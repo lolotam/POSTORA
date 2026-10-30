@@ -123,11 +123,17 @@ function createUserRpcCaller(
  * ownership checks live in SQL.
  */
 function createServiceRpcCaller(environment: ServerEnvironment): CompetitorRpcCaller {
-  const client = createClient(environment.url, environment.serviceRoleKey, {
-    auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
-  });
+  return async (functionName, args, signal) => {
+    const client = createClient(environment.url, environment.serviceRoleKey, {
+      global: {
+        fetch: (input: RequestInfo | URL, init?: RequestInit) =>
+          fetch(input, { ...init, signal: signal ?? init?.signal }),
+      },
+      auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
+    });
 
-  return async (functionName, args) => await client.rpc(functionName, args);
+    return await client.rpc(functionName, args);
+  };
 }
 
 /**

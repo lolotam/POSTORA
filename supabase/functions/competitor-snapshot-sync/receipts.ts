@@ -18,6 +18,10 @@
 
 import type {
   CompetitorCoverageGapReason,
+  CompetitorDailyEnqueueOutcome,
+  CompetitorDailyEnqueueReceipt,
+  CompetitorDailyRefusalReason,
+  CompetitorDailySweepStatus,
   CompetitorEnqueueRefusalReason,
   CompetitorOutcome,
   CompetitorReasonCode,
@@ -30,7 +34,12 @@ import type {
   PersistedCompetitorCoverage,
 } from "./types.ts";
 
-import { COMPETITOR_ENQUEUE_REFUSAL_REASONS } from "./types.ts";
+import {
+  COMPETITOR_DAILY_PAGE_LIMIT,
+  COMPETITOR_DAILY_REFUSAL_REASONS,
+  COMPETITOR_DAILY_SWEEP_STATUSES,
+  COMPETITOR_ENQUEUE_REFUSAL_REASONS,
+} from "./types.ts";
 
 const UUID_PATTERN =
   /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
@@ -362,6 +371,161 @@ export function parseEnqueueReceipt(
     capturedOn,
     retryAfterSeconds: null,
   };
+}
+
+// ---------------------------------------------------------------------------
+// The durable daily page
+// ---------------------------------------------------------------------------
+
+/**
+ * The exact key set of the accepted daily page receipt.
+ *
+ * The accepted SQL returns a closed projection, so an extra key means a
+ * different deployment and is refused instead of being read loosely.
+ */
+const DAILY_ACCEPTED_KEYS = [
+  "accepted",
+  "target_kind",
+  "captured_on",
+  "sweep_status",
+  "enqueued",
+  "has_more",
+  "page_limit",
+  "scanned",
+  "started",
+  "resumed",
+] as const;
+
+/** The exact key set of the daily page refusal. */
+const DAILY_REFUSED_KEYS = [
+  "accepted",
+  "refused",
+  "reason_code",
+  "target_kind",
+  "captured_on",
+] as const;
+
+/**
+ * Parses the accepted daily page receipt.
+ *
+ * The receipt must agree with itself: a call either STARTS the day or
+ * RESUMES it, a completed sweep has no more progress, and a pending one
+ * has more. A receipt that contradicts itself belongs to another contract.
+ */
+function parseDailyAccepted(value: unknown): CompetitorDailyEnqueueReceipt | null {
+  if (!isPlainRecord(value)) return null;
+  if (!hasExactKeys(value, DAILY_ACCEPTED_KEYS)) return null;
+
+  const read = (key: string) => readOwnData(value, key).value;
+
+  if (read("accepted") !== true) return null;
+  if (read("target_kind") !== "competitor") return null;
+
+  const capturedOn = read("captured_on");
+  if (!isDate(capturedOn)) return null;
+
+  const sweepStatus = read("sweep_status");
+  if (
+    typeof sweepStatus !== "string" ||
+    !(COMPETITOR_DAILY_SWEEP_STATUSES as readonly string[]).includes(sweepStatus)
+  ) {
+    return null;
+  }
+
+  const enqueued = read("enqueued");
+  if (!isNonNegativeSafeInteger(enqueued)) return null;
+
+  const hasMore = read("has_more");
+  if (typeof hasMore !== "boolean") return null;
+
+  const pageLimit = read("page_limit");
+  if (!isPositiveSafeInteger(pageLimit) || pageLimit !== COMPETITOR_DAILY_PAGE_LIMIT) {
+    return null;
+  }
+
+  const scanned = read("scanned");
+  if (!isNonNegativeSafeInteger(scanned)) return null;
+  // The scan is bounded by the page limit.
+  if (scanned > pageLimit) return null;
+
+  const started = read("started");
+  if (typeof started !== "boolean") return null;
+
+  const resumed = read("resumed");
+  if (typeof resumed !== "boolean") return null;
+  // A call either STARTS the day or RESUMES it. Never both.
+  if (started && resumed) return null;
+
+  // The receipt must agree with itself.
+  if (sweepStatus === "completed" && hasMore) return null;
+  if (sweepStatus === "pending" && !hasMore) return null;
+
+  return {
+    targetKind: "competitor",
+    capturedOn,
+    sweepStatus: sweepStatus as CompetitorDailySweepStatus,
+    enqueued,
+    hasMore,
+    pageLimit,
+    scanned,
+    started,
+    resumed,
+  };
+}
+
+/**
+ * Parses the daily page refusal.
+ *
+ * A reason code this contract does not know is not a refusal: the statement
+ * may have committed, so the outcome is indeterminate and it is never
+ * reported as a refusal.
+ */
+function parseDailyRefused(
+  value: unknown,
+): { readonly reason: CompetitorDailyRefusalReason; readonly capturedOn: string } | null {
+  if (!isPlainRecord(value)) return null;
+  if (!hasExactKeys(value, DAILY_REFUSED_KEYS)) return null;
+
+  const read = (key: string) => readOwnData(value, key).value;
+
+  if (read("accepted") !== false) return null;
+  if (read("refused") !== true) return null;
+  if (read("target_kind") !== "competitor") return null;
+
+  const reasonCode = read("reason_code");
+  if (
+    typeof reasonCode !== "string" ||
+    !(COMPETITOR_DAILY_REFUSAL_REASONS as readonly string[]).includes(reasonCode)
+  ) {
+    return null;
+  }
+
+  const capturedOn = read("captured_on");
+  if (!isDate(capturedOn)) return null;
+
+  return {
+    reason: reasonCode as CompetitorDailyRefusalReason,
+    capturedOn,
+  };
+}
+
+/**
+ * Parses the daily page receipt into its typed outcome.
+ *
+ * `null` means the receipt is not one this contract knows, and the caller
+ * must treat it as an indeterminate failure: the statement may have
+ * committed, and it is never reported as a completion.
+ */
+export function parseDailyEnqueueOutcome(
+  value: unknown,
+): CompetitorDailyEnqueueOutcome | null {
+  const accepted = parseDailyAccepted(value);
+  if (accepted) return { kind: "accepted", receipt: accepted };
+
+  const refused = parseDailyRefused(value);
+  if (refused) return { kind: "refused", ...refused };
+
+  return null;
 }
 
 // ---------------------------------------------------------------------------

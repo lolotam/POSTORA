@@ -66,6 +66,10 @@ import {
   type OwnerServiceRpcCaller,
   type OwnerServiceWritePort,
 } from "./workerStore.ts";
+import {
+  createOwnerDailyEnqueueStore,
+} from "./dailyEnqueueStore.ts";
+import type { OwnerDailyEnqueuePorts } from "./dailyEnqueue.ts";
 import type { OwnerWorkerPorts } from "./worker.ts";
 
 interface ServerEnvironment {
@@ -350,6 +354,22 @@ function createDirectGraphProvider(): InstagramDirectGraphProvider {
 }
 
 /**
+ * The daily enqueue ports.
+ *
+ * They run the accepted service RPC of the durable daily dispatch. The
+ * dispatcher enqueues and returns: it makes no provider call, reads no
+ * credential and touches no provider adapter.
+ */
+function createDailyEnqueuePorts(environment: ServerEnvironment): OwnerDailyEnqueuePorts {
+  return {
+    store: createOwnerDailyEnqueueStore(createServiceRpcCaller(environment)),
+    log: (event) => {
+      console.log("[instagram-insights-sync]", JSON.stringify(event));
+    },
+  };
+}
+
+/**
  * The service worker ports.
  *
  * The worker runs with the service role: the accepted worker RPCs are
@@ -372,6 +392,9 @@ function createOwnerWorkerPorts(environment: ServerEnvironment): OwnerWorkerPort
     // the protected credential id. The token is never part of it.
     bucketKeyFor: async (credentialId) => await provider.bucketKey(credentialId),
     now: () => Date.now(),
+    // The daily enqueue RESUME. The drain runs it BEFORE it claims, so a
+    // sweep larger than one page is finished by later ticks.
+    dailyEnqueue: createDailyEnqueuePorts(environment),
     log: (event) => {
       console.log("[instagram-insights-sync]", JSON.stringify(event));
     },
@@ -428,6 +451,12 @@ const deps: InstagramInsightsSyncDeps = {
       const environment = currentEnvironment();
       if (!environment) throw new Error("the server configuration is not usable");
       return createOwnerWorkerPorts(environment);
+    },
+
+    createDailyEnqueue: () => {
+      const environment = currentEnvironment();
+      if (!environment) throw new Error("the server configuration is not usable");
+      return createDailyEnqueuePorts(environment);
     },
   },
 

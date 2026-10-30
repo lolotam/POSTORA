@@ -5909,6 +5909,48 @@ export type Database = {
           },
         ]
       }
+      instagram_collection_enqueue_sweeps: {
+        Row: {
+          captured_on: string
+          completed_at: string | null
+          enqueued_count: number
+          expired_at: string | null
+          last_reason_code: string | null
+          last_target_id: string | null
+          page_count: number
+          started_at: string
+          status: string
+          target_kind: string
+          updated_at: string
+        }
+        Insert: {
+          captured_on: string
+          completed_at?: string | null
+          enqueued_count?: number
+          expired_at?: string | null
+          last_reason_code?: string | null
+          last_target_id?: string | null
+          page_count?: number
+          started_at?: string
+          status?: string
+          target_kind: string
+          updated_at?: string
+        }
+        Update: {
+          captured_on?: string
+          completed_at?: string | null
+          enqueued_count?: number
+          expired_at?: string | null
+          last_reason_code?: string | null
+          last_target_id?: string | null
+          page_count?: number
+          started_at?: string
+          status?: string
+          target_kind?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
       instagram_provider_throttle_buckets: {
         Row: {
           bucket_key: string
@@ -9959,6 +10001,10 @@ export type Database = {
       }
       authorize_instagram_collection_provider_call: {
         Args: { p_job_id: string; p_claim_token: string; p_job_generation: number }
+        Returns: Json
+      }
+      enqueue_instagram_collection_daily_page: {
+        Args: { p_target_kind: string; p_start?: boolean }
         Returns: Json
       }
       run_competitor_retention_batch: {

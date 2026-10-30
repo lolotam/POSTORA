@@ -74,6 +74,7 @@ import type { ViewerCandidate } from "../_shared/instagramDiscoveryViewer.ts";
 import {
   isPlainRecord,
   isThrottleReceipt,
+  parseDailyEnqueueOutcome,
   parseEnqueueReceipt,
   parseEnqueueRefusal,
   parseOwnerStatus,
@@ -87,6 +88,7 @@ import {
 import type {
   AttachedViewerContext,
   ClaimedCompetitorJob,
+  CompetitorDailyEnqueueOutcome,
   CompetitorEnqueueOutcome,
   CompetitorResultPayload,
   DueCompetitorTarget,
@@ -226,6 +228,7 @@ export interface ServiceReadPort {
 export type CompetitorRpcCaller = (
   functionName: string,
   args: Record<string, unknown>,
+  signal?: AbortSignal,
 ) => Promise<unknown>;
 
 /** The stable failure kinds of the store. */
@@ -312,10 +315,11 @@ async function callRpc(
   rpc: CompetitorRpcCaller,
   functionName: string,
   args: Record<string, unknown>,
+  signal?: AbortSignal,
 ): Promise<unknown> {
   let envelope: unknown;
   try {
-    envelope = await rpc(functionName, args);
+    envelope = await rpc(functionName, args, signal);
   } catch (error) {
     if (error instanceof CompetitorStoreError) throw error;
     throw new CompetitorStoreError("read_failed");
@@ -447,6 +451,21 @@ export interface CompetitorServiceStore {
     readonly cursor: DueTargetCursor | null;
     readonly signal?: AbortSignal;
   }): Promise<DueCompetitorTarget[]>;
+  /**
+   * The DURABLE daily page.
+   *
+   * It is the second, distinct branch of the scheduled enqueue: the same
+   * accepted statement the owner dispatch uses, with the competitor
+   * population and the competitor page ceiling.
+   *
+   * `start` is true for the daily dispatcher and false for the resume a
+   * drain performs before it claims. A resume never starts a sweep, and
+   * neither branch ever walks the due list with a cursor.
+   */
+  enqueueDailyPage(input: {
+    readonly start: boolean;
+    readonly signal?: AbortSignal;
+  }): Promise<CompetitorDailyEnqueueOutcome>;
   enqueueService(input: {
     readonly ownerId: string;
     readonly watchlistIds: readonly string[];
@@ -849,6 +868,28 @@ export function createCompetitorServiceStore(
           dueAt: requireString(row, "due_at"),
         };
       });
+    },
+
+    async enqueueDailyPage(input) {
+      // The DURABLE branch. The call names the KIND and whether it starts
+      // or resumes the day; it never names an owner, a watchlist entry, a
+      // date, a limit or a cursor.
+      const data = await callRpc(
+        deps.rpc,
+        "enqueue_instagram_collection_daily_page",
+        {
+          p_target_kind: "competitor",
+          p_start: input.start,
+        },
+        input.signal,
+      );
+
+      // A receipt that is not exactly the documented projection is
+      // indeterminate: the statement may or may not have run, and it is
+      // never replaced by a guess.
+      const outcome = parseDailyEnqueueOutcome(data);
+      if (outcome === null) throw new CompetitorStoreError("read_failed");
+      return outcome;
     },
 
     async enqueueService(input) {

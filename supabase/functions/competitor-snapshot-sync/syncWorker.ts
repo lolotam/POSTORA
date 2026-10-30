@@ -125,6 +125,31 @@ export const USAGE_STOP_PERCENT = 80;
  */
 export const THROTTLE_WINDOW_MS = 15 * 60_000;
 
+/**
+ * The ceiling of one daily enqueue statement.
+ *
+ * It is a dependency ceiling, not a provider one: the statement is a single
+ * bounded database call, and a slow database must not eat the drain's
+ * provider budget.
+ */
+export const DAILY_ENQUEUE_CEILING_MS = 5_000;
+
+/**
+ * The reserve the drain keeps for its OWN writes and its audit.
+ *
+ * The resume is charged against the same budget, so it must leave this
+ * much behind.
+ */
+export const DAILY_ENQUEUE_WRITE_RESERVE_MS = 5_000;
+
+/**
+ * The smallest remaining budget that still allows a resume.
+ *
+ * The resume needs its own ceiling AND the write reserve behind it.
+ */
+export const DAILY_ENQUEUE_MIN_BUDGET_MS =
+  DAILY_ENQUEUE_CEILING_MS + DAILY_ENQUEUE_WRITE_RESERVE_MS;
+
 /** A stable, bounded log event. It never carries a credential. */
 export interface CompetitorWorkerLogEvent {
   readonly event: string;
@@ -134,6 +159,17 @@ export interface CompetitorWorkerLogEvent {
   readonly reasonCode?: string;
   readonly source?: string;
   readonly mediaCount?: number;
+  /**
+   * A count of INSERTED collection rows, never of collected targets.
+   *
+   * It belongs to the daily enqueue events and it is bounded by the page
+   * limit of the population.
+   */
+  readonly enqueued?: number;
+  /** Whether committed progress remains after a daily enqueue page. */
+  readonly hasMore?: boolean;
+  /** The state of the day's sweep. */
+  readonly sweepStatus?: string;
   readonly usagePercent?: number;
   readonly durationMs?: number;
   /**
@@ -325,6 +361,116 @@ export async function runCompetitorEnqueue(
 }
 
 /**
+ * The outcome of the daily enqueue RESUME.
+ *
+ * The resume never throws: a bounded enqueue is not a reason to fail a
+ * drain that already has work to do.
+ */
+export interface CompetitorDailyResumeOutcome {
+  /** Whether the statement was sent at all. */
+  readonly attempted: boolean;
+  /** Whether the resume was skipped because the budget was too small. */
+  readonly deferred: boolean;
+  /** Whether the statement's outcome could not be read. */
+  readonly indeterminate: boolean;
+  /** The rows THIS call inserted. */
+  readonly enqueued: number;
+  readonly hasMore: boolean;
+  readonly sweepStatus: string | null;
+}
+
+/**
+ * The daily enqueue RESUME.
+ *
+ * It runs BEFORE the drain claims, inside the SAME budget, and it leaves
+ * the drain's own write reserve behind. It enqueues at most ONE page of
+ * fifty competitor targets and it never STARTS a sweep: a drain tick can
+ * only continue a sweep the daily dispatcher started.
+ *
+ * A deferred or failed resume never fails the drain. The sweep stays
+ * pending, and the next tick runs the page.
+ */
+export async function resumeCompetitorDailyEnqueue(
+  ports: CompetitorWorkerPorts,
+  budget: WorkerBudget,
+  outer: AbortSignal | undefined,
+): Promise<CompetitorDailyResumeOutcome> {
+  // The budget gate. The resume needs its own ceiling AND the drain's
+  // write reserve to be left behind.
+  if (budget.remainingMs() < DAILY_ENQUEUE_MIN_BUDGET_MS) {
+    ports.log({ event: "competitor_daily_enqueue_resume", outcome: "deferred" });
+    return {
+      attempted: false,
+      deferred: true,
+      indeterminate: false,
+      enqueued: 0,
+      hasMore: false,
+      sweepStatus: null,
+    };
+  }
+
+  let outcome;
+  try {
+    outcome = await boundedStep(
+      budget,
+      WORKER_WRITE_RESERVE_MS,
+      outer,
+      (signal) => ports.store.enqueueDailyPage({ start: false, signal }),
+      DAILY_ENQUEUE_CEILING_MS,
+    );
+  } catch {
+    // A timeout, a transport failure or a receipt that does not match the
+    // contract. The statement may have committed, so the sweep state is
+    // unknown. The drain continues with the work it already has.
+    ports.log({ event: "competitor_daily_enqueue_resume", outcome: "indeterminate" });
+    return {
+      attempted: true,
+      deferred: false,
+      indeterminate: true,
+      enqueued: 0,
+      hasMore: false,
+      sweepStatus: null,
+    };
+  }
+
+  if (outcome.kind === "refused") {
+    // The configuration refuses. The drain still claims what it already
+    // has; the refusal is recorded and nothing is invented.
+    ports.log({
+      event: "competitor_daily_enqueue_resume",
+      outcome: "refused",
+      reasonCode: outcome.reason,
+    });
+    return {
+      attempted: true,
+      deferred: false,
+      indeterminate: false,
+      enqueued: 0,
+      hasMore: false,
+      sweepStatus: null,
+    };
+  }
+
+  const receipt = outcome.receipt;
+  ports.log({
+    event: "competitor_daily_enqueue_resume",
+    outcome: receipt.enqueued > 0 ? "enqueued" : "no_work",
+    enqueued: receipt.enqueued,
+    hasMore: receipt.hasMore,
+    sweepStatus: receipt.sweepStatus,
+  });
+
+  return {
+    attempted: true,
+    deferred: false,
+    indeterminate: false,
+    enqueued: receipt.enqueued,
+    hasMore: receipt.hasMore,
+    sweepStatus: receipt.sweepStatus,
+  };
+}
+
+/**
  * The bounded drain.
  *
  * It claims the production limit, processes as many of those jobs as the
@@ -363,6 +509,19 @@ export async function runCompetitorDrain(
 
   let jobs: ClaimedCompetitorJob[];
   try {
+    // The daily enqueue RESUME runs BEFORE the claim, inside the SAME
+    // budget, and it leaves the drain's own write reserve behind.
+    //
+    // It enqueues at most ONE page and it never STARTS a sweep, so a drain
+    // tick can only continue a sweep the daily dispatcher started.
+    try {
+      await resumeCompetitorDailyEnqueue(ports, budget, input.signal);
+    } catch {
+      // The resume never throws, and a sink that does is not a reason to
+      // abandon the work the drain already has.
+      ports.log({ event: "competitor_daily_enqueue_resume", outcome: "indeterminate" });
+    }
+
     // The claim is bounded too: it must leave the write reserve behind.
     jobs = await boundedStep(
       budget,
@@ -1148,14 +1307,20 @@ export class BudgetExceededError extends Error {
  * signal aborts) and is raced against it, so a store or transport that
  * ignores the abort cannot keep the worker waiting. A late settlement is
  * consumed. It is exported so the guard can be exercised on its own.
+ *
+ * `ceilingMs` is an OPTIONAL upper bound on the step's own window. It
+ * exists for the bounded statements that must not be able to spend the
+ * whole run budget: a slow database may not eat the provider budget.
  */
 export async function boundedStep<T>(
   budget: WorkerBudget,
   reserveMs: number,
   outer: AbortSignal | undefined,
   work: (signal: AbortSignal) => Promise<T>,
+  ceilingMs?: number,
 ): Promise<T> {
-  const available = budget.remainingMs() - reserveMs;
+  const remaining = budget.remainingMs() - reserveMs;
+  const available = ceilingMs === undefined ? remaining : Math.min(ceilingMs, remaining);
   if (available <= 0 || outer?.aborted) throw new BudgetExceededError();
 
   const controller = new AbortController();

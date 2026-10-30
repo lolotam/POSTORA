@@ -102,6 +102,15 @@ export const COMPETITOR_SYNC_DEPENDENCY_CEILING_MS = 5_000;
 /** The reserve kept for the audit record and the response. */
 export const COMPETITOR_SYNC_LOG_RESERVE_MS = 1_000;
 
+/**
+ * The ceiling of the DURABLE daily dispatch.
+ *
+ * It is a dependency ceiling, not a provider one: the dispatch is a single
+ * bounded database statement, and it must not be able to spend the drain's
+ * budget.
+ */
+export const COMPETITOR_DAILY_DISPATCH_CEILING_MS = 5_000;
+
 /** The request body limit, in bytes. */
 export const COMPETITOR_SYNC_MAX_BODY_BYTES = 4_096;
 
@@ -192,10 +201,33 @@ const cursorSchema = z.object({
   id: uuidSchema,
 }).strict();
 
+/**
+ * The LEGACY scheduled enqueue.
+ *
+ * It keeps its cursor and its limit. The accepted cursor-based caller is
+ * preserved exactly, so no consumer of it is broken by the durable branch
+ * below.
+ */
 const enqueueDailyRequestSchema = z.object({
   mode: z.literal("enqueue-daily"),
   limit: z.number().int().min(1).max(50).optional(),
   cursor: cursorSchema.optional(),
+}).strict();
+
+/**
+ * The DURABLE scheduled enqueue.
+ *
+ * It is a DISTINCT schema branch: it carries the dispatch marker and NO
+ * cursor and NO limit. The durable mechanism keeps its progress in the
+ * database, so a caller-selected cursor has nothing to select and a
+ * caller-selected limit has nothing to bound.
+ *
+ * A mixed body - the durable marker with a cursor, or with a limit - is
+ * refused by the strict schemas on both sides.
+ */
+const enqueueDailyDurableRequestSchema = z.object({
+  mode: z.literal("enqueue-daily"),
+  dispatch: z.literal("durable"),
 }).strict();
 
 const drainRequestSchema = z.object({
@@ -205,12 +237,21 @@ const drainRequestSchema = z.object({
 /** The closed set of audit actions. Anything else is audited as "unknown". */
 const AUDIT_MODES = ["entry", "force", "status", "enqueue-daily", "all"] as const;
 
-const competitorSyncRequestSchema = z.discriminatedUnion("mode", [
+/**
+ * The strict request union.
+ *
+ * It is a plain union rather than a discriminated one because the
+ * `enqueue-daily` mode has TWO branches: the legacy cursor-based one and
+ * the durable one. The strict schemas keep them apart - a body with the
+ * durable marker and a cursor matches NEITHER, and is refused.
+ */
+const competitorSyncRequestSchema = z.union([
   entryRequestSchema,
   forceRequestSchema,
   statusRequestSchema,
-  enqueueDailyRequestSchema,
+  enqueueDailyDurableRequestSchema,
   drainRequestSchema,
+  enqueueDailyRequestSchema,
 ]);
 
 // ---------------------------------------------------------------------------
@@ -853,6 +894,57 @@ export function createCompetitorSyncHandler(
     const boundedWorker: CompetitorWorkerPorts = { ...worker, budgetMs: workBudgetMs };
 
     if (input.mode === "enqueue-daily") {
+      // The DURABLE branch. It is a distinct schema branch and it never
+      // falls back to the legacy cursor walk: the durable mechanism keeps
+      // its progress in the database, and no cron depends on reading a
+      // response cursor.
+      if ("dispatch" in input) {
+        const outcome = await runBounded(
+          (signal) =>
+            worker.store.enqueueDailyPage({ start: true, signal }),
+          COMPETITOR_DAILY_DISPATCH_CEILING_MS,
+        );
+
+        if (!outcome.ok) {
+          // The statement may have committed. The outcome is indeterminate
+          // and the dispatch is never replayed in the same invocation.
+          return await refuse(503, "work_indeterminate");
+        }
+
+        const page = outcome.value;
+
+        if (page.kind === "refused") {
+          if (page.reason === "collection_disabled") {
+            return await refuse(503, "collection_disabled");
+          }
+          return await refuse(503, "settings_unavailable");
+        }
+
+        const receipt = page.receipt;
+
+        // The closed set of the published response.
+        if (receipt.sweepStatus !== "pending" && receipt.sweepStatus !== "completed") {
+          return await refuse(503, "work_indeterminate");
+        }
+
+        const body = {
+          mode: "enqueue-daily",
+          dispatch: "durable",
+          captured_on: receipt.capturedOn,
+          sweep_status: receipt.sweepStatus,
+          enqueued: receipt.enqueued,
+          has_more: receipt.hasMore,
+        };
+
+        if (receipt.hasMore) {
+          return await finish(202, body, "enqueued_daily");
+        }
+
+        return await finish(200, body, "enqueued_daily_completed");
+      }
+
+      // The LEGACY branch. Its cursor and its limit keep working exactly
+      // as they did.
       const outcome = await runBounded(
         (signal) =>
           runEnqueue(boundedWorker, input.limit ?? 50, input.cursor ?? null, signal),

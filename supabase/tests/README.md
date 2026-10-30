@@ -45,6 +45,7 @@ below). So the harness does not replay history. It:
 | `competitor_retention.sql` | the bounded inactive-history cleanup: the 90-day eligibility clock to the microsecond, the removal-marker clock, the ownership boundary, the default-off switch, the dry run, the bounded slice, the child-first deletion protocol, the live-lease skip and the role boundary; rolls back |
 | `competitor_retention_cron.sql` | the inactive hourly schedule: applying the schedule definition twice leaves exactly one inactive job named `competitor-retention` at `20 * * * *`, the command resolves the shared secret at run time and carries no literal credential, and every other job is left exactly as it was; rolls back |
 | `instagram_collection_rollout_controls.sql` | the rollout admission authority (R1): the default-off policy and the strict policy schema, the master switch read first and alone, the private policy row and the service permit RPC against the browser roles, the evaluator's ownership and pin rules, the enqueue refusals and the mixed service batch, the claim passes with an eligible job behind more than 500 excluded rows, the pinned-viewer negatives, the write fences, the provider permit unions and the bounded audit rows; rolls back |
+| `instagram_collection_daily_dispatch.sql` | the durable daily dispatch (R2): the sweep table and its states, the service-only daily page RPC, the twenty five / fifty page ceilings, more than twenty five owners and more than one thousand competitors paged through the real statement, the duplicate that keeps its generation, the exclusion that wins at insert, the weekly retry gate, the truthful pending / completed / expired states, the disabled master and the unreadable configuration, the transaction atomicity and the midnight rollover; rolls back |
 
 The harness's `SUITES` array is the complete executable inventory; the table
 above highlights selected suites, not the entire list. No existing suite may
@@ -60,7 +61,8 @@ not omitted test suites: `partner_api_race_fixture.sql`,
 `meta_oauth_identity_alias_race_fixture.sql`,
 `meta_page_token_reconciliation_race_fixture.sql`,
 `competitor_retention_race_fixture.sql` and
-`instagram_collection_rollout_race_fixture.sql`. Their headers document
+`instagram_collection_rollout_race_fixture.sql` and
+`instagram_collection_daily_dispatch_race_fixture.sql`. Their headers document
 setup, interleavings, expected outcomes and cleanup. A single-session harness
 pass does not prove concurrency. Run the applicable fixtures separately against
 the same isolated candidate and record both sessions' results. Never run them
@@ -113,6 +115,59 @@ rows and the assertions are in the fixture's own header. One point the
 header states and the rehearsal shows: the rollout readers take **no** row
 lock on `app_settings`, so a policy writer never waits on an account lock
 and the established `account -> watchlist -> job` order is never inverted.
+
+### The daily dispatch race fixture
+
+`instagram_collection_daily_dispatch_race_fixture.sql` rehearses the
+concurrency races of the durable daily dispatch: a concurrent start and
+resume, a failure before and after the commit, a lost reply, a current-day
+replay and reopen, the midnight rollover, a target that becomes eligible
+mid-sweep, and the no-progress page. It commits synthetic rows **and** a
+policy change, so it refuses to run without `-v disposable=1`, and its
+cleanup step removes the synthetic rows and puts the default (off) policy
+back.
+
+Three sessions are needed: the holder (A), the probe (B) and the observer.
+The observer is what proves the wait — it reads `pg_stat_activity` while the
+other session is blocked.
+
+```bash
+# against the disposable container of the rollout validation
+DB_URL='postgres://supabase_admin:postgres@localhost:5432/instagram_rollout_harness'
+
+# 1. prepare (commits the synthetic owner, the accounts and the policy)
+psql "$DB_URL" -v ON_ERROR_STOP=1 -v disposable=1 -v prepare=1 \
+  -f supabase/tests/instagram_collection_daily_dispatch_race_fixture.sql
+
+# 2. two interactive sessions against the SAME database
+psql "$DB_URL"   # session A
+psql "$DB_URL"   # session B
+
+# 3. in session A, hold today's sweep row open (the transaction stays open)
+psql "$DB_URL" -v ON_ERROR_STOP=1 -v disposable=1 -v hold_sweep=1 -v hold_seconds=6 \
+  -f supabase/tests/instagram_collection_daily_dispatch_race_fixture.sql
+
+# 4. while A still holds it, probe from session B
+psql "$DB_URL" -v ON_ERROR_STOP=1 -v disposable=1 -v probe_page=1 \
+  -f supabase/tests/instagram_collection_daily_dispatch_race_fixture.sql
+
+# 5. the observer prints the lock waits of the other sessions
+psql "$DB_URL" -v ON_ERROR_STOP=1 -v disposable=1 -v observe=1 \
+  -f supabase/tests/instagram_collection_daily_dispatch_race_fixture.sql
+
+# 6. assert and clean up
+psql "$DB_URL" -v ON_ERROR_STOP=1 -v disposable=1 -v assert=1 \
+  -f supabase/tests/instagram_collection_daily_dispatch_race_fixture.sql
+psql "$DB_URL" -v ON_ERROR_STOP=1 -v disposable=1 -v cleanup=1 \
+  -f supabase/tests/instagram_collection_daily_dispatch_race_fixture.sql
+```
+
+The exact statements of every race, the lock waits to observe, the expected
+rows and the assertions are in the fixture's own header. One point the
+header states and the rehearsal shows: the daily page serialises on the
+SWEEP ROW, so two dispatchers of the same kind and day cannot interleave
+inside one sweep, and the sweep row is never confused with the account
+lock order the workers use.
 
 ### The competitor retention race fixture
 

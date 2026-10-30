@@ -1111,3 +1111,117 @@ function noJobStatus(): Record<string, unknown> {
     inventory: INVENTORY,
   };
 }
+
+// ---------------------------------------------------------------------------
+// The durable daily page
+// ---------------------------------------------------------------------------
+
+Deno.test("the durable page names the kind and the start marker, and nothing else", async () => {
+  const calls: Array<{ name: string; args: Record<string, unknown> }> = [];
+  const routed: CompetitorRpcCaller = async (name, args) => {
+    calls.push({ name, args });
+    return {
+      data: {
+        accepted: true,
+        target_kind: "competitor",
+        captured_on: "2026-10-29",
+        sweep_status: "pending",
+        enqueued: 50,
+        has_more: true,
+        page_limit: 50,
+        scanned: 50,
+        started: true,
+        resumed: false,
+      },
+      error: null,
+    };
+  };
+
+  const { reads } = readPort();
+  const store = createCompetitorServiceStore({ rpc: routed, reads, writes: noWrites });
+
+  const outcome = await store.enqueueDailyPage({ start: true });
+
+  assertEquals(calls.length, 1);
+  assertEquals(calls[0]!.name, "enqueue_instagram_collection_daily_page");
+  assertEquals(calls[0]!.args, {
+    p_target_kind: "competitor",
+    p_start: true,
+  });
+
+  assertEquals(outcome.kind, "accepted");
+  if (outcome.kind !== "accepted") return;
+  assertEquals(outcome.receipt.targetKind, "competitor");
+  assertEquals(outcome.receipt.capturedOn, "2026-10-29");
+  assertEquals(outcome.receipt.sweepStatus, "pending");
+  assertEquals(outcome.receipt.enqueued, 50);
+  assertEquals(outcome.receipt.hasMore, true);
+  assertEquals(outcome.receipt.pageLimit, 50);
+  assertEquals(outcome.receipt.scanned, 50);
+  assertEquals(outcome.receipt.started, true);
+  assertEquals(outcome.receipt.resumed, false);
+});
+
+Deno.test("a refusal of the configuration is a decision, not a failure", async () => {
+  const routed: CompetitorRpcCaller = async () => ({
+    data: {
+      accepted: false,
+      refused: true,
+      reason_code: "collection_disabled",
+      target_kind: "competitor",
+      captured_on: "2026-10-29",
+    },
+    error: null,
+  });
+
+  const { reads } = readPort();
+  const store = createCompetitorServiceStore({ rpc: routed, reads, writes: noWrites });
+
+  const outcome = await store.enqueueDailyPage({ start: false });
+
+  assertEquals(outcome.kind, "refused");
+  if (outcome.kind !== "refused") return;
+  assertEquals(outcome.reason, "collection_disabled");
+});
+
+Deno.test("a receipt that is not the documented projection is a failure", async () => {
+  const cases: unknown[] = [
+    { accepted: true, target_kind: "owner", captured_on: "2026-10-29", sweep_status: "pending", enqueued: 1, has_more: true, page_limit: 50, scanned: 1, started: true, resumed: false },
+    { accepted: true, target_kind: "competitor", captured_on: "2026-10-29", sweep_status: "unknown", enqueued: 1, has_more: true, page_limit: 50, scanned: 1, started: true, resumed: false },
+    { accepted: true, target_kind: "competitor", captured_on: "2026-10-29", sweep_status: "pending", enqueued: 1, has_more: true, page_limit: 25, scanned: 1, started: true, resumed: false },
+    { accepted: true, target_kind: "competitor", captured_on: "2026-10-29", sweep_status: "pending", enqueued: 1, has_more: true, page_limit: 50, scanned: 51, started: true, resumed: false },
+    { accepted: true, target_kind: "competitor", captured_on: "2026-10-29", sweep_status: "pending", enqueued: 1, has_more: true, page_limit: 50, scanned: 1, started: true, resumed: true },
+    { accepted: true, target_kind: "competitor", captured_on: "2026-10-29", sweep_status: "completed", enqueued: 1, has_more: true, page_limit: 50, scanned: 1, started: true, resumed: false },
+    { accepted: true, target_kind: "competitor", captured_on: "2026-10-29", sweep_status: "pending", enqueued: 1, has_more: true, page_limit: 50, scanned: 1, started: true, resumed: false, lease_token: "x" },
+    { accepted: false, refused: true, reason_code: "collection_not_eligible", target_kind: "competitor", captured_on: "2026-10-29" },
+    "not-a-receipt",
+  ];
+
+  for (const data of cases) {
+    const routed: CompetitorRpcCaller = async () => ({ data, error: null });
+    const { reads } = readPort();
+    const store = createCompetitorServiceStore({ rpc: routed, reads, writes: noWrites });
+
+    const error = await assertRejects(
+      () => store.enqueueDailyPage({ start: true }),
+      CompetitorStoreError,
+    );
+    assertEquals(error.failure, "read_failed", JSON.stringify(data));
+  }
+});
+
+Deno.test("a missing function is unavailable, never a completion", async () => {
+  const routed: CompetitorRpcCaller = async () => ({
+    data: null,
+    error: { code: "PGRST202", message: "the function is not deployed" },
+  });
+
+  const { reads } = readPort();
+  const store = createCompetitorServiceStore({ rpc: routed, reads, writes: noWrites });
+
+  const error = await assertRejects(
+    () => store.enqueueDailyPage({ start: true }),
+    CompetitorStoreError,
+  );
+  assertEquals(error.failure, "schema_unavailable");
+});

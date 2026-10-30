@@ -204,6 +204,10 @@ import {
   type OwnerTarget,
 } from "./workerStore.ts";
 import type { ClaimedOwnerJob } from "./receipts.ts";
+import {
+  resumeOwnerDailyEnqueue,
+  type OwnerDailyEnqueuePorts,
+} from "./dailyEnqueue.ts";
 
 /** The whole run, counted from before the first claim. */
 export const WORKER_TOTAL_BUDGET_MS = 40_000;
@@ -425,6 +429,17 @@ export interface OwnerWorkerLogEvent {
   readonly durationMs?: number;
   /** A count of media, never the media themselves. */
   readonly mediaCount?: number;
+  /**
+   * A count of INSERTED collection rows, never of collected targets.
+   *
+   * It belongs to the daily enqueue events and it is bounded by the page
+   * limit of the population.
+   */
+  readonly enqueued?: number;
+  /** Whether committed progress remains after a daily enqueue page. */
+  readonly hasMore?: boolean;
+  /** The state of the day's sweep. */
+  readonly sweepStatus?: string;
 }
 
 /**
@@ -495,6 +510,18 @@ export interface OwnerWorkerPorts {
    * exercise the deadline without waiting forty seconds.
    */
   readonly budgetMs?: number;
+  /**
+   * The daily enqueue RESUME.
+   *
+   * It runs BEFORE the claim, inside the same budget, and it enqueues at
+   * most ONE page of twenty five owner targets. It never starts a sweep:
+   * a drain tick can only continue a sweep that the daily dispatcher
+   * started.
+   *
+   * It is OPTIONAL, so a deployment that does not inject it has no daily
+   * dispatch at all and the drain simply claims.
+   */
+  readonly dailyEnqueue?: OwnerDailyEnqueuePorts;
   /** The bounded log sink. */
   readonly log: (event: OwnerWorkerLogEvent) => void;
 }
@@ -538,14 +565,20 @@ export class BudgetExceededError extends Error {
  * signal aborts) and is raced against it, so a store or transport that
  * ignores the abort cannot keep the worker waiting. A late settlement is
  * consumed. It is exported so the guard can be exercised on its own.
+ *
+ * `ceilingMs` is an OPTIONAL upper bound on the step's own window. It
+ * exists for the bounded statements that must not be able to spend the
+ * whole run budget: a slow database may not eat the provider budget.
  */
 export async function boundedStep<T>(
   budget: OwnerWorkerBudget,
   reserveMs: number,
   outer: AbortSignal | undefined,
   work: (signal: AbortSignal) => Promise<T>,
+  ceilingMs?: number,
 ): Promise<T> {
-  const available = budget.remainingMs() - reserveMs;
+  const remaining = budget.remainingMs() - reserveMs;
+  const available = ceilingMs === undefined ? remaining : Math.min(ceilingMs, remaining);
   if (available <= 0 || outer?.aborted) throw new BudgetExceededError();
 
   const controller = new AbortController();
@@ -616,6 +649,33 @@ export async function runOwnerDrain(
     stoppedEarly: false,
     jobs: [],
   };
+
+  // The daily enqueue RESUME runs BEFORE the claim, inside the SAME
+  // budget, and it leaves the drain's own write reserve behind.
+  //
+  // It enqueues at most ONE page and it never STARTS a sweep, so a drain
+  // tick can only continue a sweep the daily dispatcher started. A
+  // deferred or failed resume never fails the drain: the sweep stays
+  // pending and the next tick runs it.
+  if (ports.dailyEnqueue) {
+    try {
+      await resumeOwnerDailyEnqueue(
+        {
+          store: ports.dailyEnqueue.store,
+          log: (event) => ports.log(event),
+        },
+        budget,
+        {
+          signal: input.signal,
+          writeReserveMs: WORKER_WRITE_RESERVE_MS,
+        },
+      );
+    } catch {
+      // The resume never throws, and a sink that does is not a reason to
+      // abandon the work the drain already has.
+      ports.log({ event: "owner_daily_enqueue_resume", outcome: "indeterminate" });
+    }
+  }
 
   let jobs: ClaimedOwnerJob[];
   try {

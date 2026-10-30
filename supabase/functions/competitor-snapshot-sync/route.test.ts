@@ -739,3 +739,70 @@ Deno.test("a copy whose route no longer reaches the handler answers 404", async 
 
   assertEquals(response.status, 404);
 });
+
+Deno.test("the actual registered route dispatches the durable daily page", async () => {
+  const probe = newProbe();
+  probe.rpcByName["enqueue_instagram_collection_daily_page"] = {
+    data: {
+      accepted: true,
+      target_kind: "competitor",
+      captured_on: "2026-10-29",
+      sweep_status: "pending",
+      enqueued: 50,
+      has_more: true,
+      page_limit: 50,
+      scanned: 50,
+      started: true,
+      resumed: false,
+    },
+    error: null,
+  };
+
+  const handler = await loadRoute(probe);
+  const response = await handler(
+    request(
+      { mode: "enqueue-daily", dispatch: "durable" },
+      { Authorization: `Bearer ${CRON_SECRET}` },
+    ),
+  );
+
+  assertEquals(response.status, 202);
+  assertEquals(await body(response), {
+    mode: "enqueue-daily",
+    dispatch: "durable",
+    captured_on: "2026-10-29",
+    sweep_status: "pending",
+    enqueued: 50,
+    has_more: true,
+  });
+
+  const call = probe.rpcCalls.find((entry) =>
+    entry.name === "enqueue_instagram_collection_daily_page"
+  );
+  assert(call !== undefined, "the durable page was called");
+  assertEquals(call.args.p_target_kind, "competitor");
+  assertEquals(call.args.p_start, true);
+  // The service RPC runs with the SERVICE credential and never as a user.
+  assertEquals(call.key, SERVICE_ROLE_KEY);
+  assertEquals(call.authorization, null);
+});
+
+Deno.test("the actual registered route refuses a mixed durable branch", async () => {
+  const probe = newProbe();
+
+  const handler = await loadRoute(probe);
+  const response = await handler(
+    request(
+      { mode: "enqueue-daily", dispatch: "durable", limit: 10 },
+      { Authorization: `Bearer ${CRON_SECRET}` },
+    ),
+  );
+
+  assertEquals(response.status, 400);
+  assertEquals(
+    probe.rpcCalls.some((entry) =>
+      entry.name === "enqueue_instagram_collection_daily_page"
+    ),
+    false,
+  );
+});
