@@ -16,6 +16,8 @@
  * Review follow-up F6: docs/superpowers/specs/2026-10-30-hardening-review-followups-design.md.
  */
 
+import type { SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2.89.0";
+
 export const FINAL_NOTIFIED_KEY = "final_notified_at";
 
 export interface FinalNotificationClaim {
@@ -39,8 +41,7 @@ export function markerCoversCycle(marker: unknown, processingStartedAt: string |
 }
 
 export async function claimFinalNotification(
-  // deno-lint-ignore no-explicit-any
-  supabase: any,
+  supabase: SupabaseClient,
   postId: string,
   now = new Date(),
 ): Promise<FinalNotificationClaim> {

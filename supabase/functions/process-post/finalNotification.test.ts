@@ -1,4 +1,5 @@
 import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
+import type { SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2.89.0";
 import { claimFinalNotification, FINAL_NOTIFIED_KEY, markerCoversCycle } from "./finalNotification.ts";
 
 interface PostRow {
@@ -44,7 +45,7 @@ function fakePosts(initial: PostRow, failures: { read?: string; update?: string 
         return chain;
       },
     }),
-  };
+  } as unknown as SupabaseClient;
   return { client, row };
 }
 
