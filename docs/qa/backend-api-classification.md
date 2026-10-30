@@ -24,7 +24,7 @@ Rows marked only `harness`, `config`, `fixture`, or `expectation` get **no code 
 | 7 | `tiktok-analytics` | user JWT | `Authorization`, `apikey` | TikTok creds | 401 with valid harness token | re-verify harness; if still failing, code-fix to use `_shared/auth-helper` | **harness** (verify first) |
 | 8 | `ad-manager` | user JWT | `Authorization`, `apikey` | — | 401/403 | harness verify; preserve admin gate if any | **harness** |
 | 9 | `analyze-log` | admin JWT | `Authorization`, `apikey` | — | 401/403 | 401 / 403 — admin only | **harness** (admin role seed) |
-| 10 | `remove-background` | user JWT | `Authorization`, `apikey` | image provider creds | 401/403 | harness verify; 503 `MISSING_CONFIG` if creds missing | **harness** + **config** |
+| 10 | `remove-background` | user JWT or `postora-` API key | `Authorization`, `apikey` (or `x-api-key`) | `ATLASCLOUD_API_KEY`, `OPENINARY_*` (Cloudinary only while the admin CDN policy writes to it) | 401/403 | harness verify; 503 `PROVIDER_UNAVAILABLE` when no AI provider is available | **harness** + **config** |
 | 11 | `manage-app-secrets` | admin JWT | `Authorization`, `apikey` | — | 401/403 | 403 if not admin; **never** expose values | **harness** (admin), no code change |
 | 12 | `unsplash-proxy` | user JWT | `Authorization`, `apikey` | `UNSPLASH_ACCESS_KEY` | 500 on missing key | 503 `MISSING_CONFIG service=unsplash` | **config** + **prod-fix** |
 | 13 | `threads-oauth` (callback) | public callback (provider) | provider params | `THREADS_APP_ID/SECRET` | 500 on missing | 400 `INVALID_OAUTH_STATE` / 503 `MISSING_CONFIG` | **config** + **expectation** |

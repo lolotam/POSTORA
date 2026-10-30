@@ -137,8 +137,10 @@ and rejects the shape anywhere new); the JWT path uses `_shared/auth-helper.ts`
 
 `/docs/remove-background`, `/docs/upscale` pages and the n8n endpoint section describe the
 real contract (provider, Openinary URLs, 503 availability error) instead of the Cloudinary
-shape. `README.md` / `API_REFERENCE.md` rows are corrected. `CLAUDE.md` has no row for these
-functions, so it is unchanged.
+shape (the upscale page's `output_format`/`quality`/`denoise`/`face_enhance` and the
+background-removal page's `output_format`/`quality` were never implemented and are removed).
+`README.md`, `API_REFERENCE.md` and row 10 of `docs/qa/backend-api-classification.md` are
+corrected. `CLAUDE.md` has no row for these functions, so it is unchanged.
 
 ## Deploy-time actions
 

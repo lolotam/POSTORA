@@ -79,12 +79,21 @@ curl -X POST \\
 const bgRemovalResponse = `{
   "success": true,
   "original_url": "https://example.com/image.jpg",
-  "processed_url": "https://res.cloudinary.com/.../e_background_removal/...",
-  "public_id": "postora/user-id/processed/abc123",
+  "processed_url": "https://cdn.postora.cloud/t/postora.cloud/postora/user-id/processed/abc123.png",
+  "public_id": "postora.cloud/postora/user-id/processed/abc123.png",
   "width": 1920,
   "height": 1080,
   "format": "png",
-  "bytes": 245678
+  "bytes": 245678,
+  "platform": "atlascloud",
+  "stored_in": "openinary"
+}
+
+# No provider available (HTTP 503):
+{
+  "success": false,
+  "error": "Background removal is temporarily unavailable",
+  "code": "PROVIDER_UNAVAILABLE"
 }`;
 
 // Upscale curl examples - Cloudinary
@@ -163,11 +172,19 @@ const upscaleResponse = `{
 const upscaleAtlasResponse = `{
   "success": true,
   "original_url": "https://example.com/image.jpg",
-  "upscaled_url": "https://storage.atlascloud.ai/outputs/...",
+  "upscaled_url": "https://cdn.postora.cloud/t/postora.cloud/postora/user-id/upscaled/abc123.jpg",
   "prediction_id": "pred_abc123",
   "target_resolution": "4k",
   "scale": 4,
-  "platform": "atlascloud"
+  "platform": "atlascloud",
+  "stored_in": "openinary"
+}
+
+# No provider available (HTTP 503):
+{
+  "success": false,
+  "error": "Image upscaling is temporarily unavailable",
+  "code": "PROVIDER_UNAVAILABLE"
 }`;
 
 export function ApiEndpointsSection() {
@@ -291,7 +308,10 @@ export function ApiEndpointsSection() {
             <span className="px-3 py-1 rounded text-sm font-mono bg-emerald-500/20 text-emerald-500">POST</span>
             <code className="font-mono">/remove-background</code>
           </div>
-          <p className="text-muted-foreground mb-4">Remove background from images using AI</p>
+          <p className="text-muted-foreground mb-4">
+            Remove background from images using AI (AtlasCloud). The result is stored in Postora storage and returned as <code>processed_url</code>.
+            If no AI provider is available the endpoint answers <code>503</code> with <code>code: "PROVIDER_UNAVAILABLE"</code>.
+          </p>
 
           <Tabs defaultValue="json" className="mb-4">
             <TabsList>
@@ -349,7 +369,10 @@ export function ApiEndpointsSection() {
             <span className="px-3 py-1 rounded text-sm font-mono bg-emerald-500/20 text-emerald-500">POST</span>
             <code className="font-mono">/upscale-image</code>
           </div>
-          <p className="text-muted-foreground mb-4">Upscale images using AI - choose between Cloudinary (2x-4x) or AtlasCloud (4K premium)</p>
+          <p className="text-muted-foreground mb-4">
+            Upscale images using AI. With no <code>platform</code> the request uses Cloudinary while it is available and AtlasCloud (2K/4K) otherwise;
+            AtlasCloud results are stored in Postora storage. If no AI provider is available the endpoint answers <code>503</code> with <code>code: "PROVIDER_UNAVAILABLE"</code>.
+          </p>
 
           <Tabs defaultValue="cloudinary-json" className="mb-4">
             <TabsList className="flex-wrap h-auto">
@@ -408,12 +431,12 @@ export function ApiEndpointsSection() {
                 <tr className="border-t border-border">
                   <td className="py-2 px-4 font-mono text-primary text-xs">image_base64</td>
                   <td className="py-2 px-4 text-muted-foreground">string</td>
-                  <td className="py-2 px-4">Base64 encoded image data (Cloudinary only)</td>
+                  <td className="py-2 px-4">Base64 encoded image data (raw or data URI)</td>
                 </tr>
                 <tr className="border-t border-border">
                   <td className="py-2 px-4 font-mono text-primary text-xs">file</td>
                   <td className="py-2 px-4 text-muted-foreground">binary</td>
-                  <td className="py-2 px-4">Image file (form-data upload, Cloudinary only)</td>
+                  <td className="py-2 px-4">Image file (form-data upload)</td>
                 </tr>
                 <tr className="border-t border-border">
                   <td className="py-2 px-4 font-mono text-primary text-xs">scale</td>
@@ -423,7 +446,7 @@ export function ApiEndpointsSection() {
                 <tr className="border-t border-border bg-muted">
                   <td className="py-2 px-4 font-mono text-foreground text-xs">platform</td>
                   <td className="py-2 px-4 text-muted-foreground">string</td>
-                  <td className="py-2 px-4">"cloudinary" (default) or "atlascloud" for 4K premium</td>
+                  <td className="py-2 px-4">"atlascloud" for 2K/4K AI upscaling. Omit it to let Postora choose (Cloudinary while available, otherwise AtlasCloud); "cloudinary" falls back to AtlasCloud when Cloudinary is unavailable</td>
                 </tr>
               </tbody>
             </table>
