@@ -10,6 +10,10 @@ import {
 import { runAtlasImageJob } from "../_shared/aiImageJob.ts";
 import { logImageTool, pngSize, readImageInput, toDataUri, toolFailureResponse } from "../_shared/aiImageIo.ts";
 import { getOpeninaryConfig } from "../_shared/openinary.ts";
+import { checkUserRateLimit } from "../_shared/rate-limiter.ts";
+
+/** AtlasCloud jobs one caller may start per hour; each one is billed to the platform. */
+const ATLAS_JOBS_PER_HOUR = 30;
 
 const CLOUDINARY_CLOUD_NAME = Deno.env.get('CLOUDINARY_CLOUD_NAME');
 const CLOUDINARY_API_KEY = Deno.env.get('CLOUDINARY_API_KEY');
@@ -79,6 +83,12 @@ Deno.serve(async (req) => {
     const originalUrl = input.kind === 'url' ? input.url : 'base64_upload';
 
     if (decision.provider === 'atlascloud') {
+      // Each AtlasCloud job is paid by the platform account, so a caller is capped per hour.
+      const rate = await checkUserRateLimit(dbAdmin, 'remove-background:atlascloud', userId, ATLAS_JOBS_PER_HOUR, 3600);
+      if (!rate.allowed) {
+        logImageTool('warn', 'ai_image_rate_limited', { operation: 'background_removal', user_id: userId });
+        return toolFailureResponse(429, 'RATE_LIMITED', 'Too many image jobs this hour. Please try again later.');
+      }
       const job = await runAtlasImageJob({
         operation: 'background_removal',
         userId,
