@@ -9969,6 +9969,10 @@ export type Database = {
         Args: Record<PropertyKey, never>
         Returns: Json
       }
+      read_own_competitor_tracking_report: {
+        Args: { p_request: Json }
+        Returns: Json
+      }
       reap_exhausted_agent_replies: {
         Args: { p_max_attempts: number }
         Returns: Database["public"]["Tables"]["pending_agent_replies"]["Row"][]

@@ -152,6 +152,7 @@ SUITES=(
   meta_page_token_reconciliation.sql
   competitor_collection_results.sql
   competitor_capture_coverage.sql
+  competitor_tracking_report.sql
   instagram_direct_collection_credential.sql
 )
 # These fixtures build their own focused schema and apply the migration under
