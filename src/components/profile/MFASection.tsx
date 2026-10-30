@@ -49,7 +49,9 @@ export function MFASection() {
     try {
       const { data, error } = await supabase.auth.mfa.listFactors();
       if (error) throw error;
-      setFactors(data?.totp || []);
+      // `data.totp` holds only VERIFIED factors; `data.all` also holds an enrollment that was
+      // started and never finished, which is what the "Unfinished setup" list is for.
+      setFactors((data?.all ?? []).filter((factor) => factor.factor_type === "totp"));
     } catch (error) {
       console.error("Failed to load MFA factors:", error);
     } finally {

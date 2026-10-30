@@ -26,6 +26,12 @@ import { MFASection } from "../MFASection";
 const UNVERIFIED = { id: "f-un", friendly_name: "Authenticator App", factor_type: "totp", status: "unverified", created_at: "2026-10-01T00:00:00Z" };
 const VERIFIED = { id: "f-ok", friendly_name: "Phone", factor_type: "totp", status: "verified", created_at: "2026-09-01T00:00:00Z" };
 
+/** What supabase-js answers: `all` holds every factor, `totp` only the verified ones. */
+const factorsResponse = (...all: (typeof VERIFIED)[]) => ({
+  data: { all, totp: all.filter((factor) => factor.factor_type === "totp" && factor.status === "verified") },
+  error: null,
+});
+
 describe("MFASection unfinished setup", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -34,8 +40,8 @@ describe("MFASection unfinished setup", () => {
   });
 
   it("lists an unverified factor even when nothing is verified, and removes it without a code", async () => {
-    listFactors.mockResolvedValueOnce({ data: { totp: [UNVERIFIED] }, error: null });
-    listFactors.mockResolvedValue({ data: { totp: [] }, error: null });
+    listFactors.mockResolvedValueOnce(factorsResponse(UNVERIFIED));
+    listFactors.mockResolvedValue(factorsResponse());
     render(<MFASection />);
 
     const remove = await screen.findByRole("button", { name: "Remove unfinished setup" });
@@ -51,7 +57,16 @@ describe("MFASection unfinished setup", () => {
   });
 
   it("shows no unfinished-setup block when every factor is verified", async () => {
-    listFactors.mockResolvedValue({ data: { totp: [VERIFIED] }, error: null });
+    listFactors.mockResolvedValue(factorsResponse(VERIFIED));
+    render(<MFASection />);
+
+    expect(await screen.findByText("2FA is enabled")).toBeInTheDocument();
+    expect(screen.queryByTestId("unfinished-mfa-setup")).not.toBeInTheDocument();
+  });
+
+  it("ignores a factor of another type in `all`", async () => {
+    const PHONE = { ...UNVERIFIED, id: "f-phone", factor_type: "phone" };
+    listFactors.mockResolvedValue(factorsResponse(VERIFIED, PHONE));
     render(<MFASection />);
 
     expect(await screen.findByText("2FA is enabled")).toBeInTheDocument();
@@ -59,7 +74,7 @@ describe("MFASection unfinished setup", () => {
   });
 
   it("shows both a verified factor and a leftover unverified one", async () => {
-    listFactors.mockResolvedValue({ data: { totp: [VERIFIED, UNVERIFIED] }, error: null });
+    listFactors.mockResolvedValue(factorsResponse(VERIFIED, UNVERIFIED));
     render(<MFASection />);
 
     expect(await screen.findByText("2FA is enabled")).toBeInTheDocument();
