@@ -6,82 +6,13 @@ import {
   storeEmailAttachment,
 } from "../_shared/emailAttachmentStorage.ts";
 import { logToDatabase } from "../_shared/logging.ts";
+import { verifySvixSignature } from "../_shared/svixSignature.ts";
 import { downloadResendAttachment, isValidResendEmailId, readResendAttachmentList } from "../_shared/resendAttachmentList.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type, svix-id, svix-timestamp, svix-signature",
 };
-
-// Verify webhook signature using Svix
-async function verifyWebhookSignature(
-  payload: string,
-  headers: {
-    svixId: string | null;
-    svixTimestamp: string | null;
-    svixSignature: string | null;
-  },
-  secret: string
-): Promise<boolean> {
-  try {
-    if (!headers.svixId || !headers.svixTimestamp || !headers.svixSignature) {
-      console.error("Missing required Svix headers");
-      return false;
-    }
-
-    // Extract the secret key from the whsec_ prefix
-    const secretKey = secret.startsWith("whsec_") ? secret.slice(6) : secret;
-    const secretBytes = Uint8Array.from(atob(secretKey), c => c.charCodeAt(0));
-
-    // Create the signed payload
-    const signedPayload = `${headers.svixId}.${headers.svixTimestamp}.${payload}`;
-    const encoder = new TextEncoder();
-
-    // Import the key for HMAC
-    const key = await crypto.subtle.importKey(
-      "raw",
-      secretBytes,
-      { name: "HMAC", hash: "SHA-256" },
-      false,
-      ["sign"]
-    );
-
-    // Sign the payload
-    const signature = await crypto.subtle.sign(
-      "HMAC",
-      key,
-      encoder.encode(signedPayload)
-    );
-
-    // Convert to base64
-    const expectedSignature = btoa(String.fromCharCode(...new Uint8Array(signature)));
-
-    // Extract and verify signatures
-    const signatures = headers.svixSignature.split(" ");
-    for (const sig of signatures) {
-      const [version, sigValue] = sig.split(",");
-      if (version === "v1" && sigValue === expectedSignature) {
-        return true;
-      }
-    }
-
-    // Fallback: check timestamp (prevent replay attacks)
-    const timestamp = parseInt(headers.svixTimestamp, 10);
-    const now = Math.floor(Date.now() / 1000);
-    if (Math.abs(now - timestamp) > 300) { // 5 minute tolerance
-      console.error("Webhook timestamp too old");
-      return false;
-    }
-
-    // Still accepted on the timestamp alone (pre-existing behaviour, kept until real Resend
-    // deliveries are confirmed to verify). Logged loudly so the evidence shows up.
-    console.warn("[resend-webhook] SIGNATURE MISMATCH: accepted on timestamp fallback");
-    return true;
-  } catch (error) {
-    console.error("Error verifying webhook signature:", error);
-    return false;
-  }
-}
 
 // Fetch full inbound email content from Resend Receiving API
 async function fetchEmailContent(
@@ -269,10 +200,19 @@ serve(async (req) => {
       svixSignature: req.headers.get("svix-signature"),
     };
 
-    // Verify signature
-    const isValid = await verifyWebhookSignature(payload, svixHeaders, webhookSecret);
-    if (!isValid) {
-      console.error("Invalid webhook signature");
+    const supabase = createClient(supabaseUrl, supabaseServiceKey);
+
+    // Only a delivery Resend signed is processed: a fresh timestamp alone is not enough.
+    const verdict = await verifySvixSignature(payload, svixHeaders, webhookSecret);
+    if (!verdict.ok) {
+      console.error(`[resend-webhook] refused: ${verdict.reason}`);
+      await logToDatabase(supabase, {
+        level: "warn",
+        category: "system",
+        source: "resend-webhook",
+        message: "Webhook refused: the Svix signature did not verify",
+        metadata: { code: "invalid_signature", reason: verdict.reason, svix_id: svixHeaders.svixId },
+      });
       return new Response(
         JSON.stringify({ error: "Invalid signature" }),
         { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } }
@@ -283,8 +223,6 @@ serve(async (req) => {
     const event = JSON.parse(payload);
     console.log("Webhook event type:", event.type);
     console.log("Event data:", JSON.stringify(event.data).substring(0, 1000));
-
-    const supabase = createClient(supabaseUrl, supabaseServiceKey);
 
     // Handle different event types
     switch (event.type) {
