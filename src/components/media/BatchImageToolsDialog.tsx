@@ -45,6 +45,13 @@ import {
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { cn } from "@/lib/utils";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { useCdnConfig } from "@/hooks/useCdnConfig";
+import {
+  cloudinaryTransformsState,
+  isProviderUnavailable,
+  runBackgroundRemoval,
+  runUpscale,
+} from "@/components/media/image-tools/aiImageTools";
 
 interface BatchFile {
   id: string;
@@ -123,6 +130,11 @@ export function BatchImageToolsDialog({
   cloudName,
   onProcessComplete,
 }: BatchImageToolsDialogProps) {
+  const cdn = useCdnConfig();
+  // `loading` until the CDN config is known; `unavailable` means only the server-side AI steps
+  // (background removal, upscale) work.
+  const cdnState = cloudinaryTransformsState(cdn);
+  const transformsUnavailable = cdnState === "unavailable";
   const [processing, setProcessing] = useState(false);
   const [fileStates, setFileStates] = useState<FileProcessState[]>([]);
   
@@ -223,6 +235,18 @@ export function BatchImageToolsDialog({
       setOutputFormat("auto");
     }
   }, [open, files]);
+
+  // Resize, filters, quality and the fine-edges / enhance / restore variants are Cloudinary
+  // transforms. Once they are known to be unavailable their controls are disabled, so anything
+  // already chosen would stay chosen with no way to change it.
+  useEffect(() => {
+    if (!transformsUnavailable) return;
+    setEnableResize(false);
+    setEnableFilters(false);
+    setEnableQuality(false);
+    setEdgeMode("none");
+    setUpscaleMode("standard");
+  }, [transformsUnavailable]);
 
   const hasFilterModifications = brightness !== 0 || contrast !== 0 || saturation !== 0 || blur > 0 || sharpening > 0 || noiseReduction > 0 || artisticFilter !== "none";
 
@@ -335,7 +359,19 @@ export function BatchImageToolsDialog({
     };
   };
 
-  const processFile = async (file: BatchFile): Promise<void> => {
+  // Cloudinary is not serving transforms: the AI steps run on the server, one after the other on
+  // the file's public URL (background removal first, then upscale). The server picks the
+  // provider. A cut-out has transparency, so the upscale after it asks for PNG.
+  const fetchServerProcessedBlob = async (file: BatchFile): Promise<Blob> => {
+    let currentUrl = file.publicUrl;
+    if (enableBgRemoval) currentUrl = await runBackgroundRemoval(currentUrl);
+    if (enableUpscale) currentUrl = await runUpscale(currentUrl, enableBgRemoval ? { outputFormat: "png" } : {});
+    const response = await fetch(currentUrl);
+    if (!response.ok) throw new Error(`Failed to fetch processed image: ${response.status}`);
+    return response.blob();
+  };
+
+  const fetchCloudinaryProcessedBlob = async (file: BatchFile): Promise<Blob> => {
     const isCloudinaryFile = file.storage_bucket === "cloudinary" && !!file.cloudinary_public_id;
     
     let publicId: string;
@@ -374,13 +410,20 @@ export function BatchImageToolsDialog({
     if (!imageBlob) {
       throw new Error("Processing timed out");
     }
+    return imageBlob;
+  };
+
+  const processFile = async (file: BatchFile): Promise<void> => {
+    const imageBlob = transformsUnavailable
+      ? await fetchServerProcessedBlob(file)
+      : await fetchCloudinaryProcessedBlob(file);
 
     // Convert to base64 and upload
     const reader = new FileReader();
     const base64Promise = new Promise<string>((resolve, reject) => {
       reader.onload = () => resolve(reader.result as string);
       reader.onerror = reject;
-      reader.readAsDataURL(imageBlob!);
+      reader.readAsDataURL(imageBlob);
     });
     const base64Data = await base64Promise;
 
@@ -418,6 +461,7 @@ export function BatchImageToolsDialog({
   };
 
   const handleProcess = async () => {
+    if (cdnState === "loading") return;
     const hasValidResize = enableResize && resizeMode !== "original";
     const hasValidFilters = enableFilters && hasFilterModifications;
     
@@ -450,7 +494,9 @@ export function BatchImageToolsDialog({
           fs.id === file.id ? { 
             ...fs, 
             status: "error", 
-            error: error instanceof Error ? error.message : "Unknown error" 
+            error: isProviderUnavailable(error)
+              ? t("toast.aiToolUnavailable", "This AI tool is temporarily unavailable. Please try again later.")
+              : error instanceof Error ? error.message : "Unknown error",
           } : fs
         ));
       }
@@ -494,6 +540,14 @@ export function BatchImageToolsDialog({
         </DialogHeader>
 
         <div className="flex-1 overflow-y-auto space-y-4 pe-2">
+          {transformsUnavailable && (
+            <Alert>
+              <AlertDescription>
+                {t("imageTools.aiOnlyNotice", "Only background removal and upscale are available right now. Resize, filters and quality are turned off.")}
+              </AlertDescription>
+            </Alert>
+          )}
+
           {/* Feature Toggles */}
           <div className="grid grid-cols-2 sm:grid-cols-5 gap-2 p-3 bg-muted/50 rounded-lg">
             <div className="flex items-center justify-between p-2 border rounded-md bg-background">
@@ -517,7 +571,7 @@ export function BatchImageToolsDialog({
               <Switch
                 checked={enableResize}
                 onCheckedChange={setEnableResize}
-                disabled={processing}
+                disabled={processing || transformsUnavailable}
                 className="scale-75"
               />
             </div>
@@ -543,7 +597,7 @@ export function BatchImageToolsDialog({
               <Switch
                 checked={enableFilters}
                 onCheckedChange={setEnableFilters}
-                disabled={processing}
+                disabled={processing || transformsUnavailable}
                 className="scale-75"
               />
             </div>
@@ -556,7 +610,7 @@ export function BatchImageToolsDialog({
               <Switch
                 checked={enableQuality}
                 onCheckedChange={setEnableQuality}
-                disabled={processing}
+                disabled={processing || transformsUnavailable}
                 className="scale-75"
               />
             </div>
@@ -569,7 +623,7 @@ export function BatchImageToolsDialog({
               {enableBgRemoval && (
                 <div className="p-3 border rounded-lg space-y-2">
                   <Label className="text-xs font-medium">{t("batch.edgeQuality", "Edge Quality")}</Label>
-                  <Select value={edgeMode} onValueChange={(v) => setEdgeMode(v as EdgeMode)} disabled={processing}>
+                  <Select value={edgeMode} onValueChange={(v) => setEdgeMode(v as EdgeMode)} disabled={processing || transformsUnavailable}>
                     <SelectTrigger className="h-8 text-xs">
                       <SelectValue />
                     </SelectTrigger>
@@ -612,7 +666,7 @@ export function BatchImageToolsDialog({
               {enableUpscale && (
                 <div className="p-3 border rounded-lg space-y-2">
                   <Label className="text-xs font-medium">{t("batch.upscaleMode", "Upscale Mode")}</Label>
-                  <Select value={upscaleMode} onValueChange={(v) => setUpscaleMode(v as any)} disabled={processing}>
+                  <Select value={upscaleMode} onValueChange={(v) => setUpscaleMode(v as "standard" | "enhance" | "restore")} disabled={processing || transformsUnavailable}>
                     <SelectTrigger className="h-8 text-xs">
                       <SelectValue />
                     </SelectTrigger>
@@ -759,7 +813,7 @@ export function BatchImageToolsDialog({
           <Button variant="outline" onClick={onClose} disabled={processing}>
             {processing ? t("common:status.processing", "Processing...") : t("common:cancel", "Cancel")}
           </Button>
-          <Button onClick={handleProcess} disabled={processing}>
+          <Button onClick={handleProcess} disabled={processing || cdnState === "loading"}>
             {processing ? (
               <>
                 <Loader2 className="w-4 h-4 me-2 animate-spin" />
