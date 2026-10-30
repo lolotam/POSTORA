@@ -118,6 +118,7 @@ import {
   type PostReader,
   readPostOutcome,
   unreadableOutcomeLog,
+  writeLogRow,
 } from "./postSettlement.ts";
 import { z } from "npm:zod@3.23.8";
 
@@ -1315,11 +1316,8 @@ async function finishDeferredPost(
   if (outcome.kind === "in_progress") return { finalStatus: "processing", notified: false };
   if (outcome.kind === "unknown") {
     console.error(`[process-post] ${outcome.error}`);
-    try {
-      await supabase.from("system_logs").insert(unreadableOutcomeLog(post.user_id, post.id, platformPostId, outcome.error));
-    } catch (logError) {
-      console.error("[process-post] could not log the unreadable post either:", logError);
-    }
+    const logError = await writeLogRow(supabase, unreadableOutcomeLog(post.user_id, post.id, platformPostId, outcome.error));
+    if (logError) console.error("[process-post] could not log the unreadable post either:", logError);
     return { finalStatus: "processing", notified: false };
   }
   if (outcome.degraded) console.warn(`[process-post] notifying with a partial read: ${outcome.degraded}`);

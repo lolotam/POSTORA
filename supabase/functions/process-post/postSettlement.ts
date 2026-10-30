@@ -183,3 +183,21 @@ export function unreadableOutcomeLog(userId: string, postId: string, platformPos
     metadata: { post_id: postId, platform_post_id: platformPostId, error },
   };
 }
+
+interface LogWriter {
+  from(table: "system_logs"): { insert(row: Record<string, unknown>): PromiseLike<{ error: { message: string } | null }> };
+}
+
+/**
+ * Writes a system_logs row and says whether it landed: the client resolves with `{ error }`
+ * rather than throwing, so a bare `await insert(...)` inside a try/catch would take a failed
+ * write for a successful one. Returns the error text, or null.
+ */
+export async function writeLogRow(db: LogWriter, row: Record<string, unknown>): Promise<string | null> {
+  try {
+    const { error } = await db.from("system_logs").insert(row);
+    return error?.message ?? null;
+  } catch (caught) {
+    return caught instanceof Error ? caught.message : String(caught);
+  }
+}

@@ -6,6 +6,7 @@ import {
   readPostOutcome,
   summarizeRows,
   unreadableOutcomeLog,
+  writeLogRow,
 } from "./postSettlement.ts";
 
 const FALLBACK = {
@@ -123,6 +124,13 @@ Deno.test("the unreadable-outcome log row is an error naming the post and the ro
   assertEquals(row.source, "process-post");
   assertEquals(row.user_id, "user-1");
   assertEquals(row.metadata, { post_id: "post-1", platform_post_id: "pp-1", error: "post: timeout" });
+});
+
+Deno.test("a log write that returns an error, or throws, is reported rather than taken for success", async () => {
+  const dbReturning = (result: () => Promise<{ error: { message: string } | null }>) => ({ from: () => ({ insert: result }) });
+  assertEquals(await writeLogRow(dbReturning(() => Promise.resolve({ error: null })), { a: 1 }), null);
+  assertEquals(await writeLogRow(dbReturning(() => Promise.resolve({ error: { message: "permission denied" } })), { a: 1 }), "permission denied");
+  assertEquals(await writeLogRow(dbReturning(() => Promise.reject(new Error("connection reset"))), { a: 1 }), "connection reset");
 });
 
 Deno.test("a live story is not overwritten by a failed reel in the legacy per-platform map", () => {
