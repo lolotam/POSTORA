@@ -435,7 +435,9 @@ export function BatchImageToolsDialog({
       enableFilters && hasFilterModifications && "filtered",
     ].filter(Boolean).join("-");
     
-    const newFileName = `${originalName}_${suffix || "processed"}_${Date.now()}.png`;
+    // No extension: the upload takes the type from the bytes. Openinary delivery can serve WebP
+    // for a .png path, and a forced .png would then be refused as a content/extension mismatch.
+    const newFileName = `${originalName}_${suffix || "processed"}_${Date.now()}`;
 
     const { data: uploadData, error: uploadError } = await supabase.functions.invoke("cloudinary-upload", {
       body: {

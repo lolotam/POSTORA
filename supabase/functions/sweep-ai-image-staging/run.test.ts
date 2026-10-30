@@ -136,3 +136,15 @@ Deno.test("user folders are the root's direct children, as the listing names the
     [`${ROOT}/u1`],
   );
 });
+
+Deno.test("each run starts at a random folder and wraps around, so a budget cut does not starve the tail", async () => {
+  const seen: string[] = [];
+  const { fake } = ports({ folders: ["f0", "f1", "f2", "f3"].map((f) => `${ROOT}/${f}`) });
+  fake.listStaged = (folder) => {
+    seen.push(folder.slice(ROOT.length + 1));
+    return Promise.resolve([]);
+  };
+  await runSweep(fake, { now: () => NOW, random: () => 0.5 });
+  assertEquals(new Set(seen), new Set(["f0", "f1", "f2", "f3"]));
+  assertEquals(seen.slice(0, 2).sort(), ["f2", "f3"]); // the first workers take the rotated head
+});

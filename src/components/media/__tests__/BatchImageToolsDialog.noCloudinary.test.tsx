@@ -73,10 +73,12 @@ describe("BatchImageToolsDialog while Cloudinary is not serving transforms", () 
     expect(runUpscale).toHaveBeenCalledWith(`${files[0].publicUrl}?bg`, { outputFormat: "png" });
     expect(runUpscale).toHaveBeenCalledWith(`${files[1].publicUrl}?bg`, { outputFormat: "png" });
     expect(fetchedUrls(fetchMock)).toEqual([`${files[0].publicUrl}?bg&up`, `${files[1].publicUrl}?bg&up`]);
-    // The only cloudinary-upload calls are the final saves, never a staging copy.
+    // The only cloudinary-upload calls are the final saves, never a staging copy. The saved name
+    // has no extension, so the upload takes the type from the bytes (Openinary may deliver WebP).
     for (const [name, { body }] of invoke.mock.calls) {
       expect(name).toBe("cloudinary-upload");
       expect(body).not.toHaveProperty("skipMediaFiles");
+      expect(body.fileName).toMatch(/^[ab]_bg-removed-upscaled_\d+$/);
     }
     expect(update).toHaveBeenCalledTimes(1); // only file "a" has a folder to restore
   });

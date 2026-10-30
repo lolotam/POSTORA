@@ -31,6 +31,8 @@ export interface SweepPorts {
 
 export interface SweepOptions {
   now?: () => number;
+  /** In [0, 1): where in the folder list this run starts. */
+  random?: () => number;
   budgetMs?: number;
   maxDeletes?: number;
 }
@@ -63,7 +65,11 @@ export async function runSweep(ports: SweepPorts, options: SweepOptions = {}): P
   const deadline = now() + (options.budgetMs ?? RUN_BUDGET_MS);
   const maxDeletes = options.maxDeletes ?? MAX_DELETES_PER_RUN;
 
-  const folders = await ports.listUserFolders();
+  const listed = await ports.listUserFolders();
+  // Each run starts at a random folder and wraps around, so a run that runs out of budget does
+  // not leave the same tail of the list unvisited every time.
+  const start = Math.floor((options.random ?? Math.random)() * listed.length);
+  const folders = [...listed.slice(start), ...listed.slice(0, start)];
   const summary: SweepSummary = {
     user_folders: folders.length, scanned: 0, deleted: 0, kept_fresh: 0, undated: 0, list_errors: 0, delete_errors: 0, incomplete: false,
   };
