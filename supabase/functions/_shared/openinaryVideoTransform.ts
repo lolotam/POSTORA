@@ -105,8 +105,6 @@ const MAX_DIMENSION = 16384;
 export const MAX_TARGET_DIMENSION = 4096;
 /** A crop box smaller than this many pixels on either side is not a usable video. */
 const MIN_CROP_PIXELS = 16;
-/** Without the source size a box is checked in percent: under 1 % of a side is a sliver at any resolution we accept. */
-const MIN_RELATIVE_CROP_PERCENT = 1;
 
 const TRANSCODE_PRESETS: Record<TranscodePlatform, Dimensions> = {
   tiktok: { width: 720, height: 1280 },
@@ -279,14 +277,10 @@ export function cloudinaryCompressTransformation(request: CompressRequest): stri
 export function cloudinaryCropTransformation(crop: CropRequest, source: Dimensions | null): string {
   assertCrop(crop);
   const { targetWidth, targetHeight } = crop;
+  // Without the source size neither the 16 px floor nor the upscale bound can be checked, so
+  // it is refused like the Openinary path does; the caller can send the player's dimensions.
   if (!source) {
-    if (crop.width < MIN_RELATIVE_CROP_PERCENT || crop.height < MIN_RELATIVE_CROP_PERCENT) {
-      throw invalid(`crop box is too small: each side must cover at least ${MIN_RELATIVE_CROP_PERCENT}% of the video`);
-    }
-    const f = (percent: number) => Number(Math.min(1, Math.max(0, percent / 100)).toFixed(4));
-    let chain = `c_crop,fl_relative,x_${f(crop.x)},y_${f(crop.y)},w_${f(crop.width)},h_${f(crop.height)}`;
-    if (targetWidth && targetHeight) chain += `/c_scale,w_${targetWidth},h_${targetHeight}`;
-    return `${chain}/vc_h264,q_auto:good,f_mp4`;
+    throw new OpeninaryVideoError("SOURCE_DIMENSIONS_UNKNOWN", "The video's width and height are unknown, so the crop cannot be sized. Re-open the video and try again.");
   }
   const px = (percent: number, dimension: number) => Math.round((percent / 100) * dimension);
   const x = px(crop.x, source.width);

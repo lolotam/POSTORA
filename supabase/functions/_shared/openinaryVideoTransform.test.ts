@@ -139,10 +139,8 @@ Deno.test("cloudinary fallback strings keep the old eager transformations", () =
     cloudinaryCropTransformation({ x: 25, y: 0, width: 50, height: 100, targetWidth: 1080, targetHeight: 1920 }, FHD),
     "c_crop,x_480,y_0,w_960,h_1080/c_scale,w_1080,h_1920/vc_h264,q_auto:good,f_mp4",
   );
-  assertEquals(
-    cloudinaryCropTransformation({ x: 25, y: 0, width: 50, height: 100 }, null),
-    "c_crop,fl_relative,x_0.25,y_0,w_0.5,h_1/vc_h264,q_auto:good,f_mp4",
-  );
+  // without the source size a crop cannot be checked, so it is refused rather than guessed
+  refusal(() => cloudinaryCropTransformation({ x: 25, y: 0, width: 50, height: 100 }, null), "SOURCE_DIMENSIONS_UNKNOWN");
   assertEquals(cloudinaryTranscodeTransformation("youtube"), "c_fill,w_1920,h_1080,ar_16:9,g_center/vc_h264,q_auto:best,f_mp4");
   assertEquals(cloudinaryTranscodeTransformation("tiktok"), "c_fill,w_720,h_1280,ar_9:16,g_center/vc_h264,q_auto:best,f_mp4");
 });
@@ -175,8 +173,6 @@ Deno.test("a sliver of a crop is refused instead of upscaled to an absurd or inf
   // 0.01 % of 1920 rounds to 0 pixels wide: the auto-upscale used to divide by zero
   refusal(() => planCrop({ x: 49.995, y: 0, width: 0.01, height: 100 }, FHD), "INVALID_REQUEST");
   refusal(() => cloudinaryCropTransformation({ x: 49.995, y: 0, width: 0.01, height: 100 }, FHD), "INVALID_REQUEST");
-  // without the source size the same sliver is caught in percent
-  refusal(() => cloudinaryCropTransformation({ x: 49.995, y: 0, width: 0.01, height: 100 }, null), "INVALID_REQUEST");
   // 20 px wide on a 4320 px tall source would upscale to 720 x 155520
   refusal(() => planCrop({ x: 49.87, y: 0, width: 0.26, height: 100 }, { width: 7680, height: 4320 }), "INVALID_REQUEST");
   // an untouched 8K full frame keeps its own size
