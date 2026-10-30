@@ -96,15 +96,29 @@ new `process-post/deferredPublish.ts` (+ test), `process-post/index.ts`, new fun
 
 ## Task 7 — Part C: larger API/MCP uploads by URL
 
-Files: `cloudinary-upload/index.ts`, `_shared/openinary.ts` (streamed upload), new
-`_shared/urlIngest.ts` (+ test), `n8n-api/index.ts` (message only), `mcp/index.ts` (tool description).
+Files: `cloudinary-upload/index.ts`, `cloudinary-upload/urlIngest.ts` (+ test),
+`_shared/openinary.ts` (streamed upload), `n8n-api/index.ts` (message only), `mcp/index.ts`
+(tool description). As shipped, matching spec C1–C5:
 
-1. `urlIngest.ts`: `preflightExternalUrl` (SSRF-safe HEAD; falls back to a `Range: bytes=0-0` GET when HEAD is refused) → `{ contentLength, contentType }`; `capFor(kind, limits)` = `min(directUploadByteCap, URL_INGEST_MAX_BYTES)`.
-2. Streamed multipart body to Openinary (`ReadableStream` with a byte counter that errors at the cap), keeping adopt-before-upload and collision checks; whole leg ≤ 45 s.
-3. Cloudinary-only: no download; URL handed over; upload `fetch` gets a 60 s timeout.
-4. Base64 path unchanged at 10 MB; MCP `upload_media` description says "over 10 MB, pass media_url".
-5. Tests: over-cap header refused before GET; missing length refused; lying header aborts at the cap; Cloudinary-only never calls the GET.
-6. Commit: `feat(media): accept URL uploads up to the admin limit via streaming`.
+1. `urlIngest.ts`: `streamedSourceLength` (the `Content-Length` declared by the one
+   SSRF-checked GET, when it is over 10 MB) and `streamIngestCap(kind, limits)` =
+   `min(directUploadByteCap, STREAM_INGEST_MAX_BYTES)`, where `STREAM_INGEST_MAX_BYTES` is
+   95 MB while Openinary sits behind Cloudflare's 100 MB request cap. There is **no preflight
+   request**: the GET's headers pick the path, and above 10 MB only the first 4 KB are read
+   (`readPrefix`) to tell the file's type before the stream is passed on.
+2. A body up to 10 MB, or one that declares no length, is buffered as before and still capped
+   at 10 MB (`readCappedBytes`). A missing length is not refused.
+3. `uploadStreamToOpeninary` pipes the body into a streamed multipart request of exact
+   `Content-Length`, counting bytes: a source that sends more or fewer than it declared fails
+   the upload. It keeps adopt-before-upload and collision rules and is bounded to 45 s.
+4. A streamed upload needs Openinary: with Openinary off, a URL over 10 MB is refused with a
+   clear message. Cloudinary's upload `fetch` has a 60 s timeout.
+5. Base64 stays at 10 MB; the MCP `upload_media` description says "over 10 MB, pass
+   media_url".
+6. Tests (`urlIngest.test.ts`, `openinaryStream.test.ts`): only a declared length over 10 MB
+   streams; the cap is the admin limit held under 95 MB; the prefix and the rest add back up to
+   the body; a source that sends more or fewer bytes than it declared fails the upload.
+7. Commit: `feat(media): accept URL uploads up to the admin limit via streaming`.
 
 ## Task 8 — Wrap-up
 

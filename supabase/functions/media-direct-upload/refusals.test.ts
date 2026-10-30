@@ -51,3 +51,20 @@ Deno.test("a server-side refusal is logged as an error", async () => {
   assertEquals(logged[0].level, "error");
   assertEquals(logged[0].user_id, undefined);
 });
+
+Deno.test("a refusal with no admin client (an unauthenticated caller) writes nothing", async () => {
+  let writes = 0;
+  const response = await refuse(
+    new Request("https://x.test", { method: "POST" }),
+    null,
+    null,
+    { status: 401, reason: "unauthenticated", body: { success: false, error: "Authentication failed." } },
+    () => {
+      writes++;
+      return Promise.resolve();
+    },
+  );
+  assertEquals(response.status, 401);
+  assertEquals(await response.json(), { success: false, error: "Authentication failed." });
+  assertEquals(writes, 0);
+});
