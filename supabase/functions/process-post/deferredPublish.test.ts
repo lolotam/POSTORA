@@ -9,6 +9,7 @@ import {
   DEFERRAL_GIVE_UP_MS,
   deferrableDeadline,
   PUBLISH_RESERVE_MS,
+  refuseOnSpentWorker,
   FOLLOW_UP_RESERVE_MS,
   WORKER_LIFETIME_MS,
   withFollowUpsStarted,
@@ -296,4 +297,16 @@ Deno.test("marking the follow-ups keeps the rest of the row's response data and 
     warnings: ["w"],
     deferred: { kind: "ig_reel", container_id: "c1", followups_started_at: "2026-10-30T15:03:30.000Z" },
   });
+});
+
+Deno.test("only a run its caller retries on its own is refused on a worker near its end", () => {
+  const start = 1_000_000;
+  const late = start + WORKER_LIFETIME_MS - PUBLISH_RESERVE_MS + 1;
+  const early = start + WORKER_LIFETIME_MS - PUBLISH_RESERVE_MS - 1;
+  // The reconciler's resume and the scheduler's run come back on their own: refused late.
+  assertEquals(refuseOnSpentWorker({ resume: true, scheduled: false }, start, late), true);
+  assertEquals(refuseOnSpentWorker({ resume: false, scheduled: true }, start, late), true);
+  assertEquals(refuseOnSpentWorker({ resume: true, scheduled: false }, start, early), false);
+  // Every other caller would not retry a refusal: always started, bounded by the deadlines.
+  assertEquals(refuseOnSpentWorker({ resume: false, scheduled: false }, start, late), false);
 });

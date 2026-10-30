@@ -118,6 +118,7 @@ import {
   workerPublishDeadline,
   NO_DEFERRAL,
   ownContainerDeadline,
+  refuseOnSpentWorker,
   storyRecoveryExhausted,
   pollDeadline,
   readDeferral,
@@ -1478,6 +1479,13 @@ Deno.serve(async (req) => {
 
       authenticatedUserId = claimsData.claims.sub as string;
       console.log("User authenticated", { userId: authenticatedUserId });
+    }
+
+    // A run its caller retries on its own is not started on a worker near its end: it would be
+    // stopped between creating a container and recording it. Refused before any read or claim.
+    if (refuseOnSpentWorker({ resume: !!resumePlatformPostId, scheduled: typeof expectedScheduledAt === "string" }, WORKER_STARTED_AT_MS, Date.now())) {
+      console.warn(`[process-post] worker too old to start post ${post_id}; the caller retries on a fresh one`);
+      return createErrorResponse("This worker is about to stop, so the run was not started. Retrying shortly is safe.", 503);
     }
 
     // ─────────────────────────────────────────────────────────────────────

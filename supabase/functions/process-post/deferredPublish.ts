@@ -185,6 +185,23 @@ export function deferrableDeadline(deadlineMs: number, workerStartedAtMs: number
   return Math.min(deadlineMs, workerStartedAtMs + WORKER_LIFETIME_MS - PUBLISH_RESERVE_MS);
 }
 
+/**
+ * Whether this worker is too old to start a run whose caller retries on its own: the
+ * reconciler's resume (it calls again next minute) and the scheduler's run (the post stays
+ * `scheduled` and is picked up on the next tick). Such a run is refused before it reads or
+ * claims anything, so a fresh worker does all of it. Any other caller (the web app, n8n, MCP,
+ * TikTok review) does not retry a refusal, so its run starts and is bounded by the deadlines
+ * above instead: a reel defers, and nothing else is published that cannot be recorded.
+ */
+export function refuseOnSpentWorker(
+  run: { resume: boolean; scheduled: boolean },
+  workerStartedAtMs: number,
+  nowMs: number,
+): boolean {
+  if (!run.resume && !run.scheduled) return false;
+  return workerStartedAtMs + WORKER_LIFETIME_MS - nowMs < PUBLISH_RESERVE_MS;
+}
+
 /** How long past `give_up_at` an abandon may keep retrying a story it could not record. */
 export const STORY_RECOVERY_GRACE_MS = 10 * 60 * 1000;
 
