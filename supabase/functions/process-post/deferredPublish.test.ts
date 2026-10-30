@@ -67,11 +67,11 @@ Deno.test("only a well-formed deferral is read off a row", () => {
 function fakeDb(error: string | null = null) {
   const writes: { op: string; values: unknown; filters: [string, unknown][] }[] = [];
   const db = {
+    rpc: (fn: string, args: unknown) => {
+      writes.push({ op: `rpc:${fn}`, values: args, filters: [] });
+      return Promise.resolve({ error: error ? { message: error } : null });
+    },
     from: () => ({
-      insert: (values: unknown) => {
-        writes.push({ op: "insert", values, filters: [] });
-        return Promise.resolve({ error: error ? { message: error } : null });
-      },
       update: (values: unknown) => {
         const write = { op: "update", values, filters: [] as [string, unknown][] };
         writes.push(write);
@@ -92,14 +92,23 @@ const ACCOUNT = { id: "acct-1", platform: "instagram", platform_username: "shop"
 const SIGNAL = new ContainerStillProcessing("ig_reel", "c-9");
 const noSettle = () => Promise.reject(new Error("settle must not be called"));
 
-Deno.test("a first run records a pending row carrying the deferral", async () => {
+Deno.test("a first run records its pending row through the tenancy-checking SQL function", async () => {
   const { db, writes } = fakeDb();
   const result = await recordStillProcessing(db, noSettle, { postId: "post-1", account: ACCOUNT, signal: SIGNAL, resume: null, resumeResponseData: null }, NOW);
   assertEquals(result, { gaveUp: false, error: null });
-  assertEquals(writes[0].op, "insert");
-  const row = writes[0].values as Record<string, unknown>;
-  assertEquals([row.post_id, row.social_account_id, row.platform, row.status], ["post-1", "acct-1", "instagram", "pending"]);
-  assertEquals((row.response_data as Record<string, unknown>).deferred, newDeferral("ig_reel", "c-9", NOW));
+  assertEquals(writes.length, 1);
+  assertEquals(writes[0].op, "rpc:record_deferred_platform_post");
+  const args = writes[0].values as { p_post_id: string; p_social_account_id: string; p_response_data: Record<string, unknown> };
+  assertEquals([args.p_post_id, args.p_social_account_id], ["post-1", "acct-1"]);
+  assertEquals(args.p_response_data.deferred, newDeferral("ig_reel", "c-9", NOW));
+  assertEquals(args.p_response_data.account_username, "shop");
+});
+
+Deno.test("a cross-tenant refusal from the SQL function is an error, never a recorded row", async () => {
+  const { db } = fakeDb("record_deferred_platform_post: account a does not belong to the owner of post p (cross-tenant pairing refused)");
+  const result = await recordStillProcessing(db, noSettle, { postId: "post-1", account: ACCOUNT, signal: SIGNAL, resume: null, resumeResponseData: null }, NOW);
+  assertEquals(result.gaveUp, false);
+  assertEquals(result.error?.includes("cross-tenant pairing refused"), true);
 });
 
 Deno.test("a resumed run before the deadline moves the next check out and keeps the row's data", async () => {

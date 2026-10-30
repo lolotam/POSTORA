@@ -116,8 +116,12 @@ type WriteResult = PromiseLike<{ error: { message: string } | null }>;
 
 /** The two platform_posts writes recordStillProcessing makes, and nothing more. */
 interface PlatformPostsWriter {
+  /** record_deferred_platform_post: inserts the pending row only for an account of the post's owner. */
+  rpc(
+    fn: "record_deferred_platform_post",
+    args: { p_post_id: string; p_social_account_id: string; p_response_data: Record<string, unknown> },
+  ): WriteResult;
   from(table: "platform_posts"): {
-    insert(values: Record<string, unknown>): WriteResult;
     update(values: Record<string, unknown>): { eq(column: string, value: string): { eq(column: string, value: string): WriteResult } };
   };
 }
@@ -150,12 +154,13 @@ export async function recordStillProcessing(
 ): Promise<{ gaveUp: boolean; error: string | null }> {
   const db = supabase as PlatformPostsWriter;
   if (!args.resume) {
-    const { error } = await db.from("platform_posts").insert({
-      post_id: args.postId,
-      social_account_id: args.account.id,
-      platform: args.account.platform,
-      status: "pending",
-      response_data: {
+    // Through SQL, not a bare insert: the function refuses an account that does not belong
+    // to the post's owner, so the pairing never depends on this caller having checked it.
+    // The platform is taken from the account row there.
+    const { error } = await db.rpc("record_deferred_platform_post", {
+      p_post_id: args.postId,
+      p_social_account_id: args.account.id,
+      p_response_data: {
         deferred: newDeferral(args.signal.kind, args.signal.containerId, now),
         account_username: args.account.platform_username,
         account_metadata: args.account.account_metadata,
