@@ -99,15 +99,17 @@ import { firstPublicPostId } from "../_shared/tiktokPublishOutcome.ts";
 import { CHECK_ONCE_DEADLINE, CONTAINER_STATUS_FIELDS, containerFailureMessage, pollContainer } from "../_shared/metaContainerStatus.ts";
 import {
   abandonReason,
+  bufferAfterFinishedMs,
+  type ContainerWait,
   ContainerStillProcessing,
   giveUpMessage,
   NO_DEFERRAL,
   pollDeadline,
   readDeferral,
   recordStillProcessing,
-  type DeferredKind,
   type PublishTiming,
   type ResumeContext,
+  unfinishedError,
 } from "./deferredPublish.ts";
 import { recordPublishedStory } from "./instagramStory.ts";
 import {
@@ -3489,38 +3491,40 @@ async function optimizeUrlsForInstagram(urls: string[]): Promise<string[]> {
 
 /**
  * Waits for an Instagram container (either login) until it can be published. The wait is
- * `pollContainer`'s, so a deadline bounds the requests as well as the sleeps; a Meta API
- * error fails with Meta's reason and a server error is retried. Set `deferral` where the
- * container can be finished later: when time runs out the wait stops with
- * ContainerStillProcessing instead of running the worker out of time.
+ * `pollContainer`'s, so the deadline bounds the requests as well as the sleeps, for every
+ * container, deferrable or not; a Meta API error fails with Meta's reason and a server error
+ * is retried. When time runs out `unfinishedError` decides: a deferrable container
+ * (`wait.deferKind`) is left for the reconciler, any other fails with "Safe to retry".
  */
 async function waitForInstagramContainer(
   statusUrl: string,
   containerId: string,
   maxAttempts: number,
   delayMs: number,
-  deferral?: { kind: DeferredKind; deadlineMs: number },
+  wait: ContainerWait,
 ): Promise<string> {
   const container = await pollContainer("instagram", statusUrl, {
     maxAttempts,
     intervalMs: delayMs,
     checkFirst: true,
-    deadlineMs: deferral?.deadlineMs,
+    deadlineMs: wait.deadlineMs,
   });
   switch (container.state) {
     case "published":
       return "PUBLISHED";
-    case "finished":
-      // Add a buffer delay after FINISHED to ensure Instagram's backend is truly ready
-      console.log(`Container ${containerId} finished, waiting 3s before publish...`);
-      await new Promise((resolve) => setTimeout(resolve, 3000));
+    case "finished": {
+      // A buffer after FINISHED lets Instagram's backend settle; it counts against the deadline.
+      const bufferMs = bufferAfterFinishedMs(wait.deadlineMs, Date.now());
+      if (bufferMs > 0) {
+        console.log(`Container ${containerId} finished, waiting ${bufferMs}ms before publish...`);
+        await new Promise((resolve) => setTimeout(resolve, bufferMs));
+      }
       return "FINISHED";
+    }
     case "failed":
       throw new Error(containerFailureMessage("instagram", container.reason));
     default:
-      // NO_DEFERRAL (an infinite deadline) has nobody to finish the container later.
-      if (deferral && Number.isFinite(deferral.deadlineMs)) throw new ContainerStillProcessing(deferral.kind, containerId);
-      throw new Error("Container processing timed out after polling");
+      throw unfinishedError(wait, containerId, "Instagram");
   }
 }
 
@@ -3530,16 +3534,16 @@ async function waitForInstagramContainer(
 function pollContainerStatus(
   containerId: string,
   accessToken: string,
+  wait: ContainerWait,
   maxAttempts = 60, // Increased from 30 to 60 (2 min total for large video reels)
   delayMs = 2000,
-  deferral?: { kind: DeferredKind; deadlineMs: number },
 ): Promise<string> {
   return waitForInstagramContainer(
     `https://graph.facebook.com/v18.0/${containerId}?fields=${CONTAINER_STATUS_FIELDS.instagram}&access_token=${accessToken}`,
     containerId,
     maxAttempts,
     delayMs,
-    deferral,
+    wait,
   );
 }
 
@@ -3945,7 +3949,7 @@ async function postToInstagram(
         warnings.push(`Also share to Story failed: ${createData.error.message}`);
         return;
       }
-      await pollContainerStatus(createData.id, accessToken);
+      await pollContainerStatus(createData.id, accessToken, { deadlineMs: timing.deadlineMs });
       await publishInstagramMedia(igUserId, createData.id, accessToken);
       console.log("Instagram 'Also share to Story' published successfully");
     } catch (e) {
@@ -3997,7 +4001,7 @@ async function postToInstagram(
       warnings.push(`Instagram Story failed: ${createData.error.message}`);
     } else {
       // Poll for container readiness (especially for video stories)
-      await pollContainerStatus(createData.id, accessToken);
+      await pollContainerStatus(createData.id, accessToken, { deadlineMs: timing.deadlineMs });
 
       // Publish the story
       const publishData = await publishInstagramMedia(igUserId, createData.id, accessToken);
@@ -4115,7 +4119,7 @@ async function postToInstagram(
     }
 
     // Poll for container status before publishing (Required for videos)
-    const reelStatus = await pollContainerStatus(reelContainerId, accessToken, 60, 2000, { kind: "ig_reel", deadlineMs: timing.deadlineMs });
+    const reelStatus = await pollContainerStatus(reelContainerId, accessToken, { deferKind: "ig_reel", deadlineMs: timing.deadlineMs }, 60, 2000);
     if (reelStatus === "PUBLISHED") {
       // Only a resumed run sees this: an earlier run published but died before recording it.
       // No id: the container id is not the media id, and analytics would read it as one.
@@ -4208,7 +4212,7 @@ async function postToInstagram(
     if (createData.error) throw new Error(createData.error.message);
 
     // Poll for container status before publishing
-    await pollContainerStatus(createData.id, accessToken);
+    await pollContainerStatus(createData.id, accessToken, { deadlineMs: timing.deadlineMs });
 
     // Publish the media with retry logic
     const publishData = await publishInstagramMedia(igUserId, createData.id, accessToken);
@@ -4273,7 +4277,7 @@ async function postToInstagram(
       if (data.error) throw new Error(data.error.message);
 
       // Poll each item container
-      await pollContainerStatus(data.id, accessToken);
+      await pollContainerStatus(data.id, accessToken, { deadlineMs: timing.deadlineMs });
       containerIds.push(data.id);
     }
 
@@ -4318,7 +4322,7 @@ async function postToInstagram(
     if (carouselData.error) throw new Error(carouselData.error.message);
 
     // Poll carousel container
-    await pollContainerStatus(carouselData.id, accessToken);
+    await pollContainerStatus(carouselData.id, accessToken, { deadlineMs: timing.deadlineMs });
 
     // Publish carousel with retry logic
     const publishData = await publishInstagramMedia(igUserId, carouselData.id, accessToken);
@@ -4359,16 +4363,16 @@ async function postToInstagram(
 function pollBusinessLoginContainerStatus(
   containerId: string,
   accessToken: string,
+  wait: ContainerWait,
   maxAttempts = 30,
   delayMs = 2000,
-  deferral?: { kind: DeferredKind; deadlineMs: number },
 ): Promise<string> {
   return waitForInstagramContainer(
     `https://graph.instagram.com/v22.0/${containerId}?fields=${CONTAINER_STATUS_FIELDS.instagram}&access_token=${accessToken}`,
     containerId,
     maxAttempts,
     delayMs,
-    deferral,
+    wait,
   );
 }
 
@@ -4838,7 +4842,7 @@ async function postToInstagramBusinessLogin(
         await insertIGRow("story", "failed", undefined, undefined, msg);
         subResults.push({ subtype: "story", status: "failed", error: msg });
       } else {
-        await pollBusinessLoginContainerStatus(createData.id, accessToken);
+        await pollBusinessLoginContainerStatus(createData.id, accessToken, { deadlineMs: timing.deadlineMs });
         const publishData = await publishBusinessLoginMedia(igUserId, createData.id, accessToken);
         const fallbackUrl = username ? `https://www.instagram.com/${username}/` : `https://instagram.com`;
         const rowId = await insertIGRow("story", "success", publishData.id, fallbackUrl);
@@ -4909,10 +4913,10 @@ async function postToInstagramBusinessLogin(
         await insertIGRow(subtype, "failed", undefined, undefined, msg);
         subResults.push({ subtype, status: "failed", error: msg });
       } else {
-        const reelStatus = await pollBusinessLoginContainerStatus(createData.id, accessToken, 30, 2000, {
-          kind: "ig_business_reel",
+        const reelStatus = await pollBusinessLoginContainerStatus(createData.id, accessToken, {
+          deferKind: "ig_business_reel",
           deadlineMs: timing.deadlineMs,
-        });
+        }, 30, 2000);
         const fallbackUrl = username ? `https://www.instagram.com/${username}/` : `https://instagram.com`;
         const subtype = wantReel ? "reel" : "feed";
         if (reelStatus === "PUBLISHED") {
@@ -4978,7 +4982,7 @@ async function postToInstagramBusinessLogin(
           await insertIGRow("feed", "failed", undefined, undefined, msg);
           subResults.push({ subtype: "feed", status: "failed", error: msg });
         } else {
-          await pollBusinessLoginContainerStatus(createData.id, accessToken);
+          await pollBusinessLoginContainerStatus(createData.id, accessToken, { deadlineMs: timing.deadlineMs });
           const publishData = await publishBusinessLoginMedia(igUserId, createData.id, accessToken);
           const fallbackUrl = username ? `https://www.instagram.com/${username}/` : `https://instagram.com`;
           const blDebug = await finalizeBLLocationDebug(publishData.id);
@@ -5002,7 +5006,7 @@ async function postToInstagramBusinessLogin(
           );
           const data = await response.json();
           if (data.error) throw new Error(data.error.message);
-          await pollBusinessLoginContainerStatus(data.id, accessToken);
+          await pollBusinessLoginContainerStatus(data.id, accessToken, { deadlineMs: timing.deadlineMs });
           containerIds.push(data.id);
         }
 
@@ -5035,7 +5039,7 @@ async function postToInstagramBusinessLogin(
 
         if (carouselData.error) throw new Error(carouselData.error.message);
 
-        await pollBusinessLoginContainerStatus(carouselData.id, accessToken);
+        await pollBusinessLoginContainerStatus(carouselData.id, accessToken, { deadlineMs: timing.deadlineMs });
         const publishData = await publishBusinessLoginMedia(igUserId, carouselData.id, accessToken);
         const fallbackUrl = `https://instagram.com`;
         const blDebug = await finalizeBLLocationDebug(publishData.id);
@@ -6254,14 +6258,14 @@ async function postToThreads(
   const container = await pollContainer("threads", statusEndpoint, {
     maxAttempts: 15,
     intervalMs: pollInterval,
-    deadlineMs: timing.resume ? CHECK_ONCE_DEADLINE : deferrable ? timing.deadlineMs : undefined,
+    // Every container waits on the deadline, a video's or not; only a video can be finished later.
+    deadlineMs: timing.resume ? CHECK_ONCE_DEADLINE : timing.deadlineMs,
   });
 
   // Meta's ERROR ends the wait, and a container that never finished is never published blindly.
   if (container.state === "failed") throw new Error(containerFailureMessage("threads", container.reason));
   if (container.state === "waiting") {
-    if (deferrable && Number.isFinite(timing.deadlineMs)) throw new ContainerStillProcessing("threads", containerId);
-    throw new Error("Threads did not finish processing the media in time. Safe to retry.");
+    throw unfinishedError({ deadlineMs: timing.deadlineMs, deferKind: deferrable ? "threads" : undefined }, containerId, "Threads");
   }
   if (container.state === "published") {
     // Only a resumed run sees this: an earlier run published but died before recording it.

@@ -106,6 +106,37 @@ export function pollDeadline(startedAtMs: number, resumed: boolean): number {
   return resumed ? CHECK_ONCE_DEADLINE : startedAtMs + FIRST_RUN_POLL_BUDGET_MS;
 }
 
+/**
+ * What one container wait may do. EVERY wait has a deadline (`PublishTiming.deadlineMs`), so
+ * no poll can outlast the worker; `deferKind` says whether the container can be finished
+ * later. A deferrable one that runs out of time is handed to the reconciler; any other one
+ * ends in a plain "safe to retry" error.
+ */
+export interface ContainerWait {
+  deadlineMs: number;
+  deferKind?: DeferredKind;
+}
+
+/** What a wait throws when time or attempts ran out with the container still processing. */
+export function unfinishedError(wait: ContainerWait, containerId: string, platform: "Instagram" | "Threads"): Error {
+  // An infinite deadline (NO_DEFERRAL) has nobody to finish the container later.
+  if (wait.deferKind && Number.isFinite(wait.deadlineMs)) return new ContainerStillProcessing(wait.deferKind, containerId);
+  return new Error(`${platform} did not finish processing the media in time. Safe to retry.`);
+}
+
+const FINISHED_BUFFER_MS = 3000;
+
+/**
+ * Instagram's backend needs a moment after FINISHED before media_publish works. The pause
+ * counts against the deadline like any other time: it is cut to what is left, and is nothing
+ * once the deadline has passed (publishing retries cover a container that is not quite ready).
+ * A resumed run has a worker of its own, so it keeps the whole pause.
+ */
+export function bufferAfterFinishedMs(deadlineMs: number, nowMs: number): number {
+  if (deadlineMs === CHECK_ONCE_DEADLINE || !Number.isFinite(deadlineMs)) return FINISHED_BUFFER_MS;
+  return Math.max(0, Math.min(FINISHED_BUFFER_MS, deadlineMs - nowMs));
+}
+
 /** Reads the deferral off a pending row, or null if the row carries none. */
 export function readDeferral(responseData: unknown): Deferral | null {
   const parsed = DeferralSchema.safeParse((responseData as { deferred?: unknown } | null)?.deferred);

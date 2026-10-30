@@ -1,6 +1,8 @@
-import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
+import { assertEquals, assertInstanceOf } from "https://deno.land/std@0.224.0/assert/mod.ts";
+import { CHECK_ONCE_DEADLINE, pollContainer } from "../_shared/metaContainerStatus.ts";
 import {
   abandonReason,
+  bufferAfterFinishedMs,
   ContainerStillProcessing,
   DEFERRAL_GIVE_UP_MS,
   FIRST_RUN_POLL_BUDGET_MS,
@@ -11,6 +13,7 @@ import {
   pollDeadline,
   readDeferral,
   recordStillProcessing,
+  unfinishedError,
 } from "./deferredPublish.ts";
 
 const NOW = new Date("2026-10-29T12:00:00.000Z");
@@ -151,4 +154,44 @@ Deno.test("a failed write is reported, not swallowed", async () => {
   const { db } = fakeDb("permission denied");
   const result = await recordStillProcessing(db, noSettle, { postId: "post-1", account: ACCOUNT, signal: SIGNAL, resume: null, resumeResponseData: null }, NOW);
   assertEquals(result, { gaveUp: false, error: "permission denied" });
+});
+
+Deno.test("a deferrable container that runs out of time is left for the reconciler", () => {
+  const error = unfinishedError({ deadlineMs: 5_000, deferKind: "ig_reel" }, "c-1", "Instagram");
+  assertInstanceOf(error, ContainerStillProcessing);
+  assertEquals([(error as ContainerStillProcessing).kind, (error as ContainerStillProcessing).containerId], ["ig_reel", "c-1"]);
+});
+
+Deno.test("any other container that runs out of time fails with a clear, retryable error", () => {
+  for (const wait of [{ deadlineMs: 5_000 }, { deadlineMs: Number.POSITIVE_INFINITY, deferKind: "threads" as const }]) {
+    const error = unfinishedError(wait, "c-2", "Threads");
+    assertEquals(error instanceof ContainerStillProcessing, false);
+    assertEquals(error.message, "Threads did not finish processing the media in time. Safe to retry.");
+  }
+});
+
+Deno.test("a non-deferrable wait over a slow Meta ends by the deadline, then fails retryably", async () => {
+  let t = 1_000_000;
+  const deadlineMs = t + 35_000;
+  const timeouts: number[] = [];
+  const container = await pollContainer("instagram", "https://x", {
+    maxAttempts: 60, intervalMs: 2000, checkFirst: true, deadlineMs, now: () => t,
+    sleep: (ms) => { t += ms; return Promise.resolve(); },
+    fetcher: (_url, timeoutMs) => { timeouts.push(timeoutMs); t += timeoutMs; return Promise.reject(new DOMException("timed out", "TimeoutError")); },
+  });
+  assertEquals(container, { state: "waiting" });
+  assertEquals(t <= deadlineMs, true);
+  assertEquals(unfinishedError({ deadlineMs }, "c-3", "Instagram").message, "Instagram did not finish processing the media in time. Safe to retry.");
+});
+
+Deno.test("the pause after FINISHED counts against the deadline", () => {
+  assertEquals(bufferAfterFinishedMs(10_000, 1_000), 3000);
+  assertEquals(bufferAfterFinishedMs(10_000, 8_500), 1500);
+  assertEquals(bufferAfterFinishedMs(10_000, 10_000), 0);
+  assertEquals(bufferAfterFinishedMs(10_000, 12_000), 0);
+});
+
+Deno.test("a resumed run, with a worker of its own, and a wait with no deadline keep the whole pause", () => {
+  assertEquals(bufferAfterFinishedMs(CHECK_ONCE_DEADLINE, 1_000_000), 3000);
+  assertEquals(bufferAfterFinishedMs(Number.POSITIVE_INFINITY, 1_000_000), 3000);
 });
