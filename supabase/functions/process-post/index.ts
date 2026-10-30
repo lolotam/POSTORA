@@ -6336,7 +6336,7 @@ async function postToThreads(
   const pollInterval = 2000; // 2 seconds
   // Only a single video can be finished later; a resumed run checks once, now.
   const deferrable = containerParams.media_type === "VIDEO";
-  // The deadline bounds the requests as well as the sleeps; only a video waits on one.
+  // The deadline bounds the requests as well as the sleeps, for every container.
   const container = await pollContainer("threads", statusEndpoint, {
     maxAttempts: 15,
     intervalMs: pollInterval,
