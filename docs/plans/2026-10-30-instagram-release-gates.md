@@ -32,7 +32,7 @@ Execute **one numbered task at a time**, freeze its evidence and review before s
 
 ## Dependencies and file ownership
 
-All **Create** paths below are proposed and absent at the authoring baseline. Recheck before writing: Task 8 may have delivered equivalent fixture/runbook files in the meantime. Reuse their accepted public contracts and serialize edits to `e2e/analytics.spec.ts` and CI. An existing path listed under **Modify** is not permission to rewrite its unrelated behavior. Task 8 M1 is present; M2/M3 are reported in progress elsewhere and M4 remains proposed here. Source provenance, Task 9 and Task 10 integration, Task 6 metric/retry reconciliation, missing collection scheduling and single-account eligibility remain explicit dependency gates.
+All **Create** paths below are proposed and absent at the authoring baseline. Recheck before writing: Task 8 may have delivered equivalent fixture/runbook files in the meantime. Reuse their accepted public contracts and serialize edits to `e2e/analytics.spec.ts` and CI. An existing path listed under **Modify** is not permission to rewrite its unrelated behavior. Task 8's M1–M4 migrations, report and retention functions, competitor feature, fixture and runbook are on main since #306 (`1e1fbed3`); that is source presence only, not deployment or activation. Source provenance, Task 9 and Task 10 integration, Task 6 metric/retry reconciliation, missing collection scheduling and single-account eligibility remain explicit dependency gates.
 
 Task 11 never owns the proposed collection cron migration or new eligibility implementation. Their owners must supply reviewed artifacts, exact names and tests; the spec §5 manifest is updated before release. No wildcard or “later migration” placeholder can pass final G-X. The parent §14 owner→competitor→readiness sequencing remains mandatory for acceptance even though some code is already merged.
 
@@ -44,7 +44,7 @@ Task 11 never owns the proposed collection cron migration or new eligibility imp
 
 **Modify:** these Task 11 spec/plan files only for verified status/evidence updates. Do not edit historical acceptance records to imply new approval.
 
-- [ ] Tests first: a complete synthetic ledger passes; a missing/duplicate source ID, missing T8 ID, unknown status, unreviewed skip, stale SHA, absent proposed file, missing artifact or falsely marked live gate fails. Explicitly distinguish `existing` inventory from executed PASS and live approval.
+- [ ] Tests first: a complete synthetic ledger passes; a missing/duplicate source ID, missing T8 ID, unknown status, unreviewed skip, stale SHA, absent proposed file, missing artifact or falsely marked live gate fails. The checker also reads `supabase/migrations/` and fails when two migration files share a version prefix, or when a newly assigned manifest version is not newer than every other migration there. Explicitly distinguish `existing` inventory from executed PASS and live approval.
 - [ ] Reconcile all 78 IDs against original and Task 8 acceptance tables. Freeze baseline/head/tree, exact required test titles and fixture schema; keep dependency failures visible. Record D8/A6/I3 contract discrepancies for owning-task decision without adopting current behavior by default.
 - [ ] Implement a read-only checker consuming the Markdown tables and an external per-run evidence JSON. It must not update expectations, rewrite history, access production or infer approval from elapsed time. Unit-test its parser against real table syntax and changed source-ID inventories.
 - [ ] Run V1; record resolved/blocked dependencies in the ledger. Do not mark a proposed schedule/fixture existing based on another branch's report.
@@ -89,7 +89,7 @@ Task 11 never owns the proposed collection cron migration or new eligibility imp
 - [ ] Tests first: E2/J2–J7 and T8-12 exact fixtures, including official/Apify/own/unknown across network/cache/history; denied vs failed scope reads; same handle for two owners; nullable views/likes and FEED video.
 - [ ] Prove Track saved vs queued vs collected, one-row duplicate handling, quota/override/unlimited/downgrade, lost-response reconciliation, 429 Retry-After and bounded auth-sensitive polling. Test remove→retained history→reactivate with real RPCs and no blind mutation replay.
 - [ ] Assert S=3-day cutoff, actual 7/30-day intervals, source-switch refusal, zero/missing/stale baseline, repeated snapshot dedup and complete/partial/unknown weekly inventory. M1's unverified ordering must not be upgraded by the report fixture accidentally.
-- [ ] Run Task 8's SQL 89d/90d−1µs/90d and cleanup/reactivate/writer races in three sessions (two racers plus a `pg_stat_activity` observer) with actual observed waits, bounded child deletion and >500 backlog. Run both lock orderings and rollback/restart. UI tests alone cannot satisfy T8-08/09.
+- [ ] Run Task 8's SQL 89d/90d−1µs/90d and cleanup/reactivate/writer races in three sessions (two racers plus a `pg_stat_activity` observer): races 2 and 3 must show an observed `wait_event_type = 'Lock'` wait, and races 1 and 4 a lock *skip* (no wait, the cleanup takes the next candidate), because the cleanup uses `FOR UPDATE SKIP LOCKED`. Also cover bounded child deletion and >500 backlog. Run both lock orderings and rollback/restart. UI tests alone cannot satisfy T8-08/09.
 - [ ] Verify English/Arabic/RTL, keyboard/focus return, screen sizes/zoom and non-Instagram ProfileCard regression. Do not mark U4/T8-01/J2/J3 green until Task 2 producer provenance is accepted.
 
 **Acceptance:** D1–D7, A10–A13, I1–I2/I6–I7, H3, U4–U6, E2, J2–J7, T8-01–T8-12. **Dependencies:** Task 3 owner flow; Task 2 provenance; completed Task 8 M2/M3/M4/report/UI. **Exit:** full local competitor proof; provider-ordering compatibility remains expressly qualified.
@@ -126,7 +126,7 @@ Task 11 never owns the proposed collection cron migration or new eligibility imp
 
 **Create (proposed):** `docs/journeys/2026-10-26-instagram-insights-and-competitor-tracking.md`; `docs/runbooks/instagram-insights-release.md`.
 
-**Modify:** this plan's future validation log and the spec matrix statuses only when evidence warrants. Link to Task 8's proposed `docs/runbooks/competitor-tracking-retention.md` and journey doc if delivered; do not duplicate their retention contract.
+**Modify:** this plan's future validation log and the spec matrix statuses only when evidence warrants. Link to Task 8's `docs/runbooks/competitor-tracking-retention.md` (on main since #306) and its journey doc; do not duplicate their retention contract.
 
 - [ ] Validation first: require all E/J IDs, proof links/commands/SHAs, user-visible outcome, fixture-vs-live label and remaining limitations. Verify local links and flag unsupported claims such as “deployed”, “all permissions granted”, “tonight” or “complete history” without their gate evidence.
 - [ ] Write the Arabic journey report for a nontechnical reader: how to reach each feature, expected success/empty/error/reconnect/limit states, what source/null/partial/freshness mean, removal/reactivation behavior, and what has actually been verified. No source code or secret details in the user steps. This is not produced during the current authoring task.
@@ -210,7 +210,7 @@ docker exec -e HARNESS_DB_NAME=instagram_release_harness postora-task11-sql \
 
 This SQL-only harness is separate from Task 2's loopback local Auth/PostgREST assembled stack. Restore the baseline plus newer migrations, not every historical migration from scratch. Run all accepted suites without exclusions. Verify catalog/type alignment and nonliteral cron-secret lookup. Reapply only the new schedule definitions in the disposable database for S6; do not replay the whole production migration ledger twice.
 
-Manually rehearse the applicable existing credential/quota/job race fixtures and Task 8's retention race fixture in **independent psql sessions**: two for each credential/quota/job fixture, and **three** for the retention fixture (two racers plus the observer that reads `pg_stat_activity` while a racer is blocked, per `supabase/tests/README.md`), using each header's setup/interleavings/assertions/cleanup and `-v disposable=1`. Capture observed lock waits, both outcomes and cleanup. A single-session fixture setup or green main harness is not race proof. Remove only the verified task-owned container after evidence collection.
+Manually rehearse the applicable existing credential/quota/job race fixtures and Task 8's retention race fixture in **independent psql sessions**: two for each credential/quota/job fixture, and **three** for the retention fixture (two racers plus the observer that reads `pg_stat_activity` while a racer is blocked, per `supabase/tests/README.md`), using each header's setup/interleavings/assertions/cleanup and `-v disposable=1`. Define and call the observer's `pg_temp.crt_probe()` inside the interactive observer session itself: a temporary function is session-local, so a separate `psql -c` cannot see it. For the retention fixture, races 2 and 3 must show an observed `wait_event_type = 'Lock'` wait and races 1 and 4 a lock skip (`FOR UPDATE SKIP LOCKED`); for the other fixtures, capture the lock waits their headers name. Record both outcomes and cleanup. A single-session fixture setup or green main harness is not race proof. Remove only the verified task-owned container after evidence collection.
 
 ### V4 — frontend and regression gates
 
@@ -225,7 +225,7 @@ npm test -- src/features/competitor-tracking
 git diff --check
 ```
 
-The competitor path is proposed until Task 8 delivery. Inspect test counts; no-tests-found is not success. Record full exit codes and known baseline failures. Where approved repository policy uses `scripts/lint-i18n-regression.mjs`, follow its current documented immutable-base/head/proposed-merge invocation and retain reports rather than inventing flags. No moving baseline, missing-suite omission, timeout relaxation or new suppression.
+The competitor path is on main since #306 (`1e1fbed3`); it is not deployed or active until its own gates pass. Inspect test counts; no-tests-found is not success. Record full exit codes and known baseline failures. Where approved repository policy uses `scripts/lint-i18n-regression.mjs`, follow its current documented immutable-base/head/proposed-merge invocation and retain reports rather than inventing flags. No moving baseline, missing-suite omission, timeout relaxation or new suppression.
 
 ### V5 — strict seeded browser and assembled journeys
 
