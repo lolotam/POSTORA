@@ -71,23 +71,17 @@ export default function UpscaleApi() {
   -d '{
     "image_url": "https://example.com/photo.jpg",
     "scale": 4,
-    "output_format": "png",
-    "quality": 95,
-    "denoise": true,
-    "face_enhance": true
+    "platform": "atlascloud"
   }'`;
 
   const curlFormData = `curl -X POST "${API_BASE}/upscale-image" \\
   -H "x-api-key: YOUR_API_KEY" \\
   -F "file=@/path/to/image.jpg" \\
-  -F "scale=2" \\
-  -F "output_format=png"`;
+  -F "scale=2"`;
 
   const n8nExample = `{
   "image_url": "{{ $json.imageUrl }}",
-  "scale": 2,
-  "output_format": "png",
-  "face_enhance": true
+  "scale": 2
 }`;
 
   const fields = [
@@ -103,7 +97,7 @@ export default function UpscaleApi() {
       name: "image_base64",
       type: "string",
       required: false,
-      description: "Base64 encoded image data. Include the data URI prefix.",
+      description: "Base64 encoded image data, raw or as a data URI.",
       example: "data:image/jpeg;base64,/9j/4AAQ...",
       icon: FileText
     },
@@ -112,43 +106,39 @@ export default function UpscaleApi() {
       type: "number",
       required: false,
       default: "2",
-      description: "Upscale factor. Doubles or quadruples the image dimensions.",
-      options: ["2", "4"],
+      description: "Upscale factor, 1 to 4. With AtlasCloud, 2 or lower gives 2K output and higher gives 4K.",
+      options: ["1", "2", "3", "4"],
       icon: Maximize2
+    },
+    {
+      name: "platform",
+      type: "string",
+      required: false,
+      description: "Omit to let Postora choose: Cloudinary while it is available, otherwise AtlasCloud. \"atlascloud\" always uses AtlasCloud; \"cloudinary\" falls back to AtlasCloud when Cloudinary is unavailable (the response says which one ran).",
+      options: ["atlascloud", "cloudinary"],
+      icon: Sparkles
     },
     {
       name: "output_format",
       type: "string",
       required: false,
-      default: "png",
-      description: "Output image format.",
-      options: ["png", "jpeg", "webp"],
+      description: "Output format of an AtlasCloud upscale. When omitted, a PNG source gives PNG (transparency is kept) and anything else gives JPEG.",
+      options: ["png", "jpeg"],
       icon: Download
     },
     {
-      name: "quality",
-      type: "number",
+      name: "file",
+      type: "binary",
       required: false,
-      default: "90",
-      description: "Output quality (1-100). Applies to JPEG and WebP.",
-      example: "95",
-      icon: Sparkles
+      description: "Image file for a multipart/form-data request, instead of image_url or image_base64. When a file and image_url are both sent, the file is used.",
+      icon: Upload
     },
     {
-      name: "denoise",
-      type: "boolean",
+      name: "prediction_id",
+      type: "string",
       required: false,
-      default: "false",
-      description: "Apply noise reduction during upscaling.",
-      icon: Sparkles
-    },
-    {
-      name: "face_enhance",
-      type: "boolean",
-      required: false,
-      default: "false",
-      description: "Apply face enhancement for portraits.",
-      icon: ZoomIn
+      description: "The id from an earlier HTTP 202 answer. Send it alone (no image) to collect that job's result.",
+      icon: Zap
     }
   ];
 
@@ -166,7 +156,7 @@ export default function UpscaleApi() {
           { label: "JPEG/PNG/WebP", icon: Image },
           { label: "AI Powered", icon: Sparkles },
           { label: "2x or 4x Scale", icon: Maximize2 },
-          { label: "Face Enhance", icon: ZoomIn },
+          { label: "4K via AtlasCloud", icon: ZoomIn },
         ]}
       />
 
@@ -188,16 +178,16 @@ export default function UpscaleApi() {
                   <li>• 2x scale: 512px → 1024px</li>
                   <li>• 4x scale: 512px → 2048px</li>
                   <li>• AI-enhanced details</li>
-                  <li>• Face enhancement available</li>
+                  <li>• AtlasCloud output: 2K or 4K, stored in Postora storage</li>
                 </ul>
               </div>
               <div className="p-4 rounded-lg bg-background border">
                 <h4 className="font-medium mb-2">Limitations</h4>
                 <ul className="text-sm text-muted-foreground space-y-1">
-                  <li>• Max input size: 10MB</li>
-                  <li>• Max input dimensions: 2048x2048</li>
-                  <li>• Max output: 8192x8192</li>
+                  <li>• Max upload size: 10MB (image_base64 or file)</li>
                   <li>• Formats: JPEG, PNG, WebP, GIF</li>
+                  <li>• Slow jobs answer HTTP 202 with a prediction_id; send it back to collect the result</li>
+                  <li>• HTTP 503 PROVIDER_UNAVAILABLE when no AI provider is available</li>
                 </ul>
               </div>
             </div>
@@ -324,37 +314,65 @@ export default function UpscaleApi() {
             <Tabs defaultValue="success">
               <TabsList className="mb-4">
                 <TabsTrigger value="success">Success</TabsTrigger>
+                <TabsTrigger value="processing">Still processing (202)</TabsTrigger>
                 <TabsTrigger value="error">Error</TabsTrigger>
               </TabsList>
               <TabsContent value="success">
                 <CodeBlock 
                   code={`{
   "success": true,
-  "image_url": "https://storage.example.com/upscaled/abc123.png",
-  "image_base64": "data:image/png;base64,iVBORw0KGgo...",
-  "original_size": {
-    "width": 512,
-    "height": 512
-  },
-  "upscaled_size": {
-    "width": 2048,
-    "height": 2048
-  },
+  "status": "completed",
+  "original_url": "https://example.com/photo.jpg",
+  "upscaled_url": "https://cdn.postora.cloud/t/postora.cloud/postora/user-id/upscaled/abc123.jpg",
+  "prediction_id": "pred_abc123",
+  "target_resolution": "4k",
   "scale": 4,
-  "format": "png"
+  "output_format": "jpeg",
+  "platform": "atlascloud",
+  "stored_in": "openinary"
 }`}
                   language="json"
                   id="success-response"
                   title="Success response"
                 />
               </TabsContent>
+              <TabsContent value="processing">
+                <CodeBlock
+                  code={`# 1. The first request answers within about 45 seconds. A slower job returns HTTP 202:
+{
+  "success": true,
+  "status": "processing",
+  "prediction_id": "eyJwcmVkaWN0aW9uIjoi...",
+  "retry_after_seconds": 3,
+  "platform": "atlascloud",
+  "target_resolution": "4k",
+  "scale": 4,
+  "output_format": "jpeg"
+}
+
+# 2. Ask again with only that id until you get the normal success response (HTTP 200).
+#    Keep the same x-api-key. The id works for you only, for this endpoint, for one hour.
+curl -X POST "${API_BASE}/upscale-image" \\
+  -H "Content-Type: application/json" \\
+  -H "x-api-key: YOUR_API_KEY" \\
+  -d '{ "prediction_id": "eyJwcmVkaWN0aW9uIjoi..." }'`}
+                  language="bash"
+                  id="processing-response"
+                  title="Job still running"
+                />
+              </TabsContent>
               <TabsContent value="error">
-                <CodeBlock 
+                <CodeBlock
                   code={`{
   "success": false,
-  "error": "Image too large",
-  "details": "Input image exceeds maximum dimensions of 2048x2048"
-}`}
+  "error": "Image upscaling is temporarily unavailable",
+  "code": "PROVIDER_UNAVAILABLE"
+}
+
+// HTTP 503: no AI provider is available right now, retry later.
+// HTTP 400 INVALID_INPUT: missing or unsupported image. HTTP 413: image over 10MB.
+// HTTP 429 RATE_LIMITED: more than 30 AtlasCloud jobs this hour, or the provider is busy. HTTP 502/504: the job failed or timed out.
+// HTTP 400 INVALID_PREDICTION: unknown prediction_id. HTTP 410 PREDICTION_EXPIRED: older than one hour, start again.`}
                   language="json"
                   id="error-response"
                   title="Error response"

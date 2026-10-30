@@ -10,16 +10,20 @@ interface UpscaleOptionsProps {
   upscalePlatform?: UpscalePlatform;
   onUpscalePlatformChange?: (platform: UpscalePlatform) => void;
   showAtlasCloud?: boolean; // Feature flag - when false, hide AtlasCloud option
+  /** False when Cloudinary is not serving transforms: AtlasCloud is then the only upscaler. */
+  cloudinaryAvailable?: boolean;
 }
 
 export function UpscaleOptions({ 
   upscaleMode, 
   onUpscaleModeChange,
-  upscalePlatform = "cloudinary",
+  upscalePlatform: requestedPlatform = "cloudinary",
   onUpscalePlatformChange,
-  showAtlasCloud = false
+  showAtlasCloud = false,
+  cloudinaryAvailable = true,
 }: UpscaleOptionsProps) {
   const { t } = useTranslation("assets");
+  const upscalePlatform = cloudinaryAvailable ? requestedPlatform : "atlascloud";
   // If AtlasCloud is hidden and currently selected, reset to cloudinary
   if (!showAtlasCloud && upscalePlatform === "atlascloud" && onUpscalePlatformChange) {
     onUpscalePlatformChange("cloudinary");
@@ -33,7 +37,7 @@ export function UpscaleOptions({
       </Label>
       
       {/* Platform Selection - only show if AtlasCloud is enabled or if we want to show the selector */}
-      {onUpscalePlatformChange && showAtlasCloud && (
+      {onUpscalePlatformChange && showAtlasCloud && cloudinaryAvailable && (
         <div className="space-y-2">
           <Label className="text-xs text-muted-foreground">{t("imageTools.upscalePlatform", "Upscale Platform")}</Label>
           <Select

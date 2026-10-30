@@ -55,26 +55,15 @@ export default function RemoveBackgroundApi() {
     "image_base64": "data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAA..."
   }'`;
 
-  const curlWithOptions = `curl -X POST "${API_BASE}/remove-background" \\
-  -H "Content-Type: application/json" \\
-  -H "x-api-key: YOUR_API_KEY" \\
-  -d '{
-    "image_url": "https://example.com/photo.jpg",
-    "output_format": "png",
-    "quality": 95
-  }'`;
-
   const curlFormData = `curl -X POST "${API_BASE}/remove-background" \\
   -H "x-api-key: YOUR_API_KEY" \\
-  -F "file=@/path/to/image.jpg" \\
-  -F "output_format=png"`;
+  -F "file=@/path/to/image.jpg"`;
 
   const n8nExample = `{
-  "image_url": "{{ $json.imageUrl }}",
-  "output_format": "png"
+  "image_url": "{{ $json.imageUrl }}"
 }`;
 
-  const fields = [
+  const fields: Array<{ name: string; type: string; required: boolean; description: string; example?: string; options?: string[]; default?: string; icon: typeof Image }> = [
     {
       name: "image_url",
       type: "string",
@@ -92,22 +81,18 @@ export default function RemoveBackgroundApi() {
       icon: FileText
     },
     {
-      name: "output_format",
-      type: "string",
+      name: "file",
+      type: "binary",
       required: false,
-      default: "png",
-      description: "Output image format. PNG recommended for transparency.",
-      options: ["png", "webp"],
-      icon: Download
+      description: "Image file for a multipart/form-data request, instead of image_url or image_base64. When a file and image_url are both sent, the file is used.",
+      icon: Upload
     },
     {
-      name: "quality",
-      type: "number",
+      name: "prediction_id",
+      type: "string",
       required: false,
-      default: 90,
-      description: "Output quality (1-100). Only applies to webp format.",
-      example: "90",
-      icon: Sparkles
+      description: "The id from an earlier HTTP 202 answer. Send it alone (no image) to collect that job's result.",
+      icon: Zap
     }
   ];
 
@@ -145,9 +130,10 @@ export default function RemoveBackgroundApi() {
                 <h4 className="font-medium mb-2">Supported Formats</h4>
                 <ul className="text-sm text-muted-foreground space-y-1">
                   <li>• Input: JPEG, PNG, WebP, GIF</li>
-                  <li>• Output: PNG (transparent), WebP</li>
-                  <li>• Max file size: 10MB</li>
-                  <li>• Max dimensions: 4096x4096</li>
+                  <li>• Output: image with a transparent background (PNG)</li>
+                  <li>• Max upload size: 10MB (image_base64 or file)</li>
+                  <li>• Slow jobs answer HTTP 202 with a prediction_id; send it back to collect the result</li>
+                  <li>• Up to 30 jobs per hour per account</li>
                 </ul>
               </div>
               <div className="p-4 rounded-lg bg-background border">
@@ -159,6 +145,13 @@ export default function RemoveBackgroundApi() {
                   <li>• Sharp edges work best</li>
                 </ul>
               </div>
+            </div>
+            <div className="mt-4 p-3 rounded-lg bg-amber-500/10 border border-amber-500/20">
+              <p className="text-sm flex items-center gap-2">
+                <AlertCircle className="w-4 h-4 text-amber-500" />
+                Background removal is processed by AtlasCloud and the result is stored in Postora storage. If no AI provider is available,
+                the API answers HTTP 503 with code PROVIDER_UNAVAILABLE ("Background removal is temporarily unavailable"); retry later.
+              </p>
             </div>
           </CardContent>
         </Card>
@@ -206,10 +199,9 @@ export default function RemoveBackgroundApi() {
           </CardHeader>
           <CardContent>
             <Tabs defaultValue="url" className="w-full">
-              <TabsList className="grid grid-cols-4 mb-4">
+              <TabsList className="grid grid-cols-3 mb-4">
                 <TabsTrigger value="url">From URL</TabsTrigger>
                 <TabsTrigger value="base64">From Base64</TabsTrigger>
-                <TabsTrigger value="options">With Options</TabsTrigger>
                 <TabsTrigger value="formdata">Form Data</TabsTrigger>
               </TabsList>
               <TabsContent value="url">
@@ -217,9 +209,6 @@ export default function RemoveBackgroundApi() {
               </TabsContent>
               <TabsContent value="base64">
                 <CodeBlock code={curlFromBase64} language="bash" id="base64-example" title="From base64" />
-              </TabsContent>
-              <TabsContent value="options">
-                <CodeBlock code={curlWithOptions} language="bash" id="options-example" title="With output options" />
               </TabsContent>
               <TabsContent value="formdata">
                 <CodeBlock code={curlFormData} language="bash" id="formdata-example" title="Multipart form-data" />
@@ -273,36 +262,64 @@ export default function RemoveBackgroundApi() {
             <Tabs defaultValue="success">
               <TabsList className="mb-4">
                 <TabsTrigger value="success">Success</TabsTrigger>
+                <TabsTrigger value="processing">Still processing (202)</TabsTrigger>
                 <TabsTrigger value="error">Error</TabsTrigger>
               </TabsList>
               <TabsContent value="success">
                 <CodeBlock 
                   code={`{
   "success": true,
-  "image_url": "https://storage.example.com/processed/abc123.png",
-  "image_base64": "data:image/png;base64,iVBORw0KGgo...",
-  "original_size": {
-    "width": 1920,
-    "height": 1080
-  },
-  "processed_size": {
-    "width": 1920,
-    "height": 1080
-  },
-  "format": "png"
+  "status": "completed",
+  "original_url": "https://example.com/photo.jpg",
+  "processed_url": "https://cdn.postora.cloud/t/postora.cloud/postora/user-id/processed/abc123.png",
+  "public_id": "postora.cloud/postora/user-id/processed/abc123.png",
+  "width": 1920,
+  "height": 1080,
+  "format": "png",
+  "bytes": 245678,
+  "platform": "atlascloud",
+  "stored_in": "openinary"
 }`}
                   language="json"
                   id="success-response"
                   title="Success response"
                 />
               </TabsContent>
+              <TabsContent value="processing">
+                <CodeBlock
+                  code={`# 1. The first request answers within about 45 seconds. A slower job returns HTTP 202:
+{
+  "success": true,
+  "status": "processing",
+  "prediction_id": "eyJwcmVkaWN0aW9uIjoi...",
+  "retry_after_seconds": 3,
+  "platform": "atlascloud",
+  "original_url": "https://example.com/photo.jpg"
+}
+
+# 2. Ask again with only that id until you get the normal success response (HTTP 200).
+#    Keep the same x-api-key. The id works for you only, for this endpoint, for one hour.
+curl -X POST "${API_BASE}/remove-background" \\
+  -H "Content-Type: application/json" \\
+  -H "x-api-key: YOUR_API_KEY" \\
+  -d '{ "prediction_id": "eyJwcmVkaWN0aW9uIjoi..." }'`}
+                  language="bash"
+                  id="processing-response"
+                  title="Job still running"
+                />
+              </TabsContent>
               <TabsContent value="error">
-                <CodeBlock 
+                <CodeBlock
                   code={`{
   "success": false,
-  "error": "Invalid image format",
-  "details": "The provided file is not a supported image format"
-}`}
+  "error": "Background removal is temporarily unavailable",
+  "code": "PROVIDER_UNAVAILABLE"
+}
+
+// HTTP 503: no AI provider is available right now, retry later.
+// HTTP 400 INVALID_INPUT: missing or unsupported image. HTTP 413: image over 10MB.
+// HTTP 429 RATE_LIMITED: more than 30 jobs this hour, or the provider is busy. HTTP 502/504: the job failed or timed out.
+// HTTP 400 INVALID_PREDICTION: unknown prediction_id. HTTP 410 PREDICTION_EXPIRED: older than one hour, start again.`}
                   language="json"
                   id="error-response"
                   title="Error response"

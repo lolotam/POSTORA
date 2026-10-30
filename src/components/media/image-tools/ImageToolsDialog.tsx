@@ -27,6 +27,7 @@ import { parseApiError } from "@/lib/errorMessages";
 import { readUploadRefusal } from "@/components/media/uploadErrors";
 import { useLogMediaOperation, OperationType } from "@/hooks/useMediaOperationsHistory";
 import { useFeatureFlags } from "@/hooks/useFeatureFlags";
+import { useCdnConfig } from "@/hooks/useCdnConfig";
 
 import {
   ImageToolsDialogProps,
@@ -48,6 +49,12 @@ import {
   getTargetDimensions,
   hasFilterModifications,
 } from "./utils";
+import {
+  cloudinaryTransformsState,
+  isProviderUnavailable,
+  runBackgroundRemoval,
+  runUpscale,
+} from "./aiImageTools";
 import { FeatureToggles } from "./FeatureToggles";
 import {
   BgRemovalOptions,
@@ -65,6 +72,12 @@ export function ImageToolsDialog({
   onProcessComplete,
 }: ImageToolsDialogProps) {
   const { flags } = useFeatureFlags();
+  const cdn = useCdnConfig();
+  // `loading` until the CDN config is known; `unavailable` means only the server-side AI steps
+  // (background removal, upscale) work.
+  const cdnState = cloudinaryTransformsState(cdn);
+  const cloudinaryAvailable = cdnState === "available";
+  const transformsUnavailable = cdnState === "unavailable";
   const [processing, setProcessing] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [processedUrl, setProcessedUrl] = useState<string | null>(null);
@@ -97,7 +110,8 @@ export function ImageToolsDialog({
   
   // Upscale options
   const [upscaleMode, setUpscaleMode] = useState<UpscaleMode>("standard");
-  const [upscalePlatform, setUpscalePlatform] = useState<UpscalePlatform>("cloudinary");
+  const [selectedUpscalePlatform, setUpscalePlatform] = useState<UpscalePlatform>("cloudinary");
+  const upscalePlatform: UpscalePlatform = transformsUnavailable ? "atlascloud" : selectedUpscalePlatform;
   
   // Quality options
   const [qualityPreset, setQualityPreset] = useState<QualityPreset>("auto");
@@ -208,6 +222,15 @@ export function ImageToolsDialog({
       previewCacheRef.current.clear();
     }
   }, [open]);
+
+  // Resize, filters and quality are Cloudinary transforms. Once they are known to be unavailable
+  // their switches are disabled, so anything already on would stay on with no way to turn it off.
+  useEffect(() => {
+    if (!transformsUnavailable) return;
+    setEnableResize(false);
+    setEnableFilters(false);
+    setEnableQuality(false);
+  }, [transformsUnavailable]);
 
   const handleImageLoad = (e: React.SyntheticEvent<HTMLImageElement>) => {
     const img = e.currentTarget;
@@ -373,6 +396,17 @@ export function ImageToolsDialog({
       return;
     }
 
+    if (cdnState === "loading") return;
+
+    if (transformsUnavailable && (hasValidResize || hasValidFilters || enableQuality)) {
+      toast({
+        title: t("toast.needsCloudinaryTitle", "Not available right now"),
+        description: t("toast.needsCloudinary", "Resize, filters and quality are not available right now. Turn them off to use background removal and upscale."),
+        variant: "destructive",
+      });
+      return;
+    }
+
     setProcessing(true);
     const startTime = Date.now();
     let operationId: string | null = null;
@@ -443,6 +477,22 @@ export function ImageToolsDialog({
         fileName,
         operationDetails: buildOperationDetails() as unknown as import("@/integrations/supabase/types").Json,
       });
+
+      if (transformsUnavailable) {
+        // Cloudinary is not serving transforms: the AI steps run on the server, one after the
+        // other on the file's public URL (background removal first, then upscale). The server
+        // picks the provider. A cut-out has transparency, so the upscale after it asks for PNG.
+        let currentUrl = file.publicUrl;
+        if (enableBgRemoval) currentUrl = await runBackgroundRemoval(currentUrl);
+        if (enableUpscale) currentUrl = await runUpscale(currentUrl, enableBgRemoval ? { outputFormat: "png" } : {});
+        setProcessedUrl(currentUrl);
+        toast({
+          title: t("toast.processingComplete", "Processing complete"),
+          description: t("toast.compareHint", "Use the slider to compare before and after"),
+        });
+        if (operationId) await completeOperation(operationId, currentUrl, Date.now() - startTime);
+        return;
+      }
 
       let publicId: string;
       let targetCloudName: string;
@@ -606,9 +656,18 @@ export function ImageToolsDialog({
         );
       }
 
+      if (isProviderUnavailable(error)) {
+        toast({
+          title: t("toast.aiToolUnavailableTitle", "AI tool unavailable"),
+          description: t("toast.aiToolUnavailable", "This AI tool is temporarily unavailable. Please try again later."),
+          variant: "destructive",
+        });
+        return;
+      }
+
       // Use enhanced error parsing for user-friendly messages
       const parsedError = parseApiError(error, "Image processing");
-      
+
       toast({
         title: parsedError.title,
         description: parsedError.description,
@@ -791,11 +850,19 @@ export function ImageToolsDialog({
 
         <div className="space-y-4">
           {/* Non-Cloudinary file notice */}
-          {!isCloudinaryFile && !tempCloudinaryData && (
+          {cloudinaryAvailable && !isCloudinaryFile && !tempCloudinaryData && (
             <Alert>
               <Upload className="h-4 w-4" />
               <AlertDescription>
                 {t("imageTools.notice", "This file will be automatically uploaded to Cloudinary for processing.")}
+              </AlertDescription>
+            </Alert>
+          )}
+          {transformsUnavailable && (
+            <Alert>
+              <Upload className="h-4 w-4" />
+              <AlertDescription>
+                {t("imageTools.aiOnlyNotice", "Only background removal and upscale are available right now. Resize, filters and quality are turned off.")}
               </AlertDescription>
             </Alert>
           )}
@@ -807,6 +874,7 @@ export function ImageToolsDialog({
             enableUpscale={enableUpscale}
             enableFilters={enableFilters}
             enableQuality={enableQuality}
+            transformsDisabled={transformsUnavailable}
             onToggleBgRemoval={setEnableBgRemoval}
             onToggleResize={setEnableResize}
             onToggleUpscale={setEnableUpscale}
@@ -815,7 +883,7 @@ export function ImageToolsDialog({
           />
 
           {/* Options Panels */}
-          {enableBgRemoval && (
+          {enableBgRemoval && !transformsUnavailable && (
             <BgRemovalOptions
               edgeMode={edgeMode}
               onEdgeModeChange={setEdgeMode}
@@ -841,7 +909,8 @@ export function ImageToolsDialog({
               onUpscaleModeChange={setUpscaleMode}
               upscalePlatform={upscalePlatform}
               onUpscalePlatformChange={setUpscalePlatform}
-              showAtlasCloud={flags.atlascloudUpscale}
+              showAtlasCloud={flags.atlascloudUpscale || transformsUnavailable}
+              cloudinaryAvailable={!transformsUnavailable}
             />
           )}
           
@@ -1082,7 +1151,7 @@ export function ImageToolsDialog({
               </Button>
               <Button
                 onClick={handleProcess}
-                disabled={processing || uploading || !file || (!enableBgRemoval && !enableResize && !enableUpscale && !enableFilters && !enableQuality)}
+                disabled={processing || uploading || !file || cdnState === "loading" || (!enableBgRemoval && !enableResize && !enableUpscale && !enableFilters && !enableQuality)}
               >
                 {processing || uploading ? (
                   <>
