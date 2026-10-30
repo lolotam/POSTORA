@@ -63,7 +63,7 @@ export default function RemoveBackgroundApi() {
   "image_url": "{{ $json.imageUrl }}"
 }`;
 
-  const fields = [
+  const fields: Array<{ name: string; type: string; required: boolean; description: string; example?: string; options?: string[]; default?: string; icon: typeof Image }> = [
     {
       name: "image_url",
       type: "string",
