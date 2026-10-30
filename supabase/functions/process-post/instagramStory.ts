@@ -196,3 +196,14 @@ export async function recordCarriedStory(
     }), sleep);
   return error ? { recorded: [], error } : { recorded: [story], error: null };
 }
+
+/**
+ * The data a reel's pending row keeps when it is settled as the account's live story: the
+ * deferral and the carry are finished with, the account details stay, and a marker says why
+ * the row shows a story.
+ */
+export function storyOnReelRowData(responseData: unknown): Record<string, unknown> {
+  const data = responseData && typeof responseData === "object" ? responseData as Record<string, unknown> : {};
+  const { deferred: _deferred, [UNRECORDED_STORY_KEY]: _carried, ...rest } = data;
+  return { ...rest, story_recorded_on_reel_row: true };
+}

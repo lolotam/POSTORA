@@ -10,6 +10,7 @@ import {
   recordLiveStory,
   recordPublishedStory,
   recordWithOneRetry,
+  storyOnReelRowData,
   UNRECORDED_STORY_KEY,
 } from "./instagramStory.ts";
 
@@ -213,4 +214,15 @@ Deno.test("a carried story the row already has is not written twice, and nothing
   assertEquals(await recordCarriedStory(NO_ROWS, settle, { postId: "p", socialAccountId: "a", rowData: { deferred: {} } }, noSleep), { recorded: [], error: null });
   assertEquals(await recordCarriedStory(NO_ROWS, settle, { postId: "p", socialAccountId: "a", rowData: null }, noSleep), { recorded: [], error: null });
   assertEquals(settles, 0);
+});
+
+Deno.test("a reel row settled as the account's live story drops the deferral and the carry, keeps the account details", () => {
+  const data = storyOnReelRowData({
+    deferred: { kind: "ig_reel" },
+    unrecorded_story: { id: "s1", url: "https://ig/s1" },
+    account_username: "me",
+    account_metadata: { page: 1 },
+  });
+  assertEquals(data, { account_username: "me", account_metadata: { page: 1 }, story_recorded_on_reel_row: true });
+  assertEquals(storyOnReelRowData(null), { story_recorded_on_reel_row: true });
 });

@@ -121,6 +121,7 @@ import {
   newStoryLedger,
   recordedStoryResults,
   recordLiveStory,
+  storyOnReelRowData,
   type StoryRef,
 } from "./instagramStory.ts";
 import {
@@ -129,6 +130,7 @@ import {
   type PostReader,
   readPostOutcome,
   unreadableOutcomeLog,
+  storyRecordedOnReelRowLog,
   unrecordedStoryLog,
   writeLogRow,
 } from "./postSettlement.ts";
@@ -1504,36 +1506,55 @@ Deno.serve(async (req) => {
           socialAccountId: row.social_account_id,
           rowData: (row.response_data as Record<string, unknown> | null) ?? null,
         });
-        // The story is live whether or not its row could be written; past the grace window the
-        // reel is settled anyway (the story still counts below), so a write that never succeeds
-        // cannot keep the post in `processing` forever.
-        const exhausted = carried.error !== null && storyRecoveryExhausted(deferral, new Date());
+        // Past the grace window a story that still cannot get a row of its own is recorded on the
+        // reel's row instead: that row settles as the account's live story (with the reel's
+        // give-up in its error), so the post rolls up from rows that show the story, and a write
+        // that never succeeds cannot keep the post in `processing` forever.
+        const storyOnReelRow = carried.error !== null && storyRecoveryExhausted(deferral, new Date())
+          ? readUnrecordedStory(row.response_data)
+          : null;
         if (carried.error) {
           console.error(`[IG story] could not be recorded while giving up the reel: ${carried.error}`);
-          const logError = await writeLogRow(supabase, unrecordedStoryLog(post.user_id, post_id, row.id, carried.error));
+          const logRow = storyOnReelRow
+            ? storyRecordedOnReelRowLog(post.user_id, post_id, row.id, carried.error)
+            : unrecordedStoryLog(post.user_id, post_id, row.id, carried.error);
+          const logError = await writeLogRow(supabase, logRow);
           if (logError) console.error("[process-post] could not log the refusal either:", logError);
-          if (!exhausted) {
+          if (!storyOnReelRow) {
             return createErrorResponse(`Could not record the live Instagram story, so the reel was not given up: ${carried.error}`, 503);
           }
         }
-        const liveStories = exhausted ? [readUnrecordedStory(row.response_data)].filter((story): story is StoryRef => story !== null) : carried.recorded;
-        const settled = await settlePlatformPost(supabase, {
-          platformPostId: row.id,
-          postId: post_id,
-          socialAccountId: row.social_account_id,
-          platform: row.platform,
-          status: "failed",
-          errorMessage: abandon,
-        });
+        const settled = await settlePlatformPost(supabase, storyOnReelRow
+          ? {
+            platformPostId: row.id,
+            postId: post_id,
+            socialAccountId: row.social_account_id,
+            platform: row.platform,
+            status: "success",
+            providerPostId: storyOnReelRow.id,
+            providerPostUrl: storyOnReelRow.url,
+            errorMessage: `${abandon} The Instagram Story from this post is live and is recorded on this row.`,
+            responseData: storyOnReelRowData(row.response_data),
+          }
+          : {
+            platformPostId: row.id,
+            postId: post_id,
+            socialAccountId: row.social_account_id,
+            platform: row.platform,
+            status: "failed",
+            errorMessage: abandon,
+          });
         if (settled.error) return createErrorResponse(`Could not settle the deferred row: ${settled.error}`, 503);
         // This settle may have been the one that made the post final, and this run returns
         // before Step 6, so it reports the post here. A post that was not processing was
         // already final (or changed by someone) before this, and was announced then.
         const finished = post.status === "processing"
           ? await finishDeferredPost(supabase, post, row.id, {
-            // The story recorded just above is live: the degraded fallback must report it too.
-            results: [{ platform: row.platform, status: "failed", error_message: abandon }, ...recordedStoryResults(liveStories)],
-            hasSuccess: liveStories.length > 0,
+            // The degraded fallback must report a live story too, whichever row now holds it.
+            results: storyOnReelRow
+              ? [{ platform: row.platform, status: "success", platform_post_url: storyOnReelRow.url, error_message: abandon }]
+              : [{ platform: row.platform, status: "failed", error_message: abandon }, ...recordedStoryResults(carried.recorded)],
+            hasSuccess: storyOnReelRow !== null || carried.recorded.length > 0,
             hasFailed: true,
           })
           : { finalStatus: post.status as string, notified: false };

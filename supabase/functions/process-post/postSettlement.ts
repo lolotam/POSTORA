@@ -184,6 +184,18 @@ export function unrecordedStoryLog(userId: string, postId: string, platformPostI
   };
 }
 
+/** The system_logs row when the grace window ran out and the live story was recorded on the reel's row. */
+export function storyRecordedOnReelRowLog(userId: string, postId: string, platformPostId: string, error: string) {
+  return {
+    level: "error",
+    category: "post",
+    source: "process-post",
+    message: "A deferred reel was given up and its live Instagram story, which could not get a row of its own, was recorded on the reel's row",
+    user_id: userId,
+    metadata: { post_id: postId, platform_post_id: platformPostId, error },
+  };
+}
+
 /** The system_logs row for a settled deferred account whose post could not be read afterwards. */
 export function unreadableOutcomeLog(userId: string, postId: string, platformPostId: string | null, error: string) {
   return {
