@@ -58,11 +58,11 @@ Behaviour that shapes this design:
 | --- | --- | --- | --- |
 | `c_crop,x_,y_,w_,h_` pixel region | crop | `w_{cw},h_{ch},c_fill` when the region is **centred** and spans the **full width or full height** (what the aspect-ratio presets produce) | Supported, exact |
 | same, region off centre or not full-span | crop | none (no offsets) | `UNSUPPORTED_CROP_REGION` (422) |
-| `c_crop,fl_relative,...` (no metadata fallback) | crop | none | `SOURCE_DIMENSIONS_UNKNOWN` (422) when width/height cannot be found |
+| `c_crop,fl_relative,...` (no metadata fallback) | crop | none | `SOURCE_DIMENSIONS_UNKNOWN` (422) when width/height are neither on the library row nor sent by the caller (`source_dimensions`) |
 | `/c_scale,w_T,h_T` upscale after crop (cropped smaller than target) | crop | folded into one step: `w_{T},h_{T},c_fill` | Supported when region aspect is within 2 % of target aspect, else `UNSUPPORTED_CROP_TARGET` (422) |
 | auto-upscale of narrow verticals (ratio < 0.7, width < 720) to 720 wide | crop | same single-step target | Supported |
 | `vc_h264` | all | implicit | Supported (H.264 is the only codec) |
-| `q_auto:best` / `good` / `eco` | compress | `q_80` / `q_60` / `q_40` | Supported |
+| `q_auto:best` / `good` / `eco` | transcode (best), crop (good), compress (by the quality slider: >= 80 best, >= 50 good, else eco) | `q_80` / `q_60` / `q_40` | Supported |
 | `br_500k` / `1000k` / `2000k` (from `maxSizeMB`) | compress | none | Not applied; the output size is **checked** after encoding and a result above `maxSizeMB` fails with `TARGET_SIZE_NOT_REACHED` (nothing stored) |
 | `f_mp4` | all | `f_mp4` | Supported |
 | `c_fill,w_720,h_1280,ar_9:16,g_center` (tiktok) | transcode | `w_720,h_1280,c_fill,q_80,f_mp4` | Supported (`ar` is ignored for video, `g_center` is the default) |
@@ -84,21 +84,28 @@ Pure logic in `supabase/functions/_shared/openinaryVideoTransform.ts`:
 I/O in `supabase/functions/_shared/openinaryVideoDelivery.ts`:
 `fetchVideoVariant` requests the transformed URL, follows the 202/`statusUrl` protocol with a
 bounded deadline (40 s of the 60 s wall clock; an expired deadline is the retryable
-`TRANSFORM_STILL_PROCESSING`, and Openinary keeps the job so a retry is cheap) and returns the
-200 response unread. `ingestVariant` streams that body into `POST /api/upload` as a hand-built
-multipart stream (no `Blob`, no buffering), after the same adopt-before-upload listing check
-`_shared/openinary.ts` uses, and applies the same collision-as-failure rule. Size is known from
-`Content-Length`; a missing length or a size above `MAX_DERIVED_BYTES` (50 MB, the Openinary default
-upload cap) is an explicit error.
+`TRANSFORM_STILL_PROCESSING`, and Openinary keeps the job so a retry is cheap), never fetches a
+`statusUrl` that leaves the configured server, and returns the 200 response unread.
+`ingestVariant` stores it as a new object without holding a large video in memory: a rendition of
+a known size up to 16 MB goes through the production `uploadBytesToOpeninary` path (plain
+FormData, adopt-before-upload, collision-as-failure); anything larger, or of unknown size, is
+streamed into `POST /api/upload` as a hand-built chunked multipart body and cut off if it passes
+`MAX_DERIVED_BYTES` (50 MB, Openinary's default upload cap). A name Openinary renamed to avoid a
+collision, or a stored size that differs from the bytes sent, fails and the stray object is removed.
 
 Library and DB recording in `supabase/functions/_shared/derivedVideoMedia.ts`:
-`resolveOpeninarySource` (provider row `openinary`/`ready`, else the path of an Openinary
-`file_path`), `recordDerivedVideo` (`media_files` row `storage_bucket: "openinary"`,
+`resolveVideoSource` (provider row `openinary`/`ready`, else the path of an Openinary
+`file_path`; paths with dot segments or on another host are never used), `recordDerivedVideo` (`media_files` row `storage_bucket: "openinary"`,
 `media_file_providers` row `openinary`/`ready`, same fields `media-direct-upload` writes) and
 rollback of the stored object when the insert is refused (quota).
 
-Handlers stay adapters: CORS, JWT identity (`authenticateCaller`; a body `user_id` that is not
-the caller is refused with 403), validate, call the use case, map the typed error.
+`_shared/videoDerivation.ts` is the use case both handlers call (load the owned video, resolve
+the source, plan, fetch, check, ingest, record). Handlers stay adapters: CORS, JWT identity
+(`_shared/videoCaller.ts` over `authenticateCaller`; a body `user_id` that is not the caller is
+refused with 403, and a service-role bearer is refused because these are browser functions),
+Zod validation (`request.ts`), the use case, and `_shared/videoErrorMapping.ts` for the reply.
+Requests gain an optional `source_dimensions` (what the player reports, used only when the row
+records no size); responses gain an optional `warnings` array. Both are additive.
 Cloudinary is used only when the row has a `cloudinary_public_id` and no usable Openinary
 object. Each plan therefore also carries the equivalent Cloudinary eager transformation string
 (the strings the old code built, including the relative-crop form used when dimensions are
@@ -113,16 +120,25 @@ Cloudinary) cannot be served by Openinary and has no remote-fetch step any more:
 
 ## Error contract
 
-`{ success: false, error, error_code }`. Codes: `UNSUPPORTED_CROP_REGION`,
-`UNSUPPORTED_CROP_TARGET`, `UNSUPPORTED_OPERATION`, `SOURCE_DIMENSIONS_UNKNOWN`,
-`SOURCE_NOT_AVAILABLE`, `SOURCE_TOO_LARGE`, `TRANSFORM_FAILED`, `TRANSFORM_STILL_PROCESSING`,
-`RESULT_TOO_LARGE`, `TARGET_SIZE_NOT_REACHED`, `COMPRESSION_NOT_SMALLER`, `STORE_FAILED`,
-`PROVIDER_UNAVAILABLE`, `METADATA_UNAVAILABLE`, `MEDIA_QUOTA_DAILY_EXCEEDED`.
-Expected refusals are 4xx/503 (422 unsupported, 503 retryable); unexpected failures are logged
-and answered with a generic message. Every refusal is logged with its code and no secrets.
+`{ success: false, error, error_code }` with a stable status. Codes (status): `INVALID_REQUEST`
+(400), `UNAUTHORIZED` (401), `FORBIDDEN` (403), `MEDIA_NOT_FOUND` (404), `UNSUPPORTED_CROP_REGION`,
+`UNSUPPORTED_CROP_TARGET`, `SOURCE_DIMENSIONS_UNKNOWN`, `SOURCE_NOT_AVAILABLE`, `SOURCE_TOO_LARGE`,
+`RESULT_TOO_LARGE`, `TARGET_SIZE_NOT_REACHED`, `COMPRESSION_NOT_SMALLER`, `METADATA_UNAVAILABLE`
+(all 422), `TRANSFORM_FAILED` and `STORE_FAILED` (502), `TRANSFORM_STILL_PROCESSING` and
+`PROVIDER_UNAVAILABLE` (503), `MEDIA_QUOTA_DAILY_EXCEEDED` (429), `PROCESSING_ERROR` (500, the
+only generic one; its cause is logged, never returned). Every refusal is also written to
+`system_logs` with its code and no secrets.
+
+Because supabase-js reduces any non-2xx reply to "Edge Function returned a non-2xx status code",
+`src/lib/functionInvokeError.ts` reads the reply body and the three callers
+(`VideoCompressor`, `MediaCropper`, `TikTokPreCheck`) show the function's own message.
 
 ## Not verifiable here
 
-No live Openinary server: the 202 flow, the streamed multipart upload against the Hono/Node
-server, baseline/level 3.0 output acceptance by TikTok/Instagram, and the deployed Openinary
-version matching `main` are covered only by fakes and a local Deno multipart server.
+No live Openinary server and no access to docs.openinary.dev (blocked in this sandbox; the
+grammar was read from the Openinary repository's docs sources and `packages/core` on
+raw.githubusercontent.com). Covered only by fakes and a local Deno multipart server: the 202
+flow against the real status endpoint, the chunked multipart upload against Openinary's
+Hono/Node server, the deployed Openinary version matching `main`, baseline/level 3.0 H.264
+output being accepted by TikTok/Instagram, and the browser's `fetch(processed_url)` of the new
+Openinary URL (needs CORS on `/t/`).

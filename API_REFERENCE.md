@@ -308,8 +308,8 @@ Total: **96 functions** (verified against `supabase/functions/` directory).
 | `cloudinary-delete` | user JWT | POST | Delete a Cloudinary asset |
 | `cloudinary-rename` | user JWT | POST | Rename a Cloudinary public_id |
 | `cloudinary-email-upload` | service-role | POST | Email-attachment helper used by `send-inbox-email` |
-| `process-video` | user JWT | POST | Mark video as ready / metadata extraction |
-| `transcode-video` | user JWT | POST | Submit transcode job (external service — Deno has no FFmpeg) |
+| `process-video` | user JWT | POST | Crop or compress a stored video through Openinary and add the result to the library (`get_metadata` returns what the library recorded) |
+| `transcode-video` | user JWT | POST | Re-encode a stored video to a TikTok / Instagram / YouTube preset through Openinary and add it to the library |
 | `transcribe-media` | user JWT | POST | 3-tier fallback STT chain |
 | `remove-background` | user JWT | POST | Cloudinary BG removal |
 | `upscale-image` | user JWT | POST | Cloudinary `c_scale` upscale |
@@ -837,7 +837,7 @@ magic link) through Resend with custom branded templates.
 | `ai-config` | Read/write AI provider+model selection. |
 | `ai-email-assistant` | Compose-assist for the admin inbox. |
 | `cloudinary-upload` / `-delete` / `-rename` / `-email-upload` | Direct Cloudinary helpers. |
-| `process-video` / `transcode-video` | Video pipeline (transcode runs on an external service — Deno has no FFmpeg). |
+| `process-video` / `transcode-video` | Video pipeline: Openinary URL transformations (H.264 only; Cloudinary only as a fallback for videos stored nowhere else). See `docs/superpowers/specs/2026-10-30-openinary-video-processing-design.md`. |
 | `transcribe-media` | 3-tier STT fallback. |
 | `remove-background` / `upscale-image` / `upscale-image-atlas` | Image AI tools. |
 | `check-music-copyright` | ACRCloud lookup. |

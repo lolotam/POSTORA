@@ -11,11 +11,11 @@ Spec: `docs/superpowers/specs/2026-10-30-openinary-video-processing-design.md`.
    presets).
 3. **Delivery I/O** `supabase/functions/_shared/openinaryVideoDelivery.ts` + test with a fake
    `fetch` (200 direct, 202 then completed, 202 then error, deadline, non-200) and a local
-   `Deno.serve` multipart server proving the streamed upload carries the exact bytes, the
-   folder/name fields and an explicit `Content-Length`, plus adopt-before-upload and
-   collision-as-failure.
-4. **Library recording** `supabase/functions/_shared/derivedVideoMedia.ts` + test with a fake
-   Supabase client: source resolution (provider row, `file_path` fallback, Cloudinary-only,
+   `Deno.serve` multipart server proving both the buffered (<= 16 MB) and the streamed upload
+   carry the exact bytes, folder and name, plus collision-as-failure, size mismatch and the cap.
+4. **Library recording and use case** `_shared/derivedVideoMedia.ts` and
+   `_shared/videoDerivation.ts` + tests with a fake Supabase client and the network faked at
+   the boundary: source resolution (provider row, `file_path` fallback, Cloudinary-only,
    Supabase-storage-only), row writes, quota refusal rolls the stored object back.
 5. **Cloudinary fallback** `supabase/functions/_shared/cloudinaryVideoFallback.ts` + test
    (fake `fetch`: success, disabled cloud, other error).
