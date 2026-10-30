@@ -1335,7 +1335,7 @@ function postReaderFor(supabase: SupabaseClient): PostReader {
   return {
     postStatus: (postId) => supabase.from("posts").select("status").eq("id", postId).maybeSingle(),
     platformRows: (postId) =>
-      supabase.from("platform_posts").select("platform, status, platform_post_url, error_message").eq("post_id", postId).order("created_at"),
+      supabase.from("platform_posts").select("platform, status, platform_post_url, error_message, story_on_reel:response_data->story_recorded_on_reel_row").eq("post_id", postId).order("created_at"),
   };
 }
 
@@ -1515,12 +1515,9 @@ Deno.serve(async (req) => {
           : null;
         if (carried.error) {
           console.error(`[IG story] could not be recorded while giving up the reel: ${carried.error}`);
-          const logRow = storyOnReelRow
-            ? storyRecordedOnReelRowLog(post.user_id, post_id, row.id, carried.error)
-            : unrecordedStoryLog(post.user_id, post_id, row.id, carried.error);
-          const logError = await writeLogRow(supabase, logRow);
-          if (logError) console.error("[process-post] could not log the refusal either:", logError);
           if (!storyOnReelRow) {
+            const logError = await writeLogRow(supabase, unrecordedStoryLog(post.user_id, post_id, row.id, carried.error));
+            if (logError) console.error("[process-post] could not log the refusal either:", logError);
             return createErrorResponse(`Could not record the live Instagram story, so the reel was not given up: ${carried.error}`, 503);
           }
         }
@@ -1545,6 +1542,11 @@ Deno.serve(async (req) => {
             errorMessage: abandon,
           });
         if (settled.error) return createErrorResponse(`Could not settle the deferred row: ${settled.error}`, 503);
+        if (storyOnReelRow && carried.error) {
+          // Logged only once the reel's row really holds the story.
+          const logError = await writeLogRow(supabase, storyRecordedOnReelRowLog(post.user_id, post_id, row.id, carried.error));
+          if (logError) console.error("[process-post] could not log the story recorded on the reel's row:", logError);
+        }
         // This settle may have been the one that made the post final, and this run returns
         // before Step 6, so it reports the post here. A post that was not processing was
         // already final (or changed by someone) before this, and was announced then.

@@ -191,3 +191,15 @@ Deno.test("the legacy map keeps its exact shape for existing consumers (platform
   const { platform_results } = buildWebhookResults([{ platform: "facebook", status: "success", platform_post_url: "https://fb/1" }]);
   assertEquals(Object.keys(platform_results.facebook).sort(), ["post_url", "status"]);
 });
+
+Deno.test("a reel row holding the account's live story reports the story and the given-up reel", () => {
+  const row = { platform: "instagram", status: "success", platform_post_url: "https://ig/story", error_message: "gave up", story_on_reel: true };
+  assertEquals(summarizeRows([row]), {
+    results: [
+      { platform: "instagram", status: "success", platform_post_url: "https://ig/story" },
+      { platform: "instagram", status: "failed", error_message: "gave up" },
+    ],
+    hasSuccess: true,
+    hasFailed: true,
+  });
+});

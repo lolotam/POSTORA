@@ -23,6 +23,8 @@ export interface PlatformRow {
   status: string;
   platform_post_url: string | null;
   error_message: string | null;
+  /** Set on a reel row that was settled as the account's live story (storyOnReelRowData). */
+  story_on_reel?: unknown;
 }
 
 type Read<T> = PromiseLike<{ data: T | null; error: { message: string } | null }>;
@@ -44,14 +46,26 @@ export type PostOutcome =
   | { kind: "in_progress" }
   | { kind: "unknown"; error: string };
 
-/** One result per platform_posts row, so an Instagram story and reel are both reported. */
+/**
+ * One result per platform_posts row, so an Instagram story and reel are both reported. A reel
+ * row that holds the account's live story stands for both: the live story and the given-up
+ * reel, so the failure still reaches the notifications.
+ */
 export function summarizeRows(rows: PlatformRow[]): ResultsSummary {
-  const results = rows.map((row): PlatformResultSummary => ({
-    platform: row.platform,
-    status: row.status,
-    ...(row.platform_post_url ? { platform_post_url: row.platform_post_url } : {}),
-    ...(row.error_message ? { error_message: row.error_message } : {}),
-  }));
+  const results = rows.flatMap((row): PlatformResultSummary[] => {
+    if (row.story_on_reel === true && row.status === "success") {
+      return [
+        { platform: row.platform, status: "success", ...(row.platform_post_url ? { platform_post_url: row.platform_post_url } : {}) },
+        { platform: row.platform, status: "failed", ...(row.error_message ? { error_message: row.error_message } : {}) },
+      ];
+    }
+    return [{
+      platform: row.platform,
+      status: row.status,
+      ...(row.platform_post_url ? { platform_post_url: row.platform_post_url } : {}),
+      ...(row.error_message ? { error_message: row.error_message } : {}),
+    }];
+  });
   return {
     results,
     hasSuccess: results.some((result) => result.status === "success"),
