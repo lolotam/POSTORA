@@ -7,7 +7,8 @@
  * secret) are retried by Svix, so they keep producing a row every window.
  */
 
-export const REFUSAL_LOG_WINDOW_MS = 10 * 60 * 1000;
+/** Short enough to fire within an edge worker's lifetime, so held-back counts reach the table. */
+export const REFUSAL_LOG_WINDOW_MS = 60 * 1000;
 
 export interface RefusalLogGate {
   /** Whether this refusal gets a row, and how many earlier ones in this worker it stands for. */
