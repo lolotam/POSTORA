@@ -102,3 +102,21 @@ export function retryGuardDecision(matches: MediaSummary[]): RetryGuardDecision 
   if (matches.length > 1) return { kind: "already_live_copies", count: matches.length };
   return { kind: "publish" };
 }
+
+/** A success row of this post for the account, as the retry reads it. */
+export interface RecordedRow {
+  story_subtype: string | null;
+  story_on_reel: string | null;
+  carried_story: unknown;
+}
+
+/**
+ * What this post's success rows already record for the account: its story, its feed post or reel.
+ * A row that carries a live story it could not record (`unrecorded_story`) still proves the story
+ * is live, so a later retry must not post it again.
+ */
+export function recordedOnRetryRows(rows: RecordedRow[]): { story: boolean; feed: boolean } {
+  const isStory = (row: RecordedRow) => row.story_subtype === "story" || row.story_on_reel === "true";
+  const carriesStory = (row: RecordedRow) => row.carried_story !== null && row.carried_story !== undefined;
+  return { story: rows.some((row) => isStory(row) || carriesStory(row)), feed: rows.some((row) => !isStory(row)) };
+}

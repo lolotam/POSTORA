@@ -4,6 +4,7 @@ import {
   expectedMediaType,
   isRetryRun,
   parseMediaList,
+  recordedOnRetryRows,
   RETRY_LOOKBACK_MS,
   retryGuardDecision,
   retryWindowStart,
@@ -72,4 +73,14 @@ Deno.test("a media list with any malformed entry is unreadable, so the retry pub
 Deno.test("an entry without a media type never stops a publish", () => {
   const { media_type: _type, ...untyped } = live;
   assertEquals(retryGuardDecision(candidateMedia([untyped], post, none)), { kind: "publish" });
+});
+
+Deno.test("a row that carries a live story it could not record counts the story as recorded", () => {
+  const feed = { story_subtype: "feed", story_on_reel: null, carried_story: null };
+  const carrying = { story_subtype: null, story_on_reel: null, carried_story: { id: "s1", url: "https://instagram.com/s1" } };
+  assertEquals(recordedOnRetryRows([feed]), { story: false, feed: true });
+  assertEquals(recordedOnRetryRows([carrying]), { story: true, feed: true });
+  assertEquals(recordedOnRetryRows([feed, { story_subtype: "story", story_on_reel: null, carried_story: null }]), { story: true, feed: true });
+  assertEquals(recordedOnRetryRows([{ story_subtype: null, story_on_reel: "true", carried_story: null }]), { story: true, feed: false });
+  assertEquals(recordedOnRetryRows([]), { story: false, feed: false });
 });
