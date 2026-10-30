@@ -22,7 +22,7 @@ The drain and the owner intake refuse unless **both** global settings hold (`ins
 1. `collection_instagram_insights_enabled = true`, otherwise 503 `collection_disabled`;
 2. `credential_facebook_user_mode = protected`, otherwise 503 `protected_credentials_required`.
 
-Credential mode also changes `facebook-oauth`, `instagram-business-oauth`, `refresh-tokens` and the other credential readers for **every** user. The protected tables are empty and the plan forbids a trusted backfill (§10 R3.1), so after the cutover an existing account has no protected credential until it reconnects. Until it does, the readers return typed reconnect/capability errors.
+Credential mode also changes `facebook-oauth`, `instagram-business-oauth`, `refresh-tokens` and the other credential readers for **every** user. The protected tables are empty. The main plan prescribes a revalidated backfill of the old credentials, fenced against reconnect (§10 credential-cutover subtask: "copy/revalidate old credentials without exposing values"; §13 activation prerequisites). §10 R3.1 forbids only backfilling *scope* state to a trusted `ok`, not credentials. That backfill has not been built, so today an existing account has no protected credential until it either reconnects or is revalidated by that backfill once it exists. Until it does, the readers return typed reconnect/capability errors.
 
 **Open question that must be answered before Gate B:** in protected mode, does an account that has not reconnected keep **posting** through `process-post` and keep being refreshed by `refresh-tokens`? If not, the cutover is an outage for all 52 accounts until each one reconnects. Answer it by reading the code paths and rehearsing on a restored copy (Gate A), not by assuming.
 
@@ -52,7 +52,7 @@ Credential mode also changes `facebook-oauth`, `instagram-business-oauth`, `refr
 - an account runs protected once it holds a protected authority owned by the same user; every other account stays legacy;
 - a user listed in `credential_facebook_user_protected_pilot_user_ids` starts OAuth `authorize` on the protected branch (`facebook-oauth/protectedPageConnect.ts`), which is how an account gets that authority.
 
-**Collection is not covered by it.** `instagram-insights-sync` still refuses unless the **global** mode is `protected` (`handler.ts`, `protected_credentials_required`), and `collection_instagram_insights_enabled` is one global setting. Collection therefore stays blocked until a reviewed, server-enforced per-account collection eligibility mechanism exists (the D1 prerequisite in `docs/specs/2026-10-30-instagram-release-gates.md`).
+**Collection is not covered by it.** `instagram-insights-sync` still refuses unless the **global** mode is `protected` (`handler.ts`, `protected_credentials_required`), and `collection_instagram_insights_enabled` is one global setting. Collection therefore stays blocked until a reviewed, server-enforced per-account collection eligibility mechanism exists (the D1 prerequisite in `docs/specs/2026-10-30-instagram-release-gates.md`, added by PR #309).
 
 ## 3. Gates (each needs Waleed's explicit approval)
 
@@ -60,19 +60,21 @@ Credential mode also changes `facebook-oauth`, `instagram-business-oauth`, `refr
 
 - **Done:** the SQL suites passed on a restored production copy before the migrations, and the §2 question was answered from the edge code on `main` at `d4e12ed6`, with the protected-path tests it cites.
 - **Not done:** a production-copy run of the protected OAuth, refresh, publishing and report edge suites. The decisive behaviour is in the edge code and its tests, so it was skipped; it is not claimed.
+- **Not covered:** the analysis predates the #298 per-account cutover (`b89fd08d`). Gate A answers why the **global** flip is unsafe; it does not verify the per-account path Gate B runs. That rehearsal is Gate B's step 1.
 
 ### Gate B: one pilot account on the per-account cutover, collection still off
 
 The global `credential_facebook_user_mode` stays `legacy` throughout; it is never set to `protected`.
 
-1. Fresh backup, as in the PR #294 rollout: `pg_dump -Fc` plus globals, with the TOC checked.
-2. Add the test owner's **user UUID** to `credential_facebook_user_protected_pilot_user_ids`.
-3. That owner reconnects **one** test-owned Instagram account. Verify a protected authority row exists for it, a refresh succeeds and a post publishes.
-4. Watch for 24 hours with **direct** checks, because the usual signals stay quiet here (§2):
+1. **Rehearse the #298 cutover first**, on a restored production copy at the exact commit that will run: the pilot reconnect creates a protected authority, protected refresh succeeds for that one account, and refresh for a non-pilot account is unchanged (`accountCredentialMode` keeps it legacy). Gate B does not start until this passes.
+2. Fresh backup, as in the PR #294 rollout: `pg_dump -Fc` plus globals, with the TOC checked.
+3. The pilot list is **per user**, not per account: every Meta `authorize` that user starts takes the protected branch. So use a dedicated test owner whose only active Meta account is the test account (check the count of that user's active Facebook and Instagram accounts is exactly 1 before and during the gate), and connect no other Meta account for that user until Gate B ends. Then add that owner's **user UUID** to `credential_facebook_user_protected_pilot_user_ids`.
+4. That owner reconnects the **one** test-owned Instagram account. Verify a protected authority row exists for it, a refresh succeeds and a post publishes.
+5. Watch for 24 hours with **direct** checks, because the usual signals stay quiet here (§2):
    - the count of Meta accounts whose last refresh outcome is `unsupported` or `page_binding_missing`, or whose last successful refresh is older than the expected interval: it must stay at its pre-change value;
    - only the pilot account holds a protected authority;
    - `platform_posts` failures by platform, and edge logs.
-5. **Rollback:** remove the UUID from the pilot list. This stops new protected attempts; it does **not** downgrade the already protected account, which keeps working on its protected authority.
+6. **Rollback:** remove the UUID from the pilot list. This stops new protected attempts; it does **not** downgrade the already protected account, which keeps working on its protected authority. While it is off the list, a new `authorize` for that owner starts on the legacy branch, so it **cannot repair** the protected credential. If that credential is revoked or needs reauthorization after rollback, re-add the owner to the pilot list for that reconnect only, then remove them again. No downgrade path exists to move the account back to legacy; building one (restore a usable legacy credential, then remove the authority atomically) is a separate change.
 
 ### Gate C: owner collection for the test account (blocked)
 
@@ -88,7 +90,7 @@ Once the prerequisite is in place:
 
 ### Gate D: daily collection (blocked)
 
-**Blocked** on a daily enqueue mechanism. The handler exposes only a user `enqueue`, `status` and a target-less `drain`; nothing creates the daily owner jobs (00:30 UTC) that the main plan (§5.3) requires. A scheduled drain alone would only process jobs users trigger by hand. The mechanism is specified in `docs/specs/2026-10-30-instagram-collection-rollout-controls.md` (durable daily dispatch).
+**Blocked** on a daily enqueue mechanism. The handler exposes only a user `enqueue`, `status` and a target-less `drain`; nothing creates the daily owner jobs (00:30 UTC) that the main plan (§5.3) requires. A scheduled drain alone would only process jobs users trigger by hand. The mechanism is specified in `docs/specs/2026-10-30-instagram-collection-rollout-controls.md` (durable daily dispatch, added by PR #310); it is not implemented.
 
 Once it exists:
 
