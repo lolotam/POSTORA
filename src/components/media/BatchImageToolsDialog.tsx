@@ -362,14 +362,19 @@ export function BatchImageToolsDialog({
   // Cloudinary is not serving transforms: the AI steps run on the server, one after the other on
   // the file's public URL (background removal first, then upscale). The server picks the
   // provider. A cut-out has transparency, so the upscale after it asks for PNG.
-  const fetchServerProcessedBlob = async (file: BatchFile): Promise<Blob> => {
+  const serverProcessedUrl = async (file: BatchFile): Promise<string> => {
     let currentUrl = file.publicUrl;
     if (enableBgRemoval) currentUrl = await runBackgroundRemoval(currentUrl);
     if (enableUpscale) currentUrl = await runUpscale(currentUrl, enableBgRemoval ? { outputFormat: "png" } : {});
-    const response = await fetch(currentUrl);
-    if (!response.ok) throw new Error(`Failed to fetch processed image: ${response.status}`);
-    return response.blob();
+    return currentUrl;
   };
+
+  const blobToDataUrl = (blob: Blob): Promise<string> => new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result as string);
+    reader.onerror = reject;
+    reader.readAsDataURL(blob);
+  });
 
   const fetchCloudinaryProcessedBlob = async (file: BatchFile): Promise<Blob> => {
     const isCloudinaryFile = file.storage_bucket === "cloudinary" && !!file.cloudinary_public_id;
@@ -414,18 +419,11 @@ export function BatchImageToolsDialog({
   };
 
   const processFile = async (file: BatchFile): Promise<void> => {
-    const imageBlob = transformsUnavailable
-      ? await fetchServerProcessedBlob(file)
-      : await fetchCloudinaryProcessedBlob(file);
-
-    // Convert to base64 and upload
-    const reader = new FileReader();
-    const base64Promise = new Promise<string>((resolve, reject) => {
-      reader.onload = () => resolve(reader.result as string);
-      reader.onerror = reject;
-      reader.readAsDataURL(imageBlob);
-    });
-    const base64Data = await base64Promise;
+    // A server result is saved by URL: cloudinary-upload streams it into storage, so a large
+    // upscale is not held back by the 10 MB base64 limit and the browser never downloads it.
+    const source = transformsUnavailable
+      ? { externalUrl: await serverProcessedUrl(file) }
+      : { fileData: await blobToDataUrl(await fetchCloudinaryProcessedBlob(file)) };
 
     const originalName = file.file_path.split("/").pop()?.replace(/\.[^.]+$/, "") || "processed";
     const suffix = [
@@ -441,7 +439,7 @@ export function BatchImageToolsDialog({
 
     const { data: uploadData, error: uploadError } = await supabase.functions.invoke("cloudinary-upload", {
       body: {
-        fileData: base64Data,
+        ...source,
         fileName: newFileName,
         fileType: "image",
       },

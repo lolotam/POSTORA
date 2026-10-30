@@ -1,6 +1,6 @@
 import { assertEquals, assertRejects } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import type { OpeninaryFile } from "../_shared/openinary.ts";
-import { runSweep, STAGING_MAX_AGE_MS, type SweepPorts, userFolderPaths } from "./run.ts";
+import { modifiedAt, runSweep, STAGING_MAX_AGE_MS, type SweepPorts, userFolderPaths } from "./run.ts";
 
 const NOW = Date.parse("2026-10-30T12:00:00Z");
 const ROOT = "postora.cloud/postora";
@@ -147,4 +147,12 @@ Deno.test("each run starts at a random folder and wraps around, so a budget cut 
   await runSweep(fake, { now: () => NOW, random: () => 0.5 });
   assertEquals(new Set(seen), new Set(["f0", "f1", "f2", "f3"]));
   assertEquals(seen.slice(0, 2).sort(), ["f2", "f3"]); // the first workers take the rotated head
+});
+
+Deno.test("only a full date-time with a zone counts as a modification time", () => {
+  assertEquals(modifiedAt("2026-10-30T07:00:00.123Z"), Date.parse("2026-10-30T07:00:00.123Z"));
+  assertEquals(modifiedAt("2026-10-30T09:00:00+02:00"), Date.parse("2026-10-30T07:00:00Z"));
+  for (const loose of [undefined, "", "2026-10-30", "2026-10-30T07:00:00", "2026-02-31T00:00:00Z", "yesterday"]) {
+    assertEquals(Number.isNaN(modifiedAt(loose)), true, String(loose));
+  }
 });

@@ -37,7 +37,6 @@ function renderDialog() {
 
 const toggle = (index: number) => fireEvent.click(screen.getAllByRole("switch")[index]);
 const processButton = () => screen.getByRole("button", { name: /^Process .* Images$/ });
-const fetchedUrls = (fetchMock: ReturnType<typeof vi.fn>) => fetchMock.mock.calls.map(([url]) => String(url));
 
 describe("BatchImageToolsDialog while Cloudinary is not serving transforms", () => {
   const fetchMock = vi.fn();
@@ -50,8 +49,7 @@ describe("BatchImageToolsDialog while Cloudinary is not serving transforms", () 
     runBackgroundRemoval.mockReset();
     runUpscale.mockReset();
     fetchMock.mockReset();
-    // A plain response: the dialog only needs `ok` and a jsdom Blob that FileReader can read.
-    fetchMock.mockImplementation(async () => ({ ok: true, status: 200, blob: async () => new Blob(["png-bytes"], { type: "image/png" }) }));
+    // The server path must not download results in the browser; any fetch is a failure.
     vi.stubGlobal("fetch", fetchMock);
     invoke.mockResolvedValue({ data: { success: true, mediaFileId: "new-media" }, error: null });
     cdnQuery.current = { data: DEFAULT_CDN_STORAGE_CONFIG, isLoading: false };
@@ -72,12 +70,15 @@ describe("BatchImageToolsDialog while Cloudinary is not serving transforms", () 
     expect(runBackgroundRemoval).toHaveBeenCalledWith(files[0].publicUrl);
     expect(runUpscale).toHaveBeenCalledWith(`${files[0].publicUrl}?bg`, { outputFormat: "png" });
     expect(runUpscale).toHaveBeenCalledWith(`${files[1].publicUrl}?bg`, { outputFormat: "png" });
-    expect(fetchedUrls(fetchMock)).toEqual([`${files[0].publicUrl}?bg&up`, `${files[1].publicUrl}?bg&up`]);
-    // The only cloudinary-upload calls are the final saves, never a staging copy. The saved name
-    // has no extension, so the upload takes the type from the bytes (Openinary may deliver WebP).
+    // The only cloudinary-upload calls are the final saves, never a staging copy. Each saves the
+    // result by URL (streamed by the server, so no 10 MB base64 cap and no browser download), with
+    // no extension in the name, so the type comes from the bytes (Openinary may deliver WebP).
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(invoke.mock.calls.map(([, { body }]) => body.externalUrl).sort()).toEqual([`${files[0].publicUrl}?bg&up`, `${files[1].publicUrl}?bg&up`]);
     for (const [name, { body }] of invoke.mock.calls) {
       expect(name).toBe("cloudinary-upload");
       expect(body).not.toHaveProperty("skipMediaFiles");
+      expect(body).not.toHaveProperty("fileData");
       expect(body.fileName).toMatch(/^[ab]_bg-removed-upscaled_\d+$/);
     }
     expect(update).toHaveBeenCalledTimes(1); // only file "a" has a folder to restore
@@ -145,6 +146,6 @@ describe("BatchImageToolsDialog while Cloudinary is not serving transforms", () 
     expect(await screen.findByText("This AI tool is temporarily unavailable. Please try again later.")).toBeInTheDocument();
     await waitFor(() => expect(invoke).toHaveBeenCalledTimes(1));
     expect(runBackgroundRemoval).toHaveBeenCalledTimes(2);
-    expect(fetchedUrls(fetchMock)).toEqual(["https://o.example/t/b-cutout.png"]);
+    expect(invoke.mock.calls[0][1].body.externalUrl).toBe("https://o.example/t/b-cutout.png");
   });
 });

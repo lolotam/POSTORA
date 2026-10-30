@@ -51,6 +51,19 @@ export interface SweepSummary {
 
 type Failure = { path: string; error: string };
 
+/** A full RFC 3339 date-time with a zone. A date alone, or a zoneless time, cannot prove an age. */
+const RFC3339 = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})$/;
+
+/** The modification instant in ms, or NaN when the listing's mtime cannot be trusted as one. */
+export function modifiedAt(mtime: string | undefined): number {
+  if (!mtime || !RFC3339.test(mtime)) return NaN;
+  // Date.parse rolls impossible dates over (02-31 becomes 03-03): the calendar date must exist.
+  const [year, month, day] = mtime.slice(0, 10).split("-").map(Number);
+  const calendar = new Date(Date.UTC(year, month - 1, day));
+  if (calendar.getUTCMonth() !== month - 1 || calendar.getUTCDate() !== day) return NaN;
+  return Date.parse(mtime);
+}
+
 /** The user folders among `root`'s children: direct children only, named like the path says. */
 export function userFolderPaths(root: string, folders: OpeninaryFolder[]): string[] {
   return folders.filter((f) => f.name && !f.name.includes("/") && f.path === `${root}/${f.name}`).map((f) => f.path);
@@ -90,7 +103,7 @@ export async function runSweep(ports: SweepPorts, options: SweepOptions = {}): P
       // Only direct children of this folder's ai-tmp, whatever the listing claims.
       if (!file.path.startsWith(stagingPrefix) || file.path.slice(stagingPrefix.length).includes("/")) continue;
       summary.scanned++;
-      const modified = file.mtime ? Date.parse(file.mtime) : NaN;
+      const modified = modifiedAt(file.mtime);
       if (Number.isNaN(modified)) {
         summary.undated++;
         continue;

@@ -64,8 +64,8 @@ async function request(url: string, init: RequestInit = {}, timeout = 30_000): P
 }
 
 /** A folder's direct children. A missing folder lists as empty; any other failure throws, never reads as empty. */
-export async function listOpeninaryEntries(config: OpeninaryConfig, folder: string): Promise<{ folders: OpeninaryFolder[]; files: OpeninaryFile[] }> {
-  const response = await request(`${config.serverUrl}/api/storage?path=${encodeURIComponent(folder)}`, { headers: { Authorization: `Bearer ${config.apiKey}` } });
+export async function listOpeninaryEntries(config: OpeninaryConfig, folder: string, timeoutMs = 30_000): Promise<{ folders: OpeninaryFolder[]; files: OpeninaryFile[] }> {
+  const response = await request(`${config.serverUrl}/api/storage?path=${encodeURIComponent(folder)}`, { headers: { Authorization: `Bearer ${config.apiKey}` } }, timeoutMs);
   if (response.status === 404) return { folders: [], files: [] };
   if (!response.ok) throw new Error(`Openinary listing failed: ${response.status}`);
   const data = await response.json();
@@ -77,8 +77,8 @@ export async function listOpeninaryEntries(config: OpeninaryConfig, folder: stri
   };
 }
 
-export async function listOpeninaryFolder(config: OpeninaryConfig, folder: string): Promise<OpeninaryFile[]> {
-  return (await listOpeninaryEntries(config, folder)).files;
+export async function listOpeninaryFolder(config: OpeninaryConfig, folder: string, timeoutMs?: number): Promise<OpeninaryFile[]> {
+  return (await listOpeninaryEntries(config, folder, timeoutMs)).files;
 }
 
 export async function deleteFromOpeninary(config: OpeninaryConfig, path: string, timeoutMs = 30_000): Promise<{ success: boolean; error?: string }> {

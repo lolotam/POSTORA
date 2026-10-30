@@ -5,6 +5,8 @@ import { logToDatabase } from "../_shared/logging.ts";
 import { deleteFromOpeninary, getOpeninaryConfig, listOpeninaryEntries, listOpeninaryFolder } from "../_shared/openinary.ts";
 import { type SweepPorts, userFolderPaths } from "./run.ts";
 
+/** With RUN_BUDGET_MS (40 s), a request started just before the budget ends still finishes inside the 60 s worker limit. */
+const LIST_TIMEOUT_MS = 10_000;
 const DELETE_TIMEOUT_MS = 15_000;
 
 export function createSweepLogger(): SweepPorts["log"] {
@@ -21,8 +23,8 @@ export function createSweepPorts(): SweepPorts {
   const root = `${config.folderPrefix}/postora`;
 
   return {
-    listUserFolders: async () => userFolderPaths(root, (await listOpeninaryEntries(config, root)).folders),
-    listStaged: (userFolder) => listOpeninaryFolder(config, `${userFolder}/ai-tmp`),
+    listUserFolders: async () => userFolderPaths(root, (await listOpeninaryEntries(config, root, LIST_TIMEOUT_MS)).folders),
+    listStaged: (userFolder) => listOpeninaryFolder(config, `${userFolder}/ai-tmp`, LIST_TIMEOUT_MS),
     remove: (path) => deleteFromOpeninary(config, path, DELETE_TIMEOUT_MS),
     log: createSweepLogger(),
   };

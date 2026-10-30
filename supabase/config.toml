@@ -59,3 +59,7 @@ verify_jwt = true
 
 [functions.tiktok-review]
 verify_jwt = true
+
+# Cron calls with the shared secret, not a user JWT (verifyCronAuth in the function).
+[functions.sweep-ai-image-staging]
+verify_jwt = false
