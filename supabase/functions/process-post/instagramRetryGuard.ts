@@ -103,20 +103,26 @@ export function retryGuardDecision(matches: MediaSummary[]): RetryGuardDecision 
   return { kind: "publish" };
 }
 
-/** A success row of this post for the account, as the retry reads it. */
+/** A settled row of this post for the account, as the retry reads it. */
 export interface RecordedRow {
+  status: string;
   story_subtype: string | null;
   story_on_reel: string | null;
   carried_story: unknown;
 }
 
 /**
- * What this post's success rows already record for the account: its story, its feed post or reel.
- * A row that carries a live story it could not record (`unrecorded_story`) still proves the story
- * is live, so a later retry must not post it again.
+ * What this post's settled rows already record for the account: its story, its feed post or reel.
+ * Only success rows record either. A row of any status that carries a live story it could not
+ * record (`unrecorded_story`, which a reel that gave up can keep) still proves the story is live,
+ * so a later retry must not post it again.
  */
 export function recordedOnRetryRows(rows: RecordedRow[]): { story: boolean; feed: boolean } {
   const isStory = (row: RecordedRow) => row.story_subtype === "story" || row.story_on_reel === "true";
   const carriesStory = (row: RecordedRow) => row.carried_story !== null && row.carried_story !== undefined;
-  return { story: rows.some((row) => isStory(row) || carriesStory(row)), feed: rows.some((row) => !isStory(row)) };
+  const succeeded = rows.filter((row) => row.status === "success");
+  return {
+    story: succeeded.some(isStory) || rows.some(carriesStory),
+    feed: succeeded.some((row) => !isStory(row)),
+  };
 }

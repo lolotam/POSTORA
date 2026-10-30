@@ -76,11 +76,19 @@ Deno.test("an entry without a media type never stops a publish", () => {
 });
 
 Deno.test("a row that carries a live story it could not record counts the story as recorded", () => {
-  const feed = { story_subtype: "feed", story_on_reel: null, carried_story: null };
-  const carrying = { story_subtype: null, story_on_reel: null, carried_story: { id: "s1", url: "https://instagram.com/s1" } };
-  assertEquals(recordedOnRetryRows([feed]), { story: false, feed: true });
-  assertEquals(recordedOnRetryRows([carrying]), { story: true, feed: true });
-  assertEquals(recordedOnRetryRows([feed, { story_subtype: "story", story_on_reel: null, carried_story: null }]), { story: true, feed: true });
-  assertEquals(recordedOnRetryRows([{ story_subtype: null, story_on_reel: "true", carried_story: null }]), { story: true, feed: false });
+  const row = (status: string, story_subtype: string | null, carried_story: unknown = null, story_on_reel: string | null = null) =>
+    ({ status, story_subtype, story_on_reel, carried_story });
+  const carried = { id: "s1", url: "https://instagram.com/s1" };
+  assertEquals(recordedOnRetryRows([row("success", "feed")]), { story: false, feed: true });
+  assertEquals(recordedOnRetryRows([row("success", null, carried)]), { story: true, feed: true });
+  assertEquals(recordedOnRetryRows([row("success", "feed"), row("success", "story")]), { story: true, feed: true });
+  assertEquals(recordedOnRetryRows([row("success", null, null, "true")]), { story: true, feed: false });
   assertEquals(recordedOnRetryRows([]), { story: false, feed: false });
+});
+
+Deno.test("a failed row records nothing, unless it still carries a live story", () => {
+  const row = (status: string, story_subtype: string | null, carried_story: unknown = null) =>
+    ({ status, story_subtype, story_on_reel: null, carried_story });
+  assertEquals(recordedOnRetryRows([row("failed", "story"), row("failed", "reel")]), { story: false, feed: false });
+  assertEquals(recordedOnRetryRows([row("failed", null, { id: "s1", url: "u" })]), { story: true, feed: false });
 });

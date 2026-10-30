@@ -1984,7 +1984,7 @@ Deno.serve(async (req) => {
                   errorMessage: error,
                   responseData: { ig_post_subtype: "story", account_username: account.platform_username },
                 });
-                if (settled.error) console.error("[IG story] could not record the failed retry:", settled.error);
+                return settled.error;
               });
             }
             break;
@@ -3771,10 +3771,10 @@ async function findPublishedMedia(
 async function recordedOnRetry(supabase: SupabaseClient, postId: string, socialAccountId: string): Promise<{ story: boolean; feed: boolean }> {
   const { data, error } = await supabase
     .from("platform_posts")
-    .select("story_subtype:response_data->>ig_post_subtype, story_on_reel:response_data->>story_recorded_on_reel_row, carried_story:response_data->unrecorded_story")
+    .select("status, story_subtype:response_data->>ig_post_subtype, story_on_reel:response_data->>story_recorded_on_reel_row, carried_story:response_data->unrecorded_story")
     .eq("post_id", postId)
     .eq("social_account_id", socialAccountId)
-    .eq("status", "success");
+    .in("status", ["success", "failed"]);
   if (error) {
     console.warn(`[instagram] retry guard could not read the recorded rows for post ${postId}: ${error.message}`);
     return { story: false, feed: false };
@@ -3888,8 +3888,9 @@ async function postToInstagram(
   // still to come, so a reel that defers or fails does not lose it. See instagramStory.ts.
   recordStory?: (story: StoryRef) => Promise<string | null>,
   retry: RetryState = NOT_A_RETRY,
-  // Writes a failed story row, for a retry whose feed post or reel is already recorded.
-  recordStoryFailure?: (error: string) => Promise<void>,
+  // Writes a failed story row for a retry whose feed post or reel is already done (answering an
+  // error, or null).
+  recordStoryFailure?: (error: string) => Promise<string | null>,
 ): Promise<PlatformPostResult> {
   const igUserId = account.platform_user_id;
   const accessToken = account.access_token;
@@ -4362,15 +4363,21 @@ async function postToInstagram(
     }
   };
 
+  // The story this retry was for failed again, while its feed post or reel is done: the story
+  // gets its own failed row, so History shows it and can retry it.
+  const storyFailedAgain = igPostTypes.includes("story") && !retry.storyRecorded && igAllResults.length === 0;
+  const storyFailure = () => warnings.join("; ") || "Instagram Story failed";
+
   // This post's own row already records the feed post or reel: it is done, and that row stays the
   // record. What this retry owes is the story.
   if (retry.feedRecorded && !igPostTypes.every((type) => type === "story")) {
     await mirrorStoryOnRetry();
-    // The story this retry was for failed again. As in Business Login, it gets its own failed row
-    // and the recorded feed post or reel still counts as the account's success.
-    if (igPostTypes.includes("story") && !retry.storyRecorded && igAllResults.length === 0) {
-      const error = warnings.join("; ") || "Instagram Story failed";
-      await recordStoryFailure?.(error);
+    // As in Business Login, the recorded feed post or reel still counts as the account's success.
+    // A failed row that could not be written must not be reported as written.
+    if (storyFailedAgain) {
+      const error = storyFailure();
+      const writeError = recordStoryFailure ? await recordStoryFailure(error) : null;
+      if (writeError) throw new Error(`${error} (and its failed row could not be recorded: ${writeError})`);
       return {
         selfWroteRows: true,
         subResults: [{ subtype: "story", status: "failed", error }, { subtype: "feed", status: "success" }],
@@ -4386,6 +4393,11 @@ async function postToInstagram(
   if (live) {
     // Its publish went unanswered, so the run that published it never mirrored it to the Story.
     await mirrorStoryOnRetry();
+    if (storyFailedAgain && recordStoryFailure) {
+      // The live feed post or reel is recorded below whatever happens to this row.
+      const writeError = await recordStoryFailure(storyFailure());
+      if (writeError) console.error("[IG story] could not record the failed retry:", writeError);
+    }
     const carried = unrecordedStory ? { unrecorded_story: unrecordedStory } : {};
     return live.kind === "already_live"
       ? { id: live.media.id, url: live.media.permalink ?? profileUrl, warnings: [...warnings, ALREADY_LIVE_MESSAGE], ...carried }
