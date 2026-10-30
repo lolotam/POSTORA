@@ -23,6 +23,14 @@ export function alreadyLiveCopiesMessage(count: number): string {
   return `This post is already live on Instagram ${count} times, so it was not posted again. Check the account for duplicates.`;
 }
 
+/** What a retry knows from the rows earlier runs recorded for this account. */
+export interface RetryState {
+  /** The story already has its own success row: a retry does not post it again. */
+  storyRecorded: boolean;
+}
+
+export const NOT_A_RETRY: RetryState = { storyRecorded: false };
+
 export type RetryGuardDecision =
   | { kind: "publish" }
   | { kind: "already_live"; media: MediaSummary }
