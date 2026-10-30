@@ -4,6 +4,7 @@
 
 export interface OpeninaryConfig { serverUrl: string; apiKey: string; folderPrefix: string }
 export interface OpeninaryFile { name: string; path: string; size: number; mtime?: string }
+export interface OpeninaryFolder { name: string; path: string }
 export interface OpeninaryUploadResult { success: boolean; path?: string; url?: string; adopted?: boolean; error?: string }
 
 const TYPES: Record<string, string> = {
@@ -62,12 +63,22 @@ async function request(url: string, init: RequestInit = {}, timeout = 30_000): P
   try { return await fetch(url, { ...init, signal: controller.signal }); } finally { clearTimeout(timer); }
 }
 
-export async function listOpeninaryFolder(config: OpeninaryConfig, folder: string): Promise<OpeninaryFile[]> {
+/** A folder's direct children. A missing folder lists as empty; any other failure throws, never reads as empty. */
+export async function listOpeninaryEntries(config: OpeninaryConfig, folder: string): Promise<{ folders: OpeninaryFolder[]; files: OpeninaryFile[] }> {
   const response = await request(`${config.serverUrl}/api/storage?path=${encodeURIComponent(folder)}`, { headers: { Authorization: `Bearer ${config.apiKey}` } });
-  if (response.status === 404) return [];
+  if (response.status === 404) return { folders: [], files: [] };
   if (!response.ok) throw new Error(`Openinary listing failed: ${response.status}`);
   const data = await response.json();
-  return Array.isArray(data?.files) ? data.files.filter((f: OpeninaryFile) => typeof f?.name === "string" && typeof f?.path === "string" && Number.isFinite(f?.size)) : [];
+  return {
+    folders: Array.isArray(data?.folders)
+      ? data.folders.filter((f: OpeninaryFolder) => typeof f?.name === "string" && typeof f?.path === "string").map((f: OpeninaryFolder) => ({ name: f.name, path: f.path }))
+      : [],
+    files: Array.isArray(data?.files) ? data.files.filter((f: OpeninaryFile) => typeof f?.name === "string" && typeof f?.path === "string" && Number.isFinite(f?.size)) : [],
+  };
+}
+
+export async function listOpeninaryFolder(config: OpeninaryConfig, folder: string): Promise<OpeninaryFile[]> {
+  return (await listOpeninaryEntries(config, folder)).files;
 }
 
 export async function deleteFromOpeninary(config: OpeninaryConfig, path: string, timeoutMs = 30_000): Promise<{ success: boolean; error?: string }> {

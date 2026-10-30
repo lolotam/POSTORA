@@ -140,8 +140,9 @@ of copying.
   or fails. A repeated follow-up is harmless: the result is stored under a name derived from the
   prediction id, so a second store adopts the first copy. A token past its hour answers 410, and its
   staged input is still removed. Follow-ups are not counted against the hourly cap.
-- Unredeemed staged inputs (client never came back) stay in `postora/<user>/ai-tmp/`; they are not
-  swept by this change.
+- Unredeemed staged inputs (client never came back) stay in `postora/<user>/ai-tmp/` until the
+  `sweep-ai-image-staging` cron (every 30 minutes) deletes copies older than the token's hour plus a
+  30-minute margin. A failed listing is logged as an error and deletes nothing.
 - Rate limit: 30 AtlasCloud jobs per user per hour per function, 429 `RATE_LIMITED`.
 - Every refusal or failed job (invalid input, unavailable, rate limited, invalid or expired token,
   provider failure) writes a `system_logs` row through `_shared/logging.ts` (`source` = function,
