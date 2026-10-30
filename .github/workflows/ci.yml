@@ -385,6 +385,50 @@ jobs:
           deno test --node-modules-dir=none \
             --allow-read --allow-write --allow-env --allow-run "${route}"
 
+      - name: Typecheck and test the competitor tracking report
+        run: |
+          set -euo pipefail
+          modules=(
+            supabase/functions/competitor-tracking-report/contracts.ts
+            supabase/functions/competitor-tracking-report/growth.ts
+            supabase/functions/competitor-tracking-report/weeklyInventory.ts
+            supabase/functions/competitor-tracking-report/assemble.ts
+            supabase/functions/competitor-tracking-report/reportStore.ts
+            supabase/functions/competitor-tracking-report/handler.ts
+            supabase/functions/competitor-tracking-report/index.ts
+          )
+          tests=(
+            supabase/functions/competitor-tracking-report/growth.test.ts
+            supabase/functions/competitor-tracking-report/weeklyInventory.test.ts
+            supabase/functions/competitor-tracking-report/assemble.test.ts
+            supabase/functions/competitor-tracking-report/reportStore.test.ts
+            supabase/functions/competitor-tracking-report/handler.test.ts
+          )
+          fixture="supabase/functions/competitor-tracking-report/fixtures/captured-report.json"
+          for file in "${modules[@]}" "${tests[@]}" "${fixture}"; do
+            if [ ! -f "${file}" ]; then
+              echo "Competitor tracking report file is required: ${file}"
+              exit 1
+            fi
+          done
+          deno check --node-modules-dir=none "${modules[@]}" "${tests[@]}"
+          deno test --node-modules-dir=none \
+            --allow-read --allow-env "${tests[@]}"
+
+      - name: Typecheck and test the actual competitor tracking report route
+        env:
+          TMPDIR: ${{ runner.temp }}
+        run: |
+          set -euo pipefail
+          route="supabase/functions/competitor-tracking-report/route.test.ts"
+          if [ ! -f "${route}" ]; then
+            echo "Competitor tracking report route test is required: ${route}"
+            exit 1
+          fi
+          deno check --node-modules-dir=none "${route}"
+          deno test --node-modules-dir=none \
+            --allow-read --allow-write --allow-env --allow-run "${route}"
+
   db-harness:
     name: Postgres baseline plus delta
     runs-on: ubuntu-24.04

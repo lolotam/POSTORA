@@ -59,3 +59,10 @@ verify_jwt = true
 
 [functions.tiktok-review]
 verify_jwt = true
+
+# The competitor tracking report verifies the caller's bearer itself: it
+# resolves the owner from the verified identity and refuses a service
+# credential, because the database reader derives the owner from auth.uid().
+# The gateway setting therefore agrees with the internal verification.
+[functions.competitor-tracking-report]
+verify_jwt = true
