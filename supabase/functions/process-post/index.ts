@@ -109,6 +109,12 @@ import {
   type PublishTiming,
   type ResumeContext,
 } from "./deferredPublish.ts";
+import {
+  type PlatformResultSummary,
+  type PostReader,
+  readPostOutcome,
+  unreadableOutcomeLog,
+} from "./postSettlement.ts";
 import { z } from "npm:zod@3.23.8";
 
 const ProcessPostSchema = z.object({
@@ -467,16 +473,6 @@ interface PlatformPostResult {
   topic_tag_debug?: Record<string, unknown>;
   /** Optional structured payload merged into platform_posts.response_data (e.g. LinkedIn destination fan-out) */
   response_data?: Record<string, unknown>;
-}
-
-/**
- * Aggregated result for response
- */
-interface PlatformResultSummary {
-  platform: string;
-  status: string;
-  platform_post_url?: string;
-  error_message?: string;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -1233,6 +1229,105 @@ async function sendFailureEmailNotification(
   }
 }
 
+/**
+ * Step 6: tell the user and their webhooks that the post is final (non-blocking). Used by the
+ * run that finishes the post, whether that is the first run, a resumed run, or one that gave a
+ * deferred account up: whoever makes the post terminal reports all of it.
+ */
+function sendFinalNotifications(
+  supabase: SupabaseClient,
+  post: PostData,
+  finalStatus: string,
+  platformResults: PlatformResultSummary[],
+  hasFailed: boolean,
+): void {
+  const webhookEvent = finalStatus === "completed" ? "post.completed" : "post.failed";
+  const webhookData = {
+    post_id: post.id,
+    caption: post.caption,
+    platforms: post.platforms,
+    status: finalStatus,
+    platform_results: platformResults.reduce((acc, r) => {
+      acc[r.platform] = {
+        status: r.status,
+        post_url: r.platform_post_url || null
+      };
+      return acc;
+    }, {} as Record<string, { status: string; post_url: string | null }>)
+  };
+
+  // Extract per-request webhook configuration from post metadata
+  const perRequestWebhook = post.metadata?.webhook_url ? {
+    url: post.metadata.webhook_url as string,
+    secret: post.metadata.webhook_secret as string | undefined
+  } : undefined;
+
+  // Use EdgeRuntime.waitUntil for non-blocking webhook delivery
+  if (typeof EdgeRuntime !== "undefined" && EdgeRuntime.waitUntil) {
+    EdgeRuntime.waitUntil(sendWebhookNotifications(supabase, post.user_id, webhookEvent, webhookData, perRequestWebhook));
+
+    // Also send individual post.published events for each successful platform
+    for (const result of platformResults) {
+      if (result.status === "success" && result.platform_post_url) {
+        EdgeRuntime.waitUntil(sendWebhookNotifications(supabase, post.user_id, "post.published", {
+          post_id: post.id,
+          platform: result.platform,
+          post_url: result.platform_post_url,
+          caption: post.caption
+        }, perRequestWebhook));
+      }
+    }
+    // Send email notification for failed posts (non-blocking)
+    if (hasFailed) {
+      EdgeRuntime.waitUntil(sendFailureEmailNotification(supabase, post.user_id, post.caption || "", platformResults));
+    }
+  } else {
+    // Fallback: send synchronously but don't block response
+    sendWebhookNotifications(supabase, post.user_id, webhookEvent, webhookData, perRequestWebhook).catch(console.error);
+
+    // Send email notification for failed posts
+    if (hasFailed) {
+      sendFailureEmailNotification(supabase, post.user_id, post.caption || "", platformResults).catch(console.error);
+    }
+  }
+}
+
+/** The reads readPostOutcome needs, against the service-role client. */
+function postReaderFor(supabase: SupabaseClient): PostReader {
+  return {
+    postStatus: (postId) => supabase.from("posts").select("status").eq("id", postId).maybeSingle(),
+    platformRows: (postId) =>
+      supabase.from("platform_posts").select("platform, status, platform_post_url, error_message").eq("post_id", postId).order("created_at"),
+  };
+}
+
+/**
+ * After a resumed run settled a deferred account (or gave it up): where the post stands, and,
+ * when this settle made it final, its notifications. A post that cannot be read is logged as an
+ * error, never treated as unfinished, so a lost notification leaves a trace.
+ */
+async function finishDeferredPost(
+  supabase: SupabaseClient,
+  post: PostData,
+  platformPostId: string,
+  thisRun: { results: PlatformResultSummary[]; hasSuccess: boolean; hasFailed: boolean },
+): Promise<{ finalStatus: string; notified: boolean }> {
+  const outcome = await readPostOutcome(postReaderFor(supabase), post.id, thisRun);
+  if (outcome.kind === "in_progress") return { finalStatus: "processing", notified: false };
+  if (outcome.kind === "unknown") {
+    console.error(`[process-post] ${outcome.error}`);
+    try {
+      await supabase.from("system_logs").insert(unreadableOutcomeLog(post.user_id, post.id, platformPostId, outcome.error));
+    } catch (logError) {
+      console.error("[process-post] could not log the unreadable post either:", logError);
+    }
+    return { finalStatus: "processing", notified: false };
+  }
+  if (outcome.degraded) console.warn(`[process-post] notifying with a partial read: ${outcome.degraded}`);
+  sendFinalNotifications(supabase, post, outcome.status, outcome.results, outcome.hasFailed);
+  return { finalStatus: outcome.status, notified: true };
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
 // SECTION 4: MAIN REQUEST HANDLER
 // ═══════════════════════════════════════════════════════════════════════════
@@ -1375,7 +1470,17 @@ Deno.serve(async (req) => {
           errorMessage: abandon,
         });
         if (settled.error) return createErrorResponse(`Could not settle the deferred row: ${settled.error}`, 503);
-        return createJsonResponse({ success: true, status: "failed", reason: abandon });
+        // This settle may have been the one that made the post final, and this run returns
+        // before Step 6, so it reports the post here. A post that was not processing was
+        // already final (or changed by someone) before this, and was announced then.
+        const finished = post.status === "processing"
+          ? await finishDeferredPost(supabase, post, row.id, {
+            results: [{ platform: row.platform, status: "failed", error_message: abandon }],
+            hasSuccess: false,
+            hasFailed: true,
+          })
+          : { finalStatus: post.status as string, notified: false };
+        return createJsonResponse({ success: true, status: "failed", reason: abandon, post_status: finished.finalStatus, notified: finished.notified });
       }
       resume = { platformPostId: row.id, deferral };
       resumeResponseData = (row.response_data as Record<string, unknown> | null) ?? null;
@@ -1920,14 +2025,12 @@ Deno.serve(async (req) => {
     let notify = true;
 
     if (resume) {
-      // The settle RPC rolled the post up when this row became terminal.
-      const { data: current } = await supabase.from("posts").select("status").eq("id", post_id).maybeSingle();
-      if (current?.status === "completed" || current?.status === "failed") {
-        finalStatus = current.status;
-      } else {
-        finalStatus = "processing";
-        notify = false;
-      }
+      // The settle RPC rolled the post up when this row became terminal. finishDeferredPost
+      // reads where the post stands (retrying once; an unreadable post is logged, not taken
+      // for unfinished) and, if it is final, notifies for all of its accounts, not only this one.
+      const finished = await finishDeferredPost(supabase, post, resume.platformPostId, { results: platformResults, hasSuccess, hasFailed });
+      finalStatus = finished.finalStatus;
+      notify = false;
     } else if (hasDeferred) {
       // Stays `processing` until the deferred rows settle; the RPC rolls it up then.
       finalStatus = "processing";
@@ -1955,55 +2058,7 @@ Deno.serve(async (req) => {
     // Step 6: Send webhook notifications (non-blocking)
     // ─────────────────────────────────────────────────────────────────────
     if (notify) {
-      const webhookEvent = finalStatus === "completed" ? "post.completed" : "post.failed";
-      const webhookData = {
-        post_id: post_id,
-        caption: post.caption,
-        platforms: post.platforms,
-        status: finalStatus,
-        platform_results: platformResults.reduce((acc, r) => {
-          acc[r.platform] = {
-            status: r.status,
-            post_url: r.platform_post_url || null
-          };
-          return acc;
-        }, {} as Record<string, { status: string; post_url: string | null }>)
-      };
-
-      // Extract per-request webhook configuration from post metadata
-      const perRequestWebhook = post.metadata?.webhook_url ? {
-        url: post.metadata.webhook_url as string,
-        secret: post.metadata.webhook_secret as string | undefined
-      } : undefined;
-
-      // Use EdgeRuntime.waitUntil for non-blocking webhook delivery
-      if (typeof EdgeRuntime !== "undefined" && EdgeRuntime.waitUntil) {
-        EdgeRuntime.waitUntil(sendWebhookNotifications(supabase, post.user_id, webhookEvent, webhookData, perRequestWebhook));
-
-        // Also send individual post.published events for each successful platform
-        for (const result of platformResults) {
-          if (result.status === "success" && result.platform_post_url) {
-            EdgeRuntime.waitUntil(sendWebhookNotifications(supabase, post.user_id, "post.published", {
-              post_id: post_id,
-              platform: result.platform,
-              post_url: result.platform_post_url,
-              caption: post.caption
-            }, perRequestWebhook));
-          }
-        }
-        // Send email notification for failed posts (non-blocking)
-        if (hasFailed) {
-          EdgeRuntime.waitUntil(sendFailureEmailNotification(supabase, post.user_id, post.caption || "", platformResults));
-        }
-      } else {
-        // Fallback: send synchronously but don't block response
-        sendWebhookNotifications(supabase, post.user_id, webhookEvent, webhookData, perRequestWebhook).catch(console.error);
-
-        // Send email notification for failed posts
-        if (hasFailed) {
-          sendFailureEmailNotification(supabase, post.user_id, post.caption || "", platformResults).catch(console.error);
-        }
-      }
+      sendFinalNotifications(supabase, post, finalStatus, platformResults, hasFailed);
     }
 
     // ─────────────────────────────────────────────────────────────────────
