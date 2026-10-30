@@ -105,6 +105,7 @@ import {
   giveUpMessage,
   NO_DEFERRAL,
   ownContainerDeadline,
+  storyRecoveryExhausted,
   pollDeadline,
   readDeferral,
   recordStillProcessing,
@@ -1503,12 +1504,19 @@ Deno.serve(async (req) => {
           socialAccountId: row.social_account_id,
           rowData: (row.response_data as Record<string, unknown> | null) ?? null,
         });
+        // The story is live whether or not its row could be written; past the grace window the
+        // reel is settled anyway (the story still counts below), so a write that never succeeds
+        // cannot keep the post in `processing` forever.
+        const exhausted = carried.error !== null && storyRecoveryExhausted(deferral, new Date());
         if (carried.error) {
           console.error(`[IG story] could not be recorded while giving up the reel: ${carried.error}`);
           const logError = await writeLogRow(supabase, unrecordedStoryLog(post.user_id, post_id, row.id, carried.error));
           if (logError) console.error("[process-post] could not log the refusal either:", logError);
-          return createErrorResponse(`Could not record the live Instagram story, so the reel was not given up: ${carried.error}`, 503);
+          if (!exhausted) {
+            return createErrorResponse(`Could not record the live Instagram story, so the reel was not given up: ${carried.error}`, 503);
+          }
         }
+        const liveStories = exhausted ? [readUnrecordedStory(row.response_data)].filter((story): story is StoryRef => story !== null) : carried.recorded;
         const settled = await settlePlatformPost(supabase, {
           platformPostId: row.id,
           postId: post_id,
@@ -1524,8 +1532,8 @@ Deno.serve(async (req) => {
         const finished = post.status === "processing"
           ? await finishDeferredPost(supabase, post, row.id, {
             // The story recorded just above is live: the degraded fallback must report it too.
-            results: [{ platform: row.platform, status: "failed", error_message: abandon }, ...recordedStoryResults(carried.recorded)],
-            hasSuccess: carried.recorded.length > 0,
+            results: [{ platform: row.platform, status: "failed", error_message: abandon }, ...recordedStoryResults(liveStories)],
+            hasSuccess: liveStories.length > 0,
             hasFailed: true,
           })
           : { finalStatus: post.status as string, notified: false };
@@ -1537,7 +1545,7 @@ Deno.serve(async (req) => {
       overridePlatforms = [row.platform];
       console.log("Resuming deferred publish", { post_id, platform_post_id: row.id, kind: deferral.kind, attempts: deferral.attempts });
     }
-    const timing: PublishTiming = { resume, deadlineMs: pollDeadline(requestStartedAt, !!resume) };
+    const timing: PublishTiming = { resume, deadlineMs: pollDeadline(requestStartedAt, !!resume), startedAtMs: requestStartedAt };
 
     // The transition to `processing` is a CLAIM: when the scheduler says
     // which scheduled_at it selected, a row that no longer carries it -- the
@@ -4008,7 +4016,7 @@ async function postToInstagram(
       }
       // On a resumed run timing.deadlineMs is check-once: that suits the deferred reel, not this
       // container, which nothing re-checks. Give it a real bound.
-      await pollContainerStatus(createData.id, accessToken, { deadlineMs: ownContainerDeadline(timing.deadlineMs, Date.now()) });
+      await pollContainerStatus(createData.id, accessToken, { deadlineMs: ownContainerDeadline(timing.deadlineMs, timing.startedAtMs ?? Date.now()) });
       await publishInstagramMedia(igUserId, createData.id, accessToken);
       console.log("Instagram 'Also share to Story' published successfully");
     } catch (e) {

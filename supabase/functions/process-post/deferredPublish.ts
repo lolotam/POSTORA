@@ -66,6 +66,8 @@ export interface ResumeContext {
 export interface PublishTiming {
   resume: ResumeContext | null;
   deadlineMs: number;
+  /** When this request began; bounds a container the run creates itself (see ownContainerDeadline). */
+  startedAtMs?: number;
 }
 
 export const NO_DEFERRAL: PublishTiming = { resume: null, deadlineMs: Number.POSITIVE_INFINITY };
@@ -119,11 +121,24 @@ export function pollDeadline(startedAtMs: number, resumed: boolean): number {
  * The deadline for a container this run both creates and finishes (the "Also share to Story"
  * mirror). The run's own deadline is CHECK_ONCE_DEADLINE on a resumed run, which is right for
  * the deferred reel (Meta is asked again next minute) but would check a container created a
- * moment ago exactly once and drop it. Nothing re-checks that container later, and a resumed
- * run has a worker of its own, so it gets a real bound: the same budget a first run has.
+ * moment ago exactly once and drop it. Nothing re-checks that container later, so it gets the
+ * deadline a first run would have: the poll budget counted from when THIS request began, not
+ * from now, so the wait plus the publish after it still fit inside the worker.
  */
-export function ownContainerDeadline(runDeadlineMs: number, nowMs: number): number {
-  return runDeadlineMs === CHECK_ONCE_DEADLINE ? nowMs + FIRST_RUN_POLL_BUDGET_MS : runDeadlineMs;
+export function ownContainerDeadline(runDeadlineMs: number, requestStartedAtMs: number): number {
+  return runDeadlineMs === CHECK_ONCE_DEADLINE ? requestStartedAtMs + FIRST_RUN_POLL_BUDGET_MS : runDeadlineMs;
+}
+
+/** How long past `give_up_at` an abandon may keep retrying a story it could not record. */
+export const STORY_RECOVERY_GRACE_MS = 10 * 60 * 1000;
+
+/**
+ * Whether an abandon that keeps failing to record its carried story must give up on that too.
+ * Until then it answers 503 and the reconciler retries; after it the reel is settled anyway, so
+ * a story write that never succeeds cannot hold the post in `processing` forever.
+ */
+export function storyRecoveryExhausted(deferral: Deferral, now: Date): boolean {
+  return now.getTime() >= Date.parse(deferral.give_up_at) + STORY_RECOVERY_GRACE_MS;
 }
 
 /**

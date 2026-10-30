@@ -11,6 +11,8 @@ import {
   newDeferral,
   nextDeferral,
   ownContainerDeadline,
+  STORY_RECOVERY_GRACE_MS,
+  storyRecoveryExhausted,
   pollDeadline,
   readDeferral,
   recordStillProcessing,
@@ -61,12 +63,21 @@ Deno.test("a resumed run checks once; a first run waits within its budget", () =
 });
 
 Deno.test("a container this run creates and finishes gets a real bound even on a resumed run", () => {
-  // The resumed run's own deadline is check-once; the mirror story container has no later check.
-  assertEquals(ownContainerDeadline(pollDeadline(1_000, true), 5_000), 5_000 + FIRST_RUN_POLL_BUDGET_MS);
+  // The resumed run's own deadline is check-once; the mirror story container has no later check,
+  // so it gets the budget a first run would have, counted from when this request began.
+  assertEquals(ownContainerDeadline(pollDeadline(1_000, true), 1_000), 1_000 + FIRST_RUN_POLL_BUDGET_MS);
   // A first run keeps its deadline, so the mirror never outlasts the worker.
   const first = pollDeadline(1_000, false);
-  assertEquals(ownContainerDeadline(first, 5_000), first);
-  assertEquals(ownContainerDeadline(Infinity, 5_000), Infinity);
+  assertEquals(ownContainerDeadline(first, 1_000), first);
+  assertEquals(ownContainerDeadline(Infinity, 1_000), Infinity);
+});
+
+Deno.test("an abandon may retry an unrecordable story only for the grace window past give-up", () => {
+  const deferral = newDeferral("ig_reel", "c1", new Date(0));
+  const giveUp = Date.parse(deferral.give_up_at);
+  assertEquals(storyRecoveryExhausted(deferral, new Date(giveUp)), false);
+  assertEquals(storyRecoveryExhausted(deferral, new Date(giveUp + STORY_RECOVERY_GRACE_MS - 1)), false);
+  assertEquals(storyRecoveryExhausted(deferral, new Date(giveUp + STORY_RECOVERY_GRACE_MS)), true);
 });
 
 Deno.test("only a well-formed deferral is read off a row", () => {
