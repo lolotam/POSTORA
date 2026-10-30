@@ -92,7 +92,7 @@ Deno.test("a follow-up body carries no image, so it is not mistaken for a new jo
   assertEquals(asImage.ok, false);
 });
 
-Deno.test("upscale output format: as asked, else png for a PNG input (keeps transparency) and jpeg otherwise", () => {
+Deno.test("upscale output format: as asked, else jpeg only for a known JPEG input and png otherwise (transparency is never discarded by default)", () => {
   const pngBytes = { kind: "bytes", bytes: png(), extension: "png", mime: "image/png" } as const;
   const jpgBytes = { kind: "bytes", bytes: png(), extension: "jpg", mime: "image/jpeg" } as const;
   assertEquals(chooseUpscaleOutputFormat(undefined, pngBytes), "png");
@@ -102,6 +102,18 @@ Deno.test("upscale output format: as asked, else png for a PNG input (keeps tran
   assertEquals(chooseUpscaleOutputFormat("png", jpgBytes), "png");
   assertEquals(chooseUpscaleOutputFormat("jpeg", pngBytes), "jpeg");
   assertEquals(chooseUpscaleOutputFormat("webp", pngBytes), null);
+});
+
+Deno.test("upscale output format: an extensionless, unknown or non-JPEG URL gets png; only .jpg/.jpeg paths get jpeg", () => {
+  const formatOf = (url: string) => chooseUpscaleOutputFormat(undefined, { kind: "url", url });
+  for (const url of ["https://x.example/render/abc123", "https://x.example/t/postora.cloud/cutout", "https://x.example/a.webp", "https://x.example/a.png.bin?x=a.jpg"]) {
+    assertEquals(formatOf(url), "png", url);
+  }
+  for (const url of ["https://x.example/a.jpg", "https://x.example/a.JPEG?v=1", "https://x.example/dir.d/photo.jpeg#frag"]) {
+    assertEquals(formatOf(url), "jpeg", url);
+  }
+  const webpBytes = { kind: "bytes", bytes: png(), extension: "webp", mime: "image/webp" } as const;
+  assertEquals(chooseUpscaleOutputFormat(undefined, webpBytes), "png");
 });
 
 Deno.test("the result name is stable for one prediction and different between predictions", async () => {

@@ -261,14 +261,16 @@ export function pngSize(bytes: Uint8Array): { width: number; height: number } | 
 
 /**
  * The upscaler's output format: "png" or "jpeg" when the caller asks (anything else is null,
- * for the caller to refuse); otherwise PNG in gives PNG out, so a cut-out keeps its transparency.
+ * for the caller to refuse). Otherwise the default never throws transparency away: only an
+ * input known to be JPEG (bytes sniffed as jpg, or a URL path ending in .jpg/.jpeg) gets JPEG;
+ * everything else, including an extensionless URL, gets PNG.
  */
 export function chooseUpscaleOutputFormat(requested: unknown, input: ImageInput): "png" | "jpeg" | null {
   if (requested !== undefined && requested !== null && requested !== "") {
     return requested === "png" || requested === "jpeg" ? requested : null;
   }
-  const isPng = input.kind === "bytes" ? input.extension === "png" : /\.png$/i.test(new URL(input.url).pathname);
-  return isPng ? "png" : "jpeg";
+  const isJpeg = input.kind === "bytes" ? input.extension === "jpg" : /\.jpe?g$/i.test(new URL(input.url).pathname);
+  return isJpeg ? "jpeg" : "png";
 }
 
 export function toolFailureResponse(status: number, code: string, message: string): Response {
