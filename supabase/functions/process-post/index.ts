@@ -96,7 +96,7 @@ import { composioClientFromEnv } from "../_shared/composioClient.ts";
 import { publishYouTubeViaComposio } from "./youtubeComposio.ts";
 import { prepareTikTokReviewPublish, recordReviewPublishId, requiredReviewSubmissionId } from "./tiktokReview.ts";
 import { firstPublicPostId } from "../_shared/tiktokPublishOutcome.ts";
-import { classifyContainerStatus, CONTAINER_STATUS_FIELDS, containerFailureMessage, pollContainer } from "../_shared/metaContainerStatus.ts";
+import { CHECK_ONCE_DEADLINE, CONTAINER_STATUS_FIELDS, containerFailureMessage, pollContainer } from "../_shared/metaContainerStatus.ts";
 import {
   abandonReason,
   ContainerStillProcessing,
@@ -3431,53 +3431,58 @@ async function optimizeUrlsForInstagram(urls: string[]): Promise<string[]> {
 }
 
 /**
+ * Waits for an Instagram container (either login) until it can be published. The wait is
+ * `pollContainer`'s, so a deadline bounds the requests as well as the sleeps; a Meta API
+ * error fails with Meta's reason and a server error is retried. Set `deferral` where the
+ * container can be finished later: when time runs out the wait stops with
+ * ContainerStillProcessing instead of running the worker out of time.
+ */
+async function waitForInstagramContainer(
+  statusUrl: string,
+  containerId: string,
+  maxAttempts: number,
+  delayMs: number,
+  deferral?: { kind: DeferredKind; deadlineMs: number },
+): Promise<string> {
+  const container = await pollContainer("instagram", statusUrl, {
+    maxAttempts,
+    intervalMs: delayMs,
+    checkFirst: true,
+    deadlineMs: deferral?.deadlineMs,
+  });
+  switch (container.state) {
+    case "published":
+      return "PUBLISHED";
+    case "finished":
+      // Add a buffer delay after FINISHED to ensure Instagram's backend is truly ready
+      console.log(`Container ${containerId} finished, waiting 3s before publish...`);
+      await new Promise((resolve) => setTimeout(resolve, 3000));
+      return "FINISHED";
+    case "failed":
+      throw new Error(containerFailureMessage("instagram", container.reason));
+    default:
+      if (deferral) throw new ContainerStillProcessing(deferral.kind, containerId);
+      throw new Error("Container processing timed out after polling");
+  }
+}
+
+/**
  * Poll Instagram container status until ready
  */
-async function pollContainerStatus(
+function pollContainerStatus(
   containerId: string,
   accessToken: string,
   maxAttempts = 60, // Increased from 30 to 60 (2 min total for large video reels)
   delayMs = 2000,
-  // Set where the container can be finished later: past the deadline the wait stops
-  // with ContainerStillProcessing instead of running the worker out of time.
   deferral?: { kind: DeferredKind; deadlineMs: number },
 ): Promise<string> {
-  for (let attempt = 0; attempt < maxAttempts; attempt++) {
-    const response = await fetchWithTimeout(
-      `https://graph.facebook.com/v18.0/${containerId}?fields=${CONTAINER_STATUS_FIELDS.instagram}&access_token=${accessToken}`,
-      {},
-      15000,
-    );
-    const data = await response.json();
-
-    console.log(`Container ${containerId} status check ${attempt + 1}:`, data.status_code, data.status ?? "");
-
-    if (data.error) {
-      throw new Error(`Container status error: ${data.error.message}`);
-    }
-
-    const container = classifyContainerStatus("instagram", data);
-    if (container.state === "published") return "PUBLISHED";
-    if (container.state === "finished") {
-      // Add a buffer delay after FINISHED to ensure Instagram's backend is truly ready
-      console.log(`Container ${containerId} finished, waiting 3s before publish...`);
-      await new Promise((resolve) => setTimeout(resolve, 3000));
-      return data.status_code;
-    }
-
-    if (container.state === "failed") {
-      throw new Error(containerFailureMessage("instagram", container.reason));
-    }
-
-    if (deferral && Date.now() + delayMs > deferral.deadlineMs) {
-      throw new ContainerStillProcessing(deferral.kind, containerId);
-    }
-
-    // Still IN_PROGRESS, wait and retry
-    await new Promise((resolve) => setTimeout(resolve, delayMs));
-  }
-
-  throw new Error("Container processing timed out after polling");
+  return waitForInstagramContainer(
+    `https://graph.facebook.com/v18.0/${containerId}?fields=${CONTAINER_STATUS_FIELDS.instagram}&access_token=${accessToken}`,
+    containerId,
+    maxAttempts,
+    delayMs,
+    deferral,
+  );
 }
 
 /**
@@ -4277,47 +4282,20 @@ async function postToInstagram(
  * Poll Instagram Business Login container status
  * Uses graph.instagram.com instead of graph.facebook.com
  */
-async function pollBusinessLoginContainerStatus(
+function pollBusinessLoginContainerStatus(
   containerId: string,
   accessToken: string,
   maxAttempts = 30,
   delayMs = 2000,
   deferral?: { kind: DeferredKind; deadlineMs: number },
 ): Promise<string> {
-  for (let attempt = 0; attempt < maxAttempts; attempt++) {
-    const response = await fetchWithTimeout(
-      `https://graph.instagram.com/v22.0/${containerId}?fields=${CONTAINER_STATUS_FIELDS.instagram}&access_token=${accessToken}`,
-      {},
-      15000,
-    );
-    const data = await response.json();
-
-    console.log(`BL Container ${containerId} status check ${attempt + 1}:`, data.status_code, data.status ?? "");
-
-    if (data.error) {
-      throw new Error(`Container status error: ${data.error.message}`);
-    }
-
-    const container = classifyContainerStatus("instagram", data);
-    if (container.state === "published") return "PUBLISHED";
-    if (container.state === "finished") {
-      console.log(`BL Container ${containerId} finished, waiting 3s before publish...`);
-      await new Promise((resolve) => setTimeout(resolve, 3000));
-      return data.status_code;
-    }
-
-    if (container.state === "failed") {
-      throw new Error(containerFailureMessage("instagram", container.reason));
-    }
-
-    if (deferral && Date.now() + delayMs > deferral.deadlineMs) {
-      throw new ContainerStillProcessing(deferral.kind, containerId);
-    }
-
-    await new Promise((resolve) => setTimeout(resolve, delayMs));
-  }
-
-  throw new Error("Container processing timed out after polling");
+  return waitForInstagramContainer(
+    `https://graph.instagram.com/v22.0/${containerId}?fields=${CONTAINER_STATUS_FIELDS.instagram}&access_token=${accessToken}`,
+    containerId,
+    maxAttempts,
+    delayMs,
+    deferral,
+  );
 }
 
 /**
@@ -6198,14 +6176,12 @@ async function postToThreads(
   const pollInterval = 2000; // 2 seconds
   // Only a single video can be finished later; a resumed run checks once, now.
   const deferrable = containerParams.media_type === "VIDEO";
-  const container = timing.resume
-    ? await pollContainer("threads", statusEndpoint, { maxAttempts: 1, intervalMs: 0 })
-    : await pollContainer("threads", statusEndpoint, {
-      maxAttempts: deferrable
-        ? Math.max(1, Math.min(15, Math.floor((timing.deadlineMs - Date.now()) / pollInterval)))
-        : 15,
-      intervalMs: pollInterval,
-    });
+  // The deadline bounds the requests as well as the sleeps; only a video waits on one.
+  const container = await pollContainer("threads", statusEndpoint, {
+    maxAttempts: 15,
+    intervalMs: pollInterval,
+    deadlineMs: timing.resume ? CHECK_ONCE_DEADLINE : deferrable ? timing.deadlineMs : undefined,
+  });
 
   // Meta's ERROR ends the wait, and a container that never finished is never published blindly.
   if (container.state === "failed") throw new Error(containerFailureMessage("threads", container.reason));

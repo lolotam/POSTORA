@@ -13,6 +13,7 @@
  */
 
 import { z } from "npm:zod@3.23.8";
+import { CHECK_ONCE_DEADLINE } from "../_shared/metaContainerStatus.ts";
 
 export type DeferredKind = "ig_reel" | "ig_business_reel" | "threads";
 
@@ -102,7 +103,7 @@ export function abandonReason(deferral: Deferral, postStatus: string | null, now
  * is asked again next minute); a first run waits while the worker has time.
  */
 export function pollDeadline(startedAtMs: number, resumed: boolean): number {
-  return resumed ? 0 : startedAtMs + FIRST_RUN_POLL_BUDGET_MS;
+  return resumed ? CHECK_ONCE_DEADLINE : startedAtMs + FIRST_RUN_POLL_BUDGET_MS;
 }
 
 /** Reads the deferral off a pending row, or null if the row carries none. */
