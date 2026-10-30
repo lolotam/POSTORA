@@ -173,6 +173,27 @@ All IDs below are proposed implementation gates; none is a test pass in this doc
 | RC-15 | Rollback with a live lease and request preserves snapshots/credentials, blocks subsequent permits/results, then demonstrates quiescence and safe scoped resume. Tested last-good runtime contains rollout checks. |
 | RC-16 | Reachable index→dispatcher/worker→SQL→provider guard chains, complete Deno/SQL/typecheck and relevant existing regression gates, exact migration/type/ACL manifest, immutable evidence and unresolved live approvals handed to Task 11. No mocked proof is labeled live Meta evidence. |
 
+### Implementation status (2026-10-30)
+
+This register is the **contract**; the rows above are unchanged. What follows
+records what exists today and what does **not**.
+
+| Item | Status |
+|---|---|
+| R1 `20261030150000_instagram_collection_rollout_controls.sql` | implemented and rehearsed; **not applied to production** |
+| R2 `20261030151000_instagram_collection_daily_dispatch.sql` | implemented and rehearsed; **not applied to production** |
+| C1 `20261030152000_instagram_collection_cron.sql` | implemented and rehearsed; the four jobs install **inactive**; **not applied to production** |
+| The owner and competitor admission in the runtime | implemented; proved against a real disposable database by the two rollout integration suites |
+| The rollback contract | implemented and rehearsed: the next permit is refused, the write after the exclusion is refused, the job settles, the stored observations survive and a later re-admission resumes the work |
+| The deployment contract | [docs/runbooks/instagram-collection-rollout.md](../../docs/runbooks/instagram-collection-rollout.md); it **authorizes nothing** |
+| Live Meta evidence, the applied ledger, the deployed hashes, the boot proof | **absent** |
+| The B–E approvals | **absent** — each still needs Waleed's own separate approval |
+
+The local exclusion proof drives the **real registered handler** over the
+**real production store factories** against the **real accepted SQL**, with a
+fake provider transport and no public egress. It is **not** live Meta
+evidence, and it does not make any of the B–E gates pass.
+
 ## 8. Open questions for Waleed
 
 These are later decisions; defaults are design recommendations, not approvals.

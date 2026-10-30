@@ -30,6 +30,13 @@
 # orchestration and its actual registered route are checked and tested the
 # same way.
 #
+# The Instagram collection rollout controls add their Deno suites here: the
+# owner and competitor rollout suites, and the daily dispatch suites. The
+# rollout INTEGRATION suites run in the Postgres job, because they need that
+# job's disposable container and its migrated database: they drive the real
+# registered handler against the real SQL with a fake provider transport and
+# no public egress.
+#
 # Playwright is not a job. e2e/seed-test-data.ts needs a service-role key,
 # and e2e/fixtures/auth.ts swallows login failure. The UI slice adds a mocked
 # fixture-backed journey later. This workflow does not add real-user auth.
@@ -329,6 +336,8 @@ jobs:
             supabase/functions/instagram-insights-sync/workerStore.ts
             supabase/functions/instagram-insights-sync/worker.ts
             supabase/functions/instagram-insights-sync/workerTestSupport.ts
+            supabase/functions/instagram-insights-sync/dailyEnqueue.ts
+            supabase/functions/instagram-insights-sync/dailyEnqueueStore.ts
           )
           tests=(
             supabase/functions/instagram-insights-sync/graphProvider.test.ts
@@ -337,6 +346,8 @@ jobs:
             supabase/functions/instagram-insights-sync/worker.test.ts
             supabase/functions/instagram-insights-sync/workerTermination.test.ts
             supabase/functions/instagram-insights-sync/drainHandler.test.ts
+            supabase/functions/instagram-insights-sync/dailyEnqueue.test.ts
+            supabase/functions/instagram-insights-sync/dailyEnqueueStore.test.ts
           )
           for file in "${modules[@]}" "${tests[@]}"; do
             if [ ! -f "${file}" ]; then
@@ -347,6 +358,29 @@ jobs:
           deno check --node-modules-dir=none "${modules[@]}" "${tests[@]}"
           deno test --node-modules-dir=none \
             --allow-read --allow-env "${tests[@]}"
+
+      - name: Typecheck and test the owner rollout controls
+        env:
+          TMPDIR: ${{ runner.temp }}
+        run: |
+          set -euo pipefail
+          # The owner rollout suite drives the REAL registered route, so it
+          # bundles the checked-out composition with the locked npm esbuild
+          # dependency. It needs the same runtime permissions as the actual
+          # owner intake route above, and no more.
+          modules=(
+            supabase/functions/instagram-insights-sync/rollout.test.ts
+            supabase/functions/instagram-insights-sync/dailyEnqueueHandler.test.ts
+          )
+          for file in "${modules[@]}"; do
+            if [ ! -f "${file}" ]; then
+              echo "Owner rollout control file is required: ${file}"
+              exit 1
+            fi
+          done
+          deno check --node-modules-dir=none "${modules[@]}"
+          deno test --node-modules-dir=none \
+            --allow-read --allow-write --allow-env --allow-run "${modules[@]}"
 
       - name: Typecheck and test the competitor collection worker
         run: |
@@ -368,6 +402,7 @@ jobs:
             supabase/functions/competitor-snapshot-sync/syncWorker.test.ts
             supabase/functions/competitor-snapshot-sync/handler.test.ts
             supabase/functions/competitor-snapshot-sync/sqlContract.test.ts
+            supabase/functions/competitor-snapshot-sync/rollout.test.ts
           )
           for file in "${modules[@]}" "${tests[@]}"; do
             if [ ! -f "${file}" ]; then
@@ -515,6 +550,50 @@ jobs:
         run: |
           docker exec -e HARNESS_DB_NAME=partner_api_harness pg-harness \
             bash -c "cd /repo && bash scripts/db-harness.sh 'postgres://supabase_admin:postgres@localhost:5432/postgres'"
+
+      - name: Setup Deno for the rollout integration suites
+        uses: denoland/setup-deno@22d081ff2d3a40755e97629de92e3bcbfa7cf2ed # v2.0.5
+        with:
+          deno-version: "2.9.8"
+
+      - name: Setup Node.js 22.14.0 for the integration bundling
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "22.14.0"
+
+      - name: Install locked integration bundling dependencies
+        run: npm ci --no-audit --no-fund
+
+      - name: Typecheck and test the rollout integration suites
+        env:
+          # The disposable container this job already runs. The suites talk to
+          # it with `docker exec`, so no published port is needed.
+          ROLLOUT_IT_CONTAINER: pg-harness
+          ROLLOUT_IT_DB: partner_api_harness
+          TMPDIR: ${{ runner.temp }}
+        run: |
+          set -euo pipefail
+          tests=(
+            supabase/functions/instagram-insights-sync/rolloutIntegration.test.ts
+            supabase/functions/competitor-snapshot-sync/rolloutIntegration.test.ts
+          )
+          for file in "${tests[@]}"; do
+            if [ ! -f "${file}" ]; then
+              echo "Rollout integration suite is required: ${file}"
+              exit 1
+            fi
+          done
+          deno check --node-modules-dir=none "${tests[@]}"
+          # TWO commands on purpose. `deno test` runs test FILES in parallel,
+          # and the two suites share one disposable database and one global
+          # policy row. Each suite takes a lease in the database before it
+          # starts, so a parallel run serialises instead of interleaving.
+          deno test --node-modules-dir=none \
+            --allow-read --allow-write --allow-env --allow-run \
+            supabase/functions/instagram-insights-sync/rolloutIntegration.test.ts
+          deno test --node-modules-dir=none \
+            --allow-read --allow-write --allow-env --allow-run \
+            supabase/functions/competitor-snapshot-sync/rolloutIntegration.test.ts
 
       - name: Show Postgres logs on failure
         if: failure()
