@@ -108,8 +108,10 @@ Requests gain an optional `source_dimensions` (what the player reports, used onl
 records no size); responses gain an optional `warnings` array. Both are additive.
 Cloudinary is used only when the row has a `cloudinary_public_id` and no usable Openinary
 object. Each plan therefore also carries the equivalent Cloudinary eager transformation string
-(the strings the old code built, including the relative-crop form used when dimensions are
-unknown), and `_shared/cloudinaryVideoFallback.ts` runs the one signed upload-with-eager call
+(the strings the old code built). A crop needs the source size on both providers: with neither
+the row's dimensions nor `source_dimensions`, the Cloudinary fallback refuses with
+`SOURCE_DIMENSIONS_UNKNOWN` like the Openinary planner, instead of the old relative-crop form,
+whose box could not be checked against the 16 px minimum. And `_shared/cloudinaryVideoFallback.ts` runs the one signed upload-with-eager call
 both functions used to duplicate. A disabled cloud (401 "disabled") is reported as
 `PROVIDER_UNAVAILABLE` instead of the raw provider message. The fallback no longer calls the
 Cloudinary resource API for metadata.
