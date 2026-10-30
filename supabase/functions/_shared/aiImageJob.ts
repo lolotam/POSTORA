@@ -4,7 +4,10 @@
  *
  *   start   stage an uploaded input in Openinary, submit the job, poll until `POLL_BUDGET_MS`.
  *           Done in time: finish. Not done: answer "processing" with a signed token and keep the
- *           staged input, which the result still needs.
+ *           staged input, which the result still needs. A paid job is never submitted unless its
+ *           request can still finish inside `FINISH_BUDGET_MS`: staging and submitting check the
+ *           time left first and refuse (504, logged) when there is not enough, and a submit that
+ *           leaves no polling time answers "processing" at once.
  *   resume  (a later request with that token) check once. Still running: "processing" again.
  *           Done: finish. Failed: clean up.
  *   finish  remove the staged input, copy the result into Openinary (provider URL as the
@@ -15,7 +18,14 @@
  */
 
 import { PROVIDER_UNAVAILABLE_CODE } from "./aiImageProviders.ts";
-import { checkAtlasJob, pollAtlasJob, submitAtlasJob, type AtlasCheckResult, type AtlasFailure } from "./atlasCloudImage.ts";
+import {
+  ATLAS_REQUEST_TIMEOUT_MS,
+  checkAtlasJob,
+  pollAtlasJob,
+  submitAtlasJob,
+  type AtlasCheckResult,
+  type AtlasFailure,
+} from "./atlasCloudImage.ts";
 import {
   discardStaged,
   fetchOutputImage,
@@ -38,6 +48,10 @@ export const TOKEN_MAX_AGE_MS = 60 * 60 * 1000;
 export const RETRY_AFTER_SECONDS = 3;
 
 const MIN_DOWNLOAD_WINDOW_MS = 4_000;
+/** The submit request may use its whole timeout, so it only starts with that much time left. */
+const SUBMIT_WINDOW_MS = ATLAS_REQUEST_TIMEOUT_MS;
+/** Staging an upload is only worth starting when it gets at least this long (after the submit window). */
+const MIN_STAGE_WINDOW_MS = 3_000;
 const OUTPUT_DOWNLOAD_MAX_MS = 20_000;
 const STAGED_CLEANUP_MAX_MS = 3_000;
 
@@ -135,6 +149,17 @@ function failed(spec: AtlasJobBase, atlas: AtlasFailure): AtlasJobOutcome {
   return { ok: false, status: atlas.httpStatus, code: spec.failureCode, message, reason: atlas.kind, level: "error" };
 }
 
+/** The request ran out of time before a paid job could be submitted safely. */
+function tooLate(spec: AtlasJobBase, stage: "stage" | "submit"): AtlasJobOutcome {
+  logImageTool("warn", "ai_image_deadline_refused", { ...logOf(spec), stage });
+  return { ok: false, status: 504, code: spec.failureCode, message: spec.messages.timeout, reason: `deadline_before_${stage}`, level: "warn" };
+}
+
+/** Time left before the request must have answered, whatever else is going on. */
+function untilFinishBudget(spec: AtlasJobBase, deps: AtlasJobDeps): number {
+  return spec.startedAt + FINISH_BUDGET_MS - deps.now();
+}
+
 async function cleanStaged(spec: AtlasJobBase, deps: AtlasJobDeps, stagedPath: string | null): Promise<void> {
   if (!spec.openinary || !stagedPath) return;
   const left = spec.startedAt + FINISH_BUDGET_MS - deps.now();
@@ -210,6 +235,24 @@ async function settle(
   return finish(spec, deps, { outputUrl: result.outputUrl, predictionId, stagedPath });
 }
 
+/**
+ * Stages an upload, giving up after `ms`. A copy that lands after the give-up is removed again,
+ * since nothing will ever reference it.
+ */
+async function stageWithin(
+  openinary: OpeninaryConfig,
+  spec: AtlasJobBase,
+  input: Extract<ImageInput, { kind: "bytes" }>,
+  ms: number,
+): Promise<Awaited<ReturnType<typeof stageInput>> | null> {
+  const work = stageInput(openinary, spec.userId, input);
+  const staged = await within<Awaited<typeof work> | null>(work, ms, null);
+  if (staged === null) {
+    void work.then((late) => (late.ok ? discardStaged(openinary, late.path, STAGED_CLEANUP_MAX_MS) : undefined)).catch(() => undefined);
+  }
+  return staged;
+}
+
 export async function startAtlasImageJob(spec: StartSpec, deps: AtlasJobDeps = realDeps): Promise<AtlasJobOutcome> {
   let sourceUrl: string;
   let stagedPath: string | null = null;
@@ -218,7 +261,10 @@ export async function startAtlasImageJob(spec: StartSpec, deps: AtlasJobDeps = r
   } else {
     // AtlasCloud reads the image by URL, so an uploaded image is staged in Openinary first.
     if (!spec.openinary) return unavailable(spec, "openinary_not_configured");
-    const staged = await stageInput(spec.openinary, spec.userId, spec.input);
+    const stageWindow = untilFinishBudget(spec, deps) - SUBMIT_WINDOW_MS;
+    if (stageWindow < MIN_STAGE_WINDOW_MS) return tooLate(spec, "stage");
+    const staged = await stageWithin(spec.openinary, spec, spec.input, stageWindow);
+    if (staged === null) return tooLate(spec, "stage");
     if (!staged.ok) {
       logImageTool("error", "ai_image_stage_failed", { ...logOf(spec), error: staged.error });
       return unavailable(spec, "stage_failed");
@@ -227,15 +273,26 @@ export async function startAtlasImageJob(spec: StartSpec, deps: AtlasJobDeps = r
     stagedPath = staged.path;
   }
 
-  const submitted = await deps.submit({ apiKey: spec.atlasApiKey, body: spec.buildBody(sourceUrl) });
+  // Past this point the job costs money: submit only if the request can still wait out the
+  // submit call itself and answer before the gateway gives up.
+  if (untilFinishBudget(spec, deps) < SUBMIT_WINDOW_MS) {
+    await cleanStaged(spec, deps, stagedPath);
+    return tooLate(spec, "submit");
+  }
+  const submitted = await deps.submit({ apiKey: spec.atlasApiKey, body: spec.buildBody(sourceUrl), requestTimeoutMs: SUBMIT_WINDOW_MS });
   if (!submitted.ok) {
     await cleanStaged(spec, deps, stagedPath);
     return failed(spec, submitted);
   }
+
+  // The job is running and paid for. If the submit used up the polling time, hand back the
+  // token now rather than risk the answer arriving after the gateway has closed the request.
+  const deadline = spec.startedAt + POLL_BUDGET_MS;
+  if (deadline - deps.now() <= 0) return processing(spec, submitted.predictionId, stagedPath);
   const result = await deps.poll({
     apiKey: spec.atlasApiKey,
     predictionId: submitted.predictionId,
-    deadline: spec.startedAt + POLL_BUDGET_MS,
+    deadline,
     now: deps.now,
     sleep: deps.sleep,
   });

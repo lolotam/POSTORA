@@ -10,7 +10,7 @@ import {
   type RouteCaller,
   type RouteEnv,
 } from "./aiImageAtlasRoute.ts";
-import type { AtlasJobDeps } from "./aiImageJob.ts";
+import { FINISH_BUDGET_MS, POLL_BUDGET_MS, type AtlasJobDeps } from "./aiImageJob.ts";
 import { signJobToken, type JobTokenPayload } from "./aiImageToken.ts";
 import type { AtlasCheckResult } from "./atlasCloudImage.ts";
 import type { FetchedImage } from "./aiImageIo.ts";
@@ -158,6 +158,32 @@ Deno.test("refusals write a system_logs row with the user, the operation and the
     ["error", "PROVIDER_UNAVAILABLE", "no_provider_usable", "background_removal", "user-a"],
   ]);
   assertEquals(JSON.stringify(rows).includes("https://"), false);
+});
+
+Deno.test("start: a request already too far gone to submit safely is a logged 504 and never reaches the provider", async () => {
+  const { db, rows } = fakeDb();
+  let submitted = 0;
+  const late: AtlasJobDeps = { ...deps(), now: () => T0 + FINISH_BUDGET_MS - 5_000, submit: () => { submitted++; return Promise.resolve({ ok: true, predictionId: "pred-1" }); } };
+  const response = await startAtlasRoute(route, caller(db), env, request, late);
+  assertEquals(response.status, 504);
+  assertEquals([(await response.json()).code, submitted], ["JOB_FAILED", 0]);
+  assertEquals(rows.map((r) => [r.level, r.metadata.reason, r.metadata.status, r.user_id]), [["warn", "deadline_before_submit", 504, "user-a"]]);
+});
+
+Deno.test("start: a submit that used up the polling time is a 202 with a signed token straight away, without polling", async () => {
+  const { db } = fakeDb();
+  let clock = T0 + 1_000;
+  let polled = 0;
+  const slowSubmit: AtlasJobDeps = {
+    ...deps(),
+    now: () => clock,
+    submit: () => { clock = T0 + POLL_BUDGET_MS + 500; return Promise.resolve({ ok: true, predictionId: "pred-1" }); },
+    poll: () => { polled++; return Promise.resolve(done); },
+  };
+  const response = await startAtlasRoute(route, caller(db), env, request, slowSubmit);
+  assertEquals(response.status, 202);
+  const body = await response.json();
+  assertEquals([body.status, polled, typeof body.prediction_id === "string" && body.prediction_id.includes(".")], ["processing", 0, true]);
 });
 
 Deno.test("start: without the provider key or the signing secret the answer is a logged 503 and no job starts", async () => {

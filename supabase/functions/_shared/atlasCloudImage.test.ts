@@ -150,6 +150,10 @@ function fakeClock() {
   const sleeps: number[] = [];
   return {
     now: () => now,
+    /** Time passing outside `sleep`, e.g. a slow provider request. */
+    advance: (ms: number) => {
+      now += ms;
+    },
     sleep: (ms: number) => {
       sleeps.push(ms);
       now += ms;
@@ -174,7 +178,29 @@ Deno.test("poll: at the deadline a running job is still pending, never a timeout
   const result = await pollAtlasJob({ ...base, predictionId: "p", fetchFn, deadline: clock.now() + 5_000, intervalMs: 2_000, now: clock.now, sleep: clock.sleep });
   assertEquals(result, { ok: true, state: "pending" });
   assertEquals(clock.sleeps, [2_000, 2_000, 1_000]); // the last wait is cut to the deadline
-  assertEquals(calls.length, 4); // one final look at the deadline
+  assertEquals(calls.length, 3); // no request starts once the deadline has been reached
+});
+
+Deno.test("poll: a deadline that has already passed makes no request at all", async () => {
+  const clock = fakeClock();
+  const { fetchFn, calls } = fakeAtlas(submitted, [completed()]);
+  const result = await pollAtlasJob({ ...base, predictionId: "p", fetchFn, deadline: clock.now(), now: clock.now, sleep: clock.sleep });
+  assertEquals(result, { ok: true, state: "pending" });
+  assertEquals(calls.length, 0);
+  assertEquals(clock.sleeps, []);
+});
+
+Deno.test("poll: a slow request that runs past the deadline is the last one; there is no further wait or request", async () => {
+  const clock = fakeClock();
+  const slowPending = () => {
+    clock.advance(12_000); // the provider answered, but only after 12 s
+    return pending();
+  };
+  const { fetchFn, calls } = fakeAtlas(submitted, [slowPending]);
+  const result = await pollAtlasJob({ ...base, predictionId: "p", fetchFn, deadline: clock.now() + 10_000, intervalMs: 2_000, now: clock.now, sleep: clock.sleep });
+  assertEquals(result, { ok: true, state: "pending" });
+  assertEquals(calls.length, 1);
+  assertEquals(clock.sleeps, []); // no polling wait after the deadline passed
 });
 
 Deno.test("poll: a refused key ends the loop on the first answer instead of retrying until the deadline", async () => {

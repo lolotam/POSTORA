@@ -46,15 +46,27 @@ interface Seen {
   checks: string[];
   outputFetches: Array<{ url: string; timeoutMs?: number }>;
 }
-function deps(over: { submit?: AtlasSubmitResult; poll?: AtlasCheckResult; check?: AtlasCheckResult; output?: FetchedImage; now?: () => number } = {}) {
+function deps(over: {
+  submit?: AtlasSubmitResult;
+  poll?: AtlasCheckResult;
+  check?: AtlasCheckResult;
+  output?: FetchedImage;
+  now?: () => number;
+  /** Runs when the submit call is made, to move a fake clock. */
+  onSubmit?: () => void;
+  /** Runs when polling starts: the job "finishes" only after this much has happened. */
+  onPoll?: () => void;
+} = {}) {
   const seen: Seen = { submitted: [], polls: [], checks: [], outputFetches: [] };
   const d: AtlasJobDeps = {
     submit: (options) => {
       seen.submitted.push(options.body);
+      over.onSubmit?.();
       return Promise.resolve(over.submit ?? { ok: true, predictionId: "pred-9" });
     },
     poll: (options) => {
       seen.polls.push({ deadline: options.deadline });
+      over.onPoll?.();
       return Promise.resolve(over.poll ?? done);
     },
     check: (options) => {
@@ -72,7 +84,12 @@ function deps(over: { submit?: AtlasSubmitResult; poll?: AtlasCheckResult; check
 
 type Call = { method: string; url: string };
 /** Stands in for Openinary: stores uploads at folder/name, accepts deletes; `failUpload` refuses writes. */
-async function withOpeninary(failUpload: boolean, run: (calls: Call[]) => Promise<void>): Promise<void> {
+async function withOpeninary(
+  failUpload: boolean,
+  run: (calls: Call[]) => Promise<void>,
+  /** Called when an upload arrives; may return a promise that holds the answer back. */
+  onUpload?: () => void | Promise<void>,
+): Promise<void> {
   const original = globalThis.fetch;
   const calls: Call[] = [];
   globalThis.fetch = ((input: string | URL | Request, init?: RequestInit) => {
@@ -82,9 +99,13 @@ async function withOpeninary(failUpload: boolean, run: (calls: Call[]) => Promis
     if (url.includes("/api/storage?")) return Promise.resolve(new Response(JSON.stringify({ files: [] })));
     if (method === "DELETE") return Promise.resolve(new Response(null, { status: 200 }));
     if (url.endsWith("/api/upload")) {
-      if (failUpload) return Promise.resolve(new Response(JSON.stringify({ success: false, error: "disk full" }), { status: 500 }));
-      const form = init?.body as FormData;
-      return Promise.resolve(new Response(JSON.stringify({ success: true, files: [{ path: `${form.get("folder")}/${(form.get("files") as File).name}` }] })));
+      const answer = () => {
+        if (failUpload) return new Response(JSON.stringify({ success: false, error: "disk full" }), { status: 500 });
+        const form = init?.body as FormData;
+        return new Response(JSON.stringify({ success: true, files: [{ path: `${form.get("folder")}/${(form.get("files") as File).name}` }] }));
+      };
+      const held = onUpload?.();
+      return held ? held.then(answer) : Promise.resolve(answer());
     }
     return Promise.reject(new Error(`unexpected fetch ${url}`));
   }) as typeof fetch;
@@ -224,7 +245,8 @@ Deno.test("without Openinary the output is only downloaded when the caller repor
 
 Deno.test("a job that finishes near the end of the budget skips the copy and returns the provider URL", async () => {
   await withOpeninary(false, async () => {
-    const late = deps({ now: () => T0 + FINISH_BUDGET_MS - 1000 });
+    let clock = T0 + 1000;
+    const late = deps({ now: () => clock, onPoll: () => { clock = T0 + FINISH_BUDGET_MS - 1000; } }); // done just before the end
     const result = await startAtlasImageJob(start(), late.deps);
     assertEquals(late.seen.outputFetches, []);
     assertEquals(result.ok && result.status === "completed" && [result.storedIn, result.resultUrl], ["provider", "https://atlas.example/out.png"]);
@@ -233,10 +255,90 @@ Deno.test("a job that finishes near the end of the budget skips the copy and ret
 
 Deno.test("the output download never gets more than the time left in the budget", async () => {
   await withOpeninary(false, async () => {
-    const { deps: d, seen } = deps({ now: () => T0 + FINISH_BUDGET_MS - 10_000 });
+    let clock = T0 + 1000;
+    const { deps: d, seen } = deps({ now: () => clock, onPoll: () => { clock = T0 + FINISH_BUDGET_MS - 10_000; } });
     await startAtlasImageJob(start(), d);
     assertEquals(seen.outputFetches[0].timeoutMs, 5_000);
   });
+});
+
+const SUBMIT_WINDOW_MS = 10_000;
+const refusal = (result: Awaited<ReturnType<typeof startAtlasImageJob>>) =>
+  result.ok === false && [result.status, result.code, result.message, result.reason, result.level];
+
+Deno.test("deadline: a job that cannot wait out the submit call is refused with a logged 504 and is never submitted", async () => {
+  const late = deps({ now: () => T0 + FINISH_BUDGET_MS - SUBMIT_WINDOW_MS + 1 });
+  const result = await startAtlasImageJob(start(), late.deps);
+  assertEquals(refusal(result), [504, "JOB_FAILED", "TIMEOUT", "deadline_before_submit", "warn"]);
+  assertEquals(late.seen.submitted, []);
+  assertEquals(late.seen.polls, []);
+
+  // exactly the submit window left is still enough
+  const justEnough = deps({ now: () => T0 + FINISH_BUDGET_MS - SUBMIT_WINDOW_MS });
+  const accepted = await startAtlasImageJob(start({ openinary: null }), justEnough.deps);
+  assertEquals(justEnough.seen.submitted.length, 1);
+  assertEquals(accepted.ok, true);
+});
+
+Deno.test("deadline: an upload is not staged at all when the stage and submit windows no longer fit", async () => {
+  await withOpeninary(false, async (calls) => {
+    const late = deps({ now: () => T0 + FINISH_BUDGET_MS - SUBMIT_WINDOW_MS - 2_999 });
+    const result = await startAtlasImageJob(start({ input: bytesInput }), late.deps);
+    assertEquals(refusal(result), [504, "JOB_FAILED", "TIMEOUT", "deadline_before_stage", "warn"]);
+    assertEquals(calls, []); // nothing uploaded, nothing to clean up
+    assertEquals(late.seen.submitted, []);
+  });
+});
+
+Deno.test("deadline: a slow staging that leaves no submit window removes the staged copy and refuses", async () => {
+  let clock = T0 + 1_000;
+  await withOpeninary(false, async (calls) => {
+    const { deps: d, seen } = deps({ now: () => clock });
+    const result = await startAtlasImageJob(start({ input: bytesInput }), d);
+    assertEquals(refusal(result), [504, "JOB_FAILED", "TIMEOUT", "deadline_before_submit", "warn"]);
+    assertEquals(seen.submitted, []);
+    assertEquals(deletes(calls).length, 1);
+    assertEquals(deletes(calls)[0].url.includes("/ai-tmp/"), true);
+  }, () => {
+    clock = T0 + FINISH_BUDGET_MS - SUBMIT_WINDOW_MS + 500; // the upload took ~33 s
+  });
+});
+
+Deno.test("deadline: staging that outlasts its window is abandoned, nothing is submitted, and a late copy is removed", async () => {
+  let release: () => void = () => {};
+  const held = new Promise<void>((resolve) => { release = resolve; });
+  // 3 s is the shortest stage window the job accepts, so this waits about 3 s of real time
+  const d = deps({ now: () => T0 + FINISH_BUDGET_MS - SUBMIT_WINDOW_MS - 3_000 });
+  await withOpeninary(false, async (calls) => {
+    const result = await startAtlasImageJob(start({ input: bytesInput }), d.deps);
+    assertEquals(refusal(result), [504, "JOB_FAILED", "TIMEOUT", "deadline_before_stage", "warn"]);
+    assertEquals(d.seen.submitted, []);
+    assertEquals(deletes(calls).length, 0);
+    release(); // the upload finally lands
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    assertEquals(deletes(calls).length, 1); // and is removed, since nothing will reference it
+  }, () => held);
+});
+
+Deno.test("deadline: a submit that leaves no polling time answers 'processing' at once, without a single poll", async () => {
+  let clock = T0 + 1_000;
+  const submitTookLong = { onSubmit: () => { clock = T0 + POLL_BUDGET_MS + 1; } };
+  await withOpeninary(false, async (calls) => {
+    const { deps: d, seen } = deps({ now: () => clock, poll: done, ...submitTookLong });
+    const result = await startAtlasImageJob(start({ input: bytesInput }), d);
+    assertEquals(result.ok && result.status, "processing");
+    if (!result.ok || result.status !== "processing") return;
+    assertEquals(seen.polls, []);
+    assertEquals(seen.outputFetches, []);
+    assertEquals(result.token.startsWith("signed:pred-9:postora.cloud/postora/user-1/ai-tmp/"), true); // staged input kept
+    assertEquals(deletes(calls).length, 0);
+  });
+  // exactly at the poll budget there is no time left either
+  clock = T0 + 1_000;
+  const exact = deps({ now: () => clock, onSubmit: () => { clock = T0 + POLL_BUDGET_MS; } });
+  const result = await startAtlasImageJob(start(), exact.deps);
+  assertEquals(result.ok && result.status, "processing");
+  assertEquals(exact.seen.polls, []);
 });
 
 const payload: JobTokenPayload = {

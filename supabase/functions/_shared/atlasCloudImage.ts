@@ -12,7 +12,8 @@
 import { fetchWithTimeout } from "./request-timeout.ts";
 
 const ATLAS_MODEL_API = "https://api.atlascloud.ai/api/v1/model";
-const REQUEST_TIMEOUT_MS = 10_000;
+/** Longest one provider request may take; callers budget their deadlines around it. */
+export const ATLAS_REQUEST_TIMEOUT_MS = 10_000;
 
 export type AtlasFailureKind =
   | "provider_rejected" // our key or balance was refused: an operator problem, not the caller's
@@ -101,7 +102,7 @@ export async function submitAtlasJob(opts: CallOptions & { body: Record<string, 
     submit = await fetchWithTimeout(
       `${ATLAS_MODEL_API}/generateImage`,
       { method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${opts.apiKey}` }, body: JSON.stringify(opts.body) },
-      opts.requestTimeoutMs ?? REQUEST_TIMEOUT_MS,
+      opts.requestTimeoutMs ?? ATLAS_REQUEST_TIMEOUT_MS,
       opts.fetchFn ?? fetch,
     );
   } catch (error) {
@@ -137,7 +138,7 @@ export async function checkAtlasJob(opts: CallOptions & { predictionId: string }
     poll = await fetchWithTimeout(
       `${ATLAS_MODEL_API}/prediction/${encodeURIComponent(opts.predictionId)}`,
       { headers: { Authorization: `Bearer ${opts.apiKey}` } },
-      opts.requestTimeoutMs ?? REQUEST_TIMEOUT_MS,
+      opts.requestTimeoutMs ?? ATLAS_REQUEST_TIMEOUT_MS,
       opts.fetchFn ?? fetch,
     );
   } catch {
@@ -166,7 +167,11 @@ export async function checkAtlasJob(opts: CallOptions & { predictionId: string }
   return { ok: true, state: "pending" };
 }
 
-/** Checks until the prediction ends or `deadline` (epoch ms) passes; then it is still "pending". */
+/**
+ * Checks until the prediction ends or `deadline` (epoch ms) passes; then it is still "pending".
+ * The deadline is checked before every provider request, so no request starts once it has
+ * passed (a deadline that is already behind us makes no request at all).
+ */
 export async function pollAtlasJob(opts: CallOptions & {
   predictionId: string;
   deadline: number;
@@ -177,11 +182,13 @@ export async function pollAtlasJob(opts: CallOptions & {
   const now = opts.now ?? Date.now;
   const sleep = opts.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
   const intervalMs = opts.intervalMs ?? 2000;
+  let last: AtlasCheckResult = { ok: true, state: "pending" };
   for (;;) {
-    const result = await checkAtlasJob(opts);
-    if (!(result.ok && result.state === "pending")) return result;
-    const left = opts.deadline - now();
-    if (left <= 0) return result;
-    await sleep(Math.min(intervalMs, left));
+    if (opts.deadline - now() <= 0) return last;
+    last = await checkAtlasJob(opts);
+    if (!(last.ok && last.state === "pending")) return last;
+    const wait = Math.min(intervalMs, opts.deadline - now());
+    if (wait <= 0) return last;
+    await sleep(wait);
   }
 }
