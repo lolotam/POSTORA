@@ -4207,7 +4207,8 @@ async function postToInstagram(
   };
 
   // Helper: publish first photo/video of a feed/reel post as a Story (mirror toggle)
-  const publishIgStoryFromMedia = async (): Promise<void> => {
+  // Answers the published Story (id and a link), or null when it was not published.
+  const publishIgStoryFromMedia = async (): Promise<StoryRef | null> => {
     try {
       const storyBody: Record<string, unknown> = {
         media_type: "STORIES",
@@ -4225,7 +4226,7 @@ async function postToInstagram(
       );
       if (createData.error) {
         warnings.push(`Also share to Story failed: ${createData.error.message}`);
-        return;
+        return null;
       }
       const storyContainerId = graphId(createData, "Also share to Story");
       // On a resumed run timing.deadlineMs is check-once: that suits the deferred reel, not this
@@ -4237,10 +4238,12 @@ async function postToInstagram(
           workerPublishDeadline(WORKER_STARTED_AT_MS),
         ),
       });
-      await publishInstagramMedia(igUserId, storyContainerId, accessToken);
+      const story = await publishInstagramMedia(igUserId, storyContainerId, accessToken);
       console.log("Instagram 'Also share to Story' published successfully");
+      return { id: story.id, url: username ? `https://www.instagram.com/stories/${username}/` : "https://instagram.com" };
     } catch (e) {
       warnings.push(`Also share to Story failed: ${e instanceof Error ? e.message : "Unknown error"}`);
+      return null;
     }
   };
   let mediaType = "IMAGE";
@@ -4259,7 +4262,8 @@ async function postToInstagram(
   // A retry of a post already live on the account records it instead of posting it again.
   const profileUrl = username ? `https://www.instagram.com/${username}/` : `https://instagram.com`;
   const live = await liveOnRetry(post, retry, `https://graph.facebook.com/v18.0/${igUserId}/media`, accessToken, {
-    storyOnly: igPostTypes.every((type) => type === "story"),
+    // Nothing to look for when no feed/reel is wanted, or this post's own row already records it.
+    storyOnly: igPostTypes.every((type) => type === "story") || retry.feedRecorded === true,
     mediaType: expectedMediaType(mediaType, mediaUrls.length),
   });
 
@@ -4332,10 +4336,25 @@ async function postToInstagram(
     }
   }
 
+  // This post's own row already records the feed post or reel: it is done, and that row stays the
+  // record. Counted as a success, nothing new is written (the story step above ran).
+  if (retry.feedRecorded && !igPostTypes.every((type) => type === "story")) {
+    return { selfWroteRows: true, subResults: [{ subtype: "feed", status: "success" }], warnings } as PlatformPostResult;
+  }
+
   // The feed post or reel is already live: recorded, not posted again (the story step above ran).
   if (live) {
     // Its publish went unanswered, so the run that published it never mirrored it to the Story.
-    if (shareToStory && !igPostTypes.includes("story") && !retry.storyRecorded) await publishIgStoryFromMedia();
+    // The mirror is recorded as its own row, so a later retry sees it and never mirrors it twice.
+    if (shareToStory && !igPostTypes.includes("story") && !retry.storyRecorded) {
+      const mirror = await publishIgStoryFromMedia();
+      const recordError = mirror && recordStory ? await recordStory(mirror) : null;
+      if (mirror && recordError) {
+        console.error(`[IG story] mirror published but not recorded: ${recordError}`);
+        warnings.push("The Instagram Story was published but could not be recorded.");
+        unrecordedStory = mirror;
+      }
+    }
     const carried = unrecordedStory ? { unrecorded_story: unrecordedStory } : {};
     return live.kind === "already_live"
       ? { id: live.media.id, url: live.media.permalink ?? profileUrl, warnings: [...warnings, ALREADY_LIVE_MESSAGE], ...carried }
@@ -5433,7 +5452,8 @@ async function postToInstagramBusinessLogin(
   // ─── Aggregate ─────────────────────────────────────────────────────────────
   // A retry whose every part an earlier run already recorded has nothing left to write.
   if (subResults.length === 0 && feedDone) {
-    return { selfWroteRows: true, subResults: [], warnings } as PlatformPostResult;
+    // Counted as a success (its rows already say so); nothing new is written.
+    return { selfWroteRows: true, subResults: [{ subtype: "feed", status: "success" }], warnings } as PlatformPostResult;
   }
   if (subResults.length === 0) {
     throw new Error("Instagram: no post type matched (selected: " + JSON.stringify(blPostTypes) + ")");
