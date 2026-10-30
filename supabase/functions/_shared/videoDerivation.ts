@@ -121,7 +121,8 @@ export async function deriveVideo(deps: DeriveDeps, request: DeriveRequest): Pro
       userId: request.userId,
       original: row,
       stored: { provider: "cloudinary", objectKey: derived.publicId, url: derived.url, bytes: null },
-      metadata: { ...request.metadata, video_dimensions: sourceDimensions, provider: "cloudinary", transformation },
+      // Cloudinary does not report the rendition's size here, so none is recorded as its own.
+      metadata: { ...request.metadata, source_video_dimensions: sourceDimensions, provider: "cloudinary", transformation },
       discardStored: async () => { await io.destroyCloudinaryObject(derived.publicId, "video"); },
     });
     return {
@@ -159,7 +160,14 @@ export async function deriveVideo(deps: DeriveDeps, request: DeriveRequest): Pro
     userId: request.userId,
     original: row,
     stored: { provider: "openinary", objectKey: ingested.path, url: ingested.url, bytes: ingested.bytes },
-    metadata: { ...request.metadata, video_dimensions: sourceDimensions, provider: "openinary", transformation: plan.segment },
+    // The rendition's own size: a later crop or compress plans from it, not from the original's.
+    metadata: {
+      ...request.metadata,
+      ...(plan.output ? { video_dimensions: plan.output } : {}),
+      source_video_dimensions: sourceDimensions,
+      provider: "openinary",
+      transformation: plan.segment,
+    },
     discardStored,
   });
 

@@ -28,6 +28,7 @@ export type OpeninaryVideoErrorCode =
   | "COMPRESSION_NOT_SMALLER"
   | "STORE_FAILED"
   | "PROVIDER_UNAVAILABLE"
+  | "LOOKUP_FAILED"
   | "METADATA_UNAVAILABLE";
 
 const STATUS: Record<OpeninaryVideoErrorCode, number> = {
@@ -48,6 +49,7 @@ const STATUS: Record<OpeninaryVideoErrorCode, number> = {
   COMPRESSION_NOT_SMALLER: 422,
   STORE_FAILED: 502,
   PROVIDER_UNAVAILABLE: 503,
+  LOOKUP_FAILED: 503,
   METADATA_UNAVAILABLE: 422,
 };
 

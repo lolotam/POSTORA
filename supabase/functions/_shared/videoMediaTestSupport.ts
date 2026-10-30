@@ -10,6 +10,8 @@ export interface FakeDbState {
   /** Error message the next media_files insert should fail with. */
   mediaInsertError?: string;
   providerInsertError?: string;
+  /** Error message a read of this table should fail with. */
+  readError?: Partial<Record<"media_files" | "media_file_providers", string>>;
 }
 
 export function fakeDb(initial: Partial<FakeDbState> = {}): { db: SupabaseClient; state: FakeDbState } {
@@ -23,8 +25,14 @@ export function fakeDb(initial: Partial<FakeDbState> = {}): { db: SupabaseClient
       const query = {
         select() { return query; },
         eq(column: string, value: unknown) { filters.push([column, value]); return query; },
-        maybeSingle() { return Promise.resolve({ data: rows()[0] ?? null, error: null }); },
-        then(resolve: (value: { data: unknown[]; error: null }) => unknown) { return Promise.resolve({ data: rows(), error: null }).then(resolve); },
+        maybeSingle() {
+          const failure = state.readError?.[table as "media_files"];
+          return Promise.resolve(failure ? { data: null, error: { message: failure } } : { data: rows()[0] ?? null, error: null });
+        },
+        then(resolve: (value: { data: unknown[] | null; error: { message: string } | null }) => unknown) {
+          const failure = state.readError?.[table as "media_file_providers"];
+          return Promise.resolve(failure ? { data: null, error: { message: failure } } : { data: rows(), error: null }).then(resolve);
+        },
         insert(row: Record<string, unknown>) {
           state.inserted.push({ table, row });
           const failure = table === "media_files" ? state.mediaInsertError : state.providerInsertError;

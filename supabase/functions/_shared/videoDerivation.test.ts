@@ -145,11 +145,15 @@ Deno.test("someone else's video is not found, and nothing is fetched", async () 
 });
 
 Deno.test("a transcode names the platform and uses its preset", async () => {
-  const { deps, calls } = harness();
+  const { deps, calls, state } = harness();
   const plan = planTranscode("tiktok");
   await deriveVideo(deps, compressRequest({ label: "tiktok", openinaryPlan: () => plan, mustShrink: false, metadata: { transcoded_from: "media-1", target_platform: "tiktok" } }));
   assertEquals(calls.variant[0].segment, "w_720,h_1280,c_fill,q_80,f_mp4");
   assert(calls.ingest[0].fileName.startsWith("postora_tiktok_"));
+  // The new row carries the rendition's size, so a later crop plans from 720x1280, not the original.
+  const metadata = state.inserted[0].row.metadata as Record<string, unknown>;
+  assertEquals(metadata.video_dimensions, { width: 720, height: 1280 });
+  assertEquals(metadata.source_video_dimensions, { width: 1920, height: 1080 });
 });
 
 Deno.test("a Cloudinary-only video uses the fallback and is recorded as a Cloudinary file", async () => {

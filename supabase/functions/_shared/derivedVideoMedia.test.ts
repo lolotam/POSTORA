@@ -110,6 +110,14 @@ Deno.test("loading a video is scoped to its owner and to videos", async () => {
   assertEquals(image.code, "INVALID_REQUEST");
 });
 
+Deno.test("a failed read is a retryable lookup failure, never a missing video or a missing Openinary copy", async () => {
+  const rows = { mediaFiles: [videoRow()] };
+  const media = await assertRejects(() => loadOwnedVideo(fakeDb({ ...rows, readError: { media_files: "timeout" } }).db, "media-1", "user-1"), OpeninaryVideoError);
+  assertEquals([media.code, media.status], ["LOOKUP_FAILED", 503]);
+  const providers = await assertRejects(() => loadOwnedVideo(fakeDb({ ...rows, readError: { media_file_providers: "timeout" } }).db, "media-1", "user-1"), OpeninaryVideoError);
+  assertEquals([providers.code, providers.status], ["LOOKUP_FAILED", 503]);
+});
+
 Deno.test("a derived Openinary video is recorded as a library row plus a ready provider row", async () => {
   const { db, state } = fakeDb();
   const result = await recordDerivedVideo(db, {

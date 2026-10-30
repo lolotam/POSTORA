@@ -48,12 +48,16 @@ const ROW_COLUMNS = "id, user_id, file_path, file_type, file_size, storage_bucke
 /** Owner-scoped: someone else's row and a missing row look the same. */
 export async function loadOwnedVideo(db: SupabaseClient, mediaFileId: string, userId: string): Promise<{ row: VideoMediaRow; providers: ProviderRow[] }> {
   const { data: row, error } = await db.from("media_files").select(ROW_COLUMNS).eq("id", mediaFileId).eq("user_id", userId).maybeSingle();
-  if (error || !row) throw new OpeninaryVideoError("MEDIA_NOT_FOUND", "Media file not found.");
+  // A failed read is not a missing row: retryable, and nothing is decided from it.
+  if (error) throw new OpeninaryVideoError("LOOKUP_FAILED", "The video could not be looked up. Please try again.");
+  if (!row) throw new OpeninaryVideoError("MEDIA_NOT_FOUND", "Media file not found.");
   if (row.file_type !== "video") throw new OpeninaryVideoError("INVALID_REQUEST", "Only video files can be processed.");
-  const { data: providers } = await db
+  const { data: providers, error: providersError } = await db
     .from("media_file_providers")
     .select("provider, object_key, status, delivery_url, object_version")
     .eq("media_file_id", mediaFileId);
+  // Read as "no Openinary copy", a failed lookup would send a backfilled video to the disabled Cloudinary.
+  if (providersError) throw new OpeninaryVideoError("LOOKUP_FAILED", "The video's storage could not be looked up. Please try again.");
   return { row: row as VideoMediaRow, providers: (providers ?? []) as ProviderRow[] };
 }
 
