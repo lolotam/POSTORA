@@ -222,6 +222,16 @@ jobs:
           deno check --node-modules-dir=none "${fn}/_shared/aiImageToken.ts" "${fn}/_shared/aiImageJob.ts" "${fn}/_shared/aiImageAtlasRoute.ts" "${fn}/_shared/aiImageIo.ts" "${fn}/_shared/atlasCloudImage.ts" "${fn}/_shared/openinary.ts" "${fn}/sweep-ai-image-staging/run.ts"
           deno test --allow-env --node-modules-dir=none "${fn}/_shared/aiImageToken.test.ts" "${fn}/_shared/aiImageJob.test.ts" "${fn}/_shared/aiImageAtlasRoute.test.ts" "${fn}/_shared/aiImageIo.test.ts" "${fn}/_shared/atlasCloudImage.test.ts" "${fn}/_shared/openinary.test.ts" "${fn}/sweep-ai-image-staging/run.test.ts"
 
+      # The import map only swaps deno.land std@0.224.0/crypto for the same release published on
+      # JSR (pinned to 0.224.0): the deno.land wasm build carries a `.d.mts` types directive that
+      # Deno 2.9 cannot load. The deployed function still imports deno.land 0.224.0.
+      - name: Typecheck and test process-post
+        run: |
+          set -euo pipefail
+          map=".github/deno/process-post-import-map.json"
+          deno check --node-modules-dir=none --import-map="${map}" supabase/functions/process-post/index.ts
+          deno test --allow-env --node-modules-dir=none --import-map="${map}" supabase/functions/process-post/ supabase/functions/_shared/composioFiles.test.ts
+
       - name: Typecheck and test the owner-report contract
         run: |
           set -euo pipefail

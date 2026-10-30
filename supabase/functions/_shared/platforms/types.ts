@@ -142,6 +142,8 @@ export interface PlatformMetadata {
   threads_cross_share_to_ig?: boolean;
   threads_cross_share_to_ig_dark_mode?: boolean;
   threads_first_comment?: string | null;
+  /** Set by the browser when it dropped the location before sending (see usePlatformSettings). */
+  threads_location_skipped_reason?: string | null;
   threads_topic_tag?: string | null;
 
   // ─────────────────────────────────────────────────────────────────────────

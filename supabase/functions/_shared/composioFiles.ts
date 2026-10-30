@@ -18,7 +18,8 @@ export interface ComposioFileUploadInput {
   tool: string;
   filename: string;
   mimetype: string;
-  bytes: Uint8Array;
+  /** Over a plain ArrayBuffer: Deno 2.9's WebCrypto and fetch types refuse a shared one. */
+  bytes: Uint8Array<ArrayBuffer>;
   signal: AbortSignal;
 }
 
@@ -27,7 +28,7 @@ export interface ComposioFileUploadDependencies {
 }
 
 /** MD5 as Composio's upload request wants it: lowercase hex of the raw bytes. */
-export async function md5Hex(bytes: Uint8Array): Promise<string> {
+export async function md5Hex(bytes: Uint8Array<ArrayBuffer>): Promise<string> {
   return encodeHex(await crypto.subtle.digest("MD5", bytes));
 }
 

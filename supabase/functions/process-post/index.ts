@@ -85,6 +85,7 @@ import { createClient, SupabaseClient } from "https://esm.sh/@supabase/supabase-
 // NOTE: These modules are now extracted to reduce file size and improve maintainability
 // See: supabase/functions/_shared/platforms/ for reusable platform utilities
 import type { PlatformMetadata as SharedPlatformMetadata } from "../_shared/platforms/types.ts";
+import { graphId, type GraphResponse } from "./graphResponse.ts";
 import { validateRequestBody, validationErrorResponse } from "../_shared/validate.ts";
 import { postWebhook, validateWebhookTarget } from "../_shared/webhookSecurity.ts";
 import { getMissingMediaFileIds } from "../_shared/post-media.ts";
@@ -267,7 +268,8 @@ const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
  * Platform-specific metadata stored in posts.metadata
  * Each platform has its own settings that control how content is published
  */
-interface PlatformMetadata {
+interface PlatformMetadata
+  extends Pick<SharedPlatformMetadata, "threads_first_comment" | "threads_location_skipped_reason"> {
   // Account selection
   selected_account_ids?: string[] | null;
 
@@ -494,6 +496,14 @@ interface PlatformPostResult {
   topic_tag_debug?: Record<string, unknown>;
   /** Optional structured payload merged into platform_posts.response_data (e.g. LinkedIn destination fan-out) */
   response_data?: Record<string, unknown>;
+  /** Threads only: what happened to the requested cross-share to Instagram. */
+  cross_share?: {
+    requested: boolean;
+    attempted: boolean;
+    capability_at_publish: unknown;
+    dark_mode: boolean;
+    status: unknown;
+  };
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -2582,7 +2592,7 @@ async function postToBluesky(
         let finalUrl = imageUrl;
         let blob: Blob;
         let mimeType: string;
-        let imageBuffer: Uint8Array;
+        let imageBuffer: Uint8Array<ArrayBuffer>;
 
         // Try Cloudinary compression if the image is from Cloudinary
         const cloudinaryPattern = /^(https:\/\/res\.cloudinary\.com\/[^/]+\/image\/upload\/)(.*)/;
@@ -2960,7 +2970,7 @@ async function postToFacebook(
   console.log(`Posting to Facebook Page: ${pageId}, types: ${JSON.stringify(postTypes)}`);
 
   // If multiple post types selected, iterate and collect results
-  const allResults: Array<{ id: string; url?: string; warnings?: string[] }> = [];
+  const allResults: PlatformPostResult[] = [];
 
   for (const postType of postTypes) {
     // Handle Facebook Reels
@@ -3236,7 +3246,7 @@ async function postToFacebook(
     endpoint: string,
     body: Record<string, unknown>,
     placeKey: "place" = "place",
-  ): Promise<{ data: Record<string, unknown>; status: number; placeAttempted: boolean }> => {
+  ): Promise<{ data: GraphResponse; status: number; placeAttempted: boolean }> => {
     const placeAttempted = body[placeKey] != null;
     const doFetch = async (b: Record<string, unknown>) => {
       const r = await fetch(endpoint, {
@@ -3866,7 +3876,7 @@ async function postToInstagram(
   const igMediaCreateWithLocationRetry = async (
     endpoint: string,
     body: Record<string, unknown>,
-  ): Promise<Record<string, unknown>> => {
+  ): Promise<GraphResponse> => {
     const locationAttempted = body.location_id != null;
     // Capture only the FIRST publish-path /media call (the one we care about for debug)
     if (locationDebug.meta_media_create_success === null) {
@@ -4328,12 +4338,13 @@ async function postToInstagram(
     }
 
     if (createData.error) throw new Error(createData.error.message);
+    const containerId = graphId(createData, "Instagram image container");
 
     // Poll for container status before publishing
-    await pollContainerStatus(createData.id, accessToken, { deadlineMs: timing.deadlineMs });
+    await pollContainerStatus(containerId, accessToken, { deadlineMs: timing.deadlineMs });
 
     // Publish the media with retry logic
-    const publishData = await publishInstagramMedia(igUserId, createData.id, accessToken);
+    const publishData = await publishInstagramMedia(igUserId, containerId, accessToken);
 
     // Post first comment
     await postInstagramFirstComment(publishData.id);
@@ -4438,12 +4449,13 @@ async function postToInstagram(
     }
 
     if (carouselData.error) throw new Error(carouselData.error.message);
+    const carouselId = graphId(carouselData, "Instagram carousel container");
 
     // Poll carousel container
-    await pollContainerStatus(carouselData.id, accessToken, { deadlineMs: timing.deadlineMs });
+    await pollContainerStatus(carouselId, accessToken, { deadlineMs: timing.deadlineMs });
 
     // Publish carousel with retry logic
-    const publishData = await publishInstagramMedia(igUserId, carouselData.id, accessToken);
+    const publishData = await publishInstagramMedia(igUserId, carouselId, accessToken);
 
     // Post first comment
     await postInstagramFirstComment(publishData.id);
@@ -4721,7 +4733,7 @@ async function postToInstagramBusinessLogin(
   const blMediaCreateWithLocationRetry = async (
     endpoint: string,
     body: Record<string, unknown>,
-  ): Promise<Record<string, unknown>> => {
+  ): Promise<GraphResponse> => {
     const locationAttempted = body.location_id != null;
     if (locationDebug.meta_media_create_success === null) {
       locationDebug.media_container_endpoint = "/v22.0/{ig_user_id}/media";
@@ -5031,7 +5043,8 @@ async function postToInstagramBusinessLogin(
         await insertIGRow(subtype, "failed", undefined, undefined, msg);
         subResults.push({ subtype, status: "failed", error: msg });
       } else {
-        const reelStatus = await pollBusinessLoginContainerStatus(createData.id, accessToken, {
+        const containerId = graphId(createData, `Instagram ${wantReel ? "reel" : "feed"} container`);
+        const reelStatus = await pollBusinessLoginContainerStatus(containerId, accessToken, {
           deferKind: "ig_business_reel",
           deadlineMs: timing.deadlineMs,
         }, 30, 2000);
@@ -5044,7 +5057,7 @@ async function postToInstagramBusinessLogin(
           subResults.push({ subtype, status: "success", url: fallbackUrl });
           warnings.push(note);
         } else {
-          const publishData = await publishBusinessLoginMedia(igUserId, createData.id, accessToken);
+          const publishData = await publishBusinessLoginMedia(igUserId, containerId, accessToken);
           const blDebug = await finalizeBLLocationDebug(publishData.id);
           const rowId = await insertIGRow(subtype, "success", publishData.id, fallbackUrl, undefined, {
             shared_to_feed: wantFeed,
@@ -5100,8 +5113,9 @@ async function postToInstagramBusinessLogin(
           await insertIGRow("feed", "failed", undefined, undefined, msg);
           subResults.push({ subtype: "feed", status: "failed", error: msg });
         } else {
-          await pollBusinessLoginContainerStatus(createData.id, accessToken, { deadlineMs: timing.deadlineMs });
-          const publishData = await publishBusinessLoginMedia(igUserId, createData.id, accessToken);
+          const containerId = graphId(createData, "Instagram feed container");
+          await pollBusinessLoginContainerStatus(containerId, accessToken, { deadlineMs: timing.deadlineMs });
+          const publishData = await publishBusinessLoginMedia(igUserId, containerId, accessToken);
           const fallbackUrl = username ? `https://www.instagram.com/${username}/` : `https://instagram.com`;
           const blDebug = await finalizeBLLocationDebug(publishData.id);
           const rowId = await insertIGRow("feed", "success", publishData.id, fallbackUrl, undefined, blDebug ? { location_debug: blDebug } : undefined);
@@ -5156,9 +5170,10 @@ async function postToInstagramBusinessLogin(
         }
 
         if (carouselData.error) throw new Error(carouselData.error.message);
+        const carouselId = graphId(carouselData, "Instagram carousel container");
 
-        await pollBusinessLoginContainerStatus(carouselData.id, accessToken, { deadlineMs: timing.deadlineMs });
-        const publishData = await publishBusinessLoginMedia(igUserId, carouselData.id, accessToken);
+        await pollBusinessLoginContainerStatus(carouselId, accessToken, { deadlineMs: timing.deadlineMs });
+        const publishData = await publishBusinessLoginMedia(igUserId, carouselId, accessToken);
         const fallbackUrl = `https://instagram.com`;
         const blDebug = await finalizeBLLocationDebug(publishData.id);
         const rowId = await insertIGRow("feed", "success", publishData.id, fallbackUrl, undefined, blDebug ? { location_debug: blDebug } : undefined);
@@ -6048,7 +6063,7 @@ async function postToThreads(
 
   // ── Location tagging pre-flight guard ─────────────────────────────────
   const rawLocId: string | undefined = metadata?.threads_location_id || undefined;
-  const preSkippedReason: string | undefined = metadata?.threads_location_skipped_reason;
+  const preSkippedReason = metadata?.threads_location_skipped_reason;
   if (rawLocId && rawLocId.startsWith("osm_")) {
     threadsWarnings.push(
       "Location skipped — selected place was a reference (OpenStreetMap), not a Threads-tagable location."
