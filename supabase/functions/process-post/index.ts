@@ -3518,7 +3518,8 @@ async function waitForInstagramContainer(
     case "failed":
       throw new Error(containerFailureMessage("instagram", container.reason));
     default:
-      if (deferral) throw new ContainerStillProcessing(deferral.kind, containerId);
+      // NO_DEFERRAL (an infinite deadline) has nobody to finish the container later.
+      if (deferral && Number.isFinite(deferral.deadlineMs)) throw new ContainerStillProcessing(deferral.kind, containerId);
       throw new Error("Container processing timed out after polling");
   }
 }
