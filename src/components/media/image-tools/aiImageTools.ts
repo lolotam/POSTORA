@@ -92,12 +92,15 @@ async function runTool(
   const now = timing.now ?? Date.now;
   const deadline = now() + (timing.maxWaitMs ?? MAX_WAIT_MS);
 
+  const timedOut = () => new AiImageToolError("Processing timed out while waiting for the result. Please try again.", CLIENT_TIMEOUT_CODE);
+
   let answer = await callOnce(functionName, body, resultField, fallback);
   while (answer.status === "processing") {
-    if (now() >= deadline) {
-      throw new AiImageToolError("Processing timed out while waiting for the result. Please try again.", CLIENT_TIMEOUT_CODE);
-    }
-    await sleep(answer.retryMs);
+    const left = deadline - now();
+    if (left <= 0) throw timedOut();
+    // Never sleep past the deadline, and never start a follow-up call once it has passed.
+    await sleep(Math.min(answer.retryMs, left));
+    if (now() >= deadline) throw timedOut();
     answer = await callOnce(functionName, { prediction_id: answer.token }, resultField, fallback);
   }
   return answer.url;

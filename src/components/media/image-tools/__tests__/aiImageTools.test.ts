@@ -137,6 +137,25 @@ describe("a job that is still running when the first request answers (202)", () 
     expect(invoke.mock.calls.length).toBeLessThanOrEqual(6);
   });
 
+  it("never sleeps past the deadline: the last wait is cut to what is left, and no follow-up call follows it", async () => {
+    invoke.mockResolvedValue(processing("tok-6", 4));
+    const c = clock();
+    const failure = await runBackgroundRemoval("https://o.example/in.jpg", { ...c, maxWaitMs: 10_000 }).catch((e: unknown) => e);
+    expect((failure as AiImageToolError).code).toBe(CLIENT_TIMEOUT_CODE);
+    expect(c.waits).toEqual([4000, 4000, 2000]); // 4 s, 4 s, then only the 2 s that were left
+    expect(c.waits.reduce((a, b) => a + b, 0)).toBe(10_000);
+    expect(invoke).toHaveBeenCalledTimes(3); // the first request and two follow-ups; none after the cut wait
+  });
+
+  it("re-checks the deadline right before each follow-up, even when the wait itself ran long", async () => {
+    invoke.mockResolvedValue(processing("tok-7", 3));
+    let t = 0;
+    const overslept = { now: () => t, sleep: () => { t += 20_000; return Promise.resolve(); }, maxWaitMs: 10_000 };
+    const failure = await runUpscale("https://o.example/in.jpg", overslept).catch((e: unknown) => e);
+    expect((failure as AiImageToolError).code).toBe(CLIENT_TIMEOUT_CODE);
+    expect(invoke).toHaveBeenCalledTimes(1); // the sleep overshot the deadline, so no follow-up was made
+  });
+
   it("a failure on a follow-up reaches the caller with the server's message and code", async () => {
     invoke
       .mockResolvedValueOnce(processing("tok-4"))
