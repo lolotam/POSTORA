@@ -35,6 +35,19 @@ that cannot record its pending row is failed with "Safe to retry".
 
 ## Residual
 
-- Two reconciler runs finishing the last two deferred rows of one post at the same moment can
-  both see it terminal and both notify. The window is the length of one settle.
 - A user retrying an account whose reel gave up republishes its Instagram story.
+- Recording a story is retried once; if the first attempt committed but its answer was lost, the
+  retry writes a second story row.
+
+## Round 2 — MergePilot on PR #302
+
+| # | Fix |
+|---|---|
+| 1 | Every container wait takes `timing.deadlineMs`, not only deferrable ones (`ContainerWait`). Deferrability (`deferKind`) only picks between `ContainerStillProcessing` and "did not finish processing the media in time. Safe to retry." (`unfinishedError`). |
+| 2 | The 3 s pause after FINISHED is cut to the time left (`bufferAfterFinishedMs`); a resumed run keeps it whole. |
+| 3 | `MFASection` lists unverified factors under "Unfinished setup" with a Remove that uses the no-code path. |
+| 4 | The final webhook keeps the `platform_results` map (a success speaks for a platform with several rows) and adds `platform_results_list`, one entry per row (`buildWebhookResults`). The n8n templates in `public/` read the map with `Object.entries`; the webhook guide now shows the real payload. |
+| 5 | `writeLogRow` checks the `{ error }` the client returns. |
+| 6 | `claimFinalNotification`: a compare-and-set on `posts.metadata.final_notified_at` (the shape of `claimPostForProcessing`; PostgREST `metadata->>final_notified_at=is.null` / `=eq.<old>`, no migration). The marker is a timestamp compared with `processing_started_at`, so a retried post is announced again. All three paths go through `announceFinalPost`; a claim that cannot be made sends anyway. |
+| 7 | Stories recorded in a run join `platformResults` and set `hasSuccess` (`finally` in the account loop), so a reel that fails outright leaves the post `completed`. |
+| 8 | Recording is retried once. If it still fails and the reel defers, the story rides on the pending row as `response_data.unrecorded_story`; a resumed run records it first, an abandoning run records it before giving the reel up. |
