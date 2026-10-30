@@ -21,11 +21,13 @@
  *
  * WHY THE SERVICE CLIENT IS SO NARROW
  *
- *   The service client is used for exactly two things: reading the two
- *   server-controlled settings and writing one sanitized audit row. It never
- *   runs an owner RPC, and it never carries a user id: the accepted SQL has
- *   no `service_role` EXECUTE on the two owner functions, and asking for it
- *   would be asking for the impersonation the SQL refuses.
+ *   The service client is used for exactly three things: reading the two
+ *   server-controlled settings, writing the intake audit row, and writing the
+ *   exception-path audit of an admission refusal the accepted SQL could not
+ *   audit itself. It never runs an owner RPC, and it never carries a user
+ *   id: the accepted SQL has no `service_role` EXECUTE on the two owner
+ *   functions, and asking for it would be asking for the impersonation the
+ *   SQL refuses.
  *
  * WHY THE URL COMES FROM `SUPABASE_URL`
  *
@@ -62,6 +64,7 @@ import {
   createOwnerCollectionServiceStore,
   type OwnerServiceReadPort,
   type OwnerServiceRpcCaller,
+  type OwnerServiceWritePort,
 } from "./workerStore.ts";
 import type { OwnerWorkerPorts } from "./worker.ts";
 
@@ -239,6 +242,43 @@ function createServiceReadPort(environment: ServerEnvironment): OwnerServiceRead
 }
 
 /**
+ * The service write port.
+ *
+ * It writes ONE kind of row: the exception-path audit of an admission
+ * refusal the accepted SQL could not audit itself, because the statement
+ * never reached it. A normal refusal is audited by the accepted SQL in the
+ * same committed transaction and never comes through here.
+ *
+ * The write answers whether the row COMMITTED. A failed write is false, and
+ * the worker then stops the work and reports the audit failure: a row that
+ * did not commit is never reported as a stored row.
+ */
+function createServiceWritePort(environment: ServerEnvironment): OwnerServiceWritePort {
+  return {
+    async insertSystemLog(row) {
+      try {
+        const client = createClient(environment.url, environment.serviceRoleKey, {
+          auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
+        });
+
+        const { error } = await client.from("system_logs").insert({
+          source: row.source,
+          category: row.category,
+          level: row.level,
+          message: row.message,
+          user_id: row.userId,
+          metadata: redactSensitive(row.metadata) as Record<string, unknown>,
+        });
+
+        return error === null;
+      } catch {
+        return false;
+      }
+    },
+  };
+}
+
+/**
  * The administrator check.
  *
  * A failed read is NOT an administrator. The check fails closed, so an
@@ -321,6 +361,7 @@ function createOwnerWorkerPorts(environment: ServerEnvironment): OwnerWorkerPort
   const store = createOwnerCollectionServiceStore({
     rpc: createServiceRpcCaller(environment),
     reads: createServiceReadPort(environment),
+    writes: createServiceWritePort(environment),
   });
 
   return {

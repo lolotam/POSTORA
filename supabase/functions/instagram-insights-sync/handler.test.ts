@@ -648,10 +648,15 @@ Deno.test("an off collection setting never reads the credential mode", async () 
   assertEquals(harness.settingsReads[0], "collection_instagram_insights_enabled");
 });
 
-Deno.test("a legacy or absent credential mode refuses the request", async () => {
+Deno.test("a legacy or absent credential mode is not a refusal", async () => {
+  // The global credential mode says WHERE a Facebook User secret is read
+  // from. It is not collection permission: the rollout policy decides which
+  // accounts may be collected for, and the accepted SQL decides it per
+  // account, per target and per request.
   for (const value of [
     { data: null, error: null },
     { data: { value: "legacy" }, error: null },
+    { data: { value: "protected" }, error: null },
   ]) {
     const harness = createHarness({
       settings: { credential_facebook_user_mode: value },
@@ -660,9 +665,10 @@ Deno.test("a legacy or absent credential mode refuses the request", async () => 
       post({ action: "status", social_account_id: ACCOUNT_ID }),
     );
 
-    assertEquals(response.status, 503);
-    assertEquals((await json(response)).error, "protected_credentials_required");
-    assertEquals(harness.storeCalls.length, 0);
+    // The request reaches the owner store: the mode is still READ and still
+    // VALIDATED, it simply no longer refuses.
+    assertEquals(response.status, 200);
+    assertEquals(harness.storeCalls.length, 1);
   }
 });
 

@@ -44,6 +44,18 @@
  *   all failures. Reading them as "no data" would turn a broken response
  *   into a successful but empty capture, and the accepted SQL would then
  *   record that emptiness as a fact about the account.
+ *
+ * WHY THE PERMIT IS ASKED AT THIS BOUNDARY
+ *
+ *   The authorization instant is the LAST permit immediately preceding a
+ *   provider request. This transport is the only place a request leaves the
+ *   process, so the permit is asked HERE: before every attempt, which means
+ *   before every internal retry, before every page of a paginated sweep and
+ *   before every per-media call.
+ *
+ *   A permit is never cached between requests, and a refused or failed
+ *   permit stops the attempt BEFORE the request is sent. The first excluded
+ *   request is never sent at all.
  */
 
 /** The provider ceiling of one attempt: headers AND body. */
@@ -131,6 +143,55 @@ export interface OwnerProviderResult<T> {
   readonly value: T;
   readonly usagePercent: number;
 }
+
+/**
+ * How a permit refused the request.
+ *
+ *   refused      the database refused the call for THIS target. The
+ *                condition belongs to one job alone.
+ *   unavailable  the permit could not be read, or the refusal could not be
+ *                audited. The outcome is unknown and belongs to the run.
+ */
+export type OwnerProviderPermitKind = "refused" | "unavailable";
+
+/**
+ * The provider request was not authorized.
+ *
+ * It carries a stable kind and a stable reason code. It never carries a
+ * token, a claim token, a policy list or provider text.
+ */
+export class OwnerProviderPermitError extends Error {
+  readonly kind: OwnerProviderPermitKind;
+  readonly reasonCode: string;
+  /**
+   * True when the exception-path audit row did NOT commit.
+   *
+   * The work then stops and the audit failure is reported: a row that did
+   * not commit is never reported as a stored row.
+   */
+  readonly auditFailed: boolean;
+
+  constructor(
+    kind: OwnerProviderPermitKind,
+    reasonCode: string,
+    auditFailed = false,
+  ) {
+    super("The collection request was not authorized.");
+    this.name = "OwnerProviderPermitError";
+    this.kind = kind;
+    this.reasonCode = reasonCode;
+    this.auditFailed = auditFailed;
+  }
+}
+
+/**
+ * The per-request admission gate.
+ *
+ * It resolves when the request is authorized and throws an
+ * `OwnerProviderPermitError` when it is not. It is called once per request,
+ * immediately before that request leaves the process.
+ */
+export type OwnerProviderPermit = (signal: AbortSignal) => Promise<void>;
 
 /** The public counts of one profile observation. */
 export interface OwnerProfileObservation {
@@ -625,6 +686,26 @@ export interface OwnerProviderTransportOptions {
 }
 
 /**
+ * Asks the permit for one request.
+ *
+ * A refusal leaves here unchanged, so the caller can tell a refused target
+ * from a failed credential. A permit that fails in any other way is
+ * UNAVAILABLE: the outcome of the admission decision is unknown, and an
+ * unknown outcome is never permission.
+ */
+async function askPermit(
+  permit: OwnerProviderPermit,
+  signal: AbortSignal,
+): Promise<void> {
+  try {
+    await permit(signal);
+  } catch (error) {
+    if (error instanceof OwnerProviderPermitError) throw error;
+    throw new OwnerProviderPermitError("unavailable", "permit_failed");
+  }
+}
+
+/**
  * The bounded HTTP transport of one provider family.
  *
  * It knows the URL it is given and nothing else: the host, the version and
@@ -650,6 +731,11 @@ export class OwnerProviderTransport {
    * The media insights calls ask for ONE attempt: the media continuation is
    * a bounded sweep inside one run, and a retry would spend the run's
    * budget twice for the same media.
+   *
+   * The PERMIT is asked before EVERY attempt, never once per call: a retry
+   * is a new request and it needs a new authorization. A refused or failed
+   * permit is NOT retried and NOT converted into a provider failure - it
+   * leaves this method immediately, so no request is sent.
    */
   async attempt(
     url: string,
@@ -657,6 +743,7 @@ export class OwnerProviderTransport {
     options: {
       readonly maxAttempts?: number;
       readonly attemptTimeoutMs?: number;
+      readonly permit?: OwnerProviderPermit;
     } = {},
   ): Promise<OwnerProviderAttempt> {
     const maxAttempts = Math.max(1, options.maxAttempts ?? 3);
@@ -669,6 +756,12 @@ export class OwnerProviderTransport {
           "The collection attempt was cancelled before the provider call.",
           { kind: "provider_error" },
         );
+      }
+
+      // THE AUTHORIZATION INSTANT. The last decision before the request
+      // goes out, asked again for every retry and every page.
+      if (options.permit !== undefined) {
+        await askPermit(options.permit, signal);
       }
 
       try {

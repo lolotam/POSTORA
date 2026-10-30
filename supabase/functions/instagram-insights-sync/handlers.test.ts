@@ -506,19 +506,48 @@ Deno.test("the actual registered route refuses a disabled collection before any 
   assertEquals(probe.settingReads.length, 1);
 });
 
-Deno.test("the actual registered route refuses a legacy credential mode", async () => {
+Deno.test("the actual registered route does not refuse a legacy credential mode", async () => {
+  // The global credential mode says WHERE a Facebook User secret is read
+  // from. It is not collection permission, so a readable `legacy` mode no
+  // longer refuses the request.
   const probe = newProbe();
   probe.appSettings = {
     collection_instagram_insights_enabled: { data: { value: true }, error: null },
     credential_facebook_user_mode: { data: { value: "legacy" }, error: null },
   };
+  probe.rpc = {
+    data: {
+      target_kind: "owner",
+      target_id: ACCOUNT_ID,
+      captured_on: CAPTURED_ON,
+      status: "partial",
+      job_generation: 3,
+      attempts: 2,
+      due_at: "2026-10-28T07:00:00+00:00",
+      next_retry_at: null,
+      last_attempt_at: "2026-10-28T07:00:00+00:00",
+      last_partial_at: "2026-10-28T07:00:00+00:00",
+      last_success_at: null,
+      reason_code: "provider_throttled",
+      inventory: {
+        truncated: false,
+        partial: false,
+        window_covered: true,
+        oldest_returned_at: "2026-10-28T07:00:00+00:00",
+        gap_reason: null,
+        pages_fetched: 4,
+      },
+      pending_operations: 7,
+    },
+    error: null,
+  };
 
   const handler = await loadRoute(probe);
   const response = await harnessRequest(handler);
 
-  assertEquals(response.status, 503);
-  assertEquals((await body(response)).error, "protected_credentials_required");
-  assertEquals(probe.rpcCalls.length, 0);
+  assertEquals(response.status, 200);
+  assertEquals(probe.rpcCalls.length, 1);
+  assertEquals(probe.rpcCalls[0]!.name, "read_instagram_collection_job_status");
 });
 
 async function harnessRequest(handler: RouteHandler): Promise<Response> {

@@ -104,8 +104,10 @@ const DIRECT_CREDENTIAL_ROW = {
 function createStore(
   responder: (name: string, args: Record<string, unknown>) => unknown,
   reads: { rows?: Record<string, unknown> | null; mediaRows?: unknown[] } = {},
+  writes: { stored?: boolean; fail?: boolean } = {},
 ) {
   const { rpc, calls } = createRpc(responder);
+  const auditRows: Record<string, unknown>[] = [];
   const store = createOwnerCollectionServiceStore({
     rpc,
     reads: {
@@ -121,8 +123,15 @@ function createStore(
         return { data: reads.mediaRows ?? [], error: null };
       },
     },
+    writes: {
+      async insertSystemLog(row) {
+        auditRows.push({ ...row.metadata, source: row.source, level: row.level });
+        if (writes.fail === true) throw new Error("the audit write failed");
+        return writes.stored ?? true;
+      },
+    },
   });
-  return { store, calls };
+  return { store, calls, auditRows };
 }
 
 // ---------------------------------------------------------------------------
@@ -922,4 +931,153 @@ Deno.test("no error text ever carries a secret", async () => {
   assertEquals(error.message.includes("secret_table"), false);
   assertStringIncludes(error.message, "could not complete");
   assert(error instanceof OwnerWorkerStoreError);
+});
+
+// ---------------------------------------------------------------------------
+// The provider permit
+// ---------------------------------------------------------------------------
+
+/** The granted permit of the accepted projection. */
+const PERMIT_ALLOWED_ROW = {
+  allowed: true,
+  job_id: TEST_JOB_ID,
+  target_kind: "owner",
+  target_id: TEST_ACCOUNT_ID,
+  viewer_social_account_id: TEST_ACCOUNT_ID,
+  job_generation: 3,
+  credential_generation: 7,
+  policy_fingerprint: "a".repeat(64),
+};
+
+function permitRequest() {
+  return {
+    jobId: TEST_JOB_ID,
+    claimToken: TEST_CLAIM_TOKEN,
+    jobGeneration: 3,
+  };
+}
+
+Deno.test("the permit call sends the accepted arguments and names nothing else", async () => {
+  const { store, calls } = createStore((name) => {
+    if (name === "authorize_instagram_collection_provider_call") {
+      return { data: PERMIT_ALLOWED_ROW, error: null };
+    }
+    return { data: null, error: null };
+  });
+
+  const decision = await store.authorizeProviderCall(permitRequest());
+
+  assertEquals(decision.kind, "allowed");
+  assertEquals(calls.length, 1);
+  assertEquals(calls[0]!.name, "authorize_instagram_collection_provider_call");
+  assertEquals(calls[0]!.args, {
+    p_job_id: TEST_JOB_ID,
+    p_claim_token: TEST_CLAIM_TOKEN,
+    p_job_generation: 3,
+  });
+});
+
+Deno.test("a refused permit is a refusal and the adapter writes no audit row", async () => {
+  const { store, auditRows } = createStore(() => ({
+    data: { allowed: false, reason_code: "collection_not_eligible" },
+    error: null,
+  }));
+
+  const decision = await store.authorizeProviderCall(permitRequest());
+
+  assertEquals(decision.kind, "refused");
+  assertEquals(decision.kind === "refused" ? decision.reasonCode : null,
+    "collection_not_eligible");
+  // The accepted SQL audits a normal refusal in the same committed
+  // transaction, so the adapter writes nothing.
+  assertEquals(auditRows.length, 0);
+});
+
+Deno.test("a permit that names another job is unavailable, never permission", async () => {
+  const { store, auditRows } = createStore(() => ({
+    data: { ...PERMIT_ALLOWED_ROW, job_id: "01810099-0000-4000-8000-000000000099" },
+    error: null,
+  }));
+
+  const decision = await store.authorizeProviderCall(permitRequest());
+
+  assertEquals(decision.kind, "unavailable");
+  assertEquals(auditRows.length, 1);
+  assertEquals(auditRows[0]!.event, "collection_provider_call_refused");
+  assertEquals(auditRows[0]!.reason_code, "malformed_envelope");
+});
+
+Deno.test("a permit with an extra key is unavailable, never permission", async () => {
+  const { store } = createStore(() => ({
+    data: { ...PERMIT_ALLOWED_ROW, access_token: "a-secret" },
+    error: null,
+  }));
+
+  const decision = await store.authorizeProviderCall(permitRequest());
+
+  assertEquals(decision.kind, "unavailable");
+});
+
+Deno.test("an unknown refusal reason is unavailable, never permission", async () => {
+  const { store } = createStore(() => ({
+    data: { allowed: false, reason_code: "everything_is_fine" },
+    error: null,
+  }));
+
+  const decision = await store.authorizeProviderCall(permitRequest());
+
+  assertEquals(decision.kind, "unavailable");
+});
+
+Deno.test("a permit that cannot be read is audited in a separate bounded call", async () => {
+  const { store, auditRows } = createStore(() => {
+    throw new Error("the connection was lost");
+  });
+
+  const decision = await store.authorizeProviderCall(permitRequest());
+
+  assertEquals(decision.kind, "unavailable");
+  assertEquals(decision.kind === "unavailable" ? decision.reasonCode : null,
+    "permit_read_failed");
+  assertEquals(decision.kind === "unavailable" ? decision.auditStored : null, true);
+  assertEquals(auditRows.length, 1);
+  assertEquals(auditRows[0]!.reason_code, "permit_read_failed");
+  assertEquals(auditRows[0]!.job_id, TEST_JOB_ID);
+});
+
+Deno.test("an audit that does not commit is reported as a failure, never as a stored row", async () => {
+  const { store, auditRows } = createStore(() => {
+    throw new Error("the connection was lost");
+  }, {}, { stored: false });
+
+  const decision = await store.authorizeProviderCall(permitRequest());
+
+  assertEquals(decision.kind, "unavailable");
+  assertEquals(decision.kind === "unavailable" ? decision.auditStored : null, false);
+  assertEquals(auditRows.length, 1);
+});
+
+Deno.test("the rollout schema that is not deployed makes the gate unavailable", async () => {
+  const { store } = createStore(() => ({
+    data: null,
+    error: { code: "PGRST202", message: "function does not exist" },
+  }));
+
+  const decision = await store.authorizeProviderCall(permitRequest());
+
+  assertEquals(decision.kind, "unavailable");
+  assertEquals(decision.kind === "unavailable" ? decision.reasonCode : null,
+    "schema_unavailable");
+});
+
+Deno.test("the audit row of a refusal never carries a token or a claim token", async () => {
+  const { store, auditRows } = createStore(() => {
+    throw new Error("the connection was lost");
+  });
+
+  await store.authorizeProviderCall(permitRequest());
+
+  const serialized = JSON.stringify(auditRows);
+  assertEquals(serialized.includes(TEST_CLAIM_TOKEN), false);
+  assertEquals(serialized.includes("access_token"), false);
 });

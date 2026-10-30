@@ -295,16 +295,18 @@ Deno.test("a disabled collection refuses the drain before the worker is built", 
   assertEquals(harness.settingsReads, ["collection_instagram_insights_enabled"]);
 });
 
-Deno.test("a legacy credential mode refuses the drain before the worker is built", async () => {
+Deno.test("a legacy credential mode does not refuse the drain", async () => {
+  // The global credential mode is read for its validity, not as collection
+  // permission. Which accounts may be collected for is decided by the
+  // rollout policy in SQL, per account and per request.
   const harness = createHarness({
     settings: { credential_facebook_user_mode: { data: { value: "legacy" }, error: null } },
   });
 
   const response = await harness.handler(post({ action: "drain" }, CRON_SECRET));
 
-  assertEquals(response.status, 503);
-  assertEquals((await json(response)).error, "protected_credentials_required");
-  assertEquals(harness.workerBuilds, 0);
+  assertEquals(response.status, 200);
+  assertEquals(harness.workerBuilds, 1);
 });
 
 Deno.test("a malformed setting is unavailable, never absent", async () => {

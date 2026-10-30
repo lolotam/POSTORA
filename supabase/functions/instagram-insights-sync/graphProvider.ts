@@ -60,6 +60,7 @@ import {
   MEDIA_INSIGHT_ATTEMPT_TIMEOUT_MS,
   MAX_RESPONSE_BYTES,
   OwnerProviderError,
+  OwnerProviderPermitError,
   OwnerProviderTransport,
   PROVIDER_ATTEMPT_TIMEOUT_MS,
   USAGE_STOP_PERCENT,
@@ -81,6 +82,7 @@ import {
   type OwnerProfileObservation,
   type OwnerProviderErrorKind,
   type OwnerProviderErrorOptions,
+  type OwnerProviderPermit,
   type OwnerProviderResult,
 } from "./providerTransport.ts";
 
@@ -103,6 +105,7 @@ export {
   MAX_RESPONSE_BYTES,
   PROVIDER_ATTEMPT_TIMEOUT_MS,
   OwnerProviderError,
+  OwnerProviderPermitError,
   USAGE_STOP_PERCENT,
   classifyOwnerGraphError,
   parseOwnerUsagePercent,
@@ -119,6 +122,7 @@ export type {
   OwnerProfileObservation,
   OwnerProviderErrorKind,
   OwnerProviderErrorOptions,
+  OwnerProviderPermit,
   OwnerProviderResult,
 };
 
@@ -300,12 +304,21 @@ export class InstagramGraphProvider {
     readonly igUserId: string;
     readonly token: string;
     readonly signal: AbortSignal;
+    /**
+     * The per-request admission permit.
+     *
+     * It is asked immediately before the request leaves the process. It is
+     * never optional in production: the caller always binds it.
+     */
+    readonly permit?: OwnerProviderPermit;
   }): Promise<OwnerProviderResult<OwnerProfileObservation>> {
     const url = `${GRAPH_HOST}/${this.#apiVersion}/${encodeURIComponent(input.igUserId)}` +
       `?fields=followers_count,media_count` +
       `&access_token=${encodeURIComponent(input.token)}`;
 
-    const response = await this.#transport.attempt(url, input.signal);
+    const response = await this.#transport.attempt(url, input.signal, {
+      permit: input.permit,
+    });
 
     const payload = this.#requireObject(response.payload);
     const followers = readProviderCount(payload, "followers_count");
@@ -344,6 +357,7 @@ export class InstagramGraphProvider {
     readonly token: string;
     readonly date: string;
     readonly signal: AbortSignal;
+    readonly permit?: OwnerProviderPermit;
   }): Promise<OwnerProviderResult<OwnerAccountDay>> {
     const since = Date.parse(`${input.date}T00:00:00+03:00`);
     const until = since + 86_400_000 - 1;
@@ -354,7 +368,9 @@ export class InstagramGraphProvider {
       `&since=${Math.floor(since / 1000)}&until=${Math.floor(until / 1000)}` +
       `&access_token=${encodeURIComponent(input.token)}`;
 
-    const response = await this.#transport.attempt(url, input.signal);
+    const response = await this.#transport.attempt(url, input.signal, {
+      permit: input.permit,
+    });
     const rows = requireProviderDataArray(response.payload);
 
     const metrics: {
@@ -438,6 +454,7 @@ export class InstagramGraphProvider {
     readonly mediaProductType: string | null;
     readonly mediaType: string | null;
     readonly signal: AbortSignal;
+    readonly permit?: OwnerProviderPermit;
   }): Promise<OwnerProviderResult<OwnerMediaInsights>> {
     const metrics = mediaInsightMetricsFor(input.mediaProductType, input.mediaType);
 
@@ -448,6 +465,7 @@ export class InstagramGraphProvider {
     const response = await this.#transport.attempt(url, input.signal, {
       maxAttempts: 1,
       attemptTimeoutMs: MEDIA_INSIGHT_ATTEMPT_TIMEOUT_MS,
+      permit: input.permit,
     });
     const rows = requireProviderDataArray(response.payload);
 
@@ -511,6 +529,7 @@ export class InstagramGraphProvider {
     readonly maxPages: number;
     readonly pageSize?: number;
     readonly signal: AbortSignal;
+    readonly permit?: OwnerProviderPermit;
   }): Promise<OwnerProviderResult<OwnerMediaSweep>> {
     const windowStart = Date.parse(`${input.windowStart}T00:00:00Z`);
     const pageSize = input.pageSize ?? MEDIA_PAGE_SIZE;
@@ -530,7 +549,9 @@ export class InstagramGraphProvider {
         (cursor === null ? "" : `&after=${encodeURIComponent(cursor)}`) +
         `&access_token=${encodeURIComponent(input.token)}`;
 
-      const response = await this.#transport.attempt(url, input.signal);
+      const response = await this.#transport.attempt(url, input.signal, {
+        permit: input.permit,
+      });
       usagePercent = Math.max(usagePercent, response.usagePercent);
       pagesFetched += 1;
 

@@ -41,6 +41,15 @@
  *   gates change no setting: disabling collection never moves an account
  *   back to legacy credentials.
  *
+ * WHY THE CREDENTIAL MODE IS NOT COLLECTION PERMISSION
+ *
+ *   The global credential mode says WHERE a Facebook User secret is read
+ *   from. It does not say WHICH accounts may be collected for: that is the
+ *   rollout policy, and the accepted SQL decides it per account, per target
+ *   and per request. So the mode is still READ and still VALIDATED here -
+ *   a malformed or unreadable mode is still unavailable - but a readable
+ *   `legacy` mode is no longer a refusal.
+ *
  * ONE DEADLINE
  *
  *   The whole operation has fifteen seconds, counted from before the body
@@ -118,7 +127,14 @@ export type OwnerIntakeErrorCode =
   | "not_found"
   | "throttled"
   | "collection_disabled"
-  | "protected_credentials_required"
+  /**
+   * The rollout policy does not admit this target.
+   *
+   * It is a DEFINITE refusal of a target that IS owned by the caller: the
+   * account exists and belongs to the caller, and the collection policy
+   * simply does not admit it yet.
+   */
+  | "collection_not_eligible"
   | "settings_unavailable"
   | "service_auth_unavailable"
   | "enqueue_indeterminate"
@@ -666,6 +682,14 @@ export function createInstagramInsightsSyncHandler(
      * They are read BEFORE any job schema, RPC, credential or provider
      * access, for the owner actions and for the service drain alike. A
      * refusal is returned; `null` means the caller may continue.
+     *
+     * The CREDENTIAL MODE IS VALIDATED, NOT ENFORCED. A malformed or
+     * unreadable mode is still UNAVAILABLE, never "absent" and never
+     * "off". A readable mode of `legacy` or `protected` is NOT a refusal:
+     * the global mode says where a Facebook User secret lives, and it is
+     * not collection permission. Which accounts may be collected for is
+     * decided by the rollout policy in SQL, per account, and this endpoint
+     * never decides it.
      */
     const readGates = async (): Promise<Response | null> => {
       // The shared classifier and the shared resolvers own the setting
@@ -708,17 +732,15 @@ export function createInstagramInsightsSyncHandler(
         return await refuse(503, "collection_disabled");
       }
 
-      let credentialMode: string;
       try {
-        credentialMode = resolveFacebookCredentialMode(
+        // The mode is read for its validity, NOT as collection permission.
+        // `legacy` and `protected` are both usable; the resolver has already
+        // refused anything else as a malformed setting.
+        resolveFacebookCredentialMode(
           await readRequiredSetting(FACEBOOK_CREDENTIAL_MODE_SETTING_KEY),
         );
       } catch {
         return await refuse(503, "settings_unavailable");
-      }
-
-      if (credentialMode !== "protected") {
-        return await refuse(503, "protected_credentials_required");
       }
 
       return null;
@@ -1008,6 +1030,21 @@ export function createInstagramInsightsSyncHandler(
         return await finish(429, accepted.projection, "throttled", {
           "Retry-After": String(retryAfter),
         });
+      }
+
+      if (accepted.kind === "refused") {
+        // A DEFINITE rollout refusal. The target IS owned by the caller, and
+        // the policy simply does not admit it yet: 403. An unavailable or
+        // disabled configuration is 503, and it is never reported as a
+        // refusal of the caller's account.
+        const reason = accepted.projection.reason_code;
+        if (reason === "collection_not_eligible") {
+          return await refuse(403, "collection_not_eligible");
+        }
+        if (reason === "collection_disabled") {
+          return await refuse(503, "collection_disabled");
+        }
+        return await refuse(503, "settings_unavailable");
       }
 
       return await finish(202, accepted.projection, "enqueued");

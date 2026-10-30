@@ -164,18 +164,33 @@
  *   window was covered, and which work is still owed. A truncated inventory
  *   is not a full success, and the accepted SQL refuses a `completed`
  *   completion for one.
+ *
+ * THE PERMIT IS ASKED AT THE TRANSPORT BOUNDARY
+ *
+ *   The accepted SQL decides WHICH targets may be collected for, and it
+ *   answers that question again immediately before every provider request.
+ *   The worker binds a FRESH permit callback to the request loop of the
+ *   adapter it uses, so the permit is asked before every attempt, every
+ *   retry, every page of a sweep and every per-media call.
+ *
+ *   A refused or failed permit stops the work: no later request is sent and
+ *   no successful write is made. The job is abandoned to its lease - a
+ *   rollout refusal never marks a target unavailable, never revokes a
+ *   credential and never advances a success.
  */
 
 import {
   InstagramGraphProvider,
   MEDIA_INSIGHT_ATTEMPT_TIMEOUT_MS,
   OwnerProviderError,
+  OwnerProviderPermitError,
   USAGE_STOP_PERCENT,
   type MediaSweepStop,
   type OwnerAccountDay,
   type OwnerMediaInsights,
   type OwnerMediaSweep,
   type OwnerProfileObservation,
+  type OwnerProviderPermit,
   type OwnerProviderResult,
 } from "./graphProvider.ts";
 import { InstagramDirectGraphProvider } from "./directGraphProvider.ts";
@@ -349,6 +364,22 @@ export type OwnerReasonCode =
   | "context_missing"
   /** The target account row is gone. */
   | "target_missing"
+  /**
+   * The rollout policy no longer admits this target.
+   *
+   * The accepted SQL refused the request, so no request was sent and
+   * nothing was written. The job is abandoned to its lease and the run
+   * continues with the next claimed owner.
+   */
+  | "collection_not_eligible"
+  /**
+   * The admission gate could not be read, or its refusal could not be
+   * audited.
+   *
+   * The outcome is UNKNOWN, so the run stops rather than repeating work
+   * that may already have happened.
+   */
+  | "collection_unavailable"
   /** A store call failed or a step ran out of budget. Nothing was stored. */
   | "storage_error"
   /** A step did not finish inside the run budget. */
@@ -409,12 +440,14 @@ export interface OwnerCollectionProvider {
     readonly igUserId: string;
     readonly token: string;
     readonly signal: AbortSignal;
+    readonly permit: OwnerProviderPermit;
   }): Promise<OwnerProviderResult<OwnerProfileObservation>>;
   fetchAccountDay(input: {
     readonly igUserId: string;
     readonly token: string;
     readonly date: string;
     readonly signal: AbortSignal;
+    readonly permit: OwnerProviderPermit;
   }): Promise<OwnerProviderResult<OwnerAccountDay>>;
   fetchMediaInsights(input: {
     readonly igMediaId: string;
@@ -422,6 +455,7 @@ export interface OwnerCollectionProvider {
     readonly mediaProductType: string | null;
     readonly mediaType: string | null;
     readonly signal: AbortSignal;
+    readonly permit: OwnerProviderPermit;
   }): Promise<OwnerProviderResult<OwnerMediaInsights>>;
   fetchMediaWindow(input: {
     readonly igUserId: string;
@@ -432,6 +466,7 @@ export interface OwnerCollectionProvider {
     readonly maxPages: number;
     readonly pageSize?: number;
     readonly signal: AbortSignal;
+    readonly permit: OwnerProviderPermit;
   }): Promise<OwnerProviderResult<OwnerMediaSweep>>;
 }
 
@@ -812,6 +847,23 @@ function canStartMediaInsightCall(context: JobContext): boolean {
 }
 
 /**
+ * True when the credential authority reported an expiry that has passed.
+ *
+ * A null expiry is UNKNOWN and is never expired: the provider stays the
+ * authority on a credential whose lifetime the database does not state.
+ *
+ * The instant is the one the visit already read. A token that expires
+ * DURING the visit is refused by the provider, and a token that was already
+ * expired when the visit began is refused here, before any request.
+ */
+function isExpired(tokenExpiresAt: string | null, visitStartedAt: number): boolean {
+  if (tokenExpiresAt === null) return false;
+  const parsed = Date.parse(tokenExpiresAt);
+  if (Number.isNaN(parsed)) return false;
+  return parsed <= visitStartedAt;
+}
+
+/**
  * The bound context of an owner job.
  *
  * The claim binds the target account itself, so the captured viewer must be
@@ -1014,6 +1066,14 @@ interface VisitCredential {
   readonly token: string;
   /** The shared throttle bucket key of this credential. */
   readonly bucketKey: string;
+  /**
+   * The per-request admission permit of THIS job.
+   *
+   * It is bound to the job, its claim token and its generation, so it can
+   * never authorize a request for another job. It is asked again before
+   * every request: never cached.
+   */
+  readonly permit: OwnerProviderPermit;
 }
 
 /**
@@ -1188,6 +1248,98 @@ async function readTarget(context: JobContext): Promise<StepResult<OwnerTarget>>
 }
 
 /**
+ * The per-request admission permit of ONE job.
+ *
+ * It asks the accepted SQL for a FRESH permit immediately before every
+ * provider request. The call names the job, its claim token and its
+ * generation and NOTHING else, so the database derives the owner, the
+ * target and the viewer from the live fenced job - a caller can never
+ * redirect the request to another account.
+ *
+ * A refused permit is a refusal. A permit that could not be read is
+ * UNAVAILABLE: the outcome of the decision is unknown, and an unknown
+ * outcome is never permission.
+ */
+function visitPermit(context: JobContext): OwnerProviderPermit {
+  const { ports, job } = context;
+
+  return async (signal: AbortSignal): Promise<void> => {
+    const decision = await ports.store.authorizeProviderCall({
+      jobId: job.jobId,
+      claimToken: job.claimToken,
+      jobGeneration: job.jobGeneration,
+      signal,
+    });
+
+    if (decision.kind === "allowed") return;
+
+    if (decision.kind === "refused") {
+      throw new OwnerProviderPermitError("refused", decision.reasonCode);
+    }
+
+    throw new OwnerProviderPermitError(
+      "unavailable",
+      decision.reasonCode,
+      !decision.auditStored,
+    );
+  };
+}
+
+/**
+ * The refusal of the admission gate.
+ *
+ * A REFUSED permit is a condition of ONE job: the policy no longer admits
+ * this target, so the job is abandoned to its lease and the run continues
+ * with the next claimed owner. No later request is sent and NOTHING is
+ * written: a rollout refusal never marks a target unavailable, never
+ * revokes a credential and never advances a success.
+ *
+ * An UNAVAILABLE permit - the gate could not be read, or its refusal could
+ * not be audited - is a condition of the RUN: the outcome is unknown, so
+ * the run stops rather than repeating work that may already have happened.
+ */
+async function handlePermitFailure(
+  context: JobContext,
+  error: OwnerProviderPermitError,
+): Promise<JobStep> {
+  const { ports, job } = context;
+
+  const configurationRefusal = error.reasonCode === "collection_disabled" ||
+    error.reasonCode === "settings_unavailable";
+  const stopRun = error.kind === "unavailable" || configurationRefusal;
+  const reasonCode: OwnerReasonCode = stopRun
+    ? "collection_unavailable"
+    : "collection_not_eligible";
+
+  // The log carries the reason the DATABASE gave, verbatim. It is one of
+  // the closed reason codes of the accepted SQL: never provider text, never
+  // a policy list and never a credential.
+  ports.log({
+    event: "owner_provider_call_refused",
+    jobId: job.jobId,
+    socialAccountId: job.socialAccountId,
+    outcome: "abandoned",
+    reasonCode: error.reasonCode,
+    durationMs: ports.now() - context.startedAt,
+  });
+
+  if (error.auditFailed) {
+    // The refusal row did not commit. The work stops and the audit failure
+    // is reported: a row that did not commit is never reported as stored.
+    ports.log({
+      event: "owner_provider_call_audit_failed",
+      jobId: job.jobId,
+      socialAccountId: job.socialAccountId,
+      outcome: "abandoned",
+      reasonCode: "collection_unavailable",
+      durationMs: ports.now() - context.startedAt,
+    });
+  }
+
+  return { job: result(context, "abandoned", reasonCode), stopRun };
+}
+
+/**
  * The trusted capability, the credential and the bucket of this visit.
  *
  * The capability is read BEFORE the protected credential, because a
@@ -1299,6 +1451,17 @@ async function resolveDirectCredential(
     return { kind: "end", step: await abandon(context, "credential_changed") };
   }
 
+  // Readiness is not presence. A credential the authority reports as EXPIRED
+  // is not ready, and no provider call is spent on it: the answer is known
+  // before the request, so it is never an exploratory probe. A null expiry
+  // is UNKNOWN, not expired, and the provider stays the authority on it.
+  if (isExpired(directCredential.tokenExpiresAt, context.startedAt)) {
+    return {
+      kind: "end",
+      step: await persistFailure(context, "retry", "credential_unavailable"),
+    };
+  }
+
   // The fenced reader names the Instagram user its token belongs to. Every
   // provider call below targets the account row's user id, so the two must
   // agree; otherwise the token is not spent.
@@ -1323,6 +1486,7 @@ async function resolveDirectCredential(
       provider: ports.directProvider,
       token: directCredential.accessToken,
       bucketKey,
+      permit: visitPermit(context),
     },
   };
 }
@@ -1378,6 +1542,16 @@ async function resolveProtectedCredential(
     return { kind: "end", step: await abandon(context, "credential_changed") };
   }
 
+  // Readiness is not presence. A protected credential the authority reports
+  // as EXPIRED is not ready, and no provider call is spent on it. A null
+  // expiry is UNKNOWN, not expired.
+  if (isExpired(credential.tokenExpiresAt, context.startedAt)) {
+    return {
+      kind: "end",
+      step: await persistFailure(context, "retry", "credential_unavailable"),
+    };
+  }
+
   // The bucket key is a digest of two non-secret values. It is still a
   // step: a runtime without SHA-256 must fail inside the budget rather than
   // hang the worker.
@@ -1392,6 +1566,7 @@ async function resolveProtectedCredential(
       provider: ports.provider,
       token: credential.token,
       bucketKey,
+      permit: visitPermit(context),
     },
   };
 }
@@ -1540,6 +1715,7 @@ async function collectDays(
         igUserId: target.platformUserId,
         token: token,
         signal,
+        permit: credential.permit,
       })
     );
     visit.usagePercent = Math.max(visit.usagePercent, profile.usagePercent);
@@ -1547,6 +1723,9 @@ async function collectDays(
     visit.usageStop = visit.usagePercent >= USAGE_STOP_PERCENT;
   } catch (error) {
     if (error instanceof BudgetExceededError) throw error;
+    if (error instanceof OwnerProviderPermitError) {
+      return { kind: "end", step: await handlePermitFailure(context, error) };
+    }
     return {
       kind: "end",
       step: await handleProviderFailure(context, credential.bucketKey, error, visit),
@@ -1599,6 +1778,7 @@ async function collectDays(
           token: token,
           date: day,
           signal,
+          permit: credential.permit,
         })
       );
       visit.usagePercent = Math.max(visit.usagePercent, answer.usagePercent);
@@ -1606,6 +1786,9 @@ async function collectDays(
       dayValue = answer.value;
     } catch (error) {
       if (error instanceof BudgetExceededError) throw error;
+      if (error instanceof OwnerProviderPermitError) {
+        return { kind: "end", step: await handlePermitFailure(context, error) };
+      }
       return {
         kind: "end",
         step: await handleProviderFailure(context, credential.bucketKey, error, visit),
@@ -1691,6 +1874,7 @@ async function sweepInventory(
         cursor: visit.cursor,
         maxPages: MEDIA_PAGES_PER_ATTEMPT,
         signal,
+        permit: credential.permit,
       })
     );
     visit.usagePercent = Math.max(visit.usagePercent, sweep.usagePercent);
@@ -1698,6 +1882,9 @@ async function sweepInventory(
     sweepValue = sweep.value;
   } catch (error) {
     if (error instanceof BudgetExceededError) throw error;
+    if (error instanceof OwnerProviderPermitError) {
+      return { kind: "end", step: await handlePermitFailure(context, error) };
+    }
     return {
       kind: "end",
       step: await handleProviderFailure(context, credential.bucketKey, error, visit),
@@ -1858,6 +2045,7 @@ async function drainMediaQueue(
             mediaProductType: row.mediaProductType,
             mediaType: row.mediaType,
             signal,
+            permit: credential.permit,
           })
         );
         visit.usagePercent = Math.max(visit.usagePercent, answer.usagePercent);
@@ -1865,6 +2053,9 @@ async function drainMediaQueue(
         insights = answer.value;
       } catch (error) {
         if (error instanceof BudgetExceededError) throw error;
+        if (error instanceof OwnerProviderPermitError) {
+          return { kind: "end", step: await handlePermitFailure(context, error) };
+        }
         if (error instanceof OwnerProviderError) {
           if (error.kind === "rate_limited") {
             // The provider is throttling: the progress of this visit is

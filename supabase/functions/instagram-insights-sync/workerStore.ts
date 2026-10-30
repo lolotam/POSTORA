@@ -51,6 +51,17 @@
  *   count is not evidence that the write happened as asked. It is
  *   indeterminate, and the caller abandons the job to its lease rather than
  *   reporting a success.
+ *
+ * WHY THE PERMIT IS READ HERE AND NOT IN THE WORKER
+ *
+ *   The per-request admission gate is a DATABASE decision: the accepted SQL
+ *   derives every identity from the live fenced job, checks the current
+ *   policy and returns a typed permit or a typed refusal. This module is the
+ *   adapter of that call, so it owns the strict parsing of the answer AND
+ *   the exception-path audit: a normal refusal is audited by the accepted
+ *   SQL in the same committed transaction, and a permit that could not be
+ *   read at all never reached that audit, so this module writes the row in a
+ *   separate bounded call and reports whether it committed.
  */
 
 import {
@@ -66,16 +77,67 @@ import {
   parseCompleteReceipt,
   parseDirectOwnerCredential,
   parseProgressReceipt,
+  parseProviderPermit,
   parseSnapshotReceipt,
   parseThrottleReceipt,
   readOwnData,
+  type AllowedProviderPermit,
   type ClaimedOwnerJob,
   type CompleteReceipt,
   type DirectOwnerCredential,
   type OwnerJobOutcome,
   type ProgressReceipt,
+  type ProviderPermitRefusalReason,
   type SnapshotReceipt,
 } from "./receipts.ts";
+
+/**
+ * The narrow write surface of the service client.
+ *
+ * The ONLY row this feature writes directly is the EXCEPTION-PATH audit row:
+ * a refusal the database could not audit itself, because the statement never
+ * reached it. A normal refusal is audited by the accepted SQL in the same
+ * committed transaction, and this port is not used for it.
+ */
+export interface OwnerServiceWritePort {
+  /**
+   * Writes one sanitized audit row.
+   *
+   * It answers whether the row COMMITTED. A failed write is false, never a
+   * stored row, and the caller stops the work and reports the audit failure.
+   */
+  insertSystemLog(row: OwnerSystemLogRow): Promise<boolean>;
+}
+
+/** One bounded, sanitized audit row. It never carries a token or a header. */
+export interface OwnerSystemLogRow {
+  readonly source: string;
+  readonly category: string;
+  readonly level: string;
+  readonly message: string;
+  readonly userId: string | null;
+  readonly metadata: Record<string, unknown>;
+}
+
+/**
+ * The outcome of the per-request admission gate.
+ *
+ *   allowed      the permit was granted for THIS job and generation.
+ *   refused      the database refused the call. Its own audit row committed
+ *                with the refusal, so nothing is written here.
+ *   unavailable  the permit could not be read at all, so the outcome is
+ *                UNKNOWN. The exception-path audit row is attempted in a
+ *                separate bounded call, and `auditStored` says whether it
+ *                committed.
+ */
+export type ProviderPermitDecision =
+  | { readonly kind: "allowed"; readonly permit: AllowedProviderPermit }
+  | { readonly kind: "refused"; readonly reasonCode: ProviderPermitRefusalReason }
+  | {
+    readonly kind: "unavailable";
+    readonly reasonCode: string;
+    readonly auditStored: boolean;
+  };
 
 /** The tables this feature reads with the service role. */
 export type OwnerServiceTable =
@@ -270,6 +332,14 @@ export interface ResolvedOwnerCredential {
   readonly credentialId: string;
   /** The credential generation the credential was read at. */
   readonly capabilityGeneration: number;
+  /**
+   * The expiry the protected authority reported, or null when it reported
+   * none.
+   *
+   * Readiness is not presence: a KNOWN expired credential is not ready, and
+   * a null expiry is unknown rather than expired.
+   */
+  readonly tokenExpiresAt: string | null;
 }
 
 /**
@@ -420,6 +490,23 @@ export interface OwnerCollectionServiceStore {
     readonly signal?: AbortSignal;
   }): Promise<ResolvedOwnerCredential>;
   /**
+   * The per-request admission permit.
+   *
+   * The database derives every identity from the LIVE fenced job, so this
+   * call names the job, its claim token and its generation and NOTHING
+   * else: it can never redirect the request to another owner, another
+   * account or another viewer.
+   *
+   * The answer is a typed decision. A refusal is a refusal, a permit that
+   * could not be read is UNAVAILABLE, and neither is ever permission.
+   */
+  authorizeProviderCall(input: {
+    readonly jobId: string;
+    readonly claimToken: string;
+    readonly jobGeneration: number;
+    readonly signal?: AbortSignal;
+  }): Promise<ProviderPermitDecision>;
+  /**
    * The operational token of a DIRECT Instagram login.
    *
    * The database derives the owner and the target from the fenced job
@@ -491,6 +578,11 @@ export interface OwnerCollectionServiceStore {
 export interface OwnerCollectionServiceStoreDeps {
   readonly rpc: OwnerServiceRpcCaller;
   readonly reads: OwnerServiceReadPort;
+  /**
+   * The narrow write surface. It is used for the EXCEPTION-PATH audit only:
+   * a permit refusal the accepted SQL could not audit itself.
+   */
+  readonly writes: OwnerServiceWritePort;
 }
 
 /**
@@ -605,6 +697,112 @@ function mapCredentialError(error: unknown): OwnerWorkerStoreError {
     return new OwnerWorkerStoreError("rpc_failed", error.sqlstate);
   }
   return new OwnerWorkerStoreError("rpc_failed");
+}
+
+/**
+ * The permit call's envelope.
+ *
+ * A completed read is a plain record with an own `error` that is exactly
+ * null and an own `data`. Everything else - a missing field, a driver error,
+ * a thrown transport failure - is UNREADABLE: the outcome of the admission
+ * decision is unknown, and it is never permission.
+ */
+type PermitEnvelope =
+  | { readonly kind: "read"; readonly data: unknown }
+  | { readonly kind: "unreadable"; readonly reasonCode: string };
+
+/**
+ * Reads the permit call's envelope.
+ *
+ * Only the SQLSTATE is read, and only to tell a schema that is not deployed
+ * from an operational failure. The message is never copied.
+ */
+async function readPermitEnvelope(
+  rpc: OwnerServiceRpcCaller,
+  input: {
+    readonly jobId: string;
+    readonly claimToken: string;
+    readonly jobGeneration: number;
+    readonly signal?: AbortSignal;
+  },
+): Promise<PermitEnvelope> {
+  let envelope: unknown;
+  try {
+    envelope = await rpc(
+      "authorize_instagram_collection_provider_call",
+      {
+        p_job_id: input.jobId,
+        p_claim_token: input.claimToken,
+        p_job_generation: input.jobGeneration,
+      },
+      input.signal,
+    );
+  } catch {
+    // A thrown transport failure never reached the accepted SQL, so the
+    // statement may or may not have run. It is a failure, never a permit.
+    return { kind: "unreadable", reasonCode: "permit_read_failed" };
+  }
+
+  if (!isPlainRecord(envelope)) {
+    return { kind: "unreadable", reasonCode: "malformed_envelope" };
+  }
+
+  const error = readOwnData(envelope, "error");
+  const data = readOwnData(envelope, "data");
+  if (!error.present || !data.present) {
+    return { kind: "unreadable", reasonCode: "malformed_envelope" };
+  }
+
+  if (error.value !== null) {
+    const code = isPlainRecord(error.value)
+      ? readOwnData(error.value, "code").value
+      : undefined;
+    const sqlstate = typeof code === "string" ? code : null;
+    if (sqlstate === "PGRST202" || sqlstate === "42883") {
+      // The accepted migration is not deployed. The gate is unavailable, so
+      // it fails closed: no provider request is authorized without it.
+      return { kind: "unreadable", reasonCode: "schema_unavailable" };
+    }
+    return { kind: "unreadable", reasonCode: "permit_read_failed" };
+  }
+
+  return { kind: "read", data: data.value };
+}
+
+/**
+ * Writes the EXCEPTION-PATH audit row.
+ *
+ * The accepted SQL audits a NORMAL refusal in the same committed
+ * transaction. This row is for the refusal that never reached that audit:
+ * the permit could not be read at all. It is bounded and sanitized - an
+ * event, a reason code and the job id - and it never carries a token, a
+ * claim token, a policy list or a provider payload.
+ *
+ * It answers whether the row COMMITTED. A failed write is never reported as
+ * a stored row.
+ */
+async function auditProviderRefusal(
+  writes: OwnerServiceWritePort,
+  jobId: string,
+  reasonCode: string,
+): Promise<boolean> {
+  try {
+    return await writes.insertSystemLog({
+      source: "instagram-collection-rollout",
+      category: "database",
+      level: "warn",
+      message: "Instagram collection provider call refused",
+      userId: null,
+      metadata: {
+        event: "collection_provider_call_refused",
+        reason_code: reasonCode,
+        job_id: jobId,
+        action: "authorize_provider_call",
+      },
+    });
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -763,7 +961,56 @@ export function createOwnerCollectionServiceStore(
         token: binding.token,
         credentialId: binding.credentialId,
         capabilityGeneration: generation,
+        tokenExpiresAt: binding.tokenExpiresAt,
       };
+    },
+
+    async authorizeProviderCall(input) {
+      const envelope = await readPermitEnvelope(deps.rpc, input);
+
+      if (envelope.kind === "unreadable") {
+        // The permit could not be read. The accepted SQL never saw this
+        // call, so IT could not audit it either: the row is written here, in
+        // a separate bounded call, and the answer says whether it committed.
+        const auditStored = await auditProviderRefusal(
+          deps.writes,
+          input.jobId,
+          envelope.reasonCode,
+        );
+        return {
+          kind: "unavailable",
+          reasonCode: envelope.reasonCode,
+          auditStored,
+        };
+      }
+
+      const permit = parseProviderPermit(envelope.data, {
+        jobId: input.jobId,
+        jobGeneration: input.jobGeneration,
+      });
+
+      if (permit === null) {
+        // The answer is not the projection this contract knows. It is
+        // unavailable, never permission, and the refusal is audited here.
+        const auditStored = await auditProviderRefusal(
+          deps.writes,
+          input.jobId,
+          "malformed_envelope",
+        );
+        return {
+          kind: "unavailable",
+          reasonCode: "malformed_envelope",
+          auditStored,
+        };
+      }
+
+      if (!permit.allowed) {
+        // The accepted SQL refused the call and audited it in the same
+        // committed transaction. Nothing is written here.
+        return { kind: "refused", reasonCode: permit.reasonCode };
+      }
+
+      return { kind: "allowed", permit };
     },
 
     async resolveDirectOwnerCredential(input) {
