@@ -39,7 +39,7 @@ export type CompetitorListProps = {
   onOpenDetail: (watchlistId: string) => void;
   onRetryCollection: (entry: CompetitorReportEntry) => void;
   isRetryPending: (watchlistId: string) => boolean;
-  onRemove: (entry: CompetitorReportEntry) => void;
+  onRemove: (entry: CompetitorReportEntry, trigger: HTMLElement) => void;
   onReactivate: (entry: CompetitorReportEntry) => void;
   isReactivatePending: (watchlistId: string) => boolean;
   collectionStatus: (watchlistId: string) => CompetitorCollectionStatus | null;
@@ -418,7 +418,7 @@ export function CompetitorList({
                             variant="ghost"
                             className="text-destructive hover:text-destructive"
                             aria-label={`${t("competitors.remove", "Remove")} ${displayInstagramHandle(entry.username)}`}
-                            onClick={() => onRemove(entry)}
+                            onClick={(event) => onRemove(entry, event.currentTarget)}
                           >
                             {t("competitors.remove", "Remove")}
                           </Button>

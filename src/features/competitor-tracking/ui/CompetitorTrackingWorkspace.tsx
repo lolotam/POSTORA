@@ -76,6 +76,9 @@ export function CompetitorTrackingWorkspace({
   const [notice, setNotice] = useState<Notice | null>(null);
 
   const headingRef = useRef<HTMLHeadingElement>(null);
+  // The dialog opens from state, with no AlertDialogTrigger, so Radix
+  // has no control to return to. This is the Remove button of the row.
+  const removeTriggerRef = useRef<HTMLElement | null>(null);
 
   const list = useCompetitorList({ gateway, userId, state });
   const quota = useCompetitorQuota({ gateway, userId });
@@ -161,6 +164,10 @@ export function CompetitorTrackingWorkspace({
     removeMutation.mutate(removeTarget.watchlist_id, {
       onSuccess: (result) => {
         if (result.outcome === "removed") {
+          // The row is leaving. Drop the trigger before the dialog
+          // closes, or the close would pull focus back onto it and
+          // fight the list heading.
+          removeTriggerRef.current = null;
           setRemoveTarget(null);
           focusListHeading();
           return;
@@ -306,7 +313,8 @@ export function CompetitorTrackingWorkspace({
         onOpenDetail={(watchlistId) => setSelectedWatchlistId(watchlistId)}
         onRetryCollection={handleRetryCollection}
         isRetryPending={retryGuard.isPending}
-        onRemove={(entry) => {
+        onRemove={(entry, trigger) => {
+          removeTriggerRef.current = trigger;
           setNotice(null);
           setRemoveTarget(entry);
         }}
@@ -353,6 +361,7 @@ export function CompetitorTrackingWorkspace({
         isPending={removeMutation.isPending}
         errorMessage={removeError}
         indeterminate={removeIndeterminate}
+        returnFocusTo={removeTriggerRef}
       />
 
       {/* The live region of the screen. It announces what changed and

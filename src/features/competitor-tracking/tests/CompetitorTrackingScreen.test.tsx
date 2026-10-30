@@ -558,6 +558,44 @@ describe("CompetitorTrackingScreen", () => {
       expect(screen.queryByRole("button", { name: /Retry collection/ })).toBeNull();
       expect(screen.getByRole("button", { name: /Reactivate/ })).toBeInTheDocument();
     });
+    it("returns the focus to the same Remove button when Escape cancels", async () => {
+      const gateway = createGateway({
+        list: vi.fn(async () => listEnvelope([makeEntry()])),
+      });
+
+      renderScreen(gateway);
+
+      await screen.findByText("@northwind");
+      const remove = screen.getByRole("button", { name: "Remove @northwind" });
+      await userEvent.click(remove);
+
+      await screen.findByRole("alertdialog");
+      await userEvent.keyboard("{Escape}");
+
+      await waitFor(() => expect(document.activeElement).toBe(remove));
+      expect(screen.queryByRole("alertdialog")).toBeNull();
+      expect(gateway.setActive).not.toHaveBeenCalled();
+    });
+
+    it("returns the focus to the same Remove button when Cancel is pressed", async () => {
+      const gateway = createGateway({
+        list: vi.fn(async () => listEnvelope([makeEntry()])),
+      });
+
+      renderScreen(gateway);
+
+      await screen.findByText("@northwind");
+      const remove = screen.getByRole("button", { name: "Remove @northwind" });
+      await userEvent.click(remove);
+
+      const dialog = await screen.findByRole("alertdialog");
+      await userEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+
+      await waitFor(() => expect(document.activeElement).toBe(remove));
+      expect(screen.queryByRole("alertdialog")).toBeNull();
+      expect(gateway.setActive).not.toHaveBeenCalled();
+    });
+
     it("returns the focus to the list heading after a confirmed removal", async () => {
       const gateway = createGateway({
         list: vi.fn(async () => listEnvelope([makeEntry()])),

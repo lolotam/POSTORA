@@ -1,3 +1,4 @@
+import type { RefObject } from "react";
 import { useTranslation } from "react-i18next";
 import { Loader2 } from "lucide-react";
 
@@ -25,6 +26,12 @@ export type RemoveCompetitorDialogProps = {
   errorMessage?: string | null;
   /** The outcome of the removal could not be observed. */
   indeterminate?: boolean;
+  /**
+   * The control that opened the dialog. Cancel and Escape return focus
+   * to it. A confirmed removal clears it, because that row is leaving
+   * and the list heading takes the focus instead.
+   */
+  returnFocusTo?: RefObject<HTMLElement | null>;
 };
 
 /**
@@ -46,12 +53,23 @@ export function RemoveCompetitorDialog({
   isPending = false,
   errorMessage = null,
   indeterminate = false,
+  returnFocusTo,
 }: RemoveCompetitorDialogProps) {
   const { t } = useTranslation("analytics");
 
   return (
     <AlertDialog open={open} onOpenChange={onOpenChange}>
-      <AlertDialogContent>
+      <AlertDialogContent
+        onCloseAutoFocus={(event) => {
+          const trigger = returnFocusTo?.current ?? null;
+          // No trigger means a confirmed removal already claimed the
+          // focus for the list heading. Leaving the event alone lets
+          // that stand. Cancel and Escape still have the button.
+          if (trigger === null || !trigger.isConnected) return;
+          event.preventDefault();
+          trigger.focus();
+        }}
+      >
         <AlertDialogHeader>
           <AlertDialogTitle>
             {t("competitors.removeTitle", "Remove @{{username}}?", { username })}

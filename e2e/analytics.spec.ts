@@ -526,10 +526,12 @@ test.describe("Competitor tracking journeys (mocked browser)", () => {
         await page.keyboard.press("Shift+Tab");
         await expect(cancel).toBeFocused();
 
-        // Escape cancels: nothing is removed.
+        // Escape cancels: nothing is removed, and the focus returns to
+        // the Remove button that opened the dialog.
         await page.keyboard.press("Escape");
         await expect(dialog).toBeHidden();
         await expect(trackedRow(page, SEEDED_RENDERED.handle)).toBeVisible();
+        await expect(remove).toBeFocused();
 
         // The confirmed path is keyboard-only too, and it puts the focus
         // back on the list heading, because the row it belonged to is gone.
