@@ -13,6 +13,8 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Camera, AtSign, Facebook, Video, RotateCcw, Trash2, Eye, Search, History } from "lucide-react";
 import { format } from "date-fns";
 import { toast } from "sonner";
+import { CompetitorSourceBadge } from "@/features/competitor-tracking";
+import { resolveBrandProfileSource } from "@/types/brand-intelligence";
 import type { BrandProfile, BrandPost, BrandScrapeSession } from "@/types/brand-intelligence";
 
 interface ScrapeHistoryProps {
@@ -93,7 +95,22 @@ export function ScrapeHistory({ onReuse }: ScrapeHistoryProps) {
       toast.error(t("errors.sessionNoData", "This session has no stored data to reuse"));
       return;
     }
-    onReuse(session.profile_data, session.posts_data);
+
+    /**
+     * The reused profile carries the source of the session.
+     *
+     * The source the session recorded wins; the source the stored
+     * profile carries is the fallback; and a session with neither is
+     * "unknown". The card the owner gets therefore says exactly what
+     * the history row says (T8-01).
+     */
+    const sessionSource = resolveBrandProfileSource(session.source);
+    const profileSource =
+      sessionSource !== "unknown"
+        ? sessionSource
+        : resolveBrandProfileSource(session.profile_data.source);
+
+    onReuse({ ...session.profile_data, source: profileSource }, session.posts_data);
     toast.success(t("toast.loadedHistory", "Loaded {{username}} data from history", { username: session.username }));
   };
 
@@ -166,6 +183,7 @@ export function ScrapeHistory({ onReuse }: ScrapeHistoryProps) {
                   </TableHead>
                   <TableHead className="w-10">{t("history.platform", "Platform")}</TableHead>
                   <TableHead>{t("history.username", "Username")}</TableHead>
+                  <TableHead>{t("history.source", "Source")}</TableHead>
                   <TableHead className="text-center">{t("history.posts", "Posts")}</TableHead>
                   <TableHead>{t("history.strategy", "Strategy")}</TableHead>
                   <TableHead>{t("history.date", "Date")}</TableHead>
@@ -188,6 +206,16 @@ export function ScrapeHistory({ onReuse }: ScrapeHistoryProps) {
                       </div>
                     </TableCell>
                     <TableCell className="font-medium">@{session.username}</TableCell>
+                    <TableCell>
+                      {/*
+                        The source of the observation, when the session
+                        recorded one. It is NOT read out of the strategy:
+                        a cached session is not an official observation
+                        just because a cache entry looks official
+                        (T8-01).
+                      */}
+                      <CompetitorSourceBadge source={resolveBrandProfileSource(session.source)} />
+                    </TableCell>
                     <TableCell className="text-center">
                       <Badge variant="secondary" className="text-xs">
                         {session.total_posts_fetched || 0}

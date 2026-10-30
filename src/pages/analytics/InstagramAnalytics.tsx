@@ -6,7 +6,7 @@ import { useAuth } from "@/hooks/useAuth";
 import { useQuery } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
-import { Camera, Loader2, SearchCheck, TrendingUp } from "lucide-react";
+import { Camera, Loader2, SearchCheck, TrendingUp, Target } from "lucide-react";
 import { BrandSearchBar } from "@/components/brand-intelligence/BrandSearchBar";
 import { ProfileCard } from "@/components/brand-intelligence/ProfileCard";
 import { FilterToolbar } from "@/components/brand-intelligence/FilterToolbar";
@@ -16,6 +16,7 @@ import { useBrandScrape } from "@/hooks/useBrandScrape";
 import type { BrandPost, BrandScrapeFilters } from "@/types/brand-intelligence";
 import { Icon3D, GradientHeading, GradientRingCard, GradientDivider, Reveal } from "@/components/fx";
 import { InstagramPerformanceScreen } from "@/features/instagram-insights";
+import { CompetitorTrackingScreen, TrackCompetitorControl } from "@/features/competitor-tracking";
 
 const DEFAULT_FILTERS: BrandScrapeFilters = {
   sortBy: "engagement",
@@ -26,8 +27,19 @@ const DEFAULT_FILTERS: BrandScrapeFilters = {
 
 const EXAMPLE_BRANDS = ["@nike", "@cocacola", "@redbull", "@apple"];
 
-const VALID_TABS = ["performance", "analyze"] as const;
+const VALID_TABS = ["performance", "analyze", "competitors"] as const;
 export type InstagramAnalyticsTab = (typeof VALID_TABS)[number];
+
+/**
+ * Whether a query names a tab of this page.
+ *
+ * An unknown tab is not an error: the page falls back to its default
+ * tab and rewrites the query, so a stale bookmark still lands on a
+ * working page.
+ */
+function isAnalyticsTab(value: string | null): value is InstagramAnalyticsTab {
+  return value !== null && (VALID_TABS as readonly string[]).includes(value);
+}
 
 export type InstagramAnalyticsProps = {
   defaultTab?: InstagramAnalyticsTab;
@@ -39,25 +51,47 @@ export default function InstagramAnalytics({ defaultTab = "performance" }: Insta
   const { session } = useAuth();
   const [searchParams, setSearchParams] = useSearchParams();
 
+  /**
+   * THE URL IS THE STATE OF THIS PAGE.
+   *
+   * The active tab is read from the query every render instead of
+   * being copied into local state. A tab the owner clicks, a history
+   * entry the owner walks back to and a query the owner edits all
+   * reconcile the same way, because there is only one place the tab
+   * lives (spec §2).
+   */
   const tabParam = searchParams.get("tab");
-  const initialTab: InstagramAnalyticsTab = (VALID_TABS as readonly string[]).includes(tabParam || "")
-    ? (tabParam as InstagramAnalyticsTab)
-    : defaultTab;
+  const activeTab: InstagramAnalyticsTab = isAnalyticsTab(tabParam) ? tabParam : defaultTab;
 
-  const [activeTab, setActiveTab] = useState<InstagramAnalyticsTab>(initialTab);
-
-  // Sync tab with URL search parameter
+  /**
+   * A missing or unknown tab is normalised in place.
+   *
+   * The rewrite REPLACES the history entry: it is the same page, and
+   * the owner should be able to go back to wherever they came from.
+   */
   useEffect(() => {
-    if (searchParams.get("tab") !== activeTab) {
-      const next = new URLSearchParams(searchParams);
-      next.set("tab", activeTab);
-      setSearchParams(next, { replace: true });
-    }
-  }, [activeTab, searchParams, setSearchParams]);
+    if (tabParam === activeTab) return;
+    const next = new URLSearchParams(searchParams);
+    next.set("tab", activeTab);
+    setSearchParams(next, { replace: true });
+  }, [activeTab, tabParam, searchParams, setSearchParams]);
+
+  /**
+   * Choosing a tab is a navigation.
+   *
+   * It PUSHES a history entry, so the browser's back button walks
+   * through the tabs the owner visited instead of leaving the page.
+   */
+  const selectTab = (tab: InstagramAnalyticsTab) => {
+    if (tab === activeTab) return;
+    const next = new URLSearchParams(searchParams);
+    next.set("tab", tab);
+    setSearchParams(next);
+  };
 
   const [filters, setFilters] = useState<BrandScrapeFilters>(DEFAULT_FILTERS);
   const [selectedPost, setSelectedPost] = useState<BrandPost | null>(null);
-  const { profile, posts, totalPosts, hasMore, isLoading, error, search, loadMore } = useBrandScrape();
+  const { profile, profileSource, posts, totalPosts, hasMore, isLoading, error, search, loadMore } = useBrandScrape();
 
   const { data: contentPostIds = new Set<string>() } = useQuery({
     queryKey: ["bi-content-post-ids", session?.user?.id],
@@ -121,19 +155,25 @@ export default function InstagramAnalytics({ defaultTab = "performance" }: Insta
               <p className="text-sm text-muted-foreground mt-1">
                 {activeTab === "performance"
                   ? t("header.instagramPerformanceSubtitle", "Track owned account performance, daily insights & outlier reach")
-                  : t("header.instagramSubtitle", "Analyze Instagram brands & top performing content")}
+                  : activeTab === "competitors"
+                    ? t("competitors.tabHint", "Track Instagram competitors and compare their public history")
+                    : t("header.instagramSubtitle", "Analyze Instagram brands & top performing content")}
               </p>
             </div>
           </div>
         </Reveal>
 
-        {/* Tab switcher */}
-        <div className="flex items-center gap-2 p-1 bg-muted/40 rounded-xl border border-border/60 w-fit">
+        {/*
+          The switcher hugs its content on a wide screen and takes the
+          full width on a narrow one, so the third tab wraps instead of
+          pushing the page sideways.
+        */}
+        <div className="flex items-center gap-2 p-1 bg-muted/40 rounded-xl border border-border/60 w-full sm:w-fit flex-wrap">
           <Button
             type="button"
             size="sm"
             variant={activeTab === "performance" ? "secondary" : "ghost"}
-            onClick={() => setActiveTab("performance")}
+            onClick={() => selectTab("performance")}
             className={`gap-2 text-xs font-medium rounded-lg h-8 px-3.5 transition-all ${
               activeTab === "performance" ? "bg-background shadow-xs text-foreground font-semibold" : "text-muted-foreground"
             }`}
@@ -146,13 +186,26 @@ export default function InstagramAnalytics({ defaultTab = "performance" }: Insta
             type="button"
             size="sm"
             variant={activeTab === "analyze" ? "secondary" : "ghost"}
-            onClick={() => setActiveTab("analyze")}
+            onClick={() => selectTab("analyze")}
             className={`gap-2 text-xs font-medium rounded-lg h-8 px-3.5 transition-all ${
               activeTab === "analyze" ? "bg-background shadow-xs text-foreground font-semibold" : "text-muted-foreground"
             }`}
           >
             <SearchCheck className="h-3.5 w-3.5 text-amber-500" />
             <span>{t("instagram.tabCompetitors", "Brand & Competitors")}</span>
+          </Button>
+
+          <Button
+            type="button"
+            size="sm"
+            variant={activeTab === "competitors" ? "secondary" : "ghost"}
+            onClick={() => selectTab("competitors")}
+            className={`gap-2 text-xs font-medium rounded-lg h-8 px-3.5 transition-all ${
+              activeTab === "competitors" ? "bg-background shadow-xs text-foreground font-semibold" : "text-muted-foreground"
+            }`}
+          >
+            <Target className="h-3.5 w-3.5 text-violet-500" />
+            <span>{t("competitors.tab", "Tracked competitors")}</span>
           </Button>
         </div>
 
@@ -161,6 +214,10 @@ export default function InstagramAnalytics({ defaultTab = "performance" }: Insta
         {activeTab === "performance" ? (
           <Reveal delay={60}>
             <InstagramPerformanceScreen />
+          </Reveal>
+        ) : activeTab === "competitors" ? (
+          <Reveal delay={60}>
+            <CompetitorTrackingScreen />
           </Reveal>
         ) : (
           <>
@@ -181,7 +238,12 @@ export default function InstagramAnalytics({ defaultTab = "performance" }: Insta
             {hasResults && (
               <Reveal delay={160}>
                 <div className="space-y-4">
-                  <ProfileCard profile={profile!} isLoading={isLoading} />
+                  <ProfileCard
+                    profile={profile!}
+                    isLoading={isLoading}
+                    source={profileSource}
+                    actions={<TrackCompetitorControl username={profile!.username} />}
+                  />
                   <FilterToolbar filters={filters} onChange={setFilters} maxEngagement={maxEngagement} />
                   <p className="text-sm text-muted-foreground">
                     {t("posts.countOf", "{{filtered}} of {{total}} posts", {

@@ -18,6 +18,7 @@ import { ThreadsDiscoveryPanel } from "@/components/brand-intelligence/ThreadsDi
 import { ThreadsKeywordSearchPanel } from "@/components/brand-intelligence/ThreadsKeywordSearchPanel";
 import { ThreadsInsightsPanel } from "@/components/brand-intelligence/ThreadsInsightsPanel";
 import { MessagingInbox } from "@/components/messaging/MessagingInbox";
+import { TrackCompetitorControl } from "@/features/competitor-tracking";
 import { useBrandScrape } from "@/hooks/useBrandScrape";
 import { useUserRole } from "@/hooks/useUserRole";
 import { useFeatureFlags } from "@/hooks/useFeatureFlags";
@@ -46,7 +47,16 @@ export default function BrandIntelligence() {
   const [threadsMode, setThreadsMode] = useState<"analyze" | "discovery" | "keyword_search" | "insights">("analyze");
   const [filters, setFilters] = useState<BrandScrapeFilters>(DEFAULT_FILTERS);
   const [selectedPost, setSelectedPost] = useState<BrandPost | null>(null);
-  const { profile, posts, totalPosts, hasMore, isLoading, error, search, loadMore, loadFromSession, reset } = useBrandScrape();
+  const { profile, profileSource, posts, totalPosts, hasMore, isLoading, error, search, loadMore, loadFromSession, reset } = useBrandScrape();
+
+  /**
+   * The competitor tracking feature tracks Instagram handles only.
+   *
+   * The legacy page offers its Track control for an Instagram profile
+   * and for nothing else, so the Facebook, Threads and TikTok cards
+   * stay exactly what they were (spec §2).
+   */
+  const isInstagramProfile = profile?.platform === "instagram";
 
   // Fetch post IDs that have cached AI content
   const { data: contentPostIds = new Set<string>() } = useQuery({
@@ -220,7 +230,14 @@ export default function BrandIntelligence() {
 
               {hasResults && (
                 <div className="space-y-4">
-                  <ProfileCard profile={profile!} isLoading={isLoading} />
+                  <ProfileCard
+                    profile={profile!}
+                    isLoading={isLoading}
+                    source={isInstagramProfile ? profileSource : undefined}
+                    actions={
+                      isInstagramProfile ? <TrackCompetitorControl username={profile!.username} /> : undefined
+                    }
+                  />
                   <FilterToolbar filters={filters} onChange={setFilters} maxEngagement={maxEngagement} />
                   <div className="flex items-center justify-between">
                     <p className="text-sm text-muted-foreground">
