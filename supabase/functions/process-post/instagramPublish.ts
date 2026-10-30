@@ -46,6 +46,10 @@ export interface PublishOptions {
 export const PUBLISHED_UNCONFIRMED_MESSAGE =
   "Instagram did not confirm the publish in time, but the post appears to be live. Check the account before posting it again.";
 
+/** The error for a non-deferrable publish that was never sent because the worker had no time left. */
+export const NOT_SENT_MESSAGE =
+  "There was not enough time left to publish safely, so nothing was posted to Instagram. Safe to retry.";
+
 /** The follow-up container check's timeout, and the time kept back for it before each publish. */
 export const CHECK_TIMEOUT_MS = 5_000;
 /** Below this a request is not worth sending. */
@@ -89,13 +93,15 @@ export async function publishContainer(ports: PublishPorts, options: PublishOpti
     if (timeoutMs < MIN_REQUEST_MS) {
       // No time to publish and still learn the outcome. The container is ready, so a
       // deferrable one is published by the reconciler next minute instead.
+      // Anything else is refused unsent: a request the worker cannot outlive may publish unrecorded.
       if (unanswered) throw unconfirmed(await askContainer(), lastError!);
       if (options.deferKind) throw defer();
+      throw new Error(NOT_SENT_MESSAGE);
     }
 
     let reply: GraphResponse;
     try {
-      reply = await ports.publish(Math.max(timeoutMs, MIN_REQUEST_MS));
+      reply = await ports.publish(timeoutMs);
     } catch (requestError) {
       unanswered = true;
       lastError = requestError instanceof Error ? requestError : new Error(String(requestError));
@@ -147,5 +153,12 @@ export function matchPublishedMedia(media: MediaSummary[], caption: string | nul
   return matches.length === 1 ? matches[0] : null;
 }
 
-/** How far before its first deferral a deferred container's media may have been published. */
-export const PUBLISHED_LOOKBACK_MS = 10 * 60 * 1000;
+/**
+ * How far before its first deferral a deferred container's media may have been published. A
+ * container is published only after it is created, and a first run defers within its poll
+ * budget of creating it, so nothing older than this can be the container's media.
+ */
+export const PUBLISHED_LOOKBACK_MS = 2 * 60 * 1000;
+
+/** How many of the account's latest media are searched for it. */
+export const PUBLISHED_SEARCH_LIMIT = 25;

@@ -33,6 +33,8 @@ export const DeferralSchema = z.object({
   give_up_at: z.string(),
   next_check_at: z.string(),
   claimed_until: z.string().nullish(),
+  /** Set by a resumed run just before a published reel's first comment, comment setting and story share. */
+  followups_started_at: z.string().nullish(),
 });
 
 export type Deferral = z.infer<typeof DeferralSchema>;
@@ -57,6 +59,28 @@ export interface ResumeContext {
   deferral: Deferral;
   /** A live story the first run could not record; the resumed run records it. */
   unrecordedStory?: StoryRef | null;
+  /** Marks the pending row before the follow-ups run (answers an error, or null). */
+  markFollowUpsStarted?: () => Promise<string | null>;
+}
+
+/** The row's response data with its deferral marked: the follow-ups started at `now`. */
+export function withFollowUpsStarted(responseData: unknown, now: Date): Record<string, unknown> {
+  const data = (responseData as Record<string, unknown> | null) ?? {};
+  const deferred = (data.deferred as Record<string, unknown> | undefined) ?? {};
+  return { ...data, deferred: { ...deferred, followups_started_at: now.toISOString() } };
+}
+
+/**
+ * Whether this run may post a published reel's first comment, comment setting and story share.
+ * A first run always may. A resumed run may only if no earlier run started them and the row is
+ * marked first: a run stopped after them, before settling, would otherwise repeat them.
+ */
+export async function claimFollowUps(resume: ResumeContext | null | undefined): Promise<boolean> {
+  if (!resume) return true;
+  if (resume.deferral.followups_started_at) return false;
+  const markError = (await resume.markFollowUpsStarted?.()) ?? null;
+  if (markError) console.error(`[instagram] could not mark the follow-ups, so they are skipped: ${markError}`);
+  return markError === null;
 }
 
 /**
@@ -136,14 +160,17 @@ export function ownContainerDeadline(runDeadlineMs: number, requestStartedAtMs: 
  * already used part of it. Keep this in step with the server.
  */
 export const WORKER_LIFETIME_MS = 150 * 1000;
-/** Kept at the end of a worker's life for recording the outcome (a row write, the roll-up). */
-export const RECORD_RESERVE_MS = 5 * 1000;
-/** Kept after a deferrable wait for the publish, its follow-up check and the record. */
-export const PUBLISH_RESERVE_MS = 45 * 1000;
+/**
+ * Kept at the end of a worker's life for what follows a publish: the permalink, first comment,
+ * comment setting, story mirror and recording the outcome.
+ */
+export const FOLLOW_UP_RESERVE_MS = 30 * 1000;
+/** Kept after a deferrable wait for the publish (up to 30 s), its 5 s check and the follow-ups. */
+export const PUBLISH_RESERVE_MS = 65 * 1000;
 
 /** When a publish, and the check that settles it, must be over on this worker. */
 export function workerPublishDeadline(workerStartedAtMs: number): number {
-  return workerStartedAtMs + WORKER_LIFETIME_MS - RECORD_RESERVE_MS;
+  return workerStartedAtMs + WORKER_LIFETIME_MS - FOLLOW_UP_RESERVE_MS;
 }
 
 /**

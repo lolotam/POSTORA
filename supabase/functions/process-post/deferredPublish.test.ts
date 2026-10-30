@@ -1,14 +1,17 @@
 import { assertEquals, assertInstanceOf } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import { CHECK_ONCE_DEADLINE, pollContainer } from "../_shared/metaContainerStatus.ts";
+import { CHECK_TIMEOUT_MS } from "./instagramPublish.ts";
 import {
   abandonReason,
+  claimFollowUps,
   bufferAfterFinishedMs,
   ContainerStillProcessing,
   DEFERRAL_GIVE_UP_MS,
   deferrableDeadline,
   PUBLISH_RESERVE_MS,
-  RECORD_RESERVE_MS,
+  FOLLOW_UP_RESERVE_MS,
   WORKER_LIFETIME_MS,
+  withFollowUpsStarted,
   workerPublishDeadline,
   FIRST_RUN_POLL_BUDGET_MS,
   giveUpMessage,
@@ -247,8 +250,10 @@ Deno.test("a deferrable wait on a reused worker ends early enough for the publis
   // A resumed run checks once, and a run nobody can resume has no deadline: both left alone.
   assertEquals(deferrableDeadline(CHECK_ONCE_DEADLINE, workerStart), CHECK_ONCE_DEADLINE);
   assertEquals(deferrableDeadline(Number.POSITIVE_INFINITY, workerStart), Number.POSITIVE_INFINITY);
-  // The publish deadline keeps room for recording the outcome.
-  assertEquals(workerPublishDeadline(workerStart), workerStart + WORKER_LIFETIME_MS - RECORD_RESERVE_MS);
+  // The publish deadline keeps room for the follow-ups and recording the outcome.
+  assertEquals(workerPublishDeadline(workerStart), workerStart + WORKER_LIFETIME_MS - FOLLOW_UP_RESERVE_MS);
+  // After the latest a wait can end, the slowest publish (Business Login, 30 s) and its check still fit.
+  assertEquals(workerPublishDeadline(workerStart) - latest >= 30_000 + CHECK_TIMEOUT_MS, true);
 });
 
 Deno.test("a deferrable wait whose worker has no time left defers without checking again", async () => {
@@ -266,4 +271,29 @@ Deno.test("a deferrable wait whose worker has no time left defers without checki
   assertEquals(state, { state: "waiting" });
   assertEquals(checks, 0);
   assertInstanceOf(unfinishedError({ deadlineMs: 1, deferKind: "ig_reel" }, "c1", "Instagram"), ContainerStillProcessing);
+});
+
+Deno.test("a published reel's follow-ups run once: a first run, or the resumed run that marks the row first", async () => {
+  const deferral = newDeferral("ig_reel", "c1", new Date("2026-10-30T15:00:00Z"));
+  assertEquals(await claimFollowUps(null), true);
+
+  const marks: string[] = [];
+  const fresh = { platformPostId: "row", deferral, markFollowUpsStarted: () => (marks.push("mark"), Promise.resolve(null)) };
+  assertEquals(await claimFollowUps(fresh), true);
+  assertEquals(marks, ["mark"]);
+
+  // An earlier run started them and stopped before settling: they are not repeated.
+  const started = { platformPostId: "row", deferral: { ...deferral, followups_started_at: "2026-10-30T15:03:30Z" } };
+  assertEquals(await claimFollowUps(started), false);
+
+  // A mark that cannot be written cannot promise "once", so they are skipped.
+  assertEquals(await claimFollowUps({ platformPostId: "row", deferral, markFollowUpsStarted: () => Promise.resolve("db down") }), false);
+});
+
+Deno.test("marking the follow-ups keeps the rest of the row's response data and deferral", () => {
+  const data = { warnings: ["w"], deferred: { kind: "ig_reel", container_id: "c1" } };
+  assertEquals(withFollowUpsStarted(data, new Date("2026-10-30T15:03:30Z")), {
+    warnings: ["w"],
+    deferred: { kind: "ig_reel", container_id: "c1", followups_started_at: "2026-10-30T15:03:30.000Z" },
+  });
 });

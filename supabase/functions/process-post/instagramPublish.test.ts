@@ -7,6 +7,7 @@ import {
   isRetryablePublishError,
   matchPublishedMedia,
   MIN_REQUEST_MS,
+  NOT_SENT_MESSAGE,
   publishContainer,
   PUBLISHED_UNCONFIRMED_MESSAGE,
 } from "./instagramPublish.ts";
@@ -77,15 +78,15 @@ Deno.test("each publish is cut so the follow-up check still fits before the dead
   assertEquals(calls.publishTimeouts, [12_000 - CHECK_TIMEOUT_MS]);
 });
 
-Deno.test("with no time left to publish and learn the outcome, a reel is deferred unsent; another is still tried", async () => {
+Deno.test("with no time left to publish and learn the outcome, nothing is sent: a reel is deferred, another refused as safe to retry", async () => {
   const short = { deadlineMs: CHECK_TIMEOUT_MS + MIN_REQUEST_MS - 1 };
   const deferred = ports([{ id: "never" }]);
   assertInstanceOf(await assertRejects(() => publishContainer(deferred.ports, { ...reel, ...short })), ContainerStillProcessing);
   assertEquals(deferred.calls.publishTimeouts, []);
 
-  const image = ports([{ id: "media-1" }]);
-  assertEquals(await publishContainer(image.ports, { creationId: "c2", requestTimeoutMs: 20_000, ...short }), { id: "media-1" });
-  assertEquals(image.calls.publishTimeouts, [MIN_REQUEST_MS]);
+  const image = ports([{ id: "never" }]);
+  await assertRejects(() => publishContainer(image.ports, { creationId: "c2", requestTimeoutMs: 20_000, ...short }), Error, NOT_SENT_MESSAGE);
+  assertEquals(image.calls.publishTimeouts, []);
 });
 
 Deno.test("an unknown outcome defers a reel; a container Meta failed reports Meta's reason", async () => {

@@ -86,7 +86,13 @@ import { createClient, SupabaseClient } from "https://esm.sh/@supabase/supabase-
 // See: supabase/functions/_shared/platforms/ for reusable platform utilities
 import type { PlatformMetadata as SharedPlatformMetadata } from "../_shared/platforms/types.ts";
 import { graphId, type GraphResponse } from "./graphResponse.ts";
-import { matchPublishedMedia, type MediaSummary, publishContainer, PUBLISHED_LOOKBACK_MS } from "./instagramPublish.ts";
+import {
+  matchPublishedMedia,
+  type MediaSummary,
+  publishContainer,
+  PUBLISHED_LOOKBACK_MS,
+  PUBLISHED_SEARCH_LIMIT,
+} from "./instagramPublish.ts";
 import { validateRequestBody, validationErrorResponse } from "../_shared/validate.ts";
 import { postWebhook, validateWebhookTarget } from "../_shared/webhookSecurity.ts";
 import { getMissingMediaFileIds } from "../_shared/post-media.ts";
@@ -104,9 +110,11 @@ import {
   bufferAfterFinishedMs,
   type ContainerWait,
   ContainerStillProcessing,
+  claimFollowUps,
   deferrableDeadline,
   type DeferredKind,
   giveUpMessage,
+  withFollowUpsStarted,
   workerPublishDeadline,
   NO_DEFERRAL,
   ownContainerDeadline,
@@ -128,6 +136,7 @@ import {
   recordLiveStory,
   storyOnReelRowData,
   type StoryRef,
+  UNRECORDED_STORY_KEY,
 } from "./instagramStory.ts";
 import {
   buildWebhookResults,
@@ -136,6 +145,7 @@ import {
   readPostOutcome,
   unreadableOutcomeLog,
   storyRecordedOnReelRowLog,
+  liveReelUnrecordedStoryLog,
   unrecordedStoryLog,
   writeLogRow,
 } from "./postSettlement.ts";
@@ -1584,7 +1594,19 @@ Deno.serve(async (req) => {
           : { finalStatus: post.status as string, notified: false };
         return createJsonResponse({ success: true, status: "failed", reason: abandon, post_status: finished.finalStatus, notified: finished.notified });
       }
-      resume = { platformPostId: row.id, deferral, unrecordedStory: readUnrecordedStory(row.response_data) };
+      resume = {
+        platformPostId: row.id,
+        deferral,
+        unrecordedStory: readUnrecordedStory(row.response_data),
+        markFollowUpsStarted: async () => {
+          const { error: markError } = await supabase
+            .from("platform_posts")
+            .update({ response_data: withFollowUpsStarted(row.response_data, new Date()) })
+            .eq("id", row.id)
+            .eq("status", "pending");
+          return markError?.message ?? null;
+        },
+      };
       resumeResponseData = (row.response_data as Record<string, unknown> | null) ?? null;
       overrideAccountIds = [row.social_account_id];
       overridePlatforms = [row.platform];
@@ -1989,6 +2011,11 @@ Deno.serve(async (req) => {
         const warnings = (result as any).warnings || [];
         const locationDebug = (result as any).location_debug;
         const topicTagDebug = (result as any).topic_tag_debug;
+        const unrecordedStoryRef = (result as any).unrecorded_story as StoryRef | undefined;
+        if (unrecordedStoryRef) {
+          const logError = await writeLogRow(supabase, liveReelUnrecordedStoryLog(post.user_id, post_id, resume?.platformPostId ?? null, unrecordedStoryRef));
+          if (logError) console.error("[process-post] could not log the unrecorded story either:", logError);
+        }
         const responseData = {
           tiktok_publish_id: result.id,
           account_username: account.platform_username,
@@ -1996,6 +2023,7 @@ Deno.serve(async (req) => {
           ...(warnings.length > 0 ? { warnings } : {}),
           ...(locationDebug ? { location_debug: locationDebug } : {}),
           ...(topicTagDebug ? { topic_tag_debug: topicTagDebug } : {}),
+          ...(unrecordedStoryRef ? { [UNRECORDED_STORY_KEY]: unrecordedStoryRef } : {}),
         };
 
         // The one writer of the five that can produce a NON-terminal row:
@@ -3684,7 +3712,7 @@ async function findPublishedMedia(
 ): Promise<MediaSummary | null> {
   try {
     const response = await fetchWithTimeout(
-      `${mediaListUrl}?fields=id,caption,timestamp,permalink&limit=10&access_token=${accessToken}`,
+      `${mediaListUrl}?fields=id,caption,timestamp,permalink&limit=${PUBLISHED_SEARCH_LIMIT}&access_token=${accessToken}`,
       {},
       8000,
     );
@@ -4273,13 +4301,7 @@ async function postToInstagram(
     let publishData: { id: string };
     if (reelStatus === "PUBLISHED") {
       // Only a resumed run sees this: an earlier run's publish went unanswered, or its worker
-      // stopped, after Instagram published. A story still unrecorded keeps the row pending so
-      // it is not lost when the reel settles.
-      if (unrecordedStory) {
-        const pending = new ContainerStillProcessing("ig_reel", reelContainerId);
-        pending.unrecordedStory = unrecordedStory;
-        throw pending;
-      }
+      // stopped, after Instagram published.
       // The container id is not the media id (analytics would read it as one): find the media.
       const firstDeferredAt = Date.parse(timing.resume?.deferral.first_deferred_at ?? "");
       const media = await findPublishedMedia(
@@ -4295,6 +4317,7 @@ async function postToInstagram(
             ...warnings,
             "Instagram had already published this reel, but it could not be identified, so its first comment, comment setting and story share were not applied.",
           ],
+          ...(unrecordedStory ? { unrecorded_story: unrecordedStory } : {}),
         };
       }
       publishData = { id: media.id };
@@ -4309,9 +4332,14 @@ async function postToInstagram(
       }
     }
 
-    // Post first comment
-    await postInstagramFirstComment(publishData.id);
-    await disableIgComments(publishData.id);
+    // On a resumed run they may have run once already, before a worker stopped: never twice.
+    const followUps = await claimFollowUps(timing.resume);
+    if (followUps) {
+      await postInstagramFirstComment(publishData.id);
+      await disableIgComments(publishData.id);
+    } else {
+      warnings.push("This reel's first comment, comment setting and story share were not run on this attempt, so that they can never run twice.");
+    }
 
     // Get the permalink for the Reel
     const mediaResponse = await fetch(
@@ -4327,7 +4355,7 @@ async function postToInstagram(
     }
 
     // Mirror to Story if toggle is on (and Story wasn't already in post types)
-    if (shareToStory && !igPostTypes.includes("story")) {
+    if (followUps && shareToStory && !igPostTypes.includes("story")) {
       await publishIgStoryFromMedia();
     }
 
@@ -4337,6 +4365,8 @@ async function postToInstagram(
       url: postUrl,
       warnings,
       ...(reelDebug ? { location_debug: reelDebug } : {}),
+      // A live reel settles now; a story still unrecorded is kept on its row, never held over it.
+      ...(unrecordedStory ? { unrecorded_story: unrecordedStory } : {}),
     };
 
   } else if (mediaUrls.length === 1) {
@@ -5083,7 +5113,8 @@ async function postToInstagramBusinessLogin(
             const url = media.permalink ?? fallbackUrl;
             const rowId = await insertIGRow(subtype, "success", media.id, url, undefined, { shared_to_feed: wantFeed });
             subResults.push({ subtype, status: "success", id: media.id, url });
-            enrichInBackground(rowId, media.id, subtype, url);
+            // A row that did not settle stays pending and is resumed: its follow-ups run then, once.
+            if (rowId) enrichInBackground(rowId, media.id, subtype, url);
           } else {
             const note = "Instagram had already published this reel, but it could not be identified, so its first comment and comment setting were not applied.";
             await insertIGRow(subtype, "success", undefined, fallbackUrl, undefined, { warnings: [note] });
@@ -5098,7 +5129,7 @@ async function postToInstagramBusinessLogin(
             ...(blDebug ? { location_debug: blDebug } : {}),
           });
           subResults.push({ subtype, status: "success", id: publishData.id, url: fallbackUrl });
-          enrichInBackground(rowId, publishData.id, subtype, fallbackUrl);
+          if (rowId) enrichInBackground(rowId, publishData.id, subtype, fallbackUrl);
         }
       }
     } catch (e) {
