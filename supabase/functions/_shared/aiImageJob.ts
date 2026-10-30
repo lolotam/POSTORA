@@ -36,7 +36,7 @@ import {
   type FetchedImage,
   type ImageInput,
 } from "./aiImageIo.ts";
-import type { JobTokenPayload } from "./aiImageToken.ts";
+import { tokenMeta, type JobTokenPayload } from "./aiImageToken.ts";
 import type { OpeninaryConfig } from "./openinary.ts";
 
 /** Submit and polling stop here, measured from the start of the request. */
@@ -71,7 +71,7 @@ export interface AtlasJobBase {
   /** `unavailable` is also what an operator-side failure (key, balance, storage) says. */
   messages: { unavailable: string; busy: string; timeout: string; failed: string };
   failureCode: string;
-  /** Small values the final response reports; they travel inside the token. */
+  /** What the final response reports. Inside the token, long strings (a signed URL) are dropped to null. */
   meta: Record<string, string | number | null>;
 }
 
@@ -213,7 +213,7 @@ async function processing(spec: AtlasJobBase, predictionId: string, stagedPath: 
     operation: spec.operation,
     area: spec.area,
     issuedAt: spec.startedAt,
-    meta: spec.meta,
+    meta: tokenMeta(spec.meta),
   });
   logImageTool("info", "ai_image_job_processing", logOf(spec));
   return { ok: true, status: "processing", token: signed, retryAfterSeconds: RETRY_AFTER_SECONDS, meta: spec.meta };

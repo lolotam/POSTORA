@@ -135,6 +135,16 @@ Deno.test("start: a job still running is a 202 with an opaque prediction_id, not
   });
 });
 
+Deno.test("start: a job that finishes in the first request returns a long source URL in full, not null", async () => {
+  await withOpeninaryEnv(async () => {
+    const longUrl = `https://x.example/in.png?sig=${"a".repeat(700)}`;
+    const { db } = fakeDb();
+    const response = await startAtlasRoute(route, caller(db), env, { ...request, input: { kind: "url", url: longUrl }, meta: { original_url: longUrl } }, deps());
+    assertEquals(response.status, 200);
+    assertEquals((await response.json()).original_url, longUrl);
+  });
+});
+
 Deno.test("start: the hourly cap refuses the 31st job with 429 RATE_LIMITED and leaves a log row", async () => {
   const { db, rows } = fakeDb(false);
   const response = await startAtlasRoute(route, caller(db), env, request, deps());

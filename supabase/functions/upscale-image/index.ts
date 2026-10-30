@@ -44,9 +44,6 @@ const ROUTE: AtlasRoute = {
   }),
 };
 
-/** A longer source URL is not echoed back after a follow-up (the token has to stay small). */
-const MAX_TOKEN_URL_CHARS = 512;
-
 const CLOUDINARY_CLOUD_NAME = Deno.env.get('CLOUDINARY_CLOUD_NAME');
 const CLOUDINARY_API_KEY = Deno.env.get('CLOUDINARY_API_KEY');
 const CLOUDINARY_API_SECRET = Deno.env.get('CLOUDINARY_API_SECRET');
@@ -149,7 +146,7 @@ Deno.serve(async (req) => {
           enable_base64_output: false,
         }),
         meta: {
-          original_url: originalUrl.length <= MAX_TOKEN_URL_CHARS ? originalUrl : null,
+          original_url: originalUrl,
           target_resolution: targetResolution,
           scale,
           output_format: outputFormat,

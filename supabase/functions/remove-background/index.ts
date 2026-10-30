@@ -25,9 +25,6 @@ const SUPABASE_ANON_KEY = Deno.env.get('SUPABASE_ANON_KEY')!;
 /** AtlasCloud background-removal model; an env override means a deprecation is not a deploy. */
 const DEFAULT_ATLAS_BG_REMOVAL_MODEL = 'midjourney/v8.2/remove-background';
 
-/** A longer source URL is not echoed back after a follow-up (the token has to stay small). */
-const MAX_TOKEN_URL_CHARS = 512;
-
 const ROUTE: AtlasRoute = {
   source: 'remove-background',
   operation: 'background_removal',
@@ -128,7 +125,7 @@ Deno.serve(async (req) => {
           image: sourceUrl,
           enable_base64_output: false,
         }),
-        meta: { original_url: originalUrl.length <= MAX_TOKEN_URL_CHARS ? originalUrl : null },
+        meta: { original_url: originalUrl },
       });
     }
 

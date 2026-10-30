@@ -262,6 +262,23 @@ Deno.test("the output download never gets more than the time left in the budget"
   });
 });
 
+const LONG_URL = `https://x.example/in.png?sig=${"a".repeat(600)}`;
+
+Deno.test("a long source URL is reported in full by the request that finishes at once", async () => {
+  await withOpeninary(false, async () => {
+    const result = await startAtlasImageJob(start({ meta: { original_url: LONG_URL, scale: 4 } }), deps().deps);
+    assertEquals(result.ok && result.status === "completed" && result.meta, { original_url: LONG_URL, scale: 4 });
+  });
+});
+
+Deno.test("a long source URL is capped only inside the token; the 202 answer that carries the token still has it in full", async () => {
+  let signed: JobTokenPayload | null = null;
+  const { deps: d } = deps({ poll: pending });
+  const result = await startAtlasImageJob(start({ meta: { original_url: LONG_URL, scale: 4 }, sign: (p) => { signed = p; return Promise.resolve("tok"); } }), d);
+  assertEquals((signed as JobTokenPayload | null)?.meta, { original_url: null, scale: 4 });
+  assertEquals(result.ok && result.status === "processing" && result.meta, { original_url: LONG_URL, scale: 4 });
+});
+
 const SUBMIT_WINDOW_MS = 10_000;
 const refusal = (result: Awaited<ReturnType<typeof startAtlasImageJob>>) =>
   result.ok === false && [result.status, result.code, result.message, result.reason, result.level];

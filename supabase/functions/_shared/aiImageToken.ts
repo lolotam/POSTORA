@@ -22,6 +22,20 @@ export interface JobTokenPayload {
   meta: Record<string, string | number | null>;
 }
 
+/** The longest string a token carries; anything longer is reported as null inside the token. */
+export const MAX_TOKEN_STRING_CHARS = 512;
+
+/**
+ * `meta` as it travels inside the token, which is returned to the browser and sent back on every
+ * follow-up: a long value (a signed image URL) is dropped to null there. The response of the
+ * request that produced the meta still carries it in full.
+ */
+export function tokenMeta(meta: JobTokenPayload["meta"]): JobTokenPayload["meta"] {
+  return Object.fromEntries(
+    Object.entries(meta).map(([key, value]) => [key, typeof value === "string" && value.length > MAX_TOKEN_STRING_CHARS ? null : value]),
+  );
+}
+
 export type VerifiedToken =
   | { ok: true; payload: JobTokenPayload }
   /** An expired token is still genuine, so its payload is returned for cleanup. */

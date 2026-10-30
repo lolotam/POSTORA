@@ -1,5 +1,5 @@
 import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
-import { signJobToken, verifyJobToken, type JobTokenPayload } from "./aiImageToken.ts";
+import { MAX_TOKEN_STRING_CHARS, signJobToken, tokenMeta, verifyJobToken, type JobTokenPayload } from "./aiImageToken.ts";
 
 const SIGNING = "fixture-value-1";
 const NOW = 1_800_000_000_000;
@@ -53,4 +53,12 @@ Deno.test("an old token is expired, and still hands back its payload so the stag
   const token = await signJobToken(SIGNING, "user-a", payload);
   assertEquals(await verify(token, { now: NOW + HOUR + 1 }), { ok: false, reason: "expired", payload });
   assertEquals((await verify(token, { now: NOW + HOUR })).ok, true);
+});
+
+Deno.test("tokenMeta drops only strings longer than the token limit and leaves everything else alone", () => {
+  const atLimit = "u".repeat(MAX_TOKEN_STRING_CHARS);
+  const tooLong = "u".repeat(MAX_TOKEN_STRING_CHARS + 1);
+  const meta = { short: "https://x.example/a.png", atLimit, tooLong, scale: 4, none: null };
+  assertEquals(tokenMeta(meta), { short: "https://x.example/a.png", atLimit, tooLong: null, scale: 4, none: null });
+  assertEquals(meta.tooLong, tooLong); // the caller's own copy is untouched
 });
