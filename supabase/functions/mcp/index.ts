@@ -367,6 +367,8 @@ function buildServer(
     description:
       "Upload a media file (image or video) to the Postora media library. " +
       "Provide either media_url (public URL) or media_base64 (data URL or raw base64). " +
+      "media_base64 is limited to 10 MB; for larger images and videos pass media_url, which accepts files " +
+      "up to the admin's upload limit (at most 95 MB) when the server reports the file's size. " +
       "Returns a media_file_id you can pass to create_post.",
     inputSchema: z.object({
       media_url: z.string().optional(),

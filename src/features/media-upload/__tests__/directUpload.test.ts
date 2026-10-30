@@ -16,7 +16,7 @@ const CLOUDINARY_TARGET = {
   url: "https://api.cloudinary.com/v1_1/demo/video/upload",
   fileField: "file",
   chunkSize: 20,
-  fields: { api_key: "k", timestamp: "1", signature: "s", folder: "media/u/2026-10-29", public_id: "postora_x_1", overwrite: "true" },
+  fields: { api_key: "k", timestamp: "1", signature: "s", folder: "media/u/2026-10-29", public_id: "postora_x_1", overwrite: "false" },
 };
 
 const CLOUDINARY_DONE = { public_id: "media/u/2026-10-29/postora_x_1", version: 7, signature: "abc", secure_url: "https://res.cloudinary.com/x.mp4", bytes: 45 };
@@ -94,6 +94,31 @@ describe("uploadLargeMedia", () => {
     expect(d.invoke).toHaveBeenLastCalledWith(expect.objectContaining({
       results: { cloudinary: CLOUDINARY_DONE },
       failures: { openinary: "openinary refused the upload: File size exceeds limit of 50MB" },
+    }));
+  });
+
+  it("uploads to every provider at the same time and reports their mean progress", async () => {
+    const releases: (() => void)[] = [];
+    const reporters: ((fraction: number) => void)[] = [];
+    const postForm = vi.fn<PostForm>((url, _form, { onProgress }) => new Promise((resolve) => {
+      reporters.push((fraction) => onProgress?.(fraction));
+      releases.push(() => resolve(url.startsWith("https://openinary")
+        ? { status: 200, body: { success: true, files: [{ path: STORED_PATH }] } }
+        : { status: 200, body: CLOUDINARY_DONE }));
+    }));
+    const d = deps([OPENINARY_TARGET, { ...CLOUDINARY_TARGET, chunkSize: 100 }], postForm);
+    const progress: number[] = [];
+
+    const upload = uploadLargeMedia(video(20), (p) => progress.push(p), d);
+    await vi.waitFor(() => expect(postForm).toHaveBeenCalledTimes(2));
+    reporters[0](1);
+    reporters[1](0.5);
+    expect(progress.at(-1)).toBe(75);
+    releases.forEach((release) => release());
+    await upload;
+
+    expect(d.invoke).toHaveBeenLastCalledWith(expect.objectContaining({
+      results: { openinary: { path: STORED_PATH }, cloudinary: CLOUDINARY_DONE },
     }));
   });
 

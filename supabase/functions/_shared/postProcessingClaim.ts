@@ -31,9 +31,11 @@ export async function claimPostForProcessing(
   postId: string,
   expectedScheduledAt?: string | null,
 ): Promise<PostProcessingClaim> {
+  // processing_started_at lets sweep_stale_processing_posts() tell a post stranded by a
+  // killed worker from one claimed a minute ago.
   let transition = supabase
     .from("posts")
-    .update({ status: "processing" })
+    .update({ status: "processing", processing_started_at: new Date().toISOString() })
     .eq("id", postId);
 
   if (expectedScheduledAt === null) {

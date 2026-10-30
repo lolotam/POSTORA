@@ -136,6 +136,7 @@ SUITES=(
   media_retention.sql
   media_upload_quota.sql
   media_upload_limits.sql
+  deferred_publishes.sql
   tiktok_review_lifecycle.sql
   whatsapp_account_continuity.sql
   store_webhook_silence.sql

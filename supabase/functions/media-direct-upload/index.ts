@@ -13,25 +13,34 @@
 import { createClient, type SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { z } from "npm:zod@3.23.8";
 import { authenticateCaller } from "../_shared/auth-helper.ts";
+import { readJsonBodyCapped } from "../_shared/cappedJsonBody.ts";
 import { handleRestrictedCorsOptions, restrictedJsonResponse } from "../_shared/cors.ts";
 import { getOpeninaryConfig, openinaryTarget } from "../_shared/openinary.ts";
-import { parseUploadLimits, type UploadLimits } from "../_shared/mediaTypes.ts";
+import { checkUserRateLimit } from "../_shared/rate-limiter.ts";
 import { mediaQuotaBody, type QuotaRpc } from "../_shared/mediaQuotaError.ts";
 import { mediaQuotaPreflight } from "../cloudinary-upload/mediaQuota.ts";
 import { getCdnPolicy } from "../cloudinary-upload/providerPolicy.ts";
 import { getTodayFolder, mediaPublicId, sanitizeEmailForFolder } from "../cloudinary-upload/objectNaming.ts";
 import { cloudinaryPublicIdMatches, planDirectUpload } from "./plan.ts";
 import {
+  cloudinaryAssetMismatch,
   cloudinaryUploadTarget,
   confirmOpeninaryObject,
+  fetchCloudinaryAsset,
   isGenuineCloudinaryResult,
   openinaryUploadBaseUrl,
   openinaryUploadTarget,
   presignOpeninary,
   type UploadTarget,
 } from "./providers.ts";
+import { readUploadLimits, refuse } from "./refusals.ts";
 import { registerDirectUpload, type CloudinaryStored } from "./register.ts";
 import { SESSION_TTL_SECONDS, signSession, verifySession, type DirectUploadSession } from "./session.ts";
+
+/** A start or complete request is a few hundred bytes; the signed session dominates. */
+const MAX_BODY_BYTES = 64 * 1024;
+/** Each start hands out signed upload targets, so it is bounded per user (see the spec, A3). */
+const START_LIMIT = { max: 30, windowSeconds: 3600 };
 
 const StartSchema = z.object({
   action: z.literal("start"),
@@ -44,7 +53,8 @@ const CloudinaryResultSchema = z.object({
   public_id: z.string().min(1),
   version: z.union([z.number(), z.string()]),
   signature: z.string().min(1),
-  secure_url: z.string().url(),
+  // Only public_id and version are signed; the stored URL and size come from the Admin API.
+  secure_url: z.string().url().optional(),
   bytes: z.number().int().nonnegative().optional(),
   width: z.number().optional(),
   height: z.number().optional(),
@@ -72,26 +82,41 @@ function cloudinaryCredentials() {
   return cloudName && apiKey && apiSecret ? { cloudName, apiKey, apiSecret } : null;
 }
 
-/** The admin's choice from Settings → Media upload limits; a failed read means the defaults. */
-async function readUploadLimits(adminDb: SupabaseClient): Promise<UploadLimits> {
-  const { data, error } = await adminDb.from("app_settings").select("value").eq("key", "media_upload_limits").maybeSingle();
-  if (error) console.warn("[media-direct-upload] upload limits unreadable; using the defaults");
-  return parseUploadLimits(data?.value);
-}
-
 async function handleStart(req: Request, input: z.infer<typeof StartSchema>, userId: string, userDb: SupabaseClient, adminDb: SupabaseClient, secret: string) {
+  const fileFacts = { size: input.size, mime_type: input.mimeType ?? null };
+  const rate = await checkUserRateLimit(adminDb, "media-direct-upload:start", userId, START_LIMIT.max, START_LIMIT.windowSeconds);
+  if (!rate.allowed) {
+    return refuse(req, adminDb, userId, {
+      status: 429,
+      reason: "rate_limited",
+      body: { success: false, error: "Too many uploads started. Please wait and try again.", code: "rate_limited" },
+      headers: { "Retry-After": String(rate.retryAfter) },
+    });
+  }
+
   const cloudinary = cloudinaryCredentials();
   const openinaryConfig = getOpeninaryConfig();
   const [policy, limits] = await Promise.all([getCdnPolicy(adminDb), readUploadLimits(adminDb)]);
+  if (!limits) {
+    return refuse(req, adminDb, userId, {
+      status: 503,
+      reason: "limits_unavailable",
+      body: { success: false, error: "Uploads are temporarily unavailable. Please try again.", retryable: true },
+    });
+  }
   const plan = planDirectUpload(input, policy, { cloudinary: !!cloudinary, openinaryConfigured: !!openinaryConfig }, limits);
   if (!plan.ok) {
-    console.warn(`[media-direct-upload] start refused: ${plan.reason}`);
-    return restrictedJsonResponse(req, { success: false, error: plan.error, retryable: plan.status === 503 }, plan.status);
+    return refuse(req, adminDb, userId, {
+      status: plan.status,
+      reason: plan.reason,
+      body: { success: false, error: plan.error, retryable: plan.status === 503 },
+      metadata: fileFacts,
+    });
   }
 
   // The typed client answers rpc() with a thenable builder, which QuotaRpc models as a Promise.
   const blocked = await mediaQuotaPreflight(adminDb as unknown as QuotaRpc, userId);
-  if (blocked) return restrictedJsonResponse(req, mediaQuotaBody(blocked.limit), 429);
+  if (blocked) return refuse(req, adminDb, userId, { status: 429, reason: "quota_exceeded", body: mediaQuotaBody(blocked.limit), metadata: fileFacts });
 
   const { data: profile } = await adminDb.from("profiles").select("email").eq("id", userId).maybeSingle();
   const uploadDate = getTodayFolder();
@@ -144,8 +169,12 @@ async function handleStart(req: Request, input: z.infer<typeof StartSchema>, use
     session.providers.push(provider);
   }
   if (targets.length === 0) {
-    console.error(`[media-direct-upload] no provider could take the upload: ${errors.join("; ")}`);
-    return restrictedJsonResponse(req, { success: false, error: "Storage temporarily unavailable", retryable: true }, 503);
+    return refuse(req, adminDb, userId, {
+      status: 503,
+      reason: "no_provider_available",
+      body: { success: false, error: "Storage temporarily unavailable", retryable: true },
+      metadata: { ...fileFacts, provider_errors: errors },
+    });
   }
   // Kept from the policy even when a required provider could not be presigned, so
   // `complete` reports the upload as partial, as the edge-function path does.
@@ -161,9 +190,12 @@ async function handleStart(req: Request, input: z.infer<typeof StartSchema>, use
 async function handleComplete(req: Request, input: z.infer<typeof CompleteSchema>, userId: string, userDb: SupabaseClient, adminDb: SupabaseClient, secret: string) {
   const checked = await verifySession(input.session, secret, userId);
   if (!checked.ok) {
-    console.warn(`[media-direct-upload] complete refused: session ${checked.reason}`);
     const expired = checked.reason === "expired";
-    return restrictedJsonResponse(req, { success: false, error: expired ? "The upload took too long. Please try again." : "Invalid upload session" }, expired ? 410 : 400);
+    return refuse(req, adminDb, userId, {
+      status: expired ? 410 : 400,
+      reason: `session_${checked.reason}`,
+      body: { success: false, error: expired ? "The upload took too long. Please try again." : "Invalid upload session" },
+    });
   }
   const { session } = checked;
   const errors: string[] = [];
@@ -189,8 +221,14 @@ async function handleComplete(req: Request, input: z.infer<typeof CompleteSchema
     if (result && credentials) {
       const genuine = await isGenuineCloudinaryResult(result, credentials.apiSecret);
       const ours = cloudinaryPublicIdMatches(result.public_id, session.publicId);
-      if (genuine && ours) cloudinary = result;
-      else errors.push(`cloudinary: ${genuine ? "result is for another object" : "result signature does not match"}`);
+      if (!genuine || !ours) {
+        errors.push(`cloudinary: ${genuine ? "result is for another object" : "result signature does not match"}`);
+      } else {
+        const confirmed = await fetchCloudinaryAsset(credentials, session.kind === "video" ? "video" : "image", result.public_id);
+        const mismatch = confirmed.ok ? cloudinaryAssetMismatch(confirmed.asset, result.version, session.size) : confirmed.error;
+        if (confirmed.ok && !mismatch) cloudinary = confirmed.asset;
+        else errors.push(mismatch!);
+      }
     } else {
       errors.push(failureFor("cloudinary"));
     }
@@ -203,7 +241,14 @@ async function handleComplete(req: Request, input: z.infer<typeof CompleteSchema
     errors,
     cloudName: credentials?.cloudName,
   });
-  if (outcome.status !== 200) console.error(`[media-direct-upload] complete failed with ${outcome.status}: ${errors.join("; ")}`);
+  if (outcome.refusal) {
+    return refuse(req, adminDb, userId, {
+      status: outcome.status,
+      reason: outcome.refusal,
+      body: outcome.body,
+      metadata: { public_id: session.publicId, provider_errors: errors },
+    });
+  }
   return restrictedJsonResponse(req, outcome.body, outcome.status);
 }
 
@@ -211,24 +256,33 @@ export async function handleMediaDirectUpload(req: Request): Promise<Response> {
   if (req.method === "OPTIONS") return handleRestrictedCorsOptions(req);
   if (req.method !== "POST") return restrictedJsonResponse(req, { success: false, error: "Method not allowed" }, 405);
 
+  const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
+  const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+  // cdn_storage, the quota RPC, media_file_providers and system_logs are admin-only under RLS.
+  const adminDb = createClient(supabaseUrl, serviceRoleKey);
+
   let userId: string;
   try {
     // No body user id is passed, so a service-role bearer is refused: this path is for browsers only.
     ({ userId } = await authenticateCaller(req, null));
   } catch {
-    return restrictedJsonResponse(req, { success: false, error: "Authentication failed. Please refresh the page and try again." }, 401);
+    return refuse(req, adminDb, null, {
+      status: 401,
+      reason: "unauthenticated",
+      body: { success: false, error: "Authentication failed. Please refresh the page and try again." },
+    });
   }
 
-  const parsed = RequestSchema.safeParse(await req.json().catch(() => null));
-  if (!parsed.success) return restrictedJsonResponse(req, { success: false, error: "Invalid request" }, 400);
+  const body = await readJsonBodyCapped(req, MAX_BODY_BYTES);
+  if (!body.ok && body.reason === "too_large") {
+    return refuse(req, adminDb, userId, { status: 413, reason: "body_too_large", body: { success: false, error: "Request too large" } });
+  }
+  const parsed = RequestSchema.safeParse(body.ok ? body.value : null);
+  if (!parsed.success) return refuse(req, adminDb, userId, { status: 400, reason: "invalid_request", body: { success: false, error: "Invalid request" } });
 
-  const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
-  const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
   const userDb = createClient(supabaseUrl, Deno.env.get("SUPABASE_ANON_KEY")!, {
     global: { headers: { Authorization: req.headers.get("Authorization")! } },
   });
-  // cdn_storage, the quota RPC and media_file_providers are admin-only under RLS.
-  const adminDb = createClient(supabaseUrl, serviceRoleKey);
 
   try {
     return parsed.data.action === "start"
