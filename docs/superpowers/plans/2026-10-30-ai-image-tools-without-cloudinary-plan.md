@@ -30,6 +30,13 @@ multipart `file`; size cap; type sniff), `stageInput`, `fetchOutputBytes` (bound
 Tests `aiImageIo.test.ts` with a stubbed `fetch`: parsing variants, oversize, bad type, stage/
 store/discard calls, store failure falls back.
 
+## Task 3b — the shared AtlasCloud job
+
+`_shared/aiImageJob.ts`: `runAtlasImageJob` = stage an uploaded input, run the model, remove the
+staged copy, copy the result into Openinary (provider URL as the fallback), and map each failure to
+status/code/message. Both functions call it, so the orchestration exists once. Tests
+`aiImageJob.test.ts` with an injected model and a faked Openinary.
+
 ## Task 4 — caller auth for `remove-background`
 
 Keep the existing in-file `profiles.api_key` lookup untouched: `partner-api/d8Containment.test.ts`

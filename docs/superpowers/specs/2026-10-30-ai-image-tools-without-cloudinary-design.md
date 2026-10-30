@@ -42,8 +42,11 @@ Server: `cloudinaryUsableForTransforms(policy, env)` in `_shared/aiImageProvider
 `orderWriteProviders(policy, { cloudinary: envPresent, openinaryConfigured }).includes("cloudinary")`.
 That is exactly the rule the upload path uses to decide whether it writes to Cloudinary, so
 the AI tools and uploads cannot disagree. With the default policy (Openinary only) and a
-healthy Openinary, Cloudinary is *not* usable. An unreadable setting falls back to Openinary
-(`parseCdnPolicy`), i.e. also "not usable".
+healthy Openinary, Cloudinary is *not* usable. A missing setting row behaves as on the upload
+path (Cloudinary only as the fallback when it has credentials and Openinary is not enabled).
+A *failed read* is the one place the tools are deliberately stricter than the upload path
+(whose reader turns it into the default policy): the tools treat it as "not usable", so a
+database blip sends a paid request to AtlasCloud rather than to a possibly disabled account.
 
 Browser: `isCloudinaryTransformsAvailable(config)` is `write_policy.providers.includes("cloudinary")`
 from the existing `useCdnConfig`. The browser does not know the server env, so it is the
