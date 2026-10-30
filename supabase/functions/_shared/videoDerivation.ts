@@ -118,7 +118,16 @@ async function discardRendition(
   } catch (error) {
     failure = error instanceof Error ? error.message : "unexpected error";
   }
-  if (failure === null) return;
+  if (failure !== null) await logUnremovedObject(deps, userId, provider, objectKey, failure);
+}
+
+async function logUnremovedObject(
+  deps: DeriveDeps,
+  userId: string,
+  provider: "openinary" | "cloudinary",
+  objectKey: string,
+  failure: string,
+): Promise<void> {
   console.error(`[video-derivation] could not remove ${provider} object ${objectKey}: ${failure}`);
   const entry: CleanupLogEntry = {
     message: "Could not remove a discarded video rendition",
@@ -154,6 +163,13 @@ export async function deriveVideo(deps: DeriveDeps, request: DeriveRequest): Pro
   const startedAt = now();
 
   const { row, providers } = await loadOwnedVideo(deps.adminDb, request.mediaFileId, request.userId);
+  if (request.mustShrink && !(typeof row.file_size === "number" && row.file_size > 0)) {
+    // Without the original's size a "smaller" result cannot be confirmed; refuse before paying for an encode.
+    throw new OpeninaryVideoError(
+      "SIZE_NOT_VERIFIABLE",
+      "This video's original size is not recorded, so a smaller result cannot be confirmed. Re-upload the video to compress it.",
+    );
+  }
   const source = resolveVideoSource(row, providers, deps.openinary);
   const sourceDimensions = knownDimensions(row, request.claimedDimensions);
 
@@ -202,9 +218,16 @@ export async function deriveVideo(deps: DeriveDeps, request: DeriveRequest): Pro
   }
 
   const target = derivedObjectTarget(source.path, request.label, now());
-  const ingested: IngestedVideo = await io.ingest(config, response, target.folder, target.fileName, {
-    timeoutMs: Math.max(MIN_INGEST_TIMEOUT_MS, WALL_CLOCK_BUDGET_MS - (now() - startedAt)),
-  });
+  let ingested: IngestedVideo;
+  try {
+    ingested = await io.ingest(config, response, target.folder, target.fileName, {
+      timeoutMs: Math.max(MIN_INGEST_TIMEOUT_MS, WALL_CLOCK_BUDGET_MS - (now() - startedAt)),
+    });
+  } catch (error) {
+    const stray = error instanceof OpeninaryVideoError ? error.unremovedObject : undefined;
+    if (stray) await logUnremovedObject(deps, request.userId, "openinary", stray.key, stray.error);
+    throw error;
+  }
   const discardStored = () => discardRendition(deps, request.userId, "openinary", ingested.path, () => io.deleteObject(config, ingested.path));
 
   try {

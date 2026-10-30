@@ -51,6 +51,8 @@ Deno.test("crop target sizes must be whole numbers within the bound", () => {
   assertEquals(invalid({ media_file_id: "m1", operation: "crop", crop: { ...crop, targetWidth: 1080.5, targetHeight: 1920 } }).includes("crop.targetWidth"), true);
   assertEquals(invalid({ media_file_id: "m1", operation: "crop", crop: { ...crop, targetWidth: 1080, targetHeight: 4097 } }).includes("crop.targetHeight"), true);
   assertEquals(invalid({ media_file_id: "m1", operation: "crop", crop: { ...crop, targetWidth: 0, targetHeight: 1 } }).includes("crop.targetWidth"), true);
+  assertEquals(invalid({ media_file_id: "m1", operation: "crop", crop: { ...crop, targetWidth: 1080 } }).includes("crop.targetHeight"), true);
+  assertEquals(invalid({ media_file_id: "m1", operation: "crop", crop: { ...crop, targetHeight: 1920 } }).includes("crop.targetHeight"), true);
   const ok = parseProcessVideoRequest({ media_file_id: "m1", operation: "crop", crop: { ...crop, targetWidth: 4096, targetHeight: 4096 } });
   assertEquals(ok.crop?.targetHeight, 4096);
 });

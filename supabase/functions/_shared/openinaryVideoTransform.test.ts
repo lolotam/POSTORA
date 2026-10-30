@@ -163,3 +163,20 @@ Deno.test("inherited object keys are not transcode presets", () => {
     refusal(() => planTranscode(key), "INVALID_REQUEST");
   }
 });
+
+Deno.test("a crop target needs both its width and its height", () => {
+  const box = { x: 34.1796875, y: 0, width: 31.640625, height: 100 };
+  refusal(() => planCrop({ ...box, targetWidth: 1080 }, FHD), "INVALID_REQUEST");
+  refusal(() => planCrop({ ...box, targetHeight: 1920 }, FHD), "INVALID_REQUEST");
+  refusal(() => cloudinaryCropTransformation({ ...box, targetWidth: 1080 }, FHD), "INVALID_REQUEST");
+});
+
+Deno.test("a sliver of a crop is refused instead of upscaled to an absurd or infinite size", () => {
+  // 0.01 % of 1920 rounds to 0 pixels wide: the auto-upscale used to divide by zero
+  refusal(() => planCrop({ x: 49.995, y: 0, width: 0.01, height: 100 }, FHD), "INVALID_REQUEST");
+  refusal(() => cloudinaryCropTransformation({ x: 49.995, y: 0, width: 0.01, height: 100 }, FHD), "INVALID_REQUEST");
+  // 20 px wide on a 4320 px tall source would upscale to 720 x 155520
+  refusal(() => planCrop({ x: 49.87, y: 0, width: 0.26, height: 100 }, { width: 7680, height: 4320 }), "INVALID_REQUEST");
+  // an untouched 8K full frame keeps its own size
+  assertEquals(planCrop({ x: 0, y: 0, width: 100, height: 100 }, { width: 7680, height: 4320 }).output, { width: 7680, height: 4320 });
+});

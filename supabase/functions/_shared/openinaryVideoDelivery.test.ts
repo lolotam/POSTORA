@@ -130,12 +130,13 @@ interface Received { folder: string | null; fileName: string | null; bytes: Uint
 async function withUploadServer<T>(
   respond: (received: Received) => Response,
   run: (cfg: OpeninaryConfig, received: Received[], deletes: string[]) => Promise<T>,
+  deleteStatus = 200,
 ): Promise<T> {
   const received: Received[] = [];
   const deletes: string[] = [];
   const server = Deno.serve({ port: 0, hostname: "127.0.0.1", onListen: () => {} }, async (req) => {
     const url = new URL(req.url);
-    if (req.method === "DELETE") { deletes.push(decodeURIComponent(url.pathname)); return new Response(null, { status: 200 }); }
+    if (req.method === "DELETE") { deletes.push(decodeURIComponent(url.pathname)); return new Response(null, { status: deleteStatus }); }
     // The buffered path lists the folder first; an empty folder answers 404.
     if (req.method === "GET") return new Response(null, { status: 404 });
     const form = await req.formData();
@@ -403,5 +404,22 @@ Deno.test({
       assertEquals(await code(ingestVariant(cfg, source, "f", "v.mp4")), "STORE_FAILED");
       assertEquals(deletes, ["/api/storage/f/v.mp4"]);
     });
+  },
+});
+
+Deno.test({
+  name: "a renamed object that cannot be removed rides on the error with its key; a removed one does not",
+  ...cleanupTest,
+  fn: async () => {
+    const unremoved = await withUploadServer(collision, async (cfg) => {
+      const error = await assertRejects(() => ingestVariant(cfg, chunked([patterned(1000)]), "f", "v.mp4"), OpeninaryVideoError);
+      return error.unremovedObject;
+    }, 500);
+    assertEquals(unremoved?.key, "f/v (1).mp4");
+    const removed = await withUploadServer(collision, async (cfg) => {
+      const error = await assertRejects(() => ingestVariant(cfg, chunked([patterned(1000)]), "f", "v.mp4"), OpeninaryVideoError);
+      return error.unremovedObject;
+    });
+    assertEquals(removed, undefined);
   },
 });

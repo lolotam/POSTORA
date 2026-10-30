@@ -14,6 +14,9 @@ const CropSchema = z.object({
   height: z.number().finite(),
   targetWidth: optionalTarget,
   targetHeight: optionalTarget,
+}).refine((crop) => (crop.targetWidth === undefined) === (crop.targetHeight === undefined), {
+  path: ["targetHeight"],
+  message: "targetWidth and targetHeight must be given together",
 });
 
 const CompressSchema = z.object({

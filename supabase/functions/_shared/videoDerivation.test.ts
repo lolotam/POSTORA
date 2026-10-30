@@ -108,6 +108,13 @@ Deno.test("a compression that would not shrink the file fails before storing any
   assertEquals(state.inserted.length, 0);
 });
 
+Deno.test("a compression is refused before any encode when the original's size is not recorded", async () => {
+  const { deps, calls } = harness({ dbState: { mediaFiles: [videoRow({ file_size: null })] } });
+  const error = await assertRejects(() => deriveVideo(deps, compressRequest()), OpeninaryVideoError);
+  assertEquals(error.code, "SIZE_NOT_VERIFIABLE");
+  assertEquals(calls.variant.length, 0);
+});
+
 Deno.test("a result above the requested size target is refused up front when the size is announced", async () => {
   const { deps, calls } = harness({ variantBytes: 9_000_000 });
   const error = await assertRejects(() => deriveVideo(deps, compressRequest({ maxSizeMB: 5 })), OpeninaryVideoError);
@@ -270,6 +277,20 @@ Deno.test("a failed Cloudinary cleanup is logged with its public id", async () =
   deps.io!.destroyCloudinaryObject = () => Promise.resolve({ success: false, error: "timed out" });
   await assertRejects(() => deriveVideo(deps, compressRequest({ maxSizeMB: 5, mustShrink: false })), OpeninaryVideoError);
   assertEquals(logged[0].metadata, { provider: "cloudinary", object_key: "postora_compress_1_x", error: "timed out" });
+});
+
+Deno.test("an object the upload left behind and could not remove is logged with its key", async () => {
+  const logged: { metadata: Record<string, unknown> }[] = [];
+  const { deps } = harness();
+  deps.log = (entry) => { logged.push(entry); return Promise.resolve(); };
+  deps.io!.ingest = () => {
+    const failure = new OpeninaryVideoError("STORE_FAILED", "could not store");
+    failure.unremovedObject = { key: "f/v (1).mp4", error: "Openinary delete failed: 500" };
+    return Promise.reject(failure);
+  };
+  const error = await assertRejects(() => deriveVideo(deps, compressRequest()), OpeninaryVideoError);
+  assertEquals(error.code, "STORE_FAILED");
+  assertEquals(logged.map((entry) => entry.metadata), [{ provider: "openinary", object_key: "f/v (1).mp4", error: "Openinary delete failed: 500" }]);
 });
 
 Deno.test("a cleanup that works logs nothing", async () => {

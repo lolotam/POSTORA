@@ -193,6 +193,26 @@ function storeFailed(): OpeninaryVideoError {
 }
 
 /**
+ * The STORE_FAILED for an upload that left an object we did not ask for. The object is removed;
+ * if that fails, its key rides on the error so deriveVideo can log it where it can be found.
+ */
+async function strayObjectFailure(config: OpeninaryConfig, path: string): Promise<OpeninaryVideoError> {
+  const failure = storeFailed();
+  let reason: string | null = null;
+  try {
+    const removed = await deleteFromOpeninary(config, path);
+    if (!removed.success) reason = removed.error ?? "provider refused";
+  } catch (error) {
+    reason = error instanceof Error ? error.message : "unexpected error";
+  }
+  if (reason !== null) {
+    console.error(`[openinary-video] could not remove stray object ${path}: ${reason}`);
+    failure.unremovedObject = { key: path, error: reason };
+  }
+  return failure;
+}
+
+/**
  * Store a rendition as `folder/fileName`. A name Openinary renamed to avoid a collision is a
  * failure (the deterministic read URL would not find it), and the renamed object is removed.
  */
@@ -229,7 +249,7 @@ async function ingestBuffered(config: OpeninaryConfig, response: Response, lengt
   if (result.success && result.path) return { path: result.path, url: result.url ?? openinaryDeliveryUrl(config, result.path), bytes: blob.size };
   console.error("[openinary-video] buffered upload failed:", result.error);
   // A collision rename stores the object under another path; do not leave it behind.
-  if (result.path && result.path !== `${folder}/${fileName}`) await deleteFromOpeninary(config, result.path);
+  if (result.path && result.path !== `${folder}/${fileName}`) throw await strayObjectFailure(config, result.path);
   throw storeFailed();
 }
 
@@ -303,8 +323,7 @@ async function ingestStreamed(
   const sizeMatches = (length === null || length === sent) && (typeof reportedSize !== "number" || reportedSize === sent);
   if (stored !== `${folder}/${fileName}` || !sizeMatches) {
     console.error("[openinary-video] streamed upload stored a different object than requested");
-    await deleteFromOpeninary(config, stored);
-    throw storeFailed();
+    throw await strayObjectFailure(config, stored);
   }
   return { path: stored, url: openinaryDeliveryUrl(config, stored), bytes: sent };
 }

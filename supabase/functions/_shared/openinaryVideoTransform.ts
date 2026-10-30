@@ -59,6 +59,8 @@ const STATUS: Record<OpeninaryVideoErrorCode, number> = {
 export class OpeninaryVideoError extends Error {
   readonly code: OpeninaryVideoErrorCode;
   readonly status: number;
+  /** A stored object this failure left behind and could not remove, for the caller to log. */
+  unremovedObject?: { key: string; error: string };
   constructor(code: OpeninaryVideoErrorCode, message: string) {
     super(message);
     this.name = "OpeninaryVideoError";
@@ -101,6 +103,8 @@ const MIN_VERTICAL_WIDTH = 720;
 const MAX_DIMENSION = 16384;
 /** Largest output a caller may ask a crop to be scaled to (4K UHD is 3840 wide). */
 export const MAX_TARGET_DIMENSION = 4096;
+/** A crop box smaller than this many pixels on either side is not a usable video. */
+const MIN_CROP_PIXELS = 16;
 
 const TRANSCODE_PRESETS: Record<TranscodePlatform, Dimensions> = {
   tiktok: { width: 720, height: 1280 },
@@ -176,12 +180,27 @@ export function planTranscode(platform: string | undefined): OpeninaryPlan & { p
 
 interface CropRegion { width: number; height: number; fullFrame: boolean }
 
+/** A sliver of a crop, or the upscale it implies, must not reach the encoder. */
+function assertViableCrop(region: { width: number; height: number }, output: Dimensions): void {
+  if (region.width < MIN_CROP_PIXELS || region.height < MIN_CROP_PIXELS) {
+    throw invalid(`crop box is too small: each side must cover at least ${MIN_CROP_PIXELS} pixels of the video`);
+  }
+  // The same ceiling a source may have: an untouched crop keeps its size, so only an upscale can pass it.
+  const bounded = (n: number) => Number.isFinite(n) && n >= 1 && n <= MAX_DIMENSION;
+  if (!bounded(output.width) || !bounded(output.height)) {
+    throw invalid(`crop box is too narrow: the resized video would exceed ${MAX_DIMENSION} pixels`);
+  }
+}
+
 function assertCrop(crop: CropRequest): void {
   const edges = [crop?.x, crop?.y, crop?.width, crop?.height];
   if (edges.some((n) => typeof n !== "number" || !Number.isFinite(n))) throw invalid("crop x, y, width and height must be numbers");
   if (crop.x < 0 || crop.y < 0 || !isPositiveNumber(crop.width) || !isPositiveNumber(crop.height)
     || crop.x + crop.width > 100 + ALIGN_TOLERANCE_PERCENT || crop.y + crop.height > 100 + ALIGN_TOLERANCE_PERCENT) {
     throw invalid("crop must be percentages (0-100) that stay inside the frame");
+  }
+  if ((crop.targetWidth === undefined || crop.targetWidth === null) !== (crop.targetHeight === undefined || crop.targetHeight === null)) {
+    throw invalid("crop target width and height must be given together");
   }
   for (const target of [crop.targetWidth, crop.targetHeight]) {
     if (target === undefined || target === null) continue;
@@ -238,6 +257,7 @@ export function planCrop(crop: CropRequest, source: Dimensions | null): Openinar
     output = { width: MIN_VERTICAL_WIDTH, height: evenDimension(MIN_VERTICAL_WIDTH / (region.width / region.height)) };
   }
 
+  assertViableCrop(region, output);
   const q = QUALITY_TIER_Q.good;
   return { segment: `w_${output.width},h_${output.height},c_fill,q_${q},f_mp4`, output, warnings: [] };
 }
@@ -269,11 +289,14 @@ export function cloudinaryCropTransformation(crop: CropRequest, source: Dimensio
   const w = px(crop.width, source.width);
   const h = px(crop.height, source.height);
   let chain = `c_crop,x_${x},y_${y},w_${w},h_${h}`;
+  let output: Dimensions = { width: w, height: h };
   if (targetWidth && targetHeight) {
-    if (w < targetWidth || h < targetHeight) chain += `/c_scale,w_${targetWidth},h_${targetHeight}`;
+    if (w < targetWidth || h < targetHeight) output = { width: targetWidth, height: targetHeight };
   } else if (w / h < NARROW_VERTICAL_RATIO && w < MIN_VERTICAL_WIDTH) {
-    chain += `/c_scale,w_${MIN_VERTICAL_WIDTH},h_${Math.round(MIN_VERTICAL_WIDTH / (w / h))}`;
+    output = { width: MIN_VERTICAL_WIDTH, height: Math.round(MIN_VERTICAL_WIDTH / (w / h)) };
   }
+  assertViableCrop({ width: w, height: h }, output);
+  if (output.width !== w || output.height !== h) chain += `/c_scale,w_${output.width},h_${output.height}`;
   return `${chain}/vc_h264,q_auto:good,f_mp4`;
 }
 
