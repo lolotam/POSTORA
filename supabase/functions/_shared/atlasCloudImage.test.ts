@@ -86,15 +86,13 @@ Deno.test("check: an output that is not a well-formed https URL is a bad_respons
   }
 });
 
-Deno.test("check: rejections and rate limits are final at once; a missing prediction is a failure", async () => {
+Deno.test("check: a refused key is final at once; a missing prediction is a failure", async () => {
   const check = (status: number) =>
     checkAtlasJob({ ...base, predictionId: "p", fetchFn: fakeAtlas(submitted, [() => new Response("no", { status })]).fetchFn });
   for (const status of [401, 402, 403]) {
     const result = await check(status);
     assertEquals(result.ok === false && [result.kind, result.httpStatus], ["provider_rejected", 503], String(status));
   }
-  const limited = await check(429);
-  assertEquals(limited.ok === false && [limited.kind, limited.httpStatus], ["rate_limited", 429]);
   const missing = await check(404);
   assertEquals(missing.ok === false && missing.kind, "failed");
 });
@@ -106,6 +104,44 @@ Deno.test("check: a server error or a network failure is transient, so it reads 
   );
   const down = (() => Promise.reject(new Error("reset"))) as typeof fetch;
   assertEquals(await checkAtlasJob({ ...base, predictionId: "p", fetchFn: down }), { ok: true, state: "pending" });
+});
+
+Deno.test("check: a 429 only throttles our status query, so the paid job stays pending (submit still treats 429 as final)", async () => {
+  const throttled = () => new Response("slow down", { status: 429 });
+  assertEquals(await checkAtlasJob({ ...base, predictionId: "p", fetchFn: fakeAtlas(submitted, [throttled]).fetchFn }), { ok: true, state: "pending" });
+  const alsoWithBalanceWords = () => new Response("insufficient balance, slow down", { status: 429 });
+  assertEquals(await checkAtlasJob({ ...base, predictionId: "p", fetchFn: fakeAtlas(submitted, [alsoWithBalanceWords]).fetchFn }), { ok: true, state: "pending" });
+});
+
+Deno.test("check: a 5xx stays transient even when its page mentions a balance (load balancer), while a 4xx about credit is final", async () => {
+  for (const status of [500, 502, 503, 504]) {
+    const page = () => new Response("<html>502 Bad Gateway - load balancer error</html>", { status });
+    assertEquals(await checkAtlasJob({ ...base, predictionId: "p", fetchFn: fakeAtlas(submitted, [page]).fetchFn }), { ok: true, state: "pending" }, String(status));
+  }
+  const credit = await checkAtlasJob({ ...base, predictionId: "p", fetchFn: fakeAtlas(submitted, [() => new Response("not enough credit", { status: 400 })]).fetchFn });
+  assertEquals(credit.ok === false && credit.kind, "provider_rejected");
+});
+
+Deno.test("submit: a 5xx page that mentions a load balancer is a plain failure, not an operator rejection", async () => {
+  const result = await submitAtlasJob({ ...base, body: {}, fetchFn: fakeAtlas(() => new Response("load balancer error", { status: 502 })).fetchFn });
+  assertEquals(result.ok === false && [result.kind, result.httpStatus], ["failed", 502]);
+});
+
+Deno.test("check: a 200 that is not a prediction (bad JSON, no data, no string status) is a bad_response; an unknown status stays pending", async () => {
+  const answers: Array<() => Response> = [
+    () => new Response("<html>not json</html>", { status: 200 }),
+    () => json({}),
+    () => json({ data: null }),
+    () => json({ data: {} }),
+    () => json({ data: { status: 7 } }),
+    () => json({ data: { status: null } }),
+  ];
+  for (const answer of answers) {
+    const result = await checkAtlasJob({ ...base, predictionId: "p", fetchFn: fakeAtlas(submitted, [answer]).fetchFn });
+    assertEquals(result.ok === false && [result.kind, result.httpStatus], ["bad_response", 502]);
+  }
+  const unknown = () => json({ data: { status: "warming_up" } });
+  assertEquals(await checkAtlasJob({ ...base, predictionId: "p", fetchFn: fakeAtlas(submitted, [unknown]).fetchFn }), { ok: true, state: "pending" });
 });
 
 /** A clock the fake `sleep` advances, so the polling deadline is exercised without waiting. */

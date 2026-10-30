@@ -71,13 +71,17 @@ function networkFailure(step: string, error: unknown): AtlasFailure {
   return failure(isTimeout(error) ? "timeout" : "unreachable", detail);
 }
 
-/** An answer that means "stop now", as opposed to a transient server or network problem. */
+/**
+ * An answer that means "stop now", as opposed to a transient server or network problem. Every
+ * status >= 500 is transient here, whatever its body says (a gateway page about its "load
+ * balancer" is not a balance problem); the balance words only count in a 4xx answer.
+ */
 function terminalHttpFailure(status: number, text: string): AtlasFailure | null {
+  if (status < 400 || status >= 500) return null;
   const detail = `HTTP ${status}: ${text.slice(0, 300)}`;
   if (status === 401 || status === 402 || status === 403 || BALANCE_WORDS.test(text)) return failure("provider_rejected", detail);
   if (status === 429) return failure("rate_limited", detail);
-  if (status >= 400 && status < 500) return failure("failed", detail);
-  return null;
+  return failure("failed", detail);
 }
 
 /** https with a real host, or null. The URL is fetched by this runtime, so it must be well formed. */
@@ -121,9 +125,11 @@ export async function submitAtlasJob(opts: CallOptions & { body: Record<string, 
 }
 
 /**
- * One look at a prediction. Rejections and rate limits are final at once; a server error or a
- * network failure is transient and reads as "still pending", so the caller's own deadline or
- * retry decides when to give up.
+ * One look at a prediction. A refused key or a missing prediction is final at once. Anything
+ * transient reads as "still pending", so the caller's own deadline or retry decides when to
+ * give up: a server error, a network failure, and a 429 (that only says this status query was
+ * throttled; the paid job keeps running). A 200 that is not a prediction at all is a
+ * `bad_response`; an unfamiliar status string is still pending.
  */
 export async function checkAtlasJob(opts: CallOptions & { predictionId: string }): Promise<AtlasCheckResult> {
   let poll: Response;
@@ -138,17 +144,22 @@ export async function checkAtlasJob(opts: CallOptions & { predictionId: string }
     return { ok: true, state: "pending" };
   }
   if (!poll.ok) {
+    if (poll.status === 429) return { ok: true, state: "pending" };
     return terminalHttpFailure(poll.status, await poll.text().catch(() => "")) ?? { ok: true, state: "pending" };
   }
 
   const result = await poll.json().catch(() => null) as { data?: { status?: unknown; outputs?: unknown; error?: unknown } } | null;
-  const status = typeof result?.data?.status === "string" ? result.data.status.toLowerCase() : "";
+  const data = result?.data;
+  if (!data || typeof data !== "object" || typeof data.status !== "string") {
+    return failure("bad_response", `prediction ${opts.predictionId}: answer without a status`);
+  }
+  const status = data.status.toLowerCase();
   if (FAILED_STATES.has(status)) {
-    const detail = typeof result?.data?.error === "string" ? result.data.error : status;
+    const detail = typeof data.error === "string" ? data.error : status;
     return failure("failed", `prediction ${opts.predictionId}: ${detail}`);
   }
   if (DONE_STATES.has(status)) {
-    const first = Array.isArray(result?.data?.outputs) ? result.data.outputs[0] : undefined;
+    const first = Array.isArray(data.outputs) ? data.outputs[0] : undefined;
     const outputUrl = httpsOutputUrl(first);
     return outputUrl ? { ok: true, state: "done", outputUrl } : failure("bad_response", `prediction ${opts.predictionId}: completed without a valid https output`);
   }
