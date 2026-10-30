@@ -33,6 +33,8 @@ export const DeferralSchema = z.object({
   give_up_at: z.string(),
   next_check_at: z.string(),
   claimed_until: z.string().nullish(),
+  /** Set by a resumed run just before a published reel's first comment, comment setting and story share. */
+  followups_started_at: z.string().nullish(),
 });
 
 export type Deferral = z.infer<typeof DeferralSchema>;
@@ -57,6 +59,40 @@ export interface ResumeContext {
   deferral: Deferral;
   /** A live story the first run could not record; the resumed run records it. */
   unrecordedStory?: StoryRef | null;
+  /**
+   * Marks the pending row before the follow-ups run, only if no other run marked it first:
+   * `claimed: false` means another run holds them.
+   */
+  markFollowUpsStarted?: () => Promise<FollowUpMark>;
+}
+
+export type FollowUpMark = { claimed: boolean } | { error: string };
+
+/** The row's response data with its deferral marked: the follow-ups started at `now`. */
+export function withFollowUpsStarted(responseData: unknown, now: Date): Record<string, unknown> {
+  const data = (responseData as Record<string, unknown> | null) ?? {};
+  const deferred = (data.deferred as Record<string, unknown> | undefined) ?? {};
+  return { ...data, deferred: { ...deferred, followups_started_at: now.toISOString() } };
+}
+
+/**
+ * Whether this run may post a published reel's first comment, comment setting and story share.
+ * A first run always may. A resumed run may only if no earlier run started them and the row is
+ * marked first: a run stopped after them, before settling, would otherwise repeat them.
+ */
+export async function claimFollowUps(resume: ResumeContext | null | undefined): Promise<boolean> {
+  if (!resume) return true;
+  if (resume.deferral.followups_started_at) return false;
+  if (!resume.markFollowUpsStarted) return true;
+  let outcome: FollowUpMark;
+  try {
+    outcome = await resume.markFollowUpsStarted();
+  } catch (thrown) {
+    // The reel is live: a failed mark must never fail it, only skip what cannot run once.
+    outcome = { error: thrown instanceof Error ? thrown.message : String(thrown) };
+  }
+  if ("error" in outcome) console.error(`[instagram] could not mark the follow-ups, so they are skipped: ${outcome.error}`);
+  return "claimed" in outcome && outcome.claimed;
 }
 
 /**
@@ -127,6 +163,70 @@ export function pollDeadline(startedAtMs: number, resumed: boolean): number {
  */
 export function ownContainerDeadline(runDeadlineMs: number, requestStartedAtMs: number): number {
   return runDeadlineMs === CHECK_ONCE_DEADLINE ? requestStartedAtMs + FIRST_RUN_POLL_BUDGET_MS : runDeadlineMs;
+}
+
+/**
+ * How long one edge worker lives: `workerTimeoutMs` in the server-only `functions/main/index.ts`
+ * (150 s since 2026-10-30, Supabase's default; it was 60 s). The runtime reuses a worker for
+ * several requests inside that one lifetime, so a request can start on a worker that has
+ * already used part of it. Keep this in step with the server.
+ */
+export const WORKER_LIFETIME_MS = 150 * 1000;
+/**
+ * Kept at the end of a worker's life for what follows a publish: the permalink, first comment,
+ * comment setting, story mirror and recording the outcome.
+ */
+export const FOLLOW_UP_RESERVE_MS = 30 * 1000;
+/** Kept after a deferrable wait for the publish (up to 30 s), its 5 s check and the follow-ups. */
+export const PUBLISH_RESERVE_MS = 65 * 1000;
+
+/** Kept at the very end of a worker's life for recording the outcome (the row write, the roll-up). */
+export const RECORD_RESERVE_MS = 5 * 1000;
+/** The longest one best-effort request after a publish may wait. */
+export const FOLLOW_UP_REQUEST_MS = 8 * 1000;
+
+/**
+ * The timeout for one best-effort request after a publish (permalink, first comment, comment
+ * setting, story mirror): what is left before the record reserve, at most FOLLOW_UP_REQUEST_MS.
+ * 0 means there is no time for it, so it is skipped and the live post is still recorded.
+ */
+export function followUpTimeoutMs(workerStartedAtMs: number, nowMs: number): number {
+  const left = workerStartedAtMs + WORKER_LIFETIME_MS - RECORD_RESERVE_MS - nowMs;
+  return left >= 1000 ? Math.min(FOLLOW_UP_REQUEST_MS, left) : 0;
+}
+
+/** When a publish, and the check that settles it, must be over on this worker. */
+export function workerPublishDeadline(workerStartedAtMs: number): number {
+  return workerStartedAtMs + WORKER_LIFETIME_MS - FOLLOW_UP_RESERVE_MS;
+}
+
+/**
+ * The deadline for a container the reconciler can finish later: the run's own deadline, cut
+ * so the publish and recording after it still fit in what is left of the worker. Deferring
+ * early is safe; a worker stopped mid-wait loses the container, and the stale sweeper later
+ * fails the post as interrupted. A resumed run (check once) and a run nobody can resume (no
+ * deadline) are left as they are.
+ */
+export function deferrableDeadline(deadlineMs: number, workerStartedAtMs: number): number {
+  if (deadlineMs === CHECK_ONCE_DEADLINE || !Number.isFinite(deadlineMs)) return deadlineMs;
+  return Math.min(deadlineMs, workerStartedAtMs + WORKER_LIFETIME_MS - PUBLISH_RESERVE_MS);
+}
+
+/**
+ * Whether this worker is too old to start a run whose caller retries on its own: the
+ * reconciler's resume (it calls again next minute) and the scheduler's run (the post stays
+ * `scheduled` and is picked up on the next tick). Such a run is refused before it reads or
+ * claims anything, so a fresh worker does all of it. Any other caller (the web app, n8n, MCP,
+ * TikTok review) does not retry a refusal, so its run starts and is bounded by the deadlines
+ * above instead: a reel defers, and nothing else is published that cannot be recorded.
+ */
+export function refuseOnSpentWorker(
+  run: { resume: boolean; scheduled: boolean },
+  workerStartedAtMs: number,
+  nowMs: number,
+): boolean {
+  if (!run.resume && !run.scheduled) return false;
+  return workerStartedAtMs + WORKER_LIFETIME_MS - nowMs < PUBLISH_RESERVE_MS;
 }
 
 /** How long past `give_up_at` an abandon may keep retrying a story it could not record. */

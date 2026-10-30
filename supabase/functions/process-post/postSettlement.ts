@@ -198,6 +198,18 @@ export function unrecordedStoryLog(userId: string, postId: string, platformPostI
   };
 }
 
+/** The system_logs row for a live reel settled while its live Instagram story still has no row of its own. */
+export function liveReelUnrecordedStoryLog(userId: string, postId: string, platformPostId: string | null, story: { id: string; url: string }) {
+  return {
+    level: "error",
+    category: "post",
+    source: "process-post",
+    message: "A live reel was recorded while its live Instagram story still could not be recorded; the story is kept on the reel's row",
+    user_id: userId,
+    metadata: { post_id: postId, platform_post_id: platformPostId, story_id: story.id, story_url: story.url },
+  };
+}
+
 /** The system_logs row when the grace window ran out and the live story was recorded on the reel's row. */
 export function storyRecordedOnReelRowLog(userId: string, postId: string, platformPostId: string, error: string) {
   return {
