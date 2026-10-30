@@ -3,8 +3,10 @@ import { cloudinarySignature } from "../_shared/cloudinarySignature.ts";
 import type { OpeninaryConfig, OpeninaryFile } from "../_shared/openinary.ts";
 import {
   CLOUDINARY_CHUNK_BYTES,
+  cloudinaryAssetMismatch,
   cloudinaryUploadTarget,
   confirmOpeninaryObject,
+  fetchCloudinaryAsset,
   isGenuineCloudinaryResult,
   openinaryUploadBaseUrl,
   openinaryUploadTarget,
@@ -48,9 +50,10 @@ Deno.test("the Cloudinary target is signed over the same parameters as the edge 
   });
   assertEquals(target.url, "https://api.cloudinary.com/v1_1/demo/video/upload");
   assertEquals(target.chunkSize, CLOUDINARY_CHUNK_BYTES);
-  const expected = await cloudinarySignature("folder=media/u/2026-10-29&overwrite=true&public_id=postora_x_1&timestamp=1700000000s");
+  const expected = await cloudinarySignature("folder=media/u/2026-10-29&overwrite=false&public_id=postora_x_1&timestamp=1700000000s");
   assertEquals(target.fields.signature, expected);
   assertEquals(target.fields.api_key, "k");
+  assertEquals(target.fields.overwrite, "false");
   assertEquals("api_secret" in target.fields, false);
 });
 
@@ -73,4 +76,35 @@ Deno.test("an Openinary object counts only at the exact path and size", async ()
   assertEquals(missing, { ok: false, error: "openinary: object not found after upload" });
   const wrongSize = await confirmOpeninaryObject(CONFIG, TARGET, path, 100, listed([{ name: TARGET.fileName, path, size: 99 }]));
   assertEquals(wrongSize, { ok: false, error: "openinary: stored 99 bytes, expected 100" });
+});
+
+const CREDENTIALS = { cloudName: "demo", apiKey: "k", apiSecret: "s" };
+const ASSET = { public_id: "media/u/postora_x_1", version: 42, secure_url: "https://res.cloudinary.com/demo/video/upload/v42/media/u/postora_x_1.mp4", bytes: 300, format: "mp4", duration: 12 };
+
+Deno.test("the Admin API describes the stored asset with basic auth", async () => {
+  let seen: { url: string; init?: RequestInit } | null = null;
+  const fetcher = ((url: string, init?: RequestInit) => {
+    seen = { url, init };
+    return Promise.resolve(Response.json({ ...ASSET, resource_type: "video" }));
+  }) as typeof fetch;
+  const confirmed = await fetchCloudinaryAsset(CREDENTIALS, "video", ASSET.public_id, fetcher);
+  assertEquals(confirmed, { ok: true, asset: { ...ASSET, width: undefined, height: undefined } });
+  assertEquals(seen!.url, "https://api.cloudinary.com/v1_1/demo/resources/video/upload/media/u/postora_x_1");
+  assertEquals((seen!.init?.headers as Record<string, string>).Authorization, `Basic ${btoa("k:s")}`);
+});
+
+Deno.test("a missing, failing or unreachable asset is not confirmed", async () => {
+  const answer = (response: Response) => (() => Promise.resolve(response)) as typeof fetch;
+  assertEquals(await fetchCloudinaryAsset(CREDENTIALS, "video", "x", answer(new Response("{}", { status: 404 }))), { ok: false, error: "cloudinary: object not found after upload" });
+  assertEquals(await fetchCloudinaryAsset(CREDENTIALS, "video", "x", answer(new Response("{}", { status: 420 }))), { ok: false, error: "cloudinary: could not confirm the upload (HTTP 420)" });
+  assertEquals((await fetchCloudinaryAsset(CREDENTIALS, "video", "x", answer(Response.json({ bytes: 1 })))).ok, false);
+  const down = (() => Promise.reject(new Error("timed out"))) as typeof fetch;
+  assertEquals(await fetchCloudinaryAsset(CREDENTIALS, "video", "x", down), { ok: false, error: "cloudinary: could not confirm the upload (timed out)" });
+});
+
+Deno.test("an asset counts only at the signed version and within the declared size", () => {
+  assertEquals(cloudinaryAssetMismatch(ASSET, 42, 300), null);
+  assertEquals(cloudinaryAssetMismatch(ASSET, "42", 300), null);
+  assertEquals(cloudinaryAssetMismatch(ASSET, 41, 300), "cloudinary: the stored object changed after upload");
+  assertEquals(cloudinaryAssetMismatch(ASSET, 42, 299), "cloudinary: stored 300 bytes, more than the 299 declared");
 });

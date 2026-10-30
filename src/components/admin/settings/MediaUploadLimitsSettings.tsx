@@ -4,7 +4,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
-import { useMediaUploadLimits, useSaveMediaUploadLimits } from "@/features/media-upload";
+import { useMediaUploadLimitsState, useSaveMediaUploadLimits } from "@/features/media-upload";
 import { UPLOAD_LIMIT_OPTIONS_MB, type UploadLimits } from "@/lib/mediaTypes";
 
 const LIMIT_FIELDS = [
@@ -15,8 +15,11 @@ const LIMIT_FIELDS = [
 /** Admin → Settings → Media upload limits: the largest image and video any user may upload. */
 export function MediaUploadLimitsSettings() {
   const { toast } = useToast();
-  const saved = useMediaUploadLimits();
+  const { limits: saved, status, retry } = useMediaUploadLimitsState();
   const save = useSaveMediaUploadLimits();
+  // Until the stored row is read the editor shows the defaults, and saving them would
+  // overwrite the admin's real choice.
+  const loaded = status === "ready";
   const [draft, setDraft] = useState<UploadLimits>(saved);
 
   // Follow the stored values once they load. Keyed on the numbers, not the object,
@@ -53,6 +56,7 @@ export function MediaUploadLimitsSettings() {
             <div className="space-y-2" key={field}>
               <Label htmlFor={`upload-limit-${field}`}>{label}</Label>
               <Select
+                disabled={!loaded}
                 value={String(draft[field])}
                 onValueChange={(value) => setDraft((current) => ({ ...current, [field]: Number(value) }))}
               >
@@ -79,7 +83,15 @@ export function MediaUploadLimitsSettings() {
           <p>1000 MB and 2000 MB videos need more memory on the Openinary server, and a 2 GB upload must finish within one hour.</p>
         </div>
 
-        <Button onClick={onSave} disabled={!changed || save.isPending}>
+        {status === "loading" && <p className="text-sm text-muted-foreground">Loading the current limits…</p>}
+        {status === "error" && (
+          <div role="alert" className="flex items-center gap-3 text-sm text-destructive">
+            <span>Could not load the current limits.</span>
+            <Button variant="outline" size="sm" onClick={retry}>Retry</Button>
+          </div>
+        )}
+
+        <Button onClick={onSave} disabled={!loaded || !changed || save.isPending}>
           {save.isPending ? "Saving…" : "Save limits"}
         </Button>
       </CardContent>

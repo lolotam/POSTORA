@@ -47,7 +47,10 @@ Deno.test("a caller with no expectation keeps the unconditional transition (retr
   const outcome = await claimPostForProcessing(client, "post-1");
   assertEquals(outcome.claimed, true);
   assertEquals(filters, [["eq", "id", "post-1"]]);
-  assertEquals(payload(), { status: "processing" });
+  const written = payload() as { status: string; processing_started_at: string };
+  assertEquals(written.status, "processing");
+  // The sweeper's clock starts at the claim.
+  assertEquals(Math.abs(Date.parse(written.processing_started_at) - Date.now()) < 5_000, true);
 });
 
 Deno.test("an explicit null expectation uses IS NULL, because eq.null matches nothing in PostgREST", async () => {

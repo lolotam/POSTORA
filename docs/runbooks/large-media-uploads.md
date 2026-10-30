@@ -93,6 +93,40 @@ Apply the migration `20261029170000_media_upload_limits.sql` to the database fir
 | "openinary refused the upload: File size exceeds limit of 50MB" | `MAX_FILE_SIZE_MB` not raised. |
 | "the file is larger than the server accepts" (413) | A proxy in front of Openinary caps the body. |
 
+## Uploads by URL (API, n8n, MCP)
+
+`POST /api/v1/upload-media` with a URL, and the MCP `upload_media` tool with `media_url`,
+go through `cloudinary-upload`. The response's `Content-Length` decides the path:
+
+- **Up to 10 MB, or no length given:** the file is read into memory as before (10 MB cap).
+- **Over 10 MB:** the body is streamed straight into Openinary, never held in memory. The cap
+  is the admin limit for the kind, but no more than **95 MB** while Openinary sits behind
+  Cloudflare, which refuses request bodies over 100 MB. Only images and videos can stream,
+  Openinary must be enabled, and the transfer must finish within 45 seconds.
+- **Base64** (`media_base64`) stays at 10 MB: a JSON body cannot carry more.
+
+Every refusal writes a `system_logs` row from `cloudinary-upload` with the reason
+(`external_length`, `kind_cap`, `no_stream_provider`, `limits_unavailable`).
+
+## Slow Instagram and Threads videos
+
+A reel, or a Threads video, that Meta is still processing 35 seconds into the publish is
+not waited for. It is saved as a `pending` row in `platform_posts`, with
+`response_data.deferred`, and the post stays `processing`. The cron job
+`reconcile-deferred-publishes` runs every minute. It checks Meta once per row, then
+publishes and settles the row, or tries again a minute later. It gives up after 30
+minutes with "… Safe to retry." The same job also settles posts stuck in `processing`
+for 20 minutes with nothing pending (`sweep_stale_processing_posts()`).
+
+To check it is running:
+
+```sql
+select jobname, schedule, active from cron.job where jobname = 'reconcile-deferred-publishes';
+select status, count(*) from platform_posts where response_data ? 'deferred' group by 1;
+select created_at, level, message, metadata from system_logs
+ where source = 'reconcile-deferred-publishes' order by created_at desc limit 20;
+```
+
 ## Known limit: publishing
 
 Uploading a 500 MB video does not yet mean every platform can publish it. Facebook,
