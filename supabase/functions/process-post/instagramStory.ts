@@ -165,3 +165,34 @@ export async function recordLiveStory(
   if (!error) ledger.recorded.push(args.story);
   return error;
 }
+
+/**
+ * Records the story a pending reel row carries, for a run that is about to settle that row.
+ * Nothing carried is a success with nothing recorded. A story that still cannot be recorded
+ * (after the retry) is an error the caller must not settle the reel over: the row keeps its
+ * carry and the reconciler tries again, which recording's idempotence makes safe.
+ */
+export async function recordCarriedStory(
+  supabase: SupabaseClient,
+  settle: Settle,
+  args: {
+    postId: string;
+    socialAccountId: string;
+    rowData: Record<string, unknown> | null;
+  },
+  sleep?: (ms: number) => Promise<void>,
+): Promise<{ recorded: StoryRef[]; error: string | null }> {
+  const story = readUnrecordedStory(args.rowData);
+  if (!story) return { recorded: [], error: null };
+  const error = await recordWithOneRetry(() =>
+    recordPublishedStory(supabase, settle, {
+      postId: args.postId,
+      account: {
+        id: args.socialAccountId,
+        platform_username: args.rowData?.account_username as string | null | undefined,
+        account_metadata: args.rowData?.account_metadata,
+      },
+      story,
+    }), sleep);
+  return error ? { recorded: [], error } : { recorded: [story], error: null };
+}

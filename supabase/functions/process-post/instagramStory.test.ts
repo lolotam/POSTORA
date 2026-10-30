@@ -5,6 +5,7 @@ import {
   findRecordedStory,
   newStoryLedger,
   readUnrecordedStory,
+  recordCarriedStory,
   recordedStoryResults,
   recordLiveStory,
   recordPublishedStory,
@@ -176,4 +177,40 @@ Deno.test("a settle error or a throw is returned, not thrown: the story is live 
     await recordPublishedStory(NO_ROWS, () => Promise.reject(new Error("connection reset")), { postId: "p", account: ACCOUNT, story: STORY }),
     "connection reset",
   );
+});
+
+Deno.test("a carried story is recorded before its reel is given up, from the data on the pending row", async () => {
+  const calls: { providerPostId?: string | null; responseData?: Record<string, unknown> | null }[] = [];
+  const rowData = { [UNRECORDED_STORY_KEY]: STORY, account_username: "shop", account_metadata: { a: 1 }, deferred: {} };
+  const result = await recordCarriedStory(NO_ROWS, (_db, args) => {
+    calls.push(args);
+    return Promise.resolve({ id: "row-1", error: null });
+  }, { postId: "post-1", socialAccountId: "acct-1", rowData }, noSleep);
+  assertEquals(result, { recorded: [STORY], error: null });
+  assertEquals(calls.length, 1);
+  assertEquals(calls[0].providerPostId, "story-9");
+  assertEquals(calls[0].responseData, { ig_post_subtype: "story", account_username: "shop", account_metadata: { a: 1 } });
+});
+
+Deno.test("a carried story that still cannot be recorded is an error, so the caller does not settle the reel", async () => {
+  let settles = 0;
+  const result = await recordCarriedStory(NO_ROWS, () => {
+    settles++;
+    return Promise.resolve({ id: null, error: "rpc failed" });
+  }, { postId: "post-1", socialAccountId: "acct-1", rowData: { [UNRECORDED_STORY_KEY]: STORY } }, noSleep);
+  assertEquals(result, { recorded: [], error: "rpc failed" });
+  assertEquals(settles, 2); // tried once more
+});
+
+Deno.test("a carried story the row already has is not written twice, and nothing carried is nothing to do", async () => {
+  let settles = 0;
+  const settle = () => {
+    settles++;
+    return Promise.resolve({ id: "row-2", error: null });
+  };
+  const already = clientWithRows([{ id: "row-1" }]).client;
+  assertEquals(await recordCarriedStory(already, settle, { postId: "p", socialAccountId: "a", rowData: { [UNRECORDED_STORY_KEY]: STORY } }, noSleep), { recorded: [STORY], error: null });
+  assertEquals(await recordCarriedStory(NO_ROWS, settle, { postId: "p", socialAccountId: "a", rowData: { deferred: {} } }, noSleep), { recorded: [], error: null });
+  assertEquals(await recordCarriedStory(NO_ROWS, settle, { postId: "p", socialAccountId: "a", rowData: null }, noSleep), { recorded: [], error: null });
+  assertEquals(settles, 0);
 });

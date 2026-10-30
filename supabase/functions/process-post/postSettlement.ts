@@ -172,6 +172,18 @@ export async function readPostOutcome(
   return { kind: "unknown", error: `post: ${postProblem}; platform rows: ${rows.error ?? "none found"}` };
 }
 
+/** The system_logs row for a run that refused to give up a reel because its live story could not be recorded. */
+export function unrecordedStoryLog(userId: string, postId: string, platformPostId: string, error: string) {
+  return {
+    level: "error",
+    category: "post",
+    source: "process-post",
+    message: "A deferred reel was NOT given up because its live Instagram story could not be recorded; the reconciler will retry",
+    user_id: userId,
+    metadata: { post_id: postId, platform_post_id: platformPostId, error },
+  };
+}
+
 /** The system_logs row for a settled deferred account whose post could not be read afterwards. */
 export function unreadableOutcomeLog(userId: string, postId: string, platformPostId: string | null, error: string) {
   return {

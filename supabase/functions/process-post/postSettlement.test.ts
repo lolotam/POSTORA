@@ -6,6 +6,7 @@ import {
   readPostOutcome,
   summarizeRows,
   unreadableOutcomeLog,
+  unrecordedStoryLog,
   writeLogRow,
 } from "./postSettlement.ts";
 
@@ -124,6 +125,37 @@ Deno.test("the unreadable-outcome log row is an error naming the post and the ro
   assertEquals(row.source, "process-post");
   assertEquals(row.user_id, "user-1");
   assertEquals(row.metadata, { post_id: "post-1", platform_post_id: "pp-1", error: "post: timeout" });
+});
+
+Deno.test("refusing to give up a reel over an unrecorded story writes an error log row naming the post and the row", () => {
+  const row = unrecordedStoryLog("user-1", "post-1", "pp-1", "rpc failed");
+  assertEquals(row.level, "error");
+  assertEquals(row.source, "process-post");
+  assertEquals(row.user_id, "user-1");
+  assertEquals(row.metadata, { post_id: "post-1", platform_post_id: "pp-1", error: "rpc failed" });
+});
+
+Deno.test("when the abandoned reel's carried story is recorded, the degraded fallback reports it as a success", async () => {
+  // finishDeferredPost passes the failed reel plus the story it just recorded as `fallback`.
+  const fallback = {
+    results: [
+      { platform: "instagram", status: "failed", error_message: "gave up" },
+      { platform: "instagram", status: "success", platform_post_url: "https://ig/story" },
+    ],
+    hasSuccess: true,
+    hasFailed: true,
+  };
+  const outcome = await readPostOutcome(
+    { postStatus: () => Promise.resolve({ data: { status: "completed" }, error: null }), platformRows: () => Promise.resolve({ data: null, error: { message: "timeout" } }) },
+    "post-1",
+    fallback,
+    noSleep,
+  );
+  assertEquals(outcome.kind, "terminal");
+  if (outcome.kind === "terminal") {
+    assertEquals(outcome.results, fallback.results);
+    assertEquals(outcome.hasSuccess, true);
+  }
 });
 
 Deno.test("a log write that returns an error, or throws, is reported rather than taken for success", async () => {

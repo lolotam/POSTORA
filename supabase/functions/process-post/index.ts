@@ -116,11 +116,10 @@ import { claimFinalNotification } from "./finalNotification.ts";
 import {
   dropRecordedStory,
   readUnrecordedStory,
-  recordedStoryResults,
+  recordCarriedStory,
   newStoryLedger,
+  recordedStoryResults,
   recordLiveStory,
-  recordPublishedStory,
-  recordWithOneRetry,
   type StoryRef,
 } from "./instagramStory.ts";
 import {
@@ -129,6 +128,7 @@ import {
   type PostReader,
   readPostOutcome,
   unreadableOutcomeLog,
+  unrecordedStoryLog,
   writeLogRow,
 } from "./postSettlement.ts";
 import { z } from "npm:zod@3.23.8";
@@ -1494,21 +1494,20 @@ Deno.serve(async (req) => {
       const abandon = abandonReason(deferral, post.status, new Date());
       if (abandon) {
         // A live story the first run could not record is recorded before the reel is given up,
-        // so the post rolls up with it and it is not lost with the abandoned row.
-        const carriedStory = readUnrecordedStory(row.response_data);
-        if (carriedStory) {
-          const rowData = (row.response_data as Record<string, unknown> | null) ?? {};
-          const storyError = await recordWithOneRetry(() =>
-            recordPublishedStory(supabase, settlePlatformPost, {
-              postId: post_id,
-              account: {
-                id: row.social_account_id,
-                platform_username: rowData.account_username as string | null | undefined,
-                account_metadata: rowData.account_metadata,
-              },
-              story: carriedStory,
-            }));
-          if (storyError) console.error(`[IG story] could not be recorded while giving up the reel: ${storyError}`);
+        // so the post rolls up with it and it is not lost with the abandoned row. If it still
+        // cannot be recorded the reel is NOT settled: that would make the failure terminal and
+        // strand the story. A 503 leaves the row pending with its carry, the reconciler comes
+        // back next minute, and recording is idempotent so the retry is safe.
+        const carried = await recordCarriedStory(supabase, settlePlatformPost, {
+          postId: post_id,
+          socialAccountId: row.social_account_id,
+          rowData: (row.response_data as Record<string, unknown> | null) ?? null,
+        });
+        if (carried.error) {
+          console.error(`[IG story] could not be recorded while giving up the reel: ${carried.error}`);
+          const logError = await writeLogRow(supabase, unrecordedStoryLog(post.user_id, post_id, row.id, carried.error));
+          if (logError) console.error("[process-post] could not log the refusal either:", logError);
+          return createErrorResponse(`Could not record the live Instagram story, so the reel was not given up: ${carried.error}`, 503);
         }
         const settled = await settlePlatformPost(supabase, {
           platformPostId: row.id,
@@ -1524,8 +1523,9 @@ Deno.serve(async (req) => {
         // already final (or changed by someone) before this, and was announced then.
         const finished = post.status === "processing"
           ? await finishDeferredPost(supabase, post, row.id, {
-            results: [{ platform: row.platform, status: "failed", error_message: abandon }],
-            hasSuccess: false,
+            // The story recorded just above is live: the degraded fallback must report it too.
+            results: [{ platform: row.platform, status: "failed", error_message: abandon }, ...recordedStoryResults(carried.recorded)],
+            hasSuccess: carried.recorded.length > 0,
             hasFailed: true,
           })
           : { finalStatus: post.status as string, notified: false };
