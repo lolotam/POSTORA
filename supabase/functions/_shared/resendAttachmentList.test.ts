@@ -88,4 +88,7 @@ Deno.test("a download follows redirects only while every hop stays on HTTPS", as
     return Promise.resolve(redirectTo("https://cdn.resend.com/a"));
   });
   assertEquals([loop, hops.length], [null, 4]);
+
+  const malformed = await downloadResendAttachment("https://cdn.resend.com/a", "k", () => Promise.resolve(redirectTo("https://[")));
+  assertEquals(malformed, null);
 });

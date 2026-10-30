@@ -53,8 +53,13 @@ async function fetchHttpsOnly(url: URL, init: RequestInit, fetcher: typeof fetch
     const response = await fetcher(current.href, { ...init, redirect: "manual" });
     if (response.status < 300 || response.status >= 400) return response;
     const location = response.headers.get("location");
-    const next = location ? parsedHttpsUrl(new URL(location, current).href) : null;
     await response.body?.cancel();
+    let next: URL | null = null;
+    try {
+      next = location ? parsedHttpsUrl(new URL(location, current).href) : null;
+    } catch {
+      // An unparseable redirect target is refused like any other bad hop.
+    }
     if (!next) return null;
     current = next;
   }

@@ -73,9 +73,10 @@ async function verifyWebhookSignature(
       return false;
     }
 
-    // For development, allow if secret matches and timestamp is valid
-    console.log("Signature verification in progress...");
-    return true; // In production, you might want stricter verification
+    // Still accepted on the timestamp alone (pre-existing behaviour, kept until real Resend
+    // deliveries are confirmed to verify). Logged loudly so the evidence shows up.
+    console.warn("[resend-webhook] SIGNATURE MISMATCH: accepted on timestamp fallback");
+    return true;
   } catch (error) {
     console.error("Error verifying webhook signature:", error);
     return false;
@@ -299,6 +300,17 @@ serve(async (req) => {
         if (!emailId) {
           console.error("No email_id found in webhook payload");
           throw new Error("Missing email_id in webhook payload");
+        }
+        if (!isValidResendEmailId(emailId)) {
+          // Refused before any Resend call, and recorded: nothing is stored for this event.
+          await logToDatabase(supabase, {
+            level: "warn",
+            category: "system",
+            source: "resend-webhook",
+            message: "Inbound email refused: email id is not in Resend's format",
+            metadata: { code: "invalid_email_id" },
+          });
+          throw new Error("Invalid email_id in webhook payload");
         }
         
         console.log(`Processing inbound email with email_id: ${emailId}`);
