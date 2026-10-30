@@ -4394,9 +4394,12 @@ async function postToInstagram(
     // Its publish went unanswered, so the run that published it never mirrored it to the Story.
     await mirrorStoryOnRetry();
     if (storyFailedAgain && recordStoryFailure) {
-      // The live feed post or reel is recorded below whatever happens to this row.
-      const writeError = await recordStoryFailure(storyFailure());
-      if (writeError) console.error("[IG story] could not record the failed retry:", writeError);
+      // As on the recorded-feed path, a failed row that could not be written fails the account, so
+      // the main loop writes its fallback row and the story stays retryable. The next retry finds
+      // the live feed post or reel again through the guard.
+      const error = storyFailure();
+      const writeError = await recordStoryFailure(error);
+      if (writeError) throw new Error(`${error} (and its failed row could not be recorded: ${writeError})`);
     }
     const carried = unrecordedStory ? { unrecorded_story: unrecordedStory } : {};
     return live.kind === "already_live"
