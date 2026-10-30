@@ -14,6 +14,7 @@
 
 import { z } from "npm:zod@3.23.8";
 import { CHECK_ONCE_DEADLINE } from "../_shared/metaContainerStatus.ts";
+import { type StoryRef, UNRECORDED_STORY_KEY } from "./instagramStory.ts";
 
 export type DeferredKind = "ig_reel" | "ig_business_reel" | "threads";
 
@@ -38,6 +39,12 @@ export type Deferral = z.infer<typeof DeferralSchema>;
 
 /** Thrown by a handler whose container is still processing when its time is up. */
 export class ContainerStillProcessing extends Error {
+  /**
+   * A story that is live but whose row could not be written. It travels on the pending row so
+   * the resumed (or abandoned) run can write it, instead of the story being lost with the throw.
+   */
+  unrecordedStory: StoryRef | null = null;
+
   constructor(readonly kind: DeferredKind, readonly containerId: string) {
     super(`Meta is still processing container ${containerId}`);
     this.name = "ContainerStillProcessing";
@@ -48,6 +55,8 @@ export class ContainerStillProcessing extends Error {
 export interface ResumeContext {
   platformPostId: string;
   deferral: Deferral;
+  /** A live story the first run could not record; the resumed run records it. */
+  unrecordedStory?: StoryRef | null;
 }
 
 /**
@@ -195,6 +204,7 @@ export async function recordStillProcessing(
         deferred: newDeferral(args.signal.kind, args.signal.containerId, now),
         account_username: args.account.platform_username,
         account_metadata: args.account.account_metadata,
+        ...(args.signal.unrecordedStory ? { [UNRECORDED_STORY_KEY]: args.signal.unrecordedStory } : {}),
       },
     });
     return { gaveUp: false, error: error?.message ?? null };

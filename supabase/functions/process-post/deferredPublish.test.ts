@@ -107,6 +107,21 @@ Deno.test("a first run records its pending row through the tenancy-checking SQL 
   assertEquals(args.p_response_data.account_username, "shop");
 });
 
+Deno.test("a story the first run could not record travels on the pending row", async () => {
+  const { db, writes } = fakeDb();
+  const signal = new ContainerStillProcessing("ig_reel", "c-9");
+  signal.unrecordedStory = { id: "story-1", url: "https://ig/s/1" };
+  await recordStillProcessing(db, noSettle, { postId: "post-1", account: ACCOUNT, signal, resume: null, resumeResponseData: null }, NOW);
+  const data = (writes[0].values as { p_response_data: Record<string, unknown> }).p_response_data;
+  assertEquals(data.unrecorded_story, { id: "story-1", url: "https://ig/s/1" });
+});
+
+Deno.test("with no story to carry the pending row has no story field", async () => {
+  const { db, writes } = fakeDb();
+  await recordStillProcessing(db, noSettle, { postId: "post-1", account: ACCOUNT, signal: SIGNAL, resume: null, resumeResponseData: null }, NOW);
+  assertEquals("unrecorded_story" in (writes[0].values as { p_response_data: object }).p_response_data, false);
+});
+
 Deno.test("a cross-tenant refusal from the SQL function is an error, never a recorded row", async () => {
   const { db } = fakeDb("record_deferred_platform_post: account a does not belong to the owner of post p (cross-tenant pairing refused)");
   const result = await recordStillProcessing(db, noSettle, { postId: "post-1", account: ACCOUNT, signal: SIGNAL, resume: null, resumeResponseData: null }, NOW);

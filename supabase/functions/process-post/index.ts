@@ -112,7 +112,15 @@ import {
   unfinishedError,
 } from "./deferredPublish.ts";
 import { claimFinalNotification } from "./finalNotification.ts";
-import { recordPublishedStory } from "./instagramStory.ts";
+import {
+  dropRecordedStory,
+  readUnrecordedStory,
+  recordedStoryResults,
+  recordLiveStory,
+  recordPublishedStory,
+  recordWithOneRetry,
+  type StoryRef,
+} from "./instagramStory.ts";
 import {
   buildWebhookResults,
   type PlatformResultSummary,
@@ -1483,6 +1491,23 @@ Deno.serve(async (req) => {
       // a post someone has since changed, is settled now rather than checked forever.
       const abandon = abandonReason(deferral, post.status, new Date());
       if (abandon) {
+        // A live story the first run could not record is recorded before the reel is given up,
+        // so the post rolls up with it and it is not lost with the abandoned row.
+        const carriedStory = readUnrecordedStory(row.response_data);
+        if (carriedStory) {
+          const rowData = (row.response_data as Record<string, unknown> | null) ?? {};
+          const storyError = await recordWithOneRetry(() =>
+            recordPublishedStory(supabase, settlePlatformPost, {
+              postId: post_id,
+              account: {
+                id: row.social_account_id,
+                platform_username: rowData.account_username as string | null | undefined,
+                account_metadata: rowData.account_metadata,
+              },
+              story: carriedStory,
+            }));
+          if (storyError) console.error(`[IG story] could not be recorded while giving up the reel: ${storyError}`);
+        }
         const settled = await settlePlatformPost(supabase, {
           platformPostId: row.id,
           postId: post_id,
@@ -1504,7 +1529,7 @@ Deno.serve(async (req) => {
           : { finalStatus: post.status as string, notified: false };
         return createJsonResponse({ success: true, status: "failed", reason: abandon, post_status: finished.finalStatus, notified: finished.notified });
       }
-      resume = { platformPostId: row.id, deferral };
+      resume = { platformPostId: row.id, deferral, unrecordedStory: readUnrecordedStory(row.response_data) };
       resumeResponseData = (row.response_data as Record<string, unknown> | null) ?? null;
       overrideAccountIds = [row.social_account_id];
       overridePlatforms = [row.platform];
@@ -1812,6 +1837,9 @@ Deno.serve(async (req) => {
 
     for (const account of (accounts || [])) {
       console.log(`Posting to ${account.platform}...`);
+      // Stories this account published and recorded as rows of their own. They are live whatever
+      // the reel after them does, so they count in the roll-up and the notifications (below).
+      const liveStories: StoryRef[] = [];
 
       try {
         let result: PlatformPostResult;
@@ -1830,7 +1858,7 @@ Deno.serve(async (req) => {
               result = await postToInstagramBusinessLogin(account, post, mediaUrls, mediaFiles, supabase, post_id, timing);
             } else {
               result = await postToInstagram(account, post, mediaUrls, mediaFiles, timing, (story) =>
-                recordPublishedStory(supabase, settlePlatformPost, { postId: post_id, account, story }));
+                recordLiveStory(supabase, settlePlatformPost, { postId: post_id, account, story }, liveStories));
             }
             break;
           }
@@ -1995,7 +2023,8 @@ Deno.serve(async (req) => {
             account,
             signal: error,
             resume,
-            resumeResponseData,
+            // A story recorded by this very run must not be carried (and recorded) again.
+            resumeResponseData: dropRecordedStory(resumeResponseData, liveStories),
           });
           if (!recorded.error && !recorded.gaveUp) {
             console.log(`[${account.platform}] container ${error.containerId} still processing; left for the reconciler`);
@@ -2037,6 +2066,12 @@ Deno.serve(async (req) => {
         });
 
         hasFailed = true;
+      } finally {
+        // Runs for every outcome, `continue` included: a recorded story is a success.
+        if (liveStories.length > 0) {
+          platformResults.push(...recordedStoryResults(liveStories));
+          hasSuccess = true;
+        }
       }
     }
 
@@ -3636,7 +3671,7 @@ async function postToInstagram(
   timing: PublishTiming = NO_DEFERRAL,
   // Writes the story's own row (answering an error, or null) once it is live and the reel is
   // still to come, so a reel that defers or fails does not lose it. See instagramStory.ts.
-  recordStory?: (story: { id: string; url: string }) => Promise<string | null>,
+  recordStory?: (story: StoryRef) => Promise<string | null>,
 ): Promise<PlatformPostResult> {
   const igUserId = account.platform_user_id;
   const accessToken = account.access_token;
@@ -3990,6 +4025,9 @@ async function postToInstagram(
 
   // Handle story separately if included in post types
   const igAllResults: Array<{ id: string; url?: string; warnings?: string[] }> = [];
+  // A live story whose row could not be written (even after a retry). If the reel then defers it
+  // travels on the pending row, so the resumed or abandoned run writes the missing row.
+  let unrecordedStory: StoryRef | null = null;
 
   // A resumed run finishes only the deferred reel: the story was handled the first time.
   if (!timing.resume && igPostTypes.includes("story") && mediaUrls.length > 0) {
@@ -4042,10 +4080,12 @@ async function postToInstagram(
       // the story is recorded now, as the Business-login path does.
       const storyOnly = igPostTypes.length === 1 && igPostTypes[0] === "story";
       if (!storyOnly && recordStory) {
-        const recordError = await recordStory({ id: storyResult.id, url: storyResult.url });
+        const story: StoryRef = { id: storyResult.id, url: storyResult.url };
+        const recordError = await recordStory(story);
         if (recordError) {
           console.error(`[IG story] published but not recorded: ${recordError}`);
           warnings.push("The Instagram Story was published but could not be recorded.");
+          unrecordedStory = story;
         }
       }
     }
@@ -4107,6 +4147,17 @@ async function postToInstagram(
     let reelContainerId: string;
     if (timing.resume) {
       reelContainerId = timing.resume.deferral.container_id;
+      // The first run published a story it could not record: record it now (the story itself
+      // is never published again).
+      const carried = timing.resume.unrecordedStory;
+      if (carried && recordStory) {
+        const recordError = await recordStory(carried);
+        if (recordError) {
+          console.error(`[IG story] still not recorded on resume: ${recordError}`);
+          warnings.push("The Instagram Story was published but could not be recorded.");
+          unrecordedStory = carried;
+        }
+      }
     } else {
       console.log("Instagram REELS request:", JSON.stringify(reelsBody).slice(0, 500));
 
@@ -4138,7 +4189,14 @@ async function postToInstagram(
     }
 
     // Poll for container status before publishing (Required for videos)
-    const reelStatus = await pollContainerStatus(reelContainerId, accessToken, { deferKind: "ig_reel", deadlineMs: timing.deadlineMs }, 60, 2000);
+    let reelStatus: string;
+    try {
+      reelStatus = await pollContainerStatus(reelContainerId, accessToken, { deferKind: "ig_reel", deadlineMs: timing.deadlineMs }, 60, 2000);
+    } catch (waitError) {
+      // The pending row carries a story that could not be recorded, or it would be lost here.
+      if (waitError instanceof ContainerStillProcessing && unrecordedStory) waitError.unrecordedStory = unrecordedStory;
+      throw waitError;
+    }
     if (reelStatus === "PUBLISHED") {
       // Only a resumed run sees this: an earlier run published but died before recording it.
       // No id: the container id is not the media id, and analytics would read it as one.
