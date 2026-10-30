@@ -2011,7 +2011,7 @@ Deno.serve(async (req) => {
         const warnings = (result as any).warnings || [];
         const locationDebug = (result as any).location_debug;
         const topicTagDebug = (result as any).topic_tag_debug;
-        const unrecordedStoryRef = (result as any).unrecorded_story as StoryRef | undefined;
+        const unrecordedStoryRef = (result as { unrecorded_story?: StoryRef }).unrecorded_story;
         if (unrecordedStoryRef) {
           const logError = await writeLogRow(supabase, liveReelUnrecordedStoryLog(post.user_id, post_id, resume?.platformPostId ?? null, unrecordedStoryRef));
           if (logError) console.error("[process-post] could not log the unrecorded story either:", logError);
