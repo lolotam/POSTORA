@@ -14,12 +14,14 @@ Date: 2026-10-30. Status: documentation only; numbered work below requires a fut
 
 Read [ARCHITECTURE.md](../../ARCHITECTURE.md) in full, especially §0, §1, §3–4, §12–17, §23–28, §31–39 and §45–46; [CLAUDE.md](../../CLAUDE.md), [AGENTS.md](../../AGENTS.md), [PROJECT_AGENT.md](../../PROJECT_AGENT.md) and any directory instructions before implementation. Consult the earlier [intake](2026-10-28-instagram-owner-intake.md), [Page reconciliation](2026-10-28-meta-page-token-reconciliation.md) and [worker](2026-10-29-instagram-owner-collection-worker.md) plans for test-contract lineage, not current deployment status.
 
-Execute **one numbered task at a time**, freeze its evidence and review before starting the next. Do not dispatch all tasks in parallel or change another task's product files to turn a blocked test green. No delegation/model choice is authorized by this document. The present request authorizes only this plan, its spec and their local commit; that specific commit instruction overrides the historical no-commit delegate constraint for this authoring delivery.
+Execute **one numbered task at a time**, freeze its evidence and review before starting the next. Do not dispatch all tasks in parallel or change another task's product files to turn a blocked test green. No delegation/model choice is authorized by this document.
 
 ## Global constraints — parent §4, quoted verbatim
 
 1. Read `AGENTS.md`, `CLAUDE.md`, `ARCHITECTURE.md` (§3–4, §12–17, §23–28, §31–39), `PROJECT_AGENT.md`, this plan and the source spec before changing code. Follow directory-scoped instructions.
 2. Implement only the numbered task(s) assigned. Do not commit, push, merge, deploy, run production SQL, modify secrets or touch the standalone n8n node repository. The orchestrator reviews and commits scoped files.
+
+> These constraints bind a **delegated implementer**. The orchestrating session still follows the full CLAUDE.md Task Execution Workflow (mem0 recall and save, brainstorming, guard pass, scoped local commit); nothing in this plan replaces or waives it.
 3. Preserve unrelated user work and existing API behavior. No broad refactors, platform-version migration, scraping index, Facebook insights, hashtag search, Ad Library, or optional work without explicit approval.
 4. Derive caller identity from verified auth. Service-role reads and writes must structurally enforce resource ownership, including denormalized user IDs and post/account links. RLS alone does not protect service-role work.
 5. Null means unavailable, never zero. Failed reads/writes are failures, never empty data or successful syncs. Validate untrusted inputs/responses, sanitize client errors, redact logs, and log every refusal/early exit.
@@ -30,7 +32,7 @@ Execute **one numbered task at a time**, freeze its evidence and review before s
 
 ## Dependencies and file ownership
 
-All **Create** paths below are proposed and absent at the authoring baseline. Recheck before writing: Task 8 may have delivered equivalent fixture/runbook files in the meantime. Reuse their accepted public contracts and serialize edits to `e2e/analytics.spec.ts` and CI. An existing path listed under **Modify** is not permission to rewrite its unrelated behavior. Task 8 M1 is present; M2/M3 are reported in progress elsewhere and M4 remains proposed here. Source provenance, Task 9 and Task 10 integration, Task 6 metric/retry reconciliation, missing collection scheduling and single-account eligibility remain explicit dependency gates.
+All **Create** paths below are proposed and absent at the authoring baseline. Recheck before writing: Task 8 may have delivered equivalent fixture/runbook files in the meantime. Reuse their accepted public contracts and serialize edits to `e2e/analytics.spec.ts` and CI. An existing path listed under **Modify** is not permission to rewrite its unrelated behavior. Task 8's M1–M4 migrations, report and retention functions, competitor feature, fixture and runbook are on main since #306 (`1e1fbed3`); that is source presence only, not deployment or activation. Source provenance, Task 9 and Task 10 integration, Task 6 metric/retry reconciliation, missing collection scheduling and single-account eligibility remain explicit dependency gates.
 
 Task 11 never owns the proposed collection cron migration or new eligibility implementation. Their owners must supply reviewed artifacts, exact names and tests; the spec §5 manifest is updated before release. No wildcard or “later migration” placeholder can pass final G-X. The parent §14 owner→competitor→readiness sequencing remains mandatory for acceptance even though some code is already merged.
 
@@ -42,7 +44,7 @@ Task 11 never owns the proposed collection cron migration or new eligibility imp
 
 **Modify:** these Task 11 spec/plan files only for verified status/evidence updates. Do not edit historical acceptance records to imply new approval.
 
-- [ ] Tests first: a complete synthetic ledger passes; a missing/duplicate source ID, missing T8 ID, unknown status, unreviewed skip, stale SHA, absent proposed file, missing artifact or falsely marked live gate fails. Explicitly distinguish `existing` inventory from executed PASS and live approval.
+- [ ] Tests first: a complete synthetic ledger passes; a missing/duplicate source ID, missing T8 ID, unknown status, unreviewed skip, stale SHA, absent proposed file, missing artifact or falsely marked live gate fails. The checker also reads `supabase/migrations/` and fails when two migration files share a version prefix, or when a newly assigned manifest version is not newer than every other migration there. Explicitly distinguish `existing` inventory from executed PASS and live approval.
 - [ ] Reconcile all 78 IDs against original and Task 8 acceptance tables. Freeze baseline/head/tree, exact required test titles and fixture schema; keep dependency failures visible. Record D8/A6/I3 contract discrepancies for owning-task decision without adopting current behavior by default.
 - [ ] Implement a read-only checker consuming the Markdown tables and an external per-run evidence JSON. It must not update expectations, rewrite history, access production or infer approval from elapsed time. Unit-test its parser against real table syntax and changed source-ID inventories.
 - [ ] Run V1; record resolved/blocked dependencies in the ledger. Do not mark a proposed schedule/fixture existing based on another branch's report.
@@ -87,7 +89,7 @@ Task 11 never owns the proposed collection cron migration or new eligibility imp
 - [ ] Tests first: E2/J2–J7 and T8-12 exact fixtures, including official/Apify/own/unknown across network/cache/history; denied vs failed scope reads; same handle for two owners; nullable views/likes and FEED video.
 - [ ] Prove Track saved vs queued vs collected, one-row duplicate handling, quota/override/unlimited/downgrade, lost-response reconciliation, 429 Retry-After and bounded auth-sensitive polling. Test remove→retained history→reactivate with real RPCs and no blind mutation replay.
 - [ ] Assert S=3-day cutoff, actual 7/30-day intervals, source-switch refusal, zero/missing/stale baseline, repeated snapshot dedup and complete/partial/unknown weekly inventory. M1's unverified ordering must not be upgraded by the report fixture accidentally.
-- [ ] Run Task 8's SQL 89d/90d−1µs/90d and two-session cleanup/reactivate/writer races with actual observed waits, bounded child deletion and >500 backlog. Run both lock orderings and rollback/restart. UI tests alone cannot satisfy T8-08/09.
+- [ ] Run Task 8's SQL 89d/90d−1µs/90d and cleanup/reactivate/writer races in three sessions (two racers plus a `pg_stat_activity` observer): races 2 and 3 must show an observed `wait_event_type = 'Lock'` wait, and races 1 and 4 a lock *skip* (no wait, the cleanup takes the next candidate), because the cleanup uses `FOR UPDATE SKIP LOCKED`. Also cover bounded child deletion and >500 backlog. Run both lock orderings and rollback/restart. UI tests alone cannot satisfy T8-08/09.
 - [ ] Verify English/Arabic/RTL, keyboard/focus return, screen sizes/zoom and non-Instagram ProfileCard regression. Do not mark U4/T8-01/J2/J3 green until Task 2 producer provenance is accepted.
 
 **Acceptance:** D1–D7, A10–A13, I1–I2/I6–I7, H3, U4–U6, E2, J2–J7, T8-01–T8-12. **Dependencies:** Task 3 owner flow; Task 2 provenance; completed Task 8 M2/M3/M4/report/UI. **Exit:** full local competitor proof; provider-ordering compatibility remains expressly qualified.
@@ -124,7 +126,7 @@ Task 11 never owns the proposed collection cron migration or new eligibility imp
 
 **Create (proposed):** `docs/journeys/2026-10-26-instagram-insights-and-competitor-tracking.md`; `docs/runbooks/instagram-insights-release.md`.
 
-**Modify:** this plan's future validation log and the spec matrix statuses only when evidence warrants. Link to Task 8's proposed `docs/runbooks/competitor-tracking-retention.md` and journey doc if delivered; do not duplicate their retention contract.
+**Modify:** this plan's future validation log and the spec matrix statuses only when evidence warrants. Link to Task 8's `docs/runbooks/competitor-tracking-retention.md` (on main since #306) and its journey doc; do not duplicate their retention contract.
 
 - [ ] Validation first: require all E/J IDs, proof links/commands/SHAs, user-visible outcome, fixture-vs-live label and remaining limitations. Verify local links and flag unsupported claims such as “deployed”, “all permissions granted”, “tonight” or “complete history” without their gate evidence.
 - [ ] Write the Arabic journey report for a nontechnical reader: how to reach each feature, expected success/empty/error/reconnect/limit states, what source/null/partial/freshness mean, removal/reactivation behavior, and what has actually been verified. No source code or secret details in the user steps. This is not produced during the current authoring task.
@@ -194,15 +196,21 @@ docker run -d --name postora-task11-sql --network none \
   supabase/postgres:17.6.1.158 \
   -c cron.database_name=instagram_release_harness \
   -c shared_preload_libraries=pg_cron,pg_net,pgsodium,supabase_vault
-docker inspect --format '{{.State.Health.Status}}' postora-task11-sql
-# Continue only when healthy; bound health checks and retain startup failures.
+# Wait for a healthy database (at most 120 s); stop on unhealthy or timeout.
+for _ in $(seq 1 60); do
+  status=$(docker inspect --format '{{.State.Health.Status}}' postora-task11-sql)
+  [ "$status" = healthy ] && break
+  [ "$status" = unhealthy ] && { docker logs postora-task11-sql; exit 1; }
+  sleep 2
+done
+[ "$status" = healthy ] || { echo "postora-task11-sql not healthy after 120 s"; docker logs postora-task11-sql; exit 1; }
 docker exec -e HARNESS_DB_NAME=instagram_release_harness postora-task11-sql \
   bash -c "cd /repo && bash scripts/db-harness.sh 'postgres://supabase_admin:postgres@localhost:5432/postgres'"
 ```
 
 This SQL-only harness is separate from Task 2's loopback local Auth/PostgREST assembled stack. Restore the baseline plus newer migrations, not every historical migration from scratch. Run all accepted suites without exclusions. Verify catalog/type alignment and nonliteral cron-secret lookup. Reapply only the new schedule definitions in the disposable database for S6; do not replay the whole production migration ledger twice.
 
-Manually rehearse the applicable existing credential/quota/job race fixtures and Task 8's proposed retention race fixture in **two independent psql sessions**, using each header's setup/interleavings/assertions/cleanup and `-v disposable=1`. Capture observed lock waits, both outcomes and cleanup. A single-session fixture setup or green main harness is not race proof. Remove only the verified task-owned container after evidence collection.
+Manually rehearse the applicable existing credential/quota/job race fixtures and Task 8's retention race fixture in **independent psql sessions**: two for each credential/quota/job fixture, and **three** for the retention fixture (two racers plus the observer that reads `pg_stat_activity` while a racer is blocked, per `supabase/tests/README.md`), using each header's setup/interleavings/assertions/cleanup and `-v disposable=1`. Define and call the observer's `pg_temp.crt_probe()` inside the interactive observer session itself: a temporary function is session-local, so a separate `psql -c` cannot see it. For the retention fixture, races 2 and 3 must show an observed `wait_event_type = 'Lock'` wait and races 1 and 4 a lock skip (`FOR UPDATE SKIP LOCKED`); for the other fixtures, capture the lock waits their headers name. Record both outcomes and cleanup. A single-session fixture setup or green main harness is not race proof. Remove only the verified task-owned container after evidence collection.
 
 ### V4 — frontend and regression gates
 
@@ -217,7 +225,7 @@ npm test -- src/features/competitor-tracking
 git diff --check
 ```
 
-The competitor path is proposed until Task 8 delivery. Inspect test counts; no-tests-found is not success. Record full exit codes and known baseline failures. Where approved repository policy uses `scripts/lint-i18n-regression.mjs`, follow its current documented immutable-base/head/proposed-merge invocation and retain reports rather than inventing flags. No moving baseline, missing-suite omission, timeout relaxation or new suppression.
+The competitor path is on main since #306 (`1e1fbed3`); it is not deployed or active until its own gates pass. Inspect test counts; no-tests-found is not success. Record full exit codes and known baseline failures. Where approved repository policy uses `scripts/lint-i18n-regression.mjs`, follow its current documented immutable-base/head/proposed-merge invocation and retain reports rather than inventing flags. No moving baseline, missing-suite omission, timeout relaxation or new suppression.
 
 ### V5 — strict seeded browser and assembled journeys
 
@@ -241,7 +249,7 @@ Graph update applies after implementation code changes, not this two-document ta
 
 The exact procedure/checklists are in [spec §5–6](../specs/2026-10-30-instagram-release-gates.md#5-deployment-manifest-and-rollback-contract) and the existing deployment runbook. Future actions proceed: approved manifest/schema preflight and manual missing migrations → immutable function/shared deployment and boot → pilot user list → approved reconnect → login/refresh/approved posting checks → reviewed single-account collection prerequisite and pilot → competitor pilot → approved all-eligible collection/schedules → retention dry run and separately approved deletion → observation/acceptance. **Waleed must approve each B–E action against its preceding evidence.** None is executed by authoring or implementing Task 11 tests/docs.
 
-Do not treat main's existing merges, automatic frontend deploy or edge reconciler as migration/activation evidence. Do not push/merge dependent runtime before schema readiness. The proposed C1 schedule and per-account eligibility dependency are not permission to change production or switch the global credential mode. Rollback preserves protected authority and retained history as specified; it never restores exposed tokens.
+Do not treat main's existing merges, automatic frontend deploy or edge reconciler as migration/activation evidence. Do not push/merge dependent runtime before schema readiness. The proposed collection-cron migration (C1 in the spec's migration table, not the C1 reconnect gate) and the per-account eligibility dependency are not permission to change production or switch the global credential mode. Rollback preserves protected authority and retained history as specified; it never restores exposed tokens.
 
 ## Open questions for Waleed
 
@@ -253,8 +261,6 @@ This delivery creates only the two requested Markdown documents. Coverage invent
 
 Required documentation checks: compare all source/T8 IDs to the matrix; verify status totals/uniqueness; compare the parent §4 quotation verbatim; validate local links, existing filenames/line citations and proposed labels; verify migration order and branch/main membership; review authorization boundaries and secrets; run `git diff --check`. No product tests, migrations or live probes are required or claimed for Markdown authoring.
 
-Authoring results: all 78 expected IDs are present exactly once with the recorded counts; the parent quotation matches; local links and qualified file/line targets resolve; all 16 migration entries are ordered, with the first 11 verified in inspected main, M1 present on this branch and M2–M4/C1 absent/proposed. Recursive local-import inspection found 50 shared modules and no unresolved local imports in the inspected runtime set. Manual source/authorization/proposed-path review completed. `git diff --check` and `git diff --cached --check` passed; staged scope is exactly the two requested documents. An initial validation script failed to match a Unicode heading through the shell encoding; the corrected UTF-8 run passed without changing the requirements. These are documentation checks, not application or live-provider test results.
+Authoring results: all 78 expected IDs are present exactly once with the recorded counts; the parent quotation matches; local links and qualified file/line targets resolve; all 16 migration entries are ordered, with the first 11 verified in inspected main, M1 present on this branch and M2–M4/C1 absent/proposed. That record is historical: M1–M4 have since reached main with #306, and C1's reserved `20261030140000` turned out to be taken on main, so C1 is now unassigned (spec §5). Recursive local-import inspection found 50 shared modules and no unresolved local imports in the inspected runtime set. Manual source/authorization/proposed-path review completed. `git diff --check` and `git diff --cached --check` passed; staged scope is exactly the two requested documents. An initial validation script failed to match a Unicode heading through the shell encoding; the corrected UTF-8 run passed without changing the requirements. These are documentation checks, not application or live-provider test results.
 
-Session tooling limits: mem0 recall/save and named brainstorming/guard tools were unavailable; a bounded local skill search found no brainstorming skill. Manual requirements/design and documentation review were used, not represented as named-skill passes. Graph CLI was unavailable; a read-only graph adjacency lookup supplied orientation, then actual source inspection supplied current facts. Production/test guards are not applicable to this documentation-only diff. No code change means no graph update is required. No memory save is claimed.
-
-Commit only this plan and `docs/specs/2026-10-30-instagram-release-gates.md` with message `docs: specify Instagram release gates and journeys (Task 11)` and trailer `Co-Authored-By: Codex <noreply@openai.com>`, using `git commit -- <the two paths>`. Report commit, document summaries, status counts, deployment manifest and open questions/defaults. Then **STOP**. No implementation, Arabic journey file, push, PR, merge, production access, secret read, deployment or activation in this authoring task.
+This is an authoring record only. It instructs no reader to commit, push, merge, deploy or stop; those steps follow the repository workflow and Waleed's approvals.

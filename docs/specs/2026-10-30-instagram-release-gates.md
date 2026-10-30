@@ -44,8 +44,8 @@ Statuses are coverage inventory, not test outcomes. Keep separate fields in the 
 | G-C competitor collection | Existing `competitor-snapshot-sync/{syncWorker,graphProvider,apifyProvider,store,sqlContract,handler,route}.test.ts` and `supabase/tests/{competitor_collection_results,competitor_capture_coverage}.sql`. Task 8 report/retention proofs follow its own plan. |
 | G-R report and API | Existing `instagram-insights-report/{assemble,reportStore,handler,handlers}.test.ts`, `n8n-api/serviceProxy.test.ts`, `mcp/toolScopes.test.ts`, `mcp/connectionMode.test.ts`. Proposed `supabase/functions/n8n-api/instagramReleaseContract.test.ts` exercises the shared report through actual proxy/MCP composition and local SQL. |
 | G-S SQL/security | Existing `supabase/tests/{instagram_capabilities,instagram_tracking_schema,instagram_durable_collection_jobs,facebook_user_credential_bindings,meta_oauth_attempt_lifecycle,meta_account_refresh_lifecycle,meta_oauth_identity_alias,meta_page_token_reconciliation,instagram_direct_collection_credential}.sql`; manual race fixtures listed in `supabase/tests/README.md`. Add the Task 8 report/retention/race/cron suites when delivered. Run the entire harness, not just this subset. |
-| G-U UI | Existing owner `ui/__tests__/InstagramPerformanceScreen.test.tsx`, `domain/formatters.test.ts`, `tests/architecture.test.ts` under `src/features/instagram-insights/`. Task 8 proposed competitor suites and Task 9 expanded owner suites own their missing UI behavior. |
-| G-E journeys | Proposed strict `e2e/analytics.spec.ts` Instagram cases and `e2e/fixtures/instagramRelease.ts`, `instagramReleaseSeed.ts`, `instagramReleaseServer.ts`; use §4. Task 8's proposed `e2e/fixtures/competitorTracking.ts` should be reused if it lands, not independently duplicated. |
+| G-U UI | Existing owner `ui/__tests__/InstagramPerformanceScreen.test.tsx`, `domain/formatters.test.ts`, `tests/architecture.test.ts` under `src/features/instagram-insights/`. Task 8's competitor suites (`src/features/competitor-tracking/`, on main since #306) and Task 9 expanded owner suites own their UI behavior. |
+| G-E journeys | Proposed strict `e2e/analytics.spec.ts` Instagram cases and `e2e/fixtures/instagramRelease.ts`, `instagramReleaseSeed.ts`, `instagramReleaseServer.ts`; use §4. Task 8's `e2e/fixtures/competitorTracking.ts` (on main since #306) is reused, not independently duplicated. |
 | G-X assembled release | Proposed `scripts/check-instagram-release-gates.mjs` and adjacent `.test.mjs`: traceability, exact manifest, required artifacts, no unresolved skips, actual runtime caller evidence and fail-closed missing prerequisites. Manual architecture/guard review remains required. |
 | G-L live | Separately authorized B–E checklists (§6), configured-version Meta compatibility, real account observations and deployed hashes. No local fixture can satisfy G-L. |
 
@@ -114,7 +114,7 @@ These are references to source requirements, not replacement definitions. Parent
 | S3 | existing | G-S same suite browser snapshot-write denial and service ownership constraints. |
 | S4 | existing | G-S same suite quota and approved RPC soft-remove/reactivate behavior; real concurrent quota fixture required. Hard delete is not approved. Retention races tracked separately below. |
 | S5 | existing | G-S same suite snapshot natural-key uniqueness; G-O repeat-worker evidence remains A9. |
-| S6 | blocked-on-dependency | G-S/G-X: Task 4 collection cron definitions/daily enqueue and Task 8 M4. Run definitions twice; one job per name, active=false, no secret literals or unrelated job changes. |
+| S6 | blocked-on-dependency | G-S/G-X: C1's four inactive collection schedules (collection rollout controls plan Task 5, RC-12), with Task 4's daily dispatch as their prerequisite, and Task 8 M4. Run definitions twice; one job per name, active=false, no secret literals or unrelated job changes. |
 
 ### UI and assembled journeys
 
@@ -151,7 +151,7 @@ These are references to source requirements, not replacement definitions. Parent
 | T8-06 | blocked-on-dependency | G-R/G-U J7; Task 8 competitor assembler actually calls canonical outlier with correct cohorts and period-independent history. |
 | T8-07 | blocked-on-dependency | G-U/G-E; Task 8 queued≠collected, Retry-After, lost enqueue, bounded polling, terminal/auth-change stop and retained history. |
 | T8-08 | blocked-on-dependency | G-S; Task 8 M3: 89d/90d−1µs/90d, all children/jobs, repeated removal and reactivation semantics. |
-| T8-09 | blocked-on-dependency | G-S; Task 8 M3 real two-session cleanup/reactivation/collection races, >500-child backlog, rollback and restart. |
+| T8-09 | blocked-on-dependency | G-S; Task 8 M3 real three-session (two racers plus an observer) cleanup/reactivation/collection races, >500-child backlog, rollback and restart. |
 | T8-10 | blocked-on-dependency | G-S/G-X; Task 8 M4 inactive idempotent schedule, dry-run/no-work/refusal logging and switch-off behavior. |
 | T8-11 | blocked-on-dependency | G-U/G-E; Task 8 English/Arabic/RTL/keyboard/mobile/zoom, identity isolation and non-Instagram card regressions. |
 | T8-12 | blocked-on-dependency | G-E/G-X; Task 8 assembled route + Task 11 lifecycle, future Arabic journey and release evidence. |
@@ -206,15 +206,15 @@ Paths below are relative to `supabase/migrations/`. Apply only missing, reviewed
 | 9 | `20261028110000_meta_page_token_reconciliation.sql` | existing; in inspected main |
 | 10 | `20261029150000_competitor_collection_results.sql` | existing; in inspected main |
 | 11 | `20261029160000_instagram_direct_collection_credential.sql` | existing; in inspected main |
-| 12 / M1 | `20261030100000_competitor_capture_coverage.sql` | existing on branch only, `9d04f976` |
-| 13 / M2 | `20261030110000_competitor_tracking_report.sql` | proposed, Task 8 |
-| 14 / M3 | `20261030120000_competitor_retention.sql` | proposed, Task 8 |
-| 15 / M4 | `20261030130000_competitor_retention_cron.sql` | proposed, Task 8 |
-| 16 / R1 | `20261030133000_instagram_collection_rollout_controls.sql` | proposed, [collection rollout controls](2026-10-30-instagram-collection-rollout-controls.md) |
-| 17 / R2 | `20261030134000_instagram_collection_daily_dispatch.sql` | proposed, collection rollout controls |
-| 18 / C1 | `20261030140000_instagram_collection_cron.sql` | proposed, collection rollout controls; retains the existing reservation |
+| 12 / M1 | `20261030100000_competitor_capture_coverage.sql` | existing; on main since #306 (`1e1fbed3`) |
+| 13 / M2 | `20261030110000_competitor_tracking_report.sql` | existing; on main since #306 (`1e1fbed3`) |
+| 14 / M3 | `20261030120000_competitor_retention.sql` | existing; on main since #306 (`1e1fbed3`) |
+| 15 / M4 | `20261030130000_competitor_retention_cron.sql` | existing; on main since #306 (`1e1fbed3`) |
+| 16 / R1 | *unassigned* `_instagram_collection_rollout_controls.sql` | proposed, [collection rollout controls](2026-10-30-instagram-collection-rollout-controls.md) |
+| 17 / R2 | *unassigned* `_instagram_collection_daily_dispatch.sql` | proposed, collection rollout controls |
+| 18 / C1 | *unassigned* `_instagram_collection_cron.sql` | proposed, collection rollout controls |
 
-R1/R2/C1 contracts and implementation ownership are in the [collection rollout spec](2026-10-30-instagram-collection-rollout-controls.md) and [plan](../plans/2026-10-30-instagram-collection-rollout-controls.md). C1 depends on tested eligibility and daily dispatch; recheck collisions and freeze delivered artifacts before release. Proposed contracts do not pass the manifest gate. M1–M4 remain owned by Task 8.
+R1/R2/C1 contracts and implementation ownership are in the [collection rollout spec](2026-10-30-instagram-collection-rollout-controls.md) and [plan](../plans/2026-10-30-instagram-collection-rollout-controls.md). No version is reserved for them: `20261030140000` and `20261030150000` are already taken on main (`20261030140000_sweep_ai_image_staging_cron.sql`; `20261030150000_record_published_story.sql`, added by #313 `499a3183`). C1 depends on tested eligibility and daily dispatch. Each of R1, R2 and C1 gets, when its task assigns it, a version that no file in `supabase/migrations/` uses **and** that is newer than every migration on main and the harness baseline marker at that time, in the order R1 < R2 < C1, so manifest order and the hand-applied ascending order stay the same. The Task 1 checker reads `supabase/migrations/` and fails on a shared version prefix or a newly assigned version that is not the newest. Freeze delivered artifacts before release; proposed contracts and an unresolved dependency fail the manifest gate, never a wildcard deployment instruction. M1–M4 contracts remain owned by Task 8.
 
 ### Function and module set
 
@@ -230,8 +230,8 @@ All paths below are under `supabase/functions/`; braces enumerate exact filename
 | Existing consumers | `ad-analytics/index.ts`, `facebook-places-search/index.ts`, `threads-location-search/index.ts`, `check-connection-health/{index,youtubeProviderHealth}.ts`, `brand-scrape/index.ts` — existing; Task 2 changes remain pending |
 | API | `n8n-api/{index,mediaRelay,optOutGate,platformPostDelete,postActions,postMediaDelete,rateLimitConfig,refusalLog,requestBody,requestGuards,serviceProxy,webhookFilters}.ts` — existing |
 | MCP | `mcp/{index,confirmGate,connectionMode,keyOwner,stringList,toolScopes}.ts` — existing |
-| Competitor report | **proposed** `competitor-tracking-report/{index,handler,contracts,reportStore,assemble,growth,weeklyInventory}.ts`, Task 8 |
-| Retention | **proposed** `competitor-retention/{index,handler,run,deps}.ts`, Task 8 |
+| Competitor report | `competitor-tracking-report/{index,handler,contracts,reportStore,assemble,growth,weeklyInventory}.ts` — existing; on main since #306, not deployed |
+| Retention | `competitor-retention/{index,handler,run,deps}.ts` — existing; on main since #306, not deployed |
 
 The inspected recursive local-import closure contains these **50 existing `_shared/` modules** (including dependencies of API/MCP compatibility consumers). This is a deployment inventory, not permission to edit them:
 
@@ -290,7 +290,7 @@ youtubeGrantedScopes.ts
 
 The final immutable manifest must re-enumerate the closure after dependency tasks land and fail on unresolved paths or changed hashes. Include external Deno import versions/configuration and runtime import consumers not found by static traversal. Publishing regression uses the reviewed existing publishing runtime; add any changed publishing files/closure explicitly if an owning task changes them. `workerTestSupport.ts` is test-only and is not runtime evidence.
 
-Frontend release includes existing owner routes/feature and Task 8's proposed competitor feature/composition/translations, using the accepted Task 9 navigation contract. `supabase/config.toml` and `src/integrations/supabase/types.ts` must match accepted handlers/catalog. Schema/ACL verification precedes dependent functions and frontend merge because the automatic reconciler does not apply migrations; follow the linked deployment runbook and account for its schedule before any authorized manual deployment.
+Frontend release includes existing owner routes/feature and Task 8's competitor feature/composition/translations (on main since #306), using the accepted Task 9 navigation contract. `supabase/config.toml` and `src/integrations/supabase/types.ts` must match accepted handlers/catalog. Schema/ACL verification precedes dependent functions and frontend merge because the automatic reconciler does not apply migrations; follow the linked deployment runbook and account for its schedule before any authorized manual deployment.
 
 ### Schedules and switches
 
@@ -300,7 +300,7 @@ Frontend release includes existing owner routes/feature and Task 8's proposed co
 | `instagram-insights-drain` | `*/2 * * * *` recommended | Existing owner `{action:"drain"}` plus proposed SQL eligibility and pending-sweep resumption | absent now; C1 inactive |
 | `competitor-snapshot-enqueue-daily` | `0 1 * * *` | Proposed `{mode:"enqueue-daily",dispatch:"durable"}`; existing cursor branch preserved by rollout contract | absent now; C1 inactive |
 | `competitor-snapshot-drain` | `*/2 * * * *` recommended | Existing competitor `{mode:"all"}` | absent now; C1 inactive |
-| `competitor-retention` | `20 * * * *` | Task 8 proposed retention handler, runtime cron-secret lookup | M4 proposed; inactive |
+| `competitor-retention` | `20 * * * *` | Task 8 retention handler, runtime cron-secret lookup | M4 on main since #306; applied state unverified; created `active := false` |
 
 The two-minute drain interval is a recommendation awaiting readiness/capacity evidence, not an approved existing schedule. Daily due-target enqueue must finish all bounded pages without starving later targets; cron idempotence is not drain completeness. No Stories or scheduled Apify jobs. Tests run each definition twice and assert exactly one inactive job, correct auth-secret lookup, failure when required cron infrastructure is absent, and no change to unrelated schedules.
 
@@ -328,14 +328,14 @@ All boxes start unchecked. Planning, prior merges and prior general authorizatio
 
 ### D — collect for one account, then one competitor
 
-- [ ] D1: **Blocked pending implementation and evidence.** The [collection rollout spec](2026-10-30-instagram-collection-rollout-controls.md) and [plan](../plans/2026-10-30-instagram-collection-rollout-controls.md) own server-enforced one-account eligibility, per-account credential selection, durable daily dispatch and C1. Waleed approves this prerequisite only after RC-01–RC-16 evidence and deployment readiness. The OAuth user list is not collection admission; cron inactivity does not isolate pending jobs. Do not bypass this by setting global credential mode to protected.
+- [ ] D1: **Blocked pending implementation and evidence.** The [collection rollout spec](2026-10-30-instagram-collection-rollout-controls.md) and [plan](../plans/2026-10-30-instagram-collection-rollout-controls.md) own server-enforced one-account eligibility, per-account credential selection, durable daily dispatch and C1. Waleed approves this prerequisite only after RC-01–RC-17 evidence and deployment readiness. The OAuth user list is not collection admission; cron inactivity does not isolate pending jobs. Do not bypass this by setting global credential mode to protected. The same mechanism gates **competitor targets** (owner enqueue, privileged enqueue and drain claims), because competitor collection shares `collection_instagram_insights_enabled`: D2 cannot enable that setting without also opening competitor collection, so competitor collection stays behind its own server-side gate until D3.
 - [ ] D2: With D1 deployed and other targets demonstrably excluded, Waleed approves collection for exactly one named owner account, all broad schedules still off. Verify configured Meta version/host, dates/units/product classification, nulls, lag repair, bounded continuation, persisted success/partial/error and report/UI parity. Record other-account zero-provider-call evidence. Repeat the other login type only under a new approval after the first succeeds.
 - [ ] D3: Waleed approves one named competitor target/viewer after owner-flow evidence. Verify official provenance, nullable views, durable coverage, target-vs-viewer errors, no scheduled Apify and correct report/queue behavior. Unknown ordering remains unknown; do not manufacture complete-week evidence.
 
 ### E — wider rollout and retention
 
-- [ ] E1: Waleed approves the named wider cohort or **all eligible accounts**, with an explicit list/count of exclusions needing reconnect; protected authority readiness must be measured, never assumed. Enable collection eligibility only for that approved set. Global protected cutover, if ever wanted, is a separate migration/cutover decision, not implicit in “all collection”.
-- [ ] E2: Waleed approves the exact daily enqueue and drain schedules/cadences after boot, capacity and off-state tests. Observe a full due-target drain with continuations and >25 owners/>50 competitors where available; synthetic scale tests complement low-volume live evidence. Record missed targets, backoff and last-success/partial truth.
+- [ ] E1: Waleed approves the named wider cohort or **all eligible accounts**, with an explicit list/count of exclusions needing reconnect; protected authority readiness must be measured, never assumed. Enable collection eligibility only for that approved set. The same approval names the wider **competitor-target** set (list or count) separately from the owner accounts; D3's single target stays the only eligible competitor until it does, and competitor eligibility is enabled only for that named set. Global protected cutover, if ever wanted, is a separate migration/cutover decision, not implicit in “all collection”.
+- [ ] E2: Waleed approves the exact daily enqueue and drain schedules/cadences, which collect only the owner accounts and competitor targets E1 approved, after boot, capacity and off-state tests. Observe a full due-target drain with continuations and >25 owners/>50 competitors where available; synthetic scale tests complement low-volume live evidence. Record missed targets, backoff and last-success/partial truth.
 - [ ] E3: Waleed approves retention **dry run** first; report eligible counts and bounded backlog without deleting. After reviewing that evidence, obtain a **separate approval** for `competitor_retention_enabled` and its cron. Verify eligible inactive-only deletion and absence of active/foreign history loss.
 - [ ] E4: Waleed accepts the release report after the agreed observation window. Confirm exact deployed SHA/hashes, migration ledger, API/UI/MCP regression evidence, redacted logs and rollback readiness. Any missing live evidence leaves that gate pending, even when local suites pass.
 
