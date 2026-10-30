@@ -42,6 +42,7 @@ below). So the harness does not replay history. It:
 | `competitor_collection_results.sql` | atomic competitor result write, watchlist publication, weekly retry gate, context rules and result fences; rolls back |
 | `competitor_capture_coverage.sql` | the v2 competitor result write: coverage evidence stored atomically with the snapshots, the v2 fences, the malformed-coverage refusals, same-day idempotency, generation supersession, stale-worker refusal, unknown coverage for a legacy v1 capture, bounded completion vs full inventory, and the role boundary; rolls back |
 | `competitor_tracking_report.sql` | the owner-only competitor report reader: the grant surface, the strict request shape, the owner boundary and the identical not-found refusal, the active and removed lists, the quota consistency, the bounded keyset cursor (20/50, limit+1, sub-millisecond ties, concurrent insertion, invalid and cross-filter cursors), the S = 3 days baseline edges, the observation cap, the latest-per-media selection with its bounded cohort baseline, the coverage and job projection without lease or context, and the capped-scan incompleteness; rolls back |
+| `competitor_retention.sql` | the bounded inactive-history cleanup: the 90-day eligibility clock to the microsecond, the removal-marker clock, the ownership boundary, the default-off switch, the dry run, the bounded slice, the child-first deletion protocol, the live-lease skip and the role boundary; rolls back |
 
 The harness's `SUITES` array is the complete executable inventory; the table
 above highlights selected suites, not the entire list. No existing suite may
@@ -54,13 +55,58 @@ not omitted test suites: `partner_api_race_fixture.sql`,
 `instagram_durable_collection_jobs_race_fixture.sql`,
 `meta_oauth_attempt_lifecycle_race_fixture.sql`,
 `meta_account_refresh_lifecycle_race_fixture.sql`,
-`meta_oauth_identity_alias_race_fixture.sql`, and
-`meta_page_token_reconciliation_race_fixture.sql`. Their headers document
+`meta_oauth_identity_alias_race_fixture.sql`,
+`meta_page_token_reconciliation_race_fixture.sql`, and
+`competitor_retention_race_fixture.sql`. Their headers document
 setup, interleavings, expected outcomes and cleanup. A single-session harness
 pass does not prove concurrency. Run the applicable fixtures separately against
 the same isolated candidate and record both sessions' results. Never run them
 against production; the Instagram credential/job fixtures require
 `-v disposable=1` because setup commits synthetic records.
+
+### The competitor retention race fixture
+
+`competitor_retention_race_fixture.sql` rehearses the five concurrency races
+of the bounded inactive-history cleanup: the reactivation holding the parent
+lock, the cleanup holding the parent lock, the collector's commit against the
+cleanup, two retention runs, and the expired worker after the cleanup. It
+commits synthetic rows and it turns `competitor_retention_enabled` **on**, so
+it refuses to run without `-v disposable=1` and its cleanup step puts the
+switch back to `false`.
+
+Three sessions are needed: two racers and one observer. The observer is what
+proves the wait — it reads `pg_stat_activity` while the other session is
+blocked.
+
+```bash
+# against the disposable container of the Task 8 validation
+DB_URL='postgres://supabase_admin:postgres@localhost:5432/partner_api_harness'
+
+# 1. prepare (commits the synthetic owner and the six tracked competitors)
+psql "$DB_URL" -v ON_ERROR_STOP=1 -v disposable=1 -v prepare=1 \
+  -f supabase/tests/competitor_retention_race_fixture.sql
+
+# 2. three interactive sessions against the SAME database
+psql "$DB_URL"   # session A
+psql "$DB_URL"   # session B
+psql "$DB_URL"   # the observer
+
+# 3. in the observer session, define the probe (the definition is in the
+#    fixture header) and call it while a racer is blocked
+psql "$DB_URL" -c "SELECT * FROM pg_temp.crt_probe();"
+
+# 4. cleanup (removes the synthetic rows and switches retention off again)
+psql "$DB_URL" -v ON_ERROR_STOP=1 -v disposable=1 -v cleanup=1 \
+  -f supabase/tests/competitor_retention_race_fixture.sql
+```
+
+The exact statements of every race, the lock waits to observe, the expected
+rows and the assertions are in the fixture's own header. Note what the
+cleanup's `FOR UPDATE SKIP LOCKED` means for the rehearsal: a **second
+cleanup never waits** (it skips the locked candidate), so races 1 and 4 are
+rehearsed as lock *skips* and races 2 and 3 as lock *waits*. A rehearsal
+that expected a wait where the design produces a skip would be asserting the
+wrong thing.
 
 ## Running locally
 
