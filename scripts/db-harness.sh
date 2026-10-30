@@ -152,6 +152,7 @@ SUITES=(
   meta_page_token_reconciliation.sql
   competitor_collection_results.sql
   competitor_capture_coverage.sql
+  competitor_retention.sql
   instagram_direct_collection_credential.sql
 )
 # These fixtures build their own focused schema and apply the migration under
@@ -682,7 +683,7 @@ psql "${PSQL_COMMON[@]}" "$HARNESS_URL" -q -c \
 # moved. So: every *.sql in the tests dir must be listed, or named here as
 # deliberately excluded, or the harness fails before running anything.
 STEP="suite inventory"
-EXCLUDED_FROM_SUITES=(baseline_schema.sql partner_api_race_fixture.sql instagram_tracking_schema_race_fixture.sql facebook_user_credential_bindings_race_fixture.sql instagram_durable_collection_jobs_race_fixture.sql meta_oauth_attempt_lifecycle_race_fixture.sql meta_account_refresh_lifecycle_race_fixture.sql meta_oauth_identity_alias_race_fixture.sql meta_page_token_reconciliation_race_fixture.sql)
+EXCLUDED_FROM_SUITES=(baseline_schema.sql partner_api_race_fixture.sql instagram_tracking_schema_race_fixture.sql facebook_user_credential_bindings_race_fixture.sql instagram_durable_collection_jobs_race_fixture.sql meta_oauth_attempt_lifecycle_race_fixture.sql meta_account_refresh_lifecycle_race_fixture.sql meta_oauth_identity_alias_race_fixture.sql meta_page_token_reconciliation_race_fixture.sql competitor_retention_race_fixture.sql)
 for f in "$TESTS_DIR"/*.sql; do
   name="$(basename "$f")"
   listed=0

@@ -9957,6 +9957,14 @@ export type Database = {
         Args: { p_job_id: string; p_claim_token: string }
         Returns: Json
       }
+      run_competitor_retention_batch: {
+        Args: {
+          p_parent_limit: number
+          p_child_limit: number
+          p_dry_run: boolean
+        }
+        Returns: Json
+      }
       prune_ai_knowledge_entities: {
         Args: { p_user_id: string }
         Returns: undefined
