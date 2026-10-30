@@ -6,7 +6,7 @@ import {
   storeEmailAttachment,
 } from "../_shared/emailAttachmentStorage.ts";
 import { logToDatabase } from "../_shared/logging.ts";
-import { downloadResendAttachment, readResendAttachmentList } from "../_shared/resendAttachmentList.ts";
+import { downloadResendAttachment, isValidResendEmailId, readResendAttachmentList } from "../_shared/resendAttachmentList.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -91,6 +91,8 @@ async function fetchEmailContent(
   html: string | null;
 }> {
   try {
+    // Refused before any request: `.`/`..` would collapse into another Resend API path.
+    if (!isValidResendEmailId(emailId)) throw new Error("Invalid Resend email id");
     console.log(`Fetching inbound email content for email_id: ${emailId}`);
 
     // IMPORTANT: Inbound emails must be fetched from the Receiving API

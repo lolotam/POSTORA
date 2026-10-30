@@ -35,10 +35,37 @@ function parsedHttpsUrl(value: string): URL | null {
   }
 }
 
+/** Redirects a download may follow; each hop is re-checked as HTTPS. */
+const MAX_DOWNLOAD_REDIRECTS = 3;
+
 /**
- * Downloads an attachment from the URL Resend returned. Only an HTTPS URL is fetched, and the
- * API key is added on a 401/403 retry only when the URL is on a Resend host: the download URL
- * is signed, and the key must never reach any other origin. Null means the URL was refused.
+ * Resend ids are UUIDs. Anything else (and above all `.` or `..`, which URL parsing would
+ * collapse into another API path) is refused before a request is built with it.
+ */
+export function isValidResendEmailId(emailId: unknown): emailId is string {
+  return typeof emailId === "string" && /^[A-Za-z0-9_-]{1,128}$/.test(emailId);
+}
+
+/** Fetches, following redirects by hand so every hop stays on HTTPS. Null when a hop is refused. */
+async function fetchHttpsOnly(url: URL, init: RequestInit, fetcher: typeof fetch): Promise<Response | null> {
+  let current = url;
+  for (let hop = 0; hop <= MAX_DOWNLOAD_REDIRECTS; hop++) {
+    const response = await fetcher(current.href, { ...init, redirect: "manual" });
+    if (response.status < 300 || response.status >= 400) return response;
+    const location = response.headers.get("location");
+    const next = location ? parsedHttpsUrl(new URL(location, current).href) : null;
+    await response.body?.cancel();
+    if (!next) return null;
+    current = next;
+  }
+  return null;
+}
+
+/**
+ * Downloads an attachment from the URL Resend returned. Only HTTPS is fetched, every redirect
+ * hop included. The API key is added on a 401/403 retry only when the URL is on a Resend host,
+ * and that keyed retry follows no redirect: the download URL is signed, and the key must never
+ * reach any other origin. Null means the URL, or a redirect it led to, was refused.
  */
 export async function downloadResendAttachment(
   downloadUrl: string,
@@ -47,9 +74,8 @@ export async function downloadResendAttachment(
 ): Promise<Response | null> {
   const url = parsedHttpsUrl(downloadUrl);
   if (!url) return null;
-  // The signed link may redirect to storage; only the keyed retry refuses to follow one.
-  const response = await fetcher(url.href);
-  if ((response.status === 401 || response.status === 403) && isResendHost(url.hostname)) {
+  const response = await fetchHttpsOnly(url, {}, fetcher);
+  if (response && (response.status === 401 || response.status === 403) && isResendHost(url.hostname)) {
     return await fetcher(url.href, { headers: { Authorization: `Bearer ${apiKey}` }, redirect: "error" });
   }
   return response;
@@ -81,6 +107,7 @@ export async function readResendAttachmentList(
   apiKey: string,
   fetcher: typeof fetch = fetch,
 ): Promise<ResendAttachmentList> {
+  if (!isValidResendEmailId(emailId)) return { ok: false, status: null, detail: "invalid email id" };
   let response: Response;
   try {
     response = await fetcher(`https://api.resend.com/emails/receiving/${encodeURIComponent(emailId)}/attachments`, {

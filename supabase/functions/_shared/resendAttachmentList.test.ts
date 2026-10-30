@@ -1,5 +1,5 @@
 import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
-import { downloadResendAttachment, normaliseAttachmentEntry, readResendAttachmentList, type ResendAttachmentList } from "./resendAttachmentList.ts";
+import { downloadResendAttachment, isValidResendEmailId, normaliseAttachmentEntry, readResendAttachmentList, type ResendAttachmentList } from "./resendAttachmentList.ts";
 
 const answer = (body: BodyInit | null, status = 200) => () => Promise.resolve(new Response(body, { status }));
 
@@ -52,12 +52,40 @@ Deno.test("the Resend key is only ever sent to a Resend host, and only over HTTP
   assertEquals(calls, []);
 });
 
-Deno.test("the email id is encoded into the list URL", async () => {
+Deno.test("an email id outside Resend's format is refused before any request", async () => {
   const urls: string[] = [];
   const fetcher = (input: string | URL | Request) => {
     urls.push(String(input));
     return Promise.resolve(new Response(JSON.stringify({ data: [] })));
   };
-  await readResendAttachmentList("x/../../domains", "k", fetcher);
-  assertEquals(urls, ["https://api.resend.com/emails/receiving/x%2F..%2F..%2Fdomains/attachments"]);
+  for (const id of ["..", ".", "x/../../domains", "", "a b"]) {
+    assertEquals(await readResendAttachmentList(id, "k", fetcher), { ok: false, status: null, detail: "invalid email id" });
+  }
+  assertEquals(urls, []);
+  assertEquals(isValidResendEmailId("4ef9a417-02e9-4d39-ad75-9611e0fcc33c"), true);
+  await readResendAttachmentList("4ef9a417-02e9-4d39-ad75-9611e0fcc33c", "k", fetcher);
+  assertEquals(urls, ["https://api.resend.com/emails/receiving/4ef9a417-02e9-4d39-ad75-9611e0fcc33c/attachments"]);
+});
+
+Deno.test("a download follows redirects only while every hop stays on HTTPS", async () => {
+  const hops: string[] = [];
+  const redirectTo = (location: string) => new Response(null, { status: 302, headers: { location } });
+  const chain = (map: Record<string, Response>) => (input: string | URL | Request) => {
+    hops.push(String(input));
+    return Promise.resolve(map[String(input)] ?? new Response("file"));
+  };
+
+  const ok = await downloadResendAttachment("https://cdn.resend.com/a", "k", chain({ "https://cdn.resend.com/a": redirectTo("https://storage.example/b") }));
+  assertEquals([ok?.status, hops], [200, ["https://cdn.resend.com/a", "https://storage.example/b"]]);
+
+  hops.length = 0;
+  const downgraded = await downloadResendAttachment("https://cdn.resend.com/a", "k", chain({ "https://cdn.resend.com/a": redirectTo("http://storage.example/b") }));
+  assertEquals([downgraded, hops], [null, ["https://cdn.resend.com/a"]]);
+
+  hops.length = 0;
+  const loop = await downloadResendAttachment("https://cdn.resend.com/a", "k", () => {
+    hops.push("x");
+    return Promise.resolve(redirectTo("https://cdn.resend.com/a"));
+  });
+  assertEquals([loop, hops.length], [null, 4]);
 });
