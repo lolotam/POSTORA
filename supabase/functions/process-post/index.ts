@@ -86,7 +86,7 @@ import { createClient, SupabaseClient } from "https://esm.sh/@supabase/supabase-
 // See: supabase/functions/_shared/platforms/ for reusable platform utilities
 import type { PlatformMetadata as SharedPlatformMetadata } from "../_shared/platforms/types.ts";
 import { graphId, type GraphResponse } from "./graphResponse.ts";
-import { publishContainer } from "./instagramPublish.ts";
+import { matchPublishedMedia, type MediaSummary, publishContainer, PUBLISHED_LOOKBACK_MS } from "./instagramPublish.ts";
 import { validateRequestBody, validationErrorResponse } from "../_shared/validate.ts";
 import { postWebhook, validateWebhookTarget } from "../_shared/webhookSecurity.ts";
 import { getMissingMediaFileIds } from "../_shared/post-media.ts";
@@ -98,7 +98,7 @@ import { composioClientFromEnv } from "../_shared/composioClient.ts";
 import { publishYouTubeViaComposio } from "./youtubeComposio.ts";
 import { prepareTikTokReviewPublish, recordReviewPublishId, requiredReviewSubmissionId } from "./tiktokReview.ts";
 import { firstPublicPostId } from "../_shared/tiktokPublishOutcome.ts";
-import { CHECK_ONCE_DEADLINE, CONTAINER_STATUS_FIELDS, type ContainerState, containerFailureMessage, pollContainer } from "../_shared/metaContainerStatus.ts";
+import { CHECK_ONCE_DEADLINE, classifyContainerStatus, CONTAINER_STATUS_FIELDS, type ContainerState, containerFailureMessage, pollContainer } from "../_shared/metaContainerStatus.ts";
 import {
   abandonReason,
   bufferAfterFinishedMs,
@@ -107,6 +107,7 @@ import {
   deferrableDeadline,
   type DeferredKind,
   giveUpMessage,
+  workerPublishDeadline,
   NO_DEFERRAL,
   ownContainerDeadline,
   storyRecoveryExhausted,
@@ -3656,9 +3657,43 @@ function pollContainerStatus(
   );
 }
 
-/** An Instagram container's state, asked once with no wait (unknown comes back as `waiting`). */
-function checkContainerOnce(statusUrl: string): Promise<ContainerState> {
-  return pollContainer("instagram", statusUrl, { maxAttempts: 1, intervalMs: 0, deadlineMs: CHECK_ONCE_DEADLINE });
+/**
+ * An Instagram container's state, asked once. Only the container's own ERROR or EXPIRED is a
+ * failure: a status request that fails (an expired token, a 5xx, a timeout) says nothing about
+ * the publish, so it comes back as `waiting`, i.e. unknown.
+ */
+async function checkContainerOnce(statusUrl: string, timeoutMs: number): Promise<ContainerState> {
+  try {
+    const response = await fetchWithTimeout(statusUrl, {}, timeoutMs);
+    if (!response.ok) return { state: "waiting" };
+    return classifyContainerStatus("instagram", await response.json());
+  } catch {
+    return { state: "waiting" };
+  }
+}
+
+/**
+ * The media a published container became, looked up in the account's latest media (see
+ * matchPublishedMedia), or null when it cannot be told for sure.
+ */
+async function findPublishedMedia(
+  mediaListUrl: string,
+  accessToken: string,
+  caption: string | null | undefined,
+  notBeforeMs: number,
+): Promise<MediaSummary | null> {
+  try {
+    const response = await fetchWithTimeout(
+      `${mediaListUrl}?fields=id,caption,timestamp,permalink&limit=10&access_token=${accessToken}`,
+      {},
+      8000,
+    );
+    if (!response.ok) return null;
+    const body = await response.json() as { data?: MediaSummary[] };
+    return matchPublishedMedia(body.data ?? [], caption, notBeforeMs);
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -3672,7 +3707,7 @@ function publishInstagramMedia(
   deferKind?: DeferredKind,
 ): Promise<{ id: string }> {
   return publishContainer({
-    publish: async () => {
+    publish: async (timeoutMs) => {
       const response = await fetchWithTimeout(
         `https://graph.facebook.com/v18.0/${igUserId}/media_publish`,
         {
@@ -3680,16 +3715,17 @@ function publishInstagramMedia(
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ creation_id: creationId, access_token: accessToken }),
         },
-        20000,
+        timeoutMs,
       );
       const reply = await response.json() as GraphResponse;
       console.log("Instagram publish response:", JSON.stringify(reply).slice(0, 300));
       return reply;
     },
-    containerState: () => checkContainerOnce(
+    containerState: (timeoutMs) => checkContainerOnce(
       `https://graph.facebook.com/v18.0/${creationId}?fields=${CONTAINER_STATUS_FIELDS.instagram}&access_token=${accessToken}`,
+      timeoutMs,
     ),
-  }, { creationId, deferKind });
+  }, { creationId, deferKind, requestTimeoutMs: 20000, deadlineMs: workerPublishDeadline(WORKER_STARTED_AT_MS) });
 }
 
 /**
@@ -4234,23 +4270,43 @@ async function postToInstagram(
       if (waitError instanceof ContainerStillProcessing && unrecordedStory) waitError.unrecordedStory = unrecordedStory;
       throw waitError;
     }
-    if (reelStatus === "PUBLISHED") {
-      // Only a resumed run sees this: an earlier run published but died before recording it.
-      // No id: the container id is not the media id, and analytics would read it as one.
-      return {
-        url: username ? `https://www.instagram.com/${username}/` : `https://instagram.com`,
-        warnings: [...warnings, "Instagram had already published this reel; its direct link could not be read."],
-      };
-    }
-
-    // Publish the media with retry logic. A publish Instagram did not confirm is left for the
-    // reconciler, carrying the unrecorded story like the wait above.
     let publishData: { id: string };
-    try {
-      publishData = await publishInstagramMedia(igUserId, reelContainerId, accessToken, "ig_reel");
-    } catch (publishError) {
-      if (publishError instanceof ContainerStillProcessing && unrecordedStory) publishError.unrecordedStory = unrecordedStory;
-      throw publishError;
+    if (reelStatus === "PUBLISHED") {
+      // Only a resumed run sees this: an earlier run's publish went unanswered, or its worker
+      // stopped, after Instagram published. A story still unrecorded keeps the row pending so
+      // it is not lost when the reel settles.
+      if (unrecordedStory) {
+        const pending = new ContainerStillProcessing("ig_reel", reelContainerId);
+        pending.unrecordedStory = unrecordedStory;
+        throw pending;
+      }
+      // The container id is not the media id (analytics would read it as one): find the media.
+      const firstDeferredAt = Date.parse(timing.resume?.deferral.first_deferred_at ?? "");
+      const media = await findPublishedMedia(
+        `https://graph.facebook.com/v18.0/${igUserId}/media`,
+        accessToken,
+        post.caption,
+        (Number.isFinite(firstDeferredAt) ? firstDeferredAt : Date.now()) - PUBLISHED_LOOKBACK_MS,
+      );
+      if (!media) {
+        return {
+          url: username ? `https://www.instagram.com/${username}/` : `https://instagram.com`,
+          warnings: [
+            ...warnings,
+            "Instagram had already published this reel, but it could not be identified, so its first comment, comment setting and story share were not applied.",
+          ],
+        };
+      }
+      publishData = { id: media.id };
+    } else {
+      // A publish Instagram did not confirm is left for the reconciler, carrying the unrecorded
+      // story like the wait above.
+      try {
+        publishData = await publishInstagramMedia(igUserId, reelContainerId, accessToken, "ig_reel");
+      } catch (publishError) {
+        if (publishError instanceof ContainerStillProcessing && unrecordedStory) publishError.unrecordedStory = unrecordedStory;
+        throw publishError;
+      }
     }
 
     // Post first comment
@@ -4510,7 +4566,7 @@ function publishBusinessLoginMedia(
   deferKind?: DeferredKind,
 ): Promise<{ id: string }> {
   return publishContainer({
-    publish: async () => {
+    publish: async (timeoutMs) => {
       const response = await fetchWithTimeout(
         `https://graph.instagram.com/v22.0/${igUserId}/media_publish`,
         {
@@ -4518,16 +4574,17 @@ function publishBusinessLoginMedia(
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ creation_id: creationId, access_token: accessToken }),
         },
-        30000,
+        timeoutMs,
       );
       const reply = await response.json() as GraphResponse;
       console.log("BL Instagram publish response:", JSON.stringify(reply).slice(0, 300));
       return reply;
     },
-    containerState: () => checkContainerOnce(
+    containerState: (timeoutMs) => checkContainerOnce(
       `https://graph.instagram.com/v22.0/${creationId}?fields=${CONTAINER_STATUS_FIELDS.instagram}&access_token=${accessToken}`,
+      timeoutMs,
     ),
-  }, { creationId, deferKind });
+  }, { creationId, deferKind, requestTimeoutMs: 30000, deadlineMs: workerPublishDeadline(WORKER_STARTED_AT_MS) });
 }
 
 /**
@@ -5013,11 +5070,26 @@ async function postToInstagramBusinessLogin(
         const fallbackUrl = username ? `https://www.instagram.com/${username}/` : `https://instagram.com`;
         const subtype = wantReel ? "reel" : "feed";
         if (reelStatus === "PUBLISHED") {
-          // Only a resumed run sees this: an earlier run published but died before recording it.
-          const note = "Instagram had already published this reel; its direct link could not be read.";
-          await insertIGRow(subtype, "success", undefined, fallbackUrl, undefined, { warnings: [note] });
-          subResults.push({ subtype, status: "success", url: fallbackUrl });
-          warnings.push(note);
+          // Only a resumed run sees this: an earlier run's publish went unanswered, or its worker
+          // stopped, after Instagram published. Find the media so its follow-up steps still run.
+          const firstDeferredAt = Date.parse(timing.resume?.deferral.first_deferred_at ?? "");
+          const media = await findPublishedMedia(
+            `https://graph.instagram.com/v22.0/${igUserId}/media`,
+            accessToken,
+            post.caption,
+            (Number.isFinite(firstDeferredAt) ? firstDeferredAt : Date.now()) - PUBLISHED_LOOKBACK_MS,
+          );
+          if (media) {
+            const url = media.permalink ?? fallbackUrl;
+            const rowId = await insertIGRow(subtype, "success", media.id, url, undefined, { shared_to_feed: wantFeed });
+            subResults.push({ subtype, status: "success", id: media.id, url });
+            enrichInBackground(rowId, media.id, subtype, url);
+          } else {
+            const note = "Instagram had already published this reel, but it could not be identified, so its first comment and comment setting were not applied.";
+            await insertIGRow(subtype, "success", undefined, fallbackUrl, undefined, { warnings: [note] });
+            subResults.push({ subtype, status: "success", url: fallbackUrl });
+            warnings.push(note);
+          }
         } else {
           const publishData = await publishBusinessLoginMedia(igUserId, containerId, accessToken, "ig_business_reel");
           const blDebug = await finalizeBLLocationDebug(publishData.id);

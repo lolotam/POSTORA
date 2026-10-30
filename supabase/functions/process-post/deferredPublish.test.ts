@@ -6,6 +6,10 @@ import {
   ContainerStillProcessing,
   DEFERRAL_GIVE_UP_MS,
   deferrableDeadline,
+  PUBLISH_RESERVE_MS,
+  RECORD_RESERVE_MS,
+  WORKER_LIFETIME_MS,
+  workerPublishDeadline,
   FIRST_RUN_POLL_BUDGET_MS,
   giveUpMessage,
   isPastGiveUp,
@@ -233,23 +237,27 @@ Deno.test("a resumed run, with a worker of its own, and a wait with no deadline 
   assertEquals(bufferAfterFinishedMs(Number.POSITIVE_INFINITY, 1_000_000), 3000);
 });
 
-Deno.test("a deferrable wait on a reused worker ends by the worker's budget, not the request's", () => {
+Deno.test("a deferrable wait on a reused worker ends early enough for the publish to fit", () => {
+  const workerStart = 1_000_000;
+  const latest = workerStart + WORKER_LIFETIME_MS - PUBLISH_RESERVE_MS;
   // Fresh worker: the request's own budget stands.
-  assertEquals(deferrableDeadline(10_000 + FIRST_RUN_POLL_BUDGET_MS, 10_000), 10_000 + FIRST_RUN_POLL_BUDGET_MS);
-  // The worker started 30 s before this request: only what is left of its budget remains.
-  assertEquals(deferrableDeadline(40_000 + FIRST_RUN_POLL_BUDGET_MS, 10_000), 10_000 + FIRST_RUN_POLL_BUDGET_MS);
+  assertEquals(deferrableDeadline(workerStart + FIRST_RUN_POLL_BUDGET_MS, workerStart), workerStart + FIRST_RUN_POLL_BUDGET_MS);
+  // A request that starts late in the worker's life is cut to what the worker can still fit.
+  assertEquals(deferrableDeadline(workerStart + 100_000 + FIRST_RUN_POLL_BUDGET_MS, workerStart), latest);
   // A resumed run checks once, and a run nobody can resume has no deadline: both left alone.
-  assertEquals(deferrableDeadline(CHECK_ONCE_DEADLINE, 10_000), CHECK_ONCE_DEADLINE);
-  assertEquals(deferrableDeadline(Number.POSITIVE_INFINITY, 10_000), Number.POSITIVE_INFINITY);
+  assertEquals(deferrableDeadline(CHECK_ONCE_DEADLINE, workerStart), CHECK_ONCE_DEADLINE);
+  assertEquals(deferrableDeadline(Number.POSITIVE_INFINITY, workerStart), Number.POSITIVE_INFINITY);
+  // The publish deadline keeps room for recording the outcome.
+  assertEquals(workerPublishDeadline(workerStart), workerStart + WORKER_LIFETIME_MS - RECORD_RESERVE_MS);
 });
 
-Deno.test("a deferrable wait whose worker budget is spent defers without checking again", async () => {
+Deno.test("a deferrable wait whose worker has no time left defers without checking again", async () => {
   let checks = 0;
   const state = await pollContainer("instagram", "https://graph.invalid/c", {
     maxAttempts: 60,
     intervalMs: 2000,
     checkFirst: true,
-    deadlineMs: deferrableDeadline(Date.now() + FIRST_RUN_POLL_BUDGET_MS, Date.now() - FIRST_RUN_POLL_BUDGET_MS),
+    deadlineMs: deferrableDeadline(Date.now() + FIRST_RUN_POLL_BUDGET_MS, Date.now() - WORKER_LIFETIME_MS),
     fetcher: () => {
       checks++;
       return Promise.resolve(new Response(JSON.stringify({ status_code: "IN_PROGRESS" })));

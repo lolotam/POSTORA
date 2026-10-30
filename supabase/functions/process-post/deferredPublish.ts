@@ -130,16 +130,32 @@ export function ownContainerDeadline(runDeadlineMs: number, requestStartedAtMs: 
 }
 
 /**
- * The deadline for a container the reconciler can finish later. The edge runtime reuses a
- * worker for several requests inside its one 60 s lifetime, so a request can land on a worker
- * that has already used part of it: the poll budget then counts from the worker's start, not
- * the request's. Deferring early is safe; a worker stopped mid-wait loses the container, and
- * the stale sweeper later fails the post as interrupted. A resumed run (check once) and a run
- * nobody can resume (no deadline) are left as they are.
+ * How long one edge worker lives: `workerTimeoutMs` in the server-only `functions/main/index.ts`
+ * (150 s since 2026-10-30, Supabase's default; it was 60 s). The runtime reuses a worker for
+ * several requests inside that one lifetime, so a request can start on a worker that has
+ * already used part of it. Keep this in step with the server.
+ */
+export const WORKER_LIFETIME_MS = 150 * 1000;
+/** Kept at the end of a worker's life for recording the outcome (a row write, the roll-up). */
+export const RECORD_RESERVE_MS = 5 * 1000;
+/** Kept after a deferrable wait for the publish, its follow-up check and the record. */
+export const PUBLISH_RESERVE_MS = 45 * 1000;
+
+/** When a publish, and the check that settles it, must be over on this worker. */
+export function workerPublishDeadline(workerStartedAtMs: number): number {
+  return workerStartedAtMs + WORKER_LIFETIME_MS - RECORD_RESERVE_MS;
+}
+
+/**
+ * The deadline for a container the reconciler can finish later: the run's own deadline, cut
+ * so the publish and recording after it still fit in what is left of the worker. Deferring
+ * early is safe; a worker stopped mid-wait loses the container, and the stale sweeper later
+ * fails the post as interrupted. A resumed run (check once) and a run nobody can resume (no
+ * deadline) are left as they are.
  */
 export function deferrableDeadline(deadlineMs: number, workerStartedAtMs: number): number {
   if (deadlineMs === CHECK_ONCE_DEADLINE || !Number.isFinite(deadlineMs)) return deadlineMs;
-  return Math.min(deadlineMs, workerStartedAtMs + FIRST_RUN_POLL_BUDGET_MS);
+  return Math.min(deadlineMs, workerStartedAtMs + WORKER_LIFETIME_MS - PUBLISH_RESERVE_MS);
 }
 
 /** How long past `give_up_at` an abandon may keep retrying a story it could not record. */
