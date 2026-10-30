@@ -45,3 +45,12 @@ Deno.test("malformed requests are an invalid request that names the field", () =
   assertEquals(invalid({ media_file_id: "m1", operation: "compress" }).includes("compress"), true);
   assertEquals(invalid({ media_file_id: "m1", operation: "crop", crop: { x: "0", y: 0, width: 1, height: 1 } }).includes("crop.x"), true);
 });
+
+Deno.test("crop target sizes must be whole numbers within the bound", () => {
+  const crop = { x: 0, y: 0, width: 100, height: 100 };
+  assertEquals(invalid({ media_file_id: "m1", operation: "crop", crop: { ...crop, targetWidth: 1080.5, targetHeight: 1920 } }).includes("crop.targetWidth"), true);
+  assertEquals(invalid({ media_file_id: "m1", operation: "crop", crop: { ...crop, targetWidth: 1080, targetHeight: 4097 } }).includes("crop.targetHeight"), true);
+  assertEquals(invalid({ media_file_id: "m1", operation: "crop", crop: { ...crop, targetWidth: 0, targetHeight: 1 } }).includes("crop.targetWidth"), true);
+  const ok = parseProcessVideoRequest({ media_file_id: "m1", operation: "crop", crop: { ...crop, targetWidth: 4096, targetHeight: 4096 } });
+  assertEquals(ok.crop?.targetHeight, 4096);
+});

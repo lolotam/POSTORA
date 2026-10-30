@@ -1,16 +1,19 @@
 import { z } from "npm:zod@3.23.8";
-import { OpeninaryVideoError } from "../_shared/openinaryVideoTransform.ts";
+import { MAX_TARGET_DIMENSION, OpeninaryVideoError } from "../_shared/openinaryVideoTransform.ts";
 
 /** `maxSizeMB` is NaN in the browser when the size field is empty, which JSON turns into null. */
 const optionalPositive = z.number().finite().nullish().transform((value) => value ?? undefined);
+
+/** Same bound as the planner (MAX_TARGET_DIMENSION): reject here so the error names the field. */
+const optionalTarget = z.number().int().min(1).max(MAX_TARGET_DIMENSION).nullish().transform((value) => value ?? undefined);
 
 const CropSchema = z.object({
   x: z.number().finite(),
   y: z.number().finite(),
   width: z.number().finite(),
   height: z.number().finite(),
-  targetWidth: optionalPositive,
-  targetHeight: optionalPositive,
+  targetWidth: optionalTarget,
+  targetHeight: optionalTarget,
 });
 
 const CompressSchema = z.object({

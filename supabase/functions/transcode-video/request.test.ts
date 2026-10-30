@@ -17,3 +17,12 @@ Deno.test("a missing media id or a non-object body is an invalid request", () =>
     assertEquals(error.code, "INVALID_REQUEST");
   }
 });
+
+Deno.test("only the three presets are accepted as a platform; an empty value still means tiktok", () => {
+  for (const platform of ["instagram", "youtube"]) assertEquals(parseTranscodeRequest({ media_file_id: "m1", target_platform: platform }).target_platform, platform);
+  assertEquals(parseTranscodeRequest({ media_file_id: "m1", target_platform: "" }).target_platform, undefined);
+  for (const platform of ["constructor", "__proto__", "toString", "myspace", 5]) {
+    const error = assertThrows(() => parseTranscodeRequest({ media_file_id: "m1", target_platform: platform }), OpeninaryVideoError);
+    assertEquals(error.code, "INVALID_REQUEST");
+  }
+});

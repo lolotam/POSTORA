@@ -25,6 +25,7 @@ export type OpeninaryVideoErrorCode =
   | "TRANSFORM_STILL_PROCESSING"
   | "RESULT_TOO_LARGE"
   | "TARGET_SIZE_NOT_REACHED"
+  | "SIZE_NOT_VERIFIABLE"
   | "COMPRESSION_NOT_SMALLER"
   | "STORE_FAILED"
   | "PROVIDER_UNAVAILABLE"
@@ -46,6 +47,7 @@ const STATUS: Record<OpeninaryVideoErrorCode, number> = {
   TRANSFORM_STILL_PROCESSING: 503,
   RESULT_TOO_LARGE: 422,
   TARGET_SIZE_NOT_REACHED: 422,
+  SIZE_NOT_VERIFIABLE: 422,
   COMPRESSION_NOT_SMALLER: 422,
   STORE_FAILED: 502,
   PROVIDER_UNAVAILABLE: 503,
@@ -97,6 +99,8 @@ const TARGET_ASPECT_TOLERANCE = 0.02;
 const NARROW_VERTICAL_RATIO = 0.7;
 const MIN_VERTICAL_WIDTH = 720;
 const MAX_DIMENSION = 16384;
+/** Largest output a caller may ask a crop to be scaled to (4K UHD is 3840 wide). */
+export const MAX_TARGET_DIMENSION = 4096;
 
 const TRANSCODE_PRESETS: Record<TranscodePlatform, Dimensions> = {
   tiktok: { width: 720, height: 1280 },
@@ -157,7 +161,8 @@ export function planCompress(request: CompressRequest, source: Dimensions | null
 
 export function planTranscode(platform: string | undefined): OpeninaryPlan & { platform: TranscodePlatform } {
   const key = (platform ?? "tiktok") as TranscodePlatform;
-  const preset = TRANSCODE_PRESETS[key];
+  // hasOwn: "constructor" and "__proto__" are not presets.
+  const preset = Object.hasOwn(TRANSCODE_PRESETS, key) ? TRANSCODE_PRESETS[key] : undefined;
   if (!preset) throw invalid("target_platform must be tiktok, instagram or youtube");
   // `ar_` and `g_center` of the Cloudinary preset are redundant here: the aspect ratio follows
   // from w/h and centre is the default gravity.
@@ -179,7 +184,10 @@ function assertCrop(crop: CropRequest): void {
     throw invalid("crop must be percentages (0-100) that stay inside the frame");
   }
   for (const target of [crop.targetWidth, crop.targetHeight]) {
-    if (target !== undefined && target !== null && !isPositiveNumber(target)) throw invalid("crop target size must be positive");
+    if (target === undefined || target === null) continue;
+    if (!Number.isInteger(target) || target < 1 || target > MAX_TARGET_DIMENSION) {
+      throw invalid(`crop target size must be a whole number between 1 and ${MAX_TARGET_DIMENSION}`);
+    }
   }
 }
 

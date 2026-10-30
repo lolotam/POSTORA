@@ -4,6 +4,7 @@ import {
   cloudinaryCropTransformation,
   cloudinaryTranscodeTransformation,
   evenDimension,
+  MAX_TARGET_DIMENSION,
   OpeninaryVideoError,
   parseDimensions,
   planCompress,
@@ -144,4 +145,21 @@ Deno.test("cloudinary fallback strings keep the old eager transformations", () =
   );
   assertEquals(cloudinaryTranscodeTransformation("youtube"), "c_fill,w_1920,h_1080,ar_16:9,g_center/vc_h264,q_auto:best,f_mp4");
   assertEquals(cloudinaryTranscodeTransformation("tiktok"), "c_fill,w_720,h_1280,ar_9:16,g_center/vc_h264,q_auto:best,f_mp4");
+});
+
+Deno.test("crop target sizes must be whole numbers within the bound", () => {
+  const box = { x: 34.1796875, y: 0, width: 31.640625, height: 100 };
+  refusal(() => planCrop({ ...box, targetWidth: 1080.5, targetHeight: 1920 }, FHD), "INVALID_REQUEST");
+  refusal(() => planCrop({ ...box, targetWidth: 1080, targetHeight: 100_000 }, FHD), "INVALID_REQUEST");
+  refusal(() => planCrop({ ...box, targetWidth: MAX_TARGET_DIMENSION + 1, targetHeight: 1920 }, FHD), "INVALID_REQUEST");
+  refusal(() => planCrop({ ...box, targetWidth: 0, targetHeight: 1920 }, FHD), "INVALID_REQUEST");
+  refusal(() => cloudinaryCropTransformation({ ...box, targetWidth: 1e9, targetHeight: 1e9 }, FHD), "INVALID_REQUEST");
+  // the bound itself is allowed
+  assertEquals(planCrop({ ...box, targetWidth: 2304, targetHeight: MAX_TARGET_DIMENSION }, FHD).output?.height, MAX_TARGET_DIMENSION);
+});
+
+Deno.test("inherited object keys are not transcode presets", () => {
+  for (const key of ["constructor", "__proto__", "toString", "hasOwnProperty", "valueOf"]) {
+    refusal(() => planTranscode(key), "INVALID_REQUEST");
+  }
 });

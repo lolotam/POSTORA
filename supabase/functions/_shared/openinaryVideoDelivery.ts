@@ -27,6 +27,8 @@ export const TRANSFORM_DEADLINE_MS = 40_000;
 export const BUFFERED_UPLOAD_MAX_BYTES = 16 * 1024 * 1024;
 const POLL_INTERVAL_MS = 1_500;
 const REQUEST_TIMEOUT_MS = 30_000;
+/** Below this much time left in the deadline, a new request is not worth starting. */
+const MIN_REQUEST_MS = 500;
 const MAX_REQUEST_ROUNDS = 4;
 
 export interface DeliveryDeps {
@@ -68,6 +70,33 @@ async function fetchWithHeaderTimeout(fetchImpl: typeof fetch, url: string, ms: 
   }
 }
 
+function stillProcessing(): OpeninaryVideoError {
+  return new OpeninaryVideoError(
+    "TRANSFORM_STILL_PROCESSING",
+    "The video is still being processed. Try again in a minute; the work already done is kept.",
+  );
+}
+
+type RequestDeps = Required<Pick<DeliveryDeps, "fetchImpl" | "sleep" | "now">>;
+
+/**
+ * One request that can never outlast the transform deadline. A timeout means the encode is still
+ * running (retryable); any other failure to reach Openinary is a provider problem. Neither is an
+ * unexpected error, so neither may escape as a 500.
+ */
+async function requestWithinDeadline(deps: RequestDeps, url: string, deadlineAt: number): Promise<Response> {
+  const left = deadlineAt - deps.now();
+  if (left < MIN_REQUEST_MS) throw stillProcessing();
+  try {
+    return await fetchWithHeaderTimeout(deps.fetchImpl, url, Math.min(REQUEST_TIMEOUT_MS, left));
+  } catch (error) {
+    const name = (error as { name?: string } | null)?.name;
+    if (name === "AbortError" || name === "TimeoutError") throw stillProcessing();
+    console.error("[openinary-video] request failed:", error instanceof Error ? error.message : String(error));
+    throw new OpeninaryVideoError("PROVIDER_UNAVAILABLE", "The video service is temporarily unavailable. Try again shortly.");
+  }
+}
+
 async function discard(response: Response): Promise<void> {
   try { await response.body?.cancel(); } catch { /* nothing left to release */ }
 }
@@ -75,11 +104,11 @@ async function discard(response: Response): Promise<void> {
 async function waitForCompletion(
   config: OpeninaryConfig,
   statusUrl: string,
-  deps: Required<Pick<DeliveryDeps, "fetchImpl" | "sleep" | "now">>,
+  deps: RequestDeps,
   deadlineAt: number,
 ): Promise<void> {
   while (deps.now() < deadlineAt) {
-    const response = await fetchWithHeaderTimeout(deps.fetchImpl, statusUrl, REQUEST_TIMEOUT_MS);
+    const response = await requestWithinDeadline(deps, statusUrl, deadlineAt);
     const body = await response.json().catch(() => null) as { status?: string; error?: string } | null;
     const status = body?.status;
     if (response.ok && status === "completed") return;
@@ -89,12 +118,9 @@ async function waitForCompletion(
     }
     // `not_found` means no job and no cached variant: ask for the rendition again to queue it.
     if (status === "not_found" || !response.ok) return;
-    await deps.sleep(POLL_INTERVAL_MS);
+    await deps.sleep(Math.max(0, Math.min(POLL_INTERVAL_MS, deadlineAt - deps.now())));
   }
-  throw new OpeninaryVideoError(
-    "TRANSFORM_STILL_PROCESSING",
-    "The video is still being processed. Try again in a minute; the work already done is kept.",
-  );
+  throw stillProcessing();
 }
 
 /**
@@ -117,7 +143,7 @@ export async function fetchVideoVariant(
 
   for (let round = 0; round < MAX_REQUEST_ROUNDS; round++) {
     if (deps.now() >= deadlineAt) break;
-    const response = await fetchWithHeaderTimeout(deps.fetchImpl, url, REQUEST_TIMEOUT_MS);
+    const response = await requestWithinDeadline(deps, url, deadlineAt);
     if (response.status === 200) {
       // Openinary types the reply by extension; anything but video is not a rendition to store.
       const type = response.headers.get("content-type");
@@ -146,10 +172,7 @@ export async function fetchVideoVariant(
         : "Openinary could not process this video. Try a shorter or smaller file.",
     );
   }
-  throw new OpeninaryVideoError(
-    "TRANSFORM_STILL_PROCESSING",
-    "The video is still being processed. Try again in a minute; the work already done is kept.",
-  );
+  throw stillProcessing();
 }
 
 /** Size the response announces, or null when it streams without a length. */
@@ -275,7 +298,9 @@ async function ingestStreamed(
     throw storeFailed();
   }
   const reportedSize = result.files?.[0]?.size;
-  const sizeMatches = typeof reportedSize !== "number" || (reportedSize === sent && (length === null || length === sent));
+  // The declared length is checked on its own: a stream that ended early must not pass just
+  // because Openinary left `size` out of its reply.
+  const sizeMatches = (length === null || length === sent) && (typeof reportedSize !== "number" || reportedSize === sent);
   if (stored !== `${folder}/${fileName}` || !sizeMatches) {
     console.error("[openinary-video] streamed upload stored a different object than requested");
     await deleteFromOpeninary(config, stored);

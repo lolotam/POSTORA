@@ -20,7 +20,7 @@ function harness(options: {
   const deps: DeriveDeps = {
     adminDb: db,
     openinary: config,
-    cloudinary: { cloudName: "demo", apiKey: "k", apiSecret: "s" },
+    cloudinary: { cloudName: "demo", apiKey: "k", apiSecret: "test-value" },
     io: {
       fetchVariant: (_config, segment, path) => {
         calls.variant.push({ segment, path });
@@ -166,7 +166,7 @@ Deno.test("a Cloudinary-only video uses the fallback and is recorded as a Cloudi
   let sent: Record<string, unknown> | null = null;
   deps.io!.cloudinary = (args) => {
     sent = { publicId: args.publicId, transformation: args.transformation, label: args.label };
-    return Promise.resolve({ publicId: "postora_compress_1_x", url: "https://res.cloudinary.com/demo/e.mp4" });
+    return Promise.resolve({ publicId: "postora_compress_1_x", url: "https://res.cloudinary.com/demo/e.mp4", bytes: null });
   };
   const result = await deriveVideo(deps, compressRequest({ mustShrink: false }));
   assertEquals(sent, { publicId: "legacy/id", transformation: "vc_h264,q_auto:good,f_mp4", label: "compress" });
@@ -188,4 +188,94 @@ Deno.test("a video in neither Openinary nor Cloudinary is an explicit unavailabl
   const { deps } = harness({ dbState: { mediaFiles: [videoRow({ file_path: "user-1/clip.mp4", storage_bucket: "media" })], providers: [] } });
   const error = await assertRejects(() => deriveVideo(deps, compressRequest()), OpeninaryVideoError);
   assertEquals(error.code, "SOURCE_NOT_AVAILABLE");
+});
+
+/* ── Cloudinary fallback size guarantees and cleanup failures ─────────────────── */
+
+const cloudinaryOnly = () => ({
+  mediaFiles: [videoRow({ file_path: "https://res.cloudinary.com/demo/video/upload/v1/legacy/id.mp4", storage_bucket: "cloudinary", cloudinary_public_id: "legacy/id" })],
+  providers: [],
+});
+
+function cloudinaryHarness(bytes: number | null) {
+  const h = harness({ dbState: cloudinaryOnly() });
+  const destroyed: string[] = [];
+  h.deps.io!.cloudinary = () => Promise.resolve({ publicId: "postora_compress_1_x", url: "https://res.cloudinary.com/demo/e.mp4", bytes });
+  h.deps.io!.destroyCloudinaryObject = (publicId) => { destroyed.push(publicId); return Promise.resolve({ success: true }); };
+  return { ...h, destroyed };
+}
+
+Deno.test("a Cloudinary result whose size cannot be verified is refused when a size limit was asked for", async () => {
+  const { deps, state, destroyed } = cloudinaryHarness(null);
+  const error = await assertRejects(() => deriveVideo(deps, compressRequest({ maxSizeMB: 5, mustShrink: false })), OpeninaryVideoError);
+  assertEquals(error.code, "SIZE_NOT_VERIFIABLE");
+  assertEquals(destroyed, ["postora_compress_1_x"]);
+  assertEquals(state.inserted.length, 0);
+  const shrink = await assertRejects(() => deriveVideo(cloudinaryHarness(null).deps, compressRequest()), OpeninaryVideoError);
+  assertEquals(shrink.code, "SIZE_NOT_VERIFIABLE");
+});
+
+Deno.test("a Cloudinary result is checked against the size target and the original's size, and its bytes are recorded", async () => {
+  const over = cloudinaryHarness(9_000_000);
+  const error = await assertRejects(() => deriveVideo(over.deps, compressRequest({ maxSizeMB: 5, mustShrink: false })), OpeninaryVideoError);
+  assertEquals(error.code, "TARGET_SIZE_NOT_REACHED");
+  assertEquals(over.destroyed.length, 1);
+
+  const bigger = cloudinaryHarness(12_000_000);
+  const notSmaller = await assertRejects(() => deriveVideo(bigger.deps, compressRequest()), OpeninaryVideoError);
+  assertEquals(notSmaller.code, "COMPRESSION_NOT_SMALLER");
+  assertEquals(bigger.destroyed.length, 1);
+
+  const fine = cloudinaryHarness(4_000_000);
+  const result = await deriveVideo(fine.deps, compressRequest({ maxSizeMB: 5 }));
+  assertEquals(result.bytes, 4_000_000);
+  assertEquals(fine.state.inserted[0].row.file_size, 4_000_000);
+  assertEquals(fine.destroyed.length, 0);
+});
+
+Deno.test("a Cloudinary result with no size is fine when no size limit was asked for", async () => {
+  const { deps } = cloudinaryHarness(null);
+  const result = await deriveVideo(deps, compressRequest({ mustShrink: false }));
+  assertEquals(result.bytes, null);
+});
+
+Deno.test("a failed cleanup is logged with the object key and does not hide the original error", async () => {
+  const logged: { message: string; userId: string; metadata: Record<string, unknown> }[] = [];
+  const { deps, calls } = harness({ variantBytes: null, ingestedBytes: 9_000_000 });
+  deps.log = (entry) => { logged.push(entry); return Promise.resolve(); };
+  deps.io!.deleteObject = (_config, path) => { calls.deleted.push(path); return Promise.resolve({ success: false, error: "Openinary delete failed: 500" }); };
+  const error = await assertRejects(() => deriveVideo(deps, compressRequest({ maxSizeMB: 5 })), OpeninaryVideoError);
+  assertEquals(error.code, "TARGET_SIZE_NOT_REACHED");
+  assertEquals(logged.length, 1);
+  assertEquals(logged[0].userId, "user-1");
+  assertEquals(logged[0].metadata, { provider: "openinary", object_key: calls.deleted[0], error: "Openinary delete failed: 500" });
+});
+
+Deno.test("a cleanup that throws is logged too, and a refused library row still reports its own error", async () => {
+  const logged: { metadata: Record<string, unknown> }[] = [];
+  const { deps } = harness({ dbState: { mediaInsertError: "MEDIA_QUOTA_DAILY_EXCEEDED: Daily upload limit of 5 reached." } });
+  deps.log = (entry) => { logged.push(entry); return Promise.resolve(); };
+  deps.io!.deleteObject = () => Promise.reject(new Error("network down"));
+  await assertRejects(() => deriveVideo(deps, compressRequest()), MediaQuotaRefusal);
+  assertEquals(logged.length, 1);
+  assertEquals(logged[0].metadata.provider, "openinary");
+  assertEquals(typeof logged[0].metadata.object_key, "string");
+  assertEquals(logged[0].metadata.error, "network down");
+});
+
+Deno.test("a failed Cloudinary cleanup is logged with its public id", async () => {
+  const logged: { metadata: Record<string, unknown> }[] = [];
+  const { deps } = cloudinaryHarness(9_000_000);
+  deps.log = (entry) => { logged.push(entry); return Promise.resolve(); };
+  deps.io!.destroyCloudinaryObject = () => Promise.resolve({ success: false, error: "timed out" });
+  await assertRejects(() => deriveVideo(deps, compressRequest({ maxSizeMB: 5, mustShrink: false })), OpeninaryVideoError);
+  assertEquals(logged[0].metadata, { provider: "cloudinary", object_key: "postora_compress_1_x", error: "timed out" });
+});
+
+Deno.test("a cleanup that works logs nothing", async () => {
+  const logged: unknown[] = [];
+  const { deps } = harness({ variantBytes: null, ingestedBytes: 9_000_000 });
+  deps.log = (entry) => { logged.push(entry); return Promise.resolve(); };
+  await assertRejects(() => deriveVideo(deps, compressRequest({ maxSizeMB: 5 })), OpeninaryVideoError);
+  assertEquals(logged.length, 0);
 });

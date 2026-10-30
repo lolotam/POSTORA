@@ -15,6 +15,7 @@ import {
 } from "./derivedVideoMedia.ts";
 import { type CloudinaryCredentials, deriveWithCloudinary } from "./cloudinaryVideoFallback.ts";
 import { destroyCloudinary } from "./cloudinaryDestroy.ts";
+import { logToDatabase } from "./logging.ts";
 import { deleteFromOpeninary, type OpeninaryConfig } from "./openinary.ts";
 import {
   declaredBytes,
@@ -71,6 +72,14 @@ export interface DeriveDeps {
   delivery?: DeliveryDeps;
   now?: () => number;
   io?: Partial<DeriveIo>;
+  /** Where a failed cleanup is recorded. Defaults to system_logs. */
+  log?: (entry: CleanupLogEntry) => Promise<void>;
+}
+
+export interface CleanupLogEntry {
+  message: string;
+  userId: string;
+  metadata: Record<string, unknown>;
 }
 
 const MB = 1024 * 1024;
@@ -88,6 +97,47 @@ function assertAcceptable(bytes: number | null, request: DeriveRequest, original
       "COMPRESSION_NOT_SMALLER",
       "Compression did not make this video smaller. It is already well compressed; keep the original.",
     );
+  }
+}
+
+/**
+ * Remove a rendition we are throwing away. Neither a rejection nor `{ success: false }` may hide:
+ * the object stays in storage, so its key is logged for whoever cleans up. No retry queue.
+ */
+async function discardRendition(
+  deps: DeriveDeps,
+  userId: string,
+  provider: "openinary" | "cloudinary",
+  objectKey: string,
+  remove: () => Promise<{ success: boolean; error?: string }>,
+): Promise<void> {
+  let failure: string | null = null;
+  try {
+    const result = await remove();
+    if (!result.success) failure = result.error ?? "provider refused";
+  } catch (error) {
+    failure = error instanceof Error ? error.message : "unexpected error";
+  }
+  if (failure === null) return;
+  console.error(`[video-derivation] could not remove ${provider} object ${objectKey}: ${failure}`);
+  const entry: CleanupLogEntry = {
+    message: "Could not remove a discarded video rendition",
+    userId,
+    metadata: { provider, object_key: objectKey, error: failure },
+  };
+  const log = deps.log ?? ((e: CleanupLogEntry) =>
+    logToDatabase(deps.adminDb, { level: "error", category: "system", source: "video-derivation", message: e.message, user_id: e.userId, metadata: e.metadata }));
+  try {
+    await log(entry);
+  } catch {
+    console.error("[video-derivation] cleanup failure could not be logged");
+  }
+}
+
+/** A size limit that cannot be checked is not a limit that was met. */
+function assertVerifiable(bytes: number | null, request: DeriveRequest): void {
+  if (bytes === null && (request.maxSizeMB || request.mustShrink)) {
+    throw new OpeninaryVideoError("SIZE_NOT_VERIFIABLE", "The size of the processed video could not be confirmed, so the size limit cannot be guaranteed. Try again.");
   }
 }
 
@@ -117,16 +167,24 @@ export async function deriveVideo(deps: DeriveDeps, request: DeriveRequest): Pro
       label: request.label,
       transformation,
     });
+    const discardDerived = () => discardRendition(deps, request.userId, "cloudinary", derived.publicId, () => io.destroyCloudinaryObject(derived.publicId, "video"));
+    try {
+      assertVerifiable(derived.bytes, request);
+      assertAcceptable(derived.bytes, request, row);
+    } catch (error) {
+      await discardDerived();
+      throw error;
+    }
     const { id } = await recordDerivedVideo(deps.adminDb, {
       userId: request.userId,
       original: row,
-      stored: { provider: "cloudinary", objectKey: derived.publicId, url: derived.url, bytes: null },
-      // Cloudinary does not report the rendition's size here, so none is recorded as its own.
+      stored: { provider: "cloudinary", objectKey: derived.publicId, url: derived.url, bytes: derived.bytes },
+      // Cloudinary does not report the rendition's dimensions here, so none is recorded as its own.
       metadata: { ...request.metadata, source_video_dimensions: sourceDimensions, provider: "cloudinary", transformation },
-      discardStored: async () => { await io.destroyCloudinaryObject(derived.publicId, "video"); },
+      discardStored: discardDerived,
     });
     return {
-      mediaFileId: id, url: derived.url, bytes: null, provider: "cloudinary", transformation,
+      mediaFileId: id, url: derived.url, bytes: derived.bytes, provider: "cloudinary", transformation,
       outputDimensions: null, sourceDimensions, warnings: [],
     };
   }
@@ -147,7 +205,7 @@ export async function deriveVideo(deps: DeriveDeps, request: DeriveRequest): Pro
   const ingested: IngestedVideo = await io.ingest(config, response, target.folder, target.fileName, {
     timeoutMs: Math.max(MIN_INGEST_TIMEOUT_MS, WALL_CLOCK_BUDGET_MS - (now() - startedAt)),
   });
-  const discardStored = async () => { await io.deleteObject(config, ingested.path); };
+  const discardStored = () => discardRendition(deps, request.userId, "openinary", ingested.path, () => io.deleteObject(config, ingested.path));
 
   try {
     assertAcceptable(ingested.bytes, request, row);

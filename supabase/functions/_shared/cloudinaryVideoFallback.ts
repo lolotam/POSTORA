@@ -19,7 +19,8 @@ export function cloudinaryCredentialsFromEnv(): CloudinaryCredentials | null {
 
 const UNAVAILABLE = "This video is only stored in Cloudinary, which is no longer available, and it is not in the new media library. Upload it again to process it.";
 
-export interface CloudinaryDerived { publicId: string; url: string }
+/** `bytes` is Cloudinary's own count for the eager rendition, null when it did not report one. */
+export interface CloudinaryDerived { publicId: string; url: string; bytes: number | null }
 
 export async function deriveWithCloudinary(args: {
   credentials: CloudinaryCredentials | null;
@@ -64,7 +65,7 @@ export async function deriveWithCloudinary(args: {
   const result = await response.json().catch(() => ({})) as {
     error?: { message?: string };
     public_id?: string;
-    eager?: { secure_url?: string }[];
+    eager?: { secure_url?: string; bytes?: unknown }[];
   };
   const message = result?.error?.message;
   if (isDisabledCloudResponse(response.status, message)) throw new OpeninaryVideoError("PROVIDER_UNAVAILABLE", UNAVAILABLE);
@@ -77,5 +78,6 @@ export async function deriveWithCloudinary(args: {
   }
   const url = result.eager?.[0]?.secure_url
     ?? `https://res.cloudinary.com/${credentials.cloudName}/video/upload/${transformation}/${publicId}.mp4`;
-  return { publicId: result.public_id ?? publicId, url };
+  const bytes = result.eager?.[0]?.bytes;
+  return { publicId: result.public_id ?? publicId, url, bytes: typeof bytes === "number" && bytes > 0 ? bytes : null };
 }

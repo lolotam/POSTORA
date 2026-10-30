@@ -115,7 +115,7 @@ Deno.test("a 202 that never resolves into a 200 stops after a bounded number of 
 Deno.test("404 means the original is gone; other statuses are a failed transform with a safe message", async () => {
   assertEquals(await code(fetchVideoVariant(config, SEGMENT, PATH, { fetchImpl: scripted(new Response("nope", { status: 404 })).fetchImpl })), "SOURCE_NOT_AVAILABLE");
   const error = await assertRejects(
-    () => fetchVideoVariant(config, SEGMENT, PATH, { fetchImpl: scripted(new Response("Error: /srv/secret/path", { status: 500 })).fetchImpl }),
+    () => fetchVideoVariant(config, SEGMENT, PATH, { fetchImpl: scripted(new Response("Error: /srv/private/path", { status: 500 })).fetchImpl }),
     OpeninaryVideoError,
   );
   assertEquals(error.code, "TRANSFORM_FAILED");
@@ -151,7 +151,7 @@ async function withUploadServer<T>(
     return respond(entry);
   });
   try {
-    return await run({ serverUrl: `http://127.0.0.1:${server.addr.port}`, apiKey: "secret-key", folderPrefix: "postora.cloud" }, received, deletes);
+    return await run({ serverUrl: `http://127.0.0.1:${server.addr.port}`, apiKey: "test-key", folderPrefix: "postora.cloud" }, received, deletes);
   } finally {
     await server.shutdown();
   }
@@ -197,7 +197,7 @@ Deno.test({
     assertEquals(received.length, 1);
     assertEquals(received[0].folder, "postora.cloud/media/u/2026-10-30");
     assertEquals(received[0].fileName, "postora_crop_1_abc.mp4");
-    assertEquals(received[0].auth, "Bearer secret-key");
+    assertEquals(received[0].auth, "Bearer test-key");
     assert(sameBytes(received[0].bytes, data), "uploaded bytes differ from the rendition");
     assert(received[0].contentLength !== null);
   });
@@ -218,7 +218,7 @@ Deno.test({
     assertEquals(received.length, 1);
     assertEquals(received[0].folder, "f");
     assertEquals(received[0].fileName, "v.mp4");
-    assertEquals(received[0].auth, "Bearer secret-key");
+    assertEquals(received[0].auth, "Bearer test-key");
     assert(sameBytes(received[0].bytes, data), "streamed bytes differ from the rendition");
   });
   },
@@ -333,5 +333,75 @@ Deno.test({
     assertEquals(await code(ingestVariant(cfg, chunked([patterned(10)]), "f\r\nInjected: 1", "v.mp4")), "STORE_FAILED");
     assertEquals(received.length, 0);
   });
+  },
+});
+
+/* ── deadline and network failures ───────────────────────────────────────────── */
+
+Deno.test("a request never outlasts the transform deadline, even with a 30 s request timeout", async () => {
+  const hanging = ((_input: string | URL | Request, init?: RequestInit) =>
+    new Promise<Response>((_resolve, reject) => {
+      init?.signal?.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError")));
+    })) as typeof fetch;
+  const started = Date.now();
+  assertEquals(await code(fetchVideoVariant(config, SEGMENT, PATH, { fetchImpl: hanging, deadlineMs: 800 })), "TRANSFORM_STILL_PROCESSING");
+  assert(Date.now() - started < 5_000, "the request was allowed to run past the deadline");
+});
+
+Deno.test("with too little of the deadline left no request is made at all", async () => {
+  const net = scripted();
+  assertEquals(await code(fetchVideoVariant(config, SEGMENT, PATH, { fetchImpl: net.fetchImpl, deadlineMs: 100 })), "TRANSFORM_STILL_PROCESSING");
+  assertEquals(net.urls.length, 0);
+});
+
+Deno.test("polling sleeps are capped at the time left", async () => {
+  let clock = 0;
+  const sleeps: number[] = [];
+  const net = scripted(json({ statusUrl: "/video-status/x" }, 202), json({ status: "processing" }), json({ status: "processing" }));
+  await assertRejects(
+    () => fetchVideoVariant(config, SEGMENT, PATH, {
+      fetchImpl: net.fetchImpl,
+      deadlineMs: 2_000,
+      now: () => clock,
+      sleep: (ms) => { sleeps.push(ms); clock += ms; return Promise.resolve(); },
+    }),
+    OpeninaryVideoError,
+  );
+  assertEquals(sleeps, [1_500, 500]);
+});
+
+Deno.test("a rejected rendition request is a provider problem, not an unexpected error", async () => {
+  const refused = (() => Promise.reject(new TypeError("error sending request: connection refused"))) as typeof fetch;
+  const error = await assertRejects(() => fetchVideoVariant(config, SEGMENT, PATH, { fetchImpl: refused }), OpeninaryVideoError);
+  assertEquals(error.code, "PROVIDER_UNAVAILABLE");
+  assertEquals(error.status, 503);
+  assert(!error.message.includes("connection refused"));
+});
+
+Deno.test("a header timeout on the rendition request is still-processing, not a 500", async () => {
+  const timedOut = (() => Promise.reject(new DOMException("The signal has been aborted", "AbortError"))) as typeof fetch;
+  assertEquals(await code(fetchVideoVariant(config, SEGMENT, PATH, { fetchImpl: timedOut })), "TRANSFORM_STILL_PROCESSING");
+});
+
+Deno.test("a network failure while polling the status is a provider problem", async () => {
+  let calls = 0;
+  const fetchImpl = (() => {
+    calls++;
+    return calls === 1 ? Promise.resolve(json({ statusUrl: "/video-status/x" }, 202)) : Promise.reject(new TypeError("socket closed"));
+  }) as typeof fetch;
+  assertEquals(await code(fetchVideoVariant(config, SEGMENT, PATH, { fetchImpl, sleep: () => Promise.resolve() })), "PROVIDER_UNAVAILABLE");
+});
+
+Deno.test({
+  name: "a streamed rendition that ends short of its declared length is not accepted when Openinary omits the stored size",
+  ...cleanupTest,
+  fn: async () => {
+    const noSize = (r: Received) => new Response(JSON.stringify({ success: true, files: [{ path: `${r.folder}/${r.fileName}` }] }), { status: 200 });
+    await withUploadServer(noSize, async (cfg, _received, deletes) => {
+      const declared = BUFFERED_UPLOAD_MAX_BYTES + 1_000_000;
+      const source = chunked([patterned(1_000_000)], { "content-length": String(declared) });
+      assertEquals(await code(ingestVariant(cfg, source, "f", "v.mp4")), "STORE_FAILED");
+      assertEquals(deletes, ["/api/storage/f/v.mp4"]);
+    });
   },
 });

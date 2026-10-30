@@ -5,8 +5,8 @@ export const TranscodeSchema = z.object({
   media_file_id: z.string().min(1).max(128),
   /** Untrusted. Accepted for compatibility and checked against the caller's identity. */
   user_id: z.string().max(128).nullish(),
-  /** Validated against the preset list by the planner; a missing value means tiktok, as before. */
-  target_platform: z.string().max(32).nullish(),
+  /** A missing or empty value means tiktok, as before. */
+  target_platform: z.preprocess((value) => (value === "" ? undefined : value), z.enum(["tiktok", "instagram", "youtube"]).nullish()),
 });
 
 export type TranscodeInput = z.infer<typeof TranscodeSchema>;
