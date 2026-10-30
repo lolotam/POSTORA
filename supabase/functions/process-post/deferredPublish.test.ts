@@ -5,6 +5,7 @@ import {
   bufferAfterFinishedMs,
   ContainerStillProcessing,
   DEFERRAL_GIVE_UP_MS,
+  deferrableDeadline,
   FIRST_RUN_POLL_BUDGET_MS,
   giveUpMessage,
   isPastGiveUp,
@@ -230,4 +231,31 @@ Deno.test("the pause after FINISHED counts against the deadline", () => {
 Deno.test("a resumed run, with a worker of its own, and a wait with no deadline keep the whole pause", () => {
   assertEquals(bufferAfterFinishedMs(CHECK_ONCE_DEADLINE, 1_000_000), 3000);
   assertEquals(bufferAfterFinishedMs(Number.POSITIVE_INFINITY, 1_000_000), 3000);
+});
+
+Deno.test("a deferrable wait on a reused worker ends by the worker's budget, not the request's", () => {
+  // Fresh worker: the request's own budget stands.
+  assertEquals(deferrableDeadline(10_000 + FIRST_RUN_POLL_BUDGET_MS, 10_000), 10_000 + FIRST_RUN_POLL_BUDGET_MS);
+  // The worker started 30 s before this request: only what is left of its budget remains.
+  assertEquals(deferrableDeadline(40_000 + FIRST_RUN_POLL_BUDGET_MS, 10_000), 10_000 + FIRST_RUN_POLL_BUDGET_MS);
+  // A resumed run checks once, and a run nobody can resume has no deadline: both left alone.
+  assertEquals(deferrableDeadline(CHECK_ONCE_DEADLINE, 10_000), CHECK_ONCE_DEADLINE);
+  assertEquals(deferrableDeadline(Number.POSITIVE_INFINITY, 10_000), Number.POSITIVE_INFINITY);
+});
+
+Deno.test("a deferrable wait whose worker budget is spent defers without checking again", async () => {
+  let checks = 0;
+  const state = await pollContainer("instagram", "https://graph.invalid/c", {
+    maxAttempts: 60,
+    intervalMs: 2000,
+    checkFirst: true,
+    deadlineMs: deferrableDeadline(Date.now() + FIRST_RUN_POLL_BUDGET_MS, Date.now() - FIRST_RUN_POLL_BUDGET_MS),
+    fetcher: () => {
+      checks++;
+      return Promise.resolve(new Response(JSON.stringify({ status_code: "IN_PROGRESS" })));
+    },
+  });
+  assertEquals(state, { state: "waiting" });
+  assertEquals(checks, 0);
+  assertInstanceOf(unfinishedError({ deadlineMs: 1, deferKind: "ig_reel" }, "c1", "Instagram"), ContainerStillProcessing);
 });

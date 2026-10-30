@@ -86,6 +86,7 @@ import { createClient, SupabaseClient } from "https://esm.sh/@supabase/supabase-
 // See: supabase/functions/_shared/platforms/ for reusable platform utilities
 import type { PlatformMetadata as SharedPlatformMetadata } from "../_shared/platforms/types.ts";
 import { graphId, type GraphResponse } from "./graphResponse.ts";
+import { publishContainer } from "./instagramPublish.ts";
 import { validateRequestBody, validationErrorResponse } from "../_shared/validate.ts";
 import { postWebhook, validateWebhookTarget } from "../_shared/webhookSecurity.ts";
 import { getMissingMediaFileIds } from "../_shared/post-media.ts";
@@ -97,12 +98,14 @@ import { composioClientFromEnv } from "../_shared/composioClient.ts";
 import { publishYouTubeViaComposio } from "./youtubeComposio.ts";
 import { prepareTikTokReviewPublish, recordReviewPublishId, requiredReviewSubmissionId } from "./tiktokReview.ts";
 import { firstPublicPostId } from "../_shared/tiktokPublishOutcome.ts";
-import { CHECK_ONCE_DEADLINE, CONTAINER_STATUS_FIELDS, containerFailureMessage, pollContainer } from "../_shared/metaContainerStatus.ts";
+import { CHECK_ONCE_DEADLINE, CONTAINER_STATUS_FIELDS, type ContainerState, containerFailureMessage, pollContainer } from "../_shared/metaContainerStatus.ts";
 import {
   abandonReason,
   bufferAfterFinishedMs,
   type ContainerWait,
   ContainerStillProcessing,
+  deferrableDeadline,
+  type DeferredKind,
   giveUpMessage,
   NO_DEFERRAL,
   ownContainerDeadline,
@@ -136,6 +139,9 @@ import {
   writeLogRow,
 } from "./postSettlement.ts";
 import { z } from "npm:zod@3.23.8";
+
+/** When this worker started: the runtime reuses it for several requests inside one lifetime. */
+const WORKER_STARTED_AT_MS = Date.now();
 
 const ProcessPostSchema = z.object({
   post_id: z.string().min(1).max(100),
@@ -3650,63 +3656,40 @@ function pollContainerStatus(
   );
 }
 
+/** An Instagram container's state, asked once with no wait (unknown comes back as `waiting`). */
+function checkContainerOnce(statusUrl: string): Promise<ContainerState> {
+  return pollContainer("instagram", statusUrl, { maxAttempts: 1, intervalMs: 0, deadlineMs: CHECK_ONCE_DEADLINE });
+}
+
 /**
- * Publish Instagram media with retry logic for race conditions
+ * Publishes an Instagram container (Facebook login). An unanswered request is settled from the
+ * container's state, never assumed failed: see instagramPublish.ts.
  */
-async function publishInstagramMedia(
+function publishInstagramMedia(
   igUserId: string,
   creationId: string,
   accessToken: string,
-  maxRetries = 5,
-  initialDelayMs = 2000
+  deferKind?: DeferredKind,
 ): Promise<{ id: string }> {
-  let lastError: Error | null = null;
-
-  for (let attempt = 0; attempt < maxRetries; attempt++) {
-    const publishResponse = await fetchWithTimeout(
-      `https://graph.facebook.com/v18.0/${igUserId}/media_publish`,
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          creation_id: creationId,
-          access_token: accessToken,
-        }),
-      },
-      20000,
-    );
-
-    const publishData = await publishResponse.json();
-    console.log(`Instagram publish attempt ${attempt + 1}:`, JSON.stringify(publishData).slice(0, 300));
-
-    if (publishData.id) {
-      return publishData;
-    }
-
-    if (publishData.error) {
-      lastError = new Error(publishData.error.message);
-
-      const isRetryable = 
-        publishData.error.code === 9007 ||
-        publishData.error.message?.includes("Media ID is not available") ||
-        publishData.error.message?.includes("not ready for publishing") ||
-        publishData.error.message?.includes("An unexpected error has occurred") ||
-        publishData.error.message?.includes("Please retry your request") ||
-        publishData.error.code === 2 ||
-        publishData.error.code === 4;
-
-      if (isRetryable) {
-        const delayMs = initialDelayMs * Math.pow(2, attempt);
-        console.log(`Instagram publish error (retryable), attempt ${attempt + 1}, retrying in ${delayMs}ms: ${publishData.error.message}`);
-        await new Promise((resolve) => setTimeout(resolve, delayMs));
-        continue;
-      }
-
-      throw lastError;
-    }
-  }
-
-  throw lastError || new Error("Failed to publish Instagram media after retries");
+  return publishContainer({
+    publish: async () => {
+      const response = await fetchWithTimeout(
+        `https://graph.facebook.com/v18.0/${igUserId}/media_publish`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ creation_id: creationId, access_token: accessToken }),
+        },
+        20000,
+      );
+      const reply = await response.json() as GraphResponse;
+      console.log("Instagram publish response:", JSON.stringify(reply).slice(0, 300));
+      return reply;
+    },
+    containerState: () => checkContainerOnce(
+      `https://graph.facebook.com/v18.0/${creationId}?fields=${CONTAINER_STATUS_FIELDS.instagram}&access_token=${accessToken}`,
+    ),
+  }, { creationId, deferKind });
 }
 
 /**
@@ -4242,7 +4225,10 @@ async function postToInstagram(
     // Poll for container status before publishing (Required for videos)
     let reelStatus: string;
     try {
-      reelStatus = await pollContainerStatus(reelContainerId, accessToken, { deferKind: "ig_reel", deadlineMs: timing.deadlineMs }, 60, 2000);
+      reelStatus = await pollContainerStatus(reelContainerId, accessToken, {
+        deferKind: "ig_reel",
+        deadlineMs: deferrableDeadline(timing.deadlineMs, WORKER_STARTED_AT_MS),
+      }, 60, 2000);
     } catch (waitError) {
       // The pending row carries a story that could not be recorded, or it would be lost here.
       if (waitError instanceof ContainerStillProcessing && unrecordedStory) waitError.unrecordedStory = unrecordedStory;
@@ -4257,8 +4243,15 @@ async function postToInstagram(
       };
     }
 
-    // Publish the media with retry logic
-    const publishData = await publishInstagramMedia(igUserId, reelContainerId, accessToken);
+    // Publish the media with retry logic. A publish Instagram did not confirm is left for the
+    // reconciler, carrying the unrecorded story like the wait above.
+    let publishData: { id: string };
+    try {
+      publishData = await publishInstagramMedia(igUserId, reelContainerId, accessToken, "ig_reel");
+    } catch (publishError) {
+      if (publishError instanceof ContainerStillProcessing && unrecordedStory) publishError.unrecordedStory = unrecordedStory;
+      throw publishError;
+    }
 
     // Post first comment
     await postInstagramFirstComment(publishData.id);
@@ -4507,65 +4500,34 @@ function pollBusinessLoginContainerStatus(
 }
 
 /**
- * Publish Instagram Business Login media with retry logic
- * Uses graph.instagram.com instead of graph.facebook.com
+ * Publishes an Instagram Business Login container (graph.instagram.com). An unanswered request
+ * is settled from the container's state, never assumed failed: see instagramPublish.ts.
  */
-async function publishBusinessLoginMedia(
+function publishBusinessLoginMedia(
   igUserId: string,
   creationId: string,
   accessToken: string,
-  maxRetries = 5,
-  initialDelayMs = 2000
+  deferKind?: DeferredKind,
 ): Promise<{ id: string }> {
-  let lastError: Error | null = null;
-
-  for (let attempt = 0; attempt < maxRetries; attempt++) {
-    // Bounded so a hung publish fails this account instead of killing the worker. A timeout
-    // throws out of the loop rather than retrying: Meta may have published already.
-    const publishResponse = await fetchWithTimeout(
-      `https://graph.instagram.com/v22.0/${igUserId}/media_publish`,
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          creation_id: creationId,
-          access_token: accessToken,
-        }),
-      },
-      30000,
-    );
-
-    const publishData = await publishResponse.json();
-    console.log(`BL Instagram publish attempt ${attempt + 1}:`, JSON.stringify(publishData).slice(0, 300));
-
-    if (publishData.id) {
-      return publishData;
-    }
-
-    if (publishData.error) {
-      lastError = new Error(publishData.error.message);
-
-      const isRetryable = 
-        publishData.error.code === 9007 ||
-        publishData.error.message?.includes("Media ID is not available") ||
-        publishData.error.message?.includes("not ready for publishing") ||
-        publishData.error.message?.includes("An unexpected error has occurred") ||
-        publishData.error.message?.includes("Please retry your request") ||
-        publishData.error.code === 2 || // Temporary error
-        publishData.error.code === 4; // Rate limit / too many calls
-
-      if (isRetryable) {
-        const delayMs = initialDelayMs * Math.pow(2, attempt);
-        console.log(`BL Instagram publish error (retryable), attempt ${attempt + 1}, retrying in ${delayMs}ms: ${publishData.error.message}`);
-        await new Promise((resolve) => setTimeout(resolve, delayMs));
-        continue;
-      }
-
-      throw lastError;
-    }
-  }
-
-  throw lastError || new Error("Failed to publish Instagram media after retries");
+  return publishContainer({
+    publish: async () => {
+      const response = await fetchWithTimeout(
+        `https://graph.instagram.com/v22.0/${igUserId}/media_publish`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ creation_id: creationId, access_token: accessToken }),
+        },
+        30000,
+      );
+      const reply = await response.json() as GraphResponse;
+      console.log("BL Instagram publish response:", JSON.stringify(reply).slice(0, 300));
+      return reply;
+    },
+    containerState: () => checkContainerOnce(
+      `https://graph.instagram.com/v22.0/${creationId}?fields=${CONTAINER_STATUS_FIELDS.instagram}&access_token=${accessToken}`,
+    ),
+  }, { creationId, deferKind });
 }
 
 /**
@@ -5046,7 +5008,7 @@ async function postToInstagramBusinessLogin(
         const containerId = graphId(createData, `Instagram ${wantReel ? "reel" : "feed"} container`);
         const reelStatus = await pollBusinessLoginContainerStatus(containerId, accessToken, {
           deferKind: "ig_business_reel",
-          deadlineMs: timing.deadlineMs,
+          deadlineMs: deferrableDeadline(timing.deadlineMs, WORKER_STARTED_AT_MS),
         }, 30, 2000);
         const fallbackUrl = username ? `https://www.instagram.com/${username}/` : `https://instagram.com`;
         const subtype = wantReel ? "reel" : "feed";
@@ -5057,7 +5019,7 @@ async function postToInstagramBusinessLogin(
           subResults.push({ subtype, status: "success", url: fallbackUrl });
           warnings.push(note);
         } else {
-          const publishData = await publishBusinessLoginMedia(igUserId, containerId, accessToken);
+          const publishData = await publishBusinessLoginMedia(igUserId, containerId, accessToken, "ig_business_reel");
           const blDebug = await finalizeBLLocationDebug(publishData.id);
           const rowId = await insertIGRow(subtype, "success", publishData.id, fallbackUrl, undefined, {
             shared_to_feed: wantFeed,
@@ -6392,7 +6354,9 @@ async function postToThreads(
     maxAttempts: 15,
     intervalMs: pollInterval,
     // Every container waits on the deadline, a video's or not; only a video can be finished later.
-    deadlineMs: timing.resume ? CHECK_ONCE_DEADLINE : timing.deadlineMs,
+    deadlineMs: timing.resume
+      ? CHECK_ONCE_DEADLINE
+      : deferrable ? deferrableDeadline(timing.deadlineMs, WORKER_STARTED_AT_MS) : timing.deadlineMs,
   });
 
   // Meta's ERROR ends the wait, and a container that never finished is never published blindly.

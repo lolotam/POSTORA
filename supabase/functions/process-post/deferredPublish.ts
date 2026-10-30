@@ -129,6 +129,19 @@ export function ownContainerDeadline(runDeadlineMs: number, requestStartedAtMs: 
   return runDeadlineMs === CHECK_ONCE_DEADLINE ? requestStartedAtMs + FIRST_RUN_POLL_BUDGET_MS : runDeadlineMs;
 }
 
+/**
+ * The deadline for a container the reconciler can finish later. The edge runtime reuses a
+ * worker for several requests inside its one 60 s lifetime, so a request can land on a worker
+ * that has already used part of it: the poll budget then counts from the worker's start, not
+ * the request's. Deferring early is safe; a worker stopped mid-wait loses the container, and
+ * the stale sweeper later fails the post as interrupted. A resumed run (check once) and a run
+ * nobody can resume (no deadline) are left as they are.
+ */
+export function deferrableDeadline(deadlineMs: number, workerStartedAtMs: number): number {
+  if (deadlineMs === CHECK_ONCE_DEADLINE || !Number.isFinite(deadlineMs)) return deadlineMs;
+  return Math.min(deadlineMs, workerStartedAtMs + FIRST_RUN_POLL_BUDGET_MS);
+}
+
 /** How long past `give_up_at` an abandon may keep retrying a story it could not record. */
 export const STORY_RECOVERY_GRACE_MS = 10 * 60 * 1000;
 
