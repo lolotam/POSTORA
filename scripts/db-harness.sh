@@ -154,6 +154,7 @@ SUITES=(
   competitor_capture_coverage.sql
   competitor_tracking_report.sql
   competitor_retention.sql
+  competitor_retention_cron.sql
   instagram_direct_collection_credential.sql
 )
 # These fixtures build their own focused schema and apply the migration under

@@ -43,6 +43,7 @@ below). So the harness does not replay history. It:
 | `competitor_capture_coverage.sql` | the v2 competitor result write: coverage evidence stored atomically with the snapshots, the v2 fences, the malformed-coverage refusals, same-day idempotency, generation supersession, stale-worker refusal, unknown coverage for a legacy v1 capture, bounded completion vs full inventory, and the role boundary; rolls back |
 | `competitor_tracking_report.sql` | the owner-only competitor report reader: the grant surface, the strict request shape, the owner boundary and the identical not-found refusal, the active and removed lists, the quota consistency, the bounded keyset cursor (20/50, limit+1, sub-millisecond ties, concurrent insertion, invalid and cross-filter cursors), the S = 3 days baseline edges, the observation cap, the latest-per-media selection with its bounded cohort baseline, the coverage and job projection without lease or context, and the capped-scan incompleteness; rolls back |
 | `competitor_retention.sql` | the bounded inactive-history cleanup: the 90-day eligibility clock to the microsecond, the removal-marker clock, the ownership boundary, the default-off switch, the dry run, the bounded slice, the child-first deletion protocol, the live-lease skip and the role boundary; rolls back |
+| `competitor_retention_cron.sql` | the inactive hourly schedule: applying the schedule definition twice leaves exactly one inactive job named `competitor-retention` at `20 * * * *`, the command resolves the shared secret at run time and carries no literal credential, and every other job is left exactly as it was; rolls back |
 
 The harness's `SUITES` array is the complete executable inventory; the table
 above highlights selected suites, not the entire list. No existing suite may
@@ -107,6 +108,36 @@ cleanup never waits** (it skips the locked candidate), so races 1 and 4 are
 rehearsed as lock *skips* and races 2 and 3 as lock *waits*. A rehearsal
 that expected a wait where the design produces a skip would be asserting the
 wrong thing.
+
+## The competitor retention cron suite
+
+`competitor_retention_cron.sql` proves the schedule of migration M4
+(`supabase/migrations/20261030130000_competitor_retention_cron.sql`). It
+re-applies **the migration file itself** with `\ir`, twice, inside one
+transaction, and then asserts that the database holds exactly one job named
+`competitor-retention`, that it runs at `20 * * * *`, that it is **inactive**,
+that its command resolves the shared secret through
+`public.get_cron_secret()` instead of carrying a literal credential, and that
+every other job is untouched.
+
+Two things it deliberately does **not** do:
+
+- it never activates the job. The job is installed inactive, and a
+  re-application keeps it inactive: enabling it is a separate, authorized
+  action taken by hand after the migration is verified and the retention
+  function has booted;
+- it never touches the retention switch. `competitor_retention_enabled`
+  stays `false`, so nothing can be deleted even if the job were activated.
+
+The suite rolls back, so the job rows it creates do not survive it. The job
+the migration phase created is committed and stays, inactive, for inspection.
+
+The migration FAILS LOUDLY when `pg_cron`, `pg_net` or
+`public.get_cron_secret()` is missing, rather than reporting a schedule that
+was never installed. A harness database without pg_cron therefore fails at
+the migration step, with the name of the missing prerequisite in the error —
+which is the intended outcome, not a harness defect. The `cron.*` server flags
+in "Running locally" below are what make pg_cron usable at all.
 
 ## Running locally
 
