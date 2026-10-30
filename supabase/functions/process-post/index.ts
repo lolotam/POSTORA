@@ -85,6 +85,7 @@ import { createClient, SupabaseClient } from "https://esm.sh/@supabase/supabase-
 // NOTE: These modules are now extracted to reduce file size and improve maintainability
 // See: supabase/functions/_shared/platforms/ for reusable platform utilities
 import type { PlatformMetadata as SharedPlatformMetadata } from "../_shared/platforms/types.ts";
+import { graphId, type GraphResponse } from "./graphResponse.ts";
 import { validateRequestBody, validationErrorResponse } from "../_shared/validate.ts";
 import { postWebhook, validateWebhookTarget } from "../_shared/webhookSecurity.ts";
 import { getMissingMediaFileIds } from "../_shared/post-media.ts";
@@ -267,7 +268,8 @@ const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
  * Platform-specific metadata stored in posts.metadata
  * Each platform has its own settings that control how content is published
  */
-interface PlatformMetadata {
+interface PlatformMetadata
+  extends Pick<SharedPlatformMetadata, "threads_first_comment" | "threads_location_skipped_reason"> {
   // Account selection
   selected_account_ids?: string[] | null;
 
@@ -361,9 +363,6 @@ interface PlatformMetadata {
   threads_location_id?: string | null;
   threads_cross_share_to_ig?: boolean;
   threads_cross_share_to_ig_dark_mode?: boolean;
-  threads_first_comment?: string | null;
-  /** Set by the browser when it dropped the location before sending (see usePlatformSettings). */
-  threads_location_skipped_reason?: string | null;
 
   // ─────────────────────────────────────────────────────────────────────────
   // TIKTOK
@@ -505,28 +504,6 @@ interface PlatformPostResult {
     dark_mode: boolean;
     status: unknown;
   };
-}
-
-/** Meta's error object on a failed Graph API call. */
-interface GraphError {
-  message?: string;
-  code?: number;
-  error_subcode?: number;
-  error_user_title?: string;
-  error_user_msg?: string;
-}
-
-/** A Graph API reply: the created object's id, or Meta's error. Other fields vary by endpoint. */
-interface GraphResponse {
-  id?: string;
-  error?: GraphError;
-  [field: string]: unknown;
-}
-
-/** The id Meta gave the created object. A reply with neither an error nor an id is an error too. */
-function graphId(reply: GraphResponse, what: string): string {
-  if (typeof reply.id === "string" && reply.id) return reply.id;
-  throw new Error(`${what}: Meta returned no id`);
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
