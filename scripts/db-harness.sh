@@ -159,6 +159,7 @@ SUITES=(
   instagram_direct_collection_credential.sql
   instagram_collection_rollout_controls.sql
   instagram_collection_daily_dispatch.sql
+  instagram_collection_cron.sql
 )
 # These fixtures build their own focused schema and apply the migration under
 # test. They must never run against the restored production-shaped database.

@@ -46,6 +46,7 @@ below). So the harness does not replay history. It:
 | `competitor_retention_cron.sql` | the inactive hourly schedule: applying the schedule definition twice leaves exactly one inactive job named `competitor-retention` at `20 * * * *`, the command resolves the shared secret at run time and carries no literal credential, and every other job is left exactly as it was; rolls back |
 | `instagram_collection_rollout_controls.sql` | the rollout admission authority (R1): the default-off policy and the strict policy schema, the master switch read first and alone, the private policy row and the service permit RPC against the browser roles, the evaluator's ownership and pin rules, the enqueue refusals and the mixed service batch, the claim passes with an eligible job behind more than 500 excluded rows, the pinned-viewer negatives, the write fences, the provider permit unions and the bounded audit rows; rolls back |
 | `instagram_collection_daily_dispatch.sql` | the durable daily dispatch (R2): the sweep table and its states, the service-only daily page RPC, the twenty five / fifty page ceilings, more than twenty five owners and more than one thousand competitors paged through the real statement, the duplicate that keeps its generation, the exclusion that wins at insert, the weekly retry gate, the truthful pending / completed / expired states, the disabled master and the unreadable configuration, the transaction atomicity and the midnight rollover; rolls back |
+| `instagram_collection_cron.sql` | the four inactive collection schedules (C1): applying the schedule definition twice leaves exactly one inactive job per name and no fifth job, the exact UTC expressions, the exact bodies the registered routes accept, the runtime secret lookup with no literal credential in the stored command, the sixty second HTTP bound, the re-application that pauses an activated schedule again, the three missing-prerequisite failures that install nothing, the atomic installation, the secret rotation with a disposable request recorder, and every other job left exactly as it was; rolls back |
 
 The harness's `SUITES` array is the complete executable inventory; the table
 above highlights selected suites, not the entire list. No existing suite may
@@ -242,6 +243,58 @@ was never installed. A harness database without pg_cron therefore fails at
 the migration step, with the name of the missing prerequisite in the error —
 which is the intended outcome, not a harness defect. The `cron.*` server flags
 in "Running locally" below are what make pg_cron usable at all.
+
+## The Instagram collection cron suite
+
+`instagram_collection_cron.sql` proves the schedules of migration C1
+(`supabase/migrations/20261030152000_instagram_collection_cron.sql`). It
+re-applies **the migration file itself** with `\ir`, twice, inside one
+transaction, and then asserts that the database holds exactly four jobs -
+`instagram-insights-enqueue-daily` at `30 0 * * *`,
+`competitor-snapshot-enqueue-daily` at `0 1 * * *`,
+`instagram-insights-drain` and `competitor-snapshot-drain` at `*/2 * * * *` -
+that all four are **inactive**, that each stored command calls the right
+registered route with exactly the body that route's strict schema accepts
+(the competitor's daily body is the durable `dispatch:"durable"` branch),
+that each command resolves the shared secret through
+`public.get_cron_secret()` at run time instead of carrying a literal
+credential, that each bounds `net.http_post` to sixty seconds or less, and
+that every other job is left exactly as it was.
+
+Four things it deliberately does **not** do:
+
+- it never activates a job. The jobs are installed inactive, and a
+  re-application keeps them inactive: the suite even activates one
+  synthetically and proves that the next application pauses it again.
+  Enabling a schedule is a separate, authorized action taken by hand after
+  the migration is verified and both functions have booted;
+- it never touches the collection switches. Neither
+  `collection_instagram_insights_enabled` nor
+  `collection_instagram_rollout_policy` is read into a decision or
+  written, and the suite asserts that both are byte-identical before and
+  after the definition is applied;
+- it never sends anything. The rotation proof replaces
+  `public.get_cron_secret()` with a disposable reader and `net.http_post()`
+  with a recorder that keeps the request instead of sending it, executes the
+  stored commands exactly as they are stored, and asserts that a rotated
+  secret is picked up by the next dispatch with no re-application in
+  between. The disposable value is generated in the database, is never
+  printed, and is never asserted in a message;
+- it never weakens a precondition. A missing `pg_cron`, a missing `pg_net`
+  and a missing `public.get_cron_secret()` are each removed in their own
+  fixture, the definition is applied, and the application must fail with an
+  explicit exception and install nothing. Each removal is undone with a
+  savepoint, so the shared harness dependencies are back before the next
+  fixture runs.
+
+The suite rolls back, so the job rows it creates do not survive it. The four
+jobs the migration phase created are committed and stay, inactive, for
+inspection. Before the first application it seeds a stale, active
+`instagram-insights-drain` and a duplicate of it under another owner, so the
+reconciliation must rewrite the one and remove the other.
+
+A missing prerequisite fails the migration step the same way as the retention
+schedule above.
 
 ## Running locally
 
