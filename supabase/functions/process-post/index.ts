@@ -4045,23 +4045,32 @@ async function postToInstagram(
     return locationDebug;
   };
 
-  // Every request after a publish is bounded by what is left of the worker, so the live post
-  // is still recorded however slow Graph is. No time left: it throws, and the caller warns.
-  const followUpFetch = (url: string, init: RequestInit = {}): Promise<Response> => {
+  // Every request after a publish, its body included, is bounded by what is left of the worker,
+  // so the live post is still recorded however slow Graph is. No time left, or the time runs
+  // out: it throws, and the caller warns.
+  const followUpGraph = async (url: string, init: RequestInit = {}): Promise<GraphResponse> => {
     const timeoutMs = followUpTimeoutMs(WORKER_STARTED_AT_MS, Date.now());
-    if (!timeoutMs) return Promise.reject(new Error("no time was left before the worker stopped"));
-    return fetchWithTimeout(url, init, timeoutMs);
+    if (!timeoutMs) throw new Error("no time was left before the worker stopped");
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const response = await fetch(url, { ...init, signal: controller.signal });
+      return await response.json() as GraphResponse;
+    } catch (error) {
+      throw controller.signal.aborted ? new Error("Request timed out") : error;
+    } finally {
+      clearTimeout(timer);
+    }
   };
 
   // Helper: disable comments on a published IG media (Page-flow / Graph API)
   const disableIgComments = async (mediaId: string) => {
     if (!disableComments) return;
     try {
-      const res = await followUpFetch(
+      const data = await followUpGraph(
         `https://graph.facebook.com/v18.0/${mediaId}?comment_enabled=false&access_token=${encodeURIComponent(accessToken)}`,
         { method: "POST" }
       );
-      const data = await res.json();
       if (data.error) {
         warnings.push(`Disable comments failed: ${data.error.message}`);
       }
@@ -4078,7 +4087,7 @@ async function postToInstagram(
     const firstComment = metadata?.instagram_first_comment;
     if (!firstComment) return;
     try {
-      const commentRes = await followUpFetch(
+      const commentData = await followUpGraph(
         `https://graph.facebook.com/v18.0/${mediaId}/comments`,
         {
           method: "POST",
@@ -4086,7 +4095,6 @@ async function postToInstagram(
           body: JSON.stringify({ message: firstComment, access_token: accessToken }),
         }
       );
-      const commentData = await commentRes.json();
       if (commentData.error) {
         console.error("Instagram first comment error:", commentData.error.message);
         warnings.push(`Instagram first comment failed: ${commentData.error.message}`);
@@ -4110,25 +4118,25 @@ async function postToInstagram(
       if (await checkIgLocationEligibility()) {
         storyBody.location_id = igLocationId;
       }
-      const createRes = await followUpFetch(
+      const createData = await followUpGraph(
         `https://graph.facebook.com/v18.0/${igUserId}/media`,
         { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(storyBody) }
       );
-      const createData = await createRes.json();
       if (createData.error) {
         warnings.push(`Also share to Story failed: ${createData.error.message}`);
         return;
       }
+      const storyContainerId = graphId(createData, "Also share to Story");
       // On a resumed run timing.deadlineMs is check-once: that suits the deferred reel, not this
       // container, which nothing re-checks. Give it a real bound.
       // Cut to the worker's publish deadline too: a mirror never outlasts the reel's record.
-      await pollContainerStatus(createData.id, accessToken, {
+      await pollContainerStatus(storyContainerId, accessToken, {
         deadlineMs: Math.min(
           ownContainerDeadline(timing.deadlineMs, timing.startedAtMs ?? Date.now()),
           workerPublishDeadline(WORKER_STARTED_AT_MS),
         ),
       });
-      await publishInstagramMedia(igUserId, createData.id, accessToken);
+      await publishInstagramMedia(igUserId, storyContainerId, accessToken);
       console.log("Instagram 'Also share to Story' published successfully");
     } catch (e) {
       warnings.push(`Also share to Story failed: ${e instanceof Error ? e.message : "Unknown error"}`);
@@ -4370,13 +4378,12 @@ async function postToInstagram(
     // Get the permalink for the Reel (best effort: the reel is live with or without it)
     let postUrl = username ? `https://www.instagram.com/${username}/` : `https://instagram.com`;
     try {
-      const mediaResponse = await followUpFetch(
+      const mediaData = await followUpGraph(
         `https://graph.facebook.com/v18.0/${publishData.id}?fields=permalink,shortcode&access_token=${accessToken}`
       );
-      const mediaData = await mediaResponse.json();
-      if (mediaData.permalink) {
+      if (typeof mediaData.permalink === "string" && mediaData.permalink) {
         postUrl = mediaData.permalink;
-      } else if (mediaData.shortcode) {
+      } else if (typeof mediaData.shortcode === "string" && mediaData.shortcode) {
         postUrl = `https://www.instagram.com/reel/${mediaData.shortcode}/`;
       }
     } catch (e) {
