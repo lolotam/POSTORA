@@ -59,6 +59,58 @@ export function summarizeRows(rows: PlatformRow[]): ResultsSummary {
   };
 }
 
+export interface WebhookResultEntry {
+  status: string;
+  post_url: string | null;
+}
+
+export interface WebhookResultListEntry extends WebhookResultEntry {
+  platform: string;
+  error_message: string | null;
+}
+
+/** Which of several rows for one platform speaks for it in the legacy map. */
+const STATUS_RANK: Record<string, number> = { success: 3, pending: 2, failed: 1 };
+
+/**
+ * The results part of the post.completed / post.failed webhook.
+ *
+ * `platform_results` is the legacy map, one entry per platform, which every existing consumer
+ * (the n8n alert templates, Make) reads with Object.entries. Instagram can have several rows
+ * (story, reel, feed), so the entry must not be whichever row came last: a live story would be
+ * overwritten by a failed reel. A success speaks for the platform, then a pending row, then a
+ * failure, and the link is the speaking row's own.
+ *
+ * `platform_results_list` is additive: one entry per row, nothing collapsed, for consumers that
+ * need the story and the reel apart.
+ */
+export function buildWebhookResults(results: PlatformResultSummary[]): {
+  platform_results: Record<string, WebhookResultEntry>;
+  platform_results_list: WebhookResultListEntry[];
+} {
+  const legacy: Record<string, WebhookResultEntry> = {};
+  const rank: Record<string, number> = {};
+  for (const result of results) {
+    const thisRank = STATUS_RANK[result.status] ?? 0;
+    const current = legacy[result.platform];
+    if (!current || thisRank > rank[result.platform]) {
+      legacy[result.platform] = { status: result.status, post_url: result.platform_post_url || null };
+      rank[result.platform] = thisRank;
+    } else if (thisRank === rank[result.platform] && !current.post_url && result.platform_post_url) {
+      current.post_url = result.platform_post_url;
+    }
+  }
+  return {
+    platform_results: legacy,
+    platform_results_list: results.map((result) => ({
+      platform: result.platform,
+      status: result.status,
+      post_url: result.platform_post_url || null,
+      error_message: result.error_message || null,
+    })),
+  };
+}
+
 const RETRY_DELAY_MS = 250;
 
 /** Reads once and, on an error or a throw, once more. Returns the last answer. */

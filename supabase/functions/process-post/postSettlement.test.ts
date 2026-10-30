@@ -1,5 +1,6 @@
 import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import {
+  buildWebhookResults,
   type PlatformRow,
   type PostReader,
   readPostOutcome,
@@ -122,4 +123,31 @@ Deno.test("the unreadable-outcome log row is an error naming the post and the ro
   assertEquals(row.source, "process-post");
   assertEquals(row.user_id, "user-1");
   assertEquals(row.metadata, { post_id: "post-1", platform_post_id: "pp-1", error: "post: timeout" });
+});
+
+Deno.test("a live story is not overwritten by a failed reel in the legacy per-platform map", () => {
+  const { platform_results } = buildWebhookResults(summarizeRows([STORY, REEL, THREADS]).results);
+  assertEquals(platform_results.instagram, { status: "success", post_url: "https://ig/story" });
+  assertEquals(platform_results.threads, { status: "success", post_url: "https://threads/p" });
+  // The same answer whichever order the rows arrive in.
+  assertEquals(buildWebhookResults(summarizeRows([REEL, STORY]).results).platform_results.instagram.status, "success");
+});
+
+Deno.test("a platform with only failures stays failed, and a pending row outranks a failure", () => {
+  assertEquals(buildWebhookResults(summarizeRows([REEL]).results).platform_results.instagram, { status: "failed", post_url: null });
+  const pendingAndFailed = buildWebhookResults(summarizeRows([REEL, { ...PENDING, platform: "instagram" }]).results);
+  assertEquals(pendingAndFailed.platform_results.instagram.status, "pending");
+});
+
+Deno.test("the additive list carries every row, story and reel apart, with their errors", () => {
+  const { platform_results_list } = buildWebhookResults(summarizeRows([STORY, REEL]).results);
+  assertEquals(platform_results_list, [
+    { platform: "instagram", status: "success", post_url: "https://ig/story", error_message: null },
+    { platform: "instagram", status: "failed", post_url: null, error_message: "gave up" },
+  ]);
+});
+
+Deno.test("the legacy map keeps its exact shape for existing consumers (platform -> {status, post_url})", () => {
+  const { platform_results } = buildWebhookResults([{ platform: "facebook", status: "success", platform_post_url: "https://fb/1" }]);
+  assertEquals(Object.keys(platform_results.facebook).sort(), ["post_url", "status"]);
 });

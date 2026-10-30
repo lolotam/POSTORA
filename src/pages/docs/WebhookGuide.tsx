@@ -92,12 +92,19 @@ export default function WebhookGuide() {
   "data": {
     "post_id": "abc123-uuid",
     "status": "completed",
-    "results": {
-      "instagram": { "success": true, "post_id": "..." },
-      "facebook": { "success": true, "post_id": "..." }
-    }
+    "platform_results": {
+      "instagram": { "status": "success", "post_url": "https://www.instagram.com/p/..." },
+      "facebook": { "status": "success", "post_url": "https://www.facebook.com/..." }
+    },
+    "platform_results_list": [
+      { "platform": "instagram", "status": "success", "post_url": "https://www.instagram.com/p/...", "error_message": null },
+      { "platform": "facebook", "status": "success", "post_url": "https://www.facebook.com/...", "error_message": null }
+    ]
   }
-}`
+}
+// platform_results has one entry per platform; when a platform has several
+// results (an Instagram story and a reel) a success speaks for it.
+// platform_results_list has one entry per result, none collapsed.`
     }
   ];
 

@@ -113,6 +113,7 @@ import {
 } from "./deferredPublish.ts";
 import { recordPublishedStory } from "./instagramStory.ts";
 import {
+  buildWebhookResults,
   type PlatformResultSummary,
   type PostReader,
   readPostOutcome,
@@ -1250,13 +1251,8 @@ function sendFinalNotifications(
     caption: post.caption,
     platforms: post.platforms,
     status: finalStatus,
-    platform_results: platformResults.reduce((acc, r) => {
-      acc[r.platform] = {
-        status: r.status,
-        post_url: r.platform_post_url || null
-      };
-      return acc;
-    }, {} as Record<string, { status: string; post_url: string | null }>)
+    // The legacy per-platform map, plus platform_results_list with one entry per row.
+    ...buildWebhookResults(platformResults),
   };
 
   // Extract per-request webhook configuration from post metadata
