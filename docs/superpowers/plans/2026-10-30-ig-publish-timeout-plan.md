@@ -25,8 +25,23 @@ $D check $F index.ts && $D test $F -A . ; rm -f deno.lock
 
 - [x] Rewrite per the Codex P1 and 9 MergePilot findings (commit `36db47c9`).
 - [x] Reply to and resolve all 10 threads; update the PR body.
-- [ ] Wait for CI ("Typecheck and test process-post") and the re-review. Fix and push any new
-  finding (no round limit), replying on each thread before the push.
+- [x] CI on `36db47c9` is green: all 9 checks pass.
+- [ ] **Round 2.** MergePilot re-reviewed `36db47c9` and opened 8 new threads. Triage:
+
+| # | Thread (severity) | Claim | Verdict | Fix |
+|---|---|---|---|---|
+| R1 | `PRRT_kwDOTBx00c6yD9UX` (HIGH) | An image, carousel or story near the deadline still sends a 3 s publish past it. | **Real.** | Below `MIN_REQUEST_MS`, with nothing sent, a non-deferrable container throws "There was not enough time left to publish safely; nothing was posted. Safe to retry." and sends nothing. |
+| R2 | `PRRT_kwDOTBx00c6yD9Ui` (HIGH) | Same as R1, plus: the follow-ups after publish (permalink, first comment, story mirror) only have 5 s of reserve. | **Real.** | Split the reserve. Polls end at start + 150 − 60 s, and the publish deadline is start + 150 − 30 s. That leaves 30 s for the follow-ups and the record, and a 30 s publish still fits after the poll. |
+| R3 | `PRRT_kwDOTBx00c6yD9Ut` (MED) | A resume run on an old worker ignores the worker's lifetime. | **Real.** | Admission check (R4). |
+| R4 | `PRRT_kwDOTBx00c6yD9U2` (MED) | A request that lands on a worker past the cutoff creates a container before any deadline is read. | **Real.** | Admission check at the top of the handler, before any claim or container: if the worker is older than 150 − 60 s, return **503 retryable** and touch nothing. **Owner decision:** apply it to every request (recommended) or to resume runs only. Callers to verify before choosing: the reconciler (retries next minute), `process-scheduled-posts`, the web app (toast), and n8n `dispatchRetry` (keeps its claim on a 5xx). |
+| R5 | `PRRT_kwDOTBx00c6yD9U-` (MED) | The caption lookup can pick an older same-caption post, or miss the new one beyond 10 items. | **Partly real.** A reel cannot publish before its container exists. | Lower bound = `first_deferred_at − 2 min` (the container is created just before the first deferral), with `limit=25`. No match still gives success plus a warning, never a wrong id. |
+| R6 | `PRRT_kwDOTBx00c6yD9VC` (MED) | A FINISHED resume that publishes drops the carried story. | **Real.** | Handled with R7. |
+| R7 | `PRRT_kwDOTBx00c6yD9VJ` (MED) | Holding a live reel pending for its story ends at the give-up, with the reel recorded failed. | **Real**, and a regression this PR introduced. | A live reel (PUBLISHED, or just published) is always settled **success** now. A story still unrecorded is kept in `response_data.unrecorded_story` and gets a `system_logs` row, so it stays visible. No re-defer. |
+| R8 | `PRRT_kwDOTBx00c6yD9VW` (MED) | The follow-ups can repeat when a worker dies before the settle; Business Login enriches even when `insertIGRow` returned null. | **Real**, but rare after R2. | Write one marker, `response_data.deferred.followups_started_at`, before the follow-ups. A resume that sees the marker skips them and settles success with a warning. Business Login does not enrich when `insertIGRow` returns null. |
+
+  - Order: R1+R2 (`instagramPublish.ts`, `deferredPublish.ts`) → R7+R6 → R5 → R8 → R3+R4. Each
+    step needs a failing test written first, then the toolchain run.
+  - Reply on all 8 threads (commit "not yet pushed"), push, resolve them, then wait for round 3.
 - [ ] Merge (squash) when CI is green, no thread is open, and there is no conflict.
 - [ ] Deploy check, about 2–3 minutes after the merge. Compare the volume against `main` for
   `process-post/{index,instagramPublish,deferredPublish}.ts`:
