@@ -707,6 +707,21 @@ export function readSafeUrl(value: unknown, field: string, context: string): str
   return parsed.toString();
 }
 
+// Not a regex: a control class would need a suppression, and CI refuses one.
+function stripCaptionControls(value: string): string {
+  const kept: string[] = [];
+  for (let index = 0; index < value.length; index += 1) {
+    const code = value.charCodeAt(index);
+    const isRemovedControl = code <= 0x08
+      || code === 0x0b
+      || code === 0x0c
+      || (code >= 0x0e && code <= 0x1f)
+      || code === 0x7f;
+    if (!isRemovedControl) kept.push(value.charAt(index));
+  }
+  return kept.join("");
+}
+
 /**
  * A caption is PLAIN third-party text.
  *
@@ -724,9 +739,6 @@ export function readPlainCaption(value: unknown, field: string, context: string)
   }
   // Markup first, then the control characters that carry no meaning in a
   // caption. The text itself is preserved character for character.
-  const plain = value
-    .replace(/<[^>]*>/g, "")
-    // eslint-disable-next-line no-control-regex
-    .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, "");
+  const plain = stripCaptionControls(value.replace(/<[^>]*>/g, ""));
   return plain;
 }
