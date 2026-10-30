@@ -45,44 +45,56 @@ Credential mode also changes `facebook-oauth`, `instagram-business-oauth`, `refr
   Every active Meta token expires within 60 days, so every one depends on refresh.
 - **The legacy OAuth callbacks refuse in protected mode.** An OAuth flow that is in progress at the moment of the flip fails, and the user has to start again.
 
-**Consequence: Gate B as written is not safe.** A global flip would silently stop refresh for all 52 accounts and protect none of them. Posting would then fail one account at a time as each token reaches `token_expires_at`. Before any production change, one of these is needed:
+**Consequence: the global flip is never used.** It would silently stop refresh for all 52 accounts and protect none of them; posting would then fail one account at a time as each token reaches `token_expires_at`.
 
-1. A per-account cutover, where an account runs protected only once it holds a protected credential. This needs code.
-2. Every Meta account reconnects through the protected flow first. **This is impossible today without code.** In legacy mode, `continueOAuthRequest` (`facebook-oauth/protectedPageConnect.ts`) sends `authorize` to the legacy branch, because no attempt exists yet. So no protected attempt is ever begun, and a reconnect writes legacy metadata only. The protected path is reachable only once the global mode is already `protected`.
-3. Activation stays deferred.
+**Since #298 (`b89fd08d`, on `main`) a per-account cutover exists** (`_shared/protectedAccountCutover.ts`). The global mode stays `legacy`:
 
-The SQL suites already passed on a restored production copy before the migrations. The decisive behaviour is in the edge code, not the schema, so a second restore was not needed to answer this.
+- an account runs protected once it holds a protected authority owned by the same user; every other account stays legacy;
+- a user listed in `credential_facebook_user_protected_pilot_user_ids` starts OAuth `authorize` on the protected branch (`facebook-oauth/protectedPageConnect.ts`), which is how an account gets that authority.
+
+**Collection is not covered by it.** `instagram-insights-sync` still refuses unless the **global** mode is `protected` (`handler.ts`, `protected_credentials_required`), and `collection_instagram_insights_enabled` is one global setting. Collection therefore stays blocked until a reviewed, server-enforced per-account collection eligibility mechanism exists (the D1 prerequisite in `docs/specs/2026-10-30-instagram-release-gates.md`).
 
 ## 3. Gates (each needs Waleed's explicit approval)
 
-### Gate A: rehearsal on a production copy (no production change)
+### Gate A: rehearsal (done, 2026-10-29)
 
-1. Restore the latest dump into a throwaway `supabase/postgres:17.6.1.138` container. Before `pg_restore`, revoke the public-schema default privileges for both `supabase_admin` and `postgres`. Without that, the restore leaves anon/authenticated grants that production does not have.
-2. Set `credential_facebook_user_mode=protected` on the copy only. Against the copy, run the protected OAuth, refresh, publishing and report suites, and trace what `process-post` and `refresh-tokens` do for an account with legacy-only credentials.
-3. Write the answer to the open question in §2 into this document. If posting breaks for non-reconnected accounts, stop and redesign before any production change (for example, a per-account cutover).
+- **Done:** the SQL suites passed on a restored production copy before the migrations, and the §2 question was answered from the edge code on `main` at `d4e12ed6`, with the protected-path tests it cites.
+- **Not done:** a production-copy run of the protected OAuth, refresh, publishing and report edge suites. The decisive behaviour is in the edge code and its tests, so it was skipped; it is not claimed.
 
-### Gate B: credential cutover on production, collection still off
+### Gate B: one pilot account on the per-account cutover, collection still off
+
+The global `credential_facebook_user_mode` stays `legacy` throughout; it is never set to `protected`.
 
 1. Fresh backup, as in the PR #294 rollout: `pg_dump -Fc` plus globals, with the TOC checked.
-2. Pick a quiet window with no scheduled posts within ±15 minutes.
-3. Upsert `credential_facebook_user_mode = protected`.
-4. Reconnect **one** test-owned Instagram account through the protected OAuth flow. Verify a protected credential row exists, a refresh succeeds and a post publishes.
-5. Watch for 24 hours: `refresh-tokens` failures, `needs_reauth` counts, `platform_posts` failures by platform, edge logs.
-6. **Rollback:** upsert `credential_facebook_user_mode = legacy` (legacy branches before any new-schema access). Data written to the protected tables stays and is ignored.
+2. Add the test owner's **user UUID** to `credential_facebook_user_protected_pilot_user_ids`.
+3. That owner reconnects **one** test-owned Instagram account. Verify a protected authority row exists for it, a refresh succeeds and a post publishes.
+4. Watch for 24 hours with **direct** checks, because the usual signals stay quiet here (§2):
+   - the count of Meta accounts whose last refresh outcome is `unsupported` or `page_binding_missing`, or whose last successful refresh is older than the expected interval: it must stay at its pre-change value;
+   - only the pilot account holds a protected authority;
+   - `platform_posts` failures by platform, and edge logs.
+5. **Rollback:** remove the UUID from the pilot list. This stops new protected attempts; it does **not** downgrade the already protected account, which keeps working on its protected authority.
 
-### Gate C: owner collection for the test account
+### Gate C: owner collection for the test account (blocked)
 
-1. Upsert `collection_instagram_insights_enabled = true`.
-2. Trigger one owner sync from `/analytics/instagram` for the test account (`enqueue`), then call the service `drain` by hand once.
-3. Verify: one job claimed (owner batch 25, lease 120 s); snapshots written; the job completes or stays partial for the right reason; no repeated re-claim loop (`partial` comes due again after 1 minute, so watch several minutes); the report renders in the browser.
+**Blocked** until the per-account collection eligibility mechanism (§2) is reviewed, tested and deployed. Today `collection_instagram_insights_enabled` opens enqueue for **every** authenticated user, the `drain` takes no target and claims whatever is due (owner batch 25), and the handler refuses anyway while the global mode is `legacy`.
+
+Once the prerequisite is in place:
+
+1. Enable collection for the test account only, through that mechanism.
+2. Trigger one owner sync from `/analytics/instagram` (`enqueue`). **Before** calling the service `drain` by hand, check that the only due job is the test account's.
+3. Verify: one job claimed (lease 120 s); snapshots written; the job completes or stays partial for the right reason; no repeated re-claim loop (`partial` comes due again after 1 minute, so watch several minutes); the report renders in the browser; other accounts saw zero provider calls.
 4. Live Meta verification: compare a sample of daily metrics with what Instagram itself shows.
-5. **Rollback:** upsert `collection_instagram_insights_enabled = false`. Every collection path then refuses before reading jobs or credentials.
+5. **Rollback:** turn the test account's eligibility off, and keep `collection_instagram_insights_enabled = false`. Every collection path then refuses before reading jobs or credentials.
 
-### Gate D: scheduled drain
+### Gate D: daily collection (blocked)
 
-1. Add one `pg_cron` job that calls `instagram-insights-sync` with `{"action":"drain"}` and the service key, every 5 minutes to start. The key comes from the existing vault/cron pattern used by the other workers, never inline.
-2. Watch for 24 hours: claims per tick, partial/rate-limited counts, Meta throttle buckets, edge latency.
-3. **Rollback:** unschedule the job. The setting from Gate C stays as it is.
+**Blocked** on a daily enqueue mechanism. The handler exposes only a user `enqueue`, `status` and a target-less `drain`; nothing creates the daily owner jobs (00:30 UTC) that the main plan (§5.3) requires. A scheduled drain alone would only process jobs users trigger by hand. The mechanism is specified in `docs/specs/2026-10-30-instagram-collection-rollout-controls.md` (durable daily dispatch).
+
+Once it exists:
+
+1. Add the daily enqueue job and one `pg_cron` drain job calling `instagram-insights-sync` with `{"action":"drain"}`, every 5 minutes to start. The key comes from the existing vault/cron pattern used by the other workers, never inline.
+2. Watch for 24 hours: jobs created per day, claims per tick, partial/rate-limited counts, Meta throttle buckets, edge latency.
+3. **Rollback:** unschedule both jobs. The setting from Gate C stays as it is.
 
 ### Gate E: competitors (milestone 3 scope)
 
@@ -92,7 +104,7 @@ Only after Gate D has been stable: `competitor-snapshot-sync` scheduling, with t
 
 - Live Meta verification (Gate C.4).
 - Browser journeys for `/analytics/instagram`: connect, sync, report, empty and error states. Arabic and English.
-- The answer to the §2 posting question.
+- The per-account collection eligibility mechanism and the daily enqueue (Gates C and D).
 
 ## 5. Backups and server artifacts
 
