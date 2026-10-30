@@ -14,7 +14,7 @@ import { resultNameFor, type FetchedImage, type ImageInput } from "./aiImageIo.t
 import type { JobTokenPayload } from "./aiImageToken.ts";
 import type { OpeninaryConfig } from "./openinary.ts";
 
-const openinary: OpeninaryConfig = { serverUrl: "https://o.example", apiKey: "test-key", folderPrefix: "postora.cloud" };
+const openinary: OpeninaryConfig = { serverUrl: "https://o.example", apiKey: "fixture-value-1", folderPrefix: "postora.cloud" };
 const PNG = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13, 0x49, 0x48, 0x44, 0x52, 0, 0, 0, 2, 0, 0, 0, 2, 8, 6, 0, 0, 0]);
 const urlInput: ImageInput = { kind: "url", url: "https://x.example/in.png" };
 const bytesInput: ImageInput = { kind: "bytes", bytes: PNG, extension: "png", mime: "image/png" };
@@ -25,7 +25,7 @@ const base = (over: Partial<AtlasJobBase> = {}): AtlasJobBase => ({
   operation: "background_removal",
   userId: "user-1",
   openinary,
-  atlasApiKey: "test-key",
+  atlasApiKey: "fixture-value-1",
   area: "processed",
   startedAt: T0,
   sign: (payload) => Promise.resolve(`signed:${payload.prediction}:${payload.staged ?? "none"}`),
@@ -247,13 +247,13 @@ const payload: JobTokenPayload = {
   issuedAt: T0 - 60_000,
   meta: { original_url: "https://x.example/in.png" },
 };
-const resumeSpec = () => ({ ...base({ meta: payload.meta }), token: "the-token", payload });
+const resumeSpec = () => ({ ...base({ meta: payload.meta }), token: "fixture-value-2", payload });
 
 Deno.test("resume: still running answers 'processing' again with the same token and keeps the staged input", async () => {
   await withOpeninary(false, async (calls) => {
     const { deps: d, seen } = deps({ check: pending });
     const result = await resumeAtlasImageJob(resumeSpec(), d);
-    assertEquals(result.ok && result.status === "processing" && result.token, "the-token");
+    assertEquals(result.ok && result.status === "processing" && result.token, "fixture-value-2");
     assertEquals(seen.checks, ["pred-9"]);
     assertEquals(deletes(calls).length, 0);
   });

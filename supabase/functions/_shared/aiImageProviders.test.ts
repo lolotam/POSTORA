@@ -117,10 +117,10 @@ async function withEnv(vars: Record<string, string | undefined>, run: () => Prom
 
 const cloudinaryEnv = {
   CLOUDINARY_CLOUD_NAME: "test-cloud",
-  CLOUDINARY_API_KEY: "test-value-1",
-  CLOUDINARY_API_SECRET: "test-value-2",
+  CLOUDINARY_API_KEY: "fixture-value-1",
+  CLOUDINARY_API_SECRET: "fixture-value-2",
   OPENINARY_SERVER_URL: "https://o.example",
-  OPENINARY_API_KEY: "test-value-3",
+  OPENINARY_API_KEY: "fixture-value-3",
 };
 
 Deno.test("resolveCloudinaryUsable follows the stored policy: Openinary only means no, Cloudinary listed means yes", async () => {

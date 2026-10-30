@@ -16,7 +16,7 @@ import type { AtlasCheckResult } from "./atlasCloudImage.ts";
 import type { FetchedImage } from "./aiImageIo.ts";
 
 const PNG = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13, 0x49, 0x48, 0x44, 0x52, 0, 0, 0, 2, 0, 0, 0, 2, 8, 6, 0, 0, 0]);
-const env: RouteEnv = { atlasApiKey: "test-key", secret: "test-signing-key" };
+const env: RouteEnv = { atlasApiKey: "fixture-value-1", secret: "fixture-value-2" };
 const T0 = 7_000_000;
 
 const route: AtlasRoute = {
@@ -81,7 +81,7 @@ async function withOpeninaryEnv(run: (deleted: string[]) => Promise<void>): Prom
   const names = ["OPENINARY_SERVER_URL", "OPENINARY_API_KEY"];
   const before = names.map((n) => Deno.env.get(n));
   Deno.env.set("OPENINARY_SERVER_URL", "https://o.example");
-  Deno.env.set("OPENINARY_API_KEY", "test-value");
+  Deno.env.set("OPENINARY_API_KEY", "fixture-value-3");
   const deleted: string[] = [];
   const original = globalThis.fetch;
   globalThis.fetch = ((input: string | URL | Request, init?: RequestInit) => {
