@@ -234,6 +234,8 @@ async function settlePlatformPost(supabase: any, args: {
       platform_post_id: args.providerPostId ?? undefined,
       platform_post_url: args.providerPostUrl ?? undefined,
       error_message: args.errorMessage ?? undefined,
+      // As the RPC does: data given replaces the row's, none keeps it.
+      response_data: args.responseData ?? undefined,
       posted_at: args.status === "success" ? new Date().toISOString() : undefined,
     }).eq("id", args.platformPostId);
     return { id: args.platformPostId, error: updateError?.message ?? null };
@@ -1554,7 +1556,10 @@ Deno.serve(async (req) => {
           ? await finishDeferredPost(supabase, post, row.id, {
             // The degraded fallback must report a live story too, whichever row now holds it.
             results: storyOnReelRow
-              ? [{ platform: row.platform, status: "success", platform_post_url: storyOnReelRow.url, error_message: abandon }]
+              ? [
+                { platform: row.platform, status: "success", platform_post_url: storyOnReelRow.url },
+                { platform: row.platform, status: "failed", error_message: abandon },
+              ]
               : [{ platform: row.platform, status: "failed", error_message: abandon }, ...recordedStoryResults(carried.recorded)],
             hasSuccess: storyOnReelRow !== null || carried.recorded.length > 0,
             hasFailed: true,
