@@ -27,9 +27,19 @@ export function alreadyLiveCopiesMessage(count: number): string {
 export interface RetryState {
   /** The story already has its own success row: a retry does not post it again. */
   storyRecorded: boolean;
+  /**
+   * Which of these media ids a row already records for the account (another post's media), or
+   * null when that could not be read.
+   */
+  recordedMediaIds?: (ids: string[]) => Promise<Set<string> | null>;
 }
 
 export const NOT_A_RETRY: RetryState = { storyRecorded: false };
+
+/** The `media_type` Graph lists for what this post publishes as its feed post or reel. */
+export function expectedMediaType(mediaType: "IMAGE" | "VIDEO" | string, mediaCount: number): string {
+  return mediaCount > 1 ? "CAROUSEL_ALBUM" : mediaType;
+}
 
 export type RetryGuardDecision =
   | { kind: "publish" }
@@ -51,9 +61,23 @@ export function retryWindowStart(post: { created_at?: string | null; scheduled_a
   return (times.length ? Math.max(...times) : 0) - RETRY_LOOKBACK_MS;
 }
 
-/** What a retry does, from the account's latest media. */
-export function retryGuardDecision(media: MediaSummary[], caption: string | null | undefined, notBeforeMs: number): RetryGuardDecision {
-  const matches = captionMatches(media, caption, notBeforeMs);
+/**
+ * The account's media that can be this post: its caption, published since `notBeforeMs`, of the
+ * same media type, and not already recorded as another post's media. Caption alone is not
+ * enough: a duplicated post shares it, and is recorded on its own row.
+ */
+export function candidateMedia(
+  media: MediaSummary[],
+  post: { caption: string | null | undefined; notBeforeMs: number; mediaType: string },
+  recordedIds: Set<string>,
+): MediaSummary[] {
+  return captionMatches(media, post.caption, post.notBeforeMs)
+    .filter((item) => !item.media_type || item.media_type === post.mediaType)
+    .filter((item) => !recordedIds.has(item.id));
+}
+
+/** What a retry does, given the media that can be this post. */
+export function retryGuardDecision(matches: MediaSummary[]): RetryGuardDecision {
   if (matches.length === 1) return { kind: "already_live", media: matches[0] };
   if (matches.length > 1) return { kind: "already_live_copies", count: matches.length };
   return { kind: "publish" };

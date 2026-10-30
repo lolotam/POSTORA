@@ -6,18 +6,17 @@ export interface RetryResultRow {
 }
 
 /**
- * What a "retry failed" may publish to: the platforms of the failed rows, and their accounts.
+ * What a "retry failed" may publish to: the accounts of the failed rows, and their platforms.
  *
- * Without a target, process-post publishes to every account the post selected, so a post that
- * went out on Facebook but failed on Instagram would be posted to Facebook a second time. The
- * accounts are sent only when every failed row names one; otherwise the platforms alone narrow
- * it as far as the rows allow.
+ * Without account ids, process-post publishes to every account the post selected, so a post that
+ * went out on Facebook but failed on Instagram would be posted to Facebook a second time. A failed
+ * row that names no account cannot be targeted, so it is left out, as the n8n/MCP retry does; with
+ * no targetable row there is nothing to retry (empty lists).
  */
 export function failedRetryTargets(rows: RetryResultRow[] | undefined): { platforms: string[]; accountIds: string[] } {
-  const failed = (rows ?? []).filter((row) => row.status === "failed");
-  const platforms = [...new Set(failed.map((row) => row.platform))];
-  const accountIds = failed.every((row) => row.social_account_id)
-    ? [...new Set(failed.map((row) => row.social_account_id as string))]
-    : [];
-  return { platforms, accountIds };
+  const targetable = (rows ?? []).filter((row) => row.status === "failed" && row.social_account_id);
+  return {
+    platforms: [...new Set(targetable.map((row) => row.platform))],
+    accountIds: [...new Set(targetable.map((row) => row.social_account_id as string))],
+  };
 }

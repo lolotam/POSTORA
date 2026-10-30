@@ -138,6 +138,8 @@ export interface MediaSummary {
   caption?: string;
   timestamp?: string;
   permalink?: string;
+  /** IMAGE, VIDEO or CAROUSEL_ALBUM. */
+  media_type?: string;
 }
 
 /**

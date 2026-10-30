@@ -42,9 +42,10 @@ This is the fix for root cause A, kept inside B's new bound.
 
 - **One publish loop.** `instagramPublish.ts` `publishContainer` serves both logins.
 - **Bounded by the worker.** Every request is cut to the time left before
-  `workerPublishDeadline` (worker start + 150 s − 5 s to record), keeping 5 s for the follow-up
-  check. With no room left, a reel is deferred unsent and the reconciler publishes it next
-  minute.
+  `workerPublishDeadline` (worker start + 150 s − 30 s for the follow-ups and the record),
+  keeping 5 s for the follow-up check. With no room left nothing is sent: a reel is deferred and
+  the reconciler publishes it next minute, and anything else fails as "nothing was posted, safe
+  to retry".
 - **Settled from the container.** Once any request went unanswered, the run ends through a
   bounded container check:
 
@@ -56,11 +57,20 @@ This is the fix for root cause A, kept inside B's new bound.
   | unknown | Defer a reel; any other container keeps its error. |
 
 - **Resumed `PUBLISHED` reels keep their follow-up steps.** The media id is recovered from the
-  account's latest media: the only item with the post's caption since the first deferral minus
-  10 minutes. The first comment, comment disable, story mirror and `enrichInBackground` then run.
-  No match gives success plus a warning naming the skipped steps. An unrecorded story re-defers
-  the reel.
-- **Deferrable polls** end 45 s before the worker's end.
+  account's 25 latest media: the only item with the post's caption since the first deferral
+  minus 2 minutes.
+  - **Follow-ups.** The first comment, comment disable, story mirror and `enrichInBackground` then
+    run, at most once. They are guarded by a compare-and-set marker,
+    `deferred.followups_started_at`.
+  - **No match** gives success plus a warning naming the skipped steps.
+  - **A live reel always settles success.** A story still without a row is kept on the reel's row
+    as `unrecorded_story`, plus a `system_logs` row. It never re-defers the reel.
+- **Deferrable polls** end 65 s before the worker's end, so a 30 s publish and its 5 s check
+  still fit.
+- **Every request after a publish** is bounded by what is left before a 5 s record reserve (at
+  most 8 s), response body included (`followUpGraph`).
+- **Admission check.** A reconciler resume or a scheduler run on a worker with less than 65 s left
+  answers 503 before doing anything; both callers retry on their own.
 
 Done means CI is green, every review thread is answered and resolved, and the PR is merged. The
 changed files must then be verified in the functions volume by SHA256 after Edge Functions Sync.
@@ -108,9 +118,19 @@ finished once**, it first looks for the post on the account:
    first run (`pending`, `scheduled`, `processing`) therefore never
    pays for the lookup and can never be suppressed by an unrelated post with the same caption.
    Resume runs are excluded: they already handle `PUBLISHED`.
-2. **The lookup.** `GET /{ig-user-id}/media?fields=id,caption,timestamp,permalink&limit=25`,
-   with an 8 s timeout. Matches are items whose trimmed caption equals the post's caption and
-   whose timestamp is at or after `max(created_at, scheduled_at) − 10 min`.
+2. **The lookup.** `GET /{ig-user-id}/media?fields=id,caption,timestamp,permalink,media_type&limit=25`,
+   with an 8 s timeout. A candidate must:
+   - have a trimmed caption equal to the post's caption;
+   - have a timestamp at or after `max(created_at, scheduled_at) − 10 min`;
+   - have the same `media_type` (IMAGE, VIDEO or CAROUSEL_ALBUM);
+   - **not already be recorded** as `platform_post_id` on a row for that account.
+
+   The last rule is what tells a duplicated post apart. It shares the caption, but its media is
+   recorded on its own row; a publish that went unanswered never had its id recorded.
+
+   **The story** is not in `/media`. A retry posts it again only when no earlier run left a
+   success row with `ig_post_subtype = 'story'` for the account. Otherwise a mixed story +
+   feed/reel post would either lose a failed story or post a live one twice.
 3. **The outcome:**
 
    | Matches | Result |
@@ -120,11 +140,15 @@ finished once**, it first looks for the post on the account:
    | 0, empty caption, story-only post | Publish as today. A story is not in `/media` and expires anyway. |
    | lookup failed (timeout, non-200) | **Publish as today**, and log `[instagram] retry guard could not read media`. This keeps the old behaviour on a Graph outage rather than blocking every retry. It fails open on purpose; see "Alternatives". |
 
-4. **Where it lives.** The rule is a pure function, `retryGuardDecision(media, post, nowMs)`, in
-   `process-post/instagramRetryGuard.ts`, so it can be unit-tested. `index.ts` wires it once at
-   the top of `postToInstagram` and once at the top of `postToInstagramBusinessLogin`, before
-   any container is created. It reuses the media-list fetch from step 2 (`findPublishedMedia`
-   generalised to return all matches).
+4. **Where it lives.** The rules are pure functions in `process-post/instagramRetryGuard.ts`:
+   `candidateMedia(media, post, recordedIds)`, `retryGuardDecision(matches)` and `isRetryRun`, so
+   they can be unit-tested. In `index.ts`:
+   - the main loop builds a `RetryState` (`storyRecorded`, `recordedMediaIds`) for each retried
+     Instagram account;
+   - both posters check before any feed/reel container is created, and an already-live feed or
+     reel skips only that publish: the story step still runs;
+   - `findPublishedMedia` and the guard share `listRecentMedia`. It answers null for an
+     unreadable or malformed list.
 
 ### 4a. The web app's "Retry failed" targets only what failed
 

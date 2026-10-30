@@ -89,6 +89,8 @@ import { graphId, type GraphResponse } from "./graphResponse.ts";
 import {
   ALREADY_LIVE_MESSAGE,
   alreadyLiveCopiesMessage,
+  candidateMedia,
+  expectedMediaType,
   isRetryRun,
   NOT_A_RETRY,
   type RetryGuardDecision,
@@ -1957,8 +1959,11 @@ Deno.serve(async (req) => {
             break;
           case "instagram": {
             const igAuthType = (account as any).ig_auth_type || (account.account_metadata as Record<string, unknown>)?.account_type;
-            const retry = isRetryRun(post.status, !!resume)
-              ? { storyRecorded: await storyRecordedFor(supabase, post_id, account.id) }
+            const retry: RetryState = isRetryRun(post.status, !!resume)
+              ? {
+                storyRecorded: await storyRecordedFor(supabase, post_id, account.id),
+                recordedMediaIds: (ids) => recordedMediaIdsFor(supabase, account.id, ids),
+              }
               : NOT_A_RETRY;
             if (igAuthType === 'business_login') {
               result = await postToInstagramBusinessLogin(account, post, mediaUrls, mediaFiles, supabase, post_id, timing, retry);
@@ -3763,17 +3768,30 @@ async function storyRecordedFor(supabase: SupabaseClient, postId: string, social
   return (data ?? []).length > 0;
 }
 
+/** Which of these media ids a row already records for the account, or null when unreadable. */
+async function recordedMediaIdsFor(supabase: SupabaseClient, socialAccountId: string, ids: string[]): Promise<Set<string> | null> {
+  const { data, error } = await supabase
+    .from("platform_posts")
+    .select("platform_post_id")
+    .eq("social_account_id", socialAccountId)
+    .in("platform_post_id", ids);
+  if (error) return null;
+  return new Set((data ?? []).map((row: { platform_post_id: string | null }) => row.platform_post_id ?? ""));
+}
+
 /** The account's latest media, or null when they could not be read (non-200, timeout, error). */
 async function listRecentMedia(mediaListUrl: string, accessToken: string): Promise<MediaSummary[] | null> {
   try {
     const response = await fetchWithTimeout(
-      `${mediaListUrl}?fields=id,caption,timestamp,permalink&limit=${PUBLISHED_SEARCH_LIMIT}&access_token=${accessToken}`,
+      `${mediaListUrl}?fields=id,caption,timestamp,permalink,media_type&limit=${PUBLISHED_SEARCH_LIMIT}&access_token=${accessToken}`,
       {},
       8000,
     );
     if (!response.ok) return null;
-    const body = await response.json() as { data?: MediaSummary[] };
-    return body.data ?? [];
+    const body = await response.json() as { data?: unknown };
+    // A list Graph answered but malformed counts as unreadable, so the retry publishes as before.
+    if (body.data === undefined) return [];
+    return Array.isArray(body.data) ? body.data as MediaSummary[] : null;
   } catch {
     return null;
   }
@@ -3785,18 +3803,25 @@ async function listRecentMedia(mediaListUrl: string, accessToken: string): Promi
  */
 async function liveOnRetry(
   post: PostData,
-  timing: PublishTiming,
+  retry: RetryState,
   mediaListUrl: string,
   accessToken: string,
-  storyOnly: boolean,
+  publish: { storyOnly: boolean; mediaType: string },
 ): Promise<Exclude<RetryGuardDecision, { kind: "publish" }> | null> {
-  if (storyOnly || !post.caption?.trim() || !isRetryRun(post.status, !!timing.resume)) return null;
+  if (publish.storyOnly || !post.caption?.trim() || !retry.recordedMediaIds) return null;
   const media = await listRecentMedia(mediaListUrl, accessToken);
   if (!media) {
     console.warn(`[instagram] retry guard could not read media for post ${post.id}; publishing`);
     return null;
   }
-  const decision = retryGuardDecision(media, post.caption, retryWindowStart(post));
+  const window = { caption: post.caption, notBeforeMs: retryWindowStart(post), mediaType: publish.mediaType };
+  const sameCaption = candidateMedia(media, window, new Set());
+  const recorded = sameCaption.length ? await retry.recordedMediaIds(sameCaption.map((item) => item.id)) : new Set<string>();
+  if (!recorded) {
+    console.warn(`[instagram] retry guard could not read which media are recorded for post ${post.id}; publishing`);
+    return null;
+  }
+  const decision = retryGuardDecision(candidateMedia(media, window, recorded));
   console.log(`[instagram] retry guard: ${decision.kind} for post ${post.id}`);
   return decision.kind === "publish" ? null : decision;
 }
@@ -4226,13 +4251,10 @@ async function postToInstagram(
 
   // A retry of a post already live on the account records it instead of posting it again.
   const profileUrl = username ? `https://www.instagram.com/${username}/` : `https://instagram.com`;
-  const live = await liveOnRetry(
-    post,
-    timing,
-    `https://graph.facebook.com/v18.0/${igUserId}/media`,
-    accessToken,
-    igPostTypes.every((type) => type === "story"),
-  );
+  const live = await liveOnRetry(post, retry, `https://graph.facebook.com/v18.0/${igUserId}/media`, accessToken, {
+    storyOnly: igPostTypes.every((type) => type === "story"),
+    mediaType: expectedMediaType(mediaType, mediaUrls.length),
+  });
 
   // Handle story separately if included in post types
   const igAllResults: Array<{ id: string; url?: string; warnings?: string[] }> = [];
@@ -5120,13 +5142,10 @@ async function postToInstagramBusinessLogin(
   };
 
   // A retry of a post already live on the account records it instead of posting it again.
-  const live = await liveOnRetry(
-    post,
-    timing,
-    `https://graph.instagram.com/v22.0/${igUserId}/media`,
-    accessToken,
-    !blPostTypes.includes("feed") && !blPostTypes.includes("reel"),
-  );
+  const live = await liveOnRetry(post, retry, `https://graph.instagram.com/v22.0/${igUserId}/media`, accessToken, {
+    storyOnly: !blPostTypes.includes("feed") && !blPostTypes.includes("reel"),
+    mediaType: expectedMediaType(mediaType, mediaUrls.length),
+  });
   const optimizedMediaUrls = await optimizeUrlsForInstagram(mediaUrls);
 
   // ─── 1. STORY ──────────────────────────────────────────────────────────────
@@ -5180,7 +5199,9 @@ async function postToInstagramBusinessLogin(
     const media = live.kind === "already_live" ? live.media : null;
     const note = live.kind === "already_live" ? ALREADY_LIVE_MESSAGE : alreadyLiveCopiesMessage(live.count);
     const url = media?.permalink ?? (username ? `https://www.instagram.com/${username}/` : `https://instagram.com`);
-    await insertIGRow(subtype, "success", media?.id, url, undefined, { warnings: [note] });
+    const rowId = await insertIGRow(subtype, "success", media?.id, url, undefined, { warnings: [note] });
+    // Not recorded: say so instead of reporting a success no row shows. A retry finds it live again.
+    if (!rowId) throw new Error("This post is already live on Instagram, but it could not be recorded. Retrying is safe.");
     subResults.push({ subtype, status: "success", id: media?.id, url });
   }
 

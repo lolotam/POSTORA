@@ -69,9 +69,14 @@ export function usePostRetry() {
     if (failedPlatforms.length === 0) { toast({ title: "No failed platforms", description: "This post has no failed platforms to retry." }); return; }
     if (hasTikTokFailure(post)) { openRetryDialog(post); return; }
 
+    const targets = failedRetryTargets(post.platformResults);
+    if (targets.accountIds.length === 0) {
+      toast({ title: "Cannot retry automatically", description: "The failed results name no account. Retry them one at a time from the post's details.", variant: "destructive" });
+      return;
+    }
+
     setRetryingPostId(post.id);
     try {
-      const targets = failedRetryTargets(post.platformResults);
       await deleteFailedPlatformPosts(post.id);
       await invokeProcessPost(post.id, targets.platforms, targets.accountIds);
       toast({ title: "Retry initiated", description: `Retrying ${failedPlatforms.length} failed platform(s).` });
@@ -166,6 +171,7 @@ export function usePostRetry() {
       setBulkRetryProgress({ current: i + 1, total: failedPosts.length });
       try {
         const targets = failedRetryTargets(failedPosts[i].platformResults);
+        if (targets.accountIds.length === 0) throw new Error("No failed result names an account");
         await deleteFailedPlatformPosts(failedPosts[i].id);
         await invokeProcessPost(failedPosts[i].id, targets.platforms, targets.accountIds);
         successCount++;

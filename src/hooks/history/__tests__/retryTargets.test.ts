@@ -12,12 +12,14 @@ describe("failedRetryTargets", () => {
     expect(failedRetryTargets(rows)).toEqual({ platforms: ["instagram", "tiktok"], accountIds: ["ig-1", "tt-1"] });
   });
 
-  it("falls back to the platforms alone when a failed row names no account", () => {
+  it("leaves out a failed row that names no account, never widening to every account", () => {
     const rows = [
       { platform: "instagram", status: "failed", social_account_id: "ig-1" },
       { platform: "threads", status: "failed", social_account_id: null },
     ];
-    expect(failedRetryTargets(rows)).toEqual({ platforms: ["instagram", "threads"], accountIds: [] });
+    expect(failedRetryTargets(rows)).toEqual({ platforms: ["instagram"], accountIds: ["ig-1"] });
+    expect(failedRetryTargets([{ platform: "threads", status: "failed", social_account_id: null }]))
+      .toEqual({ platforms: [], accountIds: [] });
   });
 
   it("has nothing to target when nothing failed", () => {
