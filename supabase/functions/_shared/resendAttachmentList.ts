@@ -21,6 +21,40 @@ export type ResendAttachmentList =
 
 const LIST_TIMEOUT_MS = 15_000;
 
+/** Resend's own hosts: the only ones its API key may be sent to. */
+function isResendHost(hostname: string): boolean {
+  return ["resend.com", "resend.app"].some((root) => hostname === root || hostname.endsWith(`.${root}`));
+}
+
+function parsedHttpsUrl(value: string): URL | null {
+  try {
+    const url = new URL(value);
+    return url.protocol === "https:" ? url : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Downloads an attachment from the URL Resend returned. Only an HTTPS URL is fetched, and the
+ * API key is added on a 401/403 retry only when the URL is on a Resend host: the download URL
+ * is signed, and the key must never reach any other origin. Null means the URL was refused.
+ */
+export async function downloadResendAttachment(
+  downloadUrl: string,
+  apiKey: string,
+  fetcher: typeof fetch = fetch,
+): Promise<Response | null> {
+  const url = parsedHttpsUrl(downloadUrl);
+  if (!url) return null;
+  // The signed link may redirect to storage; only the keyed retry refuses to follow one.
+  const response = await fetcher(url.href);
+  if ((response.status === 401 || response.status === 403) && isResendHost(url.hostname)) {
+    return await fetcher(url.href, { headers: { Authorization: `Bearer ${apiKey}` }, redirect: "error" });
+  }
+  return response;
+}
+
 function text(value: unknown): string | null {
   return typeof value === "string" && value.trim() ? value : null;
 }
@@ -49,7 +83,7 @@ export async function readResendAttachmentList(
 ): Promise<ResendAttachmentList> {
   let response: Response;
   try {
-    response = await fetcher(`https://api.resend.com/emails/receiving/${emailId}/attachments`, {
+    response = await fetcher(`https://api.resend.com/emails/receiving/${encodeURIComponent(emailId)}/attachments`, {
       method: "GET",
       headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
       signal: AbortSignal.timeout(LIST_TIMEOUT_MS),

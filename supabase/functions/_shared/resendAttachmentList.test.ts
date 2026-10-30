@@ -1,5 +1,5 @@
 import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
-import { normaliseAttachmentEntry, readResendAttachmentList, type ResendAttachmentList } from "./resendAttachmentList.ts";
+import { downloadResendAttachment, normaliseAttachmentEntry, readResendAttachmentList, type ResendAttachmentList } from "./resendAttachmentList.ts";
 
 const answer = (body: BodyInit | null, status = 200) => () => Promise.resolve(new Response(body, { status }));
 
@@ -27,4 +27,37 @@ Deno.test("an entry with missing or non-string fields gets safe defaults", () =>
     downloadUrl: "https://r/y",
   });
   assertEquals(normaliseAttachmentEntry(null), { id: null, filename: "attachment", contentType: "application/octet-stream", downloadUrl: null });
+});
+
+Deno.test("the Resend key is only ever sent to a Resend host, and only over HTTPS", async () => {
+  const calls: { url: string; auth: string | null }[] = [];
+  const fetcher = (input: string | URL | Request, init?: RequestInit) => {
+    const auth = new Headers(init?.headers).get("Authorization");
+    calls.push({ url: String(input), auth });
+    return Promise.resolve(new Response("x", { status: auth ? 200 : 403 }));
+  };
+
+  const fromResend = await downloadResendAttachment("https://cdn.resend.com/att/1?sig=a", "re_key", fetcher);
+  assertEquals(fromResend?.status, 200);
+  assertEquals(calls.map((c) => c.auth), [null, "Bearer re_key"]);
+
+  calls.length = 0;
+  const elsewhere = await downloadResendAttachment("https://evil.example/resend.com/att", "re_key", fetcher);
+  assertEquals(elsewhere?.status, 403);
+  assertEquals(calls.map((c) => c.auth), [null]);
+
+  calls.length = 0;
+  assertEquals(await downloadResendAttachment("http://cdn.resend.com/att/1", "re_key", fetcher), null);
+  assertEquals(await downloadResendAttachment("not a url", "re_key", fetcher), null);
+  assertEquals(calls, []);
+});
+
+Deno.test("the email id is encoded into the list URL", async () => {
+  const urls: string[] = [];
+  const fetcher = (input: string | URL | Request) => {
+    urls.push(String(input));
+    return Promise.resolve(new Response(JSON.stringify({ data: [] })));
+  };
+  await readResendAttachmentList("x/../../domains", "k", fetcher);
+  assertEquals(urls, ["https://api.resend.com/emails/receiving/x%2F..%2F..%2Fdomains/attachments"]);
 });
