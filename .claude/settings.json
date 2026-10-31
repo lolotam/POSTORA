@@ -28,6 +28,17 @@
           }
         ]
       }
+    ],
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node .claude/hooks/caveman-ultra.mjs",
+            "timeout": 10
+          }
+        ]
+      }
     ]
   }
 }
