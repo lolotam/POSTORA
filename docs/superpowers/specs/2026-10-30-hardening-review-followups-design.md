@@ -26,18 +26,21 @@ Line numbers are as of `aa8d21f`.
 
 ## Deploy order
 
-1. Apply `20261030090000_record_deferred_platform_post.sql` to production.
+1. Apply `20261030090000_record_deferred_platform_post.sql` and
+   `20261030150000_record_published_story.sql` to production.
 2. Merge; the Edge Functions Sync deploys `process-post`, `media-direct-upload`,
    `cloudinary-upload` and the shared modules.
 
-Step 1 must come first: the new `process-post` calls the function, and a deferred first run
-that cannot record its pending row is failed with "Safe to retry".
+Step 1 must come first: the new `process-post` calls both functions. A deferred first run
+that cannot record its pending row is failed with "Safe to retry", and a story that cannot be
+recorded is carried on the reel's pending row until it can.
 
 ## Residual
 
 - A user retrying an account whose reel gave up republishes its Instagram story.
-- Recording a story is retried once; if the first attempt committed but its answer was lost, the
-  retry writes a second story row.
+- Recording a story is retried once. A retry after a first attempt that committed but lost its
+  answer finds that row: `record_published_story` looks up and inserts in one call, under a
+  unique index on (post, account, story id), so a story never gets a second row.
 
 ## Round 2 — MergePilot on PR #302
 

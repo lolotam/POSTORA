@@ -4,6 +4,7 @@ import {
 } from "https://deno.land/std@0.224.0/assert/mod.ts";
 
 import { ComposioError } from "../_shared/composioClient.ts";
+import type { ComposioFileUploadInput } from "../_shared/composioFiles.ts";
 import {
   publishYouTubeViaComposio,
   YOUTUBE_COMPOSIO_MAX_BYTES,
@@ -101,7 +102,7 @@ const STAGED = { name: "short.mp4", mimetype: "video/mp4", s3key: "youtube/uploa
 /** Fakes for the two network edges plus the client; every call is recorded. */
 function harness(executeTool: (input: Record<string, unknown>) => Promise<unknown>) {
   const fetched: string[] = [];
-  const uploads: Array<Record<string, unknown>> = [];
+  const uploads: ComposioFileUploadInput[] = [];
   const executions: Array<Record<string, unknown>> = [];
   const deps = {
     client: {
@@ -115,7 +116,7 @@ function harness(executeTool: (input: Record<string, unknown>) => Promise<unknow
       fetched.push(String(url));
       return Promise.resolve(new Response(VIDEO_BYTES, { status: 200 }));
     }) as typeof fetch,
-    uploadFile: async (_client: unknown, input: Record<string, unknown>) => {
+    uploadFile: async (_client: unknown, input: ComposioFileUploadInput) => {
       uploads.push(input);
       return STAGED;
     },
