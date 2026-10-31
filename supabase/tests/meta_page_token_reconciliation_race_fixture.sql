@@ -237,6 +237,15 @@ DROP SEQUENCE IF EXISTS public.mpr_race_seq;
 -- outbox rows.
 DELETE FROM auth.users WHERE id = 'f4ac0001-0000-4000-8000-000000000001';
 
+-- The rollout fixture goes back to the default. The prepare step turned
+-- the collection on and a collection gate left open is not a thing this
+-- fixture may leave behind.
+DELETE FROM public.app_settings
+ WHERE key = 'collection_instagram_insights_enabled';
+UPDATE public.app_settings
+   SET value = '{"version":1,"owners":{"mode":"off","account_ids":[]},"competitors":{"mode":"off","targets":[]}}'::jsonb
+ WHERE key = 'collection_instagram_rollout_policy';
+
 COMMIT;
 \echo '=== meta_page_token_reconciliation race fixture: cleaned synthetic owner ==='
 \elif :{?observe}
@@ -787,6 +796,18 @@ BEGIN
         scopes_read_at = EXCLUDED.scopes_read_at;
 
   DELETE FROM public.instagram_collection_jobs WHERE user_id = v_user;
+
+  -- The rollout fixture. R1 (20261031090000) made the collection admission
+  -- a default-off gate, so the rehearsal needs an explicit synthetic
+  -- policy. The cleanup puts the default back.
+  INSERT INTO public.app_settings (key, value, description)
+  VALUES
+    ('collection_instagram_insights_enabled', 'true'::jsonb,
+     'Synthetic race-fixture master switch.'),
+    ('collection_instagram_rollout_policy',
+     '{"version":1,"owners":{"mode":"all","account_ids":[]},"competitors":{"mode":"all","targets":[]}}'::jsonb,
+     'Synthetic race-fixture rollout policy: every otherwise eligible target.')
+  ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value;
 
   PERFORM public.enqueue_instagram_collection_jobs_service(
     v_user,

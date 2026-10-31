@@ -32,7 +32,7 @@ import {
   parseUsagePercent,
   resolveGraphApiVersion,
 } from "./graphProvider.ts";
-import { CompetitorProviderError } from "./types.ts";
+import { CompetitorProviderError, CompetitorProviderPermitError } from "./types.ts";
 
 const VIEWER = "viewer_ig_123";
 const TOKEN = "EAAB_secret_token";
@@ -96,6 +96,142 @@ Deno.test("the request uses the documented business_discovery.username expansion
   assertEquals(fields.includes("media_product_type"), true);
   assertEquals(fields.includes("video_view_count"), false);
   assertEquals(url.searchParams.get("access_token"), TOKEN);
+});
+
+// ---------------------------------------------------------------------------
+// The per-request admission permit
+// ---------------------------------------------------------------------------
+
+Deno.test("the permit is asked before every attempt, including every retry", async () => {
+  let requests = 0;
+  let permits = 0;
+
+  const mockFetch = async () => {
+    requests += 1;
+    // The first attempt fails with a 500, so the retry policy runs.
+    if (requests === 1) {
+      return jsonResponse({}, { status: 500 });
+    }
+    return jsonResponse(targetPayload());
+  };
+
+  const provider = new GraphCompetitorProvider({ fetchFn: mockFetch as typeof fetch });
+  await provider.fetch({
+    username: "competitor_brand",
+    viewerIgUserId: VIEWER,
+    token: TOKEN,
+    signal: new AbortController().signal,
+    permit: async () => {
+      permits += 1;
+    },
+  });
+
+  // Every request that left the process asked for its own permit: the
+  // retry of the 500 and the cursor request of the second page each asked
+  // for their own.
+  assertEquals(requests >= 2, true);
+  assertEquals(permits, requests);
+});
+
+Deno.test("the permit is asked before every page, including the cursor request", async () => {
+  const seen: string[] = [];
+  let permits = 0;
+
+  const mockFetch = async (input: RequestInfo | URL) => {
+    const url = new URL(String(input));
+    const fields = url.searchParams.get("fields") ?? "";
+    seen.push(fields);
+
+    if (fields.includes("after(AFTER1)")) {
+      return jsonResponse(targetPayload({}, [{
+        id: "media_2",
+        media_type: "IMAGE",
+        media_product_type: "FEED",
+        timestamp: "2026-10-27T10:00:00Z",
+      }]));
+    }
+
+    return jsonResponse(targetPayload());
+  };
+
+  const provider = new GraphCompetitorProvider({ fetchFn: mockFetch as typeof fetch });
+  await provider.fetch({
+    username: "competitor_brand",
+    viewerIgUserId: VIEWER,
+    token: TOKEN,
+    signal: new AbortController().signal,
+    permit: async () => {
+      permits += 1;
+    },
+  });
+
+  // Two pages were requested, and each of them asked for its own permit.
+  assertEquals(seen.length, 2);
+  assertEquals(permits, 2);
+});
+
+Deno.test("a refused permit stops the request before it is sent", async () => {
+  let requests = 0;
+
+  const mockFetch = async () => {
+    requests += 1;
+    return jsonResponse(targetPayload());
+  };
+
+  const provider = new GraphCompetitorProvider({ fetchFn: mockFetch as typeof fetch });
+
+  let threw = false;
+  try {
+    await provider.fetch({
+      username: "competitor_brand",
+      viewerIgUserId: VIEWER,
+      token: TOKEN,
+      signal: new AbortController().signal,
+      permit: async () => {
+        throw new CompetitorProviderPermitError("refused", "collection_not_eligible");
+      },
+    });
+  } catch (error) {
+    threw = error instanceof CompetitorProviderPermitError;
+  }
+
+  assertEquals(threw, true);
+  // The first excluded request is never sent at all.
+  assertEquals(requests, 0);
+});
+
+Deno.test("a permit that fails in another way is unavailable, never permission", async () => {
+  let requests = 0;
+
+  const mockFetch = async () => {
+    requests += 1;
+    return jsonResponse(targetPayload());
+  };
+
+  const provider = new GraphCompetitorProvider({ fetchFn: mockFetch as typeof fetch });
+
+  let thrown: unknown = null;
+  try {
+    await provider.fetch({
+      username: "competitor_brand",
+      viewerIgUserId: VIEWER,
+      token: TOKEN,
+      signal: new AbortController().signal,
+      permit: async () => {
+        throw new Error("the gate did not answer");
+      },
+    });
+  } catch (error) {
+    thrown = error;
+  }
+
+  assertEquals(thrown instanceof CompetitorProviderPermitError, true);
+  assertEquals(
+    thrown instanceof CompetitorProviderPermitError &&
+      (thrown as CompetitorProviderPermitError).kind === "unavailable",
+    true,
+  );
+  assertEquals(requests, 0);
 });
 
 Deno.test("the cursor is rebuilt into a second request on the trusted host", async () => {

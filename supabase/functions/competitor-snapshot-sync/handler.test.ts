@@ -99,7 +99,9 @@ function buildDeps(probe: Probe): CompetitorSyncDeps {
       const receipt = probe.enqueueReceipt as {
         data: {
           accepted: boolean;
-          reason: string;
+          refused?: boolean;
+          reason?: string;
+          reason_code?: string;
           job_id?: string;
           job_generation?: number;
           status?: string;
@@ -109,15 +111,34 @@ function buildDeps(probe: Probe): CompetitorSyncDeps {
         error: unknown;
       };
       const row = receipt.data;
-      return {
+
+      if (row.refused === true) {
+        return {
+          kind: "refused",
+          projection: {
+            accepted: false,
+            refused: true,
+            reason_code: (row.reason_code ?? "collection_not_eligible") as
+              | "collection_not_eligible"
+              | "collection_disabled"
+              | "settings_unavailable",
+            captured_on: row.captured_on ?? "2026-10-29",
+          },
+        };
+      }
+
+      const projection = {
         accepted: row.accepted,
-        reason: row.reason,
+        reason: row.reason ?? "enqueued",
         jobId: row.job_id ?? null,
         jobGeneration: row.job_generation ?? null,
         status: row.status ?? null,
         capturedOn: row.captured_on ?? null,
         retryAfterSeconds: row.retry_after_seconds ?? null,
       };
+      return row.accepted
+        ? { kind: "accepted", projection }
+        : { kind: "throttled", projection };
     },
     async readCompetitorStatus(input) {
       probe.ownerCalls.push({
@@ -147,6 +168,26 @@ function buildDeps(probe: Probe): CompetitorSyncDeps {
         probe.serviceCalls.push({ name: "list_due_competitor_collection_targets", args: {} });
         return [];
       },
+      async enqueueDailyPage(input) {
+        probe.serviceCalls.push({
+          name: "enqueue_instagram_collection_daily_page",
+          args: { p_target_kind: "competitor", p_start: input.start },
+        });
+        return {
+          kind: "accepted",
+          receipt: {
+            targetKind: "competitor",
+            capturedOn: "2026-10-29",
+            sweepStatus: "completed",
+            enqueued: 0,
+            hasMore: false,
+            pageLimit: 50,
+            scanned: 0,
+            started: input.start,
+            resumed: !input.start,
+          },
+        };
+      },
       async enqueueService() {
         return { accepted: 0, results: [] };
       },
@@ -164,6 +205,12 @@ function buildDeps(probe: Probe): CompetitorSyncDeps {
       },
       async attachViewerContext() {
         throw new Error("not used");
+      },
+      async authorizeProviderCall() {
+        throw new Error("not used");
+      },
+      async auditAdmissionRefusal() {
+        return true;
       },
       async persistResult() {
         throw new Error("not used");
@@ -415,7 +462,7 @@ Deno.test("a failed collection setting read is unavailable", async () => {
   assertEquals(probe.ownerCalls.length, 0);
 });
 
-Deno.test("a legacy credential mode is refused and never falls back", async () => {
+Deno.test("a legacy credential mode is not a refusal: the rollout policy is the gate", async () => {
   const probe = newProbe();
   probe.settings.credential_facebook_user_mode = { data: { value: "legacy" }, error: null };
   const handler = createCompetitorSyncHandler(buildDeps(probe));
@@ -424,9 +471,70 @@ Deno.test("a legacy credential mode is refused and never falls back", async () =
     post({ mode: "entry", watchlist_id: WATCHLIST }, USER_TOKEN),
   );
 
+  // The global mode says WHERE a Facebook User secret is read from. It is
+  // still read and still validated, but it is not collection permission:
+  // the accepted SQL decides which watchlist entry may be collected for.
+  assertEquals(response.status, 202);
+  assertEquals(probe.ownerCalls.length, 1);
+  assertEquals(probe.settingReads.length, 2);
+});
+
+Deno.test("a malformed credential mode is unavailable and never off", async () => {
+  const probe = newProbe();
+  probe.settings.credential_facebook_user_mode = { data: { value: "maybe" }, error: null };
+  const handler = createCompetitorSyncHandler(buildDeps(probe));
+
+  const response = await handler(
+    post({ mode: "entry", watchlist_id: WATCHLIST }, USER_TOKEN),
+  );
+
   assertEquals(response.status, 503);
-  assertEquals((await response.json()).error, "protected_credentials_required");
+  assertEquals((await response.json()).error, "settings_unavailable");
   assertEquals(probe.ownerCalls.length, 0);
+});
+
+Deno.test("a rollout refusal is a 403 and never an enqueue", async () => {
+  const probe = newProbe();
+  probe.enqueueReceipt = {
+    data: {
+      accepted: false,
+      refused: true,
+      reason_code: "collection_not_eligible",
+      captured_on: "2026-10-29",
+    },
+    error: null,
+  };
+  const handler = createCompetitorSyncHandler(buildDeps(probe));
+
+  const response = await handler(
+    post({ mode: "entry", watchlist_id: WATCHLIST }, USER_TOKEN),
+  );
+
+  // The watchlist entry IS owned by the caller. The policy simply does not
+  // admit it yet, so the answer is one 403.
+  assertEquals(response.status, 403);
+  assertEquals((await response.json()).error, "collection_not_eligible");
+});
+
+Deno.test("an unavailable rollout configuration is a 503 and never a refusal", async () => {
+  const probe = newProbe();
+  probe.enqueueReceipt = {
+    data: {
+      accepted: false,
+      refused: true,
+      reason_code: "settings_unavailable",
+      captured_on: "2026-10-29",
+    },
+    error: null,
+  };
+  const handler = createCompetitorSyncHandler(buildDeps(probe));
+
+  const response = await handler(
+    post({ mode: "entry", watchlist_id: WATCHLIST }, USER_TOKEN),
+  );
+
+  assertEquals(response.status, 503);
+  assertEquals((await response.json()).error, "settings_unavailable");
 });
 
 Deno.test("a malformed request is refused", async () => {
@@ -630,4 +738,158 @@ Deno.test("the drain gets the request's work budget, not the five second depende
   // A run that had too little budget refuses to claim and reports stopping
   // early; a run with the real budget finishes the (empty) claim normally.
   assertEquals(payload.stoppedEarly, false);
+});
+
+// ---------------------------------------------------------------------------
+// The durable daily branch
+// ---------------------------------------------------------------------------
+
+Deno.test("the durable branch is a distinct schema branch", async () => {
+  const probe = newProbe();
+  const handler = createCompetitorSyncHandler(buildDeps(probe));
+
+  // The durable marker with a cursor, with a limit, or with a viewer is a
+  // malformed request, not a silently ignored field.
+  for (
+    const body of [
+      { mode: "enqueue-daily", dispatch: "durable", cursor: { due_at: "2026-10-29T00:00:00Z", id: WATCHLIST } },
+      { mode: "enqueue-daily", dispatch: "durable", limit: 10 },
+      { mode: "enqueue-daily", dispatch: "durable", watchlist_id: WATCHLIST },
+      { mode: "enqueue-daily", dispatch: "cursor" },
+      { mode: "enqueue-daily", dispatch: true },
+    ]
+  ) {
+    const response = await handler(post(body, CRON_SECRET));
+    assertEquals(response.status, 400, JSON.stringify(body));
+  }
+
+  assertEquals(
+    probe.serviceCalls.some((entry) =>
+      entry.name === "enqueue_instagram_collection_daily_page"
+    ),
+    false,
+  );
+});
+
+Deno.test("the durable branch starts the day and answers with its exact counters", async () => {
+  const probe = newProbe();
+  const handler = createCompetitorSyncHandler(buildDeps(probe));
+
+  const response = await handler(
+    post({ mode: "enqueue-daily", dispatch: "durable" }, CRON_SECRET),
+  );
+
+  assertEquals(response.status, 200);
+  assertEquals(await response.json(), {
+    mode: "enqueue-daily",
+    dispatch: "durable",
+    captured_on: "2026-10-29",
+    sweep_status: "completed",
+    enqueued: 0,
+    has_more: false,
+  });
+
+  const call = probe.serviceCalls.find((entry) =>
+    entry.name === "enqueue_instagram_collection_daily_page"
+  );
+  assert(call !== undefined, "the durable page was called");
+  assertEquals(call.args.p_target_kind, "competitor");
+  assertEquals(call.args.p_start, true);
+});
+
+Deno.test("the durable branch never walks the legacy due list", async () => {
+  const probe = newProbe();
+  const handler = createCompetitorSyncHandler(buildDeps(probe));
+
+  await handler(post({ mode: "enqueue-daily", dispatch: "durable" }, CRON_SECRET));
+
+  assertEquals(
+    probe.serviceCalls.some((entry) =>
+      entry.name === "list_due_competitor_collection_targets"
+    ),
+    false,
+    "the durable branch never reads the cursor-paged due list",
+  );
+});
+
+Deno.test("the legacy branch keeps its cursor and its limit", async () => {
+  const probe = newProbe();
+  const handler = createCompetitorSyncHandler(buildDeps(probe));
+
+  const response = await handler(
+    post({ mode: "enqueue-daily", limit: 25 }, CRON_SECRET),
+  );
+
+  assertEquals(response.status, 200);
+  const call = probe.serviceCalls.find((entry) =>
+    entry.name === "list_due_competitor_collection_targets"
+  );
+  assert(call !== undefined, "the legacy due read was called");
+  assertEquals(
+    probe.serviceCalls.some((entry) =>
+      entry.name === "enqueue_instagram_collection_daily_page"
+    ),
+    false,
+    "the legacy branch never reaches the durable statement",
+  );
+});
+
+Deno.test("a plain user is refused for the durable branch", async () => {
+  const probe = newProbe();
+  const handler = createCompetitorSyncHandler(buildDeps(probe));
+
+  const response = await handler(
+    post({ mode: "enqueue-daily", dispatch: "durable" }, USER_TOKEN),
+  );
+
+  assertEquals(response.status, 403);
+  assertEquals((await response.json()).error, "forbidden");
+  assertEquals(
+    probe.serviceCalls.some((entry) =>
+      entry.name === "enqueue_instagram_collection_daily_page"
+    ),
+    false,
+  );
+});
+
+Deno.test("a disabled collection refuses the durable branch before the statement", async () => {
+  const probe = newProbe();
+  probe.settings.collection_instagram_insights_enabled = { data: null, error: null };
+  const handler = createCompetitorSyncHandler(buildDeps(probe));
+
+  const response = await handler(
+    post({ mode: "enqueue-daily", dispatch: "durable" }, CRON_SECRET),
+  );
+
+  assertEquals(response.status, 503);
+  assertEquals((await response.json()).error, "collection_disabled");
+  assertEquals(
+    probe.serviceCalls.some((entry) =>
+      entry.name === "enqueue_instagram_collection_daily_page"
+    ),
+    false,
+  );
+});
+
+Deno.test("a durable page that does not answer is indeterminate, never a completion", async () => {
+  const probe = newProbe();
+  const handler = createCompetitorSyncHandler({
+    ...buildDeps(probe),
+    createServiceWorker: () => ({
+      ...buildDeps(probe).createServiceWorker(),
+      store: {
+        ...buildDeps(probe).createServiceWorker().store,
+        async enqueueDailyPage() {
+          throw new Error("the statement did not answer");
+        },
+      },
+    }),
+  });
+
+  const response = await handler(
+    post({ mode: "enqueue-daily", dispatch: "durable" }, CRON_SECRET),
+  );
+
+  assertEquals(response.status, 503);
+  assertEquals((await response.json()).error, "work_indeterminate");
 });

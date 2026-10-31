@@ -48,6 +48,7 @@ import type {
   OwnerStoreFailure,
   OwnerThrottleBucket,
   OwnerTarget,
+  ProviderPermitDecision,
   ResolvedOwnerCredential,
 } from "./workerStore.ts";
 import { OwnerWorkerStoreError } from "./workerStore.ts";
@@ -55,6 +56,7 @@ import {
   parseClaimedOwnerJob,
   type ClaimedOwnerJob,
   type DirectOwnerCredential,
+  type ProviderPermitRefusalReason,
 } from "./receipts.ts";
 
 /** The identifiers the doubles use. */
@@ -134,6 +136,17 @@ export interface RecordedStoreCalls {
   readonly mediaInventoryReads: Array<{ capturedOn: string; mediaIds: readonly string[] }>;
   /** The writes the database refused, and the job they refused. */
   readonly refusedWrites: Array<{ jobId: string; kind: string }>;
+  /**
+   * The admission permits the store was asked for.
+   *
+   * Every provider request asks for a FRESH permit, so this list grows with
+   * the number of requests and not with the number of jobs.
+   */
+  readonly permits: Array<{
+    readonly jobId: string;
+    readonly jobGeneration: number;
+    readonly outcome: "allowed" | "refused" | "unavailable";
+  }>;
 }
 
 /** The knobs of the store double. */
@@ -196,6 +209,34 @@ export interface FakeStoreOptions {
   };
   /** The operational token the direct reader answers with. */
   readonly directCredential?: Partial<DirectOwnerCredential>;
+  /**
+   * The admission gate of the account.
+   *
+   * `allowed` is the default: the permit is granted for every request. A
+   * `refused` permit is a policy refusal and the accepted SQL audited it.
+   * An `unavailable` permit is a gate that could not be read, and the
+   * exception-path audit is attempted in a separate bounded call.
+   */
+  readonly permit?:
+    | {
+      readonly outcome: "allowed";
+    }
+    | {
+      readonly outcome: "refused";
+      readonly reasonCode?: ProviderPermitRefusalReason;
+    }
+    | {
+      readonly outcome: "unavailable";
+      readonly reasonCode?: string;
+      readonly auditStored?: boolean;
+    };
+  /**
+   * The permits that are refused, counted from the first one.
+   *
+   * It is how a test refuses a permit BETWEEN two requests: the first N
+   * permits are granted and the next one is refused.
+   */
+  readonly refusePermitAfter?: number;
   /**
    * The media rows this capture day ALREADY stores, keyed by media id.
    *
@@ -330,6 +371,7 @@ export function createFakeStore(options: FakeStoreOptions & {
     directCredentialReads: [],
     mediaInventoryReads: [],
     refusedWrites: [],
+    permits: [],
   };
 
   /**
@@ -440,6 +482,7 @@ export function createFakeStore(options: FakeStoreOptions & {
         token: "the-secret-token",
         credentialId: TEST_CREDENTIAL_ID,
         capabilityGeneration: 7,
+        tokenExpiresAt: null,
         ...(account.credential ?? {}),
       };
     },
@@ -467,6 +510,76 @@ export function createFakeStore(options: FakeStoreOptions & {
         accessToken: "the-direct-token",
         tokenExpiresAt: null,
         ...(account.directCredential ?? {}),
+      };
+    },
+
+    async authorizeProviderCall(input): Promise<ProviderPermitDecision> {
+      // The permit belongs to the JOB, so the account it belongs to is the
+      // account the claim handed it out for.
+      const scope = jobScopes.get(input.jobId);
+      const account = scope === undefined ? options : accountOf(scope.socialAccountId);
+      const permit = account.permit ?? { outcome: "allowed" as const };
+
+      // The refusal counter is per JOB, so a test can refuse the permit
+      // between two requests of one job without touching another job.
+      const seen = calls.permits.filter((entry) => entry.jobId === input.jobId).length;
+      const refuseAfter = account.refusePermitAfter;
+
+      if (
+        permit.outcome === "allowed" &&
+        refuseAfter !== undefined &&
+        seen >= refuseAfter
+      ) {
+        calls.permits.push({
+          jobId: input.jobId,
+          jobGeneration: input.jobGeneration,
+          outcome: "refused",
+        });
+        return { kind: "refused", reasonCode: "collection_not_eligible" };
+      }
+
+      if (permit.outcome === "refused") {
+        calls.permits.push({
+          jobId: input.jobId,
+          jobGeneration: input.jobGeneration,
+          outcome: "refused",
+        });
+        return {
+          kind: "refused",
+          reasonCode: permit.reasonCode ?? "collection_not_eligible",
+        };
+      }
+
+      if (permit.outcome === "unavailable") {
+        calls.permits.push({
+          jobId: input.jobId,
+          jobGeneration: input.jobGeneration,
+          outcome: "unavailable",
+        });
+        return {
+          kind: "unavailable",
+          reasonCode: permit.reasonCode ?? "permit_read_failed",
+          auditStored: permit.auditStored ?? true,
+        };
+      }
+
+      calls.permits.push({
+        jobId: input.jobId,
+        jobGeneration: input.jobGeneration,
+        outcome: "allowed",
+      });
+      return {
+        kind: "allowed",
+        permit: {
+          allowed: true,
+          jobId: input.jobId,
+          targetKind: "owner",
+          targetId: input.jobId,
+          viewerSocialAccountId: input.jobId,
+          jobGeneration: input.jobGeneration,
+          credentialGeneration: 7,
+          policyFingerprint: null,
+        },
       };
     },
 
@@ -958,6 +1071,23 @@ export function createPersistingStore(options: PersistingStoreOptions): {
         token: "the-secret-token",
         credentialId: TEST_CREDENTIAL_ID,
         capabilityGeneration: credentialGeneration,
+        tokenExpiresAt: null,
+      };
+    },
+
+    async authorizeProviderCall(input): Promise<ProviderPermitDecision> {
+      return {
+        kind: "allowed",
+        permit: {
+          allowed: true,
+          jobId: input.jobId,
+          targetKind: "owner",
+          targetId: TEST_ACCOUNT_ID,
+          viewerSocialAccountId: TEST_ACCOUNT_ID,
+          jobGeneration: input.jobGeneration,
+          credentialGeneration,
+          policyFingerprint: null,
+        },
       };
     },
 

@@ -620,6 +620,156 @@ export function parseThrottleReceipt(
 }
 
 // ---------------------------------------------------------------------------
+// The provider permit
+// ---------------------------------------------------------------------------
+
+/**
+ * The exact key sets of the provider permit.
+ *
+ * The permit is a closed projection built by `jsonb_build_object`, so an
+ * extra key means a different deployment and a missing key means the answer
+ * is not the permit. Both are refused instead of being read loosely.
+ */
+const PROVIDER_PERMIT_ALLOWED_KEYS = [
+  "allowed",
+  "job_id",
+  "target_kind",
+  "target_id",
+  "viewer_social_account_id",
+  "job_generation",
+  "credential_generation",
+  "policy_fingerprint",
+] as const;
+
+const PROVIDER_PERMIT_REFUSED_KEYS = ["allowed", "reason_code"] as const;
+
+/**
+ * The refusal reasons the accepted SQL returns.
+ *
+ * The set is closed. An unknown reason is NOT a refusal this contract
+ * knows: it is unavailable, never permission. A reason that is not in this
+ * list can never turn into a provider request.
+ */
+export const PROVIDER_PERMIT_REFUSAL_REASONS = [
+  "invalid_request",
+  "job_not_found",
+  "claim_stale",
+  "credential_changed",
+  "target_inactive",
+  "context_missing",
+  "context_unusable",
+  "collection_not_eligible",
+  "collection_disabled",
+  "settings_unavailable",
+  "not_authorized",
+] as const;
+
+export type ProviderPermitRefusalReason =
+  (typeof PROVIDER_PERMIT_REFUSAL_REASONS)[number];
+
+export function isProviderPermitRefusalReason(
+  value: unknown,
+): value is ProviderPermitRefusalReason {
+  return typeof value === "string" &&
+    (PROVIDER_PERMIT_REFUSAL_REASONS as readonly string[]).includes(value);
+}
+
+/** The SHA-256 fingerprint of the policy document. Audit evidence only. */
+const POLICY_FINGERPRINT_PATTERN = /^[0-9a-f]{64}$/;
+
+/** A granted permit. */
+export interface AllowedProviderPermit {
+  readonly allowed: true;
+  readonly jobId: string;
+  readonly targetKind: string;
+  readonly targetId: string;
+  readonly viewerSocialAccountId: string | null;
+  readonly jobGeneration: number;
+  readonly credentialGeneration: number | null;
+  /** The server-computed policy fingerprint. It is never an authorization token. */
+  readonly policyFingerprint: string | null;
+}
+
+/** A refused permit. */
+export interface RefusedProviderPermit {
+  readonly allowed: false;
+  readonly reasonCode: ProviderPermitRefusalReason;
+}
+
+export type ProviderPermit = AllowedProviderPermit | RefusedProviderPermit;
+
+/**
+ * Parses the provider permit and binds it to the request.
+ *
+ * The permit must name the SAME job and the SAME generation the request
+ * asked for: a permit for another job is not evidence that THIS job may
+ * spend a provider call.
+ *
+ * A malformed answer, an extra key, a missing key, a mismatched identity
+ * and an unknown reason are ALL unavailable. None of them is permission.
+ */
+export function parseProviderPermit(
+  value: unknown,
+  request: {
+    readonly jobId: string;
+    readonly jobGeneration: number;
+  },
+): ProviderPermit | null {
+  if (!isPlainRecord(value)) return null;
+
+  const allowed = readOwnData(value, "allowed");
+  if (!allowed.present || typeof allowed.value !== "boolean") return null;
+
+  if (allowed.value === false) {
+    if (!hasExactKeys(value, PROVIDER_PERMIT_REFUSED_KEYS)) return null;
+    const reasonCode = readOwnData(value, "reason_code").value;
+    if (!isProviderPermitRefusalReason(reasonCode)) return null;
+    return { allowed: false, reasonCode };
+  }
+
+  if (!hasExactKeys(value, PROVIDER_PERMIT_ALLOWED_KEYS)) return null;
+
+  const jobId = readOwnData(value, "job_id").value;
+  if (!isUuidText(jobId) || !sameUuid(jobId, request.jobId)) return null;
+
+  const jobGeneration = readOwnData(value, "job_generation").value;
+  if (!isPositiveSafeInteger(jobGeneration)) return null;
+  if (jobGeneration !== request.jobGeneration) return null;
+
+  const targetKind = readOwnData(value, "target_kind").value;
+  if (targetKind !== "owner") return null;
+
+  const targetId = readOwnData(value, "target_id").value;
+  if (!isUuidText(targetId)) return null;
+
+  const viewer = readOwnData(value, "viewer_social_account_id").value;
+  if (viewer !== null && !isUuidText(viewer)) return null;
+
+  const credentialGeneration = readOwnData(value, "credential_generation").value;
+  if (credentialGeneration !== null && !isPositiveSafeInteger(credentialGeneration)) {
+    return null;
+  }
+
+  const fingerprint = readOwnData(value, "policy_fingerprint").value;
+  if (fingerprint !== null && !isPolicyFingerprint(fingerprint)) return null;
+
+  return {
+    allowed: true,
+    jobId: jobId.toLowerCase(),
+    targetKind,
+    targetId: targetId.toLowerCase(),
+    viewerSocialAccountId: viewer === null ? null : (viewer as string).toLowerCase(),
+    jobGeneration,
+    credentialGeneration: credentialGeneration as number | null,
+    policyFingerprint: fingerprint === null ? null : (fingerprint as string),
+  };
+}
+
+function isPolicyFingerprint(value: unknown): value is string {
+  return typeof value === "string" && POLICY_FINGERPRINT_PATTERN.test(value);
+}
+
+// ---------------------------------------------------------------------------
 // The direct credential
 // ---------------------------------------------------------------------------
 

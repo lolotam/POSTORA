@@ -35,6 +35,7 @@ import {
   CompetitorStoreError,
   createCompetitorServiceStore,
   type CompetitorRpcCaller,
+  type CompetitorServiceWritePort,
   type ServiceReadPort,
 } from "./store.ts";
 import type { CompetitorServiceStore } from "./store.ts";
@@ -53,12 +54,27 @@ const WATCHLIST = "c1000000-0000-4000-8000-000000000001";
 const JOB = "5c1b0003-0000-4000-8000-000000000003";
 const ACCOUNT = "a1000000-0000-4000-8000-000000000001";
 
+/**
+ * The write port of a test that does not exercise the exception-path audit.
+ *
+ * It reports that the row did NOT commit, so a refusal that is audited here
+ * is audited as failed - the fail-closed direction.
+ */
+const noWrites: CompetitorServiceWritePort = {
+  async insertSystemLog() {
+    return false;
+  },
+};
+
 interface Recorder {
   store: CompetitorServiceStore;
   readonly persisted: Array<Record<string, unknown>>;
   readonly throttles: Array<Record<string, unknown>>;
   readonly attaches: Array<Record<string, unknown>>;
+  readonly permits: Array<{ jobId: string; outcome: string }>;
   readonly logs: CompetitorWorkerLogEvent[];
+  /** Whether each daily page call STARTED (true) or RESUMED (false). */
+  readonly dailyPages: boolean[];
   claimedLimit: number | null;
 }
 
@@ -73,20 +89,41 @@ function fakeStore(options: {
   const persisted: Array<Record<string, unknown>> = [];
   const throttles: Array<Record<string, unknown>> = [];
   const attaches: Array<Record<string, unknown>> = [];
+  const permits: Array<{ jobId: string; outcome: string }> = [];
   const logs: CompetitorWorkerLogEvent[] = [];
+  const dailyPages: boolean[] = [];
 
   const recorder: Recorder = {
     store: {} as CompetitorServiceStore,
     persisted,
     throttles,
     attaches,
+    permits,
     logs,
+    dailyPages,
     claimedLimit: null,
   };
 
   const store: CompetitorServiceStore = {
     async listDueTargets() {
       return [];
+    },
+    async enqueueDailyPage(input) {
+      recorder.dailyPages.push(input.start);
+      return {
+        kind: "accepted",
+        receipt: {
+          targetKind: "competitor",
+          capturedOn: "2026-10-29",
+          sweepStatus: "completed",
+          enqueued: 0,
+          hasMore: false,
+          pageLimit: 50,
+          scanned: 0,
+          started: input.start,
+          resumed: !input.start,
+        },
+      };
     },
     async enqueueService() {
       return { accepted: 0, results: [] };
@@ -134,10 +171,32 @@ function fakeStore(options: {
     async attachViewerContext(input) {
       attaches.push({ ...input });
       return {
-        viewerSocialAccountId: input.viewerSocialAccountId,
-        credentialGeneration: options.attachedGeneration ?? 3,
-        loginKind: "page_linked",
+        kind: "attached",
+        context: {
+          viewerSocialAccountId: input.viewerSocialAccountId,
+          credentialGeneration: options.attachedGeneration ?? 3,
+          loginKind: "page_linked",
+        },
       };
+    },
+    async authorizeProviderCall() {
+      permits.push({ jobId: JOB, outcome: "allowed" });
+      return {
+        kind: "allowed",
+        permit: {
+          allowed: true,
+          jobId: JOB,
+          targetKind: "competitor",
+          targetId: WATCHLIST,
+          viewerSocialAccountId: ACCOUNT,
+          jobGeneration: 1,
+          credentialGeneration: 3,
+          policyFingerprint: null,
+        },
+      };
+    },
+    async auditAdmissionRefusal() {
+      return true;
     },
     async persistResult(input) {
       if (options.persistThrows) {
@@ -201,7 +260,14 @@ function provider(
   const adapter = {
     source: "official" as const,
     calls: 0,
-    async fetch(_request: CompetitorProviderRequest): Promise<CompetitorProviderResult> {
+    async fetch(request: CompetitorProviderRequest): Promise<CompetitorProviderResult> {
+      // The permit is asked immediately before the request leaves the
+      // process, exactly as the real adapter does it. A refused permit
+      // throws BEFORE the call is counted, because the request was never
+      // sent.
+      if (request.permit !== undefined) {
+        await request.permit(request.signal);
+      }
       adapter.calls += 1;
       return { capture, usagePercent, throttledUntil: null };
     },
@@ -879,6 +945,34 @@ Deno.test("the production path carries the coverage into the versioned write", a
         error: null,
       };
     }
+    if (name === "attach_instagram_collection_job_viewer_context") {
+      return {
+        data: {
+          job_id: JOB,
+          job_generation: 1,
+          viewer_social_account_id: ACCOUNT,
+          credential_generation: 3,
+          login_kind: "page_linked",
+          granted_scopes: ["instagram_manage_insights"],
+        },
+        error: null,
+      };
+    }
+    if (name === "authorize_instagram_collection_provider_call") {
+      return {
+        data: {
+          allowed: true,
+          job_id: JOB,
+          target_kind: "competitor",
+          target_id: WATCHLIST,
+          viewer_social_account_id: ACCOUNT,
+          job_generation: 1,
+          credential_generation: 3,
+          policy_fingerprint: null,
+        },
+        error: null,
+      };
+    }
     if (name === "persist_competitor_collection_result_v2") {
       return {
         data: {
@@ -959,7 +1053,7 @@ Deno.test("the production path carries the coverage into the versioned write", a
     },
   };
 
-  const store = createCompetitorServiceStore({ rpc, reads });
+  const store = createCompetitorServiceStore({ rpc, reads, writes: noWrites });
 
   const summary = await runCompetitorDrain(
     {
@@ -1018,4 +1112,58 @@ Deno.test("the production path refuses a receipt the coverage does not answer fo
   assertEquals(summary.completed, 0);
   assertEquals(summary.abandoned, 1);
   assertEquals(summary.jobs[0]!.reasonCode, "storage_error");
+});
+
+// ---------------------------------------------------------------------------
+// The daily enqueue resume
+// ---------------------------------------------------------------------------
+
+Deno.test("the drain resumes the daily sweep before it claims", async () => {
+  const recorder = fakeStore();
+  const adapter = provider();
+
+  await runCompetitorDrain(ports(recorder, adapter), {});
+
+  // The resume ran and it RESUMED: a drain tick never starts a sweep.
+  assertEquals(recorder.dailyPages, [false]);
+});
+
+Deno.test("a failed daily resume never fails the drain", async () => {
+  const recorder = fakeStore();
+  recorder.store.enqueueDailyPage = async () => {
+    throw new CompetitorStoreError("read_failed");
+  };
+  const adapter = provider();
+
+  const summary = await runCompetitorDrain(ports(recorder, adapter), {});
+
+  assertEquals(summary.claimed, 1);
+  const resumeLogs = recorder.logs.filter((event) =>
+    event.event === "competitor_daily_enqueue_resume"
+  );
+  assertEquals(resumeLogs.length, 1);
+  assertEquals(resumeLogs[0]!.outcome, "indeterminate");
+});
+
+Deno.test("a daily resume that is deferred leaves the sweep pending", async () => {
+  const recorder = fakeStore();
+  const adapter = provider();
+
+  // A budget that cannot hold the resume AND the write reserve behind it,
+  // but that can still hold the claim.
+  const summary = await runCompetitorDrain(ports(recorder, adapter), {});
+  assertEquals(recorder.dailyPages.length, 1);
+
+  const deferred = fakeStore();
+  const deferredPorts = { ...ports(deferred, adapter), budgetMs: 8_000 };
+  const deferredSummary = await runCompetitorDrain(deferredPorts, {});
+
+  assertEquals(deferred.dailyPages, [], "the statement must not be sent");
+  const resumeLogs = deferred.logs.filter((event) =>
+    event.event === "competitor_daily_enqueue_resume"
+  );
+  assertEquals(resumeLogs.length, 1);
+  assertEquals(resumeLogs[0]!.outcome, "deferred");
+  // The drain still claims: the deferred resume is not the drain's failure.
+  assertEquals(deferredSummary.claimed, 1);
 });

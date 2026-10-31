@@ -92,6 +92,8 @@ interface Harness {
   readonly graphCalls: string[];
   readonly graphUrls: string[];
   readonly logs: Array<Record<string, unknown>>;
+  /** Whether each daily page call STARTED (true) or RESUMED (false). */
+  readonly dailyPages: boolean[];
 }
 
 function createHarness(
@@ -100,6 +102,11 @@ function createHarness(
     readonly graph?: Parameters<typeof createFakeGraph>[0];
     readonly now?: () => number;
     readonly jobs?: number;
+    readonly daily?: {
+      readonly throws?: boolean;
+      readonly enqueued?: number;
+      readonly hasMore?: boolean;
+    };
   } = {},
 ): Harness {
   const { store, calls } = createFakeStore(options.store);
@@ -114,6 +121,7 @@ function createHarness(
 
   const logs: Array<Record<string, unknown>> = [];
   const jobs = Array.from({ length: options.jobs ?? 1 }, () => createClaimedJob());
+  const dailyPages: boolean[] = [];
 
   const ports: OwnerWorkerPorts = {
     store,
@@ -124,10 +132,35 @@ function createHarness(
     directProvider: new InstagramDirectGraphProvider({ fetchFn }),
     bucketKeyFor: async (credentialId) => await sha256Of(credentialId),
     now: options.now ?? fixedClock(),
+    dailyEnqueue: {
+      store: {
+        async enqueueDailyPage(input) {
+          dailyPages.push(input.start);
+          if (options.daily?.throws) {
+            throw new Error("the daily statement did not answer");
+          }
+          return {
+            kind: "accepted" as const,
+            receipt: {
+              targetKind: "owner" as const,
+              capturedOn: TEST_CAPTURED_ON,
+              sweepStatus: "pending" as const,
+              enqueued: options.daily?.enqueued ?? 3,
+              hasMore: options.daily?.hasMore ?? true,
+              pageLimit: 25,
+              scanned: 3,
+              started: false,
+              resumed: true,
+            },
+          };
+        },
+      },
+      log: (event) => logs.push({ ...event }),
+    },
     log: (event) => logs.push({ ...event }),
   };
 
-  return { ports, calls, graphCalls, graphUrls, logs };
+  return { ports, calls, graphCalls, graphUrls, logs, dailyPages };
 }
 
 async function sha256Of(value: string): Promise<string> {
@@ -1430,11 +1463,12 @@ Deno.test("boundedStep gives up on a step that ignores the abort", async () => {
 });
 
 Deno.test("an uncooperative claim abandons the run inside the budget", async () => {
-  // The claim is the first bounded step. The clock puts it 34 seconds into
-  // the run, so its window is one second.
+  // The clock reads: the budget start, the daily resume's budget gate, the
+  // resume's window and the claim. The claim is put 34 seconds into the
+  // run, so its window is one second.
   const harness = createHarness({
     store: { hangOn: "claim" },
-    now: scheduledClock([0, 34_000]),
+    now: scheduledClock([0, 100, 100, 34_000]),
   });
 
   const started = Date.now();
@@ -1447,12 +1481,13 @@ Deno.test("an uncooperative claim abandons the run inside the budget", async () 
 });
 
 Deno.test("an uncooperative read abandons the job to its lease", async () => {
-  // The clock reads: the budget start, the claim, the provider-call
-  // precondition, the job start and the target read. The read is put 34.8
-  // seconds into the run, so its window is two hundred milliseconds.
+  // The clock reads: the budget start, the daily resume's budget gate, the
+  // resume's window, the claim, the provider-call precondition, the job
+  // start and the target read. The read is put 34.8 seconds into the run,
+  // so its window is two hundred milliseconds.
   const harness = createHarness({
     store: { jobs: [createClaimedJob()], hangOn: "target" },
-    now: scheduledClock([0, 1_000, 2_000, 3_000, 34_800]),
+    now: scheduledClock([0, 100, 100, 1_000, 2_000, 3_000, 34_800]),
   });
 
   const started = Date.now();
@@ -1467,16 +1502,19 @@ Deno.test("an uncooperative read abandons the job to its lease", async () => {
 });
 
 Deno.test("an uncooperative provider call abandons the job to its lease", async () => {
-  // The clock reads: the budget start, the claim, the provider-call
-  // precondition, the job start, the target read, the capability read, the
-  // credential read, the bucket key, the bucket read, the provider-call
-  // precondition and the provider call. The provider call is put 34.8
-  // seconds into the run, so its window is two hundred milliseconds.
+  // The clock reads: the budget start, the daily resume's budget gate, the
+  // resume's window, the claim, the provider-call precondition, the job
+  // start, the target read, the capability read, the credential read, the
+  // bucket key, the bucket read, the provider-call precondition and the
+  // provider call. The provider call is put 34.8 seconds into the run, so
+  // its window is two hundred milliseconds.
   const harness = createHarness({
     store: { jobs: [createClaimedJob()] },
     graph: { hangOn: "profile" },
     now: scheduledClock([
       0,
+      100,
+      100,
       1_000,
       2_000,
       3_000,
@@ -1505,14 +1543,17 @@ Deno.test("an uncooperative provider call abandons the job to its lease", async 
 });
 
 Deno.test("an uncooperative write abandons the job to its lease", async () => {
-  // The clock reads: the budget start, the claim, the provider-call
-  // precondition, the job start, the three reads, the provider-call
-  // precondition, the provider call and the first write. The write is put
-  // 39.5 seconds into the run, so its window is half a second.
+  // The clock reads: the budget start, the daily resume's budget gate, the
+  // resume's window, the claim, the provider-call precondition, the job
+  // start, the three reads, the provider-call precondition, the provider
+  // call and the first write. The write is put 39.5 seconds into the run,
+  // so its window is half a second.
   const harness = createHarness({
     store: { jobs: [createClaimedJob()], hangOn: "snapshot" },
     now: scheduledClock([
       0,
+      100,
+      100,
       1_000,
       2_000,
       3_000,
@@ -1705,4 +1746,60 @@ Deno.test("the throttle window is the shared one", async () => {
     true,
   );
   assertEquals(THROTTLE_WINDOW_MS, 900_000);
+});
+
+// ---------------------------------------------------------------------------
+// The daily enqueue resume
+// ---------------------------------------------------------------------------
+
+Deno.test("the drain resumes the daily sweep before it claims", async () => {
+  const harness = createHarness({ store: { jobs: [createClaimedJob()] } });
+
+  const summary = await runOwnerDrain(harness.ports);
+
+  // The resume ran, it RESUMED (it never starts a sweep), and the drain
+  // still collected the work it claimed.
+  assertEquals(harness.dailyPages, [false]);
+  assertEquals(summary.claimed, 1);
+  assertEquals(summary.completed, 1);
+});
+
+Deno.test("a failed daily resume never fails the drain", async () => {
+  const harness = createHarness({
+    store: { jobs: [createClaimedJob()] },
+    daily: { throws: true },
+  });
+
+  const summary = await runOwnerDrain(harness.ports);
+
+  assertEquals(harness.dailyPages, [false]);
+  assertEquals(summary.claimed, 1);
+  assertEquals(summary.completed, 1);
+  // The failure is recorded, and nothing is invented about the sweep.
+  const resumeLogs = harness.logs.filter((event) =>
+    event.event === "owner_daily_enqueue_resume"
+  );
+  assertEquals(resumeLogs.length, 1);
+  assertEquals(resumeLogs[0]!.outcome, "indeterminate");
+});
+
+Deno.test("a daily resume that is deferred leaves the sweep pending", async () => {
+  // A budget that cannot hold the resume AND the write reserve behind it,
+  // but that can still hold the claim.
+  const harness = createHarness({ store: { jobs: [createClaimedJob()] } });
+  const ports: OwnerWorkerPorts = {
+    ...harness.ports,
+    budgetMs: 8_000,
+  };
+
+  const summary = await runOwnerDrain(ports);
+
+  assertEquals(harness.dailyPages, [], "the statement must not be sent");
+  const resumeLogs = harness.logs.filter((event) =>
+    event.event === "owner_daily_enqueue_resume"
+  );
+  assertEquals(resumeLogs.length, 1);
+  assertEquals(resumeLogs[0]!.outcome, "deferred");
+  // The drain still claims: the deferred resume is not the drain's failure.
+  assertEquals(summary.claimed, 1);
 });

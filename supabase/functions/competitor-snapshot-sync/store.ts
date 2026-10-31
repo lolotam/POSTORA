@@ -37,6 +37,31 @@
  *   selector refuses a candidate without one; the real credential is
  *   resolved separately, through the protected credential adapter, and it
  *   never passes through this projection.
+ *
+ * WHY THE ROLLOUT DECISION IS ASKED OF THE DATABASE
+ *
+ *   The accepted migration owns the admission: it decides which watchlist
+ *   may be collected for, which viewer is approved for it, and whether a
+ *   provider request may go out. This module is the ADAPTER of those
+ *   decisions, so it never decides membership itself and never reads a
+ *   policy list: it asks the job-scoped SQL and acts on the answer.
+ *
+ *   Two of those decisions are asked per job and one of them per request:
+ *
+ *     - the viewer attachment is the job-scoped decision that narrows the
+ *       candidate set to the eligible candidates, and it is asked BEFORE
+ *       the credential is resolved, so no token is read for a target the
+ *       policy does not admit;
+ *     - the provider permit is the per-request decision, and it is asked
+ *       again immediately before every request that leaves the process.
+ *
+ * WHY THE EXCEPTION-PATH AUDIT IS WRITTEN HERE
+ *
+ *   A refusal that RETURNS is audited by the accepted SQL in the same
+ *   committed transaction. A refusal that RAISES is not: the raise rolls
+ *   the audit row back. The attachment refuses by raising, so this module
+ *   writes that row in a separate bounded call after the rollback, and it
+ *   reports whether the row COMMITTED.
  */
 
 import {
@@ -49,24 +74,127 @@ import type { ViewerCandidate } from "../_shared/instagramDiscoveryViewer.ts";
 import {
   isPlainRecord,
   isThrottleReceipt,
+  parseDailyEnqueueOutcome,
   parseEnqueueReceipt,
+  parseEnqueueRefusal,
   parseOwnerStatus,
   parseCoverageResultReceipt,
+  parseProviderPermit,
   readOwnData,
+  type AllowedProviderPermit,
+  type ProviderPermitRefusalReason,
 } from "./receipts.ts";
 
 import type {
   AttachedViewerContext,
   ClaimedCompetitorJob,
+  CompetitorDailyEnqueueOutcome,
+  CompetitorEnqueueOutcome,
   CompetitorResultPayload,
   DueCompetitorTarget,
   DueTargetCursor,
-  EnqueueReceipt,
   OwnerStatusProjection,
   PersistResultReceipt,
   ResolvedViewerCredential,
   ThrottleBucketState,
 } from "./types.ts";
+
+/**
+ * The narrow write surface of the service client.
+ *
+ * The ONLY row this feature writes directly is the EXCEPTION-PATH audit
+ * row: a refusal the accepted SQL could not audit itself, because the
+ * statement raised and the raise rolled its audit row back. A refusal that
+ * RETURNS is audited by the accepted SQL in the same committed transaction
+ * and never comes through here.
+ */
+export interface CompetitorServiceWritePort {
+  /**
+   * Writes one sanitized audit row.
+   *
+   * It answers whether the row COMMITTED. A failed write is false, never a
+   * stored row, and the caller stops the work and reports the audit
+   * failure.
+   */
+  insertSystemLog(row: CompetitorSystemLogRow): Promise<boolean>;
+}
+
+/** One bounded, sanitized audit row. It never carries a token or a header. */
+export interface CompetitorSystemLogRow {
+  readonly source: string;
+  readonly category: string;
+  readonly level: string;
+  readonly message: string;
+  readonly userId: string | null;
+  readonly metadata: Record<string, unknown>;
+}
+
+/**
+ * The outcome of the per-request admission gate.
+ *
+ *   allowed      the permit was granted for THIS job, generation, target and
+ *                bound viewer.
+ *   refused      the database refused the call. Its own audit row committed
+ *                with the refusal, so nothing is written here.
+ *   unavailable  the permit could not be read at all, so the outcome is
+ *                UNKNOWN. The exception-path audit row is attempted in a
+ *                separate bounded call, and `auditStored` says whether it
+ *                committed.
+ */
+export type ProviderPermitDecision =
+  | { readonly kind: "allowed"; readonly permit: AllowedProviderPermit }
+  | { readonly kind: "refused"; readonly reasonCode: ProviderPermitRefusalReason }
+  | {
+    readonly kind: "unavailable";
+    readonly reasonCode: string;
+    readonly auditStored: boolean;
+  };
+
+/**
+ * The outcome of one viewer attachment.
+ *
+ * The attachment is the JOB-SCOPED admission decision: it proves that the
+ * target is admitted and that THIS viewer is the one the policy approves
+ * for it. Its refusals are distinct, because they lead to distinct
+ * outcomes:
+ *
+ *   not_approved             the policy does not approve this viewer for
+ *                            this target. The candidate is EXCLUDED from
+ *                            the eligible set and the next candidate is
+ *                            offered. It is a filter step, not a refusal
+ *                            of the work.
+ *   already_bound            this generation already carries another
+ *                            viewer. The candidate is excluded for the same
+ *                            reason.
+ *   target_not_eligible      the TARGET is not admitted. The work is
+ *                            refused and nothing is written.
+ *   configuration_unavailable the rollout configuration cannot be read, or
+ *                            the collection is disabled. The work is refused
+ *                            and the run stops: the outcome is unknown.
+ *   viewer_unusable          the viewer cannot perform a Business Discovery:
+ *                            it is inactive, it needs a reconnect, it has
+ *                            no readable capability, it is not page-linked
+ *                            or it holds no insights scope.
+ *   stale_claim              the lease or the generation moved on.
+ *   unavailable              the call could not be read at all.
+ *
+ * Every refusal that ends the work carries `auditStored`: the accepted SQL
+ * refuses by RAISING, so its own audit row did not commit, and this module
+ * wrote it in a separate bounded call.
+ */
+export type ViewerAttachDecision =
+  | { readonly kind: "attached"; readonly context: AttachedViewerContext }
+  | { readonly kind: "not_approved" }
+  | { readonly kind: "already_bound" }
+  | { readonly kind: "target_not_eligible"; readonly auditStored: boolean }
+  | { readonly kind: "configuration_unavailable"; readonly auditStored: boolean }
+  | { readonly kind: "viewer_unusable"; readonly auditStored: boolean }
+  | { readonly kind: "stale_claim"; readonly auditStored: boolean }
+  | {
+    readonly kind: "unavailable";
+    readonly reasonCode: string;
+    readonly auditStored: boolean;
+  };
 
 /** The tables this feature reads with the service role. */
 export type ServiceOwnedTable =
@@ -100,6 +228,7 @@ export interface ServiceReadPort {
 export type CompetitorRpcCaller = (
   functionName: string,
   args: Record<string, unknown>,
+  signal?: AbortSignal,
 ) => Promise<unknown>;
 
 /** The stable failure kinds of the store. */
@@ -186,10 +315,11 @@ async function callRpc(
   rpc: CompetitorRpcCaller,
   functionName: string,
   args: Record<string, unknown>,
+  signal?: AbortSignal,
 ): Promise<unknown> {
   let envelope: unknown;
   try {
-    envelope = await rpc(functionName, args);
+    envelope = await rpc(functionName, args, signal);
   } catch (error) {
     if (error instanceof CompetitorStoreError) throw error;
     throw new CompetitorStoreError("read_failed");
@@ -261,7 +391,7 @@ export interface CompetitorOwnerStore {
     readonly watchlistId: string;
     readonly mode: "normal" | "force";
     readonly signal?: AbortSignal;
-  }): Promise<EnqueueReceipt>;
+  }): Promise<CompetitorEnqueueOutcome>;
   readCompetitorStatus(input: {
     readonly watchlistId: string;
     readonly capturedOn: string | null;
@@ -278,12 +408,21 @@ export function createCompetitorOwnerStore(rpc: CompetitorRpcCaller): Competitor
         p_mode: input.mode,
       });
 
+      // A DEFINITE rollout refusal. The database resolved the owner and the
+      // target and then refused the target, so nothing was inserted and no
+      // throttle window was spent. It is a distinct outcome and it is never
+      // read as an accepted enqueue.
+      const refused = parseEnqueueRefusal(data);
+      if (refused !== null) return { kind: "refused", projection: refused };
+
       // A receipt that is not exactly an accepted projection is indeterminate:
       // the enqueue may or may not have happened, and it is never replaced by
       // a guess.
       const receipt = parseEnqueueReceipt(data, input.mode);
       if (receipt === null) throw new CompetitorStoreError("read_failed");
-      return receipt;
+      return receipt.accepted
+        ? { kind: "accepted", projection: receipt }
+        : { kind: "throttled", projection: receipt };
     },
 
     async readCompetitorStatus(input) {
@@ -312,6 +451,21 @@ export interface CompetitorServiceStore {
     readonly cursor: DueTargetCursor | null;
     readonly signal?: AbortSignal;
   }): Promise<DueCompetitorTarget[]>;
+  /**
+   * The DURABLE daily page.
+   *
+   * It is the second, distinct branch of the scheduled enqueue: the same
+   * accepted statement the owner dispatch uses, with the competitor
+   * population and the competitor page ceiling.
+   *
+   * `start` is true for the daily dispatcher and false for the resume a
+   * drain performs before it claims. A resume never starts a sweep, and
+   * neither branch ever walks the due list with a cursor.
+   */
+  enqueueDailyPage(input: {
+    readonly start: boolean;
+    readonly signal?: AbortSignal;
+  }): Promise<CompetitorDailyEnqueueOutcome>;
   enqueueService(input: {
     readonly ownerId: string;
     readonly watchlistIds: readonly string[];
@@ -341,7 +495,44 @@ export interface CompetitorServiceStore {
     readonly jobGeneration: number;
     readonly viewerSocialAccountId: string;
     readonly signal?: AbortSignal;
-  }): Promise<AttachedViewerContext>;
+  }): Promise<ViewerAttachDecision>;
+  /**
+   * The per-request admission permit.
+   *
+   * The database derives every identity from the LIVE fenced job, so this
+   * call names the job, its claim token and its generation and NOTHING
+   * else: it can never redirect the request to another owner, another
+   * target or another viewer.
+   *
+   * The answer is a typed decision. A refusal is a refusal, a permit that
+   * could not be read is UNAVAILABLE, and neither is ever permission.
+   */
+  authorizeProviderCall(input: {
+    readonly jobId: string;
+    readonly claimToken: string;
+    readonly jobGeneration: number;
+    readonly targetId: string;
+    readonly viewerSocialAccountId: string;
+    readonly signal?: AbortSignal;
+  }): Promise<ProviderPermitDecision>;
+  /**
+   * The EXCEPTION-PATH audit of a refusal the accepted SQL could not audit.
+   *
+   * The viewer attachment refuses by RAISING, so the row the accepted SQL
+   * would have written did not commit with the refusal. The caller uses
+   * this port for the refusal that ends the WORK - a target the policy
+   * does not admit, a configuration that cannot be read - and never for
+   * the per-candidate exclusions of the candidate restriction, which are
+   * excluded rows and not thousands of refusal events.
+   *
+   * It answers whether the row COMMITTED. A failed write is false, never a
+   * stored row, and the caller stops the work and reports the audit
+   * failure.
+   */
+  auditAdmissionRefusal(input: {
+    readonly jobId: string;
+    readonly reasonCode: string;
+  }): Promise<boolean>;
   persistResult(input: {
     readonly jobId: string;
     readonly claimToken: string;
@@ -367,6 +558,12 @@ export interface CompetitorServiceStore {
 export interface CompetitorServiceStoreDeps {
   readonly rpc: CompetitorRpcCaller;
   readonly reads: ServiceReadPort;
+  /**
+   * The narrow write surface. It is used for the EXCEPTION-PATH audit only:
+   * a refusal the accepted SQL could not audit itself, because the
+   * statement raised and the raise rolled its audit row back.
+   */
+  readonly writes: CompetitorServiceWritePort;
 }
 
 /**
@@ -381,6 +578,271 @@ export const SELECTOR_TOKEN_SENTINEL = "protected-credential-not-a-token";
 
 /** The insights scopes a viewer may hold. */
 const INSIGHTS_SCOPES = ["instagram_manage_insights", "instagram_business_manage_insights"];
+
+/**
+ * The refusal markers of the accepted SQL.
+ *
+ * The viewer attachment refuses by RAISING, and every one of its refusals
+ * carries the same SQLSTATE, so the SQLSTATE alone cannot tell a policy
+ * refusal from an unusable viewer. The marker at the start of the message is
+ * the only thing that distinguishes them, so it is matched against this
+ * CLOSED list and the message itself is never copied into a decision, a
+ * log, an error or a response.
+ */
+const ATTACH_REFUSAL_MARKERS = [
+  "IG_COLLECTION_VIEWER_NOT_APPROVED",
+  "IG_COLLECTION_VIEWER_ALREADY_BOUND",
+  "IG_COLLECTION_NOT_ELIGIBLE",
+  "IG_COLLECTION_DISABLED",
+  "IG_COLLECTION_SETTINGS_UNAVAILABLE",
+  "IG_COLLECTION_CLAIM_STALE",
+  "IG_COLLECTION_CREDENTIAL_CHANGED",
+  "IG_COLLECTION_VIEWER_NOT_OWNED",
+  "IG_COLLECTION_VIEWER_INACTIVE",
+  "IG_COLLECTION_VIEWER_NEEDS_REAUTH",
+  "IG_COLLECTION_VIEWER_CAPABILITY_MISSING",
+  "IG_COLLECTION_VIEWER_UNSUPPORTED_LOGIN",
+  "IG_COLLECTION_VIEWER_SCOPE_MISSING",
+  "IG_COLLECTION_TARGET_INACTIVE",
+  "IG_COLLECTION_JOB_NOT_FOUND",
+] as const;
+
+/**
+ * The refusal of one attachment, before it is turned into a decision.
+ *
+ * The two filter kinds are separate from the rest, because they exclude a
+ * CANDIDATE while the rest refuse the WORK.
+ */
+type AttachOutcome =
+  | { readonly kind: "attached"; readonly context: AttachedViewerContext }
+  | { readonly kind: "not_approved" }
+  | { readonly kind: "already_bound" }
+  | {
+    readonly kind: "target_not_eligible" | "configuration_unavailable" |
+      "viewer_unusable" | "stale_claim";
+    readonly reasonCode: string;
+  }
+  | { readonly kind: "unavailable"; readonly reasonCode: string };
+
+/**
+ * Reads the marker of a raised refusal.
+ *
+ * Only a marker of the closed list is returned, and only its NAME. The
+ * message never leaves this function.
+ */
+function readRefusalMarker(error: unknown): string | null {
+  if (!isPlainRecord(error)) return null;
+  const message = readOwnData(error, "message").value;
+  if (typeof message !== "string") return null;
+  for (const marker of ATTACH_REFUSAL_MARKERS) {
+    if (message.includes(`${marker}:`)) return marker;
+  }
+  return null;
+}
+
+/**
+ * Asks the database to attach the viewer and reads its answer.
+ *
+ * The call names the job, its claim, its generation and the ONE viewer it
+ * is about to bind. It never names an owner, and it never names a
+ * substitute: the database decides whether this viewer is the approved
+ * one.
+ */
+async function readAttachOutcome(
+  rpc: CompetitorRpcCaller,
+  input: {
+    readonly jobId: string;
+    readonly claimToken: string;
+    readonly jobGeneration: number;
+    readonly viewerSocialAccountId: string;
+  },
+): Promise<AttachOutcome> {
+  let envelope: unknown;
+  try {
+    envelope = await rpc("attach_instagram_collection_job_viewer_context", {
+      p_job_id: input.jobId,
+      p_claim_token: input.claimToken,
+      p_job_generation: input.jobGeneration,
+      p_viewer_social_account_id: input.viewerSocialAccountId,
+    });
+  } catch {
+    // A thrown transport failure never reached the accepted SQL, so the
+    // statement may or may not have run. It is a failure, never an approval.
+    return { kind: "unavailable", reasonCode: "attach_read_failed" };
+  }
+
+  if (!isPlainRecord(envelope)) {
+    return { kind: "unavailable", reasonCode: "malformed_envelope" };
+  }
+
+  const error = readOwnData(envelope, "error");
+  const data = readOwnData(envelope, "data");
+  if (!error.present || !data.present) {
+    return { kind: "unavailable", reasonCode: "malformed_envelope" };
+  }
+
+  if (error.value !== null) {
+    const marker = readRefusalMarker(error.value);
+    switch (marker) {
+      case "IG_COLLECTION_VIEWER_NOT_APPROVED":
+        return { kind: "not_approved" };
+      case "IG_COLLECTION_VIEWER_ALREADY_BOUND":
+        return { kind: "already_bound" };
+      case "IG_COLLECTION_NOT_ELIGIBLE":
+      case "IG_COLLECTION_TARGET_INACTIVE":
+        return { kind: "target_not_eligible", reasonCode: marker };
+      case "IG_COLLECTION_DISABLED":
+      case "IG_COLLECTION_SETTINGS_UNAVAILABLE":
+        return { kind: "configuration_unavailable", reasonCode: marker };
+      case "IG_COLLECTION_CLAIM_STALE":
+      case "IG_COLLECTION_CREDENTIAL_CHANGED":
+      case "IG_COLLECTION_JOB_NOT_FOUND":
+        return { kind: "stale_claim", reasonCode: marker };
+      case "IG_COLLECTION_VIEWER_NOT_OWNED":
+      case "IG_COLLECTION_VIEWER_INACTIVE":
+      case "IG_COLLECTION_VIEWER_NEEDS_REAUTH":
+      case "IG_COLLECTION_VIEWER_CAPABILITY_MISSING":
+      case "IG_COLLECTION_VIEWER_UNSUPPORTED_LOGIN":
+      case "IG_COLLECTION_VIEWER_SCOPE_MISSING":
+        return { kind: "viewer_unusable", reasonCode: marker };
+      default:
+        // An unknown refusal is UNAVAILABLE, never an approval and never a
+        // filter step.
+        return { kind: "unavailable", reasonCode: "attach_refused" };
+    }
+  }
+
+  if (!isPlainRecord(data.value)) {
+    return { kind: "unavailable", reasonCode: "malformed_envelope" };
+  }
+
+  const row = data.value;
+  const viewerSocialAccountId = readOwnData(row, "viewer_social_account_id").value;
+  const credentialGeneration = readOwnData(row, "credential_generation").value;
+  const loginKind = readOwnData(row, "login_kind").value;
+  if (
+    typeof viewerSocialAccountId !== "string" ||
+    typeof credentialGeneration !== "number" ||
+    !Number.isFinite(credentialGeneration) ||
+    typeof loginKind !== "string"
+  ) {
+    return { kind: "unavailable", reasonCode: "malformed_envelope" };
+  }
+
+  return {
+    kind: "attached",
+    context: {
+      viewerSocialAccountId,
+      credentialGeneration,
+      loginKind,
+    },
+  };
+}
+
+/**
+ * The permit call's envelope.
+ *
+ * A completed read is a plain record with an own `error` that is exactly
+ * null and an own `data`. Everything else - a missing field, a driver error,
+ * a thrown transport failure - is UNREADABLE: the outcome of the admission
+ * decision is unknown, and it is never permission.
+ */
+type PermitEnvelope =
+  | { readonly kind: "read"; readonly data: unknown }
+  | { readonly kind: "unreadable"; readonly reasonCode: string };
+
+/**
+ * Reads the permit call's envelope.
+ *
+ * Only the SQLSTATE is read, and only to tell a schema that is not deployed
+ * from an operational failure. The message is never copied.
+ */
+async function readPermitEnvelope(
+  rpc: CompetitorRpcCaller,
+  input: {
+    readonly jobId: string;
+    readonly claimToken: string;
+    readonly jobGeneration: number;
+  },
+): Promise<PermitEnvelope> {
+  let envelope: unknown;
+  try {
+    envelope = await rpc("authorize_instagram_collection_provider_call", {
+      p_job_id: input.jobId,
+      p_claim_token: input.claimToken,
+      p_job_generation: input.jobGeneration,
+    });
+  } catch {
+    // A thrown transport failure never reached the accepted SQL, so the
+    // statement may or may not have run. It is a failure, never a permit.
+    return { kind: "unreadable", reasonCode: "permit_read_failed" };
+  }
+
+  if (!isPlainRecord(envelope)) {
+    return { kind: "unreadable", reasonCode: "malformed_envelope" };
+  }
+
+  const error = readOwnData(envelope, "error");
+  const data = readOwnData(envelope, "data");
+  if (!error.present || !data.present) {
+    return { kind: "unreadable", reasonCode: "malformed_envelope" };
+  }
+
+  if (error.value !== null) {
+    const code = isPlainRecord(error.value)
+      ? readOwnData(error.value, "code").value
+      : undefined;
+    const sqlstate = typeof code === "string" ? code : null;
+    if (sqlstate === "PGRST202" || sqlstate === "42883") {
+      // The accepted migration is not deployed. The gate is unavailable, so
+      // it fails closed: no provider request is authorized without it.
+      return { kind: "unreadable", reasonCode: "schema_unavailable" };
+    }
+    return { kind: "unreadable", reasonCode: "permit_read_failed" };
+  }
+
+  return { kind: "read", data: data.value };
+}
+
+/**
+ * Writes the EXCEPTION-PATH audit row.
+ *
+ * The accepted SQL audits a NORMAL refusal in the same committed
+ * transaction. This row is for the refusal that never reached that audit:
+ * a refusal that RAISED, or a permit that could not be read at all. It is
+ * bounded and sanitized - an event, a reason code and the job id - and it
+ * never carries a token, a claim token, a policy list or provider text.
+ *
+ * It answers whether the row COMMITTED. A failed write is never reported as
+ * a stored row.
+ */
+async function auditRefusal(
+  writes: CompetitorServiceWritePort,
+  event: {
+    readonly event: string;
+    readonly reasonCode: string;
+    readonly jobId: string;
+    readonly action: string;
+  },
+): Promise<boolean> {
+  try {
+    return await writes.insertSystemLog({
+      source: "instagram-collection-rollout",
+      category: "database",
+      level: "warn",
+      message: "Instagram collection rollout refusal",
+      userId: null,
+      metadata: {
+        event: event.event,
+        reason_code: event.reasonCode,
+        job_id: event.jobId,
+        action: event.action,
+      },
+    });
+  } catch {
+    return false;
+  }
+}
 
 export function createCompetitorServiceStore(
   deps: CompetitorServiceStoreDeps,
@@ -406,6 +868,28 @@ export function createCompetitorServiceStore(
           dueAt: requireString(row, "due_at"),
         };
       });
+    },
+
+    async enqueueDailyPage(input) {
+      // The DURABLE branch. The call names the KIND and whether it starts
+      // or resumes the day; it never names an owner, a watchlist entry, a
+      // date, a limit or a cursor.
+      const data = await callRpc(
+        deps.rpc,
+        "enqueue_instagram_collection_daily_page",
+        {
+          p_target_kind: "competitor",
+          p_start: input.start,
+        },
+        input.signal,
+      );
+
+      // A receipt that is not exactly the documented projection is
+      // indeterminate: the statement may or may not have run, and it is
+      // never replaced by a guess.
+      const outcome = parseDailyEnqueueOutcome(data);
+      if (outcome === null) throw new CompetitorStoreError("read_failed");
+      return outcome;
     },
 
     async enqueueService(input) {
@@ -627,19 +1111,107 @@ export function createCompetitorServiceStore(
     },
 
     async attachViewerContext(input) {
-      const data = await callRpc(deps.rpc, "attach_instagram_collection_job_viewer_context", {
-        p_job_id: input.jobId,
-        p_claim_token: input.claimToken,
-        p_job_generation: input.jobGeneration,
-        p_viewer_social_account_id: input.viewerSocialAccountId,
+      // The attachment is the JOB-SCOPED admission decision. It refuses by
+      // raising, so its refusal is read from the marker the accepted SQL
+      // puts at the start of its own message - never from provider text and
+      // never from anything the caller supplied.
+      const outcome = await readAttachOutcome(deps.rpc, input);
+
+      if (outcome.kind === "attached") return outcome;
+
+      if (outcome.kind === "not_approved" || outcome.kind === "already_bound") {
+        // A filter step of the candidate restriction, not a refusal of the
+        // work. The candidate is excluded and the next one is offered.
+        return outcome;
+      }
+
+      // Every other refusal ends the work, and the accepted SQL's own audit
+      // row did not commit with it: the raise rolled it back. The row is
+      // written here, in a separate bounded call.
+      const auditStored = await auditRefusal(deps.writes, {
+        event: "collection_viewer_attach_refused",
+        reasonCode: outcome.reasonCode,
+        jobId: input.jobId,
+        action: "attach_viewer_context",
       });
 
-      const row = requireObject(data);
-      return {
-        viewerSocialAccountId: requireString(row, "viewer_social_account_id"),
-        credentialGeneration: requireNumber(row, "credential_generation"),
-        loginKind: requireString(row, "login_kind"),
-      };
+      switch (outcome.kind) {
+        case "target_not_eligible":
+          return { kind: "target_not_eligible", auditStored };
+        case "configuration_unavailable":
+          return { kind: "configuration_unavailable", auditStored };
+        case "viewer_unusable":
+          return { kind: "viewer_unusable", auditStored };
+        case "stale_claim":
+          return { kind: "stale_claim", auditStored };
+        default:
+          return {
+            kind: "unavailable",
+            reasonCode: outcome.reasonCode,
+            auditStored,
+          };
+      }
+    },
+
+    async authorizeProviderCall(input) {
+      const envelope = await readPermitEnvelope(deps.rpc, input);
+
+      if (envelope.kind === "unreadable") {
+        // The permit could not be read. The accepted SQL never saw this
+        // call, so IT could not audit it either: the row is written here, in
+        // a separate bounded call, and the answer says whether it committed.
+        const auditStored = await auditRefusal(deps.writes, {
+          event: "collection_provider_call_refused",
+          reasonCode: envelope.reasonCode,
+          jobId: input.jobId,
+          action: "authorize_provider_call",
+        });
+        return {
+          kind: "unavailable",
+          reasonCode: envelope.reasonCode,
+          auditStored,
+        };
+      }
+
+      const permit = parseProviderPermit(envelope.data, {
+        jobId: input.jobId,
+        jobGeneration: input.jobGeneration,
+        targetId: input.targetId,
+        viewerSocialAccountId: input.viewerSocialAccountId,
+      });
+
+      if (permit === null) {
+        // The answer is not the projection this contract knows. It is
+        // unavailable, never permission, and the refusal is audited here.
+        const auditStored = await auditRefusal(deps.writes, {
+          event: "collection_provider_call_refused",
+          reasonCode: "malformed_envelope",
+          jobId: input.jobId,
+          action: "authorize_provider_call",
+        });
+        return {
+          kind: "unavailable",
+          reasonCode: "malformed_envelope",
+          auditStored,
+        };
+      }
+
+      if (!permit.allowed) {
+        // The accepted SQL refused the call and audited it in the same
+        // committed transaction. Nothing is written here.
+        return { kind: "refused", reasonCode: permit.reasonCode };
+      }
+
+      return { kind: "allowed", permit };
+    },
+
+    async auditAdmissionRefusal(input) {
+      return await auditRefusal(deps.writes, {
+        event: "collection_admission_refused",
+        reasonCode: input.reasonCode,
+        jobId: input.jobId,
+        action: "resolve_eligible_viewer",
+      });
     },
 
     async persistResult(input) {

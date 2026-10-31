@@ -23,6 +23,7 @@ import {
   createCompetitorServiceStore,
   SELECTOR_TOKEN_SENTINEL,
   type CompetitorRpcCaller,
+  type CompetitorServiceWritePort,
   type ServiceOwnedTable,
   type ServiceReadPort,
 } from "./store.ts";
@@ -126,6 +127,34 @@ function readPort(
   return { reads, calls };
 }
 
+/**
+ * The write port of a test that does not exercise the exception-path audit.
+ *
+ * It reports that the row did NOT commit, exactly like a database that
+ * refuses the write. The refusals it produces are therefore audited as
+ * failed, which is the fail-closed direction.
+ */
+const noWrites: CompetitorServiceWritePort = {
+  async insertSystemLog() {
+    return false;
+  },
+};
+
+/** A write port that records every row and reports that it committed. */
+function recordingWrites(): {
+  readonly writes: CompetitorServiceWritePort;
+  readonly rows: Array<Record<string, unknown>>;
+} {
+  const rows: Array<Record<string, unknown>> = [];
+  const writes: CompetitorServiceWritePort = {
+    async insertSystemLog(row) {
+      rows.push({ ...row.metadata });
+      return true;
+    },
+  };
+  return { writes, rows };
+}
+
 Deno.test("the owner enqueue calls the accepted RPC with its parameter names", async () => {
   const { calls, rpc } = recorder();
   const rpcWithResult: CompetitorRpcCaller = async (name, args) => {
@@ -146,7 +175,7 @@ Deno.test("the owner enqueue calls the accepted RPC with its parameter names", a
   };
 
   const store = createCompetitorOwnerStore(rpcWithResult);
-  const receipt = await store.enqueueCompetitorJob({
+  const outcome = await store.enqueueCompetitorJob({
     watchlistId: "c1000000-0000-4000-8000-000000000001",
     mode: "force",
   });
@@ -155,10 +184,12 @@ Deno.test("the owner enqueue calls the accepted RPC with its parameter names", a
   assertEquals(calls[0]!.args.p_target_kind, "competitor");
   assertEquals(calls[0]!.args.p_target_id, "c1000000-0000-4000-8000-000000000001");
   assertEquals(calls[0]!.args.p_mode, "force");
-  assertEquals(receipt.accepted, true);
-  assertEquals(receipt.jobId, "5c1b0003-0000-4000-8000-000000000003");
-  assertEquals(receipt.jobGeneration, 2);
-  assert(receipt.capturedOn === "2026-10-29");
+  assertEquals(outcome.kind, "accepted");
+  if (outcome.kind !== "accepted") throw new Error("the enqueue was not accepted");
+  assertEquals(outcome.projection.accepted, true);
+  assertEquals(outcome.projection.jobId, "5c1b0003-0000-4000-8000-000000000003");
+  assertEquals(outcome.projection.jobGeneration, 2);
+  assert(outcome.projection.capturedOn === "2026-10-29");
 });
 
 Deno.test("a throttled enqueue is a typed receipt and not an error", async () => {
@@ -173,15 +204,66 @@ Deno.test("a throttled enqueue is a typed receipt and not an error", async () =>
   });
 
   const store = createCompetitorOwnerStore(rpc);
-  const receipt = await store.enqueueCompetitorJob({
+  const outcome = await store.enqueueCompetitorJob({
     watchlistId: "c1000000-0000-4000-8000-000000000001",
     mode: "normal",
   });
 
-  assertEquals(receipt.accepted, false);
-  assertEquals(receipt.reason, "throttled");
-  assertEquals(receipt.retryAfterSeconds, 421);
-  assertEquals(receipt.jobId, null);
+  assertEquals(outcome.kind, "throttled");
+  if (outcome.kind !== "throttled") throw new Error("the enqueue was not throttled");
+  assertEquals(outcome.projection.accepted, false);
+  assertEquals(outcome.projection.reason, "throttled");
+  assertEquals(outcome.projection.retryAfterSeconds, 421);
+  assertEquals(outcome.projection.jobId, null);
+});
+
+Deno.test("a rollout refusal is a refusal and never an accepted enqueue", async () => {
+  const rpc: CompetitorRpcCaller = async () => ({
+    data: {
+      accepted: false,
+      refused: true,
+      reason_code: "collection_not_eligible",
+      captured_on: "2026-10-29",
+    },
+    error: null,
+  });
+
+  const store = createCompetitorOwnerStore(rpc);
+  const outcome = await store.enqueueCompetitorJob({
+    watchlistId: "c1000000-0000-4000-8000-000000000001",
+    mode: "normal",
+  });
+
+  assertEquals(outcome.kind, "refused");
+  if (outcome.kind !== "refused") throw new Error("the enqueue was not refused");
+  assertEquals(outcome.projection.refused, true);
+  assertEquals(outcome.projection.reason_code, "collection_not_eligible");
+  assertEquals(outcome.projection.captured_on, "2026-10-29");
+});
+
+Deno.test("a refusal with an unknown reason code is indeterminate, never a refusal", async () => {
+  const rpc: CompetitorRpcCaller = async () => ({
+    data: {
+      accepted: false,
+      refused: true,
+      reason_code: "something_else",
+      captured_on: "2026-10-29",
+    },
+    error: null,
+  });
+
+  const store = createCompetitorOwnerStore(rpc);
+
+  let threw = false;
+  try {
+    await store.enqueueCompetitorJob({
+      watchlistId: "c1000000-0000-4000-8000-000000000001",
+      mode: "normal",
+    });
+  } catch (error) {
+    threw = error instanceof CompetitorStoreError;
+  }
+  assertEquals(threw, true);
 });
 
 Deno.test("the owner status calls the accepted RPC with its parameter names", async () => {
@@ -253,7 +335,7 @@ Deno.test("the service RPCs are called with the accepted parameter names", async
   };
 
   const { reads } = readPort();
-  const store = createCompetitorServiceStore({ rpc: routed, reads });
+  const store = createCompetitorServiceStore({ rpc: routed, reads, writes: noWrites });
 
   await store.listDueTargets({
     limit: 50,
@@ -493,6 +575,7 @@ Deno.test("the viewer projection keeps only the trusted page-linked accounts", a
   const store = createCompetitorServiceStore({
     rpc: async () => ({ data: null, error: null }),
     reads,
+    writes: noWrites,
   });
 
   const candidates = await store.listViewerCandidates({ userId: "u1" });
@@ -563,7 +646,7 @@ Deno.test("the protected credential is resolved with the generation that came wi
   };
 
   const { reads } = readPort();
-  const store = createCompetitorServiceStore({ rpc, reads });
+  const store = createCompetitorServiceStore({ rpc, reads, writes: noWrites });
 
   const credential = await store.resolveViewerCredential({
     userId: "u1",
@@ -618,7 +701,7 @@ Deno.test("a credential generation that moved between the reads is refused", asy
   };
 
   const { reads } = readPort();
-  const store = createCompetitorServiceStore({ rpc, reads });
+  const store = createCompetitorServiceStore({ rpc, reads, writes: noWrites });
 
   const error = await assertRejects(
     () => store.resolveViewerCredential({ userId: "u1", socialAccountId: "acc-page" }),
@@ -670,7 +753,7 @@ Deno.test("a direct login account is refused as a viewer credential", async () =
   };
 
   const { reads } = readPort();
-  const store = createCompetitorServiceStore({ rpc, reads });
+  const store = createCompetitorServiceStore({ rpc, reads, writes: noWrites });
 
   const error = await assertRejects(
     () => store.resolveViewerCredential({ userId: "u1", socialAccountId: "acc-direct" }),
@@ -698,7 +781,7 @@ Deno.test("an account with no protected credential is not an empty token", async
   });
 
   const { reads } = readPort();
-  const store = createCompetitorServiceStore({ rpc, reads });
+  const store = createCompetitorServiceStore({ rpc, reads, writes: noWrites });
 
   const error = await assertRejects(
     () => store.resolveViewerCredential({ userId: "u1", socialAccountId: "acc-page" }),
@@ -720,6 +803,7 @@ Deno.test("the throttle bucket read returns the shared state or nothing", async 
   const store = createCompetitorServiceStore({
     rpc: async () => ({ data: null, error: null }),
     reads,
+    writes: noWrites,
   });
 
   const bucket = await store.readThrottleBucket({ bucketKey: "k" });
@@ -730,6 +814,7 @@ Deno.test("the throttle bucket read returns the shared state or nothing", async 
   const emptyStore = createCompetitorServiceStore({
     rpc: async () => ({ data: null, error: null }),
     reads: emptyReads,
+    writes: noWrites,
   });
   assertEquals(await emptyStore.readThrottleBucket({ bucketKey: "k" }), null);
 });
@@ -745,6 +830,7 @@ Deno.test("a failed read is never an empty result", async () => {
         return { data: [], error: { code: "42501" } };
       },
     },
+    writes: noWrites,
   });
 
   const error = await assertRejects(
@@ -836,7 +922,7 @@ Deno.test("a result receipt that disagrees with the request is not success", asy
   ];
   for (const data of variants) {
     const { reads } = readPort();
-    const store = createCompetitorServiceStore({ rpc: async () => ({ data, error: null }), reads });
+    const store = createCompetitorServiceStore({ rpc: async () => ({ data, error: null }), reads, writes: noWrites });
     assertEquals(
       await storeFailure(() =>
         store.persistResult({ jobId: JOB_ID, claimToken: "t", jobGeneration: 1, payload: V2_PAYLOAD })
@@ -849,6 +935,7 @@ Deno.test("a result receipt that disagrees with the request is not success", asy
   const store = createCompetitorServiceStore({
     rpc: async () => ({ data: V2_RECEIPT, error: null }),
     reads,
+    writes: noWrites,
   });
   const receipt = await store.persistResult({
     jobId: JOB_ID,
@@ -877,7 +964,7 @@ Deno.test("a v1 receipt is never read as a versioned success", async () => {
   };
 
   const { reads } = readPort();
-  const store = createCompetitorServiceStore({ rpc: async () => ({ data: v1, error: null }), reads });
+  const store = createCompetitorServiceStore({ rpc: async () => ({ data: v1, error: null }), reads, writes: noWrites });
   assertEquals(
     await storeFailure(() =>
       store.persistResult({ jobId: JOB_ID, claimToken: "t", jobGeneration: 1, payload: V2_PAYLOAD })
@@ -900,6 +987,7 @@ Deno.test("the coverage instants are compared as instants, not as text", async (
   const store = createCompetitorServiceStore({
     rpc: async () => ({ data: { ...V2_RECEIPT, coverage: sameInstant }, error: null }),
     reads,
+    writes: noWrites,
   });
   const receipt = await store.persistResult({
     jobId: JOB_ID,
@@ -917,6 +1005,7 @@ Deno.test("the coverage instants are compared as instants, not as text", async (
   const other = createCompetitorServiceStore({
     rpc: async () => ({ data: { ...V2_RECEIPT, coverage: oneSecondOff }, error: null }),
     reads: otherReads,
+    writes: noWrites,
   });
   assertEquals(
     await storeFailure(() =>
@@ -958,6 +1047,7 @@ Deno.test("a receipt whose stored coverage disagrees with the request is not suc
     const store = createCompetitorServiceStore({
       rpc: async () => ({ data: { ...V2_RECEIPT, coverage }, error: null }),
       reads,
+      writes: noWrites,
     });
     assertEquals(
       await storeFailure(() =>
@@ -971,7 +1061,7 @@ Deno.test("a receipt whose stored coverage disagrees with the request is not suc
 Deno.test("a null or partial throttle receipt is not proof the backoff was stored", async () => {
   for (const data of [null, {}, { bucket_key: "k", usage_percent: 10, throttled_until: null }]) {
     const { reads } = readPort();
-    const store = createCompetitorServiceStore({ rpc: async () => ({ data, error: null }), reads });
+    const store = createCompetitorServiceStore({ rpc: async () => ({ data, error: null }), reads, writes: noWrites });
     assertEquals(
       await storeFailure(() =>
         store.recordThrottle({ bucketKey: "k", usagePercent: 10, throttledUntil: null })
@@ -986,6 +1076,7 @@ Deno.test("a null or partial throttle receipt is not proof the backoff was store
       error: null,
     }),
     reads,
+    writes: noWrites,
   });
   // A global receipt does not answer for a job-scoped park.
   assertEquals(
@@ -1020,3 +1111,117 @@ function noJobStatus(): Record<string, unknown> {
     inventory: INVENTORY,
   };
 }
+
+// ---------------------------------------------------------------------------
+// The durable daily page
+// ---------------------------------------------------------------------------
+
+Deno.test("the durable page names the kind and the start marker, and nothing else", async () => {
+  const calls: Array<{ name: string; args: Record<string, unknown> }> = [];
+  const routed: CompetitorRpcCaller = async (name, args) => {
+    calls.push({ name, args });
+    return {
+      data: {
+        accepted: true,
+        target_kind: "competitor",
+        captured_on: "2026-10-29",
+        sweep_status: "pending",
+        enqueued: 50,
+        has_more: true,
+        page_limit: 50,
+        scanned: 50,
+        started: true,
+        resumed: false,
+      },
+      error: null,
+    };
+  };
+
+  const { reads } = readPort();
+  const store = createCompetitorServiceStore({ rpc: routed, reads, writes: noWrites });
+
+  const outcome = await store.enqueueDailyPage({ start: true });
+
+  assertEquals(calls.length, 1);
+  assertEquals(calls[0]!.name, "enqueue_instagram_collection_daily_page");
+  assertEquals(calls[0]!.args, {
+    p_target_kind: "competitor",
+    p_start: true,
+  });
+
+  assertEquals(outcome.kind, "accepted");
+  if (outcome.kind !== "accepted") return;
+  assertEquals(outcome.receipt.targetKind, "competitor");
+  assertEquals(outcome.receipt.capturedOn, "2026-10-29");
+  assertEquals(outcome.receipt.sweepStatus, "pending");
+  assertEquals(outcome.receipt.enqueued, 50);
+  assertEquals(outcome.receipt.hasMore, true);
+  assertEquals(outcome.receipt.pageLimit, 50);
+  assertEquals(outcome.receipt.scanned, 50);
+  assertEquals(outcome.receipt.started, true);
+  assertEquals(outcome.receipt.resumed, false);
+});
+
+Deno.test("a refusal of the configuration is a decision, not a failure", async () => {
+  const routed: CompetitorRpcCaller = async () => ({
+    data: {
+      accepted: false,
+      refused: true,
+      reason_code: "collection_disabled",
+      target_kind: "competitor",
+      captured_on: "2026-10-29",
+    },
+    error: null,
+  });
+
+  const { reads } = readPort();
+  const store = createCompetitorServiceStore({ rpc: routed, reads, writes: noWrites });
+
+  const outcome = await store.enqueueDailyPage({ start: false });
+
+  assertEquals(outcome.kind, "refused");
+  if (outcome.kind !== "refused") return;
+  assertEquals(outcome.reason, "collection_disabled");
+});
+
+Deno.test("a receipt that is not the documented projection is a failure", async () => {
+  const cases: unknown[] = [
+    { accepted: true, target_kind: "owner", captured_on: "2026-10-29", sweep_status: "pending", enqueued: 1, has_more: true, page_limit: 50, scanned: 1, started: true, resumed: false },
+    { accepted: true, target_kind: "competitor", captured_on: "2026-10-29", sweep_status: "unknown", enqueued: 1, has_more: true, page_limit: 50, scanned: 1, started: true, resumed: false },
+    { accepted: true, target_kind: "competitor", captured_on: "2026-10-29", sweep_status: "pending", enqueued: 1, has_more: true, page_limit: 25, scanned: 1, started: true, resumed: false },
+    { accepted: true, target_kind: "competitor", captured_on: "2026-10-29", sweep_status: "pending", enqueued: 1, has_more: true, page_limit: 50, scanned: 51, started: true, resumed: false },
+    { accepted: true, target_kind: "competitor", captured_on: "2026-10-29", sweep_status: "pending", enqueued: 1, has_more: true, page_limit: 50, scanned: 1, started: true, resumed: true },
+    { accepted: true, target_kind: "competitor", captured_on: "2026-10-29", sweep_status: "completed", enqueued: 1, has_more: true, page_limit: 50, scanned: 1, started: true, resumed: false },
+    { accepted: true, target_kind: "competitor", captured_on: "2026-10-29", sweep_status: "pending", enqueued: 1, has_more: true, page_limit: 50, scanned: 1, started: true, resumed: false, lease_token: "x" },
+    { accepted: false, refused: true, reason_code: "collection_not_eligible", target_kind: "competitor", captured_on: "2026-10-29" },
+    "not-a-receipt",
+  ];
+
+  for (const data of cases) {
+    const routed: CompetitorRpcCaller = async () => ({ data, error: null });
+    const { reads } = readPort();
+    const store = createCompetitorServiceStore({ rpc: routed, reads, writes: noWrites });
+
+    const error = await assertRejects(
+      () => store.enqueueDailyPage({ start: true }),
+      CompetitorStoreError,
+    );
+    assertEquals(error.failure, "read_failed", JSON.stringify(data));
+  }
+});
+
+Deno.test("a missing function is unavailable, never a completion", async () => {
+  const routed: CompetitorRpcCaller = async () => ({
+    data: null,
+    error: { code: "PGRST202", message: "the function is not deployed" },
+  });
+
+  const { reads } = readPort();
+  const store = createCompetitorServiceStore({ rpc: routed, reads, writes: noWrites });
+
+  const error = await assertRejects(
+    () => store.enqueueDailyPage({ start: true }),
+    CompetitorStoreError,
+  );
+  assertEquals(error.failure, "schema_unavailable");
+});

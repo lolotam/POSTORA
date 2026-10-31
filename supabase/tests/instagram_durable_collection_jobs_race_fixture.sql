@@ -139,6 +139,16 @@ END
 $cleanup_roles$;
 DELETE FROM auth.users
  WHERE id = '0a0a0a0a-0a0a-4a0a-8a0a-0a0a0a0a0a0a';
+
+-- The rollout fixture goes back to the default. The prepare step turned
+-- the collection on and a collection gate left open is not a thing this
+-- fixture may leave behind.
+DELETE FROM public.app_settings
+ WHERE key = 'collection_instagram_insights_enabled';
+UPDATE public.app_settings
+   SET value = '{"version":1,"owners":{"mode":"off","account_ids":[]},"competitors":{"mode":"off","targets":[]}}'::jsonb
+ WHERE key = 'collection_instagram_rollout_policy';
+
 COMMIT;
 \echo '=== instagram_durable_collection_jobs race fixture: cleaned synthetic owner ==='
 \elif :{?probe}
@@ -556,6 +566,18 @@ SELECT set_config('request.jwt.claim.sub', '', true);
 
 DELETE FROM public.instagram_collection_jobs
  WHERE user_id = '0a0a0a0a-0a0a-4a0a-8a0a-0a0a0a0a0a0a';
+
+-- The rollout fixture. R1 (20261031090000) made the collection admission
+-- a default-off gate, so the rehearsal needs an explicit synthetic policy
+-- that admits the synthetic owner. The cleanup puts the default back.
+INSERT INTO public.app_settings (key, value, description)
+VALUES
+  ('collection_instagram_insights_enabled', 'true'::jsonb,
+   'Synthetic race-fixture master switch.'),
+  ('collection_instagram_rollout_policy',
+   '{"version":1,"owners":{"mode":"all","account_ids":[]},"competitors":{"mode":"all","targets":[]}}'::jsonb,
+   'Synthetic race-fixture rollout policy: every otherwise eligible target.')
+ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value;
 
 SELECT public.enqueue_instagram_collection_jobs_service(
   '0a0a0a0a-0a0a-4a0a-8a0a-0a0a0a0a0a0a',

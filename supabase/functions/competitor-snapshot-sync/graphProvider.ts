@@ -68,15 +68,37 @@
 
 import {
   CompetitorProviderError,
+  CompetitorProviderPermitError,
   oldestPublishedAt,
   type CompetitorCoverageGapReason,
   type CompetitorMediaItem,
   type CompetitorProfileObservation,
   type CompetitorProvider,
+  type CompetitorProviderPermit,
   type CompetitorProviderRequest,
   type CompetitorProviderResult,
   type CompetitorSource,
 } from "./types.ts";
+
+/**
+ * Asks the permit for one request.
+ *
+ * A refusal leaves here unchanged, so the caller can tell a refused target
+ * from a failed credential. A permit that fails in any other way is
+ * UNAVAILABLE: the outcome of the admission decision is unknown, and an
+ * unknown outcome is never permission.
+ */
+async function askPermit(
+  permit: CompetitorProviderPermit,
+  signal: AbortSignal,
+): Promise<void> {
+  try {
+    await permit(signal);
+  } catch (error) {
+    if (error instanceof CompetitorProviderPermitError) throw error;
+    throw new CompetitorProviderPermitError("unavailable", "permit_failed");
+  }
+}
 
 /** The one host this module ever talks to. */
 const GRAPH_HOST = "https://graph.facebook.com";
@@ -987,6 +1009,13 @@ export class GraphCompetitorProvider implements CompetitorProvider {
    * while the caller's deadline allows it. A rejected credential, a refused
    * permission, a malformed response and a successful response are never
    * retried.
+   *
+   * The PERMIT is asked before EVERY attempt, never once per call: a retry
+   * is a new request and it needs a new authorization. Because the page
+   * walk asks this method once per page, the cursor request of the second
+   * page is guarded as well. A refused or failed permit is NOT retried and
+   * NOT converted into a provider failure - it leaves this method
+   * immediately, so no request is sent.
    */
   async #attempt(
     request: CompetitorProviderRequest,
@@ -1008,9 +1037,20 @@ export class GraphCompetitorProvider implements CompetitorProvider {
         );
       }
 
+      // THE AUTHORIZATION INSTANT. The last decision before the request
+      // goes out, asked again for every retry and every page.
+      if (request.permit !== undefined) {
+        await askPermit(request.permit, request.signal);
+      }
+
       try {
         return await this.#fetchOnce(request, handle, cursor);
       } catch (error) {
+        if (error instanceof CompetitorProviderPermitError) {
+          // The request was not authorized. It leaves here unchanged: it is
+          // not a provider failure and it is never retried.
+          throw error;
+        }
         if (error instanceof CompetitorProviderError) {
           if (!error.retryable || attempt === 2) throw error;
           lastError = error;

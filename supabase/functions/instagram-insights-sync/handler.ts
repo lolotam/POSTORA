@@ -41,6 +41,15 @@
  *   gates change no setting: disabling collection never moves an account
  *   back to legacy credentials.
  *
+ * WHY THE CREDENTIAL MODE IS NOT COLLECTION PERMISSION
+ *
+ *   The global credential mode says WHERE a Facebook User secret is read
+ *   from. It does not say WHICH accounts may be collected for: that is the
+ *   rollout policy, and the accepted SQL decides it per account, per target
+ *   and per request. So the mode is still READ and still VALIDATED here -
+ *   a malformed or unreadable mode is still unavailable - but a readable
+ *   `legacy` mode is no longer a refusal.
+ *
  * ONE DEADLINE
  *
  *   The whole operation has fifteen seconds, counted from before the body
@@ -83,6 +92,10 @@ import {
   WORKER_TOTAL_BUDGET_MS,
   type OwnerWorkerPorts,
 } from "./worker.ts";
+import {
+  dispatchOwnerDailyEnqueue,
+  type OwnerDailyEnqueuePorts,
+} from "./dailyEnqueue.ts";
 
 /** The whole operation, counted from before the body is read. */
 export const OWNER_INTAKE_TOTAL_BUDGET_MS = 15_000;
@@ -118,7 +131,14 @@ export type OwnerIntakeErrorCode =
   | "not_found"
   | "throttled"
   | "collection_disabled"
-  | "protected_credentials_required"
+  /**
+   * The rollout policy does not admit this target.
+   *
+   * It is a DEFINITE refusal of a target that IS owned by the caller: the
+   * account exists and belongs to the caller, and the collection policy
+   * simply does not admit it yet.
+   */
+  | "collection_not_eligible"
   | "settings_unavailable"
   | "service_auth_unavailable"
   | "enqueue_indeterminate"
@@ -143,7 +163,7 @@ export type SettingReader = (key: string) => Promise<unknown>;
 
 /** One audit record. It carries no token, no body and no driver text. */
 export interface OwnerIntakeAuditEvent {
-  readonly action: "enqueue" | "status" | "drain" | "unknown";
+  readonly action: "enqueue" | "status" | "drain" | "enqueue-daily" | "unknown";
   readonly outcome: string;
   readonly status: number;
   readonly userId?: string;
@@ -169,6 +189,14 @@ export interface InstagramInsightsSyncServiceDeps {
   readonly isAdmin: (userId: string) => Promise<boolean>;
   /** Builds the service worker ports. */
   readonly createServiceWorker: () => OwnerWorkerPorts;
+  /**
+   * Builds the daily enqueue ports of the DISPATCH.
+   *
+   * They are OPTIONAL: a deployment that does not inject them has no daily
+   * dispatcher, and the dispatch action is then refused as unavailable
+   * rather than reaching any work.
+   */
+  readonly createDailyEnqueue?: () => OwnerDailyEnqueuePorts;
 }
 
 export interface InstagramInsightsSyncDeps {
@@ -236,6 +264,20 @@ const drainRequestSchema = z
   .strict();
 
 /**
+ * The service daily dispatch.
+ *
+ * It carries NO key other than the action. A caller-selected owner, an
+ * account, a capture day, a cursor, a limit or a force flag in the body is
+ * a malformed request, not a silently ignored field: the capture day is
+ * chosen by the database and the page size is a constant of the contract.
+ */
+const enqueueDailyRequestSchema = z
+  .object({
+    action: z.literal("enqueue-daily"),
+  })
+  .strict();
+
+/**
  * The strict request union.
  *
  * Unknown keys are refused, so a service action, a target kind, a job id, an
@@ -247,6 +289,7 @@ const ownerIntakeRequestSchema = z.discriminatedUnion("action", [
   enqueueRequestSchema,
   statusRequestSchema,
   drainRequestSchema,
+  enqueueDailyRequestSchema,
 ]);
 
 // ---------------------------------------------------------------------------
@@ -628,7 +671,7 @@ export function createInstagramInsightsSyncHandler(
     // What is known about the caller so far. It grows as the request is
     // understood, and it is the only thing the audit record carries.
     const context: {
-      action: "enqueue" | "status" | "drain" | "unknown";
+      action: "enqueue" | "status" | "drain" | "enqueue-daily" | "unknown";
       userId?: string;
       socialAccountId?: string;
     } = { action: "unknown" };
@@ -666,6 +709,14 @@ export function createInstagramInsightsSyncHandler(
      * They are read BEFORE any job schema, RPC, credential or provider
      * access, for the owner actions and for the service drain alike. A
      * refusal is returned; `null` means the caller may continue.
+     *
+     * The CREDENTIAL MODE IS VALIDATED, NOT ENFORCED. A malformed or
+     * unreadable mode is still UNAVAILABLE, never "absent" and never
+     * "off". A readable mode of `legacy` or `protected` is NOT a refusal:
+     * the global mode says where a Facebook User secret lives, and it is
+     * not collection permission. Which accounts may be collected for is
+     * decided by the rollout policy in SQL, per account, and this endpoint
+     * never decides it.
      */
     const readGates = async (): Promise<Response | null> => {
       // The shared classifier and the shared resolvers own the setting
@@ -708,26 +759,22 @@ export function createInstagramInsightsSyncHandler(
         return await refuse(503, "collection_disabled");
       }
 
-      let credentialMode: string;
       try {
-        credentialMode = resolveFacebookCredentialMode(
+        // The mode is read for its validity, NOT as collection permission.
+        // `legacy` and `protected` are both usable; the resolver has already
+        // refused anything else as a malformed setting.
+        resolveFacebookCredentialMode(
           await readRequiredSetting(FACEBOOK_CREDENTIAL_MODE_SETTING_KEY),
         );
       } catch {
         return await refuse(503, "settings_unavailable");
       }
 
-      if (credentialMode !== "protected") {
-        return await refuse(503, "protected_credentials_required");
-      }
-
       return null;
     };
 
     /**
-     * The service drain.
-     *
-     * The authorization matrix:
+     * The service authorization matrix.
      *
      *   - the cron secret (constant-time comparison) or the service-role key
      *     is a service caller;
@@ -739,13 +786,13 @@ export function createInstagramInsightsSyncHandler(
      *   - a deployment with no service credential at all is a
      *     misconfiguration, and the refusal says so.
      *
-     * The gates run BEFORE the worker is built, so a disabled collection
-     * never reaches the job schema, a credential or a provider.
+     * It returns a refusal response, or null when the caller may continue.
+     * The drain and the daily dispatch share it, so neither can drift into a
+     * weaker matrix than the other.
      */
-    const handleServiceDrain = async (
-      _drainRequest: Request,
+    const authorizeServiceCaller = async (
       bearer: string,
-    ): Promise<Response> => {
+    ): Promise<Response | null> => {
       const service = deps.service;
       if (!service) {
         // This deployment has no service ports at all: no service caller can
@@ -794,12 +841,106 @@ export function createInstagramInsightsSyncHandler(
         context.userId = caller.userId;
       }
 
+      return null;
+    };
+
+    /**
+     * The daily dispatch.
+     *
+     * It ENQUEUES and returns. It makes ZERO provider calls: no worker is
+     * built, no credential is read and no Meta request is sent. The bounded
+     * database page is the whole of the work.
+     *
+     * The response is the accepted contract:
+     *
+     *   202  {"action","captured_on","sweep_status":"pending","enqueued","has_more":true}
+     *   200  {"action","captured_on","sweep_status":"completed","enqueued","has_more":false}
+     *   503  a typed disabled / unavailable / indeterminate answer
+     *
+     * `enqueued` is the number of rows THIS call inserted. It is never a
+     * count of collected targets, and it is never a promise that the
+     * collection happened.
+     */
+    const handleServiceDispatch = async (bearer: string): Promise<Response> => {
+      const refusal = await authorizeServiceCaller(bearer);
+      if (refusal) return refusal;
+
+      const gateRefusal = await readGates();
+      if (gateRefusal) return gateRefusal;
+
+      const createDailyEnqueue = deps.service?.createDailyEnqueue;
+      if (!createDailyEnqueue) {
+        // This deployment has no daily dispatcher at all.
+        return await refuse(503, "request_unavailable");
+      }
+
+      let daily: OwnerDailyEnqueuePorts;
+      try {
+        daily = createDailyEnqueue();
+      } catch {
+        return await refuse(503, "request_unavailable");
+      }
+
+      const outcome = await dispatchOwnerDailyEnqueue(daily, {
+        ceilingMs: dependencyCeiling(activeDeadline),
+      });
+
+      if (outcome.kind === "indeterminate") {
+        // The statement may have committed. The dispatch is never replayed
+        // in the same invocation and it is never reported as a completion.
+        return await refuse(503, "request_unavailable");
+      }
+
+      if (outcome.kind === "refused") {
+        if (outcome.reason === "collection_disabled") {
+          return await refuse(503, "collection_disabled");
+        }
+        return await refuse(503, "settings_unavailable");
+      }
+
+      const receipt = outcome.receipt;
+
+      // The closed set of the published response. A sweep state outside it
+      // is not this contract's answer and is never sent to a client.
+      if (receipt.sweepStatus !== "pending" && receipt.sweepStatus !== "completed") {
+        return await refuse(503, "request_unavailable");
+      }
+
+      const body = {
+        action: "enqueue-daily",
+        captured_on: receipt.capturedOn,
+        sweep_status: receipt.sweepStatus,
+        enqueued: receipt.enqueued,
+        has_more: receipt.hasMore,
+      };
+
+      if (receipt.hasMore) {
+        return await finish(202, body, "enqueued_daily");
+      }
+
+      return await finish(200, body, "enqueued_daily_completed");
+    };
+
+    /**
+     * The service drain.
+     *
+     * The authorization matrix is shared with the daily dispatch, and the
+     * gates run BEFORE the worker is built, so a disabled collection never
+     * reaches the job schema, a credential or a provider.
+     */
+    const handleServiceDrain = async (
+      _drainRequest: Request,
+      bearer: string,
+    ): Promise<Response> => {
+      const refusal = await authorizeServiceCaller(bearer);
+      if (refusal) return refusal;
+
       const gateRefusal = await readGates();
       if (gateRefusal) return gateRefusal;
 
       let worker: OwnerWorkerPorts;
       try {
-        worker = service.createServiceWorker();
+        worker = deps.service!.createServiceWorker();
       } catch {
         return await refuse(503, "request_unavailable");
       }
@@ -903,7 +1044,8 @@ export function createInstagramInsightsSyncHandler(
       peekedAction.present &&
       (peekedAction.value === "enqueue" ||
         peekedAction.value === "status" ||
-        peekedAction.value === "drain")
+        peekedAction.value === "drain" ||
+        peekedAction.value === "enqueue-daily")
     ) {
       context.action = peekedAction.value;
     }
@@ -921,10 +1063,16 @@ export function createInstagramInsightsSyncHandler(
       return await refuse(401, "unauthorized");
     }
 
-    // --- The service drain -----------------------------------------------
+    // --- The service actions ---------------------------------------------
     if (intake.action === "drain") {
       activeDeadline = drainDeadline;
       return await handleServiceDrain(request, token);
+    }
+
+    if (intake.action === "enqueue-daily") {
+      // The daily dispatch. It is a bounded database page and nothing else:
+      // no worker is built and no provider is called.
+      return await handleServiceDispatch(token);
     }
 
     const canonicalAccountId = canonicalUuid(intake.social_account_id);
@@ -1008,6 +1156,21 @@ export function createInstagramInsightsSyncHandler(
         return await finish(429, accepted.projection, "throttled", {
           "Retry-After": String(retryAfter),
         });
+      }
+
+      if (accepted.kind === "refused") {
+        // A DEFINITE rollout refusal. The target IS owned by the caller, and
+        // the policy simply does not admit it yet: 403. An unavailable or
+        // disabled configuration is 503, and it is never reported as a
+        // refusal of the caller's account.
+        const reason = accepted.projection.reason_code;
+        if (reason === "collection_not_eligible") {
+          return await refuse(403, "collection_not_eligible");
+        }
+        if (reason === "collection_disabled") {
+          return await refuse(503, "collection_disabled");
+        }
+        return await refuse(503, "settings_unavailable");
       }
 
       return await finish(202, accepted.projection, "enqueued");

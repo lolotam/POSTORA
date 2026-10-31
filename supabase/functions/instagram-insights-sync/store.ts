@@ -84,6 +84,37 @@ const ENQUEUE_THROTTLED_KEYS = [
   "captured_on",
 ] as const;
 
+/**
+ * The exact key set of the rollout refusal.
+ *
+ * The accepted SQL answers a definite rollout refusal with
+ * `{accepted:false, refused:true, reason_code, captured_on}`. It is a
+ * closed projection, so an extra key means a different deployment and is
+ * refused instead of being read loosely.
+ */
+const ENQUEUE_REFUSED_KEYS = [
+  "accepted",
+  "refused",
+  "reason_code",
+  "captured_on",
+] as const;
+
+/**
+ * The refusal reasons the accepted SQL returns for a rollout refusal.
+ *
+ * The set is closed. An unknown reason is NOT a refusal this contract
+ * knows: the statement may have committed, so the outcome is indeterminate
+ * and it is never reported as a refusal.
+ */
+export const OWNER_ENQUEUE_REFUSAL_REASONS = [
+  "collection_not_eligible",
+  "collection_disabled",
+  "settings_unavailable",
+] as const;
+
+export type OwnerEnqueueRefusalReason =
+  (typeof OWNER_ENQUEUE_REFUSAL_REASONS)[number];
+
 /** The thirteen keys both status variants share. */
 const STATUS_SHARED_KEYS = [
   "target_kind",
@@ -300,9 +331,25 @@ export interface OwnerEnqueueThrottledProjection {
   readonly captured_on: string;
 }
 
+/**
+ * The projection of a DEFINITE rollout refusal.
+ *
+ * The accepted SQL resolved the owner and the target, and then refused the
+ * target because the rollout policy does not admit it. The refusal carries
+ * no job: nothing was inserted, no throttle window was spent and no
+ * generation was bumped.
+ */
+export interface OwnerEnqueueRefusedProjection {
+  readonly accepted: false;
+  readonly refused: true;
+  readonly reason_code: OwnerEnqueueRefusalReason;
+  readonly captured_on: string;
+}
+
 export type OwnerEnqueueOutcome =
   | { readonly kind: "accepted"; readonly projection: OwnerEnqueueAcceptedProjection }
-  | { readonly kind: "throttled"; readonly projection: OwnerEnqueueThrottledProjection };
+  | { readonly kind: "throttled"; readonly projection: OwnerEnqueueThrottledProjection }
+  | { readonly kind: "refused"; readonly projection: OwnerEnqueueRefusedProjection };
 
 export interface OwnerInventoryProjection {
   readonly truncated: boolean;
@@ -311,6 +358,43 @@ export interface OwnerInventoryProjection {
   readonly oldest_returned_at: string | null;
   readonly gap_reason: string | null;
   readonly pages_fetched: number;
+}
+
+/**
+ * Parses the rollout refusal.
+ *
+ * The receipt must say `refused: true` and carry one of the closed reason
+ * codes. A reason code this contract does not know is not a refusal: the
+ * statement may have committed, so the outcome is indeterminate and it is
+ * never reported as a refusal.
+ */
+function parseEnqueueRefused(value: unknown): OwnerEnqueueRefusedProjection | null {
+  if (!isPlainRecord(value)) return null;
+  if (!hasExactKeys(value, ENQUEUE_REFUSED_KEYS)) return null;
+
+  const accepted = readOwnData(value, "accepted");
+  if (!accepted.present || accepted.value !== false) return null;
+
+  const refused = readOwnData(value, "refused");
+  if (!refused.present || refused.value !== true) return null;
+
+  const reasonCode = readOwnData(value, "reason_code").value;
+  if (
+    typeof reasonCode !== "string" ||
+    !(OWNER_ENQUEUE_REFUSAL_REASONS as readonly string[]).includes(reasonCode)
+  ) {
+    return null;
+  }
+
+  const capturedOn = readOwnData(value, "captured_on");
+  if (!capturedOn.present || !isGregorianCalendarDate(capturedOn.value)) return null;
+
+  return {
+    accepted: false,
+    refused: true,
+    reason_code: reasonCode as OwnerEnqueueRefusalReason,
+    captured_on: capturedOn.value,
+  };
 }
 
 /**
@@ -733,6 +817,12 @@ export function createOwnerCollectionStore(caller: UserRpcCaller): OwnerCollecti
 
       const throttled = parseEnqueueThrottled(outcome.data);
       if (throttled) return { kind: "throttled", projection: throttled };
+
+      // A DEFINITE rollout refusal. The database resolved the owner and the
+      // target and then refused the target, so nothing was inserted and no
+      // throttle window was spent.
+      const refused = parseEnqueueRefused(outcome.data);
+      if (refused) return { kind: "refused", projection: refused };
 
       // A receipt that matches neither accepted projection is not a receipt
       // this contract knows. The statement may have committed, so the caller

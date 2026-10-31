@@ -61,6 +61,21 @@ export type CompetitorReasonCode =
   | "provider_error"
   /** The credential or the captured context changed under the attempt. */
   | "credential_changed"
+  /**
+   * The rollout policy does not admit this target, or does not approve the
+   * viewer this target is pinned to.
+   *
+   * It is a DEFINITE refusal of one target. It never marks a target
+   * unavailable, never revokes a credential and never advances a success.
+   */
+  | "collection_not_eligible"
+  /**
+   * The rollout configuration could not be read, so the outcome of the
+   * admission decision is UNKNOWN.
+   *
+   * An unknown outcome is never permission, so the work stops.
+   */
+  | "collection_unavailable"
   /** The result could not be stored. Nothing was written. */
   | "storage_error"
   /** A step did not finish inside the run budget. Worker-only; never stored. */
@@ -286,7 +301,65 @@ export interface CompetitorProviderRequest {
   /** The protected Facebook User token. Never logged, never serialised. */
   readonly token: string;
   readonly signal: AbortSignal;
+  /**
+   * The per-request admission permit.
+   *
+   * The adapter asks it immediately before every request that leaves the
+   * process: before every attempt of every page. A refused or failed permit
+   * stops the attempt BEFORE the request is sent, so the first excluded
+   * request is never sent at all.
+   */
+  readonly permit?: CompetitorProviderPermit;
 }
+
+/**
+ * How a permit refused the request.
+ *
+ *   refused      the database refused the call for THIS target. The
+ *                condition belongs to one job alone.
+ *   unavailable  the permit could not be read, or the refusal could not be
+ *                audited. The outcome is unknown and belongs to the run.
+ */
+export type CompetitorPermitKind = "refused" | "unavailable";
+
+/**
+ * The provider request was not authorized.
+ *
+ * It carries a stable kind and a stable reason code. It never carries a
+ * token, a claim token, a policy list or provider text.
+ */
+export class CompetitorProviderPermitError extends Error {
+  readonly kind: CompetitorPermitKind;
+  readonly reasonCode: string;
+  /**
+   * True when the exception-path audit row did NOT commit.
+   *
+   * The work then stops and the audit failure is reported: a row that did
+   * not commit is never reported as a stored row.
+   */
+  readonly auditFailed: boolean;
+
+  constructor(
+    kind: CompetitorPermitKind,
+    reasonCode: string,
+    auditFailed = false,
+  ) {
+    super("The collection request was not authorized.");
+    this.name = "CompetitorProviderPermitError";
+    this.kind = kind;
+    this.reasonCode = reasonCode;
+    this.auditFailed = auditFailed;
+  }
+}
+
+/**
+ * The per-request admission gate.
+ *
+ * It resolves when the request is authorized and throws a
+ * `CompetitorProviderPermitError` when it is not. It is called once per
+ * request, immediately before that request leaves the process.
+ */
+export type CompetitorProviderPermit = (signal: AbortSignal) => Promise<void>;
 
 /** The provider port. Both adapters implement it. */
 export interface CompetitorProvider {
@@ -414,6 +487,49 @@ export interface EnqueueReceipt {
   readonly retryAfterSeconds: number | null;
 }
 
+/**
+ * The refusal reasons the accepted SQL returns for a rollout refusal.
+ *
+ * The set is closed. An unknown reason is NOT a refusal this contract
+ * knows: the statement may have committed, so the outcome is indeterminate
+ * and it is never reported as a refusal.
+ */
+export const COMPETITOR_ENQUEUE_REFUSAL_REASONS = [
+  "collection_not_eligible",
+  "collection_disabled",
+  "settings_unavailable",
+] as const;
+
+export type CompetitorEnqueueRefusalReason =
+  (typeof COMPETITOR_ENQUEUE_REFUSAL_REASONS)[number];
+
+/**
+ * The projection of a DEFINITE rollout refusal.
+ *
+ * The accepted SQL resolved the owner and the target, and then refused the
+ * target because the rollout policy does not admit it. The refusal carries
+ * no job: nothing was inserted, no throttle window was spent and no
+ * generation was bumped.
+ */
+export interface EnqueueRefusedProjection {
+  readonly accepted: false;
+  readonly refused: true;
+  readonly reason_code: CompetitorEnqueueRefusalReason;
+  readonly captured_on: string;
+}
+
+/**
+ * The outcome of one owner-facing enqueue.
+ *
+ * The three states are distinct and never merged: an accepted enqueue has a
+ * job, a throttled enqueue has a retry hint and no job, and a refused
+ * enqueue has a reason code and no job.
+ */
+export type CompetitorEnqueueOutcome =
+  | { readonly kind: "accepted"; readonly projection: EnqueueReceipt }
+  | { readonly kind: "throttled"; readonly projection: EnqueueReceipt }
+  | { readonly kind: "refused"; readonly projection: EnqueueRefusedProjection };
+
 /** The owner-facing status projection. */
 export interface OwnerStatusProjection {
   readonly targetKind: string;
@@ -430,6 +546,75 @@ export interface OwnerStatusProjection {
   readonly pendingOperations: number;
 }
 
+// ---------------------------------------------------------------------------
+// The durable daily dispatch
+// ---------------------------------------------------------------------------
+
+/**
+ * The page ceiling of the competitor population.
+ *
+ * It mirrors the SQL constant. A receipt that carries another ceiling
+ * belongs to another contract and is refused.
+ */
+export const COMPETITOR_DAILY_PAGE_LIMIT = 50;
+
+/** The states of one day's competitor sweep. */
+export const COMPETITOR_DAILY_SWEEP_STATUSES = [
+  "pending",
+  "completed",
+  "expired",
+  "absent",
+] as const;
+
+export type CompetitorDailySweepStatus =
+  (typeof COMPETITOR_DAILY_SWEEP_STATUSES)[number];
+
+/**
+ * The refusal reasons the daily page returns for the CONFIGURATION.
+ *
+ * The set is closed. An unknown reason is not a refusal this contract
+ * knows: the statement may have committed, so the outcome is indeterminate
+ * and it is never reported as a refusal.
+ */
+export const COMPETITOR_DAILY_REFUSAL_REASONS = [
+  "collection_disabled",
+  "settings_unavailable",
+] as const;
+
+export type CompetitorDailyRefusalReason =
+  (typeof COMPETITOR_DAILY_REFUSAL_REASONS)[number];
+
+/** The accepted receipt of one bounded competitor page. */
+export interface CompetitorDailyEnqueueReceipt {
+  readonly targetKind: "competitor";
+  readonly capturedOn: string;
+  readonly sweepStatus: CompetitorDailySweepStatus;
+  /** The rows THIS call inserted. It is never a count of collected targets. */
+  readonly enqueued: number;
+  readonly hasMore: boolean;
+  readonly pageLimit: number;
+  /** The candidates the bounded scan examined. */
+  readonly scanned: number;
+  /** Whether this call created or reopened the day's sweep. */
+  readonly started: boolean;
+  /** Whether this call continued an already pending sweep. */
+  readonly resumed: boolean;
+}
+
+/**
+ * The outcome of one bounded competitor page.
+ *
+ *   accepted  the statement ran and the sweep state is known.
+ *   refused   the configuration refuses. It is a decision, not a failure.
+ */
+export type CompetitorDailyEnqueueOutcome =
+  | { readonly kind: "accepted"; readonly receipt: CompetitorDailyEnqueueReceipt }
+  | {
+    readonly kind: "refused";
+    readonly reason: CompetitorDailyRefusalReason;
+    readonly capturedOn: string;
+  };
+
 /** One due watchlist entry. */
 export interface DueCompetitorTarget {
   readonly userId: string;
@@ -437,7 +622,6 @@ export interface DueCompetitorTarget {
   readonly username: string;
   readonly dueAt: string;
 }
-
 /** The page cursor of the due-target read. */
 export interface DueTargetCursor {
   readonly dueAt: string;

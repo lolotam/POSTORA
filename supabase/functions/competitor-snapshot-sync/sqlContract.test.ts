@@ -24,6 +24,7 @@ import { fileURLToPath } from "node:url";
 import {
   createCompetitorServiceStore,
   type CompetitorRpcCaller,
+  type CompetitorServiceWritePort,
   type ServiceReadPort,
 } from "./store.ts";
 
@@ -42,6 +43,17 @@ const MIGRATION_V2 = join(
 const MIGRATION_V1 = join(
   MIGRATIONS,
   "20261029150000_competitor_collection_results.sql",
+);
+
+/**
+ * The rollout admission contract.
+ *
+ * It owns the policy, the watchlist pins, the viewer attachment and the
+ * per-request provider permit.
+ */
+const MIGRATION_ROLLOUT = join(
+  MIGRATIONS,
+  "20261031090000_instagram_collection_rollout_controls.sql",
 );
 
 async function migrationText(path: string): Promise<string> {
@@ -98,6 +110,18 @@ const noReads: ServiceReadPort = {
   },
 };
 
+/**
+ * The write port of a test that does not exercise the exception-path audit.
+ *
+ * It reports that the row did NOT commit, so a refusal that is audited here
+ * is audited as failed - the fail-closed direction.
+ */
+const noWrites: CompetitorServiceWritePort = {
+  async insertSystemLog() {
+    return false;
+  },
+};
+
 const COVERAGE_PAYLOAD = {
   capture_started_at: "2026-10-29T02:00:00.000Z",
   capture_ended_at: "2026-10-29T02:00:05.000Z",
@@ -148,7 +172,7 @@ Deno.test("the store sends exactly the parameters the new SQL declares", async (
     },
   });
 
-  const store = createCompetitorServiceStore({ rpc, reads: noReads });
+  const store = createCompetitorServiceStore({ rpc, reads: noReads, writes: noWrites });
 
   await store.listDueTargets({
     limit: 50,
@@ -269,6 +293,95 @@ Deno.test("the v1 writer is still declared and still callable", async () => {
   );
 });
 
+Deno.test("the store sends exactly the parameters the rollout SQL declares", async () => {
+  const rollout = await migrationText(MIGRATION_ROLLOUT);
+
+  const { calls, rpc } = recorder({
+    authorize_instagram_collection_provider_call: {
+      allowed: false,
+      reason_code: "collection_not_eligible",
+    },
+    attach_instagram_collection_job_viewer_context: {
+      job_id: "5c1b0003-0000-4000-8000-000000000003",
+      job_generation: 1,
+      viewer_social_account_id: "a1000000-0000-4000-8000-000000000001",
+      credential_generation: 3,
+      login_kind: "page_linked",
+      granted_scopes: [],
+    },
+  });
+
+  const store = createCompetitorServiceStore({ rpc, reads: noReads, writes: noWrites });
+
+  await store.attachViewerContext({
+    jobId: "5c1b0003-0000-4000-8000-000000000003",
+    claimToken: "5c1b0003-0000-4000-8000-000000000003",
+    jobGeneration: 1,
+    viewerSocialAccountId: "a1000000-0000-4000-8000-000000000001",
+  });
+
+  await store.authorizeProviderCall({
+    jobId: "5c1b0003-0000-4000-8000-000000000003",
+    claimToken: "5c1b0003-0000-4000-8000-000000000003",
+    jobGeneration: 1,
+    targetId: "c1000000-0000-4000-8000-000000000001",
+    viewerSocialAccountId: "a1000000-0000-4000-8000-000000000001",
+  });
+
+  const attachCall = calls.find((call) =>
+    call.name === "attach_instagram_collection_job_viewer_context"
+  );
+  const permitCall = calls.find((call) =>
+    call.name === "authorize_instagram_collection_provider_call"
+  );
+
+  assert(attachCall !== undefined, "the viewer attachment was called");
+  assert(permitCall !== undefined, "the provider permit was called");
+
+  assertEquals(
+    Object.keys(attachCall.args).sort(),
+    declaredParameters(rollout, "attach_instagram_collection_job_viewer_context").sort(),
+    "the viewer attachment sends the declared parameters",
+  );
+
+  assertEquals(
+    Object.keys(permitCall.args).sort(),
+    declaredParameters(rollout, "authorize_instagram_collection_provider_call").sort(),
+    "the provider permit sends the declared parameters",
+  );
+});
+
+Deno.test("the provider permit names no owner, no account and no viewer", async () => {
+  const { calls, rpc } = recorder({
+    authorize_instagram_collection_provider_call: {
+      allowed: false,
+      reason_code: "collection_not_eligible",
+    },
+  });
+
+  const store = createCompetitorServiceStore({ rpc, reads: noReads, writes: noWrites });
+
+  await store.authorizeProviderCall({
+    jobId: "5c1b0003-0000-4000-8000-000000000003",
+    claimToken: "5c1b0003-0000-4000-8000-000000000003",
+    jobGeneration: 1,
+    targetId: "c1000000-0000-4000-8000-000000000001",
+    viewerSocialAccountId: "a1000000-0000-4000-8000-000000000001",
+  });
+
+  const permitCall = calls.find((call) =>
+    call.name === "authorize_instagram_collection_provider_call"
+  )!;
+
+  // The scope of the request is derived from the live fenced job. The call
+  // carries the claim and nothing else, so it can never redirect the
+  // request to another owner, another target or another viewer.
+  assertEquals(
+    Object.keys(permitCall.args).sort(),
+    ["p_claim_token", "p_job_generation", "p_job_id"],
+  );
+});
+
 Deno.test("the store refuses a receipt the new SQL could not produce", async () => {
   // A receipt without the outcome is not a receipt. The store has to
   // refuse it rather than report an empty success.
@@ -279,7 +392,7 @@ Deno.test("the store refuses a receipt the new SQL could not produce", async () 
     },
   });
 
-  const store = createCompetitorServiceStore({ rpc, reads: noReads });
+  const store = createCompetitorServiceStore({ rpc, reads: noReads, writes: noWrites });
 
   let threw = false;
   try {

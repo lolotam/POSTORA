@@ -11,6 +11,25 @@
 BEGIN;
 
 -- ---------------------------------------------------------------------------
+-- The rollout fixture.
+--
+-- R1 (20261031090000_instagram_collection_rollout_controls.sql) made the
+-- rollout admission a default-off gate. This suite exercises the Meta
+-- refresh lifecycle against a collection job, not the rollout, so it
+-- installs an explicit synthetic policy that admits every otherwise
+-- eligible target. The transaction rolls back, so nothing survives the
+-- suite.
+-- ---------------------------------------------------------------------------
+INSERT INTO public.app_settings (key, value, description)
+VALUES
+  ('collection_instagram_insights_enabled', 'true'::jsonb,
+   'Synthetic harness master switch.'),
+  ('collection_instagram_rollout_policy',
+   '{"version":1,"owners":{"mode":"all","account_ids":[]},"competitors":{"mode":"all","targets":[]}}'::jsonb,
+   'Synthetic harness rollout policy: every otherwise eligible target.')
+ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value;
+
+-- ---------------------------------------------------------------------------
 -- Fixtures.
 --
 --   owner A  0f100001-...  workspaces W1 (with a subscriber) and W2 (without)
