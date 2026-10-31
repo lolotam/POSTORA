@@ -63,7 +63,19 @@ Deno.serve(async (req) => {
     if (error) throw new Error(error.message);
     return data === true;
   };
-  let holdsLease = false;
+  // Best effort, and safe whatever the lease state: the release deletes only this holder's row,
+  // so it never frees a lease another run took over. A lease left behind expires after LEASE_TTL.
+  const releaseLease = async (): Promise<void> => {
+    try {
+      const { error } = await supabaseAdmin.rpc('release_cron_run_lease', {
+        p_job: LEASE_JOB,
+        p_holder: leaseHolder,
+      });
+      if (error) console.error('Scheduler lease release failed:', error.message);
+    } catch (releaseErr: unknown) {
+      console.error('Scheduler lease release threw:', releaseErr instanceof Error ? releaseErr.message : String(releaseErr));
+    }
+  };
   try {
     if (!(await acquireLease())) {
       console.log('Another scheduler run holds the lease; skipping this tick');
@@ -79,12 +91,13 @@ Deno.serve(async (req) => {
         { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
     }
-    holdsLease = true;
   } catch (leaseErr: unknown) {
     // Fail closed: token refresh happens before process-post's claim, so two runs without the
     // lease could spend the same rotating refresh token. The next tick retries.
     const message = leaseErr instanceof Error ? leaseErr.message : String(leaseErr);
     console.error('Scheduler lease unavailable; skipping this tick:', message);
+    // The acquire may have committed even though its answer was lost.
+    await releaseLease();
     await supabaseAdmin.from('system_logs').insert({
       level: 'error',
       category: 'system',
@@ -152,7 +165,6 @@ Deno.serve(async (req) => {
         console.error('Scheduler lease renewal failed:', renewErr instanceof Error ? renewErr.message : String(renewErr));
       }
       if (!renewed) {
-        holdsLease = false;
         await supabaseAdmin.from('system_logs').insert({
           level: 'warn',
           category: 'system',
@@ -400,17 +412,6 @@ Deno.serve(async (req) => {
       { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     );
   } finally {
-    if (holdsLease) {
-      // Best effort: a lease that is not released expires after LEASE_TTL.
-      try {
-        const { error: releaseError } = await supabaseAdmin.rpc('release_cron_run_lease', {
-          p_job: LEASE_JOB,
-          p_holder: leaseHolder,
-        });
-        if (releaseError) console.error('Scheduler lease release failed:', releaseError.message);
-      } catch (releaseErr: unknown) {
-        console.error('Scheduler lease release threw:', releaseErr instanceof Error ? releaseErr.message : String(releaseErr));
-      }
-    }
+    await releaseLease();
   }
 });
