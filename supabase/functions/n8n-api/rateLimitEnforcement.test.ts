@@ -12,11 +12,21 @@ const HOUR = 60 * 60 * 1000;
  * metered count query is `from('api_logs').select(...).eq(...).is(...).gte(...)`
  * awaited as a thenable, and `insert` returns a plain result promise.
  */
+/** The query builder the rate limiter calls: chainable filters, awaitable as the count result. */
+interface ApiLogsChain {
+  select(columns: string, opts: unknown): ApiLogsChain;
+  eq(column: string, value: unknown): ApiLogsChain;
+  is(column: string, value: unknown): ApiLogsChain;
+  gte(column: string, value: unknown): ApiLogsChain;
+  then(onFulfilled?: (value: unknown) => unknown, onRejected?: (reason: unknown) => unknown): Promise<unknown>;
+  insert(row: Record<string, unknown>): Promise<{ error: null }>;
+}
+
 function stubApiLogs(countResult: { count: number | null; error?: { message: string } | null }) {
   const countFilters: Array<{ table: string; column: string; value: unknown }> = [];
   const inserts: Array<Record<string, unknown>> = [];
   const tables: string[] = [];
-  const chain: any = {
+  const chain: ApiLogsChain = {
     select: (_columns: string, _opts: unknown) => chain,
     eq: (column: string, value: unknown) => {
       countFilters.push({ table: tables[tables.length - 1], column, value });
