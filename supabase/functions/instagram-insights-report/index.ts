@@ -7,7 +7,7 @@
  */
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
-import { authenticateCaller } from "../_shared/auth-helper.ts";
+import { authenticateCaller, serviceRoleCallerUserId } from "../_shared/auth-helper.ts";
 import { createInstagramInsightsReportHandler } from "./handler.ts";
 import { ReportStore, type ReportStoreClient } from "./reportStore.ts";
 
@@ -32,7 +32,7 @@ function getStore(): ReportStore {
 
 export const handler = createInstagramInsightsReportHandler({
   authenticate: async (req: Request) => {
-    return await authenticateCaller(req);
+    return await authenticateCaller(req, await serviceRoleCallerUserId(req));
   },
   store: {
     loadAccount: (socialAccountId: string, userId: string) =>
