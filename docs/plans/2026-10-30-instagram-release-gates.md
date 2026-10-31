@@ -193,20 +193,20 @@ Run the existing required protected OAuth/refresh and historical proxy/MCP inven
 Follow [supabase/tests/README.md](../../supabase/tests/README.md) and the complete `scripts/db-harness.sh` inventory. Example in Bash; the password below is intentionally synthetic and the container has no network or host port:
 
 ```bash
-docker run -d --name postora-task11-sql --network none \
+cid=$(docker run -d --name postora-task11-sql --network none \
   -e POSTGRES_PASSWORD=postgres -v "$PWD:/repo:ro" \
   supabase/postgres:17.6.1.158 \
   -c cron.database_name=instagram_release_harness \
-  -c shared_preload_libraries=pg_cron,pg_net,pgsodium,supabase_vault
+  -c shared_preload_libraries=pg_cron,pg_net,pgsodium,supabase_vault) || exit 1  # name taken: stop, touch nothing
 # Wait for a healthy database (at most 120 s); stop on unhealthy or timeout.
 for _ in $(seq 1 60); do
-  status=$(docker inspect --format '{{.State.Health.Status}}' postora-task11-sql)
+  status=$(docker inspect --format '{{.State.Health.Status}}' "$cid")
   [ "$status" = healthy ] && break
-  [ "$status" = unhealthy ] && { docker logs postora-task11-sql; exit 1; }
+  [ "$status" = unhealthy ] && { docker logs "$cid"; docker rm -f "$cid"; exit 1; }
   sleep 2
 done
-[ "$status" = healthy ] || { echo "postora-task11-sql not healthy after 120 s"; docker logs postora-task11-sql; exit 1; }
-docker exec -e HARNESS_DB_NAME=instagram_release_harness postora-task11-sql \
+[ "$status" = healthy ] || { echo "postora-task11-sql not healthy after 120 s"; docker logs "$cid"; docker rm -f "$cid"; exit 1; }
+docker exec -e HARNESS_DB_NAME=instagram_release_harness "$cid" \
   bash -c "cd /repo && bash scripts/db-harness.sh 'postgres://supabase_admin:postgres@localhost:5432/postgres'"
 ```
 

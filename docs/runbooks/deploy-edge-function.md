@@ -104,6 +104,14 @@ deploy a fetch + copy on the server — see Section 0 — rather than an rsync f
 (`/root/postora` in earlier versions of this runbook never existed; before 2026-08-22 the
 earlier key `postora_runtime_deploy_ed25519` was never registered, which is why fetch failed.)
 
+`$VOL/main/index.ts` is the edge-runtime router. It is server-only: the sync excludes `main`,
+and it is not in git. It sets each worker's `memoryLimitMb` (150) and `workerTimeoutMs`, which
+is **150 s** since 2026-10-30 (Supabase's default; it was 60 s). A worker serves several
+requests within that one lifetime. `process-post` budgets its waits against it
+(`WORKER_LIFETIME_MS` in `process-post/deferredPublish.ts`), so change both together. Back up
+the file before editing it (a copy is in `/root/backups/`), then run
+`docker compose restart functions` from `$STACK`.
+
 ---
 
 ## 0. Preferred: deploy straight from git (no workstation upload)

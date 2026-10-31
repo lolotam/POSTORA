@@ -64,6 +64,23 @@ export const deleteFailedPlatformPosts = async (postId: string) => {
   if (error) throw error;
 };
 
+/**
+ * Deletes the post's failed rows that name an account and returns them: a retry targets exactly
+ * what it removed, not the page's earlier snapshot. A failed row with no account cannot be
+ * targeted, so it is kept on record.
+ */
+export const takeFailedRetryRows = async (postId: string) => {
+  const { data, error } = await supabase
+    .from("platform_posts")
+    .delete()
+    .eq("post_id", postId)
+    .eq("status", "failed")
+    .not("social_account_id", "is", null)
+    .select("platform, status, social_account_id");
+  if (error) throw error;
+  return data ?? [];
+};
+
 export const deletePlatformPost = async (platformPostId: string) => {
   const { error } = await supabase.from("platform_posts").delete().eq("id", platformPostId);
   if (error) throw error;

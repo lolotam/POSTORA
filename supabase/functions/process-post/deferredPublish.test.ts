@@ -1,10 +1,22 @@
 import { assertEquals, assertInstanceOf } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import { CHECK_ONCE_DEADLINE, pollContainer } from "../_shared/metaContainerStatus.ts";
+import { CHECK_TIMEOUT_MS } from "./instagramPublish.ts";
 import {
   abandonReason,
+  claimFollowUps,
+  FOLLOW_UP_REQUEST_MS,
+  followUpTimeoutMs,
+  RECORD_RESERVE_MS,
   bufferAfterFinishedMs,
   ContainerStillProcessing,
   DEFERRAL_GIVE_UP_MS,
+  deferrableDeadline,
+  PUBLISH_RESERVE_MS,
+  refuseOnSpentWorker,
+  FOLLOW_UP_RESERVE_MS,
+  WORKER_LIFETIME_MS,
+  withFollowUpsStarted,
+  workerPublishDeadline,
   FIRST_RUN_POLL_BUDGET_MS,
   giveUpMessage,
   isPastGiveUp,
@@ -230,4 +242,85 @@ Deno.test("the pause after FINISHED counts against the deadline", () => {
 Deno.test("a resumed run, with a worker of its own, and a wait with no deadline keep the whole pause", () => {
   assertEquals(bufferAfterFinishedMs(CHECK_ONCE_DEADLINE, 1_000_000), 3000);
   assertEquals(bufferAfterFinishedMs(Number.POSITIVE_INFINITY, 1_000_000), 3000);
+});
+
+Deno.test("a deferrable wait on a reused worker ends early enough for the publish to fit", () => {
+  const workerStart = 1_000_000;
+  const latest = workerStart + WORKER_LIFETIME_MS - PUBLISH_RESERVE_MS;
+  // Fresh worker: the request's own budget stands.
+  assertEquals(deferrableDeadline(workerStart + FIRST_RUN_POLL_BUDGET_MS, workerStart), workerStart + FIRST_RUN_POLL_BUDGET_MS);
+  // A request that starts late in the worker's life is cut to what the worker can still fit.
+  assertEquals(deferrableDeadline(workerStart + 100_000 + FIRST_RUN_POLL_BUDGET_MS, workerStart), latest);
+  // A resumed run checks once, and a run nobody can resume has no deadline: both left alone.
+  assertEquals(deferrableDeadline(CHECK_ONCE_DEADLINE, workerStart), CHECK_ONCE_DEADLINE);
+  assertEquals(deferrableDeadline(Number.POSITIVE_INFINITY, workerStart), Number.POSITIVE_INFINITY);
+  // The publish deadline keeps room for the follow-ups and recording the outcome.
+  assertEquals(workerPublishDeadline(workerStart), workerStart + WORKER_LIFETIME_MS - FOLLOW_UP_RESERVE_MS);
+  // After the latest a wait can end, the slowest publish (Business Login, 30 s) and its check still fit.
+  assertEquals(workerPublishDeadline(workerStart) - latest >= 30_000 + CHECK_TIMEOUT_MS, true);
+});
+
+Deno.test("a deferrable wait whose worker has no time left defers without checking again", async () => {
+  let checks = 0;
+  const state = await pollContainer("instagram", "https://graph.invalid/c", {
+    maxAttempts: 60,
+    intervalMs: 2000,
+    checkFirst: true,
+    deadlineMs: deferrableDeadline(Date.now() + FIRST_RUN_POLL_BUDGET_MS, Date.now() - WORKER_LIFETIME_MS),
+    fetcher: () => {
+      checks++;
+      return Promise.resolve(new Response(JSON.stringify({ status_code: "IN_PROGRESS" })));
+    },
+  });
+  assertEquals(state, { state: "waiting" });
+  assertEquals(checks, 0);
+  assertInstanceOf(unfinishedError({ deadlineMs: 1, deferKind: "ig_reel" }, "c1", "Instagram"), ContainerStillProcessing);
+});
+
+Deno.test("a published reel's follow-ups run once: a first run, or the resumed run that marks the row first", async () => {
+  const deferral = newDeferral("ig_reel", "c1", new Date("2026-10-30T15:00:00Z"));
+  assertEquals(await claimFollowUps(null), true);
+
+  const marks: string[] = [];
+  const fresh = { platformPostId: "row", deferral, markFollowUpsStarted: () => (marks.push("mark"), Promise.resolve({ claimed: true })) };
+  assertEquals(await claimFollowUps(fresh), true);
+  assertEquals(marks, ["mark"]);
+
+  // An earlier run started them and stopped before settling: they are not repeated.
+  const started = { platformPostId: "row", deferral: { ...deferral, followups_started_at: "2026-10-30T15:03:30Z" } };
+  assertEquals(await claimFollowUps(started), false);
+  // An overlapping run marked the row between our read and our write: the compare-and-set says so.
+  assertEquals(await claimFollowUps({ platformPostId: "row", deferral, markFollowUpsStarted: () => Promise.resolve({ claimed: false }) }), false);
+
+  // A mark that cannot be written, or that throws, cannot promise "once": skipped, never thrown.
+  assertEquals(await claimFollowUps({ platformPostId: "row", deferral, markFollowUpsStarted: () => Promise.resolve({ error: "db down" }) }), false);
+  assertEquals(await claimFollowUps({ platformPostId: "row", deferral, markFollowUpsStarted: () => Promise.reject(new Error("network")) }), false);
+});
+
+Deno.test("a request after a publish gets what is left before the record reserve, at most 8 s, or none", () => {
+  const start = 1_000_000;
+  const end = start + WORKER_LIFETIME_MS - RECORD_RESERVE_MS;
+  assertEquals(followUpTimeoutMs(start, start), FOLLOW_UP_REQUEST_MS);
+  assertEquals(followUpTimeoutMs(start, end - 3000), 3000);
+  assertEquals(followUpTimeoutMs(start, end - 500), 0);
+});
+
+Deno.test("marking the follow-ups keeps the rest of the row's response data and deferral", () => {
+  const data = { warnings: ["w"], deferred: { kind: "ig_reel", container_id: "c1" } };
+  assertEquals(withFollowUpsStarted(data, new Date("2026-10-30T15:03:30Z")), {
+    warnings: ["w"],
+    deferred: { kind: "ig_reel", container_id: "c1", followups_started_at: "2026-10-30T15:03:30.000Z" },
+  });
+});
+
+Deno.test("only a run its caller retries on its own is refused on a worker near its end", () => {
+  const start = 1_000_000;
+  const late = start + WORKER_LIFETIME_MS - PUBLISH_RESERVE_MS + 1;
+  const early = start + WORKER_LIFETIME_MS - PUBLISH_RESERVE_MS - 1;
+  // The reconciler's resume and the scheduler's run come back on their own: refused late.
+  assertEquals(refuseOnSpentWorker({ resume: true, scheduled: false }, start, late), true);
+  assertEquals(refuseOnSpentWorker({ resume: false, scheduled: true }, start, late), true);
+  assertEquals(refuseOnSpentWorker({ resume: true, scheduled: false }, start, early), false);
+  // Every other caller would not retry a refusal: always started, bounded by the deadlines.
+  assertEquals(refuseOnSpentWorker({ resume: false, scheduled: false }, start, late), false);
 });

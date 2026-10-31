@@ -6,8 +6,9 @@ import { useToast } from "@/hooks/use-toast";
 import { useQueryClient } from "@tanstack/react-query";
 import {
   PostWithResults, invalidatePostQueries,
-  deleteFailedPlatformPosts, deletePlatformPost, invokeProcessPost,
+  deleteFailedPlatformPosts, deletePlatformPost, invokeProcessPost, takeFailedRetryRows,
 } from "./historyUtils";
+import { failedRetryTargets } from "./retryTargets";
 
 export function usePostRetry() {
   const { toast } = useToast();
@@ -51,10 +52,15 @@ export function usePostRetry() {
   };
 
   const handleRetrySinglePlatform = async (postId: string, platformPostId: string, platform: string, accountId?: string | null) => {
+    // Without an account, process-post would publish to every selected account on the platform.
+    if (!accountId) {
+      toast({ title: "Cannot retry this result", description: "It names no account. Create the post again for the account you want.", variant: "destructive" });
+      return;
+    }
     setRetryingPostId(postId);
     try {
       await deletePlatformPost(platformPostId);
-      await invokeProcessPost(postId, [platform], accountId ? [accountId] : undefined);
+      await invokeProcessPost(postId, [platform], [accountId]);
       toast({ title: "Retry initiated", description: `Retrying ${platform}...` });
       invalidatePostQueries(queryClient);
     } catch (error) {
@@ -68,10 +74,17 @@ export function usePostRetry() {
     if (failedPlatforms.length === 0) { toast({ title: "No failed platforms", description: "This post has no failed platforms to retry." }); return; }
     if (hasTikTokFailure(post)) { openRetryDialog(post); return; }
 
+    if (failedRetryTargets(post.platformResults).accountIds.length === 0) {
+      toast({ title: "Cannot retry automatically", description: "The failed results name no account, so they cannot be retried without posting to every account again.", variant: "destructive" });
+      return;
+    }
+
     setRetryingPostId(post.id);
     try {
-      await deleteFailedPlatformPosts(post.id);
-      await invokeProcessPost(post.id);
+      // Targets come from the rows actually removed, so a row that failed since the page loaded is retried too.
+      const targets = failedRetryTargets(await takeFailedRetryRows(post.id));
+      if (targets.accountIds.length === 0) throw new Error("This post has no failed platforms left to retry.");
+      await invokeProcessPost(post.id, targets.platforms, targets.accountIds);
       toast({ title: "Retry initiated", description: `Retrying ${failedPlatforms.length} failed platform(s).` });
       invalidatePostQueries(queryClient);
     } catch (error) {
@@ -162,7 +175,12 @@ export function usePostRetry() {
     let successCount = 0, errorCount = 0;
     for (let i = 0; i < failedPosts.length; i++) {
       setBulkRetryProgress({ current: i + 1, total: failedPosts.length });
-      try { await deleteFailedPlatformPosts(failedPosts[i].id); await invokeProcessPost(failedPosts[i].id); successCount++; }
+      try {
+        const targets = failedRetryTargets(await takeFailedRetryRows(failedPosts[i].id));
+        if (targets.accountIds.length === 0) throw new Error("No failed result names an account");
+        await invokeProcessPost(failedPosts[i].id, targets.platforms, targets.accountIds);
+        successCount++;
+      }
       catch { errorCount++; }
     }
     setBulkRetrying(false);
