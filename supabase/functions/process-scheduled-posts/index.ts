@@ -16,6 +16,14 @@ import {
 } from '../_shared/social-auth.ts';
 import { metaRefreshStrategy } from '../_shared/refreshEligibility.ts';
 
+/** The lease row this function holds while it runs; see migration 20261031100000. */
+const LEASE_JOB = 'process-scheduled-posts';
+/**
+ * Longer than one edge worker can live (150 s, see process-post/deferredPublish.ts), so a run
+ * never outlives its lease, and a run that dies without releasing blocks the next for at most this.
+ */
+const LEASE_TTL = '3 minutes';
+
 // Returns true if token expires in less than N minutes or is already expired
 function isTokenExpiring(expiresAt: string | null, platform?: string): boolean {
   if (!expiresAt) return true;
@@ -37,6 +45,47 @@ Deno.serve(async (req) => {
     Deno.env.get('SUPABASE_URL') ?? '',
     Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
   );
+
+  // One run at a time: a run with several posts outlives the next minute's tick, and two
+  // overlapping runs refresh the same tokens and call process-post for the same posts.
+  // Fail open when the lease cannot be read: the status-guarded claim in process-post
+  // still stops a double publish, and a scheduler that never runs would publish nothing.
+  const leaseHolder = crypto.randomUUID();
+  let holdsLease = false;
+  try {
+    const { data: acquired, error: leaseError } = await supabaseAdmin.rpc('acquire_cron_run_lease', {
+      p_job: LEASE_JOB,
+      p_holder: leaseHolder,
+      p_ttl: LEASE_TTL,
+    });
+    if (leaseError) {
+      console.error('Scheduler lease unavailable, running without it:', leaseError.message);
+      await supabaseAdmin.from('system_logs').insert({
+        level: 'warn',
+        category: 'system',
+        source: 'process-scheduled-posts',
+        message: 'Scheduler lease unavailable; running without it',
+        metadata: { error: leaseError.message },
+      });
+    } else if (acquired !== true) {
+      console.log('Another scheduler run holds the lease; skipping this tick');
+      await supabaseAdmin.from('system_logs').insert({
+        level: 'info',
+        category: 'post',
+        source: 'process-scheduled-posts',
+        message: 'Scheduler tick skipped: a previous run is still active',
+        metadata: { event: 'run_skipped_lease_held' },
+      });
+      return new Response(
+        JSON.stringify({ message: 'Previous run still active', processed: 0 }),
+        { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
+    } else {
+      holdsLease = true;
+    }
+  } catch (leaseErr: unknown) {
+    console.error('Scheduler lease check threw, running without it:', leaseErr instanceof Error ? leaseErr.message : String(leaseErr));
+  }
 
   try {
     console.log('Processing scheduled posts...');
@@ -225,31 +274,42 @@ Deno.serve(async (req) => {
       } catch (postError: unknown) {
         console.error(`Error processing post ${post.id}:`, postError);
 
-        // Mark the post as failed
-        await supabaseAdmin
+        const errorMsg = postError instanceof Error ? postError.message : 'Unknown error';
+
+        // Mark the post failed only while nobody holds it: still due at the scheduled_at this
+        // run selected and still claimable. If process-post claimed it before the call failed
+        // (a dropped connection while it publishes), it is `processing` and process-post or the
+        // stale-processing sweeper settles it; a `completed` row must never become `failed`.
+        const { data: markedFailed, error: markError } = await supabaseAdmin
           .from('posts')
           .update({ status: 'failed' })
-          .eq('id', post.id);
-
-        const errorMsg = postError instanceof Error ? postError.message : 'Unknown error';
+          .eq('id', post.id)
+          .eq('scheduled_at', post.scheduled_at)
+          .in('status', ['pending', 'scheduled'])
+          .select('id');
+        if (markError) console.error(`Could not mark post ${post.id} failed:`, markError.message);
+        const leftForOwner = !markError && (markedFailed ?? []).length === 0;
 
         // Log: per-post failure
         await supabaseAdmin.from('system_logs').insert({
-          level: 'error',
+          level: leftForOwner ? 'warn' : 'error',
           category: 'post',
           source: 'process-scheduled-posts',
-          message: `Scheduled post failed: ${errorMsg}`,
+          message: leftForOwner
+            ? `Scheduler call failed; post left as is because it is no longer claimable: ${errorMsg}`
+            : `Scheduled post failed: ${errorMsg}`,
           user_id: post.user_id,
           metadata: {
             post_id: post.id,
             platforms: post.platforms,
             error: errorMsg,
+            marked_failed: !leftForOwner && !markError,
           },
         });
 
         results.push({
           postId: post.id,
-          status: 'failed',
+          status: leftForOwner ? 'skipped' : 'failed',
           error: errorMsg
         });
       }
@@ -300,5 +360,18 @@ Deno.serve(async (req) => {
       JSON.stringify({ error: message }),
       { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     );
+  } finally {
+    if (holdsLease) {
+      // Best effort: a lease that is not released expires after LEASE_TTL.
+      try {
+        const { error: releaseError } = await supabaseAdmin.rpc('release_cron_run_lease', {
+          p_job: LEASE_JOB,
+          p_holder: leaseHolder,
+        });
+        if (releaseError) console.error('Scheduler lease release failed:', releaseError.message);
+      } catch (releaseErr: unknown) {
+        console.error('Scheduler lease release threw:', releaseErr instanceof Error ? releaseErr.message : String(releaseErr));
+      }
+    }
   }
 });

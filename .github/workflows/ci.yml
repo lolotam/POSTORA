@@ -239,6 +239,9 @@ jobs:
           deno check --node-modules-dir=none --import-map="${map}" supabase/functions/process-post/index.ts
           deno test --allow-env --node-modules-dir=none --import-map="${map}" supabase/functions/process-post/ supabase/functions/_shared/composioFiles.test.ts
 
+      - name: Typecheck process-scheduled-posts
+        run: deno check --node-modules-dir=none supabase/functions/process-scheduled-posts/index.ts
+
       - name: Typecheck and test the owner-report contract
         run: |
           set -euo pipefail
