@@ -44,7 +44,6 @@ class FakeMediaDb {
   ) {}
 
   from(table: string): MediaBuilder {
-    const db = this;
     const filters: Array<[string, ...unknown[]]> = [];
     let op: "select" | "delete" = "select";
     let payload: unknown = undefined;
@@ -65,14 +64,14 @@ class FakeMediaDb {
         filters.push(["eq", column, value]);
         return builder;
       },
-      then(
+      then: (
         onfulfilled?: (value: unknown) => unknown,
         onrejected?: (reason: unknown) => unknown,
-      ) {
-        db.calls.push({ table, op, filters: [...filters], payload });
+      ) => {
+        this.calls.push({ table, op, filters: [...filters], payload });
         const result = op === "select"
-          ? db.readResult
-          : { data: null, error: db.deleteError };
+          ? this.readResult
+          : { data: null, error: this.deleteError };
         return Promise.resolve(result).then(onfulfilled, onrejected);
       },
     };

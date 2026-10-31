@@ -115,7 +115,7 @@ export function BackgroundRemovalDialog({
   }, [open]);
 
   const buildCloudinaryUrl = (publicId: string, targetCloudName: string) => {
-    let transformations = [];
+    const transformations = [];
 
     // Add background removal
     if (edgeMode === "fine") {
@@ -182,7 +182,7 @@ export function BackgroundRemovalDialog({
       if (!data?.success) throw new Error(data?.error || "Upload failed");
 
       // Extract cloud name from returned URL
-      const urlMatch = data.url.match(/res\.cloudinary\.com\/([^\/]+)/);
+      const urlMatch = data.url.match(/res\.cloudinary\.com\/([^/]+)/);
       const extractedCloudName = urlMatch ? urlMatch[1] : "";
 
       return {

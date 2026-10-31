@@ -195,7 +195,7 @@ export function useCanvasWorkflow() {
       const platforms = enabledPlatforms.length > 0 ? enabledPlatforms : [...new Set(selectedAccountIds.map(() => 'unknown'))];
 
       // Create media file records
-      let mediaFileIds: string[] = [];
+      const mediaFileIds: string[] = [];
       if (mediaFiles.length > 0) {
         for (const media of mediaFiles) {
           const { data: mediaRecord, error } = await supabase

@@ -662,7 +662,7 @@ const CONNECTOR_DEFINITIONS: Record<ConnectorType, ConnectorDefinition> = {
     usageGuide: {
       whenToUse: "Rows in the connected Google Sheets spreadsheet — stock lists, bookings, price tables the business keeps in a sheet.",
       requestExamples: ["is item 42 in the stock sheet", "what price does the sheet list for the large size"],
-      limits: "Reads the connected account\'s sheets only. Writing rows changes the customer\'s data and is off unless the connector allows writes.",
+      limits: "Reads the connected account's sheets only. Writing rows changes the customer's data and is off unless the connector allows writes.",
     },
   },
   slack: {
@@ -671,7 +671,7 @@ const CONNECTOR_DEFINITIONS: Record<ConnectorType, ConnectorDefinition> = {
     usageGuide: {
       whenToUse: "Messages and channels in the connected Slack workspace.",
       requestExamples: ["find the latest message about order 10432", "which channel discussed the launch"],
-      limits: "Sending a message changes the customer\'s workspace and is off unless the connector allows writes.",
+      limits: "Sending a message changes the customer's workspace and is off unless the connector allows writes.",
     },
   },
   google_calendar: {
@@ -680,7 +680,7 @@ const CONNECTOR_DEFINITIONS: Record<ConnectorType, ConnectorDefinition> = {
     usageGuide: {
       whenToUse: "Events and availability in the connected Google Calendar.",
       requestExamples: ["what appointments are tomorrow", "find a free slot next Tuesday"],
-      limits: "Creating an event changes the customer\'s calendar and is off unless the connector allows writes.",
+      limits: "Creating an event changes the customer's calendar and is off unless the connector allows writes.",
     },
   },
   hubspot: {
@@ -689,7 +689,7 @@ const CONNECTOR_DEFINITIONS: Record<ConnectorType, ConnectorDefinition> = {
     usageGuide: {
       whenToUse: "Contacts and customer records in the connected HubSpot account.",
       requestExamples: ["find the contact for this email", "show the CRM record for this customer"],
-      limits: "Creating a contact changes the customer\'s CRM and is off unless the connector allows writes.",
+      limits: "Creating a contact changes the customer's CRM and is off unless the connector allows writes.",
     },
   },
   notion: {
@@ -707,7 +707,7 @@ const CONNECTOR_DEFINITIONS: Record<ConnectorType, ConnectorDefinition> = {
     usageGuide: {
       whenToUse: "Records in the connected Airtable bases.",
       requestExamples: ["list open bookings", "find the record for customer 402"],
-      limits: "Creating a record changes the customer\'s base and is off unless the connector allows writes.",
+      limits: "Creating a record changes the customer's base and is off unless the connector allows writes.",
     },
   },
   youtube: {

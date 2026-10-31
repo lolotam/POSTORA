@@ -352,7 +352,7 @@ Deno.serve(async (req) => {
         `;
         break;
 
-      case "post_failed":
+      case "post_failed": {
         const failedPlatforms = (data?.failed_platforms as Array<{ platform: string; error: string }>) || [];
         const successPlatforms = (data?.success_platforms as string[]) || [];
         const postCaption = (data?.caption as string) || "Your post";
@@ -400,6 +400,7 @@ Deno.serve(async (req) => {
           </div>
         `;
         break;
+      }
 
       default:
         logStep(`Unknown email type: ${type}`);

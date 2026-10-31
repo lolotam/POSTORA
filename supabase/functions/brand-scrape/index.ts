@@ -442,7 +442,7 @@ Deno.serve(async (req) => {
         const parsed = typeof maxPostsSetting.value === "string" ? JSON.parse(maxPostsSetting.value) : maxPostsSetting.value;
         maxPosts = Math.max(1, Math.min(100, Number(parsed) || 50));
       }
-    } catch {}
+    } catch { /* optional enrichment; scraping continues without it */ }
 
     // Read apify_enabled toggle
     let isApifyEnabled = true; // default true for backward compat
@@ -452,7 +452,7 @@ Deno.serve(async (req) => {
         const parsed = typeof apifyEnabledSetting.value === "string" ? JSON.parse(apifyEnabledSetting.value) : apifyEnabledSetting.value;
         isApifyEnabled = parsed === true || parsed === "true";
       }
-    } catch {}
+    } catch { /* optional enrichment; scraping continues without it */ }
 
     console.log(`maxPosts setting resolved to: ${maxPosts}, apify_enabled: ${isApifyEnabled}`);
 
@@ -682,7 +682,7 @@ Deno.serve(async (req) => {
         const parsed = typeof ttlSetting.value === "string" ? JSON.parse(ttlSetting.value) : ttlSetting.value;
         ttlMinutes = Number(parsed) || 60;
       }
-    } catch {}
+    } catch { /* optional enrichment; scraping continues without it */ }
 
     await supabaseAdmin.from("brand_scrape_cache").upsert({
       cache_key: cacheKey,
@@ -738,7 +738,7 @@ Deno.serve(async (req) => {
         const p = typeof actorSetting.value === "string" ? JSON.parse(actorSetting.value) : actorSetting.value;
         failedActorId = String(p).replace("/", "~");
       }
-    } catch {}
+    } catch { /* optional enrichment; scraping continues without it */ }
 
     await logger.error(`Scrape failed for ${platform}:${cleanUsername}`, {
       platform,

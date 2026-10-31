@@ -40,10 +40,11 @@ export function getPlatformProfileUrl(
     case "threads":
       return username ? `https://www.threads.net/@${username.replace("@", "")}` : null;
     
-    case "bluesky":
+    case "bluesky": {
       // Bluesky handles are typically like handle.bsky.social
       const blueskyHandle = username.replace("@", "");
       return `https://bsky.app/profile/${blueskyHandle}`;
+    }
     
     case "pinterest":
       return username ? `https://www.pinterest.com/${username.replace("@", "")}` : null;

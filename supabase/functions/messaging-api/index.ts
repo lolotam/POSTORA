@@ -248,7 +248,7 @@ Deno.serve(async (req) => {
         console.error("Graph API error:", res.status, errText);
         
         let parsed: any = {};
-        try { parsed = JSON.parse(errText); } catch {}
+        try { parsed = JSON.parse(errText); } catch { /* a non-JSON error body keeps parsed empty */ }
         
         const fbError = parsed?.error;
         if (fbError?.code === 190) {

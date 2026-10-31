@@ -354,7 +354,7 @@ export function ImageToolsDialog({
       // Use cloudName from response directly, fallback to extracting from URL
       let extractedCloudName = data.cloudName;
       if (!extractedCloudName) {
-        const urlMatch = data.url.match(/res\.cloudinary\.com\/([^\/]+)/);
+        const urlMatch = data.url.match(/res\.cloudinary\.com\/([^/]+)/);
         extractedCloudName = urlMatch ? urlMatch[1] : "";
       }
 
@@ -518,7 +518,7 @@ export function ImageToolsDialog({
         if (cloudName) {
           targetCloudName = cloudName;
         } else if (file.file_path) {
-          const urlMatch = file.file_path.match(/res\.cloudinary\.com\/([^\/]+)/);
+          const urlMatch = file.file_path.match(/res\.cloudinary\.com\/([^/]+)/);
           targetCloudName = urlMatch ? urlMatch[1] : "";
         } else {
           targetCloudName = "";

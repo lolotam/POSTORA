@@ -349,7 +349,7 @@ export function BatchImageToolsDialog({
     if (error) throw error;
     if (!data?.success) throw new Error(data?.error || "Upload failed");
 
-    const urlMatch = data.url.match(/res\.cloudinary\.com\/([^\/]+)/);
+    const urlMatch = data.url.match(/res\.cloudinary\.com\/([^/]+)/);
     const extractedCloudName = urlMatch ? urlMatch[1] : "";
 
     return {

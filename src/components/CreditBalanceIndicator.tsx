@@ -1,6 +1,6 @@
 import { useCredits } from "@/hooks/useCredits";
 import { useUserRole } from "@/hooks/useUserRole";
-import { Zap, Shield, Infinity } from "lucide-react";
+import { Zap, Shield } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";

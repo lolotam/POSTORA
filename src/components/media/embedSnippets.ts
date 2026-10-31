@@ -12,7 +12,7 @@ function escapeHtml(value: string): string {
 }
 
 function escapeMarkdownLabel(value: string): string {
-  return value.replace(/[[\]]/g, "\$&");
+  return value.replace(/[\\[\]]/g, "\\$&");
 }
 
 export function embedSnippets(fileType: string, url: string, name: string): EmbedSnippets {

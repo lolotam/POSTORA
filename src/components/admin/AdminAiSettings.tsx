@@ -200,7 +200,7 @@ export function AdminAiSettings() {
             ? JSON.parse(fbProviderSetting.value)
             : fbProviderSetting.value;
           if (parsed) setFallbackProvider(parsed as AIProvider);
-        } catch {}
+        } catch { /* an unparsable stored value keeps the default */ }
       }
 
       if (fbModelSetting?.value) {
@@ -209,7 +209,7 @@ export function AdminAiSettings() {
             ? JSON.parse(fbModelSetting.value)
             : fbModelSetting.value;
           if (parsed) setFallbackModel(parsed);
-        } catch {}
+        } catch { /* an unparsable stored value keeps the default */ }
       }
     }
   }, [aiSettings]);

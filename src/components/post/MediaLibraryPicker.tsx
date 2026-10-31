@@ -260,7 +260,7 @@ export function MediaLibraryPicker({
 
   // Filter files based on all criteria
   const filteredFiles = useMemo(() => {
-    let filtered = mediaFiles.filter((file) => {
+    const filtered = mediaFiles.filter((file) => {
       // Search filter
       const matchesSearch = searchQuery
         ? librarySearchText(file).includes(searchQuery.toLowerCase())

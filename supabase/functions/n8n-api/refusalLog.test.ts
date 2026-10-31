@@ -25,11 +25,10 @@ class FakeSupabase {
   constructor(private readonly error: { message: string } | null = null) {}
 
   from(table: string) {
-    const db = this;
     return {
-      insert(payload: Record<string, unknown>) {
-        db.inserts.push({ table, payload });
-        return Promise.resolve({ data: null, error: db.error });
+      insert: (payload: Record<string, unknown>) => {
+        this.inserts.push({ table, payload });
+        return Promise.resolve({ data: null, error: this.error });
       },
     };
   }
@@ -57,11 +56,10 @@ class FlakySupabase {
   constructor(private readonly failures: number) {}
 
   from(_table: string) {
-    const db = this;
     return {
-      insert(_payload: unknown): Promise<{ data: null; error: { message: string } | null }> {
-        db.attempts += 1;
-        const error = db.attempts <= db.failures ? { message: "insert failed" } : null;
+      insert: (_payload: unknown): Promise<{ data: null; error: { message: string } | null }> => {
+        this.attempts += 1;
+        const error = this.attempts <= this.failures ? { message: "insert failed" } : null;
         return Promise.resolve({ data: null, error });
       },
     };
@@ -80,15 +78,14 @@ class HeldSupabase {
   private holding = false;
 
   from(table: string) {
-    const db = this;
     return {
-      insert(payload: Record<string, unknown>): Promise<{ data: null; error: { message: string } | null }> {
-        db.insertCalls += 1;
-        db.inserts.push({ table, payload });
-        if (db.holding) return Promise.resolve({ data: null, error: null });
-        db.holding = true;
+      insert: (payload: Record<string, unknown>): Promise<{ data: null; error: { message: string } | null }> => {
+        this.insertCalls += 1;
+        this.inserts.push({ table, payload });
+        if (this.holding) return Promise.resolve({ data: null, error: null });
+        this.holding = true;
         return new Promise<{ data: null; error: { message: string } | null }>((resolve) => {
-          db.releaseFn = resolve;
+          this.releaseFn = resolve;
         });
       },
     };

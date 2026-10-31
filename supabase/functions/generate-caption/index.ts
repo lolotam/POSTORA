@@ -812,7 +812,7 @@ Return exactly 5 captions separated by --- on its own line. No numbering, no lab
         error_message: errMsg,
         error_stack: error instanceof Error ? error.stack : undefined,
       });
-    } catch {}
+    } catch { /* best effort; the caption is returned either way */ }
 
     // Return 200 with structured payload so the browser keeps CORS headers
     // and the client can show a readable toast instead of a 5xx/CORS crash.

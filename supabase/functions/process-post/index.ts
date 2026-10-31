@@ -5888,7 +5888,7 @@ async function postToPinterest(
 
   // Check if a board ID was specified in the post metadata
   // Support both legacy flat metadata keys and nested metadata.pinterest.* (used by our API)
-  let specifiedBoardId = nestedBoardId ?? metadata?.pinterest_board_id;
+  const specifiedBoardId = nestedBoardId ?? metadata?.pinterest_board_id;
 
   // Fetch user's boards to validate the board ID or get the first one
   const boardsResponse = await fetch(
@@ -6767,7 +6767,7 @@ async function postToThreads(
   // accepted (location_id, is_quote_post, shortcode) — surfaces silent ignores.
   let postUrl = username ? `https://www.threads.com/@${username}` : undefined;
   let verifyData: any = null;
-  let crossShareStatus: string | null = null;
+  const crossShareStatus: string | null = null;
   try {
     const verifyRes = await fetch(
       `https://graph.threads.net/v1.0/${postId}?fields=id,permalink,shortcode,is_quote_post,media_type,location,location_id,topic_tag,crossreshare_to_ig_status&access_token=${accessToken}`

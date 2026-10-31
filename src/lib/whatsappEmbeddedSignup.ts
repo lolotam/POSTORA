@@ -79,7 +79,7 @@ export async function launchWhatsAppSignup(mode: WhatsAppConnectionMode): Promis
   }
 
   return new Promise<WhatsAppSignupResult>((resolve, reject) => {
-    let captured: { waba_id?: string; phone_number_id?: string; business_id?: string } = {};
+    const captured: { waba_id?: string; phone_number_id?: string; business_id?: string } = {};
 
     const messageHandler = (event: MessageEvent) => {
       // Meta sends messages from facebook.com origins
