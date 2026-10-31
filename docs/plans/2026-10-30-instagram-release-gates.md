@@ -256,7 +256,7 @@ Do not treat main's existing merges, automatic frontend deploy or edge reconcile
 
 ## Open questions for Waleed
 
-Use the single question register in [spec §8](../specs/2026-10-30-instagram-release-gates.md#8-open-questions-for-waleed): pilot identity/order, one-account eligibility prerequisite, cadence/observation window, metric/retry reconciliation and approval of exact canary post and post-merge migration-edit recovery. Each has a recommended default. No approval is inferred from this document, and already approved limits/S/deferred scope are not reopened
+Use the single question register in [spec §8](../specs/2026-10-30-instagram-release-gates.md#8-open-questions-for-waleed): pilot identity/order, one-account eligibility prerequisite, cadence/observation window, metric/retry reconciliation and approval of exact canary post and migration-integrity incident recovery (post-merge edit, exact version collision, unreplayable superseded member). Each has a recommended default. No approval is inferred from this document, and already approved limits/S/deferred scope are not reopened
 
 ## Authoring validation record and stop boundary
 
