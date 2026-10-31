@@ -138,6 +138,7 @@ SUITES=(
   media_upload_limits.sql
   deferred_publishes.sql
   instagram_story_recording.sql
+  cron_run_lease.sql
   tiktok_review_lifecycle.sql
   whatsapp_account_continuity.sql
   store_webhook_silence.sql
