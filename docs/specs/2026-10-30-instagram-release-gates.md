@@ -1,5 +1,7 @@
 # Task 11 spec: Instagram release gates and journeys
 
+> **Status reconciliation, 2026-11-01:** the authoring baseline below is preserved. The [Meta analytics status review](../journeys/2026-11-01-meta-analytics-status.md) records subsequent merges, read-only production observations and unresolved defects. Its status inventory does not check any acceptance row or B–E approval box in this specification.
+
 Date: 2026-10-30. Status: documentation only; implementation and production approval pending.
 
 **Outcome:** an evidence-backed release handoff covering every approved acceptance ID, deterministic local journeys, and separately approved production activation. A passing component test, merged file, or HTTP 200 is not a completed journey or live Meta acceptance.
