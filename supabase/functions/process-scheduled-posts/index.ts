@@ -189,7 +189,7 @@ Deno.serve(async (req) => {
                       break;
                   }
                 } catch (refreshError) {
-                  console.warn(`[JIT-SCHEDULED] Token refresh threw error for ${account.platform} (post: ${post.id}), will attempt publish with existing token:`, refreshError.message || refreshError);
+                  console.warn(`[JIT-SCHEDULED] Token refresh threw error for ${account.platform} (post: ${post.id}), will attempt publish with existing token:`, refreshError instanceof Error ? refreshError.message : refreshError);
                   refreshResult = null;
                 }
 
