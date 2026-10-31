@@ -44,10 +44,25 @@ C1 creates no job that could reach the runtime before it is deployed, because
 all four jobs are installed **inactive**. That is the reason the schedule may
 be applied before the runtime — not a reason to apply it early.
 
-**None of R1, R2 or C1 has been applied to production.** They exist as
-migrations in this branch and as rehearsed SQL in a disposable database.
-Task 11 gate **B1** is where the applied ledger is reconciled and the
-missing migrations are approved for application.
+**R1, R2 and C1 were applied to production on 2026-10-31**, in that order,
+as `supabase_admin`, with Waleed's approval, before PR #317 merged. The
+files were read from the pushed branch (`25b1ea83`) and their SHA-256
+matched the reviewed copies. A full dump was taken first
+(`/root/backups/pre-rollout-controls-20261031.dump`). The state recorded
+right after the application:
+
+- `collection_instagram_rollout_policy` holds the default: owners `off`,
+  competitors `off`;
+- `collection_instagram_insights_enabled` does not exist, which the
+  evaluator reads as `collection_disabled`;
+- the four schedules of §3.3 exist and are all **inactive**;
+- `authorize_instagram_collection_provider_call` and
+  `enqueue_instagram_collection_daily_page` are executable by
+  `service_role` only (not `anon`, not `authenticated`).
+
+The application changed no activation state. Task 11 gate **B1** still owns
+the reconciliation of the full applied ledger; production keeps no
+migration-history table, so "applied" is proven from the objects above.
 
 ### 1.1 The manual-racing prerequisite
 
@@ -349,7 +364,18 @@ them up through `scripts/db-harness.sh`:
 - `supabase/tests/instagram_collection_cron.sql` (C1)
 
 The two race fixtures are **manual multi-session rehearsals**, not suites;
-their headers document the sessions, the waits and the cleanup.
+their headers document the sessions, the waits and the cleanup. Both were
+rehearsed on 2026-10-31 against a disposable `supabase/postgres:17.6.1.158`
+harness of the merged candidate, before the production application, and met
+every PASS line of their headers. Probes against an uncommitted policy,
+repin or reconnect returned in under a second, and the same probes were
+refused after the commit. The fenced write and the daily page waited on the
+account and sweep locks, with the holder named as the blocker, while the
+policy writer did not wait. The rollback, resume and rollover probes and
+both `assert` paths passed. One ordering note: `attach_new` reports
+`IG_COLLECTION_VIEWER_NOT_APPROVED` only on a job with no bound viewer; if
+the probe already attached the old viewer during the hold, the refusal after
+the repin is `IG_COLLECTION_NOT_ELIGIBLE`.
 
 ### 8.2 The integration suites
 
@@ -408,9 +434,9 @@ implements.
   the four schedules stay inactive until Waleed approves it under Task 11
   **B**, **C**, **D** or **E**. Each of those gates needs its own approval
   reference, its own candidate, its own timestamp and its own operator.
-- **No production SQL.** R1, R2 and C1 are **not applied**. The applied
-  ledger is reconciled under **B1**, and only the missing, reviewed
-  migrations are applied, in order, with all four jobs inactive.
+- **No further production SQL.** R1, R2 and C1 are applied (§1) with all
+  four jobs inactive. Any later migration is reconciled under **B1** and
+  applied only after its own review and approval.
 - **No deployment.** The runtime closure of §2 is a **candidate**, not a
   deployment. Deployment follows [deploy-edge-function.md](deploy-edge-function.md)
   and is approved under **B2**.

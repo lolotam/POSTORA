@@ -197,9 +197,10 @@ psql "$DB_URL"   # session A
 psql "$DB_URL"   # session B
 psql "$DB_URL"   # the observer
 
-# 3. in the observer session, define the probe (the definition is in the
-#    fixture header) and call it while a racer is blocked
-psql "$DB_URL" -c "SELECT * FROM pg_temp.crt_probe();"
+# 3. in the observer session itself, define the probe (the definition is in
+#    the fixture header) and call it there while a racer is blocked; it is a
+#    pg_temp function, so a separate `psql -c` process cannot see it
+#      observer=> SELECT * FROM pg_temp.crt_probe();
 
 # 4. cleanup (removes the synthetic rows and switches retention off again)
 psql "$DB_URL" -v ON_ERROR_STOP=1 -v disposable=1 -v cleanup=1 \
