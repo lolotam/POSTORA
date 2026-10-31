@@ -1,5 +1,7 @@
 # Activation plan: Instagram insights collection (after PR #294)
 
+> **Current status, 2026-11-01:** this plan records its 2026-10-29 baseline. Per-target rollout controls and daily dispatch subsequently landed in #317; their production application is recorded in the [rollout runbook](../runbooks/instagram-collection-rollout.md). Use the [current Meta analytics review](../journeys/2026-11-01-meta-analytics-status.md) to distinguish implemented prerequisites from pending evidence and approvals. Do not rerun historical prerequisites or infer activation permission from this note.
+
 **Status: activation not approved and not started.** Only the read-only Gate A evidence below has been gathered; no gate that changes production has run. Waleed decides if and when activation starts, and approves each gate below separately. This plan follows milestone 4 of `docs/plans/2026-10-26-instagram-insights-and-competitor-tracking.md` §14: release readiness, not automatic release.
 
 ## 1. Production state on 2026-10-29 (verified, read-only)
