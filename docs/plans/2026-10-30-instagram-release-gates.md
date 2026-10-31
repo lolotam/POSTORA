@@ -110,7 +110,7 @@ Task 11 never owns the proposed collection cron migration or new eligibility imp
 
 ### 6. Assemble migration, scheduling, runtime-caller and rollback gates
 
-**Order:** `.github/CODEOWNERS` and the branch-protection settings land first in their own PR with recorded designated-owner approval (code ownership is read from the base branch, so rules added in a PR cannot protect that PR); the checker and the gate workflow land only in a later PR, once that protection is active.
+**Order:** `.github/CODEOWNERS` and the branch-protection settings land first in their own PR with recorded designated-owner approval (code ownership is read from the base branch, so rules added in a PR cannot protect that PR); the checker and the gate workflow land only in a later PR, once that protection is active. Both bootstrap PRs, and configuring the gate's required status on main, are a prerequisite of the collection rollout plan: no R1, R2 or C1 PR is opened or merged before that status is live, because a `pull_request_target` gate protects only PRs whose base already contains it. This bootstrap step runs before the rest of Task 6, which consumes the completed migration ledger.
 
 **Create (proposed):** `.github/workflows/instagram-migration-gate.yml` (the base-sourced `pull_request_target` migration gate); `.github/CODEOWNERS` (absent today; owner review for the checker, `.github/workflows/` and `.github/CODEOWNERS` itself); evidence artifacts are outside tracked source.
 
