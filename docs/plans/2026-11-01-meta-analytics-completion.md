@@ -1,7 +1,7 @@
 # Meta analytics completion — implementation plan
 
 **Spec:** [`docs/specs/2026-11-01-meta-analytics-completion-design.md`](../specs/2026-11-01-meta-analytics-completion-design.md). Section references (§) point there.
-**Required reading for every task and every delegation brief:** [`ARCHITECTURE.md`](../../ARCHITECTURE.md) (layering, Edge Function shape, security rules), the spec, and for Batch A [`docs/specs/2026-10-30-instagram-release-gates.md`](../specs/2026-10-30-instagram-release-gates.md).
+**Required reading for every task and every delegation brief:** [`ARCHITECTURE.md`](../../ARCHITECTURE.md) §§4, 10–17, 22–24, 27–28, 31–34 and 36–39 (dependencies, adapters, authentication, contracts, storage, scheduling, testing and compatibility), the spec, and for Batch A [`docs/specs/2026-10-30-instagram-release-gates.md`](../specs/2026-10-30-instagram-release-gates.md).
 
 Three batches, in order. A batch starts only when the previous batch's exit criteria are met, except where a task is marked *parallel*.
 
@@ -9,7 +9,7 @@ Three batches, in order. A batch starts only when the previous batch's exit crit
 
 - Feature branch from `origin/main` created with `--no-track`; scoped commits (`git commit -- <files>`).
 - Tests first where behaviour changes; `clean-code-guard` on production code, `test-guard` on tests, `docs-guard` on docs.
-- Gates: relevant `deno test` suites, Node/Vitest suites, SQL tests for migrations, `npx tsc --noEmit`, `npm run build`, `node scripts/ci/lint-i18n-regression.mjs`.
+- Gates: relevant `deno test` suites, Node/Vitest suites, SQL tests for migrations, `npm run typecheck`, `npm run build`, `node scripts/ci/lint-i18n-regression.mjs`.
 - Edge deploys only via `docs/runbooks/deploy-edge-function.md`. Never `npx supabase functions deploy`.
 - No change to collection switches, allow-lists, cron activation, credentials or applied migration bytes unless the task says so **and** the owner approves at that moment (spec §12).
 - New user-facing strings in both Arabic and English.
@@ -19,15 +19,15 @@ Three batches, in order. A batch starts only when the previous batch's exit crit
 ## Batch A — Instagram defects, correct totals, pilot
 
 ### A1. Merge #326
-Review [PR #326](https://github.com/lolotam/POSTORA/pull/326), rebase on `main`, rerun its tests and gates, merge, let the frontend deploy. Does not enable collection.
+Review [PR #326](https://github.com/lolotam/POSTORA/pull/326), resolve valid findings, update from `main` only if needed, rerun its tests/gates on the final head, merge, and verify the deployed frontend. Does not enable collection.
 **Done:** merged; deployed frontend shows the translated `collection_disabled` reason.
 
 ### A2. Service-role 401 in `instagram-insights-report`
 - Files: `supabase/functions/instagram-insights-report/index.ts`; reuse `supabase/functions/_shared/auth-helper.ts` (`authenticateCaller(req, bodyUserId)`), the same pattern as the helper's own body-parsing wrapper at `auth-helper.ts:96-97`.
 - Read the body once; pass a UUID-validated `user_id`; keep the handler's structural ownership lookup.
 - Tests (through the real composition root, not an injected auth stub): service-role + owned account → 200; service-role + foreign `social_account_id` → non-enumerating 404; user JWT with a different body `user_id` → JWT identity wins; missing body `user_id` with service role → 401.
-- Deploy the function per runbook.
-**Done:** the read-only service-role probe from the status review returns 200 for the owned account.
+- Local implementation and tests only. Its immutable candidate is deployed during A7/B2, after B1 evidence and B2's separate approval; A2 authorizes no early runtime change.
+**Done locally:** real-composition regression tests pass. **Live acceptance, deferred to A7/B2:** the approved read-only service-role probe returns 200 for the owned account after deployment.
 
 ### A3. Cursor contract
 - Files: `supabase/functions/instagram-insights-report/contracts.ts` (owns the codec), `handler.ts` (`parseCursor`), `src/features/instagram-insights/infrastructure/supabaseInstagramInsightsGateway.ts`.
@@ -41,18 +41,22 @@ Review [PR #326](https://github.com/lolotam/POSTORA/pull/326), rebase on `main`,
 
 ### A5. Correct totals
 - File: `src/features/instagram-insights/ui/MetricsOverviewCards.tsx` (+ domain helper).
-- Stop labelling summed daily reach as unique accounts; period reach comes from a provider period total or is shown as daily-sum with its own label; totals with missing days show coverage (`partial`).
-- Tests: all days present; some days missing; no days; zero values vs missing values.
+- Unique `reach` requires an exact provider period total or is `unavailable`; daily reach is never summed, and no daily-sum reach metric is added. Summable metrics use per-metric coverage; a present daily row with a missing metric still leaves that metric partial/unavailable.
+- Tests: all metric values present; rows present but some metric values missing; missing days; no values; true zero versus unavailable; unique-reach summing rejected.
 
 ### A6. Release-gate artefacts (owner analytics only)
-Create the artefacts the status review lists as missing: `scripts/check-instagram-release-gates.mjs`, `e2e/fixtures/instagramReleaseServer.ts`, `e2e/fixtures/instagramReleaseSeed.ts`, `docs/runbooks/instagram-insights-release.md`. Scope them to owner analytics; competitor checks are excluded (spec §5.6).
+Create distinctly scoped artifacts: `scripts/check-instagram-owner-analytics-gates.mjs` with adjacent tests, `e2e/fixtures/instagramOwnerReleaseServer.ts`, `e2e/fixtures/instagramOwnerReleaseSeed.ts`, and `docs/runbooks/instagram-owner-analytics-release.md`. They cover owner readiness only and must identify themselves as such in their output.
+
+They do **not** implement or pass the canonical `scripts/check-instagram-release-gates.mjs` G-X gate. Its full acceptance inventory, including unresolved competitor work, remains fail-closed and unchanged. A7 is blocked until the authoritative release prerequisites pass or Waleed explicitly approves a scope amendment in the owning release-gates specification. This plan does not grant that amendment or mark competitor acceptance passed.
 
 ### A7. Pilot — owner-approved operations
-Gates by name from the release-gates spec §6: **B1** (manifest and preflight), **B2** (deployment — separate approval), **B3** (pilot user list), **C1–C2** (reconnect; session/refresh regression), **C3** (harmless test post — separate approval), **D1** (one-account eligibility from the rollout-controls work, with its RC evidence), **D2** (collect for one named owner account; prove zero provider calls for every other target). D3 (competitor) and E are out of scope.
+After the A6 prerequisite decision, gates by name from the release-gates spec §6: **B1** (manifest/preflight for the frozen A2–A5 candidate), **B2** (deploy that reviewed candidate — separate approval), **B3** (pilot user list), **C1–C2** (reconnect; session/refresh regression), **C3** (test post — separate approval), **D1** (RC-proven target admission), and **D2** (one named owner; zero provider calls for others).
 Each step: approval → action → query evidence → record in the runbook.
 
+**Proposed pilot-only schedule approval, separate from D2 and not a completion claim for canonical E2:** before A8's stability window, obtain approval for the exact `instagram-insights-enqueue-daily` and `instagram-insights-drain` cadences, candidate, one-account allow-list and window. Record the prerequisite scope amendment where required by the authoritative gates, prove other owners and all competitors remain excluded, then activate only those two jobs. Capture their active flags and seven expected collection due dates. D3 competitor collection, E1 cohort widening and E3 competitor retention remain out of scope; canonical E2 wider-cohort/scale acceptance remains pending. Rollback deactivates both jobs and disables pilot collection, with query evidence of zero further writes.
+
 ### A8. Reconciliation
-Compare 7 closed days for the pilot against Meta using spec §9 tolerances; then run the 7-day stability gate (§9). Record results in `docs/journeys/`.
+Compare 7 closed days using the exact period/bucket semantics in spec §4.4 and tolerances in §9. Stability starts only after A7's separate schedule approval/activation; require seven distinct scheduled due-date receipts, not zero runs or seven retries of one run. Record expected/actual runs, outcomes, continuation/backoff, non-pilot exclusions and rollback evidence in `docs/journeys/`.
 
 **Batch A exit:** A1–A8 done; pilot stable and reconciled; rollback verified once (switch off → zero new writes).
 
@@ -62,14 +66,15 @@ Compare 7 closed days for the pilot against Meta using spec §9 tolerances; then
 
 ### B1. Contract package *(parallel with Batch A)*
 - Files: `src/features/analytics-contract/domain/{types,registry,period,delta}.ts`, `supabase/functions/_shared/analyticsContract.ts`.
-- Implements spec §4: `MetricValue` with `available | partial | unavailable(reason)`, registry entry fields, `not_summable` rule, period/previous period, delta rules (including previous `0`), sync status, `schemaVersion`.
-- Tests: unavailable never aggregates to `0`; partial coverage; `not_summable` refuses summing; delta cases; parity test comparing frontend and Deno exports (keys, statuses, version).
+- Implements spec §4: metric statuses, explicit registry capability/evidence fields, `capability_unverified` versus `not_collected`, per-metric coverage, `not_summable`, exact calendar/bucket boundaries, deltas, sync status and distinct `analyticsContractVersion: 1`.
+- Tests: unavailable never becomes `0`; rows present with missing metrics remain incomplete; true zeros; capability-state mapping; no unique-reach sums; timezone/boundary/DST cases; deltas; frontend/Deno parity of keys, statuses and version discriminator.
 
 ### B2. Capability probes
 - A read-only probe per platform (script under `scripts/probes/` calling the Graph APIs with a stored token fetched server-side, or a service-role-only function action), producing a JSON + Markdown evidence record under `docs/journeys/` with the fields in spec §6. Tokens are never printed.
 - Facebook: Page token, `/{page-id}/insights` and `/{post-id}/insights` at the pinned Graph version; record deprecated metrics and replacements from current Meta documentation; granted scopes via token debug.
 - Threads: account and post insights, listing pagination, earliest available date per metric, maximum window.
 - Run only against owner-approved accounts (spec §12).
+- Negative expired/revoked-token and missing-permission cases use sanitized fixtures through the real adapter boundary. Existing live negative states may be observed; creating one requires the separately approved disposable-account/recovery procedure in spec §6 and is not part of the read-only probe.
 **Done:** evidence committed; registry cells move from `unverified` to proven `available`/`not_offered`.
 
 ### B3. Threads live path correctness
@@ -77,7 +82,7 @@ Compare 7 closed days for the pilot against Meta using spec §9 tolerances; then
 - Account selection: requested `accountId` missing/inactive/foreign → rejected, DB error → 5xx, no fallback, provider not called.
 - Decoding: missing metric, failed previous period, one failed post → `unavailable` in the new versioned response; multi-day series preserved.
 - Bounds: page, call and time budget under 45 s; per-call timeout; parallelism cap; throttling → `retryAt`; opaque continuation cursor.
-- **Compatibility:** the current response stays the default; the contract shape is returned only when the request asks for `schemaVersion: 1` (spec §4.6). `ThreadsInsightsPanel` and `serviceProxy.ts` keep working unchanged; compatibility tests for both shapes.
+- **Compatibility:** the current response stays the default; the unified shape is selected only by `analyticsContractVersion: 1` (spec §4.6), which is distinct from Instagram's legacy `schemaVersion: 1`. `ThreadsInsightsPanel` and `serviceProxy.ts` keep their old requests until migrated. Tests cover legacy/default, explicit unified and unsupported-version requests for both paths.
 - Tests at the endpoint: foreign/inactive/failed-read account, missing metric, failed comparison, single post failure, budget exceeded, repeated cursor.
 
 ### B4. Facebook owned-Page insights read adapter
@@ -95,10 +100,10 @@ Fill the spec §4.3 mapping table and the registry from B2 evidence; update the 
 ## Batch C — history and unified UI
 
 ### C1. Job-model decision record
-Before any migration, a short ADR in `docs/specs/` choosing spec §8.2 option (a) or (b), based on `instagram_durable_collection_jobs.sql` and `instagram-insights-sync/workerStore.ts`. It lists which TypeScript modules are platform-neutral and reused, and the platform-isolation, fencing and reconnect tests required.
+Before any migration, a short ADR in `docs/specs/` chooses spec §8.2 option (a) or (b), based on the actual Instagram durable-job migration and `instagram-insights-sync/workerStore.ts`. It lists platform-neutral modules, business keys/indexes and capture-ID ownership from §8.1, retention cutoff and anchor preservation, exact lock/fence/deletion order and batch limits, plus platform-isolation, fencing, reconnect, retry-idempotency and retention/report race tests. C2 is blocked until this ADR is reviewed; omitted cleanup details are not left to migration-time guesses.
 
 ### C2. Migrations (owner approval to merge and to apply)
-Additive migrations for spec §8.1 tables (daily, post snapshots, profile observations) for Facebook and Threads, plus the job model chosen in C1, switches defaulting to `off`, empty allow-lists, cron entries created inactive, retention policy. SQL tests: RLS deny-by-default, owner-only reads, grants, whitelist refusal, concurrency/fencing, platform isolation.
+Additive migrations for spec §8.1 tables and reviewed C1 model: enforce the declared daily/post/capture uniqueness keys, owner-first indexes, composite ownership/platform foreign keys, current-claim/generation write fences, and the 365-day retention cutoff with its profile anchor. Switches default off, allow-lists are empty, and collection/retention cron entries are created inactive. SQL tests cover RLS/grants, cross-owner and platform isolation, duplicate response writes, same-day recapture, stale retries, deterministic follower-boundary selection, retention edges/anchors and races against active collection/reporting. Retention activation needs a reviewed dry run and a separate later approval.
 
 ### C3. Sync workers
 Per-platform provider adapters and workers reusing the platform-neutral modules from C1; budgets, throttles, receipts and retries as in Instagram. Tests mirror `instagram-insights-sync/*.test.ts` coverage (worker, store, rollout, termination).
@@ -110,10 +115,10 @@ Per-platform report endpoints returning the contract (§8.3), ownership per requ
 Shared components under `src/features/analytics-contract/ui/` (account/period picker, summary cards, trends, top posts, sync-status banner, metric definition tooltip). Instagram, Facebook and Threads screens migrate to them; the Threads panel moves to the versioned response, after which the legacy shape can be retired in a separate change. Component tests for every `MetricValue` status and sync status.
 
 ### C6. Pilot per platform (owner-approved operations)
-For Facebook, then Threads: deploy (approved) → enable one named pilot target → stability gate and reconciliation (spec §9) → widen only with a separate approval. Rollback rehearsed once per platform.
+For Facebook, then Threads: approve and deploy the reviewed candidate; separately approve one named pilot target; separately approve and activate the exact per-platform daily-enqueue/drain jobs before starting the stability window. Each schedule manifest records real cron names/cadences, candidate and account scope, timezone, the seven expected due dates, run/receipt evidence and provider budgets; blank manifests block activation. Require seven distinct scheduled due-date successes (not zero runs or duplicate retries), reconciliation under spec §9, and zero non-pilot writes. Retention remains off unless separately approved after its dry run. Rehearsed rollback disables the platform switch/eligibility and deactivates its enqueue/drain jobs, then proves inactivity/no further writes. Widening remains a separate approval.
 
 ### C7. Acceptance journeys and handover
-Run spec §10 journeys per platform on production; write the user-facing journey in `docs/journeys/`; update the status review.
+Run the approved production pilot journeys in spec §10 plus isolated fixture journeys for missing/expired/revoked permission states. Do not alter pilot credentials to manufacture failures. Any optional live destructive negative case requires the dedicated disposable-account approval and recovery procedure. Record fixture versus live evidence separately, write the user-facing journey in `docs/journeys/`, and update the status review.
 
 **Batch C exit = spec §1 completion criterion.**
 
@@ -137,3 +142,18 @@ Reviewer: Codex CLI 0.166.0, model `gpt-6.1-sol`, reasoning `high`, read-only sa
 | 10 | major | Changing the Threads response in B before the UI migrates in C breaks `ThreadsInsightsPanel` and the proxy. | Accepted | Versioned response, legacy default, compatibility tests (spec §4.6, B3, C5). |
 | 11 | major | "N days" gates are undecidable; no budget, stop conditions or rollback. | Accepted | Numeric tolerances, 7-day stability gate, stop conditions, rehearsed rollback (spec §9). |
 | 12 | minor | Calling gates B–D wholesale pulls in competitor step D3 and hides separately approved steps. | Accepted, corrected | A7 names B1–B3, C1–C3, D1–D2 only. Codex placed the deploy approval in C3; the gate text puts deployment in B2 and a test post in C3, so both are listed as separate approvals. |
+
+## PR #328 review corrections
+
+The Codex record above describes its original draft review. Subsequent GitHub findings were verified against this plan, its spec, the existing owner DTO and the authoritative release gates; the following corrections supersede the original draft's wording without claiming a fresh independent approval.
+
+| Verified finding group | Correction |
+|---|---|
+| A2 deployment preceded B1/B2 | A2 is local-only; live deployment/probe acceptance moves to A7/B2 after B1 and separate approval. |
+| Owner-only artifacts reused canonical G-X names | Distinct owner-only checker/fixtures/runbook; canonical G-X retains its full fail-closed inventory. A7 requires satisfied authoritative prerequisites or an explicit approved scope amendment. |
+| Stability could pass with no schedules | Separate pilot-only schedule approval/activation in A7 and C6, exact manifests, seven distinct due-date receipts, missed-day refusal and verified deactivation rollback. No implicit E2 completion or cohort widening. |
+| Unified version collided with legacy owner DTO | `analyticsContractVersion: 1` negotiation; legacy `schemaVersion: 1` remains unchanged. |
+| Coverage counted rows, period edges were ambiguous, reach could be summed | Per-metric finite-value coverage, explicit closed-day `[since, until)` calendar/timezone contract, no prorating provider buckets, and unique reach from an exact provider total only. |
+| Storage keys, follower selection and retention were unspecified | Business uniqueness/indexes, capture-response idempotency, current-claim fences, deterministic boundary samples, 365-day cutoff/anchor policy and a required C1 locking/deletion ADR before migrations. |
+| Capability verification was conflated with collection state | Explicit registry capability/evidence fields and `capability_unverified` reason. |
+| Read-only probes/journeys forced live grant changes | Fixture negative tests by default; pre-existing live negatives may be observed, while any deliberate live mutation needs a separately approved disposable account and recovery procedure. |
