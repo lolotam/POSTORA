@@ -6,6 +6,40 @@ import {
 } from "@/components/brand-intelligence/ThreadsErrorCard";
 import type { BrandPost, BrandProfile } from "@/types/brand-intelligence";
 
+/** One post as the `threads-discovery` edge function returns it. */
+interface ThreadsDiscoveryPost {
+  id: string;
+  mediaType?: string;
+  thumbnailUrl?: string;
+  mediaUrl?: string;
+  caption?: string;
+  likesCount?: number;
+  commentsCount?: number;
+  videoViewCount?: number;
+  sharesCount?: number;
+  savesCount?: number;
+  engagementScore?: number;
+  timestamp?: string;
+  permalink?: string;
+}
+
+/** The `threads-discovery` response fields this hook reads. */
+type ThreadsDiscoveryBody = Parameters<typeof mapThreadsReason>[0] & {
+  ok?: boolean;
+  error?: string;
+  profile?: {
+    username?: string;
+    fullName?: string;
+    bio?: string;
+    profilePicUrl?: string;
+    followersCount?: number;
+    followingCount?: number;
+    postsCount?: number;
+    isVerified?: boolean;
+  };
+  posts?: ThreadsDiscoveryPost[];
+};
+
 /**
  * Live Threads discovery hook used by the Analyze tab.
  *
@@ -55,7 +89,7 @@ export function useThreadsLiveDiscovery() {
         { body: { username: clean } },
       );
 
-      let body: any = data;
+      let body: ThreadsDiscoveryBody | null = data;
       if (fnError && !data) {
         try {
           if (fnError.context && typeof fnError.context.json === "function") {
@@ -85,7 +119,7 @@ export function useThreadsLiveDiscovery() {
 
       // Map discovery payload → BrandProfile / BrandPost shape used by Analyze UI.
       const rawProfile = body?.profile;
-      const rawPosts: any[] = body?.posts || [];
+      const rawPosts: ThreadsDiscoveryPost[] = body?.posts || [];
 
       if (rawProfile) {
         setProfile({
@@ -103,7 +137,7 @@ export function useThreadsLiveDiscovery() {
       }
 
       setPosts(
-        rawPosts.map((p: any) => ({
+        rawPosts.map((p) => ({
           id: p.id,
           mediaType: (p.mediaType || "TEXT") as BrandPost["mediaType"],
           thumbnailUrl: p.thumbnailUrl || p.mediaUrl || "",

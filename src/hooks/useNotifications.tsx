@@ -47,9 +47,9 @@ export function useAdminNotifications() {
         .select("notification_id")
         .eq("user_id", user.id);
 
-      const readIds = new Set((reads || []).map((r: any) => r.notification_id));
+      const readIds = new Set((reads || []).map((r) => r.notification_id));
 
-      return (notifications || []).map((n: any) => ({
+      return (notifications || []).map((n) => ({
         ...n,
         is_read: readIds.has(n.id),
       })) as AdminNotification[];
@@ -137,13 +137,13 @@ export function useBlogPosts(publishedOnly = true) {
       // If user is logged in, fetch which posts they've read
       if (user) {
         const { data: reads } = await supabase
-          .from("user_blog_post_reads" as any)
+          .from("user_blog_post_reads")
           .select("blog_post_id")
           .eq("user_id", user.id);
 
-        const readIds = new Set((reads || []).map((r: any) => r.blog_post_id));
+        const readIds = new Set((reads || []).map((r) => r.blog_post_id));
 
-        return posts.map((p: any) => ({
+        return posts.map((p) => ({
           ...p,
           is_read: readIds.has(p.id),
         })) as BlogPost[];
@@ -181,7 +181,7 @@ export function useMarkBlogPostRead() {
       if (!user) throw new Error("Not authenticated");
 
       const { error } = await supabase
-        .from("user_blog_post_reads" as any)
+        .from("user_blog_post_reads")
         .insert({ user_id: user.id, blog_post_id: blogPostId });
 
       // Ignore unique constraint violation (already read)

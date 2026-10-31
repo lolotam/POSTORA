@@ -17,7 +17,7 @@ const mockInvoke = vi.fn();
 vi.mock("@/integrations/supabase/client", () => ({
   supabase: {
     functions: {
-      invoke: (...args: any[]) => mockInvoke(...args),
+      invoke: (...args: unknown[]) => mockInvoke(...args),
     },
   },
 }));
@@ -25,8 +25,8 @@ vi.mock("@/integrations/supabase/client", () => ({
 // Mock URL methods
 const mockRevokeObjectURL = vi.fn();
 const mockCreateObjectURL = vi.fn(() => "blob:mock-url");
-(globalThis as any).URL.createObjectURL = mockCreateObjectURL;
-(globalThis as any).URL.revokeObjectURL = mockRevokeObjectURL;
+globalThis.URL.createObjectURL = mockCreateObjectURL;
+globalThis.URL.revokeObjectURL = mockRevokeObjectURL;
 
 describe("useYouTubeThumbnails", () => {
   const mockSetAutoThumbnails = vi.fn();
@@ -209,7 +209,7 @@ describe("useYouTubeThumbnails", () => {
 
   describe("downloadThumbnail", () => {
     it("shows error toast on download failure", async () => {
-      globalThis.fetch = vi.fn().mockRejectedValue(new Error("Network error")) as any;
+      globalThis.fetch = vi.fn().mockRejectedValue(new Error("Network error"));
 
       const { result } = renderHook(() => useYouTubeThumbnails(defaultProps));
 

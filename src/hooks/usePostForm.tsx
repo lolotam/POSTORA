@@ -192,7 +192,7 @@ export function usePostForm() {
             setCaption(payload.caption);
           }
           if (payload.media && Array.isArray(payload.media) && (payload.mode === "media" || payload.mode === "full")) {
-            const reuseFiles: UploadedFile[] = payload.media.map((m: any, i: number) => ({
+            const reuseFiles: UploadedFile[] = payload.media.map((m: { id: string; url: string; kind?: string }, i: number) => ({
               id: `reuse-${m.id}-${Date.now()}-${i}`,
               file: new File([], "reused-file"),
               previewUrl: m.url,
@@ -287,7 +287,7 @@ export function usePostForm() {
         }
 
         // Set timezone from metadata
-        const meta = post.metadata as Record<string, any> | null;
+        const meta = post.metadata as { timezone?: string; selected_account_ids?: string[] } | null;
         if (meta?.timezone) setScheduleTimezone(meta.timezone);
 
         // Select accounts from metadata
@@ -304,7 +304,7 @@ export function usePostForm() {
             .in("id", post.media_file_ids);
 
           if (mediaFiles && mediaFiles.length > 0) {
-            const editFiles: UploadedFile[] = mediaFiles.map((mf: any, i: number) => {
+            const editFiles: UploadedFile[] = mediaFiles.map((mf, i: number) => {
               // Resolve the public URL via the shared helper. For Cloudinary rows,
               // file_path already stores the full secure_url (cloud name + version +
               // extension); rebuilding it from storage_bucket/public_id produced

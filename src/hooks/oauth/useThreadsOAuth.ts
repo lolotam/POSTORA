@@ -2,6 +2,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { useQueryClient } from "@tanstack/react-query";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/hooks/useAuth";
+import { Platform } from "@/lib/types";
 import { OAUTH_CALLBACKS, buildReturnUrl } from "@/lib/oauthRedirects";
 
 export interface ThreadsConnectOptions {
@@ -10,7 +11,7 @@ export interface ThreadsConnectOptions {
 }
 
 export function useThreadsOAuth(
-  setConnectingPlatform: (p: any) => void,
+  setConnectingPlatform: (p: Platform | null) => void,
   setConnectingProfile: (p: string | null) => void,
 ) {
   const { toast } = useToast();

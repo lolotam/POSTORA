@@ -6,6 +6,7 @@ import { useToast } from "@/hooks/use-toast";
 import { useQueryClient } from "@tanstack/react-query";
 import { useQuotas } from "@/hooks/useQuotas";
 import { isMediaQuotaMessage, mediaQuotaHumanMessage } from "@/components/media/uploadErrors";
+import type { Json } from "@/integrations/supabase/types";
 
 export interface WorkflowData {
   id?: string;
@@ -21,6 +22,15 @@ interface ExecutionResult {
   postId?: string;
   errors?: string[];
 }
+
+type PlatformNodeData = {
+  selectedAccountIds?: string[];
+  enabledPlatforms?: string[];
+  settings?: Json;
+  scheduledAt?: string;
+};
+
+type ProcessPostResult = { success: boolean; platform?: string; error?: string };
 
 export function useCanvasWorkflow() {
   const { user } = useAuth();
@@ -44,8 +54,8 @@ export function useCanvasWorkflow() {
         user_id: user.id,
         name: workflow.name || "Untitled Workflow",
         description: workflow.description || null,
-        nodes: workflow.nodes as any,
-        edges: workflow.edges as any,
+        nodes: workflow.nodes as unknown as Json,
+        edges: workflow.edges as unknown as Json,
         viewport: workflow.viewport || { x: 0, y: 0, zoom: 1 },
         updated_at: new Date().toISOString(),
       };
@@ -74,9 +84,9 @@ export function useCanvasWorkflow() {
       toast({ title: "Workflow saved" });
       queryClient.invalidateQueries({ queryKey: ["workflows"] });
       return result.id;
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error("Save workflow error:", error);
-      toast({ title: "Save failed", description: error.message, variant: "destructive" });
+      toast({ title: "Save failed", description: error instanceof Error ? error.message : String(error), variant: "destructive" });
       return null;
     } finally {
       setIsSaving(false);
@@ -105,13 +115,13 @@ export function useCanvasWorkflow() {
         id: data.id,
         name: data.name,
         description: data.description || undefined,
-        nodes: (data.nodes as any) || [],
-        edges: (data.edges as any) || [],
-        viewport: (data.viewport as any) || { x: 0, y: 0, zoom: 1 },
+        nodes: (data.nodes as unknown as Node[]) || [],
+        edges: (data.edges as unknown as Edge[]) || [],
+        viewport: (data.viewport as WorkflowData["viewport"]) || { x: 0, y: 0, zoom: 1 },
       };
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error("Load workflow error:", error);
-      toast({ title: "Load failed", description: error.message, variant: "destructive" });
+      toast({ title: "Load failed", description: error instanceof Error ? error.message : String(error), variant: "destructive" });
       return null;
     } finally {
       setIsLoading(false);
@@ -128,7 +138,7 @@ export function useCanvasWorkflow() {
         .order("updated_at", { ascending: false });
       if (error) throw error;
       return data || [];
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error("List workflows error:", error);
       return [];
     }
@@ -168,7 +178,7 @@ export function useCanvasWorkflow() {
         throw new Error("No Platform node found. Add a Platform node to publish.");
       }
 
-      const platformData = platformNode.data as any;
+      const platformData = platformNode.data as PlatformNodeData;
       const selectedAccountIds: string[] = platformData.selectedAccountIds || [];
       const enabledPlatforms: string[] = platformData.enabledPlatforms || [];
       const platformSettings = platformData.settings || {};
@@ -179,15 +189,15 @@ export function useCanvasWorkflow() {
       }
 
       // Get caption from text caption node
-      const captionData = textCaptionNode?.data as any;
+      const captionData = textCaptionNode?.data as { caption?: string } | undefined;
       const caption = captionData?.caption || "";
 
       // Get media files from media node
-      const mediaData = mediaNode?.data as any;
+      const mediaData = mediaNode?.data as { mediaFiles?: { url: string; type: string }[] } | undefined;
       const mediaFiles = mediaData?.mediaFiles || [];
 
       // Also check image gen node for generated images
-      const imageGenData = captionNode?.data as any;
+      const imageGenData = captionNode?.data as { generatedImage?: unknown } | undefined;
       if (imageGenData?.generatedImage) {
         // Could add generated image to media
       }
@@ -235,7 +245,7 @@ export function useCanvasWorkflow() {
             platform_settings: platformSettings,
             source: "canvas",
             selected_account_ids: selectedAccountIds,
-          } as any,
+          },
         })
         .select("id")
         .single();
@@ -289,10 +299,10 @@ export function useCanvasWorkflow() {
       }
 
       if (processResult?.results) {
-        const failed = processResult.results.filter((r: any) => !r.success);
-        const succeeded = processResult.results.filter((r: any) => r.success);
+        const failed = processResult.results.filter((r: ProcessPostResult) => !r.success);
+        const succeeded = processResult.results.filter((r: ProcessPostResult) => r.success);
         if (failed.length > 0) {
-          failed.forEach((f: any) => errors.push(`${f.platform}: ${f.error}`));
+          failed.forEach((f: ProcessPostResult) => errors.push(`${f.platform}: ${f.error}`));
         }
         if (succeeded.length > 0) {
           toast({ title: "Published!", description: `Successfully published to ${succeeded.length} platform(s).` });
@@ -307,10 +317,10 @@ export function useCanvasWorkflow() {
         postId: post.id,
         errors: errors.length > 0 ? errors : undefined,
       };
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error("Execute workflow error:", error);
-      toast({ title: "Execution failed", description: error.message, variant: "destructive" });
-      return { success: false, errors: [error.message] };
+      toast({ title: "Execution failed", description: error instanceof Error ? error.message : String(error), variant: "destructive" });
+      return { success: false, errors: [error instanceof Error ? error.message : String(error)] };
     } finally {
       setIsExecuting(false);
     }
@@ -319,7 +329,7 @@ export function useCanvasWorkflow() {
   const createExecution = useCallback(async (
     workflowId: string,
     status: "pending" | "running" | "completed" | "failed",
-    summary?: any,
+    summary?: Json,
     errorMessage?: string
   ) => {
     if (!user || !workflowId) return null;

@@ -36,8 +36,8 @@ export function useThreadsAuthorAvatars(accountId: string | null): ThreadsAuthor
 
       const map: Record<string, string> = {};
       for (const row of mentions || []) {
-        const u = (row as any).mention_author_username?.toLowerCase?.();
-        const url = (row as any).mention_author_avatar_url;
+        const u = row.mention_author_username?.toLowerCase?.();
+        const url = row.mention_author_avatar_url;
         if (u && url) map[u] = url;
       }
 

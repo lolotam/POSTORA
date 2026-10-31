@@ -193,7 +193,7 @@ export function useUserThreadsInfinite(accountId: string | null) {
     enabled: !!accountId && !!session?.user?.id,
     initialPageParam: undefined as string | undefined,
     queryFn: async ({ pageParam }) => {
-      const res = await invokeEdge<{ data: ThreadSummary[]; paging: any }>("threads-replies", {
+      const res = await invokeEdge<{ data: ThreadSummary[]; paging?: { cursors?: { after?: string } } }>("threads-replies", {
         action: "get_user_threads",
         social_account_id: accountId,
         limit: 10,
@@ -438,7 +438,7 @@ async function upsertCacheRow(
       hide_status: reply.hide_status ?? null,
       reply_audience: reply.reply_audience ?? null,
       status,
-      raw_data: reply as any,
+      raw_data: { ...reply },
     },
     { onConflict: "social_account_id,reply_id" },
   );

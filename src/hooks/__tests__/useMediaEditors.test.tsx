@@ -26,7 +26,7 @@ vi.mock("@/contexts/ProcessingJobsContext", () => ({
 
 // Mock URL methods
 const mockRevokeObjectURL = vi.fn();
-(globalThis as any).URL.revokeObjectURL = mockRevokeObjectURL;
+globalThis.URL.revokeObjectURL = mockRevokeObjectURL;
 
 describe("useMediaEditors", () => {
   const mockSetFiles = vi.fn();

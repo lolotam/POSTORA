@@ -25,7 +25,7 @@ export function useBrandSearchHistory(platform: string, scope: BrandSearchScope)
     queryKey,
     queryFn: async () => {
       if (!userId) return [];
-      const { data, error } = await (supabase as any)
+      const { data, error } = await supabase
         .from("brand_search_history")
         .select("id, query, use_count, last_used_at")
         .eq("user_id", userId)
@@ -48,7 +48,7 @@ export function useBrandSearchHistory(platform: string, scope: BrandSearchScope)
       if (!userId) return;
       const query = rawQuery.trim();
       if (!query) return;
-      const db = supabase as any;
+      const db = supabase;
       const { data: existing } = await db
         .from("brand_search_history")
         .select("id, use_count")
@@ -77,7 +77,7 @@ export function useBrandSearchHistory(platform: string, scope: BrandSearchScope)
 
   const deleteMutation = useMutation({
     mutationFn: async (id: string) => {
-      await (supabase as any).from("brand_search_history").delete().eq("id", id);
+      await supabase.from("brand_search_history").delete().eq("id", id);
     },
     onSuccess: () => qc.invalidateQueries({ queryKey }),
   });

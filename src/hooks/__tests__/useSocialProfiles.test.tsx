@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, type Mock } from "vitest";
 import { renderHook, waitFor } from "@testing-library/react";
 import { useSocialProfiles, useCreateProfile } from "../useSocialProfiles";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -55,7 +55,7 @@ describe("useSocialProfiles Hook", () => {
         ];
 
         // Mock query chain
-        (supabase.from as any).mockReturnValue({
+        (supabase.from as Mock).mockReturnValue({
             select: vi.fn().mockReturnValue({
                 eq: vi.fn().mockReturnValue({
                     order: vi.fn().mockResolvedValue({ data: mockProfiles, error: null }),
@@ -75,7 +75,7 @@ describe("useSocialProfiles Hook", () => {
         const newProfile = { id: "2", name: "New Profile", user_id: "test-user-id" };
 
         // Mock insert chain
-        (supabase.from as any).mockReturnValue({
+        (supabase.from as Mock).mockReturnValue({
             insert: vi.fn().mockReturnValue({
                 select: vi.fn().mockReturnValue({
                     single: vi.fn().mockResolvedValue({ data: newProfile, error: null }),

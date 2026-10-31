@@ -77,8 +77,8 @@ export function useAIConfiguration() {
       }
 
       const [providersResult, modelsResult, settingsResult] = await Promise.all([
-        supabase.from('ai_providers' as any).select('*').order('name'),
-        supabase.from('ai_models' as any).select('*, ai_providers(provider_code, name)').order('name'),
+        supabase.from('ai_providers').select('*').order('name'),
+        supabase.from('ai_models').select('*, ai_providers(provider_code, name)').order('name'),
         // Widened beyond the default_ai_model* tier rows so the admin UI can also
         // read the model_catalog_synced_at_<code> rows the sync-models action writes,
         // and the agent_triage_enabled on/off switch. Deviation from the task-5 brief:
@@ -86,7 +86,7 @@ export function useAIConfiguration() {
         // ai-config edge function's `list` action, but it queries system_settings
         // directly -- the edge function's filter change alone would not surface this
         // row here, leaving the switch permanently off after a successful write.
-        supabase.from('system_settings' as any).select('*').or('key.like.default_ai_model%,key.like.model_catalog_synced_at_%,key.eq.agent_triage_enabled'),
+        supabase.from('system_settings').select('*').or('key.like.default_ai_model%,key.like.model_catalog_synced_at_%,key.eq.agent_triage_enabled'),
       ]);
 
       const providers = (providersResult.data || []) as unknown as AIProvider[];
@@ -106,8 +106,8 @@ export function useSetDefaultModel() {
     mutationFn: async ({ provider_code, model_id, category }: { provider_code: string; model_id: string; category?: ModelCategory }) => {
       const key = category ? `default_ai_model_${category}` : 'default_ai_model';
       const { error } = await supabase
-        .from('system_settings' as any)
-        .upsert({ key, value: { provider_code, model_id }, updated_at: new Date().toISOString() } as any, { onConflict: 'key' } as any);
+        .from('system_settings')
+        .upsert({ key, value: { provider_code, model_id }, updated_at: new Date().toISOString() }, { onConflict: 'key' });
       if (error) throw new Error(error.message);
       return { success: true, provider_code, model_id, category };
     },
@@ -121,8 +121,8 @@ export function useSetFallbackModel() {
     mutationFn: async ({ provider_code, model_id, category }: { provider_code: string; model_id: string; category: ModelCategory }) => {
       const key = `default_ai_model_${category}_fallback`;
       const { error } = await supabase
-        .from('system_settings' as any)
-        .upsert({ key, value: { provider_code, model_id }, updated_at: new Date().toISOString() } as any, { onConflict: 'key' } as any);
+        .from('system_settings')
+        .upsert({ key, value: { provider_code, model_id }, updated_at: new Date().toISOString() }, { onConflict: 'key' });
       if (error) throw new Error(error.message);
       return { success: true, provider_code, model_id, category };
     },
@@ -136,8 +136,8 @@ export function useSetFallback2Model() {
     mutationFn: async ({ provider_code, model_id, category }: { provider_code: string; model_id: string; category: ModelCategory }) => {
       const key = `default_ai_model_${category}_fallback_2`;
       const { error } = await supabase
-        .from('system_settings' as any)
-        .upsert({ key, value: { provider_code, model_id }, updated_at: new Date().toISOString() } as any, { onConflict: 'key' } as any);
+        .from('system_settings')
+        .upsert({ key, value: { provider_code, model_id }, updated_at: new Date().toISOString() }, { onConflict: 'key' });
       if (error) throw new Error(error.message);
       return { success: true, provider_code, model_id, category };
     },
@@ -150,7 +150,7 @@ export function useSetModelAdminParams() {
   return useMutation({
     mutationFn: async ({ model_row_id, admin_params }: { model_row_id: string; admin_params: Record<string, string | number | boolean> }) => {
       const { error } = await supabase
-        .from('ai_models' as any)
+        .from('ai_models')
         .update({ admin_params } as any)
         .eq('id', model_row_id);
       if (error) throw new Error(error.message);

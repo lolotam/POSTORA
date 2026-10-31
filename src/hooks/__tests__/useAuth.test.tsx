@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, type Mock } from "vitest";
 import { renderHook, act, waitFor } from "@testing-library/react";
 import { AuthProvider, useAuth } from "../useAuth";
 import { supabase } from "@/integrations/supabase/client";
@@ -30,12 +30,12 @@ describe("useAuth Hook", () => {
 
         // Default mock implementation for auth state
         const mockSubscription = { subscription: { unsubscribe: vi.fn() } };
-        (supabase.auth.onAuthStateChange as any).mockReturnValue({
+        (supabase.auth.onAuthStateChange as Mock).mockReturnValue({
             data: mockSubscription,
         });
 
         // Default mock for getSession
-        (supabase.auth.getSession as any).mockResolvedValue({
+        vi.mocked(supabase.auth.getSession).mockResolvedValue({
             data: { session: null },
             error: null,
         });
@@ -48,7 +48,7 @@ describe("useAuth Hook", () => {
     });
 
     it("should handle sign in", async () => {
-        (supabase.auth.signInWithPassword as any).mockResolvedValue({
+        (supabase.auth.signInWithPassword as Mock).mockResolvedValue({
             data: { user: { id: "123" }, session: {} },
             error: null,
         });
@@ -86,18 +86,18 @@ describe("useAuth Hook", () => {
             const maybeSingle = vi.fn();
             results.forEach((r) => maybeSingle.mockResolvedValueOnce(r));
             maybeSingle.mockResolvedValue(results[results.length - 1]);
-            (supabase.from as any).mockReturnValue({
+            (supabase.from as Mock).mockReturnValue({
                 select: () => ({ eq: () => ({ maybeSingle }) }),
             });
             return maybeSingle;
         }
 
         function driveBothAuthArms() {
-            (supabase.auth.onAuthStateChange as any).mockImplementation((cb: any) => {
+            (supabase.auth.onAuthStateChange as Mock).mockImplementation((cb: (event: string, s: typeof session) => void) => {
                 setTimeout(() => cb("INITIAL_SESSION", session), 0);
                 return { data: { subscription: { unsubscribe: vi.fn() } } };
             });
-            (supabase.auth.getSession as any).mockResolvedValue({
+            (supabase.auth.getSession as Mock).mockResolvedValue({
                 data: { session },
                 error: null,
             });
@@ -133,7 +133,7 @@ describe("useAuth Hook", () => {
                     data: { id: "user-1", email: "a@b.c", full_name: "A" },
                     error: null,
                 });
-            (supabase.from as any).mockReturnValue({
+            (supabase.from as Mock).mockReturnValue({
                 select: () => ({ eq: () => ({ maybeSingle }) }),
             });
             driveBothAuthArms();
