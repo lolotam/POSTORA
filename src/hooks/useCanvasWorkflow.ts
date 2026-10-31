@@ -68,7 +68,7 @@ export function useCanvasWorkflow() {
           .eq("id", workflow.id || currentWorkflowId)
           .select("id")
           .single();
-        if (error) throw error;
+        if (error) throw new Error(error.message);
         result = data;
       } else {
         const { data, error } = await supabase
@@ -76,7 +76,7 @@ export function useCanvasWorkflow() {
           .insert(workflowData)
           .select("id")
           .single();
-        if (error) throw error;
+        if (error) throw new Error(error.message);
         result = data;
         setCurrentWorkflowId(result.id);
       }
@@ -108,7 +108,7 @@ export function useCanvasWorkflow() {
         .eq("user_id", user.id)
         .single();
 
-      if (error) throw error;
+      if (error) throw new Error(error.message);
       setCurrentWorkflowId(data.id);
       
       return {
@@ -250,7 +250,7 @@ export function useCanvasWorkflow() {
         .select("id")
         .single();
 
-      if (postError) throw postError;
+      if (postError) throw new Error(postError.message);
 
       // Create platform_posts entries with social_account_ids
       if (selectedAccountIds.length > 0) {
