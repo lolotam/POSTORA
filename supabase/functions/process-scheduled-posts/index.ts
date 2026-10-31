@@ -206,9 +206,10 @@ Deno.serve(async (req) => {
         const processResult = await processResponse.json();
 
         if (processResponse.status === 409) {
-          // Not a failure: the schedule changed under us and process-post
-          // declined. The row keeps whatever the later write gave it.
-          console.log(`Post ${post.id} skipped: schedule changed after selection`, processResult);
+          // Not a failure: the schedule changed under us, or an overlapping
+          // scheduler run claimed the post first, and process-post declined.
+          // The row keeps whatever the other write gave it.
+          console.log(`Post ${post.id} skipped: rescheduled or already claimed by another run`, processResult);
           results.push({ postId: post.id, status: 'skipped', result: processResult });
           continue;
         }

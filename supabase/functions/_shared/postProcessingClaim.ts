@@ -15,11 +15,19 @@
  * different instant -- makes the claim match zero rows, and process-post
  * declines without touching a provider.
  *
- * The status is deliberately NOT part of the predicate: retrying a `failed`
- * post through process-post is a supported path, and a status guard here
- * would break it. Callers that pass no expectation (immediate publishes,
- * retries) keep the unconditional transition they always had.
+ * A scheduler claim (a string expectation) also requires the row to still be
+ * `pending` or `scheduled`. Scheduler runs are minute-apart cron ticks and a
+ * slow run is still working through its list when the next one SELECTs the
+ * same due rows; without the status guard both runs claimed the post and it
+ * was published twice (2026-10-31, two posts, 16 s and 38 s apart). Only the
+ * first claim moves the row to `processing`, so the second matches nothing.
+ * Callers that pass no expectation (immediate publishes, retries of a
+ * `failed` post) and the explicit-null TikTok review dispatch keep the
+ * transition they always had, without a status guard.
  */
+/** The statuses process-scheduled-posts selects; anything else is already taken. */
+export const SCHEDULER_CLAIMABLE_STATUSES = ["pending", "scheduled"];
+
 export interface PostProcessingClaim {
   claimed: boolean;
   error: string | null;
@@ -42,7 +50,9 @@ export async function claimPostForProcessing(
     // PostgREST's `eq.null` matches nothing; NULL needs `is`.
     transition = transition.is("scheduled_at", null);
   } else if (expectedScheduledAt !== undefined) {
-    transition = transition.eq("scheduled_at", expectedScheduledAt);
+    transition = transition
+      .eq("scheduled_at", expectedScheduledAt)
+      .in("status", SCHEDULER_CLAIMABLE_STATUSES);
   }
 
   const { data, error } = await transition.select("id");

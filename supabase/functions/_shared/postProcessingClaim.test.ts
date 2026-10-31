@@ -14,6 +14,7 @@ function stub(rowsMatched: number, fail = false) {
     update: (values: unknown) => (payload = values, chain),
     eq: (col: string, val: unknown) => (filters.push(["eq", col, val]), chain),
     is: (col: string, val: unknown) => (filters.push(["is", col, val]), chain),
+    in: (col: string, val: unknown) => (filters.push(["in", col, val]), chain),
     select: () =>
       Promise.resolve(
         fail
@@ -31,7 +32,17 @@ Deno.test("a scheduler-originated claim is conditioned on the scheduled_at it se
   assertEquals(filters, [
     ["eq", "id", "post-1"],
     ["eq", "scheduled_at", "2026-09-03T14:00:00+00:00"],
+    ["in", "status", ["pending", "scheduled"]],
   ]);
+});
+
+Deno.test("an overlapping scheduler run finds the post already processing and does NOT claim it again", async () => {
+  // Two cron ticks selected the same due row. The first claim moved it to
+  // `processing`; the status guard makes the second match zero rows, so the
+  // post is published once instead of twice.
+  const { client } = stub(0);
+  const outcome = await claimPostForProcessing(client, "post-1", "2026-09-03T14:00:00+00:00");
+  assertEquals(outcome, { claimed: false, error: null });
 });
 
 Deno.test("a post unscheduled or rescheduled after selection matches no row and is NOT claimed", async () => {

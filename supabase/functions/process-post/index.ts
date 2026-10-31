@@ -1656,11 +1656,11 @@ Deno.serve(async (req) => {
       return createErrorResponse(`Could not claim post for processing: ${claim.error}`, 500);
     }
     if (!claim.claimed) {
-      console.log("Declining publish: schedule changed after the scheduler selected this post", {
+      console.log("Declining publish: the post was rescheduled, or another scheduler run already claimed it", {
         post_id,
         expected_scheduled_at: expectedScheduledAt,
       });
-      return createErrorResponse("Post schedule changed after selection; not published", 409);
+      return createErrorResponse("Post was rescheduled or is already being processed; not published", 409);
     }
 
     // ─────────────────────────────────────────────────────────────────────
