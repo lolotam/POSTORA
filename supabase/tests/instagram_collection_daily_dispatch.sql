@@ -1,7 +1,7 @@
 -- ============================================================================
 -- supabase/tests/instagram_collection_daily_dispatch.sql
 --
--- R2 (migration 20261030151000_instagram_collection_daily_dispatch.sql).
+-- R2 (migration 20261031091000_instagram_collection_daily_dispatch.sql).
 --
 -- One transaction, synthetic fixtures, labelled ASSERTs, expected refusals in
 -- nested BEGIN/EXCEPTION blocks, ROLLBACK, sentinel last. Fixture values are

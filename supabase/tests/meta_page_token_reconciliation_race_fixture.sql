@@ -797,7 +797,7 @@ BEGIN
 
   DELETE FROM public.instagram_collection_jobs WHERE user_id = v_user;
 
-  -- The rollout fixture. R1 (20261030150000) made the collection admission
+  -- The rollout fixture. R1 (20261031090000) made the collection admission
   -- a default-off gate, so the rehearsal needs an explicit synthetic
   -- policy. The cleanup puts the default back.
   INSERT INTO public.app_settings (key, value, description)

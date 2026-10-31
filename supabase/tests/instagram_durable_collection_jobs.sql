@@ -68,7 +68,7 @@ BEGIN;
 -- ---------------------------------------------------------------------------
 -- The rollout fixture.
 --
--- R1 (20261030150000_instagram_collection_rollout_controls.sql) made the
+-- R1 (20261031090000_instagram_collection_rollout_controls.sql) made the
 -- rollout admission a default-off gate: the master switch and the private
 -- policy decide which targets may be collected for. This suite exercises
 -- the durable work primitives, not the rollout, so it installs an explicit

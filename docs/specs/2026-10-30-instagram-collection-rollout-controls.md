@@ -118,9 +118,9 @@ Exact proposed migrations, checked against this worktree's migration filenames a
 
 | Order | ID and filename | Owns |
 |---|---|---|
-| R1 | `20261030150000_instagram_collection_rollout_controls.sql` | Policy default/evaluator, SQL admission and provider/write fences, refusal audit integration. |
-| R2 | `20261030151000_instagram_collection_daily_dispatch.sql` | Durable sweep relation, bounded atomic daily-page RPC and ACLs. |
-| C1 | `20261030152000_instagram_collection_cron.sql` | Four inactive jobs; retains Task 11's existing reservation. |
+| R1 | `20261031090000_instagram_collection_rollout_controls.sql` | Policy default/evaluator, SQL admission and provider/write fences, refusal audit integration. |
+| R2 | `20261031091000_instagram_collection_daily_dispatch.sql` | Durable sweep relation, bounded atomic daily-page RPC and ACLs. |
+| C1 | `20261031092000_instagram_collection_cron.sql` | Four inactive jobs; retains Task 11's existing reservation. |
 
 R1/R2 precede C1 and follow Task 8's reserved M4 `20261030130000`; no existing migration bytes change. Recheck filename and documentation collisions at implementation and against the applied ledger before a separately approved release. M1's v2 writer exists here; M2–M4 remain other-task dependencies, not permission to invent their delivery.
 
@@ -180,9 +180,9 @@ records what exists today and what does **not**.
 
 | Item | Status |
 |---|---|
-| R1 `20261030150000_instagram_collection_rollout_controls.sql` | implemented and rehearsed; **not applied to production** |
-| R2 `20261030151000_instagram_collection_daily_dispatch.sql` | implemented and rehearsed; **not applied to production** |
-| C1 `20261030152000_instagram_collection_cron.sql` | implemented and rehearsed; the four jobs install **inactive**; **not applied to production** |
+| R1 `20261031090000_instagram_collection_rollout_controls.sql` | implemented and rehearsed; **not applied to production** |
+| R2 `20261031091000_instagram_collection_daily_dispatch.sql` | implemented and rehearsed; **not applied to production** |
+| C1 `20261031092000_instagram_collection_cron.sql` | implemented and rehearsed; the four jobs install **inactive**; **not applied to production** |
 | The owner and competitor admission in the runtime | implemented; proved against a real disposable database by the two rollout integration suites |
 | The rollback contract | implemented and rehearsed: the next permit is refused, the write after the exclusion is refused, the job settles, the stored observations survive and a later re-admission resumes the work |
 | The deployment contract | [docs/runbooks/instagram-collection-rollout.md](../../docs/runbooks/instagram-collection-rollout.md); it **authorizes nothing** |

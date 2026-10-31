@@ -1,6 +1,6 @@
 -- ============================================================================
 -- supabase/tests/instagram_collection_cron.sql
--- Task 5 / C1 (migration 20261030152000_instagram_collection_cron.sql).
+-- Task 5 / C1 (migration 20261031092000_instagram_collection_cron.sql).
 --
 -- One transaction, labelled ASSERTs, ROLLBACK, sentinel last. Nothing here
 -- touches production and nothing here activates anything.
@@ -97,8 +97,8 @@ ON CONFLICT (jobname, username) DO UPDATE
 -- ---------------------------------------------------------------------------
 -- The schedule definition, applied twice.
 -- ---------------------------------------------------------------------------
-\ir ../migrations/20261030152000_instagram_collection_cron.sql
-\ir ../migrations/20261030152000_instagram_collection_cron.sql
+\ir ../migrations/20261031092000_instagram_collection_cron.sql
+\ir ../migrations/20261031092000_instagram_collection_cron.sql
 
 -- ===========================================================================
 -- C1: exactly four jobs, one per name, and nothing else.
@@ -351,7 +351,7 @@ BEGIN
 END
 $c6$;
 
-\ir ../migrations/20261030152000_instagram_collection_cron.sql
+\ir ../migrations/20261031092000_instagram_collection_cron.sql
 
 DO $c7$
 DECLARE
@@ -398,7 +398,7 @@ CREATE TEMP TABLE ic_cron_at_negatives ON COMMIT DROP AS
 SAVEPOINT neg_cron_before;
 DROP EXTENSION pg_cron CASCADE;
 SAVEPOINT neg_cron_run;
-\ir ../migrations/20261030152000_instagram_collection_cron.sql
+\ir ../migrations/20261031092000_instagram_collection_cron.sql
 \set neg_cron_sqlstate :SQLSTATE
 SELECT 1 AS neg_cron_aborted \gset
 ROLLBACK TO SAVEPOINT neg_cron_run;
@@ -410,7 +410,7 @@ ROLLBACK TO SAVEPOINT neg_cron_before;
 SAVEPOINT neg_net_before;
 DROP EXTENSION pg_net CASCADE;
 SAVEPOINT neg_net_run;
-\ir ../migrations/20261030152000_instagram_collection_cron.sql
+\ir ../migrations/20261031092000_instagram_collection_cron.sql
 \set neg_net_sqlstate :SQLSTATE
 SELECT 1 AS neg_net_aborted \gset
 ROLLBACK TO SAVEPOINT neg_net_run;
@@ -422,7 +422,7 @@ ROLLBACK TO SAVEPOINT neg_net_before;
 SAVEPOINT neg_secret_before;
 DROP FUNCTION public.get_cron_secret();
 SAVEPOINT neg_secret_run;
-\ir ../migrations/20261030152000_instagram_collection_cron.sql
+\ir ../migrations/20261031092000_instagram_collection_cron.sql
 \set neg_secret_sqlstate :SQLSTATE
 SELECT 1 AS neg_secret_aborted \gset
 ROLLBACK TO SAVEPOINT neg_secret_run;
@@ -553,7 +553,7 @@ BEGIN
 END
 $atomic_probe$;
 SAVEPOINT atomic_run;
-\ir ../migrations/20261030152000_instagram_collection_cron.sql
+\ir ../migrations/20261031092000_instagram_collection_cron.sql
 SELECT 1 AS atomic_aborted \gset
 ROLLBACK TO SAVEPOINT atomic_run;
 \set ON_ERROR_STOP on

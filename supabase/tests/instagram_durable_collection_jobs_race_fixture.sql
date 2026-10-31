@@ -567,7 +567,7 @@ SELECT set_config('request.jwt.claim.sub', '', true);
 DELETE FROM public.instagram_collection_jobs
  WHERE user_id = '0a0a0a0a-0a0a-4a0a-8a0a-0a0a0a0a0a0a';
 
--- The rollout fixture. R1 (20261030150000) made the collection admission
+-- The rollout fixture. R1 (20261031090000) made the collection admission
 -- a default-off gate, so the rehearsal needs an explicit synthetic policy
 -- that admits the synthetic owner. The cleanup puts the default back.
 INSERT INTO public.app_settings (key, value, description)

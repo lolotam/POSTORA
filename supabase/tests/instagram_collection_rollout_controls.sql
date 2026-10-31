@@ -1,7 +1,7 @@
 -- ============================================================================
 -- supabase/tests/instagram_collection_rollout_controls.sql
 --
--- R1 (migration 20261030150000_instagram_collection_rollout_controls.sql).
+-- R1 (migration 20261031090000_instagram_collection_rollout_controls.sql).
 --
 -- One transaction, synthetic fixtures, labelled ASSERTs, expected refusals in
 -- nested BEGIN/EXCEPTION blocks, ROLLBACK, sentinel last. Fixture values are

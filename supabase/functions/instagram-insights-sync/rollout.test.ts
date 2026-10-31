@@ -32,7 +32,7 @@
  *
  * WHY THE STORE DOUBLE REPRODUCES THE ACCEPTED SQL
  *
- *   The accepted migration `20261030150000_instagram_collection_rollout_
+ *   The accepted migration `20261031090000_instagram_collection_rollout_
  *   controls.sql` owns the admission: every claim pass filters the
  *   candidates, and the permit derives the scope from the live fenced job.
  *   This suite drives the PRODUCTION TypeScript against a double that

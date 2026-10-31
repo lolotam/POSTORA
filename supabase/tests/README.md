@@ -247,7 +247,7 @@ in "Running locally" below are what make pg_cron usable at all.
 ## The Instagram collection cron suite
 
 `instagram_collection_cron.sql` proves the schedules of migration C1
-(`supabase/migrations/20261030152000_instagram_collection_cron.sql`). It
+(`supabase/migrations/20261031092000_instagram_collection_cron.sql`). It
 re-applies **the migration file itself** with `\ir`, twice, inside one
 transaction, and then asserts that the database holds exactly four jobs -
 `instagram-insights-enqueue-daily` at `30 0 * * *`,

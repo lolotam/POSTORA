@@ -29,9 +29,9 @@ waits for a migration.
 
 | Order | Migration | Owns | State on this branch |
 |---|---|---|---|
-| 1 | `20261030150000_instagram_collection_rollout_controls.sql` | R1 — the default-off policy, the canonical evaluator, the SQL admission in the enqueue/claim/attach/write fences, `authorize_instagram_collection_provider_call`, the refusal audit | implemented, rehearsed |
-| 2 | `20261030151000_instagram_collection_daily_dispatch.sql` | R2 — `instagram_collection_enqueue_sweeps`, `enqueue_instagram_collection_daily_page`, its ACL | implemented, rehearsed |
-| 3 | `20261030152000_instagram_collection_cron.sql` | C1 — the four collection schedules, installed **inactive** | implemented, rehearsed |
+| 1 | `20261031090000_instagram_collection_rollout_controls.sql` | R1 — the default-off policy, the canonical evaluator, the SQL admission in the enqueue/claim/attach/write fences, `authorize_instagram_collection_provider_call`, the refusal audit | implemented, rehearsed |
+| 2 | `20261031091000_instagram_collection_daily_dispatch.sql` | R2 — `instagram_collection_enqueue_sweeps`, `enqueue_instagram_collection_daily_page`, its ACL | implemented, rehearsed |
+| 3 | `20261031092000_instagram_collection_cron.sql` | C1 — the four collection schedules, installed **inactive** | implemented, rehearsed |
 
 **R1 → R2 → C1, and the runtime after C1.** The runtime calls
 `authorize_instagram_collection_provider_call` (R1) and

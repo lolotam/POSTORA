@@ -4,7 +4,7 @@
  * WHAT THIS MODULE OWNS
  *
  *   One service RPC of the accepted migration
- *   `20261030151000_instagram_collection_daily_dispatch.sql`:
+ *   `20261031091000_instagram_collection_daily_dispatch.sql`:
  *
  *     enqueue_instagram_collection_daily_page(p_target_kind, p_start)
  *

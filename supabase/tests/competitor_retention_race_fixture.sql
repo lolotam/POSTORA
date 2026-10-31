@@ -486,7 +486,7 @@ UPDATE public.app_settings
    SET value = 'true'::jsonb
  WHERE key = 'competitor_retention_enabled';
 
--- The rollout fixture. R1 (20261030150000) made the collection admission
+-- The rollout fixture. R1 (20261031090000) made the collection admission
 -- a default-off gate, so the collector's fenced writes need an explicit
 -- synthetic policy. The cleanup puts the default back.
 INSERT INTO public.app_settings (key, value, description)

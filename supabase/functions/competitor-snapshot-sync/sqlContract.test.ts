@@ -53,7 +53,7 @@ const MIGRATION_V1 = join(
  */
 const MIGRATION_ROLLOUT = join(
   MIGRATIONS,
-  "20261030150000_instagram_collection_rollout_controls.sql",
+  "20261031090000_instagram_collection_rollout_controls.sql",
 );
 
 async function migrationText(path: string): Promise<string> {

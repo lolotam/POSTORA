@@ -13,7 +13,7 @@ BEGIN;
 -- ---------------------------------------------------------------------------
 -- The rollout fixture.
 --
--- R1 (20261030150000_instagram_collection_rollout_controls.sql) made the
+-- R1 (20261031090000_instagram_collection_rollout_controls.sql) made the
 -- rollout admission a default-off gate. This suite exercises the Meta
 -- refresh lifecycle against a collection job, not the rollout, so it
 -- installs an explicit synthetic policy that admits every otherwise

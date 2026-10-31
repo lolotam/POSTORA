@@ -32,7 +32,7 @@
  *
  * WHY THE PRODUCTION STORE IS DRIVEN AGAINST A DOUBLE
  *
- *   The accepted migration `20261030150000_instagram_collection_rollout_
+ *   The accepted migration `20261031090000_instagram_collection_rollout_
  *   controls.sql` owns the admission: the claim filters the candidates,
  *   the viewer attachment proves the target and the pin, and the permit
  *   authorizes each request. This suite drives the PRODUCTION store
