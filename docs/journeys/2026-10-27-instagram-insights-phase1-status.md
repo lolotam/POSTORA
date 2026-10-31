@@ -1,6 +1,6 @@
 # أين وصلنا في ميزة إحصائيات إنستقرام وتتبع المنافسين؟ (انتهاء المرحلة الأولى)
 
-> **ملاحظة حالة، 2026-11-01:** هذا تقرير تاريخي بتاريخ 27 أكتوبر. وصف #294 كمسودة وعدم وجود واجهة أو نشر لا يمثل الحالة الحالية. راجع [المراجعة المحدثة لتحليلات Instagram وFacebook وThreads](2026-11-01-meta-analytics-status.md) للمنجز والمتبقي وأدلة الإنتاج، دون اعتبارها موافقة على التفعيل.
+> **ملاحظة حالة، 2026-11-01:** هذا تقرير تاريخي بتاريخ 27 أكتوبر. وصف #294 بأنه مسودة وعدم وجود واجهة أو نشر لا يمثل الحالة الحالية. راجع [المراجعة المحدثة لتحليلات Instagram وFacebook وThreads](2026-11-01-meta-analytics-status.md) للمنجز والمتبقي وأدلة الإنتاج، دون اعتبارها موافقة على التفعيل.
 
 **الحالة:** مكتمل ومفحوص محلياً · غير مرفوع للسيرفر (Not Deployed) · الـ PR ما زال مسودة (Draft)
 **المصدر:** فرع `feat/instagram-insights-competitors` · طلب الدمج [PR #294](https://github.com/lolotam/POSTORA/pull/294) · التعديلان `35f86867` و `fd073772` · ٢٧ أكتوبر ٢٠٢٦
@@ -84,6 +84,8 @@
 ---
 
 # English
+
+> **Status correction, 2026-11-01:** this is a historical snapshot from October 27. The statements below that #294 remains a draft, no UI exists and nothing has been deployed are superseded. See the [current Instagram, Facebook and Threads status review](2026-11-01-meta-analytics-status.md) for merged work, production evidence and remaining tasks. This correction does not authorize collection or close an activation gate.
 
 ## In short
 

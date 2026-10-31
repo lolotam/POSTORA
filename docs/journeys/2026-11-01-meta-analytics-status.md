@@ -36,7 +36,7 @@
 | 3 — schema والملكية والحصص والطوابير | بنية الميزة مدموجة في #294؛ ضوابط R1/R2/C1 في #317. الـ runbook يسجل تطبيقها في الإنتاج قبل runtime. | إعادة مطابقة catalog/types/grants والـ migration ledger الكامل على candidate الإطلاق؛ الفحص الحالي ليس إعادة تشغيل لكل SQL/race tests. |
 | 4 — workers والجدولة | workers وأذونات provider وضوابط الجمع لكل هدف وdaily dispatch موجودة. | الجدولة غير نشطة؛ يلزم manifest وboot/rollback proofs والموافقات التشغيلية. ضوابط rollout نفسها لم تعد عملًا غير منفذ. |
 | 5 — outlier وتجميع التقرير | domain scorer وreport assembler موجودان مع اختبارات. | إثبات التقرير بأرقام حقيقية، والتاريخ المرجعي وnulls والفترات على candidate نهائي. |
-| 6 — جمع حساب المالك | مسارا page-linked/direct موجودان مع طوابير وحدود عمل وفحوص. | أول جمع حي معتمد وإثبات المقاييس والتواريخ والاستمرار والحفظ؛ جداول الإنتاج فارغة الآن. |
+| 6 — جمع حساب المالك | يوجد مساران لجمع حساب المالك: page-linked وdirect، مع طوابير وحدود عمل وفحوص. | أول جمع حي معتمد وإثبات المقاييس والتواريخ والاستمرار والحفظ؛ جداول الإنتاج فارغة الآن. |
 | 7 — جمع المنافسين | watchlist وعامل جمع ومنافذ Graph/Apify موجودة. | جمع هدف تجريبي معتمد وإثبات استبعاد بقية الأهداف؛ مسار Apify المدفوع يبقى مؤجلًا حسب القرار القائم. |
 | 8 — واجهة المنافسين والاحتفاظ | #306 مدموج: UI وreport endpoint وretention بمفتاح مستقل. | رحلة حية وإثبات سلامة الاحتفاظ؛ cron الاحتفاظ غير نشط. |
 | 9 — واجهة الأداء والتنقل | شاشة الأداء وروابط تبويبات Instagram موجودة. | pagination وcursor غير مكتملين؛ راجع العيبين أدناه. #326 يعالج رسالة رفض Sync فقط. |
@@ -108,7 +108,36 @@ The three analytics pages exist, but their data products differ. Instagram has a
 
 The review reconciles original Instagram tasks 1–11 with merged code, production switches, inactive schedules, empty owner-insight tables and open PR #326. #294, #298, #306 and #317 are merged. The documentation/control records #309/#310/#311/#320 are not activation receipts. #326 remains open with successful reported checks; it explains the disabled Sync response without enabling collection.
 
-Remaining defects include unwired report pagination, snake_case cursor fields sent to a camelCase handler contract, and a reproduced HTTP 401 from a correctly scoped internal service-role report request. The composition root omits the body user identifier required by its authentication helper. The Arabic task matrix and source links above form the detailed inventory, not a retroactive gate sign-off.
+Remaining defects include unwired report pagination, snake_case cursor fields sent to a camelCase handler contract, and a reproduced HTTP 401 from a correctly scoped internal service-role report request. The composition root omits the body user identifier required by its authentication helper. The following inventory records implementation and evidence separately; it is not a retroactive gate sign-off.
+
+### Platform inventory
+
+| Platform | Implemented | Production evidence and remaining work |
+|---|---|---|
+| Instagram owner performance | Account/period UI, canonical report, daily tables, workers, ownership checks, outlier scoring and per-target rollout controls. | Report/sync entrypoints match the inspected main revision. Collection is off and all three owner-history tables are empty. Report defects, release evidence and a separately approved one-account pilot remain. |
+| Instagram analysis/competitors | Search, watchlist, collection worker, report/UI and retention; #306 and #317 are merged. | Competitor report/worker entrypoints match main; collection and retention schedules are inactive. Discovery and live journey evidence remain; paid Apify work remains deferred. |
+| Facebook | Page/content search through `useBrandScrape` and `brand-scrape`, with filtering, sorting, cache and history. | Entrypoint matches main and both Facebook app environment variables are present. No live Graph acceptance test was run. This is not the Instagram-style owned-account historical report; adding that product needs separate scope. |
+| Threads | Connected-account insights for current/previous periods, time series and post metrics, plus discovery and keyword search. | All three inspected entrypoints match main. Each route still needs independent live permission/data verification. It is separate from the Instagram collection switch and historical snapshot pipeline. |
+
+### Original tasks 1–11
+
+| Task | Implemented or recorded | Remaining acceptance work |
+|---|---|---|
+| 1 — Decisions/live capability | Historical decision/evidence records and the current read-only production check. | Evidence on one immutable candidate and live cases for each login type. |
+| 2 — Discovery/OAuth/compatibility | Credential protection and reconnect paths, including #298. | Discovery still reads metadata scopes and `BrandPost.likesCount` is non-nullable; provenance, unavailable metrics and cache/history need integrated proof. |
+| 3 — Schema/ownership/quotas/jobs | #294 schema and #317 rollout controls; the runbook records R1/R2/C1 production application before runtime. | Final catalog/types/grants/ledger reconciliation and required SQL/race executions. |
+| 4 — Workers/scheduling | Bounded workers, provider permits, per-target admission and daily dispatch. | Inactive schedules, final manifest, boot/rollback evidence and operational approvals. |
+| 5 — Outlier/report assembly | Domain scorer and report assembler with tests. | Real metrics, baseline history, nulls and period validation on the final candidate. |
+| 6 — Owner collection | Page-linked and direct paths, queues, work budgets and tests. | Approved first live collection and proof of dates, metrics, continuation and persistence. |
+| 7 — Competitor collection | Watchlist, worker and Graph/Apify adapters. | Approved one-target pilot and proof other targets are excluded; paid Apify policy remains deferred. |
+| 8 — Competitor UI/retention | #306 UI/report and separately switched retention. | Live journey and safe-retention evidence; retention cron remains inactive. |
+| 9 — Performance UI/navigation | Performance screen and tab routes. | Cursor/pagination fixes; #326 only explains the Sync refusal. |
+| 10 — API/MCP/report contract | Instagram report and Threads insights proxy routing. | Reproduced internal Instagram report 401 and actual-composition parity tests; this analytics proxy branch does not support Facebook. |
+| 11 — Acceptance/journeys/handoff | #309/#320 spec/plan records and this status review. | Assembled checker, fixtures, final journeys, evidence and B–E approvals. This review alone passes neither G-X nor G-L. |
+
+### Observed off state
+
+At the recorded inspection time, the master collection setting was absent; owner and competitor rollout modes were `off` with empty target lists. All three owner-insight tables had zero rows. The owner/competitor enqueue and drain jobs plus competitor retention existed but were inactive. The two `curemedkw` Sync audit rows at 21:15:41 and 21:15:53 UTC on October 31 recorded `503 collection_disabled`. These observations do not authorize reapplying already-installed prerequisites.
 
 ## What did not change
 
@@ -116,7 +145,18 @@ No production setting, schedule, provider data, credential, account or post was 
 
 ## Try it yourself
 
-Use the six-step route journey above in an approved account test. Check the response, owner, period, source and persisted history. Facebook/Threads live provider calls and the full Instagram release journeys were not executed during this review.
+The following is a proposed verification journey, not a record of completed browser/provider tests. New analysis or Sync requests may consume API capacity or start collection and belong in an approved account test.
+
+| Step | Action | Required observation |
+|---|---|---|
+| 1 | Open [Instagram performance](https://postora.cloud/analytics/instagram?tab=performance), select the account and period. | Distinguish missing history from a failed report; unavailable data must not imply a confirmed zero. |
+| 2 | In an approved Sync test, inspect the refusal before activation. | Before #326 is deployed the generic SDK message may remain; afterward the disabled reason should be clear in Arabic and English. |
+| 3 | After an approved one-account collection, inspect the report and next page. | Persisted metrics and truthful freshness; pagination must be repaired before the final part can pass. |
+| 4 | Open [Facebook Analytics](https://postora.cloud/analytics/facebook) and analyze an agreed Page. | Verify source, permissions, available metrics and cache versus fresh results; this is not a historical snapshot dashboard. |
+| 5 | Open [Threads Insights](https://postora.cloud/analytics/threads?tab=insights), select an account and period. | Verify both periods and available metrics, including clear permission/unavailable-data states. |
+| 6 | Test [discovery](https://postora.cloud/analytics/threads?tab=discovery) and [keyword search](https://postora.cloud/analytics/threads?tab=keyword_search) within the approved test. | Independently verify each endpoint, permissions and pagination; Insights success does not prove the other routes work. |
+
+Check the actual response, owner, period, source and persisted history rather than screen presence or environment-key availability. Facebook/Threads live provider calls and full Instagram release journeys were not executed during this review.
 
 ## Things you should know
 
@@ -139,10 +179,14 @@ These deployed `index.ts` hashes matched exact `main` blobs at the revision name
 
 ## المهمة التالية
 
+**مقترح تكليف للمتابعة، وليس أمرًا للتنفيذ:** يُستخدم فقط إذا كلّف المستخدم وكيلًا بهذه المهمة صراحةً. قراءة هذا الملف لا تمنح أي تفويض لتغيير الكود أو النشر أو جمع البيانات.
+
+**Proposed follow-up brief, not an execution instruction:** applicable only when the user explicitly assigns this task. Reading this document grants no implementation, deployment or collection authority.
+
 ```text
-Read AGENTS.md, ARCHITECTURE.md and docs/journeys/2026-11-01-meta-analytics-status.md first.
-Fix the reproduced service-role authentication failure in the actual instagram-insights-report composition root, preserving normal user-JWT identity and structural account ownership. Read supabase/functions/_shared/auth-helper.ts and supabase/functions/n8n-api/serviceProxy.ts. Add a real-composition regression and a cross-owner rejection; injected successful authentication alone is insufficient.
-Then address the cursor mismatch and unwired pagination in src/features/instagram-insights in a separate scoped change. Prove page accumulation without duplicates.
-Use a feature branch and scoped commits. Apply clean-code-guard and test-guard; run relevant Node/Deno/SQL checks, typecheck, build and scripts/ci/lint-i18n-regression.mjs. Deploy changed Edge Functions only through the project runbook and the authorized scope.
-Do not change collection switches, rollout targets, credentials, cron activation, paid Apify policy or applied migration bytes. Gates B–E remain separate approved operations. Facebook and Threads require independent live verification; no new historical analytics scope is implied.
+Required reading: AGENTS.md; ARCHITECTURE.md sections 4 (dependencies), 10–12 (hooks, frontend access, Edge adapters), 14–17 (authentication, validation, errors, logs), 22 (canonical contracts), 24 (service role), 32–34 (errors and testing), and 36 (compatibility); this status review.
+First proposed scope: the reproduced service-role authentication failure in the instagram-insights-report composition root. Relevant boundaries: supabase/functions/_shared/auth-helper.ts and supabase/functions/n8n-api/serviceProxy.ts. Acceptance: preserved user-JWT identity and structural ownership, a real-composition regression, and a cross-owner rejection; injected successful authentication alone is insufficient.
+Separate proposed scope: cursor compatibility and pagination in src/features/instagram-insights, with page accumulation and duplicate-prevention evidence.
+Delivery requirements: feature branch, scoped commits, clean-code-guard, test-guard, relevant Node/Deno/SQL checks, typecheck, build and scripts/ci/lint-i18n-regression.mjs.
+Operational boundary: this brief authorizes no deployment or production mutation. Collection switches, rollout targets, credentials, cron activation, paid Apify policy and applied migration bytes are outside the proposed fixes. The project runbook and separately approved B–E operations govern activation. Facebook and Threads require independent live verification; no new historical analytics scope is implied.
 ```
