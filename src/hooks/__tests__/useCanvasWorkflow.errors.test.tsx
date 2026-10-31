@@ -1,7 +1,7 @@
 import { act, renderHook } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { createElement, type ReactNode } from "react";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import { supabase } from "@/integrations/supabase/client";
 import { useCanvasWorkflow } from "../useCanvasWorkflow";
 
@@ -37,7 +37,7 @@ describe("Canvas workflow database errors", () => {
         error: { message, code: "42501", details: "", hint: "" },
       }),
     };
-    vi.mocked(supabase.from).mockReturnValue(query as ReturnType<typeof supabase.from>);
+    (supabase.from as Mock).mockReturnValue(query);
     vi.spyOn(console, "error").mockImplementation(() => {});
   });
 
