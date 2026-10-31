@@ -17,6 +17,9 @@ export function InstagramPerformanceScreen({
   gateway = defaultInstagramInsightsGateway,
 }: InstagramPerformanceScreenProps) {
   const { t } = useTranslation("analytics");
+  const errorMessage = (error: Error) => error.message === "collection_disabled"
+    ? t("instagram.collectionDisabled", "Instagram insights collection is currently disabled. Contact support to check availability.")
+    : error.message;
   const { data: accounts = [], isLoading: isAccountsLoading } = useSocialAccounts();
 
   const igAccounts = useMemo(
@@ -49,7 +52,7 @@ export function InstagramPerformanceScreen({
       );
     },
     onError: (err) => {
-      toast.error(err.message || t("instagram.syncFailed", "Failed to queue sync job"));
+      toast.error(errorMessage(err) || t("instagram.syncFailed", "Failed to queue sync job"));
     },
   });
 
@@ -67,7 +70,7 @@ export function InstagramPerformanceScreen({
       onSelectPeriod={setPeriodDays}
       report={report}
       isLoading={isAccountsLoading || isReportLoading}
-      error={reportError}
+      error={reportError ? new Error(errorMessage(reportError)) : null}
       isSyncing={isSyncing}
       onTriggerSync={handleTriggerSync}
     />

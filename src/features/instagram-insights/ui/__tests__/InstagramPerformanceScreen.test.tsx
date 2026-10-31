@@ -1,10 +1,18 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter } from "react-router-dom";
+import { FunctionsHttpError } from "@supabase/supabase-js";
+import { toast } from "sonner";
+import { supabase } from "@/integrations/supabase/client";
+import { SupabaseInstagramInsightsGateway } from "../../infrastructure/supabaseInstagramInsightsGateway";
 import type { InstagramInsightsGateway } from "../../application/ports";
 import type { OwnerReport } from "../../domain/types";
 import { InstagramPerformanceScreen } from "../InstagramPerformanceScreen";
+
+vi.mock("@/integrations/supabase/client", () => ({
+  supabase: { functions: { invoke: vi.fn() } },
+}));
 
 // Mock useAuth
 vi.mock("@/hooks/useAuth", () => ({
@@ -186,6 +194,31 @@ function renderScreen(gateway: InstagramInsightsGateway) {
 }
 
 describe("InstagramPerformanceScreen", () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it("explains the production collection-disabled response when sync is refused", async () => {
+    mockUseSocialAccounts.mockReturnValue({
+      data: [{ id: "acc-123", platform: "instagram", platform_username: "testcreator", is_active: true }],
+      isLoading: false,
+    });
+    const response = new Response(JSON.stringify({ error: "collection_disabled" }), { status: 503 });
+    vi.mocked(supabase.functions.invoke)
+      .mockResolvedValueOnce({ data: mockReport, error: null })
+      .mockResolvedValueOnce({ data: null, error: new FunctionsHttpError(response) });
+    const errorToast = vi.spyOn(toast, "error");
+
+    renderScreen(new SupabaseInstagramInsightsGateway());
+    expect(await screen.findByText("14.2K")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /Sync now/i }));
+
+    await waitFor(() => {
+      expect(errorToast).toHaveBeenCalledWith(
+        "Instagram insights collection is currently disabled. Contact support to check availability.",
+      );
+    });
+    expect(await response.json()).toEqual({ error: "collection_disabled" });
+  });
+
   it("renders connect prompt when user has no active Instagram accounts", async () => {
     mockUseSocialAccounts.mockReturnValue({
       data: [],
