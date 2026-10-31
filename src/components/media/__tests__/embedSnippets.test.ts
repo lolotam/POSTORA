@@ -18,4 +18,10 @@ describe("embedSnippets", () => {
     expect(html).toContain("&quot;");
     expect(html).not.toContain(`" onerror="`);
   });
+
+  it("escapes square brackets in the Markdown label so the link text cannot end early", () => {
+    const url = "https://cdn.example/f";
+    expect(embedSnippets("image", url, "a]b[c.png").markdown).toBe(`![a\\]b\\[c.png](${url})`);
+    expect(embedSnippets("document", url, "[draft].pdf").markdown).toBe(`[\\[draft\\].pdf](${url})`);
+  });
 });

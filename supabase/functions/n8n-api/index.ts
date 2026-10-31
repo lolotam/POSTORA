@@ -646,7 +646,7 @@ async function handleCreatePost(req: Request, supabase: any, userId: string, bod
   // column is UUID[] and a non-UUID value (e.g. a Cloudinary URL from a wrong n8n
   // expression) would cause a 22P02 "invalid input syntax for type uuid" at insert.
   const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-  let rawMediaFileIds: string[] = Array.isArray(media_file_ids) ? [...media_file_ids] :
+  const rawMediaFileIds: string[] = Array.isArray(media_file_ids) ? [...media_file_ids] :
     (media_file_ids ? [media_file_ids] : []);
 
   if (rawMediaFileIds.length > 0) {
@@ -664,7 +664,7 @@ async function handleCreatePost(req: Request, supabase: any, userId: string, bod
       );
     }
   }
-  let finalMediaFileIds: string[] = rawMediaFileIds.map((id: string) => id.trim());
+  const finalMediaFileIds: string[] = rawMediaFileIds.map((id: string) => id.trim());
 
   // Combine media_url (singular) and media_urls (plural) - accept both formats
   const combinedMediaUrls = media_urls || media_url;

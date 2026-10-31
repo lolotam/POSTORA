@@ -163,7 +163,7 @@ export async function openinaryHealthCheck(config: OpeninaryConfig): Promise<{ o
     const second = await upload("probe.png"); paths.push(second); if (second === first) throw new Error("collision behavior moved: duplicate was not suffixed"); moved.push("collision suffix");
     const octet = await (async()=>{ const form=new FormData(); form.append("folder",base); form.append("files",new File([data],"octet.png",{type:"application/octet-stream"})); return request(`${config.serverUrl}/api/upload`,{method:"POST",headers:{Authorization:`Bearer ${config.apiKey}`},body:form}); })(); if (octet.ok) throw new Error("MIME rejection behavior moved: octet-stream accepted"); moved.push("MIME rejection");
     return { ok:true, moved };
-  } catch(error) { return { ok:false, moved, error:error instanceof Error?error.message:String(error) }; } finally { for (const path of paths) { try { await deleteFromOpeninary(config,path); } catch { /* cleanup is best effort */ } } try { await deleteFromOpeninary(config,base); } catch { } }
+  } catch(error) { return { ok:false, moved, error:error instanceof Error?error.message:String(error) }; } finally { for (const path of paths) { try { await deleteFromOpeninary(config,path); } catch { /* cleanup is best effort */ } } try { await deleteFromOpeninary(config,base); } catch { /* cleanup is best effort */ } }
 }
 
 /**

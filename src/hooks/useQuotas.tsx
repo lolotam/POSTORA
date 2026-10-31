@@ -272,7 +272,7 @@ export function useQuotas() {
         media_uploads_today?: number;
         media_daily_reset_date?: string;
       } = {};
-      let normalized = { ...data } as UserQuota;
+      const normalized = { ...data } as UserQuota;
 
       // Daily reset check
       const dailyReset = new Date(data.daily_reset_date || now);

@@ -41,6 +41,7 @@ class FakeAdmin {
   }
 
   get storage() {
+    // eslint-disable-next-line @typescript-eslint/no-this-alias -- the nested fake methods are regular functions and need the outer instance
     const db = this;
     return {
       from() {

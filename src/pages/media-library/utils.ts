@@ -14,7 +14,7 @@ export const formatFileSize = (bytes: number): string => {
 };
 
 export const extractCloudName = (url: string): string => {
-  const match = url.match(/res\.cloudinary\.com\/([^\/]+)/);
+  const match = url.match(/res\.cloudinary\.com\/([^/]+)/);
   return match ? match[1] : "";
 };
 

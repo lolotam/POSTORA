@@ -60,7 +60,7 @@ function placeholderForSchema(doc: Any, raw: Any, pathHint = ""): Any {
 
   // Handle allOf by merging
   if (Array.isArray(schema.allOf)) {
-    let merged: Any = {};
+    const merged: Any = {};
     for (const part of schema.allOf) {
       const resolved = resolveSchema(doc, part);
       if (isObj(resolved)) {

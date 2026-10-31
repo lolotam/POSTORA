@@ -267,7 +267,7 @@ export function RenameFolderDialog({
 
     try {
       // Sanitize folder name
-      const sanitizedName = newName.trim().replace(/[\/\\]/g, "-");
+      const sanitizedName = newName.trim().replace(/[/\\]/g, "-");
       const newFullPath =
         parentPath === "/" ? `/${sanitizedName}` : `${parentPath}/${sanitizedName}`;
 

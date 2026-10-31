@@ -381,8 +381,8 @@ export function MediaCropper({
 
         // Get target resolution based on aspect ratio and quality setting
         const targetRes = getTargetResolution(selectedRatio, qualityPreset);
-        let targetWidth: number | undefined = targetRes?.width;
-        let targetHeight: number | undefined = targetRes?.height;
+        const targetWidth: number | undefined = targetRes?.width;
+        const targetHeight: number | undefined = targetRes?.height;
 
         // Server-side video crop; the target resolution upscales a smaller crop
         const { data, error: invokeError } = await supabase.functions.invoke("process-video", {

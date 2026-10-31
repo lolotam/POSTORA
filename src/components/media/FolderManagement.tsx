@@ -56,7 +56,7 @@ export function CreateFolderDialog({
 
     try {
       // Sanitize folder name
-      const sanitizedName = folderName.trim().replace(/[\/\\]/g, "-");
+      const sanitizedName = folderName.trim().replace(/[/\\]/g, "-");
       const fullPath = parentPath === "/" 
         ? `/${sanitizedName}`
         : `${parentPath}/${sanitizedName}`;

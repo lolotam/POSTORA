@@ -80,7 +80,7 @@ export interface ComposeEmailRef {
   openDraft: (data: DraftData) => void;
 }
 
-export const ComposeEmail = forwardRef<ComposeEmailRef, {}>(function ComposeEmail(_, ref) {
+export const ComposeEmail = forwardRef<ComposeEmailRef, object>(function ComposeEmail(_, ref) {
   const queryClient = useQueryClient();
   const editorRef = useRef<RichTextEditorRef>(null);
   const [open, setOpen] = useState(false);

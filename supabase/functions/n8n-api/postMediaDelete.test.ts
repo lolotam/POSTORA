@@ -44,6 +44,7 @@ class FakeMediaDb {
   ) {}
 
   from(table: string): MediaBuilder {
+    // eslint-disable-next-line @typescript-eslint/no-this-alias -- the nested fake methods are regular functions and need the outer instance
     const db = this;
     const filters: Array<[string, ...unknown[]]> = [];
     let op: "select" | "delete" = "select";

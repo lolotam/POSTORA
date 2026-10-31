@@ -257,14 +257,14 @@ export function usePlaygroundState() {
       const duration = Date.now() - startTime;
       const apiResponse: ApiResponse = { ...data, status: res.status, duration };
       setResponse(apiResponse);
-      try { saveToHistory(JSON.parse(requestBody), apiResponse); } catch {}
+      try { saveToHistory(JSON.parse(requestBody), apiResponse); } catch { /* history is best effort; a non-JSON body is not saved */ }
       if (data.success) toast.success("Request successful!");
       else toast.error(data.error || "Request failed");
     } catch (error: any) {
       const duration = Date.now() - startTime;
       const errorResponse: ApiResponse = { success: false, error: error.message, status: 0, duration };
       setResponse(errorResponse);
-      try { saveToHistory(JSON.parse(requestBody), errorResponse); } catch {}
+      try { saveToHistory(JSON.parse(requestBody), errorResponse); } catch { /* history is best effort; a non-JSON body is not saved */ }
       toast.error("Request failed: " + error.message);
     } finally {
       setIsLoading(false);

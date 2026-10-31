@@ -16,8 +16,7 @@ function stubApiLogs(countResult: { count: number | null; error?: { message: str
   const countFilters: Array<{ table: string; column: string; value: unknown }> = [];
   const inserts: Array<Record<string, unknown>> = [];
   const tables: string[] = [];
-  let chain: any;
-  chain = {
+  const chain: any = {
     select: (_columns: string, _opts: unknown) => chain,
     eq: (column: string, value: unknown) => {
       countFilters.push({ table: tables[tables.length - 1], column, value });

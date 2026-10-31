@@ -25,6 +25,7 @@ class FakeSupabase {
   constructor(private readonly error: { message: string } | null = null) {}
 
   from(table: string) {
+    // eslint-disable-next-line @typescript-eslint/no-this-alias -- the nested fake methods are regular functions and need the outer instance
     const db = this;
     return {
       insert(payload: Record<string, unknown>) {
@@ -57,6 +58,7 @@ class FlakySupabase {
   constructor(private readonly failures: number) {}
 
   from(_table: string) {
+    // eslint-disable-next-line @typescript-eslint/no-this-alias -- the nested fake methods are regular functions and need the outer instance
     const db = this;
     return {
       insert(_payload: unknown): Promise<{ data: null; error: { message: string } | null }> {
@@ -80,6 +82,7 @@ class HeldSupabase {
   private holding = false;
 
   from(table: string) {
+    // eslint-disable-next-line @typescript-eslint/no-this-alias -- the nested fake methods are regular functions and need the outer instance
     const db = this;
     return {
       insert(payload: Record<string, unknown>): Promise<{ data: null; error: { message: string } | null }> {

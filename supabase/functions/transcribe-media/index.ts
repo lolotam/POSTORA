@@ -311,7 +311,7 @@ serve(async (req) => {
         const val = typeof row.value === "string" ? JSON.parse(row.value as string) : row.value;
         if (row.key === "transcription_primary_model" && val) primaryModel = String(val);
         if (row.key === "transcription_fallback_model" && val) fallbackModel = String(val);
-      } catch {}
+      } catch { /* an unreadable setting keeps the default model */ }
     }
 
     if (requestedModel) primaryModel = requestedModel;

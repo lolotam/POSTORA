@@ -95,7 +95,7 @@ function rewritePostgrestUrl(url: string): string {
 }
 function postgrestFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
   let urlStr: string;
-  let reqInit = init;
+  const reqInit = init;
   if (typeof input === "string") {
     urlStr = rewritePostgrestUrl(input);
     return fetch(urlStr, reqInit);
@@ -166,7 +166,7 @@ function makeProviderStub(
 ): typeof fetch {
   // deno-lint-ignore no-explicit-any
   const stub: any = async (input: RequestInfo | URL, init?: RequestInit) => {
-    let urlStr = typeof input === "string"
+    const urlStr = typeof input === "string"
       ? input
       : input instanceof URL
       ? input.toString()

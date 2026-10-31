@@ -128,7 +128,7 @@ Analyze the provided system log entry and return a JSON object with exactly thre
 Return ONLY valid JSON, no markdown formatting.`;
 
     // Build rich user prompt
-    let userPromptParts = [
+    const userPromptParts = [
       `Analyze this system log entry:`,
       ``,
       `Level: ${log.level}`,

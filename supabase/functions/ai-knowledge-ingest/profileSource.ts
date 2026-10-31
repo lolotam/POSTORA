@@ -63,6 +63,7 @@ export function parseRenameSourceInput(
     throw new SourceNameError(`file_name must be at most ${MAX_SOURCE_NAME_LENGTH} characters`);
   }
   // deno-lint-ignore no-control-regex
+  // eslint-disable-next-line no-control-regex -- matching control characters is the point of this check
   if (/[\x00-\x1f\x7f]/.test(fileName)) throw new SourceNameError("file_name must be a single line of text");
   return { sourceId: sourceId.trim(), fileName };
 }
