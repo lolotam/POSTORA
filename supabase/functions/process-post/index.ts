@@ -1660,6 +1660,19 @@ Deno.serve(async (req) => {
         post_id,
         expected_scheduled_at: expectedScheduledAt,
       });
+      const { error: logError } = await supabase.from("system_logs").insert({
+        level: "info",
+        category: "post",
+        source: "process-post",
+        message: "Publish declined: post was rescheduled or already claimed by another scheduler run",
+        user_id: post.user_id,
+        metadata: {
+          event: "claim_declined",
+          post_id,
+          expected_scheduled_at: expectedScheduledAt ?? null,
+        },
+      });
+      if (logError) console.error("claim_declined log insert failed:", logError.message);
       return createErrorResponse("Post was rescheduled or is already being processed; not published", 409);
     }
 
