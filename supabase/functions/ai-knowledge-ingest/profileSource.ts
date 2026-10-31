@@ -62,8 +62,7 @@ export function parseRenameSourceInput(
   if (fileName.length > MAX_SOURCE_NAME_LENGTH) {
     throw new SourceNameError(`file_name must be at most ${MAX_SOURCE_NAME_LENGTH} characters`);
   }
-  // deno-lint-ignore no-control-regex
-  if (/[\x00-\x1f\x7f]/.test(fileName)) throw new SourceNameError("file_name must be a single line of text"); // eslint-disable-line no-control-regex -- matching control characters is the point of this check
+  if (hasControlCharacter(fileName)) throw new SourceNameError("file_name must be a single line of text");
   return { sourceId: sourceId.trim(), fileName };
 }
 
@@ -82,4 +81,13 @@ export function shouldRetireLegacyPlatformProfile(
   if (accountIdsOnPlatform.length === 0) return false;
   const covered = new Set(accountIdsWithOwnProfile);
   return accountIdsOnPlatform.every((id) => covered.has(id));
+}
+
+/** True when the text holds a C0 control character or DEL, i.e. it is not a single line of text. */
+function hasControlCharacter(text: string): boolean {
+  for (let i = 0; i < text.length; i++) {
+    const code = text.charCodeAt(i);
+    if (code <= 0x1f || code === 0x7f) return true;
+  }
+  return false;
 }

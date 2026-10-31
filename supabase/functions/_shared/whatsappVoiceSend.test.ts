@@ -41,13 +41,11 @@ class FakeAdmin {
   }
 
   get storage() {
-    // eslint-disable-next-line @typescript-eslint/no-this-alias -- the nested fake methods are regular functions and need the outer instance
-    const db = this;
     return {
-      from() {
+      from: () => {
         return {
-          createSignedUrl(path: string, ttl: number) {
-            db.signedUrls.push({ path, ttl });
+          createSignedUrl: (path: string, ttl: number) => {
+            this.signedUrls.push({ path, ttl });
             return Promise.resolve({
               data: { signedUrl: `http://kong:8000/storage/v1/object/sign/media/${path}` },
               error: null,
