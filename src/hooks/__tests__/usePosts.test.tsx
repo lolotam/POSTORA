@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, type Mock } from "vitest";
 import { renderHook, waitFor } from "@testing-library/react";
 import { usePosts, usePostStats } from "../usePosts";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -46,7 +46,7 @@ describe("usePosts Hook", () => {
         const mockPosts = [{ id: "1", caption: "Test Post", user_id: "test-user-id" }];
 
         // Mock chain
-        (supabase.from as any).mockReturnValue({
+        (supabase.from as Mock).mockReturnValue({
             select: vi.fn().mockReturnValue({
                 eq: vi.fn().mockReturnValue({
                     order: vi.fn().mockResolvedValue({ data: mockPosts, error: null }),
@@ -68,7 +68,7 @@ describe("usePostStats Hook", () => {
             { id: "3", status: "pending", scheduled_at: new Date(Date.now() + 86400000).toISOString() }, // Future
         ];
 
-        (supabase.from as any).mockReturnValue({
+        (supabase.from as Mock).mockReturnValue({
             select: vi.fn().mockReturnValue({
                 eq: vi.fn().mockResolvedValue({ data: mockPosts, error: null }),
             }),

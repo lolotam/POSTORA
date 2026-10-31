@@ -21,7 +21,7 @@ const mockInvoke = vi.fn();
 vi.mock("@/integrations/supabase/client", () => ({
     supabase: {
         functions: {
-            invoke: (...args: any[]) => mockInvoke(...args),
+            invoke: (...args: unknown[]) => mockInvoke(...args),
         },
     },
 }));
@@ -29,8 +29,35 @@ vi.mock("@/integrations/supabase/client", () => ({
 // Mock URL methods
 const mockRevokeObjectURL = vi.fn();
 const mockCreateObjectURL = vi.fn(() => "blob:mock-url");
-(globalThis as any).URL.createObjectURL = mockCreateObjectURL;
-(globalThis as any).URL.revokeObjectURL = mockRevokeObjectURL;
+globalThis.URL.createObjectURL = mockCreateObjectURL;
+globalThis.URL.revokeObjectURL = mockRevokeObjectURL;
+
+// Minimal stand-ins for the elements the hook creates. Handlers take an optional
+// Event and getContext an optional id so each fake stays comparable to the real
+// DOM element type it is returned as.
+type FakeHandler = ((ev?: Event) => void) | null;
+
+interface FakeVideo {
+    src: string;
+    crossOrigin: string;
+    muted: boolean;
+    currentTime: number;
+    duration: number;
+    videoWidth: number;
+    videoHeight: number;
+    onloadedmetadata: FakeHandler;
+    onseeked: FakeHandler;
+    onerror: FakeHandler;
+}
+
+interface FakeCanvas {
+    width: number;
+    height: number;
+    getContext: (contextId?: string) => { drawImage: (...args: unknown[]) => void };
+    toDataURL: () => string;
+}
+
+type FakeAnchor = Pick<HTMLAnchorElement, "href" | "download" | "click">;
 
 describe("useYouTubeThumbnails - Video Generation", () => {
     const mockSetAutoThumbnails = vi.fn();
@@ -73,7 +100,7 @@ describe("useYouTubeThumbnails - Video Generation", () => {
             };
 
             // Mock video element
-            const mockVideo = {
+            const mockVideo: FakeVideo = {
                 src: "",
                 crossOrigin: "",
                 muted: false,
@@ -81,13 +108,13 @@ describe("useYouTubeThumbnails - Video Generation", () => {
                 duration: 60,
                 videoWidth: 1920,
                 videoHeight: 1080,
-                onloadedmetadata: null as any,
-                onseeked: null as any,
-                onerror: null as any,
+                onloadedmetadata: null,
+                onseeked: null,
+                onerror: null,
             };
 
             // Mock canvas element
-            const mockCanvas = {
+            const mockCanvas: FakeCanvas = {
                 width: 0,
                 height: 0,
                 getContext: () => ({
@@ -97,7 +124,7 @@ describe("useYouTubeThumbnails - Video Generation", () => {
             };
 
             // Mock anchor element
-            const mockAnchor = {
+            const mockAnchor: FakeAnchor = {
                 href: "",
                 download: "",
                 click: vi.fn(),
@@ -105,9 +132,9 @@ describe("useYouTubeThumbnails - Video Generation", () => {
 
             // Apply createElement mock
             vi.spyOn(document, "createElement").mockImplementation((tag: string) => {
-                if (tag === "video") return mockVideo as any;
-                if (tag === "canvas") return mockCanvas as any;
-                if (tag === "a") return mockAnchor as any;
+                if (tag === "video") return mockVideo as HTMLVideoElement;
+                if (tag === "canvas") return mockCanvas as HTMLCanvasElement;
+                if (tag === "a") return mockAnchor as HTMLAnchorElement;
                 return originalCreateElement(tag);
             });
 
@@ -161,7 +188,7 @@ describe("useYouTubeThumbnails - Video Generation", () => {
             };
 
             const seekTimes: number[] = [];
-            const mockVideo = {
+            const mockVideo: FakeVideo = {
                 src: "",
                 crossOrigin: "",
                 muted: false,
@@ -169,9 +196,9 @@ describe("useYouTubeThumbnails - Video Generation", () => {
                 duration: 60,
                 videoWidth: 1920,
                 videoHeight: 1080,
-                onloadedmetadata: null as any,
-                onseeked: null as any,
-                onerror: null as any,
+                onloadedmetadata: null,
+                onseeked: null,
+                onerror: null,
             };
 
             // Track when currentTime is set
@@ -186,17 +213,19 @@ describe("useYouTubeThumbnails - Video Generation", () => {
             });
 
             vi.spyOn(document, "createElement").mockImplementation((tag: string) => {
-                if (tag === "video") return mockVideo as any;
+                if (tag === "video") return mockVideo as HTMLVideoElement;
                 if (tag === "canvas") {
-                    return {
+                    const canvas: FakeCanvas = {
                         width: 0,
                         height: 0,
                         getContext: () => ({ drawImage: vi.fn() }),
                         toDataURL: () => "data:image/jpeg;base64,mock",
-                    } as any;
+                    };
+                    return canvas as HTMLCanvasElement;
                 }
                 if (tag === "a") {
-                    return { href: "", download: "", click: vi.fn() } as any;
+                    const anchor: FakeAnchor = { href: "", download: "", click: vi.fn() };
+                    return anchor as HTMLAnchorElement;
                 }
                 return originalCreateElement(tag);
             });

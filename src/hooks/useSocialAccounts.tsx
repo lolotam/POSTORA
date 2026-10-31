@@ -48,7 +48,7 @@ export function useSocialAccounts() {
       if (error) throw error;
       
       // Filter out accounts linked to profiles owned by other users
-      const validAccounts = (data || []).filter((account: any) => {
+      const validAccounts = (data || []).filter((account) => {
         // No profile linked - valid
         if (!account.social_profile_id) return true;
         // Profile exists and belongs to current user - valid

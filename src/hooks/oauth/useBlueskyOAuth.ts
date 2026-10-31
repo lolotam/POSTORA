@@ -3,10 +3,11 @@ import { supabase } from "@/integrations/supabase/client";
 import { useQueryClient } from "@tanstack/react-query";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/hooks/useAuth";
+import { Platform } from "@/lib/types";
 import { refetchSocialQueries } from "./oauthUtils";
 
 export function useBlueskyOAuth(
-  setConnectingPlatform: (p: any) => void,
+  setConnectingPlatform: (p: Platform | null) => void,
   setConnectingProfile: (p: string | null) => void,
 ) {
   const { toast } = useToast();

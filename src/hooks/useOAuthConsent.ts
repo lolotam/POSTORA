@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
 import { useSearchParams } from "react-router-dom";
 import { supabase } from "@/integrations/supabase/client";
+import type { Json } from "@/integrations/supabase/types";
 
 // No user id is passed: log_system_event takes the actor from the caller's JWT
 // and refuses any other service, so a caller cannot attribute an event to
@@ -9,7 +10,7 @@ import { supabase } from "@/integrations/supabase/client";
 async function logOAuthEvent(
   level: "info" | "error",
   message: string,
-  details: Record<string, any>
+  details: Record<string, Json | undefined>
 ) {
   try {
     await supabase.rpc("log_system_event", {
@@ -123,12 +124,13 @@ export function useOAuthConsent() {
           };
         });
         setScopes(scopeList);
-      } catch (err: any) {
+      } catch (err: unknown) {
+        const message = err instanceof Error ? err.message : undefined;
         await logOAuthEvent("error", "OAuth authorization details fetch failed", {
           authorization_id: authorizationId,
-          error: err.message,
+          error: message,
         });
-        setError(err.message || "Failed to load authorization details");
+        setError(message || "Failed to load authorization details");
       } finally {
         setIsLoading(false);
       }
@@ -159,13 +161,14 @@ export function useOAuthConsent() {
       } else {
         throw new Error("No redirect URL returned from authorization server");
       }
-    } catch (err: any) {
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : undefined;
       await logOAuthEvent("error", "OAuth authorization approval failed", {
         authorization_id: authorizationId,
         client_name: clientInfo?.name,
-        error: err.message,
+        error: message,
       });
-      setError(err.message || "Authorization failed");
+      setError(message || "Authorization failed");
       setIsApproving(false);
     }
   };
@@ -186,7 +189,7 @@ export function useOAuthConsent() {
         // Fallback: go back
         window.history.back();
       }
-    } catch (err: any) {
+    } catch (err) {
       // If deny API fails, just go back
       console.error("Deny failed:", err);
       window.history.back();

@@ -1,7 +1,7 @@
 import type { ReactNode } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { renderHook, waitFor } from "@testing-library/react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import { supabase } from "@/integrations/supabase/client";
 import { useUndeliveredStoreAccounts } from "@/hooks/useUndeliveredStoreAccounts";
 
@@ -26,6 +26,14 @@ function createWrapper() {
   };
 }
 
+// Thenable stand-in for the Supabase query builder the hook awaits.
+interface FakeQueryBuilder {
+  select: Mock;
+  eq: Mock;
+  not: Mock;
+  then: (resolve: (val: unknown) => unknown, reject?: (err: unknown) => unknown) => Promise<unknown>;
+}
+
 describe("useUndeliveredStoreAccounts", () => {
   let eqCalls: Array<[string, unknown]>;
   let notCalls: Array<[string, string, unknown]>;
@@ -37,7 +45,7 @@ describe("useUndeliveredStoreAccounts", () => {
     notCalls = [];
     queryResult = { data: [], error: null };
 
-    const builder: any = {
+    const builder: FakeQueryBuilder = {
       select: vi.fn().mockReturnThis(),
       eq: vi.fn().mockImplementation((col: string, val: unknown) => {
         eqCalls.push([col, val]);
@@ -52,7 +60,7 @@ describe("useUndeliveredStoreAccounts", () => {
       },
     };
 
-    vi.mocked(supabase.from).mockReturnValue(builder);
+    (supabase.from as Mock).mockReturnValue(builder);
   });
 
   it("queries social_accounts for the user's flagged whatsapp accounts", async () => {

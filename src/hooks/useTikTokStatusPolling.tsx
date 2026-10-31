@@ -232,7 +232,7 @@ export function useTikTokStatusPolling({
           filter: `id=eq.${platformPostId}`,
         },
         (payload) => {
-          const newRecord = payload.new as any;
+          const newRecord = payload.new as { status?: string; platform_post_id?: string; platform_post_url?: string; error_message?: string };
           if (newRecord.status === "success") {
             stopPolling();
             setStatusInfo(prev => ({

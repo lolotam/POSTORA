@@ -18,6 +18,15 @@ export interface PublishingPost {
   completedPlatforms: Map<string, "success" | "failed" | "pending_inbox">;
 }
 
+/** The platform_posts columns a realtime change event is read for. */
+interface PlatformPostChange {
+  post_id?: string;
+  platform?: string;
+  status?: RealtimeUpdate["status"];
+  platform_post_url?: string | null;
+  error_message?: string | null;
+}
+
 export function useRealtimePostUpdates() {
   const { user } = useAuth();
   const queryClient = useQueryClient();
@@ -81,8 +90,8 @@ export function useRealtimePostUpdates() {
         async (payload) => {
           console.log("[Realtime] platform_posts change:", payload);
 
-          const newRecord = payload.new as any;
-          const oldRecord = payload.old as any;
+          const newRecord = payload.new as PlatformPostChange;
+          const oldRecord = payload.old as PlatformPostChange;
 
           if (!newRecord?.post_id) return;
 
@@ -203,7 +212,7 @@ export function useRealtimePostUpdates() {
         (payload) => {
           console.log("[Realtime] posts change:", payload);
 
-          const newRecord = payload.new as any;
+          const newRecord = payload.new as { id?: string; status?: string };
 
           // Invalidate and force refetch queries
           queryClient.refetchQueries({ queryKey: ["posts_with_results"] });

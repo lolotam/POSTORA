@@ -31,6 +31,21 @@ const DEFAULT: ThreadsCapabilities = {
   probedAt: null,
 };
 
+/** The account_metadata keys the capability probe writes for a Threads account. */
+type ThreadsAccountMetadata = {
+  capabilities?: {
+    canPublish?: boolean;
+    canViewInsights?: unknown;
+    canUseDiscovery?: unknown;
+    canUseKeywordSearch?: unknown;
+    canCrossShareToIg?: unknown;
+    canUseLocationTagging?: unknown;
+    canDeleteThreadsPosts?: unknown;
+  };
+  granted_scopes?: string[];
+  capability_probed_at?: string | null;
+};
+
 function tri(val: unknown): boolean | null {
   if (val === true) return true;
   if (val === false) return false;
@@ -66,7 +81,7 @@ export function useThreadsCapabilities(accountId?: string) {
 
       if (!data) return DEFAULT;
 
-      const meta = (data.account_metadata as any) || {};
+      const meta: ThreadsAccountMetadata = (data.account_metadata as ThreadsAccountMetadata) || {};
       const caps = meta.capabilities || {};
       return {
         connected: true,

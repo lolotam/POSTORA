@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, type Mock } from "vitest";
 import { renderHook, waitFor } from "@testing-library/react";
 import { useAdminNotifications, useMarkNotificationRead } from "../useNotifications";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -32,7 +32,7 @@ describe("useNotifications Hook", () => {
         const mockReads = [{ notification_id: "n1" }];
 
         // Mock separate calls for notifications and reads
-        (supabase.from as any).mockImplementation((table: string) => {
+        (supabase.from as Mock).mockImplementation((table: string) => {
             if (table === "admin_notifications") {
                 return {
                     select: vi.fn().mockReturnValue({
@@ -57,7 +57,7 @@ describe("useNotifications Hook", () => {
     });
 
     it("should mark notification as read", async () => {
-        (supabase.from as any).mockImplementation((table: string) => {
+        (supabase.from as Mock).mockImplementation((table: string) => {
             if (table === "user_notification_reads") {
                 return {
                     insert: vi.fn().mockResolvedValue({ error: null }),

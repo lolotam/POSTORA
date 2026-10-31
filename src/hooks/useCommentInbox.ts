@@ -34,11 +34,26 @@ interface UseCommentsOptions {
   enabled?: boolean;
 }
 
-export function parsePageComments(data: any): Comment[] {
-  const comments: Comment[] = [];
-  if (!data?.data) return comments;
+/** The slice of the Graph API page-feed payload `parsePageComments` reads. */
+interface FbCommentRow {
+  id: string;
+  from?: { id?: string; name?: string; picture?: { data?: { url?: string; is_silhouette?: boolean } } };
+  message?: string;
+  created_time: string;
+  is_hidden?: boolean;
+  parent?: { id?: string };
+}
 
-  for (const post of data.data) {
+interface FbPagePostsResponse {
+  data?: Array<{ id: string; message?: string; comments?: { data?: FbCommentRow[] } }>;
+}
+
+export function parsePageComments(data: unknown): Comment[] {
+  const payload = data as FbPagePostsResponse | null | undefined;
+  const comments: Comment[] = [];
+  if (!payload?.data) return comments;
+
+  for (const post of payload.data) {
     if (!post.comments?.data) continue;
     for (const c of post.comments.data) {
       // Facebook's picture field returns { data: { url, is_silhouette } }. A
@@ -67,11 +82,36 @@ export function parsePageComments(data: any): Comment[] {
   return comments.sort((a, b) => new Date(b.created_time).getTime() - new Date(a.created_time).getTime());
 }
 
-export function parseIgComments(data: any): Comment[] {
-  const comments: Comment[] = [];
-  if (!data?.data) return comments;
+/** The slice of the Graph API IG media payload `parseIgComments` reads. */
+interface IgCommentRow {
+  id: string;
+  from?: { id?: string; username?: string };
+  username?: string;
+  author_avatar?: string | null;
+  text?: string;
+  like_count?: number;
+  timestamp: string;
+  hidden?: boolean;
+  replies?: { data?: IgCommentRow[] };
+}
 
-  for (const media of data.data) {
+interface IgMediaResponse {
+  data?: Array<{
+    id: string;
+    caption?: string;
+    media_type?: string;
+    like_count?: number | null;
+    comments_count?: number | null;
+    comments?: { data?: IgCommentRow[] };
+  }>;
+}
+
+export function parseIgComments(data: unknown): Comment[] {
+  const payload = data as IgMediaResponse | null | undefined;
+  const comments: Comment[] = [];
+  if (!payload?.data) return comments;
+
+  for (const media of payload.data) {
     const engagement = media.like_count != null || media.comments_count != null
       ? `${media.like_count ?? 0} likes · ${media.comments_count ?? 0} comments`
       : "";
@@ -192,7 +232,7 @@ function parseComments(platform: UseCommentsOptions["platform"], data: unknown):
 // error/error_type field in the body, not a transport-level error — every
 // caller must check this or a rejected Meta call (e.g. a hide/reply Meta
 // rejects) gets reported as a false success.
-function throwIfCommentManagerError(data: any): void {
+function throwIfCommentManagerError(data: { error_type?: string; error?: unknown } | null | undefined): void {
   if (!data?.error_type && !data?.error) return;
   const rawErr = data.error;
   let message: string;

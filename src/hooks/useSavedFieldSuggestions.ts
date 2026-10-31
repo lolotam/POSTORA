@@ -21,7 +21,7 @@ export function useSavedFieldSuggestions(fieldType: FieldType, platform?: string
   const { data: suggestions = [], isLoading } = useQuery({
     queryKey,
     queryFn: async () => {
-      let query = (supabase as any)
+      let query = supabase
         .from("saved_field_suggestions")
         .select("id, value, use_count, last_used_at")
         .eq("user_id", userId!)
@@ -50,7 +50,7 @@ export function useSavedFieldSuggestions(fieldType: FieldType, platform?: string
         ? value.split(",").map((v) => v.trim()).filter(Boolean)
         : [value.trim()].filter(Boolean);
 
-      const db = supabase as any;
+      const db = supabase;
       for (const val of values) {
         let existingQuery = db
           .from("saved_field_suggestions")
@@ -70,8 +70,8 @@ export function useSavedFieldSuggestions(fieldType: FieldType, platform?: string
         if (existing) {
           await db
             .from("saved_field_suggestions")
-            .update({ use_count: (existing as any).use_count + 1, last_used_at: new Date().toISOString() })
-            .eq("id", (existing as any).id);
+            .update({ use_count: existing.use_count + 1, last_used_at: new Date().toISOString() })
+            .eq("id", existing.id);
         } else {
           await db
             .from("saved_field_suggestions")
@@ -89,7 +89,7 @@ export function useSavedFieldSuggestions(fieldType: FieldType, platform?: string
 
   const deleteMutation = useMutation({
     mutationFn: async (id: string) => {
-      const { error } = await (supabase as any)
+      const { error } = await supabase
         .from("saved_field_suggestions")
         .delete()
         .eq("id", id);

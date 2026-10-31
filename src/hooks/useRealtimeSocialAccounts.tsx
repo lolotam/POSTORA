@@ -4,6 +4,14 @@ import { useAuth } from "./useAuth";
 import { useQueryClient } from "@tanstack/react-query";
 import { useToast } from "./use-toast";
 import { getPlatformName } from "@/components/PlatformIcon";
+import type { Platform } from "@/lib/types";
+
+/** The social_accounts columns a realtime change event is read for. */
+interface SocialAccountChange {
+  is_active?: boolean;
+  platform?: Platform;
+  platform_username?: string | null;
+}
 
 /**
  * Hook that listens for real-time changes to social_accounts table
@@ -34,8 +42,8 @@ export function useRealtimeSocialAccounts() {
         (payload) => {
           console.log("[Realtime] social_accounts change:", payload);
 
-          const newRecord = payload.new as any;
-          const oldRecord = payload.old as any;
+          const newRecord = payload.new as SocialAccountChange;
+          const oldRecord = payload.old as SocialAccountChange;
 
           // Invalidate all related queries to refresh the UI
           queryClient.invalidateQueries({ queryKey: ["social_accounts"] });

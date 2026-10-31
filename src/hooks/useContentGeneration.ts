@@ -71,7 +71,7 @@ export function useContentGeneration() {
     targetPlatform?: string;
   }) => {
     try {
-      const { error } = await supabase.from("generated_content_collections" as any).insert({
+      const { error } = await supabase.from("generated_content_collections").insert({
         user_id: (await supabase.auth.getUser()).data.user?.id,
         source_post_url: sourcePostUrl,
         source_username: sourceUsername,

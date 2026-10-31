@@ -1,7 +1,7 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { renderHook, waitFor } from "@testing-library/react";
 import { createElement, type ReactNode } from "react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import { supabase } from "@/integrations/supabase/client";
 import { useReconnectableQrAccounts } from "@/hooks/useReconnectableQrAccounts";
 
@@ -38,13 +38,13 @@ describe("useReconnectableQrAccounts", () => {
       },
     ];
 
-    const chain: Record<string, any> = {};
+    const chain: Record<string, Mock> = {};
     chain.select = vi.fn().mockReturnValue(chain);
     chain.eq = vi.fn().mockReturnValue(chain);
     chain.not = vi.fn().mockReturnValue(chain);
     chain.order = vi.fn().mockResolvedValue({ data: mockAccounts, error: null });
 
-    vi.mocked(supabase.from).mockReturnValue(chain as any);
+    (supabase.from as Mock).mockReturnValue(chain);
 
     const { result } = renderHook(() => useReconnectableQrAccounts(), { wrapper });
 
@@ -65,7 +65,7 @@ describe("useReconnectableQrAccounts", () => {
   });
 
   it("surfaces an error as isError when query fails", async () => {
-    const chain: Record<string, any> = {};
+    const chain: Record<string, Mock> = {};
     chain.select = vi.fn().mockReturnValue(chain);
     chain.eq = vi.fn().mockReturnValue(chain);
     chain.not = vi.fn().mockReturnValue(chain);
@@ -74,7 +74,7 @@ describe("useReconnectableQrAccounts", () => {
       error: { message: "Failed to load reconnectable accounts" },
     });
 
-    vi.mocked(supabase.from).mockReturnValue(chain as any);
+    (supabase.from as Mock).mockReturnValue(chain);
 
     const { result } = renderHook(() => useReconnectableQrAccounts(), { wrapper });
 
