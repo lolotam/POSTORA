@@ -1656,11 +1656,29 @@ Deno.serve(async (req) => {
       return createErrorResponse(`Could not claim post for processing: ${claim.error}`, 500);
     }
     if (!claim.claimed) {
-      console.log("Declining publish: schedule changed after the scheduler selected this post", {
+      console.log("Declining publish: the post was rescheduled, or another scheduler run already claimed it", {
         post_id,
         expected_scheduled_at: expectedScheduledAt,
       });
-      return createErrorResponse("Post schedule changed after selection; not published", 409);
+      // Best effort: a failed log write must never replace the 409 the scheduler skips on.
+      try {
+        const { error: logError } = await supabase.from("system_logs").insert({
+          level: "info",
+          category: "post",
+          source: "process-post",
+          message: "Publish declined: post was rescheduled or already claimed by another scheduler run",
+          user_id: post.user_id,
+          metadata: {
+            event: "claim_declined",
+            post_id,
+            expected_scheduled_at: expectedScheduledAt ?? null,
+          },
+        });
+        if (logError) console.error("claim_declined log insert failed:", logError.message);
+      } catch (e) {
+        console.error("claim_declined log insert threw:", e instanceof Error ? e.message : String(e));
+      }
+      return createErrorResponse("Post was rescheduled or is already being processed; not published", 409);
     }
 
     // ─────────────────────────────────────────────────────────────────────
