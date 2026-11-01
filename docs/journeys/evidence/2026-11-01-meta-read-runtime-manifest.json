@@ -1,0 +1,23 @@
+{
+  "commit": "3f1da2d4fb20d7976d0067a368824114d0baf234",
+  "files": {
+    "_shared/analyticsCalendar.ts": "69ddabfa205212e568aad7178735f2d34fee51b08f2af70dc7746ca2988b72ed",
+    "_shared/analyticsContract.ts": "3a09a235ad1250d1584b91ff59549fde34ca4a77530ec687f6c2d8c34b3461c7",
+    "_shared/analyticsProjection.ts": "dad85471bea97e8f99ff945d9dda96ae288cf65005978f5a3655ff2841b0225a",
+    "_shared/analyticsRegistry.ts": "ac26ff6f8595fd48b15f567287e82aabd77f951fb7fb7dfeab347c7ce0c24733",
+    "_shared/analyticsSchema.ts": "cd3dd55074a73e333962d7ebbb17b51ae5b05a8e6a8e2d373daaf7b9d32d1643",
+    "_shared/metaAnalyticsCursor.ts": "e655bf4a30c69522df60e36c1ad0a95aa8373a2b8968ec00457882b625b78c2b",
+    "_shared/metaAnalyticsTransport.ts": "6e676d9d3cba991fb2c4a83b7e88649e657d073f99225143acaeb2f0a453fc5f",
+    "facebook-page-insights/index.ts": "fe2334d2cf91f057a6c94ca348b0c7e6ed7bb90fa90e78e3f9814c124b426752",
+    "facebook-page-insights/projection.ts": "e7d637935f66a32cda1def544d8188d73bf2e73e0430e0fa333c1d92ab6858bf",
+    "facebook-page-insights/provider.ts": "3f8c77032cec824c4d946abc80a2b515710c5247786e8c289bb20e8bda4de0da",
+    "facebook-page-insights/report.ts": "1809ea1a06ef97a3ec17d9c0ab953026757f0ac3ee0e1d81c4949b4c04ff5c65",
+    "mcp/index.ts": "e11e39d13a9f41cbde5c811faa9809a883cc436ac941845294891608446274b3",
+    "n8n-api/serviceProxy.ts": "559e03841793aa85892d14fe82ddc4f5056f1fff10a9e8a9afb3e3afd75d4be1",
+    "threads-insights/analyticsCursor.ts": "4e7ae6aa2db0e58f01049ac0b40830f4359c4ab328bd8c69d66aaf7b567e16f6",
+    "threads-insights/analyticsProjection.ts": "791270a6599e70a765ee49146c77d5c6f6d300b919ed894dcee3e71afa41cb4e",
+    "threads-insights/index.ts": "65ab7719fb63a633dc40902c1c44825fcf782de44ac560a6ba21d37cf302d4f2",
+    "threads-insights/provider.ts": "a5cafd9919a3cd5cf562bbd53615d6fff444030155a85b3cab3d407127ef3dd6",
+    "threads-insights/unifiedReport.ts": "1bfc97b7f5f6780185d79355e00cf399003bd586f45d7486af65e360ab4de7c3"
+  }
+}
