@@ -1,0 +1,27 @@
+# Threads insights account selection correction
+
+Scope: the existing-account selection portion of [Meta analytics plan B3](../plans/2026-11-01-meta-analytics-completion.md#b3-threads-live-path-correctness). This correction is independent of Instagram pilot activation and does not complete B3's versioned metric decoding or pagination work.
+
+## Proven defect
+
+The real `threads-insights` composition accepted an explicit `accountId`, discarded the database read error, and called `getThreadsAccount` whenever the requested row was absent. With another active account available, a missing, foreign, inactive or non-Threads selector therefore returned that other account's analytics. A storage failure was indistinguishable from a missing connection. Invalid selectors could also be treated as omitted.
+
+The regression ran the production composition, authentication helper and Supabase client against replaced HTTP boundaries. An alternative active account was present throughout. Before the correction, all four explicit unavailable-account cases returned success instead of 404, and failed reads returned a connection prompt instead of 503. Those red results establish the defect; they are not passing receipts.
+
+## Implemented behavior
+
+- One account query always filters by authenticated owner, platform `threads`, and active state. An explicit UUID adds the account filter and never falls back.
+- Missing, foreign, inactive and wrong-platform explicit accounts share `404`, `account_not_found`, and the same safe message.
+- A failed account read produces `503 storage_error`; raw database detail is not returned or copied to the account-error audit.
+- Invalid explicit selectors or malformed JSON produce `400 invalid_request`, with no account read or provider call.
+- Omitted selectors retain the existing latest-account behavior, ordered by connection time, update time, and ID for deterministic ties. A genuinely empty implicit selection retains the legacy `no_account` connection prompt.
+- Successful responses retain the legacy metrics shape and period choices. User JWT identity still takes precedence over body `user_id`.
+- Account selection logging now records only the account ID, avoiding the previous token prefix/suffix summary. Every new refusal writes a structured operational log.
+
+## Validation and limits
+
+The endpoint regression passed one suite with 17 scenario steps, zero skips, using npm-packaged Deno 2.9.0. It executes the real composition and requires only `--allow-env`, with no network permission for test execution. It covers owner/foreign/inactive/wrong-platform selection, database failures with and without a selector, malformed bodies/selectors, JWT identity precedence, legacy success, implicit latest-account selection and the true no-account prompt. The CI Deno job now executes this suite.
+
+Runtime caller: the deployed `threads-insights/index.ts` entrypoint registers exported `handler` with `Deno.serve` when run as the main module. Tests invoke that same handler; Auth, PostgREST and Meta HTTP are the replaced boundaries. There is no new database object, RLS grant or persistence model. Normal browser and internal service-role callers retain their existing authentication paths.
+
+Production/source, test and documentation guards are applied to this scoped correction. Frontend compilation, build and the immutable lint/i18n comparison are reported separately from the endpoint regression. No live Meta capability claim follows from synthetic transport. Contract negotiation, unavailable-versus-zero decoding, bounded pagination, Facebook/Threads history and live pilot acceptance remain open. Deployment follows the existing Edge deployment runbook after the reviewed revision is ready; no production function, credential, collection switch or schedule was changed by this local correction.
