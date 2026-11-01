@@ -19,7 +19,6 @@ function createMockClient(options: {
   media?: Record<string, unknown>[];
   daily?: Record<string, unknown>[];
   profiles?: Record<string, unknown>[];
-  jobStatus?: Record<string, unknown> | null;
 }) {
   return {
     from: (table: string) => {

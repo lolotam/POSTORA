@@ -26,7 +26,7 @@ import {
   OwnerReportContractError,
 } from "./contracts.ts";
 import { assembleOwnerReport } from "./assemble.ts";
-import { readReportHistory, type HistoryClient } from "./readHistory.ts";
+import { readReportHistory, readReportQuery, ReportHistoryUnavailableError, type HistoryClient } from "./readHistory.ts";
 
 export type ReportStoreClient = HistoryClient;
 
@@ -204,21 +204,21 @@ export class ReportStore {
   private async loadCollectionStatus(socialAccountId: string, userId: string, signal: AbortSignal) {
     // The public status RPC is authenticated-only. Service-role reports read a
     // deliberately narrow projection with structural ownership on every query.
-    const [latest, success, partial] = await Promise.all([
+    const [latest, success, partial] = await readReportQuery(Promise.all([
       this.ownerJobQuery(socialAccountId, userId).order("captured_on", { ascending: false }).limit(1).abortSignal(signal).maybeSingle(),
       this.ownerJobQuery(socialAccountId, userId).order("last_success_at", { ascending: false, nullsFirst: false }).limit(1).abortSignal(signal).maybeSingle(),
       this.ownerJobQuery(socialAccountId, userId).order("last_partial_at", { ascending: false, nullsFirst: false }).limit(1).abortSignal(signal).maybeSingle(),
-    ]);
+    ]), signal);
     for (const read of [latest, success, partial]) {
-      if (read.error) throw new Error(`Failed to load collection status: ${read.error.message}`);
+      if (read.error) throw new ReportHistoryUnavailableError(`Failed to load collection status: ${read.error.message}`);
     }
     const job = latest.data;
     if (!job) return null;
-    const checkpoint = await this.client.from("instagram_collection_job_checkpoints")
+    const checkpoint = await readReportQuery(this.client.from("instagram_collection_job_checkpoints")
       .select("inventory_truncated, inventory_partial, inventory_window_covered")
       .eq("user_id", userId).eq("job_id", job.id).eq("job_generation", job.job_generation)
-      .abortSignal(signal).maybeSingle();
-    if (checkpoint.error) throw new Error(`Failed to load collection coverage: ${checkpoint.error.message}`);
+      .abortSignal(signal).maybeSingle(), signal);
+    if (checkpoint.error) throw new ReportHistoryUnavailableError(`Failed to load collection coverage: ${checkpoint.error.message}`);
     return {
       status: job.status, last_attempt_at: job.last_attempt_at,
       last_success_at: success.data?.last_success_at ?? null,
@@ -237,7 +237,7 @@ export class ReportStore {
     userId: string,
     signal = AbortSignal.timeout(20_000),
   ): Promise<{ id: string; user_id: string; platform: string } | null> {
-    const { data, error } = await this.client
+    const { data, error } = await readReportQuery(this.client
       .from("social_accounts")
       .select("id, user_id, platform")
       .eq("id", socialAccountId)
@@ -245,10 +245,10 @@ export class ReportStore {
       .eq("platform", "instagram")
       .eq("is_active", true)
       .abortSignal(signal)
-      .maybeSingle();
+      .maybeSingle(), signal);
 
     if (error) {
-      throw new Error(`Failed to load account: ${error.message}`);
+      throw new ReportHistoryUnavailableError(`Failed to load account: ${error.message}`);
     }
     if (!data) return null;
     return {
