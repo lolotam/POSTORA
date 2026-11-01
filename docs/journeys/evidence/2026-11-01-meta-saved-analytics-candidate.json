@@ -1,5 +1,5 @@
 {
-  "candidate": "8c048be55f52be5939a43b99bbc5c3ba7779b0a8",
+  "candidate": "7c596971f034e8a78bcc94615ceb9318d92c67aa",
   "production_source_baseline": "cc2555b282c1581dde196fd386b3b6d55a0f64ca",
   "deployment_authorized": false,
   "release_ready": false,
@@ -80,7 +80,7 @@
     },
     {
       "path": "supabase/functions/instagram-insights-report/index.ts",
-      "sha256": "cb9cb0a87655e9ccc52723b085171280cf62cc97ebadd0d94f3f2e9130567a8e"
+      "sha256": "02119026f4fd9855c53d53773b06dd57ae63f1111240c6977944f360d598e369"
     },
     {
       "path": "supabase/functions/instagram-insights-report/readHistory.ts",
@@ -96,7 +96,7 @@
     },
     {
       "path": "supabase/functions/meta-owned-analytics-report/assemble.ts",
-      "sha256": "b54b24021cadf7cc574e022caf0c1b6bd8d28870b0352ea7454d098307ac6481"
+      "sha256": "b6ddadbe49139181c5718d44768cbd9e31bc8af474184981d86732393304db23"
     },
     {
       "path": "supabase/functions/meta-owned-analytics-report/cursor.ts",
@@ -172,7 +172,7 @@
     },
     {
       "path": "supabase/functions/n8n-api/serviceProxy.ts",
-      "sha256": "161d6e0b5a0244de42d9f93d5ce784474f49b03037a964109504f84c15af33fb"
+      "sha256": "b9ac59d60642ef4b8094494b79d4b4ec81b4fa74c0481618b72462d8a1a876b8"
     },
     {
       "path": "supabase/functions/threads-insights/analyticsProjection.ts",
@@ -190,7 +190,7 @@
     },
     {
       "path": "src/features/analytics-contract/application/useSavedAnalytics.ts",
-      "sha256": "48d35ac2dfbbac7cb7ab27960db766851d5cee911b2123daded14a4887c0ce6e"
+      "sha256": "7856190ff0f5f1a0ceea733b51ab20be73cb5386d4c0ec6c79e449e6e188266e"
     },
     {
       "path": "src/features/analytics-contract/domain/mergeSavedAnalyticsPages.ts",
