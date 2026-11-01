@@ -51,6 +51,9 @@ below). So the harness does not replay history. It:
 | `meta_owned_analytics_claim_fairness.sql` | real Facebook/Threads admission, claim and partial completion across two owners; equal-due work yields to an unvisited account while earlier due dates retain priority; rolls back |
 | `meta_owned_analytics_worker_admission.sql` | service-only admission credential reads, default-off and target scope, derived owner, separate Page/User tokens, full expected-authority equality and Threads rotation; no invented permissions/jobs; rolls back |
 | `meta_owned_analytics_worker_progress.sql` | durable daily dispatch across more than 50 targets/two owners, atomic non-force enqueue/cursor progress, current grant renewal, UUID normalization, complete-round restart, stale day/policy/position refusal and visible account refusals; rolls back |
+| `meta_owned_analytics_inventory.sql` | claimed-state reader, page request reservation, replay/conflict, foreign Page IDs, stale position and truthful 500-ID/100-page truncation; rolls back |
+| `meta_owned_analytics_retention.sql` | private role boundaries, independent normalized retention scope, actual physical deletion/dry-run counts, no-op revisions and durable cross-platform claim turns; rolls back |
+| `meta_owned_analytics_cron.sql` | six exact inactive schedules, reapplication, active-to-inactive reconciliation, all three missing prerequisites and runtime secret rotation through a request recorder with no network; rolls back |
 
 The harness's `SUITES` array is the complete executable inventory; the table
 above highlights selected suites, not the entire list. No existing suite may

@@ -415,6 +415,45 @@ class Harness:
             self.enable(platform)
             self.record(platform, scenario, observed)
 
+    def inventory_races(self, platform: Platform) -> None:
+        for conflict in (False, True):
+            claim = self.claim(platform)
+            page = self.admin.value(f"SELECT public.reserve_{platform.family}_analytics_inventory_page({self.claim_args(claim)},NULL,0);")
+            commit = (f"SELECT public.commit_{platform.family}_analytics_inventory_page({self.claim_args(claim)},"
+                      f"{quoted(page['request_id'])},ARRAY[]::text[],NULL,false);")
+            contender_commit = commit if not conflict else (
+                f"SELECT public.commit_{platform.family}_analytics_inventory_page({self.claim_args(claim)},"
+                f"{quoted(page['request_id'])},ARRAY[]::text[],'another_cursor',true);")
+            holder = self.session("inventory_holder", service=True)
+            contender = self.session("inventory_contender", service=True)
+            holder.command("BEGIN; " + commit)
+            marker = contender.start(contender_commit)
+            observed = self.observe_wait(contender, holder)
+            holder.command("COMMIT;")
+            if conflict:
+                self.expect_refusal(contender, marker, {"MAH04"})
+            else:
+                contender.finish(marker)
+            state = self.admin.value(f"SELECT public.read_{platform.family}_analytics_worker_state({self.claim_args(claim)});")
+            if state["checkpoint"]["pages_fetched"] != 1 or not state["checkpoint"]["inventory_complete"]:
+                raise AssertionError("Concurrent page responses advanced inventory more than once")
+            holder.close()
+            contender.close()
+            self.record(platform, "inventory_conflicting_replay" if conflict else "inventory_identical_replay", observed)
+        claim = self.claim(platform)
+        page = self.admin.value(f"SELECT public.reserve_{platform.family}_analytics_inventory_page({self.claim_args(claim)},NULL,0);")
+        self.admin.command(f"UPDATE public.{platform.family}_analytics_collection_jobs SET lease_until=clock_timestamp()-interval '1 second' WHERE id={quoted(claim['job_id'])};")
+        renewed = self.admin.value(f"SELECT public.claim_{platform.family}_analytics_collection_jobs(1);")[0]
+        reserved = self.admin.value(f"SELECT public.reserve_{platform.family}_analytics_inventory_page({self.claim_args(renewed)},NULL,0);")
+        if reserved["request_id"] == page["request_id"]:
+            raise AssertionError("A renewed lease must not accept the previous request reservation")
+        stale = self.session("inventory_stale_claim", service=True)
+        command = (f"SELECT public.commit_{platform.family}_analytics_inventory_page({self.claim_args(renewed)},"
+                   f"{quoted(page['request_id'])},ARRAY[]::text[],NULL,false);")
+        self.expect_refusal(stale, stale.start(command), {"MAH04"})
+        stale.close()
+        self.record(platform, "inventory_reclaimed_request_refused")
+
     def cleanup(self) -> None:
         for session in reversed(self.sessions[1:]):
             session.close()
@@ -442,6 +481,7 @@ class Harness:
                 self.retention_races(platform)
                 self.report_write_race(platform)
                 self.dispatch_races(platform)
+                self.inventory_races(platform)
             return self.results
         finally:
             self.cleanup()

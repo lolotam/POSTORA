@@ -208,7 +208,7 @@ jobs:
         run: |
           set -euo pipefail
           deno check --no-config --no-lock --node-modules-dir=none supabase/functions/meta-owned-analytics-sync/*.ts
-          deno test --no-config --no-lock --node-modules-dir=none --allow-env supabase/functions/meta-owned-analytics-sync/composition.test.ts supabase/functions/meta-owned-analytics-sync/dispatch.test.ts
+          deno test --no-config --no-lock --node-modules-dir=none --allow-env supabase/functions/meta-owned-analytics-sync/composition.test.ts supabase/functions/meta-owned-analytics-sync/dispatch.test.ts supabase/functions/meta-owned-analytics-sync/collection.test.ts supabase/functions/meta-owned-analytics-sync/retention.test.ts
 
       - name: Test service proxy and MCP
         run: >
@@ -649,7 +649,7 @@ jobs:
             --allow-read --allow-write --allow-env --allow-run \
             supabase/functions/competitor-snapshot-sync/rolloutIntegration.test.ts
 
-      - name: Verify owned analytics admission and dispatch against real SQL
+      - name: Verify owned analytics workers and stored schedules against real SQL
         env:
           ROLLOUT_IT_CONTAINER: pg-harness
           ROLLOUT_IT_DB: partner_api_harness

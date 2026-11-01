@@ -1,5 +1,7 @@
 # Owned Meta analytics: durable daily dispatch
 
+Continuation: [collection, retention and inactive scheduling](2026-11-01-meta-owned-worker-collection.md).
+
 Status: implemented and proved locally on the C3 workers branch, extending the [admission slice](2026-11-01-meta-owned-worker-admission.md). This delivers daily enumeration and permission renewal, not metric collection or a completed analytics release. The owner requested completing the missing implementation first, then presenting a concrete deployment package for approval. C2/C3 schema and runtime have not been applied/deployed in production.
 
 ## Behavior and source ownership

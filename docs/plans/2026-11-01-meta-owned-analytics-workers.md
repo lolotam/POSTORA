@@ -38,29 +38,33 @@ public.read_threads_analytics_admission_credential(
 ## 2. Durable dispatch and worker-state protocol
 
 - [x] Add `20261101141000_meta_owned_analytics_worker_progress.sql` and its SQL suite. Implement a private platform/due-date/policy-digest dispatch checkpoint and one-step current-policy advancement. Use existing enqueue business keys; never force an already enqueued generation.
-- [ ] Add `20261101141500_meta_owned_analytics_inventory.sql` with a fenced claimed-generation state reader and checkpoint page reservation/commit under the existing parent-first locks. Keep inventory outside numeric capture kinds. Database-generated reservation UUID, expected prior cursor/page count and payload digest must prove identical replay, conflicting replay and stale-generation refusal; wire real collection consumers in the same change.
+- [x] Add `20261101141500_meta_owned_analytics_inventory.sql` with a fenced claimed-generation state reader and checkpoint page reservation/commit under the existing parent-first locks. Keep inventory outside numeric capture kinds. Database-generated reservation UUID, expected prior cursor/page count and payload digest must prove identical replay, conflicting replay and stale-generation refusal; wire real collection consumers in the same change.
 - [x] Exercise more than 50 synthetic targets, policy changes, duplicate dispatch, expired due date, unknown advancement outcomes and shared-budget fairness across platforms. No successful sweep may hide incomplete work.
-- [ ] Exercise inventory page restarts, repeated cursors, foreign IDs and 500-ID truncation. These are not proved by dispatch tests.
+- [x] Exercise inventory page restarts, repeated cursors, foreign IDs and 500-ID truncation. These are not proved by dispatch tests.
 - [x] Implement `dispatch.ts` and wire `enqueue-daily` in the strict route. Reuse admission before enqueue. One action-wide 40s deadline/50-target counter persists across platform selection; no first-page restart loop.
 - [x] Finish the dispatch guard/local-commit record after its catalog types, full SQL harness, 24 real-session races and actual HTTP/SQL integration. The initial 18 collection/history races remain included. Push and immutable lint/i18n proof are recorded against the final candidate head.
 
+Additional migrations: `20261101142000_meta_owned_analytics_throttles.sql`, `20261101142100_meta_owned_analytics_worker_fairness.sql` and `20261101142500_meta_owned_analytics_retention.sql`. The private two-row platform turn table is updated atomically after a native claim; it prevents repeated `all` invocations from always beginning with the same slow platform. Independent retention visits order later bounded cleanup invocations without advancing report revisions on no-op cleanup or dry runs.
+
 ## 3. Provider capture and resumable drain
 
-- [ ] Add `worker.ts`, `facebookCollection.ts`, `threadsCollection.ts` and typed receipt/state decoding in `store.ts`. Wire `drain` from the actual entrypoint in the same change.
-- [ ] Narrow `alignedDailySeries` to the window boundaries/buckets it actually reads; preserve existing full-window callers and their behavior. Add actual provider post-detail requests only where the worker needs metadata after restart.
-- [ ] Plan the last closed provider-calendar day and correction day as durable operations before HTTP. Build operation identities from kind/subject/window, reserve before request, skip accepted operations on reclaim and persist response cells/metadata atomically.
+- [x] Add `worker.ts`, `facebookCollection.ts`, `threadsCollection.ts` and typed receipt/state decoding in `store.ts`. Wire `drain` from the actual entrypoint in the same change.
+- [x] Narrow `alignedDailySeries` to the window boundaries/buckets it actually reads; preserve existing full-window callers and their behavior. Add actual provider post-detail requests only where the worker needs metadata after restart.
+- [x] Plan the last closed provider-calendar day and correction day as durable operations before HTTP. Build operation identities from kind/subject/window, reserve before request, skip accepted operations on reclaim and persist response cells/metadata atomically.
 - [ ] Exercise worker → real SQL → report read with true zero, omitted value, malformed bucket, wrong version, mixed cell failure causes, partial inventory and same-day supersession. A crash after a known/unknown commit must not reset completed operations or advance uncommitted state.
-- [ ] Integrate persistent usage/backoff with both the existing Instagram and new workers as real consumers. Use only bucket-only Instagram throttle RPC calls, namespaced platform/app/authority keys, and each platform's own job completion.
+- [x] Integrate persistent usage/backoff with both the existing Instagram and new workers as real consumers. Use only bucket-only Instagram throttle RPC calls, namespaced platform/app/authority keys, and each platform's own job completion.
 - [ ] Prove timeouts for each dependency, ignored aborts, reserved final writes, stale permits, fairness, revoked authority and bounded post visits. Unknown store outcomes stop the complete invocation; known target refusals do not poison other eligible targets.
 - [ ] Run affected existing provider/Instagram suites and new integration/termination suites, guards and commit.
 
 ## 4. Bounded retention and inactive schedules
 
-- [ ] Add `retention.ts` using existing cleanup RPCs and the independent retention scope. Wire `retention` in the strict route. Pin a single UTC floor and share 50 visited targets/500 actual physical deletions across both platforms.
-- [ ] Prove dry-run nonmutation, disabled/disconnected target eligibility, live-lease exclusion, no-op revisions and unknown commit termination through real SQL. Keep Instagram retention unchanged.
-- [ ] Add `20261101143000_meta_owned_analytics_cron.sql` only once the six real route bodies in the C3 contract are accepted and tested. Install all six inactive; require pg_cron, pg_net and `get_cron_secret()` before any mutation.
-- [ ] Test repeated installation, active-to-inactive reconciliation, secret rotation, missing prerequisites and unchanged unrelated jobs/settings. Parse/execute the exact stored request bodies against the registered handler with synthetic authorization.
+- [x] Add `retention.ts` using existing cleanup RPCs and the independent retention scope. Wire `retention` in the strict route. Pin a single UTC floor and share 50 visited targets/500 actual physical deletions across both platforms.
+- [x] Prove dry-run nonmutation, disabled/disconnected target eligibility, live-lease exclusion, no-op revisions and unknown commit termination through real SQL. Keep Instagram retention unchanged.
+- [x] Add `20261101143000_meta_owned_analytics_cron.sql` only once the six real route bodies in the C3 contract are accepted and tested. Install all six inactive; require pg_cron, pg_net and `get_cron_secret()` before any mutation.
+- [x] Test repeated installation, active-to-inactive reconciliation, secret rotation, missing prerequisites and unchanged unrelated jobs/settings. Parse/execute the exact stored request bodies against the registered handler with synthetic authorization.
 - [ ] Complete the fresh SQL harness, races, Deno type/tests, frontend typecheck/build and immutable lint/i18n no-regression gate. Run `graphify update .`; exclude graph/cache artifacts and secrets from commits.
+
+Local collection/retention/schedule implementation and its executed proof are recorded in the [collection continuation](../journeys/2026-11-01-meta-owned-worker-collection.md). The action-specific termination matrix and full mixed-unavailable worker-to-report journeys remain unchecked until their remaining assertions run; the existing native SQL writer suite and adapter tests are not described as those missing integrated journeys.
 
 ## 5. Review and deployment prerequisites
 

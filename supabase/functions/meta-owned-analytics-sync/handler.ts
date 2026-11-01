@@ -2,6 +2,8 @@ import { z } from "https://esm.sh/zod@3.25.76";
 import { handleRestrictedCorsOptions, restrictedJsonResponse } from "../_shared/cors.ts";
 import { admitOwnedAnalyticsAccount } from "./admission.ts";
 import { dispatchOwnedAnalyticsDaily, type DispatchCounts } from "./dispatch.ts";
+import { drainOwnedAnalytics, type DrainCounts } from "./worker.ts";
+import { retainOwnedAnalytics, type RetentionCounts } from "./retention.ts";
 import { AnalyticsWorkerDeadline, AnalyticsWorkerStopped } from "./deadline.ts";
 import type { AdmissionApp } from "./permissionProvider.ts";
 import { OwnedAnalyticsStore, type AnalyticsRpc, type OwnedAnalyticsPlatform } from "./store.ts";
@@ -9,9 +11,12 @@ import { OwnedAnalyticsStore, type AnalyticsRpc, type OwnedAnalyticsPlatform } f
 const syncRequest = z.discriminatedUnion("action", [
   z.object({ action: z.literal("admit"), platform: z.enum(["facebook", "threads"]), accountId: z.string().uuid() }).strict(),
   z.object({ action: z.literal("enqueue-daily"), platform: z.enum(["facebook", "threads", "all"]) }).strict(),
+  z.object({ action: z.literal("drain"), platform: z.enum(["facebook", "threads", "all"]) }).strict(),
+  z.object({ action: z.literal("retention"), platform: z.enum(["facebook", "threads", "all"]), dryRun: z.boolean() }).strict(),
 ]);
-export type OwnedAnalyticsAudit = { event: "owned_analytics_admission" | "owned_analytics_dispatch"; status: string; reason: string | null;
-  platform: OwnedAnalyticsPlatform | "all" | null; accountId: string | null; counts?: DispatchCounts };
+type WorkCounts = DispatchCounts | DrainCounts | RetentionCounts;
+export type OwnedAnalyticsAudit = { event: "owned_analytics_admission" | "owned_analytics_dispatch" | "owned_analytics_drain" | "owned_analytics_retention"; status: string; reason: string | null;
+  platform: OwnedAnalyticsPlatform | "all" | null; accountId: string | null; dryRun?: boolean; retentionFloor?: string; counts?: WorkCounts };
 export type OwnedAnalyticsSyncDeps = {
   authorize: (req: Request) => { ok: true } | { ok: false; status: 401 | 503 };
   app: (platform: OwnedAnalyticsPlatform) => AdmissionApp | null;
@@ -53,21 +58,24 @@ async function readSyncBody(req: Request, deadline: AnalyticsWorkerDeadline): Pr
   }
 }
 
-/** Only implemented actions are accepted; drain/retention land with their real use cases. */
+/** Internal action authority and strict request decoding precede every account operation. */
 export function createOwnedAnalyticsSyncHandler(deps: OwnedAnalyticsSyncDeps): (req: Request) => Promise<Response> {
   return async (req) => {
     if (req.method === "OPTIONS") return handleRestrictedCorsOptions(req);
     const deadline = new AnalyticsWorkerDeadline(Date.now(), req.signal);
     let platform: OwnedAnalyticsPlatform | "all" | null = null;
-    let action: "admit" | "enqueue-daily" = "admit";
+    let action: "admit" | "enqueue-daily" | "drain" | "retention" = "admit";
+    let dryRun: boolean | null = null;
+    let retentionFloor: string | null = null;
     let accountId: string | null = null;
-    const finish = async (statusCode: number, status: string, reason: string | null = null, counts?: DispatchCounts) => {
+    const finish = async (statusCode: number, status: string, reason: string | null = null, counts?: WorkCounts) => {
       let auditStored = false;
-      try { auditStored = await deadline.run((signal) => deps.audit({ event: action === "admit" ? "owned_analytics_admission" : "owned_analytics_dispatch",
-        status, reason, platform, accountId, ...(counts ? { counts } : {}) }, signal), 0); }
+      const event = { admit: "owned_analytics_admission", "enqueue-daily": "owned_analytics_dispatch", drain: "owned_analytics_drain", retention: "owned_analytics_retention" } as const;
+      try { auditStored = await deadline.run((signal) => deps.audit({ event: event[action],
+        status, reason, platform, accountId, ...(dryRun === null ? {} : { dryRun }), ...(retentionFloor ? { retentionFloor } : {}), ...(counts ? { counts } : {}) }, signal), 0); }
       catch { auditStored = false; }
       return restrictedJsonResponse(req, { ok: statusCode === 200 && auditStored, action, platform, status,
-        reason: auditStored ? reason : "audit_unavailable", auditStored, ...(counts ? { counts } : {}) }, auditStored ? statusCode : 503);
+        reason: auditStored ? reason : "audit_unavailable", auditStored, ...(dryRun === null ? {} : { dryRun }), ...(counts ? { counts } : {}) }, auditStored ? statusCode : 503);
     };
     try {
       if (req.method !== "POST") return await finish(405, "refused", "method_not_allowed");
@@ -78,8 +86,18 @@ export function createOwnedAnalyticsSyncHandler(deps: OwnedAnalyticsSyncDeps): (
       platform = parsed.data.platform;
       action = parsed.data.action;
       const store = new OwnedAnalyticsStore(deps.rpc, deadline);
+      if (parsed.data.action === "retention") {
+        dryRun = parsed.data.dryRun;
+        const result = await retainOwnedAnalytics({ platform: parsed.data.platform, dryRun, store, deadline });
+        retentionFloor = result.floor;
+        return await finish(result.status === "unavailable" ? 503 : 200, result.status, result.reason, result.counts);
+      }
       if (parsed.data.action === "enqueue-daily") {
         const result = await dispatchOwnedAnalyticsDaily({ platform: parsed.data.platform, store, deadline, app: deps.app, fetch: deps.fetch });
+        return await finish(result.status === "unavailable" ? 503 : 200, result.status, result.reason, result.counts);
+      }
+      if (parsed.data.action === "drain") {
+        const result = await drainOwnedAnalytics({ platform: parsed.data.platform, store, deadline, app: deps.app, fetch: deps.fetch });
         return await finish(result.status === "unavailable" ? 503 : 200, result.status, result.reason, result.counts);
       }
       accountId = parsed.data.accountId.toLowerCase();
