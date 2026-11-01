@@ -30,6 +30,7 @@ The previously reviewed error-message fix, [PR #326](https://github.com/lolotam/
 - `graphify update .` completed. Generated graph changes are excluded from task commits.
 - Review correction: daily chart markers remain visible for isolated measurements separated by null gaps; preserving missing days no longer hides single-point series.
 - A real local GoTrue login and PostgREST/database report probe returned the expected owner identity, 14200 followers, two daily rows and the first 20 stored media after the status-reader correction. Browser/worker acceptance remains separate until its actual journey passes.
+- The local failure journey also exposed account-query errors rendering as a disconnected-account prompt. Loading, failed reads with retry, and genuine absence are now distinct; cached account/report data stays visible on failed refresh, and a removed selection falls back only to a currently available account. Failure/retry browser evidence belongs to the separate owner-readiness fixture candidate.
 
 ## Operational limits and remaining acceptance
 
