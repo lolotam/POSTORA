@@ -6,6 +6,40 @@ import { OwnerReportContractError, type OwnerReport } from "./contracts.ts";
 const OWNER_ID = "8f14e45f-ceea-4e7a-9b1c-2d3e4f5a6b7c";
 const ACCOUNT_ID = "a1b2c3d4-e5f6-4a1b-8c2d-3e4f5a6b7c8d";
 
+Deno.test("explicit unified Instagram verifies scope and refuses unknown calendar without legacy fallback", async () => {
+  for (const scenario of ["owned", "foreign", "failed", "unsupported"] as const) {
+    let owner: string | null = null;
+    const route = createInstagramInsightsReportHandler({
+      authenticate: async () => ({ userId: OWNER_ID, isServiceRole: false }),
+      store: { loadAccount: async (_account: string, userId: string) => {
+        owner = userId;
+        if (scenario === "failed") throw new Error("fixture-private-error");
+        return scenario === "foreign" ? null : { id: ACCOUNT_ID, user_id: OWNER_ID, platform: "instagram" };
+      }, loadReportData: () => { throw new Error("Unified request must not use the legacy DTO"); } } as unknown as ReportStore,
+    });
+    const response = await route(new Request("https://example.com/report", { method: "POST", body: JSON.stringify({
+      social_account_id: ACCOUNT_ID, user_id: "d8000000-0000-4000-8000-000000000002", analyticsContractVersion: scenario === "unsupported" ? 2 : 1,
+    }) }));
+    assertEquals(response.status, { owned: 409, foreign: 404, failed: 503, unsupported: 400 }[scenario]);
+    assertEquals((await response.json()).reason, { owned: "window_mismatch", foreign: "account_not_found", failed: "storage_unavailable", unsupported: "unsupported_contract_version" }[scenario]);
+    assertEquals(owner, scenario === "unsupported" ? null : OWNER_ID);
+  }
+});
+
+Deno.test("legacy and unified report reads stop waiting when storage ignores caller cancellation", async () => {
+  for (const canonical of [false, true]) {
+    const controller = new AbortController();
+    const ignoredRead = () => { controller.abort(); return new Promise<never>(() => undefined); };
+    const route = createInstagramInsightsReportHandler({ authenticate: async () => ({ userId: OWNER_ID, isServiceRole: false }),
+      store: { loadAccount: ignoredRead, loadReportData: ignoredRead } as unknown as ReportStore });
+    const response = await route(new Request("https://example.com/report", { method: "POST", signal: controller.signal,
+      body: JSON.stringify({ social_account_id: ACCOUNT_ID, ...(canonical ? { analyticsContractVersion: 1 } : {}) }) }));
+    assertEquals(response.status, 503);
+    const result = await response.json();
+    assertEquals(canonical ? result.reason : result.error.code, canonical ? "storage_unavailable" : "HISTORY_UNAVAILABLE");
+  }
+});
+
 const MOCK_REPORT: OwnerReport = {
   schemaVersion: 1,
   source: "graph_own",

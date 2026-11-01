@@ -238,7 +238,7 @@ class Harness:
         request = {"since": self.calendar["since"], "until": self.calendar["until"]}
         if expected is not None:
             request.update(expected_revision=expected, after_published_at=self.calendar["until"], after_id="race_cursor")
-        return self.admin.value(f"SELECT public.read_{platform.family}_analytics_history({quoted(self.owner)},{quoted(platform.account)},{json_sql(request)});")
+        return self.admin.value(f"SELECT public.read_meta_owned_analytics_history({quoted(platform.name)},{quoted(self.owner)},{quoted(platform.account)},{json_sql(request)});")
 
     def record(self, platform: Platform, scenario: str, wait: dict[str, object] | None = None) -> None:
         self.results.append({"platform": platform.name, "scenario": scenario, "ok": True, "observed_wait": wait})
@@ -380,6 +380,33 @@ class Harness:
         holder.close()
         self.record(platform, "report_snapshot_and_write_cursor_invalidation")
 
+    def instagram_snapshot_race(self) -> None:
+        account = str(uuid.uuid4())
+        self.admin.command(f"INSERT INTO public.social_accounts(id,user_id,platform,platform_user_id,access_token,is_active) VALUES({quoted(account)},{quoted(self.owner)},'instagram','979991','fixture-private',true);")
+        self.admin.command(f"INSERT INTO public.ig_media_insight_snapshots(user_id,social_account_id,ig_media_id,published_at,captured_at,captured_on,views,status) VALUES({quoted(self.owner)},{quoted(account)},'979992',clock_timestamp(),clock_timestamp(),current_date,0,'ok');")
+        self.admin.command(f"INSERT INTO public.ig_account_profile_observations(user_id,social_account_id,observed_at,observed_on,followers_count) VALUES({quoted(self.owner)},{quoted(account)},clock_timestamp(),current_date,0);")
+        reader = self.session("instagram_snapshot_reader", service=True)
+        read = f"public.read_instagram_owner_report_snapshot({quoted(self.owner)},{quoted(account)},'2100-01-01'::timestamptz)"
+        marker = reader.start(f"WITH first AS MATERIALIZED (SELECT {read} AS snapshot), pause AS MATERIALIZED (SELECT pg_sleep(2) FROM first) SELECT jsonb_build_object('first',first.snapshot,'second',{read}) FROM first,pause;")
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            if self.admin.command(f"SELECT COALESCE(wait_event,'running') FROM pg_stat_activity WHERE pid={reader.pid};")[-1] == "PgSleep":
+                break
+            time.sleep(0.025)
+        else:
+            raise AssertionError("Reader pause was not observed; concurrency proof did not run")
+        self.admin.command(f"BEGIN; UPDATE public.ig_media_insight_snapshots SET views=1 WHERE user_id={quoted(self.owner)} AND social_account_id={quoted(account)}; UPDATE public.ig_account_profile_observations SET followers_count=1 WHERE user_id={quoted(self.owner)} AND social_account_id={quoted(account)}; COMMIT;")
+        snapshots = json.loads(reader.finish(marker)[-1])
+        for version in snapshots.values():
+            if version["media"][0]["views"] != 0 or version["profiles"][0]["followers_count"] != 0:
+                raise AssertionError("A stable report mixed a concurrent writer into the original snapshot")
+        after = reader.value(f"SELECT {read};")
+        if after["media"][0]["views"] != 1 or after["profiles"][0]["followers_count"] != 1:
+            raise AssertionError("A fresh statement did not observe the committed history")
+        reader.close()
+        self.results.append({"platform": "instagram", "scenario": "coherent_history_during_observed_concurrent_commit", "ok": True})
+        print("PASS instagram: coherent_history_during_observed_concurrent_commit", flush=True)
+
     def dispatch_races(self, platform: Platform) -> None:
         for scenario in ("dispatch_commit_before_duplicate", "dispatch_policy_before_commit", "dispatch_commit_before_policy"):
             self.enable(platform)
@@ -482,6 +509,7 @@ class Harness:
                 self.report_write_race(platform)
                 self.dispatch_races(platform)
                 self.inventory_races(platform)
+            self.instagram_snapshot_race()
             return self.results
         finally:
             self.cleanup()

@@ -25,7 +25,7 @@ import { PostsGrid } from "@/components/brand-intelligence/PostsGrid";
 import { PostDetailDrawer } from "@/components/brand-intelligence/PostDetailDrawer";
 import { ThreadsDiscoveryPanel } from "@/components/brand-intelligence/ThreadsDiscoveryPanel";
 import { ThreadsKeywordSearchPanel } from "@/components/brand-intelligence/ThreadsKeywordSearchPanel";
-import { ThreadsInsightsPanel } from "@/components/brand-intelligence/ThreadsInsightsPanel";
+import { OwnedAnalyticsScreen } from "@/features/analytics-contract/ui/OwnedAnalyticsScreen";
 import { ThreadsPermissionStatus } from "@/components/brand-intelligence/ThreadsPermissionStatus";
 import { ThreadsErrorCard, mapThreadsReason } from "@/components/brand-intelligence/ThreadsErrorCard";
 import { useThreadsLiveDiscovery } from "@/hooks/useThreadsLiveDiscovery";
@@ -251,7 +251,7 @@ export default function ThreadsAnalytics() {
           <ThreadsKeywordSearchPanel />
         </div>
         <div className={threadsMode === "insights" ? "space-y-4" : "hidden"}>
-          <ThreadsInsightsPanel />
+          <OwnedAnalyticsScreen platform="threads" />
         </div>
 
         <PostDetailDrawer

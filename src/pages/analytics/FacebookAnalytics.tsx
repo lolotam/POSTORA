@@ -16,6 +16,7 @@ import { PostDetailDrawer } from "@/components/brand-intelligence/PostDetailDraw
 import { useBrandScrape } from "@/hooks/useBrandScrape";
 import type { BrandPost, BrandScrapeFilters } from "@/types/brand-intelligence";
 import { Icon3D, GradientHeading, GradientRingCard, GradientDivider, Reveal } from "@/components/fx";
+import { OwnedAnalyticsScreen } from "@/features/analytics-contract/ui/OwnedAnalyticsScreen";
 
 const DEFAULT_FILTERS: BrandScrapeFilters = {
   sortBy: "engagement",
@@ -31,6 +32,7 @@ export default function FacebookAnalytics() {
   const navigate = useNavigate();
   const { session } = useAuth();
   const { isAdmin } = useUserRole();
+  const [tab, setTab] = useState<"performance" | "analyze">("performance");
   const [filters, setFilters] = useState<BrandScrapeFilters>(DEFAULT_FILTERS);
   const [selectedPost, setSelectedPost] = useState<BrandPost | null>(null);
   const { profile, posts, totalPosts, hasMore, isLoading, error, search, loadMore, reset } = useBrandScrape();
@@ -98,6 +100,12 @@ export default function FacebookAnalytics() {
           </div>
         </Reveal>
         <GradientDivider tone="sky" />
+
+        <div className="flex flex-wrap gap-2">
+          <Button variant={tab === "performance" ? "secondary" : "ghost"} onClick={() => setTab("performance")}>{t("instagram.tabPerformance", "Performance & Insights")}</Button>
+          <Button variant={tab === "analyze" ? "secondary" : "ghost"} onClick={() => setTab("analyze")}>{t("header.analyze", "Analyze")}</Button>
+        </div>
+        {tab === "performance" ? <OwnedAnalyticsScreen platform="facebook" /> : <>
 
         <Reveal delay={80}>
           <GradientRingCard variant="sky" padded={false} hoverLift={false} ringIntensity="subtle" innerClassName="p-4 md:p-5">
@@ -172,6 +180,7 @@ export default function FacebookAnalytics() {
         )}
 
         <PostDetailDrawer post={selectedPost} isOpen={!!selectedPost} onClose={() => setSelectedPost(null)} />
+        </>}
       </div>
     </DashboardLayout>
   );

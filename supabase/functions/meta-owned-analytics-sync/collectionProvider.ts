@@ -16,10 +16,11 @@ export class CollectionVisitPaused extends Error {
 export type CollectionPage = { ids: string[]; next: string | null; hasMore: boolean };
 export type CollectionPost = { published_at: string; text: string; permalink: string | null };
 export type CollectionCells = Record<string, CompleteAnalyticsMetric>;
+export type CollectionMetricReply = { cells: CollectionCells; refusal: CollectionProviderRefused | null };
 export type CollectionProvider = {
   page: (cursor: string | null) => Promise<CollectionPage>;
   post: (id: string) => Promise<CollectionPost>;
-  metrics: (capture: AnalyticsCapture, definitions: MetricDefinition[]) => Promise<CollectionCells>;
+  metrics: (capture: AnalyticsCapture, definitions: MetricDefinition[]) => Promise<CollectionMetricReply>;
 };
 
 export function providerReason(reason: string): UnavailableReason | "rate_limited" {
@@ -41,8 +42,7 @@ export function captureCell(reply: MetaAnalyticsResult<{ data: CollectionMetricR
   if (reply.error?.kind === "budget") throw new CollectionVisitPaused();
   if (reply.error) {
     const reason = providerReason(reply.error.reason);
-    if (["rate_limited", "reauth_required", "permission_missing"].includes(reason)) throw new CollectionProviderRefused(reason, reply.retryAt);
-    return unavailableMetric(reason as UnavailableReason);
+    return unavailableMetric(reason === "rate_limited" ? "provider_error" : reason);
   }
   const rows = reply.data.data.filter((row) => row.name === definition.providerMetric);
   if (rows.length !== 1) return unavailableMetric("provider_error");
@@ -55,6 +55,13 @@ export function captureCell(reply: MetaAnalyticsResult<{ data: CollectionMetricR
   if (capture.kind === "profile") return row.period === "day" ? countMetric(row.total_value?.value) : unavailableMetric("window_mismatch");
   if (row.period !== "lifetime") return unavailableMetric("window_mismatch");
   return row.values?.length === 1 ? countMetric(row.values[0].value) : unavailableMetric("provider_error");
+}
+
+/** A known response is persisted before its refusal stops further provider work. */
+export function captureRefusal(reply: MetaAnalyticsResult<unknown, string>): CollectionProviderRefused | null {
+  if (!reply.error) return null;
+  const reason = providerReason(reply.error.reason);
+  return ["rate_limited", "reauth_required", "permission_missing"].includes(reason) ? new CollectionProviderRefused(reason, reply.retryAt) : null;
 }
 
 export function collectionPage(ids: string[], paging?: { next?: string; cursors?: { after?: string } }): CollectionPage {

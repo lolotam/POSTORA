@@ -8,6 +8,28 @@ const SERVICE = "fixture-service";
 const CRON = "synthetic-cron";
 const ACCOUNT = "92000000-0000-4000-8000-000000000001";
 const OWNER = "91000000-0000-4000-8000-000000000001";
+
+Deno.test("aborted dispatch, drain and retention do not retry an unknown database outcome and still record refusal", async (test) => {
+  for (const action of ["enqueue-daily", "drain", "retention"] as const) {
+    await test.step(action, async () => {
+      const controller = new AbortController();
+      let writes = 0, audits = 0, providerCalls = 0;
+      const route = createOwnedAnalyticsSyncHandler({ authorize: () => ({ ok: true }), app: () => ({ id: "770001", secret: "fixture" }),
+        rpc: () => { writes++; controller.abort(); return new Promise(() => undefined); },
+        fetch: async () => { providerCalls++; throw new Error("No request after an unknown outcome"); },
+        audit: async (_event, signal) => { signal.throwIfAborted(); audits++; return true; },
+      });
+      const response = await route(new Request(API, { method: "POST", signal: controller.signal,
+        body: JSON.stringify({ action, platform: "all", ...(action === "retention" ? { dryRun: false } : {}) }) }));
+      const receipt = await response.json();
+      assertEquals(response.status, 503);
+      assertEquals(writes, 1);
+      assertEquals(providerCalls, 0);
+      assertEquals(audits, 1);
+      assertEquals(receipt.auditStored, true);
+    });
+  }
+});
 const TOKEN = "fixture-op";
 const GRANT = "synthetic-protected-user-token";
 const APP = "991100";

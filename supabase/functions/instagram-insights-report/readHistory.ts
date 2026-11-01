@@ -1,3 +1,4 @@
+import { awaitWithAbort } from "../_shared/abort.ts";
 export type HistoryReadResult = {
   data: Record<string, unknown>[] | null;
   error: { message: string } | null;
@@ -24,7 +25,7 @@ export class ReportHistoryUnavailableError extends Error {}
 export async function readReportQuery<T>(query: PromiseLike<T>, signal: AbortSignal): Promise<T> {
   try {
     signal.throwIfAborted();
-    const queryResult = await query;
+    const queryResult = await awaitWithAbort(() => query, signal);
     signal.throwIfAborted();
     return queryResult;
   } catch (error) {

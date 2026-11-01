@@ -369,7 +369,7 @@ Deno.test("explicit analytics negotiation never silently falls back to a legacy 
     { platform: "threads", query: { analyticsContractVersion: "01" }, code: "UNSUPPORTED_CONTRACT_VERSION" },
     { platform: "threads", query: { cursor: "opaque" }, code: "INVALID_CURSOR" },
     { platform: "threads", query: { analyticsContractVersion: "1", cursor: "" }, code: "INVALID_CURSOR" },
-    { platform: "instagram", query: { analyticsContractVersion: "1" }, code: "UNSUPPORTED_CONTRACT_VERSION" },
+    { platform: "instagram", query: { analyticsContractVersion: "2" }, code: "UNSUPPORTED_CONTRACT_VERSION" },
     { platform: "tiktok", query: { analyticsContractVersion: "1" }, code: "UNSUPPORTED_CONTRACT_VERSION" },
   ];
   for (const { platform, query, code } of cases) {
@@ -390,8 +390,35 @@ Deno.test("versioned Threads request preserves the signed continuation at the up
     period_days: "14", analyticsContractVersion: "1", cursor: "current.signed" }));
   assertEquals(result.status, 200);
   assertEquals(bodyOf(result).analyticsContractVersion, 1);
-  assertEquals(calls.invokes[0].body, { user_id: OWNER, accountId: ACCOUNT_ID, periodDays: 14,
+  assertEquals(calls.invokes[0].functionName, "meta-owned-analytics-report");
+  assertEquals(calls.invokes[0].body, { user_id: OWNER, platform: "threads", accountId: ACCOUNT_ID, periodDays: 14,
     analyticsContractVersion: 1, cursor: "current.signed" });
+});
+
+Deno.test("saved Facebook report and Instagram refusal preserve explicit negotiation and acting user", async () => {
+  for (const platform of ["facebook", "instagram"]) {
+    const upstream = platform === "instagram" ? { status: 409, data: { ok: false, reason: "window_mismatch" } }
+      : { status: 200, data: { ok: true, analyticsContractVersion: 1 } };
+    const { deps, calls } = fakeDeps({ account: { ...DEFAULT_ACCOUNT, platform }, upstream });
+    const result = await handleGetPostAnalytics(deps, OWNER, params({ social_account_id: ACCOUNT_ID, analyticsContractVersion: "1", period_days: "30" }));
+    assertEquals(result.status, upstream.status);
+    assertEquals(calls.invokes[0].functionName, platform === "instagram" ? "instagram-insights-report" : "meta-owned-analytics-report");
+    assertEquals(calls.invokes[0].body, platform === "instagram"
+      ? { user_id: OWNER, social_account_id: ACCOUNT_ID, period_days: 30, analyticsContractVersion: 1 }
+      : { user_id: OWNER, platform, accountId: ACCOUNT_ID, periodDays: 30, analyticsContractVersion: 1 });
+  }
+});
+
+Deno.test("only an explicit saved report can read a disconnected owned account", async () => {
+  for (const version of [null, "1"] as const) {
+    const { deps, calls } = fakeDeps({ account: { ...DEFAULT_ACCOUNT, platform: "threads", is_active: false } });
+    const search = params({ social_account_id: ACCOUNT_ID });
+    if (version) search.set("analyticsContractVersion", version);
+    const result = await handleGetPostAnalytics(deps, OWNER, search);
+    assertEquals(result.status, version ? 200 : 409);
+    assertEquals(calls.invokes.length, version ? 1 : 0);
+    if (version) assertEquals(calls.invokes[0].functionName, "meta-owned-analytics-report");
+  }
 });
 
 Deno.test("tiktok analytics reads the account's videos", async () => {

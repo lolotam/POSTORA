@@ -130,31 +130,21 @@ Deno.test("real Threads composition negotiates the unified contract without fabr
       assertEquals(typeof body.lastPartialAt, "string");
       scenario = "normal";
     });
-    await test.step("real proxy and endpoint preserve versioned pagination without falling back to the legacy DTO", async () => {
+    await test.step("explicit Threads proxy analytics uses saved history without invoking the live provider", async () => {
       const deps: ServiceProxyDeps = {
         loadAccount: async () => ({ failed: false, account: { id: ACCOUNT, user_id: OWNER, platform: "threads", platform_user_id: "thread_owner", is_active: true } }),
         invoke: async (functionName, body) => {
-          assertEquals(functionName, "threads-insights");
-          const response = await handler(new Request(`${API_URL}/functions/v1/${functionName}`, { method: "POST",
-            headers: { Authorization: `Bearer ${SERVICE_KEY}`, "Content-Type": "application/json" }, body: JSON.stringify(body) }));
-          return { status: response.status, data: await response.json() };
+          assertEquals(functionName, "meta-owned-analytics-report");
+          assertEquals(body, { user_id: OWNER, platform: "threads", accountId: ACCOUNT, periodDays: 7, analyticsContractVersion: 1, cursor: "saved.signed" });
+          return { status: 409, data: { ok: false, reason: "history_revision_changed" } };
         },
         storeImage: async () => { throw new Error("Analytics must not store images"); },
         mediaQuotaBlocked: async () => { throw new Error("Analytics must not check upload quotas"); },
       };
-      const query = new URLSearchParams({ social_account_id: ACCOUNT, analyticsContractVersion: "1", period_days: "7" });
-      const first = await handleGetPostAnalytics(deps, OWNER, query);
-      const firstBody = first.body as Record<string, unknown>;
-      const { ok: _firstOk, ...firstPayload } = firstBody;
-      const firstReport = parseAnalyticsReport(firstPayload);
-      assertEquals(first.status, 200);
-      assertEquals(firstReport.posts.items.map((post) => post.id), ["post1", "post2"]);
-      query.set("cursor", firstReport.posts.nextCursor!);
-      const second = await handleGetPostAnalytics(deps, OWNER, query);
-      const { ok: _secondOk, ...secondPayload } = second.body as Record<string, unknown>;
-      const secondReport = parseAnalyticsReport(secondPayload);
-      assertEquals(secondReport.posts.items.map((post) => post.id), ["post3"]);
-      assertEquals(secondReport.posts.nextCursor, null);
+      const query = new URLSearchParams({ social_account_id: ACCOUNT, period_days: "7", analyticsContractVersion: "1", cursor: "saved.signed" });
+      const result = await handleGetPostAnalytics(deps, OWNER, query);
+      assertEquals(result.status, 409);
+      assertEquals((result.body as { reason: string }).reason, "history_revision_changed");
     });
     for (const body of [{ cursor: cursor + "tampered" }, { cursor, accountId: OTHER_ACCOUNT }, { cursor, periodDays: 14 }]) {
       await test.step("tampered or account/period-mismatched continuation refuses before provider access " + JSON.stringify(Object.keys(body)), async () => {

@@ -1,5 +1,6 @@
 import { z } from "https://esm.sh/zod@3.25.76";
 import { handleRestrictedCorsOptions, restrictedJsonResponse } from "../_shared/cors.ts";
+import { awaitWithAbort } from "../_shared/abort.ts";
 import { admitOwnedAnalyticsAccount } from "./admission.ts";
 import { dispatchOwnedAnalyticsDaily, type DispatchCounts } from "./dispatch.ts";
 import { drainOwnedAnalytics, type DrainCounts } from "./worker.ts";
@@ -71,8 +72,11 @@ export function createOwnedAnalyticsSyncHandler(deps: OwnedAnalyticsSyncDeps): (
     const finish = async (statusCode: number, status: string, reason: string | null = null, counts?: WorkCounts) => {
       let auditStored = false;
       const event = { admit: "owned_analytics_admission", "enqueue-daily": "owned_analytics_dispatch", drain: "owned_analytics_drain", retention: "owned_analytics_retention" } as const;
-      try { auditStored = await deadline.run((signal) => deps.audit({ event: event[action],
-        status, reason, platform, accountId, ...(dryRun === null ? {} : { dryRun }), ...(retentionFloor ? { retentionFloor } : {}), ...(counts ? { counts } : {}) }, signal), 0); }
+      // A disconnected caller must not erase the terminal refusal receipt.
+      // Work stops within 40 seconds; this independent audit has a 5-second cap.
+      const auditSignal = AbortSignal.timeout(5_000);
+      try { auditStored = await awaitWithAbort(() => deps.audit({ event: event[action],
+        status, reason, platform, accountId, ...(dryRun === null ? {} : { dryRun }), ...(retentionFloor ? { retentionFloor } : {}), ...(counts ? { counts } : {}) }, auditSignal), auditSignal); }
       catch { auditStored = false; }
       return restrictedJsonResponse(req, { ok: statusCode === 200 && auditStored, action, platform, status,
         reason: auditStored ? reason : "audit_unavailable", auditStored, ...(dryRun === null ? {} : { dryRun }), ...(counts ? { counts } : {}) }, auditStored ? statusCode : 503);

@@ -210,6 +210,12 @@ jobs:
           deno check --no-config --no-lock --node-modules-dir=none supabase/functions/meta-owned-analytics-sync/*.ts
           deno test --no-config --no-lock --node-modules-dir=none --allow-env supabase/functions/meta-owned-analytics-sync/composition.test.ts supabase/functions/meta-owned-analytics-sync/dispatch.test.ts supabase/functions/meta-owned-analytics-sync/collection.test.ts supabase/functions/meta-owned-analytics-sync/retention.test.ts
 
+      - name: Typecheck and test persisted owned analytics reports
+        run: |
+          set -euo pipefail
+          deno check --no-config --no-lock --node-modules-dir=none supabase/functions/meta-owned-analytics-report/*.ts
+          deno test --no-config --no-lock --node-modules-dir=none --allow-env supabase/functions/meta-owned-analytics-report/report.test.ts
+
       - name: Test service proxy and MCP
         run: >
           deno test

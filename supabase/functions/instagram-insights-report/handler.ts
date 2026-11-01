@@ -13,6 +13,8 @@
 
 import { corsHeaders, handleCorsOptions, jsonResponse } from "../_shared/cors.ts";
 import { ReportHistoryUnavailableError } from "./readHistory.ts";
+import { awaitWithAbort } from "../_shared/abort.ts";
+import { readJsonBodyCapped } from "../_shared/cappedJsonBody.ts";
 import {
   type OwnerReportCursor,
   type OwnerReportPeriodDays,
@@ -42,6 +44,7 @@ export function createInstagramInsightsReportHandler(deps: ReportHandlerDeps) {
     if (req.method === "OPTIONS") {
       return handleCorsOptions();
     }
+    const signal = AbortSignal.any([req.signal, AbortSignal.timeout(20_000)]);
 
     // 2. HTTP Method Check
     if (req.method !== "GET" && req.method !== "POST") {
@@ -63,8 +66,9 @@ export function createInstagramInsightsReportHandler(deps: ReportHandlerDeps) {
     // 3. Authenticate Caller
     let auth: { userId: string; isServiceRole: boolean };
     try {
-      auth = await deps.authenticate(req);
+      auth = await awaitWithAbort(() => deps.authenticate(req), signal);
     } catch {
+      if (signal.aborted) return jsonResponse({ error: { code: "HISTORY_UNAVAILABLE", message: "Report request exceeded its deadline." } }, 503);
       return jsonResponse(
         { error: { code: "UNAUTHORIZED", message: "Missing or invalid authorization" } },
         401
@@ -83,6 +87,7 @@ export function createInstagramInsightsReportHandler(deps: ReportHandlerDeps) {
     let rawPeriod: unknown;
     let rawLimit: unknown;
     let rawCursor: unknown;
+    let rawContractVersion: unknown;
     let targetUserId = auth.userId.toLowerCase();
 
     if (req.method === "GET") {
@@ -91,11 +96,15 @@ export function createInstagramInsightsReportHandler(deps: ReportHandlerDeps) {
       rawPeriod = url.searchParams.get("period_days");
       rawLimit = url.searchParams.get("limit");
       rawCursor = url.searchParams.get("cursor");
+      rawContractVersion = url.searchParams.has("analyticsContractVersion") ? Number(url.searchParams.get("analyticsContractVersion")) : undefined;
     } else {
       let body: Record<string, unknown>;
       try {
-        body = await req.json();
+        const parsed = await readJsonBodyCapped(req, 8192, signal);
+        if (!parsed.ok) throw new Error("Invalid report request");
+        body = parsed.value as Record<string, unknown>;
       } catch {
+        if (signal.aborted) return jsonResponse({ error: { code: "HISTORY_UNAVAILABLE", message: "Report request exceeded its deadline." } }, 503);
         return jsonResponse(
           { error: { code: "INVALID_REQUEST", message: "Request body must be valid JSON" } },
           400
@@ -111,6 +120,7 @@ export function createInstagramInsightsReportHandler(deps: ReportHandlerDeps) {
       rawPeriod = body.period_days;
       rawLimit = body.limit;
       rawCursor = body.cursor;
+      rawContractVersion = body.analyticsContractVersion;
 
       // When called via service role (e.g. from serviceProxy / n8n-api), require acting for specified user_id
       if (auth.isServiceRole) {
@@ -133,6 +143,19 @@ export function createInstagramInsightsReportHandler(deps: ReportHandlerDeps) {
       );
     }
     const socialAccountId = rawAccountId.toLowerCase();
+
+    if (rawContractVersion !== undefined) {
+      if (rawContractVersion !== 1) return jsonResponse({ ok: false, reason: "unsupported_contract_version", message: "Unsupported analytics contract version." }, 400);
+      try {
+        const account = await awaitWithAbort(() => deps.store.loadAccount(socialAccountId, targetUserId), signal);
+        if (!account) return jsonResponse({ ok: false, reason: "account_not_found", message: "Instagram account not found." }, 404);
+        // No Instagram calendar/metric cell has accepted capability evidence yet.
+        // Do not relabel the legacy DTO or invent a canonical provider timezone.
+        return jsonResponse({ ok: false, reason: "window_mismatch", message: "Instagram reporting periods have not been verified for this connection yet." }, 409);
+      } catch {
+        return jsonResponse({ ok: false, reason: "storage_unavailable", message: "Saved analytics could not be read. Please retry." }, 503);
+      }
+    }
 
     // 6. Validate period_days
     let periodDays: OwnerReportPeriodDays = 30;
@@ -190,7 +213,7 @@ export function createInstagramInsightsReportHandler(deps: ReportHandlerDeps) {
     // 9. Load report data and assemble
     try {
       const now = deps.nowFn ? deps.nowFn() : new Date();
-      const report = await deps.store.loadReportData(
+      const report = await awaitWithAbort(() => deps.store.loadReportData(
         socialAccountId,
         targetUserId,
         {
@@ -199,7 +222,7 @@ export function createInstagramInsightsReportHandler(deps: ReportHandlerDeps) {
           cursor,
         },
         now
-      );
+      ), signal);
 
       return jsonResponse(report, 200);
     } catch (err) {
@@ -213,8 +236,8 @@ export function createInstagramInsightsReportHandler(deps: ReportHandlerDeps) {
         return jsonResponse({ error: { code: err.code, message: err.message } }, 400);
       }
 
-      if (err instanceof ReportHistoryUnavailableError) {
-        console.error("Instagram report refused an incomplete history read:", err.message);
+      if (err instanceof ReportHistoryUnavailableError || signal.aborted) {
+        console.error("Instagram report refused an incomplete history read");
         return jsonResponse(
           { error: { code: "HISTORY_UNAVAILABLE", message: "Report history could not be read completely. Try again later." } },
           503,

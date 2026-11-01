@@ -10,6 +10,8 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { authenticateCaller, serviceRoleCallerUserId } from "../_shared/auth-helper.ts";
 import { createInstagramInsightsReportHandler } from "./handler.ts";
 import { ReportStore, type ReportStoreClient } from "./reportStore.ts";
+import { awaitWithAbort } from "../_shared/abort.ts";
+import { jsonResponse } from "../_shared/cors.ts";
 
 function getClient() {
   const url = Deno.env.get("SUPABASE_URL") ?? "";
@@ -30,7 +32,7 @@ function getStore(): ReportStore {
   return storeInstance;
 }
 
-export const handler = createInstagramInsightsReportHandler({
+const reportHandler = createInstagramInsightsReportHandler({
   authenticate: async (req: Request) => {
     return await authenticateCaller(req, await serviceRoleCallerUserId(req));
   },
@@ -45,6 +47,22 @@ export const handler = createInstagramInsightsReportHandler({
     ) => getStore().loadReportData(socialAccountId, userId, request, now),
   } as unknown as ReportStore,
 });
+
+export async function handler(req: Request): Promise<Response> {
+  const response = await reportHandler(req);
+  if (req.method === "OPTIONS") return response;
+  const signal = AbortSignal.timeout(5_000);
+  try {
+    const receipt = await awaitWithAbort(() => getClient().from("system_logs").insert({
+      level: response.ok ? "info" : "warn", category: "edge", source: "instagram-insights-report",
+      message: "Instagram saved report finished", metadata: { status: response.status },
+    }).abortSignal(signal), signal);
+    if (receipt.error) throw new Error("Report audit unavailable");
+    return response;
+  } catch {
+    return jsonResponse({ error: { code: "HISTORY_UNAVAILABLE", message: "Report read could not be recorded. Please retry." } }, 503);
+  }
+}
 
 if (import.meta.main) {
   Deno.serve((request: Request) => handler(request));
