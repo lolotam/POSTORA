@@ -12,6 +12,8 @@ Deno.env.set("SUPABASE_URL", OWNER_RELEASE.apiUrl);
 Deno.env.set("SUPABASE_ANON_KEY", anonKey);
 Deno.env.set("SUPABASE_SERVICE_ROLE_KEY", serviceKey);
 Deno.env.set("CRON_SECRET", "synthetic-owner-release-cron-secret");
+Deno.env.set("PUBLIC_API_ORIGIN", OWNER_RELEASE.apiUrl);
+Deno.env.set("PUBLIC_APP_ORIGIN", "http://127.0.0.1:8080");
 
 const originalFetch = globalThis.fetch;
 const meta = new FakeMetaTransport();
@@ -28,8 +30,10 @@ globalThis.fetch = (input, init) => {
 };
 
 const { handler: reportHandler } = await import("../../supabase/functions/instagram-insights-report/index.ts");
+const { handleRequest: registeredApi } = await import("../../supabase/functions/n8n-api/index.ts");
 type Handler = (request: Request) => Response | Promise<Response>;
 let syncHandler: Handler | null = null;
+let mcpHandler: Handler | null = null;
 const serve = Deno.serve;
 try {
   // Capture the real registered route; do not replace its auth, stores or worker.
@@ -38,11 +42,17 @@ try {
     return { finished: Promise.resolve(), shutdown: () => Promise.resolve() };
   }) as typeof Deno.serve;
   await import("../../supabase/functions/instagram-insights-sync/index.ts");
+  Deno.serve = ((registered: Handler) => {
+    mcpHandler = registered;
+    return { finished: Promise.resolve(), shutdown: () => Promise.resolve() };
+  }) as typeof Deno.serve;
+  await import("../../supabase/functions/mcp/index.ts");
 } finally {
   Deno.serve = serve;
 }
-if (!syncHandler) throw new Error("The real owner sync composition did not register");
+if (!syncHandler || !mcpHandler) throw new Error("A real owner release composition did not register");
 const registeredSync = syncHandler as Handler;
+const registeredMcp = mcpHandler as Handler;
 
 async function route(request: Request): Promise<Response> {
   const url = new URL(request.url);
@@ -66,6 +76,13 @@ async function route(request: Request): Promise<Response> {
   }
   if (url.pathname === "/functions/v1/instagram-insights-report") return reportHandler(request);
   if (url.pathname === "/functions/v1/instagram-insights-sync") return registeredSync(request);
+  if (url.pathname.startsWith("/functions/v1/n8n-api/")) {
+    url.pathname = url.pathname.replace("/functions/v1", "");
+    return registeredApi(new Request(url, request));
+  }
+  if (["/functions/v1/mcp", "/functions/v1/mcp/read"].includes(url.pathname)) {
+    return registeredMcp(request);
+  }
   const proxy = url.pathname.startsWith("/auth/v1/") ? { base: OWNER_RELEASE.authUrl, prefix: "/auth/v1" }
     : url.pathname.startsWith("/rest/v1/") ? { base: OWNER_RELEASE.restUrl, prefix: "/rest/v1" } : null;
   if (!proxy) return Response.json({ error: "fixture_route_not_found" }, { status: 404 });

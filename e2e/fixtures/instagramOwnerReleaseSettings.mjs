@@ -13,4 +13,5 @@ export const OWNER_RELEASE = Object.freeze({
   otherAccountId: "8e020000-0000-4000-8000-000000000002",
   credentialId: "8e030000-0000-4000-8000-000000000001",
   email: "instagram-owner-release@example.test",
+  apiKey: "postora-owner-release-synthetic-key-2026",
 });

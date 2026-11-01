@@ -57,10 +57,11 @@ function validateExisting() {
   }
   const shape = sql(authShapeQuery);
   const activeSchedules = sql("SELECT count(*) FROM cron.job WHERE active");
-  if (shape !== baseline.authColumnShapeMd5 || activeSchedules !== "0") {
-    throw new Error(`Fixture auth shape or inactive schedules do not match: shape=${JSON.stringify(shape)}, active=${JSON.stringify(activeSchedules)}`);
+  const cronLaunch = sql("SHOW cron.launch_active_jobs");
+  if (shape !== baseline.authColumnShapeMd5 || activeSchedules !== "0" || cronLaunch !== "off") {
+    throw new Error(`Fixture auth shape or inactive schedules do not match: shape=${JSON.stringify(shape)}, active=${JSON.stringify(activeSchedules)}, cronLaunch=${JSON.stringify(cronLaunch)}`);
   }
-  console.log("Verified isolated local fixture identities, auth column shape and zero active schedules. No release approval.");
+  console.log("Verified isolated local fixture identities, auth column shape, disabled cron launcher and zero active schedules. No release approval.");
 }
 
 async function prepare() {
@@ -81,7 +82,7 @@ async function prepare() {
   execFileSync("git", ["-c", "core.autocrlf=false", "archive", "--format=tar", `--output=${archive}`, candidate, "scripts/db-harness.sh", "supabase/tests", "supabase/migrations"], { cwd: root });
   docker(["network", "create", "--internal", ...labels, internalNetwork]);
   docker(["network", "create", ...labels, gatewayNetwork]);
-  docker(["run", "-d", "--name", names[0], ...labels, "--network", internalNetwork, "-e", `POSTGRES_PASSWORD=${databasePassword}`, "supabase/postgres:17.6.1.158", "-c", "listen_addresses=*", "-c", `cron.database_name=${OWNER_RELEASE.database}`, "-c", "shared_preload_libraries=pg_cron,pg_net,pgsodium,supabase_vault"]);
+  docker(["run", "-d", "--name", names[0], ...labels, "--network", internalNetwork, "-e", `POSTGRES_PASSWORD=${databasePassword}`, "supabase/postgres:17.6.1.158", "-c", "listen_addresses=*", "-c", `cron.database_name=${OWNER_RELEASE.database}`, "-c", "cron.launch_active_jobs=off", "-c", "shared_preload_libraries=pg_cron,pg_net,pgsodium,supabase_vault"]);
   await waitForReady(() => {
     try { docker(["exec", names[0], "pg_isready", "-U", "supabase_admin", "-d", "postgres"]); return true; } catch { return false; }
   }, "Disposable Postgres");

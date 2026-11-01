@@ -15,7 +15,8 @@ export default defineConfig({
   workers: 1,
   forbidOnly: true,
   retries: 0,
-  timeout: 90_000,
+  // Cold Windows Vite transforms can consume over a minute before the real login form mounts.
+  timeout: 180_000,
   reporter: "list",
   outputDir: join(tmpdir(), "postora-owner-release-playwright"),
   use: { baseURL: "http://127.0.0.1:8080", trace: "retain-on-failure", screenshot: "only-on-failure" },

@@ -81,6 +81,7 @@ DELETE FROM public.ig_media_insight_snapshots WHERE user_id='${OWNER_RELEASE.own
 DELETE FROM public.ig_account_insight_daily WHERE user_id='${OWNER_RELEASE.ownerId}' AND social_account_id='${OWNER_RELEASE.accountId}';
 DELETE FROM public.ig_account_profile_observations WHERE user_id='${OWNER_RELEASE.ownerId}' AND social_account_id='${OWNER_RELEASE.accountId}';
 INSERT INTO public.user_roles(user_id, role) VALUES ('${OWNER_RELEASE.ownerId}', 'admin') ON CONFLICT DO NOTHING;
+UPDATE public.profiles SET api_key='${OWNER_RELEASE.apiKey}' WHERE id='${OWNER_RELEASE.ownerId}';
 INSERT INTO public.social_accounts(id,user_id,platform,platform_user_id,platform_username,access_token,ig_auth_type,is_active,needs_reauth)
 VALUES ('${OWNER_RELEASE.accountId}','${OWNER_RELEASE.ownerId}','instagram','ig-owner-release','owner_release','synthetic-browser-token','facebook_page',true,false),
 ('${OWNER_RELEASE.otherAccountId}','${OWNER_RELEASE.otherOwnerId}','instagram','ig-owner-release-other','other_owner_release','synthetic-other-token','facebook_page',true,false) ON CONFLICT DO NOTHING;
