@@ -216,14 +216,24 @@ def facebook_granted_scopes(transport):
             "scopes": [scope for scope in scopes if isinstance(scope, str) and re.fullmatch(r"[a-z_]{1,80}", scope)] if isinstance(scopes, list) else []}
 
 
-def threads_granted_scopes(transport):
-    status, payload, _ = transport.get("me", "permissions")
-    permissions = payload.get("data") if isinstance(payload, dict) else None
-    if status != 200 or not isinstance(permissions, list):
-        return {"verified": False, "httpStatus": status}
-    return {"verified": True, "scopes": [entry["permission"] for entry in permissions
-            if isinstance(entry, dict) and entry.get("status") == "granted"
-            and isinstance(entry.get("permission"), str) and re.fullmatch(r"[a-z_]{1,80}", entry["permission"])]}
+def threads_granted_scopes(transport, expected_user_id):
+    # Threads' permission listing failed live; its app-authenticated debugger reports the actual grant.
+    secrets = subprocess.run(["docker", "exec", FUNCTIONS_CONTAINER, "printenv", "THREADS_APP_ID", "THREADS_APP_SECRET"],
+                             capture_output=True, text=True, timeout=10, check=False)
+    parts = secrets.stdout.splitlines()
+    if secrets.returncode or len(parts) != 2 or not all(parts):
+        return {"verified": False, "reason": "app_debug_credential_unavailable"}
+    status, payload, _ = transport.get("debug_token", parameters={"input_token": transport.token}, bearer="TH|" + "|".join(parts))
+    token_data = payload.get("data") if isinstance(payload, dict) else None
+    if status != 200 or not isinstance(token_data, dict):
+        return {"verified": False, "httpStatus": status, **error_observation(status, payload)}
+    scopes = token_data.get("scopes")
+    valid_scopes = isinstance(scopes, list) and all(isinstance(scope, str) and re.fullmatch(r"[a-z_]{1,80}", scope) for scope in scopes)
+    valid = token_data.get("is_valid") is True
+    matches = token_data.get("user_id") == expected_user_id
+    return {"verified": valid and matches and valid_scopes, "httpStatus": status, "isValid": valid,
+            "matchesCanonicalId": matches, "appIdReported": "app_id" in token_data,
+            "scopes": sorted(set(scopes)) if valid_scopes else None}
 
 
 def listing_probe(transport, subject, platform):
@@ -297,7 +307,7 @@ def main():
         transport = ProbeTransport("graph.facebook.com" if args.platform == "facebook" else "graph.threads.net", args.version,
                                    account["access_token"], urllib.request.build_opener(NoRedirect()))
         report["targetSha256"] = hashlib.sha256(f"{args.owner}:{args.confirmed_account}".encode()).hexdigest()
-        report["grantedScopes"] = facebook_granted_scopes(transport) if args.platform == "facebook" else threads_granted_scopes(transport)
+        report["grantedScopes"] = facebook_granted_scopes(transport) if args.platform == "facebook" else threads_granted_scopes(transport, account["platform_user_id"])
         report["observations"] = []
         for observation in collect_observations(transport, account["platform_user_id"], args.platform):
             if "listing" in observation:
