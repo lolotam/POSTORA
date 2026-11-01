@@ -51,13 +51,20 @@ export async function seedOwnerRelease(): Promise<void> {
   for (const [id, email] of [[OWNER_RELEASE.ownerId, OWNER_RELEASE.email], [OWNER_RELEASE.otherOwnerId, "instagram-owner-release-other@example.test"]]) {
     const response = await fetch(`${OWNER_RELEASE.authUrl}/admin/users`, {
       method: "POST", headers: { Authorization: `Bearer ${serviceKey}`, "Content-Type": "application/json" },
-      body: JSON.stringify({ id, email, password: OWNER_RELEASE.password, email_confirm: true }),
+      body: JSON.stringify({ id, email, password: OWNER_RELEASE.password, email_confirm: true, role: "authenticated" }),
     });
     if (!response.ok && response.status !== 422) throw new Error(`Synthetic Auth user creation failed (${response.status})`);
     const identity = response.ok ? await response.json() : await (await fetch(`${OWNER_RELEASE.authUrl}/admin/users/${id}`, {
       headers: { Authorization: `Bearer ${serviceKey}` },
     })).json();
     if (identity.id !== id || identity.email !== email) throw new Error("Synthetic Auth identity mismatch");
+    if (identity.role !== "authenticated") {
+      const roleUpdate = await fetch(`${OWNER_RELEASE.authUrl}/admin/users/${id}`, {
+        method: "PUT", headers: { Authorization: `Bearer ${serviceKey}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ role: "authenticated" }),
+      });
+      if (!roleUpdate.ok || (await roleUpdate.json()).role !== "authenticated") throw new Error("Synthetic Auth role assignment failed");
+    }
   }
   await ownerReleaseSql(`
 BEGIN;
