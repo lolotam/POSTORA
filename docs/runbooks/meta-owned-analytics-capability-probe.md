@@ -1,0 +1,46 @@
+# Read-only owned-account capability observations
+
+This is the bounded Facebook/Threads observation tool for [Meta completion plan B2](../plans/2026-11-01-meta-analytics-completion.md#b2-capability-probes). It does not complete the platform capability matrix, approve a pilot or enable collection. The owning design's account/probe approval requirement applies before running it against a real account.
+
+## Scope and execution
+
+`scripts/probes/meta_owned_analytics.py` runs on the Postora Contabo host with Python 3.12 and the existing Docker CLI. It has no package dependencies. Its database container and functions container are fixed to the Postora stack. Execute host operations through the project's `ssh-contabo-mcp`; do not run this locally against a different Docker host.
+
+The operator first records the exact approved owner/account/platform and pinned API version. UUID syntax is validated before constructing the query. One `BEGIN READ ONLY` query selects only the exact active account belonging to that owner/platform. A missing row or failed read refuses setup; there is no fallback to another account. The stored token stays in server process memory. Facebook's app credentials are read through captured subprocess output only for the `/debug_token` permission probe; they are never printed or supplied as process arguments. Threads permissions come from `/me/permissions`, filtered to actually granted permissions rather than the requested scope list.
+
+After copying the reviewed script to a temporary server location, supply the IDs from that recorded decision through `APPROVED_OWNER_ID` and `APPROVED_ACCOUNT_ID`. These are account identifiers, not credentials. The following are alternative invocations for their respective approved platforms:
+
+```sh
+python3 /tmp/postora-meta-owned-analytics.py \
+  --owner "$APPROVED_OWNER_ID" --confirmed-account "$APPROVED_ACCOUNT_ID" \
+  --platform facebook --version v22.0
+
+python3 /tmp/postora-meta-owned-analytics.py \
+  --owner "$APPROVED_OWNER_ID" --confirmed-account "$APPROVED_ACCOUNT_ID" \
+  --platform threads --version v1.0
+```
+
+`v22.0` is the version currently requested by the repository's Instagram/Facebook readers, not a statement that every candidate Facebook metric remains supported. Requested and observed API versions are recorded separately when the provider supplies its version header. Changing a probe version is an explicit evidence choice. Instagram is intentionally not accepted by this tool: its protected direct/Page-linked credential contexts must be resolved through their existing adapters rather than treating the legacy account token as canonical.
+
+## Observations and bounds
+
+The metric names in `METRICS` are **probe candidates**, not verified registry entries. Each is requested independently so rejection of one does not erase the others. Account requests cover 7/14/30/90 closed UTC-day windows. These UTC request bounds do not establish the provider's bucket timezone. Listing checks at most two pages of two posts, records duplicate counts/repeated cursors/continuation, and probes the first returned post's candidate insights. No post is published or modified.
+
+The provider budget is 48 calls and 120 seconds, with each request limited to the remaining budget or five seconds. There are no retries. Every request has a fixed Meta origin; pagination rebuilds the request with the opaque `after` cursor and never follows `paging.next`. HTTP redirects are refused before forwarding credentials. Provider response bodies are capped at one MiB. Setup subprocesses have ten-second limits outside the provider budget.
+
+Output is sanitized JSON: numeric measurements (including genuine zero), retained bucket end times/periods, request bounds, numeric provider error codes, selected numeric usage values and retry hints, plus an owner/account fingerprint. Tokens, raw provider URLs, post text, raw error messages and unapproved headers are excluded. Credential and permission errors remain distinguishable. Missing measurements remain absent and unique reach is never summed. Completed metric receipts survive a later budget exhaustion.
+
+Exit zero and `execution: finished` mean the observation run completed; individual requests can still have failed. `capabilityVerification: incomplete`, unknown provider timezone and unverified retention/window limits remain explicit. Successful 7/14/30/90 requests prove only those observed requests, not the earliest retention date or maximum supported window. A rejected candidate is not automatically `not_offered`. Review source documentation, exact provider semantics and account permissions before promoting any registry cell.
+
+Setup failure returns nonzero with `execution: failed` and `reason: probe_setup_failed`. Budget exhaustion returns nonzero with `execution: budget_exhausted` and preserves completed metric observations. The script writes no analytics tables, tokens, rollout flags, cron entries or log rows. Its caller may save the sanitized JSON and add a reviewed Markdown interpretation to `docs/journeys/` after the approved run.
+
+## Local validation
+
+```sh
+python3 -m unittest discover -s scripts/probes -p 'test_*.py' -v
+python3 scripts/probes/meta_owned_analytics.py --help
+```
+
+Eight local tests passed. They cover true-zero/missing/multiple-bucket decoding, sanitized failures/usage, authenticated fixed-origin requests, repeated pagination, budget refusal/partial receipt retention, redirect refusal, failed account setup and granted-versus-declined permissions. HTTP and subprocess boundaries are replaced; these tests are not a live provider or real-database ownership receipt. CI runs them without credentials. Source/test/docs guard passes cover this operational tool. No production probe has run as part of its creation.
+
+At authoring time, the official Meta Page/Threads/Instagram insights documentation endpoints returned HTTP 429. Search results from third-party sites were not used to assert current metric support. B2/B5 remain open until approved live evidence and the unresolved semantics are reviewed.

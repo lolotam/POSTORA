@@ -71,6 +71,8 @@ Compare 7 closed days using the exact period/bucket semantics in spec §4.4 and 
 - Parity compares the complete serialized schema/registry and shared behavioral fixtures as required by spec §4; limited key/status equality cannot pass. Include the platform `staleAfterSeconds` scope, unit and boundary cases.
 
 ### B2. Capability probes
+
+**Tooling slice:** the [read-only Facebook/Threads probe runbook](../runbooks/meta-owned-analytics-capability-probe.md) describes the bounded server-side CLI and its local safety tests. Candidate metrics remain unverified. Approved live account selection, actual provider observations, exact timezone/retention/window evidence and the Instagram credential-context probe remain pending; the tooling alone does not satisfy B2.
 - A read-only probe per platform (script under `scripts/probes/` calling the Graph APIs with a stored token fetched server-side, or a service-role-only function action), producing a JSON + Markdown evidence record under `docs/journeys/` with the fields in spec §6. Tokens are never printed.
 - Facebook: Page token, `/{page-id}/insights` and `/{post-id}/insights` at the pinned Graph version; record deprecated metrics and replacements from current Meta documentation; granted scopes via token debug.
 - Threads: account and post insights, listing pagination, earliest available date per metric, maximum window.
