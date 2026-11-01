@@ -569,10 +569,12 @@ jobs:
       - name: Start disposable Postgres
         run: |
           docker run -d --name pg-harness \
+            --label postora.task=postora-db-harness-ci \
             -e POSTGRES_PASSWORD=postgres \
             -v "${GITHUB_WORKSPACE}:/repo" \
             supabase/postgres:17.6.1.158 \
             -c cron.database_name=partner_api_harness \
+            -c cron.launch_active_jobs=off \
             -c shared_preload_libraries=pg_cron,pg_net,pgsodium,supabase_vault
           status="none"
           for _ in $(seq 1 90); do
@@ -644,6 +646,14 @@ jobs:
       - name: Verify analytics probe ownership against the migrated SQL harness
         run: >-
           python3 scripts/probes/check_meta_owned_analytics_sql.py
+          --container pg-harness --database partner_api_harness
+
+      - name: Install the disposable SQL race runtime
+        run: docker exec -u root pg-harness apk add --no-cache python3
+
+      - name: Verify owned analytics history concurrency
+        run: >-
+          python3 scripts/ci/test-meta-owned-analytics-races.py
           --container pg-harness --database partner_api_harness
 
       - name: Show Postgres logs on failure

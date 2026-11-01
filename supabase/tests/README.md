@@ -47,10 +47,21 @@ below). So the harness does not replay history. It:
 | `instagram_collection_rollout_controls.sql` | the rollout admission authority (R1): the default-off policy and the strict policy schema, the master switch read first and alone, the private policy row and the service permit RPC against the browser roles, the evaluator's ownership and pin rules, the enqueue refusals and the mixed service batch, the claim passes with an eligible job behind more than 500 excluded rows, the pinned-viewer negatives, the write fences, the provider permit unions and the bounded audit rows; rolls back |
 | `instagram_collection_daily_dispatch.sql` | the durable daily dispatch (R2): the sweep table and its states, the service-only daily page RPC, the twenty five / fifty page ceilings, more than twenty five owners and more than one thousand competitors paged through the real statement, the duplicate that keeps its generation, the exclusion that wins at insert, the weekly retry gate, the truthful pending / completed / expired states, the disabled master and the unreadable configuration, the transaction atomicity and the midnight rollover; rolls back |
 | `instagram_collection_cron.sql` | the four inactive collection schedules (C1): applying the schedule definition twice leaves exactly one inactive job per name and no fifth job, the exact UTC expressions, the exact bodies the registered routes accept, the runtime secret lookup with no literal credential in the stored command, the sixty second HTTP bound, the re-application that pauses an activated schedule again, the three missing-prerequisite failures that install nothing, the atomic installation, the secret rotation with a disposable request recorder, and every other job left exactly as it was; rolls back |
+| `meta_owned_analytics_history.sql` | owned Facebook/Threads history and additive Instagram provenance; its executable assertions define the implemented C2 coverage, while multi-session race evidence is recorded separately |
+| `meta_owned_analytics_claim_fairness.sql` | real Facebook/Threads admission, claim and partial completion across two owners; equal-due work yields to an unvisited account while earlier due dates retain priority; rolls back |
 
 The harness's `SUITES` array is the complete executable inventory; the table
 above highlights selected suites, not the entire list. No existing suite may
 be excluded to make a rehearsal pass.
+
+Owned Meta history races run automatically after that harness in CI through
+`scripts/ci/test-meta-owned-analytics-races.py`. The runner requires an explicitly
+labelled disposable container and a database ending in `_harness`, and observes
+actual blocked sessions before asserting the concurrent outcomes. Its runtime
+report, rather than a single-session suite or fixture prose, is the race evidence.
+The PostgreSQL fixture must start with `-c cron.launch_active_jobs=off`; CI sets
+this before baseline restoration. The runner refuses an enabled launcher before
+opening its mutation sessions, so historical cron rows cannot run during races.
 
 These fixtures are explicitly classified as **manual multi-session rehearsals**,
 not omitted test suites: `partner_api_race_fixture.sql`,

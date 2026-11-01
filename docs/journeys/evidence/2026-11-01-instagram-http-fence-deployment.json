@@ -1,0 +1,109 @@
+{
+  "scope": "Instagram HTTP fence schema and runtime deployment; no collection activation",
+  "approval": {
+    "action": "Apply exactly PR #332 migration and verify grants/cache",
+    "source": "User explicitly answered نعم، طبّق الملف المحدد وافحصه",
+    "date": "2026-11-01"
+  },
+  "application": {
+    "applied": true,
+    "sha256": "4c0d5d8962a8630b51ba657f03ca97e4549080b1292e60a5614f298448e49780",
+    "verifiedAt": "2026-11-01 10:53:34.768335",
+    "catalogValid": true,
+    "nativeDefinitionsUnchanged": true,
+    "rolloutAndCronUnchanged": true,
+    "wrappers": [
+      {
+        "args": "p_job_id uuid, p_claim_token uuid, p_job_generation bigint, p_outcome text, p_reason_code text",
+        "name": "complete_instagram_collection_job_http",
+        "owner": "postgres",
+        "invoker": true,
+        "anonExecute": false,
+        "definitionMd5": "4abb96ead9ce3414b8b50709de4e5959",
+        "publicExecute": false,
+        "serviceExecute": true,
+        "authenticatedExecute": false,
+        "signatureMatchesNative": true
+      },
+      {
+        "args": "p_job_id uuid, p_claim_token uuid, p_job_generation bigint, p_payload jsonb",
+        "name": "persist_instagram_collection_snapshot_http",
+        "owner": "postgres",
+        "invoker": true,
+        "anonExecute": false,
+        "definitionMd5": "d46481c3485507a45b7d901698649df9",
+        "publicExecute": false,
+        "serviceExecute": true,
+        "authenticatedExecute": false,
+        "signatureMatchesNative": true
+      },
+      {
+        "args": "p_job_id uuid, p_claim_token uuid, p_job_generation bigint, p_expected_credential_generation bigint",
+        "name": "read_instagram_direct_collection_credential_http",
+        "owner": "postgres",
+        "invoker": true,
+        "anonExecute": false,
+        "definitionMd5": "9e7a590f54fa0ab79812ddb1a764ac74",
+        "publicExecute": false,
+        "serviceExecute": true,
+        "authenticatedExecute": false,
+        "signatureMatchesNative": true
+      },
+      {
+        "args": "p_job_id uuid, p_claim_token uuid, p_job_generation bigint, p_payload jsonb",
+        "name": "record_instagram_collection_job_progress_http",
+        "owner": "postgres",
+        "invoker": true,
+        "anonExecute": false,
+        "definitionMd5": "36b3c2143bb09e20e04018f923f3c329",
+        "publicExecute": false,
+        "serviceExecute": true,
+        "authenticatedExecute": false,
+        "signatureMatchesNative": true
+      },
+      {
+        "args": "p_bucket_key text, p_usage_percent integer, p_throttled_until timestamp with time zone, p_job_id uuid, p_claim_token uuid, p_job_generation bigint",
+        "name": "record_instagram_provider_throttle_http",
+        "owner": "postgres",
+        "invoker": true,
+        "anonExecute": false,
+        "definitionMd5": "e0b9b2c322344a7482eaed77ff438ed4",
+        "publicExecute": false,
+        "serviceExecute": true,
+        "authenticatedExecute": false,
+        "signatureMatchesNative": true
+      }
+    ]
+  },
+  "cache": {
+    "readOnly": true,
+    "request": "GET OpenAPI metadata on the Postora PostgREST container; no RPC invocation",
+    "publicMetadataRouteStatus": 403,
+    "status": 200,
+    "cachedWrappers": [
+      "complete_instagram_collection_job_http",
+      "persist_instagram_collection_snapshot_http",
+      "read_instagram_direct_collection_credential_http",
+      "record_instagram_collection_job_progress_http",
+      "record_instagram_provider_throttle_http"
+    ],
+    "complete": true
+  },
+  "deployment": {
+    "verifiedAt": "2026-11-01T10:58:14Z",
+    "runtimeCommit": "cc2555b282c1581dde196fd386b3b6d55a0f64ca",
+    "healthStatus": 200,
+    "syncOptionsStatus": 204,
+    "pausedMarker": false,
+    "failedMarker": false,
+    "files": {
+      "instagram-insights-sync/httpRpc.ts": "9423d7c70d198206ae5f729385b89ff33ecfd7fdb59beffea637173e9bae023f",
+      "instagram-insights-sync/index.ts": "e18825004a7112a337bbefcab9865d5f0ec5ef24fb5308d48caba0379f8b5a06",
+      "instagram-insights-sync/workerStore.ts": "3f45ceb187b68b6060d7fb2cd8f998cb390c9f6372ace9af25a6ffbf65c11ef0"
+    }
+  },
+  "limitations": [
+    "Metadata/boot/byte evidence does not prove collection, full G-X, account reconciliation or scheduled stability",
+    "C2 schema is not applied and no new collection, credential, retention or cron setting was activated"
+  ]
+}

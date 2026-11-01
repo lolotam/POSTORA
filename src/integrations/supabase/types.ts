@@ -34,6 +34,1627 @@ export type Database = {
   }
   public: {
     Tables: {
+      fb_analytics_captures: {
+        Row: {
+          api_version: string
+          capture_sequence: number
+          claim_token: string
+          credential_authority: Json
+          id: string
+          job_generation: number
+          job_id: string
+          kind: string
+          metric_date: string | null
+          operation_id: string
+          payload_digest: string | null
+          platform: string
+          provider_timezone: string | null
+          receipt: Json | null
+          received_at: string | null
+          requested_at: string
+          requested_metrics: string[]
+          social_account_id: string
+          subject_id: string
+          user_id: string
+          window_since: string | null
+          window_until: string | null
+        }
+        Insert: {
+          api_version: string
+          capture_sequence: number
+          claim_token: string
+          credential_authority: Json
+          id?: string
+          job_generation: number
+          job_id: string
+          kind: string
+          metric_date?: string | null
+          operation_id: string
+          payload_digest?: string | null
+          platform?: string
+          provider_timezone?: string | null
+          receipt?: Json | null
+          received_at?: string | null
+          requested_at?: string
+          requested_metrics: string[]
+          social_account_id: string
+          subject_id: string
+          user_id: string
+          window_since?: string | null
+          window_until?: string | null
+        }
+        Update: {
+          api_version?: string
+          capture_sequence?: number
+          claim_token?: string
+          credential_authority?: Json
+          id?: string
+          job_generation?: number
+          job_id?: string
+          kind?: string
+          metric_date?: string | null
+          operation_id?: string
+          payload_digest?: string | null
+          platform?: string
+          provider_timezone?: string | null
+          receipt?: Json | null
+          received_at?: string | null
+          requested_at?: string
+          requested_metrics?: string[]
+          social_account_id?: string
+          subject_id?: string
+          user_id?: string
+          window_since?: string | null
+          window_until?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "fb_analytics_captures_operation_id_job_id_job_generation_u_fkey"
+            columns: ["operation_id", "job_id", "job_generation", "user_id", "social_account_id", "platform"]
+            isOneToOne: false
+            referencedRelation: "fb_analytics_collection_operations"
+            referencedColumns: ["id", "job_id", "job_generation", "user_id", "social_account_id", "platform"]
+          },
+          {
+            foreignKeyName: "fb_analytics_captures_social_account_id_user_id_platform_fkey"
+            columns: ["social_account_id", "user_id", "platform"]
+            isOneToOne: false
+            referencedRelation: "social_accounts"
+            referencedColumns: ["id", "user_id", "platform"]
+          },
+        ]
+      }
+      fb_analytics_collection_checkpoints: {
+        Row: {
+          inventory_complete: boolean
+          inventory_cursor: string | null
+          inventory_truncated: boolean
+          job_generation: number
+          job_id: string
+          pages_fetched: number
+          platform: string
+          post_ids: string[]
+          social_account_id: string
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          inventory_complete?: boolean
+          inventory_cursor?: string | null
+          inventory_truncated?: boolean
+          job_generation: number
+          job_id: string
+          pages_fetched?: number
+          platform?: string
+          post_ids?: string[]
+          social_account_id: string
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          inventory_complete?: boolean
+          inventory_cursor?: string | null
+          inventory_truncated?: boolean
+          job_generation?: number
+          job_id?: string
+          pages_fetched?: number
+          platform?: string
+          post_ids?: string[]
+          social_account_id?: string
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "fb_analytics_collection_check_job_id_user_id_social_accoun_fkey"
+            columns: ["job_id", "user_id", "social_account_id", "platform"]
+            isOneToOne: false
+            referencedRelation: "fb_analytics_collection_jobs"
+            referencedColumns: ["id", "user_id", "social_account_id", "platform"]
+          },
+        ]
+      }
+      fb_analytics_collection_jobs: {
+        Row: {
+          attempts: number
+          claim_token: string | null
+          completed_at: string | null
+          created_at: string
+          credential_authority: Json | null
+          due_at: string
+          due_on: string
+          id: string
+          job_generation: number
+          last_partial_at: string | null
+          last_success_at: string | null
+          lease_until: string | null
+          next_due_at: string
+          platform: string
+          provider_timezone: string
+          reason_code: string | null
+          retry_at: string | null
+          social_account_id: string
+          state: string
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          attempts?: number
+          claim_token?: string | null
+          completed_at?: string | null
+          created_at?: string
+          credential_authority?: Json | null
+          due_at: string
+          due_on: string
+          id?: string
+          job_generation?: number
+          last_partial_at?: string | null
+          last_success_at?: string | null
+          lease_until?: string | null
+          next_due_at: string
+          platform?: string
+          provider_timezone?: string
+          reason_code?: string | null
+          retry_at?: string | null
+          social_account_id: string
+          state?: string
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          attempts?: number
+          claim_token?: string | null
+          completed_at?: string | null
+          created_at?: string
+          credential_authority?: Json | null
+          due_at?: string
+          due_on?: string
+          id?: string
+          job_generation?: number
+          last_partial_at?: string | null
+          last_success_at?: string | null
+          lease_until?: string | null
+          next_due_at?: string
+          platform?: string
+          provider_timezone?: string
+          reason_code?: string | null
+          retry_at?: string | null
+          social_account_id?: string
+          state?: string
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "fb_analytics_collection_jobs_social_account_id_user_id_pla_fkey"
+            columns: ["social_account_id", "user_id", "platform"]
+            isOneToOne: false
+            referencedRelation: "social_accounts"
+            referencedColumns: ["id", "user_id", "platform"]
+          },
+        ]
+      }
+      fb_analytics_collection_operations: {
+        Row: {
+          completed_at: string | null
+          id: string
+          job_generation: number
+          job_id: string
+          kind: string
+          operation_key: string
+          platform: string
+          reason_code: string | null
+          requested_metrics: string[]
+          social_account_id: string
+          state: string
+          user_id: string
+        }
+        Insert: {
+          completed_at?: string | null
+          id?: string
+          job_generation: number
+          job_id: string
+          kind: string
+          operation_key: string
+          platform?: string
+          reason_code?: string | null
+          requested_metrics: string[]
+          social_account_id: string
+          state?: string
+          user_id: string
+        }
+        Update: {
+          completed_at?: string | null
+          id?: string
+          job_generation?: number
+          job_id?: string
+          kind?: string
+          operation_key?: string
+          platform?: string
+          reason_code?: string | null
+          requested_metrics?: string[]
+          social_account_id?: string
+          state?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "fb_analytics_collection_opera_job_id_user_id_social_accoun_fkey"
+            columns: ["job_id", "user_id", "social_account_id", "platform"]
+            isOneToOne: false
+            referencedRelation: "fb_analytics_collection_jobs"
+            referencedColumns: ["id", "user_id", "social_account_id", "platform"]
+          },
+        ]
+      }
+      fb_analytics_metric_values: {
+        Row: {
+          api_version: string
+          capture_id: string
+          daily_id: string | null
+          id: string
+          metric_key: string
+          observed_at: string
+          platform: string
+          post_snapshot_id: string | null
+          profile_observation_id: string | null
+          provider_metric: string | null
+          provider_timezone: string | null
+          reason: string | null
+          social_account_id: string
+          source_ref: string
+          status: string
+          user_id: string
+          value: number | null
+          window_kind: string
+          window_since: string | null
+          window_until: string | null
+        }
+        Insert: {
+          api_version: string
+          capture_id: string
+          daily_id?: string | null
+          id?: string
+          metric_key: string
+          observed_at: string
+          platform?: string
+          post_snapshot_id?: string | null
+          profile_observation_id?: string | null
+          provider_metric?: string | null
+          provider_timezone?: string | null
+          reason?: string | null
+          social_account_id: string
+          source_ref: string
+          status: string
+          user_id: string
+          value?: number | null
+          window_kind: string
+          window_since?: string | null
+          window_until?: string | null
+        }
+        Update: {
+          api_version?: string
+          capture_id?: string
+          daily_id?: string | null
+          id?: string
+          metric_key?: string
+          observed_at?: string
+          platform?: string
+          post_snapshot_id?: string | null
+          profile_observation_id?: string | null
+          provider_metric?: string | null
+          provider_timezone?: string | null
+          reason?: string | null
+          social_account_id?: string
+          source_ref?: string
+          status?: string
+          user_id?: string
+          value?: number | null
+          window_kind?: string
+          window_since?: string | null
+          window_until?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "fb_analytics_metric_values_capture_id_user_id_social_accou_fkey"
+            columns: ["capture_id", "user_id", "social_account_id", "platform"]
+            isOneToOne: false
+            referencedRelation: "fb_analytics_captures"
+            referencedColumns: ["id", "user_id", "social_account_id", "platform"]
+          },
+          {
+            foreignKeyName: "fb_analytics_metric_values_daily_id_user_id_social_account_fkey"
+            columns: ["daily_id", "user_id", "social_account_id", "platform"]
+            isOneToOne: false
+            referencedRelation: "fb_page_insight_daily"
+            referencedColumns: ["id", "user_id", "social_account_id", "platform"]
+          },
+          {
+            foreignKeyName: "fb_analytics_metric_values_post_snapshot_id_user_id_social_fkey"
+            columns: ["post_snapshot_id", "user_id", "social_account_id", "platform"]
+            isOneToOne: false
+            referencedRelation: "fb_post_insight_snapshots"
+            referencedColumns: ["id", "user_id", "social_account_id", "platform"]
+          },
+          {
+            foreignKeyName: "fb_analytics_metric_values_profile_observation_id_user_id__fkey"
+            columns: ["profile_observation_id", "user_id", "social_account_id", "platform"]
+            isOneToOne: false
+            referencedRelation: "fb_page_profile_observations"
+            referencedColumns: ["id", "user_id", "social_account_id", "platform"]
+          },
+          {
+            foreignKeyName: "fb_analytics_metric_values_social_account_id_user_id_platf_fkey"
+            columns: ["social_account_id", "user_id", "platform"]
+            isOneToOne: false
+            referencedRelation: "social_accounts"
+            referencedColumns: ["id", "user_id", "platform"]
+          },
+        ]
+      }
+      fb_analytics_period_totals: {
+        Row: {
+          api_version: string
+          capture_id: string
+          captured_on: string
+          id: string
+          level: string
+          metric_key: string
+          observed_at: string
+          platform: string
+          provider_metric: string | null
+          provider_timezone: string
+          reason: string | null
+          social_account_id: string
+          source_ref: string
+          status: string
+          subject_id: string
+          user_id: string
+          value: number | null
+          window_since: string
+          window_until: string
+        }
+        Insert: {
+          api_version: string
+          capture_id: string
+          captured_on: string
+          id?: string
+          level: string
+          metric_key: string
+          observed_at: string
+          platform?: string
+          provider_metric?: string | null
+          provider_timezone: string
+          reason?: string | null
+          social_account_id: string
+          source_ref: string
+          status: string
+          subject_id: string
+          user_id: string
+          value?: number | null
+          window_since: string
+          window_until: string
+        }
+        Update: {
+          api_version?: string
+          capture_id?: string
+          captured_on?: string
+          id?: string
+          level?: string
+          metric_key?: string
+          observed_at?: string
+          platform?: string
+          provider_metric?: string | null
+          provider_timezone?: string
+          reason?: string | null
+          social_account_id?: string
+          source_ref?: string
+          status?: string
+          subject_id?: string
+          user_id?: string
+          value?: number | null
+          window_since?: string
+          window_until?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "fb_analytics_period_totals_capture_id_user_id_social_accou_fkey"
+            columns: ["capture_id", "user_id", "social_account_id", "platform"]
+            isOneToOne: false
+            referencedRelation: "fb_analytics_captures"
+            referencedColumns: ["id", "user_id", "social_account_id", "platform"]
+          },
+          {
+            foreignKeyName: "fb_analytics_period_totals_social_account_id_user_id_platf_fkey"
+            columns: ["social_account_id", "user_id", "platform"]
+            isOneToOne: false
+            referencedRelation: "social_accounts"
+            referencedColumns: ["id", "user_id", "platform"]
+          },
+        ]
+      }
+      fb_analytics_permission_observations: {
+        Row: {
+          authority: Json
+          granted_scopes: string[]
+          observed_at: string
+          platform: string
+          social_account_id: string
+          source_ref: string
+          state: string
+          user_id: string
+        }
+        Insert: {
+          authority: Json
+          granted_scopes: string[]
+          observed_at: string
+          platform?: string
+          social_account_id: string
+          source_ref: string
+          state: string
+          user_id: string
+        }
+        Update: {
+          authority?: Json
+          granted_scopes?: string[]
+          observed_at?: string
+          platform?: string
+          social_account_id?: string
+          source_ref?: string
+          state?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "fb_analytics_permission_obser_social_account_id_user_id_pl_fkey"
+            columns: ["social_account_id", "user_id", "platform"]
+            isOneToOne: true
+            referencedRelation: "social_accounts"
+            referencedColumns: ["id", "user_id", "platform"]
+          },
+        ]
+      }
+      fb_analytics_report_state: {
+        Row: {
+          created_at: string
+          credential_guarded: boolean
+          next_capture_sequence: number
+          platform: string
+          provider_timezone: string
+          report_revision: number
+          retention_floor: string
+          social_account_id: string
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          credential_guarded?: boolean
+          next_capture_sequence?: number
+          platform?: string
+          provider_timezone?: string
+          report_revision?: number
+          retention_floor?: string
+          social_account_id: string
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          credential_guarded?: boolean
+          next_capture_sequence?: number
+          platform?: string
+          provider_timezone?: string
+          report_revision?: number
+          retention_floor?: string
+          social_account_id?: string
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "fb_analytics_report_state_social_account_id_user_id_platfo_fkey"
+            columns: ["social_account_id", "user_id", "platform"]
+            isOneToOne: true
+            referencedRelation: "social_accounts"
+            referencedColumns: ["id", "user_id", "platform"]
+          },
+        ]
+      }
+      fb_page_insight_daily: {
+        Row: {
+          created_at: string
+          id: string
+          metric_date: string
+          period_end: string
+          period_start: string
+          platform: string
+          provider_timezone: string
+          social_account_id: string
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          id?: string
+          metric_date: string
+          period_end: string
+          period_start: string
+          platform?: string
+          provider_timezone: string
+          social_account_id: string
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          metric_date?: string
+          period_end?: string
+          period_start?: string
+          platform?: string
+          provider_timezone?: string
+          social_account_id?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "fb_page_insight_daily_social_account_id_user_id_platform_fkey"
+            columns: ["social_account_id", "user_id", "platform"]
+            isOneToOne: false
+            referencedRelation: "social_accounts"
+            referencedColumns: ["id", "user_id", "platform"]
+          },
+        ]
+      }
+      fb_page_profile_observations: {
+        Row: {
+          capture_id: string
+          created_at: string
+          id: string
+          observed_at: string
+          platform: string
+          social_account_id: string
+          user_id: string
+        }
+        Insert: {
+          capture_id: string
+          created_at?: string
+          id?: string
+          observed_at: string
+          platform?: string
+          social_account_id: string
+          user_id: string
+        }
+        Update: {
+          capture_id?: string
+          created_at?: string
+          id?: string
+          observed_at?: string
+          platform?: string
+          social_account_id?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "fb_page_profile_observations_capture_id_user_id_social_acc_fkey"
+            columns: ["capture_id", "user_id", "social_account_id", "platform"]
+            isOneToOne: true
+            referencedRelation: "fb_analytics_captures"
+            referencedColumns: ["id", "user_id", "social_account_id", "platform"]
+          },
+          {
+            foreignKeyName: "fb_page_profile_observations_social_account_id_user_id_pla_fkey"
+            columns: ["social_account_id", "user_id", "platform"]
+            isOneToOne: false
+            referencedRelation: "social_accounts"
+            referencedColumns: ["id", "user_id", "platform"]
+          },
+        ]
+      }
+      fb_post_insight_snapshots: {
+        Row: {
+          captured_on: string
+          created_at: string
+          id: string
+          metadata_capture_id: string
+          permalink: string | null
+          platform: string
+          platform_post_id: string
+          post_text: string
+          published_at: string
+          social_account_id: string
+          user_id: string
+        }
+        Insert: {
+          captured_on: string
+          created_at?: string
+          id?: string
+          metadata_capture_id: string
+          permalink?: string | null
+          platform?: string
+          platform_post_id: string
+          post_text?: string
+          published_at: string
+          social_account_id: string
+          user_id: string
+        }
+        Update: {
+          captured_on?: string
+          created_at?: string
+          id?: string
+          metadata_capture_id?: string
+          permalink?: string | null
+          platform?: string
+          platform_post_id?: string
+          post_text?: string
+          published_at?: string
+          social_account_id?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "fb_post_insight_snapshots_metadata_capture_id_user_id_soci_fkey"
+            columns: ["metadata_capture_id", "user_id", "social_account_id", "platform"]
+            isOneToOne: false
+            referencedRelation: "fb_analytics_captures"
+            referencedColumns: ["id", "user_id", "social_account_id", "platform"]
+          },
+          {
+            foreignKeyName: "fb_post_insight_snapshots_social_account_id_user_id_platfo_fkey"
+            columns: ["social_account_id", "user_id", "platform"]
+            isOneToOne: false
+            referencedRelation: "social_accounts"
+            referencedColumns: ["id", "user_id", "platform"]
+          },
+        ]
+      }
+      ig_analytics_captures: {
+        Row: {
+          capture_sequence: number
+          claim_token: string
+          credential_generation: number
+          id: string
+          job_generation: number
+          job_id: string
+          payload_digest: string | null
+          platform: string
+          receipt: Json | null
+          received_at: string | null
+          request_identity: Json
+          requested_at: string
+          social_account_id: string
+          user_id: string
+        }
+        Insert: {
+          capture_sequence: number
+          claim_token: string
+          credential_generation: number
+          id?: string
+          job_generation: number
+          job_id: string
+          payload_digest?: string | null
+          platform?: string
+          receipt?: Json | null
+          received_at?: string | null
+          request_identity: Json
+          requested_at?: string
+          social_account_id: string
+          user_id: string
+        }
+        Update: {
+          capture_sequence?: number
+          claim_token?: string
+          credential_generation?: number
+          id?: string
+          job_generation?: number
+          job_id?: string
+          payload_digest?: string | null
+          platform?: string
+          receipt?: Json | null
+          received_at?: string | null
+          request_identity?: Json
+          requested_at?: string
+          social_account_id?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "ig_analytics_captures_job_id_user_id_social_account_id_fkey"
+            columns: ["job_id", "user_id", "social_account_id"]
+            isOneToOne: false
+            referencedRelation: "instagram_collection_jobs"
+            referencedColumns: ["id", "user_id", "social_account_id"]
+          },
+          {
+            foreignKeyName: "ig_analytics_captures_social_account_id_user_id_platform_fkey"
+            columns: ["social_account_id", "user_id", "platform"]
+            isOneToOne: false
+            referencedRelation: "social_accounts"
+            referencedColumns: ["id", "user_id", "platform"]
+          },
+        ]
+      }
+      ig_analytics_metric_values: {
+        Row: {
+          api_version: string
+          capture_id: string
+          daily_id: string | null
+          id: string
+          metric_key: string
+          observed_at: string
+          platform: string
+          post_snapshot_id: string | null
+          profile_observation_id: string | null
+          provider_metric: string | null
+          provider_timezone: string | null
+          reason: string | null
+          social_account_id: string
+          source_ref: string
+          status: string
+          user_id: string
+          value: number | null
+          window_kind: string
+          window_since: string | null
+          window_until: string | null
+        }
+        Insert: {
+          api_version: string
+          capture_id: string
+          daily_id?: string | null
+          id?: string
+          metric_key: string
+          observed_at: string
+          platform?: string
+          post_snapshot_id?: string | null
+          profile_observation_id?: string | null
+          provider_metric?: string | null
+          provider_timezone?: string | null
+          reason?: string | null
+          social_account_id: string
+          source_ref: string
+          status: string
+          user_id: string
+          value?: number | null
+          window_kind: string
+          window_since?: string | null
+          window_until?: string | null
+        }
+        Update: {
+          api_version?: string
+          capture_id?: string
+          daily_id?: string | null
+          id?: string
+          metric_key?: string
+          observed_at?: string
+          platform?: string
+          post_snapshot_id?: string | null
+          profile_observation_id?: string | null
+          provider_metric?: string | null
+          provider_timezone?: string | null
+          reason?: string | null
+          social_account_id?: string
+          source_ref?: string
+          status?: string
+          user_id?: string
+          value?: number | null
+          window_kind?: string
+          window_since?: string | null
+          window_until?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "ig_analytics_metric_values_capture_id_user_id_social_accou_fkey"
+            columns: ["capture_id", "user_id", "social_account_id", "platform"]
+            isOneToOne: false
+            referencedRelation: "ig_analytics_captures"
+            referencedColumns: ["id", "user_id", "social_account_id", "platform"]
+          },
+          {
+            foreignKeyName: "ig_analytics_metric_values_daily_id_user_id_social_account_fkey"
+            columns: ["daily_id", "user_id", "social_account_id"]
+            isOneToOne: false
+            referencedRelation: "ig_account_insight_daily"
+            referencedColumns: ["id", "user_id", "social_account_id"]
+          },
+          {
+            foreignKeyName: "ig_analytics_metric_values_post_snapshot_id_user_id_social_fkey"
+            columns: ["post_snapshot_id", "user_id", "social_account_id"]
+            isOneToOne: false
+            referencedRelation: "ig_media_insight_snapshots"
+            referencedColumns: ["id", "user_id", "social_account_id"]
+          },
+          {
+            foreignKeyName: "ig_analytics_metric_values_profile_observation_id_user_id__fkey"
+            columns: ["profile_observation_id", "user_id", "social_account_id"]
+            isOneToOne: false
+            referencedRelation: "ig_account_profile_observations"
+            referencedColumns: ["id", "user_id", "social_account_id"]
+          },
+          {
+            foreignKeyName: "ig_analytics_metric_values_social_account_id_user_id_platf_fkey"
+            columns: ["social_account_id", "user_id", "platform"]
+            isOneToOne: false
+            referencedRelation: "social_accounts"
+            referencedColumns: ["id", "user_id", "platform"]
+          },
+        ]
+      }
+      ig_analytics_report_state: {
+        Row: {
+          next_capture_sequence: number
+          platform: string
+          report_revision: number
+          social_account_id: string
+          user_id: string
+        }
+        Insert: {
+          next_capture_sequence?: number
+          platform?: string
+          report_revision?: number
+          social_account_id: string
+          user_id: string
+        }
+        Update: {
+          next_capture_sequence?: number
+          platform?: string
+          report_revision?: number
+          social_account_id?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "ig_analytics_report_state_social_account_id_user_id_platfo_fkey"
+            columns: ["social_account_id", "user_id", "platform"]
+            isOneToOne: true
+            referencedRelation: "social_accounts"
+            referencedColumns: ["id", "user_id", "platform"]
+          },
+        ]
+      }
+      threads_account_insight_daily: {
+        Row: {
+          created_at: string
+          id: string
+          metric_date: string
+          period_end: string
+          period_start: string
+          platform: string
+          provider_timezone: string
+          social_account_id: string
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          id?: string
+          metric_date: string
+          period_end: string
+          period_start: string
+          platform?: string
+          provider_timezone: string
+          social_account_id: string
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          metric_date?: string
+          period_end?: string
+          period_start?: string
+          platform?: string
+          provider_timezone?: string
+          social_account_id?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "threads_account_insight_daily_social_account_id_user_id_pl_fkey"
+            columns: ["social_account_id", "user_id", "platform"]
+            isOneToOne: false
+            referencedRelation: "social_accounts"
+            referencedColumns: ["id", "user_id", "platform"]
+          },
+        ]
+      }
+      threads_account_profile_observations: {
+        Row: {
+          capture_id: string
+          created_at: string
+          id: string
+          observed_at: string
+          platform: string
+          social_account_id: string
+          user_id: string
+        }
+        Insert: {
+          capture_id: string
+          created_at?: string
+          id?: string
+          observed_at: string
+          platform?: string
+          social_account_id: string
+          user_id: string
+        }
+        Update: {
+          capture_id?: string
+          created_at?: string
+          id?: string
+          observed_at?: string
+          platform?: string
+          social_account_id?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "threads_account_profile_obser_capture_id_user_id_social_ac_fkey"
+            columns: ["capture_id", "user_id", "social_account_id", "platform"]
+            isOneToOne: true
+            referencedRelation: "threads_analytics_captures"
+            referencedColumns: ["id", "user_id", "social_account_id", "platform"]
+          },
+          {
+            foreignKeyName: "threads_account_profile_obser_social_account_id_user_id_pl_fkey"
+            columns: ["social_account_id", "user_id", "platform"]
+            isOneToOne: false
+            referencedRelation: "social_accounts"
+            referencedColumns: ["id", "user_id", "platform"]
+          },
+        ]
+      }
+      threads_analytics_captures: {
+        Row: {
+          api_version: string
+          capture_sequence: number
+          claim_token: string
+          credential_authority: Json
+          id: string
+          job_generation: number
+          job_id: string
+          kind: string
+          metric_date: string | null
+          operation_id: string
+          payload_digest: string | null
+          platform: string
+          provider_timezone: string | null
+          receipt: Json | null
+          received_at: string | null
+          requested_at: string
+          requested_metrics: string[]
+          social_account_id: string
+          subject_id: string
+          user_id: string
+          window_since: string | null
+          window_until: string | null
+        }
+        Insert: {
+          api_version: string
+          capture_sequence: number
+          claim_token: string
+          credential_authority: Json
+          id?: string
+          job_generation: number
+          job_id: string
+          kind: string
+          metric_date?: string | null
+          operation_id: string
+          payload_digest?: string | null
+          platform?: string
+          provider_timezone?: string | null
+          receipt?: Json | null
+          received_at?: string | null
+          requested_at?: string
+          requested_metrics: string[]
+          social_account_id: string
+          subject_id: string
+          user_id: string
+          window_since?: string | null
+          window_until?: string | null
+        }
+        Update: {
+          api_version?: string
+          capture_sequence?: number
+          claim_token?: string
+          credential_authority?: Json
+          id?: string
+          job_generation?: number
+          job_id?: string
+          kind?: string
+          metric_date?: string | null
+          operation_id?: string
+          payload_digest?: string | null
+          platform?: string
+          provider_timezone?: string | null
+          receipt?: Json | null
+          received_at?: string | null
+          requested_at?: string
+          requested_metrics?: string[]
+          social_account_id?: string
+          subject_id?: string
+          user_id?: string
+          window_since?: string | null
+          window_until?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "threads_analytics_captures_operation_id_job_id_job_generat_fkey"
+            columns: ["operation_id", "job_id", "job_generation", "user_id", "social_account_id", "platform"]
+            isOneToOne: false
+            referencedRelation: "threads_analytics_collection_operations"
+            referencedColumns: ["id", "job_id", "job_generation", "user_id", "social_account_id", "platform"]
+          },
+          {
+            foreignKeyName: "threads_analytics_captures_social_account_id_user_id_platf_fkey"
+            columns: ["social_account_id", "user_id", "platform"]
+            isOneToOne: false
+            referencedRelation: "social_accounts"
+            referencedColumns: ["id", "user_id", "platform"]
+          },
+        ]
+      }
+      threads_analytics_collection_checkpoints: {
+        Row: {
+          inventory_complete: boolean
+          inventory_cursor: string | null
+          inventory_truncated: boolean
+          job_generation: number
+          job_id: string
+          pages_fetched: number
+          platform: string
+          post_ids: string[]
+          social_account_id: string
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          inventory_complete?: boolean
+          inventory_cursor?: string | null
+          inventory_truncated?: boolean
+          job_generation: number
+          job_id: string
+          pages_fetched?: number
+          platform?: string
+          post_ids?: string[]
+          social_account_id: string
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          inventory_complete?: boolean
+          inventory_cursor?: string | null
+          inventory_truncated?: boolean
+          job_generation?: number
+          job_id?: string
+          pages_fetched?: number
+          platform?: string
+          post_ids?: string[]
+          social_account_id?: string
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "threads_analytics_collection_job_id_user_id_social_accoun_fkey1"
+            columns: ["job_id", "user_id", "social_account_id", "platform"]
+            isOneToOne: false
+            referencedRelation: "threads_analytics_collection_jobs"
+            referencedColumns: ["id", "user_id", "social_account_id", "platform"]
+          },
+        ]
+      }
+      threads_analytics_collection_jobs: {
+        Row: {
+          attempts: number
+          claim_token: string | null
+          completed_at: string | null
+          created_at: string
+          credential_authority: Json | null
+          due_at: string
+          due_on: string
+          id: string
+          job_generation: number
+          last_partial_at: string | null
+          last_success_at: string | null
+          lease_until: string | null
+          next_due_at: string
+          platform: string
+          provider_timezone: string
+          reason_code: string | null
+          retry_at: string | null
+          social_account_id: string
+          state: string
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          attempts?: number
+          claim_token?: string | null
+          completed_at?: string | null
+          created_at?: string
+          credential_authority?: Json | null
+          due_at: string
+          due_on: string
+          id?: string
+          job_generation?: number
+          last_partial_at?: string | null
+          last_success_at?: string | null
+          lease_until?: string | null
+          next_due_at: string
+          platform?: string
+          provider_timezone?: string
+          reason_code?: string | null
+          retry_at?: string | null
+          social_account_id: string
+          state?: string
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          attempts?: number
+          claim_token?: string | null
+          completed_at?: string | null
+          created_at?: string
+          credential_authority?: Json | null
+          due_at?: string
+          due_on?: string
+          id?: string
+          job_generation?: number
+          last_partial_at?: string | null
+          last_success_at?: string | null
+          lease_until?: string | null
+          next_due_at?: string
+          platform?: string
+          provider_timezone?: string
+          reason_code?: string | null
+          retry_at?: string | null
+          social_account_id?: string
+          state?: string
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "threads_analytics_collection__social_account_id_user_id_pl_fkey"
+            columns: ["social_account_id", "user_id", "platform"]
+            isOneToOne: false
+            referencedRelation: "social_accounts"
+            referencedColumns: ["id", "user_id", "platform"]
+          },
+        ]
+      }
+      threads_analytics_collection_operations: {
+        Row: {
+          completed_at: string | null
+          id: string
+          job_generation: number
+          job_id: string
+          kind: string
+          operation_key: string
+          platform: string
+          reason_code: string | null
+          requested_metrics: string[]
+          social_account_id: string
+          state: string
+          user_id: string
+        }
+        Insert: {
+          completed_at?: string | null
+          id?: string
+          job_generation: number
+          job_id: string
+          kind: string
+          operation_key: string
+          platform?: string
+          reason_code?: string | null
+          requested_metrics: string[]
+          social_account_id: string
+          state?: string
+          user_id: string
+        }
+        Update: {
+          completed_at?: string | null
+          id?: string
+          job_generation?: number
+          job_id?: string
+          kind?: string
+          operation_key?: string
+          platform?: string
+          reason_code?: string | null
+          requested_metrics?: string[]
+          social_account_id?: string
+          state?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "threads_analytics_collection__job_id_user_id_social_accoun_fkey"
+            columns: ["job_id", "user_id", "social_account_id", "platform"]
+            isOneToOne: false
+            referencedRelation: "threads_analytics_collection_jobs"
+            referencedColumns: ["id", "user_id", "social_account_id", "platform"]
+          },
+        ]
+      }
+      threads_analytics_connection_fences: {
+        Row: {
+          credential_generation: number
+          platform: string
+          social_account_id: string
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          credential_generation?: number
+          platform?: string
+          social_account_id: string
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          credential_generation?: number
+          platform?: string
+          social_account_id?: string
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "threads_analytics_connection__social_account_id_user_id_pl_fkey"
+            columns: ["social_account_id", "user_id", "platform"]
+            isOneToOne: true
+            referencedRelation: "social_accounts"
+            referencedColumns: ["id", "user_id", "platform"]
+          },
+        ]
+      }
+      threads_analytics_metric_values: {
+        Row: {
+          api_version: string
+          capture_id: string
+          daily_id: string | null
+          id: string
+          metric_key: string
+          observed_at: string
+          platform: string
+          post_snapshot_id: string | null
+          profile_observation_id: string | null
+          provider_metric: string | null
+          provider_timezone: string | null
+          reason: string | null
+          social_account_id: string
+          source_ref: string
+          status: string
+          user_id: string
+          value: number | null
+          window_kind: string
+          window_since: string | null
+          window_until: string | null
+        }
+        Insert: {
+          api_version: string
+          capture_id: string
+          daily_id?: string | null
+          id?: string
+          metric_key: string
+          observed_at: string
+          platform?: string
+          post_snapshot_id?: string | null
+          profile_observation_id?: string | null
+          provider_metric?: string | null
+          provider_timezone?: string | null
+          reason?: string | null
+          social_account_id: string
+          source_ref: string
+          status: string
+          user_id: string
+          value?: number | null
+          window_kind: string
+          window_since?: string | null
+          window_until?: string | null
+        }
+        Update: {
+          api_version?: string
+          capture_id?: string
+          daily_id?: string | null
+          id?: string
+          metric_key?: string
+          observed_at?: string
+          platform?: string
+          post_snapshot_id?: string | null
+          profile_observation_id?: string | null
+          provider_metric?: string | null
+          provider_timezone?: string | null
+          reason?: string | null
+          social_account_id?: string
+          source_ref?: string
+          status?: string
+          user_id?: string
+          value?: number | null
+          window_kind?: string
+          window_since?: string | null
+          window_until?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "threads_analytics_metric_valu_capture_id_user_id_social_ac_fkey"
+            columns: ["capture_id", "user_id", "social_account_id", "platform"]
+            isOneToOne: false
+            referencedRelation: "threads_analytics_captures"
+            referencedColumns: ["id", "user_id", "social_account_id", "platform"]
+          },
+          {
+            foreignKeyName: "threads_analytics_metric_valu_daily_id_user_id_social_acco_fkey"
+            columns: ["daily_id", "user_id", "social_account_id", "platform"]
+            isOneToOne: false
+            referencedRelation: "threads_account_insight_daily"
+            referencedColumns: ["id", "user_id", "social_account_id", "platform"]
+          },
+          {
+            foreignKeyName: "threads_analytics_metric_valu_post_snapshot_id_user_id_soc_fkey"
+            columns: ["post_snapshot_id", "user_id", "social_account_id", "platform"]
+            isOneToOne: false
+            referencedRelation: "threads_post_insight_snapshots"
+            referencedColumns: ["id", "user_id", "social_account_id", "platform"]
+          },
+          {
+            foreignKeyName: "threads_analytics_metric_valu_profile_observation_id_user__fkey"
+            columns: ["profile_observation_id", "user_id", "social_account_id", "platform"]
+            isOneToOne: false
+            referencedRelation: "threads_account_profile_observations"
+            referencedColumns: ["id", "user_id", "social_account_id", "platform"]
+          },
+          {
+            foreignKeyName: "threads_analytics_metric_valu_social_account_id_user_id_pl_fkey"
+            columns: ["social_account_id", "user_id", "platform"]
+            isOneToOne: false
+            referencedRelation: "social_accounts"
+            referencedColumns: ["id", "user_id", "platform"]
+          },
+        ]
+      }
+      threads_analytics_period_totals: {
+        Row: {
+          api_version: string
+          capture_id: string
+          captured_on: string
+          id: string
+          level: string
+          metric_key: string
+          observed_at: string
+          platform: string
+          provider_metric: string | null
+          provider_timezone: string
+          reason: string | null
+          social_account_id: string
+          source_ref: string
+          status: string
+          subject_id: string
+          user_id: string
+          value: number | null
+          window_since: string
+          window_until: string
+        }
+        Insert: {
+          api_version: string
+          capture_id: string
+          captured_on: string
+          id?: string
+          level: string
+          metric_key: string
+          observed_at: string
+          platform?: string
+          provider_metric?: string | null
+          provider_timezone: string
+          reason?: string | null
+          social_account_id: string
+          source_ref: string
+          status: string
+          subject_id: string
+          user_id: string
+          value?: number | null
+          window_since: string
+          window_until: string
+        }
+        Update: {
+          api_version?: string
+          capture_id?: string
+          captured_on?: string
+          id?: string
+          level?: string
+          metric_key?: string
+          observed_at?: string
+          platform?: string
+          provider_metric?: string | null
+          provider_timezone?: string
+          reason?: string | null
+          social_account_id?: string
+          source_ref?: string
+          status?: string
+          subject_id?: string
+          user_id?: string
+          value?: number | null
+          window_since?: string
+          window_until?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "threads_analytics_period_tota_capture_id_user_id_social_ac_fkey"
+            columns: ["capture_id", "user_id", "social_account_id", "platform"]
+            isOneToOne: false
+            referencedRelation: "threads_analytics_captures"
+            referencedColumns: ["id", "user_id", "social_account_id", "platform"]
+          },
+          {
+            foreignKeyName: "threads_analytics_period_tota_social_account_id_user_id_pl_fkey"
+            columns: ["social_account_id", "user_id", "platform"]
+            isOneToOne: false
+            referencedRelation: "social_accounts"
+            referencedColumns: ["id", "user_id", "platform"]
+          },
+        ]
+      }
+      threads_analytics_permission_observations: {
+        Row: {
+          authority: Json
+          granted_scopes: string[]
+          observed_at: string
+          platform: string
+          social_account_id: string
+          source_ref: string
+          state: string
+          user_id: string
+        }
+        Insert: {
+          authority: Json
+          granted_scopes: string[]
+          observed_at: string
+          platform?: string
+          social_account_id: string
+          source_ref: string
+          state: string
+          user_id: string
+        }
+        Update: {
+          authority?: Json
+          granted_scopes?: string[]
+          observed_at?: string
+          platform?: string
+          social_account_id?: string
+          source_ref?: string
+          state?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "threads_analytics_permission__social_account_id_user_id_pl_fkey"
+            columns: ["social_account_id", "user_id", "platform"]
+            isOneToOne: true
+            referencedRelation: "social_accounts"
+            referencedColumns: ["id", "user_id", "platform"]
+          },
+        ]
+      }
+      threads_analytics_report_state: {
+        Row: {
+          created_at: string
+          credential_guarded: boolean
+          next_capture_sequence: number
+          platform: string
+          provider_timezone: string
+          report_revision: number
+          retention_floor: string
+          social_account_id: string
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          credential_guarded?: boolean
+          next_capture_sequence?: number
+          platform?: string
+          provider_timezone?: string
+          report_revision?: number
+          retention_floor?: string
+          social_account_id: string
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          credential_guarded?: boolean
+          next_capture_sequence?: number
+          platform?: string
+          provider_timezone?: string
+          report_revision?: number
+          retention_floor?: string
+          social_account_id?: string
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "threads_analytics_report_stat_social_account_id_user_id_pl_fkey"
+            columns: ["social_account_id", "user_id", "platform"]
+            isOneToOne: true
+            referencedRelation: "social_accounts"
+            referencedColumns: ["id", "user_id", "platform"]
+          },
+        ]
+      }
+      threads_post_insight_snapshots: {
+        Row: {
+          captured_on: string
+          created_at: string
+          id: string
+          metadata_capture_id: string
+          permalink: string | null
+          platform: string
+          platform_post_id: string
+          post_text: string
+          published_at: string
+          social_account_id: string
+          user_id: string
+        }
+        Insert: {
+          captured_on: string
+          created_at?: string
+          id?: string
+          metadata_capture_id: string
+          permalink?: string | null
+          platform?: string
+          platform_post_id: string
+          post_text?: string
+          published_at: string
+          social_account_id: string
+          user_id: string
+        }
+        Update: {
+          captured_on?: string
+          created_at?: string
+          id?: string
+          metadata_capture_id?: string
+          permalink?: string | null
+          platform?: string
+          platform_post_id?: string
+          post_text?: string
+          published_at?: string
+          social_account_id?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "threads_post_insight_snapshot_metadata_capture_id_user_id__fkey"
+            columns: ["metadata_capture_id", "user_id", "social_account_id", "platform"]
+            isOneToOne: false
+            referencedRelation: "threads_analytics_captures"
+            referencedColumns: ["id", "user_id", "social_account_id", "platform"]
+          },
+          {
+            foreignKeyName: "threads_post_insight_snapshot_social_account_id_user_id_pl_fkey"
+            columns: ["social_account_id", "user_id", "platform"]
+            isOneToOne: false
+            referencedRelation: "social_accounts"
+            referencedColumns: ["id", "user_id", "platform"]
+          },
+        ]
+      }
       user_ai_provider_keys: {
         Row: {
           id: string
@@ -9144,6 +10765,365 @@ export type Database = {
       }
     }
     Functions: {
+      meta_analytics_ig_legacy_digest: {
+        Args: {
+          p_owner: string
+          p_account: string
+          p_captured_on: string
+          p_identity: Json
+        }
+        Returns: string
+      }
+      persist_ig_analytics_snapshot: {
+        Args: {
+          p_job_id: string
+          p_claim_token: string
+          p_job_generation: number
+          p_capture_id: string
+          p_legacy_payload: Json
+          p_metric_values: Json
+          p_received_at: string
+        }
+        Returns: Json
+      }
+      reserve_ig_analytics_capture: {
+        Args: {
+          p_job_id: string
+          p_claim_token: string
+          p_job_generation: number
+          p_request: Json
+        }
+        Returns: Json
+      }
+      checkpoint_fb_analytics_inventory: {
+        Args: {
+          p_job_id: string
+          p_claim_token: string
+          p_job_generation: number
+          p_cursor: string
+          p_post_ids: string[]
+          p_pages_fetched: number
+          p_complete: boolean
+          p_truncated: boolean
+        }
+        Returns: Json
+      }
+      checkpoint_threads_analytics_inventory: {
+        Args: {
+          p_job_id: string
+          p_claim_token: string
+          p_job_generation: number
+          p_cursor: string
+          p_post_ids: string[]
+          p_pages_fetched: number
+          p_complete: boolean
+          p_truncated: boolean
+        }
+        Returns: Json
+      }
+      claim_fb_analytics_collection_jobs: {
+        Args: {
+          p_limit?: number
+        }
+        Returns: Json
+      }
+      claim_threads_analytics_collection_jobs: {
+        Args: {
+          p_limit?: number
+        }
+        Returns: Json
+      }
+      cleanup_fb_analytics_history: {
+        Args: {
+          p_user_id: string
+          p_account_id: string
+          p_floor: string
+          p_limit?: number
+          p_dry_run?: boolean
+        }
+        Returns: Json
+      }
+      cleanup_threads_analytics_history: {
+        Args: {
+          p_user_id: string
+          p_account_id: string
+          p_floor: string
+          p_limit?: number
+          p_dry_run?: boolean
+        }
+        Returns: Json
+      }
+      complete_fb_analytics_collection_job: {
+        Args: {
+          p_job_id: string
+          p_claim_token: string
+          p_job_generation: number
+          p_outcome: string
+          p_reason?: string
+          p_retry_at?: string
+        }
+        Returns: Json
+      }
+      complete_threads_analytics_collection_job: {
+        Args: {
+          p_job_id: string
+          p_claim_token: string
+          p_job_generation: number
+          p_outcome: string
+          p_reason?: string
+          p_retry_at?: string
+        }
+        Returns: Json
+      }
+      enqueue_fb_analytics_collection_job: {
+        Args: {
+          p_user_id: string
+          p_account_id: string
+          p_due_on: string
+          p_force?: boolean
+        }
+        Returns: Json
+      }
+      enqueue_threads_analytics_collection_job: {
+        Args: {
+          p_user_id: string
+          p_account_id: string
+          p_due_on: string
+          p_force?: boolean
+        }
+        Returns: Json
+      }
+      fb_analytics_fenced_job: {
+        Args: {
+          p_job_id: string
+          p_claim_token: string
+          p_job_generation: number
+        }
+        Returns: Database["public"]["Tables"]["fb_analytics_collection_jobs"]["Row"]
+      }
+      fb_analytics_require_permission: {
+        Args: {
+          p_user_id: string
+          p_account_id: string
+          p_authority: Json
+        }
+        Returns: undefined
+      }
+      meta_analytics_assert_service: {
+        Args: Record<PropertyKey, never>
+        Returns: undefined
+      }
+      meta_analytics_collection_allowed: {
+        Args: {
+          p_platform: string
+          p_account: string
+        }
+        Returns: boolean
+      }
+      meta_analytics_current_authority: {
+        Args: {
+          p_platform: string
+          p_account: string
+          p_owner: string
+        }
+        Returns: Json
+      }
+      meta_analytics_fb_guarded: {
+        Args: {
+          p_account: string
+          p_owner: string
+        }
+        Returns: boolean
+      }
+      meta_analytics_lock_account: {
+        Args: {
+          p_account: string
+          p_owner: string
+          p_platform: string
+          p_nowait?: boolean
+        }
+        Returns: undefined
+      }
+      meta_analytics_metric_key_valid: {
+        Args: {
+          p_key: string
+        }
+        Returns: boolean
+      }
+      meta_analytics_metric_valid: {
+        Args: {
+          p_platform: string
+          p_level: string
+          p_key: string
+          p_status: string
+          p_value: number
+          p_reason: string
+          p_provider_metric: string
+          p_api_version: string
+          p_window_kind: string
+          p_timezone: string
+          p_since: string
+          p_until: string
+          p_source: string
+        }
+        Returns: boolean
+      }
+      meta_analytics_provider_metric: {
+        Args: {
+          p_platform: string
+          p_level: string
+          p_key: string
+          p_window_kind: string
+        }
+        Returns: string
+      }
+      meta_analytics_reason_valid: {
+        Args: {
+          p_reason: string
+        }
+        Returns: boolean
+      }
+      meta_analytics_retention_allowed: {
+        Args: {
+          p_platform: string
+          p_account: string
+          p_dry_run: boolean
+        }
+        Returns: boolean
+      }
+      meta_analytics_validate_metric_map: {
+        Args: {
+          p_metrics: Json
+          p_expected: string[]
+        }
+        Returns: undefined
+      }
+      observe_fb_analytics_permissions: {
+        Args: {
+          p_user_id: string
+          p_account_id: string
+          p_expected_authority: Json
+          p_granted_scopes: string[]
+          p_verified_provider_id: string
+          p_observed_at: string
+          p_state: string
+        }
+        Returns: Json
+      }
+      observe_threads_analytics_permissions: {
+        Args: {
+          p_user_id: string
+          p_account_id: string
+          p_expected_authority: Json
+          p_granted_scopes: string[]
+          p_verified_provider_id: string
+          p_observed_at: string
+          p_state: string
+        }
+        Returns: Json
+      }
+      persist_fb_analytics_capture: {
+        Args: {
+          p_job_id: string
+          p_claim_token: string
+          p_job_generation: number
+          p_capture_id: string
+          p_payload: Json
+        }
+        Returns: Json
+      }
+      persist_threads_analytics_capture: {
+        Args: {
+          p_job_id: string
+          p_claim_token: string
+          p_job_generation: number
+          p_capture_id: string
+          p_payload: Json
+        }
+        Returns: Json
+      }
+      prepare_fb_analytics_account: {
+        Args: {
+          p_user_id: string
+          p_account_id: string
+        }
+        Returns: Json
+      }
+      prepare_threads_analytics_account: {
+        Args: {
+          p_user_id: string
+          p_account_id: string
+        }
+        Returns: Json
+      }
+      read_fb_analytics_collection_credential: {
+        Args: {
+          p_job_id: string
+          p_claim_token: string
+          p_job_generation: number
+        }
+        Returns: Json
+      }
+      read_fb_analytics_history: {
+        Args: {
+          p_user_id: string
+          p_account_id: string
+          p_request: Json
+        }
+        Returns: Json
+      }
+      read_threads_analytics_collection_credential: {
+        Args: {
+          p_job_id: string
+          p_claim_token: string
+          p_job_generation: number
+        }
+        Returns: Json
+      }
+      read_threads_analytics_history: {
+        Args: {
+          p_user_id: string
+          p_account_id: string
+          p_request: Json
+        }
+        Returns: Json
+      }
+      reserve_fb_analytics_capture: {
+        Args: {
+          p_job_id: string
+          p_claim_token: string
+          p_job_generation: number
+          p_operation_key: string
+          p_request: Json
+        }
+        Returns: Json
+      }
+      reserve_threads_analytics_capture: {
+        Args: {
+          p_job_id: string
+          p_claim_token: string
+          p_job_generation: number
+          p_operation_key: string
+          p_request: Json
+        }
+        Returns: Json
+      }
+      threads_analytics_fenced_job: {
+        Args: {
+          p_job_id: string
+          p_claim_token: string
+          p_job_generation: number
+        }
+        Returns: Database["public"]["Tables"]["threads_analytics_collection_jobs"]["Row"]
+      }
+      threads_analytics_require_permission: {
+        Args: {
+          p_user_id: string
+          p_account_id: string
+          p_authority: Json
+        }
+        Returns: undefined
+      }
       ai_agent_dashboard: {
         Args: { p_days: number; p_platform?: string | null }
         Returns: Json
