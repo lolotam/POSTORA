@@ -121,10 +121,23 @@ Deno.test("registered MCP and create API preserve Story sharing and collaborator
         if (raw === "invalid") assertEquals(inserted.length, before);
         else {
           assertEquals(inserted.at(-1)!.metadata.instagram_share_to_story, raw === "true" || raw === "1");
-          if (format !== "fallback") assertEquals(inserted.at(-1)!.metadata.instagram_collaborator, "doctor_one");
+          assertEquals(inserted.at(-1)!.metadata.instagram_collaborator, "doctor_one");
         }
       });
     }
+    await test.step("a multipart file cannot silently omit the requested Story option", async () => {
+      const body = new FormData();
+      for (const [key, value] of Object.entries(common)) {
+        body.append(key, Array.isArray(value) ? JSON.stringify(value) : value);
+      }
+      body.append("instagram_share_to_story", new File(["true"], "mirror.txt", { type: "text/plain" }));
+      const before = inserted.length;
+      const response = await fetch(`${ORIGIN}/functions/v1/n8n-api/api/v1/post`, {
+        method: "POST", headers: { "x-api-key": API_KEY }, body,
+      });
+      assertEquals(response.status, 400);
+      assertEquals(inserted.length, before);
+    });
     await test.step("invalid MCP boolean cannot create a post", async () => {
       const before = inserted.length;
       const response = await invoke("tools/call", { name: "create_post", arguments: { ...common, instagram_share_to_story: "true" } });

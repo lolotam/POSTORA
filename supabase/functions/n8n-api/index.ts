@@ -2475,7 +2475,9 @@ export async function handleRequest(req: Request): Promise<Response> {
         const body: Record<string, any> = {};
 
         for (const [key, value] of formData.entries()) {
-          if (typeof value === 'string') {
+          if (key === 'instagram_share_to_story') {
+            body[key] = typeof value === 'string' ? parseFormBoolean(value) : value;
+          } else if (typeof value === 'string') {
             // Handle array fields
             if (key === 'platforms' || key === 'media_file_ids' || key === 'account_ids' ||
               key === 'youtube_tags' || key === 'instagram_collaborators' ||
@@ -2485,8 +2487,6 @@ export async function handleRequest(req: Request): Promise<Response> {
               } catch {
                 body[key] = value.split(',').map(s => s.trim()).filter(Boolean);
               }
-            } else if (key === 'instagram_share_to_story') {
-              body[key] = parseFormBoolean(value);
             } else if (key === 'youtube_made_for_kids' || key === 'youtube_allow_embedding' ||
               key === 'youtube_public_stats_viewable' || key === 'youtube_contains_synthetic_media' ||
               key === 'youtube_has_paid_product_placement' || key === 'youtube_notify_subscribers' ||
@@ -2516,7 +2516,7 @@ export async function handleRequest(req: Request): Promise<Response> {
         const body: Record<string, any> = {};
 
         for (const [key, value] of params.entries()) {
-          if (key === 'platforms' || key === 'media_file_ids' || key === 'account_ids') {
+          if (key === 'platforms' || key === 'media_file_ids' || key === 'account_ids' || key === 'instagram_collaborators') {
             try {
               body[key] = JSON.parse(value);
             } catch {
