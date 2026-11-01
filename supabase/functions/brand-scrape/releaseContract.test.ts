@@ -192,6 +192,9 @@ Deno.test("registered discovery handler retains source and null cells through ca
   } finally {
     globalThis.fetch = originalFetch;
     Deno.serve = originalServe;
-    for (const [name, value] of environment) value === undefined ? Deno.env.delete(name) : Deno.env.set(name, value);
+    for (const [name, value] of environment) {
+      if (value === undefined) Deno.env.delete(name);
+      else Deno.env.set(name, value);
+    }
   }
 });
