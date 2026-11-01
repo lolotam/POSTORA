@@ -454,6 +454,10 @@
     "yourActivity": "نشاطك"
   },
   "instagram": {
+    "metricUnavailable": "غير متاح",
+    "metricPartialCoverage": "جزئي: {{availableDays}} من {{expectedDays}} يوم",
+    "periodReachUnavailable": "الوصول الفريد يتطلب إجماليًا مطابقًا للفترة من Meta.",
+    "viewsCount": "المشاهدات كما أبلغت عنها المنصة",
     "account": "الحساب",
     "actions": "الرابط",
     "content": "المحتوى",

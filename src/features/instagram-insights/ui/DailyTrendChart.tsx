@@ -11,25 +11,26 @@ import {
   Legend,
 } from "recharts";
 import { TrendingUp } from "lucide-react";
-import type { OwnerReportDailyRow } from "../domain/types";
+import type { OwnerReport, OwnerReportDailyRow } from "../domain/types";
+import { dailyMetricSeries } from "../domain/dailyMetrics";
 
 export type DailyTrendChartProps = {
   daily: OwnerReportDailyRow[] | undefined;
+  period: OwnerReport["period"];
 };
 
-export function DailyTrendChart({ daily = [] }: DailyTrendChartProps) {
+export function DailyTrendChart({ daily = [], period }: DailyTrendChartProps) {
   const { t } = useTranslation("analytics");
 
-  const chartData = daily
-    .filter((d) => d.status === "ok")
-    .map((d) => ({
-      date: d.metricDate.slice(5), // "MM-DD"
-      reach: d.reach ?? 0,
-      views: d.views ?? 0,
-      interactions: d.totalInteractions ?? 0,
+  const chartData = dailyMetricSeries({ account: { daily }, period })
+    .map((day) => ({
+      date: day.date.slice(5), // "MM-DD"
+      reach: day.reach,
+      views: day.views,
+      interactions: day.totalInteractions,
     }));
 
-  if (chartData.length === 0) {
+  if (!chartData.some((day) => day.reach !== null || day.views !== null || day.interactions !== null)) {
     return (
       <Card className="border border-border/70 bg-card">
         <CardHeader className="pb-2">

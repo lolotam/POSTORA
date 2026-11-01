@@ -135,7 +135,7 @@ export function InstagramInsightsWorkspace({
       {!isLoading && report && (
         <>
           <MetricsOverviewCards report={report} />
-          <DailyTrendChart daily={report.account.daily} />
+          <DailyTrendChart daily={report.account.daily} period={report.period} />
           <MediaPerformanceTable
             media={mediaItems ? { items: mediaItems, hasMore: Boolean(onLoadMore) } : report.media.page}
             onLoadMore={onLoadMore}
