@@ -57,10 +57,9 @@ function boundaryMeasurement(definition: MetricDefinition, stored: StoredAnalyti
     return { metric: cellMetric(cell, definition), observedAt: cell?.observed_at ?? null, series: [] };
   }
   const cell = exactCell(stored.profile_boundaries.filter((sample) => Date.parse(sample.boundary) === Date.parse(window.period.until)), definition.key);
-  const observed = cell ? Date.parse(cell.observed_at) : NaN;
-  const finalDay = window.buckets[window.buckets.length - 1];
-  const metric = !cell || observed < Date.parse(finalDay.since) ? unavailableMetric("not_collected")
-    : observed > Date.parse(window.period.until) ? unavailableMetric("window_mismatch") : cellMetric(cell, definition);
+  // Sample freshness is 24 elapsed hours (design §8.1), independent of provider-day length.
+  const age = cell ? Date.parse(window.period.until) - Date.parse(cell.observed_at) : NaN;
+  const metric = !cell || age > 86_400_000 ? unavailableMetric("not_collected") : age < 0 ? unavailableMetric("window_mismatch") : cellMetric(cell, definition);
   return { metric, observedAt: cell?.observed_at ?? null, series: [] };
 }
 

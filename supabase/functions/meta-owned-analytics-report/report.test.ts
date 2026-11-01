@@ -77,14 +77,15 @@ Deno.test("terminal inventory bounds remain partial while actual connection fail
   }
 });
 
-Deno.test("previous Threads follower observations follow the final provider day across DST", async (test) => {
+Deno.test("previous Threads follower observations preserve the 24-hour age contract across DST", async (test) => {
   for (const now of ["2026-03-16T12:00:00.000Z", "2026-11-09T12:00:00.000Z"]) {
     const calendar = closedAnalyticsPeriods({ now, days: 7, timezone: "America/Los_Angeles" });
     const lastDay = calendar.previous.buckets.at(-1)!;
     const definition = analyticsDefinitions("threads", "account").find((metric) => metric.key === "followers")!;
-    for (const scenario of ["start", "too_old", "after_boundary"] as const) {
+    for (const scenario of ["age_limit", "too_old", "after_boundary"] as const) {
       await test.step(`${lastDay.date}: ${scenario}`, () => {
-        const observedAt = scenario === "start" ? lastDay.since : new Date(Date.parse(scenario === "too_old" ? lastDay.since : lastDay.until) + (scenario === "too_old" ? -1 : 1)).toISOString();
+        const boundary = Date.parse(calendar.previous.period.until);
+        const observedAt = new Date(scenario === "after_boundary" ? boundary + 1 : boundary - 86_400_000 - (scenario === "too_old" ? 1 : 0)).toISOString();
         const stored = fixture();
         Object.assign(stored, { platform: "threads", daily: [], since: calendar.current.period.since, until: calendar.current.period.until,
           previous_since: calendar.previous.period.since, as_of: calendar.current.period.until });
@@ -93,7 +94,7 @@ Deno.test("previous Threads follower observations follow the final provider day 
           window_since: null, window_until: null, source_ref: "threads_graph_v1", observed_at: observedAt, collected_at: now }];
         const report = assembleStoredAnalytics({ stored, windows: calendar, generatedAt: now, nextCursor: null, hasMore: false });
         const followers = report.metrics.find((metric) => metric.definition.key === "followers")!;
-        assertEquals(followers.previous, scenario === "start" ? { status: "available", value: 10 }
+        assertEquals(followers.previous, scenario === "age_limit" ? { status: "available", value: 10 }
           : { status: "unavailable", reason: scenario === "too_old" ? "not_collected" : "window_mismatch" });
         assertEquals(followers.previousObservedAt, observedAt);
       });
