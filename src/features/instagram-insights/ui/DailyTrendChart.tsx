@@ -86,7 +86,7 @@ export function DailyTrendChart({ daily = [], period }: DailyTrendChartProps) {
                 name={t("instagram.reach", "Reach")}
                 stroke="#f59e0b"
                 strokeWidth={2}
-                dot={false}
+                dot={{ r: 2 }}
                 activeDot={{ r: 4 }}
               />
               <Line
@@ -95,7 +95,7 @@ export function DailyTrendChart({ daily = [], period }: DailyTrendChartProps) {
                 name={t("instagram.views", "Views")}
                 stroke="#8b5cf6"
                 strokeWidth={2}
-                dot={false}
+                dot={{ r: 2 }}
                 activeDot={{ r: 4 }}
               />
               <Line
@@ -104,7 +104,7 @@ export function DailyTrendChart({ daily = [], period }: DailyTrendChartProps) {
                 name={t("instagram.interactions", "Interactions")}
                 stroke="#10b981"
                 strokeWidth={2}
-                dot={false}
+                dot={{ r: 2 }}
                 activeDot={{ r: 4 }}
               />
             </LineChart>

@@ -1245,7 +1245,7 @@ export function createClient(url, key, options) {
       return { data: row ? row : null, error: null };
     }
     const list = probe.tables[table];
-    return { data: list ? list : [], error: null };
+    return { data: list ? list : [], count: list ? list.length : 0, error: null };
   };
 
   const from = (table) => {
@@ -1253,6 +1253,9 @@ export function createClient(url, key, options) {
     const builder = {
       select() { return builder; },
       eq(column, value) { filters[column] = value; return builder; },
+      gt() { return builder; },
+      lte() { return builder; },
+      abortSignal() { return builder; },
       in() { return builder; },
       order() { return builder; },
       limit() { return builder; },
@@ -1281,19 +1284,24 @@ export function createClient(url, key, options) {
       },
     },
     rpc(name, args) {
+      const rpcResult = (answer) => {
+        const pending = Promise.resolve(answer);
+        pending.abortSignal = () => pending;
+        return pending;
+      };
       probe.rpcCalls.push({ name, args, key, authorization });
       if (name === "enqueue_instagram_collection_job" && authorization !== ${JSON.stringify(`Bearer ${BEARER}`)}) {
-        return Promise.resolve({ data: null, error: { code: "42501" } });
+        return rpcResult({ data: null, error: { code: "42501" } });
       }
       // The rollout schema is NOT deployed: the new functions answer the
       // way PostgREST answers a function that does not exist.
       if (probe.newSqlUnavailable && (name === "authorize_instagram_collection_provider_call" || name === "claim_instagram_collection_jobs")) {
-        return Promise.resolve({ data: null, error: { code: "PGRST202" } });
+        return rpcResult({ data: null, error: { code: "PGRST202" } });
       }
       const answer = probe.rpc[name];
-      if (answer === undefined) return Promise.resolve({ data: null, error: null });
-      if (typeof answer === "function") return Promise.resolve(answer(args));
-      return Promise.resolve(answer);
+      if (answer === undefined) return rpcResult({ data: null, error: null });
+      if (typeof answer === "function") return rpcResult(answer(args));
+      return rpcResult(answer);
     },
     from,
   };
