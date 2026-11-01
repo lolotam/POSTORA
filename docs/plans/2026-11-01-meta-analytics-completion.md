@@ -67,6 +67,8 @@ Compare 7 closed days using the exact period/bucket semantics in spec §4.4 and 
 ## Batch B — Facebook/Threads verification and the metric contract
 
 ### B1. Contract package *(parallel with Batch A)*
+
+**Current implementation candidate:** canonical calendar, contract, registry and serialized validator are runtime-neutral modules in `supabase/functions/_shared/`, consumed by the explicit Threads report and re-exported by the browser facade. Behavioral/parity coverage includes closed DST calendars, zero/unavailable/partial values, metric definitions, comparisons, observation times and persisted freshness. This supersedes the partial B1 foundation proposed in #331; reconcile that overlapping PR before merging it. The candidate remains local until its own review/checks/deployment are recorded.
 - Files: `src/features/analytics-contract/domain/{types,registry,period,delta}.ts`, `supabase/functions/_shared/analyticsContract.ts`.
 - Implements spec §4: metric statuses, explicit registry capability/evidence fields, `capability_unverified` versus `not_collected`, per-metric coverage, `not_summable`, exact calendar/bucket boundaries, deltas, sync status and distinct `analyticsContractVersion: 1`.
 - Tests: unavailable never becomes `0`; rows present with missing metrics remain incomplete; true zeros; capability-state mapping; no unique-reach sums; timezone/boundary/DST cases; deltas; frontend/Deno parity of keys, statuses and version discriminator.

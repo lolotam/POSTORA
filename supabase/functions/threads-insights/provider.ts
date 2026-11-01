@@ -3,6 +3,7 @@ import { classifyMetaError, type ClassifiedReason } from "../_shared/threads-deb
 
 const metricRow = z.object({
   name: z.string().min(1).max(100),
+  period: z.enum(["day", "week", "days_28", "lifetime"]).optional(),
   total_value: z.object({ value: z.number().finite().nullish() }).optional(),
   values: z.array(z.object({ value: z.number().finite().nullish(), end_time: z.string().optional() })).optional(),
 });
@@ -12,7 +13,13 @@ const postRow = z.object({
   shortcode: z.string().nullish(), thumbnail_url: z.string().nullish(),
 });
 const metricPayload = z.object({ data: z.array(metricRow) });
-const postsPayload = z.object({ data: z.array(postRow).max(25) });
+const postsPayload = z.object({
+  data: z.array(postRow).max(25),
+  paging: z.object({
+    next: z.string().min(1).max(16384).optional(),
+    cursors: z.object({ after: z.string().min(1).max(4096).optional() }).optional(),
+  }).optional(),
+});
 const identityPayload = z.object({ id: z.string().min(1).max(200).regex(/^[A-Za-z0-9_-]+$/), username: z.string().optional() });
 
 export type ThreadsMetricRow = z.infer<typeof metricRow>;
@@ -174,10 +181,13 @@ export class ThreadsInsightsProvider {
     return this.request([input.userId, "threads_insights"], query, metricPayload);
   }
 
-  recentPosts(userId: string) {
-    return this.request([userId, "threads"], {
-      fields: "id,text,timestamp,media_type,media_url,permalink,shortcode,thumbnail_url", limit: 25,
+  async recentPosts(userId: string, page?: { after: string | null; limit: number }) {
+    const reply = await this.request([userId, "threads"], {
+      fields: "id,text,timestamp,media_type,media_url,permalink,shortcode,thumbnail_url", limit: page?.limit ?? 25,
+      ...(page?.after ? { after: page.after } : {}),
     }, postsPayload);
+    const after = reply.data?.paging?.cursors?.after;
+    return after?.includes(this.options.token) ? failure(reply.status, "invalid_response") : reply;
   }
 
   postInsights(postId: string) {

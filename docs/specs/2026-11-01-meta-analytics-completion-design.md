@@ -121,6 +121,8 @@ The [live evidence record](../journeys/2026-11-01-meta-live-capabilities.md) now
 
 The unified contract uses the distinct discriminator `analyticsContractVersion: 1` in both request and response. It does not reuse the existing Instagram owner's `schemaVersion: 1`. Omitting the new field preserves each endpoint's legacy response; explicitly requesting `analyticsContractVersion: 1` selects the unified shape, including for Instagram and the proxy. Unsupported contract versions are rejected explicitly. Existing consumers (Threads panel, service proxy / MCP) keep their legacy requests until migrated. Compatibility tests cover default legacy requests, explicit unified requests and unsupported versions across the real composition boundaries.
 
+Implementation note for §4.6: B3 first adds explicit Threads version negotiation through its endpoint and the existing n8n/MCP proxy. Until C4 adopts the other endpoints, explicit version requests for those platforms are refused; they never silently return a legacy DTO. The default request stays unchanged. The canonical runtime-neutral modules live under `supabase/functions/_shared/analytics{Calendar,Contract,Registry,Schema}.ts`, with the browser public API at `src/features/analytics-contract/index.ts` importing the same artifacts. Metric meaning/capability metadata is pinned to the negotiated version; evidence references and verification timestamps may refresh during a rolling deployment without making an otherwise compatible response invalid. A future semantic registry change needs an explicit compatibility/version review.
+
 ## 5. Workstream 1 — Instagram defects and pilot
 
 1. **#326** (Sync rejection message) is reviewed, valid review findings are resolved, and the exact passing revision is merged.

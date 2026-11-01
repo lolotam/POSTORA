@@ -218,6 +218,10 @@ jobs:
           deno test --node-modules-dir=none --allow-env
           supabase/functions/threads-insights/provider.test.ts
           supabase/functions/threads-insights/composition.test.ts
+          supabase/functions/_shared/analyticsCalendar.test.ts
+          supabase/functions/_shared/analyticsContract.test.ts
+          supabase/functions/threads-insights/analyticsCursor.test.ts
+          supabase/functions/threads-insights/unifiedComposition.test.ts
 
       - name: Typecheck and test the outlier module
         run: |
