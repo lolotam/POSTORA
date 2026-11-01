@@ -454,6 +454,7 @@
     "yourActivity": "نشاطك"
   },
   "instagram": {
+    "accountsLoadFailed": "تعذّر تحميل الحسابات المرتبطة. جرّب مرة أخرى.",
     "metricUnavailable": "غير متاح",
     "metricPartialCoverage": "جزئي: {{availableDays}} من {{expectedDays}} يوم",
     "periodReachUnavailable": "الوصول الفريد يتطلب إجماليًا مطابقًا للفترة من Meta.",

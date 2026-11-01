@@ -29,7 +29,7 @@ export function InstagramPerformanceScreen({
     ["enqueue_indeterminate", t("instagram.syncUnconfirmed", "We could not confirm whether syncing started. Wait and check the report before trying again.")],
   ]);
   const errorMessage = (error: Error, fallback: string) => errorMessages.get(error.message) ?? fallback;
-  const { data: accounts = [], isLoading: isAccountsLoading } = useSocialAccounts();
+  const { data: accounts = [], isLoading: isAccountsLoading, error: accountsError, refetch: refetchAccounts } = useSocialAccounts();
 
   const igAccounts = useMemo(
     () => accounts.filter((a) => a.platform === "instagram" && a.is_active !== false),
@@ -40,7 +40,7 @@ export function InstagramPerformanceScreen({
   const [periodDays, setPeriodDays] = useState<OwnerReportPeriodDays>(30);
 
   // Auto-select first active Instagram account if none selected
-  const activeAccountId = selectedAccountId || igAccounts[0]?.id || null;
+  const activeAccountId = igAccounts.find((account) => account.id === selectedAccountId)?.id ?? igAccounts[0]?.id ?? null;
 
   const {
     data: reportPages,
@@ -79,6 +79,8 @@ export function InstagramPerformanceScreen({
   return (
     <InstagramInsightsWorkspace
       accounts={accounts}
+      accountsError={accountsError ? t("instagram.accountsLoadFailed", "Failed to load connected accounts. Please try again.") : null}
+      onRetryAccounts={() => { void refetchAccounts({ cancelRefetch: false }); }}
       selectedAccountId={activeAccountId}
       onSelectAccount={setSelectedAccountId}
       periodDays={periodDays}
