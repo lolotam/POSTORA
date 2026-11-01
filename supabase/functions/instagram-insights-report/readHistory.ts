@@ -20,6 +20,21 @@ export interface HistoryClient {
 
 export class ReportHistoryUnavailableError extends Error {}
 
+/** SDKs can reject a deadline or resolve it as an error; neither is an empty read. */
+export async function readReportQuery<T>(query: PromiseLike<T>, signal: AbortSignal): Promise<T> {
+  try {
+    signal.throwIfAborted();
+    const queryResult = await query;
+    signal.throwIfAborted();
+    return queryResult;
+  } catch (error) {
+    if (signal.aborted || error instanceof DOMException && ["AbortError", "TimeoutError"].includes(error.name)) {
+      throw new ReportHistoryUnavailableError("Report storage exceeded its read deadline");
+    }
+    throw error;
+  }
+}
+
 const PAGE_SIZE = 500;
 const MAX_HISTORY_ROWS = 20_000;
 
@@ -34,14 +49,13 @@ export async function readReportHistory(
   const history: Record<string, unknown>[] = [];
   let afterId: string | null = null;
   for (let page = 0; page < 40; page++) {
-    signal.throwIfAborted();
     let query = client.from(source.table).select(source.columns, { count: "exact" })
       .eq("user_id", scope.userId).eq("social_account_id", scope.socialAccountId)
       .lte(source.timestamp, source.asOf).order("id", { ascending: true })
       .limit(PAGE_SIZE).abortSignal(signal);
     if (afterId !== null) query = query.gt("id", afterId);
-    const { data, error, count } = await query;
-    if (error) throw new Error(`Failed to read report history: ${error.message}`);
+    const { data, error, count } = await readReportQuery(query, signal);
+    if (error) throw new ReportHistoryUnavailableError(`Failed to read report history: ${error.message}`);
     if (!data || count === null || !Number.isSafeInteger(count) || count < data.length || count > MAX_HISTORY_ROWS - history.length) {
       throw new ReportHistoryUnavailableError("Report history exceeds the bounded reader or lacks a verified count");
     }

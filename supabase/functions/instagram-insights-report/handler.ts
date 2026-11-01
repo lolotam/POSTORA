@@ -83,7 +83,7 @@ export function createInstagramInsightsReportHandler(deps: ReportHandlerDeps) {
     let rawPeriod: unknown;
     let rawLimit: unknown;
     let rawCursor: unknown;
-    let targetUserId = auth.userId;
+    let targetUserId = auth.userId.toLowerCase();
 
     if (req.method === "GET") {
       const url = new URL(req.url);
@@ -115,7 +115,7 @@ export function createInstagramInsightsReportHandler(deps: ReportHandlerDeps) {
       // When called via service role (e.g. from serviceProxy / n8n-api), require acting for specified user_id
       if (auth.isServiceRole) {
         if (typeof body.user_id === "string" && UUID_RE.test(body.user_id)) {
-          targetUserId = body.user_id;
+          targetUserId = body.user_id.toLowerCase();
         } else {
           return jsonResponse(
             { error: { code: "INVALID_REQUEST", message: "Service-role call requires valid user_id in request body" } },
