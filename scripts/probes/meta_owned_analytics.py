@@ -250,20 +250,32 @@ def listing_probe(transport, subject, platform):
             pages.append({"httpStatus": status, **error_observation(status, payload), "usage": usage})
             break
         ids = [row.get("id") for row in rows if isinstance(row, dict) and isinstance(row.get("id"), str)]
+        if len(ids) != len(rows) or any(not re.fullmatch(r"[A-Za-z0-9_]{1,200}", subject_id) for subject_id in ids):
+            pages.append({"httpStatus": status, "observation": "provider_error", "probeFailure": "invalid_listing"})
+            break
         if first_post is None and ids:
             first_post = ids[0]
         paging = payload.get("paging")
+        if "paging" in payload and not isinstance(paging, dict):
+            pages.append({"httpStatus": status, "observation": "provider_error", "probeFailure": "invalid_paging"})
+            break
         cursors = paging.get("cursors") if isinstance(paging, dict) else None
-        next_after = cursors.get("after") if isinstance(cursors, dict) and paging.get("next") else None
+        has_next = isinstance(paging, dict) and "next" in paging
+        next_after = cursors.get("after") if isinstance(cursors, dict) and has_next else None
+        valid_next = has_next and isinstance(paging["next"], str) and bool(paging["next"].strip())
+        valid_cursor = valid_next and isinstance(next_after, str) and 0 < len(next_after) <= 4096
         repeated = bool(after and next_after == after)
         duplicates = len(ids) - len(set(ids) - seen_ids)
         seen_ids.update(ids)
         pages.append({"httpStatus": status, "postCount": len(ids), "duplicatePostCount": duplicates,
-                      "hasContinuation": bool(next_after), "repeatedCursor": repeated, "usage": usage})
-        if not isinstance(next_after, str) or not next_after or repeated:
+                      "hasContinuation": has_next, "invalidContinuation": has_next and not valid_cursor,
+                      "repeatedCursor": repeated, "usage": usage})
+        if not valid_cursor or repeated:
             break
         after = next_after
-    return {"pages": pages, "complete": bool(pages) and pages[-1].get("httpStatus") == 200 and not pages[-1].get("hasContinuation", True)}, first_post
+    return {"pages": pages, "complete": bool(pages) and pages[-1].get("httpStatus") == 200
+            and not pages[-1].get("hasContinuation", True)
+            and all(page.get("duplicatePostCount", 1) == 0 for page in pages)}, first_post
 
 
 def collect_observations(transport, subject, platform):

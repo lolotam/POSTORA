@@ -151,6 +151,17 @@ class CapabilityProbeTests(unittest.TestCase):
             transport.get("owner")
         self.assertEqual(len(opener.requests), 1)
 
+    def test_malformed_listing_or_declared_continuation_never_establishes_an_end(self):
+        for payload in ({"data": [None]}, {"data": [{"id": "invalid/path"}]}, {"data": [], "paging": None},
+                        {"data": [], "paging": {"next": ""}}, {"data": [], "paging": {"next": None}},
+                        {"data": [], "paging": {"next": "https://attacker.invalid/"}}):
+            with self.subTest(payload=payload):
+                transport = probe.ProbeTransport("graph.threads.net", "v1.0", "fixture-token", RecordingOpener([JsonResponse(payload)]))
+                listing, _ = probe.listing_probe(transport, "owner", "threads")
+                self.assertFalse(listing["complete"])
+        transport = probe.ProbeTransport("graph.threads.net", "v1.0", "fixture-token", RecordingOpener([JsonResponse({"data": []})]))
+        self.assertTrue(probe.listing_probe(transport, "owner", "threads")[0]["complete"])
+
     def test_redirect_refuses_to_forward_authorization(self):
         request = probe.urllib.request.Request("https://graph.facebook.com/v22.0/me", headers={"Authorization": "Bearer synthetic-token"})
         self.assertIsNone(probe.NoRedirect().redirect_request(request, None, 302, "Found", {}, "https://attacker.invalid/"))

@@ -14,6 +14,12 @@ ACCOUNT_METRICS = ("reach", "views", "accounts_engaged", "total_interactions")
 MEDIA_METRICS = ("views", "reach", "shares", "total_interactions")
 
 
+class DirectProbeRefusal(RuntimeError):
+    def __init__(self, reason):
+        super().__init__(reason)
+        self.reason = reason
+
+
 def read_direct_account(owner_id, account_id):
     owner_id, account_id = str(uuid.UUID(owner_id)), str(uuid.UUID(account_id))
     # OAuth's direct writer owns these canonical columns. Messaging aliases are not insight IDs.
@@ -21,16 +27,26 @@ def read_direct_account(owner_id, account_id):
         'access_token', access_token) FROM public.social_accounts
         WHERE user_id='{owner_id}' AND id='{account_id}' AND platform='instagram'
         AND is_active AND ig_auth_type='business_login'; COMMIT;"""
-    completed = subprocess.run(["docker", "exec", shared.DB_CONTAINER, "psql", "-U", "postgres", "-d", shared.DB_DATABASE,
-                                "-X", "-qAt", "-v", "ON_ERROR_STOP=1", "-c", query],
-                               capture_output=True, text=True, timeout=10, check=False)
-    if completed.returncode or not completed.stdout.strip():
-        raise RuntimeError("Owned active Instagram Login account unavailable")
-    account = json.loads(completed.stdout)
-    if not isinstance(account, dict) or not isinstance(account.get("access_token"), str) or not account["access_token"]:
-        raise RuntimeError("Direct credential unavailable")
+    try:
+        completed = subprocess.run(["docker", "exec", shared.DB_CONTAINER, "psql", "-U", "postgres", "-d", shared.DB_DATABASE,
+                                    "-X", "-qAt", "-v", "ON_ERROR_STOP=1", "-c", query],
+                                   capture_output=True, text=True, timeout=10, check=False)
+    except (subprocess.SubprocessError, OSError) as error:
+        raise DirectProbeRefusal("account_read_failed") from error
+    if completed.returncode:
+        raise DirectProbeRefusal("account_read_failed")
+    if not completed.stdout.strip():
+        raise DirectProbeRefusal("account_unavailable")
+    try:
+        account = json.loads(completed.stdout)
+    except ValueError as error:
+        raise DirectProbeRefusal("invalid_account_response") from error
+    if not isinstance(account, dict):
+        raise DirectProbeRefusal("invalid_account_response")
+    if not isinstance(account.get("access_token"), str) or not account["access_token"]:
+        raise DirectProbeRefusal("credential_unavailable")
     if not isinstance(account.get("platform_user_id"), str) or not re.fullmatch(r"[0-9]{1,40}", account["platform_user_id"]):
-        raise RuntimeError("Direct insight identity unavailable")
+        raise DirectProbeRefusal("identity_unavailable")
     return account
 
 
@@ -38,8 +54,8 @@ def observation(status, payload, metric):
     return shared.metric_observation(payload, metric) if status == 200 and isinstance(payload, dict) and "error" not in payload else shared.error_observation(status, payload)
 
 
-def direct_permissions(transport, subject):
-    status, payload, usage = transport.get(subject, "permissions")
+def direct_permissions(transport):
+    status, payload, usage = transport.get("me", "permissions")
     rows = payload.get("data") if isinstance(payload, dict) else None
     if status != 200 or not isinstance(rows, list):
         return {"verified": False, "httpStatus": status, "usage": usage, **shared.error_observation(status, payload)}
@@ -65,20 +81,26 @@ def media_listing(transport, subject):
             break
         first_media = first_media or (ids[0] if ids else None)
         paging = payload.get("paging")
+        if "paging" in payload and not isinstance(paging, dict):
+            pages.append({"httpStatus": status, "observation": "provider_error", "probeFailure": "invalid_media_paging"})
+            break
         cursors = paging.get("cursors") if isinstance(paging, dict) else None
-        next_cursor = cursors.get("after") if isinstance(cursors, dict) and paging.get("next") else None
-        valid_cursor = isinstance(next_cursor, str) and 0 < len(next_cursor) <= 4096
+        has_next = isinstance(paging, dict) and "next" in paging
+        next_cursor = cursors.get("after") if isinstance(cursors, dict) and has_next else None
+        valid_next = has_next and isinstance(paging["next"], str) and bool(paging["next"].strip())
+        valid_cursor = valid_next and isinstance(next_cursor, str) and 0 < len(next_cursor) <= 4096
         repeated = valid_cursor and next_cursor in seen_cursors
         pages.append({"httpStatus": status, "postCount": len(ids), "duplicatePostCount": len(ids) - len(set(ids) - seen_ids),
-                      "hasContinuation": bool(isinstance(paging, dict) and paging.get("next")), "repeatedCursor": repeated,
-                      "invalidContinuation": bool(isinstance(paging, dict) and paging.get("next")) and not valid_cursor, "usage": usage})
+                      "hasContinuation": has_next, "repeatedCursor": repeated,
+                      "invalidContinuation": has_next and not valid_cursor, "usage": usage})
         seen_ids.update(ids)
         if not valid_cursor or repeated:
             break
         seen_cursors.add(next_cursor)
         after = next_cursor
     return {"pages": pages, "complete": bool(pages) and pages[-1].get("httpStatus") == 200
-            and "probeFailure" not in pages[-1] and not pages[-1].get("hasContinuation", True)}, first_media
+            and "probeFailure" not in pages[-1] and not pages[-1].get("hasContinuation", True)
+            and all(page.get("duplicatePostCount", 1) == 0 for page in pages)}, first_media
 
 
 def direct_observations(transport, subject):
@@ -114,7 +136,7 @@ def run_probe(owner_id, account_id, version):
             report.update(execution="failed", reason="direct_identity_unverified")
         else:
             report["targetSha256"] = hashlib.sha256(f"{owner_id}:{account_id}".encode()).hexdigest()
-            report["grantedScopes"] = direct_permissions(transport, account["platform_user_id"])
+            report["grantedScopes"] = direct_permissions(transport)
             status, profile, usage = transport.get(account["platform_user_id"], parameters={"fields": "followers_count,media_count"})
             report["profileObservation"] = {"httpStatus": status, "observedAt": shared.utc_now(), "usage": usage}
             if status == 200 and isinstance(profile, dict) and "error" not in profile:
@@ -130,6 +152,8 @@ def run_probe(owner_id, account_id, version):
             report["execution"] = "finished"
     except shared.ProbeBudgetExceeded:
         report["execution"] = "budget_exhausted"
+    except DirectProbeRefusal as refused:
+        report.update(execution="failed", reason=refused.reason)
     except (RuntimeError, ValueError, subprocess.SubprocessError, OSError):
         report.update(execution="failed", reason="probe_setup_failed")
     if transport:

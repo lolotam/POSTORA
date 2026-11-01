@@ -48,6 +48,7 @@ class DirectProbeTests(unittest.TestCase):
         self.assertEqual(report["observations"][2]["reason"], "permission_missing")
         self.assertEqual(report["observations"][3]["reason"], "reauth_required")
         self.assertTrue(report["listing"]["complete"])
+        self.assertEqual(urllib.parse.urlparse(opener.requests[1][0].full_url).path, "/v22.0/me/permissions")
         for request, _ in opener.requests:
             parsed = urllib.parse.urlparse(request.full_url)
             self.assertEqual(parsed.hostname, "graph.instagram.com")
@@ -57,28 +58,44 @@ class DirectProbeTests(unittest.TestCase):
 
     def test_listing_rebuilds_origin_and_retains_incomplete_cursor_state(self):
         for paging in ({"next": "https://attacker.invalid/?access_token=private", "cursors": {"after": "cursor"}},
-                       {"next": "https://attacker.invalid/", "cursors": {}}, {}):
+                       {"next": "https://attacker.invalid/", "cursors": {}}, {}, {"cursors": {"after": "end"}},
+                       {"next": "", "cursors": {"after": "cursor"}}, {"next": None}, {"next": False},
+                       {"next": 1}, None, []):
             page = {"data": [{"id": "789"}], "paging": paging}
             opener = RecordingOpener([JsonResponse(page), JsonResponse(page)])
             transport = direct.shared.ProbeTransport("graph.instagram.com", "v22.0", "fixture-token", opener)
             listing, first = direct.media_listing(transport, "123")
             self.assertEqual(first, "789")
-            self.assertEqual(listing["complete"], not bool(paging))
+            self.assertEqual(listing["complete"], isinstance(paging, dict) and "next" not in paging)
             self.assertNotIn("private", json.dumps(listing))
-            if paging.get("cursors", {}).get("after"):
-                self.assertTrue(listing["pages"][-1]["repeatedCursor"])
+            if isinstance(paging, dict) and "next" in paging and paging.get("cursors", {}).get("after"):
+                if paging.get("next"):
+                    self.assertTrue(listing["pages"][-1]["repeatedCursor"])
+                else:
+                    self.assertTrue(listing["pages"][-1]["invalidContinuation"])
             for request, _ in opener.requests:
                 self.assertEqual(urllib.parse.urlparse(request.full_url).hostname, "graph.instagram.com")
 
     def test_database_failures_and_bad_identity_refuse_before_network(self):
-        for completed in (subprocess.CompletedProcess([], 0, "", ""), subprocess.CompletedProcess([], 1, "", "private"),
-                          subprocess.CompletedProcess([], 0, '{"access_token":"fixture-token","platform_user_id":"messaging_alias"}', "")):
+        for completed, reason in ((subprocess.CompletedProcess([], 0, "", ""), "account_unavailable"),
+                                  (subprocess.CompletedProcess([], 1, "", "private"), "account_read_failed"),
+                                  (subprocess.CompletedProcess([], 0, "invalid JSON", ""), "invalid_account_response"),
+                                  (subprocess.CompletedProcess([], 0, "null", ""), "invalid_account_response"),
+                                  (subprocess.CompletedProcess([], 0, '{"platform_user_id":"123"}', ""), "credential_unavailable"),
+                                  (subprocess.CompletedProcess([], 0, '{"access_token":"fixture-token","platform_user_id":"messaging_alias"}', ""), "identity_unavailable")):
             with self.subTest(completed=completed), patch.object(direct.subprocess, "run", return_value=completed), \
                  patch.object(direct.shared.urllib.request, "build_opener") as network:
                 report = direct.run_probe(OWNER, ACCOUNT, "v22.0")
             self.assertEqual(report["execution"], "failed")
-            self.assertEqual(report["reason"], "probe_setup_failed")
+            self.assertEqual(report["reason"], reason)
             network.assert_not_called()
+
+    def test_database_timeout_stays_an_infrastructure_failure(self):
+        with patch.object(direct.subprocess, "run", side_effect=subprocess.TimeoutExpired("docker", 10)), \
+             patch.object(direct.shared.urllib.request, "build_opener") as network:
+            report = direct.run_probe(OWNER, ACCOUNT, "v22.0")
+        self.assertEqual(report["reason"], "account_read_failed")
+        network.assert_not_called()
 
 
 if __name__ == "__main__":

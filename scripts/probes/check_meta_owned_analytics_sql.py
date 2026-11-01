@@ -85,7 +85,7 @@ def main():
             try:
                 direct.read_direct_account(OWNER, account)
             except RuntimeError as refused:
-                if str(refused) != "Owned active Instagram Login account unavailable":
+                if str(refused) != "account_unavailable":
                     raise
             else:
                 raise AssertionError("Direct lookup admitted foreign/inactive/Page-linked/wrong-platform/missing account")

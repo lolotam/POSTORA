@@ -4,7 +4,7 @@ This companion to the [Facebook/Threads probe](./meta-owned-analytics-capability
 
 The operator records the owned active account before running the probe. This is read-only verification, not collection-pilot admission. The canonical credential is selected from `social_accounts.access_token` only where owner, account ID, `platform='instagram'`, active state and `ig_auth_type='business_login'` all match. This follows the direct writer in `supabase/functions/instagram-oauth/index.ts` and the credential reader in `20261029160000_instagram_direct_collection_credential.sql`. Page-linked accounts are refused. No credential RPC, collection job, token renewal, app-secret read or Facebook credential substitution occurs.
 
-All requests use `graph.instagram.com/v22.0`. `/me` must return the exact canonical `platform_user_id` before permission, profile, account-insight or media requests begin. The messaging-scoped `user_id` alias never substitutes for this identity. Permission observations retain granted direct-business scopes only; a failed permission endpoint stays unverified even if insights requests succeed.
+All requests use `graph.instagram.com/v22.0`. `/me` must return the exact canonical `platform_user_id` before permission, profile, account-insight or media requests begin. The messaging-scoped `user_id` alias never substitutes for this identity. Permissions use `/me/permissions`, matching the existing direct OAuth reader. Permission observations retain granted direct-business scopes only; a failed permission endpoint stays unverified even if insights requests succeed.
 
 ```sh
 umask 077
@@ -17,7 +17,7 @@ The paths above are examples: use the actual mode-0700 evidence directory holdin
 
 Account requests independently observe `reach`, `views`, `accounts_engaged`, and `total_interactions` with `period=day`, `metric_type=total_value`, and explicit 7/14/30/90-day UTC bounds. Those are probe candidate windows, not proof of provider-calendar alignment or retention. The profile observation reads `followers_count` and `media_count` at capture time; it cannot establish historical growth. The first listed media is independently probed for `views`, `reach`, `shares`, and `total_interactions`. All numeric values stay in the restricted private artifact; public journey records contain capability metadata and hashes only.
 
-`execution: finished` indicates completion of the bounded observation run, including any individual failed requests. Identity or setup refusal and budget exhaustion return nonzero. The report deliberately keeps `capabilityVerification: incomplete`, unknown provider timezone, and unverified earliest retention/maximum window. No production database, permission, credential, post, collection control or schedule is changed.
+`execution: finished` indicates completion of the bounded observation run, including any individual failed requests. Identity or setup refusal and budget exhaustion return nonzero. Database exit/timeout failures report `account_read_failed`, while a successful empty lookup reports `account_unavailable`. Malformed account JSON, missing credentials and unusable canonical IDs retain distinct sanitized reasons. Empty or malformed declared continuation and malformed paging never establish a completed listing. The report deliberately keeps `capabilityVerification: incomplete`, unknown provider timezone, and unverified earliest retention/maximum window. No production database, permission, credential, post, collection control or schedule is changed.
 
 Validation:
 
