@@ -216,14 +216,24 @@ def facebook_granted_scopes(transport):
             "scopes": [scope for scope in scopes if isinstance(scope, str) and re.fullmatch(r"[a-z_]{1,80}", scope)] if isinstance(scopes, list) else []}
 
 
-def threads_granted_scopes(transport):
-    status, payload, _ = transport.get("me", "permissions")
-    permissions = payload.get("data") if isinstance(payload, dict) else None
-    if status != 200 or not isinstance(permissions, list):
-        return {"verified": False, "httpStatus": status}
-    return {"verified": True, "scopes": [entry["permission"] for entry in permissions
-            if isinstance(entry, dict) and entry.get("status") == "granted"
-            and isinstance(entry.get("permission"), str) and re.fullmatch(r"[a-z_]{1,80}", entry["permission"])]}
+def threads_granted_scopes(transport, expected_user_id):
+    # Threads' permission listing failed live; its app-authenticated debugger reports the actual grant.
+    secrets = subprocess.run(["docker", "exec", FUNCTIONS_CONTAINER, "printenv", "THREADS_APP_ID", "THREADS_APP_SECRET"],
+                             capture_output=True, text=True, timeout=10, check=False)
+    parts = secrets.stdout.splitlines()
+    if secrets.returncode or len(parts) != 2 or not all(parts):
+        return {"verified": False, "reason": "app_debug_credential_unavailable"}
+    status, payload, _ = transport.get("debug_token", parameters={"input_token": transport.token}, bearer="TH|" + "|".join(parts))
+    token_data = payload.get("data") if isinstance(payload, dict) else None
+    if status != 200 or not isinstance(token_data, dict):
+        return {"verified": False, "httpStatus": status, **error_observation(status, payload)}
+    scopes = token_data.get("scopes")
+    valid_scopes = isinstance(scopes, list) and all(isinstance(scope, str) and re.fullmatch(r"[a-z_]{1,80}", scope) for scope in scopes)
+    valid = token_data.get("is_valid") is True
+    matches = token_data.get("user_id") == expected_user_id
+    return {"verified": valid and matches and valid_scopes, "httpStatus": status, "isValid": valid,
+            "matchesCanonicalId": matches, "appIdReported": "app_id" in token_data,
+            "scopes": sorted(set(scopes)) if valid_scopes else None}
 
 
 def listing_probe(transport, subject, platform):
@@ -240,20 +250,32 @@ def listing_probe(transport, subject, platform):
             pages.append({"httpStatus": status, **error_observation(status, payload), "usage": usage})
             break
         ids = [row.get("id") for row in rows if isinstance(row, dict) and isinstance(row.get("id"), str)]
+        if len(ids) != len(rows) or any(not re.fullmatch(r"[A-Za-z0-9_]{1,200}", subject_id) for subject_id in ids):
+            pages.append({"httpStatus": status, "observation": "provider_error", "probeFailure": "invalid_listing"})
+            break
         if first_post is None and ids:
             first_post = ids[0]
         paging = payload.get("paging")
+        if "paging" in payload and not isinstance(paging, dict):
+            pages.append({"httpStatus": status, "observation": "provider_error", "probeFailure": "invalid_paging"})
+            break
         cursors = paging.get("cursors") if isinstance(paging, dict) else None
-        next_after = cursors.get("after") if isinstance(cursors, dict) and paging.get("next") else None
+        has_next = isinstance(paging, dict) and "next" in paging
+        next_after = cursors.get("after") if isinstance(cursors, dict) and has_next else None
+        valid_next = has_next and isinstance(paging["next"], str) and bool(paging["next"].strip())
+        valid_cursor = valid_next and isinstance(next_after, str) and 0 < len(next_after) <= 4096
         repeated = bool(after and next_after == after)
         duplicates = len(ids) - len(set(ids) - seen_ids)
         seen_ids.update(ids)
         pages.append({"httpStatus": status, "postCount": len(ids), "duplicatePostCount": duplicates,
-                      "hasContinuation": bool(next_after), "repeatedCursor": repeated, "usage": usage})
-        if not isinstance(next_after, str) or not next_after or repeated:
+                      "hasContinuation": has_next, "invalidContinuation": has_next and not valid_cursor,
+                      "repeatedCursor": repeated, "usage": usage})
+        if not valid_cursor or repeated:
             break
         after = next_after
-    return {"pages": pages, "complete": bool(pages) and pages[-1].get("httpStatus") == 200 and not pages[-1].get("hasContinuation", True)}, first_post
+    return {"pages": pages, "complete": bool(pages) and pages[-1].get("httpStatus") == 200
+            and not pages[-1].get("hasContinuation", True)
+            and all(page.get("duplicatePostCount", 1) == 0 for page in pages)}, first_post
 
 
 def collect_observations(transport, subject, platform):
@@ -297,7 +319,7 @@ def main():
         transport = ProbeTransport("graph.facebook.com" if args.platform == "facebook" else "graph.threads.net", args.version,
                                    account["access_token"], urllib.request.build_opener(NoRedirect()))
         report["targetSha256"] = hashlib.sha256(f"{args.owner}:{args.confirmed_account}".encode()).hexdigest()
-        report["grantedScopes"] = facebook_granted_scopes(transport) if args.platform == "facebook" else threads_granted_scopes(transport)
+        report["grantedScopes"] = facebook_granted_scopes(transport) if args.platform == "facebook" else threads_granted_scopes(transport, account["platform_user_id"])
         report["observations"] = []
         for observation in collect_observations(transport, account["platform_user_id"], args.platform):
             if "listing" in observation:

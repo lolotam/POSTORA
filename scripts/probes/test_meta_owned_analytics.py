@@ -151,6 +151,17 @@ class CapabilityProbeTests(unittest.TestCase):
             transport.get("owner")
         self.assertEqual(len(opener.requests), 1)
 
+    def test_malformed_listing_or_declared_continuation_never_establishes_an_end(self):
+        for payload in ({"data": [None]}, {"data": [{"id": "invalid/path"}]}, {"data": [], "paging": None},
+                        {"data": [], "paging": {"next": ""}}, {"data": [], "paging": {"next": None}},
+                        {"data": [], "paging": {"next": "https://attacker.invalid/"}}):
+            with self.subTest(payload=payload):
+                transport = probe.ProbeTransport("graph.threads.net", "v1.0", "fixture-token", RecordingOpener([JsonResponse(payload)]))
+                listing, _ = probe.listing_probe(transport, "owner", "threads")
+                self.assertFalse(listing["complete"])
+        transport = probe.ProbeTransport("graph.threads.net", "v1.0", "fixture-token", RecordingOpener([JsonResponse({"data": []})]))
+        self.assertTrue(probe.listing_probe(transport, "owner", "threads")[0]["complete"])
+
     def test_redirect_refuses_to_forward_authorization(self):
         request = probe.urllib.request.Request("https://graph.facebook.com/v22.0/me", headers={"Authorization": "Bearer synthetic-token"})
         self.assertIsNone(probe.NoRedirect().redirect_request(request, None, 302, "Found", {}, "https://attacker.invalid/"))
@@ -167,14 +178,32 @@ class CapabilityProbeTests(unittest.TestCase):
                 probe.read_account("invalid' SQL", account_id, "threads")
             database.assert_not_called()
 
-    def test_scope_probe_uses_only_granted_provider_permissions(self):
-        opener = RecordingOpener([JsonResponse({"data": [
-            {"permission": "threads_basic", "status": "granted"},
-            {"permission": "threads_manage_insights", "status": "declined"},
-            {"permission": "secret-token!", "status": "granted"},
-        ]})])
-        transport = probe.ProbeTransport("graph.threads.net", "v1.0", "synthetic-token", opener)
-        self.assertEqual(probe.threads_granted_scopes(transport), {"verified": True, "scopes": ["threads_basic"]})
+    def test_scope_probe_requires_app_authenticated_debug_and_the_exact_owned_user(self):
+        for fields, verified in [({}, True), ({"is_valid": False}, False), ({"user_id": "other"}, False),
+                                 ({"scopes": None}, False), ({"scopes": ["bad scope!"]}, False)]:
+            payload = {"data": {"is_valid": True, "user_id": "owner", "scopes": ["threads_basic", "threads_manage_insights"], **fields}}
+            opener = RecordingOpener([JsonResponse(payload)])
+            transport = probe.ProbeTransport("graph.threads.net", "v1.0", "fixture-token", opener)
+            with self.subTest(fields=fields), patch.object(probe.subprocess, "run", return_value=probe.subprocess.CompletedProcess([], 0, "fixture-app\nfixture-secret\n", "")):
+                receipt = probe.threads_granted_scopes(transport, "owner")
+            self.assertEqual(receipt["verified"], verified)
+            self.assertFalse(receipt["appIdReported"])
+            request = opener.requests[0][0]
+            self.assertEqual(urllib.parse.urlparse(request.full_url).path, "/v1.0/debug_token")
+            self.assertEqual(request.get_header("Authorization"), "Bearer TH|fixture-app|fixture-secret")
+            self.assertNotIn("fixture", json.dumps(receipt))
+
+    def test_scope_probe_missing_app_credentials_and_refused_debugger_stay_unverified(self):
+        opener = RecordingOpener([JsonResponse({"error": {"code": 10, "message": "fixture-secret"}}, 403)])
+        transport = probe.ProbeTransport("graph.threads.net", "v1.0", "fixture-token", opener)
+        with patch.object(probe.subprocess, "run", return_value=probe.subprocess.CompletedProcess([], 1, "", "private")):
+            self.assertEqual(probe.threads_granted_scopes(transport, "owner"), {"verified": False, "reason": "app_debug_credential_unavailable"})
+        self.assertEqual(opener.requests, [])
+        with patch.object(probe.subprocess, "run", return_value=probe.subprocess.CompletedProcess([], 0, "fixture-app\nfixture-secret\n", "")):
+            receipt = probe.threads_granted_scopes(transport, "owner")
+        self.assertFalse(receipt["verified"])
+        self.assertEqual(receipt["reason"], "permission_missing")
+        self.assertNotIn("fixture", json.dumps(receipt))
 
 
 if __name__ == "__main__":
