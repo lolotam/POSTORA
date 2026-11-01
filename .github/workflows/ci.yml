@@ -62,6 +62,17 @@ defaults:
     shell: bash
 
 jobs:
+  analytics-probe:
+    name: Read-only analytics probe safety
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Test capability observations without provider access
+        run: python3 -m unittest discover -s scripts/probes -p 'test_*.py' -v
+
   node:
     name: npm run ${{ matrix.script }}
     runs-on: ubuntu-24.04
@@ -619,6 +630,11 @@ jobs:
           deno test --node-modules-dir=none \
             --allow-read --allow-write --allow-env --allow-run \
             supabase/functions/competitor-snapshot-sync/rolloutIntegration.test.ts
+
+      - name: Verify analytics probe ownership against the migrated SQL harness
+        run: >-
+          python3 scripts/probes/check_meta_owned_analytics_sql.py
+          --container pg-harness --database partner_api_harness
 
       - name: Show Postgres logs on failure
         if: failure()
