@@ -15,6 +15,8 @@ Before a complete release approval card can be presented:
 3. Finish the outstanding local/assembled/hosted proofs and independent reviews listed in the implementation record, including full applicable G-X. Freeze the resulting final candidate and regenerate this manifest. Current source may be reviewed, but it is not certified as the complete release.
 4. Fill an exact pilot authorization record for each approved target and schedule manifest. Record owner approval reference, private account ID, provider calendar, candidate, seven expected due dates, reconciliation reference, rollback/restoration operations and operator. Public aliases alone must never be executed as database IDs.
 
+The local owner-browser gap has progressed: all 13 Instagram/Facebook/Threads journeys passed on execution candidate `a98d7fe34e29ff3cf47d2d62caa9dbb622f33f1a`, with unchanged production bytes from the runtime candidate above. The [supplemental proof](../journeys/evidence/2026-11-02-meta-owned-browser-proof.json) records real local Auth/SQL/worker use, synthetic Meta transport and the remaining coverage limits. This does not close canonical G-X, live-provider or schedule acceptance and does not change this package's NO-GO decision.
+
 ## Ordered schema artifacts
 
 These ten files are absent from the last verified production lineage and are proposed in this exact order. Application is a separate approval from PR review/merge. `20261101023000_instagram_collection_http_fences.sql` was separately approved/applied earlier and must not be reapplied as if new.
