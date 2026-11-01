@@ -10,7 +10,7 @@ This is a point-in-time snapshot. Once something here is merged or decided, the 
 
 ## 1. State of `main`
 
-`main` is at `dadf2c24` (#322). Everything below is merged. Edge-function changes are live, because a Dokploy schedule syncs `supabase/functions/**` from `main` about every two minutes.
+At this update, `main` is at `dd7f02c3` (#324); #323 is also merged. The production checks below are the original handover's observations, not a fresh deployment verification.
 
 ### Merged on 2026-10-31
 
@@ -33,12 +33,22 @@ Earlier in the same week: Instagram collection rollout controls (#317), Instagra
 
 ## 2. Open work
 
-### PR #323: `no-explicit-any` batch 1 (`src/hooks`), draft
+### Recommended order for the next agent
+
+1. **Canvas publishing results.** Fix the response-contract mismatch described below and add a regression test using the actual response shape.
+2. **OAuth consent.** Inspect the real response from `api.postora.cloud` before changing the fields; see the conditional diagnosis below.
+3. **Generated Supabase types.** Regenerate `src/integrations/supabase/types.ts` from the self-hosted schema, review the diff for other missing columns, then remove the `admin_params` cast in `src/hooks/useAIConfiguration.ts`.
+4. **`no-explicit-any` batches.** Continue with `src/components` (about 193), then `src/pages` (86), `supabase/functions/_shared` (296), `partner-api` (119), `n8n-api` (87), and the remaining functions. `_shared` has the highest risk; some Deno tests require CI because of esm.sh access.
+5. **Optional parser hardening.** Audit malformed collections in the Facebook, Instagram, and YouTube Graph-response parsers in `src/hooks/useCommentInbox.ts`, adding only missing checks. YouTube's `videos` collection already has an `Array.isArray` guard. This is a separate, low-priority follow-up; malformed collection handling predates #323.
+
+The paid Apify permission guard, the in-repo n8n directory decision, and remote branch deletion remain outside this sequence; see the owner-decision notes below.
+
+### PR #323: `no-explicit-any` batch 1 (`src/hooks`), merged
 
 - Removes 117 of the 121 errors in 33 files, which takes lint errors from 1,341 to 1,224.
 - No suppression comments.
-- Locally: `tsc` is clean apart from the known error below, 451 tests pass, and the lint regression gate passes.
-- At the time of writing it was waiting on CI and on the owner's go-ahead to merge.
+- Merged on 2026-10-31 with head `20240a6f`. GitHub reports successful typecheck, tests, build, lint/i18n regression, Deno, Postgres, CodeRabbit, and Socket checks.
+- Includes the separate Canvas database-error regression fix and four test cases in `src/hooks/__tests__/useCanvasWorkflow.errors.test.tsx`. It does **not** fix the publishing-result mismatch below.
 - What it leaves on purpose:
   - **4 `as unknown as` casts in `useCanvasWorkflow.ts`.** `@xyflow/react` `Node[]`/`Edge[]` and the `Json` columns share no type.
   - **`useAIConfiguration.ts:154`.** `ai_models.admin_params` is missing from the generated types.
@@ -61,20 +71,32 @@ About 345 of these are in test files.
 
 The owner approved continuing in batches, one PR per batch. Batch 1 handled the source files and the test files with two agents in parallel, each on its own set of files. That worked.
 
-**`n8n-community-node/nodes` (18 errors) is a directory in this repo.** `CLAUDE.md` says the real node lives in a separate repo. Leave that directory alone until the owner says whether it should exist here at all.
+**`n8n-community-node/nodes` (18 errors) is tracked in this repo.** Treat it as a legacy copy, not the release source: the canonical [n8n community node workflow](../../CLAUDE.md#n8n-community-node-workflow) uses the standalone repository. Do not recreate or sync node changes here. The owner has deferred the tracked-directory cleanup decision; leave its contents untouched until that decision.
+
+### Bug found after the original handover, not fixed: Canvas hides publishing results
+
+`src/hooks/useCanvasWorkflow.ts` reads `processResult.results`, then classifies entries by `success` and reads `error`. The normal response from `supabase/functions/process-post/index.ts:2313` instead contains `platform_results`, whose entries use `status` and `error_message`.
+
+The `results` branch is skipped for that response, so platform failures are not returned to the Canvas caller and the "Successfully published to N platform(s)." toast is not shown. An invocation error can still be reported through `processError`; this bug concerns the per-platform results.
+
+In a separate fix PR:
+- Read `platform_results` and classify `status === "success"` and `status === "failed"`; read failure details from `error_message`.
+- Treat `status === "pending"` as work still in progress, without counting it as a completed publish or a failed platform.
+- Add regression tests using the actual response contract, covering success, failure, mixed outcomes, and pending results.
 
 ### Bug found, not fixed: the OAuth consent page reads the wrong fields
 
 `src/hooks/useOAuthConsent.ts` reads these fields:
 
-| The code reads | auth-js 2.118 returns |
+| The code reads | Installed auth-js 2.108.2 types specify |
 |---|---|
 | `data.redirect_to` | `redirect_url` |
 | `data.client.icon` | `client.logo_uri` |
 | `data.scopes` (an array) | `scope` (a space-separated string) |
 
-If the self-hosted GoTrue returns what the SDK types say, three things break:
-- the auto-redirect never fires;
+If the self-hosted GoTrue returns what the SDK types say, these flows break:
+- the initial auto-redirect never fires;
+- redirects after both approval and denial are also skipped (`useOAuthConsent.ts:159,186`);
 - the scope list is always empty;
 - the client icon never shows.
 
@@ -87,13 +109,13 @@ If the self-hosted GoTrue returns what the SDK types say, three things break:
 ### Small follow-ups
 
 - **Regenerate `src/integrations/supabase/types.ts`.** At least `ai_models.admin_params` is missing, and there may be more.
-- **One known `tsc` error on `main`:** `src/components/post/BlueskyMediaValidation.tsx(123,50) TS2345`. A `TFunction` doesn't match the expected translate signature.
 - **Merged remote branches can't be deleted from the cloud session.** The git proxy returns HTTP 403, so the owner deletes them in the GitHub UI.
 
 ---
 
 ## 3. Gotchas that are not obvious from the code
 
+- **Supabase errors can be plain objects.** When changing `catch (error: any)` to `unknown`, preserve database messages at the throw site with `throw new Error(error.message)`. An `instanceof Error` fallback alone can turn a PostgREST error into `[object Object]`; the Canvas error tests added in #323 cover this regression.
 - **The lint gate is stricter than "no new errors".** `scripts/ci/lint-i18n-regression.mjs` refuses any new suppression comment (`suppression_added`). It also refuses any diagnostic of any rule on a line the PR touches (`new_diagnostics`), even one that was already there. If you edit a line that holds an old `any`, fix that `any` too. Run the gate locally before pushing:
   ```bash
   node scripts/ci/lint-i18n-regression.mjs --event pull_request --base "$(git merge-base origin/main HEAD)" --head HEAD --report /tmp/gate.json --summary /tmp/gate.md
