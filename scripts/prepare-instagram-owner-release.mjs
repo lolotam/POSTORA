@@ -21,7 +21,7 @@ function docker(args, options = {}) {
   try {
     return execFileSync("docker", args, { cwd: root, encoding: "utf8", maxBuffer: 32 * 1024 * 1024, stdio: "pipe", ...options });
   } catch (error) {
-    throw new Error(`Docker ${args[0]} failed (exit ${error.status ?? "unknown"}); inspect the isolated fixture locally`);
+    throw new Error(`Docker ${args[0]} failed (exit ${error.status ?? "unknown"}); inspect the isolated fixture locally`, { cause: error });
   }
 }
 function sql(statement) {
@@ -90,7 +90,15 @@ async function prepare() {
   docker(["cp", archive, `${names[0]}:/tmp/owner-release-inputs.tar`]);
   docker(["exec", names[0], "tar", "-xf", "/tmp/owner-release-inputs.tar", "-C", "/owner-release-repo"]);
   console.log(`Preparing isolated baseline/delta database for ${candidate}`);
-  const harnessLog = docker(["exec", "-e", `HARNESS_DB_NAME=${OWNER_RELEASE.database}`, names[0], "bash", "/owner-release-repo/scripts/db-harness.sh", `postgres://supabase_admin:${databasePassword}@localhost:5432/postgres`]);
+  let harnessLog;
+  try {
+    harnessLog = docker(["exec", "-e", `HARNESS_DB_NAME=${OWNER_RELEASE.database}`, names[0], "bash", "/owner-release-repo/scripts/db-harness.sh", `postgres://supabase_admin:${databasePassword}@localhost:5432/postgres`]);
+  } catch (error) {
+    // Preserve only the isolated fixture's diagnostics; do not turn a failed restore into an empty receipt.
+    writeFileSync(join(evidenceDirectory, "database-harness.log"), `${error.cause?.stdout ?? ""}\n${error.cause?.stderr ?? ""}`);
+    writeFileSync(join(evidenceDirectory, "postgres-startup.log"), docker(["logs", names[0]]));
+    throw error;
+  }
   writeFileSync(join(evidenceDirectory, "database-harness.log"), harnessLog);
   if (sql(authShapeQuery) !== baseline.authColumnShapeMd5 || !baseline.versions.every((version) => /^(00|\d{14})$/.test(version))) throw new Error("Auth baseline metadata does not match");
   sql(`UPDATE cron.job SET active=false;
