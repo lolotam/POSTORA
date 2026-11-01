@@ -1,5 +1,6 @@
 import { supabase } from "@/integrations/supabase/client";
 import { parseOwnerReportCursor } from "../../../../supabase/functions/instagram-insights-report/contracts";
+import { invokeErrorMessage } from "@/lib/functionInvokeError";
 import type {
   GetReportParams,
   InstagramInsightsGateway,
@@ -23,7 +24,7 @@ export class SupabaseInstagramInsightsGateway implements InstagramInsightsGatewa
     );
 
     if (error) {
-      throw new Error(error.message || "Failed to load Instagram insights report");
+      throw new Error(await invokeErrorMessage(error, "Failed to load Instagram insights report"));
     }
 
     if (!data) {
@@ -48,7 +49,7 @@ export class SupabaseInstagramInsightsGateway implements InstagramInsightsGatewa
     });
 
     if (error) {
-      throw new Error(error.message || "Failed to trigger Instagram insights collection");
+      throw new Error(await invokeErrorMessage(error, "Failed to trigger Instagram insights collection"));
     }
 
     if (data?.error) {

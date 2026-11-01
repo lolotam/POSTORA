@@ -1,10 +1,18 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter } from "react-router-dom";
+import { FunctionsHttpError } from "@supabase/supabase-js";
+import { toast } from "sonner";
+import { supabase } from "@/integrations/supabase/client";
+import { SupabaseInstagramInsightsGateway } from "../../infrastructure/supabaseInstagramInsightsGateway";
 import type { InstagramInsightsGateway } from "../../application/ports";
 import { reportFixture } from "../../tests/reportFixture";
 import { InstagramPerformanceScreen } from "../InstagramPerformanceScreen";
+
+vi.mock("@/integrations/supabase/client", () => ({
+  supabase: { functions: { invoke: vi.fn() } },
+}));
 
 // Mock useAuth
 vi.mock("@/hooks/useAuth", () => ({
@@ -47,6 +55,57 @@ function renderScreen(gateway: InstagramInsightsGateway) {
 }
 
 describe("InstagramPerformanceScreen", () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it.each([
+    ["collection_disabled", "Instagram insights collection is currently disabled. Contact support to check availability."],
+    ["collection_not_eligible", "This account is not enabled for Instagram insights collection yet."],
+    ["throttled", "Too many sync requests. Please wait before trying again."],
+    ["settings_unavailable", "Instagram insights are temporarily unavailable. Please try again later."],
+    ["not_found", "Instagram account not found or no longer connected."],
+    ["enqueue_indeterminate", "We could not confirm whether syncing started. Wait and check the report before trying again."],
+    ["unknown_server_code", "Failed to queue sync job"],
+    ["constructor", "Failed to queue sync job"],
+  ])("explains the %s sync refusal instead of exposing its machine code", async (code, expectedMessage) => {
+    mockUseSocialAccounts.mockReturnValue({
+      data: [{ id: "acc-123", platform: "instagram", platform_username: "testcreator", is_active: true }],
+      isLoading: false,
+    });
+    const response = new Response(JSON.stringify({ error: code }), { status: 503 });
+    vi.mocked(supabase.functions.invoke)
+      .mockResolvedValueOnce({ data: mockReport, error: null })
+      .mockResolvedValueOnce({ data: null, error: new FunctionsHttpError(response) });
+    const errorToast = vi.spyOn(toast, "error");
+
+    renderScreen(new SupabaseInstagramInsightsGateway());
+    expect(await screen.findByText("14.2K")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /Sync now/i }));
+
+    await waitFor(() => {
+      expect(errorToast).toHaveBeenCalledWith(expectedMessage);
+    });
+    expect(await response.json()).toEqual({ error: code });
+  });
+
+  it("shows a report fallback instead of an unknown server code", async () => {
+    mockUseSocialAccounts.mockReturnValue({
+      data: [{ id: "acc-123", platform: "instagram", platform_username: "testcreator", is_active: true }],
+      isLoading: false,
+    });
+    vi.mocked(supabase.functions.invoke).mockResolvedValue({
+      data: null,
+      error: new FunctionsHttpError(new Response(JSON.stringify({ error: "unknown_report_code" }), { status: 503 })),
+    });
+
+    renderScreen(new SupabaseInstagramInsightsGateway());
+
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent("Failed to load report");
+    expect(alert).not.toHaveTextContent("unknown_report_code");
+    expect(alert).not.toHaveTextContent("non-2xx");
+    vi.mocked(supabase.functions.invoke).mockReset();
+  });
+
   it("renders connect prompt when user has no active Instagram accounts", async () => {
     mockUseSocialAccounts.mockReturnValue({
       data: [],
