@@ -1,0 +1,232 @@
+{
+  "candidate": "9143bb2b14f00e3652bc80b5c0d149cc46aa0a75",
+  "production_source_baseline": "cc2555b282c1581dde196fd386b3b6d55a0f64ca",
+  "deployment_authorized": false,
+  "release_ready": false,
+  "migrations": [
+    {
+      "path": "supabase/migrations/20261101130000_meta_owned_analytics_history.sql",
+      "sha256": "cec7cfdb982a819d24365b62549cf422a43a92023746cfcb42c03dcaa6decbe5"
+    },
+    {
+      "path": "supabase/migrations/20261101140000_meta_owned_analytics_worker_admission.sql",
+      "sha256": "7d491c6169ad64aa87e574e3c2f64d8f1692c9d0e3c8d885ac51ddfc13268801"
+    },
+    {
+      "path": "supabase/migrations/20261101141000_meta_owned_analytics_worker_progress.sql",
+      "sha256": "0a1f568b4427567821f40284d85b8a63ceafdb1eebbba0aad140bbdd730d8b57"
+    },
+    {
+      "path": "supabase/migrations/20261101141500_meta_owned_analytics_inventory.sql",
+      "sha256": "e1260700064febfe691e4a2a2dbe34c2cb39142279c670d5c041ca7f7c1e57b2"
+    },
+    {
+      "path": "supabase/migrations/20261101142000_meta_owned_analytics_throttles.sql",
+      "sha256": "6ed101147bd488d9b6265c5585515c4e6101a65e00b355b1eed979d8b68969b0"
+    },
+    {
+      "path": "supabase/migrations/20261101142100_meta_owned_analytics_worker_fairness.sql",
+      "sha256": "5a2174ce0c70c1ae38d43baccca7c01919ecfc1e0d39ce6e3ac1d7329e545378"
+    },
+    {
+      "path": "supabase/migrations/20261101142500_meta_owned_analytics_retention.sql",
+      "sha256": "471d9172984054249bf717f6c32c9cda6c19c179c846f0a553b0bcfee33b37f7"
+    },
+    {
+      "path": "supabase/migrations/20261101143000_meta_owned_analytics_cron.sql",
+      "sha256": "2188ceee85730a8949fb299bf9469a7855515c07db4dbdcce18234e49337d429"
+    },
+    {
+      "path": "supabase/migrations/20261101144500_meta_owned_analytics_capture_failures.sql",
+      "sha256": "6bf26bb3078305289e9164fc054373eed1ee4b2b2c03f3827e033ad19130de25"
+    },
+    {
+      "path": "supabase/migrations/20261101150000_meta_owned_analytics_reports.sql",
+      "sha256": "be4e43964cbc4bdb2329e6762cb4d2c1348f7c35e1c9243f5f995e0edf7729a1"
+    }
+  ],
+  "backend_source_delta": [
+    {
+      "path": "supabase/functions/_shared/abort.ts",
+      "sha256": "7b2b07398196128de6822446f95138742453a90758e2bea61c86cacaf2ba1aed"
+    },
+    {
+      "path": "supabase/functions/_shared/analyticsCalendar.ts",
+      "sha256": "78451a4c31350f7d27703ec0c87cb682c31ef07b717787f4bdd065f6de7ec853"
+    },
+    {
+      "path": "supabase/functions/_shared/analyticsProjection.ts",
+      "sha256": "9fd5016bbae085b45706e4391c7901e28e0418ee66c4350e1f5b35e393bd85a5"
+    },
+    {
+      "path": "supabase/functions/_shared/cappedJsonBody.ts",
+      "sha256": "720c95b2ac03ec30000d13b8f40f53c9cbefd1f72d17e212786a88474a5985c7"
+    },
+    {
+      "path": "supabase/functions/_shared/metaAnalyticsTransport.ts",
+      "sha256": "bfa511b9b90437985a82424c0230c632e7d907b99c4e0a01df9b89e56b1851d0"
+    },
+    {
+      "path": "supabase/functions/_shared/metaUsage.ts",
+      "sha256": "572ac4df0576fe6ef9892b9f1d16f1b429354701b80fc39210d867b90b5188c7"
+    },
+    {
+      "path": "supabase/functions/facebook-page-insights/provider.ts",
+      "sha256": "6737fc3d6fdc0016c87030660d88544c7207ee2b2368f420b066a64025a62aaa"
+    },
+    {
+      "path": "supabase/functions/instagram-insights-report/handler.ts",
+      "sha256": "f37329298a80dd002fc017c224f1bfb084dc98fd534ebe659be26d0f7b9ce21e"
+    },
+    {
+      "path": "supabase/functions/instagram-insights-report/index.ts",
+      "sha256": "cb9cb0a87655e9ccc52723b085171280cf62cc97ebadd0d94f3f2e9130567a8e"
+    },
+    {
+      "path": "supabase/functions/instagram-insights-report/readHistory.ts",
+      "sha256": "2a6f909f5c35c4cb11ff1824e37dd13975ab2bea35dabfe882c4fa09416d1738"
+    },
+    {
+      "path": "supabase/functions/instagram-insights-report/reportStore.ts",
+      "sha256": "707751300545ceae329b491fdacf425a5e00b401d94cc014314ef980a89fafab"
+    },
+    {
+      "path": "supabase/functions/instagram-insights-sync/providerTransport.ts",
+      "sha256": "56b726a74827dd60726e1aa5aeababb7655791b93d991a9de61c95a51e6d4036"
+    },
+    {
+      "path": "supabase/functions/meta-owned-analytics-report/assemble.ts",
+      "sha256": "4a973c0217ae1838677809c9cce306055c763d9070b96d471ba06a40cd832288"
+    },
+    {
+      "path": "supabase/functions/meta-owned-analytics-report/cursor.ts",
+      "sha256": "7152bd87397a36125e90ec518253daaead8e42c59860911705762c22a76639cb"
+    },
+    {
+      "path": "supabase/functions/meta-owned-analytics-report/handler.ts",
+      "sha256": "78059c9ad3d3556f2550cfbec21bbafefb2c5dd1004248858c2be52ab7cb3e1e"
+    },
+    {
+      "path": "supabase/functions/meta-owned-analytics-report/index.ts",
+      "sha256": "722719695640c33cb987c058f46a27e1bb9fba79c590721c28f314f2e7d5ab84"
+    },
+    {
+      "path": "supabase/functions/meta-owned-analytics-report/report.ts",
+      "sha256": "18f8a2b0ae80d4a0c77150b323c00ca9c3c7362f6653e3eb3747fdb8aa5278a6"
+    },
+    {
+      "path": "supabase/functions/meta-owned-analytics-report/store.ts",
+      "sha256": "2a303800455d9cc4aafcef8ecf73b06dabcc87d8de7eb0c013ca81440d18b1c3"
+    },
+    {
+      "path": "supabase/functions/meta-owned-analytics-sync/admission.ts",
+      "sha256": "c4264a792499f99e4ac1ac509fb06b2954287e053d9007e1260ff8e3e7e82dee"
+    },
+    {
+      "path": "supabase/functions/meta-owned-analytics-sync/collectionProvider.ts",
+      "sha256": "f70d96668390fd181d69656707b006ab508b1f10bf2e96ff7de5ab5e576c43e0"
+    },
+    {
+      "path": "supabase/functions/meta-owned-analytics-sync/deadline.ts",
+      "sha256": "089ef374cd03fd85d15c2301190911e2e4e3cfd814b6c87dd99742eee265c641"
+    },
+    {
+      "path": "supabase/functions/meta-owned-analytics-sync/dispatch.ts",
+      "sha256": "77ef33c43cdca05bf5e051251814c3ff3cff927f3c5a0859ebb0e3d664b5666d"
+    },
+    {
+      "path": "supabase/functions/meta-owned-analytics-sync/facebookCollection.ts",
+      "sha256": "0841a5ab900744abaf3b94796806df470e1428d8204baabde2118ce6c2c4008e"
+    },
+    {
+      "path": "supabase/functions/meta-owned-analytics-sync/handler.ts",
+      "sha256": "6032d2056a2bb50938f4b9efacdc67af94c1b7c6d6374a74d98a615bf31ddcde"
+    },
+    {
+      "path": "supabase/functions/meta-owned-analytics-sync/index.ts",
+      "sha256": "90deddd3139ac2b0aed965a61dd05d8bf8f58b9dec83881b7915e0ca17adf98f"
+    },
+    {
+      "path": "supabase/functions/meta-owned-analytics-sync/permissionProvider.ts",
+      "sha256": "f5cc560507c11b33b0e4661c2aceea62ec24d7db5a11c568beddc4d6c2db9022"
+    },
+    {
+      "path": "supabase/functions/meta-owned-analytics-sync/retention.ts",
+      "sha256": "0399504d4462323509c6bb5990bae760b75d70b26a834108281369c3b765a111"
+    },
+    {
+      "path": "supabase/functions/meta-owned-analytics-sync/store.ts",
+      "sha256": "a07fccbc85807e82be288c9f2e40020cf1868756f81429f68a971fdb9b743945"
+    },
+    {
+      "path": "supabase/functions/meta-owned-analytics-sync/threadsCollection.ts",
+      "sha256": "c4daa796c605a651b740f59c759203618f4da91bee23db3434312d559c07036a"
+    },
+    {
+      "path": "supabase/functions/meta-owned-analytics-sync/throttle.ts",
+      "sha256": "2d0e12c2004eee01e1ab9ef12c9b642f017e1e64d921edf7d9dbe060e06491f1"
+    },
+    {
+      "path": "supabase/functions/meta-owned-analytics-sync/worker.ts",
+      "sha256": "28374bbd7f3b8afe51728bdc789827346697cd051a82bc98a982edd5cf7dd7c7"
+    },
+    {
+      "path": "supabase/functions/n8n-api/serviceProxy.ts",
+      "sha256": "161d6e0b5a0244de42d9f93d5ce784474f49b03037a964109504f84c15af33fb"
+    },
+    {
+      "path": "supabase/functions/threads-insights/provider.ts",
+      "sha256": "07f279805bf4f9f0b647318488fb59098ddba8cd1a4781cece0071e20c54352e"
+    }
+  ],
+  "frontend_delta": [
+    {
+      "path": "src/features/analytics-contract/application/ports.ts",
+      "sha256": "b579847c10e627e785526a7eee159a953722c367681816d9ccfb5b13c40c55e8"
+    },
+    {
+      "path": "src/features/analytics-contract/application/useSavedAnalytics.ts",
+      "sha256": "48d35ac2dfbbac7cb7ab27960db766851d5cee911b2123daded14a4887c0ce6e"
+    },
+    {
+      "path": "src/features/analytics-contract/index.ts",
+      "sha256": "64c6c85238c4d4e689660dd0729a3bda7478ce926d498e65e036d17f833d5969"
+    },
+    {
+      "path": "src/features/analytics-contract/infrastructure/supabaseSavedAnalytics.ts",
+      "sha256": "7c92a9ff95fb5aa1a3cce05a5e1c6af8e54e0f9c203aa23a8b02ef858606a758"
+    },
+    {
+      "path": "src/features/analytics-contract/ui/OwnedAnalyticsScreen.tsx",
+      "sha256": "c68cedc713172ee9f9e4fc615c51a174456d00f41d877b957d10ae79766cc2f2"
+    },
+    {
+      "path": "src/features/analytics-contract/ui/SavedAnalyticsReport.tsx",
+      "sha256": "9d4ea4fb1390299e5ce959c7d9425fce7ac0787e383fa937c57f3d4c2a15c52e"
+    },
+    {
+      "path": "src/features/analytics-contract/ui/useAnalyticsLabels.ts",
+      "sha256": "eaaca5d4c42c4a7423a92e149fae2aeab1ac23a4b7af076277fdb62c0cb9c263"
+    },
+    {
+      "path": "src/features/instagram-insights/infrastructure/supabaseInstagramInsightsGateway.ts",
+      "sha256": "6dc3060c21ff5d85fa127f3bbaaf32583dd29c7c12c9ebedf47c83953ddaa3ce"
+    },
+    {
+      "path": "src/i18n/locales/ar/analytics.json",
+      "sha256": "72276811ffed6faa52e66ed5dfe53f7a1d8528876f5a2b841d8ea2170b790f6b"
+    },
+    {
+      "path": "src/integrations/supabase/types.ts",
+      "sha256": "a2b0261091fd707c52571b07a1ddd6af2fb8b8b0ccd1c8517a95d91343d8d513"
+    },
+    {
+      "path": "src/pages/analytics/FacebookAnalytics.tsx",
+      "sha256": "70daeddf80a9c893ae9717d6685e70a3267f9469b0887c18550836a894b4509c"
+    },
+    {
+      "path": "src/pages/analytics/ThreadsAnalytics.tsx",
+      "sha256": "bbd8bc3be540d040805c2f3e3950b93b2a1e2959e55d3900265c89c48d5a8da4"
+    }
+  ]
+}

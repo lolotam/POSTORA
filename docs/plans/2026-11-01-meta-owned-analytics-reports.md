@@ -6,6 +6,8 @@
 
 **Tech stack:** PostgreSQL stable security-definer RPCs, Deno/TypeScript, existing Supabase client/auth/logging, Web Crypto HMAC, canonical browser/Edge contract.
 
+**Execution update:** the [saved-report implementation record](../journeys/2026-11-01-meta-saved-analytics.md) records executed SQL, concurrency, handler/proxy and component proofs. Facebook/Threads saved reports and UI, coherent legacy Instagram reads and explicit negotiation are implemented. Instagram capability/provenance adoption, complete G-X, the remaining per-dependency termination matrix, assembled browser journeys and production acceptance remain open; do not mark this entire plan complete from unit/native SQL success.
+
 **Required reading:** `ARCHITECTURE.md` ??12?17, 23?28, 31?37, 40, 45?46; the [C4 report contract](../specs/2026-11-01-meta-owned-analytics-reports.md); C2 `read_*_analytics_history`; C3 collection continuation; the existing report/proxy/gateway consumers.
 
 ## 1. Saved Facebook/Threads reports and history continuation

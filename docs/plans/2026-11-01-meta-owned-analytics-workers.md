@@ -68,6 +68,8 @@ Local collection/retention/schedule implementation and its executed proof are re
 
 ## 5. Review and deployment prerequisites
 
+The [saved-report continuation](../journeys/2026-11-01-meta-saved-analytics.md) adds actual worker → SQL → report → proxy mixed-cause proof and cancellation/unknown-outcome tests for dispatch, drain and retention. The remaining per-dependency termination matrix and full browser/live acceptance are still open; this continuation does not silently check the broader combined proof items above.
+
 - [ ] Record exact tested candidate hashes, real executed counts, remaining omissions and source/test/docs guard results in `docs/journeys/`.
 - [ ] Open/update the stacked C3 PR against C2 and link its full URL immediately after create/push. Keep migration merge/application and runtime deployment decisions separate. Do not deploy unapproved dependent schema/runtime.
 - [ ] After separately approved application, verify actual catalog/ACLs/cache before dependent runtime deployment; then verify runtime SHA256 and disabled-state boot. No admission, token repair, deletion, collection or cron activation follows implicitly.

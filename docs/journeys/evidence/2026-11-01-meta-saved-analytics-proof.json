@@ -1,0 +1,108 @@
+{
+  "candidate": "9143bb2b14f00e3652bc80b5c0d149cc46aa0a75",
+  "production_changes": false,
+  "independent_review": false,
+  "full_gx_accepted": false,
+  "checks": {
+    "fresh_database": {
+      "newer_migrations": 151,
+      "sql_suites": 68,
+      "isolated_suites": 1
+    },
+    "concurrency": {
+      "cases": 31,
+      "observed_lock_waits": 24
+    },
+    "registered_sql_integration": {
+      "tests": 1,
+      "steps": 20
+    },
+    "backend": {
+      "tests": 151,
+      "steps": 82
+    },
+    "provider_regressions": {
+      "tests": 104,
+      "steps": 135
+    },
+    "frontend": {
+      "files": 5,
+      "tests": 28
+    },
+    "typecheck": "passed",
+    "build": "passed",
+    "immutable_lint_i18n": {
+      "result": "NO REGRESSIONS",
+      "base": "067521c9e884f5f5f7d8a41a9c35751ba32cf4a2",
+      "head": "9143bb2b14f00e3652bc80b5c0d149cc46aa0a75",
+      "historical_debt_remains": true
+    }
+  },
+  "artifacts": [
+    {
+      "local_artifact": ".tmp/c4-fresh-schema-proof.log",
+      "sha256": "96d814d9f8ccc16b4d875185e09ddff23a1964b355ce9820edc321f130972536"
+    },
+    {
+      "local_artifact": ".tmp/c4-snapshot-bounds.log",
+      "sha256": "a4959d6d72911612c03d41394c910986ac6c7689fab9ff2ef8a88b8ec7658f30"
+    },
+    {
+      "local_artifact": ".tmp/c4-races.json",
+      "sha256": "bc7ab97f5b74bb91de1c3444dae694ce793e793374d4f4b34d715d52639f6f5f"
+    },
+    {
+      "local_artifact": ".tmp/c4-final-integration.log",
+      "sha256": "2ce5b53635f099c100731ebf64350c26fcccf28a297f1ecba30fa99da7fd72e8"
+    },
+    {
+      "local_artifact": ".tmp/c4-final-backend.log",
+      "sha256": "ba98ed68cd2f2c99a595ef8608fd4156e44e044cb2cb266dbf135ad17704b88f"
+    },
+    {
+      "local_artifact": ".tmp/c4-provider-regressions.log",
+      "sha256": "1e577fbe7b450dde94c380f15e1c2099b70a4e17a3a5bd7e5b036bc8bddc1c1e"
+    },
+    {
+      "local_artifact": ".tmp/c5-ui-final-tests.log",
+      "sha256": "a605eff0fac10c4ec56f0b5d46c6664beafdf1a0d604e4206d7a3fe5d6bee6fa"
+    },
+    {
+      "local_artifact": ".tmp/c5-candidate-typecheck.log",
+      "sha256": "82b5202dbc205db5afc9568372d1f11e63c1105117ebdc791a50680ece23bccf"
+    },
+    {
+      "local_artifact": ".tmp/c5-candidate-build.log",
+      "sha256": "8e59f81cca46ab536f3e369d6f835a0c4c9ad8592d25a71f31b073d52185be65"
+    },
+    {
+      "local_artifact": ".tmp/c4-final-deno-check.log",
+      "sha256": "d2c7bbb92a2c681481a41311f1569494fe127ad0569d6f1b42a44ee9682c13ed"
+    },
+    {
+      "local_artifact": ".tmp/c5-label-lint.log",
+      "sha256": "2157a5f3c12477857845842650bbd669c004666db09a84e463dc354ce2c5a27f"
+    },
+    {
+      "local_artifact": ".tmp/c4-final-lint-report.json",
+      "sha256": "8a670a67b3f27511f5d2267859da9a85783c48af60536c5dfa0e6dfed22f4c10"
+    },
+    {
+      "local_artifact": ".tmp/c4-final-lint-summary.md",
+      "sha256": "93703fb543bf9e278f7269fe857e5b706f948dd455cbf645b2471602472c2d8d"
+    }
+  ],
+  "read_only_production_verification": {
+    "date": "2026-11-01",
+    "history_reader_installed": false,
+    "saved_reader_installed": false,
+    "instagram_snapshot_installed": false,
+    "requested_collection_setting_rows": 0,
+    "new_schedule_names": 0,
+    "protected_binding": {
+      "FB-01": false,
+      "IG-01": false
+    },
+    "threads_uses_facebook_binding": false
+  }
+}
