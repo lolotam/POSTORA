@@ -104,6 +104,20 @@ Deno.test("report composition preserves authenticated identity and account owner
       assertEquals((await response.json()).scope.ownerId, OWNER_ID);
     });
 
+    for (const cursor of [
+      { published_at: "2026-10-26T12:00:00Z", media_id: "media-1" },
+      { publishedAt: "not-a-date", mediaId: "media-1" },
+      "null",
+    ]) {
+      await test.step(`malformed cursor ${JSON.stringify(cursor)} is rejected before database reads`, async () => {
+        databaseReads = 0;
+        const response = await handler(reportRequest(SERVICE_KEY, { user_id: OWNER_ID, cursor }));
+        assertEquals(response.status, 400);
+        assertEquals((await response.json()).error.code, "INVALID_CURSOR");
+        assertEquals(databaseReads, 0);
+      });
+    }
+
     for (const body of [{}, { user_id: "not-a-uuid" }]) {
       await test.step(`service role rejects ${"user_id" in body ? "invalid" : "missing"} user_id before reads`, async () => {
         databaseReads = 0;

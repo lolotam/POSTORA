@@ -1,4 +1,5 @@
 import { supabase } from "@/integrations/supabase/client";
+import { parseOwnerReportCursor } from "../../../../supabase/functions/instagram-insights-report/contracts";
 import type {
   GetReportParams,
   InstagramInsightsGateway,
@@ -16,12 +17,7 @@ export class SupabaseInstagramInsightsGateway implements InstagramInsightsGatewa
           social_account_id: params.socialAccountId,
           period_days: params.periodDays,
           limit: params.limit,
-          cursor: params.cursor
-            ? {
-                published_at: params.cursor.publishedAt,
-                media_id: params.cursor.mediaId,
-              }
-            : undefined,
+          cursor: parseOwnerReportCursor(params.cursor) ?? undefined,
         },
       },
     );

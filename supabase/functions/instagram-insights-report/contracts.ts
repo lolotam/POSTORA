@@ -718,6 +718,25 @@ export function parseOwnerReportCursor(value: unknown): OwnerReportCursor | null
   return { publishedAt, mediaId };
 }
 
+/** HTTP cursors may be tuples, JSON strings or legacy base64 JSON strings. */
+export function decodeOwnerReportCursor(raw: unknown): OwnerReportCursor | null {
+  if (raw === "") return null;
+  if (typeof raw !== "string") return parseOwnerReportCursor(raw);
+  let decoded: unknown;
+  try {
+    decoded = JSON.parse(raw);
+  } catch {
+    try {
+      decoded = JSON.parse(atob(raw));
+    } catch {
+      throw new OwnerReportContractError("INVALID_CURSOR", "cursor must be a valid cursor object or encoded string");
+    }
+  }
+  const cursor = parseOwnerReportCursor(decoded);
+  if (!cursor) throw new OwnerReportContractError("INVALID_CURSOR", "encoded cursor must contain a cursor tuple");
+  return cursor;
+}
+
 /** The validated scope. */
 export function parseOwnerReportScope(value: unknown): OwnerReportScope {
   if (!isRecord(value)) {

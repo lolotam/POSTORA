@@ -19,6 +19,7 @@ import {
   OWNER_REPORT_DEFAULT_LIMIT,
   OWNER_REPORT_MAX_LIMIT,
   OwnerReportContractError,
+  decodeOwnerReportCursor,
 } from "./contracts.ts";
 import { ReportStore } from "./reportStore.ts";
 
@@ -31,32 +32,7 @@ export interface ReportHandlerDeps {
 }
 
 export function parseCursor(raw: unknown): OwnerReportCursor | null {
-  if (raw === undefined || raw === null || raw === "") return null;
-  if (typeof raw === "object" && raw !== null && "publishedAt" in raw && "mediaId" in raw) {
-    const obj = raw as { publishedAt: unknown; mediaId: unknown };
-    if (typeof obj.publishedAt === "string" && typeof obj.mediaId === "string") {
-      return { publishedAt: obj.publishedAt, mediaId: obj.mediaId };
-    }
-  }
-  if (typeof raw === "string") {
-    try {
-      const parsed = JSON.parse(raw);
-      if (typeof parsed?.publishedAt === "string" && typeof parsed?.mediaId === "string") {
-        return { publishedAt: parsed.publishedAt, mediaId: parsed.mediaId };
-      }
-    } catch {
-      try {
-        const decoded = atob(raw);
-        const parsed = JSON.parse(decoded);
-        if (typeof parsed?.publishedAt === "string" && typeof parsed?.mediaId === "string") {
-          return { publishedAt: parsed.publishedAt, mediaId: parsed.mediaId };
-        }
-      } catch {
-        // Fall through to error
-      }
-    }
-  }
-  throw new OwnerReportContractError("INVALID_CURSOR", "cursor must be a valid cursor object or encoded string");
+  return decodeOwnerReportCursor(raw);
 }
 
 export function createInstagramInsightsReportHandler(deps: ReportHandlerDeps) {
