@@ -92,6 +92,12 @@ Deno.test("report composition preserves authenticated identity and account owner
       assertEquals(report.scope.socialAccountId, ACCOUNT_ID);
     });
 
+    await test.step("service UUID casing retains the canonical owner identity", async () => {
+      const response = await handler(reportRequest(SERVICE_KEY, { user_id: OWNER_ID.toUpperCase() }));
+      assertEquals(response.status, 200);
+      assertEquals((await response.json()).scope.ownerId, OWNER_ID);
+    });
+
     await test.step("service role gets the same non-enumerating 404 for a foreign account", async () => {
       const response = await handler(reportRequest(SERVICE_KEY, {
         user_id: OWNER_ID, social_account_id: OTHER_ACCOUNT_ID,
@@ -234,10 +240,32 @@ Deno.test("report composition pages the full stored inventory without treating d
       await test.step(`${failure} never returns a successful empty or truncated report`, async () => {
         mode = failure;
         const response = await handler(reportRequest(SERVICE_KEY, { user_id: OWNER_ID }));
-        assertEquals(response.status, failure === "overflow" || failure === "repeated_page" ? 503 : 500);
+        assertEquals(response.status, 503);
       });
     }
   } finally {
     globalThis.fetch = originalFetch;
   }
+});
+
+Deno.test("storage deadlines remain retryable through the real report composition", async (test) => {
+  const originalFetch = globalThis.fetch;
+  try {
+    for (const timedOutTable of ["social_accounts", "ig_media_insight_snapshots", "instagram_collection_jobs", "instagram_collection_job_checkpoints"]) {
+      await test.step(timedOutTable, async () => {
+        globalThis.fetch = async (input, init) => {
+          const outgoing = new Request(input, init);
+          const url = new URL(outgoing.url);
+          if (url.origin !== URL_BASE) throw new Error("Unexpected report test boundary");
+          if (url.pathname === `/rest/v1/${timedOutTable}`) throw new DOMException("synthetic storage deadline", "TimeoutError");
+          if (url.pathname === "/rest/v1/social_accounts") return Response.json([{ id: ACCOUNT_ID, user_id: OWNER_ID, platform: "instagram", is_active: true }]);
+          if (url.pathname === "/rest/v1/instagram_collection_jobs") return Response.json([{ id: ACCOUNT_ID, job_generation: 1, status: "pending" }]);
+          return Response.json([], { headers: { "Content-Range": "*/0" } });
+        };
+        const response = await handler(reportRequest(SERVICE_KEY, { user_id: OWNER_ID }));
+        assertEquals(response.status, 503);
+        assertEquals((await response.json()).error.code, "HISTORY_UNAVAILABLE");
+      });
+    }
+  } finally { globalThis.fetch = originalFetch; }
 });

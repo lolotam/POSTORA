@@ -86,7 +86,25 @@ Registry platform configuration also declares `staleAfterSeconds`, a positive in
 
 Reach, views, impressions, engagements (with components: likes, comments/replies, shares/reposts, saves, quotes), followers (point-in-time count and net change), per-post performance, previous-period delta.
 
+`profile_views` is a separate normalized key from content `views`. The selected Threads account's provider metric named `views` describes profile visits; its post-level metric describes content views. Account profile visits must never be relabelled as content views or compared as the same measure across platforms. Cumulative follower counts use `last`/observation comparison, never daily summation.
+
 The per-platform mapping table is **filled from the live probe evidence (§6)**, not from memory. An unverified registry cell maps to `unavailable: capability_unverified`; verified absence maps to `not_offered`. `not_collected` is reserved for verified capabilities whose collection has not run or is off. None of these states proves permission for a specific account.
+
+The [live evidence record](../journeys/2026-11-01-meta-live-capabilities.md) now establishes the following candidate meanings. These are not fully verified registry entries: provider calendar, exact-window behavior, retention and remaining permission prerequisites still need the complete §6 evidence. Definitions came from actual provider response metadata captured at `2026-11-01T05:03:27Z`; no private measurement values are reproduced here.
+
+| Platform / level | Provider metric / observed version | Normalized meaning | Aggregation constraint |
+|---|---|---|---|
+| Facebook account | `page_media_view` / `v25.0` | Content displays, including Page posts, stories and ads; candidate `views`. | Sum only complete aligned daily buckets; preserve the inclusive content definition. |
+| Facebook account | `page_total_media_view_unique` / `v25.0` | Unique media viewers; candidate unique-audience metric. | `not_summable`; exact-period reach remains unavailable without a proven provider total. |
+| Facebook account | `page_post_engagements` / `v25.0` | Daily post interaction actions. | Sum only complete aligned daily buckets; never label as unique engaged accounts. |
+| Facebook account | `page_follows` / `v25.0` | Cumulative lifetime follower balance, despite response `period: day`. | `last`; never sum across days or treat a daily snapshot as new follows. |
+| Facebook post | `post_media_view`, `post_total_media_view_unique` / `v25.0` | Observed numeric lifetime views / unique viewers; unique metric also returns daily rows. | Select the proven row/window explicitly; never mix daily and lifetime rows. |
+| Threads account | `views` / requested `v1.0` | Profile visits; `profile_views`. | Keep all daily buckets and validate calendar coverage before aggregation. |
+| Threads account | `likes`, `replies`, `reposts`, `quotes` / requested `v1.0` | Interaction action totals; returned without dated daily buckets in the initial capture. | Do not invent daily trends from these totals; exact requested-window behavior remains to be verified. |
+| Threads account | `followers_count` / requested `v1.0` | Current total follower count. | Point-in-time observation; growth requires two valid persisted boundary samples. |
+| Threads post | `views`, `likes`, `replies`, `reposts`, `quotes`, `shares` / requested `v1.0` | Observed numeric lifetime per-post metrics. | Preserve lifetime scope; do not claim these are interactions occurring within the selected reporting period. |
+
+`post_engaged_users` was explicitly rejected as an invalid insights metric on the observed Facebook surface. That rejection alone neither identifies its replacement nor proves all post-engagement metrics are unavailable. Instagram's selected Page-linked account has no protected credential binding, so no live metric-support claim is made for it.
 
 ### 4.4 Period and delta
 
@@ -102,6 +120,8 @@ The per-platform mapping table is **filled from the live probe evidence (§6)**,
 ### 4.6 Versioning and compatibility
 
 The unified contract uses the distinct discriminator `analyticsContractVersion: 1` in both request and response. It does not reuse the existing Instagram owner's `schemaVersion: 1`. Omitting the new field preserves each endpoint's legacy response; explicitly requesting `analyticsContractVersion: 1` selects the unified shape, including for Instagram and the proxy. Unsupported contract versions are rejected explicitly. Existing consumers (Threads panel, service proxy / MCP) keep their legacy requests until migrated. Compatibility tests cover default legacy requests, explicit unified requests and unsupported versions across the real composition boundaries.
+
+Implementation note for §4.6: B3 first adds explicit Threads version negotiation through its endpoint and the existing n8n/MCP proxy. Until C4 adopts the other endpoints, explicit version requests for those platforms are refused; they never silently return a legacy DTO. The default request stays unchanged. The canonical runtime-neutral modules live under `supabase/functions/_shared/analytics{Calendar,Contract,Registry,Schema}.ts`, with the browser public API at `src/features/analytics-contract/index.ts` importing the same artifacts. Metric meaning/capability metadata is pinned to the negotiated version; evidence references and verification timestamps may refresh during a rolling deployment without making an otherwise compatible response invalid. A future semantic registry change needs an explicit compatibility/version review.
 
 ## 5. Workstream 1 — Instagram defects and pilot
 
@@ -157,6 +177,8 @@ Ownership, RLS (deny by default), grants and metric whitelists follow the Instag
 
 **Exact-period identity:** C1 must define storage and indexes for verified period-total measurements in addition to the daily/post/profile tables. The business key includes owner/account, level and subject ID, metric key, provider API version, provider timezone, exact normalized provider `since` and `until` bounds and UTC capture day. A 7-day and a 30-day total ending together are distinct keys. Same-day recapture uses the latest fenced capture; retries reuse their capture ID and cannot overwrite newer responses. C2 adds ownership/window constraints and tests for both overlapping windows, same-day recapture, stale retries and exact-boundary report selection before C3/C4 use the model. The C1 ADR names the concrete tables/representation; it cannot omit this identity.
 
+**Exact-total retention:** a period-total row is eligible only when its exact provider `until` is at or before the pinned §8.1 retention floor **and** its UTC `captured_on` is before that floor's date. A window overlapping the floor, or a newer capture of an older window, remains. Referencing per-metric data is removed before unreferenced capture/job history under the C1 deletion protocol. This does not alter Instagram or competitor retention.
+
 The Instagram job SQL and worker store are Instagram-only (§3), so they are **not** reused directly. Before any migration, the plan decides between:
 
 - (a) additive migrations that widen the job model to a platform-tagged target with per-platform credential contexts, or
@@ -200,4 +222,8 @@ Per platform, on production for the approved pilot account: open analytics → c
 
 Retention activation is also a distinct owner decision: approve the bounded dry run first, then separately approve the exact retention switch, deletion scope and cleanup schedule after reviewing its counts. Neither a collection-switch approval nor a general cron approval authorizes production deletion.
 
-Each needs Waleed's explicit approval at the time it happens: merging migrations; applying migrations in production; deploying canaries; enabling any collection switch or allow-list entry; activating any cron; naming pilot accounts; running live probes against those accounts; widening rollout.
+Bounded read-only probes under §6 require owner-authorized targets. During this session Waleed expressly delegated selection among accounts connected to the administrator, then specified the platform targets; the latest explicit selection governs. The restricted authorization record retains the exact owner/account mapping and instruction order, while the [public journey](../journeys/2026-11-01-meta-live-capabilities.md) uses opaque aliases. These explicit instructions cover the named reads without another confirmation; a general task request alone does not replace this target-approval record. Preliminary operator-selected observations are diagnostic only and do not establish target-approved acceptance retrospectively.
+
+This selection is not admission to a collection pilot. The scope excludes token renewal/revocation, permission changes, posts, analytics writes, collection switches, allow-list admission, schedules and paid Apify. Public evidence contains capability metadata and artifact hashes, excluding account handles, owner associations, private measurements and credentials; exact target mappings and detailed measurements remain restricted.
+
+Each needs Waleed's explicit approval at the time it happens: merging migrations; applying migrations in production; deploying canaries; enabling any collection switch or allow-list entry; activating any cron; naming collection pilot accounts; live probes beyond the already requested bounded verification; widening rollout.

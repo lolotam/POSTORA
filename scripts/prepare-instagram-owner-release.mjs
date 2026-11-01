@@ -7,6 +7,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { OWNER_RELEASE } from "../e2e/fixtures/instagramOwnerReleaseSettings.mjs";
 import { assertLocalDockerSocket } from "../e2e/fixtures/instagramOwnerReleaseSafety.mjs";
+import { assertOwnerExecutionSource } from "./instagram-owner-execution-source.mjs";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const fixture = join(root, "e2e", "fixtures");
@@ -77,6 +78,8 @@ async function prepare() {
   }
   if (existing.some((name) => name.startsWith("postorasupabase-supabase-j8axyh"))) throw new Error("Refusing fixture preparation on the production-stack Docker host");
   const candidate = execFileSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" }).trim();
+  assertOwnerExecutionSource(root, candidate);
+  labels.push("--label", `postora.owner-candidate=${candidate}`);
   const evidenceDirectory = mkdtempSync(join(tmpdir(), "postora-owner-release-prepare-"));
   const archive = join(evidenceDirectory, "database-inputs.tar");
   execFileSync("git", ["-c", "core.autocrlf=false", "archive", "--format=tar", `--output=${archive}`, candidate, "scripts/db-harness.sh", "supabase/tests", "supabase/migrations"], { cwd: root });
