@@ -88,7 +88,7 @@ BEGIN
     'Saved '||(a->>'platform')||' '||(a->>'kind')||' post '||lpad(v_index::text,2,'0'));
   END LOOP;
   EXECUTE format('UPDATE public.%I SET post_ids=(SELECT array_agg(platform_post_id ORDER BY published_at DESC,platform_post_id DESC) FROM public.%I WHERE social_account_id=$1),pages_fetched=$2 WHERE social_account_id=$1',v_prefix||'_analytics_collection_checkpoints',v_prefix||'_post_insight_snapshots')
-   USING (a->>'id')::uuid,CASE WHEN a->>'kind'='archived' THEN 1 ELSE 2 END;
+   USING (a->>'id')::uuid,CASE WHEN a->>'kind'='archived' THEN 1 WHEN a->>'platform'='facebook' THEN 6 ELSE 2 END;
   FOR v_index IN 1..28 LOOP
    SELECT jsonb_object_agg(key,CASE WHEN key='followers' THEN 100+v_index ELSE 0 END) INTO v_metrics FROM jsonb_array_elements_text(${jsonSql(metrics)}->(a->>'platform')->'daily') key;
    PERFORM pg_temp.seed_owned_browser_capture(a->>'platform',(a->>'id')::uuid,'account_day',a->>'providerId',v_day-v_index,clock_timestamp()-interval '1 minute',v_metrics);
@@ -133,7 +133,8 @@ export class MetaOwnedProviderFixture {
         scopes: threaded ? ["threads_basic", "threads_manage_insights"] : ["read_insights", "pages_read_engagement"] } },
         { headers: facebook ? { "facebook-api-version": "v25.0" } : {} });
     }
-    const account = META_ACCOUNTS.find((entry) => url.pathname.split("/").some((segment) => segment === entry.providerId || Array.from({ length: 26 }, (_, index) => metaPostId(entry, index)).includes(segment)));
+    const account = META_ACCOUNTS.find((entry) => url.pathname.split("/").some((segment) => segment === entry.providerId || Array.from({ length: 26 }, (_, index) => metaPostId(entry, index)).includes(segment)))
+      ?? (url.pathname.endsWith("/me") ? META_ACCOUNTS.find((entry) => token === `owned-${entry.platform}-${entry.kind}`) : undefined);
     if (!account) return null;
     if (url.origin !== (account.platform === "facebook" ? "https://graph.facebook.com" : "https://graph.threads.net") || token !== `owned-${account.platform}-${account.kind}`) {
       throw new Error("Owned Meta fixture refused a foreign endpoint or credential");
@@ -146,9 +147,13 @@ export class MetaOwnedProviderFixture {
       ...(account.platform === "facebook" ? { created_time: new Date(Date.now() - 3 * 86_400_000 - index * 1000).toISOString(), message: `Collected facebook ${account.kind} post ${String(index).padStart(2, "0")}` }
         : { timestamp: new Date(Date.now() - 3 * 86_400_000 - index * 1000).toISOString(), text: `Collected threads ${account.kind} post ${String(index).padStart(2, "0")}` }) });
     if (isInventory) {
-      const second = url.searchParams.has("after");
-      return respond({ data: Array.from({ length: second ? 1 : 25 }, (_, index) => post(second ? 25 : index)),
-        ...(second ? {} : { paging: { cursors: { after: "fixture-page-two" }, next: `${url.origin}${url.pathname}?after=fixture-page-two` } }) });
+      const limit = Number(url.searchParams.get("limit"));
+      const cursor = url.searchParams.get("after");
+      if (limit !== (account.platform === "facebook" ? 5 : 25) || cursor !== null && !/^fixture-offset-\d{1,2}$/.test(cursor)) throw new Error("Unexpected owned inventory page request");
+      const offset = cursor === null ? 0 : Number(cursor.replace("fixture-offset-", ""));
+      const next = offset + limit < 26 ? `fixture-offset-${offset + limit}` : null;
+      return respond({ data: Array.from({ length: Math.min(limit, 26 - offset) }, (_, index) => post(offset + index)),
+        ...(next === null ? {} : { paging: { cursors: { after: next }, next: `${url.origin}${url.pathname}?after=${next}` } }) });
     }
     const postIndex = Array.from({ length: 26 }, (_, index) => index).find((index) => url.pathname.split("/").includes(metaPostId(account, index)));
     if (!isMetric) return respond(postIndex === undefined ? { id: account.providerId } : post(postIndex));
