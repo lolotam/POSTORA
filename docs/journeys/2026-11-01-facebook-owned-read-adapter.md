@@ -1,6 +1,6 @@
 # Owned Facebook Page analytics read adapter
 
-Local B4 candidate built on the contract proposal in [PR #340](https://github.com/lolotam/POSTORA/pull/340), head `5738e98070179cbe9ea947ad8a2f7537d47a92ec`. This branch is not deployed. Parent review corrections must be incorporated before publication/merge of this dependent candidate. No collection, migration, credential or schedule change is included.
+Local B4 candidate built on the corrected contract proposal in [PR #340](https://github.com/lolotam/POSTORA/pull/340), head `680ee7f2ccc623930f423e97e92fd7658a40e517`. The parent review corrections have been incorporated: the canonical parser keeps its stronger `last` policy, and the shared cursor codec keeps the corrected bounded opaque grammar. This branch is not deployed. No collection, migration, credential or schedule change is included.
 
 ## Data path and behavior
 
@@ -14,6 +14,10 @@ The common fixed-origin transport, bounded read pool, count/calendar projection 
 
 The response remains `source: live` and `sync: never_synced`. It does not claim persisted history or scheduled collection. Stored Page analytics, Instagram adoption, shared UI and approved pilots remain later plan tasks.
 
+Optional malformed or credential-bearing permalinks use the parent's canonical normalization policy and become null without dropping the post's usable measurements. Intentionally unmeasurable period aggregates do not mark a completed read as partial collection; provider failures, missing measurable values and actual pagination truncation still do.
+
+This dependent change also closes [the remaining previous-period completeness finding on #340](https://github.com/lolotam/POSTORA/pull/340#discussion_r4434705432). A successful HTTP response that omits a measurable comparison metric still marks the report incomplete; current point-in-time followers intentionally have no historical comparison and remain exempt. The shared policy is consumed by both platform reports, and real endpoint regressions use a completed second page so ordinary pagination cannot mask the missing-comparison defect. Review the parent and this follow-up as the combined runtime candidate before acceptance.
+
 ## Additional bounded live evidence
 
 A two-call read-only metadata diagnostic on the owner's authorized `FB-01` target ran at `2026-11-01T06:31:56.955761Z`–`06:31:57.675759Z`. Canonical Page identity matched; the post-list request returned HTTP 200 under requested/observed `v25.0` for `id,created_time,message,permalink_url`. The sampled response contained an owned composite ID, creation time and an HTTPS Facebook permalink. `message` was absent, so text is optional in the adapter and never synthesized. The diagnostic's strict all-fields `shapeVerified` flag was false because it required `message`; the individual presence facts, rather than that aggregate flag, support the optional-field implementation.
@@ -24,7 +28,7 @@ Official Meta Page-post/Insights documentation could not be fetched in this sess
 
 ## Local verification
 
-- Deno real composition/provider/calendar/schema/cursor suites: 24 tests, 116 nested steps passed, with CI's exact permissions.
+- Deno real composition/provider/calendar/schema/cursor suites: 26 tests, 119 nested steps passed after rebase and comparison-policy corrections, with CI's exact permissions.
 - MCP/service proxy: 150 tests passed; Vitest parity/existing translated Threads panel: 13 tests passed.
 - Typecheck and production build passed. The immutable lint/i18n regression result is recorded separately before this candidate is published.
 - Targeted ESLint passed for changed production/test files. `clean-code-guard` and `test-guard` were applied; extraction helpers have active production callers in both Facebook and Threads. Documentation was checked with `docs-guard` against the actual modules and probe metadata.

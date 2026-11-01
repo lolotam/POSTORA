@@ -46,6 +46,7 @@ export function serializedAnalyticsArtifact(runtime: AnalyticsRuntime): string {
     version: runtime.ANALYTICS_CONTRACT_VERSION, reasons: runtime.UNAVAILABLE_REASONS, platforms: runtime.ANALYTICS_PLATFORMS,
     metricKeys: runtime.ANALYTICS_METRIC_KEYS, periodDays: runtime.ANALYTICS_PERIOD_DAYS,
     measurable: runtime.ANALYTICS_METRIC_REGISTRY.map((definition) => runtime.isAnalyticsMetricMeasurable(definition)),
+    incomplete: report.metrics.map((metric) => runtime.isAnalyticsAccountMetricIncomplete(metric)),
     calendar: calendarCases.map((input) => runtime.closedAnalyticsPeriods(input)),
     values: [
       runtime.summarizeDailyMetricValues({ aggregation: "sum", days: [{ date: "2026-10-01", metric: available(0) }] }),

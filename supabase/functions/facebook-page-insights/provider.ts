@@ -10,15 +10,8 @@ const MESSAGE = "Facebook insights request could not be completed.";
 const metricRow = z.object({ name: z.string().min(1).max(100), period: z.enum(["day", "week", "days_28", "lifetime"]),
   values: z.array(z.object({ value: z.number().finite().nullish(), end_time: z.string().optional() })).optional() });
 const metricPayload = z.object({ data: z.array(metricRow) });
-function safePermalink(value: string): boolean {
-  try {
-    const url = new URL(value);
-    return url.protocol === "https:" && ["facebook.com", "www.facebook.com"].includes(url.hostname) && !url.username && !url.password
-      && !Array.from(url.searchParams.keys()).some((key) => ["access_token", "refresh_token", "apikey", "api_key", "token", "authorization", "secret"].includes(key.toLowerCase()));
-  } catch (error) { if (error instanceof TypeError) return false; throw error; }
-}
 const postRow = z.object({ id: z.string().regex(/^\d{1,40}_\d{1,40}$/), created_time: z.string().datetime({ offset: true }),
-  message: z.string().nullish(), permalink_url: z.string().refine(safePermalink).nullish() });
+  message: z.string().nullish(), permalink_url: z.string().nullish() });
 const postsPayload = z.object({ data: z.array(postRow).max(5), paging: z.object({
   next: z.string().min(1).max(16384).optional(), cursors: z.object({ after: z.string().min(1).max(4096).optional() }).optional(),
 }).optional() });

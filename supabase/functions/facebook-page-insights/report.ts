@@ -1,7 +1,7 @@
-import { ANALYTICS_CONTRACT_VERSION, analyticsSyncState, type AnalyticsPost, type AnalyticsReport } from "../_shared/analyticsContract.ts";
+import { ANALYTICS_CONTRACT_VERSION, analyticsSyncState, isAnalyticsAccountMetricIncomplete, type AnalyticsPost, type AnalyticsReport } from "../_shared/analyticsContract.ts";
 import { closedAnalyticsPeriods, type AnalyticsPeriodDays } from "../_shared/analyticsCalendar.ts";
 import { analyticsDefinitions, ANALYTICS_PLATFORM_CONFIGURATION } from "../_shared/analyticsRegistry.ts";
-import { parseAnalyticsReport } from "../_shared/analyticsSchema.ts";
+import { parseAnalyticsReport, normalizeAnalyticsPermalink } from "../_shared/analyticsSchema.ts";
 import { AnalyticsCursorError, analyticsCursorScope, decodeAnalyticsCursor, createAnalyticsContinuation } from "../_shared/metaAnalyticsCursor.ts";
 import { mapAnalyticsReads, latestRetryAt } from "../_shared/metaAnalyticsTransport.ts";
 import { FacebookInsightsProvider, type FacebookPost } from "./provider.ts";
@@ -9,6 +9,11 @@ import { projectFacebookAccountMetric, projectFacebookPostMetric, facebookUnavai
 
 type FacebookReportResult = { ok: true; report: AnalyticsReport; refusalReasons: string[] }
   | { ok: false; status: number; reason: string; message: string; needsReauth?: boolean; retryAt?: string | null };
+
+function facebookPermalink(value: string | null | undefined): string | null {
+  const permalink = normalizeAnalyticsPermalink(value);
+  return permalink && ["facebook.com", "www.facebook.com"].includes(new URL(permalink).hostname) ? permalink : null;
+}
 
 async function accountMeasurements(provider: FacebookInsightsProvider, pageId: string, windows: ReturnType<typeof closedAnalyticsPeriods>) {
   const definitions = analyticsDefinitions("facebook", "account").filter((definition) => definition.capability === "available");
@@ -28,7 +33,7 @@ async function postMeasurements(provider: FacebookInsightsProvider, selected: re
     reply: await provider.postMetric(post.id, definition.providerMetric!) }));
   const observedAt = new Date().toISOString();
   const items: AnalyticsPost[] = selected.map((post) => ({ id: post.id, publishedAt: new Date(post.created_time).toISOString(),
-    text: post.message ?? "", permalink: post.permalink_url ?? null, metrics: definitions.map((definition) => projectFacebookPostMetric(definition,
+    text: post.message ?? "", permalink: facebookPermalink(post.permalink_url), metrics: definitions.map((definition) => projectFacebookPostMetric(definition,
       replies.find((entry) => entry.postId === post.id && entry.key === definition.key)?.reply, observedAt)) }));
   return { replies, items };
 }
@@ -64,7 +69,7 @@ export async function facebookPageReport(input: {
   if (continuation.reason) refusalReasons.push(continuation.reason);
   const incompletePosts = posts.items.some((post) => post.metrics.some((metric) => metric.definition.capability === "available" && metric.current.status !== "available"));
   const partial = replies.some((reply) => reply.error) || incompletePosts || continuation.truncated
-    || account.metrics.some((metric) => metric.definition.capability === "available" && metric.current.status !== "available");
+    || account.metrics.some(isAnalyticsAccountMetricIncomplete);
   const retryAt = latestRetryAt([...replies, listing].map((reply) => reply.retryAt));
   const generatedAt = new Date().toISOString();
   return { ok: true, refusalReasons: Array.from(new Set(refusalReasons)), report: parseAnalyticsReport({

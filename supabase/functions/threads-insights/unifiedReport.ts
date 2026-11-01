@@ -1,5 +1,5 @@
 import {
-  ANALYTICS_CONTRACT_VERSION, analyticsSyncState, isAnalyticsMetricMeasurable,
+  ANALYTICS_CONTRACT_VERSION, analyticsSyncState, isAnalyticsAccountMetricIncomplete,
   type AnalyticsPost, type AnalyticsReport, type UnavailableReason,
 } from "../_shared/analyticsContract.ts";
 import { closedAnalyticsPeriods, type AnalyticsPeriod, type AnalyticsPeriodDays } from "../_shared/analyticsCalendar.ts";
@@ -83,7 +83,7 @@ export async function unifiedThreadsReport(input: {
   if (pageReason) refusalReasons.push(pageReason);
   const retryAt = latestRetryAt(allReplies.map((reply) => reply.retryAt));
   const partial = Boolean(current.error || previous.error || pageReason || truncated || posts.incomplete
-    || metrics.some((metric) => isAnalyticsMetricMeasurable(metric.definition) && metric.current.status !== "available"));
+    || metrics.some(isAnalyticsAccountMetricIncomplete));
   return { ok: true, refusalReasons: Array.from(new Set(refusalReasons)), report: parseAnalyticsReport({
     analyticsContractVersion: ANALYTICS_CONTRACT_VERSION, platform: "threads", accountId: input.accountId,
     generatedAt: new Date().toISOString(), period: windows.current.period, previousPeriod: windows.previous.period, source: "live",

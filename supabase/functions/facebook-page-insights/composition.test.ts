@@ -103,7 +103,7 @@ Deno.test("owned Facebook Page analytics composes auth, provider, exact metrics 
       if (mode === "throttled") return Response.json({ error: { code: 4, message: TOKEN } }, { status: 429, headers: { "Retry-After": "180" } });
       if (mode === "ambiguous_parameter" && metric === "page_media_view") return json({ error: { code: 100, message: "Invalid parameter" } }, 400);
       const window = analyticsWindowForPeriod({ days: 7, since, until, timezone: "America/Los_Angeles" });
-      return json({ data: mode === "missing_metric" && metric === "page_media_view" ? [] : [{ name: metric, period: "day", values: [
+      return json({ data: metric === "page_media_view" && (mode === "missing_metric" || mode === "previous_missing_metric" && !current) ? [] : [{ name: metric, period: "day", values: [
         ...window.buckets.filter((_bucket, index) => mode !== "missing_day" || !current || metric !== "page_media_view" || index !== 3).map((bucket, index) => ({
           end_time: bucket.until, value: metric === "page_follows" ? (current ? 100 : 80) + index : mode === "zero" || index === 0 ? 0 : current ? 2 : 1,
         })), { end_time: new Date(Date.parse(until) + 86_400_000).toISOString(), value: 9999 },
@@ -157,6 +157,7 @@ Deno.test("owned Facebook Page analytics composes auth, provider, exact metrics 
       assertEquals(body.posts.items.map((post: { id: string }) => post.id), [`${PAGE}_3`]);
       assertEquals(body.posts.nextCursor, null);
       assertEquals(body.posts.truncated, false);
+      assertEquals(body.lastPartialAt, null);
     });
     await test.step("actual proxy-to-handler negotiation returns Facebook contract pages and rejects legacy fallback", async () => {
       const deps: ServiceProxyDeps = {
@@ -228,23 +229,33 @@ Deno.test("owned Facebook Page analytics composes auth, provider, exact metrics 
       assertFalse(JSON.stringify(body).includes(TOKEN));
       mode = "normal";
     });
-    for (const scenario of ["zero", "missing_metric", "missing_day", "previous_failed", "permission_missing", "post_metric_failed", "listing_failed", "empty_listing", "foreign_post", "cursor_loop", "budget", "throttled", "ambiguous_parameter", "missing_text", "invalid_permalink"]) {
+    for (const scenario of ["zero", "missing_metric", "missing_day", "previous_failed", "previous_missing_metric", "permission_missing", "post_metric_failed", "listing_failed", "empty_listing", "foreign_post", "cursor_loop", "budget", "throttled", "ambiguous_parameter", "missing_text", "invalid_permalink"]) {
       await test.step("metric and listing failure semantics " + scenario, async () => {
         mode = scenario;
-        const body = await (await handler(request(scenario === "cursor_loop" ? { cursor } : {}))).json();
+        const body = await (await handler(request(["cursor_loop", "previous_missing_metric"].includes(scenario) ? { cursor } : {}))).json();
         assertEquals(body.ok, true);
         const metric = (key: string) => body.metrics.find((entry: { definition: { key: string } }) => entry.definition.key === key);
         if (scenario === "zero") { assertEquals(metric("views").current, { status: "available", value: 0 }); assertEquals(metric("views").delta.reason, "zero_baseline"); }
         if (scenario === "missing_metric" || scenario === "ambiguous_parameter") assertEquals(metric("views").current, { status: "unavailable", reason: "provider_error" });
         if (scenario === "missing_day") assertEquals(metric("views").current.coverage, { availableDays: 6, expectedDays: 7 });
         if (scenario === "previous_failed") { assertEquals(metric("views").current.status, "available"); assertEquals(metric("views").delta.status, "unavailable"); }
+        if (scenario === "previous_missing_metric") {
+          assertEquals(body.posts.truncated, false);
+          assertEquals(metric("views").current.status, "available");
+          assertEquals(metric("views").previous.reason, "provider_error");
+          assertEquals(typeof body.lastPartialAt, "string");
+        }
         if (scenario === "permission_missing") assertEquals(metric("engagements").current, { status: "unavailable", reason: "permission_missing" });
         if (scenario === "post_metric_failed") {
           const metrics = body.posts.items[1].metrics;
           assertEquals(metrics.find((entry: { definition: { key: string } }) => entry.definition.key === "views").current.status, "available");
           assertEquals(metrics.find((entry: { definition: { key: string } }) => entry.definition.key === "unique_viewers").current.reason, "permission_missing");
         }
-        if (["listing_failed", "foreign_post", "invalid_permalink"].includes(scenario)) assertEquals(body.posts.status, "unavailable");
+        if (["listing_failed", "foreign_post"].includes(scenario)) assertEquals(body.posts.status, "unavailable");
+        if (scenario === "invalid_permalink") {
+          assertEquals(body.posts.items[0].permalink, null);
+          assertEquals(body.posts.items[0].metrics.find((entry: { definition: { key: string } }) => entry.definition.key === "views").current.status, "available");
+        }
         if (scenario === "missing_text") { assertEquals(body.posts.items[0].text, ""); assertEquals(body.posts.items[0].permalink, `https://www.facebook.com/${PAGE}_1`); }
         if (scenario === "empty_listing") { assertEquals(body.posts.status, "available"); assertEquals(body.posts.items, []); }
         if (scenario === "cursor_loop") { assertEquals(body.posts.reason, "provider_error"); assertEquals(body.posts.nextCursor, null); }
