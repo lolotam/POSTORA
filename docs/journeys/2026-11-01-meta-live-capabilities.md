@@ -1,12 +1,16 @@
 # Live capability verification for owned Meta accounts
 
-Scope: the owner's requested read-only verification under [design §6 and its authorization record in §12](../specs/2026-11-01-meta-analytics-completion-design.md). The preliminary operator selection was the common active Flexitol brand accounts attached to the configured project administrator: Facebook `Flexitolkw`, Instagram `flexitolkw`, and Threads `flexitolkw`. The user subsequently selected Curemed instead, then explicitly retained `flexitolkw` for Threads because no active Curemed Threads account was found. The current named targets are Facebook `Curemed`, Instagram `curemedkw`, and Threads `flexitolkw`, owned in Postora by `dr.vet.waleedtam@gmail.com`. These choices authorize bounded reads only and do not admit collection pilots.
+Scope: read-only verification under [design §6 and its target-approval record in §12](../specs/2026-11-01-meta-analytics-completion-design.md). Current owner-approved targets are `FB-01`, `IG-01`, and `TH-01`. The exact account handles, owner association and database identifiers remain in the restricted evidence directory. Waleed explicitly allowed selection among connected administrator accounts, subsequently chose an alternative brand, and separately selected its Threads replacement when that brand had no active Threads connection. The ordered instruction record is retained privately; these choices authorize bounded reads only and do not admit collection pilots.
+
+The preliminary observations below preceded those later explicit target instructions. They remain diagnostic observations, not proof of target-approved acceptance or retrospective pilot approval. The follow-up sections concern the subsequently approved targets. This record does not waive the design's target-approval requirement.
+
+Restricted target-authorization record SHA256: `5e8a7cfd73bb67567fbe82311016a66a1feac7f71fda96a342db5c0040c62181`. It records instruction order rather than inventing unavailable message timestamps. This revision minimizes the public target mapping; earlier Git revisions have not been rewritten.
 
 Before execution, a read-only database query required the configured owner, exact platform/username and active state. It returned one deterministically selected account per platform, with future stored expiry timestamps. A stored expiry timestamp does not prove that a token remains valid or that a permission is granted. No token value was returned by the selection query.
 
 The initial Facebook/Threads runner is the independently reviewed, tested immutable `617699095ff8bb0a013bfca21c8d7f1326663f40` probe from [its runbook](https://github.com/lolotam/POSTORA/blob/617699095ff8bb0a013bfca21c8d7f1326663f40/docs/runbooks/meta-owned-analytics-capability-probe.md). Its canonical LF script SHA256 is `9b70831663d248ef0c60cc2174c6ec466053142fbe80032cdb507b1372ffad68`. Requested versions are Facebook `v22.0` and Threads `v1.0`, matching existing repository readers. These are probe choices, not assertions of metric validity. The runner does not accept Instagram; credential resolution must match the account's login context.
 
-The repository is public. Detailed sanitized provider measurements are retained outside Git in a mode-0700 server evidence directory, with files restricted by umask 077. Public evidence will record API/status/permission/capability/window/pagination metadata and artifact hashes, excluding private metric counts, account UUIDs, raw provider URLs, post text and credentials. No production analytics table, credential, permission, post, collection control or schedule is changed by these probes.
+The repository is public. Detailed sanitized provider measurements and the exact target-authorization mapping are retained outside Git in a mode-0700 server evidence directory, with files restricted by umask 077. Public evidence records API/status/permission/capability/window/pagination metadata and artifact hashes, excluding account handles, administrator associations, private metric counts, account UUIDs, raw provider URLs, post text and credentials. No production analytics table, credential, permission, post, collection control or schedule is changed by these probes.
 
 ## Executed observations, 2026-11-01
 
@@ -41,19 +45,19 @@ Accepting a 90-day request does not prove a maximum supported window or the earl
 
 ## Follow-up on the owner's named targets
 
-### Facebook `Curemed`
+### Facebook `FB-01`
 
 The updated immutable probe `7ab53ed5c0d4b24a28ccf232da6107cb6fa47546` has LF source SHA256 `f4ee0aa54442a7542c2cf17e5d0e8e42187efc926798df880817eaba78ebef7d`. Its private capture completed with 22 provider calls; artifact SHA256 `a38b64796a7e07779e1149cd4a9b4bbdf67d5867bd28171670dcab13f12ad853`. Token debug confirmed validity and actual grants including `read_insights`, `pages_read_engagement`, `pages_read_user_content`, and `pages_show_list`. Responses again reported `v25.0` despite requested `v22.0`. Both bounded listing pages retained continuation, without duplicates or repeated cursors; this capture does not prove end-of-list behavior.
 
 Capture interval: `2026-11-01T04:51:13Z`–`04:52:08Z`. All four tested account metrics returned numeric daily measurements for 7/14/30/90 requests. Post views and unique-view metrics returned numeric measurements; `post_engaged_users` again returned HTTP 400/code 100. Definitions, exact-period semantics and provider-calendar alignment remain unresolved, so none of these successes establishes reconciliation.
 
-### Instagram `curemedkw`
+### Instagram `IG-01`
 
 The active row is `ig_auth_type: facebook_business`, not direct Instagram Login. Before making any Instagram provider call, the existing stable service-only `read_facebook_user_account_credential` was evaluated for the exact active owned account in a `BEGIN READ ONLY` transaction. The function exists in production, but returned `found: false`, `credential_kind: null`, and no capability generation. No token was returned to the operator. This proves that the protected account binding required by the current Page-linked owner worker is absent; it does not prove that Instagram insights are unsupported or that the legacy token is invalid. No fallback to the account's legacy credential was attempted. Credential repair/reconnection and collection acceptance remain separate from this read-only diagnostic.
 
 The direct-login probe in [PR #338](https://github.com/lolotam/POSTORA/pull/338) is intentionally inapplicable to this selected account. Sixteen offline tests passed on Windows and Linux with matching source hashes; the actual disposable SQL harness also proved direct owned success and five context/ownership refusals. Those are tool-safety tests, not live Instagram capability evidence.
 
-### Threads `flexitolkw`
+### Threads `TH-01`
 
 The four-call diagnostic captured at `2026-11-01T04:53:24Z`–`04:53:25Z` confirmed `/me` matches the stored canonical identity. `/me/permissions` returned HTTP 500/code 100. `/debug_token` authenticated with the same user token returned HTTP 403/code 10; this is refusal of that debugger request, not proof that `threads_manage_insights` is absent. Actual grants remain unverified.
 
