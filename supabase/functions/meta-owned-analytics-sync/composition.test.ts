@@ -50,7 +50,7 @@ Deno.test("registered admission keeps real token roles and refuses stale or inva
     FACEBOOK_APP_ID: APP, FACEBOOK_APP_SECRET: SECRET, THREADS_APP_ID: APP, THREADS_APP_SECRET: SECRET })) Deno.env.set(key, value);
   try {
     for (const platform of ["facebook", "threads"] as const) {
-      for (const scenario of ["normal", "missing_scope", "wrong_user", "wrong_app", "wrong_operational_identity", "invalid_token", "malformed", "permit_changed", "write_changed", "unknown_write", "invalid_envelope", "no_app_id", "unknown_permit", "extra_scopes"] as const) {
+      for (const scenario of ["normal", "missing_scope", "wrong_user", "wrong_app", "wrong_operational_identity", "invalid_token", "malformed", "missing_scopes", "duplicate_scopes", "permit_changed", "write_changed", "unknown_write", "invalid_envelope", "no_app_id", "unknown_permit", "extra_scopes"] as const) {
         await test.step(`${platform}: ${scenario}`, async () => {
           const authority = platform === "facebook" ? { platform_user_id: "992001", connection_version: 1,
             credential_id: "95000000-0000-4000-8000-000000000001", credential_revision: 1, provider_user_id: "991001", token_expires_at: null }
@@ -101,7 +101,7 @@ Deno.test("registered admission keeps real token roles and refuses stale or inva
               return Response.json({ data: { is_valid: scenario !== "invalid_token",
                 user_id: scenario === "wrong_user" ? "foreign" : "provider_user_id" in authority ? authority.provider_user_id : authority.platform_user_id,
                 ...(scenario === "no_app_id" ? {} : { app_id: scenario === "wrong_app" ? "wrong" : APP }),
-                scopes: scenario === "missing_scope" ? required.slice(0, 1) : scenario === "extra_scopes"
+                scopes: scenario === "missing_scopes" ? undefined : scenario === "duplicate_scopes" ? [...required, required[0]] : scenario === "missing_scope" ? required.slice(0, 1) : scenario === "extra_scopes"
                   ? [...required, ...Array.from({ length: 40 }, (_unused, index) => `other_permission_${index}`)] : required } }, { headers });
             }
             assertEquals(url.pathname.endsWith("/me"), true);
@@ -111,7 +111,7 @@ Deno.test("registered admission keeps real token roles and refuses stale or inva
           const response = await handler(request(platform));
           const body = await response.json();
           const success = scenario === "normal" || scenario === "no_app_id" && platform === "threads" || scenario === "extra_scopes";
-          assertEquals(response.status, success ? 200 : ["unknown_write", "unknown_permit", "invalid_envelope"].includes(scenario) ? 503 : 409);
+          assertEquals(response.status, success ? 200 : ["unknown_write", "unknown_permit", "invalid_envelope", "malformed", "missing_scopes", "duplicate_scopes"].includes(scenario) ? 503 : 409);
           assertEquals(body.ok, success);
           assertEquals(response.headers.get("access-control-allow-origin"), null);
           assertEquals(audits.length, 1);
