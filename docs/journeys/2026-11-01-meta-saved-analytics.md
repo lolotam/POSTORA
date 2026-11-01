@@ -1,6 +1,6 @@
 # Saved Meta analytics: implementation and executed evidence
 
-Source candidate: `9143bb2b14f00e3652bc80b5c0d149cc46aa0a75`, stacked on the C3 worker candidate. This record covers local implementation and preparation, not approval to merge, apply SQL, deploy, repair credentials, collect data or activate schedules. The owner explicitly requested completing missing work before a concrete deployment decision.
+Source candidate: `c07939126879d9d7b00b35831154a2e6be7b8053`, stacked on the C3 worker candidate. This record covers local implementation and preparation, not approval to merge, apply SQL, deploy, repair credentials, collect data or activate schedules. The owner explicitly requested completing missing work before a concrete deployment decision.
 
 ## Behavior now implemented
 
@@ -28,9 +28,9 @@ The [proof artifact](evidence/2026-11-01-meta-saved-analytics-proof.json) binds 
 | Browser contract/gateway/UI/Instagram route components | Five test files / 28 tests passed. Includes zero/unavailable/partial values, all six sync states, disconnected selection, failed account lookup, continuation conflict and period/account reset. |
 | Deno checks, frontend typecheck, build | Passed. Local Deno 2.9.6; hosted CI remains pinned to 2.9.8. Existing build-size warnings remain. |
 | Source/test/docs guards | Applied inline. Checked actual production consumers, dependency direction, scope/grants, zero/missing semantics, cancellation, fixture-only writes, compatibility and claims against executed logs. This is an author guard, not an independent review. |
-| Immutable lint/i18n regression | No regressions on source `9143bb2b14f00e3652bc80b5c0d149cc46aa0a75` against C3 `067521c9e884f5f5f7d8a41a9c35751ba32cf4a2`, in ordinary, suppressed and inline-disabled lanes. Historical lint/i18n debt remains; this is not a claim that full lint is clean. An initial 40 orphan-translation regression was fixed with statically checked labels before this result. |
+| Immutable lint/i18n regression | No regressions on source `c07939126879d9d7b00b35831154a2e6be7b8053` against C3 `067521c9e884f5f5f7d8a41a9c35751ba32cf4a2`, in ordinary, suppressed and inline-disabled lanes. Historical lint/i18n debt remains; this is not a claim that full lint is clean. An initial 40 orphan-translation regression was fixed with statically checked labels before this result. |
 
-The independent database fixture suites were executed sequentially when sharing global test settings. An initial observer-fixture error handling an empty activity field was corrected before the successful 31-case concurrency run. No failed run is represented as a pass. The frontend boundary tests also caught the extra `ok` field in the new response before it was corrected and verified through canonical parsing of real SQL-backed replies.
+The independent database fixture suites were executed sequentially when sharing global test settings. An initial observer-fixture error handling an empty activity field was corrected before the successful 31-case concurrency run. No failed run is represented as a pass. The frontend boundary tests also caught the extra `ok` field in the new response before it was corrected and verified through canonical parsing of real SQL-backed replies. Final typechecking rejected `Object.hasOwn` under the existing frontend library target; the safe refusal lookup now uses `Object.prototype.hasOwnProperty.call`, with a successful final typecheck and no compiler-target relaxation.
 
 ## Current production readback and remaining work
 
