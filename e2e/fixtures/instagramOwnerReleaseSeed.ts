@@ -86,7 +86,7 @@ INSERT INTO public.social_accounts(id,user_id,platform,platform_user_id,platform
 VALUES ('${OWNER_RELEASE.accountId}','${OWNER_RELEASE.ownerId}','instagram','ig-owner-release','owner_release','synthetic-browser-token','facebook_page',true,false),
 ('${OWNER_RELEASE.otherAccountId}','${OWNER_RELEASE.otherOwnerId}','instagram','ig-owner-release-other','other_owner_release','synthetic-other-token','facebook_page',true,false) ON CONFLICT DO NOTHING;
 INSERT INTO public.instagram_account_capabilities(social_account_id,user_id,platform,login_kind,permission_read_state,granted_scopes,scopes_read_at,credential_generation)
-VALUES ('${OWNER_RELEASE.accountId}','${OWNER_RELEASE.ownerId}','instagram','page_linked','ok',ARRAY['instagram_manage_insights'],now(),1) ON CONFLICT DO NOTHING;
+VALUES ('${OWNER_RELEASE.accountId}','${OWNER_RELEASE.ownerId}','instagram','page_linked','ok',ARRAY['instagram_manage_insights'],now(),1) ON CONFLICT (social_account_id) DO UPDATE SET credential_generation=1;
 INSERT INTO public.facebook_user_credentials(id,user_id,token,revision,lifecycle,token_expires_at,provenance_source)
 VALUES ('${OWNER_RELEASE.credentialId}','${OWNER_RELEASE.ownerId}','synthetic-owner-release-provider-token',1,'active',now()+interval '30 days','migrated_instagram_account_credential') ON CONFLICT DO NOTHING;
 INSERT INTO public.facebook_user_credential_bindings(social_account_id,user_id,platform,credential_id,evidence_source)

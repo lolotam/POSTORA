@@ -69,6 +69,7 @@ import {
   createInstagramAccountCapabilityStore,
   CredentialStoreError,
 } from "../_shared/facebookUserCredentialStore.ts";
+import { isStaleCollectionSqlstate } from "./httpRpc.ts";
 
 import {
   isPlainRecord,
@@ -239,7 +240,7 @@ function classifyDriverError(error: unknown): OwnerWorkerStoreError {
 
   if (sqlstate === "42501") return new OwnerWorkerStoreError("forbidden", sqlstate);
   if (sqlstate === "P0002") return new OwnerWorkerStoreError("not_found", sqlstate);
-  if (sqlstate === "40001") return new OwnerWorkerStoreError("stale_claim", sqlstate);
+  if (isStaleCollectionSqlstate(sqlstate)) return new OwnerWorkerStoreError("stale_claim", sqlstate);
   if (sqlstate === "22023" || sqlstate === "23514" || sqlstate === "23505") {
     return new OwnerWorkerStoreError("invalid", sqlstate);
   }
@@ -601,7 +602,7 @@ const DIRECT_CREDENTIAL_REFUSED_CODES = new Set(["IDC01", "IDC02"]);
 /**
  * Maps a direct-credential refusal onto a stable failure kind.
  *
- * The `40001` of the accepted fence is folded into `credential_changed` on
+ * The native `40001` and HTTP `PT409` of the accepted fence are folded into `credential_changed` on
  * purpose: for THIS reader a stale claim and a replaced connection are the
  * same outcome for the worker - this job may not be collected, and no other
  * job may be held up by it. Folding it here keeps that condition a
@@ -619,7 +620,7 @@ function classifyDirectCredentialError(error: unknown): OwnerWorkerStoreError {
 
   if (sqlstate === "42501") return new OwnerWorkerStoreError("forbidden", sqlstate);
   if (sqlstate === "P0002") return new OwnerWorkerStoreError("not_found", sqlstate);
-  if (sqlstate === "40001") return new OwnerWorkerStoreError("credential_changed", sqlstate);
+  if (isStaleCollectionSqlstate(sqlstate)) return new OwnerWorkerStoreError("credential_changed", sqlstate);
 
   if (sqlstate !== null && DIRECT_CREDENTIAL_GENERATION_CODES.has(sqlstate)) {
     return new OwnerWorkerStoreError("credential_changed", sqlstate);
