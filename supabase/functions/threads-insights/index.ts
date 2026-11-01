@@ -3,7 +3,7 @@ import { z } from "https://esm.sh/zod@3.25.76";
 import { createLogger } from "../_shared/logging.ts";
 import type { SelectedThreadsAccount } from "../_shared/threads-debug.ts";
 import { authenticateCaller, serviceRoleCallerUserId } from "../_shared/auth-helper.ts";
-import { ThreadsInsightsProvider, loadPostMetrics, type ThreadsPost } from "./provider.ts";
+import { ThreadsInsightsProvider, latestRetryAt, loadPostMetrics, type ThreadsPost } from "./provider.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -182,7 +182,7 @@ export async function handler(req: Request): Promise<Response> {
         meta: { code: cls.code, subcode: cls.subcode },
         needsPermission: cls.reason === "permission_not_approved" || cls.reason === "missing_scope",
         needsReauth: cls.reason === "invalid_token" || cls.reason === "expired_token",
-        retryAt: currentTotals.retryAt,
+        retryAt: latestRetryAt([currentTotals.retryAt, previousTotals.retryAt, timeSeries.retryAt]),
       });
     }
 
@@ -343,8 +343,8 @@ export async function handler(req: Request): Promise<Response> {
       username: account.platform_username,
       threadsUserId,
       partial: Boolean(previousTotals.error || timeSeries.error || listing.error || postResponses.some((entry) => entry.insights.error)),
-      retryAt: [currentTotals, previousTotals, timeSeries, listing, ...postResponses.map((entry) => entry.insights)]
-        .map((reply) => reply.retryAt).find((retryAt) => retryAt !== null) ?? null,
+      retryAt: latestRetryAt([currentTotals, previousTotals, timeSeries, listing, ...postResponses.map((entry) => entry.insights)]
+        .map((reply) => reply.retryAt)),
     });
 
   } catch (error) {

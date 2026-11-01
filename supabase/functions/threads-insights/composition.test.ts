@@ -81,9 +81,14 @@ Deno.test("Threads selection never substitutes an account after refusal or faile
       if (url.pathname.endsWith("/me")) return Response.json({ id: scenario === "identity_mismatch" ? "different-owner" : "thread-owner", username: "owner" });
       if (url.pathname.endsWith("/threads_insights")) {
         profileRequests++;
+        if (scenario.startsWith("throttle_")) {
+          if (profileRequests === 1 && scenario === "throttle_failure") return Response.json({ error: { code: 2 } }, { status: 503 });
+          if (profileRequests > 1) return Response.json({ error: { code: 4 } }, { status: 429, headers: { "Retry-After": profileRequests === 2 ? "180" : "15" } });
+        }
         if (scenario === "invalid_current" && profileRequests === 1) return new Response("private malformed response");
         if (scenario === "failed_previous" && profileRequests === 2) return Response.json({ error: { code: 2, message: "private-provider-detail" } }, { status: 503 });
       }
+      if (scenario === "invalid_post_time" && url.pathname.endsWith("/threads")) return Response.json({ data: [{ id: "post1", timestamp: "2026-02-30T12:00:00Z" }] });
       if (scenario === "failed_post") {
         if (url.pathname.endsWith("/threads")) return Response.json({ data: [
           { id: "post1", text: "first", timestamp: new Date().toISOString() },
@@ -189,7 +194,7 @@ Deno.test("Threads selection never substitutes an account after refusal or faile
       assertEquals(providerCalls, 0);
     });
     noAccounts = false;
-    for (const mode of ["identity_mismatch", "invalid_current", "failed_previous", "failed_post"]) {
+    for (const mode of ["identity_mismatch", "invalid_current", "failed_previous", "failed_post", "invalid_post_time", "throttle_failure", "throttle_success"]) {
       await test.step(`real provider composition handles ${mode} without replacing identity or exposing raw failures`, async () => {
         scenario = mode;
         profileRequests = 0;
@@ -203,6 +208,9 @@ Deno.test("Threads selection never substitutes an account after refusal or faile
         } else if (mode === "invalid_current") {
           assertEquals(payload.ok, false);
           assertEquals(payload.needsReauth, false);
+        } else if (mode === "throttle_failure") {
+          assertEquals(payload.ok, false);
+          assertEquals(payload.reason, "transient");
         } else {
           assertEquals(payload.ok, true);
           assertEquals(payload.partial, true);
@@ -211,6 +219,12 @@ Deno.test("Threads selection never substitutes an account after refusal or faile
             assertEquals(payload.posts[0].metrics.views, 5);
           }
         }
+        if (mode.startsWith("throttle_")) {
+          const delay = Date.parse(payload.retryAt) - Date.now();
+          assertEquals(delay > 170_000 && delay <= 180_000, true);
+          assertEquals(providerCalls, 4);
+        }
+        if (mode === "invalid_post_time") assertEquals(payload.posts, []);
         assertFalse(JSON.stringify(payload).includes("private"));
         assertFalse(JSON.stringify(payload).includes("synthetic-owner-token"));
         assertFalse(JSON.stringify(audits).includes("synthetic-owner-token"));

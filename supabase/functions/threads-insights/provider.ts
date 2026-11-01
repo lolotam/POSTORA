@@ -7,7 +7,7 @@ const metricRow = z.object({
   values: z.array(z.object({ value: z.number().finite().nullish(), end_time: z.string().optional() })).optional(),
 });
 const postRow = z.object({
-  id: z.string().min(1).max(200).regex(/^[A-Za-z0-9_-]+$/), text: z.string().nullish(), timestamp: z.string().optional(),
+  id: z.string().min(1).max(200).regex(/^[A-Za-z0-9_-]+$/), text: z.string().nullish(), timestamp: z.string().datetime({ offset: true }),
   media_type: z.string().optional(), media_url: z.string().nullish(), permalink: z.string().nullish(),
   shortcode: z.string().nullish(), thumbnail_url: z.string().nullish(),
 });
@@ -29,6 +29,12 @@ export type ProviderResult<T> =
   | { status: number; data: T; error: null; retryAt: null }
   | ProviderFailure;
 type RequestQuery = Record<string, string | number>;
+
+/** Concurrent refusals must never shorten a provider's authoritative backoff. */
+export function latestRetryAt(deadlines: readonly (string | null)[]): string | null {
+  return deadlines.reduce<string | null>((latest, candidate) =>
+    candidate !== null && (latest === null || Date.parse(candidate) > Date.parse(latest)) ? candidate : latest, null);
+}
 
 function failure(status: number, kind: ThreadsProviderError["kind"], reason: ClassifiedReason = "transient"): ProviderFailure {
   return { status, data: null, error: { kind, reason, message: "Threads insights request could not be completed." }, retryAt: null };
@@ -100,6 +106,7 @@ export class ThreadsInsightsProvider {
   private calls = 0;
   private readonly deadline: number;
   private retryAt: string | null = null;
+  private throttled = false;
   constructor(private readonly options: {
     token: string;
     signal: AbortSignal;
@@ -113,15 +120,16 @@ export class ThreadsInsightsProvider {
   }
 
   private rememberRefusal(refused: ProviderFailure): ProviderFailure {
-    if (refused.retryAt) this.retryAt = refused.retryAt;
-    return refused;
+    if (refused.error.reason === "rate_limited") this.throttled = true;
+    this.retryAt = latestRetryAt([this.retryAt, refused.retryAt]);
+    return { ...refused, retryAt: this.retryAt };
   }
 
   private async request<T>(path: readonly string[], query: RequestQuery, schema: z.ZodType<T>): Promise<ProviderResult<T>> {
     const remaining = this.deadline - Date.now();
     if (this.options.signal.aborted) return failure(0, "aborted");
     if (remaining <= 0 || this.calls >= (this.options.maxCalls ?? 32)) return failure(0, "budget");
-    if (this.retryAt && Date.parse(this.retryAt) > Date.now()) {
+    if (this.throttled) {
       return { ...failure(429, "provider", "rate_limited"), retryAt: this.retryAt };
     }
     const url = new URL(`https://graph.threads.net/v1.0/${path.map(encodeURIComponent).join("/")}`);

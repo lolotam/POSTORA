@@ -333,6 +333,8 @@
     "insightsUnauthorized": "تعذّر التحقق من جلستك. سجّل الدخول مرة أخرى.",
     "insightsReconnect": "أعد ربط حساب Threads المختار.",
     "insightsRateLimited": "وصلت طلبات Threads للحد المسموح. جرّب لاحقًا.",
+    "insightsNotEligible": "حساب Threads المختار غير مؤهل لهذه التحليلات.",
+    "insightsNotFound": "لم يعثر Threads على الحساب أو المحتوى المطلوب.",
     "insightsFailed": "فشل تحميل تحليلات Threads.",
     "insightsPermission": "صلاحية تحليلات Threads مش متاحة.",
     "loadFailed": "فشل تحميل بيانات التحليلات. {{details}} حدّث الصفحة أو سجّل دخول تاني.",

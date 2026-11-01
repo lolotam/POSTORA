@@ -115,6 +115,42 @@ Deno.test("HTTP-date backoff and malformed error bodies retain authoritative thr
   assertEquals(response.retryAt, new Date(retryAt).toISOString());
 });
 
+Deno.test("concurrent throttles keep the longest deadline and park the entire request after expiry", async () => {
+  const originalNow = Date.now;
+  let clock = originalNow();
+  Date.now = () => clock;
+  const finish: ((response: Response) => void)[] = [];
+  try {
+    const client = provider(() => new Promise((resolve) => finish.push(resolve)), { budgetMs: 300_000 });
+    const firstRead = client.identity();
+    const secondRead = client.identity();
+    finish[0](Response.json({ error: { code: 4 } }, { status: 429, headers: { "Retry-After": "120" } }));
+    const first = await firstRead;
+    finish[1](Response.json({ error: { code: 4 } }, { status: 429, headers: { "Retry-After": "10" } }));
+    const second = await secondRead;
+    assertEquals(second.retryAt, first.retryAt);
+    clock += 121_000;
+    const parked = await client.postInsights("post1");
+    assertEquals(parked.error?.reason, "rate_limited");
+    assertEquals(parked.retryAt, first.retryAt);
+    assertEquals(finish.length, 2);
+  } finally { Date.now = originalNow; }
+});
+
+Deno.test("post listing refuses missing, malformed and rolled timestamps before reporting activity", async (test) => {
+  for (const timestamp of [undefined, null, "", "2026-10-31", "invalid", "2026-02-30T12:00:00Z", "2026-10-31T25:00:00Z", "2026-10-31T12:00:00"]) {
+    await test.step(String(timestamp), async () => {
+      const response = await provider(async () => Response.json({ data: [{ id: "post1", timestamp }] })).recentPosts("owner");
+      assertEquals(response.error?.kind, "invalid_response");
+      assertEquals(response.data, null);
+    });
+  }
+  for (const timestamp of ["2024-02-29T12:00:00Z", "2026-10-31T12:00:00+0000", "2026-10-31T12:00:00.123+03:00"]) {
+    const response = await provider(async () => Response.json({ data: [{ id: "post1", timestamp }] })).recentPosts("owner");
+    assertEquals(response.data?.data[0].timestamp, timestamp);
+  }
+});
+
 Deno.test("credential, permission and server errors remain distinct without their raw messages", async (test) => {
   for (const [status, code, subcode, reason] of [
     [400, 190, 463, "expired_token"], [400, 190, 0, "invalid_token"],
@@ -140,7 +176,7 @@ Deno.test("post insights cap parallel HTTP requests at three and retain listing 
     active--;
     return Response.json({ data: [{ name: "views", total_value: { value: Number(url.pathname.split("/")[2].slice(4)) } }] });
   });
-  const posts = Array.from({ length: 8 }, (_unused, index) => ({ id: `post${index}` }));
+  const posts = Array.from({ length: 8 }, (_unused, index) => ({ id: `post${index}`, timestamp: "2026-10-31T12:00:00Z" }));
   const responses = await loadPostMetrics(client, posts);
   assertEquals(peak, 3);
   assertEquals(responses.map((entry) => entry.post.id), posts.map((post) => post.id));

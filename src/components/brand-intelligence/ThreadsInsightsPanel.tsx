@@ -249,6 +249,8 @@ export function ThreadsInsightsPanel() {
           ["invalid_token", t("errors.insightsReconnect", "Reconnect the selected Threads account.")],
           ["expired_token", t("errors.insightsReconnect", "Reconnect the selected Threads account.")],
           ["rate_limited", t("errors.insightsRateLimited", "Threads request limit reached. Please retry later.")],
+          ["not_eligible", t("errors.insightsNotEligible", "The selected Threads account is not eligible for these insights.")],
+          ["not_found", t("errors.insightsNotFound", "Threads could not find the requested account or content.")],
           ["transient", t("errors.insightsFailed", "Threads insights failed.")],
           ["unknown", t("errors.insightsFailed", "Threads insights failed.")],
         ]).get(reason);

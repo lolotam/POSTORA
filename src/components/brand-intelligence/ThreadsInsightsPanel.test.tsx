@@ -40,6 +40,8 @@ describe("Threads selection refusals", () => {
     ["wrong_account", "Reconnect the selected Threads account.", "أعد ربط حساب Threads المختار."],
     ["expired_token", "Reconnect the selected Threads account.", "أعد ربط حساب Threads المختار."],
     ["rate_limited", "Threads request limit reached. Please retry later.", "وصلت طلبات Threads للحد المسموح. جرّب لاحقًا."],
+    ["not_eligible", "The selected Threads account is not eligible for these insights.", "حساب Threads المختار غير مؤهل لهذه التحليلات."],
+    ["not_found", "Threads could not find the requested account or content.", "لم يعثر Threads على الحساب أو المحتوى المطلوب."],
     ["transient", "Threads insights failed.", "فشل تحميل تحليلات Threads."],
   ])("renders localized %s instead of the backend fallback", async (reason, english, arabic) => {
     invoke.mockImplementation(async () => ({ data: null, error: {
