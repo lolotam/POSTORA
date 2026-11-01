@@ -49,6 +49,7 @@ below). So the harness does not replay history. It:
 | `instagram_collection_cron.sql` | the four inactive collection schedules (C1): applying the schedule definition twice leaves exactly one inactive job per name and no fifth job, the exact UTC expressions, the exact bodies the registered routes accept, the runtime secret lookup with no literal credential in the stored command, the sixty second HTTP bound, the re-application that pauses an activated schedule again, the three missing-prerequisite failures that install nothing, the atomic installation, the secret rotation with a disposable request recorder, and every other job left exactly as it was; rolls back |
 | `meta_owned_analytics_history.sql` | owned Facebook/Threads history and additive Instagram provenance; its executable assertions define the implemented C2 coverage, while multi-session race evidence is recorded separately |
 | `meta_owned_analytics_claim_fairness.sql` | real Facebook/Threads admission, claim and partial completion across two owners; equal-due work yields to an unvisited account while earlier due dates retain priority; rolls back |
+| `meta_owned_analytics_worker_admission.sql` | service-only admission credential reads, default-off and target scope, derived owner, separate Page/User tokens, full expected-authority equality and Threads rotation; no invented permissions/jobs; rolls back |
 
 The harness's `SUITES` array is the complete executable inventory; the table
 above highlights selected suites, not the entire list. No existing suite may

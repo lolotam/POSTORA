@@ -10909,6 +10909,14 @@ export type Database = {
         }
         Returns: undefined
       }
+      meta_analytics_admission_credential: {
+        Args: {
+          p_platform: string
+          p_account_id: string
+          p_expected_authority: Json
+        }
+        Returns: Json
+      }
       meta_analytics_assert_service: {
         Args: Record<PropertyKey, never>
         Returns: undefined
@@ -11056,6 +11064,13 @@ export type Database = {
         }
         Returns: Json
       }
+      read_fb_analytics_admission_credential: {
+        Args: {
+          p_account_id: string
+          p_expected_authority?: Json | null
+        }
+        Returns: Json
+      }
       read_fb_analytics_collection_credential: {
         Args: {
           p_job_id: string
@@ -11069,6 +11084,13 @@ export type Database = {
           p_user_id: string
           p_account_id: string
           p_request: Json
+        }
+        Returns: Json
+      }
+      read_threads_analytics_admission_credential: {
+        Args: {
+          p_account_id: string
+          p_expected_authority?: Json | null
         }
         Returns: Json
       }

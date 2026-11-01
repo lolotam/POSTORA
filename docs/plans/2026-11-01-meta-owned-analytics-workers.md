@@ -16,13 +16,13 @@ Files:
 - Extend `_shared/metaAnalyticsTransport.ts` with the actual pre-request permit and wire both admission provider callers; preserve existing live consumers.
 - Reflect real catalog RPCs in `src/integrations/supabase/types.ts`.
 
-- [ ] Write the real SQL admission test first. Create synthetic two-owner Page/Threads rows and actual Facebook bindings using the C2 suite's shape. Require browser denial, off-policy refusal, complete expected-authority equality, correct operational/protected token separation and unchanged credential/settings/cron fingerprints.
-- [ ] Run it against the labelled disposable harness; require missing admission RPC failure before implementation. Never run this fixture in production.
-- [ ] Implement the two service-only credential readers under the existing preparation/locks, without new token storage, refresh captures or caller owner IDs.
-- [ ] Add strict typed RPC decoding and bounded calls. Classify MAH refusals separately from unknown outcomes; drop raw driver messages and token-bearing provider URLs.
-- [ ] Implement the explicit admission action and real debugger/identity adapter. Every network call repeats current authority/policy through the transport permit outside its provider catch; observation persistence repeats the SQL fence after HTTP.
-- [ ] Prove valid/missing scopes, wrong identity/app, omitted Threads app ID, malformed/expired token, stale authority before/after HTTP, unknown timeout and no secret leakage through the registered handler. Verify no enqueue or schedule change occurs during this admission slice.
-- [ ] Run the fresh SQL harness and affected Deno composition/type checks; apply guards and commit this coherent admission slice. Record it as partial C3, not a finished worker.
+- [x] Write the real SQL admission test first. Create synthetic two-owner Page/Threads rows and actual Facebook bindings using the C2 suite's shape. Require browser denial, off-policy refusal, complete expected-authority equality, correct operational/protected token separation and unchanged credential/settings/cron fingerprints.
+- [x] Run it against the labelled disposable harness; require missing admission RPC failure before implementation. Never run this fixture in production.
+- [x] Implement the two service-only credential readers under the existing preparation/locks, without new token storage, refresh captures or caller owner IDs.
+- [x] Add strict typed RPC decoding and bounded calls. Classify MAH refusals separately from unknown outcomes; drop raw driver messages and token-bearing provider URLs.
+- [x] Implement the explicit admission action and real debugger/identity adapter. Every network call repeats current authority/policy through the transport permit outside its provider catch; observation persistence repeats the SQL fence after HTTP.
+- [x] Prove valid/missing scopes, wrong identity/app, omitted Threads app ID, malformed/expired token, stale authority before/after HTTP, unknown timeout and no secret leakage through the registered handler. Verify no enqueue or schedule change occurs during this admission slice.
+- [x] Run the fresh SQL harness and affected Deno composition/type checks; apply guards and commit this coherent admission slice. Record it as partial C3, not a finished worker.
 
 The SQL entrypoint contract is exact:
 

@@ -64,6 +64,7 @@ export type MetaAnalyticsTransportOptions<Reason extends string> = {
   fallbackReason: Reason; rateLimitedReason: Reason; failureMessage: string;
   classifyFailure: (status: number, payload: unknown, headers: Headers) => MetaAnalyticsFailure<Reason> | null;
   fetch?: typeof fetch; requestTimeoutMs?: number; budgetMs?: number; maxCalls?: number;
+  beforeRequest?: () => Promise<void>;
 };
 
 /** One fixed-origin, request-wide budget for identity, metrics and bounded listing pages. No retries. */
@@ -87,10 +88,16 @@ export class MetaAnalyticsTransport<Reason extends string> {
   }
 
   async request<T>(path: readonly string[], query: Record<string, string | number>, schema: z.ZodType<T>): Promise<MetaAnalyticsResult<T, Reason>> {
-    const remaining = this.deadline - Date.now();
+    let remaining = this.deadline - Date.now();
     if (this.options.signal.aborted) return this.failure(0, "aborted");
     if (remaining <= 0 || this.calls >= (this.options.maxCalls ?? 32)) return this.failure(0, "budget");
     if (this.throttled) return { ...this.failure(429, "provider", this.options.rateLimitedReason), retryAt: this.retryAt };
+    // A permission/store failure is not a provider response. Let it stop the
+    // caller outside the transport catch, and charge its time to this budget.
+    if (this.options.beforeRequest) await this.options.beforeRequest();
+    remaining = this.deadline - Date.now();
+    if (this.options.signal.aborted) return this.failure(0, "aborted");
+    if (remaining <= 0 || this.calls >= (this.options.maxCalls ?? 32)) return this.failure(0, "budget");
     const url = new URL(`${this.options.origin}/${this.options.version}/${path.map(encodeURIComponent).join("/")}`);
     for (const [key, value] of Object.entries(query)) url.searchParams.set(key, String(value));
     const timeout = AbortSignal.timeout(Math.max(1, Math.min(remaining, this.options.requestTimeoutMs ?? 4_000)));
