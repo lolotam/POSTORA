@@ -105,6 +105,11 @@ export function isAnalyticsMetricMeasurable(definition: MetricDefinition): boole
     && !(definition.windowKind === "day" && definition.aggregation === "not_summable");
 }
 
+export function isAnalyticsAccountMetricIncomplete(metric: AnalyticsMetricResult): boolean {
+  return isAnalyticsMetricMeasurable(metric.definition) && (metric.current.status !== "available"
+    || metric.definition.windowKind !== "point_in_time" && metric.previous.status !== "available");
+}
+
 function missingReason(metrics: readonly MetricValue[]): UnavailableReason {
   const reasons = new Set(metrics.flatMap((metric) => metric.status === "unavailable" ? [metric.reason] : []));
   return UNAVAILABLE_REASONS.find((reason) => reasons.has(reason)) ?? "not_collected";

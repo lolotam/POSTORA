@@ -1,13 +1,14 @@
 import {
-  ANALYTICS_CONTRACT_VERSION, analyticsSyncState, isAnalyticsMetricMeasurable,
+  ANALYTICS_CONTRACT_VERSION, analyticsSyncState, isAnalyticsAccountMetricIncomplete,
   type AnalyticsPost, type AnalyticsReport, type UnavailableReason,
 } from "../_shared/analyticsContract.ts";
 import { closedAnalyticsPeriods, type AnalyticsPeriod, type AnalyticsPeriodDays } from "../_shared/analyticsCalendar.ts";
 import { ANALYTICS_PLATFORM_CONFIGURATION, analyticsDefinitions } from "../_shared/analyticsRegistry.ts";
 import { parseAnalyticsReport, normalizeAnalyticsPermalink } from "../_shared/analyticsSchema.ts";
 import {
-  AnalyticsCursorError, analyticsCursorScope, decodeAnalyticsCursor, encodeAnalyticsCursor, type AnalyticsCursorPosition,
+  AnalyticsCursorError, analyticsCursorScope, decodeAnalyticsCursor, type AnalyticsCursorPosition,
 } from "./analyticsCursor.ts";
+import { createAnalyticsContinuation } from "../_shared/metaAnalyticsCursor.ts";
 import { projectThreadsAccountMetric, projectThreadsPostMetric, threadsUnavailableReason } from "./analyticsProjection.ts";
 import { latestRetryAt, loadPostMetrics, type ThreadsInsightsProvider } from "./provider.ts";
 
@@ -38,20 +39,10 @@ async function continuation(input: {
   listing: Awaited<ReturnType<ThreadsInsightsProvider["recentPosts"]>>; validPage: boolean;
   position: AnalyticsCursorPosition; scope: ReturnType<typeof analyticsCursorScope>; secret: string;
 }) {
-  let reason: UnavailableReason | null = input.listing.error ? threadsUnavailableReason(input.listing.error) : input.validPage ? null : "provider_error";
+  const reason: UnavailableReason | null = input.listing.error ? threadsUnavailableReason(input.listing.error) : input.validPage ? null : "provider_error";
   const hasContinuation = input.validPage && input.listing.data?.paging?.next !== undefined;
-  let nextCursor: string | null = null;
-  if (hasContinuation) {
-    const after = input.listing.data?.paging?.cursors?.after;
-    if (!after) reason = "provider_error";
-    else {
-      const encoded = await encodeAnalyticsCursor({ after, position: input.position, scope: input.scope, secret: input.secret });
-      nextCursor = encoded.cursor;
-      if (encoded.repeated) reason = "provider_error";
-      if (encoded.exhausted) reason = "not_collected";
-    }
-  }
-  return { nextCursor, reason, truncated: !input.validPage || Boolean(hasContinuation) };
+  return await createAnalyticsContinuation({ validPage: input.validPage, hasContinuation, after: input.listing.data?.paging?.cursors?.after,
+    reason, position: input.position, scope: input.scope, secret: input.secret, namespace: "threads" });
 }
 
 export async function unifiedThreadsReport(input: {
@@ -92,7 +83,7 @@ export async function unifiedThreadsReport(input: {
   if (pageReason) refusalReasons.push(pageReason);
   const retryAt = latestRetryAt(allReplies.map((reply) => reply.retryAt));
   const partial = Boolean(current.error || previous.error || pageReason || truncated || posts.incomplete
-    || metrics.some((metric) => isAnalyticsMetricMeasurable(metric.definition) && metric.current.status !== "available"));
+    || metrics.some(isAnalyticsAccountMetricIncomplete));
   return { ok: true, refusalReasons: Array.from(new Set(refusalReasons)), report: parseAnalyticsReport({
     analyticsContractVersion: ANALYTICS_CONTRACT_VERSION, platform: "threads", accountId: input.accountId,
     generatedAt: new Date().toISOString(), period: windows.current.period, previousPeriod: windows.previous.period, source: "live",

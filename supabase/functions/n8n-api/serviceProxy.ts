@@ -242,7 +242,7 @@ export async function handleGetPostAnalytics(deps: ServiceProxyDeps, userId: str
   const owned = await loadOwnedAccount(deps, userId, params.get("social_account_id"));
   if ("error" in owned) return owned.error;
   const { account } = owned;
-  if (version !== null && account.platform !== "threads") {
+  if (version !== null && !["threads", "facebook"].includes(account.platform)) {
     return proxyError(400, "UNSUPPORTED_CONTRACT_VERSION", "This platform does not yet support analyticsContractVersion: 1.");
   }
   const rawPeriod = textField(params.get("period_days"));
@@ -254,6 +254,11 @@ export async function handleGetPostAnalytics(deps: ServiceProxyDeps, userId: str
     const upstream = await deps.invoke("threads-insights", { user_id: userId, accountId: account.id, periodDays,
       ...(version !== null ? { analyticsContractVersion: 1 } : {}), ...(cursor !== null ? { cursor } : {}) }, READ_TIMEOUT_MS);
     return fromUpstream("threads-insights", upstream);
+  }
+  if (account.platform === "facebook" && version !== null) {
+    const upstream = await deps.invoke("facebook-page-insights", { user_id: userId, accountId: account.id, periodDays,
+      analyticsContractVersion: 1, ...(cursor !== null ? { cursor } : {}) }, READ_TIMEOUT_MS);
+    return fromUpstream("facebook-page-insights", upstream);
   }
   if (account.platform === "tiktok") {
     // tiktok-analytics returns the account's recent videos and has no period.

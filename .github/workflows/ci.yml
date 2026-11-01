@@ -223,6 +223,11 @@ jobs:
           supabase/functions/threads-insights/analyticsCursor.test.ts
           supabase/functions/threads-insights/unifiedComposition.test.ts
 
+      - name: Test owned Facebook Page analytics through real composition
+        run: >-
+          deno test --node-modules-dir=none --allow-env
+          supabase/functions/facebook-page-insights/composition.test.ts
+
       - name: Typecheck and test the outlier module
         run: |
           set -euo pipefail

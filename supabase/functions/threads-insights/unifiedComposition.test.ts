@@ -62,7 +62,8 @@ Deno.test("real Threads composition negotiates the unified contract without fabr
           value: scenario === "zero" ? 0 : current ? index === 0 ? 0 : 2 : 1 })),
       ] }, { name: "followers_count", period: "day", total_value: { value: 50 } },
       { name: "likes", period: "day", total_value: { value: 88 } }];
-      return Response.json({ data: scenario === "missing_metric" && current ? rows.filter((row) => row.name !== "views") : rows });
+      return Response.json({ data: scenario === "missing_metric" && current || scenario === "previous_missing_metric" && !current
+        ? rows.filter((row) => row.name !== "views") : rows });
     }
     if (url.pathname.endsWith("/threads")) {
       if (scenario === "listing_failed") return Response.json({ error: { code: 10, message: PROVIDER_TOKEN } }, { status: 403 });
@@ -116,6 +117,16 @@ Deno.test("real Threads composition negotiates the unified contract without fabr
       assertEquals(body.posts.truncated, false);
       assertEquals(body.lastPartialAt, null);
       assertEquals(metaCalls.some((url) => url.searchParams.get("after") === "page-two"), true);
+    });
+    await test.step("a missing comparison metric in HTTP 200 marks an otherwise complete page partial", async () => {
+      scenario = "previous_missing_metric";
+      const body = await (await handler(request({ cursor }))).json();
+      assertEquals(body.posts.truncated, false);
+      const visits = body.metrics.find((metric: { definition: { key: string } }) => metric.definition.key === "profile_views");
+      assertEquals(visits.current.status, "available");
+      assertEquals(visits.previous, { status: "unavailable", reason: "provider_error" });
+      assertEquals(typeof body.lastPartialAt, "string");
+      scenario = "normal";
     });
     await test.step("real proxy and endpoint preserve versioned pagination without falling back to the legacy DTO", async () => {
       const deps: ServiceProxyDeps = {
