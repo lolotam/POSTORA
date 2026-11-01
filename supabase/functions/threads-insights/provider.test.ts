@@ -154,13 +154,48 @@ Deno.test("post listing refuses missing, malformed and rolled timestamps before 
 Deno.test("credential, permission and server errors remain distinct without their raw messages", async (test) => {
   for (const [status, code, subcode, reason] of [
     [400, 190, 463, "expired_token"], [400, 190, 0, "invalid_token"],
-    [403, 10, 0, "missing_scope"], [403, 200, 0, "missing_scope"], [503, 2, 0, "transient"],
+    [403, 10, 0, "missing_scope"], [403, 200, 0, "missing_scope"],
+    [503, 190, 463, "expired_token"], [502, 190, 467, "expired_token"],
+    [500, 190, 0, "invalid_token"], [503, 10, 0, "missing_scope"], [503, 200, 0, "missing_scope"],
+    [503, 2, 0, "transient"], [503, 999, 0, "transient"],
   ] as const) {
-    await test.step(reason, async () => {
+    await test.step(`${status}/${code}/${subcode}: ${reason}`, async () => {
       const client = provider(async () => Response.json({ error: { code, error_subcode: subcode, message: TOKEN } }, { status }));
       const response = await client.identity();
+      assertEquals(response.status, status);
+      assertEquals(response.data, null);
       assertEquals(response.error?.reason, reason);
+      assertEquals(response.retryAt, null);
       assertFalse(JSON.stringify(response).includes(TOKEN));
+    });
+  }
+});
+
+Deno.test("HTTP 429 takes precedence over credential errors and preserves its retry deadline", async () => {
+  let calls = 0;
+  const client = provider(async () => {
+    calls++;
+    return Response.json({ error: { code: 190, error_subcode: 463, message: TOKEN } }, { status: 429, headers: { "Retry-After": "120" } });
+  });
+  const response = await client.identity();
+  assertEquals(response.error?.reason, "rate_limited");
+  assertEquals(typeof response.retryAt, "string");
+  assertEquals((await client.identity()).retryAt, response.retryAt);
+  assertEquals(calls, 1);
+  assertFalse(JSON.stringify(response).includes(TOKEN));
+});
+
+Deno.test("server failures without recognized codes keep fallback classification and reject malformed errors", async (test) => {
+  for (const [payload, kind, reason] of [
+    [{}, "provider", "transient"],
+    [{ error: "invalid envelope" }, "invalid_response", "transient"],
+  ] as const) {
+    await test.step(kind, async () => {
+      const response = await provider(async () => Response.json(payload, { status: 503 })).identity();
+      assertEquals(response.data, null);
+      assertEquals(response.error?.kind, kind);
+      assertEquals(response.error?.reason, reason);
+      assertEquals(response.retryAt, null);
     });
   }
 });
