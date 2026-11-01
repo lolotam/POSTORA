@@ -3,7 +3,7 @@
 **Spec:** [`docs/specs/2026-11-01-meta-analytics-completion-design.md`](../specs/2026-11-01-meta-analytics-completion-design.md). Section references (§) point there.
 **Required reading for every task and every delegation brief:** [`ARCHITECTURE.md`](../../ARCHITECTURE.md) §§4, 10–17, 22–24, 27–28, 31–34 and 36–39 (dependencies, adapters, authentication, contracts, storage, scheduling, testing and compatibility), the spec, and for Batch A [`docs/specs/2026-10-30-instagram-release-gates.md`](../specs/2026-10-30-instagram-release-gates.md).
 
-Three batches, in order. A batch starts only when the previous batch's exit criteria are met, except where a task is marked *parallel*.
+Three batches, in order. A batch starts only when the previous batch's exit criteria are met, except where a task is marked *parallel*. Independent corrections to existing read paths may proceed while Instagram's pilot observation is pending; this does not waive capability evidence, migration ordering or platform activation prerequisites.
 
 Execution status (2026-11-01): #326 and the specification/plan PR #328 are merged. A2–A5 and the account-loading correction are implemented in [PR #329](https://github.com/lolotam/POSTORA/pull/329), with merge/deployment held for the named release prerequisites. A6 has six passing isolated owner journeys, API/MCP parity, an effective copied-fixture negative control and a fresh SQL/Auth preparation rehearsal; it remains partial. Candidate-bound receipts and the remaining local/production boundaries live in the [owner release runbook](../runbooks/instagram-owner-analytics-release.md). A7–A8 and the Facebook/Threads capability, contract, history and unified-UI acceptance remain open. B1 below may proceed in parallel; no pilot, production probe, switch or schedule has been activated by this work.
 
@@ -51,6 +51,8 @@ Create distinctly scoped artifacts: `scripts/check-instagram-owner-analytics-gat
 
 They do **not** implement or pass the canonical `scripts/check-instagram-release-gates.mjs` G-X gate. Its full acceptance inventory, including unresolved competitor work, remains fail-closed and unchanged. A7 is blocked until the authoritative release prerequisites pass or Waleed explicitly approves a scope amendment in the owning release-gates specification. This plan does not grant that amendment or mark competitor acceptance passed.
 
+The [recorded owner decision](../specs/2026-10-30-instagram-release-gates.md) retains the complete G-X gate before the owner pilot. No limited exception was approved; A7 remains blocked by the full gate.
+
 ### A7. Pilot — owner-approved operations
 After the A6 prerequisite decision, gates by name from the release-gates spec §6: **B1** (manifest/preflight for the frozen A2–A5 candidate), **B2** (deploy that reviewed candidate — separate approval), **B3** (pilot user list), **C1–C2** (reconnect; session/refresh regression), **C3** (test post — separate approval), **D1** (RC-proven target admission), and **D2** (one named owner; zero provider calls for others).
 Each step: approval → action → query evidence → record in the runbook.
@@ -67,12 +69,16 @@ Compare 7 closed days using the exact period/bucket semantics in spec §4.4 and 
 ## Batch B — Facebook/Threads verification and the metric contract
 
 ### B1. Contract package *(parallel with Batch A)*
-- Files: `src/features/analytics-contract/domain/{types,registry,period,delta}.ts`, `supabase/functions/_shared/analyticsContract.ts`.
+
+**Implemented and deployed foundation:** canonical calendar, contract, registry and serialized validator are runtime-neutral modules in `supabase/functions/_shared/`, consumed by the explicit Threads/Facebook reports and re-exported by the browser facade. Behavioral/parity coverage includes closed DST calendars, zero/unavailable/partial values, metric definitions, comparisons, observation times and persisted freshness. [Merge/deployment/live evidence](../journeys/2026-11-01-meta-read-path-deployment.md) records #340/#341. This supersedes #331's partial B1 core; preserve and port its unique remaining Instagram summary/inventory changes before closing it, and do not merge its old canonical definitions over main. Batch B/C completion is not claimed by this foundation.
+- Canonical implementations: `supabase/functions/_shared/analytics{Calendar,Contract,Registry,Schema}.ts`. Browser facade only: `src/features/analytics-contract/index.ts` and `domain/types.ts` re-export the same runtime-neutral artifacts; no separate frontend registry, period or delta implementation.
 - Implements spec §4: metric statuses, explicit registry capability/evidence fields, `capability_unverified` versus `not_collected`, per-metric coverage, `not_summable`, exact calendar/bucket boundaries, deltas, sync status and distinct `analyticsContractVersion: 1`.
 - Tests: unavailable never becomes `0`; rows present with missing metrics remain incomplete; true zeros; capability-state mapping; no unique-reach sums; timezone/boundary/DST cases; deltas; frontend/Deno parity of keys, statuses and version discriminator.
 - Parity compares the complete serialized schema/registry and shared behavioral fixtures as required by spec §4; limited key/status equality cannot pass. Include the platform `staleAfterSeconds` scope, unit and boundary cases.
 
 ### B2. Capability probes
+
+**Tooling slice:** the [read-only Facebook/Threads probe runbook](../runbooks/meta-owned-analytics-capability-probe.md) describes the bounded server-side CLI and its local safety tests. Candidate metrics remain unverified. Approved live account selection, actual provider observations, exact timezone/retention/window evidence and the Instagram credential-context probe remain pending; the tooling alone does not satisfy B2.
 - A read-only probe per platform (script under `scripts/probes/` calling the Graph APIs with a stored token fetched server-side, or a service-role-only function action), producing a JSON + Markdown evidence record under `docs/journeys/` with the fields in spec §6. Tokens are never printed.
 - Facebook: Page token, `/{page-id}/insights` and `/{post-id}/insights` at the pinned Graph version; record deprecated metrics and replacements from current Meta documentation; granted scopes via token debug.
 - Threads: account and post insights, listing pagination, earliest available date per metric, maximum window.
@@ -82,6 +88,10 @@ Compare 7 closed days using the exact period/bucket semantics in spec §4.4 and 
 **Done:** evidence committed; registry cells move from `unverified` to proven `available`/`not_offered`.
 
 ### B3. Threads live path correctness
+
+**Account-selection slice implemented locally:** the [executed regression and behavior record](../journeys/2026-11-01-threads-account-selection.md) covers explicit-selector refusal, failed-read handling, input validation and JWT identity precedence. This is an independent correctness repair; B3 remains incomplete until the versioned metric semantics, time/call bounds and pagination below pass.
+
+**Provider-bounds slice implemented locally:** the [provider correction record](../journeys/2026-11-01-threads-provider-bounds.md) covers the production-consumed bounded transport, response validation, token-identity refusal, throttle parking, bounded post concurrency and sanitized failures. Legacy response compatibility is retained; the unified metric semantics and continuation pagination below remain open. This does not establish a measured end-to-end proxy deadline or any live API capability.
 - File: `supabase/functions/threads-insights/index.ts` (split into handler + provider adapter per `ARCHITECTURE.md` if the file shape requires it).
 - Account selection: requested `accountId` missing/inactive/foreign → rejected, DB error → 5xx, no fallback, provider not called.
 - Decoding: missing metric, failed previous period, one failed post → `unavailable` in the new versioned response; multi-day series preserved.
@@ -104,6 +114,9 @@ Fill the spec §4.3 mapping table and the registry from B2 evidence; update the 
 ## Batch C — history and unified UI
 
 ### C1. Job-model decision record
+
+**Reviewed decision:** [per-platform jobs and concrete history/fencing ADR](../specs/2026-11-01-meta-analytics-history-job-model.md) selects option (b), preserving the Instagram queue. It specifies capture sequencing, relational per-metric provenance, exact-period keys, credential authority, parent-first locking, report revisions/cursor invalidation and bounded retention. Its source review and author corrections are recorded in §9; C2 implementation may be prepared for review, while migration merge/application remain separately owner-approved and C2 acceptance remains open.
+
 The ADR also defines spec §8.2's exact-period business key, concrete storage/indexes and same-day capture fencing before migrations; overlapping 7/30-day totals must never collide.
 
 Before any migration, a short ADR in `docs/specs/` chooses spec §8.2 option (a) or (b), based on the actual Instagram durable-job migration and `instagram-insights-sync/workerStore.ts`. It lists platform-neutral modules, business keys/indexes and capture-ID ownership from §8.1, retention cutoff and anchor preservation, exact lock/fence/deletion order and batch limits, plus platform-isolation, fencing, reconnect, retry-idempotency and retention/report race tests. C2 is blocked until this ADR is reviewed; omitted cleanup details are not left to migration-time guesses.

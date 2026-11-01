@@ -363,6 +363,37 @@ Deno.test("a period outside 7, 14, 30, 90 is refused before any call", async () 
   assertEquals(badPeriod.calls.invokes.length, 0);
 });
 
+Deno.test("explicit analytics negotiation never silently falls back to a legacy platform response", async () => {
+  const cases = [
+    { platform: "threads", query: { analyticsContractVersion: "2" }, code: "UNSUPPORTED_CONTRACT_VERSION" },
+    { platform: "threads", query: { analyticsContractVersion: "01" }, code: "UNSUPPORTED_CONTRACT_VERSION" },
+    { platform: "threads", query: { cursor: "opaque" }, code: "INVALID_CURSOR" },
+    { platform: "threads", query: { analyticsContractVersion: "1", cursor: "" }, code: "INVALID_CURSOR" },
+    { platform: "instagram", query: { analyticsContractVersion: "1" }, code: "UNSUPPORTED_CONTRACT_VERSION" },
+    { platform: "tiktok", query: { analyticsContractVersion: "1" }, code: "UNSUPPORTED_CONTRACT_VERSION" },
+  ];
+  for (const { platform, query, code } of cases) {
+    const { deps, calls } = fakeDeps({ account: { ...DEFAULT_ACCOUNT, platform } });
+    const search = params({ social_account_id: ACCOUNT_ID });
+    for (const [key, value] of Object.entries(query)) search.set(key, value!);
+    const result = await handleGetPostAnalytics(deps, OWNER, search);
+    assertEquals(result.status, 400);
+    assertEquals(errorOf(result).code, code);
+    assertEquals(calls.invokes.length, 0);
+  }
+});
+
+Deno.test("versioned Threads request preserves the signed continuation at the upstream boundary", async () => {
+  const { deps, calls } = fakeDeps({ account: { ...DEFAULT_ACCOUNT, platform: "threads" },
+    upstream: { status: 200, data: { ok: true, analyticsContractVersion: 1, posts: { nextCursor: "next.signed" } } } });
+  const result = await handleGetPostAnalytics(deps, OWNER, params({ social_account_id: ACCOUNT_ID,
+    period_days: "14", analyticsContractVersion: "1", cursor: "current.signed" }));
+  assertEquals(result.status, 200);
+  assertEquals(bodyOf(result).analyticsContractVersion, 1);
+  assertEquals(calls.invokes[0].body, { user_id: OWNER, accountId: ACCOUNT_ID, periodDays: 14,
+    analyticsContractVersion: 1, cursor: "current.signed" });
+});
+
 Deno.test("tiktok analytics reads the account's videos", async () => {
   const tiktok = fakeDeps({
     account: { id: ACCOUNT_ID, user_id: OWNER, platform: "tiktok", platform_user_id: "tt-1", is_active: true },
