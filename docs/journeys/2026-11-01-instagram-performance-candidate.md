@@ -12,14 +12,16 @@ Date: 2026-11-01. Scope: owned-account performance analytics, Batch A2–A5 of t
 | Load more never advanced the report | An infinite query fetches and accumulates pages, preserving server ordering and deduplicating media IDs. Integration tests cover the final page, period reset and retained data after next-page failure. |
 | The store silently stopped at 200 snapshots, 100 daily rows and 50 profile observations | Owner/account-filtered keyset traversal now reads all three series independently of the display cursor. Exact PostgREST counts prevent a server row cap from masquerading as end-of-list. A real SDK/HTTP-boundary regression reads 522 snapshots representing 261 distinct media, with a synthetic server cap of 37 rows, and reaches all media through three display pages. |
 | Unique reach was a daily sum, partial sums looked complete, and chart gaps became zeros | Unique period reach is unavailable until an exact provider total exists. Additive metrics expose per-metric day coverage using the report's date bounds. True zero remains numeric; missing/failed days remain chart gaps. Views are labelled as views. |
-| Failed collection-status reads looked like never-synced accounts | A failed status RPC now fails the report, preserving the distinction between missing data and failed reads. |
+| Failed collection-status reads looked like never-synced accounts | Failed status/coverage reads now fail the report, preserving the distinction between missing data and failed reads. |
+
+The later real Auth/PostgREST/SQL probe exposed an additional composition defect: `read_instagram_collection_job_status` explicitly grants execution only to `authenticated`, while the report store uses `service_role`. Its previous swallowed error concealed this mismatch. The report now reads only whitelisted job/checkpoint fields through structurally owner/account/target/generation-filtered queries, preserving historical last-success/partial timestamps across capture days. No SQL grant is widened. Failed status/coverage reads still fail the report.
 
 The previously reviewed error-message fix, [PR #326](https://github.com/lolotam/POSTORA/pull/326), was merged before integration into this candidate. Its translated refusals and regression tests are preserved.
 
 ## Validation
 
 - Node/Vitest: 46 focused tests passed, including real gateway/assembler pagination, account/period isolation and metric coverage cases.
-- Deno 2.9.0 via pinned npm package: 82 report tests and 13 substeps passed, with typechecking enabled. CI config specifies a different Deno patch version; the local result does not claim patch-version parity.
+- Deno 2.9.0 via pinned npm package: 83 report tests and 13 substeps passed, with typechecking enabled. CI config specifies a different Deno patch version; the local result does not claim patch-version parity.
 - The first hosted run passed Node/type/build/lint/Postgres checks but failed an existing rollout test whose SDK double lacked the newly used count/filter/abort methods. The boundary fixture was updated without weakening its assertions; all 48 owner-rollout/daily-dispatch tests then passed locally. Final hosted Deno acceptance remains tied to the updated head.
 - `npm run typecheck` passed.
 - `npm run build` passed; existing WhatsApp circular-chunk and large-chunk warnings remain.
@@ -27,6 +29,7 @@ The previously reviewed error-message fix, [PR #326](https://github.com/lolotam/
 - The lint/i18n regression gate initially caught two translation keys orphaned by the metric-copy correction. Both obsolete keys were removed; the corrected production code at `914eb868` passed with **NO REGRESSIONS**, retaining the historical baseline of 1224 ordinary lint errors and 364 i18n aggregate findings. Subsequent account-isolation test/documentation additions still require the final PR revision's hosted check; a historical pass is not that result.
 - `graphify update .` completed. Generated graph changes are excluded from task commits.
 - Review correction: daily chart markers remain visible for isolated measurements separated by null gaps; preserving missing days no longer hides single-point series.
+- A real local GoTrue login and PostgREST/database report probe returned the expected owner identity, 14200 followers, two daily rows and the first 20 stored media after the status-reader correction. Browser/worker acceptance remains separate until its actual journey passes.
 
 ## Operational limits and remaining acceptance
 

@@ -8,7 +8,7 @@ export interface HistoryQuery extends PromiseLike<HistoryReadResult> {
   eq(column: string, value: unknown): HistoryQuery;
   gt(column: string, value: string): HistoryQuery;
   lte(column: string, value: string): HistoryQuery;
-  order(column: string, options: { ascending: boolean }): HistoryQuery;
+  order(column: string, options: { ascending: boolean; nullsFirst?: boolean }): HistoryQuery;
   limit(count: number): HistoryQuery;
   abortSignal(signal: AbortSignal): HistoryQuery;
   maybeSingle(): PromiseLike<{ data: Record<string, unknown> | null; error: { message: string } | null }>;
