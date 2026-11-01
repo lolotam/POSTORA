@@ -11936,6 +11936,26 @@ export type Database = {
         }
         Returns: Json
       }
+      persist_instagram_collection_snapshot_http: {
+        Args: { p_job_id: string; p_claim_token: string; p_job_generation: number; p_payload: Json }
+        Returns: Json
+      }
+      record_instagram_collection_job_progress_http: {
+        Args: { p_job_id: string; p_claim_token: string; p_job_generation: number; p_payload: Json }
+        Returns: Json
+      }
+      complete_instagram_collection_job_http: {
+        Args: { p_job_id: string; p_claim_token: string; p_job_generation: number; p_outcome: string; p_reason_code?: string | null }
+        Returns: Json
+      }
+      record_instagram_provider_throttle_http: {
+        Args: { p_bucket_key: string; p_usage_percent: number; p_throttled_until: string; p_job_id?: string | null; p_claim_token?: string | null; p_job_generation?: number | null }
+        Returns: Json
+      }
+      read_instagram_direct_collection_credential_http: {
+        Args: { p_job_id: string; p_claim_token: string; p_job_generation: number; p_expected_credential_generation: number }
+        Returns: Json
+      }
       persist_competitor_collection_result: {
         Args: {
           p_job_id: string

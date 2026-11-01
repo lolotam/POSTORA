@@ -162,6 +162,7 @@ SUITES=(
   instagram_collection_rollout_controls.sql
   instagram_collection_daily_dispatch.sql
   instagram_collection_cron.sql
+  instagram_collection_http_fences.sql
   meta_owned_analytics_history.sql
 )
 # These fixtures build their own focused schema and apply the migration under

@@ -5,6 +5,8 @@
 
 Three batches, in order. A batch starts only when the previous batch's exit criteria are met, except where a task is marked *parallel*. Independent corrections to existing read paths may proceed while Instagram's pilot observation is pending; this does not waive capability evidence, migration ordering or platform activation prerequisites.
 
+Execution status (2026-11-01): #326 and the specification/plan PR #328 are merged. A2–A5 and the account-loading correction are implemented in [PR #329](https://github.com/lolotam/POSTORA/pull/329), with merge/deployment held for the named release prerequisites. A6 has six passing isolated owner journeys, API/MCP parity, an effective copied-fixture negative control and a fresh SQL/Auth preparation rehearsal; it remains partial. Candidate-bound receipts and the remaining local/production boundaries live in the [owner release runbook](../runbooks/instagram-owner-analytics-release.md). A7–A8 and the Facebook/Threads capability, contract, history and unified-UI acceptance remain open. B1 below may proceed in parallel; no pilot, production probe, switch or schedule has been activated by this work.
+
 ## Conventions for every task
 
 - Feature branch from `origin/main` created with `--no-track`; scoped commits (`git commit -- <files>`).
