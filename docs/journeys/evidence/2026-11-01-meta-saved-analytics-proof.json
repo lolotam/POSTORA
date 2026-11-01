@@ -36,6 +36,11 @@
       "base": "067521c9e884f5f5f7d8a41a9c35751ba32cf4a2",
       "head": "c07939126879d9d7b00b35831154a2e6be7b8053",
       "historical_debt_remains": true
+    },
+    "owner_rollout_ci_fixture_correction": {
+      "tests": 48,
+      "failed_hosted_fixture_preserved": true,
+      "production_source_changed": false
     }
   },
   "artifacts": [
@@ -90,6 +95,10 @@
     {
       "local_artifact": ".tmp/c4-final-lint-summary.md",
       "sha256": "e573152e2c24313afa0d0a79ba00f17c40366abf8fe51b7228c4fc65ee517980"
+    },
+    {
+      "local_artifact": ".tmp/pr347-rollout-ci-proof.log",
+      "sha256": "d6629aaad6ef2fb200c652d9d28f83aab68fe59699beb2d43b879d6a97118f3e"
     }
   ],
   "read_only_production_verification": {

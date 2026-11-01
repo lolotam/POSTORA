@@ -34,6 +34,8 @@ The independent database fixture suites were executed sequentially when sharing 
 
 ## Current production readback and remaining work
 
+Hosted CI later exposed a composition fixture still serving the former multi-table report contract. The owner-rollout fixture now serves `read_instagram_owner_report_snapshot` and models the SDK's abortable audit insert. The excluded-account history regression remains intact; the exact rollout/daily-enqueue CI pair passed locally (48 tests). This correction changes tests only; deployed source remains pinned to the candidate above. Hosted checks on the correction must pass before merge.
+
 A new **read-only** production transaction on 2026-11-01 found the C2 history reader, new saved-report reader and Instagram snapshot reader absent. The three requested collection-setting rows and the six new Facebook/Threads schedule names were absent; this is not evidence of an explicit false-valued setting. The collectors refuse missing configuration. The selected owned Facebook and Instagram rows were active but had no protected credential-binding row. Threads does not use that Facebook binding, so its missing row is not itself a Threads defect. No credential or provider token was retrieved or changed.
 
 Still open: accepted Facebook/Instagram protected binding, Instagram capability/calendar evidence and per-metric capture adoption, complete canonical G-X, the remaining per-dependency C3 termination matrix, fully assembled browser journeys, hosted checks/independent review, approved production application/deployment, live reconciliation and seven distinct scheduled due-date successes. Local SQL/handler/component tests are not substituted for those live/browser acceptance records.
