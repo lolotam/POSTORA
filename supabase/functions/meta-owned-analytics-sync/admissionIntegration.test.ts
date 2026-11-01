@@ -10,7 +10,7 @@ const API = "https://owned-analytics.invalid";
 const literal = (value: unknown) => `'${JSON.stringify(value).replaceAll("'", "''")}'::jsonb`;
 const settingKeys = "'collection_facebook_analytics_enabled','collection_threads_analytics_enabled','collection_facebook_analytics_policy','collection_threads_analytics_policy'";
 
-Deno.test("registered admission uses real SQL fences before requests and after provider responses", async (test) => {
+Deno.test("registered admission and dispatch preserve real SQL fences and durable progress", async (test) => {
   const target = Deno.env.get("ROLLOUT_IT_CONTAINER");
   const database = Deno.env.get("ROLLOUT_IT_DB") ?? "";
   assert(target && database.endsWith("_harness"), "Explicit disposable container and _harness database are required");
@@ -29,10 +29,45 @@ Deno.test("registered admission uses real SQL fences before requests and after p
   let snapshot: unknown;
   let ownsFixture = false;
   const failures: unknown[] = [];
+  const auditIds: unknown[] = [];
+  const sweepDigests: string[] = [];
+  let loseCommitResponse = false;
+  const sqlRequest = async (outgoing: Request): Promise<Response> => {
+    const url = new URL(outgoing.url);
+    const body = await outgoing.json();
+    if (url.pathname === "/rest/v1/system_logs") {
+      const id = await runtime.queryJson(`INSERT INTO public.system_logs(level,category,source,message,metadata)
+        SELECT x.level,x.category,x.source,x.message,x.metadata FROM jsonb_to_record(${literal(body)})
+        AS x(level text,category text,source text,message text,metadata jsonb) RETURNING to_jsonb(id);`, SERVICE_ROLE);
+      auditIds.push(id);
+      return new Response(null, { status: 201 });
+    }
+    const name = url.pathname.slice("/rest/v1/rpc/".length);
+    assert(/^(read|observe)_(fb|threads)_analytics_(admission_credential|permissions)$/.test(name)
+      || ["next_meta_analytics_dispatch_target", "commit_meta_analytics_dispatch_target"].includes(name), "Unexpected RPC refused");
+    try {
+      const result = await runtime.callRpc(name, body, SERVICE_ROLE);
+      if (loseCommitResponse && name === "commit_meta_analytics_dispatch_target") {
+        loseCommitResponse = false;
+        return Response.json({ code: "57014", message: "Synthetic lost commit response" }, { status: 503 });
+      }
+      return Response.json(result);
+    } catch (error) {
+      if (!(error instanceof RolloutSqlError)) throw error;
+      return Response.json({ code: error.sqlstate, message: "Synthetic SQL refusal" }, { status: 400 });
+    }
+  };
   try {
     assertEquals(await runtime.queryJson(`SELECT to_jsonb(count(*)) FROM auth.users WHERE id='${OWNER}';`), 0, "Never replace a pre-existing owner");
     snapshot = await runtime.queryJson(`SELECT jsonb_object_agg(key,value) FROM public.app_settings WHERE key IN (${settingKeys});`);
     assert(snapshot && typeof snapshot === "object", "Existing rollout settings required");
+    for (const id of [PAGE, THREADS]) {
+      const digest = await runtime.queryJson(`SELECT to_jsonb(encode(sha256(convert_to(${literal({ account_ids: [id] })}::text,'utf8')),'hex'));`);
+      assert(typeof digest === "string", "Fixture policy digest must be database-authored");
+      sweepDigests.push(digest);
+    }
+    assertEquals(await runtime.queryJson(`SELECT to_jsonb(count(*)) FROM public.meta_analytics_enqueue_sweeps
+      WHERE policy_digest IN (SELECT jsonb_array_elements_text(${literal(sweepDigests)}));`), 0, "Never replace pre-existing sweep metadata");
     await runtime.exec(`BEGIN;
       INSERT INTO auth.users(id,email) VALUES('${OWNER}','meta-admission-it@example.invalid');
       INSERT INTO public.social_accounts(id,user_id,platform,platform_user_id,access_token,is_active,needs_reauth) VALUES
@@ -57,22 +92,7 @@ Deno.test("registered admission uses real SQL fences before requests and after p
           globalThis.fetch = async (input, init) => {
             const outgoing = new Request(input, init);
             const url = new URL(outgoing.url);
-            if (url.origin === API) {
-              const body = await outgoing.json();
-              if (url.pathname === "/rest/v1/system_logs") {
-                await runtime.exec(`INSERT INTO public.system_logs(level,category,source,message,metadata)
-                  SELECT x.level,x.category,x.source,x.message,x.metadata FROM jsonb_to_record(${literal(body)})
-                  AS x(level text,category text,source text,message text,metadata jsonb);`, SERVICE_ROLE);
-                return new Response(null, { status: 201 });
-              }
-              const name = url.pathname.slice("/rest/v1/rpc/".length);
-              assert(/^(read|observe)_(fb|threads)_analytics_(admission_credential|permissions)$/.test(name), "Unexpected RPC refused");
-              try { return Response.json(await runtime.callRpc(name, body, SERVICE_ROLE)); }
-              catch (error) {
-                if (!(error instanceof RolloutSqlError)) throw error;
-                return Response.json({ code: error.sqlstate, message: "Synthetic SQL refusal" }, { status: 400 });
-              }
-            }
+            if (url.origin === API) return await sqlRequest(outgoing);
             assertEquals(url.origin, platform === "facebook" ? "https://graph.facebook.com" : "https://graph.threads.net");
             providerCalls++;
             const debuggerCall = url.pathname.endsWith("/debug_token");
@@ -100,12 +120,56 @@ Deno.test("registered admission uses real SQL fences before requests and after p
       }
     }
     assertEquals(await runtime.queryJson(`SELECT to_jsonb(count(*)) FROM public.system_logs WHERE source='meta-owned-analytics-sync' AND metadata->>'accountId' IN ('${PAGE}','${THREADS}');`), 6);
+    await runtime.exec(`UPDATE public.app_settings SET value=jsonb_build_object('account_ids',jsonb_build_array('${PAGE}')) WHERE key='collection_facebook_analytics_policy';
+      UPDATE public.app_settings SET value=jsonb_build_object('account_ids',jsonb_build_array('${THREADS}')) WHERE key='collection_threads_analytics_policy';`);
+    let providerCalls = 0;
+    globalThis.fetch = async (input, init) => {
+      const outgoing = new Request(input, init);
+      const url = new URL(outgoing.url);
+      if (url.origin === API) return await sqlRequest(outgoing);
+      providerCalls++;
+      assertEquals(url.origin, "https://graph.threads.net");
+      if (url.pathname.endsWith("debug_token")) {
+        assertEquals(url.searchParams.get("input_token"), "fixture-rotated");
+        return Response.json({ data: { is_valid: true, user_id: "773001", scopes: ["threads_basic", "threads_manage_insights",
+          ...Array.from({ length: 40 }, (_unused, index) => `other_permission_${index}`)] } });
+      }
+      assertEquals(outgoing.headers.get("authorization"), "Bearer fixture-rotated");
+      return Response.json({ id: "773001" });
+    };
+    const dispatch = () => handler(new Request(API, { method: "POST", headers: { Authorization: "Bearer synthetic-cron", "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "enqueue-daily", platform: "all" }) }));
+    for (const scenario of ["fresh_grants", "existing_jobs", "rotated_credential", "lost_commit_then_resume"] as const) {
+      const passed = await test.step(`dispatch: ${scenario}`, async () => {
+        if (scenario === "rotated_credential") await runtime.exec(`UPDATE public.social_accounts SET access_token='fixture-rotated' WHERE id='${THREADS}';`);
+        if (scenario === "lost_commit_then_resume") {
+          loseCommitResponse = true;
+          const lost = await dispatch();
+          assertEquals(lost.status, 503);
+          const result = await lost.json();
+          assertEquals(result.reason, "storage_unavailable");
+          assertEquals(result.counts.queued, 0);
+        }
+        const response = await dispatch();
+        const result = await response.json();
+        assertEquals(response.status, 200, JSON.stringify(result));
+        assertEquals(result.status, "complete");
+        assertEquals(result.counts, { visited: 2, queued: 2, refused: 0 });
+        assertEquals(providerCalls, ["rotated_credential", "lost_commit_then_resume"].includes(scenario) ? 2 : 0);
+        for (const family of ["fb", "threads"]) assertEquals(await runtime.queryJson(`SELECT jsonb_build_object('count',count(*),'generation',min(job_generation))
+          FROM public.${family}_analytics_collection_jobs WHERE user_id='${OWNER}';`), { count: 1, generation: 1 });
+      });
+      assert(passed, "Stop after a failed durable dispatch scenario");
+    }
+    assertEquals(auditIds.length, 11);
   } catch (error) { failures.push(error); }
   finally {
     globalThis.fetch = oldFetch;
     try { if (snapshot) await runtime.exec(`UPDATE public.app_settings s SET value=e.value FROM jsonb_each(${literal(snapshot)}) e WHERE s.key=e.key;`); }
     catch (error) { failures.push(error); }
-    try { if (ownsFixture) await runtime.exec(`DELETE FROM public.system_logs WHERE source='meta-owned-analytics-sync' AND metadata->>'accountId' IN ('${PAGE}','${THREADS}'); DELETE FROM auth.users WHERE id='${OWNER}';`); }
+    try { if (ownsFixture) await runtime.exec(`DELETE FROM public.system_logs WHERE id::text IN (SELECT jsonb_array_elements_text(${literal(auditIds)}));
+      DELETE FROM public.meta_analytics_enqueue_sweeps WHERE policy_digest IN (SELECT jsonb_array_elements_text(${literal(sweepDigests)}));
+      DELETE FROM auth.users WHERE id='${OWNER}';`); }
     catch (error) { failures.push(error); }
     for (const [key, value] of previousEnvironment) {
       if (value === undefined) Deno.env.delete(key);

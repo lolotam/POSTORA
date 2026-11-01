@@ -27,7 +27,7 @@ export function handler(req: Request): Promise<Response> {
     audit: async (event, signal) => {
       if (!client) return false;
       const result = await client.from("system_logs").insert({ level: "info", category: "edge", source: "meta-owned-analytics-sync",
-        message: "Owned analytics admission finished", metadata: redactSensitive(event) }).abortSignal(signal);
+        message: "Owned analytics operation finished", metadata: redactSensitive(event) }).abortSignal(signal);
       return result.error === null;
     },
   })(req);

@@ -50,6 +50,7 @@ below). So the harness does not replay history. It:
 | `meta_owned_analytics_history.sql` | owned Facebook/Threads history and additive Instagram provenance; its executable assertions define the implemented C2 coverage, while multi-session race evidence is recorded separately |
 | `meta_owned_analytics_claim_fairness.sql` | real Facebook/Threads admission, claim and partial completion across two owners; equal-due work yields to an unvisited account while earlier due dates retain priority; rolls back |
 | `meta_owned_analytics_worker_admission.sql` | service-only admission credential reads, default-off and target scope, derived owner, separate Page/User tokens, full expected-authority equality and Threads rotation; no invented permissions/jobs; rolls back |
+| `meta_owned_analytics_worker_progress.sql` | durable daily dispatch across more than 50 targets/two owners, atomic non-force enqueue/cursor progress, current grant renewal, UUID normalization, complete-round restart, stale day/policy/position refusal and visible account refusals; rolls back |
 
 The harness's `SUITES` array is the complete executable inventory; the table
 above highlights selected suites, not the entire list. No existing suite may

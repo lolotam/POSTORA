@@ -14,8 +14,21 @@ const facebookCredential = credentialBase.extend({ authority: facebookAuthority 
 const threadsCredential = credentialBase.extend({ authority: threadsAuthority }).strict();
 export type AdmissionCredential = z.infer<typeof facebookCredential> | z.infer<typeof threadsCredential>;
 export type AnalyticsRpc = (name: string, args: Record<string, unknown>, signal: AbortSignal) => PromiseLike<unknown>;
+const dispatchTicket = z.object({ platform: z.enum(["facebook", "threads"]), due_on: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  policy_digest: z.string().regex(/^[a-f0-9]{64}$/), round: z.number().int().positive().safe(),
+  after_account_id: z.string().uuid().nullable(), account_id: z.string().uuid() }).strict();
+const dispatchNext = z.discriminatedUnion("state", [z.object({ state: z.literal("disabled") }).strict(),
+  z.object({ state: z.literal("not_started") }).strict(),
+  z.object({ state: z.literal("complete"), refused_count: z.number().int().min(0).max(100), round: z.number().int().positive().safe(),
+    served_at: z.string().datetime({ offset: true }) }).strict(),
+  z.object({ state: z.literal("target"), served_at: z.string().datetime({ offset: true }), ticket: dispatchTicket }).strict()]);
+const dispatchCommit = z.discriminatedUnion("state", [z.object({ state: z.literal("needs_admission") }).strict(),
+  z.object({ state: z.literal("advanced"), outcome: z.enum(["queued", "refused"]), complete: z.boolean(),
+    refused_count: z.number().int().min(0).max(100) }).strict()]);
+export type AnalyticsDispatchTicket = z.infer<typeof dispatchTicket>;
+export type AnalyticsDispatchNext = z.infer<typeof dispatchNext>;
 
-export class OwnedAnalyticsAdmissionStore {
+export class OwnedAnalyticsStore {
   constructor(private readonly rpc: AnalyticsRpc, private readonly deadline: AnalyticsWorkerDeadline) {}
 
   private async call(name: string, args: Record<string, unknown>): Promise<unknown> {
@@ -31,8 +44,9 @@ export class OwnedAnalyticsAdmissionStore {
     }
     if (decoded.data.error !== null) {
       const refusal = z.object({ code: z.string() }).passthrough().safeParse(decoded.data.error);
+      if (refusal.success && refusal.data.code === "MAH05") throw new AnalyticsWorkerStopped("configuration_unavailable", "MAH05");
       const definitive = refusal.success && ["MAH01", "MAH02", "MAH03", "MAH04", "MAH05", "42501"].includes(refusal.data.code);
-      throw new AnalyticsWorkerStopped(definitive ? "admission_refused" : "storage_unavailable");
+      throw new AnalyticsWorkerStopped(definitive ? "admission_refused" : "storage_unavailable", definitive && refusal.success ? refusal.data.code : null);
     }
     return decoded.data.data;
   }
@@ -53,5 +67,19 @@ export class OwnedAnalyticsAdmissionStore {
     const decoded = z.object({ account_id: z.string().uuid(), authority: platform === "facebook" ? facebookAuthority : threadsAuthority,
       state: z.literal("verified") }).strict().safeParse(raw);
     if (!decoded.success || decoded.data.account_id !== credential.account_id) throw new AnalyticsWorkerStopped("invalid_contract");
+  }
+
+  async nextDispatch(platform: OwnedAnalyticsPlatform, start: boolean): Promise<AnalyticsDispatchNext> {
+    const raw = await this.call("next_meta_analytics_dispatch_target", { p_platform: platform, p_start: start });
+    const decoded = dispatchNext.safeParse(raw);
+    if (!decoded.success || decoded.data.state === "target" && decoded.data.ticket.platform !== platform) throw new AnalyticsWorkerStopped("invalid_contract");
+    return decoded.data;
+  }
+
+  async commitDispatch(ticket: AnalyticsDispatchTicket, outcome: "enqueue" | "refused", reason: string | null = null): Promise<z.infer<typeof dispatchCommit>> {
+    const raw = await this.call("commit_meta_analytics_dispatch_target", { p_ticket: ticket, p_outcome: outcome, p_reason: reason });
+    const decoded = dispatchCommit.safeParse(raw);
+    if (!decoded.success) throw new AnalyticsWorkerStopped("invalid_contract");
+    return decoded.data;
   }
 }

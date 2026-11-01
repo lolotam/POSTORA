@@ -1,13 +1,17 @@
 import { z } from "https://esm.sh/zod@3.25.76";
 import { handleRestrictedCorsOptions, restrictedJsonResponse } from "../_shared/cors.ts";
 import { admitOwnedAnalyticsAccount } from "./admission.ts";
+import { dispatchOwnedAnalyticsDaily, type DispatchCounts } from "./dispatch.ts";
 import { AnalyticsWorkerDeadline, AnalyticsWorkerStopped } from "./deadline.ts";
 import type { AdmissionApp } from "./permissionProvider.ts";
-import { OwnedAnalyticsAdmissionStore, type AnalyticsRpc, type OwnedAnalyticsPlatform } from "./store.ts";
+import { OwnedAnalyticsStore, type AnalyticsRpc, type OwnedAnalyticsPlatform } from "./store.ts";
 
-const admissionRequest = z.object({ action: z.literal("admit"), platform: z.enum(["facebook", "threads"]), accountId: z.string().uuid() }).strict();
-export type OwnedAnalyticsAudit = { event: "owned_analytics_admission"; status: string; reason: string | null;
-  platform: OwnedAnalyticsPlatform | null; accountId: string | null };
+const syncRequest = z.discriminatedUnion("action", [
+  z.object({ action: z.literal("admit"), platform: z.enum(["facebook", "threads"]), accountId: z.string().uuid() }).strict(),
+  z.object({ action: z.literal("enqueue-daily"), platform: z.enum(["facebook", "threads", "all"]) }).strict(),
+]);
+export type OwnedAnalyticsAudit = { event: "owned_analytics_admission" | "owned_analytics_dispatch"; status: string; reason: string | null;
+  platform: OwnedAnalyticsPlatform | "all" | null; accountId: string | null; counts?: DispatchCounts };
 export type OwnedAnalyticsSyncDeps = {
   authorize: (req: Request) => { ok: true } | { ok: false; status: 401 | 503 };
   app: (platform: OwnedAnalyticsPlatform) => AdmissionApp | null;
@@ -16,7 +20,7 @@ export type OwnedAnalyticsSyncDeps = {
   fetch?: typeof fetch;
 };
 
-async function readAdmissionBody(req: Request, deadline: AnalyticsWorkerDeadline): Promise<unknown> {
+async function readSyncBody(req: Request, deadline: AnalyticsWorkerDeadline): Promise<unknown> {
   if (!req.body) return null;
   const reader = req.body.getReader();
   let completed = false;
@@ -49,32 +53,39 @@ async function readAdmissionBody(req: Request, deadline: AnalyticsWorkerDeadline
   }
 }
 
-/** Only implemented actions are accepted; dispatch/drain/retention land with their real use cases. */
+/** Only implemented actions are accepted; drain/retention land with their real use cases. */
 export function createOwnedAnalyticsSyncHandler(deps: OwnedAnalyticsSyncDeps): (req: Request) => Promise<Response> {
   return async (req) => {
     if (req.method === "OPTIONS") return handleRestrictedCorsOptions(req);
     const deadline = new AnalyticsWorkerDeadline(Date.now(), req.signal);
-    let platform: OwnedAnalyticsPlatform | null = null;
+    let platform: OwnedAnalyticsPlatform | "all" | null = null;
+    let action: "admit" | "enqueue-daily" = "admit";
     let accountId: string | null = null;
-    const finish = async (statusCode: number, status: string, reason: string | null = null) => {
+    const finish = async (statusCode: number, status: string, reason: string | null = null, counts?: DispatchCounts) => {
       let auditStored = false;
-      try { auditStored = await deadline.run((signal) => deps.audit({ event: "owned_analytics_admission", status, reason, platform, accountId }, signal), 0); }
+      try { auditStored = await deadline.run((signal) => deps.audit({ event: action === "admit" ? "owned_analytics_admission" : "owned_analytics_dispatch",
+        status, reason, platform, accountId, ...(counts ? { counts } : {}) }, signal), 0); }
       catch { auditStored = false; }
-      return restrictedJsonResponse(req, { ok: statusCode === 200 && auditStored, action: "admit", platform, status,
-        reason: auditStored ? reason : "audit_unavailable", auditStored }, auditStored ? statusCode : 503);
+      return restrictedJsonResponse(req, { ok: statusCode === 200 && auditStored, action, platform, status,
+        reason: auditStored ? reason : "audit_unavailable", auditStored, ...(counts ? { counts } : {}) }, auditStored ? statusCode : 503);
     };
     try {
       if (req.method !== "POST") return await finish(405, "refused", "method_not_allowed");
       const auth = deps.authorize(req);
       if (!auth.ok) return await finish(auth.status, "refused", "unauthorized");
-      const parsed = admissionRequest.safeParse(await readAdmissionBody(req, deadline));
+      const parsed = syncRequest.safeParse(await readSyncBody(req, deadline));
       if (!parsed.success) return await finish(400, "refused", "invalid_request");
       platform = parsed.data.platform;
+      action = parsed.data.action;
+      const store = new OwnedAnalyticsStore(deps.rpc, deadline);
+      if (parsed.data.action === "enqueue-daily") {
+        const result = await dispatchOwnedAnalyticsDaily({ platform: parsed.data.platform, store, deadline, app: deps.app, fetch: deps.fetch });
+        return await finish(result.status === "unavailable" ? 503 : 200, result.status, result.reason, result.counts);
+      }
       accountId = parsed.data.accountId.toLowerCase();
-      const app = deps.app(platform);
+      const app = deps.app(parsed.data.platform);
       if (!app) return await finish(503, "unavailable", "app_configuration_unavailable");
-      const result = await admitOwnedAnalyticsAccount({ platform, accountId, app, deadline, fetch: deps.fetch,
-        store: new OwnedAnalyticsAdmissionStore(deps.rpc, deadline) });
+      const result = await admitOwnedAnalyticsAccount({ platform: parsed.data.platform, accountId, app, deadline, fetch: deps.fetch, store });
       return await finish(result.status === "complete" ? 200 : 409, result.status, result.status === "refused" ? result.reason : null);
     } catch (error) {
       const reason = error instanceof AnalyticsWorkerStopped ? error.reason : "storage_unavailable";

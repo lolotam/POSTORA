@@ -37,11 +37,12 @@ public.read_threads_analytics_admission_credential(
 
 ## 2. Durable dispatch and worker-state protocol
 
-- [ ] Add `20261101141000_meta_owned_analytics_worker_progress.sql` and its SQL suite. Implement a private platform/due-date/policy-digest dispatch checkpoint and one-step current-policy advancement. Use existing enqueue business keys; never force an already enqueued generation.
-- [ ] Add a fenced claimed-generation state reader and checkpoint page reservation/commit under the existing parent-first locks. Keep inventory outside numeric capture kinds. Database-generated reservation UUID, expected prior cursor/page count and payload digest must prove identical replay, conflicting replay and stale-generation refusal.
-- [ ] Exercise more than 50 synthetic targets, policy changes, duplicate dispatch, expired due date, page restarts, repeated cursors, foreign IDs, 500-ID truncation and unknown advancement outcomes. No successful page/sweep may hide incomplete work.
-- [ ] Implement `dispatch.ts` and wire `enqueue-daily` in the strict route. Reuse admission before enqueue. One action-wide 40s deadline/50-target counter persists across platform selection; no first-page restart loop.
-- [ ] Refresh types from the disposable applied catalog, run the SQL suites plus 18 existing races, guard and commit.
+- [x] Add `20261101141000_meta_owned_analytics_worker_progress.sql` and its SQL suite. Implement a private platform/due-date/policy-digest dispatch checkpoint and one-step current-policy advancement. Use existing enqueue business keys; never force an already enqueued generation.
+- [ ] Add `20261101141500_meta_owned_analytics_inventory.sql` with a fenced claimed-generation state reader and checkpoint page reservation/commit under the existing parent-first locks. Keep inventory outside numeric capture kinds. Database-generated reservation UUID, expected prior cursor/page count and payload digest must prove identical replay, conflicting replay and stale-generation refusal; wire real collection consumers in the same change.
+- [x] Exercise more than 50 synthetic targets, policy changes, duplicate dispatch, expired due date, unknown advancement outcomes and shared-budget fairness across platforms. No successful sweep may hide incomplete work.
+- [ ] Exercise inventory page restarts, repeated cursors, foreign IDs and 500-ID truncation. These are not proved by dispatch tests.
+- [x] Implement `dispatch.ts` and wire `enqueue-daily` in the strict route. Reuse admission before enqueue. One action-wide 40s deadline/50-target counter persists across platform selection; no first-page restart loop.
+- [x] Finish the dispatch guard/local-commit record after its catalog types, full SQL harness, 24 real-session races and actual HTTP/SQL integration. The initial 18 collection/history races remain included. Push and immutable lint/i18n proof are recorded against the final candidate head.
 
 ## 3. Provider capture and resumable drain
 

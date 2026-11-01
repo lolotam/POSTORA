@@ -3,11 +3,14 @@ import { MetaAnalyticsTransport, metaAnalyticsFailure } from "../_shared/metaAna
 import { parseMetaError } from "../_shared/metaErrors.ts";
 import type { AdmissionCredential, OwnedAnalyticsPlatform } from "./store.ts";
 
-type PermissionFailure = "provider_error" | "reauth_required";
+type PermissionFailure = "provider_error" | "reauth_required" | "rate_limited";
 export type PermissionVerification = { ok: true; scopes: string[]; observedAt: string }
   | { ok: false; reason: PermissionFailure | "identity_mismatch" | "app_mismatch" };
 export type AdmissionApp = { id: string; secret: string };
-const scopesSchema = z.array(z.string().regex(/^[a-z][a-z0-9_]{0,99}$/)).max(32);
+export const OWNED_ANALYTICS_REQUIRED_SCOPES: Record<OwnedAnalyticsPlatform, readonly string[]> = {
+  facebook: ["read_insights", "pages_read_engagement"], threads: ["threads_basic", "threads_manage_insights"],
+};
+const scopesSchema = z.array(z.string().regex(/^[a-z][a-z0-9_]{0,99}$/)).max(512);
 const debugSchema = z.object({ data: z.object({ is_valid: z.boolean(), user_id: z.string().optional(), app_id: z.string().optional(),
   scopes: scopesSchema.optional(), expires_at: z.number().int().nonnegative().optional(),
   data_access_expires_at: z.number().int().nonnegative().optional() }) });
@@ -22,7 +25,7 @@ export async function verifyAdmissionPermission(input: {
   const options = { origin: platform === "facebook" ? "https://graph.facebook.com" as const : "https://graph.threads.net" as const,
     version: platform === "facebook" ? "v25.0" : "v1.0", signal: input.signal, startedAt: input.startedAt,
     budgetMs: 30_000, maxCalls: 1, fetch: input.fetch, beforeRequest: input.beforeRequest,
-    fallbackReason: "provider_error" as const, rateLimitedReason: "provider_error" as const,
+    fallbackReason: "provider_error" as const, rateLimitedReason: "rate_limited" as const,
     failureMessage: "Owned analytics permission verification failed.",
     classifyFailure: (status: number, payload: unknown, headers: Headers) => {
       const hasError = typeof payload === "object" && payload !== null && Object.hasOwn(payload, "error");
@@ -31,7 +34,9 @@ export async function verifyAdmissionPermission(input: {
           ? metaAnalyticsFailure(status, "invalid_response", "provider_error" as PermissionFailure, "Permission response version mismatch.") : null;
       }
       const error = parseMetaError(status, payload);
-      return metaAnalyticsFailure(status, "provider", error.code === 190 ? "reauth_required" as const : "provider_error" as const,
+      const reason: PermissionFailure = status === 429 || [4,17,32,613].includes(error.code ?? -1) ? "rate_limited"
+        : error.code === 190 ? "reauth_required" : "provider_error";
+      return metaAnalyticsFailure(status, "provider", reason,
         "Owned analytics permission verification failed.");
     } };
   const appBearer = `${platform === "threads" ? "TH|" : ""}${app.id}|${app.secret}`;
@@ -50,5 +55,8 @@ export async function verifyAdmissionPermission(input: {
   const identity = await operational.request(["me"], { fields: "id" }, identitySchema);
   if (identity.error) return { ok: false, reason: identity.error.reason };
   if (identity.data.id !== credential.authority.platform_user_id) return { ok: false, reason: "identity_mismatch" };
-  return { ok: true, scopes: [...grant.scopes].sort(), observedAt: new Date().toISOString() };
+  // Other product permissions must not invalidate this feature's bounded
+  // authority merely because a legitimate grant contains more scopes.
+  const observedScopes = OWNED_ANALYTICS_REQUIRED_SCOPES[platform].filter((scope) => grant.scopes!.includes(scope));
+  return { ok: true, scopes: observedScopes.sort(), observedAt: new Date().toISOString() };
 }

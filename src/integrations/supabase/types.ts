@@ -34,6 +34,42 @@ export type Database = {
   }
   public: {
     Tables: {
+      meta_analytics_enqueue_sweeps: {
+        Row: {
+          complete: boolean
+          created_at: string
+          dispatch_round: number
+          due_on: string
+          last_account_id: string | null
+          outcomes: Json
+          platform: string
+          policy_digest: string
+          updated_at: string
+        }
+        Insert: {
+          complete?: boolean
+          created_at?: string
+          dispatch_round?: number
+          due_on: string
+          last_account_id?: string | null
+          outcomes?: Json
+          platform: string
+          policy_digest: string
+          updated_at?: string
+        }
+        Update: {
+          complete?: boolean
+          created_at?: string
+          dispatch_round?: number
+          due_on?: string
+          last_account_id?: string | null
+          outcomes?: Json
+          platform?: string
+          policy_digest?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
       fb_analytics_captures: {
         Row: {
           api_version: string
@@ -10765,6 +10801,34 @@ export type Database = {
       }
     }
     Functions: {
+      commit_meta_analytics_dispatch_target: {
+        Args: {
+          p_ticket: Json
+          p_outcome?: string
+          p_reason?: string | null
+        }
+        Returns: Json
+      }
+      meta_analytics_collection_policy: {
+        Args: {
+          p_platform: string
+        }
+        Returns: Json
+      }
+      meta_analytics_dispatch_next_id: {
+        Args: {
+          p_policy: Json
+          p_after: string | null
+        }
+        Returns: string | null
+      }
+      next_meta_analytics_dispatch_target: {
+        Args: {
+          p_platform: string
+          p_start?: boolean
+        }
+        Returns: Json
+      }
       meta_analytics_ig_legacy_digest: {
         Args: {
           p_owner: string

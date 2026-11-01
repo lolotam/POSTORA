@@ -1,12 +1,12 @@
 # Owned Meta analytics: C3 admission slice
 
-Status: local implementation and executed isolated proof. This is the first C3 slice, not a completed collector. The [C3 contract](../specs/2026-11-01-meta-owned-analytics-workers.md) and [execution plan](../plans/2026-11-01-meta-owned-analytics-workers.md) own the remaining work. No C2/C3 production application, deployment, admission, credential repair, collection, retention or activation is authorized by this record.
+Status: historical proof for the first C3 admission slice. The later [daily dispatch record](2026-11-01-meta-owned-worker-dispatch.md) extends this implementation; neither record describes a completed collector. The [C3 contract](../specs/2026-11-01-meta-owned-analytics-workers.md) and [execution plan](../plans/2026-11-01-meta-owned-analytics-workers.md) own the remaining work. No C2/C3 production application, deployment, admission, credential repair, collection, retention or activation is authorized by this record.
 
 ## Problem and implementation
 
 C2 requires a current trusted permission observation before enqueue/claim, while its worker credential reader requires a claimed job. The new admission seam closes that bootstrap cycle without manufacturing scopes or a credential generation. Two service-only RPCs derive the owner, use C2 preparation/locks and compare the complete captured authority. Facebook returns distinct operational Page and protected User credentials; Threads uses its actual C2 epoch. Expired protected User credentials refuse.
 
-The registered `meta-owned-analytics-sync` route currently accepts only the implemented `admit` action. It verifies cron/service authority, bounds and validates the body, checks app configuration before account secrets, uses restricted CORS, verifies the real grant debugger and operational account identity, and persists observed scopes through C2's post-response fence. Missing required permissions remain an explicit refusal after truthful observation. No permission or owner fields are accepted from the request.
+The registered `meta-owned-analytics-sync` route at this admission-only candidate accepted only the implemented `admit` action. It verifies cron/service authority, bounds and validates the body, checks app configuration before account secrets, uses restricted CORS, verifies the real grant debugger and operational account identity, and persists observed scopes through C2's post-response fence. Missing required permissions remain an explicit refusal after truthful observation. No permission or owner fields are accepted from the request.
 
 The shared Meta transport now calls a real per-request permit outside its provider catch and recalculates time/call budgets afterwards. A stale or unknown store result therefore stops before the next provider request. Concurrent permits cannot exceed the physical call cap, and a rate limit observed while another permit waits prevents that pending HTTP request. The route has a 40-second overall bound, five-second dependencies and bounded final audit; unknown writes are never retried or reported as success.
 
@@ -31,6 +31,6 @@ The first real-SQL integration run exposed an existing test-driver defect: its `
 
 ## Remaining C3 and release order
 
-Durable daily dispatch, reservation/replay for inventory pages, fenced worker-state reads, actual metric collection, persistent throttling, bounded retention orchestration and the six inactive schedule definitions remain in the execution plan. Dispatch/drain/retention requests currently refuse input validation rather than simulate successful work. No inactive cron has been installed by this slice.
+At this admission-only candidate, daily dispatch, inventory reservations, worker-state reads, metric collection, persistent throttling, retention and inactive schedules remained open. The [dispatch continuation](2026-11-01-meta-owned-worker-dispatch.md) now supplies `enqueue-daily`; drain/retention still refuse input validation rather than simulate successful work. No inactive cron was installed by this slice.
 
 Migration merge/application require separate decisions after review, followed by deployed catalog/ACL/cache verification before dependent runtime deployment. No production Edge Function deployment occurred: this unmerged runtime depends on unapplied C2/C3 schema. Full Instagram G-X, C4 persisted reports, C5 unified UI, live reconciliation, rollback/restoration and seven scheduled due-date receipts remain open.

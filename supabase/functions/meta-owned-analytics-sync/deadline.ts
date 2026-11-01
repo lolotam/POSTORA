@@ -1,5 +1,5 @@
 export class AnalyticsWorkerStopped extends Error {
-  constructor(readonly reason: "deadline" | "storage_unavailable" | "invalid_contract" | "admission_refused") {
+  constructor(readonly reason: "deadline" | "storage_unavailable" | "invalid_contract" | "admission_refused" | "configuration_unavailable", readonly sqlstate: string | null = null) {
     super(`Owned analytics operation stopped: ${reason}`);
     this.name = "AnalyticsWorkerStopped";
   }
@@ -9,8 +9,10 @@ export class AnalyticsWorkerStopped extends Error {
 export class AnalyticsWorkerDeadline {
   constructor(readonly startedAt: number, readonly signal: AbortSignal) {}
 
+  get remainingMs(): number { return this.startedAt + 40_000 - Date.now(); }
+
   async run<T>(work: (signal: AbortSignal) => PromiseLike<T>, reserveMs = 5_000): Promise<T> {
-    const remaining = this.startedAt + 40_000 - Date.now() - reserveMs;
+    const remaining = this.remainingMs - reserveMs;
     if (remaining <= 0 || this.signal.aborted) throw new AnalyticsWorkerStopped("deadline");
     const controller = new AbortController();
     const abort = () => controller.abort();
