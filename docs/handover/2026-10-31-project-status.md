@@ -39,7 +39,7 @@ Earlier in the same week: Instagram collection rollout controls (#317), Instagra
 2. **OAuth consent.** Inspect the real response from `api.postora.cloud` before changing the fields; see the conditional diagnosis below.
 3. **Generated Supabase types.** Regenerate `src/integrations/supabase/types.ts` from the self-hosted schema, review the diff for other missing columns, then remove the `admin_params` cast in `src/hooks/useAIConfiguration.ts`.
 4. **`no-explicit-any` batches.** Continue with `src/components` (about 193), then `src/pages` (86), `supabase/functions/_shared` (296), `partner-api` (119), `n8n-api` (87), and the remaining functions. `_shared` has the highest risk; some Deno tests require CI because of esm.sh access.
-5. **Optional parser hardening.** Add `Array.isArray` checks to the Facebook, Instagram, and YouTube Graph-response parsers in `src/hooks/useCommentInbox.ts`. This is a separate, low-priority follow-up; malformed collection handling predates #323.
+5. **Optional parser hardening.** Audit malformed collections in the Facebook, Instagram, and YouTube Graph-response parsers in `src/hooks/useCommentInbox.ts`, adding only missing checks. YouTube's `videos` collection already has an `Array.isArray` guard. This is a separate, low-priority follow-up; malformed collection handling predates #323.
 
 The paid Apify permission guard, the in-repo n8n directory decision, and remote branch deletion remain outside this sequence; see the owner-decision notes below.
 
@@ -71,7 +71,7 @@ About 345 of these are in test files.
 
 The owner approved continuing in batches, one PR per batch. Batch 1 handled the source files and the test files with two agents in parallel, each on its own set of files. That worked.
 
-**`n8n-community-node/nodes` (18 errors) is a directory in this repo.** `CLAUDE.md` says the real node lives in a separate repo. Leave that directory alone until the owner says whether it should exist here at all.
+**`n8n-community-node/nodes` (18 errors) is tracked in this repo.** Treat it as a legacy copy, not the release source: the canonical [n8n community node workflow](../../CLAUDE.md#n8n-community-node-workflow) uses the standalone repository. Do not recreate or sync node changes here. The owner has deferred the tracked-directory cleanup decision; leave its contents untouched until that decision.
 
 ### Bug found after the original handover, not fixed: Canvas hides publishing results
 
@@ -94,8 +94,9 @@ In a separate fix PR:
 | `data.client.icon` | `client.logo_uri` |
 | `data.scopes` (an array) | `scope` (a space-separated string) |
 
-If the self-hosted GoTrue returns what the SDK types say, three things break:
-- the auto-redirect never fires;
+If the self-hosted GoTrue returns what the SDK types say, these flows break:
+- the initial auto-redirect never fires;
+- redirects after both approval and denial are also skipped (`useOAuthConsent.ts:159,186`);
 - the scope list is always empty;
 - the client icon never shows.
 
