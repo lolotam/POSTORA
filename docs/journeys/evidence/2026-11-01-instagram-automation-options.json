@@ -1,0 +1,110 @@
+{
+  "backend_candidate": "7f3185c3944c597632d144371e8d5a07aeb14bf3",
+  "backend_base": "781111a8c8b5bc1296f8c82bbe575f2498b82748",
+  "backend_files": [
+    {
+      "path": "supabase/functions/mcp/index.ts",
+      "sha256": "a0718917c74fc48899eff42799092a734a019b4e9f6c7299b495572c7b33b009"
+    },
+    {
+      "path": "supabase/functions/n8n-api/index.ts",
+      "sha256": "a9de5b784b092269ff4c2594bd57fc68e0cead09d2fc805b4f8da488eb17d9f2"
+    }
+  ],
+  "node": {
+    "repository": "https://github.com/lolotam/postora-n8n-community-node",
+    "pull_request": "https://github.com/lolotam/postora-n8n-community-node/pull/2",
+    "candidate": "486d14a3970c39cc685b18c6dd6cab43594554ab",
+    "package_candidate": "1.9.2",
+    "published_version_readback": "1.9.1",
+    "files": [
+      {
+        "path": "nodes/Postora/Postora.node.ts",
+        "sha256": "69ac87bc86d23665f28b443ffcd83a5e2c0ed9cb4d1e55e9b56a133bdebc673d"
+      },
+      {
+        "path": "dist/nodes/Postora/Postora.node.js",
+        "sha256": "45f6a2a0a69cf2d25c1199f631f4fd41eeedc89d8a034da5d6061571959e9bb7"
+      },
+      {
+        "path": "dist/nodes/Postora/Postora.node.js.map",
+        "sha256": "99901a5d22c3d4c7443a1c1a49abc835ab1060f4d6a6f868d7e852652d6731e1"
+      },
+      {
+        "path": "package.json",
+        "sha256": "534495cba0a2dd40cc94f75b13cb13850f0ed997c2bc5632bbdc791803080c3d"
+      },
+      {
+        "path": "package-lock.json",
+        "sha256": "1e10cfd8133750ef8beefa25354d7ac21577dce17d69ef678986faa0dea629d7"
+      }
+    ]
+  },
+  "production_deployed": false,
+  "npm_released": false,
+  "live_publication_verified": false,
+  "checks": {
+    "backend_composition_and_story_regressions": {
+      "tests": 36,
+      "steps": 26
+    },
+    "registered_composition_after_fixture_key_correction": {
+      "tests": 1,
+      "steps": 26
+    },
+    "mcp_auth_and_proxy_regressions": {
+      "tests": 150,
+      "existing_suite_no_check": true
+    },
+    "node_canonical_suites": {
+      "files": 2,
+      "tests": 120
+    },
+    "node_typecheck": "passed",
+    "node_build": "passed",
+    "immutable_lint_i18n": "NO REGRESSIONS",
+    "graphify_update": "passed"
+  },
+  "local_artifacts": [
+    {
+      "path": ".tmp/mcp-story-baseline-corrected.log",
+      "sha256": "3ae23838ee2b8455769b736f9eed47b7de838ab0c970054a57ebe74de6d59f00"
+    },
+    {
+      "path": ".tmp/mcp-story-regressions-final.log",
+      "sha256": "013ec862318471c8223ab0af6426c62adfb570f09b6910f835ebe9949e9902be"
+    },
+    {
+      "path": ".tmp/mcp-story-fixture-final.log",
+      "sha256": "668361230f2ea536f805e4d3ebfaadf8a71768da74ab9c676e28c32a2872d4da"
+    },
+    {
+      "path": ".tmp/mcp-story-auth-regressions.log",
+      "sha256": "0df43f8bdaf8c3d9a6baad2ca529e8f5b168d7da40838a1cc6c64eebef192ecd"
+    },
+    {
+      "path": ".tmp/mcp-story-lint.json",
+      "sha256": "16c3785741b7bd9affce0a7222016688d22cdb7970a258f51938a6db785c1dda"
+    },
+    {
+      "path": ".tmp/mcp-story-graphify.log",
+      "sha256": "1f2c8eedaa7751b42b8837fe03312359b36f42dbe84518cd61157b1f884aba77"
+    },
+    {
+      "path": ".tmp/n8n-story-before.log",
+      "sha256": "ce406b9351c59a4006841c2e5971e8a5ba23f5403cf96c7d632f469dbe69dc2c"
+    },
+    {
+      "path": ".tmp/n8n-story-canonical-tests.log",
+      "sha256": "0166e2baafd90c708e5701684c6771400b1d06a9449b5a3084b413fb2b17be50"
+    },
+    {
+      "path": ".tmp/n8n-story-typecheck-final.log",
+      "sha256": "2157a5f3c12477857845842650bbd669c004666db09a84e463dc354ce2c5a27f"
+    },
+    {
+      "path": ".tmp/n8n-story-build-final.log",
+      "sha256": "bbb0a30cc2325026d1f970d6828ba52979c9b4483759c709435bb115e5224f16"
+    }
+  ]
+}
