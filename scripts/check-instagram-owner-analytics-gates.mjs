@@ -21,7 +21,7 @@ const FRONTEND_PATHS = [
 const digest = (bytes) => createHash("sha256").update(bytes).digest("hex");
 
 function git(root, args) {
-  return execFileSync("git", ["-C", root, ...args], { maxBuffer: 32 * 1024 * 1024 });
+  return execFileSync("git", ["-C", root, ...args], { maxBuffer: 32 * 1024 * 1024, stdio: ["ignore", "pipe", "pipe"] });
 }
 
 function importSpecifiers(source, path) {

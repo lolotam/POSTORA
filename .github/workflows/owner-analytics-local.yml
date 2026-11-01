@@ -1,0 +1,88 @@
+name: Owner analytics local journeys
+
+on:
+  pull_request:
+    paths:
+      - "src/features/instagram-insights/**"
+      - "src/pages/analytics/InstagramAnalytics.tsx"
+      - "supabase/functions/instagram-insights-*/**"
+      - "supabase/functions/_shared/**"
+      - "supabase/migrations/**"
+      - "supabase/tests/**"
+      - "e2e/fixtures/instagramOwner*"
+      - "e2e/instagram-owner-release.spec.ts"
+      - "scripts/*instagram*owner*"
+      - "scripts/db-harness.sh"
+      - "playwright.owner-analytics.config.ts"
+      - "package*.json"
+      - ".github/workflows/owner-analytics-local.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: owner-analytics-local-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  isolated-owner-journeys:
+    name: Isolated owner Auth SQL browser journeys
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      TMPDIR: ${{ runner.temp }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "22.14.0"
+      - uses: denoland/setup-deno@22d081ff2d3a40755e97629de92e3bcbfa7cf2ed # v2.0.5
+        with:
+          deno-version: "2.9.8"
+      - name: Install locked dependencies and Chromium
+        run: |
+          npm ci --no-audit --no-fund
+          npx playwright install --with-deps chromium
+      - name: Check fixture safety and artifact inventory tooling
+        run: |
+          node --test scripts/check-instagram-owner-analytics-gates.test.mjs scripts/instagram-owner-release-safety.test.mjs
+          deno check --node-modules-dir=none e2e/fixtures/instagramOwnerReleaseServer.ts e2e/fixtures/instagramOwnerReleaseSeed.ts
+      - name: Prepare new isolated SQL and Auth services
+        run: node scripts/prepare-instagram-owner-release.mjs
+      - name: Seed synthetic identities through real Auth
+        run: >-
+          deno run --node-modules-dir=none --allow-env=DOCKER_HOST --allow-run=docker
+          --allow-net=127.0.0.1:65435 e2e/fixtures/instagramOwnerReleaseSeed.ts
+      - name: Start real composition roots with synthetic Meta transport
+        run: |
+          deno run --node-modules-dir=none --allow-env --allow-run=docker \
+            --allow-net=127.0.0.1:65431,127.0.0.1:65435,127.0.0.1:65436 \
+            e2e/fixtures/instagramOwnerReleaseServer.ts > "$RUNNER_TEMP/owner-release-server.log" 2>&1 &
+          for attempt in $(seq 1 90); do
+            if curl --fail --silent --max-time 2 http://127.0.0.1:65431/__owner-release/health; then
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "The isolated owner fixture did not become ready."
+          exit 1
+      - name: Run owner browser and authorization journeys
+        run: npx playwright test --config playwright.owner-analytics.config.ts
+      - name: Verify the candidate artifact inventory
+        run: |
+          node scripts/check-instagram-owner-analytics-gates.mjs --candidate HEAD --out "$RUNNER_TEMP/owner-artifacts.json"
+          node scripts/check-instagram-owner-analytics-gates.mjs --verify "$RUNNER_TEMP/owner-artifacts.json"
+      - name: Retain synthetic local evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: owner-analytics-local-evidence
+          path: |
+            ${{ runner.temp }}/postora-owner-release-prepare-*/
+            ${{ runner.temp }}/postora-owner-release-playwright/
+            ${{ runner.temp }}/owner-release-server.log
+            ${{ runner.temp }}/owner-artifacts.json
+          if-no-files-found: error
+          retention-days: 7
