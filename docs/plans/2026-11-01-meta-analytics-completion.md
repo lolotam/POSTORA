@@ -3,7 +3,7 @@
 **Spec:** [`docs/specs/2026-11-01-meta-analytics-completion-design.md`](../specs/2026-11-01-meta-analytics-completion-design.md). Section references (§) point there.
 **Required reading for every task and every delegation brief:** [`ARCHITECTURE.md`](../../ARCHITECTURE.md) §§4, 10–17, 22–24, 27–28, 31–34 and 36–39 (dependencies, adapters, authentication, contracts, storage, scheduling, testing and compatibility), the spec, and for Batch A [`docs/specs/2026-10-30-instagram-release-gates.md`](../specs/2026-10-30-instagram-release-gates.md).
 
-Three batches, in order. A batch starts only when the previous batch's exit criteria are met, except where a task is marked *parallel*.
+Three batches, in order. A batch starts only when the previous batch's exit criteria are met, except where a task is marked *parallel*. Independent corrections to existing read paths may proceed while Instagram's pilot observation is pending; this does not waive capability evidence, migration ordering or platform activation prerequisites.
 
 ## Conventions for every task
 
@@ -80,6 +80,8 @@ Compare 7 closed days using the exact period/bucket semantics in spec §4.4 and 
 **Done:** evidence committed; registry cells move from `unverified` to proven `available`/`not_offered`.
 
 ### B3. Threads live path correctness
+
+**Account-selection slice implemented locally:** the [executed regression and behavior record](../journeys/2026-11-01-threads-account-selection.md) covers explicit-selector refusal, failed-read handling, input validation and JWT identity precedence. This is an independent correctness repair; B3 remains incomplete until the versioned metric semantics, time/call bounds and pagination below pass.
 - File: `supabase/functions/threads-insights/index.ts` (split into handler + provider adapter per `ARCHITECTURE.md` if the file shape requires it).
 - Account selection: requested `accountId` missing/inactive/foreign → rejected, DB error → 5xx, no fallback, provider not called.
 - Decoding: missing metric, failed previous period, one failed post → `unavailable` in the new versioned response; multi-day series preserved.

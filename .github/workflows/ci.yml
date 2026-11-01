@@ -202,6 +202,11 @@ jobs:
           supabase/functions/mcp
           supabase/functions/n8n-api/serviceProxy.test.ts
 
+      - name: Test Threads insights account selection through real composition
+        run: >-
+          deno test --node-modules-dir=none --allow-env
+          supabase/functions/threads-insights/composition.test.ts
+
       - name: Typecheck and test the outlier module
         run: |
           set -euo pipefail

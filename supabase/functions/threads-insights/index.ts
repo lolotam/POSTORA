@@ -1,12 +1,12 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { z } from "https://esm.sh/zod@3.25.76";
 import { createLogger } from "../_shared/logging.ts";
 import {
-  getThreadsAccount,
-  summarizeAccount,
   debugThreadsToken,
   classifyMetaError,
+  type SelectedThreadsAccount,
 } from "../_shared/threads-debug.ts";
-import { serviceRoleCallerUserId } from "../_shared/auth-helper.ts";
+import { authenticateCaller, serviceRoleCallerUserId } from "../_shared/auth-helper.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -15,6 +15,12 @@ const corsHeaders = {
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+
+const selectionSchema = z.object({
+  accountId: z.string().uuid().optional(),
+  periodDays: z.unknown().optional(),
+  user_id: z.unknown().optional(),
+}).strict();
 
 const ENGLISH_TITLES: Record<string, string> = {
   views: "Views", likes: "Likes", replies: "Replies", reposts: "Reposts", quotes: "Quotes", followers_count: "Followers",
@@ -38,9 +44,9 @@ function ok(body: Record<string, unknown>) {
     headers: { ...corsHeaders, "Content-Type": "application/json" },
   });
 }
-function structured(body: Record<string, unknown>) {
+function structured(body: Record<string, unknown>, status = 200) {
   return new Response(JSON.stringify({ ok: false, ...body }), {
-    status: 200,
+    status,
     headers: { ...corsHeaders, "Content-Type": "application/json" },
   });
 }
@@ -58,7 +64,7 @@ async function fetchProfileTimeSeries(threadsUserId: string, accessToken: string
   return { status: res.status, data: await res.json().catch(() => ({})) };
 }
 
-Deno.serve(async (req) => {
+export async function handler(req: Request): Promise<Response> {
   if (req.method === "OPTIONS") {
     return new Response(null, { headers: corsHeaders });
   }
@@ -68,48 +74,52 @@ Deno.serve(async (req) => {
   let userId: string | undefined;
 
   try {
-    const authHeader = req.headers.get("Authorization");
-    if (!authHeader) throw new Error("Missing authorization header");
-    const token = authHeader.replace("Bearer ", "");
-
-    const serviceUserId = await serviceRoleCallerUserId(req);
-    if (serviceUserId) {
-      userId = serviceUserId;
-    } else {
-      const supabaseAuth = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
-        global: { headers: { Authorization: authHeader } },
-        auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
-      });
-      const { data: claimsData, error: claimsError } = await supabaseAuth.auth.getClaims(token);
-      if (claimsError || !claimsData?.claims) throw new Error("Unauthorized");
-      userId = claimsData.claims.sub as string;
+    try {
+      userId = (await authenticateCaller(req, await serviceRoleCallerUserId(req))).userId;
+    } catch {
+      await logger.warn("Threads insights caller refused", { event: "unauthorized", platform: "threads" });
+      return structured({ reason: "unauthorized", message: "Unauthorized." }, 401);
     }
 
     // Parse body
-    let accountId: string | undefined;
     let periodDays = 7;
-    try {
-      const body = await req.json().catch(() => ({}));
-      if (body && typeof body.accountId === "string") accountId = body.accountId;
-      if (body && typeof body.periodDays === "number" && [7, 14, 30, 90].includes(body.periodDays)) {
-        periodDays = body.periodDays;
-      }
-    } catch { /* no body / not json */ }
-
-    let account: any = null;
-    if (accountId) {
-      const { data } = await supabase
-        .from("social_accounts")
-        .select("id, user_id, platform_user_id, platform_username, access_token, connected_at, updated_at, token_expires_at")
-        .eq("user_id", userId)
-        .eq("platform", "threads")
-        .eq("is_active", true)
-        .eq("id", accountId)
-        .limit(1);
-      account = data && data.length ? data[0] : null;
+    const body = await req.json().catch(() => null);
+    const selection = selectionSchema.safeParse(body);
+    if (!selection.success) {
+      await logger.warn("Invalid Threads insights request", {
+        event: "invalid_request", platform: "threads",
+      }, userId);
+      return structured({ reason: "invalid_request", message: "Invalid Threads insights request." }, 400);
     }
-    if (!account) {
-      account = await getThreadsAccount(supabase, userId);
+    const { accountId, periodDays: requestedPeriod } = selection.data;
+    if (typeof requestedPeriod === "number" && [7, 14, 30, 90].includes(requestedPeriod)) {
+      periodDays = requestedPeriod;
+    }
+
+    let accountQuery = supabase
+      .from("social_accounts")
+      .select("id, user_id, platform_user_id, platform_username, access_token, connected_at, updated_at, token_expires_at")
+      .eq("user_id", userId)
+      .eq("platform", "threads")
+      .eq("is_active", true);
+    accountQuery = accountId
+      ? accountQuery.eq("id", accountId)
+      : accountQuery.order("connected_at", { ascending: false, nullsFirst: false })
+        .order("updated_at", { ascending: false, nullsFirst: false })
+        .order("id", { ascending: false });
+    const { data: accounts, error: accountError } = await accountQuery.limit(1).returns<SelectedThreadsAccount[]>();
+    if (accountError) {
+      await logger.error("Threads insights account read failed", {
+        event: "account_read_failed", platform: "threads", error_code: accountError.code,
+      }, userId);
+      return structured({ reason: "storage_error", message: "Unable to load Threads account. Please retry." }, 503);
+    }
+    const account = accounts?.[0] ?? null;
+    if (accountId && !account) {
+      await logger.warn("Threads insights account not found", {
+        event: "account_not_found", platform: "threads",
+      }, userId);
+      return structured({ reason: "account_not_found", message: "Threads account not found." }, 404);
     }
 
     if (!account?.access_token) {
@@ -127,7 +137,7 @@ Deno.serve(async (req) => {
     await logger.info("Threads Insights — selected account", {
       event: "selected_account",
       platform: "threads",
-      selected_account: summarizeAccount(account),
+      social_account_id: account.id,
       periodDays,
     }, userId);
 
@@ -357,4 +367,6 @@ Deno.serve(async (req) => {
     }, userId);
     return structured({ reason: "unknown", message: errMsg });
   }
-});
+}
+
+if (import.meta.main) Deno.serve(handler);

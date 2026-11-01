@@ -217,6 +217,11 @@ export function ThreadsInsightsPanel() {
     setError(null);
     setNeedsConnection(false);
     setNeedsPermission(false);
+    setInsights(null);
+    setPosts([]);
+    setAggregated(null);
+    setActivity(null);
+    setUsername(null);
 
     try {
       const body: Record<string, unknown> = { periodDays: period };
@@ -235,6 +240,16 @@ export function ThreadsInsightsPanel() {
 
       if (resBody && resBody.ok === false) {
         const reason = resBody.reason;
+        const selectionError = new Map([
+          ["account_not_found", t("errors.insightsAccountNotFound", "The selected Threads account is unavailable.")],
+          ["storage_error", t("errors.insightsStorageFailed", "Unable to load the Threads account. Please retry.")],
+          ["invalid_request", t("errors.insightsInvalidRequest", "Invalid Threads insights request. Refresh the page and retry.")],
+          ["unauthorized", t("errors.insightsUnauthorized", "Your session could not be verified. Please sign in again.")],
+        ]).get(reason);
+        if (selectionError) {
+          setError(selectionError);
+          return;
+        }
         if (reason === "no_account") {
           setNeedsConnection(true);
           setError(resBody.message || t("errors.noThreads", "No Threads account connected."));
