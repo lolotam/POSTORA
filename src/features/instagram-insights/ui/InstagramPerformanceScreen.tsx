@@ -7,6 +7,7 @@ import { useInstagramInsightsReport } from "../application/useInstagramInsightsR
 import { useTriggerInstagramSync } from "../application/useTriggerInstagramSync";
 import { defaultInstagramInsightsGateway } from "../infrastructure/supabaseInstagramInsightsGateway";
 import type { OwnerReportPeriodDays } from "../domain/types";
+import { collectReportMedia } from "../domain/reportPages";
 import { InstagramInsightsWorkspace } from "./InstagramInsightsWorkspace";
 
 export type InstagramPerformanceScreenProps = {
@@ -31,15 +32,21 @@ export function InstagramPerformanceScreen({
   const activeAccountId = selectedAccountId || igAccounts[0]?.id || null;
 
   const {
-    data: report,
+    data: reportPages,
     isLoading: isReportLoading,
     error: reportError,
+    fetchNextPage,
+    hasNextPage,
+    isFetchingNextPage,
   } = useInstagramInsightsReport({
     gateway,
     socialAccountId: activeAccountId,
     periodDays,
     enabled: Boolean(activeAccountId),
   });
+
+  const report = reportPages?.pages[0];
+  const mediaItems = useMemo(() => collectReportMedia(reportPages?.pages ?? []), [reportPages]);
 
   const { mutate: triggerSync, isPending: isSyncing } = useTriggerInstagramSync({
     gateway,
@@ -66,10 +73,13 @@ export function InstagramPerformanceScreen({
       periodDays={periodDays}
       onSelectPeriod={setPeriodDays}
       report={report}
+      mediaItems={mediaItems}
       isLoading={isAccountsLoading || isReportLoading}
       error={reportError}
       isSyncing={isSyncing}
       onTriggerSync={handleTriggerSync}
+      onLoadMore={hasNextPage ? () => { void fetchNextPage({ cancelRefetch: false }); } : undefined}
+      isLoadingMore={isFetchingNextPage}
     />
   );
 }

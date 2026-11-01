@@ -12,14 +12,14 @@ export type MetricsOverviewCardsProps = {
 export function MetricsOverviewCards({ report }: MetricsOverviewCardsProps) {
   const { t } = useTranslation("analytics");
 
-  const followersCount = report?.profile?.followersCount ?? null;
+  const followersCount = report?.account.latestProfileObservation?.followersCount ?? null;
 
   // Aggregate daily metrics across the display window
   let totalReach: number | null = null;
   let totalViews: number | null = null;
   let totalInteractions: number | null = null;
 
-  if (report?.daily && report.daily.length > 0) {
+  if (report?.account.daily && report.account.daily.length > 0) {
     let hasReach = false;
     let reachSum = 0;
     let hasViews = false;
@@ -27,7 +27,7 @@ export function MetricsOverviewCards({ report }: MetricsOverviewCardsProps) {
     let hasInteractions = false;
     let interactionsSum = 0;
 
-    for (const day of report.daily) {
+    for (const day of report.account.daily) {
       if (day.status === "ok") {
         if (day.reach !== null && Number.isFinite(day.reach)) {
           reachSum += day.reach;

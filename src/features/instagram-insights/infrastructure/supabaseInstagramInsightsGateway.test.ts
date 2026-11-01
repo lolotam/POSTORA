@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { supabase } from "@/integrations/supabase/client";
-import { parseCursor } from "../../../../supabase/functions/instagram-insights-report/handler";
+import { decodeOwnerReportCursor as parseCursor } from "../../../../supabase/functions/instagram-insights-report/contracts";
 import { reportFixture } from "../tests/reportFixture";
 import { SupabaseInstagramInsightsGateway } from "./supabaseInstagramInsightsGateway";
 

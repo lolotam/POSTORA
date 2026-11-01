@@ -5,7 +5,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Button } from "@/components/ui/button";
 import { Link } from "react-router-dom";
 import type { SocialAccount } from "@/hooks/useSocialAccounts";
-import type { OwnerReport, OwnerReportPeriodDays } from "../domain/types";
+import type { OwnerReport, OwnerReportMediaItem, OwnerReportPeriodDays } from "../domain/types";
 import { AccountPicker } from "./AccountPicker";
 import { PeriodSelector } from "./PeriodSelector";
 import { SyncStatusBanner } from "./SyncStatusBanner";
@@ -20,6 +20,7 @@ export type InstagramInsightsWorkspaceProps = {
   periodDays: OwnerReportPeriodDays;
   onSelectPeriod: (period: OwnerReportPeriodDays) => void;
   report: OwnerReport | undefined;
+  mediaItems?: OwnerReportMediaItem[];
   isLoading: boolean;
   error: Error | null;
   isSyncing: boolean;
@@ -35,6 +36,7 @@ export function InstagramInsightsWorkspace({
   periodDays,
   onSelectPeriod,
   report,
+  mediaItems,
   isLoading,
   error,
   isSyncing,
@@ -133,9 +135,9 @@ export function InstagramInsightsWorkspace({
       {!isLoading && report && (
         <>
           <MetricsOverviewCards report={report} />
-          <DailyTrendChart daily={report.daily} />
+          <DailyTrendChart daily={report.account.daily} />
           <MediaPerformanceTable
-            media={report.media}
+            media={mediaItems ? { items: mediaItems, hasMore: Boolean(onLoadMore) } : report.media.page}
             onLoadMore={onLoadMore}
             isLoadingMore={isLoadingMore}
           />
