@@ -1,6 +1,6 @@
 # Instagram owner analytics release evidence
 
-Status: partial local evidence. Artifact inventory and isolated real Auth/PostgREST/SQL/worker/browser fixtures exist; six local journeys pass, including direct/API/MCP report parity. Full prerequisite traceability, remaining fencing evidence, production schema reconciliation and live acceptance remain pending. This runbook grants no production approval and does not replace the [canonical Task 11 release gates](../specs/2026-10-30-instagram-release-gates.md).
+Status: partial local evidence. Artifact inventory and isolated real Auth/PostgREST/SQL/worker/browser fixtures exist; seven local journeys pass, including direct/API/MCP report parity and the [credential-generation HTTP fence](../journeys/2026-11-01-instagram-http-fence-candidate.md). Full prerequisite traceability, production schema reconciliation and live acceptance remain pending. This runbook grants no production approval and does not replace the [canonical Task 11 release gates](../specs/2026-10-30-instagram-release-gates.md).
 
 Scope: owned-account analytics under the [Meta completion specification](../specs/2026-11-01-meta-analytics-completion-design.md) and its [implementation plan](../plans/2026-11-01-meta-analytics-completion.md), A6–A8. Competitor acceptance is unchanged; this owner-only record cannot mark canonical G-X passed.
 
@@ -45,7 +45,7 @@ The initializer restores the repository baseline plus newer migrations and runs 
 
 Re-seeding is confined to the fixed synthetic owner/account in the dedicated labelled container, refuses an active worker lease, and resets that fixture's histories/jobs/throttle before inserting deterministic values. It does not modify shared accounts or pilot credentials. Traces and preparation logs stay in the local temporary directory and must not be committed.
 
-The six implemented journeys cover real login, stored pagination and end-of-list, period reset, visible isolated chart points, 202 enqueue → real worker/SQL → refreshed report/UI, disabled collection with retained data, identical foreign/nonexistent 404 refusals with JWT identity precedence, account-read loading/failure/retry, Arabic/RTL and keyboard controls, identity changes without previous-owner data, and full direct/API/MCP report parity. They found and reproduced the authenticated-only status-RPC mismatch documented in the repair candidate; the production correction does not widen grants.
+The first six journeys cover real login, stored pagination and end-of-list, period reset, visible isolated chart points, 202 enqueue → real worker/SQL → refreshed report/UI, disabled collection with retained data, identical foreign/nonexistent 404 refusals with JWT identity precedence, account-read loading/failure/retry, Arabic/RTL and keyboard controls, identity changes without previous-owner data, and full direct/API/MCP report parity. They found and reproduced the authenticated-only status-RPC mismatch documented in the repair candidate; the correction does not widen grants. The seventh journey changes the credential generation through real PostgREST during a synthetic Meta response, requires a definitive per-job refusal and an unchanged fingerprint of all three history tables, and proves the worker does not stop the whole drain for that refusal.
 
 The API fixture sets a public synthetic `profiles.api_key`, letting the real database trigger calculate its hash; neither API nor MCP authentication is replaced. The parity journey compares every report field after independently validating the three request-clock instants (`generatedAt`, `period.windowStart`, `period.windowEnd`). It normalizes only those instants; persisted measurements, provenance, coverage, cursors, scope and errors must match exactly. This proves the current legacy owner contract, not the future unified contract.
 
@@ -65,13 +65,15 @@ Source candidate: `d7f23934683254039237b97983e9bbe6124236e7`. The artifact inven
 
 Local evidence is retained outside task commits: `postora-owner-release-prepare-tJdt3t`, `postora-owner-d7f23934-{artifacts,resolved-dependencies,playwright}.json`, and the negative-control log/source/trace under the local temporary directory. The resolved-dependency file describes this local Deno resolver only; it is not deployed dependency evidence. Previously used containers were stopped and preserved with a `-preserved-20261101043442` suffix; their network configuration was retained separately. No production resources were modified.
 
+The six-journey hosted workflow subsequently passed on `099ed2b2d34a0c7b0ef25a16ce7608e9dbe1411a` ([run](https://github.com/lolotam/POSTORA/actions/runs/41263612777)), after correcting the job-level runner-context expression and waiting for the final authenticated TCP PostgreSQL server instead of its temporary Unix-socket bootstrap. That receipt predates the HTTP-fence correction. The seventh journey exposed a separate PostgREST `40001` retry defect; its fix, validation scope and mandatory migration-before-runtime sequence are recorded in the linked HTTP-fence candidate. No seven-journey hosted result is inferred from the earlier six-journey pass.
+
 Runtime caller chains exercised: `InstagramPerformanceScreen` → `useInstagramInsightsReport` → default Supabase gateway → report composition/store → PostgREST/SQL; Sync button → sync composition → durable worker/store → SQL → report/UI; n8n `handleRequest` → `handleGetPostAnalytics` → real function invoker → report; MCP registered `get_post_analytics` → authenticated n8n route → report. These are executed routes, not import-presence claims.
 
 ## Remaining owner-local evidence
 
 The following are requirements, not executed receipts:
 
-- Extend the real-boundary journeys with stale-worker fencing and complete the prerequisite-to-evidence mapping. Keep provider transport fixtures distinct from database/Auth evidence. Existing unit/SQL fencing tests are not a substitute for any required end-to-end assertion.
+- Complete the prerequisite-to-evidence mapping and any uncovered owner cases. Keep provider transport fixtures distinct from database/Auth evidence. The executed generation-fence journey and existing unit/SQL tests do not waive another required assertion.
 - Complete all canonical owner acceptance cells beyond the six journeys above. The existing parity, account/period reset, pagination, AR/EN/RTL, failure/retry and negative-control receipts do not evaluate competitor cells or the future unified schema.
 - Bind executed commands, tool versions, exits, test titles, skip counts, artifact hashes and actual runtime caller chains to the candidate. Run source/test/docs guards and independent review. An absent artifact or skipped required assertion remains a blocker.
 

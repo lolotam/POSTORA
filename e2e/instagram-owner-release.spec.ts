@@ -203,3 +203,39 @@ test("direct report, authenticated public API and MCP preserve the complete stor
     expect(mcpRefusal.content[0].text).toBe(`Postora API error 404: ${JSON.stringify(refusal)}`);
   }
 });
+
+test("a credential generation changed during the provider response fences all history writes", async ({ request }) => {
+  const serviceKey = await syntheticOwnerReleaseKey("service_role");
+  const serviceHeaders = { Authorization: `Bearer ${serviceKey}` };
+  const armed = await request.post(`${OWNER_RELEASE.apiUrl}/__owner-release/generation-fence`, { headers: serviceHeaders });
+  expect(armed.status()).toBe(200);
+  const before = await armed.json();
+  expect(before.triggered).toBe(false);
+  const login = await request.post(`${OWNER_RELEASE.apiUrl}/auth/v1/token?grant_type=password`, {
+    data: { email: OWNER_RELEASE.email, password: OWNER_RELEASE.password },
+  });
+  expect(login.status()).toBe(200);
+  const { access_token: token } = await login.json();
+  const queued = await request.post(`${OWNER_RELEASE.apiUrl}/functions/v1/instagram-insights-sync`, {
+    headers: { Authorization: `Bearer ${token}` }, data: { action: "enqueue", social_account_id: OWNER_RELEASE.accountId, mode: "normal" },
+  });
+  expect(queued.status()).toBe(202);
+  const drained = await request.post(`${OWNER_RELEASE.apiUrl}/functions/v1/instagram-insights-sync`, {
+    headers: serviceHeaders, data: { action: "drain" },
+  });
+  expect(drained.status()).toBe(200);
+  const receipt = await drained.json();
+  expect(receipt.completed).toBe(0);
+  expect(receipt.abandoned).toBe(1);
+  expect(receipt.stopped_early).toBe(false);
+  const afterResponse = await request.get(`${OWNER_RELEASE.apiUrl}/__owner-release/generation-fence`, { headers: serviceHeaders });
+  expect(afterResponse.status()).toBe(200);
+  const after = await afterResponse.json();
+  expect(after.triggered).toBe(true);
+  expect(after.history).toEqual(before.history);
+  expect(["stale_claim", "credential_changed"], JSON.stringify({ rpc: after.rpcFailures, generationChangeMs: after.generationChangeMs })).toContain(receipt.jobs[0].reason_code);
+  const calls = await request.get(`${OWNER_RELEASE.apiUrl}/__owner-release/provider-calls`, { headers: serviceHeaders });
+  const providerCalls = await calls.json();
+  expect(providerCalls.length).toBeGreaterThan(0);
+  expect(providerCalls.every((call: { target: string }) => call.target === "ig-owner-release")).toBe(true);
+});
