@@ -112,6 +112,9 @@ Fill the spec §4.3 mapping table and the registry from B2 evidence; update the 
 ## Batch C — history and unified UI
 
 ### C1. Job-model decision record
+
+**Reviewed decision:** [per-platform jobs and concrete history/fencing ADR](../specs/2026-11-01-meta-analytics-history-job-model.md) selects option (b), preserving the Instagram queue. It specifies capture sequencing, relational per-metric provenance, exact-period keys, credential authority, parent-first locking, report revisions/cursor invalidation and bounded retention. Its source review and author corrections are recorded in §9; C2 implementation may be prepared for review, while migration merge/application remain separately owner-approved and C2 acceptance remains open.
+
 The ADR also defines spec §8.2's exact-period business key, concrete storage/indexes and same-day capture fencing before migrations; overlapping 7/30-day totals must never collide.
 
 Before any migration, a short ADR in `docs/specs/` chooses spec §8.2 option (a) or (b), based on the actual Instagram durable-job migration and `instagram-insights-sync/workerStore.ts`. It lists platform-neutral modules, business keys/indexes and capture-ID ownership from §8.1, retention cutoff and anchor preservation, exact lock/fence/deletion order and batch limits, plus platform-isolation, fencing, reconnect, retry-idempotency and retention/report race tests. C2 is blocked until this ADR is reviewed; omitted cleanup details are not left to migration-time guesses.

@@ -177,6 +177,8 @@ Ownership, RLS (deny by default), grants and metric whitelists follow the Instag
 
 **Exact-period identity:** C1 must define storage and indexes for verified period-total measurements in addition to the daily/post/profile tables. The business key includes owner/account, level and subject ID, metric key, provider API version, provider timezone, exact normalized provider `since` and `until` bounds and UTC capture day. A 7-day and a 30-day total ending together are distinct keys. Same-day recapture uses the latest fenced capture; retries reuse their capture ID and cannot overwrite newer responses. C2 adds ownership/window constraints and tests for both overlapping windows, same-day recapture, stale retries and exact-boundary report selection before C3/C4 use the model. The C1 ADR names the concrete tables/representation; it cannot omit this identity.
 
+**Exact-total retention:** a period-total row is eligible only when its exact provider `until` is at or before the pinned §8.1 retention floor **and** its UTC `captured_on` is before that floor's date. A window overlapping the floor, or a newer capture of an older window, remains. Referencing per-metric data is removed before unreferenced capture/job history under the C1 deletion protocol. This does not alter Instagram or competitor retention.
+
 The Instagram job SQL and worker store are Instagram-only (§3), so they are **not** reused directly. Before any migration, the plan decides between:
 
 - (a) additive migrations that widen the job model to a platform-tagged target with per-platform credential contexts, or
