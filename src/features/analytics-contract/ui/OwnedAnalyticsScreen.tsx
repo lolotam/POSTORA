@@ -46,7 +46,7 @@ export function OwnedAnalyticsScreen({ platform, gateway = supabaseSavedAnalytic
         {reports.isLoading && <p role="status">{t("owned.loading", "Loading saved analytics…")}</p>}
         {reports.isError && <div role="alert" className="rounded-lg border p-4">{revisionChanged
           ? t("owned.historyChanged", "Saved history changed. Refresh the report before continuing.")
-          : labels.reasons[errorReason] ?? t("owned.readFailed", "Saved analytics could not be loaded. Please retry.")}
+          : Object.hasOwn(labels.reasons, errorReason) ? labels.reasons[errorReason] : t("owned.readFailed", "Saved analytics could not be loaded. Please retry.")}
           <Button variant="outline" disabled={reports.isFetching} onClick={refresh}>{t("owned.refresh", "Refresh report")}</Button>
         </div>}
         {first && !revisionChanged && <SavedAnalyticsReport report={first} posts={Array.from(new Map(pages.flatMap((page) => page.posts.items).map((post) => [post.id, post])).values())} />}
