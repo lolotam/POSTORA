@@ -97,6 +97,21 @@ class CapabilityProbeTests(unittest.TestCase):
             self.assertEqual(completed.returncode, 2)
             self.assertIn("POSIX server request timers", completed.stderr)
 
+    def test_truncated_response_keeps_previous_observations_and_a_failure_receipt(self):
+        class TruncatedResponse(JsonResponse):
+            def read(self, _limit):
+                raise probe.http.client.IncompleteRead(b"private-provider-body", 100)
+
+        opener = RecordingOpener([JsonResponse({"data": [{"name": "views", "total_value": {"value": 0}}]}), TruncatedResponse({})])
+        transport = probe.ProbeTransport("graph.threads.net", "v1.0", "synthetic-token", opener)
+        receipts = probe.collect_observations(transport, "owner", "threads")
+        first, interrupted = next(receipts), next(receipts)
+        self.assertEqual(first["measurements"], [{"kind": "total_value", "value": 0}])
+        self.assertEqual(interrupted["httpStatus"], 200)
+        self.assertEqual(interrupted["observation"], "provider_error")
+        self.assertEqual(interrupted["probeFailure"], "http_protocol_error")
+        self.assertNotIn("private-provider-body", json.dumps(interrupted))
+
     def test_listing_rebuilds_fixed_origin_and_stops_on_repeated_cursor(self):
         page = {"data": [{"id": "post1"}], "paging": {"next": "https://attacker.invalid/?access_token=secret", "cursors": {"after": "cursor1"}}}
         opener = RecordingOpener([JsonResponse(page), JsonResponse(page)])

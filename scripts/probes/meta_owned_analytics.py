@@ -4,6 +4,7 @@ import argparse
 from contextlib import contextmanager
 import datetime as dt
 import hashlib
+import http.client
 import json
 import math
 import re
@@ -95,7 +96,7 @@ def error_observation(status, payload):
                    "providerSubcode": error.get("error_subcode") if type(error.get("error_subcode")) is int else None,
                    "throttled": status == 429 or code in (4, 17, 32, 613)}
     failure = payload.get("__probe_failure") if isinstance(payload, dict) else None
-    if failure in ("invalid_json", "response_too_large"):
+    if failure in ("invalid_json", "response_too_large", "http_protocol_error"):
         observation["probeFailure"] = failure
     return observation
 
@@ -150,7 +151,10 @@ class ProbeTransport:
                 except urllib.error.HTTPError as error:
                     response = error
                 with response:
-                    raw = response.read(1_048_577)
+                    try:
+                        raw = response.read(1_048_577)
+                    except http.client.HTTPException:
+                        return response.status, {"error": {}, "__probe_failure": "http_protocol_error"}, safe_usage(response.headers)
                     if len(raw) > 1_048_576:
                         return response.status, {"error": {}, "__probe_failure": "response_too_large"}, safe_usage(response.headers)
                     try:
@@ -160,6 +164,8 @@ class ProbeTransport:
                     return response.status, payload, safe_usage(response.headers)
         except (urllib.error.URLError, TimeoutError, OSError):
             return 0, {}, {}
+        except http.client.HTTPException:
+            return 0, {"error": {}, "__probe_failure": "http_protocol_error"}, {}
 
 
 class NoRedirect(urllib.request.HTTPRedirectHandler):
