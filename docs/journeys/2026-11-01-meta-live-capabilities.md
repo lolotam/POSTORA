@@ -66,3 +66,20 @@ The initial diagnostic's `matchesConfiguredApp: false` was caused by a **missing
 ### Release decision
 
 The owner explicitly retained the [complete G-X gate](../specs/2026-10-30-instagram-release-gates.md) before an Instagram owner pilot. No limited exception, collection activation, schedule or credential change was approved by target selection. Read-only diagnostics cannot satisfy that gate, and neither preliminary nor follow-up captures establish seven distinct scheduled due-date receipts.
+
+## Metric definitions and implementation consequences
+
+A four-call definition diagnostic captured at `2026-11-01T05:03:27Z` requested Facebook `v25.0` explicitly and observed the same version header. It retained only metric names, titles, descriptions, periods and sanitized failure metadata. JSON SHA256: `be28deeb1665463ac0eb8f160a520482b0cb28bd7e3429d8a5ad7825afb14fac`. The resulting candidate mapping and aggregation rules are owned by [design §4.3](../specs/2026-11-01-meta-analytics-completion-design.md#43-common-metric-set).
+
+The provider explicitly described Facebook `page_follows` as lifetime total follows, although each response row said `period: day`. It described Threads account `views` as profile views, distinct from post content views. These findings rule out daily summation of follower snapshots and a shared content-view label for the account metrics. The Facebook rejected-post diagnostic classified code 100 as `invalid_insights_metric` without retaining its raw error text; no replacement is asserted.
+
+The updated probe at `8247ab8f` verifies Threads scopes through the app-authenticated debugger and retains unreported app identity honestly. Seventeen boundary tests passed on Windows and Linux with matching LF source/test SHA256 values `c8676099af173a2d415f7409e84955e78c40cf71bc017b35be86fd53ce7de835` and `d09a479a73a83a4676ba4f2e40cc27ceb09221c8e1e68541886dc02802d50103`. These Linux tests used replaced network/database boundaries and made no live Meta calls.
+
+## Threads runtime correction deployment
+
+[PR #336](https://github.com/lolotam/POSTORA/pull/336) merged as `3755788b97c0ec03ed2d10688eb357b4bee6f581` at `2026-11-01T05:01:42Z`, after all reported hosted checks passed. The automatic edge reconciler deployed it; an explicit run of the versioned deployment helper at `05:02:17Z` confirmed the volume already matched that commit. The operator then verified these exact LF SHA256 hashes:
+
+- `threads-insights/index.ts`: `486d3b51af5b0f0f84a6cfc2d9c9ccc7ce86d727bdb2621ea8634bf71187e37b`.
+- `threads-insights/provider.ts`: `0ec0224544b175f6bf303e22ac295f6399ca2c66765704ee527b4061438a0b8e`.
+
+Health and Threads OPTIONS returned 200; an unauthenticated POST returned the exact function 401 refusal. Local validation passed 13 Deno tests/47 nested steps, 11 translated component tests, typecheck/build and the immutable lint/i18n regression gate. These prove the correction's checks and deployment, not a signed-in browser journey or completion of the analytics project. No collection or schedule was activated.
