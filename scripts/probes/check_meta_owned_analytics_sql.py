@@ -7,10 +7,12 @@ import subprocess
 import urllib.parse
 
 import meta_owned_analytics as probe
+import instagram_direct_analytics as direct
 
 OWNER = "9f010000-0000-4000-8000-000000000001"
 FOREIGN_OWNER = "9f010000-0000-4000-8000-000000000002"
 ACCOUNTS = [f"9f020000-0000-4000-8000-{number:012d}" for number in range(1, 6)]
+DIRECT_ACCOUNTS = [f"9f020000-0000-4000-8000-{number:012d}" for number in range(10, 14)]
 
 
 def sql(container, database, statement):
@@ -47,7 +49,7 @@ def main():
     verify_disposable(args.container)
     existing = sql(args.container, args.database, f"""SELECT
         (SELECT count(*) FROM auth.users WHERE id IN ('{OWNER}', '{FOREIGN_OWNER}')) +
-        (SELECT count(*) FROM public.social_accounts WHERE id IN ({','.join(repr(account) for account in ACCOUNTS)}));""")
+        (SELECT count(*) FROM public.social_accounts WHERE id IN ({','.join(repr(account) for account in ACCOUNTS + DIRECT_ACCOUNTS)}));""")
     if existing != "0":
         raise RuntimeError("Refusing to overwrite existing SQL regression fixtures")
     sql(args.container, args.database, f"""BEGIN;
@@ -57,6 +59,11 @@ def main():
           ('{ACCOUNTS[1]}','{FOREIGN_OWNER}','threads','probe_foreign','synthetic-foreign-token',true),
           ('{ACCOUNTS[2]}','{OWNER}','threads','probe_inactive','synthetic-inactive-token',false),
           ('{ACCOUNTS[3]}','{OWNER}','facebook','probe_facebook','synthetic-facebook-token',true);
+        INSERT INTO public.social_accounts(id,user_id,platform,platform_user_id,access_token,is_active,ig_auth_type) VALUES
+          ('{DIRECT_ACCOUNTS[0]}','{OWNER}','instagram','123','fixture-token',true,'business_login'),
+          ('{DIRECT_ACCOUNTS[1]}','{FOREIGN_OWNER}','instagram','124','fixture-token',true,'business_login'),
+          ('{DIRECT_ACCOUNTS[2]}','{OWNER}','instagram','125','fixture-token',false,'business_login'),
+          ('{DIRECT_ACCOUNTS[3]}','{OWNER}','instagram','126','fixture-token',true,'facebook_login');
         COMMIT;""")
     try:
         probe.DB_CONTAINER, probe.DB_DATABASE = args.container, args.database
@@ -72,6 +79,17 @@ def main():
             else:
                 raise AssertionError("Foreign/inactive/wrong-platform/nonexistent account was substituted")
         print("Actual probe SQL: owned lookup and four non-enumerating refusals passed. No provider calls.")
+        if direct.read_direct_account(OWNER, DIRECT_ACCOUNTS[0]) != {"platform_user_id": "123", "access_token": "fixture-token"}:
+            raise AssertionError("Direct lookup did not return the canonical credential")
+        for account in DIRECT_ACCOUNTS[1:] + [ACCOUNTS[0], ACCOUNTS[-1]]:
+            try:
+                direct.read_direct_account(OWNER, account)
+            except RuntimeError as refused:
+                if str(refused) != "Owned active Instagram Login account unavailable":
+                    raise
+            else:
+                raise AssertionError("Direct lookup admitted foreign/inactive/Page-linked/wrong-platform/missing account")
+        print("Actual direct SQL: owned canonical credential and five context/ownership refusals passed.")
     finally:
         sql(args.container, args.database, f"""BEGIN;
             DELETE FROM public.social_accounts WHERE user_id IN ('{OWNER}', '{FOREIGN_OWNER}');
