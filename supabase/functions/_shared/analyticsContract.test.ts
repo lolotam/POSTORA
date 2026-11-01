@@ -2,7 +2,7 @@ import { assertEquals, assertThrows } from "https://deno.land/std@0.224.0/assert
 import { analyticsSyncState, metricDelta, summarizeDailyMetricValues, unavailableMetric, type AnalyticsReport } from "./analyticsContract.ts";
 import { analyticsWindowForPeriod } from "./analyticsCalendar.ts";
 import { analyticsReportFixture, assertAnalyticsArtifactParity, edgeAnalyticsRuntime, serializedAnalyticsArtifact } from "./analyticsContractTestSupport.ts";
-import { parseAnalyticsReport } from "./analyticsSchema.ts";
+import { parseAnalyticsReport, normalizeAnalyticsPermalink } from "./analyticsSchema.ts";
 
 Deno.test("metric aggregation preserves genuine zero, distinct causes and per-metric coverage", () => {
   const zero = { date: "2026-10-01", metric: { status: "available" as const, value: 0 } };
@@ -102,4 +102,28 @@ Deno.test("transport validation rejects fabricated totals, comparison, observati
   refreshedEvidence.metrics[1].definition.verifiedAt = "2026-11-02T00:00:00Z";
   refreshedEvidence.metrics[1].definition.evidenceRef = "docs/journeys/refreshed-evidence.md";
   assertEquals(parseAnalyticsReport(refreshedEvidence), refreshedEvidence);
+});
+
+Deno.test("daily last-value follower counts must match the final observed provider day", () => {
+  const report = analyticsReportFixture("facebook");
+  const followers = report.metrics.find((metric) => metric.definition.key === "followers")!;
+  followers.trend = analyticsWindowForPeriod(report.period).buckets.map((bucket, index) => ({ ...bucket, metric: { status: "available", value: 10 + index } }));
+  followers.current = { status: "available", value: 16 };
+  followers.observedAt = report.generatedAt;
+  followers.delta = metricDelta(followers.current, followers.previous);
+  assertEquals(parseAnalyticsReport(report), report);
+  const undated = structuredClone(report);
+  undated.metrics.find((metric) => metric.definition.key === "followers")!.trend = [];
+  assertThrows(() => parseAnalyticsReport(undated), TypeError);
+  followers.current = { status: "available", value: 999 };
+  followers.delta = metricDelta(followers.current, followers.previous);
+  assertThrows(() => parseAnalyticsReport(report), TypeError);
+});
+
+Deno.test("optional links reject credentials and malformed URLs without discarding usable metrics", () => {
+  for (const url of [null, undefined, "/relative", "http://example.com/post", "https://user:pass@example.com/post",
+    "https://example.com/post?access_token=fixture", "https://example.com/post?ACCESS_TOKEN=fixture"]) {
+    assertEquals(normalizeAnalyticsPermalink(url), null);
+  }
+  assertEquals(normalizeAnalyticsPermalink("https://www.threads.net/post/fixture"), "https://www.threads.net/post/fixture");
 });

@@ -27,4 +27,8 @@ Deno.test("signed continuation binds owner/account/calendar and stops cycles and
     await assertRejects(() => decodeAnalyticsCursor(cursor, scope, secret), AnalyticsCursorError);
   }
   await assertRejects(() => decodeAnalyticsCursor(firstCursor, scope, "different-signing-key"), AnalyticsCursorError);
+  const opaque = "cursor:with%2Fescaping";
+  const encoded = await encodeAnalyticsCursor({ after: opaque, position: { after: null, visited: [] }, scope, secret });
+  assertEquals((await decodeAnalyticsCursor(encoded.cursor, scope, secret)).after, opaque);
+  assertEquals((await encodeAnalyticsCursor({ after: "https://graph.threads.net/private", position: { after: null, visited: [] }, scope, secret })).cursor, null);
 });

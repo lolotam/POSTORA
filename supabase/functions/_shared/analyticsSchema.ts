@@ -106,17 +106,29 @@ export const ANALYTICS_REPORT_SCHEMA = objectSchema<AnalyticsReport>({
   truncated: { type: "boolean" }, lastPartialAt: nullable(instant), retryAt: nullable(instant),
 });
 
+/** Optional provider metadata must not discard otherwise usable measurements or expose credential-bearing URLs. */
+export function normalizeAnalyticsPermalink(value: string | null | undefined): string | null {
+  if (!value) return null;
+  try {
+    const url = new URL(value);
+    let sensitive = false;
+    url.searchParams.forEach((_measurement, key) => {
+      if (["access_token", "refresh_token", "apikey", "api_key", "token", "authorization", "secret"].includes(key.toLowerCase())) sensitive = true;
+    });
+    return url.protocol === "https:" && !url.username && !url.password && !sensitive ? value : null;
+  } catch (error) { if (error instanceof TypeError) return null; throw error; }
+}
+
 function formatted(value: string, format: ContractSchema["format"]): boolean {
   if (format === "date-time") {
     if (!/^\d{4}-\d{2}-\d{2}T(?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d(?:\.\d{1,9})?(?:Z|[+-](?:[01]\d|2[0-3]):[0-5]\d)$/.test(value)) return false;
     const date = new Date(`${value.slice(0, 10)}T00:00:00Z`);
     return Number.isFinite(Date.parse(value)) && Number.isFinite(date.getTime()) && date.toISOString().slice(0, 10) === value.slice(0, 10);
   }
+  if (format === "https-url") return normalizeAnalyticsPermalink(value) !== null;
   try {
     if (format === "iana-timezone") { new Intl.DateTimeFormat("en", { timeZone: value }); return true; }
-    const url = new URL(value);
-    return url.protocol === "https:" && !url.username && !url.password
-      && !["access_token", "refresh_token", "apikey", "api_key", "token", "authorization", "secret"].some((key) => url.searchParams.has(key));
+    return false;
   } catch (error) { if (error instanceof RangeError || error instanceof TypeError) return false; throw error; }
 }
 
@@ -175,6 +187,10 @@ function measurementSemantics(metric: AnalyticsMetricResult, report: AnalyticsRe
   if (metric.trend.length && (metric.definition.level !== "account" || metric.definition.windowKind !== "day")) return false;
   if (metric.trend.some((point) => point.metric.status === "available"
     && (!Number.isSafeInteger(point.metric.value) || point.metric.value < 0))) return false;
+  if (metric.definition.windowKind === "day" && metric.definition.aggregation === "last") {
+    if (metric.current.status !== "unavailable" && !metric.trend.length) return false;
+    if (metric.trend.length && !sameMeasurement(metric.current, metric.trend[metric.trend.length - 1].metric)) return false;
+  }
   if (metric.definition.windowKind === "day" && metric.definition.aggregation === "sum") {
     if (metric.current.status !== "unavailable" && !metric.trend.length) return false;
     if (metric.trend.length) {

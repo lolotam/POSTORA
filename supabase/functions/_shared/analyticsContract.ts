@@ -98,6 +98,13 @@ export function unavailableMetric(reason: UnavailableReason): Extract<MetricValu
   return { status: "unavailable", reason };
 }
 
+/** Intentionally unsupported aggregates are capability gaps, not failed collection of a measurable value. */
+export function isAnalyticsMetricMeasurable(definition: MetricDefinition): boolean {
+  return definition.capability === "available"
+    && !(definition.windowKind === "period_total" && !definition.exactPeriodVerified)
+    && !(definition.windowKind === "day" && definition.aggregation === "not_summable");
+}
+
 function missingReason(metrics: readonly MetricValue[]): UnavailableReason {
   const reasons = new Set(metrics.flatMap((metric) => metric.status === "unavailable" ? [metric.reason] : []));
   return UNAVAILABLE_REASONS.find((reason) => reasons.has(reason)) ?? "not_collected";

@@ -6,16 +6,16 @@ import * as schema from "./analyticsSchema.ts";
 export const edgeAnalyticsRuntime = { ...contract, ...calendar, ...registry, ...schema };
 type AnalyticsRuntime = typeof edgeAnalyticsRuntime;
 
-export function analyticsReportFixture(): contract.AnalyticsReport {
+export function analyticsReportFixture(platform: contract.AnalyticsPlatform = "threads"): contract.AnalyticsReport {
   const windows = calendar.closedAnalyticsPeriods({ now: "2026-11-01T04:00:00Z", days: 7, timezone: "America/Los_Angeles" });
-  const metrics = registry.analyticsDefinitions("threads", "account").map((definition) => {
+  const metrics = registry.analyticsDefinitions(platform, "account").map((definition) => {
     const current = contract.unavailableMetric(definition.capability === "available" ? "provider_error" : "capability_unverified");
     const previous = contract.unavailableMetric(definition.capability === "available" && definition.windowKind === "point_in_time" ? "not_collected" : current.reason);
     return { definition, current, previous, delta: contract.metricDelta(current, previous), observedAt: null,
       previousObservedAt: null, boundaryObservations: { current: null, previous: null }, trend: [] };
   });
   return {
-    analyticsContractVersion: 1, platform: "threads", accountId: "9f020000-0000-4000-8000-000000000001", generatedAt: "2026-11-01T04:00:00.000Z",
+    analyticsContractVersion: 1, platform, accountId: "9f020000-0000-4000-8000-000000000001", generatedAt: "2026-11-01T04:00:00.000Z",
     period: windows.current.period, previousPeriod: windows.previous.period, source: "live", metrics,
     posts: { items: [], status: "available", reason: null, nextCursor: null, truncated: false },
     sync: { status: "never_synced", reason: null, collectedAt: null, asOf: null, retryAt: null },
@@ -45,6 +45,7 @@ export function serializedAnalyticsArtifact(runtime: AnalyticsRuntime): string {
     schema: runtime.ANALYTICS_REPORT_SCHEMA, registry: runtime.ANALYTICS_METRIC_REGISTRY, configuration: runtime.ANALYTICS_PLATFORM_CONFIGURATION,
     version: runtime.ANALYTICS_CONTRACT_VERSION, reasons: runtime.UNAVAILABLE_REASONS, platforms: runtime.ANALYTICS_PLATFORMS,
     metricKeys: runtime.ANALYTICS_METRIC_KEYS, periodDays: runtime.ANALYTICS_PERIOD_DAYS,
+    measurable: runtime.ANALYTICS_METRIC_REGISTRY.map((definition) => runtime.isAnalyticsMetricMeasurable(definition)),
     calendar: calendarCases.map((input) => runtime.closedAnalyticsPeriods(input)),
     values: [
       runtime.summarizeDailyMetricValues({ aggregation: "sum", days: [{ date: "2026-10-01", metric: available(0) }] }),

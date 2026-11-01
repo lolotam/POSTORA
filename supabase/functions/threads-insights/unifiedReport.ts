@@ -1,10 +1,10 @@
 import {
-  ANALYTICS_CONTRACT_VERSION, analyticsSyncState,
+  ANALYTICS_CONTRACT_VERSION, analyticsSyncState, isAnalyticsMetricMeasurable,
   type AnalyticsPost, type AnalyticsReport, type UnavailableReason,
 } from "../_shared/analyticsContract.ts";
 import { closedAnalyticsPeriods, type AnalyticsPeriod, type AnalyticsPeriodDays } from "../_shared/analyticsCalendar.ts";
 import { ANALYTICS_PLATFORM_CONFIGURATION, analyticsDefinitions } from "../_shared/analyticsRegistry.ts";
-import { parseAnalyticsReport } from "../_shared/analyticsSchema.ts";
+import { parseAnalyticsReport, normalizeAnalyticsPermalink } from "../_shared/analyticsSchema.ts";
 import {
   AnalyticsCursorError, analyticsCursorScope, decodeAnalyticsCursor, encodeAnalyticsCursor, type AnalyticsCursorPosition,
 } from "./analyticsCursor.ts";
@@ -27,7 +27,7 @@ async function projectPosts(provider: ThreadsInsightsProvider, listing: Awaited<
   }) : [];
   const replies = await loadPostMetrics(provider, selected);
   const items: AnalyticsPost[] = replies.map(({ post, insights }) => ({
-    id: post.id, publishedAt: new Date(post.timestamp).toISOString(), text: post.text ?? "", permalink: post.permalink ?? null,
+    id: post.id, publishedAt: new Date(post.timestamp).toISOString(), text: post.text ?? "", permalink: normalizeAnalyticsPermalink(post.permalink),
     metrics: analyticsDefinitions("threads", "post").map((definition) => projectThreadsPostMetric(definition, insights, new Date().toISOString())),
   }));
   return { validPage, items, replies,
@@ -91,8 +91,8 @@ export async function unifiedThreadsReport(input: {
   const pageStatus = !posts.validPage ? "unavailable" : truncated || posts.incomplete ? "partial" : "available";
   if (pageReason) refusalReasons.push(pageReason);
   const retryAt = latestRetryAt(allReplies.map((reply) => reply.retryAt));
-  const partial = Boolean(current.error || previous.error || pageReason || posts.incomplete
-    || metrics.some((metric) => metric.definition.capability === "available" && metric.current.status !== "available"));
+  const partial = Boolean(current.error || previous.error || pageReason || truncated || posts.incomplete
+    || metrics.some((metric) => isAnalyticsMetricMeasurable(metric.definition) && metric.current.status !== "available"));
   return { ok: true, refusalReasons: Array.from(new Set(refusalReasons)), report: parseAnalyticsReport({
     analyticsContractVersion: ANALYTICS_CONTRACT_VERSION, platform: "threads", accountId: input.accountId,
     generatedAt: new Date().toISOString(), period: windows.current.period, previousPeriod: windows.previous.period, source: "live",

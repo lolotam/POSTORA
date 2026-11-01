@@ -8,7 +8,7 @@ const scopeSchema = z.object({
 }).strict();
 const payloadSchema = z.object({
   version: z.literal(1), scope: scopeSchema,
-  after: z.string().regex(/^[A-Za-z0-9_.~+/=-]{1,4096}$/),
+  after: z.string().min(1).max(4096).refine((value) => !/^[a-z][a-z0-9+.-]*:\/\//i.test(value)),
   visited: z.array(z.string().regex(/^[a-f0-9]{64}$/)).min(1).max(7),
 }).strict();
 export type AnalyticsCursorScope = z.infer<typeof scopeSchema>;

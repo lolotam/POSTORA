@@ -71,7 +71,7 @@ Deno.test("real Threads composition negotiates the unified contract without fabr
       const ids = after ? ["post3"] : ["post1", "post2"];
       const cursor = scenario === "repeated_cursor" ? "page-two" : after ? null : "page-two";
       return Response.json({ data: ids.map((id) => ({ id, timestamp: new Date(Date.parse(period.buckets[2].since) + 1000).toISOString(),
-        text: id, permalink: `https://www.threads.net/post/${id}` })),
+        text: id, permalink: scenario === "invalid_permalink" ? "http://invalid.example/private" : `https://www.threads.net/post/${id}` })),
         ...(cursor ? { paging: { next: `https://graph.threads.net/private?access_token=${PROVIDER_TOKEN}`, cursors: { after: cursor } } } : {}) });
     }
     if (url.pathname.endsWith("/insights")) {
@@ -114,6 +114,7 @@ Deno.test("real Threads composition negotiates the unified contract without fabr
       assertEquals(body.posts.items.map((post: { id: string }) => post.id), ["post3"]);
       assertEquals(body.posts.nextCursor, null);
       assertEquals(body.posts.truncated, false);
+      assertEquals(body.lastPartialAt, null);
       assertEquals(metaCalls.some((url) => url.searchParams.get("after") === "page-two"), true);
     });
     await test.step("real proxy and endpoint preserve versioned pagination without falling back to the legacy DTO", async () => {
@@ -121,7 +122,8 @@ Deno.test("real Threads composition negotiates the unified contract without fabr
         loadAccount: async () => ({ failed: false, account: { id: ACCOUNT, user_id: OWNER, platform: "threads", platform_user_id: "thread_owner", is_active: true } }),
         invoke: async (functionName, body) => {
           assertEquals(functionName, "threads-insights");
-          const response = await handler(request(body));
+          const response = await handler(new Request(`${API_URL}/functions/v1/${functionName}`, { method: "POST",
+            headers: { Authorization: `Bearer ${SERVICE_KEY}`, "Content-Type": "application/json" }, body: JSON.stringify(body) }));
           return { status: response.status, data: await response.json() };
         },
         storeImage: async () => { throw new Error("Analytics must not store images"); },
@@ -150,7 +152,7 @@ Deno.test("real Threads composition negotiates the unified contract without fabr
         assertEquals(metaCalls.length, before);
       });
     }
-    for (const mode of ["zero", "missing_metric", "missing_day", "previous_failed", "post_failed", "listing_failed", "repeated_cursor", "budget_exhausted"]) {
+    for (const mode of ["zero", "missing_metric", "missing_day", "previous_failed", "post_failed", "listing_failed", "repeated_cursor", "budget_exhausted", "invalid_permalink"]) {
       await test.step("versioned response retains semantic refusal for " + mode, async () => {
         scenario = mode;
         const body = await (await handler(request(mode === "repeated_cursor" ? { cursor } : {}))).json();
@@ -158,6 +160,11 @@ Deno.test("real Threads composition negotiates the unified contract without fabr
         const visits = body.metrics.find((metric: { definition: { key: string } }) => metric.definition.key === "profile_views");
         if (mode === "zero") assertEquals(visits.current, { status: "available", value: 0 });
         if (mode === "missing_metric") assertEquals(visits.current, { status: "unavailable", reason: "provider_error" });
+        if (mode === "invalid_permalink") {
+          assertEquals(body.posts.items[0].permalink, null);
+          assertEquals(body.posts.items[0].metrics.find((metric: { definition: { key: string } }) => metric.definition.key === "views").current,
+            { status: "available", value: 0 });
+        }
         if (mode === "missing_day") {
           assertEquals(visits.current.status, "partial");
           assertEquals(visits.current.coverage, { availableDays: 6, expectedDays: 7 });
