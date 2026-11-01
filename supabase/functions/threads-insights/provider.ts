@@ -1,5 +1,7 @@
 import { z } from "https://esm.sh/zod@3.25.76";
 import { classifyMetaError, type ClassifiedReason } from "../_shared/threads-debug.ts";
+import { mapAnalyticsReads, MetaAnalyticsTransport, metaAnalyticsFailure, type MetaAnalyticsError, type MetaAnalyticsFailure, type MetaAnalyticsResult } from "../_shared/metaAnalyticsTransport.ts";
+export { latestRetryAt } from "../_shared/metaAnalyticsTransport.ts";
 
 const metricRow = z.object({
   name: z.string().min(1).max(100),
@@ -24,64 +26,14 @@ const identityPayload = z.object({ id: z.string().min(1).max(200).regex(/^[A-Za-
 
 export type ThreadsMetricRow = z.infer<typeof metricRow>;
 export type ThreadsPost = z.infer<typeof postRow>;
-export type ThreadsProviderError = {
-  reason: ClassifiedReason;
-  message: string;
-  code?: number;
-  subcode?: number;
-  kind: "provider" | "transport" | "invalid_response" | "budget" | "aborted";
-};
-type ProviderFailure = { status: number; data: null; error: ThreadsProviderError; retryAt: string | null };
-export type ProviderResult<T> =
-  | { status: number; data: T; error: null; retryAt: null }
-  | ProviderFailure;
+export type ThreadsProviderError = MetaAnalyticsError<ClassifiedReason>;
+type ProviderFailure = MetaAnalyticsFailure<ClassifiedReason>;
+export type ProviderResult<T> = MetaAnalyticsResult<T, ClassifiedReason>;
+const FAILURE_MESSAGE = "Threads insights request could not be completed.";
 type RequestQuery = Record<string, string | number>;
 
-/** Concurrent refusals must never shorten a provider's authoritative backoff. */
-export function latestRetryAt(deadlines: readonly (string | null)[]): string | null {
-  return deadlines.reduce<string | null>((latest, candidate) =>
-    candidate !== null && (latest === null || Date.parse(candidate) > Date.parse(latest)) ? candidate : latest, null);
-}
-
 function failure(status: number, kind: ThreadsProviderError["kind"], reason: ClassifiedReason = "transient"): ProviderFailure {
-  return { status, data: null, error: { kind, reason, message: "Threads insights request could not be completed." }, retryAt: null };
-}
-
-/** Resolves even if a replaced/non-native transport ignores AbortSignal. Native fetch is cancelled too. */
-async function beforeAbort<T>(pending: Promise<T>, signal: AbortSignal): Promise<T> {
-  let abort: () => void = () => undefined;
-  const refused = new Promise<never>((_resolve, reject) => {
-    abort = () => reject(new DOMException("Threads provider deadline reached", "AbortError"));
-    if (signal.aborted) abort();
-    else signal.addEventListener("abort", abort, { once: true });
-  });
-  try { return await Promise.race([pending, refused]); }
-  finally { signal.removeEventListener("abort", abort); }
-}
-
-async function boundedJson(response: Response, signal: AbortSignal): Promise<unknown> {
-  if (!response.body) throw new SyntaxError("Threads response body missing");
-  const reader = response.body.getReader();
-  const chunks: Uint8Array[] = [];
-  let length = 0;
-  try {
-    while (true) {
-      const chunk = await beforeAbort(reader.read(), signal);
-      if (chunk.done) break;
-      length += chunk.value.byteLength;
-      if (length > 1_048_576) throw new RangeError("Threads response exceeds limit");
-      chunks.push(chunk.value);
-    }
-  } catch (error) {
-    // Cancellation is best-effort cleanup; the caller's deadline must not wait for an uncooperative stream.
-    void reader.cancel().catch(() => undefined);
-    throw error;
-  }
-  reader.releaseLock();
-  const bytes = new Uint8Array(length);
-  let offset = 0;
-  for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.byteLength; }
-  return JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
+  return metaAnalyticsFailure(status, kind, reason, FAILURE_MESSAGE);
 }
 
 function providerFailure(status: number, payload: unknown, headers: Headers): ProviderFailure | null {
@@ -110,79 +62,25 @@ function providerFailure(status: number, payload: unknown, headers: Headers): Pr
 
 /** One request-scoped budget is shared by identity, profile, listing and post calls. No retries. */
 export class ThreadsInsightsProvider {
-  private calls = 0;
-  private readonly deadline: number;
-  private retryAt: string | null = null;
-  private throttled = false;
+  private readonly transport: MetaAnalyticsTransport<ClassifiedReason>;
   constructor(private readonly options: {
-    token: string;
-    signal: AbortSignal;
-    startedAt: number;
-    fetch?: typeof fetch;
-    requestTimeoutMs?: number;
-    budgetMs?: number;
-    maxCalls?: number;
+    token: string; signal: AbortSignal; startedAt: number; fetch?: typeof fetch;
+    requestTimeoutMs?: number; budgetMs?: number; maxCalls?: number;
   }) {
-    this.deadline = options.startedAt + (options.budgetMs ?? 30_000);
+    this.transport = new MetaAnalyticsTransport({ ...options, origin: "https://graph.threads.net", version: "v1.0",
+      fallbackReason: "transient", rateLimitedReason: "rate_limited", failureMessage: FAILURE_MESSAGE, classifyFailure: providerFailure });
   }
 
-  private rememberRefusal(refused: ProviderFailure): ProviderFailure {
-    if (refused.error.reason === "rate_limited") this.throttled = true;
-    this.retryAt = latestRetryAt([this.retryAt, refused.retryAt]);
-    return { ...refused, retryAt: this.retryAt };
-  }
-
-  private async request<T>(path: readonly string[], query: RequestQuery, schema: z.ZodType<T>): Promise<ProviderResult<T>> {
-    const remaining = this.deadline - Date.now();
-    if (this.options.signal.aborted) return failure(0, "aborted");
-    if (remaining <= 0 || this.calls >= (this.options.maxCalls ?? 32)) return failure(0, "budget");
-    if (this.throttled) {
-      return { ...failure(429, "provider", "rate_limited"), retryAt: this.retryAt };
-    }
-    const url = new URL(`https://graph.threads.net/v1.0/${path.map(encodeURIComponent).join("/")}`);
-    for (const [key, value] of Object.entries(query)) url.searchParams.set(key, String(value));
-    const timeout = AbortSignal.timeout(Math.max(1, Math.min(remaining, this.options.requestTimeoutMs ?? 4_000)));
-    const signal = AbortSignal.any([this.options.signal, timeout]);
-    this.calls++;
-    try {
-      const response = await beforeAbort((this.options.fetch ?? fetch)(url, {
-        headers: { Authorization: `Bearer ${this.options.token}` }, signal, redirect: "error",
-      }), signal);
-      if (response.status === 429) this.rememberRefusal(providerFailure(429, null, response.headers)!);
-      let payload: unknown;
-      try { payload = await boundedJson(response, signal); }
-      catch (error) {
-        if (response.status === 429) return this.rememberRefusal(providerFailure(429, null, response.headers)!);
-        if (signal.aborted) return failure(response.status, this.options.signal.aborted ? "aborted" : "transport");
-        if (error instanceof SyntaxError || error instanceof RangeError || error instanceof TypeError) return failure(response.status, "invalid_response");
-        throw error;
-      }
-      const refused = providerFailure(response.status, payload, response.headers);
-      if (refused) {
-        return this.rememberRefusal(refused);
-      }
-      const parsed = schema.safeParse(payload);
-      return parsed.success ? { status: response.status, data: parsed.data, error: null, retryAt: null }
-        : failure(response.status, "invalid_response");
-    } catch (error) {
-      if (signal.aborted || error instanceof TypeError || error instanceof DOMException) {
-        return failure(0, this.options.signal.aborted ? "aborted" : "transport");
-      }
-      // Fetch and body streams can reject with arbitrary values; this is an explicit failed read, never empty data.
-      return failure(0, "transport");
-    }
-  }
-
-  identity() { return this.request(["me"], { fields: "id,username" }, identityPayload); }
+  identity() { return this.transport.request(["me"], { fields: "id,username" }, identityPayload); }
 
   profile(input: { userId: string; metrics: readonly string[]; since: number; until: number; metricType?: "time_series" }) {
     const query: RequestQuery = { metric: input.metrics.join(","), since: input.since, until: input.until, locale: "en_US" };
     if (input.metricType) query.metric_type = input.metricType;
-    return this.request([input.userId, "threads_insights"], query, metricPayload);
+    return this.transport.request([input.userId, "threads_insights"], query, metricPayload);
   }
 
   async recentPosts(userId: string, page?: { after: string | null; limit: number }) {
-    const reply = await this.request([userId, "threads"], {
+    const reply = await this.transport.request([userId, "threads"], {
       fields: "id,text,timestamp,media_type,media_url,permalink,shortcode,thumbnail_url", limit: page?.limit ?? 25,
       ...(page?.after ? { after: page.after } : {}),
     }, postsPayload);
@@ -191,19 +89,11 @@ export class ThreadsInsightsProvider {
   }
 
   postInsights(postId: string) {
-    return this.request([postId, "insights"], { metric: "views,likes,replies,reposts,quotes,shares" }, metricPayload);
+    return this.transport.request([postId, "insights"], { metric: "views,likes,replies,reposts,quotes,shares" }, metricPayload);
   }
 }
 
 /** Fixed worker count bounds simultaneous calls while preserving provider listing order. */
 export async function loadPostMetrics(provider: ThreadsInsightsProvider, posts: readonly ThreadsPost[]) {
-  const results: { post: ThreadsPost; insights: Awaited<ReturnType<ThreadsInsightsProvider["postInsights"]>> }[] = [];
-  let next = 0;
-  await Promise.all(Array.from({ length: Math.min(3, posts.length) }, async () => {
-    while (next < posts.length) {
-      const index = next++;
-      results[index] = { post: posts[index], insights: await provider.postInsights(posts[index].id) };
-    }
-  }));
-  return results;
+  return await mapAnalyticsReads(posts, async (post) => ({ post, insights: await provider.postInsights(post.id) }));
 }
