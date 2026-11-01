@@ -18,6 +18,7 @@ const FRONTEND_PATHS = [
   "src/i18n/locales/ar/analytics.json", "src/integrations/supabase/types.ts",
   "supabase/config.toml", "package.json", "package-lock.json", ".github/workflows/ci.yml",
 ];
+const METRIC_CONTRACT_PATHS = ["src/features/analytics-contract", "supabase/functions/_shared/analyticsContract.ts"];
 const digest = (bytes) => createHash("sha256").update(bytes).digest("hex");
 
 function git(root, args) {
@@ -68,12 +69,16 @@ export function inventoryOwnerCandidate(root, revision) {
       }
     }
   }
-  const frontendFiles = git(root, ["ls-tree", "-r", "--name-only", candidate, "--", ...FRONTEND_PATHS])
+  const frontendFiles = git(root, ["ls-tree", "-r", "--name-only", candidate, "--", ...FRONTEND_PATHS, ...METRIC_CONTRACT_PATHS])
     .toString().trim().split("\n").filter(Boolean);
   for (const path of FRONTEND_PATHS) {
     if (!frontendFiles.some((file) => file === path || file.startsWith(`${path}/`))) {
       throw new Error(`Missing required frontend/config path: ${path}`);
     }
+  }
+  // Older repair candidates predate the shared feature; newer bundles depend on its canonical source.
+  if (frontendFiles.some((path) => path.startsWith(`${METRIC_CONTRACT_PATHS[0]}/`)) && !frontendFiles.includes(METRIC_CONTRACT_PATHS[1])) {
+    throw new Error("Missing canonical analytics metric contract");
   }
   return {
     formatVersion: 1,

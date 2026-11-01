@@ -42,14 +42,25 @@ function fixtureRepository(testContext) {
 
 test("hashes committed dependency bytes despite dirty checkout and never grants release readiness", (context) => {
   const fixture = fixtureRepository(context);
+  fixture.put("src/features/analytics-contract/index.ts", 'export { summarizeDailyMetricValues } from "./domain/metricValue";\n');
+  fixture.put("supabase/functions/_shared/analyticsContract.ts", 'export const summarizeDailyMetricValues = () => "canonical fixture";\n');
   const candidate = fixture.commit();
   fixture.put("supabase/functions/instagram-insights-report/readHistory.ts", "dirty checkout\n");
+  fixture.put("supabase/functions/_shared/analyticsContract.ts", "dirty metric contract\n");
   const manifest = inventoryOwnerCandidate(fixture.directory, candidate);
   const dependency = manifest.runtimeFiles.find((file) => file.path.endsWith("/readHistory.ts"));
   assert.equal(dependency.sha256, createHash("sha256").update('export const readHistory = () => "fixture";\n').digest("hex"));
   assert.equal(manifest.runtimeFiles.length, 5);
+  assert.equal(manifest.frontendAndConfigFiles.find((file) => file.path === "supabase/functions/_shared/analyticsContract.ts").sha256,
+    createHash("sha256").update('export const summarizeDailyMetricValues = () => "canonical fixture";\n').digest("hex"));
   assert.equal(manifest.releaseReady, false);
   assert.equal(manifest.canonicalTask11GX, "not_evaluated");
+});
+
+test("refuses a frontend analytics bundle whose canonical metric source is absent", (context) => {
+  const fixture = fixtureRepository(context);
+  fixture.put("src/features/analytics-contract/index.ts", 'export { summarizeDailyMetricValues } from "./domain/metricValue";\n');
+  assert.throws(() => inventoryOwnerCandidate(fixture.directory, fixture.commit()), /Missing canonical analytics metric contract/);
 });
 
 for (const [name, dependency] of [
