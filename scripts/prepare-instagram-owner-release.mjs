@@ -84,7 +84,10 @@ async function prepare() {
   docker(["network", "create", ...labels, gatewayNetwork]);
   docker(["run", "-d", "--name", names[0], ...labels, "--network", internalNetwork, "-e", `POSTGRES_PASSWORD=${databasePassword}`, "supabase/postgres:17.6.1.158", "-c", "listen_addresses=*", "-c", `cron.database_name=${OWNER_RELEASE.database}`, "-c", "cron.launch_active_jobs=off", "-c", "shared_preload_libraries=pg_cron,pg_net,pgsodium,supabase_vault"]);
   await waitForReady(() => {
-    try { docker(["exec", names[0], "pg_isready", "-U", "supabase_admin", "-d", "postgres"]); return true; } catch { return false; }
+    // The image's bootstrap postmaster accepts Unix sockets before migrations finish; the harness uses TCP.
+    try {
+      return docker(["exec", "-e", `PGPASSWORD=${databasePassword}`, names[0], "psql", "-h", "127.0.0.1", "-U", "supabase_admin", "-d", "postgres", "-X", "-A", "-t", "-v", "ON_ERROR_STOP=1", "-c", "SELECT rolsuper FROM pg_roles WHERE rolname=current_user"]).trim() === "t";
+    } catch { return false; }
   }, "Disposable Postgres");
   docker(["exec", names[0], "mkdir", "-p", "/owner-release-repo"]);
   docker(["cp", archive, `${names[0]}:/tmp/owner-release-inputs.tar`]);
