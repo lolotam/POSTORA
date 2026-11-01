@@ -1,4 +1,5 @@
 import type { OwnerReport } from "./types";
+import { summarizeDailyMetricValues } from "@/features/analytics-contract";
 
 type DailyMetric = "views" | "totalInteractions";
 type DailyReport = {
@@ -29,12 +30,15 @@ export function dailyMetricSeries(report: DailyReport) {
 // Only additive metrics may use this path; unique reach requires a provider period total.
 export function summarizeDailyMetric(report: OwnerReport, metric: DailyMetric): DailyMetricSummary {
   const series = dailyMetricSeries(report);
-  const measurements = series.flatMap((day) => day[metric] === null ? [] : [day[metric]]);
-  const availableDays = measurements.length;
+  const summary = summarizeDailyMetricValues({
+    aggregation: "sum",
+    days: series.map((day) => ({ date: day.date, metric: day[metric] === null
+      ? { status: "unavailable", reason: "not_collected" } : { status: "available", value: day[metric] } })),
+  });
   return {
-    status: availableDays === 0 ? "unavailable" : availableDays === series.length ? "available" : "partial",
-    value: availableDays === 0 ? null : measurements.reduce((sum, value) => sum + value, 0),
-    availableDays,
+    status: summary.status,
+    value: summary.status === "unavailable" ? null : summary.value,
+    availableDays: summary.status === "available" ? series.length : summary.status === "partial" ? summary.coverage.availableDays : 0,
     expectedDays: series.length,
   };
 }

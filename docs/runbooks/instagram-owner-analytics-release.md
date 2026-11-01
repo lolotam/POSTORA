@@ -14,7 +14,7 @@ node scripts/check-instagram-owner-analytics-gates.mjs --verify <evidence-direct
 node --test scripts/check-instagram-owner-analytics-gates.test.mjs
 ```
 
-The inventory reads committed Git blobs, not checkout bytes, and records SHA256 hashes, commit/tree IDs, the recursive local import closure of owner report/sync and API/MCP roots, frontend/configuration files and external import specifiers. It rejects unresolved local/bare imports, computed dynamic imports, runtime imports outside `supabase/functions/`, missing required frontend/config paths and changed recorded hashes. It includes type-only local dependencies conservatively; that is deployment inventory, not proof that each module has a runtime caller.
+The inventory reads committed Git blobs, not checkout bytes, and records SHA256 hashes, commit/tree IDs, the recursive local import closure of owner report/sync and API/MCP roots, the transitive local frontend import closure (including aliases), all canonical analytics modules, AR/EN locales, frontend/configuration files and external import specifiers. It rejects unresolved local/bare imports, computed dynamic imports, runtime imports outside `supabase/functions/`, missing required frontend/config paths and changed recorded hashes. It includes type-only local dependencies conservatively; that is deployment inventory, not proof that each module has a runtime caller.
 
 Exit zero means **artifact inventory/verification succeeded only**. The JSON always has `scope: "instagram-owner-analytics-artifact-inventory"`, `canonicalTask11GX: "not_evaluated"` and `releaseReady: false`. External import URLs alone do not freeze their resolved transitive versions; B1 still needs the deployed resolver/configuration and resolved-dependency evidence. A changed candidate needs a new inventory and candidate-bound validation results.
 
@@ -27,8 +27,8 @@ Requirements: a local Docker Unix/named-pipe context, Node/npm, Git and Playwrig
 ```powershell
 node scripts/prepare-instagram-owner-release.mjs
 node scripts/prepare-instagram-owner-release.mjs --verify-existing
-npm exec --yes --package deno@2.9.0 -- deno run --node-modules-dir=none --allow-env=DOCKER_HOST --allow-run=docker --allow-net=127.0.0.1:65435 e2e/fixtures/instagramOwnerReleaseSeed.ts
-npm exec --yes --package deno@2.9.0 -- deno run --node-modules-dir=none --allow-env --allow-run=docker --allow-net=127.0.0.1:65431,127.0.0.1:65435,127.0.0.1:65436 e2e/fixtures/instagramOwnerReleaseServer.ts
+npm exec --yes --package deno@2.9.0 -- deno run --no-config --no-lock --node-modules-dir=none --allow-env=DOCKER_HOST --allow-run=docker --allow-net=127.0.0.1:65435 e2e/fixtures/instagramOwnerReleaseSeed.ts
+npm exec --yes --package deno@2.9.0 -- deno run --no-config --no-lock --node-modules-dir=none --allow-env --allow-run=docker,git --allow-net=127.0.0.1:65431,127.0.0.1:65435,127.0.0.1:65436 e2e/fixtures/instagramOwnerReleaseServer.ts
 ```
 
 Leave the fixture server running, then in another terminal:
@@ -36,7 +36,7 @@ Leave the fixture server running, then in another terminal:
 ```powershell
 npx playwright install chromium
 npx playwright test --config playwright.owner-analytics.config.ts
-node --test scripts/check-instagram-owner-analytics-gates.test.mjs scripts/instagram-owner-release-safety.test.mjs
+node --test scripts/check-instagram-owner-analytics-gates.test.mjs scripts/instagram-owner-release-safety.test.mjs scripts/check-instagram-owner-journeys.test.mjs scripts/instagram-owner-resolver.test.mjs
 ```
 
 The dedicated Playwright config overrides the Supabase URL/key with public synthetic fixture values, refuses to reuse an existing frontend server, and waits for the application entry module before launching tests. Auth uses real email/password login, not a fabricated browser session. Browser routes allow loopback app/API traffic only. The real report/sync, n8n API and MCP composition roots use real local Auth/PostgREST/Postgres; only Meta transport is synthetic and public provider egress is refused. The gateway forwards to two fixed internal services; only its host ports are published, bound to loopback. Postgres starts with `cron.launch_active_jobs=off` before baseline restoration; preparation also deactivates all cron rows. Verification requires both the disabled launcher and zero active rows, preventing jobs created active by historical migrations from running during preparation.
@@ -48,6 +48,14 @@ Re-seeding is confined to the fixed synthetic owner/account in the dedicated lab
 The first six journeys cover real login, stored pagination and end-of-list, period reset, visible isolated chart points, 202 enqueue → real worker/SQL → refreshed report/UI, disabled collection with retained data, identical foreign/nonexistent 404 refusals with JWT identity precedence, account-read loading/failure/retry, Arabic/RTL and keyboard controls, identity changes without previous-owner data, and full direct/API/MCP report parity. They found and reproduced the authenticated-only status-RPC mismatch documented in the repair candidate; the correction does not widen grants. The seventh journey changes the credential generation through real PostgREST during a synthetic Meta response, requires a definitive per-job refusal and an unchanged fingerprint of all three history tables, and proves the worker does not stop the whole drain for that refusal.
 
 The API fixture sets a public synthetic `profiles.api_key`, letting the real database trigger calculate its hash; neither API nor MCP authentication is replaced. The parity journey compares every report field after independently validating the three request-clock instants (`generatedAt`, `period.windowStart`, `period.windowEnd`). It normalizes only those instants; persisted measurements, provenance, coverage, cursors, scope and errors must match exactly. This proves the current legacy owner contract, not the future unified contract.
+
+## Review hardening, 2026-11-01
+
+Preparation now refuses modified, staged or untracked execution inputs, including ignored local Vite environment files. Deno fixture commands explicitly use `--no-config --no-lock`, so ignored root resolver files cannot silently change the executed import graph. External transitive versions remain resolver evidence, not a frozen production dependency acceptance. Each new fixture container records the exact candidate in the `postora.owner-candidate` label. The real composition server and Playwright configuration read that label and require the same clean checkout before loading application code. Existing unlabelled fixtures remain preserved and cannot supply new candidate-bound evidence. The `--verify-existing` inspection remains read-only and is not an execution-source proof.
+
+Playwright writes `postora-owner-release-playwright.json` under the system temporary directory. Run `node scripts/check-instagram-owner-journeys.mjs <temporary-directory>/postora-owner-release-playwright.json` after the browser command. CI enforces the six named journeys, nonzero executed tests, exactly one passing Chromium attempt per test, correct totals and zero errors, skips, expected failures or flaky results. The JSON is retained with the other evidence. Additional journeys must also pass.
+
+The source/inventory, result-validator, resolver and socket suites pass 24 Node tests with zero skips. A real Deno negative control proves ambient malformed resolver configuration fails when the explicit isolation flag is removed. Other negative controls reject omitted journeys, skipped assertions, expected failures, retries, wrong projects, invalid totals and mismatched or dirty execution source. This is tooling evidence; the historical browser receipts below do not certify this revised candidate. The unique daily-metric adapter from #331 now calls the already merged public canonical summarizer; no old contract definitions are reintroduced. Eight focused metric/UI/parity tests pass. Fresh isolated SQL/Auth/browser execution and final-candidate hosted checks remain required. The inventory retains `releaseReady: false` and `canonicalTask11GX: "not_evaluated"`.
 
 ## Executed local evidence, 2026-11-01
 
@@ -81,7 +89,7 @@ Until these exist and run, A6 is partial. The artifact checker is intentionally 
 
 ## Production sequence after local prerequisites
 
-The authoritative gate ledger owns decisions. Before any pilot, satisfy its prerequisites or record Waleed's explicit approved scope amendment in that owning specification. This runbook cannot supply the amendment.
+The authoritative gate ledger owns decisions. Before any owner pilot, satisfy the complete G-X prerequisites, including competitor acceptance. Waleed rejected the proposed owner-only exception; no such amendment is approved.
 
 1. Prepare the full B1 release/schema manifest and read-only production preflight, including object definitions/ACLs/owners, migration lineage, installed functions and rollback compatibility. The artifact inventory above is only one input.
 2. Obtain the distinct B1/B2 approvals before merging or deploying the backend candidate. A main merge can trigger automatic Edge reconciliation; see the [deployment runbook](deploy-edge-function.md).

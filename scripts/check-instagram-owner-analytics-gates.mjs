@@ -15,9 +15,11 @@ export const OWNER_RUNTIME_ROOTS = [
 ];
 const FRONTEND_PATHS = [
   "src/features/instagram-insights", "src/pages/analytics/InstagramAnalytics.tsx",
-  "src/i18n/locales/ar/analytics.json", "src/integrations/supabase/types.ts",
+  "src/features/analytics-contract", "src/i18n/locales/ar/analytics.json", "src/i18n/index.ts", "src/integrations/supabase/types.ts",
   "supabase/config.toml", "package.json", "package-lock.json", ".github/workflows/ci.yml",
 ];
+const CANONICAL_MODULES = ["analyticsContract", "analyticsCalendar", "analyticsRegistry", "analyticsSchema", "analyticsProjection"]
+  .map((name) => `supabase/functions/_shared/${name}.ts`);
 const digest = (bytes) => createHash("sha256").update(bytes).digest("hex");
 
 function git(root, args) {
@@ -44,6 +46,30 @@ function importSpecifiers(source, path) {
   return imports;
 }
 
+function frontendClosure(root, candidate, externalImports) {
+  const tracked = new Set(git(root, ["ls-tree", "-r", "--name-only", candidate]).toString().trim().split("\n"));
+  const pending = ["src/pages/analytics/InstagramAnalytics.tsx", "src/features/analytics-contract/index.ts", "src/i18n/index.ts", ...CANONICAL_MODULES];
+  const files = new Set();
+  while (pending.length) {
+    const path = pending.pop();
+    if (files.has(path)) continue;
+    if (!tracked.has(path) || (!path.startsWith("src/") && !path.startsWith("supabase/functions/")) || /(?:\.test\.|TestSupport\.)/.test(path)) {
+      throw new Error(`Invalid frontend dependency: ${path}`);
+    }
+    files.add(path);
+    if (!/\.[cm]?[jt]sx?$/.test(path)) continue;
+    for (const specifier of importSpecifiers(git(root, ["show", `${candidate}:${path}`]).toString("utf8"), path)) {
+      if (!specifier.startsWith(".") && !specifier.startsWith("@/")) { externalImports.add(specifier); continue; }
+      const target = specifier.startsWith("@/") ? `src/${specifier.slice(2)}` : posix.normalize(posix.join(posix.dirname(path), specifier));
+      const resolved = [target, ...[".ts", ".tsx", ".js", ".jsx", ".mjs", ".json"].map((suffix) => `${target}${suffix}`),
+        ...[".ts", ".tsx", ".js", ".jsx"].map((suffix) => `${target}/index${suffix}`)].find((file) => tracked.has(file));
+      if (!resolved) throw new Error(`Unresolved frontend import ${specifier} in ${path}`);
+      pending.push(resolved);
+    }
+  }
+  return [...files];
+}
+
 export function inventoryOwnerCandidate(root, revision) {
   const candidate = git(root, ["rev-parse", "--verify", "--end-of-options", `${revision}^{commit}`]).toString().trim();
   const tree = git(root, ["rev-parse", `${candidate}^{tree}`]).toString().trim();
@@ -68,15 +94,17 @@ export function inventoryOwnerCandidate(root, revision) {
       }
     }
   }
-  const frontendFiles = git(root, ["ls-tree", "-r", "--name-only", candidate, "--", ...FRONTEND_PATHS])
-    .toString().trim().split("\n").filter(Boolean);
+  const frontendFiles = [...new Set([
+    ...git(root, ["ls-tree", "-r", "--name-only", candidate, "--", ...FRONTEND_PATHS]).toString().trim().split("\n").filter(Boolean),
+    ...frontendClosure(root, candidate, externalImports),
+  ])];
   for (const path of FRONTEND_PATHS) {
     if (!frontendFiles.some((file) => file === path || file.startsWith(`${path}/`))) {
       throw new Error(`Missing required frontend/config path: ${path}`);
     }
   }
   return {
-    formatVersion: 1,
+    formatVersion: 2,
     scope: "instagram-owner-analytics-artifact-inventory",
     candidate, tree,
     runtimeRoots: OWNER_RUNTIME_ROOTS,
@@ -88,7 +116,7 @@ export function inventoryOwnerCandidate(root, revision) {
     pendingEvidence: [
       "Executed owner SQL/Auth/browser/worker-to-report journeys and API/MCP parity",
       "Resolved external module versions/configuration and full deployment/schema preflight",
-      "Canonical release prerequisites or explicit owner-approved scope amendment",
+      "Complete canonical G-X prerequisites, including competitor acceptance; no owner-only exception approved",
       "Separate deployment, named-pilot, collection/schedule and restoration approvals",
       "Live Meta reconciliation and seven timely scheduled due-date receipts",
     ],

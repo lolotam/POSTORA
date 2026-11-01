@@ -7,6 +7,7 @@ import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { test } from "node:test";
 import { inventoryOwnerCandidate, OWNER_RUNTIME_ROOTS } from "./check-instagram-owner-analytics-gates.mjs";
+import { assertOwnerExecutionSource } from "./instagram-owner-execution-source.mjs";
 
 const CHECKER = fileURLToPath(new URL("./check-instagram-owner-analytics-gates.mjs", import.meta.url));
 
@@ -23,12 +24,15 @@ function fixtureRepository(testContext) {
     writeFileSync(join(directory, path), source);
   };
   git("init", "--quiet");
+  put(".gitignore", ".env*\n");
   for (const path of OWNER_RUNTIME_ROOTS) put(path, "export const handler = () => new Response();\n");
   put(OWNER_RUNTIME_ROOTS[0], 'import { readHistory } from "./readHistory.ts";\nexport const handler = () => readHistory();\n');
   put("supabase/functions/instagram-insights-report/readHistory.ts", 'export const readHistory = () => "fixture";\n');
   for (const path of [
     "src/features/instagram-insights/ui/InstagramPerformanceScreen.tsx",
     "src/pages/analytics/InstagramAnalytics.tsx", "src/i18n/locales/ar/analytics.json",
+    "src/i18n/index.ts", "src/features/analytics-contract/index.ts",
+    ...["analyticsContract", "analyticsCalendar", "analyticsRegistry", "analyticsSchema", "analyticsProjection"].map((name) => `supabase/functions/_shared/${name}.ts`),
     "src/integrations/supabase/types.ts", "supabase/config.toml", "package.json",
     "package-lock.json", ".github/workflows/ci.yml",
   ]) put(path, "{}\n");
@@ -77,3 +81,39 @@ test("CLI verification rejects a changed recorded hash", (context) => {
   writeFileSync(manifestPath, JSON.stringify(manifest));
   assert.notEqual(run("--verify", manifestPath).status, 0);
 });
+
+test("frontend aliases and canonical modules bind their transitive committed bytes", (context) => {
+  const fixture = fixtureRepository(context);
+  fixture.put("src/pages/analytics/InstagramAnalytics.tsx", 'import "@/features/analytics-contract";');
+  fixture.put("src/features/analytics-contract/index.ts", 'export * from "./nested";');
+  fixture.put("src/features/analytics-contract/nested.ts", 'export * from "../../presentation";');
+  fixture.put("src/presentation.ts", 'export const label = "unavailable";');
+  const candidate = fixture.commit();
+  const manifest = inventoryOwnerCandidate(fixture.directory, candidate);
+  assert.ok(manifest.frontendAndConfigFiles.some((file) => file.path === "src/presentation.ts"));
+  assert.equal(manifest.frontendAndConfigFiles.filter((file) => /_shared\/analytics(?:Contract|Calendar|Registry|Schema|Projection)\.ts$/.test(file.path)).length, 5);
+  fixture.put("src/presentation.ts", 'export const label = "dirty";');
+  assert.deepEqual(inventoryOwnerCandidate(fixture.directory, candidate), manifest);
+});
+
+test("missing frontend dependency refuses the inventory", (context) => {
+  const fixture = fixtureRepository(context);
+  fixture.put("src/pages/analytics/InstagramAnalytics.tsx", 'import "@/missing";');
+  assert.throws(() => inventoryOwnerCandidate(fixture.directory, fixture.commit()), /Unresolved frontend import/);
+});
+
+for (const [scenario, change] of [
+  ["modified tracked input", (fixture) => fixture.put(OWNER_RUNTIME_ROOTS[0], "dirty")],
+  ["staged input", (fixture) => { fixture.put("src/new.ts", "export {};"); execFileSync("git", ["-C", fixture.directory, "add", "src/new.ts"]); }],
+  ["untracked source", (fixture) => fixture.put("src/new.ts", "export {};")],
+  ["ignored Vite environment", (fixture) => fixture.put(".env.local", "VITE_EXAMPLE=synthetic")],
+  ["different candidate", () => {}],
+]) {
+  test(`execution refuses ${scenario}`, (context) => {
+    const fixture = fixtureRepository(context);
+    const candidate = fixture.commit();
+    assert.equal(assertOwnerExecutionSource(fixture.directory, candidate), candidate);
+    change(fixture);
+    assert.throws(() => assertOwnerExecutionSource(fixture.directory, scenario === "different candidate" ? "0".repeat(40) : candidate));
+  });
+}

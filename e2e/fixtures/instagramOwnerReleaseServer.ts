@@ -1,6 +1,10 @@
 /** Loopback-only real Auth/PostgREST/report/worker composition; only Meta transport is synthetic. */
 import { OWNER_RELEASE, assertOwnerReleaseUrl, ownerReleaseSql, seedOwnerRelease, syntheticOwnerReleaseKey } from "./instagramOwnerReleaseSeed.ts";
 import { FakeMetaTransport } from "../../supabase/functions/_shared/rolloutIntegrationTestSupport.ts";
+import { fileURLToPath } from "node:url";
+import { assertPreparedOwnerExecutionSource } from "../../scripts/instagram-owner-execution-source.mjs";
+
+assertPreparedOwnerExecutionSource(fileURLToPath(new URL("../../", import.meta.url)));
 
 for (const endpoint of [OWNER_RELEASE.apiUrl, OWNER_RELEASE.authUrl, OWNER_RELEASE.restUrl]) assertOwnerReleaseUrl(endpoint);
 const configuredUrl = Deno.env.get("SUPABASE_URL");
