@@ -5,7 +5,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Button } from "@/components/ui/button";
 import { Link } from "react-router-dom";
 import type { SocialAccount } from "@/hooks/useSocialAccounts";
-import type { OwnerReport, OwnerReportPeriodDays } from "../domain/types";
+import type { OwnerReport, OwnerReportMediaItem, OwnerReportPeriodDays } from "../domain/types";
 import { AccountPicker } from "./AccountPicker";
 import { PeriodSelector } from "./PeriodSelector";
 import { SyncStatusBanner } from "./SyncStatusBanner";
@@ -15,11 +15,14 @@ import { MediaPerformanceTable } from "./MediaPerformanceTable";
 
 export type InstagramInsightsWorkspaceProps = {
   accounts: SocialAccount[];
+  accountsError?: string | null;
+  onRetryAccounts?: () => void;
   selectedAccountId: string | null;
   onSelectAccount: (accountId: string) => void;
   periodDays: OwnerReportPeriodDays;
   onSelectPeriod: (period: OwnerReportPeriodDays) => void;
   report: OwnerReport | undefined;
+  mediaItems?: OwnerReportMediaItem[];
   isLoading: boolean;
   error: Error | null;
   isSyncing: boolean;
@@ -30,11 +33,14 @@ export type InstagramInsightsWorkspaceProps = {
 
 export function InstagramInsightsWorkspace({
   accounts,
+  accountsError,
+  onRetryAccounts,
   selectedAccountId,
   onSelectAccount,
   periodDays,
   onSelectPeriod,
   report,
+  mediaItems,
   isLoading,
   error,
   isSyncing,
@@ -47,9 +53,18 @@ export function InstagramInsightsWorkspace({
   const igAccounts = accounts.filter(
     (acc) => acc.platform === "instagram" && acc.is_active !== false,
   );
+  const accountFailure = accountsError ? (
+    <Alert variant="destructive">
+      <AlertCircle className="h-4 w-4" />
+      <AlertDescription>{accountsError}</AlertDescription>
+      {onRetryAccounts && <Button type="button" variant="outline" size="sm" className="mt-3" onClick={onRetryAccounts}>{t("common:retry", "Retry")}</Button>}
+    </Alert>
+  ) : null;
 
   // If no account is connected
   if (igAccounts.length === 0) {
+    if (accountFailure) return accountFailure;
+    if (isLoading) return <div role="status" aria-label={t("common:loading", "Loading...")}><Skeleton className="h-28 rounded-xl" /></div>;
     return (
       <div className="p-8 sm:p-12 text-center rounded-2xl border border-dashed border-border bg-card/40 max-w-lg mx-auto space-y-4">
         <div className="mx-auto w-12 h-12 rounded-full bg-rose-500/10 flex items-center justify-center text-rose-500">
@@ -77,6 +92,7 @@ export function InstagramInsightsWorkspace({
 
   return (
     <div className="space-y-6">
+      {accountFailure}
       {/* Top controls: Account Picker + Period Selector */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 p-4 rounded-xl border border-border/70 bg-card">
         <AccountPicker
@@ -133,9 +149,9 @@ export function InstagramInsightsWorkspace({
       {!isLoading && report && (
         <>
           <MetricsOverviewCards report={report} />
-          <DailyTrendChart daily={report.daily} />
+          <DailyTrendChart daily={report.account.daily} period={report.period} />
           <MediaPerformanceTable
-            media={report.media}
+            media={mediaItems ? { items: mediaItems, hasMore: Boolean(onLoadMore) } : report.media.page}
             onLoadMore={onLoadMore}
             isLoadingMore={isLoadingMore}
           />

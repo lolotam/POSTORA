@@ -25,7 +25,7 @@ import {
 import type { OwnerReportMediaItem, OwnerReportMediaPage } from "../domain/types";
 
 export type MediaPerformanceTableProps = {
-  media: OwnerReportMediaPage | undefined;
+  media: Pick<OwnerReportMediaPage, "items" | "hasMore"> | undefined;
   onLoadMore?: () => void;
   isLoadingMore?: boolean;
 };

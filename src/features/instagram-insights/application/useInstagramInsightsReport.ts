@@ -1,4 +1,4 @@
-import { useQuery } from "@tanstack/react-query";
+import { useInfiniteQuery } from "@tanstack/react-query";
 import { useAuth } from "@/hooks/useAuth";
 import type { OwnerReport, OwnerReportCursor, OwnerReportPeriodDays } from "../domain/types";
 import type { InstagramInsightsGateway } from "./ports";
@@ -23,19 +23,23 @@ export function useInstagramInsightsReport({
   const { user } = useAuth();
   const userId = user?.id ?? "anonymous";
 
-  return useQuery<OwnerReport, Error>({
+  return useInfiniteQuery({
     queryKey: ["instagram-insights-report", userId, socialAccountId, periodDays, cursor, limit],
-    queryFn: async () => {
+    initialPageParam: cursor,
+    queryFn: async ({ pageParam }): Promise<OwnerReport> => {
       if (!socialAccountId) {
         throw new Error("Social account ID is required");
       }
       return gateway.getReport({
         socialAccountId,
         periodDays,
-        cursor,
+        cursor: pageParam,
         limit,
       });
     },
+    getNextPageParam: (lastPage) => lastPage.media.page.hasMore
+      ? lastPage.media.page.nextCursor ?? undefined
+      : undefined,
     enabled: Boolean(enabled && socialAccountId && user?.id),
     staleTime: 60_000,
     retry: (failureCount, error) => {

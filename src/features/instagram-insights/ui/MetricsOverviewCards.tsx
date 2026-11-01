@@ -3,6 +3,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Users, Eye, TrendingUp, Sparkles } from "lucide-react";
 import { formatCompactNumber } from "../domain/formatters";
 import type { OwnerReport } from "../domain/types";
+import { summarizeDailyMetric, type DailyMetricSummary } from "../domain/dailyMetrics";
 
 export type MetricsOverviewCardsProps = {
   report: OwnerReport | undefined;
@@ -12,47 +13,23 @@ export type MetricsOverviewCardsProps = {
 export function MetricsOverviewCards({ report }: MetricsOverviewCardsProps) {
   const { t } = useTranslation("analytics");
 
-  const followersCount = report?.profile?.followersCount ?? null;
+  const followersCount = report?.account.latestProfileObservation?.followersCount ?? null;
 
-  // Aggregate daily metrics across the display window
-  let totalReach: number | null = null;
-  let totalViews: number | null = null;
-  let totalInteractions: number | null = null;
-
-  if (report?.daily && report.daily.length > 0) {
-    let hasReach = false;
-    let reachSum = 0;
-    let hasViews = false;
-    let viewsSum = 0;
-    let hasInteractions = false;
-    let interactionsSum = 0;
-
-    for (const day of report.daily) {
-      if (day.status === "ok") {
-        if (day.reach !== null && Number.isFinite(day.reach)) {
-          reachSum += day.reach;
-          hasReach = true;
-        }
-        if (day.views !== null && Number.isFinite(day.views)) {
-          viewsSum += day.views;
-          hasViews = true;
-        }
-        if (day.totalInteractions !== null && Number.isFinite(day.totalInteractions)) {
-          interactionsSum += day.totalInteractions;
-          hasInteractions = true;
-        }
-      }
-    }
-
-    if (hasReach) totalReach = reachSum;
-    if (hasViews) totalViews = viewsSum;
-    if (hasInteractions) totalInteractions = interactionsSum;
-  }
+  // Aggregate additive daily metrics across the authoritative display window;
+  // the legacy report has no exact-period unique-reach measurement.
+  const views = report ? summarizeDailyMetric(report, "views") : undefined;
+  const interactions = report ? summarizeDailyMetric(report, "totalInteractions") : undefined;
+  const unavailable = t("instagram.metricUnavailable", "Not available");
+  const metricValue = (summary?: DailyMetricSummary) => summary?.value === null || !summary
+    ? unavailable : formatCompactNumber(summary.value);
+  const coverage = (summary?: DailyMetricSummary) => summary?.status === "partial"
+    ? t("instagram.metricPartialCoverage", "Partial: {{availableDays}} of {{expectedDays}} days", summary)
+    : null;
 
   const cards = [
     {
       title: t("instagram.followers", "Followers"),
-      value: formatCompactNumber(followersCount),
+      value: followersCount === null ? unavailable : formatCompactNumber(followersCount),
       subtext: t("instagram.profileObservation", "Current audience"),
       icon: Users,
       color: "text-rose-500",
@@ -61,8 +38,8 @@ export function MetricsOverviewCards({ report }: MetricsOverviewCardsProps) {
     },
     {
       title: t("instagram.reach", "Total Reach"),
-      value: formatCompactNumber(totalReach),
-      subtext: t("instagram.uniqueAccounts", "Unique accounts reached"),
+      value: unavailable,
+      subtext: t("instagram.periodReachUnavailable", "An exact period total is required for unique reach."),
       icon: TrendingUp,
       color: "text-amber-500",
       bg: "bg-amber-500/10",
@@ -70,8 +47,8 @@ export function MetricsOverviewCards({ report }: MetricsOverviewCardsProps) {
     },
     {
       title: t("instagram.views", "Total Views"),
-      value: formatCompactNumber(totalViews),
-      subtext: t("instagram.impressionsCount", "Reel & post impressions"),
+      value: metricValue(views),
+      subtext: coverage(views) ?? t("instagram.viewsCount", "Provider-reported views"),
       icon: Eye,
       color: "text-violet-500",
       bg: "bg-violet-500/10",
@@ -79,8 +56,8 @@ export function MetricsOverviewCards({ report }: MetricsOverviewCardsProps) {
     },
     {
       title: t("instagram.interactions", "Interactions"),
-      value: formatCompactNumber(totalInteractions),
-      subtext: t("instagram.likesCommentsShares", "Likes, comments, shares, saves"),
+      value: metricValue(interactions),
+      subtext: coverage(interactions) ?? t("instagram.likesCommentsShares", "Likes, comments, shares, saves"),
       icon: Sparkles,
       color: "text-emerald-500",
       bg: "bg-emerald-500/10",
@@ -103,7 +80,7 @@ export function MetricsOverviewCards({ report }: MetricsOverviewCardsProps) {
               </div>
               <div className="mt-3">
                 <div className="text-2xl font-bold tracking-tight">{card.value}</div>
-                <p className="text-[11px] text-muted-foreground mt-1 truncate">{card.subtext}</p>
+                <p className="text-[11px] text-muted-foreground mt-1">{card.subtext}</p>
               </div>
             </CardContent>
           </Card>

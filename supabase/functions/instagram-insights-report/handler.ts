@@ -12,6 +12,7 @@
  */
 
 import { corsHeaders, handleCorsOptions, jsonResponse } from "../_shared/cors.ts";
+import { ReportHistoryUnavailableError } from "./readHistory.ts";
 import {
   type OwnerReportCursor,
   type OwnerReportPeriodDays,
@@ -19,6 +20,7 @@ import {
   OWNER_REPORT_DEFAULT_LIMIT,
   OWNER_REPORT_MAX_LIMIT,
   OwnerReportContractError,
+  decodeOwnerReportCursor,
 } from "./contracts.ts";
 import { ReportStore } from "./reportStore.ts";
 
@@ -31,32 +33,7 @@ export interface ReportHandlerDeps {
 }
 
 export function parseCursor(raw: unknown): OwnerReportCursor | null {
-  if (raw === undefined || raw === null || raw === "") return null;
-  if (typeof raw === "object" && raw !== null && "publishedAt" in raw && "mediaId" in raw) {
-    const obj = raw as { publishedAt: unknown; mediaId: unknown };
-    if (typeof obj.publishedAt === "string" && typeof obj.mediaId === "string") {
-      return { publishedAt: obj.publishedAt, mediaId: obj.mediaId };
-    }
-  }
-  if (typeof raw === "string") {
-    try {
-      const parsed = JSON.parse(raw);
-      if (typeof parsed?.publishedAt === "string" && typeof parsed?.mediaId === "string") {
-        return { publishedAt: parsed.publishedAt, mediaId: parsed.mediaId };
-      }
-    } catch {
-      try {
-        const decoded = atob(raw);
-        const parsed = JSON.parse(decoded);
-        if (typeof parsed?.publishedAt === "string" && typeof parsed?.mediaId === "string") {
-          return { publishedAt: parsed.publishedAt, mediaId: parsed.mediaId };
-        }
-      } catch {
-        // Fall through to error
-      }
-    }
-  }
-  throw new OwnerReportContractError("INVALID_CURSOR", "cursor must be a valid cursor object or encoded string");
+  return decodeOwnerReportCursor(raw);
 }
 
 export function createInstagramInsightsReportHandler(deps: ReportHandlerDeps) {
@@ -106,7 +83,7 @@ export function createInstagramInsightsReportHandler(deps: ReportHandlerDeps) {
     let rawPeriod: unknown;
     let rawLimit: unknown;
     let rawCursor: unknown;
-    let targetUserId = auth.userId;
+    let targetUserId = auth.userId.toLowerCase();
 
     if (req.method === "GET") {
       const url = new URL(req.url);
@@ -138,7 +115,7 @@ export function createInstagramInsightsReportHandler(deps: ReportHandlerDeps) {
       // When called via service role (e.g. from serviceProxy / n8n-api), require acting for specified user_id
       if (auth.isServiceRole) {
         if (typeof body.user_id === "string" && UUID_RE.test(body.user_id)) {
-          targetUserId = body.user_id;
+          targetUserId = body.user_id.toLowerCase();
         } else {
           return jsonResponse(
             { error: { code: "INVALID_REQUEST", message: "Service-role call requires valid user_id in request body" } },
@@ -236,6 +213,13 @@ export function createInstagramInsightsReportHandler(deps: ReportHandlerDeps) {
         return jsonResponse({ error: { code: err.code, message: err.message } }, 400);
       }
 
+      if (err instanceof ReportHistoryUnavailableError) {
+        console.error("Instagram report refused an incomplete history read:", err.message);
+        return jsonResponse(
+          { error: { code: "HISTORY_UNAVAILABLE", message: "Report history could not be read completely. Try again later." } },
+          503,
+        );
+      }
       console.error("Failed to generate Instagram insights report:", err);
       return jsonResponse(
         { error: { code: "INTERNAL_ERROR", message: "Failed to generate report" } },

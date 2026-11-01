@@ -19,68 +19,32 @@ function createMockClient(options: {
   media?: Record<string, unknown>[];
   daily?: Record<string, unknown>[];
   profiles?: Record<string, unknown>[];
-  jobStatus?: Record<string, unknown> | null;
 }) {
   return {
-    from: (table: string) => ({
-      select: (_cols: string) => ({
-        eq: (_col1: string, val1: unknown) => ({
-          eq: (_col2: string, val2: unknown) => {
-            if (table === "social_accounts") {
-              return {
-                eq: (_col3: string, _val3: unknown) => ({
-                  eq: (_col4: string, _val4: unknown) => ({
-                    maybeSingle: () => {
-                      if (options.accountError) {
-                        return Promise.resolve({ data: null, error: options.accountError });
-                      }
-                      return Promise.resolve({
-                        data: options.account !== undefined ? options.account : {
-                          id: ACCOUNT_ID,
-                          user_id: OWNER_ID,
-                          platform: "instagram",
-                        },
-                        error: null,
-                      });
-                    },
-                  }),
-                }),
-              };
-            }
-            return {
-              order: (_orderCol: string, _opts?: { ascending: boolean }) => ({
-                limit: (_limitVal: number) => {
-                  if (table === "ig_media_insight_snapshots") {
-                    return Promise.resolve({ data: options.media ?? [], error: null });
-                  }
-                  if (table === "ig_account_insight_daily") {
-                    return Promise.resolve({ data: options.daily ?? [], error: null });
-                  }
-                  if (table === "ig_account_profile_observations") {
-                    return Promise.resolve({ data: options.profiles ?? [], error: null });
-                  }
-                  return Promise.resolve({ data: [], error: null });
-                },
-              }),
-            };
-          },
+    from: (table: string) => {
+      const history = table === "ig_media_insight_snapshots" ? options.media ?? []
+        : table === "ig_account_insight_daily" ? options.daily ?? []
+        : table === "ig_account_profile_observations" ? options.profiles ?? [] : [];
+      const builder = {
+        select: (_columns: string) => builder,
+        eq: (_column: string, _value: unknown) => builder,
+        gt: (_column: string, _value: unknown) => builder,
+        lte: (_column: string, _value: unknown) => builder,
+        order: (_column: string, _options: unknown) => builder,
+        limit: (_count: number) => builder,
+        abortSignal: (_signal: AbortSignal) => builder,
+        maybeSingle: () => Promise.resolve({
+          data: table === "social_accounts" ? options.account === undefined
+            ? { id: ACCOUNT_ID, user_id: OWNER_ID, platform: "instagram" } : options.account : null,
+          error: table === "social_accounts" ? options.accountError ?? null : null,
         }),
-      }),
-    }),
-    rpc: (_fn: string, _args: Record<string, unknown>) => {
-      return Promise.resolve({
-        data: options.jobStatus !== undefined ? options.jobStatus : {
-          status: "completed",
-          last_attempt_at: "2026-10-28T12:00:00Z",
-          last_success_at: "2026-10-28T12:00:00Z",
-          inventory: { window_covered: true, truncated: false },
-        },
-        error: null,
-      });
+        then: (resolve: (value: unknown) => unknown, reject: (error: unknown) => unknown) =>
+          Promise.resolve({ data: history, count: history.length, error: null }).then(resolve, reject),
+      };
+      return builder;
     },
   };
 }
-
 Deno.test("toMediaSnapshotRow converts snake_case db columns cleanly", () => {
   const row = toMediaSnapshotRow({
     id: "snap-01",

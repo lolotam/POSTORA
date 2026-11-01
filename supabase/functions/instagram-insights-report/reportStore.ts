@@ -6,7 +6,7 @@
  * - `ig_media_insight_snapshots` (media metrics and inventory)
  * - `ig_account_insight_daily` (daily interactions and follow breakdowns)
  * - `ig_account_profile_observations` (followers and media count history)
- * - `read_instagram_collection_job_status` (sync status and coverage)
+ * - owner-scoped collection jobs/checkpoints (sync status and coverage)
  *
  * Feeds pure `assembleOwnerReport` to construct the canonical OwnerReport v1 DTO.
  */
@@ -26,29 +26,9 @@ import {
   OwnerReportContractError,
 } from "./contracts.ts";
 import { assembleOwnerReport } from "./assemble.ts";
+import { readReportHistory, readReportQuery, ReportHistoryUnavailableError, type HistoryClient } from "./readHistory.ts";
 
-export interface ReportStoreClient {
-  from(table: string): {
-    select(columns: string): {
-      eq(column: string, value: unknown): {
-        eq(column: string, value: unknown): {
-          eq(column: string, value: unknown): {
-            eq(column: string, value: unknown): {
-              maybeSingle(): Promise<{ data: Record<string, unknown> | null; error: Error | null }>;
-            };
-          };
-          order(column: string, options?: { ascending: boolean }): {
-            limit(count: number): Promise<{ data: Record<string, unknown>[] | null; error: Error | null }>;
-          };
-        };
-        order(column: string, options?: { ascending: boolean }): {
-          limit(count: number): Promise<{ data: Record<string, unknown>[] | null; error: Error | null }>;
-        };
-      };
-    };
-  };
-  rpc(fn: string, args: Record<string, unknown>): Promise<{ data: unknown; error: Error | null }>;
-}
+export type ReportStoreClient = HistoryClient;
 
 export function toMediaSnapshotRow(row: Record<string, unknown>): MediaSnapshotRow {
   return {
@@ -214,21 +194,61 @@ export function parseCompleteness(
 export class ReportStore {
   constructor(private readonly client: ReportStoreClient) {}
 
+  private ownerJobQuery(socialAccountId: string, userId: string) {
+    return this.client.from("instagram_collection_jobs")
+      .select("id, job_generation, status, captured_on, last_attempt_at, last_success_at, last_partial_at, retry_at, last_reason_code")
+      .eq("user_id", userId).eq("social_account_id", socialAccountId)
+      .eq("target_kind", "owner").eq("target_id", socialAccountId);
+  }
+
+  private async loadCollectionStatus(socialAccountId: string, userId: string, signal: AbortSignal) {
+    // The public status RPC is authenticated-only. Service-role reports read a
+    // deliberately narrow projection with structural ownership on every query.
+    const [latest, success, partial] = await readReportQuery(Promise.all([
+      this.ownerJobQuery(socialAccountId, userId).order("captured_on", { ascending: false }).limit(1).abortSignal(signal).maybeSingle(),
+      this.ownerJobQuery(socialAccountId, userId).order("last_success_at", { ascending: false, nullsFirst: false }).limit(1).abortSignal(signal).maybeSingle(),
+      this.ownerJobQuery(socialAccountId, userId).order("last_partial_at", { ascending: false, nullsFirst: false }).limit(1).abortSignal(signal).maybeSingle(),
+    ]), signal);
+    for (const read of [latest, success, partial]) {
+      if (read.error) throw new ReportHistoryUnavailableError(`Failed to load collection status: ${read.error.message}`);
+    }
+    const job = latest.data;
+    if (!job) return null;
+    const checkpoint = await readReportQuery(this.client.from("instagram_collection_job_checkpoints")
+      .select("inventory_truncated, inventory_partial, inventory_window_covered")
+      .eq("user_id", userId).eq("job_id", job.id).eq("job_generation", job.job_generation)
+      .abortSignal(signal).maybeSingle(), signal);
+    if (checkpoint.error) throw new ReportHistoryUnavailableError(`Failed to load collection coverage: ${checkpoint.error.message}`);
+    return {
+      status: job.status, last_attempt_at: job.last_attempt_at,
+      last_success_at: success.data?.last_success_at ?? null,
+      last_partial_at: partial.data?.last_partial_at ?? null,
+      next_retry_at: job.retry_at, reason_code: job.last_reason_code,
+      inventory: {
+        truncated: checkpoint.data?.inventory_truncated ?? false,
+        partial: checkpoint.data?.inventory_partial ?? job.status === "partial",
+        window_covered: checkpoint.data?.inventory_window_covered ?? false,
+      },
+    };
+  }
+
   async loadAccount(
     socialAccountId: string,
-    userId: string
+    userId: string,
+    signal = AbortSignal.timeout(20_000),
   ): Promise<{ id: string; user_id: string; platform: string } | null> {
-    const { data, error } = await this.client
+    const { data, error } = await readReportQuery(this.client
       .from("social_accounts")
       .select("id, user_id, platform")
       .eq("id", socialAccountId)
       .eq("user_id", userId)
       .eq("platform", "instagram")
       .eq("is_active", true)
-      .maybeSingle();
+      .abortSignal(signal)
+      .maybeSingle(), signal);
 
     if (error) {
-      throw new Error(`Failed to load account: ${error.message}`);
+      throw new ReportHistoryUnavailableError(`Failed to load account: ${error.message}`);
     }
     if (!data) return null;
     return {
@@ -244,8 +264,9 @@ export class ReportStore {
     request: OwnerReportRequest,
     now: Date = new Date()
   ): Promise<OwnerReport> {
-    // 1. Verify account ownership
-    const account = await this.loadAccount(socialAccountId, userId);
+    // 1. Verify account ownership within the same budget as the history reads.
+    const signal = AbortSignal.timeout(20_000);
+    const account = await this.loadAccount(socialAccountId, userId, signal);
     if (!account) {
       throw new OwnerReportContractError("ACCOUNT_MISMATCH", "Instagram account not found or not owned by user");
     }
@@ -254,63 +275,32 @@ export class ReportStore {
     const windowStartMs = now.getTime() - periodDays * 86_400_000;
 
     // 2. Query ig_media_insight_snapshots for this account and user
-    const { data: rawMedia, error: mediaError } = await this.client
-      .from("ig_media_insight_snapshots")
-      .select(
-        "id, user_id, social_account_id, post_id, ig_media_id, published_at, captured_at, captured_on, capture_timezone, media_product_type, media_type, permalink, thumbnail_url, status, views, reach, likes, comments, saved, shares, total_interactions, follows, profile_visits, replies, ig_reels_avg_watch_time_ms"
-      )
-      .eq("user_id", userId)
-      .eq("social_account_id", socialAccountId)
-      .order("published_at", { ascending: false })
-      .limit(200);
-
-    if (mediaError) {
-      throw new Error(`Failed to load media snapshots: ${mediaError.message}`);
-    }
+    const historyScope = { userId, socialAccountId };
+    const rawMedia = await readReportHistory(this.client, historyScope, {
+      table: "ig_media_insight_snapshots",
+      columns:
+        "id, user_id, social_account_id, post_id, ig_media_id, published_at, captured_at, captured_on, capture_timezone, media_product_type, media_type, permalink, thumbnail_url, status, views, reach, likes, comments, saved, shares, total_interactions, follows, profile_visits, replies, ig_reels_avg_watch_time_ms",
+      timestamp: "captured_at", asOf: now.toISOString(),
+    }, signal);
 
     // 3. Query ig_account_insight_daily for this account and user
-    const { data: rawDaily, error: dailyError } = await this.client
-      .from("ig_account_insight_daily")
-      .select(
-        "id, user_id, social_account_id, metric_date, provider_date, period_start, period_end, provider_timezone, status, captured_at, reach, views, accounts_engaged, total_interactions, likes, comments, saves, shares, follows, unfollows"
-      )
-      .eq("user_id", userId)
-      .eq("social_account_id", socialAccountId)
-      .order("metric_date", { ascending: false })
-      .limit(100);
-
-    if (dailyError) {
-      throw new Error(`Failed to load daily insights: ${dailyError.message}`);
-    }
+    const rawDaily = await readReportHistory(this.client, historyScope, {
+      table: "ig_account_insight_daily",
+      columns:
+        "id, user_id, social_account_id, metric_date, provider_date, period_start, period_end, provider_timezone, status, captured_at, reach, views, accounts_engaged, total_interactions, likes, comments, saves, shares, follows, unfollows",
+      timestamp: "captured_at", asOf: now.toISOString(),
+    }, signal);
 
     // 4. Query ig_account_profile_observations for this account and user
-    const { data: rawProfiles, error: profileError } = await this.client
-      .from("ig_account_profile_observations")
-      .select(
-        "id, user_id, social_account_id, observed_at, observed_on, capture_timezone, status, followers_count, media_count"
-      )
-      .eq("user_id", userId)
-      .eq("social_account_id", socialAccountId)
-      .order("observed_at", { ascending: false })
-      .limit(50);
+    const rawProfiles = await readReportHistory(this.client, historyScope, {
+      table: "ig_account_profile_observations",
+      columns:
+        "id, user_id, social_account_id, observed_at, observed_on, capture_timezone, status, followers_count, media_count",
+      timestamp: "observed_at", asOf: now.toISOString(),
+    }, signal);
 
-    if (profileError) {
-      throw new Error(`Failed to load profile observations: ${profileError.message}`);
-    }
-
-    // 5. Query status from read_instagram_collection_job_status
-    let jobStatus: Record<string, unknown> | null = null;
-    try {
-      const { data, error } = await this.client.rpc("read_instagram_collection_job_status", {
-        p_target_kind: "owner",
-        p_target_id: socialAccountId,
-      });
-      if (!error && data) {
-        jobStatus = data as Record<string, unknown>;
-      }
-    } catch {
-      // Graceful fallback if rpc is unavailable
-    }
+    // 5. Read status without treating a failed read as a missing job.
+    const jobStatus = await this.loadCollectionStatus(socialAccountId, userId, signal);
 
     // Map rows to contracts types
     const mappedMedia: MediaSnapshotRow[] = (rawMedia ?? []).map((r: Record<string, unknown>) =>

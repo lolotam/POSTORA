@@ -7,6 +7,7 @@ import { useInstagramInsightsReport } from "../application/useInstagramInsightsR
 import { useTriggerInstagramSync } from "../application/useTriggerInstagramSync";
 import { defaultInstagramInsightsGateway } from "../infrastructure/supabaseInstagramInsightsGateway";
 import type { OwnerReportPeriodDays } from "../domain/types";
+import { collectReportMedia } from "../domain/reportPages";
 import { InstagramInsightsWorkspace } from "./InstagramInsightsWorkspace";
 
 export type InstagramPerformanceScreenProps = {
@@ -28,7 +29,7 @@ export function InstagramPerformanceScreen({
     ["enqueue_indeterminate", t("instagram.syncUnconfirmed", "We could not confirm whether syncing started. Wait and check the report before trying again.")],
   ]);
   const errorMessage = (error: Error, fallback: string) => errorMessages.get(error.message) ?? fallback;
-  const { data: accounts = [], isLoading: isAccountsLoading } = useSocialAccounts();
+  const { data: accounts = [], isLoading: isAccountsLoading, error: accountsError, refetch: refetchAccounts } = useSocialAccounts();
 
   const igAccounts = useMemo(
     () => accounts.filter((a) => a.platform === "instagram" && a.is_active !== false),
@@ -39,18 +40,24 @@ export function InstagramPerformanceScreen({
   const [periodDays, setPeriodDays] = useState<OwnerReportPeriodDays>(30);
 
   // Auto-select first active Instagram account if none selected
-  const activeAccountId = selectedAccountId || igAccounts[0]?.id || null;
+  const activeAccountId = igAccounts.find((account) => account.id === selectedAccountId)?.id ?? igAccounts[0]?.id ?? null;
 
   const {
-    data: report,
+    data: reportPages,
     isLoading: isReportLoading,
     error: reportError,
+    fetchNextPage,
+    hasNextPage,
+    isFetchingNextPage,
   } = useInstagramInsightsReport({
     gateway,
     socialAccountId: activeAccountId,
     periodDays,
     enabled: Boolean(activeAccountId),
   });
+
+  const report = reportPages?.pages[0];
+  const mediaItems = useMemo(() => collectReportMedia(reportPages?.pages ?? []), [reportPages]);
 
   const { mutate: triggerSync, isPending: isSyncing } = useTriggerInstagramSync({
     gateway,
@@ -72,15 +79,20 @@ export function InstagramPerformanceScreen({
   return (
     <InstagramInsightsWorkspace
       accounts={accounts}
+      accountsError={accountsError ? t("instagram.accountsLoadFailed", "Failed to load connected accounts. Please try again.") : null}
+      onRetryAccounts={() => { void refetchAccounts({ cancelRefetch: false }); }}
       selectedAccountId={activeAccountId}
       onSelectAccount={setSelectedAccountId}
       periodDays={periodDays}
       onSelectPeriod={setPeriodDays}
       report={report}
+      mediaItems={mediaItems}
       isLoading={isAccountsLoading || isReportLoading}
       error={reportError ? new Error(errorMessage(reportError, t("errors.failedToLoad", "Failed to load report"))) : null}
       isSyncing={isSyncing}
       onTriggerSync={handleTriggerSync}
+      onLoadMore={hasNextPage ? () => { void fetchNextPage({ cancelRefetch: false }); } : undefined}
+      isLoadingMore={isFetchingNextPage}
     />
   );
 }
