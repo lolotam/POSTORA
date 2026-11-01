@@ -18,12 +18,12 @@ The previously reviewed error-message fix, [PR #326](https://github.com/lolotam/
 
 ## Validation
 
-- Node/Vitest: 45 focused tests passed, including real gateway/assembler pagination and metric coverage cases.
+- Node/Vitest: 46 focused tests passed, including real gateway/assembler pagination, account/period isolation and metric coverage cases.
 - Deno 2.9.0 via pinned npm package: 82 report tests and 13 substeps passed, with typechecking enabled. CI config specifies a different Deno patch version; the local result does not claim patch-version parity.
 - `npm run typecheck` passed.
 - `npm run build` passed; existing WhatsApp circular-chunk and large-chunk warnings remain.
 - Production/test guard passes checked the changed scopes; documentation review checked this record against the implementation and executed results. These are agent guard passes, not independent approval.
-- The lint/i18n regression gate initially caught two translation keys orphaned by the metric-copy correction. Both obsolete keys were removed; the final gate result belongs to the final candidate's check artifact.
+- The lint/i18n regression gate initially caught two translation keys orphaned by the metric-copy correction. Both obsolete keys were removed; the corrected production code at `914eb868` passed with **NO REGRESSIONS**, retaining the historical baseline of 1224 ordinary lint errors and 364 i18n aggregate findings. Subsequent account-isolation test/documentation additions still require the final PR revision's hosted check; a historical pass is not that result.
 - `graphify update .` completed. Generated graph changes are excluded from task commits.
 
 ## Operational limits and remaining acceptance

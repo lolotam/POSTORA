@@ -16,7 +16,10 @@ vi.mock("@/hooks/useAuth", () => ({
 }));
 vi.mock("@/hooks/useSocialAccounts", () => ({
   useSocialAccounts: () => ({
-    data: [{ id: "acc-123", platform: "instagram", platform_username: "testcreator", is_active: true }],
+    data: [
+      { id: "acc-123", platform: "instagram", platform_username: "testcreator", is_active: true },
+      { id: "acc-456", platform: "instagram", platform_username: "secondcreator", is_active: true },
+    ],
     isLoading: false,
   }),
 }));
@@ -106,5 +109,34 @@ describe("Instagram performance pagination through the real gateway and report a
     expect(screen.getByText("media-0")).toBeInTheDocument();
     expect(screen.queryByText("media-20")).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: /Load more/i })).not.toBeDisabled();
+  });
+
+  it("does not carry loaded pages into a different account", async () => {
+    vi.mocked(supabase.functions.invoke).mockImplementation(async (_name, options) => {
+      const body = options?.body as { social_account_id: string; cursor?: OwnerReportCursor };
+      if (body.social_account_id === "acc-456") {
+        return {
+          data: reportFixture({
+            scope: { ownerId: "test-user-id", socialAccountId: "acc-456", platform: "instagram" },
+            mediaSnapshots: [mediaFixture({ mediaId: "second-account-media", socialAccountId: "acc-456" })],
+            baselineHistory: [], accountDaily: [], profileObservations: [],
+          }),
+          error: null,
+        };
+      }
+      return { data: reportPage(30, body.cursor ?? null), error: null };
+    });
+    renderPerformance();
+    expect(await screen.findByText("media-0")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /Load more/i }));
+    expect(await screen.findByText("media-20")).toBeInTheDocument();
+
+    fireEvent.keyDown(screen.getByRole("combobox"), { key: "ArrowDown" });
+    fireEvent.click(await screen.findByRole("option", { name: /secondcreator/i }));
+
+    expect(await screen.findByText("second-account-media")).toBeInTheDocument();
+    expect(screen.queryByText("media-0")).not.toBeInTheDocument();
+    expect(screen.queryByText("media-20")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Load more/i })).not.toBeInTheDocument();
   });
 });
