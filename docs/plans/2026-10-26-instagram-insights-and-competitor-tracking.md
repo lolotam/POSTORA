@@ -1,5 +1,7 @@
 # Implementation plan: Instagram insights and competitor tracking
 
+> **Current status, 2026-11-01:** the planning status and progress entries below are historical. See the [reconciled Instagram, Facebook and Threads status review](../journeys/2026-11-01-meta-analytics-status.md) for merged work, observed production state, known gaps and remaining release work. This pointer does not amend the acceptance contract or approve activation.
+
 Date: 2026-10-26
 
 Status: Planning only; implementation not authorized. Three Grok 4.7 debate rounds completed and adjudicated; implementation blocked on decisions/capability gates below. Final-round corrections were reviewed by the orchestrator, not a fourth Grok pass.
