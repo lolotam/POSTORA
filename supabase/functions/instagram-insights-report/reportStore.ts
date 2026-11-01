@@ -29,7 +29,9 @@ import { assembleOwnerReport } from "./assemble.ts";
 import { readReportHistory, type HistoryClient } from "./readHistory.ts";
 
 export interface ReportStoreClient extends HistoryClient {
-  rpc(fn: string, args: Record<string, unknown>): Promise<{ data: unknown; error: { message: string } | null }>;
+  rpc(fn: string, args: Record<string, unknown>): {
+    abortSignal(signal: AbortSignal): PromiseLike<{ data: unknown; error: { message: string } | null }>;
+  };
 }
 
 export function toMediaSnapshotRow(row: Record<string, unknown>): MediaSnapshotRow {
@@ -198,7 +200,8 @@ export class ReportStore {
 
   async loadAccount(
     socialAccountId: string,
-    userId: string
+    userId: string,
+    signal = AbortSignal.timeout(20_000),
   ): Promise<{ id: string; user_id: string; platform: string } | null> {
     const { data, error } = await this.client
       .from("social_accounts")
@@ -207,6 +210,7 @@ export class ReportStore {
       .eq("user_id", userId)
       .eq("platform", "instagram")
       .eq("is_active", true)
+      .abortSignal(signal)
       .maybeSingle();
 
     if (error) {
@@ -226,8 +230,9 @@ export class ReportStore {
     request: OwnerReportRequest,
     now: Date = new Date()
   ): Promise<OwnerReport> {
-    // 1. Verify account ownership
-    const account = await this.loadAccount(socialAccountId, userId);
+    // 1. Verify account ownership within the same budget as the history reads.
+    const signal = AbortSignal.timeout(20_000);
+    const account = await this.loadAccount(socialAccountId, userId, signal);
     if (!account) {
       throw new OwnerReportContractError("ACCOUNT_MISMATCH", "Instagram account not found or not owned by user");
     }
@@ -237,7 +242,6 @@ export class ReportStore {
 
     // 2. Query ig_media_insight_snapshots for this account and user
     const historyScope = { userId, socialAccountId };
-    const signal = AbortSignal.timeout(20_000);
     const rawMedia = await readReportHistory(this.client, historyScope, {
       table: "ig_media_insight_snapshots",
       columns:
@@ -267,7 +271,7 @@ export class ReportStore {
       const { data, error } = await this.client.rpc("read_instagram_collection_job_status", {
         p_target_kind: "owner",
         p_target_id: socialAccountId,
-      });
+      }).abortSignal(signal);
       if (error) throw new Error(`Failed to load collection status: ${error.message}`);
       if (data) {
         jobStatus = data as Record<string, unknown>;

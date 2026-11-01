@@ -30,6 +30,7 @@ function createMockClient(options: {
               return {
                 eq: (_col3: string, _val3: unknown) => ({
                   eq: (_col4: string, _val4: unknown) => ({
+                    abortSignal: (_signal: AbortSignal) => ({
                     maybeSingle: () => {
                       if (options.accountError) {
                         return Promise.resolve({ data: null, error: options.accountError });
@@ -43,6 +44,7 @@ function createMockClient(options: {
                         error: null,
                       });
                     },
+                    }),
                   }),
                 }),
               };
@@ -64,7 +66,7 @@ function createMockClient(options: {
       }),
     }),
     rpc: (_fn: string, _args: Record<string, unknown>) => {
-      return Promise.resolve({
+      return { abortSignal: (_signal: AbortSignal) => Promise.resolve({
         data: options.jobStatus !== undefined ? options.jobStatus : {
           status: "completed",
           last_attempt_at: "2026-10-28T12:00:00Z",
@@ -72,7 +74,7 @@ function createMockClient(options: {
           inventory: { window_covered: true, truncated: false },
         },
         error: null,
-      });
+      }) };
     },
   };
 }
