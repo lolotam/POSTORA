@@ -144,3 +144,34 @@ Deno.test("malformed configuration is unavailable and a caller cannot choose dis
     });
   }
 });
+
+Deno.test("transient or undecodable admission leaves the durable dispatch target resumable", async (test) => {
+  for (const stage of ["debug_token", "me"]) for (const failure of ["transport", "server_error", "invalid_response"]) {
+    await test.step(`${stage}: ${failure}`, async () => {
+      let commits = 0, observations = 0;
+      const handler = createOwnedAnalyticsSyncHandler({ authorize: () => ({ ok: true }), app: () => ({ id: "790001", secret: "fixture-app" }), audit: async () => true,
+        rpc: async (name) => {
+          if (name === "next_meta_analytics_dispatch_target") return { data: { state: "target", ticket, served_at: STAMP }, error: null };
+          if (name === "commit_meta_analytics_dispatch_target") { commits++; return { data: { state: "needs_admission" }, error: null }; }
+          if (name === "read_threads_analytics_admission_credential") return { data: credential, error: null };
+          observations++;
+          throw new Error("Failed provider verification must not persist a grant");
+        }, fetch: async (input) => {
+          const url = new URL(String(input));
+          if (url.pathname.endsWith(`/${stage}`)) {
+            if (failure === "transport") throw new TypeError("Synthetic network outage");
+            if (failure === "server_error") return Response.json({ error: { code: 2 } }, { status: 503 });
+            return Response.json({ unexpected: true });
+          }
+          return Response.json({ data: { is_valid: true, user_id: authority.platform_user_id, scopes: ["threads_basic", "threads_manage_insights"] } });
+        } });
+      const response = await handler(request("threads"));
+      const receipt = await response.json();
+      assertEquals(response.status, 503);
+      assertEquals(receipt.status, "unavailable");
+      assertEquals(receipt.counts, { visited: 1, queued: 0, refused: 0 });
+      assertEquals(commits, 1);
+      assertEquals(observations, 0);
+    });
+  }
+});

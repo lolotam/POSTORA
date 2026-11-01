@@ -49,11 +49,13 @@ Admission reads app configuration before accessing account secrets. Missing app 
 
 1. Capture the allowed account and credential authority through the admission reader.
 2. Before each HTTP request, repeat that reader with the captured expected authority. Any changed authority, policy, account health or owner refuses before provider HTTP.
-3. Verify the grant using the fixed-origin app-authenticated debugger: Graph `v25.0` with Facebook app bearer, Threads `v1.0` with `TH|APP_ID|APP_SECRET`. Check `is_valid`, canonical user identity, valid unique scope strings and application identity when reported. An omitted Threads `app_id` is unreported evidence, not a mismatch. Never infer requested permissions as granted.
+3. Verify the grant using the fixed-origin app-authenticated debugger: Graph `v25.0` with Facebook app bearer, Threads `v1.0` with `TH|APP_ID|APP_SECRET`. Check `is_valid`, canonical user identity and valid unique scope strings. Facebook requires a matching `app_id`. An omitted Threads `app_id` is unreported evidence, not a mismatch; a reported value must match. Never infer requested permissions as granted.
 4. Verify the operational account identity separately. Facebook's `/me` must be the expected Page; a User ID cannot stand in for it. Threads' `/me` must be its expected user.
 5. Commit only validated scopes through the existing `observe_*_analytics_permissions` RPC with the captured authority and actual observation time. The SQL fence repeats after HTTP. A scope change may advance authority; use the returned authority rather than recapturing an unrelated grant.
 
 Required scopes remain the C2 contracts: Facebook `read_insights` and `pages_read_engagement`; Threads `threads_basic` and `threads_manage_insights`. A valid observation missing either scope is persisted as observed, then admission refuses `permission_missing`; it must not enqueue work. Invalid/expired identity or malformed debugger results never produce a verified observation. Provider failures are sanitized and do not overwrite a previous observation as a fabricated empty grant.
+
+Transport failures, provider 5xx responses and undecodable permission replies stop admission without committing a dispatch refusal. Abort/budget failures also stop the invocation. The durable target remains resumable; transient unavailability is not proof that the account lacks permission.
 
 The observation stores only actually granted scopes relevant to this analytics feature. It does not claim to inventory every permission on the provider grant. Accept a bounded provider scope list, validate its names/uniqueness, then intersect it with the feature's required scopes before persistence. Adding unrelated valid permissions must never exceed the observation's 32-scope storage ceiling or invalidate analytics authority; a missing relevant permission remains missing and is never filled from the requested scope list.
 
@@ -92,6 +94,8 @@ Plan the latest completed provider-calendar day and its preceding correction day
 Facebook daily collection uses verified `page_media_view`, `page_total_media_view_unique`, `page_post_engagements` and daily `page_follows`. Do not fabricate a Facebook point-in-time followers sample. Post captures use `post_media_view` and `post_total_media_view_unique`. Threads collects verified daily profile views, point-in-time `followers_count` and its six verified lifetime post metrics. Calendar-less period totals stay unavailable unless the registry verifies that exact period; do not label a provider lifetime count as a selected-window total. Per-cell failure causes and true zeros pass through the canonical decoder, C2 writer and report read unchanged.
 
 Reserve each metric capture before HTTP; the request's operation key includes kind, subject and window identity. Metadata and accepted cells from one response commit together. The first accepted capture supersedes older responses according to the existing sequence rules. Replays do not manufacture timestamps, increment report revisions or skip the current claim fence. Completion calls the existing SQL truth checks; truncated inventory, expected missing cells, failed/pending operations, unverified capability and permission/credential failures cannot become successful due dates.
+
+After every planned bounded capture is accepted, an irrecoverable inventory bound terminates the job as `failed` with `inventory_truncated`, preserving its saved prefix and permitting later due dates. Unfinished captures remain `partial` with a 60-second retry delay. Other eligible jobs can proceed in the same drain. Rate limits pause only their platform for the invocation; the other platform remains eligible within the shared budget.
 
 ## Throttling and retention
 

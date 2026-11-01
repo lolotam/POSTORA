@@ -3,6 +3,7 @@ import { unavailableMetric } from "../_shared/analyticsContract.ts";
 import { alignedDailySeries, countMetric, type CompleteAnalyticsMetric, type DailyAnalyticsRow } from "../_shared/analyticsProjection.ts";
 import type { MetaAnalyticsResult } from "../_shared/metaAnalyticsTransport.ts";
 import type { AnalyticsCapture } from "./store.ts";
+import { threadsSnapshotMetric } from "../threads-insights/analyticsProjection.ts";
 
 export class CollectionProviderRefused extends Error {
   constructor(readonly reason: UnavailableReason | "rate_limited", readonly retryAt: string | null = null) {
@@ -52,6 +53,7 @@ export function captureCell(reply: MetaAnalyticsResult<{ data: CollectionMetricR
     return alignedDailySeries(row, { period: { since: capture.since, until: capture.until },
       buckets: [{ date: capture.metric_date, since: capture.since, until: capture.until }] })[0];
   }
+  if (definition.platform === "threads") return threadsSnapshotMetric(row, capture.kind === "profile" ? "point_in_time" : "lifetime");
   if (capture.kind === "profile") return row.period === "day" ? countMetric(row.total_value?.value) : unavailableMetric("window_mismatch");
   if (row.period !== "lifetime") return unavailableMetric("window_mismatch");
   return row.values?.length === 1 ? countMetric(row.values[0].value) : unavailableMetric("provider_error");

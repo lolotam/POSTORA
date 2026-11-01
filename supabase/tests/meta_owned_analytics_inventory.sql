@@ -1,5 +1,5 @@
--- Boundaries: off/malformed/empty policy, >50 targets, two owners, same-day
--- reopen, credential rotation, CAS replay/skip, expired day and policy change.
+-- Boundaries: request-bound inventory reservation, identical/conflicting replay,
+-- stale position, missing/repeated cursor, foreign Page IDs, 500-ID and 100-page caps.
 \set ON_ERROR_STOP on
 BEGIN;
 INSERT INTO auth.users(id,email) VALUES
