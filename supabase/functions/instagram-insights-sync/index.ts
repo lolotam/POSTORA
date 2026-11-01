@@ -54,6 +54,7 @@ import {
   type OwnerIntakeAuditEvent,
 } from "./handler.ts";
 import { isPlainRecord, readOwnData } from "./receipts.ts";
+import { ownerHttpRpcName } from "./httpRpc.ts";
 import { createOwnerCollectionStore, type UserRpcCaller } from "./store.ts";
 import { InstagramGraphProvider } from "./graphProvider.ts";
 import {
@@ -204,7 +205,7 @@ function createServiceRpcCaller(environment: ServerEnvironment): OwnerServiceRpc
 
     // The raw driver envelope. The store reads its own descriptors before a
     // SQLSTATE is allowed to mean anything.
-    return await client.rpc(functionName, args);
+    return await client.rpc(ownerHttpRpcName(functionName), args);
   };
 }
 

@@ -1,5 +1,5 @@
 /** Loopback-only real Auth/PostgREST/report/worker composition; only Meta transport is synthetic. */
-import { OWNER_RELEASE, assertOwnerReleaseUrl, ownerReleaseSql, syntheticOwnerReleaseKey } from "./instagramOwnerReleaseSeed.ts";
+import { OWNER_RELEASE, assertOwnerReleaseUrl, ownerReleaseSql, seedOwnerRelease, syntheticOwnerReleaseKey } from "./instagramOwnerReleaseSeed.ts";
 import { FakeMetaTransport } from "../../supabase/functions/_shared/rolloutIntegrationTestSupport.ts";
 import { fileURLToPath } from "node:url";
 import { assertPreparedOwnerExecutionSource } from "../../scripts/instagram-owner-execution-source.mjs";
@@ -24,13 +24,24 @@ const meta = new FakeMetaTransport();
 meta.install();
 const syntheticMetaFetch = globalThis.fetch;
 meta.restore();
-globalThis.fetch = (input, init) => {
+const rpcFailures: { name: string; status: number; code: string | null }[] = [];
+globalThis.fetch = async (input, init) => {
   const url = new URL(input instanceof Request ? input.url : String(input));
   if (["graph.facebook.com", "graph.instagram.com"].includes(url.hostname)) return syntheticMetaFetch(input, init);
   if (url.protocol !== "http:" || url.hostname !== "127.0.0.1" || !["65431", "65435", "65436"].includes(url.port)) {
     throw new Error("Owner-release runtime refused non-fixture network access");
   }
-  return originalFetch(input, init);
+  let response: Response;
+  try { response = await originalFetch(input, init); } catch (error) {
+    if (url.pathname.startsWith("/rest/v1/rpc/")) rpcFailures.push({ name: url.pathname.split("/").at(-1)!, status: 0, code: error instanceof Error ? error.name : "transport_error" });
+    throw error;
+  }
+  if (url.pathname.startsWith("/rest/v1/rpc/") && !response.ok) {
+    const receipt = await response.clone().json();
+    rpcFailures.push({ name: url.pathname.split("/").at(-1)!, status: response.status,
+      code: typeof receipt?.code === "string" ? receipt.code : null });
+  }
+  return response;
 };
 
 const { handler: reportHandler } = await import("../../supabase/functions/instagram-insights-report/index.ts");
@@ -57,6 +68,14 @@ try {
 if (!syncHandler || !mcpHandler) throw new Error("A real owner release composition did not register");
 const registeredSync = syncHandler as Handler;
 const registeredMcp = mcpHandler as Handler;
+let generationFenceTriggered = false;
+let generationChangeMs = 0;
+
+async function historyFingerprint() {
+  const histories = ["ig_media_insight_snapshots", "ig_account_insight_daily", "ig_account_profile_observations"];
+  const entries = histories.flatMap((table) => [`'${table}'`, `(SELECT md5(COALESCE(jsonb_agg(to_jsonb(history) ORDER BY history.id)::text,'[]')) FROM public.${table} history WHERE user_id='${OWNER_RELEASE.ownerId}' AND social_account_id='${OWNER_RELEASE.accountId}')`]);
+  return JSON.parse(await ownerReleaseSql(`SELECT jsonb_build_object(${entries.join(",")});`));
+}
 
 async function route(request: Request): Promise<Response> {
   const url = new URL(request.url);
@@ -77,6 +96,31 @@ async function route(request: Request): Promise<Response> {
     await ownerReleaseSql("UPDATE public.app_settings SET value='false'::jsonb WHERE key='collection_instagram_insights_enabled';");
     const enabled = await ownerReleaseSql("SELECT value::text FROM public.app_settings WHERE key='collection_instagram_insights_enabled';");
     return Response.json({ collectionEnabled: enabled === "true" });
+  }
+  if (url.pathname === "/__owner-release/generation-fence") {
+    if (request.headers.get("Authorization") !== `Bearer ${serviceKey}`) return new Response(null, { status: 401 });
+    if (request.method === "POST") {
+      await seedOwnerRelease();
+      generationFenceTriggered = false;
+      generationChangeMs = 0;
+      rpcFailures.length = 0;
+      meta.reset();
+      meta.setHook(async (call) => {
+        if (call.target !== "ig-owner-release" || generationFenceTriggered) return;
+        const changeStarted = performance.now();
+        // Use real PostgREST inside the provider deadline; spawning Docker CLI probes can exceed it on Windows.
+        const changed = await originalFetch(`${OWNER_RELEASE.restUrl}/instagram_account_capabilities?user_id=eq.${OWNER_RELEASE.ownerId}&social_account_id=eq.${OWNER_RELEASE.accountId}&select=credential_generation`, {
+          method: "PATCH", headers: { Authorization: `Bearer ${serviceKey}`, "Content-Type": "application/json", Prefer: "return=representation" },
+          body: JSON.stringify({ credential_generation: 2 }),
+        });
+        if (!changed.ok) throw new Error("Fixture generation change was refused");
+        const generations = await changed.json();
+        if (generations.length !== 1 || generations[0].credential_generation !== 2) throw new Error("Fixture generation change did not reach its exact target");
+        generationFenceTriggered = true;
+        generationChangeMs = performance.now() - changeStarted;
+      });
+    } else if (request.method !== "GET") return new Response(null, { status: 405 });
+    return Response.json({ triggered: generationFenceTriggered, history: await historyFingerprint(), rpcFailures, generationChangeMs });
   }
   if (url.pathname === "/functions/v1/instagram-insights-report") return reportHandler(request);
   if (url.pathname === "/functions/v1/instagram-insights-sync") return registeredSync(request);
