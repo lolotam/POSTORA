@@ -1,28 +1,37 @@
 {
-  "candidate": "7c596971f034e8a78bcc94615ceb9318d92c67aa",
+  "candidate": "a4294b9a5465a45c3c2969f4e35084b116969123",
   "production_changes": false,
   "independent_review": false,
   "full_gx_accepted": false,
   "predecessor_evidence": {
-    "candidate": "8c048be55f52be5939a43b99bbc5c3ba7779b0a8",
-    "path": "2026-11-01-meta-saved-analytics-8c048be5-proof.json",
+    "candidate": "7c596971f034e8a78bcc94615ceb9318d92c67aa",
+    "path": "2026-11-01-meta-saved-analytics-7c596971-proof.json",
     "unchanged_source_scopes": [
       "schema",
-      "worker admission/collection/termination",
-      "direct Facebook/Threads provider endpoints"
+      "frontend",
+      "worker",
+      "canonical audit reason and inactive proxy fixes"
     ],
-    "runtime_frontend_source_delta": [
-      "supabase/functions/instagram-insights-report/index.ts",
-      "supabase/functions/meta-owned-analytics-report/assemble.ts",
-      "supabase/functions/n8n-api/serviceProxy.ts",
-      "src/features/analytics-contract/application/useSavedAnalytics.ts"
+    "runtime_source_delta": [
+      "supabase/functions/meta-owned-analytics-report/assemble.ts"
     ],
     "not_rerun": [
-      "fresh SQL baseline and all suites",
-      "complete concurrency matrix",
-      "worker termination matrix",
-      "assembled browser journeys"
+      "full concurrency/termination matrices",
+      "frontend component tests/typecheck/build",
+      "Facebook/Threads assembled browser journeys"
     ]
+  },
+  "review_correction": {
+    "issue": "Prior review replaced the explicit 24-hour elapsed sample-age contract with a provider calendar day.",
+    "authoritative_sources": [
+      "docs/specs/2026-11-01-meta-analytics-completion-design.md section 8.1",
+      "docs/specs/2026-11-01-meta-analytics-history-job-model.md profile observations",
+      "native read_fb_analytics_history and read_threads_analytics_history"
+    ],
+    "resolution": "Restore inclusive 24-hour elapsed age; provider day lengths continue to govern daily/report windows only.",
+    "pre_fix_failed_steps": 2,
+    "contract_or_migration_changed": false,
+    "other_three_review_fixes_preserved": true
   },
   "checks": {
     "affected_backend_report_legacy_proxy_calendar": {
@@ -30,92 +39,154 @@
       "steps": 50,
       "result": "passed"
     },
-    "frontend_analytics_and_instagram": {
-      "files": 10,
-      "tests": 72,
-      "result": "passed"
+    "native_sql_history_suite": {
+      "suite": "meta_owned_analytics_history.sql",
+      "result": "passed",
+      "transaction": "rolled back",
+      "includes": "inclusive 24-hour age; stale/future by one microsecond; deterministic ties; unavailable reasons"
     },
     "registered_worker_sql_report_proxy": {
       "tests": 1,
       "steps": 20,
-      "result": "passed",
+      "result": "passed"
+    },
+    "fixture": {
       "container": "postora-meta-reports-pg-20261101",
       "database": "meta_analytics_reports_harness",
       "task_label": "meta-analytics-history-c2",
       "cron_launch_active_jobs": "off"
     },
-    "frontend_typecheck": "passed",
-    "frontend_build": "passed; existing chunk warnings remain",
-    "source_test_docs_guards": "passed; author review only",
     "immutable_lint_i18n": {
       "result": "NO REGRESSIONS",
       "base": "2b04837163f81cb4220c36e6d393d4ac27afd68a",
-      "head": "7c596971f034e8a78bcc94615ceb9318d92c67aa",
+      "head": "a4294b9a5465a45c3c2969f4e35084b116969123",
       "historical_debt_remains": true
     },
-    "graphify_update": "passed"
+    "source_test_docs_guards": "passed; author review only",
+    "graphify_update": "passed",
+    "fresh_owner_fixture_sql_harness": {
+      "candidate": "a4294b9a5465a45c3c2969f4e35084b116969123",
+      "baseline": "20260830120300_partner_api_least_privilege_grants.sql",
+      "newer_migrations": 151,
+      "baseline_suites": 69,
+      "isolated_suites": 1,
+      "result": "passed",
+      "database": "postora_owner_release_harness",
+      "cron_launch_active_jobs": "off",
+      "active_schedules": 0
+    },
+    "instagram_assembled_browser": {
+      "tests": 7,
+      "result": "passed",
+      "skips": 0,
+      "retries": 0,
+      "real_auth_postgrest_sql": true,
+      "provider_transport": "synthetic Meta only",
+      "scope": "Instagram owner local journeys; not canonical G-X or saved Facebook/Threads screens",
+      "journey_checker": "passed",
+      "source_guard": "passed",
+      "runtime_inventory_files": 76,
+      "artifact_hash_verification": "passed",
+      "release_ready": false,
+      "canonical_gx": "not evaluated"
+    },
+    "fixture_safety_and_inventory_tooling": {
+      "tests": 24,
+      "result": "passed",
+      "initial_attempt": "23 passed / 1 failed because deno was not on PATH; retained, then repeated with pinned Deno executable directory"
+    }
   },
-  "baseline_limits": {
-    "backend_pre_fix": "Focused working-tree test reproduced audit, DST and inactive-account failures before the production edits.",
-    "first_ui_invocation": "Overlapped source edits; not used as an immutable failing baseline."
+  "assembled_browser_preparation": {
+    "existing_fixture": "postora-owner-release-pg",
+    "running": true,
+    "candidate_label_present": false,
+    "meta_saved_reader_present": false,
+    "cron_launch_active_jobs": "off",
+    "decision": "Old fixture was stopped and preserved with its volumes and archival networks. A new candidate-bound isolated fixture was prepared. No old database was reset or relabelled as current proof.",
+    "new_candidate": "a4294b9a5465a45c3c2969f4e35084b116969123",
+    "new_meta_saved_reader_present": true,
+    "auth_and_sql_health": "reachable",
+    "fixture_server": "stopped by operator after successful journeys; database/Auth/REST/gateway preserved"
   },
-  "review_triage": {
-    "fixed": [
-      "canonical audit refusal reason",
-      "previous follower final provider-day boundary",
-      "inactive-account exemption limited to saved Facebook/Threads",
-      "prefer active account without overriding deliberate archived selection"
-    ],
-    "no_patch_from_unverified_claims": [
-      "native SQL already refuses windows below retention_floor",
-      "provider_error operation state is failed and remains retryable",
-      "generatedAt already follows the saved SQL read",
-      "actual social_accounts catalog contains connected_at; created_at absent"
-    ],
-    "pending_separate_reproduction": [
-      "Instagram collection status versus p_as_of snapshot cutoff"
-    ]
-  },
+  "remaining_reproduction": [
+    "Instagram collection status versus p_as_of snapshot cutoff"
+  ],
   "artifacts": [
     {
-      "local_artifact": ".tmp/meta-report-review-before.log",
-      "sha256": "898923f6a3abaaf93da4e46819ff55ad57fa56f193b01f916f5b94ad340a9b2b"
+      "local_artifact": ".tmp/meta-follower-age-before.log",
+      "sha256": "c35ee9b5638d1368f564442f8fd3ed12c659bbf104535dda53f21b68710b221b"
     },
     {
-      "local_artifact": ".tmp/meta-report-ui-review-before.log",
-      "sha256": "895161298bffdcde7cf751cee32823ca713ced2ca6b2e8b9557dc9806595e041"
+      "local_artifact": ".tmp/meta-follower-age-after.log",
+      "sha256": "206a20db4ef13d4854077651b08f712e63afbcba8d013a26d393f1da8970b2db"
     },
     {
-      "local_artifact": ".tmp/meta-report-review-final-backend.log",
-      "sha256": "a6e0e71fd2b302cdffca62a0ad7f86c3dd16d49da7b3558f714ebe357ef30e78"
+      "local_artifact": ".tmp/meta-follower-age-sql.log",
+      "sha256": "569f5920066c965aa6943da8257f49eb4911aeccf016231aef92aff002956b90"
     },
     {
-      "local_artifact": ".tmp/meta-report-review-final-frontend.log",
-      "sha256": "c0c1feef34ebf25d7d37330be733ceeeae0827e0bc91b95145941fcb628e3bfe"
+      "local_artifact": ".tmp/meta-follower-age-native.log",
+      "sha256": "6929ef6184d3207ad2438e102bda736cb4c80393cb765c0aa26840fd256dbb97"
     },
     {
-      "local_artifact": ".tmp/meta-report-review-typecheck.log",
-      "sha256": "82b5202dbc205db5afc9568372d1f11e63c1105117ebdc791a50680ece23bccf"
+      "local_artifact": ".tmp/meta-follower-age-lint.json",
+      "sha256": "fb9c22ce4ec820460f1acd340007a5a083a3128a6d1a87821948013539543a4b"
     },
     {
-      "local_artifact": ".tmp/meta-report-review-build.log",
-      "sha256": "4d54b63c15e3c417cd6256e134a656a6db9a09984e17834f95ea45778d456992"
+      "local_artifact": ".tmp/meta-follower-age-lint.md",
+      "sha256": "0f06e41e71e9a10d9fe7c466536dee3163d83d8ffc59a422672024e303a1d724"
     },
     {
-      "local_artifact": ".tmp/meta-report-review-native.log",
-      "sha256": "cdb91ccadd2ae1974841f689c0d6d297f07cd160699999c8fc0ae5cc0e300993"
+      "local_artifact": ".tmp/meta-follower-age-graphify.log",
+      "sha256": "92ade157537a086e12c4ac01ba2f132f43257694f9415f7f35c905c071838351"
     },
     {
-      "local_artifact": ".tmp/meta-report-review-lint.json",
-      "sha256": "5c4a075592e59eaafcd42f6aa327ae2a486fa8c3c1d1f1333bc992f4540569e4"
+      "local_artifact": ".tmp/meta-owner-browser-a429-prepare.log",
+      "sha256": "a8b1709e8b314461715540480cb9edadca2e21f2e8e47e127b8489cb95b50028"
     },
     {
-      "local_artifact": ".tmp/meta-report-review-lint.md",
-      "sha256": "d4d544c4296ef0a31345bae0415a6dbc1db7dd5fcff4453fc093e8034c49aed2"
+      "local_artifact": ".tmp/meta-owner-browser-a429-db-harness.log",
+      "sha256": "f732ea9236dcecf93604b7b9041f24dbeeacc5013f8e8204c1810aa7e24cfd61"
     },
     {
-      "local_artifact": ".tmp/meta-report-review-graphify.log",
-      "sha256": "4c49a85508eb2a7d250567080bf95ce7640de39802c9b08ede333ce79b5e5f17"
+      "local_artifact": ".tmp/meta-owner-browser-a429-seed.log",
+      "sha256": "d08ce213080b1329065eff39c08a518b9c7852b312b690110295caf042830595"
+    },
+    {
+      "local_artifact": ".tmp/meta-owner-browser-a429-fixtures-check.log",
+      "sha256": "195f762caa048988af433f4dcc465a02b979ab0782230bb68264b2533998b962"
+    },
+    {
+      "local_artifact": ".tmp/meta-owner-browser-a429-safety.log",
+      "sha256": "749b374bfb459a0c7c3da5faa5ed010ed8f7560d62bfbf0114e4afa62e282aa5"
+    },
+    {
+      "local_artifact": ".tmp/meta-owner-browser-a429-safety-final.log",
+      "sha256": "594f701a9252958b0d51ba34a5b0e302e6c0db2de1374f1a01f157e8b15bce30"
+    },
+    {
+      "local_artifact": ".tmp/meta-owner-browser-a429-playwright.log",
+      "sha256": "947526aa3425dffb0a440fdd11478dc41e4fdb46fb43dac3a4ba3ff9769c03b9"
+    },
+    {
+      "local_artifact": ".tmp/meta-owner-browser-a429-playwright.json",
+      "sha256": "e5e2a1caa67ed33b4ec61aea0d5a28047a9666452d24b05cfc505d223a7d0ac7"
+    },
+    {
+      "local_artifact": ".tmp/meta-owner-browser-a429-inventory.json",
+      "sha256": "b56d0f955f0a2981f6f9fb66449ccd8e081a22f1f223b9bccf7936d67a9e050e"
+    },
+    {
+      "local_artifact": ".tmp/meta-owner-browser-a429-acceptance.log",
+      "sha256": "eae44b82bfa429b3d94eacb912e6c46f0241d83b85241cc5fbaf5f564b9d675a"
+    },
+    {
+      "local_artifact": ".tmp/meta-owner-browser-a429-server.log",
+      "sha256": "c288f38a96f9ac0d3864e990cfee7bc2c25faeb76172bdfc36bbd19bb95ec1ea"
+    },
+    {
+      "local_artifact": ".tmp/owner-fixture-preserved-20261101215209.json",
+      "sha256": "68d985c7e37692c371cfb2e8a529fad3eaa54bcf1d0563e0e6ae35d91c047c14"
     }
   ]
 }

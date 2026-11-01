@@ -1,0 +1,121 @@
+{
+  "candidate": "7c596971f034e8a78bcc94615ceb9318d92c67aa",
+  "production_changes": false,
+  "independent_review": false,
+  "full_gx_accepted": false,
+  "predecessor_evidence": {
+    "candidate": "8c048be55f52be5939a43b99bbc5c3ba7779b0a8",
+    "path": "2026-11-01-meta-saved-analytics-8c048be5-proof.json",
+    "unchanged_source_scopes": [
+      "schema",
+      "worker admission/collection/termination",
+      "direct Facebook/Threads provider endpoints"
+    ],
+    "runtime_frontend_source_delta": [
+      "supabase/functions/instagram-insights-report/index.ts",
+      "supabase/functions/meta-owned-analytics-report/assemble.ts",
+      "supabase/functions/n8n-api/serviceProxy.ts",
+      "src/features/analytics-contract/application/useSavedAnalytics.ts"
+    ],
+    "not_rerun": [
+      "fresh SQL baseline and all suites",
+      "complete concurrency matrix",
+      "worker termination matrix",
+      "assembled browser journeys"
+    ]
+  },
+  "checks": {
+    "affected_backend_report_legacy_proxy_calendar": {
+      "tests": 139,
+      "steps": 50,
+      "result": "passed"
+    },
+    "frontend_analytics_and_instagram": {
+      "files": 10,
+      "tests": 72,
+      "result": "passed"
+    },
+    "registered_worker_sql_report_proxy": {
+      "tests": 1,
+      "steps": 20,
+      "result": "passed",
+      "container": "postora-meta-reports-pg-20261101",
+      "database": "meta_analytics_reports_harness",
+      "task_label": "meta-analytics-history-c2",
+      "cron_launch_active_jobs": "off"
+    },
+    "frontend_typecheck": "passed",
+    "frontend_build": "passed; existing chunk warnings remain",
+    "source_test_docs_guards": "passed; author review only",
+    "immutable_lint_i18n": {
+      "result": "NO REGRESSIONS",
+      "base": "2b04837163f81cb4220c36e6d393d4ac27afd68a",
+      "head": "7c596971f034e8a78bcc94615ceb9318d92c67aa",
+      "historical_debt_remains": true
+    },
+    "graphify_update": "passed"
+  },
+  "baseline_limits": {
+    "backend_pre_fix": "Focused working-tree test reproduced audit, DST and inactive-account failures before the production edits.",
+    "first_ui_invocation": "Overlapped source edits; not used as an immutable failing baseline."
+  },
+  "review_triage": {
+    "fixed": [
+      "canonical audit refusal reason",
+      "previous follower final provider-day boundary",
+      "inactive-account exemption limited to saved Facebook/Threads",
+      "prefer active account without overriding deliberate archived selection"
+    ],
+    "no_patch_from_unverified_claims": [
+      "native SQL already refuses windows below retention_floor",
+      "provider_error operation state is failed and remains retryable",
+      "generatedAt already follows the saved SQL read",
+      "actual social_accounts catalog contains connected_at; created_at absent"
+    ],
+    "pending_separate_reproduction": [
+      "Instagram collection status versus p_as_of snapshot cutoff"
+    ]
+  },
+  "artifacts": [
+    {
+      "local_artifact": ".tmp/meta-report-review-before.log",
+      "sha256": "898923f6a3abaaf93da4e46819ff55ad57fa56f193b01f916f5b94ad340a9b2b"
+    },
+    {
+      "local_artifact": ".tmp/meta-report-ui-review-before.log",
+      "sha256": "895161298bffdcde7cf751cee32823ca713ced2ca6b2e8b9557dc9806595e041"
+    },
+    {
+      "local_artifact": ".tmp/meta-report-review-final-backend.log",
+      "sha256": "a6e0e71fd2b302cdffca62a0ad7f86c3dd16d49da7b3558f714ebe357ef30e78"
+    },
+    {
+      "local_artifact": ".tmp/meta-report-review-final-frontend.log",
+      "sha256": "c0c1feef34ebf25d7d37330be733ceeeae0827e0bc91b95145941fcb628e3bfe"
+    },
+    {
+      "local_artifact": ".tmp/meta-report-review-typecheck.log",
+      "sha256": "82b5202dbc205db5afc9568372d1f11e63c1105117ebdc791a50680ece23bccf"
+    },
+    {
+      "local_artifact": ".tmp/meta-report-review-build.log",
+      "sha256": "4d54b63c15e3c417cd6256e134a656a6db9a09984e17834f95ea45778d456992"
+    },
+    {
+      "local_artifact": ".tmp/meta-report-review-native.log",
+      "sha256": "cdb91ccadd2ae1974841f689c0d6d297f07cd160699999c8fc0ae5cc0e300993"
+    },
+    {
+      "local_artifact": ".tmp/meta-report-review-lint.json",
+      "sha256": "5c4a075592e59eaafcd42f6aa327ae2a486fa8c3c1d1f1333bc992f4540569e4"
+    },
+    {
+      "local_artifact": ".tmp/meta-report-review-lint.md",
+      "sha256": "d4d544c4296ef0a31345bae0415a6dbc1db7dd5fcff4453fc093e8034c49aed2"
+    },
+    {
+      "local_artifact": ".tmp/meta-report-review-graphify.log",
+      "sha256": "4c49a85508eb2a7d250567080bf95ce7640de39802c9b08ede333ce79b5e5f17"
+    }
+  ]
+}
