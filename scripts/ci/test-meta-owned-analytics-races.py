@@ -130,6 +130,7 @@ class Harness:
         ]
         self.results: list[dict[str, object]] = []
         self.settings: dict[str, object] = {}
+        self.dispatch_sweeps: set[tuple[str, str, str]] = set()
         self.admin = self.session("observer")
         if self.admin.command("SELECT pg_try_advisory_lock(hashtextextended('meta_owned_analytics_races',0));")[-1] != "t":
             raise RuntimeError("Another Meta-history race runner owns the disposable fixture")
@@ -379,6 +380,80 @@ class Harness:
         holder.close()
         self.record(platform, "report_snapshot_and_write_cursor_invalidation")
 
+    def dispatch_races(self, platform: Platform) -> None:
+        for scenario in ("dispatch_commit_before_duplicate", "dispatch_policy_before_commit", "dispatch_commit_before_policy"):
+            self.enable(platform)
+            self.refresh_permissions(platform)
+            ticket = self.admin.value(f"SELECT public.next_meta_analytics_dispatch_target({quoted(platform.name)},true);")["ticket"]
+            self.dispatch_sweeps.add((platform.name, ticket["due_on"], ticket["policy_digest"]))
+            before = self.admin.value(f"SELECT jsonb_build_object('generation',job_generation,'state',state,'claim',claim_token) "
+                                      f"FROM public.{platform.family}_analytics_collection_jobs WHERE user_id={quoted(self.owner)} AND social_account_id={quoted(platform.account)};")
+            commit = f"SELECT public.commit_meta_analytics_dispatch_target({json_sql(ticket)},'enqueue',NULL);"
+            exclusion = (f"UPDATE public.app_settings SET value='{{\"account_ids\":[]}}'::jsonb "
+                         f"WHERE key={quoted(self.settings_key(platform,'policy'))};")
+            policy_first = scenario == "dispatch_policy_before_commit"
+            holder = self.session("dispatch_holder", service=not policy_first)
+            contender = self.session("dispatch_contender", service=scenario != "dispatch_commit_before_policy")
+            holder.command("BEGIN; " + (exclusion if policy_first else commit))
+            marker = contender.start(exclusion if scenario == "dispatch_commit_before_policy" else commit)
+            observed = self.observe_wait(contender, holder)
+            holder.command("COMMIT;")
+            if scenario == "dispatch_commit_before_policy":
+                contender.finish(marker)
+            else:
+                self.expect_refusal(contender, marker, {"MAH04"})
+            after = self.admin.value(f"SELECT jsonb_build_object('generation',job_generation,'state',state,'claim',claim_token) "
+                                     f"FROM public.{platform.family}_analytics_collection_jobs WHERE user_id={quoted(self.owner)} AND social_account_id={quoted(platform.account)};")
+            if before != after:
+                raise AssertionError("Dispatch must not force/reset an existing job")
+            completed = self.admin.value(f"SELECT to_jsonb(complete) FROM public.meta_analytics_enqueue_sweeps WHERE "
+                                        f"platform={quoted(platform.name)} AND due_on={quoted(ticket['due_on'])} AND policy_digest={quoted(ticket['policy_digest'])};")
+            if completed != (not policy_first):
+                raise AssertionError("Dispatch cursor did not match the winning transaction")
+            holder.close()
+            contender.close()
+            self.enable(platform)
+            self.record(platform, scenario, observed)
+
+    def inventory_races(self, platform: Platform) -> None:
+        for conflict in (False, True):
+            claim = self.claim(platform)
+            page = self.admin.value(f"SELECT public.reserve_{platform.family}_analytics_inventory_page({self.claim_args(claim)},NULL,0);")
+            commit = (f"SELECT public.commit_{platform.family}_analytics_inventory_page({self.claim_args(claim)},"
+                      f"{quoted(page['request_id'])},ARRAY[]::text[],NULL,false);")
+            contender_commit = commit if not conflict else (
+                f"SELECT public.commit_{platform.family}_analytics_inventory_page({self.claim_args(claim)},"
+                f"{quoted(page['request_id'])},ARRAY[]::text[],'another_cursor',true);")
+            holder = self.session("inventory_holder", service=True)
+            contender = self.session("inventory_contender", service=True)
+            holder.command("BEGIN; " + commit)
+            marker = contender.start(contender_commit)
+            observed = self.observe_wait(contender, holder)
+            holder.command("COMMIT;")
+            if conflict:
+                self.expect_refusal(contender, marker, {"MAH04"})
+            else:
+                contender.finish(marker)
+            state = self.admin.value(f"SELECT public.read_{platform.family}_analytics_worker_state({self.claim_args(claim)});")
+            if state["checkpoint"]["pages_fetched"] != 1 or not state["checkpoint"]["inventory_complete"]:
+                raise AssertionError("Concurrent page responses advanced inventory more than once")
+            holder.close()
+            contender.close()
+            self.record(platform, "inventory_conflicting_replay" if conflict else "inventory_identical_replay", observed)
+        claim = self.claim(platform)
+        page = self.admin.value(f"SELECT public.reserve_{platform.family}_analytics_inventory_page({self.claim_args(claim)},NULL,0);")
+        self.admin.command(f"UPDATE public.{platform.family}_analytics_collection_jobs SET lease_until=clock_timestamp()-interval '1 second' WHERE id={quoted(claim['job_id'])};")
+        renewed = self.admin.value(f"SELECT public.claim_{platform.family}_analytics_collection_jobs(1);")[0]
+        reserved = self.admin.value(f"SELECT public.reserve_{platform.family}_analytics_inventory_page({self.claim_args(renewed)},NULL,0);")
+        if reserved["request_id"] == page["request_id"]:
+            raise AssertionError("A renewed lease must not accept the previous request reservation")
+        stale = self.session("inventory_stale_claim", service=True)
+        command = (f"SELECT public.commit_{platform.family}_analytics_inventory_page({self.claim_args(renewed)},"
+                   f"{quoted(page['request_id'])},ARRAY[]::text[],NULL,false);")
+        self.expect_refusal(stale, stale.start(command), {"MAH04"})
+        stale.close()
+        self.record(platform, "inventory_reclaimed_request_refused")
+
     def cleanup(self) -> None:
         for session in reversed(self.sessions[1:]):
             session.close()
@@ -388,7 +463,10 @@ class Harness:
                 raise RuntimeError("Cleanup refused while another race runner owns the fixture")
         if self.settings:
             restore = " ".join(f"UPDATE public.app_settings SET value={json_sql(value)} WHERE key={quoted(key)};" for key, value in self.settings.items())
-            self.admin.command("BEGIN; " + restore + f"DELETE FROM auth.users WHERE id={quoted(self.owner)}; COMMIT;")
+            sweeps = " ".join("DELETE FROM public.meta_analytics_enqueue_sweeps WHERE "
+                               f"platform={quoted(platform)} AND due_on={quoted(due)} AND policy_digest={quoted(digest)};"
+                               for platform, due, digest in self.dispatch_sweeps)
+            self.admin.command("BEGIN; " + restore + sweeps + f"DELETE FROM auth.users WHERE id={quoted(self.owner)}; COMMIT;")
         self.admin.close()
 
     def run(self) -> list[dict[str, object]]:
@@ -402,6 +480,8 @@ class Harness:
                     self.credential_race(platform, rotation_first)
                 self.retention_races(platform)
                 self.report_write_race(platform)
+                self.dispatch_races(platform)
+                self.inventory_races(platform)
             return self.results
         finally:
             self.cleanup()

@@ -64,6 +64,8 @@ export type MetaAnalyticsTransportOptions<Reason extends string> = {
   fallbackReason: Reason; rateLimitedReason: Reason; failureMessage: string;
   classifyFailure: (status: number, payload: unknown, headers: Headers) => MetaAnalyticsFailure<Reason> | null;
   fetch?: typeof fetch; requestTimeoutMs?: number; budgetMs?: number; maxCalls?: number;
+  beforeRequest?: () => Promise<void>;
+  afterResponse?: (status: number, headers: Headers) => Promise<void>;
 };
 
 /** One fixed-origin, request-wide budget for identity, metrics and bounded listing pages. No retries. */
@@ -86,20 +88,8 @@ export class MetaAnalyticsTransport<Reason extends string> {
     return { ...refused, retryAt: this.retryAt };
   }
 
-  async request<T>(path: readonly string[], query: Record<string, string | number>, schema: z.ZodType<T>): Promise<MetaAnalyticsResult<T, Reason>> {
-    const remaining = this.deadline - Date.now();
-    if (this.options.signal.aborted) return this.failure(0, "aborted");
-    if (remaining <= 0 || this.calls >= (this.options.maxCalls ?? 32)) return this.failure(0, "budget");
-    if (this.throttled) return { ...this.failure(429, "provider", this.options.rateLimitedReason), retryAt: this.retryAt };
-    const url = new URL(`${this.options.origin}/${this.options.version}/${path.map(encodeURIComponent).join("/")}`);
-    for (const [key, value] of Object.entries(query)) url.searchParams.set(key, String(value));
-    const timeout = AbortSignal.timeout(Math.max(1, Math.min(remaining, this.options.requestTimeoutMs ?? 4_000)));
-    const signal = AbortSignal.any([this.options.signal, timeout]);
-    this.calls++;
+  private async decodeResponse<T>(response: Response, signal: AbortSignal, schema: z.ZodType<T>): Promise<MetaAnalyticsResult<T, Reason>> {
     try {
-      const response = await beforeAbort((this.options.fetch ?? fetch)(url, {
-        headers: { Authorization: `Bearer ${this.options.token}` }, signal, redirect: "error",
-      }), signal);
       if (response.status === 429) this.rememberRefusal(this.options.classifyFailure(429, null, response.headers)!);
       let payload: unknown;
       try { payload = await boundedJson(response, signal); }
@@ -120,6 +110,37 @@ export class MetaAnalyticsTransport<Reason extends string> {
       // Transport implementations can reject with arbitrary values. Return an explicit sanitized failed read.
       return this.failure(0, "transport");
     }
+  }
+
+  async request<T>(path: readonly string[], query: Record<string, string | number>, schema: z.ZodType<T>): Promise<MetaAnalyticsResult<T, Reason>> {
+    let remaining = this.deadline - Date.now();
+    if (this.options.signal.aborted) return this.failure(0, "aborted");
+    if (remaining <= 0 || this.calls >= (this.options.maxCalls ?? 32)) return this.failure(0, "budget");
+    if (this.throttled) return { ...this.failure(429, "provider", this.options.rateLimitedReason), retryAt: this.retryAt };
+    // A permission/store failure is not a provider response. Let it stop the
+    // caller outside the transport catch, and charge its time to this budget.
+    if (this.options.beforeRequest) await this.options.beforeRequest();
+    remaining = this.deadline - Date.now();
+    if (this.options.signal.aborted) return this.failure(0, "aborted");
+    if (remaining <= 0 || this.calls >= (this.options.maxCalls ?? 32)) return this.failure(0, "budget");
+    if (this.throttled) return { ...this.failure(429, "provider", this.options.rateLimitedReason), retryAt: this.retryAt };
+    const url = new URL(`${this.options.origin}/${this.options.version}/${path.map(encodeURIComponent).join("/")}`);
+    for (const [key, value] of Object.entries(query)) url.searchParams.set(key, String(value));
+    const timeout = AbortSignal.timeout(Math.max(1, Math.min(remaining, this.options.requestTimeoutMs ?? 4_000)));
+    const signal = AbortSignal.any([this.options.signal, timeout]);
+    this.calls++;
+    let response: Response;
+    try {
+      response = await beforeAbort((this.options.fetch ?? fetch)(url, {
+        headers: { Authorization: `Bearer ${this.options.token}` }, signal, redirect: "error",
+      }), signal);
+    } catch {
+      return this.failure(0, this.options.signal.aborted ? "aborted" : "transport");
+    }
+    const reply = await this.decodeResponse(response, signal, schema);
+    // A failed usage write is an unknown store outcome, not a provider read.
+    if (this.options.afterResponse) await this.options.afterResponse(response.status, response.headers);
+    return reply;
   }
 }
 

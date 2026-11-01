@@ -34,6 +34,86 @@ export type Database = {
   }
   public: {
     Tables: {
+      meta_analytics_retention_visits: {
+        Row: {
+          last_visited_at: string
+          platform: string
+          social_account_id: string
+          user_id: string
+        }
+        Insert: {
+          last_visited_at: string
+          platform: string
+          social_account_id: string
+          user_id: string
+        }
+        Update: {
+          last_visited_at?: string
+          platform?: string
+          social_account_id?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "meta_analytics_retention_visi_social_account_id_user_id_pl_fkey"
+            columns: ["social_account_id", "user_id", "platform"]
+            isOneToOne: true
+            referencedRelation: "social_accounts"
+            referencedColumns: ["id", "user_id", "platform"]
+          },
+        ]
+      }
+      meta_analytics_worker_turns: {
+        Row: {
+          last_claimed_at: string
+          platform: string
+        }
+        Insert: {
+          last_claimed_at?: string
+          platform: string
+        }
+        Update: {
+          last_claimed_at?: string
+          platform?: string
+        }
+        Relationships: []
+      }
+      meta_analytics_enqueue_sweeps: {
+        Row: {
+          complete: boolean
+          created_at: string
+          dispatch_round: number
+          due_on: string
+          last_account_id: string | null
+          outcomes: Json
+          platform: string
+          policy_digest: string
+          updated_at: string
+        }
+        Insert: {
+          complete?: boolean
+          created_at?: string
+          dispatch_round?: number
+          due_on: string
+          last_account_id?: string | null
+          outcomes?: Json
+          platform: string
+          policy_digest: string
+          updated_at?: string
+        }
+        Update: {
+          complete?: boolean
+          created_at?: string
+          dispatch_round?: number
+          due_on?: string
+          last_account_id?: string | null
+          outcomes?: Json
+          platform?: string
+          policy_digest?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
       fb_analytics_captures: {
         Row: {
           api_version: string
@@ -128,6 +208,11 @@ export type Database = {
         Row: {
           inventory_complete: boolean
           inventory_cursor: string | null
+          inventory_receipt: Json | null
+          inventory_request_claim: string | null
+          inventory_request_id: string | null
+          inventory_response_digest: string | null
+          inventory_seen_cursors: string[]
           inventory_truncated: boolean
           job_generation: number
           job_id: string
@@ -141,6 +226,11 @@ export type Database = {
         Insert: {
           inventory_complete?: boolean
           inventory_cursor?: string | null
+          inventory_receipt?: Json | null
+          inventory_request_claim?: string | null
+          inventory_request_id?: string | null
+          inventory_response_digest?: string | null
+          inventory_seen_cursors?: string[]
           inventory_truncated?: boolean
           job_generation: number
           job_id: string
@@ -154,6 +244,11 @@ export type Database = {
         Update: {
           inventory_complete?: boolean
           inventory_cursor?: string | null
+          inventory_receipt?: Json | null
+          inventory_request_claim?: string | null
+          inventory_request_id?: string | null
+          inventory_response_digest?: string | null
+          inventory_seen_cursors?: string[]
           inventory_truncated?: boolean
           job_generation?: number
           job_id?: string
@@ -1113,6 +1208,11 @@ export type Database = {
         Row: {
           inventory_complete: boolean
           inventory_cursor: string | null
+          inventory_receipt: Json | null
+          inventory_request_claim: string | null
+          inventory_request_id: string | null
+          inventory_response_digest: string | null
+          inventory_seen_cursors: string[]
           inventory_truncated: boolean
           job_generation: number
           job_id: string
@@ -1126,6 +1226,11 @@ export type Database = {
         Insert: {
           inventory_complete?: boolean
           inventory_cursor?: string | null
+          inventory_receipt?: Json | null
+          inventory_request_claim?: string | null
+          inventory_request_id?: string | null
+          inventory_response_digest?: string | null
+          inventory_seen_cursors?: string[]
           inventory_truncated?: boolean
           job_generation: number
           job_id: string
@@ -1139,6 +1244,11 @@ export type Database = {
         Update: {
           inventory_complete?: boolean
           inventory_cursor?: string | null
+          inventory_receipt?: Json | null
+          inventory_request_claim?: string | null
+          inventory_request_id?: string | null
+          inventory_response_digest?: string | null
+          inventory_seen_cursors?: string[]
           inventory_truncated?: boolean
           job_generation?: number
           job_id?: string
@@ -10765,6 +10875,136 @@ export type Database = {
       }
     }
     Functions: {
+      claim_meta_analytics_collection_job: {
+        Args: {
+          p_platform: string
+        }
+        Returns: Json
+      }
+      cleanup_meta_analytics_target: {
+        Args: {
+          p_platform: string
+          p_account_id: string
+          p_floor: string
+          p_limit: number
+          p_dry_run: boolean
+        }
+        Returns: Json
+      }
+      commit_fb_analytics_inventory_page: {
+        Args: {
+          p_job_id: string
+          p_claim_token: string
+          p_job_generation: number
+          p_request_id: string
+          p_post_ids: string[]
+          p_next_cursor: string | null
+          p_has_more: boolean
+        }
+        Returns: Json
+      }
+      commit_threads_analytics_inventory_page: {
+        Args: {
+          p_job_id: string
+          p_claim_token: string
+          p_job_generation: number
+          p_request_id: string
+          p_post_ids: string[]
+          p_next_cursor: string | null
+          p_has_more: boolean
+        }
+        Returns: Json
+      }
+      list_meta_analytics_retention_targets: {
+        Args: {
+          p_platform: string
+          p_dry_run: boolean
+        }
+        Returns: Json
+      }
+      meta_analytics_policy_ids: {
+        Args: {
+          p_policy: Json
+        }
+        Returns: Json
+      }
+      meta_analytics_retention_policy: {
+        Args: {
+          p_platform: string
+          p_dry_run: boolean
+        }
+        Returns: Json
+      }
+      read_fb_analytics_worker_state: {
+        Args: {
+          p_job_id: string
+          p_claim_token: string
+          p_job_generation: number
+        }
+        Returns: Json
+      }
+      read_meta_analytics_provider_throttle: {
+        Args: {
+          p_bucket_key: string
+        }
+        Returns: Json
+      }
+      read_threads_analytics_worker_state: {
+        Args: {
+          p_job_id: string
+          p_claim_token: string
+          p_job_generation: number
+        }
+        Returns: Json
+      }
+      reserve_fb_analytics_inventory_page: {
+        Args: {
+          p_job_id: string
+          p_claim_token: string
+          p_job_generation: number
+          p_expected_cursor: string | null
+          p_expected_pages: number
+        }
+        Returns: Json
+      }
+      reserve_threads_analytics_inventory_page: {
+        Args: {
+          p_job_id: string
+          p_claim_token: string
+          p_job_generation: number
+          p_expected_cursor: string | null
+          p_expected_pages: number
+        }
+        Returns: Json
+      }
+      commit_meta_analytics_dispatch_target: {
+        Args: {
+          p_ticket: Json
+          p_outcome?: string
+          p_reason?: string | null
+        }
+        Returns: Json
+      }
+      meta_analytics_collection_policy: {
+        Args: {
+          p_platform: string
+        }
+        Returns: Json
+      }
+      meta_analytics_dispatch_next_id: {
+        Args: {
+          p_policy: Json
+          p_after: string | null
+        }
+        Returns: string | null
+      }
+      next_meta_analytics_dispatch_target: {
+        Args: {
+          p_platform: string
+          p_start?: boolean
+        }
+        Returns: Json
+      }
       meta_analytics_ig_legacy_digest: {
         Args: {
           p_owner: string
@@ -10908,6 +11148,14 @@ export type Database = {
           p_authority: Json
         }
         Returns: undefined
+      }
+      meta_analytics_admission_credential: {
+        Args: {
+          p_platform: string
+          p_account_id: string
+          p_expected_authority: Json
+        }
+        Returns: Json
       }
       meta_analytics_assert_service: {
         Args: Record<PropertyKey, never>
@@ -11056,6 +11304,13 @@ export type Database = {
         }
         Returns: Json
       }
+      read_fb_analytics_admission_credential: {
+        Args: {
+          p_account_id: string
+          p_expected_authority?: Json | null
+        }
+        Returns: Json
+      }
       read_fb_analytics_collection_credential: {
         Args: {
           p_job_id: string
@@ -11069,6 +11324,13 @@ export type Database = {
           p_user_id: string
           p_account_id: string
           p_request: Json
+        }
+        Returns: Json
+      }
+      read_threads_analytics_admission_credential: {
+        Args: {
+          p_account_id: string
+          p_expected_authority?: Json | null
         }
         Returns: Json
       }

@@ -1,0 +1,18 @@
+{
+  "scope": "Read-only production availability diagnosis after the reported collection-disabled message",
+  "checkedAt": "2026-11-01T13:15:54.584319+00:00",
+  "transaction": "BEGIN READ ONLY ... COMMIT",
+  "masterSettingPresent": false,
+  "ownerRollout": { "mode": "off", "targetCount": 0 },
+  "competitorRollout": { "mode": "off", "targetCount": 0 },
+  "schedules": [
+    { "name": "competitor-retention", "active": false },
+    { "name": "competitor-snapshot-drain", "active": false },
+    { "name": "competitor-snapshot-enqueue-daily", "active": false },
+    { "name": "instagram-insights-drain", "active": false },
+    { "name": "instagram-insights-enqueue-daily", "active": false }
+  ],
+  "settingsOrSchedulesModified": false,
+  "collectionInvoked": false,
+  "interpretation": "The sync endpoint's existing fail-closed collection_disabled response matches current production configuration. This receipt does not authorize activation."
+}

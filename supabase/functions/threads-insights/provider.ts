@@ -65,7 +65,8 @@ export class ThreadsInsightsProvider {
   private readonly transport: MetaAnalyticsTransport<ClassifiedReason>;
   constructor(private readonly options: {
     token: string; signal: AbortSignal; startedAt: number; fetch?: typeof fetch;
-    requestTimeoutMs?: number; budgetMs?: number; maxCalls?: number;
+    requestTimeoutMs?: number; budgetMs?: number; maxCalls?: number; beforeRequest?: () => Promise<void>;
+    afterResponse?: (status: number, headers: Headers) => Promise<void>;
   }) {
     this.transport = new MetaAnalyticsTransport({ ...options, origin: "https://graph.threads.net", version: "v1.0",
       fallbackReason: "transient", rateLimitedReason: "rate_limited", failureMessage: FAILURE_MESSAGE, classifyFailure: providerFailure });
@@ -90,6 +91,11 @@ export class ThreadsInsightsProvider {
 
   postInsights(postId: string) {
     return this.transport.request([postId, "insights"], { metric: "views,likes,replies,reposts,quotes,shares" }, metricPayload);
+  }
+
+  async post(postId: string) {
+    const reply = await this.transport.request([postId], { fields: "id,text,timestamp,permalink" }, postRow);
+    return reply.data && reply.data.id !== postId ? failure(reply.status, "invalid_response") : reply;
   }
 }
 

@@ -9,7 +9,9 @@ export function countMetric(value: number | null | undefined): CompleteAnalytics
 }
 
 /** Provider calendars may include an extra boundary bucket. Only the exact expected end instants are usable. */
-export function alignedDailySeries(row: DailyAnalyticsRow, window: AnalyticsCalendarWindow): CompleteAnalyticsMetric[] {
+export function alignedDailySeries(row: DailyAnalyticsRow, window: {
+  period: Pick<AnalyticsCalendarWindow["period"], "since" | "until">; buckets: AnalyticsCalendarWindow["buckets"];
+}): CompleteAnalyticsMetric[] {
   const refused = (reason: UnavailableReason) => window.buckets.map(() => unavailableMetric(reason));
   if (row.period !== "day" || !row.values) return refused("window_mismatch");
   const expectedEnds = new Set(window.buckets.map((bucket) => Date.parse(bucket.until)));

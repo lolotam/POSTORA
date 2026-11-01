@@ -28,6 +28,10 @@ verify_jwt = false
 [functions.competitor-retention]
 verify_jwt = false
 
+# Internal cron/service authority is verified by verifyCronAuth in the handler.
+[functions.meta-owned-analytics-sync]
+verify_jwt = false
+
 [functions.cleanup-media]
 verify_jwt = false
 

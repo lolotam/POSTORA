@@ -2,12 +2,20 @@ import {
   summarizeDailyMetricValues, unavailableMetric,
   type AnalyticsMetricResult, type MetricDefinition, type MetricValue, type UnavailableReason,
 } from "../_shared/analyticsContract.ts";
-import { countMetric as count, alignedDailySeries as dailySeries, liveAnalyticsMetric } from "../_shared/analyticsProjection.ts";
+import { countMetric as count, alignedDailySeries as dailySeries, liveAnalyticsMetric, type DailyAnalyticsRow } from "../_shared/analyticsProjection.ts";
 import type { AnalyticsCalendarWindow } from "../_shared/analyticsCalendar.ts";
 import type { ProviderResult, ThreadsMetricRow, ThreadsProviderError } from "./provider.ts";
 
 type MetricReply = ProviderResult<{ data: ThreadsMetricRow[] }>;
 type CompleteMetric = Exclude<MetricValue, { status: "partial" }>;
+
+/** Snapshot endpoints may omit period; explicit incompatible periods still refuse. */
+export function threadsSnapshotMetric(row: DailyAnalyticsRow & Pick<ThreadsMetricRow, "total_value">, windowKind: "point_in_time" | "lifetime"): CompleteMetric {
+  const expectedPeriod = windowKind === "point_in_time" ? "day" : "lifetime";
+  if (row.period !== undefined && row.period !== expectedPeriod) return unavailableMetric("window_mismatch");
+  if (row.total_value !== undefined) return count(row.total_value.value);
+  return windowKind === "lifetime" && row.values?.length === 1 ? count(row.values[0].value) : unavailableMetric("provider_error");
+}
 
 export function threadsUnavailableReason(error: ThreadsProviderError): UnavailableReason {
   if (error.reason === "expired_token" || error.reason === "invalid_token") return "reauth_required";
@@ -27,7 +35,7 @@ function periodMeasurement(reply: MetricReply, definition: MetricDefinition, win
   const row = matchingRow(reply, definition);
   if ("status" in row) return { metric: row, series: [] };
   if (definition.windowKind === "point_in_time") return {
-    metric: row.period === "day" ? count(row.total_value?.value) : unavailableMetric("window_mismatch"), series: [],
+    metric: threadsSnapshotMetric(row, "point_in_time"), series: [],
   };
   if (definition.windowKind !== "day" || definition.aggregation !== "sum" || !definition.exactPeriodVerified) {
     return { metric: unavailableMetric("window_mismatch"), series: [] };
@@ -60,8 +68,7 @@ export function projectThreadsPostMetric(definition: MetricDefinition, reply: Me
   let current: MetricValue = unavailableMetric(definition.capability === "not_offered" ? "not_offered" : "capability_unverified");
   if (definition.capability === "available") {
     const row = matchingRow(reply, definition);
-    current = "status" in row ? row : row.period !== "lifetime" ? unavailableMetric("window_mismatch")
-      : row.values?.length === 1 ? count(row.values[0].value) : unavailableMetric("provider_error");
+    current = "status" in row ? row : threadsSnapshotMetric(row, "lifetime");
   }
   const previous = unavailableMetric(definition.capability === "available" ? "not_collected"
     : definition.capability === "not_offered" ? "not_offered" : "capability_unverified");

@@ -43,7 +43,8 @@ export class FacebookInsightsProvider {
   private readonly transport: MetaAnalyticsTransport<FacebookReadReason>;
   constructor(private readonly options: {
     token: string; signal: AbortSignal; startedAt: number; fetch?: typeof fetch;
-    requestTimeoutMs?: number; budgetMs?: number; maxCalls?: number;
+    requestTimeoutMs?: number; budgetMs?: number; maxCalls?: number; beforeRequest?: () => Promise<void>;
+    afterResponse?: (status: number, headers: Headers) => Promise<void>;
   }) {
     this.transport = new MetaAnalyticsTransport({ ...options, origin: "https://graph.facebook.com", version: FACEBOOK_INSIGHTS_VERSION,
       fallbackReason: "provider_error", rateLimitedReason: "rate_limited", failureMessage: MESSAGE, classifyFailure: providerFailure });
@@ -65,4 +66,9 @@ export class FacebookInsightsProvider {
   }
 
   postMetric(postId: string, metric: string) { return this.transport.request([postId, "insights"], { metric, locale: "en_US" }, metricPayload); }
+
+  async post(postId: string) {
+    const reply = await this.transport.request([postId], { fields: "id,created_time,message,permalink_url" }, postRow);
+    return reply.data && reply.data.id !== postId ? metaAnalyticsFailure(reply.status, "invalid_response", "provider_error" as const, MESSAGE) : reply;
+  }
 }
