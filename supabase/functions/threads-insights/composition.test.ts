@@ -42,7 +42,8 @@ Deno.test("Threads selection never substitutes an account after refusal or faile
   const audits: Record<string, unknown>[] = [];
   const jwt = await userToken();
   const accounts = [
-    { id: ACCOUNT_ID, user_id: OWNER_ID, platform: "threads", is_active: true, access_token: "synthetic-owner-token", platform_user_id: "thread-owner", platform_username: "owner" },
+    { id: "f1b2c3d4-e5f6-4a1b-8c2d-3e4f5a6b7c8d", user_id: OWNER_ID, platform: "threads", is_active: true, access_token: "synthetic-owner-token", platform_user_id: "thread-older", platform_username: "older", connected_at: "2026-10-01T00:00:00Z" },
+    { id: ACCOUNT_ID, user_id: OWNER_ID, platform: "threads", is_active: true, access_token: "synthetic-owner-token", platform_user_id: "thread-owner", platform_username: "owner", connected_at: "2026-11-01T00:00:00Z" },
     { id: FOREIGN_ID, user_id: OTHER_OWNER_ID, platform: "threads", is_active: true, access_token: "synthetic-foreign-token" },
     { id: INACTIVE_ID, user_id: OWNER_ID, platform: "threads", is_active: false, access_token: "synthetic-inactive-token" },
     { id: WRONG_PLATFORM_ID, user_id: OWNER_ID, platform: "facebook", is_active: true, access_token: "synthetic-facebook-token" },
@@ -62,6 +63,9 @@ Deno.test("Threads selection never substitutes an account after refusal or faile
           const filter = url.searchParams.get(column);
           return filter === null || filter === `eq.${value}`;
         }));
+        if (url.searchParams.get("order")?.startsWith("connected_at.desc")) {
+          selected.sort((left, right) => (right.connected_at ?? "").localeCompare(left.connected_at ?? ""));
+        }
         return Response.json(selected.slice(0, 1));
       }
       if (url.pathname === "/rest/v1/system_logs") {
@@ -135,6 +139,16 @@ Deno.test("Threads selection never substitutes an account after refusal or faile
         assertEquals(providerCalls, 0);
       });
     }
+    for (const body of [{ accountID: ACCOUNT_ID }, { account_id: ACCOUNT_ID }, { user_id: undefined }]) {
+      await test.step(`unknown selector or missing service identity ${JSON.stringify(body)} is refused`, async () => {
+        accountReads = 0;
+        providerCalls = 0;
+        const response = await handler(request(body));
+        assertEquals(response.status, "user_id" in body ? 401 : 400);
+        assertEquals(accountReads, 0);
+        assertEquals(providerCalls, 0);
+      });
+    }
     await test.step("an owned selection retains the legacy success shape", async () => {
       const response = await handler(request({ accountId: ACCOUNT_ID, periodDays: 14 }));
       const payload = await response.json();
@@ -147,7 +161,9 @@ Deno.test("Threads selection never substitutes an account after refusal or faile
     });
     await test.step("an omitted selector retains latest-account compatibility", async () => {
       const response = await handler(request({}));
-      assertEquals((await response.json()).ok, true);
+      const payload = await response.json();
+      assertEquals(payload.ok, true);
+      assertEquals(payload.username, "owner");
     });
     await test.step("an omitted selector with no account retains the connection prompt", async () => {
       noAccounts = true;

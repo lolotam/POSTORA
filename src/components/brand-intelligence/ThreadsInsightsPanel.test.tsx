@@ -1,0 +1,38 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { cleanup, render, screen } from "@testing-library/react";
+import i18next from "@/i18n";
+import { ThreadsInsightsPanel } from "./ThreadsInsightsPanel";
+
+const { invoke } = vi.hoisted(() => ({ invoke: vi.fn() }));
+// Supabase is the external boundary; the real component, reason handling and translations run.
+vi.mock("@/integrations/supabase/client", () => ({ supabase: {
+  auth: { getUser: async () => ({ data: { user: null } }) },
+  functions: { invoke },
+} }));
+
+afterEach(async () => {
+  cleanup();
+  await i18next.changeLanguage("en");
+});
+beforeEach(() => invoke.mockReset());
+
+describe("Threads selection refusals", () => {
+  it.each([
+    ["account_not_found", "The selected Threads account is unavailable.", "حساب Threads المختار غير متاح."],
+    ["storage_error", "Unable to load the Threads account. Please retry.", "تعذّر تحميل حساب Threads. جرّب مرة أخرى."],
+    ["invalid_request", "Invalid Threads insights request. Refresh the page and retry.", "طلب تحليلات Threads غير صالح. حدّث الصفحة وجرّب مرة أخرى."],
+    ["unauthorized", "Your session could not be verified. Please sign in again.", "تعذّر التحقق من جلستك. سجّل الدخول مرة أخرى."],
+  ])("renders localized %s instead of the backend fallback", async (reason, english, arabic) => {
+    invoke.mockImplementation(async () => ({ data: null, error: {
+      context: Response.json({ ok: false, reason, message: "Untranslated backend fallback" }, { status: 503 }),
+    } }));
+    await i18next.changeLanguage("ar");
+    render(<ThreadsInsightsPanel />);
+    expect(await screen.findByText(arabic)).toBeVisible();
+    expect(screen.queryByText("Untranslated backend fallback")).not.toBeInTheDocument();
+    cleanup();
+    await i18next.changeLanguage("en");
+    render(<ThreadsInsightsPanel />);
+    expect(await screen.findByText(english)).toBeVisible();
+  });
+});

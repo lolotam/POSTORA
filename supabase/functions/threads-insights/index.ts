@@ -6,7 +6,7 @@ import {
   classifyMetaError,
   type SelectedThreadsAccount,
 } from "../_shared/threads-debug.ts";
-import { serviceRoleCallerUserId } from "../_shared/auth-helper.ts";
+import { authenticateCaller, serviceRoleCallerUserId } from "../_shared/auth-helper.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -19,7 +19,8 @@ const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 const selectionSchema = z.object({
   accountId: z.string().uuid().optional(),
   periodDays: z.unknown().optional(),
-});
+  user_id: z.unknown().optional(),
+}).strict();
 
 const ENGLISH_TITLES: Record<string, string> = {
   views: "Views", likes: "Likes", replies: "Replies", reposts: "Reposts", quotes: "Quotes", followers_count: "Followers",
@@ -73,21 +74,11 @@ export async function handler(req: Request): Promise<Response> {
   let userId: string | undefined;
 
   try {
-    const authHeader = req.headers.get("Authorization");
-    if (!authHeader) throw new Error("Missing authorization header");
-    const token = authHeader.replace("Bearer ", "");
-
-    const serviceUserId = await serviceRoleCallerUserId(req);
-    if (serviceUserId) {
-      userId = serviceUserId;
-    } else {
-      const supabaseAuth = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
-        global: { headers: { Authorization: authHeader } },
-        auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
-      });
-      const { data: claimsData, error: claimsError } = await supabaseAuth.auth.getClaims(token);
-      if (claimsError || !claimsData?.claims) throw new Error("Unauthorized");
-      userId = claimsData.claims.sub as string;
+    try {
+      userId = (await authenticateCaller(req, await serviceRoleCallerUserId(req))).userId;
+    } catch {
+      await logger.warn("Threads insights caller refused", { event: "unauthorized", platform: "threads" });
+      return structured({ reason: "unauthorized", message: "Unauthorized." }, 401);
     }
 
     // Parse body
