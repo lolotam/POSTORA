@@ -1,6 +1,6 @@
 # Saved Meta analytics: implementation and executed evidence
 
-Source candidate: `1a5ff1267e8b6741e62592e02fa02d3932baab56`, stacked on C3 `730b549181480bc3566cb389a8e3943a7507077f`. This record covers local implementation and preparation, not approval to apply SQL, deploy, repair credentials, collect data or activate schedules. Source merge was authorized by the owner, but dependent runtime merges remain gated by the deployment order below. The owner explicitly requested completing missing work before a concrete deployment decision.
+Source candidate: `8c048be55f52be5939a43b99bbc5c3ba7779b0a8`, stacked on C3 `2b04837163f81cb4220c36e6d393d4ac27afd68a`. This record covers local implementation and preparation, not approval to apply SQL, deploy, repair credentials, collect data or activate schedules. Source merge was authorized by the owner, but dependent runtime merges remain gated by the deployment order below. The owner explicitly requested completing missing work before a concrete deployment decision.
 
 ## Behavior now implemented
 
@@ -30,7 +30,7 @@ The [proof artifact](evidence/2026-11-01-meta-saved-analytics-proof.json) binds 
 | Source/test/docs guards | Applied inline. Checked actual production consumers, dependency direction, scope/grants, zero/missing semantics, cancellation, fixture-only writes, compatibility and claims against executed logs. This is an author guard, not an independent review. |
 | Immutable lint/i18n regression | No regressions on source `c07939126879d9d7b00b35831154a2e6be7b8053` against C3 `067521c9e884f5f5f7d8a41a9c35751ba32cf4a2`, in ordinary, suppressed and inline-disabled lanes. Historical lint/i18n debt remains; this is not a claim that full lint is clean. An initial 40 orphan-translation regression was fixed with statically checked labels before this result. |
 
-The table above records the pre-review candidate `c07939126879d9d7b00b35831154a2e6be7b8053`; its exact evidence is preserved in the [pre-review proof](evidence/2026-11-01-meta-saved-analytics-pre-review-proof.json). It is not represented as a complete rerun on the corrected source. The current proof artifact records the following affected checks on the new candidate: fresh baseline + 151 migrations, 69 SQL suites and one isolated suite; 44 Deno tests / 146 nested steps; five frontend files / 32 tests; frontend typecheck and production build; and immutable lint/i18n with no regressions against C3 `730b549181480bc3566cb389a8e3943a7507077f`. The registered SQL integration attempt and repeat are recorded separately, including the failed attempt, in that artifact.
+The table above records the pre-review candidate `c07939126879d9d7b00b35831154a2e6be7b8053`; its exact evidence is preserved in the [pre-review proof](evidence/2026-11-01-meta-saved-analytics-pre-review-proof.json). It is not represented as a complete rerun on the corrected source. The [subsequent report candidate proof](evidence/2026-11-01-meta-saved-analytics-1a5ff126-proof.json), for `1a5ff1267e8b6741e62592e02fa02d3932baab56`, records: fresh baseline + 151 migrations, 69 SQL suites and one isolated suite; 44 Deno tests / 146 nested steps; five frontend files / 32 tests; frontend typecheck and production build; and immutable lint/i18n with no regressions against C3 `730b549181480bc3566cb389a8e3943a7507077f`. The registered SQL integration attempt and repeat are recorded separately, including the failed attempt, in that artifact.
 
 ## Review corrections before deployment
 
@@ -39,6 +39,12 @@ The worker now terminates irrecoverably bounded inventory only after its capture
 The combined screen now derives coverage from all loaded pages. Loading the final page clears unread-pagination incompleteness, while a collection gap or unavailable measurable cell on either page remains visible. Terminal inventory truncation reports partial saved data rather than fabricating a provider failure. Source/test/docs guards checked the merged worker's existing refusal isolation and capture-receipt behavior as well as these fixes. Retention dry-run continuation beyond 50 targets remains an explicit review gap; neither PR is described as ready for the complete production release.
 
 The independent database fixture suites were executed sequentially when sharing global test settings. An initial observer-fixture error handling an empty activity field was corrected before the successful 31-case concurrency run. No failed run is represented as a pass. The frontend boundary tests also caught the extra `ok` field in the new response before it was corrected and verified through canonical parsing of real SQL-backed replies. Final typechecking rejected `Object.hasOwn` under the existing frontend library target; the safe refusal lookup now uses `Object.prototype.hasOwnProperty.call`, with a successful final typecheck and no compiler-target relaxation.
+
+## Dependency termination continuation
+
+The latest source adds the [action-specific termination proof](2026-11-01-meta-owned-worker-termination.md) and fixes ambiguous admission errors carried by HTTP 400. The immutable candidate passed six termination tests / 118 steps, including 96 database cancellation/timeout cases, noncooperative provider bodies/audits, late acknowledgements and the final-write reserve. Its focused admission/dispatch pair passed 14 tests / 60 steps. CI runs the native timeout suite explicitly. Immutable lint/i18n found no regressions against C3 `2b04837163f81cb4220c36e6d393d4ac27afd68a`.
+
+Only `permissionProvider.ts` changed among the 57 frozen runtime/schema/frontend source artifacts since the preceding report candidate. The new proof records that delta and preserves the older SQL, browser-component, integrated and build evidence under its original candidate. Those older checks are not described as complete reruns on the new source. The remaining combined native/worker/browser/live acceptance below stays open.
 
 ## Current production readback and remaining work
 

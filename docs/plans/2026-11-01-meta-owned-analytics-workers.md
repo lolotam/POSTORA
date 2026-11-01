@@ -53,7 +53,8 @@ Additional migrations: `20261101142000_meta_owned_analytics_throttles.sql`, `202
 - [x] Plan the last closed provider-calendar day and correction day as durable operations before HTTP. Build operation identities from kind/subject/window, reserve before request, skip accepted operations on reclaim and persist response cells/metadata atomically.
 - [ ] Exercise worker → real SQL → report read with true zero, omitted value, malformed bucket, wrong version, mixed cell failure causes, partial inventory and same-day supersession. A crash after a known/unknown commit must not reset completed operations or advance uncommitted state.
 - [x] Integrate persistent usage/backoff with both the existing Instagram and new workers as real consumers. Use only bucket-only Instagram throttle RPC calls, namespaced platform/app/authority keys, and each platform's own job completion.
-- [ ] Prove timeouts for each dependency, ignored aborts, reserved final writes, stale permits, fairness, revoked authority and bounded post visits. Unknown store outcomes stop the complete invocation; known target refusals do not poison other eligible targets.
+- [x] Prove action-specific dependency timeouts, ignored caller/stream cancellation, reserved final writes and late database acknowledgements through the real handler boundaries. See the [termination matrix](../journeys/2026-11-01-meta-owned-worker-termination.md) for exact scope and executed evidence.
+- [ ] Complete the combined stale-permit/fairness/revoked-authority/bounded-post-visit acceptance record. Existing native races and focused refusal tests retain their own evidence; the termination matrix does not substitute for missing combined journeys.
 - [ ] Run affected existing provider/Instagram suites and new integration/termination suites, guards and commit.
 
 ## 4. Bounded retention and inactive schedules

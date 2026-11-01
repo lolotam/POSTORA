@@ -1,5 +1,5 @@
 {
-  "candidate": "1a5ff1267e8b6741e62592e02fa02d3932baab56",
+  "candidate": "8c048be55f52be5939a43b99bbc5c3ba7779b0a8",
   "production_source_baseline": "cc2555b282c1581dde196fd386b3b6d55a0f64ca",
   "deployment_authorized": false,
   "release_ready": false,
@@ -148,7 +148,7 @@
     },
     {
       "path": "supabase/functions/meta-owned-analytics-sync/permissionProvider.ts",
-      "sha256": "aa8e8bb059df6b58ceab927f715106122a51dd3e7e7b226516559e28bf999220"
+      "sha256": "b0856c9590bda6170b5c517676b7331dc53c0bf3b6579e39180c0c0aae5c9717"
     },
     {
       "path": "supabase/functions/meta-owned-analytics-sync/retention.ts",

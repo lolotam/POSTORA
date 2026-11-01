@@ -1,6 +1,6 @@
 # Competitor analytics and MCP/n8n publishing: source audit
 
-Scope: the owner's follow-up request to inspect Facebook/Instagram competitor analysis, MCP/n8n endpoint coverage and publishing the same content as a post and a Story. This is a source audit, not a claim that a live provider request or publication succeeded. The Android/USB wording and the exact publishing mode remain under clarification. No Android/USB action, provider request, paid collection, credential change or publication was performed.
+Scope: the owner's follow-up request to inspect Facebook/Instagram competitor analysis, MCP/n8n endpoint coverage and publishing the same content as a post and a Story. This is a source audit, not a claim that a live provider request or publication succeeded. The owner clarified that the request concerns Postora tools through MCP/n8n, with an additional share-to-Story option while creating a post and collaborator support in MCP. Android/USB device control is outside the requested work. No provider request, paid collection, credential change or publication was performed.
 
 ## What already exists
 
@@ -30,7 +30,7 @@ The standalone checkout has pre-existing untracked files; none were modified. A 
 ## Recommended next work
 
 1. Finish the analytics stack's current CI correction and prerequisite SQL deployment decision before dependent runtime merges. Preserve the completed saved-report work and its exact evidence.
-2. Confirm whether the request concerns MCP/n8n/SDK coverage or an actual Android device, and whether the desired publishing UI is combined Post + Story. Do not infer USB operations from transcription.
+2. Apply the owner's clarified contract: expose the existing additional share-to-Story option through MCP/n8n and verify collaborator forwarding. The native convenience path mirrors the first attached image/video, matching the existing web setting; descriptions must disclose that scope for multi-media input. Do not implement Android/USB control or replace the existing separate Story mode.
 3. Implement and test a single supported Instagram option contract through web/API/MCP/n8n and the real publisher boundary, preserving separate outcomes and retry safety for post/Story. Do not send a real publication as a test without its explicit account/content approval.
 4. Specify Facebook competitor capability/history and common competitor tool exposure from the existing Instagram feature. Keep owned analytics and public-competitor metrics distinct, with explicit unavailable values.
 5. Any paid Apify access/activation remains the owner's deferred decision. The request for stronger analysis does not itself choose a paid fallback or widen collection eligibility.
