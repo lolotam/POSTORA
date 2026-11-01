@@ -213,6 +213,12 @@ jobs:
           supabase/functions/mcp
           supabase/functions/n8n-api/serviceProxy.test.ts
 
+      - name: Test Instagram Story sharing through registered MCP and API routes
+        # The automation test imports the registered MCP/API routes with fixture-only env.
+        run: >-
+          deno test --no-config --no-lock --node-modules-dir=none --allow-env
+          supabase/functions/n8n-api/instagramAutomation.test.ts
+
       - name: Test Threads insights account selection through real composition
         run: >-
           deno test --node-modules-dir=none --allow-env

@@ -418,6 +418,13 @@ async function uploadFileFromBase64(supabase: any, userId: string, fileData: str
   });
 }
 
+// Keep malformed form values available for the typed option check to reject.
+function parseFormBoolean(value: string): boolean | string {
+  if (value === 'true' || value === '1') return true;
+  if (value === 'false' || value === '0') return false;
+  return value;
+}
+
 // Helper function to parse array fields from various formats (JSON string, comma-separated, actual array)
 function parseArrayField(value: any, fieldName: string): string[] {
   if (!value) return [];
@@ -540,6 +547,7 @@ async function handleCreatePost(req: Request, supabase: any, userId: string, bod
     instagram_first_comment, // Auto-post first comment
     instagram_audio_name,
     instagram_share_to_feed,
+    instagram_share_to_story,
 
     // Facebook metadata
     facebook_page_id,
@@ -583,6 +591,13 @@ async function handleCreatePost(req: Request, supabase: any, userId: string, bod
     // Webhook configuration for this specific post
     webhook_url, // URL to send status callbacks
   } = body;
+
+  if (instagram_share_to_story !== undefined && typeof instagram_share_to_story !== 'boolean') {
+    await recordApiRefusal(supabase, { userId, route: '/api/v1/post', code: 'INVALID_INSTAGRAM_STORY_OPTION', status: 400 });
+    return new Response(JSON.stringify({ error: 'instagram_share_to_story must be a boolean' }), {
+      status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+    });
+  }
 
   // Parse platforms array from various formats (JSON string, comma-separated, actual array)
   const platforms = parseArrayField(rawPlatforms, 'platforms');
@@ -1021,6 +1036,7 @@ async function handleCreatePost(req: Request, supabase: any, userId: string, bod
       shareToFeed: instagram_share_to_feed ?? true,
     };
     metadata.instagram_post_type = normalizedInstagramPostType;
+    if (instagram_share_to_story !== undefined) metadata.instagram_share_to_story = instagram_share_to_story;
     metadata.instagram_first_comment = instagram_first_comment || first_comment || null;
 
     // The publisher (process-post) reads only the singular top-level key
@@ -2436,6 +2452,8 @@ export async function handleRequest(req: Request): Promise<Response> {
             } catch {
               body[key] = value.split(',').map(s => s.trim()).filter(Boolean);
             }
+          } else if (key === 'instagram_share_to_story') {
+            body[key] = parseFormBoolean(value);
           } else if (key === 'youtube_made_for_kids' || key === 'youtube_allow_embedding' ||
             key === 'youtube_public_stats_viewable' || key === 'youtube_contains_synthetic_media' ||
             key === 'youtube_has_paid_product_placement' || key === 'youtube_notify_subscribers' ||
@@ -2467,6 +2485,8 @@ export async function handleRequest(req: Request): Promise<Response> {
               } catch {
                 body[key] = value.split(',').map(s => s.trim()).filter(Boolean);
               }
+            } else if (key === 'instagram_share_to_story') {
+              body[key] = parseFormBoolean(value);
             } else if (key === 'youtube_made_for_kids' || key === 'youtube_allow_embedding' ||
               key === 'youtube_public_stats_viewable' || key === 'youtube_contains_synthetic_media' ||
               key === 'youtube_has_paid_product_placement' || key === 'youtube_notify_subscribers' ||
@@ -2502,6 +2522,8 @@ export async function handleRequest(req: Request): Promise<Response> {
             } catch {
               body[key] = value.split(',').map(s => s.trim()).filter(Boolean);
             }
+          } else if (key === 'instagram_share_to_story') {
+            body[key] = parseFormBoolean(value);
           } else {
             body[key] = value;
           }
