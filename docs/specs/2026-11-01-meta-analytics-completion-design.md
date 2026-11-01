@@ -43,10 +43,11 @@ The analytics section is complete when, for each of Instagram, Facebook Pages an
 
 ## 4. Unified analytics contract
 
-One contract, defined in the domain layer and mirrored once for Deno:
+One contract, defined in the domain layer and shared across the two runtimes. Prefer a runtime-neutral definition with frontend public re-exports where practical; explicitly version and compare any definitions that must be mirrored:
 
 - Frontend: `src/features/analytics-contract/domain/` (types, metric registry, pure helpers).
 - Edge: `supabase/functions/_shared/analyticsContract.ts`.
+- Initial metric-value foundation: the pure Edge module owns the types and additive-day calculation; the frontend feature re-exports it without SDK, environment or UI dependencies. Instagram's legacy daily-summary adapter calls that public API. Shared behavioral cases execute in Vitest and Deno. This avoids two copies but does not fulfill the full serialized report-schema/registry parity requirement below.
 - A parity test compares the canonical serialized schema and registry in full: all fields, discriminated unions, unavailable reasons, coverage, registry metadata, period and sync-status constraints and `analyticsContractVersion`. Shared behavioral fixtures cover calendar, aggregation, delta and freshness rules in both runtimes; a deliberate isolated-copy mutation must fail parity. Matching only keys/status names is insufficient.
 
 ### 4.1 Metric value
@@ -73,6 +74,7 @@ Rules:
 - `unavailable` is never rendered or aggregated as `0`. A provider-reported `0` is `available` with value `0`.
 - Completeness is measured **per metric**, not per row. `availableDays` counts distinct expected provider-day buckets containing a finite, valid value for that metric and scope. A present `ok` row with a null/absent/failed metric does not count; retries never add an extra day. Only all expected metric values produce `available`; some produce `partial` with coverage; no values produce `unavailable` with the actual cause. A genuine numeric zero counts as available. No daily-sum calculation applies to `not_summable` metrics.
 - Truncation (`truncated`), partial collection (`lastPartialAt`) and back-off (`retryAt`) from the Instagram report are kept at report level, not dropped.
+- When no expected day has an available value and different unavailable causes occur, the aggregate exposes the most actionable actual cause in this order: `reauth_required`, `permission_missing`, `provider_error`, `window_mismatch`, `outside_retention`, `capability_unverified`, `not_offered`, `not_collected`. Individual persisted measurements keep their own causes. The caller resolves duplicate captures into one measurement per expected bucket before aggregation; unresolved duplicate dates are rejected. Invalid non-finite measurements become unavailable provider errors, and an overflowing total is unavailable rather than serialized as a number.
 
 ### 4.2 Metric definition (registry entry)
 
