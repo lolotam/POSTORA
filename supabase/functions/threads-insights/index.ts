@@ -4,6 +4,9 @@ import { createLogger } from "../_shared/logging.ts";
 import type { SelectedThreadsAccount } from "../_shared/threads-debug.ts";
 import { authenticateCaller, serviceRoleCallerUserId } from "../_shared/auth-helper.ts";
 import { ThreadsInsightsProvider, latestRetryAt, loadPostMetrics, type ThreadsPost } from "./provider.ts";
+import { unifiedThreadsReport } from "./unifiedReport.ts";
+import { ANALYTICS_CONTRACT_VERSION } from "../_shared/analyticsContract.ts";
+import type { AnalyticsPeriodDays } from "../_shared/analyticsCalendar.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -17,6 +20,8 @@ const selectionSchema = z.object({
   accountId: z.string().uuid().optional(),
   periodDays: z.unknown().optional(),
   user_id: z.unknown().optional(),
+  analyticsContractVersion: z.unknown().optional(),
+  cursor: z.unknown().optional(),
 }).strict();
 
 const ENGLISH_TITLES: Record<string, string> = {
@@ -77,6 +82,18 @@ export async function handler(req: Request): Promise<Response> {
       return structured({ reason: "invalid_request", message: "Invalid Threads insights request." }, 400);
     }
     const { accountId, periodDays: requestedPeriod } = selection.data;
+    const version = selection.data.analyticsContractVersion;
+    if (version !== undefined && version !== ANALYTICS_CONTRACT_VERSION) {
+      await logger.warn("Unsupported analytics contract", { event: "unsupported_contract_version", platform: "threads" }, userId);
+      return structured({ reason: "unsupported_contract_version", message: "Unsupported analytics contract version." }, 400);
+    }
+    if (version === undefined && "cursor" in selection.data || version === ANALYTICS_CONTRACT_VERSION && (
+      requestedPeriod !== undefined && (typeof requestedPeriod !== "number" || ![7, 14, 30, 90].includes(requestedPeriod))
+      || selection.data.cursor !== undefined && selection.data.cursor !== null && (typeof selection.data.cursor !== "string"
+        || selection.data.cursor.length === 0 || selection.data.cursor.length > 16384))) {
+      await logger.warn("Invalid analytics contract request", { event: "invalid_request", platform: "threads" }, userId);
+      return structured({ reason: "invalid_request", message: "Invalid Threads insights request." }, 400);
+    }
     if (typeof requestedPeriod === "number" && [7, 14, 30, 90].includes(requestedPeriod)) {
       periodDays = requestedPeriod;
     }
@@ -127,6 +144,20 @@ export async function handler(req: Request): Promise<Response> {
     }, userId);
 
     const provider = new ThreadsInsightsProvider({ token: account.access_token, signal: req.signal, startedAt });
+    if (version === ANALYTICS_CONTRACT_VERSION) {
+      const unified = await unifiedThreadsReport({ provider, ownerId: userId, accountId: account.id,
+        providerUserId: account.platform_user_id, days: periodDays as AnalyticsPeriodDays,
+        cursor: typeof selection.data.cursor === "string" ? selection.data.cursor : null,
+        signingSecret: SUPABASE_SERVICE_ROLE_KEY, now: new Date(startedAt).toISOString() });
+      if (unified.ok === false) {
+        await logger.warn("Threads unified analytics refused", { event: "unified_report_refused", reason: unified.reason }, userId);
+        const { status, ...refusal } = unified;
+        return structured(refusal, status);
+      }
+      await logger.info("Threads unified analytics read", { event: "unified_report_read", platform: "threads",
+        refusal_reasons: unified.refusalReasons, truncated: unified.report.truncated }, userId);
+      return ok(unified.report);
+    }
     const preflight = await provider.identity();
     if (preflight.error) {
       const cls = preflight.error;

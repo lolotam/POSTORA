@@ -461,11 +461,15 @@ function buildServer(
   register("get_post_analytics", {
     description:
       "Get analytics for a connected account's recent posts. Supported today: Threads (insights over period_days), " +
-      "TikTok (profile stats and recent videos), and Instagram (insights report and outlier detection over period_days). Other platforms return a 'not supported yet' error.",
+      "TikTok (profile stats and recent videos), and Instagram (insights report and outlier detection over period_days). " +
+      "Threads accepts analyticsContractVersion: 1 for explicit availability, closed calendar periods and signed pagination. " +
+      "Omit the version for the legacy response. Other platforms do not yet accept the versioned contract.",
     inputSchema: z.object({
       social_account_id: z.string().describe("Postora account UUID from list_accounts"),
       period_days: z.union([z.literal(7), z.literal(14), z.literal(30), z.literal(90)]).optional()
-        .describe("Threads and Instagram: 7, 14, 30 or 90 days (default 7 for Threads, default 30 for Instagram)"),
+        .describe("Threads and Instagram: 7, 14, 30 or 90 days (default 7)"),
+      analyticsContractVersion: z.literal(1).optional().describe("Threads only: select the unified analytics response"),
+      cursor: z.string().min(1).max(16384).optional().describe("Signed continuation from the versioned Threads response; keep account and period_days unchanged"),
     }),
     handler: async (args) => {
       const scopeRefusal = await refuseUngranted({ admin }, { userId: ownerId, tool: "get_post_analytics", grant });

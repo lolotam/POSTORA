@@ -81,9 +81,30 @@ The updated probe at `8247ab8f` verifies Threads scopes through the app-authenti
 
 ## Threads runtime correction deployment
 
+The later contract candidate described below has not been deployed; this subsection records the earlier provider correction only.
+
 [PR #336](https://github.com/lolotam/POSTORA/pull/336) merged as `3755788b97c0ec03ed2d10688eb357b4bee6f581` at `2026-11-01T05:01:42Z`, after all reported hosted checks passed. The automatic edge reconciler deployed it; an explicit run of the versioned deployment helper at `05:02:17Z` confirmed the volume already matched that commit. The operator then verified these exact LF SHA256 hashes:
 
 - `threads-insights/index.ts`: `486d3b51af5b0f0f84a6cfc2d9c9ccc7ce86d727bdb2621ea8634bf71187e37b`.
 - `threads-insights/provider.ts`: `0ec0224544b175f6bf303e22ac295f6399ca2c66765704ee527b4061438a0b8e`.
 
 Health and Threads OPTIONS returned 200; an unauthenticated POST returned the exact function 401 refusal. Local validation passed 13 Deno tests/47 nested steps, 11 translated component tests, typecheck/build and the immutable lint/i18n regression gate. These prove the correction's checks and deployment, not a signed-in browser journey or completion of the analytics project. No collection or schedule was activated.
+
+## Closed-window and DST observations
+
+These later bounded reads concern the owner's authorized aliases `FB-01` and `TH-01`. They supersede the earlier unresolved calendar assessment only for the tested metrics and windows. No analytics writes, credential changes or collection activation occurred. Artifact hashes were rechecked on the server before recording this section; raw measurements and target mapping remain restricted outside Git.
+
+| Capture | Interval (UTC, 2026-11-01) | Calls | Private artifact SHA256 |
+|---|---|---:|---|
+| Facebook aligned windows, requested/observed `v25.0` | 05:23:28–05:23:37 | 15 | `cc3e4d5239860d99640cdb77c034cb8cacb813aeea3b8c01c5c854d1701fc19c` |
+| Threads aligned windows, requested `v1.0` | 05:24:01–05:24:05 | 24 | `7ddbed5b29ebc49e877d9261915aee69366cb40bcd514f542c565b60379dd191` |
+| Calendar compatibility, system tzdata `2026e` | Validation of those captures | 0 | `279acf56335417089e37036a8f4d7fbd70d02ce3517ec7b1fefe1037338a51f1` |
+| Threads owned post shape | 05:37:58–05:38:00 | 3 | `6cc0e1c260ad7cc02f08f28c22fe6b8df9d77360e708b22c4dd4ef0814bd49ee` |
+
+Current and immediately preceding 7-day and 90-day daily windows were tested. Facebook returned an extra daily end after `until`; Threads returned an extra end at `since`. Selecting only expected bucket ends satisfying `since < end_time <= until` yielded exactly the requested closed-day sets, without duplicate closed ends. The March transition matched `America/Los_Angeles`, including a 23-hour day. The APIs did not explicitly declare an IANA timezone: this is empirical compatibility supporting a pinned report calendar, not proof of a provider-declared timezone identity. Primary timezone documentation remains desirable before pilot acceptance.
+
+For Facebook `page_media_view`, a 93-day span succeeded; adjacent 94-day and 180-day requests returned HTTP 400/code 100 (`Invalid parameter`). This is the observed span boundary for that metric/request, not a universal API limit. Separate 90-day current and previous reads worked. Threads daily views accepted the tested spans through 180 days; neither success proves the earliest retained date or maximum supported history.
+
+Explicit Threads `metric_type=time_series` still produced undated totals for likes/replies/reposts/quotes. Their exact requested-period semantics remain unverified. The versioned adapter therefore returns `window_mismatch` for those account totals and does not invent daily trends. Profile `views` remains distinct from content views. Follower count remains a current observation, with no historical growth until valid persisted boundary observations exist.
+
+The final owned-post proof checked canonical identity and all six post metrics: views, likes, replies, reposts, quotes and shares returned numeric lifetime values. It establishes lifetime response shape for the selected account, not exact-period engagement, stored history, or reconciliation. Instagram's protected credential-binding blocker and the complete G-X prerequisite remain unchanged.

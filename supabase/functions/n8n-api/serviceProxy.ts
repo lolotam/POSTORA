@@ -231,16 +231,28 @@ export async function handleListMessages(deps: ServiceProxyDeps, userId: string,
 }
 
 export async function handleGetPostAnalytics(deps: ServiceProxyDeps, userId: string, params: URLSearchParams): Promise<ProxyResult> {
+  const version = params.get("analyticsContractVersion");
+  if (version !== null && version !== "1") {
+    return proxyError(400, "UNSUPPORTED_CONTRACT_VERSION", "Unsupported analytics contract version.");
+  }
+  const cursor = params.get("cursor");
+  if (cursor !== null && (version === null || !cursor || cursor.length > 16384)) {
+    return proxyError(400, "INVALID_CURSOR", "A bounded continuation requires analyticsContractVersion: 1.");
+  }
   const owned = await loadOwnedAccount(deps, userId, params.get("social_account_id"));
   if ("error" in owned) return owned.error;
   const { account } = owned;
+  if (version !== null && account.platform !== "threads") {
+    return proxyError(400, "UNSUPPORTED_CONTRACT_VERSION", "This platform does not yet support analyticsContractVersion: 1.");
+  }
   const rawPeriod = textField(params.get("period_days"));
   const periodDays = rawPeriod ? Number(rawPeriod) : 7;
   if (!THREADS_PERIODS.includes(periodDays)) {
     return proxyError(400, "INVALID_PERIOD", `period_days must be one of ${THREADS_PERIODS.join(", ")}`);
   }
   if (account.platform === "threads") {
-    const upstream = await deps.invoke("threads-insights", { user_id: userId, accountId: account.id, periodDays }, READ_TIMEOUT_MS);
+    const upstream = await deps.invoke("threads-insights", { user_id: userId, accountId: account.id, periodDays,
+      ...(version !== null ? { analyticsContractVersion: 1 } : {}), ...(cursor !== null ? { cursor } : {}) }, READ_TIMEOUT_MS);
     return fromUpstream("threads-insights", upstream);
   }
   if (account.platform === "tiktok") {
