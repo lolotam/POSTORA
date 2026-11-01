@@ -432,6 +432,13 @@ def run_local(database: str) -> int:
     # socket namespace. All SQL sessions share one Docker exec process.
     report: dict[str, object] = {"ok": False, "cases": []}
     try:
+        launcher = subprocess.run(
+            ["psql", "-h", "/var/run/postgresql", "-X", "-At", "-U", "supabase_admin", "-d", database,
+             "-v", "ON_ERROR_STOP=1", "-c", "SHOW cron.launch_active_jobs"],
+            check=True, capture_output=True, text=True, timeout=10,
+        )
+        if launcher.stdout.strip() != "off":
+            raise ValueError("Disposable PostgreSQL must disable cron.launch_active_jobs before race setup")
         harness = Harness(database)
         report["cases"] = harness.results
         harness.run()

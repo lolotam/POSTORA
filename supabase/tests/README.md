@@ -58,6 +58,9 @@ Owned Meta history races run automatically after that harness in CI through
 labelled disposable container and a database ending in `_harness`, and observes
 actual blocked sessions before asserting the concurrent outcomes. Its runtime
 report, rather than a single-session suite or fixture prose, is the race evidence.
+The PostgreSQL fixture must start with `-c cron.launch_active_jobs=off`; CI sets
+this before baseline restoration. The runner refuses an enabled launcher before
+opening its mutation sessions, so historical cron rows cannot run during races.
 
 These fixtures are explicitly classified as **manual multi-session rehearsals**,
 not omitted test suites: `partner_api_race_fixture.sql`,

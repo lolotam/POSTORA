@@ -574,6 +574,7 @@ jobs:
             -v "${GITHUB_WORKSPACE}:/repo" \
             supabase/postgres:17.6.1.158 \
             -c cron.database_name=partner_api_harness \
+            -c cron.launch_active_jobs=off \
             -c shared_preload_libraries=pg_cron,pg_net,pgsodium,supabase_vault
           status="none"
           for _ in $(seq 1 90); do

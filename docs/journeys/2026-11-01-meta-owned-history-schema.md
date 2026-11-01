@@ -16,7 +16,7 @@ Retention uses independent scope, parent-first fences and live-lease exclusion. 
 
 | Boundary | Result |
 |---|---|
-| Fresh disposable PostgreSQL | Repository baseline + 141 migrations + 58 baseline suites + 1 isolated suite passed. Includes the C2 primary SQL suite. |
+| Fresh disposable PostgreSQL | Updated main, including #332, plus C2: repository baseline + 142 migrations + 59 baseline suites + 1 isolated suite passed. Includes both HTTP-fence and C2 primary SQL suites, with the cron launcher disabled before restoration. |
 | Real concurrent SQL sessions | 18 cases passed across Facebook/Threads, with 14 actual PostgreSQL Lock waits observed. Covers switch/scope changes in both orders, credentials, collection/retention exclusion and report revision invalidation. |
 | Type catalog | C2 table/FK/function blocks refreshed from that applied disposable catalog; frontend typecheck passed. No production catalog or credentials used. |
 | Production build | Passed; existing bundle-size warnings remain. |
@@ -26,8 +26,12 @@ The primary suite includes failed-before-fix regressions for Facebook's literal 
 
 Local logs and JSON reports stay under `.tmp/` and are excluded from commits. The race runner validates the disposable container label, pins its inspected ID, requires a `_harness` database and restores its synthetic settings/owner in cleanup. CI runs the SQL harness first, installs Python inside the disposable Alpine image, then executes the same race runner.
 
+The ordered-lineage rehearsal found the old disposable container's cron launcher enabled. CI now starts PostgreSQL with `cron.launch_active_jobs=off`; the race runner rejects an enabled launcher before mutation setup. The real negative control exited 1 with zero race cases and unchanged owner count/settings fingerprint. Only the validated disposable instance was reconfigured/reloaded before the successful fresh restore and 18-case repeat. No production setting or schedule changed.
+
+Read-only deployment verification at 2026-11-01 10:26:49 UTC also confirmed #329's report `handler.ts`, `index.ts`, `readHistory.ts`, `reportStore.ts` and `contracts.ts` in the production functions volume match main `0183977fe5dca1686ea1604d79a6742e9817a91e` by SHA256. No paused/failed deploy marker was present. This is deployed-byte evidence only, not an owner collection or reconciliation receipt.
+
 ## Remaining dependency and release order
 
 The [history/job ADR](../specs/2026-11-01-meta-analytics-history-job-model.md) owns the model. Its five-second per-RPC and forty-second invocation deadlines, plus the shared 50-target/500-child budget across platforms, require C3 orchestration. Function-level `statement_timeout` was experimentally insufficient to enforce that caller deadline; this migration makes no such claim. SQL supplies its per-target remaining-row ceiling and three-second lock timeout.
 
-The five Instagram HTTP fence wrappers in PR #332 precede this migration. The current fresh harness used main plus this C2 candidate; #332 is not yet merged, so the complete ordered lineage must be rerun after that schema layer lands. Merge/application of schema requires separate approval and actual deployed catalog/ACL verification before dependent runtime adoption. C3 workers and inactive cron definitions, C4 persisted endpoints/version negotiation, C5 unified UI and live pilot reconciliation/stability are not delivered by this schema candidate.
+The five Instagram HTTP fence wrappers in PR #332 merged at `eb3c672693c0c536aac5f326885af64b9b162189` and precede this migration. The updated fresh rehearsal verifies that exact ordered lineage. Merge/application of C2 schema still requires separate approval and actual deployed catalog/ACL verification before dependent runtime adoption. #333 remains unmerged until #332 is separately approved and actually applied to production. C3 workers and inactive cron definitions, C4 persisted endpoints/version negotiation, C5 unified UI and live pilot reconciliation/stability are not delivered by this schema candidate.
