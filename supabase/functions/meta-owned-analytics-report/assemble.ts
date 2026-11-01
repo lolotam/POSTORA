@@ -91,7 +91,7 @@ function connectionFailure(stored: StoredAnalyticsSnapshot): UnavailableReason |
   if (!stored.health.active || stored.health.needs_reauth || stored.health.token_expired) return "reauth_required";
   const job = stored.collection.latest;
   if (["reauth_required", "permission_missing"].includes(job?.reason_code ?? "")) return job!.reason_code as UnavailableReason;
-  return job?.state === "failed" ? "provider_error" : null;
+  return job?.state === "failed" && job.reason_code !== "inventory_truncated" ? "provider_error" : null;
 }
 
 export function assembleStoredAnalytics(input: { stored: StoredAnalyticsSnapshot; windows: { current: AnalyticsCalendarWindow; previous: AnalyticsCalendarWindow };

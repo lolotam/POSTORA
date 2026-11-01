@@ -29,10 +29,11 @@ function MetricDetails({ metric }: { metric: AnalyticsMetricResult }) {
   </details>;
 }
 
-export function SavedAnalyticsReport({ report, posts = report.posts.items }: { report: AnalyticsReport; posts?: AnalyticsReport["posts"]["items"] }) {
+export function SavedAnalyticsReport({ report }: { report: AnalyticsReport }) {
   const { t } = useTranslation("analytics");
   const labels = useAnalyticsLabels();
   const [sortByViews, setSortByViews] = useState(false);
+  const posts = report.posts.items;
   const visible = report.metrics.filter((metric) => metric.definition.capability === "available" || ["reach", "views", "profile_views", "engagements", "followers", "follower_change"].includes(metric.definition.key));
   const viewCount = (post: AnalyticsReport["posts"]["items"][number]) => {
     const metric = post.metrics.find((metric) => metric.definition.key === "views")?.current;

@@ -3,6 +3,7 @@ import i18n from "@/i18n";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { analyticsReportFixture } from "../../../../supabase/functions/_shared/analyticsContractTestSupport.ts";
+import { analyticsDefinitions } from "../../../../supabase/functions/_shared/analyticsRegistry.ts";
 import { AnalyticsMetricValue, SavedAnalyticsReport } from "./SavedAnalyticsReport";
 import { OwnedAnalyticsScreen } from "./OwnedAnalyticsScreen";
 import { AnalyticsReadError, type SavedAnalyticsGateway } from "../application/ports";
@@ -67,5 +68,37 @@ describe("saved analytics presentation", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent("Connected accounts could not be loaded");
     expect(within(screen.getByRole("alert")).getByRole("button", { name: "Retry" })).toBeEnabled();
     expect(screen.queryByText("No connected accounts for this platform.")).toBeNull();
+  });
+
+  it.each(["complete", "collection_gap", "first_page_metric_gap", "last_page_metric_gap"] as const)("continuation clears only unread pagination: %s", async (scenario) => {
+    const pages = [analyticsReportFixture("facebook"), analyticsReportFixture("facebook")];
+    pages.forEach((page, pageIndex) => {
+      page.source = "persisted";
+      page.sync.status = "fresh";
+      page.posts.items = Array.from({ length: pageIndex === 0 ? 25 : 1 }, (_, index) => ({
+        id: `post-${pageIndex * 25 + index}`, publishedAt: page.period.since, text: `Saved post ${pageIndex * 25 + index}`, permalink: null,
+        metrics: analyticsDefinitions("facebook", "post").map((definition) => ({ ...page.metrics[0], definition, current: { status: "available" as const, value: 0 } })),
+      }));
+      page.truncated = page.posts.truncated = pageIndex === 0 || scenario === "collection_gap";
+      page.posts.status = page.truncated ? "partial" : "available";
+      page.posts.reason = scenario === "collection_gap" ? "not_collected" : null;
+      page.posts.nextCursor = pageIndex === 0 ? "page-two" : null;
+    });
+    if (scenario.endsWith("metric_gap")) {
+      const affected = pages[scenario === "first_page_metric_gap" ? 0 : 1];
+      affected.posts.items[0].metrics.find((metric) => metric.definition.capability === "available")!.current = { status: "unavailable", reason: "provider_error" };
+      affected.posts.status = "partial";
+      affected.sync.status = "partial";
+    }
+    render(<QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } })}>
+      <OwnedAnalyticsScreen platform="facebook" gateway={{ accounts: async () => [{ id: "first", name: "Curemed", active: true }],
+        report: async (request) => pages[request.cursor ? 1 : 0] }} />
+    </QueryClientProvider>);
+    fireEvent.click(await screen.findByRole("button", { name: "Load more posts" }));
+    expect(await screen.findByText("Saved post 25")).toBeVisible();
+    expect(screen.queryByRole("button", { name: "Load more posts" })).toBeNull();
+    expect(screen.queryByText("Collection is incomplete. Some posts are missing.") !== null).toBe(scenario === "collection_gap");
+    expect(screen.queryByText(/Post coverage is incomplete/) !== null).toBe(scenario !== "complete");
+    if (scenario.endsWith("metric_gap")) expect(screen.getByText("Partial data")).toBeVisible();
   });
 });

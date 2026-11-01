@@ -9,6 +9,7 @@ import { useSavedAnalytics } from "../application/useSavedAnalytics";
 import { AnalyticsReadError, type SavedAnalyticsGateway } from "../application/ports";
 import { supabaseSavedAnalytics } from "../infrastructure/supabaseSavedAnalytics";
 import { SavedAnalyticsReport } from "./SavedAnalyticsReport";
+import { mergeSavedAnalyticsPages } from "../domain/mergeSavedAnalyticsPages";
 
 /** Composition root: only this screen selects the concrete persistence adapter. */
 export function OwnedAnalyticsScreen({ platform, gateway = supabaseSavedAnalytics }: { platform: AnalyticsPlatform; gateway?: SavedAnalyticsGateway }) {
@@ -18,8 +19,7 @@ export function OwnedAnalyticsScreen({ platform, gateway = supabaseSavedAnalytic
   const [selectedAccountId, setSelectedAccountId] = useState<string | null>(null);
   const [periodDays, setPeriodDays] = useState<AnalyticsPeriodDays>(7);
   const { accounts, accountId, reports } = useSavedAnalytics({ ownerId: user?.id ?? null, platform, gateway, selectedAccountId, periodDays });
-  const first = reports.data?.pages[0];
-  const pages = reports.data?.pages ?? [];
+  const combined = mergeSavedAnalyticsPages(reports.data?.pages ?? []);
   const revisionChanged = reports.error instanceof AnalyticsReadError && ["history_revision_changed", "history_expired", "invalid_cursor"].includes(reports.error.reason);
   const errorReason = reports.error instanceof AnalyticsReadError ? reports.error.reason : "storage_unavailable";
   const refresh = () => { void reports.refetch(); };
@@ -49,7 +49,7 @@ export function OwnedAnalyticsScreen({ platform, gateway = supabaseSavedAnalytic
           : Object.prototype.hasOwnProperty.call(labels.reasons, errorReason) ? labels.reasons[errorReason] : t("owned.readFailed", "Saved analytics could not be loaded. Please retry.")}
           <Button variant="outline" disabled={reports.isFetching} onClick={refresh}>{t("owned.refresh", "Refresh report")}</Button>
         </div>}
-        {first && !revisionChanged && <SavedAnalyticsReport report={first} posts={Array.from(new Map(pages.flatMap((page) => page.posts.items).map((post) => [post.id, post])).values())} />}
+        {combined && !revisionChanged && <SavedAnalyticsReport report={combined} />}
         {reports.hasNextPage && !reports.isError && <Button variant="outline" disabled={reports.isFetchingNextPage} onClick={() => { void reports.fetchNextPage(); }}>{t("owned.more", "Load more posts")}</Button>}
       </>}
   </section>;

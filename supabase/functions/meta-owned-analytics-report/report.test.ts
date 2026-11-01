@@ -61,6 +61,22 @@ Deno.test("saved report preserves unavailable causes and partial coverage withou
   assertEquals(report.sync.status, "partial");
 });
 
+Deno.test("terminal inventory bounds remain partial while actual connection failures stay failed", async (test) => {
+  for (const reason of ["inventory_truncated", "provider_error", "permission_missing", "reauth_required"]) {
+    await test.step(reason, () => {
+      const stored = fixture();
+      stored.inventory = { complete: false, truncated: true };
+      stored.collection.latest = { ...stored.collection.latest!, state: "failed", reason_code: reason };
+      const report = assembleStoredAnalytics({ stored, windows, generatedAt: NOW, nextCursor: null, hasMore: false });
+      assertEquals(report.sync.status, reason === "inventory_truncated" ? "partial" : "failed");
+      assertEquals(report.sync.reason, reason === "inventory_truncated" ? null : reason);
+      assertEquals(report.posts.status, "partial");
+      assertEquals(report.truncated, true);
+      assertEquals(report.metrics.find((metric) => metric.definition.key === "views")!.current, { status: "available", value: 0 });
+    });
+  }
+});
+
 Deno.test("history cursor preserves SQL precision and its frozen calendar across midnight", async (test) => {
   const cursor = await storedReportCursor({ scope, period: windows.current.period, revision: 4, publishedAt: "2026-10-31T12:00:00.123456Z", postId: "772001_9001", secret: "fixture-sign" });
   const position = await storedReportPosition({ cursor, scope, now: "2026-11-03T12:00:00Z", secret: "fixture-sign" });
