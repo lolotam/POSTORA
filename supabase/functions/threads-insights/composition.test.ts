@@ -39,6 +39,8 @@ Deno.test("Threads selection never substitutes an account after refusal or faile
   let noAccounts = false;
   let providerCalls = 0;
   let accountReads = 0;
+  let scenario = "normal";
+  let profileRequests = 0;
   const audits: Record<string, unknown>[] = [];
   const jwt = await userToken();
   const accounts = [
@@ -76,7 +78,25 @@ Deno.test("Threads selection never substitutes an account after refusal or faile
     }
     if (url.origin === "https://graph.threads.net") {
       providerCalls++;
-      if (url.pathname.endsWith("/me")) return Response.json({ id: "thread-owner", username: "owner" });
+      if (url.pathname.endsWith("/me")) return Response.json({ id: scenario === "identity_mismatch" ? "different-owner" : "thread-owner", username: "owner" });
+      if (url.pathname.endsWith("/threads_insights")) {
+        profileRequests++;
+        if (scenario.startsWith("throttle_")) {
+          if (profileRequests === 1 && scenario === "throttle_failure") return Response.json({ error: { code: 2 } }, { status: 503 });
+          if (profileRequests > 1) return Response.json({ error: { code: 4 } }, { status: 429, headers: { "Retry-After": profileRequests === 2 ? "180" : "15" } });
+        }
+        if (scenario === "invalid_current" && profileRequests === 1) return new Response("private malformed response");
+        if (scenario === "failed_previous" && profileRequests === 2) return Response.json({ error: { code: 2, message: "private-provider-detail" } }, { status: 503 });
+      }
+      if (scenario === "invalid_post_time" && url.pathname.endsWith("/threads")) return Response.json({ data: [{ id: "post1", timestamp: "2026-02-30T12:00:00Z" }] });
+      if (scenario === "failed_post") {
+        if (url.pathname.endsWith("/threads")) return Response.json({ data: [
+          { id: "post1", text: "first", timestamp: new Date().toISOString() },
+          { id: "post2", text: "second", timestamp: new Date().toISOString() },
+        ] });
+        if (url.pathname.includes("/post1/")) return Response.json({ data: [{ name: "views", total_value: { value: 5 } }] });
+        if (url.pathname.includes("/post2/")) return Response.json({ error: { code: 10, message: "synthetic-owner-token" } }, { status: 403 });
+      }
       return Response.json({ data: [] });
     }
     throw new Error(`Unexpected boundary: ${url.origin}${url.pathname}`);
@@ -173,6 +193,44 @@ Deno.test("Threads selection never substitutes an account after refusal or faile
       assertEquals((await response.json()).reason, "no_account");
       assertEquals(providerCalls, 0);
     });
+    noAccounts = false;
+    for (const mode of ["identity_mismatch", "invalid_current", "failed_previous", "failed_post", "invalid_post_time", "throttle_failure", "throttle_success"]) {
+      await test.step(`real provider composition handles ${mode} without replacing identity or exposing raw failures`, async () => {
+        scenario = mode;
+        profileRequests = 0;
+        providerCalls = 0;
+        const response = await handler(request({ accountId: ACCOUNT_ID }));
+        const payload = await response.json();
+        if (mode === "identity_mismatch") {
+          assertEquals(payload.ok, false);
+          assertEquals(payload.reason, "wrong_account");
+          assertEquals(providerCalls, 1);
+        } else if (mode === "invalid_current") {
+          assertEquals(payload.ok, false);
+          assertEquals(payload.needsReauth, false);
+        } else if (mode === "throttle_failure") {
+          assertEquals(payload.ok, false);
+          assertEquals(payload.reason, "transient");
+        } else {
+          assertEquals(payload.ok, true);
+          assertEquals(payload.partial, true);
+          if (mode === "failed_post") {
+            assertEquals(payload.posts.map((post: { id: string }) => post.id), ["post1", "post2"]);
+            assertEquals(payload.posts[0].metrics.views, 5);
+          }
+        }
+        if (mode.startsWith("throttle_")) {
+          const delay = Date.parse(payload.retryAt) - Date.now();
+          assertEquals(delay > 170_000 && delay <= 180_000, true);
+          assertEquals(providerCalls, 4);
+        }
+        if (mode === "invalid_post_time") assertEquals(payload.posts, []);
+        assertFalse(JSON.stringify(payload).includes("private"));
+        assertFalse(JSON.stringify(payload).includes("synthetic-owner-token"));
+        assertFalse(JSON.stringify(audits).includes("synthetic-owner-token"));
+        scenario = "normal";
+      });
+    }
   } finally {
     globalThis.fetch = originalFetch;
   }

@@ -245,6 +245,14 @@ export function ThreadsInsightsPanel() {
           ["storage_error", t("errors.insightsStorageFailed", "Unable to load the Threads account. Please retry.")],
           ["invalid_request", t("errors.insightsInvalidRequest", "Invalid Threads insights request. Refresh the page and retry.")],
           ["unauthorized", t("errors.insightsUnauthorized", "Your session could not be verified. Please sign in again.")],
+          ["wrong_account", t("errors.insightsReconnect", "Reconnect the selected Threads account.")],
+          ["invalid_token", t("errors.insightsReconnect", "Reconnect the selected Threads account.")],
+          ["expired_token", t("errors.insightsReconnect", "Reconnect the selected Threads account.")],
+          ["rate_limited", t("errors.insightsRateLimited", "Threads request limit reached. Please retry later.")],
+          ["not_eligible", t("errors.insightsNotEligible", "The selected Threads account is not eligible for these insights.")],
+          ["not_found", t("errors.insightsNotFound", "Threads could not find the requested account or content.")],
+          ["transient", t("errors.insightsFailed", "Threads insights failed.")],
+          ["unknown", t("errors.insightsFailed", "Threads insights failed.")],
         ]).get(reason);
         if (selectionError) {
           setError(selectionError);
@@ -257,7 +265,7 @@ export function ThreadsInsightsPanel() {
         }
         if (reason === "permission_not_approved" || reason === "missing_scope") {
           setNeedsPermission(true);
-          setError(resBody.message || t("errors.insightsPermission", "Threads insights permission not granted."));
+          setError(t("errors.insightsPermission", "Threads insights permission not granted."));
           return;
         }
         setError(resBody.message || t("errors.insightsFailed", "Threads insights failed."));
