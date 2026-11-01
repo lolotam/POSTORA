@@ -1,6 +1,5 @@
 import { assertEquals, assertRejects } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import { FacebookInsightsProvider } from "../facebook-page-insights/provider.ts";
-import { createOwnedAnalyticsSyncHandler } from "./handler.ts";
 import type { MetricValue } from "../_shared/analyticsContract.ts";
 import { ThreadsInsightsProvider } from "../threads-insights/provider.ts";
 import { threadsCollection } from "./threadsCollection.ts";
@@ -54,7 +53,7 @@ Deno.test("Threads snapshots share live and saved decoding without inventing dai
       const capture: AnalyticsCapture = { capture_id: "c1000000-0000-4000-8000-000000000001", capture_sequence: 1,
         job_id: "c2000000-0000-4000-8000-000000000001", job_generation: 1, kind, subject_id: "773001", metric_date: null,
         since: null, until: null, timezone: null };
-      const cells = await threadsCollection(provider, "773001", windows.current.buckets[0]).metrics(capture, [definition]);
+      const { cells } = await threadsCollection(provider, "773001", windows.current.buckets[0]).metrics(capture, [definition]);
       const live = kind === "post" ? projectThreadsPostMetric(definition, reply, "2026-11-01T12:00:00Z")
         : projectThreadsAccountMetric({ definition, current: reply, previous: reply, windows, observedAt: "2026-11-01T12:00:00Z" });
       const expected: MetricValue = scenario === "zero_total" || kind === "post" && scenario === "single_lifetime_value" ? { status: "available", value: 0 }
