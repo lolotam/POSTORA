@@ -1,6 +1,7 @@
 /** Disposable owner-release identities. Never use these fixtures against a shared stack. */
 import { OWNER_RELEASE } from "./instagramOwnerReleaseSettings.mjs";
 import { assertLocalDockerSocket } from "./instagramOwnerReleaseSafety.mjs";
+import { seedMetaOwnedRelease } from "./metaOwnedRelease.ts";
 export { OWNER_RELEASE } from "./instagramOwnerReleaseSettings.mjs";
 
 export function assertOwnerReleaseUrl(url: string): void {
@@ -106,6 +107,7 @@ INSERT INTO public.app_settings(key,value,description) VALUES
 ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value;
 COMMIT;
 `);
+  await seedMetaOwnedRelease(ownerReleaseSql);
 }
 
 if (import.meta.main) {

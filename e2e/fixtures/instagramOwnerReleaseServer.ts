@@ -3,6 +3,7 @@ import { OWNER_RELEASE, assertOwnerReleaseUrl, ownerReleaseSql, seedOwnerRelease
 import { FakeMetaTransport } from "../../supabase/functions/_shared/rolloutIntegrationTestSupport.ts";
 import { fileURLToPath } from "node:url";
 import { assertPreparedOwnerExecutionSource } from "../../scripts/instagram-owner-execution-source.mjs";
+import { META_ACCOUNTS, META_PLATFORMS, MetaOwnedProviderFixture, type MetaFixturePlatform } from "./metaOwnedRelease.ts";
 
 assertPreparedOwnerExecutionSource(fileURLToPath(new URL("../../", import.meta.url)));
 
@@ -18,15 +19,24 @@ Deno.env.set("SUPABASE_SERVICE_ROLE_KEY", serviceKey);
 Deno.env.set("CRON_SECRET", "synthetic-owner-release-cron-secret");
 Deno.env.set("PUBLIC_API_ORIGIN", OWNER_RELEASE.apiUrl);
 Deno.env.set("PUBLIC_APP_ORIGIN", "http://127.0.0.1:8080");
+for (const platform of ["FACEBOOK", "THREADS"]) {
+  Deno.env.set(`${platform}_APP_ID`, "770001");
+  Deno.env.set(`${platform}_APP_SECRET`, "owned-fixture-app");
+}
 
 const originalFetch = globalThis.fetch;
 const meta = new FakeMetaTransport();
+const ownedMeta = new MetaOwnedProviderFixture();
 meta.install();
 const syntheticMetaFetch = globalThis.fetch;
 meta.restore();
 const rpcFailures: { name: string; status: number; code: string | null }[] = [];
 globalThis.fetch = async (input, init) => {
   const url = new URL(input instanceof Request ? input.url : String(input));
+  if (["graph.facebook.com", "graph.threads.net"].includes(url.hostname)) {
+    const reply = ownedMeta.reply(new Request(input, init));
+    if (reply) return reply;
+  }
   if (["graph.facebook.com", "graph.instagram.com"].includes(url.hostname)) return syntheticMetaFetch(input, init);
   if (url.protocol !== "http:" || url.hostname !== "127.0.0.1" || !["65431", "65435", "65436"].includes(url.port)) {
     throw new Error("Owner-release runtime refused non-fixture network access");
@@ -46,6 +56,8 @@ globalThis.fetch = async (input, init) => {
 
 const { handler: reportHandler } = await import("../../supabase/functions/instagram-insights-report/index.ts");
 const { handleRequest: registeredApi } = await import("../../supabase/functions/n8n-api/index.ts");
+const { handler: savedMetaReport } = await import("../../supabase/functions/meta-owned-analytics-report/index.ts");
+const { handler: savedMetaSync } = await import("../../supabase/functions/meta-owned-analytics-sync/index.ts");
 type Handler = (request: Request) => Response | Promise<Response>;
 let syncHandler: Handler | null = null;
 let mcpHandler: Handler | null = null;
@@ -79,6 +91,41 @@ async function historyFingerprint() {
 
 async function route(request: Request): Promise<Response> {
   const url = new URL(request.url);
+  if (url.pathname === "/__owner-release/meta-owned") {
+    if (request.headers.get("Authorization") !== `Bearer ${serviceKey}`) return new Response(null, { status: 401 });
+    if (request.method === "GET") {
+      const fingerprints: Record<string, unknown> = {};
+      for (const platform of META_PLATFORMS) {
+        const prefix = platform === "facebook" ? "fb" : "threads";
+        const tables = [`${prefix}_analytics_report_state`, `${prefix}_analytics_permission_observations`, `${prefix}_analytics_collection_jobs`,
+          `${prefix}_analytics_collection_operations`, `${prefix}_analytics_collection_checkpoints`, `${prefix}_analytics_captures`, `${prefix}_analytics_metric_values`, `${prefix}_post_insight_snapshots`];
+        for (const table of tables) fingerprints[table] = await ownerReleaseSql(`SELECT md5(COALESCE(jsonb_agg(to_jsonb(history) ORDER BY to_jsonb(history)::text)::text,'[]')) FROM public.${table} history
+          WHERE social_account_id IN (${META_ACCOUNTS.filter((account) => account.platform === platform && ["archived", "foreign"].includes(account.kind)).map((account) => `'${account.id}'`).join(",")});`);
+      }
+      return Response.json({ calls: ownedMeta.calls, fingerprints });
+    }
+    if (request.method !== "POST") return new Response(null, { status: 405 });
+    const input = await request.json();
+    if (!META_PLATFORMS.includes(input.platform) || !["drain", "disconnect", "revision"].includes(input.action)) return new Response(null, { status: 400 });
+    const platform: MetaFixturePlatform = input.platform;
+    const account = META_ACCOUNTS.find((entry) => entry.platform === platform && entry.kind === "active")!;
+    if (input.action === "disconnect") {
+      await ownerReleaseSql(`UPDATE public.social_accounts SET is_active=false,needs_reauth=true,token_expires_at=clock_timestamp()-interval '1 hour' WHERE id='${account.id}' AND user_id='${account.owner}';`);
+      return Response.json({ disconnected: account.id });
+    }
+    if (input.action === "revision") {
+      await ownerReleaseSql(`UPDATE public.${platform === "facebook" ? "fb" : "threads"}_analytics_report_state SET report_revision=report_revision+1 WHERE social_account_id='${account.id}' AND user_id='${account.owner}';`);
+      return Response.json({ changed: account.id });
+    }
+    const invoke = (action: string) => savedMetaSync(new Request(`${OWNER_RELEASE.apiUrl}/functions/v1/meta-owned-analytics-sync`, {
+      method: "POST", headers: { Authorization: "Bearer synthetic-owner-release-cron-secret", "Content-Type": "application/json" }, body: JSON.stringify({ action, platform }),
+    }));
+    const enqueued = await invoke("enqueue-daily");
+    const enqueue = await enqueued.json();
+    if (!enqueued.ok) return Response.json({ enqueue }, { status: enqueued.status });
+    const drained = await invoke("drain");
+    return Response.json({ enqueue, drain: await drained.json() }, { status: drained.status });
+  }
   if (url.pathname === "/__owner-release/health") {
     const [auth, sql] = await Promise.all([
       originalFetch(`${OWNER_RELEASE.authUrl}/health`),
@@ -123,6 +170,8 @@ async function route(request: Request): Promise<Response> {
     return Response.json({ triggered: generationFenceTriggered, history: await historyFingerprint(), rpcFailures, generationChangeMs });
   }
   if (url.pathname === "/functions/v1/instagram-insights-report") return reportHandler(request);
+  if (url.pathname === "/functions/v1/meta-owned-analytics-report") return savedMetaReport(request);
+  if (url.pathname === "/functions/v1/meta-owned-analytics-sync") return savedMetaSync(request);
   if (url.pathname === "/functions/v1/instagram-insights-sync") return registeredSync(request);
   if (url.pathname.startsWith("/functions/v1/n8n-api/")) {
     url.pathname = url.pathname.replace("/functions/v1", "");
