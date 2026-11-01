@@ -82,7 +82,7 @@ async function captureVisit(input: DrainInput, job: AnalyticsClaim, provider: Co
     await input.store.persistCapture(job, capture.capture_id, { metrics, ...post, received_at: receivedAt, observed_at: receivedAt });
     if (Object.values(metrics).every((cell) => cell.status === "available" || ["not_offered", "outside_retention"].includes(cell.reason))) accepted.add(plan.key);
   }
-  return state.checkpoint.inventory_complete && !state.checkpoint.inventory_truncated && plans.every((plan) => accepted.has(plan.key));
+  return plans.every((plan) => accepted.has(plan.key));
 }
 
 async function collectJob(input: DrainInput, job: AnalyticsClaim): Promise<"success" | "partial" | "refused" | "rate_limited"> {
@@ -92,12 +92,18 @@ async function collectJob(input: DrainInput, job: AnalyticsClaim): Promise<"succ
   try {
     const provider = await collectionProvider(input, job, throttle);
     const state = await inventory(input, job, provider);
-    const complete = await captureVisit(input, job, provider, state);
-    await input.store.complete(job, complete ? "success" : "partial", complete ? null : state.checkpoint.inventory_truncated ? "inventory_truncated" : "collection_incomplete");
+    const capturesComplete = await captureVisit(input, job, provider, state);
+    const complete = capturesComplete && state.checkpoint.inventory_complete && !state.checkpoint.inventory_truncated;
+    // A bounded prefix is useful history but can never become a full inventory.
+    // Once its captures are saved, stop reclaiming this date ahead of newer jobs.
+    const terminalTruncation = capturesComplete && state.checkpoint.inventory_truncated;
+    await input.store.complete(job, complete ? "success" : terminalTruncation ? "failed" : "partial",
+      complete ? null : state.checkpoint.inventory_truncated ? "inventory_truncated" : "collection_incomplete",
+      complete || terminalTruncation ? null : new Date(Date.now() + 60_000).toISOString());
     return complete ? "success" : "partial";
   } catch (error) {
     if (error instanceof CollectionVisitPaused) {
-      await input.store.complete(job, "partial", "visit_budget");
+      await input.store.complete(job, "partial", "visit_budget", new Date(Date.now() + 60_000).toISOString());
       return "partial";
     }
     if (!(error instanceof CollectionProviderRefused)) throw error;
@@ -105,7 +111,9 @@ async function collectJob(input: DrainInput, job: AnalyticsClaim): Promise<"succ
     const now = Date.now();
     const persistedRetry = retry ? await throttle.refuse(error.retryAt) : null;
     const retryAt = new Date(Math.min(now + 86_000_000, Math.max(now + 60_000, Date.parse(persistedRetry ?? "") || 0))).toISOString();
-    await input.store.complete(job, retry ? "retry" : "partial", error.reason, retry ? retryAt : null);
+    const terminal = error.reason === "reauth_required" || error.reason === "permission_missing";
+    await input.store.complete(job, retry ? "retry" : terminal ? "failed" : "partial", error.reason,
+      retry ? retryAt : terminal ? null : new Date(Date.now() + 60_000).toISOString());
     return retry ? "rate_limited" : "refused";
   }
 }
@@ -120,17 +128,17 @@ export async function drainOwnedAnalytics(input: DrainInput): Promise<DrainResul
     if (!active.length) return { status: "disabled", counts, reason: null };
     const exhausted = new Set<OwnedAnalyticsPlatform>();
     const paused = new Set<OwnedAnalyticsPlatform>();
+    let rateLimited = false;
     while (counts.visited < 50 && input.deadline.remainingMs >= 25_000 && exhausted.size + paused.size < active.length) {
         const candidates = active.filter((platform) => !exhausted.has(platform) && !paused.has(platform));
         const job = await input.store.claim(candidates.length === 2 ? "all" : candidates[0]);
         if (!job) { for (const platform of candidates) exhausted.add(platform); break; }
         counts.visited++;
         const outcome = await collectJob(input, job);
-        if (outcome === "rate_limited") { counts.partial++; return { status: "partial", counts, reason: "rate_limited" }; }
+        if (outcome === "rate_limited") { counts.partial++; rateLimited = true; paused.add(job.platform); continue; }
         counts[outcome === "success" ? "collected" : outcome]++;
-        if (outcome !== "success") paused.add(job.platform);
     }
-    return { status: exhausted.size === active.length && !counts.partial && !counts.refused ? "complete" : "partial", counts, reason: null };
+    return { status: exhausted.size === active.length && !counts.partial && !counts.refused ? "complete" : "partial", counts, reason: rateLimited ? "rate_limited" : null };
   } catch (error) {
     const refused = error instanceof AnalyticsWorkerStopped && ["MAH02", "MAH03", "MAH04"].includes(error.sqlstate ?? "");
     return { status: refused ? "partial" : "unavailable", counts, reason: refused ? "collection_changed"

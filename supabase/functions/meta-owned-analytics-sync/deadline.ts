@@ -1,5 +1,5 @@
 export class AnalyticsWorkerStopped extends Error {
-  constructor(readonly reason: "deadline" | "storage_unavailable" | "invalid_contract" | "admission_refused" | "configuration_unavailable", readonly sqlstate: string | null = null) {
+  constructor(readonly reason: "deadline" | "storage_unavailable" | "provider_unavailable" | "invalid_contract" | "admission_refused" | "configuration_unavailable", readonly sqlstate: string | null = null) {
     super(`Owned analytics operation stopped: ${reason}`);
     this.name = "AnalyticsWorkerStopped";
   }

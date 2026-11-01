@@ -111,6 +111,7 @@ END;
 $fn$;
 REVOKE ALL ON FUNCTION public.meta_analytics_policy_ids(jsonb) FROM PUBLIC,anon,authenticated,service_role;
 REVOKE ALL ON FUNCTION public.meta_analytics_retention_policy(text,boolean) FROM PUBLIC,anon,authenticated,service_role;
+REVOKE ALL ON FUNCTION public.meta_analytics_retention_allowed(text,uuid,boolean) FROM PUBLIC,anon,authenticated,service_role;
 REVOKE ALL ON FUNCTION public.list_meta_analytics_retention_targets(text,boolean) FROM PUBLIC,anon,authenticated;
 REVOKE ALL ON FUNCTION public.cleanup_meta_analytics_target(text,uuid,timestamptz,integer,boolean) FROM PUBLIC,anon,authenticated;
 GRANT EXECUTE ON FUNCTION public.list_meta_analytics_retention_targets(text,boolean) TO service_role;

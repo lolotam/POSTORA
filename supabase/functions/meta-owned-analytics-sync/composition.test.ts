@@ -88,12 +88,12 @@ Deno.test("registered admission keeps real token roles and refuses stale or inva
           };
           const response = await handler(request(platform));
           const body = await response.json();
-          const success = scenario === "normal" || scenario === "no_app_id" || scenario === "extra_scopes";
+          const success = scenario === "normal" || scenario === "no_app_id" && platform === "threads" || scenario === "extra_scopes";
           assertEquals(response.status, success ? 200 : ["unknown_write", "unknown_permit", "invalid_envelope"].includes(scenario) ? 503 : 409);
           assertEquals(body.ok, success);
           assertEquals(response.headers.get("access-control-allow-origin"), null);
           assertEquals(audits.length, 1);
-          assertEquals(observations, ["normal", "no_app_id", "missing_scope", "write_changed", "unknown_write", "extra_scopes"].includes(scenario) ? 1 : 0);
+          assertEquals(observations, ["normal", "missing_scope", "write_changed", "unknown_write", "extra_scopes"].includes(scenario) || scenario === "no_app_id" && platform === "threads" ? 1 : 0);
           if (scenario === "permit_changed" || scenario === "unknown_permit") assertEquals(providerCalls, 1);
           if (scenario === "invalid_envelope") assertEquals(providerCalls, 0);
           for (const secret of [TOKEN, GRANT, SECRET]) {

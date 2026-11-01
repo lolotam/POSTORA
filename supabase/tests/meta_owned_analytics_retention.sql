@@ -2,6 +2,12 @@
 -- reopen, credential rotation, CAS replay/skip, expired day and policy change.
 \set ON_ERROR_STOP on
 BEGIN;
+DO $acl$
+BEGIN
+  ASSERT NOT has_function_privilege('anon','public.meta_analytics_retention_allowed(text,uuid,boolean)','EXECUTE');
+  ASSERT NOT has_function_privilege('authenticated','public.meta_analytics_retention_allowed(text,uuid,boolean)','EXECUTE');
+  ASSERT NOT has_function_privilege('service_role','public.meta_analytics_retention_allowed(text,uuid,boolean)','EXECUTE');
+END;$acl$;
 INSERT INTO auth.users(id,email) VALUES
  ('b1000000-0000-4000-8000-000000000001','meta-dispatch-one@example.invalid'),
  ('b1000000-0000-4000-8000-000000000002','meta-dispatch-two@example.invalid');

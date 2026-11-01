@@ -1,5 +1,6 @@
 import { z } from "https://esm.sh/zod@3.25.76";
-import { MetaAnalyticsTransport, metaAnalyticsFailure } from "../_shared/metaAnalyticsTransport.ts";
+import { MetaAnalyticsTransport, metaAnalyticsFailure, type MetaAnalyticsFailure } from "../_shared/metaAnalyticsTransport.ts";
+import { AnalyticsWorkerStopped } from "./deadline.ts";
 import { parseMetaError } from "../_shared/metaErrors.ts";
 import type { AdmissionCredential, OwnedAnalyticsPlatform } from "./store.ts";
 
@@ -15,6 +16,13 @@ const debugSchema = z.object({ data: z.object({ is_valid: z.boolean(), user_id: 
   scopes: scopesSchema.optional(), expires_at: z.number().int().nonnegative().optional(),
   data_access_expires_at: z.number().int().nonnegative().optional() }) });
 const identitySchema = z.object({ id: z.string().min(1).max(200) });
+
+function permissionFailure(reply: MetaAnalyticsFailure<PermissionFailure>): PermissionVerification {
+  if (["aborted", "budget"].includes(reply.error.kind)) throw new AnalyticsWorkerStopped("deadline");
+  if (reply.error.kind === "transport" || reply.status >= 500) throw new AnalyticsWorkerStopped("provider_unavailable");
+  if (reply.error.kind === "invalid_response") throw new AnalyticsWorkerStopped("invalid_contract");
+  return { ok: false, reason: reply.error.reason };
+}
 
 /** Debugger and operational identity requests share one authority permit, never one token role. */
 export async function verifyAdmissionPermission(input: {
@@ -42,18 +50,18 @@ export async function verifyAdmissionPermission(input: {
   const appBearer = `${platform === "threads" ? "TH|" : ""}${app.id}|${app.secret}`;
   const debuggerClient = new MetaAnalyticsTransport<PermissionFailure>({ ...options, token: appBearer });
   const debug = await debuggerClient.request(["debug_token"], { input_token: credential.permission_token }, debugSchema);
-  if (debug.error) return { ok: false, reason: debug.error.reason };
+  if (debug.error) return permissionFailure(debug);
   const grant = debug.data.data;
   if (!grant.is_valid || [grant.expires_at, grant.data_access_expires_at].some((until) => until !== undefined && until !== 0 && until * 1000 <= Date.now())) {
     return { ok: false, reason: "reauth_required" };
   }
   const expectedUser = "provider_user_id" in credential.authority ? credential.authority.provider_user_id : credential.authority.platform_user_id;
   if (grant.user_id !== expectedUser) return { ok: false, reason: "identity_mismatch" };
-  if (grant.app_id !== undefined && grant.app_id !== app.id) return { ok: false, reason: "app_mismatch" };
+  if ((platform === "facebook" || grant.app_id !== undefined) && grant.app_id !== app.id) return { ok: false, reason: "app_mismatch" };
   if (!grant.scopes || new Set(grant.scopes).size !== grant.scopes.length) return { ok: false, reason: "provider_error" };
   const operational = new MetaAnalyticsTransport<PermissionFailure>({ ...options, token: credential.access_token });
   const identity = await operational.request(["me"], { fields: "id" }, identitySchema);
-  if (identity.error) return { ok: false, reason: identity.error.reason };
+  if (identity.error) return permissionFailure(identity);
   if (identity.data.id !== credential.authority.platform_user_id) return { ok: false, reason: "identity_mismatch" };
   // Other product permissions must not invalidate this feature's bounded
   // authority merely because a legitimate grant contains more scopes.
