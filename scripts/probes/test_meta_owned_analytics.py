@@ -67,7 +67,9 @@ class CapabilityProbeTests(unittest.TestCase):
         self.assertEqual(transport.get("owner", "threads"), (0, {}, {}))
 
     def test_invalid_or_oversized_http_success_stays_a_failed_metric_read(self):
-        for raw, failure in [(b"not-json", "invalid_json"), (b" " * 1_048_577, "response_too_large")]:
+        for raw, failure in [(b"not-json", "invalid_json"), (b" " * 1_048_577, "response_too_large"),
+                             (b'{"data":[{"name":"views","total_value":{"value":NaN}}]}', "invalid_json"),
+                             (b'{"data":Infinity}', "invalid_json"), (b'{"data":-Infinity}', "invalid_json")]:
             with self.subTest(failure=failure):
                 response = JsonResponse({})
                 response.seek(0)
@@ -80,6 +82,14 @@ class CapabilityProbeTests(unittest.TestCase):
                 self.assertEqual(observation["observation"], "provider_error")
                 self.assertEqual(observation["probeFailure"], failure)
         self.assertEqual(probe.metric_observation({}, "views")["observation"], "provider_error")
+
+    def test_oversized_numbers_never_overflow_or_enter_contract_measurements(self):
+        enormous = 10 ** 400
+        for number in (enormous, -enormous, 9_007_199_254_740_992, float("inf")):
+            self.assertFalse(probe.finite_number(number))
+            self.assertEqual(probe.metric_observation({"data": [{"name": "views", "total_value": {"value": number}}]}, "views")["measurements"], [])
+        self.assertTrue(probe.finite_number(9_007_199_254_740_991))
+        self.assertEqual(probe.safe_usage({"x-app-usage": json.dumps({"call_count": enormous})}), {"x-app-usage": {}})
 
     def test_linux_request_alarm_or_unsupported_live_cli_refusal(self):
         if hasattr(probe.signal, "setitimer"):

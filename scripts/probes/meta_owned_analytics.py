@@ -32,7 +32,12 @@ def utc_now():
 
 
 def finite_number(value):
-    return type(value) in (int, float) and math.isfinite(value)
+    # Counts must remain exactly representable by the browser/Deno contract too.
+    return type(value) in (int, float) and -9_007_199_254_740_991 <= value <= 9_007_199_254_740_991 and math.isfinite(value)
+
+
+def reject_json_constant(_constant):
+    raise ValueError("Nonstandard JSON numeric constant")
 
 
 def safe_usage(headers):
@@ -158,7 +163,7 @@ class ProbeTransport:
                     if len(raw) > 1_048_576:
                         return response.status, {"error": {}, "__probe_failure": "response_too_large"}, safe_usage(response.headers)
                     try:
-                        payload = json.loads(raw)
+                        payload = json.loads(raw, parse_constant=reject_json_constant)
                     except (ValueError, UnicodeError):
                         payload = {"error": {}, "__probe_failure": "invalid_json"}
                     return response.status, payload, safe_usage(response.headers)

@@ -43,12 +43,21 @@ python3 scripts/probes/meta_owned_analytics.py --help
 
 Ten unit tests passed on Windows and on the Contabo Linux host. They cover true-zero/missing/multiple-bucket decoding, sanitized failures/usage, authenticated fixed-origin requests, repeated pagination, budget refusal/partial receipt retention, redirect refusal, failed account setup, granted-versus-declined permissions, invalid/oversized HTTP-200 responses, and request deadline enforcement. Windows verifies that the live CLI refuses unsupported timers; Linux verifies interruption and signal/timer restoration. The Linux run used reviewed copies in a temporary directory with matching SHA256 hashes and replaced HTTP/subprocess boundaries; it made no live Meta or account-database requests.
 
-The separate real SQL check also passed against the labelled local disposable database: exact owned account success plus four identical refusals for foreign, inactive, wrong-platform and nonexistent accounts. It creates only fixed synthetic identities after proving they do not exist, then removes those fixtures. It refuses remote Docker endpoints, shared container names and non-harness database names. CI runs this check against its already migrated Postgres harness:
+The separate real SQL check also passed against the labelled local disposable database: exact owned account success plus four identical refusals for foreign, inactive, wrong-platform and nonexistent accounts. It creates only fixed synthetic identities after proving they do not exist, then removes those fixtures. It refuses remote Docker endpoints, shared container names and non-harness database names. Local disposable database invocation:
 
 ```sh
 python3 scripts/probes/check_meta_owned_analytics_sql.py \
   --container postora-owner-release-pg --database postora_owner_release_harness
 ```
+
+CI uses its already migrated harness:
+
+```sh
+python3 scripts/probes/check_meta_owned_analytics_sql.py \
+  --container pg-harness --database partner_api_harness
+```
+
+Provider decoding rejects nonstandard JSON numeric constants. Numeric observations and usage counts outside JavaScript's exact integer range are excluded without attempting an overflowing float conversion. The safety CI job has a ten-minute timeout and does not persist checkout credentials.
 
 Independent review found that invalid JSON/oversized HTTP-200 reads could appear absent; the correction retains HTTP status and emits a sanitized decode-failure receipt. A socket inactivity timeout also proved insufficient for the elapsed deadline, prompting the POSIX alarm correction. A subsequent hosted review reproduced `http.client.IncompleteRead` escaping the response reader and preventing the report from being emitted. HTTP protocol/read failures now produce a sanitized `http_protocol_error` receipt, preserving earlier observations and the actual HTTP status when available. The eleventh regression and the preceding ten tests passed on both Windows and Linux, with matching source/test SHA256 hashes. Source/test/docs guards cover these fixes. No production capability probe has run as part of this work.
 
