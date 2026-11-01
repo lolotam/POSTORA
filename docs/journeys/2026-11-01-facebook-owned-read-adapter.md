@@ -1,6 +1,6 @@
 # Owned Facebook Page analytics read adapter
 
-Local B4 candidate built on the corrected contract proposal in [PR #340](https://github.com/lolotam/POSTORA/pull/340), head `680ee7f2ccc623930f423e97e92fd7658a40e517`. The parent review corrections have been incorporated: the canonical parser keeps its stronger `last` policy, and the shared cursor codec keeps the corrected bounded opaque grammar. This branch is not deployed. No collection, migration, credential or schedule change is included.
+B4 implementation built on the corrected contract proposal in [PR #340](https://github.com/lolotam/POSTORA/pull/340), head `680ee7f2ccc623930f423e97e92fd7658a40e517`, and now merged/deployed through #341. Current commit/hash/live evidence is owned by the [deployment record](2026-11-01-meta-read-path-deployment.md). The parent review corrections have been incorporated: the canonical parser keeps its stronger `last` policy, and the shared cursor codec keeps the corrected bounded opaque grammar. No collection, migration, credential or schedule change is included.
 
 ## Data path and behavior
 
@@ -30,7 +30,7 @@ Official Meta Page-post/Insights documentation could not be fetched in this sess
 
 - Deno real composition/provider/calendar/schema/cursor suites: 26 tests, 119 nested steps passed after rebase and comparison-policy corrections, with CI's exact permissions.
 - MCP/service proxy: 150 tests passed; Vitest parity/existing translated Threads panel: 13 tests passed.
-- Typecheck and production build passed. The immutable lint/i18n regression result is recorded separately before this candidate is published.
+- Typecheck and production build passed. The immutable lint/i18n gate reported `NO REGRESSIONS` for reviewed head `0f98e331c2292c113687953f8015dda7f445c459` against corrected parent `680ee7f2ccc623930f423e97e92fd7658a40e517`.
 - Targeted ESLint passed for changed production/test files. `clean-code-guard` and `test-guard` were applied; extraction helpers have active production callers in both Facebook and Threads. Documentation was checked with `docs-guard` against the actual modules and probe metadata.
 
-These are local fixture journeys and bounded provider-shape evidence, not a deployed signed-in journey or reconciliation. The complete G-X prerequisite remains in force before the Instagram owner pilot. No seven-day schedule receipts, rollback/restoration or widening acceptance is claimed.
+The checks in this section record local fixture journeys and bounded provider-shape evidence. Subsequent internal deployed-path verification is linked above; a signed-in public browser journey and reconciliation remain unproven. The complete G-X prerequisite remains in force before the Instagram owner pilot. No seven-day schedule receipts, rollback/restoration or widening acceptance is claimed.

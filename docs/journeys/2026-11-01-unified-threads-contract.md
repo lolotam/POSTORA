@@ -1,6 +1,6 @@
 # Unified analytics contract and Threads read path
 
-This is the local B1/B3 implementation candidate from the [completion plan](../plans/2026-11-01-meta-analytics-completion.md), based on main `02faafceaf3679ecd4b63ab5c8e024bb160a022c`. It is not a collection activation receipt or completion of Batch B/C. The earlier partial B1 proposal in #331 overlaps this implementation and must be reconciled before either is merged independently.
+This records the B1/B3 implementation from the [completion plan](../plans/2026-11-01-meta-analytics-completion.md), originally based on main `02faafceaf3679ecd4b63ab5c8e024bb160a022c` and now merged/deployed through #340/#341. Current source, hashes and bounded live evidence are owned by the [deployment record](2026-11-01-meta-read-path-deployment.md). This is not a collection activation receipt or completion of Batch B/C. The earlier partial proposal in #331 must not overwrite the canonical implementation; its unique remaining Instagram integration changes still need a deliberate port.
 
 ## Behavior
 
@@ -24,11 +24,11 @@ The versioned path reuses the existing request-wide provider budget (30 seconds,
 - `npm run typecheck` and `npm run build` passed. Build retains existing dependency/chunk warnings.
 - Targeted ESLint reports only the two existing `no-explicit-any` findings in the legacy Threads DTO; no new-file findings. Immutable lint/i18n regression results are recorded after the candidate commit.
 
-`clean-code-guard`, `test-guard` and `docs-guard` were applied to the changed production/test/documentation surfaces. New pure modules have an active production consumer in the versioned Threads report; the browser facade imports the same canonical artifacts, without SDKs or copied definitions. No migration, credential, collection switch, allow-list or schedule changed. This candidate has not been merged or deployed.
+`clean-code-guard`, `test-guard` and `docs-guard` were applied to the changed production/test/documentation surfaces. New pure modules have an active production consumer in the versioned Threads report; the browser facade imports the same canonical artifacts, without SDKs or copied definitions. No migration, credential, collection switch, allow-list or schedule changed. The checks above record the local candidate stage; subsequent merge/deployment evidence is linked at the start of this record.
 
 ## Remaining acceptance
 
-B2 still needs unresolved metric retention/total semantics and Instagram capability evidence after its protected credential binding is repaired through an approved operation. B4's Facebook owned-Page adapter, C1/C2 storage decision/migrations, C3 workers, C4 persisted reports/Instagram negotiation, C5 shared UI and C6/C7 separately approved pilots remain. The canonical G-X prerequisite remains mandatory before the Instagram owner pilot. Seven distinct scheduled due-date receipts, reconciliation, rollback and approved restoration are not supplied by fixture tests or read-only capability probes.
+B2 still needs unresolved metric retention/total semantics, full Facebook listing acceptance and Instagram capability evidence after its protected credential binding is repaired through an approved operation. C1/C2 storage decision/migrations, C3 workers, C4 persisted reports/Instagram negotiation, C5 shared UI and C6/C7 separately approved pilots remain. The canonical G-X prerequisite remains mandatory before the Instagram owner pilot. Seven distinct scheduled due-date receipts, reconciliation, rollback and approved restoration are not supplied by fixture tests or read-only capability probes.
 
 ## Review corrections and adjudication
 
