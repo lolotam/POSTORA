@@ -37,6 +37,10 @@ describe("Threads selection refusals", () => {
     ["storage_error", "Unable to load the Threads account. Please retry.", "تعذّر تحميل حساب Threads. جرّب مرة أخرى."],
     ["invalid_request", "Invalid Threads insights request. Refresh the page and retry.", "طلب تحليلات Threads غير صالح. حدّث الصفحة وجرّب مرة أخرى."],
     ["unauthorized", "Your session could not be verified. Please sign in again.", "تعذّر التحقق من جلستك. سجّل الدخول مرة أخرى."],
+    ["wrong_account", "Reconnect the selected Threads account.", "أعد ربط حساب Threads المختار."],
+    ["expired_token", "Reconnect the selected Threads account.", "أعد ربط حساب Threads المختار."],
+    ["rate_limited", "Threads request limit reached. Please retry later.", "وصلت طلبات Threads للحد المسموح. جرّب لاحقًا."],
+    ["transient", "Threads insights failed.", "فشل تحميل تحليلات Threads."],
   ])("renders localized %s instead of the backend fallback", async (reason, english, arabic) => {
     invoke.mockImplementation(async () => ({ data: null, error: {
       context: Response.json({ ok: false, reason, message: "Untranslated backend fallback" }, { status: 503 }),

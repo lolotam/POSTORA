@@ -331,6 +331,8 @@
     "insightsStorageFailed": "تعذّر تحميل حساب Threads. جرّب مرة أخرى.",
     "insightsInvalidRequest": "طلب تحليلات Threads غير صالح. حدّث الصفحة وجرّب مرة أخرى.",
     "insightsUnauthorized": "تعذّر التحقق من جلستك. سجّل الدخول مرة أخرى.",
+    "insightsReconnect": "أعد ربط حساب Threads المختار.",
+    "insightsRateLimited": "وصلت طلبات Threads للحد المسموح. جرّب لاحقًا.",
     "insightsFailed": "فشل تحميل تحليلات Threads.",
     "insightsPermission": "صلاحية تحليلات Threads مش متاحة.",
     "loadFailed": "فشل تحميل بيانات التحليلات. {{details}} حدّث الصفحة أو سجّل دخول تاني.",

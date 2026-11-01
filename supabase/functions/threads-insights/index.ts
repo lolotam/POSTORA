@@ -1,12 +1,9 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { z } from "https://esm.sh/zod@3.25.76";
 import { createLogger } from "../_shared/logging.ts";
-import {
-  debugThreadsToken,
-  classifyMetaError,
-  type SelectedThreadsAccount,
-} from "../_shared/threads-debug.ts";
+import type { SelectedThreadsAccount } from "../_shared/threads-debug.ts";
 import { authenticateCaller, serviceRoleCallerUserId } from "../_shared/auth-helper.ts";
+import { ThreadsInsightsProvider, loadPostMetrics, type ThreadsPost } from "./provider.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -51,20 +48,8 @@ function structured(body: Record<string, unknown>, status = 200) {
   });
 }
 
-async function fetchProfileTotals(threadsUserId: string, accessToken: string, since: number, until: number) {
-  const url = `https://graph.threads.net/v1.0/${threadsUserId}/threads_insights?metric=${ALL_PROFILE_METRICS.join(",")}&since=${since}&until=${until}&locale=en_US&access_token=${encodeURIComponent(accessToken)}`;
-  const res = await fetch(url);
-  return { status: res.status, data: await res.json().catch(() => ({})) };
-}
-
-async function fetchProfileTimeSeries(threadsUserId: string, accessToken: string, since: number, until: number) {
-  // time_series breakdown for supported metrics
-  const url = `https://graph.threads.net/v1.0/${threadsUserId}/threads_insights?metric=${TIME_SERIES_METRICS.join(",")}&since=${since}&until=${until}&metric_type=time_series&locale=en_US&access_token=${encodeURIComponent(accessToken)}`;
-  const res = await fetch(url);
-  return { status: res.status, data: await res.json().catch(() => ({})) };
-}
-
 export async function handler(req: Request): Promise<Response> {
+  const startedAt = Date.now();
   if (req.method === "OPTIONS") {
     return new Response(null, { headers: corsHeaders });
   }
@@ -141,25 +126,26 @@ export async function handler(req: Request): Promise<Response> {
       periodDays,
     }, userId);
 
-    const preflight = await debugThreadsToken(account.access_token);
-    if (!preflight.ok) {
-      const cls = classifyMetaError({
-        code: preflight.errorCode,
-        error_subcode: preflight.errorSubcode,
-        message: preflight.errorMessage,
-        type: preflight.errorType,
-      });
+    const provider = new ThreadsInsightsProvider({ token: account.access_token, signal: req.signal, startedAt });
+    const preflight = await provider.identity();
+    if (preflight.error) {
+      const cls = preflight.error;
       const needsReauth = cls.reason === "invalid_token" || cls.reason === "expired_token";
+      await logger.warn("Threads insights identity refused", { event: "identity_refused", reason: cls.reason }, userId);
       return structured({
-        reason: needsReauth ? cls.reason : (cls.reason === "unknown" ? "invalid_token" : cls.reason),
-        message: cls.message || "Threads token preflight failed",
-        meta: { code: cls.code, subcode: cls.subcode, type: cls.type },
+        reason: cls.reason,
+        message: cls.message,
+        meta: { code: cls.code, subcode: cls.subcode },
         needsReauth,
+        retryAt: preflight.retryAt,
       });
     }
 
-    const threadsUserId = preflight.threadsUserId || account.platform_user_id;
-    const accessToken = account.access_token;
+    if (preflight.data.id !== account.platform_user_id) {
+      await logger.warn("Threads insights token identity mismatch", { event: "identity_mismatch" }, userId);
+      return structured({ reason: "wrong_account", message: "The Threads connection must be renewed.", needsReauth: true });
+    }
+    const threadsUserId = account.platform_user_id;
 
     // Compute period windows (UNIX seconds)
     const nowSec = Math.floor(Date.now() / 1000);
@@ -171,9 +157,9 @@ export async function handler(req: Request): Promise<Response> {
 
     // Fetch current period totals + previous period totals + time series in parallel
     const [currentTotals, previousTotals, timeSeries] = await Promise.all([
-      fetchProfileTotals(threadsUserId, accessToken, sinceSec, untilSec),
-      fetchProfileTotals(threadsUserId, accessToken, prevSinceSec, prevUntilSec),
-      fetchProfileTimeSeries(threadsUserId, accessToken, sinceSec, untilSec),
+      provider.profile({ userId: threadsUserId, metrics: ALL_PROFILE_METRICS, since: sinceSec, until: untilSec }),
+      provider.profile({ userId: threadsUserId, metrics: ALL_PROFILE_METRICS, since: prevSinceSec, until: prevUntilSec }),
+      provider.profile({ userId: threadsUserId, metrics: TIME_SERIES_METRICS, since: sinceSec, until: untilSec, metricType: "time_series" }),
     ]);
 
     await logger.info("Threads Insights — period requests", {
@@ -185,17 +171,18 @@ export async function handler(req: Request): Promise<Response> {
       current_status: currentTotals.status,
       previous_status: previousTotals.status,
       time_series_status: timeSeries.status,
-      current_error: currentTotals.data?.error,
+      current_error: currentTotals.error,
     }, userId);
 
-    if (currentTotals.data?.error) {
-      const cls = classifyMetaError(currentTotals.data.error);
+    if (currentTotals.error) {
+      const cls = currentTotals.error;
       return structured({
         reason: cls.reason,
         message: cls.message,
-        meta: { code: cls.code, subcode: cls.subcode, type: cls.type },
+        meta: { code: cls.code, subcode: cls.subcode },
         needsPermission: cls.reason === "permission_not_approved" || cls.reason === "missing_scope",
         needsReauth: cls.reason === "invalid_token" || cls.reason === "expired_token",
+        retryAt: currentTotals.retryAt,
       });
     }
 
@@ -219,7 +206,7 @@ export async function handler(req: Request): Promise<Response> {
     const dailyMap: Record<string, number[]> = {};
     if (Array.isArray(timeSeries.data?.data)) {
       for (const m of timeSeries.data.data) {
-        const values = Array.isArray(m.values) ? m.values.map((v: any) => Number(v.value) || 0) : [];
+        const values = Array.isArray(m.values) ? m.values.map((v) => Number(v.value) || 0) : [];
         dailyMap[m.name] = values;
       }
     }
@@ -242,33 +229,26 @@ export async function handler(req: Request): Promise<Response> {
     }
 
     // Recent posts
-    const postsUrl = `https://graph.threads.net/v1.0/${threadsUserId}/threads?fields=id,text,timestamp,media_type,media_url,permalink,shortcode,thumbnail_url&limit=25&access_token=${encodeURIComponent(accessToken)}`;
-    let posts: any[] = [];
-    try {
-      const postsRes = await fetch(postsUrl);
-      const postsData = await postsRes.json();
-      if (postsData.data && Array.isArray(postsData.data)) posts = postsData.data;
-    } catch (e) {
+    const listing = await provider.recentPosts(threadsUserId);
+    const posts: ThreadsPost[] = listing.data?.data ?? [];
+    if (listing.error) {
       await logger.warn("Error fetching Threads posts", {
         event: "posts_fetch_error",
         platform: "threads",
-        error_message: (e as Error).message,
+        reason: listing.error.reason,
       }, userId);
     }
 
     // Per-post insights
     const postsWithMetrics: any[] = [];
-    for (const post of posts) {
+    const postResponses = await loadPostMetrics(provider, posts);
+    for (const { post, insights: postInsights } of postResponses) {
       const postMetrics: Record<string, number> = { views: 0, likes: 0, replies: 0, reposts: 0, quotes: 0, shares: 0 };
-      try {
-        const piRes = await fetch(`https://graph.threads.net/v1.0/${post.id}/insights?metric=views,likes,replies,reposts,quotes,shares&access_token=${encodeURIComponent(accessToken)}`);
-        const piData = await piRes.json();
-        if (piData.data && Array.isArray(piData.data)) {
-          for (const m of piData.data) {
-            postMetrics[m.name] = m.total_value?.value ?? m.values?.[0]?.value ?? 0;
-          }
+      if (postInsights.data) {
+        for (const m of postInsights.data.data) {
+          postMetrics[m.name] = m.total_value?.value ?? m.values?.[0]?.value ?? 0;
         }
-      } catch { /* skip */ }
+      }
 
       postsWithMetrics.push({
         id: post.id,
@@ -280,6 +260,13 @@ export async function handler(req: Request): Promise<Response> {
         thumbnail_url: post.thumbnail_url,
         metrics: postMetrics,
       });
+    }
+    const failedPostInsights = postResponses.filter((entry) => entry.insights.error);
+    if (failedPostInsights.length) {
+      await logger.warn("Threads post insights refused", {
+        event: "post_insights_refused", failed_count: failedPostInsights.length,
+        reasons: Array.from(new Set(failedPostInsights.map((entry) => entry.insights.error!.reason))),
+      }, userId);
     }
 
     // Activity: posts in current vs previous period
@@ -355,17 +342,18 @@ export async function handler(req: Request): Promise<Response> {
       periodDays,
       username: account.platform_username,
       threadsUserId,
+      partial: Boolean(previousTotals.error || timeSeries.error || listing.error || postResponses.some((entry) => entry.insights.error)),
+      retryAt: [currentTotals, previousTotals, timeSeries, listing, ...postResponses.map((entry) => entry.insights)]
+        .map((reply) => reply.retryAt).find((retryAt) => retryAt !== null) ?? null,
     });
 
   } catch (error) {
-    const errMsg = (error as Error).message || "Insights fetch failed";
     await logger.error("Threads Insights — internal error", {
       event: "insights_internal_error",
       platform: "threads",
-      error_message: errMsg,
-      error_stack: (error as Error).stack,
+      error_type: error instanceof TypeError ? "type_error" : "unexpected",
     }, userId);
-    return structured({ reason: "unknown", message: errMsg });
+    return structured({ reason: "unknown", message: "Threads insights failed." }, 500);
   }
 }
 

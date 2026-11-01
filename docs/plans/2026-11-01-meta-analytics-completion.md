@@ -82,6 +82,8 @@ Compare 7 closed days using the exact period/bucket semantics in spec §4.4 and 
 ### B3. Threads live path correctness
 
 **Account-selection slice implemented locally:** the [executed regression and behavior record](../journeys/2026-11-01-threads-account-selection.md) covers explicit-selector refusal, failed-read handling, input validation and JWT identity precedence. This is an independent correctness repair; B3 remains incomplete until the versioned metric semantics, time/call bounds and pagination below pass.
+
+**Provider-bounds slice implemented locally:** the [provider correction record](../journeys/2026-11-01-threads-provider-bounds.md) covers the production-consumed bounded transport, response validation, token-identity refusal, throttle parking, bounded post concurrency and sanitized failures. Legacy response compatibility is retained; the unified metric semantics and continuation pagination below remain open. This does not establish a measured end-to-end proxy deadline or any live API capability.
 - File: `supabase/functions/threads-insights/index.ts` (split into handler + provider adapter per `ARCHITECTURE.md` if the file shape requires it).
 - Account selection: requested `accountId` missing/inactive/foreign → rejected, DB error → 5xx, no fallback, provider not called.
 - Decoding: missing metric, failed previous period, one failed post → `unavailable` in the new versioned response; multi-day series preserved.
