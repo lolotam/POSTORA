@@ -12,6 +12,7 @@
  */
 
 import { corsHeaders, handleCorsOptions, jsonResponse } from "../_shared/cors.ts";
+import { ReportHistoryUnavailableError } from "./readHistory.ts";
 import {
   type OwnerReportCursor,
   type OwnerReportPeriodDays,
@@ -212,6 +213,13 @@ export function createInstagramInsightsReportHandler(deps: ReportHandlerDeps) {
         return jsonResponse({ error: { code: err.code, message: err.message } }, 400);
       }
 
+      if (err instanceof ReportHistoryUnavailableError) {
+        console.error("Instagram report refused an incomplete history read:", err.message);
+        return jsonResponse(
+          { error: { code: "HISTORY_UNAVAILABLE", message: "Report history could not be read completely. Try again later." } },
+          503,
+        );
+      }
       console.error("Failed to generate Instagram insights report:", err);
       return jsonResponse(
         { error: { code: "INTERNAL_ERROR", message: "Failed to generate report" } },

@@ -76,7 +76,7 @@ Deno.test("report composition preserves authenticated identity and account owner
       "/rest/v1/ig_account_profile_observations",
     ].includes(url.pathname)) {
       databaseReads++;
-      return Response.json([]);
+      return Response.json([], { headers: { "Content-Range": "*/0" } });
     }
     throw new Error(`Unexpected report HTTP boundary: ${url.pathname}`);
   };
@@ -125,6 +125,68 @@ Deno.test("report composition preserves authenticated identity and account owner
         assertEquals(response.status, 401);
         assertEquals((await response.json()).error.code, "UNAUTHORIZED");
         assertEquals(databaseReads, 0);
+      });
+    }
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+Deno.test("report composition pages the full stored inventory without treating database caps as end-of-list", async (test) => {
+  const originalFetch = globalThis.fetch;
+  const timestamp = new Date(Date.now() - 3 * 86_400_000).toISOString();
+  const snapshots = Array.from({ length: 522 }, (_, index) => ({
+    id: `00000000-0000-4000-8000-${index.toString().padStart(12, "0")}`,
+    user_id: OWNER_ID, social_account_id: ACCOUNT_ID, ig_media_id: `media-${Math.floor(index / 2)}`,
+    published_at: timestamp, captured_at: timestamp, captured_on: timestamp.slice(0, 10),
+    capture_timezone: "UTC", media_product_type: "REELS", media_type: "VIDEO", status: "ok", views: 10,
+  }));
+  let mode: "ok" | "overflow" | "database_error" | "status_error" | "repeated_page" = "ok";
+  globalThis.fetch = async (input, init) => {
+    const request = new Request(input, init);
+    const url = new URL(request.url);
+    if (url.origin !== URL_BASE) throw new Error("Unexpected external report request");
+    if (url.pathname === "/rest/v1/social_accounts") {
+      return Response.json([{ id: ACCOUNT_ID, user_id: OWNER_ID, platform: "instagram", is_active: true }]);
+    }
+    if (url.pathname === "/rest/v1/rpc/read_instagram_collection_job_status") {
+      return mode === "status_error"
+        ? Response.json({ message: "status unavailable" }, { status: 500 }) : Response.json(null);
+    }
+    assertEquals(url.searchParams.get("user_id"), `eq.${OWNER_ID}`);
+    assertEquals(url.searchParams.get("social_account_id"), `eq.${ACCOUNT_ID}`);
+    if (url.pathname === "/rest/v1/ig_media_insight_snapshots") {
+      if (mode === "database_error") return Response.json({ message: "read failed" }, { status: 500 });
+      const afterId = url.searchParams.get("id")?.slice(3) ?? "";
+      const matching = snapshots.filter((row) => row.id > afterId);
+      const page = (mode === "repeated_page" ? snapshots : matching).slice(0, 37);
+      // Model a PostgREST max-rows setting smaller than the requested page size.
+      return Response.json(page, {
+        headers: { "Content-Range": `0-${page.length - 1}/${mode === "overflow" ? 20_001 : matching.length}` },
+      });
+    }
+    return Response.json([], { headers: { "Content-Range": "*/0" } });
+  };
+  try {
+    await test.step("all 261 distinct media remain reachable after duplicate captures and database pagination", async () => {
+      const ids = new Set<string>();
+      let cursor: unknown = null;
+      for (let page = 0; page < 3; page++) {
+        const response = await handler(reportRequest(SERVICE_KEY, { user_id: OWNER_ID, limit: 100, cursor }));
+        assertEquals(response.status, 200);
+        const report = await response.json();
+        for (const media of report.media.page.items) ids.add(media.mediaId);
+        cursor = report.media.page.nextCursor;
+        assertEquals(report.media.page.hasMore, page < 2);
+      }
+      assertEquals(ids.size, 261);
+      assertEquals(cursor, null);
+    });
+    for (const failure of ["overflow", "repeated_page", "database_error", "status_error"] as const) {
+      await test.step(`${failure} never returns a successful empty or truncated report`, async () => {
+        mode = failure;
+        const response = await handler(reportRequest(SERVICE_KEY, { user_id: OWNER_ID }));
+        assertEquals(response.status, failure === "overflow" || failure === "repeated_page" ? 503 : 500);
       });
     }
   } finally {

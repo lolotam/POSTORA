@@ -26,28 +26,10 @@ import {
   OwnerReportContractError,
 } from "./contracts.ts";
 import { assembleOwnerReport } from "./assemble.ts";
+import { readReportHistory, type HistoryClient } from "./readHistory.ts";
 
-export interface ReportStoreClient {
-  from(table: string): {
-    select(columns: string): {
-      eq(column: string, value: unknown): {
-        eq(column: string, value: unknown): {
-          eq(column: string, value: unknown): {
-            eq(column: string, value: unknown): {
-              maybeSingle(): Promise<{ data: Record<string, unknown> | null; error: Error | null }>;
-            };
-          };
-          order(column: string, options?: { ascending: boolean }): {
-            limit(count: number): Promise<{ data: Record<string, unknown>[] | null; error: Error | null }>;
-          };
-        };
-        order(column: string, options?: { ascending: boolean }): {
-          limit(count: number): Promise<{ data: Record<string, unknown>[] | null; error: Error | null }>;
-        };
-      };
-    };
-  };
-  rpc(fn: string, args: Record<string, unknown>): Promise<{ data: unknown; error: Error | null }>;
+export interface ReportStoreClient extends HistoryClient {
+  rpc(fn: string, args: Record<string, unknown>): Promise<{ data: unknown; error: { message: string } | null }>;
 }
 
 export function toMediaSnapshotRow(row: Record<string, unknown>): MediaSnapshotRow {
@@ -254,62 +236,42 @@ export class ReportStore {
     const windowStartMs = now.getTime() - periodDays * 86_400_000;
 
     // 2. Query ig_media_insight_snapshots for this account and user
-    const { data: rawMedia, error: mediaError } = await this.client
-      .from("ig_media_insight_snapshots")
-      .select(
-        "id, user_id, social_account_id, post_id, ig_media_id, published_at, captured_at, captured_on, capture_timezone, media_product_type, media_type, permalink, thumbnail_url, status, views, reach, likes, comments, saved, shares, total_interactions, follows, profile_visits, replies, ig_reels_avg_watch_time_ms"
-      )
-      .eq("user_id", userId)
-      .eq("social_account_id", socialAccountId)
-      .order("published_at", { ascending: false })
-      .limit(200);
-
-    if (mediaError) {
-      throw new Error(`Failed to load media snapshots: ${mediaError.message}`);
-    }
+    const historyScope = { userId, socialAccountId };
+    const signal = AbortSignal.timeout(20_000);
+    const rawMedia = await readReportHistory(this.client, historyScope, {
+      table: "ig_media_insight_snapshots",
+      columns:
+        "id, user_id, social_account_id, post_id, ig_media_id, published_at, captured_at, captured_on, capture_timezone, media_product_type, media_type, permalink, thumbnail_url, status, views, reach, likes, comments, saved, shares, total_interactions, follows, profile_visits, replies, ig_reels_avg_watch_time_ms",
+      timestamp: "captured_at", asOf: now.toISOString(),
+    }, signal);
 
     // 3. Query ig_account_insight_daily for this account and user
-    const { data: rawDaily, error: dailyError } = await this.client
-      .from("ig_account_insight_daily")
-      .select(
-        "id, user_id, social_account_id, metric_date, provider_date, period_start, period_end, provider_timezone, status, captured_at, reach, views, accounts_engaged, total_interactions, likes, comments, saves, shares, follows, unfollows"
-      )
-      .eq("user_id", userId)
-      .eq("social_account_id", socialAccountId)
-      .order("metric_date", { ascending: false })
-      .limit(100);
-
-    if (dailyError) {
-      throw new Error(`Failed to load daily insights: ${dailyError.message}`);
-    }
+    const rawDaily = await readReportHistory(this.client, historyScope, {
+      table: "ig_account_insight_daily",
+      columns:
+        "id, user_id, social_account_id, metric_date, provider_date, period_start, period_end, provider_timezone, status, captured_at, reach, views, accounts_engaged, total_interactions, likes, comments, saves, shares, follows, unfollows",
+      timestamp: "captured_at", asOf: now.toISOString(),
+    }, signal);
 
     // 4. Query ig_account_profile_observations for this account and user
-    const { data: rawProfiles, error: profileError } = await this.client
-      .from("ig_account_profile_observations")
-      .select(
-        "id, user_id, social_account_id, observed_at, observed_on, capture_timezone, status, followers_count, media_count"
-      )
-      .eq("user_id", userId)
-      .eq("social_account_id", socialAccountId)
-      .order("observed_at", { ascending: false })
-      .limit(50);
-
-    if (profileError) {
-      throw new Error(`Failed to load profile observations: ${profileError.message}`);
-    }
+    const rawProfiles = await readReportHistory(this.client, historyScope, {
+      table: "ig_account_profile_observations",
+      columns:
+        "id, user_id, social_account_id, observed_at, observed_on, capture_timezone, status, followers_count, media_count",
+      timestamp: "observed_at", asOf: now.toISOString(),
+    }, signal);
 
     // 5. Query status from read_instagram_collection_job_status
     let jobStatus: Record<string, unknown> | null = null;
-    try {
+    {
       const { data, error } = await this.client.rpc("read_instagram_collection_job_status", {
         p_target_kind: "owner",
         p_target_id: socialAccountId,
       });
-      if (!error && data) {
+      if (error) throw new Error(`Failed to load collection status: ${error.message}`);
+      if (data) {
         jobStatus = data as Record<string, unknown>;
       }
-    } catch {
-      // Graceful fallback if rpc is unavailable
     }
 
     // Map rows to contracts types

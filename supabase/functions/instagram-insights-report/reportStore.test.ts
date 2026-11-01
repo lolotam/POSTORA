@@ -48,19 +48,15 @@ function createMockClient(options: {
               };
             }
             return {
-              order: (_orderCol: string, _opts?: { ascending: boolean }) => ({
+              lte: (_timestamp: string, _asOf: string) => ({
+                order: (_orderCol: string, _opts?: { ascending: boolean }) => ({
                 limit: (_limitVal: number) => {
-                  if (table === "ig_media_insight_snapshots") {
-                    return Promise.resolve({ data: options.media ?? [], error: null });
-                  }
-                  if (table === "ig_account_insight_daily") {
-                    return Promise.resolve({ data: options.daily ?? [], error: null });
-                  }
-                  if (table === "ig_account_profile_observations") {
-                    return Promise.resolve({ data: options.profiles ?? [], error: null });
-                  }
-                  return Promise.resolve({ data: [], error: null });
+                  const rows = table === "ig_media_insight_snapshots" ? options.media ?? []
+                    : table === "ig_account_insight_daily" ? options.daily ?? []
+                    : options.profiles ?? [];
+                  return { abortSignal: (_signal: AbortSignal) => Promise.resolve({ data: rows, count: rows.length, error: null }) };
                 },
+                }),
               }),
             };
           },
