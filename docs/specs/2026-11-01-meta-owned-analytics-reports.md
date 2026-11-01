@@ -1,0 +1,25 @@
+# Persisted owned-account analytics reports (C4)
+
+This implements C4 of the [completion design](2026-11-01-meta-analytics-completion-design.md) and [plan](../plans/2026-11-01-meta-analytics-completion.md), after the C2/C3 candidate. Preparation is authorized; production application/deployment and the full Instagram G-X/pilot gates remain separate. No collection or credential mutation belongs to report reads.
+
+## Proven gaps and ownership
+
+Facebook `facebook-page-insights/report.ts` and Threads `threads-insights/unifiedReport.ts` currently build unified responses from live provider reads. Their existing direct routes remain compatible. A new `meta-owned-analytics-report` feature owns persisted report assembly, strict internal/browser HTTP handling, raw history decoding and signed history continuations. C5 and explicit unified proxy requests use it; default legacy proxy calls retain their existing endpoints. The existing canonical calendar, registry, aggregate/delta/freshness logic and response validator remain authoritative.
+
+Instagram `ReportStore.loadReportData` reads media, daily, profile and collection state in separate REST statements. A count-checked traversal prevents silent row truncation, but it cannot prevent a response mixing different database snapshots. Replace that production read with one owner-scoped stable SQL snapshot, preserving the legacy DTO and its bounded-history refusal. Keep failed storage reads distinct from absent history. Explicit unified negotiation must validate version and ownership and use verified per-metric provenance. No legacy null becomes a proven provider/permission error.
+
+The named Instagram account's last authorized diagnostic found no protected Page-linked credential binding. The canonical Instagram registry has no verified metric/calendar cells. Report implementation cannot repair that binding, choose a different target or promote stored legacy values as capability evidence. An unknown provider calendar must produce an explicit `window_mismatch` refusal after ownership validation. Completing Instagram availability remains dependent on the required capability/binding evidence; this limitation must remain visible in acceptance/deployment records.
+
+## Persisted response and pagination
+
+The new endpoint accepts only POST with `platform`, `accountId`, `periodDays` (7/14/30/90, default 7), `analyticsContractVersion: 1`, optional bounded `cursor`, and service-role acting `user_id`. Derive ordinary user identity through the existing auth helper; body owner IDs never replace it. Read saved history without requiring a live token and without provider HTTP. Current disconnected/expired/reauth state may mark the report failed while retaining saved values.
+
+A history continuation signs the platform, owner, account, frozen canonical period, report revision and last displayed publication tuple. It is separate from the bounded live-provider cursor format. Preserve timestamp precision from SQL for the keyset. Reconstruct and validate the signed calendar, bind requested day count and target, reject tampering or use across platforms/accounts/owners, and reject a changed report revision rather than mixing dataset versions. A cursor may finish its original closed period across midnight. The SQL reader returns limit plus one posts; display a bounded page and issue the next cursor only when another row exists.
+
+Use the current platform-owned single-snapshot history RPCs for Facebook/Threads, with current connection health added within the same database statement. Daily sums retain exact expected-day coverage. Daily `last` uses the exact final bucket; unique daily counts never become period totals. Point samples retain actual observation times and supported boundary rules. Post lifetime comparisons require the correctly selected prior saved snapshot, otherwise they stay unavailable. Unsupported/unverified definitions remain unavailable regardless of raw scalar content. Canonical validation is the final output boundary.
+
+## Required proof
+
+Real PostgreSQL tests cover ownership, caller role, health/history coherence, stable snapshot reads during concurrent writes, revision-bound keysets, timestamp ties, retention invalidation and bounded legacy history. Registered handler tests exercise actual saved captures through the report and proxy, zero values and independently retained unavailable causes, missing/expired permission state, body owner spoofing, failed reads and timeouts. Existing legacy/default and live routes keep compatibility tests. No read sends provider requests or changes collection controls, schedules, history or credentials.
+
+C3's remaining action-specific termination and mixed-unavailable integrated proofs continue alongside C4; existing unit/native SQL coverage is not relabelled as missing full journeys. C5 adoption follows completed endpoint/gateway/proxy negotiation. Production acceptance still requires full G-X, approved pilot operations, reconciliation and seven distinct successful scheduled due dates.
