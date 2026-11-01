@@ -6,7 +6,7 @@
  * - `ig_media_insight_snapshots` (media metrics and inventory)
  * - `ig_account_insight_daily` (daily interactions and follow breakdowns)
  * - `ig_account_profile_observations` (followers and media count history)
- * - `read_instagram_collection_job_status` (sync status and coverage)
+ * - owner-scoped collection jobs/checkpoints (sync status and coverage)
  *
  * Feeds pure `assembleOwnerReport` to construct the canonical OwnerReport v1 DTO.
  */
@@ -28,11 +28,7 @@ import {
 import { assembleOwnerReport } from "./assemble.ts";
 import { readReportHistory, type HistoryClient } from "./readHistory.ts";
 
-export interface ReportStoreClient extends HistoryClient {
-  rpc(fn: string, args: Record<string, unknown>): {
-    abortSignal(signal: AbortSignal): PromiseLike<{ data: unknown; error: { message: string } | null }>;
-  };
-}
+export type ReportStoreClient = HistoryClient;
 
 export function toMediaSnapshotRow(row: Record<string, unknown>): MediaSnapshotRow {
   return {
@@ -198,6 +194,44 @@ export function parseCompleteness(
 export class ReportStore {
   constructor(private readonly client: ReportStoreClient) {}
 
+  private ownerJobQuery(socialAccountId: string, userId: string) {
+    return this.client.from("instagram_collection_jobs")
+      .select("id, job_generation, status, captured_on, last_attempt_at, last_success_at, last_partial_at, retry_at, last_reason_code")
+      .eq("user_id", userId).eq("social_account_id", socialAccountId)
+      .eq("target_kind", "owner").eq("target_id", socialAccountId);
+  }
+
+  private async loadCollectionStatus(socialAccountId: string, userId: string, signal: AbortSignal) {
+    // The public status RPC is authenticated-only. Service-role reports read a
+    // deliberately narrow projection with structural ownership on every query.
+    const [latest, success, partial] = await Promise.all([
+      this.ownerJobQuery(socialAccountId, userId).order("captured_on", { ascending: false }).limit(1).abortSignal(signal).maybeSingle(),
+      this.ownerJobQuery(socialAccountId, userId).order("last_success_at", { ascending: false, nullsFirst: false }).limit(1).abortSignal(signal).maybeSingle(),
+      this.ownerJobQuery(socialAccountId, userId).order("last_partial_at", { ascending: false, nullsFirst: false }).limit(1).abortSignal(signal).maybeSingle(),
+    ]);
+    for (const read of [latest, success, partial]) {
+      if (read.error) throw new Error(`Failed to load collection status: ${read.error.message}`);
+    }
+    const job = latest.data;
+    if (!job) return null;
+    const checkpoint = await this.client.from("instagram_collection_job_checkpoints")
+      .select("inventory_truncated, inventory_partial, inventory_window_covered")
+      .eq("user_id", userId).eq("job_id", job.id).eq("job_generation", job.job_generation)
+      .abortSignal(signal).maybeSingle();
+    if (checkpoint.error) throw new Error(`Failed to load collection coverage: ${checkpoint.error.message}`);
+    return {
+      status: job.status, last_attempt_at: job.last_attempt_at,
+      last_success_at: success.data?.last_success_at ?? null,
+      last_partial_at: partial.data?.last_partial_at ?? null,
+      next_retry_at: job.retry_at, reason_code: job.last_reason_code,
+      inventory: {
+        truncated: checkpoint.data?.inventory_truncated ?? false,
+        partial: checkpoint.data?.inventory_partial ?? job.status === "partial",
+        window_covered: checkpoint.data?.inventory_window_covered ?? false,
+      },
+    };
+  }
+
   async loadAccount(
     socialAccountId: string,
     userId: string,
@@ -265,18 +299,8 @@ export class ReportStore {
       timestamp: "observed_at", asOf: now.toISOString(),
     }, signal);
 
-    // 5. Query status from read_instagram_collection_job_status
-    let jobStatus: Record<string, unknown> | null = null;
-    {
-      const { data, error } = await this.client.rpc("read_instagram_collection_job_status", {
-        p_target_kind: "owner",
-        p_target_id: socialAccountId,
-      }).abortSignal(signal);
-      if (error) throw new Error(`Failed to load collection status: ${error.message}`);
-      if (data) {
-        jobStatus = data as Record<string, unknown>;
-      }
-    }
+    // 5. Read status without treating a failed read as a missing job.
+    const jobStatus = await this.loadCollectionStatus(socialAccountId, userId, signal);
 
     // Map rows to contracts types
     const mappedMedia: MediaSnapshotRow[] = (rawMedia ?? []).map((r: Record<string, unknown>) =>

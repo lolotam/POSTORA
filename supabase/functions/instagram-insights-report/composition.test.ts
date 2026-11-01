@@ -74,6 +74,8 @@ Deno.test("report composition preserves authenticated identity and account owner
       "/rest/v1/ig_media_insight_snapshots",
       "/rest/v1/ig_account_insight_daily",
       "/rest/v1/ig_account_profile_observations",
+      "/rest/v1/instagram_collection_jobs",
+      "/rest/v1/instagram_collection_job_checkpoints",
     ].includes(url.pathname)) {
       databaseReads++;
       return Response.json([], { headers: { "Content-Range": "*/0" } });
@@ -132,6 +134,50 @@ Deno.test("report composition preserves authenticated identity and account owner
   }
 });
 
+Deno.test("service-role report reads narrow owner status and retains previous-day success", async () => {
+  const originalFetch = globalThis.fetch;
+  const jobId = "8e040000-0000-4000-8000-000000000001";
+  const previousSuccess = "2026-10-28T12:00:00Z";
+  globalThis.fetch = async (input, init) => {
+    const request = new Request(input, init);
+    const url = new URL(request.url);
+    if (url.origin !== URL_BASE) throw new Error("Unexpected external report request");
+    if (url.pathname === "/rest/v1/social_accounts") {
+      return Response.json([{ id: ACCOUNT_ID, user_id: OWNER_ID, platform: "instagram", is_active: true }]);
+    }
+    assertEquals(url.searchParams.get("user_id"), `eq.${OWNER_ID}`);
+    if (url.pathname === "/rest/v1/instagram_collection_jobs") {
+      assertEquals(url.searchParams.get("social_account_id"), `eq.${ACCOUNT_ID}`);
+      assertEquals(url.searchParams.get("target_id"), `eq.${ACCOUNT_ID}`);
+      assertEquals(url.searchParams.get("target_kind"), "eq.owner");
+      assertEquals(/lease|token|context/.test(url.searchParams.get("select") ?? ""), false);
+      const successQuery = url.searchParams.get("order")?.startsWith("last_success_at");
+      return Response.json([{
+        id: jobId, job_generation: 2, status: "queued", captured_on: "2026-10-29",
+        last_attempt_at: "2026-10-29T12:00:00Z", last_success_at: successQuery ? previousSuccess : null,
+        last_partial_at: null, retry_at: null, last_reason_code: null,
+      }]);
+    }
+    if (url.pathname === "/rest/v1/instagram_collection_job_checkpoints") {
+      assertEquals(url.searchParams.get("job_id"), `eq.${jobId}`);
+      assertEquals(url.searchParams.get("job_generation"), "eq.2");
+      return Response.json([{ inventory_truncated: false, inventory_partial: false, inventory_window_covered: false }]);
+    }
+    if (url.pathname.startsWith("/rest/v1/rpc/")) throw new Error("Report must not call an authenticated-only RPC with service role");
+    return Response.json([], { headers: { "Content-Range": "*/0" } });
+  };
+  try {
+    const response = await handler(reportRequest(SERVICE_KEY, { user_id: OWNER_ID }));
+    assertEquals(response.status, 200);
+    const report = await response.json();
+    assertEquals(Date.parse(report.freshness.lastSuccessAt), Date.parse(previousSuccess));
+    assertEquals(report.freshness.lastAttemptAt, "2026-10-29T12:00:00.000Z");
+    assertEquals(JSON.stringify(report).includes("lease_token"), false);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 Deno.test("report composition pages the full stored inventory without treating database caps as end-of-list", async (test) => {
   const originalFetch = globalThis.fetch;
   const timestamp = new Date(Date.now() - 3 * 86_400_000).toISOString();
@@ -149,11 +195,13 @@ Deno.test("report composition pages the full stored inventory without treating d
     if (url.pathname === "/rest/v1/social_accounts") {
       return Response.json([{ id: ACCOUNT_ID, user_id: OWNER_ID, platform: "instagram", is_active: true }]);
     }
-    if (url.pathname === "/rest/v1/rpc/read_instagram_collection_job_status") {
-      return mode === "status_error"
-        ? Response.json({ message: "status unavailable" }, { status: 500 }) : Response.json(null);
-    }
     assertEquals(url.searchParams.get("user_id"), `eq.${OWNER_ID}`);
+    if (url.pathname === "/rest/v1/instagram_collection_jobs") {
+      assertEquals(url.searchParams.get("target_kind"), "eq.owner");
+      assertEquals(url.searchParams.get("target_id"), `eq.${ACCOUNT_ID}`);
+      return mode === "status_error"
+        ? Response.json({ message: "status unavailable" }, { status: 500 }) : Response.json([]);
+    }
     assertEquals(url.searchParams.get("social_account_id"), `eq.${ACCOUNT_ID}`);
     if (url.pathname === "/rest/v1/ig_media_insight_snapshots") {
       if (mode === "database_error") return Response.json({ message: "read failed" }, { status: 500 });

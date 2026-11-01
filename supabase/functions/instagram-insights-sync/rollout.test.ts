@@ -1262,7 +1262,8 @@ export function createClient(url, key, options) {
       range() { return builder; },
       async maybeSingle() {
         probe.reads.push({ table, filters });
-        return rows(table, filters);
+        const answer = rows(table, filters);
+        return Array.isArray(answer.data) ? { ...answer, data: answer.data[0] ?? null } : answer;
       },
       async insert(row) {
         probe.inserts.push({ table, row, clientKey: key });
