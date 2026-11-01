@@ -58,7 +58,7 @@ Each step: approval → action → query evidence → record in the runbook.
 ### A8. Reconciliation
 Compare 7 closed days using the exact period/bucket semantics in spec §4.4 and tolerances in §9. Stability starts only after A7's separate schedule approval/activation; require seven distinct scheduled due-date receipts, not zero runs or seven retries of one run. Record expected/actual runs, outcomes, continuation/backoff, non-pilot exclusions and rollback evidence in `docs/journeys/`.
 
-**Batch A exit:** A1–A8 done; pilot stable and reconciled; rollback verified once (switch off → zero new writes).
+**Batch A exit:** A1–A8 done; pilot stable and reconciled; rollback verified once (switch off → zero new writes), then separately approved restoration of the same frozen candidate, switch/allow-list and exact enqueue/drain jobs. Verify active settings, one successful post-restoration scheduled receipt and zero non-pilot writes. A rehearsed rollback left disabled does not meet completion; widening remains unapproved.
 
 ---
 
@@ -73,6 +73,7 @@ Compare 7 closed days using the exact period/bucket semantics in spec §4.4 and 
 - A read-only probe per platform (script under `scripts/probes/` calling the Graph APIs with a stored token fetched server-side, or a service-role-only function action), producing a JSON + Markdown evidence record under `docs/journeys/` with the fields in spec §6. Tokens are never printed.
 - Facebook: Page token, `/{page-id}/insights` and `/{post-id}/insights` at the pinned Graph version; record deprecated metrics and replacements from current Meta documentation; granted scopes via token debug.
 - Threads: account and post insights, listing pagination, earliest available date per metric, maximum window.
+- Instagram: account/media metrics, exact-period reach, daily boundaries, follower observations and pagination. Reuse A7/A8 evidence only for the individual cells whose full §6 fields it proves; probe the remainder. All three platforms need verified registry evidence before unified UI adoption.
 - Run only against owner-approved accounts (spec §12).
 - Negative expired/revoked-token and missing-permission cases use sanitized fixtures through the real adapter boundary. Existing live negative states may be observed; creating one requires the separately approved disposable-account/recovery procedure in spec §6 and is not part of the read-only probe.
 **Done:** evidence committed; registry cells move from `unverified` to proven `available`/`not_offered`.
@@ -93,7 +94,7 @@ Compare 7 closed days using the exact period/bucket semantics in spec §4.4 and 
 ### B5. Registry update
 Fill the spec §4.3 mapping table and the registry from B2 evidence; update the spec in the same PR.
 
-**Batch B exit:** contract merged with parity tests; evidence records for both platforms; Threads and Facebook live paths return the versioned contract without breaking current consumers.
+**Batch B exit:** contract merged with parity tests; capability evidence for all three platforms; Threads and Facebook live paths return the versioned contract without breaking current consumers. Instagram endpoint adoption is explicitly implemented in C4 before C5.
 
 ---
 
@@ -103,6 +104,8 @@ Fill the spec §4.3 mapping table and the registry from B2 evidence; update the 
 Before any migration, a short ADR in `docs/specs/` chooses spec §8.2 option (a) or (b), based on the actual Instagram durable-job migration and `instagram-insights-sync/workerStore.ts`. It lists platform-neutral modules, business keys/indexes and capture-ID ownership from §8.1, retention cutoff and anchor preservation, exact lock/fence/deletion order and batch limits, plus platform-isolation, fencing, reconnect, retry-idempotency and retention/report race tests. C2 is blocked until this ADR is reviewed; omitted cleanup details are not left to migration-time guesses.
 
 ### C2. Migrations (owner approval to merge and to apply)
+Implement C1's concrete per-metric state/reason/source/window representation from spec §8.1 for all measurement kinds, including the additive Instagram extension required for C4. Worker → database → report tests preserve omitted, permission, credential and provider-failure causes independently within otherwise successful rows; true zero stays available. Row status plus nullable metric columns alone cannot satisfy this requirement.
+
 Additive migrations for spec §8.1 tables and reviewed C1 model: enforce the declared daily/post/capture uniqueness keys, owner-first indexes, composite ownership/platform foreign keys, current-claim/generation write fences, and the 365-day retention cutoff with its profile anchor. Switches default off, allow-lists are empty, and collection/retention cron entries are created inactive. SQL tests cover RLS/grants, cross-owner and platform isolation, duplicate response writes, same-day recapture, stale retries, deterministic follower-boundary selection, retention edges/anchors and races against active collection/reporting. Retention activation needs a reviewed dry run and a separate later approval.
 
 ### C3. Sync workers
@@ -111,13 +114,19 @@ Per-platform provider adapters and workers reusing the platform-neutral modules 
 ### C4. Report functions
 Per-platform report endpoints returning the contract (§8.3), ownership per request, service-role identity as in A2, cursor codec as in A3. Proxy (`serviceProxy.ts` `get_post_analytics`) gains a Facebook branch behind the versioned contract.
 
+Instagram's `instagram-insights-report`, gateway and proxy explicitly gain `analyticsContractVersion: 1` negotiation before C5. Preserve the default legacy DTO; reject unsupported versions. Map verified capabilities and C2's per-metric provenance, and leave missing exact-period totals unavailable. Tests cover real endpoint/proxy legacy, unified and unsupported-version paths; UI adoption cannot precede this task.
+
 ### C5. Unified UI
 Shared components under `src/features/analytics-contract/ui/` (account/period picker, summary cards, trends, top posts, sync-status banner, metric definition tooltip). Instagram, Facebook and Threads screens migrate to them; the Threads panel moves to the versioned response, after which the legacy shape can be retired in a separate change. Component tests for every `MetricValue` status and sync status.
 
 ### C6. Pilot per platform (owner-approved operations)
+Before activating schedules, separately approve and execute the exact platform-switch change and the addition of the one named target to its empty allow-list. Read back both settings and prove non-pilot targets remain excluded. Target selection alone does not enable collection.
+
 For Facebook, then Threads: approve and deploy the reviewed candidate; separately approve one named pilot target; separately approve and activate the exact per-platform daily-enqueue/drain jobs before starting the stability window. Each schedule manifest records real cron names/cadences, candidate and account scope, timezone, the seven expected due dates, run/receipt evidence and provider budgets; blank manifests block activation. Require seven distinct scheduled due-date successes (not zero runs or duplicate retries), reconciliation under spec §9, and zero non-pilot writes. Retention remains off unless separately approved after its dry run. Rehearsed rollback disables the platform switch/eligibility and deactivates its enqueue/drain jobs, then proves inactivity/no further writes. Widening remains a separate approval.
 
 ### C7. Acceptance journeys and handover
+Before C7, separately approve and execute restoration after the C6 rollback rehearsal: same reviewed candidate, named target, platform switch, allow-list and exact enqueue/drain schedules. Verify active flags, one successful post-restoration scheduled receipt and zero non-pilot writes. Disabled collection after rehearsal cannot satisfy Batch C exit; widening is still a separate approval.
+
 Run the approved production pilot journeys in spec §10 plus isolated fixture journeys for missing/expired/revoked permission states. Do not alter pilot credentials to manufacture failures. Any optional live destructive negative case requires the dedicated disposable-account approval and recovery procedure. Record fixture versus live evidence separately, write the user-facing journey in `docs/journeys/`, and update the status review.
 
 **Batch C exit = spec §1 completion criterion.**
@@ -157,3 +166,6 @@ The Codex record above describes its original draft review. Subsequent GitHub fi
 | Storage keys, follower selection and retention were unspecified | Business uniqueness/indexes, capture-response idempotency, current-claim fences, deterministic boundary samples, 365-day cutoff/anchor policy and a required C1 locking/deletion ADR before migrations. |
 | Capability verification was conflated with collection state | Explicit registry capability/evidence fields and `capability_unverified` reason. |
 | Read-only probes/journeys forced live grant changes | Fixture negative tests by default; pre-existing live negatives may be observed, while any deliberate live mutation needs a separately approved disposable account and recovery procedure. |
+| Rollback ended with collection disabled; Facebook/Threads targets never enabled | C6 explicitly changes the approved switch/allow-list before schedules. Batch A/C completion additionally requires separately approved restoration, active-setting evidence and a successful post-restoration scheduled receipt. |
+| Instagram had no capability evidence or unified endpoint task | B2/B5 cover all three platforms; C4 implements Instagram endpoint/gateway/proxy version negotiation before C5 migration. |
+| Nullable measurements lost individual failure causes and credential errors | Spec §4 adds `reauth_required`; §8.1 and C1/C2 require durable per-metric provenance, including additive Instagram support and worker/database/report round-trip tests. |
