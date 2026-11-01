@@ -1,3 +1,4 @@
+import { useAnalyticsLabels } from "./useAnalyticsLabels";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
@@ -13,6 +14,7 @@ import { SavedAnalyticsReport } from "./SavedAnalyticsReport";
 export function OwnedAnalyticsScreen({ platform, gateway = supabaseSavedAnalytics }: { platform: AnalyticsPlatform; gateway?: SavedAnalyticsGateway }) {
   const { user } = useAuth();
   const { t } = useTranslation("analytics");
+  const labels = useAnalyticsLabels();
   const [selectedAccountId, setSelectedAccountId] = useState<string | null>(null);
   const [periodDays, setPeriodDays] = useState<AnalyticsPeriodDays>(7);
   const { accounts, accountId, reports } = useSavedAnalytics({ ownerId: user?.id ?? null, platform, gateway, selectedAccountId, periodDays });
@@ -44,7 +46,7 @@ export function OwnedAnalyticsScreen({ platform, gateway = supabaseSavedAnalytic
         {reports.isLoading && <p role="status">{t("owned.loading", "Loading saved analytics…")}</p>}
         {reports.isError && <div role="alert" className="rounded-lg border p-4">{revisionChanged
           ? t("owned.historyChanged", "Saved history changed. Refresh the report before continuing.")
-          : t(`owned.reasons.${errorReason}`, t("owned.readFailed", "Saved analytics could not be loaded. Please retry."))}
+          : labels.reasons[errorReason] ?? t("owned.readFailed", "Saved analytics could not be loaded. Please retry.")}
           <Button variant="outline" disabled={reports.isFetching} onClick={refresh}>{t("owned.refresh", "Refresh report")}</Button>
         </div>}
         {first && !revisionChanged && <SavedAnalyticsReport report={first} posts={Array.from(new Map(pages.flatMap((page) => page.posts.items).map((post) => [post.id, post])).values())} />}

@@ -29,7 +29,7 @@ describe("saved analytics presentation", () => {
     report.sync.reason = status === "failed" ? "reauth_required" : null;
     report.metrics.find((metric) => metric.definition.key === "views")!.current = { status: "available", value: 923 };
     render(<SavedAnalyticsReport report={report} />);
-    expect(screen.getByRole("status")).toHaveTextContent(status);
+    expect(screen.getByRole("status")).toHaveTextContent({ never_synced: "Never synced", syncing: "Syncing", fresh: "Up to date", stale: "Needs updating", partial: "Partial data", failed: "Sync failed; saved data remains available" }[status]);
     expect(screen.getByText("923")).toBeVisible();
   });
 
