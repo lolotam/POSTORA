@@ -196,3 +196,25 @@ Deno.test("permit time is charged before a provider request can start", async ()
     assertEquals(calls, 0);
   } finally { Date.now = originalNow; }
 });
+
+Deno.test("a rate limit observed while another permit waits prevents its HTTP request", async () => {
+  let permits = 0;
+  let calls = 0;
+  let release: () => void = () => undefined;
+  const waitingPermit = new Promise<void>((resolve) => { release = resolve; });
+  const retryAt = new Date(Date.now() + 60_000).toISOString();
+  const transport = new MetaAnalyticsTransport({ origin: "https://graph.threads.net", version: "v1.0", token: TOKEN,
+    signal: new AbortController().signal, startedAt: Date.now(), fallbackReason: "provider_error", rateLimitedReason: "rate_limited",
+    failureMessage: "Synthetic failure", beforeRequest: async () => { if (++permits === 2) await waitingPermit; },
+    classifyFailure: (status) => status === 429 ? { status, data: null, retryAt,
+      error: { kind: "provider", reason: "rate_limited", message: "Synthetic throttle" } } : null,
+    fetch: async () => { calls++; return Response.json({ error: {} }, { status: 429 }); } });
+  const first = transport.request(["me"], {}, z.object({ id: z.string() }));
+  const waiting = transport.request(["me"], {}, z.object({ id: z.string() }));
+  assertEquals((await first).error?.reason, "rate_limited");
+  release();
+  const refused = await waiting;
+  assertEquals(refused.error?.reason, "rate_limited");
+  assertEquals(refused.retryAt, retryAt);
+  assertEquals(calls, 1);
+});

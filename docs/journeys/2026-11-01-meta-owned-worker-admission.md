@@ -8,7 +8,7 @@ C2 requires a current trusted permission observation before enqueue/claim, while
 
 The registered `meta-owned-analytics-sync` route currently accepts only the implemented `admit` action. It verifies cron/service authority, bounds and validates the body, checks app configuration before account secrets, uses restricted CORS, verifies the real grant debugger and operational account identity, and persists observed scopes through C2's post-response fence. Missing required permissions remain an explicit refusal after truthful observation. No permission or owner fields are accepted from the request.
 
-The shared Meta transport now calls a real per-request permit outside its provider catch and recalculates time/call budgets afterwards. A stale or unknown store result therefore stops before the next provider request. Concurrent permits cannot exceed the physical call cap. The route has a 40-second overall bound, five-second dependencies and bounded final audit; unknown writes are never retried or reported as success.
+The shared Meta transport now calls a real per-request permit outside its provider catch and recalculates time/call budgets afterwards. A stale or unknown store result therefore stops before the next provider request. Concurrent permits cannot exceed the physical call cap, and a rate limit observed while another permit waits prevents that pending HTTP request. The route has a 40-second overall bound, five-second dependencies and bounded final audit; unknown writes are never retried or reported as success.
 
 ## Executed evidence
 
@@ -16,7 +16,7 @@ The shared Meta transport now calls a real per-request permit outside its provid
 |---|---|
 | Before implementation | Admission SQL suite failed because the required credential-reader RPC did not exist. |
 | Fresh PostgreSQL | Repository baseline +143 migrations +61 baseline suites +1 isolated suite passed in the labelled disposable harness, cron launcher off. The expanded admission suite then passed again, including expired protected User token refusal. |
-| Actual registered HTTP with synthetic driver/provider boundaries | 21 tests /95 steps passed across the new composition suite and existing Threads provider/Facebook composition suites. Includes scopes, user/app/Page identity, malformed responses, revoked/unknown permits, unknown writes, caller-field refusal, configuration/body limits and ignored abort. |
+| Actual registered HTTP with synthetic driver/provider boundaries | 22 tests /95 steps passed across the new composition suite and existing Threads provider/Facebook composition suites. Includes scopes, user/app/Page identity, malformed responses, revoked/unknown permits, unknown writes, caller-field refusal, configuration/body limits, ignored abort, concurrent call ceilings and a throttle observed during a pending permit. |
 | Actual registered HTTP with real SQL | Both platforms passed normal admission, exclusion before the second provider request and exclusion before observation persistence: 1 test /6 steps. Exactly six real audit rows, no collection jobs; fixture settings/owner restored by cleanup. Only provider HTTP and the PostgREST network driver were replaced. |
 | Existing concurrency | All 18 real-session cases passed again; 14 actual PostgreSQL Lock waits observed. |
 | Types | Three added function blocks match the actual disposable catalog signatures. Existing upstream HTTP-wrapper types were preserved. Deno typechecking of route/composition/integration passed. |

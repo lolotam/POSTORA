@@ -98,6 +98,7 @@ export class MetaAnalyticsTransport<Reason extends string> {
     remaining = this.deadline - Date.now();
     if (this.options.signal.aborted) return this.failure(0, "aborted");
     if (remaining <= 0 || this.calls >= (this.options.maxCalls ?? 32)) return this.failure(0, "budget");
+    if (this.throttled) return { ...this.failure(429, "provider", this.options.rateLimitedReason), retryAt: this.retryAt };
     const url = new URL(`${this.options.origin}/${this.options.version}/${path.map(encodeURIComponent).join("/")}`);
     for (const [key, value] of Object.entries(query)) url.searchParams.set(key, String(value));
     const timeout = AbortSignal.timeout(Math.max(1, Math.min(remaining, this.options.requestTimeoutMs ?? 4_000)));
