@@ -49,6 +49,8 @@ Create distinctly scoped artifacts: `scripts/check-instagram-owner-analytics-gat
 
 They do **not** implement or pass the canonical `scripts/check-instagram-release-gates.mjs` G-X gate. Its full acceptance inventory, including unresolved competitor work, remains fail-closed and unchanged. A7 is blocked until the authoritative release prerequisites pass or Waleed explicitly approves a scope amendment in the owning release-gates specification. This plan does not grant that amendment or mark competitor acceptance passed.
 
+The [recorded owner decision](../specs/2026-10-30-instagram-release-gates.md) retains the complete G-X gate before the owner pilot. No limited exception was approved; A7 remains blocked by the full gate.
+
 ### A7. Pilot — owner-approved operations
 After the A6 prerequisite decision, gates by name from the release-gates spec §6: **B1** (manifest/preflight for the frozen A2–A5 candidate), **B2** (deploy that reviewed candidate — separate approval), **B3** (pilot user list), **C1–C2** (reconnect; session/refresh regression), **C3** (test post — separate approval), **D1** (RC-proven target admission), and **D2** (one named owner; zero provider calls for others).
 Each step: approval → action → query evidence → record in the runbook.

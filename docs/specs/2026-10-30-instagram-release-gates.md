@@ -2,6 +2,8 @@
 
 > **Status reconciliation, 2026-11-01:** the authoring baseline below is preserved. The [Meta analytics status review](../journeys/2026-11-01-meta-analytics-status.md) records subsequent merges, read-only production observations and unresolved defects. Its status inventory does not check any acceptance row or B–E approval box in this specification.
 
+> **Owner scope decision, 2026-11-01:** Waleed selected **retain the complete G-X gate before the owner pilot** when asked about a limited owner-only exception. No exception is approved. Isolated owner-readiness proofs do not waive unresolved competitor acceptance or admit a production owner pilot. This decision changes no acceptance requirement and authorizes no merge, deployment, probe, credential change, target activation or schedule; separately requested read-only verification retains its own authorization record.
+
 Date: 2026-10-30. Status: documentation only; implementation and production approval pending.
 
 **Outcome:** an evidence-backed release handoff covering every approved acceptance ID, deterministic local journeys, and separately approved production activation. A passing component test, merged file, or HTTP 200 is not a completed journey or live Meta acceptance.

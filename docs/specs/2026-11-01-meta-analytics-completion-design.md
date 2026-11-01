@@ -86,7 +86,25 @@ Registry platform configuration also declares `staleAfterSeconds`, a positive in
 
 Reach, views, impressions, engagements (with components: likes, comments/replies, shares/reposts, saves, quotes), followers (point-in-time count and net change), per-post performance, previous-period delta.
 
+`profile_views` is a separate normalized key from content `views`. The selected Threads account's provider metric named `views` describes profile visits; its post-level metric describes content views. Account profile visits must never be relabelled as content views or compared as the same measure across platforms. Cumulative follower counts use `last`/observation comparison, never daily summation.
+
 The per-platform mapping table is **filled from the live probe evidence (§6)**, not from memory. An unverified registry cell maps to `unavailable: capability_unverified`; verified absence maps to `not_offered`. `not_collected` is reserved for verified capabilities whose collection has not run or is off. None of these states proves permission for a specific account.
+
+The [live evidence record](../journeys/2026-11-01-meta-live-capabilities.md) now establishes the following candidate meanings. These are not fully verified registry entries: provider calendar, exact-window behavior, retention and remaining permission prerequisites still need the complete §6 evidence. Definitions came from actual provider response metadata captured at `2026-11-01T05:03:27Z`; no private measurement values are reproduced here.
+
+| Platform / level | Provider metric / observed version | Normalized meaning | Aggregation constraint |
+|---|---|---|---|
+| Facebook account | `page_media_view` / `v25.0` | Content displays, including Page posts, stories and ads; candidate `views`. | Sum only complete aligned daily buckets; preserve the inclusive content definition. |
+| Facebook account | `page_total_media_view_unique` / `v25.0` | Unique media viewers; candidate unique-audience metric. | `not_summable`; exact-period reach remains unavailable without a proven provider total. |
+| Facebook account | `page_post_engagements` / `v25.0` | Daily post interaction actions. | Sum only complete aligned daily buckets; never label as unique engaged accounts. |
+| Facebook account | `page_follows` / `v25.0` | Cumulative lifetime follower balance, despite response `period: day`. | `last`; never sum across days or treat a daily snapshot as new follows. |
+| Facebook post | `post_media_view`, `post_total_media_view_unique` / `v25.0` | Observed numeric lifetime views / unique viewers; unique metric also returns daily rows. | Select the proven row/window explicitly; never mix daily and lifetime rows. |
+| Threads account | `views` / requested `v1.0` | Profile visits; `profile_views`. | Keep all daily buckets and validate calendar coverage before aggregation. |
+| Threads account | `likes`, `replies`, `reposts`, `quotes` / requested `v1.0` | Interaction action totals; returned without dated daily buckets in the initial capture. | Do not invent daily trends from these totals; exact requested-window behavior remains to be verified. |
+| Threads account | `followers_count` / requested `v1.0` | Current total follower count. | Point-in-time observation; growth requires two valid persisted boundary samples. |
+| Threads post | `views`, `likes`, `replies`, `reposts`, `quotes`, `shares` / requested `v1.0` | Observed numeric lifetime per-post metrics. | Preserve lifetime scope; do not claim these are interactions occurring within the selected reporting period. |
+
+`post_engaged_users` was explicitly rejected as an invalid insights metric on the observed Facebook surface. That rejection alone neither identifies its replacement nor proves all post-engagement metrics are unavailable. Instagram's selected Page-linked account has no protected credential binding, so no live metric-support claim is made for it.
 
 ### 4.4 Period and delta
 
@@ -200,4 +218,6 @@ Per platform, on production for the approved pilot account: open analytics → c
 
 Retention activation is also a distinct owner decision: approve the bounded dry run first, then separately approve the exact retention switch, deletion scope and cleanup schedule after reviewing its counts. Neither a collection-switch approval nor a general cron approval authorizes production deletion.
 
-Each needs Waleed's explicit approval at the time it happens: merging migrations; applying migrations in production; deploying canaries; enabling any collection switch or allow-list entry; activating any cron; naming pilot accounts; running live probes against those accounts; widening rollout.
+The owner's explicit task to test one connected account per platform authorizes the bounded read-only verification in §6. The operator records one active owned probe target per platform before execution; this selection is not admission to a collection pilot. An additional confirmation is unnecessary for those already requested reads. The scope excludes token renewal/revocation, permission changes, posts, analytics writes, collection switches, allow-list admission, schedules and paid Apify. Probe evidence in the public repository contains capability metadata, not private account measurements or credentials; detailed measurements remain in a restricted evidence location.
+
+Each needs Waleed's explicit approval at the time it happens: merging migrations; applying migrations in production; deploying canaries; enabling any collection switch or allow-list entry; activating any cron; naming collection pilot accounts; live probes beyond the already requested bounded verification; widening rollout.
