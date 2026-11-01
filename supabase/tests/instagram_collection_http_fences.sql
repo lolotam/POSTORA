@@ -56,12 +56,24 @@ INSERT INTO http_fence_claim SELECT c FROM public.claim_instagram_collection_job
 WHERE c->>'social_account_id'='f1120000-0000-4000-8000-000000000001';
 
 DO $success$
-DECLARE c jsonb; receipt jsonb; payload jsonb;
+DECLARE c jsonb; receipt jsonb; payload jsonb; claim_arg uuid; generation_arg bigint;
 BEGIN
   SELECT claim INTO STRICT c FROM http_fence_claim;
   payload := jsonb_build_object('kind','owner_profile_observation','items',jsonb_build_array(jsonb_build_object('observed_at',now(),'status','ok','metrics',jsonb_build_object('followers_count',42,'media_count',0))));
   receipt := public.persist_instagram_collection_snapshot_http((c->>'job_id')::uuid,(c->>'claim_token')::uuid,(c->>'job_generation')::bigint,payload);
   ASSERT (receipt->>'written')::integer=1, 'HTTP wrapper must execute the real writer';
+  FOR claim_arg,generation_arg IN
+    SELECT * FROM (VALUES
+      ('f1140000-0000-4000-8000-000000000099'::uuid,(c->>'job_generation')::bigint),
+      ((c->>'claim_token')::uuid,(c->>'job_generation')::bigint+1)
+    ) invalid_claims(token,generation)
+  LOOP
+    BEGIN
+      PERFORM public.persist_instagram_collection_snapshot_http((c->>'job_id')::uuid,claim_arg,generation_arg,payload);
+      RAISE EXCEPTION 'wrong claim token or generation was accepted';
+    EXCEPTION WHEN SQLSTATE 'PT409' THEN NULL;
+    END;
+  END LOOP;
 END $success$;
 RESET ROLE;
 
