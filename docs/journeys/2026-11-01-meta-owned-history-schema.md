@@ -16,13 +16,15 @@ Retention uses independent scope, parent-first fences and live-lease exclusion. 
 
 | Boundary | Result |
 |---|---|
-| Fresh disposable PostgreSQL | Updated main, including #332, plus C2: repository baseline + 142 migrations + 59 baseline suites + 1 isolated suite passed. Includes both HTTP-fence and C2 primary SQL suites, with the cron launcher disabled before restoration. |
+| Fresh disposable PostgreSQL | Updated main, including #332, plus C2: repository baseline + 142 migrations + 60 baseline suites + 1 isolated suite passed. Includes HTTP-fence, C2 primary and claim-fairness SQL suites, with the cron launcher disabled before restoration. |
 | Real concurrent SQL sessions | 18 cases passed across Facebook/Threads, with 14 actual PostgreSQL Lock waits observed. Covers switch/scope changes in both orders, credentials, collection/retention exclusion and report revision invalidation. |
 | Type catalog | C2 table/FK/function blocks refreshed from that applied disposable catalog; frontend typecheck passed. No production catalog or credentials used. |
 | Production build | Passed; existing bundle-size warnings remain. |
 | Independent reviews | Separate source review of migration/SQL suite and tooling review found no blocking findings. Reviewers did not rerun database suites. Source/test guards applied. |
 
 The primary suite includes failed-before-fix regressions for Facebook's literal Page/post separator and Instagram pending-response/legacy overwrite. It also verifies same-day supersession, exact totals, zero/missing values, follower 24-hour boundaries and deterministic ties, cross-owner/platform FKs, retention cutoff edges, more than 500 historical children, safe partial stops and no-op revisions.
+
+C3 source tracing exposed a claim fairness defect: ordering equal-due jobs only by ID let a partially completed target immediately reclaim ahead of an unvisited account. The new two-owner regression failed on the original Facebook claim, then passed for both platforms after ordering by `due_at, updated_at, id` and using `clock_timestamp()` for force/claim/completion timestamps. The same transaction exercises the complete real admission/permission/enqueue/claim/completion path and proves older due dates still take priority. The full fresh harness and all 18 races (14 observed Lock waits) passed again after that correction. Earlier independent reviews did not cover this later fairness fix; it received the source/test guard pass.
 
 Local logs and JSON reports stay under `.tmp/` and are excluded from commits. The race runner validates the disposable container label, pins its inspected ID, requires a `_harness` database and restores its synthetic settings/owner in cleanup. CI runs the SQL harness first, installs Python inside the disposable Alpine image, then executes the same race runner.
 

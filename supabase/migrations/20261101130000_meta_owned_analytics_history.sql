@@ -202,7 +202,9 @@ CREATE TABLE public.fb_analytics_collection_jobs (
 );
 CREATE INDEX fb_analytics_jobs_due ON public.fb_analytics_collection_jobs(state,retry_at,due_at,id);
 CREATE INDEX fb_analytics_jobs_owner ON public.fb_analytics_collection_jobs(user_id,social_account_id,due_on DESC);
-CREATE INDEX fb_analytics_jobs_claim_target ON public.fb_analytics_collection_jobs(user_id,social_account_id,due_at,id) WHERE state IN ('pending','running','partial','retry');
+-- Equal-due jobs yield to the least recently served target. Claim/completion
+-- use wall-clock updated_at so several RPCs in one transaction also yield.
+CREATE INDEX fb_analytics_jobs_claim_target ON public.fb_analytics_collection_jobs(user_id,social_account_id,due_at,updated_at,id) WHERE state IN ('pending','running','partial','retry');
 CREATE TABLE public.fb_analytics_collection_operations (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),job_id uuid NOT NULL,user_id uuid NOT NULL,social_account_id uuid NOT NULL,
   platform text NOT NULL DEFAULT 'facebook' CHECK(platform='facebook'),job_generation bigint NOT NULL CHECK(job_generation>0),
@@ -359,7 +361,7 @@ CREATE TABLE public.threads_analytics_collection_jobs (
 );
 CREATE INDEX threads_analytics_jobs_due ON public.threads_analytics_collection_jobs(state,retry_at,due_at,id);
 CREATE INDEX threads_analytics_jobs_owner ON public.threads_analytics_collection_jobs(user_id,social_account_id,due_on DESC);
-CREATE INDEX threads_analytics_jobs_claim_target ON public.threads_analytics_collection_jobs(user_id,social_account_id,due_at,id) WHERE state IN ('pending','running','partial','retry');
+CREATE INDEX threads_analytics_jobs_claim_target ON public.threads_analytics_collection_jobs(user_id,social_account_id,due_at,updated_at,id) WHERE state IN ('pending','running','partial','retry');
 CREATE TABLE public.threads_analytics_collection_operations (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),job_id uuid NOT NULL,user_id uuid NOT NULL,social_account_id uuid NOT NULL,
   platform text NOT NULL DEFAULT 'threads' CHECK(platform='threads'),job_generation bigint NOT NULL CHECK(job_generation>0),
@@ -668,7 +670,7 @@ BEGIN
   SELECT * INTO v_job FROM public.fb_analytics_collection_jobs WHERE user_id=p_user_id AND social_account_id=p_account_id AND due_on=p_due_on FOR UPDATE;
   IF p_force THEN
     UPDATE public.fb_analytics_collection_jobs SET job_generation=job_generation+1,state='pending',claim_token=NULL,lease_until=NULL,
-      credential_authority=NULL,completed_at=NULL,last_success_at=NULL,retry_at=NULL,reason_code=NULL,updated_at=now() WHERE id=v_job.id RETURNING * INTO v_job;
+      credential_authority=NULL,completed_at=NULL,last_success_at=NULL,retry_at=NULL,reason_code=NULL,updated_at=clock_timestamp() WHERE id=v_job.id RETURNING * INTO v_job;
   END IF;
   RETURN jsonb_build_object('job_id',v_job.id,'job_generation',v_job.job_generation,'state',v_job.state,'due_at',v_job.due_at,'next_due_at',v_job.next_due_at);
 END;
@@ -688,12 +690,12 @@ BEGIN
   SELECT array_agg(DISTINCT (e#>>'{}')::uuid) INTO v_accounts FROM jsonb_array_elements(v_hint) e;
   FOR v_candidate IN SELECT j.id,j.user_id,j.social_account_id FROM unnest(v_accounts) h(account_id)
     JOIN public.social_accounts a ON a.id=h.account_id AND a.platform='facebook'
-    CROSS JOIN LATERAL(SELECT q.id,q.user_id,q.social_account_id,q.due_at FROM public.fb_analytics_collection_jobs q
+    CROSS JOIN LATERAL(SELECT q.id,q.user_id,q.social_account_id,q.due_at,q.updated_at FROM public.fb_analytics_collection_jobs q
       WHERE q.user_id=a.user_id AND q.social_account_id=a.id AND q.state IN ('pending','running','partial','retry')
         AND q.due_on>=(clock_timestamp() AT TIME ZONE 'America/Los_Angeles')::date-365
         AND (q.retry_at IS NULL OR q.retry_at<=clock_timestamp()) AND (q.lease_until IS NULL OR q.lease_until<=clock_timestamp())
-        AND q.due_at<=clock_timestamp() ORDER BY q.due_at,q.id LIMIT 1) j
-    ORDER BY j.due_at,j.id LOOP
+        AND q.due_at<=clock_timestamp() ORDER BY q.due_at,q.updated_at,q.id LIMIT 1) j
+    ORDER BY j.due_at,j.updated_at,j.id LOOP
     EXIT WHEN jsonb_array_length(v_jobs)>=p_limit;
     BEGIN
       PERFORM public.meta_analytics_lock_account(v_candidate.social_account_id,v_candidate.user_id,'facebook',true);
@@ -708,7 +710,7 @@ BEGIN
       UPDATE public.fb_analytics_collection_jobs SET
         job_generation=job_generation+CASE WHEN credential_authority IS NOT NULL AND credential_authority IS DISTINCT FROM v_authority THEN 1 ELSE 0 END,
         state='running',claim_token=v_claim,lease_until=clock_timestamp()+interval '120 seconds',credential_authority=v_authority,
-        attempts=attempts+1,retry_at=NULL,updated_at=now() WHERE id=v_job.id RETURNING * INTO v_job;
+        attempts=attempts+1,retry_at=NULL,updated_at=clock_timestamp() WHERE id=v_job.id RETURNING * INTO v_job;
       v_jobs:=v_jobs||jsonb_build_array(jsonb_build_object('job_id',v_job.id,'user_id',v_job.user_id,'account_id',v_job.social_account_id,
         'job_generation',v_job.job_generation,'claim_token',v_job.claim_token,'lease_until',v_job.lease_until,'authority',v_authority,
         'due_on',v_job.due_on,'due_at',v_job.due_at,'next_due_at',v_job.next_due_at));
@@ -849,7 +851,7 @@ BEGIN
   SELECT * INTO v_job FROM public.threads_analytics_collection_jobs WHERE user_id=p_user_id AND social_account_id=p_account_id AND due_on=p_due_on FOR UPDATE;
   IF p_force THEN
     UPDATE public.threads_analytics_collection_jobs SET job_generation=job_generation+1,state='pending',claim_token=NULL,lease_until=NULL,
-      credential_authority=NULL,completed_at=NULL,last_success_at=NULL,retry_at=NULL,reason_code=NULL,updated_at=now() WHERE id=v_job.id RETURNING * INTO v_job;
+      credential_authority=NULL,completed_at=NULL,last_success_at=NULL,retry_at=NULL,reason_code=NULL,updated_at=clock_timestamp() WHERE id=v_job.id RETURNING * INTO v_job;
   END IF;
   RETURN jsonb_build_object('job_id',v_job.id,'job_generation',v_job.job_generation,'state',v_job.state,'due_at',v_job.due_at,'next_due_at',v_job.next_due_at);
 END;
@@ -869,12 +871,12 @@ BEGIN
   SELECT array_agg(DISTINCT (e#>>'{}')::uuid) INTO v_accounts FROM jsonb_array_elements(v_hint) e;
   FOR v_candidate IN SELECT j.id,j.user_id,j.social_account_id FROM unnest(v_accounts) h(account_id)
     JOIN public.social_accounts a ON a.id=h.account_id AND a.platform='threads'
-    CROSS JOIN LATERAL(SELECT q.id,q.user_id,q.social_account_id,q.due_at FROM public.threads_analytics_collection_jobs q
+    CROSS JOIN LATERAL(SELECT q.id,q.user_id,q.social_account_id,q.due_at,q.updated_at FROM public.threads_analytics_collection_jobs q
       WHERE q.user_id=a.user_id AND q.social_account_id=a.id AND q.state IN ('pending','running','partial','retry')
         AND q.due_on>=(clock_timestamp() AT TIME ZONE 'America/Los_Angeles')::date-365
         AND (q.retry_at IS NULL OR q.retry_at<=clock_timestamp()) AND (q.lease_until IS NULL OR q.lease_until<=clock_timestamp())
-        AND q.due_at<=clock_timestamp() ORDER BY q.due_at,q.id LIMIT 1) j
-    ORDER BY j.due_at,j.id LOOP
+        AND q.due_at<=clock_timestamp() ORDER BY q.due_at,q.updated_at,q.id LIMIT 1) j
+    ORDER BY j.due_at,j.updated_at,j.id LOOP
     EXIT WHEN jsonb_array_length(v_jobs)>=p_limit;
     BEGIN
       PERFORM public.meta_analytics_lock_account(v_candidate.social_account_id,v_candidate.user_id,'threads',true);
@@ -889,7 +891,7 @@ BEGIN
       UPDATE public.threads_analytics_collection_jobs SET
         job_generation=job_generation+CASE WHEN credential_authority IS NOT NULL AND credential_authority IS DISTINCT FROM v_authority THEN 1 ELSE 0 END,
         state='running',claim_token=v_claim,lease_until=clock_timestamp()+interval '120 seconds',credential_authority=v_authority,
-        attempts=attempts+1,retry_at=NULL,updated_at=now() WHERE id=v_job.id RETURNING * INTO v_job;
+        attempts=attempts+1,retry_at=NULL,updated_at=clock_timestamp() WHERE id=v_job.id RETURNING * INTO v_job;
       v_jobs:=v_jobs||jsonb_build_array(jsonb_build_object('job_id',v_job.id,'user_id',v_job.user_id,'account_id',v_job.social_account_id,
         'job_generation',v_job.job_generation,'claim_token',v_job.claim_token,'lease_until',v_job.lease_until,'authority',v_authority,
         'due_on',v_job.due_on,'due_at',v_job.due_at,'next_due_at',v_job.next_due_at));
@@ -1399,7 +1401,7 @@ BEGIN
     last_success_at=CASE WHEN p_outcome='success' THEN clock_timestamp() ELSE last_success_at END,
     last_partial_at=CASE WHEN p_outcome='partial' THEN clock_timestamp() ELSE last_partial_at END,
     retry_at=CASE WHEN p_outcome='retry' THEN p_retry_at WHEN p_outcome='partial' THEN clock_timestamp() ELSE NULL END,
-    reason_code=p_reason,claim_token=NULL,lease_until=NULL,updated_at=now() WHERE id=p_job_id;
+    reason_code=p_reason,claim_token=NULL,lease_until=NULL,updated_at=clock_timestamp() WHERE id=p_job_id;
   UPDATE public.fb_analytics_report_state SET report_revision=report_revision+1,updated_at=now() WHERE social_account_id=v_job.social_account_id AND user_id=v_job.user_id;
   RETURN jsonb_build_object('job_id',p_job_id,'job_generation',p_job_generation,'state',p_outcome,
     'on_time',p_outcome='success' AND clock_timestamp()<v_job.next_due_at,'due_at',v_job.due_at,'next_due_at',v_job.next_due_at);
@@ -1508,7 +1510,7 @@ BEGIN
     last_success_at=CASE WHEN p_outcome='success' THEN clock_timestamp() ELSE last_success_at END,
     last_partial_at=CASE WHEN p_outcome='partial' THEN clock_timestamp() ELSE last_partial_at END,
     retry_at=CASE WHEN p_outcome='retry' THEN p_retry_at WHEN p_outcome='partial' THEN clock_timestamp() ELSE NULL END,
-    reason_code=p_reason,claim_token=NULL,lease_until=NULL,updated_at=now() WHERE id=p_job_id;
+    reason_code=p_reason,claim_token=NULL,lease_until=NULL,updated_at=clock_timestamp() WHERE id=p_job_id;
   UPDATE public.threads_analytics_report_state SET report_revision=report_revision+1,updated_at=now() WHERE social_account_id=v_job.social_account_id AND user_id=v_job.user_id;
   RETURN jsonb_build_object('job_id',p_job_id,'job_generation',p_job_generation,'state',p_outcome,
     'on_time',p_outcome='success' AND clock_timestamp()<v_job.next_due_at,'due_at',v_job.due_at,'next_due_at',v_job.next_due_at);
