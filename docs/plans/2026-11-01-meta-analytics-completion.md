@@ -68,6 +68,7 @@ Compare 7 closed days using the exact period/bucket semantics in spec §4.4 and 
 - Files: `src/features/analytics-contract/domain/{types,registry,period,delta}.ts`, `supabase/functions/_shared/analyticsContract.ts`.
 - Implements spec §4: metric statuses, explicit registry capability/evidence fields, `capability_unverified` versus `not_collected`, per-metric coverage, `not_summable`, exact calendar/bucket boundaries, deltas, sync status and distinct `analyticsContractVersion: 1`.
 - Tests: unavailable never becomes `0`; rows present with missing metrics remain incomplete; true zeros; capability-state mapping; no unique-reach sums; timezone/boundary/DST cases; deltas; frontend/Deno parity of keys, statuses and version discriminator.
+- Parity compares the complete serialized schema/registry and shared behavioral fixtures as required by spec §4; limited key/status equality cannot pass. Include the platform `staleAfterSeconds` scope, unit and boundary cases.
 
 ### B2. Capability probes
 - A read-only probe per platform (script under `scripts/probes/` calling the Graph APIs with a stored token fetched server-side, or a service-role-only function action), producing a JSON + Markdown evidence record under `docs/journeys/` with the fields in spec §6. Tokens are never printed.
@@ -101,6 +102,8 @@ Fill the spec §4.3 mapping table and the registry from B2 evidence; update the 
 ## Batch C — history and unified UI
 
 ### C1. Job-model decision record
+The ADR also defines spec §8.2's exact-period business key, concrete storage/indexes and same-day capture fencing before migrations; overlapping 7/30-day totals must never collide.
+
 Before any migration, a short ADR in `docs/specs/` chooses spec §8.2 option (a) or (b), based on the actual Instagram durable-job migration and `instagram-insights-sync/workerStore.ts`. It lists platform-neutral modules, business keys/indexes and capture-ID ownership from §8.1, retention cutoff and anchor preservation, exact lock/fence/deletion order and batch limits, plus platform-isolation, fencing, reconnect, retry-idempotency and retention/report race tests. C2 is blocked until this ADR is reviewed; omitted cleanup details are not left to migration-time guesses.
 
 ### C2. Migrations (owner approval to merge and to apply)
@@ -169,3 +172,4 @@ The Codex record above describes its original draft review. Subsequent GitHub fi
 | Rollback ended with collection disabled; Facebook/Threads targets never enabled | C6 explicitly changes the approved switch/allow-list before schedules. Batch A/C completion additionally requires separately approved restoration, active-setting evidence and a successful post-restoration scheduled receipt. |
 | Instagram had no capability evidence or unified endpoint task | B2/B5 cover all three platforms; C4 implements Instagram endpoint/gateway/proxy version negotiation before C5 migration. |
 | Nullable measurements lost individual failure causes and credential errors | Spec §4 adds `reauth_required`; §8.1 and C1/C2 require durable per-metric provenance, including additive Instagram support and worker/database/report round-trip tests. |
+| Contract parity, freshness, exact-period keys and reconciliation still had gaps | Full schema/registry parity plus shared behavior fixtures; explicit stale-age scope and threshold; exact-period identity in C1; deterministic count/percentage/observation comparisons; retries must finish before the next due date. Retention activation remains a separate decision. |

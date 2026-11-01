@@ -47,7 +47,7 @@ One contract, defined in the domain layer and mirrored once for Deno:
 
 - Frontend: `src/features/analytics-contract/domain/` (types, metric registry, pure helpers).
 - Edge: `supabase/functions/_shared/analyticsContract.ts`.
-- A parity test asserts that both copies expose the same metric keys, statuses and `analyticsContractVersion`.
+- A parity test compares the canonical serialized schema and registry in full: all fields, discriminated unions, unavailable reasons, coverage, registry metadata, period and sync-status constraints and `analyticsContractVersion`. Shared behavioral fixtures cover calendar, aggregation, delta and freshness rules in both runtimes; a deliberate isolated-copy mutation must fail parity. Matching only keys/status names is insufficient.
 
 ### 4.1 Metric value
 
@@ -81,6 +81,8 @@ Each registry entry states: `key`; `platform`; provider metric name and API vers
 `not_summable` metrics (for example unique reach) are never summed across days; a period value comes only from a provider period total or is `unavailable`. `views` and `impressions` are distinct keys; a platform that offers only one leaves the other `not_offered`.
 
 ### 4.3 Common metric set
+
+Registry platform configuration also declares `staleAfterSeconds`, a positive integer measured from the last successful persisted collection's `collectedAt` to evaluation time, for that platform's report sync state. The proposed pilot value is 172800 seconds for each platform, reviewed with B2 evidence before activation. Equality is fresh; a greater age is stale. Missing success is `never_synced`; active work, failed attempts and partial collection retain their explicit states rather than being masked by the age calculation. A provider's observation window and its data lag remain separate metadata; a historical period is not made stale merely because its `since` is old.
 
 Reach, views, impressions, engagements (with components: likes, comments/replies, shares/reposts, saves, quotes), followers (point-in-time count and net change), per-post performance, previous-period delta.
 
@@ -153,6 +155,8 @@ Ownership, RLS (deny by default), grants and metric whitelists follow the Instag
 
 ### 8.2 Collection jobs
 
+**Exact-period identity:** C1 must define storage and indexes for verified period-total measurements in addition to the daily/post/profile tables. The business key includes owner/account, level and subject ID, metric key, provider API version, provider timezone, exact normalized provider `since` and `until` bounds and UTC capture day. A 7-day and a 30-day total ending together are distinct keys. Same-day recapture uses the latest fenced capture; retries reuse their capture ID and cannot overwrite newer responses. C2 adds ownership/window constraints and tests for both overlapping windows, same-day recapture, stale retries and exact-boundary report selection before C3/C4 use the model. The C1 ADR names the concrete tables/representation; it cannot omit this identity.
+
 The Instagram job SQL and worker store are Instagram-only (§3), so they are **not** reused directly. Before any migration, the plan decides between:
 
 - (a) additive migrations that widen the job model to a platform-tagged target with per-platform credential contexts, or
@@ -162,7 +166,7 @@ Either way: applied migration bytes are never edited; platform isolation, lease 
 
 ### 8.3 Reports
 
-A report function per platform (or one function with per-platform assemblers) returns the contract, with ownership checked per request and service-role identity handled as in §5.2.
+A report function per platform (or one function with per-platform assemblers) returns the contract, with ownership checked per request and service-role identity handled as in §5, item 2.
 
 ## 9. Workstream 5 — unified UI and gradual rollout
 
@@ -174,6 +178,10 @@ A report function per platform (or one function with per-platform assemblers) re
 **Pilot stability gate (per platform):** measurement starts only after separate approval and activation of the exact pilot-only enqueue/drain schedule manifest. Each platform must have one scheduled collection for the named target on each of 7 consecutive closed provider-calendar days (7 distinct due-date receipts); drain invocations and duplicate retries do not count as additional scheduled collections. Every due collection succeeds or has a recorded retry to success, with no missed day, ownership/isolation failure, budget overrun or non-pilot writes. Zero scheduled runs cannot pass. The runbook records exact cron names/cadences, active flags, expected versus actual due dates, receipts and continuation/backoff evidence. Stop conditions include cross-owner reads, non-allow-listed writes, repeated permission errors, budget overrun and missed due dates. Rollback disables the target switch/eligibility and deactivates its enqueue/drain schedules; queries must prove inactivity and no further writes before the gate can be signed off. Canonical E2 wider-cohort/scale evidence remains separate.
 
 ## 10. Acceptance journeys
+
+Reconciliation additionally covers point-in-time and derived values. Point-in-time counts must exactly match the provider response for the same capture/`observedAt`, retained as sanitized evidence; a later live count is not an interchangeable reference. Follower net change must equal the difference of the two individually reconciled boundary observations, with both actual timestamps disclosed. Lifetime post counts use that post's same-capture provider values. Percentages require independently reconciled numerator/denominator and identical metric/window definitions; compare the recomputed percentage within 0.01 percentage points (two-decimal display precision). Previous-period absolute change must match exactly from reconciled inputs, while its percentage uses the same 0.01-point rule and stays unavailable for a zero/missing/incomplete previous value. A compact/rounded UI count, unmatched observation time or mismatched window is insufficient evidence; obtain the exact API reference or keep that acceptance pending.
+
+Each scheduled collection must succeed strictly before the next scheduled daily due instant for that target. A later retry may repair history but records the original due date as missed/stale and cannot pass the seven-day gate. Record due instant, completion instant, next-due deadline and retry lineage for every receipt; calendar/DST scheduling determines the deadline, not an assumed fixed day length.
 
 After each rollback rehearsal, completion requires a separate owner-approved restoration of the same frozen candidate, target eligibility/allow-list and exact enqueue/drain schedules, followed by active-setting evidence, a successful post-restoration scheduled collection and zero non-pilot writes. Rollback safety evidence is retained; a system left disabled cannot pass §1's scheduled-refresh requirement. This is restoration within the approved scope, not cohort widening.
 
@@ -187,5 +195,7 @@ Per platform, on production for the approved pilot account: open analytics → c
 - Migrations precede the runtime that depends on them; SQL tests cover ownership, grants and concurrency.
 
 ## 12. Approvals (owner decisions)
+
+Retention activation is also a distinct owner decision: approve the bounded dry run first, then separately approve the exact retention switch, deletion scope and cleanup schedule after reviewing its counts. Neither a collection-switch approval nor a general cron approval authorizes production deletion.
 
 Each needs Waleed's explicit approval at the time it happens: merging migrations; applying migrations in production; deploying canaries; enabling any collection switch or allow-list entry; activating any cron; naming pilot accounts; running live probes against those accounts; widening rollout.
