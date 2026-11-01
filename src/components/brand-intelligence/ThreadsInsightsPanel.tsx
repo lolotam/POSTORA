@@ -217,6 +217,11 @@ export function ThreadsInsightsPanel() {
     setError(null);
     setNeedsConnection(false);
     setNeedsPermission(false);
+    setInsights(null);
+    setPosts([]);
+    setAggregated(null);
+    setActivity(null);
+    setUsername(null);
 
     try {
       const body: Record<string, unknown> = { periodDays: period };

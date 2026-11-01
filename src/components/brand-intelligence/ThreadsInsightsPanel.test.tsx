@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import i18next from "@/i18n";
 import { ThreadsInsightsPanel } from "./ThreadsInsightsPanel";
 
@@ -17,6 +17,21 @@ afterEach(async () => {
 beforeEach(() => invoke.mockReset());
 
 describe("Threads selection refusals", () => {
+  it("clears the previous report when a changed period fails", async () => {
+    invoke.mockResolvedValueOnce({ data: {
+      ok: true, insights: { views: { value: 111, previous: 0, daily: [] } }, posts: [], username: "previous-account",
+    }, error: null }).mockResolvedValueOnce({ data: null, error: {
+      context: Response.json({ ok: false, reason: "storage_error" }, { status: 503 }),
+    } });
+    await i18next.changeLanguage("en");
+    render(<ThreadsInsightsPanel />);
+    expect(await screen.findByText("111", { exact: true })).toBeVisible();
+    fireEvent.pointerDown(screen.getByRole("combobox"), { button: 0, ctrlKey: false, pointerType: "mouse" });
+    fireEvent.click(await screen.findByRole("option", { name: "Last 14 days" }));
+    expect(await screen.findByText("Unable to load the Threads account. Please retry.")).toBeVisible();
+    expect(screen.queryByText("111", { exact: true })).not.toBeInTheDocument();
+  });
+
   it.each([
     ["account_not_found", "The selected Threads account is unavailable.", "حساب Threads المختار غير متاح."],
     ["storage_error", "Unable to load the Threads account. Please retry.", "تعذّر تحميل حساب Threads. جرّب مرة أخرى."],
