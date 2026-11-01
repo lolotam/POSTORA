@@ -623,6 +623,11 @@ jobs:
             --allow-read --allow-write --allow-env --allow-run \
             supabase/functions/competitor-snapshot-sync/rolloutIntegration.test.ts
 
+      - name: Verify analytics probe ownership against the migrated SQL harness
+        run: >-
+          python3 scripts/probes/check_meta_owned_analytics_sql.py
+          --container pg-harness --database partner_api_harness
+
       - name: Show Postgres logs on failure
         if: failure()
         run: docker logs pg-harness

@@ -1,5 +1,9 @@
 import io
 import json
+from pathlib import Path
+import subprocess
+import sys
+import time
 import unittest
 import urllib.error
 import urllib.parse
@@ -61,6 +65,37 @@ class CapabilityProbeTests(unittest.TestCase):
         self.assertGreater(timeout, 0)
         self.assertLessEqual(timeout, 5)
         self.assertEqual(transport.get("owner", "threads"), (0, {}, {}))
+
+    def test_invalid_or_oversized_http_success_stays_a_failed_metric_read(self):
+        for raw, failure in [(b"not-json", "invalid_json"), (b" " * 1_048_577, "response_too_large")]:
+            with self.subTest(failure=failure):
+                response = JsonResponse({})
+                response.seek(0)
+                response.truncate()
+                response.write(raw)
+                response.seek(0)
+                transport = probe.ProbeTransport("graph.threads.net", "v1.0", "synthetic-token", RecordingOpener([response]))
+                observation = next(probe.collect_observations(transport, "owner", "threads"))
+                self.assertEqual(observation["httpStatus"], 200)
+                self.assertEqual(observation["observation"], "provider_error")
+                self.assertEqual(observation["probeFailure"], failure)
+        self.assertEqual(probe.metric_observation({}, "views")["observation"], "provider_error")
+
+    def test_linux_request_alarm_or_unsupported_live_cli_refusal(self):
+        if hasattr(probe.signal, "setitimer"):
+            previous_handler = probe.signal.getsignal(probe.signal.SIGALRM)
+            with self.assertRaises(TimeoutError):
+                with probe.request_deadline(0.02):
+                    time.sleep(1)
+            self.assertEqual(probe.signal.getitimer(probe.signal.ITIMER_REAL), (0.0, 0.0))
+            self.assertEqual(probe.signal.getsignal(probe.signal.SIGALRM), previous_handler)
+        else:
+            completed = subprocess.run([sys.executable, str(Path(probe.__file__).resolve()),
+                                        "--owner", "8f14e45f-ceea-4e7a-9b1c-2d3e4f5a6b7c",
+                                        "--confirmed-account", "a1b2c3d4-e5f6-4a1b-8c2d-3e4f5a6b7c8d",
+                                        "--platform", "threads", "--version", "v1.0"], capture_output=True, text=True, timeout=5)
+            self.assertEqual(completed.returncode, 2)
+            self.assertIn("POSIX server request timers", completed.stderr)
 
     def test_listing_rebuilds_fixed_origin_and_stops_on_repeated_cursor(self):
         page = {"data": [{"id": "post1"}], "paging": {"next": "https://attacker.invalid/?access_token=secret", "cursors": {"after": "cursor1"}}}

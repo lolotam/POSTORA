@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
 """Read-only, server-side Facebook/Threads capability observations. Uses only Python stdlib."""
 import argparse
+from contextlib import contextmanager
 import datetime as dt
 import hashlib
 import json
 import math
 import re
+import signal
 import subprocess
 import time
 import urllib.error
@@ -14,6 +16,7 @@ import urllib.request
 import uuid
 
 DB_CONTAINER = "postorasupabase-supabase-j8axyh-supabase-db"
+DB_DATABASE = "postgres"
 FUNCTIONS_CONTAINER = "postorasupabase-supabase-j8axyh-supabase-edge-functions"
 METRICS = {
     "facebook": {"account": ["page_media_view", "page_total_media_view_unique", "page_post_engagements", "page_follows"],
@@ -53,10 +56,13 @@ def safe_usage(headers):
 def metric_observation(payload, metric):
     """Keep every numeric provider bucket; never synthesize zero or sum unique reach."""
     rows = payload.get("data") if isinstance(payload, dict) else None
+    if not isinstance(rows, list):
+        return {"observation": "provider_error", "reason": "provider_error", "probeFailure": "invalid_metric_response"}
     observations = []
-    for row in rows if isinstance(rows, list) else []:
+    for row in rows:
         if not isinstance(row, dict) or row.get("name") != metric:
             continue
+        row_start = len(observations)
         total = row.get("total_value")
         if isinstance(total, dict) and finite_number(total.get("value")):
             observations.append({"kind": "total_value", "value": total["value"]})
@@ -74,7 +80,7 @@ def metric_observation(payload, metric):
             observations.append(observation)
         period = row.get("period")
         if period in ("day", "week", "days_28", "lifetime"):
-            for observation in observations:
+            for observation in observations[row_start:]:
                 observation["providerPeriod"] = period
     return {"observation": "present" if observations else "absent", "measurements": observations}
 
@@ -84,14 +90,39 @@ def error_observation(status, payload):
     error = error if isinstance(error, dict) else {}
     code = error.get("code")
     reason = "reauth_required" if code == 190 else "permission_missing" if code in (10, 200) else "provider_error"
-    return {"observation": "provider_error", "reason": reason,
-            "providerCode": code if type(code) is int else None,
-            "providerSubcode": error.get("error_subcode") if type(error.get("error_subcode")) is int else None,
-            "throttled": status == 429 or code in (4, 17, 32, 613)}
+    observation = {"observation": "provider_error", "reason": reason,
+                   "providerCode": code if type(code) is int else None,
+                   "providerSubcode": error.get("error_subcode") if type(error.get("error_subcode")) is int else None,
+                   "throttled": status == 429 or code in (4, 17, 32, 613)}
+    failure = payload.get("__probe_failure") if isinstance(payload, dict) else None
+    if failure in ("invalid_json", "response_too_large"):
+        observation["probeFailure"] = failure
+    return observation
 
 
 class ProbeBudgetExceeded(Exception):
     pass
+
+
+@contextmanager
+def request_deadline(seconds):
+    # Injectable HTTP tests run on Windows too; the live CLI requires POSIX timers.
+    if not hasattr(signal, "setitimer"):
+        yield
+        return
+    if signal.getitimer(signal.ITIMER_REAL)[0] > 0:
+        raise RuntimeError("Probe cannot replace an existing request timer")
+
+    def expired(_number, _frame):
+        raise TimeoutError("Provider request deadline reached")
+
+    previous_handler = signal.signal(signal.SIGALRM, expired)
+    signal.setitimer(signal.ITIMER_REAL, seconds)
+    try:
+        yield
+    finally:
+        signal.setitimer(signal.ITIMER_REAL, 0)
+        signal.signal(signal.SIGALRM, previous_handler)
 
 
 class ProbeTransport:
@@ -106,28 +137,29 @@ class ProbeTransport:
         remaining = self.deadline - time.monotonic()
         if remaining <= 0 or self.calls >= 48:
             raise ProbeBudgetExceeded()
-        self.calls += 1
         if not re.fullmatch(r"[A-Za-z0-9_]+", subject) or not re.fullmatch(r"[a-z_]*", edge):
             raise ValueError("Invalid provider subject or edge")
         suffix = f"/{edge}" if edge else ""
         url = f"{self.base_url}/{subject}{suffix}?{urllib.parse.urlencode(parameters or {})}"
         request = urllib.request.Request(url, headers={"Authorization": f"Bearer {bearer or self.token}"})
+        self.calls += 1
         try:
-            response = self.opener.open(request, timeout=min(5, remaining))
-        except urllib.error.HTTPError as error:
-            response = error
+            with request_deadline(min(5, remaining)):
+                try:
+                    response = self.opener.open(request, timeout=min(5, remaining))
+                except urllib.error.HTTPError as error:
+                    response = error
+                with response:
+                    raw = response.read(1_048_577)
+                    if len(raw) > 1_048_576:
+                        return response.status, {"error": {}, "__probe_failure": "response_too_large"}, safe_usage(response.headers)
+                    try:
+                        payload = json.loads(raw)
+                    except (ValueError, UnicodeError):
+                        payload = {"error": {}, "__probe_failure": "invalid_json"}
+                    return response.status, payload, safe_usage(response.headers)
         except (urllib.error.URLError, TimeoutError, OSError):
             return 0, {}, {}
-        with response:
-            try:
-                raw = response.read(1_048_577)
-            except (TimeoutError, OSError):
-                return 0, {}, {}
-            try:
-                payload = json.loads(raw) if len(raw) <= 1_048_576 else {}
-            except (ValueError, UnicodeError):
-                payload = {}
-            return response.status, payload, safe_usage(response.headers)
 
 
 class NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -143,7 +175,7 @@ def read_account(owner_id, account_id, platform):
     query = f"""BEGIN READ ONLY; SELECT json_build_object('platform_user_id', platform_user_id,
         'access_token', access_token) FROM public.social_accounts
         WHERE user_id='{owner_id}' AND id='{account_id}' AND platform='{platform}' AND is_active; COMMIT;"""
-    read = subprocess.run(["docker", "exec", DB_CONTAINER, "psql", "-U", "postgres", "-d", "postgres",
+    read = subprocess.run(["docker", "exec", DB_CONTAINER, "psql", "-U", "postgres", "-d", DB_DATABASE,
                            "-X", "-qAt", "-v", "ON_ERROR_STOP=1", "-c", query],
                           capture_output=True, text=True, timeout=10, check=False)
     if read.returncode:
@@ -241,6 +273,8 @@ def main():
     parser.add_argument("--platform", required=True, choices=sorted(METRICS))
     parser.add_argument("--version", required=True, help="Explicit pinned provider version, e.g. v22.0 or v1.0")
     args = parser.parse_args()
+    if not hasattr(signal, "setitimer"):
+        parser.error("Live probes require the Postora POSIX server request timers")
     if not re.fullmatch(r"v[0-9]{1,2}\.0", args.version):
         parser.error("Expected pinned API version")
     report = {"scope": "read-only-capability-observation", "platform": args.platform, "requestedApiVersion": args.version,

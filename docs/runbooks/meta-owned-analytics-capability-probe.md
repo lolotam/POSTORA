@@ -26,7 +26,7 @@ python3 /tmp/postora-meta-owned-analytics.py \
 
 The metric names in `METRICS` are **probe candidates**, not verified registry entries. Each is requested independently so rejection of one does not erase the others. Account requests cover 7/14/30/90 closed UTC-day windows. These UTC request bounds do not establish the provider's bucket timezone. Listing checks at most two pages of two posts, records duplicate counts/repeated cursors/continuation, and probes the first returned post's candidate insights. No post is published or modified.
 
-The provider budget is 48 calls and 120 seconds, with each request limited to the remaining budget or five seconds. There are no retries. Every request has a fixed Meta origin; pagination rebuilds the request with the opaque `after` cursor and never follows `paging.next`. HTTP redirects are refused before forwarding credentials. Provider response bodies are capped at one MiB. Setup subprocesses have ten-second limits outside the provider budget.
+The provider budget is 48 calls and 120 seconds, with each request limited to the remaining budget or five seconds. A POSIX request alarm covers opening, reading and decoding, rather than relying only on a socket inactivity timeout; the live CLI refuses platforms without these timers. There are no retries. Every request has a fixed Meta origin; pagination rebuilds the request with the opaque `after` cursor and never follows `paging.next`. HTTP redirects are refused before forwarding credentials. Provider response bodies are capped at one MiB. Setup subprocesses each have a ten-second limit.
 
 Output is sanitized JSON: numeric measurements (including genuine zero), retained bucket end times/periods, request bounds, numeric provider error codes, selected numeric usage values and retry hints, plus an owner/account fingerprint. Tokens, raw provider URLs, post text, raw error messages and unapproved headers are excluded. Credential and permission errors remain distinguishable. Missing measurements remain absent and unique reach is never summed. Completed metric receipts survive a later budget exhaustion.
 
@@ -41,6 +41,15 @@ python3 -m unittest discover -s scripts/probes -p 'test_*.py' -v
 python3 scripts/probes/meta_owned_analytics.py --help
 ```
 
-Eight local tests passed. They cover true-zero/missing/multiple-bucket decoding, sanitized failures/usage, authenticated fixed-origin requests, repeated pagination, budget refusal/partial receipt retention, redirect refusal, failed account setup and granted-versus-declined permissions. HTTP and subprocess boundaries are replaced; these tests are not a live provider or real-database ownership receipt. CI runs them without credentials. Source/test/docs guard passes cover this operational tool. No production probe has run as part of its creation.
+Ten unit tests passed on Windows and on the Contabo Linux host. They cover true-zero/missing/multiple-bucket decoding, sanitized failures/usage, authenticated fixed-origin requests, repeated pagination, budget refusal/partial receipt retention, redirect refusal, failed account setup, granted-versus-declined permissions, invalid/oversized HTTP-200 responses, and request deadline enforcement. Windows verifies that the live CLI refuses unsupported timers; Linux verifies interruption and signal/timer restoration. The Linux run used reviewed copies in a temporary directory with matching SHA256 hashes and replaced HTTP/subprocess boundaries; it made no live Meta or account-database requests.
+
+The separate real SQL check also passed against the labelled local disposable database: exact owned account success plus four identical refusals for foreign, inactive, wrong-platform and nonexistent accounts. It creates only fixed synthetic identities after proving they do not exist, then removes those fixtures. It refuses remote Docker endpoints, shared container names and non-harness database names. CI runs this check against its already migrated Postgres harness:
+
+```sh
+python3 scripts/probes/check_meta_owned_analytics_sql.py \
+  --container postora-owner-release-pg --database postora_owner_release_harness
+```
+
+Independent review found that invalid JSON/oversized HTTP-200 reads could appear absent; the correction retains HTTP status and emits a sanitized decode-failure receipt. A socket inactivity timeout also proved insufficient for the elapsed deadline, prompting the POSIX alarm correction. Source/test/docs guards cover both fixes. No production capability probe has run as part of this work.
 
 At authoring time, the official Meta Page/Threads/Instagram insights documentation endpoints returned HTTP 429. Search results from third-party sites were not used to assert current metric support. B2/B5 remain open until approved live evidence and the unresolved semantics are reviewed.
