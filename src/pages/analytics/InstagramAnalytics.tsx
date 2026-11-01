@@ -1,3 +1,4 @@
+import { compareBrandMetric } from "@/lib/brandMetrics";
 import { useState, useMemo, useEffect } from "react";
 import { useTranslation } from "react-i18next";
 import { useNavigate, useSearchParams } from "react-router-dom";
@@ -91,7 +92,7 @@ export default function InstagramAnalytics({ defaultTab = "performance" }: Insta
 
   const [filters, setFilters] = useState<BrandScrapeFilters>(DEFAULT_FILTERS);
   const [selectedPost, setSelectedPost] = useState<BrandPost | null>(null);
-  const { profile, profileSource, posts, totalPosts, hasMore, isLoading, error, search, loadMore } = useBrandScrape();
+  const { profile, profileSource, posts, totalPosts, hasMore, isLoading, error, warning, reconnectRequired, search, loadMore } = useBrandScrape(session?.user.id);
 
   const { data: contentPostIds = new Set<string>() } = useQuery({
     queryKey: ["bi-content-post-ids", session?.user?.id],
@@ -124,14 +125,14 @@ export default function InstagramAnalytics({ defaultTab = "performance" }: Insta
       const ms: Record<string, number> = { "30d": 30 * 86400000, "3m": 90 * 86400000, "6m": 180 * 86400000, "1y": 365 * 86400000 };
       result = result.filter((p) => new Date(p.timestamp).getTime() > now - (ms[filters.period] || 0));
     }
-    if (filters.minEngagement > 0) result = result.filter((p) => p.engagementScore >= filters.minEngagement);
+    if (filters.minEngagement > 0) result = result.filter((p) => p.engagementScore !== null && p.engagementScore >= filters.minEngagement);
     const sorters: Record<string, (a: BrandPost, b: BrandPost) => number> = {
-      engagement: (a, b) => b.engagementScore - a.engagementScore,
-      likes: (a, b) => b.likesCount - a.likesCount,
-      comments: (a, b) => b.commentsCount - a.commentsCount,
-      views: (a, b) => (b.videoViewCount || 0) - (a.videoViewCount || 0),
-      shares: (a, b) => (b.sharesCount || 0) - (a.sharesCount || 0),
-      saves: (a, b) => (b.savesCount || 0) - (a.savesCount || 0),
+      engagement: (a, b) => compareBrandMetric(a, b, "engagementScore"),
+      likes: (a, b) => compareBrandMetric(a, b, "likesCount"),
+      comments: (a, b) => compareBrandMetric(a, b, "commentsCount"),
+      views: (a, b) => compareBrandMetric(a, b, "videoViewCount"),
+      shares: (a, b) => compareBrandMetric(a, b, "sharesCount"),
+      saves: (a, b) => compareBrandMetric(a, b, "savesCount"),
       newest: (a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime(),
       oldest: (a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime(),
     };
@@ -139,7 +140,7 @@ export default function InstagramAnalytics({ defaultTab = "performance" }: Insta
     return result;
   }, [posts, filters]);
 
-  const maxEngagement = useMemo(() => Math.max(...posts.map((p) => p.engagementScore), 0), [posts]);
+  const maxEngagement = useMemo(() => Math.max(...posts.flatMap((p) => p.engagementScore === null ? [] : [p.engagementScore]), 0), [posts]);
   const hasResults = profile !== null;
 
   return (
@@ -227,10 +228,13 @@ export default function InstagramAnalytics({ defaultTab = "performance" }: Insta
               </GradientRingCard>
             </Reveal>
 
-            {error && (
+            {(error || warning) && (
               <Reveal delay={120}>
                 <GradientRingCard variant="rose" padded={false} hoverLift={false} ringIntensity="subtle" innerClassName="p-4">
-                  <p className="text-sm text-rose-500">{error}</p>
+                  <p className="text-sm text-rose-500">{error || warning}</p>
+                  {reconnectRequired && <Button variant="outline" className="mt-3" onClick={() => navigate("/profiles")}>
+                    {t("actions.reconnectInstagram", "Reconnect Instagram")}
+                  </Button>}
                 </GradientRingCard>
               </Reveal>
             )}

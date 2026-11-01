@@ -39,9 +39,9 @@ export interface BrandProfile {
   fullName: string;
   bio: string;
   avatarUrl: string;
-  followersCount: number;
-  followingCount: number;
-  postsCount: number;
+  followersCount: number | null;
+  followingCount: number | null;
+  postsCount: number | null;
   isVerified: boolean;
   website?: string;
   platform: BrandPlatform;
@@ -61,13 +61,13 @@ export interface BrandPost {
   thumbnailUrl: string;
   mediaUrl?: string;
   caption: string;
-  likesCount: number;
-  commentsCount: number;
-  videoViewCount?: number;
-  sharesCount?: number;
-  savesCount?: number;
-  bookmarksCount?: number;
-  engagementScore: number;
+  likesCount: number | null;
+  commentsCount: number | null;
+  videoViewCount?: number | null;
+  sharesCount?: number | null;
+  savesCount?: number | null;
+  bookmarksCount?: number | null;
+  engagementScore: number | null;
   timestamp: string;
   permalink: string;
   // TikTok-specific

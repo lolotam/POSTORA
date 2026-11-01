@@ -7,7 +7,7 @@
  * Business Discovery queries on third-party competitor handles.
  */
 
-import { isDirectInstagramAccount } from "./messengerCredentials.ts";
+import type { InstagramAccountCapability } from "./facebookUserCredentialStore.ts";
 
 export interface ViewerCandidate {
   id: string;
@@ -15,11 +15,14 @@ export interface ViewerCandidate {
   platform: string;
   platform_user_id: string;
   access_token: string;
+  platform_username?: string | null;
   is_active: boolean;
   needs_reauth?: boolean | null;
   ig_auth_type?: string | null;
   account_metadata?: Record<string, unknown> | null;
   connected_at?: string | null;
+  /** Service-only capability read. Legacy metadata is never authoritative. */
+  capability?: InstagramAccountCapability;
 }
 
 export function pickBusinessDiscoveryViewer(accounts: ViewerCandidate[]): ViewerCandidate | null {
@@ -41,23 +44,20 @@ export function pickBusinessDiscoveryViewer(accounts: ViewerCandidate[]): Viewer
     }
 
     // 3. Must not be direct Instagram login (Business Discovery requires Facebook page-linked token)
-    if (isDirectInstagramAccount(acc)) {
+    if (acc.capability?.loginKind === "direct" ||
+      (acc.ig_auth_type && !["facebook_page", "facebook_business"].includes(acc.ig_auth_type))) {
       continue;
     }
 
-    // 4. Must have access token and platform_user_id
-    if (!acc.access_token || !acc.platform_user_id) {
+    // 4. The protected adapter supplies the token after selection.
+    if (!acc.platform_user_id) {
       continue;
     }
-
-    // 5. Inspect granted_scopes
-    const meta = acc.account_metadata ?? {};
-    const scopes = meta.granted_scopes;
 
     let priority = 2; // Default: unknown scopes
-
-    if (Array.isArray(scopes)) {
-      if (scopes.includes("instagram_manage_insights")) {
+    const capability = acc.capability;
+    if (capability?.permissionReadState === "ok" && capability.scopesAuthoritative) {
+      if (capability.grantedScopes.includes("instagram_manage_insights")) {
         priority = 1; // Preferred: explicitly granted
       } else {
         // Explicitly lacks required scope -> reject completely
@@ -83,7 +83,7 @@ export function pickBusinessDiscoveryViewer(accounts: ViewerCandidate[]): Viewer
     if (a.priority !== b.priority) {
       return a.priority - b.priority;
     }
-    return b.connectedTime - a.connectedTime;
+    return b.connectedTime - a.connectedTime || a.candidate.id.localeCompare(b.candidate.id);
   });
 
   return validCandidates[0].candidate;

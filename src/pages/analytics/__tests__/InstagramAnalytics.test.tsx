@@ -11,7 +11,7 @@ vi.mock("@/components/layout/DashboardLayout", () => ({
 vi.mock("@/hooks/useAuth", () => ({
   useAuth: () => ({
     user: { id: "test-user-id" },
-    session: { access_token: "test-token" },
+    session: { access_token: "test-token", user: { id: "test-user-id" } },
   }),
 }));
 

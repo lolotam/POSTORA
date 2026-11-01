@@ -35,7 +35,8 @@
     "transcribeAudio": "🎙 فرّغ الصوت",
     "transcribeVideo": "فرّغ الفيديو",
     "useForGeneration": "استخدمه لتوليد المحتوى",
-    "useInPost": "استخدم في المنشور"
+    "useInPost": "استخدم في المنشور",
+    "reconnectInstagram": "إعادة ربط Instagram"
   },
   "ads": {
     "adAccount": "حساب الإعلانات",
