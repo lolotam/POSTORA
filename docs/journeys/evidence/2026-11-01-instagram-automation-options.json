@@ -1,5 +1,5 @@
 {
-  "backend_candidate": "7f3185c3944c597632d144371e8d5a07aeb14bf3",
+  "backend_candidate": "413d55f8315144d542ef98565884c4e38ae4c5e1",
   "backend_base": "781111a8c8b5bc1296f8c82bbe575f2498b82748",
   "backend_files": [
     {
@@ -8,7 +8,7 @@
     },
     {
       "path": "supabase/functions/n8n-api/index.ts",
-      "sha256": "a9de5b784b092269ff4c2594bd57fc68e0cead09d2fc805b4f8da488eb17d9f2"
+      "sha256": "372b89df259b797da58c8e39bce649f7e382e004594eb7747ffb86d79ce7c964"
     }
   ],
   "node": {
@@ -46,15 +46,18 @@
   "checks": {
     "backend_composition_and_story_regressions": {
       "tests": 36,
-      "steps": 26
+      "steps": 27,
+      "candidate": "413d55f8315144d542ef98565884c4e38ae4c5e1"
     },
     "registered_composition_after_fixture_key_correction": {
       "tests": 1,
-      "steps": 26
+      "steps": 26,
+      "candidate": "7f3185c3944c597632d144371e8d5a07aeb14bf3"
     },
     "mcp_auth_and_proxy_regressions": {
       "tests": 150,
-      "existing_suite_no_check": true
+      "existing_suite_no_check": true,
+      "candidate": "7f3185c3944c597632d144371e8d5a07aeb14bf3"
     },
     "node_canonical_suites": {
       "files": 2,
@@ -63,7 +66,8 @@
     "node_typecheck": "passed",
     "node_build": "passed",
     "immutable_lint_i18n": "NO REGRESSIONS",
-    "graphify_update": "passed"
+    "graphify_update": "passed",
+    "immutable_lint_i18n_source_candidate": "413d55f8315144d542ef98565884c4e38ae4c5e1"
   },
   "local_artifacts": [
     {
@@ -105,6 +109,54 @@
     {
       "path": ".tmp/n8n-story-build-final.log",
       "sha256": "bbb0a30cc2325026d1f970d6828ba52979c9b4483759c709435bb115e5224f16"
+    },
+    {
+      "path": ".tmp/mcp-story-review-before.log",
+      "sha256": "bbec07cc3e226e58b38fef3c2ceadbe01827089caac910c4bc7ce10216901c29"
+    },
+    {
+      "path": ".tmp/mcp-story-review-after.log",
+      "sha256": "717e267b5d6976823901b86d470ec5bf02dc7d5fdcb04640f62f27c52089b85b"
+    },
+    {
+      "path": ".tmp/mcp-story-review-lint.json",
+      "sha256": "5fdb5bca9dd2e6c1782d4848ba26ff74fc5e60ebd5f9744f78f75efcdc3d1735"
+    },
+    {
+      "path": ".tmp/mcp-story-review-lint-fixed.json",
+      "sha256": "0f12fe9553cad9fe4618cebca2b2044d64ed7fd49f99e2e8b51add95ab9e1821"
+    },
+    {
+      "path": ".tmp/mcp-story-review-graphify.log",
+      "sha256": "7818f2c6840d44ff966ad5c3df36e4a6fabeb39c5f0fb305ed3480f861fc6941"
+    },
+    {
+      "path": ".tmp/mcp-story-review-lint-final.json",
+      "sha256": "cb2be3d5cdebf0b27cac25e832d3dd6526c3de0327a795a3d5414cc57ea22ae6"
+    },
+    {
+      "path": ".tmp/mcp-story-review-lint-final.md",
+      "sha256": "6a915fce4259c192909a9b322e4582aaf6e89c7246bcbddfe35925f270cd2f3a"
     }
-  ]
+  ],
+  "previous_backend_candidate": "7f3185c3944c597632d144371e8d5a07aeb14bf3",
+  "review_followup": {
+    "candidate": "413d55f8315144d542ef98565884c4e38ae4c5e1",
+    "before_fix_failed_steps": 5,
+    "after_fix_tests": 36,
+    "after_fix_steps": 27,
+    "fixed": [
+      "Fallback form transport parses instagram_collaborators before metadata mapping.",
+      "Multipart files supplied as instagram_share_to_story reach the existing logged type rejection."
+    ],
+    "guards": {
+      "clean_code": "passed",
+      "test_guard": "passed",
+      "docs_guard": "passed"
+    },
+    "graphify_update": "passed",
+    "initial_lint_attempts": "Tool failures: missing isolated-worktree ESLint, then unresolved TypeScript. Both retained.",
+    "checker_sha256": "4d33c31bdf7784c082f8e653f6b93be1549dba7b0d5f0f8b2fc5aa16c86ea0c7",
+    "immutable_lint_i18n": "NO REGRESSIONS; existing lint/i18n debt remains"
+  }
 }
