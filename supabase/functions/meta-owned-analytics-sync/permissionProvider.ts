@@ -19,7 +19,7 @@ const identitySchema = z.object({ id: z.string().min(1).max(200) });
 
 function permissionFailure(reply: MetaAnalyticsFailure<PermissionFailure>): PermissionVerification {
   if (["aborted", "budget"].includes(reply.error.kind)) throw new AnalyticsWorkerStopped("deadline");
-  if (reply.error.kind === "transport" || reply.status >= 500) throw new AnalyticsWorkerStopped("provider_unavailable");
+  if (reply.error.kind === "transport" || reply.status >= 500 || reply.error.kind === "provider" && reply.error.reason === "provider_error") throw new AnalyticsWorkerStopped("provider_unavailable");
   if (reply.error.kind === "invalid_response") throw new AnalyticsWorkerStopped("invalid_contract");
   return { ok: false, reason: reply.error.reason };
 }
@@ -56,9 +56,10 @@ export async function verifyAdmissionPermission(input: {
     return { ok: false, reason: "reauth_required" };
   }
   const expectedUser = "provider_user_id" in credential.authority ? credential.authority.provider_user_id : credential.authority.platform_user_id;
+  if (grant.user_id === undefined) throw new AnalyticsWorkerStopped("invalid_contract");
   if (grant.user_id !== expectedUser) return { ok: false, reason: "identity_mismatch" };
   if ((platform === "facebook" || grant.app_id !== undefined) && grant.app_id !== app.id) return { ok: false, reason: "app_mismatch" };
-  if (!grant.scopes || new Set(grant.scopes).size !== grant.scopes.length) return { ok: false, reason: "provider_error" };
+  if (!grant.scopes || new Set(grant.scopes).size !== grant.scopes.length) throw new AnalyticsWorkerStopped("invalid_contract");
   const operational = new MetaAnalyticsTransport<PermissionFailure>({ ...options, token: credential.access_token });
   const identity = await operational.request(["me"], { fields: "id" }, identitySchema);
   if (identity.error) return permissionFailure(identity);

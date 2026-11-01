@@ -146,7 +146,7 @@ Deno.test("malformed configuration is unavailable and a caller cannot choose dis
 });
 
 Deno.test("transient or undecodable admission leaves the durable dispatch target resumable", async (test) => {
-  for (const stage of ["debug_token", "me"]) for (const failure of ["transport", "server_error", "invalid_response"]) {
+  for (const stage of ["debug_token", "me"]) for (const failure of ["transport", "server_error", "transient_error", "invalid_response"]) {
     await test.step(`${stage}: ${failure}`, async () => {
       let commits = 0, observations = 0;
       const handler = createOwnedAnalyticsSyncHandler({ authorize: () => ({ ok: true }), app: () => ({ id: "790001", secret: "fixture-app" }), audit: async () => true,
@@ -161,6 +161,7 @@ Deno.test("transient or undecodable admission leaves the durable dispatch target
           if (url.pathname.endsWith(`/${stage}`)) {
             if (failure === "transport") throw new TypeError("Synthetic network outage");
             if (failure === "server_error") return Response.json({ error: { code: 2 } }, { status: 503 });
+            if (failure === "transient_error") return Response.json({ error: { code: 2, is_transient: true } }, { status: 400 });
             return Response.json({ unexpected: true });
           }
           return Response.json({ data: { is_valid: true, user_id: authority.platform_user_id, scopes: ["threads_basic", "threads_manage_insights"] } });
