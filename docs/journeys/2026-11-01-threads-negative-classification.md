@@ -10,8 +10,10 @@ The correction retains a recognized structured reason. Only an **unknown** 5xx e
 
 ## Validation and scope
 
-- Exact Threads CI suite: **27 tests and 94 nested steps passed**, including the production composition's legacy/versioned handlers, provider transport, shared contract and calendar behavior.
+- Exact Threads CI suite: **27 tests and 102 nested steps passed**, including the production composition's legacy/versioned handlers, provider transport, shared contract and calendar behavior.
 - Provider fixtures cover existing 4xx classifications, structured credential/permission failures carried by 5xx, generic/unknown 5xx, malformed error envelopes, HTTP429 precedence, retry parking and secret redaction.
 - Targeted ESLint, `git diff --check`, `clean-code-guard` and `test-guard` passed.
+
+CodeRabbit's response-boundary observation was accepted. Four recognized credential/permission error variants carried by HTTP503 now run through each real handler composition. The legacy response asserts reconnect/permission flags; the unified response asserts canonical current/previous unavailable reasons and delta. Temporarily restoring the old classifier condition makes exactly these **eight** new steps fail; the fixed condition restores the full passing suite. The temporary mutation was restored before committing, and fixture state resets even after an assertion failure.
 
 These are isolated fixture results, not deliberately expired/revoked live credentials or completed platform acceptance. No account, credential, collection control, schedule or migration changed. Runtime deployment and the final immutable lint/i18n result must be verified separately before claiming production behavior.

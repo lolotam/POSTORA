@@ -41,6 +41,7 @@ Deno.test("Threads selection never substitutes an account after refusal or faile
   let accountReads = 0;
   let scenario = "normal";
   let profileRequests = 0;
+  let recognizedServerFailure: { code: number; error_subcode: number } | null = null;
   const audits: Record<string, unknown>[] = [];
   const jwt = await userToken();
   const accounts = [
@@ -81,6 +82,7 @@ Deno.test("Threads selection never substitutes an account after refusal or faile
       if (url.pathname.endsWith("/me")) return Response.json({ id: scenario === "identity_mismatch" ? "different-owner" : "thread-owner", username: "owner" });
       if (url.pathname.endsWith("/threads_insights")) {
         profileRequests++;
+        if (recognizedServerFailure) return Response.json({ error: { ...recognizedServerFailure, message: "synthetic-owner-token" } }, { status: 503 });
         if (scenario.startsWith("throttle_")) {
           if (profileRequests === 1 && scenario === "throttle_failure") return Response.json({ error: { code: 2 } }, { status: 503 });
           if (profileRequests > 1) return Response.json({ error: { code: 4 } }, { status: 429, headers: { "Retry-After": profileRequests === 2 ? "180" : "15" } });
@@ -194,6 +196,24 @@ Deno.test("Threads selection never substitutes an account after refusal or faile
       assertEquals(providerCalls, 0);
     });
     noAccounts = false;
+    for (const [code, subcode, reason, needsReauth, needsPermission] of [
+      [190, 463, "expired_token", true, false], [190, 0, "invalid_token", true, false],
+      [10, 0, "missing_scope", false, true], [200, 0, "missing_scope", false, true],
+    ] as const) {
+      await test.step(`legacy response preserves reconnect/permission guidance for 503/${code}/${subcode}`, async () => {
+        recognizedServerFailure = { code, error_subcode: subcode };
+        try {
+          const response = await handler(request({ accountId: ACCOUNT_ID }));
+          const payload = await response.json();
+          assertEquals(response.status, 200);
+          assertEquals(payload.ok, false);
+          assertEquals(payload.reason, reason);
+          assertEquals(payload.needsReauth, needsReauth);
+          assertEquals(payload.needsPermission, needsPermission);
+          assertFalse(JSON.stringify(payload).includes("synthetic-owner-token"));
+        } finally { recognizedServerFailure = null; }
+      });
+    }
     for (const mode of ["identity_mismatch", "invalid_current", "failed_previous", "failed_post", "invalid_post_time", "throttle_failure", "throttle_success"]) {
       await test.step(`real provider composition handles ${mode} without replacing identity or exposing raw failures`, async () => {
         scenario = mode;

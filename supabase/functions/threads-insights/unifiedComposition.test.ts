@@ -27,6 +27,7 @@ Deno.test("real Threads composition negotiates the unified contract without fabr
   const metaCalls: URL[] = [];
   const audits: unknown[] = [];
   let scenario = "normal";
+  let recognizedServerFailure: { code: number; error_subcode: number } | null = null;
   let accountReads = 0;
   const originalNow = Date.now;
   globalThis.fetch = async (input, init) => {
@@ -50,6 +51,7 @@ Deno.test("real Threads composition negotiates the unified contract without fabr
       ? Response.json({ error: { code: 190, error_subcode: 463, message: PROVIDER_TOKEN } }, { status: 400 })
       : Response.json({ id: "thread_owner" });
     if (url.pathname.endsWith("/threads_insights")) {
+      if (recognizedServerFailure) return Response.json({ error: { ...recognizedServerFailure, message: PROVIDER_TOKEN } }, { status: 503 });
       const since = new Date(Number(url.searchParams.get("since")) * 1000).toISOString();
       const until = new Date(Number(url.searchParams.get("until")) * 1000).toISOString();
       const current = until === period.period.until;
@@ -209,6 +211,26 @@ Deno.test("real Threads composition negotiates the unified contract without fabr
         assertFalse(JSON.stringify(body).includes(PROVIDER_TOKEN));
         Date.now = originalNow;
         scenario = "normal";
+      });
+    }
+    for (const [code, subcode, reason] of [
+      [190, 463, "reauth_required"], [190, 0, "reauth_required"],
+      [10, 0, "permission_missing"], [200, 0, "permission_missing"],
+    ] as const) {
+      await test.step(`versioned metrics retain the actionable reason for 503/${code}/${subcode}`, async () => {
+        recognizedServerFailure = { code, error_subcode: subcode };
+        try {
+          const response = await handler(request({}));
+          const { ok, ...payload } = await response.json();
+          assertEquals(response.status, 200);
+          assertEquals(ok, true);
+          const report = parseAnalyticsReport(payload);
+          const visits = report.metrics.find((metric) => metric.definition.key === "profile_views")!;
+          assertEquals(visits.current, { status: "unavailable", reason });
+          assertEquals(visits.previous, { status: "unavailable", reason });
+          assertEquals(visits.delta.reason, reason);
+          assertFalse(JSON.stringify(payload).includes(PROVIDER_TOKEN));
+        } finally { recognizedServerFailure = null; }
       });
     }
     await test.step("expired credentials return a sanitized reauthentication refusal", async () => {
