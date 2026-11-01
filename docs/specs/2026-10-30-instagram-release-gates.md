@@ -320,18 +320,6 @@ Rollback stops new enqueue/drain/retention schedules and sets collection/retenti
 
 All boxes start unchecked. Planning, prior merges and prior general authorizations do not check them. Record Waleed's explicit approval reference, exact candidate/configuration, intended accounts, timestamp, operator and resulting redacted evidence **for each numbered action**, then stop before the next action. Local readiness (Gate A) requires complete local-phase G-X, accepted dependencies and final-revision local/hosted checks and reviews; this document does not obtain or authorize hosted work.
 
-### Proposed owner-only pilot scope amendment — NOT APPROVED
-
-Decision record: no owner approval recorded. The existing Gate A/G-X prerequisite above remains binding until Waleed explicitly accepts this amendment. This proposal changes no approval box or runtime setting.
-
-The proposed exception permits readiness to be evaluated for one exact named Instagram account owned by one named user, independently of competitor/discovery acceptance. All other accounts and owners remain excluded. It does not pass, replace or rename canonical G-X. Competitor discovery, collection, reporting, UI, retention and cohort/scale acceptance remain unresolved under their owning tasks and cannot inherit an owner pilot result.
-
-Before using the exception, the owner release runbook must map every applicable owner collection, report/API/MCP, SQL/security, UI and journey requirement to final-candidate evidence, including real Auth/PostgREST/SQL/worker boundaries, claim/credential fencing, failure/retry states, identity isolation, complete pagination and AR/EN/RTL. Required owner assertions cannot be skipped. Final local/hosted checks and reviews, full frozen runtime/dependency/schema inventory, deployed-catalog/ACL lineage reconciliation and rollback compatibility are still required; the artifact-inventory tool alone cannot satisfy these conditions.
-
-Every B1–B3, C1–C3 and D1–D2 action below still needs its own approval at the time it occurs. In particular, accepting this scope amendment does not approve a merge/deployment, name a pilot, authorize a live probe or test post, enable a collection switch/allow-list, activate a schedule, restore after rollback or widen any population. Exact pilot-only enqueue/drain schedules need their separate decision before the seven-day stability window. The seven distinct due-date receipts, reconciliation, rollback and separately approved restoration requirements remain unchanged. Facebook/Threads have no implied activation approval.
-
-Approval reference, approver, timestamp and scope: **unrecorded**. An unanswered request is not approval.
-
 ### B — release prerequisites and pilot eligibility
 
 - [ ] B1: Waleed approves the concrete immutable release/schema manifest and production preflight; reconcile installed IDs, grants, drift and rollback compatibility. Apply only separately approved missing prerequisites with all new schedules inactive. Record exact catalog and hashes; no raw credentials.
