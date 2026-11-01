@@ -1,6 +1,6 @@
 # Saved Meta analytics: implementation and executed evidence
 
-Source candidate: `c07939126879d9d7b00b35831154a2e6be7b8053`, stacked on the C3 worker candidate. This record covers local implementation and preparation, not approval to merge, apply SQL, deploy, repair credentials, collect data or activate schedules. The owner explicitly requested completing missing work before a concrete deployment decision.
+Source candidate: `1a5ff1267e8b6741e62592e02fa02d3932baab56`, stacked on C3 `730b549181480bc3566cb389a8e3943a7507077f`. This record covers local implementation and preparation, not approval to apply SQL, deploy, repair credentials, collect data or activate schedules. Source merge was authorized by the owner, but dependent runtime merges remain gated by the deployment order below. The owner explicitly requested completing missing work before a concrete deployment decision.
 
 ## Behavior now implemented
 
@@ -29,6 +29,14 @@ The [proof artifact](evidence/2026-11-01-meta-saved-analytics-proof.json) binds 
 | Deno checks, frontend typecheck, build | Passed. Local Deno 2.9.6; hosted CI remains pinned to 2.9.8. Existing build-size warnings remain. |
 | Source/test/docs guards | Applied inline. Checked actual production consumers, dependency direction, scope/grants, zero/missing semantics, cancellation, fixture-only writes, compatibility and claims against executed logs. This is an author guard, not an independent review. |
 | Immutable lint/i18n regression | No regressions on source `c07939126879d9d7b00b35831154a2e6be7b8053` against C3 `067521c9e884f5f5f7d8a41a9c35751ba32cf4a2`, in ordinary, suppressed and inline-disabled lanes. Historical lint/i18n debt remains; this is not a claim that full lint is clean. An initial 40 orphan-translation regression was fixed with statically checked labels before this result. |
+
+The table above records the pre-review candidate `c07939126879d9d7b00b35831154a2e6be7b8053`; its exact evidence is preserved in the [pre-review proof](evidence/2026-11-01-meta-saved-analytics-pre-review-proof.json). It is not represented as a complete rerun on the corrected source. The current proof artifact records the following affected checks on the new candidate: fresh baseline + 151 migrations, 69 SQL suites and one isolated suite; 44 Deno tests / 146 nested steps; five frontend files / 32 tests; frontend typecheck and production build; and immutable lint/i18n with no regressions against C3 `730b549181480bc3566cb389a8e3943a7507077f`. The registered SQL integration attempt and repeat are recorded separately, including the failed attempt, in that artifact.
+
+## Review corrections before deployment
+
+The worker now terminates irrecoverably bounded inventory only after its captures are accepted, preserving the prefix and allowing newer due dates. Transient admission reads do not advance a refusal ticket. Facebook debugger application identity is required. Threads live/saved snapshot decoders share the actual optional-period/total-value handling, with incompatible periods and missing values remaining unavailable. A rate-limited platform no longer ends work for the other platform. These C3 corrections are detailed in the [worker continuation](2026-11-01-meta-owned-worker-collection.md).
+
+The combined screen now derives coverage from all loaded pages. Loading the final page clears unread-pagination incompleteness, while a collection gap or unavailable measurable cell on either page remains visible. Terminal inventory truncation reports partial saved data rather than fabricating a provider failure. Source/test/docs guards checked the merged worker's existing refusal isolation and capture-receipt behavior as well as these fixes. Retention dry-run continuation beyond 50 targets remains an explicit review gap; neither PR is described as ready for the complete production release.
 
 The independent database fixture suites were executed sequentially when sharing global test settings. An initial observer-fixture error handling an empty activity field was corrected before the successful 31-case concurrency run. No failed run is represented as a pass. The frontend boundary tests also caught the extra `ok` field in the new response before it was corrected and verified through canonical parsing of real SQL-backed replies. Final typechecking rejected `Object.hasOwn` under the existing frontend library target; the safe refusal lookup now uses `Object.prototype.hasOwnProperty.call`, with a successful final typecheck and no compiler-target relaxation.
 

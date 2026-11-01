@@ -1,5 +1,5 @@
 {
-  "candidate": "c07939126879d9d7b00b35831154a2e6be7b8053",
+  "candidate": "1a5ff1267e8b6741e62592e02fa02d3932baab56",
   "production_source_baseline": "cc2555b282c1581dde196fd386b3b6d55a0f64ca",
   "deployment_authorized": false,
   "release_ready": false,
@@ -30,7 +30,7 @@
     },
     {
       "path": "supabase/migrations/20261101142500_meta_owned_analytics_retention.sql",
-      "sha256": "471d9172984054249bf717f6c32c9cda6c19c179c846f0a553b0bcfee33b37f7"
+      "sha256": "67506139aa18584eb9c3075ac95ba9326b1c57fef17b472a4739def43d1a8b97"
     },
     {
       "path": "supabase/migrations/20261101143000_meta_owned_analytics_cron.sql",
@@ -96,7 +96,7 @@
     },
     {
       "path": "supabase/functions/meta-owned-analytics-report/assemble.ts",
-      "sha256": "4a973c0217ae1838677809c9cce306055c763d9070b96d471ba06a40cd832288"
+      "sha256": "b54b24021cadf7cc574e022caf0c1b6bd8d28870b0352ea7454d098307ac6481"
     },
     {
       "path": "supabase/functions/meta-owned-analytics-report/cursor.ts",
@@ -124,11 +124,11 @@
     },
     {
       "path": "supabase/functions/meta-owned-analytics-sync/collectionProvider.ts",
-      "sha256": "f70d96668390fd181d69656707b006ab508b1f10bf2e96ff7de5ab5e576c43e0"
+      "sha256": "efdf213915ba9baa97833e70e9d8d653395c54c77dced953021bb792dc80aeab"
     },
     {
       "path": "supabase/functions/meta-owned-analytics-sync/deadline.ts",
-      "sha256": "089ef374cd03fd85d15c2301190911e2e4e3cfd814b6c87dd99742eee265c641"
+      "sha256": "63f879e502421240a4db4305908affb2850fdc1eb5adfb02ef9a6e1ff82f1c2b"
     },
     {
       "path": "supabase/functions/meta-owned-analytics-sync/dispatch.ts",
@@ -148,7 +148,7 @@
     },
     {
       "path": "supabase/functions/meta-owned-analytics-sync/permissionProvider.ts",
-      "sha256": "f5cc560507c11b33b0e4661c2aceea62ec24d7db5a11c568beddc4d6c2db9022"
+      "sha256": "aa8e8bb059df6b58ceab927f715106122a51dd3e7e7b226516559e28bf999220"
     },
     {
       "path": "supabase/functions/meta-owned-analytics-sync/retention.ts",
@@ -168,11 +168,15 @@
     },
     {
       "path": "supabase/functions/meta-owned-analytics-sync/worker.ts",
-      "sha256": "28374bbd7f3b8afe51728bdc789827346697cd051a82bc98a982edd5cf7dd7c7"
+      "sha256": "e1a4d31bdcb8acba4cb0d11e23d112edd0b32c2ec0bbb91d8ee0b07755f05a00"
     },
     {
       "path": "supabase/functions/n8n-api/serviceProxy.ts",
       "sha256": "161d6e0b5a0244de42d9f93d5ce784474f49b03037a964109504f84c15af33fb"
+    },
+    {
+      "path": "supabase/functions/threads-insights/analyticsProjection.ts",
+      "sha256": "c8918d8f7c45cb3f9de9d64af6ed7d620dc53d350f3cff01a8cf7f334aa3b9e6"
     },
     {
       "path": "supabase/functions/threads-insights/provider.ts",
@@ -189,6 +193,10 @@
       "sha256": "48d35ac2dfbbac7cb7ab27960db766851d5cee911b2123daded14a4887c0ce6e"
     },
     {
+      "path": "src/features/analytics-contract/domain/mergeSavedAnalyticsPages.ts",
+      "sha256": "9085f96a1a7032b2f3f25f92e52b83435c2f1ff7bc63037328dd74e87f0d6d58"
+    },
+    {
       "path": "src/features/analytics-contract/index.ts",
       "sha256": "64c6c85238c4d4e689660dd0729a3bda7478ce926d498e65e036d17f833d5969"
     },
@@ -198,11 +206,11 @@
     },
     {
       "path": "src/features/analytics-contract/ui/OwnedAnalyticsScreen.tsx",
-      "sha256": "e1965f5d8bed660e073a5ed6a04b6c2a39af0a9133ad6d2cee09ea9ae9123835"
+      "sha256": "499dfc67864c2bb4b03f7ba014b1ebe5fbea12f4c3fd0d95c97b9d2dcde6f32c"
     },
     {
       "path": "src/features/analytics-contract/ui/SavedAnalyticsReport.tsx",
-      "sha256": "9d4ea4fb1390299e5ce959c7d9425fce7ac0787e383fa937c57f3d4c2a15c52e"
+      "sha256": "6e9b5a38b1591c104abcf3ad0f42766b0ba075833a3e01eb2dff29c871fbbbd3"
     },
     {
       "path": "src/features/analytics-contract/ui/useAnalyticsLabels.ts",

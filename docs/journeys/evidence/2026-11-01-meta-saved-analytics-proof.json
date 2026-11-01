@@ -1,104 +1,94 @@
 {
-  "candidate": "c07939126879d9d7b00b35831154a2e6be7b8053",
+  "candidate": "1a5ff1267e8b6741e62592e02fa02d3932baab56",
   "production_changes": false,
   "independent_review": false,
   "full_gx_accepted": false,
+  "predecessor_evidence": {
+    "candidate": "c07939126879d9d7b00b35831154a2e6be7b8053",
+    "path": "2026-11-01-meta-saved-analytics-pre-review-proof.json",
+    "not_rerun": [
+      "complete prior concurrency matrix",
+      "complete prior broad backend/provider regressions"
+    ]
+  },
   "checks": {
     "fresh_database": {
       "newer_migrations": 151,
-      "sql_suites": 68,
+      "sql_suites": 69,
       "isolated_suites": 1
     },
-    "concurrency": {
-      "cases": 31,
-      "observed_lock_waits": 24
+    "affected_backend": {
+      "tests": 44,
+      "steps": 146
     },
     "registered_sql_integration": {
       "tests": 1,
-      "steps": 20
-    },
-    "backend": {
-      "tests": 151,
-      "steps": 82
-    },
-    "provider_regressions": {
-      "tests": 104,
-      "steps": 135
+      "steps": 20,
+      "result": "passed_on_repeat",
+      "initial_attempt": "failed: audit_unavailable; exact cause not established"
     },
     "frontend": {
       "files": 5,
-      "tests": 28
+      "tests": 32
     },
     "typecheck": "passed",
     "build": "passed",
+    "graphify_update": "passed",
     "immutable_lint_i18n": {
       "result": "NO REGRESSIONS",
-      "base": "067521c9e884f5f5f7d8a41a9c35751ba32cf4a2",
-      "head": "c07939126879d9d7b00b35831154a2e6be7b8053",
+      "base": "730b549181480bc3566cb389a8e3943a7507077f",
+      "head": "1a5ff1267e8b6741e62592e02fa02d3932baab56",
       "historical_debt_remains": true
-    },
-    "owner_rollout_ci_fixture_correction": {
-      "tests": 48,
-      "failed_hosted_fixture_preserved": true,
-      "production_source_changed": false
     }
   },
   "artifacts": [
     {
-      "local_artifact": ".tmp/c4-fresh-schema-proof.log",
-      "sha256": "96d814d9f8ccc16b4d875185e09ddff23a1964b355ce9820edc321f130972536"
+      "local_artifact": ".tmp/pr347-reviewed-fresh-schema.log",
+      "sha256": "a62f0f199da22bc4968cc792fdf93c270ae7dc052097599ee5d30c138f36a236"
     },
     {
-      "local_artifact": ".tmp/c4-snapshot-bounds.log",
-      "sha256": "a4959d6d72911612c03d41394c910986ac6c7689fab9ff2ef8a88b8ec7658f30"
+      "local_artifact": ".tmp/pr347-reviewed-tests.log",
+      "sha256": "b163b06d04122965f765617a4202c39ee6c455ea6342ee51a22099deccf04567"
     },
     {
-      "local_artifact": ".tmp/c4-races.json",
-      "sha256": "bc7ab97f5b74bb91de1c3444dae694ce793e793374d4f4b34d715d52639f6f5f"
+      "local_artifact": ".tmp/pr347-reviewed-frontend.log",
+      "sha256": "7d5312f29f3f1fe9095409535c38fffa83c6cdc526e6d8e57510102f15869f1b"
     },
     {
-      "local_artifact": ".tmp/c4-final-integration.log",
-      "sha256": "2ce5b53635f099c100731ebf64350c26fcccf28a297f1ecba30fa99da7fd72e8"
-    },
-    {
-      "local_artifact": ".tmp/c4-final-backend.log",
-      "sha256": "ba98ed68cd2f2c99a595ef8608fd4156e44e044cb2cb266dbf135ad17704b88f"
-    },
-    {
-      "local_artifact": ".tmp/c4-provider-regressions.log",
-      "sha256": "1e577fbe7b450dde94c380f15e1c2099b70a4e17a3a5bd7e5b036bc8bddc1c1e"
-    },
-    {
-      "local_artifact": ".tmp/c5-ui-final-tests.log",
-      "sha256": "53b0713416760fa3eb1f82c133e7fd05128897dd57c322ba24a5085cf810ea2a"
-    },
-    {
-      "local_artifact": ".tmp/c5-candidate-typecheck.log",
+      "local_artifact": ".tmp/pr347-reviewed-typecheck.log",
       "sha256": "82b5202dbc205db5afc9568372d1f11e63c1105117ebdc791a50680ece23bccf"
     },
     {
-      "local_artifact": ".tmp/c5-candidate-build.log",
-      "sha256": "6859be2ec54cbaff1d986e9ebfb92fdfbfc0575d0bee361c4315afc73e162486"
+      "local_artifact": ".tmp/pr347-reviewed-build.log",
+      "sha256": "f67fb943e044dc922cfbdf1efb21995505d717a15d1f4ff7f5a4866d270ea83a"
     },
     {
-      "local_artifact": ".tmp/c4-final-deno-check.log",
-      "sha256": "d2c7bbb92a2c681481a41311f1569494fe127ad0569d6f1b42a44ee9682c13ed"
+      "local_artifact": ".tmp/pr347-reviewed-lint.json",
+      "sha256": "7f6d14c15588fcf3da6825c5690b760cedfb98599fa5751ff0e094ebafed76a3"
     },
     {
-      "local_artifact": ".tmp/c5-label-lint.log",
-      "sha256": "2157a5f3c12477857845842650bbd669c004666db09a84e463dc354ce2c5a27f"
+      "local_artifact": ".tmp/pr347-reviewed-graphify.log",
+      "sha256": "2ec4e3d5ba4d85b54bcc456f1f826ccd54f7b57e20b140ed06da4f4eaabf3537"
     },
     {
-      "local_artifact": ".tmp/c4-final-lint-report.json",
-      "sha256": "1aa22202090682887f3f07f704ae9685d644afb7f928b311de4c1afd809b9b87"
+      "local_artifact": ".tmp/pr347-reviewed-integration.log",
+      "sha256": "2a36b15965e6e154ed49b95563d0f93df2636f4aa78d20041fa30bddb65d953e"
     },
     {
-      "local_artifact": ".tmp/c4-final-lint-summary.md",
-      "sha256": "e573152e2c24313afa0d0a79ba00f17c40366abf8fe51b7228c4fc65ee517980"
+      "local_artifact": ".tmp/pr347-reviewed-integration-repeat.log",
+      "sha256": "5daf56293ffc8c82082d322ccf46f452babec1f886fcc0ffef367205f45b90ff"
     },
     {
-      "local_artifact": ".tmp/pr347-rollout-ci-proof.log",
-      "sha256": "d6629aaad6ef2fb200c652d9d28f83aab68fe59699beb2d43b879d6a97118f3e"
+      "local_artifact": ".tmp/pr346-review-lint.json",
+      "sha256": "cfec0bdd9f25f717e8130f8f6c67163ef125075316a4bfc7f69f7a83640c54bf"
+    },
+    {
+      "local_artifact": ".tmp/pr346-review-tests.log",
+      "sha256": "92063ef741aed9a22fbe1aa161a6e02d02f484345b985078139c8cecd28884c5"
+    },
+    {
+      "local_artifact": ".tmp/pr346-review-fresh-schema.log",
+      "sha256": "c00f08ef70dfaf48cb39c8bf4cb1f6115d9f7617b88aeb4378b58c547fe24899"
     }
   ],
   "read_only_production_verification": {
