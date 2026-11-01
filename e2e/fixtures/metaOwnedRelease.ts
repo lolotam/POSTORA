@@ -130,7 +130,8 @@ export class MetaOwnedProviderFixture {
       if (url.origin !== (threaded ? "https://graph.threads.net" : "https://graph.facebook.com") || token !== `${threaded ? "TH|" : ""}770001|owned-fixture-app`) throw new Error("Owned debugger fixture credential mismatch");
       this.calls.push({ platform, kind: "permissions", account: threaded?.kind ?? "bound-owner" });
       return Response.json({ data: { is_valid: true, app_id: "770001", user_id: threaded?.providerId ?? (checked === "owned-user-primary" ? "887001" : "887002"),
-        scopes: threaded ? ["threads_basic", "threads_manage_insights"] : ["read_insights", "pages_read_engagement"] } });
+        scopes: threaded ? ["threads_basic", "threads_manage_insights"] : ["read_insights", "pages_read_engagement"] } },
+        { headers: facebook ? { "facebook-api-version": "v25.0" } : {} });
     }
     const account = META_ACCOUNTS.find((entry) => url.pathname.split("/").some((segment) => segment === entry.providerId || Array.from({ length: 26 }, (_, index) => metaPostId(entry, index)).includes(segment)));
     if (!account) return null;
