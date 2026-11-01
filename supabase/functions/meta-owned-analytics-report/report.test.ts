@@ -77,6 +77,30 @@ Deno.test("terminal inventory bounds remain partial while actual connection fail
   }
 });
 
+Deno.test("previous Threads follower observations follow the final provider day across DST", async (test) => {
+  for (const now of ["2026-03-16T12:00:00.000Z", "2026-11-09T12:00:00.000Z"]) {
+    const calendar = closedAnalyticsPeriods({ now, days: 7, timezone: "America/Los_Angeles" });
+    const lastDay = calendar.previous.buckets.at(-1)!;
+    const definition = analyticsDefinitions("threads", "account").find((metric) => metric.key === "followers")!;
+    for (const scenario of ["start", "too_old", "after_boundary"] as const) {
+      await test.step(`${lastDay.date}: ${scenario}`, () => {
+        const observedAt = scenario === "start" ? lastDay.since : new Date(Date.parse(scenario === "too_old" ? lastDay.since : lastDay.until) + (scenario === "too_old" ? -1 : 1)).toISOString();
+        const stored = fixture();
+        Object.assign(stored, { platform: "threads", daily: [], since: calendar.current.period.since, until: calendar.current.period.until,
+          previous_since: calendar.previous.period.since, as_of: calendar.current.period.until });
+        stored.profile_boundaries = [{ boundary: calendar.previous.period.until, metric_key: "followers", status: "available", value: 10, reason: null,
+          provider_metric: definition.providerMetric, api_version: definition.apiVersion, window_kind: "point_in_time", provider_timezone: null,
+          window_since: null, window_until: null, source_ref: "threads_graph_v1", observed_at: observedAt, collected_at: now }];
+        const report = assembleStoredAnalytics({ stored, windows: calendar, generatedAt: now, nextCursor: null, hasMore: false });
+        const followers = report.metrics.find((metric) => metric.definition.key === "followers")!;
+        assertEquals(followers.previous, scenario === "start" ? { status: "available", value: 10 }
+          : { status: "unavailable", reason: scenario === "too_old" ? "not_collected" : "window_mismatch" });
+        assertEquals(followers.previousObservedAt, observedAt);
+      });
+    }
+  }
+});
+
 Deno.test("history cursor preserves SQL precision and its frozen calendar across midnight", async (test) => {
   const cursor = await storedReportCursor({ scope, period: windows.current.period, revision: 4, publishedAt: "2026-10-31T12:00:00.123456Z", postId: "772001_9001", secret: "fixture-sign" });
   const position = await storedReportPosition({ cursor, scope, now: "2026-11-03T12:00:00Z", secret: "fixture-sign" });

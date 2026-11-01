@@ -60,7 +60,8 @@ export async function handler(req: Request): Promise<Response> {
     if (receipt.error) throw new Error("Report audit unavailable");
     return response;
   } catch {
-    return jsonResponse({ error: { code: "HISTORY_UNAVAILABLE", message: "Report read could not be recorded. Please retry." } }, 503);
+    return jsonResponse({ ok: false, reason: "audit_unavailable",
+      error: { code: "HISTORY_UNAVAILABLE", message: "Report read could not be recorded. Please retry." } }, 503);
   }
 }
 

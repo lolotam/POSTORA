@@ -409,15 +409,18 @@ Deno.test("saved Facebook report and Instagram refusal preserve explicit negotia
   }
 });
 
-Deno.test("only an explicit saved report can read a disconnected owned account", async () => {
-  for (const version of [null, "1"] as const) {
-    const { deps, calls } = fakeDeps({ account: { ...DEFAULT_ACCOUNT, platform: "threads", is_active: false } });
-    const search = params({ social_account_id: ACCOUNT_ID });
-    if (version) search.set("analyticsContractVersion", version);
-    const result = await handleGetPostAnalytics(deps, OWNER, search);
-    assertEquals(result.status, version ? 200 : 409);
-    assertEquals(calls.invokes.length, version ? 1 : 0);
-    if (version) assertEquals(calls.invokes[0].functionName, "meta-owned-analytics-report");
+Deno.test("only Facebook and Threads saved reports can read a disconnected owned account", async (test) => {
+  for (const platform of ["facebook", "threads", "instagram", "tiktok"]) for (const version of [null, "1"] as const) {
+    await test.step(`${platform}, version=${version}`, async () => {
+      const { deps, calls } = fakeDeps({ account: { ...DEFAULT_ACCOUNT, platform, is_active: false } });
+      const search = params({ social_account_id: ACCOUNT_ID });
+      if (version) search.set("analyticsContractVersion", version);
+      const result = await handleGetPostAnalytics(deps, OWNER, search);
+      const saved = version !== null && (platform === "facebook" || platform === "threads");
+      assertEquals(result.status, saved ? 200 : 409);
+      assertEquals(calls.invokes.length, saved ? 1 : 0);
+      if (saved) assertEquals(calls.invokes[0].functionName, "meta-owned-analytics-report");
+    });
   }
 });
 

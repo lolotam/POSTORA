@@ -61,6 +61,29 @@ describe("saved analytics presentation", () => {
     expect(screen.getByRole("option", { name: "Archived · Disconnected" })).toBeInTheDocument();
   });
 
+  it.each([true, false])("defaults to an active account when one exists: %s", async (hasActiveAccount) => {
+    const seen: string[] = [];
+    const accounts = [{ id: "archived", name: "Archived", active: false }, { id: "second", name: "Second", active: hasActiveAccount }];
+    const gateway: SavedAnalyticsGateway = {
+      accounts: async () => accounts,
+      report: async (request) => {
+        seen.push(request.accountId);
+        return { ...analyticsReportFixture("facebook"), accountId: request.accountId };
+      },
+    };
+    render(<QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } })}>
+      <OwnedAnalyticsScreen platform="facebook" gateway={gateway} />
+    </QueryClientProvider>);
+    const expected = hasActiveAccount ? "second" : "archived";
+    await waitFor(() => expect(seen).toEqual([expected]));
+    expect(screen.getByLabelText("Account")).toHaveValue(expected);
+    if (hasActiveAccount) {
+      fireEvent.change(screen.getByLabelText("Account"), { target: { value: "archived" } });
+      await waitFor(() => expect(seen).toEqual(["second", "archived"]));
+      expect(screen.getByLabelText("Account")).toHaveValue("archived");
+    }
+  });
+
   it("a failed account lookup renders retry instead of a missing-account result", async () => {
     render(<QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } })}>
       <OwnedAnalyticsScreen platform="threads" gateway={{ accounts: async () => { throw new Error("fixture read failure"); }, report: async () => { throw new Error("Must not request a report"); } }} />

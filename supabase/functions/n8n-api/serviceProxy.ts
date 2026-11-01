@@ -85,9 +85,10 @@ async function loadOwnedAccount(deps: ServiceProxyDeps, userId: string, rawAccou
     console.warn(`[n8n-api] service proxy: account ${accountId} not found for caller ${userId}`);
     return { error: proxyError(404, "ACCOUNT_NOT_FOUND", "Social account not found or not owned by the authenticated user.") };
   }
-  // An inactive (disconnected) account would make threads-insights fall back to
-  // a different Threads account, so the proxy never forwards one.
-  if (account.is_active === false && !options.savedHistory) {
+  // Only saved Facebook/Threads reports can read disconnected accounts. Legacy
+  // readers must not fall back to a different account.
+  const savedHistory = options.savedHistory && (account.platform === "facebook" || account.platform === "threads");
+  if (account.is_active === false && !savedHistory) {
     return { error: proxyError(409, "ACCOUNT_INACTIVE", "This social account is disconnected. Reconnect it in Postora first.") };
   }
   return { account };

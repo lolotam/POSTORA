@@ -137,6 +137,48 @@ Deno.test("report composition preserves authenticated identity and account owner
   }
 });
 
+Deno.test("report audit failure keeps canonical refusal reasons and legacy errors through GET and POST", async (test) => {
+  const originalFetch = globalThis.fetch;
+  const jwt = await userToken();
+  let audits = 0;
+  let reportReads = 0;
+  globalThis.fetch = async (input, init) => {
+    const request = new Request(input, init);
+    const url = new URL(request.url);
+    assertEquals(url.origin, URL_BASE);
+    if (url.pathname === "/auth/v1/user") return Response.json({ id: OWNER_ID, role: "authenticated", aud: "authenticated" });
+    if (url.pathname === "/rest/v1/system_logs") {
+      audits++;
+      return Response.json({ code: "57014", message: "fixture-private-audit-failure" }, { status: 500 });
+    }
+    reportReads++;
+    if (url.pathname === "/rest/v1/social_accounts") return Response.json([{ id: ACCOUNT_ID, user_id: OWNER_ID, platform: "instagram", is_active: true }]);
+    assertEquals(url.pathname, "/rest/v1/rpc/read_instagram_owner_report_snapshot");
+    return Response.json({ account_id: ACCOUNT_ID, owner_id: OWNER_ID, media: [], daily: [], profiles: [], collection: null });
+  };
+  try {
+    for (const method of ["GET", "POST"]) for (const canonical of [false, true]) {
+      await test.step(`${method}, canonical=${canonical}`, async () => {
+        audits = reportReads = 0;
+        const query = new URLSearchParams({ social_account_id: ACCOUNT_ID, period_days: "30", ...(canonical ? { analyticsContractVersion: "1" } : {}) });
+        const request = method === "POST" ? reportRequest(jwt, canonical ? { analyticsContractVersion: 1 } : {})
+          : new Request(`${URL_BASE}/functions/v1/instagram-insights-report?${query}`, { headers: { Authorization: `Bearer ${jwt}` } });
+        const response = await handler(request);
+        const body = await response.json();
+        assertEquals(response.status, 503);
+        assertEquals(body.error.code, "HISTORY_UNAVAILABLE");
+        if (canonical) {
+          assertEquals(body.ok, false);
+          assertEquals(body.reason, "audit_unavailable");
+        }
+        assertEquals(JSON.stringify(body).includes("fixture-private"), false);
+        assertEquals(audits, 1);
+        assertEquals(reportReads > 0, true);
+      });
+    }
+  } finally { globalThis.fetch = originalFetch; }
+});
+
 Deno.test("service-role report reads narrow owner status and retains previous-day success", async () => {
   const originalFetch = globalThis.fetch;
   const previousSuccess = "2026-10-28T12:00:00Z";
