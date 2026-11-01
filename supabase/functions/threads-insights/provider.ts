@@ -54,7 +54,7 @@ function providerFailure(status: number, payload: unknown, headers: Headers): Pr
   const retryAt = Number.isFinite(retryTime) && retryTime > Date.now() ? retryTime : Date.now() + 60_000;
   return {
     status, data: null,
-    error: { kind: "provider", reason: throttled ? "rate_limited" : status >= 500 ? "transient" : classified.reason,
+    error: { kind: "provider", reason: throttled ? "rate_limited" : status >= 500 && classified.reason === "unknown" ? "transient" : classified.reason,
       message: "Threads insights request could not be completed.", code, subcode },
     retryAt: throttled ? new Date(retryAt).toISOString() : null,
   };
