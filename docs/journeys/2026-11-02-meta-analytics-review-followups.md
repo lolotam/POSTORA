@@ -1,5 +1,7 @@
 # Meta analytics review follow-ups
 
+Later continuation: [Instagram SQL report API/MCP parity](2026-11-02-instagram-api-mcp-report-contract.md) passed the three canonical tests at `05c466ffa8f92a6bc73842edd779e415bc373681`. It adds real registered-route authorization and four-period legacy parity, not versioned Instagram/calendar acceptance or production activation. The combined-source evidence below retains its original candidate attribution.
+
 Combined source checkpoint: `5cf3b5bc5412a172f1b3d91d0bff2ba52b2be60e`. This record covers additional local review fixes. It does not accept full Instagram G-X, approve production operations or relabel earlier browser proofs.
 
 ## User-visible changes

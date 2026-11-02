@@ -1,0 +1,150 @@
+{
+  "version": 1,
+  "recordedAt": "2026-11-02T03:23:58.886Z",
+  "scope": "local Instagram legacy SQL report API MCP parity",
+  "source": "05c466ffa8f92a6bc73842edd779e415bc373681",
+  "tree": "f74e897f2b041ac43d61a2cf8c7f8c1d972b1582",
+  "executionCheckout": "F:/Dev/Worktrees/Postora_new/canonical-api-05c466ff",
+  "evidenceAuthority": "Author-recorded local evidence; not a trusted external G-X receipt",
+  "inputs": [
+    {
+      "path": ".github/workflows/owner-analytics-local.yml",
+      "gitBlob": "6b723ff5e4c2ff53fda2ea6086f90aa557e70949",
+      "gitSha256": "76027c4cbd1e49fd3e69c7ce6cca2451cf9dd0380038eff318660e86ea3a0ec6",
+      "executionSha256": "a7790f303fd6760208dea9a4b0848b11443c706f753f1e65d00694ae7bc3574f",
+      "normalizedExecutionSha256": "76027c4cbd1e49fd3e69c7ce6cca2451cf9dd0380038eff318660e86ea3a0ec6"
+    },
+    {
+      "path": "e2e/fixtures/instagramReleaseSeed.ts",
+      "gitBlob": "d73d7c1f13e8e8ddf0ae479258ad1b81949053b3",
+      "gitSha256": "70019b49baacb31764e73c9ad11944c291a456db4ee987f9f42cd37e08762ed3",
+      "executionSha256": "c24ffa4a5b16e4e7778d238f3567e173ecd192372faee8ca56fcf4eedad38782",
+      "normalizedExecutionSha256": "70019b49baacb31764e73c9ad11944c291a456db4ee987f9f42cd37e08762ed3"
+    },
+    {
+      "path": "e2e/instagram-release.spec.ts",
+      "gitBlob": "e5c749a3dc5a332676b02d5c2935ddc10d987dd0",
+      "gitSha256": "472c6f51c8f2ce0ce68d359ae302d64c731c8c7569e1e1aff1e39447cffbc1a5",
+      "executionSha256": "23081100e60990525d558ba14d5f507dad172e802e5c47dad0fb42543b970487",
+      "normalizedExecutionSha256": "472c6f51c8f2ce0ce68d359ae302d64c731c8c7569e1e1aff1e39447cffbc1a5"
+    },
+    {
+      "path": "playwright.instagram-release.config.ts",
+      "gitBlob": "632198d3d68a80ea52d4a1a205ec3f452a02cb07",
+      "gitSha256": "4afcf6ac8ca2dee5c3ecc8bed9d76133be5c38d2f6ff25ec48dd8730727676f5",
+      "executionSha256": "add9cfd96d87596903ebf144cb7946465c153c8ca85b4150dbb3c69d12465df7",
+      "normalizedExecutionSha256": "4afcf6ac8ca2dee5c3ecc8bed9d76133be5c38d2f6ff25ec48dd8730727676f5"
+    },
+    {
+      "path": "supabase/functions/n8n-api/instagramReleaseContract.test.ts",
+      "gitBlob": "37a3aaaa32852ea5c35249805a51073992f1cecd",
+      "gitSha256": "89288eac9ff4da4c6da00c2ae49af62c58cfebcae146b022c8abaa763e78b8cb",
+      "executionSha256": "949e7e5c8c462397b6b881320457fcdaab2f0502cc3052b0d60e2e12a75b7c75",
+      "normalizedExecutionSha256": "89288eac9ff4da4c6da00c2ae49af62c58cfebcae146b022c8abaa763e78b8cb"
+    }
+  ],
+  "runner": "Playwright, playwright.instagram-release.config.ts",
+  "result": {
+    "startTime": "2026-11-02T03:19:54.816Z",
+    "duration": 186112.109,
+    "expected": 3,
+    "skipped": 0,
+    "unexpected": 0,
+    "flaky": 0
+  },
+  "coverage": [
+    "real Auth normal owners and separate admin",
+    "real quota/report SQL and registered routes",
+    "explicit 7/14/30/90-day legacy report parity, stored nulls/zeros, outliers and freshness",
+    "posts:read OAuth grant enforcement and persisted refusal audit",
+    "normal-user body user_id ignored",
+    "cross-owner and nonexistent 404 indistinguishable at report/API/MCP",
+    "legacy cursor refusal and honest versioned Instagram window_mismatch",
+    "zero provider calls and zero refused outbound network requests"
+  ],
+  "additionalChecks": {
+    "safetyTests": 9,
+    "serviceProxyTests": 39,
+    "serviceProxySteps": 8,
+    "strictTypeScript": "passed",
+    "denoCompositionCheck": "passed",
+    "scopedEslint": "passed",
+    "yamlParse": "passed",
+    "immutableLintI18n": "NO REGRESSIONS",
+    "migratedDatabase": {
+      "newerMigrations": 151,
+      "baselineSqlSuites": 69,
+      "isolatedSqlSuites": 1
+    }
+  },
+  "cleanup": {
+    "users": 1,
+    "tokens": 0,
+    "clients": 0,
+    "namespace": null,
+    "audit_rows": 0,
+    "active_cron": 0,
+    "cron_launcher": "off"
+  },
+  "priorAttempts": [
+    {
+      "source": "374d17df42ec65147a5321f98a251a28f2d6b745",
+      "result": "one passed, two failed; test client selected SSE but parsed JSON",
+      "report": ".tmp/canonical-api-374d17df-playwright.json"
+    },
+    {
+      "source": "f5fe55bff565844c115fbec7e5ab5fdaef26abe3",
+      "result": "two passed, one failed; expected row lay outside rolling seven-day window",
+      "report": ".tmp/canonical-api-f5fe55bf-playwright.json"
+    }
+  ],
+  "artifacts": [
+    {
+      "path": ".tmp/canonical-api-05c466ff-playwright.log",
+      "sha256": "86df56152bd90bd08b28adb9a45b230ff3273bbc3593ec661ac93550c878c84e"
+    },
+    {
+      "path": ".tmp/canonical-api-05c466ff-playwright.json",
+      "sha256": "d0cc04ea125bf4b08346ffb217ad5af4b9cfa81de0ea7b444faffc6aa89cf85a"
+    },
+    {
+      "path": ".tmp/canonical-api-05c466ff-prepare.log",
+      "sha256": "53d887e46eab8b7b22f14d0c602e044ce061f308fb7f717ec55772ae6a931afa"
+    },
+    {
+      "path": ".tmp/canonical-api-05c466ff-lint-i18n.log",
+      "sha256": "94ee6cb1892f985a578008173d1bfc6b799bb0e9e33dd714ce1c7e92ead74fca"
+    },
+    {
+      "path": ".tmp/canonical-api-05c466ff-service-proxy.log",
+      "sha256": "405ef2886da6a335c77293896f81aa89e84610f1c7865356ae7b9714cf7d3279"
+    },
+    {
+      "path": ".tmp/canonical-api-05c466ff-deno-check.log",
+      "sha256": "591055e61b60bf82da399813e0d0275cea800d56a3cb7e3fe14722439ff81c07"
+    },
+    {
+      "path": ".tmp/canonical-api-05c466ff-graph-update.log",
+      "sha256": "3de126a47ce970da51fa2f40cdf045ae4acc55ef342730a42137902a25ff8126"
+    },
+    {
+      "path": ".tmp/canonical-api-05c466ff-cleanup.json",
+      "sha256": "db7f78d640fb541b421d84b23a856628819abb5034f99a127a53107da93a688a"
+    },
+    {
+      "path": ".tmp/canonical-api-05c466ff-gates.json",
+      "sha256": "f33c0212a3063f974f52f3f7fae15b93a3ff0b2bcf7e6e8f44f8b2e49a8fb909"
+    }
+  ],
+  "releaseReady": false,
+  "productionActivationAuthorized": false,
+  "remaining": [
+    "accepted Instagram metric/calendar registry and versioned API/UI adoption",
+    "successful versioned API/MCP pagination",
+    "full J/E journeys including other-platform assembled compatibility",
+    "trusted workflow/verifier/bootstrap and independent reviews",
+    "four immutable historical migration-prefix incidents",
+    "approved production prerequisites and selected-account bindings",
+    "live Meta reconciliation, rollback/restoration and seven successful scheduled due dates per platform"
+  ]
+}

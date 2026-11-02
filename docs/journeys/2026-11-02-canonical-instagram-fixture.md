@@ -1,5 +1,7 @@
 # Canonical Instagram fixture foundation and local smoke
 
+Continuation: the [SQL report API/MCP contract](2026-11-02-instagram-api-mcp-report-contract.md) records three successful canonical tests at `05c466ffa8f92a6bc73842edd779e415bc373681`, including actual registered MCP authorization and four-period legacy report parity. Cleanup now runs after all canonical journeys. The candidate, counts and five-file gap below describe the earlier foundation proof; the continuation reduces missing required sources to four without accepting G-X.
+
 Executed candidate: `baba9e3b5b9a7814125dada5383e9c4ff38b3f74`. This is fixture infrastructure and one local smoke journey, not acceptance of the full [Instagram release gates](../specs/2026-10-30-instagram-release-gates.md). Production was not changed. The [proof record](evidence/2026-11-02-canonical-instagram-fixture-proof.json) binds the source and local artifacts.
 
 ## What now runs
