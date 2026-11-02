@@ -182,7 +182,7 @@ Deno.test("missing app configuration and oversized bodies refuse before account 
         app: () => scenario === "configuration" ? null : { id: APP, secret: SECRET },
         rpc: () => { reads++; throw new Error("must not read"); }, audit: async () => true });
       const incoming = scenario === "configuration" ? request("facebook")
-        : new Request(API, { method: "POST", body: "x".repeat(8193) });
+        : new Request(API, { method: "POST", body: `{"action":"admit","platform":"facebook","accountId":"${ACCOUNT}"}${" ".repeat(8193)}` });
       assertEquals((await composed(incoming)).status, scenario === "configuration" ? 503 : 400);
       assertEquals(reads, 0);
     });

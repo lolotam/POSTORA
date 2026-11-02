@@ -112,6 +112,7 @@ export function createOwnedAnalyticsSyncHandler(deps: OwnedAnalyticsSyncDeps): (
       const app = deps.app(parsed.data.platform);
       if (!app) return await finish(503, "unavailable", "app_configuration_unavailable");
       const result = await admitOwnedAnalyticsAccount({ platform: parsed.data.platform, accountId, app, deadline, fetch: deps.fetch, store });
+      if (result.status === "refused" && result.reason === "rate_limited") return await finish(429, "unavailable", result.reason);
       return await finish(result.status === "complete" ? 200 : 409, result.status, result.status === "refused" ? result.reason : null);
     } catch (error) {
       const reason = error instanceof AnalyticsWorkerStopped ? error.reason : "storage_unavailable";

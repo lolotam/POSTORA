@@ -185,8 +185,8 @@ Deno.test("app usage stops another account and survives credential rotation", as
 });
 
 Deno.test("post metadata truncation preserves complete Unicode characters at the SQL boundary", () => {
-  for (const [text, expected] of [["a".repeat(9999) + "😀suffix", "a".repeat(9999)],
-    ["a".repeat(9998) + "😀suffix", "a".repeat(9998) + "😀"], ["short", "short"]]) {
+  for (const [text, expected] of [["a".repeat(9999) + "😀suffix", "a".repeat(9999) + "😀"],
+    ["a".repeat(9998) + "😀suffix", "a".repeat(9998) + "😀s"], ["short", "short"]]) {
     assertEquals(collectionPost({ text, published_at: "2026-11-01T00:00:00Z", permalink: null }).text, expected);
   }
 });

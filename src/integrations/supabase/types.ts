@@ -10985,6 +10985,14 @@ export type Database = {
         }
         Returns: Json
       }
+      record_meta_analytics_admission_failure: {
+        Args: {
+          p_ticket: Json
+          p_reason: string
+          p_attempt_id: string
+        }
+        Returns: Json
+      }
       meta_analytics_collection_policy: {
         Args: {
           p_platform: string

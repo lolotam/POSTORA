@@ -147,13 +147,14 @@ Deno.test("malformed configuration is unavailable and a caller cannot choose dis
 });
 
 Deno.test("transient or undecodable admission leaves the durable dispatch target resumable", async (test) => {
-  for (const stage of ["debug_token", "me"]) for (const failure of ["transport", "server_error", "transient_error", "invalid_response"]) {
+  for (const stage of ["debug_token", "me"]) for (const failure of ["transport", "server_error", "transient_error", "transient_permission", "transient_auth", "invalid_response"]) {
     await test.step(`${stage}: ${failure}`, async () => {
       let commits = 0, observations = 0;
       const handler = createOwnedAnalyticsSyncHandler({ authorize: () => ({ ok: true }), app: () => ({ id: "790001", secret: "fixture-app" }), audit: async () => true,
         rpc: async (name) => {
           if (name === "next_meta_analytics_dispatch_target") return { data: { state: "target", ticket, served_at: STAMP }, error: null };
           if (name === "commit_meta_analytics_dispatch_target") { commits++; return { data: { state: "needs_admission" }, error: null }; }
+          if (name === "record_meta_analytics_admission_failure") return { data: { state: "pending", attempts: 1 }, error: null };
           if (name === "read_threads_analytics_admission_credential") return { data: credential, error: null };
           observations++;
           throw new Error("Failed provider verification must not persist a grant");
@@ -163,6 +164,8 @@ Deno.test("transient or undecodable admission leaves the durable dispatch target
             if (failure === "transport") throw new TypeError("Synthetic network outage");
             if (failure === "server_error") return Response.json({ error: { code: 2 } }, { status: 503 });
             if (failure === "transient_error") return Response.json({ error: { code: 2, is_transient: true } }, { status: 400 });
+            if (failure === "transient_permission") return Response.json({ error: { code: 200, is_transient: true } }, { status: 400 });
+            if (failure === "transient_auth") return Response.json({ error: { code: 190, is_transient: true } }, { status: 400 });
             return Response.json({ unexpected: true });
           }
           return Response.json({ data: { is_valid: true, user_id: authority.platform_user_id, scopes: ["threads_basic", "threads_manage_insights"] } });
@@ -201,4 +204,144 @@ Deno.test("credential rotation during admission leaves the dispatch ticket uncom
     assertEquals(receipt.counts, { visited: 1, queued: 0, refused: 0 });
     assertEquals(commits, 1);
   });
+});
+
+Deno.test("known permission and auth refusals advance without fabricated observations", async (test) => {
+  for (const providerError of [{ code: 10 }, { code: 200 }, { code: 190 }, { code: 100, error_subcode: 463 }])
+    for (const stage of ["debug_token", "me"]) await test.step(`${JSON.stringify(providerError)}: ${stage}`, async () => {
+    let commits = 0;
+    const handler = createOwnedAnalyticsSyncHandler({ authorize: () => ({ ok: true }), app: () => ({ id: "790001", secret: "fixture-app" }), audit: async () => true,
+      rpc: async (name, args) => {
+        if (name === "next_meta_analytics_dispatch_target") return { data: { state: "target", ticket, served_at: STAMP }, error: null };
+        if (name === "read_threads_analytics_admission_credential") return { data: credential, error: null };
+        assertEquals(name, "commit_meta_analytics_dispatch_target");
+        if (++commits === 1) return { data: { state: "needs_admission" }, error: null };
+        assertEquals(args.p_outcome, "refused");
+        assertEquals(args.p_reason, [10, 200].includes(providerError.code) ? "permission_missing" : "reauth_required");
+        return { data: { state: "advanced", outcome: "refused", complete: true, refused_count: 1 }, error: null };
+      }, fetch: async (input) => String(input).includes(stage) ? Response.json({ error: providerError }, { status: 400 })
+        : Response.json({ data: { is_valid: true, user_id: authority.platform_user_id, scopes: ["threads_basic", "threads_manage_insights"] } }) });
+    const response = await handler(request("threads"));
+    assertEquals(response.status, 200);
+    assertEquals((await response.json()).counts, { visited: 1, queued: 0, refused: 1 });
+  });
+});
+
+Deno.test("persisted admission failures release the next account without reporting collection success", async () => {
+  let attempts = 0, advanced = false;
+  const attemptIds = new Set<unknown>();
+  const handler = createOwnedAnalyticsSyncHandler({ authorize: () => ({ ok: true }), app: () => ({ id: "790001", secret: "fixture-app" }), audit: async () => true,
+    rpc: async (name, args) => {
+      if (name === "next_meta_analytics_dispatch_target") return { data: { state: "target", ticket: advanced
+        ? { ...ticket, account_id: "c2000000-0000-4000-8000-000000000002", after_account_id: ACCOUNT } : ticket, served_at: STAMP }, error: null };
+      if (name === "commit_meta_analytics_dispatch_target") return { data: advanced
+        ? { state: "advanced", outcome: "queued", complete: true, refused_count: 1 } : { state: "needs_admission" }, error: null };
+      if (name === "read_threads_analytics_admission_credential") return { data: credential, error: null };
+      assertEquals(name, "record_meta_analytics_admission_failure");
+      assertEquals(args.p_reason, "provider_unavailable");
+      attemptIds.add(args.p_attempt_id);
+      attempts++;
+      advanced = attempts === 3;
+      return { data: advanced ? { state: "advanced", outcome: "refused", complete: false, refused_count: 1 }
+        : { state: "pending", attempts }, error: null };
+    }, fetch: async () => Response.json({ error: { code: 2 } }, { status: 503 }) });
+  for (const expected of [503, 503, 200]) {
+    const response = await handler(request("threads"));
+    assertEquals(response.status, expected);
+    if (expected === 200) {
+      const body = await response.json();
+      assertEquals(body.status, "partial");
+      assertEquals(body.reason, "admission_unavailable");
+      assertEquals(body.counts, { visited: 1, queued: 0, refused: 1 });
+    }
+  }
+  assertEquals(attemptIds.size, 3);
+  const next = await (await handler(request("threads"))).json();
+  assertEquals(next.counts, { visited: 1, queued: 1, refused: 0 });
+  assertEquals(next.status, "partial", "A prior refused admission cannot become a successful due date");
+});
+
+Deno.test("unknown store contracts never consume a provider failure attempt", async () => {
+  let attempts = 0;
+  const handler = createOwnedAnalyticsSyncHandler({ authorize: () => ({ ok: true }), app: () => ({ id: "790001", secret: "fixture-app" }), audit: async () => true,
+    rpc: async (name) => {
+      if (name === "next_meta_analytics_dispatch_target") return { data: { state: "target", ticket, served_at: STAMP }, error: null };
+      if (name === "commit_meta_analytics_dispatch_target") return { data: { state: "needs_admission" }, error: null };
+      if (name === "read_threads_analytics_admission_credential") return { data: {}, error: null };
+      attempts++;
+      throw new Error("An unknown store outcome must stop before another write");
+    }, fetch: async () => { throw new Error("Unknown credentials cannot reach Meta"); } });
+  const response = await handler(request("threads"));
+  assertEquals(response.status, 503);
+  assertEquals((await response.json()).reason, "invalid_contract");
+  assertEquals(attempts, 0);
+});
+
+Deno.test("a concurrent verified grant resumes dispatch and preserves round completion", async (test) => {
+  for (const complete of [true, false]) for (const refusedCount of [0, 1]) await test.step(`complete=${complete}, prior refusals=${refusedCount}`, async () => {
+    let visits = 0, commits = 0, failureWrites = 0;
+    const handler = createOwnedAnalyticsSyncHandler({ authorize: () => ({ ok: true }), app: () => ({ id: "790001", secret: "fixture-app" }), audit: async () => true,
+      rpc: async (name) => {
+        if (name === "next_meta_analytics_dispatch_target") {
+          visits++;
+          return { data: { state: "target", ticket: visits === 1 ? ticket
+            : { ...ticket, account_id: "c2000000-0000-4000-8000-000000000002", after_account_id: ACCOUNT }, served_at: STAMP }, error: null };
+        }
+        if (name === "commit_meta_analytics_dispatch_target") {
+          commits++;
+          return { data: commits === 1 ? { state: "needs_admission" }
+            : { state: "advanced", outcome: "queued", complete: true, refused_count: refusedCount }, error: null };
+        }
+        if (name === "read_threads_analytics_admission_credential") return { data: credential, error: null };
+        assertEquals(name, "record_meta_analytics_admission_failure");
+        failureWrites++;
+        return { data: { state: "advanced", outcome: "queued", complete, refused_count: refusedCount }, error: null };
+      }, fetch: async () => Response.json({ error: { code: 2 } }, { status: 503 }) });
+    const response = await handler(request("threads"));
+    const body = await response.json();
+    assertEquals(response.status, 200);
+    assertEquals(body.reason, null, "A verified queued receipt is not unavailable admission");
+    assertEquals(body.status, refusedCount ? "partial" : "complete");
+    assertEquals(body.counts, { visited: complete ? 1 : 2, queued: complete ? 1 : 2, refused: 0 });
+    assertEquals([visits, commits, failureWrites], [complete ? 1 : 2, complete ? 1 : 2, 1]);
+  });
+});
+
+Deno.test("an unacknowledged failure-counter write stops before advancing or visiting another target", async (test) => {
+  for (const failure of ["lost_response", "invalid_receipt", "unexpected_admission"] as const) await test.step(failure, async () => {
+    let visited = 0, commits = 0, failureWrites = 0;
+    const handler = createOwnedAnalyticsSyncHandler({ authorize: () => ({ ok: true }), app: () => ({ id: "790001", secret: "fixture-app" }), audit: async () => true,
+      rpc: async (name) => {
+        if (name === "next_meta_analytics_dispatch_target") { visited++; return { data: { state: "target", ticket, served_at: STAMP }, error: null }; }
+        if (name === "commit_meta_analytics_dispatch_target") { commits++; return { data: { state: "needs_admission" }, error: null }; }
+        if (name === "read_threads_analytics_admission_credential") return { data: credential, error: null };
+        assertEquals(name, "record_meta_analytics_admission_failure");
+        failureWrites++;
+        return failure === "lost_response" ? { data: null, error: { code: "57014" } }
+          : { data: failure === "invalid_receipt" ? { state: "pending", attempts: 3 } : { state: "needs_admission" }, error: null };
+      }, fetch: async () => Response.json({ error: { code: 2 } }, { status: 503 }) });
+    const response = await handler(request("threads"));
+    const body = await response.json();
+    assertEquals(response.status, 503);
+    assertEquals(body.reason, failure === "lost_response" ? "storage_unavailable" : "invalid_contract");
+    assertEquals(body.counts, { visited: 1, queued: 0, refused: 0 });
+    assertEquals([visited, commits, failureWrites], [1, 1, 1]);
+  });
+});
+
+Deno.test("caller abort during provider admission never consumes a failure attempt", async () => {
+  let commits = 0, failureWrites = 0;
+  const controller = new AbortController();
+  const handler = createOwnedAnalyticsSyncHandler({ authorize: () => ({ ok: true }), app: () => ({ id: "790001", secret: "fixture-app" }), audit: async () => true,
+    rpc: async (name) => {
+      if (name === "next_meta_analytics_dispatch_target") return { data: { state: "target", ticket, served_at: STAMP }, error: null };
+      if (name === "commit_meta_analytics_dispatch_target") { commits++; return { data: { state: "needs_admission" }, error: null }; }
+      if (name === "read_threads_analytics_admission_credential") return { data: credential, error: null };
+      failureWrites++;
+      throw new Error("An aborted provider call cannot write an admission failure");
+    }, fetch: async () => { controller.abort(); throw new DOMException("Synthetic caller abort", "AbortError"); } });
+  const response = await handler(new Request(request("threads"), { signal: controller.signal }));
+  assertEquals(response.status, 503);
+  assertEquals((await response.json()).counts, { visited: 1, queued: 0, refused: 0 });
+  assertEquals([commits, failureWrites], [1, 0]);
 });

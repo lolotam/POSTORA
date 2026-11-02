@@ -2,6 +2,7 @@ import type { MetricDefinition, UnavailableReason } from "../_shared/analyticsCo
 import { unavailableMetric } from "../_shared/analyticsContract.ts";
 import { alignedDailySeries, countMetric, type CompleteAnalyticsMetric, type DailyAnalyticsRow } from "../_shared/analyticsProjection.ts";
 import type { MetaAnalyticsResult } from "../_shared/metaAnalyticsTransport.ts";
+import { AnalyticsWorkerStopped } from "./deadline.ts";
 import type { AnalyticsCapture } from "./store.ts";
 import { threadsSnapshotMetric } from "../threads-insights/analyticsProjection.ts";
 
@@ -33,6 +34,8 @@ export function providerReason(reason: string): UnavailableReason | "rate_limite
 }
 
 export function requiredReply<T>(reply: MetaAnalyticsResult<T, string>): T {
+  // A cancelled invocation is not a provider failure: stop and leave the visit resumable.
+  if (reply.error?.kind === "aborted") throw new AnalyticsWorkerStopped("deadline");
   if (reply.error?.kind === "budget") throw new CollectionVisitPaused();
   if (reply.error) throw new CollectionProviderRefused(providerReason(reply.error.reason), reply.retryAt);
   return reply.data;
@@ -40,6 +43,7 @@ export function requiredReply<T>(reply: MetaAnalyticsResult<T, string>): T {
 
 type CollectionMetricRow = DailyAnalyticsRow & { name: string; total_value?: { value?: number | null } };
 export function captureCell(reply: MetaAnalyticsResult<{ data: CollectionMetricRow[] }, string>, definition: MetricDefinition, capture: AnalyticsCapture): CompleteAnalyticsMetric {
+  if (reply.error?.kind === "aborted") throw new AnalyticsWorkerStopped("deadline");
   if (reply.error?.kind === "budget") throw new CollectionVisitPaused();
   if (reply.error) {
     const reason = providerReason(reply.error.reason);
@@ -77,7 +81,7 @@ export function collectionPost(post: CollectionPost): CollectionPost {
   if (post.permalink !== null && (!/^https:\/\/[^\s]+$/.test(post.permalink) || post.permalink.length > 2048)) {
     throw new CollectionProviderRefused("provider_error");
   }
-  // Avoid splitting a surrogate pair at the SQL text limit.
-  const prefix = post.text.slice(0, 10000);
-  return { ...post, text: /[\uD800-\uDBFF]$/.test(prefix) ? prefix.slice(0, -1) : prefix };
+  // SQL length() counts characters (code points), not UTF-16 units; truncating by
+  // code point keeps every character the column accepts and never splits a pair.
+  return { ...post, text: Array.from(post.text).slice(0, 10000).join("") };
 }

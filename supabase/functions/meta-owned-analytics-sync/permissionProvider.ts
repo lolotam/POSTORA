@@ -1,10 +1,13 @@
 import { z } from "https://esm.sh/zod@3.25.76";
 import { MetaAnalyticsTransport, metaAnalyticsFailure, type MetaAnalyticsFailure } from "../_shared/metaAnalyticsTransport.ts";
 import { AnalyticsWorkerStopped } from "./deadline.ts";
-import { parseMetaError } from "../_shared/metaErrors.ts";
+import { isPermanentMetaError, parseMetaError } from "../_shared/metaErrors.ts";
 import type { AdmissionCredential, OwnedAnalyticsPlatform } from "./store.ts";
 
-type PermissionFailure = "provider_error" | "reauth_required" | "rate_limited";
+type PermissionFailure = "provider_error" | "reauth_required" | "rate_limited" | "permission_missing";
+export class AdmissionProviderUnavailable extends AnalyticsWorkerStopped {
+  constructor(reason: "provider_unavailable" | "invalid_contract") { super(reason); }
+}
 export type PermissionVerification = { ok: true; scopes: string[]; observedAt: string }
   | { ok: false; reason: PermissionFailure | "identity_mismatch" | "app_mismatch" };
 export type AdmissionApp = { id: string; secret: string };
@@ -19,8 +22,8 @@ const identitySchema = z.object({ id: z.string().min(1).max(200) });
 
 function permissionFailure(reply: MetaAnalyticsFailure<PermissionFailure>): PermissionVerification {
   if (["aborted", "budget"].includes(reply.error.kind)) throw new AnalyticsWorkerStopped("deadline");
-  if (reply.error.kind === "transport" || reply.status >= 500 || reply.error.kind === "provider" && reply.error.reason === "provider_error") throw new AnalyticsWorkerStopped("provider_unavailable");
-  if (reply.error.kind === "invalid_response") throw new AnalyticsWorkerStopped("invalid_contract");
+  if (reply.error.kind === "transport" || reply.error.kind === "provider" && reply.error.reason === "provider_error") throw new AdmissionProviderUnavailable("provider_unavailable");
+  if (reply.error.kind === "invalid_response") throw new AdmissionProviderUnavailable("invalid_contract");
   return { ok: false, reason: reply.error.reason };
 }
 
@@ -43,7 +46,8 @@ export async function verifyAdmissionPermission(input: {
       }
       const error = parseMetaError(status, payload);
       const reason: PermissionFailure = status === 429 || [4,17,32,613].includes(error.code ?? -1) ? "rate_limited"
-        : error.code === 190 ? "reauth_required" : "provider_error";
+        : isPermanentMetaError(error) || error.code === 190 && !error.transient ? "reauth_required"
+        : !error.transient && [10, 200].includes(error.code ?? -1) ? "permission_missing" : "provider_error";
       return metaAnalyticsFailure(status, "provider", reason,
         "Owned analytics permission verification failed.");
     } };
@@ -56,11 +60,11 @@ export async function verifyAdmissionPermission(input: {
     return { ok: false, reason: "reauth_required" };
   }
   const expectedUser = "provider_user_id" in credential.authority ? credential.authority.provider_user_id : credential.authority.platform_user_id;
-  if (grant.user_id === undefined) throw new AnalyticsWorkerStopped("invalid_contract");
+  if (grant.user_id === undefined) throw new AdmissionProviderUnavailable("invalid_contract");
   if (grant.user_id !== expectedUser) return { ok: false, reason: "identity_mismatch" };
-  if (platform === "facebook" && grant.app_id === undefined) throw new AnalyticsWorkerStopped("invalid_contract");
+  if (platform === "facebook" && grant.app_id === undefined) throw new AdmissionProviderUnavailable("invalid_contract");
   if (grant.app_id !== undefined && grant.app_id !== app.id) return { ok: false, reason: "app_mismatch" };
-  if (!grant.scopes || new Set(grant.scopes).size !== grant.scopes.length) throw new AnalyticsWorkerStopped("invalid_contract");
+  if (!grant.scopes || new Set(grant.scopes).size !== grant.scopes.length) throw new AdmissionProviderUnavailable("invalid_contract");
   const operational = new MetaAnalyticsTransport<PermissionFailure>({ ...options, token: credential.access_token });
   const identity = await operational.request(["me"], { fields: "id" }, identitySchema);
   if (identity.error) return permissionFailure(identity);
