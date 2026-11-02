@@ -1,5 +1,5 @@
 {
-  "backend_candidate": "413d55f8315144d542ef98565884c4e38ae4c5e1",
+  "backend_candidate": "cb089d6169a42f486fa4ed2ebeac71622ead7a71",
   "backend_base": "781111a8c8b5bc1296f8c82bbe575f2498b82748",
   "backend_files": [
     {
@@ -9,6 +9,10 @@
     {
       "path": "supabase/functions/n8n-api/index.ts",
       "sha256": "372b89df259b797da58c8e39bce649f7e382e004594eb7747ffb86d79ce7c964"
+    },
+    {
+      "path": "supabase/functions/process-post/index.ts",
+      "sha256": "cf8b6046d916b52b878336591c15244fb48c5ee46d2794370ceb92c0c82d6c0b"
     }
   ],
   "node": {
@@ -67,7 +71,19 @@
     "node_build": "passed",
     "immutable_lint_i18n": "NO REGRESSIONS",
     "graphify_update": "passed",
-    "immutable_lint_i18n_source_candidate": "413d55f8315144d542ef98565884c4e38ae4c5e1"
+    "immutable_lint_i18n_source_candidate": "413d55f8315144d542ef98565884c4e38ae4c5e1",
+    "native_publisher_and_companion_regressions": {
+      "candidate": "cb089d6169a42f486fa4ed2ebeac71622ead7a71",
+      "tests": 37,
+      "steps": 33,
+      "failed": 0,
+      "native_publisher_test": {
+        "path": "supabase/functions/process-post/instagramMirroring.test.ts",
+        "sha256": "accb0532c52e0ea4b8b14cb2b85d090d7f6b7f60f6a898e6ae299bf8811afd05",
+        "tests": 1,
+        "steps": 6
+      }
+    }
   },
   "local_artifacts": [
     {
@@ -137,6 +153,22 @@
     {
       "path": ".tmp/mcp-story-review-lint-final.md",
       "sha256": "6a915fce4259c192909a9b322e4582aaf6e89c7246bcbddfe35925f270cd2f3a"
+    },
+    {
+      "path": ".tmp/mcp-story-native-before-valid.log",
+      "sha256": "3fdb16db2315cb989576d03d879e07d58a60306735bc2dee9d39301980f222cf"
+    },
+    {
+      "path": ".tmp/mcp-story-native-cb089d61-regressions.log",
+      "sha256": "88ba7bc2be1db92ff0467b8ea04fc990d9f040fcb0da7f213bc1063eed05e1d9"
+    },
+    {
+      "path": ".tmp/mcp-story-native-test-eslint-final.json",
+      "sha256": "374b45fdb20fab22f1583a75f19529addba2fe6bf05cc9eb43e80f2e9a287e58"
+    },
+    {
+      "path": ".tmp/mcp-story-native-production-eslint-comparison.json",
+      "sha256": "e17fcf065bb00a8d8a801ee2614109a7711dcac42ff7688eef33c0453c99eb26"
     }
   ],
   "previous_backend_candidate": "7f3185c3944c597632d144371e8d5a07aeb14bf3",
@@ -158,5 +190,39 @@
     "initial_lint_attempts": "Tool failures: missing isolated-worktree ESLint, then unresolved TypeScript. Both retained.",
     "checker_sha256": "4d33c31bdf7784c082f8e653f6b93be1549dba7b0d5f0f8b2fc5aa16c86ea0c7",
     "immutable_lint_i18n": "NO REGRESSIONS; existing lint/i18n debt remains"
+  },
+  "native_publisher_followup": {
+    "candidate": "cb089d6169a42f486fa4ed2ebeac71622ead7a71",
+    "superseded_candidate": "413d55f8315144d542ef98565884c4e38ae4c5e1",
+    "before_fix_failed_steps": 5,
+    "before_fix_passed_steps": 1,
+    "boundaries": "Registered process-post and public get-post composition; only Meta and database HTTP boundaries are synthetic.",
+    "fixed": [
+      "Page-linked first-run image, Reel and carousel mirrors record their returned StoryRef before returning, so a completed-post retry does not mirror again.",
+      "Image and carousel results preserve an unrecordable Story carry, the existing warning and operational log without marking the live feed as failed.",
+      "Business Login stores accumulated collaborator warnings in response_data.warnings before selfWroteRows skips the outer writer."
+    ],
+    "guards": { "clean_code": "passed", "test_guard": "passed", "docs_guard": "passed" },
+    "scoped_eslint": { "new_test_errors": 0, "new_test_warnings": 0, "production_baseline_errors": 16, "production_current_errors": 16, "added_findings": 0 },
+    "initial_eslint_attempt": "Tool failure: isolated checkout could not resolve @eslint/js. Retained; final scoped check used the installed main-workspace config.",
+    "graphify_update": "passed",
+    "release_state": {
+      "backend_pr": "https://github.com/lolotam/POSTORA/pull/348",
+      "backend_remote_head_checked": "6c61f6ba855cb653d2f631ad317e7011d5151112",
+      "backend_remote_state": "OPEN; inspected checks green for previous head, not the newer local candidate",
+      "node_remote_head_checked": "486d14a3970c39cc685b18c6dd6cab43594554ab",
+      "node_remote_state": "OPEN; inspected checks green",
+      "node_focused_tests": 9,
+      "node_typecheck": "passed",
+      "npm_version_readback": "1.9.1",
+      "pushed": false,
+      "merged": false,
+      "deployed": false,
+      "npm_published": false,
+      "live_publication_verified": false,
+      "new_sql": false,
+      "existing_rpc_prerequisites": ["record_published_story", "partner_settle_platform_post"],
+      "production_package_approval": "pending"
+    }
   }
 }
