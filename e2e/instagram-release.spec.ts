@@ -5,6 +5,13 @@ import { syntheticOwnerReleaseKey } from "./fixtures/instagramOwnerReleaseSettin
 import { INSTAGRAM_RELEASE } from "./fixtures/instagramRelease.ts";
 import { prepareInstagramReleaseBrowser, signInInstagramRelease } from "./fixtures/instagramReleaseBrowser.ts";
 
+async function searchInstagramRelease(page: Page, username: string) {
+  await page.getByPlaceholder("Enter @username or instagram.com/username").fill(`@${username}`);
+  const response = page.waitForResponse((reply) => reply.url().endsWith("/functions/v1/brand-scrape") && reply.request().method() === "POST");
+  await page.getByRole("button", { name: "Analyze", exact: true }).click();
+  return response;
+}
+
 test("canonical fixture smoke: real Auth, ordinary owners, separate admin and SQL quota state", async ({ page, request }) => {
   const manifest = await prepareInstagramReleaseBrowser(page, request);
   const healthReceipt = await (await request.get(`${INSTAGRAM_RELEASE.apiUrl}/__instagram-release/health`)).json();
@@ -35,7 +42,7 @@ test("canonical fixture smoke: real Auth, ordinary owners, separate admin and SQ
       remaining: key === "admin" ? null : key === "ownerA" ? 9 : 0 });
   }
   const calls = await request.get(`${INSTAGRAM_RELEASE.apiUrl}/__instagram-release/provider-calls`, { headers });
-  expect(await calls.json()).toEqual({ calls: [], networkRefusals: 0 });
+  expect(await calls.json()).toEqual({ calls: [], apifyCalls: [], networkRefusals: 0 });
   // The shared lifecycle cleans up after every canonical journey has finished.
 });
 
@@ -50,10 +57,7 @@ test("canonical discovery preserves official provenance, nullable media and owne
     return response.json();
   };
   const analyze = async (browser: Page) => {
-    await browser.getByPlaceholder("Enter @username or instagram.com/username").fill("@release_competitor");
-    const response = browser.waitForResponse((reply) => reply.url().endsWith("/functions/v1/brand-scrape") && reply.request().method() === "POST");
-    await browser.getByRole("button", { name: "Analyze", exact: true }).click();
-    const reply = await response;
+    const reply = await searchInstagramRelease(browser, "release_competitor");
     expect(reply.status()).toBe(200);
     return reply.json();
   };
@@ -69,7 +73,7 @@ test("canonical discovery preserves official provenance, nullable media and owne
   };
 
   const before = await providerState();
-  expect(before).toEqual({ calls: [], networkRefusals: 0 });
+  expect(before).toEqual({ calls: [], apifyCalls: [], networkRefusals: 0 });
   await signInInstagramRelease(page, manifest, "ownerA");
   await page.goto("/analytics/instagram?tab=analyze");
   const discovered = await analyze(page);
@@ -129,4 +133,93 @@ test("canonical discovery preserves official provenance, nullable media and owne
   await page.keyboard.press("Escape");
   await expect(otherHistoryDialog).toHaveCount(0);
   await expect(page.getByRole("button", { name: "History", exact: true })).toBeFocused();
+});
+
+test("canonical discovery keeps ambiguous viewer failures out of target eligibility and labels only explicitly enabled third-party fallback", async ({ page, request }) => {
+  const manifest = await prepareInstagramReleaseBrowser(page, request);
+  const health = await (await request.get(`${INSTAGRAM_RELEASE.apiUrl}/__instagram-release/health`)).json();
+  const headers = { Authorization: `Bearer ${await syntheticOwnerReleaseKey("service_role")}`,
+    "X-Instagram-Release-Namespace": manifest.namespace, "X-Instagram-Release-Candidate": health.candidate };
+  const control = async (path: string, data: Record<string, unknown>) => {
+    const response = await request.post(`${INSTAGRAM_RELEASE.apiUrl}/__instagram-release/${path}`, { headers, data });
+    expect(response.status()).toBe(200);
+  };
+  const receipts = async () => {
+    const response = await request.get(`${INSTAGRAM_RELEASE.apiUrl}/__instagram-release/provider-calls`, { headers });
+    expect(response.status()).toBe(200);
+    return response.json();
+  };
+  const cases = [
+    { scenario: "permission_denied", username: "release_missing", status: 502, code: "DISCOVERY_PROVIDER_UNAVAILABLE", message: "Instagram discovery could not be completed.", reconnect: false },
+    { scenario: "token_expired", username: "release_zero", status: 409, code: "IG_RECONNECT_REQUIRED", message: "Reconnect Instagram to enable official competitor data.", reconnect: true },
+    { scenario: "network_failure", username: "release_null", status: 502, code: "DISCOVERY_PROVIDER_UNAVAILABLE", message: "Instagram discovery could not be completed.", reconnect: false },
+    { scenario: "ambiguous_target", username: "release_stale", status: 502, code: "DISCOVERY_PROVIDER_UNAVAILABLE", message: "Instagram discovery could not be completed.", reconnect: false },
+  ];
+  const usernames = [...cases.map((entry) => entry.username), "release_partial", "release_negative"];
+  const stored = async (table: string) => {
+    const response = await request.get(`${INSTAGRAM_RELEASE.apiUrl}/rest/v1/${table}`, { headers,
+      params: { user_id: `eq.${manifest.users.ownerA.id}`, username: `in.(${usernames.join(",")})`, order: "username.asc" } });
+    expect(response.status()).toBe(200);
+    return response.json();
+  };
+  const watchlistsBefore = await stored("competitor_watchlist");
+  expect(watchlistsBefore).toHaveLength(usernames.length);
+  const before = await receipts();
+  expect(before.apifyCalls).toEqual([]);
+  const fallbackControlUrl = `${INSTAGRAM_RELEASE.apiUrl}/__instagram-release/interactive-fallback`;
+  expect((await request.post(fallbackControlUrl, { data: { enabled: true } })).status()).toBe(401);
+  expect((await request.post(fallbackControlUrl, { headers: { ...headers, "X-Instagram-Release-Namespace": "foreign" }, data: { enabled: true } })).status()).toBe(409);
+  expect((await request.post(fallbackControlUrl, { headers, data: { enabled: "true" } })).status()).toBe(400);
+  await signInInstagramRelease(page, manifest, "ownerA");
+  await page.goto("/analytics/instagram?tab=analyze");
+  try {
+    for (const entry of cases) {
+      await control("provider-scenario", { account: "pageGranted", scenario: entry.scenario });
+      const response = await searchInstagramRelease(page, entry.username);
+      expect(response.status()).toBe(entry.status);
+      expect(await response.json()).toEqual({ error: entry.message, error_code: entry.code });
+      await expect(page.getByText(entry.message, { exact: true })).toBeVisible({ timeout: 15_000 });
+      await expect(page.getByRole("button", { name: "Reconnect Instagram", exact: true })).toHaveCount(entry.reconnect ? 1 : 0);
+      await expect(page.getByRole("heading", { name: "Synthetic release competitor", exact: true })).toHaveCount(0);
+    }
+    const refused = await receipts();
+    expect(refused.apifyCalls).toEqual([]);
+    expect(refused.networkRefusals).toBe(0);
+    for (const entry of cases) expect(refused.calls.slice(before.calls.length)).toEqual(expect.arrayContaining([
+      expect.objectContaining({ account: "pageGranted", operation: "discovery", scenario: entry.scenario }),
+    ]));
+    expect(await stored("brand_scrape_sessions")).toEqual([]);
+    expect(await stored("competitor_watchlist")).toEqual(watchlistsBefore);
+
+    // The privileged fixture control models an administrator's persisted setting, never browser authority.
+    await control("interactive-fallback", { enabled: true });
+    await control("provider-scenario", { account: "pageGranted", scenario: "token_expired" });
+    const fallback = await searchInstagramRelease(page, "release_partial");
+    expect(fallback.status()).toBe(200);
+    const payload = await fallback.json();
+    expect(payload.source).toBe("apify");
+    expect(payload.profile).toMatchObject({ source: "apify", followersCount: 67 });
+    expect(payload.posts).toEqual([expect.objectContaining({ mediaType: "REEL", likesCount: null, videoViewCount: 17 })]);
+    expect(payload.warning.code).toBe("IG_RECONNECT_REQUIRED");
+    await expect(page.getByRole("heading", { name: "Synthetic third-party competitor", exact: true })).toBeVisible();
+    await expect(page.getByText("Third-party", { exact: true })).toBeVisible();
+    await expect(page.getByText("Official", { exact: true })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Reconnect Instagram", exact: true })).toBeVisible();
+    const afterFallback = await receipts();
+    expect(afterFallback.apifyCalls).toEqual([{ username: "release_partial", observedAt: manifest.referenceInstant }]);
+    expect((await stored("brand_scrape_sessions")).map((row: { profile_data: { source: string } }) => row.profile_data.source)).toEqual(["apify"]);
+
+    await control("provider-scenario", { account: "pageGranted", scenario: "rate_limited" });
+    const throttled = await searchInstagramRelease(page, "release_negative");
+    expect(throttled.status()).toBe(429);
+    expect(await throttled.json()).toEqual({ error: "Instagram discovery is temporarily unavailable.", error_code: "DISCOVERY_RATE_LIMITED" });
+    await expect(page.getByText("Instagram discovery is temporarily unavailable.", { exact: true })).toBeVisible({ timeout: 15_000 });
+    const afterThrottle = await receipts();
+    expect(afterThrottle.apifyCalls).toEqual(afterFallback.apifyCalls);
+    expect(afterThrottle.networkRefusals).toBe(0);
+    expect(await stored("competitor_watchlist")).toEqual(watchlistsBefore);
+  } finally {
+    await control("interactive-fallback", { enabled: false });
+    await control("provider-scenario", { account: "pageGranted", scenario: "normal" });
+  }
 });

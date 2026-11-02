@@ -11,7 +11,7 @@ import { scrapeInstagramOfficial } from "../../supabase/functions/brand-scrape/i
 import {
   assertInstagramReleaseEnvironment, assertInstagramReleaseNetworkUrl,
   assertInstagramReleaseManifest, assertInstagramReleaseCleanupIdentity,
-  createInstagramReleaseManifest, InstagramReleaseMetaTransport,
+  createInstagramReleaseManifest, INSTAGRAM_RELEASE, InstagramReleaseMetaTransport, InstagramReleaseApifyTransport,
   requireInstagramReleaseLogin, requireInstagramReleaseHealth,
 } from "./instagramRelease.ts";
 
@@ -90,6 +90,31 @@ test("provider transport requires exact synthetic authority, host, grammar and b
   for (let index = transport.calls.length; index < 500; index += 1) await transport.reply(new Request(endpoint));
   await assert.rejects(() => transport.reply(new Request(endpoint)), /budget/);
   assert.ok(transport.calls.every((call) => !JSON.stringify(call).includes(account.token)));
+});
+
+test("interactive fallback transport refuses foreign tokens, actors, URLs, bodies and unbounded calls", async () => {
+  const manifest = createInstagramReleaseManifest(referenceInstant);
+  const transport = new InstagramReleaseApifyTransport(manifest);
+  const username = manifest.watchlists[0].username;
+  const endpoint = `https://api.apify.com/v2/acts/apify~instagram-scraper/run-sync-get-dataset-items?token=${INSTAGRAM_RELEASE.apifyToken}&timeout=60`;
+  const input = { directUrls: [`https://www.instagram.com/${username}/`], resultsType: "posts", resultsLimit: 50, addParentData: true };
+  const request = (url = endpoint, body: unknown = input) => new Request(url, { method: "POST", body: JSON.stringify(body) });
+  const result = await transport.reply(request());
+  assert.equal(result.status, 200);
+  assert.deepEqual((await result.json()).map((item: { followersCount: number; likesCount: null; videoViewCount: number }) => [item.followersCount, item.likesCount, item.videoViewCount]), [[67, null, 17]]);
+  for (const url of [endpoint.replace(INSTAGRAM_RELEASE.apifyToken, "foreign"), endpoint.replace("apify~instagram-scraper", "foreign~actor"),
+    endpoint.replace("https://", "http://"), endpoint.replace("api.apify.com", "api.apify.com.evil.test"), `${endpoint}&unreviewed=true`, `${endpoint}&token=${INSTAGRAM_RELEASE.apifyToken}`]) {
+    await assert.rejects(() => transport.reply(request(url)), /refused/);
+  }
+  await assert.rejects(() => transport.reply(new Request(endpoint)), /refused/);
+  for (const body of [null, [], { ...input, resultsLimit: 1000 }, { ...input, extra: true },
+    { ...input, directUrls: ["https://www.instagram.com/foreign/"] }, { ...input, directUrls: [...input.directUrls, ...input.directUrls] }]) {
+    await assert.rejects(() => transport.reply(request(endpoint, body)), /refused/);
+  }
+  assert.equal(transport.calls.length, 1);
+  for (let index = transport.calls.length; index < 20; index += 1) await transport.reply(request());
+  await assert.rejects(() => transport.reply(request()), /budget/);
+  assert.ok(transport.calls.every((call) => !JSON.stringify(call).includes(INSTAGRAM_RELEASE.apifyToken)));
 });
 
 test("remote Docker overrides and default contexts refuse before container inspection", () => {

@@ -7,10 +7,11 @@ export const INSTAGRAM_RELEASE = Object.freeze({
   appUrl: "http://127.0.0.1:8080", password: "InstagramReleaseSyntheticPassword-2026!",
   cronSecret: "synthetic-instagram-release-cron-secret", appId: "770001",
   providerSecret: "synthetic-instagram-release-provider-secret",
+  apifyToken: "synthetic-instagram-release-apify-token",
 });
 export type ReleaseUserKey = "ownerA" | "ownerB" | "admin";
 export type ReleaseAccountKey = "pageGranted" | "directEmpty" | "sibling" | "pageDenied" | "pageUnknown" | "pageMissing" | "pageFailed" | "pageExpired" | "threshold" | "otherPage";
-export type ProviderScenario = "normal" | "token_expired" | "permission_denied" | "network_failure" | "threshold_unavailable" | "empty_metric";
+export type ProviderScenario = "normal" | "token_expired" | "permission_denied" | "network_failure" | "ambiguous_target" | "rate_limited" | "threshold_unavailable" | "empty_metric";
 export interface ReleaseUser { id: string; email: string; key: ReleaseUserKey }
 export interface ReleaseAccount {
   id: string; owner: ReleaseUserKey; key: ReleaseAccountKey; providerId: string;
@@ -169,7 +170,36 @@ export class InstagramReleaseMetaTransport {
     this.calls.push({ account: account.key, operation, scenario, observedAt: this.manifest.referenceInstant });
     if (scenario === "network_failure") throw new TypeError("Synthetic provider transport unavailable");
     if (scenario === "token_expired" || scenario === "permission_denied") return Response.json({ error: { code: scenario === "token_expired" ? 190 : 10 } }, { status: 400 });
+    // Meta 100/33 is deliberately ambiguous; it must not establish target ineligibility.
+    if (scenario === "ambiguous_target") return Response.json({ error: { code: 100, error_subcode: 33 } }, { status: 400 });
+    if (scenario === "rate_limited") return Response.json({ error: { code: 4 } }, { status: 429 });
     return Response.json(providerBody({ url, account, operation, manifest: this.manifest, scenario }));
+  }
+}
+
+/** Intercepts the one reviewed interactive actor request; never delegates to native fetch. */
+export class InstagramReleaseApifyTransport {
+  readonly calls: { username: string; observedAt: string }[] = [];
+  constructor(readonly manifest: InstagramReleaseManifest) { assertInstagramReleaseManifest(manifest); }
+
+  async reply(request: Request): Promise<Response> {
+    const url = new URL(request.url);
+    if (request.method !== "POST" || url.origin !== "https://api.apify.com" || url.username || url.password
+      || url.pathname !== "/v2/acts/apify~instagram-scraper/run-sync-get-dataset-items"
+      || url.searchParams.size !== 2 || url.searchParams.get("token") !== INSTAGRAM_RELEASE.apifyToken
+      || url.searchParams.get("timeout") !== "60") throw new Error("Instagram release Apify transport refused request");
+    const input: unknown = await request.json();
+    if (!input || typeof input !== "object" || Array.isArray(input)) throw new Error("Instagram release Apify transport refused body");
+    const body = input as Record<string, unknown>;
+    const username = this.manifest.watchlists.find((entry) => Array.isArray(body.directUrls)
+      && body.directUrls.length === 1 && body.directUrls[0] === `https://www.instagram.com/${entry.username}/`)?.username;
+    if (!username || Object.keys(body).sort().join(",") !== "addParentData,directUrls,resultsLimit,resultsType"
+      || body.resultsType !== "posts" || body.resultsLimit !== 50 || body.addParentData !== true
+      || this.calls.length >= 20) throw new Error("Instagram release Apify transport refused body or budget");
+    this.calls.push({ username, observedAt: this.manifest.referenceInstant });
+    return Response.json([{ id: `release_third_party_${username}`, shortCode: "release_synthetic", type: "Video", productType: "reels",
+      ownerId: "release_third_party_profile", ownerFullName: "Synthetic third-party competitor", followersCount: 67, postsCount: 1,
+      caption: "Recorded synthetic third-party media", timestamp: this.manifest.referenceInstant, likesCount: null, commentsCount: 2, videoViewCount: 17 }]);
   }
 }
 
