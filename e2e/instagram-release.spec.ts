@@ -223,3 +223,118 @@ test("canonical discovery keeps ambiguous viewer failures out of target eligibil
     await control("provider-scenario", { account: "pageGranted", scenario: "normal" });
   }
 });
+
+test("canonical quota management refuses extra activations, serializes the final slot and preserves downgrade and unlimited behavior", async ({ page, request }) => {
+  const manifest = await prepareInstagramReleaseBrowser(page, request);
+  const health = await (await request.get(`${INSTAGRAM_RELEASE.apiUrl}/__instagram-release/health`)).json();
+  const headers = { Authorization: `Bearer ${await syntheticOwnerReleaseKey("service_role")}`,
+    "X-Instagram-Release-Namespace": manifest.namespace, "X-Instagram-Release-Candidate": health.candidate };
+  const read = async (table: string, owner: string) => {
+    const response = await request.get(`${INSTAGRAM_RELEASE.apiUrl}/rest/v1/${table}`, { headers, params: { user_id: `eq.${owner}`, order: "id.asc" } });
+    expect(response.status()).toBe(200);
+    return response.json();
+  };
+  const providerState = async () => {
+    const response = await request.get(`${INSTAGRAM_RELEASE.apiUrl}/__instagram-release/provider-calls`, { headers });
+    expect(response.status()).toBe(200);
+    return response.json();
+  };
+  const setQuota = async (limit: number) => {
+    const response = await request.post(`${INSTAGRAM_RELEASE.apiUrl}/__instagram-release/quota`, { headers, data: { owner: "ownerA", limit } });
+    expect(response.status()).toBe(200);
+  };
+  const rpc = async (operations: { name: string; args: Record<string, unknown> }[]) => page.evaluate(async ({ apiUrl, operations }) => {
+    const saved = Object.entries(localStorage).find(([key]) => key.endsWith("-auth-token"));
+    if (!saved) throw new Error("Real owner Auth session missing");
+    const token = JSON.parse(saved[1]).access_token;
+    return Promise.all(operations.map(async (operation) => {
+      const response = await fetch(`${apiUrl}/rest/v1/rpc/${operation.name}`, { method: "POST",
+        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" }, body: JSON.stringify(operation.args) });
+      return { status: response.status, body: await response.json() };
+    }));
+  }, { apiUrl: INSTAGRAM_RELEASE.apiUrl, operations });
+  const logout = async () => {
+    await page.locator('header button[aria-haspopup="menu"]').last().click();
+    await page.getByRole("menuitem", { name: "Logout", exact: true }).click();
+    await page.waitForURL("/");
+  };
+  await signInInstagramRelease(page, manifest, "ownerB");
+  await page.goto("/analytics/instagram?tab=competitors");
+  await expect(page.getByText("5 of 5 tracked", { exact: true })).toBeVisible();
+  await expect(page.getByRole("link", { name: "View plans", exact: true })).toHaveAttribute("href", "/pricing");
+  const beforeRows = await read("competitor_watchlist", manifest.users.ownerB.id);
+  const beforeJobs = await read("instagram_collection_jobs", manifest.users.ownerB.id);
+  await page.goto("/analytics/instagram?tab=analyze");
+  expect((await searchInstagramRelease(page, "release_zero")).status()).toBe(200);
+  const afterDiscovery = await providerState();
+  const deniedAdd = page.waitForResponse((response) => response.url().endsWith("/rpc/add_competitor_watchlist") && response.request().method() === "POST");
+  await page.getByRole("button", { name: "Track", exact: true }).click();
+  expect((await deniedAdd).status()).toBe(400);
+  await expect(page.getByText("Your limit is 5 active competitors.", { exact: true })).toBeVisible();
+  expect(await read("competitor_watchlist", manifest.users.ownerB.id)).toEqual(beforeRows);
+  expect(await read("instagram_collection_jobs", manifest.users.ownerB.id)).toEqual(beforeJobs);
+  expect(await providerState()).toEqual(afterDiscovery);
+
+  await page.goto("/analytics/instagram?tab=competitors");
+  await page.getByRole("button", { name: "Remove @release_quota_4", exact: true }).click();
+  const removal = page.getByRole("alertdialog", { name: "Remove @release_quota_4?", exact: true });
+  await expect(removal).toContainText("History is kept for 90 days");
+  await removal.getByRole("button", { name: "Remove", exact: true }).click();
+  await expect(removal).toHaveCount(0);
+  await expect(page.getByText("4 of 5 tracked", { exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Tracked competitors", exact: true })).toBeFocused();
+  const competing = await rpc(["release_race_a", "release_race_b"].map((username) => ({ name: "add_competitor_watchlist", args: { p_username: username, p_label: null } })));
+  expect(competing.map((result) => result.status).sort()).toEqual([200, 400]);
+  expect(competing.find((result) => result.status === 400)?.body.message).toMatch(/^COMPETITOR_QUOTA_EXCEEDED:/);
+  const rowsAfterRace = await read("competitor_watchlist", manifest.users.ownerB.id);
+  expect(rowsAfterRace.filter((row: { is_active: boolean }) => row.is_active)).toHaveLength(5);
+  expect(rowsAfterRace.filter((row: { username: string }) => row.username.startsWith("release_race_"))).toHaveLength(1);
+  const removed = rowsAfterRace.find((row: { username: string }) => row.username === "release_quota_4");
+  expect(removed.id).toBe(beforeRows.find((row: { username: string }) => row.username === "release_quota_4").id);
+  expect(removed.is_active).toBe(false);
+  expect(removed.removed_at).not.toBeNull();
+  await page.reload();
+  await page.getByRole("tab", { name: "Removed", exact: true }).click();
+  await page.getByRole("button", { name: "Reactivate @release_quota_4", exact: true }).click();
+  await expect(page.getByText("Your limit is 5 active competitors.", { exact: true })).toBeVisible();
+  expect(await read("competitor_watchlist", manifest.users.ownerB.id)).toEqual(rowsAfterRace);
+  expect(await read("instagram_collection_jobs", manifest.users.ownerB.id)).toEqual(beforeJobs);
+
+  await logout();
+  await signInInstagramRelease(page, manifest, "ownerA");
+  const ownerRows = await read("competitor_watchlist", manifest.users.ownerA.id);
+  const ownerHistory = await read("competitor_profile_snapshots", manifest.users.ownerA.id);
+  try {
+    await setQuota(3);
+    await page.goto("/analytics/instagram?tab=competitors");
+    await expect(page.getByText("11 of 3 tracked", { exact: true })).toBeVisible();
+    await expect(page.getByRole("link", { name: "View plans", exact: true })).toBeVisible();
+    expect(await read("competitor_watchlist", manifest.users.ownerA.id)).toEqual(ownerRows);
+    expect(await read("competitor_profile_snapshots", manifest.users.ownerA.id)).toEqual(ownerHistory);
+    await page.getByRole("tab", { name: "Removed", exact: true }).click();
+    await page.getByRole("button", { name: "Reactivate @release_retention_89", exact: true }).click();
+    await expect(page.getByText("Your limit is 3 active competitors.", { exact: true })).toBeVisible();
+    expect(await read("competitor_watchlist", manifest.users.ownerA.id)).toEqual(ownerRows);
+
+    await setQuota(-1);
+    await page.reload();
+    await expect(page.getByText("Unlimited tracking", { exact: true })).toBeVisible();
+    await expect(page.getByRole("link", { name: "View plans", exact: true })).toHaveCount(0);
+    await page.getByRole("tab", { name: "Removed", exact: true }).click();
+    await page.getByRole("button", { name: "Reactivate @release_retention_89", exact: true }).click();
+    await expect(page.getByText("Tracked; the first snapshot is queued.", { exact: true })).toBeVisible();
+    const reactivated = (await read("competitor_watchlist", manifest.users.ownerA.id)).find((row: { username: string }) => row.username === "release_retention_89");
+    expect(reactivated).toMatchObject({ id: ownerRows.find((row: { username: string }) => row.username === "release_retention_89").id, is_active: true, removed_at: null });
+    expect(await read("competitor_profile_snapshots", manifest.users.ownerA.id)).toEqual(ownerHistory);
+    expect((await read("instagram_collection_jobs", manifest.users.ownerA.id)).some((job: { watchlist_id: string; status: string }) => job.watchlist_id === reactivated.id && job.status === "queued")).toBe(true);
+  } finally { await setQuota(20); }
+  await logout();
+  await signInInstagramRelease(page, manifest, "admin");
+  await page.goto("/analytics/instagram?tab=competitors");
+  await expect(page.getByText("Unlimited tracking", { exact: true })).toBeVisible();
+  await expect(page.getByRole("link", { name: "View plans", exact: true })).toHaveCount(0);
+  const adminAdd = await rpc([{ name: "add_competitor_watchlist", args: { p_username: "release_admin_extra", p_label: null } }]);
+  expect(adminAdd[0].status).toBe(200);
+  expect((await read("competitor_watchlist", manifest.users.admin.id)).filter((row: { is_active: boolean }) => row.is_active)).toHaveLength(2);
+  expect(await providerState()).toEqual(afterDiscovery);
+});
