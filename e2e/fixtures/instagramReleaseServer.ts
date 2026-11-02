@@ -114,7 +114,9 @@ async function fixtureControl(request: Request, path: string): Promise<Response>
   if (path === "provider-scenario") return setProviderScenario(input);
   if (path === "interactive-fallback") {
     if (Object.keys(input).join(",") !== "enabled" || typeof input.enabled !== "boolean") return new Response(null, { status: 400 });
-    const changed = await ownerReleaseSql(`UPDATE public.app_settings SET value='${input.enabled}'::jsonb WHERE key='apify_enabled' RETURNING key;`);
+    const changed = await ownerReleaseSql(`WITH changed AS (
+      UPDATE public.app_settings SET value='${input.enabled}'::jsonb WHERE key='apify_enabled' RETURNING key
+    ) SELECT key FROM changed;`);
     if (changed !== "apify_enabled") throw new Error("Canonical interactive fallback setting missing");
     return Response.json({ enabled: input.enabled });
   }
