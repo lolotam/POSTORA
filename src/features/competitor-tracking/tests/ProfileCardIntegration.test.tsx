@@ -350,6 +350,18 @@ describe("the history states the source it was given", () => {
     expect(screen.queryByText("Source unknown")).toBeNull();
   });
 
+  it("preserves the producer's profile source in a saved cache row and its reused profile", async () => {
+    supabaseState.sessions = [makeSession({ strategy_used: "cache", source: null,
+      profile_data: { ...makeProfile("instagram"), source: "official" }, posts_data: [POST] })];
+    const onReuse = vi.fn();
+    renderWithProviders(<ScrapeHistory onReuse={onReuse} />);
+
+    expect(await screen.findByText("Official")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Reuse" }));
+    expect(onReuse).toHaveBeenCalledTimes(1);
+    expect(onReuse.mock.calls[0][0].source).toBe("official");
+  });
+
   it("hands the reused profile the source of its session", async () => {
     supabaseState.sessions = [
       makeSession({ strategy_used: "apify", source: "apify", posts_data: [POST] }),

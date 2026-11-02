@@ -28,6 +28,11 @@ const platformIcons: Record<string, React.ReactNode> = {
   tiktok: <Video className="w-4 h-4" />,
 };
 
+function resolveSessionSource(session: BrandScrapeSession) {
+  const recorded = resolveBrandProfileSource(session.source);
+  return recorded !== "unknown" ? recorded : resolveBrandProfileSource(session.profile_data?.source);
+}
+
 export function ScrapeHistory({ onReuse }: ScrapeHistoryProps) {
   const { t } = useTranslation("analytics");
   const queryClient = useQueryClient();
@@ -105,11 +110,7 @@ export function ScrapeHistory({ onReuse }: ScrapeHistoryProps) {
      * "unknown". The card the owner gets therefore says exactly what
      * the history row says (T8-01).
      */
-    const sessionSource = resolveBrandProfileSource(session.source);
-    const profileSource =
-      sessionSource !== "unknown"
-        ? sessionSource
-        : resolveBrandProfileSource(session.profile_data.source);
+    const profileSource = resolveSessionSource(session);
 
     onReuse({ ...session.profile_data, source: profileSource }, session.posts_data);
     toast.success(t("toast.loadedHistory", "Loaded {{username}} data from history", { username: session.username }));
@@ -215,7 +216,7 @@ export function ScrapeHistory({ onReuse }: ScrapeHistoryProps) {
                         just because a cache entry looks official
                         (T8-01).
                       */}
-                      <CompetitorSourceBadge source={resolveBrandProfileSource(session.source)} />
+                      <CompetitorSourceBadge source={resolveSessionSource(session)} />
                     </TableCell>
                     <TableCell className="text-center">
                       <Badge variant="secondary" className="text-xs">

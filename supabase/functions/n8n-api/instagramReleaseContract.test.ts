@@ -15,6 +15,7 @@ let clientCreated = false;
 let readToken: string;
 let noScopeToken: string;
 let candidate: string;
+let providerBefore: unknown;
 
 function controlHeaders() {
   return { Authorization: `Bearer ${serviceKey}`, "X-Instagram-Release-Namespace": manifest.namespace,
@@ -94,10 +95,18 @@ test.beforeAll(async ({ request }) => {
   expect(tokens.status()).toBe(201);
 });
 
+test.beforeEach(async ({ request }) => {
+  const response = await request.get(`${INSTAGRAM_RELEASE.apiUrl}/__instagram-release/provider-calls`, { headers: controlHeaders() });
+  expect(response.status()).toBe(200);
+  providerBefore = await response.json();
+  expect(providerBefore).toMatchObject({ networkRefusals: 0 });
+});
+
 test.afterEach(async ({ request }) => {
   const response = await request.get(`${INSTAGRAM_RELEASE.apiUrl}/__instagram-release/provider-calls`, { headers: controlHeaders() });
   expect(response.status()).toBe(200);
-  expect(await response.json()).toEqual({ calls: [], networkRefusals: 0 });
+  // Earlier discovery journeys retain their receipts; these API reads must add zero calls.
+  expect(await response.json()).toEqual(providerBefore);
 });
 
 test.afterAll(async ({ request }) => {
