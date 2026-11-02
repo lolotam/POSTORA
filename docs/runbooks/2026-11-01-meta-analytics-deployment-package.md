@@ -23,6 +23,8 @@ The local owner-browser gap has progressed: all 13 Instagram/Facebook/Threads jo
 
 The [historical competitor journey](../journeys/2026-11-02-instagram-historical-growth.md) supplies local assembled E2 evidence with eight successful canonical journeys at `d1ff8c8f75c026bc5a9d2b0e341c02118f650155`. That batch changes fixture/browser tests only; it adds no deployment artifact and no live elapsed-history or provider acceptance. Outlier J7 and the remaining canonical/release prerequisites are still open.
 
+The [outlier journey](../journeys/2026-11-02-instagram-outlier-journey.md) supplies representative local J7 evidence with nine successful canonical journeys at `038f18a25adda3386a18a643f4e00541c7b5b638`. It fixes the owner screen's tooltip-only metric basis. Two additional frontend deployment inputs are `src/features/instagram-insights/ui/MediaPerformanceTable.tsx` and `src/i18n/locales/ar/analytics.json`; their hashes are pinned in the journey proof, outside the older manifest. Include these bytes in the refrozen combined candidate and frontend build. No score/DTO/schema change is bundled with that presentation correction. Exact maturity-boundary, remaining canonical and independent acceptance work still prevents complete release.
+
 ## Ordered schema artifacts
 
 These eleven files are absent from the last verified production lineage and are proposed in this exact order. The first ten are in the older artifact manifest; the eleventh is the separately attributed weekly correction above and must enter the refrozen final manifest. Application is a separate approval from PR review/merge. `20261101023000_instagram_collection_http_fences.sql` was separately approved/applied earlier and must not be reapplied as if new.

@@ -1,0 +1,291 @@
+{
+  "version": 1,
+  "recordedAt": "2026-11-02T07:03:02.404Z",
+  "source": "038f18a25adda3386a18a643f4e00541c7b5b638",
+  "tree": "c0d9cd46d31853ecb294c133f3190a1057b42d2a",
+  "executionCheckout": "F:/Dev/Worktrees/Postora_new/canonical-discovery-538ef365",
+  "evidenceAuthority": "Author-recorded local execution, not independent G-X acceptance or production approval",
+  "scope": "J7 owner and competitor outlier report/screen labels, exact thresholds, period/page invariance, six/twelve baselines and visible metric units in English/Arabic RTL",
+  "inputs": [
+    {
+      "path": "e2e/instagram-release.spec.ts",
+      "gitBlob": "fb7d774554c320467c70354bce67860906db64a8",
+      "gitSha256": "09bbd99ac0d5c4cfc1ea55cf9de621c600691526b6188784030278bdd252cd0b",
+      "executionSha256": "febbf1f04492ed21ade02982c780dc6adb4a5b7ccf26e6b54064af93b1da3716",
+      "normalizedExecutionSha256": "09bbd99ac0d5c4cfc1ea55cf9de621c600691526b6188784030278bdd252cd0b"
+    },
+    {
+      "path": "e2e/fixtures/instagramRelease.ts",
+      "gitBlob": "d8e534a91ff75c74435954b32561c766acef61f8",
+      "gitSha256": "fecd520c2f40fbbe05dd0a6196aee9a35fd80cfafe62192f1fd10078188499a8",
+      "executionSha256": "07b61d6ba3f85edf5c5f5f9ca85757f1c38c0882bed73439a762e4ea2ca63cb6",
+      "normalizedExecutionSha256": "fecd520c2f40fbbe05dd0a6196aee9a35fd80cfafe62192f1fd10078188499a8"
+    },
+    {
+      "path": "e2e/fixtures/instagramReleaseSeed.ts",
+      "gitBlob": "7995644ed62747be5b1b7ba2807f6b28d778fcde",
+      "gitSha256": "75db3e4303aca294e57a2e341d0a7834d256b1886a041c0e8e6d2560b04d3282",
+      "executionSha256": "df295f1e5e38958e3a1f67cb082a5648d0e418d81a335e938b5c75dd69bbdb57",
+      "normalizedExecutionSha256": "75db3e4303aca294e57a2e341d0a7834d256b1886a041c0e8e6d2560b04d3282"
+    },
+    {
+      "path": "e2e/fixtures/instagramReleaseServer.ts",
+      "gitBlob": "db7f577ec9ea94694600870eb6eddd4c5e15dc2c",
+      "gitSha256": "aed048f4f5f457acfbb2f6a10dfa7b14e194b2af760478f3ff478b205f0d2e7c",
+      "executionSha256": "c1e88ab630fd1359cd7afceb645a4bbb0fe42e9601045dae58ecb27ca38555df",
+      "normalizedExecutionSha256": "aed048f4f5f457acfbb2f6a10dfa7b14e194b2af760478f3ff478b205f0d2e7c"
+    },
+    {
+      "path": "e2e/fixtures/instagramReleaseBrowser.ts",
+      "gitBlob": "80eafa851c51c5d86cf4794102d7b3dc94525938",
+      "gitSha256": "d9f97105776d5f483ad2c37bf8076098041fe0adc41a1243ed6570d2dcf680c7",
+      "executionSha256": "14b555717e960545ce424c85c037971b8831569add749662f7dd8b2f113fa699",
+      "normalizedExecutionSha256": "d9f97105776d5f483ad2c37bf8076098041fe0adc41a1243ed6570d2dcf680c7"
+    },
+    {
+      "path": "src/features/instagram-insights/ui/MediaPerformanceTable.tsx",
+      "gitBlob": "43e3c7c5668f4f960a1cd654f247212fe063b72a",
+      "gitSha256": "44418f3b84d8aefdf2b93c32508270642d64574ae2cac62da8af71aeb83b0dde",
+      "executionSha256": "973f46e82f6f47614a1233940e94d0ee25c3024329628a8037d16e0a3a0e93cc",
+      "normalizedExecutionSha256": "44418f3b84d8aefdf2b93c32508270642d64574ae2cac62da8af71aeb83b0dde"
+    },
+    {
+      "path": "src/i18n/locales/ar/analytics.json",
+      "gitBlob": "ec7d9e9362ebcd3f93489bcd9bcbbb943e294fda",
+      "gitSha256": "d531194eee7cdb49fd465ebc5375ba39a486dfcad3b6335916b8ad90216bd8c8",
+      "executionSha256": "2dcc39bd2450d7699e579638dd10f055495d54f2346eccd1b85855f0418ad313",
+      "normalizedExecutionSha256": "d531194eee7cdb49fd465ebc5375ba39a486dfcad3b6335916b8ad90216bd8c8"
+    },
+    {
+      "path": "src/features/competitor-tracking/ui/CompetitorMediaTable.tsx",
+      "gitBlob": "1f2124faaf6f67a628018d8a0aae929d892f53ee",
+      "gitSha256": "d4f76c0da37bdf50560bd85bd099039734c7dfd12737a3105b936791cab1d83f",
+      "executionSha256": "0229b792b0618574e432ca6bfb0dbd26435b6525268785648486ca9c40653e78",
+      "normalizedExecutionSha256": "d4f76c0da37bdf50560bd85bd099039734c7dfd12737a3105b936791cab1d83f"
+    },
+    {
+      "path": "src/features/competitor-tracking/ui/CompetitorOutlierLabel.tsx",
+      "gitBlob": "225365d52303c4f8a7b47714bb2a6b3de0db484c",
+      "gitSha256": "b43044e94e833531b41b13f4ff2db2b826dee8b9526ca13f978768c9e8f7bb94",
+      "executionSha256": "6994f9d38e911a63f2bef0554c9adcecefabbcc254b80d2bb256e763c1aa1734",
+      "normalizedExecutionSha256": "b43044e94e833531b41b13f4ff2db2b826dee8b9526ca13f978768c9e8f7bb94"
+    },
+    {
+      "path": "supabase/functions/_shared/outlierScore.ts",
+      "gitBlob": "ebc6ce53f852189f6c5c208413da8ab0c2974d92",
+      "gitSha256": "22d021a81eeb3095ffbe07e6c5e1fea3597bad336f105133a393c2aabb546ee3",
+      "executionSha256": "ed84b8e66b30a72de796cd417f8876bd4cd6224fca0d9574f73de8098b2e45ff",
+      "normalizedExecutionSha256": "22d021a81eeb3095ffbe07e6c5e1fea3597bad336f105133a393c2aabb546ee3"
+    },
+    {
+      "path": "supabase/functions/competitor-tracking-report/assemble.ts",
+      "gitBlob": "cea90105147f59354f974aeee0d944ba8f65ed4d",
+      "gitSha256": "9f517a2aa6bb41c490eec5169c96e201972b2accab709d711eae3c130b4875e8",
+      "executionSha256": "de61b748c288700d7733ddc38f29c4f58d181c760f2d2da5cf372bffca55d16b",
+      "normalizedExecutionSha256": "9f517a2aa6bb41c490eec5169c96e201972b2accab709d711eae3c130b4875e8"
+    },
+    {
+      "path": "supabase/functions/instagram-insights-report/assemble.ts",
+      "gitBlob": "80c364b30e9e047e063ca2b2617fe1a4d00ad1eb",
+      "gitSha256": "7eda7a8e4b1a66772bccb9fd5d5a6858381c6d59b10051a4f06af9415e8b6a9c",
+      "executionSha256": "f7ca7e62cab5600aa1d4f979342c314e0a7da9c634aa2bc47fb9b0c04848b79c",
+      "normalizedExecutionSha256": "7eda7a8e4b1a66772bccb9fd5d5a6858381c6d59b10051a4f06af9415e8b6a9c"
+    },
+    {
+      "path": "supabase/functions/instagram-insights-report/reportStore.ts",
+      "gitBlob": "d40ecac8094ed709d699784b5395b09babbf8dfc",
+      "gitSha256": "707751300545ceae329b491fdacf425a5e00b401d94cc014314ef980a89fafab",
+      "executionSha256": "545340f47d8a41c11c00bbcf8dc969311a5df50dcd92480129cea46b9afb98c2",
+      "normalizedExecutionSha256": "707751300545ceae329b491fdacf425a5e00b401d94cc014314ef980a89fafab"
+    }
+  ],
+  "canonical": {
+    "startTime": "2026-11-02T07:00:16.642Z",
+    "duration": 113413.484,
+    "expected": 9,
+    "skipped": 0,
+    "unexpected": 0,
+    "flaky": 0,
+    "tests": [
+      {
+        "title": "canonical fixture smoke: real Auth, ordinary owners, separate admin and SQL quota state",
+        "status": "passed",
+        "retry": 0
+      },
+      {
+        "title": "canonical discovery preserves official provenance, nullable media and owner-scoped cache through saved history",
+        "status": "passed",
+        "retry": 0
+      },
+      {
+        "title": "canonical discovery keeps ambiguous viewer failures out of target eligibility and labels only explicitly enabled third-party fallback",
+        "status": "passed",
+        "retry": 0
+      },
+      {
+        "title": "canonical owner and competitor screens retain exact outliers across periods and pages with distinct metric bases",
+        "status": "passed",
+        "retry": 0
+      },
+      {
+        "title": "canonical historical growth preserves real intervals and refuses zero, missing, stale and changed-source baselines",
+        "status": "passed",
+        "retry": 0
+      },
+      {
+        "title": "canonical quota management refuses extra activations, serializes the final slot and preserves downgrade and unlimited behavior",
+        "status": "passed",
+        "retry": 0
+      },
+      {
+        "title": "canonical tracking persists a new capture through the real worker and reconciles a lost save response without replay",
+        "status": "passed",
+        "retry": 0
+      },
+      {
+        "title": "SQL-backed Instagram reports retain metrics, nulls, outliers and freshness through API and scoped MCP",
+        "status": "passed",
+        "retry": 0
+      },
+      {
+        "title": "registered analytics routes refuse foreign owners, missing scopes and cursors without inventing Instagram capability",
+        "status": "passed",
+        "retry": 0
+      }
+    ]
+  },
+  "databasePreparation": {
+    "directory": "F:/Dev/Temp/postora-owner-release-prepare-KYWIhS",
+    "newerMigrations": 152,
+    "baselineSqlSuites": 70,
+    "isolatedSqlSuites": 1
+  },
+  "assertions": [
+    "Both reports/screens retain outlier=3, above=1.5, normal=1 and below=0.5 inclusive thresholds",
+    "Measured zero retains score zero/below; unavailable views produce no_data, immature twenty-four-hour media produce too_early and insufficient older media produce small_baseline",
+    "Owner organic views use twelve predecessors; owner organic interactions can score with exactly six, both medians 100",
+    "Competitor public views/interactions are explicitly distinct from owner organic metric units",
+    "Report outliers remain equal after changing seven/thirty-day display periods; pagination appends actual SQL media without changing the original visible verdict",
+    "Owner metric bases are visible text in English and Arabic with RTL, rather than only an English tooltip",
+    "Saved report reads add zero provider or paid calls"
+  ],
+  "checks": {
+    "strictE2eTypecheck": "passed on final test inputs",
+    "scopedEslint": "passed",
+    "frontendTypecheck": "passed in clean execution checkout",
+    "frontendBuild": "passed in clean execution checkout",
+    "componentTests": {
+      "passed": 16,
+      "inputAttribution": "Root test run used the final MediaPerformanceTable and translation bytes before they were committed as this execution source; the later clean checkout build/typecheck and canonical run have their own exact source attribution"
+    },
+    "denoServerCheck": "passed",
+    "immutableLintI18n": {
+      "base": "f0e0d59df6279bf3e4e75d1514fae2dccc0f4c1d",
+      "head": "038f18a25adda3386a18a643f4e00541c7b5b638",
+      "result": "NO REGRESSIONS",
+      "historicalDebtRemains": true
+    }
+  },
+  "retainedFailure": {
+    "source": "76be6a89b2cd5382ced7a28cf7985459f1db4072",
+    "passed": 8,
+    "failed": 1,
+    "reason": "All preceding numerical/label/period/page assertions passed, then the actual owner screen lacked visible Metric basis: owner organic views. Fixed presentation and Arabic copy without altering the scoring algorithm or report DTO.",
+    "artifacts": ".tmp/j7-76be6a89-failure-artifacts/"
+  },
+  "retainedSetupFailure": "Initial strict E2E typecheck used media.items instead of media.page.items; corrected to the real DTO before the first browser execution. This is not the product-red evidence.",
+  "cleanup": {
+    "users": 1,
+    "namespace_settings": 0,
+    "scrape_sessions": 0,
+    "scrape_cache": 0,
+    "fixture_oauth_clients": 0,
+    "collection_jobs": 0,
+    "profiles": 0,
+    "media": 0,
+    "coverage": 0,
+    "active_cron": 0,
+    "cron_launcher": "off",
+    "live_leases": 0,
+    "httpListenersStopped": true
+  },
+  "artifacts": [
+    {
+      "path": ".tmp/j7-initial-typecheck.log",
+      "sha256": "829823107b437ae36134e9a319e9b4e67973003b9e16e657b656c71de16dab5c"
+    },
+    {
+      "path": ".tmp/j7-prepared-typecheck.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": ".tmp/j7-76be6a89-playwright.log",
+      "sha256": "58642e10f734a37ad971645aa931ed7f40bbcc67828db7c0e9bc03fc11fa51de"
+    },
+    {
+      "path": ".tmp/j7-76be6a89-playwright.json",
+      "sha256": "ef4f42367abd117605b1adc847ed5405465738608cbfd94753bdec6bab5631b4"
+    },
+    {
+      "path": ".tmp/j7-ui-vitest.log",
+      "sha256": "cbb9255789f656d5f825798da4b74aa56053d39c637654293ea5e887e487efc2"
+    },
+    {
+      "path": ".tmp/j7-final-typecheck.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": ".tmp/j7-final-eslint.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": ".tmp/j7-038f18a2-typecheck.log",
+      "sha256": "82b5202dbc205db5afc9568372d1f11e63c1105117ebdc791a50680ece23bccf"
+    },
+    {
+      "path": ".tmp/j7-038f18a2-build.log",
+      "sha256": "a2386fa6d1cc9b59f7aab8c799febb59b3665894ea247809400aa719d8c5f390"
+    },
+    {
+      "path": ".tmp/j7-038f18a2-prepare.log",
+      "sha256": "c11a72ac6e5c3f4b4abff97a74eaed536a0af45a04c996d081bea69d1bac8ee9"
+    },
+    {
+      "path": ".tmp/j7-038f18a2-deno-check.log",
+      "sha256": "fa236573c48c4a6c9c0f821bbdc1b66bb0d1f800ee46c7d4aeef838fad0c143b"
+    },
+    {
+      "path": ".tmp/j7-038f18a2-playwright.log",
+      "sha256": "bb256e5935c89aaf66a0b69b125850ea4a045b2e156c917d7588ee5a75a5054a"
+    },
+    {
+      "path": ".tmp/j7-038f18a2-playwright.json",
+      "sha256": "419846e468a7fff279e67755da95a0a2e77942522b5934fa402b84dd6f8deffe"
+    },
+    {
+      "path": ".tmp/j7-038f18a2-cleanup.json",
+      "sha256": "f748763300b1f5cbc4ad75d7e0b921999398dc7f96dfd65a64ad305c10e0abf6"
+    },
+    {
+      "path": ".tmp/j7-038f18a2-lint-i18n.log",
+      "sha256": "6dd5ec56002bf42d8214919522882cd093333ec48e06f0346062d0f026f01634"
+    },
+    {
+      "path": ".tmp/j7-038f18a2-graph-update.log",
+      "sha256": "750d4bf727a503c2b3cc567a7bd34e4fdb37227b29b237dd056698b6f02f0298"
+    },
+    {
+      "path": "F:/Dev/Temp/postora-owner-release-prepare-KYWIhS/database-harness.log",
+      "sha256": "8cc33bb1db210e32f92af0bf65231d87c6f495f5c54e551e6d9bc67039de6bcf"
+    }
+  ],
+  "releaseReady": false,
+  "productionActivationAuthorized": false,
+  "remaining": [
+    "Exact 48-hour microsecond maturity boundaries still require an authoritative server clock seam; this journey uses a stable twenty-four-hour immature fixture",
+    "Other canonical J/E journeys, protected reconnect and verified provider-specific eligibility/threshold signals",
+    "Canonical Instagram metric/calendar and worker/report/UI adoption",
+    "Trusted workflow/bootstrap/CODEOWNERS, independent review and migration-history recovery",
+    "Refrozen and approved production prerequisite/runtime/frontend/activation, Meta reconciliation and seven distinct successful scheduled due dates per platform"
+  ]
+}
