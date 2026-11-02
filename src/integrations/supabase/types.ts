@@ -12310,6 +12310,10 @@ export type Database = {
         Args: { p_request: Json }
         Returns: Json
       }
+      read_own_competitor_tracking_report_v2: {
+        Args: { p_request: Json }
+        Returns: Json
+      }
       reap_exhausted_agent_replies: {
         Args: { p_max_attempts: number }
         Returns: Database["public"]["Tables"]["pending_agent_replies"]["Row"][]
