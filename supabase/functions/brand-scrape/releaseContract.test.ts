@@ -1,5 +1,5 @@
 import { assertEquals, assertRejects, assertStringIncludes } from "https://deno.land/std@0.224.0/assert/mod.ts";
-import { discoveryCacheKey, discoveryMedia, InstagramDiscoveryError, resolveDiscoveryAuthority, scrapeInstagramOfficial, scrapeInstagramOwn } from "./instagramDiscovery.ts";
+import { discoveryCacheKey, discoveryMedia, discoveryProfile, InstagramDiscoveryError, resolveDiscoveryAuthority, scrapeInstagramOfficial, scrapeInstagramOwn } from "./instagramDiscovery.ts";
 
 const OWNER = "8a000000-0000-4000-8000-000000000001";
 const ACCOUNT = "8a000000-0000-4000-8000-000000000002";
@@ -68,6 +68,67 @@ Deno.test("own-account source and FEED video survive the direct transport with m
   assertEquals(discoveryMedia(media("reel", { media_product_type: "REELS" })).mediaType, "REEL");
 });
 
+Deno.test("discovery classifies throttling independently of HTTP success and provider text", async (test) => {
+  for (const scenario of ["http429", "code4", "code17", "code32", "code613", "usage80"] as const) {
+    await test.step(scenario, async () => {
+      const response = scenario === "http429" ? new Response("upstream throttle", { status: 429 }) :
+        scenario === "usage80" ? json({ business_discovery: { id: "target", media: { data: [] } } }) :
+          json({ error: { code: Number(scenario.slice(4)), message: "synthetic-provider-secret" } }, 400);
+      if (scenario === "usage80") response.headers.set("x-app-usage", JSON.stringify({ call_count: 80 }));
+      const error = await assertRejects(() => scrapeInstagramOfficial({ username: "target", viewerIgUserId: "77001",
+        accessToken: "synthetic", maxPosts: 25, fetchFn: (() => Promise.resolve(response)) as typeof fetch }), InstagramDiscoveryError);
+      assertEquals(error.code, "DISCOVERY_RATE_LIMITED");
+      assertEquals(error.status, 429);
+      assertEquals(error.message.includes("synthetic-provider-secret"), false);
+    });
+  }
+});
+
+Deno.test("profile counts preserve measured safe integers and make invalid counts unavailable", () => {
+  for (const count of [0, Number.MAX_SAFE_INTEGER, -1, 0.5, Number.MAX_SAFE_INTEGER + 1, Infinity, NaN, null, undefined, "2"]) {
+    const profile = discoveryProfile({ id: "target", followers_count: count, follows_count: count, media_count: count }, "target", "official");
+    const expected = typeof count === "number" && Number.isSafeInteger(count) && count >= 0 ? count : null;
+    assertEquals([profile.followersCount, profile.followingCount, profile.postsCount], [expected, expected, expected]);
+  }
+});
+
+Deno.test("malformed shared provider rows become sanitized discovery errors", async () => {
+  const error = await assertRejects(() => scrapeInstagramOfficial({ username: "target", viewerIgUserId: "77001",
+    accessToken: "synthetic", maxPosts: 25, fetchFn: (() => Promise.resolve(json({ business_discovery: {
+      id: "target", media: { data: [{ id: "synthetic-provider-secret" }] },
+    } }))) as typeof fetch }), InstagramDiscoveryError);
+  assertEquals(error.code, "DISCOVERY_PROVIDER_UNAVAILABLE");
+  assertEquals(error.status, 502);
+  assertEquals(error.message.includes("synthetic-provider-secret"), false);
+});
+
+Deno.test("duplicate-only pages follow valid cursors but cannot claim completion beyond the accepted page budget", async (test) => {
+  for (const source of ["official", "graph_own"] as const) for (const capped of [false, true]) {
+    await test.step(`${source}:${capped ? "capped" : "exhausted"}`, async () => {
+      let mediaRequests = 0;
+      const fetchFn = ((url) => {
+        if (source === "graph_own" && !new URL(String(url)).pathname.endsWith("/media")) return Promise.resolve(json({ id: "77001", username: "owner" }));
+        mediaRequests++;
+        const connection = { data: [media(mediaRequests === 3 ? "2" : "1")],
+          ...(mediaRequests < 3 ? { paging: { cursors: { after: `page_${mediaRequests + 1}` } } } : {}) };
+        return Promise.resolve(json(source === "official" ? { business_discovery: { id: "target", media: connection } } : connection));
+      }) as typeof fetch;
+      const capture = () => source === "official"
+        ? scrapeInstagramOfficial({ username: "target", viewerIgUserId: "77001", accessToken: "synthetic", maxPosts: capped ? 26 : 75, fetchFn })
+        : scrapeInstagramOwn({ username: "owner", igUserId: "77001", accessToken: "synthetic", maxPosts: capped ? 26 : 75, fetchFn });
+      if (capped) {
+        const error = await assertRejects(capture, InstagramDiscoveryError);
+        assertEquals(error.code, "DISCOVERY_PROVIDER_UNAVAILABLE");
+        assertEquals(mediaRequests, 2);
+      } else {
+        const report = await capture();
+        assertEquals(report.posts.map((post) => post.id), ["1", "2"]);
+        assertEquals(mediaRequests, 3);
+      }
+    });
+  }
+});
+
 Deno.test("official and own transports reject malformed optional profile text instead of serializing unknown values", async (test) => {
   const malformedFields = [
     { name: {} }, { username: [] }, { biography: 1 }, { profile_picture_url: true }, { website: {} },
@@ -131,6 +192,22 @@ Deno.test("a direct-login account does not falsely establish missing Business Di
   assertEquals(resolved.refusalCode, "IG_RECONNECT_REQUIRED");
 });
 
+Deno.test("an explicitly credentialless capability cannot hide a usable protected sibling", async () => {
+  const newer = "8a000000-0000-4000-8000-000000000004";
+  const resolved = await resolveDiscoveryAuthority({ userId: OWNER, username: "target",
+    accounts: [{ ...ACCOUNT_ROW, connected_at: "2026-11-01T00:00:00Z" },
+      { ...ACCOUNT_ROW, id: newer, connected_at: "2026-11-02T00:00:00Z" }],
+    rpc: (name, args) => {
+      const accountId = String(args.p_social_account_id);
+      return Promise.resolve({ data: name.includes("capability")
+        ? capability({ social_account_id: accountId, has_protected_credential: accountId !== newer })
+        : accountId === newer ? credential({ found: false, social_account_id: newer, credential_id: null,
+            credential_kind: null, token: null, revision: null, capability_generation: null, connection_version: null }) : credential(), error: null });
+    } });
+  assertEquals(resolved.authority?.account.id, ACCOUNT);
+  assertEquals(resolved.refusalCode, null);
+});
+
 Deno.test("registered discovery handler retains source and null cells through cache and history, then refuses denied scopes", async () => {
   const originalFetch = globalThis.fetch;
   const originalServe = Deno.serve;
@@ -143,6 +220,8 @@ Deno.test("registered discovery handler retains source and null cells through ca
   let apifyCalls = 0;
   let authorityReads = 0;
   let apifySetting: unknown = false;
+  let maxPostsSetting = 1;
+  let providerFailure: "malformed" | "rate" | null = null;
   try {
     Deno.env.set("SUPABASE_URL", "http://127.0.0.1:61999");
     Deno.env.set("SUPABASE_SERVICE_ROLE_KEY", "synthetic-discovery-service-key");
@@ -154,7 +233,9 @@ Deno.test("registered discovery handler retains source and null cells through ca
       if (url.hostname === "graph.facebook.com") {
         providerCalls++;
         assertEquals(url.searchParams.get("access_token"), "synthetic-user-token");
-        return json({ business_discovery: { id: "target", username: "target", media: { data: [media("1", { like_count: undefined, view_count: undefined })] } } });
+        if (providerFailure === "rate") return json({ error: { code: 4 } }, 400);
+        return json({ business_discovery: { id: "target", username: "target", media: { data: providerFailure === "malformed" ? [{}] :
+          [media("1", { like_count: undefined, view_count: undefined }), media("2", { like_count: undefined, view_count: undefined })] } } });
       }
       if (url.hostname === "api.apify.com") {
         apifyCalls++;
@@ -170,7 +251,7 @@ Deno.test("registered discovery handler retains source and null cells through ca
       if (table === "read_facebook_user_account_credential") return json(credential());
       if (table === "social_accounts") return json([ACCOUNT_ROW]);
       if (table === "app_settings") return json(url.searchParams.get("key")?.includes("ttl") ? { value: 60 } :
-        apifySetting === undefined ? [] : [{ key: "apify_enabled", value: apifySetting }]);
+        [{ key: "brand_scrape_max_posts", value: maxPostsSetting }, ...(apifySetting === undefined ? [] : [{ key: "apify_enabled", value: apifySetting }])]);
       if (table === "brand_scrape_cache") {
         if (request.method === "GET") return json(cache && url.searchParams.get("cache_key") === `eq.${cache.cache_key}` ? cache : null);
         cache = await request.json(); return json(null);
@@ -180,9 +261,13 @@ Deno.test("registered discovery handler retains source and null cells through ca
       throw new Error(`Unexpected synthetic database route ${table}`);
     }) as typeof fetch;
     await import("./index.ts");
-    const request = (platform = "instagram") => new Request("http://127.0.0.1:61999/functions/v1/brand-scrape", { method: "POST", headers: { Authorization: "Bearer synthetic-caller", "Content-Type": "application/json" }, body: JSON.stringify({ platform, username: "target" }) });
+    const request = (platform = "instagram", username = "target") => new Request("http://127.0.0.1:61999/functions/v1/brand-scrape", { method: "POST", headers: { Authorization: "Bearer synthetic-caller", "Content-Type": "application/json" }, body: JSON.stringify({ platform, username }) });
+    const invalidHandle = await handler!(request("instagram", "tar@get"));
+    assertEquals(invalidHandle.status, 400);
+    assertEquals(authorityReads, 0);
+    assertEquals(providerCalls, 0);
     for (const cached of [false, true]) {
-      const response = await handler!(request());
+      const response = await handler!(request("instagram", cached ? "target" : " @@TARGET "));
       assertEquals(response.status, 200);
       const payload = await response.json();
       assertEquals(payload.source, "official");
@@ -194,6 +279,25 @@ Deno.test("registered discovery handler retains source and null cells through ca
     assertEquals(providerCalls, 1);
     assertEquals(history.length, 2);
     for (const session of history) assertEquals((session.profile_data as Record<string, unknown>).source, "official");
+    maxPostsSetting = 2;
+    const expanded = await handler!(request());
+    assertEquals(expanded.status, 200);
+    assertEquals((await expanded.json()).totalPosts, 2);
+    assertEquals(providerCalls, 2);
+    cache = null;
+    providerFailure = "malformed";
+    apifySetting = true;
+    const recovered = await handler!(request());
+    assertEquals(recovered.status, 200);
+    assertEquals((await recovered.json()).source, "apify");
+    assertEquals(apifyCalls, 1);
+    cache = null;
+    providerFailure = "rate";
+    const throttled = await handler!(request());
+    assertEquals(throttled.status, 429);
+    assertEquals((await throttled.json()).error_code, "DISCOVERY_RATE_LIMITED");
+    assertEquals(apifyCalls, 1);
+    providerFailure = null;
     denied = true;
     for (const setting of [false, undefined, "malformed", '"true"']) {
       apifySetting = setting;
@@ -201,8 +305,8 @@ Deno.test("registered discovery handler retains source and null cells through ca
       assertEquals(refused.status, 409);
       assertEquals((await refused.json()).error_code, "IG_INSIGHTS_SCOPE_MISSING");
     }
-    assertEquals(providerCalls, 1);
-    assertEquals(apifyCalls, 0);
+    assertEquals(providerCalls, 4);
+    assertEquals(apifyCalls, 1);
     apifySetting = true;
     const fallback = await handler!(request());
     assertEquals(fallback.status, 200);
@@ -211,13 +315,13 @@ Deno.test("registered discovery handler retains source and null cells through ca
     assertEquals(fallbackPayload.profile.source, "apify");
     assertEquals(fallbackPayload.warning.code, "IG_INSIGHTS_SCOPE_MISSING");
     assertEquals(fallbackPayload.posts[0].likesCount, null);
-    assertEquals(apifyCalls, 1);
+    assertEquals(apifyCalls, 2);
     const readsBeforeThreads = authorityReads;
     const threads = await handler!(request("threads"));
     assertEquals(threads.status, 200);
     assertEquals((await threads.json()).reason, "deprecated_endpoint");
     assertEquals(authorityReads, readsBeforeThreads);
-    assertEquals(apifyCalls, 1);
+    assertEquals(apifyCalls, 2);
   } finally {
     globalThis.fetch = originalFetch;
     Deno.serve = originalServe;

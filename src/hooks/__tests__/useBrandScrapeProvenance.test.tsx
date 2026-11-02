@@ -117,6 +117,22 @@ describe("useBrandScrape provenance", () => {
     expect(result.current.hasMore).toBe(false);
   });
 
+  it.each(["first", "later"])("honors server completion on the %s page even when totalPosts is larger", async (completedPage) => {
+    fetchMock.mockImplementation((_url, init) => {
+      const offset = JSON.parse(init.body).offset;
+      return Promise.resolve(jsonResponse({ profile: PROFILE, posts: [{ ...POST, id: String(offset) }],
+        totalPosts: offset === 0 ? 100 : 50, hasMore: completedPage === "later" && offset === 0 }));
+    });
+    const { result } = renderHook(() => useBrandScrape("fixture-owner"), { wrapper });
+    act(() => result.current.search("northwind", "instagram"));
+    await waitFor(() => expect(result.current.posts).toHaveLength(1));
+    if (completedPage === "later") await act(() => result.current.loadMore());
+    expect(result.current.hasMore).toBe(false);
+    expect(result.current.totalPosts).toBe(completedPage === "later" ? 50 : 100);
+    await act(() => result.current.loadMore());
+    expect(fetchMock).toHaveBeenCalledTimes(completedPage === "later" ? 2 : 1);
+  });
+
   it("passes an explicit source through to the caller", async () => {
     fetchMock.mockResolvedValue(
       jsonResponse({

@@ -8,6 +8,7 @@ import {
   parseUsagePercent, readBoundedBody, readBusinessDiscoveryTarget, readGraphErrorEnvelope,
   readMediaCursor, resolveGraphApiVersion,
 } from "../competitor-snapshot-sync/graphProvider.ts";
+import { CompetitorProviderError } from "../competitor-snapshot-sync/types.ts";
 
 export class InstagramDiscoveryError extends Error {
   constructor(readonly code: string, message: string, readonly status = 409) {
@@ -97,7 +98,7 @@ export function discoveryProfile(profile: Record<string, unknown>, fallbackUsern
 
 /** One format/count contract shared with the scheduled Graph adapter. */
 export function discoveryMedia(raw: unknown) {
-  const media = parseBusinessDiscoveryMedia(raw);
+  const media = discoveryParse(() => parseBusinessDiscoveryMedia(raw));
   const record = raw as Record<string, unknown>;
   const mediaType = media.media_product_type === "REELS" ? "REEL" :
     media.media_type === "VIDEO" ? "VIDEO" : media.media_type === "CAROUSEL_ALBUM" ? "CAROUSEL" : "IMAGE";
@@ -109,19 +110,30 @@ export function discoveryMedia(raw: unknown) {
     timestamp: media.published_at, permalink: media.permalink ?? "" };
 }
 
+function discoveryParse<T>(parse: () => T): T {
+  try { return parse(); } catch (error) {
+    if (error instanceof CompetitorProviderError) {
+      throw new InstagramDiscoveryError("DISCOVERY_PROVIDER_UNAVAILABLE", "Instagram discovery returned unusable data.", 502);
+    }
+    throw error;
+  }
+}
+
 async function discoveryJson(url: string, fetchFn: typeof fetch): Promise<unknown> {
   const signal = AbortSignal.timeout(8_000);
   try {
     const response = await fetchFn(url, { signal, redirect: "error" });
-    const payload: unknown = JSON.parse(await readBoundedBody(response, 1_048_576, signal));
+    const payload: unknown = response.status === 429 ? null : JSON.parse(await readBoundedBody(response, 1_048_576, signal));
     const providerError = readGraphErrorEnvelope(payload);
+    if (providerError?.code === 190) throw new InstagramDiscoveryError("IG_RECONNECT_REQUIRED", "Reconnect Instagram to enable official competitor data.");
+    if (response.status === 429 || [4, 17, 32, 613].includes(providerError?.code ?? -1) || parseUsagePercent(response.headers) >= 80) {
+      throw new InstagramDiscoveryError("DISCOVERY_RATE_LIMITED", "Instagram discovery is temporarily unavailable.", 429);
+    }
     if (!response.ok || providerError) {
-      if (providerError?.code === 190) throw new InstagramDiscoveryError("IG_RECONNECT_REQUIRED", "Reconnect Instagram to enable official competitor data.");
       // A provider permission-shaped code also covers target/data restrictions.
       // Only the trusted permission read above establishes a missing scope.
       throw new InstagramDiscoveryError("DISCOVERY_PROVIDER_UNAVAILABLE", "Instagram discovery could not be completed.", 502);
     }
-    if (parseUsagePercent(response.headers) > 80) throw new InstagramDiscoveryError("DISCOVERY_RATE_LIMITED", "Instagram discovery is temporarily unavailable.", 429);
     return payload;
   } catch (error) {
     if (error instanceof InstagramDiscoveryError) throw error;
@@ -141,9 +153,11 @@ export async function scrapeInstagramOfficial(input: {
   const cursors = new Set<string>();
   let target: Record<string, unknown> = {};
   let cursor: string | null = null;
+  let hasNext = false;
   for (let page = 0; page < Math.ceil(input.maxPosts / 25); page++) {
-    target = readBusinessDiscoveryTarget(await discoveryJson(buildBusinessDiscoveryUrl({ apiVersion: resolveGraphApiVersion(input.apiVersion),
-      viewerIgUserId: input.viewerIgUserId, handle, token: input.accessToken, cursor }), input.fetchFn ?? fetch));
+    const payload = await discoveryJson(buildBusinessDiscoveryUrl({ apiVersion: resolveGraphApiVersion(input.apiVersion),
+      viewerIgUserId: input.viewerIgUserId, handle, token: input.accessToken, cursor }), input.fetchFn ?? fetch);
+    target = discoveryParse(() => readBusinessDiscoveryTarget(payload));
     const connection = target.media as Record<string, unknown> | undefined;
     const rows = connection?.data ?? (target.media_count === 0 ? [] : null);
     if (!Array.isArray(rows) || rows.length > 25) throw new InstagramDiscoveryError("DISCOVERY_PROVIDER_UNAVAILABLE", "Instagram discovery returned unusable data.", 502);
@@ -155,11 +169,13 @@ export async function scrapeInstagramOfficial(input: {
     }
     if (posts.length >= input.maxPosts) break;
     const next = readMediaCursor(target);
+    hasNext = next.present;
     if (!next.present) break;
     if (!next.usable || !next.cursor || cursors.has(next.cursor)) throw new InstagramDiscoveryError("DISCOVERY_PROVIDER_UNAVAILABLE", "Instagram discovery pagination could not be completed.", 502);
     cursor = next.cursor;
     cursors.add(cursor);
   }
+  if (hasNext && posts.length < input.maxPosts) throw new InstagramDiscoveryError("DISCOVERY_PROVIDER_UNAVAILABLE", "Instagram discovery pagination could not be completed.", 502);
   return { source: "official", profile: discoveryProfile(target, handle, "official"), posts };
 }
 
@@ -179,6 +195,7 @@ export async function scrapeInstagramOwn(input: {
   const seen = new Set<string>();
   const cursors = new Set<string>();
   let cursor: string | null = null;
+  let hasNext = false;
   for (let page = 0; page < Math.ceil(input.maxPosts / 25); page++) {
     const url = new URL(`${endpoint}/media`);
     url.search = new URLSearchParams({ fields: "id,media_type,media_product_type,media_url,thumbnail_url,timestamp,like_count,comments_count,permalink,caption", limit: "25", access_token: input.accessToken, ...(cursor ? { after: cursor } : {}) }).toString();
@@ -191,14 +208,16 @@ export async function scrapeInstagramOwn(input: {
     }
     if (posts.length >= input.maxPosts) break;
     const next = readMediaCursor({ media: payload });
+    hasNext = next.present;
     if (!next.present) break;
     if (!next.usable || !next.cursor || cursors.has(next.cursor)) throw new InstagramDiscoveryError("DISCOVERY_PROVIDER_UNAVAILABLE", "Instagram media pagination could not be completed.", 502);
     cursor = next.cursor;
     cursors.add(cursor);
   }
+  if (hasNext && posts.length < input.maxPosts) throw new InstagramDiscoveryError("DISCOVERY_PROVIDER_UNAVAILABLE", "Instagram media pagination could not be completed.", 502);
   return { source: "graph_own", profile: discoveryProfile(account, input.username, "graph_own"), posts };
 }
 
 export function discoveryCount(value: unknown): number | null {
-  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : null;
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : null;
 }

@@ -25,6 +25,7 @@ export function useBrandScrape(ownerId: string | undefined) {
   const [username, setUsername] = useState("");
   const [platform, setPlatform] = useState<BrandPlatform>("instagram");
   const [allPosts, setAllPosts] = useState<BrandPost[]>([]);
+  const [continuation, setContinuation] = useState<{ hasMore: boolean; nextOffset: number; totalPosts: number } | null>(null);
   const [searchTriggered, setSearchTriggered] = useState(false);
 
   // For loading from history sessions
@@ -82,6 +83,7 @@ export function useBrandScrape(ownerId: string | undefined) {
     staleTime: 3600000,
     retry: 1,
   });
+  const hasMore = sameOwner && !sessionPosts && (continuation?.hasMore ?? data?.hasMore ?? false);
 
   const search = useCallback((newUsername: string, newPlatform: BrandPlatform) => {
     requestGeneration.current++;
@@ -91,30 +93,32 @@ export function useBrandScrape(ownerId: string | undefined) {
     setUsername(newUsername);
     setPlatform(newPlatform);
     setAllPosts([]);
+    setContinuation(null);
     setSearchTriggered(true);
     queryClient.invalidateQueries({ queryKey: ["brand-scrape", ownerId, newPlatform, newUsername, 0] });
   }, [queryClient, ownerId]);
 
   const loadMore = useCallback(async () => {
-    if (!sameOwner || !username || !data?.hasMore) return;
-    const nextOffset = (data.posts?.length || 0) + allPosts.length;
-    if (nextOffset >= data.totalPosts) return;
+    if (!hasMore || !username || !data) return;
+    const nextOffset = continuation?.nextOffset ?? data.posts.length;
     const generation = requestGeneration.current;
 
     try {
       const moreData = await callBrandScrape(nextOffset);
       if (moreData.posts && generation === requestGeneration.current) {
         setAllPosts((prev) => [...new Map([...prev, ...moreData.posts].map((post) => [post.id, post])).values()]);
+        setContinuation({ hasMore: moreData.hasMore, nextOffset: nextOffset + moreData.posts.length, totalPosts: moreData.totalPosts });
       }
     } catch (err) {
       console.error("Load more error:", err);
     }
-  }, [username, data, allPosts, callBrandScrape, sameOwner]);
+  }, [username, data, continuation, callBrandScrape, hasMore]);
 
   const reset = useCallback(() => {
     requestGeneration.current++;
     setUsername("");
     setAllPosts([]);
+    setContinuation(null);
     setSearchTriggered(false);
     setSessionProfile(null);
     setSessionPosts(null);
@@ -128,6 +132,7 @@ export function useBrandScrape(ownerId: string | undefined) {
     setSessionPosts(posts);
     setSearchTriggered(false);
     setAllPosts([]);
+    setContinuation(null);
     setPlatform(profile.platform);
     setUsername(profile.username);
   }, [ownerId]);
@@ -151,8 +156,8 @@ export function useBrandScrape(ownerId: string | undefined) {
     profile: activeProfile,
     profileSource,
     posts: combinedPosts,
-    totalPosts: sameOwner && sessionPosts ? sessionPosts.length : (data?.totalPosts || 0),
-    hasMore: sameOwner && sessionPosts ? false : combinedPosts.length < (data?.totalPosts || 0),
+    totalPosts: sameOwner && sessionPosts ? sessionPosts.length : ((sameOwner ? continuation?.totalPosts : undefined) ?? data?.totalPosts ?? 0),
+    hasMore,
     isLoading: sameOwner && sessionProfile ? false : isLoading,
     error: sameOwner && sessionProfile ? null : (error ? (error as Error).message : null),
     reconnectRequired: ["IG_INSIGHTS_SCOPE_MISSING", "IG_RECONNECT_REQUIRED"].includes(

@@ -312,8 +312,8 @@ Deno.serve(async (req) => {
       });
     }
 
-    cleanUsername = username.replace("@", "").toLowerCase().trim();
-    if (platform === "instagram" && (!normalizeCompetitorHandle(cleanUsername) || !Number.isInteger(offset) || offset < 0 || offset > 100)) {
+    cleanUsername = platform === "instagram" ? normalizeCompetitorHandle(username) ?? "" : username.replace("@", "").toLowerCase().trim();
+    if (platform === "instagram" && (!cleanUsername || !Number.isInteger(offset) || offset < 0 || offset > 100)) {
       throw new InstagramDiscoveryError("INVALID_DISCOVERY_REQUEST", "Invalid Instagram discovery request.", 400);
     }
     let cacheKey = `${platform}:${cleanUsername}`;
@@ -374,7 +374,7 @@ Deno.serve(async (req) => {
       const authorityDeadline = AbortSignal.timeout(10_000);
       discoveryContext = await resolveDiscoveryAuthority({ rpc: async (name, args) => await supabaseAdmin.rpc(name, args).abortSignal(authorityDeadline),
         accounts: accounts as ViewerCandidate[], userId: user.id, username: cleanUsername });
-      cacheKey = await discoveryCacheKey(user.id, cleanUsername, `${discoveryContext.cacheIdentity}:${isApifyEnabled}`);
+      cacheKey = await discoveryCacheKey(user.id, cleanUsername, `${discoveryContext.cacheIdentity}:${isApifyEnabled}:${maxPosts}`);
     }
 
     // Check cache
@@ -480,7 +480,7 @@ Deno.serve(async (req) => {
       } catch (error) {
         if (!(error instanceof InstagramDiscoveryError)) throw error;
         await logger.warn("Instagram discovery refused official data", { platform, username: cleanUsername, error_code: error.code }, userId);
-        if (!isApifyEnabled) throw error;
+        if (!isApifyEnabled || error.code === "DISCOVERY_RATE_LIMITED") throw error;
         const apifyToken = Deno.env.get("APIFY_API_TOKEN");
         if (!apifyToken) throw error;
         const actorId = getActorId("apify_actor_instagram", "apify~instagram-scraper");
