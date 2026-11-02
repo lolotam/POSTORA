@@ -41,6 +41,12 @@ npx playwright test --config playwright.instagram-release.config.ts --fail-on-fl
 
 The Deno check populates the dependency cache before the configured server uses `--cached-only`. The added `Canonical Instagram Auth SQL API MCP contract` job in `.github/workflows/owner-analytics-local.yml` prepares its own database and runs this entry point. It retains the synthetic report and fixture artifacts. Local success is not a claim that this new hosted job has already executed or that the protected migration workflow exists.
 
+## Hosted dependency-cache follow-up
+
+The first hosted canonical job [failed before any journey ran](https://github.com/lolotam/POSTORA/actions/runs/41383125981/job/125078022767). Its actual prepared candidate was GitHub's merge `896655f0b34c642da8e2adcc460cc07c3ad83204`, for PR head `02b94a401f8166f55ce7cbc4a891699d7c883007`. The configured offline server could not load `https://esm.sh/@supabase/auth-js@2.118.0/denonext/auth-js.mjs` from the empty hosted cache. Database preparation and all nine safety tests had passed. This failure does not invalidate or relabel the separately recorded local result, and local success did not prove hosted dependency readiness.
+
+The route-capture helper accepted a variable import path, so Deno's dependency analysis could not discover those registered entry points. The local cache already held their runtime modules. The helper now accepts a loader callback, and each caller uses a literal dynamic import. Deno can discover the same route modules without duplicating a preload list or changing registration order. `deno check` passes with a separate newly populated cache; the dependency graph contains all six formerly opaque entry points. The `--cached-only` server restriction remains in place. This is fixture loading, not a production route or report-contract change. Corrected hosted assembled acceptance remains unverified until its job succeeds.
+
 ## Remaining acceptance
 
 This provides the local legacy report portion of A14/A15/J8. It does not claim successful versioned Instagram pagination, a verified provider calendar, canonical worker/UI adoption, all-platform assembled compatibility, or the full J/E journeys. A14/J8 remain incomplete until those obligations have their own execution evidence. The author-recorded proof is not an origin-verified external release receipt.

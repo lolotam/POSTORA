@@ -38,7 +38,7 @@ globalThis.fetch = async (input, init) => {
 };
 
 type Handler = (request: Request) => Response | Promise<Response>;
-async function registeredRoute(path: string): Promise<Handler> {
+async function registeredRoute(load: () => Promise<unknown>): Promise<Handler> {
   const nativeServe = Deno.serve;
   let captured: Handler | undefined;
   try {
@@ -47,20 +47,20 @@ async function registeredRoute(path: string): Promise<Handler> {
       captured = handler;
       return { finished: Promise.resolve(), shutdown: () => Promise.resolve() };
     }) as typeof Deno.serve;
-    await import(path);
+    await load();
   } finally { Deno.serve = nativeServe; }
   if (!captured) throw new Error("Instagram release production route did not register");
   return captured;
 }
 
 const routes = new Map<string, Handler>([
-  ["brand-scrape", await registeredRoute("../../supabase/functions/brand-scrape/index.ts")],
-  ["instagram-insights-sync", await registeredRoute("../../supabase/functions/instagram-insights-sync/index.ts")],
-  ["competitor-snapshot-sync", await registeredRoute("../../supabase/functions/competitor-snapshot-sync/index.ts")],
-  ["competitor-retention", await registeredRoute("../../supabase/functions/competitor-retention/index.ts")],
-  ["mcp", await registeredRoute("../../supabase/functions/mcp/index.ts")],
+  ["brand-scrape", await registeredRoute(() => import("../../supabase/functions/brand-scrape/index.ts"))],
+  ["instagram-insights-sync", await registeredRoute(() => import("../../supabase/functions/instagram-insights-sync/index.ts"))],
+  ["competitor-snapshot-sync", await registeredRoute(() => import("../../supabase/functions/competitor-snapshot-sync/index.ts"))],
+  ["competitor-retention", await registeredRoute(() => import("../../supabase/functions/competitor-retention/index.ts"))],
+  ["mcp", await registeredRoute(() => import("../../supabase/functions/mcp/index.ts"))],
   ["instagram-insights-report", (await import("../../supabase/functions/instagram-insights-report/index.ts")).handler],
-  ["competitor-tracking-report", await registeredRoute("../../supabase/functions/competitor-tracking-report/index.ts")],
+  ["competitor-tracking-report", await registeredRoute(() => import("../../supabase/functions/competitor-tracking-report/index.ts"))],
   // The canonical registry currently refuses Instagram. Register its actual refusal, never a fabricated calendar.
   ["meta-owned-analytics-report", (await import("../../supabase/functions/meta-owned-analytics-report/index.ts")).handler],
 ]);
