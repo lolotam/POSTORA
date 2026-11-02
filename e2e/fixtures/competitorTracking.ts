@@ -299,12 +299,12 @@ export function buildSeededEntry(): MockEntry {
 
 /** Every call the mocked boundaries received. */
 export type MockCalls = {
-  readonly quota: number;
-  readonly add: number;
-  readonly update: number;
-  readonly report: number;
-  readonly sync: number;
-  readonly brandScrape: number;
+  quota: number;
+  add: number;
+  update: number;
+  report: number;
+  sync: number;
+  brandScrape: number;
   readonly addArgs: { p_username: string; p_label: string | null }[];
   readonly updateArgs: {
     p_watchlist_id: string;
