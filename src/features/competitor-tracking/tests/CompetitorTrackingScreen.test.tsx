@@ -80,6 +80,36 @@ const QUOTA: CompetitorReportQuota = {
   remaining: 3,
 };
 
+it("shows a refused reactivation's resolved quota instead of silently retaining the removed row", async () => {
+  const entry = makeEntry({ is_active: false, removed_at: "2026-10-29T00:00:00Z" });
+  const gateway = createGateway({
+    list: vi.fn(async () => listEnvelope([entry])),
+    setActive: vi.fn(async () => { throw new CompetitorTrackingError("QUOTA_EXCEEDED", "synthetic private database detail"); }),
+  });
+  renderScreen(gateway);
+  await userEvent.click(await screen.findByRole("tab", { name: "Removed" }));
+  await userEvent.click(await screen.findByRole("button", { name: "Reactivate @northwind" }));
+  expect(await screen.findByText("Your limit is 5 active competitors.")).toBeInTheDocument();
+  expect(screen.getByText("@northwind")).toBeInTheDocument();
+  expect(screen.queryByText("synthetic private database detail")).toBeNull();
+  expect(gateway.enqueue).not.toHaveBeenCalled();
+});
+
+it("keeps a refused removal dialog open with a safe reason and the stored row", async () => {
+  const gateway = createGateway({
+    list: vi.fn(async () => listEnvelope([makeEntry()])),
+    setActive: vi.fn(async () => { throw new CompetitorTrackingError("NOT_FOUND", "synthetic private database detail"); }),
+  });
+  renderScreen(gateway);
+  await userEvent.click(await screen.findByRole("button", { name: "Remove @northwind" }));
+  const dialog = screen.getByRole("alertdialog");
+  await userEvent.click(within(dialog).getByRole("button", { name: "Remove", exact: true }));
+  expect(await within(dialog).findByRole("alert")).toHaveTextContent("That competitor is no longer available.");
+  expect(dialog).toBeInTheDocument();
+  expect(screen.getByText("@northwind")).toBeInTheDocument();
+  expect(screen.queryByText("synthetic private database detail")).toBeNull();
+});
+
 type EntryOverrides = Partial<CompetitorReportEntry>;
 
 function makeEntry(overrides: EntryOverrides = {}): CompetitorReportEntry {
