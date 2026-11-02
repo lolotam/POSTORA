@@ -37,7 +37,7 @@ export function SavedAnalyticsReport({ report }: { report: AnalyticsReport }) {
   const visible = report.metrics.filter((metric) => metric.definition.capability === "available" || ["reach", "views", "profile_views", "engagements", "followers", "follower_change"].includes(metric.definition.key));
   const viewCount = (post: AnalyticsReport["posts"]["items"][number]) => {
     const metric = post.metrics.find((metric) => metric.definition.key === "views")?.current;
-    return metric?.status === "available" ? metric.value : -1;
+    return metric && metric.status !== "unavailable" ? metric.value : -1;
   };
   const orderedPosts = sortByViews ? [...posts].sort((left, right) => viewCount(right) - viewCount(left)) : posts;
   const time = (instant: string | null) => instant ?? t("owned.unavailable", "Not available");
@@ -77,8 +77,9 @@ export function SavedAnalyticsReport({ report }: { report: AnalyticsReport }) {
       <h3 className="font-medium">{t("owned.posts", "Post performance")}</h3>
       <label className="flex gap-2 text-sm"><input type="checkbox" checked={sortByViews} onChange={(event) => setSortByViews(event.target.checked)} />{t("owned.topLoaded", "Rank loaded posts by lifetime views")}</label>
       {sortByViews && <p className="text-xs text-muted-foreground">{t("owned.rankingScope", "Ranking covers loaded posts only. Load more to include the rest; unavailable views are placed last.")}</p>}
-      {report.posts.status !== "available" && <p role="status">{t("owned.postsIncomplete", "Post coverage is incomplete.")} {report.posts.reason && labels.reasons[report.posts.reason]}</p>}
-      {posts.length === 0 && <p>{t("owned.noPosts", "No saved posts in this period.")}</p>}
+      {report.posts.status !== "available" && <p role="status">{report.posts.status === "unavailable"
+        ? t("owned.unavailable", "Not available") : t("owned.postsIncomplete", "Post coverage is incomplete.")} {report.posts.reason && labels.reasons[report.posts.reason]}</p>}
+      {posts.length === 0 && report.posts.status === "available" && <p>{t("owned.noPosts", "No saved posts in this period.")}</p>}
       {orderedPosts.map((post) => <article key={post.id} className="rounded-lg border p-4 space-y-2">
         <p className="break-words whitespace-pre-wrap">{post.text || post.id}</p><p className="text-xs">{post.publishedAt}</p>
         {post.permalink && <a className="text-sm underline" href={post.permalink} target="_blank" rel="noopener noreferrer">{t("owned.openPost", "Open post")}</a>}

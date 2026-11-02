@@ -5,6 +5,7 @@ import type { AnalyticsReport } from "./types";
 export function mergeSavedAnalyticsPages(pages: readonly AnalyticsReport[]): AnalyticsReport | null {
   const first = pages[0];
   if (!first) return null;
+  if (first.posts.status === "unavailable") return first;
   const last = pages[pages.length - 1];
   const items = Array.from(new Map(pages.flatMap((page) => page.posts.items).map((post) => [post.id, post])).values());
   const reason = pages.find((page) => page.posts.reason !== null)?.posts.reason ?? null;

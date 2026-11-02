@@ -7,7 +7,7 @@ import { analyticsDefinitions } from "../../../../supabase/functions/_shared/ana
 import { AnalyticsMetricValue, SavedAnalyticsReport } from "./SavedAnalyticsReport";
 import { OwnedAnalyticsScreen } from "./OwnedAnalyticsScreen";
 import { AnalyticsReadError, type SavedAnalyticsGateway } from "../application/ports";
-import type { AnalyticsSyncState, MetricValue } from "../domain/types";
+import type { AnalyticsReport, AnalyticsSyncState, MetricValue } from "../domain/types";
 
 vi.mock("@/hooks/useAuth", () => ({ useAuth: () => ({ user: { id: "owner-fixture" } }) }));
 
@@ -91,6 +91,67 @@ describe("saved analytics presentation", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent("Connected accounts could not be loaded");
     expect(within(screen.getByRole("alert")).getByRole("button", { name: "Retry" })).toBeEnabled();
     expect(screen.queryByText("No connected accounts for this platform.")).toBeNull();
+  });
+
+  it("ranks measured partial views above unavailable views while retaining the coverage label", () => {
+    const report = analyticsReportFixture("facebook");
+    const definition = analyticsDefinitions("facebook", "post").find((metric) => metric.key === "views")!;
+    const observations: { name: string; current: MetricValue }[] = [
+      { name: "unavailable", current: { status: "unavailable", reason: "not_collected" } },
+      { name: "partial", current: { status: "partial", value: 9, coverage: { availableDays: 2, expectedDays: 7 } } },
+      { name: "zero", current: { status: "available", value: 0 } },
+    ];
+    report.posts.items = observations.map(({ name, current }) => ({ id: name, text: `Post: ${name}`, publishedAt: report.period.since, permalink: null,
+      metrics: [{ ...report.metrics[0], definition, current }] }));
+    render(<SavedAnalyticsReport report={report} />);
+    fireEvent.click(screen.getByRole("checkbox", { name: "Rank loaded posts by lifetime views" }));
+    const posts = screen.getByRole("heading", { name: "Post performance" }).closest("section")!;
+    const articles = within(posts).getAllByRole("article");
+    expect(articles.map((article) => within(article).getByText(/^Post:/).textContent)).toEqual(["Post: partial", "Post: zero", "Post: unavailable"]);
+    expect(articles[0]).toHaveTextContent("9 · Partial: 2/7 days");
+  });
+
+  it("retains an unavailable post collection instead of claiming a verified empty period", async () => {
+    const report = analyticsReportFixture("facebook");
+    report.posts = { items: [], status: "unavailable", reason: "not_collected", nextCursor: null, truncated: true };
+    render(<QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } })}>
+      <OwnedAnalyticsScreen platform="facebook" gateway={{ accounts: async () => [{ id: "first", name: "Curemed", active: true }], report: async () => report }} />
+    </QueryClientProvider>);
+    const posts = (await screen.findByRole("heading", { name: "Post performance" })).closest("section")!;
+    expect(within(posts).getByRole("status")).toHaveTextContent("Not available");
+    expect(within(posts).getByRole("status")).toHaveTextContent("This measurement has not been collected yet.");
+    expect(within(posts).queryByText("No saved posts in this period.")).toBeNull();
+  });
+
+  it("waits for a refresh to finish before continuing from its new cursor", async () => {
+    const requested: (string | null)[] = [];
+    let finishRefresh: ((report: AnalyticsReport) => void) | undefined;
+    const initial = analyticsReportFixture("facebook");
+    initial.posts.nextCursor = "old-cursor";
+    const gateway: SavedAnalyticsGateway = {
+      accounts: async () => [{ id: "first", name: "Curemed", active: true }],
+      report: (request) => {
+        requested.push(request.cursor);
+        if (requested.length === 2) return new Promise((resolve) => { finishRefresh = resolve; });
+        return Promise.resolve(request.cursor ? analyticsReportFixture("facebook") : initial);
+      },
+    };
+    render(<QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } })}>
+      <OwnedAnalyticsScreen platform="facebook" gateway={gateway} />
+    </QueryClientProvider>);
+    const more = await screen.findByRole("button", { name: "Load more posts" });
+    fireEvent.click(screen.getByRole("button", { name: "Refresh report" }));
+    await waitFor(() => expect(requested).toEqual([null, null]));
+    const refreshed = analyticsReportFixture("facebook");
+    refreshed.posts.nextCursor = "new-cursor";
+    try {
+      expect(more).toBeDisabled();
+      fireEvent.click(more);
+      expect(requested).toEqual([null, null]);
+    } finally { finishRefresh!(refreshed); }
+    await waitFor(() => expect(more).toBeEnabled());
+    fireEvent.click(more);
+    await waitFor(() => expect(requested).toEqual([null, null, "new-cursor"]));
   });
 
   it.each(["complete", "collection_gap", "first_page_metric_gap", "last_page_metric_gap"] as const)("continuation clears only unread pagination: %s", async (scenario) => {

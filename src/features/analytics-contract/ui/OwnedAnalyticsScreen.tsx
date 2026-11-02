@@ -22,7 +22,8 @@ export function OwnedAnalyticsScreen({ platform, gateway = supabaseSavedAnalytic
   const combined = mergeSavedAnalyticsPages(reports.data?.pages ?? []);
   const revisionChanged = reports.error instanceof AnalyticsReadError && ["history_revision_changed", "history_expired", "invalid_cursor"].includes(reports.error.reason);
   const errorReason = reports.error instanceof AnalyticsReadError ? reports.error.reason : "storage_unavailable";
-  const refresh = () => { void reports.refetch(); };
+  const refresh = () => { if (!reports.isFetching) void reports.refetch({ cancelRefetch: false }); };
+  const loadMore = () => { if (!reports.isFetching) void reports.fetchNextPage({ cancelRefetch: false }); };
   return <section aria-label={t("owned.title", "Connected account performance")} className="space-y-4">
     <h2 className="text-lg font-semibold">{t("owned.title", "Connected account performance")}</h2>
     {accounts.isError ? <div role="alert">{t("owned.accountsFailed", "Connected accounts could not be loaded.")} <Button variant="outline" onClick={() => { void accounts.refetch(); }}>{t("owned.retry", "Retry")}</Button></div>
@@ -50,7 +51,7 @@ export function OwnedAnalyticsScreen({ platform, gateway = supabaseSavedAnalytic
           <Button variant="outline" disabled={reports.isFetching} onClick={refresh}>{t("owned.refresh", "Refresh report")}</Button>
         </div>}
         {combined && !revisionChanged && <SavedAnalyticsReport report={combined} />}
-        {reports.hasNextPage && !reports.isError && <Button variant="outline" disabled={reports.isFetchingNextPage} onClick={() => { void reports.fetchNextPage(); }}>{t("owned.more", "Load more posts")}</Button>}
+        {reports.hasNextPage && !reports.isError && <Button variant="outline" disabled={reports.isFetching} onClick={loadMore}>{t("owned.more", "Load more posts")}</Button>}
       </>}
   </section>;
 }
