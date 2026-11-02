@@ -21,7 +21,7 @@ BEGIN
     'inventory_complete',inventory_complete,'inventory_truncated',inventory_truncated)
     INTO v_checkpoint FROM public.fb_analytics_collection_checkpoints WHERE job_id=p_job_id AND job_generation=p_job_generation;
   SELECT COALESCE(jsonb_agg(jsonb_build_object('operation_key',o.operation_key,'kind',o.kind,'state',o.state,
-    'reason',o.reason_code,'last_requested_at',(SELECT max(c.requested_at) FROM public.fb_analytics_captures c WHERE c.operation_id=o.id))
+    'reason',o.reason_code,'last_requested_at',(SELECT max(c.requested_at) FROM public.fb_analytics_captures c WHERE c.job_id=o.job_id AND c.job_generation=o.job_generation AND c.operation_id=o.id))
     ORDER BY o.operation_key),'[]'::jsonb) INTO v_operations
     FROM public.fb_analytics_collection_operations o WHERE o.job_id=p_job_id AND o.job_generation=p_job_generation;
   IF v_job.lease_until<=clock_timestamp() THEN RAISE EXCEPTION 'META_ANALYTICS_STALE_CLAIM' USING ERRCODE='MAH04'; END IF;
@@ -128,7 +128,7 @@ BEGIN
     'inventory_complete',inventory_complete,'inventory_truncated',inventory_truncated)
     INTO v_checkpoint FROM public.threads_analytics_collection_checkpoints WHERE job_id=p_job_id AND job_generation=p_job_generation;
   SELECT COALESCE(jsonb_agg(jsonb_build_object('operation_key',o.operation_key,'kind',o.kind,'state',o.state,
-    'reason',o.reason_code,'last_requested_at',(SELECT max(c.requested_at) FROM public.threads_analytics_captures c WHERE c.operation_id=o.id))
+    'reason',o.reason_code,'last_requested_at',(SELECT max(c.requested_at) FROM public.threads_analytics_captures c WHERE c.job_id=o.job_id AND c.job_generation=o.job_generation AND c.operation_id=o.id))
     ORDER BY o.operation_key),'[]'::jsonb) INTO v_operations
     FROM public.threads_analytics_collection_operations o WHERE o.job_id=p_job_id AND o.job_generation=p_job_generation;
   IF v_job.lease_until<=clock_timestamp() THEN RAISE EXCEPTION 'META_ANALYTICS_STALE_CLAIM' USING ERRCODE='MAH04'; END IF;
