@@ -73,6 +73,6 @@ it("lets an active Instagram account renew permissions without pretending its to
     accounts={[{ ...account, platform: "instagram", ig_auth_type: "facebook_page", needs_reauth: false, last_refresh_error: null }]} />);
   expect(screen.getByText("Active")).toBeInTheDocument();
   expect(screen.queryByText("Action Required")).not.toBeInTheDocument();
-  fireEvent.click(screen.getByRole("button", { name: "Reconnect", exact: true }));
+  fireEvent.click(screen.getByRole("button", { name: "Reconnect" }));
   expect(onReconnect).toHaveBeenCalledExactlyOnceWith("instagram", account.id);
 });
