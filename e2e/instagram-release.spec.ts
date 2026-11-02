@@ -671,6 +671,7 @@ test("canonical protected reconnect renews denied insights and replaces the prev
     { social_account_id: `eq.${account.id}` });
   const binding = () => read("facebook_user_credential_bindings", "credential_id,connection_version", { social_account_id: `eq.${account.id}` });
   const credential = (id: string) => read("facebook_user_credentials", "id,revision,provider_user_id,lifecycle", { id: `eq.${id}` });
+  const fence = () => read("facebook_user_credential_connection_fences", "connection_version", { social_account_id: `eq.${account.id}` });
   await signInInstagramRelease(page, manifest, "ownerB");
   await page.goto("/analytics/instagram?tab=analyze");
   const initial = await searchInstagramRelease(page, "release_competitor");
@@ -678,6 +679,7 @@ test("canonical protected reconnect renews denied insights and replaces the prev
   expect((await initial.json()).posts).toEqual(expect.arrayContaining([expect.objectContaining({ mediaType: "REEL", videoViewCount: 300 })]));
   const beforeCapability = (await capability())[0];
   const beforeBinding = (await binding())[0];
+  expect(await fence()).toEqual([{ connection_version: beforeBinding.connection_version }]);
   const beforeCredential = (await credential(beforeBinding.credential_id))[0];
   const before = await receipts();
   expect((await control("oauth-authorize", { url: "https://postora.cloud/" })).status()).toBe(400);
@@ -727,6 +729,7 @@ test("canonical protected reconnect renews denied insights and replaces the prev
   const afterBinding = (await binding())[0];
   expect(afterBinding.credential_id).toBe(beforeBinding.credential_id);
   expect(afterBinding.connection_version).toBe(beforeBinding.connection_version + 1);
+  expect(await fence()).toEqual([{ connection_version: afterBinding.connection_version }]);
   const afterCredential = (await credential(afterBinding.credential_id))[0];
   expect(afterCredential).toEqual({ ...beforeCredential, revision: beforeCredential.revision + 1 });
   const committed = await read("meta_oauth_attempt_receipts", "credential_id,credential_revision,capability_generation,connection_version",

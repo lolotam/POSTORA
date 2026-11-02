@@ -96,6 +96,7 @@ export async function cleanupInstagramRelease(seed: InstagramReleaseSeed): Promi
     (SELECT count(*) FROM public.meta_oauth_attempt_receipts WHERE user_id IN (SELECT id FROM owners))+
     (SELECT count(*) FROM public.oauth_pending_instagram_selections WHERE user_id IN (SELECT id FROM owners))+
     (SELECT count(*) FROM public.facebook_user_credentials WHERE user_id IN (SELECT id FROM owners))+
+    (SELECT count(*) FROM public.facebook_user_credential_connection_fences WHERE user_id IN (SELECT id FROM owners))+
     (SELECT count(*) FROM public.facebook_user_credential_bindings WHERE user_id IN (SELECT id FROM owners));`);
   if (remaining !== "0") throw new Error("Instagram release cleanup left owned identities or OAuth authority");
   await restoreReleaseSettings(seed.previousSettings);
@@ -177,6 +178,8 @@ BEGIN
    VALUES((a->>'credentialId')::uuid,u,a->>'token',1,'active',CASE WHEN a->>'authority'='expired' THEN t-interval '1 hour' ELSE t+interval '30 days' END,
      CASE WHEN known_subject THEN 'oauth_exchange' ELSE 'migrated_instagram_account_credential' END,
      CASE WHEN known_subject THEN t END,CASE WHEN known_subject THEN 'release_fb_'||right(m->>'namespace',12) END);
+   INSERT INTO public.facebook_user_credential_connection_fences(social_account_id,user_id,platform,connection_version)
+   VALUES((a->>'id')::uuid,u,'instagram',1);
    INSERT INTO public.facebook_user_credential_bindings(social_account_id,user_id,platform,credential_id,evidence_source,
      verified_facebook_user_id,verified_facebook_page_id,verified_instagram_user_id)
    VALUES((a->>'id')::uuid,u,'instagram',(a->>'credentialId')::uuid,
