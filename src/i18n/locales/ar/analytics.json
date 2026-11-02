@@ -466,6 +466,10 @@
     "yourActivity": "نشاطك"
   },
   "instagram": {
+    "outlierMetricBasis": "المقياس: {{basis}}",
+    "outlierOrganicViews": "مشاهدات الحساب العضوية",
+    "outlierOrganicReach": "الوصول العضوي للحساب",
+    "outlierOrganicInteractions": "تفاعلات الحساب العضوية",
     "accountsLoadFailed": "تعذّر تحميل الحسابات المرتبطة. جرّب مرة أخرى.",
     "metricUnavailable": "غير متاح",
     "metricPartialCoverage": "جزئي: {{availableDays}} من {{expectedDays}} يوم",

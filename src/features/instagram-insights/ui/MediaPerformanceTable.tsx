@@ -36,6 +36,11 @@ export function MediaPerformanceTable({
   isLoadingMore = false,
 }: MediaPerformanceTableProps) {
   const { t } = useTranslation("analytics");
+  const metricBasisLabels = {
+    views: t("instagram.outlierOrganicViews", "owner organic views"),
+    reach: t("instagram.outlierOrganicReach", "owner organic reach"),
+    interactions: t("instagram.outlierOrganicInteractions", "owner organic interactions"),
+  };
   const [formatFilter, setFormatFilter] = useState<"all" | "reel" | "non_reel">("all");
   const [sortBy, setSortBy] = useState<"newest" | "engagement" | "reach" | "views">("newest");
 
@@ -241,6 +246,13 @@ export function MediaPerformanceTable({
                         >
                           {badge.text}
                         </Badge>
+                        {item.outlier.metricBasis !== null && (
+                          <span className="mt-1 block text-[10px] text-muted-foreground">
+                            {t("instagram.outlierMetricBasis", "Metric basis: {{basis}}", {
+                              basis: metricBasisLabels[item.outlier.metricBasis],
+                            })}
+                          </span>
+                        )}
                       </td>
 
                       <td className="py-3 px-3 sm:px-4 text-center">

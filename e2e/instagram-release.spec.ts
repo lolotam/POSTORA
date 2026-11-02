@@ -329,10 +329,17 @@ test("canonical owner and competitor screens retain exact outliers across period
   expect(shortOwnerResponse.status()).toBe(200);
   const shortOwner: OwnerReport = await shortOwnerResponse.json();
   expect(shortOwner.media.page.items.find((item) => item.mediaId === ownerOriginal.mediaId)?.outlier).toEqual(ownerOriginal.outlier);
+  expect(shortOwner.media.page.items.find((item) => item.mediaId === `${account.providerId}_six_baseline_0`)?.outlier)
+    .toEqual(ownerItems.find((item) => item.mediaId === `${account.providerId}_six_baseline_0`)?.outlier);
   const ownerRow = page.getByRole("row").filter({ has: page.getByText(ownerOriginal.mediaId, { exact: true }) });
   await expect(ownerRow.getByText("Metric basis: owner organic views", { exact: true })).toBeVisible();
   const interactionsRow = page.getByRole("row").filter({ has: page.getByText(`${account.providerId}_six_baseline_0`, { exact: true }) });
   await expect(interactionsRow.getByText("Metric basis: owner organic interactions", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Toggle language", exact: true }).click();
+  await expect(page.locator("html")).toHaveAttribute("lang", "ar");
+  await expect(page.locator("html")).toHaveAttribute("dir", "rtl");
+  await expect(ownerRow.getByText("المقياس: مشاهدات الحساب العضوية", { exact: true })).toBeVisible();
+  await expect(interactionsRow.getByText("المقياس: تفاعلات الحساب العضوية", { exact: true })).toBeVisible();
   expect(await providerState()).toEqual(before);
 });
 
