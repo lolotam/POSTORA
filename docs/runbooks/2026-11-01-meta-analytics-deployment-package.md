@@ -4,6 +4,8 @@ This package prepares the owner's requested combined release. It does not author
 
 ## Decision boundary
 
+Later discovery/tooling checkpoint `5ada6702f9d17251aa350d1a00bc989f204ec430` is recorded in the [discovery continuation](../journeys/2026-11-02-instagram-discovery-contract.md). Those changed discovery/frontend/shared-Graph bytes are outside this package's older frozen manifest. Refreeze the combined final candidate and affected proofs before execution; the older manifest cannot be used to deploy the later branch head. The canonical checker also reports four historical duplicate migration prefixes that require provenance reconciliation before its workflow activation.
+
 **NO-GO for the requested complete three-platform release.** Do not ask the owner to approve an enablement that cannot produce verified data. The selected Facebook and Instagram accounts lack protected credential bindings; Instagram also lacks accepted canonical metric/calendar evidence. Keep the owner's complete [G-X decision](../specs/2026-10-30-instagram-release-gates.md). An owner-only artifact inventory does not replace it.
 
 The selected read-only aliases remain `FB-01`, `IG-01`, `TH-01` from [design §12](../specs/2026-11-01-meta-analytics-completion-design.md). Reconnection must preserve those targets and their owner; do not substitute another account or derive a binding from an unverified legacy token. Target selection was not permission to admit collection or start schedules.
