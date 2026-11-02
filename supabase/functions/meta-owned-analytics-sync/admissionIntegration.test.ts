@@ -2,6 +2,8 @@ import { assert, assertEquals } from "https://deno.land/std@0.224.0/assert/mod.t
 import { z } from "https://esm.sh/zod@3.25.76";
 import { resolveRolloutRuntime, RolloutSqlError, SERVICE_ROLE, acquireRolloutLease, releaseRolloutLease } from "../_shared/rolloutIntegrationTestSupport.ts";
 import { handler } from "./index.ts";
+import { parseAnalyticsReport } from "../_shared/analyticsSchema.ts";
+import { handleGetPostAnalytics } from "../n8n-api/serviceProxy.ts";
 
 const OWNER = "a1000000-0000-4000-8000-000000000001";
 const PAGE = "a2000000-0000-4000-8000-000000000001";
@@ -50,7 +52,7 @@ Deno.test("registered admission and dispatch preserve real SQL fences and durabl
     assert(/^(read|observe)_(fb|threads)_analytics_(admission_credential|permissions)$/.test(name)
       || /^(claim|read|reserve|commit|persist|complete)_(fb|threads)_analytics_(collection_jobs|collection_credential|worker_state|inventory_page|capture|collection_job)$/.test(name)
       || ["next_meta_analytics_dispatch_target", "commit_meta_analytics_dispatch_target", "read_meta_analytics_provider_throttle", "record_instagram_provider_throttle_http", "claim_meta_analytics_collection_job",
-        "list_meta_analytics_retention_targets", "cleanup_meta_analytics_target"].includes(name), "Unexpected RPC refused");
+        "list_meta_analytics_retention_targets", "cleanup_meta_analytics_target", "read_meta_owned_analytics_history"].includes(name), "Unexpected RPC refused");
     if (name === "record_instagram_provider_throttle_http") {
       assert(/^[a-f0-9]{64}$/.test(body.p_bucket_key), "Only a validated synthetic digest can enter fixture cleanup");
       assertEquals([body.p_job_id, body.p_claim_token, body.p_job_generation], [null, null, null], "Foreign jobs never enter the Instagram job RPC");
@@ -103,6 +105,11 @@ Deno.test("registered admission and dispatch preserve real SQL fences and durabl
     ownsFixture = true;
     for (const [key, value] of Object.entries({ SUPABASE_URL: API, SUPABASE_SERVICE_ROLE_KEY: "fixture-service", CRON_SECRET: "synthetic-cron",
       FACEBOOK_APP_ID: "770001", FACEBOOK_APP_SECRET: "synthetic-app", THREADS_APP_ID: "770001", THREADS_APP_SECRET: "synthetic-app" })) Deno.env.set(key, value);
+    const { handler: reportHandler } = await import("../meta-owned-analytics-report/index.ts");
+    const reportRequest = (platform: "facebook" | "threads", accountId: string, ownerId = OWNER) => reportHandler(new Request(API, {
+      method: "POST", headers: { Authorization: "Bearer fixture-service", "Content-Type": "application/json" },
+      body: JSON.stringify({ platform, accountId, user_id: ownerId, analyticsContractVersion: 1, periodDays: 7 }),
+    }));
     for (const platform of ["facebook", "threads"] as const) {
       const accountId = platform === "facebook" ? PAGE : THREADS;
       for (const scenario of ["normal", "exclude_before_second_request", "exclude_before_observation_write"] as const) {
@@ -189,6 +196,7 @@ Deno.test("registered admission and dispatch preserve real SQL fences and durabl
         const providerId = platform === "facebook" ? "772001" : "773001";
         const postId = platform === "facebook" ? `${providerId}_9001` : "7739001";
         const capturedRequests: string[] = [];
+        let metricScenario: "normal" | "permission" | "credential" = "normal";
         globalThis.fetch = async (input, init) => {
           const outgoing = new Request(input, init);
           const url = new URL(outgoing.url);
@@ -202,6 +210,8 @@ Deno.test("registered admission and dispatch preserve real SQL fences and durabl
           if (url.pathname.endsWith(`/${postId}`)) return reply(post);
           const metrics = url.searchParams.get("metric")!.split(",");
           capturedRequests.push(url.pathname + "?" + url.searchParams.toString());
+          if (metricScenario === "permission" && metrics.includes("page_post_engagements")) return Response.json({ error: { code: 10 } }, { status: 403 });
+          if (metricScenario === "credential" && metrics.includes("followers_count")) return Response.json({ error: { code: 190 } }, { status: 400 });
           const isDay = url.searchParams.has("since");
           return reply({ data: metrics.map((name) => name === "followers_count" ? { name, period: "day", total_value: { value: 0 } }
             : { name, period: isDay ? "day" : "lifetime", values: [{ value: 0,
@@ -229,6 +239,52 @@ Deno.test("registered admission and dispatch preserve real SQL fences and durabl
           daily: z.array(z.object({ metrics: z.array(z.object({ status: z.string(), value: z.number().nullable() })) })) }).parse(report);
         assertEquals(persisted.daily.length, 2);
         assertEquals(persisted.daily.every((day) => day.metrics.every((cell) => cell.status === "available" && cell.value === 0)), true);
+        const beforeReportRequests = capturedRequests.length;
+        const canonicalResponse = await reportRequest(platform, accountId);
+        const canonical = await canonicalResponse.json();
+        assertEquals(canonicalResponse.status, 200, JSON.stringify(canonical));
+        parseAnalyticsReport(canonical);
+        assertEquals(canonical.source, "persisted");
+        assertEquals(canonical.platform, platform);
+        assertEquals(canonical.metrics.find((metric: { definition: { key: string } }) => metric.definition.key === (platform === "facebook" ? "views" : "profile_views")).current,
+          { status: "partial", value: 0, coverage: { availableDays: 2, expectedDays: 7 } });
+        assertEquals(canonical.posts.items[0].metrics.find((metric: { definition: { key: string } }) => metric.definition.key === "views").current, { status: "available", value: 0 });
+        if (platform === "threads") assertEquals(canonical.metrics.find((metric: { definition: { key: string } }) => metric.definition.key === "followers").current,
+          { status: "available", value: 0 }, "A real current point sample is usable on its capture day without pretending it is a period total");
+        assertEquals(capturedRequests.length, beforeReportRequests, "Saved reports perform no provider requests");
+        assertEquals((await reportRequest(platform, accountId, CREDENTIAL)).status, 404, "The real report path structurally rejects a foreign acting owner");
+        metricScenario = platform === "facebook" ? "permission" : "credential";
+        await runtime.exec(`SELECT public.enqueue_${family}_analytics_collection_job('${OWNER}','${accountId}',(clock_timestamp() AT TIME ZONE 'America/Los_Angeles')::date,true);`, SERVICE_ROLE);
+        const mixed = await drain();
+        const mixedReceipt = await mixed.json();
+        assertEquals(mixed.status, 200, JSON.stringify(mixedReceipt));
+        assertEquals(mixedReceipt.counts.refused, 1);
+        const mixedResponse = await reportRequest(platform, accountId);
+        const mixedReport = await mixedResponse.json();
+        assertEquals(mixedResponse.status, 200, JSON.stringify(mixedReport));
+        parseAnalyticsReport(mixedReport);
+        const proxied = await handleGetPostAnalytics({
+          loadAccount: async () => ({ account: { id: accountId, user_id: OWNER, platform, platform_user_id: platform === "facebook" ? "772001" : "773001", is_active: true }, failed: false }),
+          invoke: async (name, body) => {
+            assertEquals(name, "meta-owned-analytics-report");
+            const response = await reportHandler(new Request(API, { method: "POST", headers: { Authorization: "Bearer fixture-service" }, body: JSON.stringify(body) }));
+            return { status: response.status, data: await response.json() };
+          }, storeImage: async () => { throw new Error("Read-only analytics must not store media"); }, mediaQuotaBlocked: async () => null,
+        }, OWNER, new URLSearchParams({ social_account_id: accountId, period_days: "7", analyticsContractVersion: "1" }));
+        assertEquals(proxied.status, 200);
+        assertEquals(parseAnalyticsReport(proxied.body).metrics, mixedReport.metrics, "Worker → SQL → report → actual proxy preserves each measurement cause");
+        assertEquals(mixedReport.sync.status, "failed");
+        assertEquals(mixedReport.sync.reason, platform === "facebook" ? "permission_missing" : "reauth_required");
+        if (platform === "facebook") {
+          const engagement = mixedReport.metrics.find((metric: { definition: { key: string } }) => metric.definition.key === "engagements");
+          assertEquals(engagement.trend[6].metric, { status: "unavailable", reason: "permission_missing" });
+          assertEquals(mixedReport.metrics.find((metric: { definition: { key: string } }) => metric.definition.key === "views").trend[6].metric,
+            { status: "available", value: 0 }, "An earlier successful metric in the same response plan remains saved");
+          assertEquals(mixedReport.metrics.find((metric: { definition: { key: string } }) => metric.definition.key === "followers").trend[6].metric,
+            { status: "unavailable", reason: "not_collected" }, "A refused request does not fabricate failure evidence for later unattempted metrics");
+        } else assertEquals(mixedReport.metrics.find((metric: { definition: { key: string } }) => metric.definition.key === "followers").current,
+          { status: "unavailable", reason: "reauth_required" });
+        metricScenario = "normal";
         await runtime.exec(`SELECT public.enqueue_${family}_analytics_collection_job('${OWNER}','${accountId}',(clock_timestamp() AT TIME ZONE 'America/Los_Angeles')::date,true);`, SERVICE_ROLE);
         let throttledRequests = 0;
         globalThis.fetch = async (input, init) => {
@@ -250,6 +306,16 @@ Deno.test("registered admission and dispatch preserve real SQL fences and durabl
       });
       assert(passed, "Stop after a failed real collection boundary");
     }
+    const savedHealthPassed = await test.step("saved report retains measurements while expired connection health is failed", async () => {
+      await runtime.exec(`UPDATE public.social_accounts SET needs_reauth=true,token_expires_at=clock_timestamp()-interval '1 hour' WHERE id='${PAGE}';`);
+      const response = await reportRequest("facebook", PAGE);
+      const report = await response.json();
+      assertEquals(response.status, 200, JSON.stringify(report));
+      assertEquals(report.sync.status, "failed");
+      assertEquals(report.sync.reason, "reauth_required");
+      assertEquals(report.posts.items[0].metrics.find((metric: { definition: { key: string } }) => metric.definition.key === "views").current, { status: "available", value: 0 });
+    });
+    assert(savedHealthPassed, "Stop after a saved connection-health report fails");
     const dryRunPassed = await test.step("registered retention dry run uses real independent scope without mutation", async () => {
       await runtime.exec(`UPDATE public.app_settings SET value=jsonb_build_object('account_ids',jsonb_build_array('${PAGE}')) WHERE key='retention_facebook_analytics_policy';
         UPDATE public.app_settings SET value=jsonb_build_object('account_ids',jsonb_build_array('${THREADS}')) WHERE key='retention_threads_analytics_policy';`);

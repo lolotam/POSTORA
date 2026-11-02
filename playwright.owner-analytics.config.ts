@@ -14,7 +14,7 @@ const anonKey = `${unsigned}.${createHmac("sha256", OWNER_RELEASE.signingSecret)
 
 export default defineConfig({
   testDir: "./e2e",
-  testMatch: "instagram-owner-release.spec.ts",
+  testMatch: ["instagram-owner-release.spec.ts", "meta-owned-release.spec.ts"],
   fullyParallel: false,
   workers: 1,
   forbidOnly: true,

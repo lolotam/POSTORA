@@ -11327,6 +11327,23 @@ export type Database = {
         }
         Returns: Json
       }
+      read_meta_owned_analytics_history: {
+        Args: {
+          p_platform: string
+          p_user_id: string
+          p_account_id: string
+          p_request: Json
+        }
+        Returns: Json
+      }
+      read_instagram_owner_report_snapshot: {
+        Args: {
+          p_user_id: string
+          p_account_id: string
+          p_as_of: string
+        }
+        Returns: Json
+      }
       read_threads_analytics_admission_credential: {
         Args: {
           p_account_id: string

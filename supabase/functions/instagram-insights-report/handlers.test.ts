@@ -12,7 +12,14 @@
  */
 
 import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
-import { handler } from "./index.ts";
+Deno.env.set("SUPABASE_URL", "http://127.0.0.1:9");
+Deno.env.set("SUPABASE_SERVICE_ROLE_KEY", "fixture-report-audit-key");
+const { handler } = await import("./index.ts");
+globalThis.fetch = (input, init) => {
+  const request = new Request(input, init);
+  if (new URL(request.url).pathname !== "/rest/v1/system_logs") throw new Error("Unexpected report test request");
+  return Promise.resolve(new Response(null, { status: 201 }));
+};
 
 const OWNER_ID = "8f14e45f-ceea-4e7a-9b1c-2d3e4f5a6b7c";
 const ACCOUNT_ID = "a1b2c3d4-e5f6-4a1b-8c2d-3e4f5a6b7c8d";

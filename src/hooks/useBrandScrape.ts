@@ -1,4 +1,4 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, useRef } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import { resolveBrandProfileSource } from "@/types/brand-intelligence";
@@ -9,13 +9,21 @@ type BrandScrapeResponse = {
   posts: BrandPost[];
   totalPosts: number;
   hasMore: boolean;
+  warning?: { code: string; message: string };
 };
 
-export function useBrandScrape() {
+export function useBrandScrape(ownerId: string | undefined) {
+  const requestOwner = useRef(ownerId);
+  const requestGeneration = useRef(0);
+  if (requestOwner.current !== ownerId) {
+    requestOwner.current = ownerId;
+    requestGeneration.current++;
+  }
+  const [transientOwner, setTransientOwner] = useState(ownerId);
+  const sameOwner = transientOwner === ownerId;
   const queryClient = useQueryClient();
   const [username, setUsername] = useState("");
   const [platform, setPlatform] = useState<BrandPlatform>("instagram");
-  const [offset, setOffset] = useState(0);
   const [allPosts, setAllPosts] = useState<BrandPost[]>([]);
   const [searchTriggered, setSearchTriggered] = useState(false);
 
@@ -34,6 +42,7 @@ export function useBrandScrape() {
       }
       session = refreshedSessionData.session;
     }
+    if (!ownerId || session.user.id !== ownerId) throw new Error("Your session changed. Please search again.");
 
     const response = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/brand-scrape`, {
       method: "POST",
@@ -56,7 +65,7 @@ export function useBrandScrape() {
         throw new Error("Your session has expired. Please log out and log back in.");
       }
 
-      throw new Error(message);
+      throw Object.assign(new Error(message), { code: typeof payload.error_code === "string" ? payload.error_code : null });
     }
 
     if (typeof payload?.error === "string") {
@@ -64,44 +73,47 @@ export function useBrandScrape() {
     }
 
     return payload as BrandScrapeResponse;
-  }, [platform, username]);
+  }, [platform, username, ownerId]);
 
   const { data, isLoading, error } = useQuery({
-    queryKey: ["brand-scrape", platform, username, 0],
+    queryKey: ["brand-scrape", ownerId, platform, username, 0],
     queryFn: () => callBrandScrape(0),
-    enabled: searchTriggered && !!username && !sessionProfile,
+    enabled: !!ownerId && sameOwner && searchTriggered && !!username && !sessionProfile,
     staleTime: 3600000,
     retry: 1,
   });
 
   const search = useCallback((newUsername: string, newPlatform: BrandPlatform) => {
+    requestGeneration.current++;
+    setTransientOwner(ownerId);
     setSessionProfile(null);
     setSessionPosts(null);
     setUsername(newUsername);
     setPlatform(newPlatform);
-    setOffset(0);
     setAllPosts([]);
     setSearchTriggered(true);
-    queryClient.invalidateQueries({ queryKey: ["brand-scrape", newPlatform, newUsername, 0] });
-  }, [queryClient]);
+    queryClient.invalidateQueries({ queryKey: ["brand-scrape", ownerId, newPlatform, newUsername, 0] });
+  }, [queryClient, ownerId]);
 
   const loadMore = useCallback(async () => {
-    if (!username || !data?.hasMore) return;
-    const nextOffset = allPosts.length > 0 ? allPosts.length : (data?.posts?.length || 0);
+    if (!sameOwner || !username || !data?.hasMore) return;
+    const nextOffset = (data.posts?.length || 0) + allPosts.length;
+    if (nextOffset >= data.totalPosts) return;
+    const generation = requestGeneration.current;
 
     try {
       const moreData = await callBrandScrape(nextOffset);
-      if (moreData.posts) {
-        setAllPosts((prev) => [...prev, ...moreData.posts]);
+      if (moreData.posts && generation === requestGeneration.current) {
+        setAllPosts((prev) => [...new Map([...prev, ...moreData.posts].map((post) => [post.id, post])).values()]);
       }
     } catch (err) {
       console.error("Load more error:", err);
     }
-  }, [username, data, allPosts, callBrandScrape]);
+  }, [username, data, allPosts, callBrandScrape, sameOwner]);
 
   const reset = useCallback(() => {
+    requestGeneration.current++;
     setUsername("");
-    setOffset(0);
     setAllPosts([]);
     setSearchTriggered(false);
     setSessionProfile(null);
@@ -110,17 +122,20 @@ export function useBrandScrape() {
 
   /** Load data from a stored history session without re-scraping */
   const loadFromSession = useCallback((profile: BrandProfile, posts: BrandPost[]) => {
+    requestGeneration.current++;
+    setTransientOwner(ownerId);
     setSessionProfile(profile);
     setSessionPosts(posts);
     setSearchTriggered(false);
     setAllPosts([]);
     setPlatform(profile.platform);
     setUsername(profile.username);
-  }, []);
+  }, [ownerId]);
 
   // Merge: session data takes priority, then query data
-  const activeProfile = sessionProfile || data?.profile || null;
-  const combinedPosts = sessionPosts || (data?.posts ? [...data.posts, ...allPosts] : allPosts);
+  const activeProfile = (sameOwner ? sessionProfile : null) || data?.profile || null;
+  const visiblePosts = sameOwner ? allPosts : [];
+  const combinedPosts = (sameOwner ? sessionPosts : null) || (data?.posts ? [...data.posts, ...visiblePosts] : visiblePosts);
 
   /**
    * The source of the profile the owner is looking at.
@@ -136,10 +151,13 @@ export function useBrandScrape() {
     profile: activeProfile,
     profileSource,
     posts: combinedPosts,
-    totalPosts: sessionPosts ? sessionPosts.length : (data?.totalPosts || 0),
-    hasMore: sessionPosts ? false : (data?.hasMore || false),
-    isLoading: sessionProfile ? false : isLoading,
-    error: sessionProfile ? null : (error ? (error as Error).message : null),
+    totalPosts: sameOwner && sessionPosts ? sessionPosts.length : (data?.totalPosts || 0),
+    hasMore: sameOwner && sessionPosts ? false : combinedPosts.length < (data?.totalPosts || 0),
+    isLoading: sameOwner && sessionProfile ? false : isLoading,
+    error: sameOwner && sessionProfile ? null : (error ? (error as Error).message : null),
+    reconnectRequired: ["IG_INSIGHTS_SCOPE_MISSING", "IG_RECONNECT_REQUIRED"].includes(
+      data?.warning?.code ?? (error && "code" in error ? String(error.code) : "")),
+    warning: data?.warning?.message ?? null,
     search,
     loadMore,
     loadFromSession,

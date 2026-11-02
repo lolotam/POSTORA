@@ -77,9 +77,11 @@ async function captureVisit(input: DrainInput, job: AnalyticsClaim, provider: Co
     if (input.deadline.remainingMs < 20_000) break;
     const capture = await input.store.reserveCapture(job, plan.key, plan.request);
     const post = capture.kind === "post" ? await provider.post(capture.subject_id) : {};
-    const metrics = await provider.metrics(capture, plan.definitions);
+    const reply = await provider.metrics(capture, plan.definitions);
+    const metrics = reply.cells;
     const receivedAt = new Date().toISOString();
     await input.store.persistCapture(job, capture.capture_id, { metrics, ...post, received_at: receivedAt, observed_at: receivedAt });
+    if (reply.refusal) throw reply.refusal;
     if (Object.values(metrics).every((cell) => cell.status === "available" || ["not_offered", "outside_retention"].includes(cell.reason))) accepted.add(plan.key);
   }
   return plans.every((plan) => accepted.has(plan.key));
@@ -134,7 +136,13 @@ export async function drainOwnedAnalytics(input: DrainInput): Promise<DrainResul
         const job = await input.store.claim(candidates.length === 2 ? "all" : candidates[0]);
         if (!job) { for (const platform of candidates) exhausted.add(platform); break; }
         counts.visited++;
-        const outcome = await collectJob(input, job);
+        let outcome: Awaited<ReturnType<typeof collectJob>>;
+        try { outcome = await collectJob(input, job); }
+        catch (error) {
+          if (!(error instanceof AnalyticsWorkerStopped) || !["MAH02", "MAH03", "MAH04"].includes(error.sqlstate ?? "")) throw error;
+          counts.refused++;
+          continue;
+        }
         if (outcome === "rate_limited") { counts.partial++; rateLimited = true; paused.add(job.platform); continue; }
         counts[outcome === "success" ? "collected" : outcome]++;
     }

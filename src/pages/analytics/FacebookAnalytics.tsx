@@ -1,3 +1,4 @@
+import { compareBrandMetric } from "@/lib/brandMetrics";
 import { useState, useMemo } from "react";
 import { useTranslation } from "react-i18next";
 import { useNavigate } from "react-router-dom";
@@ -16,6 +17,7 @@ import { PostDetailDrawer } from "@/components/brand-intelligence/PostDetailDraw
 import { useBrandScrape } from "@/hooks/useBrandScrape";
 import type { BrandPost, BrandScrapeFilters } from "@/types/brand-intelligence";
 import { Icon3D, GradientHeading, GradientRingCard, GradientDivider, Reveal } from "@/components/fx";
+import { OwnedAnalyticsScreen } from "@/features/analytics-contract/ui/OwnedAnalyticsScreen";
 
 const DEFAULT_FILTERS: BrandScrapeFilters = {
   sortBy: "engagement",
@@ -31,9 +33,10 @@ export default function FacebookAnalytics() {
   const navigate = useNavigate();
   const { session } = useAuth();
   const { isAdmin } = useUserRole();
+  const [tab, setTab] = useState<"performance" | "analyze">("performance");
   const [filters, setFilters] = useState<BrandScrapeFilters>(DEFAULT_FILTERS);
   const [selectedPost, setSelectedPost] = useState<BrandPost | null>(null);
-  const { profile, posts, totalPosts, hasMore, isLoading, error, search, loadMore, reset } = useBrandScrape();
+  const { profile, posts, totalPosts, hasMore, isLoading, error, search, loadMore, reset } = useBrandScrape(session?.user.id);
   const isCredentialError = typeof error === "string" && /credential|not configured|app id|app secret/i.test(error);
 
   const { data: contentPostIds = new Set<string>() } = useQuery({
@@ -67,14 +70,14 @@ export default function FacebookAnalytics() {
       const ms: Record<string, number> = { "30d": 30 * 86400000, "3m": 90 * 86400000, "6m": 180 * 86400000, "1y": 365 * 86400000 };
       result = result.filter((p) => new Date(p.timestamp).getTime() > now - (ms[filters.period] || 0));
     }
-    if (filters.minEngagement > 0) result = result.filter((p) => p.engagementScore >= filters.minEngagement);
+    if (filters.minEngagement > 0) result = result.filter((p) => p.engagementScore !== null && p.engagementScore >= filters.minEngagement);
     const sorters: Record<string, (a: BrandPost, b: BrandPost) => number> = {
-      engagement: (a, b) => b.engagementScore - a.engagementScore,
-      likes: (a, b) => b.likesCount - a.likesCount,
-      comments: (a, b) => b.commentsCount - a.commentsCount,
-      views: (a, b) => (b.videoViewCount || 0) - (a.videoViewCount || 0),
-      shares: (a, b) => (b.sharesCount || 0) - (a.sharesCount || 0),
-      saves: (a, b) => (b.savesCount || 0) - (a.savesCount || 0),
+      engagement: (a, b) => compareBrandMetric(a, b, "engagementScore"),
+      likes: (a, b) => compareBrandMetric(a, b, "likesCount"),
+      comments: (a, b) => compareBrandMetric(a, b, "commentsCount"),
+      views: (a, b) => compareBrandMetric(a, b, "videoViewCount"),
+      shares: (a, b) => compareBrandMetric(a, b, "sharesCount"),
+      saves: (a, b) => compareBrandMetric(a, b, "savesCount"),
       newest: (a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime(),
       oldest: (a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime(),
     };
@@ -82,7 +85,7 @@ export default function FacebookAnalytics() {
     return result;
   }, [posts, filters]);
 
-  const maxEngagement = useMemo(() => Math.max(...posts.map((p) => p.engagementScore), 0), [posts]);
+  const maxEngagement = useMemo(() => Math.max(...posts.flatMap((p) => p.engagementScore === null ? [] : [p.engagementScore]), 0), [posts]);
   const hasResults = profile !== null;
 
   return (
@@ -98,6 +101,12 @@ export default function FacebookAnalytics() {
           </div>
         </Reveal>
         <GradientDivider tone="sky" />
+
+        <div className="flex flex-wrap gap-2">
+          <Button variant={tab === "performance" ? "secondary" : "ghost"} onClick={() => setTab("performance")}>{t("instagram.tabPerformance", "Performance & Insights")}</Button>
+          <Button variant={tab === "analyze" ? "secondary" : "ghost"} onClick={() => setTab("analyze")}>{t("header.analyze", "Analyze")}</Button>
+        </div>
+        {tab === "performance" ? <OwnedAnalyticsScreen platform="facebook" /> : <>
 
         <Reveal delay={80}>
           <GradientRingCard variant="sky" padded={false} hoverLift={false} ringIntensity="subtle" innerClassName="p-4 md:p-5">
@@ -172,6 +181,7 @@ export default function FacebookAnalytics() {
         )}
 
         <PostDetailDrawer post={selectedPost} isOpen={!!selectedPost} onClose={() => setSelectedPost(null)} />
+        </>}
       </div>
     </DashboardLayout>
   );

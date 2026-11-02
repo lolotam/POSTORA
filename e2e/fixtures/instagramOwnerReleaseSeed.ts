@@ -1,20 +1,13 @@
 /** Disposable owner-release identities. Never use these fixtures against a shared stack. */
-import { OWNER_RELEASE } from "./instagramOwnerReleaseSettings.mjs";
+import { OWNER_RELEASE, syntheticOwnerReleaseKey } from "./instagramOwnerReleaseSettings.mjs";
 import { assertLocalDockerSocket } from "./instagramOwnerReleaseSafety.mjs";
-export { OWNER_RELEASE } from "./instagramOwnerReleaseSettings.mjs";
+import { seedMetaOwnedRelease } from "./metaOwnedRelease.ts";
+export { OWNER_RELEASE, syntheticOwnerReleaseKey } from "./instagramOwnerReleaseSettings.mjs";
 
 export function assertOwnerReleaseUrl(url: string): void {
   if (![OWNER_RELEASE.apiUrl, OWNER_RELEASE.authUrl, OWNER_RELEASE.restUrl].some((allowed) => allowed === url)) {
     throw new Error("Owner-release fixtures require their exact loopback endpoints");
   }
-}
-
-export async function syntheticOwnerReleaseKey(role: "anon" | "service_role"): Promise<string> {
-  const base64url = (bytes: Uint8Array) => btoa(String.fromCharCode(...bytes)).replaceAll("+", "-").replaceAll("/", "_").replaceAll("=", "");
-  const encode = (value: unknown) => base64url(new TextEncoder().encode(JSON.stringify(value)));
-  const unsigned = `${encode({ alg: "HS256", typ: "JWT" })}.${encode({ role, iss: "supabase", exp: 4_102_444_800 })}`;
-  const key = await crypto.subtle.importKey("raw", new TextEncoder().encode(OWNER_RELEASE.signingSecret), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
-  return `${unsigned}.${base64url(new Uint8Array(await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(unsigned))))}`;
 }
 
 export async function ownerReleaseSql(sql: string): Promise<string> {
@@ -106,6 +99,7 @@ INSERT INTO public.app_settings(key,value,description) VALUES
 ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value;
 COMMIT;
 `);
+  await seedMetaOwnedRelease(ownerReleaseSql);
 }
 
 if (import.meta.main) {

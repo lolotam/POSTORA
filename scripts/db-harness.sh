@@ -170,6 +170,9 @@ SUITES=(
   meta_owned_analytics_inventory.sql
   meta_owned_analytics_retention.sql
   meta_owned_analytics_cron.sql
+  meta_owned_analytics_capture_failures.sql
+  meta_owned_analytics_reports.sql
+  instagram_report_snapshot.sql
   meta_owned_analytics_truncation.sql
 )
 # These fixtures build their own focused schema and apply the migration under

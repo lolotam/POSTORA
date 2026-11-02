@@ -1,4 +1,5 @@
 import type { z } from "https://esm.sh/zod@3.25.76";
+import { awaitWithAbort } from "./abort.ts";
 
 export type MetaAnalyticsError<Reason extends string> = {
   reason: Reason; message: string; code?: number; subcode?: number;
@@ -21,18 +22,6 @@ export function latestRetryAt(deadlines: readonly (string | null)[]): string | n
     candidate !== null && (latest === null || Date.parse(candidate) > Date.parse(latest)) ? candidate : latest, null);
 }
 
-/** Resolve even when a replaced transport ignores AbortSignal; cancel native fetch as well. */
-async function beforeAbort<T>(pending: Promise<T>, signal: AbortSignal): Promise<T> {
-  let abort: () => void = () => undefined;
-  const refused = new Promise<never>((_resolve, reject) => {
-    abort = () => reject(new DOMException("Meta analytics provider deadline reached", "AbortError"));
-    if (signal.aborted) abort();
-    else signal.addEventListener("abort", abort, { once: true });
-  });
-  try { return await Promise.race([pending, refused]); }
-  finally { signal.removeEventListener("abort", abort); }
-}
-
 async function boundedJson(response: Response, signal: AbortSignal): Promise<unknown> {
   if (!response.body) throw new SyntaxError("Meta analytics response body missing");
   const reader = response.body.getReader();
@@ -40,7 +29,7 @@ async function boundedJson(response: Response, signal: AbortSignal): Promise<unk
   let length = 0;
   try {
     while (true) {
-      const chunk = await beforeAbort(reader.read(), signal);
+      const chunk = await awaitWithAbort(() => reader.read(), signal);
       if (chunk.done) break;
       length += chunk.value.byteLength;
       if (length > 1_048_576) throw new RangeError("Meta analytics response exceeds limit");
@@ -131,7 +120,7 @@ export class MetaAnalyticsTransport<Reason extends string> {
     this.calls++;
     let response: Response;
     try {
-      response = await beforeAbort((this.options.fetch ?? fetch)(url, {
+      response = await awaitWithAbort(() => (this.options.fetch ?? fetch)(url, {
         headers: { Authorization: `Bearer ${this.options.token}` }, signal, redirect: "error",
       }), signal);
     } catch {

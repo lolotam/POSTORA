@@ -71,7 +71,7 @@ export function toProxyResponse(result: ProxyResult, corsHeaders: Record<string,
 
 type Owned = { account: ProxyAccount } | { error: ProxyResult };
 
-async function loadOwnedAccount(deps: ServiceProxyDeps, userId: string, rawAccountId: unknown): Promise<Owned> {
+async function loadOwnedAccount(deps: ServiceProxyDeps, userId: string, rawAccountId: unknown, options: { savedHistory?: boolean } = {}): Promise<Owned> {
   const accountId = typeof rawAccountId === "string" ? rawAccountId.trim() : "";
   if (!accountId) return { error: proxyError(400, "INVALID_ACCOUNT_ID", "social_account_id is required") };
   if (!isValidUuid(accountId)) {
@@ -85,9 +85,10 @@ async function loadOwnedAccount(deps: ServiceProxyDeps, userId: string, rawAccou
     console.warn(`[n8n-api] service proxy: account ${accountId} not found for caller ${userId}`);
     return { error: proxyError(404, "ACCOUNT_NOT_FOUND", "Social account not found or not owned by the authenticated user.") };
   }
-  // An inactive (disconnected) account would make threads-insights fall back to
-  // a different Threads account, so the proxy never forwards one.
-  if (account.is_active === false) {
+  // Only saved Facebook/Threads reports can read disconnected accounts. Legacy
+  // readers must not fall back to a different account.
+  const savedHistory = options.savedHistory && (account.platform === "facebook" || account.platform === "threads");
+  if (account.is_active === false && !savedHistory) {
     return { error: proxyError(409, "ACCOUNT_INACTIVE", "This social account is disconnected. Reconnect it in Postora first.") };
   }
   return { account };
@@ -239,10 +240,10 @@ export async function handleGetPostAnalytics(deps: ServiceProxyDeps, userId: str
   if (cursor !== null && (version === null || !cursor || cursor.length > 16384)) {
     return proxyError(400, "INVALID_CURSOR", "A bounded continuation requires analyticsContractVersion: 1.");
   }
-  const owned = await loadOwnedAccount(deps, userId, params.get("social_account_id"));
+  const owned = await loadOwnedAccount(deps, userId, params.get("social_account_id"), { savedHistory: version === "1" });
   if ("error" in owned) return owned.error;
   const { account } = owned;
-  if (version !== null && !["threads", "facebook"].includes(account.platform)) {
+  if (version !== null && !["threads", "facebook", "instagram"].includes(account.platform)) {
     return proxyError(400, "UNSUPPORTED_CONTRACT_VERSION", "This platform does not yet support analyticsContractVersion: 1.");
   }
   const rawPeriod = textField(params.get("period_days"));
@@ -250,15 +251,14 @@ export async function handleGetPostAnalytics(deps: ServiceProxyDeps, userId: str
   if (!THREADS_PERIODS.includes(periodDays)) {
     return proxyError(400, "INVALID_PERIOD", `period_days must be one of ${THREADS_PERIODS.join(", ")}`);
   }
-  if (account.platform === "threads") {
-    const upstream = await deps.invoke("threads-insights", { user_id: userId, accountId: account.id, periodDays,
-      ...(version !== null ? { analyticsContractVersion: 1 } : {}), ...(cursor !== null ? { cursor } : {}) }, READ_TIMEOUT_MS);
-    return fromUpstream("threads-insights", upstream);
-  }
-  if (account.platform === "facebook" && version !== null) {
-    const upstream = await deps.invoke("facebook-page-insights", { user_id: userId, accountId: account.id, periodDays,
+  if ((account.platform === "facebook" || account.platform === "threads") && version !== null) {
+    const upstream = await deps.invoke("meta-owned-analytics-report", { user_id: userId, platform: account.platform, accountId: account.id, periodDays,
       analyticsContractVersion: 1, ...(cursor !== null ? { cursor } : {}) }, READ_TIMEOUT_MS);
-    return fromUpstream("facebook-page-insights", upstream);
+    return fromUpstream("meta-owned-analytics-report", upstream);
+  }
+  if (account.platform === "threads") {
+    const upstream = await deps.invoke("threads-insights", { user_id: userId, accountId: account.id, periodDays }, READ_TIMEOUT_MS);
+    return fromUpstream("threads-insights", upstream);
   }
   if (account.platform === "tiktok") {
     // tiktok-analytics returns the account's recent videos and has no period.
@@ -266,7 +266,8 @@ export async function handleGetPostAnalytics(deps: ServiceProxyDeps, userId: str
     return fromUpstream("tiktok-analytics", upstream);
   }
   if (account.platform === "instagram") {
-    const upstream = await deps.invoke("instagram-insights-report", { user_id: userId, social_account_id: account.id, period_days: periodDays }, READ_TIMEOUT_MS);
+    const upstream = await deps.invoke("instagram-insights-report", { user_id: userId, social_account_id: account.id, period_days: periodDays,
+      ...(version !== null ? { analyticsContractVersion: 1 } : {}), ...(cursor !== null ? { cursor } : {}) }, READ_TIMEOUT_MS);
     return fromUpstream("instagram-insights-report", upstream);
   }
   return unsupported("Post analytics", account.platform, "threads, tiktok, instagram");

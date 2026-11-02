@@ -1,3 +1,4 @@
+import { formatBrandMetric } from "@/lib/brandMetrics";
 import { useTranslation } from "react-i18next";
 import { AspectRatio } from "@/components/ui/aspect-ratio";
 import { Badge } from "@/components/ui/badge";
@@ -29,7 +30,7 @@ const MEDIA_BADGES: Record<string, { label: string; className: string }> = {
 export function PostCard({ post, index, onClick, hasContent, canDelete, isDeleting, onDelete }: PostCardProps) {
   const { t } = useTranslation("analytics");
   const badge = MEDIA_BADGES[post.mediaType] || MEDIA_BADGES.IMAGE;
-  const isHot = post.engagementScore > 10000;
+  const isHot = post.engagementScore !== null && post.engagementScore > 10000;
 
   return (
     <div
@@ -79,16 +80,16 @@ export function PostCard({ post, index, onClick, hasContent, canDelete, isDeleti
           </div>
           <div className="absolute top-1.5 end-1.5">
             <Badge variant="secondary" className={`text-[10px] px-1.5 py-0 ${isHot ? "text-orange-400" : ""}`}>
-              {isHot && "🔥 "}{post.engagementScore.toLocaleString()}
+              {isHot && "🔥 "}{formatBrandMetric(post.engagementScore)}
             </Badge>
           </div>
 
           {/* Hover overlay */}
           <div className="absolute inset-0 bg-black/70 opacity-0 group-hover:opacity-100 transition-opacity duration-200 flex flex-col items-center justify-center gap-2 p-3">
             <div className="flex items-center gap-3 text-white text-xs">
-              <span>❤️ {post.likesCount.toLocaleString()}</span>
-              <span>💬 {post.commentsCount.toLocaleString()}</span>
-              {post.videoViewCount ? <span>▶️ {post.videoViewCount.toLocaleString()}</span> : null}
+              <span>❤️ {formatBrandMetric(post.likesCount)}</span>
+              <span>💬 {formatBrandMetric(post.commentsCount)}</span>
+              {post.videoViewCount !== undefined ? <span>▶️ {formatBrandMetric(post.videoViewCount)}</span> : null}
             </div>
             <div className="flex gap-2 mt-1">
               <Button size="sm" variant="secondary" className="h-7 text-xs gap-1" onClick={(e) => { e.stopPropagation(); onClick(post); }}>
