@@ -1,0 +1,304 @@
+{
+  "formatVersion": 1,
+  "scope": "canonical-instagram-fixture-foundation-and-local-smoke",
+  "recordedAt": "2026-11-02T01:17:36.379457+00:00",
+  "candidate": "baba9e3b5b9a7814125dada5383e9c4ff38b3f74",
+  "tree": "aeb6ddfde0ec10878b6baca4a6a7d5a7e4de7d85",
+  "sourceManifestScope": "changed fixture inputs plus preparation and harness entry inputs; not a complete production release manifest",
+  "sources": [
+    {
+      "path": "e2e/fixtures/competitorTracking.ts",
+      "sha256": "0a9a8b810886e271987e94bd3c9503400147073a3f1c13438da5912463ce41af"
+    },
+    {
+      "path": "e2e/fixtures/instagramOwnerAuthBaseline.json",
+      "sha256": "b9ab2936ae454713092d530c541a5960068fe4b79f61d90faf1908ddfa8e5e43"
+    },
+    {
+      "path": "e2e/fixtures/instagramOwnerReleaseSeed.ts",
+      "sha256": "d7989ba866e79f48a0f57b48478ac570022947739d5b8ab04753ad0be310b824"
+    },
+    {
+      "path": "e2e/fixtures/instagramOwnerReleaseSettings.mjs",
+      "sha256": "ec82b306549429e0c07b0c5d7c2319f08406756e7133ccfb7ca7a86eca302040"
+    },
+    {
+      "path": "e2e/fixtures/instagramRelease.ts",
+      "sha256": "0644117975a4528e9391870e0439532c899225437944103b6c0ede6910981033"
+    },
+    {
+      "path": "e2e/fixtures/instagramReleaseBrowser.ts",
+      "sha256": "d9f97105776d5f483ad2c37bf8076098041fe0adc41a1243ed6570d2dcf680c7"
+    },
+    {
+      "path": "e2e/fixtures/instagramReleaseLifecycle.ts",
+      "sha256": "0cab93407b9858db8f9fce6344fd836930e7feaa64c2b622fbac7f237777d423"
+    },
+    {
+      "path": "e2e/fixtures/instagramReleaseSafety.test.ts",
+      "sha256": "fd9fed464a86fb9e22ecf9d39022a6cbfc772beb72ef72565ceff314682759d5"
+    },
+    {
+      "path": "e2e/fixtures/instagramReleaseSeed.ts",
+      "sha256": "49731d576db81bac24bcedbe45298d824fefa010062718fcf8dbfde35e385c6b"
+    },
+    {
+      "path": "e2e/fixtures/instagramReleaseServer.ts",
+      "sha256": "328b4bf25c1afdd609224bb6a43ca7aa411871b76a1a91534b3624bbc4f06be2"
+    },
+    {
+      "path": "e2e/instagram-release.spec.ts",
+      "sha256": "665d2632d309ff49415967734f60f7421b0c9929cd5180fdb52fdf2b789b148f"
+    },
+    {
+      "path": "playwright.instagram-release.config.ts",
+      "sha256": "86f96f60f696ce204d866ce6d6c4cf21003a5adab85a47035b45017fc6fd7f99"
+    },
+    {
+      "path": "scripts/db-harness.sh",
+      "sha256": "8d9d38193717a8216a9bf36c15da80ea7c2a5835b1e87c69331cbbe2ab2b7c79"
+    },
+    {
+      "path": "scripts/instagram-owner-execution-source.mjs",
+      "sha256": "f83a661c02cda4fff0b45df7cde2b6e8dec94f6150f11de17fa6fcef8d83fae6"
+    },
+    {
+      "path": "scripts/prepare-instagram-owner-release.mjs",
+      "sha256": "acf7e52d6431c687c36b9430c94b2087241fbeafabe211c2408bfd66948d8e08"
+    }
+  ],
+  "productionChanges": false,
+  "canonicalGXAccepted": false,
+  "releaseReady": false,
+  "checks": {
+    "chromium": {
+      "expected": 1,
+      "unexpected": 0,
+      "skipped": 0,
+      "flaky": 0,
+      "retries": 0,
+      "result": "passed",
+      "scope": "real application Auth for two ordinary owners and separate admin, SQL quota RPC, cleanup; no analytics acceptance inferred"
+    },
+    "safety": {
+      "passed": 9,
+      "failed": 0
+    },
+    "strictNodeTypecheck": {
+      "exit": 0
+    },
+    "denoCheck": {
+      "exit": 0
+    },
+    "scopedEslint": {
+      "exit": 0
+    },
+    "database": {
+      "baseline": true,
+      "newerMigrations": 151,
+      "sqlSuites": 69,
+      "isolatedSuites": 1,
+      "result": "passed",
+      "preparationArtifactDirectory": "F:/Dev/Temp/postora-owner-release-prepare-vZHU9z"
+    },
+    "cleanup": {
+      "users": 1,
+      "active_cron": 0,
+      "cron_launcher": "off",
+      "namespace_present": false,
+      "sentinel_preserved": true
+    },
+    "immutableLintI18n": {
+      "result": "NO REGRESSIONS",
+      "base": "2b04837163f81cb4220c36e6d393d4ac27afd68a",
+      "head": "baba9e3b5b9a7814125dada5383e9c4ff38b3f74",
+      "historicalDebtRemains": true
+    },
+    "actualCanonicalGate": {
+      "conclusion": "failed",
+      "releaseReady": false,
+      "productionActivationAuthorized": false,
+      "failures": [
+        {
+          "code": "migration_version_collision",
+          "detail": "20260825120000 at baba9e3b5b9a7814125dada5383e9c4ff38b3f74"
+        },
+        {
+          "code": "migration_reserved_prefix_violation",
+          "detail": "supabase/migrations/20260825120000_inbound_media_understanding.sql at baba9e3b5b9a7814125dada5383e9c4ff38b3f74"
+        },
+        {
+          "code": "migration_version_collision",
+          "detail": "20260828190000 at baba9e3b5b9a7814125dada5383e9c4ff38b3f74"
+        },
+        {
+          "code": "migration_reserved_prefix_violation",
+          "detail": "supabase/migrations/20260828190000_clear_false_positive_meta_reauth.sql at baba9e3b5b9a7814125dada5383e9c4ff38b3f74"
+        },
+        {
+          "code": "migration_version_collision",
+          "detail": "20260904120000 at baba9e3b5b9a7814125dada5383e9c4ff38b3f74"
+        },
+        {
+          "code": "migration_reserved_prefix_violation",
+          "detail": "supabase/migrations/20260904120000_social_contacts.sql at baba9e3b5b9a7814125dada5383e9c4ff38b3f74"
+        },
+        {
+          "code": "migration_version_collision",
+          "detail": "20260906120000 at baba9e3b5b9a7814125dada5383e9c4ff38b3f74"
+        },
+        {
+          "code": "migration_reserved_prefix_violation",
+          "detail": "supabase/migrations/20260906120000_whatsapp_evolution_sync_outcome.sql at baba9e3b5b9a7814125dada5383e9c4ff38b3f74"
+        },
+        {
+          "code": "required_source_missing",
+          "detail": ".github/workflows/instagram-migration-gate.yml"
+        },
+        {
+          "code": "required_source_missing",
+          "detail": ".github/CODEOWNERS"
+        },
+        {
+          "code": "required_source_missing",
+          "detail": "supabase/functions/n8n-api/instagramReleaseContract.test.ts"
+        },
+        {
+          "code": "required_source_missing",
+          "detail": "docs/journeys/2026-10-26-instagram-insights-and-competitor-tracking.md"
+        },
+        {
+          "code": "required_source_missing",
+          "detail": "docs/runbooks/instagram-insights-release.md"
+        },
+        {
+          "code": "evidence_missing",
+          "detail": "Supply the external redacted Task 11 per-run ledger; source inventory is not executed proof"
+        }
+      ]
+    },
+    "discoverySiblingFollowup": {
+      "candidate": "f9feeec0a37beebd530f58127660cae37941c3aa",
+      "tests": 15,
+      "steps": 21,
+      "result": "passed",
+      "scopedLintExit": 0
+    }
+  },
+  "boundaries": {
+    "authPostgrestSql": "real disposable loopback services",
+    "metaDataHttp": "synthetic",
+    "fonts": "empty local stylesheet",
+    "realtime": "explicitly unavailable; exact loopback socket closed without events",
+    "cron": "launcher off and zero active jobs",
+    "predecessorDatabases": "preserved, not relabelled or reused as this candidate"
+  },
+  "failedAttempts": [
+    {
+      "candidate": "476b96982d8442f3c9f52e895f61fa9493c7f7f8",
+      "artifacts": [
+        ".tmp/canonical-476-smoke.log",
+        ".tmp/canonical-476-smoke-clean-environment.log"
+      ],
+      "causes": [
+        "inherited NTFY_TOKEN refused",
+        "harness non-login sentinel refused"
+      ]
+    },
+    {
+      "candidate": "03e4aa4c513f5b9343d0aa37a503a95477f83c0e",
+      "artifacts": [
+        ".tmp/canonical-03e-smoke.log",
+        ".tmp/canonical-03e-playwright.json"
+      ],
+      "causes": [
+        "missing Vite public exports",
+        "Auth cascade schema permission"
+      ]
+    },
+    {
+      "candidate": "ed298c413ac3d34aa904a80aeeb415161ab85692",
+      "artifacts": [
+        ".tmp/canonical-ed298-smoke.log",
+        ".tmp/canonical-ed298-playwright.json"
+      ],
+      "causes": [
+        "font request refused",
+        "Auth cascade application-table permission"
+      ]
+    },
+    {
+      "candidate": "6ab196230cd98cc8c1c26b5dd5d39a16e35e3b4f",
+      "artifacts": [
+        ".tmp/canonical-6ab196-smoke.log",
+        ".tmp/canonical-6ab196-playwright.json"
+      ],
+      "causes": [
+        "local Realtime socket refused"
+      ],
+      "cleanupSucceeded": true
+    }
+  ],
+  "artifacts": [
+    {
+      "path": ".tmp/canonical-baba9e-prepare.log",
+      "sha256": "3e74aa02c97ea7c79343af0c73aaede730002925297fd4ef1244a5c926c690f3"
+    },
+    {
+      "path": ".tmp/canonical-baba9e-smoke.log",
+      "sha256": "40755292dd8ed39f4c57272438e85a37afae7481da35a9c1c45c7a0ec1fe1cc0"
+    },
+    {
+      "path": ".tmp/canonical-baba9e-playwright.json",
+      "sha256": "111437d704ead2509958852c310632f0a9e73798502983deefb11fed465ecd41"
+    },
+    {
+      "path": ".tmp/canonical-baba9e-safety.log",
+      "sha256": "a2de74fa5f7674cb69f3bb9a6584650995405dd1bce4249cdf89672bfc7c73fc"
+    },
+    {
+      "path": ".tmp/canonical-baba9e-deno.log",
+      "sha256": "c453f5508a3a383192e0ff17e0f61ec8ad25014ac2a5eb5ef53a14101fbf3bfe"
+    },
+    {
+      "path": ".tmp/canonical-browser-lifecycle-tsc.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": ".tmp/canonical-browser-lifecycle-eslint.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": ".tmp/canonical-baba9e-immutable-lint.json",
+      "sha256": "1138b8749f7d6809606ddbc525e4cb030737edc2934d4a54eef68c1fc60f0573"
+    },
+    {
+      "path": ".tmp/canonical-gx-baba9e.json",
+      "sha256": "fff52a7fefc624789f0779be8121210574b7b1cf4a9710fe61098c99e5bf739a"
+    },
+    {
+      "path": ".tmp/canonical-baba9e-cleanup.json",
+      "sha256": "759371b9ddea0734f587c4f1566a6a69abbce0e8d9a7f36e907dfac839e06609"
+    },
+    {
+      "path": ".tmp/canonical-baba9e-graphify.log",
+      "sha256": "973478a1d2223b59db8544c7a1ecab4853a1c239ccf9e2db829d96df85cbb2e4"
+    },
+    {
+      "path": ".tmp/discovery-sibling-before-valid.log",
+      "sha256": "99473ec5b41e5d1db75ed4f4db96a3731bd4d914264ec6ac63f093ad476d448a"
+    },
+    {
+      "path": ".tmp/discovery-sibling-after.log",
+      "sha256": "1370900d34340fbc34eb49d40fa51028020285e004291a16ef37cccffbe40d21"
+    },
+    {
+      "path": ".tmp/discovery-sibling-eslint.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": ".tmp/migration-provenance-reconciliation-review.md",
+      "sha256": "12e7c5d136a653b5a68e5cca885060546f08b56d0b3568b263dc4b3e59307b9e"
+    }
+  ]
+}
