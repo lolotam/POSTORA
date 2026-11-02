@@ -12,7 +12,7 @@ const browserEnvironment = { VITE_SUPABASE_URL: INSTAGRAM_RELEASE.apiUrl, VITE_S
 assertInstagramReleaseEnvironment(process.env, browserEnvironment);
 
 export default defineConfig({
-  testDir: "./e2e", testMatch: ["instagram-release.spec.ts"],
+  testDir: ".", testMatch: ["**/e2e/instagram-release.spec.ts", "**/supabase/functions/n8n-api/instagramReleaseContract.test.ts"],
   globalTeardown: "./e2e/fixtures/instagramReleaseLifecycle.ts",
   fullyParallel: false, workers: 1, forbidOnly: true, retries: 0, timeout: 180_000,
   reporter: [["list"], ["json", { outputFile: join(tmpdir(), "postora-instagram-release-playwright.json") }]],

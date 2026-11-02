@@ -102,6 +102,8 @@ END;$leases$;
 DELETE FROM public.brand_scrape_sessions WHERE user_id IN (SELECT jsonb_array_elements_text(${jsonSql(ownedUsers)})::uuid);
 DELETE FROM public.brand_scrape_cache WHERE EXISTS(SELECT 1 FROM jsonb_array_elements_text(${jsonSql(ownedUsers)}) AS owners(owner_id)
  WHERE cache_key LIKE 'instagram:v2:'||owner_id||':%');
+DELETE FROM public.mcp_oauth_clients WHERE client_id=(SELECT value #>> '{}' FROM public.app_settings WHERE key='test_instagram_release_namespace')
+ AND client_name='Canonical Instagram release fixture';
 COMMIT;`);
 }
 

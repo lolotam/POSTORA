@@ -13,13 +13,16 @@ on:
       - "supabase/migrations/**"
       - "supabase/tests/**"
       - "e2e/fixtures/instagramOwner*"
+      - "e2e/fixtures/instagramRelease*"
       - "e2e/fixtures/metaOwned*"
       - "e2e/fixtures/ownerReleaseBrowser*"
       - "e2e/instagram-owner-release.spec.ts"
+      - "e2e/instagram-release.spec.ts"
       - "e2e/meta-owned-release.spec.ts"
       - "scripts/*instagram*owner*"
       - "scripts/db-harness.sh"
       - "playwright.owner-analytics.config.ts"
+      - "playwright.instagram-release.config.ts"
       - "package*.json"
       - "index.html"
       - "vite.config.ts"
@@ -36,6 +39,46 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  canonical-report-contract:
+    name: Canonical Instagram Auth SQL API MCP contract
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "22.14.0"
+      - uses: denoland/setup-deno@22d081ff2d3a40755e97629de92e3bcbfa7cf2ed # v2.0.5
+        with:
+          deno-version: "2.9.8"
+      - name: Keep synthetic fixture evidence outside the source checkout
+        run: echo "TMPDIR=$RUNNER_TEMP" >> "$GITHUB_ENV"
+      - name: Install locked dependencies and Chromium
+        run: |
+          npm ci --no-audit --no-fund
+          npx playwright install --with-deps chromium
+      - name: Check and cache the canonical composition
+        run: |
+          deno check --no-config --no-lock --node-modules-dir=none e2e/fixtures/instagramReleaseServer.ts
+          node --experimental-transform-types --test e2e/fixtures/instagramReleaseSafety.test.ts
+      - name: Prepare new isolated SQL and Auth services with cron disabled
+        run: node scripts/prepare-instagram-owner-release.mjs
+      - name: Run canonical Auth smoke and actual registered API MCP report contract
+        run: npx playwright test --config playwright.instagram-release.config.ts --fail-on-flaky-tests
+      - name: Retain synthetic canonical evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: canonical-instagram-report-contract
+          path: |
+            ${{ runner.temp }}/postora-owner-release-prepare-*/
+            ${{ runner.temp }}/postora-instagram-release-playwright/
+            ${{ runner.temp }}/postora-instagram-release-playwright.json
+          if-no-files-found: error
+          retention-days: 7
+
   isolated-owner-journeys:
     name: Isolated owner Auth SQL browser journeys
     runs-on: ubuntu-24.04

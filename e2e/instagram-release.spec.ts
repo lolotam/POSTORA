@@ -36,9 +36,5 @@ test("canonical fixture smoke: real Auth, ordinary owners, separate admin and SQ
   }
   const calls = await request.get(`${INSTAGRAM_RELEASE.apiUrl}/__instagram-release/provider-calls`, { headers });
   expect(await calls.json()).toEqual({ calls: [], networkRefusals: 0 });
-  const cleanup = await request.post(`${INSTAGRAM_RELEASE.apiUrl}/__instagram-release/cleanup`, { headers });
-  expect(cleanup.status()).toBe(200);
-  expect(await cleanup.json()).toEqual({ cleaned: true });
-  const health = await request.get(`${INSTAGRAM_RELEASE.apiUrl}/__instagram-release/health`);
-  expect(health.status()).toBe(503);
+  // The shared lifecycle cleans up after every canonical journey has finished.
 });
