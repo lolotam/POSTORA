@@ -79,14 +79,15 @@ BEGIN
   ) r;
   IF jsonb_array_length(v_profiles)>20000 THEN RAISE EXCEPTION 'REPORT_HISTORY_BOUND_EXCEEDED' USING ERRCODE='MAH05';END IF;
   SELECT jsonb_build_object('status',j.status,'last_attempt_at',j.last_attempt_at,
-    'last_success_at',(SELECT max(last_success_at) FROM public.instagram_collection_jobs WHERE user_id=v_owner AND social_account_id=p_account_id AND target_kind='owner' AND target_id=p_account_id),
-    'last_partial_at',(SELECT max(last_partial_at) FROM public.instagram_collection_jobs WHERE user_id=v_owner AND social_account_id=p_account_id AND target_kind='owner' AND target_id=p_account_id),
+    'last_success_at',(SELECT max(last_success_at) FROM public.instagram_collection_jobs WHERE user_id=v_owner AND social_account_id=p_account_id AND target_kind='owner' AND target_id=p_account_id AND last_success_at<=p_as_of),
+    'last_partial_at',(SELECT max(last_partial_at) FROM public.instagram_collection_jobs WHERE user_id=v_owner AND social_account_id=p_account_id AND target_kind='owner' AND target_id=p_account_id AND last_partial_at<=p_as_of),
     'next_retry_at',j.retry_at,'reason_code',j.last_reason_code,'inventory',jsonb_build_object(
       'truncated',COALESCE(c.inventory_truncated,false),'partial',COALESCE(c.inventory_partial,j.status='partial'),
       'window_covered',COALESCE(c.inventory_window_covered,false))) INTO v_collection
     FROM public.instagram_collection_jobs j LEFT JOIN public.instagram_collection_job_checkpoints c
-      ON c.job_id=j.id AND c.job_generation=j.job_generation AND c.user_id=v_owner
+      ON c.job_id=j.id AND c.job_generation=j.job_generation AND c.user_id=v_owner AND c.updated_at<=p_as_of
     WHERE j.user_id=v_owner AND j.social_account_id=p_account_id AND j.target_kind='owner' AND j.target_id=p_account_id
+      AND greatest(j.created_at,j.updated_at,j.last_attempt_at,j.last_success_at,j.last_partial_at)<=p_as_of
     ORDER BY j.captured_on DESC,j.id DESC LIMIT 1;
   RETURN jsonb_build_object('account_id',p_account_id,'owner_id',v_owner,'media',v_media,'daily',v_daily,'profiles',v_profiles,'collection',v_collection);
 END;$fn$;

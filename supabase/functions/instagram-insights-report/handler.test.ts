@@ -6,6 +6,20 @@ import { OwnerReportContractError, type OwnerReport } from "./contracts.ts";
 const OWNER_ID = "8f14e45f-ceea-4e7a-9b1c-2d3e4f5a6b7c";
 const ACCOUNT_ID = "a1b2c3d4-e5f6-4a1b-8c2d-3e4f5a6b7c8d";
 
+Deno.test("valid JSON scalars and arrays refuse as invalid requests without account reads", async (test) => {
+  let reads = 0;
+  const handler = createInstagramInsightsReportHandler({
+    authenticate: async () => ({ userId: OWNER_ID, isServiceRole: false }),
+    store: { loadAccount: () => { reads++; throw new Error("Invalid request reached account storage"); } } as unknown as ReportStore,
+  });
+  for (const body of [null, [], 0, true, "text"]) await test.step(JSON.stringify(body), async () => {
+    const response = await handler(new Request("https://reports.invalid", { method: "POST", body: JSON.stringify(body) }));
+    assertEquals(response.status, 400);
+    assertEquals((await response.json()).error.code, "INVALID_REQUEST");
+  });
+  assertEquals(reads, 0);
+});
+
 Deno.test("explicit unified Instagram verifies scope and refuses unknown calendar without legacy fallback", async () => {
   for (const scenario of ["owned", "foreign", "failed", "unsupported"] as const) {
     let owner: string | null = null;
