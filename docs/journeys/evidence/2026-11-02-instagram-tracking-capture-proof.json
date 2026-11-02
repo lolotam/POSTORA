@@ -1,0 +1,226 @@
+{
+  "version": 1,
+  "recordedAt": "2026-11-02T05:49:59.402Z",
+  "source": "22029b5cfccdc6e685c310ec1957be80ed6d401c",
+  "tree": "9e8b277f2c22d7bb789e8d86734e6ced3177a6c5",
+  "executionCheckout": "F:/Dev/Worktrees/Postora_new/canonical-discovery-538ef365",
+  "scope": "Canonical new-target save/admission/queue/real-worker/SQL/report plus management and lost-save reconciliation",
+  "evidenceAuthority": "Author-recorded local execution, not independent G-X acceptance or production approval",
+  "inputs": [
+    {
+      "path": "e2e/instagram-release.spec.ts",
+      "gitBlob": "3f32d5126c0c524d715ec38797d767f3c497872a",
+      "gitSha256": "1031f173326549bad08874758465f8a02947c403c3b14dc89deba2d0ffdd87e4",
+      "executionSha256": "fbad3a7a28e62073d75c836e10f9dc86cbcc1c31a766d30a0a57a83ce6af1bfb",
+      "normalizedExecutionSha256": "1031f173326549bad08874758465f8a02947c403c3b14dc89deba2d0ffdd87e4"
+    },
+    {
+      "path": "e2e/fixtures/instagramRelease.ts",
+      "gitBlob": "d8e534a91ff75c74435954b32561c766acef61f8",
+      "gitSha256": "fecd520c2f40fbbe05dd0a6196aee9a35fd80cfafe62192f1fd10078188499a8",
+      "executionSha256": "07b61d6ba3f85edf5c5f5f9ca85757f1c38c0882bed73439a762e4ea2ca63cb6",
+      "normalizedExecutionSha256": "fecd520c2f40fbbe05dd0a6196aee9a35fd80cfafe62192f1fd10078188499a8"
+    },
+    {
+      "path": "e2e/fixtures/instagramReleaseServer.ts",
+      "gitBlob": "db7f577ec9ea94694600870eb6eddd4c5e15dc2c",
+      "gitSha256": "aed048f4f5f457acfbb2f6a10dfa7b14e194b2af760478f3ff478b205f0d2e7c",
+      "executionSha256": "c1e88ab630fd1359cd7afceb645a4bbb0fe42e9601045dae58ecb27ca38555df",
+      "normalizedExecutionSha256": "aed048f4f5f457acfbb2f6a10dfa7b14e194b2af760478f3ff478b205f0d2e7c"
+    },
+    {
+      "path": "supabase/functions/competitor-snapshot-sync/index.ts",
+      "gitBlob": "7231b78dba528aad667c72ecf37321c875d8af82",
+      "gitSha256": "d8c52c2082795decd22ed23ad92bc510626f2553c5f1de1032eda39ae6443b1a",
+      "executionSha256": "4abeaa5f7a509c90ad315c979a51a5c64bb0f2181003a047d04e933174469f18",
+      "normalizedExecutionSha256": "d8c52c2082795decd22ed23ad92bc510626f2553c5f1de1032eda39ae6443b1a"
+    },
+    {
+      "path": "supabase/functions/competitor-snapshot-sync/handler.ts",
+      "gitBlob": "6abc2dba2e439b3723167b10a18d897d17ab910b",
+      "gitSha256": "8b932d383d33c7b56ec7c4e6b2171820feb674668870ac1aacf362e9cc1f5488",
+      "executionSha256": "59a16bbc0e82162b9ad278d07b279cea7f9013a8fe5d153aef5070b8f04134a3",
+      "normalizedExecutionSha256": "8b932d383d33c7b56ec7c4e6b2171820feb674668870ac1aacf362e9cc1f5488"
+    },
+    {
+      "path": "supabase/functions/competitor-snapshot-sync/syncWorker.ts",
+      "gitBlob": "02d607cc51547f66aec0e266ea198640b52e471c",
+      "gitSha256": "604c9773e6e7bccb21df1c7943a29c5eeaf544258ed42c00799064ed62df3c20",
+      "executionSha256": "20e7609434303f3e0665dc94e861491d957b89b05ecc19bb7c654cf1cfed6a4e",
+      "normalizedExecutionSha256": "604c9773e6e7bccb21df1c7943a29c5eeaf544258ed42c00799064ed62df3c20"
+    },
+    {
+      "path": "supabase/functions/competitor-snapshot-sync/store.ts",
+      "gitBlob": "11951e935edcd58caa499c0939f1015142382c9b",
+      "gitSha256": "4a2508f52275b55447ab046939feb2ff7776ac6e848945e6919cabd3d85ec15b",
+      "executionSha256": "42d3d3b0ed35f3efb940d0c0b40dc56a9c2e896b990522e0bb2e91c17d18e936",
+      "normalizedExecutionSha256": "4a2508f52275b55447ab046939feb2ff7776ac6e848945e6919cabd3d85ec15b"
+    },
+    {
+      "path": "supabase/functions/competitor-snapshot-sync/graphProvider.ts",
+      "gitBlob": "d19f8b713744eb25f39f4ef92f6e0b1efbaad1b0",
+      "gitSha256": "67c2c07a9859cf6d16ae597cd6ecf3c922539399e53e36242e93b819ded55351",
+      "executionSha256": "b57d9ed174ef4fb44b2f4eb1520e984d1347320cc4e3616e7f9fdb2b00eed6bb",
+      "normalizedExecutionSha256": "67c2c07a9859cf6d16ae597cd6ecf3c922539399e53e36242e93b819ded55351"
+    },
+    {
+      "path": "src/features/competitor-tracking/infrastructure/supabaseCompetitorTrackingGateway.ts",
+      "gitBlob": "1585acd2e0adad8f519ad43f7a04b548d1199ecc",
+      "gitSha256": "ea05d19f2f948ab3e0496d1941ce589a059dda63f354e71410727ccb43606fdf",
+      "executionSha256": "a02f1b18018a137f2384cf3af2ca632bbc73271900d1eac794a5062d54518d15",
+      "normalizedExecutionSha256": "ea05d19f2f948ab3e0496d1941ce589a059dda63f354e71410727ccb43606fdf"
+    },
+    {
+      "path": "src/features/competitor-tracking/ui/TrackCompetitorControl.tsx",
+      "gitBlob": "a87d81845313f645c0194123956638db98946ea0",
+      "gitSha256": "2983f5ede719a698d9c014674bf376335e1595b8f925398b9c3cd491dd9ec188",
+      "executionSha256": "30b9c59125677860a15a39411bc3d76627288e545d6e08d34dddafd3405f3d58",
+      "normalizedExecutionSha256": "2983f5ede719a698d9c014674bf376335e1595b8f925398b9c3cd491dd9ec188"
+    }
+  ],
+  "canonical": {
+    "startTime": "2026-11-02T05:47:27.314Z",
+    "duration": 97895.921,
+    "expected": 7,
+    "skipped": 0,
+    "unexpected": 0,
+    "flaky": 0,
+    "tests": [
+      {
+        "title": "canonical fixture smoke: real Auth, ordinary owners, separate admin and SQL quota state",
+        "status": "passed",
+        "retry": 0
+      },
+      {
+        "title": "canonical discovery preserves official provenance, nullable media and owner-scoped cache through saved history",
+        "status": "passed",
+        "retry": 0
+      },
+      {
+        "title": "canonical discovery keeps ambiguous viewer failures out of target eligibility and labels only explicitly enabled third-party fallback",
+        "status": "passed",
+        "retry": 0
+      },
+      {
+        "title": "canonical quota management refuses extra activations, serializes the final slot and preserves downgrade and unlimited behavior",
+        "status": "passed",
+        "retry": 0
+      },
+      {
+        "title": "canonical tracking persists a new capture through the real worker and reconciles a lost save response without replay",
+        "status": "passed",
+        "retry": 0
+      },
+      {
+        "title": "SQL-backed Instagram reports retain metrics, nulls, outliers and freshness through API and scoped MCP",
+        "status": "passed",
+        "retry": 0
+      },
+      {
+        "title": "registered analytics routes refuse foreign owners, missing scopes and cursors without inventing Instagram capability",
+        "status": "passed",
+        "retry": 0
+      }
+    ]
+  },
+  "databasePreparation": {
+    "directory": "F:/Dev/Temp/postora-owner-release-prepare-rx0fFJ",
+    "newerMigrations": 151,
+    "baselineSqlSuites": 69,
+    "isolatedSqlSuites": 1
+  },
+  "checks": {
+    "safetyTestsPassed": 10,
+    "safetySource": "111b2b098c91392b995300118b2d0b4868a17e59; fixture implementation unchanged at final source",
+    "strictE2eTypecheck": "passed on final source",
+    "scopedEslint": "passed",
+    "denoCheck": "passed; server implementation unchanged at final source",
+    "immutableLintI18n": {
+      "base": "00879cbd1b4e456c449d2caafb5990f541c82ed2",
+      "head": "22029b5cfccdc6e685c310ec1957be80ed6d401c",
+      "result": "NO REGRESSIONS",
+      "historicalDebtRemains": true
+    },
+    "applicationBuildAndTypecheck": "Not rerun: this batch changes only fixture/tests and documentation; previous application evidence retains its own source"
+  },
+  "retainedFailure": {
+    "source": "111b2b098c91392b995300118b2d0b4868a17e59",
+    "passed": 6,
+    "failed": 1,
+    "reason": "The assertion expected first-observation copy after a successful capture, but the approved SQL projection returns no_comparable_baseline when a latest observation has no comparison baseline; fixed the assertion without changing production policy",
+    "artifacts": ".tmp/canonical-tracking-111b2b09-failure-artifacts/"
+  },
+  "cleanup": {
+    "users": 1,
+    "namespace_settings": 0,
+    "scrape_sessions": 0,
+    "scrape_cache": 0,
+    "fixture_oauth_clients": 0,
+    "collection_jobs": 0,
+    "profiles": 0,
+    "media": 0,
+    "coverage": 0,
+    "active_cron": 0,
+    "cron_launcher": "off",
+    "instagram_live_leases": 0,
+    "httpListenersStopped": true
+  },
+  "artifacts": [
+    {
+      "path": ".tmp/canonical-tracking-safety.log",
+      "sha256": "b06ec6f6abb9e16750d8ab32a94202fa2352dd87bb99c8fdb4d9ce768a0724b8"
+    },
+    {
+      "path": ".tmp/canonical-tracking-eslint.log",
+      "sha256": "2157a5f3c12477857845842650bbd669c004666db09a84e463dc354ce2c5a27f"
+    },
+    {
+      "path": ".tmp/canonical-tracking-deno-check.log",
+      "sha256": "fa236573c48c4a6c9c0f821bbdc1b66bb0d1f800ee46c7d4aeef838fad0c143b"
+    },
+    {
+      "path": ".tmp/canonical-tracking-final-types.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": ".tmp/canonical-tracking-111b2b09-playwright.log",
+      "sha256": "cd5fac0e9a4ea6f32fd2930d1c19be2b2d737fb82fbebc9cd4f28ad311061fda"
+    },
+    {
+      "path": ".tmp/canonical-tracking-111b2b09-playwright.json",
+      "sha256": "7345f0baa751fc625ff5a50b324a9ca7187bb20afff4a9a8ffbf09f181a02d3d"
+    },
+    {
+      "path": ".tmp/canonical-tracking-22029b5c-prepare.log",
+      "sha256": "f061364e4f0cb2c5eede489ccc32b6a0b8613509f10f451891b9e3a3b27b6820"
+    },
+    {
+      "path": ".tmp/canonical-tracking-22029b5c-playwright.log",
+      "sha256": "2d7c8e8b156c1f1c2f8b873f1144a1296b67a9bfd2e3b677d16ea9f5c008527a"
+    },
+    {
+      "path": ".tmp/canonical-tracking-22029b5c-playwright.json",
+      "sha256": "e0a5ff8f32c4409eeb1ccac332e8a836412cd8c70b937abe4d538d4626349a67"
+    },
+    {
+      "path": ".tmp/canonical-tracking-22029b5c-cleanup.json",
+      "sha256": "fdb91edb1743ffa4cd0fd4df812add0491b16e7b76c6523e944b19c3ac37abd0"
+    },
+    {
+      "path": ".tmp/canonical-tracking-22029b5c-lint-i18n.log",
+      "sha256": "2a9809b62e278625b47d0669d3e389415e85216050fa4f093ec37dbae9850c0c"
+    },
+    {
+      "path": ".tmp/canonical-tracking-22029b5c-graph-update.log",
+      "sha256": "6913355caaccf45ddddea1d0d83de4bbfaca3c47e44d060efcbc6ab0502e0635"
+    }
+  ],
+  "acceptanceLimits": [
+    "Reactivation within the existing user throttle preserves the saved row/history and honestly leaves collection unconfirmed; it does not invent an immediate second enqueue",
+    "No elapsed 7/30-day history is fabricated for the new target; historical comparisons and list/detail weekly-inventory parity remain separate acceptance work",
+    "Canonical Instagram adoption, remaining J/E journeys, trusted workflow/bootstrap, independent review and migration-history recovery remain open",
+    "Production approval, live Meta reconciliation and scheduled observation remain unaccepted"
+  ],
+  "releaseReady": false,
+  "productionActivationAuthorized": false
+}
