@@ -942,3 +942,14 @@ Deno.test("a legacy projection missing the committed weekly aggregate is refused
   assertThrows(() => assembleCompetitorReport({ action: "list", request: listRequest(),
     raw: projection([rawEntry({ weekly_inventory: undefined })]) }, NOW, COMPETITOR_REPORT_BASELINE_POLICY), CompetitorReportContractError);
 });
+
+Deno.test("the actual v2 SQL projection counts the whole window despite a ten-row display page", async () => {
+  const raw = JSON.parse(await Deno.readTextFile(join(HERE, "fixtures", "captured-weekly-report-v2.json"))) as RawReportProjection;
+  const request: CompetitorReportRequest = { action: "detail", watchlistId: raw.entry!.watchlist_id, periodDays: 7, limit: 10, cursor: null };
+  const report = assembleCompetitorReport({ action: "detail", request, raw }, new Date(raw.as_of), COMPETITOR_REPORT_BASELINE_POLICY) as CompetitorReportDetail;
+  assertEquals(report.media.length, 10);
+  assert(report.next_cursor !== null);
+  assertEquals(report.entry!.weekly.observed_count, 33);
+  assertEquals(report.entry!.weekly.posts_per_week, 33);
+  assertEquals(report.entry!.weekly.coverage, "complete");
+});
