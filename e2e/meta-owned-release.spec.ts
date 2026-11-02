@@ -2,6 +2,7 @@ import { expect, test, type APIRequestContext, type Page } from "@playwright/tes
 import { OWNER_RELEASE, syntheticOwnerReleaseKey } from "./fixtures/instagramOwnerReleaseSeed";
 import { META_ACCOUNTS, META_PLATFORMS, type MetaFixturePlatform } from "./fixtures/metaOwnedRelease";
 import { prepareOwnerBrowser, signInThroughBrowser } from "./fixtures/ownerReleaseBrowser";
+import type { AnalyticsReport } from "../supabase/functions/_shared/analyticsContract.ts";
 
 test.beforeEach(async ({ page, request }) => { await prepareOwnerBrowser(page, request); });
 const account = (platform: MetaFixturePlatform, kind: string) => META_ACCOUNTS.find((entry) => entry.platform === platform && entry.kind === kind)!;
@@ -19,6 +20,36 @@ async function control(request: APIRequestContext, platform?: MetaFixturePlatfor
   return await response.json();
 }
 
+async function mcpAnalytics(request: APIRequestContext, args: Record<string, string | number>) {
+  const response = await request.post(`${OWNER_RELEASE.apiUrl}/functions/v1/mcp/read`, {
+    headers: { Authorization: `Bearer ${OWNER_RELEASE.apiKey}`, Accept: "application/json" },
+    data: { jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "get_post_analytics", arguments: args } },
+  });
+  expect(response.status()).toBe(200);
+  const envelope = await response.json();
+  expect(envelope.error).toBeUndefined();
+  return envelope.result;
+}
+
+function storedReport(report: AnalyticsReport) {
+  expect(Number.isFinite(Date.parse(report.generatedAt))).toBe(true);
+  const { generatedAt: _generatedAt, ...stored } = report;
+  return stored;
+}
+
+async function verifySavedReportParity(request: APIRequestContext, expected: AnalyticsReport, cursor: string | null = null) {
+  const args = { social_account_id: expected.accountId, period_days: expected.period.days, analyticsContractVersion: 1,
+    ...(cursor === null ? {} : { cursor }) };
+  const api = await request.get(`${OWNER_RELEASE.apiUrl}/functions/v1/n8n-api/api/v1/analytics`, {
+    headers: { "x-api-key": OWNER_RELEASE.apiKey }, params: args,
+  });
+  expect(api.status()).toBe(200);
+  expect(storedReport(await api.json())).toEqual(storedReport(expected));
+  const mcp = await mcpAnalytics(request, args);
+  expect(mcp.isError).not.toBe(true);
+  expect(storedReport(JSON.parse(mcp.content[0].text))).toEqual(storedReport(expected));
+}
+
 for (const platform of META_PLATFORMS) {
   test(`${platform} saved browser selects accounts and periods, paginates without duplicates and recovers revision conflicts`, async ({ page, request }) => {
     const before = await control(request);
@@ -27,6 +58,7 @@ for (const platform of META_PLATFORMS) {
     await page.goto(route(platform));
     const first = await (await initial).json();
     expect(first.accountId).toBe(account(platform, "active").id);
+    await verifySavedReportParity(request, first);
     const region = performance(page);
     await expect(region.getByLabel("Account")).toHaveValue(account(platform, "active").id);
     const summary = region.getByRole("article").filter({ has: page.getByRole("heading", { name: platform === "facebook" ? "Views" : "Profile views", exact: true }) });
@@ -40,7 +72,8 @@ for (const platform of META_PLATFORMS) {
     await expect(region.getByText(/Ranking covers loaded posts only/)).toBeVisible();
     const continued = reportReply(page, platform);
     await region.getByRole("button", { name: "Load more posts" }).click();
-    await continued;
+    const continuation = await (await continued).json();
+    await verifySavedReportParity(request, continuation, first.posts.nextCursor);
     await expect(savedPosts).toHaveCount(26);
     expect(new Set(await savedPosts.allTextContents()).size).toBe(26);
     await expect(region.getByRole("button", { name: "Load more posts" })).toHaveCount(0);
@@ -108,6 +141,7 @@ for (const platform of META_PLATFORMS) {
   });
 
   test(`${platform} real identity switch and direct requests cannot reuse another owner history or cursor`, async ({ page, request }) => {
+    const before = await control(request);
     const login = await request.post(`${OWNER_RELEASE.apiUrl}/auth/v1/token?grant_type=password`, { data: { email: OWNER_RELEASE.email, password: OWNER_RELEASE.password } });
     expect(login.status()).toBe(200);
     const token = (await login.json()).access_token;
@@ -119,6 +153,29 @@ for (const platform of META_PLATFORMS) {
     expect(foreign.status()).toBe(404);
     expect(missing.status()).toBe(404);
     expect(await foreign.json()).toEqual(await missing.json());
+    const apiRefusals: unknown[] = [];
+    for (const id of [account(platform, "foreign").id, "8e099999-0000-4000-8000-000000000099"]) {
+      const args = { social_account_id: id, period_days: 7, analyticsContractVersion: 1 };
+      const api = await request.get(`${OWNER_RELEASE.apiUrl}/functions/v1/n8n-api/api/v1/analytics`, {
+        headers: { "x-api-key": OWNER_RELEASE.apiKey }, params: args,
+      });
+      expect(api.status()).toBe(404);
+      const refusal = await api.json();
+      apiRefusals.push(refusal);
+      const mcp = await mcpAnalytics(request, args);
+      expect(mcp.isError).toBe(true);
+      expect(mcp.content[0].text).toBe(`Postora API error 404: ${JSON.stringify(refusal)}`);
+    }
+    expect(apiRefusals[0]).toEqual(apiRefusals[1]);
+    const malformedArgs = { social_account_id: account(platform, "active").id, period_days: 7, analyticsContractVersion: 1, cursor: "malformed" };
+    const malformed = await request.get(`${OWNER_RELEASE.apiUrl}/functions/v1/n8n-api/api/v1/analytics`, {
+      headers: { "x-api-key": OWNER_RELEASE.apiKey }, params: malformedArgs,
+    });
+    expect(malformed.status()).toBe(400);
+    expect((await malformed.json()).reason).toBe("invalid_cursor");
+    const malformedMcp = await mcpAnalytics(request, malformedArgs);
+    expect(malformedMcp.isError).toBe(true);
+    expect(malformedMcp.content[0].text).toContain('"reason":"invalid_cursor"');
     await signInThroughBrowser(page);
     await page.goto(route(platform));
     const region = performance(page);
@@ -138,5 +195,6 @@ for (const platform of META_PLATFORMS) {
     await expect(region.getByText(new RegExp(`^(Saved|Collected) ${platform} active post`))).toHaveCount(0);
     expect(requests.length).toBeGreaterThan(0);
     expect(requests.every((entry) => entry.accountId === account(platform, "foreign").id && entry.cursor === null)).toBe(true);
+    expect((await control(request)).calls.length).toBe(before.calls.length);
   });
 }
