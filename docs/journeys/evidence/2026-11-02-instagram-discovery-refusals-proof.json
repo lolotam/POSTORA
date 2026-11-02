@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "recordedAt": "2026-11-02T05:11:24.414Z",
+  "recordedAt": "2026-11-02T05:12:22.569Z",
   "source": "9413950f01ea6fa933e016d60ab7b1d89acf8136",
   "tree": "42830061a74c6783327133ab6b61f96a5489feff",
   "executionCheckout": "F:/Dev/Worktrees/Postora_new/canonical-discovery-538ef365",
@@ -253,5 +253,83 @@
     "Remaining canonical journeys, trusted workflow/bootstrap, migration-history recovery and final release evidence remain open"
   ],
   "releaseReady": false,
-  "productionActivationAuthorized": false
+  "productionActivationAuthorized": false,
+  "postDocumentationInventory": {
+    "candidate": "f2d904b73b70b384a7d535a54b8ca2e08933dc67",
+    "conclusion": "failed",
+    "localReady": false,
+    "releaseReady": false,
+    "missingSources": [
+      ".github/CODEOWNERS",
+      ".github/workflows/instagram-migration-gate.yml"
+    ],
+    "failures": [
+      {
+        "code": "migration_version_collision",
+        "detail": "20260825120000 at f2d904b73b70b384a7d535a54b8ca2e08933dc67"
+      },
+      {
+        "code": "migration_reserved_prefix_violation",
+        "detail": "supabase/migrations/20260825120000_inbound_media_understanding.sql at f2d904b73b70b384a7d535a54b8ca2e08933dc67"
+      },
+      {
+        "code": "migration_version_collision",
+        "detail": "20260828190000 at f2d904b73b70b384a7d535a54b8ca2e08933dc67"
+      },
+      {
+        "code": "migration_reserved_prefix_violation",
+        "detail": "supabase/migrations/20260828190000_clear_false_positive_meta_reauth.sql at f2d904b73b70b384a7d535a54b8ca2e08933dc67"
+      },
+      {
+        "code": "migration_version_collision",
+        "detail": "20260904120000 at f2d904b73b70b384a7d535a54b8ca2e08933dc67"
+      },
+      {
+        "code": "migration_reserved_prefix_violation",
+        "detail": "supabase/migrations/20260904120000_social_contacts.sql at f2d904b73b70b384a7d535a54b8ca2e08933dc67"
+      },
+      {
+        "code": "migration_version_collision",
+        "detail": "20260906120000 at f2d904b73b70b384a7d535a54b8ca2e08933dc67"
+      },
+      {
+        "code": "migration_reserved_prefix_violation",
+        "detail": "supabase/migrations/20260906120000_whatsapp_evolution_sync_outcome.sql at f2d904b73b70b384a7d535a54b8ca2e08933dc67"
+      },
+      {
+        "code": "required_source_missing",
+        "detail": ".github/workflows/instagram-migration-gate.yml"
+      },
+      {
+        "code": "required_source_missing",
+        "detail": ".github/CODEOWNERS"
+      },
+      {
+        "code": "evidence_missing",
+        "detail": "Supply the external redacted Task 11 per-run ledger; source inventory is not executed proof"
+      }
+    ],
+    "blocked": [
+      {
+        "code": "activation_unresolved",
+        "detail": ".github/workflows/instagram-migration-gate.yml has no first-parent activation on 781111a8c8b5bc1296f8c82bbe575f2498b82748"
+      },
+      {
+        "code": "migration_snapshot_evidence_missing",
+        "detail": "R1"
+      },
+      {
+        "code": "migration_snapshot_evidence_missing",
+        "detail": "R2"
+      },
+      {
+        "code": "migration_snapshot_evidence_missing",
+        "detail": "C1"
+      }
+    ],
+    "artifact": {
+      "path": ".tmp/canonical-j4-f2d904b7-gx-inventory.json",
+      "sha256": "c8115bdba2a6b13715cd42199cf9e75d86d5bd320d62b20a7a499a16d2e6b81a"
+    }
+  }
 }
