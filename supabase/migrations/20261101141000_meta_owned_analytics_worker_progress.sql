@@ -140,6 +140,9 @@ BEGIN
     RAISE EXCEPTION 'META_ANALYTICS_DISPATCH_CHANGED' USING ERRCODE='MAH04'; END IF;
   IF v_due<>(clock_timestamp() AT TIME ZONE 'America/Los_Angeles')::date THEN
     RAISE EXCEPTION 'META_ANALYTICS_DISPATCH_CHANGED' USING ERRCODE='MAH04'; END IF;
+  IF v_outcome='refused' AND v_reason='provider_error'
+    AND COALESCE(jsonb_array_length(v_sweep.outcomes->v_account::text->'attempt_ids'),0)<3 THEN
+    RAISE EXCEPTION 'META_ANALYTICS_ADMISSION_FAILURE_BOUND_REQUIRED' USING ERRCODE='MAH01'; END IF;
   IF v_outcome='enqueue' THEN
     IF v_owner IS NULL THEN v_outcome:='refused';v_reason:='account_unavailable';
     ELSE
@@ -176,6 +179,39 @@ BEGIN
   RETURN jsonb_build_object('state','advanced','outcome',v_outcome,'complete',v_complete,'refused_count',v_refused);
 END;
 $fn$;
+
+-- A failed provider read is not a denied grant. Bound acknowledged failures per
+-- exact ticket/round without changing credentials or fabricating observations.
+CREATE FUNCTION public.record_meta_analytics_admission_failure(p_ticket jsonb,p_reason text,p_attempt_id uuid)
+RETURNS jsonb LANGUAGE plpgsql VOLATILE SECURITY DEFINER
+SET search_path=public,pg_temp SET lock_timeout='3s' AS $fn$
+DECLARE v_initial jsonb;v_ids jsonb;v_account text;v_platform text;v_due date;v_digest text;v_count integer;
+BEGIN
+  PERFORM public.meta_analytics_assert_service();
+  IF p_reason IS NULL OR p_reason NOT IN ('provider_unavailable','invalid_contract') OR p_attempt_id IS NULL THEN
+    RAISE EXCEPTION 'META_ANALYTICS_INVALID_ADMISSION_FAILURE' USING ERRCODE='MAH01'; END IF;
+  -- Reuse ticket validation, parent-first locking and current policy/authority.
+  -- A concurrently verified grant wins over this failed provider attempt.
+  v_initial:=public.commit_meta_analytics_dispatch_target(p_ticket,'enqueue',NULL);
+  IF v_initial->>'state'='advanced' THEN RETURN v_initial; END IF;
+  v_account:=((p_ticket->>'account_id')::uuid)::text;v_platform:=p_ticket->>'platform';
+  v_due:=(p_ticket->>'due_on')::date;v_digest:=p_ticket->>'policy_digest';
+  SELECT COALESCE(outcomes->v_account->'attempt_ids','[]'::jsonb) INTO v_ids
+    FROM public.meta_analytics_enqueue_sweeps WHERE platform=v_platform AND due_on=v_due AND policy_digest=v_digest;
+  IF NOT v_ids @> jsonb_build_array(p_attempt_id::text) THEN v_ids:=v_ids||jsonb_build_array(p_attempt_id::text); END IF;
+  v_count:=jsonb_array_length(v_ids);
+  IF v_count NOT BETWEEN 1 AND 3 THEN RAISE EXCEPTION 'META_ANALYTICS_INVALID_ADMISSION_FAILURE' USING ERRCODE='MAH01'; END IF;
+  UPDATE public.meta_analytics_enqueue_sweeps SET updated_at=clock_timestamp(),
+    outcomes=outcomes||jsonb_build_object(v_account,jsonb_build_object('outcome','admission_pending','reason',p_reason,'attempt_ids',v_ids))
+    WHERE platform=v_platform AND due_on=v_due AND policy_digest=v_digest;
+  IF v_count<3 THEN RETURN jsonb_build_object('state','pending','attempts',v_count); END IF;
+  -- This is a visible failed enumeration outcome, not permission denial. A
+  -- later round retries admission; unknown SQL outcomes still stop the caller.
+  RETURN public.commit_meta_analytics_dispatch_target(p_ticket,'refused','provider_error');
+END;
+$fn$;
+REVOKE ALL ON FUNCTION public.record_meta_analytics_admission_failure(jsonb,text,uuid) FROM PUBLIC,anon,authenticated;
+GRANT EXECUTE ON FUNCTION public.record_meta_analytics_admission_failure(jsonb,text,uuid) TO service_role;
 
 REVOKE ALL ON FUNCTION public.meta_analytics_collection_policy(text) FROM PUBLIC,anon,authenticated,service_role;
 REVOKE ALL ON FUNCTION public.meta_analytics_dispatch_next_id(jsonb,uuid) FROM PUBLIC,anon,authenticated,service_role;

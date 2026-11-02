@@ -21,7 +21,8 @@ DO $acl$
 DECLARE v_signature text;v_role text;
 BEGIN
   FOREACH v_signature IN ARRAY ARRAY['public.next_meta_analytics_dispatch_target(text,boolean)',
-    'public.commit_meta_analytics_dispatch_target(jsonb,text,text)'] LOOP
+    'public.commit_meta_analytics_dispatch_target(jsonb,text,text)',
+    'public.record_meta_analytics_admission_failure(jsonb,text,uuid)'] LOOP
     ASSERT has_function_privilege('service_role',v_signature,'EXECUTE'),'service dispatch RPC is granted';
     FOREACH v_role IN ARRAY ARRAY['anon','authenticated'] LOOP
       ASSERT NOT has_function_privilege(v_role,v_signature,'EXECUTE'),'browser cannot enumerate dispatch';
@@ -136,6 +137,41 @@ BEGIN
   ASSERT public.commit_meta_analytics_dispatch_target(v_ticket,'enqueue',NULL)->>'outcome'='queued','valid uppercase UUID policy identifies the same account';
 END;
 $freshness$;
+RESET ROLE;
+-- A failed provider cannot permanently pin later accounts, nor fabricate a grant.
+UPDATE public.app_settings SET value='{"account_ids":["b3000000-0000-4000-8000-000000000001","b3000000-0000-4000-8000-000000000002"]}'::jsonb
+ WHERE key='collection_threads_analytics_policy';
+DELETE FROM public.threads_analytics_permission_observations WHERE social_account_id='b3000000-0000-4000-8000-000000000001';
+DO $failure_bound$
+DECLARE t jsonb;r jsonb;a jsonb;fresh jsonb;n bigint;id1 uuid:='b9000000-0000-4000-8000-000000000001';
+BEGIN
+ t:=public.next_meta_analytics_dispatch_target('threads',true)->'ticket';
+ SELECT count(*) INTO n FROM public.threads_analytics_collection_jobs;
+ BEGIN PERFORM public.commit_meta_analytics_dispatch_target(t,'refused','provider_error');
+  RAISE EXCEPTION 'unknown provider failure bypassed its durable bound';EXCEPTION WHEN SQLSTATE 'MAH01' THEN NULL;END;
+ r:=public.record_meta_analytics_admission_failure(t,'provider_unavailable',id1);
+ ASSERT r=jsonb_build_object('state','pending','attempts',1);
+ ASSERT public.record_meta_analytics_admission_failure(t,'provider_unavailable',id1)=r,'identical attempt replay does not consume another attempt';
+ ASSERT public.record_meta_analytics_admission_failure(t,'invalid_contract','b9000000-0000-4000-8000-000000000002')->>'attempts'='2';
+ r:=public.record_meta_analytics_admission_failure(t,'provider_unavailable','b9000000-0000-4000-8000-000000000003');
+ ASSERT r->>'state'='advanced' AND r->>'outcome'='refused' AND r->>'refused_count'='1';
+ ASSERT (SELECT count(*) FROM public.threads_analytics_collection_jobs)=n,'unavailable admission cannot enqueue a job';
+ ASSERT NOT EXISTS(SELECT 1 FROM public.threads_analytics_permission_observations WHERE social_account_id='b3000000-0000-4000-8000-000000000001'),'unavailable admission cannot write a grant';
+ fresh:=public.next_meta_analytics_dispatch_target('threads',false)->'ticket';
+ ASSERT fresh->>'account_id'='b3000000-0000-4000-8000-000000000002','the next account is no longer starved';
+ a:=public.prepare_threads_analytics_account('b1000000-0000-4000-8000-000000000002',(fresh->>'account_id')::uuid);
+ PERFORM public.observe_threads_analytics_permissions('b1000000-0000-4000-8000-000000000002',(fresh->>'account_id')::uuid,a->'authority',
+  ARRAY['threads_basic','threads_manage_insights'],a#>>'{authority,platform_user_id}',clock_timestamp(),'verified');
+ ASSERT public.commit_meta_analytics_dispatch_target(fresh,'enqueue',NULL)->>'outcome'='queued';
+ fresh:=public.next_meta_analytics_dispatch_target('threads',true)->'ticket';
+ ASSERT public.record_meta_analytics_admission_failure(fresh,'invalid_contract',id1)->>'attempts'='1','a later round retries without stale failure counts';
+ BEGIN PERFORM public.record_meta_analytics_admission_failure(t,'invalid_contract',id1);
+  RAISE EXCEPTION 'stale round accepted';EXCEPTION WHEN SQLSTATE 'MAH04' THEN NULL;END;
+ a:=public.prepare_threads_analytics_account('b1000000-0000-4000-8000-000000000001',(fresh->>'account_id')::uuid);
+ PERFORM public.observe_threads_analytics_permissions('b1000000-0000-4000-8000-000000000001',(fresh->>'account_id')::uuid,a->'authority',
+  ARRAY['threads_basic','threads_manage_insights'],a#>>'{authority,platform_user_id}',clock_timestamp(),'verified');
+ ASSERT public.record_meta_analytics_admission_failure(fresh,'invalid_contract','b9000000-0000-4000-8000-000000000002')->>'outcome'='queued','a concurrent verified grant wins over failed verification';
+END;$failure_bound$;
 RESET ROLE;
 ROLLBACK;
 \echo ALL CHECKS PASSED: owned analytics worker progress

@@ -1,6 +1,6 @@
 import { admitOwnedAnalyticsAccount, type AdmissionResult } from "./admission.ts";
 import { AnalyticsWorkerDeadline, AnalyticsWorkerStopped } from "./deadline.ts";
-import type { AdmissionApp } from "./permissionProvider.ts";
+import { AdmissionProviderUnavailable, type AdmissionApp } from "./permissionProvider.ts";
 import { OwnedAnalyticsStore, type OwnedAnalyticsPlatform } from "./store.ts";
 
 export type DispatchCounts = { visited: number; queued: number; refused: number };
@@ -59,6 +59,14 @@ export async function dispatchOwnedAnalyticsDaily(input: DispatchInput): Promise
             admitted = await admitOwnedAnalyticsAccount({ platform, accountId: next.ticket.account_id, app,
               store: input.store, deadline: input.deadline, fetch: input.fetch });
           } catch (error) {
+            if (error instanceof AdmissionProviderUnavailable) {
+              const failed = await input.store.recordAdmissionFailure(next.ticket, error.reason, crypto.randomUUID());
+              if (failed.state === "advanced") {
+                counts[failed.outcome]++;
+                return { status: "partial", counts, reason: "admission_unavailable" };
+              }
+              throw error;
+            }
             if (!isTargetRefusal(error)) throw error;
             if (error.sqlstate === "MAH04") return { status: "partial", counts, reason: "dispatch_changed" };
             admitted = { status: "refused", reason: "admission_refused" };

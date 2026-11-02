@@ -105,6 +105,13 @@ export class OwnedAnalyticsStore {
     return decoded.data;
   }
 
+  async recordAdmissionFailure(ticket: AnalyticsDispatchTicket, reason: string, attemptId: string) {
+    const receipt = this.decode(z.union([dispatchCommit, z.object({ state: z.literal("pending"), attempts: z.number().int().min(1).max(2) }).strict()]),
+      await this.call("record_meta_analytics_admission_failure", { p_ticket: ticket, p_reason: reason, p_attempt_id: attemptId }));
+    if (receipt.state === "needs_admission") throw new AnalyticsWorkerStopped("invalid_contract");
+    return receipt;
+  }
+
   private decode<T>(schema: z.ZodType<T>, raw: unknown): T {
     const decoded = schema.safeParse(raw);
     if (!decoded.success) throw new AnalyticsWorkerStopped("invalid_contract");
