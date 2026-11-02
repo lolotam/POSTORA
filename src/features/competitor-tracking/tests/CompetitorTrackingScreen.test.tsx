@@ -103,7 +103,7 @@ it("keeps a refused removal dialog open with a safe reason and the stored row", 
   renderScreen(gateway);
   await userEvent.click(await screen.findByRole("button", { name: "Remove @northwind" }));
   const dialog = screen.getByRole("alertdialog");
-  await userEvent.click(within(dialog).getByRole("button", { name: "Remove", exact: true }));
+  await userEvent.click(within(dialog).getByRole("button", { name: "Remove" }));
   expect(await within(dialog).findByRole("alert")).toHaveTextContent("That competitor is no longer available.");
   expect(dialog).toBeInTheDocument();
   expect(screen.getByText("@northwind")).toBeInTheDocument();
