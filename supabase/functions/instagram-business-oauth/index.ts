@@ -757,7 +757,7 @@ Deno.serve(async (req) => {
         });
         try {
           const audit = await supabase.from("system_logs").insert({
-            level: permissions.status === "ok" ? "info" : "warn", category: "oauth", source: "instagram-business-oauth",
+            level: permissions.status === "ok" ? "info" : "warn", category: "auth", source: "instagram-business-oauth",
             message: "Protected Instagram permission read finished", user_id,
             metadata: { social_account_id: committed.receipt.socialAccountId, ...permissions },
           }).abortSignal(AbortSignal.timeout(2_000));
