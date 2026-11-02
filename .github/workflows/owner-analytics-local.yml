@@ -61,6 +61,7 @@ jobs:
           npx playwright install --with-deps chromium
       - name: Check and cache the canonical composition
         run: |
+          deno cache --no-config --no-lock --node-modules-dir=none e2e/fixtures/instagramReleaseServer.ts
           deno check --no-config --no-lock --node-modules-dir=none e2e/fixtures/instagramReleaseServer.ts
           node --experimental-transform-types --test e2e/fixtures/instagramReleaseSafety.test.ts
       - name: Prepare new isolated SQL and Auth services with cron disabled
