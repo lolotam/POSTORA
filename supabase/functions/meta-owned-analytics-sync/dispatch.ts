@@ -63,7 +63,10 @@ export async function dispatchOwnedAnalyticsDaily(input: DispatchInput): Promise
               const failed = await input.store.recordAdmissionFailure(next.ticket, error.reason, crypto.randomUUID());
               if (failed.state === "advanced") {
                 counts[failed.outcome]++;
-                return { status: "partial", counts, reason: "admission_unavailable" };
+                refusedEarlier ||= failed.refused_count > 0;
+                if (failed.outcome === "refused") return { status: "partial", counts, reason: "admission_unavailable" };
+                if (failed.complete) { completed++; break; }
+                continue;
               }
               throw error;
             }

@@ -277,6 +277,36 @@ Deno.test("unknown store contracts never consume a provider failure attempt", as
   assertEquals(attempts, 0);
 });
 
+Deno.test("a concurrent verified grant resumes dispatch and preserves round completion", async (test) => {
+  for (const complete of [true, false]) for (const refusedCount of [0, 1]) await test.step(`complete=${complete}, prior refusals=${refusedCount}`, async () => {
+    let visits = 0, commits = 0, failureWrites = 0;
+    const handler = createOwnedAnalyticsSyncHandler({ authorize: () => ({ ok: true }), app: () => ({ id: "790001", secret: "fixture-app" }), audit: async () => true,
+      rpc: async (name) => {
+        if (name === "next_meta_analytics_dispatch_target") {
+          visits++;
+          return { data: { state: "target", ticket: visits === 1 ? ticket
+            : { ...ticket, account_id: "c2000000-0000-4000-8000-000000000002", after_account_id: ACCOUNT }, served_at: STAMP }, error: null };
+        }
+        if (name === "commit_meta_analytics_dispatch_target") {
+          commits++;
+          return { data: commits === 1 ? { state: "needs_admission" }
+            : { state: "advanced", outcome: "queued", complete: true, refused_count: refusedCount }, error: null };
+        }
+        if (name === "read_threads_analytics_admission_credential") return { data: credential, error: null };
+        assertEquals(name, "record_meta_analytics_admission_failure");
+        failureWrites++;
+        return { data: { state: "advanced", outcome: "queued", complete, refused_count: refusedCount }, error: null };
+      }, fetch: async () => Response.json({ error: { code: 2 } }, { status: 503 }) });
+    const response = await handler(request("threads"));
+    const body = await response.json();
+    assertEquals(response.status, 200);
+    assertEquals(body.reason, null, "A verified queued receipt is not unavailable admission");
+    assertEquals(body.status, refusedCount ? "partial" : "complete");
+    assertEquals(body.counts, { visited: complete ? 1 : 2, queued: complete ? 1 : 2, refused: 0 });
+    assertEquals([visits, commits, failureWrites], [complete ? 1 : 2, complete ? 1 : 2, 1]);
+  });
+});
+
 Deno.test("an unacknowledged failure-counter write stops before advancing or visiting another target", async (test) => {
   for (const failure of ["lost_response", "invalid_receipt", "unexpected_admission"] as const) await test.step(failure, async () => {
     let visited = 0, commits = 0, failureWrites = 0;
