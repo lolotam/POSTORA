@@ -6,7 +6,7 @@ import { PersistedReportRefused } from "./store.ts";
 export type StoredReportScope = { platform: "facebook" | "threads"; ownerId: string; accountId: string; days: AnalyticsPeriodDays };
 const payloadSchema = z.object({ version: z.literal(1), platform: z.enum(["facebook", "threads"]), ownerId: z.string().uuid(), accountId: z.string().uuid(),
   period: z.object({ days: z.union([z.literal(7), z.literal(14), z.literal(30), z.literal(90)]), since: z.string().datetime(), until: z.string().datetime(), timezone: z.string() }).strict(),
-  revision: z.number().int().positive().safe(), publishedAt: z.string().datetime({ offset: true }), postId: z.string().min(1).max(200).regex(/^[A-Za-z0-9_-]+$/) }).strict();
+  revision: z.number().int().positive().safe(), publishedAt: z.string().datetime({ offset: true }), postId: z.string().min(1).max(200) }).strict();
 type StoredPosition = z.infer<typeof payloadSchema>;
 
 function encoded(bytes: Uint8Array): string { return btoa(String.fromCharCode(...bytes)).replaceAll("+", "-").replaceAll("/", "_").replaceAll("=", ""); }

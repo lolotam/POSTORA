@@ -64,7 +64,7 @@ export function SavedAnalyticsReport({ report }: { report: AnalyticsReport }) {
     {visible.filter((metric) => metric.trend.length > 0).map((metric) => <section key={metric.definition.key} className="rounded-lg border p-4 min-w-0">
       <h3>{labels.metrics[metric.definition.key]} · {t("owned.trend", "Daily trend")}</h3>
       <div className="h-48" role="img" aria-label={t("owned.trendDescription", "Missing days appear as gaps in the daily trend.")}>
-        <ResponsiveContainer width="100%" height="100%"><LineChart data={metric.trend.map((day) => ({ date: day.date, value: day.metric.status === "available" ? day.metric.value : null }))}>
+        <ResponsiveContainer width="100%" height="100%"><LineChart data={metric.trend.map((day) => ({ date: day.date, value: day.metric.status !== "unavailable" ? day.metric.value : null }))}>
           <XAxis dataKey="date" tick={{ fontSize: 10 }} /><YAxis tick={{ fontSize: 10 }} /><Tooltip />
           <Line dataKey="value" name={labels.metrics[metric.definition.key]} type="monotone" stroke="currentColor" connectNulls={false} />
         </LineChart></ResponsiveContainer>
