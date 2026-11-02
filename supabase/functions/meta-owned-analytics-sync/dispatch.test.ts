@@ -62,6 +62,7 @@ Deno.test("the shared 50-target cap yields to an unstarted platform on the next 
   assertEquals(positions, { facebook: 50, threads: 0 });
   const second = await (await handler(request("all"))).json();
   assertEquals(second.counts, { visited: 50, queued: 50, refused: 0 });
+  assertEquals(second.status, "complete");
   assertEquals(positions, { facebook: 50, threads: 50 });
   assertEquals(committed.size, 100);
 });
@@ -175,4 +176,29 @@ Deno.test("transient or undecodable admission leaves the durable dispatch target
       assertEquals(observations, 0);
     });
   }
+});
+
+Deno.test("credential rotation during admission leaves the dispatch ticket uncommitted", async (test) => {
+  for (const stage of ["permit", "observation"] as const) await test.step(stage, async () => {
+    let commits = 0, reads = 0;
+    const handler = createOwnedAnalyticsSyncHandler({ authorize: () => ({ ok: true }), app: () => ({ id: "790001", secret: "fixture-app" }), audit: async () => true,
+      rpc: async (name) => {
+        if (name === "next_meta_analytics_dispatch_target") return { data: { state: "target", ticket, served_at: STAMP }, error: null };
+        if (name === "commit_meta_analytics_dispatch_target") { commits++; return { data: { state: "needs_admission" }, error: null }; }
+        if (name === "read_threads_analytics_admission_credential") {
+          reads++;
+          if (stage !== "permit" || reads < 3) return { data: credential, error: null };
+        }
+        return { data: null, error: { code: "MAH04" } };
+      }, fetch: async (input) => Response.json(String(input).includes("debug_token") ? { data: {
+        is_valid: true, user_id: authority.platform_user_id, scopes: ["threads_basic", "threads_manage_insights"],
+      } } : { id: authority.platform_user_id }) });
+    const response = await handler(request("threads"));
+    const receipt = await response.json();
+    assertEquals(response.status, 200);
+    assertEquals(receipt.status, "partial");
+    assertEquals(receipt.reason, "dispatch_changed");
+    assertEquals(receipt.counts, { visited: 1, queued: 0, refused: 0 });
+    assertEquals(commits, 1);
+  });
 });

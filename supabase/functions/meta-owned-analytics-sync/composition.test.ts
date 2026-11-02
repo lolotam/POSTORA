@@ -111,7 +111,7 @@ Deno.test("registered admission keeps real token roles and refuses stale or inva
           const response = await handler(request(platform));
           const body = await response.json();
           const success = scenario === "normal" || scenario === "no_app_id" && platform === "threads" || scenario === "extra_scopes";
-          assertEquals(response.status, success ? 200 : ["unknown_write", "unknown_permit", "invalid_envelope", "malformed", "missing_scopes", "duplicate_scopes"].includes(scenario) ? 503 : 409);
+          assertEquals(response.status, success ? 200 : ["unknown_write", "unknown_permit", "invalid_envelope", "malformed", "missing_scopes", "duplicate_scopes", "no_app_id"].includes(scenario) ? 503 : 409);
           assertEquals(body.ok, success);
           assertEquals(response.headers.get("access-control-allow-origin"), null);
           assertEquals(audits.length, 1);

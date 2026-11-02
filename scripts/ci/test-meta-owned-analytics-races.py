@@ -496,9 +496,32 @@ class Harness:
             self.admin.command("BEGIN; " + restore + sweeps + f"DELETE FROM auth.users WHERE id={quoted(self.owner)}; COMMIT;")
         self.admin.close()
 
+    def platform_turn_race(self) -> None:
+        for platform in self.platforms:
+            self.enable(platform)
+            self.refresh_permissions(platform)
+            self.admin.command(f"SELECT public.enqueue_{platform.family}_analytics_collection_job({quoted(self.owner)},{quoted(platform.account)},{quoted(self.calendar['due_on'])},true);")
+        first = self.session("targeted-platform-turn", True)
+        second = self.session("all-platform-turn", True)
+        try:
+            first.command("BEGIN;")
+            targeted = first.value("SELECT public.claim_meta_analytics_collection_job('threads');")
+            assert targeted["platform"] == "threads"
+            marker = second.start("SELECT public.claim_meta_analytics_collection_job('all');")
+            wait = self.observe_wait(second, first)
+            first.command("COMMIT;")
+            claimed = json.loads(second.finish(marker)[-1])
+            assert claimed["platform"] == "facebook", "The next committed turn must serve the other platform"
+            for platform, claim in zip(self.platforms, [claimed, targeted]):
+                self.admin.command(f"SELECT public.complete_{platform.family}_analytics_collection_job({self.claim_args(claim)},'failed','fixture_turn');")
+            self.record(self.platforms[0], "concurrent_platform_turns_are_serialized", wait)
+        finally:
+            first.command("ROLLBACK;")
+
     def run(self) -> list[dict[str, object]]:
         try:
             self.setup()
+            self.platform_turn_race()
             for platform in self.platforms:
                 for suffix in ("enabled", "policy"):
                     for exclusion_first in (True, False):

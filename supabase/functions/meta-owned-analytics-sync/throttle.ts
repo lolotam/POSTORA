@@ -5,10 +5,9 @@ import { AnalyticsWorkerStopped } from "./deadline.ts";
 import { OwnedAnalyticsStore, type AnalyticsClaim } from "./store.ts";
 
 export async function collectionBucketKey(job: AnalyticsClaim, appId: string): Promise<string> {
-  const authority = job.authority;
-  const meter = "credential_id" in authority ? `${authority.credential_id}:${authority.credential_revision}`
-    : `${authority.platform_user_id}:${authority.credential_generation}`;
-  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(`owned_analytics:${job.platform}:${appId}:${meter}`));
+  // App usage survives account and credential rotation. Conservatively share
+  // business usage/backoff in this bucket too, rather than bypass an app limit.
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(`owned_analytics:app:${job.platform}:${appId}`));
   return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 

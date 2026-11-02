@@ -27,6 +27,9 @@ DO $paused$ BEGIN
   ASSERT NOT EXISTS((SELECT jobid,jobname,schedule,command,active FROM cron.job WHERE jobname !~ '^(facebook|threads)-analytics-(enqueue-daily|drain|retention)$')
     EXCEPT (SELECT * FROM mac_before WHERE jobname !~ '^(facebook|threads)-analytics-(enqueue-daily|drain|retention)$')),'unrelated jobs unchanged';
   ASSERT NOT EXISTS((SELECT key,value FROM public.app_settings) EXCEPT (SELECT * FROM mac_settings)),'settings unchanged';
+  ASSERT NOT EXISTS((SELECT * FROM mac_before WHERE jobname !~ '^(facebook|threads)-analytics-(enqueue-daily|drain|retention)$')
+    EXCEPT (SELECT jobid,jobname,schedule,command,active FROM cron.job WHERE jobname !~ '^(facebook|threads)-analytics-(enqueue-daily|drain|retention)$')),'no unrelated job removed';
+  ASSERT NOT EXISTS((SELECT * FROM mac_settings) EXCEPT (SELECT key,value FROM public.app_settings)),'no setting removed';
 END;$paused$;
 SAVEPOINT missing_secret;
 ALTER FUNCTION public.get_cron_secret() RENAME TO mac_missing_secret;

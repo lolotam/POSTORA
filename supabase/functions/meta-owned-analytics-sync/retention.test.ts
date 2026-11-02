@@ -27,3 +27,36 @@ Deno.test("retention shares target and physical deletion budgets across both pla
     });
   }
 });
+
+Deno.test("dry-run continuation previews every target without writing visit order", async () => {
+  const visited: string[] = [];
+  let excludeLast = false;
+  const handler = createOwnedAnalyticsSyncHandler({ authorize: () => ({ ok: true }), app: () => null, audit: async () => true,
+    rpc: async (name, args) => {
+      if (name === "list_meta_analytics_retention_targets") return { data: { state: "enabled",
+        targets: Array.from({ length: excludeLast ? 59 : 60 }, (_unused, index) => ({
+          account_id: `c1000000-0000-4000-8000-${String(index + 1).padStart(12, "0")}`, last_visited_at: null,
+        })) }, error: null };
+      assertEquals(name, "cleanup_meta_analytics_target");
+      assertEquals(args.p_dry_run, true);
+      visited.push(String(args.p_account_id));
+      return { data: { deleted: 0, skipped: false, dry_run: true, report_revision: 1, floor: args.p_floor }, error: null };
+    } });
+  const request = (continuation?: unknown, dryRun = true) => new Request("https://owned-analytics.invalid", { method: "POST",
+    body: JSON.stringify({ action: "retention", platform: "threads", dryRun, ...(continuation ? { continuation } : {}) }) });
+  const first = await (await handler(request())).json();
+  assertEquals(first.status, "partial");
+  assertEquals(first.counts.visited, 50);
+  const second = await (await handler(request(first.continuation))).json();
+  assertEquals(second.status, "complete");
+  assertEquals(second.counts.visited, 10);
+  assertEquals(second.continuation, null);
+  assertEquals(new Set(visited).size, 60);
+  assertEquals(visited.length, 60);
+  assertEquals((await handler(request(first.continuation, false))).status, 400);
+  excludeLast = true;
+  const changed = await (await handler(request(first.continuation))).json();
+  assertEquals(changed.status, "unavailable");
+  assertEquals(changed.reason, "invalid_contract");
+  assertEquals(visited.length, 60, "A changed target scope must stop before cleanup");
+});
