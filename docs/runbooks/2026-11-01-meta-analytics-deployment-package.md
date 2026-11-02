@@ -6,6 +6,8 @@ This package prepares the owner's requested combined release. It does not author
 
 Later discovery/tooling checkpoint `5ada6702f9d17251aa350d1a00bc989f204ec430` is recorded in the [discovery continuation](../journeys/2026-11-02-instagram-discovery-contract.md). Those changed discovery/frontend/shared-Graph bytes are outside this package's older frozen manifest. Refreeze the combined final candidate and affected proofs before execution; the older manifest cannot be used to deploy the later branch head. The canonical checker also reports four historical duplicate migration prefixes that require provenance reconciliation before its workflow activation.
 
+The [weekly inventory correction](../journeys/2026-11-02-competitor-weekly-inventory-correction.md) adds another explicit prerequisite: `supabase/migrations/20261102090000_competitor_weekly_inventory_projection.sql`, including its index and authenticated-only `read_own_competitor_tracking_report_v2(jsonb)` RPC. Its dependent report runtime files are `assemble.ts`, `contracts.ts`, `reportStore.ts` and `weeklyInventory.ts` under `supabase/functions/competitor-tracking-report/`. These runtime/schema bytes are identical in canonical execution source `6d109d4ca35d3fb024a16b99e47f24a92f814b1f` and later test source `cffff00423117a6c2787fad5e4bc177a4e9310de`. The public DTO remains version 1. Neither the new SQL/index nor these runtime bytes is authorized by the older manifest. Include them when refreezing the complete candidate; independently approve/install the SQL before dependent runtime, verify owner grants and PostgREST cache, and prove failed reads cannot become empty reports.
+
 **NO-GO for the requested complete three-platform release.** Do not ask the owner to approve an enablement that cannot produce verified data. The selected Facebook and Instagram accounts lack protected credential bindings; Instagram also lacks accepted canonical metric/calendar evidence. Keep the owner's complete [G-X decision](../specs/2026-10-30-instagram-release-gates.md). An owner-only artifact inventory does not replace it.
 
 The selected read-only aliases remain `FB-01`, `IG-01`, `TH-01` from [design §12](../specs/2026-11-01-meta-analytics-completion-design.md). Reconnection must preserve those targets and their owner; do not substitute another account or derive a binding from an unverified legacy token. Target selection was not permission to admit collection or start schedules.
@@ -21,7 +23,7 @@ The local owner-browser gap has progressed: all 13 Instagram/Facebook/Threads jo
 
 ## Ordered schema artifacts
 
-These ten files are absent from the last verified production lineage and are proposed in this exact order. Application is a separate approval from PR review/merge. `20261101023000_instagram_collection_http_fences.sql` was separately approved/applied earlier and must not be reapplied as if new.
+These eleven files are absent from the last verified production lineage and are proposed in this exact order. The first ten are in the older artifact manifest; the eleventh is the separately attributed weekly correction above and must enter the refrozen final manifest. Application is a separate approval from PR review/merge. `20261101023000_instagram_collection_http_fences.sql` was separately approved/applied earlier and must not be reapplied as if new.
 
 1. `20261101130000_meta_owned_analytics_history.sql`
 2. `20261101140000_meta_owned_analytics_worker_admission.sql`
@@ -33,8 +35,9 @@ These ten files are absent from the last verified production lineage and are pro
 8. `20261101143000_meta_owned_analytics_cron.sql`
 9. `20261101144500_meta_owned_analytics_capture_failures.sql`
 10. `20261101150000_meta_owned_analytics_reports.sql`
+11. `20261102090000_competitor_weekly_inventory_projection.sql`
 
-Paths are under `supabase/migrations/`; exact hashes are in the manifest. Do not run a blanket migration push, replay an applied file, alter applied bytes or infer installation from a Git merge. Check the live catalog and approved predecessor definitions first; stop on drift. Apply schema before dependent runtime. Verify structural ownership constraints, native/wrapper grants, service-only writers, authenticated reader scope, generated-type signatures and PostgREST cache after application. Read back collection/retention settings and exactly six inactive schedule definitions; preserve unrelated settings/jobs.
+Paths are under `supabase/migrations/`; the older manifest pins the first ten hashes and the weekly proof pins the eleventh. No current manifest certifies their combined deployment closure. Do not run a blanket migration push, replay an applied file, alter applied bytes or infer installation from a Git merge. Check the live catalog and approved predecessor definitions first; stop on drift. Apply schema before dependent runtime. Verify structural ownership constraints, native/wrapper grants, service-only writers, authenticated reader scope, generated-type signatures and PostgREST cache after application. Read back collection/retention settings and exactly six inactive schedule definitions; preserve unrelated settings/jobs.
 
 ## Runtime and frontend artifact scope
 
