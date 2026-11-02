@@ -55,6 +55,9 @@ const proofSchema = z.object({
   failures: z.number().int().nonnegative(), attempts: z.number().int().positive(),
   reporter: z.enum(["receipt", "playwright"]), project: nonempty.optional(),
 }).strict();
+const executionReceiptSchema = proofSchema.omit({ artifact: true, reporter: true }).extend({
+  formatVersion: z.literal(1), scope: z.literal("instagram-release-execution"),
+}).strict();
 const snapshotSchema = z.object({ commit: sha, newestVersion: z.string().regex(/^\d{14}$/), marker: z.string().regex(/^\d{14}$/) }).strict();
 
 // These names follow spec §2. Execution status is deliberately separate from Markdown inventory status.
@@ -381,7 +384,7 @@ function artifactBytes(context, artifact) {
   }
   if (digest(bytes) !== artifact.sha256) throw new GateError("artifact_hash_mismatch", artifact.path);
   // Never print the matching text: evidence is untrusted and can contain credentials.
-  if (/(?:https?:\/\/[^\s"']+[?&](?:access_token|refresh_token|api_key)=)|(?:Bearer\s+[A-Za-z0-9_.-]{20,})|(?:-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----)|(?:eyJ[A-Za-z0-9_-]{15,}\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+)|(?:["']?(?:access_token|refresh_token|api_key|password|client_secret|SUPABASE_SERVICE_ROLE_KEY)["']?\s*[:=]\s*["'](?!\[REDACTED\]|<redacted>)[^"'\s]{6,})/i.test(bytes.toString("utf8"))) {
+  if (/(?:[a-z][a-z0-9+.-]*:\/\/[^\s/?#"'<>]+@)|(?:["']?authorization["']?\s*[:=]\s*["']?Basic\s+[A-Za-z0-9+/]{8,}={0,2})|(?:https?:\/\/[^\s"']+[?&](?:access_token|refresh_token|api_key)=)|(?:Bearer\s+[A-Za-z0-9_.-]{20,})|(?:-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----)|(?:eyJ[A-Za-z0-9_-]{15,}\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+)|(?:["']?(?:access_token|refresh_token|api_key|password|client_secret|SUPABASE_SERVICE_ROLE_KEY)["']?\s*[:=]\s*["'](?!\[REDACTED\]|<redacted>)[^"'\s]{6,})/i.test(bytes.toString("utf8"))) {
     throw new GateError("artifact_redaction_failed", artifact.path);
   }
   return bytes;
@@ -535,6 +538,15 @@ function validateProof(context, proof) {
   if (context.sourceHashes.get(proof.source.path) !== proof.source.sha256 || digest(committedBytes(context, proof.source.path)) !== proof.source.sha256) throw new GateError("proof_wrong_source", proof.id);
   artifactBytes(context, proof.artifact);
   if (proof.reporter === "playwright") playwrightProof(context, proof);
+  else executionReceiptProof(context, proof);
+}
+
+function executionReceiptProof(context, proof) {
+  const parsed = executionReceiptSchema.safeParse(readJsonArtifact(context, proof.artifact));
+  if (!parsed.success) throw new GateError("execution_receipt_invalid", proof.id);
+  for (const key of Object.keys(proof).filter((key) => !["artifact", "reporter"].includes(key))) {
+    if (JSON.stringify(parsed.data[key]) !== JSON.stringify(proof[key])) throw new GateError("execution_receipt_mismatch", proof.id);
+  }
 }
 
 function proofInventory(context) {
@@ -723,6 +735,35 @@ function dependencyAndReviewReceipts(context) {
   }
 }
 
+function protectedWorkflowInventory(workflow, bootstrap) {
+  const jobs = Object.values(workflow.jobs ?? {});
+  if (jobs.length !== 1) throw new GateError("migration_workflow_execution", "One protected environment-bound gate job is required");
+  const [job] = jobs;
+  const onlyKeys = (entry, allowed) => Object.keys(entry).every((key) => allowed.includes(key));
+  if ((typeof job.environment === "string" ? job.environment : job.environment?.name) !== bootstrap.environment.name) throw new GateError("migration_workflow_environment", "The checker job must bind the gate App environment");
+  if (!onlyKeys(workflow, ["name", "on", "permissions", "jobs"]) || !onlyKeys(job, ["name", "runs-on", "environment", "steps", "permissions", "timeout-minutes"])
+    || (typeof job.environment !== "string" && !onlyKeys(job.environment, ["name"]))
+    || job["runs-on"] !== "ubuntu-latest" || !Array.isArray(job.steps)) throw new GateError("migration_workflow_execution", "Unreviewed execution context cannot surround the protected checker");
+  const steps = job.steps;
+  const checkouts = steps.filter((step) => /^actions\/checkout@/.test(step.uses ?? ""));
+  const checkout = checkouts[0];
+  if (checkouts.length !== 1 || steps[0] !== checkout || !onlyKeys(checkout, ["name", "id", "uses", "with"])
+    || !/^actions\/checkout@(?:v\d+|[a-f0-9]{40})$/.test(checkout.uses) || checkout.with?.["fetch-depth"] !== 0
+    || checkout.with?.ref !== "${{ github.event.pull_request.base.sha || github.sha }}"
+    || (checkout.with.path && checkout.with.path !== ".") || checkout.with.repository || checkout.env || checkout.run) throw new GateError("migration_workflow_checkout", "Only one full-history protected-base checkout may precede execution");
+  const commands = {
+    pull_request_target: "node scripts/check-instagram-release-gates.mjs --gate migrations --main-ref origin/main --event pull_request_target --candidate $CANDIDATE --head '${{ github.event.pull_request.head.sha }}'",
+    push: "node scripts/check-instagram-release-gates.mjs --gate migrations --main-ref origin/main --event push --head '${{ github.sha }}'",
+  };
+  if (steps.length !== 3 || steps.slice(1).some((step) => !onlyKeys(step, ["name", "id", "if", "env", "run"])
+    || Object.keys(step.env ?? {}).some((name) => name !== "GATE_KEY"))) throw new GateError("migration_workflow_execution", "Only the protected PR/push checker invocations are supported; extra execution requires separate review");
+  for (const [event, command] of Object.entries(commands)) {
+    const matches = steps.slice(1).filter((step) => step.if === `github.event_name == '${event}'` && typeof step.run === "string" && step.run.trim() === command);
+    if (matches.length !== 1) throw new GateError("migration_workflow_dispatch", "Require explicit ordered protected-checker invocations for both PR and push events");
+    if (event === "pull_request_target" && matches[0].name !== bootstrap.app.context) throw new GateError("migration_workflow_dispatch", "The inventoried PR checker must bind the dedicated App context");
+  }
+}
+
 function workflowContract(context, bootstrap) {
   const source = committedBytes(context, WORKFLOW).toString("utf8");
   const document = parseDocument(source, { uniqueKeys: true });
@@ -736,10 +777,7 @@ function workflowContract(context, bootstrap) {
   if (!jobs.length || jobs.some((job) => job.permissions && !permissionsSafe(job.permissions))) throw new GateError("migration_workflow_permissions", "Job permissions must not elevate workflow permissions");
   const secrets = [...source.matchAll(/secrets\s*(?:\.\s*([A-Za-z_][A-Za-z0-9_]*)|\[\s*['"]([^'"]+)['"]\s*\])/g)].map((match) => match[1] ?? match[2]);
   if (!secrets.length || secrets.some((name) => name !== bootstrap.app.privateKeySecret) || /secrets\s*\[(?!\s*['"])/.test(source) || /(?:toJSON|toJson)\s*\(\s*secrets/.test(source)) throw new GateError("migration_workflow_secret", "Only the dedicated gate App private-key secret is permitted");
-  const steps = jobs.flatMap((job) => job.steps ?? []);
-  if (!steps.some((step) => /^actions\/checkout@/.test(step.uses ?? "") && step.with?.["fetch-depth"] === 0 && String(step.with?.ref).includes("github.event.pull_request.base.sha"))) throw new GateError("migration_workflow_checkout", "Require full-history checkout of protected base code");
-  if (!jobs.some((job) => (typeof job.environment === "string" ? job.environment : job.environment?.name) === bootstrap.environment.name)) throw new GateError("migration_workflow_environment", "Gate App environment is not bound to the job");
-  if (!source.includes("--gate migrations") || !source.includes("--main-ref origin/main") || !source.includes("--candidate") || !source.includes("pull_request.head.sha") || !source.includes(bootstrap.app.context) || !source.includes("--event")) throw new GateError("migration_workflow_dispatch", "Missing explicit event/candidate/head/main/context binding");
+  protectedWorkflowInventory(workflow, bootstrap);
 }
 
 function protectedOwners(context) {
@@ -767,6 +805,9 @@ function bootstrapReceipts(context) {
   const ownersAddition = context.history?.findIndex((entry) => entry.changes.some((change) => change.status === "A" && change.path === ".github/CODEOWNERS"));
   const activation = context.history?.findIndex((entry) => entry.commit === context.report.activation);
   if (ownersAddition === undefined || ownersAddition < 0 || activation === undefined || ownersAddition >= activation) throw new GateError("bootstrap_order_invalid", "CODEOWNERS must land separately before the gate workflow");
+  // Syntax and reviewed claims cannot prove that this recipe fetches its merge object,
+  // installs the checker dependencies or emits the pinned App status on the verified head.
+  context.report.blocked.push(gap("migration_workflow_execution_unverified", "Workflow inventory is not executable bootstrap evidence: protected candidate fetch, dependency installation and dedicated App status publication require a reviewed implementation"));
 }
 
 function liveReceipts(context) {
@@ -797,6 +838,9 @@ function evidenceChecks(context) {
   const parsed = ledgerSchema.safeParse(context.evidence);
   if (!parsed.success) throw new GateError("evidence_schema_invalid", parsed.error.issues.map((issue) => issue.path.join(".")).join(", "));
   context.evidence = parsed.data;
+  // Matching JSON/hashes bind content, not its origin. No trusted external verifier is implemented here.
+  context.report.pendingEvidence.push("Execution/review/bootstrap/live artifact origins remain unverified; manual external review is required");
+  if (context.phase === "release") context.report.blocked.push(gap("evidence_origin_unverified", "A trusted external evidence verifier is required; self-authored receipts and approvals cannot establish release readiness"));
   if (context.evidence.candidate !== context.candidate || context.evidence.tree !== context.report.tree) throw new GateError("evidence_stale_candidate", "Ledger candidate/tree must equal the checked immutable revision");
   if (context.evidence.baseline === context.candidate || spawnSync("git", ["-C", context.root, "merge-base", "--is-ancestor", context.evidence.baseline, context.candidate]).status !== 0) throw new GateError("evidence_baseline_invalid", "Accepted baseline must be a distinct reachable ancestor");
   collect(context, verifyManifest);
