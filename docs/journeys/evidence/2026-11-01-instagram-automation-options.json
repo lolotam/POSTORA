@@ -1,5 +1,5 @@
 {
-  "backend_candidate": "cb089d6169a42f486fa4ed2ebeac71622ead7a71",
+  "backend_candidate": "d6773d0c39354a138a691617ecd633a47d816586",
   "backend_base": "781111a8c8b5bc1296f8c82bbe575f2498b82748",
   "backend_files": [
     {
@@ -8,7 +8,11 @@
     },
     {
       "path": "supabase/functions/n8n-api/index.ts",
-      "sha256": "372b89df259b797da58c8e39bce649f7e382e004594eb7747ffb86d79ce7c964"
+      "sha256": "09b034017a3bd1b4e496e8696437c5f03eaa9e3d066c0b1588cc586139ac5848"
+    },
+    {
+      "path": "supabase/functions/n8n-api/requestBody.ts",
+      "sha256": "2c9d7cc5d2f777257a33bbea1ec7532c9b11f8a5c69c26cb97218a20b7e2a0ed"
     },
     {
       "path": "supabase/functions/process-post/index.ts",
@@ -71,7 +75,7 @@
     "node_build": "passed",
     "immutable_lint_i18n": "NO REGRESSIONS",
     "graphify_update": "passed",
-    "immutable_lint_i18n_source_candidate": "413d55f8315144d542ef98565884c4e38ae4c5e1",
+    "immutable_lint_i18n_source_candidate": "d6773d0c39354a138a691617ecd633a47d816586",
     "native_publisher_and_companion_regressions": {
       "candidate": "cb089d6169a42f486fa4ed2ebeac71622ead7a71",
       "tests": 37,
@@ -83,6 +87,15 @@
         "tests": 1,
         "steps": 6
       }
+    },
+    "numeric_collaborator_form_regressions": {
+      "candidate": "d6773d0c39354a138a691617ecd633a47d816586",
+      "tests": 9,
+      "steps": 36,
+      "failed": 0,
+      "original_source_failed_steps": 3,
+      "boundaries": "registered MCP/API and native publisher with synthetic provider/database HTTP; not a live invitation",
+      "immutable_lint_i18n": "NO REGRESSIONS"
     }
   },
   "local_artifacts": [
@@ -169,6 +182,26 @@
     {
       "path": ".tmp/mcp-story-native-production-eslint-comparison.json",
       "sha256": "e17fcf065bb00a8d8a801ee2614109a7711dcac42ff7688eef33c0453c99eb26"
+    },
+    {
+      "path": ".tmp/mcp-numeric-collaborator-before.log",
+      "sha256": "aa197d1de2239b7146b78b1889711e1b7d73db553bc517098fab60abb3f3da0d"
+    },
+    {
+      "path": ".tmp/mcp-numeric-collaborator-after.log",
+      "sha256": "82027ba0a2587083318108b6c54fd4d9ca79a9e21302ade6068f5d7fde6c6d02"
+    },
+    {
+      "path": ".tmp/mcp-numeric-collaborator-eslint.json",
+      "sha256": "24614db625efccce63a233ac9d04da247822baca19524d87f179f397c9cde101"
+    },
+    {
+      "path": ".tmp/mcp-d677-immutable-lint.json",
+      "sha256": "ff8304333dd63304a455a88ea93d0a7a51c46aa82460baaad7537ee19d76a7e8"
+    },
+    {
+      "path": ".tmp/mcp-d677-immutable-lint.md",
+      "sha256": "3ee3b87385c27699d6bea7b135f3d476ef443e1a39207801153a2acb1dabdd99"
     }
   ],
   "previous_backend_candidate": "7f3185c3944c597632d144371e8d5a07aeb14bf3",
@@ -202,8 +235,18 @@
       "Image and carousel results preserve an unrecordable Story carry, the existing warning and operational log without marking the live feed as failed.",
       "Business Login stores accumulated collaborator warnings in response_data.warnings before selfWroteRows skips the outer writer."
     ],
-    "guards": { "clean_code": "passed", "test_guard": "passed", "docs_guard": "passed" },
-    "scoped_eslint": { "new_test_errors": 0, "new_test_warnings": 0, "production_baseline_errors": 16, "production_current_errors": 16, "added_findings": 0 },
+    "guards": {
+      "clean_code": "passed",
+      "test_guard": "passed",
+      "docs_guard": "passed"
+    },
+    "scoped_eslint": {
+      "new_test_errors": 0,
+      "new_test_warnings": 0,
+      "production_baseline_errors": 16,
+      "production_current_errors": 16,
+      "added_findings": 0
+    },
     "initial_eslint_attempt": "Tool failure: isolated checkout could not resolve @eslint/js. Retained; final scoped check used the installed main-workspace config.",
     "graphify_update": "passed",
     "release_state": {
@@ -221,7 +264,10 @@
       "npm_published": false,
       "live_publication_verified": false,
       "new_sql": false,
-      "existing_rpc_prerequisites": ["record_published_story", "partner_settle_platform_post"],
+      "existing_rpc_prerequisites": [
+        "record_published_story",
+        "partner_settle_platform_post"
+      ],
       "production_package_approval": "pending"
     }
   }
