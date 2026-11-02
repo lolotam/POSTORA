@@ -138,6 +138,17 @@ Deno.test("Instagram mirrors keep durable receipts and public collaborator warni
       await publish();
       assertEquals({ storyPublishes, feedPublishes }, { storyPublishes: 1, feedPublishes: 1 });
     });
+    await test.step("a successful standalone Story keeps its provider credential out of diagnostics", async () => {
+      reset("image"); post.metadata.instagram_post_type = "story";
+      const previousLog = console.log;
+      const messages: unknown[][] = [];
+      console.log = (...message: unknown[]) => { messages.push(message); };
+      try {
+        await publish();
+        assertEquals(storyPublishes, 1);
+        assert(!JSON.stringify(messages).includes("fixture-provider"), "Provider credentials must not enter Story diagnostics");
+      } finally { console.log = previousLog; }
+    });
     await test.step("a refused mirror can recover on retry without republishing the completed feed", async () => {
       reset("image"); failStory = true;
       await publish();

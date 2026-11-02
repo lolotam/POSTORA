@@ -4321,8 +4321,6 @@ async function postToInstagram(
       storyBody.location_id = igLocationId;
     }
 
-    console.log("Instagram Story request:", JSON.stringify(storyBody).slice(0, 500));
-
     const createResponse = await fetch(
       `https://graph.facebook.com/v18.0/${igUserId}/media`,
       { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(storyBody) }
