@@ -133,10 +133,13 @@ test("SQL-backed Instagram reports retain metrics, nulls, outliers and freshness
     expect(report.source).toBe("graph_own");
     expect(report.freshness).toMatchObject({ status: "never", lastSuccessAt: null });
     const media = report.media.page.items;
-    expect(media.find((item) => item.mediaId.endsWith("_history_4"))?.metrics.views).toBeNull();
-    expect(media.find((item) => item.mediaId.endsWith("_history_5"))?.metrics.views).toBe(0);
+    // These observations are inside every window; history_4/5 sit outside the rolling seven-day window.
+    expect(media.find((item) => item.mediaId.endsWith("_six_baseline_0"))?.metrics.views).toBeNull();
+    expect(media.find((item) => item.mediaId.endsWith("_midnight_0"))?.metrics.views).toBe(0);
     expect(media.find((item) => item.mediaId.endsWith("_history_0"))?.outlier).toMatchObject({ score: 3, label: "outlier", baselineMedian: 100 });
-    expect(media.filter((item) => item.metrics.reach === 0).every((item) => item.engagementRate.value === null)).toBe(true);
+    const zeroReach = media.filter((item) => item.metrics.reach === 0);
+    expect(zeroReach.length).toBeGreaterThan(0);
+    expect(zeroReach.every((item) => item.engagementRate.value === null)).toBe(true);
     expect(report.account.daily.some((day) => day.reach === null)).toBe(true);
     expect(report.account.daily.some((day) => day.reach === 0)).toBe(true);
     expect(report.lagNote).toBe("provider_data_may_lag_up_to_48h");
