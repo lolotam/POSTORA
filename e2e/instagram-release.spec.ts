@@ -4,6 +4,7 @@ import { assertOwnerExecutionSource } from "../scripts/instagram-owner-execution
 import { syntheticOwnerReleaseKey } from "./fixtures/instagramOwnerReleaseSettings.mjs";
 import { INSTAGRAM_RELEASE } from "./fixtures/instagramRelease.ts";
 import { prepareInstagramReleaseBrowser, signInInstagramRelease } from "./fixtures/instagramReleaseBrowser.ts";
+import type { CompetitorReportDetail, CompetitorReportList } from "../supabase/functions/competitor-tracking-report/contracts.ts";
 
 async function searchInstagramRelease(page: Page, username: string) {
   await page.getByPlaceholder("Enter @username or instagram.com/username").fill(`@${username}`);
@@ -222,6 +223,86 @@ test("canonical discovery keeps ambiguous viewer failures out of target eligibil
     await control("interactive-fallback", { enabled: false });
     await control("provider-scenario", { account: "pageGranted", scenario: "normal" });
   }
+});
+
+test("canonical historical growth preserves real intervals and refuses zero, missing, stale and changed-source baselines", async ({ page, request }) => {
+  const manifest = await prepareInstagramReleaseBrowser(page, request);
+  const health = await (await request.get(`${INSTAGRAM_RELEASE.apiUrl}/__instagram-release/health`)).json();
+  const headers = { Authorization: `Bearer ${await syntheticOwnerReleaseKey("service_role")}`,
+    "X-Instagram-Release-Namespace": manifest.namespace, "X-Instagram-Release-Candidate": health.candidate };
+  const providerState = async () => {
+    const response = await request.get(`${INSTAGRAM_RELEASE.apiUrl}/__instagram-release/provider-calls`, { headers });
+    expect(response.status()).toBe(200);
+    return response.json();
+  };
+  const before = await providerState();
+  await signInInstagramRelease(page, manifest, "ownerA");
+  const reportResponse = page.waitForResponse((response) => response.url().endsWith("/functions/v1/competitor-tracking-report")
+    && response.request().postDataJSON()?.action === "list");
+  await page.goto("/analytics/instagram?tab=competitors");
+  const response = await reportResponse;
+  expect(response.status()).toBe(200);
+  const report: CompetitorReportList = await response.json();
+  const row = (username: string) => page.getByRole("row").filter({ has: page.getByText(`@${username}`, { exact: true }) });
+  const entry = report.entries.find((item) => item.username === "release_competitor");
+  expect(entry?.profile?.followers_count).toBe(120);
+  const referenceMs = Date.parse(manifest.referenceInstant);
+  for (const comparison of [
+    { days: 7, growth: entry!.growth_7d, absolute: 20, percent: 20 },
+    { days: 30, growth: entry!.growth_30d, absolute: 40, percent: 50 },
+  ]) {
+    expect(comparison.growth).toMatchObject({ absolute: comparison.absolute, percent: comparison.percent,
+      interval_days: comparison.days, reason: null });
+    expect(Date.parse(comparison.growth.observed_at!)).toBe(referenceMs);
+    expect(Date.parse(comparison.growth.baseline_at!)).toBe(referenceMs - comparison.days * 86_400_000);
+    await expect(row(entry!.username).getByText(new RegExp(`^Compared with .+ \\(${comparison.days} days\\)$`))).toBeVisible();
+  }
+  await expect(row(entry!.username).getByText("+20 (20.0%)", { exact: true })).toBeVisible();
+  await expect(row(entry!.username).getByText("+40 (50.0%)", { exact: true })).toBeVisible();
+  await expect(row(entry!.username).getByText("3 observed posts / 7 days", { exact: true })).toBeVisible();
+  for (const refused of [
+    { username: "release_zero", reason: "zero_baseline", copy: "No percentage: baseline was zero" },
+    { username: "release_null", reason: "unavailable_metric", copy: "That metric is unavailable" },
+    { username: "release_missing", reason: "missing_baseline", copy: "No comparable baseline" },
+    // SQL excludes observations outside S=3 days; there is no comparable baseline to display.
+    { username: "release_stale", reason: "missing_baseline", copy: "No comparable baseline" },
+    { username: "release_first", reason: "missing_baseline", copy: "No comparable baseline" },
+    { username: "release_source_switch", reason: "source_changed", copy: "The source changed between the two observations" },
+  ]) {
+    const stored = report.entries.find((item) => item.username === refused.username);
+    expect(stored).toBeDefined();
+    for (const growth of [stored!.growth_7d, stored!.growth_30d]) {
+      expect(growth).toMatchObject({ reason: refused.reason, absolute: null, percent: null });
+    }
+    await expect(row(refused.username).getByText(refused.copy, { exact: true })).toHaveCount(2);
+    for (const cell of [2, 3]) await expect(row(refused.username).getByRole("cell").nth(cell)).toContainText("—");
+    await expect(row(refused.username).getByText(/0\.0%/)).toHaveCount(0);
+  }
+  const negative = report.entries.find((item) => item.username === "release_negative");
+  expect(negative?.growth_7d).toMatchObject({ absolute: -20, interval_days: 7, reason: null });
+  expect(negative?.growth_7d.percent).toBeCloseTo(-100 / 7);
+  expect(negative?.growth_30d).toMatchObject({ absolute: -40, percent: -25, interval_days: 30, reason: null });
+  await expect(row("release_negative").getByText(/^[−-]20 \(-14\.3%\)$/)).toBeVisible();
+  await expect(row("release_negative").getByText(/^[−-]40 \(-25\.0%\)$/)).toBeVisible();
+  await expect(row("release_partial").getByText("30 posts observed · incomplete coverage", { exact: true })).toBeVisible();
+  await expect(row("release_partial").getByRole("cell").nth(4)).toContainText("—");
+  await expect(row("release_legacy").getByText("3 posts observed · incomplete coverage", { exact: true })).toBeVisible();
+
+  const detailResponse = page.waitForResponse((reply) => reply.url().endsWith("/functions/v1/competitor-tracking-report")
+    && reply.request().postDataJSON()?.action === "detail");
+  await row(entry!.username).getByRole("button", { name: `View report for @${entry!.username}`, exact: true }).click();
+  const detailReply = await detailResponse;
+  expect(detailReply.status()).toBe(200);
+  const detail: CompetitorReportDetail = await detailReply.json();
+  expect(detail.entry?.growth_7d).toEqual(entry!.growth_7d);
+  expect(detail.entry?.growth_30d).toEqual(entry!.growth_30d);
+  expect(detail.entry?.weekly).toEqual(entry!.weekly);
+  const sheet = page.getByRole("dialog");
+  await expect(sheet.getByText("+20 (20.0%)", { exact: true })).toBeVisible();
+  await expect(sheet.getByText("+40 (50.0%)", { exact: true })).toBeVisible();
+  await expect(sheet.getByText("3 observed posts / 7 days", { exact: true })).toBeVisible();
+  await page.keyboard.press("Escape");
+  expect(await providerState()).toEqual(before);
 });
 
 test("canonical quota management refuses extra activations, serializes the final slot and preserves downgrade and unlimited behavior", async ({ page, request }) => {
