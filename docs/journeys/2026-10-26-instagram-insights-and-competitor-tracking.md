@@ -20,6 +20,8 @@ The [canonical fixture record](2026-11-02-canonical-instagram-fixture.md) explai
 
 The [discovery-refusal journey](2026-11-02-instagram-discovery-refusals.md) extends the canonical suite to five successful tests at `9413950f01ea6fa933e016d60ab7b1d89acf8136`. It covers ambiguous viewer/provider failures, explicit synthetic third-party fallback, throttling refusal and unchanged persisted watchlist eligibility. Confirmed target ineligibility and its weekly retry remain unverified, so this does not close J4.
 
+The [quota/management journey](2026-11-02-instagram-quota-management.md) extends the canonical suite to six successful tests at `5a66366c0650a8940ddeca486c9767fa6cb02fca`. It proves real quota refusals, paired requests for the final slot, downgrade preservation, unlimited override/admin behavior and queued reactivation. It also reproduces and fixes silent definite reactivation/removal failures. J5's new-target capture/report and lost-response reconciliation remain open.
+
 No result is promoted to a newer source merely because it is an ancestor. A changed runtime, schema, frontend or fixture input needs affected proofs on the new immutable candidate. Author-recorded JSON and a passing structural inventory cannot supply independent execution/review provenance.
 
 ## Open acceptance work
