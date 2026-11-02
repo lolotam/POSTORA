@@ -8,6 +8,7 @@ export const INSTAGRAM_RELEASE = Object.freeze({
   cronSecret: "synthetic-instagram-release-cron-secret", appId: "770001",
   providerSecret: "synthetic-instagram-release-provider-secret",
   apifyToken: "synthetic-instagram-release-apify-token",
+  newTarget: "release_new_target", lostTarget: "release_lost_target",
 });
 export type ReleaseUserKey = "ownerA" | "ownerB" | "admin";
 export type ReleaseAccountKey = "pageGranted" | "directEmpty" | "sibling" | "pageDenied" | "pageUnknown" | "pageMissing" | "pageFailed" | "pageExpired" | "threshold" | "otherPage";
@@ -225,7 +226,8 @@ function providerOperation(url: URL, account: ReleaseAccount, manifest: Instagra
 function assertDiscoveryRequest(url: URL, account: ReleaseAccount, manifest: InstagramReleaseManifest): void {
   const handle = /username\(([^)]+)\)/.exec(url.searchParams.get("fields") ?? "")?.[1];
   const cursor = /\.after\(([^)]+)\)/.exec(url.searchParams.get("fields") ?? "")?.[1] ?? null;
-  if (!handle || !manifest.watchlists.some((entry) => entry.username === handle) || cursor !== null && cursor !== "release_page_2"
+  if (!handle || !(manifest.watchlists.some((entry) => entry.username === handle)
+      || handle === INSTAGRAM_RELEASE.newTarget || handle === INSTAGRAM_RELEASE.lostTarget) || cursor !== null && cursor !== "release_page_2"
     || url.href !== buildBusinessDiscoveryUrl({ apiVersion: "v22.0", viewerIgUserId: account.providerId, handle, token: account.token, cursor })) throw new Error("Instagram release provider refused discovery request");
 }
 

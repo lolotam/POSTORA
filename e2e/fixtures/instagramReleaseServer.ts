@@ -112,6 +112,25 @@ async function fixtureControl(request: Request, path: string): Promise<Response>
   if (!body || typeof body !== "object" || Array.isArray(body)) return new Response(null, { status: 400 });
   const input = body as Record<string, unknown>;
   if (path === "provider-scenario") return setProviderScenario(input);
+  if (path === "admit-tracked-competitor") {
+    if (Object.keys(input).join(",") !== "username" || input.username !== INSTAGRAM_RELEASE.newTarget) return new Response(null, { status: 400 });
+    const viewer = seed.manifest.accounts.find((account) => account.key === "pageGranted")!;
+    const admitted = await ownerReleaseSql(`WITH target AS (
+      SELECT id FROM public.competitor_watchlist WHERE user_id='${seed.manifest.users.ownerA.id}'
+        AND username='${INSTAGRAM_RELEASE.newTarget}' AND is_active
+    ), updated AS (
+      UPDATE public.app_settings SET value=jsonb_set(value,'{competitors,targets}',
+        CASE WHEN EXISTS(SELECT 1 FROM jsonb_array_elements(value->'competitors'->'targets') item
+          WHERE item->>'watchlist_id'=(SELECT id::text FROM target)) THEN value->'competitors'->'targets'
+        ELSE (value->'competitors'->'targets')||jsonb_build_array(jsonb_build_object(
+          'watchlist_id',(SELECT id FROM target),'viewer_social_account_id','${viewer.id}')) END)
+      WHERE key='collection_instagram_rollout_policy' AND value->'competitors'->>'mode'='allowlist'
+        AND jsonb_typeof(value->'competitors'->'targets')='array' AND (SELECT count(*) FROM target)=1
+      RETURNING key
+    ) SELECT count(*) FROM updated;`);
+    if (admitted !== "1") return Response.json({ error: "fixture_target_not_saved" }, { status: 409 });
+    return Response.json({ admitted: true });
+  }
   if (path === "interactive-fallback") {
     if (Object.keys(input).join(",") !== "enabled" || typeof input.enabled !== "boolean") return new Response(null, { status: 400 });
     const changed = await ownerReleaseSql(`WITH changed AS (
@@ -158,7 +177,8 @@ async function drain(input: Record<string, unknown>): Promise<Response> {
   const name = input.kind === "owner" ? "instagram-insights-sync" : "competitor-snapshot-sync";
   // Intake remains a separate authenticated request: a drain never seeds or invents a completed job.
   return routes.get(name)!(new Request(`${INSTAGRAM_RELEASE.apiUrl}/functions/v1/${name}`, { method: "POST",
-    headers: { Authorization: `Bearer ${INSTAGRAM_RELEASE.cronSecret}`, "Content-Type": "application/json" }, body: JSON.stringify({ action: "drain" }) }));
+    headers: { Authorization: `Bearer ${INSTAGRAM_RELEASE.cronSecret}`, "Content-Type": "application/json" },
+    body: JSON.stringify(input.kind === "owner" ? { action: "drain" } : { mode: "all" }) }));
 }
 
 async function route(request: Request): Promise<Response> {

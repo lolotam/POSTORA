@@ -338,3 +338,110 @@ test("canonical quota management refuses extra activations, serializes the final
   expect((await read("competitor_watchlist", manifest.users.admin.id)).filter((row: { is_active: boolean }) => row.is_active)).toHaveLength(2);
   expect(await providerState()).toEqual(afterDiscovery);
 });
+
+test("canonical tracking persists a new capture through the real worker and reconciles a lost save response without replay", async ({ page, request }) => {
+  const manifest = await prepareInstagramReleaseBrowser(page, request);
+  const health = await (await request.get(`${INSTAGRAM_RELEASE.apiUrl}/__instagram-release/health`)).json();
+  const headers = { Authorization: `Bearer ${await syntheticOwnerReleaseKey("service_role")}`,
+    "X-Instagram-Release-Namespace": manifest.namespace, "X-Instagram-Release-Candidate": health.candidate };
+  const control = async (path: string, data: Record<string, unknown>) => request.post(`${INSTAGRAM_RELEASE.apiUrl}/__instagram-release/${path}`, { headers, data });
+  const read = async (table: string, filters: Record<string, string>) => {
+    const response = await request.get(`${INSTAGRAM_RELEASE.apiUrl}/rest/v1/${table}`, { headers,
+      params: { user_id: `eq.${manifest.users.ownerA.id}`, order: "id.asc", ...filters } });
+    expect(response.status()).toBe(200);
+    return response.json();
+  };
+  const target = () => read("competitor_watchlist", { username: `eq.${INSTAGRAM_RELEASE.newTarget}` });
+  const syncResponse = () => page.waitForResponse((response) => response.url().endsWith("/functions/v1/competitor-snapshot-sync") && response.request().method() === "POST");
+  expect((await control("admit-tracked-competitor", { username: INSTAGRAM_RELEASE.newTarget })).status()).toBe(409);
+  expect((await control("admit-tracked-competitor", { username: "foreign" })).status()).toBe(400);
+  await signInInstagramRelease(page, manifest, "ownerA");
+  await page.goto("/analytics/instagram?tab=analyze");
+  expect((await searchInstagramRelease(page, INSTAGRAM_RELEASE.newTarget)).status()).toBe(200);
+  const notAdmitted = syncResponse();
+  await page.getByRole("button", { name: "Track", exact: true }).click();
+  expect((await notAdmitted).status()).toBe(403);
+  await expect(page.getByText("Tracked; collection could not be confirmed.", { exact: true })).toBeVisible();
+  const saved = await target();
+  expect(saved).toHaveLength(1);
+  expect(saved[0]).toMatchObject({ username: INSTAGRAM_RELEASE.newTarget, is_active: true, status: "pending", last_synced_at: null });
+  const id = saved[0].id;
+  const snapshots = () => read("competitor_profile_snapshots", { watchlist_id: `eq.${id}` });
+  const media = () => read("competitor_media_snapshots", { watchlist_id: `eq.${id}` });
+  const jobs = () => read("instagram_collection_jobs", { watchlist_id: `eq.${id}` });
+  expect(await snapshots()).toEqual([]);
+  expect(await jobs()).toEqual([]);
+  // The fixture models approval of this exact saved target/viewer, without bypassing the real intake.
+  for (let attempt = 0; attempt < 2; attempt++) expect((await control("admit-tracked-competitor", { username: INSTAGRAM_RELEASE.newTarget })).status()).toBe(200);
+  await page.goto("/analytics/instagram?tab=competitors");
+  const row = () => page.getByRole("row").filter({ has: page.getByText(`@${INSTAGRAM_RELEASE.newTarget}`, { exact: true }) });
+  await expect(row()).toHaveCount(1);
+  await expect(row()).toContainText("Waiting for first snapshot");
+  const accepted = syncResponse();
+  await row().getByRole("button", { name: "Retry collection", exact: true }).click();
+  expect((await accepted).status()).toBe(202);
+  await expect(page.getByText("Tracked; the first snapshot is queued.", { exact: true })).toBeVisible();
+  expect((await jobs()).map((job: { status: string }) => job.status)).toEqual(["queued"]);
+  expect(await snapshots()).toEqual([]);
+  const drained = await control("drain", { kind: "competitor" });
+  expect(drained.status()).toBe(200);
+  expect((await jobs()).map((job: { status: string }) => job.status)).toEqual(["completed"]);
+  const captured = await snapshots();
+  expect(captured).toHaveLength(1);
+  expect(captured[0]).toMatchObject({ followers_count: 120, media_count: 2, source: "official", status: "ok" });
+  const capturedMedia = await media();
+  expect(capturedMedia).toHaveLength(2);
+  expect(capturedMedia).toEqual(expect.arrayContaining([
+    expect.objectContaining({ media_type: "VIDEO", media_product_type: "REELS", like_count: null, view_count: 300, source: "official" }),
+    expect.objectContaining({ media_type: "VIDEO", media_product_type: "FEED", like_count: 20, view_count: null, source: "official" }),
+  ]));
+  await page.reload();
+  await expect(row()).toContainText("120");
+  await expect(row().getByText("Official", { exact: true })).toBeVisible();
+  await expect(row().getByText("Not enough history", { exact: true })).toHaveCount(2);
+  await row().getByRole("button", { name: `View report for @${INSTAGRAM_RELEASE.newTarget}`, exact: true }).click();
+  const detail = page.getByRole("dialog");
+  await expect(detail.getByText("Synthetic release media 0", { exact: true })).toBeVisible();
+  await expect(detail.getByText("Synthetic release media 1", { exact: true })).toBeVisible();
+  await page.keyboard.press("Escape");
+  await row().getByRole("button", { name: `Remove @${INSTAGRAM_RELEASE.newTarget}`, exact: true }).click();
+  await page.getByRole("alertdialog").getByRole("button", { name: "Remove", exact: true }).click();
+  await expect(row()).toHaveCount(0);
+  expect((await target())[0]).toMatchObject({ id, is_active: false });
+  expect(await snapshots()).toEqual(captured);
+  expect(await media()).toEqual(capturedMedia);
+  await page.getByRole("tab", { name: "Removed", exact: true }).click();
+  const reactivation = syncResponse();
+  await row().getByRole("button", { name: `Reactivate @${INSTAGRAM_RELEASE.newTarget}`, exact: true }).click();
+  expect((await reactivation).status()).toBe(429);
+  await expect(page.getByText("Tracked; collection could not be confirmed.", { exact: true })).toBeVisible();
+  expect((await target())[0]).toMatchObject({ id, is_active: true, removed_at: null });
+  expect(await snapshots()).toEqual(captured);
+  expect(await media()).toEqual(capturedMedia);
+
+  await page.goto("/analytics/instagram?tab=analyze");
+  expect((await searchInstagramRelease(page, INSTAGRAM_RELEASE.lostTarget)).status()).toBe(200);
+  let saveCalls = 0;
+  let enqueueCalls = 0;
+  page.on("request", (request) => { if (request.url().endsWith("/functions/v1/competitor-snapshot-sync") && request.method() === "POST") enqueueCalls++; });
+  await page.route("**/rest/v1/rpc/add_competitor_watchlist", async (route) => {
+    saveCalls++;
+    expect(route.request().postDataJSON().p_username).toBe(INSTAGRAM_RELEASE.lostTarget);
+    const response = await route.fetch();
+    expect(response.status()).toBe(200);
+    await response.body();
+    await route.abort("failed");
+  });
+  await page.getByRole("button", { name: "Track", exact: true }).click();
+  await expect(page.getByText("Could not confirm the change. Reload to check.", { exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Tracked", exact: true })).toBeDisabled();
+  const lost = await read("competitor_watchlist", { username: `eq.${INSTAGRAM_RELEASE.lostTarget}` });
+  expect(lost).toHaveLength(1);
+  expect(await read("instagram_collection_jobs", { watchlist_id: `eq.${lost[0].id}` })).toEqual([]);
+  await page.reload();
+  expect((await searchInstagramRelease(page, INSTAGRAM_RELEASE.lostTarget)).status()).toBe(200);
+  await expect(page.getByRole("button", { name: "Tracked", exact: true })).toBeDisabled();
+  expect(saveCalls).toBe(1);
+  expect(enqueueCalls).toBe(0);
+  expect((await read("competitor_watchlist", { username: `eq.${INSTAGRAM_RELEASE.lostTarget}` })).map((entry: { id: string }) => entry.id)).toEqual([lost[0].id]);
+});
