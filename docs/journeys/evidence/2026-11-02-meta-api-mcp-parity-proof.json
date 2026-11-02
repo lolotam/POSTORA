@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "recordedAt": "2026-11-02T04:00:00.219Z",
+  "recordedAt": "2026-11-02T04:03:35.838Z",
   "scope": "local saved analytics UI API MCP parity and cold-cache preparation",
   "source": "97c6708804a94f725945100638061ba0e99e65ff",
   "tree": "b1bf76912af0afb6bb8d085c3e5a5bcb25a5db8f",
@@ -101,6 +101,14 @@
     "passed": 3,
     "distinction": "GitHub PR merge candidate, not the local 97c67088 execution and not full G-X acceptance"
   },
+  "hostedOwner": {
+    "prHead": "b8bd1f11ebd21eab4d3e7a90a2ab827deb1462dd",
+    "executedCandidate": "0a15860485e4d584c6b7093ffb048e1aae9a3274",
+    "job": "https://github.com/lolotam/POSTORA/actions/runs/41385591492/job/125085596667",
+    "conclusion": "success",
+    "passed": 13,
+    "requiredJourneyChecker": "passed"
+  },
   "artifacts": [
     {
       "path": ".tmp/owner-api-97c67088-canonical-playwright.log",
@@ -173,6 +181,10 @@
     {
       "path": ".tmp/owner-api-b8bd1f11-canonical-ci.log",
       "sha256": "650b436c3f06301febe60d573cdf231b4778b4f7251ea28b018d4b853c544af3"
+    },
+    {
+      "path": ".tmp/owner-api-b8bd1f11-owner-ci.log",
+      "sha256": "aa4a63f227677d59f6007ddc80f8e725fac9087b362fcfadc6c7a54ed44cccbd"
     }
   ],
   "releaseReady": false,
