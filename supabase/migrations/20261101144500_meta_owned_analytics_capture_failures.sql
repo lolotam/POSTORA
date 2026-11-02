@@ -20,13 +20,13 @@ BEGIN
       WHERE NOT EXISTS(SELECT 1 FROM public.fb_page_insight_daily d JOIN public.fb_analytics_metric_values m ON m.daily_id=d.id
         JOIN public.fb_analytics_captures c ON c.id=m.capture_id WHERE d.user_id=v_job.user_id AND d.social_account_id=v_job.social_account_id
           AND d.metric_date=day_value AND m.metric_key=key_value AND c.job_id=p_job_id AND c.job_generation=p_job_generation
-          AND (m.status='available' OR m.status='unavailable' AND m.reason IN ('not_offered','outside_retention'))))
+          AND m.status='available'))
     OR EXISTS(SELECT 1 FROM public.fb_analytics_collection_checkpoints checkpoint CROSS JOIN unnest(checkpoint.post_ids) post_id CROSS JOIN unnest(ARRAY['views','unique_viewers']) key_value
       WHERE checkpoint.job_id=p_job_id AND checkpoint.job_generation=p_job_generation
         AND NOT EXISTS(SELECT 1 FROM public.fb_post_insight_snapshots p JOIN public.fb_analytics_metric_values m ON m.post_snapshot_id=p.id
           JOIN public.fb_analytics_captures c ON c.id=m.capture_id WHERE p.user_id=v_job.user_id AND p.social_account_id=v_job.social_account_id
             AND p.platform_post_id=post_id AND m.metric_key=key_value AND c.job_id=p_job_id AND c.job_generation=p_job_generation
-            AND (m.status='available' OR m.status='unavailable' AND m.reason IN ('not_offered','outside_retention'))))
+            AND m.status='available'))
 
   ) THEN RAISE EXCEPTION 'META_ANALYTICS_INCOMPLETE_COLLECTION' USING ERRCODE='MAH05'; END IF;
   IF v_job.lease_until<=clock_timestamp() THEN RAISE EXCEPTION 'META_ANALYTICS_STALE_CLAIM' USING ERRCODE='MAH04'; END IF;
@@ -60,13 +60,13 @@ BEGIN
       WHERE NOT EXISTS(SELECT 1 FROM public.threads_account_insight_daily d JOIN public.threads_analytics_metric_values m ON m.daily_id=d.id
         JOIN public.threads_analytics_captures c ON c.id=m.capture_id WHERE d.user_id=v_job.user_id AND d.social_account_id=v_job.social_account_id
           AND d.metric_date=day_value AND m.metric_key=key_value AND c.job_id=p_job_id AND c.job_generation=p_job_generation
-          AND (m.status='available' OR m.status='unavailable' AND m.reason IN ('not_offered','outside_retention'))))
+          AND m.status='available'))
     OR EXISTS(SELECT 1 FROM public.threads_analytics_collection_checkpoints checkpoint CROSS JOIN unnest(checkpoint.post_ids) post_id CROSS JOIN unnest(ARRAY['views','likes','replies','reposts','quotes','shares']) key_value
       WHERE checkpoint.job_id=p_job_id AND checkpoint.job_generation=p_job_generation
         AND NOT EXISTS(SELECT 1 FROM public.threads_post_insight_snapshots p JOIN public.threads_analytics_metric_values m ON m.post_snapshot_id=p.id
           JOIN public.threads_analytics_captures c ON c.id=m.capture_id WHERE p.user_id=v_job.user_id AND p.social_account_id=v_job.social_account_id
             AND p.platform_post_id=post_id AND m.metric_key=key_value AND c.job_id=p_job_id AND c.job_generation=p_job_generation
-            AND (m.status='available' OR m.status='unavailable' AND m.reason IN ('not_offered','outside_retention'))))
+            AND m.status='available'))
     OR NOT EXISTS(SELECT 1 FROM public.threads_analytics_metric_values m JOIN public.threads_analytics_captures c ON c.id=m.capture_id WHERE c.job_id=p_job_id AND c.job_generation=p_job_generation AND m.profile_observation_id IS NOT NULL AND m.metric_key='followers' AND m.status='available')
   ) THEN RAISE EXCEPTION 'META_ANALYTICS_INCOMPLETE_COLLECTION' USING ERRCODE='MAH05'; END IF;
   IF v_job.lease_until<=clock_timestamp() THEN RAISE EXCEPTION 'META_ANALYTICS_STALE_CLAIM' USING ERRCODE='MAH04'; END IF;
