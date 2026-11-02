@@ -666,9 +666,16 @@ test("canonical protected reconnect renews denied insights and replaces the prev
   };
   const capability = () => read("instagram_account_capabilities", "credential_generation,permission_read_state,granted_scopes,scopes_read_at",
     { social_account_id: `eq.${account.id}` });
-  const binding = () => read("facebook_user_credential_bindings", "credential_id", { social_account_id: `eq.${account.id}` });
+  const binding = () => read("facebook_user_credential_bindings", "credential_id,connection_version", { social_account_id: `eq.${account.id}` });
+  const credential = (id: string) => read("facebook_user_credentials", "id,revision,provider_user_id,lifecycle", { id: `eq.${id}` });
+  await signInInstagramRelease(page, manifest, "ownerB");
+  await page.goto("/analytics/instagram?tab=analyze");
+  const initial = await searchInstagramRelease(page, "release_competitor");
+  expect(initial.status()).toBe(200);
+  expect((await initial.json()).posts).toEqual(expect.arrayContaining([expect.objectContaining({ mediaType: "REEL", videoViewCount: 300 })]));
   const beforeCapability = (await capability())[0];
   const beforeBinding = (await binding())[0];
+  const beforeCredential = (await credential(beforeBinding.credential_id))[0];
   const before = await receipts();
   expect((await control("oauth-authorize", { url: "https://postora.cloud/" })).status()).toBe(400);
   expect((await control("deny-reconnect-permissions", { account: "pageGranted" })).status()).toBe(400);
@@ -676,8 +683,6 @@ test("canonical protected reconnect renews denied insights and replaces the prev
   expect(denial.status()).toBe(200);
   expect(await denial.json()).toMatchObject({ credential_generation: beforeCapability.credential_generation,
     permission_read_state: "ok", granted_scopes: ["instagram_basic"] });
-  await signInInstagramRelease(page, manifest, "ownerB");
-  await page.goto("/analytics/instagram?tab=analyze");
   const refused = await searchInstagramRelease(page, "release_competitor");
   expect(refused.status()).toBe(409);
   expect(await refused.json()).toMatchObject({ error_code: "IG_INSIGHTS_SCOPE_MISSING" });
@@ -717,7 +722,14 @@ test("canonical protected reconnect renews denied insights and replaces the prev
   expect(afterCapability.granted_scopes).toContain("instagram_manage_insights");
   expect(Date.parse(afterCapability.scopes_read_at)).toBeGreaterThan(Date.parse(beforeCapability.scopes_read_at));
   const afterBinding = (await binding())[0];
-  expect(afterBinding.credential_id).not.toBe(beforeBinding.credential_id);
+  expect(afterBinding.credential_id).toBe(beforeBinding.credential_id);
+  expect(afterBinding.connection_version).toBe(beforeBinding.connection_version + 1);
+  const afterCredential = (await credential(afterBinding.credential_id))[0];
+  expect(afterCredential).toEqual({ ...beforeCredential, revision: beforeCredential.revision + 1 });
+  const committed = await read("meta_oauth_attempt_receipts", "credential_id,credential_revision,capability_generation,connection_version",
+    { attempt_id: `eq.${savedBody.attempt_id}`, social_account_id: `eq.${account.id}` });
+  expect(committed).toEqual([{ credential_id: afterBinding.credential_id, credential_revision: afterCredential.revision,
+    capability_generation: afterCapability.credential_generation, connection_version: afterBinding.connection_version }]);
   const accounts = await read("social_accounts", "id,platform_user_id,is_active,needs_reauth", { platform: "eq.instagram" });
   expect(accounts).toEqual([{ id: account.id, platform_user_id: account.providerId, is_active: true, needs_reauth: false }]);
   const oauth = await receipts("oauth-calls");
