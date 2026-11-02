@@ -1,0 +1,140 @@
+{
+  "version": 1,
+  "recordedAt": "2026-11-02T07:38:24.650Z",
+  "source": "714ca86cc2ff330d7b972f80d6ea463878a3818a",
+  "tree": "128c89e9c0269a8f8a5eafb94142edb8f486e183",
+  "executionRoot": "F:/Dev/Projects/Postora_new",
+  "evidenceAuthority": "Author-recorded local unit/bundled-route execution, not assembled J2, independent G-X acceptance or live Meta evidence",
+  "executionInputState": "Listed committed inputs matched their Git blobs after line-ending normalization; unrelated graph/untracked workspace material is not claimed clean",
+  "inputs": [
+    {
+      "path": "supabase/functions/_shared/metaOAuthProtectedBoundary.ts",
+      "gitBlob": "acf83813d1426560a5ed17f4ed9b189af2c6e1a8",
+      "gitSha256": "4169718af9f0b5a80a5d0bb7758af70709d4d5fe172dad0b7187077187ca2295",
+      "executionSha256": "46397b0011f644f89598b833483f7504aade478f9486516b62fe11155bcfeced",
+      "normalizedExecutionSha256": "4169718af9f0b5a80a5d0bb7758af70709d4d5fe172dad0b7187077187ca2295"
+    },
+    {
+      "path": "supabase/functions/_shared/metaOAuthProtectedBoundary.test.ts",
+      "gitBlob": "4a200065ba23214146e99ac551699b2fd62bb424",
+      "gitSha256": "c18da964dc0e448cfe9faabfa38f4f1d5745537e4bf99a8351f2e96b208315db",
+      "executionSha256": "ad1d62921aebe456c2f1773d0fc76477b8103a8389fc908dd0a672fac0de6bc0",
+      "normalizedExecutionSha256": "c18da964dc0e448cfe9faabfa38f4f1d5745537e4bf99a8351f2e96b208315db"
+    },
+    {
+      "path": "supabase/functions/_shared/protectedOAuthHandlers.test.ts",
+      "gitBlob": "22c3f7a195fdb4df36c9d8cd53623ced09b9b6c9",
+      "gitSha256": "31e144587abb330f733ebfdff2cd512f5f13d488d53a349e55e10d7568a9f187",
+      "executionSha256": "bdeff50f746a7c2c4cea9531551260b90c6e0f077f99f0898d7ed2979fb8895b",
+      "normalizedExecutionSha256": "31e144587abb330f733ebfdff2cd512f5f13d488d53a349e55e10d7568a9f187"
+    },
+    {
+      "path": "supabase/functions/_shared/protectedRouteHandlers.test.ts",
+      "gitBlob": "f8b96981be741720fb28af88c6dacec8da5eeb1b",
+      "gitSha256": "a7778281d8cf51164a1934ac17df594252376f160c514ed396f384903ba529f2",
+      "executionSha256": "5fb873bcab62a05ed194cde8976f62036bc16e12b9469dcfa364dc6e51ee6956",
+      "normalizedExecutionSha256": "a7778281d8cf51164a1934ac17df594252376f160c514ed396f384903ba529f2"
+    },
+    {
+      "path": "supabase/functions/instagram-business-oauth/index.ts",
+      "gitBlob": "88bba6956d3c1e2eb7281426c7406a52a19b5b5a",
+      "gitSha256": "60f60150316a219650fb77d0a96982126ad57db901b9ea8a1317bf8c434b486a",
+      "executionSha256": "fd0defbb6b165558bef1f95d348a396c8f3e1ef019f56d184c4bd83014bee03f",
+      "normalizedExecutionSha256": "60f60150316a219650fb77d0a96982126ad57db901b9ea8a1317bf8c434b486a"
+    },
+    {
+      "path": "supabase/functions/instagram-business-oauth/permissions.ts",
+      "gitBlob": "e29dd00788916e70188f9634eedd2bf82780f458",
+      "gitSha256": "fa8f96a5d4d466fb25de8ad5c390a011d6d450b9052c996526949f77b5757348",
+      "executionSha256": "fa8f96a5d4d466fb25de8ad5c390a011d6d450b9052c996526949f77b5757348",
+      "normalizedExecutionSha256": "fa8f96a5d4d466fb25de8ad5c390a011d6d450b9052c996526949f77b5757348"
+    },
+    {
+      "path": "supabase/functions/instagram-business-oauth/permissions.test.ts",
+      "gitBlob": "37dd3069d02ed5504785d748695e3245f7b40f29",
+      "gitSha256": "ff71d223656e1196bc89f558d918910188334b47fa82bf21f15c716c75c3a64b",
+      "executionSha256": "ff71d223656e1196bc89f558d918910188334b47fa82bf21f15c716c75c3a64b",
+      "normalizedExecutionSha256": "ff71d223656e1196bc89f558d918910188334b47fa82bf21f15c716c75c3a64b"
+    }
+  ],
+  "productRed": {
+    "source": "d4513e31e0e5e8c368e911f4fa6074b2b63070ec",
+    "path": "supabase/functions/instagram-business-oauth/index.ts",
+    "gitSha256": "b50756953eede1798df8c0b57d0a1182d2ec6d1a05e2386f0ac33df7ad24ae8c",
+    "executionSha256": "8b30400741a5156e29d182381d19941a006ca38a76548127b7d8668810bdc277",
+    "normalizedExecutionSha256": "b50756953eede1798df8c0b57d0a1182d2ec6d1a05e2386f0ac33df7ad24ae8c",
+    "testInputSource": "714ca86cc2ff330d7b972f80d6ea463878a3818a",
+    "result": "0 passed, 1 failed, 55 filtered; successful connection response had no authoritative permission outcome",
+    "archive": ".tmp/permission-red-d4513e31",
+    "infrastructure": "Old Git-archived production modules, current route test with mocked Auth/RPC/provider ports; no network permission"
+  },
+  "checks": {
+    "denoPassed": 98,
+    "denoFailed": 0,
+    "denoEntrypointCheck": "passed on source",
+    "scopedEslint": "passed",
+    "immutableLintI18n": {
+      "base": "d4513e31e0e5e8c368e911f4fa6074b2b63070ec",
+      "head": "714ca86cc2ff330d7b972f80d6ea463878a3818a",
+      "result": "NO REGRESSIONS",
+      "historicalDebtRemains": true
+    },
+    "graphMaintenance": "completed",
+    "frontendBuildAndTypecheck": "Not rerun: no frontend inputs changed; their earlier source attribution remains separate"
+  },
+  "assertions": [
+    "Commit precedes permission read; credential ID/revision, connection version and capability generation must match its receipt",
+    "Only complete successful permissions establish grants; successful empty/declined/expired scopes are denial, while failed/malformed/oversized/incomplete HTTP is failed evidence",
+    "Trusted cursor reconstruction, four-page/100-row limits, a 65536-byte per-page cap and aggregate eight-second provider budget",
+    "Late results keep their original expected generation and never retry against a newer generation; ambiguous driver envelopes cannot confirm insights",
+    "The bounded HTTP body releases its reader when cancellation/deadline occurs",
+    "The real registered protected selection branch returns connection success with a separate safe permission result; audit failure leaves that result unconfirmed without replaying the account commit",
+    "No raw credential, provider error or URL is returned in the safe outcome"
+  ],
+  "sqlEvidenceBoundary": "No SQL changed. Existing real capability ownership/generation/timestamp/failed-read suites retain their earlier candidate attribution; this slice does not claim a new real SQL/route composition run.",
+  "evidenceCollectionCorrection": "The initial collector rejected a raw CRLF archive/LF Git comparison. Verified exact normalized byte equality and retained separate raw/normalized hashes; no production-code drift was waived.",
+  "artifacts": [
+    {
+      "path": ".tmp/permission-refresh-before-red.log",
+      "sha256": "4c43b4366a0b415e4c0712fd4191223ef737aea78416e6bb4fc276d066da9019"
+    },
+    {
+      "path": ".tmp/permission-refresh-routes-wired-deno.log",
+      "sha256": "aba138bb16a0fd1e09a555eb47cdcafaf7f9c285c3d04dd788b998811860b14c"
+    },
+    {
+      "path": ".tmp/permission-refresh-full-route-deno.log",
+      "sha256": "50fec3d84d140965ea63e1d5fabbe12cda29c9af6f1f693051b544bafa0bb42d"
+    },
+    {
+      "path": ".tmp/permission-refresh-final-eslint.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": ".tmp/permission-714ca86c-deno.log",
+      "sha256": "edcc0cfadda25036a4a12d125c2d0d3a353194d48bd64cccd4e78ac2e90b5b4e"
+    },
+    {
+      "path": ".tmp/permission-714ca86c-check.log",
+      "sha256": "13b4ba608ef9f3105e9a771a96607294e4a09b1798c3bebf9d1a1d762382c8d3"
+    },
+    {
+      "path": ".tmp/permission-714ca86c-lint-i18n.log",
+      "sha256": "1ab700842fd687d9d4aeb3f759973eba29ec4c4cfb48f3d39aadb9516362c4d6"
+    },
+    {
+      "path": ".tmp/permission-714ca86c-graph-update.log",
+      "sha256": "c2a32fa5f3b5b5210f084968bfb9afe163889cf27a72d1f2bafa148c2d51a804"
+    }
+  ],
+  "releaseReady": false,
+  "productionActivationAuthorized": false,
+  "remaining": [
+    "Complete canonical J2 with real local Auth/PostgREST/SQL, synthetic OAuth exchange/picker and discovery cache invalidation",
+    "Resolve loopback return-origin composition through the existing trusted application-origin boundary",
+    "Facebook Page/companion and direct-login permission paths need their own applicable evidence",
+    "Exact maturity clock boundaries, other J/E journeys and canonical Instagram metric/calendar adoption",
+    "Trusted release workflow/bootstrap/CODEOWNERS, independent review and migration-history recovery",
+    "Refrozen and separately approved production prerequisites/runtime/activation, Meta reconciliation and scheduled observation"
+  ]
+}
