@@ -373,7 +373,7 @@ describe("the history states the source it was given", () => {
 
     supabaseState.error = null;
     supabaseState.sessions = [makeSession()];
-    await userEvent.click(screen.getByRole("button", { name: "Retry", exact: true }));
+    await userEvent.click(screen.getByRole("button", { name: "Retry" }));
     expect(await screen.findByText("@northwind")).toBeInTheDocument();
   });
 
@@ -393,7 +393,7 @@ describe("the history states the source it was given", () => {
     supabaseState.sessions = [makeSession({ profile_data: makeProfile("facebook"), posts_data: [POST] })];
     const onReuse = vi.fn();
     renderWithProviders(<ScrapeHistory onReuse={onReuse} platform="instagram" />);
-    await userEvent.click(await screen.findByRole("button", { name: "Reuse", exact: true }));
+    await userEvent.click(await screen.findByRole("button", { name: "Reuse" }));
     expect(onReuse).not.toHaveBeenCalled();
   });
 
