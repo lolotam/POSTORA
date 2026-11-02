@@ -102,8 +102,9 @@ function fullLedger(context, customize = () => {}) {
   const workflow = [
     "name: Instagram migration gate", "on:", "  pull_request_target: {}", "  push:", "    branches: [main]", "permissions:", "  contents: read", "jobs:",
     "  check:", "    runs-on: ubuntu-latest", "    environment: release-gate", "    steps:", "      - uses: actions/checkout@v4", "        with:", "          fetch-depth: 0",
-    "          ref: ${{ github.event.pull_request.base.sha || github.sha }}", "      - name: gate-app-context", "        env:", "          GATE_KEY: ${{ secrets.INSTAGRAM_GATE_APP_KEY }}",
+    "          ref: ${{ github.event.pull_request.base.sha || github.sha }}", "      - name: gate-app-context", "        if: github.event_name == 'pull_request_target'", "        env:", "          GATE_KEY: ${{ secrets.INSTAGRAM_GATE_APP_KEY }}",
     "        run: node scripts/check-instagram-release-gates.mjs --gate migrations --main-ref origin/main --event pull_request_target --candidate $CANDIDATE --head '${{ github.event.pull_request.head.sha }}'",
+    "      - name: protected push gate", "        if: github.event_name == 'push'", "        run: node scripts/check-instagram-release-gates.mjs --gate migrations --main-ref origin/main --event push --head '${{ github.sha }}'",
   ].join("\n");
   fixture.put(WORKFLOW, workflow);
   customize(fixture);
@@ -271,22 +272,66 @@ test("CLI rejects absent mandatory ref and rejects malformed evidence without ex
   assert.ok(!invalid.stderr.includes("private synthetic content"));
 });
 
-test("complete synthetic ledger passes local bookkeeping while live approval and production authorization remain pending", (context) => {
+test("complete synthetic ledger retains local bookkeeping while executable bootstrap and live approval remain pending", (context) => {
   const fixture = fullLedger(context);
   const report = fixture.evaluate();
   assert.deepEqual(report.failures, []);
-  assert.deepEqual(report.blocked, []);
+  assert.deepEqual(report.blocked.map((entry) => entry.code), ["migration_workflow_execution_unverified"]);
   assert.equal(report.acceptance.filter((row) => row.execution === "passed").length, 78);
-  assert.equal(report.localReady, true);
+  assert.equal(report.localReady, false);
   assert.equal(report.releaseReady, false);
   assert.equal(report.productionActivationAuthorized, false);
   assert.ok(report.pendingEvidence.some((entry) => entry.includes("G-L")));
   fixture.ledger.hosted.proofIds = [];
-  assert.equal(fixture.evaluate().localReady, true);
+  assert.deepEqual(fixture.evaluate().blocked.map((entry) => entry.code), ["migration_workflow_execution_unverified"]);
   const release = fixture.evaluate({ phase: "release" });
   assert.equal(release.releaseReady, false);
   assert.ok(codes(release).includes("hosted_evidence_pending"));
   assert.ok(codes(release).includes("live_evidence_pending"));
+});
+
+function executionReceipt(proof, changes = {}) {
+  return { formatVersion: 1, scope: "instagram-release-execution",
+    ...Object.fromEntries(Object.entries(proof).filter(([key]) => !["artifact", "reporter"].includes(key))), ...changes };
+}
+
+test("execution receipts must contain the claimed result instead of arbitrary matching-hash bytes", async (context) => {
+  const fixture = fullLedger(context);
+  for (const [scenario, body, expected] of [
+    ["ordinary reviewed text", "Reviewed, therefore passed", "report_json_invalid"],
+    ["unrelated JSON", JSON.stringify({ passed: true }), "execution_receipt_invalid"],
+    ["different command", JSON.stringify(executionReceipt(fixture.ledger.proofs[0], { command: "true" })), "execution_receipt_mismatch"],
+    ["different source", JSON.stringify(executionReceipt(fixture.ledger.proofs[0], { source: { path: "unrelated.ts", sha256: "0".repeat(64) } })), "execution_receipt_mismatch"],
+    ["hidden retry", JSON.stringify(executionReceipt(fixture.ledger.proofs[0], { attempts: 2 })), "execution_receipt_mismatch"],
+  ]) await context.test(scenario, () => {
+    const ledger = structuredClone(fixture.ledger);
+    ledger.proofs[0].reporter = "receipt";
+    ledger.proofs[0].artifact = fixture.artifact("execution.json", body);
+    assert.ok(codes(fixture.evaluate({ evidence: ledger })).includes(expected));
+  });
+});
+
+test("fabricated matching receipts and approvals never establish authenticated release origin", (context) => {
+  const fixture = fullLedger(context);
+  const ledger = structuredClone(fixture.ledger);
+  const proof = { ...ledger.proofs[0], reporter: "receipt" };
+  proof.artifact = fixture.artifact("local-execution.json", JSON.stringify(executionReceipt(proof)));
+  ledger.proofs[0] = proof;
+  const local = fixture.evaluate({ evidence: ledger });
+  assert.equal(local.acceptance[0].execution, "passed");
+  assert.deepEqual(local.blocked.map((entry) => entry.code), ["migration_workflow_execution_unverified"]);
+  ledger.live = { status: "passed", approvals: ["B1", "B2", "B3", "C1", "C2", "C3", "D1", "D2", "D3", "E1", "E2", "E3-dry-run", "E3-enable", "E4"].map((action, index) => {
+    const liveProof = { ...proof, id: `live-${action}`, environment: "live", command: "node production-read-only-probe.mjs" };
+    liveProof.artifact = fixture.artifact(`live-${action}.json`, JSON.stringify(executionReceipt(liveProof)));
+    ledger.proofs.push(liveProof);
+    return { action, candidate: ledger.candidate, tree: ledger.tree, reference: `synthetic-${action}`, approver: "Waleed",
+      timestamp: `2026-11-01T00:00:${String(index).padStart(2, "0")}Z`, operator: "Synthetic operator", configuration: "Synthetic configuration",
+      accounts: ["opaque-fixture-target"], proofIds: [liveProof.id], artifact: fixture.review };
+  }) };
+  const report = fixture.evaluate({ phase: "release", evidence: ledger });
+  assert.equal(report.releaseReady, false);
+  assert.ok(codes(report).includes("evidence_origin_unverified"));
+  assert.equal(report.productionActivationAuthorized, false);
 });
 
 test("reviewed evidence rejects incomplete, duplicated, failed, skipped, flaky and wrong-scope receipts", async (context) => {
@@ -341,7 +386,10 @@ test("native Playwright result and redaction boundaries cannot be overridden by 
     const ledger = structuredClone(fixture.ledger);
     const normalized = fixture.artifact("normalized-playwright.json", JSON.stringify(report));
     ledger.proofs.forEach((proof) => { proof.artifact = normalized; });
-    assert.equal(fixture.evaluate({ evidence: ledger }).localReady, true);
+    const normalizedReport = fixture.evaluate({ evidence: ledger });
+    assert.deepEqual(normalizedReport.failures, []);
+    assert.equal(normalizedReport.acceptance.filter((row) => row.execution === "passed").length, 78);
+    assert.deepEqual(normalizedReport.blocked.map((entry) => entry.code), ["migration_workflow_execution_unverified"]);
   });
   await context.test("credential evidence is rejected without printing its matching bytes", () => {
     const ledger = structuredClone(fixture.ledger);
@@ -351,6 +399,15 @@ test("native Playwright result and redaction boundaries cannot be overridden by 
     assert.ok(codes(report).includes("artifact_redaction_failed"));
     assert.ok(!JSON.stringify(report).includes("synthetic-secret"));
   });
+  for (const [scheme, credential] of [["postgres userinfo", "postgres://fixture:synthetic-private@db.example.test/database"], ["HTTP userinfo", "https://fixture:synthetic-private@example.test/report"], ["Basic authorization", "Authorization: Basic Zml4dHVyZTpzeW50aGV0aWMtcHJpdmF0ZQ=="]]) {
+    await context.test(`${scheme} cannot enter retained evidence`, () => {
+      const ledger = structuredClone(fixture.ledger);
+      ledger.proofs[0].artifact = fixture.artifact("userinfo.txt", credential);
+      const report = fixture.evaluate({ evidence: ledger });
+      assert.ok(codes(report).includes("artifact_redaction_failed"));
+      assert.ok(!JSON.stringify(report).includes("synthetic-private"));
+    });
+  }
 });
 
 function mergeCandidate(fixture, change) {
@@ -503,6 +560,14 @@ test("claimed bootstrap receipts cannot override unsafe committed workflow behav
     ["elevated repository token", (source) => source.replace("contents: read", "contents: write"), "migration_workflow_permissions"],
     ["unapproved secret", (source) => source.replace("secrets.INSTAGRAM_GATE_APP_KEY", "secrets.OTHER_KEY"), "migration_workflow_secret"],
     ["candidate checkout", (source) => source.replace("github.event.pull_request.base.sha || github.sha", "github.event.pull_request.head.sha"), "migration_workflow_checkout"],
+    ["dummy protected job before untrusted head job", (source) => source + "\n  attack:\n    environment: release-gate\n    steps:\n      - uses: actions/checkout@v4\n        with:\n          ref: ${{ github.event.pull_request.head.sha }}\n      - run: npm test\n", "migration_workflow_execution"],
+    ["head checkout after protected checkout", (source) => source + "\n      - uses: actions/checkout@v4\n        with:\n          ref: ${{ github.event.pull_request.head.sha }}\n", "migration_workflow_checkout"],
+    ["head execution after dummy base checkout", (source) => source + "\n      - run: git checkout $CANDIDATE && npm test\n", "migration_workflow_execution"],
+    ["local action execution", (source) => source + "\n      - uses: ./.github/actions/from-candidate\n", "migration_workflow_execution"],
+    ["checker secret environment belongs to another job", (source) => source.replace("    environment: release-gate\n", "") + "\n  dummy:\n    environment: release-gate\n    steps: []\n", "migration_workflow_execution"],
+    ["markers in comments cannot certify a different command", (source) => source.replace("run: node scripts/check-instagram-release-gates.mjs", "# node scripts/check-instagram-release-gates.mjs\n        run: npm test #"), "migration_workflow_dispatch"],
+    ["runtime preload cannot execute before protected checker", (source) => source.replace("          GATE_KEY:", "          NODE_OPTIONS: --require ./candidate.js\n          GATE_KEY:"), "migration_workflow_execution"],
+    ["custom shell cannot replace the protected command", (source) => source.replace("        env:", "        shell: bash -c 'npm test; {0}'\n        env:"), "migration_workflow_execution"],
   ]) await context.test(scenario, () => {
     const fixture = fullLedger(context, (draft) => draft.put(WORKFLOW, rewrite(readFileSync(join(draft.root, WORKFLOW), "utf8"))));
     assert.ok(codes(fixture.evaluate()).includes(expected));
