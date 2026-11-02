@@ -397,6 +397,7 @@ test("canonical tracking persists a new capture through the real worker and reco
   ]));
   await page.reload();
   await expect(row()).toContainText("120");
+  await expect(row().getByText("2 posts observed · incomplete coverage", { exact: true })).toBeVisible();
   await expect(row().getByText("Official", { exact: true })).toBeVisible();
   await expect(row().getByText("No comparable baseline", { exact: true })).toHaveCount(2);
   await row().getByRole("button", { name: `View report for @${INSTAGRAM_RELEASE.newTarget}`, exact: true }).click();
