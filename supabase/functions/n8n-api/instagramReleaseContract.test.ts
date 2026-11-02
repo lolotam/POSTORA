@@ -30,7 +30,7 @@ async function rest(request: APIRequestContext, path: string, method = "GET", da
 
 async function mcp(request: APIRequestContext, token: string, args: Record<string, unknown>, method = "tools/call") {
   const response = await request.post(`${INSTAGRAM_RELEASE.apiUrl}/functions/v1/mcp/read`, {
-    headers: { Authorization: `Bearer ${token}`, Accept: "application/json, text/event-stream" },
+    headers: { Authorization: `Bearer ${token}`, Accept: "application/json" },
     data: { jsonrpc: "2.0", id: 1, method, params: method === "tools/list" ? {} : { name: "get_post_analytics", arguments: args } },
   });
   expect(response.status()).toBe(200);
