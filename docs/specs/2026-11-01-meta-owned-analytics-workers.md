@@ -35,9 +35,9 @@ Accepted bodies:
 {"action":"retention","platform":"all","dryRun":true}
 ```
 
-For enqueue, drain and retention, `platform` is exactly `facebook`, `threads` or `all`. For admission it is exactly one platform and `accountId` is required. Retention requires an explicit boolean `dryRun`; other actions reject it. Reject unknown keys, body owner IDs, caller limits, due dates, floors, tokens and permission lists. `OPTIONS` performs no work. Only `POST` executes an action. Bound body reads to 8 KiB and the remaining invocation deadline.
+For enqueue, drain and retention, `platform` is exactly `facebook`, `threads` or `all`. For admission it is exactly one platform and `accountId` is required. Retention requires an explicit boolean `dryRun`; other actions reject it. Reject unknown keys, body owner IDs, caller limits, due dates, floors, tokens and permission lists, with one exception: a `dryRun:true` retention request may carry the validated `continuation` object defined in the retention section below. `OPTIONS` performs no work. Only `POST` executes an action. Bound body reads to 8 KiB and the remaining invocation deadline.
 
-Return only action/platform, a truthful status (`complete`, `partial`, `disabled`, `refused` or `unavailable`), sanitized reason and bounded work counts. Never return authority objects, token material, provider bodies, cursors, account text or private measurements. Authentication is 401, invalid input 400, definitive admission/fence refusal 409, and unknown dependency outcome 503. `complete` describes that action's committed receipt, not pilot acceptance.
+Return only action/platform, a truthful status (`complete`, `partial`, `disabled`, `refused` or `unavailable`), sanitized reason and bounded work counts; a partial retention dry run additionally returns the scope-bound `continuation` object. Never return authority objects, token material, provider bodies, provider cursors, account text or private measurements. Authentication is 401, invalid input 400, definitive admission/fence refusal 409, and unknown dependency outcome 503. `complete` describes that action's committed receipt, not pilot acceptance.
 
 ## Admission and permission renewal
 

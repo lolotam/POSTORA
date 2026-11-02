@@ -27,7 +27,9 @@ export class CollectionThrottle {
     if (!usage && status !== 429) return;
     const rawRetry = headers.get("retry-after");
     const retry = rawRetry && /^\d{1,7}$/.test(rawRetry) ? Date.now() + Number(rawRetry) * 1000 : Date.parse(rawRetry ?? "");
-    const until = status === 429 || usage >= 80 ? new Date(Number.isFinite(retry) && retry > Date.now() ? retry : Date.now() + 15 * 60_000).toISOString() : null;
+    const requested = Number.isFinite(retry) && retry > Date.now() ? retry : Date.now() + 15 * 60_000;
+    // A provider-supplied instant is untrusted: never park the shared app bucket beyond one day.
+    const until = status === 429 || usage >= 80 ? new Date(Math.min(requested, Date.now() + 86_000_000)).toISOString() : null;
     await this.store.recordThrottle(this.bucket, usage, until);
   }
 

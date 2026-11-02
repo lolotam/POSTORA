@@ -1400,7 +1400,7 @@ BEGIN
   UPDATE public.fb_analytics_collection_jobs SET state=p_outcome,completed_at=CASE WHEN p_outcome IN ('success','failed') THEN clock_timestamp() END,
     last_success_at=CASE WHEN p_outcome='success' THEN clock_timestamp() ELSE last_success_at END,
     last_partial_at=CASE WHEN p_outcome='partial' THEN clock_timestamp() ELSE last_partial_at END,
-    retry_at=CASE WHEN p_outcome='retry' THEN p_retry_at WHEN p_outcome='partial' THEN clock_timestamp() ELSE NULL END,
+    retry_at=CASE WHEN p_outcome='retry' THEN p_retry_at WHEN p_outcome='partial' THEN CASE WHEN p_retry_at IS NOT NULL AND isfinite(p_retry_at) THEN LEAST(GREATEST(p_retry_at,clock_timestamp()),clock_timestamp()+interval '1 day') ELSE clock_timestamp() END ELSE NULL END,
     reason_code=p_reason,claim_token=NULL,lease_until=NULL,updated_at=clock_timestamp() WHERE id=p_job_id;
   UPDATE public.fb_analytics_report_state SET report_revision=report_revision+1,updated_at=now() WHERE social_account_id=v_job.social_account_id AND user_id=v_job.user_id;
   RETURN jsonb_build_object('job_id',p_job_id,'job_generation',p_job_generation,'state',p_outcome,
@@ -1509,7 +1509,7 @@ BEGIN
   UPDATE public.threads_analytics_collection_jobs SET state=p_outcome,completed_at=CASE WHEN p_outcome IN ('success','failed') THEN clock_timestamp() END,
     last_success_at=CASE WHEN p_outcome='success' THEN clock_timestamp() ELSE last_success_at END,
     last_partial_at=CASE WHEN p_outcome='partial' THEN clock_timestamp() ELSE last_partial_at END,
-    retry_at=CASE WHEN p_outcome='retry' THEN p_retry_at WHEN p_outcome='partial' THEN clock_timestamp() ELSE NULL END,
+    retry_at=CASE WHEN p_outcome='retry' THEN p_retry_at WHEN p_outcome='partial' THEN CASE WHEN p_retry_at IS NOT NULL AND isfinite(p_retry_at) THEN LEAST(GREATEST(p_retry_at,clock_timestamp()),clock_timestamp()+interval '1 day') ELSE clock_timestamp() END ELSE NULL END,
     reason_code=p_reason,claim_token=NULL,lease_until=NULL,updated_at=clock_timestamp() WHERE id=p_job_id;
   UPDATE public.threads_analytics_report_state SET report_revision=report_revision+1,updated_at=now() WHERE social_account_id=v_job.social_account_id AND user_id=v_job.user_id;
   RETURN jsonb_build_object('job_id',p_job_id,'job_generation',p_job_generation,'state',p_outcome,

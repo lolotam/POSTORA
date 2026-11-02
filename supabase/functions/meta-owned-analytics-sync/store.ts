@@ -184,9 +184,11 @@ export class OwnedAnalyticsStore {
       throttled_until: z.string().datetime({ offset: true }).nullable(), job_id: z.null() }).strict(),
     await this.call("record_instagram_provider_throttle_http", { p_bucket_key: bucketKey, p_usage_percent: usage,
       p_throttled_until: until, p_job_id: null, p_claim_token: null, p_job_generation: null }));
-    // PostgreSQL normalizes an instant's spelling; compare the actual instant.
-    if (until === null ? receipt.throttled_until !== null : receipt.throttled_until === null
-      || Date.parse(receipt.throttled_until) !== Date.parse(until)) throw new AnalyticsWorkerStopped("invalid_contract");
+    // The shared bucket retains an already-stored later deadline (GREATEST in the RPC) and PostgreSQL
+    // normalizes an instant's spelling: the receipt must not be earlier than the one requested.
+    if (until !== null && (receipt.throttled_until === null || Date.parse(receipt.throttled_until) < Date.parse(until))) {
+      throw new AnalyticsWorkerStopped("invalid_contract");
+    }
   }
 
   async retentionTargets(platform: OwnedAnalyticsPlatform, dryRun: boolean) {
