@@ -21,6 +21,8 @@ Before a complete release approval card can be presented:
 
 The local owner-browser gap has progressed: all 13 Instagram/Facebook/Threads journeys passed on execution candidate `a98d7fe34e29ff3cf47d2d62caa9dbb622f33f1a`, with unchanged production bytes from the runtime candidate above. The [supplemental proof](../journeys/evidence/2026-11-02-meta-owned-browser-proof.json) records real local Auth/SQL/worker use, synthetic Meta transport and the remaining coverage limits. This does not close canonical G-X, live-provider or schedule acceptance and does not change this package's NO-GO decision.
 
+The [historical competitor journey](../journeys/2026-11-02-instagram-historical-growth.md) supplies local assembled E2 evidence with eight successful canonical journeys at `d1ff8c8f75c026bc5a9d2b0e341c02118f650155`. That batch changes fixture/browser tests only; it adds no deployment artifact and no live elapsed-history or provider acceptance. Outlier J7 and the remaining canonical/release prerequisites are still open.
+
 ## Ordered schema artifacts
 
 These eleven files are absent from the last verified production lineage and are proposed in this exact order. The first ten are in the older artifact manifest; the eleventh is the separately attributed weekly correction above and must enter the refrozen final manifest. Application is a separate approval from PR review/merge. `20261101023000_instagram_collection_http_fences.sql` was separately approved/applied earlier and must not be reapplied as if new.

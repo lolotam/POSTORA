@@ -1,0 +1,256 @@
+{
+  "version": 1,
+  "recordedAt": "2026-11-02T06:45:29.112Z",
+  "source": "d1ff8c8f75c026bc5a9d2b0e341c02118f650155",
+  "tree": "bf8ee015409937acdf24ab91ddb077a2c680aac0",
+  "executionCheckout": "F:/Dev/Worktrees/Postora_new/canonical-discovery-538ef365",
+  "evidenceAuthority": "Author-recorded local execution, not independent G-X acceptance or production approval",
+  "scope": "Historical E2 real SQL/report/browser growth, refusal reasons, negative changes, list/detail and observed-week parity; no provider calls for saved reads",
+  "inputs": [
+    {
+      "path": "e2e/instagram-release.spec.ts",
+      "gitBlob": "c5d28c147dcaa44858f6a87723d904c91e2b1f97",
+      "gitSha256": "ce8e29a21003357a4adf64f08d8db1df5b1fd2c92826fa977496217cc847a77a",
+      "executionSha256": "aa4ed2808c084f1a1b27c26a9e91920b82d9d1460bc3d2019c289ee02aa88991",
+      "normalizedExecutionSha256": "ce8e29a21003357a4adf64f08d8db1df5b1fd2c92826fa977496217cc847a77a"
+    },
+    {
+      "path": "e2e/fixtures/instagramRelease.ts",
+      "gitBlob": "d8e534a91ff75c74435954b32561c766acef61f8",
+      "gitSha256": "fecd520c2f40fbbe05dd0a6196aee9a35fd80cfafe62192f1fd10078188499a8",
+      "executionSha256": "07b61d6ba3f85edf5c5f5f9ca85757f1c38c0882bed73439a762e4ea2ca63cb6",
+      "normalizedExecutionSha256": "fecd520c2f40fbbe05dd0a6196aee9a35fd80cfafe62192f1fd10078188499a8"
+    },
+    {
+      "path": "e2e/fixtures/instagramReleaseSeed.ts",
+      "gitBlob": "006a4a8c877cdffd36bc05ca10bbbe172edb3290",
+      "gitSha256": "2b4165aec54a239ddc723e5fc4da0175142f917c6e65f17647c57c406216eccf",
+      "executionSha256": "865bd4092ea762938dd04351e6f281bdcad7def62229585de0328a2f809ab168",
+      "normalizedExecutionSha256": "2b4165aec54a239ddc723e5fc4da0175142f917c6e65f17647c57c406216eccf"
+    },
+    {
+      "path": "e2e/fixtures/instagramReleaseServer.ts",
+      "gitBlob": "db7f577ec9ea94694600870eb6eddd4c5e15dc2c",
+      "gitSha256": "aed048f4f5f457acfbb2f6a10dfa7b14e194b2af760478f3ff478b205f0d2e7c",
+      "executionSha256": "c1e88ab630fd1359cd7afceb645a4bbb0fe42e9601045dae58ecb27ca38555df",
+      "normalizedExecutionSha256": "aed048f4f5f457acfbb2f6a10dfa7b14e194b2af760478f3ff478b205f0d2e7c"
+    },
+    {
+      "path": "e2e/fixtures/instagramReleaseBrowser.ts",
+      "gitBlob": "80eafa851c51c5d86cf4794102d7b3dc94525938",
+      "gitSha256": "d9f97105776d5f483ad2c37bf8076098041fe0adc41a1243ed6570d2dcf680c7",
+      "executionSha256": "14b555717e960545ce424c85c037971b8831569add749662f7dd8b2f113fa699",
+      "normalizedExecutionSha256": "d9f97105776d5f483ad2c37bf8076098041fe0adc41a1243ed6570d2dcf680c7"
+    },
+    {
+      "path": "src/features/competitor-tracking/domain/formatters.ts",
+      "gitBlob": "aab3f3c0da9f099c9be4e561448e55cdb18e371e",
+      "gitSha256": "d8425d2b77f8e393819cd8f0edc78b6633c5c8585af2a83f2e90810aaa01de2f",
+      "executionSha256": "079b00a2f51a2c33cff11b7522ce80a91ed40cdf19c8bf2b9f0cb374514f3dcc",
+      "normalizedExecutionSha256": "d8425d2b77f8e393819cd8f0edc78b6633c5c8585af2a83f2e90810aaa01de2f"
+    },
+    {
+      "path": "src/features/competitor-tracking/ui/CompetitorList.tsx",
+      "gitBlob": "699aff41ed282f93e31211f25b0013a971b488cf",
+      "gitSha256": "74c49a8dcd9dfd9ddb212dbfbeb5b62f00046281d24f01373eadcb7ccc6fb339",
+      "executionSha256": "89a3ec90c4d6b10a81ae41eb53d5c526127f1fb3aef2eba7787fc9c88b624aa4",
+      "normalizedExecutionSha256": "74c49a8dcd9dfd9ddb212dbfbeb5b62f00046281d24f01373eadcb7ccc6fb339"
+    },
+    {
+      "path": "src/features/competitor-tracking/ui/CompetitorDetailSheet.tsx",
+      "gitBlob": "4de1a2a8a75baac1d65aea7ef8b8db78d928dfea",
+      "gitSha256": "e38c698adb44942f529716472e79c3e4cd80eb9bf3a660a4beb54818ddb17575",
+      "executionSha256": "ad515b11822ba3d357dcb5c9ab06b178f93f9d6a24f4932c9eba18fded18e392",
+      "normalizedExecutionSha256": "e38c698adb44942f529716472e79c3e4cd80eb9bf3a660a4beb54818ddb17575"
+    },
+    {
+      "path": "supabase/migrations/20261030110000_competitor_tracking_report.sql",
+      "gitBlob": "eec8e8eeb7b9ccfc87547cdd3f4b002b4f8c0c7a",
+      "gitSha256": "6709cae84fe26da92df07e6c566b33ba45bcb01fc80208f33b5056ab8a566eff",
+      "executionSha256": "00db5a64ce8e1f6681ce1ba53cba6cdeea1e59ab7e0acfc4f5c3fb067cd0cc5d",
+      "normalizedExecutionSha256": "6709cae84fe26da92df07e6c566b33ba45bcb01fc80208f33b5056ab8a566eff"
+    },
+    {
+      "path": "supabase/migrations/20261102090000_competitor_weekly_inventory_projection.sql",
+      "gitBlob": "19f48adb29cdee68322bd47b4bf86f183be1c639",
+      "gitSha256": "2a8f56d3b0e051ffc94a85e18379d69003756ba5421e5c600665c3a448adf429",
+      "executionSha256": "0c35747148e683a0ff9fd8ce40e07889101113f4fd566aa54627587f11c940d3",
+      "normalizedExecutionSha256": "2a8f56d3b0e051ffc94a85e18379d69003756ba5421e5c600665c3a448adf429"
+    },
+    {
+      "path": "supabase/functions/competitor-tracking-report/growth.ts",
+      "gitBlob": "6127c48054886a84503a57fd422f7c5131851dac",
+      "gitSha256": "7637354086407cdab93165153d3374d9f07f140367b7dfa81724e06c33259706",
+      "executionSha256": "979ded38355c4f7a34f0c0b2a75f19310288f186674d4c4331ddc15f29429800",
+      "normalizedExecutionSha256": "7637354086407cdab93165153d3374d9f07f140367b7dfa81724e06c33259706"
+    },
+    {
+      "path": "supabase/functions/competitor-tracking-report/weeklyInventory.ts",
+      "gitBlob": "149de1fe5542b4af47e29a9e96848f9e9206e054",
+      "gitSha256": "eeafb4b98aff76d395a040cc6b0d2c08ec208471d346dfd715d8226221798a98",
+      "executionSha256": "2c3e19f6b2fe6125a4fb9a8ea7555460a70f571459bf3255d8dc2b40a5ecd4e1",
+      "normalizedExecutionSha256": "eeafb4b98aff76d395a040cc6b0d2c08ec208471d346dfd715d8226221798a98"
+    }
+  ],
+  "canonical": {
+    "startTime": "2026-11-02T06:43:03.100Z",
+    "duration": 117776.36,
+    "expected": 8,
+    "skipped": 0,
+    "unexpected": 0,
+    "flaky": 0,
+    "tests": [
+      {
+        "title": "canonical fixture smoke: real Auth, ordinary owners, separate admin and SQL quota state",
+        "status": "passed",
+        "retry": 0
+      },
+      {
+        "title": "canonical discovery preserves official provenance, nullable media and owner-scoped cache through saved history",
+        "status": "passed",
+        "retry": 0
+      },
+      {
+        "title": "canonical discovery keeps ambiguous viewer failures out of target eligibility and labels only explicitly enabled third-party fallback",
+        "status": "passed",
+        "retry": 0
+      },
+      {
+        "title": "canonical historical growth preserves real intervals and refuses zero, missing, stale and changed-source baselines",
+        "status": "passed",
+        "retry": 0
+      },
+      {
+        "title": "canonical quota management refuses extra activations, serializes the final slot and preserves downgrade and unlimited behavior",
+        "status": "passed",
+        "retry": 0
+      },
+      {
+        "title": "canonical tracking persists a new capture through the real worker and reconciles a lost save response without replay",
+        "status": "passed",
+        "retry": 0
+      },
+      {
+        "title": "SQL-backed Instagram reports retain metrics, nulls, outliers and freshness through API and scoped MCP",
+        "status": "passed",
+        "retry": 0
+      },
+      {
+        "title": "registered analytics routes refuse foreign owners, missing scopes and cursors without inventing Instagram capability",
+        "status": "passed",
+        "retry": 0
+      }
+    ]
+  },
+  "databasePreparation": {
+    "directory": "F:/Dev/Temp/postora-owner-release-prepare-J9ybKW",
+    "newerMigrations": 152,
+    "baselineSqlSuites": 70,
+    "isolatedSqlSuites": 1
+  },
+  "assertions": [
+    "Latest 120 followers with 100 at seven days and 80 at thirty days gives +20/20% and +40/50%; exact baseline/end instants and actual intervals retained",
+    "Zero/null/missing/outside-S=3-day baselines retain null numeric outputs, visible reason and dash, never invented 0%",
+    "An intervening source change disqualifies an otherwise same-source eligible comparison",
+    "Negative follower changes remain valid",
+    "Complete three-post week is distinct from thirty observed posts with incomplete coverage and legacy unknown coverage",
+    "List/detail growth and weekly aggregates agree; saved report reads add no provider or paid calls"
+  ],
+  "checks": {
+    "strictE2eTypecheck": "passed on execution source",
+    "scopedEslint": "passed",
+    "denoServerCheck": "passed",
+    "immutableLintI18n": {
+      "base": "7eb581600b779e685dae71950ac0e61eb0186bf6",
+      "head": "d1ff8c8f75c026bc5a9d2b0e341c02118f650155",
+      "result": "NO REGRESSIONS",
+      "historicalDebtRemains": true
+    },
+    "frontendBuild": "Not rerun; only fixture/browser test inputs changed, earlier frontend evidence retains its own source"
+  },
+  "retainedFailure": {
+    "source": "573e58a58b21b8e79cce4e91c0a69a73ae912ce2",
+    "passed": 7,
+    "failed": 1,
+    "reason": "Initial source-switch seed had no same-source baseline and correctly returned missing_baseline under approved spec section 11. Added same-source historical observations before intervening different-source captures to exercise source_changed without changing the report policy.",
+    "artifacts": ".tmp/growth-573e58a5-failure-artifacts/"
+  },
+  "cleanup": {
+    "users": 1,
+    "namespace_settings": 0,
+    "scrape_sessions": 0,
+    "scrape_cache": 0,
+    "fixture_oauth_clients": 0,
+    "collection_jobs": 0,
+    "profiles": 0,
+    "media": 0,
+    "coverage": 0,
+    "active_cron": 0,
+    "cron_launcher": "off",
+    "live_leases": 0,
+    "httpListenersStopped": true
+  },
+  "artifacts": [
+    {
+      "path": ".tmp/growth-573e58a5-playwright.log",
+      "sha256": "b5af8862dd3146b7203768496a84b23f3df3c43717cb07abf9fa1fb80520e9cc"
+    },
+    {
+      "path": ".tmp/growth-573e58a5-playwright.json",
+      "sha256": "d9b2fe9da616f731361b5407e81ecea633173ba73458e7637529a728bd7d6541"
+    },
+    {
+      "path": ".tmp/growth-corrected-typecheck.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": ".tmp/growth-corrected-eslint.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": ".tmp/growth-d1ff8c8f-final-types.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": ".tmp/growth-d1ff8c8f-prepare.log",
+      "sha256": "f271ce017cb0011dfb07c080b95f3ff2c7483220c5429bb875d9761130026941"
+    },
+    {
+      "path": ".tmp/growth-d1ff8c8f-deno-check.log",
+      "sha256": "fa236573c48c4a6c9c0f821bbdc1b66bb0d1f800ee46c7d4aeef838fad0c143b"
+    },
+    {
+      "path": ".tmp/growth-d1ff8c8f-playwright.log",
+      "sha256": "487dcc0e2529b472e17d54212d9795871b1805ea5acbb1fd419673c97634f4a7"
+    },
+    {
+      "path": ".tmp/growth-d1ff8c8f-playwright.json",
+      "sha256": "f4599dc6d4c72079b911edc231cbb63345a9c2a00291ee3c1961513596e51c2a"
+    },
+    {
+      "path": ".tmp/growth-d1ff8c8f-cleanup.json",
+      "sha256": "f748763300b1f5cbc4ad75d7e0b921999398dc7f96dfd65a64ad305c10e0abf6"
+    },
+    {
+      "path": ".tmp/growth-d1ff8c8f-lint-i18n.log",
+      "sha256": "cb3a388d65f3ebc4f50b2ec538731cb28fadc6bd500137d3afeaac417c2edb73"
+    },
+    {
+      "path": ".tmp/growth-d1ff8c8f-graph-update.log",
+      "sha256": "e021746dd88b640c3414e2756c12ecf03e9c3f3fd8b1fe8f2f81e19a7c7fd245"
+    },
+    {
+      "path": "F:/Dev/Temp/postora-owner-release-prepare-J9ybKW/database-harness.log",
+      "sha256": "8cc33bb1db210e32f92af0bf65231d87c6f495f5c54e551e6d9bc67039de6bcf"
+    }
+  ],
+  "releaseReady": false,
+  "productionActivationAuthorized": false,
+  "remaining": [
+    "Outlier J7 and other canonical J/E journeys",
+    "Canonical Instagram metric/calendar and worker/report/UI adoption",
+    "Protected reconnect and verified provider-specific eligibility/threshold signals",
+    "Trusted workflow/bootstrap/CODEOWNERS, independent review and migration-history recovery",
+    "Separately approved production prerequisite/runtime/activation, Meta reconciliation and seven distinct successful scheduled due dates per platform"
+  ]
+}
