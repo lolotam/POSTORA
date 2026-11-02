@@ -33,8 +33,12 @@ async function createReleaseUsers(manifest: InstagramReleaseManifest): Promise<v
 }
 
 async function pristineReleaseDatabase(): Promise<void> {
+  // db-harness.sh retains this non-login sentinel after its SQL suites. Preserve it;
+  // every other Auth identity means the candidate database has already been used.
   const receipt = JSON.parse(await ownerReleaseSql(`SELECT jsonb_build_object('database',current_database(),
-    'users',(SELECT count(*) FROM auth.users),'active_cron',(SELECT count(*) FROM cron.job WHERE active),
+    'users',(SELECT count(*) FROM auth.users WHERE (id='0e5eeee1-0000-4000-8000-000000000001'
+      AND email='harness-seed@example.invalid' AND encrypted_password IS NULL) IS NOT TRUE),
+    'active_cron',(SELECT count(*) FROM cron.job WHERE active),
     'cron_launcher',current_setting('cron.launch_active_jobs'),
     'required',to_regclass('public.competitor_capture_coverage') IS NOT NULL
       AND to_regprocedure('public.read_own_competitor_quota()') IS NOT NULL
