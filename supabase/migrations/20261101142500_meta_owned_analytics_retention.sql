@@ -84,6 +84,7 @@ BEGIN
   SELECT COALESCE(jsonb_agg(jsonb_build_object('account_id',t.account_id,'last_visited_at',v.last_visited_at)
     ORDER BY v.last_visited_at NULLS FIRST,t.account_id),'[]'::jsonb) INTO v_targets
     FROM (SELECT (e#>>'{}')::uuid account_id FROM jsonb_array_elements(v_policy->'account_ids') e) t
+    JOIN public.social_accounts a ON a.id=t.account_id AND a.platform=p_platform
     LEFT JOIN public.meta_analytics_retention_visits v ON v.social_account_id=t.account_id AND v.platform=p_platform;
   RETURN jsonb_build_object('state','enabled','targets',v_targets);
 END;

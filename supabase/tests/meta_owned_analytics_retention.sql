@@ -110,6 +110,39 @@ END;
 $cleanup$;
 RESET ROLE;
 DO $visited$ BEGIN ASSERT EXISTS(SELECT 1 FROM public.meta_analytics_retention_visits WHERE social_account_id='b3000000-0000-4000-8000-000000000001'),'real no-op visit yields to other targets';END;$visited$;
+-- Deleted or wrong-platform policy entries cannot consume bounded visits.
+UPDATE public.app_settings SET value=jsonb_build_object('account_ids',jsonb_build_array(
+  'b3000000-0000-4000-8000-000000000001','b4000000-0000-4000-8000-000000000001','b9000000-0000-4000-8000-000000000001'))
+  WHERE key='retention_threads_analytics_policy';
+SET LOCAL ROLE service_role;
+DO $targets$ BEGIN
+  ASSERT jsonb_array_length(public.list_meta_analytics_retention_targets('threads',true)->'targets')=1,'only current accounts of this platform are listed';
+END;$targets$;
+RESET ROLE;
+-- Listing never authorizes a later cleanup after the current policy changes.
+UPDATE public.app_settings SET value='false'::jsonb WHERE key='retention_threads_analytics_enabled';
+SET LOCAL ROLE service_role;
+DO $disabled$
+BEGIN
+  BEGIN
+    PERFORM public.cleanup_meta_analytics_target('threads','b3000000-0000-4000-8000-000000000001',
+      ((clock_timestamp() AT TIME ZONE 'UTC')::date-365)::timestamp AT TIME ZONE 'UTC',500,false);
+    RAISE EXCEPTION 'cleanup bypassed disabled policy';
+  EXCEPTION WHEN SQLSTATE 'MAH03' THEN NULL; END;
+END;$disabled$;
+RESET ROLE;
+UPDATE public.app_settings SET value='true'::jsonb WHERE key='retention_threads_analytics_enabled';
+UPDATE public.app_settings SET value='{"account_ids":[]}'::jsonb WHERE key='retention_threads_analytics_policy';
+SET LOCAL ROLE service_role;
+DO $removed$
+BEGIN
+  BEGIN
+    PERFORM public.cleanup_meta_analytics_target('threads','b3000000-0000-4000-8000-000000000001',
+      ((clock_timestamp() AT TIME ZONE 'UTC')::date-365)::timestamp AT TIME ZONE 'UTC',500,false);
+    RAISE EXCEPTION 'cleanup bypassed removed account';
+  EXCEPTION WHEN SQLSTATE 'MAH03' THEN NULL; END;
+END;$removed$;
+RESET ROLE;
 -- Independent invocations use durable platform turns, even when the first job is partial again.
 UPDATE public.social_accounts SET is_active=true WHERE id IN ('b4000000-0000-4000-8000-000000000001','b3000000-0000-4000-8000-000000000001');
 UPDATE public.app_settings SET value='true'::jsonb WHERE key IN ('collection_facebook_analytics_enabled','collection_threads_analytics_enabled');

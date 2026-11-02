@@ -13,7 +13,10 @@ type CompleteMetric = Exclude<MetricValue, { status: "partial" }>;
 export function threadsSnapshotMetric(row: DailyAnalyticsRow & Pick<ThreadsMetricRow, "total_value">, windowKind: "point_in_time" | "lifetime"): CompleteMetric {
   const expectedPeriod = windowKind === "point_in_time" ? "day" : "lifetime";
   if (row.period !== undefined && row.period !== expectedPeriod) return unavailableMetric("window_mismatch");
-  if (row.total_value !== undefined) return count(row.total_value.value);
+  if (row.total_value !== undefined) {
+    const total = count(row.total_value.value);
+    if (total.status === "available" || windowKind !== "lifetime") return total;
+  }
   return windowKind === "lifetime" && row.values?.length === 1 ? count(row.values[0].value) : unavailableMetric("provider_error");
 }
 

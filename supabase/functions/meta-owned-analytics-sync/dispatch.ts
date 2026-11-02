@@ -14,18 +14,23 @@ function isTargetRefusal(error: unknown): error is AnalyticsWorkerStopped {
 }
 
 /** Ranking is only a hint; actual tickets and commits repeat current SQL checks. */
-async function dispatchOrder(input: DispatchInput): Promise<{ platforms: OwnedAnalyticsPlatform[]; disabled: number }> {
-  if (input.platform !== "all") return { platforms: [input.platform], disabled: 0 };
-  const hints: { platform: OwnedAnalyticsPlatform; round: number; servedAt: number }[] = [];
+async function dispatchOrder(input: DispatchInput): Promise<{ platforms: OwnedAnalyticsPlatform[]; disabled: number; completed: number; refused: boolean }> {
+  if (input.platform !== "all") return { platforms: [input.platform], disabled: 0, completed: 0, refused: false };
+  const hints: { platform: OwnedAnalyticsPlatform; round: number; servedAt: number; complete: boolean; refused: boolean }[] = [];
   let disabled = 0;
   for (const platform of ["facebook", "threads"] as const) {
     const next = await input.store.nextDispatch(platform, false);
     if (next.state === "disabled") { disabled++; continue; }
     const round = next.state === "target" ? next.ticket.round : next.state === "complete" ? next.round + 1 : 1;
-    hints.push({ platform, round, servedAt: next.state === "not_started" ? -Infinity : Date.parse(next.served_at) });
+    hints.push({ platform, round, servedAt: next.state === "not_started" ? -Infinity : Date.parse(next.served_at),
+      complete: next.state === "complete", refused: next.state === "complete" && next.refused_count > 0 });
   }
   hints.sort((left, right) => left.round - right.round || left.servedAt - right.servedAt || left.platform.localeCompare(right.platform));
-  return { platforms: hints.map((hint) => hint.platform), disabled };
+  // Reopening a finished round must wait until its peer finishes the current one.
+  // Once all enabled platforms finish, a later invocation may start a new round.
+  const skipped = hints.some((hint) => !hint.complete) ? hints.filter((hint) => hint.complete) : [];
+  return { platforms: hints.filter((hint) => !skipped.includes(hint)).map((hint) => hint.platform), disabled,
+    completed: skipped.length, refused: skipped.some((hint) => hint.refused) };
 }
 
 /** A completed enumeration is not a completed measurement job. */
@@ -33,9 +38,9 @@ export async function dispatchOwnedAnalyticsDaily(input: DispatchInput): Promise
   const counts: DispatchCounts = { visited: 0, queued: 0, refused: 0 };
   try {
     const ordered = await dispatchOrder(input);
-    let completed = ordered.disabled;
+    let completed = ordered.disabled + ordered.completed;
     let disabled = ordered.disabled;
-    let refusedEarlier = false;
+    let refusedEarlier = ordered.refused;
     for (const platform of ordered.platforms) {
       let start = true;
       while (counts.visited < 50 && input.deadline.remainingMs >= 15_000) {
@@ -55,6 +60,7 @@ export async function dispatchOwnedAnalyticsDaily(input: DispatchInput): Promise
               store: input.store, deadline: input.deadline, fetch: input.fetch });
           } catch (error) {
             if (!isTargetRefusal(error)) throw error;
+            if (error.sqlstate === "MAH04") return { status: "partial", counts, reason: "dispatch_changed" };
             admitted = { status: "refused", reason: "admission_refused" };
           }
           if (admitted.status === "refused" && admitted.reason === "rate_limited") return { status: "partial", counts, reason: "rate_limited" };

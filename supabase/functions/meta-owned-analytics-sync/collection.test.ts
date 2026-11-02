@@ -11,8 +11,10 @@ import { analyticsDefinitions } from "../_shared/analyticsRegistry.ts";
 import { analyticsDayBucket } from "../_shared/analyticsCalendar.ts";
 import { z } from "https://esm.sh/zod@3.25.76";
 import { facebookCollection } from "./facebookCollection.ts";
-import { CollectionProviderRefused } from "./collectionProvider.ts";
-import type { AnalyticsCapture } from "./store.ts";
+import { CollectionProviderRefused, collectionPost } from "./collectionProvider.ts";
+import { OwnedAnalyticsStore, type AnalyticsCapture, type AnalyticsClaim } from "./store.ts";
+import { collectionBucketKey, CollectionThrottle } from "./throttle.ts";
+import { AnalyticsWorkerDeadline } from "./deadline.ts";
 
 Deno.test("a collected day preserves zero and distinguishes missing, duplicate and misaligned cells", async (test) => {
   const day = analyticsDayBucket("2026-11-01", "America/Los_Angeles");
@@ -42,10 +44,11 @@ Deno.test("a collected day preserves zero and distinguishes missing, duplicate a
 
 Deno.test("Threads snapshots share live and saved decoding without inventing daily periods", async (test) => {
   const windows = closedAnalyticsPeriods({ now: "2026-11-01T12:00:00Z", days: 7, timezone: "America/Los_Angeles" });
-  for (const kind of ["profile", "post"] as const) for (const scenario of ["zero_total", "single_lifetime_value", "wrong_period", "missing_value"] as const) {
+  for (const kind of ["profile", "post"] as const) for (const scenario of ["zero_total", "single_lifetime_value", "null_total_with_value", "wrong_period", "missing_value"] as const) {
     await test.step(`${kind}: ${scenario}`, async () => {
       const definition = analyticsDefinitions("threads", kind === "profile" ? "account" : "post").find((entry) => entry.key === (kind === "profile" ? "followers" : "views"))!;
-      const row = { name: definition.providerMetric!, ...(scenario === "single_lifetime_value" ? { period: "lifetime" as const, values: [{ value: 0 }] }
+      const row = { name: definition.providerMetric!, ...(scenario === "null_total_with_value" ? { total_value: { value: null }, values: [{ value: 0 }] }
+        : scenario === "single_lifetime_value" ? { period: "lifetime" as const, values: [{ value: 0 }] }
         : { ...(scenario === "wrong_period" ? { period: "week" as const } : {}), total_value: { value: scenario === "missing_value" ? null : 0 } }) };
       const reply = { data: { data: [row] }, error: null, status: 200, retryAt: null };
       const provider = new ThreadsInsightsProvider({ token: "fixture-threads", startedAt: Date.now(), signal: new AbortController().signal,
@@ -56,7 +59,7 @@ Deno.test("Threads snapshots share live and saved decoding without inventing dai
       const cells = await threadsCollection(provider, "773001", windows.current.buckets[0]).metrics(capture, [definition]);
       const live = kind === "post" ? projectThreadsPostMetric(definition, reply, "2026-11-01T12:00:00Z")
         : projectThreadsAccountMetric({ definition, current: reply, previous: reply, windows, observedAt: "2026-11-01T12:00:00Z" });
-      const expected: MetricValue = scenario === "zero_total" || kind === "post" && scenario === "single_lifetime_value" ? { status: "available", value: 0 }
+      const expected: MetricValue = scenario === "zero_total" || kind === "post" && ["single_lifetime_value", "null_total_with_value"].includes(scenario) ? { status: "available", value: 0 }
         : { status: "unavailable", reason: scenario === "wrong_period" || scenario === "single_lifetime_value" ? "window_mismatch" : "provider_error" };
       assertEquals(cells[definition.key], expected);
       assertEquals(live.current, expected);
@@ -121,4 +124,37 @@ Deno.test("an unknown usage write leaves the actual transport unchanged for the 
   let caught: unknown;
   try { await transport.request(["me"], {}, z.object({ id: z.string() })); } catch (error) { caught = error; }
   assertEquals(caught, failure, "A store outcome must not become a sanitized successful/failed provider response");
+});
+
+Deno.test("app usage stops another account and survives credential rotation", async () => {
+  const job: AnalyticsClaim = { platform: "threads", job_id: "c2000000-0000-4000-8000-000000000001", job_generation: 1,
+    user_id: "c1000000-0000-4000-8000-000000000001", account_id: "c3000000-0000-4000-8000-000000000001",
+    claim_token: "c4000000-0000-4000-8000-000000000001", lease_until: "2026-11-02T20:00:00Z", due_on: "2026-11-02",
+    due_at: "2026-11-02T08:00:00Z", next_due_at: "2026-11-03T08:00:00Z",
+    authority: { platform_user_id: "773001", credential_generation: 1, token_expires_at: null } };
+  const deadline = new AnalyticsWorkerDeadline(Date.now(), new AbortController().signal);
+  let persisted: { usage_percent: number; throttled_until: string | null } | null = null;
+  const store = new OwnedAnalyticsStore(async (name, args) => {
+    if (name === "record_instagram_provider_throttle_http") {
+      persisted = { usage_percent: Number(args.p_usage_percent), throttled_until: args.p_throttled_until as string | null };
+      return { data: { bucket_key: args.p_bucket_key, ...persisted, job_id: null }, error: null };
+    }
+    return { data: persisted, error: null };
+  }, deadline);
+  const bucket = await collectionBucketKey(job, "770001");
+  await new CollectionThrottle(store, bucket, deadline).afterResponse(200, new Headers({ "x-app-usage": '{"call_count":85}' }));
+  for (const authority of [{ platform_user_id: "773002", credential_generation: 1, token_expires_at: null },
+    { platform_user_id: "773001", credential_generation: 2, token_expires_at: null }]) {
+    const nextBucket = await collectionBucketKey({ ...job, authority }, "770001");
+    assertEquals(nextBucket, bucket);
+    await assertRejects(() => new CollectionThrottle(store, nextBucket, deadline).beforeRequest(), CollectionProviderRefused);
+  }
+  assertEquals(await collectionBucketKey(job, "770002") === bucket, false);
+});
+
+Deno.test("post metadata truncation preserves complete Unicode characters at the SQL boundary", () => {
+  for (const [text, expected] of [["a".repeat(9999) + "😀suffix", "a".repeat(9999)],
+    ["a".repeat(9998) + "😀suffix", "a".repeat(9998) + "😀"], ["short", "short"]]) {
+    assertEquals(collectionPost({ text, published_at: "2026-11-01T00:00:00Z", permalink: null }).text, expected);
+  }
 });

@@ -58,7 +58,8 @@ export async function verifyAdmissionPermission(input: {
   const expectedUser = "provider_user_id" in credential.authority ? credential.authority.provider_user_id : credential.authority.platform_user_id;
   if (grant.user_id === undefined) throw new AnalyticsWorkerStopped("invalid_contract");
   if (grant.user_id !== expectedUser) return { ok: false, reason: "identity_mismatch" };
-  if ((platform === "facebook" || grant.app_id !== undefined) && grant.app_id !== app.id) return { ok: false, reason: "app_mismatch" };
+  if (platform === "facebook" && grant.app_id === undefined) throw new AnalyticsWorkerStopped("invalid_contract");
+  if (grant.app_id !== undefined && grant.app_id !== app.id) return { ok: false, reason: "app_mismatch" };
   if (!grant.scopes || new Set(grant.scopes).size !== grant.scopes.length) throw new AnalyticsWorkerStopped("invalid_contract");
   const operational = new MetaAnalyticsTransport<PermissionFailure>({ ...options, token: credential.access_token });
   const identity = await operational.request(["me"], { fields: "id" }, identitySchema);

@@ -16,8 +16,9 @@ BEGIN
   PERFORM public.meta_analytics_assert_service();
   IF p_platform IS NULL OR p_platform NOT IN ('facebook','threads','all') THEN
     RAISE EXCEPTION 'META_ANALYTICS_INVALID_PLATFORM' USING ERRCODE='MAH01'; END IF;
-  -- Ordering is a non-locking hint. Native claims retain parent-first locks
-  -- and repeat current policy/authority before issuing a claim.
+  -- Serialize the turn decision before reading either row. Native claims keep
+  -- their parent-first locks and repeat current policy/authority checks.
+  PERFORM pg_advisory_xact_lock(hashtextextended('meta_analytics_worker_turn',0));
   FOR v_platform IN SELECT platform FROM public.meta_analytics_worker_turns
     WHERE p_platform='all' OR platform=p_platform ORDER BY last_claimed_at,platform LOOP
     IF v_platform='facebook' THEN v_jobs:=public.claim_fb_analytics_collection_jobs(1);

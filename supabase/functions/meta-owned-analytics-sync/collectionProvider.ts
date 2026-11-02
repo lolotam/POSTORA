@@ -70,5 +70,7 @@ export function collectionPost(post: CollectionPost): CollectionPost {
   if (post.permalink !== null && (!/^https:\/\/[^\s]+$/.test(post.permalink) || post.permalink.length > 2048)) {
     throw new CollectionProviderRefused("provider_error");
   }
-  return { ...post, text: post.text.slice(0, 10000) };
+  // Avoid splitting a surrogate pair at the SQL text limit.
+  const prefix = post.text.slice(0, 10000);
+  return { ...post, text: /[\uD800-\uDBFF]$/.test(prefix) ? prefix.slice(0, -1) : prefix };
 }

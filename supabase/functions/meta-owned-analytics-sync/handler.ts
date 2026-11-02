@@ -3,7 +3,7 @@ import { handleRestrictedCorsOptions, restrictedJsonResponse } from "../_shared/
 import { admitOwnedAnalyticsAccount } from "./admission.ts";
 import { dispatchOwnedAnalyticsDaily, type DispatchCounts } from "./dispatch.ts";
 import { drainOwnedAnalytics, type DrainCounts } from "./worker.ts";
-import { retainOwnedAnalytics, type RetentionCounts } from "./retention.ts";
+import { retainOwnedAnalytics, retentionContinuation, type RetentionContinuation, type RetentionCounts } from "./retention.ts";
 import { AnalyticsWorkerDeadline, AnalyticsWorkerStopped } from "./deadline.ts";
 import type { AdmissionApp } from "./permissionProvider.ts";
 import { OwnedAnalyticsStore, type AnalyticsRpc, type OwnedAnalyticsPlatform } from "./store.ts";
@@ -12,8 +12,9 @@ const syncRequest = z.discriminatedUnion("action", [
   z.object({ action: z.literal("admit"), platform: z.enum(["facebook", "threads"]), accountId: z.string().uuid() }).strict(),
   z.object({ action: z.literal("enqueue-daily"), platform: z.enum(["facebook", "threads", "all"]) }).strict(),
   z.object({ action: z.literal("drain"), platform: z.enum(["facebook", "threads", "all"]) }).strict(),
-  z.object({ action: z.literal("retention"), platform: z.enum(["facebook", "threads", "all"]), dryRun: z.boolean() }).strict(),
-]);
+  z.object({ action: z.literal("retention"), platform: z.enum(["facebook", "threads", "all"]), dryRun: z.boolean(), continuation: retentionContinuation.optional() }).strict(),
+]).refine((input) => input.action !== "retention" || input.dryRun || input.continuation === undefined,
+  { message: "Continuation is only valid for retention dry runs" });
 type WorkCounts = DispatchCounts | DrainCounts | RetentionCounts;
 export type OwnedAnalyticsAudit = { event: "owned_analytics_admission" | "owned_analytics_dispatch" | "owned_analytics_drain" | "owned_analytics_retention"; status: string; reason: string | null;
   platform: OwnedAnalyticsPlatform | "all" | null; accountId: string | null; dryRun?: boolean; retentionFloor?: string; counts?: WorkCounts };
@@ -68,14 +69,17 @@ export function createOwnedAnalyticsSyncHandler(deps: OwnedAnalyticsSyncDeps): (
     let dryRun: boolean | null = null;
     let retentionFloor: string | null = null;
     let accountId: string | null = null;
-    const finish = async (statusCode: number, status: string, reason: string | null = null, counts?: WorkCounts) => {
+    const finish = async (statusCode: number, status: string, reason: string | null = null,
+      details?: { counts: WorkCounts; continuation?: RetentionContinuation | null }) => {
+      const { counts, continuation } = details ?? {};
       let auditStored = false;
       const event = { admit: "owned_analytics_admission", "enqueue-daily": "owned_analytics_dispatch", drain: "owned_analytics_drain", retention: "owned_analytics_retention" } as const;
       try { auditStored = await deadline.run((signal) => deps.audit({ event: event[action],
         status, reason, platform, accountId, ...(dryRun === null ? {} : { dryRun }), ...(retentionFloor ? { retentionFloor } : {}), ...(counts ? { counts } : {}) }, signal), 0); }
       catch { auditStored = false; }
       return restrictedJsonResponse(req, { ok: statusCode === 200 && auditStored, action, platform, status,
-        reason: auditStored ? reason : "audit_unavailable", auditStored, ...(dryRun === null ? {} : { dryRun }), ...(counts ? { counts } : {}) }, auditStored ? statusCode : 503);
+        reason: auditStored ? reason : "audit_unavailable", auditStored, ...(dryRun === null ? {} : { dryRun }), ...(counts ? { counts } : {}),
+        ...(auditStored && continuation !== undefined ? { continuation } : {}) }, auditStored ? statusCode : 503);
     };
     try {
       if (req.method !== "POST") return await finish(405, "refused", "method_not_allowed");
@@ -88,17 +92,17 @@ export function createOwnedAnalyticsSyncHandler(deps: OwnedAnalyticsSyncDeps): (
       const store = new OwnedAnalyticsStore(deps.rpc, deadline);
       if (parsed.data.action === "retention") {
         dryRun = parsed.data.dryRun;
-        const result = await retainOwnedAnalytics({ platform: parsed.data.platform, dryRun, store, deadline });
+        const result = await retainOwnedAnalytics({ platform: parsed.data.platform, dryRun, continuation: parsed.data.continuation, store, deadline });
         retentionFloor = result.floor;
-        return await finish(result.status === "unavailable" ? 503 : 200, result.status, result.reason, result.counts);
+        return await finish(result.status === "unavailable" ? 503 : 200, result.status, result.reason, { counts: result.counts, continuation: result.continuation });
       }
       if (parsed.data.action === "enqueue-daily") {
         const result = await dispatchOwnedAnalyticsDaily({ platform: parsed.data.platform, store, deadline, app: deps.app, fetch: deps.fetch });
-        return await finish(result.status === "unavailable" ? 503 : 200, result.status, result.reason, result.counts);
+        return await finish(result.status === "unavailable" ? 503 : 200, result.status, result.reason, { counts: result.counts });
       }
       if (parsed.data.action === "drain") {
         const result = await drainOwnedAnalytics({ platform: parsed.data.platform, store, deadline, app: deps.app, fetch: deps.fetch });
-        return await finish(result.status === "unavailable" ? 503 : 200, result.status, result.reason, result.counts);
+        return await finish(result.status === "unavailable" ? 503 : 200, result.status, result.reason, { counts: result.counts });
       }
       accountId = parsed.data.accountId.toLowerCase();
       const app = deps.app(parsed.data.platform);
