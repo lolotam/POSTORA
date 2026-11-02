@@ -28,7 +28,13 @@ export async function prepareInstagramReleaseBrowser(page: Page, request: APIReq
     await route.continue();
   });
   await page.routeWebSocket("**/*", (socket) => {
-    if (!socket.url().startsWith("ws://127.0.0.1:8080/")) throw new Error("Instagram release browser refused unexpected WebSocket");
+    const endpoint = new URL(socket.url());
+    if (endpoint.protocol === "ws:" && endpoint.hostname === "127.0.0.1" && endpoint.port === "65431"
+      && endpoint.pathname === "/realtime/v1/websocket" && !endpoint.username && !endpoint.password) {
+      // Realtime notifications are unavailable in this fixture; no events or successful subscription are fabricated.
+      return socket.close({ code: 1000, reason: "Isolated fixture has no Realtime service" });
+    }
+    if (!socket.url().startsWith("ws://127.0.0.1:8080/")) throw new Error(`Instagram release browser refused unexpected WebSocket: ${endpoint.origin}${endpoint.pathname}`);
     socket.connectToServer();
   });
   await page.clock.setFixedTime(new Date(manifest.referenceInstant));
