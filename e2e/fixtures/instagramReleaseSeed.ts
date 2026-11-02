@@ -82,10 +82,11 @@ export async function cleanupInstagramRelease(seed: InstagramReleaseSeed): Promi
     ownedUsers.push(user.id);
   }
   await cleanupReleaseChildren(ownedUsers);
-  for (const id of ownedUsers) {
-    const response = await authAdmin(`/${id}`, { method: "DELETE" });
-    if (!response.ok) throw new Error("Instagram release cleanup failed");
-  }
+  // Application cascade triggers require their real database owner. Do not grant
+  // Auth new application privileges merely to remove this isolated fixture.
+  await ownerReleaseSql(`DELETE FROM auth.users u USING jsonb_array_elements(${jsonSql(Object.values(seed.manifest.users))}) entry
+    WHERE u.id=(entry->>'id')::uuid AND u.email=entry->>'email'
+      AND u.raw_app_meta_data->>'instagram_release_namespace'='${seed.manifest.namespace}';`);
   await restoreReleaseSettings(seed.previousSettings);
   await ownerReleaseSql(`DELETE FROM public.app_settings WHERE key='test_instagram_release_namespace' AND value=${jsonSql(seed.manifest.namespace)};`);
   const remaining = await ownerReleaseSql(`SELECT count(*) FROM auth.users WHERE id IN (SELECT (entry->>'id')::uuid FROM jsonb_array_elements(${jsonSql(Object.values(seed.manifest.users))}) entry);`);

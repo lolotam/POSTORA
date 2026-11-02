@@ -16,6 +16,13 @@ export async function prepareInstagramReleaseBrowser(page: Page, request: APIReq
   const health = await request.get(`${INSTAGRAM_RELEASE.apiUrl}/__instagram-release/health`);
   const manifest = await requireInstagramReleaseHealth(new Response(await health.body(), { status: health.status() }));
   await page.route("**/*", async (route) => {
+    const endpoint = new URL(route.request().url());
+    if (endpoint.origin === "https://fonts.googleapis.com" && endpoint.pathname === "/css2"
+      && route.request().resourceType() === "stylesheet" && route.request().method() === "GET") {
+      // The fixture uses system fonts; no font-service request leaves the browser.
+      await route.fulfill({ contentType: "text/css", body: "" });
+      return;
+    }
     try { assertInstagramReleaseNetworkUrl(route.request().url(), "browser"); }
     catch { await route.abort("blockedbyclient"); throw new Error("Instagram release browser refused unexpected network access"); }
     await route.continue();
