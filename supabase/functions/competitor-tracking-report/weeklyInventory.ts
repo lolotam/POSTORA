@@ -38,8 +38,8 @@
  *
  *   When there is no coverage row at all (a legacy entry that predates the
  *   coverage ledger), the newest captured media row anchors the window
- *   instead. That fallback is page-local, and it is only reached when no
- *   committed coverage exists at all.
+ *   instead. SQL derives that fallback from the whole stored inventory,
+ *   independently of the media page being displayed.
  *
  * REPEATED DAILY SNAPSHOTS ARE NOT NEW POSTS
  *
@@ -58,7 +58,6 @@ import {
   type CompetitorReportWeekly,
   type CompetitorReportWeeklyCoverage,
   type RawCoverageRow,
-  type RawMedia,
 } from "./contracts.ts";
 
 /** The window the rate describes, in days. */
@@ -81,19 +80,10 @@ export type WeeklyInventoryReason =
   | "coverage_window_short";
 
 export type WeeklyInventoryInput = {
-  /** The media page of the entry. */
-  readonly media: readonly RawMedia[];
+  /** The committed whole-window projection, independent of display pages. */
+  readonly summary: unknown;
   /** The committed capture coverage of the entry, newest day first. */
   readonly coverage: readonly RawCoverageRow[];
-  /**
-   * Whether this response carries the inventory the count is derived from.
-   *
-   * A LIST read carries no media: the database projects the media only for a
-   * detail read. The coverage proof is still available and is still reported,
-   * but the observed count cannot be published without the rows it counts,
-   * so the rate is never published from a list.
-   */
-  readonly inventoryIncluded: boolean;
 };
 
 /**
@@ -108,12 +98,6 @@ export function assembleWeeklyInventory(input: WeeklyInventoryInput): Competitor
       "the weekly input must be an object",
     );
   }
-  if (!Array.isArray(input.media)) {
-    throw new CompetitorReportContractError(
-      "REPORT_UNAVAILABLE",
-      "weekly.media must be an array",
-    );
-  }
   if (!Array.isArray(input.coverage)) {
     throw new CompetitorReportContractError(
       "REPORT_UNAVAILABLE",
@@ -123,7 +107,12 @@ export function assembleWeeklyInventory(input: WeeklyInventoryInput): Competitor
 
   const coverage = input.coverage.map((row, index) => readCoverageRow(row, `coverage[${index}]`));
   const anchorRow = newestCoverageRow(coverage);
-  const anchorMs = resolveAnchor(anchorRow, input.media);
+  const summary = readWeeklySummary(input.summary);
+  const anchorMs = summary.end;
+  const coverageAnchor = resolveAnchor(anchorRow);
+  if (coverageAnchor !== null && coverageAnchor !== anchorMs) {
+    throw new CompetitorReportContractError("REPORT_UNAVAILABLE", "weekly summary does not match its committed coverage");
+  }
 
   if (anchorMs === null) {
     // There is no committed inventory observation at all: there is no window
@@ -141,21 +130,19 @@ export function assembleWeeklyInventory(input: WeeklyInventoryInput): Competitor
   const intervalEnd = anchorMs;
   const intervalStart = anchorMs - COMPETITOR_REPORT_WEEKLY_WINDOW_DAYS * MILLISECONDS_PER_DAY;
 
-  const observedCount = input.inventoryIncluded
-    ? countObservedPosts(input.media, intervalStart, intervalEnd)
-    : 0;
+  const observedCount = summary.count;
 
   const verdict = classifyCoverage(anchorRow, intervalStart);
 
   return {
     observed_count: observedCount,
-    posts_per_week: verdict.coverage === "complete" && input.inventoryIncluded
+    posts_per_week: verdict.coverage === "complete"
       ? observedCount
       : null,
     interval_start: new Date(intervalStart).toISOString(),
     interval_end: new Date(intervalEnd).toISOString(),
     coverage: verdict.coverage,
-    reason: verdict.reason ?? (input.inventoryIncluded ? null : "media_not_included"),
+    reason: verdict.reason,
   };
 }
 
@@ -255,43 +242,31 @@ function newestCoverageRow(rows: readonly RawCoverageRow[]): RawCoverageRow | nu
  */
 function resolveAnchor(
   anchor: RawCoverageRow | null,
-  media: readonly RawMedia[],
 ): number | null {
   if (anchor !== null) {
     const endedAt = anchor.capture_ended_at ?? anchor.captured_at;
     return parseInstant(endedAt, "captured_at", "coverage");
   }
 
-  let newestMs: number | null = null;
-  for (const row of media) {
-    const capturedAt = requireText(row.captured_at, "captured_at", "media");
-    const ms = parseInstant(capturedAt, "captured_at", "media");
-    if (newestMs === null || ms > newestMs) newestMs = ms;
-  }
-  return newestMs;
+  return null;
 }
 
 /**
- * The distinct observed posts inside the window.
- *
- * The count is of DISTINCT `ig_media_id` values: a post captured on several
- * days is one observed post, and a repeated daily snapshot never inflates
- * the rate.
+ * The owner-scoped SQL reader counted distinct observed IDs across the
+ * whole window. An absent or inconsistent aggregate is a failed read;
+ * the displayed media page is never a substitute for that measurement.
  */
-function countObservedPosts(
-  media: readonly RawMedia[],
-  intervalStartMs: number,
-  intervalEndMs: number,
-): number {
-  const seen = new Set<string>();
-  for (const row of media) {
-    const mediaId = requireText(row.ig_media_id, "ig_media_id", "media");
-    const publishedAt = requireText(row.published_at, "published_at", "media");
-    const publishedMs = parseInstant(publishedAt, "published_at", "media");
-    if (publishedMs < intervalStartMs || publishedMs > intervalEndMs) continue;
-    seen.add(mediaId);
+function readWeeklySummary(raw: unknown): { count: number; end: number | null } {
+  if (!isRecord(raw) || typeof raw.observed_count !== "number" || !Number.isSafeInteger(raw.observed_count) || raw.observed_count < 0) {
+    throw new CompetitorReportContractError("REPORT_UNAVAILABLE", "weekly inventory requires a safe committed count");
   }
-  return seen.size;
+  if (raw.interval_start === null && raw.interval_end === null && raw.observed_count === 0) return { count: 0, end: null };
+  const start = parseInstant(requireText(raw.interval_start, "interval_start", "weekly"), "interval_start", "weekly");
+  const end = parseInstant(requireText(raw.interval_end, "interval_end", "weekly"), "interval_end", "weekly");
+  if (end - start !== COMPETITOR_REPORT_WEEKLY_WINDOW_DAYS * MILLISECONDS_PER_DAY) {
+    throw new CompetitorReportContractError("REPORT_UNAVAILABLE", "weekly inventory requires an exact seven-day interval");
+  }
+  return { count: raw.observed_count, end };
 }
 
 /* -------------------------------------------------------------------------- */

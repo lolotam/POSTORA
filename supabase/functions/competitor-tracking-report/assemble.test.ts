@@ -73,6 +73,7 @@ function detailRequest(): CompetitorReportRequest {
 
 function rawEntry(overrides: Partial<RawEntry> = {}): RawEntry {
   return {
+    weekly_inventory: { observed_count: 0, interval_start: null, interval_end: null },
     watchlist_id: "d2000000-0000-4000-8000-000000000001",
     username: "rich",
     label: "Rich",
@@ -828,6 +829,13 @@ async function capturedProjection(): Promise<RawReportProjection> {
 /** The captured projection, assembled at the instant it was read. */
 async function assembleCaptured(): Promise<CompetitorReportDetail> {
   const captured = await capturedProjection();
+  // Keep the original SQL artifact untouched. These legacy-growth/outlier
+  // tests combine it with an explicit synthetic aggregate; fresh v2 SQL
+  // execution and whole-window counting are proved by the SQL suite.
+  captured.entry = { ...captured.entry!, weekly_inventory: {
+    observed_count: 2, interval_start: "2026-10-22T00:57:39.702828+00:00",
+    interval_end: "2026-10-29T00:57:39.702828+00:00",
+  } };
   return assembleCompetitorReport(
     {
       action: "detail",
@@ -845,7 +853,7 @@ async function assembleCaptured(): Promise<CompetitorReportDetail> {
   ) as CompetitorReportDetail;
 }
 
-Deno.test("the captured payload of the real database assembles", async () => {
+Deno.test("the unchanged legacy SQL artifact assembles with an explicit unit-test inventory aggregate", async () => {
   const report = await assembleCaptured();
 
   assertEquals(report.version, 1);
@@ -917,4 +925,20 @@ Deno.test("the captured freshness comes from the committed coverage and the job"
   assertEquals(report.entry!.freshness.last_capture_at, "2026-10-29T00:57:39.702828+00:00");
   assert(report.entry!.freshness.last_partial_at !== null);
   assert(report.entry!.freshness.last_full_success_at !== null);
+});
+
+Deno.test("list and paginated detail retain the same committed weekly count", () => {
+  const entry = rawEntry({ weekly_inventory: { observed_count: 31,
+    interval_start: "2026-10-13T12:00:00Z", interval_end: "2026-10-20T12:00:00Z" } });
+  const list = assembleCompetitorReport({ action: "list", request: listRequest(), raw: projection([entry]) }, NOW, COMPETITOR_REPORT_BASELINE_POLICY) as CompetitorReportList;
+  const detail = assembleCompetitorReport({ action: "detail", request: detailRequest(),
+    raw: projection([], [rawMedia("displayed", "2026-10-19T09:00:00Z")], { action: "detail", entry, next_cursor: "another_page" }) }, NOW, COMPETITOR_REPORT_BASELINE_POLICY) as CompetitorReportDetail;
+  assertEquals(list.entries[0].weekly.observed_count, 31);
+  assertEquals(detail.entry!.weekly, list.entries[0].weekly);
+  assertEquals(detail.entry!.weekly.posts_per_week, null);
+});
+
+Deno.test("a legacy projection missing the committed weekly aggregate is refused", () => {
+  assertThrows(() => assembleCompetitorReport({ action: "list", request: listRequest(),
+    raw: projection([rawEntry({ weekly_inventory: undefined })]) }, NOW, COMPETITOR_REPORT_BASELINE_POLICY), CompetitorReportContractError);
 });

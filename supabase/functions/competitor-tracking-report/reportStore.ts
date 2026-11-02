@@ -9,7 +9,7 @@
  *
  * WHY THE READ RUNS AS THE CALLER
  *
- *   `read_own_competitor_tracking_report` is granted to `authenticated` and
+ *   `read_own_competitor_tracking_report_v2` is granted to `authenticated` and
  *   explicitly revoked from the service role. It derives the owner from
  *   `auth.uid()`, so the request has to reach PostgreSQL with the CALLER's
  *   own bearer - the public project key as the apikey, the user's token as
@@ -81,7 +81,7 @@ export class CompetitorReportStoreError extends Error {
 }
 
 /** The RPC the report reads through. */
-export const COMPETITOR_REPORT_RPC = "read_own_competitor_tracking_report";
+export const COMPETITOR_REPORT_RPC = "read_own_competitor_tracking_report_v2";
 
 /**
  * The reader.

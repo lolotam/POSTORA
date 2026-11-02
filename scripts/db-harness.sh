@@ -156,6 +156,7 @@ SUITES=(
   competitor_collection_results.sql
   competitor_capture_coverage.sql
   competitor_tracking_report.sql
+  competitor_weekly_inventory_projection.sql
   competitor_retention.sql
   competitor_retention_cron.sql
   instagram_direct_collection_credential.sql
