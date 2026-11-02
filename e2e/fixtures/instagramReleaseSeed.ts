@@ -248,6 +248,15 @@ BEGIN
    INSERT INTO public.competitor_profile_snapshots(watchlist_id,user_id,captured_on,captured_at,capture_timezone,followers_count,media_count,source,status)
    VALUES((w->>'id')::uuid,u,((t-interval '3 days') AT TIME ZONE 'Asia/Kuwait')::date,t-interval '3 days','Asia/Kuwait',110,30,'official','ok');
   END IF;
+  IF w->>'scenario'='source_switch' THEN
+   -- The latest observation is Apify. Give each cutoff a same-source baseline
+   -- before an intervening official capture; without it the approved S=3
+   -- contract correctly reports no_comparable_baseline, not source_changed.
+   INSERT INTO public.competitor_profile_snapshots(watchlist_id,user_id,captured_on,captured_at,capture_timezone,followers_count,media_count,source,status)
+   SELECT (w->>'id')::uuid,u,((t-baseline.days*interval '1 day') AT TIME ZONE 'Asia/Kuwait')::date,
+    t-baseline.days*interval '1 day','Asia/Kuwait',baseline.followers,30,'apify','ok'
+   FROM (VALUES (8,100),(31,80)) baseline(days,followers);
+  END IF;
   FOR i IN 0..29 LOOP
    pub:=t-(CASE WHEN i<3 THEN i+3 ELSE i+8 END)*interval '1 day';
    IF w->>'scenario'='partial' THEN pub:=t-interval '3 days'-i*interval '1 hour';END IF;
