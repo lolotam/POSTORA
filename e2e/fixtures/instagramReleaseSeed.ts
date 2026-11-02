@@ -76,7 +76,7 @@ export async function cleanupInstagramRelease(seed: InstagramReleaseSeed): Promi
   const ownedUsers: string[] = [];
   for (const user of Object.values(seed.manifest.users)) {
     const response = await authAdmin(`/${user.id}`);
-    if (response.status === 404) continue;
+    if (response.status === 404) { ownedUsers.push(user.id); continue; }
     if (!response.ok) throw new Error("Instagram release cleanup identity read failed");
     assertInstagramReleaseCleanupIdentity(seed.manifest, await response.json());
     ownedUsers.push(user.id);
@@ -87,8 +87,6 @@ export async function cleanupInstagramRelease(seed: InstagramReleaseSeed): Promi
   await ownerReleaseSql(`DELETE FROM auth.users u USING jsonb_array_elements(${jsonSql(Object.values(seed.manifest.users))}) entry
     WHERE u.id=(entry->>'id')::uuid AND u.email=entry->>'email'
       AND u.raw_app_meta_data->>'instagram_release_namespace'='${seed.manifest.namespace}';`);
-  await restoreReleaseSettings(seed.previousSettings);
-  await ownerReleaseSql(`DELETE FROM public.app_settings WHERE key='test_instagram_release_namespace' AND value=${jsonSql(seed.manifest.namespace)};`);
   const remaining = await ownerReleaseSql(`WITH owners AS (
     SELECT (entry->>'id')::uuid id FROM jsonb_array_elements(${jsonSql(Object.values(seed.manifest.users))}) entry
   ) SELECT
@@ -100,6 +98,8 @@ export async function cleanupInstagramRelease(seed: InstagramReleaseSeed): Promi
     (SELECT count(*) FROM public.facebook_user_credentials WHERE user_id IN (SELECT id FROM owners))+
     (SELECT count(*) FROM public.facebook_user_credential_bindings WHERE user_id IN (SELECT id FROM owners));`);
   if (remaining !== "0") throw new Error("Instagram release cleanup left owned identities or OAuth authority");
+  await restoreReleaseSettings(seed.previousSettings);
+  await ownerReleaseSql(`DELETE FROM public.app_settings WHERE key='test_instagram_release_namespace' AND value=${jsonSql(seed.manifest.namespace)};`);
 }
 
 async function cleanupReleaseChildren(ownedUsers: string[]): Promise<void> {
@@ -111,6 +111,8 @@ END;$leases$;
 DELETE FROM public.brand_scrape_sessions WHERE user_id IN (SELECT jsonb_array_elements_text(${jsonSql(ownedUsers)})::uuid);
 DELETE FROM public.brand_scrape_cache WHERE EXISTS(SELECT 1 FROM jsonb_array_elements_text(${jsonSql(ownedUsers)}) AS owners(owner_id)
  WHERE cache_key LIKE 'instagram:v2:'||owner_id||':%');
+-- social_profiles has no auth-user foreign key in the actual baseline.
+DELETE FROM public.social_profiles WHERE user_id IN (SELECT jsonb_array_elements_text(${jsonSql(ownedUsers)})::uuid);
 DELETE FROM public.mcp_oauth_clients WHERE client_id=(SELECT value #>> '{}' FROM public.app_settings WHERE key='test_instagram_release_namespace')
  AND client_name='Canonical Instagram release fixture';
 DELETE FROM public.system_logs WHERE user_id IN (SELECT jsonb_array_elements_text(${jsonSql(ownedUsers)})::uuid);
