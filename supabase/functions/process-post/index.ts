@@ -4367,10 +4367,9 @@ async function postToInstagram(
     }
   }
 
-  // A retry whose feed post or reel is not published again still owes its "Also share to Story"
-  // mirror when no row records it. The mirror is recorded as its own row, so a later retry sees it
-  // and never mirrors it twice.
-  const mirrorStoryOnRetry = async () => {
+  // Both the first run and retries need a durable mirror receipt. Otherwise a retry sees only
+  // the feed row and publishes the already-live Story again. Failed receipts travel on that row.
+  const publishAndRecordStoryMirror = async () => {
     if (!shareToStory || igPostTypes.includes("story") || retry.storyRecorded) return;
     const mirror = await publishIgStoryFromMedia();
     const recordError = mirror && recordStory ? await recordStory(mirror) : null;
@@ -4389,7 +4388,7 @@ async function postToInstagram(
   // This post's own row already records the feed post or reel: it is done, and that row stays the
   // record. What this retry owes is the story.
   if (retry.feedRecorded && !igPostTypes.every((type) => type === "story")) {
-    await mirrorStoryOnRetry();
+    await publishAndRecordStoryMirror();
     // As in Business Login, the recorded feed post or reel still counts as the account's success.
     // A failed row that could not be written must not be reported as written.
     if (storyFailedAgain) {
@@ -4410,7 +4409,7 @@ async function postToInstagram(
   // The feed post or reel is already live: recorded, not posted again (the story step above ran).
   if (live) {
     // Its publish went unanswered, so the run that published it never mirrored it to the Story.
-    await mirrorStoryOnRetry();
+    await publishAndRecordStoryMirror();
     if (storyFailedAgain && recordStoryFailure) {
       // As on the recorded-feed path, a failed row that could not be written fails the account, so
       // the main loop writes its fallback row and the story stays retryable. The next retry finds
@@ -4594,7 +4593,7 @@ async function postToInstagram(
 
     // Mirror to Story if toggle is on (and Story wasn't already in post types)
     if (followUps && shareToStory && !igPostTypes.includes("story")) {
-      await publishIgStoryFromMedia();
+      await publishAndRecordStoryMirror();
     }
 
     const reelDebug = await finalizeIgLocationDebug(publishData.id);
@@ -4683,7 +4682,7 @@ async function postToInstagram(
 
     // Mirror to Story if toggle is on (and Story wasn't already in post types)
     if (shareToStory && !igPostTypes.includes("story")) {
-      await publishIgStoryFromMedia();
+      await publishAndRecordStoryMirror();
     }
 
     const singleDebug = await finalizeIgLocationDebug(publishData.id);
@@ -4694,6 +4693,7 @@ async function postToInstagram(
         : mediaData.permalink || `https://instagram.com`,
       warnings,
       ...(singleDebug ? { location_debug: singleDebug } : {}),
+      ...(unrecordedStory ? { unrecorded_story: unrecordedStory } : {}),
     };
 
   } else {
@@ -4786,7 +4786,7 @@ async function postToInstagram(
 
     // Mirror to Story if toggle is on (and Story wasn't already in post types)
     if (shareToStory && !igPostTypes.includes("story")) {
-      await publishIgStoryFromMedia();
+      await publishAndRecordStoryMirror();
     }
 
     const carouselDebug = await finalizeIgLocationDebug(publishData.id);
@@ -4795,6 +4795,7 @@ async function postToInstagram(
       url: mediaData.permalink || `https://instagram.com`,
       warnings,
       ...(carouselDebug ? { location_debug: carouselDebug } : {}),
+      ...(unrecordedStory ? { unrecorded_story: unrecordedStory } : {}),
     };
   }
 }
@@ -5162,9 +5163,10 @@ async function postToInstagramBusinessLogin(
     mediaId?: string,
     postUrl?: string,
     errorMessage?: string,
-    extraData?: Record<string, unknown>
+    extraData?: Record<string, unknown> & { warnings?: string[] }
   ): Promise<string | null> => {
     try {
+      const rowWarnings = [...warnings, ...(extraData?.warnings ?? [])];
       // One Instagram post can be several sub-posts (story, reel, feed), each
       // its own target with its own row -- so each is its own occurrence, and
       // keying the event on the POST id rather than the row id would collapse
@@ -5184,6 +5186,7 @@ async function postToInstagramBusinessLogin(
           account_username: account.platform_username,
           account_metadata: account.account_metadata,
           ...(extraData || {}),
+          ...(rowWarnings.length > 0 ? { warnings: rowWarnings } : {}),
         },
       });
       if (settled.error) {

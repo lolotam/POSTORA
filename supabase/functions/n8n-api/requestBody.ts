@@ -39,3 +39,15 @@ export function looksLikeJson(text: string): boolean {
   const trimmed = text.trimStart();
   return trimmed.startsWith('{') || trimmed.startsWith('[');
 }
+
+/** Form list fields accept JSON arrays or comma-separated literals. JSON scalars
+ *  remain text: a numeric Instagram username must not become a number. */
+export function parseFormArray(text: string): unknown[] {
+  try {
+    const parsed: unknown = JSON.parse(text);
+    if (Array.isArray(parsed)) return parsed;
+  } catch {
+    // Non-JSON input is the supported comma-separated transport.
+  }
+  return text.split(',').map(entry => entry.trim()).filter(Boolean);
+}

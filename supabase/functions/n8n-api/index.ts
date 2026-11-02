@@ -8,7 +8,7 @@ import { type CommentActionResult, deleteComment, hideComment, replyToComment } 
 import { parseSubscriptionFilters } from "./webhookFilters.ts";
 import { describeBase64Failure, normalizeBase64Media } from "../_shared/base64Media.ts";
 import { clientIpFromHeaders, isValidUuid } from "./requestGuards.ts";
-import { INVALID_JSON_MESSAGE, InvalidRequestBodyError, looksLikeJson, parseJsonText, readJsonBody } from "./requestBody.ts";
+import { INVALID_JSON_MESSAGE, InvalidRequestBodyError, looksLikeJson, parseFormArray, parseJsonText, readJsonBody } from "./requestBody.ts";
 import { recordApiRefusal, recordRateLimitRefusal } from "./refusalLog.ts";
 import { relayUploadTarget } from "./mediaRelay.ts";
 import { handleCancelScheduledPost, handleCheckAccountHealth, handleDeletePost, handleReschedulePost, handleRetryFailedPost, handleSuggestBestTimes } from "./postActions.ts";
@@ -418,6 +418,13 @@ async function uploadFileFromBase64(supabase: any, userId: string, fileData: str
   });
 }
 
+// Keep malformed form values available for the typed option check to reject.
+function parseFormBoolean(value: string): boolean | string {
+  if (value === 'true' || value === '1') return true;
+  if (value === 'false' || value === '0') return false;
+  return value;
+}
+
 // Helper function to parse array fields from various formats (JSON string, comma-separated, actual array)
 function parseArrayField(value: any, fieldName: string): string[] {
   if (!value) return [];
@@ -540,6 +547,7 @@ async function handleCreatePost(req: Request, supabase: any, userId: string, bod
     instagram_first_comment, // Auto-post first comment
     instagram_audio_name,
     instagram_share_to_feed,
+    instagram_share_to_story,
 
     // Facebook metadata
     facebook_page_id,
@@ -583,6 +591,13 @@ async function handleCreatePost(req: Request, supabase: any, userId: string, bod
     // Webhook configuration for this specific post
     webhook_url, // URL to send status callbacks
   } = body;
+
+  if (instagram_share_to_story !== undefined && typeof instagram_share_to_story !== 'boolean') {
+    await recordApiRefusal(supabase, { userId, route: '/api/v1/post', code: 'INVALID_INSTAGRAM_STORY_OPTION', status: 400 });
+    return new Response(JSON.stringify({ error: 'instagram_share_to_story must be a boolean' }), {
+      status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+    });
+  }
 
   // Parse platforms array from various formats (JSON string, comma-separated, actual array)
   const platforms = parseArrayField(rawPlatforms, 'platforms');
@@ -1021,6 +1036,7 @@ async function handleCreatePost(req: Request, supabase: any, userId: string, bod
       shareToFeed: instagram_share_to_feed ?? true,
     };
     metadata.instagram_post_type = normalizedInstagramPostType;
+    if (instagram_share_to_story !== undefined) metadata.instagram_share_to_story = instagram_share_to_story;
     metadata.instagram_first_comment = instagram_first_comment || first_comment || null;
 
     // The publisher (process-post) reads only the singular top-level key
@@ -2427,8 +2443,10 @@ export async function handleRequest(req: Request): Promise<Response> {
 
         for (const [key, value] of params.entries()) {
           // Handle array fields (platforms, media_file_ids, account_ids, etc.)
-          if (key === 'platforms' || key === 'media_file_ids' || key === 'account_ids' ||
-            key === 'youtube_tags' || key === 'instagram_collaborators' ||
+          if (key === 'instagram_collaborators') {
+            body[key] = parseFormArray(value);
+          } else if (key === 'platforms' || key === 'media_file_ids' || key === 'account_ids' ||
+            key === 'youtube_tags' ||
             key === 'youtube_allowed_countries' || key === 'youtube_blocked_countries') {
             // Try to parse as JSON array first, otherwise split by comma
             try {
@@ -2436,6 +2454,8 @@ export async function handleRequest(req: Request): Promise<Response> {
             } catch {
               body[key] = value.split(',').map(s => s.trim()).filter(Boolean);
             }
+          } else if (key === 'instagram_share_to_story') {
+            body[key] = parseFormBoolean(value);
           } else if (key === 'youtube_made_for_kids' || key === 'youtube_allow_embedding' ||
             key === 'youtube_public_stats_viewable' || key === 'youtube_contains_synthetic_media' ||
             key === 'youtube_has_paid_product_placement' || key === 'youtube_notify_subscribers' ||
@@ -2457,10 +2477,14 @@ export async function handleRequest(req: Request): Promise<Response> {
         const body: Record<string, any> = {};
 
         for (const [key, value] of formData.entries()) {
-          if (typeof value === 'string') {
+          if (key === 'instagram_share_to_story') {
+            body[key] = typeof value === 'string' ? parseFormBoolean(value) : value;
+          } else if (typeof value === 'string') {
             // Handle array fields
-            if (key === 'platforms' || key === 'media_file_ids' || key === 'account_ids' ||
-              key === 'youtube_tags' || key === 'instagram_collaborators' ||
+            if (key === 'instagram_collaborators') {
+              body[key] = parseFormArray(value);
+            } else if (key === 'platforms' || key === 'media_file_ids' || key === 'account_ids' ||
+              key === 'youtube_tags' ||
               key === 'youtube_allowed_countries' || key === 'youtube_blocked_countries') {
               try {
                 body[key] = JSON.parse(value);
@@ -2496,12 +2520,16 @@ export async function handleRequest(req: Request): Promise<Response> {
         const body: Record<string, any> = {};
 
         for (const [key, value] of params.entries()) {
-          if (key === 'platforms' || key === 'media_file_ids' || key === 'account_ids') {
+          if (key === 'instagram_collaborators') {
+            body[key] = parseFormArray(value);
+          } else if (key === 'platforms' || key === 'media_file_ids' || key === 'account_ids') {
             try {
               body[key] = JSON.parse(value);
             } catch {
               body[key] = value.split(',').map(s => s.trim()).filter(Boolean);
             }
+          } else if (key === 'instagram_share_to_story') {
+            body[key] = parseFormBoolean(value);
           } else {
             body[key] = value;
           }
