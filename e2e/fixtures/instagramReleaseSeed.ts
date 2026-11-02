@@ -151,7 +151,7 @@ COMMIT;`;
 
 function accountSeedSql(): string {
   return `DO $accounts$
-DECLARE a jsonb; m jsonb; u uuid; t timestamptz; scopes text[];
+DECLARE a jsonb; m jsonb; u uuid; t timestamptz; scopes text[]; known_subject boolean;
 BEGIN
  SELECT manifest INTO STRICT m FROM release_fixture;t:=(m->>'referenceInstant')::timestamptz;
  FOR a IN SELECT value FROM jsonb_array_elements(m->'accounts') LOOP
@@ -170,10 +170,19 @@ BEGIN
    CASE WHEN a->>'authority' IN ('granted','denied','expired') THEN t END,CASE WHEN a->>'authority'='failed' THEN t END,
    CASE WHEN a->>'authority'='failed' THEN 'synthetic_permission_read_failed' END,1);
   IF a->>'loginKind'='page_linked' THEN
-   INSERT INTO public.facebook_user_credentials(id,user_id,token,revision,lifecycle,token_expires_at,provenance_source)
-   VALUES((a->>'credentialId')::uuid,u,a->>'token',1,'active',CASE WHEN a->>'authority'='expired' THEN t-interval '1 hour' ELSE t+interval '30 days' END,'migrated_instagram_account_credential');
-   INSERT INTO public.facebook_user_credential_bindings(social_account_id,user_id,platform,credential_id,evidence_source)
-   VALUES((a->>'id')::uuid,u,'instagram',(a->>'credentialId')::uuid,'migrated_instagram_account_credential');
+   -- A reconnect preserves a verified subject. Other rows retain legacy unknown provenance.
+   known_subject:=a->>'key'='otherPage';
+   INSERT INTO public.facebook_user_credentials(id,user_id,token,revision,lifecycle,token_expires_at,
+     provenance_source,provenance_captured_at,provider_user_id)
+   VALUES((a->>'credentialId')::uuid,u,a->>'token',1,'active',CASE WHEN a->>'authority'='expired' THEN t-interval '1 hour' ELSE t+interval '30 days' END,
+     CASE WHEN known_subject THEN 'oauth_exchange' ELSE 'migrated_instagram_account_credential' END,
+     CASE WHEN known_subject THEN t END,CASE WHEN known_subject THEN 'release_fb_'||right(m->>'namespace',12) END);
+   INSERT INTO public.facebook_user_credential_bindings(social_account_id,user_id,platform,credential_id,evidence_source,
+     verified_facebook_user_id,verified_facebook_page_id,verified_instagram_user_id)
+   VALUES((a->>'id')::uuid,u,'instagram',(a->>'credentialId')::uuid,
+     CASE WHEN known_subject THEN 'oauth_exchange' ELSE 'migrated_instagram_account_credential' END,
+     CASE WHEN known_subject THEN 'release_fb_'||right(m->>'namespace',12) END,
+     CASE WHEN known_subject THEN 'release_page_'||right(m->>'namespace',12) END,CASE WHEN known_subject THEN a->>'providerId' END);
   END IF;
  END LOOP;
 END;$accounts$;`;
