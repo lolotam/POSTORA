@@ -139,6 +139,9 @@ jobs:
       - name: Test the regression comparator
         run: node --test scripts/ci/lint-i18n-regression.test.mjs
 
+      - name: Test the Instagram release-gate checker
+        run: node --test scripts/check-instagram-release-gates.test.mjs
+
       - name: Compare lint and i18n against the immutable base
         run: |
           set -euo pipefail

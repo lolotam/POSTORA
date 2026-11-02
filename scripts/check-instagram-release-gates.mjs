@@ -373,6 +373,10 @@ function migrationChecks(context) {
   }
 }
 
+// Credential-bearing text is never accepted in evidence and never echoed in a report.
+const CREDENTIAL_PATTERN = /(?:[a-z][a-z0-9+.-]*:\/\/[^\s/?#"'<>]+@)|(?:["']?authorization["']?\s*[:=]\s*["']?Basic\s+[A-Za-z0-9+/]{4,}={0,2})|(?:https?:\/\/[^\s"']+[?&](?:access_token|refresh_token|api_key)=)|(?:Bearer\s+[A-Za-z0-9_.-]{20,})|(?:-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----)|(?:eyJ[A-Za-z0-9_-]{15,}\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+)|(?:["']?(?:access_token|refresh_token|api_key|password|client_secret|SUPABASE_SERVICE_ROLE_KEY)["']?\s*[:=]\s*["']?(?!\[REDACTED\]|<redacted>)[^"'\s]{6,})/i;
+const safeDetail = (value) => CREDENTIAL_PATTERN.test(String(value)) ? "[redacted-path]" : value;
+
 function artifactBytes(context, artifact) {
   const directory = context.evidenceDirectory ?? context.root;
   const path = isAbsolute(artifact.path) ? artifact.path : resolve(directory, artifact.path);
@@ -380,12 +384,12 @@ function artifactBytes(context, artifact) {
   try { bytes = readFileSync(realpathSync(path)); }
   catch (error) {
     if (!["ENOENT", "ENOTDIR", "EACCES", "EPERM", "EISDIR"].includes(error.code)) throw error;
-    throw new GateError("artifact_missing", artifact.path);
+    throw new GateError("artifact_missing", safeDetail(artifact.path));
   }
-  if (digest(bytes) !== artifact.sha256) throw new GateError("artifact_hash_mismatch", artifact.path);
+  if (digest(bytes) !== artifact.sha256) throw new GateError("artifact_hash_mismatch", safeDetail(artifact.path));
   // Never print the matching text: evidence is untrusted and can contain credentials.
-  if (/(?:[a-z][a-z0-9+.-]*:\/\/[^\s/?#"'<>]+@)|(?:["']?authorization["']?\s*[:=]\s*["']?Basic\s+[A-Za-z0-9+/]{8,}={0,2})|(?:https?:\/\/[^\s"']+[?&](?:access_token|refresh_token|api_key)=)|(?:Bearer\s+[A-Za-z0-9_.-]{20,})|(?:-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----)|(?:eyJ[A-Za-z0-9_-]{15,}\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+)|(?:["']?(?:access_token|refresh_token|api_key|password|client_secret|SUPABASE_SERVICE_ROLE_KEY)["']?\s*[:=]\s*["'](?!\[REDACTED\]|<redacted>)[^"'\s]{6,})/i.test(bytes.toString("utf8"))) {
-    throw new GateError("artifact_redaction_failed", artifact.path);
+  if (CREDENTIAL_PATTERN.test(bytes.toString("utf8"))) {
+    throw new GateError("artifact_redaction_failed", safeDetail(artifact.path));
   }
   return bytes;
 }

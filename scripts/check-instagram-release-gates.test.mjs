@@ -399,6 +399,24 @@ test("native Playwright result and redaction boundaries cannot be overridden by 
     assert.ok(codes(report).includes("artifact_redaction_failed"));
     assert.ok(!JSON.stringify(report).includes("synthetic-secret"));
   });
+  for (const [scheme, text, secret] of [
+    ["unquoted environment assignment", `${"PASS"}${"WORD"}=synthetic-unquoted`, "synthetic-unquoted"],
+    ["unquoted service role assignment", `${"SUPABASE_SERVICE"}${"_ROLE_KEY"}=synthetic-unquoted`, "synthetic-unquoted"],
+    ["short Basic credential", `Authorization: ${"Ba"}${"sic"} YTpi`, "YTpi"],
+  ]) await context.test(`${scheme} cannot enter retained evidence`, () => {
+    const ledger = structuredClone(fixture.ledger);
+    ledger.proofs[0].artifact = fixture.artifact("unquoted.txt", text);
+    const report = fixture.evaluate({ evidence: ledger });
+    assert.ok(codes(report).includes("artifact_redaction_failed"));
+    assert.ok(!JSON.stringify(report).includes(secret));
+  });
+  await context.test("a credential-bearing artifact path is never echoed in a failure report", () => {
+    const ledger = structuredClone(fixture.ledger);
+    ledger.proofs[0].artifact = { path: "https://fixture:synthetic-path@example.test/absent.json", sha256: "0".repeat(64) };
+    const report = fixture.evaluate({ evidence: ledger });
+    assert.ok(codes(report).includes("artifact_missing"));
+    assert.ok(!JSON.stringify(report).includes("synthetic-path"));
+  });
   for (const [scheme, credential] of [["postgres userinfo", "postgres://fixture:synthetic-private@db.example.test/database"], ["HTTP userinfo", "https://fixture:synthetic-private@example.test/report"], ["Basic authorization", "Authorization: Basic Zml4dHVyZTpzeW50aGV0aWMtcHJpdmF0ZQ=="]]) {
     await context.test(`${scheme} cannot enter retained evidence`, () => {
       const ledger = structuredClone(fixture.ledger);
