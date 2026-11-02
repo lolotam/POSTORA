@@ -398,7 +398,7 @@ test("canonical tracking persists a new capture through the real worker and reco
   await page.reload();
   await expect(row()).toContainText("120");
   await expect(row().getByText("Official", { exact: true })).toBeVisible();
-  await expect(row().getByText("Not enough history", { exact: true })).toHaveCount(2);
+  await expect(row().getByText("No comparable baseline", { exact: true })).toHaveCount(2);
   await row().getByRole("button", { name: `View report for @${INSTAGRAM_RELEASE.newTarget}`, exact: true }).click();
   const detail = page.getByRole("dialog");
   await expect(detail.getByText("Synthetic release media 0", { exact: true })).toBeVisible();
@@ -424,7 +424,7 @@ test("canonical tracking persists a new capture through the real worker and reco
   let saveCalls = 0;
   let enqueueCalls = 0;
   page.on("request", (request) => { if (request.url().endsWith("/functions/v1/competitor-snapshot-sync") && request.method() === "POST") enqueueCalls++; });
-  await page.route("**/rest/v1/rpc/add_competitor_watchlist", async (route) => {
+  await page.route(`${INSTAGRAM_RELEASE.apiUrl}/rest/v1/rpc/add_competitor_watchlist`, async (route) => {
     saveCalls++;
     expect(route.request().postDataJSON().p_username).toBe(INSTAGRAM_RELEASE.lostTarget);
     const response = await route.fetch();
