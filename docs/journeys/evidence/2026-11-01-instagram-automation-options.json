@@ -1,5 +1,5 @@
 {
-  "backend_candidate": "d6773d0c39354a138a691617ecd633a47d816586",
+  "backend_candidate": "89b17b24816ce1b2273052d741c34f2bdcdd866f",
   "backend_base": "781111a8c8b5bc1296f8c82bbe575f2498b82748",
   "backend_files": [
     {
@@ -16,7 +16,7 @@
     },
     {
       "path": "supabase/functions/process-post/index.ts",
-      "sha256": "cf8b6046d916b52b878336591c15244fb48c5ee46d2794370ceb92c0c82d6c0b"
+      "sha256": "e0a00fa6fb0b6fd90a47ca4e6b1c3a168c6c42c3bfde04f5f84ea888b69cb772"
     }
   ],
   "node": {
@@ -75,7 +75,7 @@
     "node_build": "passed",
     "immutable_lint_i18n": "NO REGRESSIONS",
     "graphify_update": "passed",
-    "immutable_lint_i18n_source_candidate": "d6773d0c39354a138a691617ecd633a47d816586",
+    "immutable_lint_i18n_source_candidate": "89b17b24816ce1b2273052d741c34f2bdcdd866f",
     "native_publisher_and_companion_regressions": {
       "candidate": "cb089d6169a42f486fa4ed2ebeac71622ead7a71",
       "tests": 37,
@@ -95,6 +95,15 @@
       "failed": 0,
       "original_source_failed_steps": 3,
       "boundaries": "registered MCP/API and native publisher with synthetic provider/database HTTP; not a live invitation",
+      "immutable_lint_i18n": "NO REGRESSIONS"
+    },
+    "story_request_diagnostics": {
+      "candidate": "89b17b24816ce1b2273052d741c34f2bdcdd866f",
+      "tests": 9,
+      "steps": 37,
+      "failed": 0,
+      "original_source_failed_steps": 1,
+      "synthetic_provider_credential_absent_from_successful_story_diagnostics": true,
       "immutable_lint_i18n": "NO REGRESSIONS"
     }
   },
@@ -202,6 +211,26 @@
     {
       "path": ".tmp/mcp-d677-immutable-lint.md",
       "sha256": "3ee3b87385c27699d6bea7b135f3d476ef443e1a39207801153a2acb1dabdd99"
+    },
+    {
+      "path": ".tmp/mcp-story-credential-log-before.log",
+      "sha256": "ee7a8d406930faefa7c82319aa42c6fd339371809af8cd7c9bfadfce7abdbf8f"
+    },
+    {
+      "path": ".tmp/mcp-story-credential-log-after.log",
+      "sha256": "7984b2c2634a062a8eecb76693cd7106d5a6f793c7715fbe68c938113882a195"
+    },
+    {
+      "path": ".tmp/mcp-story-credential-log-eslint.json",
+      "sha256": "3e998b6b52ebec582666ec24dcf7cc9a9fb216d4ce3b9367b5b9ee90b5fc4440"
+    },
+    {
+      "path": ".tmp/mcp-89b17-immutable-lint.json",
+      "sha256": "901665ad030bd5c177405cab1f702a987e8f746400ea13cd79fca4834a29ca30"
+    },
+    {
+      "path": ".tmp/mcp-89b17-graphify.log",
+      "sha256": "05596a1f4b3b7d5f408b8ff41fcc770b1ae63a363223157353d0094e59a4058b"
     }
   ],
   "previous_backend_candidate": "7f3185c3944c597632d144371e8d5a07aeb14bf3",
