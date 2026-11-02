@@ -8,7 +8,7 @@ import { type CommentActionResult, deleteComment, hideComment, replyToComment } 
 import { parseSubscriptionFilters } from "./webhookFilters.ts";
 import { describeBase64Failure, normalizeBase64Media } from "../_shared/base64Media.ts";
 import { clientIpFromHeaders, isValidUuid } from "./requestGuards.ts";
-import { INVALID_JSON_MESSAGE, InvalidRequestBodyError, looksLikeJson, parseJsonText, readJsonBody } from "./requestBody.ts";
+import { INVALID_JSON_MESSAGE, InvalidRequestBodyError, looksLikeJson, parseFormArray, parseJsonText, readJsonBody } from "./requestBody.ts";
 import { recordApiRefusal, recordRateLimitRefusal } from "./refusalLog.ts";
 import { relayUploadTarget } from "./mediaRelay.ts";
 import { handleCancelScheduledPost, handleCheckAccountHealth, handleDeletePost, handleReschedulePost, handleRetryFailedPost, handleSuggestBestTimes } from "./postActions.ts";
@@ -2443,8 +2443,10 @@ export async function handleRequest(req: Request): Promise<Response> {
 
         for (const [key, value] of params.entries()) {
           // Handle array fields (platforms, media_file_ids, account_ids, etc.)
-          if (key === 'platforms' || key === 'media_file_ids' || key === 'account_ids' ||
-            key === 'youtube_tags' || key === 'instagram_collaborators' ||
+          if (key === 'instagram_collaborators') {
+            body[key] = parseFormArray(value);
+          } else if (key === 'platforms' || key === 'media_file_ids' || key === 'account_ids' ||
+            key === 'youtube_tags' ||
             key === 'youtube_allowed_countries' || key === 'youtube_blocked_countries') {
             // Try to parse as JSON array first, otherwise split by comma
             try {
@@ -2479,8 +2481,10 @@ export async function handleRequest(req: Request): Promise<Response> {
             body[key] = typeof value === 'string' ? parseFormBoolean(value) : value;
           } else if (typeof value === 'string') {
             // Handle array fields
-            if (key === 'platforms' || key === 'media_file_ids' || key === 'account_ids' ||
-              key === 'youtube_tags' || key === 'instagram_collaborators' ||
+            if (key === 'instagram_collaborators') {
+              body[key] = parseFormArray(value);
+            } else if (key === 'platforms' || key === 'media_file_ids' || key === 'account_ids' ||
+              key === 'youtube_tags' ||
               key === 'youtube_allowed_countries' || key === 'youtube_blocked_countries') {
               try {
                 body[key] = JSON.parse(value);
@@ -2516,7 +2520,9 @@ export async function handleRequest(req: Request): Promise<Response> {
         const body: Record<string, any> = {};
 
         for (const [key, value] of params.entries()) {
-          if (key === 'platforms' || key === 'media_file_ids' || key === 'account_ids' || key === 'instagram_collaborators') {
+          if (key === 'instagram_collaborators') {
+            body[key] = parseFormArray(value);
+          } else if (key === 'platforms' || key === 'media_file_ids' || key === 'account_ids') {
             try {
               body[key] = JSON.parse(value);
             } catch {

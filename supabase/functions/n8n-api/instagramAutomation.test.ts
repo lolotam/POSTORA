@@ -125,6 +125,18 @@ Deno.test("registered MCP and create API preserve Story sharing and collaborator
         }
       });
     }
+    for (const format of ["urlencoded", "multipart", "fallback"]) {
+      await test.step(`${format} preserves a numeric collaborator username`, async () => {
+        const fields = { ...common, platforms: '["instagram"]', account_ids: JSON.stringify([ACCOUNT]), media_file_ids: JSON.stringify([MEDIA]),
+          instagram_share_to_story: "true", instagram_collaborators: "1234" };
+        const body = format === "multipart" ? new FormData() : new URLSearchParams(fields);
+        if (body instanceof FormData) for (const [key, value] of Object.entries(fields)) body.append(key, value);
+        const response = await fetch(new Request(`${ORIGIN}/functions/v1/n8n-api/api/v1/post`, { method: "POST",
+          body: format === "fallback" ? body.toString() : body, headers: { "x-api-key": API_KEY, ...(format === "fallback" ? { "Content-Type": "application/unknown" } : {}) } }));
+        assertEquals(response.status, 201, await response.clone().text());
+        assertEquals(inserted.at(-1)!.metadata.instagram_collaborator, "1234");
+      });
+    }
     await test.step("a multipart file cannot silently omit the requested Story option", async () => {
       const body = new FormData();
       for (const [key, value] of Object.entries(common)) {
