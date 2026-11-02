@@ -313,6 +313,7 @@
     "syncFormsHint": "اربط صفحة Facebook عشان تزامن نماذج العملاء."
   },
   "errors": {
+    "historyLoadFailed": "تعذّرت قراءة التحليلات المحفوظة. أعد المحاولة.",
     "actionFailed": "فشل الإجراء",
     "commentEmpty": "التعليق مينفعش يكون فاضي",
     "commentFailed": "فشل التعليق",
@@ -420,6 +421,8 @@
     "instagramPerformanceSubtitle": "تابع أداء حسابك، والإحصائيات اليومية، والمنشورات اللي وصولها أعلى من المعتاد"
   },
   "history": {
+    "savedAnalyses": "التحليلات المحفوظة",
+    "reuseHint": "اختر تحليلًا محفوظًا لعرض بياناته المسجلة دون طلب بيانات جديدة من المنصة.",
     "actions": "إجراءات",
     "actor": "Actor:",
     "allPlatforms": "كل المنصات",

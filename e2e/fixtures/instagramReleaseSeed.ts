@@ -9,7 +9,7 @@ import {
 
 type SavedSetting = { key: string; value: unknown; description: string | null };
 export interface InstagramReleaseSeed { manifest: InstagramReleaseManifest; previousSettings: SavedSetting[] }
-const SETTING_KEYS = ["collection_instagram_insights_enabled", "collection_instagram_rollout_policy", "credential_facebook_user_mode", "apify_enabled", "brand_scrape_max_posts", "feature_brand_intelligence"];
+const SETTING_KEYS = ["collection_instagram_insights_enabled", "collection_instagram_rollout_policy", "credential_facebook_user_mode", "apify_enabled", "brand_scrape_max_posts"];
 const jsonSql = (payload: unknown): string => `'${JSON.stringify(payload).replaceAll("'", "''")}'::jsonb`;
 
 async function authAdmin(path: string, init: RequestInit = {}): Promise<Response> {
@@ -273,7 +273,7 @@ function releaseSettingsSql(manifest: InstagramReleaseManifest): string {
     competitors: { mode: "allowlist", targets: manifest.watchlists.filter((entry) => entry.owner !== "admin").map((entry) => ({
       watchlist_id: entry.id, viewer_social_account_id: manifest.accounts.find((account) => account.key === (entry.owner === "ownerA" ? "pageGranted" : "otherPage"))!.id })) } };
   const settings = { collection_instagram_insights_enabled: true, collection_instagram_rollout_policy: policy,
-    credential_facebook_user_mode: "legacy", apify_enabled: false, brand_scrape_max_posts: 50, feature_brand_intelligence: true };
+    credential_facebook_user_mode: "legacy", apify_enabled: false, brand_scrape_max_posts: 50 };
   return `INSERT INTO public.app_settings(key,value,description) SELECT key,value,'Disposable canonical Instagram release fixture'
    FROM jsonb_each(${jsonSql(settings)}) ON CONFLICT(key) DO UPDATE SET value=EXCLUDED.value;`;
 }

@@ -31,9 +31,9 @@ import { TrackCompetitorControl } from "../ui/TrackCompetitorControl";
  *
  * WHY THE SOURCES ARE READ FROM THE PRODUCER
  *
- *   The interactive brand scrape does not publish a source yet, so the
- *   honest answer today is "unknown". A card that guessed "official"
- *   from a handle would be a claim nobody made (parent Task 2).
+ *   The producer's explicit provenance survives interactive responses
+ *   and saved profile data. A record without that provenance remains
+ *   "unknown"; a handle or cache strategy alone cannot establish it.
  */
 
 beforeAll(async () => {
@@ -65,6 +65,7 @@ vi.mock("@/hooks/useAuth", () => ({
 
 const supabaseState = vi.hoisted(() => ({
   sessions: [] as unknown[],
+  error: null as { message: string } | null,
 }));
 
 vi.mock("@/integrations/supabase/client", () => {
@@ -76,8 +77,8 @@ vi.mock("@/integrations/supabase/client", () => {
     ilike: () => chain,
     delete: () => chain,
     in: () => chain,
-    then: (resolve: (value: { data: unknown[]; error: null }) => unknown) =>
-      resolve({ data: supabaseState.sessions, error: null }),
+    then: (resolve: (value: { data: unknown[] | null; error: { message: string } | null }) => unknown) =>
+      resolve({ data: supabaseState.error ? null : supabaseState.sessions, error: supabaseState.error }),
   };
   return {
     supabase: {
@@ -164,16 +165,17 @@ function renderWithProviders(node: ReactNode) {
     defaultOptions: { queries: { retry: false } },
   });
 
-  return render(
+  return render(node, { wrapper: ({ children }: { children: ReactNode }) => (
     <QueryClientProvider client={queryClient}>
-      <MemoryRouter>{node}</MemoryRouter>
-    </QueryClientProvider>,
-  );
+      <MemoryRouter>{children}</MemoryRouter>
+    </QueryClientProvider>
+  ) });
 }
 
 beforeEach(() => {
   authState.user = { id: "user-a" };
   supabaseState.sessions = [];
+  supabaseState.error = null;
 });
 
 describe("ProfileCard composition", () => {
@@ -360,6 +362,39 @@ describe("the history states the source it was given", () => {
     await userEvent.click(screen.getByRole("button", { name: "Reuse" }));
     expect(onReuse).toHaveBeenCalledTimes(1);
     expect(onReuse.mock.calls[0][0].source).toBe("official");
+  });
+
+  it("does not show a failed history read as an empty history and retries the read", async () => {
+    supabaseState.error = { message: "synthetic database read failure" };
+    renderWithProviders(<ScrapeHistory onReuse={() => undefined} platform="instagram" />);
+    expect(await screen.findByRole("alert")).toHaveTextContent("Saved analyses could not be read.");
+    expect(screen.queryByText("No scraping history yet. Search for a brand to get started.")).toBeNull();
+    expect(screen.queryByText("synthetic database read failure")).toBeNull();
+
+    supabaseState.error = null;
+    supabaseState.sessions = [makeSession()];
+    await userEvent.click(screen.getByRole("button", { name: "Retry", exact: true }));
+    expect(await screen.findByText("@northwind")).toBeInTheDocument();
+  });
+
+  it("cannot reuse the previous owner's cached saved rows after an identity change", async () => {
+    supabaseState.sessions = [makeSession({ username: "owner_a" })];
+    const { rerender } = renderWithProviders(<ScrapeHistory onReuse={() => undefined} platform="instagram" />);
+    expect(await screen.findByText("@owner_a")).toBeInTheDocument();
+
+    authState.user = { id: "user-b" };
+    supabaseState.sessions = [makeSession({ user_id: "user-b", username: "owner_b" })];
+    rerender(<ScrapeHistory onReuse={() => undefined} platform="instagram" />);
+    expect(screen.queryByText("@owner_a")).toBeNull();
+    expect(await screen.findByText("@owner_b")).toBeInTheDocument();
+  });
+
+  it("refuses saved profile data for another platform in an Instagram history", async () => {
+    supabaseState.sessions = [makeSession({ profile_data: makeProfile("facebook"), posts_data: [POST] })];
+    const onReuse = vi.fn();
+    renderWithProviders(<ScrapeHistory onReuse={onReuse} platform="instagram" />);
+    await userEvent.click(await screen.findByRole("button", { name: "Reuse", exact: true }));
+    expect(onReuse).not.toHaveBeenCalled();
   });
 
   it("hands the reused profile the source of its session", async () => {

@@ -15,10 +15,12 @@ import { format } from "date-fns";
 import { toast } from "sonner";
 import { CompetitorSourceBadge } from "@/features/competitor-tracking";
 import { resolveBrandProfileSource } from "@/types/brand-intelligence";
-import type { BrandProfile, BrandPost, BrandScrapeSession } from "@/types/brand-intelligence";
+import { useAuth } from "@/hooks/useAuth";
+import type { BrandPlatform, BrandProfile, BrandPost, BrandScrapeSession } from "@/types/brand-intelligence";
 
 interface ScrapeHistoryProps {
   onReuse: (profile: BrandProfile, posts: BrandPost[]) => void;
+  platform?: BrandPlatform;
 }
 
 const platformIcons: Record<string, React.ReactNode> = {
@@ -33,24 +35,30 @@ function resolveSessionSource(session: BrandScrapeSession) {
   return recorded !== "unknown" ? recorded : resolveBrandProfileSource(session.profile_data?.source);
 }
 
-export function ScrapeHistory({ onReuse }: ScrapeHistoryProps) {
+export function ScrapeHistory({ onReuse, platform }: ScrapeHistoryProps) {
   const { t } = useTranslation("analytics");
+  const { user } = useAuth();
+  const ownerId = user?.id;
   const queryClient = useQueryClient();
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [platformFilter, setPlatformFilter] = useState<string>("all");
   const [searchQuery, setSearchQuery] = useState("");
 
-  const { data: sessions, isLoading } = useQuery({
-    queryKey: ["scrape-history", platformFilter, searchQuery],
+  const selectedPlatform = platform ?? platformFilter;
+  const { data: sessions, isLoading, error, refetch } = useQuery({
+    queryKey: ["scrape-history", ownerId, selectedPlatform, searchQuery],
+    enabled: !!ownerId,
     queryFn: async () => {
+      if (!ownerId) throw new Error("An authenticated owner is required to read saved analyses.");
       let query = supabase
         .from("brand_scrape_sessions")
         .select("*")
+        .eq("user_id", ownerId)
         .order("created_at", { ascending: false })
         .limit(50);
 
-      if (platformFilter !== "all") {
-        query = query.eq("platform", platformFilter);
+      if (selectedPlatform !== "all") {
+        query = query.eq("platform", selectedPlatform);
       }
       if (searchQuery.trim()) {
         query = query.ilike("username", `%${searchQuery.trim()}%`);
@@ -97,7 +105,8 @@ export function ScrapeHistory({ onReuse }: ScrapeHistoryProps) {
   };
 
   const handleReuse = (session: BrandScrapeSession) => {
-    if (!session.profile_data || !session.posts_data) {
+    if (!session.profile_data || !session.posts_data
+      || platform && (session.platform !== platform || session.profile_data.platform !== platform)) {
       toast.error(t("errors.sessionNoData", "This session has no stored data to reuse"));
       return;
     }
@@ -149,7 +158,7 @@ export function ScrapeHistory({ onReuse }: ScrapeHistoryProps) {
               className="ps-8 h-9 text-sm"
             />
           </div>
-          <Select value={platformFilter} onValueChange={setPlatformFilter}>
+          {!platform && <Select value={platformFilter} onValueChange={setPlatformFilter}>
             <SelectTrigger className="w-[140px] h-9 text-xs">
               <SelectValue placeholder={t("history.platform", "Platform")} />
             </SelectTrigger>
@@ -160,13 +169,20 @@ export function ScrapeHistory({ onReuse }: ScrapeHistoryProps) {
               <SelectItem value="facebook">{t("brand.facebook", "Facebook")}</SelectItem>
               <SelectItem value="tiktok">{t("brand.tiktok", "TikTok")}</SelectItem>
             </SelectContent>
-          </Select>
+          </Select>}
         </div>
 
         {/* Table */}
         {isLoading ? (
           <div className="space-y-2">
             {[1, 2, 3].map((i) => <div key={i} className="h-12 w-full animate-pulse rounded-md bg-muted" />)}
+          </div>
+        ) : error ? (
+          <div role="alert" className="space-y-2 text-sm">
+            <p>{t("errors.historyLoadFailed", "Saved analyses could not be read. Please retry.")}</p>
+            <Button type="button" variant="outline" size="sm" onClick={() => { void refetch(); }}>
+              {t("common:retry", "Retry")}
+            </Button>
           </div>
         ) : !sessions?.length ? (
           <div className="text-center py-8 text-muted-foreground text-sm">

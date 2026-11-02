@@ -91,11 +91,16 @@ test("canonical discovery preserves official provenance, nullable media and owne
   expect(await providerState()).toEqual(afterDiscovery);
 
   await page.goto("/brand-intelligence");
-  await page.getByRole("tab", { name: "History", exact: true }).click();
-  const history = page.getByRole("row").filter({ hasText: "@release_competitor" });
+  await expect(page).toHaveURL(/\/analytics\/instagram\?tab=performance$/);
+  await page.getByRole("button", { name: "Brand & Competitors", exact: true }).click();
+  await page.getByRole("button", { name: "History", exact: true }).click();
+  const historyDialog = page.getByRole("dialog", { name: "Saved analyses", exact: true });
+  const history = historyDialog.getByRole("row").filter({ hasText: "@release_competitor" });
   await expect(history).toHaveCount(2);
   await expect(history.first().getByText("Official", { exact: true })).toBeVisible();
   await history.first().getByRole("button", { name: "Reuse", exact: true }).click();
+  await expect(historyDialog).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "History", exact: true })).toBeFocused();
   await expectResult();
   expect(await providerState()).toEqual(afterDiscovery);
 
@@ -114,11 +119,14 @@ test("canonical discovery preserves official provenance, nullable media and owne
   expect(afterOtherOwner.networkRefusals).toBe(0);
   expect(afterOtherOwner.calls.slice(2).map((call: { account: string; operation: string }) => ({ account: call.account, operation: call.operation })))
     .toEqual([{ account: "otherPage", operation: "discovery" }, { account: "otherPage", operation: "discovery" }]);
-  await page.goto("/brand-intelligence");
-  await page.getByRole("tab", { name: "History", exact: true }).click();
-  const otherHistory = page.getByRole("row").filter({ hasText: "@release_competitor" });
+  await page.getByRole("button", { name: "History", exact: true }).click();
+  const otherHistoryDialog = page.getByRole("dialog", { name: "Saved analyses", exact: true });
+  const otherHistory = otherHistoryDialog.getByRole("row").filter({ hasText: "@release_competitor" });
   await expect(otherHistory).toHaveCount(1);
   await expect(otherHistory.getByText("Official", { exact: true })).toBeVisible();
-  await expect(page.getByText("@release_history_official", { exact: true })).toHaveCount(0);
+  await expect(otherHistoryDialog.getByText("@release_history_official", { exact: true })).toHaveCount(0);
   expect(await providerState()).toEqual(afterOtherOwner);
+  await page.keyboard.press("Escape");
+  await expect(otherHistoryDialog).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "History", exact: true })).toBeFocused();
 });

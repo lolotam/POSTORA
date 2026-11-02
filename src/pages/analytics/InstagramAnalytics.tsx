@@ -7,12 +7,14 @@ import { useAuth } from "@/hooks/useAuth";
 import { useQuery } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
-import { Camera, Loader2, SearchCheck, TrendingUp, Target } from "lucide-react";
+import { Camera, History, Loader2, SearchCheck, TrendingUp, Target } from "lucide-react";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { BrandSearchBar } from "@/components/brand-intelligence/BrandSearchBar";
 import { ProfileCard } from "@/components/brand-intelligence/ProfileCard";
 import { FilterToolbar } from "@/components/brand-intelligence/FilterToolbar";
 import { PostsGrid } from "@/components/brand-intelligence/PostsGrid";
 import { PostDetailDrawer } from "@/components/brand-intelligence/PostDetailDrawer";
+import { ScrapeHistory } from "@/components/brand-intelligence/ScrapeHistory";
 import { useBrandScrape } from "@/hooks/useBrandScrape";
 import type { BrandPost, BrandScrapeFilters } from "@/types/brand-intelligence";
 import { Icon3D, GradientHeading, GradientRingCard, GradientDivider, Reveal } from "@/components/fx";
@@ -92,7 +94,8 @@ export default function InstagramAnalytics({ defaultTab = "performance" }: Insta
 
   const [filters, setFilters] = useState<BrandScrapeFilters>(DEFAULT_FILTERS);
   const [selectedPost, setSelectedPost] = useState<BrandPost | null>(null);
-  const { profile, profileSource, posts, totalPosts, hasMore, isLoading, error, warning, reconnectRequired, search, loadMore } = useBrandScrape(session?.user.id);
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const { profile, profileSource, posts, totalPosts, hasMore, isLoading, error, warning, reconnectRequired, search, loadMore, loadFromSession } = useBrandScrape(session?.user.id);
 
   const { data: contentPostIds = new Set<string>() } = useQuery({
     queryKey: ["bi-content-post-ids", session?.user?.id],
@@ -224,6 +227,26 @@ export default function InstagramAnalytics({ defaultTab = "performance" }: Insta
           <>
             <Reveal delay={80}>
               <GradientRingCard variant="rose" padded={false} hoverLift={false} ringIntensity="subtle" innerClassName="p-4 md:p-5">
+                <div className="flex justify-end mb-3">
+                  <Dialog open={historyOpen} onOpenChange={setHistoryOpen}>
+                    <DialogTrigger asChild>
+                      <Button type="button" variant="outline" size="sm" className="gap-2">
+                        <History className="h-4 w-4" />
+                        {t("brand.history", "History")}
+                      </Button>
+                    </DialogTrigger>
+                    <DialogContent className="max-w-4xl max-h-[85dvh] overflow-y-auto">
+                      <DialogHeader className="text-start sm:text-start">
+                        <DialogTitle>{t("history.savedAnalyses", "Saved analyses")}</DialogTitle>
+                        <DialogDescription>{t("history.reuseHint", "Select a saved analysis to view its recorded data without requesting new provider data.")}</DialogDescription>
+                      </DialogHeader>
+                      <ScrapeHistory platform="instagram" onReuse={(savedProfile, savedPosts) => {
+                        loadFromSession(savedProfile, savedPosts);
+                        setHistoryOpen(false);
+                      }} />
+                    </DialogContent>
+                  </Dialog>
+                </div>
                 <BrandSearchBar platform="instagram" onSearch={handleSearch} isLoading={isLoading} />
               </GradientRingCard>
             </Reveal>
