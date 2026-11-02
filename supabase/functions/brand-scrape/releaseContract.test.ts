@@ -51,6 +51,7 @@ Deno.test("discovery refuses malformed grammar, cursor loops and provider bodies
           json({ business_discovery: { id: "target", media: { data: [media(String(requests))], paging: { cursors: { after: "repeated" } } } } }));
       }) as typeof fetch }), InstagramDiscoveryError);
     assertEquals(error.message.includes("synthetic-user-token"), false);
+    if (scenario === "token") assertEquals(error.code, "IG_RECONNECT_REQUIRED");
     if (scenario.startsWith("insufficient_data")) assertEquals(error.code, "DISCOVERY_PROVIDER_UNAVAILABLE");
     assertEquals(requests, scenario === "handle" ? 0 : scenario === "loop" ? 2 : 1);
   });
@@ -69,9 +70,13 @@ Deno.test("own-account source and FEED video survive the direct transport with m
 });
 
 Deno.test("discovery classifies throttling independently of HTTP success and provider text", async (test) => {
-  for (const scenario of ["http429", "code4", "code17", "code32", "code613", "usage80"] as const) {
+  for (const scenario of ["http429", "http429cancelerror", "code4", "code17", "code32", "code613", "usage80"] as const) {
     await test.step(scenario, async () => {
-      const response = scenario === "http429" ? new Response("upstream throttle", { status: 429 }) :
+      let bodyCancelled = false;
+      const response = scenario.startsWith("http429") ? new Response(new ReadableStream({
+        start(controller) { controller.enqueue(new TextEncoder().encode("upstream throttle")); },
+        cancel() { bodyCancelled = true; if (scenario === "http429cancelerror") throw new Error("synthetic cancellation failure"); },
+      }), { status: 429 }) :
         scenario === "usage80" ? json({ business_discovery: { id: "target", media: { data: [] } } }) :
           json({ error: { code: Number(scenario.slice(4)), message: "synthetic-provider-secret" } }, 400);
       if (scenario === "usage80") response.headers.set("x-app-usage", JSON.stringify({ call_count: 80 }));
@@ -80,6 +85,7 @@ Deno.test("discovery classifies throttling independently of HTTP success and pro
       assertEquals(error.code, "DISCOVERY_RATE_LIMITED");
       assertEquals(error.status, 429);
       assertEquals(error.message.includes("synthetic-provider-secret"), false);
+      if (scenario.startsWith("http429")) assertEquals(bodyCancelled, true);
     });
   }
 });

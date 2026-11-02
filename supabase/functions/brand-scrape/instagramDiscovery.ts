@@ -9,6 +9,7 @@ import {
   readMediaCursor, resolveGraphApiVersion,
 } from "../competitor-snapshot-sync/graphProvider.ts";
 import { CompetitorProviderError } from "../competitor-snapshot-sync/types.ts";
+import { awaitWithAbort } from "../_shared/abort.ts";
 
 export class InstagramDiscoveryError extends Error {
   constructor(readonly code: string, message: string, readonly status = 409) {
@@ -123,6 +124,11 @@ async function discoveryJson(url: string, fetchFn: typeof fetch): Promise<unknow
   const signal = AbortSignal.timeout(8_000);
   try {
     const response = await fetchFn(url, { signal, redirect: "error" });
+    const responseBody = response.body;
+    if (response.status === 429 && responseBody) {
+      // Cleanup stays inside the attempt ceiling and cannot mask known throttling.
+      await awaitWithAbort(() => responseBody.cancel(), signal).catch(() => undefined);
+    }
     const payload: unknown = response.status === 429 ? null : JSON.parse(await readBoundedBody(response, 1_048_576, signal));
     const providerError = readGraphErrorEnvelope(payload);
     if (providerError?.code === 190) throw new InstagramDiscoveryError("IG_RECONNECT_REQUIRED", "Reconnect Instagram to enable official competitor data.");
