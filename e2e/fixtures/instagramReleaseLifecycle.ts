@@ -29,6 +29,8 @@ async function startCanonicalVite(): Promise<void> {
   Object.assign(process.env, browserEnvironment);
   // The ordinary vite.config.ts explicitly calls loadEnv; Vite 5's envFile flag disables its own loader.
   const server = await createServer({ configFile: false, envFile: false, plugins: [react()],
+    // envFile:false also skips Vite's process.env collection. Expose only these synthetic public inputs.
+    define: Object.fromEntries(Object.entries(browserEnvironment).map(([key, setting]) => [`import.meta.env.${key}`, JSON.stringify(setting)])),
     resolve: { alias: { "@": resolve(fileURLToPath(new URL("../../src", import.meta.url))) } },
     server: { host: "127.0.0.1", port: 8080, strictPort: true } });
   await server.listen();

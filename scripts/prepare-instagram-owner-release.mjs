@@ -111,6 +111,8 @@ async function prepare() {
 ALTER ROLE supabase_auth_admin WITH PASSWORD '${databasePassword}';
 ALTER ROLE authenticator WITH PASSWORD '${databasePassword}';
 ALTER SCHEMA auth OWNER TO supabase_auth_admin;
+-- Auth deletion traverses application foreign keys. The restored schema revokes PUBLIC usage.
+GRANT USAGE ON SCHEMA public TO supabase_auth_admin;
 DO $ownership$ DECLARE entry record; BEGIN
 FOR entry IN SELECT c.relname,c.relkind FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='auth' AND c.relkind IN ('r','S','v') LOOP
 EXECUTE format('ALTER %s auth.%I OWNER TO supabase_auth_admin',CASE entry.relkind WHEN 'S' THEN 'SEQUENCE' WHEN 'v' THEN 'VIEW' ELSE 'TABLE' END,entry.relname);

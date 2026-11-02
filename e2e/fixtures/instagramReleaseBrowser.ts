@@ -12,6 +12,7 @@ export {
 } from "./competitorTracking.ts";
 
 export async function prepareInstagramReleaseBrowser(page: Page, request: APIRequestContext): Promise<InstagramReleaseManifest> {
+  page.on("pageerror", (error) => { throw error; });
   const health = await request.get(`${INSTAGRAM_RELEASE.apiUrl}/__instagram-release/health`);
   const manifest = await requireInstagramReleaseHealth(new Response(await health.body(), { status: health.status() }));
   await page.route("**/*", async (route) => {
