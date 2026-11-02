@@ -5,7 +5,7 @@ import { Button } from "@/components/ui/button";
 import { useAuth } from "@/hooks/useAuth";
 import type { AnalyticsPeriodDays, AnalyticsPlatform } from "../domain/types";
 import { ANALYTICS_PERIOD_DAYS } from "../../../../supabase/functions/_shared/analyticsCalendar.ts";
-import { useSavedAnalytics } from "../application/useSavedAnalytics";
+import { useSavedAnalytics } from "./useSavedAnalytics";
 import { AnalyticsReadError, type SavedAnalyticsGateway } from "../application/ports";
 import { supabaseSavedAnalytics } from "../infrastructure/supabaseSavedAnalytics";
 import { SavedAnalyticsReport } from "./SavedAnalyticsReport";

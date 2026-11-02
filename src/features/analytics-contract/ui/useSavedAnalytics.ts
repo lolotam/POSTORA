@@ -1,6 +1,6 @@
 import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import type { AnalyticsPeriodDays, AnalyticsPlatform } from "../domain/types";
-import type { SavedAnalyticsGateway } from "./ports";
+import type { SavedAnalyticsGateway } from "../application/ports";
 
 export function useSavedAnalytics(input: { gateway: SavedAnalyticsGateway; ownerId: string | null; platform: AnalyticsPlatform;
   selectedAccountId: string | null; periodDays: AnalyticsPeriodDays }) {
