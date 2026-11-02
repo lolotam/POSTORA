@@ -5,6 +5,7 @@ import { syntheticOwnerReleaseKey } from "./fixtures/instagramOwnerReleaseSettin
 import { INSTAGRAM_RELEASE } from "./fixtures/instagramRelease.ts";
 import { prepareInstagramReleaseBrowser, signInInstagramRelease } from "./fixtures/instagramReleaseBrowser.ts";
 import type { CompetitorReportDetail, CompetitorReportList } from "../supabase/functions/competitor-tracking-report/contracts.ts";
+import type { OwnerReport } from "../supabase/functions/instagram-insights-report/contracts.ts";
 
 async function searchInstagramRelease(page: Page, username: string) {
   await page.getByPlaceholder("Enter @username or instagram.com/username").fill(`@${username}`);
@@ -223,6 +224,116 @@ test("canonical discovery keeps ambiguous viewer failures out of target eligibil
     await control("interactive-fallback", { enabled: false });
     await control("provider-scenario", { account: "pageGranted", scenario: "normal" });
   }
+});
+
+test("canonical owner and competitor screens retain exact outliers across periods and pages with distinct metric bases", async ({ page, request }) => {
+  const manifest = await prepareInstagramReleaseBrowser(page, request);
+  const health = await (await request.get(`${INSTAGRAM_RELEASE.apiUrl}/__instagram-release/health`)).json();
+  const headers = { Authorization: `Bearer ${await syntheticOwnerReleaseKey("service_role")}`,
+    "X-Instagram-Release-Namespace": manifest.namespace, "X-Instagram-Release-Candidate": health.candidate };
+  const providerState = async () => {
+    const response = await request.get(`${INSTAGRAM_RELEASE.apiUrl}/__instagram-release/provider-calls`, { headers });
+    expect(response.status()).toBe(200);
+    return response.json();
+  };
+  const before = await providerState();
+  await signInInstagramRelease(page, manifest, "ownerA");
+  await page.goto("/analytics/instagram?tab=competitors");
+  const detailResponse = (period: number, cursor = false) => page.waitForResponse((reply) => {
+    if (!reply.url().endsWith("/functions/v1/competitor-tracking-report")) return false;
+    const body = reply.request().postDataJSON();
+    return body?.action === "detail" && body.period_days === period && Boolean(body.cursor) === cursor;
+  });
+  const first = detailResponse(7);
+  await page.getByRole("button", { name: "View report for @release_cursor_tie", exact: true }).click();
+  const firstReply = await first;
+  expect(firstReply.status()).toBe(200);
+  const short: CompetitorReportDetail = await firstReply.json();
+  const original = short.media.find((item) => item.ig_media_id === "release_cursor_tie_media_0")!;
+  expect(original.outlier).toMatchObject({ score: 3, label: "outlier", baselineMedian: 100, baselineSize: 12, metric_basis: "public_views" });
+  const longReply = detailResponse(30);
+  await page.getByRole("dialog").getByRole("tab", { name: "Follower change · 30 days", exact: true }).click();
+  const response = await longReply;
+  expect(response.status()).toBe(200);
+  const long: CompetitorReportDetail = await response.json();
+  expect(long.media.find((item) => item.ig_media_id === original.ig_media_id)?.outlier).toEqual(original.outlier);
+  expect(long.next_cursor).not.toBeNull();
+  const continuation = detailResponse(30, true);
+  await page.getByRole("dialog").getByRole("button", { name: "Load more", exact: true }).click();
+  const continued = await continuation;
+  expect(continued.status()).toBe(200);
+  const tail: CompetitorReportDetail = await continued.json();
+  const media = [...long.media, ...tail.media];
+  for (const verdict of [
+    { index: 0, label: "outlier", score: 3, copy: "Outlier" },
+    { index: 1, label: "above", score: 1.5, copy: "Above usual" },
+    { index: 2, label: "normal", score: 1, copy: "Normal" },
+    { index: 3, label: "below", score: 0.5, copy: "Below usual" },
+    { index: 4, label: "no_data", score: null, copy: "Data unavailable" },
+    { index: 5, label: "below", score: 0, copy: "Below usual" },
+    { index: 20, label: "small_baseline", score: null, copy: "Not enough earlier posts" },
+    { index: 29, label: "too_early", score: null, copy: "Too early" },
+  ]) {
+    const item = media.find((candidate) => candidate.ig_media_id === `release_cursor_tie_media_${verdict.index}`)!;
+    expect(item?.outlier).toMatchObject({ label: verdict.label, score: verdict.score });
+    const row = page.getByRole("dialog").getByRole("row").filter({ has: page.getByText(`Synthetic competitor media ${verdict.index}`, { exact: true }) });
+    await expect(row.getByText(verdict.copy, { exact: true })).toBeVisible();
+    await expect(row.getByText(`Metric basis: ${verdict.index === 20 ? "public interactions" : "public views"}`, { exact: true })).toBeVisible();
+  }
+  await expect(page.getByRole("dialog").getByRole("row").filter({ has: page.getByText("Synthetic competitor media 0", { exact: true }) })
+    .getByText("Outlier", { exact: true })).toBeVisible();
+  await page.keyboard.press("Escape");
+
+  const account = manifest.accounts.find((item) => item.key === "pageGranted")!;
+  const ownerResponse = (period: number, cursor = false) => page.waitForResponse((reply) => {
+    if (!reply.url().endsWith("/functions/v1/instagram-insights-report")) return false;
+    const body = reply.request().postDataJSON();
+    return body?.social_account_id === account.id && body.period_days === period && Boolean(body.cursor) === cursor;
+  });
+  const ownerFirst = ownerResponse(30);
+  await page.goto("/analytics/instagram?tab=performance");
+  const ownerReply = await ownerFirst;
+  expect(ownerReply.status()).toBe(200);
+  const owner: OwnerReport = await ownerReply.json();
+  await expect(page.getByRole("combobox")).toContainText("@release_pagegranted");
+  const ownerNext = ownerResponse(30, true);
+  await page.getByRole("button", { name: "Load more", exact: true }).click();
+  const ownerTailReply = await ownerNext;
+  expect(ownerTailReply.status()).toBe(200);
+  const ownerTail: OwnerReport = await ownerTailReply.json();
+  const ownerItems = [...owner.media.page.items, ...ownerTail.media.page.items];
+  for (const verdict of [
+    { suffix: "history_0", label: "outlier", score: 3, copy: "🌟 3.0x Outlier" },
+    { suffix: "history_1", label: "above", score: 1.5, copy: "▲ 1.5x Above" },
+    { suffix: "history_2", label: "normal", score: 1, copy: "1.0x Normal" },
+    { suffix: "history_3", label: "below", score: 0.5, copy: "▼ 0.5x Below" },
+    { suffix: "history_4", label: "no_data", score: null, copy: "No data" },
+    { suffix: "history_5", label: "below", score: 0, copy: "▼ 0.0x Below" },
+    { suffix: "history_6", label: "too_early", score: null, copy: "Too early (<48h)" },
+    { suffix: "history_20", label: "small_baseline", score: null, copy: "Small baseline" },
+    { suffix: "six_baseline_0", label: "outlier", score: 3, copy: "🌟 3.0x Outlier" },
+  ]) {
+    const id = `${account.providerId}_${verdict.suffix}`;
+    const item = ownerItems.find((candidate) => candidate.mediaId === id)!;
+    expect(item?.outlier).toMatchObject({ label: verdict.label, score: verdict.score });
+    const row = page.getByRole("row").filter({ has: page.getByText(id, { exact: true }) });
+    await expect(row.getByText(verdict.copy, { exact: true })).toBeVisible();
+  }
+  const ownerOriginal = ownerItems.find((item) => item.mediaId === `${account.providerId}_history_0`)!;
+  expect(ownerOriginal.outlier).toMatchObject({ baselineSize: 12, baselineMedian: 100, metricBasis: "views" });
+  expect(ownerItems.find((item) => item.mediaId === `${account.providerId}_six_baseline_0`)?.outlier)
+    .toMatchObject({ baselineSize: 6, baselineMedian: 100, metricBasis: "interactions" });
+  const shortOwnerReply = ownerResponse(7);
+  await page.getByRole("button", { name: "7d", exact: true }).click();
+  const shortOwnerResponse = await shortOwnerReply;
+  expect(shortOwnerResponse.status()).toBe(200);
+  const shortOwner: OwnerReport = await shortOwnerResponse.json();
+  expect(shortOwner.media.page.items.find((item) => item.mediaId === ownerOriginal.mediaId)?.outlier).toEqual(ownerOriginal.outlier);
+  const ownerRow = page.getByRole("row").filter({ has: page.getByText(ownerOriginal.mediaId, { exact: true }) });
+  await expect(ownerRow.getByText("Metric basis: owner organic views", { exact: true })).toBeVisible();
+  const interactionsRow = page.getByRole("row").filter({ has: page.getByText(`${account.providerId}_six_baseline_0`, { exact: true }) });
+  await expect(interactionsRow.getByText("Metric basis: owner organic interactions", { exact: true })).toBeVisible();
+  expect(await providerState()).toEqual(before);
 });
 
 test("canonical historical growth preserves real intervals and refuses zero, missing, stale and changed-source baselines", async ({ page, request }) => {

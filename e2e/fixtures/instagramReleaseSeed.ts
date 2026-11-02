@@ -189,6 +189,7 @@ BEGIN
    published:=t-interval '3 days'-i*interval '1 day';
    metric:=CASE i WHEN 0 THEN 300 WHEN 1 THEN 150 WHEN 2 THEN 100 WHEN 3 THEN 50 WHEN 4 THEN NULL WHEN 5 THEN 0 ELSE 100 END;
    IF i IN (6,7,8) THEN published:=t-interval '48 hours'+(i-7)*interval '1 microsecond';END IF;
+   IF i=6 THEN published:=t-interval '24 hours';END IF;
    INSERT INTO public.ig_media_insight_snapshots(user_id,social_account_id,ig_media_id,published_at,captured_at,captured_on,capture_timezone,media_product_type,media_type,status,views,reach,likes,comments,saved,shares,total_interactions,caption)
    VALUES(u,(a->>'id')::uuid,(a->>'providerId')||'_history_'||i,published,t,(t AT TIME ZONE 'Asia/Kuwait')::date,'Asia/Kuwait','REELS','VIDEO','ok',metric,0,0,0,0,0,0,'Synthetic owner media '||i);
   END LOOP;
@@ -203,8 +204,8 @@ BEGIN
    ((t AT TIME ZONE 'UTC')::date-d+1)::timestamp AT TIME ZONE 'UTC','UTC','ok',t,
    CASE WHEN d=1 THEN NULL ELSE 0 END,CASE WHEN d=1 THEN NULL ELSE 200 END,0 FROM generate_series(1,30) d;
   FOR i IN 0..6 LOOP
-   INSERT INTO public.ig_media_insight_snapshots(user_id,social_account_id,ig_media_id,published_at,captured_at,captured_on,media_product_type,media_type,status,views,likes,comments,saved,shares)
-   VALUES(u,(a->>'id')::uuid,(a->>'providerId')||'_six_baseline_'||i,t-(i+3)*interval '1 day',t,(t AT TIME ZONE 'Asia/Kuwait')::date,'FEED','IMAGE','ok',NULL,CASE WHEN i=0 THEN 300 ELSE 100 END,0,0,0);
+   INSERT INTO public.ig_media_insight_snapshots(user_id,social_account_id,ig_media_id,published_at,captured_at,captured_on,media_product_type,media_type,status,views,likes,comments,saved,shares,total_interactions)
+   VALUES(u,(a->>'id')::uuid,(a->>'providerId')||'_six_baseline_'||i,t-(i+3)*interval '1 day',t,(t AT TIME ZONE 'Asia/Kuwait')::date,'FEED','IMAGE','ok',NULL,CASE WHEN i=0 THEN 300 ELSE 100 END,0,0,0,CASE WHEN i=0 THEN 300 ELSE 100 END);
   END LOOP;
   FOREACH i IN ARRAY ARRAY[7,8,30,31,90,91] LOOP
    INSERT INTO public.ig_media_insight_snapshots(user_id,social_account_id,ig_media_id,published_at,captured_at,captured_on,media_product_type,media_type,status,views)
@@ -261,6 +262,7 @@ BEGIN
    pub:=t-(CASE WHEN i<3 THEN i+3 ELSE i+8 END)*interval '1 day';
    IF w->>'scenario'='partial' THEN pub:=t-interval '3 days'-i*interval '1 hour';END IF;
    IF w->>'scenario'='cursor_tie' AND i<2 THEN pub:=t-interval '3 days'+i*interval '1 microsecond';END IF;
+   IF w->>'scenario'='cursor_tie' AND i=29 THEN pub:=t-interval '24 hours';END IF;
    INSERT INTO public.competitor_media_snapshots(watchlist_id,user_id,ig_media_id,captured_on,captured_at,capture_timezone,media_product_type,media_type,published_at,like_count,comments_count,view_count,source,status,caption)
    VALUES((w->>'id')::uuid,u,(w->>'username')||'_media_'||i,(t AT TIME ZONE 'Asia/Kuwait')::date,t,'Asia/Kuwait',CASE WHEN i=20 THEN 'FEED' ELSE 'REELS' END,'VIDEO',pub,
     CASE WHEN i=0 THEN NULL ELSE 0 END,0,CASE i WHEN 0 THEN 300 WHEN 1 THEN 150 WHEN 2 THEN 100 WHEN 3 THEN 50 WHEN 4 THEN NULL WHEN 5 THEN 0 ELSE 100 END,s,'ok','Synthetic competitor media '||i);
