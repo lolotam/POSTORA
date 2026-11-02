@@ -605,7 +605,10 @@ test("canonical tracking persists a new capture through the real worker and reco
   await expect(detail.getByText("Synthetic release media 1", { exact: true })).toBeVisible();
   await page.keyboard.press("Escape");
   await row().getByRole("button", { name: `Remove @${INSTAGRAM_RELEASE.newTarget}`, exact: true }).click();
+  const removedResponse = page.waitForResponse((response) => response.url().endsWith("/rpc/update_competitor_watchlist")
+    && response.request().method() === "POST" && response.request().postDataJSON()?.p_watchlist_id === id);
   await page.getByRole("alertdialog").getByRole("button", { name: "Remove", exact: true }).click();
+  expect((await removedResponse).status()).toBe(200);
   await expect(row()).toHaveCount(0);
   expect((await target())[0]).toMatchObject({ id, is_active: false });
   expect(await snapshots()).toEqual(captured);

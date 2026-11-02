@@ -89,6 +89,24 @@ beforeEach(() => {
 });
 
 describe("useBrandScrape provenance", () => {
+  it("hides an earlier successful analysis after a same-target permission refusal", async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse({ profile: { ...PROFILE, source: "official" }, posts: [POST], totalPosts: 1, hasMore: true }));
+    const { result } = renderHook(() => useBrandScrape("fixture-owner"), { wrapper });
+    act(() => result.current.search("northwind", "instagram"));
+    await waitFor(() => expect(result.current.profileSource).toBe("official"));
+    fetchMock.mockResolvedValue({ ok: false, status: 409, json: async () => ({
+      error: "Reconnect Instagram", error_code: "IG_INSIGHTS_SCOPE_MISSING",
+    }) });
+    act(() => result.current.search("northwind", "instagram"));
+    await waitFor(() => expect(result.current.error).toBe("Reconnect Instagram"), { timeout: 3_000 });
+    expect(result.current.reconnectRequired).toBe(true);
+    expect(result.current.profile).toBeNull();
+    expect(result.current.profileSource).toBe("unknown");
+    expect(result.current.posts).toEqual([]);
+    expect(result.current.totalPosts).toBe(0);
+    expect(result.current.hasMore).toBe(false);
+  });
+
   it("hides prior-owner session data immediately when the authenticated owner changes", () => {
     const { result, rerender } = renderHook(({ owner }) => useBrandScrape(owner), { wrapper, initialProps: { owner: "fixture-owner" } });
     act(() => result.current.loadFromSession({ ...PROFILE, source: "official" }, [POST]));

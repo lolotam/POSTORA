@@ -76,14 +76,17 @@ export function useBrandScrape(ownerId: string | undefined) {
     return payload as BrandScrapeResponse;
   }, [platform, username, ownerId]);
 
-  const { data, isLoading, error } = useQuery({
+  const { data: cachedData, isLoading, error } = useQuery({
     queryKey: ["brand-scrape", ownerId, platform, username, 0],
     queryFn: () => callBrandScrape(0),
     enabled: !!ownerId && sameOwner && searchTriggered && !!username && !sessionProfile,
     staleTime: 3600000,
     retry: 1,
   });
-  const hasMore = sameOwner && !sessionPosts && (continuation?.hasMore ?? data?.hasMore ?? false);
+  // React Query retains old data after a failed refetch. It cannot represent
+  // the result of a newly refused search, especially after a permission denial.
+  const data = error ? undefined : cachedData;
+  const hasMore = sameOwner && !!data && !sessionPosts && (continuation?.hasMore ?? data.hasMore);
 
   const search = useCallback((newUsername: string, newPlatform: BrandPlatform) => {
     requestGeneration.current++;
@@ -139,7 +142,7 @@ export function useBrandScrape(ownerId: string | undefined) {
 
   // Merge: session data takes priority, then query data
   const activeProfile = (sameOwner ? sessionProfile : null) || data?.profile || null;
-  const visiblePosts = sameOwner ? allPosts : [];
+  const visiblePosts = sameOwner && data ? allPosts : [];
   const combinedPosts = (sameOwner ? sessionPosts : null) || (data?.posts ? [...data.posts, ...visiblePosts] : visiblePosts);
 
   /**
@@ -156,7 +159,7 @@ export function useBrandScrape(ownerId: string | undefined) {
     profile: activeProfile,
     profileSource,
     posts: combinedPosts,
-    totalPosts: sameOwner && sessionPosts ? sessionPosts.length : ((sameOwner ? continuation?.totalPosts : undefined) ?? data?.totalPosts ?? 0),
+    totalPosts: sameOwner && sessionPosts ? sessionPosts.length : (data ? ((sameOwner ? continuation?.totalPosts : undefined) ?? data.totalPosts) : 0),
     hasMore,
     isLoading: sameOwner && sessionProfile ? false : isLoading,
     error: sameOwner && sessionProfile ? null : (error ? (error as Error).message : null),

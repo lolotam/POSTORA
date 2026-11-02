@@ -239,8 +239,15 @@ async function serveRequest(request: Request): Promise<Response> {
     headers.set("Access-Control-Allow-Methods", "GET,POST,PATCH,DELETE,OPTIONS");
     headers.set("Access-Control-Expose-Headers", "content-range");
     return new Response(response.body, { status: response.status, headers });
-  } catch {
-    console.error("Canonical Instagram release route failed");
+  } catch (failure) {
+    console.error("Canonical Instagram release route failed", {
+      path: new URL(request.url).pathname,
+      name: failure instanceof Error ? failure.name : "unknown",
+      seedLocation: failure instanceof Error ? /instagramReleaseSeed\.ts:\d+:\d+/.exec(failure.stack ?? "")?.[0] ?? null : null,
+      // Fixture SQL already strips driver messages to a SQLSTATE. Never log
+      // arbitrary provider errors, request bodies, query strings or secrets.
+      sqlstate: failure instanceof Error ? /^Owner-release SQL fixture failed \(SQLSTATE ([A-Z0-9]{5}|unknown)\)$/.exec(failure.message)?.[1] ?? null : null,
+    });
     return Response.json({ error: "fixture_route_failed" }, { status: 500 });
   }
 }
