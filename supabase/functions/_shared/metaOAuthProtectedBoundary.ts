@@ -297,12 +297,45 @@ function isAbortLike(error: unknown): boolean {
  * Reads a JSON body. A parse failure is an empty body, not a timeout.
  * Abort and the deadline stay failures so a hanging read cannot look done.
  */
-async function readProtectedJson(response: Response): Promise<unknown> {
+async function readProtectedJson(response: Response, signal: AbortSignal, maxBodyBytes?: number): Promise<unknown> {
   try {
-    return await response.json();
+    return maxBodyBytes === undefined
+      ? await response.json()
+      : await readBoundedProtectedJson(response, maxBodyBytes, signal);
   } catch (error) {
     if (isAbortLike(error) || error instanceof ProtectedProviderFailure) throw error;
     return null;
+  }
+}
+
+/** The permission reader must not allocate an unbounded provider document. */
+async function readBoundedProtectedJson(response: Response, maxBytes: number, signal: AbortSignal): Promise<unknown> {
+  if (!response.body) return null;
+  const reader = response.body.getReader();
+  const stop = () => { void reader.cancel().catch(() => undefined); };
+  signal.addEventListener("abort", stop, { once: true });
+  const chunks: Uint8Array[] = [];
+  let length = 0;
+  try {
+    while (true) {
+      if (signal.aborted) throw new ProtectedProviderFailure("provider_timeout");
+      const chunk = await reader.read();
+      if (signal.aborted) throw new ProtectedProviderFailure("provider_timeout");
+      if (chunk.done) break;
+      length += chunk.value.byteLength;
+      if (length > maxBytes) {
+        await reader.cancel();
+        throw new ProtectedProviderFailure("provider_malformed");
+      }
+      chunks.push(chunk.value);
+    }
+    const bytes = new Uint8Array(length);
+    let offset = 0;
+    for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.byteLength; }
+    return JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
+  } finally {
+    signal.removeEventListener("abort", stop);
+    reader.releaseLock();
   }
 }
 
@@ -317,7 +350,7 @@ async function readProtectedJson(response: Response): Promise<unknown> {
 export async function protectedFetchJson(
   url: string,
   init: RequestInit,
-  options: { timeoutMs: number; fetcher?: typeof fetch; signal?: AbortSignal },
+  options: { timeoutMs: number; fetcher?: typeof fetch; signal?: AbortSignal; maxBodyBytes?: number },
 ): Promise<ProtectedHttpResult> {
   if (options.signal?.aborted || options.timeoutMs <= 0) {
     throw new ProtectedProviderFailure("provider_timeout");
@@ -376,7 +409,7 @@ export async function protectedFetchJson(
       callerStop,
     ]);
     const body = await Promise.race([
-      readProtectedJson(response),
+      readProtectedJson(response, transport.signal, options.maxBodyBytes),
       deadline,
       callerStop,
     ]);

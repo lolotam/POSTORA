@@ -75,6 +75,7 @@ import {
   PROTECTED_OPERATION_BUDGET_MS,
 } from "../_shared/metaOAuthProtectedBoundary.ts";
 import { restrictedCorsHeaders } from "../_shared/cors.ts";
+import { refreshPageLinkedInstagramPermissions } from "./permissions.ts";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
@@ -749,6 +750,22 @@ Deno.serve(async (req) => {
           selectionKey: selection_key,
           providerTokenPresent,
         });
+        let permissions = await refreshPageLinkedInstagramPermissions({
+          userId: user_id,
+          receipt: committed.receipt,
+          rpc: async (name, args) => await supabase.rpc(name, args).abortSignal(AbortSignal.timeout(5_000)),
+        });
+        try {
+          const audit = await supabase.from("system_logs").insert({
+            level: permissions.status === "ok" ? "info" : "warn", category: "oauth", source: "instagram-business-oauth",
+            message: "Protected Instagram permission read finished", user_id,
+            metadata: { social_account_id: committed.receipt.socialAccountId, ...permissions },
+          }).abortSignal(AbortSignal.timeout(2_000));
+          if (audit.error) throw new Error("Permission audit unavailable");
+        } catch {
+          console.error("[instagram-business-oauth] permission audit unavailable", { event: "permission_audit_unavailable" });
+          permissions = { status: "unconfirmed" };
+        }
         const subscription = await assertWebhookSubscription({
           receipt: committed.receipt,
           userId: user_id,
@@ -779,6 +796,7 @@ Deno.serve(async (req) => {
           selection_key: committed.receipt.selectionKey,
           ig_username: committed.receipt.username,
           facebook_page_name: committed.receipt.facebookPageId,
+          permissions,
           subscription,
         });
       }
