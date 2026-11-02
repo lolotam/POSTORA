@@ -8,6 +8,7 @@ export const INSTAGRAM_RELEASE = Object.freeze({
   cronSecret: "synthetic-instagram-release-cron-secret", appId: "770001",
   providerSecret: "synthetic-instagram-release-provider-secret",
   apifyToken: "synthetic-instagram-release-apify-token",
+  oauthSecret: "synthetic-instagram-release-oauth-state-secret",
   newTarget: "release_new_target", lostTarget: "release_lost_target",
 });
 export type ReleaseUserKey = "ownerA" | "ownerB" | "admin";
@@ -154,6 +155,8 @@ export async function requireInstagramReleaseLogin(response: Response, expectedI
 
 export interface ReleaseProviderCall { account: ReleaseAccountKey; operation: string; scenario: ProviderScenario; observedAt: string }
 export class InstagramReleaseMetaTransport {
+  private reconnected = false;
+  acceptReconnectedAuthority(): void { this.reconnected = true; }
   readonly calls: ReleaseProviderCall[] = [];
   readonly scenarios = new Map<ReleaseAccountKey, ProviderScenario>();
   constructor(readonly manifest: InstagramReleaseManifest) { assertInstagramReleaseManifest(manifest); }
@@ -163,9 +166,11 @@ export class InstagramReleaseMetaTransport {
     if (request.method !== "GET" || !["https://graph.facebook.com", "https://graph.instagram.com"].includes(url.origin) || !url.pathname.startsWith("/v22.0/")) throw new Error("Instagram release provider refused request");
     const account = this.manifest.accounts.find((entry) => [entry.providerId, ...[0, 1].map((index) => `${entry.providerId}_media_${index}`),
       ...Array.from({ length: 21 }, (_, index) => `${entry.providerId}_history_${index}`)].includes(url.pathname.split("/")[2]));
-    if (!account || url.searchParams.get("access_token") !== account.token
+    if (!account || !(url.searchParams.get("access_token") === account.token
+        || (this.reconnected && account.key === "otherPage" && url.searchParams.get("access_token") === `${account.token}-renewed`))
       || url.hostname !== (account.loginKind === "direct" ? "graph.instagram.com" : "graph.facebook.com")) throw new Error("Instagram release provider refused authority");
-    const operation = providerOperation(url, account, this.manifest);
+    const authority = { ...account, token: url.searchParams.get("access_token")! };
+    const operation = providerOperation(url, authority, this.manifest);
     if (this.calls.length >= 500) throw new Error("Instagram release provider request budget exceeded");
     const scenario = this.scenarios.get(account.key) ?? "normal";
     this.calls.push({ account: account.key, operation, scenario, observedAt: this.manifest.referenceInstant });
@@ -174,7 +179,8 @@ export class InstagramReleaseMetaTransport {
     // Meta 100/33 is deliberately ambiguous; it must not establish target ineligibility.
     if (scenario === "ambiguous_target") return Response.json({ error: { code: 100, error_subcode: 33 } }, { status: 400 });
     if (scenario === "rate_limited") return Response.json({ error: { code: 4 } }, { status: 429 });
-    return Response.json(providerBody({ url, account, operation, manifest: this.manifest, scenario }));
+    return Response.json(providerBody({ url, account, operation, manifest: this.manifest, scenario,
+      reconnected: this.reconnected && account.key === "otherPage" && url.searchParams.get("access_token") === `${account.token}-renewed` }));
   }
 }
 
@@ -256,7 +262,7 @@ function syntheticMedia(account: ReleaseAccount, referenceInstant: string, index
     like_count: index === 0 ? null : 20, comments_count: 3, view_count: index === 1 ? null : 300, media_url: "", thumbnail_url: "", permalink: "" };
 }
 
-function providerBody(input: { url: URL; account: ReleaseAccount; operation: string; manifest: InstagramReleaseManifest; scenario: ProviderScenario }): unknown {
+function providerBody(input: { url: URL; account: ReleaseAccount; operation: string; manifest: InstagramReleaseManifest; scenario: ProviderScenario; reconnected: boolean }): unknown {
   const { url, account, operation, manifest, scenario } = input;
   if (operation === "profile") return { id: account.providerId, username: account.username, followers_count: account.key === "threshold" ? 99 : 120, media_count: 2 };
   if (operation === "inventory") return { data: [0, 1].map((index) => syntheticMedia(account, manifest.referenceInstant, index)) };
@@ -264,8 +270,10 @@ function providerBody(input: { url: URL; account: ReleaseAccount; operation: str
     const handle = /username\(([^)]+)\)/.exec(url.searchParams.get("fields") ?? "")![1];
     const second = url.searchParams.get("fields")!.includes(".after(");
     const targetAccount = { ...account, providerId: `release_target_${handle}` };
+    const media = syntheticMedia(targetAccount, manifest.referenceInstant, second ? 1 : 0);
+    if (input.reconnected && !second) media.view_count = 777;
     return { business_discovery: { id: `release_target_${handle}`, username: handle, name: "Synthetic release competitor", followers_count: 120, media_count: 2,
-      media: { data: [syntheticMedia(targetAccount, manifest.referenceInstant, second ? 1 : 0)],
+      media: { data: [media],
         ...(second ? {} : { paging: { cursors: { after: "release_page_2" }, next: "https://graph.facebook.com/synthetic-cursor-never-followed" } }) } } };
   }
   if (scenario === "empty_metric") return { data: [] };

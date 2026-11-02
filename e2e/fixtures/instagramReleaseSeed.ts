@@ -9,7 +9,7 @@ import {
 
 type SavedSetting = { key: string; value: unknown; description: string | null };
 export interface InstagramReleaseSeed { manifest: InstagramReleaseManifest; previousSettings: SavedSetting[] }
-const SETTING_KEYS = ["collection_instagram_insights_enabled", "collection_instagram_rollout_policy", "credential_facebook_user_mode", "apify_enabled", "brand_scrape_max_posts"];
+const SETTING_KEYS = ["collection_instagram_insights_enabled", "collection_instagram_rollout_policy", "credential_facebook_user_mode", "credential_facebook_user_protected_pilot_user_ids", "apify_enabled", "brand_scrape_max_posts"];
 const jsonSql = (payload: unknown): string => `'${JSON.stringify(payload).replaceAll("'", "''")}'::jsonb`;
 
 async function authAdmin(path: string, init: RequestInit = {}): Promise<Response> {
@@ -89,8 +89,17 @@ export async function cleanupInstagramRelease(seed: InstagramReleaseSeed): Promi
       AND u.raw_app_meta_data->>'instagram_release_namespace'='${seed.manifest.namespace}';`);
   await restoreReleaseSettings(seed.previousSettings);
   await ownerReleaseSql(`DELETE FROM public.app_settings WHERE key='test_instagram_release_namespace' AND value=${jsonSql(seed.manifest.namespace)};`);
-  const remaining = await ownerReleaseSql(`SELECT count(*) FROM auth.users WHERE id IN (SELECT (entry->>'id')::uuid FROM jsonb_array_elements(${jsonSql(Object.values(seed.manifest.users))}) entry);`);
-  if (remaining !== "0") throw new Error("Instagram release cleanup left owned identities");
+  const remaining = await ownerReleaseSql(`WITH owners AS (
+    SELECT (entry->>'id')::uuid id FROM jsonb_array_elements(${jsonSql(Object.values(seed.manifest.users))}) entry
+  ) SELECT
+    (SELECT count(*) FROM auth.users WHERE id IN (SELECT id FROM owners))+
+    (SELECT count(*) FROM public.social_profiles WHERE user_id IN (SELECT id FROM owners))+
+    (SELECT count(*) FROM public.meta_oauth_attempts WHERE user_id IN (SELECT id FROM owners))+
+    (SELECT count(*) FROM public.meta_oauth_attempt_receipts WHERE user_id IN (SELECT id FROM owners))+
+    (SELECT count(*) FROM public.oauth_pending_instagram_selections WHERE user_id IN (SELECT id FROM owners))+
+    (SELECT count(*) FROM public.facebook_user_credentials WHERE user_id IN (SELECT id FROM owners))+
+    (SELECT count(*) FROM public.facebook_user_credential_bindings WHERE user_id IN (SELECT id FROM owners));`);
+  if (remaining !== "0") throw new Error("Instagram release cleanup left owned identities or OAuth authority");
 }
 
 async function cleanupReleaseChildren(ownedUsers: string[]): Promise<void> {
@@ -284,7 +293,8 @@ function releaseSettingsSql(manifest: InstagramReleaseManifest): string {
     competitors: { mode: "allowlist", targets: manifest.watchlists.filter((entry) => entry.owner !== "admin").map((entry) => ({
       watchlist_id: entry.id, viewer_social_account_id: manifest.accounts.find((account) => account.key === (entry.owner === "ownerA" ? "pageGranted" : "otherPage"))!.id })) } };
   const settings = { collection_instagram_insights_enabled: true, collection_instagram_rollout_policy: policy,
-    credential_facebook_user_mode: "legacy", apify_enabled: false, brand_scrape_max_posts: 50 };
+    credential_facebook_user_mode: "legacy", credential_facebook_user_protected_pilot_user_ids: [manifest.users.ownerB.id],
+    apify_enabled: false, brand_scrape_max_posts: 50 };
   return `INSERT INTO public.app_settings(key,value,description) SELECT key,value,'Disposable canonical Instagram release fixture'
    FROM jsonb_each(${jsonSql(settings)}) ON CONFLICT(key) DO UPDATE SET value=EXCLUDED.value;`;
 }

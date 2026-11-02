@@ -645,3 +645,100 @@ test("canonical tracking persists a new capture through the real worker and reco
   expect(enqueueCalls).toBe(0);
   expect((await read("competitor_watchlist", { username: `eq.${INSTAGRAM_RELEASE.lostTarget}` })).map((entry: { id: string }) => entry.id)).toEqual([lost[0].id]);
 });
+
+test("canonical protected reconnect renews denied insights and replaces the previous generation discovery cache", async ({ page, request }) => {
+  const manifest = await prepareInstagramReleaseBrowser(page, request);
+  const health = await (await request.get(`${INSTAGRAM_RELEASE.apiUrl}/__instagram-release/health`)).json();
+  const headers = { Authorization: `Bearer ${await syntheticOwnerReleaseKey("service_role")}`,
+    "X-Instagram-Release-Namespace": manifest.namespace, "X-Instagram-Release-Candidate": health.candidate };
+  const account = manifest.accounts.find((entry) => entry.key === "otherPage")!;
+  const control = (path: string, data: Record<string, unknown>) => request.post(`${INSTAGRAM_RELEASE.apiUrl}/__instagram-release/${path}`, { headers, data });
+  const receipts = async (path = "provider-calls") => {
+    const response = await request.get(`${INSTAGRAM_RELEASE.apiUrl}/__instagram-release/${path}`, { headers });
+    expect(response.status()).toBe(200);
+    return response.json();
+  };
+  const read = async (table: string, select: string, filters: Record<string, string>) => {
+    const response = await request.get(`${INSTAGRAM_RELEASE.apiUrl}/rest/v1/${table}`, { headers,
+      params: { select, user_id: `eq.${manifest.users.ownerB.id}`, ...filters } });
+    expect(response.status()).toBe(200);
+    return response.json();
+  };
+  const capability = () => read("instagram_account_capabilities", "credential_generation,permission_read_state,granted_scopes,scopes_read_at",
+    { social_account_id: `eq.${account.id}` });
+  const binding = () => read("facebook_user_credential_bindings", "credential_id", { social_account_id: `eq.${account.id}` });
+  const beforeCapability = (await capability())[0];
+  const beforeBinding = (await binding())[0];
+  const before = await receipts();
+  expect((await control("oauth-authorize", { url: "https://postora.cloud/" })).status()).toBe(400);
+  expect((await control("deny-reconnect-permissions", { account: "pageGranted" })).status()).toBe(400);
+  const denial = await control("deny-reconnect-permissions", {});
+  expect(denial.status()).toBe(200);
+  expect(await denial.json()).toMatchObject({ credential_generation: beforeCapability.credential_generation,
+    permission_read_state: "ok", granted_scopes: ["instagram_basic"] });
+  await signInInstagramRelease(page, manifest, "ownerB");
+  await page.goto("/analytics/instagram?tab=analyze");
+  const refused = await searchInstagramRelease(page, "release_competitor");
+  expect(refused.status()).toBe(409);
+  expect(await refused.json()).toMatchObject({ error_code: "IG_INSIGHTS_SCOPE_MISSING" });
+  await expect(page.getByRole("heading", { name: "Synthetic release competitor", exact: true })).toHaveCount(0);
+  expect(await receipts()).toEqual(before);
+  await page.getByRole("button", { name: "Reconnect Instagram", exact: true }).click();
+  await page.waitForURL("**/profiles");
+  const row = page.getByRole("row").filter({ hasText: account.username });
+  await expect(row).toHaveCount(1);
+  await expect(row.getByText("Active", { exact: true })).toBeVisible();
+  await row.getByRole("button", { name: "Reconnect", exact: true }).click();
+  const flow = page.getByRole("dialog", { name: "Connect Instagram", exact: true });
+  await expect(flow).toBeVisible();
+  await page.route("https://www.facebook.com/v22.0/dialog/oauth?**", async (route) => {
+    expect(route.request().method()).toBe("GET");
+    const authorization = await control("oauth-authorize", { url: route.request().url() });
+    expect(authorization.status()).toBe(200);
+    const { redirect_url } = await authorization.json();
+    expect(new URL(redirect_url).origin).toBe(INSTAGRAM_RELEASE.apiUrl);
+    await route.fulfill({ status: 302, headers: { location: redirect_url }, body: "" });
+  });
+  await flow.getByRole("button", { name: /^Connect via Facebook Business/ }).click();
+  const picker = page.getByRole("dialog", { name: "Choose Instagram account", exact: true });
+  await expect(picker).toBeVisible();
+  const savedResponse = page.waitForResponse((response) => response.url().endsWith("/functions/v1/instagram-business-oauth")
+    && response.request().method() === "POST" && response.request().postDataJSON()?.action === "store_ig_account");
+  await picker.getByRole("button", { name: new RegExp(`@${account.username}`) }).click();
+  const saved = await savedResponse;
+  expect(saved.status()).toBe(200);
+  const savedBody = await saved.json();
+  expect(savedBody).toMatchObject({ success: true, permissions: { status: "ok", insights_granted: true } });
+  for (const token of [account.token, `${account.token}-renewed`, `${account.token}-page`]) expect(JSON.stringify(savedBody)).not.toContain(token);
+  await expect(picker).toHaveCount(0);
+  const afterCapability = (await capability())[0];
+  expect(afterCapability.credential_generation).toBeGreaterThan(beforeCapability.credential_generation);
+  expect(afterCapability.permission_read_state).toBe("ok");
+  expect(afterCapability.granted_scopes).toContain("instagram_manage_insights");
+  expect(Date.parse(afterCapability.scopes_read_at)).toBeGreaterThan(Date.parse(beforeCapability.scopes_read_at));
+  const afterBinding = (await binding())[0];
+  expect(afterBinding.credential_id).not.toBe(beforeBinding.credential_id);
+  const accounts = await read("social_accounts", "id,platform_user_id,is_active,needs_reauth", { platform: "eq.instagram" });
+  expect(accounts).toEqual([{ id: account.id, platform_user_id: account.providerId, is_active: true, needs_reauth: false }]);
+  const oauth = await receipts("oauth-calls");
+  expect(oauth.calls.map((call: { operation: string }) => call.operation)).toEqual([
+    "authorize", "exchange_code", "exchange_long_token", "identity", "pages", "permissions",
+  ]);
+  await page.goto("/analytics/instagram?tab=analyze");
+  const renewed = await searchInstagramRelease(page, "release_competitor");
+  expect(renewed.status()).toBe(200);
+  const renewedBody = await renewed.json();
+  expect(renewedBody.fromCache).not.toBe(true);
+  expect(renewedBody.profile.source).toBe("official");
+  expect(renewedBody.posts).toEqual(expect.arrayContaining([expect.objectContaining({ mediaType: "REEL", videoViewCount: 777 })]));
+  await expect(page.getByRole("heading", { name: "Synthetic release competitor", exact: true })).toBeVisible();
+  const after = await receipts();
+  expect(after.calls.slice(before.calls.length).map((call: { account: string; operation: string }) => ({ account: call.account, operation: call.operation })))
+    .toEqual([{ account: "otherPage", operation: "discovery" }, { account: "otherPage", operation: "discovery" }]);
+  expect(after.apifyCalls).toEqual(before.apifyCalls);
+  expect(after.networkRefusals).toBe(0);
+  const cached = await searchInstagramRelease(page, "release_competitor");
+  expect(cached.status()).toBe(200);
+  expect(await cached.json()).toMatchObject({ fromCache: true, posts: renewedBody.posts });
+  expect(await receipts()).toEqual(after);
+});

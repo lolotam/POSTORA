@@ -3,6 +3,7 @@ import { fileURLToPath } from "node:url";
 import { assertPreparedOwnerExecutionSource } from "../../scripts/instagram-owner-execution-source.mjs";
 import { ownerReleaseSql, syntheticOwnerReleaseKey } from "./instagramOwnerReleaseSeed.ts";
 import { cleanupInstagramRelease, seedInstagramRelease } from "./instagramReleaseSeed.ts";
+import { InstagramReleaseOAuthTransport } from "./instagramReleaseOAuth.ts";
 import {
   INSTAGRAM_RELEASE, InstagramReleaseMetaTransport, InstagramReleaseApifyTransport, assertInstagramReleaseEnvironment,
   assertInstagramReleaseNetworkUrl, type ProviderScenario, type ReleaseAccountKey, type ReleaseUserKey,
@@ -11,12 +12,13 @@ import {
 const candidate = assertPreparedOwnerExecutionSource(fileURLToPath(new URL("../../", import.meta.url)));
 const anonKey = await syntheticOwnerReleaseKey("anon");
 const serviceKey = await syntheticOwnerReleaseKey("service_role");
-const { cronSecret, providerSecret, apifyToken } = INSTAGRAM_RELEASE;
+const { cronSecret, providerSecret, apifyToken, oauthSecret } = INSTAGRAM_RELEASE;
 const runtimeEnvironment = {
   SUPABASE_URL: INSTAGRAM_RELEASE.apiUrl, SUPABASE_ANON_KEY: anonKey, SUPABASE_SERVICE_ROLE_KEY: serviceKey,
   CRON_SECRET: cronSecret, FACEBOOK_APP_ID: INSTAGRAM_RELEASE.appId,
   FACEBOOK_APP_SECRET: providerSecret, INSTAGRAM_APP_ID: INSTAGRAM_RELEASE.appId,
   APIFY_API_TOKEN: apifyToken,
+  OAUTH_STATE_SECRET: oauthSecret,
   PUBLIC_API_ORIGIN: INSTAGRAM_RELEASE.apiUrl, PUBLIC_APP_ORIGIN: INSTAGRAM_RELEASE.appUrl,
   VITE_SUPABASE_URL: INSTAGRAM_RELEASE.apiUrl, VITE_SUPABASE_PUBLISHABLE_KEY: anonKey,
 };
@@ -31,7 +33,7 @@ globalThis.fetch = async (input, init) => {
   const url = new URL(request.url);
   if (["graph.facebook.com", "graph.instagram.com"].includes(url.hostname)) {
     if (!providerReady) throw new Error("Instagram release provider requested before fixture ownership");
-    return provider.reply(request);
+    return oauth.handles(url) ? oauth.reply(request) : provider.reply(request);
   }
   if (url.hostname === "api.apify.com") {
     if (!providerReady) throw new Error("Instagram release Apify requested before fixture ownership");
@@ -60,6 +62,7 @@ async function registeredRoute(load: () => Promise<unknown>): Promise<Handler> {
 
 const routes = new Map<string, Handler>([
   ["brand-scrape", await registeredRoute(() => import("../../supabase/functions/brand-scrape/index.ts"))],
+  ["instagram-business-oauth", await registeredRoute(() => import("../../supabase/functions/instagram-business-oauth/index.ts"))],
   ["instagram-insights-sync", await registeredRoute(() => import("../../supabase/functions/instagram-insights-sync/index.ts"))],
   ["competitor-snapshot-sync", await registeredRoute(() => import("../../supabase/functions/competitor-snapshot-sync/index.ts"))],
   ["competitor-retention", await registeredRoute(() => import("../../supabase/functions/competitor-retention/index.ts"))],
@@ -72,6 +75,7 @@ const routes = new Map<string, Handler>([
 const registeredApi = (await import("../../supabase/functions/n8n-api/index.ts")).handleRequest;
 const seed = await seedInstagramRelease();
 const provider = new InstagramReleaseMetaTransport(seed.manifest);
+const oauth = new InstagramReleaseOAuthTransport(seed.manifest, () => provider.acceptReconnectedAuthority());
 const apify = new InstagramReleaseApifyTransport(seed.manifest);
 providerReady = true;
 let cleaned = false;
@@ -94,7 +98,7 @@ async function health(): Promise<Response> {
   return Response.json({ fixture: "instagram-release", authReachable: auth.ok, sqlReachable: sql.ok,
     manifest: seed.manifest, candidate, networkRefusals, routes: [...routes.keys()],
     blockers: ["instagram_canonical_registry_unverified", "target_ineligible_provider_signal_unverified", "threshold_unavailable_provider_signal_unverified", "worker_reference_clock_seam_missing"],
-    pendingAssembly: ["protected_oauth_reconnect_transport", "full_journeys_and_retention_races"],
+    pendingAssembly: ["protected_oauth_reconnect_journey", "full_journeys_and_retention_races"],
   }, { status: auth.ok && sql.ok && networkRefusals === 0 && !cleaned ? 200 : 503 });
 }
 
@@ -104,6 +108,7 @@ async function fixtureControl(request: Request, path: string): Promise<Response>
   if (request.headers.get("X-Instagram-Release-Namespace") !== seed.manifest.namespace
     || request.headers.get("X-Instagram-Release-Candidate") !== candidate) return new Response(null, { status: 409 });
   if (path === "provider-calls" && request.method === "GET") return Response.json({ calls: provider!.calls, apifyCalls: apify.calls, networkRefusals });
+  if (path === "oauth-calls" && request.method === "GET") return Response.json({ calls: oauth.calls });
   if (path === "cleanup" && request.method === "POST") { await cleanup(); return Response.json({ cleaned }); }
   if (cleaned) return Response.json({ error: "fixture_cleaned" }, { status: 409 });
   if (path === "state" && request.method === "GET") return fixtureState();
@@ -111,6 +116,15 @@ async function fixtureControl(request: Request, path: string): Promise<Response>
   const body: unknown = await request.json();
   if (!body || typeof body !== "object" || Array.isArray(body)) return new Response(null, { status: 400 });
   const input = body as Record<string, unknown>;
+  if (path === "oauth-authorize") {
+    if (Object.keys(input).join(",") !== "url") return new Response(null, { status: 400 });
+    try { return Response.json({ redirect_url: await oauth.authorize(input.url) }); }
+    catch { return Response.json({ error: "fixture_authorization_refused" }, { status: 400 }); }
+  }
+  if (path === "deny-reconnect-permissions") {
+    if (Object.keys(input).length !== 0) return new Response(null, { status: 400 });
+    return denyReconnectPermissions();
+  }
   if (path === "provider-scenario") return setProviderScenario(input);
   if (path === "admit-tracked-competitor") {
     if (Object.keys(input).join(",") !== "username" || input.username !== INSTAGRAM_RELEASE.newTarget) return new Response(null, { status: 400 });
@@ -142,6 +156,23 @@ async function fixtureControl(request: Request, path: string): Promise<Response>
   if (path === "quota") return setQuota(input);
   if (path === "drain") return drain(input);
   return new Response(null, { status: 404 });
+}
+
+async function denyReconnectPermissions(): Promise<Response> {
+  const account = seed.manifest.accounts.find((entry) => entry.key === "otherPage")!;
+  const identity = { p_user_id: seed.manifest.users.ownerB.id, p_social_account_id: account.id };
+  const rpc = async (name: string, args: Record<string, unknown>) => {
+    const response = await fetch(`${INSTAGRAM_RELEASE.restUrl}/rpc/${name}`, { method: "POST",
+      headers: { Authorization: `Bearer ${serviceKey}`, "Content-Type": "application/json" }, body: JSON.stringify(args) });
+    if (!response.ok) throw new Error("Canonical reconnect capability control failed");
+    return response.json();
+  };
+  const observed = await rpc("read_instagram_account_capability", identity);
+  const denied = await rpc("write_instagram_account_capability", { ...identity, p_payload: {
+    login_kind: "page_linked", expected_credential_generation: observed.credential_generation,
+    permission_read_state: "ok", granted_scopes: ["instagram_basic"], scopes_read_at: new Date().toISOString(),
+  } });
+  return Response.json(denied);
 }
 
 async function fixtureState(): Promise<Response> {

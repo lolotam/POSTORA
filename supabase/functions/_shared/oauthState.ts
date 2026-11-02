@@ -107,23 +107,32 @@ function getSecret(): string {
 
 /**
  * Validate a user-supplied post-OAuth return_to URL.
- * Only allows https URLs on postora.cloud or its subdomains — an unanchored
- * endsWith would also match attacker domains like evilpostora.cloud.
+ * Allows HTTPS Postora URLs and an exact, explicitly server-configured app
+ * origin. An unanchored endsWith would also match evilpostora.cloud.
  * Prevents open-redirect abuse via signed state.
  */
 export function safeReturnTo(
   candidate: unknown,
   fallback = "https://postora.cloud/profiles",
+  trustedAppOrigin?: string,
 ): string {
   if (typeof candidate === "string" && candidate.length > 0) {
     try {
       const u = new URL(candidate);
       const hostname = u.hostname.toLowerCase().replace(/\.$/, "");
+      if (u.username || u.password) return fallback;
       if (
         u.protocol === "https:" &&
         (hostname === "postora.cloud" || hostname.endsWith(".postora.cloud"))
       ) {
         return candidate;
+      }
+      if (trustedAppOrigin) {
+        const trusted = new URL(trustedAppOrigin);
+        const allowedProtocol = trusted.protocol === "https:"
+          || (trusted.protocol === "http:" && trusted.hostname === "127.0.0.1");
+        if (allowedProtocol && !trusted.username && !trusted.password && trusted.pathname === "/"
+          && !trusted.search && !trusted.hash && u.origin === trusted.origin) return candidate;
       }
     } catch {
       /* fall through */
@@ -152,7 +161,7 @@ export async function createOAuthState(input: CreateStateInput): Promise<string>
     flow: input.flow,
     user_id: input.user_id,
     profile_id: input.profile_id ?? null,
-    return_to: requestedReturnTo ? safeReturnTo(requestedReturnTo) : undefined,
+    return_to: requestedReturnTo ? safeReturnTo(requestedReturnTo, undefined, Deno.env.get("PUBLIC_APP_ORIGIN")) : undefined,
     nonce: base64UrlEncode(nonceBytes),
     iat: Math.floor(Date.now() / 1000),
   };
