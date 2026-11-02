@@ -1,0 +1,257 @@
+{
+  "version": 1,
+  "recordedAt": "2026-11-02T05:11:24.414Z",
+  "source": "9413950f01ea6fa933e016d60ab7b1d89acf8136",
+  "tree": "42830061a74c6783327133ab6b61f96a5489feff",
+  "executionCheckout": "F:/Dev/Worktrees/Postora_new/canonical-discovery-538ef365",
+  "scope": "Canonical local discovery refusal and explicitly enabled synthetic interactive fallback, contributing to J4 without closing its unresolved target-ineligibility evidence",
+  "evidenceAuthority": "Author-recorded local execution, not independently trusted G-X acceptance or production approval",
+  "inputs": [
+    {
+      "path": "e2e/instagram-release.spec.ts",
+      "gitBlob": "58f76c28384564bea01d667aa95e7093fa89ea06",
+      "gitSha256": "c0011da19f391f66bd085352d3f4eea41a7facc8295cbda3aacb74b92c686e38",
+      "executionSha256": "6807339eb1e1738cd3018ea3b84a81d33e80262f160c6a5df9ba6fadfd6b61ac",
+      "normalizedExecutionSha256": "c0011da19f391f66bd085352d3f4eea41a7facc8295cbda3aacb74b92c686e38"
+    },
+    {
+      "path": "e2e/fixtures/instagramRelease.ts",
+      "gitBlob": "95ecd98c8ae07dd56af44a5e2ea35f64c3229615",
+      "gitSha256": "623557dec54ace4c879ef69b92062e390436cfd4ffa71594cff9f7ecc43c6657",
+      "executionSha256": "5c574b778fd5250049d346390e245bd91dfee84b5e1ff0e04045a6a10f5b2fad",
+      "normalizedExecutionSha256": "623557dec54ace4c879ef69b92062e390436cfd4ffa71594cff9f7ecc43c6657"
+    },
+    {
+      "path": "e2e/fixtures/instagramReleaseSafety.test.ts",
+      "gitBlob": "5b259836238a6a22ee983e44ec30d4969498cea5",
+      "gitSha256": "ba32f37ae374f431b20c27d3598c697e2804c9caa3da9d08eea1345784203585",
+      "executionSha256": "b05f8b670c6e896100092ab780a0700f0acf7776e146d5beadf25c47b8891af1",
+      "normalizedExecutionSha256": "ba32f37ae374f431b20c27d3598c697e2804c9caa3da9d08eea1345784203585"
+    },
+    {
+      "path": "e2e/fixtures/instagramReleaseServer.ts",
+      "gitBlob": "005a7e0b43d99931f2d08398fd0792b77361149a",
+      "gitSha256": "49b2ee9b5a3fa105023ec4486e884b8c5fb11df957a1cf6c6c279d52173088d2",
+      "executionSha256": "e779b53378311cf2be8ce809f980fe8fec3e5b742d0dac75ef1120b4c7bae488",
+      "normalizedExecutionSha256": "49b2ee9b5a3fa105023ec4486e884b8c5fb11df957a1cf6c6c279d52173088d2"
+    },
+    {
+      "path": "e2e/fixtures/instagramReleaseSeed.ts",
+      "gitBlob": "d73d7c1f13e8e8ddf0ae479258ad1b81949053b3",
+      "gitSha256": "70019b49baacb31764e73c9ad11944c291a456db4ee987f9f42cd37e08762ed3",
+      "executionSha256": "c24ffa4a5b16e4e7778d238f3567e173ecd192372faee8ca56fcf4eedad38782",
+      "normalizedExecutionSha256": "70019b49baacb31764e73c9ad11944c291a456db4ee987f9f42cd37e08762ed3"
+    },
+    {
+      "path": "playwright.instagram-release.config.ts",
+      "gitBlob": "632198d3d68a80ea52d4a1a205ec3f452a02cb07",
+      "gitSha256": "4afcf6ac8ca2dee5c3ecc8bed9d76133be5c38d2f6ff25ec48dd8730727676f5",
+      "executionSha256": "add9cfd96d87596903ebf144cb7946465c153c8ca85b4150dbb3c69d12465df7",
+      "normalizedExecutionSha256": "4afcf6ac8ca2dee5c3ecc8bed9d76133be5c38d2f6ff25ec48dd8730727676f5"
+    },
+    {
+      "path": "supabase/functions/brand-scrape/index.ts",
+      "gitBlob": "87e829a6998b2f29fa15451ccf8f24b5e45f5556",
+      "gitSha256": "83b20c796b717103ba725797c3db479957b7436029fcc53ed49034ee84c4fef5",
+      "executionSha256": "78acbb8498e659d3a4615bc4b669f41505268f3d60ef1c1fd5ba252ae1f2f716",
+      "normalizedExecutionSha256": "83b20c796b717103ba725797c3db479957b7436029fcc53ed49034ee84c4fef5"
+    },
+    {
+      "path": "supabase/functions/brand-scrape/instagramDiscovery.ts",
+      "gitBlob": "2c00156557e72d264ba59a923ae6f54110f2829d",
+      "gitSha256": "8b8ceafbbd15214281b15787f663dca661252cfaa7a70482c2fca73038638b5f",
+      "executionSha256": "76ca195aa0372ad52168a0ab972b3d2fd466218c142f5e0435bfaccef7e3f564",
+      "normalizedExecutionSha256": "8b8ceafbbd15214281b15787f663dca661252cfaa7a70482c2fca73038638b5f"
+    },
+    {
+      "path": "supabase/functions/competitor-snapshot-sync/graphProvider.ts",
+      "gitBlob": "d19f8b713744eb25f39f4ef92f6e0b1efbaad1b0",
+      "gitSha256": "67c2c07a9859cf6d16ae597cd6ecf3c922539399e53e36242e93b819ded55351",
+      "executionSha256": "b57d9ed174ef4fb44b2f4eb1520e984d1347320cc4e3616e7f9fdb2b00eed6bb",
+      "normalizedExecutionSha256": "67c2c07a9859cf6d16ae597cd6ecf3c922539399e53e36242e93b819ded55351"
+    }
+  ],
+  "canonical": {
+    "expected": 5,
+    "unexpected": 0,
+    "flaky": 0,
+    "skipped": 0,
+    "tests": [
+      {
+        "title": "canonical fixture smoke: real Auth, ordinary owners, separate admin and SQL quota state",
+        "ok": true,
+        "statuses": [
+          {
+            "status": "passed",
+            "retry": 0
+          }
+        ]
+      },
+      {
+        "title": "canonical discovery preserves official provenance, nullable media and owner-scoped cache through saved history",
+        "ok": true,
+        "statuses": [
+          {
+            "status": "passed",
+            "retry": 0
+          }
+        ]
+      },
+      {
+        "title": "canonical discovery keeps ambiguous viewer failures out of target eligibility and labels only explicitly enabled third-party fallback",
+        "ok": true,
+        "statuses": [
+          {
+            "status": "passed",
+            "retry": 0
+          }
+        ]
+      },
+      {
+        "title": "SQL-backed Instagram reports retain metrics, nulls, outliers and freshness through API and scoped MCP",
+        "ok": true,
+        "statuses": [
+          {
+            "status": "passed",
+            "retry": 0
+          }
+        ]
+      },
+      {
+        "title": "registered analytics routes refuse foreign owners, missing scopes and cursors without inventing Instagram capability",
+        "ok": true,
+        "statuses": [
+          {
+            "status": "passed",
+            "retry": 0
+          }
+        ]
+      }
+    ]
+  },
+  "databasePreparation": {
+    "directory": "F:/Dev/Temp/postora-owner-release-prepare-vyuWgs",
+    "newerMigrations": 151,
+    "baselineSqlSuites": 69,
+    "isolatedSqlSuites": 1
+  },
+  "fixtureSafety": {
+    "testsPassed": 10,
+    "covered": "Exact synthetic authority, actor, method, target handles, request-body shape and bounded calls; no delegation to native provider fetch"
+  },
+  "checks": {
+    "eslint": "passed",
+    "strictTestTypecheck": "passed with --allowJs for existing imported mjs sources",
+    "denoCheck": "passed on final source",
+    "lint": {
+      "base": "568fe2fc82446b2d927dcb532edfc215ba64fa9a",
+      "head": "9413950f01ea6fa933e016d60ab7b1d89acf8136",
+      "result": "NO REGRESSIONS",
+      "historicalDebtRemains": true
+    },
+    "applicationTypecheckAndBuild": "Not rerun: this batch changes only fixture/tests and documentation; prior application proof is unchanged"
+  },
+  "retainedFailures": [
+    {
+      "source": "eadacd3c4d4841a86faee6c919169f65a5967729",
+      "passed": 4,
+      "failed": 1,
+      "reason": "psql UPDATE command tag made fixture setting-confirmation compare fail after a successful write; corrected using a modifying CTE with a SELECT result",
+      "artifacts": ".tmp/canonical-j4-eadacd3c-failure-artifacts/"
+    },
+    {
+      "command": "strict tsc without --allowJs",
+      "reason": "Existing imported mjs sources have no declaration files; enabling their actual JS source inputs made strict test checking pass"
+    }
+  ],
+  "cleanup": {
+    "users": 1,
+    "namespace_settings": 0,
+    "scrape_sessions": 0,
+    "scrape_cache": 0,
+    "fixture_oauth_clients": 0,
+    "active_cron": 0,
+    "cron_launcher": "off",
+    "instagram_live_leases": 0,
+    "restored_apify_setting": null,
+    "httpListenersStopped": true
+  },
+  "artifacts": [
+    {
+      "path": ".tmp/canonical-j4-safety.log",
+      "sha256": "58aed2fa72a4528140478c2e85d733bd9331d0899d011f762ffe0c21d6546044"
+    },
+    {
+      "path": ".tmp/canonical-j4-eslint.log",
+      "sha256": "2157a5f3c12477857845842650bbd669c004666db09a84e463dc354ce2c5a27f"
+    },
+    {
+      "path": ".tmp/canonical-j4-test-types.log",
+      "sha256": "6ae3bc08e56e3d19eb1fc552263237cc40113bca05a053aa93486f925d5a93af"
+    },
+    {
+      "path": ".tmp/canonical-j4-test-types-with-js.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": ".tmp/canonical-j4-eadacd3c-prepare.log",
+      "sha256": "5911e92ea6140c5d2f0ea2e4d718f63f586bb2cb6bc7b4915000fe20596050ea"
+    },
+    {
+      "path": ".tmp/canonical-j4-eadacd3c-cache.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": ".tmp/canonical-j4-eadacd3c-deno-check.log",
+      "sha256": "d08e5dc4ff9a1880a8a440aa35a0f8c6c26fec623addd43f516fd0a90d403b7d"
+    },
+    {
+      "path": ".tmp/canonical-j4-eadacd3c-playwright.log",
+      "sha256": "0920b5570bd7d6e75c28a3fb05eb0d290ba14395548920ed026fd825378e83dd"
+    },
+    {
+      "path": ".tmp/canonical-j4-eadacd3c-playwright.json",
+      "sha256": "fa72ab36cc264552095cbd9f0fdaa6acf37003df3c2bc5ccc7c0dc750514e5f2"
+    },
+    {
+      "path": ".tmp/canonical-j4-psql-command-tag.log",
+      "sha256": "0b5a739e3b2ae2a3feac271fc52a9d9a4ce1f4c8bd35555860b5c37b273c6f56"
+    },
+    {
+      "path": ".tmp/canonical-j4-9413950f-prepare.log",
+      "sha256": "dfa970e09615ac8e3b5da8cf3c720cde1568a355531fa543bbf2a59d778c32c0"
+    },
+    {
+      "path": ".tmp/canonical-j4-9413950f-deno-check.log",
+      "sha256": "fa236573c48c4a6c9c0f821bbdc1b66bb0d1f800ee46c7d4aeef838fad0c143b"
+    },
+    {
+      "path": ".tmp/canonical-j4-9413950f-playwright.log",
+      "sha256": "c223c6775f876e279795cc401983e14957b45c989500f816070564e62db276e6"
+    },
+    {
+      "path": ".tmp/canonical-j4-9413950f-playwright.json",
+      "sha256": "a06739fa691dc77e6b1468c6f13d3ebd7c0879afea11c9fc5967c6a6e1237931"
+    },
+    {
+      "path": ".tmp/canonical-j4-9413950f-cleanup.json",
+      "sha256": "2a2b90c0755c8103dc744ac884c596be7eea18b2451b6f1914117299957685f8"
+    },
+    {
+      "path": ".tmp/canonical-j4-9413950f-lint-i18n.log",
+      "sha256": "3a67391c9b7a92e3aa15d03848e7f67949bc52bc19113b17179243890f4176ea"
+    },
+    {
+      "path": ".tmp/canonical-j4-9413950f-graph-update.log",
+      "sha256": "dc93481597655f408e1d462511d263c6e192c5ee5c30798c6430034cf9a295e3"
+    }
+  ],
+  "acceptanceLimits": [
+    "No verified provider signal for confirmed target ineligibility or its weekly retry; J4 remains partial",
+    "Scheduled paid fallback was not executed or approved by this interactive journey",
+    "No live Meta or paid Apify requests, production mutation or release approval",
+    "Remaining canonical journeys, trusted workflow/bootstrap, migration-history recovery and final release evidence remain open"
+  ],
+  "releaseReady": false,
+  "productionActivationAuthorized": false
+}

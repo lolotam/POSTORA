@@ -1,0 +1,29 @@
+# Instagram insights and competitor tracking: implementation evidence index
+
+Record created on 2026-11-02. The filename follows the parent specification's date; it does not date the executions below. **The complete feature remains unaccepted for production.** This index connects the implementation records required by the [release gates](../specs/2026-10-30-instagram-release-gates.md) without replacing their candidate-bound evidence or approval records.
+
+## Requirement coverage
+
+| Required behavior | Current evidence and limit |
+|---|---|
+| Close the Instagram sync error, internal authentication and continuation defects | [Performance review](2026-11-01-instagram-performance-review.md), [HTTP-fence candidate](2026-11-01-instagram-http-fence-candidate.md) and [saved analytics status](2026-11-01-meta-saved-analytics.md). Merged changes, SQL installation, runtime deployment and end-to-end acceptance are separate facts in those records. |
+| Read linked Instagram metrics without inventing zero values | [Owner API/MCP report contract](2026-11-02-instagram-api-mcp-report-contract.md) and [assembled parity proof](2026-11-02-meta-api-mcp-saved-report-parity.md). Legacy Instagram reads have assembled evidence; successful versioned Instagram reporting and canonical metric/calendar adoption remain open. |
+| Discover competitors through protected official authority, preserving media formats and nullable counts | [Discovery contract](2026-11-02-instagram-discovery-contract.md) and [canonical discovery/history proof](2026-11-02-instagram-discovery-history.md). Local J3 exercises real Auth, SQL, application routes and synthetic provider HTTP. It is not live Meta reconciliation. |
+| Track competitors, enforce quotas, retain snapshots and report growth/outliers | [Competitor UI and retention record](2026-10-30-competitor-ui-and-retention.md). The complete canonical management, queue, collection, report and retention journeys remain subject to the J/E acceptance rows; unit/SQL evidence alone does not close them. |
+| Verify Facebook and Threads linked-account capabilities | [Live capability record](2026-11-01-meta-live-capabilities.md). Only the recorded read-only checks are established; stored screens do not prove scheduled production collection. |
+| Persist Facebook/Threads reports and expose a shared account/period interface | [History schema](2026-11-01-meta-owned-history-schema.md), [worker collection](2026-11-01-meta-owned-worker-collection.md), [review follow-ups](2026-11-02-meta-analytics-review-followups.md) and [browser/API/MCP parity](2026-11-02-meta-api-mcp-saved-report-parity.md). Saved report parity and worker journeys are attributed to their actual source candidates. |
+| Launch one account per platform, reconcile with Meta and establish scheduled stability | Not accepted. The [combined deployment package](../runbooks/2026-11-01-meta-analytics-deployment-package.md) remains NO-GO. Pilot targets and authority boundaries are owned by [completion design §12](../specs/2026-11-01-meta-analytics-completion-design.md#12-approvals-owner-decisions). |
+
+## Provenance and test scope
+
+The [canonical fixture record](2026-11-02-canonical-instagram-fixture.md) explains real local Auth/PostgREST, ordinary owners, separate administration, protected credentials and the outbound network boundary. Provider HTTP is synthetic. The [J3 proof](2026-11-02-instagram-discovery-history.md) records four successful canonical tests at `0e3d01fef8bbcf6ece3257a0b6ca736ad9c139ac`, both defects reproduced before correction, cleanup state and final-revision lint/i18n. The earlier three-test hosted run and 13-owner-journey hosted run retain their separate source identities in the [parity record](2026-11-02-meta-api-mcp-saved-report-parity.md).
+
+The [discovery-refusal journey](2026-11-02-instagram-discovery-refusals.md) extends the canonical suite to five successful tests at `9413950f01ea6fa933e016d60ab7b1d89acf8136`. It covers ambiguous viewer/provider failures, explicit synthetic third-party fallback, throttling refusal and unchanged persisted watchlist eligibility. Confirmed target ineligibility and its weekly retry remain unverified, so this does not close J4.
+
+No result is promoted to a newer source merely because it is an ancestor. A changed runtime, schema, frontend or fixture input needs affected proofs on the new immutable candidate. Author-recorded JSON and a passing structural inventory cannot supply independent execution/review provenance.
+
+## Open acceptance work
+
+The [release specification's acceptance matrix](../specs/2026-10-30-instagram-release-gates.md#3-acceptance-traceability-matrix) remains authoritative for individual acceptance IDs. Open work includes canonical Instagram worker/report/UI adoption; protected reconnect; the remaining J/E journeys; verified target-ineligibility and follower-threshold provider signals; trusted workflow/verifier/bootstrap and independent review; migration-history recovery; and the approved production observation sequence. Missing provider evidence remains a blocker, rather than an invented timezone, an inferred private target or an unavailable metric coerced to zero.
+
+The current [release procedure](../runbooks/instagram-insights-release.md) describes how to prepare and inspect a candidate. It is not release permission. Production rollout, rollback/restoration and the distinct successful scheduled due dates required by the completion design remain unproven. Paid Apify and broader competitor expansion remain separate from the linked-account analytics completion goal.
