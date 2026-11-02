@@ -1,8 +1,8 @@
 import {
   createFacebookUserCredentialStore, createInstagramAccountCapabilityStore,
-  CredentialStoreError, type ServiceRpcCaller,
+  CredentialStoreError, type FacebookUserAccountCredential, type ServiceRpcCaller,
 } from "../_shared/facebookUserCredentialStore.ts";
-import { pickBusinessDiscoveryViewer, type ViewerCandidate } from "../_shared/instagramDiscoveryViewer.ts";
+import { isBusinessDiscoveryViewerCandidate, pickBusinessDiscoveryViewer, type ViewerCandidate } from "../_shared/instagramDiscoveryViewer.ts";
 import {
   buildBusinessDiscoveryUrl, normalizeCompetitorHandle, parseBusinessDiscoveryMedia,
   parseUsagePercent, readBoundedBody, readBusinessDiscoveryTarget, readGraphErrorEnvelope,
@@ -38,28 +38,30 @@ export async function resolveDiscoveryAuthority(input: {
     (!account.ig_auth_type || account.ig_auth_type === "business_login") &&
     normalizeCompetitorHandle(String(account.platform_username ?? "")) === input.username);
   if (own) return { authority: { account: own, token: own.access_token, source: "graph_own" }, cacheIdentity, refusalCode: null };
-  const viewer = pickBusinessDiscoveryViewer(accounts);
-  if (!viewer || viewer.capability?.loginKind !== "page_linked") {
-    const denied = accounts.some((account) => account.capability?.permissionReadState === "ok" &&
-      account.capability.scopesAuthoritative && !account.capability.grantedScopes.includes("instagram_manage_insights"));
-    return { authority: null, cacheIdentity, refusalCode: denied ? "IG_INSIGHTS_SCOPE_MISSING" : "IG_RECONNECT_REQUIRED" };
+  let remaining = accounts.filter((account) => account.capability?.loginKind === "page_linked" && isBusinessDiscoveryViewerCandidate(account));
+  while (remaining.length) {
+    const viewer = pickBusinessDiscoveryViewer(remaining);
+    if (!viewer || viewer.capability?.loginKind !== "page_linked") break;
+    remaining = remaining.filter((account) => account.id !== viewer.id);
+    let binding: FacebookUserAccountCredential;
+    try {
+      binding = await createFacebookUserCredentialStore(input.rpc).readAccountCredential({ userId: input.userId, socialAccountId: viewer.id });
+    } catch (error) {
+      if (error instanceof CredentialStoreError && error.code === "not_found") continue;
+      throw error;
+    }
+    if (!binding.found || (binding.tokenExpiresAt !== null && Date.parse(binding.tokenExpiresAt) <= Date.now())) continue;
+    if (binding.platform !== "instagram" || binding.credentialKind !== "facebook_user" || !binding.token ||
+      !binding.credentialId || binding.revision === null || binding.capabilityGeneration !== viewer.capability.credentialGeneration) {
+      throw new InstagramDiscoveryError("DISCOVERY_UNAVAILABLE", "Instagram discovery is unavailable.", 503);
+    }
+    const identity = `${cacheIdentity}:${binding.credentialId}:${binding.revision}:${binding.connectionVersion}`;
+    return { authority: { account: viewer, token: binding.token, source: "official" }, cacheIdentity: identity, refusalCode: null };
   }
-  let binding;
-  try {
-    binding = await createFacebookUserCredentialStore(input.rpc).readAccountCredential({ userId: input.userId, socialAccountId: viewer.id });
-  } catch (error) {
-    if (error instanceof CredentialStoreError && error.code === "not_found") return { authority: null, cacheIdentity, refusalCode: "IG_RECONNECT_REQUIRED" };
-    throw error;
-  }
-  if (!binding.found || (binding.tokenExpiresAt !== null && Date.parse(binding.tokenExpiresAt) <= Date.now())) {
-    return { authority: null, cacheIdentity, refusalCode: "IG_RECONNECT_REQUIRED" };
-  }
-  if (binding.platform !== "instagram" || binding.credentialKind !== "facebook_user" || !binding.token ||
-    !binding.credentialId || binding.revision === null || binding.capabilityGeneration !== viewer.capability.credentialGeneration) {
-    throw new InstagramDiscoveryError("DISCOVERY_UNAVAILABLE", "Instagram discovery is unavailable.", 503);
-  }
-  const identity = `${cacheIdentity}:${binding.credentialId}:${binding.revision}:${binding.connectionVersion}`;
-  return { authority: { account: viewer, token: binding.token, source: "official" }, cacheIdentity: identity, refusalCode: null };
+  const denied = accounts.some((account) => isBusinessDiscoveryViewerCandidate(account) && account.capability?.loginKind === "page_linked" &&
+    account.capability.permissionReadState === "ok" && account.capability.scopesAuthoritative &&
+    !account.capability.grantedScopes.includes("instagram_manage_insights"));
+  return { authority: null, cacheIdentity, refusalCode: denied ? "IG_INSIGHTS_SCOPE_MISSING" : "IG_RECONNECT_REQUIRED" };
 }
 
 export async function discoveryCacheKey(owner: string, username: string, identity: string): Promise<string> {

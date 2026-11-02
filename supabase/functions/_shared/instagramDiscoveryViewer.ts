@@ -25,6 +25,30 @@ export interface ViewerCandidate {
   capability?: InstagramAccountCapability;
 }
 
+export function isBusinessDiscoveryViewerCandidate(acc: ViewerCandidate): boolean {
+  // 1. Must be active Instagram account
+  if (acc.platform !== "instagram" || !acc.is_active) {
+    return false;
+  }
+
+  // 2. Needs reauth must not be true
+  if (acc.needs_reauth === true) {
+    return false;
+  }
+
+  // 3. Must not be direct Instagram login (Business Discovery requires Facebook Login on a page-linked account)
+  if (acc.capability?.loginKind === "direct" ||
+    (acc.ig_auth_type && !["facebook_page", "facebook_business"].includes(acc.ig_auth_type))) {
+    return false;
+  }
+
+  // 4. The protected adapter supplies the token after selection.
+  if (!acc.platform_user_id) {
+    return false;
+  }
+  return true;
+}
+
 export function pickBusinessDiscoveryViewer(accounts: ViewerCandidate[]): ViewerCandidate | null {
   if (!Array.isArray(accounts) || accounts.length === 0) {
     return null;
@@ -33,26 +57,7 @@ export function pickBusinessDiscoveryViewer(accounts: ViewerCandidate[]): Viewer
   const validCandidates: { candidate: ViewerCandidate; priority: number; connectedTime: number }[] = [];
 
   for (const acc of accounts) {
-    // 1. Must be active Instagram account
-    if (acc.platform !== "instagram" || !acc.is_active) {
-      continue;
-    }
-
-    // 2. Needs reauth must not be true
-    if (acc.needs_reauth === true) {
-      continue;
-    }
-
-    // 3. Must not be direct Instagram login (Business Discovery requires Facebook page-linked token)
-    if (acc.capability?.loginKind === "direct" ||
-      (acc.ig_auth_type && !["facebook_page", "facebook_business"].includes(acc.ig_auth_type))) {
-      continue;
-    }
-
-    // 4. The protected adapter supplies the token after selection.
-    if (!acc.platform_user_id) {
-      continue;
-    }
+    if (!isBusinessDiscoveryViewerCandidate(acc)) continue;
 
     let priority = 2; // Default: unknown scopes
     const capability = acc.capability;

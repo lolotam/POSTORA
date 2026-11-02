@@ -102,6 +102,35 @@ Deno.test("protected discovery never substitutes the Page token and scopes cache
     rpc: (name) => Promise.resolve({ data: name.includes("capability") ? capability() : credential({ capability_generation: 3 }), error: null }) }), InstagramDiscoveryError);
 });
 
+Deno.test("a newer missing or expired credential cannot hide a usable protected sibling", async (test) => {
+  const newer = "8a000000-0000-4000-8000-000000000004";
+  for (const unavailable of ["missing", "expired"] as const) await test.step(unavailable, async () => {
+    const resolved = await resolveDiscoveryAuthority({ userId: OWNER, username: "target",
+      accounts: [{ ...ACCOUNT_ROW, connected_at: "2026-11-01T00:00:00Z" },
+        { ...ACCOUNT_ROW, id: newer, platform_user_id: "77002", connected_at: "2026-11-02T00:00:00Z" }],
+      rpc: (name, args) => {
+        const accountId = String(args.p_social_account_id);
+        const binding = accountId === newer
+          ? unavailable === "missing" ? credential({ found: false, social_account_id: newer,
+              credential_id: null, credential_kind: null, token: null, revision: null, capability_generation: null, connection_version: null })
+            : credential({ social_account_id: newer, credential_id: "8a000000-0000-4000-8000-000000000005", token_expires_at: "2020-01-01T00:00:00Z" })
+          : credential();
+        return Promise.resolve({ data: name.includes("capability") ? capability({ social_account_id: accountId }) : binding, error: null });
+      } });
+    assertEquals(resolved.authority?.account.id, ACCOUNT);
+    assertEquals(resolved.authority?.token, "synthetic-user-token");
+    assertEquals(resolved.refusalCode, null);
+  });
+});
+
+Deno.test("a direct-login account does not falsely establish missing Business Discovery permission", async () => {
+  const resolved = await resolveDiscoveryAuthority({ userId: OWNER, username: "target",
+    accounts: [{ ...ACCOUNT_ROW, ig_auth_type: "business_login" }],
+    rpc: () => Promise.resolve({ data: capability({ login_kind: "direct", granted_scopes: ["instagram_business_basic"] }), error: null }) });
+  assertEquals(resolved.authority, null);
+  assertEquals(resolved.refusalCode, "IG_RECONNECT_REQUIRED");
+});
+
 Deno.test("registered discovery handler retains source and null cells through cache and history, then refuses denied scopes", async () => {
   const originalFetch = globalThis.fetch;
   const originalServe = Deno.serve;
