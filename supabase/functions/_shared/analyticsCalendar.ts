@@ -41,6 +41,15 @@ function midnight(date: string, formatter: Intl.DateTimeFormat): string {
   throw new RangeError("The registered analytics calendar has no representable midnight");
 }
 
+/** A capture uses one real provider day, including 23/25-hour DST boundaries. */
+export function analyticsDayBucket(date: string, timezone: string): AnalyticsDayBucket {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || new Date(`${date}T00:00:00.000Z`).toISOString().slice(0, 10) !== date) {
+    throw new RangeError("Invalid analytics capture date");
+  }
+  const formatter = dateFormatter(timezone);
+  return { date, since: midnight(date, formatter), until: midnight(shiftDate(date, 1), formatter) };
+}
+
 function calendarWindow(start: string, days: AnalyticsPeriodDays, timezone: string, formatter: Intl.DateTimeFormat): AnalyticsCalendarWindow {
   const buckets = Array.from({ length: days }, (_unused, index) => {
     const date = shiftDate(start, index);

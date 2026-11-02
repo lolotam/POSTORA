@@ -165,6 +165,12 @@ SUITES=(
   instagram_collection_http_fences.sql
   meta_owned_analytics_history.sql
   meta_owned_analytics_claim_fairness.sql
+  meta_owned_analytics_worker_admission.sql
+  meta_owned_analytics_worker_progress.sql
+  meta_owned_analytics_inventory.sql
+  meta_owned_analytics_retention.sql
+  meta_owned_analytics_cron.sql
+  meta_owned_analytics_truncation.sql
 )
 # These fixtures build their own focused schema and apply the migration under
 # test. They must never run against the restored production-shaped database.

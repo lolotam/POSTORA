@@ -1,5 +1,5 @@
 import { assertEquals, assertThrows } from "https://deno.land/std@0.224.0/assert/mod.ts";
-import { analyticsWindowForPeriod, closedAnalyticsPeriods } from "./analyticsCalendar.ts";
+import { analyticsDayBucket, analyticsWindowForPeriod, closedAnalyticsPeriods } from "./analyticsCalendar.ts";
 
 Deno.test("closed calendar days handle spring/fall DST, leap day and year rollover", async (test) => {
   for (const fixture of [
@@ -26,4 +26,13 @@ Deno.test("calendar boundaries refuse shifted periods and unsupported timezone/d
   assertThrows(() => closedAnalyticsPeriods({ now: "invalid", days: 7, timezone: "UTC" }), RangeError);
   assertThrows(() => closedAnalyticsPeriods({ now: "2026-11-01T00:00:00Z", days: 7, timezone: "invalid/timezone" }), RangeError);
   assertThrows(() => closedAnalyticsPeriods({ now: "2011-12-31T12:00:00Z", days: 7, timezone: "Pacific/Apia" }), RangeError);
+});
+
+Deno.test("individual capture days preserve DST and reject normalized invalid civil dates", () => {
+  for (const [date, hours] of [["2026-03-08", 23], ["2026-11-01", 25], ["2024-02-29", 24]] as const) {
+    const bucket = analyticsDayBucket(date, "America/Los_Angeles");
+    assertEquals((Date.parse(bucket.until) - Date.parse(bucket.since)) / 3_600_000, hours);
+    assertEquals(bucket.date, date);
+  }
+  for (const date of ["2026-02-29", "2026-04-31", "bad"]) assertThrows(() => analyticsDayBucket(date, "UTC"), RangeError);
 });

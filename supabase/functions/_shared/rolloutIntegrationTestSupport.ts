@@ -174,6 +174,15 @@ function castFor(type: string): string {
 /** One SQL literal, with the cast of the parameter it is bound to. */
 function sqlLiteral(value: unknown, cast: string): string {
   if (value === null || value === undefined) return `NULL::${cast}`;
+  if (Array.isArray(value) && (cast === "text[]" || cast === "uuid[]")) {
+    // JSON arrays are not PostgreSQL array literals. Bind native elements so
+    // an actual text[]/uuid[] RPC exercises its declared contract.
+    if (value.some((item) => item !== null && typeof item !== "string")) {
+      throw new Error("The rollout integration adapter requires text array elements.");
+    }
+    const elementCast = cast.slice(0, -2);
+    return `ARRAY[${value.map((item) => sqlLiteral(item, elementCast)).join(",")}]::${cast}`;
+  }
   if (typeof value === "number") {
     if (!Number.isFinite(value)) {
       throw new Error("The rollout integration adapter refuses a non-finite number.");
