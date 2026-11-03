@@ -386,7 +386,7 @@ function migrationChecks(context) {
 const CREDENTIAL_PATTERN = /(?:[a-z][a-z0-9+.-]*:\/\/[^\s/?#"'<>]+@)|(?:["']?authorization["']?\s*[:=]\s*["']?Basic\s+[A-Za-z0-9+/]{4,}={0,2})|(?:https?:\/\/[^\s"']+[?&](?:access_token|refresh_token|api_key)=)|(?:Bearer\s+(?!token(?![A-Za-z0-9._~+/=-]))[A-Za-z0-9._~+/=-]{8,})|(?:-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----)|(?:eyJ[A-Za-z0-9_-]{15,}\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+)|(?:["']?(?:access_token|refresh_token|api_key|password|client_secret|SUPABASE_SERVICE_ROLE_KEY)["']?\s*[:=]\s*(?:"(?!(?:\[REDACTED\]|<redacted>|)"(?=\s|$|[}\]]+(?:[\s"',;]|$)|[,;](?:[\s"'}\]]|$)))[^"]*|'(?!(?:\[REDACTED\]|<redacted>|)\'(?=\s|$|[}\]]+(?:[\s"',;]|$)|[,;](?:[\s"'}\]]|$)))[^']*|(?!["'])(?!(?:\[REDACTED\]|<redacted>|\[\]|\{\}|null|true|false|undefined)(?=[\s"']|$|[}\]]+(?:[\s"',;]|$)|[,;](?:[\s"'}\]]|$)))[^"'\s]+))/i;
 const safeDetail = (value) => CREDENTIAL_PATTERN.test(String(value)) ? "[redacted-path]" : value;
 function redactDetail(detail) { return typeof detail === "string" ? safeDetail(detail) : detail; }
-const IDENT_GRAMMAR = /^(?:\.{1,2}\/|@\/|@[A-Za-z0-9._-]+\/|[A-Za-z0-9])[A-Za-z0-9._:\/@+\[\]-]{0,159}$/;
+const IDENT_GRAMMAR = /^(?=.{1,160}$)(?:\.{1,2}\/|@\/|@[A-Za-z0-9._-]+\/|[A-Za-z0-9])[A-Za-z0-9._:\/@+\[\]-]{0,159}$/;
 export const ident = (value) => {
   const text = String(value);
   return IDENT_GRAMMAR.test(text) && !CREDENTIAL_PATTERN.test(text) ? text : "[omitted]";

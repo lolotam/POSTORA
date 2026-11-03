@@ -470,6 +470,10 @@ test("native Playwright result and redaction boundaries cannot be overridden by 
       assert.equal(ident(hidden), "[omitted]");
     }
     assert.equal(ident(`${"pass"}${"word"}="${"synthetic-"}${"probe"}"`), ident("has a space"), "the marker is the same for every hidden input");
+    assert.equal(ident(`@${"s".repeat(300)}/pkg`), "[omitted]", "an overlong scope cannot bypass the length bound");
+    assert.equal(ident("a".repeat(160)), "a".repeat(160));
+    assert.equal(ident("a".repeat(161)), "[omitted]");
+    assert.equal(ident(`@${"s".repeat(150)}/pkg`), `@${"s".repeat(150)}/pkg`);
   });
   await context.test("an untrusted proof identifier is not echoed into the report", () => {
     const tainted = `proof-${"pass"}${"word"}="[REDACTED] ${"synthetic-"}${"probe"}"`;
