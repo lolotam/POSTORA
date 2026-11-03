@@ -20,6 +20,12 @@ test("owner CI resolver policy ignores hostile local Deno config and lock files"
   for (const [command] of ciWorkflow.matchAll(/deno (?:check|test|cache|run) [^\r\n]*--lock=scripts\/ci\/deno-analytics\.lock[^\r\n]*/g)) {
     assert.ok(command.split(/\s+/).includes("--no-config") && command.includes("--frozen"), "a locked analytics command must also pass --no-config and --frozen");
   }
+  // The one folded multi-line command is read as the shell sees it: its lines joined, then exact tokens.
+  const folded = /- name: Test service proxy and MCP\r?\n\s+run: >\r?\n((?:\s{10,}\S[^\r\n]*\r?\n)+)/.exec(ciWorkflow);
+  assert.ok(folded, "the service proxy and MCP step must be present");
+  const foldedTokens = folded[1].trim().split(/\s+/);
+  assert.equal(foldedTokens[0], "deno");
+  for (const required of ["--no-config", "--lock=scripts/ci/deno-analytics.lock", "--frozen"]) assert.ok(foldedTokens.includes(required), `service proxy command must pass ${required}`);
   const directory = mkdtempSync(join(tmpdir(), "postora-owner-resolver-"));
   context.after(() => {
     const withinTemp = relative(realpathSync(tmpdir()), realpathSync(directory));
