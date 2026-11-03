@@ -20,7 +20,7 @@ export default defineConfig({
   use: { baseURL: INSTAGRAM_RELEASE.appUrl, trace: "retain-on-failure", screenshot: "only-on-failure", serviceWorkers: "block" },
   projects: [{ name: "chromium", use: { ...devices["Desktop Chrome"] } }],
   webServer: [
-    { command: "deno run --no-config --no-lock --cached-only --allow-env --allow-read --allow-run=docker,git --allow-net=127.0.0.1:65431,127.0.0.1:65435,127.0.0.1:65436 e2e/fixtures/instagramReleaseServer.ts",
+    { command: "deno run --no-config --import-map=scripts/ci/deno-analytics.import-map.json --lock=scripts/ci/deno-analytics.lock --frozen --cached-only --allow-env --allow-read --allow-run=docker,git --allow-net=127.0.0.1:65431,127.0.0.1:65435,127.0.0.1:65436 e2e/fixtures/instagramReleaseServer.ts",
       url: `${INSTAGRAM_RELEASE.apiUrl}/__instagram-release/health`, timeout: 180_000, reuseExistingServer: false,
       gracefulShutdown: { signal: "SIGTERM", timeout: 30_000 } },
     { command: "node --experimental-transform-types e2e/fixtures/instagramReleaseLifecycle.ts --vite",

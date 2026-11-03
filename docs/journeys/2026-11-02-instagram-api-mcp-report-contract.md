@@ -28,13 +28,13 @@ Earlier attempts remain recorded separately. At `374d17df42ec65147a5321f98a251a2
 
 ## Reproduction and CI scope
 
-Use a clean immutable checkout of the executed source, the repository's installed dependencies and a local Docker context. Preparation refuses existing fixture containers/networks instead of resetting a database. Preserve and inspect an earlier fixture before preparing another. Refuse inherited credentials and repository `.env` inputs; this suite needs no production secret.
+The executed evidence above remains bound to its historical source. For current mapped/frozen reproduction, use a clean immutable checkout of the reviewed candidate containing `scripts/ci/deno-analytics.import-map.json`, the repository's installed dependencies, a verified Deno 2.9.8 executable and a local Docker context. Preparation refuses existing fixture containers/networks instead of resetting a database. Preserve and inspect an earlier fixture before preparing another. Refuse inherited credentials and repository `.env` inputs; this suite needs no production secret.
 
 Run from that checkout, with `docker`, `deno` and Node on PATH:
 
 ```sh
-deno cache --no-config --no-lock --node-modules-dir=none e2e/fixtures/instagramReleaseServer.ts
-deno check --no-config --no-lock --node-modules-dir=none e2e/fixtures/instagramReleaseServer.ts
+deno cache --no-config --import-map=scripts/ci/deno-analytics.import-map.json --lock=scripts/ci/deno-analytics.lock --frozen --node-modules-dir=none e2e/fixtures/instagramReleaseServer.ts
+deno check --no-config --import-map=scripts/ci/deno-analytics.import-map.json --lock=scripts/ci/deno-analytics.lock --frozen --node-modules-dir=none e2e/fixtures/instagramReleaseServer.ts
 node --experimental-transform-types --test e2e/fixtures/instagramReleaseSafety.test.ts
 node scripts/prepare-instagram-owner-release.mjs
 npx playwright test --config playwright.instagram-release.config.ts --fail-on-flaky-tests
