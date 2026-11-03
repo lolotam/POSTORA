@@ -382,14 +382,14 @@ function migrationChecks(context) {
 // optionally followed by the closers and separators of JSON-like text (] } , ;) that are themselves followed by whitespace, a quote, another delimiter or the end.
 // NOT guaranteed: this is a text filter for accidental retention, not a boundary against an author who puts a secret where no sensitive key precedes it (bare tokens, free text,
 // encodings, values split across tokens or lines). Evidence origin is a separate, unresolved blocker (evidence_origin_unverified).
-// Reports do not echo untrusted evidence text where an identifier suffices: ident() prints an identifier only if it passes a strict grammar and this filter, otherwise an omitted marker with a short hash.
-const CREDENTIAL_PATTERN = /(?:[a-z][a-z0-9+.-]*:\/\/[^\s/?#"'<>]+@)|(?:["']?authorization["']?\s*[:=]\s*["']?Basic\s+[A-Za-z0-9+/]{4,}={0,2})|(?:https?:\/\/[^\s"']+[?&](?:access_token|refresh_token|api_key)=)|(?:Bearer\s+(?!token(?![A-Za-z0-9._~+/=-]))[A-Za-z0-9._~+/=-]{8,})|(?:-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----)|(?:eyJ[A-Za-z0-9_-]{15,}\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+)|(?:["']?(?:access_token|refresh_token|api_key|password|client_secret|SUPABASE_SERVICE_ROLE_KEY)["']?\s*[:=]\s*(?:"(?!(?:\[REDACTED\]|<redacted>|)")[^"]+|'(?!(?:\[REDACTED\]|<redacted>|)')[^']+|(?!["'])(?!(?:\[REDACTED\]|<redacted>|\[\]|\{\}|null|true|false|undefined)(?=[\s"']|$|[}\]]+(?:[\s"',;]|$)|[,;](?:[\s"'}\]]|$)))[^"'\s]+))/i;
+// Reports do not echo untrusted evidence text where an identifier suffices: ident() prints an identifier only if it passes a strict grammar and this filter, otherwise the constant marker [omitted] (nothing derived from the input is printed).
+const CREDENTIAL_PATTERN = /(?:[a-z][a-z0-9+.-]*:\/\/[^\s/?#"'<>]+@)|(?:["']?authorization["']?\s*[:=]\s*["']?Basic\s+[A-Za-z0-9+/]{4,}={0,2})|(?:https?:\/\/[^\s"']+[?&](?:access_token|refresh_token|api_key)=)|(?:Bearer\s+(?!token(?![A-Za-z0-9._~+/=-]))[A-Za-z0-9._~+/=-]{8,})|(?:-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----)|(?:eyJ[A-Za-z0-9_-]{15,}\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+)|(?:["']?(?:access_token|refresh_token|api_key|password|client_secret|SUPABASE_SERVICE_ROLE_KEY)["']?\s*[:=]\s*(?:"(?!(?:\[REDACTED\]|<redacted>|)"(?=\s|$|[}\]]+(?:[\s"',;]|$)|[,;](?:[\s"'}\]]|$)))[^"]*|'(?!(?:\[REDACTED\]|<redacted>|)\'(?=\s|$|[}\]]+(?:[\s"',;]|$)|[,;](?:[\s"'}\]]|$)))[^']*|(?!["'])(?!(?:\[REDACTED\]|<redacted>|\[\]|\{\}|null|true|false|undefined)(?=[\s"']|$|[}\]]+(?:[\s"',;]|$)|[,;](?:[\s"'}\]]|$)))[^"'\s]+))/i;
 const safeDetail = (value) => CREDENTIAL_PATTERN.test(String(value)) ? "[redacted-path]" : value;
 function redactDetail(detail) { return typeof detail === "string" ? safeDetail(detail) : detail; }
-const IDENT_GRAMMAR = /^[A-Za-z0-9][A-Za-z0-9._:\/@+\[\]-]{0,159}$/;
-const ident = (value) => {
+const IDENT_GRAMMAR = /^(?:\.{1,2}\/|@\/|@[A-Za-z0-9._-]+\/|[A-Za-z0-9])[A-Za-z0-9._:\/@+\[\]-]{0,159}$/;
+export const ident = (value) => {
   const text = String(value);
-  return IDENT_GRAMMAR.test(text) && !CREDENTIAL_PATTERN.test(text) ? text : `[omitted:${createHash("sha256").update(text).digest("hex").slice(0, 8)}]`;
+  return IDENT_GRAMMAR.test(text) && !CREDENTIAL_PATTERN.test(text) ? text : "[omitted]";
 };
 
 function artifactBytes(context, artifact) {

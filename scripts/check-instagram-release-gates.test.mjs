@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join, posix, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { test } from "node:test";
-import { evaluateReleaseGates } from "./check-instagram-release-gates.mjs";
+import { evaluateReleaseGates, ident } from "./check-instagram-release-gates.mjs";
 
 const ROOT = fileURLToPath(new URL("../", import.meta.url));
 const CHECKER = fileURLToPath(new URL("./check-instagram-release-gates.mjs", import.meta.url));
@@ -425,6 +425,12 @@ test("native Playwright result and redaction boundaries cannot be overridden by 
     ["content after null inside double quotes", `${"pass"}${"word"}="null, ${"synthetic-"}${"probe"}"`, "synthetic-probe"],
     ["content after a lowercase marker inside double quotes", `${"pass"}${"word"}="<redacted> ${"synthetic-"}${"probe"}"`, "synthetic-probe"],
     ["content after a marker inside single quotes", `${"pass"}${"word"}='[REDACTED] ${"synthetic-"}${"probe"}'`, "synthetic-probe"],
+    ["unquoted text glued after a quoted marker", `${"pass"}${"word"}="[REDACTED]"${"actual-"}${"secret"}`, "actual-secret"],
+    ["unquoted text glued after an empty double-quoted value", `${"pass"}${"word"}=""${"actual-"}${"secret"}`, "actual-secret"],
+    ["unquoted text glued after an empty single-quoted value", `${"pass"}${"word"}=''${"actual-"}${"secret"}`, "actual-secret"],
+    ["single-quoted marker followed by glued text", `${"pass"}${"word"}='[REDACTED]'${"actual-"}${"secret"}`, "actual-secret"],
+    ["second quoted segment after a quoted marker", `${"pass"}${"word"}="[REDACTED]""${"actual-"}${"secret"}"`, "actual-secret"],
+    ["single-quoted segment after a quoted marker", `${"pass"}${"word"}="<redacted>"'${"actual-"}${"secret"}'`, "actual-secret"],
     ["content glued to a marker inside quotes", `${"pass"}${"word"}="[REDACTED]${"synthetic-"}${"probe"}"`, "synthetic-probe"],
     ["quoted literal is not an approved placeholder", `${"pass"}${"word"}="null"`, '"null"'],
     ["JSON string with a marker prefix", `{"${"pass"}${"word"}":"[REDACTED] ${"synthetic-"}${"probe"}"}`, "synthetic-probe"],
@@ -448,6 +454,23 @@ test("native Playwright result and redaction boundaries cannot be overridden by 
     assert.ok(!codes(result).includes("artifact_redaction_failed"));
     assert.deepEqual(result.failures, []);
   });
+  await context.test("a placeholder with a legitimate boundary after its closing quote is accepted", () => {
+    const report = structuredClone(fixture.report);
+    report.metadata = { rows: [{ [["pass", "word"].join("")]: "", note: "[REDACTED]" }, { [["api", "_key"].join("")]: "<redacted>" }] };
+    const ledger = structuredClone(fixture.ledger);
+    const artifact = fixture.artifact("quoted-boundaries-playwright.json", JSON.stringify(report));
+    ledger.proofs.forEach((proof) => { proof.artifact = artifact; });
+    const result = fixture.evaluate({ evidence: ledger });
+    assert.ok(!codes(result).includes("artifact_redaction_failed"));
+    assert.deepEqual(result.failures, []);
+  });
+  await context.test("ident() prints safe identifiers, relative and alias specifiers and hides everything else with a constant", () => {
+    for (const safe of ["proof-1", "e2e/instagram-release.spec.ts", "./worker", "../shared/audit.ts", "@/lib/utils", "@supabase/supabase-js", "https://deno.land/std@0.224.0/assert/mod.ts", "npm:zod@3"]) assert.equal(ident(safe), safe);
+    for (const hidden of [`${"pass"}${"word"}="${"synthetic-"}${"probe"}"`, "has a space", "a=b", `https://user:${"synthetic-"}${"probe"}@example.test/x`, "", "-leading-dash", "x".repeat(200)]) {
+      assert.equal(ident(hidden), "[omitted]");
+    }
+    assert.equal(ident(`${"pass"}${"word"}="${"synthetic-"}${"probe"}"`), ident("has a space"), "the marker is the same for every hidden input");
+  });
   await context.test("an untrusted proof identifier is not echoed into the report", () => {
     const tainted = `proof-${"pass"}${"word"}="[REDACTED] ${"synthetic-"}${"probe"}"`;
     const ledger = structuredClone(fixture.ledger);
@@ -455,7 +478,8 @@ test("native Playwright result and redaction boundaries cannot be overridden by 
     ledger.proofs.push(structuredClone(ledger.proofs[0]));
     const result = fixture.evaluate({ evidence: ledger });
     const duplicate = result.failures.find((entry) => entry.code === "proof_duplicate");
-    assert.match(duplicate?.detail ?? "", /^\[omitted:[0-9a-f]{8}\]$/);
+    assert.equal(duplicate?.detail, "[omitted]");
+    assert.ok(!/omitted:|[0-9a-f]{8}/.test(String(duplicate?.detail)), "no digest or input-derived text is printed");
     assert.ok(!JSON.stringify(result).includes("synthetic-probe"));
   });
   await context.test("a well-formed proof identifier is still reported by name", () => {
