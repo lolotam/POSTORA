@@ -11,7 +11,12 @@ type BrandScrapeResponse = {
   hasMore: boolean;
   warning?: { code: string; message: string };
 };
+
 const RECONNECT_CODES = ["IG_INSIGHTS_SCOPE_MISSING", "IG_RECONNECT_REQUIRED"];
+const RECONNECT_MESSAGE = "Reconnect Instagram to enable official competitor data.";
+
+/** What a load-more request reports. It belongs to the generation it started in and is shown only there. */
+type LoadMoreState = { generation: number; loading: boolean; error: "unavailable" | null; warning: { code: string; message: string } | null };
 
 export function useBrandScrape(ownerId: string | undefined) {
   const requestOwner = useRef(ownerId);
@@ -30,9 +35,7 @@ export function useBrandScrape(ownerId: string | undefined) {
   const [allPosts, setAllPosts] = useState<BrandPost[]>([]);
   const [continuation, setContinuation] = useState<{ hasMore: boolean; nextOffset: number; totalPosts: number } | null>(null);
   const [searchTriggered, setSearchTriggered] = useState(false);
-  const [isLoadingMore, setIsLoadingMore] = useState(false);
-  const [loadMoreError, setLoadMoreError] = useState<"unavailable" | null>(null);
-  const [pageWarning, setPageWarning] = useState<{ code: string; message: string } | null>(null);
+  const [loadMoreState, setLoadMoreState] = useState<LoadMoreState | null>(null);
 
   // For loading from history sessions
   const [sessionProfile, setSessionProfile] = useState<BrandProfile | null>(null);
@@ -94,11 +97,21 @@ export function useBrandScrape(ownerId: string | undefined) {
   const data = error ? undefined : cachedData;
   const hasMore = sameOwner && !!data && !sessionPosts && (continuation?.hasMore ?? data.hasMore);
 
+  /** A new generation frees the guard; the state of the old generation is never shown again, so nothing has to be cleared. */
   const releaseLoadMore = useCallback(() => {
     loadMoreToken.current = null;
-    setIsLoadingMore(false);
-    setLoadMoreError(null);
-    setPageWarning(null);
+  }, []);
+
+  /**
+   * An older request may still write the state of its own, now hidden, generation when no newer state exists.
+   * It never changes what the current generation shows, and a newer generation's state is never replaced.
+   */
+  const writeLoadMore = useCallback((generation: number, patch: Partial<LoadMoreState>) => {
+    setLoadMoreState((previous) => {
+      if (previous && previous.generation > generation) return previous;
+      const own = previous?.generation === generation ? previous : { loading: false, error: null, warning: null };
+      return { ...own, ...patch, generation };
+    });
   }, []);
 
   const search = useCallback((newUsername: string, newPlatform: BrandPlatform) => {
@@ -122,7 +135,7 @@ export function useBrandScrape(ownerId: string | undefined) {
     const token = Symbol("load-more");
     const owns = () => loadMoreToken.current === token && generation === requestGeneration.current;
     loadMoreToken.current = token;
-    setIsLoadingMore(true); setLoadMoreError(null);
+    writeLoadMore(generation, { loading: true, error: null });
 
     try {
       const moreData = await callBrandScrape(nextOffset);
@@ -131,16 +144,17 @@ export function useBrandScrape(ownerId: string | undefined) {
         setAllPosts((prev) => [...new Map([...prev, ...moreData.posts].map((post) => [post.id, post])).values()]);
         setContinuation({ hasMore: moreData.hasMore, nextOffset: nextOffset + moreData.posts.length, totalPosts: moreData.totalPosts });
       }
-      if (moreData.warning) setPageWarning(moreData.warning);
+      if (moreData.warning) writeLoadMore(generation, { warning: moreData.warning });
     } catch (err) {
       if (!owns()) return;
       const code = err && typeof err === "object" && "code" in err ? String(err.code) : "";
-      if (RECONNECT_CODES.includes(code)) setPageWarning({ code, message: "Reconnect Instagram to enable official competitor data." });
-      else setLoadMoreError("unavailable");
+      if (RECONNECT_CODES.includes(code)) writeLoadMore(generation, { warning: { code, message: RECONNECT_MESSAGE } });
+      else writeLoadMore(generation, { error: "unavailable" });
     } finally {
-      if (loadMoreToken.current === token) { loadMoreToken.current = null; setIsLoadingMore(false); }
+      if (loadMoreToken.current === token) loadMoreToken.current = null;
+      writeLoadMore(generation, { loading: false });
     }
-  }, [username, data, continuation, callBrandScrape, hasMore]);
+  }, [username, data, continuation, callBrandScrape, hasMore, writeLoadMore]);
 
   const reset = useCallback(() => {
     requestGeneration.current++;
@@ -181,8 +195,10 @@ export function useBrandScrape(ownerId: string | undefined) {
    * its numbers came from (T8-01).
    */
   const profileSource: BrandProfileSource = resolveBrandProfileSource(activeProfile?.source);
+  // A saved session is provider-free data: nothing from the earlier live search describes it.
   const showingSession = sameOwner && !!sessionProfile;
-  const shownWarning = showingSession ? null : (pageWarning ?? data?.warning ?? null);
+  const moreState = sameOwner && loadMoreState?.generation === requestGeneration.current ? loadMoreState : null;
+  const shownWarning = showingSession ? null : (moreState?.warning ?? data?.warning ?? null);
 
   return {
     profile: activeProfile,
@@ -190,10 +206,10 @@ export function useBrandScrape(ownerId: string | undefined) {
     posts: combinedPosts,
     totalPosts: sameOwner && sessionPosts ? sessionPosts.length : (data ? ((sameOwner ? continuation?.totalPosts : undefined) ?? data.totalPosts) : 0),
     hasMore,
-    isLoading: sameOwner && sessionProfile ? false : isLoading,
-    isLoadingMore: sameOwner && isLoadingMore,
-    error: sameOwner && sessionProfile ? null : (error ? (error as Error).message : null),
-    loadMoreError: sameOwner && !showingSession ? loadMoreError : null,
+    isLoading: showingSession ? false : isLoading,
+    isLoadingMore: !!moreState?.loading,
+    error: showingSession ? null : (error ? (error as Error).message : null),
+    loadMoreError: showingSession ? null : (moreState?.error ?? null),
     reconnectRequired: RECONNECT_CODES.includes(
       shownWarning?.code ?? (!showingSession && error && "code" in error ? String(error.code) : "")),
     warning: shownWarning?.message ?? null,

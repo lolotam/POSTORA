@@ -48,7 +48,7 @@ beforeEach(() => {
 function setup() {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   const wrapper = ({ children }: { children: ReactNode }) => <QueryClientProvider client={client}>{children}</QueryClientProvider>;
-  return renderHook(() => useBrandScrape("fixture-owner"), { wrapper });
+  return renderHook(({ owner }) => useBrandScrape(owner), { wrapper, initialProps: { owner: "fixture-owner" } });
 }
 type Hook = ReturnType<typeof setup>["result"];
 async function search(result: Hook, handle: string, firstPostId: string, extra: Record<string, unknown> = {}) {
@@ -57,6 +57,14 @@ async function search(result: Hook, handle: string, firstPostId: string, extra: 
   await waitFor(() => expect(result.current.posts.map((entry) => entry.id)).toEqual([firstPostId]));
 }
 const calls = () => fetchMock.mock.calls.length;
+/** Starts a load-more whose network reply the test settles later; waits until its request is on the wire. */
+async function startPending(result: Hook, expectedCalls: number) {
+  const pending = deferred();
+  fetchMock.mockReturnValueOnce(pending.promise);
+  act(() => { void result.current.loadMore(); });
+  await waitFor(() => expect(calls()).toBe(expectedCalls));
+  return pending;
+}
 
 describe("useBrandScrape load more", () => {
   it("starts one request for two load-more calls in the same tick", async () => {
@@ -77,10 +85,7 @@ describe("useBrandScrape load more", () => {
   it("ignores a late page that belongs to an earlier search", async () => {
     const { result } = setup();
     await search(result, "northwind", "a0");
-    const stale = deferred();
-    fetchMock.mockReturnValueOnce(stale.promise);
-    act(() => { void result.current.loadMore(); });
-    await waitFor(() => expect(calls()).toBe(2));
+    const stale = await startPending(result, 2);
     await search(result, "other", "o0");
     await act(async () => { stale.resolve(ok("a1")); });
     expect(result.current.posts.map((entry) => entry.id)).toEqual(["o0"]);
@@ -128,15 +133,9 @@ describe("useBrandScrape load more", () => {
   it.each(["resolve", "reject"] as const)("a late %s of request A neither commits nor releases the guard of request B", async (settle) => {
     const { result } = setup();
     await search(result, "northwind", "a0");
-    const first = deferred();
-    fetchMock.mockReturnValueOnce(first.promise);
-    act(() => { void result.current.loadMore(); });
-    await waitFor(() => expect(calls()).toBe(2));
+    const first = await startPending(result, 2);
     await search(result, "other", "o0");
-    const second = deferred();
-    fetchMock.mockReturnValueOnce(second.promise);
-    act(() => { void result.current.loadMore(); });
-    await waitFor(() => expect(calls()).toBe(4));
+    const second = await startPending(result, 4);
     expect(result.current.isLoadingMore).toBe(true);
     await act(async () => { if (settle === "resolve") first.resolve(ok("a1")); else first.reject(new Error("late failure")); });
     expect(result.current.isLoadingMore).toBe(true);
@@ -148,5 +147,79 @@ describe("useBrandScrape load more", () => {
     await act(async () => { second.resolve(ok("o1")); });
     await waitFor(() => expect(result.current.isLoadingMore).toBe(false));
     expect(result.current.posts.map((entry) => entry.id)).toEqual(["o0", "o1"]);
+  });
+
+  it("does not hand a late-page warning, reconnect flag or loading state to the next owner", async () => {
+    const { result, rerender } = setup();
+    await search(result, "northwind", "a0");
+    fetchMock.mockResolvedValueOnce(ok("a1", { warning: RECONNECT }));
+    await act(() => result.current.loadMore());
+    expect(result.current.reconnectRequired).toBe(true);
+    rerender({ owner: "another-owner" });
+    expect(result.current.warning).toBeNull();
+    expect(result.current.reconnectRequired).toBe(false);
+    expect(result.current.isLoadingMore).toBe(false);
+    expect(result.current.loadMoreError).toBeNull();
+  });
+
+  it.each(["before", "after"])("a request of owner A that settles %s A returns leaves no stuck loading state", async (settles) => {
+    const { result, rerender } = setup();
+    await search(result, "northwind", "a0");
+    const pending = await startPending(result, 2);
+    rerender({ owner: "another-owner" });
+    if (settles === "before") await act(async () => { pending.resolve(ok("a1")); });
+    rerender({ owner: "fixture-owner" });
+    if (settles === "after") await act(async () => { pending.resolve(ok("a1")); });
+    await waitFor(() => expect(result.current.isLoadingMore).toBe(false));
+    expect(result.current.posts.map((entry) => entry.id)).toEqual(["a0"]);
+    fetchMock.mockResolvedValueOnce(ok("a2"));
+    await act(() => result.current.loadMore());
+    expect(calls()).toBe(3);
+  });
+
+  it("lets the returning owner start a new request while an earlier one never settles", async () => {
+    const { result, rerender } = setup();
+    await search(result, "northwind", "a0");
+    const hung = await startPending(result, 2);
+    rerender({ owner: "another-owner" });
+    rerender({ owner: "fixture-owner" });
+    expect(result.current.isLoadingMore).toBe(false);
+    const fresh = await startPending(result, 3);
+    expect(result.current.isLoadingMore).toBe(true);
+    await act(async () => { fresh.resolve(ok("a1")); });
+    await waitFor(() => expect(result.current.isLoadingMore).toBe(false));
+    expect(result.current.posts.map((entry) => entry.id)).toEqual(["a0", "a1"]);
+    await act(async () => { hung.resolve(ok("late")); });
+    expect(result.current.posts.map((entry) => entry.id)).toEqual(["a0", "a1"]);
+  });
+
+  it.each([
+    ["warning", ok("a1", { warning: RECONNECT })],
+    ["error", { ok: false, status: 500, json: async () => ({ error: "SECRET upstream stack trace" }) }],
+  ])("a %s of owner A does not come back after A, B, A", async (_kind, reply) => {
+    const { result, rerender } = setup();
+    await search(result, "northwind", "a0");
+    fetchMock.mockResolvedValueOnce(reply);
+    await act(() => result.current.loadMore());
+    expect(result.current.warning !== null || result.current.loadMoreError !== null).toBe(true);
+    rerender({ owner: "another-owner" });
+    rerender({ owner: "fixture-owner" });
+    expect(result.current.warning).toBeNull();
+    expect(result.current.reconnectRequired).toBe(false);
+    expect(result.current.loadMoreError).toBeNull();
+    expect(result.current.isLoadingMore).toBe(false);
+  });
+
+  it.each(["resolve", "reject"] as const)("a late %s of owner A changes nothing in the idle generation after A, B, A", async (settle) => {
+    const { result, rerender } = setup();
+    await search(result, "northwind", "a0");
+    const late = await startPending(result, 2);
+    rerender({ owner: "another-owner" });
+    rerender({ owner: "fixture-owner" });
+    await act(async () => { if (settle === "resolve") late.resolve(ok("a1", { warning: RECONNECT })); else late.reject(new Error("late failure")); });
+    expect(result.current.isLoadingMore).toBe(false);
+    expect(result.current.loadMoreError).toBeNull();
+    expect(result.current.warning).toBeNull();
+    expect(result.current.posts.map((entry) => entry.id)).toEqual(["a0"]);
   });
 });
