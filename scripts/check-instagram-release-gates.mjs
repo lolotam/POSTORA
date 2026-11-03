@@ -2,7 +2,7 @@
 // Task 11 validates retained evidence; it never executes candidate code or authorizes production work.
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { readFileSync, realpathSync } from "node:fs";
+import { closeSync, constants, fstatSync, lstatSync, openSync, readFileSync, readSync, realpathSync } from "node:fs";
 import { dirname, isAbsolute, posix, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import ts from "typescript";
@@ -395,14 +395,51 @@ export const ident = (value) => {
   return IDENT_GRAMMAR.test(text) && !CREDENTIAL_PATTERN.test(text) ? text : "[omitted]";
 };
 
+const MAX_ARTIFACT_BYTES = 2 * 1024 * 1024;
+
+/** Returns an exact unpooled buffer; scratch and return allocations coexist during the copy.
+ * A swap of a parent directory between realpath and open is a residual: Node has no openat. */
+export function readBoundedFile(path, maxBytes, options = {}) {
+  const guard = constants.O_NOFOLLOW !== undefined && constants.O_NONBLOCK !== undefined;
+  if (!guard && !options.privateImmutableInput) throw new GateError("platform_precondition_unmet", "This platform lacks O_NOFOLLOW/O_NONBLOCK; pass --private-immutable-input only for a private, unchanging bundle");
+  const before = lstatSync(path, { bigint: true });
+  if (!before.isFile()) throw new GateError("artifact_not_regular", "Artifact is not a regular file");
+  options.beforeOpen?.();
+  const fd = openSync(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0));
+  try {
+    const stat = fstatSync(fd, { bigint: true });
+    if (!stat.isFile() || stat.dev !== before.dev || stat.ino !== before.ino) throw new GateError("artifact_not_regular", "Artifact changed before it was read");
+    if (stat.size !== before.size) throw new GateError("artifact_changed_during_read", "Artifact size changed before it was read");
+    if (stat.size > BigInt(maxBytes)) throw new GateError("artifact_too_large", "Artifact exceeds the size limit");
+    options.afterFstat?.();
+    const scratch = Buffer.alloc(maxBytes + 1);
+    let length = 0;
+    for (let count = 1; count > 0 && length <= maxBytes; length += count) count = readSync(fd, scratch, length, maxBytes + 1 - length, null);
+    if (length > maxBytes || BigInt(length) !== stat.size || fstatSync(fd, { bigint: true }).size !== stat.size) {
+      throw new GateError("artifact_changed_during_read", "Artifact size changed while it was being read");
+    }
+    // Buffer.alloc never uses the shared pool, so the returned backing store is exactly the bytes read.
+    const exact = Buffer.alloc(length);
+    scratch.copy(exact, 0, 0, length);
+    return exact;
+  } finally { closeSync(fd); }
+}
+
 function artifactBytes(context, artifact) {
   const directory = context.evidenceDirectory ?? context.root;
   const path = isAbsolute(artifact.path) ? artifact.path : resolve(directory, artifact.path);
   if (CREDENTIAL_PATTERN.test(artifact.path)) throw new GateError("artifact_redaction_failed", "[redacted-path]");
   let bytes;
-  try { bytes = readFileSync(realpathSync(path)); }
+  try {
+    const real = realpathSync(path);
+    const inside = relative(realpathSync(directory), real);
+    if (!inside || /^\.\.(?:[\\/]|$)/.test(inside) || isAbsolute(inside)) throw new GateError("artifact_path_escape", "Artifact is outside the evidence directory");
+    bytes = readBoundedFile(real, MAX_ARTIFACT_BYTES, { privateImmutableInput: context.privateImmutableInput });
+  }
   catch (error) {
+    if (error instanceof GateError) throw error;
     // Node's raw filesystem error carries the path; report only the sanitized one.
+    if (error.code === "ELOOP") throw new GateError("artifact_not_regular", "Artifact is not a regular file");
     if (!["ENOENT", "ENOTDIR", "EACCES", "EPERM", "EISDIR"].includes(error.code)) throw new GateError("artifact_unreadable", safeDetail(artifact.path));
     throw new GateError("artifact_missing", safeDetail(artifact.path));
   }
@@ -924,8 +961,9 @@ export function evaluateReleaseGates(options) {
   return report;
 }
 
-function cli(args) {
-  const options = {};
+function cli(argv) {
+  const options = { privateImmutableInput: argv.includes("--private-immutable-input") };
+  const args = argv.filter((arg) => arg !== "--private-immutable-input");
   const flags = { "--spec": "spec", "--evidence": "evidencePath", "--main-ref": "mainRef", "--phase": "phase", "--gate": "gate", "--event": "event", "--candidate": "candidate", "--head": "head" };
   for (let index = 0; index < args.length; index += 2) {
     const key = flags[args[index]];
