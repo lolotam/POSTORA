@@ -374,10 +374,23 @@ function migrationChecks(context) {
   }
 }
 
-// Credential-bearing text is never accepted in evidence and never echoed in a report.
-const CREDENTIAL_PATTERN = /(?:[a-z][a-z0-9+.-]*:\/\/[^\s/?#"'<>]+@)|(?:["']?authorization["']?\s*[:=]\s*["']?Basic\s+[A-Za-z0-9+/]{4,}={0,2})|(?:https?:\/\/[^\s"']+[?&](?:access_token|refresh_token|api_key)=)|(?:Bearer\s+(?!token(?![A-Za-z0-9._~+/=-]))[A-Za-z0-9._~+/=-]{8,})|(?:-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----)|(?:eyJ[A-Za-z0-9_-]{15,}\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+)|(?:["']?(?:access_token|refresh_token|api_key|password|client_secret|SUPABASE_SERVICE_ROLE_KEY)["']?\s*[:=]\s*(?:["']\s*)?(?!(?:\[REDACTED\]|<redacted>|\[\]|\{\}|null|true|false|undefined)(?=[\s"']|$|[}\]]+(?:[\s"',;]|$)|[,;](?:[\s"'}\]]|$)))[^"'\s]+)/i;
+// Credential screening: the bounded guarantee.
+// Detected (the artifact is refused and any report text is replaced): URI userinfo, Basic authorization, access_token/refresh_token/api_key query parameters,
+// Bearer values, PEM private-key headers, JWTs, and a value assigned with = or : to access_token, refresh_token, api_key, password, client_secret or SUPABASE_SERVICE_ROLE_KEY.
+// Assignment semantics. A quoted value ("..." or '...') is read up to its closing quote and is accepted only when it is empty, [REDACTED] or <redacted>; any other content
+// inside the quotes is a credential. An unquoted value ends at whitespace. [REDACTED], <redacted>, [], {}, null, true, false and undefined are accepted only as the whole value,
+// optionally followed by the closers and separators of JSON-like text (] } , ;) that are themselves followed by whitespace, a quote, another delimiter or the end.
+// NOT guaranteed: this is a text filter for accidental retention, not a boundary against an author who puts a secret where no sensitive key precedes it (bare tokens, free text,
+// encodings, values split across tokens or lines). Evidence origin is a separate, unresolved blocker (evidence_origin_unverified).
+// Reports do not echo untrusted evidence text where an identifier suffices: ident() prints an identifier only if it passes a strict grammar and this filter, otherwise an omitted marker with a short hash.
+const CREDENTIAL_PATTERN = /(?:[a-z][a-z0-9+.-]*:\/\/[^\s/?#"'<>]+@)|(?:["']?authorization["']?\s*[:=]\s*["']?Basic\s+[A-Za-z0-9+/]{4,}={0,2})|(?:https?:\/\/[^\s"']+[?&](?:access_token|refresh_token|api_key)=)|(?:Bearer\s+(?!token(?![A-Za-z0-9._~+/=-]))[A-Za-z0-9._~+/=-]{8,})|(?:-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----)|(?:eyJ[A-Za-z0-9_-]{15,}\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+)|(?:["']?(?:access_token|refresh_token|api_key|password|client_secret|SUPABASE_SERVICE_ROLE_KEY)["']?\s*[:=]\s*(?:"(?!(?:\[REDACTED\]|<redacted>|)")[^"]+|'(?!(?:\[REDACTED\]|<redacted>|)')[^']+|(?!["'])(?!(?:\[REDACTED\]|<redacted>|\[\]|\{\}|null|true|false|undefined)(?=[\s"']|$|[}\]]+(?:[\s"',;]|$)|[,;](?:[\s"'}\]]|$)))[^"'\s]+))/i;
 const safeDetail = (value) => CREDENTIAL_PATTERN.test(String(value)) ? "[redacted-path]" : value;
 function redactDetail(detail) { return typeof detail === "string" ? safeDetail(detail) : detail; }
+const IDENT_GRAMMAR = /^[A-Za-z0-9][A-Za-z0-9._:\/@+\[\]-]{0,159}$/;
+const ident = (value) => {
+  const text = String(value);
+  return IDENT_GRAMMAR.test(text) && !CREDENTIAL_PATTERN.test(text) ? text : `[omitted:${createHash("sha256").update(text).digest("hex").slice(0, 8)}]`;
+};
 
 function artifactBytes(context, artifact) {
   const directory = context.evidenceDirectory ?? context.root;
@@ -430,7 +443,7 @@ function importedPath(context, caller, specifier) {
   const target = specifier.startsWith("@/") ? `src/${specifier.slice(2)}` : posix.normalize(posix.join(posix.dirname(caller), specifier));
   const path = [target, ...[".ts", ".tsx", ".js", ".jsx", ".mjs", ".json"].map((extension) => `${target}${extension}`),
     ...[".ts", ".tsx", ".js", ".jsx"].map((extension) => `${target}/index${extension}`)].find((candidate) => context.files.has(candidate));
-  if (!path || isTest(path) || (!path.startsWith("src/") && !path.startsWith("supabase/functions/"))) throw new GateError("runtime_import_unresolved", `${caller}: ${specifier}`);
+  if (!path || isTest(path) || (!path.startsWith("src/") && !path.startsWith("supabase/functions/"))) throw new GateError("runtime_import_unresolved", `${ident(caller)}: ${ident(specifier)}`);
   return path;
 }
 
@@ -443,7 +456,7 @@ function addRuntimeClosure(context, paths, pending) {
     if (!/\.[cm]?[jt]sx?$/.test(path)) continue;
     for (const specifier of moduleImports(bytes, path).imports) {
       if (specifier.startsWith(".") || specifier.startsWith("@/")) pending.push(importedPath(context, path, specifier));
-      else if (path.startsWith("supabase/functions/") && !/^(?:https:\/\/|npm:|node:)/.test(specifier)) throw new GateError("runtime_import_unresolved", safeDetail(`${path}: ${specifier}`));
+      else if (path.startsWith("supabase/functions/") && !/^(?:https:\/\/|npm:|node:)/.test(specifier)) throw new GateError("runtime_import_unresolved", `${ident(path)}: ${ident(specifier)}`);
       else context.externalImports.add(safeDetail(specifier));
     }
   }
@@ -521,29 +534,29 @@ function playwrightSourcePath(report, file) {
 
 function playwrightProof(context, proof) {
   const report = readJsonArtifact(context, proof.artifact);
-  if (!report || !Array.isArray(report.suites) || !report.stats) throw new GateError("playwright_report_invalid", proof.id);
+  if (!report || !Array.isArray(report.suites) || !report.stats) throw new GateError("playwright_report_invalid", ident(proof.id));
   const specs = [];
   function visit(suite) {
-    if (!suite || (suite.specs !== undefined && !Array.isArray(suite.specs)) || (suite.suites !== undefined && !Array.isArray(suite.suites))) throw new GateError("playwright_report_invalid", proof.id);
+    if (!suite || (suite.specs !== undefined && !Array.isArray(suite.specs)) || (suite.suites !== undefined && !Array.isArray(suite.suites))) throw new GateError("playwright_report_invalid", ident(proof.id));
     specs.push(...(suite.specs ?? []));
     for (const child of suite.suites ?? []) visit(child);
   }
   for (const suite of report.suites ?? []) visit(suite);
-  if (report.errors?.length || !specs.length || report.stats?.skipped !== 0 || report.stats?.unexpected !== 0 || report.stats?.flaky !== 0 || report.stats?.expected !== specs.length) throw new GateError("playwright_run_not_clean", proof.id);
+  if (report.errors?.length || !specs.length || report.stats?.skipped !== 0 || report.stats?.unexpected !== 0 || report.stats?.flaky !== 0 || report.stats?.expected !== specs.length) throw new GateError("playwright_run_not_clean", ident(proof.id));
   for (const spec of specs) {
     const execution = spec?.tests?.[0];
-    if (!spec?.ok || !Array.isArray(spec.tests) || spec.tests.length !== 1 || !execution || execution.expectedStatus !== "passed" || execution.status !== "expected" || !Array.isArray(execution.results) || execution.results.length !== 1 || execution.results[0]?.status !== "passed" || execution.results[0]?.errors?.length) throw new GateError("playwright_run_not_clean", proof.id);
+    if (!spec?.ok || !Array.isArray(spec.tests) || spec.tests.length !== 1 || !execution || execution.expectedStatus !== "passed" || execution.status !== "expected" || !Array.isArray(execution.results) || execution.results.length !== 1 || execution.results[0]?.status !== "passed" || execution.results[0]?.errors?.length) throw new GateError("playwright_run_not_clean", ident(proof.id));
   }
   const matches = specs.filter((spec) => spec.title === proof.testTitle && playwrightSourcePath(report, spec.file) === proof.source.path && spec.tests[0].projectName === proof.project);
-  if (matches.length !== 1 || !proof.project) throw new GateError("proof_wrong_scope", proof.id);
+  if (matches.length !== 1 || !proof.project) throw new GateError("proof_wrong_scope", ident(proof.id));
 }
 
 function validateProof(context, proof) {
-  if (proof.candidate !== context.candidate || proof.tree !== context.report.tree) throw new GateError("proof_stale_candidate", proof.id);
-  if (proof.status !== "passed" || proof.exit !== 0 || proof.skipped !== 0 || proof.flaky !== 0 || proof.failures !== 0 || proof.attempts !== 1) throw new GateError("proof_not_clean", proof.id);
-  if (/--no-check|(?:--allow-net(?:\s|$)(?![=]))|(?:test\.skip|--passWithNoTests)/.test(proof.command)) throw new GateError("proof_command_unsafe", proof.id);
-  if (proof.environment === "live" && (proof.reporter !== "receipt" || /(?:localhost|127\.0\.0\.1|fixture|synthetic|playwright)/i.test(proof.command))) throw new GateError("proof_wrong_scope", proof.id);
-  if (context.sourceHashes.get(proof.source.path) !== proof.source.sha256 || digest(committedBytes(context, proof.source.path)) !== proof.source.sha256) throw new GateError("proof_wrong_source", proof.id);
+  if (proof.candidate !== context.candidate || proof.tree !== context.report.tree) throw new GateError("proof_stale_candidate", ident(proof.id));
+  if (proof.status !== "passed" || proof.exit !== 0 || proof.skipped !== 0 || proof.flaky !== 0 || proof.failures !== 0 || proof.attempts !== 1) throw new GateError("proof_not_clean", ident(proof.id));
+  if (/--no-check|(?:--allow-net(?:\s|$)(?![=]))|(?:test\.skip|--passWithNoTests)/.test(proof.command)) throw new GateError("proof_command_unsafe", ident(proof.id));
+  if (proof.environment === "live" && (proof.reporter !== "receipt" || /(?:localhost|127\.0\.0\.1|fixture|synthetic|playwright)/i.test(proof.command))) throw new GateError("proof_wrong_scope", ident(proof.id));
+  if (context.sourceHashes.get(proof.source.path) !== proof.source.sha256 || digest(committedBytes(context, proof.source.path)) !== proof.source.sha256) throw new GateError("proof_wrong_source", ident(proof.id));
   artifactBytes(context, proof.artifact);
   if (proof.reporter === "playwright") playwrightProof(context, proof);
   else executionReceiptProof(context, proof);
@@ -551,9 +564,9 @@ function validateProof(context, proof) {
 
 function executionReceiptProof(context, proof) {
   const parsed = executionReceiptSchema.safeParse(readJsonArtifact(context, proof.artifact));
-  if (!parsed.success) throw new GateError("execution_receipt_invalid", proof.id);
+  if (!parsed.success) throw new GateError("execution_receipt_invalid", ident(proof.id));
   for (const key of Object.keys(proof).filter((key) => !["artifact", "reporter"].includes(key))) {
-    if (JSON.stringify(parsed.data[key]) !== JSON.stringify(proof[key])) throw new GateError("execution_receipt_mismatch", proof.id);
+    if (JSON.stringify(parsed.data[key]) !== JSON.stringify(proof[key])) throw new GateError("execution_receipt_mismatch", ident(proof.id));
   }
 }
 
@@ -561,7 +574,7 @@ function proofInventory(context) {
   const proofs = new Map();
   context.validProofs = new Set();
   for (const proof of context.evidence.proofs) {
-    if (proofs.has(proof.id)) { context.report.failures.push(gap("proof_duplicate", proof.id)); context.validProofs.delete(proof.id); }
+    if (proofs.has(proof.id)) { context.report.failures.push(gap("proof_duplicate", ident(proof.id))); context.validProofs.delete(proof.id); }
     else {
       proofs.set(proof.id, proof);
       collect(context, () => { validateProof(context, proof); context.validProofs.add(proof.id); });
@@ -640,7 +653,7 @@ function frozenInventory(context) {
 }
 
 function actualCall(context, step) {
-  if (isTest(step.caller) || isTest(step.callee) || !context.runtimeFiles.has(step.callee)) throw new GateError("runtime_caller_invalid", step.callee);
+  if (isTest(step.caller) || isTest(step.callee) || !context.runtimeFiles.has(step.callee)) throw new GateError("runtime_caller_invalid", ident(step.callee));
   const { syntax } = moduleImports(committedBytes(context, step.caller), step.caller);
   const bindings = new Map();
   for (const statement of syntax.statements.filter(ts.isImportDeclaration)) {
@@ -665,7 +678,7 @@ function actualCall(context, step) {
     ts.forEachChild(node, visit);
   }
   visit(syntax);
-  if (!matched) throw new GateError("runtime_call_missing", `${step.caller}:${step.line} -> ${step.callee} :: ${step.symbol}`);
+  if (!matched) throw new GateError("runtime_call_missing", `${ident(step.caller)}:${step.line} -> ${ident(step.callee)} :: ${ident(step.symbol)}`);
 }
 
 function unparenthesized(expression) {
@@ -704,10 +717,10 @@ function runtimeCallers(context) {
   const reached = new Set();
   const entrypoints = new Set([...context.runtimeRoots.filter((path) => path.endsWith("/index.ts")), "src/pages/analytics/InstagramAnalytics.tsx"]);
   for (const chain of context.evidence.runtimeCallers) collect(context, () => {
-    if (!entrypoints.has(chain.entrypoint) || chain.steps[0].caller !== chain.entrypoint) throw new GateError("runtime_entrypoint_invalid", chain.entrypoint);
+    if (!entrypoints.has(chain.entrypoint) || chain.steps[0].caller !== chain.entrypoint) throw new GateError("runtime_entrypoint_invalid", ident(chain.entrypoint));
     artifactBytes(context, chain.artifact);
     for (let index = 0; index < chain.steps.length; index++) {
-      if (index && chain.steps[index - 1].callee !== chain.steps[index].caller) throw new GateError("runtime_chain_disconnected", chain.entrypoint);
+      if (index && chain.steps[index - 1].callee !== chain.steps[index].caller) throw new GateError("runtime_chain_disconnected", ident(chain.entrypoint));
       actualCall(context, chain.steps[index]);
     }
     for (const step of chain.steps) reached.add(step.callee);
@@ -829,11 +842,11 @@ function liveReceipts(context) {
   const timestamps = [];
   for (const action of APPROVAL_ACTIONS) {
     const matches = live.approvals.filter((approval) => approval.action === action);
-    if (matches.length !== 1) throw new GateError("live_approval_missing_or_duplicate", action);
+    if (matches.length !== 1) throw new GateError("live_approval_missing_or_duplicate", ident(action));
     const approval = matches[0];
-    if (approval.candidate !== context.candidate || approval.tree !== context.report.tree) throw new GateError("live_approval_stale", action);
+    if (approval.candidate !== context.candidate || approval.tree !== context.report.tree) throw new GateError("live_approval_stale", ident(action));
     const proofs = approval.proofIds.map((id) => context.proofs.get(id));
-    if (new Set(approval.proofIds).size !== proofs.length || proofs.some((proof) => !proof || proof.environment !== "live" || !context.validProofs.has(proof.id))) throw new GateError("live_approval_wrong_scope", action);
+    if (new Set(approval.proofIds).size !== proofs.length || proofs.some((proof) => !proof || proof.environment !== "live" || !context.validProofs.has(proof.id))) throw new GateError("live_approval_wrong_scope", ident(action));
     artifactBytes(context, approval.artifact);
     timestamps.push(Date.parse(approval.timestamp));
   }

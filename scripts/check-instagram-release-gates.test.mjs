@@ -421,6 +421,13 @@ test("native Playwright result and redaction boundaries cannot be overridden by 
     ["null literal as the prefix of a real value", `${"pass"}${"word"}=null/${"actual-"}${"secret"}`, "actual-secret"],
     ["quoted value with leading whitespace", `${"pass"}${"word"}=" ${"actual-"}${"secret"}"`, "actual-secret"],
     ["single-quoted value with leading whitespace", `${"pass"}${"word"}=' ${"actual-"}${"secret"}'`, "actual-secret"],
+    ["content after a marker inside double quotes", `${"pass"}${"word"}="[REDACTED] ${"synthetic-"}${"probe"}"`, "synthetic-probe"],
+    ["content after null inside double quotes", `${"pass"}${"word"}="null, ${"synthetic-"}${"probe"}"`, "synthetic-probe"],
+    ["content after a lowercase marker inside double quotes", `${"pass"}${"word"}="<redacted> ${"synthetic-"}${"probe"}"`, "synthetic-probe"],
+    ["content after a marker inside single quotes", `${"pass"}${"word"}='[REDACTED] ${"synthetic-"}${"probe"}'`, "synthetic-probe"],
+    ["content glued to a marker inside quotes", `${"pass"}${"word"}="[REDACTED]${"synthetic-"}${"probe"}"`, "synthetic-probe"],
+    ["quoted literal is not an approved placeholder", `${"pass"}${"word"}="null"`, '"null"'],
+    ["JSON string with a marker prefix", `{"${"pass"}${"word"}":"[REDACTED] ${"synthetic-"}${"probe"}"}`, "synthetic-probe"],
     ["closing bracket after an empty marker", `${"pass"}${"word"}=[]]${"actual-"}${"secret"}`, "actual-secret"],
     ["closing brace after an empty marker", `${"pass"}${"word"}={}}${"actual-"}${"secret"}`, "actual-secret"],
     ["comma after a literal inside an unquoted value", `${"pass"}${"word"}=null,${"actual-"}${"secret"}`, "actual-secret"],
@@ -430,6 +437,32 @@ test("native Playwright result and redaction boundaries cannot be overridden by 
     const report = fixture.evaluate({ evidence: ledger });
     assert.ok(codes(report).includes("artifact_redaction_failed"));
     assert.ok(!JSON.stringify(report).includes(secret));
+  });
+  await context.test("exact approved placeholders in structured evidence are accepted", () => {
+    const report = structuredClone(fixture.report);
+    report.metadata = { [["pass", "word"].join("")]: null, [["api", "_key"].join("")]: "[REDACTED]", [["client", "_secret"].join("")]: "", [["access", "_token"].join("")]: "<redacted>", nested: [{ [["pass", "word"].join("")]: [] }, { [["pass", "word"].join("")]: {} }] };
+    const ledger = structuredClone(fixture.ledger);
+    const artifact = fixture.artifact("placeholders-playwright.json", JSON.stringify(report));
+    ledger.proofs.forEach((proof) => { proof.artifact = artifact; });
+    const result = fixture.evaluate({ evidence: ledger });
+    assert.ok(!codes(result).includes("artifact_redaction_failed"));
+    assert.deepEqual(result.failures, []);
+  });
+  await context.test("an untrusted proof identifier is not echoed into the report", () => {
+    const tainted = `proof-${"pass"}${"word"}="[REDACTED] ${"synthetic-"}${"probe"}"`;
+    const ledger = structuredClone(fixture.ledger);
+    ledger.proofs[0].id = tainted;
+    ledger.proofs.push(structuredClone(ledger.proofs[0]));
+    const result = fixture.evaluate({ evidence: ledger });
+    const duplicate = result.failures.find((entry) => entry.code === "proof_duplicate");
+    assert.match(duplicate?.detail ?? "", /^\[omitted:[0-9a-f]{8}\]$/);
+    assert.ok(!JSON.stringify(result).includes("synthetic-probe"));
+  });
+  await context.test("a well-formed proof identifier is still reported by name", () => {
+    const ledger = structuredClone(fixture.ledger);
+    ledger.proofs.push(structuredClone(ledger.proofs[0]));
+    const duplicate = fixture.evaluate({ evidence: ledger }).failures.find((entry) => entry.code === "proof_duplicate");
+    assert.equal(duplicate?.detail, ledger.proofs[0].id);
   });
   await context.test("a credential-bearing artifact path is never echoed in a failure report", () => {
     const ledger = structuredClone(fixture.ledger);
