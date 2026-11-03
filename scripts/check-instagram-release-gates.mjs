@@ -136,8 +136,10 @@ function trackedTree(root, revision) {
   if (/^[a-f0-9]{40}$/.test(revision) && cache.has(revision)) return cache.get(revision);
   const entries = git(root, ["ls-tree", "-r", "-z", revision]).toString().split("\0").filter(Boolean);
   const files = new Map(entries.map((entry) => {
-    const [metadata, path] = entry.split("\t");
-    const [mode, type, blob] = metadata.split(" ");
+    const tab = entry.indexOf("\t");
+    const [mode, type, blob] = entry.slice(0, tab).split(" ");
+    const path = entry.slice(tab + 1);
+    if (tab < 1 || /[\x00-\x1f\x7f]/.test(path)) throw new GateError("tracked_path_invalid", "A tracked path contains a control character");
     return [path, { mode, type, blob }];
   }));
   if (/^[a-f0-9]{40}$/.test(revision)) cache.set(revision, files);
@@ -383,7 +385,7 @@ function migrationChecks(context) {
 // NOT guaranteed: this is a text filter for accidental retention, not a boundary against an author who puts a secret where no sensitive key precedes it (bare tokens, free text,
 // encodings, values split across tokens or lines). Evidence origin is a separate, unresolved blocker (evidence_origin_unverified).
 // Reports do not echo untrusted evidence text where an identifier suffices: ident() prints an identifier only if it passes a strict grammar and this filter, otherwise the constant marker [omitted] (nothing derived from the input is printed).
-const CREDENTIAL_PATTERN = /(?:[a-z][a-z0-9+.-]*:\/\/[^\s/?#"'<>]+@)|(?:["']?authorization["']?\s*[:=]\s*["']?Basic\s+[A-Za-z0-9+/]{4,}={0,2})|(?:https?:\/\/[^\s"']+[?&](?:access_token|refresh_token|api_key)=)|(?:Bearer\s+(?!token(?![A-Za-z0-9._~+/=-]))[A-Za-z0-9._~+/=-]{8,})|(?:-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----)|(?:eyJ[A-Za-z0-9_-]{15,}\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+)|(?:["']?(?:access_token|refresh_token|api_key|password|client_secret|SUPABASE_SERVICE_ROLE_KEY)["']?\s*[:=]\s*(?:"(?!(?:\[REDACTED\]|<redacted>|)"(?=\s|$|[}\]]+(?:[\s"',;]|$)|[,;](?:[\s"'}\]]|$)))[^"]*|'(?!(?:\[REDACTED\]|<redacted>|)\'(?=\s|$|[}\]]+(?:[\s"',;]|$)|[,;](?:[\s"'}\]]|$)))[^']*|(?!["'])(?!(?:\[REDACTED\]|<redacted>|\[\]|\{\}|null|true|false|undefined)(?=[\s"']|$|[}\]]+(?:[\s"',;]|$)|[,;](?:[\s"'}\]]|$)))[^"'\s]+))/i;
+const CREDENTIAL_PATTERN = /(?:[a-z][a-z0-9+.-]*:\/\/[^\s/?#"'<>]+@)|(?:["']?authorization["']?\s*[:=]\s*["']?Basic\s+[A-Za-z0-9+/]{4,}={0,2})|(?:https?:\/\/[^\s"']+[?&](?:access_token|refresh_token|api_key|token|key)=)|(?:Bearer\s+(?!token(?![A-Za-z0-9._~+/=-]))[A-Za-z0-9._~+/=-]{8,})|(?:-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----)|(?:eyJ[A-Za-z0-9_-]{15,}\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+)|(?:["']?(?:access_token|refresh_token|api_key|password|client_secret|SUPABASE_SERVICE_ROLE_KEY)["']?\s*[:=]\s*(?:"(?!(?:\[REDACTED\]|<redacted>|)"(?=\s|$|[}\]]+(?:[\s"',;]|$)|[,;](?:[\s"'}\]]|$)))[^"]*|'(?!(?:\[REDACTED\]|<redacted>|)\'(?=\s|$|[}\]]+(?:[\s"',;]|$)|[,;](?:[\s"'}\]]|$)))[^']*|(?!["'])(?!(?:\[REDACTED\]|<redacted>|\[\]|\{\}|null|true|false|undefined)(?=[\s"']|$|[}\]]+(?:[\s"',;]|$)|[,;](?:[\s"'}\]]|$)))[^"'\s]+))/i;
 const safeDetail = (value) => CREDENTIAL_PATTERN.test(String(value)) ? "[redacted-path]" : value;
 function redactDetail(detail) { return typeof detail === "string" ? safeDetail(detail) : detail; }
 const IDENT_GRAMMAR = /^(?=.{1,160}$)(?:\.{1,2}\/|@\/|@[A-Za-z0-9._-]+\/|[A-Za-z0-9])[A-Za-z0-9._:\/@+\[\]-]{0,159}$/;
@@ -585,7 +587,7 @@ function proofInventory(context) {
 
 function requirementProofs(context, requirement, row) {
   if (requirement.inventoryStatus !== row.inventoryStatus) throw new GateError("inventory_status_mismatch", row.id);
-  if (requirement.blocker) { row.execution = "blocked"; context.report.blocked.push(gap("acceptance_blocked", `${row.id}: ${requirement.blocker}`)); }
+  if (requirement.blocker) { row.execution = "blocked"; context.report.blocked.push(gap("acceptance_blocked", ident(row.id))); }
   const selected = requirement.proofIds.map((id) => context.proofs.get(id));
   const identities = requirement.requiredTests.map((expected) => JSON.stringify(expected));
   if (new Set(identities).size !== identities.length) throw new GateError("required_test_duplicate", row.id);
