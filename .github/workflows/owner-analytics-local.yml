@@ -29,6 +29,7 @@ on:
       - "scripts/db-harness.sh"
       - "playwright.owner-analytics.config.ts"
       - "playwright.instagram-release.config.ts"
+      - "scripts/ci/deno-analytics.lock"
       - "package*.json"
       - "index.html"
       - "vite.config.ts"
@@ -67,8 +68,8 @@ jobs:
           npx playwright install --with-deps chromium
       - name: Check and cache the canonical composition
         run: |
-          deno cache --no-config --no-lock --node-modules-dir=none e2e/fixtures/instagramReleaseServer.ts
-          deno check --no-config --no-lock --node-modules-dir=none e2e/fixtures/instagramReleaseServer.ts
+          deno cache --no-config --lock=scripts/ci/deno-analytics.lock --frozen --node-modules-dir=none e2e/fixtures/instagramReleaseServer.ts
+          deno check --no-config --lock=scripts/ci/deno-analytics.lock --frozen --node-modules-dir=none e2e/fixtures/instagramReleaseServer.ts
           node --experimental-transform-types --test e2e/fixtures/instagramReleaseSafety.test.ts
       - name: Prepare new isolated SQL and Auth services with cron disabled
         run: node scripts/prepare-instagram-owner-release.mjs
@@ -109,16 +110,16 @@ jobs:
       - name: Check fixture safety and artifact inventory tooling
         run: |
           node --test scripts/check-instagram-owner-analytics-gates.test.mjs scripts/instagram-owner-release-safety.test.mjs scripts/check-instagram-owner-journeys.test.mjs scripts/instagram-owner-resolver.test.mjs
-          deno check --no-config --no-lock --node-modules-dir=none e2e/fixtures/instagramOwnerReleaseServer.ts e2e/fixtures/instagramOwnerReleaseSeed.ts
+          deno check --no-config --lock=scripts/ci/deno-analytics.lock --frozen --node-modules-dir=none e2e/fixtures/instagramOwnerReleaseServer.ts e2e/fixtures/instagramOwnerReleaseSeed.ts
       - name: Prepare new isolated SQL and Auth services
         run: node scripts/prepare-instagram-owner-release.mjs
       - name: Seed synthetic identities through real Auth
         run: >-
-          deno run --no-config --no-lock --node-modules-dir=none --allow-env=DOCKER_HOST --allow-run=docker
+          deno run --no-config --lock=scripts/ci/deno-analytics.lock --frozen --node-modules-dir=none --allow-env=DOCKER_HOST --allow-run=docker
           --allow-net=127.0.0.1:65435 e2e/fixtures/instagramOwnerReleaseSeed.ts
       - name: Start real composition roots with synthetic Meta transport
         run: |
-          deno run --no-config --no-lock --node-modules-dir=none --allow-env --allow-run=docker,git \
+          deno run --no-config --lock=scripts/ci/deno-analytics.lock --frozen --node-modules-dir=none --allow-env --allow-run=docker,git \
             --allow-net=127.0.0.1:65431,127.0.0.1:65435,127.0.0.1:65436 \
             e2e/fixtures/instagramOwnerReleaseServer.ts > "$RUNNER_TEMP/owner-release-server.log" 2>&1 &
           for attempt in $(seq 1 90); do

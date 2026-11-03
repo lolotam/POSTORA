@@ -3,6 +3,7 @@ import { spawnSync } from "node:child_process";
 import { mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
+import { fileURLToPath } from "node:url";
 import { test } from "node:test";
 
 test("owner CI resolver policy ignores hostile local Deno config and lock files", (context) => {
@@ -10,7 +11,8 @@ test("owner CI resolver policy ignores hostile local Deno config and lock files"
   const commands = [...workflow.matchAll(/deno (?:check|run) ([^\r\n]+)/g)];
   assert.ok(commands.length >= 3, "check, seed and real composition commands must be present");
   for (const [, args] of commands) {
-    assert.ok(args.includes("--no-config") && args.includes("--no-lock"), "all executed Deno roots must ignore ambient resolver files");
+    const explicitFrozenLock = args.includes("--lock=scripts/ci/deno-analytics.lock") && args.includes("--frozen");
+    assert.ok(args.includes("--no-config") && (args.includes("--no-lock") || explicitFrozenLock), "all executed Deno roots must ignore ambient resolver files and use no lock or the one reviewed frozen lock");
   }
   const directory = mkdtempSync(join(tmpdir(), "postora-owner-resolver-"));
   context.after(() => {
@@ -21,7 +23,9 @@ test("owner CI resolver policy ignores hostile local Deno config and lock files"
   writeFileSync(join(directory, "deno.json"), "invalid local config");
   writeFileSync(join(directory, "deno.lock"), "invalid local lock");
   writeFileSync(join(directory, "fixture.ts"), "export const candidate = 1;\n");
-  const policy = commands[0][1].split(/\s+/).filter((arg) => ["--no-config", "--no-lock", "--node-modules-dir=none"].includes(arg));
+  const reviewedLock = fileURLToPath(new URL("./ci/deno-analytics.lock", import.meta.url));
+  const policy = commands[0][1].split(/\s+/).filter((arg) => ["--no-config", "--no-lock", "--frozen", "--node-modules-dir=none"].includes(arg))
+    .concat(commands[0][1].includes("--lock=scripts/ci/deno-analytics.lock") ? [`--lock=${reviewedLock}`] : []);
   const check = (args) => spawnSync("deno", ["check", ...args, "fixture.ts"], { cwd: directory, encoding: "utf8", timeout: 30_000 });
   const controlled = check(policy);
   assert.ifError(controlled.error);

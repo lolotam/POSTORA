@@ -27,8 +27,8 @@ Requirements: a local Docker Unix/named-pipe context, Node/npm, Git and Playwrig
 ```powershell
 node scripts/prepare-instagram-owner-release.mjs
 node scripts/prepare-instagram-owner-release.mjs --verify-existing
-npm exec --yes --package deno@2.9.0 -- deno run --no-config --no-lock --node-modules-dir=none --allow-env=DOCKER_HOST --allow-run=docker --allow-net=127.0.0.1:65435 e2e/fixtures/instagramOwnerReleaseSeed.ts
-npm exec --yes --package deno@2.9.0 -- deno run --no-config --no-lock --node-modules-dir=none --allow-env --allow-run=docker,git --allow-net=127.0.0.1:65431,127.0.0.1:65435,127.0.0.1:65436 e2e/fixtures/instagramOwnerReleaseServer.ts
+npm exec --yes --package deno@2.9.0 -- deno run --no-config --lock=scripts/ci/deno-analytics.lock --frozen --node-modules-dir=none --allow-env=DOCKER_HOST --allow-run=docker --allow-net=127.0.0.1:65435 e2e/fixtures/instagramOwnerReleaseSeed.ts
+npm exec --yes --package deno@2.9.0 -- deno run --no-config --lock=scripts/ci/deno-analytics.lock --frozen --node-modules-dir=none --allow-env --allow-run=docker,git --allow-net=127.0.0.1:65431,127.0.0.1:65435,127.0.0.1:65436 e2e/fixtures/instagramOwnerReleaseServer.ts
 ```
 
 Leave the fixture server running, then in another terminal:
@@ -51,7 +51,7 @@ The API fixture sets a public synthetic `profiles.api_key`, letting the real dat
 
 ## Review hardening, 2026-11-01
 
-Preparation now refuses modified, staged or untracked execution inputs, including ignored local Vite environment files. Deno fixture commands explicitly use `--no-config --no-lock`, so ignored root resolver files cannot silently change the executed import graph. External transitive versions remain resolver evidence, not a frozen production dependency acceptance. Each new fixture container records the exact candidate in the `postora.owner-candidate` label. The real composition server and Playwright configuration read that label and require the same clean checkout before loading application code. Existing unlabelled fixtures remain preserved and cannot supply new candidate-bound evidence. The `--verify-existing` inspection remains read-only and is not an execution-source proof.
+Preparation now refuses modified, staged or untracked execution inputs, including ignored local Vite environment files. Deno fixture commands explicitly use `--no-config --lock=scripts/ci/deno-analytics.lock --frozen`, so ignored root resolver files cannot silently change the executed import graph. External transitive versions remain resolver evidence, not a frozen production dependency acceptance. Each new fixture container records the exact candidate in the `postora.owner-candidate` label. The real composition server and Playwright configuration read that label and require the same clean checkout before loading application code. Existing unlabelled fixtures remain preserved and cannot supply new candidate-bound evidence. The `--verify-existing` inspection remains read-only and is not an execution-source proof.
 
 Playwright writes `postora-owner-release-playwright.json` under the system temporary directory. Run `node scripts/check-instagram-owner-journeys.mjs <temporary-directory>/postora-owner-release-playwright.json` after the browser command. CI enforces the six named journeys, nonzero executed tests, exactly one passing Chromium attempt per test, correct totals and zero errors, skips, expected failures or flaky results. The JSON is retained with the other evidence. Additional journeys must also pass.
 

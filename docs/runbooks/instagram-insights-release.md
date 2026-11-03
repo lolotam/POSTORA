@@ -11,10 +11,12 @@ Run from that checkout:
 ```powershell
 git rev-parse HEAD
 node scripts/prepare-instagram-owner-release.mjs
-deno cache --no-config --no-lock --node-modules-dir=none e2e/fixtures/instagramReleaseServer.ts
-deno check --no-config --no-lock --node-modules-dir=none --cached-only e2e/fixtures/instagramReleaseServer.ts
+deno cache --no-config --lock=scripts/ci/deno-analytics.lock --frozen --node-modules-dir=none e2e/fixtures/instagramReleaseServer.ts
+deno check --no-config --lock=scripts/ci/deno-analytics.lock --frozen --node-modules-dir=none --cached-only e2e/fixtures/instagramReleaseServer.ts
 npx playwright test --config playwright.instagram-release.config.ts --fail-on-flaky-tests
 ```
+
+Deno dependency integrity: the commands above and the analytics steps of `ci.yml` and `owner-analytics-local.yml` verify remote and npm modules against the committed `scripts/ci/deno-analytics.lock` with `--frozen`. Regenerate it only with Deno 2.9.8, `--no-config --lock=<new file>` and an isolated `DENO_DIR`, review the version diff, and commit it separately. The ai-image, resend and process-post steps are outside this lock. Its three jsr/esm.sh entries (`@std/assert`, `@std/internal`, `iceberg-js`) have no historical CI provenance.
 
 Preparation creates a new isolated database and Auth/PostgREST/gateway containers. It refuses existing fixture names/networks and the production-stack host; it never resets a previous database. If preparation refuses an existing fixture, inspect its source identity and preserve its data/recovery metadata before freeing names. Never remove a volume or relabel a predecessor as the new candidate. The database harness must pass before browser evidence is usable.
 

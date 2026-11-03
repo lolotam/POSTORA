@@ -33,8 +33,8 @@ Use a clean immutable checkout of the executed source, the repository's installe
 Run from that checkout, with `docker`, `deno` and Node on PATH:
 
 ```sh
-deno cache --no-config --no-lock --node-modules-dir=none e2e/fixtures/instagramReleaseServer.ts
-deno check --no-config --no-lock --node-modules-dir=none e2e/fixtures/instagramReleaseServer.ts
+deno cache --no-config --lock=scripts/ci/deno-analytics.lock --frozen --node-modules-dir=none e2e/fixtures/instagramReleaseServer.ts
+deno check --no-config --lock=scripts/ci/deno-analytics.lock --frozen --node-modules-dir=none e2e/fixtures/instagramReleaseServer.ts
 node --experimental-transform-types --test e2e/fixtures/instagramReleaseSafety.test.ts
 node scripts/prepare-instagram-owner-release.mjs
 npx playwright test --config playwright.instagram-release.config.ts --fail-on-flaky-tests

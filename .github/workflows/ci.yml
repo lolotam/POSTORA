@@ -210,27 +210,28 @@ jobs:
       - name: Typecheck and test owned analytics coordination
         run: |
           set -euo pipefail
-          deno check --no-config --no-lock --node-modules-dir=none supabase/functions/meta-owned-analytics-sync/*.ts
-          deno test --no-config --no-lock --node-modules-dir=none --allow-env supabase/functions/meta-owned-analytics-sync/composition.test.ts supabase/functions/meta-owned-analytics-sync/dispatch.test.ts supabase/functions/meta-owned-analytics-sync/collection.test.ts supabase/functions/meta-owned-analytics-sync/retention.test.ts supabase/functions/meta-owned-analytics-sync/truncation.test.ts
+          deno check --no-config --lock=scripts/ci/deno-analytics.lock --frozen --node-modules-dir=none supabase/functions/meta-owned-analytics-sync/*.ts
+          deno test --no-config --lock=scripts/ci/deno-analytics.lock --frozen --node-modules-dir=none --allow-env supabase/functions/meta-owned-analytics-sync/composition.test.ts supabase/functions/meta-owned-analytics-sync/dispatch.test.ts supabase/functions/meta-owned-analytics-sync/collection.test.ts supabase/functions/meta-owned-analytics-sync/retention.test.ts supabase/functions/meta-owned-analytics-sync/truncation.test.ts
 
       - name: Prove owned analytics dependency termination with real timeout ceilings
-        run: deno test --no-config --no-lock --node-modules-dir=none --allow-env supabase/functions/meta-owned-analytics-sync/termination.test.ts
+        run: deno test --no-config --lock=scripts/ci/deno-analytics.lock --frozen --node-modules-dir=none --allow-env supabase/functions/meta-owned-analytics-sync/termination.test.ts
 
       - name: Typecheck and test persisted owned analytics reports
         run: |
           set -euo pipefail
-          deno check --no-config --no-lock --node-modules-dir=none supabase/functions/meta-owned-analytics-report/*.ts
-          deno test --no-config --no-lock --node-modules-dir=none --allow-env supabase/functions/meta-owned-analytics-report/report.test.ts
+          deno check --no-config --lock=scripts/ci/deno-analytics.lock --frozen --node-modules-dir=none supabase/functions/meta-owned-analytics-report/*.ts
+          deno test --no-config --lock=scripts/ci/deno-analytics.lock --frozen --node-modules-dir=none --allow-env supabase/functions/meta-owned-analytics-report/report.test.ts
 
       - name: Typecheck and test competitor discovery (brand-scrape)
         run: |
           set -euo pipefail
-          deno check --no-config --no-lock --node-modules-dir=none supabase/functions/brand-scrape/index.ts supabase/functions/brand-scrape/releaseContract.test.ts
-          deno test --no-config --no-lock --node-modules-dir=none --allow-env --allow-read=supabase/functions/brand-scrape/index.ts supabase/functions/brand-scrape/releaseContract.test.ts
+          deno check --no-config --lock=scripts/ci/deno-analytics.lock --frozen --node-modules-dir=none supabase/functions/brand-scrape/index.ts supabase/functions/brand-scrape/releaseContract.test.ts
+          deno test --no-config --lock=scripts/ci/deno-analytics.lock --frozen --node-modules-dir=none --allow-env --allow-read=supabase/functions/brand-scrape/index.ts supabase/functions/brand-scrape/releaseContract.test.ts
 
       - name: Test service proxy and MCP
         run: >
           deno test
+          --lock=scripts/ci/deno-analytics.lock --frozen
           --allow-read=supabase/functions/mcp
           --no-check
           --node-modules-dir=none
@@ -239,7 +240,7 @@ jobs:
 
       - name: Test Threads insights account selection through real composition
         run: >-
-          deno test --node-modules-dir=none --allow-env
+          deno test --lock=scripts/ci/deno-analytics.lock --frozen --node-modules-dir=none --allow-env
           supabase/functions/threads-insights/provider.test.ts
           supabase/functions/threads-insights/composition.test.ts
           supabase/functions/_shared/analyticsCalendar.test.ts
@@ -249,7 +250,7 @@ jobs:
 
       - name: Test owned Facebook Page analytics through real composition
         run: >-
-          deno test --node-modules-dir=none --allow-env
+          deno test --lock=scripts/ci/deno-analytics.lock --frozen --node-modules-dir=none --allow-env
           supabase/functions/facebook-page-insights/composition.test.ts
 
       - name: Typecheck and test the outlier module
@@ -302,9 +303,9 @@ jobs:
               exit 1
             fi
           done
-          deno check --node-modules-dir=none "${report_dir}"/*.ts
+          deno check --lock=scripts/ci/deno-analytics.lock --frozen --node-modules-dir=none "${report_dir}"/*.ts
           # handlers.test.ts drives the real index.ts, whose auth helper reads these at import.
-          deno test --allow-env=SUPABASE_URL,SUPABASE_ANON_KEY,SUPABASE_SERVICE_ROLE_KEY --node-modules-dir=none "${report_dir}"/*.test.ts
+          deno test --lock=scripts/ci/deno-analytics.lock --frozen --allow-env=SUPABASE_URL,SUPABASE_ANON_KEY,SUPABASE_SERVICE_ROLE_KEY --node-modules-dir=none "${report_dir}"/*.test.ts
 
       - name: Typecheck and test protected Meta credential readers and refusals
         run: |
@@ -330,7 +331,7 @@ jobs:
               exit 1
             fi
           done
-          deno test --node-modules-dir=none "${tests[@]}"
+          deno test --lock=scripts/ci/deno-analytics.lock --frozen --node-modules-dir=none "${tests[@]}"
 
       - name: Typecheck and test actual protected Meta request handlers
         env:
@@ -353,7 +354,7 @@ jobs:
               exit 1
             fi
           done
-          deno test --node-modules-dir=none \
+          deno test --lock=scripts/ci/deno-analytics.lock --frozen --node-modules-dir=none \
             --allow-read --allow-write --allow-env --allow-run "${tests[@]}"
 
       - name: Typecheck and test the authenticated owner intake contract
@@ -375,8 +376,8 @@ jobs:
               exit 1
             fi
           done
-          deno check --node-modules-dir=none "${modules[@]}" "${tests[@]}"
-          deno test --node-modules-dir=none \
+          deno check --lock=scripts/ci/deno-analytics.lock --frozen --node-modules-dir=none "${modules[@]}" "${tests[@]}"
+          deno test --lock=scripts/ci/deno-analytics.lock --frozen --node-modules-dir=none \
             --allow-read --allow-env \
             supabase/functions/instagram-insights-sync/store.test.ts \
             supabase/functions/instagram-insights-sync/handler.test.ts
@@ -391,8 +392,8 @@ jobs:
             echo "Owner intake route test is required: ${route}"
             exit 1
           fi
-          deno check --node-modules-dir=none "${route}"
-          deno test --node-modules-dir=none \
+          deno check --lock=scripts/ci/deno-analytics.lock --frozen --node-modules-dir=none "${route}"
+          deno test --lock=scripts/ci/deno-analytics.lock --frozen --node-modules-dir=none \
             --allow-read --allow-write --allow-env --allow-run "${route}"
 
       - name: Typecheck and test the owner collection worker
@@ -425,8 +426,8 @@ jobs:
               exit 1
             fi
           done
-          deno check --node-modules-dir=none "${modules[@]}" "${tests[@]}"
-          deno test --node-modules-dir=none \
+          deno check --lock=scripts/ci/deno-analytics.lock --frozen --node-modules-dir=none "${modules[@]}" "${tests[@]}"
+          deno test --lock=scripts/ci/deno-analytics.lock --frozen --node-modules-dir=none \
             --allow-read --allow-env "${tests[@]}"
 
       - name: Typecheck and test the owner rollout controls
@@ -448,8 +449,8 @@ jobs:
               exit 1
             fi
           done
-          deno check --node-modules-dir=none "${modules[@]}"
-          deno test --node-modules-dir=none \
+          deno check --lock=scripts/ci/deno-analytics.lock --frozen --node-modules-dir=none "${modules[@]}"
+          deno test --lock=scripts/ci/deno-analytics.lock --frozen --node-modules-dir=none \
             --allow-read --allow-write --allow-env --allow-run "${modules[@]}"
 
       - name: Typecheck and test the competitor collection worker
@@ -480,8 +481,8 @@ jobs:
               exit 1
             fi
           done
-          deno check --node-modules-dir=none "${modules[@]}" "${tests[@]}"
-          deno test --node-modules-dir=none \
+          deno check --lock=scripts/ci/deno-analytics.lock --frozen --node-modules-dir=none "${modules[@]}" "${tests[@]}"
+          deno test --lock=scripts/ci/deno-analytics.lock --frozen --node-modules-dir=none \
             --allow-read --allow-env "${tests[@]}"
 
       - name: Typecheck and test the actual competitor collection route
@@ -494,8 +495,8 @@ jobs:
             echo "Competitor collection route test is required: ${route}"
             exit 1
           fi
-          deno check --node-modules-dir=none "${route}"
-          deno test --node-modules-dir=none \
+          deno check --lock=scripts/ci/deno-analytics.lock --frozen --node-modules-dir=none "${route}"
+          deno test --lock=scripts/ci/deno-analytics.lock --frozen --node-modules-dir=none \
             --allow-read --allow-write --allow-env --allow-run "${route}"
 
       - name: Typecheck and test the competitor tracking report
@@ -524,8 +525,8 @@ jobs:
               exit 1
             fi
           done
-          deno check --node-modules-dir=none "${modules[@]}" "${tests[@]}"
-          deno test --node-modules-dir=none \
+          deno check --lock=scripts/ci/deno-analytics.lock --frozen --node-modules-dir=none "${modules[@]}" "${tests[@]}"
+          deno test --lock=scripts/ci/deno-analytics.lock --frozen --node-modules-dir=none \
             --allow-read --allow-env "${tests[@]}"
 
       - name: Typecheck and test the actual competitor tracking report route
@@ -538,8 +539,8 @@ jobs:
             echo "Competitor tracking report route test is required: ${route}"
             exit 1
           fi
-          deno check --node-modules-dir=none "${route}"
-          deno test --node-modules-dir=none \
+          deno check --lock=scripts/ci/deno-analytics.lock --frozen --node-modules-dir=none "${route}"
+          deno test --lock=scripts/ci/deno-analytics.lock --frozen --node-modules-dir=none \
             --allow-read --allow-write --allow-env --allow-run "${route}"
 
       - name: Typecheck and test the competitor retention function
@@ -562,8 +563,8 @@ jobs:
               exit 1
             fi
           done
-          deno check --node-modules-dir=none "${modules[@]}" "${tests[@]}"
-          deno test --node-modules-dir=none \
+          deno check --lock=scripts/ci/deno-analytics.lock --frozen --node-modules-dir=none "${modules[@]}" "${tests[@]}"
+          deno test --lock=scripts/ci/deno-analytics.lock --frozen --node-modules-dir=none \
             --allow-read --allow-env "${tests[@]}"
 
       - name: Typecheck and test the actual competitor retention route
@@ -576,8 +577,8 @@ jobs:
             echo "Competitor retention route test is required: ${route}"
             exit 1
           fi
-          deno check --node-modules-dir=none "${route}"
-          deno test --node-modules-dir=none \
+          deno check --lock=scripts/ci/deno-analytics.lock --frozen --node-modules-dir=none "${route}"
+          deno test --lock=scripts/ci/deno-analytics.lock --frozen --node-modules-dir=none \
             --allow-read --allow-write --allow-env --allow-run "${route}"
 
   db-harness:
@@ -655,15 +656,15 @@ jobs:
               exit 1
             fi
           done
-          deno check --node-modules-dir=none "${tests[@]}"
+          deno check --lock=scripts/ci/deno-analytics.lock --frozen --node-modules-dir=none "${tests[@]}"
           # TWO commands on purpose. `deno test` runs test FILES in parallel,
           # and the two suites share one disposable database and one global
           # policy row. Each suite takes a lease in the database before it
           # starts, so a parallel run serialises instead of interleaving.
-          deno test --node-modules-dir=none \
+          deno test --lock=scripts/ci/deno-analytics.lock --frozen --node-modules-dir=none \
             --allow-read --allow-write --allow-env --allow-run \
             supabase/functions/instagram-insights-sync/rolloutIntegration.test.ts
-          deno test --node-modules-dir=none \
+          deno test --lock=scripts/ci/deno-analytics.lock --frozen --node-modules-dir=none \
             --allow-read --allow-write --allow-env --allow-run \
             supabase/functions/competitor-snapshot-sync/rolloutIntegration.test.ts
 
@@ -672,7 +673,7 @@ jobs:
           ROLLOUT_IT_CONTAINER: pg-harness
           ROLLOUT_IT_DB: partner_api_harness
         run: >-
-          deno test --no-config --no-lock --node-modules-dir=none
+          deno test --no-config --lock=scripts/ci/deno-analytics.lock --frozen --node-modules-dir=none
           --allow-env --allow-run
           supabase/functions/meta-owned-analytics-sync/admissionIntegration.test.ts
 
