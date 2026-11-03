@@ -259,10 +259,11 @@ async function scrapeTikTok(username: string, apifyToken: string, actorId = "clo
 }
 
 /**
- * The maximum number of posts per scrape: an integer from 1 to 100.
- * A missing, zero or non-numeric setting means 50. A fraction is floored first and the range applies
- * afterwards, so 0.5 becomes 1 (the minimum) while a stored 0 still means the default.
- * The setting is read once here for every consumer.
+ * The maximum number of posts per scrape, from 1 to 100. A string setting is parsed as JSON and the
+ * result is converted with Number(). A falsy setting, a zero, NaN or a parse failure means 50; booleans and
+ * one-element arrays do convert (true gives 1, [10] gives 10). The number is floored first and the range
+ * applies afterwards, so 0.5 becomes 1 (the minimum) while a stored 0 still means the default.
+ * This describes the existing conversion; it is not input validation. The setting is read once here.
  */
 export function resolveMaxPosts(setting: unknown): number {
   try {
