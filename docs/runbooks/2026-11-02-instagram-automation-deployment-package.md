@@ -4,7 +4,7 @@ Status: **awaiting review and explicit deployment approval**. This package does 
 
 ## Frozen source and prerequisites
 
-Backend source: `89b17b24816ce1b2273052d741c34f2bdcdd866f`, PR [#348](https://github.com/lolotam/POSTORA/pull/348). Later documentation commits do not change its runtime inputs. The [candidate manifest](../journeys/evidence/2026-11-01-instagram-automation-options.json) owns exact SHA256 values for these **four files**:
+Backend source: `13d4f1b8257c2735bb3beb5f30355ef2b1e2b669`, PR [#348](https://github.com/lolotam/POSTORA/pull/348). It supersedes `89b17b24816ce1b2273052d741c34f2bdcdd866f`: only `supabase/functions/n8n-api/requestBody.ts` changed (numeric usernames inside JSON form arrays now keep every digit), so its manifest hash changed and the other three files are byte-identical. Later documentation commits do not change its runtime inputs. The [candidate manifest](../journeys/evidence/2026-11-01-instagram-automation-options.json) owns exact SHA256 values for these **four files**:
 
 - `supabase/functions/mcp/index.ts`
 - `supabase/functions/n8n-api/index.ts`
@@ -15,7 +15,7 @@ Deploy the request-body dependency with the router. The package exposes the exis
 
 The [read-only prerequisite receipt](../journeys/evidence/2026-11-02-instagram-automation-production-prerequisites.json) was recorded at `2026-11-02T01:43:12.794316+00:00`. All four inspected runtime files matched main `781111a8c8b5bc1296f8c82bbe575f2498b82748` exactly. No server-only conflict was found in those files. Both `record_published_story` and `partner_settle_platform_post` existed with the expected argument names/types and `jsonb` result. Their definition fingerprints matched the isolated migrated database. Both are security definers; `service_role` has EXECUTE while `anon` and `authenticated` do not. This is structural prerequisite evidence, not a live publication.
 
-That immutable receipt records the then-current `d6773d0c` source. The later `89b17b24` production change only removes the token-bearing Story request diagnostic; its new regression uses a synthetic credential. SQL and RPC contracts are unchanged. The receipt's original candidate and hashes are retained; the current deployment file hashes belong to the candidate manifest above.
+That immutable receipt records the then-current `d6773d0c` source and the then-current `requestBody.ts` hash; the `requestBody.ts` hash now differs by design (see above) and must be taken from the candidate manifest. The later `89b17b24` production change only removes the token-bearing Story request diagnostic; its new regression uses a synthetic credential. SQL and RPC contracts are unchanged. The receipt's original candidate and hashes are retained; the current deployment file hashes belong to the candidate manifest above.
 
 The inspected deploy pause/failure markers were absent. Their absence does not independently prove that the Dokploy schedule is active; treat a main merge as potentially deploying automatically, as the [deployment runbook](deploy-edge-function.md#automatic-deploy-dokploy-schedule) specifies.
 
