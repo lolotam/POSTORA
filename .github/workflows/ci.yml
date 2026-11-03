@@ -218,6 +218,7 @@ jobs:
         run: >-
           deno test --no-config --no-lock --node-modules-dir=none --allow-env
           supabase/functions/n8n-api/instagramAutomation.test.ts
+          supabase/functions/n8n-api/parseFormArray.test.ts
 
       - name: Test Threads insights account selection through real composition
         run: >-

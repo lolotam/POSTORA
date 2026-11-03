@@ -45,7 +45,8 @@ export function looksLikeJson(text: string): boolean {
 export function parseFormArray(text: string): unknown[] {
   try {
     const parsed: unknown = JSON.parse(text);
-    if (Array.isArray(parsed)) return parsed;
+    // A numeric username inside a JSON array (`[1234]`) is still a username, not a number.
+    if (Array.isArray(parsed)) return parsed.map(entry => typeof entry === 'number' && Number.isSafeInteger(entry) ? String(entry) : entry);
   } catch {
     // Non-JSON input is the supported comma-separated transport.
   }
