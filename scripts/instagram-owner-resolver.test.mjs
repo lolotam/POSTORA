@@ -7,13 +7,87 @@ import { fileURLToPath } from "node:url";
 import { test } from "node:test";
 
 function assertFrozenPolicy(tokens) {
+  const boundary = tokens.findIndex((token) => token === "--" ||
+    (!token.startsWith("-") && !["deno", "cache", "check", "test", "run"].includes(token)));
+  const options = boundary < 0 ? tokens : tokens.slice(0, boundary);
   for (const required of ["--no-config", "--lock=scripts/ci/deno-analytics.lock", "--frozen"]) {
     assert.ok(tokens.includes(required), `locked command must pass ${required}`);
+    assert.ok(options.includes(required), `Deno option must precede the entrypoint: ${required}`);
   }
   assert.ok(!tokens.some((token) => token === "--no-lock" || token.startsWith("--frozen=") ||
     (token.startsWith("--lock") && token !== "--lock=scripts/ci/deno-analytics.lock")),
   "locked command must not override frozen mode or the reviewed lock");
 }
+
+const ciSteps = [
+  "Typecheck and test owned analytics coordination|check,test",
+  "Prove owned analytics dependency termination with real timeout ceilings|test",
+  "Typecheck and test persisted owned analytics reports|check,test",
+  "Typecheck and test competitor discovery (brand-scrape)|check,test",
+  "Test service proxy and MCP|test",
+  "Test Threads insights account selection through real composition|test",
+  "Test owned Facebook Page analytics through real composition|test",
+  "Typecheck and test the owner-report contract|check,test",
+  "Typecheck and test protected Meta credential readers and refusals|test",
+  "Typecheck and test actual protected Meta request handlers|test",
+  "Typecheck and test the authenticated owner intake contract|check,test",
+  "Typecheck and test the actual owner intake route|check,test",
+  "Typecheck and test the owner collection worker|check,test",
+  "Typecheck and test the owner rollout controls|check,test",
+  "Typecheck and test the competitor collection worker|check,test",
+  "Typecheck and test the actual competitor collection route|check,test",
+  "Typecheck and test the competitor tracking report|check,test",
+  "Typecheck and test the actual competitor tracking report route|check,test",
+  "Typecheck and test the competitor retention function|check,test",
+  "Typecheck and test the actual competitor retention route|check,test",
+  "Typecheck and test the rollout integration suites|check,test,test",
+  "Verify owned analytics workers and stored schedules against real SQL|test",
+];
+const ownerSteps = [
+  "Check and cache the canonical composition|cache,check",
+  "Check fixture safety and artifact inventory tooling|check",
+  "Seed synthetic identities through real Auth|run",
+  "Start real composition roots with synthetic Meta transport|run",
+];
+
+// Recognize only these existing named steps and their literal, continued or folded commands.
+function assertSelectedSteps(source, expected) {
+  const blocks = source.replaceAll("\r\n", "\n").split(/^      - name: /m).slice(1);
+  for (const entry of expected) {
+    const [name, verbs] = entry.split("|");
+    const selected = blocks.filter((block) => block.startsWith(`${name}\n`));
+    assert.equal(selected.length, 1, `required unique step: ${name}`);
+    const block = selected[0].replace(/\\\n\s*/g, " ")
+      .replace(/run: >-?\n((?: {10,}[^\n]*\n)+)/g,
+        (_, body) => `run: ${body.trim().replace(/\n\s*/g, " ")}\n`);
+    const commands = [...block.matchAll(/(?:^|\n)\s*(?:run: )?deno (cache|check|test|run) ([^\n]+)/g)];
+    assert.deepEqual(commands.map((command) => command[1]), verbs.split(","), `recognized commands in ${name}`);
+    for (const [, verb, args] of commands) assertFrozenPolicy([verb, ...args.trim().split(/\s+/)]);
+  }
+}
+
+test("selected workflow commands cannot escape policy through removal, renaming or argument placement", () => {
+  for (const [file, expected] of [["ci.yml", ciSteps], ["owner-analytics-local.yml", ownerSteps]]) {
+    const source = readFileSync(new URL(`../.github/workflows/${file}`, import.meta.url), "utf8");
+    assertSelectedSteps(source, expected);
+    assert.throws(() => assertSelectedSteps(source.replace("deno check", "deno unrecognized"), expected), assert.AssertionError);
+    for (const flag of ["--lock=scripts/ci/deno-analytics.lock ", "--frozen ", "--no-config "]) {
+      assert.throws(() => assertSelectedSteps(source.replace(flag, ""), expected), assert.AssertionError);
+    }
+    const name = expected[0].split("|")[0];
+    assert.throws(() => assertSelectedSteps(source.replace(name, "Renamed step"), expected), assert.AssertionError);
+    const escapedName = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const withoutStep = source.replace(new RegExp(`      - name: ${escapedName}[^]*?(?=      - name:)`), "");
+    assert.throws(() => assertSelectedSteps(withoutStep, expected), assert.AssertionError);
+    assertSelectedSteps(`${source}\n      - name: Unrelated unlocked step\n        run: deno test --no-lock other.test.ts\n`, expected);
+  }
+  const required = ["--no-config", "--lock=scripts/ci/deno-analytics.lock", "--frozen"];
+  for (const prefix of [["run", "fixture.ts"], ["run", "--", "fixture.ts"]]) {
+    assert.throws(() => assertFrozenPolicy([...prefix, ...required]), assert.AssertionError);
+  }
+  const owner = readFileSync(new URL("../.github/workflows/owner-analytics-local.yml", import.meta.url), "utf8");
+  assert.ok(owner.split("permissions:")[0].includes('      - ".github/workflows/ci.yml"'), "CI-only edits must trigger this gate");
+});
 
 test("frozen policy rejects disabled mode and conflicting or lookalike lock tokens", () => {
   const valid = ["--no-config", "--lock=scripts/ci/deno-analytics.lock", "--frozen"];

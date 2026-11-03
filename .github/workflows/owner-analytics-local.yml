@@ -37,6 +37,7 @@ on:
       - "tailwind.config.ts"
       - "postcss.config.js"
       - ".github/workflows/owner-analytics-local.yml"
+      - ".github/workflows/ci.yml"
 
 permissions:
   contents: read
