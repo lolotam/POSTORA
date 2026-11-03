@@ -96,11 +96,11 @@ const ledgerSchema = z.object({
 }).strict();
 
 class GateError extends Error {
-  constructor(code, detail) { super(`${code}: ${detail}`); this.code = code; this.detail = detail; }
+  constructor(code, detail) { const safe = redactDetail(detail); super(`${code}: ${safe}`); this.code = code; this.detail = safe; }
 }
 
 const digest = (bytes) => createHash("sha256").update(bytes).digest("hex");
-const gap = (code, detail) => ({ code, detail });
+const gap = (code, detail) => ({ code, detail: redactDetail(detail) });
 const isTest = (path) => /(?:\.test\.|\.spec\.|TestSupport\.|\/__tests__\/)/.test(path);
 const immutableObjects = new Map();
 
@@ -375,8 +375,9 @@ function migrationChecks(context) {
 }
 
 // Credential-bearing text is never accepted in evidence and never echoed in a report.
-const CREDENTIAL_PATTERN = /(?:[a-z][a-z0-9+.-]*:\/\/[^\s/?#"'<>]+@)|(?:["']?authorization["']?\s*[:=]\s*["']?Basic\s+[A-Za-z0-9+/]{4,}={0,2})|(?:https?:\/\/[^\s"']+[?&](?:access_token|refresh_token|api_key)=)|(?:Bearer\s+(?!token(?![A-Za-z0-9._~+/=-]))[A-Za-z0-9._~+/=-]{8,})|(?:-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----)|(?:eyJ[A-Za-z0-9_-]{15,}\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+)|(?:["']?(?:access_token|refresh_token|api_key|password|client_secret|SUPABASE_SERVICE_ROLE_KEY)["']?\s*[:=]\s*["']?(?!\[REDACTED\]|<redacted>|(?:null|true|false|undefined)(?![A-Za-z0-9._-]))[^"'\s]+)/i;
+const CREDENTIAL_PATTERN = /(?:[a-z][a-z0-9+.-]*:\/\/[^\s/?#"'<>]+@)|(?:["']?authorization["']?\s*[:=]\s*["']?Basic\s+[A-Za-z0-9+/]{4,}={0,2})|(?:https?:\/\/[^\s"']+[?&](?:access_token|refresh_token|api_key)=)|(?:Bearer\s+(?!token(?![A-Za-z0-9._~+/=-]))[A-Za-z0-9._~+/=-]{8,})|(?:-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----)|(?:eyJ[A-Za-z0-9_-]{15,}\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+)|(?:["']?(?:access_token|refresh_token|api_key|password|client_secret|SUPABASE_SERVICE_ROLE_KEY)["']?\s*[:=]\s*["']?(?!\[REDACTED\]|<redacted>|\[\](?![^"'\s])|\{\}(?![^"'\s])|(?:null|true|false|undefined)(?![A-Za-z0-9._-]))[^"'\s]+)/i;
 const safeDetail = (value) => CREDENTIAL_PATTERN.test(String(value)) ? "[redacted-path]" : value;
+function redactDetail(detail) { return typeof detail === "string" ? safeDetail(detail) : detail; }
 
 function artifactBytes(context, artifact) {
   const directory = context.evidenceDirectory ?? context.root;
@@ -468,7 +469,7 @@ function releaseSources(context) {
       paths.add(file.path);
       if (/\.[jt]sx?$/.test(file.path) && !isTest(file.path) && /^(?:src|supabase\/functions)\//.test(file.path)) runtime.add(file.path);
     }
-    for (const specifier of owner.externalImports) context.externalImports.add(specifier);
+    for (const specifier of owner.externalImports) context.externalImports.add(safeDetail(specifier));
   });
   for (const path of context.files.keys()) {
     if (/^supabase\/(?:migrations|tests)\//.test(path) || (/^(?:src|supabase\/functions)\//.test(path) && isTest(path)) || /^src\/features\/(?:instagram-insights|competitor-tracking)\//.test(path) ||
@@ -499,7 +500,7 @@ function verifyManifest(context) {
   });
   for (const path of recorded.keys()) if (!expected.has(path)) context.report.failures.push(gap("source_manifest_unexpected", safeDetail(path)));
   context.sourceHashes = recorded;
-  context.report.sourceManifest = { required: expected.size, recorded: recorded.size, runtime: context.runtimeFiles.size, externalImports: [...context.externalImports].sort() };
+  context.report.sourceManifest = { required: expected.size, recorded: recorded.size, runtime: context.runtimeFiles.size, externalImports: [...new Set([...context.externalImports].map(safeDetail))].sort() };
 }
 
 function readJsonArtifact(context, artifact) {
