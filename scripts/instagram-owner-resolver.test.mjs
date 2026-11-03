@@ -11,8 +11,14 @@ test("owner CI resolver policy ignores hostile local Deno config and lock files"
   const commands = [...workflow.matchAll(/deno (?:check|run) ([^\r\n]+)/g)];
   assert.ok(commands.length >= 3, "check, seed and real composition commands must be present");
   for (const [, args] of commands) {
-    const explicitFrozenLock = args.includes("--lock=scripts/ci/deno-analytics.lock") && args.includes("--frozen");
-    assert.ok(args.includes("--no-config") && (args.includes("--no-lock") || explicitFrozenLock), "all executed Deno roots must ignore ambient resolver files and use no lock or the one reviewed frozen lock");
+    const tokens = args.trim().split(/\s+/);
+    const explicitFrozenLock = tokens.includes("--lock=scripts/ci/deno-analytics.lock") && tokens.includes("--frozen") && !tokens.some((token) => token.startsWith("--frozen=") || token === "--no-lock");
+    assert.ok(tokens.includes("--no-config") && (tokens.includes("--no-lock") || explicitFrozenLock), "all executed Deno roots must ignore ambient resolver files and use no lock or the one reviewed frozen lock");
+  }
+  // package.json discovery makes a frozen lock demand the whole application workspace; every locked command must opt out.
+  const ciWorkflow = readFileSync(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8");
+  for (const [command] of ciWorkflow.matchAll(/deno (?:check|test|cache|run) [^\r\n]*--lock=scripts\/ci\/deno-analytics\.lock[^\r\n]*/g)) {
+    assert.ok(command.split(/\s+/).includes("--no-config") && command.includes("--frozen"), "a locked analytics command must also pass --no-config and --frozen");
   }
   const directory = mkdtempSync(join(tmpdir(), "postora-owner-resolver-"));
   context.after(() => {

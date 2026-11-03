@@ -27,8 +27,8 @@ Requirements: a local Docker Unix/named-pipe context, Node/npm, Git and Playwrig
 ```powershell
 node scripts/prepare-instagram-owner-release.mjs
 node scripts/prepare-instagram-owner-release.mjs --verify-existing
-npm exec --yes --package deno@2.9.0 -- deno run --no-config --lock=scripts/ci/deno-analytics.lock --frozen --node-modules-dir=none --allow-env=DOCKER_HOST --allow-run=docker --allow-net=127.0.0.1:65435 e2e/fixtures/instagramOwnerReleaseSeed.ts
-npm exec --yes --package deno@2.9.0 -- deno run --no-config --lock=scripts/ci/deno-analytics.lock --frozen --node-modules-dir=none --allow-env --allow-run=docker,git --allow-net=127.0.0.1:65431,127.0.0.1:65435,127.0.0.1:65436 e2e/fixtures/instagramOwnerReleaseServer.ts
+npm exec --yes --package deno@2.9.8 -- deno run --no-config --lock=scripts/ci/deno-analytics.lock --frozen --node-modules-dir=none --allow-env=DOCKER_HOST --allow-run=docker --allow-net=127.0.0.1:65435 e2e/fixtures/instagramOwnerReleaseSeed.ts
+npm exec --yes --package deno@2.9.8 -- deno run --no-config --lock=scripts/ci/deno-analytics.lock --frozen --node-modules-dir=none --allow-env --allow-run=docker,git --allow-net=127.0.0.1:65431,127.0.0.1:65435,127.0.0.1:65436 e2e/fixtures/instagramOwnerReleaseServer.ts
 ```
 
 Leave the fixture server running, then in another terminal:
