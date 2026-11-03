@@ -416,6 +416,9 @@ test("native Playwright result and redaction boundaries cannot be overridden by 
     ["bearer value that starts with the word token", `Authorization: ${"Bea"}${"rer"} ${"token-"}${"production-secret"}`, "production-secret"],
     ["bracketed sensitive value", `${"pass"}${"word"}=[${"actual-"}${"secret"}]`, "actual-secret"],
     ["empty brackets as the prefix of a real value", `${"pass"}${"word"}=[]${"actual-"}${"secret"}`, "actual-secret"],
+    ["redaction marker as the prefix of a real value", `${"pass"}${"word"}=[REDACTED]${"actual-"}${"secret"}`, "actual-secret"],
+    ["lowercase marker as the prefix of a real value", `${"pass"}${"word"}=<redacted>${"actual-"}${"secret"}`, "actual-secret"],
+    ["null literal as the prefix of a real value", `${"pass"}${"word"}=null/${"actual-"}${"secret"}`, "actual-secret"],
   ]) await context.test(`${scheme} cannot enter retained evidence`, () => {
     const ledger = structuredClone(fixture.ledger);
     ledger.proofs[0].artifact = fixture.artifact("short.txt", text);
