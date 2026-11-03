@@ -44,9 +44,11 @@ export function looksLikeJson(text: string): boolean {
  *  remain text: a numeric Instagram username must not become a number. */
 export function parseFormArray(text: string): unknown[] {
   try {
-    const parsed: unknown = JSON.parse(text);
-    // A numeric username inside a JSON array (`[1234]`) is still a username, not a number.
-    if (Array.isArray(parsed)) return parsed.map(entry => typeof entry === 'number' && Number.isSafeInteger(entry) ? String(entry) : entry);
+    // A numeric username inside a JSON array (`[1234]`) is still a username, not a number. The reviver
+    // receives the exact source text, so a digit string beyond 2^53 keeps every digit.
+    const parsed: unknown = JSON.parse(text, (_key, value, context?: { source?: string }) =>
+      typeof value === 'number' ? (context?.source ?? String(value)) : value);
+    if (Array.isArray(parsed)) return parsed;
   } catch {
     // Non-JSON input is the supported comma-separated transport.
   }
