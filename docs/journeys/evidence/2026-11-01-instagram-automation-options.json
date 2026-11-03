@@ -89,6 +89,12 @@
         "steps": 6
       }
     },
+    "numeric_collaborator_form_regressions_frozen_candidate": {
+      "candidate": "09586b62cbd33cfb0aa574a38eb382ec67b38a38",
+      "evidence": "CI only, not a local run and not a live invitation: the PR check Deno service proxy and MCP, step Test Instagram Story sharing through registered MCP and API routes, succeeded on head fbe04812 (supabase/ is byte-identical to 09586b62), run 41611004550",
+      "covers": "parseFormArray.test.ts and the Story registered-route suite against the frozen requestBody.ts",
+      "not_covered": "the other checks in this object were recorded at earlier candidates and are not re-asserted for 09586b62"
+    },
     "numeric_collaborator_form_regressions": {
       "candidate": "d6773d0c39354a138a691617ecd633a47d816586",
       "tests": 9,
