@@ -355,7 +355,7 @@ Deno.serve(async (req) => {
     };
 
     // Read max posts limit from settings
-    const maxPosts = resolveMaxPosts((actorSettings || []).find((s: any) => s.key === "brand_scrape_max_posts")?.value);
+    const maxPosts = resolveMaxPosts((actorSettings || []).find((setting: { key: string }) => setting.key === "brand_scrape_max_posts")?.value);
 
     // Read apify_enabled toggle
     let isApifyEnabled = platform !== "instagram"; // Preserve other platforms' legacy default.
