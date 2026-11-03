@@ -442,8 +442,8 @@ function addRuntimeClosure(context, paths, pending) {
     if (!/\.[cm]?[jt]sx?$/.test(path)) continue;
     for (const specifier of moduleImports(bytes, path).imports) {
       if (specifier.startsWith(".") || specifier.startsWith("@/")) pending.push(importedPath(context, path, specifier));
-      else if (path.startsWith("supabase/functions/") && !/^(?:https:\/\/|npm:|node:)/.test(specifier)) throw new GateError("runtime_import_unresolved", `${path}: ${specifier}`);
-      else context.externalImports.add(specifier);
+      else if (path.startsWith("supabase/functions/") && !/^(?:https:\/\/|npm:|node:)/.test(specifier)) throw new GateError("runtime_import_unresolved", safeDetail(`${path}: ${specifier}`));
+      else context.externalImports.add(safeDetail(specifier));
     }
   }
 }
