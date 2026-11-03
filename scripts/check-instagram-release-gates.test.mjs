@@ -492,6 +492,35 @@ test("native Playwright result and redaction boundaries cannot be overridden by 
     const duplicate = fixture.evaluate({ evidence: ledger }).failures.find((entry) => entry.code === "proof_duplicate");
     assert.equal(duplicate?.detail, ledger.proofs[0].id);
   });
+  for (const [scheme, credential] of [
+    ["token query parameter", `https://api.example.test/v2/run?${"to"}${"ken"}=${"synthetic-"}${"probe"}`],
+    ["key query parameter after another parameter", `https://api.example.test/v2/run?x=1&${"ke"}${"y"}=${"synthetic-"}${"probe"}`],
+    ["access token query parameter (existing rule)", `https://api.example.test/v2/run?${"access_"}${"token"}=${"synthetic-"}${"probe"}`],
+  ]) await context.test(`${scheme} cannot enter retained evidence`, () => {
+    const ledger = structuredClone(fixture.ledger);
+    ledger.proofs[0].artifact = fixture.artifact("query-credential.txt", credential);
+    const report = fixture.evaluate({ evidence: ledger });
+    assert.ok(codes(report).includes("artifact_redaction_failed"));
+    assert.ok(!JSON.stringify(report).includes("synthetic-probe"));
+  });
+  await context.test("query parameters that only contain the words token or key are not credentials", () => {
+    const report = structuredClone(fixture.report);
+    report.metadata = { note: "https://api.example.test/p?monkey=1&tokens=2&keyword=3&x=key" };
+    const ledger = structuredClone(fixture.ledger);
+    const artifact = fixture.artifact("lookalike-params-playwright.json", JSON.stringify(report));
+    ledger.proofs.forEach((proof) => { proof.artifact = artifact; });
+    const result = fixture.evaluate({ evidence: ledger });
+    assert.ok(!codes(result).includes("artifact_redaction_failed"));
+    assert.deepEqual(result.failures, []);
+  });
+  await context.test("a blocker is reported by acceptance id only and its text is never echoed", () => {
+    const ledger = structuredClone(fixture.ledger);
+    ledger.acceptance[0].blocker = `${"pass"}${"word"}=${"synthetic-"}${"probe"} awaiting external review`;
+    const result = fixture.evaluate({ evidence: ledger });
+    const blocked = result.blocked.find((entry) => entry.code === "acceptance_blocked");
+    assert.equal(blocked?.detail, ledger.acceptance[0].id);
+    assert.ok(!JSON.stringify(result).includes("synthetic-probe"));
+  });
   await context.test("a credential-bearing artifact path is never echoed in a failure report", () => {
     const ledger = structuredClone(fixture.ledger);
     ledger.proofs[0].artifact = { path: "https://fixture:synthetic-path@example.test/absent.json", sha256: "0".repeat(64) };
@@ -704,4 +733,40 @@ test("scheduled paid fallback requires a literal disabled policy without spreads
       assert.ok(codes(fixture.evaluate()).includes("scheduled_apify_policy_unproved"));
     });
   }
+});
+
+test("a tracked path with a tab or other control character fails closed and cannot alias a real entry", async (context) => {
+  // Built with git plumbing so no such file is ever created on disk (Windows cannot create these names).
+  const withTreeEntries = (names) => {
+    const fixture = repository(context);
+    const blob = execFileSync("git", ["-C", fixture.root, "hash-object", "-w", "--stdin"], { input: "synthetic content\n" }).toString().trim();
+    const tree = execFileSync("git", ["-C", fixture.root, "mktree", "-z"], { input: Buffer.concat(names.map((name) => Buffer.concat([Buffer.from(`100644 blob ${blob}\t`), Buffer.from(name), Buffer.from([0])]))) }).toString().trim();
+    const commit = execFileSync("git", ["-C", fixture.root, "-c", "user.name=Release Gate Test", "-c", "user.email=release@example.test", "commit-tree", tree, "-m", "control character path"]).toString().trim();
+    fixture.git("update-ref", "HEAD", commit);
+    return fixture;
+  };
+  for (const [scheme, suffix] of [["embedded tab", "\tinjected"], ["embedded newline", "\ninjected"], ["embedded escape", "\u001binjected"], ["embedded C1 control", "\u009binjected"]]) {
+    await context.test(`${scheme} is rejected without echoing the path`, () => {
+      const result = withTreeEntries(["real.ts", `real.ts${suffix}`]).evaluate();
+      assert.ok(result.failures.some((entry) => entry.code === "tracked_path_invalid"));
+      assert.ok(!JSON.stringify(result).includes("injected"));
+    });
+  }
+  await context.test("two paths that differ only in invalid UTF-8 bytes cannot alias one entry", () => {
+    const named = (byte) => Buffer.concat([Buffer.from("a"), Buffer.from([byte]), Buffer.from(".md")]);
+    const result = withTreeEntries([named(0xff), named(0xfe)]).evaluate();
+    const failure = result.failures.find((entry) => entry.code === "tracked_path_invalid");
+    assert.equal(failure?.detail, "A tracked path contains an unsupported control or replacement character");
+  });
+  await context.test("a literal replacement character that is valid UTF-8 is also refused by policy", () => {
+    const result = withTreeEntries([`a\u{FFFD}b.md`]).evaluate();
+    assert.ok(result.failures.some((entry) => entry.code === "tracked_path_invalid"));
+  });
+  await context.test("ordinary paths, including spaces and non-ASCII letters, are still accepted", () => {
+    const fixture = repository(context);
+    fixture.put("docs/with space.md", "synthetic\n");
+    fixture.put("docs/accent-é.md", "synthetic\n");
+    fixture.commit();
+    assert.ok(!codes(fixture.evaluate()).includes("tracked_path_invalid"));
+  });
 });
