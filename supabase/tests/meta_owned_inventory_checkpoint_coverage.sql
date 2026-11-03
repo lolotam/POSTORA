@@ -128,10 +128,14 @@ BEGIN
     EXECUTE format('INSERT INTO public.%I(id,user_id,social_account_id,capture_id,observed_at) VALUES($1,$2,$3,$4,$5)',
       CASE v_platform WHEN 'facebook' THEN 'fb_page_profile_observations' ELSE 'threads_account_profile_observations' END)
       USING v_profile,v_owner,v_account,v_capture,v_when;
-    EXECUTE format($sql$INSERT INTO public.%I(user_id,social_account_id,profile_observation_id,metric_key,status,value,
+    EXECUTE format($sql$INSERT INTO public.%I(user_id,social_account_id,profile_observation_id,metric_key,status,value,reason,
       provider_metric,api_version,window_kind,source_ref,capture_id,observed_at)
-      VALUES($1,$2,$3,'followers','available',12,$4,$5,'point_in_time',$6,$7,$8)$sql$,v_prefix||'_analytics_metric_values')
-      USING v_owner,v_account,v_profile,public.meta_analytics_provider_metric(v_platform,'account','followers','point_in_time'),
+      VALUES($1,$2,$3,'followers',$4,$5,$6,$7,$8,'point_in_time',$9,$10,$11)$sql$,v_prefix||'_analytics_metric_values')
+      USING v_owner,v_account,v_profile,
+      CASE WHEN v_platform='facebook' THEN 'unavailable' ELSE 'available' END,
+      CASE WHEN v_platform='facebook' THEN NULL::bigint ELSE 12::bigint END,
+      CASE WHEN v_platform='facebook' THEN 'not_offered' ELSE NULL END,
+      public.meta_analytics_provider_metric(v_platform,'account','followers','point_in_time'),
       v_version,CASE v_platform WHEN 'facebook' THEN 'meta_graph_v25' ELSE 'threads_graph_v1' END,v_capture,v_when;
     v_report:=public.read_meta_owned_analytics_history(v_platform,v_owner,v_account,v_request);
     ASSERT (jsonb_array_length(v_report->'profile_boundaries')>0 AND jsonb_array_length(v_report->'posts')=1) IS TRUE,'history and current post remain presented';
