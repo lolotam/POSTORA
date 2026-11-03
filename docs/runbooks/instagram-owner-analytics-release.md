@@ -24,11 +24,16 @@ The first inventory of the [Instagram repair candidate](../journeys/2026-11-01-i
 
 Requirements: a local Docker Unix/named-pipe context, Node/npm, Git and Playwright Chromium. The preparation script refuses remote Docker endpoints, production-stack hosts and existing fixture container/network names. It creates new disposable resources only, retaining them for inspection. It never resets an existing database.
 
+Use an explicitly installed Deno **2.9.8** executable, verified through the recorded official release archive/SHA256 verification process for [the v2.9.8 release](https://github.com/denoland/deno/releases/tag/v2.9.8). Make that verified executable available as `deno` on `PATH` in both terminals. Run `deno --version` before preparation and require its first line to identify exactly version `2.9.8`; stop on any other version or a missing executable. This section assumes the verified binary is already installed and does not supply an installer or an unverified checksum.
+
+Reproduction limitation recorded on 2026-11-03: `npm exec --yes --package=deno@2.9.8 -- deno --version` failed with `ETARGET` / `No matching version found for deno@2.9.8`. Do not use npm to acquire this pinned executable. The two resolver-policy tests passed locally with cached Deno **2.9.6** as supplemental evidence only; that result does not replace candidate-bound Linux execution with **2.9.8** or verify the full dependency graph.
+
 ```powershell
+deno --version
 node scripts/prepare-instagram-owner-release.mjs
 node scripts/prepare-instagram-owner-release.mjs --verify-existing
-npm exec --yes --package deno@2.9.8 -- deno run --no-config --lock=scripts/ci/deno-analytics.lock --frozen --node-modules-dir=none --allow-env=DOCKER_HOST --allow-run=docker --allow-net=127.0.0.1:65435 e2e/fixtures/instagramOwnerReleaseSeed.ts
-npm exec --yes --package deno@2.9.8 -- deno run --no-config --lock=scripts/ci/deno-analytics.lock --frozen --node-modules-dir=none --allow-env --allow-run=docker,git --allow-net=127.0.0.1:65431,127.0.0.1:65435,127.0.0.1:65436 e2e/fixtures/instagramOwnerReleaseServer.ts
+deno run --no-config --lock=scripts/ci/deno-analytics.lock --frozen --node-modules-dir=none --allow-env=DOCKER_HOST --allow-run=docker --allow-net=127.0.0.1:65435 e2e/fixtures/instagramOwnerReleaseSeed.ts
+deno run --no-config --lock=scripts/ci/deno-analytics.lock --frozen --node-modules-dir=none --allow-env --allow-run=docker,git --allow-net=127.0.0.1:65431,127.0.0.1:65435,127.0.0.1:65436 e2e/fixtures/instagramOwnerReleaseServer.ts
 ```
 
 Leave the fixture server running, then in another terminal:
