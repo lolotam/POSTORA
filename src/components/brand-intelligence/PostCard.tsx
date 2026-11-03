@@ -89,7 +89,7 @@ export function PostCard({ post, index, onClick, hasContent, canDelete, isDeleti
             <div className="flex items-center gap-3 text-white text-xs">
               <span>❤️ {formatBrandMetric(post.likesCount)}</span>
               <span>💬 {formatBrandMetric(post.commentsCount)}</span>
-              {post.videoViewCount !== undefined ? <span>▶️ {formatBrandMetric(post.videoViewCount)}</span> : null}
+              {typeof post.videoViewCount === "number" ? <span>▶️ {formatBrandMetric(post.videoViewCount)}</span> : null}
             </div>
             <div className="flex gap-2 mt-1">
               <Button size="sm" variant="secondary" className="h-7 text-xs gap-1" onClick={(e) => { e.stopPropagation(); onClick(post); }}>
