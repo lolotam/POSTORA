@@ -4,7 +4,7 @@ Status: **awaiting review and explicit deployment approval**. This package does 
 
 ## Frozen source and prerequisites
 
-Backend source: `dd47d644b409b14b9cdf382f4598c4bfb37c08f9`, PR [#348](https://github.com/lolotam/POSTORA/pull/348). It supersedes `89b17b24816ce1b2273052d741c34f2bdcdd866f` (and the intermediate `13d4f1b8257c2735bb3beb5f30355ef2b1e2b669`): only `supabase/functions/n8n-api/requestBody.ts` changed (numeric usernames inside JSON form arrays keep every digit where the runtime exposes the JSON source text, and an unsafe number is never rounded into a different username), so its manifest hash changed and the other three files are byte-identical. Later documentation commits do not change its runtime inputs. The [candidate manifest](../journeys/evidence/2026-11-01-instagram-automation-options.json) owns exact SHA256 values for these **four files**:
+Backend source: `09586b62cbd33cfb0aa574a38eb382ec67b38a38`, PR [#348](https://github.com/lolotam/POSTORA/pull/348). It supersedes `89b17b24816ce1b2273052d741c34f2bdcdd866f` (and the intermediates `13d4f1b8257c2735bb3beb5f30355ef2b1e2b669` and `dd47d644b409b14b9cdf382f4598c4bfb37c08f9`): only `supabase/functions/n8n-api/requestBody.ts` changed (numeric usernames inside JSON form arrays keep every digit where the runtime exposes the JSON source text, and a number is never turned into a different username where the runtime gives no source text), so its manifest hash changed and the other three files are byte-identical. Later documentation commits do not change its runtime inputs. The [candidate manifest](../journeys/evidence/2026-11-01-instagram-automation-options.json) owns exact SHA256 values for these **four files**:
 
 - `supabase/functions/mcp/index.ts`
 - `supabase/functions/n8n-api/index.ts`
