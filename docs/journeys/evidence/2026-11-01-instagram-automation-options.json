@@ -1,6 +1,6 @@
 {
-  "backend_candidate": "13d4f1b8257c2735bb3beb5f30355ef2b1e2b669",
-  "superseded_backend_candidate": {"commit": "89b17b24816ce1b2273052d741c34f2bdcdd866f", "reason": "requestBody.ts now keeps every digit of a numeric username inside a JSON form array (review follow-up); the other three runtime files are byte-identical"},
+  "backend_candidate": "dd47d644b409b14b9cdf382f4598c4bfb37c08f9",
+  "superseded_backend_candidate": {"commit": "89b17b24816ce1b2273052d741c34f2bdcdd866f", "intermediate": "13d4f1b8257c2735bb3beb5f30355ef2b1e2b669", "reason": "requestBody.ts now keeps every digit of a numeric username inside a JSON form array and never rounds an unsafe number into a different username on older runtimes (review follow-ups); the other three runtime files are byte-identical"},
   "backend_base": "781111a8c8b5bc1296f8c82bbe575f2498b82748",
   "backend_files": [
     {
@@ -13,7 +13,7 @@
     },
     {
       "path": "supabase/functions/n8n-api/requestBody.ts",
-      "sha256": "7c6260c5700d1561633f1eccf45106f4ebd4725710bca4ddcd2d8a0fbcb911c5"
+      "sha256": "890b4d3a42ff3148d19830c9e77870aa1aa0dc12790f2d12e393876919cea774"
     },
     {
       "path": "supabase/functions/process-post/index.ts",
