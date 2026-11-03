@@ -62,7 +62,8 @@ BEGIN
       'consecutive pristine jobs preserve older authoritative checkpoint coverage';
     FOREACH v_fence IN ARRAY ARRAY['failed','running','forced'] LOOP
       EXECUTE format('UPDATE public.%I SET state=$2,attempts=$3,job_generation=$4,credential_authority=NULL,
-        claim_token=CASE WHEN $2=''running'' THEN gen_random_uuid() ELSE NULL END WHERE id=$1',
+        claim_token=CASE WHEN $2=''running'' THEN gen_random_uuid() ELSE NULL END,
+        lease_until=CASE WHEN $2=''running'' THEN clock_timestamp()+interval ''1 minute'' ELSE NULL END WHERE id=$1',
         v_prefix||'_analytics_collection_jobs') USING v_new,CASE WHEN v_fence='forced' THEN 'pending' ELSE v_fence END,
         CASE WHEN v_fence='forced' THEN 0 ELSE 1 END,CASE WHEN v_fence='forced' THEN 2 ELSE 1 END;
       v_report:=public.read_meta_owned_analytics_history(v_platform,v_owner,v_account,v_request);
