@@ -45,9 +45,11 @@ export function looksLikeJson(text: string): boolean {
 export function parseFormArray(text: string): unknown[] {
   try {
     // A numeric username inside a JSON array (`[1234]`) is still a username, not a number. The reviver
-    // receives the exact source text, so a digit string beyond 2^53 keeps every digit.
+    // receives the exact source text, so a digit string beyond 2^53 keeps every digit. A runtime without
+    // that third argument keeps an unsafe number as a number (never a rounded, different username),
+    // which the collaborator mapping then omits rather than inviting the wrong account.
     const parsed: unknown = JSON.parse(text, (_key, value, context?: { source?: string }) =>
-      typeof value === 'number' ? (context?.source ?? String(value)) : value);
+      typeof value === 'number' ? (context?.source ?? (Number.isSafeInteger(value) ? String(value) : value)) : value);
     if (Array.isArray(parsed)) return parsed;
   } catch {
     // Non-JSON input is the supported comma-separated transport.
