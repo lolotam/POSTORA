@@ -25,6 +25,8 @@ SELECT set_config('request.jwt.claims','{"role":"service_role"}',true);
 DO $test$
 DECLARE v_platform text;v_prefix text;v_owner uuid:='b1000000-0000-4000-8000-000000000001';v_account uuid;
   v_old uuid;v_new uuid;v_operation uuid;v_capture uuid;v_authority jsonb;v_request jsonb;v_report jsonb;
+  v_tail uuid;v_fence text;
+  v_profile uuid;v_when timestamptz;
   v_day date:=(clock_timestamp() AT TIME ZONE 'America/Los_Angeles')::date;v_version text;
 BEGIN
   v_request:=jsonb_build_object('since',(v_day-7)::timestamp AT TIME ZONE 'America/Los_Angeles',
@@ -51,6 +53,25 @@ BEGIN
       v_prefix||'_analytics_collection_jobs') USING v_new,v_owner,v_account,v_day-1;
     v_report:=public.read_meta_owned_analytics_history(v_platform,v_owner,v_account,v_request);
     ASSERT (v_report->'inventory'->'source'->>'job_id'=v_old::text) IS TRUE,'never-claimed first generation may fall back';
+    v_tail:=gen_random_uuid();
+    EXECUTE format($sql$INSERT INTO public.%I(id,user_id,social_account_id,due_on,due_at,next_due_at)
+      VALUES($1,$2,$3,$4,$4::timestamp AT TIME ZONE 'America/Los_Angeles',($4+1)::timestamp AT TIME ZONE 'America/Los_Angeles')$sql$,
+      v_prefix||'_analytics_collection_jobs') USING v_tail,v_owner,v_account,v_day;
+    v_report:=public.read_meta_owned_analytics_history(v_platform,v_owner,v_account,v_request);
+    ASSERT (v_report->'inventory'->>'state'='complete' AND v_report->'inventory'->'source'->>'job_id'=v_old::text) IS TRUE,
+      'consecutive pristine jobs preserve older authoritative checkpoint coverage';
+    FOREACH v_fence IN ARRAY ARRAY['failed','running','forced'] LOOP
+      EXECUTE format('UPDATE public.%I SET state=$2,attempts=$3,job_generation=$4,credential_authority=NULL,
+        claim_token=CASE WHEN $2=''running'' THEN gen_random_uuid() ELSE NULL END WHERE id=$1',
+        v_prefix||'_analytics_collection_jobs') USING v_new,CASE WHEN v_fence='forced' THEN 'pending' ELSE v_fence END,
+        CASE WHEN v_fence='forced' THEN 0 ELSE 1 END,CASE WHEN v_fence='forced' THEN 2 ELSE 1 END;
+      v_report:=public.read_meta_owned_analytics_history(v_platform,v_owner,v_account,v_request);
+      ASSERT (v_report->'inventory'->>'state'='unknown' AND v_report->'inventory'->'source'='null'::jsonb) IS TRUE,
+        'an intervening failed, claimed or forced job fences older coverage';
+    END LOOP;
+    EXECUTE format('DELETE FROM public.%I WHERE id=$1',v_prefix||'_analytics_collection_jobs') USING v_tail;
+    EXECUTE format('UPDATE public.%I SET job_generation=1,attempts=0,state=''pending'',credential_authority=NULL WHERE id=$1',
+      v_prefix||'_analytics_collection_jobs') USING v_new;
     EXECUTE format('UPDATE public.%I SET attempts=1,state=''running'',credential_authority=$2 WHERE id=$1',v_prefix||'_analytics_collection_jobs') USING v_new,v_authority;
     v_report:=public.read_meta_owned_analytics_history(v_platform,v_owner,v_account,v_request);
     ASSERT (v_report->'inventory'->>'state'='unknown') IS TRUE,'claimed newest without own checkpoint cannot fall back';
@@ -92,6 +113,31 @@ BEGIN
     EXECUTE format('UPDATE public.%I SET credential_authority=$2 WHERE id=$1',v_prefix||'_analytics_captures') USING v_capture,v_authority;
     v_report:=public.read_meta_owned_analytics_history(v_platform,v_owner,v_account,v_request);
     ASSERT (v_report->'inventory'->>'state'='complete') IS TRUE,'matching capture authority and checkpoint IDs prove checkpoint coverage';
+    -- A historical profile cell remains visible; conservative coverage checks its authority too.
+    v_operation:=gen_random_uuid();v_capture:=gen_random_uuid();v_profile:=gen_random_uuid();
+    v_when:=(v_day-7)::timestamp AT TIME ZONE 'America/Los_Angeles';
+    EXECUTE format($sql$INSERT INTO public.%I(id,job_id,user_id,social_account_id,job_generation,operation_key,kind,requested_metrics)
+      VALUES($1,$2,$3,$4,1,'fixture-profile','profile',ARRAY['followers'])$sql$,v_prefix||'_analytics_collection_operations')
+      USING v_operation,v_new,v_owner,v_account;
+    EXECUTE format($sql$INSERT INTO public.%I(id,job_id,operation_id,job_generation,claim_token,user_id,social_account_id,
+      capture_sequence,kind,subject_id,api_version,requested_metrics,credential_authority,requested_at,received_at,payload_digest,receipt)
+      VALUES($1,$2,$3,1,gen_random_uuid(),$4,$5,2,'profile','fixture-account',$6,ARRAY['followers'],$7,$8-interval '1 second',$8,repeat('b',64),'{}')$sql$,
+      v_prefix||'_analytics_captures') USING v_capture,v_new,v_operation,v_owner,v_account,v_version,
+      v_authority||'{"fixture_other_authority":true}'::jsonb,v_when;
+    EXECUTE format('INSERT INTO public.%I(id,user_id,social_account_id,capture_id,observed_at) VALUES($1,$2,$3,$4,$5)',
+      CASE v_platform WHEN 'facebook' THEN 'fb_page_profile_observations' ELSE 'threads_account_profile_observations' END)
+      USING v_profile,v_owner,v_account,v_capture,v_when;
+    EXECUTE format($sql$INSERT INTO public.%I(user_id,social_account_id,profile_observation_id,metric_key,status,value,
+      provider_metric,api_version,window_kind,source_ref,capture_id,observed_at)
+      VALUES($1,$2,$3,'followers','available',12,$4,$5,'point_in_time',$6,$7,$8)$sql$,v_prefix||'_analytics_metric_values')
+      USING v_owner,v_account,v_profile,public.meta_analytics_provider_metric(v_platform,'account','followers','point_in_time'),
+      v_version,CASE v_platform WHEN 'facebook' THEN 'meta_graph_v25' ELSE 'threads_graph_v1' END,v_capture,v_when;
+    v_report:=public.read_meta_owned_analytics_history(v_platform,v_owner,v_account,v_request);
+    ASSERT (jsonb_array_length(v_report->'profile_boundaries')>0 AND jsonb_array_length(v_report->'posts')=1) IS TRUE,'history and current post remain presented';
+    ASSERT (v_report->'inventory'->>'state'='incomplete') IS TRUE,'historical profile authority mismatch refuses all-presented coverage, not history';
+    EXECUTE format('UPDATE public.%I SET credential_authority=$2 WHERE id=$1',v_prefix||'_analytics_captures') USING v_capture,v_authority;
+    v_report:=public.read_meta_owned_analytics_history(v_platform,v_owner,v_account,v_request);
+    ASSERT (v_report->'inventory'->>'state'='complete') IS TRUE,'same-authority historical profile and current post restore coverage';
     EXECUTE format('UPDATE public.%I SET post_ids=ARRAY[]::text[] WHERE job_id=$1',v_prefix||'_analytics_collection_checkpoints') USING v_new;
     v_report:=public.read_meta_owned_analytics_history(v_platform,v_owner,v_account,v_request);
     ASSERT (v_report->'inventory'->>'state'='incomplete') IS TRUE,'presented post outside checkpoint inventory is not covered';

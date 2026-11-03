@@ -47,9 +47,12 @@ BEGIN
       FROM newest n JOIN public.%1$I j ON j.user_id=n.user_id AND j.social_account_id=n.social_account_id
       JOIN public.%2$I c ON c.job_id=j.id AND c.job_generation=j.job_generation
       WHERE $2 IS NOT NULL AND j.credential_authority IS NOT NULL AND j.credential_authority=$2
-        AND (j.id=n.id OR (n.job_generation=1 AND n.credential_authority IS NULL AND n.attempts=0
-          AND n.state='pending' AND n.claim_token IS NULL AND (j.due_at,j.id)<(n.due_at,n.id)
-          AND NOT EXISTS(SELECT 1 FROM public.%2$I nc WHERE nc.job_id=n.id AND nc.job_generation=n.job_generation)))
+        AND (j.id=n.id OR ((j.due_at,j.id)<(n.due_at,n.id) AND NOT EXISTS(
+          SELECT 1 FROM public.%1$I f WHERE f.user_id=n.user_id AND f.social_account_id=n.social_account_id
+            AND (f.due_at,f.id)>(j.due_at,j.id) AND (f.due_at,f.id)<=(n.due_at,n.id)
+            AND (f.job_generation=1 AND f.credential_authority IS NULL AND f.attempts=0
+              AND f.state='pending' AND f.claim_token IS NULL AND NOT EXISTS(
+                SELECT 1 FROM public.%2$I fc WHERE fc.job_id=f.id AND fc.job_generation=f.job_generation)) IS NOT TRUE)))
       ORDER BY j.due_at DESC,j.id DESC LIMIT 1
     ), shown AS (
       SELECT value#>>'{}' AS id FROM jsonb_array_elements(jsonb_path_query_array($1,'$.**.capture_id')
