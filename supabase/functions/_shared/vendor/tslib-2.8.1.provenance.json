@@ -1,0 +1,17 @@
+{
+  "upstreamPackage": "tslib@2.8.1",
+  "upstreamAuthor": "Microsoft Corporation",
+  "license": "0BSD",
+  "sourceUrl": "https://esm.sh/tslib@2.8.1/denonext/tslib.mjs",
+  "transformation": "Retained esm.sh CDN output; not byte-equivalent to npm source.",
+  "responseBytes": 11226,
+  "responseSha256": "c38da5dd6da6281964435002ce204cd586634fe3bdfb24a0ee116f48cf3292e9",
+  "sourceReceipt": "postora-358-tslib-retained-evidence-2026-11-03.md",
+  "cacheResponseDate": "2026-11-03T18:04:21Z",
+  "extraction": "Removed only the trailing Deno cache metadata marker and JSON.",
+  "licenseSha256": "210b19e543130388c68654b7497e967119ce17145f66ab7d85688fbd70f08751",
+  "failedCiResponse": "Bytes unavailable; cause and code-text differences unknown.",
+  "historicalCiParity": "Not established.",
+  "sourceMap": "Original sourceMappingURL retained; map not supplied.",
+  "productionMapping": "Requires separate runtime configuration and deployment evidence."
+}

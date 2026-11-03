@@ -32,11 +32,13 @@ Reproduction limitation recorded on 2026-11-03: `npm exec --yes --package=deno@2
 deno --version
 node scripts/prepare-instagram-owner-release.mjs
 node scripts/prepare-instagram-owner-release.mjs --verify-existing
-deno run --no-config --lock=scripts/ci/deno-analytics.lock --frozen --node-modules-dir=none --allow-env=DOCKER_HOST --allow-run=docker --allow-net=127.0.0.1:65435 e2e/fixtures/instagramOwnerReleaseSeed.ts
-deno run --no-config --lock=scripts/ci/deno-analytics.lock --frozen --node-modules-dir=none --allow-env --allow-run=docker,git --allow-net=127.0.0.1:65431,127.0.0.1:65435,127.0.0.1:65436 e2e/fixtures/instagramOwnerReleaseServer.ts
+deno run --no-config --import-map=scripts/ci/deno-analytics.import-map.json --lock=scripts/ci/deno-analytics.lock --frozen --node-modules-dir=none --allow-env=DOCKER_HOST --allow-run=docker --allow-net=127.0.0.1:65435 e2e/fixtures/instagramOwnerReleaseSeed.ts
+deno run --no-config --import-map=scripts/ci/deno-analytics.import-map.json --lock=scripts/ci/deno-analytics.lock --frozen --node-modules-dir=none --allow-env --allow-run=docker,git --allow-net=127.0.0.1:65431,127.0.0.1:65435,127.0.0.1:65436 e2e/fixtures/instagramOwnerReleaseServer.ts
 ```
 
 Leave the fixture server running, then in another terminal:
+
+Retain the explicit import-map option in both fixture commands; the [canonical release procedure](instagram-insights-release.md#prepare-an-immutable-local-candidate) describes its exact expected-byte scope and the separate production resolver prerequisite.
 
 ```powershell
 npx playwright install chromium

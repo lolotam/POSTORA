@@ -2,3 +2,5 @@
 # bash on the Contabo VPS, and a CRLF shebang line fails with "bad interpreter".
 # core.autocrlf=true on Windows checkouts would otherwise hand out CRLF copies.
 *.sh text eol=lf
+supabase/functions/_shared/vendor/tslib-2.8.1.mjs -text
+supabase/functions/_shared/vendor/tslib-2.8.1.LICENSE.txt -text
