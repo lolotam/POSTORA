@@ -836,25 +836,43 @@ if (canSymlink) {
 
 test("artifacts outside the evidence directory, through an absolute path or a dot-dot segment, are refused", async (context) => {
   const fixture = fullLedger(context);
-  const outside = join(boundedDirectory, "outside-artifact.json");
+  const original = structuredClone(fixture.ledger);
+  const evidenceDirectory = join(fixture.root, ".evidence");
+  const outside = join(fixture.root, "outside-artifact.json");
   writeFileSync(outside, "{}");
-  mkdirSync(join(boundedDirectory, "bundle"), { recursive: true });
+  const control = structuredClone(fixture.ledger);
+  control.proofs[0].artifact = { ...control.proofs[0].artifact, path: join(evidenceDirectory, "playwright.json") };
+  assert.deepEqual(control.inventoryReview, original.inventoryReview);
+  assert.deepEqual(control.proofs.slice(1), original.proofs.slice(1));
+  const controlReport = fixture.evaluate({ phase: "release", evidence: control, evidenceDirectory });
+  assert.ok(!codes(controlReport).includes("artifact_path_escape"), JSON.stringify(codes(controlReport)));
+  assert.deepEqual(controlReport.failures.filter((failure) => failure.code.startsWith("artifact_")), []);
+  assert.ok(!JSON.stringify(controlReport).includes(JSON.stringify(fixture.root).slice(1, -1)));
   for (const path of [outside, "../outside-artifact.json"]) {
     const ledger = structuredClone(fixture.ledger);
-    ledger.proofs[0].artifact.path = path;
-    const report = fixture.evaluate({ phase: "release", evidence: ledger, evidenceDirectory: join(boundedDirectory, "bundle") });
+    ledger.proofs[0].artifact = { ...ledger.proofs[0].artifact, path };
+    assert.deepEqual(ledger.inventoryReview, original.inventoryReview);
+    assert.deepEqual(ledger.proofs.slice(1), original.proofs.slice(1));
+    const report = fixture.evaluate({ phase: "release", evidence: ledger, evidenceDirectory });
     assert.ok(codes(report).includes("artifact_path_escape"), JSON.stringify(codes(report)));
     assert.ok(!JSON.stringify(report).includes(boundedDirectory));
+    assert.ok(!JSON.stringify(report).includes(JSON.stringify(fixture.root).slice(1, -1)));
+    assert.ok(!JSON.stringify(report).includes(JSON.stringify(outside).slice(1, -1)));
   }
   if (canSymlink) {
-    const link = join(boundedDirectory, "bundle", "outside-link.json");
+    const link = join(evidenceDirectory, "outside-link.json");
     symlinkSync(outside, link);
     const ledger = structuredClone(fixture.ledger);
-    ledger.proofs[0].artifact.path = "outside-link.json";
-    const report = fixture.evaluate({ phase: "release", evidence: ledger, evidenceDirectory: join(boundedDirectory, "bundle") });
+    ledger.proofs[0].artifact = { ...ledger.proofs[0].artifact, path: "outside-link.json" };
+    assert.deepEqual(ledger.inventoryReview, original.inventoryReview);
+    assert.deepEqual(ledger.proofs.slice(1), original.proofs.slice(1));
+    const report = fixture.evaluate({ phase: "release", evidence: ledger, evidenceDirectory });
     assert.ok(codes(report).includes("artifact_path_escape"));
     assert.ok(!JSON.stringify(report).includes(boundedDirectory));
+    assert.ok(!JSON.stringify(report).includes(JSON.stringify(fixture.root).slice(1, -1)));
+    assert.ok(!JSON.stringify(report).includes(JSON.stringify(outside).slice(1, -1)));
   }
+  assert.deepEqual(fixture.ledger, original);
 });
 
 test("bounded read refuses growth below the cap between lstat and open", () => {
