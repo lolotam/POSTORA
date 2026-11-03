@@ -409,12 +409,15 @@ export function readBoundedFile(path, maxBytes, options = {}) {
   try {
     const stat = fstatSync(fd, { bigint: true });
     if (!stat.isFile() || stat.dev !== before.dev || stat.ino !== before.ino) throw new GateError("artifact_not_regular", "Artifact changed before it was read");
+    if (stat.size !== before.size) throw new GateError("artifact_changed_during_read", "Artifact size changed before it was read");
     if (stat.size > BigInt(maxBytes)) throw new GateError("artifact_too_large", "Artifact exceeds the size limit");
     options.afterFstat?.();
     const scratch = Buffer.alloc(maxBytes + 1);
     let length = 0;
     for (let count = 1; count > 0 && length <= maxBytes; length += count) count = readSync(fd, scratch, length, maxBytes + 1 - length, null);
-    if (length > maxBytes) throw new GateError("artifact_changed_during_read", "Artifact grew while it was being read");
+    if (length > maxBytes || BigInt(length) !== stat.size || fstatSync(fd, { bigint: true }).size !== stat.size) {
+      throw new GateError("artifact_changed_during_read", "Artifact size changed while it was being read");
+    }
     // Buffer.alloc never uses the shared pool, so the returned backing store is exactly the bytes read.
     const exact = Buffer.alloc(length);
     scratch.copy(exact, 0, 0, length);

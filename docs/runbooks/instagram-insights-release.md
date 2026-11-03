@@ -29,7 +29,7 @@ On POSIX, use a private copy with directory mode 700; Windows requires an equiva
 Where Node lacks either O_NOFOLLOW or O_NONBLOCK, explicitly pass `--private-immutable-input` only after establishing that precondition.
 The flag declares the prerequisite; it does not set permissions or provide POSIX-equivalent race protection.
 The reader bounds each artifact at 2 MiB and retains an exact unpooled copy; scratch and copy coexist transiently, so this is not a process-memory ceiling.
-A concurrent parent-directory swap and same-inode overwrite remain residual risks; a matching declared digest is not origin/authenticity proof.
+A concurrent parent-directory swap, same-inode overwrite and inode reuse remain residual risks; a matching declared digest is not origin/authenticity proof.
 
 Run the checker from the candidate checkout with a verified `origin/main` ref:
 

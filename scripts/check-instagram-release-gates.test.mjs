@@ -794,7 +794,7 @@ test("bounded read refuses a directory and reports no path", () => {
 
 test("bounded read refuses a file swapped for another file after the check", () => {
   const path = boundedFile("swapped.bin", "original");
-  failsWith(() => readBoundedFile(path, 64, { ...precondition, beforeOpen: () => { unlinkSync(path); writeFileSync(path, "replacement"); } }), "artifact_not_regular");
+  failsWith(() => readBoundedFile(path, 64, { ...precondition, beforeOpen: () => { renameSync(path, `${path}.old`); writeFileSync(path, "replacement"); } }), "artifact_not_regular");
 });
 
 test("bounded read never returns bytes appended after the size check", () => {
@@ -855,4 +855,19 @@ test("artifacts outside the evidence directory, through an absolute path or a do
     assert.ok(codes(report).includes("artifact_path_escape"));
     assert.ok(!JSON.stringify(report).includes(boundedDirectory));
   }
+});
+
+test("bounded read refuses growth below the cap between lstat and open", () => {
+  const path = boundedFile("before-open-growth.bin", Buffer.alloc(8));
+  failsWith(() => readBoundedFile(path, 16, { ...precondition, beforeOpen: () => appendFileSync(path, "x") }), "artifact_changed_during_read");
+});
+
+test("bounded read refuses growth below the cap after fstat", () => {
+  const path = boundedFile("sub-cap-growth.bin", Buffer.alloc(8));
+  failsWith(() => readBoundedFile(path, 16, { ...precondition, afterFstat: () => appendFileSync(path, "x") }), "artifact_changed_during_read");
+});
+
+test("bounded read refuses shrinkage after fstat", () => {
+  const path = boundedFile("shrink-after-stat.bin", Buffer.alloc(8));
+  failsWith(() => readBoundedFile(path, 16, { ...precondition, afterFstat: () => writeFileSync(path, Buffer.alloc(7)) }), "artifact_changed_during_read");
 });
