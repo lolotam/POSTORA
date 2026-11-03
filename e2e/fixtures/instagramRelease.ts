@@ -259,7 +259,7 @@ function validateMetricRequest(url: URL): string {
 function syntheticMedia(account: ReleaseAccount, referenceInstant: string, index: number) {
   return { id: `${account.providerId}_media_${index}`, media_type: "VIDEO", ...(account.loginKind === "direct" ? {} : { media_product_type: index === 1 ? "FEED" : "REELS", caption: `Synthetic release media ${index}` }),
     timestamp: new Date(Date.parse(referenceInstant) - (index + 3) * DAY).toISOString(),
-    like_count: index === 0 ? null : 20, comments_count: 3, view_count: index === 1 ? null : 300, media_url: "", thumbnail_url: "", permalink: "" };
+    like_count: index === 0 ? null : 20, comments_count: 3, media_url: "", thumbnail_url: "", permalink: "" };
 }
 
 function providerBody(input: { url: URL; account: ReleaseAccount; operation: string; manifest: InstagramReleaseManifest; scenario: ProviderScenario; reconnected: boolean }): unknown {
@@ -270,8 +270,8 @@ function providerBody(input: { url: URL; account: ReleaseAccount; operation: str
     const handle = /username\(([^)]+)\)/.exec(url.searchParams.get("fields") ?? "")![1];
     const second = url.searchParams.get("fields")!.includes(".after(");
     const targetAccount = { ...account, providerId: `release_target_${handle}` };
-    const media = syntheticMedia(targetAccount, manifest.referenceInstant, second ? 1 : 0);
-    if (input.reconnected && !second) media.view_count = 777;
+    // Only business discovery requests view_count; inventory rows must not carry a field the provider was not asked for.
+    const media = { ...syntheticMedia(targetAccount, manifest.referenceInstant, second ? 1 : 0), view_count: second ? null : input.reconnected ? 777 : 300 };
     return { business_discovery: { id: `release_target_${handle}`, username: handle, name: "Synthetic release competitor", followers_count: 120, media_count: 2,
       media: { data: [media],
         ...(second ? {} : { paging: { cursors: { after: "release_page_2" }, next: "https://graph.facebook.com/synthetic-cursor-never-followed" } }) } } };
