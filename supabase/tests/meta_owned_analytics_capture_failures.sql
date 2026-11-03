@@ -30,6 +30,21 @@ BEGIN
   PERFORM public.observe_fb_analytics_permissions(v_owner,v_account,v_authority->'authority',ARRAY['read_insights','pages_read_engagement'],'784001',clock_timestamp(),'verified');
   PERFORM public.enqueue_fb_analytics_collection_job(v_owner,v_account,(clock_timestamp() AT TIME ZONE 'America/Los_Angeles')::date,false);
   v_job:=public.claim_fb_analytics_collection_jobs(1)->0;
+  BEGIN
+    PERFORM public.complete_fb_analytics_collection_job((v_job->>'job_id')::uuid,(v_job->>'claim_token')::uuid,(v_job->>'job_generation')::bigint,'success');
+    RAISE EXCEPTION 'an incomplete collection was accepted as success';
+  EXCEPTION WHEN SQLSTATE 'MAH05' THEN NULL;
+  END;
+  BEGIN
+    PERFORM public.complete_fb_analytics_collection_job((v_job->>'job_id')::uuid,(v_job->>'claim_token')::uuid,(v_job->>'job_generation')::bigint,'partial','collection_incomplete',clock_timestamp()-interval '1 second');
+    RAISE EXCEPTION 'a partial retry time in the past was accepted';
+  EXCEPTION WHEN SQLSTATE 'MAH01' THEN NULL;
+  END;
+  BEGIN
+    PERFORM public.complete_fb_analytics_collection_job((v_job->>'job_id')::uuid,(v_job->>'claim_token')::uuid,(v_job->>'job_generation')::bigint,'partial','collection_incomplete',clock_timestamp()+interval '2 days');
+    RAISE EXCEPTION 'a partial retry time beyond one day was accepted';
+  EXCEPTION WHEN SQLSTATE 'MAH01' THEN NULL;
+  END;
   PERFORM public.complete_fb_analytics_collection_job((v_job->>'job_id')::uuid,(v_job->>'claim_token')::uuid,(v_job->>'job_generation')::bigint,'partial','collection_incomplete',v_retry);
   ASSERT public.claim_fb_analytics_collection_jobs(1)='[]'::jsonb,'explicit partial backoff prevents reclaiming the same job within this invocation';
 END;
@@ -41,6 +56,21 @@ BEGIN
   PERFORM public.observe_threads_analytics_permissions(v_owner,v_account,v_authority->'authority',ARRAY['threads_basic','threads_manage_insights'],'780001',clock_timestamp(),'verified');
   PERFORM public.enqueue_threads_analytics_collection_job(v_owner,v_account,(clock_timestamp() AT TIME ZONE 'America/Los_Angeles')::date,false);
   v_job:=public.claim_threads_analytics_collection_jobs(1)->0;
+  BEGIN
+    PERFORM public.complete_threads_analytics_collection_job((v_job->>'job_id')::uuid,(v_job->>'claim_token')::uuid,(v_job->>'job_generation')::bigint,'success');
+    RAISE EXCEPTION 'an incomplete collection was accepted as success';
+  EXCEPTION WHEN SQLSTATE 'MAH05' THEN NULL;
+  END;
+  BEGIN
+    PERFORM public.complete_threads_analytics_collection_job((v_job->>'job_id')::uuid,(v_job->>'claim_token')::uuid,(v_job->>'job_generation')::bigint,'partial','collection_incomplete',clock_timestamp()-interval '1 second');
+    RAISE EXCEPTION 'a partial retry time in the past was accepted';
+  EXCEPTION WHEN SQLSTATE 'MAH01' THEN NULL;
+  END;
+  BEGIN
+    PERFORM public.complete_threads_analytics_collection_job((v_job->>'job_id')::uuid,(v_job->>'claim_token')::uuid,(v_job->>'job_generation')::bigint,'partial','collection_incomplete',clock_timestamp()+interval '2 days');
+    RAISE EXCEPTION 'a partial retry time beyond one day was accepted';
+  EXCEPTION WHEN SQLSTATE 'MAH01' THEN NULL;
+  END;
   PERFORM public.complete_threads_analytics_collection_job((v_job->>'job_id')::uuid,(v_job->>'claim_token')::uuid,(v_job->>'job_generation')::bigint,'partial','collection_incomplete',v_retry);
   ASSERT public.claim_threads_analytics_collection_jobs(1)='[]'::jsonb,'explicit partial backoff prevents reclaiming the same job within this invocation';
 END;

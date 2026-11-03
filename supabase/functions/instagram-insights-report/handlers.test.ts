@@ -44,7 +44,7 @@ Deno.test("registered route refuses unauthenticated request with 401", async () 
   assertEquals(json.error.code, "UNAUTHORIZED");
 });
 
-Deno.test("registered route refuses malformed social_account_id with 400", async () => {
+Deno.test("registered route refuses an invalid bearer token with 401 before validating the account id", async () => {
   const req = new Request(
     "https://example.com/functions/v1/instagram-insights-report?social_account_id=bad-uuid",
     {
@@ -53,6 +53,7 @@ Deno.test("registered route refuses malformed social_account_id with 400", async
     }
   );
   const res = await handler(req);
-  // Without mock auth in index.ts, it will return 401 because test_token is invalid JWT
-  assertEquals(res.status === 401 || res.status === 400, true);
+  // The registered route authenticates first: an invalid JWT is a 401 whatever the query holds. The 400
+  // path for a malformed id is covered through the injected-auth handler in handler.test.ts.
+  assertEquals(res.status, 401);
 });
