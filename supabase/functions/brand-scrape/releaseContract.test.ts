@@ -266,7 +266,7 @@ Deno.test("registered discovery handler retains source and null cells through ca
       if (table === "system_logs" || table === "profiles") return json(null);
       throw new Error(`Unexpected synthetic database route ${table}`);
     }) as typeof fetch;
-    await import("./index.ts");
+    const { resolveMaxPosts } = await import("./index.ts");
     const request = (platform = "instagram", username = "target") => new Request("http://127.0.0.1:61999/functions/v1/brand-scrape", { method: "POST", headers: { Authorization: "Bearer synthetic-caller", "Content-Type": "application/json" }, body: JSON.stringify({ platform, username }) });
     const invalidHandle = await handler!(request("instagram", "tar@get"));
     assertEquals(invalidHandle.status, 400);
@@ -328,6 +328,22 @@ Deno.test("registered discovery handler retains source and null cells through ca
     assertEquals((await threads.json()).reason, "deprecated_endpoint");
     assertEquals(authorityReads, readsBeforeThreads);
     assertEquals(apifyCalls, 2);
+    denied = false;
+    apifySetting = false;
+    for (const [setting, expectedPosts] of [[0.5, 1], [1.5, 1], [0, 2]] as const) {
+      cache = null;
+      maxPostsSetting = setting;
+      const response = await handler!(request());
+      assertEquals(response.status, 200);
+      assertEquals((await response.json()).posts.length, expectedPosts);
+    }
+    const resolverCases: [unknown, number][] = [
+      [1, 1], [50, 50], [100, 100], [101, 100], [150, 100], [-3, 1], [-0.5, 1],
+      [1.5, 1], [99.9, 99], [100.5, 100], [0.5, 1], [0, 50],
+      ["10", 10], ["1.5", 1], ['"25"', 25], ["1e2", 100], ["0", 50], ["-3", 1],
+      ["", 50], ["not json", 50], ['{"a":1}', 50], [null, 50], [undefined, 50], [false, 50], [Number.NaN, 50], [{}, 50],
+    ];
+    for (const [setting, expected] of resolverCases) assertEquals(resolveMaxPosts(setting), expected, `setting ${JSON.stringify(setting)}`);
   } finally {
     globalThis.fetch = originalFetch;
     Deno.serve = originalServe;

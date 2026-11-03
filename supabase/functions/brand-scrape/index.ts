@@ -258,6 +258,20 @@ async function scrapeTikTok(username: string, apifyToken: string, actorId = "clo
   };
 }
 
+/**
+ * The maximum number of posts per scrape: an integer from 1 to 100.
+ * A missing, zero or non-numeric setting means 50. A fraction is floored first and the range applies
+ * afterwards, so 0.5 becomes 1 (the minimum) while a stored 0 still means the default.
+ * The setting is read once here for every consumer.
+ */
+export function resolveMaxPosts(setting: unknown): number {
+  try {
+    if (!setting) return 50;
+    const parsed = typeof setting === "string" ? JSON.parse(setting) : setting;
+    return Math.max(1, Math.min(100, Math.floor(Number(parsed) || 50)));
+  } catch { return 50; /* optional enrichment; scraping continues without it */ }
+}
+
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
 
@@ -341,14 +355,7 @@ Deno.serve(async (req) => {
     };
 
     // Read max posts limit from settings
-    let maxPosts = 50;
-    try {
-      const maxPostsSetting = (actorSettings || []).find((s: any) => s.key === "brand_scrape_max_posts");
-      if (maxPostsSetting?.value) {
-        const parsed = typeof maxPostsSetting.value === "string" ? JSON.parse(maxPostsSetting.value) : maxPostsSetting.value;
-        maxPosts = Math.max(1, Math.min(100, Number(parsed) || 50));
-      }
-    } catch { /* optional enrichment; scraping continues without it */ }
+    const maxPosts = resolveMaxPosts((actorSettings || []).find((s: any) => s.key === "brand_scrape_max_posts")?.value);
 
     // Read apify_enabled toggle
     let isApifyEnabled = platform !== "instagram"; // Preserve other platforms' legacy default.
