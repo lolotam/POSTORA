@@ -11,7 +11,7 @@ vi.mock("@/components/layout/DashboardLayout", () => ({
 vi.mock("@/hooks/useAuth", () => ({
   useAuth: () => ({
     user: { id: "test-user-id" },
-    session: { access_token: "test-token" },
+    session: { access_token: "test-token", user: { id: "test-user-id" } },
   }),
 }));
 
@@ -93,5 +93,22 @@ describe("InstagramAnalytics page composition", () => {
     renderPage(["/analytics/instagram/performance"]);
 
     expect(screen.getByTestId("instagram-performance-screen")).toBeInTheDocument();
+  });
+});
+
+describe("InstagramAnalytics load more", () => {
+  it("disables Load More while a page loads and shows the translated failure without the raw message", async () => {
+    vi.resetModules();
+    const post = { id: "p1", mediaType: "IMAGE", thumbnailUrl: "", caption: "", likesCount: 1, commentsCount: 0, engagementScore: 1, timestamp: "2026-10-30T08:00:00Z", permalink: "https://www.instagram.com/p/1" };
+    const profile = { id: "i1", username: "northwind", fullName: "Northwind", bio: "", avatarUrl: "", followersCount: 1, followingCount: 1, postsCount: 2, isVerified: false, platform: "instagram" };
+    vi.doMock("@/hooks/useBrandScrape", () => ({
+      useBrandScrape: () => ({ profile, profileSource: "unknown", posts: [post], totalPosts: 2, hasMore: true, isLoading: false, isLoadingMore: true,
+        error: null, loadMoreError: "unavailable", warning: null, reconnectRequired: false, search: vi.fn(), loadMore: vi.fn(), loadFromSession: vi.fn() }),
+    }));
+    const { default: Page } = await import("../InstagramAnalytics");
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(<QueryClientProvider client={queryClient}><MemoryRouter initialEntries={["/analytics/instagram?tab=analyze"]}><Page /></MemoryRouter></QueryClientProvider>);
+    expect(screen.getByRole("button", { name: /Loading/i })).toBeDisabled();
+    expect(screen.getByText("Could not load more. Try again.")).toBeInTheDocument();
   });
 });

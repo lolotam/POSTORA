@@ -25,6 +25,20 @@ import {
 
 const SECRET = "provider-token-must-not-leak";
 
+Deno.test("a bounded provider body releases its reader when the body ignores the deadline signal", async () => {
+  let cancellations = 0;
+  const response = new Response(new ReadableStream<Uint8Array>({
+    pull: () => new Promise<void>(() => {}),
+    cancel: () => { cancellations++; },
+  }));
+  await assertRejects(() => protectedFetchJson("https://graph.facebook.com/v22.0/me/permissions", {}, {
+    timeoutMs: 10, maxBodyBytes: 65_536, fetcher: async () => response,
+  }), ProtectedProviderFailure, "provider_timeout");
+  await Promise.resolve();
+  assertEquals(cancellations, 1);
+  assertEquals(response.body?.locked, false);
+});
+
 Deno.test("a service envelope distinguishes a row, absence and a failure", () => {
   assertEquals(readServiceEnvelope({ data: { id: "1" }, error: null }).status, "row");
   assertEquals(readServiceEnvelope({ data: null, error: null }).status, "missing");

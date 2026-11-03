@@ -15,3 +15,12 @@ export const OWNER_RELEASE = Object.freeze({
   email: "instagram-owner-release@example.test",
   apiKey: "postora-owner-release-synthetic-key-2026",
 });
+
+/** @param {"anon" | "service_role"} role */
+export async function syntheticOwnerReleaseKey(role) {
+  const base64url = (bytes) => btoa(String.fromCharCode(...bytes)).replaceAll("+", "-").replaceAll("/", "_").replaceAll("=", "");
+  const encode = (payload) => base64url(new TextEncoder().encode(JSON.stringify(payload)));
+  const unsigned = `${encode({ alg: "HS256", typ: "JWT" })}.${encode({ role, iss: "supabase", exp: 4_102_444_800 })}`;
+  const key = await crypto.subtle.importKey("raw", new TextEncoder().encode(OWNER_RELEASE.signingSecret), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
+  return `${unsigned}.${base64url(new Uint8Array(await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(unsigned))))}`;
+}

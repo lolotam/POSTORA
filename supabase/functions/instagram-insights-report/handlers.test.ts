@@ -12,7 +12,14 @@
  */
 
 import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
-import { handler } from "./index.ts";
+Deno.env.set("SUPABASE_URL", "http://127.0.0.1:9");
+Deno.env.set("SUPABASE_SERVICE_ROLE_KEY", "fixture-report-audit-key");
+const { handler } = await import("./index.ts");
+globalThis.fetch = (input, init) => {
+  const request = new Request(input, init);
+  if (new URL(request.url).pathname !== "/rest/v1/system_logs") throw new Error("Unexpected report test request");
+  return Promise.resolve(new Response(null, { status: 201 }));
+};
 
 const OWNER_ID = "8f14e45f-ceea-4e7a-9b1c-2d3e4f5a6b7c";
 const ACCOUNT_ID = "a1b2c3d4-e5f6-4a1b-8c2d-3e4f5a6b7c8d";
@@ -37,7 +44,7 @@ Deno.test("registered route refuses unauthenticated request with 401", async () 
   assertEquals(json.error.code, "UNAUTHORIZED");
 });
 
-Deno.test("registered route refuses malformed social_account_id with 400", async () => {
+Deno.test("registered route refuses an invalid bearer token with 401 before validating the account id", async () => {
   const req = new Request(
     "https://example.com/functions/v1/instagram-insights-report?social_account_id=bad-uuid",
     {
@@ -46,6 +53,7 @@ Deno.test("registered route refuses malformed social_account_id with 400", async
     }
   );
   const res = await handler(req);
-  // Without mock auth in index.ts, it will return 401 because test_token is invalid JWT
-  assertEquals(res.status === 401 || res.status === 400, true);
+  // The registered route authenticates first: an invalid JWT is a 401 whatever the query holds. The 400
+  // path for a malformed id is covered through the injected-auth handler in handler.test.ts.
+  assertEquals(res.status, 401);
 });

@@ -8,8 +8,14 @@ import type {
   TriggerSyncResult,
 } from "../application/ports";
 import type { OwnerReport } from "../domain/types";
+import { supabaseSavedAnalytics } from "@/features/analytics-contract/infrastructure/supabaseSavedAnalytics";
+import type { AnalyticsPeriodDays, AnalyticsReport } from "@/features/analytics-contract";
 
 export class SupabaseInstagramInsightsGateway implements InstagramInsightsGateway {
+  // Kept explicit until verified Instagram capabilities permit screen adoption.
+  getAnalyticsReport(params: { socialAccountId: string; periodDays: AnalyticsPeriodDays; cursor?: string | null }): Promise<AnalyticsReport> {
+    return supabaseSavedAnalytics.report({ platform: "instagram", accountId: params.socialAccountId, periodDays: params.periodDays, cursor: params.cursor ?? null });
+  }
   async getReport(params: GetReportParams): Promise<OwnerReport> {
     const { data, error } = await supabase.functions.invoke<OwnerReport>(
       "instagram-insights-report",

@@ -1,4 +1,4 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, useRef } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import { resolveBrandProfileSource } from "@/types/brand-intelligence";
@@ -9,15 +9,33 @@ type BrandScrapeResponse = {
   posts: BrandPost[];
   totalPosts: number;
   hasMore: boolean;
+  warning?: { code: string; message: string };
 };
 
-export function useBrandScrape() {
+const RECONNECT_CODES = ["IG_INSIGHTS_SCOPE_MISSING", "IG_RECONNECT_REQUIRED"];
+const RECONNECT_MESSAGE = "Reconnect Instagram to enable official competitor data.";
+
+/** What a load-more request reports. It belongs to the generation it started in and is shown only there. */
+type LoadMoreState = { generation: number; loading: boolean; error: "unavailable" | null; warning: { code: string; message: string } | null };
+
+export function useBrandScrape(ownerId: string | undefined) {
+  const requestOwner = useRef(ownerId);
+  const requestGeneration = useRef(0);
+  const loadMoreToken = useRef<symbol | null>(null);
+  if (requestOwner.current !== ownerId) {
+    requestOwner.current = ownerId;
+    requestGeneration.current++;
+    loadMoreToken.current = null;
+  }
+  const [transientOwner, setTransientOwner] = useState(ownerId);
+  const sameOwner = transientOwner === ownerId;
   const queryClient = useQueryClient();
   const [username, setUsername] = useState("");
   const [platform, setPlatform] = useState<BrandPlatform>("instagram");
-  const [offset, setOffset] = useState(0);
   const [allPosts, setAllPosts] = useState<BrandPost[]>([]);
+  const [continuation, setContinuation] = useState<{ hasMore: boolean; nextOffset: number; totalPosts: number } | null>(null);
   const [searchTriggered, setSearchTriggered] = useState(false);
+  const [loadMoreState, setLoadMoreState] = useState<LoadMoreState | null>(null);
 
   // For loading from history sessions
   const [sessionProfile, setSessionProfile] = useState<BrandProfile | null>(null);
@@ -34,6 +52,7 @@ export function useBrandScrape() {
       }
       session = refreshedSessionData.session;
     }
+    if (!ownerId || session.user.id !== ownerId) throw new Error("Your session changed. Please search again.");
 
     const response = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/brand-scrape`, {
       method: "POST",
@@ -56,7 +75,7 @@ export function useBrandScrape() {
         throw new Error("Your session has expired. Please log out and log back in.");
       }
 
-      throw new Error(message);
+      throw Object.assign(new Error(message), { code: typeof payload.error_code === "string" ? payload.error_code : null });
     }
 
     if (typeof payload?.error === "string") {
@@ -64,63 +83,108 @@ export function useBrandScrape() {
     }
 
     return payload as BrandScrapeResponse;
-  }, [platform, username]);
+  }, [platform, username, ownerId]);
 
-  const { data, isLoading, error } = useQuery({
-    queryKey: ["brand-scrape", platform, username, 0],
+  const { data: cachedData, isLoading, error } = useQuery({
+    queryKey: ["brand-scrape", ownerId, platform, username, 0],
     queryFn: () => callBrandScrape(0),
-    enabled: searchTriggered && !!username && !sessionProfile,
+    enabled: !!ownerId && sameOwner && searchTriggered && !!username && !sessionProfile,
     staleTime: 3600000,
     retry: 1,
   });
+  // React Query retains old data after a failed refetch. It cannot represent
+  // the result of a newly refused search, especially after a permission denial.
+  const data = error ? undefined : cachedData;
+  const hasMore = sameOwner && !!data && !sessionPosts && (continuation?.hasMore ?? data.hasMore);
+
+  /** A new generation frees the guard; the state of the old generation is never shown again, so nothing has to be cleared. */
+  const releaseLoadMore = useCallback(() => {
+    loadMoreToken.current = null;
+  }, []);
+
+  /**
+   * An older request may still write the state of its own, now hidden, generation when no newer state exists.
+   * It never changes what the current generation shows, and a newer generation's state is never replaced.
+   */
+  const writeLoadMore = useCallback((generation: number, patch: Partial<LoadMoreState>) => {
+    setLoadMoreState((previous) => {
+      if (previous && previous.generation > generation) return previous;
+      const own = previous?.generation === generation ? previous : { loading: false, error: null, warning: null };
+      return { ...own, ...patch, generation };
+    });
+  }, []);
 
   const search = useCallback((newUsername: string, newPlatform: BrandPlatform) => {
+    requestGeneration.current++;
+    releaseLoadMore();
+    setTransientOwner(ownerId);
     setSessionProfile(null);
     setSessionPosts(null);
     setUsername(newUsername);
     setPlatform(newPlatform);
-    setOffset(0);
     setAllPosts([]);
+    setContinuation(null);
     setSearchTriggered(true);
-    queryClient.invalidateQueries({ queryKey: ["brand-scrape", newPlatform, newUsername, 0] });
-  }, [queryClient]);
+    queryClient.invalidateQueries({ queryKey: ["brand-scrape", ownerId, newPlatform, newUsername, 0] });
+  }, [queryClient, ownerId, releaseLoadMore]);
 
   const loadMore = useCallback(async () => {
-    if (!username || !data?.hasMore) return;
-    const nextOffset = allPosts.length > 0 ? allPosts.length : (data?.posts?.length || 0);
+    if (!hasMore || !username || !data || loadMoreToken.current) return;
+    const nextOffset = continuation?.nextOffset ?? data.posts.length;
+    const generation = requestGeneration.current;
+    const token = Symbol("load-more");
+    const owns = () => loadMoreToken.current === token && generation === requestGeneration.current;
+    loadMoreToken.current = token;
+    writeLoadMore(generation, { loading: true, error: null });
 
     try {
       const moreData = await callBrandScrape(nextOffset);
+      if (!owns()) return;
       if (moreData.posts) {
-        setAllPosts((prev) => [...prev, ...moreData.posts]);
+        setAllPosts((prev) => [...new Map([...prev, ...moreData.posts].map((post) => [post.id, post])).values()]);
+        setContinuation({ hasMore: moreData.hasMore, nextOffset: nextOffset + moreData.posts.length, totalPosts: moreData.totalPosts });
       }
+      if (moreData.warning) writeLoadMore(generation, { warning: moreData.warning });
     } catch (err) {
-      console.error("Load more error:", err);
+      if (!owns()) return;
+      const code = err && typeof err === "object" && "code" in err ? String(err.code) : "";
+      if (RECONNECT_CODES.includes(code)) writeLoadMore(generation, { warning: { code, message: RECONNECT_MESSAGE } });
+      else writeLoadMore(generation, { error: "unavailable" });
+    } finally {
+      if (loadMoreToken.current === token) loadMoreToken.current = null;
+      writeLoadMore(generation, { loading: false });
     }
-  }, [username, data, allPosts, callBrandScrape]);
+  }, [username, data, continuation, callBrandScrape, hasMore, writeLoadMore]);
 
   const reset = useCallback(() => {
+    requestGeneration.current++;
+    releaseLoadMore();
     setUsername("");
-    setOffset(0);
     setAllPosts([]);
+    setContinuation(null);
     setSearchTriggered(false);
     setSessionProfile(null);
     setSessionPosts(null);
-  }, []);
+  }, [releaseLoadMore]);
 
   /** Load data from a stored history session without re-scraping */
   const loadFromSession = useCallback((profile: BrandProfile, posts: BrandPost[]) => {
+    requestGeneration.current++;
+    releaseLoadMore();
+    setTransientOwner(ownerId);
     setSessionProfile(profile);
     setSessionPosts(posts);
     setSearchTriggered(false);
     setAllPosts([]);
+    setContinuation(null);
     setPlatform(profile.platform);
     setUsername(profile.username);
-  }, []);
+  }, [ownerId, releaseLoadMore]);
 
   // Merge: session data takes priority, then query data
-  const activeProfile = sessionProfile || data?.profile || null;
-  const combinedPosts = sessionPosts || (data?.posts ? [...data.posts, ...allPosts] : allPosts);
+  const activeProfile = (sameOwner ? sessionProfile : null) || data?.profile || null;
+  const visiblePosts = sameOwner && data ? allPosts : [];
+  const combinedPosts = (sameOwner ? sessionPosts : null) || (data?.posts ? [...data.posts, ...visiblePosts] : visiblePosts);
 
   /**
    * The source of the profile the owner is looking at.
@@ -131,15 +195,24 @@ export function useBrandScrape() {
    * its numbers came from (T8-01).
    */
   const profileSource: BrandProfileSource = resolveBrandProfileSource(activeProfile?.source);
+  // A saved session is provider-free data: nothing from the earlier live search describes it.
+  const showingSession = sameOwner && !!sessionProfile;
+  const moreState = sameOwner && loadMoreState?.generation === requestGeneration.current ? loadMoreState : null;
+  const shownWarning = showingSession ? null : (moreState?.warning ?? data?.warning ?? null);
 
   return {
     profile: activeProfile,
     profileSource,
     posts: combinedPosts,
-    totalPosts: sessionPosts ? sessionPosts.length : (data?.totalPosts || 0),
-    hasMore: sessionPosts ? false : (data?.hasMore || false),
-    isLoading: sessionProfile ? false : isLoading,
-    error: sessionProfile ? null : (error ? (error as Error).message : null),
+    totalPosts: sameOwner && sessionPosts ? sessionPosts.length : (data ? ((sameOwner ? continuation?.totalPosts : undefined) ?? data.totalPosts) : 0),
+    hasMore,
+    isLoading: showingSession ? false : isLoading,
+    isLoadingMore: !!moreState?.loading,
+    error: showingSession ? null : (error ? (error as Error).message : null),
+    loadMoreError: showingSession ? null : (moreState?.error ?? null),
+    reconnectRequired: RECONNECT_CODES.includes(
+      shownWarning?.code ?? (!showingSession && error && "code" in error ? String(error.code) : "")),
+    warning: shownWarning?.message ?? null,
     search,
     loadMore,
     loadFromSession,

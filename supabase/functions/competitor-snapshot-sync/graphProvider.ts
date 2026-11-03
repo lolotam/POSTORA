@@ -147,6 +147,8 @@ const TARGET_FIELDS = [
   "followers_count",
   "media_count",
   "profile_picture_url",
+  "biography",
+  "website",
 ].join(",");
 
 /** The media fields of the target. */
@@ -161,6 +163,7 @@ const MEDIA_FIELDS = [
   "comments_count",
   "view_count",
   "thumbnail_url",
+  "media_url",
 ].join(",");
 
 const HANDLE_GRAMMAR = /^[a-z0-9._]{1,30}$/;
@@ -320,7 +323,7 @@ export function buildBusinessDiscoveryUrl(input: {
  * transport that ignores the abort is still bounded: the read is raced
  * against the signal, not merely cancelled.
  */
-async function readBoundedBody(
+export async function readBoundedBody(
   response: Response,
   maxBytes: number,
   signal: AbortSignal,

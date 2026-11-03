@@ -1,0 +1,199 @@
+{
+  "version": 1,
+  "recordedAt": "2026-11-02T04:03:35.838Z",
+  "scope": "local saved analytics UI API MCP parity and cold-cache preparation",
+  "source": "97c6708804a94f725945100638061ba0e99e65ff",
+  "tree": "b1bf76912af0afb6bb8d085c3e5a5bcb25a5db8f",
+  "executionCheckout": "F:/Dev/Worktrees/Postora_new/owner-api-97c67088",
+  "evidenceAuthority": "Author-recorded local evidence, not a trusted external G-X receipt",
+  "inputs": [
+    {
+      "path": "e2e/meta-owned-release.spec.ts",
+      "gitBlob": "ca0d320cd8d56a875a091796ab4dcdc4d16a4a5f",
+      "gitSha256": "1304cae00fe88fdb01ab692d591378c6019682c5861cf0a58befff2b30705855",
+      "executionSha256": "a7214028439cc1cd25aef85427025c18207acd8d689ae73a41d4f61c03c8f855",
+      "normalizedExecutionSha256": "1304cae00fe88fdb01ab692d591378c6019682c5861cf0a58befff2b30705855"
+    },
+    {
+      "path": "e2e/fixtures/instagramReleaseServer.ts",
+      "gitBlob": "dd5e712c54361e320bb4f79f8fe41436507fac02",
+      "gitSha256": "39d6b11f371b32294183a116a4da96b4eb9b4f1426e1fa7da6bc822ed1f507c2",
+      "executionSha256": "9a5d479c574c0239f00a8473a6b30f352245bcfbad05b368f7511a8449644310",
+      "normalizedExecutionSha256": "39d6b11f371b32294183a116a4da96b4eb9b4f1426e1fa7da6bc822ed1f507c2"
+    },
+    {
+      "path": "supabase/functions/n8n-api/instagramReleaseContract.test.ts",
+      "gitBlob": "37a3aaaa32852ea5c35249805a51073992f1cecd",
+      "gitSha256": "89288eac9ff4da4c6da00c2ae49af62c58cfebcae146b022c8abaa763e78b8cb",
+      "executionSha256": "949e7e5c8c462397b6b881320457fcdaab2f0502cc3052b0d60e2e12a75b7c75",
+      "normalizedExecutionSha256": "89288eac9ff4da4c6da00c2ae49af62c58cfebcae146b022c8abaa763e78b8cb"
+    },
+    {
+      "path": "playwright.instagram-release.config.ts",
+      "gitBlob": "632198d3d68a80ea52d4a1a205ec3f452a02cb07",
+      "gitSha256": "4afcf6ac8ca2dee5c3ecc8bed9d76133be5c38d2f6ff25ec48dd8730727676f5",
+      "executionSha256": "add9cfd96d87596903ebf144cb7946465c153c8ca85b4150dbb3c69d12465df7",
+      "normalizedExecutionSha256": "4afcf6ac8ca2dee5c3ecc8bed9d76133be5c38d2f6ff25ec48dd8730727676f5"
+    },
+    {
+      "path": "playwright.owner-analytics.config.ts",
+      "gitBlob": "1ef40eb56db076d2c2b37de3e595352848625a7a",
+      "gitSha256": "1617446c0eac41de332a73a8d61b8f3da15d69abcddb0787d21f7730052c9b67",
+      "executionSha256": "d0cb63ff22ca5a6adf25f99e94e5fff4437be68373155453ee2483425e59d4b7",
+      "normalizedExecutionSha256": "1617446c0eac41de332a73a8d61b8f3da15d69abcddb0787d21f7730052c9b67"
+    }
+  ],
+  "canonical": {
+    "startTime": "2026-11-02T03:49:25.487Z",
+    "duration": 64793.022999999994,
+    "expected": 3,
+    "skipped": 0,
+    "unexpected": 0,
+    "flaky": 0
+  },
+  "owner": {
+    "startTime": "2026-11-02T03:53:48.877Z",
+    "duration": 268185.732,
+    "expected": 13,
+    "skipped": 0,
+    "unexpected": 0,
+    "flaky": 0
+  },
+  "requiredOwnerJourneyChecker": "passed; all 13 required journeys exactly once",
+  "fixturePreparation": {
+    "newerMigrations": 151,
+    "baselineSqlSuites": 69,
+    "isolatedSqlSuites": 1,
+    "cronLauncher": "off",
+    "activeSchedules": 0
+  },
+  "coverage": [
+    "Instagram canonical Auth/quota, legacy report and scoped MCP refusal journeys repeated",
+    "Facebook/Threads actual UI backend, authenticated API and registered MCP payload parity",
+    "first 25 posts and signed continuation to the 26th post match exactly across transports",
+    "foreign and nonexistent accounts return indistinguishable API/MCP 404s",
+    "malformed versioned cursor is refused by API/MCP",
+    "read and refusal journeys add zero provider calls",
+    "existing real-Auth ownership, worker refresh, permission/token failures, revision conflict, RTL and generation fencing journeys"
+  ],
+  "cachePreparation": {
+    "path": "F:/Dev/Temp/postora-canonical-api-cold-cache-20261102-0331",
+    "observation": "Check-only startup reproduced a missing executable module even with literal route imports; explicit deno cache prepared executable modules, then cached-only canonical and owner runtimes ran.",
+    "deploymentSource": "b8bd1f11ebd21eab4d3e7a90a2ab827deb1462dd",
+    "distinction": "The executed source is 97c67088 with explicit cache CLI preparation; b8bd1f11 adds the same preparation command to CI and edits documentation."
+  },
+  "postRunState": {
+    "users": 3,
+    "accounts": 13,
+    "active_cron": 0,
+    "cron_launcher": "off",
+    "threads_running": 0,
+    "facebook_running": 0,
+    "unexpected_accounts": 0,
+    "instagram_live_leases": 0,
+    "harness_sentinel_accounts": 1
+  },
+  "hostedCanonical": {
+    "prHead": "b8bd1f11ebd21eab4d3e7a90a2ab827deb1462dd",
+    "executedCandidate": "0a15860485e4d584c6b7093ffb048e1aae9a3274",
+    "job": "https://github.com/lolotam/POSTORA/actions/runs/41385591492/job/125085596371",
+    "conclusion": "success",
+    "passed": 3,
+    "distinction": "GitHub PR merge candidate, not the local 97c67088 execution and not full G-X acceptance"
+  },
+  "hostedOwner": {
+    "prHead": "b8bd1f11ebd21eab4d3e7a90a2ab827deb1462dd",
+    "executedCandidate": "0a15860485e4d584c6b7093ffb048e1aae9a3274",
+    "job": "https://github.com/lolotam/POSTORA/actions/runs/41385591492/job/125085596667",
+    "conclusion": "success",
+    "passed": 13,
+    "requiredJourneyChecker": "passed"
+  },
+  "artifacts": [
+    {
+      "path": ".tmp/owner-api-97c67088-canonical-playwright.log",
+      "sha256": "61e879b16f225e6777e487055ed74151904e1e2c0a3cf5962a1fa3b977102ed9"
+    },
+    {
+      "path": ".tmp/owner-api-97c67088-canonical-playwright.json",
+      "sha256": "d027109c8504f50e24ac209121071810e6c1527f021730ac222af681a0f0aca9"
+    },
+    {
+      "path": ".tmp/owner-api-97c67088-canonical-cleanup.json",
+      "sha256": "db7f78d640fb541b421d84b23a856628819abb5034f99a127a53107da93a688a"
+    },
+    {
+      "path": ".tmp/owner-api-97c67088-canonical-cold-playwright.log",
+      "sha256": "17474da6a8b32867f29abd925f15ce633d3169a58fe3991fc4b64cfcbe6eea1b"
+    },
+    {
+      "path": ".tmp/owner-api-97c67088-runtime-cache.log",
+      "sha256": "1ea07f42cb334395801ba117f56c21d6679d8d01fc87958b56257bae33a93bea"
+    },
+    {
+      "path": ".tmp/owner-api-97c67088-owner-runtime-cache.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": ".tmp/owner-api-97c67088-playwright-v2.stdout.log",
+      "sha256": "447ff7482031f7fdff025ada8b57a21fb7a083a20f8280c0f334f859484626d2"
+    },
+    {
+      "path": ".tmp/owner-api-97c67088-playwright-v2.stderr.log",
+      "sha256": "bd3eede249bd745b770d6df4de5de7c4d1dacd61d20e0533349598248f82a377"
+    },
+    {
+      "path": ".tmp/owner-api-97c67088-playwright.json",
+      "sha256": "90ffdda1e8215ebb49018271488feafb7053ae82fa445306b31accf9976a6448"
+    },
+    {
+      "path": ".tmp/owner-api-97c67088-seed.stdout.log",
+      "sha256": "dd1d406e89682e5be704afce46f2bcec16ed7bdfe8c0def6eb0892931418b9ec"
+    },
+    {
+      "path": ".tmp/owner-api-97c67088-server.stderr.log",
+      "sha256": "5435e33bf8e0c6aebe9d42dedbd2d5da7edabf3a95981aa2f3b531336fea5ea5"
+    },
+    {
+      "path": ".tmp/owner-api-97c67088-prepare.log",
+      "sha256": "97d2306c43e0f60dc215e9f79f0538d228c419d3fae102a53f239e31ca1462e3"
+    },
+    {
+      "path": ".tmp/owner-api-97c67088-lint-i18n.log",
+      "sha256": "5e2022ce58551e3f1c7b2f3f5c6f0fc0522ebed0896864d6adde996421a11770"
+    },
+    {
+      "path": ".tmp/owner-api-b8bd1f11-lint-i18n.log",
+      "sha256": "ac7c5a6de6eb2466e377f8da0da48cf8f99d35ac216cf1c82918a490a47649f6"
+    },
+    {
+      "path": ".tmp/owner-api-97c67088-deno-check.log",
+      "sha256": "4954aea944863bbd9dcfe40981a2a5ef424560d8afc5a0b4735c1e4f51886d5b"
+    },
+    {
+      "path": ".tmp/owner-api-97c67088-graph-update.log",
+      "sha256": "8085c54e34a4ff929ec9b90bf41b269d50472ea7818676ea21f0a110ea3b4993"
+    },
+    {
+      "path": ".tmp/owner-api-97c67088-post-run-state.json",
+      "sha256": "2533c9d424544292e3f1b32379941334b4ff8715cb1d1ee88a9ad0a45811f2c9"
+    },
+    {
+      "path": ".tmp/owner-api-b8bd1f11-canonical-ci.log",
+      "sha256": "650b436c3f06301febe60d573cdf231b4778b4f7251ea28b018d4b853c544af3"
+    },
+    {
+      "path": ".tmp/owner-api-b8bd1f11-owner-ci.log",
+      "sha256": "aa4a63f227677d59f6007ddc80f8e725fac9087b362fcfadc6c7a54ed44cccbd"
+    }
+  ],
+  "releaseReady": false,
+  "productionActivationAuthorized": false,
+  "remaining": [
+    "Instagram selected-account protected binding, accepted metric/calendar registry and canonical adoption",
+    "full canonical G-X J/E execution and trusted origin/bootstrap/review workflow",
+    "four immutable historical migration-prefix incidents",
+    "approved production prerequisites/runtime/eligibility/schedules",
+    "live Meta reconciliation and seven successful scheduled due dates per platform"
+  ]
+}

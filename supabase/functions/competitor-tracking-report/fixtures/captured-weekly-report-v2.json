@@ -1,0 +1,845 @@
+{
+  "as_of": "2026-11-02T06:18:05.927293+00:00",
+  "entry": {
+    "job": null,
+    "label": null,
+    "growth": {
+      "7": {
+        "reason": "first_observation",
+        "percent": null,
+        "absolute": null,
+        "baseline_at": null,
+        "observed_at": null,
+        "period_days": 7,
+        "interval_days": null,
+        "observed_source": null,
+        "interval_seconds": null,
+        "baseline_followers": null,
+        "observed_followers": null
+      },
+      "30": {
+        "reason": "first_observation",
+        "percent": null,
+        "absolute": null,
+        "baseline_at": null,
+        "observed_at": null,
+        "period_days": 30,
+        "interval_days": null,
+        "observed_source": null,
+        "interval_seconds": null,
+        "baseline_followers": null,
+        "observed_followers": null
+      }
+    },
+    "source": null,
+    "status": "pending",
+    "profile": null,
+    "coverage": [
+      {
+        "source": "official",
+        "exhausted": true,
+        "truncated": false,
+        "gap_reason": null,
+        "captured_at": "2026-11-02T05:18:05.927293+00:00",
+        "captured_on": "2026-11-02",
+        "cursor_present": false,
+        "job_generation": 1,
+        "capture_ended_at": "2026-11-02T05:18:05.927293+00:00",
+        "ordering_verified": true,
+        "capture_started_at": "2026-11-02T05:18:00.927293+00:00",
+        "oldest_returned_at": "2026-10-23T06:18:05.927293+00:00"
+      }
+    ],
+    "username": "weekly_main",
+    "is_active": true,
+    "created_at": "2026-11-02T06:18:05.927293+00:00",
+    "removed_at": null,
+    "observations": [],
+    "watchlist_id": "f7720000-0000-4000-8000-000000000001",
+    "next_retry_at": null,
+    "last_error_code": null,
+    "weekly_inventory": {
+      "interval_end": "2026-11-02T05:18:05.927293+00:00",
+      "interval_start": "2026-10-26T05:18:05.927293+00:00",
+      "observed_count": 33
+    },
+    "coverage_truncated": false,
+    "cleanup_eligible_at": null,
+    "observations_truncated": false
+  },
+  "media": [
+    {
+      "mature": false,
+      "source": "official",
+      "caption": null,
+      "baseline": [],
+      "permalink": null,
+      "like_count": null,
+      "media_type": null,
+      "view_count": null,
+      "captured_at": "2026-11-02T05:18:05.927293+00:00",
+      "ig_media_id": "future_publication",
+      "metric_basis": null,
+      "published_at": "2026-11-02T05:18:05.927294+00:00",
+      "thumbnail_url": null,
+      "comments_count": null,
+      "media_product_type": null,
+      "baseline_incomplete": false
+    },
+    {
+      "mature": false,
+      "source": "official",
+      "caption": null,
+      "baseline": [],
+      "permalink": null,
+      "like_count": null,
+      "media_type": null,
+      "view_count": null,
+      "captured_at": "2026-11-02T05:18:05.927293+00:00",
+      "ig_media_id": "boundary_end",
+      "metric_basis": null,
+      "published_at": "2026-11-02T05:18:05.927293+00:00",
+      "thumbnail_url": null,
+      "comments_count": null,
+      "media_product_type": null,
+      "baseline_incomplete": false
+    },
+    {
+      "mature": true,
+      "source": "official",
+      "caption": null,
+      "baseline": [],
+      "permalink": null,
+      "like_count": null,
+      "media_type": null,
+      "view_count": null,
+      "captured_at": "2026-11-03T06:18:05.927293+00:00",
+      "ig_media_id": "future_observation",
+      "metric_basis": null,
+      "published_at": "2026-10-31T06:18:05.927293+00:00",
+      "thumbnail_url": null,
+      "comments_count": null,
+      "media_product_type": null,
+      "baseline_incomplete": false
+    },
+    {
+      "mature": true,
+      "source": "official",
+      "caption": null,
+      "baseline": [],
+      "permalink": null,
+      "like_count": null,
+      "media_type": null,
+      "view_count": null,
+      "captured_at": "2026-11-02T05:18:05.927293+00:00",
+      "ig_media_id": "failed_observation",
+      "metric_basis": null,
+      "published_at": "2026-10-31T06:18:05.927293+00:00",
+      "thumbnail_url": null,
+      "comments_count": null,
+      "media_product_type": null,
+      "baseline_incomplete": false
+    },
+    {
+      "mature": true,
+      "source": "official",
+      "caption": null,
+      "baseline": [
+        {
+          "value": 2,
+          "source": "official",
+          "captured_at": "2026-11-02T05:18:05.927293+00:00",
+          "ig_media_id": "weekly_2",
+          "metric_basis": "public_views",
+          "published_at": "2026-10-30T06:18:03.927293+00:00"
+        },
+        {
+          "value": 3,
+          "source": "official",
+          "captured_at": "2026-11-02T05:18:05.927293+00:00",
+          "ig_media_id": "weekly_3",
+          "metric_basis": "public_views",
+          "published_at": "2026-10-30T06:18:02.927293+00:00"
+        },
+        {
+          "value": 4,
+          "source": "official",
+          "captured_at": "2026-11-02T05:18:05.927293+00:00",
+          "ig_media_id": "weekly_4",
+          "metric_basis": "public_views",
+          "published_at": "2026-10-30T06:18:01.927293+00:00"
+        },
+        {
+          "value": 5,
+          "source": "official",
+          "captured_at": "2026-11-02T05:18:05.927293+00:00",
+          "ig_media_id": "weekly_5",
+          "metric_basis": "public_views",
+          "published_at": "2026-10-30T06:18:00.927293+00:00"
+        },
+        {
+          "value": 6,
+          "source": "official",
+          "captured_at": "2026-11-02T05:18:05.927293+00:00",
+          "ig_media_id": "weekly_6",
+          "metric_basis": "public_views",
+          "published_at": "2026-10-30T06:17:59.927293+00:00"
+        },
+        {
+          "value": 7,
+          "source": "official",
+          "captured_at": "2026-11-02T05:18:05.927293+00:00",
+          "ig_media_id": "weekly_7",
+          "metric_basis": "public_views",
+          "published_at": "2026-10-30T06:17:58.927293+00:00"
+        },
+        {
+          "value": 8,
+          "source": "official",
+          "captured_at": "2026-11-02T05:18:05.927293+00:00",
+          "ig_media_id": "weekly_8",
+          "metric_basis": "public_views",
+          "published_at": "2026-10-30T06:17:57.927293+00:00"
+        },
+        {
+          "value": 9,
+          "source": "official",
+          "captured_at": "2026-11-02T05:18:05.927293+00:00",
+          "ig_media_id": "weekly_9",
+          "metric_basis": "public_views",
+          "published_at": "2026-10-30T06:17:56.927293+00:00"
+        },
+        {
+          "value": 10,
+          "source": "official",
+          "captured_at": "2026-11-02T05:18:05.927293+00:00",
+          "ig_media_id": "weekly_10",
+          "metric_basis": "public_views",
+          "published_at": "2026-10-30T06:17:55.927293+00:00"
+        },
+        {
+          "value": 11,
+          "source": "official",
+          "captured_at": "2026-11-02T05:18:05.927293+00:00",
+          "ig_media_id": "weekly_11",
+          "metric_basis": "public_views",
+          "published_at": "2026-10-30T06:17:54.927293+00:00"
+        },
+        {
+          "value": 12,
+          "source": "official",
+          "captured_at": "2026-11-02T05:18:05.927293+00:00",
+          "ig_media_id": "weekly_12",
+          "metric_basis": "public_views",
+          "published_at": "2026-10-30T06:17:53.927293+00:00"
+        },
+        {
+          "value": 13,
+          "source": "official",
+          "captured_at": "2026-11-02T05:18:05.927293+00:00",
+          "ig_media_id": "weekly_13",
+          "metric_basis": "public_views",
+          "published_at": "2026-10-30T06:17:52.927293+00:00"
+        }
+      ],
+      "permalink": null,
+      "like_count": null,
+      "media_type": "VIDEO",
+      "view_count": 1,
+      "captured_at": "2026-11-02T05:18:05.927293+00:00",
+      "ig_media_id": "weekly_1",
+      "metric_basis": "public_views",
+      "published_at": "2026-10-30T06:18:04.927293+00:00",
+      "thumbnail_url": null,
+      "comments_count": null,
+      "media_product_type": "REELS",
+      "baseline_incomplete": false
+    },
+    {
+      "mature": true,
+      "source": "official",
+      "caption": null,
+      "baseline": [
+        {
+          "value": 3,
+          "source": "official",
+          "captured_at": "2026-11-02T05:18:05.927293+00:00",
+          "ig_media_id": "weekly_3",
+          "metric_basis": "public_views",
+          "published_at": "2026-10-30T06:18:02.927293+00:00"
+        },
+        {
+          "value": 4,
+          "source": "official",
+          "captured_at": "2026-11-02T05:18:05.927293+00:00",
+          "ig_media_id": "weekly_4",
+          "metric_basis": "public_views",
+          "published_at": "2026-10-30T06:18:01.927293+00:00"
+        },
+        {
+          "value": 5,
+          "source": "official",
+          "captured_at": "2026-11-02T05:18:05.927293+00:00",
+          "ig_media_id": "weekly_5",
+          "metric_basis": "public_views",
+          "published_at": "2026-10-30T06:18:00.927293+00:00"
+        },
+        {
+          "value": 6,
+          "source": "official",
+          "captured_at": "2026-11-02T05:18:05.927293+00:00",
+          "ig_media_id": "weekly_6",
+          "metric_basis": "public_views",
+          "published_at": "2026-10-30T06:17:59.927293+00:00"
+        },
+        {
+          "value": 7,
+          "source": "official",
+          "captured_at": "2026-11-02T05:18:05.927293+00:00",
+          "ig_media_id": "weekly_7",
+          "metric_basis": "public_views",
+          "published_at": "2026-10-30T06:17:58.927293+00:00"
+        },
+        {
+          "value": 8,
+          "source": "official",
+          "captured_at": "2026-11-02T05:18:05.927293+00:00",
+          "ig_media_id": "weekly_8",
+          "metric_basis": "public_views",
+          "published_at": "2026-10-30T06:17:57.927293+00:00"
+        },
+        {
+          "value": 9,
+          "source": "official",
+          "captured_at": "2026-11-02T05:18:05.927293+00:00",
+          "ig_media_id": "weekly_9",
+          "metric_basis": "public_views",
+          "published_at": "2026-10-30T06:17:56.927293+00:00"
+        },
+        {
+          "value": 10,
+          "source": "official",
+          "captured_at": "2026-11-02T05:18:05.927293+00:00",
+          "ig_media_id": "weekly_10",
+          "metric_basis": "public_views",
+          "published_at": "2026-10-30T06:17:55.927293+00:00"
+        },
+        {
+          "value": 11,
+          "source": "official",
+          "captured_at": "2026-11-02T05:18:05.927293+00:00",
+          "ig_media_id": "weekly_11",
+          "metric_basis": "public_views",
+          "published_at": "2026-10-30T06:17:54.927293+00:00"
+        },
+        {
+          "value": 12,
+          "source": "official",
+          "captured_at": "2026-11-02T05:18:05.927293+00:00",
+          "ig_media_id": "weekly_12",
+          "metric_basis": "public_views",
+          "published_at": "2026-10-30T06:17:53.927293+00:00"
+        },
+        {
+          "value": 13,
+          "source": "official",
+          "captured_at": "2026-11-02T05:18:05.927293+00:00",
+          "ig_media_id": "weekly_13",
+          "metric_basis": "public_views",
+          "published_at": "2026-10-30T06:17:52.927293+00:00"
+        },
+        {
+          "value": 14,
+          "source": "official",
+          "captured_at": "2026-11-02T05:18:05.927293+00:00",
+          "ig_media_id": "weekly_14",
+          "metric_basis": "public_views",
+          "published_at": "2026-10-30T06:17:51.927293+00:00"
+        }
+      ],
+      "permalink": null,
+      "like_count": null,
+      "media_type": "VIDEO",
+      "view_count": 2,
+      "captured_at": "2026-11-02T05:18:05.927293+00:00",
+      "ig_media_id": "weekly_2",
+      "metric_basis": "public_views",
+      "published_at": "2026-10-30T06:18:03.927293+00:00",
+      "thumbnail_url": null,
+      "comments_count": null,
+      "media_product_type": "REELS",
+      "baseline_incomplete": false
+    },
+    {
+      "mature": true,
+      "source": "official",
+      "caption": null,
+      "baseline": [
+        {
+          "value": 4,
+          "source": "official",
+          "captured_at": "2026-11-02T05:18:05.927293+00:00",
+          "ig_media_id": "weekly_4",
+          "metric_basis": "public_views",
+          "published_at": "2026-10-30T06:18:01.927293+00:00"
+        },
+        {
+          "value": 5,
+          "source": "official",
+          "captured_at": "2026-11-02T05:18:05.927293+00:00",
+          "ig_media_id": "weekly_5",
+          "metric_basis": "public_views",
+          "published_at": "2026-10-30T06:18:00.927293+00:00"
+        },
+        {
+          "value": 6,
+          "source": "official",
+          "captured_at": "2026-11-02T05:18:05.927293+00:00",
+          "ig_media_id": "weekly_6",
+          "metric_basis": "public_views",
+          "published_at": "2026-10-30T06:17:59.927293+00:00"
+        },
+        {
+          "value": 7,
+          "source": "official",
+          "captured_at": "2026-11-02T05:18:05.927293+00:00",
+          "ig_media_id": "weekly_7",
+          "metric_basis": "public_views",
+          "published_at": "2026-10-30T06:17:58.927293+00:00"
+        },
+        {
+          "value": 8,
+          "source": "official",
+          "captured_at": "2026-11-02T05:18:05.927293+00:00",
+          "ig_media_id": "weekly_8",
+          "metric_basis": "public_views",
+          "published_at": "2026-10-30T06:17:57.927293+00:00"
+        },
+        {
+          "value": 9,
+          "source": "official",
+          "captured_at": "2026-11-02T05:18:05.927293+00:00",
+          "ig_media_id": "weekly_9",
+          "metric_basis": "public_views",
+          "published_at": "2026-10-30T06:17:56.927293+00:00"
+        },
+        {
+          "value": 10,
+          "source": "official",
+          "captured_at": "2026-11-02T05:18:05.927293+00:00",
+          "ig_media_id": "weekly_10",
+          "metric_basis": "public_views",
+          "published_at": "2026-10-30T06:17:55.927293+00:00"
+        },
+        {
+          "value": 11,
+          "source": "official",
+          "captured_at": "2026-11-02T05:18:05.927293+00:00",
+          "ig_media_id": "weekly_11",
+          "metric_basis": "public_views",
+          "published_at": "2026-10-30T06:17:54.927293+00:00"
+        },
+        {
+          "value": 12,
+          "source": "official",
+          "captured_at": "2026-11-02T05:18:05.927293+00:00",
+          "ig_media_id": "weekly_12",
+          "metric_basis": "public_views",
+          "published_at": "2026-10-30T06:17:53.927293+00:00"
+        },
+        {
+          "value": 13,
+          "source": "official",
+          "captured_at": "2026-11-02T05:18:05.927293+00:00",
+          "ig_media_id": "weekly_13",
+          "metric_basis": "public_views",
+          "published_at": "2026-10-30T06:17:52.927293+00:00"
+        },
+        {
+          "value": 14,
+          "source": "official",
+          "captured_at": "2026-11-02T05:18:05.927293+00:00",
+          "ig_media_id": "weekly_14",
+          "metric_basis": "public_views",
+          "published_at": "2026-10-30T06:17:51.927293+00:00"
+        },
+        {
+          "value": 15,
+          "source": "official",
+          "captured_at": "2026-11-02T05:18:05.927293+00:00",
+          "ig_media_id": "weekly_15",
+          "metric_basis": "public_views",
+          "published_at": "2026-10-30T06:17:50.927293+00:00"
+        }
+      ],
+      "permalink": null,
+      "like_count": null,
+      "media_type": "VIDEO",
+      "view_count": 3,
+      "captured_at": "2026-11-02T05:18:05.927293+00:00",
+      "ig_media_id": "weekly_3",
+      "metric_basis": "public_views",
+      "published_at": "2026-10-30T06:18:02.927293+00:00",
+      "thumbnail_url": null,
+      "comments_count": null,
+      "media_product_type": "REELS",
+      "baseline_incomplete": false
+    },
+    {
+      "mature": true,
+      "source": "official",
+      "caption": null,
+      "baseline": [
+        {
+          "value": 5,
+          "source": "official",
+          "captured_at": "2026-11-02T05:18:05.927293+00:00",
+          "ig_media_id": "weekly_5",
+          "metric_basis": "public_views",
+          "published_at": "2026-10-30T06:18:00.927293+00:00"
+        },
+        {
+          "value": 6,
+          "source": "official",
+          "captured_at": "2026-11-02T05:18:05.927293+00:00",
+          "ig_media_id": "weekly_6",
+          "metric_basis": "public_views",
+          "published_at": "2026-10-30T06:17:59.927293+00:00"
+        },
+        {
+          "value": 7,
+          "source": "official",
+          "captured_at": "2026-11-02T05:18:05.927293+00:00",
+          "ig_media_id": "weekly_7",
+          "metric_basis": "public_views",
+          "published_at": "2026-10-30T06:17:58.927293+00:00"
+        },
+        {
+          "value": 8,
+          "source": "official",
+          "captured_at": "2026-11-02T05:18:05.927293+00:00",
+          "ig_media_id": "weekly_8",
+          "metric_basis": "public_views",
+          "published_at": "2026-10-30T06:17:57.927293+00:00"
+        },
+        {
+          "value": 9,
+          "source": "official",
+          "captured_at": "2026-11-02T05:18:05.927293+00:00",
+          "ig_media_id": "weekly_9",
+          "metric_basis": "public_views",
+          "published_at": "2026-10-30T06:17:56.927293+00:00"
+        },
+        {
+          "value": 10,
+          "source": "official",
+          "captured_at": "2026-11-02T05:18:05.927293+00:00",
+          "ig_media_id": "weekly_10",
+          "metric_basis": "public_views",
+          "published_at": "2026-10-30T06:17:55.927293+00:00"
+        },
+        {
+          "value": 11,
+          "source": "official",
+          "captured_at": "2026-11-02T05:18:05.927293+00:00",
+          "ig_media_id": "weekly_11",
+          "metric_basis": "public_views",
+          "published_at": "2026-10-30T06:17:54.927293+00:00"
+        },
+        {
+          "value": 12,
+          "source": "official",
+          "captured_at": "2026-11-02T05:18:05.927293+00:00",
+          "ig_media_id": "weekly_12",
+          "metric_basis": "public_views",
+          "published_at": "2026-10-30T06:17:53.927293+00:00"
+        },
+        {
+          "value": 13,
+          "source": "official",
+          "captured_at": "2026-11-02T05:18:05.927293+00:00",
+          "ig_media_id": "weekly_13",
+          "metric_basis": "public_views",
+          "published_at": "2026-10-30T06:17:52.927293+00:00"
+        },
+        {
+          "value": 14,
+          "source": "official",
+          "captured_at": "2026-11-02T05:18:05.927293+00:00",
+          "ig_media_id": "weekly_14",
+          "metric_basis": "public_views",
+          "published_at": "2026-10-30T06:17:51.927293+00:00"
+        },
+        {
+          "value": 15,
+          "source": "official",
+          "captured_at": "2026-11-02T05:18:05.927293+00:00",
+          "ig_media_id": "weekly_15",
+          "metric_basis": "public_views",
+          "published_at": "2026-10-30T06:17:50.927293+00:00"
+        },
+        {
+          "value": 16,
+          "source": "official",
+          "captured_at": "2026-11-02T05:18:05.927293+00:00",
+          "ig_media_id": "weekly_16",
+          "metric_basis": "public_views",
+          "published_at": "2026-10-30T06:17:49.927293+00:00"
+        }
+      ],
+      "permalink": null,
+      "like_count": null,
+      "media_type": "VIDEO",
+      "view_count": 4,
+      "captured_at": "2026-11-02T05:18:05.927293+00:00",
+      "ig_media_id": "weekly_4",
+      "metric_basis": "public_views",
+      "published_at": "2026-10-30T06:18:01.927293+00:00",
+      "thumbnail_url": null,
+      "comments_count": null,
+      "media_product_type": "REELS",
+      "baseline_incomplete": false
+    },
+    {
+      "mature": true,
+      "source": "official",
+      "caption": null,
+      "baseline": [
+        {
+          "value": 6,
+          "source": "official",
+          "captured_at": "2026-11-02T05:18:05.927293+00:00",
+          "ig_media_id": "weekly_6",
+          "metric_basis": "public_views",
+          "published_at": "2026-10-30T06:17:59.927293+00:00"
+        },
+        {
+          "value": 7,
+          "source": "official",
+          "captured_at": "2026-11-02T05:18:05.927293+00:00",
+          "ig_media_id": "weekly_7",
+          "metric_basis": "public_views",
+          "published_at": "2026-10-30T06:17:58.927293+00:00"
+        },
+        {
+          "value": 8,
+          "source": "official",
+          "captured_at": "2026-11-02T05:18:05.927293+00:00",
+          "ig_media_id": "weekly_8",
+          "metric_basis": "public_views",
+          "published_at": "2026-10-30T06:17:57.927293+00:00"
+        },
+        {
+          "value": 9,
+          "source": "official",
+          "captured_at": "2026-11-02T05:18:05.927293+00:00",
+          "ig_media_id": "weekly_9",
+          "metric_basis": "public_views",
+          "published_at": "2026-10-30T06:17:56.927293+00:00"
+        },
+        {
+          "value": 10,
+          "source": "official",
+          "captured_at": "2026-11-02T05:18:05.927293+00:00",
+          "ig_media_id": "weekly_10",
+          "metric_basis": "public_views",
+          "published_at": "2026-10-30T06:17:55.927293+00:00"
+        },
+        {
+          "value": 11,
+          "source": "official",
+          "captured_at": "2026-11-02T05:18:05.927293+00:00",
+          "ig_media_id": "weekly_11",
+          "metric_basis": "public_views",
+          "published_at": "2026-10-30T06:17:54.927293+00:00"
+        },
+        {
+          "value": 12,
+          "source": "official",
+          "captured_at": "2026-11-02T05:18:05.927293+00:00",
+          "ig_media_id": "weekly_12",
+          "metric_basis": "public_views",
+          "published_at": "2026-10-30T06:17:53.927293+00:00"
+        },
+        {
+          "value": 13,
+          "source": "official",
+          "captured_at": "2026-11-02T05:18:05.927293+00:00",
+          "ig_media_id": "weekly_13",
+          "metric_basis": "public_views",
+          "published_at": "2026-10-30T06:17:52.927293+00:00"
+        },
+        {
+          "value": 14,
+          "source": "official",
+          "captured_at": "2026-11-02T05:18:05.927293+00:00",
+          "ig_media_id": "weekly_14",
+          "metric_basis": "public_views",
+          "published_at": "2026-10-30T06:17:51.927293+00:00"
+        },
+        {
+          "value": 15,
+          "source": "official",
+          "captured_at": "2026-11-02T05:18:05.927293+00:00",
+          "ig_media_id": "weekly_15",
+          "metric_basis": "public_views",
+          "published_at": "2026-10-30T06:17:50.927293+00:00"
+        },
+        {
+          "value": 16,
+          "source": "official",
+          "captured_at": "2026-11-02T05:18:05.927293+00:00",
+          "ig_media_id": "weekly_16",
+          "metric_basis": "public_views",
+          "published_at": "2026-10-30T06:17:49.927293+00:00"
+        },
+        {
+          "value": 17,
+          "source": "official",
+          "captured_at": "2026-11-02T05:18:05.927293+00:00",
+          "ig_media_id": "weekly_17",
+          "metric_basis": "public_views",
+          "published_at": "2026-10-30T06:17:48.927293+00:00"
+        }
+      ],
+      "permalink": null,
+      "like_count": null,
+      "media_type": "VIDEO",
+      "view_count": 5,
+      "captured_at": "2026-11-02T05:18:05.927293+00:00",
+      "ig_media_id": "weekly_5",
+      "metric_basis": "public_views",
+      "published_at": "2026-10-30T06:18:00.927293+00:00",
+      "thumbnail_url": null,
+      "comments_count": null,
+      "media_product_type": "REELS",
+      "baseline_incomplete": false
+    },
+    {
+      "mature": true,
+      "source": "official",
+      "caption": null,
+      "baseline": [
+        {
+          "value": 7,
+          "source": "official",
+          "captured_at": "2026-11-02T05:18:05.927293+00:00",
+          "ig_media_id": "weekly_7",
+          "metric_basis": "public_views",
+          "published_at": "2026-10-30T06:17:58.927293+00:00"
+        },
+        {
+          "value": 8,
+          "source": "official",
+          "captured_at": "2026-11-02T05:18:05.927293+00:00",
+          "ig_media_id": "weekly_8",
+          "metric_basis": "public_views",
+          "published_at": "2026-10-30T06:17:57.927293+00:00"
+        },
+        {
+          "value": 9,
+          "source": "official",
+          "captured_at": "2026-11-02T05:18:05.927293+00:00",
+          "ig_media_id": "weekly_9",
+          "metric_basis": "public_views",
+          "published_at": "2026-10-30T06:17:56.927293+00:00"
+        },
+        {
+          "value": 10,
+          "source": "official",
+          "captured_at": "2026-11-02T05:18:05.927293+00:00",
+          "ig_media_id": "weekly_10",
+          "metric_basis": "public_views",
+          "published_at": "2026-10-30T06:17:55.927293+00:00"
+        },
+        {
+          "value": 11,
+          "source": "official",
+          "captured_at": "2026-11-02T05:18:05.927293+00:00",
+          "ig_media_id": "weekly_11",
+          "metric_basis": "public_views",
+          "published_at": "2026-10-30T06:17:54.927293+00:00"
+        },
+        {
+          "value": 12,
+          "source": "official",
+          "captured_at": "2026-11-02T05:18:05.927293+00:00",
+          "ig_media_id": "weekly_12",
+          "metric_basis": "public_views",
+          "published_at": "2026-10-30T06:17:53.927293+00:00"
+        },
+        {
+          "value": 13,
+          "source": "official",
+          "captured_at": "2026-11-02T05:18:05.927293+00:00",
+          "ig_media_id": "weekly_13",
+          "metric_basis": "public_views",
+          "published_at": "2026-10-30T06:17:52.927293+00:00"
+        },
+        {
+          "value": 14,
+          "source": "official",
+          "captured_at": "2026-11-02T05:18:05.927293+00:00",
+          "ig_media_id": "weekly_14",
+          "metric_basis": "public_views",
+          "published_at": "2026-10-30T06:17:51.927293+00:00"
+        },
+        {
+          "value": 15,
+          "source": "official",
+          "captured_at": "2026-11-02T05:18:05.927293+00:00",
+          "ig_media_id": "weekly_15",
+          "metric_basis": "public_views",
+          "published_at": "2026-10-30T06:17:50.927293+00:00"
+        },
+        {
+          "value": 16,
+          "source": "official",
+          "captured_at": "2026-11-02T05:18:05.927293+00:00",
+          "ig_media_id": "weekly_16",
+          "metric_basis": "public_views",
+          "published_at": "2026-10-30T06:17:49.927293+00:00"
+        },
+        {
+          "value": 17,
+          "source": "official",
+          "captured_at": "2026-11-02T05:18:05.927293+00:00",
+          "ig_media_id": "weekly_17",
+          "metric_basis": "public_views",
+          "published_at": "2026-10-30T06:17:48.927293+00:00"
+        },
+        {
+          "value": 18,
+          "source": "official",
+          "captured_at": "2026-11-02T05:18:05.927293+00:00",
+          "ig_media_id": "weekly_18",
+          "metric_basis": "public_views",
+          "published_at": "2026-10-30T06:17:47.927293+00:00"
+        }
+      ],
+      "permalink": null,
+      "like_count": null,
+      "media_type": "VIDEO",
+      "view_count": 6,
+      "captured_at": "2026-11-02T05:18:05.927293+00:00",
+      "ig_media_id": "weekly_6",
+      "metric_basis": "public_views",
+      "published_at": "2026-10-30T06:17:59.927293+00:00",
+      "thumbnail_url": null,
+      "comments_count": null,
+      "media_product_type": "REELS",
+      "baseline_incomplete": false
+    }
+  ],
+  "quota": {
+    "remaining": null,
+    "unlimited": true,
+    "tracked_active": 3,
+    "max_tracked_competitors": -1
+  },
+  "action": "detail",
+  "entries": [],
+  "version": 1,
+  "next_cursor": "eyJmIjogImQ1NzRhZGE2NTRlNzhiNTE0YTUzZTE0YjczOGRlMjE3IiwgImkiOiAid2Vla2x5XzYiLCAiayI6ICIyMDI2LTEwLTMwVDA2OjE3OjU5LjkyNzI5M1oiLCAibyI6ICJmNzcxMDAwMC0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDAwMDEiLCAidiI6IDF9",
+  "capture_timezone": "Asia/Kuwait"
+}

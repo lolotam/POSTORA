@@ -9,6 +9,12 @@ export const REQUIRED_OWNER_JOURNEYS = [
   "Arabic RTL keeps unavailable reach explicit and period controls work with the keyboard",
   "signing out and switching real identities never reuses the previous owner's report",
   "direct report, authenticated public API and MCP preserve the complete stored report",
+  "a credential generation changed during the provider response fences all history writes",
+  ...["facebook", "threads"].flatMap((platform) => [
+    `${platform} saved browser selects accounts and periods, paginates without duplicates and recovers revision conflicts`,
+    `${platform} actual worker refresh preserves saved data and exposes permission and credential failures`,
+    `${platform} real identity switch and direct requests cannot reuse another owner history or cursor`,
+  ]),
 ];
 
 export function assertOwnerJourneyResults(report) {

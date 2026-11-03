@@ -185,7 +185,7 @@ export function assembleCompetitorReport(
   if (isDetail) {
     const entry = raw.entry === null
       ? null
-      : assembleEntry(raw.entry, "entry", media, true, now, baselinePolicy);
+      : assembleEntry(raw.entry, "entry", now, baselinePolicy);
     const detail: CompetitorReportDetail = {
       ...envelope,
       entry,
@@ -194,7 +194,7 @@ export function assembleCompetitorReport(
     report = detail;
   } else {
     const entries = raw.entries.map((row, index) =>
-      assembleEntry(row, `entries[${index}]`, media, false, now, baselinePolicy)
+      assembleEntry(row, `entries[${index}]`, now, baselinePolicy)
     );
     const list: CompetitorReportList = { ...envelope, entries };
     report = list;
@@ -271,8 +271,6 @@ function readCursor(raw: unknown): string | null {
 function assembleEntry(
   raw: RawEntry,
   context: string,
-  media: readonly RawMedia[],
-  inventoryIncluded: boolean,
   now: Date,
   baselinePolicy: BaselinePolicy | null,
 ): CompetitorReportEntry {
@@ -299,9 +297,8 @@ function assembleEntry(
     growth_7d: mapGrowth(growth["7"], 7, baselinePolicy),
     growth_30d: mapGrowth(growth["30"], 30, baselinePolicy),
     weekly: assembleWeeklyInventory({
-      media: inventoryIncluded ? media : [],
+      summary: raw.weekly_inventory,
       coverage,
-      inventoryIncluded,
     }),
   };
 }

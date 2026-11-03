@@ -1,3 +1,4 @@
+import { formatBrandMetric } from "@/lib/brandMetrics";
 import { useTranslation } from "react-i18next";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { Card, CardContent } from "@/components/ui/card";
@@ -72,9 +73,9 @@ export function PostDetailDrawer({ post, isOpen, onClose, platformUsername, onDe
   const stats = [
     { id: "likes", emoji: "❤️", label: t("stats.likes", "Likes"), value: post.likesCount },
     { id: "comments", emoji: "💬", label: t("stats.comments", "Comments"), value: post.commentsCount },
-    { id: "views", emoji: "▶️", label: t("stats.views", "Views"), value: post.videoViewCount || 0 },
-    { id: "shares", emoji: "🔁", label: t("stats.shares", "Shares"), value: post.sharesCount || 0 },
-    { id: "saves", emoji: "🔖", label: t("stats.saves", "Saves"), value: post.savesCount || 0 },
+    { id: "views", emoji: "▶️", label: t("stats.views", "Views"), value: post.videoViewCount },
+    { id: "shares", emoji: "🔁", label: t("stats.shares", "Shares"), value: post.sharesCount },
+    { id: "saves", emoji: "🔖", label: t("stats.saves", "Saves"), value: post.savesCount },
     { id: "score", emoji: "🔥", label: t("stats.score", "Score"), value: post.engagementScore },
   ];
 
@@ -195,7 +196,7 @@ export function PostDetailDrawer({ post, isOpen, onClose, platformUsername, onDe
               <Card key={s.id} className="overflow-hidden">
                 <CardContent className="p-3 text-center">
                   <p className="text-xs text-muted-foreground">{s.emoji} {s.label}</p>
-                  <p className="text-sm font-bold">{s.value.toLocaleString()}</p>
+                  <p className="text-sm font-bold">{formatBrandMetric(s.value)}</p>
                 </CardContent>
               </Card>
             ))}

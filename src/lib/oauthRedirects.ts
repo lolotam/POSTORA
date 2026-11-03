@@ -13,7 +13,8 @@
  *   https://api.postora.cloud/functions/v1/<platform>-oauth
  *
  * Post-callback browser landing:
- *   https://postora.cloud/profiles?connected=<platform>
+ *   <current-application-origin>/profiles?connected=<platform>
+ * The backend must validate the requested origin before signing OAuth state.
  */
 
 const RAW_API_BASE =
@@ -67,5 +68,9 @@ export const OAUTH_CALLBACKS: Record<OAuthPlatformKey, string> =
 
 export function buildReturnUrl(platform: OAuthPlatformKey, extra?: Record<string, string>) {
   const params = new URLSearchParams({ connected: platform, ...(extra ?? {}) });
-  return `${OAUTH_RETURN_URL}?${params.toString()}`;
+  // The server validates this origin before signing state; previews must not
+  // silently hand a local OAuth selection to the production application.
+  const landing = typeof window === "undefined" ? OAUTH_RETURN_URL
+    : new URL("/profiles", window.location.origin).toString();
+  return `${landing}?${params.toString()}`;
 }

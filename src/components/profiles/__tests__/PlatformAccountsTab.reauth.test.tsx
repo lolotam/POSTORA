@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { expect, it, vi } from "vitest";
 import { PlatformAccountsTab } from "../PlatformAccountsTab";
 import type { SocialAccountWithProfile } from "@/hooks/useSocialProfiles";
@@ -65,4 +65,14 @@ it("changes a re-auth account card from Action Required to Active", () => {
   expect(screen.getByText("Active")).toBeInTheDocument();
   expect(screen.queryByText("Action Required")).not.toBeInTheDocument();
   expect(screen.queryByRole("button", { name: "Reconnect" })).not.toBeInTheDocument();
+});
+
+it("lets an active Instagram account renew permissions without pretending its token expired", () => {
+  const onReconnect = vi.fn();
+  render(<PlatformAccountsTab {...props} platform="instagram" onReconnect={onReconnect}
+    accounts={[{ ...account, platform: "instagram", ig_auth_type: "facebook_page", needs_reauth: false, last_refresh_error: null }]} />);
+  expect(screen.getByText("Active")).toBeInTheDocument();
+  expect(screen.queryByText("Action Required")).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "Reconnect" }));
+  expect(onReconnect).toHaveBeenCalledExactlyOnceWith("instagram", account.id);
 });

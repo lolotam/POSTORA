@@ -11,6 +11,17 @@ vi.mock("@/integrations/supabase/client", () => ({
 describe("Instagram report gateway contract", () => {
   beforeEach(() => vi.clearAllMocks());
 
+  it("explicit canonical negotiation preserves a calendar refusal without requesting a legacy report", async () => {
+    vi.mocked(supabase.functions.invoke).mockResolvedValue({ data: null, error: Object.assign(new Error("non-2xx status code"), {
+      context: Response.json({ ok: false, reason: "window_mismatch" }, { status: 409 }),
+    }) });
+    await expect(new SupabaseInstagramInsightsGateway().getAnalyticsReport({ socialAccountId: "acc-123", periodDays: 7 })).rejects.toThrow("window_mismatch");
+    expect(supabase.functions.invoke).toHaveBeenCalledTimes(1);
+    expect(supabase.functions.invoke).toHaveBeenCalledWith("instagram-insights-report", { body: {
+      social_account_id: "acc-123", period_days: 7, analyticsContractVersion: 1, cursor: null,
+    } });
+  });
+
   it("sends a cursor that the actual report handler can decode", async () => {
     const report = reportFixture();
     vi.mocked(supabase.functions.invoke).mockResolvedValue({ data: report, error: null });

@@ -120,10 +120,13 @@ Deno.test("concurrent throttles keep the longest deadline and park the entire re
   let clock = originalNow();
   Date.now = () => clock;
   const finish: ((response: Response) => void)[] = [];
+  let bothStarted: () => void = () => undefined;
+  const started = new Promise<void>((resolve) => { bothStarted = resolve; });
   try {
-    const client = provider(() => new Promise((resolve) => finish.push(resolve)), { budgetMs: 300_000 });
+    const client = provider(() => new Promise((resolve) => { finish.push(resolve); if (finish.length === 2) bothStarted(); }), { budgetMs: 300_000 });
     const firstRead = client.identity();
     const secondRead = client.identity();
+    await started;
     finish[0](Response.json({ error: { code: 4 } }, { status: 429, headers: { "Retry-After": "120" } }));
     const first = await firstRead;
     finish[1](Response.json({ error: { code: 4 } }, { status: 429, headers: { "Retry-After": "10" } }));

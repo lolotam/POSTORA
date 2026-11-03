@@ -73,7 +73,12 @@ interface Probe {
 }
 
 async function capturedProjection(): Promise<Record<string, unknown>> {
-  return JSON.parse(await Deno.readTextFile(CAPTURED_FIXTURE));
+  const captured = JSON.parse(await Deno.readTextFile(CAPTURED_FIXTURE));
+  // This route suite fakes the SQL boundary. Preserve the legacy artifact
+  // and explicitly supply the new aggregate as synthetic boundary data.
+  captured.entry.weekly_inventory = { observed_count: 2,
+    interval_start: "2026-10-22T00:57:39.702828+00:00", interval_end: "2026-10-29T00:57:39.702828+00:00" };
+  return captured;
 }
 
 function newProbe(): Probe {
@@ -307,7 +312,7 @@ Deno.test("the actual registered route reads as the verified caller", async () =
   // The owner RPC ran on the PUBLIC key, with the caller's own bearer.
   assertEquals(probe.rpcCalls.length, 1);
   const call = probe.rpcCalls[0]!;
-  assertEquals(call.name, "read_own_competitor_tracking_report");
+  assertEquals(call.name, "read_own_competitor_tracking_report_v2");
   assertEquals(call.key, ANON_KEY);
   assertEquals(call.authorization, `Bearer ${BEARER}`);
   assertEquals(call.args.p_request, {
@@ -469,7 +474,7 @@ Deno.test("a copy that swaps the caller identity is refused and never reads", as
 
   // The statement really ran, with the SWAPPED identity, and the database
   // refused it. The endpoint never reports a read.
-  const call = probe.rpcCalls.find((entry) => entry.name === "read_own_competitor_tracking_report");
+  const call = probe.rpcCalls.find((entry) => entry.name === "read_own_competitor_tracking_report_v2");
   assert(call !== undefined);
   assertEquals(call.authorization, "Bearer synthetic-anon-key");
 

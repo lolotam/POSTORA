@@ -1,6 +1,6 @@
 import { ThreadsInsightsProvider } from "../threads-insights/provider.ts";
 import type { AnalyticsDayBucket } from "../_shared/analyticsCalendar.ts";
-import { captureCell, collectionPage, collectionPost, requiredReply, type CollectionCells, type CollectionProvider } from "./collectionProvider.ts";
+import { captureCell, captureRefusal, collectionPage, collectionPost, requiredReply, type CollectionCells, type CollectionProvider } from "./collectionProvider.ts";
 
 export function threadsCollection(provider: ThreadsInsightsProvider, userId: string, latestDay: AnalyticsDayBucket): CollectionProvider {
   return {
@@ -20,7 +20,7 @@ export function threadsCollection(provider: ThreadsInsightsProvider, userId: str
           ...(capture.kind === "account_day" ? { metricType: "time_series" as const } : {}) });
       const cells: CollectionCells = {};
       for (const definition of definitions) cells[definition.key] = captureCell(reply, definition, capture);
-      return cells;
+      return { cells, refusal: captureRefusal(reply) };
     },
   };
 }

@@ -2,6 +2,8 @@
 
 Status: schema implementation and isolated proofs prepared for review. C2 acceptance remains open: inactive collection/retention cron definitions await C3's reviewed worker/HTTP contract. This record does not approve migration merge/application, production credentials, collection, retention, schedules or pilots. Full Instagram G-X remains required.
 
+**Later source-merge receipt:** on the owner's explicit follow-up request for final merging, PR #345 merged at `2026-11-01T16:27:10Z` as `781111a8c8b5bc1296f8c82bbe575f2498b82748`, with all reported non-skipped checks successful on head `4e8e7c0fe71f9b341ebae61c4616e3dd79e7e9e9`. CodeRabbit was skipped on the draft; that is not represented as an independent review. This source merge does not apply SQL. Application, deployed-catalog verification, dependent runtime, collection and schedule decisions remain separate. The earlier status/proof below describes preparation before this source merge.
+
 ## Delivered behavior
 
 `20261101130000_meta_owned_analytics_history.sql` adds 26 platform-owned history, job, operation, checkpoint, capture, permission and report-state tables, plus their constrained service RPCs and private helpers. Composite ownership/platform keys prevent cross-account attachments even under the service role. Raw tables are unavailable to browsers; direct service mutations are revoked in favor of fenced writers. New collection and retention switches remain false and account allow-lists empty.

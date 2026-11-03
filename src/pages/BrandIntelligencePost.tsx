@@ -1,3 +1,4 @@
+import { formatBrandMetric } from "@/lib/brandMetrics";
 import { useState, useEffect, useCallback } from "react";
 import { useTranslation } from "react-i18next";
 import { useNavigate, useLocation, useParams } from "react-router-dom";
@@ -188,9 +189,9 @@ export default function BrandIntelligencePost() {
   const stats = [
     { id: "likes", icon: Heart, label: t("stats.likes", "Likes"), value: post.likesCount, color: "text-red-500" },
     { id: "comments", icon: MessageCircle, label: t("stats.comments", "Comments"), value: post.commentsCount, color: "text-blue-500" },
-    { id: "views", icon: Eye, label: t("stats.views", "Views"), value: post.videoViewCount || 0, color: "text-green-500" },
-    { id: "shares", icon: Share2, label: t("stats.shares", "Shares"), value: post.sharesCount || 0, color: "text-foreground" },
-    { id: "saves", icon: Bookmark, label: t("stats.saves", "Saves"), value: post.savesCount || 0, color: "text-amber-500" },
+    { id: "views", icon: Eye, label: t("stats.views", "Views"), value: post.videoViewCount, color: "text-green-500" },
+    { id: "shares", icon: Share2, label: t("stats.shares", "Shares"), value: post.sharesCount, color: "text-foreground" },
+    { id: "saves", icon: Bookmark, label: t("stats.saves", "Saves"), value: post.savesCount, color: "text-amber-500" },
     { id: "score", icon: TrendingUp, label: t("stats.score", "Score"), value: post.engagementScore, color: "text-foreground" },
   ];
 
@@ -321,7 +322,7 @@ export default function BrandIntelligencePost() {
                 <Card key={id}>
                   <CardContent className="p-3 text-center">
                     <Icon className={`w-4 h-4 mx-auto mb-1 ${color}`} />
-                    <p className="text-sm font-bold">{value.toLocaleString()}</p>
+                    <p className="text-sm font-bold">{formatBrandMetric(value)}</p>
                     <p className="text-[10px] text-muted-foreground">{label}</p>
                   </CardContent>
                 </Card>

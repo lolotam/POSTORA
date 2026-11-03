@@ -1,0 +1,272 @@
+{
+  "formatVersion": 1,
+  "scope": "local-meta-analytics-review-followups",
+  "recordedAt": "2026-11-02T02:20:33.160572+00:00",
+  "candidate": "5cf3b5bc5412a172f1b3d91d0bff2ba52b2be60e",
+  "tree": "528e610e26c815b9a7b860437ee71da95cdc4c37",
+  "productionMutated": false,
+  "canonicalGXAccepted": false,
+  "releaseReady": false,
+  "productionActivationAuthorized": false,
+  "checks": {
+    "savedAnalyticsUI": {
+      "originalSource": {
+        "passed": 17,
+        "failed": 3,
+        "scenarioFailures": [
+          "partial post ranking",
+          "unavailable collection rendered as an empty period",
+          "load-more during report refresh"
+        ]
+      },
+      "targetedFrontend": {
+        "files": 2,
+        "passed": 26,
+        "failed": 0
+      },
+      "scopedEslint": {
+        "exit": 0
+      },
+      "architectureGuard": "UI hook moved from application, sole production consumer updated; application retains framework-neutral ports"
+    },
+    "savedAnalyticsUICandidate": "2661dce9ff1c61a1ae07205ab6d3cbc55eecce1a",
+    "discovery": {
+      "source": "3c59f38989fd5d90fca2f8ba0e93e080f6bba5db",
+      "denoTests": 20,
+      "denoSteps": 31,
+      "hookTests": 13,
+      "result": "passed"
+    },
+    "discoveryBodyCleanup": {
+      "source": "076d323c52a51e701dc41f07a4954fa7d25aea5e",
+      "affectedDenoTests": 13,
+      "affectedDenoSteps": 32,
+      "result": "passed"
+    },
+    "checker": {
+      "source": "5b2fb9ca1a8d1941836b4a5f68582d9d9c8b02c7",
+      "integratedSource": "5cf3b5bc5412a172f1b3d91d0bff2ba52b2be60e",
+      "gitBlobsAndExecutionWorktreeBytesMatch": true,
+      "gitAndExecutionLineEndingsDiffer": true,
+      "packageInputsByteIdentical": true,
+      "fullTests": 97,
+      "passed": 97,
+      "failed": 0,
+      "skipped": 0,
+      "cancelled": 0
+    },
+    "frontendTypecheck": {
+      "applicationInputCandidate": "076d323c52a51e701dc41f07a4954fa7d25aea5e",
+      "exit": 0,
+      "inputsByteIdenticalAtCombinedCandidate": true
+    },
+    "frontendBuild": {
+      "applicationInputCandidate": "076d323c52a51e701dc41f07a4954fa7d25aea5e",
+      "exit": 0,
+      "inputsByteIdenticalAtCombinedCandidate": true
+    },
+    "immutableLintI18n": {
+      "base": "2b04837163f81cb4220c36e6d393d4ac27afd68a",
+      "head": "5cf3b5bc5412a172f1b3d91d0bff2ba52b2be60e",
+      "result": "NO REGRESSIONS",
+      "historicalDebtRemains": true
+    },
+    "graphUpdate": {
+      "exit": 0
+    },
+    "actualCanonicalGate": {
+      "conclusion": "failed",
+      "releaseReady": false,
+      "failures": [
+        {
+          "code": "migration_version_collision",
+          "detail": "20260825120000 at 5cf3b5bc5412a172f1b3d91d0bff2ba52b2be60e"
+        },
+        {
+          "code": "migration_reserved_prefix_violation",
+          "detail": "supabase/migrations/20260825120000_inbound_media_understanding.sql at 5cf3b5bc5412a172f1b3d91d0bff2ba52b2be60e"
+        },
+        {
+          "code": "migration_version_collision",
+          "detail": "20260828190000 at 5cf3b5bc5412a172f1b3d91d0bff2ba52b2be60e"
+        },
+        {
+          "code": "migration_reserved_prefix_violation",
+          "detail": "supabase/migrations/20260828190000_clear_false_positive_meta_reauth.sql at 5cf3b5bc5412a172f1b3d91d0bff2ba52b2be60e"
+        },
+        {
+          "code": "migration_version_collision",
+          "detail": "20260904120000 at 5cf3b5bc5412a172f1b3d91d0bff2ba52b2be60e"
+        },
+        {
+          "code": "migration_reserved_prefix_violation",
+          "detail": "supabase/migrations/20260904120000_social_contacts.sql at 5cf3b5bc5412a172f1b3d91d0bff2ba52b2be60e"
+        },
+        {
+          "code": "migration_version_collision",
+          "detail": "20260906120000 at 5cf3b5bc5412a172f1b3d91d0bff2ba52b2be60e"
+        },
+        {
+          "code": "migration_reserved_prefix_violation",
+          "detail": "supabase/migrations/20260906120000_whatsapp_evolution_sync_outcome.sql at 5cf3b5bc5412a172f1b3d91d0bff2ba52b2be60e"
+        },
+        {
+          "code": "required_source_missing",
+          "detail": ".github/workflows/instagram-migration-gate.yml"
+        },
+        {
+          "code": "required_source_missing",
+          "detail": ".github/CODEOWNERS"
+        },
+        {
+          "code": "required_source_missing",
+          "detail": "supabase/functions/n8n-api/instagramReleaseContract.test.ts"
+        },
+        {
+          "code": "required_source_missing",
+          "detail": "docs/journeys/2026-10-26-instagram-insights-and-competitor-tracking.md"
+        },
+        {
+          "code": "required_source_missing",
+          "detail": "docs/runbooks/instagram-insights-release.md"
+        },
+        {
+          "code": "evidence_missing",
+          "detail": "Supply the external redacted Task 11 per-run ledger; source inventory is not executed proof"
+        }
+      ]
+    }
+  },
+  "sources": {
+    "ui": [
+      {
+        "path": "src/features/analytics-contract/ui/useSavedAnalytics.ts",
+        "sha256": "13d45c8c4b36dfd72b81ad4684d04287a877aa37581831498e8e48888b7796c7"
+      },
+      {
+        "path": "src/features/analytics-contract/ui/OwnedAnalyticsScreen.tsx",
+        "sha256": "dd277cb1bef959f2a014d456a7f8bab2c0b269ecd29a0b1dbde5076f8badf427"
+      },
+      {
+        "path": "src/features/analytics-contract/ui/SavedAnalyticsReport.tsx",
+        "sha256": "f26aa24e00a98980880a9153b115344afd0bdf73d9fa459e8e3db2e18277009f"
+      },
+      {
+        "path": "src/features/analytics-contract/domain/mergeSavedAnalyticsPages.ts",
+        "sha256": "f019a59a7021feb4cd9f39441014e3502d3ea84d5d722d763689b47e122e6188"
+      },
+      {
+        "path": "src/features/analytics-contract/ui/SavedAnalyticsReport.test.tsx",
+        "sha256": "e0cdde26897453c3e63efd7561dd95170105c612a531fc79c475460f87880823"
+      }
+    ],
+    "checker": [
+      {
+        "path": "scripts/check-instagram-release-gates.mjs",
+        "gitBlob": "0ad4469240881c1d0bf15b6b7e3d90477769fdf3",
+        "gitSha256": "b1e7155276db7e9585e07b328f95a1f33b6f490063a07a28e9449f80a838def7",
+        "executedWorkingSha256": "5ff9b5fd2791d7ce96a56658d4abea7fb06fbd9232e8de435ef6eb48246b3064",
+        "executionLineEndings": "CRLF",
+        "gitLineEndings": "LF",
+        "integratedWorkingBytesMatchExecution": true,
+        "onlyDifferenceFromGitIsLineEndings": true
+      },
+      {
+        "path": "scripts/check-instagram-release-gates.test.mjs",
+        "gitBlob": "07aa32874425cbd016d5068bcee223bab73cf4d1",
+        "gitSha256": "6154fa1c3f44333a659a99dded48b44d7b149c6f5b537134f3201ed198e7b4a1",
+        "executedWorkingSha256": "a76d124f71a4206a9a9fd59b399e3bc8f580c4fcfaab08de4384e5cd526c39d4",
+        "executionLineEndings": "CRLF",
+        "gitLineEndings": "LF",
+        "integratedWorkingBytesMatchExecution": true,
+        "onlyDifferenceFromGitIsLineEndings": true
+      }
+    ]
+  },
+  "limits": [
+    "targeted local proof, not complete independent review",
+    "earlier browser journeys not rerun on the changed analytics screens",
+    "checker self-tests used CRLF working files; canonical Git blobs use LF, with both hashes recorded",
+    "self-authored artifacts do not establish trusted execution origin",
+    "no production SQL, runtime writes, collection activation or schedules",
+    "MCP/n8n source and deployment packet remain in separate PR348"
+  ],
+  "artifacts": [
+    {
+      "path": ".tmp/saved-ui-review-proof.json",
+      "sha256": "46872b7cfdf49064b517eb34dc02e527a4b042a12baf561e6918d106fdea484b"
+    },
+    {
+      "path": ".tmp/saved-ui-review-before.log",
+      "sha256": "63142abf3ac3dc7afeafc437795fcc065f62bc557b04ea827f9cb8a9ff53da58"
+    },
+    {
+      "path": ".tmp/saved-ui-review-after.log",
+      "sha256": "c0deb1c87696303e8d2b712cae00619e16a2f46b66b196fd40955c4d25495d60"
+    },
+    {
+      "path": ".tmp/saved-ui-review-eslint.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": ".tmp/discovery-review-source-manifest.json",
+      "sha256": "1db06be35a798191428ee0ab4ab5089204dbd6c4c55f53a3d7063715f2f824a1"
+    },
+    {
+      "path": ".tmp/discovery-review-red-deno.log",
+      "sha256": "217d9ac40e50762299f77b08960a8bd14ae0d74db0a10c65af5f916ea07715dd"
+    },
+    {
+      "path": ".tmp/discovery-review-green-deno.log",
+      "sha256": "d5e2c8cffcc7b19c30d5228317b9d236c388d14c6e6d049d4e78dc97b7b52da5"
+    },
+    {
+      "path": ".tmp/discovery-review-red-hook.log",
+      "sha256": "0d02becdf03a99576abf5876a27fede0d88acfb58004cdfa80e80304cb3ce623"
+    },
+    {
+      "path": ".tmp/discovery-review-green-hook.log",
+      "sha256": "9958952e2b0ebce8a198879214a781e4b00537e7044c8305c3589a91fd47d699"
+    },
+    {
+      "path": ".tmp/discovery-review-cancel-red-deno.log",
+      "sha256": "eb3a625252f493e1b365a1a59b520a1ea85f840d36087ba3943adcbdce26ff16"
+    },
+    {
+      "path": ".tmp/discovery-review-cancel-green-deno.log",
+      "sha256": "999036068e560899ab15a679b33a07fd3fc9fe66e964e4e02fee9dc06a944cb5"
+    },
+    {
+      "path": ".tmp/discovery-review-cancel-eslint.json",
+      "sha256": "8960bda2dd46f4e7b9135e0d46bb1c3e1a2ddbaf1033c767883b92c0da40c496"
+    },
+    {
+      "path": ".tmp/checker-trust-boundaries-proof.json",
+      "sha256": "16ed4481fc4f9d807a8520cabd3233c45a09d2192124efdc33ec3840d64e4745"
+    },
+    {
+      "path": ".tmp/checker-trust-boundaries-guard-review.md",
+      "sha256": "6d36963cc3a5a717c5552a33961609e0a256470a065d8d64c4d83e4b8893b224"
+    },
+    {
+      "path": ".tmp/meta-review-combined-typecheck.log",
+      "sha256": "82b5202dbc205db5afc9568372d1f11e63c1105117ebdc791a50680ece23bccf"
+    },
+    {
+      "path": ".tmp/meta-review-combined-build.log",
+      "sha256": "57b9524c93091ad30a06cee2a5cd3aca7ab5d487d700214fd63ecdd4b0f61900"
+    },
+    {
+      "path": ".tmp/meta-review-5cf3-immutable-lint.json",
+      "sha256": "fb58a3a06c7a880be2d4d8c193dd12ad90eaa3e132044acf2d555d9b7cf09cea"
+    },
+    {
+      "path": ".tmp/canonical-gx-5cf3.json",
+      "sha256": "097805bbf9dc8df273eade8bcb2d424ce3340d72041b54da128380c6df8e8964"
+    },
+    {
+      "path": ".tmp/meta-review-5cf3-graphify.log",
+      "sha256": "eb5b89388cd4d3fbaf95e07b3f689cff53b1ca4b5c90faf27cc0c24914903a99"
+    }
+  ]
+}

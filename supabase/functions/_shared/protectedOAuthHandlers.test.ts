@@ -341,6 +341,15 @@ function defaultRpcResult(name: string, args: Record<string, unknown>, current: 
       return pickerResult({ flow: "instagram_page_linked" });
     case "commit_meta_oauth_selection":
       return receiptForAttempt(current, payload);
+    case "write_instagram_account_capability":
+      return {
+        social_account_id: args.p_social_account_id, capability_present: true, login_kind: "page_linked",
+        permission_read_state: payload.permission_read_state, scopes_authoritative: payload.permission_read_state === "ok",
+        granted_scopes: payload.granted_scopes ?? [], scopes_read_at: payload.scopes_read_at ?? null,
+        last_read_failed_at: payload.read_failed_at ?? null, last_read_error_code: payload.read_error_code ?? null,
+        credential_generation: payload.expected_credential_generation, credential_updated_at: "2026-10-28T10:05:00Z",
+        has_protected_credential: false,
+      };
     default:
       return null;
   }
@@ -409,6 +418,9 @@ function installClient(current: Probe) {
       this.one = true;
       return this;
     }
+    abortSignal(_signal: AbortSignal) {
+      return this;
+    }
 
     then(ok: (value: unknown) => unknown, bad?: (reason: unknown) => unknown) {
       return Promise.resolve().then(() => this.execute()).then(ok, bad);
@@ -417,6 +429,7 @@ function installClient(current: Probe) {
     execute() {
       if (this.op !== "select") {
         current.mutations.push({ table: this.table, op: this.op });
+        if (current.failingTables.includes(this.table)) return { data: null, error: { message: RAW_DRIVER_TEXT } };
         return { data: this.op === "insert" ? { id: "synthetic-inserted" } : null, error: null };
       }
       current.tableReads.push(this.table);
@@ -446,7 +459,8 @@ function installClient(current: Probe) {
 
   return {
     from: (table: string) => new Query(table),
-    rpc: async (name: string, args: Record<string, unknown>) => {
+    rpc: (name: string, args: Record<string, unknown>) => {
+      const operation = (async () => {
       current.rpcCalls.push({ name, args });
       if (current.rpcMode === "throw") throw new Error(`${RAW_DRIVER_TEXT}`);
       if (current.rpcMode === "malformed") return { data: { unexpected: true }, error: null };
@@ -459,6 +473,8 @@ function installClient(current: Probe) {
       const override = current.rpcOverrides[name];
       const data = override !== undefined ? override : defaultRpcResult(name, args, current);
       return { data, error: null };
+      })();
+      return Object.assign(operation, { abortSignal: (_signal: AbortSignal) => operation });
     },
     auth: {
       getClaims: async () => ({ data: { claims: { sub: current.userId } }, error: null }),
@@ -1985,6 +2001,41 @@ routeTest("a long-lived response without a lifetime omits the expiry", async () 
   assertEquals(stash.user_token, "long-lived-token");
   assertEquals(Object.prototype.hasOwnProperty.call(stash, "user_token_expires_in"), false);
   assertEquals(stash.user_token_expires_in, undefined);
+});
+
+routeTest("a committed Page-linked selection establishes current permission evidence and never rolls back on audit failure", async () => {
+  for (const auditFails of [false, true]) {
+    const current = probe({
+      attemptRows: [{ id: ATTEMPT_ID, user_id: USER_ID, flow: "instagram_page_linked" }],
+      failingTables: auditFails ? ["system_logs"] : [],
+      rpcOverrides: { read_facebook_user_account_credential: {
+        found: true, social_account_id: ACCOUNT_ID, platform: "instagram", credential_id: "cred-1",
+        credential_kind: "facebook_user", token: PROVIDER_TOKEN, token_expires_at: null, revision: 1,
+        capability_generation: 2, connection_version: 1,
+      } },
+      providerFetch: (endpoint) => {
+        const url = new URL(endpoint);
+        assertEquals(url.origin, "https://graph.facebook.com");
+        assertEquals(url.pathname, "/v22.0/me/permissions");
+        assertEquals(url.searchParams.get("access_token"), PROVIDER_TOKEN);
+        return { status: 200, body: { data: [{ permission: "instagram_manage_insights", status: "granted" }] } };
+      },
+    });
+    const handler = await loadHandler("instagram-business-oauth/index.ts", current);
+    const result = await callJson(handler, "https://synthetic.invalid/functions/v1/instagram-business-oauth", {
+      action: "store_ig_account", attempt_id: ATTEMPT_ID, selection_key: "instagram_page_linked:ig:ig-1",
+    });
+    assertEquals(result.status, 200);
+    assertEquals(result.body.success, true);
+    assertEquals(result.body.permissions, auditFails ? { status: "unconfirmed" } : { status: "ok", insights_granted: true });
+    assertEquals(JSON.stringify(result.body).includes(PROVIDER_TOKEN), false);
+    const names = rpcNames(current);
+    assertEquals(names.indexOf("commit_meta_oauth_selection") < names.indexOf("read_facebook_user_account_credential"), true);
+    assertEquals(names.indexOf("read_facebook_user_account_credential") < names.indexOf("write_instagram_account_capability"), true);
+    assertEquals(names.filter((name) => name === "commit_meta_oauth_selection").length, 1);
+    assertEquals(current.mutations, [{ table: "system_logs", op: "insert" }]);
+    assertEquals(providerUrls(current).length, 1);
+  }
 });
 
 routeTest("a consumed page-linked stash replays from the attempt and key", async () => {

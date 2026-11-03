@@ -1265,9 +1265,11 @@ export function createClient(url, key, options) {
         const answer = rows(table, filters);
         return Array.isArray(answer.data) ? { ...answer, data: answer.data[0] ?? null } : answer;
       },
-      async insert(row) {
+      insert(row) {
         probe.inserts.push({ table, row, clientKey: key });
-        return { data: null, error: null };
+        const pending = Promise.resolve({ data: null, error: null });
+        pending.abortSignal = () => pending;
+        return pending;
       },
       then(resolve, reject) {
         probe.reads.push({ table, filters });
@@ -1639,6 +1641,8 @@ Deno.test("the stored report stays readable through the existing report route", 
       captured_at: "2026-10-20T13:00:00+00:00",
       captured_on: CAPTURED_ON,
       capture_timezone: "Asia/Kuwait",
+      media_product_type: "REELS",
+      media_type: "VIDEO",
       status: "ok",
       views: 200,
       reach: 100,
@@ -1677,6 +1681,13 @@ Deno.test("the stored report stays readable through the existing report route", 
     data: { ...STATUS_PROJECTION.data, reason_code: "throttled" },
   };
 
+  probe.rpc["read_instagram_owner_report_snapshot"] = {
+    data: { account_id: ACCOUNT_B, owner_id: OWNER_ID,
+      media: probe.tables["ig_media_insight_snapshots"], daily: probe.tables["ig_account_insight_daily"],
+      profiles: probe.tables["ig_account_profile_observations"], collection: null },
+    error: null,
+  };
+
   const handler = await loadReportRoute(probe);
   const response = await handler(
     new Request(
@@ -1690,4 +1701,6 @@ Deno.test("the stored report stays readable through the existing report route", 
   assertEquals(response.status, 200);
   const payload = await body(response);
   assertEquals(payload.scope === undefined, false);
+  assertEquals((payload.scope as { socialAccountId: string }).socialAccountId, ACCOUNT_B);
+  assertEquals(probe.rpcCalls.some((call) => call.name === "read_instagram_owner_report_snapshot"), true);
 });

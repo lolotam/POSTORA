@@ -1,0 +1,248 @@
+{
+  "version": 1,
+  "recordedAt": "2026-11-02T06:27:52.827Z",
+  "source": "6d109d4ca35d3fb024a16b99e47f24a92f814b1f",
+  "tree": "da053feb743e526299e4d34bc6b2c5690472873b",
+  "executionCheckout": "F:/Dev/Worktrees/Postora_new/canonical-discovery-538ef365",
+  "evidenceAuthority": "Author-recorded local execution, not independent G-X acceptance or production approval",
+  "scope": "Whole-window SQL observed-count projection, ownership and list/detail/continuation parity; no display-page-derived count",
+  "inputs": [
+    {
+      "path": "supabase/migrations/20261102090000_competitor_weekly_inventory_projection.sql",
+      "gitBlob": "19f48adb29cdee68322bd47b4bf86f183be1c639",
+      "gitSha256": "2a8f56d3b0e051ffc94a85e18379d69003756ba5421e5c600665c3a448adf429",
+      "executionSha256": "0c35747148e683a0ff9fd8ce40e07889101113f4fd566aa54627587f11c940d3",
+      "normalizedExecutionSha256": "2a8f56d3b0e051ffc94a85e18379d69003756ba5421e5c600665c3a448adf429"
+    },
+    {
+      "path": "supabase/tests/competitor_weekly_inventory_projection.sql",
+      "gitBlob": "fbaba4480bcce2c77212c72cd99d827c3775fd2c",
+      "gitSha256": "dc8f506dc96ff5ca213f4c1ce83708f9e70dbf534373ccd24e913609ee391d38",
+      "executionSha256": "7250eea9b5ca932cb288861b6a3ffc35c5deac8848df00da58fc07696b6e988c",
+      "normalizedExecutionSha256": "dc8f506dc96ff5ca213f4c1ce83708f9e70dbf534373ccd24e913609ee391d38"
+    },
+    {
+      "path": "scripts/db-harness.sh",
+      "gitBlob": "8e86e240cd56566fa504ed7fa11ddd26779ad862",
+      "gitSha256": "d6156468e26a15f028e4611ea8d2cb86e78e839ce4f98a984190e0973f1388c5",
+      "executionSha256": "d6156468e26a15f028e4611ea8d2cb86e78e839ce4f98a984190e0973f1388c5",
+      "normalizedExecutionSha256": "d6156468e26a15f028e4611ea8d2cb86e78e839ce4f98a984190e0973f1388c5"
+    },
+    {
+      "path": "supabase/functions/competitor-tracking-report/assemble.ts",
+      "gitBlob": "cea90105147f59354f974aeee0d944ba8f65ed4d",
+      "gitSha256": "9f517a2aa6bb41c490eec5169c96e201972b2accab709d711eae3c130b4875e8",
+      "executionSha256": "de61b748c288700d7733ddc38f29c4f58d181c760f2d2da5cf372bffca55d16b",
+      "normalizedExecutionSha256": "9f517a2aa6bb41c490eec5169c96e201972b2accab709d711eae3c130b4875e8"
+    },
+    {
+      "path": "supabase/functions/competitor-tracking-report/contracts.ts",
+      "gitBlob": "762dab435ca78f33f3f68337a01b8a0b80067f7d",
+      "gitSha256": "795ec63955fa3fbaf2c3bd566e341e2591969bd79e4c523859461bfbf7495021",
+      "executionSha256": "2870863141eb77cc70b12141e44f6fdbb3f16abd77142c3a1cc827a8f24b1878",
+      "normalizedExecutionSha256": "795ec63955fa3fbaf2c3bd566e341e2591969bd79e4c523859461bfbf7495021"
+    },
+    {
+      "path": "supabase/functions/competitor-tracking-report/reportStore.ts",
+      "gitBlob": "8d2082e36a03dece84135cabe28345773479875a",
+      "gitSha256": "70bda8304844635c9fb1904250c14dfa9a02f7a22bbb700b51b4d1b8dd86bb3a",
+      "executionSha256": "caf47c679fc5054db0b952a1fdf4695e857ce2921a89007c2f6cea8efe10c6d6",
+      "normalizedExecutionSha256": "70bda8304844635c9fb1904250c14dfa9a02f7a22bbb700b51b4d1b8dd86bb3a"
+    },
+    {
+      "path": "supabase/functions/competitor-tracking-report/weeklyInventory.ts",
+      "gitBlob": "149de1fe5542b4af47e29a9e96848f9e9206e054",
+      "gitSha256": "eeafb4b98aff76d395a040cc6b0d2c08ec208471d346dfd715d8226221798a98",
+      "executionSha256": "2c3e19f6b2fe6125a4fb9a8ea7555460a70f571459bf3255d8dc2b40a5ecd4e1",
+      "normalizedExecutionSha256": "eeafb4b98aff76d395a040cc6b0d2c08ec208471d346dfd715d8226221798a98"
+    },
+    {
+      "path": "e2e/instagram-release.spec.ts",
+      "gitBlob": "9f36ffaf6e45167c8b07ae3a231a68890033dd8b",
+      "gitSha256": "b9fd55bf74ce5033195be76c8bef398e6c2ae8267ce895d871582a5e3b2bfbfd",
+      "executionSha256": "0fefc23eb7fc89caeae35757bf87ea3d96b469ecd1e72d7d5a27e3449d8ff484",
+      "normalizedExecutionSha256": "b9fd55bf74ce5033195be76c8bef398e6c2ae8267ce895d871582a5e3b2bfbfd"
+    }
+  ],
+  "laterTestSource": "cffff00423117a6c2787fad5e4bc177a4e9310de",
+  "laterInputs": [
+    {
+      "path": "supabase/functions/competitor-tracking-report/assemble.test.ts",
+      "gitBlob": "e198ee18eaaf5d99e1be274126aefbcc33512805",
+      "sha256": "18dd71ad8ebd9af9c92854131dddc491031c81602c75ba1a1800fd30cefb1a4d"
+    },
+    {
+      "path": "supabase/functions/competitor-tracking-report/fixtures/captured-weekly-report-v2.json",
+      "gitBlob": "e357c3f059071dc89932cff74fb07bf74ae07d52",
+      "sha256": "0fb8e280a8026a8a84461ba9cb1d8dcd572170ba74621a45a95fea99884a4ba4"
+    }
+  ],
+  "canonical": {
+    "startTime": "2026-11-02T06:18:09.814Z",
+    "duration": 101614.801,
+    "expected": 7,
+    "skipped": 0,
+    "unexpected": 0,
+    "flaky": 0
+  },
+  "denoReportSuite": {
+    "atInitialImplementation": 120,
+    "withActualSqlCapturedFixture": 121
+  },
+  "databasePreparation": {
+    "directory": "F:/Dev/Temp/postora-owner-release-prepare-P5nALF",
+    "newerMigrations": 152,
+    "baselineSqlSuites": 70,
+    "isolatedSqlSuites": 1
+  },
+  "actualSqlProjection": {
+    "distinctObservedCount": 33,
+    "displayedMedia": 10,
+    "continuation": true,
+    "assertions": [
+      "deduplicate repeated daily snapshots",
+      "inclusive window boundaries",
+      "exclude failed/future/foreign observations",
+      "list/first-detail/continuation equality",
+      "no-coverage stored anchor",
+      "empty observed inventory",
+      "old RPC projection compatibility",
+      "owner-derived grants and foreign refusal"
+    ],
+    "captureMetadata": {
+      "source": "6d109d4ca35d3fb024a16b99e47f24a92f814b1f",
+      "sqlBlob": "fbaba4480bcce2c77212c72cd99d827c3775fd2c",
+      "stdoutSha256": "7d9ed2a5b776b2ee297ee120b22d5af6df612c9505dcc8698ae3e072f1cbfe5d",
+      "fixtureSha256": "0fb8e280a8026a8a84461ba9cb1d8dcd572170ba74621a45a95fea99884a4ba4",
+      "note": "Actual disposable SQL output. Original shell-format preflight had a quoting error; prepared fixture identity was independently rechecked via full Docker inspect JSON. No production access or release authority."
+    }
+  },
+  "checks": {
+    "finalScopedEslint": "passed",
+    "denoComposition": "passed",
+    "immutableLintI18n": {
+      "base": "eaf720e7ef20d577cc24d446e2cf09e43f3a90ea",
+      "head": "cffff00423117a6c2787fad5e4bc177a4e9310de",
+      "result": "NO REGRESSIONS",
+      "historicalDebtRemains": true
+    },
+    "frontendBuildAndTypecheck": "Not rerun: frontend source/DTO unchanged; prior proof retains its source identity"
+  },
+  "retainedFailures": [
+    "Original code returned zero instead of the declared whole-window count 31; a separate initial cached-only attempt lacked the std assertion dependency and is not the product regression",
+    "Initial full Deno directory invocation lacked temporary-write permissions for the existing route-copy suite; the appropriately bounded permission rerun passed",
+    "Route-copy assertions initially expected the former RPC name; updated to the explicit v2 dependency without weakening identity or broken-route negative controls"
+  ],
+  "state": {
+    "users": 1,
+    "namespace_settings": 0,
+    "scrape_sessions": 0,
+    "scrape_cache": 0,
+    "collection_jobs": 0,
+    "profiles": 0,
+    "media": 0,
+    "coverage": 0,
+    "fixture_oauth_clients": 0,
+    "active_cron": 0,
+    "cron_launcher": "off",
+    "authenticated_execute": true,
+    "anon_execute": false,
+    "service_execute": false,
+    "httpListenersStopped": true
+  },
+  "artifacts": [
+    {
+      "path": ".tmp/weekly-count-before.log",
+      "sha256": "7fa22f653540c61b6f4eaf52f2e4f83c0febb8e1e9d8ea7c419566f52a029ed2"
+    },
+    {
+      "path": ".tmp/weekly-count-before-prepared.log",
+      "sha256": "c0473d169e770438d1e36536f3a9a6d31be2fed4d1105a13ef37146c48b7cbdd"
+    },
+    {
+      "path": ".tmp/weekly-count-unit-after.log",
+      "sha256": "9e622228bcbdaf9ef8c2262a728267177fcd96ae7e84b5d61874eee4e59db972"
+    },
+    {
+      "path": ".tmp/weekly-report-deno-verified.log",
+      "sha256": "d46a95a1b7855b24b4b5ce043f4a1cf2c66c2b9512a29e6e905d81e6f5bd5e7c"
+    },
+    {
+      "path": ".tmp/weekly-report-deno-composition.log",
+      "sha256": "fab1b584b8f406e2e9f8d417ea65ec861995f3816e30b6294d046816b96d02a1"
+    },
+    {
+      "path": ".tmp/weekly-report-deno-composition-final.log",
+      "sha256": "7709cf44d7d4910354b320dea3c03e6ad64573705594bf51a1618483b0a24d5e"
+    },
+    {
+      "path": ".tmp/weekly-report-deno-sql-fixture.log",
+      "sha256": "049e68e17a0d81824a7caed9dc2acecf00c3143a124129e40aea5eb2a1647379"
+    },
+    {
+      "path": ".tmp/weekly-final-eslint.log",
+      "sha256": "2157a5f3c12477857845842650bbd669c004666db09a84e463dc354ce2c5a27f"
+    },
+    {
+      "path": ".tmp/weekly-6d109d4c-prepare.log",
+      "sha256": "f4d69cbe2bab53e5e534e817b88ddfea0d0ebb9da003f89d0460696f3a8637c7"
+    },
+    {
+      "path": ".tmp/weekly-6d109d4c-deno-check.log",
+      "sha256": "fa236573c48c4a6c9c0f821bbdc1b66bb0d1f800ee46c7d4aeef838fad0c143b"
+    },
+    {
+      "path": ".tmp/weekly-6d109d4c-sql-capture.log",
+      "sha256": "7d9ed2a5b776b2ee297ee120b22d5af6df612c9505dcc8698ae3e072f1cbfe5d"
+    },
+    {
+      "path": ".tmp/weekly-fixture-capture.json",
+      "sha256": "f5a17750241f9a73260de019ac1e382265a8bc1a6907690cd6a132f748f30153"
+    },
+    {
+      "path": ".tmp/weekly-6d109d4c-playwright.log",
+      "sha256": "334c6a19477ae2df72b2e0832b884294e4fef9d09e87df203f2c06fe9eaf8a58"
+    },
+    {
+      "path": ".tmp/weekly-6d109d4c-playwright.json",
+      "sha256": "ebc144fd675d6c4690d0c431d28bc6336a68f6d16518f0acfab7213f8544ce4a"
+    },
+    {
+      "path": ".tmp/weekly-6d109d4c-cleanup.json",
+      "sha256": "45e130b12f5fdff439cf8096188ad2ca497a65cfa6d837ccf0de49c39e5bf5af"
+    },
+    {
+      "path": ".tmp/weekly-cffff004-lint-i18n.log",
+      "sha256": "bf53328f21e428b89ddb8d07cfa20d2009a751c1c8640a9b968e72ba530dfe66"
+    },
+    {
+      "path": ".tmp/weekly-cffff004-graph-update.log",
+      "sha256": "f0fc94df1b7d0b494aef864956ae20e3d74f10135700610f552a96a4c64d2e58"
+    },
+    {
+      "path": "F:/Dev/Temp/postora-owner-release-prepare-P5nALF/database-harness.log",
+      "sha256": "8cc33bb1db210e32f92af0bf65231d87c6f495f5c54e551e6d9bc67039de6bcf"
+    }
+  ],
+  "releaseReady": false,
+  "productionActivationAuthorized": false,
+  "remaining": [
+    "Historical E2 and outlier J7 browser acceptance",
+    "Canonical Instagram registry/calendar and UI/worker adoption",
+    "Protected reconnect and remaining canonical J/E journeys",
+    "Trusted workflow/bootstrap/CODEOWNERS, independent review and migration-history recovery",
+    "Separately approved production prerequisite including the new migration before Edge runtime, live reconciliation and scheduled observation"
+  ],
+  "typeMapFollowup": {
+    "source": "6429e1b75577ac6762ef86b723a8648e20bf755b",
+    "path": "src/integrations/supabase/types.ts",
+    "sha256": "9390ac8c36d821bcecea109cd895fd49ef6b3c39f4ababdfc5abc13a45c087a9",
+    "typecheck": {
+      "result": "passed",
+      "exitCode": 0,
+      "log": ".tmp/weekly-types-typecheck.log",
+      "sha256": "82b5202dbc205db5afc9568372d1f11e63c1105117ebdc791a50680ece23bccf"
+    },
+    "scope": "Additive Json argument/return signature only; erased at runtime, no frontend runtime or DTO change"
+  }
+}

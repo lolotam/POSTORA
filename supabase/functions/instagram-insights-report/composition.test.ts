@@ -54,6 +54,7 @@ Deno.test("report composition preserves authenticated identity and account owner
   globalThis.fetch = async (input, init) => {
     const request = new Request(input, init);
     const url = new URL(request.url);
+    if (url.pathname === "/rest/v1/system_logs") return new Response(null, { status: 201 });
     if (url.origin !== URL_BASE) throw new Error("Unexpected external request in report composition test");
     if (url.pathname === "/auth/v1/user") {
       assertEquals(request.headers.get("Authorization"), `Bearer ${jwt}`);
@@ -69,16 +70,12 @@ Deno.test("report composition preserves authenticated identity and account owner
       );
       return Response.json(matches);
     }
-    if (url.pathname === "/rest/v1/rpc/read_instagram_collection_job_status") return Response.json(null);
-    if ([
-      "/rest/v1/ig_media_insight_snapshots",
-      "/rest/v1/ig_account_insight_daily",
-      "/rest/v1/ig_account_profile_observations",
-      "/rest/v1/instagram_collection_jobs",
-      "/rest/v1/instagram_collection_job_checkpoints",
-    ].includes(url.pathname)) {
+    if (url.pathname === "/rest/v1/rpc/read_instagram_owner_report_snapshot") {
       databaseReads++;
-      return Response.json([], { headers: { "Content-Range": "*/0" } });
+      const body = await request.json();
+      const account = accounts.find((row) => row.id === body.p_account_id && row.user_id === body.p_user_id);
+      if (!account) return Response.json({ code: "MAH02", message: "Account not found" }, { status: 400 });
+      return Response.json({ account_id: account.id, owner_id: account.user_id, media: [], daily: [], profiles: [], collection: null });
     }
     throw new Error(`Unexpected report HTTP boundary: ${url.pathname}`);
   };
@@ -140,37 +137,62 @@ Deno.test("report composition preserves authenticated identity and account owner
   }
 });
 
-Deno.test("service-role report reads narrow owner status and retains previous-day success", async () => {
+Deno.test("report audit failure keeps canonical refusal reasons and legacy errors through GET and POST", async (test) => {
   const originalFetch = globalThis.fetch;
-  const jobId = "8e040000-0000-4000-8000-000000000001";
-  const previousSuccess = "2026-10-28T12:00:00Z";
+  const jwt = await userToken();
+  let audits = 0;
+  let reportReads = 0;
   globalThis.fetch = async (input, init) => {
     const request = new Request(input, init);
     const url = new URL(request.url);
-    if (url.origin !== URL_BASE) throw new Error("Unexpected external report request");
-    if (url.pathname === "/rest/v1/social_accounts") {
-      return Response.json([{ id: ACCOUNT_ID, user_id: OWNER_ID, platform: "instagram", is_active: true }]);
+    assertEquals(url.origin, URL_BASE);
+    if (url.pathname === "/auth/v1/user") return Response.json({ id: OWNER_ID, role: "authenticated", aud: "authenticated" });
+    if (url.pathname === "/rest/v1/system_logs") {
+      audits++;
+      return Response.json({ code: "57014", message: "fixture-private-audit-failure" }, { status: 500 });
     }
-    assertEquals(url.searchParams.get("user_id"), `eq.${OWNER_ID}`);
-    if (url.pathname === "/rest/v1/instagram_collection_jobs") {
-      assertEquals(url.searchParams.get("social_account_id"), `eq.${ACCOUNT_ID}`);
-      assertEquals(url.searchParams.get("target_id"), `eq.${ACCOUNT_ID}`);
-      assertEquals(url.searchParams.get("target_kind"), "eq.owner");
-      assertEquals(/lease|token|context/.test(url.searchParams.get("select") ?? ""), false);
-      const successQuery = url.searchParams.get("order")?.startsWith("last_success_at");
-      return Response.json([{
-        id: jobId, job_generation: 2, status: "queued", captured_on: "2026-10-29",
-        last_attempt_at: "2026-10-29T12:00:00Z", last_success_at: successQuery ? previousSuccess : null,
-        last_partial_at: null, retry_at: null, last_reason_code: null,
-      }]);
+    reportReads++;
+    if (url.pathname === "/rest/v1/social_accounts") return Response.json([{ id: ACCOUNT_ID, user_id: OWNER_ID, platform: "instagram", is_active: true }]);
+    assertEquals(url.pathname, "/rest/v1/rpc/read_instagram_owner_report_snapshot");
+    return Response.json({ account_id: ACCOUNT_ID, owner_id: OWNER_ID, media: [], daily: [], profiles: [], collection: null });
+  };
+  try {
+    for (const method of ["GET", "POST"]) for (const canonical of [false, true]) {
+      await test.step(`${method}, canonical=${canonical}`, async () => {
+        audits = reportReads = 0;
+        const query = new URLSearchParams({ social_account_id: ACCOUNT_ID, period_days: "30", ...(canonical ? { analyticsContractVersion: "1" } : {}) });
+        const request = method === "POST" ? reportRequest(jwt, canonical ? { analyticsContractVersion: 1 } : {})
+          : new Request(`${URL_BASE}/functions/v1/instagram-insights-report?${query}`, { headers: { Authorization: `Bearer ${jwt}` } });
+        const response = await handler(request);
+        const body = await response.json();
+        assertEquals(response.status, 503);
+        assertEquals(body.error.code, "HISTORY_UNAVAILABLE");
+        if (canonical) {
+          assertEquals(body.ok, false);
+          assertEquals(body.reason, "audit_unavailable");
+        }
+        assertEquals(JSON.stringify(body).includes("fixture-private"), false);
+        assertEquals(audits, 1);
+        assertEquals(reportReads > 0, true);
+      });
     }
-    if (url.pathname === "/rest/v1/instagram_collection_job_checkpoints") {
-      assertEquals(url.searchParams.get("job_id"), `eq.${jobId}`);
-      assertEquals(url.searchParams.get("job_generation"), "eq.2");
-      return Response.json([{ inventory_truncated: false, inventory_partial: false, inventory_window_covered: false }]);
-    }
-    if (url.pathname.startsWith("/rest/v1/rpc/")) throw new Error("Report must not call an authenticated-only RPC with service role");
-    return Response.json([], { headers: { "Content-Range": "*/0" } });
+  } finally { globalThis.fetch = originalFetch; }
+});
+
+Deno.test("service-role report reads narrow owner status and retains previous-day success", async () => {
+  const originalFetch = globalThis.fetch;
+  const previousSuccess = "2026-10-28T12:00:00Z";
+  globalThis.fetch = async (input, init) => {
+    const request = new Request(input, init);
+    if (new URL(request.url).pathname === "/rest/v1/system_logs") return new Response(null, { status: 201 });
+    assertEquals(new URL(request.url).pathname, "/rest/v1/rpc/read_instagram_owner_report_snapshot");
+    const body = await request.json();
+    assertEquals(body.p_user_id, OWNER_ID);
+    assertEquals(body.p_account_id, ACCOUNT_ID);
+    return Response.json({ account_id: ACCOUNT_ID, owner_id: OWNER_ID, media: [], daily: [], profiles: [],
+      collection: { status: "queued", last_success_at: previousSuccess, last_attempt_at: "2026-10-29T12:00:00Z",
+        last_partial_at: null, next_retry_at: null, reason_code: null,
+        inventory: { truncated: false, partial: false, window_covered: false } } });
   };
   try {
     const response = await handler(reportRequest(SERVICE_KEY, { user_id: OWNER_ID }));
@@ -184,7 +206,7 @@ Deno.test("service-role report reads narrow owner status and retains previous-da
   }
 });
 
-Deno.test("report composition pages the full stored inventory without treating database caps as end-of-list", async (test) => {
+Deno.test("report composition pages the full snapshot without treating database caps as end-of-list", async (test) => {
   const originalFetch = globalThis.fetch;
   const timestamp = new Date(Date.now() - 3 * 86_400_000).toISOString();
   const snapshots = Array.from({ length: 522 }, (_, index) => ({
@@ -197,29 +219,15 @@ Deno.test("report composition pages the full stored inventory without treating d
   globalThis.fetch = async (input, init) => {
     const request = new Request(input, init);
     const url = new URL(request.url);
+    if (url.pathname === "/rest/v1/system_logs") return new Response(null, { status: 201 });
     if (url.origin !== URL_BASE) throw new Error("Unexpected external report request");
-    if (url.pathname === "/rest/v1/social_accounts") {
-      return Response.json([{ id: ACCOUNT_ID, user_id: OWNER_ID, platform: "instagram", is_active: true }]);
-    }
-    assertEquals(url.searchParams.get("user_id"), `eq.${OWNER_ID}`);
-    if (url.pathname === "/rest/v1/instagram_collection_jobs") {
-      assertEquals(url.searchParams.get("target_kind"), "eq.owner");
-      assertEquals(url.searchParams.get("target_id"), `eq.${ACCOUNT_ID}`);
-      return mode === "status_error"
-        ? Response.json({ message: "status unavailable" }, { status: 500 }) : Response.json([]);
-    }
-    assertEquals(url.searchParams.get("social_account_id"), `eq.${ACCOUNT_ID}`);
-    if (url.pathname === "/rest/v1/ig_media_insight_snapshots") {
-      if (mode === "database_error") return Response.json({ message: "read failed" }, { status: 500 });
-      const afterId = url.searchParams.get("id")?.slice(3) ?? "";
-      const matching = snapshots.filter((row) => row.id > afterId);
-      const page = (mode === "repeated_page" ? snapshots : matching).slice(0, 37);
-      // Model a PostgREST max-rows setting smaller than the requested page size.
-      return Response.json(page, {
-        headers: { "Content-Range": `0-${page.length - 1}/${mode === "overflow" ? 20_001 : matching.length}` },
-      });
-    }
-    return Response.json([], { headers: { "Content-Range": "*/0" } });
+    assertEquals(url.pathname, "/rest/v1/rpc/read_instagram_owner_report_snapshot");
+    const body = await request.json();
+    assertEquals(body.p_user_id, OWNER_ID);
+    assertEquals(body.p_account_id, ACCOUNT_ID);
+    if (mode === "database_error" || mode === "status_error" || mode === "overflow") return Response.json({ code: mode === "overflow" ? "MAH05" : "57014", message: "Snapshot refused" }, { status: 500 });
+    return Response.json({ account_id: ACCOUNT_ID, owner_id: OWNER_ID,
+      media: mode === "repeated_page" ? [...snapshots, snapshots[0]] : snapshots, daily: [], profiles: [], collection: null });
   };
   try {
     await test.step("all 261 distinct media remain reachable after duplicate captures and database pagination", async () => {
@@ -251,21 +259,16 @@ Deno.test("report composition pages the full stored inventory without treating d
 Deno.test("storage deadlines remain retryable through the real report composition", async (test) => {
   const originalFetch = globalThis.fetch;
   try {
-    for (const timedOutTable of ["social_accounts", "ig_media_insight_snapshots", "instagram_collection_jobs", "instagram_collection_job_checkpoints"]) {
-      await test.step(timedOutTable, async () => {
-        globalThis.fetch = async (input, init) => {
-          const outgoing = new Request(input, init);
-          const url = new URL(outgoing.url);
-          if (url.origin !== URL_BASE) throw new Error("Unexpected report test boundary");
-          if (url.pathname === `/rest/v1/${timedOutTable}`) throw new DOMException("synthetic storage deadline", "TimeoutError");
-          if (url.pathname === "/rest/v1/social_accounts") return Response.json([{ id: ACCOUNT_ID, user_id: OWNER_ID, platform: "instagram", is_active: true }]);
-          if (url.pathname === "/rest/v1/instagram_collection_jobs") return Response.json([{ id: ACCOUNT_ID, job_generation: 1, status: "pending" }]);
-          return Response.json([], { headers: { "Content-Range": "*/0" } });
-        };
-        const response = await handler(reportRequest(SERVICE_KEY, { user_id: OWNER_ID }));
-        assertEquals(response.status, 503);
-        assertEquals((await response.json()).error.code, "HISTORY_UNAVAILABLE");
-      });
-    }
+    await test.step("the single snapshot RPC fails atomically for any history or status deadline", async () => {
+      globalThis.fetch = async (input, init) => {
+        const outgoing = new Request(input, init);
+        if (new URL(outgoing.url).pathname === "/rest/v1/system_logs") return new Response(null, { status: 201 });
+        assertEquals(new URL(outgoing.url).pathname, "/rest/v1/rpc/read_instagram_owner_report_snapshot");
+        throw new DOMException("synthetic storage deadline", "TimeoutError");
+      };
+      const response = await handler(reportRequest(SERVICE_KEY, { user_id: OWNER_ID }));
+      assertEquals(response.status, 503);
+      assertEquals((await response.json()).error.code, "HISTORY_UNAVAILABLE");
+    });
   } finally { globalThis.fetch = originalFetch; }
 });

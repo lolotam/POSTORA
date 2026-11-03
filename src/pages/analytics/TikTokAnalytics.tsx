@@ -1,3 +1,4 @@
+import { compareBrandMetric } from "@/lib/brandMetrics";
 import { useState, useMemo, useEffect } from "react";
 import { useTranslation } from "react-i18next";
 import { useNavigate } from "react-router-dom";
@@ -39,7 +40,7 @@ export default function TikTokAnalytics() {
   const [selectedAccountId, setSelectedAccountId] = useState<string | null>(null);
 
   const { source, isLoading: sourceLoading } = useTikTokAnalyticsSource();
-  const apifyHook = useBrandScrape();
+  const apifyHook = useBrandScrape(session?.user.id);
   const apiHook = useTikTokApiAnalytics(source === "tiktok_api" ? selectedAccountId : null);
 
   // Auto-select first connected TikTok account when in API mode
@@ -74,6 +75,9 @@ export default function TikTokAnalytics() {
   const error = isApi ? apiHook.error : apifyHook.error;
   const errorCode = isApi ? apiHook.errorCode : undefined;
   const loadMore = isApi ? apiHook.loadMore : apifyHook.loadMore;
+  // Page-continuation state exists only for the Apify source; a stale value never reaches API mode.
+  const isLoadingMore = !isApi && apifyHook.isLoadingMore;
+  const loadMoreError = !isApi ? apifyHook.loadMoreError : null;
 
   const { data: contentPostIds = new Set<string>() } = useQuery({
     queryKey: ["bi-content-post-ids", session?.user?.id],
@@ -106,14 +110,14 @@ export default function TikTokAnalytics() {
       const ms: Record<string, number> = { "30d": 30 * 86400000, "3m": 90 * 86400000, "6m": 180 * 86400000, "1y": 365 * 86400000 };
       result = result.filter((p) => new Date(p.timestamp).getTime() > now - (ms[filters.period] || 0));
     }
-    if (filters.minEngagement > 0) result = result.filter((p) => p.engagementScore >= filters.minEngagement);
+    if (filters.minEngagement > 0) result = result.filter((p) => p.engagementScore !== null && p.engagementScore >= filters.minEngagement);
     const sorters: Record<string, (a: BrandPost, b: BrandPost) => number> = {
-      engagement: (a, b) => b.engagementScore - a.engagementScore,
-      likes: (a, b) => b.likesCount - a.likesCount,
-      comments: (a, b) => b.commentsCount - a.commentsCount,
-      views: (a, b) => (b.videoViewCount || 0) - (a.videoViewCount || 0),
-      shares: (a, b) => (b.sharesCount || 0) - (a.sharesCount || 0),
-      saves: (a, b) => (b.savesCount || 0) - (a.savesCount || 0),
+      engagement: (a, b) => compareBrandMetric(a, b, "engagementScore"),
+      likes: (a, b) => compareBrandMetric(a, b, "likesCount"),
+      comments: (a, b) => compareBrandMetric(a, b, "commentsCount"),
+      views: (a, b) => compareBrandMetric(a, b, "videoViewCount"),
+      shares: (a, b) => compareBrandMetric(a, b, "sharesCount"),
+      saves: (a, b) => compareBrandMetric(a, b, "savesCount"),
       newest: (a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime(),
       oldest: (a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime(),
     };
@@ -121,7 +125,7 @@ export default function TikTokAnalytics() {
     return result;
   }, [posts, filters]);
 
-  const maxEngagement = useMemo(() => Math.max(...posts.map((p) => p.engagementScore), 0), [posts]);
+  const maxEngagement = useMemo(() => Math.max(...posts.flatMap((p) => p.engagementScore === null ? [] : [p.engagementScore]), 0), [posts]);
   const hasResults = profile !== null;
 
   const renderErrorBlock = () => {
@@ -227,9 +231,10 @@ export default function TikTokAnalytics() {
               <PostsGrid posts={filteredPosts} isLoading={isLoading} onPostClick={handlePostClick} contentPostIds={contentPostIds} />
               {hasMore && (
                 <div className="flex justify-center pt-4">
-                  <Button variant="outline" onClick={loadMore} className="gap-2 border-rose-500/40 hover:bg-rose-500/10" disabled={isLoading}>
-                    {isLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Loader2 className="w-4 h-4" />}
-                    {t("actions.loadMore", "Load More")}
+                  {loadMoreError && <p className="mr-3 self-center text-sm text-destructive">{t("actions.loadMoreFailed", "Could not load more. Try again.")}</p>}
+                  <Button variant="outline" onClick={loadMore} className="gap-2 border-rose-500/40 hover:bg-rose-500/10" disabled={isLoading || isLoadingMore}>
+                    {isLoading || isLoadingMore ? <Loader2 className="w-4 h-4 animate-spin" /> : <Loader2 className="w-4 h-4" />}
+                    {isLoadingMore ? t("actions.loadingMore", "Loading...") : t("actions.loadMore", "Load More")}
                   </Button>
                 </div>
               )}

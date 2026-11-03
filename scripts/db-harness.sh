@@ -156,6 +156,7 @@ SUITES=(
   competitor_collection_results.sql
   competitor_capture_coverage.sql
   competitor_tracking_report.sql
+  competitor_weekly_inventory_projection.sql
   competitor_retention.sql
   competitor_retention_cron.sql
   instagram_direct_collection_credential.sql
@@ -170,6 +171,9 @@ SUITES=(
   meta_owned_analytics_inventory.sql
   meta_owned_analytics_retention.sql
   meta_owned_analytics_cron.sql
+  meta_owned_analytics_capture_failures.sql
+  meta_owned_analytics_reports.sql
+  instagram_report_snapshot.sql
   meta_owned_analytics_truncation.sql
 )
 # These fixtures build their own focused schema and apply the migration under

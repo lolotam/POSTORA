@@ -1,0 +1,164 @@
+{
+  "formatVersion": 1,
+  "scope": "local-meta-owned-browser-continuation",
+  "recordedAt": "2026-11-01T22:41:56.537Z",
+  "runtimeCandidate": "a4294b9a5465a45c3c2969f4e35084b116969123",
+  "executionCandidate": "a98d7fe34e29ff3cf47d2d62caa9dbb622f33f1a",
+  "executionTree": "1366598ff6e174fe255b15eb6d8c26735a77aa91",
+  "productionSourceDelta": [],
+  "productionChanges": false,
+  "releaseReady": false,
+  "canonicalTask11GX": "not_evaluated",
+  "checks": {
+    "chromium": {
+      "startTime": "2026-11-01T22:19:50.255Z",
+      "duration": 391307.56200000003,
+      "expected": 13,
+      "skipped": 0,
+      "unexpected": 0,
+      "flaky": 0,
+      "result": "passed",
+      "instagram": 7,
+      "facebook": 3,
+      "threads": 3,
+      "workers": 1,
+      "retries": 0
+    },
+    "fixture": {
+      "candidateLabel": "a98d7fe34e29ff3cf47d2d62caa9dbb622f33f1a",
+      "database": "postora_owner_release_harness",
+      "baseline": "20260830120300_partner_api_least_privilege_grants.sql",
+      "newerMigrations": 151,
+      "baselineSuites": 69,
+      "isolatedSuites": 1,
+      "cronLaunchActiveJobs": "off",
+      "activeSchedules": 0,
+      "httpServer": "stopped by operator after proof; backing containers and predecessor volumes preserved"
+    },
+    "boundaries": {
+      "auth": "real",
+      "postgrest": "real",
+      "sql": "real",
+      "registeredReportsAndProxy": "real",
+      "enqueueAndDrain": "real",
+      "metaTransport": "synthetic"
+    },
+    "requiredJourneyChecker": "passed",
+    "executionSourceGuard": "passed",
+    "instagramOwnerInventory": {
+      "files": 76,
+      "hashes": "verified",
+      "scope": "Instagram owner inventory only; not canonical G-X or complete saved Facebook/Threads runtime inventory"
+    },
+    "safetyAndInventoryTooling": {
+      "tests": 24,
+      "passed": 24,
+      "failed": 0
+    },
+    "fixtureTypecheck": "passed",
+    "immutableLintI18n": {
+      "result": "NO REGRESSIONS",
+      "base": "2b04837163f81cb4220c36e6d393d4ac27afd68a",
+      "head": "a98d7fe34e29ff3cf47d2d62caa9dbb622f33f1a",
+      "historicalDebtRemains": true,
+      "earlierAttempt": "merge no-inline-config process exited 3221226505 with no report; gate correctly refused eslint_report_missing; retained and rerun unchanged with 6144 MiB Node heap after browser completion"
+    },
+    "nativeReadOnlyReview": {
+      "result": "no blocking finding",
+      "limitationsRecorded": true,
+      "hostedIndependentReviewComplete": false
+    }
+  },
+  "priorAttempt": {
+    "candidate": "9d8b3e06ab62dd324c2fdbc4155e668caaa7b721",
+    "passed": 11,
+    "failed": 2,
+    "cause": "Synthetic transport omitted /me and returned 25 Facebook posts although adapter page limit is 5",
+    "resolution": "Corrected fixture identity and provider pagination; actual worker/SQL/report smoke passed before a fresh full run"
+  },
+  "limits": [
+    "Period journey proves control changes/page reset; mostly zero daily values do not independently prove numeric date filtering. Native SQL/report suites carry that proof.",
+    "Two drains do not establish all captures complete or real scheduled dispatch.",
+    "Seven Instagram journeys use the existing legacy owner screen, not verified canonical Instagram adoption.",
+    "Other backend/frontend/concurrency proofs retain their original candidate attribution.",
+    "Canonical G-X, protected selected FB/IG authority, accepted Instagram calendar/capabilities, live Meta reconciliation, approved production application/enablement, rollback/restoration and seven scheduled due dates remain open."
+  ],
+  "artifacts": [
+    {
+      "localArtifact": ".tmp/meta-owned-browser-a98-prepare.log",
+      "sha256": "0816958c110990b7291e77878f9d7da1f7590dec8b070586e1c0be45f9a6a122"
+    },
+    {
+      "localArtifact": ".tmp/meta-owned-browser-a98-seed.log",
+      "sha256": "d08ce213080b1329065eff39c08a518b9c7852b312b690110295caf042830595"
+    },
+    {
+      "localArtifact": ".tmp/meta-owned-browser-a98-playwright.log",
+      "sha256": "2fb6cd3a4e4168e3c124bb930b92ad3f97a92a624a9bbe238ef116a342f7e651"
+    },
+    {
+      "localArtifact": ".tmp/meta-owned-browser-a98-playwright.json",
+      "sha256": "6db62ab65c010ef7a0df8322779048c1c59a1ec27142e127c0ec7d83559ca4fb"
+    },
+    {
+      "localArtifact": ".tmp/meta-owned-browser-a98-inventory.json",
+      "sha256": "705a09c2230c8f6965b72df1b8392c82db444b78e4e29ee83236c0f0922a88e2"
+    },
+    {
+      "localArtifact": ".tmp/meta-owned-browser-a98-acceptance.log",
+      "sha256": "1ba7e5715021079dddab29d25b8b97977977dd42ff24d85ecc9cd67558cfc87e"
+    },
+    {
+      "localArtifact": ".tmp/meta-owned-browser-a98-safety.log",
+      "sha256": "2bc9533e84d94369ae38c90a5693b13b089849dd783d36fb5b665905f992ee5a"
+    },
+    {
+      "localArtifact": ".tmp/meta-owned-browser-a98-fixture-check.log",
+      "sha256": "83498c0bf250aa91742844e77263f180a5c88e0342f245a2691d02a167651eeb"
+    },
+    {
+      "localArtifact": ".tmp/meta-owned-browser-a98-lint-final.log",
+      "sha256": "ee14da1fb59584b1d41074dd502d6d0b0a93751477a19a8fa80c68f4402ffe66"
+    },
+    {
+      "localArtifact": ".tmp/meta-owned-browser-a98-lint-retry.log",
+      "sha256": "3b20276653bf7cefc1e3546d2d37e2622766f38528422167f2ad23946a2a3b91"
+    },
+    {
+      "localArtifact": ".tmp/meta-owned-browser-a98-lint-retry.json",
+      "sha256": "220f689983b1c90006ba2c32c434ab3e716278b261bdeccbaffafa1621f9d099"
+    },
+    {
+      "localArtifact": ".tmp/meta-owned-browser-a98-lint-retry.md",
+      "sha256": "751303d8fc13d7da94968753bdf6e69629f87b919cbcbc6baa10547cddd68fcb"
+    },
+    {
+      "localArtifact": ".tmp/meta-owned-browser-a98-graphify.log",
+      "sha256": "b12c0c738ec200185d076bb1288c2705d388ef13589dbeca865ed317561265e5"
+    },
+    {
+      "localArtifact": ".tmp/meta-owned-browser-9d8-playwright.log",
+      "sha256": "40c21655ca7bd730aeb2bbabbaa2177685bc9aabb0bdd35e79c2d57775c112f9"
+    },
+    {
+      "localArtifact": ".tmp/meta-owned-browser-9d8-playwright.json",
+      "sha256": "598fe129c88cb16a3fccf7609e51642a10823d7a1e557132031660aa266c0ad4"
+    },
+    {
+      "localArtifact": ".tmp/meta-owned-browser-9d8-rejected.log",
+      "sha256": "04cf09b2043951427917430a945a89ab2336e62bcd69de2af3e177b8cda749ca"
+    },
+    {
+      "localArtifact": ".tmp/meta-owned-browser-worker-protocol-smoke.log",
+      "sha256": "2ac28058505b936f2712b99fd3c5f5939b9e4d24d175095a22660ef22542d7e5"
+    },
+    {
+      "localArtifact": "F:/Dev/Temp/postora-owner-release-prepare-Dqi47r/candidate.json",
+      "sha256": "f73ef856a67ddb4ad4c0a2062b65a010ab6ee58c1812be37363f7afb05feadf3"
+    },
+    {
+      "localArtifact": "F:/Dev/Temp/postora-owner-release-prepare-Dqi47r/database-harness.log",
+      "sha256": "f732ea9236dcecf93604b7b9041f24dbeeacc5013f8e8204c1810aa7e24cfd61"
+    }
+  ]
+}

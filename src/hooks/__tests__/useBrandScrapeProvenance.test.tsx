@@ -30,11 +30,11 @@ vi.mock("@/integrations/supabase/client", () => ({
   supabase: {
     auth: {
       getSession: async () => ({
-        data: { session: { access_token: "test-token" } },
+        data: { session: { access_token: "test-token", user: { id: "fixture-owner" } } },
         error: null,
       }),
       refreshSession: async () => ({
-        data: { session: { access_token: "test-token" } },
+        data: { session: { access_token: "test-token", user: { id: "fixture-owner" } } },
         error: null,
       }),
     },
@@ -89,6 +89,68 @@ beforeEach(() => {
 });
 
 describe("useBrandScrape provenance", () => {
+  it("hides an earlier successful analysis after a same-target permission refusal", async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse({ profile: { ...PROFILE, source: "official" }, posts: [POST], totalPosts: 1, hasMore: true }));
+    const { result } = renderHook(() => useBrandScrape("fixture-owner"), { wrapper });
+    act(() => result.current.search("northwind", "instagram"));
+    await waitFor(() => expect(result.current.profileSource).toBe("official"));
+    fetchMock.mockResolvedValue({ ok: false, status: 409, json: async () => ({
+      error: "Reconnect Instagram", error_code: "IG_INSIGHTS_SCOPE_MISSING",
+    }) });
+    act(() => result.current.search("northwind", "instagram"));
+    await waitFor(() => expect(result.current.error).toBe("Reconnect Instagram"), { timeout: 3_000 });
+    expect(result.current.reconnectRequired).toBe(true);
+    expect(result.current.profile).toBeNull();
+    expect(result.current.profileSource).toBe("unknown");
+    expect(result.current.posts).toEqual([]);
+    expect(result.current.totalPosts).toBe(0);
+    expect(result.current.hasMore).toBe(false);
+  });
+
+  it("hides prior-owner session data immediately when the authenticated owner changes", () => {
+    const { result, rerender } = renderHook(({ owner }) => useBrandScrape(owner), { wrapper, initialProps: { owner: "fixture-owner" } });
+    act(() => result.current.loadFromSession({ ...PROFILE, source: "official" }, [POST]));
+    expect(result.current.profileSource).toBe("official");
+    rerender({ owner: "another-owner" });
+    expect(result.current.profile).toBeNull();
+    expect(result.current.posts).toEqual([]);
+    expect(result.current.totalPosts).toBe(0);
+  });
+
+  it("requests consecutive result offsets without repeating the second page", async () => {
+    const offsets: number[] = [];
+    fetchMock.mockImplementation((_url, init) => {
+      const offset = JSON.parse(init.body).offset;
+      offsets.push(offset);
+      return Promise.resolve(jsonResponse({ profile: { ...PROFILE, source: "official" },
+        posts: Array.from({ length: 10 }, (_, index) => ({ ...POST, id: String(offset + index) })), totalPosts: 30, hasMore: offset < 20 }));
+    });
+    const { result } = renderHook(() => useBrandScrape("fixture-owner"), { wrapper });
+    act(() => result.current.search("northwind", "instagram"));
+    await waitFor(() => expect(result.current.posts).toHaveLength(10));
+    await act(() => result.current.loadMore());
+    await act(() => result.current.loadMore());
+    expect(offsets).toEqual([0, 10, 20]);
+    expect(new Set(result.current.posts.map((entry) => entry.id)).size).toBe(30);
+    expect(result.current.hasMore).toBe(false);
+  });
+
+  it.each(["first", "later"])("honors server completion on the %s page even when totalPosts is larger", async (completedPage) => {
+    fetchMock.mockImplementation((_url, init) => {
+      const offset = JSON.parse(init.body).offset;
+      return Promise.resolve(jsonResponse({ profile: PROFILE, posts: [{ ...POST, id: String(offset) }],
+        totalPosts: offset === 0 ? 100 : 50, hasMore: completedPage === "later" && offset === 0 }));
+    });
+    const { result } = renderHook(() => useBrandScrape("fixture-owner"), { wrapper });
+    act(() => result.current.search("northwind", "instagram"));
+    await waitFor(() => expect(result.current.posts).toHaveLength(1));
+    if (completedPage === "later") await act(() => result.current.loadMore());
+    expect(result.current.hasMore).toBe(false);
+    expect(result.current.totalPosts).toBe(completedPage === "later" ? 50 : 100);
+    await act(() => result.current.loadMore());
+    expect(fetchMock).toHaveBeenCalledTimes(completedPage === "later" ? 2 : 1);
+  });
+
   it("passes an explicit source through to the caller", async () => {
     fetchMock.mockResolvedValue(
       jsonResponse({
@@ -99,7 +161,7 @@ describe("useBrandScrape provenance", () => {
       }),
     );
 
-    const { result } = renderHook(() => useBrandScrape(), { wrapper });
+    const { result } = renderHook(() => useBrandScrape("fixture-owner"), { wrapper });
 
     act(() => {
       result.current.search("northwind", "instagram");
@@ -119,7 +181,7 @@ describe("useBrandScrape provenance", () => {
       }),
     );
 
-    const { result } = renderHook(() => useBrandScrape(), { wrapper });
+    const { result } = renderHook(() => useBrandScrape("fixture-owner"), { wrapper });
 
     act(() => {
       result.current.search("northwind", "instagram");
@@ -140,7 +202,7 @@ describe("useBrandScrape provenance", () => {
       }),
     );
 
-    const { result } = renderHook(() => useBrandScrape(), { wrapper });
+    const { result } = renderHook(() => useBrandScrape("fixture-owner"), { wrapper });
 
     act(() => {
       result.current.search("northwind", "instagram");
@@ -161,7 +223,7 @@ describe("useBrandScrape provenance", () => {
       }),
     );
 
-    const { result } = renderHook(() => useBrandScrape(), { wrapper });
+    const { result } = renderHook(() => useBrandScrape("fixture-owner"), { wrapper });
 
     act(() => {
       result.current.search("northwind", "instagram");
@@ -181,7 +243,7 @@ describe("useBrandScrape provenance", () => {
       }),
     );
 
-    const { result } = renderHook(() => useBrandScrape(), { wrapper });
+    const { result } = renderHook(() => useBrandScrape("fixture-owner"), { wrapper });
 
     act(() => {
       result.current.search("northwind", "instagram");
@@ -192,7 +254,7 @@ describe("useBrandScrape provenance", () => {
   });
 
   it("keeps the explicit source of a history session", async () => {
-    const { result } = renderHook(() => useBrandScrape(), { wrapper });
+    const { result } = renderHook(() => useBrandScrape("fixture-owner"), { wrapper });
 
     act(() => {
       result.current.loadFromSession({ ...PROFILE, source: "official" }, [POST]);
@@ -205,7 +267,7 @@ describe("useBrandScrape provenance", () => {
   });
 
   it("does not infer the source of a history session", async () => {
-    const { result } = renderHook(() => useBrandScrape(), { wrapper });
+    const { result } = renderHook(() => useBrandScrape("fixture-owner"), { wrapper });
 
     act(() => {
       result.current.loadFromSession({ ...PROFILE }, [POST]);

@@ -159,29 +159,22 @@ Deno.test("owned Facebook Page analytics composes auth, provider, exact metrics 
       assertEquals(body.posts.truncated, false);
       assertEquals(body.lastPartialAt, null);
     });
-    await test.step("actual proxy-to-handler negotiation returns Facebook contract pages and rejects legacy fallback", async () => {
+    await test.step("explicit Facebook proxy analytics uses saved history without invoking the live provider", async () => {
       const deps: ServiceProxyDeps = {
         loadAccount: async () => ({ failed: false, account: accounts[0] }),
         invoke: async (functionName, body) => {
-          assertEquals(functionName, "facebook-page-insights");
-          const response = await handler(new Request(`${API_URL}/functions/v1/${functionName}`, { method: "POST",
-            headers: { Authorization: `Bearer ${SERVICE_KEY}`, "Content-Type": "application/json" }, body: JSON.stringify(body) }));
-          return { status: response.status, data: await response.json() };
+          assertEquals(functionName, "meta-owned-analytics-report");
+          assertEquals(body, { user_id: OWNER, platform: "facebook", accountId: ACCOUNT, periodDays: 7, analyticsContractVersion: 1, cursor: "saved.signed" });
+          return { status: 409, data: { ok: false, reason: "history_revision_changed" } };
         },
         storeImage: async () => { throw new Error("Analytics must not store images"); },
         mediaQuotaBlocked: async () => { throw new Error("Analytics must not check upload quotas"); },
       };
-      const query = new URLSearchParams({ social_account_id: ACCOUNT, period_days: "7", analyticsContractVersion: "1" });
-      const first = await handleGetPostAnalytics(deps, OWNER, query);
-      const { ok: _firstOk, ...firstPayload } = first.body as Record<string, unknown>;
-      const firstReport = parseAnalyticsReport(firstPayload);
-      assertEquals(firstReport.platform, "facebook");
-      query.set("cursor", firstReport.posts.nextCursor!);
-      const second = await handleGetPostAnalytics(deps, OWNER, query);
-      const { ok: _secondOk, ...secondPayload } = second.body as Record<string, unknown>;
-      assertEquals(parseAnalyticsReport(secondPayload).posts.nextCursor, null);
-      query.delete("analyticsContractVersion");
-      query.delete("cursor");
+      const query = new URLSearchParams({ social_account_id: ACCOUNT, period_days: "7", analyticsContractVersion: "1", cursor: "saved.signed" });
+      const result = await handleGetPostAnalytics(deps, OWNER, query);
+      assertEquals(result.status, 409);
+      assertEquals((result.body as { reason: string }).reason, "history_revision_changed");
+      query.delete("analyticsContractVersion"); query.delete("cursor");
       assertEquals((await handleGetPostAnalytics(deps, OWNER, query)).status, 400);
     });
     for (const accountId of [FOREIGN, INACTIVE, WRONG_PLATFORM, MISSING]) await test.step("unavailable selector never falls back " + accountId, async () => {

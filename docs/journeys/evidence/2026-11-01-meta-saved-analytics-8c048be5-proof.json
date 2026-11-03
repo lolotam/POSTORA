@@ -1,0 +1,99 @@
+{
+  "candidate": "8c048be55f52be5939a43b99bbc5c3ba7779b0a8",
+  "production_changes": false,
+  "independent_review": false,
+  "full_gx_accepted": false,
+  "predecessor_evidence": {
+    "candidate": "1a5ff1267e8b6741e62592e02fa02d3932baab56",
+    "path": "2026-11-01-meta-saved-analytics-1a5ff126-proof.json",
+    "unchanged_source_scopes": [
+      "schema",
+      "frontend",
+      "saved report assembly"
+    ],
+    "runtime_source_delta": [
+      "supabase/functions/meta-owned-analytics-sync/permissionProvider.ts"
+    ],
+    "not_rerun": [
+      "fresh SQL harness",
+      "complete prior concurrency matrix",
+      "complete prior broad backend/provider regressions",
+      "registered real-SQL integration",
+      "frontend components/typecheck/build"
+    ]
+  },
+  "checks": {
+    "worker_termination": {
+      "tests": 6,
+      "steps": 118,
+      "database_dependency_cases": 96,
+      "native_timers": true,
+      "result": "passed"
+    },
+    "focused_admission_dispatch": {
+      "tests": 14,
+      "steps": 60,
+      "result": "passed"
+    },
+    "c3_focused_admission_dispatch": {
+      "candidate": "2b04837163f81cb4220c36e6d393d4ac27afd68a",
+      "tests": 13,
+      "steps": 57,
+      "result": "passed"
+    },
+    "immutable_lint_i18n": {
+      "result": "NO REGRESSIONS",
+      "base": "2b04837163f81cb4220c36e6d393d4ac27afd68a",
+      "head": "8c048be55f52be5939a43b99bbc5c3ba7779b0a8",
+      "historical_debt_remains": true
+    },
+    "graphify_update": "passed"
+  },
+  "artifacts": [
+    {
+      "local_artifact": ".tmp/c3-termination-full.log",
+      "sha256": "23d4179b6cdf02038b699c2406e752bd3511e08d14a2799d74b8448ecfd18149"
+    },
+    {
+      "local_artifact": ".tmp/c3-termination-8c048be5.log",
+      "sha256": "af020da54633ab6fa289280acbd0f3f4985eecb6bcb5ade854db40bdee618ac9"
+    },
+    {
+      "local_artifact": ".tmp/c3-admission-transient-before.log",
+      "sha256": "a97b52236bb536aff9940a7b7f8bd236ead4b7c1f55d1b9a7f8e760ec34140ac"
+    },
+    {
+      "local_artifact": ".tmp/c3-admission-transient-after.log",
+      "sha256": "38219a8bd6e42d031efbc506cffb68b40ede8d667b31b9fee4bc67e02149b9a0"
+    },
+    {
+      "local_artifact": ".tmp/pr346-transient-after.log",
+      "sha256": "bfb2499569434f46c536f2d5d109fe3dc18a6f364bbc292fd2f1fea64555fc9d"
+    },
+    {
+      "local_artifact": ".tmp/pr346-transient-lint.json",
+      "sha256": "73693f8ad3b420ddba66d2ee7b60a04f8e27be826fc16bdbfdb778f197f4ba36"
+    },
+    {
+      "local_artifact": ".tmp/pr347-termination-lint.json",
+      "sha256": "f689ec555f75e78fbe7266563e5de9d3987058da5c2946041fdcd474cb3d66e2"
+    },
+    {
+      "local_artifact": ".tmp/c3-termination-graphify.log",
+      "sha256": "2e68127da4db6afda453a289317a8bbd5f98e03c09293c34d2b9617e57c5e56a"
+    }
+  ],
+  "read_only_production_verification": {
+    "date": "2026-11-01",
+    "history_reader_installed": false,
+    "saved_reader_installed": false,
+    "instagram_snapshot_installed": false,
+    "requested_collection_setting_rows": 0,
+    "new_schedule_names": 0,
+    "protected_binding": {
+      "FB-01": false,
+      "IG-01": false
+    },
+    "threads_uses_facebook_binding": false
+  }
+}

@@ -4,6 +4,16 @@ import {
   type ViewerCandidate,
 } from "./instagramDiscoveryViewer.ts";
 
+import type { InstagramAccountCapability } from "./facebookUserCredentialStore.ts";
+
+function trustedScopes(scopes: string[]): InstagramAccountCapability {
+  return { socialAccountId: "fixture", capabilityPresent: true, loginKind: "page_linked",
+    permissionReadState: "ok", scopesAuthoritative: true, grantedScopes: scopes,
+    scopesReadAt: "2026-11-02T00:00:00Z", lastReadFailedAt: null, lastReadErrorCode: null,
+    credentialGeneration: 1, credentialUpdatedAt: null, generationReason: null, reconnectedAt: null,
+    hasProtectedCredential: true, updatedAt: null };
+}
+
 Deno.test("pickBusinessDiscoveryViewer - returns null for empty or invalid list", () => {
   assertEquals(pickBusinessDiscoveryViewer([]), null);
 });
@@ -69,9 +79,7 @@ Deno.test("pickBusinessDiscoveryViewer - rejects accounts that explicitly lack i
       access_token: "tok-page",
       is_active: true,
       ig_auth_type: "facebook_page",
-      account_metadata: {
-        granted_scopes: ["instagram_basic", "pages_show_list"],
-      },
+      capability: trustedScopes(["instagram_basic", "pages_show_list"]),
     },
   ];
 
@@ -98,9 +106,7 @@ Deno.test("pickBusinessDiscoveryViewer - prefers accounts with instagram_manage_
     access_token: "tok-pref",
     is_active: true,
     ig_auth_type: "facebook_page",
-    account_metadata: {
-      granted_scopes: ["instagram_manage_insights"],
-    },
+    capability: trustedScopes(["instagram_manage_insights"]),
     connected_at: "2026-10-25T12:00:00Z", // Older, but has preferred scope
   };
 
@@ -117,9 +123,7 @@ Deno.test("pickBusinessDiscoveryViewer - tie-breaks by newest connected_at", () 
     access_token: "tok-old",
     is_active: true,
     ig_auth_type: "facebook_page",
-    account_metadata: {
-      granted_scopes: ["instagram_manage_insights"],
-    },
+    capability: trustedScopes(["instagram_manage_insights"]),
     connected_at: "2026-10-20T12:00:00Z",
   };
 
@@ -131,12 +135,22 @@ Deno.test("pickBusinessDiscoveryViewer - tie-breaks by newest connected_at", () 
     access_token: "tok-new",
     is_active: true,
     ig_auth_type: "facebook_page",
-    account_metadata: {
-      granted_scopes: ["instagram_manage_insights"],
-    },
+    capability: trustedScopes(["instagram_manage_insights"]),
     connected_at: "2026-10-28T12:00:00Z",
   };
 
   const chosen = pickBusinessDiscoveryViewer([accountOld, accountNew]);
   assertEquals(chosen?.id, "new-1");
+});
+
+Deno.test("legacy granted and empty scope metadata are unknown, and equal times use stable IDs", () => {
+  const candidate: ViewerCandidate = { id: "b", user_id: "owner", platform: "instagram", platform_user_id: "viewer",
+    access_token: "", is_active: true, ig_auth_type: "facebook_business", account_metadata: { granted_scopes: ["instagram_manage_insights"] } };
+  const empty = { ...candidate, id: "a", account_metadata: { granted_scopes: [] } };
+  assertEquals(pickBusinessDiscoveryViewer([candidate, empty])?.id, "a");
+  assertEquals(pickBusinessDiscoveryViewer([{ ...candidate, ig_auth_type: "unsupported" }]), null);
+  assertEquals(pickBusinessDiscoveryViewer([{ ...candidate, ig_auth_type: null, capability: trustedScopes(["instagram_manage_insights"]) }])?.id, "b");
+  assertEquals(pickBusinessDiscoveryViewer([{ ...candidate, ig_auth_type: "business_login", capability: trustedScopes(["instagram_manage_insights"]) }]), null);
+  assertEquals(pickBusinessDiscoveryViewer([{ ...candidate, capability: { ...trustedScopes(["instagram_manage_insights"]), loginKind: "direct" } }]), null);
+  assertEquals(pickBusinessDiscoveryViewer([{ ...candidate, capability: { ...trustedScopes([]), permissionReadState: "failed" } }])?.id, "b");
 });

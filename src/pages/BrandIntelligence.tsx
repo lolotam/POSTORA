@@ -1,3 +1,4 @@
+import { compareBrandMetric } from "@/lib/brandMetrics";
 import { useState, useMemo, useEffect } from "react";
 import { useTranslation } from "react-i18next";
 import { useNavigate, useLocation } from "react-router-dom";
@@ -47,7 +48,7 @@ export default function BrandIntelligence() {
   const [threadsMode, setThreadsMode] = useState<"analyze" | "discovery" | "keyword_search" | "insights">("analyze");
   const [filters, setFilters] = useState<BrandScrapeFilters>(DEFAULT_FILTERS);
   const [selectedPost, setSelectedPost] = useState<BrandPost | null>(null);
-  const { profile, profileSource, posts, totalPosts, hasMore, isLoading, error, search, loadMore, loadFromSession, reset } = useBrandScrape();
+  const { profile, profileSource, posts, totalPosts, hasMore, isLoading, isLoadingMore, error, loadMoreError, search, loadMore, loadFromSession, reset } = useBrandScrape(session?.user.id);
 
   /**
    * The competitor tracking feature tracks Instagram handles only.
@@ -127,16 +128,16 @@ export default function BrandIntelligence() {
     }
 
     if (filters.minEngagement > 0) {
-      result = result.filter((p) => p.engagementScore >= filters.minEngagement);
+      result = result.filter((p) => p.engagementScore !== null && p.engagementScore >= filters.minEngagement);
     }
 
     const sorters: Record<string, (a: BrandPost, b: BrandPost) => number> = {
-      engagement: (a, b) => b.engagementScore - a.engagementScore,
-      likes: (a, b) => b.likesCount - a.likesCount,
-      comments: (a, b) => b.commentsCount - a.commentsCount,
-      views: (a, b) => (b.videoViewCount || 0) - (a.videoViewCount || 0),
-      shares: (a, b) => (b.sharesCount || 0) - (a.sharesCount || 0),
-      saves: (a, b) => (b.savesCount || 0) - (a.savesCount || 0),
+      engagement: (a, b) => compareBrandMetric(a, b, "engagementScore"),
+      likes: (a, b) => compareBrandMetric(a, b, "likesCount"),
+      comments: (a, b) => compareBrandMetric(a, b, "commentsCount"),
+      views: (a, b) => compareBrandMetric(a, b, "videoViewCount"),
+      shares: (a, b) => compareBrandMetric(a, b, "sharesCount"),
+      saves: (a, b) => compareBrandMetric(a, b, "savesCount"),
       newest: (a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime(),
       oldest: (a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime(),
     };
@@ -145,7 +146,7 @@ export default function BrandIntelligence() {
     return result;
   }, [posts, filters]);
 
-  const maxEngagement = useMemo(() => Math.max(...posts.map((p) => p.engagementScore), 0), [posts]);
+  const maxEngagement = useMemo(() => Math.max(...posts.flatMap((p) => p.engagementScore === null ? [] : [p.engagementScore]), 0), [posts]);
   const hasResults = profile !== null;
 
   return (
@@ -247,9 +248,10 @@ export default function BrandIntelligence() {
                   <PostsGrid posts={filteredPosts} isLoading={isLoading} onPostClick={handlePostClick} contentPostIds={contentPostIds} />
                   {hasMore && (
                     <div className="flex justify-center pt-4">
-                      <Button variant="outline" onClick={loadMore} className="gap-2">
+                      {loadMoreError && <p className="mr-3 self-center text-sm text-destructive">{t("actions.loadMoreFailed", "Could not load more. Try again.")}</p>}
+                      <Button variant="outline" onClick={loadMore} disabled={isLoadingMore} className="gap-2">
                         <Loader2 className="w-4 h-4" />
-                        {t("actions.loadMore", "Load More")}
+                        {isLoadingMore ? t("actions.loadingMore", "Loading...") : t("actions.loadMore", "Load More")}
                       </Button>
                     </div>
                   )}
@@ -348,9 +350,10 @@ export default function BrandIntelligence() {
                     <PostsGrid posts={filteredPosts} isLoading={isLoading} onPostClick={handlePostClick} contentPostIds={contentPostIds} />
                     {hasMore && (
                       <div className="flex justify-center pt-4">
-                        <Button variant="outline" onClick={loadMore} className="gap-2">
+                        {loadMoreError && <p className="mr-3 self-center text-sm text-destructive">{t("actions.loadMoreFailed", "Could not load more. Try again.")}</p>}
+                        <Button variant="outline" onClick={loadMore} disabled={isLoadingMore} className="gap-2">
                           <Loader2 className="w-4 h-4" />
-                          {t("actions.loadMore", "Load More")}
+                          {isLoadingMore ? t("actions.loadingMore", "Loading...") : t("actions.loadMore", "Load More")}
                         </Button>
                       </div>
                     )}

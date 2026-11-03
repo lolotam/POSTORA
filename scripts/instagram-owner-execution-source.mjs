@@ -1,11 +1,12 @@
 import { execFileSync } from "node:child_process";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { assertLocalDockerSocket } from "../e2e/fixtures/instagramOwnerReleaseSafety.mjs";
 
 const EXECUTION_PATHS = [
   "src", "supabase", "e2e", "scripts", ".github/workflows", "public",
   "package.json", "package-lock.json", "index.html", "vite.config.ts", "tsconfig*.json",
-  "tailwind.config.ts", "postcss.config.js", "playwright.owner-analytics.config.ts", ".env*",
+  "tailwind.config.ts", "postcss.config.js", "playwright.owner-analytics.config.ts", "playwright.instagram-release.config.ts", ".env*",
 ];
 
 export function assertOwnerExecutionSource(root, candidate) {
@@ -22,8 +23,12 @@ export function assertOwnerExecutionSource(root, candidate) {
   return head;
 }
 
-export function assertPreparedOwnerExecutionSource(root) {
-  const candidate = execFileSync("docker", ["inspect", "--format", '{{ index .Config.Labels "postora.owner-candidate" }}', "postora-owner-release-pg"],
+/** @param {string} root @param {(file: string, args: string[], options: import('node:child_process').ExecFileSyncOptionsWithStringEncoding) => string} command */
+export function assertPreparedOwnerExecutionSource(root, command = execFileSync) {
+  if (process.env.DOCKER_HOST) assertLocalDockerSocket(process.env.DOCKER_HOST);
+  const context = JSON.parse(command("docker", ["context", "inspect"], { encoding: "utf8", stdio: "pipe" }))[0];
+  assertLocalDockerSocket(context?.Endpoints?.docker?.Host);
+  const candidate = command("docker", ["inspect", "--format", '{{ index .Config.Labels "postora.owner-candidate" }}', "postora-owner-release-pg"],
     { encoding: "utf8", stdio: "pipe" }).trim();
   return assertOwnerExecutionSource(root, candidate);
 }

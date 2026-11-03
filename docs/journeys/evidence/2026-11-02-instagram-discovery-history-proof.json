@@ -1,0 +1,845 @@
+{
+  "version": 1,
+  "recordedAt": "2026-11-02T04:53:43.667Z",
+  "scope": "Canonical J3 discovery/cache/history browser journey with real local Auth and SQL",
+  "source": "0e3d01fef8bbcf6ece3257a0b6ca736ad9c139ac",
+  "tree": "59cde7b7886f109da57cfdddab97fbcdf16e4f3d",
+  "executionCheckout": "F:/Dev/Worktrees/Postora_new/canonical-discovery-538ef365",
+  "evidenceAuthority": "Author-recorded local execution; not independently trusted G-X acceptance or production approval",
+  "inputs": [
+    {
+      "path": "e2e/instagram-release.spec.ts",
+      "gitBlob": "4f410ea3567f94e0be1c3bdf29f5c2bda952492c",
+      "gitSha256": "d2ce952062354e62cb58defe2d59826d15028bda11b5c42e43e265be5da5390f",
+      "executionSha256": "f6286f5dcaf3a308b09ee13b906e0d9c378417d9a8bbf7f835c3636e0d980a55",
+      "normalizedExecutionSha256": "d2ce952062354e62cb58defe2d59826d15028bda11b5c42e43e265be5da5390f"
+    },
+    {
+      "path": "supabase/functions/n8n-api/instagramReleaseContract.test.ts",
+      "gitBlob": "f58abe6b5103e156f6177024d0b6d7d39b500413",
+      "gitSha256": "644114e41e5a0b0028955c6720424baa4cc1ae7dda3d7076d3a7a9ada5410988",
+      "executionSha256": "e46cb80ebd3cb8022504fd97f6ea1f3f9a9817542feaabb78b5c1aa20d4192dc",
+      "normalizedExecutionSha256": "644114e41e5a0b0028955c6720424baa4cc1ae7dda3d7076d3a7a9ada5410988"
+    },
+    {
+      "path": "e2e/fixtures/instagramReleaseSeed.ts",
+      "gitBlob": "d73d7c1f13e8e8ddf0ae479258ad1b81949053b3",
+      "gitSha256": "70019b49baacb31764e73c9ad11944c291a456db4ee987f9f42cd37e08762ed3",
+      "executionSha256": "c24ffa4a5b16e4e7778d238f3567e173ecd192372faee8ca56fcf4eedad38782",
+      "normalizedExecutionSha256": "70019b49baacb31764e73c9ad11944c291a456db4ee987f9f42cd37e08762ed3"
+    },
+    {
+      "path": "e2e/fixtures/instagramReleaseServer.ts",
+      "gitBlob": "dd5e712c54361e320bb4f79f8fe41436507fac02",
+      "gitSha256": "39d6b11f371b32294183a116a4da96b4eb9b4f1426e1fa7da6bc822ed1f507c2",
+      "executionSha256": "9a5d479c574c0239f00a8473a6b30f352245bcfbad05b368f7511a8449644310",
+      "normalizedExecutionSha256": "39d6b11f371b32294183a116a4da96b4eb9b4f1426e1fa7da6bc822ed1f507c2"
+    },
+    {
+      "path": "src/components/brand-intelligence/ScrapeHistory.tsx",
+      "gitBlob": "a5001d5a1741eedbac2558cba428b4723b6ba9ae",
+      "gitSha256": "75dad35b9eabfb932e569ddf24dc7b703138c6f7bb5d8344f9afaba2e5cb1b3b",
+      "executionSha256": "2db64fc135669af23ae7a92004a9fa5504b2215a6aec8f7583e223436a44c8b5",
+      "normalizedExecutionSha256": "75dad35b9eabfb932e569ddf24dc7b703138c6f7bb5d8344f9afaba2e5cb1b3b"
+    },
+    {
+      "path": "src/pages/analytics/InstagramAnalytics.tsx",
+      "gitBlob": "dfe99b53051bd1526431a132617b956c569249b5",
+      "gitSha256": "987c5f6b2a20cad48084c1997bda6986776cdfa76f91b1f3e53532e4176a6fae",
+      "executionSha256": "aff297c9965302a724b30226c9af7e6506217d23e105a7a54b01b44d57a4a77d",
+      "normalizedExecutionSha256": "987c5f6b2a20cad48084c1997bda6986776cdfa76f91b1f3e53532e4176a6fae"
+    },
+    {
+      "path": "src/features/competitor-tracking/tests/ProfileCardIntegration.test.tsx",
+      "gitBlob": "c198044ba78114b599bc5b0bcef800883fd721a0",
+      "gitSha256": "6c78ad874859ced5133c03b562b128105578cf66bb13737ea59774b90b57d9af",
+      "executionSha256": "e0de02b8a67c64850de53b66bbd0ae263dae68ae88f1f317c5ae9897dad162ec",
+      "normalizedExecutionSha256": "6c78ad874859ced5133c03b562b128105578cf66bb13737ea59774b90b57d9af"
+    },
+    {
+      "path": "src/i18n/locales/ar/analytics.json",
+      "gitBlob": "ce33850fdb49face68326f984c3eb5e0141db334",
+      "gitSha256": "ce14aefb2798956d7da81fff4935819d10a2c5c841d47f3f89aa58f7b400864c",
+      "executionSha256": "1735ad9da2380ee6d051ed98ba0c3adf765f9d1ad4062f078cc84955d6bcb898",
+      "normalizedExecutionSha256": "ce14aefb2798956d7da81fff4935819d10a2c5c841d47f3f89aa58f7b400864c"
+    },
+    {
+      "path": "playwright.instagram-release.config.ts",
+      "gitBlob": "632198d3d68a80ea52d4a1a205ec3f452a02cb07",
+      "gitSha256": "4afcf6ac8ca2dee5c3ecc8bed9d76133be5c38d2f6ff25ec48dd8730727676f5",
+      "executionSha256": "add9cfd96d87596903ebf144cb7946465c153c8ca85b4150dbb3c69d12465df7",
+      "normalizedExecutionSha256": "4afcf6ac8ca2dee5c3ecc8bed9d76133be5c38d2f6ff25ec48dd8730727676f5"
+    }
+  ],
+  "canonical": {
+    "expected": 4,
+    "unexpected": 0,
+    "flaky": 0,
+    "skipped": 0,
+    "tests": [
+      {
+        "title": "canonical fixture smoke: real Auth, ordinary owners, separate admin and SQL quota state",
+        "ok": true,
+        "executions": [
+          {
+            "status": "expected",
+            "results": [
+              {
+                "status": "passed",
+                "retry": 0
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "title": "canonical discovery preserves official provenance, nullable media and owner-scoped cache through saved history",
+        "ok": true,
+        "executions": [
+          {
+            "status": "expected",
+            "results": [
+              {
+                "status": "passed",
+                "retry": 0
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "title": "SQL-backed Instagram reports retain metrics, nulls, outliers and freshness through API and scoped MCP",
+        "ok": true,
+        "executions": [
+          {
+            "status": "expected",
+            "results": [
+              {
+                "status": "passed",
+                "retry": 0
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "title": "registered analytics routes refuse foreign owners, missing scopes and cursors without inventing Instagram capability",
+        "ok": true,
+        "executions": [
+          {
+            "status": "expected",
+            "results": [
+              {
+                "status": "passed",
+                "retry": 0
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "databasePreparation": {
+    "directory": "F:/Dev/Temp/postora-owner-release-prepare-SzvbNk",
+    "migrationsAfterBaseline": 151,
+    "baselineSuites": 69,
+    "isolatedSuites": 1
+  },
+  "previousCanonicalFailure": {
+    "source": "ddbb91e5c071e1b790ea3ea8fa42fcaad036ee96",
+    "passed": 3,
+    "failed": 1,
+    "reason": "Legacy /brand-intelligence redirects to the current Instagram screen, which had no reachable History control",
+    "artifacts": ".tmp/canonical-discovery-ddbb91e5-failure-artifacts/"
+  },
+  "sourceBadgeRegression": {
+    "before": {
+      "passed": 17,
+      "failed": 1
+    },
+    "after": {
+      "passed": 18,
+      "failed": 0
+    },
+    "reason": "Stored profile_data.source was ignored by the history row"
+  },
+  "uiRegressions": {
+    "passed": 35,
+    "files": 3,
+    "source": "0e3d01fef8bbcf6ece3257a0b6ca736ad9c139ac"
+  },
+  "typecheck": {
+    "passed": true,
+    "source": "0e3d01fef8bbcf6ece3257a0b6ca736ad9c139ac"
+  },
+  "build": {
+    "passed": true,
+    "source": "538ef365df35e375c6195d8baf77f583ce591168",
+    "attribution": "Same production inputs; subsequent commit removes unsupported test-query options only"
+  },
+  "lint": {
+    "base": "757fc42fa6002b782c6a3eb155695fa97fe2adc1",
+    "head": "0e3d01fef8bbcf6ece3257a0b6ca736ad9c139ac",
+    "result": "NO REGRESSIONS",
+    "historicalDebtRemains": true
+  },
+  "cleanup": {
+    "users": 1,
+    "namespace_settings": 0,
+    "scrape_sessions": 0,
+    "scrape_cache": 0,
+    "fixture_oauth_clients": 0,
+    "active_cron": 0,
+    "cron_launcher": "off",
+    "instagram_live_leases": 0
+  },
+  "artifacts": [
+    {
+      "path": ".tmp/canonical-discovery-0e3d01fe-prepare.log",
+      "sha256": "f31598535feced24be8770fcb7f51ccd6a0b94c6d092294657e1fd5172d2d8f6"
+    },
+    {
+      "path": ".tmp/canonical-discovery-0e3d01fe-deno-cache.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": ".tmp/canonical-discovery-0e3d01fe-deno-check.log",
+      "sha256": "030000da0e6cae48c8bdb159dfdcf57b22ce1c53b8f53d811c3b15f03c86c110"
+    },
+    {
+      "path": ".tmp/canonical-discovery-0e3d01fe-playwright.log",
+      "sha256": "b77063712ab3423122c34cd8dfceaee54227eb427916f6be200d5eca31a6c191"
+    },
+    {
+      "path": ".tmp/canonical-discovery-0e3d01fe-playwright.json",
+      "sha256": "e13a2596e020586b26e4f223842d17cee363cf6321d6bb6818a12f2d892a9966"
+    },
+    {
+      "path": ".tmp/canonical-discovery-0e3d01fe-cleanup.json",
+      "sha256": "6df53c220fe9cfed195a42d52a3d962ec04c8780c8b04aef15d881061a08ab3c"
+    },
+    {
+      "path": ".tmp/canonical-discovery-0e3d01fe-lint-i18n.log",
+      "sha256": "824ef84397219d1e52d901b58ad1dbeaca54981aa393e78a20f505137add4ba2"
+    },
+    {
+      "path": ".tmp/canonical-discovery-ddbb91e5-playwright.log",
+      "sha256": "0e410c7c2b28b653e9aed625ea0e80d0fb755e4fe12311d45ce329e651c373b4"
+    },
+    {
+      "path": ".tmp/canonical-discovery-ddbb91e5-playwright.json",
+      "sha256": "d244b3af31d2c57e51115d81e6da8c4bf085e7ea8e7ae5c837d6f1e940b8605a"
+    },
+    {
+      "path": ".tmp/canonical-discovery-history-source-before.log",
+      "sha256": "8f03ebc9c7b0c90a2b86b927c6abf047f88321fa7531f7b71a71b7323162cf33"
+    },
+    {
+      "path": ".tmp/canonical-discovery-history-source-after.log",
+      "sha256": "0b47d2e0dd875c4525771fde374047c981064fa6490dbb10a628d26d03b5dae2"
+    },
+    {
+      "path": ".tmp/canonical-discovery-history-composition-final.log",
+      "sha256": "3366bd7c4c8488576460f633dc3480927f1b4436fdb6de4b466c5394d4acea71"
+    },
+    {
+      "path": ".tmp/canonical-discovery-history-typecheck-corrected.log",
+      "sha256": "82b5202dbc205db5afc9568372d1f11e63c1105117ebdc791a50680ece23bccf"
+    },
+    {
+      "path": ".tmp/canonical-discovery-history-build.log",
+      "sha256": "a0accd73178ffaa539774ada9613ed3b10d5411dc6556da4736a2e78f882434e"
+    },
+    {
+      "path": ".tmp/canonical-discovery-0e3d01fe-gx-inventory.json",
+      "sha256": "ede5db3cecb6bfc9e402de64650c0edbbb869da29aba2e9ea2e35e10b81b58f1"
+    },
+    {
+      "path": ".tmp/canonical-discovery-0e3d01fe-graph-update.log",
+      "sha256": "da8ff9e7e11f0c5e0e99d6a799fa65565a4f0f43f9a76122b31bbed48b800636"
+    }
+  ],
+  "gxInventory": {
+    "formatVersion": 1,
+    "scope": "instagram-task11-release-gates",
+    "phase": "local",
+    "gate": null,
+    "candidate": "0e3d01fef8bbcf6ece3257a0b6ca736ad9c139ac",
+    "tree": "59cde7b7886f109da57cfdddab97fbcdf16e4f3d",
+    "main": "781111a8c8b5bc1296f8c82bbe575f2498b82748",
+    "activation": null,
+    "acceptance": [
+      {
+        "id": "D1",
+        "inventoryStatus": "blocked-on-dependency",
+        "obligation": "G-D; Task 2: page-linked business candidate from trusted capability, not metadata-only legacy test.",
+        "execution": "missing"
+      },
+      {
+        "id": "D2",
+        "inventoryStatus": "blocked-on-dependency",
+        "obligation": "G-D; Task 2: direct login excluded by trusted kind; existing legacy selector test is partial proof.",
+        "execution": "missing"
+      },
+      {
+        "id": "D3",
+        "inventoryStatus": "blocked-on-dependency",
+        "obligation": "G-D; Task 2: successful empty permissions denied; failed/legacy scopes unknown, never trusted.",
+        "execution": "missing"
+      },
+      {
+        "id": "D4",
+        "inventoryStatus": "blocked-on-dependency",
+        "obligation": "G-D; Task 2: inactive/reauth exclusion and deterministic newest/ID tie after capability repair.",
+        "execution": "missing"
+      },
+      {
+        "id": "D5",
+        "inventoryStatus": "blocked-on-dependency",
+        "obligation": "G-D; Task 2: real interactive mapping REELS/view_count, through cache and history.",
+        "execution": "missing"
+      },
+      {
+        "id": "D6",
+        "inventoryStatus": "blocked-on-dependency",
+        "obligation": "G-D; Task 2: hidden likes remain null in all numeric consumers/exports.",
+        "execution": "missing"
+      },
+      {
+        "id": "D7",
+        "inventoryStatus": "blocked-on-dependency",
+        "obligation": "G-D; Task 2: FEED VIDEO remains VIDEO through interactive path.",
+        "execution": "missing"
+      },
+      {
+        "id": "D8",
+        "inventoryStatus": "blocked-on-dependency",
+        "obligation": "G-O + G-L; Task 6/provider contract: exact approved product lists and unknown/AD behavior need reconciliation. Current graph tests intentionally use a universal unknown-product set; direct classification is not a proved Reel/Feed surface.",
+        "execution": "missing"
+      },
+      {
+        "id": "D9",
+        "inventoryStatus": "to-be-written",
+        "obligation": "G-O + G-S: pin 7/8/30/31/90/91-day cadence, ordinary continuation skip and accepted force recollection with stale-worker refusal.",
+        "execution": "missing"
+      },
+      {
+        "id": "D10",
+        "inventoryStatus": "existing",
+        "obligation": "G-O `worker.test.ts` page/direct transport cases; `workerStore.test.ts` trusted capability and protected credential tests; `directGraphProvider.test.ts` host tests. Approved protected replacement of metadata fallback only. G-L still required.",
+        "execution": "missing"
+      },
+      {
+        "id": "D11",
+        "inventoryStatus": "existing",
+        "obligation": "G-R `_shared/outlierScore.test.ts` self exclusion; report assembler canonical-caller test.",
+        "execution": "missing"
+      },
+      {
+        "id": "D12",
+        "inventoryStatus": "existing",
+        "obligation": "G-R `_shared/outlierScore.test.ts` format separation; assembler source/metric cohort tests.",
+        "execution": "missing"
+      },
+      {
+        "id": "D13",
+        "inventoryStatus": "existing",
+        "obligation": "G-R `_shared/outlierScore.test.ts` 48-hour equality, null precedence, fewer-than-six and zero median.",
+        "execution": "missing"
+      },
+      {
+        "id": "D14",
+        "inventoryStatus": "existing",
+        "obligation": "G-R `_shared/outlierScore.test.ts` inclusive 3/1.5/0.5 boundary test.",
+        "execution": "missing"
+      },
+      {
+        "id": "D15",
+        "inventoryStatus": "existing",
+        "obligation": "G-R `assemble.test.ts` zero reach, missing numerator, unavailable media and percent-basis assertions.",
+        "execution": "missing"
+      },
+      {
+        "id": "A1",
+        "inventoryStatus": "to-be-written",
+        "obligation": "G-O/G-S: bridge two media plus daily metrics through real worker writes to report; assert completion only after durable writes.",
+        "execution": "missing"
+      },
+      {
+        "id": "A2",
+        "inventoryStatus": "existing",
+        "obligation": "G-O `graphProvider.test.ts` empty account day and missing media value tests; unavailable remains null.",
+        "execution": "missing"
+      },
+      {
+        "id": "A3",
+        "inventoryStatus": "to-be-written",
+        "obligation": "G-O/G-S/J9: actual 190→fenced account health transition plus another account advancing; classifier-only evidence is insufficient.",
+        "execution": "missing"
+      },
+      {
+        "id": "A4",
+        "inventoryStatus": "to-be-written",
+        "obligation": "G-O/G-S/J9: permission refusal→scope_missing without needs_reauth; distinguish code 10 insufficient-viewer data.",
+        "execution": "missing"
+      },
+      {
+        "id": "A5",
+        "inventoryStatus": "existing",
+        "obligation": "G-O `worker.test.ts` nearly-spent budget and durable shared throttle tests; `graphProvider.test.ts` both usage headers.",
+        "execution": "missing"
+      },
+      {
+        "id": "A6",
+        "inventoryStatus": "blocked-on-dependency",
+        "obligation": "G-O; Task 6/provider contract: current test explicitly says media insight calls are never retried automatically. Need approved targeted unsupported-metric behavior and positive test, or explicit amendment; do not mark the opposite test green for A6.",
+        "execution": "missing"
+      },
+      {
+        "id": "A7",
+        "inventoryStatus": "to-be-written",
+        "obligation": "G-O: existing 25-claim and five-media-per-visit tests support tighter slices; aggregate invocation proof must enforce <=60 media/account with >60 due and fair continuation.",
+        "execution": "missing"
+      },
+      {
+        "id": "A8",
+        "inventoryStatus": "to-be-written",
+        "obligation": "G-S/G-O: real platform-post linkage for same owner/account/media; foreign and unpublished media remain unlinked/rejected.",
+        "execution": "missing"
+      },
+      {
+        "id": "A9",
+        "inventoryStatus": "to-be-written",
+        "obligation": "G-S/G-O: repeat a real worker day, compare row identities/counts and values; force supersession and durable completion, not only fake upsert calls.",
+        "execution": "missing"
+      },
+      {
+        "id": "A10",
+        "inventoryStatus": "existing",
+        "obligation": "G-C `syncWorker.test.ts` named A10 official capture test.",
+        "execution": "missing"
+      },
+      {
+        "id": "A11",
+        "inventoryStatus": "existing",
+        "obligation": "G-C `syncWorker.test.ts` named A11 no viewer/paid-off test, no provider call.",
+        "execution": "missing"
+      },
+      {
+        "id": "A12",
+        "inventoryStatus": "existing",
+        "obligation": "G-C `syncWorker.test.ts` named A12 injected paid-on case. Approved scope: adapter-only evidence; `index.ts` injects disabled paid policy. G-X must assert scheduled fallback remains unreachable.",
+        "execution": "missing"
+      },
+      {
+        "id": "A13",
+        "inventoryStatus": "existing",
+        "obligation": "G-C `syncWorker.test.ts` named A13 and `supabase/tests/competitor_collection_results.sql` weekly retry rules; viewer/network failures are not target-unavailable.",
+        "execution": "missing"
+      },
+      {
+        "id": "A14",
+        "inventoryStatus": "blocked-on-dependency",
+        "obligation": "G-R; Task 10: existing dispatch/assembler tests do not prove real database-only API/MCP report parity, outliers and pagination.",
+        "execution": "missing"
+      },
+      {
+        "id": "A15",
+        "inventoryStatus": "blocked-on-dependency",
+        "obligation": "G-R; Task 10: assembled API/MCP cross-owner and nonexistent target return indistinguishable 404, with no provider calls.",
+        "execution": "missing"
+      },
+      {
+        "id": "A16",
+        "inventoryStatus": "to-be-written",
+        "obligation": "G-R: extend existing Facebook unsupported proxy test to assert exact supported-platform list; retain Threads/TikTok responses.",
+        "execution": "missing"
+      },
+      {
+        "id": "I1",
+        "inventoryStatus": "blocked-on-dependency",
+        "obligation": "G-D; Task 2: inspect actual interactive request fields, not the competitor worker alone.",
+        "execution": "missing"
+      },
+      {
+        "id": "I2",
+        "inventoryStatus": "blocked-on-dependency",
+        "obligation": "G-D; Task 2: interactive cursor, cap, repeated cursor and trusted-host tests.",
+        "execution": "missing"
+      },
+      {
+        "id": "I3",
+        "inventoryStatus": "blocked-on-dependency",
+        "obligation": "G-O/G-L; Task 6 metric/classification reconciliation and live configured-version verification; host unit tests already exist.",
+        "execution": "missing"
+      },
+      {
+        "id": "I4",
+        "inventoryStatus": "existing",
+        "obligation": "G-O `graphProvider.test.ts` timeout/abort and at-most-two server retries; no claim every request retries.",
+        "execution": "missing"
+      },
+      {
+        "id": "I5",
+        "inventoryStatus": "existing",
+        "obligation": "G-O `worker.test.ts` “no token reaches a log line, a summary or an error”; provider failure text tests. G-X extends redaction checks to all release artifacts.",
+        "execution": "missing"
+      },
+      {
+        "id": "I6",
+        "inventoryStatus": "blocked-on-dependency",
+        "obligation": "G-D; Task 2 repaired actual brand-scrape handler with only facebook_business account; G-L later confirms usable live grant.",
+        "execution": "missing"
+      },
+      {
+        "id": "I7",
+        "inventoryStatus": "blocked-on-dependency",
+        "obligation": "G-D; Task 2 typed IG_INSIGHTS_SCOPE_MISSING and allowed interactive fallback warning/source.",
+        "execution": "missing"
+      },
+      {
+        "id": "H1",
+        "inventoryStatus": "to-be-written",
+        "obligation": "G-O/G-X: existing intake/actual-route/drain tests cover current auth; daily enqueue contract is missing. Test cron, admin, service and JWT against final supported actions, rejecting spoofed owner/target.",
+        "execution": "missing"
+      },
+      {
+        "id": "H2",
+        "inventoryStatus": "existing",
+        "obligation": "G-S `instagram_durable_collection_jobs.sql` shared accepted-request throttle and G-O handler/store throttle projection tests. Rerun two-session fixture separately.",
+        "execution": "missing"
+      },
+      {
+        "id": "H3",
+        "inventoryStatus": "existing",
+        "obligation": "G-C `handler.test.ts` and `route.test.ts` owner entry/force/status vs privileged enqueue-daily/all auth matrix.",
+        "execution": "missing"
+      },
+      {
+        "id": "H4",
+        "inventoryStatus": "existing",
+        "obligation": "G-R `mcp/toolScopes.test.ts` every registered tool has/checks scope; unknown-tool fail closed. No optional competitor registrations.",
+        "execution": "missing"
+      },
+      {
+        "id": "S1",
+        "inventoryStatus": "existing",
+        "obligation": "G-S `instagram_tracking_schema.sql` owner SELECT on actual five-table schema; M1 coverage test extends new table.",
+        "execution": "missing"
+      },
+      {
+        "id": "S2",
+        "inventoryStatus": "existing",
+        "obligation": "G-S same suite cross-user SELECT denial plus composite ownership; report bridges must retain isolation.",
+        "execution": "missing"
+      },
+      {
+        "id": "S3",
+        "inventoryStatus": "existing",
+        "obligation": "G-S same suite browser snapshot-write denial and service ownership constraints.",
+        "execution": "missing"
+      },
+      {
+        "id": "S4",
+        "inventoryStatus": "existing",
+        "obligation": "G-S same suite quota and approved RPC soft-remove/reactivate behavior; real concurrent quota fixture required. Hard delete is not approved. Retention races tracked separately below.",
+        "execution": "missing"
+      },
+      {
+        "id": "S5",
+        "inventoryStatus": "existing",
+        "obligation": "G-S same suite snapshot natural-key uniqueness; G-O repeat-worker evidence remains A9.",
+        "execution": "missing"
+      },
+      {
+        "id": "S6",
+        "inventoryStatus": "blocked-on-dependency",
+        "obligation": "G-S/G-X: C1's four inactive collection schedules (collection rollout controls plan Task 5, RC-12), with Task 4's daily dispatch as their prerequisite, and Task 8 M4. Run definitions twice; one job per name, active=false, no secret literals or unrelated job changes.",
+        "execution": "missing"
+      },
+      {
+        "id": "U1",
+        "inventoryStatus": "blocked-on-dependency",
+        "obligation": "G-U/G-E; Task 9: existing table render test needs real type-filter behavior and exact fixture values.",
+        "execution": "missing"
+      },
+      {
+        "id": "U2",
+        "inventoryStatus": "blocked-on-dependency",
+        "obligation": "G-U/G-E; Task 9: connected account with no snapshots, actionable Sync now; never promise a disabled nightly schedule.",
+        "execution": "missing"
+      },
+      {
+        "id": "U3",
+        "inventoryStatus": "blocked-on-dependency",
+        "obligation": "G-U/G-E; Task 9: scope_missing vs reauth banners and preserved history.",
+        "execution": "missing"
+      },
+      {
+        "id": "U4",
+        "inventoryStatus": "blocked-on-dependency",
+        "obligation": "G-D/G-U; Task 2 provenance + Task 8 card wiring. A hand-supplied source prop cannot close this.",
+        "execution": "missing"
+      },
+      {
+        "id": "U5",
+        "inventoryStatus": "blocked-on-dependency",
+        "obligation": "G-U/G-E; Task 8 management and quotas, backed by real local RPCs.",
+        "execution": "missing"
+      },
+      {
+        "id": "U6",
+        "inventoryStatus": "blocked-on-dependency",
+        "obligation": "G-U/G-E; Task 8 + Task 9: neutral labels in both actual screens, not only formatter functions.",
+        "execution": "missing"
+      },
+      {
+        "id": "E1",
+        "inventoryStatus": "blocked-on-dependency",
+        "obligation": "G-E §4 E1; Task 9 complete route/UI and Task 10 accepted read contract.",
+        "execution": "missing"
+      },
+      {
+        "id": "E2",
+        "inventoryStatus": "blocked-on-dependency",
+        "obligation": "G-E §4 E2; Task 8 M2/report/UI, growth and route delivery.",
+        "execution": "missing"
+      },
+      {
+        "id": "J1",
+        "inventoryStatus": "blocked-on-dependency",
+        "obligation": "G-E §4 J1; Task 9 + collection contract reconciliation; G-L direct-login acceptance remains separate.",
+        "execution": "missing"
+      },
+      {
+        "id": "J2",
+        "inventoryStatus": "blocked-on-dependency",
+        "obligation": "G-E §4 J2; Task 2 provenance/reconnect and Task 8 badge; live Meta Gate C separately.",
+        "execution": "missing"
+      },
+      {
+        "id": "J3",
+        "inventoryStatus": "blocked-on-dependency",
+        "obligation": "G-E §4 J3; Task 2 interactive official lookup and Task 8 source integration; live Meta separately.",
+        "execution": "missing"
+      },
+      {
+        "id": "J4",
+        "inventoryStatus": "blocked-on-dependency",
+        "obligation": "G-E §4 J4; Task 2 target-vs-viewer classification and interactive admin fallback policy.",
+        "execution": "missing"
+      },
+      {
+        "id": "J5",
+        "inventoryStatus": "blocked-on-dependency",
+        "obligation": "G-E §4 J5; Task 8 saved→queued→collected and honest baseline states.",
+        "execution": "missing"
+      },
+      {
+        "id": "J6",
+        "inventoryStatus": "blocked-on-dependency",
+        "obligation": "G-E §4 J6; Task 8 management UX backed by existing quota arbiter.",
+        "execution": "missing"
+      },
+      {
+        "id": "J7",
+        "inventoryStatus": "blocked-on-dependency",
+        "obligation": "G-E §4 J7; Task 8 + Task 9 real screens; canonical outlier unit evidence already exists.",
+        "execution": "missing"
+      },
+      {
+        "id": "J8",
+        "inventoryStatus": "blocked-on-dependency",
+        "obligation": "G-R/G-E §4 J8; Task 10 actual MCP composition/read parity; do not invoke a live AI client/provider.",
+        "execution": "missing"
+      },
+      {
+        "id": "J9",
+        "inventoryStatus": "blocked-on-dependency",
+        "obligation": "G-O/G-E §4 J9; Task 9 reconnect UX plus full health/write bridge; live revocation testing needs separate consent.",
+        "execution": "missing"
+      },
+      {
+        "id": "J10",
+        "inventoryStatus": "blocked-on-dependency",
+        "obligation": "G-O/G-E §4 J10; Task 9 reason display and Task 6/live Meta evidence distinguishing threshold from generic unavailable.",
+        "execution": "missing"
+      },
+      {
+        "id": "T8-01",
+        "inventoryStatus": "blocked-on-dependency",
+        "obligation": "G-D/G-U; Task 2 source contract + Task 8 producer/hook/card/history proof.",
+        "execution": "missing"
+      },
+      {
+        "id": "T8-02",
+        "inventoryStatus": "blocked-on-dependency",
+        "obligation": "G-S/G-U/G-E J5/J6; Task 8 management/lost-response/quotas/downgrade suite.",
+        "execution": "missing"
+      },
+      {
+        "id": "T8-03",
+        "inventoryStatus": "blocked-on-dependency",
+        "obligation": "G-R/G-S; Task 8 M2/report: real auth-scoped list/detail, cursor precision, malformed/error refusal, no provider.",
+        "execution": "missing"
+      },
+      {
+        "id": "T8-04",
+        "inventoryStatus": "blocked-on-dependency",
+        "obligation": "G-R/G-E E2; Task 8 growth with approved S=3 days, missing/zero/source-change/negative and actual interval.",
+        "execution": "missing"
+      },
+      {
+        "id": "T8-05",
+        "inventoryStatus": "blocked-on-dependency",
+        "obligation": "G-C/G-R; M1 tests exist, but Task 8 report-level complete/partial/unknown semantics and provider ordering proof remain. Live ordering absence must retain unknown.",
+        "execution": "missing"
+      },
+      {
+        "id": "T8-06",
+        "inventoryStatus": "blocked-on-dependency",
+        "obligation": "G-R/G-U J7; Task 8 competitor assembler actually calls canonical outlier with correct cohorts and period-independent history.",
+        "execution": "missing"
+      },
+      {
+        "id": "T8-07",
+        "inventoryStatus": "blocked-on-dependency",
+        "obligation": "G-U/G-E; Task 8 queued≠collected, Retry-After, lost enqueue, bounded polling, terminal/auth-change stop and retained history.",
+        "execution": "missing"
+      },
+      {
+        "id": "T8-08",
+        "inventoryStatus": "blocked-on-dependency",
+        "obligation": "G-S; Task 8 M3: 89d/90d−1µs/90d, all children/jobs, repeated removal and reactivation semantics.",
+        "execution": "missing"
+      },
+      {
+        "id": "T8-09",
+        "inventoryStatus": "blocked-on-dependency",
+        "obligation": "G-S; Task 8 M3 real three-session (two racers plus an observer) cleanup/reactivation/collection races, >500-child backlog, rollback and restart.",
+        "execution": "missing"
+      },
+      {
+        "id": "T8-10",
+        "inventoryStatus": "blocked-on-dependency",
+        "obligation": "G-S/G-X; Task 8 M4 inactive idempotent schedule, dry-run/no-work/refusal logging and switch-off behavior.",
+        "execution": "missing"
+      },
+      {
+        "id": "T8-11",
+        "inventoryStatus": "blocked-on-dependency",
+        "obligation": "G-U/G-E; Task 8 English/Arabic/RTL/keyboard/mobile/zoom, identity isolation and non-Instagram card regressions.",
+        "execution": "missing"
+      },
+      {
+        "id": "T8-12",
+        "inventoryStatus": "blocked-on-dependency",
+        "obligation": "G-E/G-X; Task 8 assembled route + Task 11 lifecycle, future Arabic journey and release evidence.",
+        "execution": "missing"
+      }
+    ],
+    "migrationSnapshots": {
+      "R1": {
+        "commit": "49e1d4a917c6d0f617d903cc49182c8849cb0b30",
+        "newestVersion": "20261030150000",
+        "marker": "20260830120300"
+      },
+      "R2": {
+        "commit": "49e1d4a917c6d0f617d903cc49182c8849cb0b30",
+        "newestVersion": "20261030150000",
+        "marker": "20260830120300"
+      },
+      "C1": {
+        "commit": "49e1d4a917c6d0f617d903cc49182c8849cb0b30",
+        "newestVersion": "20261030150000",
+        "marker": "20260830120300"
+      }
+    },
+    "failures": [
+      {
+        "code": "migration_version_collision",
+        "detail": "20260825120000 at 0e3d01fef8bbcf6ece3257a0b6ca736ad9c139ac"
+      },
+      {
+        "code": "migration_reserved_prefix_violation",
+        "detail": "supabase/migrations/20260825120000_inbound_media_understanding.sql at 0e3d01fef8bbcf6ece3257a0b6ca736ad9c139ac"
+      },
+      {
+        "code": "migration_version_collision",
+        "detail": "20260828190000 at 0e3d01fef8bbcf6ece3257a0b6ca736ad9c139ac"
+      },
+      {
+        "code": "migration_reserved_prefix_violation",
+        "detail": "supabase/migrations/20260828190000_clear_false_positive_meta_reauth.sql at 0e3d01fef8bbcf6ece3257a0b6ca736ad9c139ac"
+      },
+      {
+        "code": "migration_version_collision",
+        "detail": "20260904120000 at 0e3d01fef8bbcf6ece3257a0b6ca736ad9c139ac"
+      },
+      {
+        "code": "migration_reserved_prefix_violation",
+        "detail": "supabase/migrations/20260904120000_social_contacts.sql at 0e3d01fef8bbcf6ece3257a0b6ca736ad9c139ac"
+      },
+      {
+        "code": "migration_version_collision",
+        "detail": "20260906120000 at 0e3d01fef8bbcf6ece3257a0b6ca736ad9c139ac"
+      },
+      {
+        "code": "migration_reserved_prefix_violation",
+        "detail": "supabase/migrations/20260906120000_whatsapp_evolution_sync_outcome.sql at 0e3d01fef8bbcf6ece3257a0b6ca736ad9c139ac"
+      },
+      {
+        "code": "required_source_missing",
+        "detail": ".github/workflows/instagram-migration-gate.yml"
+      },
+      {
+        "code": "required_source_missing",
+        "detail": ".github/CODEOWNERS"
+      },
+      {
+        "code": "required_source_missing",
+        "detail": "docs/journeys/2026-10-26-instagram-insights-and-competitor-tracking.md"
+      },
+      {
+        "code": "required_source_missing",
+        "detail": "docs/runbooks/instagram-insights-release.md"
+      },
+      {
+        "code": "evidence_missing",
+        "detail": "Supply the external redacted Task 11 per-run ledger; source inventory is not executed proof"
+      }
+    ],
+    "blocked": [
+      {
+        "code": "activation_unresolved",
+        "detail": ".github/workflows/instagram-migration-gate.yml has no first-parent activation on 781111a8c8b5bc1296f8c82bbe575f2498b82748"
+      },
+      {
+        "code": "migration_snapshot_evidence_missing",
+        "detail": "R1"
+      },
+      {
+        "code": "migration_snapshot_evidence_missing",
+        "detail": "R2"
+      },
+      {
+        "code": "migration_snapshot_evidence_missing",
+        "detail": "C1"
+      }
+    ],
+    "pendingEvidence": [],
+    "localReady": false,
+    "releaseReady": false,
+    "productionActivationAuthorized": false,
+    "conclusion": "failed"
+  },
+  "releaseReady": false,
+  "productionActivationAuthorized": false,
+  "remaining": [
+    "Remaining canonical J/E journeys, including protected reconnect and canonical Instagram report adoption",
+    "Trusted workflow/verifier/bootstrap, missing required sources and independent reviews",
+    "Four historical migration-prefix incidents and separately reviewed recovery",
+    "Approved production prerequisites, runtime, eligibility, schedules and retention",
+    "Live Meta reconciliation, rollback/restoration and seven successful scheduled due dates per platform"
+  ]
+}

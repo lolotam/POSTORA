@@ -1,3 +1,4 @@
+import { formatBrandMetric } from "@/lib/brandMetrics";
 import type { ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
@@ -33,11 +34,11 @@ interface ProfileCardProps {
   actions?: ReactNode;
 }
 
-function StatItem({ label, value, emoji }: { label: string; value: number; emoji: string }) {
-  const animated = useCountUp(value);
+function StatItem({ label, value, emoji }: { label: string; value: number | null; emoji: string }) {
+  const animated = useCountUp(value ?? 0);
   return (
     <div className="text-center">
-      <p className="text-lg font-bold">{emoji} {animated.toLocaleString()}</p>
+      <p className="text-lg font-bold">{emoji} {value === null ? formatBrandMetric(value) : animated.toLocaleString()}</p>
       <p className="text-xs text-muted-foreground">{label}</p>
     </div>
   );

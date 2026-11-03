@@ -5,12 +5,13 @@
  * send megabytes to an endpoint that expects a few hundred bytes. This stops
  * reading at the cap, whatever Content-Length claims.
  */
+import { awaitWithAbort } from "./abort.ts";
 
 export type CappedJsonBody =
   | { ok: true; value: unknown }
   | { ok: false; reason: "too_large" | "invalid_json" };
 
-export async function readJsonBodyCapped(req: Request, maxBytes: number): Promise<CappedJsonBody> {
+export async function readJsonBodyCapped(req: Request, maxBytes: number, signal?: AbortSignal): Promise<CappedJsonBody> {
   const declared = Number(req.headers.get("content-length"));
   if (Number.isFinite(declared) && declared > maxBytes) return { ok: false, reason: "too_large" };
   if (!req.body) return { ok: false, reason: "invalid_json" };
@@ -18,15 +19,20 @@ export async function readJsonBodyCapped(req: Request, maxBytes: number): Promis
   const reader = req.body.getReader();
   const chunks: Uint8Array[] = [];
   let total = 0;
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    total += value.byteLength;
-    if (total > maxBytes) {
-      await reader.cancel().catch(() => {});
-      return { ok: false, reason: "too_large" };
+  let complete = false;
+  try {
+    for (;;) {
+      const { done, value } = await (signal ? awaitWithAbort(() => reader.read(), signal) : reader.read());
+      if (done) { complete = true; break; }
+      total += value.byteLength;
+      if (total > maxBytes) {
+        return { ok: false, reason: "too_large" };
+      }
+      chunks.push(value);
     }
-    chunks.push(value);
+  } finally {
+    if (!complete) void reader.cancel().catch(() => {});
+    reader.releaseLock();
   }
 
   const bytes = new Uint8Array(total);

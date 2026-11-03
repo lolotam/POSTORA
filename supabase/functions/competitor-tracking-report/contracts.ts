@@ -370,6 +370,7 @@ export type RawGrowth = {
 };
 
 export type RawEntry = {
+  weekly_inventory: unknown;
   watchlist_id: string;
   username: string;
   label: string | null;

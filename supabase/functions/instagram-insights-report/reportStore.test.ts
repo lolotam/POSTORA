@@ -21,6 +21,11 @@ function createMockClient(options: {
   profiles?: Record<string, unknown>[];
 }) {
   return {
+    rpc: () => {
+      const result = { data: { account_id: ACCOUNT_ID, owner_id: OWNER_ID, media: options.media ?? [], daily: options.daily ?? [], profiles: options.profiles ?? [], collection: null },
+        error: options.account === null ? { code: "MAH02", message: "Not found" } : options.accountError ?? null };
+      return { abortSignal: () => Promise.resolve(result) };
+    },
     from: (table: string) => {
       const history = table === "ig_media_insight_snapshots" ? options.media ?? []
         : table === "ig_account_insight_daily" ? options.daily ?? []

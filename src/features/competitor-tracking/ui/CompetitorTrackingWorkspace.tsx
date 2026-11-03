@@ -219,6 +219,12 @@ export function CompetitorTrackingWorkspace({
               text: t("competitors.outcomeUnknown", "Could not confirm the change. Reload to check."),
             });
           }
+          if (result.outcome === "failure") {
+            setNotice({
+              tone: "error",
+              text: competitorErrorMessage(copy, result.error, quotaState.limit),
+            });
+          }
         },
         onError: (error) => {
           setNotice({
@@ -231,8 +237,10 @@ export function CompetitorTrackingWorkspace({
     [copy, quotaState.limit, reactivateMutation, t],
   );
 
-  const removeError = removeMutation.error
-    ? competitorErrorMessage(copy, removeMutation.error as CompetitorTrackingError, quotaState.limit)
+  const removeFailure = removeMutation.error
+    ?? (removeMutation.data?.outcome === "failure" ? removeMutation.data.error : null);
+  const removeError = removeFailure
+    ? competitorErrorMessage(copy, removeFailure as CompetitorTrackingError, quotaState.limit)
     : null;
   const removeIndeterminate =
     removeMutation.data !== undefined && removeMutation.data.outcome === "indeterminate";

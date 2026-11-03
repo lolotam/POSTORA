@@ -313,7 +313,7 @@ export function PlatformAccountsTab({
                       </TableCell>
                       <TableCell>
                         <div className="flex items-center gap-1">
-                          {(expired || needsReauth) && (
+                          {(expired || needsReauth || account.platform === "instagram") && (
                             <Button
                               variant={needsReauth ? "default" : "outline"}
                               size="sm"

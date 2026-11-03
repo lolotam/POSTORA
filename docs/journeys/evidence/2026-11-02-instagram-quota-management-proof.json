@@ -1,0 +1,198 @@
+{
+  "version": 1,
+  "recordedAt": "2026-11-02T05:30:54.930Z",
+  "source": "5a66366c0650a8940ddeca486c9767fa6cb02fca",
+  "tree": "439306e0f6cd3be18ddf6476376045d2b8945c5c",
+  "executionCheckout": "F:/Dev/Worktrees/Postora_new/canonical-discovery-538ef365",
+  "scope": "Real Auth/SQL quota enforcement and UI removal/reactivation refusals, contributing to canonical J6 and management portions of J5",
+  "evidenceAuthority": "Author-recorded local execution, not independent G-X acceptance or production approval",
+  "inputs": [
+    {
+      "path": "e2e/instagram-release.spec.ts",
+      "gitBlob": "b2218864af13c6fb549722659f42f82c2d9ad6be",
+      "gitSha256": "4631526d7ef351c67a89fa9cfa2caa6045d9914e46835765200ff8f014c4b3a1",
+      "executionSha256": "b7aa5262d9d606b076ff6a50db95f41378392da8021059bcc580f953e4aa7981",
+      "normalizedExecutionSha256": "4631526d7ef351c67a89fa9cfa2caa6045d9914e46835765200ff8f014c4b3a1"
+    },
+    {
+      "path": "src/features/competitor-tracking/ui/CompetitorTrackingWorkspace.tsx",
+      "gitBlob": "d0271e85b4cb8033351c177131fcefbf46155dd7",
+      "gitSha256": "9da4d2251a60489573a3f7c67ad366ad6c35a0cefab69abdea670b7d0b8b7b1c",
+      "executionSha256": "627659cf8e49420c4d9d82539b9e6a1f8e7d609d4f9edead327797d01027186a",
+      "normalizedExecutionSha256": "9da4d2251a60489573a3f7c67ad366ad6c35a0cefab69abdea670b7d0b8b7b1c"
+    },
+    {
+      "path": "src/features/competitor-tracking/tests/CompetitorTrackingScreen.test.tsx",
+      "gitBlob": "022d50cb73351c8c8dfbe8a73046a6a2b4b2bccd",
+      "gitSha256": "a1d5760082ae1a29facdbe34c38482cffac2c961caa3f362fe99920597e43324",
+      "executionSha256": "2146ba307644c2de490cf7503b8ea7c6b9927b901123458f5f3cbc080d9f6ce5",
+      "normalizedExecutionSha256": "a1d5760082ae1a29facdbe34c38482cffac2c961caa3f362fe99920597e43324"
+    },
+    {
+      "path": "src/features/competitor-tracking/application/reactivateCompetitor.ts",
+      "gitBlob": "13c32fdbeff56f80af700175734c67f50b29262c",
+      "gitSha256": "5901be0b14848fe3d0e01364e67eb5d38bb851fced9a4cffe0ab97200c85d9e1",
+      "executionSha256": "a03f922d1b81d701dd88c4ea95bfca3253423c63eadeaf6e4259c38694810356",
+      "normalizedExecutionSha256": "5901be0b14848fe3d0e01364e67eb5d38bb851fced9a4cffe0ab97200c85d9e1"
+    },
+    {
+      "path": "src/features/competitor-tracking/application/removeCompetitor.ts",
+      "gitBlob": "f028d1195da421698f07894fc76d698fdc44bcca",
+      "gitSha256": "32287a851f3646fea6533a2df1bc8081da77dfcf9cb4bc756ae8f7418350bee1",
+      "executionSha256": "9dd9600522d97d38c2d791315572384acf776af13e2c5608d89ea78ee26628d2",
+      "normalizedExecutionSha256": "32287a851f3646fea6533a2df1bc8081da77dfcf9cb4bc756ae8f7418350bee1"
+    },
+    {
+      "path": "src/features/competitor-tracking/infrastructure/supabaseCompetitorTrackingGateway.ts",
+      "gitBlob": "1585acd2e0adad8f519ad43f7a04b548d1199ecc",
+      "gitSha256": "ea05d19f2f948ab3e0496d1941ce589a059dda63f354e71410727ccb43606fdf",
+      "executionSha256": "a02f1b18018a137f2384cf3af2ca632bbc73271900d1eac794a5062d54518d15",
+      "normalizedExecutionSha256": "ea05d19f2f948ab3e0496d1941ce589a059dda63f354e71410727ccb43606fdf"
+    },
+    {
+      "path": "e2e/fixtures/instagramReleaseServer.ts",
+      "gitBlob": "005a7e0b43d99931f2d08398fd0792b77361149a",
+      "gitSha256": "49b2ee9b5a3fa105023ec4486e884b8c5fb11df957a1cf6c6c279d52173088d2",
+      "executionSha256": "e779b53378311cf2be8ce809f980fe8fec3e5b742d0dac75ef1120b4c7bae488",
+      "normalizedExecutionSha256": "49b2ee9b5a3fa105023ec4486e884b8c5fb11df957a1cf6c6c279d52173088d2"
+    },
+    {
+      "path": "e2e/fixtures/instagramReleaseSeed.ts",
+      "gitBlob": "d73d7c1f13e8e8ddf0ae479258ad1b81949053b3",
+      "gitSha256": "70019b49baacb31764e73c9ad11944c291a456db4ee987f9f42cd37e08762ed3",
+      "executionSha256": "c24ffa4a5b16e4e7778d238f3567e173ecd192372faee8ca56fcf4eedad38782",
+      "normalizedExecutionSha256": "70019b49baacb31764e73c9ad11944c291a456db4ee987f9f42cd37e08762ed3"
+    }
+  ],
+  "canonical": {
+    "startTime": "2026-11-02T05:28:25.776Z",
+    "duration": 91639.73999999999,
+    "expected": 6,
+    "skipped": 0,
+    "unexpected": 0,
+    "flaky": 0,
+    "errors": [],
+    "failures": 0,
+    "retries": 0
+  },
+  "databasePreparation": {
+    "directory": "F:/Dev/Temp/postora-owner-release-prepare-jKoLak",
+    "newerMigrations": 151,
+    "baselineSqlSuites": 69,
+    "isolatedSqlSuites": 1
+  },
+  "reproducedFailures": [
+    {
+      "source": "3bf06d702282629d7aa2a137250f92c47af83195",
+      "passed": 5,
+      "failed": 1,
+      "reason": "Application returned a definite reactivation failure, but UI onSuccess ignored that union variant",
+      "artifacts": ".tmp/canonical-quota-3bf06d70-failure-artifacts/"
+    },
+    {
+      "selectedUiRegressionsFailedBeforeFix": 2,
+      "reason": "Reactivation and removal definite failures were both silent"
+    },
+    {
+      "initialFullTypecheck": "failed for unsupported Testing Library exact option; corrected final typecheck passed"
+    }
+  ],
+  "checks": {
+    "uiTestsPassed": 37,
+    "fullTypecheck": "passed on final source",
+    "build": {
+      "source": "fdbe4b81e2dd16d92362f6e7211ef98e9aadcd51",
+      "result": "passed; final commit only removes unsupported test-query option, production inputs unchanged"
+    },
+    "strictE2eTypecheck": "passed",
+    "scopedEslint": "passed",
+    "immutableLintI18n": {
+      "base": "a7b79b7e9429d0fe2b63c04b427576e4d6e663e3",
+      "head": "5a66366c0650a8940ddeca486c9767fa6cb02fca",
+      "result": "NO REGRESSIONS",
+      "historicalDebtRemains": true
+    }
+  },
+  "cleanup": {
+    "users": 1,
+    "namespace_settings": 0,
+    "scrape_sessions": 0,
+    "scrape_cache": 0,
+    "fixture_oauth_clients": 0,
+    "collection_jobs": 0,
+    "active_cron": 0,
+    "cron_launcher": "off",
+    "instagram_live_leases": 0,
+    "httpListenersStopped": true
+  },
+  "artifacts": [
+    {
+      "path": ".tmp/canonical-quota-3bf06d70-playwright.log",
+      "sha256": "3379af2e83b89cf457b6a2228208dfabe7d3c31365019c6f782c84eb717b783c"
+    },
+    {
+      "path": ".tmp/canonical-quota-3bf06d70-playwright.json",
+      "sha256": "b99fa2350fdb3e2a5c6e85471be1be32a21f50b50aef381c69e097372aaec246"
+    },
+    {
+      "path": ".tmp/canonical-quota-5a66366c-prepare.log",
+      "sha256": "88f321e0d2f9bb35ebeb5043d4cd9ae283f6e64a71f138669ca61212bbb2c4a6"
+    },
+    {
+      "path": ".tmp/canonical-quota-5a66366c-playwright.log",
+      "sha256": "554693009edd81d05ad02a4e0607b68478d8848399dcddebbe44f0d5d88e66f8"
+    },
+    {
+      "path": ".tmp/canonical-quota-5a66366c-playwright.json",
+      "sha256": "185024d9d160087810126f186571c1a37257a7888bd2593faf2a6b1d0757648a"
+    },
+    {
+      "path": ".tmp/canonical-quota-5a66366c-cleanup.json",
+      "sha256": "5cdb1258915aca7c7d224dc5d188bf362e6c0a58a541f5aba400ac0f727ab3b1"
+    },
+    {
+      "path": ".tmp/canonical-quota-5a66366c-lint-i18n.log",
+      "sha256": "c33b6a4427f97a6f91af9fde49a10bef68c97b26bb897f5eccdae79452d130bd"
+    },
+    {
+      "path": ".tmp/canonical-quota-5a66366c-graph-update.log",
+      "sha256": "6f65c22a6990be2c90f958492ed56f4e8136faf9eaadbbe09fc0bc11074a790a"
+    },
+    {
+      "path": ".tmp/canonical-quota-ui-before.log",
+      "sha256": "e4e23cd3a03832dd1757f1b0f215df480f927cd88c707a8ba6634b10cd0bfa29"
+    },
+    {
+      "path": ".tmp/canonical-quota-ui-after-final.log",
+      "sha256": "2ac5780319038d160a38bcbedf305e2a9e53327aadd80235bbe571025ebbbc02"
+    },
+    {
+      "path": ".tmp/canonical-quota-ui-typecheck.log",
+      "sha256": "82bfc79b7e8b4227442c2028a85cf4607ce42e9b5117c35cd7f0db65162fb75e"
+    },
+    {
+      "path": ".tmp/canonical-quota-ui-typecheck-corrected.log",
+      "sha256": "82b5202dbc205db5afc9568372d1f11e63c1105117ebdc791a50680ece23bccf"
+    },
+    {
+      "path": ".tmp/canonical-quota-ui-build.log",
+      "sha256": "d61e4cd9dd4878560c8bc84e97557f8c2b6c90b625080932963a57095c5c1fc4"
+    },
+    {
+      "path": ".tmp/canonical-quota-ui-eslint.log",
+      "sha256": "2157a5f3c12477857845842650bbd669c004666db09a84e463dc354ce2c5a27f"
+    },
+    {
+      "path": ".tmp/canonical-quota-types.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  ],
+  "acceptanceLimits": [
+    "The paired HTTP requests test last-slot outcomes; this run does not claim an independently observed PostgreSQL Lock wait",
+    "New-target saved-to-collected/report and lost-response reconciliation portions of J5 remain open",
+    "Canonical Instagram adoption, remaining J/E journeys, trusted workflow/bootstrap, independent review and migration-history recovery remain open",
+    "Production approvals, live reconciliation and scheduled observation remain unaccepted"
+  ],
+  "releaseReady": false,
+  "productionActivationAuthorized": false
+}
