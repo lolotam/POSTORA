@@ -375,7 +375,7 @@ function migrationChecks(context) {
 }
 
 // Credential-bearing text is never accepted in evidence and never echoed in a report.
-const CREDENTIAL_PATTERN = /(?:[a-z][a-z0-9+.-]*:\/\/[^\s/?#"'<>]+@)|(?:["']?authorization["']?\s*[:=]\s*["']?Basic\s+[A-Za-z0-9+/]{4,}={0,2})|(?:https?:\/\/[^\s"']+[?&](?:access_token|refresh_token|api_key)=)|(?:Bearer\s+(?!token(?![A-Za-z0-9._~+/=-]))[A-Za-z0-9._~+/=-]{8,})|(?:-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----)|(?:eyJ[A-Za-z0-9_-]{15,}\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+)|(?:["']?(?:access_token|refresh_token|api_key|password|client_secret|SUPABASE_SERVICE_ROLE_KEY)["']?\s*[:=]\s*["']?(?!(?:\[REDACTED\]|<redacted>|\[\]|\{\}|null|true|false|undefined)(?=[\s"']|$|[}\]]+(?:[\s"',;]|$)|[,;](?:[\s"'}\]]|$)))[^"'\s]+)/i;
+const CREDENTIAL_PATTERN = /(?:[a-z][a-z0-9+.-]*:\/\/[^\s/?#"'<>]+@)|(?:["']?authorization["']?\s*[:=]\s*["']?Basic\s+[A-Za-z0-9+/]{4,}={0,2})|(?:https?:\/\/[^\s"']+[?&](?:access_token|refresh_token|api_key)=)|(?:Bearer\s+(?!token(?![A-Za-z0-9._~+/=-]))[A-Za-z0-9._~+/=-]{8,})|(?:-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----)|(?:eyJ[A-Za-z0-9_-]{15,}\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+)|(?:["']?(?:access_token|refresh_token|api_key|password|client_secret|SUPABASE_SERVICE_ROLE_KEY)["']?\s*[:=]\s*(?:["']\s*)?(?!(?:\[REDACTED\]|<redacted>|\[\]|\{\}|null|true|false|undefined)(?=[\s"']|$|[}\]]+(?:[\s"',;]|$)|[,;](?:[\s"'}\]]|$)))[^"'\s]+)/i;
 const safeDetail = (value) => CREDENTIAL_PATTERN.test(String(value)) ? "[redacted-path]" : value;
 function redactDetail(detail) { return typeof detail === "string" ? safeDetail(detail) : detail; }
 

@@ -419,6 +419,8 @@ test("native Playwright result and redaction boundaries cannot be overridden by 
     ["redaction marker as the prefix of a real value", `${"pass"}${"word"}=[REDACTED]${"actual-"}${"secret"}`, "actual-secret"],
     ["lowercase marker as the prefix of a real value", `${"pass"}${"word"}=<redacted>${"actual-"}${"secret"}`, "actual-secret"],
     ["null literal as the prefix of a real value", `${"pass"}${"word"}=null/${"actual-"}${"secret"}`, "actual-secret"],
+    ["quoted value with leading whitespace", `${"pass"}${"word"}=" ${"actual-"}${"secret"}"`, "actual-secret"],
+    ["single-quoted value with leading whitespace", `${"pass"}${"word"}=' ${"actual-"}${"secret"}'`, "actual-secret"],
     ["closing bracket after an empty marker", `${"pass"}${"word"}=[]]${"actual-"}${"secret"}`, "actual-secret"],
     ["closing brace after an empty marker", `${"pass"}${"word"}={}}${"actual-"}${"secret"}`, "actual-secret"],
     ["comma after a literal inside an unquoted value", `${"pass"}${"word"}=null,${"actual-"}${"secret"}`, "actual-secret"],
