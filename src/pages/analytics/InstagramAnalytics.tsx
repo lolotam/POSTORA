@@ -95,7 +95,7 @@ export default function InstagramAnalytics({ defaultTab = "performance" }: Insta
   const [filters, setFilters] = useState<BrandScrapeFilters>(DEFAULT_FILTERS);
   const [selectedPost, setSelectedPost] = useState<BrandPost | null>(null);
   const [historyOpen, setHistoryOpen] = useState(false);
-  const { profile, profileSource, posts, totalPosts, hasMore, isLoading, error, warning, reconnectRequired, search, loadMore, loadFromSession } = useBrandScrape(session?.user.id);
+  const { profile, profileSource, posts, totalPosts, hasMore, isLoading, isLoadingMore, error, loadMoreError, warning, reconnectRequired, search, loadMore, loadFromSession } = useBrandScrape(session?.user.id);
 
   const { data: contentPostIds = new Set<string>() } = useQuery({
     queryKey: ["bi-content-post-ids", session?.user?.id],
@@ -281,9 +281,10 @@ export default function InstagramAnalytics({ defaultTab = "performance" }: Insta
                   <PostsGrid posts={filteredPosts} isLoading={isLoading} onPostClick={handlePostClick} contentPostIds={contentPostIds} />
                   {hasMore && (
                     <div className="flex justify-center pt-4">
-                      <Button variant="outline" onClick={loadMore} className="gap-2 border-rose-500/40 hover:bg-rose-500/10">
+                      {loadMoreError && <p className="mr-3 self-center text-sm text-destructive">{t("actions.loadMoreFailed", "Could not load more. Try again.")}</p>}
+                      <Button variant="outline" onClick={loadMore} disabled={isLoadingMore} className="gap-2 border-rose-500/40 hover:bg-rose-500/10">
                         <Loader2 className="w-4 h-4" />
-                        {t("actions.loadMore", "Load More")}
+                        {isLoadingMore ? t("actions.loadingMore", "Loading...") : t("actions.loadMore", "Load More")}
                       </Button>
                     </div>
                   )}

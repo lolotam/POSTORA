@@ -48,7 +48,7 @@ export default function BrandIntelligence() {
   const [threadsMode, setThreadsMode] = useState<"analyze" | "discovery" | "keyword_search" | "insights">("analyze");
   const [filters, setFilters] = useState<BrandScrapeFilters>(DEFAULT_FILTERS);
   const [selectedPost, setSelectedPost] = useState<BrandPost | null>(null);
-  const { profile, profileSource, posts, totalPosts, hasMore, isLoading, error, search, loadMore, loadFromSession, reset } = useBrandScrape(session?.user.id);
+  const { profile, profileSource, posts, totalPosts, hasMore, isLoading, isLoadingMore, error, loadMoreError, search, loadMore, loadFromSession, reset } = useBrandScrape(session?.user.id);
 
   /**
    * The competitor tracking feature tracks Instagram handles only.
@@ -248,9 +248,10 @@ export default function BrandIntelligence() {
                   <PostsGrid posts={filteredPosts} isLoading={isLoading} onPostClick={handlePostClick} contentPostIds={contentPostIds} />
                   {hasMore && (
                     <div className="flex justify-center pt-4">
-                      <Button variant="outline" onClick={loadMore} className="gap-2">
+                      {loadMoreError && <p className="mr-3 self-center text-sm text-destructive">{t("actions.loadMoreFailed", "Could not load more. Try again.")}</p>}
+                      <Button variant="outline" onClick={loadMore} disabled={isLoadingMore} className="gap-2">
                         <Loader2 className="w-4 h-4" />
-                        {t("actions.loadMore", "Load More")}
+                        {isLoadingMore ? t("actions.loadingMore", "Loading...") : t("actions.loadMore", "Load More")}
                       </Button>
                     </div>
                   )}
@@ -349,9 +350,10 @@ export default function BrandIntelligence() {
                     <PostsGrid posts={filteredPosts} isLoading={isLoading} onPostClick={handlePostClick} contentPostIds={contentPostIds} />
                     {hasMore && (
                       <div className="flex justify-center pt-4">
-                        <Button variant="outline" onClick={loadMore} className="gap-2">
+                        {loadMoreError && <p className="mr-3 self-center text-sm text-destructive">{t("actions.loadMoreFailed", "Could not load more. Try again.")}</p>}
+                        <Button variant="outline" onClick={loadMore} disabled={isLoadingMore} className="gap-2">
                           <Loader2 className="w-4 h-4" />
-                          {t("actions.loadMore", "Load More")}
+                          {isLoadingMore ? t("actions.loadingMore", "Loading...") : t("actions.loadMore", "Load More")}
                         </Button>
                       </div>
                     )}

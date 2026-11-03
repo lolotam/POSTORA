@@ -14,6 +14,8 @@
     "generateImage": "🎨 ولّد صورة",
     "goToProfiles": "روح للملفات",
     "loadMore": "حمّل المزيد",
+    "loadMoreFailed": "تعذّر تحميل المزيد. حاول مرة أخرى.",
+    "loadingMore": "جارٍ التحميل…",
     "newCampaign": "حملة جديدة",
     "openCredentials": "افتح بيانات التطبيق",
     "postComment": "انشر التعليق",

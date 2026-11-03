@@ -11,13 +11,16 @@ type BrandScrapeResponse = {
   hasMore: boolean;
   warning?: { code: string; message: string };
 };
+const RECONNECT_CODES = ["IG_INSIGHTS_SCOPE_MISSING", "IG_RECONNECT_REQUIRED"];
 
 export function useBrandScrape(ownerId: string | undefined) {
   const requestOwner = useRef(ownerId);
   const requestGeneration = useRef(0);
+  const loadMoreToken = useRef<symbol | null>(null);
   if (requestOwner.current !== ownerId) {
     requestOwner.current = ownerId;
     requestGeneration.current++;
+    loadMoreToken.current = null;
   }
   const [transientOwner, setTransientOwner] = useState(ownerId);
   const sameOwner = transientOwner === ownerId;
@@ -27,6 +30,9 @@ export function useBrandScrape(ownerId: string | undefined) {
   const [allPosts, setAllPosts] = useState<BrandPost[]>([]);
   const [continuation, setContinuation] = useState<{ hasMore: boolean; nextOffset: number; totalPosts: number } | null>(null);
   const [searchTriggered, setSearchTriggered] = useState(false);
+  const [isLoadingMore, setIsLoadingMore] = useState(false);
+  const [loadMoreError, setLoadMoreError] = useState<"unavailable" | null>(null);
+  const [pageWarning, setPageWarning] = useState<{ code: string; message: string } | null>(null);
 
   // For loading from history sessions
   const [sessionProfile, setSessionProfile] = useState<BrandProfile | null>(null);
@@ -88,8 +94,16 @@ export function useBrandScrape(ownerId: string | undefined) {
   const data = error ? undefined : cachedData;
   const hasMore = sameOwner && !!data && !sessionPosts && (continuation?.hasMore ?? data.hasMore);
 
+  const releaseLoadMore = useCallback(() => {
+    loadMoreToken.current = null;
+    setIsLoadingMore(false);
+    setLoadMoreError(null);
+    setPageWarning(null);
+  }, []);
+
   const search = useCallback((newUsername: string, newPlatform: BrandPlatform) => {
     requestGeneration.current++;
+    releaseLoadMore();
     setTransientOwner(ownerId);
     setSessionProfile(null);
     setSessionPosts(null);
@@ -99,37 +113,50 @@ export function useBrandScrape(ownerId: string | undefined) {
     setContinuation(null);
     setSearchTriggered(true);
     queryClient.invalidateQueries({ queryKey: ["brand-scrape", ownerId, newPlatform, newUsername, 0] });
-  }, [queryClient, ownerId]);
+  }, [queryClient, ownerId, releaseLoadMore]);
 
   const loadMore = useCallback(async () => {
-    if (!hasMore || !username || !data) return;
+    if (!hasMore || !username || !data || loadMoreToken.current) return;
     const nextOffset = continuation?.nextOffset ?? data.posts.length;
     const generation = requestGeneration.current;
+    const token = Symbol("load-more");
+    const owns = () => loadMoreToken.current === token && generation === requestGeneration.current;
+    loadMoreToken.current = token;
+    setIsLoadingMore(true); setLoadMoreError(null);
 
     try {
       const moreData = await callBrandScrape(nextOffset);
-      if (moreData.posts && generation === requestGeneration.current) {
+      if (!owns()) return;
+      if (moreData.posts) {
         setAllPosts((prev) => [...new Map([...prev, ...moreData.posts].map((post) => [post.id, post])).values()]);
         setContinuation({ hasMore: moreData.hasMore, nextOffset: nextOffset + moreData.posts.length, totalPosts: moreData.totalPosts });
       }
+      if (moreData.warning) setPageWarning(moreData.warning);
     } catch (err) {
-      console.error("Load more error:", err);
+      if (!owns()) return;
+      const code = err && typeof err === "object" && "code" in err ? String(err.code) : "";
+      if (RECONNECT_CODES.includes(code)) setPageWarning({ code, message: "Reconnect Instagram to enable official competitor data." });
+      else setLoadMoreError("unavailable");
+    } finally {
+      if (loadMoreToken.current === token) { loadMoreToken.current = null; setIsLoadingMore(false); }
     }
   }, [username, data, continuation, callBrandScrape, hasMore]);
 
   const reset = useCallback(() => {
     requestGeneration.current++;
+    releaseLoadMore();
     setUsername("");
     setAllPosts([]);
     setContinuation(null);
     setSearchTriggered(false);
     setSessionProfile(null);
     setSessionPosts(null);
-  }, []);
+  }, [releaseLoadMore]);
 
   /** Load data from a stored history session without re-scraping */
   const loadFromSession = useCallback((profile: BrandProfile, posts: BrandPost[]) => {
     requestGeneration.current++;
+    releaseLoadMore();
     setTransientOwner(ownerId);
     setSessionProfile(profile);
     setSessionPosts(posts);
@@ -138,7 +165,7 @@ export function useBrandScrape(ownerId: string | undefined) {
     setContinuation(null);
     setPlatform(profile.platform);
     setUsername(profile.username);
-  }, [ownerId]);
+  }, [ownerId, releaseLoadMore]);
 
   // Merge: session data takes priority, then query data
   const activeProfile = (sameOwner ? sessionProfile : null) || data?.profile || null;
@@ -154,6 +181,8 @@ export function useBrandScrape(ownerId: string | undefined) {
    * its numbers came from (T8-01).
    */
   const profileSource: BrandProfileSource = resolveBrandProfileSource(activeProfile?.source);
+  const showingSession = sameOwner && !!sessionProfile;
+  const shownWarning = showingSession ? null : (pageWarning ?? data?.warning ?? null);
 
   return {
     profile: activeProfile,
@@ -162,10 +191,12 @@ export function useBrandScrape(ownerId: string | undefined) {
     totalPosts: sameOwner && sessionPosts ? sessionPosts.length : (data ? ((sameOwner ? continuation?.totalPosts : undefined) ?? data.totalPosts) : 0),
     hasMore,
     isLoading: sameOwner && sessionProfile ? false : isLoading,
+    isLoadingMore: sameOwner && isLoadingMore,
     error: sameOwner && sessionProfile ? null : (error ? (error as Error).message : null),
-    reconnectRequired: ["IG_INSIGHTS_SCOPE_MISSING", "IG_RECONNECT_REQUIRED"].includes(
-      data?.warning?.code ?? (error && "code" in error ? String(error.code) : "")),
-    warning: data?.warning?.message ?? null,
+    loadMoreError: sameOwner && !showingSession ? loadMoreError : null,
+    reconnectRequired: RECONNECT_CODES.includes(
+      shownWarning?.code ?? (!showingSession && error && "code" in error ? String(error.code) : "")),
+    warning: shownWarning?.message ?? null,
     search,
     loadMore,
     loadFromSession,
