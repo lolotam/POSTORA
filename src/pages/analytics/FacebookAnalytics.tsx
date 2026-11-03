@@ -36,7 +36,7 @@ export default function FacebookAnalytics() {
   const [tab, setTab] = useState<"performance" | "analyze">("performance");
   const [filters, setFilters] = useState<BrandScrapeFilters>(DEFAULT_FILTERS);
   const [selectedPost, setSelectedPost] = useState<BrandPost | null>(null);
-  const { profile, posts, totalPosts, hasMore, isLoading, error, search, loadMore, reset } = useBrandScrape(session?.user.id);
+  const { profile, posts, totalPosts, hasMore, isLoading, isLoadingMore, error, loadMoreError, search, loadMore, reset } = useBrandScrape(session?.user.id);
   const isCredentialError = typeof error === "string" && /credential|not configured|app id|app secret/i.test(error);
 
   const { data: contentPostIds = new Set<string>() } = useQuery({
@@ -154,8 +154,9 @@ export default function FacebookAnalytics() {
               <PostsGrid posts={filteredPosts} isLoading={isLoading} onPostClick={handlePostClick} contentPostIds={contentPostIds} />
               {hasMore && (
                 <div className="flex justify-center pt-4">
-                  <Button variant="outline" onClick={loadMore} className="gap-2 border-input hover:bg-muted">
-                    <Loader2 className="w-4 h-4" />{t("actions.loadMore", "Load More")}
+                  {loadMoreError && <p className="mr-3 self-center text-sm text-destructive">{t("actions.loadMoreFailed", "Could not load more. Try again.")}</p>}
+                  <Button variant="outline" onClick={loadMore} disabled={isLoadingMore} className="gap-2 border-input hover:bg-muted">
+                    <Loader2 className="w-4 h-4" />{isLoadingMore ? t("actions.loadingMore", "Loading...") : t("actions.loadMore", "Load More")}
                   </Button>
                 </div>
               )}

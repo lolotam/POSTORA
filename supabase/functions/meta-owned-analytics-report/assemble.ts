@@ -99,10 +99,12 @@ export function assembleStoredAnalytics(input: { stored: StoredAnalyticsSnapshot
   generatedAt: string; nextCursor: string | null; hasMore: boolean }): AnalyticsReport {
   const { stored, windows } = input;
   const metrics = analyticsDefinitions(stored.platform, "account").map((definition) => accountMetric(definition, stored, windows));
-  const posts = stored.posts.slice(0, 25).map(({ post, metrics: cells }) => ({ id: post.platform_post_id, publishedAt: post.published_at,
+  // The 26th row only tells the caller that another page exists: it is not part of this response, so it cannot date it.
+  const shownPosts = stored.posts.slice(0, 25);
+  const posts = shownPosts.map(({ post, metrics: cells }) => ({ id: post.platform_post_id, publishedAt: post.published_at,
     text: post.post_text, permalink: normalizeAnalyticsPermalink(post.permalink), metrics: analyticsDefinitions(stored.platform, "post").map((definition) => postMetric(definition, cells)) }));
   const incompleteCells = posts.some((post) => post.metrics.some((metric) => isAnalyticsMetricMeasurable(metric.definition) && metric.current.status !== "available"));
-  const cells = [...stored.daily.flatMap((day) => day.metrics), ...stored.posts.flatMap((post) => post.metrics), ...stored.profile_boundaries, ...stored.profile_current, ...stored.period_totals];
+  const cells = [...stored.daily.flatMap((day) => day.metrics), ...shownPosts.flatMap((post) => post.metrics), ...stored.profile_boundaries, ...stored.profile_current, ...stored.period_totals];
   const collectedAt = latestInstant(cells.map((cell) => cell.collected_at));
   const asOf = collectedAt ? new Date(Math.min(Date.parse(windows.current.period.until), Date.parse(collectedAt))).toISOString() : null;
   const incompleteInventory = "state" in stored.inventory ? stored.inventory.state !== "complete" : !stored.inventory.complete || stored.inventory.truncated;

@@ -66,7 +66,7 @@ Additional migrations: `20261101142000_meta_owned_analytics_throttles.sql`, `202
 - [x] Test repeated installation, active-to-inactive reconciliation, secret rotation, missing prerequisites and unchanged unrelated jobs/settings. Parse/execute the exact stored request bodies against the registered handler with synthetic authorization.
 - [ ] Complete the fresh SQL harness, races, Deno type/tests, frontend typecheck/build and immutable lint/i18n no-regression gate. Run `graphify update .`; exclude graph/cache artifacts and secrets from commits.
 
-Local collection/retention/schedule implementation and its executed proof are recorded in the [collection continuation](../journeys/2026-11-01-meta-owned-worker-collection.md). The action-specific termination matrix and full mixed-unavailable worker-to-report journeys remain unchecked until their remaining assertions run; the existing native SQL writer suite and adapter tests are not described as those missing integrated journeys.
+Local collection/retention/schedule implementation and its executed proof are recorded in the [collection continuation](../journeys/2026-11-01-meta-owned-worker-collection.md). The action-specific termination matrix is complete (see the [termination record](../journeys/2026-11-01-meta-owned-worker-termination.md)); the full mixed-unavailable worker-to-report journeys and the combined stale-permit/fairness/revoked-authority record remain unchecked until their remaining assertions run; the existing native SQL writer suite and adapter tests are not described as those missing integrated journeys.
 
 ## 5. Review and deployment prerequisites
 

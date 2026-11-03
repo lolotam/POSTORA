@@ -3,7 +3,7 @@ import { createLogger } from "../_shared/logging.ts";
 import type { ViewerCandidate } from "../_shared/instagramDiscoveryViewer.ts";
 import { CredentialStoreError } from "../_shared/facebookUserCredentialStore.ts";
 import { normalizeCompetitorHandle } from "../competitor-snapshot-sync/graphProvider.ts";
-import { discoveryCacheKey, discoveryMedia, discoveryProfile, InstagramDiscoveryError, resolveDiscoveryAuthority, scrapeInstagramOfficial, scrapeInstagramOwn } from "./instagramDiscovery.ts";
+import { discoveryCacheKey, discoveryMedia, discoveryProfile, InstagramDiscoveryError, parseDiscoveryPlatform, resolveDiscoveryAuthority, scrapeInstagramOfficial, scrapeInstagramOwn } from "./instagramDiscovery.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -258,6 +258,21 @@ async function scrapeTikTok(username: string, apifyToken: string, actorId = "clo
   };
 }
 
+/**
+ * The maximum number of posts per scrape, from 1 to 100. A string setting is parsed as JSON and the
+ * result is converted with Number(). A falsy setting, a zero, NaN or a parse failure means 50; booleans and
+ * one-element arrays do convert (true gives 1, [10] gives 10). The number is floored first and the range
+ * applies afterwards, so 0.5 becomes 1 (the minimum) while a stored 0 still means the default.
+ * This describes the existing conversion; it is not input validation. The setting is read once here.
+ */
+export function resolveMaxPosts(setting: unknown): number {
+  try {
+    if (!setting) return 50;
+    const parsed = typeof setting === "string" ? JSON.parse(setting) : setting;
+    return Math.max(1, Math.min(100, Math.floor(Number(parsed) || 50)));
+  } catch { return 50; /* optional enrichment; scraping continues without it */ }
+}
+
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
 
@@ -302,7 +317,7 @@ Deno.serve(async (req) => {
     try { body = await req.json(); } catch { throw new InstagramDiscoveryError("INVALID_DISCOVERY_REQUEST", "Invalid discovery request.", 400); }
     if (!body || typeof body !== "object" || Array.isArray(body)) throw new InstagramDiscoveryError("INVALID_DISCOVERY_REQUEST", "Invalid discovery request.", 400);
     const { username, offset = 0 } = body;
-    platform = body.platform || "instagram";
+    platform = parseDiscoveryPlatform(body.platform);
 
     if (typeof username !== "string" || !username.trim()) {
       await logger.warn("Discovery request refused", { error_code: "INVALID_DISCOVERY_REQUEST" }, userId);
@@ -341,14 +356,7 @@ Deno.serve(async (req) => {
     };
 
     // Read max posts limit from settings
-    let maxPosts = 50;
-    try {
-      const maxPostsSetting = (actorSettings || []).find((s: any) => s.key === "brand_scrape_max_posts");
-      if (maxPostsSetting?.value) {
-        const parsed = typeof maxPostsSetting.value === "string" ? JSON.parse(maxPostsSetting.value) : maxPostsSetting.value;
-        maxPosts = Math.max(1, Math.min(100, Number(parsed) || 50));
-      }
-    } catch { /* optional enrichment; scraping continues without it */ }
+    const maxPosts = resolveMaxPosts((actorSettings || []).find((setting: { key: string }) => setting.key === "brand_scrape_max_posts")?.value);
 
     // Read apify_enabled toggle
     let isApifyEnabled = platform !== "instagram"; // Preserve other platforms' legacy default.

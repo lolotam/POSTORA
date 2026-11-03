@@ -75,6 +75,9 @@ export default function TikTokAnalytics() {
   const error = isApi ? apiHook.error : apifyHook.error;
   const errorCode = isApi ? apiHook.errorCode : undefined;
   const loadMore = isApi ? apiHook.loadMore : apifyHook.loadMore;
+  // Page-continuation state exists only for the Apify source; a stale value never reaches API mode.
+  const isLoadingMore = !isApi && apifyHook.isLoadingMore;
+  const loadMoreError = !isApi ? apifyHook.loadMoreError : null;
 
   const { data: contentPostIds = new Set<string>() } = useQuery({
     queryKey: ["bi-content-post-ids", session?.user?.id],
@@ -228,9 +231,10 @@ export default function TikTokAnalytics() {
               <PostsGrid posts={filteredPosts} isLoading={isLoading} onPostClick={handlePostClick} contentPostIds={contentPostIds} />
               {hasMore && (
                 <div className="flex justify-center pt-4">
-                  <Button variant="outline" onClick={loadMore} className="gap-2 border-rose-500/40 hover:bg-rose-500/10" disabled={isLoading}>
-                    {isLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Loader2 className="w-4 h-4" />}
-                    {t("actions.loadMore", "Load More")}
+                  {loadMoreError && <p className="mr-3 self-center text-sm text-destructive">{t("actions.loadMoreFailed", "Could not load more. Try again.")}</p>}
+                  <Button variant="outline" onClick={loadMore} className="gap-2 border-rose-500/40 hover:bg-rose-500/10" disabled={isLoading || isLoadingMore}>
+                    {isLoading || isLoadingMore ? <Loader2 className="w-4 h-4 animate-spin" /> : <Loader2 className="w-4 h-4" />}
+                    {isLoadingMore ? t("actions.loadingMore", "Loading...") : t("actions.loadMore", "Load More")}
                   </Button>
                 </div>
               )}

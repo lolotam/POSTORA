@@ -66,6 +66,16 @@ export async function resolveDiscoveryAuthority(input: {
   return { authority: null, cacheIdentity, refusalCode: denied ? "IG_INSIGHTS_SCOPE_MISSING" : "IG_RECONNECT_REQUIRED" };
 }
 
+export const DISCOVERY_PLATFORMS = ["instagram", "facebook", "tiktok", "threads"] as const;
+export type DiscoveryPlatform = typeof DISCOVERY_PLATFORMS[number];
+
+/** An absent platform means Instagram. Any other value must be a supported platform before it can reach a cache key. */
+export function parseDiscoveryPlatform(value: unknown): DiscoveryPlatform {
+  if (value === undefined || value === null || value === "") return "instagram";
+  if (typeof value === "string" && (DISCOVERY_PLATFORMS as readonly string[]).includes(value)) return value as DiscoveryPlatform;
+  throw new InstagramDiscoveryError("INVALID_DISCOVERY_REQUEST", "Invalid discovery request.", 400);
+}
+
 export async function discoveryCacheKey(owner: string, username: string, identity: string): Promise<string> {
   const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(identity));
   const fingerprint = Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");

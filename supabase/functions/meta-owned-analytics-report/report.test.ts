@@ -44,6 +44,20 @@ Deno.test("saved report keeps true zero, last follower sample and unsummable uni
   assertEquals(report.sync.status, "fresh");
 });
 
+Deno.test("the lookahead post that only signals another page cannot change report freshness or paging", () => {
+  const base = fixture();
+  const newer = { ...base.daily[0].metrics[0], collected_at: "2026-11-01T11:30:00.000Z", observed_at: "2026-11-01T11:30:00.000Z" };
+  const post = (index: number, metrics: typeof base.daily[0]["metrics"]) => ({ metrics,
+    post: { platform_post_id: `post-${index}`, published_at: "2026-10-30T08:00:00.000Z", post_text: "", permalink: null, captured_on: "2026-11-01" } });
+  const posts = Array.from({ length: 25 }, (_, index) => post(index, []));
+  const without = assembleStoredAnalytics({ stored: { ...base, posts }, windows, generatedAt: NOW, nextCursor: "next", hasMore: true });
+  const withLookahead = assembleStoredAnalytics({ stored: { ...base, posts: [...posts, post(25, [newer])] }, windows, generatedAt: NOW, nextCursor: "next", hasMore: true });
+  assertEquals(withLookahead.sync.collectedAt, COLLECTED);
+  assertEquals(withLookahead.sync.asOf, without.sync.asOf);
+  assertEquals(withLookahead.posts.items.length, 25);
+  assertEquals([withLookahead.posts.nextCursor, withLookahead.posts.truncated], ["next", true]);
+});
+
 Deno.test("saved report preserves unavailable causes and partial coverage without inventing missing days", () => {
   const stored = fixture();
   const first = stored.daily[7].metrics.find((cell) => cell.metric_key === "views")!;

@@ -155,6 +155,22 @@ test("synthetic public target keeps identity, formats and nulls through the real
   assert.deepEqual(transport.calls.map((call) => call.account), ["pageGranted", "pageGranted", "otherPage", "otherPage"]);
 });
 
+test("inventory rows omit the unrequested view_count while discovery rows keep their values", async () => {
+  const manifest = createInstagramReleaseManifest(referenceInstant);
+  const transport = new InstagramReleaseMetaTransport(manifest);
+  const account = manifest.accounts.find((entry) => entry.key === "pageGranted")!;
+  const inventory = new URL(`https://graph.facebook.com/v22.0/${account.providerId}/media`);
+  inventory.search = new URLSearchParams({ limit: "25", access_token: account.token,
+    fields: "id,caption,media_type,media_product_type,timestamp,permalink,thumbnail_url,like_count,comments_count" }).toString();
+  const { data } = await (await transport.reply(new Request(inventory))).json();
+  assert.equal(data.length, 2);
+  assert.ok(data.every((row: object) => !("view_count" in row)));
+  assert.deepEqual(data.map((row: { like_count: number | null }) => row.like_count), [null, 20]);
+  const capture = await scrapeInstagramOfficial({ username: "release_competitor", viewerIgUserId: account.providerId,
+    accessToken: account.token, maxPosts: 50, fetchFn: (input, init) => transport.reply(new Request(input, init)) });
+  assert.deepEqual(capture.posts.map((post) => post.videoViewCount), [300, null]);
+});
+
 test("canonical config dirt and untracked fixture inputs fail immutable candidate provenance", () => {
   const root = mkdtempSync(join(tmpdir(), "instagram-release-source-safety-"));
   const git = (...args: string[]) => execFileSync("git", ["-C", root, ...args], { encoding: "utf8", stdio: "pipe" }).trim();

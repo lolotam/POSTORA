@@ -30,6 +30,9 @@ const MEDIA_BADGES: Record<string, { label: string; className: string }> = {
 export function PostCard({ post, index, onClick, hasContent, canDelete, isDeleting, onDelete }: PostCardProps) {
   const { t } = useTranslation("analytics");
   const badge = MEDIA_BADGES[post.mediaType] || MEDIA_BADGES.IMAGE;
+  // Display contract of the card: a number (including 0) is shown; null shows the unavailable dash only on VIDEO and REEL cards;
+  // null on other cards and undefined are hidden. This is a UI rule, not a statement about what the provider measures.
+  const showsViews = typeof post.videoViewCount === "number" || (post.videoViewCount === null && (post.mediaType === "VIDEO" || post.mediaType === "REEL"));
   const isHot = post.engagementScore !== null && post.engagementScore > 10000;
 
   return (
@@ -89,7 +92,7 @@ export function PostCard({ post, index, onClick, hasContent, canDelete, isDeleti
             <div className="flex items-center gap-3 text-white text-xs">
               <span>❤️ {formatBrandMetric(post.likesCount)}</span>
               <span>💬 {formatBrandMetric(post.commentsCount)}</span>
-              {post.videoViewCount !== undefined ? <span>▶️ {formatBrandMetric(post.videoViewCount)}</span> : null}
+              {showsViews ? <span>▶️ {formatBrandMetric(post.videoViewCount)}</span> : null}
             </div>
             <div className="flex gap-2 mt-1">
               <Button size="sm" variant="secondary" className="h-7 text-xs gap-1" onClick={(e) => { e.stopPropagation(); onClick(post); }}>

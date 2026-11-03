@@ -1,5 +1,5 @@
-import { assertEquals, assertRejects, assertStringIncludes } from "https://deno.land/std@0.224.0/assert/mod.ts";
-import { discoveryCacheKey, discoveryMedia, discoveryProfile, InstagramDiscoveryError, resolveDiscoveryAuthority, scrapeInstagramOfficial, scrapeInstagramOwn } from "./instagramDiscovery.ts";
+import { assertEquals, assertRejects, assertStringIncludes, assertThrows } from "https://deno.land/std@0.224.0/assert/mod.ts";
+import { discoveryCacheKey, discoveryMedia, discoveryProfile, InstagramDiscoveryError, parseDiscoveryPlatform, resolveDiscoveryAuthority, scrapeInstagramOfficial, scrapeInstagramOwn } from "./instagramDiscovery.ts";
 
 const OWNER = "8a000000-0000-4000-8000-000000000001";
 const ACCOUNT = "8a000000-0000-4000-8000-000000000002";
@@ -266,7 +266,7 @@ Deno.test("registered discovery handler retains source and null cells through ca
       if (table === "system_logs" || table === "profiles") return json(null);
       throw new Error(`Unexpected synthetic database route ${table}`);
     }) as typeof fetch;
-    await import("./index.ts");
+    const { resolveMaxPosts } = await import("./index.ts");
     const request = (platform = "instagram", username = "target") => new Request("http://127.0.0.1:61999/functions/v1/brand-scrape", { method: "POST", headers: { Authorization: "Bearer synthetic-caller", "Content-Type": "application/json" }, body: JSON.stringify({ platform, username }) });
     const invalidHandle = await handler!(request("instagram", "tar@get"));
     assertEquals(invalidHandle.status, 400);
@@ -328,6 +328,22 @@ Deno.test("registered discovery handler retains source and null cells through ca
     assertEquals((await threads.json()).reason, "deprecated_endpoint");
     assertEquals(authorityReads, readsBeforeThreads);
     assertEquals(apifyCalls, 2);
+    denied = false;
+    apifySetting = false;
+    for (const [setting, expectedPosts] of [[0.5, 1], [1.5, 1], [0, 2]] as const) {
+      cache = null;
+      maxPostsSetting = setting;
+      const response = await handler!(request());
+      assertEquals(response.status, 200);
+      assertEquals((await response.json()).posts.length, expectedPosts);
+    }
+    const resolverCases: [unknown, number][] = [
+      [1, 1], [50, 50], [100, 100], [101, 100], [150, 100], [-3, 1], [-0.5, 1],
+      [1.5, 1], [99.9, 99], [100.5, 100], [0.5, 1], [0, 50],
+      ["10", 10], ["1.5", 1], ['"25"', 25], ["1e2", 100], ["0", 50], ["-3", 1],
+      ["", 50], ["not json", 50], ['{"a":1}', 50], [null, 50], [undefined, 50], [false, 50], [Number.NaN, 50], [{}, 50],
+    ];
+    for (const [setting, expected] of resolverCases) assertEquals(resolveMaxPosts(setting), expected, `setting ${JSON.stringify(setting)}`);
   } finally {
     globalThis.fetch = originalFetch;
     Deno.serve = originalServe;
@@ -336,4 +352,21 @@ Deno.test("registered discovery handler retains source and null cells through ca
       else Deno.env.set(name, value);
     }
   }
+});
+
+Deno.test("a platform must be a supported value before it can address a cache key", () => {
+  for (const absent of [undefined, null, ""]) assertEquals(parseDiscoveryPlatform(absent), "instagram");
+  for (const supported of ["instagram", "facebook", "tiktok", "threads"]) assertEquals(parseDiscoveryPlatform(supported), supported);
+  for (const unsupported of ["Instagram", "instagram ", "instagram:v2:owner", "instagram:v2:8a000000-0000-4000-8000-000000000001:target", "x", 1, true, {}, []]) {
+    const error = assertThrows(() => parseDiscoveryPlatform(unsupported), InstagramDiscoveryError);
+    assertEquals([error.code, error.status], ["INVALID_DISCOVERY_REQUEST", 400]);
+  }
+});
+
+Deno.test("the handler validates the platform before it builds or reads any cache key", async () => {
+  // index.ts registers Deno.serve at import time, so the ordering is pinned on its source text.
+  const source = await Deno.readTextFile(new URL("./index.ts", import.meta.url));
+  const validate = source.indexOf("parseDiscoveryPlatform(body.platform)");
+  assertEquals(validate > 0, true);
+  for (const later of ["let cacheKey", '.from("brand_scrape_cache")']) assertEquals(validate < source.indexOf(later), true, later);
 });
