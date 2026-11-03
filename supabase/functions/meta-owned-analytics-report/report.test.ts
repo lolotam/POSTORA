@@ -4,7 +4,7 @@ import { analyticsDefinitions } from "../_shared/analyticsRegistry.ts";
 import { assembleStoredAnalytics } from "./assemble.ts";
 import { storedReportCursor, storedReportPosition, type StoredReportScope } from "./cursor.ts";
 import { createStoredReportHandler } from "./handler.ts";
-import { PersistedReportRefused, type StoredAnalyticsSnapshot } from "./store.ts";
+import { PersistedReportRefused, readStoredAnalytics, type StoredAnalyticsSnapshot } from "./store.ts";
 import { readJsonBodyCapped } from "../_shared/cappedJsonBody.ts";
 
 const OWNER = "d1000000-0000-4000-8000-000000000001";
@@ -161,4 +161,43 @@ Deno.test("bounded body abort never waits for an ignored read or cancellation", 
   controller.abort();
   await assertRejects(() => pending, DOMException);
   assertEquals(cancelled, true);
+});
+
+Deno.test("inventory DTO accepts legacy flags and coherent checkpoint provenance", async (test) => {
+  const source = { job_id: ACCOUNT, due_on: "2026-11-01", job_generation: 1, checkpoint_updated_at: COLLECTED };
+  for (const inventory of [{ complete: true, truncated: false },
+    { complete: true, truncated: false, state: "complete", source },
+    { complete: false, truncated: false, state: "incomplete", source },
+    { complete: false, truncated: true, state: "truncated", source },
+    { complete: false, truncated: false, state: "unknown", source: null }]) {
+    await test.step(JSON.stringify(inventory), async () => {
+      const stored = await readStoredAnalytics({ rpc: () => Promise.resolve({ data: { ...fixture(), inventory }, error: null }),
+        platform: "facebook", ownerId: OWNER, accountId: ACCOUNT, request: {}, signal: new AbortController().signal });
+      assertEquals(stored.inventory, inventory);
+      const report = assembleStoredAnalytics({ stored, windows, generatedAt: NOW, nextCursor: null, hasMore: false });
+      assertEquals(report.posts.status, inventory.complete ? "available" : "partial");
+      stored.collection.syncing = true;
+      assertEquals(assembleStoredAnalytics({ stored, windows, generatedAt: NOW, nextCursor: null, hasMore: false }).sync.status, "syncing");
+    });
+  }
+});
+
+Deno.test("inventory DTO refuses contradictory flags, states and provenance", async (test) => {
+  const source = { job_id: ACCOUNT, due_on: "2026-11-01", job_generation: 1, checkpoint_updated_at: COLLECTED };
+  for (const inventory of [{ complete: true, truncated: true },
+    { complete: "true", truncated: false },
+    { complete: true, truncated: false, state: "unknown", source: null },
+    { complete: false, truncated: false, state: "unknown", source },
+    { complete: true, truncated: false, state: "complete", source: null },
+    { complete: false, truncated: false, state: "truncated", source },
+    { complete: false, truncated: false, state: "complete", source },
+    { complete: false, truncated: false, state: "other", source },
+    { complete: false, truncated: false, state: "incomplete" },
+    { complete: false, truncated: false, state: "incomplete", source: { ...source, job_generation: 0 } }]) {
+    await test.step(JSON.stringify(inventory), async () => {
+      await assertRejects(() => readStoredAnalytics({ rpc: () => Promise.resolve({ data: { ...fixture(), inventory }, error: null }),
+        platform: "facebook", ownerId: OWNER, accountId: ACCOUNT, request: {}, signal: new AbortController().signal }),
+      PersistedReportRefused, "invalid_contract");
+    });
+  }
 });

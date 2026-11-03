@@ -13,10 +13,16 @@ const post = z.object({ platform_post_id: z.string().min(1).max(200), published_
   permalink: z.string().nullable(), captured_on: z.string() });
 const latest = z.object({ state: z.enum(["pending", "running", "partial", "success", "failed", "retry"]),
   reason_code: z.string().nullable(), retry_at: instant.nullable(), due_at: instant, next_due_at: instant, completed_at: instant.nullable() });
+const inventory = z.object({
+  complete: z.boolean(), truncated: z.boolean(), state: z.enum(["complete", "incomplete", "truncated", "unknown"]),
+  source: z.object({ job_id: z.string().uuid(), due_on: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+    job_generation: z.number().int().positive().safe(), checkpoint_updated_at: instant }).strict().nullable(),
+}).strict().refine((value) => value.complete === (value.state === "complete") && value.truncated === (value.state === "truncated") &&
+  (value.state === "unknown" ? value.source === null : value.source !== null));
 const snapshot = z.object({ ok: z.literal(true), account_id: z.string().uuid(), platform: z.enum(["facebook", "threads"]),
   revision: z.number().int().positive().safe().nullable(), retention_floor: instant.nullable(), as_of: instant, since: instant, until: instant,
   previous_since: instant, timezone: z.string(), health: z.object({ active: z.boolean(), needs_reauth: z.boolean(), token_expired: z.boolean() }).strict(),
-  inventory: z.object({ complete: z.boolean(), truncated: z.boolean() }).strict(),
+  inventory: z.union([z.object({ complete: z.boolean(), truncated: z.boolean() }).strict().refine((value) => !value.complete || !value.truncated), inventory]),
   daily: z.array(z.object({ bucket, metrics: z.array(cell).max(15) })).max(180),
   posts: z.array(z.object({ post, metrics: z.array(cell).max(15) })).max(26),
   profile_boundaries: z.array(cell.extend({ boundary: instant })).max(45),
