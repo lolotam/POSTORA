@@ -124,6 +124,7 @@ function commitSha(root, revision, code) {
 }
 
 function sourcePath(path) {
+  if (typeof path === "string" && CREDENTIAL_PATTERN.test(path)) throw new GateError("source_path_invalid", "[redacted-path]");
   if (typeof path !== "string" || path.includes("\\") || path.includes(":") || path.startsWith("/") || posix.normalize(path) !== path || path.startsWith("../")) {
     throw new GateError("source_path_invalid", "Expected a normalized repository-relative source path");
   }
@@ -148,7 +149,7 @@ function committedBytes(context, path, revision = context.candidate) {
   const entries = revision === context.candidate ? context.files : trackedTree(context.root, revision);
   const entry = entries.get(path);
   if (!entry || entry.type !== "blob" || !["100644", "100755"].includes(entry.mode)) {
-    throw new GateError("required_source_missing", `${path} at ${revision}`);
+    throw new GateError("required_source_missing", `${safeDetail(path)} at ${revision}`);
   }
   const blobs = objectCache(context.root).blobs;
   if (!blobs.has(entry.blob)) blobs.set(entry.blob, git(context.root, ["cat-file", "blob", entry.blob], "assignment_commit_unreachable"));
@@ -374,7 +375,7 @@ function migrationChecks(context) {
 }
 
 // Credential-bearing text is never accepted in evidence and never echoed in a report.
-const CREDENTIAL_PATTERN = /(?:[a-z][a-z0-9+.-]*:\/\/[^\s/?#"'<>]+@)|(?:["']?authorization["']?\s*[:=]\s*["']?Basic\s+[A-Za-z0-9+/]{4,}={0,2})|(?:https?:\/\/[^\s"']+[?&](?:access_token|refresh_token|api_key)=)|(?:Bearer\s+(?!token\b)[A-Za-z0-9._~+/=-]{8,})|(?:-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----)|(?:eyJ[A-Za-z0-9_-]{15,}\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+)|(?:["']?(?:access_token|refresh_token|api_key|password|client_secret|SUPABASE_SERVICE_ROLE_KEY)["']?\s*[:=]\s*["']?(?!\[REDACTED\]|<redacted>|(?:null|true|false|undefined)\b|[\[{])[^"'\s]+)/i;
+const CREDENTIAL_PATTERN = /(?:[a-z][a-z0-9+.-]*:\/\/[^\s/?#"'<>]+@)|(?:["']?authorization["']?\s*[:=]\s*["']?Basic\s+[A-Za-z0-9+/]{4,}={0,2})|(?:https?:\/\/[^\s"']+[?&](?:access_token|refresh_token|api_key)=)|(?:Bearer\s+(?!token(?![A-Za-z0-9._~+/=-]))[A-Za-z0-9._~+/=-]{8,})|(?:-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----)|(?:eyJ[A-Za-z0-9_-]{15,}\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+)|(?:["']?(?:access_token|refresh_token|api_key|password|client_secret|SUPABASE_SERVICE_ROLE_KEY)["']?\s*[:=]\s*["']?(?!\[REDACTED\]|<redacted>|(?:null|true|false|undefined)(?![A-Za-z0-9._-]))[^"'\s]+)/i;
 const safeDetail = (value) => CREDENTIAL_PATTERN.test(String(value)) ? "[redacted-path]" : value;
 
 function artifactBytes(context, artifact) {
@@ -489,12 +490,12 @@ function verifyManifest(context) {
     if (recorded.has(file.path)) context.report.failures.push(gap("source_artifact_duplicate", safeDetail(file.path)));
     recorded.set(file.path, file.sha256);
     collect(context, () => {
-      if (digest(committedBytes(context, file.path)) !== file.sha256) throw new GateError("source_hash_mismatch", file.path);
+      if (digest(committedBytes(context, file.path)) !== file.sha256) throw new GateError("source_hash_mismatch", safeDetail(file.path));
     });
   }
   for (const path of expected) collect(context, () => {
     const hash = digest(committedBytes(context, path));
-    if (recorded.get(path) !== hash) throw new GateError("source_manifest_incomplete", path);
+    if (recorded.get(path) !== hash) throw new GateError("source_manifest_incomplete", safeDetail(path));
   });
   for (const path of recorded.keys()) if (!expected.has(path)) context.report.failures.push(gap("source_manifest_unexpected", safeDetail(path)));
   context.sourceHashes = recorded;
@@ -864,7 +865,7 @@ function evidenceChecks(context) {
 
 function sourcePrerequisites(context) {
   for (const path of [...REQUIRED_FILES, ...runtimeSeeds(context)]) collect(context, () => {
-    if (!context.files.has(path)) throw new GateError("required_source_missing", path);
+    if (!context.files.has(path)) throw new GateError("required_source_missing", safeDetail(path));
   });
 }
 

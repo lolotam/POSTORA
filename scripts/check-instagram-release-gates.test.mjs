@@ -413,6 +413,8 @@ test("native Playwright result and redaction boundaries cannot be overridden by 
   for (const [scheme, text, secret] of [
     ["short bearer value", `Authorization: ${"Bea"}${"rer"} ${"abcd"}${"1234"}`, "abcd1234"],
     ["short sensitive assignment", `${"pass"}${"word"}=${"12"}${"345"}`, "12345"],
+    ["bearer value that starts with the word token", `Authorization: ${"Bea"}${"rer"} ${"token-"}${"production-secret"}`, "production-secret"],
+    ["bracketed sensitive value", `${"pass"}${"word"}=[${"actual-"}${"secret"}]`, "actual-secret"],
   ]) await context.test(`${scheme} cannot enter retained evidence`, () => {
     const ledger = structuredClone(fixture.ledger);
     ledger.proofs[0].artifact = fixture.artifact("short.txt", text);
