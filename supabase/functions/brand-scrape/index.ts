@@ -3,7 +3,7 @@ import { createLogger } from "../_shared/logging.ts";
 import type { ViewerCandidate } from "../_shared/instagramDiscoveryViewer.ts";
 import { CredentialStoreError } from "../_shared/facebookUserCredentialStore.ts";
 import { normalizeCompetitorHandle } from "../competitor-snapshot-sync/graphProvider.ts";
-import { discoveryCacheKey, discoveryMedia, discoveryProfile, InstagramDiscoveryError, resolveDiscoveryAuthority, scrapeInstagramOfficial, scrapeInstagramOwn } from "./instagramDiscovery.ts";
+import { discoveryCacheKey, discoveryMedia, discoveryProfile, InstagramDiscoveryError, parseDiscoveryPlatform, resolveDiscoveryAuthority, scrapeInstagramOfficial, scrapeInstagramOwn } from "./instagramDiscovery.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -302,7 +302,7 @@ Deno.serve(async (req) => {
     try { body = await req.json(); } catch { throw new InstagramDiscoveryError("INVALID_DISCOVERY_REQUEST", "Invalid discovery request.", 400); }
     if (!body || typeof body !== "object" || Array.isArray(body)) throw new InstagramDiscoveryError("INVALID_DISCOVERY_REQUEST", "Invalid discovery request.", 400);
     const { username, offset = 0 } = body;
-    platform = body.platform || "instagram";
+    platform = parseDiscoveryPlatform(body.platform);
 
     if (typeof username !== "string" || !username.trim()) {
       await logger.warn("Discovery request refused", { error_code: "INVALID_DISCOVERY_REQUEST" }, userId);

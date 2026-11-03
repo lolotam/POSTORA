@@ -1,5 +1,5 @@
-import { assertEquals, assertRejects, assertStringIncludes } from "https://deno.land/std@0.224.0/assert/mod.ts";
-import { discoveryCacheKey, discoveryMedia, discoveryProfile, InstagramDiscoveryError, resolveDiscoveryAuthority, scrapeInstagramOfficial, scrapeInstagramOwn } from "./instagramDiscovery.ts";
+import { assertEquals, assertRejects, assertStringIncludes, assertThrows } from "https://deno.land/std@0.224.0/assert/mod.ts";
+import { discoveryCacheKey, discoveryMedia, discoveryProfile, InstagramDiscoveryError, parseDiscoveryPlatform, resolveDiscoveryAuthority, scrapeInstagramOfficial, scrapeInstagramOwn } from "./instagramDiscovery.ts";
 
 const OWNER = "8a000000-0000-4000-8000-000000000001";
 const ACCOUNT = "8a000000-0000-4000-8000-000000000002";
@@ -336,4 +336,21 @@ Deno.test("registered discovery handler retains source and null cells through ca
       else Deno.env.set(name, value);
     }
   }
+});
+
+Deno.test("a platform must be a supported value before it can address a cache key", () => {
+  for (const absent of [undefined, null, ""]) assertEquals(parseDiscoveryPlatform(absent), "instagram");
+  for (const supported of ["instagram", "facebook", "tiktok", "threads"]) assertEquals(parseDiscoveryPlatform(supported), supported);
+  for (const unsupported of ["Instagram", "instagram ", "instagram:v2:owner", "instagram:v2:8a000000-0000-4000-8000-000000000001:target", "x", 1, true, {}, []]) {
+    const error = assertThrows(() => parseDiscoveryPlatform(unsupported), InstagramDiscoveryError);
+    assertEquals([error.code, error.status], ["INVALID_DISCOVERY_REQUEST", 400]);
+  }
+});
+
+Deno.test("the handler validates the platform before it builds or reads any cache key", async () => {
+  // index.ts registers Deno.serve at import time, so the ordering is pinned on its source text.
+  const source = await Deno.readTextFile(new URL("./index.ts", import.meta.url));
+  const validate = source.indexOf("parseDiscoveryPlatform(body.platform)");
+  assertEquals(validate > 0, true);
+  for (const later of ["let cacheKey", '.from("brand_scrape_cache")']) assertEquals(validate < source.indexOf(later), true, later);
 });
