@@ -107,7 +107,7 @@ export function assembleStoredAnalytics(input: { stored: StoredAnalyticsSnapshot
   const cells = [...stored.daily.flatMap((day) => day.metrics), ...shownPosts.flatMap((post) => post.metrics), ...stored.profile_boundaries, ...stored.profile_current, ...stored.period_totals];
   const collectedAt = latestInstant(cells.map((cell) => cell.collected_at));
   const asOf = collectedAt ? new Date(Math.min(Date.parse(windows.current.period.until), Date.parse(collectedAt))).toISOString() : null;
-  const incompleteInventory = !stored.inventory.complete || stored.inventory.truncated;
+  const incompleteInventory = "state" in stored.inventory ? stored.inventory.state !== "complete" : !stored.inventory.complete || stored.inventory.truncated;
   const truncated = input.hasMore || incompleteInventory;
   const reason = incompleteInventory ? "not_collected" as const : null;
   const partial = (collectedAt !== null || stored.collection.latest !== null) && (incompleteInventory || incompleteCells
