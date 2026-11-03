@@ -1,12 +1,12 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdtempSync, mkdirSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, constants, mkdtempSync, mkdirSync, readFileSync, realpathSync, renameSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join, posix, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { test } from "node:test";
-import { evaluateReleaseGates, ident } from "./check-instagram-release-gates.mjs";
+import { evaluateReleaseGates, ident, readBoundedFile } from "./check-instagram-release-gates.mjs";
 
 const ROOT = fileURLToPath(new URL("../", import.meta.url));
 const CHECKER = fileURLToPath(new URL("./check-instagram-release-gates.mjs", import.meta.url));
@@ -47,7 +47,7 @@ function repository(context, options = {}) {
   if (!options.unassigned) for (const name of MEMBERS) put(`supabase/migrations/${name}`, "-- synthetic series member\n");
   const memberCommit = options.unassigned ? baseline : commit();
   git("update-ref", "refs/remotes/origin/main", memberCommit);
-  const evaluate = (options = {}) => evaluateReleaseGates({ root, spec: SPEC, mainRef: "origin/main", gate: "migrations", ...options });
+  const evaluate = (options = {}) => evaluateReleaseGates({ root, spec: SPEC, mainRef: "origin/main", gate: "migrations", privateImmutableInput: true, ...options });
   const activate = () => { put(WORKFLOW, "name: migration gate\n"); const sha = commit(); git("update-ref", "refs/remotes/origin/main", sha); return sha; };
   return { root, put, git, commit, baseline, memberCommit, evaluate, activate };
 }
@@ -769,4 +769,123 @@ test("a tracked path with a tab or other control character fails closed and cann
     fixture.commit();
     assert.ok(!codes(fixture.evaluate()).includes("tracked_path_invalid"));
   });
+});
+
+// Slice 1a: bounded reads from one opened handle. Every bundle below is a private temporary directory created by the test.
+const boundedDirectory = mkdtempSync(join(tmpdir(), "release-gate-bounded-"));
+const boundedFile = (name, bytes) => { const path = join(boundedDirectory, name); writeFileSync(path, bytes); return path; };
+process.once("exit", () => rmSync(boundedDirectory, { recursive: true, force: true }));
+const precondition = { privateImmutableInput: true };
+const failsWith = (action, code) => assert.throws(action, (error) => error.code === code && !error.message.includes(boundedDirectory));
+const canSymlink = (() => { try { symlinkSync(boundedFile("probe-target", "x"), join(boundedDirectory, "probe-link")); return true; } catch { return false; } })();
+
+test("bounded read returns exactly the bytes at the cap and refuses one byte more", () => {
+  const exact = readBoundedFile(boundedFile("at-cap.bin", Buffer.alloc(16, 7)), 16, precondition);
+  assert.equal(exact.length, 16);
+  assert.equal(exact.buffer.byteLength, 16, "the returned backing store must hold exactly the bytes read");
+  failsWith(() => readBoundedFile(boundedFile("over-cap.bin", Buffer.alloc(17)), 16, precondition), "artifact_too_large");
+  const empty = readBoundedFile(boundedFile("empty.bin", ""), 16, precondition);
+  assert.equal(empty.buffer.byteLength, 0);
+});
+
+test("bounded read refuses a directory and reports no path", () => {
+  failsWith(() => readBoundedFile(boundedDirectory, 16, precondition), "artifact_not_regular");
+});
+
+test("bounded read refuses a file swapped for another file after the check", () => {
+  const path = boundedFile("swapped.bin", "original");
+  failsWith(() => readBoundedFile(path, 64, { ...precondition, beforeOpen: () => { renameSync(path, `${path}.old`); writeFileSync(path, "replacement"); } }), "artifact_not_regular");
+});
+
+test("bounded read never returns bytes appended after the size check", () => {
+  const path = boundedFile("grown.bin", Buffer.alloc(8));
+  failsWith(() => readBoundedFile(path, 8, { ...precondition, afterFstat: () => appendFileSync(path, Buffer.alloc(64)) }), "artifact_changed_during_read");
+});
+
+const hasHandleGuards = constants.O_NOFOLLOW !== undefined && constants.O_NONBLOCK !== undefined;
+if (hasHandleGuards) {
+  test("bounded read refuses a FIFO before opening it", { timeout: 1000 }, () => {
+    const fifo = join(boundedDirectory, "untrusted-fifo");
+    execFileSync("mkfifo", [fifo]);
+    failsWith(() => readBoundedFile(fifo, 16), "artifact_not_regular");
+  });
+  test("platform with no-follow and non-blocking flags reads without the private-input precondition", () => {
+    assert.equal(readBoundedFile(boundedFile("guarded.bin", "x"), 16).toString(), "x");
+  });
+} else {
+  test("platform without no-follow or non-blocking flags refuses unless the private-input precondition is stated", () => {
+    failsWith(() => readBoundedFile(boundedFile("precondition.bin", "x"), 16), "platform_precondition_unmet");
+  });
+}
+
+if (canSymlink) {
+  test("bounded read refuses replacement with a symlink before open", () => {
+    const target = boundedFile("race-target.bin", "replacement");
+    const path = boundedFile("race-link.bin", "original");
+    assert.throws(() => readBoundedFile(path, 64, {
+      ...precondition,
+      beforeOpen: () => { unlinkSync(path); symlinkSync(target, path); },
+    }), (error) => ["artifact_not_regular", "ELOOP"].includes(error.code));
+  });
+  test("bounded read refuses a symlink even when its target is a regular file", () => {
+    const link = join(boundedDirectory, "link-to-target");
+    symlinkSync(boundedFile("symlink-target.bin", "x"), link);
+    assert.throws(() => readBoundedFile(link, 16, precondition), (error) => ["artifact_not_regular", "ELOOP"].includes(error.code));
+  });
+}
+
+test("artifacts outside the evidence directory, through an absolute path or a dot-dot segment, are refused", async (context) => {
+  const fixture = fullLedger(context);
+  const original = structuredClone(fixture.ledger);
+  const evidenceDirectory = join(fixture.root, ".evidence");
+  const outside = join(fixture.root, "outside-artifact.json");
+  writeFileSync(outside, "{}");
+  const control = structuredClone(fixture.ledger);
+  control.proofs[0].artifact = { ...control.proofs[0].artifact, path: join(evidenceDirectory, "playwright.json") };
+  assert.deepEqual(control.inventoryReview, original.inventoryReview);
+  assert.deepEqual(control.proofs.slice(1), original.proofs.slice(1));
+  const controlReport = fixture.evaluate({ phase: "release", evidence: control, evidenceDirectory });
+  assert.ok(!codes(controlReport).includes("artifact_path_escape"), JSON.stringify(codes(controlReport)));
+  assert.deepEqual(controlReport.failures.filter((failure) => failure.code.startsWith("artifact_")), []);
+  assert.ok(!JSON.stringify(controlReport).includes(JSON.stringify(fixture.root).slice(1, -1)));
+  for (const path of [outside, "../outside-artifact.json"]) {
+    const ledger = structuredClone(fixture.ledger);
+    ledger.proofs[0].artifact = { ...ledger.proofs[0].artifact, path };
+    assert.deepEqual(ledger.inventoryReview, original.inventoryReview);
+    assert.deepEqual(ledger.proofs.slice(1), original.proofs.slice(1));
+    const report = fixture.evaluate({ phase: "release", evidence: ledger, evidenceDirectory });
+    assert.ok(codes(report).includes("artifact_path_escape"), JSON.stringify(codes(report)));
+    assert.ok(!JSON.stringify(report).includes(boundedDirectory));
+    assert.ok(!JSON.stringify(report).includes(JSON.stringify(fixture.root).slice(1, -1)));
+    assert.ok(!JSON.stringify(report).includes(JSON.stringify(outside).slice(1, -1)));
+  }
+  if (canSymlink) {
+    const link = join(evidenceDirectory, "outside-link.json");
+    symlinkSync(outside, link);
+    const ledger = structuredClone(fixture.ledger);
+    ledger.proofs[0].artifact = { ...ledger.proofs[0].artifact, path: "outside-link.json" };
+    assert.deepEqual(ledger.inventoryReview, original.inventoryReview);
+    assert.deepEqual(ledger.proofs.slice(1), original.proofs.slice(1));
+    const report = fixture.evaluate({ phase: "release", evidence: ledger, evidenceDirectory });
+    assert.ok(codes(report).includes("artifact_path_escape"));
+    assert.ok(!JSON.stringify(report).includes(boundedDirectory));
+    assert.ok(!JSON.stringify(report).includes(JSON.stringify(fixture.root).slice(1, -1)));
+    assert.ok(!JSON.stringify(report).includes(JSON.stringify(outside).slice(1, -1)));
+  }
+  assert.deepEqual(fixture.ledger, original);
+});
+
+test("bounded read refuses growth below the cap between lstat and open", () => {
+  const path = boundedFile("before-open-growth.bin", Buffer.alloc(8));
+  failsWith(() => readBoundedFile(path, 16, { ...precondition, beforeOpen: () => appendFileSync(path, "x") }), "artifact_changed_during_read");
+});
+
+test("bounded read refuses growth below the cap after fstat", () => {
+  const path = boundedFile("sub-cap-growth.bin", Buffer.alloc(8));
+  failsWith(() => readBoundedFile(path, 16, { ...precondition, afterFstat: () => appendFileSync(path, "x") }), "artifact_changed_during_read");
+});
+
+test("bounded read refuses shrinkage after fstat", () => {
+  const path = boundedFile("shrink-after-stat.bin", Buffer.alloc(8));
+  failsWith(() => readBoundedFile(path, 16, { ...precondition, afterFstat: () => writeFileSync(path, Buffer.alloc(7)) }), "artifact_changed_during_read");
 });
