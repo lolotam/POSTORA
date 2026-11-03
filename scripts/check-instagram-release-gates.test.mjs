@@ -740,18 +740,28 @@ test("a tracked path with a tab or other control character fails closed and cann
   const withTreeEntries = (names) => {
     const fixture = repository(context);
     const blob = execFileSync("git", ["-C", fixture.root, "hash-object", "-w", "--stdin"], { input: "synthetic content\n" }).toString().trim();
-    const tree = execFileSync("git", ["-C", fixture.root, "mktree", "-z"], { input: names.map((name) => `100644 blob ${blob}\t${name}\0`).join("") }).toString().trim();
+    const tree = execFileSync("git", ["-C", fixture.root, "mktree", "-z"], { input: Buffer.concat(names.map((name) => Buffer.concat([Buffer.from(`100644 blob ${blob}\t`), Buffer.from(name), Buffer.from([0])]))) }).toString().trim();
     const commit = execFileSync("git", ["-C", fixture.root, "-c", "user.name=Release Gate Test", "-c", "user.email=release@example.test", "commit-tree", tree, "-m", "control character path"]).toString().trim();
     fixture.git("update-ref", "HEAD", commit);
     return fixture;
   };
-  for (const [scheme, suffix] of [["embedded tab", "\tinjected"], ["embedded newline", "\ninjected"], ["embedded escape", "\u001binjected"]]) {
+  for (const [scheme, suffix] of [["embedded tab", "\tinjected"], ["embedded newline", "\ninjected"], ["embedded escape", "\u001binjected"], ["embedded C1 control", "\u009binjected"]]) {
     await context.test(`${scheme} is rejected without echoing the path`, () => {
       const result = withTreeEntries(["real.ts", `real.ts${suffix}`]).evaluate();
       assert.ok(result.failures.some((entry) => entry.code === "tracked_path_invalid"));
       assert.ok(!JSON.stringify(result).includes("injected"));
     });
   }
+  await context.test("two paths that differ only in invalid UTF-8 bytes cannot alias one entry", () => {
+    const named = (byte) => Buffer.concat([Buffer.from("a"), Buffer.from([byte]), Buffer.from(".md")]);
+    const result = withTreeEntries([named(0xff), named(0xfe)]).evaluate();
+    const failure = result.failures.find((entry) => entry.code === "tracked_path_invalid");
+    assert.equal(failure?.detail, "A tracked path contains an unsupported control or replacement character");
+  });
+  await context.test("a literal replacement character that is valid UTF-8 is also refused by policy", () => {
+    const result = withTreeEntries([`a\u{FFFD}b.md`]).evaluate();
+    assert.ok(result.failures.some((entry) => entry.code === "tracked_path_invalid"));
+  });
   await context.test("ordinary paths, including spaces and non-ASCII letters, are still accepted", () => {
     const fixture = repository(context);
     fixture.put("docs/with space.md", "synthetic\n");

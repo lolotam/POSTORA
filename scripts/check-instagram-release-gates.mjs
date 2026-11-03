@@ -139,7 +139,8 @@ function trackedTree(root, revision) {
     const tab = entry.indexOf("\t");
     const [mode, type, blob] = entry.slice(0, tab).split(" ");
     const path = entry.slice(tab + 1);
-    if (tab < 1 || /[\x00-\x1f\x7f]/.test(path)) throw new GateError("tracked_path_invalid", "A tracked path contains a control character");
+    // Conservative policy: any Unicode control or the replacement character (also when it is valid UTF-8) is refused. The regex does not tell a decoder substitution from a real U+FFFD.
+    if (tab < 1 || /[\p{Cc}\u{FFFD}]/u.test(path)) throw new GateError("tracked_path_invalid", "A tracked path contains an unsupported control or replacement character");
     return [path, { mode, type, blob }];
   }));
   if (/^[a-f0-9]{40}$/.test(revision)) cache.set(revision, files);
@@ -377,7 +378,7 @@ function migrationChecks(context) {
 }
 
 // Credential screening: the bounded guarantee.
-// Detected (the artifact is refused and any report text is replaced): URI userinfo, Basic authorization, access_token/refresh_token/api_key query parameters,
+// Detected (the artifact is refused and any report text is replaced): URI userinfo, Basic authorization, access_token/refresh_token/api_key/token/key query parameters (any value, placeholders included),
 // Bearer values, PEM private-key headers, JWTs, and a value assigned with = or : to access_token, refresh_token, api_key, password, client_secret or SUPABASE_SERVICE_ROLE_KEY.
 // Assignment semantics. A quoted value ("..." or '...') is read up to its closing quote and is accepted only when it is empty, [REDACTED] or <redacted>; any other content
 // inside the quotes is a credential. An unquoted value ends at whitespace. [REDACTED], <redacted>, [], {}, null, true, false and undefined are accepted only as the whole value,
