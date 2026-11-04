@@ -401,6 +401,14 @@ export function classifyOwnerGraphError(
     );
   }
 
+  // An HTTP 401 is an authentication refusal whatever the envelope says.
+  if (httpStatus === 401) {
+    return new OwnerProviderError(
+      "The provider rejected the credential.",
+      { ...options, kind: "token_invalid" },
+    );
+  }
+
   const { code, mentionsScope } = envelope;
 
   if (code !== null && RATE_LIMIT_CODES.has(code)) {
@@ -411,14 +419,6 @@ export function classifyOwnerGraphError(
   }
 
   if (code !== null && TOKEN_ERROR_CODES.has(code)) {
-    return new OwnerProviderError(
-      "The provider rejected the credential.",
-      { ...options, kind: "token_invalid" },
-    );
-  }
-
-  // An HTTP 401 is an authentication refusal whatever the envelope says.
-  if (httpStatus === 401) {
     return new OwnerProviderError(
       "The provider rejected the credential.",
       { ...options, kind: "token_invalid" },

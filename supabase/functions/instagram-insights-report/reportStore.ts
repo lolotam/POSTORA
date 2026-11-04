@@ -139,6 +139,42 @@ export function toProfileObservationRow(row: Record<string, unknown>): ProfileOb
   };
 }
 
+/**
+ * The collection worker records its own reason vocabulary on the job; the
+ * report speaks a smaller one. Every worker reason is translated here so a
+ * partial or failed visit never makes the report itself invalid. A reason the
+ * report does not know yet reads as "unknown", never as a refusal.
+ */
+const WORKER_REASON_TO_REPORT_REASON: Readonly<Record<string, OwnerReportReasonCode>> = {
+  scope_missing: "scope_missing",
+  capability_missing: "scope_missing",
+  token_invalid: "reauth_required",
+  credential_unavailable: "reauth_required",
+  context_missing: "reauth_required",
+  direct_login_unsupported: "reauth_required",
+  rate_limited: "throttled",
+  provider_error: "provider_error",
+  collection_unavailable: "provider_unavailable",
+  inventory_unavailable: "provider_unavailable",
+  inventory_incomplete: "inventory_truncated",
+  daily_observation_pending: "baseline_history_incomplete",
+  media_insights_pending: "baseline_history_incomplete",
+  period_reach_pending: "baseline_history_incomplete",
+};
+
+const REPORT_REASONS: ReadonlySet<string> = new Set<OwnerReportReasonCode>([
+  "ok", "never_synced", "scope_missing", "reauth_required", "throttled", "usage_limit_reached",
+  "provider_unavailable", "provider_error", "network_error", "write_failed", "inventory_truncated",
+  "baseline_history_incomplete", "unknown",
+]);
+
+function toReportReason(stored: unknown): OwnerReportReasonCode | null {
+  if (stored === null || stored === undefined) return null;
+  const code = String(stored);
+  if (REPORT_REASONS.has(code)) return code as OwnerReportReasonCode;
+  return WORKER_REASON_TO_REPORT_REASON[code] ?? "unknown";
+}
+
 export function parseFreshness(jobStatus: Record<string, unknown> | null): OwnerReportFreshnessInput {
   if (!jobStatus || jobStatus.status === "none") {
     return {
@@ -164,7 +200,7 @@ export function parseFreshness(jobStatus: Record<string, unknown> | null): Owner
   const inventory = (jobStatus.inventory as Record<string, unknown>) ?? {};
   const isPartial = Boolean(inventory.partial ?? rawStatus === "partial");
   const isTruncated = Boolean(inventory.truncated ?? false);
-  const reasonCode = (jobStatus.reason_code as OwnerReportReasonCode) ?? null;
+  const reasonCode = toReportReason(jobStatus.reason_code);
 
   return {
     status: syncStatus,

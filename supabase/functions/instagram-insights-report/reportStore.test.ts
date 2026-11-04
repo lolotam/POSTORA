@@ -90,6 +90,24 @@ Deno.test("parseFreshness maps database job status cleanly", () => {
   assertEquals(never.reason, "never_synced");
 });
 
+// PR #367 review: a partial visit that still owed history stored
+// "daily_observation_pending", which the report refused as an unknown reason.
+Deno.test("a worker reason outside the report vocabulary still yields a valid report reason", () => {
+  for (const [stored, expected] of [
+    ["daily_observation_pending", "baseline_history_incomplete"],
+    ["period_reach_pending", "baseline_history_incomplete"],
+    ["rate_limited", "throttled"],
+    ["token_invalid", "reauth_required"],
+    ["inventory_incomplete", "inventory_truncated"],
+    ["scope_missing", "scope_missing"],
+    ["continuation_expired", "unknown"],
+    [null, null],
+  ] as const) {
+    const freshness = parseFreshness({ status: "partial", last_attempt_at: "2026-10-28T12:00:00Z", reason_code: stored });
+    assertEquals(freshness.reason, expected, String(stored));
+  }
+});
+
 Deno.test("parseCompleteness determines coverage from inventory flags", () => {
   const covered = parseCompleteness(
     { inventory: { window_covered: true, truncated: false } },

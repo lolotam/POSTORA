@@ -553,7 +553,8 @@ Deno.test("a Graph error envelope delivered with HTTP 200 is an error", async ()
 });
 
 Deno.test("an HTTP 401 is a rejected credential whatever its envelope says", async () => {
-  for (const body of [{ error: { code: 1, message: "unauthorized" } }, {}]) {
+  // A rate-limit code in a 401 envelope must not turn a dead credential into a retry.
+  for (const body of [{ error: { code: 1, message: "unauthorized" } }, { error: { code: 4, message: "limit" } }, {}]) {
     const { provider, attempts } = providerWith(() => jsonResponse(body, { status: 401 }));
 
     const error = await assertRejects(
