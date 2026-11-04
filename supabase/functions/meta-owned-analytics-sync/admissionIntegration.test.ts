@@ -1,7 +1,6 @@
 import { assert, assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import { z } from "https://esm.sh/zod@3.25.76";
 import { resolveRolloutRuntime, RolloutSqlError, SERVICE_ROLE, acquireRolloutLease, releaseRolloutLease } from "../_shared/rolloutIntegrationTestSupport.ts";
-import { handler } from "./index.ts";
 import { parseAnalyticsReport } from "../_shared/analyticsSchema.ts";
 import { handleGetPostAnalytics } from "../n8n-api/serviceProxy.ts";
 
@@ -106,6 +105,9 @@ Deno.test("registered admission and dispatch preserve real SQL fences and durabl
     for (const [key, value] of Object.entries({ SUPABASE_URL: API, SUPABASE_SERVICE_ROLE_KEY: "fixture-service", CRON_SECRET: "synthetic-cron",
       FACEBOOK_APP_ID: "770001", FACEBOOK_APP_SECRET: "synthetic-app", THREADS_APP_ID: "770001", THREADS_APP_SECRET: "synthetic-app" })) Deno.env.set(key, value);
     const { handler: reportHandler } = await import("../meta-owned-analytics-report/index.ts");
+    // Both entries share the auth helper, which reads the service key when it is first imported:
+    // import them only after the fixture environment is in place.
+    const { handler } = await import("./index.ts");
     const reportRequest = (platform: "facebook" | "threads", accountId: string, ownerId = OWNER) => reportHandler(new Request(API, {
       method: "POST", headers: { Authorization: "Bearer fixture-service", "Content-Type": "application/json" },
       body: JSON.stringify({ platform, accountId, user_id: ownerId, analyticsContractVersion: 1, periodDays: 7 }),
