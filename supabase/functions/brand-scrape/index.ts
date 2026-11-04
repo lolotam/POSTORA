@@ -4,16 +4,13 @@ import { createLogger } from "../_shared/logging.ts";
 import type { ViewerCandidate } from "../_shared/instagramDiscoveryViewer.ts";
 import { CredentialStoreError } from "../_shared/facebookUserCredentialStore.ts";
 import { normalizeCompetitorHandle } from "../competitor-snapshot-sync/graphProvider.ts";
+import { calculateEngagementScore, FacebookPublicPageError, scrapeFacebookPublicPage } from "./facebookPublicPage.ts";
 import { discoveryCacheKey, discoveryMedia, discoveryProfile, InstagramDiscoveryError, parseDiscoveryPlatform, resolveDiscoveryAuthority, scrapeInstagramOfficial, scrapeInstagramOwn } from "./instagramDiscovery.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
 };
-
-function calculateEngagementScore(likes = 0, comments = 0, shares = 0, views = 0): number {
-  return Math.round((likes * 1) + (comments * 2) + (shares * 1.5) + (views * 0.1));
-}
 
 // ─── Instagram: Official Business Discovery API ───
 // ─── Instagram: Apify fallback ───
@@ -49,138 +46,6 @@ async function scrapeInstagramApify(username: string, apifyToken: string, actorI
       like_count: item.likesCount, comments_count: item.commentsCount, view_count: item.videoViewCount,
       timestamp: item.timestamp, permalink: `https://www.instagram.com/p/${item.shortCode}/`,
     })),
-  };
-}
-
-// ─── Facebook: App Access Token (public pages) ───
-async function scrapeFacebook(pageIdentifier: string, appId: string, appSecret: string, maxPosts = 50) {
-  const appAccessToken = `${appId}|${appSecret}`;
-  const baseUrl = "https://graph.facebook.com/v22.0";
-
-  const pageFields = "id,name,username,about,fan_count,picture{url},cover,website,verification_status";
-  const pageRes = await fetch(
-    `${baseUrl}/${encodeURIComponent(pageIdentifier)}?fields=${pageFields}&access_token=${appAccessToken}`
-  );
-  if (!pageRes.ok) {
-    const errText = await pageRes.text();
-    throw new Error(`Facebook page not found (${pageRes.status}): ${errText}`);
-  }
-  const pageData = await pageRes.json();
-  if (pageData.error) throw new Error(pageData.error.message);
-
-  const postFields = "id,message,story,full_picture,created_time,permalink_url," +
-    "attachments{type,subattachments{type,media_type,media},media_type,media{source},description}," +
-    "likes.summary(true),comments.summary(true),shares,reactions.summary(true)";
-  const postsRes = await fetch(
-    `${baseUrl}/${pageData.id}/posts?fields=${postFields}&limit=${maxPosts}&access_token=${appAccessToken}`
-  );
-  if (!postsRes.ok) {
-    const errText = await postsRes.text();
-    throw new Error(`Facebook posts fetch failed (${postsRes.status}): ${errText}`);
-  }
-  const postsData = await postsRes.json();
-  if (postsData.error) throw new Error(postsData.error.message);
-
-  const posts = (postsData.data || []).map((post: any) => {
-    const likes = post.likes?.summary?.total_count || 0;
-    const comments = post.comments?.summary?.total_count || 0;
-    const shares = post.shares?.count || 0;
-    const reactions = post.reactions?.summary?.total_count || 0;
-
-    let mediaType = "IMAGE";
-    const attachmentType = post.attachments?.data?.[0]?.type || "";
-    const attachmentMediaType = post.attachments?.data?.[0]?.media_type || "";
-    const subattachments = post.attachments?.data?.[0]?.subattachments?.data;
-    const description = post.attachments?.data?.[0]?.description || "";
-    const storyText = post.story || "";
-
-    if (subattachments && subattachments.length > 1) {
-      mediaType = "CAROUSEL";
-    } else if (
-      attachmentType.includes("video") ||
-      attachmentMediaType === "video" ||
-      (attachmentType === "share" && attachmentMediaType === "video")
-    ) {
-      if (storyText.toLowerCase().includes("reel") || description.toLowerCase().includes("reel")) {
-        mediaType = "REEL";
-      } else {
-        mediaType = "VIDEO";
-      }
-    } else if (attachmentType.includes("album")) {
-      mediaType = "CAROUSEL";
-    } else if (!post.full_picture && !attachmentType) {
-      mediaType = "TEXT";
-    }
-
-    return {
-      id: post.id,
-      mediaType,
-      thumbnailUrl: post.full_picture || "",
-      mediaUrl: post.full_picture || "",
-      caption: post.message || post.story || "",
-      likesCount: reactions || likes,
-      commentsCount: comments,
-      videoViewCount: 0,
-      sharesCount: shares,
-      savesCount: 0,
-      engagementScore: calculateEngagementScore(reactions || likes, comments, shares, 0),
-      timestamp: post.created_time,
-      permalink: post.permalink_url || `https://www.facebook.com/${post.id}`,
-    };
-  });
-
-  // Try fetching Reels separately and merge
-  const existingIds = new Set(posts.map((p: any) => p.id));
-  try {
-    const reelsRes = await fetch(
-      `${baseUrl}/${pageData.id}/video_reels?fields=id,description,created_time,` +
-      `thumbnails,permalink_url,likes.summary(true),comments.summary(true),shares` +
-      `&limit=25&access_token=${appAccessToken}`
-    );
-    if (reelsRes.ok) {
-      const reelsData = await reelsRes.json();
-      for (const reel of (reelsData.data || [])) {
-        if (existingIds.has(reel.id)) continue;
-        const rLikes = reel.likes?.summary?.total_count || 0;
-        const rComments = reel.comments?.summary?.total_count || 0;
-        const rShares = reel.shares?.count || 0;
-        const thumbnail = reel.thumbnails?.data?.[0]?.uri || "";
-        posts.push({
-          id: reel.id,
-          mediaType: "REEL",
-          thumbnailUrl: thumbnail,
-          mediaUrl: thumbnail,
-          caption: reel.description || "",
-          likesCount: rLikes,
-          commentsCount: rComments,
-          videoViewCount: 0,
-          sharesCount: rShares,
-          savesCount: 0,
-          engagementScore: calculateEngagementScore(rLikes, rComments, rShares, 0),
-          timestamp: reel.created_time,
-          permalink: reel.permalink_url || `https://www.facebook.com/${reel.id}`,
-        });
-      }
-    }
-  } catch (_e) {
-    // Reels endpoint may not be available with app token — silently skip
-  }
-
-  return {
-    profile: {
-      id: pageData.id,
-      username: pageData.username || pageIdentifier,
-      fullName: pageData.name,
-      bio: pageData.about || "",
-      avatarUrl: pageData.picture?.data?.url || "",
-      followersCount: pageData.fan_count || 0,
-      followingCount: 0,
-      postsCount: posts.length,
-      isVerified: pageData.verification_status === "blue_verified" || pageData.verification_status === "gray_verified",
-      website: pageData.website || null,
-      platform: "facebook",
-    },
-    posts,
   };
 }
 
@@ -523,7 +388,7 @@ Deno.serve(async (req) => {
       if (!fbAppId || !fbAppSecret) {
         throw new Error("Facebook app credentials not configured. Contact support.");
       }
-      result = await scrapeFacebook(cleanUsername, fbAppId, fbAppSecret, maxPosts);
+      result = await scrapeFacebookPublicPage({ pageIdentifier: cleanUsername, appId: fbAppId, appSecret: fbAppSecret, maxPosts });
       strategyUsed = "official";
       apiEndpoint = "graph.facebook.com";
       await logger.info(`Facebook scrape succeeded for ${cleanUsername}`, {
@@ -643,6 +508,7 @@ Deno.serve(async (req) => {
         message: errorMessage,
         stack: errorStack,
         actor_id: failedActorId || undefined,
+        provider_detail: error instanceof FacebookPublicPageError ? error.detail : undefined,
       },
     }, userId);
 
