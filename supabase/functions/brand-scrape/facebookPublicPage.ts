@@ -18,6 +18,8 @@ const MAX_DETAIL_LENGTH = 500;
 // deno-lint-ignore no-explicit-any
 type GraphObject = Record<string, any>;
 type GraphReply = { status: number; payload: GraphObject | null };
+/** One scrape's Graph access: the transport, the app token and every form of the credential to redact. */
+type GraphSession = { fetchFn: typeof fetch; accessToken: string; redactions: string[] };
 
 /** The message is shown to the user; the detail is the provider reply, for logs only. */
 export class FacebookPublicPageError extends Error {
@@ -37,6 +39,21 @@ function graphUrl(path: string, params: Record<string, string>, accessToken: str
   return url.toString();
 }
 
+function queryEncoded(value: string): string {
+  return new URLSearchParams({ v: value }).toString().slice("v=".length);
+}
+
+// A provider error may echo the request URL, where the token is query-encoded
+// ("|" becomes "%7C"). Longer forms come first so a shorter one cannot split them.
+function credentialForms(accessToken: string, appSecret: string): string[] {
+  const forms = [accessToken, queryEncoded(accessToken), encodeURIComponent(accessToken), appSecret, encodeURIComponent(appSecret)];
+  return [...new Set(forms)].sort((left, right) => right.length - left.length);
+}
+
+function isGraphObject(value: unknown): value is GraphObject {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
 // Deno's fetch failure message quotes the request URL, which carries the app
 // access token, so a transport failure is rethrown with its error name only.
 async function readGraph(fetchFn: typeof fetch, url: string): Promise<GraphReply> {
@@ -50,7 +67,8 @@ async function readGraph(fetchFn: typeof fetch, url: string): Promise<GraphReply
     throw new FacebookPublicPageError("Facebook could not be reached. Try again later.", `Graph request failed: ${error.name}`);
   }
   try {
-    return { status: response.status, payload: JSON.parse(text) };
+    const parsed: unknown = JSON.parse(text);
+    return { status: response.status, payload: isGraphObject(parsed) ? parsed : null };
   } catch (error) {
     if (!(error instanceof SyntaxError)) throw error;
     return { status: response.status, payload: null };
@@ -66,34 +84,54 @@ function isTooMuchData(reply: GraphReply): boolean {
   return error?.code === 1 && String(error.message ?? "").includes("reduce the amount of data");
 }
 
-function providerDetail(reply: GraphReply, accessToken: string): string {
-  const detail = `HTTP ${reply.status}: ${JSON.stringify(reply.payload?.error ?? reply.payload)}`;
-  return detail.split(accessToken).join("[redacted]").slice(0, MAX_DETAIL_LENGTH);
+// Graph answers an unknown Page id with 803, or with 100/33 for an id it cannot read.
+function isPageMissing(reply: GraphReply): boolean {
+  const error = reply.payload?.error;
+  return reply.status === 404 || error?.code === 803 || (error?.code === 100 && error?.error_subcode === 33);
 }
 
-async function fetchPostPage(fetchFn: typeof fetch, pageId: string, accessToken: string,
-  wanted: number, after: string | undefined): Promise<GraphObject> {
-  const limits = new Set(POST_PAGE_SIZES.map((pageSize) => Math.min(pageSize, wanted)));
-  for (const limit of limits) {
-    const params: Record<string, string> = { fields: POST_FIELDS, limit: String(limit) };
+function providerDetail(reply: GraphReply, redactions: string[]): string {
+  const detail = `HTTP ${reply.status}: ${JSON.stringify(reply.payload?.error ?? reply.payload)}`;
+  const redacted = redactions.reduce((text, secret) => text.split(secret).join("[redacted]"), detail);
+  return redacted.slice(0, MAX_DETAIL_LENGTH);
+}
+
+type PostPage = { data: GraphObject[]; paging: GraphObject | undefined; pageSize: number };
+
+/** Tries each candidate page size, largest first, and reports the one Graph accepted. */
+async function fetchPostPage(session: GraphSession, pageId: string, sizes: number[], after: string | undefined): Promise<PostPage> {
+  for (const pageSize of sizes) {
+    const params: Record<string, string> = { fields: POST_FIELDS, limit: String(pageSize) };
     if (after) params.after = after;
-    const reply = await readGraph(fetchFn, graphUrl(`${pageId}/posts`, params, accessToken));
-    if (!isFailedReply(reply)) return reply.payload!;
+    const reply = await readGraph(session.fetchFn, graphUrl(`${pageId}/posts`, params, session.accessToken));
+    if (!isFailedReply(reply)) {
+      if (!Array.isArray(reply.payload!.data)) {
+        throw new FacebookPublicPageError("Facebook returned an invalid response for this Page.", "posts page has no data array");
+      }
+      return { data: reply.payload!.data, paging: reply.payload!.paging, pageSize };
+    }
     if (!isTooMuchData(reply)) {
-      throw new FacebookPublicPageError("Facebook posts could not be loaded for this Page.", providerDetail(reply, accessToken));
+      throw new FacebookPublicPageError("Facebook posts could not be loaded for this Page.", providerDetail(reply, session.redactions));
     }
   }
   throw new FacebookPublicPageError("Facebook returned too much data for this Page. Try again later.",
     `posts page still too large at limit ${POST_PAGE_SIZES.at(-1)}`);
 }
 
+// A size Graph rejected as too much data is not tried again on later pages.
+function pageSizesFor(wanted: number, largestAccepted: number): number[] {
+  return [...new Set(POST_PAGE_SIZES.filter((size) => size <= largestAccepted).map((size) => Math.min(size, wanted)))];
+}
+
 /** Pages follow Graph's own `after` cursor, never a provider-supplied URL. */
-async function fetchPosts(fetchFn: typeof fetch, pageId: string, accessToken: string, maxPosts: number): Promise<GraphObject[]> {
+async function fetchPosts(session: GraphSession, pageId: string, maxPosts: number): Promise<GraphObject[]> {
   const posts: GraphObject[] = [];
   let after: string | undefined;
+  let largestAccepted: number = POST_PAGE_SIZES[0];
   while (posts.length < maxPosts) {
-    const page = await fetchPostPage(fetchFn, pageId, accessToken, maxPosts - posts.length, after);
-    const data: GraphObject[] = Array.isArray(page.data) ? page.data : [];
+    const page = await fetchPostPage(session, pageId, pageSizesFor(maxPosts - posts.length, largestAccepted), after);
+    largestAccepted = page.pageSize;
+    const data = page.data;
     posts.push(...data);
     const previousAfter = after;
     after = page.paging?.cursors?.after;
@@ -167,10 +205,10 @@ function mapReel(reel: GraphObject) {
 }
 
 /** Reels are optional enrichment: the app token may not reach that edge. */
-async function fetchReels(fetchFn: typeof fetch, pageId: string, accessToken: string): Promise<GraphObject[]> {
+async function fetchReels(session: GraphSession, pageId: string): Promise<GraphObject[]> {
   let reply: GraphReply;
   try {
-    reply = await readGraph(fetchFn, graphUrl(`${pageId}/video_reels`, { fields: REEL_FIELDS, limit: "25" }, accessToken));
+    reply = await readGraph(session.fetchFn, graphUrl(`${pageId}/video_reels`, { fields: REEL_FIELDS, limit: "25" }, session.accessToken));
   } catch (error) {
     if (error instanceof FacebookPublicPageError) return [];
     throw error;
@@ -197,15 +235,18 @@ function mapProfile(pageData: GraphObject, pageIdentifier: string, postsCount: n
 export async function scrapeFacebookPublicPage(input: {
   pageIdentifier: string; appId: string; appSecret: string; maxPosts: number; fetchFn?: typeof fetch;
 }) {
-  const fetchFn = input.fetchFn ?? fetch;
   const accessToken = `${input.appId}|${input.appSecret}`;
-  const pageReply = await readGraph(fetchFn, graphUrl(encodeURIComponent(input.pageIdentifier), { fields: PAGE_FIELDS }, accessToken));
-  if (isFailedReply(pageReply)) throw new FacebookPublicPageError("Facebook Page not found.", providerDetail(pageReply, accessToken));
+  const session: GraphSession = { fetchFn: input.fetchFn ?? fetch, accessToken, redactions: credentialForms(accessToken, input.appSecret) };
+  const pageReply = await readGraph(session.fetchFn, graphUrl(encodeURIComponent(input.pageIdentifier), { fields: PAGE_FIELDS }, accessToken));
+  if (isFailedReply(pageReply)) {
+    const message = isPageMissing(pageReply) ? "Facebook Page not found." : "Facebook Page could not be loaded. Try again later.";
+    throw new FacebookPublicPageError(message, providerDetail(pageReply, session.redactions));
+  }
   const pageData = pageReply.payload!;
 
-  const posts = (await fetchPosts(fetchFn, pageData.id, accessToken, input.maxPosts)).map(mapPost);
+  const posts = (await fetchPosts(session, pageData.id, input.maxPosts)).map(mapPost);
   const existingIds = new Set(posts.map((post) => post.id));
-  for (const reel of await fetchReels(fetchFn, pageData.id, accessToken)) {
+  for (const reel of await fetchReels(session, pageData.id)) {
     if (!existingIds.has(reel.id)) posts.push(mapReel(reel));
   }
 

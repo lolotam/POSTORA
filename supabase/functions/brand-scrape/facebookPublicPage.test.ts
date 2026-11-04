@@ -39,19 +39,39 @@ Deno.test("posts are read in small pages through the after cursor up to the post
 
 // Production 2026-11-04: Analyze @cocacola failed because one 100-post page
 // carrying summary edges was rejected with Graph code 1.
-Deno.test("a page Graph rejects as too much data is retried with a smaller limit", async () => {
+Deno.test("a page size Graph rejects as too much data is not tried again on later pages", async () => {
   const { fetchFn, postRequests } = graph({
-    posts: (url) => url.searchParams.get("limit") === "25" ? json(TOO_MUCH_DATA, 500) : json({ data: posts(0, 10) }),
+    posts: (url) => {
+      if (url.searchParams.get("limit") === "25") return json(TOO_MUCH_DATA, 500);
+      return url.searchParams.has("after")
+        ? json({ data: posts(10, 5) })
+        : json({ data: posts(0, 10), paging: { cursors: { after: "page_2" }, next: "https://graph.facebook.com/next" } });
+    },
   });
   const report = await scrapeFacebookPublicPage({ ...APP, pageIdentifier: "cocacola", maxPosts: 100, fetchFn });
-  assertEquals(postRequests.map((url) => url.searchParams.get("limit")), ["25", "10"]);
-  assertEquals(report.posts.length, 10);
+  assertEquals(postRequests.map((url) => url.searchParams.get("limit")), ["25", "10", "10"]);
+  assertEquals(report.posts.length, 15);
+});
+
+Deno.test("a reels reply that is not a JSON object leaves the posts analysis intact", async () => {
+  const { fetchFn } = graph({ posts: () => json({ data: posts(0, 3) }), reels: () => json(1) });
+  const report = await scrapeFacebookPublicPage({ ...APP, pageIdentifier: "synthetic", maxPosts: 10, fetchFn });
+  assertEquals(report.posts.length, 3);
 });
 
 Deno.test("provider failures reach the caller as a short message with the provider reply kept for logs", async () => {
   const cases: { name: string; routes: { page?: Route; posts: Route }; message: string; detail: string }[] = [
     { name: "unknown page", routes: { page: () => json({ error: { code: 803, message: "Some of the aliases you requested do not exist" } }, 404), posts: () => json({ data: [] }) },
       message: "Facebook Page not found.", detail: "803" },
+    { name: "page lookup unavailable", routes: { page: () => json({ error: { code: 2, message: "Service temporarily unavailable" } }, 503), posts: () => json({ data: [] }) },
+      message: "Facebook Page could not be loaded. Try again later.", detail: "503" },
+    { name: "page reply is not an object", routes: { page: () => json(1), posts: () => json({ data: [] }) },
+      message: "Facebook Page could not be loaded. Try again later.", detail: "HTTP 200" },
+    { name: "posts reply without a data array", routes: { posts: () => json({}) },
+      message: "Facebook returned an invalid response for this Page.", detail: "no data array" },
+    // Graph may echo the request URL, where the token is query-encoded.
+    { name: "provider echoes the encoded request URL", routes: { posts: (url) => json({ error: { code: 190, message: `bad request ${url.search}` } }, 400) },
+      message: "Facebook posts could not be loaded for this Page.", detail: "[redacted]" },
     { name: "posts refused", routes: { posts: () => json({ error: { code: 10, message: "Permission denied" } }, 403) },
       message: "Facebook posts could not be loaded for this Page.", detail: "Permission denied" },
     { name: "still too large", routes: { posts: () => json(TOO_MUCH_DATA, 500) },
