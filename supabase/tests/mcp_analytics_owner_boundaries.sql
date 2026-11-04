@@ -173,4 +173,4 @@ DO $anonymous$ BEGIN
 END $anonymous$;
 RESET ROLE;
 ROLLBACK;
-SELECT 'mcp_analytics_owner_boundaries: ok' AS result;
+\echo 'ALL CHECKS PASSED'
