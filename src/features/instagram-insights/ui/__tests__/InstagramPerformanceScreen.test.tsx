@@ -87,6 +87,31 @@ describe("InstagramPerformanceScreen", () => {
     expect(await response.json()).toEqual({ error: code });
   });
 
+  // Regression 2026-11-04: a second Sync click answered 429 with the job projection as the body
+  // (no `error` field), and the owner saw "Failed to queue sync job" instead of the throttle notice.
+  it.each([
+    [429, "Too many sync requests. Please wait before trying again."],
+    [500, "Failed to queue sync job"],
+  ])("explains a %i sync answer whose body has no error code", async (status, expectedMessage) => {
+    mockUseSocialAccounts.mockReturnValue({
+      data: [{ id: "acc-123", platform: "instagram", platform_username: "testcreator", is_active: true }],
+      isLoading: false,
+    });
+    const projection = { job_id: "job-1", status: "queued", retry_after_seconds: 300 };
+    vi.mocked(supabase.functions.invoke)
+      .mockResolvedValueOnce({ data: mockReport, error: null })
+      .mockResolvedValueOnce({ data: null, error: new FunctionsHttpError(Response.json(projection, { status })) });
+    const errorToast = vi.spyOn(toast, "error");
+
+    renderScreen(new SupabaseInstagramInsightsGateway());
+    expect(await screen.findByText("14.2K")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /Sync now/i }));
+
+    await waitFor(() => {
+      expect(errorToast).toHaveBeenCalledWith(expectedMessage);
+    });
+  });
+
   it("shows a report fallback instead of an unknown server code", async () => {
     mockUseSocialAccounts.mockReturnValue({
       data: [{ id: "acc-123", platform: "instagram", platform_username: "testcreator", is_active: true }],
