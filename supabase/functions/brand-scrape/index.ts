@@ -388,11 +388,13 @@ Deno.serve(async (req) => {
       if (!fbAppId || !fbAppSecret) {
         throw new Error("Facebook app credentials not configured. Contact support.");
       }
-      result = await scrapeFacebookPublicPage({ pageIdentifier: cleanUsername, appId: fbAppId, appSecret: fbAppSecret, maxPosts });
+      const facebook = await scrapeFacebookPublicPage({ pageIdentifier: cleanUsername, appId: fbAppId, appSecret: fbAppSecret, maxPosts });
+      result = { profile: facebook.profile, posts: facebook.posts };
       strategyUsed = "official";
       apiEndpoint = "graph.facebook.com";
       await logger.info(`Facebook scrape succeeded for ${cleanUsername}`, {
         platform, username: cleanUsername, strategy: "official", posts_count: result.posts.length,
+        reading_stopped_by: facebook.readingStoppedBy ?? undefined,
       }, userId);
 
     } else if (platform === "tiktok") {

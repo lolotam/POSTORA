@@ -169,9 +169,14 @@ function pageSizesFor(wanted: number, largestAccepted: number): number[] {
 /**
  * Pages follow Graph's own `after` cursor, never a provider-supplied URL.
  * Once some posts are read, a later page that times out ends the reading:
- * the analysis keeps the posts it has instead of failing as a whole.
+ * the analysis keeps the posts it has instead of failing as a whole, and
+ * `stoppedBy` carries the timeout detail so the caller can log why.
  */
-async function fetchPosts(session: GraphSession, pageId: string, maxPosts: number): Promise<GraphPost[]> {
+async function fetchPosts(
+  session: GraphSession,
+  pageId: string,
+  maxPosts: number,
+): Promise<{ posts: GraphPost[]; stoppedBy: string | null }> {
   const posts: GraphPost[] = [];
   let after: string | undefined;
   let largestAccepted: number = POST_PAGE_SIZES[0];
@@ -180,7 +185,9 @@ async function fetchPosts(session: GraphSession, pageId: string, maxPosts: numbe
     try {
       page = await fetchPostPage(session, pageId, pageSizesFor(maxPosts - posts.length, largestAccepted), after);
     } catch (error) {
-      if (error instanceof GraphTimeoutError && posts.length > 0) break;
+      if (error instanceof GraphTimeoutError && posts.length > 0) {
+        return { posts: posts.slice(0, maxPosts), stoppedBy: error.detail };
+      }
       throw error;
     }
     largestAccepted = page.pageSize;
@@ -194,7 +201,7 @@ async function fetchPosts(session: GraphSession, pageId: string, maxPosts: numbe
         "posts pagination cursor did not advance");
     }
   }
-  return posts.slice(0, maxPosts);
+  return { posts: posts.slice(0, maxPosts), stoppedBy: null };
 }
 
 function postMediaType(post: GraphPost): string {
@@ -302,11 +309,12 @@ export async function scrapeFacebookPublicPage(input: {
   }
   const pageData = pageReply.payload as GraphPage;
 
-  const posts = (await fetchPosts(session, pageData.id, input.maxPosts)).map(mapPost);
+  const reading = await fetchPosts(session, pageData.id, input.maxPosts);
+  const posts = reading.posts.map(mapPost);
   const existingIds = new Set(posts.map((post) => post.id));
   for (const reel of await fetchReels(session, pageData.id)) {
     if (!existingIds.has(reel.id)) posts.push(mapReel(reel));
   }
 
-  return { profile: mapProfile(pageData, input.pageIdentifier, posts.length), posts };
+  return { profile: mapProfile(pageData, input.pageIdentifier, posts.length), posts, readingStoppedBy: reading.stoppedBy };
 }

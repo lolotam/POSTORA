@@ -32,6 +32,7 @@ Deno.test("posts are read in small pages through the after cursor up to the post
   });
   const report = await scrapeFacebookPublicPage({ ...APP, pageIdentifier: "synthetic", maxPosts: 30, fetchFn });
   assertEquals(postRequests.map((url) => [url.searchParams.get("limit"), url.searchParams.get("after")]), [["25", null], ["5", "page_2"]]);
+  assertEquals(report.readingStoppedBy, null);
   assertEquals(report.posts.length, 31);
   assertEquals(report.posts.at(-1)!.id, "reel_1");
   assertEquals(report.profile.postsCount, 31);
@@ -69,6 +70,7 @@ Deno.test("a later posts page that times out keeps the posts already read", asyn
   });
   const report = await scrapeFacebookPublicPage({ ...APP, pageIdentifier: "cocacola", maxPosts: 100, fetchFn });
   assertEquals(report.posts.length, 25);
+  assertEquals(report.readingStoppedBy?.includes("posts limit=5 request failed: TimeoutError"), true);
 });
 
 Deno.test("a reels reply that is not a JSON object leaves the posts analysis intact", async () => {
