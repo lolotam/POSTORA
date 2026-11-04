@@ -3,6 +3,10 @@ const fencedHttpRpcs = new Map([
   ["persist_instagram_collection_snapshot", "persist_instagram_collection_snapshot_http"],
   ["record_instagram_collection_job_progress", "record_instagram_collection_job_progress_http"],
   ["complete_instagram_collection_job", "complete_instagram_collection_job_http"],
+  [
+    "complete_instagram_collection_job_capability_unavailable",
+    "complete_instagram_collection_job_capability_unavailable_http",
+  ],
   ["record_instagram_provider_throttle", "record_instagram_provider_throttle_http"],
   ["read_instagram_direct_collection_credential", "read_instagram_direct_collection_credential_http"],
 ]);

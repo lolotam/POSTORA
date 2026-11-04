@@ -568,6 +568,20 @@ export interface OwnerCollectionServiceStore {
     readonly reasonCode: string | null;
     readonly signal?: AbortSignal;
   }): Promise<CompleteReceipt>;
+  /**
+   * Settles a job whose bound account never recorded its permission read as
+   * `unavailable` with the fixed reason `capability_missing`.
+   *
+   * It is the only completion the fence lets through for that account:
+   * `completeJob` sits behind the capability refusal. The database refuses
+   * a replaced connection and a permission read that landed after the claim.
+   */
+  settleCapabilityUnavailable(input: {
+    readonly jobId: string;
+    readonly claimToken: string;
+    readonly jobGeneration: number;
+    readonly signal?: AbortSignal;
+  }): Promise<CompleteReceipt>;
   recordThrottle(input: {
     readonly bucketKey: string;
     readonly usagePercent: number | null;
@@ -1249,6 +1263,31 @@ export function createOwnerCollectionServiceStore(
         jobGeneration: input.jobGeneration,
         outcome: input.outcome,
         reasonCode: input.reasonCode,
+      });
+      if (receipt === null) {
+        throw new OwnerWorkerStoreError("invalid_envelope");
+      }
+      return receipt;
+    },
+
+    async settleCapabilityUnavailable(input) {
+      const data = await callRpc(
+        deps.rpc,
+        "complete_instagram_collection_job_capability_unavailable",
+        {
+          p_job_id: input.jobId,
+          p_claim_token: input.claimToken,
+          p_job_generation: input.jobGeneration,
+        },
+        input.signal,
+      );
+
+      // The reason is fixed by the database, so the receipt must name it.
+      const receipt = parseCompleteReceipt(data, {
+        jobId: input.jobId,
+        jobGeneration: input.jobGeneration,
+        outcome: "unavailable",
+        reasonCode: "capability_missing",
       });
       if (receipt === null) {
         throw new OwnerWorkerStoreError("invalid_envelope");

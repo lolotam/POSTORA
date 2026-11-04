@@ -21,6 +21,12 @@
 --   E5  the read mutates nothing: the account, the capability and the job
 --       rows are byte-identical before and after.
 --   E6  no refusal text ever carries the operational token.
+--   E7  the throttle bucket accepts a direct account bucket.
+--   E8  a direct login's permission evidence, end to end.
+--   E9  the settlement of a capability-missing job (migration
+--       20261104120000): settled once, refused for a replaced, resolved or
+--       absent capability, a stale claim, an expired lease, a rollout or
+--       account refusal, and service-only.
 --
 -- The suite SET ROLEs away from superuser where the point of the check is
 -- that a client role cannot do something. The service role bypasses RLS, so
@@ -838,6 +844,561 @@ BEGIN
   ASSERT v_failed, 'E8 the generation 1 claim read the generation 2 credential';
 END
 $e8$;
+
+-- ===========================================================================
+-- E9 - the settlement of a capability-missing job
+-- (20261104120000_instagram_capability_unavailable_settlement.sql).
+--
+-- It covers the settlement cases: unknown capability settled, generation
+-- bumped, capability resolved, stale claim, expired lease, rollout or account
+-- refusal, browser roles, and an absent capability row.
+--
+-- Every account here is a direct login whose capability is opened by the
+-- commit's own transition, so its permission read is 'unknown' and the fence
+-- refuses its jobs with IG_COLLECTION_CAPABILITY_MISSING, exactly as E8
+-- shows.
+--
+-- s1  settled: unavailable / capability_missing, lease cleared, capability
+--     and account byte-identical, a second settlement is a stale claim
+-- s2  the generation moved after the claim: CREDENTIAL_CHANGED, unsettled
+-- s3  the evidence landed before the call: CAPABILITY_RESOLVED, unsettled,
+--     the job is readable again, and the HTTP wrapper answers PT409
+-- s4  a wrong claim token, a wrong job generation, an expired lease: the
+--     existing CLAIM_STALE refusals, unsettled
+-- s5  collection disabled, the target no longer eligible, the account
+--     waiting for a reconnect: the existing 22023 refusals, unsettled
+-- s7  no capability row at all: refused as CREDENTIAL_CHANGED, unsettled
+-- and last, case 6: the grant surface and the browser-role refusals.
+-- ===========================================================================
+CREATE FUNCTION pg_temp.igsettle_state(p_account uuid)
+RETURNS jsonb
+LANGUAGE sql
+AS $function$
+  SELECT jsonb_build_object(
+    'job', (SELECT to_jsonb(j) FROM public.instagram_collection_jobs AS j
+             WHERE j.social_account_id = p_account),
+    'capability', (SELECT to_jsonb(c) FROM public.instagram_account_capabilities AS c
+                    WHERE c.social_account_id = p_account),
+    'account', (SELECT to_jsonb(a) FROM public.social_accounts AS a
+                 WHERE a.id = p_account));
+$function$;
+
+DO $e9_fixtures$
+DECLARE
+  u_d     uuid := 'd1000000-0000-4000-8000-000000000001';
+  v_acct  uuid;
+  v_gen   bigint;
+  v_count integer;
+BEGIN
+  FOREACH v_acct IN ARRAY ARRAY[
+    'd2000000-0000-4000-8000-000000000009',
+    'd2000000-0000-4000-8000-000000000010',
+    'd2000000-0000-4000-8000-000000000011',
+    'd2000000-0000-4000-8000-000000000012',
+    'd2000000-0000-4000-8000-000000000013',
+    'd2000000-0000-4000-8000-000000000014']::uuid[]
+  LOOP
+    INSERT INTO public.social_accounts
+      (id, user_id, platform, platform_user_id, platform_username,
+       access_token, token_expires_at, is_active, ig_auth_type)
+    VALUES
+      (v_acct, u_d, 'instagram', 'ig-settle-' || right(v_acct::text, 2),
+       'igsettle_' || right(v_acct::text, 2), 'settle-token-' || right(v_acct::text, 2),
+       NULL, true, 'business_login');
+
+    v_gen := public.meta_oauth_attempt_bump_instagram_capability(u_d, v_acct, 'direct', 'created');
+    ASSERT v_gen = 1, 'E9 the commit opened generation 1, got ' || v_gen::text;
+
+    INSERT INTO public.instagram_collection_jobs
+      (user_id, target_kind, target_id, social_account_id, captured_on)
+    VALUES (u_d, 'owner', v_acct, v_acct, current_date);
+  END LOOP;
+
+  INSERT INTO igdirect_claim_ctx (label, job_id, token, generation)
+  SELECT CASE c ->> 'social_account_id'
+           WHEN 'd2000000-0000-4000-8000-000000000009' THEN 's1'
+           WHEN 'd2000000-0000-4000-8000-000000000010' THEN 's2'
+           WHEN 'd2000000-0000-4000-8000-000000000011' THEN 's3'
+           WHEN 'd2000000-0000-4000-8000-000000000012' THEN 's4'
+           WHEN 'd2000000-0000-4000-8000-000000000013' THEN 's5'
+           ELSE 's7' END,
+         (c ->> 'job_id')::uuid,
+         (c ->> 'claim_token')::uuid,
+         (c ->> 'job_generation')::bigint
+    FROM public.claim_instagram_collection_jobs('owner', 100) AS c
+   WHERE c ->> 'social_account_id' IN (
+           'd2000000-0000-4000-8000-000000000009',
+           'd2000000-0000-4000-8000-000000000010',
+           'd2000000-0000-4000-8000-000000000011',
+           'd2000000-0000-4000-8000-000000000012',
+           'd2000000-0000-4000-8000-000000000013',
+           'd2000000-0000-4000-8000-000000000014');
+
+  SELECT count(*) INTO v_count FROM igdirect_claim_ctx WHERE label LIKE 's%';
+  ASSERT v_count = 6, 'E9 every settlement job was claimed, got ' || v_count::text;
+
+  -- The claim bound the unknown capability's generation and login kind.
+  ASSERT (SELECT count(*) = 6
+            FROM public.instagram_collection_jobs AS j
+            JOIN igdirect_claim_ctx AS x ON x.job_id = j.id AND x.label LIKE 's%'
+           WHERE j.status = 'leased'
+             AND j.context_viewer_social_account_id = j.social_account_id
+             AND j.context_credential_generation = 1
+             AND j.context_login_kind = 'direct'),
+    'E9 every settlement job is leased with a bound direct context';
+END
+$e9_fixtures$;
+
+-- ---------------------------------------------------------------------------
+-- E9 case 1 - settled.
+-- ---------------------------------------------------------------------------
+DO $e9_settled$
+DECLARE
+  acct     uuid := 'd2000000-0000-4000-8000-000000000009';
+  v_job    uuid;
+  v_token  uuid;
+  v_gen    bigint;
+  v_before jsonb;
+  v_after  jsonb;
+  v_result jsonb;
+  v_keys   text[];
+  v_failed boolean;
+BEGIN
+  SELECT job_id, token, generation INTO v_job, v_token, v_gen
+    FROM igdirect_claim_ctx WHERE label = 's1';
+
+  v_before := pg_temp.igsettle_state(acct);
+  ASSERT v_before #>> '{capability,permission_read_state}' = 'unknown',
+    'E9.1 the capability is unknown before the settlement';
+
+  v_result := public.complete_instagram_collection_job_capability_unavailable(v_job, v_token, v_gen);
+
+  -- The answer has the five keys of the existing completion.
+  SELECT coalesce(array_agg(k ORDER BY k), '{}') INTO v_keys
+    FROM jsonb_object_keys(v_result) AS k;
+  ASSERT v_keys = ARRAY['job_generation', 'job_id', 'outcome', 'reason_code', 'status'],
+    'E9.1 the answer carries the completion keys, got ' || v_keys::text;
+  ASSERT v_result ->> 'job_id' = v_job::text, 'E9.1 the answer names the job';
+  ASSERT (v_result ->> 'job_generation')::bigint = v_gen, 'E9.1 the answer names the generation';
+  ASSERT v_result ->> 'status' = 'unavailable', 'E9.1 the status is unavailable';
+  ASSERT v_result ->> 'outcome' = 'unavailable', 'E9.1 the outcome is unavailable';
+  ASSERT v_result ->> 'reason_code' = 'capability_missing', 'E9.1 the reason is capability_missing';
+
+  v_after := pg_temp.igsettle_state(acct);
+
+  ASSERT v_after #>> '{job,status}' = 'unavailable', 'E9.1 the job is unavailable';
+  ASSERT v_after #>> '{job,last_reason_code}' = 'capability_missing',
+    'E9.1 the job records capability_missing';
+  ASSERT v_after #> '{job,lease_token}' = 'null'::jsonb, 'E9.1 the lease token is cleared';
+  ASSERT v_after #> '{job,lease_expires_at}' = 'null'::jsonb, 'E9.1 the lease expiry is cleared';
+  ASSERT v_after #> '{job,retry_at}' = 'null'::jsonb, 'E9.1 no retry is scheduled';
+  -- The 'unavailable' branch of the completion keeps these columns.
+  ASSERT v_after #> '{job,due_at}' = v_before #> '{job,due_at}', 'E9.1 due_at is unchanged';
+  ASSERT v_after #> '{job,last_success_at}' = v_before #> '{job,last_success_at}',
+    'E9.1 last_success_at is unchanged';
+  ASSERT v_after #> '{job,last_partial_at}' = v_before #> '{job,last_partial_at}',
+    'E9.1 last_partial_at is unchanged';
+  ASSERT v_after #> '{job,job_generation}' = v_before #> '{job,job_generation}',
+    'E9.1 the job generation is unchanged';
+  ASSERT v_after #> '{job,attempts}' = v_before #> '{job,attempts}',
+    'E9.1 the attempts are unchanged';
+
+  -- Nothing but the job was written.
+  ASSERT v_after -> 'capability' = v_before -> 'capability',
+    'E9.1 the capability row is byte-identical';
+  ASSERT v_after -> 'account' = v_before -> 'account',
+    'E9.1 the account row is byte-identical';
+
+  -- The settled claim is spent.
+  v_failed := false;
+  BEGIN
+    PERFORM public.complete_instagram_collection_job_capability_unavailable(v_job, v_token, v_gen);
+  EXCEPTION WHEN others THEN
+    v_failed := true;
+    ASSERT SQLSTATE = '40001', 'E9.1 a second settlement is SQLSTATE 40001, got ' || SQLSTATE;
+    ASSERT SQLERRM LIKE 'IG_COLLECTION_CLAIM_STALE:%',
+      'E9.1 a second settlement is a stale claim, got ' || SQLERRM;
+  END;
+  ASSERT v_failed, 'E9.1 a settled job was settled twice';
+END
+$e9_settled$;
+
+-- ---------------------------------------------------------------------------
+-- E9 case 2 - the generation moved after the claim.
+-- ---------------------------------------------------------------------------
+DO $e9_reconnected$
+DECLARE
+  u_d      uuid := 'd1000000-0000-4000-8000-000000000001';
+  acct     uuid := 'd2000000-0000-4000-8000-000000000010';
+  v_job    uuid;
+  v_token  uuid;
+  v_gen    bigint;
+  v_cgen   bigint;
+  v_before jsonb;
+  v_failed boolean;
+BEGIN
+  SELECT job_id, token, generation INTO v_job, v_token, v_gen
+    FROM igdirect_claim_ctx WHERE label = 's2';
+
+  -- A reconnect opens generation 2 and leaves the read unknown, so the
+  -- state alone would still look like missing evidence.
+  v_cgen := public.meta_oauth_attempt_bump_instagram_capability(u_d, acct, 'direct', 'reconnected');
+  ASSERT v_cgen = 2, 'E9.2 the reconnect opened generation 2, got ' || v_cgen::text;
+
+  v_before := pg_temp.igsettle_state(acct);
+  ASSERT v_before #>> '{capability,permission_read_state}' = 'unknown',
+    'E9.2 the reconnected capability is unknown';
+
+  v_failed := false;
+  BEGIN
+    PERFORM public.complete_instagram_collection_job_capability_unavailable(v_job, v_token, v_gen);
+  EXCEPTION WHEN others THEN
+    v_failed := true;
+    ASSERT SQLSTATE = '40001', 'E9.2 a replaced connection is SQLSTATE 40001, got ' || SQLSTATE;
+    ASSERT SQLERRM LIKE 'IG_COLLECTION_CREDENTIAL_CHANGED:%',
+      'E9.2 a replaced connection is a changed credential, got ' || SQLERRM;
+  END;
+  ASSERT v_failed, 'E9.2 the job of generation 1 was settled after a reconnect';
+
+  ASSERT pg_temp.igsettle_state(acct) = v_before, 'E9.2 the job and the capability are unchanged';
+  ASSERT v_before #>> '{job,status}' = 'leased', 'E9.2 the job is still leased';
+END
+$e9_reconnected$;
+
+-- ---------------------------------------------------------------------------
+-- E9 case 3 - the evidence landed before the call.
+-- ---------------------------------------------------------------------------
+DO $e9_resolved$
+DECLARE
+  u_d      uuid := 'd1000000-0000-4000-8000-000000000001';
+  acct     uuid := 'd2000000-0000-4000-8000-000000000011';
+  v_job    uuid;
+  v_token  uuid;
+  v_gen    bigint;
+  v_before jsonb;
+  v_read   jsonb;
+  v_failed boolean;
+BEGIN
+  SELECT job_id, token, generation INTO v_job, v_token, v_gen
+    FROM igdirect_claim_ctx WHERE label = 's3';
+
+  PERFORM public.write_instagram_account_capability(acct, u_d, jsonb_build_object(
+    'login_kind', 'direct',
+    'permission_read_state', 'ok',
+    'granted_scopes', jsonb_build_array('instagram_business_basic', 'instagram_business_manage_insights'),
+    'scopes_read_at', to_char((now() + interval '1 second') AT TIME ZONE 'UTC',
+                              'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),
+    'expected_credential_generation', 1));
+
+  v_before := pg_temp.igsettle_state(acct);
+  ASSERT v_before #>> '{capability,permission_read_state}' = 'ok',
+    'E9.3 the evidence was recorded';
+
+  v_failed := false;
+  BEGIN
+    PERFORM public.complete_instagram_collection_job_capability_unavailable(v_job, v_token, v_gen);
+  EXCEPTION WHEN others THEN
+    v_failed := true;
+    ASSERT SQLSTATE = '40001', 'E9.3 a resolved capability is SQLSTATE 40001, got ' || SQLSTATE;
+    ASSERT SQLERRM LIKE 'IG_COLLECTION_CAPABILITY_RESOLVED:%',
+      'E9.3 a resolved capability is refused as resolved, got ' || SQLERRM;
+  END;
+  ASSERT v_failed, 'E9.3 a job with recorded evidence was settled as missing evidence';
+
+  -- The HTTP wrapper answers the same refusal with a non-retrying PT409.
+  v_failed := false;
+  BEGIN
+    PERFORM public.complete_instagram_collection_job_capability_unavailable_http(v_job, v_token, v_gen);
+  EXCEPTION WHEN SQLSTATE 'PT409' THEN
+    v_failed := true;
+    ASSERT SQLERRM LIKE 'IG_COLLECTION_CLAIM_STALE:%',
+      'E9.3 the wrapper sanitises the refusal, got ' || SQLERRM;
+  END;
+  ASSERT v_failed, 'E9.3 the wrapper did not answer PT409 for a resolved capability';
+
+  ASSERT pg_temp.igsettle_state(acct) = v_before, 'E9.3 the job and the capability are unchanged';
+  ASSERT v_before #>> '{job,status}' = 'leased', 'E9.3 the job is still leased';
+
+  -- The job is left for a normal read: the same claim reads the credential.
+  v_read := public.read_instagram_direct_collection_credential(v_job, v_token, v_gen, 1);
+  ASSERT v_read ->> 'access_token' = 'settle-token-11', 'E9.3 the job is readable again';
+END
+$e9_resolved$;
+
+-- ---------------------------------------------------------------------------
+-- E9 case 4 - a stale claim and an expired lease.
+-- ---------------------------------------------------------------------------
+DO $e9_stale$
+DECLARE
+  acct     uuid := 'd2000000-0000-4000-8000-000000000012';
+  v_job    uuid;
+  v_token  uuid;
+  v_gen    bigint;
+  v_before jsonb;
+  v_case   record;
+  v_failed boolean;
+BEGIN
+  SELECT job_id, token, generation INTO v_job, v_token, v_gen
+    FROM igdirect_claim_ctx WHERE label = 's4';
+
+  v_before := pg_temp.igsettle_state(acct);
+
+  FOR v_case IN
+    SELECT * FROM (VALUES
+      ('a wrong claim token', gen_random_uuid(), v_gen),
+      ('a wrong job generation', v_token, v_gen + 1)) AS t(label, token, generation)
+  LOOP
+    v_failed := false;
+    BEGIN
+      PERFORM public.complete_instagram_collection_job_capability_unavailable(
+        v_job, v_case.token, v_case.generation);
+    EXCEPTION WHEN others THEN
+      v_failed := true;
+      ASSERT SQLSTATE = '40001',
+        'E9.4 ' || v_case.label || ' is SQLSTATE 40001, got ' || SQLSTATE;
+      ASSERT SQLERRM LIKE 'IG_COLLECTION_CLAIM_STALE:%',
+        'E9.4 ' || v_case.label || ' is a stale claim, got ' || SQLERRM;
+    END;
+    ASSERT v_failed, 'E9.4 ' || v_case.label || ' was settled';
+  END LOOP;
+
+  -- The HTTP wrapper answers a stale claim with PT409.
+  v_failed := false;
+  BEGIN
+    PERFORM public.complete_instagram_collection_job_capability_unavailable_http(
+      v_job, gen_random_uuid(), v_gen);
+  EXCEPTION WHEN SQLSTATE 'PT409' THEN
+    v_failed := true;
+  END;
+  ASSERT v_failed, 'E9.4 the wrapper did not answer PT409 for a stale claim';
+
+  ASSERT pg_temp.igsettle_state(acct) = v_before, 'E9.4 the stale claims changed nothing';
+
+  -- An expired lease is the fence's own refusal.
+  UPDATE public.instagram_collection_jobs
+     SET lease_expires_at = clock_timestamp() - interval '1 second'
+   WHERE id = v_job;
+  v_before := pg_temp.igsettle_state(acct);
+
+  v_failed := false;
+  BEGIN
+    PERFORM public.complete_instagram_collection_job_capability_unavailable(v_job, v_token, v_gen);
+  EXCEPTION WHEN others THEN
+    v_failed := true;
+    ASSERT SQLSTATE = '40001', 'E9.4 an expired lease is SQLSTATE 40001, got ' || SQLSTATE;
+    ASSERT SQLERRM LIKE 'IG_COLLECTION_CLAIM_STALE:%',
+      'E9.4 an expired lease is a stale claim, got ' || SQLERRM;
+  END;
+  ASSERT v_failed, 'E9.4 a job with an expired lease was settled';
+
+  ASSERT pg_temp.igsettle_state(acct) = v_before, 'E9.4 the expired lease changed nothing';
+  ASSERT v_before #>> '{job,status}' = 'leased', 'E9.4 the job is still leased';
+END
+$e9_stale$;
+
+-- ---------------------------------------------------------------------------
+-- E9 case 5 - the rollout and the account refuse; nothing is settled.
+--
+-- For an owner job the target IS the viewer, so the fence's target check
+-- answers a reconnect-pending account (TARGET_INACTIVE) before the viewer
+-- check would (VIEWER_NEEDS_REAUTH). Both are the existing 22023 refusals.
+-- ---------------------------------------------------------------------------
+DO $e9_refused$
+DECLARE
+  acct     uuid := 'd2000000-0000-4000-8000-000000000013';
+  v_job    uuid;
+  v_token  uuid;
+  v_gen    bigint;
+  v_before jsonb;
+  v_case   record;
+  v_failed boolean;
+BEGIN
+  SELECT job_id, token, generation INTO v_job, v_token, v_gen
+    FROM igdirect_claim_ctx WHERE label = 's5';
+
+  FOR v_case IN
+    SELECT * FROM (VALUES
+      ('collection disabled', 'IG_COLLECTION_DISABLED:%'),
+      ('the target not eligible', 'IG_COLLECTION_NOT_ELIGIBLE:%'),
+      ('the account waiting for a reconnect', 'IG_COLLECTION_TARGET_INACTIVE:%')) AS t(label, refusal)
+  LOOP
+    IF v_case.label = 'collection disabled' THEN
+      UPDATE public.app_settings SET value = 'false'::jsonb
+       WHERE key = 'collection_instagram_insights_enabled';
+    ELSIF v_case.label = 'the target not eligible' THEN
+      UPDATE public.app_settings
+         SET value = '{"version":1,"owners":{"mode":"allowlist","account_ids":["d2000000-0000-4000-8000-000000000001"]},"competitors":{"mode":"all","targets":[]}}'::jsonb
+       WHERE key = 'collection_instagram_rollout_policy';
+    ELSE
+      UPDATE public.social_accounts SET needs_reauth = true WHERE id = acct;
+    END IF;
+
+    v_before := pg_temp.igsettle_state(acct);
+
+    v_failed := false;
+    BEGIN
+      PERFORM public.complete_instagram_collection_job_capability_unavailable(v_job, v_token, v_gen);
+    EXCEPTION WHEN others THEN
+      v_failed := true;
+      ASSERT SQLSTATE = '22023',
+        'E9.5 ' || v_case.label || ' is SQLSTATE 22023, got ' || SQLSTATE;
+      ASSERT SQLERRM LIKE v_case.refusal,
+        'E9.5 ' || v_case.label || ' is the existing refusal, got ' || SQLERRM;
+    END;
+    ASSERT v_failed, 'E9.5 ' || v_case.label || ' was settled';
+
+    ASSERT pg_temp.igsettle_state(acct) = v_before,
+      'E9.5 ' || v_case.label || ' changed nothing';
+    ASSERT v_before #>> '{job,status}' = 'leased',
+      'E9.5 ' || v_case.label || ' left the job leased';
+
+    -- Restore the admitting fixture for the next case.
+    UPDATE public.app_settings SET value = 'true'::jsonb
+     WHERE key = 'collection_instagram_insights_enabled';
+    UPDATE public.app_settings
+       SET value = '{"version":1,"owners":{"mode":"all","account_ids":[]},"competitors":{"mode":"all","targets":[]}}'::jsonb
+     WHERE key = 'collection_instagram_rollout_policy';
+    UPDATE public.social_accounts SET needs_reauth = false WHERE id = acct;
+  END LOOP;
+END
+$e9_refused$;
+
+-- ---------------------------------------------------------------------------
+-- E9 case 7 - no capability row at all.
+-- ---------------------------------------------------------------------------
+DO $e9_absent$
+DECLARE
+  acct     uuid := 'd2000000-0000-4000-8000-000000000014';
+  v_job    uuid;
+  v_token  uuid;
+  v_gen    bigint;
+  v_before jsonb;
+  v_failed boolean;
+BEGIN
+  SELECT job_id, token, generation INTO v_job, v_token, v_gen
+    FROM igdirect_claim_ctx WHERE label = 's7';
+
+  DELETE FROM public.instagram_account_capabilities WHERE social_account_id = acct;
+
+  v_before := pg_temp.igsettle_state(acct);
+  ASSERT v_before -> 'capability' = 'null'::jsonb, 'E9.7 the capability row is gone';
+
+  v_failed := false;
+  BEGIN
+    PERFORM public.complete_instagram_collection_job_capability_unavailable(v_job, v_token, v_gen);
+  EXCEPTION WHEN others THEN
+    v_failed := true;
+    ASSERT SQLSTATE = '40001', 'E9.7 an absent capability is SQLSTATE 40001, got ' || SQLSTATE;
+    ASSERT SQLERRM LIKE 'IG_COLLECTION_CREDENTIAL_CHANGED:%',
+      'E9.7 an absent capability is refused as a changed credential, got ' || SQLERRM;
+  END;
+  ASSERT v_failed, 'E9.7 a job without a capability row was settled';
+
+  ASSERT pg_temp.igsettle_state(acct) = v_before, 'E9.7 the job is unchanged';
+  ASSERT v_before #>> '{job,status}' = 'leased', 'E9.7 the job is still leased';
+END
+$e9_absent$;
+
+-- ---------------------------------------------------------------------------
+-- E9 case 6 - the grant surface. Both functions are service-only, the
+-- settlement is SECURITY DEFINER and its wrapper SECURITY INVOKER, and the
+-- browser roles are refused before either body runs.
+-- ---------------------------------------------------------------------------
+DO $e9_grants$
+DECLARE
+  v_signature text;
+  v_fn        regprocedure;
+BEGIN
+  FOREACH v_signature IN ARRAY ARRAY[
+    'public.complete_instagram_collection_job_capability_unavailable(uuid,uuid,bigint)',
+    'public.complete_instagram_collection_job_capability_unavailable_http(uuid,uuid,bigint)']
+  LOOP
+    v_fn := v_signature::regprocedure;
+    ASSERT has_function_privilege('service_role', v_fn, 'EXECUTE'),
+      'E9.6 the service role can execute ' || v_signature;
+    ASSERT NOT has_function_privilege('authenticated', v_fn, 'EXECUTE'),
+      'E9.6 authenticated cannot execute ' || v_signature;
+    ASSERT NOT has_function_privilege('anon', v_fn, 'EXECUTE'),
+      'E9.6 anon cannot execute ' || v_signature;
+    ASSERT NOT EXISTS (
+      SELECT 1
+        FROM pg_proc AS p,
+             LATERAL aclexplode(COALESCE(p.proacl, acldefault('f', p.proowner))) AS a
+       WHERE p.oid = v_fn AND a.grantee = 0 AND a.privilege_type = 'EXECUTE'),
+      'E9.6 PUBLIC cannot execute ' || v_signature;
+  END LOOP;
+
+  ASSERT (SELECT prosecdef FROM pg_proc
+           WHERE oid = 'public.complete_instagram_collection_job_capability_unavailable(uuid,uuid,bigint)'::regprocedure),
+    'E9.6 the settlement is SECURITY DEFINER';
+  ASSERT (SELECT NOT prosecdef FROM pg_proc
+           WHERE oid = 'public.complete_instagram_collection_job_capability_unavailable_http(uuid,uuid,bigint)'::regprocedure),
+    'E9.6 the wrapper keeps the privileges of its caller';
+END
+$e9_grants$;
+
+SET LOCAL ROLE authenticated;
+SELECT set_config('request.jwt.claim.sub', 'd1000000-0000-4000-8000-000000000001', true);
+SELECT set_config('request.jwt.claim.role', 'authenticated', true);
+
+DO $e9_authenticated$
+DECLARE
+  v_failed boolean;
+BEGIN
+  v_failed := false;
+  BEGIN
+    PERFORM public.complete_instagram_collection_job_capability_unavailable(
+      'e9000000-0000-4000-8000-000000000001'::uuid,
+      'e9000000-0000-4000-8000-000000000002'::uuid, 1);
+  EXCEPTION WHEN insufficient_privilege THEN
+    v_failed := true;
+  END;
+  ASSERT v_failed, 'E9.6 an ordinary user reached the settlement';
+
+  v_failed := false;
+  BEGIN
+    PERFORM public.complete_instagram_collection_job_capability_unavailable_http(
+      'e9000000-0000-4000-8000-000000000001'::uuid,
+      'e9000000-0000-4000-8000-000000000002'::uuid, 1);
+  EXCEPTION WHEN insufficient_privilege THEN
+    v_failed := true;
+  END;
+  ASSERT v_failed, 'E9.6 an ordinary user reached the settlement wrapper';
+END
+$e9_authenticated$;
+
+RESET ROLE;
+
+SET LOCAL ROLE anon;
+DO $e9_anon$
+DECLARE
+  v_failed boolean;
+BEGIN
+  v_failed := false;
+  BEGIN
+    PERFORM public.complete_instagram_collection_job_capability_unavailable(
+      'e9000000-0000-4000-8000-000000000001'::uuid,
+      'e9000000-0000-4000-8000-000000000002'::uuid, 1);
+  EXCEPTION WHEN insufficient_privilege THEN
+    v_failed := true;
+  END;
+  ASSERT v_failed, 'E9.6 anon reached the settlement';
+
+  v_failed := false;
+  BEGIN
+    PERFORM public.complete_instagram_collection_job_capability_unavailable_http(
+      'e9000000-0000-4000-8000-000000000001'::uuid,
+      'e9000000-0000-4000-8000-000000000002'::uuid, 1);
+  EXCEPTION WHEN insufficient_privilege THEN
+    v_failed := true;
+  END;
+  ASSERT v_failed, 'E9.6 anon reached the settlement wrapper';
+END
+$e9_anon$;
+
+RESET ROLE;
+
+SELECT set_config('request.jwt.claim.role', 'service_role', true);
 
 SELECT set_config('request.jwt.claim.role', '', true);
 SELECT set_config('request.jwt.claim.sub', '', true);

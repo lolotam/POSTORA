@@ -1405,35 +1405,51 @@ Deno.test("a direct credential that the database refuses is not a collection", a
 // Production 2026-11-04 (drain 595878): a direct-login pilot whose permission
 // read was never recorded hit the fence's capability refusal, which the worker
 // reported as storage_error and which stopped the whole run.
-Deno.test("only the fence's capability refusal lets the run go on to the next owner", async () => {
+function unrecordedDirectJob(): ClaimedOwnerJob {
+  return createClaimedJob({
+    job_id: SECOND_JOB_ID,
+    social_account_id: SECOND_ACCOUNT_ID,
+    target_id: SECOND_ACCOUNT_ID,
+    context: {
+      viewer_social_account_id: SECOND_ACCOUNT_ID,
+      credential_generation: 7,
+      login_kind: "direct",
+      capability_present: true,
+      permission_read_state: "unknown",
+      granted_scopes: [],
+    },
+  });
+}
+
+/** The pilot as production held it: a direct capability whose permission read was never recorded. */
+const UNRECORDED_DIRECT_CAPABILITY = {
+  loginKind: "direct",
+  scopesAuthoritative: false,
+  grantedScopes: [],
+} as const;
+
+Deno.test("the capability refusal is settled once, and the run goes on to the next owner whatever the settlement answers", async () => {
+  // The store failure each database answer is classified into.
   const cases = [
-    { failure: "capability_missing", reasonCode: "capability_missing", stoppedEarly: false, completed: 1 },
-    { failure: "rpc_failed", reasonCode: "storage_error", stoppedEarly: true, completed: 0 },
+    { name: "settled", settleFailure: undefined, outcome: "unavailable" },
+    // PT409: CLAIM_STALE, CREDENTIAL_CHANGED, CAPABILITY_RESOLVED, LOCK_RETRY.
+    { name: "refused as stale", settleFailure: "stale_claim", outcome: "abandoned" },
+    // PGRST202 / 42883: the settlement is not deployed yet.
+    { name: "not deployed", settleFailure: "schema_unavailable", outcome: "abandoned" },
+    // The call failed in transport: whether it committed is unknown.
+    { name: "transport failure", settleFailure: "rpc_failed", outcome: "abandoned" },
   ] as const;
 
   for (const expected of cases) {
-    const unrecorded = createClaimedJob({
-      social_account_id: SECOND_ACCOUNT_ID,
-      target_id: SECOND_ACCOUNT_ID,
-      context: {
-        viewer_social_account_id: SECOND_ACCOUNT_ID,
-        credential_generation: 7,
-        login_kind: "direct",
-        capability_present: true,
-        permission_read_state: "unknown",
-        granted_scopes: [],
-      },
-    });
-
+    const unrecorded = unrecordedDirectJob();
     const harness = createHarness({
       store: {
         jobs: [unrecorded, createClaimedJob()],
         accounts: {
           [SECOND_ACCOUNT_ID]: {
-            // The pilot as production held it: a direct capability whose
-            // permission read was never recorded.
-            capability: { loginKind: "direct", scopesAuthoritative: false, grantedScopes: [] },
-            directCredentialFailure: expected.failure,
+            capability: UNRECORDED_DIRECT_CAPABILITY,
+            directCredentialFailure: "capability_missing",
+            settleFailure: expected.settleFailure,
           },
         },
       },
@@ -1441,14 +1457,76 @@ Deno.test("only the fence's capability refusal lets the run go on to the next ow
 
     const summary = await runOwnerDrain(harness.ports);
 
-    assertEquals(summary.jobs[0]!.outcome, "abandoned", expected.failure);
-    assertEquals(summary.jobs[0]!.reasonCode, expected.reasonCode, expected.failure);
-    assertEquals(summary.stoppedEarly, expected.stoppedEarly, expected.failure);
-    assertEquals(summary.completed, expected.completed, expected.failure);
-    // The refused job is never settled and never collected: the completion
-    // RPC sits behind the same fence, so it is left to its lease.
-    assertEquals(harness.calls.completes.length, expected.completed, expected.failure);
+    assertEquals(summary.jobs[0]!.outcome, expected.outcome, expected.name);
+    assertEquals(summary.jobs[0]!.reasonCode, "capability_missing", expected.name);
+    assertEquals(summary.stoppedEarly, false, expected.name);
+    assertEquals(summary.completed, 1, expected.name);
+    // Asked for once and never replayed inside the run.
+    assertEquals(
+      harness.calls.settlements,
+      [{ jobId: SECOND_JOB_ID, jobGeneration: unrecorded.jobGeneration }],
+      expected.name,
+    );
+    // The fenced completion is never asked for the refused job: the one
+    // completion is the next owner's.
+    assertEquals(harness.calls.completes, [{ outcome: "completed", reasonCode: null }], expected.name);
+
+    const refused = harness.logs.find((event) => event.event === "owner_capability_settlement_refused");
+    assertEquals(refused?.outcome, expected.settleFailure, expected.name);
   }
+});
+
+Deno.test("the run's deadline during the settlement stops the run instead of being logged as a refusal", async () => {
+  const harness = createHarness({
+    store: {
+      jobs: [unrecordedDirectJob(), createClaimedJob()],
+      accounts: {
+        [SECOND_ACCOUNT_ID]: {
+          capability: UNRECORDED_DIRECT_CAPABILITY,
+          directCredentialFailure: "capability_missing",
+          hangOn: "settlement",
+        },
+      },
+    },
+  });
+  // The outer deadline fires while the settlement is in flight.
+  const controller = new AbortController();
+  const tick = setInterval(() => {
+    if (harness.calls.settlements.length > 0) controller.abort();
+  }, 5);
+
+  const summary = await runOwnerDrain(harness.ports, { signal: controller.signal });
+  clearInterval(tick);
+
+  assertEquals(summary.jobs[0]!.outcome, "abandoned");
+  assertEquals(summary.jobs[0]!.reasonCode, "deadline_exceeded");
+  assertEquals(summary.stoppedEarly, true);
+  assertEquals(summary.completed, 0);
+  assertEquals(harness.calls.completes.length, 0);
+  assertEquals(harness.logs.some((event) => event.event === "owner_capability_settlement_refused"), false);
+});
+
+Deno.test("a direct credential read that fails for another reason is not settled and stops the run", async () => {
+  const harness = createHarness({
+    store: {
+      jobs: [unrecordedDirectJob(), createClaimedJob()],
+      accounts: {
+        [SECOND_ACCOUNT_ID]: {
+          capability: UNRECORDED_DIRECT_CAPABILITY,
+          directCredentialFailure: "rpc_failed",
+        },
+      },
+    },
+  });
+
+  const summary = await runOwnerDrain(harness.ports);
+
+  assertEquals(summary.jobs[0]!.outcome, "abandoned");
+  assertEquals(summary.jobs[0]!.reasonCode, "storage_error");
+  assertEquals(summary.stoppedEarly, true);
+  assertEquals(summary.completed, 0);
+  assertEquals(harness.calls.settlements.length, 0);
+  assertEquals(harness.calls.completes.length, 0);
 });
 
 Deno.test("a direct-login account without the insights permission is closed with a stable outcome and no provider call", async () => {
