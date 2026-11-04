@@ -834,6 +834,8 @@ export interface FakeGraphOptions {
   /** The account day answers, keyed by the Kuwait date. */
   readonly accountDays?: Record<string, unknown>;
   readonly accountDayHeaders?: Record<string, string>;
+  /** The HTTP status of an account day answer, keyed by the Kuwait date. */
+  readonly accountDayStatus?: Record<string, number>;
   /** The media insights answers, keyed by the media id. */
   readonly mediaInsights?: Record<string, unknown>;
   readonly mediaInsightHeaders?: Record<string, string>;
@@ -903,7 +905,7 @@ export function createFakeGraph(options: FakeGraphOptions = {}) {
         : options.accountDays[day] ?? { data: [] };
       return Promise.resolve(
         new Response(JSON.stringify(answer), {
-          status: 200,
+          status: options.accountDayStatus?.[day] ?? 200,
           headers: { "Content-Type": "application/json", ...(options.accountDayHeaders ?? {}) },
         }),
       );

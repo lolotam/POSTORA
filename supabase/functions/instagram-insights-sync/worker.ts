@@ -1969,7 +1969,7 @@ async function planBackfill(
 
   owedDays.push(...slice);
   visit.backfillDays = owedDays.filter((day) => !currentDays.includes(day));
-  visit.backfillRemaining = sliceSize === 0 && visit.bucketUsagePercent >= BACKFILL_USAGE_CEILING_PERCENT
+  visit.backfillRemaining = sliceSize === 0 && backfillCeilingReached(visit)
     ? 0
     : Math.min(missing.length - slice.length, todayRoom - slice.length);
 }
@@ -1987,11 +1987,16 @@ function backfillSliceSize(
   visit: OwnerVisitState,
   room: { readonly owedBackfill: number; readonly todayRoom: number; readonly queueRoom: number },
 ): number {
-  if (visit.bucketUsagePercent >= BACKFILL_USAGE_CEILING_PERCENT) return 0;
+  if (backfillCeilingReached(visit)) return 0;
   return Math.max(
     0,
     Math.min(ACCOUNT_DAYS_BACKFILL_PER_VISIT - room.owedBackfill, room.todayRoom, room.queueRoom),
   );
+}
+
+/** True when the shared or this visit's usage leaves no room for history. */
+function backfillCeilingReached(visit: OwnerVisitState): boolean {
+  return Math.max(visit.bucketUsagePercent, visit.usagePercent) >= BACKFILL_USAGE_CEILING_PERCENT;
 }
 
 /** The first instant of a Kuwait calendar day. */
@@ -2119,6 +2124,11 @@ async function collectDays(
     // The usage budget is nearly spent: no further provider call is made.
     if (visit.usageStop) break;
     if (!context.budget.canStartProviderCall()) break;
+    // History waits for a quiet budget. A backfill day queued by an earlier
+    // visit is checked again here, against the usage seen NOW, so a queue
+    // planned at low usage cannot spend a budget that has since filled. The
+    // day stays owed; the daily capture's own days still run.
+    if (visit.backfillDays.includes(day) && backfillCeilingReached(visit)) continue;
 
     let dayValue: Awaited<
       ReturnType<InstagramGraphProvider["fetchAccountDay"]>
@@ -3106,6 +3116,10 @@ function moveToBackOfQueue(visit: OwnerVisitState, mediaId: string): void {
  * nothing about the other items.
  */
 function isDefinitiveItemRefusal(error: OwnerProviderError): boolean {
+  // A throttle or a dead credential can carry code 10 or 100 too (HTTP 429,
+  // or usage past the stop line). Those are conditions of the account or of
+  // the application, never of the item, and must not close it for good.
+  if (error.kind === "rate_limited" || error.kind === "token_invalid") return false;
   return error.graphCode !== null &&
     DEFINITIVE_ITEM_GRAPH_CODES.has(error.graphCode);
 }

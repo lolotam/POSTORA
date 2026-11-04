@@ -2029,6 +2029,49 @@ Deno.test("a backfill day the provider refuses for good is stored as unavailable
   }
 });
 
+Deno.test("a throttled backfill day is never closed as unavailable", async () => {
+  // HTTP 429 carrying code 100: a throttle of the application, not a refusal
+  // of the day. Storing it as unavailable would close the day for good.
+  const throttledDay = "2025-11-02";
+  const harness = createHarness({
+    store: { jobs: [createClaimedJob()], missingDays: [throttledDay] },
+    graph: {
+      accountDays: {
+        [TEST_PRIMARY_DAY]: accountDayAnswer({ reach: 450, views: 890 }),
+        [TEST_CORRECTION_DAY]: accountDayAnswer({ reach: 400, views: 800 }),
+        [throttledDay]: { error: { code: 100, message: "too many calls" } },
+      },
+      accountDayStatus: { [throttledDay]: 429 },
+    },
+  });
+
+  const summary = await runOwnerDrain(harness.ports);
+
+  assertEquals(writtenDays(harness.calls), [TEST_PRIMARY_DAY, TEST_CORRECTION_DAY]);
+  // The job is parked by the throttle and the run stops.
+  assertEquals(harness.calls.throttles.length, 1);
+  assertEquals(harness.calls.throttles[0]!.jobId, TEST_JOB_ID);
+  assertEquals(harness.calls.completes.length, 0);
+  assertEquals(summary.stoppedEarly, true);
+});
+
+Deno.test("a usage that rises past the backfill ceiling during the visit defers the planned history", async () => {
+  // The bucket is quiet when the slice is planned; the provider then
+  // reports 60% on the capture's own days.
+  const harness = createHarness({
+    store: { jobs: [createClaimedJob()], missingDays: "all" },
+    graph: { accountDayHeaders: { "x-app-usage": JSON.stringify({ call_count: 60 }) } },
+  });
+
+  await runOwnerDrain(harness.ports);
+
+  assertEquals(writtenDays(harness.calls), [TEST_PRIMARY_DAY, TEST_CORRECTION_DAY]);
+  // The planned days stay owed for a quieter visit.
+  assertEquals(harness.calls.completes, [
+    { outcome: "partial", reasonCode: "daily_observation_pending" },
+  ]);
+});
+
 Deno.test("a refusal of the daily capture's own day is not stored as unavailable", async () => {
   const harness = createHarness({
     store: { jobs: [createClaimedJob()] },
