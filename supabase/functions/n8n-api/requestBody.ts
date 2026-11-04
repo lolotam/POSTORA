@@ -39,3 +39,21 @@ export function looksLikeJson(text: string): boolean {
   const trimmed = text.trimStart();
   return trimmed.startsWith('{') || trimmed.startsWith('[');
 }
+
+/** Form list fields accept JSON arrays or comma-separated literals. JSON scalars
+ *  remain text: a numeric Instagram username must not become a number. */
+export function parseFormArray(text: string): unknown[] {
+  try {
+    // A numeric username inside a JSON array (`[1234]`) is still a username, not a number. The reviver
+    // receives the exact source text, so a digit string beyond 2^53 keeps every digit. A runtime without
+    // that third argument keeps every number as a number (`1e3` and `1234.0` parse to 1000 and 1234, which
+    // are different usernames, so the parsed value is never turned into text), and the collaborator
+    // mapping then omits it rather than inviting the wrong account.
+    const parsed: unknown = JSON.parse(text, (_key, value, context?: { source?: string }) =>
+      typeof value === 'number' ? (context?.source ?? value) : value);
+    if (Array.isArray(parsed)) return parsed;
+  } catch {
+    // Non-JSON input is the supported comma-separated transport.
+  }
+  return text.split(',').map(entry => entry.trim()).filter(Boolean);
+}

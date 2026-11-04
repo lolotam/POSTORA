@@ -323,6 +323,7 @@ function buildServer(
       "Create a post and publish (or schedule) it across one or more connected social accounts. " +
       "To schedule, pass a future ISO 8601 timestamp to 'scheduled_at'. " +
       "To create a Carousel post, pass multiple files (2 to 10) in 'media_urls' or 'media_file_ids'. " +
+      "Set 'instagram_share_to_story' to true to also share the first attached image or video as an Instagram Story. " +
       "If scheduled_at is omitted, the post is published immediately.",
     inputSchema: z.object({
       caption: z.string().optional().describe("The post caption or text content"),
@@ -335,6 +336,7 @@ function buildServer(
       timezone: z.string().optional().describe("Target timezone for scheduling (e.g., 'America/New_York')"),
       first_comment: z.string().optional().describe("Optional comment to automatically post immediately after publishing"),
       instagram_media_type: z.enum(["feed", "stories"]).optional().describe("Set to 'stories' to publish as an Instagram Story instead of a feed post"),
+      instagram_share_to_story: z.boolean().optional().describe("Also publish the first attached image/video as a Story alongside the feed post or reel. The Story does not carry the post caption or collaborator invitation."),
       instagram_share_to_feed: z.boolean().optional().describe("For Instagram videos, whether to also share to the main profile feed"),
       instagram_collaborators: stringList.optional().describe("Instagram usernames to invite as Collab co-authors on a feed image, carousel or reel (not stories). Only the first username is invited today. If Instagram rejects it, the post is published without it and create_post and get_post show a warning in platform_results[].warnings."),
       facebook_post_type: z.enum(["feed", "story", "reel"]).optional().describe("Set to 'story' to publish as a Facebook Story, or 'reel' to publish as a Reel"),

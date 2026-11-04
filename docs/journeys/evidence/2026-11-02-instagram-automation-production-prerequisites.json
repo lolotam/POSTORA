@@ -1,0 +1,88 @@
+{
+  "formatVersion": 1,
+  "scope": "read-only-instagram-automation-production-prerequisites",
+  "checkedAt": "2026-11-02T01:43:12.794316+00:00",
+  "transactionReadOnly": "on",
+  "host": "86.48.2.205",
+  "inspectedMain": "781111a8c8b5bc1296f8c82bbe575f2498b82748",
+  "candidate": "d6773d0c39354a138a691617ecd633a47d816586",
+  "productionMutated": false,
+  "providerCalls": false,
+  "livePublicationVerified": false,
+  "deploymentApproved": false,
+  "files": [
+    {
+      "path": "supabase/functions/mcp/index.ts",
+      "runtimeSha256": "e11e39d13a9f41cbde5c811faa9809a883cc436ac941845294891608446274b3",
+      "matchesInspectedMain": true,
+      "candidateSha256": "a0718917c74fc48899eff42799092a734a019b4e9f6c7299b495572c7b33b009"
+    },
+    {
+      "path": "supabase/functions/n8n-api/index.ts",
+      "runtimeSha256": "402a3b6e5c2308131234d18050039a9f646bff5ff2b1437c0bb0e20526f83f3a",
+      "matchesInspectedMain": true,
+      "candidateSha256": "09b034017a3bd1b4e496e8696437c5f03eaa9e3d066c0b1588cc586139ac5848"
+    },
+    {
+      "path": "supabase/functions/n8n-api/requestBody.ts",
+      "runtimeSha256": "f1e1b3eb1baa506128e634c1886a5b9d220984813716d858f451b67040fd93ef",
+      "matchesInspectedMain": true,
+      "candidateSha256": "2c9d7cc5d2f777257a33bbea1ec7532c9b11f8a5c69c26cb97218a20b7e2a0ed"
+    },
+    {
+      "path": "supabase/functions/process-post/index.ts",
+      "runtimeSha256": "25bdeb625d603a15b2fd51475348af200c327a59afdacbd9ae50741417d30c61",
+      "matchesInspectedMain": true,
+      "candidateSha256": "cf8b6046d916b52b878336591c15244fb48c5ee46d2794370ceb92c0c82d6c0b"
+    }
+  ],
+  "functions": [
+    {
+      "acl": [
+        "supabase_admin=X/supabase_admin",
+        "postgres=X/supabase_admin",
+        "service_role=X/supabase_admin"
+      ],
+      "name": "partner_settle_platform_post",
+      "owner": "supabase_admin",
+      "config": [
+        "search_path=public"
+      ],
+      "returns": "jsonb",
+      "arguments": "p_platform_post_id uuid, p_post_id uuid, p_social_account_id uuid, p_platform text, p_status text, p_provider_post_id text, p_provider_post_url text, p_error_message text, p_response_data jsonb",
+      "anon_execute": false,
+      "definition_md5": "6bb0ec6a5a29f14de9608561a4a81080",
+      "service_execute": true,
+      "security_definer": true,
+      "authenticated_execute": false
+    },
+    {
+      "acl": [
+        "postgres=X/postgres",
+        "service_role=X/postgres"
+      ],
+      "name": "record_published_story",
+      "owner": "postgres",
+      "config": [
+        "search_path=public"
+      ],
+      "returns": "jsonb",
+      "arguments": "p_post_id uuid, p_social_account_id uuid, p_story_id text, p_story_url text, p_response_data jsonb",
+      "anon_execute": false,
+      "definition_md5": "cc7c6c3a7f2e5f662ad0bde4dbfcbe1c",
+      "service_execute": true,
+      "security_definer": true,
+      "authenticated_execute": false
+    }
+  ],
+  "isolatedDefinitionsMatch": true,
+  "deployMarkers": {
+    "pauseMarkerPresent": false,
+    "failureMarkerPresent": false,
+    "scheduleActivityIndependentlyVerified": false
+  },
+  "rawReceipt": {
+    "path": ".tmp/mcp-production-prerequisites-20261102.json",
+    "sha256": "b71c9c924e785f53594121ca5cec607fd3fa53b6b29a0597d8056094a5bed2ca"
+  }
+}
