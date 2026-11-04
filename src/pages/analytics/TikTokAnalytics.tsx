@@ -1,4 +1,4 @@
-import { compareBrandMetric } from "@/lib/brandMetrics";
+import { compareBrandMetric, matchesMediaTypeFilter } from "@/lib/brandMetrics";
 import { useState, useMemo, useEffect } from "react";
 import { useTranslation } from "react-i18next";
 import { useNavigate } from "react-router-dom";
@@ -101,10 +101,7 @@ export default function TikTokAnalytics() {
 
   const filteredPosts = useMemo(() => {
     let result = [...posts];
-    if (filters.mediaType !== "all") {
-      const typeMap: Record<string, string[]> = { image: ["IMAGE"], video: ["VIDEO"], reel: ["REEL"], carousel: ["CAROUSEL"] };
-      result = result.filter((p) => typeMap[filters.mediaType]?.includes(p.mediaType));
-    }
+    result = result.filter((p) => matchesMediaTypeFilter(p, filters.mediaType));
     if (filters.period !== "all") {
       const now = Date.now();
       const ms: Record<string, number> = { "30d": 30 * 86400000, "3m": 90 * 86400000, "6m": 180 * 86400000, "1y": 365 * 86400000 };
