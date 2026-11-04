@@ -15,9 +15,26 @@ const POST_PAGE_SIZES = [25, 10, 5] as const;
 const GRAPH_TIMEOUT_MS = 15_000;
 const MAX_DETAIL_LENGTH = 500;
 
-// deno-lint-ignore no-explicit-any
-type GraphObject = Record<string, any>;
-type GraphReply = { status: number; payload: GraphObject | null };
+// The Graph fields this module reads. Every field is optional because Graph
+// omits what a Page does not expose to the app token.
+type GraphCount = { summary?: { total_count?: number } };
+type GraphError = { code?: number; error_subcode?: number; message?: string };
+type GraphPaging = { next?: string; cursors?: { after?: string } };
+type GraphPayload = { error?: GraphError; data?: unknown; paging?: GraphPaging; [field: string]: unknown };
+type GraphAttachment = { type?: string; media_type?: string; description?: string; subattachments?: { data?: unknown[] } };
+type GraphPost = {
+  id: string; message?: string; story?: string; full_picture?: string; created_time?: string; permalink_url?: string;
+  attachments?: { data?: GraphAttachment[] }; likes?: GraphCount; comments?: GraphCount; reactions?: GraphCount; shares?: { count?: number };
+};
+type GraphReel = {
+  id: string; description?: string; created_time?: string; permalink_url?: string; thumbnails?: { data?: { uri?: string }[] };
+  likes?: GraphCount; comments?: GraphCount; shares?: { count?: number };
+};
+type GraphPage = {
+  id: string; name?: string; username?: string; about?: string; fan_count?: number; picture?: { data?: { url?: string } };
+  website?: string; verification_status?: string;
+};
+type GraphReply = { status: number; payload: GraphPayload | null };
 /** One scrape's Graph access: the transport, the app token and every form of the credential to redact. */
 type GraphSession = { fetchFn: typeof fetch; accessToken: string; redactions: string[] };
 
@@ -50,7 +67,7 @@ function credentialForms(accessToken: string, appSecret: string): string[] {
   return [...new Set(forms)].sort((left, right) => right.length - left.length);
 }
 
-function isGraphObject(value: unknown): value is GraphObject {
+function isGraphPayload(value: unknown): value is GraphPayload {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
@@ -68,7 +85,7 @@ async function readGraph(fetchFn: typeof fetch, url: string): Promise<GraphReply
   }
   try {
     const parsed: unknown = JSON.parse(text);
-    return { status: response.status, payload: isGraphObject(parsed) ? parsed : null };
+    return { status: response.status, payload: isGraphPayload(parsed) ? parsed : null };
   } catch (error) {
     if (!(error instanceof SyntaxError)) throw error;
     return { status: response.status, payload: null };
@@ -96,7 +113,7 @@ function providerDetail(reply: GraphReply, redactions: string[]): string {
   return redacted.slice(0, MAX_DETAIL_LENGTH);
 }
 
-type PostPage = { data: GraphObject[]; paging: GraphObject | undefined; pageSize: number };
+type PostPage = { data: GraphPost[]; paging: GraphPaging | undefined; pageSize: number };
 
 /** Tries each candidate page size, largest first, and reports the one Graph accepted. */
 async function fetchPostPage(session: GraphSession, pageId: string, sizes: number[], after: string | undefined): Promise<PostPage> {
@@ -108,7 +125,7 @@ async function fetchPostPage(session: GraphSession, pageId: string, sizes: numbe
       if (!Array.isArray(reply.payload!.data)) {
         throw new FacebookPublicPageError("Facebook returned an invalid response for this Page.", "posts page has no data array");
       }
-      return { data: reply.payload!.data, paging: reply.payload!.paging, pageSize };
+      return { data: reply.payload!.data as GraphPost[], paging: reply.payload!.paging, pageSize };
     }
     if (!isTooMuchData(reply)) {
       throw new FacebookPublicPageError("Facebook posts could not be loaded for this Page.", providerDetail(reply, session.redactions));
@@ -124,8 +141,8 @@ function pageSizesFor(wanted: number, largestAccepted: number): number[] {
 }
 
 /** Pages follow Graph's own `after` cursor, never a provider-supplied URL. */
-async function fetchPosts(session: GraphSession, pageId: string, maxPosts: number): Promise<GraphObject[]> {
-  const posts: GraphObject[] = [];
+async function fetchPosts(session: GraphSession, pageId: string, maxPosts: number): Promise<GraphPost[]> {
+  const posts: GraphPost[] = [];
   let after: string | undefined;
   let largestAccepted: number = POST_PAGE_SIZES[0];
   while (posts.length < maxPosts) {
@@ -144,7 +161,7 @@ async function fetchPosts(session: GraphSession, pageId: string, maxPosts: numbe
   return posts.slice(0, maxPosts);
 }
 
-function postMediaType(post: GraphObject): string {
+function postMediaType(post: GraphPost): string {
   const attachment = post.attachments?.data?.[0];
   const attachmentType = attachment?.type || "";
   const attachmentMediaType = attachment?.media_type || "";
@@ -160,7 +177,7 @@ function postMediaType(post: GraphObject): string {
   return "IMAGE";
 }
 
-function mapPost(post: GraphObject) {
+function mapPost(post: GraphPost) {
   const likes = post.likes?.summary?.total_count || 0;
   const comments = post.comments?.summary?.total_count || 0;
   const shares = post.shares?.count || 0;
@@ -182,7 +199,7 @@ function mapPost(post: GraphObject) {
   };
 }
 
-function mapReel(reel: GraphObject) {
+function mapReel(reel: GraphReel) {
   const likes = reel.likes?.summary?.total_count || 0;
   const comments = reel.comments?.summary?.total_count || 0;
   const shares = reel.shares?.count || 0;
@@ -205,7 +222,7 @@ function mapReel(reel: GraphObject) {
 }
 
 /** Reels are optional enrichment: the app token may not reach that edge. */
-async function fetchReels(session: GraphSession, pageId: string): Promise<GraphObject[]> {
+async function fetchReels(session: GraphSession, pageId: string): Promise<GraphReel[]> {
   let reply: GraphReply;
   try {
     reply = await readGraph(session.fetchFn, graphUrl(`${pageId}/video_reels`, { fields: REEL_FIELDS, limit: "25" }, session.accessToken));
@@ -213,10 +230,10 @@ async function fetchReels(session: GraphSession, pageId: string): Promise<GraphO
     if (error instanceof FacebookPublicPageError) return [];
     throw error;
   }
-  return isFailedReply(reply) || !Array.isArray(reply.payload!.data) ? [] : reply.payload!.data;
+  return isFailedReply(reply) || !Array.isArray(reply.payload!.data) ? [] : reply.payload!.data as GraphReel[];
 }
 
-function mapProfile(pageData: GraphObject, pageIdentifier: string, postsCount: number) {
+function mapProfile(pageData: GraphPage, pageIdentifier: string, postsCount: number) {
   return {
     id: pageData.id,
     username: pageData.username || pageIdentifier,
@@ -242,7 +259,7 @@ export async function scrapeFacebookPublicPage(input: {
     const message = isPageMissing(pageReply) ? "Facebook Page not found." : "Facebook Page could not be loaded. Try again later.";
     throw new FacebookPublicPageError(message, providerDetail(pageReply, session.redactions));
   }
-  const pageData = pageReply.payload!;
+  const pageData = pageReply.payload as GraphPage;
 
   const posts = (await fetchPosts(session, pageData.id, input.maxPosts)).map(mapPost);
   const existingIds = new Set(posts.map((post) => post.id));
