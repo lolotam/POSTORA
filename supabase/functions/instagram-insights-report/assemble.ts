@@ -37,6 +37,7 @@ import {
   type OutlierFormat,
   type OutlierInput,
 } from "../_shared/outlierScore.ts";
+import { ACCOUNT_DAY_HISTORY_DAYS } from "../_shared/instagramOwnerHistory.ts";
 import {
   KUWAIT_UTC_OFFSET_MS,
   MILLISECONDS_PER_DAY,
@@ -766,8 +767,11 @@ function kuwaitDayStartMs(date: string): number {
  *
  * The metric days end on the last CLOSED Kuwait day: today is never
  * collected, so a period that counted it would always look one day short.
- * "All time" starts on the oldest stored day, and its media window starts
- * on the oldest stored media, so nothing that was collected is left out.
+ * "All time" starts on the first day of the collected history, or on an
+ * older stored day, and its media window starts on the oldest stored media,
+ * so nothing that was collected is left out. A history day the worker has
+ * not collected yet is therefore a missing day of the period, never a day
+ * the period silently does not cover.
  */
 function resolvePeriodWindow(
   periodDays: OwnerReportPeriodDays,
@@ -788,7 +792,7 @@ function resolvePeriodWindow(
     .filter((date) => date <= metricDateEnd);
   const metricDateStart = storedDays.reduce(
     (oldest, date) => (date < oldest ? date : oldest),
-    metricDateEnd,
+    addUtcDays(metricDateEnd, -(ACCOUNT_DAY_HISTORY_DAYS - 1)),
   );
   const windowStartMs = mediaRows.reduce(
     (oldest, row) => Math.min(oldest, row.publishedMs),

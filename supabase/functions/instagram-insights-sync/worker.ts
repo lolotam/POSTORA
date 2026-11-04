@@ -207,6 +207,7 @@ import {
   type OwnerTarget,
 } from "./workerStore.ts";
 import type { ClaimedOwnerJob } from "./receipts.ts";
+import { ACCOUNT_DAY_HISTORY_DAYS } from "../_shared/instagramOwnerHistory.ts";
 import {
   resumeOwnerDailyEnqueue,
   type OwnerDailyEnqueuePorts,
@@ -252,16 +253,6 @@ export const MEDIA_INSIGHTS_PER_VISIT = 5;
  * exceed it.
  */
 export const REMAINING_IDS_LIMIT = 500;
-
-/**
- * The closed Kuwait days whose daily observation the owner history keeps
- * complete, counted back from the job's last closed day.
- *
- * Meta keeps account insights for two years
- * (docs/specs/2026-10-26-instagram-insights-and-competitor-tracking.md), so
- * a year of history is inside what the provider can still answer.
- */
-export const ACCOUNT_DAY_HISTORY_DAYS = 365;
 
 /**
  * The missing closed days ONE visit backfills at most, newest first.
