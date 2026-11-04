@@ -225,8 +225,8 @@ jobs:
       - name: Typecheck and test competitor discovery (brand-scrape)
         run: |
           set -euo pipefail
-          deno check --no-config --import-map=scripts/ci/deno-analytics.import-map.json --lock=scripts/ci/deno-analytics.lock --frozen --node-modules-dir=none supabase/functions/brand-scrape/index.ts supabase/functions/brand-scrape/releaseContract.test.ts
-          deno test --no-config --import-map=scripts/ci/deno-analytics.import-map.json --lock=scripts/ci/deno-analytics.lock --frozen --node-modules-dir=none --allow-env --allow-read=supabase/functions/brand-scrape/index.ts supabase/functions/brand-scrape/releaseContract.test.ts
+          deno check --no-config --import-map=scripts/ci/deno-analytics.import-map.json --lock=scripts/ci/deno-analytics.lock --frozen --node-modules-dir=none supabase/functions/brand-scrape/index.ts supabase/functions/brand-scrape/releaseContract.test.ts supabase/functions/brand-scrape/facebookPublicPage.test.ts
+          deno test --no-config --import-map=scripts/ci/deno-analytics.import-map.json --lock=scripts/ci/deno-analytics.lock --frozen --node-modules-dir=none --allow-env --allow-read=supabase/functions/brand-scrape/index.ts supabase/functions/brand-scrape/releaseContract.test.ts supabase/functions/brand-scrape/facebookPublicPage.test.ts
 
       - name: Test service proxy and MCP
         run: >
