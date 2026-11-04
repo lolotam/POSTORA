@@ -51,6 +51,7 @@ export function reportFixture(overrides: Partial<OwnerReportAssemblyInput> = {})
       { id: "daily-1", metricDate: "2026-10-27", providerDate: "2026-10-27", capturedAt: NOW, status: "ok", reach: 1200, views: 3500, totalInteractions: 380 },
       { id: "daily-2", metricDate: "2026-10-28", providerDate: "2026-10-28", capturedAt: NOW, status: "ok", reach: 1800, views: 4900, totalInteractions: 520 },
     ],
+    accountPeriodTotals: [],
     profileObservations: [{
       id: "profile-1", observedAt: NOW, observedOn: "2026-10-29", captureTimezone: "UTC",
       status: "ok", followersCount: 14200, mediaCount: 156,

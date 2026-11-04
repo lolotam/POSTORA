@@ -1,5 +1,9 @@
+import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
-import { OWNER_REPORT_PERIOD_DAYS, type OwnerReportPeriodDays } from "../domain/types";
+import type { OwnerReportPeriodDays } from "../domain/types";
+
+/** The periods the screen offers; the report also serves 7 and 14 days. */
+const SELECTABLE_PERIODS: readonly OwnerReportPeriodDays[] = [1, 30, 90, 365, "all"];
 
 export type PeriodSelectorProps = {
   selectedPeriod: OwnerReportPeriodDays;
@@ -12,9 +16,13 @@ export function PeriodSelector({
   onSelectPeriod,
   disabled = false,
 }: PeriodSelectorProps) {
+  const { t } = useTranslation("analytics");
+  const label = (period: OwnerReportPeriodDays) => period === "all"
+    ? t("instagram.periodAllTime", "All time")
+    : `${period}${t("instagram.periodDaysUnit", "d")}`;
   return (
     <div className="flex items-center gap-1 bg-muted/50 p-1 rounded-lg border border-border/60">
-      {OWNER_REPORT_PERIOD_DAYS.map((days) => {
+      {SELECTABLE_PERIODS.map((days) => {
         const isActive = selectedPeriod === days;
         return (
           <Button
@@ -30,7 +38,7 @@ export function PeriodSelector({
                 : "text-muted-foreground hover:text-foreground"
             }`}
           >
-            {days}d
+            {label(days)}
           </Button>
         );
       })}

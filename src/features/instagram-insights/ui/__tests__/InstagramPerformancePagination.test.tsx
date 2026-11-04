@@ -83,14 +83,16 @@ describe("Instagram performance pagination through the real gateway and report a
     fireEvent.click(screen.getByRole("button", { name: /Load more/i }));
     expect(await screen.findByText("media-20")).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("button", { name: /^7d$/i }));
+    fireEvent.click(screen.getByRole("button", { name: /^90d$/i }));
 
+    // The new period holds all 21 media again: its first page is the first
+    // 20, and the second page loaded for the old period is gone.
     await waitFor(() => {
       expect(screen.queryByText("media-20")).not.toBeInTheDocument();
       expect(screen.getByText("media-0")).toBeInTheDocument();
-      expect(screen.getAllByRole("row")).toHaveLength(6);
+      expect(screen.getAllByRole("row")).toHaveLength(21);
     });
-    expect(screen.queryByRole("button", { name: /Load more/i })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Load more/i })).toBeInTheDocument();
   });
 
   it("keeps already loaded media visible when the next page fails", async () => {
