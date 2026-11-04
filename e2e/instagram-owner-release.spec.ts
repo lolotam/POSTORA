@@ -18,9 +18,9 @@ test("real login, persisted report pagination, isolated chart points and durable
   await expect(page.getByRole("row")).toHaveCount(22);
   await expect(page.getByRole("button", { name: /Load more/i })).toHaveCount(0);
 
-  await page.getByRole("button", { name: /^7d$/ }).click();
-  await expect(page.getByRole("row")).toHaveCount(5);
-  await expect(page.getByText("owner-release-media-20", { exact: true })).toHaveCount(0);
+  await page.getByRole("button", { name: /^1d$/ }).click();
+  await expect(page.getByText("No media published in this period.", { exact: true })).toBeVisible();
+  await expect(page.getByRole("row")).toHaveCount(0);
   const queued = page.waitForResponse((response) => response.url().endsWith("/functions/v1/instagram-insights-sync") && response.request().method() === "POST");
   await page.getByRole("button", { name: /Sync now/i }).click();
   expect((await queued).status()).toBe(202);
@@ -31,7 +31,8 @@ test("real login, persisted report pagination, isolated chart points and durable
   });
   expect(drained.status()).toBe(200);
   const receipt = await drained.json();
-  expect(receipt.completed).toBe(1);
+  // A fresh account still owes its year of closed days, so its first visit may end partial.
+  expect(receipt.completed + receipt.partial).toBe(1);
   expect(receipt.unavailable).toBe(0);
   await page.reload();
   await expect(page.getByText("120", { exact: true })).toBeVisible();
@@ -99,11 +100,12 @@ test("Arabic RTL keeps unavailable reach explicit and period controls work with 
   await page.getByRole("button", { name: "Toggle language", exact: true }).click();
   await expect(page.locator("html")).toHaveAttribute("lang", "ar");
   await expect(page.locator("html")).toHaveAttribute("dir", "rtl");
-  await expect(page.getByText("غير متاح", { exact: true })).toBeVisible();
-  await expect(page.getByText("الوصول الفريد يتطلب إجماليًا مطابقًا للفترة من Meta.", { exact: true })).toBeVisible();
+  // Reach and accounts engaged have no collected value in the seed.
+  await expect(page.getByText("غير متاح", { exact: true })).toHaveCount(2);
+  await expect(page.getByText("لم يُجمع الوصول الفريد لهذه الفترة بعد.", { exact: true })).toBeVisible();
   const reportResponse = page.waitForResponse((response) => response.url().endsWith("/functions/v1/instagram-insights-report")
-    && response.request().postDataJSON()?.period_days === 7);
-  const periodButton = page.getByRole("button", { name: /^7d$/ });
+    && response.request().postDataJSON()?.period_days === 1);
+  const periodButton = page.getByRole("button", { name: "1 يوم", exact: true });
   await periodButton.focus();
   await expect(periodButton).toBeFocused();
   await periodButton.press("Enter");
@@ -111,7 +113,7 @@ test("Arabic RTL keeps unavailable reach explicit and period controls work with 
   await expect(page.getByRole("button", { name: "زامن دلوقتي", exact: true })).toBeEnabled();
   await page.getByRole("button", { name: "Toggle language", exact: true }).click();
   await expect(page.locator("html")).toHaveAttribute("dir", "ltr");
-  await expect(page.getByText("An exact period total is required for unique reach.", { exact: true })).toBeVisible();
+  await expect(page.getByText("The unique reach of this period has not been collected yet.", { exact: true })).toBeVisible();
 });
 
 test("signing out and switching real identities never reuses the previous owner's report", async ({ page }) => {
@@ -127,7 +129,7 @@ test("signing out and switching real identities never reuses the previous owner'
   await expect(page.getByText("@other_owner_release", { exact: true })).toBeVisible();
   await expect(page.getByText("@owner_release", { exact: true })).toHaveCount(0);
   await expect(page.getByText("owner-release-media-0", { exact: true })).toHaveCount(0);
-  await expect(page.getByText("Not available", { exact: true })).toHaveCount(4);
+  await expect(page.getByText("Not available", { exact: true })).toHaveCount(5);
 });
 
 test("direct report, authenticated public API and MCP preserve the complete stored report", async ({ request }) => {
