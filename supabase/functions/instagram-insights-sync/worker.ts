@@ -2846,15 +2846,16 @@ async function settleCapabilityMissing(context: JobContext): Promise<JobStep> {
       })
     );
   } catch (error) {
+    // Only a database answer or the run's deadline is a refusal; anything
+    // else is a defect and propagates like every other unexpected error.
+    if (!(error instanceof OwnerWorkerStoreError) && !(error instanceof BudgetExceededError)) {
+      throw error;
+    }
     ports.log({
       event: "owner_capability_settlement_refused",
       jobId: job.jobId,
       socialAccountId: job.socialAccountId,
-      outcome: error instanceof OwnerWorkerStoreError
-        ? error.failure
-        : error instanceof BudgetExceededError
-        ? "deadline_exceeded"
-        : "rpc_failed",
+      outcome: error instanceof OwnerWorkerStoreError ? error.failure : "deadline_exceeded",
       reasonCode: "capability_missing",
       durationMs: ports.now() - context.startedAt,
     });
