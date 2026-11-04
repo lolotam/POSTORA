@@ -384,6 +384,14 @@ export type OwnerReasonCode =
    * that may already have happened.
    */
   | "collection_unavailable"
+  /**
+   * The fence refused the direct credential read: the bound account's
+   * permission read never succeeded. Nothing committed and no request was
+   * sent. The job is abandoned to its lease and the run continues; the
+   * completion RPC sits behind the same fence, so the job cannot be settled
+   * until the account records its permission evidence.
+   */
+  | "capability_missing"
   /** A store call failed or a step ran out of budget. Nothing was stored. */
   | "storage_error"
   /** A step did not finish inside the run budget. */
@@ -1502,6 +1510,9 @@ async function resolveDirectCredential(
       }
       if (error.failure === "credential_changed") {
         return { kind: "end", step: await abandon(context, "credential_changed") };
+      }
+      if (error.failure === "capability_missing") {
+        return { kind: "end", step: await abandon(context, "capability_missing") };
       }
     }
     throw error;

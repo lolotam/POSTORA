@@ -1402,6 +1402,55 @@ Deno.test("a direct credential that the database refuses is not a collection", a
   assertEquals(harness.graphCalls.length, 0);
 });
 
+// Production 2026-11-04 (drain 595878): a direct-login pilot whose permission
+// read was never recorded hit the fence's capability refusal, which the worker
+// reported as storage_error and which stopped the whole run.
+Deno.test("only the fence's capability refusal lets the run go on to the next owner", async () => {
+  const cases = [
+    { failure: "capability_missing", reasonCode: "capability_missing", stoppedEarly: false, completed: 1 },
+    { failure: "rpc_failed", reasonCode: "storage_error", stoppedEarly: true, completed: 0 },
+  ] as const;
+
+  for (const expected of cases) {
+    const unrecorded = createClaimedJob({
+      social_account_id: SECOND_ACCOUNT_ID,
+      target_id: SECOND_ACCOUNT_ID,
+      context: {
+        viewer_social_account_id: SECOND_ACCOUNT_ID,
+        credential_generation: 7,
+        login_kind: "direct",
+        capability_present: true,
+        permission_read_state: "unknown",
+        granted_scopes: [],
+      },
+    });
+
+    const harness = createHarness({
+      store: {
+        jobs: [unrecorded, createClaimedJob()],
+        accounts: {
+          [SECOND_ACCOUNT_ID]: {
+            // The pilot as production held it: a direct capability whose
+            // permission read was never recorded.
+            capability: { loginKind: "direct", scopesAuthoritative: false, grantedScopes: [] },
+            directCredentialFailure: expected.failure,
+          },
+        },
+      },
+    });
+
+    const summary = await runOwnerDrain(harness.ports);
+
+    assertEquals(summary.jobs[0]!.outcome, "abandoned", expected.failure);
+    assertEquals(summary.jobs[0]!.reasonCode, expected.reasonCode, expected.failure);
+    assertEquals(summary.stoppedEarly, expected.stoppedEarly, expected.failure);
+    assertEquals(summary.completed, expected.completed, expected.failure);
+    // The refused job is never settled and never collected: the completion
+    // RPC sits behind the same fence, so it is left to its lease.
+    assertEquals(harness.calls.completes.length, expected.completed, expected.failure);
+  }
+});
+
 Deno.test("a direct-login account without the insights permission is closed with a stable outcome and no provider call", async () => {
   const harness = createHarness({
     store: {

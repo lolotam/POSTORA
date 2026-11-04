@@ -16,6 +16,7 @@ import {
   createOperationBudget,
   exchangeProtectedDirectLogin,
   logProtectedFailure,
+  parseDirectGrantedPermissions,
   protectedFetchJson,
   protectedWebhookSubscribe,
   readMaybeSingle,
@@ -432,6 +433,69 @@ Deno.test("a direct profile id with a control character is not an identity", asy
   if (ok.kind === "ok") {
     assertEquals(ok.canonicalId, "provider-id-123");
     assertEquals(ok.igid, "ig-messaging");
+  }
+});
+
+Deno.test("only a comma-separated permission string is evidence of a grant", () => {
+  const cases: Array<[unknown, string[] | null]> = [
+    [
+      "instagram_business_manage_insights,instagram_business_basic,instagram_business_basic",
+      ["instagram_business_basic", "instagram_business_manage_insights"],
+    ],
+    [" instagram_business_basic , instagram_business_content_publish ", [
+      "instagram_business_basic",
+      "instagram_business_content_publish",
+    ]],
+    [undefined, null],
+    [null, null],
+    [["instagram_business_basic"], null],
+    [{ instagram_business_basic: true }, null],
+    ["", null],
+    ["instagram_business_basic,", null],
+    ["instagram_business_basic;instagram_business_manage_insights", null],
+    ["Instagram_Business_Basic", null],
+  ];
+  for (const [raw, expected] of cases) {
+    assertEquals(parseDirectGrantedPermissions(raw), expected, JSON.stringify(raw));
+  }
+});
+
+Deno.test("the direct exchange reports the granted permissions of the short-lived token", async () => {
+  const cases: Array<[Record<string, unknown>, string[] | null, string]> = [
+    [{ permissions: "instagram_business_basic,instagram_business_manage_insights" }, [
+      "instagram_business_basic",
+      "instagram_business_manage_insights",
+    ], "string"],
+    [{}, null, "missing"],
+    [{ permissions: ["instagram_business_basic"] }, null, "array"],
+  ];
+  for (const [extra, granted, shape] of cases) {
+    const login = await exchangeProtectedDirectLogin({
+      appId: "app",
+      appSecret: "secret",
+      redirectUri: "https://postora.cloud/callback",
+      code: "code-1",
+      fetcher: ((input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.includes("api.instagram.com")) {
+          return Promise.resolve(new Response(JSON.stringify({ access_token: "short", expires_in: 60, ...extra }), { status: 200 }));
+        }
+        if (url.includes("ig_exchange_token")) {
+          // The long-lived exchange never carries grant evidence.
+          return Promise.resolve(new Response(JSON.stringify({ access_token: "long", permissions: "instagram_business_basic" }), { status: 200 }));
+        }
+        return Promise.resolve(new Response(JSON.stringify({
+          id: "provider-id-123",
+          user_id: "ig-messaging",
+          account_type: "BUSINESS",
+        }), { status: 200 }));
+      }) as typeof fetch,
+    });
+    assertEquals(login.kind, "ok", shape);
+    if (login.kind === "ok") {
+      assertEquals(login.grantedPermissions, granted, shape);
+      assertEquals(login.permissionEvidenceShape, shape, shape);
+    }
   }
 });
 

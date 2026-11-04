@@ -489,7 +489,7 @@ async function readTokenResponse(
   init: RequestInit,
   budget: OperationBudget,
   fetcher: typeof fetch | undefined,
-): Promise<{ token: string; expiresIn: number | null }> {
+): Promise<{ token: string; expiresIn: number | null; permissions: unknown }> {
   const response = await protectedFetchJson(url, init, {
     timeoutMs: budget.take(PROTECTED_HTTP_TIMEOUT_MS),
     fetcher,
@@ -502,7 +502,45 @@ async function readTokenResponse(
   }
   const token = stringField(response.body.access_token);
   if (token === null) throw new ProtectedProviderFailure("provider_malformed");
-  return { token, expiresIn: cleanExpirySeconds(response.body.expires_in) };
+  return {
+    token,
+    expiresIn: cleanExpirySeconds(response.body.expires_in),
+    permissions: response.body.permissions,
+  };
+}
+
+const DIRECT_PERMISSION_NAME = /^[a-z][a-z0-9_]{0,127}$/;
+
+/**
+ * The permissions an Instagram Login token exchange reports as granted.
+ *
+ * Meta documents the short-lived token response as carrying "a list of the
+ * permissions granted by the app user" in `permissions`, as one
+ * comma-separated string (Business Login for Instagram, step 2). Only that
+ * shape is evidence. An absent field, another type, an empty list or a
+ * malformed name is NOT a grant set and NOT a denial: it returns null, and
+ * the capability keeps its unknown state.
+ */
+export function parseDirectGrantedPermissions(value: unknown): string[] | null {
+  if (typeof value !== "string") return null;
+  const names = value.split(",").map((name) => name.trim());
+  if (names.some((name) => !DIRECT_PERMISSION_NAME.test(name))) return null;
+  return [...new Set(names)].sort();
+}
+
+export type PermissionEvidenceShape = "string" | "array" | "missing" | "other";
+
+/**
+ * The JSON type the exchange carried in `permissions`, never its values.
+ *
+ * The live response shape of this field is not yet observed, so the callback
+ * logs which type arrived. That is how an unknown capability is told apart
+ * from a field that Meta sends in another shape.
+ */
+export function describePermissionEvidenceShape(value: unknown): PermissionEvidenceShape {
+  if (value === undefined || value === null) return "missing";
+  if (typeof value === "string") return "string";
+  return Array.isArray(value) ? "array" : "other";
 }
 
 export interface ProtectedFacebookGrant {
@@ -659,6 +697,9 @@ export type ProtectedDirectLogin =
     profilePictureUrl: string | null;
     token: string;
     expiresIn: number | null;
+    /** The granted permissions of this exchange, or null when it carried no evidence. */
+    grantedPermissions: string[] | null;
+    permissionEvidenceShape: PermissionEvidenceShape;
   }
   | { kind: "personal" };
 
@@ -741,6 +782,8 @@ export async function exchangeProtectedDirectLogin(input: {
     profilePictureUrl: typeof picture === "string" ? picture : null,
     token: selected.token,
     expiresIn: selected.expiresIn,
+    grantedPermissions: parseDirectGrantedPermissions(shortLived.permissions),
+    permissionEvidenceShape: describePermissionEvidenceShape(shortLived.permissions),
   };
 }
 
