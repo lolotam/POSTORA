@@ -1238,13 +1238,12 @@ Deno.test("an ok total without a value is refused", () => {
   assertEquals(error.code, "INVALID_ROW");
 });
 
-Deno.test("all time starts on the oldest stored day and shows media older than any period", () => {
+Deno.test("all time shows media older than any period", () => {
   const ancient = mediaRow({ mediaId: "ancient", publishedAt: at(400) });
   const input = { mediaSnapshots: [...DISPLAY_MEDIA, ancient], baselineHistory: [...ALL_MEDIA, ancient] };
 
   const report = reportFor("all", input);
   assertEquals(report.period.days, "all");
-  assertEquals(report.period.metricDateStart, "2026-10-10");
   assertEquals(report.period.metricDateEnd, "2026-10-25");
   assertEquals(report.account.daily[0]!.metricDate, "2026-10-10");
   assertEquals(report.period.windowStart, ancient.publishedAt);
@@ -1252,4 +1251,22 @@ Deno.test("all time starts on the oldest stored day and shows media older than a
 
   const year = reportFor(365, input);
   assertEquals(year.media.page.items.some((item) => item.mediaId === "ancient"), false);
+});
+
+// PR #367 review: a capped backfill completes the job while older history
+// days are still uncollected. Starting "all time" on the oldest STORED day
+// then left those days out and the sum looked complete.
+Deno.test("all time spans the whole collected history, so uncollected days count as missing", () => {
+  const cases: { name: string; accountDaily: AccountDailyRow[]; metricDateStart: string }[] = [
+    { name: "history still backfilling", accountDaily: DAILY_ROWS, metricDateStart: "2025-10-26" },
+    {
+      name: "a stored day older than the history",
+      accountDaily: [...DAILY_ROWS, dailyRow("dly-old", "2025-06-01", "2025-06-02T03:00:00.000Z", 80)],
+      metricDateStart: "2025-06-01",
+    },
+  ];
+  for (const { name, accountDaily, metricDateStart } of cases) {
+    const report = reportFor("all", { accountDaily });
+    assertEquals(report.period.metricDateStart, metricDateStart, name);
+  }
 });
