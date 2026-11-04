@@ -3,7 +3,8 @@
 // Graph answers a heavy /posts page (summary edges plus nested attachments)
 // with code 1 "Please reduce the amount of data you're asking for". Posts are
 // therefore read in small pages, and a page that is still too heavy is retried
-// with a smaller limit before the request fails.
+// with a smaller limit before the request fails. A page Graph is still
+// working on when the request times out is retried the same way.
 
 const GRAPH_BASE_URL = "https://graph.facebook.com/v22.0";
 const PAGE_FIELDS = "id,name,username,about,fan_count,picture{url},cover,website,verification_status";
@@ -13,6 +14,9 @@ const POST_FIELDS = "id,message,story,full_picture,created_time,permalink_url," 
 const REEL_FIELDS = "id,description,created_time,thumbnails,permalink_url,likes.summary(true),comments.summary(true),shares";
 const POST_PAGE_SIZES = [25, 10, 5] as const;
 const GRAPH_TIMEOUT_MS = 15_000;
+// Kong closes a function request after 60 s, so every Graph read of one scrape
+// shares this budget and the caller still gets an answer.
+const GRAPH_BUDGET_MS = 45_000;
 const MAX_DETAIL_LENGTH = 500;
 
 // The Graph fields this module reads. Every field is optional because Graph
@@ -35,8 +39,8 @@ type GraphPage = {
   website?: string; verification_status?: string;
 };
 type GraphReply = { status: number; payload: GraphPayload | null };
-/** One scrape's Graph access: the transport, the app token and every form of the credential to redact. */
-type GraphSession = { fetchFn: typeof fetch; accessToken: string; redactions: string[] };
+/** One scrape's Graph access: the transport, the app token, every form of the credential to redact and the budget's end. */
+type GraphSession = { fetchFn: typeof fetch; accessToken: string; redactions: string[]; deadlineMs: number };
 
 /** The message is shown to the user; the detail is the provider reply, for logs only. */
 export class FacebookPublicPageError extends Error {
@@ -45,6 +49,9 @@ export class FacebookPublicPageError extends Error {
     this.name = "FacebookPublicPageError";
   }
 }
+
+/** Graph did not answer before the request's share of the budget ran out. */
+class GraphTimeoutError extends FacebookPublicPageError {}
 
 export function calculateEngagementScore(likes = 0, comments = 0, shares = 0, views = 0): number {
   return Math.round((likes * 1) + (comments * 2) + (shares * 1.5) + (views * 0.1));
@@ -73,15 +80,20 @@ function isGraphPayload(value: unknown): value is GraphPayload {
 
 // Deno's fetch failure message quotes the request URL, which carries the app
 // access token, so a transport failure is rethrown with its error name only.
-async function readGraph(fetchFn: typeof fetch, url: string): Promise<GraphReply> {
+async function readGraph(session: GraphSession, edge: string, url: string): Promise<GraphReply> {
+  const timeoutMs = Math.max(0, Math.min(GRAPH_TIMEOUT_MS, session.deadlineMs - Date.now()));
   let response: Response;
   let text: string;
   try {
-    response = await fetchFn(url, { signal: AbortSignal.timeout(GRAPH_TIMEOUT_MS) });
+    response = await session.fetchFn(url, { signal: AbortSignal.timeout(timeoutMs) });
     text = await response.text();
   } catch (error) {
-    if (!(error instanceof TypeError || (error instanceof DOMException && error.name === "TimeoutError"))) throw error;
-    throw new FacebookPublicPageError("Facebook could not be reached. Try again later.", `Graph request failed: ${error.name}`);
+    if (error instanceof DOMException && error.name === "TimeoutError") {
+      throw new GraphTimeoutError("Facebook could not be reached. Try again later.",
+        `Graph ${edge} request failed: TimeoutError after ${timeoutMs} ms`);
+    }
+    if (!(error instanceof TypeError)) throw error;
+    throw new FacebookPublicPageError("Facebook could not be reached. Try again later.", `Graph ${edge} request failed: ${error.name}`);
   }
   try {
     const parsed: unknown = JSON.parse(text);
@@ -115,12 +127,24 @@ function providerDetail(reply: GraphReply, redactions: string[]): string {
 
 type PostPage = { data: GraphPost[]; paging: GraphPaging | undefined; pageSize: number };
 
-/** Tries each candidate page size, largest first, and reports the one Graph accepted. */
+/**
+ * Tries each candidate page size, largest first, and reports the one Graph
+ * accepted. A size that timed out gives way to the next; the last timeout is
+ * rethrown when no size is left.
+ */
 async function fetchPostPage(session: GraphSession, pageId: string, sizes: number[], after: string | undefined): Promise<PostPage> {
+  let timeout: GraphTimeoutError | null = null;
   for (const pageSize of sizes) {
     const params: Record<string, string> = { fields: POST_FIELDS, limit: String(pageSize) };
     if (after) params.after = after;
-    const reply = await readGraph(session.fetchFn, graphUrl(`${pageId}/posts`, params, session.accessToken));
+    let reply: GraphReply;
+    try {
+      reply = await readGraph(session, `posts limit=${pageSize}`, graphUrl(`${pageId}/posts`, params, session.accessToken));
+    } catch (error) {
+      if (!(error instanceof GraphTimeoutError)) throw error;
+      timeout = error;
+      continue;
+    }
     if (!isFailedReply(reply)) {
       if (!Array.isArray(reply.payload!.data)) {
         throw new FacebookPublicPageError("Facebook returned an invalid response for this Page.", "posts page has no data array");
@@ -131,22 +155,34 @@ async function fetchPostPage(session: GraphSession, pageId: string, sizes: numbe
       throw new FacebookPublicPageError("Facebook posts could not be loaded for this Page.", providerDetail(reply, session.redactions));
     }
   }
+  if (timeout) throw timeout;
   throw new FacebookPublicPageError("Facebook returned too much data for this Page. Try again later.",
     `posts page still too large at limit ${POST_PAGE_SIZES.at(-1)}`);
 }
 
-// A size Graph rejected as too much data is not tried again on later pages.
+// A size Graph rejected as too much data, or did not answer in time, is not
+// tried again on later pages.
 function pageSizesFor(wanted: number, largestAccepted: number): number[] {
   return [...new Set(POST_PAGE_SIZES.filter((size) => size <= largestAccepted).map((size) => Math.min(size, wanted)))];
 }
 
-/** Pages follow Graph's own `after` cursor, never a provider-supplied URL. */
+/**
+ * Pages follow Graph's own `after` cursor, never a provider-supplied URL.
+ * Once some posts are read, a later page that times out ends the reading:
+ * the analysis keeps the posts it has instead of failing as a whole.
+ */
 async function fetchPosts(session: GraphSession, pageId: string, maxPosts: number): Promise<GraphPost[]> {
   const posts: GraphPost[] = [];
   let after: string | undefined;
   let largestAccepted: number = POST_PAGE_SIZES[0];
   while (posts.length < maxPosts) {
-    const page = await fetchPostPage(session, pageId, pageSizesFor(maxPosts - posts.length, largestAccepted), after);
+    let page: PostPage;
+    try {
+      page = await fetchPostPage(session, pageId, pageSizesFor(maxPosts - posts.length, largestAccepted), after);
+    } catch (error) {
+      if (error instanceof GraphTimeoutError && posts.length > 0) break;
+      throw error;
+    }
     largestAccepted = page.pageSize;
     const data = page.data;
     posts.push(...data);
@@ -225,7 +261,7 @@ function mapReel(reel: GraphReel) {
 async function fetchReels(session: GraphSession, pageId: string): Promise<GraphReel[]> {
   let reply: GraphReply;
   try {
-    reply = await readGraph(session.fetchFn, graphUrl(`${pageId}/video_reels`, { fields: REEL_FIELDS, limit: "25" }, session.accessToken));
+    reply = await readGraph(session, "video_reels", graphUrl(`${pageId}/video_reels`, { fields: REEL_FIELDS, limit: "25" }, session.accessToken));
   } catch (error) {
     if (error instanceof FacebookPublicPageError) return [];
     throw error;
@@ -253,8 +289,13 @@ export async function scrapeFacebookPublicPage(input: {
   pageIdentifier: string; appId: string; appSecret: string; maxPosts: number; fetchFn?: typeof fetch;
 }) {
   const accessToken = `${input.appId}|${input.appSecret}`;
-  const session: GraphSession = { fetchFn: input.fetchFn ?? fetch, accessToken, redactions: credentialForms(accessToken, input.appSecret) };
-  const pageReply = await readGraph(session.fetchFn, graphUrl(encodeURIComponent(input.pageIdentifier), { fields: PAGE_FIELDS }, accessToken));
+  const session: GraphSession = {
+    fetchFn: input.fetchFn ?? fetch,
+    accessToken,
+    redactions: credentialForms(accessToken, input.appSecret),
+    deadlineMs: Date.now() + GRAPH_BUDGET_MS,
+  };
+  const pageReply = await readGraph(session, "page", graphUrl(encodeURIComponent(input.pageIdentifier), { fields: PAGE_FIELDS }, accessToken));
   if (isFailedReply(pageReply)) {
     const message = isPageMissing(pageReply) ? "Facebook Page not found." : "Facebook Page could not be loaded. Try again later.";
     throw new FacebookPublicPageError(message, providerDetail(pageReply, session.redactions));
