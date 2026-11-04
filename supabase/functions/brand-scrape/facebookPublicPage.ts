@@ -78,6 +78,11 @@ function isGraphPayload(value: unknown): value is GraphPayload {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+/** A Graph node this module can map: an object with a string id. */
+function isGraphNode(value: unknown): value is { id: string } {
+  return isGraphPayload(value) && typeof value.id === "string" && value.id !== "";
+}
+
 // Deno's fetch failure message quotes the request URL, which carries the app
 // access token, so a transport failure is rethrown with its error name only.
 async function readGraph(session: GraphSession, edge: string, url: string): Promise<GraphReply> {
@@ -125,18 +130,28 @@ function providerDetail(reply: GraphReply, redactions: string[]): string {
   return redacted.slice(0, MAX_DETAIL_LENGTH);
 }
 
-type PostPage = { data: GraphPost[]; paging: GraphPaging | undefined; pageSize: number };
+/** `tier` is the configured page size Graph accepted, before the request was clamped to the posts still wanted. */
+type PostPage = { data: GraphPost[]; paging: GraphPaging | undefined; tier: number };
 
 /**
- * Tries each candidate page size, largest first, and reports the one Graph
- * accepted. A size that timed out gives way to the next; the last timeout is
- * rethrown when no size is left.
+ * Tries each candidate tier, largest first, and reports the one Graph
+ * accepted. Each request asks for the tier or the posts still wanted,
+ * whichever is fewer. A tier that timed out gives way to the next; the last
+ * timeout is rethrown when no tier is left.
  */
-async function fetchPostPage(session: GraphSession, pageId: string, sizes: number[], after: string | undefined): Promise<PostPage> {
+async function fetchPostPage(
+  session: GraphSession,
+  pageId: string,
+  request: { tiers: number[]; wanted: number; after: string | undefined },
+): Promise<PostPage> {
   let timeout: GraphTimeoutError | null = null;
-  for (const pageSize of sizes) {
+  const triedLimits = new Set<number>();
+  for (const tier of request.tiers) {
+    const pageSize = Math.min(tier, request.wanted);
+    if (triedLimits.has(pageSize)) continue;
+    triedLimits.add(pageSize);
     const params: Record<string, string> = { fields: POST_FIELDS, limit: String(pageSize) };
-    if (after) params.after = after;
+    if (request.after) params.after = request.after;
     let reply: GraphReply;
     try {
       reply = await readGraph(session, `posts limit=${pageSize}`, graphUrl(`${pageId}/posts`, params, session.accessToken));
@@ -149,7 +164,7 @@ async function fetchPostPage(session: GraphSession, pageId: string, sizes: numbe
       if (!Array.isArray(reply.payload!.data)) {
         throw new FacebookPublicPageError("Facebook returned an invalid response for this Page.", "posts page has no data array");
       }
-      return { data: reply.payload!.data as GraphPost[], paging: reply.payload!.paging, pageSize };
+      return { data: reply.payload!.data.filter(isGraphNode) as GraphPost[], paging: reply.payload!.paging, tier };
     }
     if (!isTooMuchData(reply)) {
       throw new FacebookPublicPageError("Facebook posts could not be loaded for this Page.", providerDetail(reply, session.redactions));
@@ -160,10 +175,10 @@ async function fetchPostPage(session: GraphSession, pageId: string, sizes: numbe
     `posts page still too large at limit ${POST_PAGE_SIZES.at(-1)}`);
 }
 
-// A size Graph rejected as too much data, or did not answer in time, is not
+// A tier Graph rejected as too much data, or did not answer in time, is not
 // tried again on later pages.
-function pageSizesFor(wanted: number, largestAccepted: number): number[] {
-  return [...new Set(POST_PAGE_SIZES.filter((size) => size <= largestAccepted).map((size) => Math.min(size, wanted)))];
+function tiersFrom(largestAccepted: number): number[] {
+  return POST_PAGE_SIZES.filter((size) => size <= largestAccepted);
 }
 
 /**
@@ -183,14 +198,14 @@ async function fetchPosts(
   while (posts.length < maxPosts) {
     let page: PostPage;
     try {
-      page = await fetchPostPage(session, pageId, pageSizesFor(maxPosts - posts.length, largestAccepted), after);
+      page = await fetchPostPage(session, pageId, { tiers: tiersFrom(largestAccepted), wanted: maxPosts - posts.length, after });
     } catch (error) {
       if (error instanceof GraphTimeoutError && posts.length > 0) {
         return { posts: posts.slice(0, maxPosts), stoppedBy: error.detail };
       }
       throw error;
     }
-    largestAccepted = page.pageSize;
+    largestAccepted = page.tier;
     const data = page.data;
     posts.push(...data);
     const previousAfter = after;
@@ -273,7 +288,7 @@ async function fetchReels(session: GraphSession, pageId: string): Promise<GraphR
     if (error instanceof FacebookPublicPageError) return [];
     throw error;
   }
-  return isFailedReply(reply) || !Array.isArray(reply.payload!.data) ? [] : reply.payload!.data as GraphReel[];
+  return isFailedReply(reply) || !Array.isArray(reply.payload!.data) ? [] : reply.payload!.data.filter(isGraphNode) as GraphReel[];
 }
 
 function mapProfile(pageData: GraphPage, pageIdentifier: string, postsCount: number) {
@@ -306,6 +321,9 @@ export async function scrapeFacebookPublicPage(input: {
   if (isFailedReply(pageReply)) {
     const message = isPageMissing(pageReply) ? "Facebook Page not found." : "Facebook Page could not be loaded. Try again later.";
     throw new FacebookPublicPageError(message, providerDetail(pageReply, session.redactions));
+  }
+  if (!isGraphNode(pageReply.payload)) {
+    throw new FacebookPublicPageError("Facebook returned an invalid response for this Page.", "page reply has no id");
   }
   const pageData = pageReply.payload as GraphPage;
 

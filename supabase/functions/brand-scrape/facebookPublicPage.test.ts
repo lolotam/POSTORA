@@ -73,6 +73,31 @@ Deno.test("a later posts page that times out keeps the posts already read", asyn
   assertEquals(report.readingStoppedBy?.includes("posts limit=5 request failed: TimeoutError"), true);
 });
 
+// PR #372 review: a clamped tail request (3 posts still wanted) was recorded
+// as the accepted size, so a short page with a next cursor left no size to try.
+Deno.test("a short tail page with a next cursor keeps reading the posts still wanted", async () => {
+  const { fetchFn, postRequests } = graph({
+    posts: (url) => {
+      const after = url.searchParams.get("after");
+      if (after === null) return json({ data: posts(0, 25), paging: { cursors: { after: "page_2" }, next: "https://graph.facebook.com/next" } });
+      if (after === "page_2") return json({ data: posts(25, 2), paging: { cursors: { after: "page_3" }, next: "https://graph.facebook.com/next" } });
+      return json({ data: posts(27, 1) });
+    },
+  });
+  const report = await scrapeFacebookPublicPage({ ...APP, pageIdentifier: "synthetic", maxPosts: 28, fetchFn });
+  assertEquals(postRequests.map((url) => url.searchParams.get("limit")), ["25", "3", "1"]);
+  assertEquals(report.posts.length, 28);
+});
+
+Deno.test("Graph items without an id are skipped instead of failing the analysis", async () => {
+  const { fetchFn } = graph({
+    posts: () => json({ data: [null, post(1), { message: "no id" }] }),
+    reels: () => json({ data: [null, { id: "reel_1" }] }),
+  });
+  const report = await scrapeFacebookPublicPage({ ...APP, pageIdentifier: "synthetic", maxPosts: 10, fetchFn });
+  assertEquals(report.posts.map((item) => item.id), ["777_1", "reel_1"]);
+});
+
 Deno.test("a reels reply that is not a JSON object leaves the posts analysis intact", async () => {
   const { fetchFn } = graph({ posts: () => json({ data: posts(0, 3) }), reels: () => json(1) });
   const report = await scrapeFacebookPublicPage({ ...APP, pageIdentifier: "synthetic", maxPosts: 10, fetchFn });
@@ -87,6 +112,8 @@ Deno.test("provider failures reach the caller as a short message with the provid
       message: "Facebook Page could not be loaded. Try again later.", detail: "503" },
     { name: "page reply is not an object", routes: { page: () => json(1), posts: () => json({ data: [] }) },
       message: "Facebook Page could not be loaded. Try again later.", detail: "HTTP 200" },
+    { name: "page reply without an id", routes: { page: () => json({ name: "Synthetic Page" }), posts: () => json({ data: [] }) },
+      message: "Facebook returned an invalid response for this Page.", detail: "page reply has no id" },
     { name: "posts reply without a data array", routes: { posts: () => json({}) },
       message: "Facebook returned an invalid response for this Page.", detail: "no data array" },
     // Graph may echo the request URL, where the token is query-encoded.
