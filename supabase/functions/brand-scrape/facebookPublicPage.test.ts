@@ -4,6 +4,7 @@ import { FacebookPublicPageError, scrapeFacebookPublicPage } from "./facebookPub
 const APP = { appId: "synthetic-app", appSecret: "synthetic-app-secret" };
 const PAGE = { id: "777", name: "Synthetic Page", username: "synthetic", fan_count: 1200 };
 const TOO_MUCH_DATA = { error: { code: 1, message: "Please reduce the amount of data you're asking for, then retry your request" } };
+const timedOut = (): Response => { throw new DOMException("Signal timed out.", "TimeoutError"); };
 const json = (payload: unknown, status = 200) => new Response(JSON.stringify(payload), { status, headers: { "content-type": "application/json" } });
 const post = (id: number) => ({ id: `777_${id}`, message: `post ${id}`, created_time: "2026-11-01T00:00:00+0000",
   likes: { summary: { total_count: 1 } }, comments: { summary: { total_count: 1 } }, reactions: { summary: { total_count: 2 } } });
@@ -31,26 +32,70 @@ Deno.test("posts are read in small pages through the after cursor up to the post
   });
   const report = await scrapeFacebookPublicPage({ ...APP, pageIdentifier: "synthetic", maxPosts: 30, fetchFn });
   assertEquals(postRequests.map((url) => [url.searchParams.get("limit"), url.searchParams.get("after")]), [["25", null], ["5", "page_2"]]);
+  assertEquals(report.readingStoppedBy, null);
   assertEquals(report.posts.length, 31);
   assertEquals(report.posts.at(-1)!.id, "reel_1");
   assertEquals(report.profile.postsCount, 31);
   assertEquals(report.profile.followersCount, 1200);
 });
 
-// Production 2026-11-04: Analyze @cocacola failed because one 100-post page
-// carrying summary edges was rejected with Graph code 1.
-Deno.test("a page size Graph rejects as too much data is not tried again on later pages", async () => {
-  const { fetchFn, postRequests } = graph({
-    posts: (url) => {
-      if (url.searchParams.get("limit") === "25") return json(TOO_MUCH_DATA, 500);
-      return url.searchParams.has("after")
-        ? json({ data: posts(10, 5) })
-        : json({ data: posts(0, 10), paging: { cursors: { after: "page_2" }, next: "https://graph.facebook.com/next" } });
-    },
+// Production 2026-11-04: Analyze @cocacola failed twice. First one 100-post
+// page carrying summary edges was rejected with Graph code 1; after the fix a
+// 25-post page did not answer within the request timeout.
+Deno.test("a page size Graph refuses or does not answer in time is not tried again on later pages", async () => {
+  const refusals: { name: string; refuse: Route }[] = [
+    { name: "too much data", refuse: () => json(TOO_MUCH_DATA, 500) },
+    { name: "timed out", refuse: timedOut },
+  ];
+  for (const { name, refuse } of refusals) {
+    const { fetchFn, postRequests } = graph({
+      posts: (url) => {
+        if (url.searchParams.get("limit") === "25") return refuse(url);
+        return url.searchParams.has("after")
+          ? json({ data: posts(10, 5) })
+          : json({ data: posts(0, 10), paging: { cursors: { after: "page_2" }, next: "https://graph.facebook.com/next" } });
+      },
+    });
+    const report = await scrapeFacebookPublicPage({ ...APP, pageIdentifier: "cocacola", maxPosts: 100, fetchFn });
+    assertEquals(postRequests.map((url) => url.searchParams.get("limit")), ["25", "10", "10"], name);
+    assertEquals(report.posts.length, 15, name);
+  }
+});
+
+Deno.test("a later posts page that times out keeps the posts already read", async () => {
+  const { fetchFn } = graph({
+    posts: (url) => url.searchParams.has("after")
+      ? timedOut()
+      : json({ data: posts(0, 25), paging: { cursors: { after: "page_2" }, next: "https://graph.facebook.com/next" } }),
   });
   const report = await scrapeFacebookPublicPage({ ...APP, pageIdentifier: "cocacola", maxPosts: 100, fetchFn });
-  assertEquals(postRequests.map((url) => url.searchParams.get("limit")), ["25", "10", "10"]);
-  assertEquals(report.posts.length, 15);
+  assertEquals(report.posts.length, 25);
+  assertEquals(report.readingStoppedBy?.includes("posts limit=5 request failed: TimeoutError"), true);
+});
+
+// PR #372 review: a clamped tail request (3 posts still wanted) was recorded
+// as the accepted size, so a short page with a next cursor left no size to try.
+Deno.test("a short tail page with a next cursor keeps reading the posts still wanted", async () => {
+  const { fetchFn, postRequests } = graph({
+    posts: (url) => {
+      const after = url.searchParams.get("after");
+      if (after === null) return json({ data: posts(0, 25), paging: { cursors: { after: "page_2" }, next: "https://graph.facebook.com/next" } });
+      if (after === "page_2") return json({ data: posts(25, 2), paging: { cursors: { after: "page_3" }, next: "https://graph.facebook.com/next" } });
+      return json({ data: posts(27, 1) });
+    },
+  });
+  const report = await scrapeFacebookPublicPage({ ...APP, pageIdentifier: "synthetic", maxPosts: 28, fetchFn });
+  assertEquals(postRequests.map((url) => url.searchParams.get("limit")), ["25", "3", "1"]);
+  assertEquals(report.posts.length, 28);
+});
+
+Deno.test("Graph items without an id are skipped instead of failing the analysis", async () => {
+  const { fetchFn } = graph({
+    posts: () => json({ data: [null, post(1), { message: "no id" }] }),
+    reels: () => json({ data: [null, { id: "reel_1" }] }),
+  });
+  const report = await scrapeFacebookPublicPage({ ...APP, pageIdentifier: "synthetic", maxPosts: 10, fetchFn });
+  assertEquals(report.posts.map((item) => item.id), ["777_1", "reel_1"]);
 });
 
 Deno.test("a reels reply that is not a JSON object leaves the posts analysis intact", async () => {
@@ -67,6 +112,8 @@ Deno.test("provider failures reach the caller as a short message with the provid
       message: "Facebook Page could not be loaded. Try again later.", detail: "503" },
     { name: "page reply is not an object", routes: { page: () => json(1), posts: () => json({ data: [] }) },
       message: "Facebook Page could not be loaded. Try again later.", detail: "HTTP 200" },
+    { name: "page reply without an id", routes: { page: () => json({ name: "Synthetic Page" }), posts: () => json({ data: [] }) },
+      message: "Facebook returned an invalid response for this Page.", detail: "page reply has no id" },
     { name: "posts reply without a data array", routes: { posts: () => json({}) },
       message: "Facebook returned an invalid response for this Page.", detail: "no data array" },
     // Graph may echo the request URL, where the token is query-encoded.
@@ -74,6 +121,8 @@ Deno.test("provider failures reach the caller as a short message with the provid
       message: "Facebook posts could not be loaded for this Page.", detail: "[redacted]" },
     { name: "posts refused", routes: { posts: () => json({ error: { code: 10, message: "Permission denied" } }, 403) },
       message: "Facebook posts could not be loaded for this Page.", detail: "Permission denied" },
+    { name: "posts time out at every size", routes: { posts: timedOut },
+      message: "Facebook could not be reached. Try again later.", detail: "posts limit=5" },
     { name: "still too large", routes: { posts: () => json(TOO_MUCH_DATA, 500) },
       message: "Facebook returned too much data for this Page. Try again later.", detail: "limit 5" },
     { name: "provider echoes the token", routes: { posts: (url) => json({ error: { code: 190, message: `bad token ${url.searchParams.get("access_token")}` } }, 400) },
