@@ -278,6 +278,11 @@ export interface FakeStoreOptions {
   /** The stored status of a day that HAS a row; `ok` by default. */
   readonly dayStatus?: Readonly<Record<string, OwnerAccountDayRow["status"]>>;
   /**
+   * When a stored day's row was first written. A day without an entry was
+   * written long before any capture day of the suite.
+   */
+  readonly dayCapturedAt?: Readonly<Record<string, string>>;
+  /**
    * The periods whose total for the last closed day is NOT stored.
    *
    * The default is none: every period is stored, so a job owes no period.
@@ -663,7 +668,7 @@ export function createFakeStore(options: FakeStoreOptions & {
       const account = accountOf(input.socialAccountId);
       if (account.hangOn === "accountDays") return await hang();
       if (account.failOn === "accountDays") throw new Error("the history read failed");
-      return storedHistory(input.days, account.missingDays, account.dayStatus);
+      return storedHistory(input.days, account.missingDays, account.dayStatus, account.dayCapturedAt);
     },
 
     async readOwnerPeriodTotals(input) {
@@ -784,6 +789,9 @@ export function createFakeStore(options: FakeStoreOptions & {
   return { store, calls };
 }
 
+/** The first write of a row that predates every capture day of the suite. */
+const LONG_AGO = "2025-01-01T00:00:00.000Z";
+
 /**
  * The stored rows of the asked days.
  *
@@ -794,12 +802,17 @@ function storedHistory(
   days: readonly string[],
   missingDays: readonly string[] | "all" | undefined,
   dayStatus: Readonly<Record<string, OwnerAccountDayRow["status"]>> | undefined,
+  dayCapturedAt: Readonly<Record<string, string>> | undefined,
 ): OwnerAccountDayRow[] {
   if (missingDays === "all") return [];
   const missing = new Set(missingDays ?? []);
   return days
     .filter((day) => !missing.has(day))
-    .map((day) => ({ metricDate: day, status: dayStatus?.[day] ?? "ok" }));
+    .map((day) => ({
+      metricDate: day,
+      status: dayStatus?.[day] ?? "ok",
+      capturedAt: dayCapturedAt?.[day] ?? LONG_AGO,
+    }));
 }
 
 /** The stored period totals of the asked periods. */
@@ -1136,6 +1149,8 @@ export function createPersistingStore(options: PersistingStoreOptions): {
 
   /** The history days without a row; a written day leaves the set. */
   const missingDays = new Set(options.missingDays ?? []);
+  /** When each formerly missing day was first written. */
+  const firstWrittenAt = new Map<string, string>();
   /** The periods without a total; a written period leaves the set. */
   const missingPeriods = new Set(options.missingPeriods ?? []);
   const periodTotals: OwnerPeriodTotalPayload[] = [];
@@ -1266,7 +1281,7 @@ export function createPersistingStore(options: PersistingStoreOptions): {
     },
 
     async readOwnerAccountDays(input) {
-      return storedHistory(input.days, [...missingDays], undefined);
+      return storedHistory(input.days, [...missingDays], undefined, Object.fromEntries(firstWrittenAt));
     },
 
     async readOwnerPeriodTotals(input) {
@@ -1302,8 +1317,11 @@ export function createPersistingStore(options: PersistingStoreOptions): {
           const queryKind = item.query_kind;
           if (typeof providerDate !== "string" || typeof queryKind !== "string") continue;
           operations.set(`account_day:${providerDate}:${queryKind}`, "success");
-          // The written day has a row now, ok or unavailable.
-          missingDays.delete(providerDate);
+          // The written day has a row now, ok or unavailable. The accepted
+          // upsert keeps the first write's captured_at.
+          if (missingDays.delete(providerDate)) {
+            firstWrittenAt.set(providerDate, new Date(options.now()).toISOString());
+          }
         }
       }
 

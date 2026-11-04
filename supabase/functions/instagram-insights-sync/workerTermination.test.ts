@@ -444,30 +444,30 @@ function daysBack(newest: string, count: number): string[] {
 }
 
 /**
- * A year without any stored day converges across visits.
+ * A year without any stored day is paced across capture days.
  *
- * The capture's own two days are owed by the daily capture; the other 363
- * days of the year are backfilled ten per visit, so the job needs
- * ceil(363 / 10) visits and completes on the last one, inside the
- * continuation window.
+ * The capture's own two days are owed by the daily capture. Of the other
+ * 363 days, ONE capture day backfills at most 60, five per visit, newest
+ * first: the job needs 60 / 5 = 12 visits, completes on the last one, and
+ * leaves the rest to the next capture days. Every day is asked for once.
  */
-Deno.test("a year of missing days is backfilled in ceil(363/10) visits and the job completes", async () => {
+Deno.test("a year of missing days backfills sixty days on one capture day, each day once", async () => {
   const missing = daysBack("2026-10-25", 363);
   const harness = createHarness({ missingDays: missing });
 
-  const visits = Math.ceil(missing.length / 10);
-  assertEquals(visits, 37);
+  const summaries = await runVisits(harness, { visits: 13, stepMs: 2 * 60_000 });
 
-  const summaries = await runVisits(harness, { visits, stepMs: 2 * 60_000 });
-
-  // Every visit but the last one left the job claimable.
-  for (const summary of summaries.slice(0, -1)) {
+  for (const summary of summaries.slice(0, 11)) {
     assertEquals(summary.partial, 1);
     assertEquals(summary.completed, 0);
   }
-  assertEquals(summaries.at(-1)!.completed, 1);
+  assertEquals(summaries[11]!.completed, 1);
   assertEquals(harness.state.status(), "completed");
+  // The visit after the completion claims nothing and asks for nothing.
+  assertEquals(summaries[12]!.claimed, 0);
 
-  // No day of the year is missing any more.
-  assertEquals(harness.state.missingDays(), []);
+  // The sixty newest missing days are stored; the older ones wait.
+  assertEquals(harness.state.missingDays(), missing.slice(60));
+  const dayCalls = harness.graphCalls.filter((call) => call === "accountDay").length;
+  assertEquals(dayCalls, 2 + 60);
 });

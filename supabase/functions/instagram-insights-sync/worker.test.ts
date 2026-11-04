@@ -1942,14 +1942,14 @@ function writtenDays(calls: Harness["calls"]): string[] {
     .map((entry) => entry.items[0]!.provider_date as string);
 }
 
-Deno.test("a missing history is backfilled newest first, ten days per visit", async () => {
+Deno.test("a missing history is backfilled newest first, five days per visit", async () => {
   const harness = createHarness({
     store: { jobs: [createClaimedJob()], missingDays: "all" },
   });
 
   await runOwnerDrain(harness.ports);
 
-  // The daily capture's own days come first, then the ten newest missing
+  // The daily capture's own days come first, then the five newest missing
   // days of the history.
   assertEquals(writtenDays(harness.calls), [
     TEST_PRIMARY_DAY,
@@ -1959,11 +1959,6 @@ Deno.test("a missing history is backfilled newest first, ten days per visit", as
     "2026-10-23",
     "2026-10-22",
     "2026-10-21",
-    "2026-10-20",
-    "2026-10-19",
-    "2026-10-18",
-    "2026-10-17",
-    "2026-10-16",
   ]);
 
   // The history read asks for a year of closed days, newest first, ending
@@ -2172,4 +2167,126 @@ Deno.test("a stored period is not asked for again", async () => {
 
   assertEquals(harness.calls.periodTotals, []);
   assertEquals(harness.graphUrls.filter((url) => url.includes("metric=reach&")).length, 0);
+});
+
+// ---------------------------------------------------------------------------
+// The backfill pacing
+// ---------------------------------------------------------------------------
+
+/** `count` consecutive dates, newest first, starting on `newest`. */
+function datesFrom(newest: string, count: number): string[] {
+  const start = Date.parse(`${newest}T00:00:00.000Z`);
+  return Array.from(
+    { length: count },
+    (_unused, index) => new Date(start - index * 86_400_000).toISOString().slice(0, 10),
+  );
+}
+
+Deno.test("the backfill of one account stops at the daily cap and the job is not kept partial for it", async () => {
+  // 58 history days were first written on this capture day already: two
+  // more fit under the cap of 60.
+  const writtenToday = Object.fromEntries(
+    datesFrom("2026-08-31", 58).map((day) => [day, "2026-10-28T08:00:00.000Z"]),
+  );
+  const harness = createHarness({
+    store: {
+      jobs: [createClaimedJob()],
+      missingDays: datesFrom("2026-10-25", 10),
+      dayCapturedAt: writtenToday,
+    },
+  });
+
+  await runOwnerDrain(harness.ports);
+
+  assertEquals(writtenDays(harness.calls), [
+    TEST_PRIMARY_DAY,
+    TEST_CORRECTION_DAY,
+    "2026-10-25",
+    "2026-10-24",
+  ]);
+  // The other eight days wait for the next capture day: the job completes.
+  assertEquals(harness.calls.completes, [{ outcome: "completed", reasonCode: null }]);
+});
+
+Deno.test("a day written before this capture day does not count against today's cap", async () => {
+  const writtenYesterday = Object.fromEntries(
+    datesFrom("2026-08-31", 58).map((day) => [day, "2026-10-27T20:59:59.000Z"]),
+  );
+  const harness = createHarness({
+    store: {
+      jobs: [createClaimedJob()],
+      missingDays: datesFrom("2026-10-25", 10),
+      dayCapturedAt: writtenYesterday,
+    },
+  });
+
+  await runOwnerDrain(harness.ports);
+
+  // A full slice of five: 20:59:59Z on the 27th is still the 27th in Kuwait.
+  assertEquals(writtenDays(harness.calls).length, 2 + 5);
+});
+
+Deno.test("a high shared usage defers the backfill and keeps the capture", async () => {
+  const harness = createHarness({
+    store: {
+      jobs: [createClaimedJob()],
+      missingDays: "all",
+      bucket: { usagePercent: 50, throttledUntil: null },
+    },
+  });
+
+  await runOwnerDrain(harness.ports);
+
+  // The capture's own days are collected; no backfill day is asked for.
+  assertEquals(writtenDays(harness.calls), [TEST_PRIMARY_DAY, TEST_CORRECTION_DAY]);
+  // The deferred history does not keep the job partial.
+  assertEquals(harness.calls.completes, [{ outcome: "completed", reasonCode: null }]);
+});
+
+Deno.test("an answered day is never asked for again", async () => {
+  const harness = createHarness({
+    store: { jobs: [createClaimedJob()], missingDays: ["2026-06-01"] },
+  });
+
+  await runOwnerDrain(harness.ports);
+
+  // A year is stored but one day: only that day is fetched for the history.
+  assertEquals(writtenDays(harness.calls), [TEST_PRIMARY_DAY, TEST_CORRECTION_DAY, "2026-06-01"]);
+  const dayCalls = harness.graphUrls.filter((url) =>
+    url.includes("metric_type=total_value") && !url.includes("metric=reach&")
+  );
+  assertEquals(dayCalls.length, 3);
+});
+
+// ---------------------------------------------------------------------------
+// The rejected credential
+// ---------------------------------------------------------------------------
+
+Deno.test("a rejected credential ends the job without a retry", async () => {
+  const backfillDay = "2026-10-25";
+  for (
+    const graph of [
+      { profile: { error: { code: 190, message: "Error validating access token" } } },
+      {
+        accountDays: {
+          [TEST_PRIMARY_DAY]: accountDayAnswer({ reach: 450, views: 890 }),
+          [TEST_CORRECTION_DAY]: accountDayAnswer({ reach: 400, views: 800 }),
+          [backfillDay]: { error: { code: 190, message: "Error validating access token" } },
+        },
+      },
+    ]
+  ) {
+    const harness = createHarness({
+      store: { jobs: [createClaimedJob()], missingDays: [backfillDay] },
+      graph,
+    });
+
+    const summary = await runOwnerDrain(harness.ports);
+
+    assertEquals(harness.calls.completes, [{ outcome: "unavailable", reasonCode: "token_invalid" }]);
+    assertEquals(summary.retried, 0);
+    // A rejected credential is not a refusal of the day: the day is not
+    // closed as unavailable.
+    assertEquals(writtenDays(harness.calls).includes(backfillDay), false);
+  }
 });

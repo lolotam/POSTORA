@@ -417,6 +417,14 @@ export function classifyOwnerGraphError(
     );
   }
 
+  // An HTTP 401 is an authentication refusal whatever the envelope says.
+  if (httpStatus === 401) {
+    return new OwnerProviderError(
+      "The provider rejected the credential.",
+      { ...options, kind: "token_invalid" },
+    );
+  }
+
   if (code !== null && PERMISSION_ERROR_CODES.has(code)) {
     // A permission refusal is the provider's own signal that this
     // credential cannot read this data. It is not a transport failure and it

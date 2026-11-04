@@ -1209,8 +1209,8 @@ Deno.test("the history is read owner-scoped and in bounded chunks", async () => 
   const days = closedDays(365);
   const { store, calls } = createStore(() => ({ data: null, error: null }), {
     mediaRows: [
-      { metric_date: "2026-10-27", status: "ok" },
-      { metric_date: "2026-10-26", status: "unavailable" },
+      { metric_date: "2026-10-27", status: "ok", captured_at: "2026-10-28T09:00:00+00:00" },
+      { metric_date: "2026-10-26", status: "unavailable", captured_at: "2026-10-27T09:00:00+00:00" },
     ],
   });
 
@@ -1232,18 +1232,23 @@ Deno.test("the history is read owner-scoped and in bounded chunks", async () => 
 
   // The double answers the same two rows for each chunk.
   assertEquals(rows.slice(0, 2), [
-    { metricDate: "2026-10-27", status: "ok" },
-    { metricDate: "2026-10-26", status: "unavailable" },
+    { metricDate: "2026-10-27", status: "ok", capturedAt: "2026-10-28T09:00:00+00:00" },
+    { metricDate: "2026-10-26", status: "unavailable", capturedAt: "2026-10-27T09:00:00+00:00" },
   ]);
+  // The first write of each row is read too: the daily backfill cap is
+  // counted from it.
+  assertEquals(calls[0]!.args.columns, "metric_date, status, captured_at");
 });
 
 Deno.test("a history row that does not answer the read is refused", async () => {
   for (
     const row of [
-      { metric_date: "2026-01-01", status: "ok" },
-      { metric_date: "2026-10-27", status: "done" },
-      { metric_date: "not a date", status: "ok" },
-      { status: "ok" },
+      { metric_date: "2026-01-01", status: "ok", captured_at: "2026-10-28T09:00:00+00:00" },
+      { metric_date: "2026-10-27", status: "done", captured_at: "2026-10-28T09:00:00+00:00" },
+      { metric_date: "not a date", status: "ok", captured_at: "2026-10-28T09:00:00+00:00" },
+      { status: "ok", captured_at: "2026-10-28T09:00:00+00:00" },
+      { metric_date: "2026-10-27", status: "ok" },
+      { metric_date: "2026-10-27", status: "ok", captured_at: "yesterday" },
     ]
   ) {
     const { store } = createStore(() => ({ data: null, error: null }), { mediaRows: [row] });

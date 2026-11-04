@@ -266,12 +266,34 @@ export const ACCOUNT_DAY_HISTORY_DAYS = 365;
 /**
  * The missing closed days ONE visit backfills at most, newest first.
  *
- * The backfill shares the per-visit budget with the primary and correction
- * days, the profile and the media continuation. A job that still owes days
- * ends `partial` and is continued a minute later, so a year of history
- * arrives over a few dozen visits instead of in one visit that cannot fit.
+ * Each backfill day is one Graph call. A run claims up to 25 owner jobs, so
+ * five per visit keeps the backfill of a whole run at or under 125 calls on
+ * top of the capture's own calls, and leaves the shared 40 second budget to
+ * the primary and correction days, which are always planned first.
  */
-export const ACCOUNT_DAYS_BACKFILL_PER_VISIT = 10;
+export const ACCOUNT_DAYS_BACKFILL_PER_VISIT = 5;
+
+/**
+ * The missing closed days ONE account backfills per Kuwait capture day.
+ *
+ * This is the cap that spreads the catch-up: an account with no history
+ * gets 60 days a day, so its 363 missing days fill over about a week
+ * instead of in one burst on the day the backfill is deployed, for every
+ * owner at once. It is counted from the rows the store holds - the days
+ * whose row was first written on this capture day - so a re-run, a second
+ * job or a resumed visit can never exceed it.
+ */
+export const ACCOUNT_DAYS_BACKFILL_PER_DAY = 60;
+
+/**
+ * The shared usage at which the backfill waits for another day.
+ *
+ * The capture itself stops at `USAGE_STOP_PERCENT`. The backfill is the
+ * work that can wait, so it backs off much earlier: at half the budget the
+ * credential's calls are left to the primary and correction days, the
+ * profile and the media of the accounts that share it.
+ */
+export const BACKFILL_USAGE_CEILING_PERCENT = 50;
 
 /**
  * The day tokens one visit can hold in the queue: the primary day, the
@@ -836,8 +858,15 @@ interface OwnerVisitState {
    * such a day may be closed as unavailable when the provider refuses it.
    */
   backfillDays: string[];
-  /** The missing closed days of the history that this visit did not plan. */
+  /**
+   * The missing closed days this capture day can still backfill after this
+   * visit. A day the daily cap or the usage ceiling holds back is not
+   * counted: it waits for the next capture day, and the job is not kept
+   * partial for it.
+   */
   backfillRemaining: number;
+  /** The usage the shared throttle bucket reported before this visit. */
+  bucketUsagePercent: number;
   /** The job's last closed Kuwait day: the end of every period it owes. */
   lastClosedDay: string;
   /** The periods whose exact reach this job still owes, in days. */
@@ -1282,7 +1311,7 @@ async function collect(context: JobContext): Promise<JobStep> {
   if (credentialStep.kind === "end") return credentialStep.step;
   const credential = credentialStep.state;
 
-  const throttleStep = await checkThrottle(context, credential);
+  const throttleStep = await checkThrottle(context, credential, visit);
   if (throttleStep.kind === "end") return throttleStep.step;
 
   const planStep = await planOwedDays(context, visit);
@@ -1320,6 +1349,7 @@ function createVisitState(job: ClaimedOwnerJob): OwnerVisitState {
     collectedDays: [],
     backfillDays: [],
     backfillRemaining: 0,
+    bucketUsagePercent: 0,
     lastClosedDay: previousDay(job.capturedOn),
     owedPeriods: [],
     collectedPeriods: [],
@@ -1766,12 +1796,14 @@ async function resolveProtectedCredential(
 async function checkThrottle(
   context: JobContext,
   credential: VisitCredential,
+  visit: OwnerVisitState,
 ): Promise<StepResult<null>> {
   const { ports } = context;
 
   const bucket = await read(context, (signal) =>
     ports.store.readThrottleBucket({ bucketKey: credential.bucketKey, signal })
   );
+  visit.bucketUsagePercent = bucket?.usagePercent ?? 0;
 
   if (bucket?.throttledUntil && new Date(bucket.throttledUntil).getTime() > ports.now()) {
     // The shared bucket says THIS credential is still throttled. No provider
@@ -1886,10 +1918,9 @@ async function planOwedDays(
  * missing. The missing days are recomputed from the store on every visit,
  * so a slice that a visit could not finish is simply planned again.
  *
- * The slice is newest first and bounded twice: by the per-visit backfill
- * budget (less the backfill days a previous visit already owes) and by the
- * room the checkpoint's queue has left, so the planned queue never exceeds
- * what the accepted SQL accepts.
+ * The slice is newest first and bounded by `backfillSliceSize`. A day that
+ * is already answered is never asked for again, so a re-run plans nothing
+ * twice.
  */
 async function planBackfill(
   context: JobContext,
@@ -1922,17 +1953,50 @@ async function planBackfill(
   );
 
   const owedBackfill = owedDays.filter((day) => !currentDays.includes(day)).length;
-  const queueRoom = REMAINING_IDS_LIMIT -
-    mergeQueue(owedDays.map(accountDayToken), queuedTokens).length;
-  const sliceSize = Math.max(
-    0,
-    Math.min(ACCOUNT_DAYS_BACKFILL_PER_VISIT - owedBackfill, queueRoom),
-  );
+  const firstWrittenToday = stored.filter((row) =>
+    !currentDays.includes(row.metricDate) &&
+    Date.parse(row.capturedAt) >= kuwaitDayStartMs(job.capturedOn)
+  ).length;
+  // The days a previous visit planned today count against today's cap too.
+  const todayRoom = Math.max(0, ACCOUNT_DAYS_BACKFILL_PER_DAY - firstWrittenToday - owedBackfill);
+  const sliceSize = backfillSliceSize(visit, {
+    owedBackfill,
+    todayRoom,
+    queueRoom: REMAINING_IDS_LIMIT -
+      mergeQueue(owedDays.map(accountDayToken), queuedTokens).length,
+  });
   const slice = missing.slice(0, sliceSize);
 
   owedDays.push(...slice);
   visit.backfillDays = owedDays.filter((day) => !currentDays.includes(day));
-  visit.backfillRemaining = missing.length - slice.length;
+  visit.backfillRemaining = sliceSize === 0 && visit.bucketUsagePercent >= BACKFILL_USAGE_CEILING_PERCENT
+    ? 0
+    : Math.min(missing.length - slice.length, todayRoom - slice.length);
+}
+
+/**
+ * The backfill days this visit may plan.
+ *
+ * Zero while the shared usage is at or above the backfill ceiling. Else the
+ * least of: the per-visit budget less the backfill days already owed, the
+ * room today's per-account cap has left, and the room the checkpoint's
+ * queue has left - so the planned queue never exceeds what the accepted SQL
+ * accepts.
+ */
+function backfillSliceSize(
+  visit: OwnerVisitState,
+  room: { readonly owedBackfill: number; readonly todayRoom: number; readonly queueRoom: number },
+): number {
+  if (visit.bucketUsagePercent >= BACKFILL_USAGE_CEILING_PERCENT) return 0;
+  return Math.max(
+    0,
+    Math.min(ACCOUNT_DAYS_BACKFILL_PER_VISIT - room.owedBackfill, room.todayRoom, room.queueRoom),
+  );
+}
+
+/** The first instant of a Kuwait calendar day. */
+function kuwaitDayStartMs(day: string): number {
+  return Date.parse(`${day}T00:00:00+03:00`);
 }
 
 /**
@@ -2479,11 +2543,12 @@ async function drainMediaQueue(
           }
           if (error.kind === "token_invalid") {
             // The credential is dead. The progress of this visit is recorded
-            // first, so the next visit does not ask for it again.
+            // first, and the job ends without a retry: see
+            // `handleProviderFailure`.
             await recordVisitProgress(context, visit);
             return {
               kind: "end",
-              step: await persistFailure(context, "retry", "token_invalid"),
+              step: await persistFailure(context, "unavailable", "token_invalid"),
             };
           }
           if (isDefinitiveItemRefusal(error)) {
@@ -2908,8 +2973,13 @@ async function handleProviderFailure(
   }
 
   if (error.kind === "token_invalid") {
+    // The provider rejected the credential itself. Asking again with the
+    // same token can only be rejected again, so the job ends without a
+    // retry. This worker has no write that marks the account for
+    // reconnection; the account's reconnection state is owned by the token
+    // refresh and connection health paths.
     await recordVisitProgress(context, visit);
-    return await persistFailure(context, "retry", "token_invalid");
+    return await persistFailure(context, "unavailable", "token_invalid");
   }
 
   if (error.kind === "scope_missing") {

@@ -410,12 +410,15 @@ export interface OwnerMediaInventoryRow {
 /**
  * A stored daily observation, as far as the backfill needs to know it.
  *
- * Only the day and its status are read: the backfill asks which closed days
- * are already answered, never what they say.
+ * Only the day, its status and when it was first written are read: the
+ * backfill asks which closed days are already answered and how many it
+ * wrote today, never what they say.
  */
 export interface OwnerAccountDayRow {
   readonly metricDate: string;
   readonly status: "pending" | "ok" | "unavailable" | "error";
+  /** When the row was first written; the accepted upsert never moves it. */
+  readonly capturedAt: string;
 }
 
 /** A stored period total, as far as the worker needs to know it. */
@@ -1237,7 +1240,7 @@ export function createOwnerCollectionServiceStore(
       for (let start = 0; start < input.days.length; start += ACCOUNT_DAY_READ_CHUNK) {
         const envelope = await deps.reads.readMany(
           "ig_account_insight_daily",
-          "metric_date, status",
+          "metric_date, status, captured_at",
           { social_account_id: input.socialAccountId, user_id: input.userId },
           "metric_date",
           input.days.slice(start, start + ACCOUNT_DAY_READ_CHUNK),
@@ -1265,7 +1268,11 @@ export function createOwnerCollectionServiceStore(
           ) {
             throw new OwnerWorkerStoreError("invalid_envelope");
           }
-          stored.push({ metricDate, status });
+          const capturedAt = requireString(row, "captured_at");
+          if (!isTimestampText(capturedAt)) {
+            throw new OwnerWorkerStoreError("invalid_envelope");
+          }
+          stored.push({ metricDate, status, capturedAt });
         }
       }
 

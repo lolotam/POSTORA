@@ -552,6 +552,26 @@ Deno.test("a Graph error envelope delivered with HTTP 200 is an error", async ()
   assertEquals(error.kind, "token_invalid");
 });
 
+Deno.test("an HTTP 401 is a rejected credential whatever its envelope says", async () => {
+  for (const body of [{ error: { code: 1, message: "unauthorized" } }, {}]) {
+    const { provider, attempts } = providerWith(() => jsonResponse(body, { status: 401 }));
+
+    const error = await assertRejects(
+      () =>
+        provider.fetchAccountProfile({
+          igUserId: "1784140001",
+          token: "the-token",
+          signal: new AbortController().signal,
+        }),
+      OwnerProviderError,
+    );
+
+    assertEquals(error.kind, "token_invalid");
+    // A rejected credential is not retried inside the call either.
+    assertEquals(attempts(), 1);
+  }
+});
+
 Deno.test("a missing or non-array data array is a failure, never an empty success", async () => {
   for (const payload of [{}, { data: "not-an-array" }, { data: { nested: true } }]) {
     const { provider } = providerWith(() => jsonResponse(payload));
