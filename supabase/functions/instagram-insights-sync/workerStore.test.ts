@@ -28,6 +28,7 @@ import {
   OwnerWorkerStoreError,
   type OwnerServiceRpcCaller,
 } from "./workerStore.ts";
+import { ownerHttpRpcName } from "./httpRpc.ts";
 import {
   TEST_ACCOUNT_ID,
   TEST_CLAIM_TOKEN,
@@ -422,6 +423,81 @@ Deno.test("a completion receipt with another outcome or another reason is refuse
         }),
       OwnerWorkerStoreError,
     );
+  }
+});
+
+const SETTLEMENT_RECEIPT = {
+  job_id: TEST_JOB_ID,
+  job_generation: 1,
+  status: "unavailable",
+  outcome: "unavailable",
+  reason_code: "capability_missing",
+};
+
+function settle(store: ReturnType<typeof createStore>["store"]) {
+  return store.settleCapabilityUnavailable({
+    jobId: TEST_JOB_ID,
+    claimToken: TEST_CLAIM_TOKEN,
+    jobGeneration: 1,
+  });
+}
+
+Deno.test("the capability settlement names only the claim and goes through its non-retrying wrapper", async () => {
+  const { store, calls } = createStore(() => ({ data: SETTLEMENT_RECEIPT, error: null }));
+
+  const receipt = await settle(store);
+
+  assertEquals(receipt, {
+    jobId: TEST_JOB_ID,
+    jobGeneration: 1,
+    status: "unavailable",
+    outcome: "unavailable",
+    reasonCode: "capability_missing",
+  });
+  // No outcome and no reason are sent: the database fixes both.
+  assertEquals(calls, [{
+    name: "complete_instagram_collection_job_capability_unavailable",
+    args: { p_job_id: TEST_JOB_ID, p_claim_token: TEST_CLAIM_TOKEN, p_job_generation: 1 },
+  }]);
+  assertEquals(
+    ownerHttpRpcName("complete_instagram_collection_job_capability_unavailable"),
+    "complete_instagram_collection_job_capability_unavailable_http",
+  );
+});
+
+Deno.test("a settlement receipt that is not the fixed unavailable outcome of this claim is refused", async () => {
+  for (
+    const data of [
+      { ...SETTLEMENT_RECEIPT, reason_code: "continuation_expired" },
+      { ...SETTLEMENT_RECEIPT, status: "error", outcome: "error" },
+      { ...SETTLEMENT_RECEIPT, job_generation: 2 },
+      null,
+    ]
+  ) {
+    const { store } = createStore(() => ({ data, error: null }));
+
+    const error = await assertRejects(() => settle(store), OwnerWorkerStoreError);
+    assertEquals(error.failure, "invalid_envelope", JSON.stringify(data));
+  }
+});
+
+Deno.test("a refused or failed settlement is classified by its SQLSTATE and its message is dropped", async () => {
+  const cases: Array<[string, () => unknown, string]> = [
+    ["PT409", () => ({ data: null, error: { code: "PT409", message: "IG_COLLECTION_CLAIM_STALE: x" } }), "stale_claim"],
+    ["40001", () => ({ data: null, error: { code: "40001", message: "IG_COLLECTION_CAPABILITY_RESOLVED: x" } }), "stale_claim"],
+    ["PGRST202", () => ({ data: null, error: { code: "PGRST202", message: "IG_COLLECTION not found" } }), "schema_unavailable"],
+    ["42883", () => ({ data: null, error: { code: "42883", message: "IG_COLLECTION undefined" } }), "schema_unavailable"],
+    ["transport", () => {
+      throw new Error("IG_COLLECTION connection reset");
+    }, "rpc_failed"],
+  ];
+
+  for (const [label, responder, failure] of cases) {
+    const { store } = createStore(responder);
+
+    const error = await assertRejects(() => settle(store), OwnerWorkerStoreError);
+    assertEquals(error.failure, failure, label);
+    assertEquals(error.message.includes("IG_COLLECTION"), false, label);
   }
 });
 

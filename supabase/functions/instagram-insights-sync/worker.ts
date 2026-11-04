@@ -386,10 +386,11 @@ export type OwnerReasonCode =
   | "collection_unavailable"
   /**
    * The fence refused the direct credential read: the bound account's
-   * permission read never succeeded. Nothing committed and no request was
-   * sent. The job is abandoned to its lease and the run continues; the
-   * completion RPC sits behind the same fence, so the job cannot be settled
-   * until the account records its permission evidence.
+   * permission read never succeeded. No request was sent. The job is
+   * settled `unavailable` through the dedicated settlement, which is the
+   * only completion that fence lets through; when the database refuses or
+   * the call fails, the job is abandoned to its lease. Either way the run
+   * continues.
    */
   | "capability_missing"
   /** A store call failed or a step ran out of budget. Nothing was stored. */
@@ -1512,7 +1513,7 @@ async function resolveDirectCredential(
         return { kind: "end", step: await abandon(context, "credential_changed") };
       }
       if (error.failure === "capability_missing") {
-        return { kind: "end", step: await abandon(context, "capability_missing") };
+        return { kind: "end", step: await settleCapabilityMissing(context) };
       }
     }
     throw error;
@@ -2820,6 +2821,55 @@ async function abandon(
     durationMs: context.ports.now() - context.startedAt,
   });
   return { job: result(context, "abandoned", reasonCode), stopRun: false };
+}
+
+/**
+ * Settles a job whose bound account never recorded its permission read.
+ *
+ * The settlement is asked for ONCE and never replayed. When the database
+ * refuses it (a stale claim, a replaced connection, a permission read that
+ * landed meanwhile, a settlement that is not deployed yet) or the call
+ * fails, the job is abandoned to its lease, exactly as before the
+ * settlement existed. The condition belongs to this job alone, so the run
+ * continues either way. Only the failure kind is logged.
+ */
+async function settleCapabilityMissing(context: JobContext): Promise<JobStep> {
+  const { ports, job } = context;
+
+  try {
+    await write(context, (signal) =>
+      ports.store.settleCapabilityUnavailable({
+        jobId: job.jobId,
+        claimToken: job.claimToken,
+        jobGeneration: job.jobGeneration,
+        signal,
+      })
+    );
+  } catch (error) {
+    ports.log({
+      event: "owner_capability_settlement_refused",
+      jobId: job.jobId,
+      socialAccountId: job.socialAccountId,
+      outcome: error instanceof OwnerWorkerStoreError
+        ? error.failure
+        : error instanceof BudgetExceededError
+        ? "deadline_exceeded"
+        : "rpc_failed",
+      reasonCode: "capability_missing",
+      durationMs: ports.now() - context.startedAt,
+    });
+    return await abandon(context, "capability_missing");
+  }
+
+  ports.log({
+    event: "owner_capture",
+    jobId: job.jobId,
+    socialAccountId: job.socialAccountId,
+    outcome: "unavailable",
+    reasonCode: "capability_missing",
+    durationMs: ports.now() - context.startedAt,
+  });
+  return { job: result(context, "unavailable", "capability_missing"), stopRun: false };
 }
 
 /**

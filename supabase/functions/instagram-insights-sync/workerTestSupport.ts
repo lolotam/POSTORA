@@ -121,6 +121,8 @@ export interface RecordedStoreCalls {
   readonly snapshots: Array<{ kind: string; items: readonly Record<string, unknown>[] }>;
   readonly progresses: OwnerProgressPayload[];
   readonly completes: Array<{ outcome: string; reasonCode: string | null }>;
+  /** The capability settlements the worker asked for, kept apart from the completions. */
+  readonly settlements: Array<{ jobId: string; jobGeneration: number }>;
   readonly throttles: Array<{
     bucketKey: string;
     usagePercent: number | null;
@@ -195,6 +197,8 @@ export interface FakeStoreOptions {
   readonly capabilityFailure?: "credential_missing" | "credential_changed";
   /** The direct credential read refuses with this failure. */
   readonly directCredentialFailure?: "credential_missing" | "credential_changed" | "capability_missing" | "rpc_failed";
+  /** The capability settlement refuses or fails with this failure. */
+  readonly settleFailure?: OwnerStoreFailure;
   /**
    * The write the DATABASE refuses for one job.
    *
@@ -365,6 +369,7 @@ export function createFakeStore(options: FakeStoreOptions & {
     snapshots: [],
     progresses: [],
     completes: [],
+    settlements: [],
     throttles: [],
     credentialReads: [],
     capabilityReads: [],
@@ -681,6 +686,22 @@ export function createFakeStore(options: FakeStoreOptions & {
         status: input.outcome,
         outcome: input.outcome,
         reasonCode: input.reasonCode,
+      };
+    },
+
+    async settleCapabilityUnavailable(input) {
+      calls.settlements.push({ jobId: input.jobId, jobGeneration: input.jobGeneration });
+      const scope = jobScopes.get(input.jobId);
+      const account = scope === undefined ? options : accountOf(scope.socialAccountId);
+      if (account.settleFailure) {
+        throw new OwnerWorkerStoreError(account.settleFailure);
+      }
+      return {
+        jobId: input.jobId,
+        jobGeneration: input.jobGeneration,
+        status: "unavailable",
+        outcome: "unavailable",
+        reasonCode: "capability_missing",
       };
     },
 
@@ -1208,6 +1229,15 @@ export function createPersistingStore(options: PersistingStoreOptions): {
         outcome: input.outcome,
         reasonCode: input.reasonCode,
       };
+    },
+
+    async settleCapabilityUnavailable(input) {
+      // The accepted settlement is the 'unavailable' branch of the completion.
+      return await store.completeJob({
+        ...input,
+        outcome: "unavailable",
+        reasonCode: "capability_missing",
+      });
     },
 
     async recordThrottle(input) {
