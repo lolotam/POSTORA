@@ -211,7 +211,7 @@ jobs:
         run: |
           set -euo pipefail
           deno check --no-config --import-map=scripts/ci/deno-analytics.import-map.json --lock=scripts/ci/deno-analytics.lock --frozen --node-modules-dir=none supabase/functions/meta-owned-analytics-sync/*.ts
-          deno test --no-config --import-map=scripts/ci/deno-analytics.import-map.json --lock=scripts/ci/deno-analytics.lock --frozen --node-modules-dir=none --allow-env supabase/functions/meta-owned-analytics-sync/composition.test.ts supabase/functions/meta-owned-analytics-sync/dispatch.test.ts supabase/functions/meta-owned-analytics-sync/collection.test.ts supabase/functions/meta-owned-analytics-sync/retention.test.ts supabase/functions/meta-owned-analytics-sync/truncation.test.ts
+          deno test --no-config --import-map=scripts/ci/deno-analytics.import-map.json --lock=scripts/ci/deno-analytics.lock --frozen --node-modules-dir=none --allow-env supabase/functions/meta-owned-analytics-sync/enqueue.test.ts supabase/functions/meta-owned-analytics-sync/composition.test.ts supabase/functions/meta-owned-analytics-sync/dispatch.test.ts supabase/functions/meta-owned-analytics-sync/collection.test.ts supabase/functions/meta-owned-analytics-sync/retention.test.ts supabase/functions/meta-owned-analytics-sync/truncation.test.ts
 
       - name: Prove owned analytics dependency termination with real timeout ceilings
         run: deno test --no-config --import-map=scripts/ci/deno-analytics.import-map.json --lock=scripts/ci/deno-analytics.lock --frozen --node-modules-dir=none --allow-env supabase/functions/meta-owned-analytics-sync/termination.test.ts
@@ -238,6 +238,7 @@ jobs:
           --node-modules-dir=none
           supabase/functions/mcp
           supabase/functions/n8n-api/serviceProxy.test.ts
+          supabase/functions/n8n-api/analyticsFilters.test.ts
 
       - name: Test Instagram Story sharing through registered MCP and API routes
         # The automation test imports the registered MCP/API routes with fixture-only env.

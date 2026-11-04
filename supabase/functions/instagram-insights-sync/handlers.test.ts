@@ -191,6 +191,11 @@ async function bundle(entry: string, functionsRoot: string): Promise<string> {
           // The real Zod is resolved by Deno at import time. The bundle keeps
           // the npm specifier, so the production validator is the production
           // validator.
+          // The Node builtins the shared auth helper uses are external: the
+          // Deno runtime provides them.
+          if (path.startsWith("node:")) {
+            return { path, external: true };
+          }
           if (path.startsWith("npm:")) {
             return { path, external: true };
           }

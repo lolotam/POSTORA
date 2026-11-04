@@ -61,6 +61,7 @@ interface HarnessOptions {
   readonly auditThrows?: boolean;
   readonly auditHang?: boolean;
   readonly configuration?: "ready" | "unavailable";
+  readonly serviceOwner?: string | null;
 }
 
 interface Harness {
@@ -173,6 +174,8 @@ function createHarness(options: HarnessOptions = {}): Harness {
       return settings[key] as SettingReadEnvelope;
     },
 
+    authenticateServiceOwner: async () => options.serviceOwner ?? null,
+    createServiceOwnerStore: () => store,
     createOwnerStore: (token: string) => {
       tokens.push(token);
       return store;
@@ -251,13 +254,14 @@ Deno.test("a malformed body is refused with 400", async () => {
   assertEquals(harness.storeCalls.length, 0);
 });
 
-Deno.test("an unknown field is refused", async () => {
+Deno.test("a caller-selected owner without service authentication is refused", async () => {
   const harness = createHarness();
   const response = await harness.handler(
     post({ action: "enqueue", social_account_id: ACCOUNT_ID, user_id: OWNER_ID }),
   );
 
   assertEquals(response.status, 400);
+  assertEquals(harness.storeCalls.length, 0);
 });
 
 Deno.test("a service action, a target kind, a job id and a secret are refused", async () => {
@@ -977,4 +981,28 @@ Deno.test("a malformed request is audited with the action it claimed", async () 
   assertEquals(harness.audit.length, 1);
   assertEquals(harness.audit[0]!.action, "status");
   assertEquals(harness.audit[0]!.outcome, "invalid_request");
+});
+
+
+Deno.test("service enqueue uses the same owner store policies and throttle receipts without a user token", async () => {
+  for (const kind of ["accepted", "throttled", "target_not_found"] as const) {
+    const harness = createHarness({ serviceOwner: OWNER_ID, store: { kind } });
+    const response = await harness.handler(post({ action: "enqueue", user_id: OWNER_ID, social_account_id: ACCOUNT_ID }));
+    assertEquals(response.status, kind === "accepted" ? 202 : kind === "throttled" ? 429 : 404);
+    assertEquals(harness.tokens.length, 0);
+    assertEquals(harness.storeCalls.length, 1);
+    assertEquals(harness.audit[0].userId, OWNER_ID);
+  }
+});
+
+Deno.test("service enqueue cannot force collection or skip the collection switch", async () => {
+  const harness = createHarness({ serviceOwner: OWNER_ID });
+  const forced = await harness.handler(post({ action: "enqueue", user_id: OWNER_ID, social_account_id: ACCOUNT_ID, mode: "force" }));
+  assertEquals(forced.status, 400);
+  assertEquals(harness.storeCalls.length, 0);
+  const disabled = createHarness({ serviceOwner: OWNER_ID, settings: { collection_instagram_insights_enabled: { data: { value: false }, error: null } } });
+  const response = await disabled.handler(post({ action: "enqueue", user_id: OWNER_ID, social_account_id: ACCOUNT_ID }));
+  assertEquals(response.status, 503);
+  assertEquals((await json(response)).error, "collection_disabled");
+  assertEquals(disabled.storeCalls.length, 0);
 });

@@ -82,6 +82,13 @@ export const TOOL_SCOPES: Readonly<Record<string, string | readonly string[]>> =
   register_webhook: "webhooks:manage",
   delete_webhook: "webhooks:manage",
   get_post_analytics: "posts:read",
+  get_account_analytics: "posts:read",
+  trigger_analytics_sync: "posts:write",
+  list_competitors: "posts:read",
+  track_competitor: "posts:write",
+  untrack_competitor: "posts:write",
+  get_competitor_report: "posts:read",
+  analyze_brand: "posts:read",
   generate_caption: "posts:write",
   generate_hashtags: "posts:write",
   // It saves the image to the media library, so it needs media:write as well

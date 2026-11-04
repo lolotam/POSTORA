@@ -73,6 +73,20 @@ export class OwnedAnalyticsStore {
     return decoded.data.data;
   }
 
+  async enqueueScope(userId: string, platform: OwnedAnalyticsPlatform, accountId: string): Promise<{ status: "eligible" | "collection_disabled" | "not_eligible" }> {
+    const raw = await this.call("read_meta_analytics_enqueue_scope", { p_user_id: userId, p_platform: platform, p_account_id: accountId });
+    const parsed = z.object({ status: z.enum(["eligible", "collection_disabled", "not_eligible"]) }).strict().safeParse(raw);
+    if (!parsed.success) throw new AnalyticsWorkerStopped("invalid_contract");
+    return parsed.data;
+  }
+
+  async enqueueAccount(userId: string, platform: OwnedAnalyticsPlatform, accountId: string): Promise<Record<string, unknown>> {
+    const raw = await this.call("enqueue_meta_analytics_for_user", { p_user_id: userId, p_platform: platform, p_account_id: accountId });
+    const parsed = z.object({ status: z.enum(["queued", "throttled", "collection_disabled", "not_eligible", "running", "partial", "success", "failed", "retry"]) }).passthrough().safeParse(raw);
+    if (!parsed.success) throw new AnalyticsWorkerStopped("invalid_contract");
+    return parsed.data;
+  }
+
   async read(platform: OwnedAnalyticsPlatform, accountId: string, expected: AdmissionCredential["authority"] | null): Promise<AdmissionCredential> {
     const name = platform === "facebook" ? "read_fb_analytics_admission_credential" : "read_threads_analytics_admission_credential";
     const raw = await this.call(name, { p_account_id: accountId, p_expected_authority: expected });

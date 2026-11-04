@@ -88,6 +88,12 @@ export const FALLBACK_RATE_LIMITS: Record<string, { requests: number; windowMs: 
   '/api/v1/ai/caption': { requests: 30, windowMs: 60 * 60 * 1000 },
   '/api/v1/ai/hashtags': { requests: 30, windowMs: 60 * 60 * 1000 },
   '/api/v1/ai/image': { requests: 10, windowMs: 60 * 60 * 1000 },
+  '/api/v1/analytics/account': { requests: 120, windowMs: 60 * 60 * 1000 },
+  '/api/v1/analytics/sync': { requests: 20, windowMs: 60 * 60 * 1000 },
+  '/api/v1/analytics/competitors': { requests: 120, windowMs: 60 * 60 * 1000 },
+  '/api/v1/analytics/competitors/untrack': { requests: 20, windowMs: 60 * 60 * 1000 },
+  '/api/v1/analytics/competitors/report': { requests: 120, windowMs: 60 * 60 * 1000 },
+  '/api/v1/analytics/brand': { requests: 20, windowMs: 60 * 60 * 1000 },
   'default': { requests: 100, windowMs: 60 * 60 * 1000 },
 };
 

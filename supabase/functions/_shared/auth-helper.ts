@@ -47,7 +47,8 @@ export async function authenticateCaller(
   const token = authHeader.replace("Bearer ", "");
 
   // Check if this is a service-role call (internal system call)
-  if (timingSafeTokenEqual(token, SUPABASE_SERVICE_ROLE_KEY)) {
+  // An empty configured key must never let an empty bearer act as the service role.
+  if (SUPABASE_SERVICE_ROLE_KEY && timingSafeTokenEqual(token, SUPABASE_SERVICE_ROLE_KEY)) {
     if (!bodyUserId) {
       throw new Error("Service-role call requires user_id in request body");
     }

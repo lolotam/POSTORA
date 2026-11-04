@@ -3,6 +3,9 @@
 // LLM client (Claude Desktop, ChatGPT, Antigravity, Cursor, Cline, OpenAI
 // Agents SDK, etc.) can connect with a Postora API key as Bearer token.
 
+import { accountAnalyticsSchema, analyticsSyncSchema, listCompetitorsSchema, trackCompetitorSchema,
+  untrackCompetitorSchema, competitorReportSchema, analyzeBrandSchema } from "../_shared/analyticsToolSchemas.ts";
+import { stripCredentialUrls } from "../n8n-api/serviceProxy.ts";
 import { Hono } from "npm:hono@4.6.14";
 import { McpServer, StreamableHttpTransport } from "npm:mcp-lite@^0.10.0";
 import { z } from "npm:zod@4.1.12";
@@ -483,6 +486,83 @@ function buildServer(
       if (scopeRefusal) return fail(403, scopeRefusal);
       const r = await callN8n(apiKey, "GET", "/api/v1/analytics", undefined, args);
       return r.status >= 400 ? fail(r.status, r.data) : ok(r.data);
+    },
+  });
+
+  register("get_account_analytics", {
+    description: "Read an owned Instagram, Facebook or Threads account report, or the existing TikTok passthrough. Instagram periods: 1, 7, 14, 30, 90, 365 or all; Facebook/Threads: 7, 14, 30 or 90. Default 7. Instagram media_type filters this media page only; totals retain report scope. Facebook/Threads accept only all because stored reports lack media formats. Pass nextCursor back as cursor with unchanged account and period.",
+    inputSchema: accountAnalyticsSchema,
+    handler: async (args) => {
+      const scopeRefusal = await refuseUngranted({ admin }, { userId: ownerId, tool: "get_account_analytics", grant });
+      if (scopeRefusal) return fail(403, scopeRefusal);
+      const r = await callN8n(apiKey, "GET", "/api/v1/analytics/account", undefined, args);
+      return r.status >= 400 ? fail(r.status, stripCredentialUrls(r.data)) : ok(stripCredentialUrls(r.data));
+    },
+  });
+
+  register("trigger_analytics_sync", {
+    description: "Request fresh collection for one owned Instagram, Facebook or Threads account. Respects collection policy and throttles; returns queued, throttled with retry_after_seconds, collection_disabled or not_eligible. Does not wait for collection or force a refresh.",
+    inputSchema: analyticsSyncSchema,
+    handler: async (args) => {
+      const scopeRefusal = await refuseUngranted({ admin }, { userId: ownerId, tool: "trigger_analytics_sync", grant });
+      if (scopeRefusal) return fail(403, scopeRefusal);
+      const r = await callN8n(apiKey, "POST", "/api/v1/analytics/sync", args);
+      return r.status >= 400 ? fail(r.status, stripCredentialUrls(r.data)) : ok(stripCredentialUrls(r.data));
+    },
+  });
+
+  register("list_competitors", {
+    description: "Read your tracked Instagram competitors, status, last capture and quota. Default active; state removed reads retained history. Follow next_cursor for more entries.",
+    inputSchema: listCompetitorsSchema,
+    handler: async (args) => {
+      const scopeRefusal = await refuseUngranted({ admin }, { userId: ownerId, tool: "list_competitors", grant });
+      if (scopeRefusal) return fail(403, scopeRefusal);
+      const r = await callN8n(apiKey, "GET", "/api/v1/analytics/competitors", undefined, args);
+      return r.status >= 400 ? fail(r.status, stripCredentialUrls(r.data)) : okUntrusted(stripCredentialUrls(r.data));
+    },
+  });
+
+  register("track_competitor", {
+    description: "Track an Instagram competitor handle, or reactivate a removed entry. Applies the same username rules and plan quota as Postora. Active entries are idempotent. Collection follows the existing schedule.",
+    inputSchema: trackCompetitorSchema,
+    handler: async (args) => {
+      const scopeRefusal = await refuseUngranted({ admin }, { userId: ownerId, tool: "track_competitor", grant });
+      if (scopeRefusal) return fail(403, scopeRefusal);
+      const r = await callN8n(apiKey, "POST", "/api/v1/analytics/competitors", args);
+      return r.status >= 400 ? fail(r.status, stripCredentialUrls(r.data)) : ok(stripCredentialUrls(r.data));
+    },
+  });
+
+  register("untrack_competitor", {
+    description: "Stop tracking an owned Instagram competitor using watchlist_id from list_competitors. Soft removal preserves history and frees a tracking slot, exactly like Postora.",
+    inputSchema: untrackCompetitorSchema,
+    handler: async (args) => {
+      const scopeRefusal = await refuseUngranted({ admin }, { userId: ownerId, tool: "untrack_competitor", grant });
+      if (scopeRefusal) return fail(403, scopeRefusal);
+      const r = await callN8n(apiKey, "POST", "/api/v1/analytics/competitors/untrack", args);
+      return r.status >= 400 ? fail(r.status, stripCredentialUrls(r.data)) : ok(stripCredentialUrls(r.data));
+    },
+  });
+
+  register("get_competitor_report", {
+    description: "Read your tracked Instagram competitor report: profile, growth, media, outliers and capture coverage shown in Postora. period_days accepts 7 or 30 (default 30); follow next_cursor with unchanged scope.",
+    inputSchema: competitorReportSchema,
+    handler: async (args) => {
+      const scopeRefusal = await refuseUngranted({ admin }, { userId: ownerId, tool: "get_competitor_report", grant });
+      if (scopeRefusal) return fail(403, scopeRefusal);
+      const r = await callN8n(apiKey, "GET", "/api/v1/analytics/competitors/report", undefined, args);
+      return r.status >= 400 ? fail(r.status, stripCredentialUrls(r.data)) : okUntrusted(stripCredentialUrls(r.data));
+    },
+  });
+
+  register("analyze_brand", {
+    description: "Analyze a public Facebook Page or Instagram profile by handle or profile URL using official data only. Filters and sort apply to this page; totals retain upstream scope. offset follows upstream pagination. image includes carousels; video includes reels. period: 30d, 3m, 6m, 1y or all (default all); sort defaults engagement. min_engagement filters engagement scores. Paid scraping stays disabled.",
+    inputSchema: analyzeBrandSchema,
+    handler: async (args) => {
+      const scopeRefusal = await refuseUngranted({ admin }, { userId: ownerId, tool: "analyze_brand", grant });
+      if (scopeRefusal) return fail(403, scopeRefusal);
+      const r = await callN8n(apiKey, "POST", "/api/v1/analytics/brand", args);
+      return r.status >= 400 ? fail(r.status, stripCredentialUrls(r.data)) : okUntrusted(stripCredentialUrls(r.data));
     },
   });
 

@@ -963,6 +963,11 @@ export function rolloutDriverStubPlugin(): Record<string, unknown> {
         if (path.includes("@supabase/supabase-js") || path.includes("esm.sh/@supabase")) {
           return { path: "rollout-driver", namespace: "rollout-stub" };
         }
+        // The Node builtins the shared auth helper uses are external: the
+        // Deno runtime provides them.
+        if (path.startsWith("node:")) {
+          return { path, external: true };
+        }
         if (path.startsWith("npm:")) {
           return { path, external: true };
         }

@@ -16,9 +16,11 @@
  *   the Authorization header.
  *
  *   A service-role call has no user to scope to, and a service-role call
- *   that names one would be an impersonation. This adapter therefore has no
- *   service-role path at all: the bearer is a parameter and it is always the
- *   verified user's bearer.
+ *   that names one would be an impersonation. The browser adapter therefore
+ *   always carries the verified user's bearer. The API-key path in n8n-api
+ *   supplies its own reader instead, which calls the service-role-only
+ *   `read_competitor_tracking_report_v2_for_user` with the owner that the API
+ *   key proved.
  *
  * WHY A FAILED READ IS NEVER AN EMPTY ONE
  *
