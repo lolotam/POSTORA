@@ -2157,7 +2157,7 @@ async function collectDays(
       // unavailable. The primary and the correction day keep the visit-level
       // failure: a refusal of TODAY's data is about the account, not a day.
       if (
-        error instanceof OwnerProviderError && isDefinitiveItemRefusal(error) &&
+        error instanceof OwnerProviderError && isDefinitiveHistoryRefusal(error) &&
         visit.backfillDays.includes(day)
       ) {
         logHistoryUnavailable(context, "owner_account_day_unavailable");
@@ -2262,7 +2262,7 @@ async function collectPeriodReach(
       if (error instanceof OwnerProviderPermitError) {
         return { kind: "end", step: await handlePermitFailure(context, error) };
       }
-      if (!(error instanceof OwnerProviderError) || !isDefinitiveItemRefusal(error)) {
+      if (!(error instanceof OwnerProviderError) || !isDefinitiveHistoryRefusal(error)) {
         return {
           kind: "end",
           step: await handleProviderFailure(context, credential.bucketKey, error, visit),
@@ -3122,6 +3122,18 @@ function isDefinitiveItemRefusal(error: OwnerProviderError): boolean {
   if (error.kind === "rate_limited" || error.kind === "token_invalid") return false;
   return error.graphCode !== null &&
     DEFINITIVE_ITEM_GRAPH_CODES.has(error.graphCode);
+}
+
+/**
+ * True when the provider will never answer ONE backfill day or period.
+ *
+ * Only code 100 qualifies. For account insights, code 10 is a permission
+ * refusal of the whole account (`scope_missing`): closing days for it would
+ * mark up to a full slice of history as answered when the credential, not
+ * the history, is the problem.
+ */
+function isDefinitiveHistoryRefusal(error: OwnerProviderError): boolean {
+  return error.kind === "provider_error" && error.graphCode === 100;
 }
 
 /**

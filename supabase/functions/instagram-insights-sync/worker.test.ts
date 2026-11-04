@@ -1995,7 +1995,7 @@ Deno.test("a stored day that is still pending or failed is backfilled again", as
 });
 
 Deno.test("a backfill day the provider refuses for good is stored as unavailable, never as zero", async () => {
-  for (const code of [10, 100]) {
+  for (const code of [100]) {
     const refusedDay = "2025-11-02";
     const harness = createHarness({
       store: { jobs: [createClaimedJob()], missingDays: [refusedDay] },
@@ -2027,6 +2027,26 @@ Deno.test("a backfill day the provider refuses for good is stored as unavailable
       `code ${code}`,
     );
   }
+});
+
+Deno.test("a permission refusal of a backfill day closes no history", async () => {
+  // Code 10 on account insights refuses the account, not the day.
+  const refusedDay = "2025-11-02";
+  const harness = createHarness({
+    store: { jobs: [createClaimedJob()], missingDays: [refusedDay] },
+    graph: {
+      accountDays: {
+        [TEST_PRIMARY_DAY]: accountDayAnswer({ reach: 450, views: 890 }),
+        [TEST_CORRECTION_DAY]: accountDayAnswer({ reach: 400, views: 800 }),
+        [refusedDay]: { error: { code: 10, message: "permission denied" } },
+      },
+    },
+  });
+
+  await runOwnerDrain(harness.ports);
+
+  assertEquals(writtenDays(harness.calls), [TEST_PRIMARY_DAY, TEST_CORRECTION_DAY]);
+  assertEquals(harness.calls.completes, [{ outcome: "unavailable", reasonCode: "scope_missing" }]);
 });
 
 Deno.test("a throttled backfill day is never closed as unavailable", async () => {
