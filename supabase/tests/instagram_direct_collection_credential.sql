@@ -27,6 +27,11 @@
 --       20261104120000): settled once, refused for a replaced, resolved or
 --       absent capability, a stale claim, an expired lease, a rollout or
 --       account refusal, and service-only.
+--   E10 the settlement's parity with the existing completion: the same
+--       claimed job settled through complete_instagram_collection_job(...,
+--       'unavailable', 'capability_missing') under an ok capability, and
+--       through the settlement under an unknown one, ends in the same job
+--       columns, and neither path writes any other row.
 --
 -- The suite SET ROLEs away from superuser where the point of the check is
 -- that a client role cannot do something. The service role bypasses RLS, so
@@ -1399,6 +1404,317 @@ $e9_anon$;
 RESET ROLE;
 
 SELECT set_config('request.jwt.claim.role', 'service_role', true);
+
+-- ===========================================================================
+-- E10 - the settlement's parity with the existing completion
+-- (the 2026-11-04 design, section 5.3).
+--
+-- The settlement duplicates the 'unavailable' UPDATE of
+-- complete_instagram_collection_job instead of calling it, so this section
+-- pins the two writes to each other. Two equivalent owner jobs are seeded and
+-- claimed together. The completion job's capability is then recorded 'ok'
+-- (the completion's fence requires it) and settled through
+-- complete_instagram_collection_job(..., 'unavailable', 'capability_missing');
+-- the settlement job keeps its 'unknown' capability and is settled through
+-- complete_instagram_collection_job_capability_unavailable.
+--
+-- Neither completion writes a receipt row, so the parity is the job row
+-- alone. Every column of instagram_collection_jobs is named below, either
+-- as COMPARED (it must end equal on both jobs) or as PER-JOB (an id, the
+-- job's own account, or a timestamp of its own); the column list is pinned
+-- to the table, so a new column fails this section until it is classified.
+--
+-- "Nothing else written" is checked three ways: the capability and the
+-- account rows are byte-identical around each call, the job's checkpoint
+-- and operation rows are not touched, and this transaction's own tuple
+-- counters (pg_stat_xact_user_tables) move by exactly one UPDATE of
+-- instagram_collection_jobs per call.
+-- ===========================================================================
+CREATE FUNCTION pg_temp.igparity_pick(p_row jsonb, p_columns text[])
+RETURNS jsonb
+LANGUAGE sql
+IMMUTABLE
+AS $function$
+  SELECT COALESCE(jsonb_object_agg(c.name, p_row -> c.name), '{}'::jsonb)
+    FROM unnest(p_columns) AS c(name);
+$function$;
+
+-- This transaction's insert, update and delete counters per user table.
+CREATE FUNCTION pg_temp.igparity_writes()
+RETURNS jsonb
+LANGUAGE sql
+VOLATILE
+AS $function$
+  SELECT COALESCE(jsonb_object_agg(t.schemaname || '.' || t.relname,
+           jsonb_build_array(t.n_tup_ins, t.n_tup_upd, t.n_tup_del)), '{}'::jsonb)
+    FROM pg_stat_xact_user_tables AS t;
+$function$;
+
+-- The tables whose counters moved between two igparity_writes() snapshots,
+-- each with its [inserted, updated, deleted] delta.
+CREATE FUNCTION pg_temp.igparity_write_delta(p_before jsonb, p_after jsonb)
+RETURNS jsonb
+LANGUAGE sql
+IMMUTABLE
+AS $function$
+  SELECT COALESCE(jsonb_object_agg(a.key, jsonb_build_array(
+           (a.value ->> 0)::bigint - COALESCE((p_before -> a.key ->> 0)::bigint, 0),
+           (a.value ->> 1)::bigint - COALESCE((p_before -> a.key ->> 1)::bigint, 0),
+           (a.value ->> 2)::bigint - COALESCE((p_before -> a.key ->> 2)::bigint, 0))),
+         '{}'::jsonb)
+    FROM jsonb_each(p_after) AS a
+   WHERE a.value IS DISTINCT FROM p_before -> a.key;
+$function$;
+
+-- The checkpoint and operation rows of one job.
+CREATE FUNCTION pg_temp.igparity_children(p_job uuid)
+RETURNS jsonb
+LANGUAGE sql
+AS $function$
+  SELECT jsonb_build_object(
+    'checkpoints', (SELECT COALESCE(jsonb_agg(to_jsonb(c) ORDER BY c.job_generation), '[]'::jsonb)
+                      FROM public.instagram_collection_job_checkpoints AS c
+                     WHERE c.job_id = p_job),
+    'operations', (SELECT COALESCE(jsonb_agg(to_jsonb(o) ORDER BY to_jsonb(o)::text), '[]'::jsonb)
+                     FROM public.instagram_collection_job_operations AS o
+                    WHERE o.job_id = p_job));
+$function$;
+
+DO $e10_fixtures$
+DECLARE
+  u_d     uuid := 'd1000000-0000-4000-8000-000000000001';
+  v_acct  uuid;
+  v_gen   bigint;
+  v_count integer;
+  v_cols  text[];
+BEGIN
+  -- Every column is classified below. A new column must be classified too.
+  SELECT array_agg(c.column_name::text ORDER BY c.ordinal_position)
+    INTO v_cols
+    FROM information_schema.columns AS c
+   WHERE c.table_schema = 'public'
+     AND c.table_name = 'instagram_collection_jobs';
+  ASSERT v_cols = ARRAY[
+      'id', 'user_id', 'target_kind', 'target_id', 'social_account_id',
+      'watchlist_id', 'captured_on', 'job_generation', 'status', 'due_at',
+      'retry_at', 'lease_token', 'lease_expires_at', 'attempts',
+      'last_attempt_at', 'last_partial_at', 'last_success_at',
+      'last_reason_code', 'context_viewer_social_account_id',
+      'context_credential_generation', 'context_login_kind', 'created_at',
+      'updated_at'],
+    'E10 the job columns are the ones this section classifies, got ' || v_cols::text;
+
+  -- 15: settled by the existing completion. 16: settled by the settlement.
+  FOREACH v_acct IN ARRAY ARRAY[
+    'd2000000-0000-4000-8000-000000000015',
+    'd2000000-0000-4000-8000-000000000016']::uuid[]
+  LOOP
+    INSERT INTO public.social_accounts
+      (id, user_id, platform, platform_user_id, platform_username,
+       access_token, token_expires_at, is_active, ig_auth_type)
+    VALUES
+      (v_acct, u_d, 'instagram', 'ig-parity-' || right(v_acct::text, 2),
+       'igparity_' || right(v_acct::text, 2), 'parity-token-' || right(v_acct::text, 2),
+       NULL, true, 'business_login');
+
+    v_gen := public.meta_oauth_attempt_bump_instagram_capability(u_d, v_acct, 'direct', 'created');
+    ASSERT v_gen = 1, 'E10 the commit opened generation 1, got ' || v_gen::text;
+
+    INSERT INTO public.instagram_collection_jobs
+      (user_id, target_kind, target_id, social_account_id, captured_on)
+    VALUES (u_d, 'owner', v_acct, v_acct, current_date);
+  END LOOP;
+
+  -- One claim for both, so both are claimed by the same code path. (The
+  -- claim may also re-lease the E9.4 job whose lease that case expired; it
+  -- is not counted and nothing below reads it.)
+  INSERT INTO igdirect_claim_ctx (label, job_id, token, generation)
+  SELECT CASE c ->> 'social_account_id'
+           WHEN 'd2000000-0000-4000-8000-000000000015' THEN 'parity_completion'
+           ELSE 'parity_settlement' END,
+         (c ->> 'job_id')::uuid,
+         (c ->> 'claim_token')::uuid,
+         (c ->> 'job_generation')::bigint
+    FROM public.claim_instagram_collection_jobs('owner', 100) AS c
+   WHERE c ->> 'social_account_id' IN (
+           'd2000000-0000-4000-8000-000000000015',
+           'd2000000-0000-4000-8000-000000000016');
+
+  SELECT count(*) INTO v_count FROM igdirect_claim_ctx WHERE label LIKE 'parity_%';
+  ASSERT v_count = 2, 'E10 both parity jobs were claimed, got ' || v_count::text;
+
+  ASSERT (SELECT count(*) = 2
+            FROM public.instagram_collection_jobs AS j
+            JOIN igdirect_claim_ctx AS x ON x.job_id = j.id AND x.label LIKE 'parity_%'
+           WHERE j.status = 'leased'
+             AND j.context_viewer_social_account_id = j.social_account_id
+             AND j.context_credential_generation = 1
+             AND j.context_login_kind = 'direct'),
+    'E10 both parity jobs are leased with a bound direct context';
+END
+$e10_fixtures$;
+
+DO $e10_parity$
+DECLARE
+  u_d       uuid := 'd1000000-0000-4000-8000-000000000001';
+  acct_c    uuid := 'd2000000-0000-4000-8000-000000000015';
+  acct_s    uuid := 'd2000000-0000-4000-8000-000000000016';
+  -- Must end equal on both jobs.
+  v_compared text[] := ARRAY[
+    'user_id', 'target_kind', 'watchlist_id', 'captured_on', 'job_generation',
+    'status', 'due_at', 'retry_at', 'lease_token', 'lease_expires_at',
+    'attempts', 'last_partial_at', 'last_success_at', 'last_reason_code',
+    'context_credential_generation', 'context_login_kind'];
+  -- Genuinely per job: its ids, its own account, and its own timestamps.
+  -- last_attempt_at is the claim's clock_timestamp(), so it differs
+  -- between two jobs claimed in one call.
+  v_per_job  text[] := ARRAY[
+    'id', 'target_id', 'social_account_id', 'context_viewer_social_account_id',
+    'last_attempt_at', 'created_at', 'updated_at'];
+  -- The lease is per job until it is cleared.
+  v_lease    text[] := ARRAY['lease_token', 'lease_expires_at'];
+  v_all      text[];
+  v_c_job    uuid;
+  v_c_token  uuid;
+  v_c_gen    bigint;
+  v_s_job    uuid;
+  v_s_token  uuid;
+  v_s_gen    bigint;
+  v_c_before jsonb;
+  v_s_before jsonb;
+  v_c_after  jsonb;
+  v_s_after  jsonb;
+  v_c_kids   jsonb;
+  v_s_kids   jsonb;
+  v_c_result jsonb;
+  v_s_result jsonb;
+  v_writes   jsonb;
+  v_delta    jsonb;
+  v_side     record;
+BEGIN
+  -- The two lists together are exactly the table's columns, each once.
+  SELECT array_agg(x ORDER BY x) INTO v_all FROM unnest(v_compared || v_per_job) AS x;
+  ASSERT v_all = (SELECT array_agg(c.column_name::text ORDER BY c.column_name::text)
+                    FROM information_schema.columns AS c
+                   WHERE c.table_schema = 'public'
+                     AND c.table_name = 'instagram_collection_jobs'),
+    'E10 every job column is either compared or per-job, exactly once';
+
+  SELECT job_id, token, generation INTO v_c_job, v_c_token, v_c_gen
+    FROM igdirect_claim_ctx WHERE label = 'parity_completion';
+  SELECT job_id, token, generation INTO v_s_job, v_s_token, v_s_gen
+    FROM igdirect_claim_ctx WHERE label = 'parity_settlement';
+
+  -- The completion's fence needs a recorded capability of the claimed
+  -- generation. The settlement job keeps its unknown one.
+  PERFORM public.write_instagram_account_capability(acct_c, u_d, jsonb_build_object(
+    'login_kind', 'direct',
+    'permission_read_state', 'ok',
+    'granted_scopes', jsonb_build_array('instagram_business_basic', 'instagram_business_manage_insights'),
+    'scopes_read_at', to_char((now() + interval '1 second') AT TIME ZONE 'UTC',
+                              'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),
+    'expected_credential_generation', 1));
+
+  v_c_before := pg_temp.igsettle_state(acct_c);
+  v_s_before := pg_temp.igsettle_state(acct_s);
+  v_c_kids := pg_temp.igparity_children(v_c_job);
+  v_s_kids := pg_temp.igparity_children(v_s_job);
+
+  ASSERT v_c_before #>> '{capability,permission_read_state}' = 'ok',
+    'E10 the completion job has a recorded capability';
+  ASSERT v_s_before #>> '{capability,permission_read_state}' = 'unknown',
+    'E10 the settlement job has an unknown capability';
+  ASSERT (v_c_before #>> '{capability,credential_generation}')::bigint = 1
+     AND (v_s_before #>> '{capability,credential_generation}')::bigint = 1,
+    'E10 both capabilities are on the claimed generation';
+
+  -- The two jobs start equivalent: every compared column but the live lease.
+  ASSERT pg_temp.igparity_pick(v_c_before -> 'job', v_compared) - v_lease
+         = pg_temp.igparity_pick(v_s_before -> 'job', v_compared) - v_lease,
+    'E10 the two claimed jobs are equivalent before they are settled, got '
+      || (pg_temp.igparity_pick(v_c_before -> 'job', v_compared) - v_lease)::text || ' vs '
+      || (pg_temp.igparity_pick(v_s_before -> 'job', v_compared) - v_lease)::text;
+
+  -- The existing completion, 'unavailable' / 'capability_missing'.
+  v_writes := pg_temp.igparity_writes();
+  v_c_result := public.complete_instagram_collection_job(
+    v_c_job, v_c_token, v_c_gen, 'unavailable', 'capability_missing');
+  v_delta := pg_temp.igparity_write_delta(v_writes, pg_temp.igparity_writes());
+  ASSERT v_delta = '{"public.instagram_collection_jobs": [0, 1, 0]}'::jsonb,
+    'E10 the completion wrote exactly one job update and nothing else, got ' || v_delta::text;
+
+  -- The settlement.
+  v_writes := pg_temp.igparity_writes();
+  v_s_result := public.complete_instagram_collection_job_capability_unavailable(
+    v_s_job, v_s_token, v_s_gen);
+  v_delta := pg_temp.igparity_write_delta(v_writes, pg_temp.igparity_writes());
+  ASSERT v_delta = '{"public.instagram_collection_jobs": [0, 1, 0]}'::jsonb,
+    'E10 the settlement wrote exactly one job update and nothing else, got ' || v_delta::text;
+
+  v_c_after := pg_temp.igsettle_state(acct_c);
+  v_s_after := pg_temp.igsettle_state(acct_s);
+
+  -- The answers are the same apart from the job they name.
+  ASSERT v_c_result - 'job_id' = v_s_result - 'job_id',
+    'E10 the two answers agree, got ' || v_c_result::text || ' vs ' || v_s_result::text;
+  ASSERT v_c_result ->> 'job_id' = v_c_job::text AND v_s_result ->> 'job_id' = v_s_job::text,
+    'E10 each answer names its own job';
+
+  -- THE PARITY: every compared column ends equal.
+  ASSERT pg_temp.igparity_pick(v_c_after -> 'job', v_compared)
+         = pg_temp.igparity_pick(v_s_after -> 'job', v_compared),
+    'E10 the two settled jobs agree on every compared column, got '
+      || pg_temp.igparity_pick(v_c_after -> 'job', v_compared)::text || ' vs '
+      || pg_temp.igparity_pick(v_s_after -> 'job', v_compared)::text;
+
+  -- The named semantics, on both rows.
+  FOR v_side IN
+    SELECT * FROM (VALUES
+      ('the completion', v_c_before, v_c_after, v_c_kids, v_c_job),
+      ('the settlement', v_s_before, v_s_after, v_s_kids, v_s_job))
+      AS t(label, before, after, kids, job)
+  LOOP
+    ASSERT v_side.after #>> '{job,status}' = 'unavailable',
+      'E10 ' || v_side.label || ' left the job unavailable';
+    ASSERT v_side.after #>> '{job,last_reason_code}' = 'capability_missing',
+      'E10 ' || v_side.label || ' recorded capability_missing';
+    ASSERT v_side.after #> '{job,retry_at}' = 'null'::jsonb,
+      'E10 ' || v_side.label || ' scheduled no retry';
+    ASSERT v_side.after #> '{job,lease_token}' = 'null'::jsonb,
+      'E10 ' || v_side.label || ' cleared the lease token';
+    ASSERT v_side.after #> '{job,lease_expires_at}' = 'null'::jsonb,
+      'E10 ' || v_side.label || ' cleared the lease expiry';
+    ASSERT v_side.after #> '{job,due_at}' = v_side.before #> '{job,due_at}',
+      'E10 ' || v_side.label || ' kept due_at';
+    ASSERT v_side.after #> '{job,attempts}' = v_side.before #> '{job,attempts}',
+      'E10 ' || v_side.label || ' kept the attempts';
+    ASSERT v_side.after #> '{job,job_generation}' = v_side.before #> '{job,job_generation}',
+      'E10 ' || v_side.label || ' kept the job generation';
+    ASSERT v_side.after #> '{job,last_success_at}' = v_side.before #> '{job,last_success_at}',
+      'E10 ' || v_side.label || ' kept last_success_at';
+    ASSERT v_side.after #> '{job,last_partial_at}' = v_side.before #> '{job,last_partial_at}',
+      'E10 ' || v_side.label || ' kept last_partial_at';
+    ASSERT v_side.after #> '{job,last_attempt_at}' = v_side.before #> '{job,last_attempt_at}',
+      'E10 ' || v_side.label || ' kept last_attempt_at';
+    ASSERT v_side.after #> '{job,context_viewer_social_account_id}'
+           = v_side.after #> '{job,social_account_id}',
+      'E10 ' || v_side.label || ' kept the job bound to its own account';
+    ASSERT pg_temp.igparity_pick(v_side.after -> 'job',
+             ARRAY['id', 'target_id', 'social_account_id', 'context_viewer_social_account_id', 'created_at'])
+           = pg_temp.igparity_pick(v_side.before -> 'job',
+             ARRAY['id', 'target_id', 'social_account_id', 'context_viewer_social_account_id', 'created_at']),
+      'E10 ' || v_side.label || ' kept the job identity';
+
+    -- Nothing but the job row was written.
+    ASSERT v_side.after -> 'capability' = v_side.before -> 'capability',
+      'E10 ' || v_side.label || ' left the capability row byte-identical';
+    ASSERT v_side.after -> 'account' = v_side.before -> 'account',
+      'E10 ' || v_side.label || ' left the account row byte-identical';
+    ASSERT pg_temp.igparity_children(v_side.job) = v_side.kids,
+      'E10 ' || v_side.label || ' left the job checkpoints and operations untouched';
+  END LOOP;
+END
+$e10_parity$;
 
 SELECT set_config('request.jwt.claim.role', '', true);
 SELECT set_config('request.jwt.claim.sub', '', true);
