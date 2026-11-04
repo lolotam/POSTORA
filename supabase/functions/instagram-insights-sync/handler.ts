@@ -142,6 +142,11 @@ export type OwnerIntakeErrorCode =
    * simply does not admit it yet.
    */
   | "collection_not_eligible"
+  /**
+   * The owned account has no usable capability record, so a job could not
+   * run: it has to be reconnected first.
+   */
+  | "reconnect_required"
   | "settings_unavailable"
   | "service_auth_unavailable"
   | "enqueue_indeterminate"
@@ -1173,6 +1178,9 @@ export function createInstagramInsightsSyncHandler(
         const reason = accepted.projection.reason_code;
         if (reason === "collection_not_eligible") {
           return await refuse(403, "collection_not_eligible");
+        }
+        if (reason === "reconnect_required") {
+          return await refuse(409, "reconnect_required");
         }
         if (reason === "collection_disabled") {
           return await refuse(503, "collection_disabled");

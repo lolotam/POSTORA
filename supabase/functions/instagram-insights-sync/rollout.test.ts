@@ -1542,13 +1542,16 @@ Deno.test("the actual route refuses a service identity on the owner actions", as
   assertEquals(enqueueCalls[0]!.authorization, `Bearer ${SERVICE_ROLE_KEY}`);
 });
 
-Deno.test("the actual route maps a rollout refusal to one 403 and creates nothing", async () => {
+// reconnect_required: production incident 2026-11-04, an account without a
+// capability record was answered "queued" and its job abandoned.
+for (const [reasonCode, status] of [["collection_not_eligible", 403], ["reconnect_required", 409]] as const) {
+Deno.test(`the actual route maps a ${reasonCode} refusal to one ${status} and creates nothing`, async () => {
   const probe = newProbe();
   probe.rpc["enqueue_instagram_collection_job"] = {
     data: {
       accepted: false,
       refused: true,
-      reason_code: "collection_not_eligible",
+      reason_code: reasonCode,
       captured_on: CAPTURED_ON,
     },
     error: null,
@@ -1557,8 +1560,8 @@ Deno.test("the actual route maps a rollout refusal to one 403 and creates nothin
   const handler = await loadRoute(probe);
   const response = await handler(post({ action: "enqueue", social_account_id: ACCOUNT_B }));
 
-  assertEquals(response.status, 403);
-  assertEquals((await body(response)).error, "collection_not_eligible");
+  assertEquals(response.status, status);
+  assertEquals((await body(response)).error, reasonCode);
 
   // The refusal created nothing and mutated nothing: the only write is the
   // audit row of the request itself. No scope, no health and no credential
@@ -1578,6 +1581,7 @@ Deno.test("the actual route maps a rollout refusal to one 403 and creates nothin
     false,
   );
 });
+}
 
 Deno.test("the actual route keeps a drain behind a service credential", async () => {
   const probe = newProbe();
