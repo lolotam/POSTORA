@@ -110,6 +110,7 @@ export const OWNER_ENQUEUE_REFUSAL_REASONS = [
   "collection_not_eligible",
   "collection_disabled",
   "settings_unavailable",
+  "reconnect_required",
 ] as const;
 
 export type OwnerEnqueueRefusalReason =
