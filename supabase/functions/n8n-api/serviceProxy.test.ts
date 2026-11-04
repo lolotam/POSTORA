@@ -720,3 +720,27 @@ Deno.test("the account loader reads one account and tells a failed read from a m
   assertEquals(seen[0].column, "id");
   assertEquals(seen[0].value, ACCOUNT_ID);
 });
+
+Deno.test("instagram also accepts one day, a year and all time; other platforms keep their periods", async () => {
+  const cases: { platform: string; period: string; forwarded: number | "all" | null }[] = [
+    { platform: "instagram", period: "1", forwarded: 1 },
+    { platform: "instagram", period: "365", forwarded: 365 },
+    { platform: "instagram", period: "all", forwarded: "all" },
+    { platform: "instagram", period: "2", forwarded: null },
+    { platform: "threads", period: "1", forwarded: null },
+    { platform: "threads", period: "365", forwarded: null },
+    { platform: "threads", period: "all", forwarded: null },
+  ];
+  for (const { platform, period, forwarded } of cases) {
+    const { deps, calls } = fakeDeps({ account: { ...DEFAULT_ACCOUNT, platform } });
+    const result = await handleGetPostAnalytics(deps, OWNER, params({ social_account_id: ACCOUNT_ID, period_days: period }));
+    if (forwarded === null) {
+      assertEquals(result.status, 400, `${platform} ${period}`);
+      assertEquals(errorOf(result).code, "INVALID_PERIOD");
+      assertEquals(calls.invokes.length, 0);
+    } else {
+      assertEquals(result.status, 200, `${platform} ${period}`);
+      assertEquals(calls.invokes[0].body.period_days, forwarded);
+    }
+  }
+});

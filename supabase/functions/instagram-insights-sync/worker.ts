@@ -187,6 +187,7 @@ import {
   USAGE_STOP_PERCENT,
   type MediaSweepStop,
   type OwnerAccountDay,
+  type OwnerAccountPeriodTotal,
   type OwnerMediaInsights,
   type OwnerMediaSweep,
   type OwnerProfileObservation,
@@ -194,12 +195,14 @@ import {
   type OwnerProviderResult,
 } from "./graphProvider.ts";
 import { InstagramDirectGraphProvider } from "./directGraphProvider.ts";
+import { kuwaitDayRange } from "./providerTransport.ts";
 import {
   OwnerWorkerStoreError,
   type OwnerCapability,
   type OwnerCollectionServiceStore,
   type OwnerInventoryProgressPayload,
   type OwnerMediaInventoryRow,
+  type OwnerPeriodTotalPayload,
   type OwnerSnapshotPayload,
   type OwnerTarget,
 } from "./workerStore.ts";
@@ -244,10 +247,79 @@ export const MEDIA_INSIGHTS_PER_VISIT = 5;
 /**
  * The size of the pending queue the accepted checkpoint accepts.
  *
- * The accepted SQL refuses more than five hundred remaining ids, so the
- * queue is capped and the cap is recorded as a gap rather than hidden.
+ * The accepted SQL refuses more than five hundred remaining ids, and the
+ * queue holds the owed days AND the owed media, so the two together never
+ * exceed it.
  */
-export const MEDIA_QUEUE_LIMIT = 500;
+export const REMAINING_IDS_LIMIT = 500;
+
+/**
+ * The closed Kuwait days whose daily observation the owner history keeps
+ * complete, counted back from the job's last closed day.
+ *
+ * Meta keeps account insights for two years
+ * (docs/specs/2026-10-26-instagram-insights-and-competitor-tracking.md), so
+ * a year of history is inside what the provider can still answer.
+ */
+export const ACCOUNT_DAY_HISTORY_DAYS = 365;
+
+/**
+ * The missing closed days ONE visit backfills at most, newest first.
+ *
+ * Each backfill day is one Graph call. A run claims up to 25 owner jobs, so
+ * five per visit keeps the backfill of a whole run at or under 125 calls on
+ * top of the capture's own calls, and leaves the shared 40 second budget to
+ * the primary and correction days, which are always planned first.
+ */
+export const ACCOUNT_DAYS_BACKFILL_PER_VISIT = 5;
+
+/**
+ * The missing closed days ONE account backfills per Kuwait capture day.
+ *
+ * This is the cap that spreads the catch-up: an account with no history
+ * gets 60 days a day, so its 363 missing days fill over about a week
+ * instead of in one burst on the day the backfill is deployed, for every
+ * owner at once. It is counted from the rows the store holds - the days
+ * whose row was first written on this capture day - so a re-run, a second
+ * job or a resumed visit can never exceed it.
+ */
+export const ACCOUNT_DAYS_BACKFILL_PER_DAY = 60;
+
+/**
+ * The shared usage at which the backfill waits for another day.
+ *
+ * The capture itself stops at `USAGE_STOP_PERCENT`. The backfill is the
+ * work that can wait, so it backs off much earlier: at half the budget the
+ * credential's calls are left to the primary and correction days, the
+ * profile and the media of the accounts that share it.
+ */
+export const BACKFILL_USAGE_CEILING_PERCENT = 50;
+
+/**
+ * The day tokens one visit can hold in the queue: the primary day, the
+ * correction day and one backfill slice.
+ */
+const ACCOUNT_DAY_QUEUE_SLOTS = 2 + ACCOUNT_DAYS_BACKFILL_PER_VISIT;
+
+/**
+ * The media the queue holds at most.
+ *
+ * The rest of the checkpoint's five hundred ids is left to the owed days,
+ * so a full media queue never pushes the checkpoint past what the accepted
+ * SQL accepts. The cap is recorded as a gap rather than hidden.
+ */
+export const MEDIA_QUEUE_LIMIT = REMAINING_IDS_LIMIT - ACCOUNT_DAY_QUEUE_SLOTS;
+
+/**
+ * The periods whose exact unique reach a capture day collects, in days.
+ *
+ * Each ends on the job's last closed day. Reach is a count of UNIQUE
+ * accounts, so a period's reach is never a sum of daily reach: it is one
+ * provider total, and Meta answers such a total for at most thirty days. A
+ * one-day period is the daily row itself; a longer period has no exact
+ * reach at all.
+ */
+export const PERIOD_REACH_DAYS: readonly number[] = [7, 14, 30];
 
 /**
  * The durable gap: the queue could not hold every media of the window.
@@ -277,13 +349,21 @@ const CONTINUATION_EXPIRED = "continuation_expired";
 const MEDIA_INSIGHTS_UNAVAILABLE = "media_insights_unavailable";
 
 /**
- * The Graph error codes that are a refusal of ONE media.
+ * The Graph error codes that are a refusal of ONE item.
  *
  * Meta answers a media it will never answer - a media without insights, a
  * media it has no permission to read - with a Graph error object of code 10
- * or 100. The refusal is about that media, and it is permanent.
+ * or 100. It answers a backfill day or a period it cannot serve the same
+ * way. The refusal is about that item, and it is permanent.
  */
-const DEFINITIVE_MEDIA_GRAPH_CODES: ReadonlySet<number> = new Set([10, 100]);
+const DEFINITIVE_ITEM_GRAPH_CODES: ReadonlySet<number> = new Set([10, 100]);
+
+/**
+ * The item-level reason of a backfill day or a period the provider refused
+ * for good. Like the media reason, it lives in the bounded log only: the
+ * stored row says `unavailable` and carries no number.
+ */
+const ACCOUNT_HISTORY_UNAVAILABLE = "account_history_unavailable";
 
 /**
  * The number of Kuwait days a capture day may be continued for.
@@ -364,6 +444,8 @@ export type OwnerReasonCode =
   | "daily_observation_pending"
   /** The insights of one or more media are still owed. */
   | "media_insights_pending"
+  /** The exact reach of one or more periods is still owed. */
+  | "period_reach_pending"
   /** The job carries no bound connection context. */
   | "context_missing"
   /** The target account row is gone. */
@@ -473,6 +555,14 @@ export interface OwnerCollectionProvider {
     readonly signal: AbortSignal;
     readonly permit: OwnerProviderPermit;
   }): Promise<OwnerProviderResult<OwnerAccountDay>>;
+  fetchAccountPeriodReach(input: {
+    readonly igUserId: string;
+    readonly token: string;
+    readonly sinceDate: string;
+    readonly untilDate: string;
+    readonly signal: AbortSignal;
+    readonly permit: OwnerProviderPermit;
+  }): Promise<OwnerProviderResult<OwnerAccountPeriodTotal>>;
   fetchMediaInsights(input: {
     readonly igMediaId: string;
     readonly token: string;
@@ -763,6 +853,26 @@ interface OwnerVisitState {
   owedDays: string[];
   /** The days that were collected, with their metrics or without them. */
   collectedDays: string[];
+  /**
+   * The owed days that are BACKFILL: older than the correction day. Only
+   * such a day may be closed as unavailable when the provider refuses it.
+   */
+  backfillDays: string[];
+  /**
+   * The missing closed days this capture day can still backfill after this
+   * visit. A day the daily cap or the usage ceiling holds back is not
+   * counted: it waits for the next capture day, and the job is not kept
+   * partial for it.
+   */
+  backfillRemaining: number;
+  /** The usage the shared throttle bucket reported before this visit. */
+  bucketUsagePercent: number;
+  /** The job's last closed Kuwait day: the end of every period it owes. */
+  lastClosedDay: string;
+  /** The periods whose exact reach this job still owes, in days. */
+  owedPeriods: number[];
+  /** The periods whose reach was stored by this visit. */
+  collectedPeriods: number[];
   /** The media that still owe their insights, in the order they are owed. */
   mediaQueue: string[];
   /** The cursor the next visit resumes the media sweep from. */
@@ -963,10 +1073,34 @@ function mediaWindowStart(capturedOn: string): string {
  * them: the capture day is still running while the worker runs.
  */
 function previousDay(day: string): string {
+  return addDays(day, -1);
+}
+
+/**
+ * The calendar day a number of days away from the given day.
+ *
+ * Like `previousDay`, it counts whole calendar days at UTC midnight, so the
+ * answer never depends on the host's timezone.
+ */
+function addDays(day: string, offset: number): string {
   const parsed = new Date(`${day}T00:00:00Z`);
   if (Number.isNaN(parsed.getTime())) return day;
-  parsed.setUTCDate(parsed.getUTCDate() - 1);
+  parsed.setUTCDate(parsed.getUTCDate() + offset);
   return parsed.toISOString().slice(0, 10);
+}
+
+/**
+ * The closed Kuwait days of the owner history, newest first.
+ *
+ * They end on the job's last closed day and reach back
+ * `ACCOUNT_DAY_HISTORY_DAYS` days. The capture day is never one of them: it
+ * is still running while the worker runs.
+ */
+function historyDays(lastClosedDay: string): string[] {
+  return Array.from(
+    { length: ACCOUNT_DAY_HISTORY_DAYS },
+    (_unused, index) => addDays(lastClosedDay, -index),
+  );
 }
 
 /**
@@ -1177,7 +1311,7 @@ async function collect(context: JobContext): Promise<JobStep> {
   if (credentialStep.kind === "end") return credentialStep.step;
   const credential = credentialStep.state;
 
-  const throttleStep = await checkThrottle(context, credential);
+  const throttleStep = await checkThrottle(context, credential, visit);
   if (throttleStep.kind === "end") return throttleStep.step;
 
   const planStep = await planOwedDays(context, visit);
@@ -1185,6 +1319,9 @@ async function collect(context: JobContext): Promise<JobStep> {
 
   const daysStep = await collectDays(context, visit, targetStep.state, credential);
   if (daysStep.kind === "end") return daysStep.step;
+
+  const periodsStep = await collectPeriodReach(context, visit, targetStep.state, credential);
+  if (periodsStep.kind === "end") return periodsStep.step;
 
   const sweepStep = await sweepInventory(context, visit, targetStep.state, credential);
   if (sweepStep.kind === "end") return sweepStep.step;
@@ -1210,6 +1347,12 @@ function createVisitState(job: ClaimedOwnerJob): OwnerVisitState {
   const visit: OwnerVisitState = {
     owedDays: [],
     collectedDays: [],
+    backfillDays: [],
+    backfillRemaining: 0,
+    bucketUsagePercent: 0,
+    lastClosedDay: previousDay(job.capturedOn),
+    owedPeriods: [],
+    collectedPeriods: [],
     mediaQueue: [],
     cursor: checkpoint.cursor,
     pagesFetched: checkpoint.pagesFetched,
@@ -1653,12 +1796,14 @@ async function resolveProtectedCredential(
 async function checkThrottle(
   context: JobContext,
   credential: VisitCredential,
+  visit: OwnerVisitState,
 ): Promise<StepResult<null>> {
   const { ports } = context;
 
   const bucket = await read(context, (signal) =>
     ports.store.readThrottleBucket({ bucketKey: credential.bucketKey, signal })
   );
+  visit.bucketUsagePercent = bucket?.usagePercent ?? 0;
 
   if (bucket?.throttledUntil && new Date(bucket.throttledUntil).getTime() > ports.now()) {
     // The shared bucket says THIS credential is still throttled. No provider
@@ -1721,6 +1866,9 @@ async function planOwedDays(
     // contract is owed even when the queue does not name it.
     if (job.pendingOperations.includes(accountDayOperationKey(day))) owedDays.push(day);
   }
+
+  await planBackfill(context, visit, owedDays, queuedTokens);
+  await planOwedPeriods(context, visit);
   visit.owedDays = owedDays;
 
   if (owedDays.length === 0) {
@@ -1760,6 +1908,144 @@ async function planOwedDays(
   });
 
   return { kind: "continue", state: null };
+}
+
+/**
+ * Adds ONE slice of the missing closed days to the owed days.
+ *
+ * The history is the last `ACCOUNT_DAY_HISTORY_DAYS` closed Kuwait days. A
+ * day is answered when its row is `ok` or `unavailable`; any other day is
+ * missing. The missing days are recomputed from the store on every visit,
+ * so a slice that a visit could not finish is simply planned again.
+ *
+ * The slice is newest first and bounded by `backfillSliceSize`. A day that
+ * is already answered is never asked for again, so a re-run plans nothing
+ * twice.
+ */
+async function planBackfill(
+  context: JobContext,
+  visit: OwnerVisitState,
+  owedDays: string[],
+  queuedTokens: readonly string[],
+): Promise<void> {
+  const { ports, job } = context;
+  const history = historyDays(visit.lastClosedDay);
+  const currentDays = [visit.lastClosedDay, previousDay(visit.lastClosedDay)];
+
+  const stored = await read(context, (signal) =>
+    ports.store.readOwnerAccountDays({
+      userId: job.userId,
+      socialAccountId: job.socialAccountId,
+      days: history,
+      signal,
+    })
+  );
+  const answered = new Set(
+    stored
+      .filter((row) => row.status === "ok" || row.status === "unavailable")
+      .map((row) => row.metricDate),
+  );
+
+  // The primary and the correction day are owed by the daily capture
+  // itself; they are never part of the backfill.
+  const missing = history.filter((day) =>
+    !answered.has(day) && !owedDays.includes(day) && !currentDays.includes(day)
+  );
+
+  const owedBackfill = owedDays.filter((day) => !currentDays.includes(day)).length;
+  const firstWrittenToday = stored.filter((row) =>
+    !currentDays.includes(row.metricDate) &&
+    Date.parse(row.capturedAt) >= kuwaitDayStartMs(job.capturedOn)
+  ).length;
+  // The days a previous visit planned today count against today's cap too.
+  const todayRoom = Math.max(0, ACCOUNT_DAYS_BACKFILL_PER_DAY - firstWrittenToday - owedBackfill);
+  const sliceSize = backfillSliceSize(visit, {
+    owedBackfill,
+    todayRoom,
+    queueRoom: REMAINING_IDS_LIMIT -
+      mergeQueue(owedDays.map(accountDayToken), queuedTokens).length,
+  });
+  const slice = missing.slice(0, sliceSize);
+
+  owedDays.push(...slice);
+  visit.backfillDays = owedDays.filter((day) => !currentDays.includes(day));
+  visit.backfillRemaining = sliceSize === 0 && backfillCeilingReached(visit)
+    ? 0
+    : Math.min(missing.length - slice.length, todayRoom - slice.length);
+}
+
+/**
+ * The backfill days this visit may plan.
+ *
+ * Zero while the shared usage is at or above the backfill ceiling. Else the
+ * least of: the per-visit budget less the backfill days already owed, the
+ * room today's per-account cap has left, and the room the checkpoint's
+ * queue has left - so the planned queue never exceeds what the accepted SQL
+ * accepts.
+ */
+function backfillSliceSize(
+  visit: OwnerVisitState,
+  room: { readonly owedBackfill: number; readonly todayRoom: number; readonly queueRoom: number },
+): number {
+  if (backfillCeilingReached(visit)) return 0;
+  return Math.max(
+    0,
+    Math.min(ACCOUNT_DAYS_BACKFILL_PER_VISIT - room.owedBackfill, room.todayRoom, room.queueRoom),
+  );
+}
+
+/** True when the shared or this visit's usage leaves no room for history. */
+function backfillCeilingReached(visit: OwnerVisitState): boolean {
+  return Math.max(visit.bucketUsagePercent, visit.usagePercent) >= BACKFILL_USAGE_CEILING_PERCENT;
+}
+
+/** The first instant of a Kuwait calendar day. */
+function kuwaitDayStartMs(day: string): number {
+  return Date.parse(`${day}T00:00:00+03:00`);
+}
+
+/**
+ * The periods whose exact reach this job still owes.
+ *
+ * A period is owed until a row for it - `ok` or `unavailable` - ends on the
+ * job's last closed day. No operation is planned for it: the accepted
+ * operations contract has no kind for a period, so the job stays `partial`
+ * through its own finalisation while a period is owed.
+ */
+async function planOwedPeriods(context: JobContext, visit: OwnerVisitState): Promise<void> {
+  const { ports, job } = context;
+
+  const stored = await read(context, (signal) =>
+    ports.store.readOwnerPeriodTotals({
+      userId: job.userId,
+      socialAccountId: job.socialAccountId,
+      untilDate: visit.lastClosedDay,
+      periodDays: PERIOD_REACH_DAYS,
+      signal,
+    })
+  );
+  const answered = new Set(stored.map((row) => row.periodDays));
+  visit.owedPeriods = PERIOD_REACH_DAYS.filter((days) => !answered.has(days));
+}
+
+/**
+ * The daily observation of a backfill day the provider refused for good.
+ *
+ * It is the provider's own statement that the day has nothing to give, so
+ * the row is `unavailable` and carries no metric: the day is never stored as
+ * a zero, and it is not asked for again.
+ */
+function refusedAccountDay(day: string): OwnerAccountDay {
+  const { since, until } = kuwaitDayRange(day, day);
+  return {
+    provider_date: day,
+    metric_date: day,
+    period_start: new Date(since).toISOString(),
+    period_end: new Date(until).toISOString(),
+    provider_timezone: "Asia/Kuwait",
+    query_kind: "interactions",
+    metrics: {},
+  };
 }
 
 /**
@@ -1838,6 +2124,11 @@ async function collectDays(
     // The usage budget is nearly spent: no further provider call is made.
     if (visit.usageStop) break;
     if (!context.budget.canStartProviderCall()) break;
+    // History waits for a quiet budget. A backfill day queued by an earlier
+    // visit is checked again here, against the usage seen NOW, so a queue
+    // planned at low usage cannot spend a budget that has since filled. The
+    // day stays owed; the daily capture's own days still run.
+    if (visit.backfillDays.includes(day) && backfillCeilingReached(visit)) continue;
 
     let dayValue: Awaited<
       ReturnType<InstagramGraphProvider["fetchAccountDay"]>
@@ -1861,10 +2152,22 @@ async function collectDays(
       if (error instanceof OwnerProviderPermitError) {
         return { kind: "end", step: await handlePermitFailure(context, error) };
       }
-      return {
-        kind: "end",
-        step: await handleProviderFailure(context, credential.bucketKey, error, visit),
-      };
+      // A backfill day the provider will never answer - older than the
+      // history it serves, or before the account existed - is closed as
+      // unavailable. The primary and the correction day keep the visit-level
+      // failure: a refusal of TODAY's data is about the account, not a day.
+      if (
+        error instanceof OwnerProviderError && isDefinitiveHistoryRefusal(error) &&
+        visit.backfillDays.includes(day)
+      ) {
+        logHistoryUnavailable(context, "owner_account_day_unavailable");
+        dayValue = refusedAccountDay(day);
+      } else {
+        return {
+          kind: "end",
+          step: await handleProviderFailure(context, credential.bucketKey, error, visit),
+        };
+      }
     }
 
     const accountDayPayload: OwnerSnapshotPayload = {
@@ -1902,6 +2205,111 @@ async function collectDays(
   }
 
   return { kind: "continue", state: null };
+}
+
+/**
+ * The exact unique reach of the periods this job owes.
+ *
+ * Each period is ONE provider total over its whole range, ending on the
+ * job's last closed day. It runs after the days, inside the same budget and
+ * usage stop; a period that does not fit is owed again on the next visit.
+ */
+async function collectPeriodReach(
+  context: JobContext,
+  visit: OwnerVisitState,
+  target: OwnerTarget,
+  credential: VisitCredential,
+): Promise<StepResult<null>> {
+  const { ports, job } = context;
+
+  for (const periodDays of visit.owedPeriods) {
+    if (visit.usageStop) break;
+    if (!context.budget.canStartProviderCall()) break;
+
+    const untilDate = visit.lastClosedDay;
+    const sinceDate = addDays(untilDate, -(periodDays - 1));
+    let payload: OwnerPeriodTotalPayload;
+
+    try {
+      const answer = await providerStep(context, (signal) =>
+        credential.provider.fetchAccountPeriodReach({
+          igUserId: target.platformUserId,
+          token: credential.token,
+          sinceDate,
+          untilDate,
+          signal,
+          permit: credential.permit,
+        })
+      );
+      visit.usagePercent = Math.max(visit.usagePercent, answer.usagePercent);
+      visit.usageStop = visit.usagePercent >= USAGE_STOP_PERCENT;
+      const total = answer.value;
+      payload = {
+        metric: total.metric,
+        period_days: total.period_days,
+        since_date: total.since_date,
+        until_date: total.until_date,
+        period_start: total.period_start,
+        period_end: total.period_end,
+        provider_timezone: total.provider_timezone,
+        // A range the provider did not report has no reach. It is stored as
+        // unavailable, never as a zero.
+        status: total.value === null ? "unavailable" : "ok",
+        value: total.value,
+      };
+    } catch (error) {
+      if (error instanceof BudgetExceededError) throw error;
+      if (error instanceof OwnerProviderPermitError) {
+        return { kind: "end", step: await handlePermitFailure(context, error) };
+      }
+      if (!(error instanceof OwnerProviderError) || !isDefinitiveHistoryRefusal(error)) {
+        return {
+          kind: "end",
+          step: await handleProviderFailure(context, credential.bucketKey, error, visit),
+        };
+      }
+      logHistoryUnavailable(context, "owner_period_reach_unavailable");
+      const { since, until } = kuwaitDayRange(sinceDate, untilDate);
+      payload = {
+        metric: "reach",
+        period_days: periodDays,
+        since_date: sinceDate,
+        until_date: untilDate,
+        period_start: new Date(since).toISOString(),
+        period_end: new Date(until).toISOString(),
+        provider_timezone: "Asia/Kuwait",
+        status: "unavailable",
+        value: null,
+      };
+    }
+
+    await write(context, (signal) =>
+      ports.store.persistPeriodTotal({
+        jobId: job.jobId,
+        claimToken: job.claimToken,
+        jobGeneration: job.jobGeneration,
+        payload,
+        signal,
+      })
+    );
+    visit.collectedPeriods.push(periodDays);
+
+    if (visit.usageStop) break;
+  }
+
+  return { kind: "continue", state: null };
+}
+
+/** Logs ONE backfill day or period the provider refused for good. */
+function logHistoryUnavailable(context: JobContext, event: string): void {
+  context.ports.log({
+    event,
+    jobId: context.job.jobId,
+    socialAccountId: context.job.socialAccountId,
+    outcome: "unavailable",
+    reasonCode: ACCOUNT_HISTORY_UNAVAILABLE,
+    durationMs: context.ports.now() - context.startedAt,
+  });
 }
 
 /**
@@ -2145,14 +2553,15 @@ async function drainMediaQueue(
           }
           if (error.kind === "token_invalid") {
             // The credential is dead. The progress of this visit is recorded
-            // first, so the next visit does not ask for it again.
+            // first, and the job ends without a retry: see
+            // `handleProviderFailure`.
             await recordVisitProgress(context, visit);
             return {
               kind: "end",
-              step: await persistFailure(context, "retry", "token_invalid"),
+              step: await persistFailure(context, "unavailable", "token_invalid"),
             };
           }
-          if (isDefinitiveMediaRefusal(error)) {
+          if (isDefinitiveItemRefusal(error)) {
             // The provider refuses THIS media and will refuse it again. The
             // item is closed, and only the item: the job keeps the work it
             // has left.
@@ -2289,10 +2698,16 @@ async function finalize(
     });
   }
 
-  if (pendingDays.length > 0) {
-    // A daily observation is still owed. The job stays claimable and it is
-    // completed again on the next visit.
+  if (pendingDays.length > 0 || visit.backfillRemaining > 0) {
+    // A daily observation is still owed - one this visit planned, or a
+    // missing day of the history the next slice will plan. The job stays
+    // claimable and it is completed again on the next visit.
     return await persistFailure(context, "partial", "daily_observation_pending");
+  }
+  if (visit.owedPeriods.some((days) => !visit.collectedPeriods.includes(days))) {
+    // The exact reach of a period is still owed. It has no operation of its
+    // own, so the partial outcome is what brings the job back for it.
+    return await persistFailure(context, "partial", "period_reach_pending");
   }
   if (visit.mediaQueue.length > 0) {
     // The insights of some media are still owed. The job stays claimable and
@@ -2568,8 +2983,13 @@ async function handleProviderFailure(
   }
 
   if (error.kind === "token_invalid") {
+    // The provider rejected the credential itself. Asking again with the
+    // same token can only be rejected again, so the job ends without a
+    // retry. This worker has no write that marks the account for
+    // reconnection; the account's reconnection state is owned by the token
+    // refresh and connection health paths.
     await recordVisitProgress(context, visit);
-    return await persistFailure(context, "retry", "token_invalid");
+    return await persistFailure(context, "unavailable", "token_invalid");
   }
 
   if (error.kind === "scope_missing") {
@@ -2687,16 +3107,33 @@ function moveToBackOfQueue(visit: OwnerVisitState, mediaId: string): void {
 }
 
 /**
- * True when the provider refused ONE media and will refuse it again.
+ * True when the provider refused ONE item and will refuse it again.
  *
  * Meta answers a media it will never answer with a Graph error object of
  * code 10 ("not enough viewers for the media to show insights") or of code
- * 100. The refusal is about that media alone: it says nothing about the
- * account and nothing about the other media.
+ * 100, and a backfill day or a period it cannot serve the same way. The
+ * refusal is about that item alone: it says nothing about the account and
+ * nothing about the other items.
  */
-function isDefinitiveMediaRefusal(error: OwnerProviderError): boolean {
+function isDefinitiveItemRefusal(error: OwnerProviderError): boolean {
+  // A throttle or a dead credential can carry code 10 or 100 too (HTTP 429,
+  // or usage past the stop line). Those are conditions of the account or of
+  // the application, never of the item, and must not close it for good.
+  if (error.kind === "rate_limited" || error.kind === "token_invalid") return false;
   return error.graphCode !== null &&
-    DEFINITIVE_MEDIA_GRAPH_CODES.has(error.graphCode);
+    DEFINITIVE_ITEM_GRAPH_CODES.has(error.graphCode);
+}
+
+/**
+ * True when the provider will never answer ONE backfill day or period.
+ *
+ * Only code 100 qualifies. For account insights, code 10 is a permission
+ * refusal of the whole account (`scope_missing`): closing days for it would
+ * mark up to a full slice of history as answered when the credential, not
+ * the history, is the problem.
+ */
+function isDefinitiveHistoryRefusal(error: OwnerProviderError): boolean {
+  return error.kind === "provider_error" && error.graphCode === 100;
 }
 
 /**

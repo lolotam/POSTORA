@@ -464,13 +464,17 @@ function buildServer(
     description:
       "Get analytics for a connected account's recent posts. Supported today: Threads (insights over period_days), " +
       "TikTok (profile stats and recent videos), and Instagram (insights report and outlier detection over period_days). " +
+      "Threads and Facebook accept period_days 7, 14, 30 or 90. Instagram also accepts 1, 365 and \"all\" (all stored history); " +
+      "its exact unique reach is reported only for periods of up to 30 days. " +
       "Threads accepts analyticsContractVersion: 1 for explicit availability, closed calendar periods and signed pagination. " +
       "Facebook owned Pages require analyticsContractVersion: 1 for the same contract. " +
       "Omit the version for the existing Threads/TikTok/Instagram legacy responses. Instagram/TikTok do not yet accept the versioned contract.",
     inputSchema: z.object({
       social_account_id: z.string().describe("Postora account UUID from list_accounts"),
-      period_days: z.union([z.literal(7), z.literal(14), z.literal(30), z.literal(90)]).optional()
-        .describe("Threads and Instagram: 7, 14, 30 or 90 days (default 7)"),
+      period_days: z.union([
+        z.literal(1), z.literal(7), z.literal(14), z.literal(30), z.literal(90), z.literal(365), z.literal("all"),
+      ]).optional()
+        .describe("Threads and Facebook: 7, 14, 30 or 90 days. Instagram: 1, 7, 14, 30, 90, 365 or \"all\". Default 7"),
       analyticsContractVersion: z.literal(1).optional().describe("Threads or Facebook owned Page: select the unified analytics response"),
       cursor: z.string().min(1).max(16384).optional().describe("Signed continuation from a versioned response; keep account and period_days unchanged"),
     }),

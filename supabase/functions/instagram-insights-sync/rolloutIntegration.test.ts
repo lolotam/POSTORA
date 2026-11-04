@@ -836,7 +836,13 @@ Deno.test("the write after the exclusion is refused and the work settles", async
   meta.reset();
 
   const first = await drain(handler);
-  assertEquals(first.completed, 1, "the allowlisted visit did not complete");
+  // A fresh account still owes its history after one visit, so the visit
+  // ends partial with the backfill pending; it is not refused or abandoned.
+  assertEquals(
+    first.jobs.map((job) => [job.social_account_id, job.outcome, job.reason_code]),
+    [[ACCT_A, "partial", "daily_observation_pending"]],
+    "the allowlisted visit did not run to its end",
+  );
 
   const storedBefore = Number(await active.queryJson(
     `SELECT count(*)::int FROM public.ig_account_insight_daily ` +
@@ -928,7 +934,14 @@ Deno.test("the write after the exclusion is refused and the work settles", async
   meta.reset();
 
   const resumed = await drain(handler);
-  assert(resumed.completed >= 1, "the re-admitted work did not resume");
+  // The account still owes history, so a resumed visit may end partial; it
+  // must run to its end rather than be refused or abandoned.
+  assert(
+    resumed.jobs.some((job) =>
+      job.social_account_id === ACCT_A && (job.outcome === "completed" || job.outcome === "partial")
+    ),
+    "the re-admitted work did not resume",
+  );
   assertEquals(
     detectExclusionBreach(meta.calls, [IG_USER_B, IG_USER_C, IG_USER_D]),
     [],

@@ -38,13 +38,16 @@ import {
   type OutlierInput,
 } from "../_shared/outlierScore.ts";
 import {
+  KUWAIT_UTC_OFFSET_MS,
   MILLISECONDS_PER_DAY,
+  OWNER_REPORT_EXACT_REACH_MAX_DAYS,
   OWNER_REPORT_LAG_NOTE,
   OWNER_REPORT_SCHEMA_VERSION,
   OwnerReportContractError,
   addUtcDays,
   isCalendarDate,
   isRecord,
+  lastClosedKuwaitDay,
   optionalText,
   parseInstant,
   parseOwnerReportRequest,
@@ -65,6 +68,8 @@ import {
   type OwnerReportMediaItem,
   type OwnerReportMetricBasis,
   type OwnerReportOutlier,
+  type OwnerReportPeriodDays,
+  type OwnerReportPeriodReach,
   type OwnerReportProfileObservation,
   type OwnerReportReasonCode,
   type OwnerReportRowStatus,
@@ -692,6 +697,181 @@ function isAfterCursor(row: NormalizedMediaRow, cursorMs: number, cursor: OwnerR
   return row.mediaId > cursor.mediaId;
 }
 
+type NormalizedPeriodTotalRow = {
+  id: string;
+  metric: string;
+  periodDays: number;
+  sinceDate: string;
+  untilDate: string;
+  status: "ok" | "unavailable";
+  value: number | null;
+  capturedAt: string;
+};
+
+/**
+ * A stored period total. An `ok` total without a usable value is refused: a
+ * total the database would never store is not quietly read as a zero.
+ */
+function normalizePeriodTotalRow(
+  row: unknown,
+  scope: OwnerReportScope,
+  context: string,
+): NormalizedPeriodTotalRow {
+  if (!isRecord(row)) {
+    throw new OwnerReportContractError("INVALID_ROW", `${context} must be an object`);
+  }
+  assertRowScope(row, scope, context);
+  const status = row.status;
+  if (status !== "ok" && status !== "unavailable") {
+    throw new OwnerReportContractError("INVALID_ROW", `${context}.status is not a period total status`);
+  }
+  const value = status === "ok" ? readMetric(row.value) : null;
+  if (status === "ok" && value === null) {
+    throw new OwnerReportContractError("INVALID_ROW", `${context}.value must be a reported total`);
+  }
+  if (typeof row.periodDays !== "number" || !Number.isInteger(row.periodDays)) {
+    throw new OwnerReportContractError("INVALID_ROW", `${context}.periodDays must be an integer`);
+  }
+  return {
+    id: requireText(row.id, "id", context),
+    metric: requireText(row.metric, "metric", context),
+    periodDays: row.periodDays,
+    sinceDate: readCalendarDate(row.sinceDate, "sinceDate", context),
+    untilDate: readCalendarDate(row.untilDate, "untilDate", context),
+    status,
+    value,
+    capturedAt: readInstant(row.capturedAt, "capturedAt", context).text,
+  };
+}
+
+/* -------------------------------------------------------------------------- */
+/* The period                                                                   */
+/* -------------------------------------------------------------------------- */
+
+type PeriodWindow = {
+  /** The metric days of the period, inclusive on both ends. */
+  metricDateStart: string;
+  metricDateEnd: string;
+  /** The first publication instant the media display includes. */
+  windowStartMs: number;
+};
+
+/** The first instant of a Kuwait calendar day. */
+function kuwaitDayStartMs(date: string): number {
+  return Date.parse(`${date}T00:00:00Z`) - KUWAIT_UTC_OFFSET_MS;
+}
+
+/**
+ * The metric days and the media window of the requested period.
+ *
+ * The metric days end on the last CLOSED Kuwait day: today is never
+ * collected, so a period that counted it would always look one day short.
+ * "All time" starts on the oldest stored day, and its media window starts
+ * on the oldest stored media, so nothing that was collected is left out.
+ */
+function resolvePeriodWindow(
+  periodDays: OwnerReportPeriodDays,
+  nowMs: number,
+  dailyRows: readonly NormalizedDailyRow[],
+  mediaRows: readonly NormalizedMediaRow[],
+): PeriodWindow {
+  const metricDateEnd = lastClosedKuwaitDay(nowMs);
+  if (periodDays !== "all") {
+    return {
+      metricDateStart: addUtcDays(metricDateEnd, -(periodDays - 1)),
+      metricDateEnd,
+      windowStartMs: nowMs - periodDays * MILLISECONDS_PER_DAY,
+    };
+  }
+  const storedDays = dailyRows
+    .map((row) => row.metricDate)
+    .filter((date) => date <= metricDateEnd);
+  const metricDateStart = storedDays.reduce(
+    (oldest, date) => (date < oldest ? date : oldest),
+    metricDateEnd,
+  );
+  const windowStartMs = mediaRows.reduce(
+    (oldest, row) => Math.min(oldest, row.publishedMs),
+    kuwaitDayStartMs(metricDateStart),
+  );
+  return { metricDateStart, metricDateEnd, windowStartMs };
+}
+
+/**
+ * The exact unique reach of the period.
+ *
+ * A one-day period is that day's own reach. A period of up to 30 days is
+ * the stored provider total for EXACTLY its dates. Anything longer has no
+ * exact reach. A missing total is reported as missing, never as zero, and
+ * it is never rebuilt from daily reach: people reached on two days would be
+ * counted twice.
+ */
+function resolvePeriodReach(
+  periodDays: OwnerReportPeriodDays,
+  window: PeriodWindow,
+  totals: readonly NormalizedPeriodTotalRow[],
+  dailyByDate: ReadonlyMap<string, NormalizedDailyRow>,
+): OwnerReportPeriodReach {
+  if (periodDays === "all" || periodDays > OWNER_REPORT_EXACT_REACH_MAX_DAYS) {
+    return { status: "unavailable", reason: "period_too_long" };
+  }
+  const { metricDateStart, metricDateEnd } = window;
+
+  if (periodDays === 1) {
+    const day = dailyByDate.get(metricDateEnd);
+    if (day === undefined || day.status === "pending" || day.status === "error") {
+      return { status: "unavailable", reason: "not_collected" };
+    }
+    if (day.reach === null) return { status: "unavailable", reason: "provider_unavailable" };
+    return {
+      status: "available",
+      value: day.reach,
+      sinceDate: metricDateEnd,
+      untilDate: metricDateEnd,
+      capturedAt: day.capturedAt,
+    };
+  }
+
+  const total = totals.find((row) =>
+    row.metric === "reach" && row.periodDays === periodDays &&
+    row.sinceDate === metricDateStart && row.untilDate === metricDateEnd
+  );
+  if (total === undefined) return { status: "unavailable", reason: "not_collected" };
+  if (total.value === null) return { status: "unavailable", reason: "provider_unavailable" };
+  return {
+    status: "available",
+    value: total.value,
+    sinceDate: total.sinceDate,
+    untilDate: total.untilDate,
+    capturedAt: total.capturedAt,
+  };
+}
+
+/** The account days, validated, with conflicting captures refused. */
+function normalizeDailyRows(
+  rows: readonly unknown[],
+  scope: OwnerReportScope,
+): NormalizedDailyRow[] {
+  const dailyRows = rows.map((row, index) =>
+    normalizeDailyRow(row, scope, `accountDaily[${index}]`)
+  );
+  rejectConflictingRows(
+    dailyRows,
+    dailySignature,
+    (row) => `row:${row.id}`,
+    "CONFLICTING_DUPLICATE_ROW",
+    "account daily",
+  );
+  rejectConflictingRows(
+    dailyRows,
+    dailySignature,
+    (row) => `day:${row.metricDate}:${row.capturedAt}`,
+    "CONFLICTING_CAPTURE_IDENTITY",
+    "account daily",
+  );
+  return dailyRows;
+}
+
 /* -------------------------------------------------------------------------- */
 /* The assembler                                                                */
 /* -------------------------------------------------------------------------- */
@@ -744,7 +924,7 @@ export function assembleOwnerReport(input: OwnerReportAssemblyInput): OwnerRepor
   requireArray(input.baselineHistory, "baselineHistory");
   requireArray(input.accountDaily, "accountDaily");
   requireArray(input.profileObservations, "profileObservations");
-  const windowStartMs = nowMs - periodDays * MILLISECONDS_PER_DAY;
+  requireArray(input.accountPeriodTotals, "accountPeriodTotals");
   const windowEndMs = nowMs;
 
   /* --- media rows ---------------------------------------------------- */
@@ -759,6 +939,9 @@ export function assembleOwnerReport(input: OwnerReportAssemblyInput): OwnerRepor
   });
 
   const mediaRows = [...displayRows, ...historyRows];
+  const dailyRows = normalizeDailyRows(input.accountDaily, checkedScope);
+  const periodWindow = resolvePeriodWindow(periodDays, nowMs, dailyRows, mediaRows);
+  const { metricDateStart, metricDateEnd, windowStartMs } = periodWindow;
 
   rejectConflictingRows(
     mediaRows,
@@ -932,27 +1115,6 @@ export function assembleOwnerReport(input: OwnerReportAssemblyInput): OwnerRepor
 
   /* --- account days -------------------------------------------------- */
 
-  const dailyRows: NormalizedDailyRow[] = [];
-  input.accountDaily.forEach((row, index) => {
-    dailyRows.push(normalizeDailyRow(row, checkedScope, `accountDaily[${index}]`));
-  });
-  rejectConflictingRows(
-    dailyRows,
-    dailySignature,
-    (row) => `row:${row.id}`,
-    "CONFLICTING_DUPLICATE_ROW",
-    "account daily",
-  );
-  rejectConflictingRows(
-    dailyRows,
-    dailySignature,
-    (row) => `day:${row.metricDate}:${row.capturedAt}`,
-    "CONFLICTING_CAPTURE_IDENTITY",
-    "account daily",
-  );
-
-  const metricDateStart = addUtcDays(utcDateString(nowMs), -(periodDays - 1));
-  const metricDateEnd = utcDateString(nowMs);
   const dailyByDate = new Map<string, NormalizedDailyRow>();
   for (const row of dailyRows) {
     const existing = dailyByDate.get(row.metricDate);
@@ -996,6 +1158,11 @@ export function assembleOwnerReport(input: OwnerReportAssemblyInput): OwnerRepor
       follows: row.follows,
       unfollows: row.unfollows,
     }));
+
+  const periodTotals = input.accountPeriodTotals.map((row, index) =>
+    normalizePeriodTotalRow(row, checkedScope, `accountPeriodTotals[${index}]`)
+  );
+  const periodReach = resolvePeriodReach(periodDays, periodWindow, periodTotals, dailyByDate);
 
   /* --- profile observations ------------------------------------------ */
 
@@ -1048,6 +1215,7 @@ export function assembleOwnerReport(input: OwnerReportAssemblyInput): OwnerRepor
     },
     account: {
       daily,
+      periodReach,
       profiles,
       latestProfileObservation: completedProfiles.length > 0
         ? completedProfiles[completedProfiles.length - 1]

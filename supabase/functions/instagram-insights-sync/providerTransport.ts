@@ -218,6 +218,33 @@ export interface OwnerAccountDay {
   };
 }
 
+/**
+ * The longest range, in Kuwait days, one `total_value` request may span.
+ *
+ * Meta refuses a `since`/`until` range longer than thirty days on the
+ * account insights edge
+ * (https://developers.facebook.com/documentation/instagram-platform/api-reference/instagram-user/insights).
+ */
+export const ACCOUNT_PERIOD_TOTAL_MAX_DAYS = 30;
+
+/**
+ * The unique reach of a range of closed Kuwait days.
+ *
+ * It is ONE provider total for the whole range, never a sum of daily reach:
+ * an account reached on two days is counted once. A range the provider did
+ * not report leaves `value` null - it is not a zero.
+ */
+export interface OwnerAccountPeriodTotal {
+  readonly metric: "reach";
+  readonly period_days: number;
+  readonly since_date: string;
+  readonly until_date: string;
+  readonly period_start: string;
+  readonly period_end: string;
+  readonly provider_timezone: "Asia/Kuwait";
+  readonly value: number | null;
+}
+
 /** One captured media row. */
 export interface OwnerMediaItem {
   readonly ig_media_id: string;
@@ -371,6 +398,14 @@ export function classifyOwnerGraphError(
     return new OwnerProviderError(
       "The provider is throttling this application.",
       { ...options, kind: "rate_limited" },
+    );
+  }
+
+  // An HTTP 401 is an authentication refusal whatever the envelope says.
+  if (httpStatus === 401) {
+    return new OwnerProviderError(
+      "The provider rejected the credential.",
+      { ...options, kind: "token_invalid" },
     );
   }
 
@@ -855,6 +890,129 @@ export function requireProviderDataArray(payload: unknown): unknown[] {
     );
   }
   return data;
+}
+
+/**
+ * The instants that bound a range of whole Kuwait days.
+ *
+ * `since` is the first millisecond of the first day and `until` the last
+ * millisecond of the last day, so the range never reaches into a day that
+ * is not part of it.
+ */
+export function kuwaitDayRange(
+  sinceDate: string,
+  untilDate: string,
+): { readonly since: number; readonly until: number } {
+  const since = Date.parse(`${sinceDate}T00:00:00+03:00`);
+  const until = Date.parse(`${untilDate}T00:00:00+03:00`) + 86_400_000 - 1;
+  return { since, until };
+}
+
+/**
+ * The query of a `total_value` request on the account insights edge.
+ *
+ * It is the documented request for both login kinds: the metrics with
+ * `metric_type=total_value`, `period=day` and an explicit `since`/`until`
+ * range in whole seconds.
+ */
+export function accountTotalValueQuery(input: {
+  readonly metrics: readonly string[];
+  readonly since: number;
+  readonly until: number;
+  readonly token: string;
+}): string {
+  return `/insights?metric=${encodeURIComponent(input.metrics.join(","))}` +
+    `&period=day&metric_type=total_value` +
+    `&since=${Math.floor(input.since / 1000)}&until=${Math.floor(input.until / 1000)}` +
+    `&access_token=${encodeURIComponent(input.token)}`;
+}
+
+/**
+ * Reads the `data[].total_value.value` of an account insights answer.
+ *
+ * There is deliberately NO fallback to `values[]`: on this endpoint
+ * `values` is the time-series shape, and reading it as a total would store
+ * a bucket sum under the wrong meaning. A metric row without a
+ * `total_value` leaves that metric absent; a malformed `total_value` or a
+ * value that is not an exactly representable non-negative integer is a
+ * provider error. A metric that was not asked for is ignored.
+ */
+export function readAccountTotalValues(
+  payload: unknown,
+  metrics: readonly string[],
+  usagePercent: number,
+): Record<string, number> {
+  const rows = requireProviderDataArray(payload);
+  const totals: Record<string, number> = {};
+
+  for (const row of rows) {
+    const record = requireProviderObject(row);
+    const name = record.name;
+    if (typeof name !== "string") {
+      throw new OwnerProviderError(
+        "The provider returned a metric without a name.",
+        { kind: "provider_error", usagePercent },
+      );
+    }
+    if (!metrics.includes(name)) continue;
+
+    const period = record.period;
+    if (period !== undefined && period !== null) {
+      if (typeof period !== "string" || period !== "day") {
+        throw new OwnerProviderError(
+          "The provider returned a metric for another period.",
+          { kind: "provider_error", usagePercent },
+        );
+      }
+    }
+
+    const total = record.total_value;
+    if (total === undefined || total === null) {
+      // The provider did not report this metric. It stays absent: it is not
+      // a zero, and it is not a number borrowed from another shape.
+      continue;
+    }
+
+    const raw = requireProviderObject(total).value;
+    if (typeof raw !== "number" || !Number.isFinite(raw) || !Number.isSafeInteger(raw) ||
+      raw < 0) {
+      throw new OwnerProviderError(
+        "The provider returned a malformed metric value.",
+        { kind: "provider_error", usagePercent },
+      );
+    }
+
+    totals[name] = raw;
+  }
+
+  return totals;
+}
+
+/**
+ * Validates a period total range before any request is made.
+ *
+ * A range that is reversed, malformed or longer than the provider accepts
+ * is a defect of the caller, so it is refused before the request leaves the
+ * process rather than spending a provider call on a certain refusal.
+ */
+export function assertAccountPeriodRange(sinceDate: string, untilDate: string): number {
+  const since = Date.parse(`${sinceDate}T00:00:00Z`);
+  const until = Date.parse(`${untilDate}T00:00:00Z`);
+  const days = Math.round((until - since) / 86_400_000) + 1;
+  if (!Number.isFinite(days) || days < 1 || days > ACCOUNT_PERIOD_TOTAL_MAX_DAYS) {
+    throw new RangeError("The period total range is not a range the provider accepts.");
+  }
+  return days;
+}
+
+function requireProviderObject(value: unknown): Record<string, unknown> {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new OwnerProviderError(
+      "The provider response was not an object.",
+      { kind: "provider_error" },
+    );
+  }
+  return value as Record<string, unknown>;
 }
 
 /**

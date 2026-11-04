@@ -72,6 +72,7 @@ import {
 import { isStaleCollectionSqlstate } from "./httpRpc.ts";
 
 import {
+  isDateText,
   isPlainRecord,
   isTimestampText,
   parseClaimedOwnerJob,
@@ -144,7 +145,9 @@ export type ProviderPermitDecision =
 export type OwnerServiceTable =
   | "social_accounts"
   | "instagram_provider_throttle_buckets"
-  | "ig_media_insight_snapshots";
+  | "ig_media_insight_snapshots"
+  | "ig_account_insight_daily"
+  | "ig_account_insight_period_totals";
 
 /**
  * The narrow read surface of the service client.
@@ -404,6 +407,53 @@ export interface OwnerMediaInventoryRow {
   readonly igReelsAvgWatchTimeMs: number | null;
 }
 
+/**
+ * A stored daily observation, as far as the backfill needs to know it.
+ *
+ * Only the day, its status and when it was first written are read: the
+ * backfill asks which closed days are already answered and how many it
+ * wrote today, never what they say.
+ */
+export interface OwnerAccountDayRow {
+  readonly metricDate: string;
+  readonly status: "pending" | "ok" | "unavailable" | "error";
+  /** When the row was first written; the accepted upsert never moves it. */
+  readonly capturedAt: string;
+}
+
+/** A stored period total, as far as the worker needs to know it. */
+export interface OwnerPeriodTotalRow {
+  readonly periodDays: number;
+  readonly status: "ok" | "unavailable";
+}
+
+/**
+ * The payload of one period total write.
+ *
+ * The accepted SQL refuses a range that does not end on the job's last
+ * closed day, and an `ok` total without a value or an `unavailable` one with
+ * a value: a missing total is never a zero.
+ */
+export interface OwnerPeriodTotalPayload {
+  readonly metric: "reach";
+  readonly period_days: number;
+  readonly since_date: string;
+  readonly until_date: string;
+  readonly period_start: string;
+  readonly period_end: string;
+  readonly provider_timezone: string;
+  readonly status: "ok" | "unavailable";
+  readonly value: number | null;
+}
+
+/**
+ * The days one daily-observation read asks for at most.
+ *
+ * The days travel in the query string of an `in` filter, so a year of days
+ * is read in two bounded requests rather than one long URL.
+ */
+export const ACCOUNT_DAY_READ_CHUNK = 200;
+
 /** The shared throttle bucket state of a credential. */
 export interface OwnerThrottleBucket {
   readonly usagePercent: number | null;
@@ -542,6 +592,30 @@ export interface OwnerCollectionServiceStore {
     readonly mediaIds: readonly string[];
     readonly signal?: AbortSignal;
   }): Promise<OwnerMediaInventoryRow[]>;
+  /**
+   * The stored daily observations of the given days.
+   *
+   * It is owner-scoped by the account AND the owner, and it answers only for
+   * the days it was asked about. A day without a row is simply absent.
+   */
+  readOwnerAccountDays(input: {
+    readonly userId: string;
+    readonly socialAccountId: string;
+    readonly days: readonly string[];
+    readonly signal?: AbortSignal;
+  }): Promise<OwnerAccountDayRow[]>;
+  /**
+   * The stored reach totals of the periods that end on `untilDate`.
+   *
+   * A period without a row is absent; it is owed, not zero.
+   */
+  readOwnerPeriodTotals(input: {
+    readonly userId: string;
+    readonly socialAccountId: string;
+    readonly untilDate: string;
+    readonly periodDays: readonly number[];
+    readonly signal?: AbortSignal;
+  }): Promise<OwnerPeriodTotalRow[]>;
   readThrottleBucket(input: {
     readonly bucketKey: string;
     readonly signal?: AbortSignal;
@@ -551,6 +625,19 @@ export interface OwnerCollectionServiceStore {
     readonly claimToken: string;
     readonly jobGeneration: number;
     readonly payload: OwnerSnapshotPayload;
+    readonly signal?: AbortSignal;
+  }): Promise<SnapshotReceipt>;
+  /**
+   * Stores one period total behind the accepted collection fence.
+   *
+   * The receipt is the snapshot receipt: it must name this job and this
+   * generation and answer for exactly one written row.
+   */
+  persistPeriodTotal(input: {
+    readonly jobId: string;
+    readonly claimToken: string;
+    readonly jobGeneration: number;
+    readonly payload: OwnerPeriodTotalPayload;
     readonly signal?: AbortSignal;
   }): Promise<SnapshotReceipt>;
   recordProgress(input: {
@@ -1146,6 +1233,92 @@ export function createOwnerCollectionServiceStore(
       return inventory;
     },
 
+    async readOwnerAccountDays(input) {
+      const asked = new Set(input.days);
+      const stored: OwnerAccountDayRow[] = [];
+
+      for (let start = 0; start < input.days.length; start += ACCOUNT_DAY_READ_CHUNK) {
+        const envelope = await deps.reads.readMany(
+          "ig_account_insight_daily",
+          "metric_date, status, captured_at",
+          { social_account_id: input.socialAccountId, user_id: input.userId },
+          "metric_date",
+          input.days.slice(start, start + ACCOUNT_DAY_READ_CHUNK),
+        );
+
+        const rows = await readCompleted(envelope);
+        if (!Array.isArray(rows)) {
+          throw new OwnerWorkerStoreError("invalid_envelope");
+        }
+
+        for (const row of rows) {
+          if (!isPlainRecord(row)) {
+            throw new OwnerWorkerStoreError("invalid_envelope");
+          }
+          const metricDate = requireString(row, "metric_date");
+          // A row for a day that was not asked about is not an answer to
+          // this read.
+          if (!isDateText(metricDate) || !asked.has(metricDate)) {
+            throw new OwnerWorkerStoreError("invalid_envelope");
+          }
+          const status = requireString(row, "status");
+          if (
+            status !== "pending" && status !== "ok" && status !== "unavailable" &&
+            status !== "error"
+          ) {
+            throw new OwnerWorkerStoreError("invalid_envelope");
+          }
+          const capturedAt = requireString(row, "captured_at");
+          if (!isTimestampText(capturedAt)) {
+            throw new OwnerWorkerStoreError("invalid_envelope");
+          }
+          stored.push({ metricDate, status, capturedAt });
+        }
+      }
+
+      return stored;
+    },
+
+    async readOwnerPeriodTotals(input) {
+      if (input.periodDays.length === 0) return [];
+
+      const envelope = await deps.reads.readMany(
+        "ig_account_insight_period_totals",
+        "period_days, status",
+        {
+          social_account_id: input.socialAccountId,
+          user_id: input.userId,
+          metric: "reach",
+          until_date: input.untilDate,
+        },
+        "period_days",
+        input.periodDays.map(String),
+      );
+
+      const rows = await readCompleted(envelope);
+      if (!Array.isArray(rows)) {
+        throw new OwnerWorkerStoreError("invalid_envelope");
+      }
+
+      const stored: OwnerPeriodTotalRow[] = [];
+      for (const row of rows) {
+        if (!isPlainRecord(row)) {
+          throw new OwnerWorkerStoreError("invalid_envelope");
+        }
+        const periodDays = optionalNumber(row, "period_days");
+        if (periodDays === null || !input.periodDays.includes(periodDays)) {
+          throw new OwnerWorkerStoreError("invalid_envelope");
+        }
+        const status = requireString(row, "status");
+        if (status !== "ok" && status !== "unavailable") {
+          throw new OwnerWorkerStoreError("invalid_envelope");
+        }
+        stored.push({ periodDays, status });
+      }
+
+      return stored;
+    },
+
     async readThrottleBucket(input) {
       const envelope = await deps.reads.readOne(
         "instagram_provider_throttle_buckets",
@@ -1187,6 +1360,31 @@ export function createOwnerCollectionServiceStore(
         jobId: input.jobId,
         jobGeneration: input.jobGeneration,
         itemCount: input.payload.items.length,
+      });
+      if (receipt === null) {
+        throw new OwnerWorkerStoreError("invalid_envelope");
+      }
+      return receipt;
+    },
+
+    async persistPeriodTotal(input) {
+      const data = await callRpc(
+        deps.rpc,
+        "persist_instagram_owner_period_total",
+        {
+          p_job_id: input.jobId,
+          p_claim_token: input.claimToken,
+          p_job_generation: input.jobGeneration,
+          p_payload: { ...input.payload },
+        },
+        input.signal,
+      );
+
+      // The receipt must answer for THIS job and generation, and for one row.
+      const receipt = parseSnapshotReceipt(data, {
+        jobId: input.jobId,
+        jobGeneration: input.jobGeneration,
+        itemCount: 1,
       });
       if (receipt === null) {
         throw new OwnerWorkerStoreError("invalid_envelope");

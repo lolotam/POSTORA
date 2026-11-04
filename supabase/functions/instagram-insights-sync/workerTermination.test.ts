@@ -182,9 +182,14 @@ interface TerminationHarness {
 
 function createHarness(options: {
   readonly graph?: ScriptedGraphOptions;
+  /** The closed days of the history with no stored row at the start. */
+  readonly missingDays?: readonly string[];
 } = {}): TerminationHarness {
   const clock = createClock(FIRST_VISIT_MS);
-  const { store, state } = createPersistingStore({ now: clock.now });
+  const { store, state } = createPersistingStore({
+    now: clock.now,
+    missingDays: options.missingDays,
+  });
   const { fetchFn, calls } = createScriptedGraph(options.graph ?? { media: [] });
   const logs: Array<Record<string, unknown>> = [];
 
@@ -423,4 +428,46 @@ Deno.test("a visit after the completion claims nothing", async () => {
   assertEquals(second.completed, 0);
   assertEquals(second.jobs.length, 0);
   assertEquals(harness.state.claims(), 1);
+});
+
+// ---------------------------------------------------------------------------
+// The history backfill
+// ---------------------------------------------------------------------------
+
+/** The `count` closed days before `newest`, newest first, `newest` included. */
+function daysBack(newest: string, count: number): string[] {
+  const start = Date.parse(`${newest}T00:00:00.000Z`);
+  return Array.from(
+    { length: count },
+    (_unused, index) => new Date(start - index * KUWAIT_DAY_MS).toISOString().slice(0, 10),
+  );
+}
+
+/**
+ * A year without any stored day is paced across capture days.
+ *
+ * The capture's own two days are owed by the daily capture. Of the other
+ * 363 days, ONE capture day backfills at most 60, five per visit, newest
+ * first: the job needs 60 / 5 = 12 visits, completes on the last one, and
+ * leaves the rest to the next capture days. Every day is asked for once.
+ */
+Deno.test("a year of missing days backfills sixty days on one capture day, each day once", async () => {
+  const missing = daysBack("2026-10-25", 363);
+  const harness = createHarness({ missingDays: missing });
+
+  const summaries = await runVisits(harness, { visits: 13, stepMs: 2 * 60_000 });
+
+  for (const summary of summaries.slice(0, 11)) {
+    assertEquals(summary.partial, 1);
+    assertEquals(summary.completed, 0);
+  }
+  assertEquals(summaries[11]!.completed, 1);
+  assertEquals(harness.state.status(), "completed");
+  // The visit after the completion claims nothing and asks for nothing.
+  assertEquals(summaries[12]!.claimed, 0);
+
+  // The sixty newest missing days are stored; the older ones wait.
+  assertEquals(harness.state.missingDays(), missing.slice(60));
+  const dayCalls = harness.graphCalls.filter((call) => call === "accountDay").length;
+  assertEquals(dayCalls, 2 + 60);
 });

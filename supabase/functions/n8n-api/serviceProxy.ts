@@ -51,7 +51,13 @@ const AI_TEXT_TIMEOUT_MS = 60_000;
 const AI_IMAGE_TIMEOUT_MS = 90_000;
 const MAX_COMMENT_POSTS = 50;
 const DEFAULT_COMMENT_POSTS = 25;
-const THREADS_PERIODS = [7, 14, 30, 90];
+type AnalyticsPeriod = number | "all";
+const THREADS_PERIODS: readonly AnalyticsPeriod[] = [7, 14, 30, 90];
+/**
+ * The Instagram owner report also serves one closed day, a year and all
+ * time. Every other platform keeps the Threads periods.
+ */
+const INSTAGRAM_PERIODS: readonly AnalyticsPeriod[] = [1, 7, 14, 30, 90, 365, "all"];
 
 // Meta conversation ids are short opaque tokens (t_123..., aWdfZG...); anything
 // with a slash, query or fragment character never reaches the Graph URL path.
@@ -247,9 +253,10 @@ export async function handleGetPostAnalytics(deps: ServiceProxyDeps, userId: str
     return proxyError(400, "UNSUPPORTED_CONTRACT_VERSION", "This platform does not yet support analyticsContractVersion: 1.");
   }
   const rawPeriod = textField(params.get("period_days"));
-  const periodDays = rawPeriod ? Number(rawPeriod) : 7;
-  if (!THREADS_PERIODS.includes(periodDays)) {
-    return proxyError(400, "INVALID_PERIOD", `period_days must be one of ${THREADS_PERIODS.join(", ")}`);
+  const periodDays: AnalyticsPeriod = rawPeriod === "all" ? "all" : rawPeriod ? Number(rawPeriod) : 7;
+  const allowedPeriods = account.platform === "instagram" ? INSTAGRAM_PERIODS : THREADS_PERIODS;
+  if (!allowedPeriods.includes(periodDays)) {
+    return proxyError(400, "INVALID_PERIOD", `period_days must be one of ${allowedPeriods.join(", ")}`);
   }
   if ((account.platform === "facebook" || account.platform === "threads") && version !== null) {
     const upstream = await deps.invoke("meta-owned-analytics-report", { user_id: userId, platform: account.platform, accountId: account.id, periodDays,

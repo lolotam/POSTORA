@@ -13,6 +13,7 @@
 
 import {
   type AccountDailyRow,
+  type AccountPeriodTotalRow,
   type MediaSnapshotRow,
   type OwnerReportCompletenessInput,
   type OwnerReportCoverage,
@@ -102,6 +103,22 @@ export function toAccountDailyRow(row: Record<string, unknown>): AccountDailyRow
   };
 }
 
+export function toAccountPeriodTotalRow(row: Record<string, unknown>): AccountPeriodTotalRow {
+  return {
+    id: String(row.id),
+    ownerId: row.user_id ? String(row.user_id) : null,
+    socialAccountId: row.social_account_id ? String(row.social_account_id) : null,
+    metric: String(row.metric),
+    periodDays: Number(row.period_days),
+    sinceDate: String(row.since_date),
+    untilDate: String(row.until_date),
+    status: String(row.status),
+    // A total without a value stays without one; it is never read as zero.
+    value: row.value == null ? null : Number(row.value),
+    capturedAt: String(row.captured_at),
+  };
+}
+
 export function toProfileObservationRow(row: Record<string, unknown>): ProfileObservationRow {
   return {
     id: String(row.id),
@@ -120,6 +137,42 @@ export function toProfileObservationRow(row: Record<string, unknown>): ProfileOb
         ? row.media_count
         : (row.media_count != null ? Number(row.media_count) : null),
   };
+}
+
+/**
+ * The collection worker records its own reason vocabulary on the job; the
+ * report speaks a smaller one. Every worker reason is translated here so a
+ * partial or failed visit never makes the report itself invalid. A reason the
+ * report does not know yet reads as "unknown", never as a refusal.
+ */
+const WORKER_REASON_TO_REPORT_REASON: Readonly<Record<string, OwnerReportReasonCode>> = {
+  scope_missing: "scope_missing",
+  capability_missing: "scope_missing",
+  token_invalid: "reauth_required",
+  credential_unavailable: "reauth_required",
+  context_missing: "reauth_required",
+  direct_login_unsupported: "reauth_required",
+  rate_limited: "throttled",
+  provider_error: "provider_error",
+  collection_unavailable: "provider_unavailable",
+  inventory_unavailable: "provider_unavailable",
+  inventory_incomplete: "inventory_truncated",
+  daily_observation_pending: "baseline_history_incomplete",
+  media_insights_pending: "baseline_history_incomplete",
+  period_reach_pending: "baseline_history_incomplete",
+};
+
+const REPORT_REASONS: ReadonlySet<string> = new Set<OwnerReportReasonCode>([
+  "ok", "never_synced", "scope_missing", "reauth_required", "throttled", "usage_limit_reached",
+  "provider_unavailable", "provider_error", "network_error", "write_failed", "inventory_truncated",
+  "baseline_history_incomplete", "unknown",
+]);
+
+function toReportReason(stored: unknown): OwnerReportReasonCode | null {
+  if (stored === null || stored === undefined) return null;
+  const code = String(stored);
+  if (REPORT_REASONS.has(code)) return code as OwnerReportReasonCode;
+  return WORKER_REASON_TO_REPORT_REASON[code] ?? "unknown";
 }
 
 export function parseFreshness(jobStatus: Record<string, unknown> | null): OwnerReportFreshnessInput {
@@ -147,7 +200,7 @@ export function parseFreshness(jobStatus: Record<string, unknown> | null): Owner
   const inventory = (jobStatus.inventory as Record<string, unknown>) ?? {};
   const isPartial = Boolean(inventory.partial ?? rawStatus === "partial");
   const isTruncated = Boolean(inventory.truncated ?? false);
-  const reasonCode = (jobStatus.reason_code as OwnerReportReasonCode) ?? null;
+  const reasonCode = toReportReason(jobStatus.reason_code);
 
   return {
     status: syncStatus,
@@ -245,11 +298,15 @@ export class ReportStore {
       return value;
     };
     const rawMedia = rows("media"), rawDaily = rows("daily"), rawProfiles = rows("profiles");
+    const rawPeriodTotals = rows("period_totals");
     if (snapshot.collection !== null && (!snapshot.collection || typeof snapshot.collection !== "object" || Array.isArray(snapshot.collection))) {
       throw new ReportHistoryUnavailableError("Invalid owner report collection state");
     }
     const jobStatus = snapshot.collection as Record<string, unknown> | null;
-    const windowStartMs = now.getTime() - request.periodDays * 86_400_000;
+    // "All time" displays every stored media; a day count bounds the rest.
+    const windowStartMs = request.periodDays === "all"
+      ? Number.NEGATIVE_INFINITY
+      : now.getTime() - request.periodDays * 86_400_000;
 
     // Map rows to contracts types
     const mappedMedia: MediaSnapshotRow[] = (rawMedia ?? []).map((r: Record<string, unknown>) =>
@@ -263,6 +320,7 @@ export class ReportStore {
     const mappedDaily: AccountDailyRow[] = (rawDaily ?? []).map((r: Record<string, unknown>) =>
       toAccountDailyRow(r)
     );
+    const mappedPeriodTotals = rawPeriodTotals.map(toAccountPeriodTotalRow);
     const mappedProfiles: ProfileObservationRow[] = (rawProfiles ?? []).map(
       (r: Record<string, unknown>) => toProfileObservationRow(r)
     );
@@ -281,6 +339,7 @@ export class ReportStore {
       mediaSnapshots: displayMedia,
       baselineHistory,
       accountDaily: mappedDaily,
+      accountPeriodTotals: mappedPeriodTotals,
       profileObservations: mappedProfiles,
       freshness,
       completeness,

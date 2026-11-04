@@ -1684,7 +1684,7 @@ Deno.test("the stored report stays readable through the existing report route", 
   probe.rpc["read_instagram_owner_report_snapshot"] = {
     data: { account_id: ACCOUNT_B, owner_id: OWNER_ID,
       media: probe.tables["ig_media_insight_snapshots"], daily: probe.tables["ig_account_insight_daily"],
-      profiles: probe.tables["ig_account_profile_observations"], collection: null },
+      profiles: probe.tables["ig_account_profile_observations"], period_totals: [], collection: null },
     error: null,
   };
 

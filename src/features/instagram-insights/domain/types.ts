@@ -29,6 +29,7 @@ export type {
   OwnerReportMediaCoverage,
   OwnerReportMediaPage,
   OwnerReportDailyRow,
+  OwnerReportPeriodReach,
   OwnerReportProfileObservation,
   OwnerReportFreshness,
   OwnerReportCompleteness,

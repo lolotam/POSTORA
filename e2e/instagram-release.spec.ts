@@ -323,8 +323,8 @@ test("canonical owner and competitor screens retain exact outliers across period
   expect(ownerOriginal.outlier).toMatchObject({ baselineSize: 12, baselineMedian: 100, metricBasis: "views" });
   expect(ownerItems.find((item) => item.mediaId === `${account.providerId}_six_baseline_0`)?.outlier)
     .toMatchObject({ baselineSize: 6, baselineMedian: 100, metricBasis: "interactions" });
-  const shortOwnerReply = ownerResponse(7);
-  await page.getByRole("button", { name: "7d", exact: true }).click();
+  const shortOwnerReply = ownerResponse(90);
+  await page.getByRole("button", { name: "90d", exact: true }).click();
   const shortOwnerResponse = await shortOwnerReply;
   expect(shortOwnerResponse.status()).toBe(200);
   const shortOwner: OwnerReport = await shortOwnerResponse.json();

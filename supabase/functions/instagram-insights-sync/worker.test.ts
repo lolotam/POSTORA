@@ -1930,3 +1930,426 @@ Deno.test("a daily resume that is deferred leaves the sweep pending", async () =
   // The drain still claims: the deferred resume is not the drain's failure.
   assertEquals(summary.claimed, 1);
 });
+
+// ---------------------------------------------------------------------------
+// The history backfill
+// ---------------------------------------------------------------------------
+
+/** The days of the account day snapshots, in the order they were written. */
+function writtenDays(calls: Harness["calls"]): string[] {
+  return calls.snapshots
+    .filter((entry) => entry.kind === "owner_account_day")
+    .map((entry) => entry.items[0]!.provider_date as string);
+}
+
+Deno.test("a missing history is backfilled newest first, five days per visit", async () => {
+  const harness = createHarness({
+    store: { jobs: [createClaimedJob()], missingDays: "all" },
+  });
+
+  await runOwnerDrain(harness.ports);
+
+  // The daily capture's own days come first, then the five newest missing
+  // days of the history.
+  assertEquals(writtenDays(harness.calls), [
+    TEST_PRIMARY_DAY,
+    TEST_CORRECTION_DAY,
+    "2026-10-25",
+    "2026-10-24",
+    "2026-10-23",
+    "2026-10-22",
+    "2026-10-21",
+  ]);
+
+  // The history read asks for a year of closed days, newest first, ending
+  // on the last closed day.
+  const asked = harness.calls.accountDayReads[0]!.days;
+  assertEquals(asked.length, 365);
+  assertEquals(asked[0], TEST_PRIMARY_DAY);
+  assertEquals(asked.at(-1), "2025-10-28");
+
+  // The rest of the history is still owed, so the job comes back for it.
+  assertEquals(harness.calls.completes, [
+    { outcome: "partial", reasonCode: "daily_observation_pending" },
+  ]);
+});
+
+Deno.test("a stored day that is still pending or failed is backfilled again", async () => {
+  const harness = createHarness({
+    store: {
+      jobs: [createClaimedJob()],
+      dayStatus: { "2026-10-20": "error", "2026-03-01": "pending" },
+    },
+  });
+
+  await runOwnerDrain(harness.ports);
+
+  assertEquals(writtenDays(harness.calls), [
+    TEST_PRIMARY_DAY,
+    TEST_CORRECTION_DAY,
+    "2026-10-20",
+    "2026-03-01",
+  ]);
+  // Nothing else is owed, so the job is a full success.
+  assertEquals(harness.calls.completes, [{ outcome: "completed", reasonCode: null }]);
+});
+
+Deno.test("a backfill day the provider refuses for good is stored as unavailable, never as zero", async () => {
+  for (const code of [100]) {
+    const refusedDay = "2025-11-02";
+    const harness = createHarness({
+      store: { jobs: [createClaimedJob()], missingDays: [refusedDay] },
+      graph: {
+        accountDays: {
+          [TEST_PRIMARY_DAY]: accountDayAnswer({ reach: 450, views: 890 }),
+          [TEST_CORRECTION_DAY]: accountDayAnswer({ reach: 400, views: 800 }),
+          [refusedDay]: { error: { code, message: "the provider has no data this old" } },
+        },
+      },
+    });
+
+    await runOwnerDrain(harness.ports);
+
+    const refused = harness.calls.snapshots
+      .filter((entry) => entry.kind === "owner_account_day")
+      .map((entry) => entry.items[0]!)
+      .find((item) => item.provider_date === refusedDay);
+    assert(refused !== undefined, `code ${code}`);
+    assertEquals(refused.status, "unavailable", `code ${code}`);
+    assertEquals(refused.metrics, {}, `code ${code}`);
+
+    // The refusal closes only that day: the job is still a full success.
+    assertEquals(harness.calls.completes, [
+      { outcome: "completed", reasonCode: null },
+    ], `code ${code}`);
+    assert(
+      harness.logs.some((event) => event.event === "owner_account_day_unavailable"),
+      `code ${code}`,
+    );
+  }
+});
+
+Deno.test("a permission refusal of a backfill day closes no history", async () => {
+  // Code 10 on account insights refuses the account, not the day.
+  const refusedDay = "2025-11-02";
+  const harness = createHarness({
+    store: { jobs: [createClaimedJob()], missingDays: [refusedDay] },
+    graph: {
+      accountDays: {
+        [TEST_PRIMARY_DAY]: accountDayAnswer({ reach: 450, views: 890 }),
+        [TEST_CORRECTION_DAY]: accountDayAnswer({ reach: 400, views: 800 }),
+        [refusedDay]: { error: { code: 10, message: "permission denied" } },
+      },
+    },
+  });
+
+  await runOwnerDrain(harness.ports);
+
+  assertEquals(writtenDays(harness.calls), [TEST_PRIMARY_DAY, TEST_CORRECTION_DAY]);
+  assertEquals(harness.calls.completes, [{ outcome: "unavailable", reasonCode: "scope_missing" }]);
+});
+
+Deno.test("a throttled backfill day is never closed as unavailable", async () => {
+  // HTTP 429 carrying code 100: a throttle of the application, not a refusal
+  // of the day. Storing it as unavailable would close the day for good.
+  const throttledDay = "2025-11-02";
+  const harness = createHarness({
+    store: { jobs: [createClaimedJob()], missingDays: [throttledDay] },
+    graph: {
+      accountDays: {
+        [TEST_PRIMARY_DAY]: accountDayAnswer({ reach: 450, views: 890 }),
+        [TEST_CORRECTION_DAY]: accountDayAnswer({ reach: 400, views: 800 }),
+        [throttledDay]: { error: { code: 100, message: "too many calls" } },
+      },
+      accountDayStatus: { [throttledDay]: 429 },
+    },
+  });
+
+  const summary = await runOwnerDrain(harness.ports);
+
+  assertEquals(writtenDays(harness.calls), [TEST_PRIMARY_DAY, TEST_CORRECTION_DAY]);
+  // The job is parked by the throttle and the run stops.
+  assertEquals(harness.calls.throttles.length, 1);
+  assertEquals(harness.calls.throttles[0]!.jobId, TEST_JOB_ID);
+  assertEquals(harness.calls.completes.length, 0);
+  assertEquals(summary.stoppedEarly, true);
+});
+
+Deno.test("a usage that rises past the backfill ceiling during the visit defers the planned history", async () => {
+  // The bucket is quiet when the slice is planned; the provider then
+  // reports 60% on the capture's own days.
+  const harness = createHarness({
+    store: { jobs: [createClaimedJob()], missingDays: "all" },
+    graph: { accountDayHeaders: { "x-app-usage": JSON.stringify({ call_count: 60 }) } },
+  });
+
+  await runOwnerDrain(harness.ports);
+
+  assertEquals(writtenDays(harness.calls), [TEST_PRIMARY_DAY, TEST_CORRECTION_DAY]);
+  // The planned days stay owed for a quieter visit.
+  assertEquals(harness.calls.completes, [
+    { outcome: "partial", reasonCode: "daily_observation_pending" },
+  ]);
+});
+
+Deno.test("a refusal of the daily capture's own day is not stored as unavailable", async () => {
+  const harness = createHarness({
+    store: { jobs: [createClaimedJob()] },
+    graph: {
+      accountDays: {
+        [TEST_PRIMARY_DAY]: { error: { code: 100, message: "refused" } },
+        [TEST_CORRECTION_DAY]: accountDayAnswer({ reach: 400, views: 800 }),
+      },
+    },
+  });
+
+  await runOwnerDrain(harness.ports);
+
+  // The primary day keeps its accepted failure handling: no row closes it.
+  assertEquals(writtenDays(harness.calls).includes(TEST_PRIMARY_DAY), false);
+  assertEquals(
+    harness.calls.completes.some((entry) => entry.outcome === "completed"),
+    false,
+  );
+});
+
+Deno.test("the backfill never grows the queue past what the database accepts", async () => {
+  // A carried media queue that leaves room for three more tokens.
+  const carried = Array.from({ length: 497 }, (_, index) => `media-${index}`);
+  const harness = createHarness({
+    store: {
+      jobs: [createClaimedJob({ checkpoint: { inventory_remaining_ids: carried } })],
+      missingDays: "all",
+    },
+  });
+
+  await runOwnerDrain(harness.ports);
+
+  const planned = harness.calls.progresses.find((entry) => entry.kind === "inventory")!;
+  assert(planned.remaining_ids.length <= 500);
+  // The two current days take two of the three free tokens: one backfill
+  // day fits.
+  assertEquals(
+    planned.remaining_ids.filter((token: string) => token.startsWith("account_day:")).length,
+    3,
+  );
+});
+
+// ---------------------------------------------------------------------------
+// The exact period reach
+// ---------------------------------------------------------------------------
+
+Deno.test("the owed period totals end on the last closed day and are written", async () => {
+  const harness = createHarness({
+    store: { jobs: [createClaimedJob()], missingPeriods: "all" },
+  });
+
+  await runOwnerDrain(harness.ports);
+
+  assertEquals(harness.calls.periodTotalReads, [
+    { untilDate: TEST_PRIMARY_DAY, periodDays: [7, 14, 30] },
+  ]);
+
+  const periods = new Map(harness.calls.periodTotals.map((entry) => [entry.period_days, entry]));
+  assertEquals([...periods.keys()], [7, 14, 30]);
+  assertEquals(periods.get(7)!.since_date, "2026-10-21");
+  assertEquals(periods.get(14)!.since_date, "2026-10-14");
+  assertEquals(periods.get(30)!.since_date, "2026-09-28");
+  for (const total of periods.values()) {
+    assertEquals(total.until_date, TEST_PRIMARY_DAY);
+    assertEquals(total.metric, "reach");
+    assertEquals(total.status, "ok");
+    assertEquals(total.value, 1200);
+  }
+
+  // The reach of a period is ONE request for the whole range, not a sum.
+  const reachUrls = harness.graphUrls.filter((url) =>
+    url.includes("metric_type=total_value") && url.includes("metric=reach&")
+  );
+  assertEquals(reachUrls.length, 3);
+  assertEquals(harness.calls.completes, [{ outcome: "completed", reasonCode: null }]);
+});
+
+Deno.test("a period without a reported reach is stored as unavailable, never as zero", async () => {
+  const harness = createHarness({
+    store: { jobs: [createClaimedJob()], missingPeriods: [7] },
+    graph: { periodReach: { "2026-10-21": { data: [] } } },
+  });
+
+  await runOwnerDrain(harness.ports);
+
+  assertEquals(harness.calls.periodTotals.length, 1);
+  const total = harness.calls.periodTotals[0]!;
+  assertEquals(total.period_days, 7);
+  assertEquals(total.status, "unavailable");
+  assertEquals(total.value, null);
+});
+
+Deno.test("a period the provider refuses for good is stored as unavailable", async () => {
+  const harness = createHarness({
+    store: { jobs: [createClaimedJob()], missingPeriods: [14] },
+    graph: {
+      periodReach: { "2026-10-14": { error: { code: 100, message: "refused" } } },
+    },
+  });
+
+  await runOwnerDrain(harness.ports);
+
+  assertEquals(harness.calls.periodTotals.length, 1);
+  const total = harness.calls.periodTotals[0]!;
+  assertEquals(total.period_days, 14);
+  assertEquals(total.since_date, "2026-10-14");
+  assertEquals(total.status, "unavailable");
+  assertEquals(total.value, null);
+  assert(harness.logs.some((event) => event.event === "owner_period_reach_unavailable"));
+  assertEquals(harness.calls.completes, [{ outcome: "completed", reasonCode: null }]);
+});
+
+Deno.test("a period that failed for another reason stays owed", async () => {
+  const harness = createHarness({
+    store: { jobs: [createClaimedJob()], missingPeriods: [30] },
+    graph: {
+      periodReach: { "2026-09-28": { error: { code: 1, message: "temporary" } } },
+    },
+  });
+
+  await runOwnerDrain(harness.ports);
+
+  // Nothing is stored for it, and the job is not a full success.
+  assertEquals(harness.calls.periodTotals, []);
+  assertEquals(
+    harness.calls.completes.some((entry) => entry.outcome === "completed"),
+    false,
+  );
+});
+
+Deno.test("a stored period is not asked for again", async () => {
+  const harness = createHarness({ store: { jobs: [createClaimedJob()] } });
+
+  await runOwnerDrain(harness.ports);
+
+  assertEquals(harness.calls.periodTotals, []);
+  assertEquals(harness.graphUrls.filter((url) => url.includes("metric=reach&")).length, 0);
+});
+
+// ---------------------------------------------------------------------------
+// The backfill pacing
+// ---------------------------------------------------------------------------
+
+/** `count` consecutive dates, newest first, starting on `newest`. */
+function datesFrom(newest: string, count: number): string[] {
+  const start = Date.parse(`${newest}T00:00:00.000Z`);
+  return Array.from(
+    { length: count },
+    (_unused, index) => new Date(start - index * 86_400_000).toISOString().slice(0, 10),
+  );
+}
+
+Deno.test("the backfill of one account stops at the daily cap and the job is not kept partial for it", async () => {
+  // 58 history days were first written on this capture day already: two
+  // more fit under the cap of 60.
+  const writtenToday = Object.fromEntries(
+    datesFrom("2026-08-31", 58).map((day) => [day, "2026-10-28T08:00:00.000Z"]),
+  );
+  const harness = createHarness({
+    store: {
+      jobs: [createClaimedJob()],
+      missingDays: datesFrom("2026-10-25", 10),
+      dayCapturedAt: writtenToday,
+    },
+  });
+
+  await runOwnerDrain(harness.ports);
+
+  assertEquals(writtenDays(harness.calls), [
+    TEST_PRIMARY_DAY,
+    TEST_CORRECTION_DAY,
+    "2026-10-25",
+    "2026-10-24",
+  ]);
+  // The other eight days wait for the next capture day: the job completes.
+  assertEquals(harness.calls.completes, [{ outcome: "completed", reasonCode: null }]);
+});
+
+Deno.test("a day written before this capture day does not count against today's cap", async () => {
+  const writtenYesterday = Object.fromEntries(
+    datesFrom("2026-08-31", 58).map((day) => [day, "2026-10-27T20:59:59.000Z"]),
+  );
+  const harness = createHarness({
+    store: {
+      jobs: [createClaimedJob()],
+      missingDays: datesFrom("2026-10-25", 10),
+      dayCapturedAt: writtenYesterday,
+    },
+  });
+
+  await runOwnerDrain(harness.ports);
+
+  // A full slice of five: 20:59:59Z on the 27th is still the 27th in Kuwait.
+  assertEquals(writtenDays(harness.calls).length, 2 + 5);
+});
+
+Deno.test("a high shared usage defers the backfill and keeps the capture", async () => {
+  const harness = createHarness({
+    store: {
+      jobs: [createClaimedJob()],
+      missingDays: "all",
+      bucket: { usagePercent: 50, throttledUntil: null },
+    },
+  });
+
+  await runOwnerDrain(harness.ports);
+
+  // The capture's own days are collected; no backfill day is asked for.
+  assertEquals(writtenDays(harness.calls), [TEST_PRIMARY_DAY, TEST_CORRECTION_DAY]);
+  // The deferred history does not keep the job partial.
+  assertEquals(harness.calls.completes, [{ outcome: "completed", reasonCode: null }]);
+});
+
+Deno.test("an answered day is never asked for again", async () => {
+  const harness = createHarness({
+    store: { jobs: [createClaimedJob()], missingDays: ["2026-06-01"] },
+  });
+
+  await runOwnerDrain(harness.ports);
+
+  // A year is stored but one day: only that day is fetched for the history.
+  assertEquals(writtenDays(harness.calls), [TEST_PRIMARY_DAY, TEST_CORRECTION_DAY, "2026-06-01"]);
+  const dayCalls = harness.graphUrls.filter((url) =>
+    url.includes("metric_type=total_value") && !url.includes("metric=reach&")
+  );
+  assertEquals(dayCalls.length, 3);
+});
+
+// ---------------------------------------------------------------------------
+// The rejected credential
+// ---------------------------------------------------------------------------
+
+Deno.test("a rejected credential ends the job without a retry", async () => {
+  const backfillDay = "2026-10-25";
+  for (
+    const graph of [
+      { profile: { error: { code: 190, message: "Error validating access token" } } },
+      {
+        accountDays: {
+          [TEST_PRIMARY_DAY]: accountDayAnswer({ reach: 450, views: 890 }),
+          [TEST_CORRECTION_DAY]: accountDayAnswer({ reach: 400, views: 800 }),
+          [backfillDay]: { error: { code: 190, message: "Error validating access token" } },
+        },
+      },
+    ]
+  ) {
+    const harness = createHarness({
+      store: { jobs: [createClaimedJob()], missingDays: [backfillDay] },
+      graph,
+    });
+
+    const summary = await runOwnerDrain(harness.ports);
+
+    assertEquals(harness.calls.completes, [{ outcome: "unavailable", reasonCode: "token_invalid" }]);
+    assertEquals(summary.retried, 0);
+    // A rejected credential is not a refusal of the day: the day is not
+    // closed as unavailable.
+    assertEquals(writtenDays(harness.calls).includes(backfillDay), false);
+  }
+});

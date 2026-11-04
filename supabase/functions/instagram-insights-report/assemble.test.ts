@@ -25,6 +25,7 @@ import {
   OwnerReportContractError,
   parseOwnerReportRequest,
   type AccountDailyRow,
+  type AccountPeriodTotalRow,
   type MediaSnapshotRow,
   type OwnerReportAssemblyInput,
   type OwnerReportCompletenessInput,
@@ -308,6 +309,7 @@ function buildInput(
     mediaSnapshots: DISPLAY_MEDIA,
     baselineHistory: ALL_MEDIA,
     accountDaily: DAILY_ROWS,
+    accountPeriodTotals: [],
     profileObservations: PROFILE_ROWS,
     freshness: FRESHNESS,
     completeness: COMPLETENESS,
@@ -822,14 +824,29 @@ Deno.test("one row per metric day survives, the newest capture wins", () => {
   assertEquals(day.capturedAt, "2026-10-26T09:00:00.000Z");
 });
 
-Deno.test("the account days are bounded by the period window", () => {
+Deno.test("the account days end on the last closed Kuwait day", () => {
+  // 12:00Z on the 26th is 15:00 in Kuwait: the 26th is still open, so the
+  // seven days are the 19th to the 25th.
   const report = assembleOwnerReport(buildInput());
   const dates = report.account.daily.map((row) => row.metricDate);
   assertEquals(dates.includes("2026-10-10"), false, "a day outside the window is dropped");
+  assertEquals(dates.includes("2026-10-26"), false, "the open day is not a period day");
   assertEquals(dates[0], "2026-10-20");
-  assertEquals(dates[dates.length - 1], "2026-10-26");
-  assertEquals(report.period.metricDateStart, "2026-10-20");
-  assertEquals(report.period.metricDateEnd, "2026-10-26");
+  assertEquals(dates[dates.length - 1], "2026-10-25");
+  assertEquals(report.period.metricDateStart, "2026-10-19");
+  assertEquals(report.period.metricDateEnd, "2026-10-25");
+});
+
+Deno.test("the Kuwait day closes at 21:00 UTC", () => {
+  for (
+    const [now, lastClosed] of [
+      ["2026-10-26T20:59:59.999Z", "2026-10-25"],
+      ["2026-10-26T21:00:00.000Z", "2026-10-26"],
+    ]
+  ) {
+    const report = assembleOwnerReport(buildInput({ now: new Date(now) }));
+    assertEquals(report.period.metricDateEnd, lastClosed, now);
+  }
 });
 
 Deno.test("the provider day and window are carried through untouched", () => {
@@ -851,7 +868,9 @@ Deno.test("followers stay a point-in-time observation, never a metric day", () =
   assertExists(latest);
   assertEquals(latest.followersCount, 1250);
   assertEquals(latest.observedOn, "2026-10-26");
-  assertEquals(report.account.daily.some((row) => row.metricDate === latest.observedOn), true);
+  // Today's metric day is still open; its followers observation is current
+  // anyway.
+  assertEquals(report.account.daily.some((row) => row.metricDate === latest.observedOn), false);
 });
 
 /* -------------------------------------------------------------------------- */
@@ -957,19 +976,19 @@ Deno.test("paging does not change the score of a media", () => {
 /* Boundary validation                                                          */
 /* -------------------------------------------------------------------------- */
 
-Deno.test("only 7, 14, 30 and 90 day periods are accepted", () => {
-  assertEquals(parseOwnerReportRequest({ periodDays: 7 }).periodDays, 7);
-  assertEquals(parseOwnerReportRequest({ periodDays: "14" }).periodDays, 14);
-  assertEquals(parseOwnerReportRequest({ periodDays: 30 }).periodDays, 30);
-  assertEquals(parseOwnerReportRequest({ periodDays: 90 }).periodDays, 90);
+Deno.test("only 1, 7, 14, 30, 90 and 365 days or all time are accepted", () => {
+  for (const [raw, parsed] of [[1, 1], [7, 7], ["14", 14], [30, 30], [90, 90], [365, 365], ["all", "all"], [" all ", "all"]]) {
+    assertEquals(parseOwnerReportRequest({ periodDays: raw }).periodDays, parsed, String(raw));
+  }
 
   const error = assertThrows(
     () => parseOwnerReportRequest({ periodDays: 10 }),
     OwnerReportContractError,
   );
   assertEquals(error.code, "INVALID_PERIOD");
-  assertThrows(() => parseOwnerReportRequest({ periodDays: 0 }), OwnerReportContractError);
-  assertThrows(() => parseOwnerReportRequest({ periodDays: 365 }), OwnerReportContractError);
+  for (const raw of [0, 2, 366, "ALL", "forever"]) {
+    assertThrows(() => parseOwnerReportRequest({ periodDays: raw }), OwnerReportContractError, undefined, String(raw));
+  }
 });
 
 Deno.test("the page size is bounded", () => {
@@ -1105,4 +1124,132 @@ Deno.test("the report never grows past the period or the page", () => {
   assert(report.media.page.items.length <= 4);
   assert(report.account.daily.length <= 7);
   assert(report.account.profiles.length <= DAILY_ROWS.length);
+});
+
+/* -------------------------------------------------------------------------- */
+/* The exact period reach                                                       */
+/* -------------------------------------------------------------------------- */
+
+function periodTotal(
+  sinceDate: string,
+  untilDate: string,
+  periodDays: number,
+  value: number | null,
+  status = "ok",
+): AccountPeriodTotalRow {
+  return {
+    id: `tot-${sinceDate}-${untilDate}`,
+    ownerId: OWNER_ID,
+    socialAccountId: ACCOUNT_ID,
+    metric: "reach",
+    periodDays,
+    sinceDate,
+    untilDate,
+    status,
+    value,
+    capturedAt: "2026-10-26T03:30:00.000Z",
+  };
+}
+
+function reportFor(periodDays: OwnerReportRequest["periodDays"], overrides: Partial<OwnerReportAssemblyInput> = {}) {
+  return assembleOwnerReport(buildInput({ request: { periodDays, limit: 20, cursor: null }, ...overrides }));
+}
+
+Deno.test("a one-day period reports that closed day's own reach", () => {
+  const report = reportFor(1);
+  assertEquals(report.period.metricDateStart, "2026-10-25");
+  assertEquals(report.period.metricDateEnd, "2026-10-25");
+  assertEquals(report.account.periodReach, {
+    status: "available",
+    value: 150,
+    sinceDate: "2026-10-25",
+    untilDate: "2026-10-25",
+    capturedAt: "2026-10-26T03:00:00.000Z",
+  });
+});
+
+Deno.test("a one-day period without that day's reach is not available, never zero", () => {
+  const withoutDay = DAILY_ROWS.filter((row) => row.metricDate !== "2026-10-25");
+  assertEquals(
+    reportFor(1, { accountDaily: withoutDay }).account.periodReach,
+    { status: "unavailable", reason: "not_collected" },
+  );
+  assertEquals(
+    reportFor(1, { accountDaily: [...withoutDay, dailyRow("dly-25n", "2026-10-25", "2026-10-26T03:00:00.000Z", null)] })
+      .account.periodReach,
+    { status: "unavailable", reason: "provider_unavailable" },
+  );
+  assertEquals(
+    reportFor(1, { accountDaily: [...withoutDay, { ...dailyRow("dly-25p", "2026-10-25", "2026-10-26T03:00:00.000Z", 0), status: "pending" }] })
+      .account.periodReach,
+    { status: "unavailable", reason: "not_collected" },
+  );
+});
+
+Deno.test("a period reports the stored total of exactly its days", () => {
+  const report = reportFor(7, {
+    accountPeriodTotals: [
+      periodTotal("2026-10-18", "2026-10-24", 7, 999),
+      periodTotal("2026-10-19", "2026-10-25", 7, 640),
+    ],
+  });
+  assertEquals(report.account.periodReach, {
+    status: "available",
+    value: 640,
+    sinceDate: "2026-10-19",
+    untilDate: "2026-10-25",
+    capturedAt: "2026-10-26T03:30:00.000Z",
+  });
+});
+
+Deno.test("a period without its own total is not rebuilt from the daily reach", () => {
+  // Yesterday's window and a 14-day total of the same end are not this period.
+  const report = reportFor(7, {
+    accountPeriodTotals: [
+      periodTotal("2026-10-18", "2026-10-24", 7, 999),
+      periodTotal("2026-10-12", "2026-10-25", 14, 1200),
+    ],
+  });
+  assertEquals(report.account.periodReach, { status: "unavailable", reason: "not_collected" });
+});
+
+Deno.test("a total the provider could not serve stays unavailable", () => {
+  const report = reportFor(30, {
+    accountPeriodTotals: [periodTotal("2026-09-26", "2026-10-25", 30, null, "unavailable")],
+  });
+  assertEquals(report.account.periodReach, { status: "unavailable", reason: "provider_unavailable" });
+});
+
+Deno.test("periods longer than thirty days have no exact reach", () => {
+  for (const periodDays of [90, 365, "all"] as const) {
+    assertEquals(
+      reportFor(periodDays).account.periodReach,
+      { status: "unavailable", reason: "period_too_long" },
+      String(periodDays),
+    );
+  }
+});
+
+Deno.test("an ok total without a value is refused", () => {
+  const error = assertThrows(
+    () => reportFor(7, { accountPeriodTotals: [periodTotal("2026-10-19", "2026-10-25", 7, null)] }),
+    OwnerReportContractError,
+  );
+  assertEquals(error.code, "INVALID_ROW");
+});
+
+Deno.test("all time starts on the oldest stored day and shows media older than any period", () => {
+  const ancient = mediaRow({ mediaId: "ancient", publishedAt: at(400) });
+  const input = { mediaSnapshots: [...DISPLAY_MEDIA, ancient], baselineHistory: [...ALL_MEDIA, ancient] };
+
+  const report = reportFor("all", input);
+  assertEquals(report.period.days, "all");
+  assertEquals(report.period.metricDateStart, "2026-10-10");
+  assertEquals(report.period.metricDateEnd, "2026-10-25");
+  assertEquals(report.account.daily[0]!.metricDate, "2026-10-10");
+  assertEquals(report.period.windowStart, ancient.publishedAt);
+  assert(report.media.page.items.some((item) => item.mediaId === "ancient"));
+
+  const year = reportFor(365, input);
+  assertEquals(year.media.page.items.some((item) => item.mediaId === "ancient"), false);
 });

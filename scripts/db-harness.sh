@@ -176,6 +176,7 @@ SUITES=(
   instagram_report_snapshot.sql
   meta_owned_analytics_truncation.sql
   meta_owned_inventory_checkpoint_coverage.sql
+  instagram_owner_period_reach.sql
 )
 # These fixtures build their own focused schema and apply the migration under
 # test. They must never run against the restored production-shaped database.

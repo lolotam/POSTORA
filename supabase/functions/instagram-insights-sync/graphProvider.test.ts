@@ -236,6 +236,102 @@ Deno.test("a metric row for another period is refused", async () => {
 });
 
 // ---------------------------------------------------------------------------
+// The period reach
+// ---------------------------------------------------------------------------
+
+Deno.test("the period reach is ONE total over the whole Kuwait-day range", async () => {
+  const { provider, urls } = providerWith(() =>
+    jsonResponse({ data: [{ name: "reach", period: "day", total_value: { value: 1200 } }] })
+  );
+
+  const result = await provider.fetchAccountPeriodReach({
+    igUserId: "1784140001",
+    token: "the-token",
+    sinceDate: "2026-10-04",
+    untilDate: "2026-11-02",
+    signal: new AbortController().signal,
+  });
+
+  assertEquals(result.value, {
+    metric: "reach",
+    period_days: 30,
+    since_date: "2026-10-04",
+    until_date: "2026-11-02",
+    period_start: "2026-10-03T21:00:00.000Z",
+    period_end: "2026-11-02T20:59:59.999Z",
+    provider_timezone: "Asia/Kuwait",
+    value: 1200,
+  });
+
+  // One request, asking for reach only, as a total over the explicit range.
+  assertEquals(urls.length, 1);
+  assertStringIncludes(urls[0]!, "metric=reach&");
+  assertStringIncludes(urls[0]!, "metric_type=total_value");
+  assertStringIncludes(urls[0]!, "since=1791061200");
+  assertStringIncludes(urls[0]!, "until=1793653199");
+});
+
+Deno.test("a period the provider did not report has no reach, not a zero", async () => {
+  const { provider } = providerWith(() => jsonResponse({ data: [] }));
+
+  const result = await provider.fetchAccountPeriodReach({
+    igUserId: "1784140001",
+    token: "the-token",
+    sinceDate: "2026-10-27",
+    untilDate: "2026-11-02",
+    signal: new AbortController().signal,
+  });
+
+  assertEquals(result.value.value, null);
+  assertEquals(result.value.period_days, 7);
+});
+
+Deno.test("a malformed period total is a failure, never a number", async () => {
+  const { provider } = providerWith(() =>
+    jsonResponse({ data: [{ name: "reach", period: "day", total_value: { value: -4 } }] })
+  );
+
+  const error = await assertRejects(
+    () =>
+      provider.fetchAccountPeriodReach({
+        igUserId: "1784140001",
+        token: "the-token",
+        sinceDate: "2026-10-27",
+        untilDate: "2026-11-02",
+        signal: new AbortController().signal,
+      }),
+    OwnerProviderError,
+  );
+
+  assertEquals(error.kind, "provider_error");
+});
+
+Deno.test("a range Meta refuses is refused before any request is made", async () => {
+  for (
+    const [sinceDate, untilDate] of [
+      ["2026-10-03", "2026-11-02"], // 31 days: longer than Meta accepts
+      ["2026-11-02", "2026-10-27"], // reversed
+      ["not-a-day", "2026-11-02"],
+    ]
+  ) {
+    const { provider, attempts } = providerWith(() => jsonResponse({ data: [] }));
+
+    await assertRejects(
+      () =>
+        provider.fetchAccountPeriodReach({
+          igUserId: "1784140001",
+          token: "the-token",
+          sinceDate: sinceDate!,
+          untilDate: untilDate!,
+          signal: new AbortController().signal,
+        }),
+      RangeError,
+    );
+    assertEquals(attempts(), 0, `${sinceDate}..${untilDate}`);
+  }
+});
+
+// ---------------------------------------------------------------------------
 // The media insights
 // ---------------------------------------------------------------------------
 
@@ -454,6 +550,27 @@ Deno.test("a Graph error envelope delivered with HTTP 200 is an error", async ()
   );
 
   assertEquals(error.kind, "token_invalid");
+});
+
+Deno.test("an HTTP 401 is a rejected credential whatever its envelope says", async () => {
+  // A rate-limit code in a 401 envelope must not turn a dead credential into a retry.
+  for (const body of [{ error: { code: 1, message: "unauthorized" } }, { error: { code: 4, message: "limit" } }, {}]) {
+    const { provider, attempts } = providerWith(() => jsonResponse(body, { status: 401 }));
+
+    const error = await assertRejects(
+      () =>
+        provider.fetchAccountProfile({
+          igUserId: "1784140001",
+          token: "the-token",
+          signal: new AbortController().signal,
+        }),
+      OwnerProviderError,
+    );
+
+    assertEquals(error.kind, "token_invalid");
+    // A rejected credential is not retried inside the call either.
+    assertEquals(attempts(), 1);
+  }
 });
 
 Deno.test("a missing or non-array data array is a failure, never an empty success", async () => {

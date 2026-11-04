@@ -62,6 +62,10 @@
 
 import {
   CURSOR_GRAMMAR,
+  accountTotalValueQuery,
+  assertAccountPeriodRange,
+  kuwaitDayRange,
+  readAccountTotalValues,
   MEDIA_INSIGHT_ATTEMPT_TIMEOUT_MS,
   OwnerProviderError,
   OwnerProviderTransport,
@@ -74,6 +78,7 @@ import {
   sha256Hex,
   type MediaSweepStop,
   type OwnerAccountDay,
+  type OwnerAccountPeriodTotal,
   type OwnerMediaInsights,
   type OwnerMediaItem,
   type OwnerMediaSweep,
@@ -309,69 +314,19 @@ export class InstagramDirectGraphProvider {
     readonly signal: AbortSignal;
     readonly permit?: OwnerProviderPermit;
   }): Promise<OwnerProviderResult<OwnerAccountDay>> {
-    const since = Date.parse(`${input.date}T00:00:00+03:00`);
-    const until = since + 86_400_000 - 1;
+    const { since, until } = kuwaitDayRange(input.date, input.date);
 
-    const url = `${INSTAGRAM_GRAPH_HOST}/${this.#apiVersion}/${
-      encodeURIComponent(input.igUserId)
-    }` +
-      `/insights?metric=${encodeURIComponent(DIRECT_ACCOUNT_DAY_METRICS.join(","))}` +
-      `&period=day&metric_type=total_value` +
-      `&since=${Math.floor(since / 1000)}&until=${Math.floor(until / 1000)}` +
-      `&access_token=${encodeURIComponent(input.token)}`;
+    const url = `${INSTAGRAM_GRAPH_HOST}/${this.#apiVersion}/${encodeURIComponent(input.igUserId)}` +
+      accountTotalValueQuery({ metrics: DIRECT_ACCOUNT_DAY_METRICS, since, until, token: input.token });
 
     const response = await this.#transport.attempt(url, input.signal, {
       permit: input.permit,
     });
-    const rows = requireProviderDataArray(response.payload);
-
-    const metrics: {
-      reach?: number;
-      views?: number;
-      accounts_engaged?: number;
-      total_interactions?: number;
-    } = {};
-
-    for (const row of rows) {
-      const record = this.#requireObject(row);
-      const name = record.name;
-      if (typeof name !== "string") {
-        throw new OwnerProviderError(
-          "The provider returned a metric without a name.",
-          { kind: "provider_error", usagePercent: response.usagePercent },
-        );
-      }
-      if (!DIRECT_ACCOUNT_DAY_METRICS.includes(name)) continue;
-
-      const period = record.period;
-      if (period !== undefined && period !== null) {
-        if (typeof period !== "string" || period !== "day") {
-          throw new OwnerProviderError(
-            "The provider returned a metric for another period.",
-            { kind: "provider_error", usagePercent: response.usagePercent },
-          );
-        }
-      }
-
-      const total = record.total_value;
-      if (total === undefined || total === null) {
-        // The provider did not report this metric. It stays null: it is not
-        // a zero, and it is not a number borrowed from another shape.
-        continue;
-      }
-
-      const totalRecord = this.#requireObject(total);
-      const raw = totalRecord.value;
-      if (typeof raw !== "number" || !Number.isFinite(raw) || !Number.isSafeInteger(raw) ||
-        raw < 0) {
-        throw new OwnerProviderError(
-          "The provider returned a malformed metric value.",
-          { kind: "provider_error", usagePercent: response.usagePercent },
-        );
-      }
-
-      metrics[name as keyof typeof metrics] = raw;
-    }
+    const metrics: OwnerAccountDay["metrics"] = readAccountTotalValues(
+      response.payload,
+      DIRECT_ACCOUNT_DAY_METRICS,
+      response.usagePercent,
+    );
 
     return {
       value: {
@@ -382,6 +337,51 @@ export class InstagramDirectGraphProvider {
         provider_timezone: "Asia/Kuwait",
         query_kind: "interactions",
         metrics,
+      },
+      usagePercent: response.usagePercent,
+    };
+  }
+
+  /**
+   * The unique reach of a range of closed Kuwait days.
+   *
+   * It is the same documented `total_value` request as the account day,
+   * over the whole range at once, so the provider counts an account that
+   * was reached on several days once. A sum of daily reach would count it
+   * once per day, which is why the period is never derived from the days.
+   *
+   * The range is at most thirty days, the longest `since`/`until` range
+   * Meta accepts; a longer range is refused before any request is made.
+   */
+  async fetchAccountPeriodReach(input: {
+    readonly igUserId: string;
+    readonly token: string;
+    readonly sinceDate: string;
+    readonly untilDate: string;
+    readonly signal: AbortSignal;
+    readonly permit?: OwnerProviderPermit;
+  }): Promise<OwnerProviderResult<OwnerAccountPeriodTotal>> {
+    const periodDays = assertAccountPeriodRange(input.sinceDate, input.untilDate);
+    const { since, until } = kuwaitDayRange(input.sinceDate, input.untilDate);
+
+    const url = `${INSTAGRAM_GRAPH_HOST}/${this.#apiVersion}/${encodeURIComponent(input.igUserId)}` +
+      accountTotalValueQuery({ metrics: ["reach"], since, until, token: input.token });
+
+    const response = await this.#transport.attempt(url, input.signal, {
+      permit: input.permit,
+    });
+    const totals = readAccountTotalValues(response.payload, ["reach"], response.usagePercent);
+
+    return {
+      value: {
+        metric: "reach",
+        period_days: periodDays,
+        since_date: input.sinceDate,
+        until_date: input.untilDate,
+        period_start: new Date(since).toISOString(),
+        period_end: new Date(until).toISOString(),
+        provider_timezone: "Asia/Kuwait",
+        value: totals.reach ?? null,
       },
       usagePercent: response.usagePercent,
     };

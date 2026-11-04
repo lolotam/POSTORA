@@ -1,7 +1,7 @@
 import type { OwnerReport } from "./types";
 import { summarizeDailyMetricValues } from "@/features/analytics-contract";
 
-type DailyMetric = "views" | "totalInteractions";
+type DailyMetric = "views" | "totalInteractions" | "accountsEngaged";
 type DailyReport = {
   account: Pick<OwnerReport["account"], "daily">;
   period: Pick<OwnerReport["period"], "metricDateStart" | "metricDateEnd">;
@@ -22,12 +22,20 @@ export function dailyMetricSeries(report: DailyReport) {
     const row = rows.get(date);
     const measurement = (metric: "reach" | DailyMetric) =>
       row?.status === "ok" && row[metric] !== null && Number.isFinite(row[metric]) ? row[metric] : null;
-    series.push({ date, reach: measurement("reach"), views: measurement("views"), totalInteractions: measurement("totalInteractions") });
+    series.push({
+      date,
+      reach: measurement("reach"),
+      views: measurement("views"),
+      totalInteractions: measurement("totalInteractions"),
+      accountsEngaged: measurement("accountsEngaged"),
+    });
   }
   return series;
 }
 
-// Only additive metrics may use this path; unique reach requires a provider period total.
+// Unique reach never uses this path: it requires a provider period total.
+// Accounts engaged is summed as the owner asked; an account engaged on two
+// days counts twice, so its card labels the value as a sum of daily values.
 export function summarizeDailyMetric(report: OwnerReport, metric: DailyMetric): DailyMetricSummary {
   const series = dailyMetricSeries(report);
   const summary = summarizeDailyMetricValues({

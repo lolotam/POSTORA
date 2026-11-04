@@ -1,8 +1,9 @@
 import { useTranslation } from "react-i18next";
 import { Card, CardContent } from "@/components/ui/card";
-import { Users, Eye, TrendingUp, Sparkles } from "lucide-react";
+import { Users, Eye, TrendingUp, Sparkles, MousePointerClick } from "lucide-react";
+import type { TFunction } from "i18next";
 import { formatCompactNumber } from "../domain/formatters";
-import type { OwnerReport } from "../domain/types";
+import type { OwnerReport, OwnerReportPeriodReach } from "../domain/types";
 import { summarizeDailyMetric, type DailyMetricSummary } from "../domain/dailyMetrics";
 
 export type MetricsOverviewCardsProps = {
@@ -10,15 +11,31 @@ export type MetricsOverviewCardsProps = {
   isLoading?: boolean;
 };
 
+/** Why the period has no exact unique reach, in the owner's words. */
+function periodReachGap(t: TFunction, reach: OwnerReportPeriodReach | undefined): string {
+  if (reach?.status !== "unavailable") {
+    return t("instagram.periodReachUnavailable", "An exact period total is required for unique reach.");
+  }
+  if (reach.reason === "period_too_long") {
+    return t("instagram.periodReachTooLong", "Meta reports exact unique reach for periods of up to 30 days.");
+  }
+  if (reach.reason === "provider_unavailable") {
+    return t("instagram.periodReachProviderUnavailable", "Meta did not report the unique reach of this period.");
+  }
+  return t("instagram.periodReachNotCollected", "The unique reach of this period has not been collected yet.");
+}
+
 export function MetricsOverviewCards({ report }: MetricsOverviewCardsProps) {
   const { t } = useTranslation("analytics");
 
   const followersCount = report?.account.latestProfileObservation?.followersCount ?? null;
 
-  // Aggregate additive daily metrics across the authoritative display window;
-  // the legacy report has no exact-period unique-reach measurement.
+  // Daily metrics are summed across the authoritative display window. Reach
+  // is the provider's exact period total, never a sum of daily reach.
   const views = report ? summarizeDailyMetric(report, "views") : undefined;
   const interactions = report ? summarizeDailyMetric(report, "totalInteractions") : undefined;
+  const accountsEngaged = report ? summarizeDailyMetric(report, "accountsEngaged") : undefined;
+  const periodReach = report?.account.periodReach;
   const unavailable = t("instagram.metricUnavailable", "Not available");
   const metricValue = (summary?: DailyMetricSummary) => summary?.value === null || !summary
     ? unavailable : formatCompactNumber(summary.value);
@@ -38,8 +55,10 @@ export function MetricsOverviewCards({ report }: MetricsOverviewCardsProps) {
     },
     {
       title: t("instagram.reach", "Total Reach"),
-      value: unavailable,
-      subtext: t("instagram.periodReachUnavailable", "An exact period total is required for unique reach."),
+      value: periodReach?.status === "available" ? formatCompactNumber(periodReach.value) : unavailable,
+      subtext: periodReach?.status === "available"
+        ? t("instagram.periodReachExact", "Unique accounts reached in the period")
+        : periodReachGap(t, periodReach),
       icon: TrendingUp,
       color: "text-amber-500",
       bg: "bg-amber-500/10",
@@ -63,10 +82,19 @@ export function MetricsOverviewCards({ report }: MetricsOverviewCardsProps) {
       bg: "bg-emerald-500/10",
       border: "border-emerald-500/20",
     },
+    {
+      title: t("instagram.accountsEngaged", "Accounts engaged"),
+      value: metricValue(accountsEngaged),
+      subtext: coverage(accountsEngaged) ?? t("instagram.accountsEngagedDailySum", "Sum of the daily engaged accounts"),
+      icon: MousePointerClick,
+      color: "text-sky-500",
+      bg: "bg-sky-500/10",
+      border: "border-sky-500/20",
+    },
   ];
 
   return (
-    <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+    <div className="grid grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-4">
       {cards.map((card, idx) => {
         const Icon = card.icon;
         return (

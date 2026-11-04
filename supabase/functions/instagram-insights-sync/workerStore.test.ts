@@ -1190,3 +1190,183 @@ Deno.test("the audit row of a refusal never carries a token or a claim token", a
   assertEquals(serialized.includes(TEST_CLAIM_TOKEN), false);
   assertEquals(serialized.includes("access_token"), false);
 });
+
+
+// ---------------------------------------------------------------------------
+// The history and the period totals
+// ---------------------------------------------------------------------------
+
+/** `count` consecutive dates, newest first, ending on 2026-10-27. */
+function closedDays(count: number): string[] {
+  const start = Date.parse("2026-10-27T00:00:00.000Z");
+  return Array.from(
+    { length: count },
+    (_unused, index) => new Date(start - index * 86_400_000).toISOString().slice(0, 10),
+  );
+}
+
+Deno.test("the history is read owner-scoped and in bounded chunks", async () => {
+  const days = closedDays(365);
+  const { store, calls } = createStore(() => ({ data: null, error: null }), {
+    mediaRows: [
+      { metric_date: "2026-10-27", status: "ok", captured_at: "2026-10-28T09:00:00+00:00" },
+      { metric_date: "2026-10-26", status: "unavailable", captured_at: "2026-10-27T09:00:00+00:00" },
+    ],
+  });
+
+  const rows = await store.readOwnerAccountDays({
+    userId: TEST_USER_ID,
+    socialAccountId: TEST_ACCOUNT_ID,
+    days,
+  });
+
+  // A year is two requests, never one long URL.
+  assertEquals(calls.length, 2);
+  for (const call of calls) {
+    assertEquals(call.name, "readMany:ig_account_insight_daily");
+    assertEquals(call.args.social_account_id, TEST_ACCOUNT_ID);
+    assertEquals(call.args.user_id, TEST_USER_ID);
+  }
+  assertEquals((calls[0]!.args.metric_date as string[]).length, 200);
+  assertEquals((calls[1]!.args.metric_date as string[]).length, 165);
+
+  // The double answers the same two rows for each chunk.
+  assertEquals(rows.slice(0, 2), [
+    { metricDate: "2026-10-27", status: "ok", capturedAt: "2026-10-28T09:00:00+00:00" },
+    { metricDate: "2026-10-26", status: "unavailable", capturedAt: "2026-10-27T09:00:00+00:00" },
+  ]);
+  // The first write of each row is read too: the daily backfill cap is
+  // counted from it.
+  assertEquals(calls[0]!.args.columns, "metric_date, status, captured_at");
+});
+
+Deno.test("a history row that does not answer the read is refused", async () => {
+  for (
+    const row of [
+      { metric_date: "2026-01-01", status: "ok", captured_at: "2026-10-28T09:00:00+00:00" },
+      { metric_date: "2026-10-27", status: "done", captured_at: "2026-10-28T09:00:00+00:00" },
+      { metric_date: "not a date", status: "ok", captured_at: "2026-10-28T09:00:00+00:00" },
+      { status: "ok", captured_at: "2026-10-28T09:00:00+00:00" },
+      { metric_date: "2026-10-27", status: "ok" },
+      { metric_date: "2026-10-27", status: "ok", captured_at: "yesterday" },
+    ]
+  ) {
+    const { store } = createStore(() => ({ data: null, error: null }), { mediaRows: [row] });
+    await assertRejects(
+      () =>
+        store.readOwnerAccountDays({
+          userId: TEST_USER_ID,
+          socialAccountId: TEST_ACCOUNT_ID,
+          days: closedDays(10),
+        }),
+      OwnerWorkerStoreError,
+    );
+  }
+});
+
+Deno.test("the period totals are read for the account, the owner and the last closed day", async () => {
+  const { store, calls } = createStore(() => ({ data: null, error: null }), {
+    mediaRows: [{ period_days: 7, status: "ok" }, { period_days: 30, status: "unavailable" }],
+  });
+
+  const rows = await store.readOwnerPeriodTotals({
+    userId: TEST_USER_ID,
+    socialAccountId: TEST_ACCOUNT_ID,
+    untilDate: "2026-10-27",
+    periodDays: [7, 14, 30],
+  });
+
+  assertEquals(rows, [
+    { periodDays: 7, status: "ok" },
+    { periodDays: 30, status: "unavailable" },
+  ]);
+  assertEquals(calls[0]!.name, "readMany:ig_account_insight_period_totals");
+  assertEquals(calls[0]!.args.social_account_id, TEST_ACCOUNT_ID);
+  assertEquals(calls[0]!.args.user_id, TEST_USER_ID);
+  assertEquals(calls[0]!.args.metric, "reach");
+  assertEquals(calls[0]!.args.until_date, "2026-10-27");
+  assertEquals(calls[0]!.args.period_days, ["7", "14", "30"]);
+});
+
+Deno.test("a period total row that does not answer the read is refused", async () => {
+  for (
+    const row of [
+      { period_days: 90, status: "ok" },
+      { period_days: 7, status: "pending" },
+      { period_days: "7", status: "ok" },
+    ]
+  ) {
+    const { store } = createStore(() => ({ data: null, error: null }), { mediaRows: [row] });
+    await assertRejects(
+      () =>
+        store.readOwnerPeriodTotals({
+          userId: TEST_USER_ID,
+          socialAccountId: TEST_ACCOUNT_ID,
+          untilDate: "2026-10-27",
+          periodDays: [7, 14, 30],
+        }),
+      OwnerWorkerStoreError,
+    );
+  }
+});
+
+const PERIOD_TOTAL = {
+  metric: "reach",
+  period_days: 7,
+  since_date: "2026-10-21",
+  until_date: "2026-10-27",
+  period_start: "2026-10-20T21:00:00.000Z",
+  period_end: "2026-10-27T20:59:59.999Z",
+  provider_timezone: "Asia/Kuwait",
+  status: "ok",
+  value: 1200,
+} as const;
+
+Deno.test("a period total is written behind the fence and its receipt is checked", async () => {
+  const { store, calls } = createStore(() => ({
+    data: { job_id: TEST_JOB_ID, job_generation: 1, written: 1 },
+    error: null,
+  }));
+
+  const receipt = await store.persistPeriodTotal({
+    jobId: TEST_JOB_ID,
+    claimToken: TEST_CLAIM_TOKEN,
+    jobGeneration: 1,
+    payload: PERIOD_TOTAL,
+  });
+
+  assertEquals(receipt.written, 1);
+  assertEquals(calls[0]!.name, "persist_instagram_owner_period_total");
+  assertEquals(calls[0]!.args.p_job_id, TEST_JOB_ID);
+  assertEquals(calls[0]!.args.p_claim_token, TEST_CLAIM_TOKEN);
+  assertEquals(calls[0]!.args.p_job_generation, 1);
+  assertEquals(calls[0]!.args.p_payload, { ...PERIOD_TOTAL });
+  // The HTTP wrapper is the one that maps a lost lease to a stale claim.
+  assertEquals(
+    ownerHttpRpcName("persist_instagram_owner_period_total"),
+    "persist_instagram_owner_period_total_http",
+  );
+});
+
+Deno.test("a period total receipt that disagrees with the request is refused", async () => {
+  for (
+    const data of [
+      { job_id: TEST_JOB_ID, job_generation: 1, written: 2 },
+      { job_id: TEST_JOB_ID, job_generation: 2, written: 1 },
+      { job_id: "01810009-0000-4000-8000-000000000009", job_generation: 1, written: 1 },
+      null,
+    ]
+  ) {
+    const { store } = createStore(() => ({ data, error: null }));
+    await assertRejects(
+      () =>
+        store.persistPeriodTotal({
+          jobId: TEST_JOB_ID,
+          claimToken: TEST_CLAIM_TOKEN,
+          jobGeneration: 1,
+          payload: PERIOD_TOTAL,
+        }),
+      OwnerWorkerStoreError,
+    );
+  }
+});
