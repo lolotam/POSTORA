@@ -516,14 +516,17 @@ const DIRECT_PERMISSION_NAME = /^[a-z][a-z0-9_]{0,127}$/;
  *
  * Meta documents the short-lived token response as carrying "a list of the
  * permissions granted by the app user" in `permissions`, as one
- * comma-separated string (Business Login for Instagram, step 2). Only that
- * shape is evidence. An absent field, another type, an empty list or a
- * malformed name is NOT a grant set and NOT a denial: it returns null, and
- * the capability keeps its unknown state.
+ * comma-separated string (Business Login for Instagram, step 2). The live
+ * shape is not yet observed, so an array of names is accepted too; each name
+ * passes the same check either way. An absent field, another type, an empty
+ * list or a malformed name is NOT a grant set and NOT a denial: it returns
+ * null, and the capability keeps its unknown state.
  */
 export function parseDirectGrantedPermissions(value: unknown): string[] | null {
-  if (typeof value !== "string") return null;
-  const names = value.split(",").map((name) => name.trim());
+  const raw = typeof value === "string" ? value.split(",") : value;
+  if (!Array.isArray(raw) || raw.length === 0) return null;
+  if (raw.some((name) => typeof name !== "string")) return null;
+  const names = raw.map((name: string) => name.trim());
   if (names.some((name) => !DIRECT_PERMISSION_NAME.test(name))) return null;
   return [...new Set(names)].sort();
 }

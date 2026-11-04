@@ -436,7 +436,7 @@ Deno.test("a direct profile id with a control character is not an identity", asy
   }
 });
 
-Deno.test("only a comma-separated permission string is evidence of a grant", () => {
+Deno.test("only a comma-separated string or an array of valid names is evidence of a grant", () => {
   const cases: Array<[unknown, string[] | null]> = [
     [
       "instagram_business_manage_insights,instagram_business_basic,instagram_business_basic",
@@ -448,7 +448,13 @@ Deno.test("only a comma-separated permission string is evidence of a grant", () 
     ]],
     [undefined, null],
     [null, null],
-    [["instagram_business_basic"], null],
+    [["instagram_business_manage_insights", " instagram_business_basic", "instagram_business_basic"], [
+      "instagram_business_basic",
+      "instagram_business_manage_insights",
+    ]],
+    [[], null],
+    [["instagram_business_basic", 7], null],
+    [["instagram_business_basic", "Instagram_Business_Basic"], null],
     [{ instagram_business_basic: true }, null],
     ["", null],
     ["instagram_business_basic,", null],
@@ -467,7 +473,8 @@ Deno.test("the direct exchange reports the granted permissions of the short-live
       "instagram_business_manage_insights",
     ], "string"],
     [{}, null, "missing"],
-    [{ permissions: ["instagram_business_basic"] }, null, "array"],
+    [{ permissions: ["instagram_business_basic"] }, ["instagram_business_basic"], "array"],
+    [{ permissions: 42 }, null, "other"],
   ];
   for (const [extra, granted, shape] of cases) {
     const login = await exchangeProtectedDirectLogin({
