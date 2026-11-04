@@ -196,6 +196,8 @@ export type OwnerServiceRpcCaller = (
  *   schema_unavailable   - the accepted functions are not deployed.
  *   credential_missing   - the account owns no protected credential.
  *   credential_changed   - the credential was replaced under the attempt.
+ *   capability_missing   - the fence refused: the bound account's permission
+ *                          read never succeeded. Nothing committed.
  *   invalid_envelope     - the driver envelope was malformed.
  *   rpc_failed           - anything else. The write may have committed.
  */
@@ -207,6 +209,7 @@ export type OwnerStoreFailure =
   | "schema_unavailable"
   | "credential_missing"
   | "credential_changed"
+  | "capability_missing"
   | "invalid_envelope"
   | "rpc_failed";
 
@@ -600,6 +603,21 @@ const DIRECT_CREDENTIAL_MISSING_CODES = new Set(["IDC05"]);
 const DIRECT_CREDENTIAL_REFUSED_CODES = new Set(["IDC01", "IDC02"]);
 
 /**
+ * The fence's refusal of a bound account whose permission read never
+ * succeeded (`ig_collection_load_fenced_job`). Its SQLSTATE 22023 is shared
+ * with every other fence refusal, so only this exact marker at the start of
+ * the message identifies it. The message itself is never copied.
+ */
+const CAPABILITY_MISSING_MARKER = "IG_COLLECTION_CAPABILITY_MISSING:";
+
+function isCapabilityMissingRefusal(error: Record<string, unknown>, sqlstate: string | null): boolean {
+  if (sqlstate !== "22023") return false;
+  const message = readOwnData(error, "message");
+  return message.present && typeof message.value === "string" &&
+    message.value.startsWith(CAPABILITY_MISSING_MARKER);
+}
+
+/**
  * Maps a direct-credential refusal onto a stable failure kind.
  *
  * The native `40001` and HTTP `PT409` of the accepted fence are folded into `credential_changed` on
@@ -630,6 +648,9 @@ function classifyDirectCredentialError(error: unknown): OwnerWorkerStoreError {
   }
   if (sqlstate !== null && DIRECT_CREDENTIAL_REFUSED_CODES.has(sqlstate)) {
     return new OwnerWorkerStoreError("invalid", sqlstate);
+  }
+  if (isCapabilityMissingRefusal(error, sqlstate)) {
+    return new OwnerWorkerStoreError("capability_missing", sqlstate);
   }
   if (sqlstate === "PGRST202" || sqlstate === "42883") {
     return new OwnerWorkerStoreError("schema_unavailable", sqlstate);

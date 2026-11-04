@@ -662,6 +662,37 @@ Deno.test("a direct refusal is classified by its SQLSTATE and its message is dro
   }
 });
 
+// Production 2026-11-04: a direct-login pilot whose permission read was never
+// recorded hit this fence refusal, and the worker reported it as storage_error.
+Deno.test("only the fence's capability refusal is told apart from the other 22023 refusals", async () => {
+  const cases: Array<[string, string, string]> = [
+    ["22023", "IG_COLLECTION_CAPABILITY_MISSING: the bound account has no recorded capability", "capability_missing"],
+    ["22023", "IG_COLLECTION_TARGET_INACTIVE: the target account is no longer active and usable", "rpc_failed"],
+    ["22023", "IG_COLLECTION_CONTEXT_MISSING: the job has no bound connection context", "rpc_failed"],
+    ["22023", "wrapped IG_COLLECTION_CAPABILITY_MISSING: not at the start", "rpc_failed"],
+    ["22023", "IG_COLLECTION_CAPABILITY_MISSING without its separator", "rpc_failed"],
+    ["P0001", "IG_COLLECTION_CAPABILITY_MISSING: another SQLSTATE", "rpc_failed"],
+  ];
+
+  for (const [sqlstate, message, failure] of cases) {
+    const { store } = createStore(() => ({ data: null, error: { code: sqlstate, message } }));
+
+    const error = await assertRejects(
+      () =>
+        store.resolveDirectOwnerCredential({
+          jobId: TEST_JOB_ID,
+          claimToken: TEST_CLAIM_TOKEN,
+          jobGeneration: 3,
+          expectedCredentialGeneration: 7,
+          socialAccountId: TEST_ACCOUNT_ID,
+        }),
+      OwnerWorkerStoreError,
+    );
+    assertEquals(error.failure, failure, message);
+    assertEquals(error.message.includes("IG_COLLECTION"), false);
+  }
+});
+
 // ---------------------------------------------------------------------------
 // The protected credential
 // ---------------------------------------------------------------------------

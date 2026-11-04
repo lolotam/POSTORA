@@ -343,7 +343,7 @@ function defaultRpcResult(name: string, args: Record<string, unknown>, current: 
       return receiptForAttempt(current, payload);
     case "write_instagram_account_capability":
       return {
-        social_account_id: args.p_social_account_id, capability_present: true, login_kind: "page_linked",
+        social_account_id: args.p_social_account_id, capability_present: true, login_kind: payload.login_kind ?? "page_linked",
         permission_read_state: payload.permission_read_state, scopes_authoritative: payload.permission_read_state === "ok",
         granted_scopes: payload.granted_scopes ?? [], scopes_read_at: payload.scopes_read_at ?? null,
         last_read_failed_at: payload.read_failed_at ?? null, last_read_error_code: payload.read_error_code ?? null,
@@ -996,6 +996,75 @@ routeTest("the protected direct callback needs both Instagram identities", async
   const location = response.headers.get("location") ?? "";
   assertEquals(location.includes("connected=instagram"), true);
   assertEquals(location.includes("warning="), false);
+});
+
+// Production 2026-11-04: a direct login committed its capability as unknown,
+// so the collection fence refused every job of the account.
+routeTest("a direct callback records the permissions its token exchange granted", async () => {
+  const current = probe({
+    setting: "protected",
+    instagramRows: [protectedPendingRow({
+      ig_candidates_json: [{ ig_user_id: "ig-canonical", ig_igid: "ig-messaging" }],
+    })],
+    attemptRows: [{
+      id: ATTEMPT_ID,
+      user_id: USER_ID,
+      meta_oauth_attempt_id: ATTEMPT_ID,
+      flow: "instagram_direct",
+    }],
+    socialRows: [{
+      id: ACCOUNT_ID,
+      user_id: USER_ID,
+      platform: "instagram",
+      platform_user_id: "ig-canonical",
+      access_token: PAGE_TOKEN,
+    }],
+  });
+  metaProvider(current);
+  const provider = current.providerFetch;
+  current.providerFetch = (url) => {
+    if (url.includes("api.instagram.com/oauth/access_token")) {
+      return {
+        status: 200,
+        body: {
+          access_token: PROVIDER_TOKEN,
+          user_id: "igid-1",
+          permissions: "instagram_business_manage_insights,instagram_business_basic",
+        },
+      };
+    }
+    return provider(url);
+  };
+  const handler = await loadHandler("instagram-oauth/index.ts", current);
+  const state = await protectedState({
+    platform: "instagram",
+    flow: "direct",
+    sqlFlow: "instagram_direct",
+  });
+
+  let response: Response | undefined;
+  const logs = await withCapturedLogs(async () => {
+    response = await handler(new Request(
+      `https://synthetic.invalid/functions/v1/instagram-oauth?code=code-1&state=${encodeURIComponent(state)}`,
+      { method: "GET" },
+    ));
+  });
+
+  assertEquals(response!.status, 302);
+  const names = rpcNames(current);
+  // The evidence is written after the commit opened the generation it names.
+  assertEquals(names.indexOf("commit_meta_oauth_selection") < names.indexOf("write_instagram_account_capability"), true);
+  const write = current.rpcCalls.find((call) => call.name === "write_instagram_account_capability")!;
+  const payload = write.args.p_payload as Record<string, unknown>;
+  assertEquals(write.args.p_social_account_id, ACCOUNT_ID);
+  assertEquals(write.args.p_user_id, USER_ID);
+  assertEquals(payload.login_kind, "direct");
+  assertEquals(payload.permission_read_state, "ok");
+  assertEquals(payload.granted_scopes, ["instagram_business_basic", "instagram_business_manage_insights"]);
+  assertEquals(payload.expected_credential_generation, 2);
+  assertEquals(typeof payload.scopes_read_at, "string");
+  assertEquals(logs.includes('"evidence_shape":"string","status":"ok","insights_granted":true'), true);
+  assertEquals(logs.includes(PROVIDER_TOKEN), false);
 });
 
 routeTest("a direct callback without the messaging identity never completes", async () => {

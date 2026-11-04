@@ -325,6 +325,7 @@ jobs:
             supabase/functions/refresh-tokens/metaPageReconciliationProvider.test.ts
             supabase/functions/refresh-tokens/protectedPageReconciliation.test.ts
             supabase/functions/instagram-oauth/protectedDirectRefusal.test.ts
+            supabase/functions/instagram-oauth/directPermissions.test.ts
           )
           for file in "${tests[@]}"; do
             if [ ! -f "${file}" ]; then

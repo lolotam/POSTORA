@@ -78,8 +78,10 @@ import {
   protectedWebhookSubscribe,
   PROTECTED_HTTP_TIMEOUT_MS,
   PROTECTED_OPERATION_BUDGET_MS,
+  type PermissionEvidenceShape,
 } from "../_shared/metaOAuthProtectedBoundary.ts";
 import { restrictedCorsHeaders } from "../_shared/cors.ts";
+import { type DirectPermissionEvidence, recordDirectInstagramPermissions } from "./directPermissions.ts";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
@@ -383,6 +385,11 @@ async function handleProtectedDirectCallback(
 ): Promise<Response> {
   const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
   const store = createMetaOAuthAttemptStoreFromClient(supabase);
+  // Set only by the exchange of THIS callback; a callback that never exchanged has no evidence.
+  const exchanged: {
+    evidence: DirectPermissionEvidence | null;
+    shape: PermissionEvidenceShape | null;
+  } = { evidence: null, shape: null };
 
   try {
     const complete = await completeProtectedCallback(store, {
@@ -403,6 +410,11 @@ async function handleProtectedDirectCallback(
           ig_user_id: login.canonicalId,
           ig_igid: login.igid,
         });
+        exchanged.evidence = {
+          canonicalId: evidence.canonicalId,
+          grantedPermissions: login.grantedPermissions,
+        };
+        exchanged.shape = login.permissionEvidenceShape;
         const avatarUrl = await cacheAvatarToCdn(
           login.profilePictureUrl ?? undefined,
           userId,
@@ -465,6 +477,21 @@ async function handleProtectedDirectCallback(
         providerTokenPresent: false,
       },
     );
+
+    const permissions = exchanged.evidence === null
+      ? { status: "unknown" as const }
+      : await recordDirectInstagramPermissions({
+        userId,
+        receipt,
+        evidence: exchanged.evidence,
+        rpc: async (name, args) => await supabase.rpc(name, args).abortSignal(AbortSignal.timeout(5_000)),
+      });
+    console.log("[instagram-oauth] direct permission evidence", {
+      event: "direct_permission_evidence",
+      social_account_id: receipt.socialAccountId,
+      evidence_shape: exchanged.shape,
+      ...permissions,
+    });
 
     // Every valid receipt reasserts. The outcome is not an exactly-once claim.
     const subscription = await assertWebhookSubscription({

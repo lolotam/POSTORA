@@ -194,7 +194,7 @@ export interface FakeStoreOptions {
   /** The capability read refuses with this failure. */
   readonly capabilityFailure?: "credential_missing" | "credential_changed";
   /** The direct credential read refuses with this failure. */
-  readonly directCredentialFailure?: "credential_missing" | "credential_changed";
+  readonly directCredentialFailure?: "credential_missing" | "credential_changed" | "capability_missing" | "rpc_failed";
   /**
    * The write the DATABASE refuses for one job.
    *

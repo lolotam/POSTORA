@@ -691,6 +691,154 @@ BEGIN
 END
 $e7$;
 
+-- ===========================================================================
+-- E8 - a direct login's permission evidence, end to end.
+--
+-- Production 2026-11-04: a direct login committed its capability as
+-- unknown, and the fence refused every job of the account with
+-- IG_COLLECTION_CAPABILITY_MISSING. Nothing here seeds an 'ok' row: the
+-- capability is opened by the commit's own transition
+-- (meta_oauth_attempt_bump_instagram_capability), the evidence is written
+-- with the payload instagram-oauth/directPermissions.ts sends (same keys,
+-- same fence), and the read is the worker's own fenced reader.
+--
+-- now() is the transaction start, so the commit's credential_updated_at is
+-- now(); evidence read after the commit is now() plus an offset.
+-- ===========================================================================
+DO $e8$
+DECLARE
+  u_d      uuid := 'd1000000-0000-4000-8000-000000000001';
+  acct_e   uuid := 'd2000000-0000-4000-8000-000000000008';
+  v_gen    bigint;
+  v_job    uuid;
+  v_token  uuid;
+  v_jgen   bigint;
+  v_cap    jsonb;
+  v_read   jsonb;
+  v_failed boolean;
+BEGIN
+  INSERT INTO public.social_accounts
+    (id, user_id, platform, platform_user_id, platform_username,
+     access_token, token_expires_at, is_active, ig_auth_type)
+  VALUES
+    (acct_e, u_d, 'instagram', 'ig-direct-8', 'igdirect_8', 'direct-token-8',
+     NULL, true, 'business_login');
+
+  v_gen := public.meta_oauth_attempt_bump_instagram_capability(u_d, acct_e, 'direct', 'created');
+  ASSERT v_gen = 1, 'E8 the commit opened generation 1, got ' || v_gen::text;
+  ASSERT (SELECT permission_read_state = 'unknown'
+            FROM public.instagram_account_capabilities WHERE social_account_id = acct_e),
+    'E8 the commit leaves the permission read unknown';
+
+  INSERT INTO public.instagram_collection_jobs
+    (user_id, target_kind, target_id, social_account_id, captured_on)
+  VALUES (u_d, 'owner', acct_e, acct_e, current_date);
+
+  SELECT (c ->> 'job_id')::uuid, (c ->> 'claim_token')::uuid, (c ->> 'job_generation')::bigint
+    INTO v_job, v_token, v_jgen
+    FROM public.claim_instagram_collection_jobs('owner', 100) AS c
+   WHERE c ->> 'social_account_id' = acct_e::text;
+  ASSERT v_job IS NOT NULL, 'E8 the job of the unknown capability was claimed';
+
+  -- The production refusal: unknown is not a recorded capability.
+  v_failed := false;
+  BEGIN
+    PERFORM public.read_instagram_direct_collection_credential(v_job, v_token, v_jgen, 1);
+  EXCEPTION WHEN others THEN
+    v_failed := true;
+    ASSERT SQLSTATE = '22023', 'E8 the unknown read is SQLSTATE 22023, got ' || SQLSTATE;
+    ASSERT SQLERRM LIKE 'IG_COLLECTION_CAPABILITY_MISSING:%',
+      'E8 the unknown read is the capability refusal, got ' || SQLERRM;
+  END;
+  ASSERT v_failed, 'E8 an unknown capability was readable';
+
+  -- The evidence of THIS callback, fenced on the generation its commit named.
+  v_cap := public.write_instagram_account_capability(acct_e, u_d, jsonb_build_object(
+    'login_kind', 'direct',
+    'permission_read_state', 'ok',
+    'granted_scopes', jsonb_build_array('instagram_business_basic', 'instagram_business_manage_insights'),
+    'scopes_read_at', to_char((now() + interval '1 second') AT TIME ZONE 'UTC',
+                              'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),
+    'expected_credential_generation', 1));
+  ASSERT v_cap ->> 'permission_read_state' = 'ok', 'E8 the evidence recorded an ok read';
+  ASSERT (v_cap ->> 'scopes_authoritative')::boolean, 'E8 the recorded scopes are authoritative';
+  ASSERT (v_cap ->> 'credential_generation')::bigint = 1, 'E8 the evidence kept generation 1';
+  ASSERT v_cap -> 'granted_scopes'
+         = '["instagram_business_basic", "instagram_business_manage_insights"]'::jsonb,
+    'E8 the projection carries the granted scopes, got ' || (v_cap -> 'granted_scopes')::text;
+
+  -- The same claim now reads the credential.
+  v_read := public.read_instagram_direct_collection_credential(v_job, v_token, v_jgen, 1);
+  ASSERT v_read ->> 'access_token' = 'direct-token-8', 'E8 the recorded capability is readable';
+  ASSERT (v_read ->> 'credential_generation')::bigint = 1, 'E8 the read names generation 1';
+
+  -- A reconnect opens generation 2 and resets the read to unknown.
+  v_gen := public.meta_oauth_attempt_bump_instagram_capability(u_d, acct_e, 'direct', 'reconnected');
+  ASSERT v_gen = 2, 'E8 the reconnect opened generation 2, got ' || v_gen::text;
+  ASSERT (SELECT permission_read_state = 'unknown' AND granted_scopes = ARRAY[]::text[]
+            FROM public.instagram_account_capabilities WHERE social_account_id = acct_e),
+    'E8 the reconnect reset the recorded evidence';
+
+  -- A late write of the previous callback is refused by the generation fence.
+  v_failed := false;
+  BEGIN
+    PERFORM public.write_instagram_account_capability(acct_e, u_d, jsonb_build_object(
+      'login_kind', 'direct', 'permission_read_state', 'ok',
+      'granted_scopes', jsonb_build_array('instagram_business_basic', 'instagram_business_manage_insights'),
+      'scopes_read_at', to_char((now() + interval '2 seconds') AT TIME ZONE 'UTC',
+                                'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),
+      'expected_credential_generation', 1));
+  EXCEPTION WHEN others THEN
+    v_failed := true;
+    ASSERT SQLSTATE = 'ICG01', 'E8 a write for generation 1 is ICG01, got ' || SQLSTATE;
+  END;
+  ASSERT v_failed, 'E8 a stale generation write was accepted';
+
+  -- Evidence read before the reconnect is refused even under the new generation.
+  v_failed := false;
+  BEGIN
+    PERFORM public.write_instagram_account_capability(acct_e, u_d, jsonb_build_object(
+      'login_kind', 'direct', 'permission_read_state', 'ok',
+      'granted_scopes', jsonb_build_array('instagram_business_basic'),
+      'scopes_read_at', to_char((now() - interval '1 second') AT TIME ZONE 'UTC',
+                                'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),
+      'expected_credential_generation', 2));
+  EXCEPTION WHEN others THEN
+    v_failed := true;
+    ASSERT SQLSTATE = 'ICG02', 'E8 evidence older than the reconnect is ICG02, got ' || SQLSTATE;
+  END;
+  ASSERT v_failed, 'E8 evidence older than the reconnect was accepted';
+
+  -- The work claimed under generation 1 is refused again.
+  v_failed := false;
+  BEGIN
+    PERFORM public.read_instagram_direct_collection_credential(v_job, v_token, v_jgen, 1);
+  EXCEPTION WHEN others THEN
+    v_failed := true;
+    ASSERT SQLERRM LIKE 'IG_COLLECTION_CAPABILITY_MISSING:%',
+      'E8 the reset capability is refused again, got ' || SQLERRM;
+  END;
+  ASSERT v_failed, 'E8 the reset capability was readable';
+
+  -- New evidence for generation 2 never revives the work of generation 1.
+  PERFORM public.write_instagram_account_capability(acct_e, u_d, jsonb_build_object(
+    'login_kind', 'direct', 'permission_read_state', 'ok',
+    'granted_scopes', jsonb_build_array('instagram_business_basic', 'instagram_business_manage_insights'),
+    'scopes_read_at', to_char((now() + interval '3 seconds') AT TIME ZONE 'UTC',
+                              'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),
+    'expected_credential_generation', 2));
+  v_failed := false;
+  BEGIN
+    PERFORM public.read_instagram_direct_collection_credential(v_job, v_token, v_jgen, 1);
+  EXCEPTION WHEN others THEN
+    v_failed := true;
+    ASSERT SQLERRM LIKE 'IG_COLLECTION_CREDENTIAL_CHANGED:%',
+      'E8 the generation 1 claim is a changed credential, got ' || SQLERRM;
+  END;
+  ASSERT v_failed, 'E8 the generation 1 claim read the generation 2 credential';
+END
+$e8$;
+
 SELECT set_config('request.jwt.claim.role', '', true);
 SELECT set_config('request.jwt.claim.sub', '', true);
 
