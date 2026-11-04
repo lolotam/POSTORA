@@ -1,4 +1,4 @@
-import { compareBrandMetric } from "@/lib/brandMetrics";
+import { compareBrandMetric, matchesMediaTypeFilter } from "@/lib/brandMetrics";
 import { useState, useMemo, useEffect } from "react";
 import { useTranslation } from "react-i18next";
 import { useNavigate, useLocation } from "react-router-dom";
@@ -105,15 +105,7 @@ export default function BrandIntelligence() {
   const filteredPosts = useMemo(() => {
     let result = [...posts];
 
-    if (filters.mediaType !== "all") {
-      const typeMap: Record<string, string[]> = {
-        image: ["IMAGE"],
-        video: ["VIDEO"],
-        reel: ["REEL"],
-        carousel: ["CAROUSEL"],
-      };
-      result = result.filter((p) => typeMap[filters.mediaType]?.includes(p.mediaType));
-    }
+    result = result.filter((p) => matchesMediaTypeFilter(p, filters.mediaType));
 
     if (filters.period !== "all") {
       const now = Date.now();
