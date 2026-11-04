@@ -934,7 +934,14 @@ Deno.test("the write after the exclusion is refused and the work settles", async
   meta.reset();
 
   const resumed = await drain(handler);
-  assert(resumed.completed >= 1, "the re-admitted work did not resume");
+  // The account still owes history, so a resumed visit may end partial; it
+  // must run to its end rather than be refused or abandoned.
+  assert(
+    resumed.jobs.some((job) =>
+      job.social_account_id === ACCT_A && (job.outcome === "completed" || job.outcome === "partial")
+    ),
+    "the re-admitted work did not resume",
+  );
   assertEquals(
     detectExclusionBreach(meta.calls, [IG_USER_B, IG_USER_C, IG_USER_D]),
     [],
