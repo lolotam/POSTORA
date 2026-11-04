@@ -28,8 +28,22 @@ import type { OutlierFormat, OutlierLabel } from "../_shared/outlierScore.ts";
 /** Version of the owner-report DTO. Bump on any breaking shape change. */
 export const OWNER_REPORT_SCHEMA_VERSION = 1;
 
-/** The only display periods the report accepts. */
-export const OWNER_REPORT_PERIOD_DAYS = [7, 14, 30, 90] as const;
+/**
+ * The only display periods the report accepts: a number of closed Kuwait
+ * days, or `"all"` for every stored day. 7 and 14 stay accepted for the
+ * callers that still ask for them.
+ */
+export const OWNER_REPORT_PERIOD_DAYS = [1, 7, 14, 30, 90, 365, "all"] as const;
+
+/**
+ * The longest period the provider answers one exact unique reach for. A
+ * longer period has no exact reach, and a sum of daily reach is never shown
+ * in its place.
+ */
+export const OWNER_REPORT_EXACT_REACH_MAX_DAYS = 30;
+
+/** The offset of Asia/Kuwait from UTC. Kuwait keeps no daylight saving. */
+export const KUWAIT_UTC_OFFSET_MS = 3 * 60 * 60_000;
 
 /** Default page size when the caller does not ask for one. */
 export const OWNER_REPORT_DEFAULT_LIMIT = 20;
@@ -252,6 +266,32 @@ export type OwnerReportDailyRow = {
   unfollows: number | null;
 };
 
+/** Why a period has no exact unique reach. */
+export type OwnerReportPeriodReachGap =
+  /** The period is longer than the provider answers one total for. */
+  | "period_too_long"
+  /** No total for exactly this period has been collected yet. */
+  | "not_collected"
+  /** The provider answered this period without a reach. */
+  | "provider_unavailable";
+
+/**
+ * The exact unique reach of the displayed period.
+ *
+ * It comes from ONE provider total for exactly the period's dates, or - for
+ * a one-day period - from that day's own reach. It is never a sum of daily
+ * reach.
+ */
+export type OwnerReportPeriodReach =
+  | {
+    status: "available";
+    value: number;
+    sinceDate: string;
+    untilDate: string;
+    capturedAt: string;
+  }
+  | { status: "unavailable"; reason: OwnerReportPeriodReachGap };
+
 export type OwnerReportProfileObservation = {
   observedAt: string;
   observedOn: string;
@@ -310,6 +350,8 @@ export type OwnerReport = {
      * must not present one as the other.
      */
     daily: OwnerReportDailyRow[];
+    /** The exact unique reach of the period, when the provider reported one. */
+    periodReach: OwnerReportPeriodReach;
     /** Point-in-time observations. Never a daily metric. */
     profiles: OwnerReportProfileObservation[];
     latestProfileObservation: OwnerReportProfileObservation | null;
@@ -385,6 +427,20 @@ export type AccountDailyRow = {
   shares?: number | null;
   follows?: number | null;
   unfollows?: number | null;
+};
+
+/** One row of `ig_account_insight_period_totals`. */
+export type AccountPeriodTotalRow = {
+  id: string;
+  ownerId?: string | null;
+  socialAccountId?: string | null;
+  metric: string;
+  periodDays: number;
+  sinceDate: string;
+  untilDate: string;
+  status: string;
+  value: number | null;
+  capturedAt: string;
 };
 
 /** One row of `ig_account_profile_observations`. */
@@ -503,6 +559,8 @@ export type OwnerReportAssemblyInput = {
    */
   baselineHistory: readonly MediaSnapshotRow[];
   accountDaily: readonly AccountDailyRow[];
+  /** The stored exact period totals; the assembler picks the one that matches. */
+  accountPeriodTotals: readonly AccountPeriodTotalRow[];
   profileObservations: readonly ProfileObservationRow[];
   freshness: OwnerReportFreshnessInput;
   completeness: OwnerReportCompletenessInput;
@@ -664,15 +722,19 @@ export function addUtcDays(dateString: string, days: number): string {
   return utcDateString(date.getTime());
 }
 
+/** The last Kuwait day that has closed at `epochMs`. */
+export function lastClosedKuwaitDay(epochMs: number): string {
+  return addUtcDays(utcDateString(epochMs + KUWAIT_UTC_OFFSET_MS), -1);
+}
+
 /* -------------------------------------------------------------------------- */
 /* Transport boundary                                                           */
 /* -------------------------------------------------------------------------- */
 
 /** The validated display period. Anything else is refused. */
 export function parseOwnerReportPeriod(value: unknown): OwnerReportPeriodDays {
-  const numeric = typeof value === "string" && /^\d+$/.test(value.trim())
-    ? Number(value.trim())
-    : value;
+  const text = typeof value === "string" ? value.trim() : null;
+  const numeric = text !== null && /^\d+$/.test(text) ? Number(text) : text ?? value;
   if (!isReportPeriod(numeric)) {
     throw new OwnerReportContractError(
       "INVALID_PERIOD",

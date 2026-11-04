@@ -68,6 +68,7 @@ const MOCK_REPORT: OwnerReport = {
   },
   account: {
     daily: [],
+    periodReach: { status: "unavailable", reason: "not_collected" },
     profiles: [],
     latestProfileObservation: null,
   },

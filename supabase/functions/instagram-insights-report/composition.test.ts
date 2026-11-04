@@ -75,7 +75,7 @@ Deno.test("report composition preserves authenticated identity and account owner
       const body = await request.json();
       const account = accounts.find((row) => row.id === body.p_account_id && row.user_id === body.p_user_id);
       if (!account) return Response.json({ code: "MAH02", message: "Account not found" }, { status: 400 });
-      return Response.json({ account_id: account.id, owner_id: account.user_id, media: [], daily: [], profiles: [], collection: null });
+      return Response.json({ account_id: account.id, owner_id: account.user_id, media: [], daily: [], profiles: [], period_totals: [], collection: null });
     }
     throw new Error(`Unexpected report HTTP boundary: ${url.pathname}`);
   };
@@ -154,7 +154,7 @@ Deno.test("report audit failure keeps canonical refusal reasons and legacy error
     reportReads++;
     if (url.pathname === "/rest/v1/social_accounts") return Response.json([{ id: ACCOUNT_ID, user_id: OWNER_ID, platform: "instagram", is_active: true }]);
     assertEquals(url.pathname, "/rest/v1/rpc/read_instagram_owner_report_snapshot");
-    return Response.json({ account_id: ACCOUNT_ID, owner_id: OWNER_ID, media: [], daily: [], profiles: [], collection: null });
+    return Response.json({ account_id: ACCOUNT_ID, owner_id: OWNER_ID, media: [], daily: [], profiles: [], period_totals: [], collection: null });
   };
   try {
     for (const method of ["GET", "POST"]) for (const canonical of [false, true]) {
@@ -189,7 +189,7 @@ Deno.test("service-role report reads narrow owner status and retains previous-da
     const body = await request.json();
     assertEquals(body.p_user_id, OWNER_ID);
     assertEquals(body.p_account_id, ACCOUNT_ID);
-    return Response.json({ account_id: ACCOUNT_ID, owner_id: OWNER_ID, media: [], daily: [], profiles: [],
+    return Response.json({ account_id: ACCOUNT_ID, owner_id: OWNER_ID, media: [], daily: [], profiles: [], period_totals: [],
       collection: { status: "queued", last_success_at: previousSuccess, last_attempt_at: "2026-10-29T12:00:00Z",
         last_partial_at: null, next_retry_at: null, reason_code: null,
         inventory: { truncated: false, partial: false, window_covered: false } } });
@@ -227,7 +227,7 @@ Deno.test("report composition pages the full snapshot without treating database 
     assertEquals(body.p_account_id, ACCOUNT_ID);
     if (mode === "database_error" || mode === "status_error" || mode === "overflow") return Response.json({ code: mode === "overflow" ? "MAH05" : "57014", message: "Snapshot refused" }, { status: 500 });
     return Response.json({ account_id: ACCOUNT_ID, owner_id: OWNER_ID,
-      media: mode === "repeated_page" ? [...snapshots, snapshots[0]] : snapshots, daily: [], profiles: [], collection: null });
+      media: mode === "repeated_page" ? [...snapshots, snapshots[0]] : snapshots, daily: [], profiles: [], period_totals: [], collection: null });
   };
   try {
     await test.step("all 261 distinct media remain reachable after duplicate captures and database pagination", async () => {

@@ -19,10 +19,11 @@ function createMockClient(options: {
   media?: Record<string, unknown>[];
   daily?: Record<string, unknown>[];
   profiles?: Record<string, unknown>[];
+  periodTotals?: Record<string, unknown>[];
 }) {
   return {
     rpc: () => {
-      const result = { data: { account_id: ACCOUNT_ID, owner_id: OWNER_ID, media: options.media ?? [], daily: options.daily ?? [], profiles: options.profiles ?? [], collection: null },
+      const result = { data: { account_id: ACCOUNT_ID, owner_id: OWNER_ID, media: options.media ?? [], daily: options.daily ?? [], profiles: options.profiles ?? [], period_totals: options.periodTotals ?? [], collection: null },
         error: options.account === null ? { code: "MAH02", message: "Not found" } : options.accountError ?? null };
       return { abortSignal: () => Promise.resolve(result) };
     },
@@ -186,4 +187,60 @@ Deno.test("ReportStore loads data and produces valid OwnerReport DTO", async () 
   assertEquals(report.media.page.items[0].mediaId, "m1");
   assertEquals(report.account.daily.length, 1);
   assertEquals(report.account.profiles.length, 1);
+});
+
+Deno.test("a stored period total reaches the report as the period's exact reach", async () => {
+  const periodTotals = [{
+    id: "tot-1",
+    user_id: OWNER_ID,
+    social_account_id: ACCOUNT_ID,
+    metric: "reach",
+    period_days: 7,
+    since_date: "2026-10-22",
+    until_date: "2026-10-28",
+    status: "ok",
+    value: 777,
+    captured_at: "2026-10-29T00:00:00Z",
+  }];
+  const store = new ReportStore(createMockClient({ periodTotals }) as unknown as ReportStoreClient);
+
+  // 00:00Z on the 29th is 03:00 in Kuwait: the 28th is the last closed day.
+  const report = await store.loadReportData(
+    ACCOUNT_ID,
+    OWNER_ID,
+    { periodDays: 7, limit: 20, cursor: null },
+    new Date("2026-10-29T00:00:00Z"),
+  );
+
+  assertEquals(report.account.periodReach, {
+    status: "available",
+    value: 777,
+    sinceDate: "2026-10-22",
+    untilDate: "2026-10-28",
+    capturedAt: "2026-10-29T00:00:00.000Z",
+  });
+});
+
+Deno.test("all time displays media older than any day-count period", async () => {
+  const media = [{
+    id: "snap-old",
+    user_id: OWNER_ID,
+    social_account_id: ACCOUNT_ID,
+    ig_media_id: "m-old",
+    published_at: "2025-01-10T10:00:00Z",
+    captured_at: "2026-10-25T12:00:00Z",
+    captured_on: "2026-10-25",
+    capture_timezone: "Asia/Kuwait",
+    media_product_type: "FEED",
+    media_type: "IMAGE",
+    status: "ok",
+    reach: 90,
+    likes: 8,
+  }];
+  const store = new ReportStore(createMockClient({ media }) as unknown as ReportStoreClient);
+  const load = (periodDays: 365 | "all") =>
+    store.loadReportData(ACCOUNT_ID, OWNER_ID, { periodDays, limit: 20, cursor: null }, new Date("2026-10-29T00:00:00Z"));
+
+  assertEquals((await load(365)).media.page.items.length, 0);
+  assertEquals((await load("all")).media.page.items.map((item) => item.mediaId), ["m-old"]);
 });

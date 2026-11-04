@@ -23,6 +23,7 @@ import {
   OWNER_REPORT_MAX_LIMIT,
   OwnerReportContractError,
   decodeOwnerReportCursor,
+  parseOwnerReportPeriod,
 } from "./contracts.ts";
 import { ReportStore } from "./reportStore.ts";
 
@@ -160,11 +161,9 @@ export function createInstagramInsightsReportHandler(deps: ReportHandlerDeps) {
     // 6. Validate period_days
     let periodDays: OwnerReportPeriodDays = 30;
     if (rawPeriod !== undefined && rawPeriod !== null && rawPeriod !== "") {
-      const parsedPeriod = Number(rawPeriod);
-      if (
-        !Number.isInteger(parsedPeriod) ||
-        !OWNER_REPORT_PERIOD_DAYS.includes(parsedPeriod as OwnerReportPeriodDays)
-      ) {
+      try {
+        periodDays = parseOwnerReportPeriod(rawPeriod);
+      } catch {
         return jsonResponse(
           {
             error: {
@@ -175,7 +174,6 @@ export function createInstagramInsightsReportHandler(deps: ReportHandlerDeps) {
           400
         );
       }
-      periodDays = parsedPeriod as OwnerReportPeriodDays;
     }
 
     // 7. Validate limit

@@ -13,6 +13,7 @@
 
 import {
   type AccountDailyRow,
+  type AccountPeriodTotalRow,
   type MediaSnapshotRow,
   type OwnerReportCompletenessInput,
   type OwnerReportCoverage,
@@ -99,6 +100,22 @@ export function toAccountDailyRow(row: Record<string, unknown>): AccountDailyRow
     shares: typeof row.shares === "number" ? row.shares : (row.shares != null ? Number(row.shares) : null),
     follows: typeof row.follows === "number" ? row.follows : (row.follows != null ? Number(row.follows) : null),
     unfollows: typeof row.unfollows === "number" ? row.unfollows : (row.unfollows != null ? Number(row.unfollows) : null),
+  };
+}
+
+export function toAccountPeriodTotalRow(row: Record<string, unknown>): AccountPeriodTotalRow {
+  return {
+    id: String(row.id),
+    ownerId: row.user_id ? String(row.user_id) : null,
+    socialAccountId: row.social_account_id ? String(row.social_account_id) : null,
+    metric: String(row.metric),
+    periodDays: Number(row.period_days),
+    sinceDate: String(row.since_date),
+    untilDate: String(row.until_date),
+    status: String(row.status),
+    // A total without a value stays without one; it is never read as zero.
+    value: row.value == null ? null : Number(row.value),
+    capturedAt: String(row.captured_at),
   };
 }
 
@@ -245,11 +262,15 @@ export class ReportStore {
       return value;
     };
     const rawMedia = rows("media"), rawDaily = rows("daily"), rawProfiles = rows("profiles");
+    const rawPeriodTotals = rows("period_totals");
     if (snapshot.collection !== null && (!snapshot.collection || typeof snapshot.collection !== "object" || Array.isArray(snapshot.collection))) {
       throw new ReportHistoryUnavailableError("Invalid owner report collection state");
     }
     const jobStatus = snapshot.collection as Record<string, unknown> | null;
-    const windowStartMs = now.getTime() - request.periodDays * 86_400_000;
+    // "All time" displays every stored media; a day count bounds the rest.
+    const windowStartMs = request.periodDays === "all"
+      ? Number.NEGATIVE_INFINITY
+      : now.getTime() - request.periodDays * 86_400_000;
 
     // Map rows to contracts types
     const mappedMedia: MediaSnapshotRow[] = (rawMedia ?? []).map((r: Record<string, unknown>) =>
@@ -263,6 +284,7 @@ export class ReportStore {
     const mappedDaily: AccountDailyRow[] = (rawDaily ?? []).map((r: Record<string, unknown>) =>
       toAccountDailyRow(r)
     );
+    const mappedPeriodTotals = rawPeriodTotals.map(toAccountPeriodTotalRow);
     const mappedProfiles: ProfileObservationRow[] = (rawProfiles ?? []).map(
       (r: Record<string, unknown>) => toProfileObservationRow(r)
     );
@@ -281,6 +303,7 @@ export class ReportStore {
       mediaSnapshots: displayMedia,
       baselineHistory,
       accountDaily: mappedDaily,
+      accountPeriodTotals: mappedPeriodTotals,
       profileObservations: mappedProfiles,
       freshness,
       completeness,
