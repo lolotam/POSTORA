@@ -501,7 +501,7 @@ function buildServer(
   });
 
   register("trigger_analytics_sync", {
-    description: "Request fresh collection for one owned Instagram, Facebook or Threads account. Respects collection policy and throttles. Instagram returns queued, throttled with retry_after_seconds, collection_disabled or not_eligible. Facebook and Threads return collection_disabled, not_eligible, or the state of the account's current daily job: pending, running, partial or retry while it is still collecting, success once that day is already collected, failed when it stopped. Does not wait for collection or force a refresh.",
+    description: "Request fresh collection for one owned Instagram, Facebook or Threads account. Respects collection policy and throttles. Instagram returns queued, throttled with retry_after_seconds, collection_disabled or not_eligible. Facebook and Threads return collection_disabled, not_eligible, throttled with retry_after_seconds while a provider retry is scheduled, or the state of the account's current daily job: queued, running, partial or retry while it is still collecting, success once that day is already collected, failed when it stopped. Does not wait for collection or force a refresh.",
     inputSchema: analyticsSyncSchema,
     handler: async (args) => {
       const scopeRefusal = await refuseUngranted({ admin }, { userId: ownerId, tool: "trigger_analytics_sync", grant });
