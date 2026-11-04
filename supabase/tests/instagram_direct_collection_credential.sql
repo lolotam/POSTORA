@@ -26,8 +26,7 @@
 --   E9  the settlement of a capability-missing job (migration
 --       20261104120000): settled once, refused for a replaced, resolved or
 --       absent capability, a stale claim, an expired lease, a rollout or
---       account refusal, and service-only. UNEXECUTED - written against the
---       real migration objects, never run.
+--       account refusal, and service-only.
 --
 -- The suite SET ROLEs away from superuser where the point of the check is
 -- that a client role cannot do something. The service role bypasses RLS, so
@@ -850,9 +849,9 @@ $e8$;
 -- E9 - the settlement of a capability-missing job
 -- (20261104120000_instagram_capability_unavailable_settlement.sql).
 --
--- UNEXECUTED: this section was written against the real migration objects
--- and has never been run. It covers cases 1-7 of the 2026-11-04 design,
--- section 5.1.
+-- It covers the settlement cases: unknown capability settled, generation
+-- bumped, capability resolved, stale claim, expired lease, rollout or account
+-- refusal, browser roles, and an absent capability row.
 --
 -- Every account here is a direct login whose capability is opened by the
 -- commit's own transition, so its permission read is 'unknown' and the fence
