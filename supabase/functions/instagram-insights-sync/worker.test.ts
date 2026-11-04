@@ -1476,6 +1476,36 @@ Deno.test("the capability refusal is settled once, and the run goes on to the ne
   }
 });
 
+Deno.test("the run's deadline during the settlement stops the run instead of being logged as a refusal", async () => {
+  const harness = createHarness({
+    store: {
+      jobs: [unrecordedDirectJob(), createClaimedJob()],
+      accounts: {
+        [SECOND_ACCOUNT_ID]: {
+          capability: UNRECORDED_DIRECT_CAPABILITY,
+          directCredentialFailure: "capability_missing",
+          hangOn: "settlement",
+        },
+      },
+    },
+  });
+  // The outer deadline fires while the settlement is in flight.
+  const controller = new AbortController();
+  const tick = setInterval(() => {
+    if (harness.calls.settlements.length > 0) controller.abort();
+  }, 5);
+
+  const summary = await runOwnerDrain(harness.ports, { signal: controller.signal });
+  clearInterval(tick);
+
+  assertEquals(summary.jobs[0]!.outcome, "abandoned");
+  assertEquals(summary.jobs[0]!.reasonCode, "deadline_exceeded");
+  assertEquals(summary.stoppedEarly, true);
+  assertEquals(summary.completed, 0);
+  assertEquals(harness.calls.completes.length, 0);
+  assertEquals(harness.logs.some((event) => event.event === "owner_capability_settlement_refused"), false);
+});
+
 Deno.test("a direct credential read that fails for another reason is not settled and stops the run", async () => {
   const harness = createHarness({
     store: {

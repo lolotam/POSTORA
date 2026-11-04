@@ -2831,7 +2831,8 @@ async function abandon(
  * landed meanwhile, a settlement that is not deployed yet) or the call
  * fails, the job is abandoned to its lease, exactly as before the
  * settlement existed. The condition belongs to this job alone, so the run
- * continues either way. Only the failure kind is logged.
+ * continues either way. Only the failure kind is logged. The run's deadline
+ * is not a refusal: it propagates and stops the run like every other step.
  */
 async function settleCapabilityMissing(context: JobContext): Promise<JobStep> {
   const { ports, job } = context;
@@ -2846,16 +2847,14 @@ async function settleCapabilityMissing(context: JobContext): Promise<JobStep> {
       })
     );
   } catch (error) {
-    // Only a database answer or the run's deadline is a refusal; anything
-    // else is a defect and propagates like every other unexpected error.
-    if (!(error instanceof OwnerWorkerStoreError) && !(error instanceof BudgetExceededError)) {
-      throw error;
-    }
+    // Only a database answer is a refusal. The deadline and any defect
+    // propagate like every other unexpected error.
+    if (!(error instanceof OwnerWorkerStoreError)) throw error;
     ports.log({
       event: "owner_capability_settlement_refused",
       jobId: job.jobId,
       socialAccountId: job.socialAccountId,
-      outcome: error instanceof OwnerWorkerStoreError ? error.failure : "deadline_exceeded",
+      outcome: error.failure,
       reasonCode: "capability_missing",
       durationMs: ports.now() - context.startedAt,
     });

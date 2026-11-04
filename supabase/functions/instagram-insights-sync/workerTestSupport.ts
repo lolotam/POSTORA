@@ -177,7 +177,8 @@ export interface FakeStoreOptions {
     | "progress"
     | "complete"
     | "throttle"
-    | "mediaInventory";
+    | "mediaInventory"
+    | "settlement";
   /** The store call that fails. */
   readonly failOn?:
     | "claim"
@@ -693,6 +694,7 @@ export function createFakeStore(options: FakeStoreOptions & {
       calls.settlements.push({ jobId: input.jobId, jobGeneration: input.jobGeneration });
       const scope = jobScopes.get(input.jobId);
       const account = scope === undefined ? options : accountOf(scope.socialAccountId);
+      if (account.hangOn === "settlement") return await hang();
       if (account.settleFailure) {
         throw new OwnerWorkerStoreError(account.settleFailure);
       }
