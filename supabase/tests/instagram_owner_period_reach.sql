@@ -14,9 +14,15 @@ DECLARE signature text; fn regprocedure;
 BEGIN
   ASSERT (SELECT relrowsecurity FROM pg_class WHERE oid='public.ig_account_insight_period_totals'::regclass),
     'RLS must be enabled';
-  ASSERT EXISTS(SELECT 1 FROM pg_policies WHERE schemaname='public' AND tablename='ig_account_insight_period_totals'
-    AND policyname='Owners can read their own rows' AND cmd='SELECT' AND roles::text='{authenticated}'
-    AND qual='(auth.uid() = user_id)' AND permissive='PERMISSIVE'), 'the owner-read policy must match the daily table';
+  -- Compared with the daily table's own policy in this session: the deparsed
+  -- qual depends on the session's search_path, so a literal is not portable.
+  ASSERT EXISTS(SELECT 1 FROM pg_policies p, pg_policies d
+    WHERE p.schemaname='public' AND p.tablename='ig_account_insight_period_totals'
+      AND d.schemaname='public' AND d.tablename='ig_account_insight_daily'
+      AND p.policyname='Owners can read their own rows' AND d.policyname=p.policyname
+      AND p.cmd='SELECT' AND p.cmd=d.cmd AND p.roles::text='{authenticated}' AND p.roles=d.roles
+      AND p.qual=d.qual AND p.permissive='PERMISSIVE' AND p.permissive=d.permissive),
+    'the owner-read policy must match the daily table';
   ASSERT has_table_privilege('authenticated','public.ig_account_insight_period_totals','SELECT');
   ASSERT NOT has_table_privilege('authenticated','public.ig_account_insight_period_totals','INSERT');
   ASSERT NOT has_table_privilege('authenticated','public.ig_account_insight_period_totals','UPDATE');
