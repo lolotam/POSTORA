@@ -261,6 +261,29 @@ Deno.test("a metric the provider did not report stays null", async () => {
   assertEquals("views" in answer.value.metrics, false);
 });
 
+Deno.test("the period reach is the documented total_value request on this login's host", async () => {
+  const { provider, urls } = providerWith(() =>
+    jsonResponse(accountDayAnswer({ reach: 640 }))
+  );
+
+  const answer = await provider.fetchAccountPeriodReach({
+    igUserId: "1784140001",
+    token: "the-token",
+    sinceDate: "2026-10-20",
+    untilDate: "2026-11-02",
+    signal: new AbortController().signal,
+  });
+
+  const url = urls[0]!;
+  assert(url.startsWith("https://graph.instagram.com/"), url);
+  assertStringIncludes(url, "metric=reach&");
+  assertStringIncludes(url, "metric_type=total_value");
+  assertEquals(answer.value.value, 640);
+  assertEquals(answer.value.period_days, 14);
+  assertEquals(answer.value.since_date, "2026-10-20");
+  assertEquals(answer.value.until_date, "2026-11-02");
+});
+
 // ---------------------------------------------------------------------------
 // The media insights
 // ---------------------------------------------------------------------------

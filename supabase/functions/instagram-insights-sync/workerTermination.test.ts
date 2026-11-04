@@ -182,9 +182,14 @@ interface TerminationHarness {
 
 function createHarness(options: {
   readonly graph?: ScriptedGraphOptions;
+  /** The closed days of the history with no stored row at the start. */
+  readonly missingDays?: readonly string[];
 } = {}): TerminationHarness {
   const clock = createClock(FIRST_VISIT_MS);
-  const { store, state } = createPersistingStore({ now: clock.now });
+  const { store, state } = createPersistingStore({
+    now: clock.now,
+    missingDays: options.missingDays,
+  });
   const { fetchFn, calls } = createScriptedGraph(options.graph ?? { media: [] });
   const logs: Array<Record<string, unknown>> = [];
 
@@ -423,4 +428,46 @@ Deno.test("a visit after the completion claims nothing", async () => {
   assertEquals(second.completed, 0);
   assertEquals(second.jobs.length, 0);
   assertEquals(harness.state.claims(), 1);
+});
+
+// ---------------------------------------------------------------------------
+// The history backfill
+// ---------------------------------------------------------------------------
+
+/** The `count` closed days before `newest`, newest first, `newest` included. */
+function daysBack(newest: string, count: number): string[] {
+  const start = Date.parse(`${newest}T00:00:00.000Z`);
+  return Array.from(
+    { length: count },
+    (_unused, index) => new Date(start - index * KUWAIT_DAY_MS).toISOString().slice(0, 10),
+  );
+}
+
+/**
+ * A year without any stored day converges across visits.
+ *
+ * The capture's own two days are owed by the daily capture; the other 363
+ * days of the year are backfilled ten per visit, so the job needs
+ * ceil(363 / 10) visits and completes on the last one, inside the
+ * continuation window.
+ */
+Deno.test("a year of missing days is backfilled in ceil(363/10) visits and the job completes", async () => {
+  const missing = daysBack("2026-10-25", 363);
+  const harness = createHarness({ missingDays: missing });
+
+  const visits = Math.ceil(missing.length / 10);
+  assertEquals(visits, 37);
+
+  const summaries = await runVisits(harness, { visits, stepMs: 2 * 60_000 });
+
+  // Every visit but the last one left the job claimable.
+  for (const summary of summaries.slice(0, -1)) {
+    assertEquals(summary.partial, 1);
+    assertEquals(summary.completed, 0);
+  }
+  assertEquals(summaries.at(-1)!.completed, 1);
+  assertEquals(harness.state.status(), "completed");
+
+  // No day of the year is missing any more.
+  assertEquals(harness.state.missingDays(), []);
 });

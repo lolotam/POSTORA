@@ -42,7 +42,10 @@
 import type {
   OwnerCapability,
   OwnerCollectionServiceStore,
+  OwnerAccountDayRow,
   OwnerMediaInventoryRow,
+  OwnerPeriodTotalPayload,
+  OwnerPeriodTotalRow,
   OwnerProgressPayload,
   OwnerSnapshotPayload,
   OwnerStoreFailure,
@@ -136,6 +139,12 @@ export interface RecordedStoreCalls {
     expectedCredentialGeneration: number;
   }>;
   readonly mediaInventoryReads: Array<{ capturedOn: string; mediaIds: readonly string[] }>;
+  /** The history reads: the days each read asked about. */
+  readonly accountDayReads: Array<{ days: readonly string[] }>;
+  /** The period total reads: the last closed day each read asked about. */
+  readonly periodTotalReads: Array<{ untilDate: string; periodDays: readonly number[] }>;
+  /** The period totals the worker wrote, in order. */
+  readonly periodTotals: OwnerPeriodTotalPayload[];
   /** The writes the database refused, and the job they refused. */
   readonly refusedWrites: Array<{ jobId: string; kind: string }>;
   /**
@@ -178,6 +187,9 @@ export interface FakeStoreOptions {
     | "complete"
     | "throttle"
     | "mediaInventory"
+    | "accountDays"
+    | "periodTotals"
+    | "periodTotal"
     | "settlement";
   /** The store call that fails. */
   readonly failOn?:
@@ -191,7 +203,10 @@ export interface FakeStoreOptions {
     | "progress"
     | "complete"
     | "throttle"
-    | "mediaInventory";
+    | "mediaInventory"
+    | "accountDays"
+    | "periodTotals"
+    | "periodTotal";
   /** The credential read refuses with this failure. */
   readonly credentialFailure?: "credential_missing" | "credential_changed";
   /** The capability read refuses with this failure. */
@@ -252,6 +267,22 @@ export interface FakeStoreOptions {
    * stored metrics are the ones the sweep really wrote.
    */
   readonly mediaInventory?: Record<string, Partial<OwnerMediaInventoryRow>>;
+  /**
+   * The closed days of the history that have NO stored row.
+   *
+   * The default is none: the history is complete, so a job owes only its
+   * primary and correction day, as it did before the backfill existed.
+   * `"all"` is an account whose history was never collected.
+   */
+  readonly missingDays?: readonly string[] | "all";
+  /** The stored status of a day that HAS a row; `ok` by default. */
+  readonly dayStatus?: Readonly<Record<string, OwnerAccountDayRow["status"]>>;
+  /**
+   * The periods whose total for the last closed day is NOT stored.
+   *
+   * The default is none: every period is stored, so a job owes no period.
+   */
+  readonly missingPeriods?: readonly number[] | "all";
 }
 
 /**
@@ -376,6 +407,9 @@ export function createFakeStore(options: FakeStoreOptions & {
     capabilityReads: [],
     directCredentialReads: [],
     mediaInventoryReads: [],
+    accountDayReads: [],
+    periodTotalReads: [],
+    periodTotals: [],
     refusedWrites: [],
     permits: [],
   };
@@ -624,6 +658,34 @@ export function createFakeStore(options: FakeStoreOptions & {
       return rows;
     },
 
+    async readOwnerAccountDays(input) {
+      calls.accountDayReads.push({ days: [...input.days] });
+      const account = accountOf(input.socialAccountId);
+      if (account.hangOn === "accountDays") return await hang();
+      if (account.failOn === "accountDays") throw new Error("the history read failed");
+      return storedHistory(input.days, account.missingDays, account.dayStatus);
+    },
+
+    async readOwnerPeriodTotals(input) {
+      calls.periodTotalReads.push({
+        untilDate: input.untilDate,
+        periodDays: [...input.periodDays],
+      });
+      const account = accountOf(input.socialAccountId);
+      if (account.hangOn === "periodTotals") return await hang();
+      if (account.failOn === "periodTotals") throw new Error("the period read failed");
+      return storedPeriods(input.periodDays, account.missingPeriods);
+    },
+
+    async persistPeriodTotal(input) {
+      if (options.hangOn === "periodTotal") return await hang();
+      if (options.failOn === "periodTotal") throw new Error("the period write failed");
+      const refused = refusalOf(input.jobId, "periodTotal");
+      if (refused !== null) throw refused;
+      calls.periodTotals.push(input.payload);
+      return { jobId: input.jobId, jobGeneration: input.jobGeneration, written: 1 };
+    },
+
     async readThrottleBucket(input) {
       if (options.hangOn === "bucket") return await hang();
       if (options.failOn === "bucket") throw new Error("the bucket read failed");
@@ -722,6 +784,36 @@ export function createFakeStore(options: FakeStoreOptions & {
   return { store, calls };
 }
 
+/**
+ * The stored rows of the asked days.
+ *
+ * A missing day has no row at all; every other day has a row with its
+ * configured status, `ok` by default.
+ */
+function storedHistory(
+  days: readonly string[],
+  missingDays: readonly string[] | "all" | undefined,
+  dayStatus: Readonly<Record<string, OwnerAccountDayRow["status"]>> | undefined,
+): OwnerAccountDayRow[] {
+  if (missingDays === "all") return [];
+  const missing = new Set(missingDays ?? []);
+  return days
+    .filter((day) => !missing.has(day))
+    .map((day) => ({ metricDate: day, status: dayStatus?.[day] ?? "ok" }));
+}
+
+/** The stored period totals of the asked periods. */
+function storedPeriods(
+  periodDays: readonly number[],
+  missingPeriods: readonly number[] | "all" | undefined,
+): OwnerPeriodTotalRow[] {
+  if (missingPeriods === "all") return [];
+  const missing = new Set(missingPeriods ?? []);
+  return periodDays
+    .filter((days) => !missing.has(days))
+    .map((days) => ({ periodDays: days, status: "ok" as const }));
+}
+
 /** The canned answers of the Graph transport double. */
 export interface FakeGraphOptions {
   readonly profile?: unknown;
@@ -734,8 +826,14 @@ export interface FakeGraphOptions {
   readonly mediaInsightHeaders?: Record<string, string>;
   readonly media?: unknown[];
   readonly mediaHeaders?: Record<string, string>;
+  /**
+   * The period reach answers, keyed by the period's first Kuwait day. A
+   * period without an answer gets a reach of 1200.
+   */
+  readonly periodReach?: Record<string, unknown>;
+  readonly periodReachHeaders?: Record<string, string>;
   /** The transport call that never answers. */
-  readonly hangOn?: "profile" | "accountDay" | "media" | "mediaInsight";
+  readonly hangOn?: "profile" | "accountDay" | "periodReach" | "media" | "mediaInsight";
 }
 
 /**
@@ -766,8 +864,12 @@ export function createFakeGraph(options: FakeGraphOptions = {}) {
     const url = typeof input === "string" ? input : input.toString();
     urls.push(url);
     const isInsights = url.includes("/insights");
-    const isAccountDay = isInsights && url.includes("metric_type=total_value");
-    const kind = isAccountDay
+    const isTotal = isInsights && url.includes("metric_type=total_value");
+    // The period reach asks for reach ALONE; the account day asks for four
+    // metrics at once.
+    const kind = isTotal && url.includes("metric=reach&")
+      ? "periodReach"
+      : isTotal
       ? "accountDay"
       : isInsights
       ? "mediaInsight"
@@ -790,6 +892,18 @@ export function createFakeGraph(options: FakeGraphOptions = {}) {
         new Response(JSON.stringify(answer), {
           status: 200,
           headers: { "Content-Type": "application/json", ...(options.accountDayHeaders ?? {}) },
+        }),
+      );
+    }
+
+    if (kind === "periodReach") {
+      const since = /[?&]since=(\d+)/.exec(url)?.[1] ?? null;
+      const day = kuwaitDateOf(since);
+      const answer = options.periodReach?.[day] ?? accountDayAnswer({ reach: 1200 });
+      return Promise.resolve(
+        new Response(JSON.stringify(answer), {
+          status: 200,
+          headers: { "Content-Type": "application/json", ...(options.periodReachHeaders ?? {}) },
         }),
       );
     }
@@ -940,6 +1054,10 @@ export interface PersistingStoreOptions {
   readonly retryDelayMs?: number;
   /** The credential generation the captured context carries. */
   readonly credentialGeneration?: number;
+  /** The closed days with no stored row when the first visit starts. */
+  readonly missingDays?: readonly string[];
+  /** The periods with no stored total when the first visit starts. */
+  readonly missingPeriods?: readonly number[];
 }
 
 /** What the persisting store holds, as the accepted SQL holds it. */
@@ -962,6 +1080,10 @@ export interface PersistingStoreState {
   readonly bucket: () => OwnerThrottleBucket | null;
   /** The snapshots the worker wrote, in order. */
   readonly snapshots: () => readonly { kind: string; items: readonly Record<string, unknown>[] }[];
+  /** The closed days that still have no stored row. */
+  readonly missingDays: () => readonly string[];
+  /** The period totals the worker wrote, in order. */
+  readonly periodTotals: () => readonly OwnerPeriodTotalPayload[];
 }
 
 /**
@@ -1011,6 +1133,12 @@ export function createPersistingStore(options: PersistingStoreOptions): {
 
   const completions: Array<{ outcome: string; reasonCode: string | null }> = [];
   const snapshots: Array<{ kind: string; items: readonly Record<string, unknown>[] }> = [];
+
+  /** The history days without a row; a written day leaves the set. */
+  const missingDays = new Set(options.missingDays ?? []);
+  /** The periods without a total; a written period leaves the set. */
+  const missingPeriods = new Set(options.missingPeriods ?? []);
+  const periodTotals: OwnerPeriodTotalPayload[] = [];
 
   /** The operation keys that are still open. */
   const openOperations = (): string[] =>
@@ -1137,6 +1265,20 @@ export function createPersistingStore(options: PersistingStoreOptions): {
       return rows;
     },
 
+    async readOwnerAccountDays(input) {
+      return storedHistory(input.days, [...missingDays], undefined);
+    },
+
+    async readOwnerPeriodTotals(input) {
+      return storedPeriods(input.periodDays, [...missingPeriods]);
+    },
+
+    async persistPeriodTotal(input) {
+      periodTotals.push(input.payload);
+      missingPeriods.delete(input.payload.period_days);
+      return { jobId: input.jobId, jobGeneration: input.jobGeneration, written: 1 };
+    },
+
     async readThrottleBucket() {
       return bucket;
     },
@@ -1160,6 +1302,8 @@ export function createPersistingStore(options: PersistingStoreOptions): {
           const queryKind = item.query_kind;
           if (typeof providerDate !== "string" || typeof queryKind !== "string") continue;
           operations.set(`account_day:${providerDate}:${queryKind}`, "success");
+          // The written day has a row now, ok or unavailable.
+          missingDays.delete(providerDate);
         }
       }
 
@@ -1278,6 +1422,8 @@ export function createPersistingStore(options: PersistingStoreOptions): {
     media: () => [...media.values()],
     bucket: () => bucket,
     snapshots: () => snapshots.map((entry) => ({ ...entry })),
+    missingDays: () => [...missingDays].sort().reverse(),
+    periodTotals: () => [...periodTotals],
   };
 
   return { store, state };
