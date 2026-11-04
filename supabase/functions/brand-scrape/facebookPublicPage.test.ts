@@ -56,6 +56,13 @@ Deno.test("provider failures reach the caller as a short message with the provid
       message: "Facebook posts could not be loaded for this Page.", detail: "Permission denied" },
     { name: "still too large", routes: { posts: () => json(TOO_MUCH_DATA, 500) },
       message: "Facebook returned too much data for this Page. Try again later.", detail: "limit 5" },
+    { name: "provider echoes the token", routes: { posts: (url) => json({ error: { code: 190, message: `bad token ${url.searchParams.get("access_token")}` } }, 400) },
+      message: "Facebook posts could not be loaded for this Page.", detail: "[redacted]" },
+    // Deno's fetch failure message quotes the request URL, token included.
+    { name: "Graph unreachable", routes: { posts: (url) => { throw new TypeError(`error sending request for url (${url})`); } },
+      message: "Facebook could not be reached. Try again later.", detail: "TypeError" },
+    { name: "cursor does not advance", routes: { posts: () => json({ data: posts(0, 5), paging: { cursors: { after: "same" }, next: "https://graph.facebook.com/next" } }) },
+      message: "Facebook returned an invalid response for this Page.", detail: "did not advance" },
   ];
   for (const scenario of cases) {
     const { fetchFn } = graph(scenario.routes);

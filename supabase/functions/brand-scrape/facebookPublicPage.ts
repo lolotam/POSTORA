@@ -12,6 +12,8 @@ const POST_FIELDS = "id,message,story,full_picture,created_time,permalink_url," 
   "likes.summary(true),comments.summary(true),shares,reactions.summary(true)";
 const REEL_FIELDS = "id,description,created_time,thumbnails,permalink_url,likes.summary(true),comments.summary(true),shares";
 const POST_PAGE_SIZES = [25, 10, 5] as const;
+const GRAPH_TIMEOUT_MS = 15_000;
+const MAX_DETAIL_LENGTH = 500;
 
 // deno-lint-ignore no-explicit-any
 type GraphObject = Record<string, any>;
@@ -35,9 +37,18 @@ function graphUrl(path: string, params: Record<string, string>, accessToken: str
   return url.toString();
 }
 
+// Deno's fetch failure message quotes the request URL, which carries the app
+// access token, so a transport failure is rethrown with its error name only.
 async function readGraph(fetchFn: typeof fetch, url: string): Promise<GraphReply> {
-  const response = await fetchFn(url);
-  const text = await response.text();
+  let response: Response;
+  let text: string;
+  try {
+    response = await fetchFn(url, { signal: AbortSignal.timeout(GRAPH_TIMEOUT_MS) });
+    text = await response.text();
+  } catch (error) {
+    if (!(error instanceof TypeError || (error instanceof DOMException && error.name === "TimeoutError"))) throw error;
+    throw new FacebookPublicPageError("Facebook could not be reached. Try again later.", `Graph request failed: ${error.name}`);
+  }
   try {
     return { status: response.status, payload: JSON.parse(text) };
   } catch (error) {
@@ -55,8 +66,9 @@ function isTooMuchData(reply: GraphReply): boolean {
   return error?.code === 1 && String(error.message ?? "").includes("reduce the amount of data");
 }
 
-function providerDetail(reply: GraphReply): string {
-  return `HTTP ${reply.status}: ${JSON.stringify(reply.payload?.error ?? reply.payload)}`;
+function providerDetail(reply: GraphReply, accessToken: string): string {
+  const detail = `HTTP ${reply.status}: ${JSON.stringify(reply.payload?.error ?? reply.payload)}`;
+  return detail.split(accessToken).join("[redacted]").slice(0, MAX_DETAIL_LENGTH);
 }
 
 async function fetchPostPage(fetchFn: typeof fetch, pageId: string, accessToken: string,
@@ -68,7 +80,7 @@ async function fetchPostPage(fetchFn: typeof fetch, pageId: string, accessToken:
     const reply = await readGraph(fetchFn, graphUrl(`${pageId}/posts`, params, accessToken));
     if (!isFailedReply(reply)) return reply.payload!;
     if (!isTooMuchData(reply)) {
-      throw new FacebookPublicPageError("Facebook posts could not be loaded for this Page.", providerDetail(reply));
+      throw new FacebookPublicPageError("Facebook posts could not be loaded for this Page.", providerDetail(reply, accessToken));
     }
   }
   throw new FacebookPublicPageError("Facebook returned too much data for this Page. Try again later.",
@@ -83,8 +95,13 @@ async function fetchPosts(fetchFn: typeof fetch, pageId: string, accessToken: st
     const page = await fetchPostPage(fetchFn, pageId, accessToken, maxPosts - posts.length, after);
     const data: GraphObject[] = Array.isArray(page.data) ? page.data : [];
     posts.push(...data);
+    const previousAfter = after;
     after = page.paging?.cursors?.after;
     if (data.length === 0 || !page.paging?.next || !after) break;
+    if (after === previousAfter) {
+      throw new FacebookPublicPageError("Facebook returned an invalid response for this Page.",
+        "posts pagination cursor did not advance");
+    }
   }
   return posts.slice(0, maxPosts);
 }
@@ -155,8 +172,7 @@ async function fetchReels(fetchFn: typeof fetch, pageId: string, accessToken: st
   try {
     reply = await readGraph(fetchFn, graphUrl(`${pageId}/video_reels`, { fields: REEL_FIELDS, limit: "25" }, accessToken));
   } catch (error) {
-    // fetch rejects with TypeError on a network failure; anything else is a bug.
-    if (error instanceof TypeError) return [];
+    if (error instanceof FacebookPublicPageError) return [];
     throw error;
   }
   return isFailedReply(reply) || !Array.isArray(reply.payload!.data) ? [] : reply.payload!.data;
@@ -184,7 +200,7 @@ export async function scrapeFacebookPublicPage(input: {
   const fetchFn = input.fetchFn ?? fetch;
   const accessToken = `${input.appId}|${input.appSecret}`;
   const pageReply = await readGraph(fetchFn, graphUrl(encodeURIComponent(input.pageIdentifier), { fields: PAGE_FIELDS }, accessToken));
-  if (isFailedReply(pageReply)) throw new FacebookPublicPageError("Facebook Page not found.", providerDetail(pageReply));
+  if (isFailedReply(pageReply)) throw new FacebookPublicPageError("Facebook Page not found.", providerDetail(pageReply, accessToken));
   const pageData = pageReply.payload!;
 
   const posts = (await fetchPosts(fetchFn, pageData.id, accessToken, input.maxPosts)).map(mapPost);
