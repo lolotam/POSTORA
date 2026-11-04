@@ -11,6 +11,13 @@ import type { OwnerReport } from "../domain/types";
 import { supabaseSavedAnalytics } from "@/features/analytics-contract/infrastructure/supabaseSavedAnalytics";
 import type { AnalyticsPeriodDays, AnalyticsReport } from "@/features/analytics-contract";
 
+const HTTP_TOO_MANY_REQUESTS = 429;
+
+function isThrottledResponse(error: unknown): boolean {
+  const context = (error as { context?: unknown } | null)?.context;
+  return context instanceof Response && context.status === HTTP_TOO_MANY_REQUESTS;
+}
+
 export class SupabaseInstagramInsightsGateway implements InstagramInsightsGateway {
   // Kept explicit until verified Instagram capabilities permit screen adoption.
   getAnalyticsReport(params: { socialAccountId: string; periodDays: AnalyticsPeriodDays; cursor?: string | null }): Promise<AnalyticsReport> {
@@ -55,6 +62,9 @@ export class SupabaseInstagramInsightsGateway implements InstagramInsightsGatewa
     });
 
     if (error) {
+      // The sync function answers a throttled enqueue with 429 and the job projection as the
+      // body, which carries no `error` code.
+      if (isThrottledResponse(error)) throw new Error("throttled");
       throw new Error(await invokeErrorMessage(error, "Failed to trigger Instagram insights collection"));
     }
 
