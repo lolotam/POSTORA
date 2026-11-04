@@ -100,20 +100,21 @@ test("Arabic RTL keeps unavailable reach explicit and period controls work with 
   await page.getByRole("button", { name: "Toggle language", exact: true }).click();
   await expect(page.locator("html")).toHaveAttribute("lang", "ar");
   await expect(page.locator("html")).toHaveAttribute("dir", "rtl");
-  // Reach and accounts engaged have no collected value in the seed.
-  await expect(page.getByText("غير متاح", { exact: true })).toHaveCount(2);
-  await expect(page.getByText("لم يُجمع الوصول الفريد لهذه الفترة بعد.", { exact: true })).toBeVisible();
+  // An earlier journey may already have collected this account's reach, so the
+  // keyboard selects all time: Meta never reports its exact unique reach.
   const reportResponse = page.waitForResponse((response) => response.url().endsWith("/functions/v1/instagram-insights-report")
-    && response.request().postDataJSON()?.period_days === 1);
-  const periodButton = page.getByRole("button", { name: "1 يوم", exact: true });
+    && response.request().postDataJSON()?.period_days === "all");
+  const periodButton = page.getByRole("button", { name: "كل الفترة", exact: true });
   await periodButton.focus();
   await expect(periodButton).toBeFocused();
   await periodButton.press("Enter");
   expect((await reportResponse).status()).toBe(200);
+  await expect(page.getByText("تحسب Meta الوصول الفريد بدقة للفترات حتى 30 يومًا فقط.", { exact: true })).toBeVisible();
+  await expect(page.getByText("غير متاح", { exact: true }).first()).toBeVisible();
   await expect(page.getByRole("button", { name: "زامن دلوقتي", exact: true })).toBeEnabled();
   await page.getByRole("button", { name: "Toggle language", exact: true }).click();
   await expect(page.locator("html")).toHaveAttribute("dir", "ltr");
-  await expect(page.getByText("The unique reach of this period has not been collected yet.", { exact: true })).toBeVisible();
+  await expect(page.getByText("Meta reports exact unique reach for periods of up to 30 days.", { exact: true })).toBeVisible();
 });
 
 test("signing out and switching real identities never reuses the previous owner's report", async ({ page }) => {
