@@ -10,6 +10,7 @@ import type { AdmissionApp } from "./permissionProvider.ts";
 import { OwnedAnalyticsStore, type AnalyticsRpc, type OwnedAnalyticsPlatform } from "./store.ts";
 
 const syncRequest = z.discriminatedUnion("action", [
+  z.object({ action: z.literal("enqueue"), user_id: z.string().uuid(), platform: z.enum(["facebook", "threads"]), accountId: z.string().uuid() }).strict(),
   z.object({ action: z.literal("admit"), platform: z.enum(["facebook", "threads"]), accountId: z.string().uuid() }).strict(),
   z.object({ action: z.literal("enqueue-daily"), platform: z.enum(["facebook", "threads", "all"]) }).strict(),
   z.object({ action: z.literal("drain"), platform: z.enum(["facebook", "threads", "all"]) }).strict(),
@@ -17,9 +18,10 @@ const syncRequest = z.discriminatedUnion("action", [
 ]).refine((input) => input.action !== "retention" || input.dryRun || input.continuation === undefined,
   { message: "Continuation is only valid for retention dry runs" });
 type WorkCounts = DispatchCounts | DrainCounts | RetentionCounts;
-export type OwnedAnalyticsAudit = { event: "owned_analytics_admission" | "owned_analytics_dispatch" | "owned_analytics_drain" | "owned_analytics_retention"; status: string; reason: string | null;
+export type OwnedAnalyticsAudit = { event: "owned_analytics_enqueue" | "owned_analytics_admission" | "owned_analytics_dispatch" | "owned_analytics_drain" | "owned_analytics_retention"; status: string; reason: string | null;
   platform: OwnedAnalyticsPlatform | "all" | null; accountId: string | null; dryRun?: boolean; retentionFloor?: string; counts?: WorkCounts };
 export type OwnedAnalyticsSyncDeps = {
+  authorizeEnqueue?: (req: Request, userId: string) => Promise<boolean>;
   authorize: (req: Request) => { ok: true } | { ok: false; status: 401 | 503 };
   app: (platform: OwnedAnalyticsPlatform) => AdmissionApp | null;
   rpc: AnalyticsRpc;
@@ -66,34 +68,51 @@ export function createOwnedAnalyticsSyncHandler(deps: OwnedAnalyticsSyncDeps): (
     if (req.method === "OPTIONS") return handleRestrictedCorsOptions(req);
     const deadline = new AnalyticsWorkerDeadline(Date.now(), req.signal);
     let platform: OwnedAnalyticsPlatform | "all" | null = null;
-    let action: "admit" | "enqueue-daily" | "drain" | "retention" = "admit";
+    let action: "enqueue" | "admit" | "enqueue-daily" | "drain" | "retention" = "admit";
     let dryRun: boolean | null = null;
     let retentionFloor: string | null = null;
     let accountId: string | null = null;
+    let enqueueReceipt: Record<string, unknown> | null = null;
     const finish = async (statusCode: number, status: string, reason: string | null = null,
       details?: { counts: WorkCounts; continuation?: RetentionContinuation | null }) => {
       const { counts, continuation } = details ?? {};
       let auditStored = false;
-      const event = { admit: "owned_analytics_admission", "enqueue-daily": "owned_analytics_dispatch", drain: "owned_analytics_drain", retention: "owned_analytics_retention" } as const;
+      const event = { enqueue: "owned_analytics_enqueue", admit: "owned_analytics_admission", "enqueue-daily": "owned_analytics_dispatch", drain: "owned_analytics_drain", retention: "owned_analytics_retention" } as const;
       // A disconnected caller must not erase the terminal refusal receipt.
       // Work stops within 40 seconds; this independent audit has a 5-second cap.
       const auditSignal = AbortSignal.timeout(5_000);
       try { auditStored = await awaitWithAbort(() => deps.audit({ event: event[action],
         status, reason, platform, accountId, ...(dryRun === null ? {} : { dryRun }), ...(retentionFloor ? { retentionFloor } : {}), ...(counts ? { counts } : {}) }, auditSignal), auditSignal); }
       catch { auditStored = false; }
-      return restrictedJsonResponse(req, { ok: statusCode === 200 && auditStored, action, platform, status,
-        reason: auditStored ? reason : "audit_unavailable", auditStored, ...(dryRun === null ? {} : { dryRun }), ...(counts ? { counts } : {}),
+      return restrictedJsonResponse(req, { ok: (action === "enqueue" ? statusCode >= 200 && statusCode < 300 && !["collection_disabled", "not_eligible"].includes(status) : statusCode === 200) && auditStored, action, platform, status,
+        reason: auditStored ? reason : "audit_unavailable", auditStored, ...(enqueueReceipt ?? {}), ...(dryRun === null ? {} : { dryRun }), ...(counts ? { counts } : {}),
         ...(auditStored && continuation !== undefined ? { continuation } : {}) }, auditStored ? statusCode : 503);
     };
     try {
       if (req.method !== "POST") return await finish(405, "refused", "method_not_allowed");
       const auth = deps.authorize(req);
-      if (!auth.ok) return await finish(auth.status, "refused", "unauthorized");
       const parsed = syncRequest.safeParse(await readSyncBody(req, deadline));
-      if (!parsed.success) return await finish(400, "refused", "invalid_request");
+      if (!parsed.success) return await finish(auth.ok ? 400 : auth.status, "refused", auth.ok ? "invalid_request" : "unauthorized");
+      if (parsed.data.action === "enqueue") {
+        const ownerId = parsed.data.user_id;
+        if (!deps.authorizeEnqueue || !await deadline.run(() => deps.authorizeEnqueue!(req, ownerId))) return await finish(401, "refused", "unauthorized");
+      } else if (!auth.ok) return await finish(auth.status, "refused", "unauthorized");
       platform = parsed.data.platform;
       action = parsed.data.action;
       const store = new OwnedAnalyticsStore(deps.rpc, deadline);
+      if (parsed.data.action === "enqueue") {
+        const input = parsed.data;
+        accountId = input.accountId.toLowerCase();
+        const scope = await store.enqueueScope(input.user_id, input.platform, accountId);
+        if (scope.status !== "eligible") return await finish(200, scope.status);
+        const app = deps.app(input.platform);
+        if (!app) return await finish(503, "unavailable", "app_configuration_unavailable");
+        const admitted = await admitOwnedAnalyticsAccount({ platform: input.platform, accountId, app, deadline, fetch: deps.fetch, store });
+        if (admitted.status !== "complete") return await finish(admitted.reason === "rate_limited" ? 429 : 409, "not_eligible", admitted.reason);
+        enqueueReceipt = await store.enqueueAccount(input.user_id, input.platform, accountId);
+        const status = String(enqueueReceipt.status);
+        return await finish(status === "throttled" ? 429 : status === "queued" ? 202 : 200, status);
+      }
       if (parsed.data.action === "retention") {
         dryRun = parsed.data.dryRun;
         const result = await retainOwnedAnalytics({ platform: parsed.data.platform, dryRun, continuation: parsed.data.continuation, store, deadline });
@@ -115,6 +134,7 @@ export function createOwnedAnalyticsSyncHandler(deps: OwnedAnalyticsSyncDeps): (
       if (result.status === "refused" && result.reason === "rate_limited") return await finish(429, "unavailable", result.reason);
       return await finish(result.status === "complete" ? 200 : 409, result.status, result.status === "refused" ? result.reason : null);
     } catch (error) {
+      if (action === "enqueue" && error instanceof AnalyticsWorkerStopped && error.sqlstate === "MAH02") return await finish(404, "not_found");
       const reason = error instanceof AnalyticsWorkerStopped ? error.reason : "storage_unavailable";
       return await finish(reason === "admission_refused" ? 409 : 503, reason === "admission_refused" ? "refused" : "unavailable", reason);
     }

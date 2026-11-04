@@ -1,4 +1,5 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { authenticateCaller } from "../_shared/auth-helper.ts";
 import { verifyCronAuth } from "../_shared/cron-auth.ts";
 import { redactSensitive } from "../_shared/logging.ts";
 import { createOwnedAnalyticsSyncHandler } from "./handler.ts";
@@ -10,6 +11,10 @@ export function handler(req: Request): Promise<Response> {
   const key = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
   const client = url && key ? createClient(url, key) : null;
   return createOwnedAnalyticsSyncHandler({
+    authorizeEnqueue: async (request, userId) => {
+      try { return (await authenticateCaller(request, userId)).isServiceRole; }
+      catch { return false; }
+    },
     authorize: (request) => {
       const checked = verifyCronAuth(request);
       return checked.ok ? { ok: true } : { ok: false, status: checked.response.status === 503 ? 503 : 401 };

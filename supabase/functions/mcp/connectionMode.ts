@@ -100,6 +100,36 @@ export const TOOL_POLICIES: Readonly<Record<string, ToolPolicy>> = {
     kind: "read",
     annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: true },
   },
+  get_account_analytics: {
+    kind: "read",
+    annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: true },
+  },
+  trigger_analytics_sync: {
+    kind: "write",
+    annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
+  },
+  // Owner-managed watchlist metadata and numeric captures; no third-party post text.
+  list_competitors: {
+    kind: "read",
+    annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: true },
+  },
+  track_competitor: {
+    kind: "write",
+    annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
+  },
+  untrack_competitor: {
+    kind: "write",
+    // Soft removal: history stays and track_competitor reactivates the entry.
+    annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
+  },
+  get_competitor_report: {
+    kind: "untrusted_read",
+    annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: true },
+  },
+  analyze_brand: {
+    kind: "untrusted_read",
+    annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: true },
+  },
   get_media: {
     kind: "read",
     annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },

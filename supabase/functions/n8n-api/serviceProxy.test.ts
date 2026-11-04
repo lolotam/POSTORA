@@ -5,6 +5,13 @@ import {
   handleGenerateHashtags,
   handleGenerateImage,
   handleGetPostAnalytics,
+  handleGetAccountAnalytics,
+  handleTriggerAnalyticsSync,
+  handleListCompetitors,
+  handleTrackCompetitor,
+  handleUntrackCompetitor,
+  handleGetCompetitorReport,
+  handleAnalyzeBrand,
   handleListComments,
   handleListMessages,
   supabaseAccountLoader,
@@ -13,6 +20,7 @@ import {
   type ServiceProxyDeps,
   type StoredImage,
 } from "./serviceProxy.ts";
+import capturedCompetitorReport from "../competitor-tracking-report/fixtures/captured-report.json" with { type: "json" };
 
 const OWNER = "8f14e45f-ceea-4e7a-9b1c-2d3e4f5a6b7c";
 const OTHER = "1b4e28ba-2fa1-4d3b-a3f5-ef19b5a7633b";
@@ -742,5 +750,183 @@ Deno.test("instagram also accepts one day, a year and all time; other platforms 
       assertEquals(result.status, 200, `${platform} ${period}`);
       assertEquals(calls.invokes[0].body.period_days, forwarded);
     }
+  }
+});
+
+
+Deno.test("account reports and sync refuse foreign/missing accounts without invoking a service", async () => {
+  for (const account of [null, { ...DEFAULT_ACCOUNT, user_id: OTHER }]) {
+    for (const operation of ["report", "sync"]) {
+      const { deps, calls } = fakeDeps({ account });
+      const result = operation === "report"
+        ? await handleGetAccountAnalytics(deps, OWNER, params({ social_account_id: ACCOUNT_ID }))
+        : await handleTriggerAnalyticsSync(deps, OWNER, { social_account_id: ACCOUNT_ID });
+      assertEquals(result.status, 404);
+      assertEquals(errorOf(result).code, "ACCOUNT_NOT_FOUND");
+      assertEquals(calls.invokes.length, 0);
+    }
+  }
+});
+
+Deno.test("account reports select the supported contract and validate platform periods and filters", async () => {
+  for (const [platform, period, mediaType, expected] of [
+    ["instagram", "all", "reel", 200], ["instagram", "365", "all", 200], ["instagram", "1", "all", 200],
+    ["facebook", "30", "all", 200], ["threads", "14", "all", 200], ["threads", "all", "all", 400],
+    ["facebook", "365", "all", 400], ["facebook", "30", "image", 400], ["instagram", "2", "all", 400],
+    ["instagram", "7", "story", 400],
+  ] as const) {
+    const { deps, calls } = fakeDeps({ account: { ...DEFAULT_ACCOUNT, platform }, upstream: { status: 200, data: { media: { page: {
+      items: [{ mediaId: "reel", mediaType: "VIDEO", format: "reel" }, { mediaId: "photo", mediaType: "IMAGE" }],
+      nextCursor: { publishedAt: "2026-10-30T00:00:00Z", mediaId: "photo" }, hasMore: true, returned: 2,
+    } } } } });
+    const result = await handleGetAccountAnalytics(deps, OWNER, params({ social_account_id: ACCOUNT_ID, period_days: period, media_type: mediaType }));
+    assertEquals(result.status, expected, `${platform}/${period}/${mediaType}`);
+    if (expected === 400) { assertEquals(calls.invokes.length, 0); continue; }
+    assertEquals(calls.invokes[0].functionName, platform === "instagram" ? "instagram-insights-report" : "meta-owned-analytics-report");
+    if (platform !== "instagram") assertEquals(calls.invokes[0].body.analyticsContractVersion, 1);
+    if (mediaType === "reel") {
+      const media = (bodyOf(result).media as { page: Record<string, unknown> }).page;
+      assertEquals((media.items as unknown[]).length, 1);
+      assertEquals(media.hasMore, true);
+      assertEquals(typeof media.nextCursor, "string");
+    }
+  }
+});
+
+Deno.test("account report continuation reaches Instagram without selecting its unsupported unified contract", async () => {
+  const { deps, calls } = fakeDeps({ account: { ...DEFAULT_ACCOUNT, platform: "instagram" } });
+  const cursor = JSON.stringify({ publishedAt: "2026-10-30T00:00:00Z", mediaId: "m-1" });
+  const result = await handleGetAccountAnalytics(deps, OWNER, params({ social_account_id: ACCOUNT_ID, cursor }));
+  assertEquals(result.status, 200);
+  assertEquals(calls.invokes[0].body.cursor, cursor);
+  assertEquals("analyticsContractVersion" in calls.invokes[0].body, false);
+});
+
+Deno.test("sync forwards only normal account enqueue and preserves collection receipts", async () => {
+  for (const platform of ["instagram", "facebook", "threads"]) {
+    for (const [status, data] of [
+      [202, { status: "queued" }], [429, { status: "throttled", retry_after_seconds: 900 }],
+      [503, { error: "collection_disabled" }], [403, { error: "collection_not_eligible" }],
+      [200, { status: "not_eligible" }],
+    ] as const) {
+      const { deps, calls } = fakeDeps({ account: { ...DEFAULT_ACCOUNT, platform }, upstream: { status, data } });
+      const result = await handleTriggerAnalyticsSync(deps, OWNER, { social_account_id: ACCOUNT_ID });
+      assertEquals(result.status, status);
+      assertEquals(result.body, data);
+      assertEquals(calls.invokes[0].functionName, platform === "instagram" ? "instagram-insights-sync" : "meta-owned-analytics-sync");
+      assertEquals(calls.invokes[0].body.user_id, OWNER);
+      assertEquals(calls.invokes[0].body.action, "enqueue");
+      assertEquals("force" in calls.invokes[0].body, false);
+    }
+  }
+});
+
+Deno.test("new account routes reject invalid arguments and unsupported sync before a service call", async () => {
+  const { deps, calls } = fakeDeps({ account: { ...DEFAULT_ACCOUNT, platform: "youtube" } });
+  assertEquals((await handleTriggerAnalyticsSync(deps, OWNER, { social_account_id: "bad" })).status, 400);
+  assertEquals((await handleTriggerAnalyticsSync(deps, OWNER, { social_account_id: ACCOUNT_ID, force: true })).status, 400);
+  assertEquals((await handleTriggerAnalyticsSync(deps, OWNER, { social_account_id: ACCOUNT_ID })).status, 400);
+  assertEquals((await handleGetAccountAnalytics(deps, OWNER, params({ social_account_id: ACCOUNT_ID, cursor: "" }))).status, 400);
+  assertEquals(calls.invokes.length, 0);
+});
+
+Deno.test("competitor mutations use explicit owners, normalize handles and retain soft-removal semantics", async () => {
+  const { deps, calls } = fakeDeps();
+  const rpcCalls: { name: string; args: Record<string, unknown> }[] = [];
+  deps.rpc = async (name, args) => { rpcCalls.push({ name, args }); return { data: { watchlist_id: ACCOUNT_ID, is_active: args.p_is_active !== false }, error: null }; };
+  assertEquals((await handleTrackCompetitor(deps, OWNER, { username: " @@Some.Brand ", label: "Brand" })).status, 200);
+  assertEquals(rpcCalls[0], { name: "add_competitor_watchlist_for_user", args: { p_user_id: OWNER, p_username: "some.brand", p_label: "Brand" } });
+  const removed = await handleUntrackCompetitor(deps, OWNER, { watchlist_id: ACCOUNT_ID });
+  assertEquals(bodyOf(removed).is_active, false);
+  assertEquals(rpcCalls[1], { name: "update_competitor_watchlist_for_user", args: { p_user_id: OWNER, p_watchlist_id: ACCOUNT_ID, p_label: null, p_is_active: false } });
+  assertEquals(calls.invokes.length, 0);
+});
+
+Deno.test("competitor handlers reject invalid input before RPC and map ownership/quota/read failures safely", async () => {
+  const { deps, calls } = fakeDeps();
+  let rpcCalls = 0;
+  deps.rpc = async () => { rpcCalls++; return { data: null, error: { code: "P0002", message: "private SQL" } }; };
+  for (const [handler, args] of [
+    [handleTrackCompetitor, { username: "bad..name" }], [handleTrackCompetitor, { username: "valid", label: "x".repeat(121) }],
+    [handleUntrackCompetitor, { watchlist_id: "bad" }], [handleListCompetitors, { state: "all" }],
+    [handleGetCompetitorReport, { watchlist_id: ACCOUNT_ID, period_days: 90 }],
+  ] as const) assertEquals((await handler(deps, OWNER, args)).status, 400);
+  assertEquals(rpcCalls, 0);
+  for (const handler of [handleUntrackCompetitor, handleGetCompetitorReport]) {
+    const result = await handler(deps, OWNER, { watchlist_id: ACCOUNT_ID });
+    assertEquals(result.status, 404);
+    assertEquals(JSON.stringify(result.body).includes("private SQL"), false);
+  }
+  deps.rpc = async () => ({ data: null, error: { code: "23514", message: "COMPETITOR_QUOTA_EXCEEDED: internal" } });
+  assertEquals((await handleTrackCompetitor(deps, OWNER, { username: "valid" })).status, 409);
+  // A concurrent write is retryable, not a bad handle.
+  deps.rpc = async () => ({ data: null, error: { code: "23514", message: "COMPETITOR_ADD_FAILED: internal" } });
+  assertEquals((await handleTrackCompetitor(deps, OWNER, { username: "valid" })).status, 409);
+  deps.rpc = async () => ({ data: null, error: { code: "57014", message: "statement timeout" } });
+  assertEquals((await handleListCompetitors(deps, OWNER, {})).status, 503);
+  assertEquals((await handleGetCompetitorReport(deps, OWNER, { watchlist_id: ACCOUNT_ID })).status, 503);
+  assertEquals(calls.invokes.length, 0);
+});
+
+Deno.test("competitor list and detail reuse the validated UI report projection and caller scope", async () => {
+  const fixture = {
+    ...structuredClone(capturedCompetitorReport),
+    // The captured SQL artifact predates the v2 whole-window aggregate. Match
+    // the current RPC projection without changing the historical JSON fixture.
+    entry: { ...capturedCompetitorReport.entry, weekly_inventory: {
+      observed_count: 2,
+      interval_start: "2026-10-22T00:57:39.702828+00:00",
+      interval_end: "2026-10-29T00:57:39.702828+00:00",
+    } },
+  };
+  const { deps } = fakeDeps();
+  const seen: Record<string, unknown>[] = [];
+  deps.rpc = async (_name, args) => {
+    seen.push(args);
+    const request = args.p_request as Record<string, unknown>;
+    return { data: request.action === "detail" ? fixture : { ...fixture, action: "list", entries: [fixture.entry], entry: null, media: [] }, error: null };
+  };
+  const detail = await handleGetCompetitorReport(deps, OWNER, { watchlist_id: fixture.entry.watchlist_id, period_days: 7 });
+  assertEquals(detail.status, 200);
+  assertEquals((bodyOf(detail).media as unknown[]).length > 0, true);
+  assertEquals((bodyOf(detail).entry as { weekly: { observed_count: number } }).weekly.observed_count, 2);
+  const list = await handleListCompetitors(deps, OWNER, { state: "active" });
+  assertEquals(list.status, 200);
+  assertEquals((bodyOf(list).entries as unknown[]).length, 1);
+  assertEquals(seen.every((args) => args.p_user_id === OWNER), true);
+});
+
+Deno.test("a competitor projection missing the v2 weekly aggregate remains a failed read", async () => {
+  const { deps } = fakeDeps();
+  deps.rpc = async () => ({ data: structuredClone(capturedCompetitorReport), error: null });
+  const result = await handleGetCompetitorReport(deps, OWNER, { watchlist_id: capturedCompetitorReport.entry.watchlist_id });
+  assertEquals(result.status, 503);
+  assertEquals(errorOf(result).code, "COMPETITOR_UNAVAILABLE");
+});
+
+Deno.test("brand analysis validates platform URLs, applies UI filters and strips credentials", async () => {
+  const { deps, calls } = fakeDeps({ upstream: { status: 200, data: { totalPosts: 3, hasMore: true, access_token: "private", posts: [
+    { id: "1", mediaType: "IMAGE", likesCount: null, timestamp: new Date().toISOString() },
+    { id: "2", mediaType: "CAROUSEL", likesCount: 10, timestamp: new Date().toISOString(), refresh_token: "private" },
+    { id: "3", mediaType: "REEL", likesCount: 20, timestamp: new Date().toISOString() },
+  ] } } });
+  for (const args of [{ platform: "tiktok", handle: "brand" }, { platform: "instagram", handle: "https://attacker.invalid/brand" }, { platform: "instagram", handle: "brand", apify_enabled: true }, { platform: "instagram", handle: "brand", offset: 101 }]) {
+    assertEquals((await handleAnalyzeBrand(deps, OWNER, args)).status, 400);
+  }
+  assertEquals(calls.invokes.length, 0);
+  const result = await handleAnalyzeBrand(deps, OWNER, { platform: "instagram", handle: "https://www.instagram.com/Brand/", media_type: "image", sort: "likes" });
+  assertEquals(result.status, 200);
+  assertEquals(bodyOf(result).totalPosts, 3);
+  assertEquals((bodyOf(result).posts as { id: string }[]).map((post) => post.id), ["2", "1"]);
+  assertEquals(JSON.stringify(result.body).includes("private"), false);
+  assertEquals(calls.invokes[0].body, { user_id: OWNER, platform: "instagram", username: "brand", offset: 0 });
+});
+
+Deno.test("new read handlers retain upstream business refusals and sanitize internal outages", async () => {
+  for (const status of [403, 429, 500, 504]) {
+    const { deps } = fakeDeps({ account: { ...DEFAULT_ACCOUNT, platform: "instagram" }, upstream: { status, data: { error: "unavailable" } } });
+    const expected = status === 500 ? 502 : status;
+    assertEquals((await handleGetAccountAnalytics(deps, OWNER, params({ social_account_id: ACCOUNT_ID }))).status, expected);
+    assertEquals((await handleAnalyzeBrand(deps, OWNER, { platform: "facebook", handle: "brand" })).status, expected);
   }
 });

@@ -19,7 +19,10 @@
  *   designed to prevent. The shared helper is immutable, so this module
  *   verifies the bearer itself, with the server-verified `auth.getClaims`
  *   envelope, and refuses everything that is not an authenticated user
- *   session.
+ *   session. This describes the JWT path. The separate service enqueue path
+ *   verifies a service credential with the shared helper, accepts an explicit
+ *   user_id only for that identity, and uses an explicit-owner SQL boundary
+ *   sharing all collection rules. It cannot force collection or read status.
  *
  * WHY THE CLAIM ENVELOPE IS VALIDATED BY DESCRIPTOR
  *
@@ -214,6 +217,9 @@ export interface InstagramInsightsSyncDeps {
    * bearer that was verified, and it is used unchanged, so the database sees
    * the caller's own identity.
    */
+  /** Only a verified service credential may select an explicit owner; JWT intake is unchanged. */
+  readonly authenticateServiceOwner?: (request: Request, userId: string) => Promise<string | null>;
+  readonly createServiceOwnerStore?: (userId: string) => OwnerCollectionStore;
   readonly createOwnerStore: (verifiedToken: string) => OwnerCollectionStore;
   /**
    * The service ports of the drain action. Absent means that no service
@@ -234,6 +240,7 @@ const socialAccountIdSchema = z
 const enqueueRequestSchema = z
   .object({
     action: z.literal("enqueue"),
+    user_id: z.string().uuid().optional(),
     social_account_id: socialAccountIdSchema,
     mode: z.enum(["normal", "force"]).optional().default("normal"),
   })
@@ -1079,21 +1086,21 @@ export function createInstagramInsightsSyncHandler(
     context.socialAccountId = canonicalAccountId;
 
     // --- The verified identity -----------------------------------------
-    const claimsOutcome = await runBounded(
-      (signal) => deps.verifyClaims(token, signal),
-      dependencyCeiling(deadline),
-    );
-    if (!claimsOutcome.ok) {
-      // The verifier could not be reached or did not answer in time. That is
-      // an unavailable dependency, not a refusal of the caller.
-      return await refuse(503, "request_unavailable");
+    let serviceOwner: string | null = null;
+    if (intake.action === "enqueue" && intake.user_id !== undefined) {
+      if (!deps.authenticateServiceOwner || !deps.createServiceOwnerStore || intake.mode !== "normal") return await refuse(400, "invalid_request");
+      const verified = await runBounded(() => deps.authenticateServiceOwner!(request, intake.user_id!), dependencyCeiling(deadline));
+      if (!verified.ok) return await refuse(401, "unauthorized");
+      if (!verified.value) return await refuse(400, "invalid_request");
+      serviceOwner = verified.value;
+      context.userId = serviceOwner;
+    } else {
+      const claimsOutcome = await runBounded((signal) => deps.verifyClaims(token, signal), dependencyCeiling(deadline));
+      if (!claimsOutcome.ok) return await refuse(503, "request_unavailable");
+      const owner = parseVerifiedOwner(claimsOutcome.value);
+      if (!owner) return await refuse(401, "unauthorized");
+      context.userId = owner.userId;
     }
-
-    const owner = parseVerifiedOwner(claimsOutcome.value);
-    if (!owner) {
-      return await refuse(401, "unauthorized");
-    }
-    context.userId = owner.userId;
 
     // --- The availability gates ----------------------------------------
     const gateRefusal = await readGates();
@@ -1108,7 +1115,7 @@ export function createInstagramInsightsSyncHandler(
 
     let store: OwnerCollectionStore;
     try {
-      store = deps.createOwnerStore(token);
+      store = serviceOwner ? deps.createServiceOwnerStore!(serviceOwner) : deps.createOwnerStore(token);
     } catch {
       return await refuse(503, "request_unavailable");
     }

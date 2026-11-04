@@ -39,6 +39,14 @@ import {
   handleGenerateHashtags,
   handleGenerateImage,
   handleGetPostAnalytics,
+  handleGetAccountAnalytics,
+  handleTriggerAnalyticsSync,
+  handleListCompetitors,
+  handleTrackCompetitor,
+  handleUntrackCompetitor,
+  handleGetCompetitorReport,
+  handleAnalyzeBrand,
+
   handleListComments,
   handleListMessages,
   type ServiceProxyDeps,
@@ -2550,6 +2558,10 @@ export async function handleRequest(req: Request): Promise<Response> {
         `${Deno.env.get('SUPABASE_URL') ?? ''}/functions/v1`,
         Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '',
       ),
+      rpc: async (name, args) => {
+        const { data, error } = await supabaseAdmin.rpc(name, args).abortSignal(AbortSignal.timeout(15_000));
+        return { data, error };
+      },
       storeImage: (ownerId, dataUrl) => uploadFileFromBase64(supabaseAdmin, ownerId, dataUrl, 'ai-image'),
       mediaQuotaBlocked: (ownerId) => mediaQuotaPreflight(supabaseAdmin as unknown as QuotaRpc, ownerId),
     });
@@ -2608,6 +2620,20 @@ export async function handleRequest(req: Request): Promise<Response> {
       response = toProxyResponse(await handleListMessages(serviceProxyDeps(), userId, url.searchParams), corsHeaders);
     } else if (path === '/api/v1/analytics' && req.method === 'GET') {
       response = toProxyResponse(await handleGetPostAnalytics(serviceProxyDeps(), userId, url.searchParams), corsHeaders);
+    } else if (path === '/api/v1/analytics/account' && req.method === 'GET') {
+      response = toProxyResponse(await handleGetAccountAnalytics(serviceProxyDeps(), userId, url.searchParams), corsHeaders);
+    } else if (path === '/api/v1/analytics/sync' && req.method === 'POST') {
+      response = toProxyResponse(await handleTriggerAnalyticsSync(serviceProxyDeps(), userId, await parseRequestBody(req)), corsHeaders);
+    } else if (path === '/api/v1/analytics/competitors' && req.method === 'GET') {
+      response = toProxyResponse(await handleListCompetitors(serviceProxyDeps(), userId, Object.fromEntries([...url.searchParams].map(([key, value]) => [key, ["limit", "period_days"].includes(key) ? Number(value) : value]))), corsHeaders);
+    } else if (path === '/api/v1/analytics/competitors' && req.method === 'POST') {
+      response = toProxyResponse(await handleTrackCompetitor(serviceProxyDeps(), userId, await parseRequestBody(req)), corsHeaders);
+    } else if (path === '/api/v1/analytics/competitors/untrack' && req.method === 'POST') {
+      response = toProxyResponse(await handleUntrackCompetitor(serviceProxyDeps(), userId, await parseRequestBody(req)), corsHeaders);
+    } else if (path === '/api/v1/analytics/competitors/report' && req.method === 'GET') {
+      response = toProxyResponse(await handleGetCompetitorReport(serviceProxyDeps(), userId, Object.fromEntries([...url.searchParams].map(([key, value]) => [key, ["limit", "period_days"].includes(key) ? Number(value) : value]))), corsHeaders);
+    } else if (path === '/api/v1/analytics/brand' && req.method === 'POST') {
+      response = toProxyResponse(await handleAnalyzeBrand(serviceProxyDeps(), userId, await parseRequestBody(req)), corsHeaders);
     } else if (path === '/api/v1/ai/caption' && req.method === 'POST') {
       response = toProxyResponse(await handleGenerateCaption(serviceProxyDeps(), userId, await parseRequestBody(req)), corsHeaders);
     } else if (path === '/api/v1/ai/hashtags' && req.method === 'POST') {
@@ -2641,6 +2667,14 @@ export async function handleRequest(req: Request): Promise<Response> {
           'GET /api/v1/comments',
           'GET /api/v1/messages',
           'GET /api/v1/analytics',
+          'GET /api/v1/analytics/account',
+          'POST /api/v1/analytics/sync',
+          'GET /api/v1/analytics/competitors',
+          'POST /api/v1/analytics/competitors',
+          'POST /api/v1/analytics/competitors/untrack',
+          'GET /api/v1/analytics/competitors/report',
+          'POST /api/v1/analytics/brand',
+
           'POST /api/v1/ai/caption',
           'POST /api/v1/ai/hashtags',
           'POST /api/v1/ai/image'
@@ -2648,6 +2682,10 @@ export async function handleRequest(req: Request): Promise<Response> {
       });
     }
 
+    if (['/api/v1/analytics/account', '/api/v1/analytics/sync', '/api/v1/analytics/competitors',
+      '/api/v1/analytics/competitors/untrack', '/api/v1/analytics/competitors/report', '/api/v1/analytics/brand'].includes(path) && response.status >= 400) {
+      await recordApiRefusal(supabaseAdmin, { userId, route: path, code: 'ANALYTICS_REQUEST_REFUSED', status: response.status });
+    }
     return withRateLimitHeaders(response, rateLimit, rateLimitConfig);
 
   } catch (error: unknown) {

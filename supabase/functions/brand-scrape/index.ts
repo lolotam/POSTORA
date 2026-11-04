@@ -1,4 +1,5 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { serviceRoleCallerUserId } from "../_shared/auth-helper.ts";
 import { createLogger } from "../_shared/logging.ts";
 import type { ViewerCandidate } from "../_shared/instagramDiscoveryViewer.ts";
 import { CredentialStoreError } from "../_shared/facebookUserCredentialStore.ts";
@@ -302,7 +303,16 @@ Deno.serve(async (req) => {
     }
 
     const token = authHeader.replace("Bearer ", "");
-    const { data: { user } } = await supabaseAdmin.auth.getUser(token);
+    // A service-role call without a valid user_id is an authentication refusal, not a discovery outage.
+    const serviceUserId = await serviceRoleCallerUserId(req).catch(() => undefined);
+    if (serviceUserId === undefined) {
+      await logger.warn("Discovery request refused", { error_code: "UNAUTHORIZED" });
+      return new Response(JSON.stringify({ error: "Unauthorized" }), {
+        status: 401,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+    const user = serviceUserId ? { id: serviceUserId } : (await supabaseAdmin.auth.getUser(token)).data.user;
     if (!user) {
       await logger.warn("Discovery request refused", { error_code: "UNAUTHORIZED" });
       return new Response(JSON.stringify({ error: "Unauthorized" }), {
@@ -318,6 +328,9 @@ Deno.serve(async (req) => {
     if (!body || typeof body !== "object" || Array.isArray(body)) throw new InstagramDiscoveryError("INVALID_DISCOVERY_REQUEST", "Invalid discovery request.", 400);
     const { username, offset = 0 } = body;
     platform = parseDiscoveryPlatform(body.platform);
+    if (serviceUserId && !["facebook", "instagram"].includes(platform)) {
+      throw new InstagramDiscoveryError("INVALID_DISCOVERY_REQUEST", "Service discovery supports Facebook and Instagram only.", 400);
+    }
 
     if (typeof username !== "string" || !username.trim()) {
       await logger.warn("Discovery request refused", { error_code: "INVALID_DISCOVERY_REQUEST" }, userId);
@@ -367,6 +380,9 @@ Deno.serve(async (req) => {
         isApifyEnabled = parsed === true || (platform !== "instagram" && parsed === "true");
       }
     } catch { /* optional enrichment; scraping continues without it */ }
+
+    // Service discovery is official-only regardless of the admin fallback setting.
+    if (serviceUserId) isApifyEnabled = false;
 
     console.log(`maxPosts setting resolved to: ${maxPosts}, apify_enabled: ${isApifyEnabled}`);
 

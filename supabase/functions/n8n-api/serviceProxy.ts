@@ -8,6 +8,12 @@
 // limits to the user_id they receive. Every dependency is injected so the tests
 // run against fakes.
 
+import { accountAnalyticsSchema, analyticsSyncSchema, listCompetitorsSchema, trackCompetitorSchema,
+  untrackCompetitorSchema, competitorReportSchema, analyzeBrandSchema, normalizeTrackedHandle } from "../_shared/analyticsToolSchemas.ts";
+import { CompetitorReportStore } from "../competitor-tracking-report/reportStore.ts";
+import { assembleCompetitorReport } from "../competitor-tracking-report/assemble.ts";
+import { COMPETITOR_REPORT_BASELINE_POLICY } from "../competitor-tracking-report/growth.ts";
+import { filterBrandPosts, filterAccountMedia, normalizeBrandHandle } from "./analyticsFilters.ts";
 import { isValidUuid } from "./requestGuards.ts";
 import { containsSensitiveInfo } from "../_shared/errorSanitizer.ts";
 import { MEDIA_QUOTA_CODE, isMediaQuotaMessage, mediaQuotaBody } from "../_shared/mediaQuotaError.ts";
@@ -34,6 +40,8 @@ export interface ServiceProxyDeps {
   /** `failed` is true when the lookup itself errored, so a failed read never looks like a missing account. */
   loadAccount(accountId: string): Promise<{ account: ProxyAccount | null; failed: boolean }>;
   invoke(functionName: string, body: Record<string, unknown>, timeoutMs: number): Promise<InvokeResult>;
+  /** Service-only explicit-owner RPCs; PostgreSQL applies ownership and the shared UI rules. */
+  rpc?(name: string, args: Record<string, unknown>): Promise<{ data: unknown; error: { code?: string; message?: string } | null }>;
   storeImage(userId: string, dataUrl: string): Promise<StoredImage>;
   /** Non-null when the user's daily media uploads are used up; checked before a billed image generation. */
   mediaQuotaBlocked(userId: string): Promise<{ limit: number } | null>;
@@ -145,11 +153,12 @@ function redactErrorText(data: unknown): unknown {
 // account's access_token, so they never leave the proxy; the opaque cursors
 // stay. Any other string that still carries an access_token is dropped too.
 export function stripCredentialUrls(value: unknown): unknown {
-  if (typeof value === "string") return /access_token=/i.test(value) ? null : value;
+  if (typeof value === "string") return /(?:access_token|refresh_token|api_key|service_role_key|cron_secret)=/i.test(value) ? null : value;
   if (Array.isArray(value)) return value.map(stripCredentialUrls);
   if (!value || typeof value !== "object") return value;
   const out: Record<string, unknown> = {};
   for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
+    if (/^(access_?token|refresh_?token|permission_?token|service_?role_?key|cron_?secret|api_?key|authorization|app_?secret|token|secret|service_?key)$/i.test(key)) continue;
     if (key === "paging" && child && typeof child === "object" && !Array.isArray(child)) {
       const { next: _next, previous: _previous, ...rest } = child as Record<string, unknown>;
       out[key] = stripCredentialUrls(rest);
@@ -451,4 +460,133 @@ export function supabaseAccountLoader(supabase: AccountQueryClient): ServiceProx
     }
     return { account: (data as ProxyAccount | null) ?? null, failed: false };
   };
+}
+
+
+function invalidAnalyticsInput(message: string): ProxyResult {
+  console.warn("[n8n-api] analytics request refused: invalid_request");
+  return proxyError(400, "INVALID_REQUEST", message);
+}
+
+/** Dedicated report route selects each platform's supported contract without changing legacy analytics. */
+export async function handleGetAccountAnalytics(deps: ServiceProxyDeps, userId: string, params: URLSearchParams): Promise<ProxyResult> {
+  const input = Object.fromEntries(params);
+  const rawPeriod = params.get("period_days");
+  const parsed = accountAnalyticsSchema.safeParse({ ...input,
+    ...(rawPeriod !== null && rawPeriod !== "all" ? { period_days: Number(rawPeriod) } : {}) });
+  if (!parsed.success) return invalidAnalyticsInput("Invalid account report arguments: check account UUID, period_days, media_type and cursor.");
+  const owned = await loadOwnedAccount(deps, userId, parsed.data.social_account_id, { savedHistory: true });
+  if ("error" in owned) return owned.error;
+  const { account } = owned;
+  const mediaType = parsed.data.media_type ?? "all";
+  // The persisted Meta contract has no media format evidence. Refuse rather than guess formats or hide posts.
+  if (["facebook", "threads"].includes(account.platform) && mediaType !== "all") {
+    return invalidAnalyticsInput("media_type filtering is unavailable for Facebook/Threads saved reports because they do not record media formats.");
+  }
+  const reportParams = new URLSearchParams(params);
+  reportParams.delete("media_type");
+  if (["facebook", "threads"].includes(account.platform)) reportParams.set("analyticsContractVersion", "1");
+  // Instagram's legacy report supports its own cursor, without the unified version flag.
+  if (account.platform === "instagram") {
+    const period = parsed.data.period_days ?? 7;
+    const upstream = await deps.invoke("instagram-insights-report", { user_id: userId, social_account_id: account.id,
+      period_days: period, ...(parsed.data.cursor ? { cursor: parsed.data.cursor } : {}) }, READ_TIMEOUT_MS);
+    const result = fromUpstream("instagram-insights-report", upstream);
+    return result.status === 200 ? { ...result, body: filterAccountMedia(result.body, mediaType) } : result;
+  }
+  // Keep the existing TikTok passthrough and its validation unchanged.
+  return await handleGetPostAnalytics(deps, userId, reportParams);
+}
+
+export async function handleTriggerAnalyticsSync(deps: ServiceProxyDeps, userId: string, rawBody: unknown): Promise<ProxyResult> {
+  const parsed = analyticsSyncSchema.safeParse(rawBody);
+  if (!parsed.success) return invalidAnalyticsInput("social_account_id must be a Postora account UUID.");
+  const owned = await loadOwnedAccount(deps, userId, parsed.data.social_account_id);
+  if ("error" in owned) return owned.error;
+  const { account } = owned;
+  if (!["instagram", "facebook", "threads"].includes(account.platform)) return unsupported("Analytics collection", account.platform, "instagram, facebook, threads");
+  const name = account.platform === "instagram" ? "instagram-insights-sync" : "meta-owned-analytics-sync";
+  const body = account.platform === "instagram"
+    ? { action: "enqueue", user_id: userId, social_account_id: account.id }
+    : { action: "enqueue", user_id: userId, platform: account.platform, accountId: account.id };
+  const upstream = await deps.invoke(name, body, READ_TIMEOUT_MS);
+  // Collection refusals such as collection_disabled are meaningful even when the service uses 503.
+  if (upstream.status === 503 && upstream.data && typeof upstream.data === "object") {
+    const payload = asRecord(upstream.data);
+    if (["collection_disabled", "settings_unavailable"].includes(String(payload.error)) ||
+        ["collection_disabled", "not_eligible", "configuration_unavailable"].includes(String(payload.status))) {
+      return { status: upstream.status, body: redactErrorText(stripCredentialUrls(payload)) };
+    }
+  }
+  return fromUpstream(name, upstream);
+}
+
+async function competitorRpc(deps: ServiceProxyDeps, name: string, args: Record<string, unknown>): Promise<ProxyResult> {
+  if (!deps.rpc) return proxyError(503, "COMPETITOR_UNAVAILABLE", "Competitor tracking is unavailable.");
+  const result = await deps.rpc(name, args);
+  if (result.error) {
+    console.warn("[n8n-api] competitor request refused", { code: result.error.code });
+    const code = result.error.code;
+    if (code === "P0002") return proxyError(404, "COMPETITOR_NOT_FOUND", "Competitor not found or not owned by the authenticated user.");
+    if (code === "23514" && result.error.message?.startsWith("COMPETITOR_QUOTA_EXCEEDED")) return proxyError(409, "COMPETITOR_QUOTA_EXCEEDED", "The tracked competitor limit has been reached.");
+    if (code === "23514" && result.error.message?.startsWith("COMPETITOR_ADD_FAILED")) return proxyError(409, "COMPETITOR_ADD_CONFLICT", "The competitor changed concurrently; retry the request.");
+    if (code === "23514" || code === "22023") return invalidAnalyticsInput("Invalid competitor handle, label or report arguments.");
+    return proxyError(503, "COMPETITOR_UNAVAILABLE", "Competitor tracking is unavailable.");
+  }
+  if (result.data === null) return proxyError(503, "COMPETITOR_UNAVAILABLE", "Competitor tracking returned no result.");
+  return { status: 200, body: stripCredentialUrls(result.data) };
+}
+
+async function competitorReport(deps: ServiceProxyDeps, userId: string, request: import("../competitor-tracking-report/contracts.ts").CompetitorReportRequest): Promise<ProxyResult> {
+  // The store keeps the same strict projection validator as the UI report. Its bearer is unused by this explicit-owner adapter.
+  let refusal: ProxyResult | undefined;
+  const store = new CompetitorReportStore(async (_name, args) => {
+    const result = await competitorRpc(deps, "read_competitor_tracking_report_v2_for_user", { p_user_id: userId, ...args });
+    if (result.status !== 200) { refusal = result; return { data: null, error: { code: "unavailable" } }; }
+    return { data: result.body, error: null };
+  });
+  try {
+    const raw = await store.readReportInput(request, "");
+    const report = assembleCompetitorReport({ action: request.action, request, raw }, new Date(), COMPETITOR_REPORT_BASELINE_POLICY);
+    return { status: 200, body: stripCredentialUrls(report) };
+  } catch {
+    console.warn("[n8n-api] competitor report unavailable");
+    return refusal ?? proxyError(503, "COMPETITOR_UNAVAILABLE", "The competitor report could not be read.");
+  }
+}
+
+export async function handleListCompetitors(deps: ServiceProxyDeps, userId: string, rawBody: unknown): Promise<ProxyResult> {
+  const parsed = listCompetitorsSchema.safeParse(rawBody);
+  if (!parsed.success) return invalidAnalyticsInput("Use state active/removed, limit 1-50 and a bounded report cursor.");
+  return competitorReport(deps, userId, { action: "list", state: parsed.data.state ?? "active", limit: parsed.data.limit ?? 20, cursor: parsed.data.cursor ?? null });
+}
+
+export async function handleTrackCompetitor(deps: ServiceProxyDeps, userId: string, rawBody: unknown): Promise<ProxyResult> {
+  const parsed = trackCompetitorSchema.safeParse(rawBody);
+  if (!parsed.success) return invalidAnalyticsInput("Use an Instagram handle of 1-30 letters, digits, underscores or periods (no consecutive periods), and a label of at most 120 characters.");
+  return competitorRpc(deps, "add_competitor_watchlist_for_user", { p_user_id: userId, p_username: normalizeTrackedHandle(parsed.data.username), p_label: parsed.data.label ?? null });
+}
+
+export async function handleUntrackCompetitor(deps: ServiceProxyDeps, userId: string, rawBody: unknown): Promise<ProxyResult> {
+  const parsed = untrackCompetitorSchema.safeParse(rawBody);
+  if (!parsed.success) return invalidAnalyticsInput("watchlist_id must be a UUID from list_competitors.");
+  return competitorRpc(deps, "update_competitor_watchlist_for_user", { p_user_id: userId, p_watchlist_id: parsed.data.watchlist_id, p_label: null, p_is_active: false });
+}
+
+export async function handleGetCompetitorReport(deps: ServiceProxyDeps, userId: string, rawBody: unknown): Promise<ProxyResult> {
+  const parsed = competitorReportSchema.safeParse(rawBody);
+  if (!parsed.success) return invalidAnalyticsInput("Use a watchlist UUID, period_days 7/30, limit 1-50 and a bounded report cursor.");
+  return competitorReport(deps, userId, { action: "detail", watchlistId: parsed.data.watchlist_id,
+    periodDays: parsed.data.period_days ?? 30, limit: parsed.data.limit ?? 20, cursor: parsed.data.cursor ?? null });
+}
+
+export async function handleAnalyzeBrand(deps: ServiceProxyDeps, userId: string, rawBody: unknown): Promise<ProxyResult> {
+  const parsed = analyzeBrandSchema.safeParse(rawBody);
+  if (!parsed.success) return invalidAnalyticsInput("Invalid brand analysis filters; platform must be facebook or instagram.");
+  if (parsed.data.platform === "instagram" && (parsed.data.offset ?? 0) > 100) return invalidAnalyticsInput("Instagram offset must be between 0 and 100.");
+  const username = normalizeBrandHandle(parsed.data.handle, parsed.data.platform);
+  if (!username) return invalidAnalyticsInput("Use a valid handle or a profile URL on the selected platform.");
+  const upstream = await deps.invoke("brand-scrape", { user_id: userId, platform: parsed.data.platform, username, offset: parsed.data.offset ?? 0 }, READ_TIMEOUT_MS);
+  const result = fromUpstream("brand-scrape", upstream);
+  return result.status === 200 ? { ...result, body: filterBrandPosts(result.body, parsed.data) } : result;
 }

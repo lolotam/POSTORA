@@ -11,7 +11,9 @@
  *
  *   The two owner RPCs are granted to `authenticated` and explicitly revoked
  *   from `service_role`, and they derive the owner from `auth.uid()`. The
- *   request therefore has to reach PostgreSQL as the CALLER.
+ *   JWT request therefore reaches PostgreSQL as the CALLER. The service
+ *   enqueue entry uses a separate explicit-owner RPC that shares the same
+ *   implementation and checks ownership in SQL; it never changes JWT claims.
  *
  *   The user-context client is built per request, from the PUBLIC project key
  *   and the SAME bearer that was verified, so the token that was checked is
@@ -26,8 +28,10 @@
  *   exception-path audit of an admission refusal the accepted SQL could not
  *   audit itself. It never runs an owner RPC, and it never carries a user
  *   id: the accepted SQL has no `service_role` EXECUTE on the two owner
- *   functions, and asking for it would be asking for the impersonation the
- *   SQL refuses.
+ *   functions. The one additional service operation is the explicit-owner
+ *   enqueue RPC: the shared auth helper verifies the service credential,
+ *   SQL proves target ownership, and the existing gates and throttle still
+ *   apply. The service client never invokes a browser owner RPC.
  *
  * WHY THE URL COMES FROM `SUPABASE_URL`
  *
@@ -46,6 +50,7 @@
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
+import { authenticateCaller } from "../_shared/auth-helper.ts";
 import { redactSensitive } from "../_shared/logging.ts";
 
 import {
@@ -428,6 +433,23 @@ const deps: InstagramInsightsSyncDeps = {
     const environment = currentEnvironment();
     if (!environment) throw new Error("the server configuration is not usable");
     return await createSettingReader(environment)(key);
+  },
+
+  authenticateServiceOwner: async (request, userId) => {
+    const caller = await authenticateCaller(request, userId);
+    return caller.isServiceRole ? caller.userId : null;
+  },
+
+  createServiceOwnerStore: (userId) => {
+    const environment = currentEnvironment();
+    if (!environment) throw new Error("the server configuration is not usable");
+    return createOwnerCollectionStore(async (name, args, signal) => {
+      if (name !== "enqueue_instagram_collection_job") throw new Error("unsupported service operation");
+      const client = createClient(environment.url, environment.serviceRoleKey, {
+        auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
+      });
+      return await client.rpc("enqueue_instagram_collection_job_for_user", { p_user_id: userId, ...args }).abortSignal(signal ?? AbortSignal.timeout(5_000));
+    });
   },
 
   createOwnerStore: (verifiedToken) => {
