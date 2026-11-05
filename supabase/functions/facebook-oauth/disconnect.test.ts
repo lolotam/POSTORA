@@ -43,6 +43,13 @@ Deno.test("an account without a binding is removed without any Graph call", asyn
   assertEquals(calls, []);
 });
 
+Deno.test("a grant with no member left is removed without any Graph call", async () => {
+  const calls: Request[] = [];
+  const outcome = await decideDisconnect(ports({ countGrantMembers: async () => 0 }, calls), APP, ACCOUNT);
+  assertEquals(outcome, { revoked: false, reason: "no_binding" });
+  assertEquals(calls, []);
+});
+
 Deno.test("a grant shared with a sibling account is left alone", async () => {
   const calls: Request[] = [];
   const outcome = await decideDisconnect(ports({ countGrantMembers: async () => 2 }, calls), APP, ACCOUNT);

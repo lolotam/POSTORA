@@ -52,7 +52,11 @@ export async function decideDisconnect(
 ): Promise<DisconnectOutcome> {
   const binding = await ports.readBinding(accountId);
   if (!binding) return { revoked: false, reason: "no_binding" };
-  if (await ports.countGrantMembers(binding.credential_id) > 1) return { revoked: false, reason: "grant_shared" };
+  const members = await ports.countGrantMembers(binding.credential_id);
+  // A count of zero means the binding is already gone: there is no grant left
+  // to withdraw, so the removal stays a Postora-only operation.
+  if (members < 1) return { revoked: false, reason: "no_binding" };
+  if (members > 1) return { revoked: false, reason: "grant_shared" };
   const providerUserId = await ports.readProviderUserId(binding.credential_id);
   if (!providerUserId) return { revoked: false, reason: "credential_missing" };
   const revoked = await revokeFacebookGrant(ports.fetch, app, providerUserId);

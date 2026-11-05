@@ -809,6 +809,36 @@ Deno.serve(async (req) => {
     });
   }
 
+  // Every disconnect refusal leaves one sanitized system_logs row: the
+  // request-boundary refusal, the failed lookups and the failed revoke. The
+  // account id is optional, because an invalid one is never copied into the
+  // log, and no raw request value ever reaches the metadata.
+  const logDisconnectEvent = async (
+    message: string,
+    metadata: Record<string, unknown>,
+    socialAccountId?: string,
+  ) => {
+    try {
+      const logClient = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
+      const { error: logError } = await logClient.from("system_logs").insert({
+        source: "facebook-oauth",
+        category: "auth",
+        level: "warn",
+        message,
+        user_id: user_id,
+        metadata: {
+          action: "disconnect",
+          ...(socialAccountId ? { social_account_id: socialAccountId } : {}),
+          ...metadata,
+        },
+      }).abortSignal(AbortSignal.timeout(2_000));
+      if (logError) console.error("[facebook-oauth] Disconnect log rejected:", logError.message);
+    } catch {
+      // A failed log must never change the response of the request.
+      console.error("[facebook-oauth] Disconnect log failed");
+    }
+  };
+
   if (!body.action) {
     return new Response(JSON.stringify({ error: "Invalid request body" }), {
       status: 400,
@@ -826,6 +856,11 @@ Deno.serve(async (req) => {
   // the opaque selection key instead of a page id.
   const legacyTokenActions = ["list_pages", "store_account"];
   const selectionOrTokenActions = ["store_page", "store_instagram"];
+  // A disconnect names exactly one account, so its id has to be a UUID
+  // string. The refused raw value is never logged.
+  const disconnectIdInvalid = body.action === "disconnect" &&
+    (typeof body.social_account_id !== "string" ||
+      !UUID_PATTERN.test(body.social_account_id));
   const missingActionField =
     (legacyTokenActions.includes(body.action) && !body.provider_token) ||
     (selectionOrTokenActions.includes(body.action) &&
@@ -835,11 +870,15 @@ Deno.serve(async (req) => {
     (body.action === "store_page" && !body.page_id && !body.selection_key) ||
     (body.action === "store_instagram" && !body.instagram_account_id) ||
     (body.action === "get_pending_selection" && !body.selection_id) ||
-    (body.action === "disconnect" &&
-      (typeof body.social_account_id !== "string" ||
-        !UUID_PATTERN.test(body.social_account_id)));
+    disconnectIdInvalid;
 
   if (!validActions.includes(body.action) || missingActionField) {
+    if (disconnectIdInvalid) {
+      await logDisconnectEvent(
+        "Facebook disconnect refused: invalid account id",
+        { reason: "invalid_account_id" },
+      );
+    }
     return new Response(JSON.stringify({ error: "Invalid request body" }), {
       status: 400,
       headers: { ...corsHeaders, "Content-Type": "application/json" },
@@ -893,17 +932,6 @@ Deno.serve(async (req) => {
     // the lifecycle decision.
     if (action === "disconnect") {
       const socialAccountId = String(body.social_account_id);
-      const logDisconnectEvent = async (message: string, metadata: Record<string, unknown>) => {
-        const { error: logError } = await supabase.from("system_logs").insert({
-          source: "facebook-oauth",
-          category: "auth",
-          level: "warn",
-          message,
-          user_id: user_id,
-          metadata: { action: "disconnect", social_account_id: socialAccountId, ...metadata },
-        }).abortSignal(AbortSignal.timeout(2_000));
-        if (logError) console.error("[facebook-oauth] Disconnect log rejected:", logError.message);
-      };
 
       const { data: account, error: accountError } = await supabase
         .from("social_accounts")
@@ -911,9 +939,20 @@ Deno.serve(async (req) => {
         .eq("id", socialAccountId)
         .eq("user_id", user_id)
         .maybeSingle();
-      if (accountError) throw new Error("Account lookup failed");
+      if (accountError) {
+        await logDisconnectEvent(
+          "Facebook disconnect failed: account lookup failed",
+          { reason: "account_lookup_failed" },
+          socialAccountId,
+        );
+        throw new Error("Account lookup failed");
+      }
       if (!account || !["facebook", "instagram"].includes(String(account.platform))) {
-        await logDisconnectEvent("Facebook disconnect refused: account not found for this caller", { reason: "account_not_found" });
+        await logDisconnectEvent(
+          "Facebook disconnect refused: account not found for this caller",
+          { reason: "account_not_found" },
+          socialAccountId,
+        );
         return new Response(JSON.stringify({ error: "Account not found" }), {
           status: 404,
           headers: { ...corsHeaders, "Content-Type": "application/json" },
@@ -923,7 +962,11 @@ Deno.serve(async (req) => {
       const appId = Deno.env.get("FACEBOOK_APP_ID");
       const appSecret = Deno.env.get("FACEBOOK_APP_SECRET");
       if (!appId || !appSecret) {
-        await logDisconnectEvent("Facebook disconnect: app credentials not configured; account removed in Postora only", { reason: "credentials_missing" });
+        await logDisconnectEvent(
+          "Facebook disconnect: app credentials not configured; account removed in Postora only",
+          { reason: "credentials_missing" },
+          socialAccountId,
+        );
         return new Response(JSON.stringify({ success: true, revoked: false, reason: "credentials_missing" }), {
           headers: { ...corsHeaders, "Content-Type": "application/json" },
         });
@@ -937,7 +980,14 @@ Deno.serve(async (req) => {
             .eq("social_account_id", id)
             .eq("user_id", user_id)
             .maybeSingle();
-          if (error) throw new Error("Binding lookup failed");
+          if (error) {
+            await logDisconnectEvent(
+              "Facebook disconnect failed: binding lookup failed",
+              { reason: "binding_lookup_failed" },
+              socialAccountId,
+            );
+            throw new Error("Binding lookup failed");
+          }
           return data;
         },
         countGrantMembers: async (credentialId) => {
@@ -946,7 +996,14 @@ Deno.serve(async (req) => {
             .select("social_account_id", { count: "exact", head: true })
             .eq("credential_id", credentialId)
             .eq("user_id", user_id);
-          if (error) throw new Error("Grant member count failed");
+          if (error) {
+            await logDisconnectEvent(
+              "Facebook disconnect failed: grant member count failed",
+              { reason: "grant_count_failed" },
+              socialAccountId,
+            );
+            throw new Error("Grant member count failed");
+          }
           return count ?? 0;
         },
         readProviderUserId: async (credentialId) => {
@@ -956,14 +1013,25 @@ Deno.serve(async (req) => {
             .eq("id", credentialId)
             .eq("user_id", user_id)
             .maybeSingle();
-          if (error) throw new Error("Credential lookup failed");
+          if (error) {
+            await logDisconnectEvent(
+              "Facebook disconnect failed: credential lookup failed",
+              { reason: "credential_lookup_failed" },
+              socialAccountId,
+            );
+            throw new Error("Credential lookup failed");
+          }
           return data?.provider_user_id ?? null;
         },
         fetch,
       }, { appId, appSecret }, socialAccountId);
 
       if (!outcome.revoked && outcome.reason !== "no_binding" && outcome.reason !== "grant_shared") {
-        await logDisconnectEvent("Facebook de-authorization did not succeed; account removed in Postora only", { reason: outcome.reason });
+        await logDisconnectEvent(
+          "Facebook de-authorization did not succeed; account removed in Postora only",
+          { reason: outcome.reason },
+          socialAccountId,
+        );
       }
       return new Response(JSON.stringify({ success: true, revoked: outcome.revoked, reason: outcome.reason }), {
         headers: { ...corsHeaders, "Content-Type": "application/json" },
