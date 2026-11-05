@@ -469,7 +469,14 @@ BEGIN
   SELECT count(*) INTO n
     FROM pg_proc p JOIN pg_namespace ns ON ns.oid = p.pronamespace
    WHERE ns.nspname = 'public' AND p.proname LIKE 'meta_oauth_attempt_%';
-  ASSERT n = 24, 'A1 the owner-only helper count is unchanged';
+  -- 24 helpers plus meta_oauth_attempt_consumed_by from
+  -- 20261105130000_meta_oauth_consume_page_alternatives.sql.
+  ASSERT n = 25, 'A1 the owner-only helper count is unchanged';
+  ASSERT NOT has_function_privilege('service_role',
+    'public.meta_oauth_attempt_consumed_by(text,jsonb,text,text)', 'EXECUTE')
+    AND NOT has_function_privilege('authenticated',
+    'public.meta_oauth_attempt_consumed_by(text,jsonb,text,text)', 'EXECUTE'),
+    'A1 the Page-alternative helper is owner-only';
 
   SELECT count(*) INTO n
     FROM pg_proc p JOIN pg_namespace ns ON ns.oid = p.pronamespace
