@@ -7,9 +7,12 @@ import {
   isLifecycleRefusal,
 } from "../_shared/facebookCredentialMode.ts";
 import {
+  MAX_PICKER_CANDIDATES,
   beginOAuthRequest,
+  buildProtectedPageCandidates,
   continueOAuthRequest,
   oauthTripwirePorts,
+  projectFacebookPicker,
   type OAuthLifecyclePorts,
 } from "./protectedPageConnect.ts";
 import { PROTECTED_PILOT_USERS_SETTING_KEY } from "../_shared/protectedAccountCutover.ts";
@@ -241,4 +244,69 @@ Deno.test("a global protected mode is unchanged by the pilot list", async () => 
     userId: PILOT_USER,
   });
   assertEquals(isLifecycleRefusal(refused), true);
+});
+
+function managedPage(id: string, instagramId: string | null) {
+  return {
+    id,
+    name: `Page ${id}`,
+    accessToken: `token-${id}`,
+    instagram: instagramId === null ? null : { id: instagramId, username: null, profilePictureUrl: null },
+  };
+}
+
+Deno.test("a Page with a linked Instagram offers the owner both the linked and the Page-only key", () => {
+  const candidates = buildProtectedPageCandidates({
+    flow: "facebook_page",
+    pages: [managedPage("p1", "ig1"), managedPage("p2", null)],
+    facebookUserId: "fb-user",
+  });
+  assertEquals(
+    candidates.map((candidate) => [candidate.facebook_page_id, candidate.candidate_kind, candidate.ig_user_id ?? null]),
+    [["p1", "page_plus_ig", "ig1"], ["p2", "page_only", null], ["p1", "page_only", null]],
+  );
+});
+
+Deno.test("the Instagram flow offers only the linked Instagram accounts", () => {
+  const candidates = buildProtectedPageCandidates({
+    flow: "instagram_page_linked",
+    pages: [managedPage("p1", "ig1"), managedPage("p2", null)],
+    facebookUserId: "fb-user",
+  });
+  assertEquals(candidates.map((candidate) => candidate.candidate_kind), ["ig_only"]);
+});
+
+Deno.test("Page-only alternatives never push a Page past the stash limit", () => {
+  const pages = Array.from({ length: 30 }, (_, index) => managedPage(`p${index}`, `ig${index}`));
+  const candidates = buildProtectedPageCandidates({ flow: "facebook_page", pages, facebookUserId: "fb-user" });
+  assertEquals(candidates.length, MAX_PICKER_CANDIDATES);
+  assertEquals(candidates.filter((candidate) => candidate.candidate_kind === "page_plus_ig").length, 30);
+});
+
+Deno.test("the picker shows a linked Page once and carries its Page-only key", () => {
+  const candidate = (key: string, pageId: string | null, igId: string | null) => ({
+    selection_key: key,
+    ig_user_id: igId,
+    ig_username: igId === null ? null : `user_${igId}`,
+    ig_profile_picture_url: null,
+    facebook_page_id: pageId,
+    facebook_page_name: pageId === null ? null : `Page ${pageId}`,
+  });
+  const projected = projectFacebookPicker({
+    attempt_id: "attempt-1",
+    flow: "facebook_page",
+    intent: "connect",
+    social_profile_id: null,
+    expired: false,
+    committed_selection_keys: [],
+    candidates: [
+      candidate("linked-p1", "p1", "ig1"),
+      candidate("plain-p2", "p2", null),
+      candidate("only-p1", "p1", null),
+    ],
+  });
+  assertEquals(
+    projected.pages.map((page) => [page.id, page.selection_key, page.facebook_only_selection_key, page.ig_username]),
+    [["p1", "linked-p1", "only-p1", "user_ig1"], ["p2", "plain-p2", null, null]],
+  );
 });

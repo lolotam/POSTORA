@@ -16,6 +16,22 @@ export interface FacebookPage {
    * accepts the attempt id plus this key, never a page name or a username.
    */
   selection_key?: string;
+  /** The linked Instagram username a Page-plus-Instagram candidate carries. */
+  ig_username?: string | null;
+  /**
+   * The key that connects the Page without its linked Instagram. Present only
+   * when the owner can choose, so the picker asks before linking Instagram.
+   */
+  facebook_only_selection_key?: string | null;
+}
+
+/** Every key that commits a choice; a choice is taken once any one is committed. */
+export function choiceSelectionKeys(choice: {
+  selection_key?: string;
+  facebook_only_selection_key?: string | null;
+}): string[] {
+  return [choice.selection_key, choice.facebook_only_selection_key]
+    .filter((key): key is string => typeof key === "string" && key.length > 0);
 }
 
 export interface StandaloneInstagram {
@@ -148,7 +164,10 @@ export function useFacebookOAuth(
         if (protectedAttempt && selectionKey) {
           const committed = [...(pageSelectionData.committedSelectionKeys ?? []), selectionKey];
           const remaining = [...pageSelectionData.pages, ...pageSelectionData.standaloneInstagram]
-            .some((choice) => choice.selection_key && !committed.includes(choice.selection_key));
+            .some((choice) => {
+              const keys = choiceSelectionKeys(choice);
+              return keys.length > 0 && !keys.some((key) => committed.includes(key));
+            });
           if (remaining) {
             setPageSelectionData({ ...pageSelectionData, committedSelectionKeys: committed });
           } else {

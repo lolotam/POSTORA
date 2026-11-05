@@ -12,6 +12,7 @@ import {
 } from "../_shared/facebookCredentialMode.ts";
 import {
   beginOAuthRequest,
+  buildProtectedPageCandidates,
   createFacebookRouteContext,
   facebookRouteFlow,
   oauthTripwirePorts,
@@ -20,7 +21,6 @@ import {
 } from "./protectedPageConnect.ts";
 import {
   createMetaOAuthAttemptStoreFromClient,
-  type MetaOAuthCandidate,
   type MetaOAuthFlow,
 } from "../_shared/metaOAuthAttemptStore.ts";
 import {
@@ -512,36 +512,11 @@ async function handleProtectedFacebookCallback(
           throw new ProtectedFacebookRefusal("no_pages");
         }
 
-        const candidates: MetaOAuthCandidate[] = [];
-        for (const page of pages) {
-          const base: MetaOAuthCandidate = {
-            facebook_page_id: page.id,
-            facebook_page_name: page.name,
-            page_access_token: page.accessToken,
-            facebook_user_id: grant.facebookUserId,
-          };
-          if (context.flow === "facebook_page") {
-            if (page.instagram) {
-              candidates.push({
-                ...base,
-                candidate_kind: "page_plus_ig",
-                ig_user_id: page.instagram.id,
-                ig_username: page.instagram.username ?? `ig_${page.instagram.id}`,
-                ig_profile_picture_url: page.instagram.profilePictureUrl,
-              });
-            } else {
-              candidates.push({ ...base, candidate_kind: "page_only" });
-            }
-          } else if (page.instagram) {
-            candidates.push({
-              ...base,
-              candidate_kind: "ig_only",
-              ig_user_id: page.instagram.id,
-              ig_username: page.instagram.username ?? `ig_${page.instagram.id}`,
-              ig_profile_picture_url: page.instagram.profilePictureUrl,
-            });
-          }
-        }
+        const candidates = buildProtectedPageCandidates({
+          flow: context.flow,
+          pages,
+          facebookUserId: grant.facebookUserId,
+        });
 
         if (candidates.length === 0) {
           throw new ProtectedFacebookRefusal("no_pages");

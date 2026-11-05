@@ -905,7 +905,7 @@ routeTest("the protected Facebook callback claims the attempt before the provide
   assertEquals(claim.flow, "facebook_page");
 });
 
-routeTest("the protected Facebook callback maps a Page with a linked Instagram account", async () => {
+routeTest("the protected Facebook callback offers a linked Page with and without its Instagram account", async () => {
   const current = probe({ setting: "protected" });
   metaProvider(current);
   const handler = await loadHandler("facebook-oauth/index.ts", current);
@@ -917,11 +917,11 @@ routeTest("the protected Facebook callback maps a Page with a linked Instagram a
   const complete = current.rpcCalls[1].args.p_payload as Record<string, unknown>;
   const stash = complete.stash as Record<string, unknown>;
   const candidates = stash.candidates as Record<string, unknown>[];
-  assertEquals(candidates.length, 1);
-  assertEquals(candidates[0].candidate_kind, "page_plus_ig");
-  assertEquals(candidates[0].facebook_page_id, "page-1");
-  assertEquals(candidates[0].ig_user_id, "ig-1");
-  assertEquals(candidates[0].facebook_user_id, "fb-user-1");
+  assertEquals(
+    candidates.map((candidate) => [candidate.candidate_kind, candidate.facebook_page_id, candidate.ig_user_id ?? null]),
+    [["page_plus_ig", "page-1", "ig-1"], ["page_only", "page-1", null]],
+  );
+  assertEquals(candidates.every((candidate) => candidate.facebook_user_id === "fb-user-1"), true);
 });
 
 routeTest("the protected Page-linked callback maps an Instagram-only candidate", async () => {
