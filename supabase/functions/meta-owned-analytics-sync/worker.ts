@@ -4,7 +4,7 @@ import type { MetricDefinition } from "../_shared/analyticsContract.ts";
 import { FacebookInsightsProvider } from "../facebook-page-insights/provider.ts";
 import { ThreadsInsightsProvider } from "../threads-insights/provider.ts";
 import { CollectionProviderRefused, CollectionVisitPaused, type CollectionProvider } from "./collectionProvider.ts";
-import { AnalyticsWorkerDeadline, AnalyticsWorkerStopped } from "./deadline.ts";
+import { AnalyticsWorkerDeadline, AnalyticsWorkerStopped, CompletionRefused } from "./deadline.ts";
 import { facebookCollection } from "./facebookCollection.ts";
 import { threadsCollection } from "./threadsCollection.ts";
 import { CollectionThrottle, collectionBucketKey } from "./throttle.ts";
@@ -87,6 +87,13 @@ async function captureVisit(input: DrainInput, job: AnalyticsClaim, provider: Co
   return plans.every((plan) => accepted.has(plan.key));
 }
 
+/** The database judges completeness more strictly than the worker; a refused success is released as a failure. */
+async function releaseRefusedCompletion(input: DrainInput, job: AnalyticsClaim): Promise<"refused"> {
+  try { await input.store.complete(job, "failed", "completion_refused", null); }
+  catch (error) { throw error instanceof CompletionRefused ? new AnalyticsWorkerStopped("invalid_contract") : error; }
+  return "refused";
+}
+
 async function collectJob(input: DrainInput, job: AnalyticsClaim): Promise<"success" | "partial" | "refused" | "rate_limited"> {
   const app = input.app(job.platform);
   if (!app) throw new AnalyticsWorkerStopped("configuration_unavailable");
@@ -99,9 +106,17 @@ async function collectJob(input: DrainInput, job: AnalyticsClaim): Promise<"succ
     // A bounded prefix is useful history but can never become a full inventory.
     // Once its captures are saved, stop reclaiming this date ahead of newer jobs.
     const terminalTruncation = capturesComplete && state.checkpoint.inventory_truncated;
-    await input.store.complete(job, complete ? "success" : terminalTruncation ? "failed" : "partial",
-      complete ? null : state.checkpoint.inventory_truncated ? "inventory_truncated" : "collection_incomplete",
-      complete || terminalTruncation ? null : new Date(Date.now() + 60_000).toISOString());
+    try {
+      await input.store.complete(job, complete ? "success" : terminalTruncation ? "failed" : "partial",
+        complete ? null : state.checkpoint.inventory_truncated ? "inventory_truncated" : "collection_incomplete",
+        complete || terminalTruncation ? null : new Date(Date.now() + 60_000).toISOString());
+    } catch (error) {
+      if (!(error instanceof CompletionRefused)) throw error;
+      // The database holds the stricter definition of "complete"; a refusal of any other outcome
+      // breaks the worker's contract instead of releasing a job it cannot judge.
+      if (!complete) throw new AnalyticsWorkerStopped("invalid_contract");
+      return await releaseRefusedCompletion(input, job);
+    }
     return complete ? "success" : "partial";
   } catch (error) {
     if (error instanceof CollectionVisitPaused) {

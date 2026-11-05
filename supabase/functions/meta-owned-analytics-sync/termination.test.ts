@@ -1,7 +1,8 @@
 import { assert, assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import { createOwnedAnalyticsSyncHandler, type OwnedAnalyticsAudit } from "./handler.ts";
-import type { AnalyticsRpc, OwnedAnalyticsPlatform } from "./store.ts";
-import { AnalyticsWorkerDeadline, AnalyticsWorkerStopped } from "./deadline.ts";
+import { OwnedAnalyticsStore, type AnalyticsClaim, type AnalyticsRpc, type OwnedAnalyticsPlatform } from "./store.ts";
+import { AnalyticsWorkerDeadline, AnalyticsWorkerStopped, CompletionRefused } from "./deadline.ts";
+import { drainOwnedAnalytics } from "./worker.ts";
 
 const ACCOUNT = "d3000000-0000-4000-8000-000000000001";
 const OWNER = "d1000000-0000-4000-8000-000000000001";
@@ -241,4 +242,80 @@ Deno.test("the final-write reserve shortens a dependency ceiling and refuses new
       assert(performance.now() - started < 3_000);
     });
   }
+});
+
+/** Two already collected Facebook jobs: every cell the worker asks for is already stored. */
+function collectedDrain(options: { claimRefusal?: string; refuseCompletion?: "once" | "always"; truncated?: boolean } = {}) {
+  const authority = { platform_user_id: "772001", connection_version: 1,
+    credential_id: "d6000000-0000-4000-8000-000000000001", credential_revision: 1, provider_user_id: "771001", token_expires_at: null };
+  const jobs: AnalyticsClaim[] = [
+    { platform: "facebook", job_id: JOB, user_id: OWNER, account_id: ACCOUNT, job_generation: 1, authority,
+      claim_token: "d4000000-0000-4000-8000-000000000001", lease_until: "2026-11-01T23:00:00Z",
+      due_on: "2026-11-01", due_at: "2026-11-01T07:00:00Z", next_due_at: "2026-11-02T08:00:00Z" },
+    { platform: "facebook", job_id: "d2000000-0000-4000-8000-000000000002", user_id: OWNER, account_id: ACCOUNT, job_generation: 1, authority,
+      claim_token: "d4000000-0000-4000-8000-000000000002", lease_until: "2026-11-01T23:00:00Z",
+      due_on: "2026-11-01", due_at: "2026-11-01T07:00:00Z", next_due_at: "2026-11-02T08:00:00Z" }];
+  const completions: Array<{ outcome: string; reason: string | null }> = [];
+  const deadline = new AnalyticsWorkerDeadline(Date.now(), new AbortController().signal);
+  let claimed = 0, refusedOnce = false;
+  const rpc: AnalyticsRpc = async (name, args) => {
+    if (name === "next_meta_analytics_dispatch_target") return { data: { state: "not_started" }, error: null };
+    if (name === "claim_meta_analytics_collection_job") {
+      if (options.claimRefusal) return { data: null, error: { code: options.claimRefusal } };
+      const next = jobs[claimed++];
+      return { data: next ?? null, error: null };
+    }
+    if (name === "read_fb_analytics_collection_credential") return { data: { job_id: args.p_job_id, job_generation: 1, authority, access_token: "fixture-op" }, error: null };
+    if (name === "read_fb_analytics_worker_state") return { data: { checkpoint: { cursor: null, post_ids: [], pages_fetched: 1,
+      inventory_complete: !options.truncated, inventory_truncated: !!options.truncated },
+      operations: [{ operation_key: "account_day:2026-10-31", kind: "account_day", state: "success", reason: null, last_requested_at: null },
+        { operation_key: "account_day:2026-10-30", kind: "account_day", state: "success", reason: null, last_requested_at: null }] }, error: null };
+    if (name === "complete_fb_analytics_collection_job") {
+      if (options.refuseCompletion && (options.refuseCompletion === "always" || (!refusedOnce && args.p_outcome === "success"))) {
+        refusedOnce = true;
+        return { data: null, error: { code: "MAH05", message: "META_ANALYTICS_INCOMPLETE_COLLECTION" } };
+      }
+      completions.push({ outcome: String(args.p_outcome), reason: (args.p_reason as string | null) ?? null });
+      const active = jobs.find((entry) => entry.job_id === String(args.p_job_id))!;
+      return { data: { job_id: active.job_id, job_generation: 1, state: args.p_outcome, on_time: false, due_at: active.due_at, next_due_at: active.next_due_at }, error: null };
+    }
+    throw new Error(`Unexpected fixture RPC ${name}`);
+  };
+  const store = new OwnedAnalyticsStore(rpc, deadline);
+  return { completions, job: jobs[0], store,
+    input: { platform: "facebook" as const, store, deadline, app: () => ({ id: "770001", secret: "fixture-app" }),
+      fetch: async () => { throw new Error("A collected job must not reach Meta"); } } };
+}
+
+Deno.test("a success the database refuses releases the job as failed and the drain goes on", async () => {
+  const { input, completions } = collectedDrain({ refuseCompletion: "once" });
+  const result = await drainOwnedAnalytics(input);
+  assertEquals(completions, [{ outcome: "failed", reason: "completion_refused" }, { outcome: "success", reason: null }]);
+  // The refused job never reached success, so the drain reports partial like any other refusal.
+  assertEquals(result.status, "partial");
+  assertEquals(result.counts, { visited: 2, collected: 1, partial: 0, refused: 1 });
+});
+
+Deno.test("MAH05 from a claim still stops the worker as configuration_unavailable", async () => {
+  const { input, job, store } = collectedDrain({ claimRefusal: "MAH05", refuseCompletion: "always" });
+  let claimFailure: unknown;
+  try { await store.claim("facebook"); } catch (error) { claimFailure = error; }
+  assert(claimFailure instanceof AnalyticsWorkerStopped);
+  assertEquals(claimFailure.reason, "configuration_unavailable");
+  assertEquals(claimFailure.sqlstate, "MAH05");
+  let completionFailure: unknown;
+  try { await store.complete(job, "success", null, null); } catch (error) { completionFailure = error; }
+  assert(completionFailure instanceof CompletionRefused);
+  assertEquals(completionFailure.sqlstate, "MAH05");
+  const result = await drainOwnedAnalytics(input);
+  assertEquals(result.status, "unavailable");
+  assertEquals(result.reason, "configuration_unavailable");
+});
+
+Deno.test("a refused partial or failed completion breaks the worker's contract", async () => {
+  const { input, completions } = collectedDrain({ refuseCompletion: "always", truncated: true });
+  const result = await drainOwnedAnalytics(input);
+  assertEquals(completions, []);
+  assertEquals(result.status, "unavailable");
+  assertEquals(result.reason, "invalid_contract");
 });

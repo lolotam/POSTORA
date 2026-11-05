@@ -1,5 +1,5 @@
 import { z } from "https://esm.sh/zod@3.25.76";
-import { AnalyticsWorkerDeadline, AnalyticsWorkerStopped } from "./deadline.ts";
+import { AnalyticsWorkerDeadline, AnalyticsWorkerStopped, CompletionRefused } from "./deadline.ts";
 
 export type OwnedAnalyticsPlatform = "facebook" | "threads";
 const identifier = z.string().min(1).max(200).regex(/^[A-Za-z0-9_-]+$/);
@@ -53,7 +53,7 @@ function family(platform: OwnedAnalyticsPlatform): "fb" | "threads" { return pla
 export class OwnedAnalyticsStore {
   constructor(private readonly rpc: AnalyticsRpc, private readonly deadline: AnalyticsWorkerDeadline) {}
 
-  private async call(name: string, args: Record<string, unknown>): Promise<unknown> {
+  private async call(name: string, args: Record<string, unknown>, onRefusal?: (code: string) => Error | null): Promise<unknown> {
     let envelope: unknown;
     try { envelope = await this.deadline.run((signal) => this.rpc(name, args, signal)); }
     catch (error) {
@@ -66,6 +66,11 @@ export class OwnedAnalyticsStore {
     }
     if (decoded.data.error !== null) {
       const refusal = z.object({ code: z.string() }).passthrough().safeParse(decoded.data.error);
+      // The caller that owns the SQLSTATE owns its meaning; every other RPC keeps the shared MAH05 fence.
+      if (refusal.success) {
+        const refused = onRefusal?.(refusal.data.code);
+        if (refused) throw refused;
+      }
       if (refusal.success && refusal.data.code === "MAH05") throw new AnalyticsWorkerStopped("configuration_unavailable", "MAH05");
       const definitive = refusal.success && ["MAH01", "MAH02", "MAH03", "MAH04", "MAH05", "42501"].includes(refusal.data.code);
       throw new AnalyticsWorkerStopped(definitive ? "admission_refused" : "storage_unavailable", definitive && refusal.success ? refusal.data.code : null);
@@ -184,7 +189,9 @@ export class OwnedAnalyticsStore {
   async complete(job: AnalyticsClaim, outcome: "success" | "partial" | "failed" | "retry", reason: string | null, retryAt: string | null = null): Promise<void> {
     this.decode(z.object({ job_id: z.literal(job.job_id), job_generation: z.literal(job.job_generation), state: z.literal(outcome),
       on_time: z.boolean(), due_at: z.string().datetime({ offset: true }), next_due_at: z.string().datetime({ offset: true }) }).strict(),
-    await this.call(`complete_${family(job.platform)}_analytics_collection_job`, { ...jobArgs(job), p_outcome: outcome, p_reason: reason, p_retry_at: retryAt }));
+    await this.call(`complete_${family(job.platform)}_analytics_collection_job`, { ...jobArgs(job), p_outcome: outcome, p_reason: reason, p_retry_at: retryAt },
+      // Only a completion can be refused for incompleteness; every other RPC keeps the shared MAH05 meaning.
+      (code) => code === "MAH05" ? new CompletionRefused("MAH05") : null));
   }
 
   async throttle(bucketKey: string): Promise<{ usage_percent: number | null; throttled_until: string | null } | null> {
