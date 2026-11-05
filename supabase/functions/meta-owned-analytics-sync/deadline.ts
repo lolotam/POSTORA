@@ -5,6 +5,11 @@ export class AnalyticsWorkerStopped extends Error {
   }
 }
 
+/** The database refused a job completion the worker believed complete (MAH05 from complete_*). */
+export class CompletionRefused extends Error {
+  constructor(readonly sqlstate: "MAH05") { super(`completion refused (${sqlstate})`); }
+}
+
 /** Caller deadlines stop waiting; they never prove that a database write rolled back. */
 export class AnalyticsWorkerDeadline {
   constructor(readonly startedAt: number, readonly signal: AbortSignal) {}
