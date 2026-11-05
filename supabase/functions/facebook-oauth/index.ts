@@ -82,6 +82,8 @@ const FB_OAUTH_SCOPES = [
   "ads_read", "ads_management",
   "leads_retrieval", "pages_manage_ads",
 ];
+// A disconnect names exactly one account, so its id has to be a UUID string.
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 
 interface FacebookPage {
@@ -783,7 +785,11 @@ Deno.serve(async (req) => {
     });
   }
 
-  if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY || !Deno.env.get("FACEBOOK_APP_ID")) {
+  // A disconnect never needs the Facebook app configuration: it has to be
+  // able to remove the account in Postora even when the provider is
+  // unconfigured, so it is exempt from the Facebook app id requirement.
+  if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY ||
+      (body.action !== "disconnect" && !Deno.env.get("FACEBOOK_APP_ID"))) {
     console.error("Facebook OAuth configuration is incomplete");
     return new Response(JSON.stringify({ error: "Service configuration error" }), {
       status: 500,
@@ -830,7 +836,8 @@ Deno.serve(async (req) => {
     (body.action === "store_instagram" && !body.instagram_account_id) ||
     (body.action === "get_pending_selection" && !body.selection_id) ||
     (body.action === "disconnect" &&
-      !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(String(body.social_account_id ?? "")));
+      (typeof body.social_account_id !== "string" ||
+        !UUID_PATTERN.test(body.social_account_id)));
 
   if (!validActions.includes(body.action) || missingActionField) {
     return new Response(JSON.stringify({ error: "Invalid request body" }), {
@@ -906,7 +913,7 @@ Deno.serve(async (req) => {
         .maybeSingle();
       if (accountError) throw new Error("Account lookup failed");
       if (!account || !["facebook", "instagram"].includes(String(account.platform))) {
-        await logDisconnectEvent("Facebook disconnect refused: account not found for this caller", {});
+        await logDisconnectEvent("Facebook disconnect refused: account not found for this caller", { reason: "account_not_found" });
         return new Response(JSON.stringify({ error: "Account not found" }), {
           status: 404,
           headers: { ...corsHeaders, "Content-Type": "application/json" },

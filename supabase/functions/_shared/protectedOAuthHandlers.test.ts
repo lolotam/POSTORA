@@ -2514,3 +2514,21 @@ routeTest("disconnect refuses a foreign, non-Meta or malformed account id before
   assertEquals(malformed.status, 400);
   assertEquals(providerUrls(current), []);
 });
+
+routeTest("disconnect refuses a non-string account id before any provider call", async () => {
+  const current = probe({ setting: "protected", socialRows: [{ id: ACCOUNT_ID, user_id: USER_ID, platform: "facebook", is_active: true }] });
+  const handler = await loadHandler("facebook-oauth/index.ts", current);
+  const result = await callJson(handler, "https://synthetic.invalid/functions/v1/facebook-oauth", { action: "disconnect", social_account_id: [ACCOUNT_ID] });
+  assertEquals(result.status, 400);
+  assertEquals(providerUrls(current), []);
+});
+
+routeTest("disconnect removes the account in Postora when the app credentials are absent", async () => {
+  const current = probe({ setting: "protected", socialRows: [{ id: ACCOUNT_ID, user_id: USER_ID, platform: "facebook", is_active: true }] });
+  const handler = await loadHandler("facebook-oauth/index.ts", current);
+  Deno.env.delete("FACEBOOK_APP_ID");
+  const result = await callJson(handler, "https://synthetic.invalid/functions/v1/facebook-oauth", { action: "disconnect", social_account_id: ACCOUNT_ID });
+  assertEquals(result.status, 200);
+  assertEquals(result.body, { success: true, revoked: false, reason: "credentials_missing" });
+  assertEquals(providerUrls(current), []);
+});
