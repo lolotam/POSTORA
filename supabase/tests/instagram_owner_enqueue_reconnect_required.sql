@@ -49,5 +49,103 @@ BEGIN
   ASSERT v_result->>'reason' = 'enqueued', 'the accepted request created the job: ' || v_result;
 END $with_capability$;
 
+-- ===========================================================================
+-- The context-missing loop (migration
+-- 20261105200000_instagram_context_missing_settlement.sql).
+--
+-- Three proofs about the daily owner enqueue and the terminal settlement of
+-- a job the claim could never bind:
+--
+--   1. the daily page enqueues the account WITH a capability row, skips the
+--      account WITHOUT one, and reports the gap as skipped_reconnect_required;
+--   2. a context-less owner job whose account has NO capability row is
+--      settled once, as unavailable / capability_missing, with the lease
+--      cleared, so it can never come back;
+--   3. a context-less job whose account HAS a capability row is still refused
+--      with IG_COLLECTION_CONTEXT_MISSING: that is a stale claim, not an
+--      unenrolled account.
+--
+-- The fixture above had to enroll ...0001 to prove the refusal, and it left
+-- a job for it. The blocks below need the opposite shape - ...0001 UNENROLLED
+-- and ...0002 enrolled - so the capability row and the job of ...0001 are
+-- removed here, and the policy is widened to 'owners: all' so the daily page
+-- sees both synthetic accounts.
+-- ===========================================================================
+
+INSERT INTO public.social_accounts(id,user_id,platform,platform_user_id,platform_username,access_token,ig_auth_type,is_active)
+VALUES ('f3120000-0000-4000-8000-000000000002','f3110000-0000-4000-8000-000000000001','instagram','ig-reconnect-required-second','reconnect_required_second','synthetic-reconnect-token','facebook_page',true);
+
+-- The ENROLLED account of the blocks below, written the way
+-- instagram_capabilities.sql writes one: a page-linked account whose
+-- permission read already landed, at credential generation 1.
+INSERT INTO public.instagram_account_capabilities(social_account_id,user_id,platform,login_kind,permission_read_state,granted_scopes,scopes_read_at,credential_generation)
+VALUES ('f3120000-0000-4000-8000-000000000002','f3110000-0000-4000-8000-000000000001','instagram','page_linked','ok',ARRAY['instagram_manage_insights'],now(),1);
+
+-- ...0001 is now the account WITHOUT a capability row.
+DELETE FROM public.instagram_account_capabilities WHERE social_account_id='f3120000-0000-4000-8000-000000000001';
+DELETE FROM public.instagram_collection_jobs WHERE target_id='f3120000-0000-4000-8000-000000000001';
+
+-- The daily page is global: 'owners: all' admits both synthetic accounts.
+-- The mode 'all' carries no id list, so the list is empty.
+INSERT INTO public.app_settings(key,value,description) VALUES
+('collection_instagram_rollout_policy','{"version":1,"owners":{"mode":"all","account_ids":[]},"competitors":{"mode":"off","targets":[]}}'::jsonb,'Synthetic context-missing fixture')
+ON CONFLICT(key) DO UPDATE SET value=EXCLUDED.value;
+
+DO $daily_page_skips_unenrolled$
+DECLARE v_result jsonb;
+BEGIN
+  PERFORM set_config('request.jwt.claim.role','service_role',true);
+  v_result := public.enqueue_instagram_collection_daily_page('owner', true);
+  ASSERT (v_result->>'accepted')::boolean, 'the daily page is accepted: ' || v_result;
+  ASSERT (v_result->>'skipped_reconnect_required')::int = 1, 'one account without a capability row is reported skipped: ' || v_result;
+  ASSERT EXISTS(SELECT 1 FROM public.instagram_collection_jobs WHERE target_id='f3120000-0000-4000-8000-000000000002' AND target_kind='owner'),
+    'the account with a capability row is enqueued';
+  ASSERT NOT EXISTS(SELECT 1 FROM public.instagram_collection_jobs WHERE target_id='f3120000-0000-4000-8000-000000000001'),
+    'the account without a capability row gets no job';
+END $daily_page_skips_unenrolled$;
+
+DO $contextless_owner_job_is_settled$
+DECLARE v_job public.instagram_collection_jobs%ROWTYPE; v_claimed jsonb; v_result jsonb;
+BEGIN
+  PERFORM set_config('request.jwt.claim.role','service_role',true);
+  -- A job the OLD enqueue would have written: no context, account without a capability row.
+  INSERT INTO public.instagram_collection_jobs(user_id,target_kind,target_id,social_account_id,captured_on,status,due_at)
+  VALUES ('f3110000-0000-4000-8000-000000000001','owner','f3120000-0000-4000-8000-000000000001','f3120000-0000-4000-8000-000000000001',current_date,'queued',now()-interval '1 minute')
+  RETURNING * INTO v_job;
+  -- The claim answers in jsonb: the token and the generation are read from it.
+  SELECT * INTO v_claimed
+    FROM public.claim_instagram_collection_jobs('owner', 10) AS c
+   WHERE c ->> 'job_id' = v_job.id::text;
+  ASSERT v_claimed IS NOT NULL, 'the job is claimed';
+  ASSERT (v_claimed -> 'context' ->> 'viewer_social_account_id') IS NULL,
+    'the claim bound no context: the account has no capability row';
+  v_result := public.complete_instagram_collection_job_capability_unavailable(v_job.id, (v_claimed->>'claim_token')::uuid, (v_claimed->>'job_generation')::bigint);
+  ASSERT v_result->>'status' = 'unavailable' AND v_result->>'reason_code' = 'capability_missing', 'settled unavailable/capability_missing: ' || v_result;
+  SELECT * INTO v_job FROM public.instagram_collection_jobs WHERE id = v_job.id;
+  ASSERT v_job.status = 'unavailable' AND v_job.lease_token IS NULL AND v_job.lease_expires_at IS NULL AND v_job.last_reason_code = 'capability_missing',
+    'the row is terminal with the lease cleared';
+END $contextless_owner_job_is_settled$;
+
+DO $contextless_job_with_capability_is_still_refused$
+DECLARE v_job public.instagram_collection_jobs%ROWTYPE; v_claimed jsonb; v_refused boolean := false;
+BEGIN
+  PERFORM set_config('request.jwt.claim.role','service_role',true);
+  INSERT INTO public.instagram_collection_jobs(user_id,target_kind,target_id,social_account_id,captured_on,status,due_at)
+  VALUES ('f3110000-0000-4000-8000-000000000001','owner','f3120000-0000-4000-8000-000000000002','f3120000-0000-4000-8000-000000000002',current_date - 1,'queued',now()-interval '1 minute')
+  RETURNING * INTO v_job;
+  -- Blank the context the claim bound, as a stale claim would look.
+  SELECT * INTO v_claimed
+    FROM public.claim_instagram_collection_jobs('owner', 10) AS c
+   WHERE c ->> 'job_id' = v_job.id::text;
+  ASSERT v_claimed IS NOT NULL, 'the job is claimed';
+  UPDATE public.instagram_collection_jobs SET context_viewer_social_account_id=NULL, context_credential_generation=NULL, context_login_kind=NULL WHERE id=v_job.id;
+  BEGIN
+    PERFORM public.complete_instagram_collection_job_capability_unavailable(v_job.id, (v_claimed->>'claim_token')::uuid, (v_claimed->>'job_generation')::bigint);
+  EXCEPTION WHEN OTHERS THEN
+    v_refused := split_part(SQLERRM, ':', 1) = 'IG_COLLECTION_CONTEXT_MISSING';
+  END;
+  ASSERT v_refused, 'a context-less job whose account has a capability row is still refused';
+END $contextless_job_with_capability_is_still_refused$;
+
 ROLLBACK;
 \echo 'ALL CHECKS PASSED'
