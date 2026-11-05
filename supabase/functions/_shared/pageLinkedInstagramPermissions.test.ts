@@ -1,6 +1,8 @@
 import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
-import type { MetaOAuthReceipt } from "../_shared/metaOAuthAttemptStore.ts";
-import { refreshPageLinkedInstagramPermissions } from "./permissions.ts";
+import type { MetaOAuthReceipt } from "./metaOAuthAttemptStore.ts";
+import {
+  auditPermissionOutcome, refreshCompanionInstagramPermissions, refreshPageLinkedInstagramPermissions,
+} from "./pageLinkedInstagramPermissions.ts";
 
 const START = "2026-11-02T10:00:00.000Z";
 const receipt: MetaOAuthReceipt = {
@@ -8,6 +10,13 @@ const receipt: MetaOAuthReceipt = {
   platform: "instagram", platformUserId: "ig", instagramUserId: "ig", facebookPageId: "page", facebookUserId: "fb",
   socialAccountId: "account", companionSocialAccountId: null, username: "synthetic", operation: "reconnected", loginKind: "page_linked",
   credentialId: "credential", credentialRevision: 3, connectionVersion: 2, capabilityGeneration: 7, committedAt: "2026-11-02T09:59:59Z",
+};
+
+// A Facebook Page commit that created or adopted the Instagram "account" as
+// its companion. The receipt's connection version is the Page's own.
+const pageReceipt: MetaOAuthReceipt = {
+  ...receipt, selectionKey: "facebook_page:page", flow: "facebook_page", platform: "facebook", platformUserId: "page",
+  instagramUserId: null, socialAccountId: "page-account", companionSocialAccountId: "account", loginKind: null, connectionVersion: 41,
 };
 
 function fixture(options: {
@@ -44,7 +53,12 @@ function fixture(options: {
     requests.push(url);
     return options.response?.(url, requests.length - 1) ?? Response.json({ data: [{ permission: "instagram_manage_insights", status: "granted" }] });
   };
-  return { writes, requests, run: () => refreshPageLinkedInstagramPermissions({ userId: "owner", receipt, rpc, fetcher, now: () => new Date(START) }) };
+  return {
+    writes, requests,
+    run: () => refreshPageLinkedInstagramPermissions({ userId: "owner", receipt, rpc, fetcher, now: () => new Date(START) }),
+    runCompanion: (page: MetaOAuthReceipt = pageReceipt) =>
+      refreshCompanionInstagramPermissions({ userId: "owner", receipt: page, rpc, fetcher, now: () => new Date(START) }),
+  };
 }
 
 Deno.test("a protected reconnect reads actual grants and persists the captured generation and read-start evidence", async () => {
@@ -127,4 +141,47 @@ Deno.test("duplicate and over-budget permission pages never publish a partial gr
     assertEquals(test.requests.length, duplicate ? 2 : 4);
     assertEquals(test.writes[0].granted_scopes, undefined);
   }
+});
+
+// Production 2026-11-05: reconnecting the Facebook Page @Xsellpoint adopted
+// the linked Instagram xsellpoint_kw, cleared its permissions and advanced its
+// generation, and no permission read followed. Every collection job for the
+// account was then refused by the capability fence.
+Deno.test("a Facebook Page commit reads the companion Instagram grants under the companion's generation", async () => {
+  const test = fixture();
+  assertEquals(await test.runCompanion(), { status: "ok", insights_granted: true });
+  assertEquals(test.writes, [{ login_kind: "page_linked", expected_credential_generation: 7,
+    permission_read_state: "ok", granted_scopes: ["instagram_manage_insights"], scopes_read_at: START }]);
+});
+
+Deno.test("a companion whose credential or generation moved after the Page commit is never written", async () => {
+  for (const credential of [{ found: false }, { revision: 4 }, { capability_generation: 8 }, { credential_id: "other" }, { platform: "facebook" }]) {
+    const test = fixture({ credential });
+    assertEquals(await test.runCompanion(), { status: "stale" });
+    assertEquals(test.requests, []);
+    assertEquals(test.writes, []);
+  }
+});
+
+Deno.test("a receipt that names no companion Instagram reads nothing", async () => {
+  const receipts: MetaOAuthReceipt[] = [
+    { ...pageReceipt, companionSocialAccountId: null },
+    { ...pageReceipt, capabilityGeneration: null },
+    receipt,
+  ];
+  for (const page of receipts) {
+    const test = fixture();
+    assertEquals(await test.runCompanion(page), { status: "unconfirmed" });
+    assertEquals(test.requests, []);
+    assertEquals(test.writes, []);
+  }
+});
+
+Deno.test("an outcome that cannot be audited is reported as unconfirmed", async () => {
+  const outcome = { status: "ok", insights_granted: true } as const;
+  const audit = (insert: () => Promise<{ error: unknown }>) =>
+    auditPermissionOutcome({ insert, source: "facebook-oauth", userId: "owner", socialAccountId: "account", outcome });
+  assertEquals(await audit(() => Promise.resolve({ error: null })), outcome);
+  assertEquals(await audit(() => Promise.resolve({ error: { message: "private-sql-error" } })), { status: "unconfirmed" });
+  assertEquals(await audit(() => Promise.reject(new Error("private-network-error"))), { status: "unconfirmed" });
 });
