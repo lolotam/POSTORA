@@ -224,7 +224,7 @@ DECLARE
   v_has_more    boolean := false;
   v_cursor      uuid := NULL;
   v_last_scanned uuid := NULL;
-  v_candidates  jsonb := '[]'::jsonb;
+  v_window       jsonb := '[]'::jsonb;
   v_candidate   record;
   v_allowed     jsonb;
   v_job_id      uuid;
@@ -363,23 +363,24 @@ BEGIN
   END IF;
 
   -- -------------------------------------------------------------------------
-  -- The candidates.
+  -- The window.
   --
   -- The continuation is the persisted keyset AND the anti-join. The scan
   -- reads at most one page of ids strictly after the cursor, in id order.
   -- The anti-join skips a target that already has a job for this capture
   -- day, so a start that reset the cursor does not insert a second job.
   --
-  -- The evaluator is applied in the loop below, not in this WHERE clause.
+  -- The WINDOW is read FIRST and it carries NO enrolment predicate. The
+  -- window is the bounded read: the first v_page_limit ids after the
+  -- cursor. The enrolment decides what happens to a row INSIDE the window,
+  -- never which rows the window is. An account without a capability row
+  -- consumes its slot in this page and the cursor moves past it, so the
+  -- read stays bounded and the account is counted once and never again.
+  --
+  -- The evaluator is applied in the loop below, not in the WHERE clause.
   -- A refused row still consumes a slot in this page and still advances
   -- the cursor. Filtering it out here would keep scanning until the page
   -- filled with admitted rows, which is unbounded when every row is refused.
-  --
-  -- The capability filter is ALSO in this WHERE clause, and for a different
-  -- reason: an account without a capability row is SKIPPED, not refused. It
-  -- never becomes a candidate at all, so it must not consume a slot in the
-  -- page and must not advance the cursor. The count of the skipped accounts
-  -- is reported in the receipt as 'skipped_reconnect_required'.
   --
   -- The two kinds are two SEPARATE bounded reads rather than one union: a
   -- union would apply its LIMIT to the combined result and the scan would
@@ -387,66 +388,48 @@ BEGIN
   -- ORDER BY id LIMIT`.
   -- -------------------------------------------------------------------------
   IF v_kind = 'owner' THEN
+    -- The WINDOW of this page: the first v_page_limit active Instagram
+    -- account ids strictly after the cursor, in id order, with the allowlist
+    -- and the anti-join applied. One bounded read.
+    --
+    -- The enrolment is decided INSIDE the window: a row whose account has a
+    -- capability row is a candidate, a row without one is SKIPPED. It
+    -- consumes its slot, the cursor moves past it, and it is counted in the
+    -- receipt as 'skipped_reconnect_required'.
+    WITH page_window AS (
+      SELECT sa.id, sa.user_id
+        FROM public.social_accounts AS sa
+       WHERE sa.platform = 'instagram'
+         AND sa.is_active
+         AND (NOT v_restrict OR sa.id = ANY(v_allowed_ids))
+         AND (v_cursor IS NULL OR sa.id > v_cursor)
+         AND NOT EXISTS (
+               SELECT 1
+                 FROM public.instagram_collection_jobs AS j
+                WHERE j.user_id = sa.user_id
+                  AND j.target_kind = 'owner'
+                  AND j.target_id = sa.id
+                  AND j.captured_on = v_captured_on)
+       ORDER BY sa.id
+       LIMIT v_page_limit
+    ),
+    page_rows AS (
+      SELECT w.id, w.user_id,
+             EXISTS (SELECT 1
+                       FROM public.instagram_account_capabilities AS cap
+                      WHERE cap.social_account_id = w.id) AS has_capability
+        FROM page_window AS w
+    )
     SELECT COALESCE(jsonb_agg(jsonb_build_object(
-               'user_id', c.user_id,
-               'target_id', c.target_id,
-               'social_account_id', c.social_account_id,
-               'watchlist_id', c.watchlist_id
-             ) ORDER BY c.target_id), '[]'::jsonb)
-      INTO v_candidates
-      FROM (
-        SELECT sa.user_id,
-               sa.id AS target_id,
-               sa.id AS social_account_id,
-               NULL::uuid AS watchlist_id
-          FROM public.social_accounts AS sa
-         WHERE sa.platform = 'instagram'
-           AND sa.is_active
-           AND EXISTS (
-                 SELECT 1
-                   FROM public.instagram_account_capabilities AS c
-                  WHERE c.social_account_id = sa.id)
-           AND (NOT v_restrict OR sa.id = ANY(v_allowed_ids))
-           AND (v_cursor IS NULL OR sa.id > v_cursor)
-           AND NOT EXISTS (
-                 SELECT 1
-                   FROM public.instagram_collection_jobs AS j
-                  WHERE j.user_id = sa.user_id
-                    AND j.target_kind = 'owner'
-                    AND j.target_id = sa.id
-                    AND j.captured_on = v_captured_on)
-         ORDER BY sa.id
-         LIMIT v_page_limit
-      ) AS c;
-
-    -- The enrolment gap of THIS page window: the active Instagram accounts
-    -- after the cursor that have NO capability row. It is one bounded read
-    -- with the same predicates and the same LIMIT as the candidate scan,
-    -- with NOT EXISTS in place of EXISTS, so the receipt shows the gap
-    -- without a second unbounded scan.
-    SELECT count(*)::integer
-      INTO v_skipped
-      FROM (
-        SELECT sa.id
-          FROM public.social_accounts AS sa
-         WHERE sa.platform = 'instagram'
-           AND sa.is_active
-           AND (NOT v_restrict OR sa.id = ANY(v_allowed_ids))
-           AND (v_cursor IS NULL OR sa.id > v_cursor)
-           AND NOT EXISTS (
-                 SELECT 1
-                   FROM public.instagram_account_capabilities AS c
-                  WHERE c.social_account_id = sa.id)
-           AND NOT EXISTS (
-                 SELECT 1
-                   FROM public.instagram_collection_jobs AS j
-                  WHERE j.user_id = sa.user_id
-                    AND j.target_kind = 'owner'
-                    AND j.target_id = sa.id
-                    AND j.captured_on = v_captured_on)
-         ORDER BY sa.id
-         LIMIT v_page_limit
-      ) AS skipped;
+               'user_id', r.user_id,
+               'target_id', r.id,
+               'social_account_id', r.id,
+               'watchlist_id', NULL::uuid,
+               'has_capability', r.has_capability
+             ) ORDER BY r.id), '[]'::jsonb),
+           count(*) FILTER (WHERE NOT r.has_capability)
+      INTO v_window, v_skipped
+      FROM page_rows AS r;
   ELSE
     SELECT COALESCE(jsonb_agg(jsonb_build_object(
                'user_id', c.user_id,
@@ -454,7 +437,7 @@ BEGIN
                'social_account_id', c.social_account_id,
                'watchlist_id', c.watchlist_id
              ) ORDER BY c.target_id), '[]'::jsonb)
-      INTO v_candidates
+      INTO v_window
       FROM (
         SELECT w.user_id,
                w.id AS target_id,
@@ -484,13 +467,21 @@ BEGIN
     SELECT (e.value ->> 'user_id')::uuid AS user_id,
            (e.value ->> 'target_id')::uuid AS target_id,
            (e.value ->> 'social_account_id')::uuid AS social_account_id,
-           (e.value ->> 'watchlist_id')::uuid AS watchlist_id
-      FROM jsonb_array_elements(v_candidates) AS e(value)
+           (e.value ->> 'watchlist_id')::uuid AS watchlist_id,
+           COALESCE((e.value ->> 'has_capability')::boolean, true) AS has_capability
+      FROM jsonb_array_elements(v_window) AS e(value)
   LOOP
     v_scanned := v_scanned + 1;
     -- Every scanned id advances the cursor, including a refusal and an
     -- insert that conflicted. The cursor is how the next page moves on.
     v_last_scanned := v_candidate.target_id;
+
+    -- A row whose account has NO capability row is SKIPPED, not refused: it
+    -- consumes its slot in this page and the cursor moves past it, so the
+    -- window stays bounded and the account is never counted twice.
+    IF NOT v_candidate.has_capability THEN
+      CONTINUE;
+    END IF;
 
     -- The canonical admission check, AT INSERT TIME.
     --

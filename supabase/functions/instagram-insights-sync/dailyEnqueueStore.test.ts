@@ -40,6 +40,7 @@ function acceptedReceipt(overrides: Record<string, unknown> = {}): Record<string
     has_more: true,
     page_limit: OWNER_DAILY_PAGE_LIMIT,
     scanned: 25,
+    skipped_reconnect_required: 0,
     started: true,
     resumed: false,
     ...overrides,
@@ -135,6 +136,7 @@ Deno.test("the accepted receipt is parsed into its typed projection", async () =
   assertEquals(outcome.receipt.hasMore, true);
   assertEquals(outcome.receipt.pageLimit, OWNER_DAILY_PAGE_LIMIT);
   assertEquals(outcome.receipt.scanned, 25);
+  assertEquals(outcome.receipt.skippedReconnectRequired, 0);
   assertEquals(outcome.receipt.started, true);
   assertEquals(outcome.receipt.resumed, false);
 });
@@ -168,6 +170,9 @@ Deno.test("a receipt outside the SQL's own domain is refused", async () => {
     acceptedReceipt({ has_more: "yes" }),
     acceptedReceipt({ page_limit: 50 }),
     acceptedReceipt({ scanned: 26 }),
+    acceptedReceipt({ skipped_reconnect_required: -1 }),
+    acceptedReceipt({ skipped_reconnect_required: 1.5 }),
+    acceptedReceipt({ skipped_reconnect_required: 26 }),
     acceptedReceipt({ started: 1 }),
     acceptedReceipt({ started: true, resumed: true }),
     acceptedReceipt({ sweep_status: "completed", has_more: true }),

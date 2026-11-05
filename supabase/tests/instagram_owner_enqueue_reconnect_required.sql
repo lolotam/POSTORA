@@ -147,5 +147,94 @@ BEGIN
   ASSERT v_refused, 'a context-less job whose account has a capability row is still refused';
 END $contextless_job_with_capability_is_still_refused$;
 
+-- ===========================================================================
+-- The window of a page (migration
+-- 20261105200000_instagram_context_missing_settlement.sql, fix round 1).
+--
+-- The page reads a WINDOW: the first twenty five account ids after the
+-- cursor. The enrolment decides what happens INSIDE the window, never which
+-- rows the window is, so an unenrolled account consumes its slot and is
+-- counted once. The page must never scan past an unenrolled account looking
+-- for enrolled ones: that is an unbounded read.
+--
+-- The thirty accounts below make two pages, and every third one has NO
+-- capability row: ten unenrolled and twenty enrolled. The first window
+-- holds accounts one to twenty five (eight unenrolled, seventeen enrolled)
+-- and the second holds the remaining five (two unenrolled, three enrolled).
+-- ===========================================================================
+
+INSERT INTO public.social_accounts(id,user_id,platform,platform_user_id,platform_username,access_token,ig_auth_type,is_active)
+SELECT ('b0f30000-0000-4000-8000-' || lpad(n::text, 12, '0'))::uuid,
+       'f3110000-0000-4000-8000-000000000001', 'instagram',
+       'ig-window-' || n, 'igwindow_' || n, 'synthetic-window-token-' || n,
+       'facebook_page', true
+  FROM generate_series(1, 30) AS n;
+
+-- Every third account is ENROLLED; the other two of three are not.
+INSERT INTO public.instagram_account_capabilities(social_account_id,user_id,platform,login_kind,permission_read_state,granted_scopes,scopes_read_at,credential_generation)
+SELECT ('b0f30000-0000-4000-8000-' || lpad(n::text, 12, '0'))::uuid,
+       'f3110000-0000-4000-8000-000000000001', 'instagram', 'page_linked', 'ok',
+       ARRAY['instagram_manage_insights'], now(), 1
+  FROM generate_series(1, 30) AS n
+ WHERE n % 3 <> 0;
+
+-- The page sees exactly these thirty accounts.
+INSERT INTO public.app_settings(key,value,description) VALUES
+('collection_instagram_rollout_policy', jsonb_build_object(
+   'version', 1,
+   'owners', jsonb_build_object(
+     'mode', 'allowlist',
+     'account_ids', (SELECT jsonb_agg(('b0f30000-0000-4000-8000-' || lpad(n::text, 12, '0'))::uuid::text ORDER BY n)
+                        FROM generate_series(1, 30) AS n)),
+   'competitors', jsonb_build_object('mode', 'off', 'targets', '[]'::jsonb)),
+ 'Synthetic page-window fixture')
+ON CONFLICT(key) DO UPDATE SET value=EXCLUDED.value;
+
+DO $page_window_is_bounded$
+DECLARE
+  v_page1 jsonb;
+  v_page2 jsonb;
+BEGIN
+  PERFORM set_config('request.jwt.claim.role','service_role',true);
+
+  -- The first page reads exactly ONE window of twenty five ids.
+  v_page1 := public.enqueue_instagram_collection_daily_page('owner', true);
+  ASSERT (v_page1->>'scanned')::int = 25, 'the first page reads exactly one window: ' || v_page1;
+  ASSERT (v_page1->>'enqueued')::int = 17, 'the enrolled accounts of the window are enqueued: ' || v_page1;
+  ASSERT (v_page1->>'skipped_reconnect_required')::int = 8, 'the unenrolled accounts of the window are counted: ' || v_page1;
+  ASSERT (v_page1->>'has_more')::boolean, 'a full window leaves more ids behind: ' || v_page1;
+
+  -- The second page reads the remainder of the ids.
+  v_page2 := public.enqueue_instagram_collection_daily_page('owner', false);
+  ASSERT (v_page2->>'scanned')::int = 5, 'the second page reads the remainder: ' || v_page2;
+  ASSERT (v_page2->>'enqueued')::int = 3, 'the enrolled accounts of the remainder are enqueued: ' || v_page2;
+  ASSERT (v_page2->>'skipped_reconnect_required')::int = 2, 'the unenrolled accounts of the remainder are counted: ' || v_page2;
+  ASSERT NOT (v_page2->>'has_more')::boolean, 'the last window ends the sweep: ' || v_page2;
+
+  -- Every unenrolled account is counted EXACTLY once across the two pages.
+  ASSERT (v_page1->>'skipped_reconnect_required')::int
+       + (v_page2->>'skipped_reconnect_required')::int = 10,
+    'the ten unenrolled accounts are counted once: ' || v_page1 || ' ' || v_page2;
+
+  -- No job for an unenrolled account.
+  ASSERT NOT EXISTS (
+    SELECT 1
+      FROM public.instagram_collection_jobs AS j
+      JOIN public.social_accounts AS sa ON sa.id = j.social_account_id
+     WHERE j.user_id = 'f3110000-0000-4000-8000-000000000001'
+       AND sa.id::text LIKE 'b0f30000-%'
+       AND NOT EXISTS (SELECT 1 FROM public.instagram_account_capabilities AS c
+                        WHERE c.social_account_id = sa.id)),
+    'an unenrolled account never gets a job';
+
+  -- Exactly one job per enrolled account.
+  ASSERT (SELECT count(*)
+            FROM public.instagram_collection_jobs AS j
+            JOIN public.social_accounts AS sa ON sa.id = j.social_account_id
+           WHERE j.user_id = 'f3110000-0000-4000-8000-000000000001'
+             AND sa.id::text LIKE 'b0f30000-%') = 20,
+    'every enrolled account has exactly one job';
+END $page_window_is_bounded$;
+
 ROLLBACK;
 \echo 'ALL CHECKS PASSED'

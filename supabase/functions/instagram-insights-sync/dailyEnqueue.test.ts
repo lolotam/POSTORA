@@ -41,6 +41,7 @@ function receipt(overrides: Partial<OwnerDailyEnqueueReceipt> = {}): OwnerDailyE
     hasMore: true,
     pageLimit: 25,
     scanned: 25,
+    skippedReconnectRequired: 0,
     started: true,
     resumed: false,
     ...overrides,

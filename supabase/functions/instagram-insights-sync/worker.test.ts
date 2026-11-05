@@ -149,6 +149,7 @@ function createHarness(
               hasMore: options.daily?.hasMore ?? true,
               pageLimit: 25,
               scanned: 3,
+              skippedReconnectRequired: 0,
               started: false,
               resumed: true,
             },
