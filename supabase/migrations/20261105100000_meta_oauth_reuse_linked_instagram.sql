@@ -19,9 +19,11 @@
 --     run unchanged: the token, expiry and profile are refreshed and the
 --     account is reactivated; settings, metadata and history are kept;
 --   * its capability generation advances like every other commit;
---   * a binding to an older credential of the same Facebook user is
---     replaced by a binding to this attempt's credential. The delete
---     trigger advances the fence and collects an orphaned credential.
+--   * its binding is always replaced by a binding to this attempt's
+--     credential that records the selected Page, also when the old binding
+--     already uses that credential (it would otherwise keep naming the Page
+--     the account was first verified through). The delete trigger advances
+--     the fence and collects an orphaned older credential.
 -- Adoption is refused with MOA05, as before, when the Instagram row is a
 -- direct-login account, or when it is bound to a different Facebook user
 -- (a subject change stays an explicit rebind). The lookup is scoped to the
@@ -1135,14 +1137,12 @@ BEGIN
       -- Detach only the binding this attempt captured on this companion.
       -- A binding that appeared after capture was already refused. There
       -- is no fallback that deletes whatever binding is live now. An
-      -- adopted Instagram bound to an older credential of the same
-      -- Facebook user moves to this attempt's credential the same way.
+      -- adopted Instagram is always rebound the same way, even on this
+      -- attempt's own credential: its binding records the Page it was
+      -- verified through, and the adopted account now belongs to v_page_id.
       IF v_linked_capture IS NOT NULL
          AND (v_linked_capture ->> 'binding_present')::BOOLEAN IS TRUE
-         AND (v_intent = 'rebind'
-              OR (v_reuse_companion
-                  AND (v_linked_capture ->> 'binding_credential_id')::UUID
-                      IS DISTINCT FROM v_credential)) THEN
+         AND (v_intent = 'rebind' OR v_reuse_companion) THEN
         DELETE FROM public.facebook_user_credential_bindings AS b
          WHERE b.social_account_id = v_companion
            AND b.user_id = p_user_id
@@ -1151,7 +1151,8 @@ BEGIN
       IF v_linked_capture IS NOT NULL
          AND (v_linked_capture ->> 'binding_present')::BOOLEAN IS TRUE
          AND (v_linked_capture ->> 'binding_credential_id')::UUID = v_credential
-         AND v_intent <> 'rebind' THEN
+         AND v_intent <> 'rebind'
+         AND NOT v_reuse_companion THEN
         v_companion_connection := public.facebook_user_credential_commit_connection_version(
           p_user_id, v_companion,
           (v_linked_capture ->> 'binding_connection_version')::BIGINT);
