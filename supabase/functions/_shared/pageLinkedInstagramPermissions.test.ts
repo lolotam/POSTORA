@@ -16,7 +16,7 @@ const receipt: MetaOAuthReceipt = {
 // its companion. The receipt's connection version is the Page's own.
 const pageReceipt: MetaOAuthReceipt = {
   ...receipt, selectionKey: "facebook_page:page", flow: "facebook_page", platform: "facebook", platformUserId: "page",
-  instagramUserId: null, socialAccountId: "page-account", companionSocialAccountId: "account", loginKind: null, connectionVersion: 41,
+  instagramUserId: "ig", socialAccountId: "page-account", companionSocialAccountId: "account", loginKind: "page_linked", connectionVersion: 41,
 };
 
 function fixture(options: {
