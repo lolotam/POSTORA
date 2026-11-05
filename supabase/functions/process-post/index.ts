@@ -6661,6 +6661,18 @@ async function postToThreads(
         childIds.push(childData.id);
       }
 
+      // Meta refuses a carousel whose children are still processing: every child is waited for.
+      const children = await waitForCarouselChildren(
+        "threads",
+        childIds,
+        (id) => `https://graph.threads.net/v1.0/${id}?fields=${CONTAINER_STATUS_FIELDS.threads}&access_token=${accessToken}`,
+        { deadlineMs: timing.deadlineMs, maxAttempts: 15, intervalMs: 2000 },
+      );
+      for (const dropped of children.dropped) {
+        console.error("Threads: Child container failed:", dropped.reason, "| id:", dropped.id);
+      }
+      childIds.splice(0, childIds.length, ...children.finished);
+
       // If no children were created successfully, fail fast with a clear
       // error instead of letting Threads return the generic "Invalid
       // parameter" message.
