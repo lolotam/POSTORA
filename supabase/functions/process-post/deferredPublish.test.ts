@@ -66,7 +66,7 @@ Deno.test("a resumed run is abandoned past its deadline or once the post has cha
   const inTime = new Date(NOW.getTime() + DEFERRAL_GIVE_UP_MS - 1);
   assertEquals(abandonReason(deferral, "processing", inTime), null);
   assertEquals(abandonReason(deferral, "processing", new Date(NOW.getTime() + DEFERRAL_GIVE_UP_MS)), giveUpMessage("ig_reel"));
-  assertEquals(abandonReason(deferral, "failed", inTime), "The post was changed while the video was processing. Safe to retry.");
+  assertEquals(abandonReason(deferral, "failed", inTime), "The post was changed while the media was processing. Safe to retry.");
 });
 
 Deno.test("a resumed run checks once; a first run waits within its budget", () => {
@@ -323,4 +323,10 @@ Deno.test("only a run its caller retries on its own is refused on a worker near 
   assertEquals(refuseOnSpentWorker({ resume: true, scheduled: false }, start, early), false);
   // Every other caller would not retry a refusal: always started, bounded by the deadlines.
   assertEquals(refuseOnSpentWorker({ resume: false, scheduled: false }, start, late), false);
+});
+
+Deno.test("a deferred carousel is read off its row and given up by name", () => {
+  const deferral = newDeferral("ig_carousel", "c-7", NOW);
+  assertEquals(readDeferral({ deferred: deferral }), deferral);
+  assertEquals(giveUpMessage("ig_carousel"), "Instagram did not finish processing the carousel within 30 minutes. Safe to retry.");
 });

@@ -16,7 +16,7 @@ import { z } from "npm:zod@3.23.8";
 import { CHECK_ONCE_DEADLINE } from "../_shared/metaContainerStatus.ts";
 import { type StoryRef, UNRECORDED_STORY_KEY } from "./instagramStory.ts";
 
-export type DeferredKind = "ig_reel" | "ig_business_reel" | "threads";
+export type DeferredKind = "ig_reel" | "ig_business_reel" | "ig_carousel" | "threads";
 
 /** How long a deferred container may keep processing before it is given up. */
 export const DEFERRAL_GIVE_UP_MS = 30 * 60 * 1000;
@@ -26,7 +26,7 @@ export const DEFERRAL_RECHECK_MS = 60 * 1000;
 export const FIRST_RUN_POLL_BUDGET_MS = 35 * 1000;
 
 export const DeferralSchema = z.object({
-  kind: z.enum(["ig_reel", "ig_business_reel", "threads"]),
+  kind: z.enum(["ig_reel", "ig_business_reel", "ig_carousel", "threads"]),
   container_id: z.string().min(1),
   attempts: z.number().int().nonnegative(),
   first_deferred_at: z.string(),
@@ -134,14 +134,15 @@ export function isPastGiveUp(deferral: Deferral, now: Date): boolean {
 }
 
 export function giveUpMessage(kind: DeferredKind): string {
-  const platform = kind === "threads" ? "Threads" : "Instagram";
-  return `${platform} did not finish processing the video within 30 minutes. Safe to retry.`;
+  if (kind === "threads") return "Threads did not finish processing the video within 30 minutes. Safe to retry.";
+  const media = kind === "ig_carousel" ? "carousel" : "video";
+  return `Instagram did not finish processing the ${media} within 30 minutes. Safe to retry.`;
 }
 
 /** Why a resumed run settles its row failed without asking Meta again, or null to go on. */
 export function abandonReason(deferral: Deferral, postStatus: string | null, now: Date): string | null {
   if (isPastGiveUp(deferral, now)) return giveUpMessage(deferral.kind);
-  if (postStatus !== "processing") return "The post was changed while the video was processing. Safe to retry.";
+  if (postStatus !== "processing") return "The post was changed while the media was processing. Safe to retry.";
   return null;
 }
 
