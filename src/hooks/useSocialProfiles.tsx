@@ -186,6 +186,12 @@ export function useDisconnectAccountFromProfile() {
         // Best effort, like the revoke itself: removing the account must not depend on TikTok being reachable.
         if (revokeError) console.warn("TikTok revoke before account removal failed:", revokeError);
       }
+      if (account?.platform === "facebook" || account?.platform === "instagram") {
+        // Withdraw the Facebook user grant when this account is its last member, so reconnecting shows Meta's permission screen.
+        const { error: revokeError } = await supabase.functions.invoke("facebook-oauth", { body: { action: "disconnect", social_account_id: accountId } });
+        // Best effort, like TikTok: removing the account must not depend on Meta being reachable.
+        if (revokeError) console.warn("Meta grant withdrawal before account removal failed:", revokeError);
+      }
 
       const { error } = await supabase
         .from("social_accounts")
