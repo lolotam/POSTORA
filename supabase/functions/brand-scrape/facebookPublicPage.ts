@@ -130,12 +130,8 @@ function providerDetail(reply: GraphReply, redactions: string[]): string {
   return redacted.slice(0, MAX_DETAIL_LENGTH);
 }
 
-/**
- * `tier` is the configured page size Graph accepted, before the request was clamped to the posts still wanted.
- * `received` counts every item Graph returned, including those `data` dropped as unmappable, so a page of
- * only malformed items is not mistaken for the end of the feed.
- */
-type PostPage = { data: GraphPost[]; received: number; paging: GraphPaging | undefined; tier: number };
+/** `tier` is the configured page size Graph accepted, before the request was clamped to the posts still wanted. */
+type PostPage = { data: GraphPost[]; paging: GraphPaging | undefined; tier: number };
 
 /**
  * Tries each candidate tier, largest first, and reports the one Graph
@@ -169,8 +165,7 @@ async function fetchPostPage(
       if (!Array.isArray(reply.payload!.data)) {
         throw new FacebookPublicPageError("Facebook returned an invalid response for this Page.", "posts page has no data array");
       }
-      const items = reply.payload!.data;
-      return { data: items.filter(isGraphNode) as GraphPost[], received: items.length, paging: reply.payload!.paging, tier };
+      return { data: reply.payload!.data.filter(isGraphNode) as GraphPost[], paging: reply.payload!.paging, tier };
     }
     if (!isTooMuchData(reply)) {
       throw new FacebookPublicPageError("Facebook posts could not be loaded for this Page.", providerDetail(reply, session.redactions));
@@ -190,6 +185,9 @@ function tiersFrom(largestAccepted: number): number[] {
 
 /**
  * Pages follow Graph's own `after` cursor, never a provider-supplied URL.
+ * Graph may answer a page with no usable posts and still a next cursor, so
+ * only a missing cursor ends the feed; a cursor that does not advance and the
+ * shared Graph budget bound the reading.
  * Once some posts are read, a later page that times out ends the reading:
  * the analysis keeps the posts it has instead of failing as a whole, and
  * `stoppedBy` carries the timeout detail so the caller can log why.
@@ -217,7 +215,7 @@ async function fetchPosts(
     posts.push(...data);
     const previousAfter = after;
     after = page.paging?.cursors?.after;
-    if (page.received === 0 || !page.paging?.next || !after) break;
+    if (!page.paging?.next || !after) break;
     if (after === previousAfter) {
       throw new FacebookPublicPageError("Facebook returned an invalid response for this Page.",
         "posts pagination cursor did not advance");

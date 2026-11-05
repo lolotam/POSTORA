@@ -98,16 +98,18 @@ Deno.test("Graph items without an id are skipped instead of failing the analysis
   assertEquals(report.posts.map((item) => item.id), ["777_1", "reel_1"]);
 });
 
-// PR #373 review: the end of the feed was decided on the mapped posts, so a
-// page of only unmappable items stopped the reading before the valid pages.
-Deno.test("a page of only unmappable items with a next cursor does not end the reading", async () => {
-  const { fetchFn } = graph({
-    posts: (url) => url.searchParams.has("after")
-      ? json({ data: posts(0, 3) })
-      : json({ data: [null, { message: "no id" }], paging: { cursors: { after: "page_2" }, next: "https://graph.facebook.com/next" } }),
-  });
-  const report = await scrapeFacebookPublicPage({ ...APP, pageIdentifier: "synthetic", maxPosts: 10, fetchFn });
-  assertEquals(report.posts.length, 3);
+// PR #373 and #377 reviews: an empty page ended the reading, so a page of only
+// unmappable items, or none, with a next cursor hid the valid pages after it.
+Deno.test("a page without usable posts but with a next cursor does not end the reading", async () => {
+  for (const firstPage of [[], [null, { message: "no id" }]]) {
+    const { fetchFn } = graph({
+      posts: (url) => url.searchParams.has("after")
+        ? json({ data: posts(0, 3) })
+        : json({ data: firstPage, paging: { cursors: { after: "page_2" }, next: "https://graph.facebook.com/next" } }),
+    });
+    const report = await scrapeFacebookPublicPage({ ...APP, pageIdentifier: "synthetic", maxPosts: 10, fetchFn });
+    assertEquals(report.posts.length, 3, JSON.stringify(firstPage));
+  }
 });
 
 Deno.test("a reels reply that is not a JSON object leaves the posts analysis intact", async () => {
