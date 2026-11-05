@@ -217,7 +217,7 @@ Deno.test("an explicitly credentialless capability cannot hide a usable protecte
 Deno.test("registered discovery handler retains source and null cells through cache and history, then refuses denied scopes", async () => {
   const originalFetch = globalThis.fetch;
   const originalServe = Deno.serve;
-  const environment = ["SUPABASE_URL", "SUPABASE_SERVICE_ROLE_KEY", "APIFY_API_TOKEN"].map((name) => [name, Deno.env.get(name)] as const);
+  const environment = ["SUPABASE_URL", "SUPABASE_SERVICE_ROLE_KEY", "APIFY_API_TOKEN", "FACEBOOK_APP_ID", "FACEBOOK_APP_SECRET"].map((name) => [name, Deno.env.get(name)] as const);
   let handler: (request: Request) => Promise<Response>;
   let cache: Record<string, unknown> | null = null;
   const history: Record<string, unknown>[] = [];
@@ -228,14 +228,24 @@ Deno.test("registered discovery handler retains source and null cells through ca
   let apifySetting: unknown = false;
   let maxPostsSetting = 1;
   let providerFailure: "malformed" | "rate" | null = null;
+  let facebookSecondPageTimesOut = true;
   try {
     Deno.env.set("SUPABASE_URL", "http://127.0.0.1:61999");
     Deno.env.set("SUPABASE_SERVICE_ROLE_KEY", "synthetic-discovery-service-key");
     Deno.env.set("APIFY_API_TOKEN", "synthetic-apify-token");
+    Deno.env.set("FACEBOOK_APP_ID", "synthetic-fb-app");
+    Deno.env.set("FACEBOOK_APP_SECRET", "synthetic-fb-secret");
     Deno.serve = ((registered: typeof handler) => { handler = registered; return {}; }) as typeof Deno.serve;
     globalThis.fetch = (async (input, init) => {
       const request = new Request(input, init);
       const url = new URL(request.url);
+      if (url.hostname === "graph.facebook.com" && url.searchParams.get("access_token") === "synthetic-fb-app|synthetic-fb-secret") {
+        if (url.pathname.endsWith("/video_reels")) return json({ data: [] });
+        if (!url.pathname.endsWith("/posts")) return json({ id: "777", name: "Synthetic Page", username: "fbtarget" });
+        if (url.searchParams.has("after")) throw new DOMException("Signal timed out.", "TimeoutError");
+        return json({ data: [{ id: "777_1", message: "post" }],
+          ...(facebookSecondPageTimesOut ? { paging: { cursors: { after: "page_2" }, next: "https://graph.facebook.com/next" } } : {}) });
+      }
       if (url.hostname === "graph.facebook.com") {
         providerCalls++;
         assertEquals(url.searchParams.get("access_token"), "synthetic-user-token");
@@ -337,6 +347,17 @@ Deno.test("registered discovery handler retains source and null cells through ca
       assertEquals(response.status, 200);
       assertEquals((await response.json()).posts.length, expectedPosts);
     }
+    // PR #373 review: a Facebook read that stopped early was cached under the
+    // Page's shared key and served to every caller until it expired.
+    cache = null;
+    const partial = await handler!(request("facebook", "fbtarget"));
+    assertEquals(partial.status, 200);
+    assertEquals((await partial.json()).totalPosts, 1);
+    assertEquals(cache, null);
+    facebookSecondPageTimesOut = false;
+    const complete = await handler!(request("facebook", "fbtarget"));
+    assertEquals(complete.status, 200);
+    assertEquals((cache as Record<string, unknown> | null)?.cache_key, "facebook:fbtarget");
     const resolverCases: [unknown, number][] = [
       [1, 1], [50, 50], [100, 100], [101, 100], [150, 100], [-3, 1], [-0.5, 1],
       [1.5, 1], [99.9, 99], [100.5, 100], [0.5, 1], [0, 50],

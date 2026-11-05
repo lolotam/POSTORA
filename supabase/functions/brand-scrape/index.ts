@@ -320,6 +320,7 @@ Deno.serve(async (req) => {
     let result: any;
     let strategyUsed = "unknown";
     let apiEndpoint = "";
+    let readingStoppedBy: string | null = null;
 
     // ─── Platform Routing ───
 
@@ -390,11 +391,12 @@ Deno.serve(async (req) => {
       }
       const facebook = await scrapeFacebookPublicPage({ pageIdentifier: cleanUsername, appId: fbAppId, appSecret: fbAppSecret, maxPosts });
       result = { profile: facebook.profile, posts: facebook.posts };
+      readingStoppedBy = facebook.readingStoppedBy;
       strategyUsed = "official";
       apiEndpoint = "graph.facebook.com";
       await logger.info(`Facebook scrape succeeded for ${cleanUsername}`, {
         platform, username: cleanUsername, strategy: "official", posts_count: result.posts.length,
-        reading_stopped_by: facebook.readingStoppedBy ?? undefined,
+        reading_stopped_by: readingStoppedBy ?? undefined,
       }, userId);
 
     } else if (platform === "tiktok") {
@@ -423,30 +425,34 @@ Deno.serve(async (req) => {
       b.engagementScore === null ? -1 : b.engagementScore - a.engagementScore || a.id.localeCompare(b.id));
     result.posts = result.posts.slice(0, maxPosts);
 
-    // Cache
-    const { data: ttlSetting } = await supabaseAdmin
-      .from("app_settings")
-      .select("value")
-      .eq("key", "brand_scrape_cache_ttl_minutes")
-      .single();
-
+    // Cache. A Facebook read that stopped early is a partial snapshot; the cache
+    // key is shared by every caller of the Page, so it is not cached and the
+    // next request reads Graph again.
     let ttlMinutes = 60;
-    try {
-      if (ttlSetting?.value) {
-        const parsed = typeof ttlSetting.value === "string" ? JSON.parse(ttlSetting.value) : ttlSetting.value;
-        ttlMinutes = Number(parsed) || 60;
-      }
-    } catch { /* optional enrichment; scraping continues without it */ }
+    if (readingStoppedBy === null) {
+      const { data: ttlSetting } = await supabaseAdmin
+        .from("app_settings")
+        .select("value")
+        .eq("key", "brand_scrape_cache_ttl_minutes")
+        .single();
 
-    const { error: cacheWriteError } = await supabaseAdmin.from("brand_scrape_cache").upsert({
-      cache_key: cacheKey,
-      platform,
-      username: cleanUsername,
-      response_data: result,
-      expires_at: new Date(Date.now() + ttlMinutes * 60 * 1000).toISOString(),
-    }, { onConflict: "cache_key" });
+      try {
+        if (ttlSetting?.value) {
+          const parsed = typeof ttlSetting.value === "string" ? JSON.parse(ttlSetting.value) : ttlSetting.value;
+          ttlMinutes = Number(parsed) || 60;
+        }
+      } catch { /* optional enrichment; scraping continues without it */ }
 
-    if (platform === "instagram" && cacheWriteError) throw new InstagramDiscoveryError("DISCOVERY_UNAVAILABLE", "Instagram discovery could not be saved.", 503);
+      const { error: cacheWriteError } = await supabaseAdmin.from("brand_scrape_cache").upsert({
+        cache_key: cacheKey,
+        platform,
+        username: cleanUsername,
+        response_data: result,
+        expires_at: new Date(Date.now() + ttlMinutes * 60 * 1000).toISOString(),
+      }, { onConflict: "cache_key" });
+
+      if (platform === "instagram" && cacheWriteError) throw new InstagramDiscoveryError("DISCOVERY_UNAVAILABLE", "Instagram discovery could not be saved.", 503);
+    }
 
     // Log session with actual strategy used
     const { error: historyWriteError } = await supabaseAdmin.from("brand_scrape_sessions").insert({
@@ -468,7 +474,7 @@ Deno.serve(async (req) => {
       platform,
       username: cleanUsername,
       posts_count: result.posts.length,
-      cache_ttl_minutes: ttlMinutes,
+      cache_ttl_minutes: readingStoppedBy === null ? ttlMinutes : undefined,
     }, userId);
 
     return new Response(JSON.stringify({

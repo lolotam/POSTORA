@@ -98,6 +98,18 @@ Deno.test("Graph items without an id are skipped instead of failing the analysis
   assertEquals(report.posts.map((item) => item.id), ["777_1", "reel_1"]);
 });
 
+// PR #373 review: the end of the feed was decided on the mapped posts, so a
+// page of only unmappable items stopped the reading before the valid pages.
+Deno.test("a page of only unmappable items with a next cursor does not end the reading", async () => {
+  const { fetchFn } = graph({
+    posts: (url) => url.searchParams.has("after")
+      ? json({ data: posts(0, 3) })
+      : json({ data: [null, { message: "no id" }], paging: { cursors: { after: "page_2" }, next: "https://graph.facebook.com/next" } }),
+  });
+  const report = await scrapeFacebookPublicPage({ ...APP, pageIdentifier: "synthetic", maxPosts: 10, fetchFn });
+  assertEquals(report.posts.length, 3);
+});
+
 Deno.test("a reels reply that is not a JSON object leaves the posts analysis intact", async () => {
   const { fetchFn } = graph({ posts: () => json({ data: posts(0, 3) }), reels: () => json(1) });
   const report = await scrapeFacebookPublicPage({ ...APP, pageIdentifier: "synthetic", maxPosts: 10, fetchFn });
@@ -124,6 +136,9 @@ Deno.test("provider failures reach the caller as a short message with the provid
     { name: "posts time out at every size", routes: { posts: timedOut },
       message: "Facebook could not be reached. Try again later.", detail: "posts limit=5" },
     { name: "still too large", routes: { posts: () => json(TOO_MUCH_DATA, 500) },
+      message: "Facebook returned too much data for this Page. Try again later.", detail: "limit 5" },
+    // PR #373 review: an earlier timeout was rethrown over the smaller sizes' refusals.
+    { name: "a timeout then smaller sizes refused as too large", routes: { posts: (url) => url.searchParams.get("limit") === "25" ? timedOut() : json(TOO_MUCH_DATA, 500) },
       message: "Facebook returned too much data for this Page. Try again later.", detail: "limit 5" },
     { name: "provider echoes the token", routes: { posts: (url) => json({ error: { code: 190, message: `bad token ${url.searchParams.get("access_token")}` } }, 400) },
       message: "Facebook posts could not be loaded for this Page.", detail: "[redacted]" },

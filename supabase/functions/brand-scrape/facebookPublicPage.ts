@@ -130,14 +130,19 @@ function providerDetail(reply: GraphReply, redactions: string[]): string {
   return redacted.slice(0, MAX_DETAIL_LENGTH);
 }
 
-/** `tier` is the configured page size Graph accepted, before the request was clamped to the posts still wanted. */
-type PostPage = { data: GraphPost[]; paging: GraphPaging | undefined; tier: number };
+/**
+ * `tier` is the configured page size Graph accepted, before the request was clamped to the posts still wanted.
+ * `received` counts every item Graph returned, including those `data` dropped as unmappable, so a page of
+ * only malformed items is not mistaken for the end of the feed.
+ */
+type PostPage = { data: GraphPost[]; received: number; paging: GraphPaging | undefined; tier: number };
 
 /**
  * Tries each candidate tier, largest first, and reports the one Graph
  * accepted. Each request asks for the tier or the posts still wanted,
- * whichever is fewer. A tier that timed out gives way to the next; the last
- * timeout is rethrown when no tier is left.
+ * whichever is fewer. A tier that timed out gives way to the next. When no
+ * tier is left, a timeout is rethrown only if the last tier tried timed out:
+ * a smaller tier Graph refused as too much data is the definitive answer.
  */
 async function fetchPostPage(
   session: GraphSession,
@@ -164,11 +169,13 @@ async function fetchPostPage(
       if (!Array.isArray(reply.payload!.data)) {
         throw new FacebookPublicPageError("Facebook returned an invalid response for this Page.", "posts page has no data array");
       }
-      return { data: reply.payload!.data.filter(isGraphNode) as GraphPost[], paging: reply.payload!.paging, tier };
+      const items = reply.payload!.data;
+      return { data: items.filter(isGraphNode) as GraphPost[], received: items.length, paging: reply.payload!.paging, tier };
     }
     if (!isTooMuchData(reply)) {
       throw new FacebookPublicPageError("Facebook posts could not be loaded for this Page.", providerDetail(reply, session.redactions));
     }
+    timeout = null;
   }
   if (timeout) throw timeout;
   throw new FacebookPublicPageError("Facebook returned too much data for this Page. Try again later.",
@@ -210,7 +217,7 @@ async function fetchPosts(
     posts.push(...data);
     const previousAfter = after;
     after = page.paging?.cursors?.after;
-    if (data.length === 0 || !page.paging?.next || !after) break;
+    if (page.received === 0 || !page.paging?.next || !after) break;
     if (after === previousAfter) {
       throw new FacebookPublicPageError("Facebook returned an invalid response for this Page.",
         "posts pagination cursor did not advance");
