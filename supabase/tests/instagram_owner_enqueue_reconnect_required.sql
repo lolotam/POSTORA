@@ -97,7 +97,7 @@ BEGIN
   PERFORM set_config('request.jwt.claim.role','service_role',true);
   v_result := public.enqueue_instagram_collection_daily_page('owner', true);
   ASSERT (v_result->>'accepted')::boolean, 'the daily page is accepted: ' || v_result;
-  ASSERT (v_result->>'skipped_reconnect_required')::int = 1, 'one account without a capability row is reported skipped: ' || v_result;
+  ASSERT v_result ? 'skipped_reconnect_required' IS FALSE, 'the receipt carries no skipped key; the gap is audited instead: ' || v_result;
   ASSERT EXISTS(SELECT 1 FROM public.instagram_collection_jobs WHERE target_id='f3120000-0000-4000-8000-000000000002' AND target_kind='owner'),
     'the account with a capability row is enqueued';
   ASSERT NOT EXISTS(SELECT 1 FROM public.instagram_collection_jobs WHERE target_id='f3120000-0000-4000-8000-000000000001'),
