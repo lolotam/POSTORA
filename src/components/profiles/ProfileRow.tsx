@@ -2,12 +2,13 @@ import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Badge } from "@/components/ui/badge";
+import { Badge, badgeVariants } from "@/components/ui/badge";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { PlatformIcon, getPlatformName } from "@/components/PlatformIcon";
 import { Platform } from "@/lib/types";
 import { ExtendedPlatform, PlatformConfig, isPlatformType } from "@/lib/platformConstants";
 import { isTokenExpired, isTokenExpiringSoon, formatTokenExpiry } from "@/lib/tokenUtils";
+import { cn } from "@/lib/utils";
 import { useFeatureFlags } from "@/hooks/useFeatureFlags";
 import { TokenLifetimeInfo, ReconnectionFrequencyBadge } from "./TokenLifetimeInfo";
 import { useToast } from "@/hooks/use-toast";
@@ -693,10 +694,14 @@ export function ProfileRow({
                               {account.platform === 'threads' && (
                                 <Popover>
                                   <PopoverTrigger asChild>
-                                    <Badge variant="outline" className="text-xs gap-1 cursor-pointer">
+                                    <button
+                                      type="button"
+                                      aria-label="Show the permissions Postora holds for this Threads account"
+                                      className={cn(badgeVariants({ variant: "outline" }), "gap-1 cursor-pointer")}
+                                    >
                                       <KeyRound className="w-3 h-3" />
                                       Permissions
-                                    </Badge>
+                                    </button>
                                   </PopoverTrigger>
                                   <PopoverContent className="w-80 text-xs space-y-2">
                                     <p className="font-medium">Permissions Postora holds for this Threads account</p>
