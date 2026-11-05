@@ -146,6 +146,7 @@ SUITES=(
   whatsapp_account_setup_move.sql
   instagram_capabilities.sql
   facebook_user_credential_bindings.sql
+  social_account_disconnect_credentials.sql
   instagram_tracking_schema.sql
   instagram_durable_collection_jobs.sql
   meta_pending_selection_secret_boundary.sql
