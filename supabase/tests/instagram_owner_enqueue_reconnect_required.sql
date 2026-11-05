@@ -102,6 +102,14 @@ BEGIN
     'the account with a capability row is enqueued';
   ASSERT NOT EXISTS(SELECT 1 FROM public.instagram_collection_jobs WHERE target_id='f3120000-0000-4000-8000-000000000001'),
     'the account without a capability row gets no job';
+  -- The gap is AUDITED, not returned: the receipt is a closed projection and
+  -- it does not change.
+  ASSERT EXISTS(
+    SELECT 1 FROM public.system_logs
+     WHERE source = 'instagram-collection-rollout'
+       AND metadata ->> 'event' = 'collection_daily_enqueue_skipped_reconnect_required'
+       AND (metadata -> 'details' ->> 'skipped')::int = 1),
+    'the skipped account is audited';
 END $daily_page_skips_unenrolled$;
 
 DO $contextless_owner_job_is_settled$
@@ -170,7 +178,7 @@ SELECT ('b0f30000-0000-4000-8000-' || lpad(n::text, 12, '0'))::uuid,
        'facebook_page', true
   FROM generate_series(1, 30) AS n;
 
--- Every third account is ENROLLED; the other two of three are not.
+-- Two of every three accounts are ENROLLED; every third one is not.
 INSERT INTO public.instagram_account_capabilities(social_account_id,user_id,platform,login_kind,permission_read_state,granted_scopes,scopes_read_at,credential_generation)
 SELECT ('b0f30000-0000-4000-8000-' || lpad(n::text, 12, '0'))::uuid,
        'f3110000-0000-4000-8000-000000000001', 'instagram', 'page_linked', 'ok',
@@ -197,24 +205,51 @@ DECLARE
 BEGIN
   PERFORM set_config('request.jwt.claim.role','service_role',true);
 
+  -- The earlier page audited its own gap. This block counts ITS OWN rows.
+  DELETE FROM public.system_logs
+   WHERE source = 'instagram-collection-rollout'
+     AND metadata ->> 'event' = 'collection_daily_enqueue_skipped_reconnect_required';
+
   -- The first page reads exactly ONE window of twenty five ids.
   v_page1 := public.enqueue_instagram_collection_daily_page('owner', true);
   ASSERT (v_page1->>'scanned')::int = 25, 'the first page reads exactly one window: ' || v_page1;
   ASSERT (v_page1->>'enqueued')::int = 17, 'the enrolled accounts of the window are enqueued: ' || v_page1;
-  ASSERT (v_page1->>'skipped_reconnect_required')::int = 8, 'the unenrolled accounts of the window are counted: ' || v_page1;
   ASSERT (v_page1->>'has_more')::boolean, 'a full window leaves more ids behind: ' || v_page1;
 
   -- The second page reads the remainder of the ids.
   v_page2 := public.enqueue_instagram_collection_daily_page('owner', false);
   ASSERT (v_page2->>'scanned')::int = 5, 'the second page reads the remainder: ' || v_page2;
   ASSERT (v_page2->>'enqueued')::int = 3, 'the enrolled accounts of the remainder are enqueued: ' || v_page2;
-  ASSERT (v_page2->>'skipped_reconnect_required')::int = 2, 'the unenrolled accounts of the remainder are counted: ' || v_page2;
   ASSERT NOT (v_page2->>'has_more')::boolean, 'the last window ends the sweep: ' || v_page2;
 
+  -- The gap of each page is audited, and the receipt does not carry it.
+  ASSERT NOT EXISTS(SELECT 1 FROM jsonb_object_keys(v_page1) AS k WHERE k = 'skipped_reconnect_required'),
+    'the receipt does not carry the gap';
+  ASSERT (SELECT count(*) FROM public.system_logs
+           WHERE source = 'instagram-collection-rollout'
+             AND metadata ->> 'event' = 'collection_daily_enqueue_skipped_reconnect_required'
+             AND (metadata -> 'details' ->> 'skipped')::int = 8) = 1,
+    'the first page audited its eight skipped accounts';
+  ASSERT (SELECT count(*) FROM public.system_logs
+           WHERE source = 'instagram-collection-rollout'
+             AND metadata ->> 'event' = 'collection_daily_enqueue_skipped_reconnect_required'
+             AND (metadata -> 'details' ->> 'skipped')::int = 2) = 1,
+    'the second page audited its two skipped accounts';
+
   -- Every unenrolled account is counted EXACTLY once across the two pages.
-  ASSERT (v_page1->>'skipped_reconnect_required')::int
-       + (v_page2->>'skipped_reconnect_required')::int = 10,
-    'the ten unenrolled accounts are counted once: ' || v_page1 || ' ' || v_page2;
+  ASSERT (SELECT COALESCE(sum((metadata -> 'details' ->> 'skipped')::int), 0)
+            FROM public.system_logs
+           WHERE source = 'instagram-collection-rollout'
+             AND metadata ->> 'event' = 'collection_daily_enqueue_skipped_reconnect_required') = 10,
+    'the ten unenrolled accounts are audited once';
+
+  -- The audit names the accounts that need a reconnect.
+  ASSERT (SELECT count(*) FROM public.system_logs
+           WHERE source = 'instagram-collection-rollout'
+             AND metadata ->> 'event' = 'collection_daily_enqueue_skipped_reconnect_required'
+             AND jsonb_array_length(metadata -> 'details' -> 'skipped_accounts')
+               = (metadata -> 'details' ->> 'skipped')::int) = 2,
+    'each audited page names its skipped accounts';
 
   -- No job for an unenrolled account.
   ASSERT NOT EXISTS (

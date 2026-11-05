@@ -36,12 +36,16 @@
 --      the grants are unchanged: the branch is reachable only through the
 --      same accepted fence the bound-context settlement already used.
 --
---   2. enqueue_instagram_collection_daily_page never selects an owner
---      account without a capability row, and reports how many it skipped in
---      the receipt as 'skipped_reconnect_required'. The filter lives in the
---      candidate WHERE clause, so a skipped account is not a refused
---      candidate: it never consumes a slot in the page and never advances
---      the cursor. The competitor branch is unchanged.
+--   2. enqueue_instagram_collection_daily_page never enqueues an owner
+--      account without a capability row, and AUDITS how many it skipped.
+--
+--      The page reads a WINDOW: the first twenty five account ids after
+--      the cursor, in id order. The enrolment decides what happens inside
+--      the window, never which rows the window is, so an unenrolled account
+--      consumes its slot, the cursor moves past it, and the read stays
+--      bounded. The receipt does NOT change: it is a closed projection the
+--      worker parses exactly, so the gap is observed in the audit trail
+--      instead, one row per page. The competitor branch is unchanged.
 --
 --   This migration is additive: no table, constraint, existing function,
 --   grant or policy is changed.
@@ -190,9 +194,9 @@ $function$;
 -- cannot be collected.
 --
 -- Copied from 20261031091000_instagram_collection_daily_dispatch.sql. The
--- owner candidate query gains the capability filter, the owner branch gains
--- the bounded count of the skipped accounts, and every accepted receipt
--- carries 'skipped_reconnect_required'.
+-- owner branch reads the page WINDOW first and decides the enrolment
+-- inside it, and the skipped accounts of the window are audited. The
+-- receipt itself is unchanged.
 -- ===========================================================================
 
 CREATE OR REPLACE FUNCTION public.enqueue_instagram_collection_daily_page(
@@ -221,6 +225,7 @@ DECLARE
   v_enqueued    integer := 0;
   v_scanned     integer := 0;
   v_skipped     integer := 0;
+  v_skipped_accounts jsonb := '[]'::jsonb;
   v_has_more    boolean := false;
   v_cursor      uuid := NULL;
   v_last_scanned uuid := NULL;
@@ -354,7 +359,6 @@ BEGIN
         'has_more', false,
         'page_limit', v_page_limit,
         'scanned', 0,
-        'skipped_reconnect_required', 0,
         'started', false,
         'resumed', false);
     END IF;
@@ -395,7 +399,7 @@ BEGIN
     -- The enrolment is decided INSIDE the window: a row whose account has a
     -- capability row is a candidate, a row without one is SKIPPED. It
     -- consumes its slot, the cursor moves past it, and it is counted in the
-    -- receipt as 'skipped_reconnect_required'.
+    -- audit of this page.
     WITH page_window AS (
       SELECT sa.id, sa.user_id
         FROM public.social_accounts AS sa
@@ -427,8 +431,12 @@ BEGIN
                'watchlist_id', NULL::uuid,
                'has_capability', r.has_capability
              ) ORDER BY r.id), '[]'::jsonb),
-           count(*) FILTER (WHERE NOT r.has_capability)
-      INTO v_window, v_skipped
+           count(*) FILTER (WHERE NOT r.has_capability),
+           COALESCE(jsonb_agg(jsonb_build_object(
+               'target_id', r.id,
+               'user_id', r.user_id
+             ) ORDER BY r.id) FILTER (WHERE NOT r.has_capability), '[]'::jsonb)
+      INTO v_window, v_skipped, v_skipped_accounts
       FROM page_rows AS r;
   ELSE
     SELECT COALESCE(jsonb_agg(jsonb_build_object(
@@ -461,6 +469,29 @@ BEGIN
          ORDER BY w.id
          LIMIT v_page_limit
       ) AS c;
+  END IF;
+
+  -- -------------------------------------------------------------------------
+  -- The enrolment gap of this page.
+  --
+  -- The receipt is a CLOSED projection and it does NOT change: the old and
+  -- the new worker agree on it, so either deploy order is safe. The gap is
+  -- observable in the AUDIT trail instead: one row per page, written with
+  -- the same helper the refusals use.
+  --
+  -- A page is not one tenant's page, so the row carries no user id of its
+  -- own; the owners of the skipped accounts are in the details.
+  -- -------------------------------------------------------------------------
+  IF v_kind = 'owner' AND v_skipped > 0 THEN
+    PERFORM public.ig_collection_rollout_audit(jsonb_build_object(
+      'event', 'collection_daily_enqueue_skipped_reconnect_required',
+      'reason_code', 'capability_missing',
+      'target_kind', 'owner',
+      'details', jsonb_build_object(
+        'action', 'enqueue_daily',
+        'captured_on', v_captured_on::text,
+        'skipped', v_skipped,
+        'skipped_accounts', v_skipped_accounts)));
   END IF;
 
   FOR v_candidate IN
@@ -552,7 +583,6 @@ BEGIN
     'has_more', v_has_more,
     'page_limit', v_page_limit,
     'scanned', v_scanned,
-    'skipped_reconnect_required', v_skipped,
     'started', v_started,
     'resumed', v_resumed);
 END;
@@ -587,9 +617,10 @@ COMMENT ON FUNCTION public.enqueue_instagram_collection_daily_page(text, boolean
   'p_start = true starts or reopens the day''s sweep and resets the cursor; '
   'p_start = false resumes an already pending sweep and never starts one. '
   'A target that becomes eligible behind the cursor waits for the next '
-  'start or reopen. The evaluator is not part of the scan filter. An owner '
-  'account with no capability row is never a candidate, and the receipt '
-  'counts the accounts this page skipped as skipped_reconnect_required.';
+  'start or reopen. The evaluator is not part of the scan filter. The page '
+  'reads a window of ids and decides the enrolment inside it, so an owner '
+  'account with no capability row consumes its slot, is never enqueued and '
+  'is audited as skipped; the receipt itself does not change.';
 
 -- ===========================================================================
 -- 3. The grants.

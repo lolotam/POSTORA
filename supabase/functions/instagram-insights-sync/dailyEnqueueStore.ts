@@ -90,7 +90,6 @@ const ACCEPTED_KEYS = [
   "has_more",
   "page_limit",
   "scanned",
-  "skipped_reconnect_required",
   "started",
   "resumed",
 ] as const;
@@ -173,15 +172,8 @@ export interface OwnerDailyEnqueueReceipt {
   readonly enqueued: number;
   readonly hasMore: boolean;
   readonly pageLimit: number;
-  /** The rows the bounded scan examined: the window of this page. */
+  /** The candidates the bounded scan examined. */
   readonly scanned: number;
-  /**
-   * The accounts of this page's window that have NO capability row.
-   *
-   * They are SKIPPED, not refused: they consumed their slot in the window
-   * and the cursor moved past them, so each of them is counted exactly once.
-   */
-  readonly skippedReconnectRequired: number;
   /** Whether this call created or reopened the day's sweep. */
   readonly started: boolean;
   /** Whether this call continued an already pending sweep. */
@@ -317,12 +309,6 @@ function parseAccepted(value: unknown): OwnerDailyEnqueueReceipt | null {
   // candidates than the page can hold is not this contract's receipt.
   if (scanned.value > pageLimit.value) return null;
 
-  const skipped = readOwnData(value, "skipped_reconnect_required");
-  if (!skipped.present || !isNonNegativeSafeInteger(skipped.value)) return null;
-
-  // The skipped accounts are part of the window, so they cannot outnumber it.
-  if (skipped.value > pageLimit.value) return null;
-
   const started = readOwnData(value, "started");
   if (!started.present || typeof started.value !== "boolean") return null;
 
@@ -346,7 +332,6 @@ function parseAccepted(value: unknown): OwnerDailyEnqueueReceipt | null {
     hasMore: hasMore.value,
     pageLimit: pageLimit.value,
     scanned: scanned.value,
-    skippedReconnectRequired: skipped.value,
     started: started.value,
     resumed: resumed.value,
   };

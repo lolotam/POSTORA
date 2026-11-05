@@ -1375,11 +1375,14 @@ function createVisitState(job: ClaimedOwnerJob): OwnerVisitState {
  * The bound context of this visit, and the truth it starts from.
  *
  * A job without a captured context cannot be written at all: the accepted
- * SQL refuses every provider result write without one. The claim could not
- * bind one because the owner account has NO capability row, so the job can
- * never be collected. It is settled once, as unavailable, so it stops coming
- * back every lease, and the run continues - one unusable job must not stall
- * every other owner.
+ * SQL refuses every provider result write without one. An unbound context
+ * is either an account with NO capability row, so the claim could not bind
+ * one, or a claim whose bound viewer is not the target. The DATABASE
+ * decides which of the two may be settled: it settles the first one, once,
+ * so a job that keeps coming back stops coming back, and it refuses the
+ * second one, which is then abandoned to its lease exactly as before.
+ * Either way the run continues - one unusable job must not stall every
+ * other owner.
  *
  * A job that keeps coming back must stop coming back, so a continuation
  * that outlived its capture day is finished here, before a provider call is
@@ -1391,10 +1394,13 @@ async function readJobContext(
   const { job } = context;
 
   if (!verifyBoundContext(job)) {
-    // The claim could not bind a context: the account has no capability row.
-    // Settled once, so the job stops coming back every lease; a settlement
-    // the database refuses abandons it exactly as before, and the RUN
-    // continues either way - one unusable job must not stall every other owner.
+    // The context is not bound: either the account has no capability row,
+    // so the claim could not bind one, or the bound viewer is not the
+    // target. The DATABASE decides which of the two may be settled. The
+    // settlement is asked for once, so a job that keeps coming back stops
+    // coming back; a settlement the database refuses abandons it exactly
+    // as before, and the RUN continues either way - one unusable job must
+    // not stall every other owner.
     return { kind: "end", step: await settleCapabilityMissing(context) };
   }
 
