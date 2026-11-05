@@ -68,6 +68,7 @@ import {
   resolveProtectedIntent,
   type ProtectedAttemptStateContext,
 } from "../_shared/metaOAuthProtectedFlow.ts";
+import { withMetaConsentPrompt } from "../_shared/metaConsentPrompt.ts";
 
 import {
   ProtectedProviderFailure,
@@ -747,6 +748,9 @@ Deno.serve(async (req) => {
       authUrl.searchParams.set("redirect_uri", INSTAGRAM_REDIRECT_URI);
       authUrl.searchParams.set("scope", IG_SCOPES);
       authUrl.searchParams.set("response_type", "code");
+      // The Instagram Login window only re-asks the permissions when it is
+      // forced to, so every connect starts from the permission screen.
+      withMetaConsentPrompt(authUrl, "instagram_login");
 
       if (decision === "protected") {
         const intent = resolveProtectedIntent({

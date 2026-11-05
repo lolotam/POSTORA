@@ -801,6 +801,31 @@ routeTest("legacy authorize does not capture an attempt", async () => {
   assertEquals(current.mutations, []);
 });
 
+routeTest("every Meta authorize URL asks the provider to show the permission screen again", async () => {
+  const cases = [
+    { entry: "facebook-oauth/index.ts", url: "https://synthetic.invalid/functions/v1/facebook-oauth", body: { action: "authorize", social_profile_id: null }, parameter: ["auth_type", "rerequest"] },
+    { entry: "facebook-oauth/index.ts", url: "https://synthetic.invalid/functions/v1/facebook-oauth", body: { action: "authorize", intent: "reconnect", target_social_account_id: TARGET_ID }, parameter: ["auth_type", "rerequest"] },
+    { entry: "instagram-business-oauth/index.ts", url: "https://synthetic.invalid/functions/v1/instagram-business-oauth", body: { action: "authorize", social_profile_id: null }, parameter: ["auth_type", "rerequest"] },
+    { entry: "instagram-oauth/index.ts", url: "https://synthetic.invalid/functions/v1/instagram-oauth", body: { action: "authorize", social_profile_id: null }, parameter: ["force_reauth", "true"] },
+  ] as const;
+  for (const scenario of cases) {
+    const current = probe({ setting: "protected" });
+    const handler = await loadHandler(scenario.entry, current);
+    const result = await callJson(handler, scenario.url, scenario.body);
+    assertEquals(result.status, 200, `${scenario.entry} ${JSON.stringify(scenario.body)}`);
+    const url = new URL(String(result.body.url));
+    assertEquals(url.searchParams.get(scenario.parameter[0]), scenario.parameter[1], scenario.entry);
+  }
+});
+
+routeTest("the legacy Facebook authorize URL asks for the permission screen too", async () => {
+  const current = probe({ setting: "absent" });
+  const handler = await loadHandler("facebook-oauth/index.ts", current);
+  const result = await callJson(handler, "https://synthetic.invalid/functions/v1/facebook-oauth", { action: "authorize" });
+  assertEquals(result.status, 200);
+  assertEquals(new URL(String(result.body.url)).searchParams.get("auth_type"), "rerequest");
+});
+
 routeTest("an unreadable mode is a typed failure and captures nothing", async () => {
   for (const setting of ["throw", "driver-error", "malformed"] as const) {
     const current = probe({ setting });

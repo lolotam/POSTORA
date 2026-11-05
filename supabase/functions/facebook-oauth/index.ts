@@ -43,6 +43,7 @@ import {
   type PendingReferenceOutcome,
   type ProtectedAttemptStateContext,
 } from "../_shared/metaOAuthProtectedFlow.ts";
+import { withMetaConsentPrompt } from "../_shared/metaConsentPrompt.ts";
 
 import {
   ProtectedProviderFailure,
@@ -962,13 +963,17 @@ Deno.serve(async (req) => {
             [PROTECTED_ATTEMPT_STATE_KEY]: begun.stateContext,
           },
         });
-        const authorizeUrl =
-          `https://www.facebook.com/v22.0/dialog/oauth` +
-          `?client_id=${encodeURIComponent(appId)}` +
-          `&redirect_uri=${encodeURIComponent(FACEBOOK_REDIRECT_URI)}` +
-          `&state=${encodeURIComponent(state)}` +
-          `&response_type=code` +
-          `&scope=${encodeURIComponent(FB_OAUTH_SCOPES.join(","))}`;
+        const authorizeUrl = withMetaConsentPrompt(
+          new URL(
+            `https://www.facebook.com/v22.0/dialog/oauth` +
+              `?client_id=${encodeURIComponent(appId)}` +
+              `&redirect_uri=${encodeURIComponent(FACEBOOK_REDIRECT_URI)}` +
+              `&state=${encodeURIComponent(state)}` +
+              `&response_type=code` +
+              `&scope=${encodeURIComponent(FB_OAUTH_SCOPES.join(","))}`,
+          ),
+          "facebook_login",
+        ).toString();
         return new Response(JSON.stringify({ success: true, url: authorizeUrl }), {
           headers: { ...corsHeaders, "Content-Type": "application/json" },
         });
@@ -982,13 +987,17 @@ Deno.serve(async (req) => {
         return_to: returnTo,
         extra: { target_platform: targetPlatform },
       });
-      const authorizeUrl =
-        `https://www.facebook.com/v22.0/dialog/oauth` +
-        `?client_id=${encodeURIComponent(appId)}` +
-        `&redirect_uri=${encodeURIComponent(FACEBOOK_REDIRECT_URI)}` +
-        `&state=${encodeURIComponent(state)}` +
-        `&response_type=code` +
-        `&scope=${encodeURIComponent(FB_OAUTH_SCOPES.join(","))}`;
+      const authorizeUrl = withMetaConsentPrompt(
+        new URL(
+          `https://www.facebook.com/v22.0/dialog/oauth` +
+            `?client_id=${encodeURIComponent(appId)}` +
+            `&redirect_uri=${encodeURIComponent(FACEBOOK_REDIRECT_URI)}` +
+            `&state=${encodeURIComponent(state)}` +
+            `&response_type=code` +
+            `&scope=${encodeURIComponent(FB_OAUTH_SCOPES.join(","))}`,
+        ),
+        "facebook_login",
+      ).toString();
       return new Response(JSON.stringify({ success: true, url: authorizeUrl }), {
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
