@@ -3714,6 +3714,330 @@ BEGIN
 END
 $s23$;
 
+-- ---------------------------------------------------------------------------
+-- S24. A new Facebook Page adopts the same user's existing page-linked
+--      Instagram as its companion (2026-11-05: a disconnected Page left its
+--      Instagram behind and every reconnection failed with MOA05). The
+--      adopted row keeps its id and settings; an older binding of the same
+--      Facebook user moves to the new grant. A direct login, a different
+--      Facebook user and an existing Page row are still refused, and
+--      another user's account with the same Instagram id is never touched.
+-- ---------------------------------------------------------------------------
+CREATE FUNCTION pg_temp.moa_s24_page_attempt(
+  p_owner UUID, p_page TEXT, p_ig TEXT, p_subject TEXT,
+  p_begin JSONB DEFAULT '{"intent":"connect_new"}'
+) RETURNS JSONB
+LANGUAGE plpgsql
+AS $moa_s24_page_attempt$
+DECLARE
+  v_result JSONB;
+  v_attempt UUID;
+BEGIN
+  v_result := public.begin_meta_oauth_attempt(p_owner,
+    jsonb_build_object('flow', 'facebook_page') || p_begin);
+  v_attempt := (v_result ->> 'attempt_id')::UUID;
+  v_result := public.claim_meta_oauth_callback(p_owner, jsonb_build_object(
+    'attempt_id', v_attempt, 'nonce', v_result ->> 'nonce', 'flow', 'facebook_page'));
+  PERFORM public.complete_meta_oauth_callback(p_owner, jsonb_build_object(
+    'attempt_id', v_attempt, 'claim_token', v_result ->> 'claim_token',
+    'stash', jsonb_build_object(
+      'candidates', jsonb_build_array(jsonb_build_object(
+        'candidate_kind', 'page_plus_ig',
+        'facebook_page_id', p_page,
+        'facebook_page_name', 'MOA S24 Page',
+        'ig_user_id', p_ig,
+        'ig_username', 'moa_s24_new_handle',
+        'page_access_token', 'synthetic-s24-page-secret',
+        'facebook_user_id', p_subject,
+        'page_token_expires_in', 7200)),
+      'user_token', 'synthetic-s24-user-secret',
+      'user_token_expires_in', 90000)));
+  RETURN jsonb_build_object(
+    'attempt_id', v_attempt,
+    'selection_key', 'facebook_page:page:' || p_page || ':ig:' || p_ig);
+END
+$moa_s24_page_attempt$;
+
+DO $s24$
+DECLARE
+  u_owner UUID := '0ea00001-0000-4000-8000-000000000001';
+  u_other UUID := '0ea00002-0000-4000-8000-000000000002';
+  v_reused UUID := '0ea20001-0000-4000-8000-0000000000a1';
+  v_direct UUID := '0ea20001-0000-4000-8000-0000000000a2';
+  v_other_subject UUID := '0ea20001-0000-4000-8000-0000000000a3';
+  v_existing_page UUID := '0ea20001-0000-4000-8000-0000000000a4';
+  v_foreign UUID := '0ea20002-0000-4000-8000-0000000000a5';
+  v_old_cred UUID := '0ea90001-0000-4000-8000-0000000000a1';
+  v_other_cred UUID := '0ea90001-0000-4000-8000-0000000000a2';
+  v_stage JSONB;
+  v_receipt JSONB;
+  v_replay JSONB;
+  v_account RECORD;
+BEGIN
+  INSERT INTO public.facebook_user_credentials (
+    id, user_id, token, revision, lifecycle, provider_user_id,
+    provenance_source, provenance_captured_at
+  ) VALUES
+    (v_old_cred, u_owner, 'synthetic-not-a-live-secret', 1, 'active',
+     'moa-fb-user-s24', 'oauth_exchange', now()),
+    (v_other_cred, u_owner, 'synthetic-not-a-live-secret', 1, 'active',
+     'moa-fb-user-s24-other', 'oauth_exchange', now());
+
+  INSERT INTO public.social_accounts (
+    id, user_id, platform, platform_user_id, platform_username, access_token,
+    is_active, social_profile_id, account_metadata, ig_auth_type
+  ) VALUES
+    -- left behind when its Page was disconnected: inactive, still bound
+    (v_reused, u_owner, 'instagram', 'moa-ig-s24-reuse', 'moa_s24_old_handle',
+     'synthetic-s24-stale-secret', false, NULL,
+     '{"legacy":"kept"}'::jsonb, 'facebook_page'),
+    (v_direct, u_owner, 'instagram', 'moa-ig-s24-direct', 'moa_s24_direct',
+     'synthetic-s24-direct-secret', true, NULL, NULL, 'business_login'),
+    (v_other_subject, u_owner, 'instagram', 'moa-ig-s24-subject', 'moa_s24_subject',
+     'synthetic-s24-subject-secret', true, NULL, NULL, 'facebook_page'),
+    (v_existing_page, u_owner, 'facebook', 'moa-fbpage-s24-existing', 'MOA S24 Existing',
+     'synthetic-s24-existing-secret', true, NULL, NULL, NULL),
+    -- another user's account with the reused Instagram id
+    (v_foreign, u_other, 'instagram', 'moa-ig-s24-reuse', 'moa_s24_foreign',
+     'synthetic-s24-foreign-secret', false, NULL, NULL, 'facebook_page');
+
+  INSERT INTO public.facebook_user_credential_bindings (
+    social_account_id, user_id, platform, credential_id,
+    verified_facebook_user_id, verified_facebook_page_id,
+    verified_instagram_user_id, evidence_source, connection_version
+  ) VALUES
+    (v_reused, u_owner, 'instagram', v_old_cred,
+     'moa-fb-user-s24', 'moa-fbpage-s24-old', 'moa-ig-s24-reuse', 'oauth_exchange', 3),
+    (v_other_subject, u_owner, 'instagram', v_other_cred,
+     'moa-fb-user-s24-other', 'moa-fbpage-s24-subject', 'moa-ig-s24-subject',
+     'oauth_exchange', 1);
+
+  INSERT INTO public.facebook_user_credential_connection_fences (
+    social_account_id, user_id, platform, connection_version
+  ) VALUES
+    (v_reused, u_owner, 'instagram', 3),
+    (v_other_subject, u_owner, 'instagram', 1);
+
+  INSERT INTO public.instagram_account_capabilities (
+    social_account_id, user_id, platform, login_kind, permission_read_state,
+    granted_scopes, scopes_read_at, credential_generation, credential_updated_at,
+    generation_reason
+  ) VALUES
+    (v_reused, u_owner, 'instagram', 'page_linked', 'ok',
+     ARRAY['instagram_basic'], now(), 7, now(), 'credential_bound'),
+    (v_direct, u_owner, 'instagram', 'direct', 'ok',
+     ARRAY['instagram_business_basic'], now(), 2, now(), 'credential_bound'),
+    (v_other_subject, u_owner, 'instagram', 'page_linked', 'ok',
+     ARRAY['instagram_basic'], now(), 1, now(), 'credential_bound');
+
+  -- Adoption.
+  v_stage := pg_temp.moa_s24_page_attempt(
+    u_owner, 'moa-fbpage-s24-new', 'moa-ig-s24-reuse', 'moa-fb-user-s24');
+  v_receipt := public.commit_meta_oauth_selection(u_owner, v_stage);
+  ASSERT (v_receipt ->> 'companion_social_account_id')::UUID = v_reused,
+    'S24 the existing Instagram row is the companion';
+  ASSERT (v_receipt ->> 'operation') = 'created',
+    'S24 the new Page itself is created';
+  ASSERT (
+    SELECT count(*) FROM public.social_accounts
+     WHERE user_id = u_owner AND platform = 'instagram'
+       AND platform_user_id = 'moa-ig-s24-reuse'
+  ) = 1, 'S24 adoption creates no second Instagram row';
+  SELECT sa.is_active, sa.access_token, sa.platform_username,
+         sa.account_metadata, sa.ig_auth_type, sa.needs_reauth
+    INTO v_account
+    FROM public.social_accounts AS sa WHERE sa.id = v_reused;
+  ASSERT v_account.is_active, 'S24 the adopted account is reactivated';
+  ASSERT v_account.access_token = 'synthetic-s24-page-secret',
+    'S24 the adopted account carries the new Page token';
+  ASSERT v_account.platform_username = 'moa_s24_new_handle',
+    'S24 the adopted account takes the verified username';
+  ASSERT (v_account.account_metadata ->> 'legacy') = 'kept',
+    'S24 unrelated account metadata is kept';
+  ASSERT v_account.ig_auth_type = 'facebook_page' AND NOT v_account.needs_reauth,
+    'S24 the adopted account stays page-linked and healthy';
+  ASSERT (
+    SELECT credential_generation FROM public.instagram_account_capabilities
+     WHERE social_account_id = v_reused AND login_kind = 'page_linked'
+  ) = 8, 'S24 the adopted capability generation advances once';
+  ASSERT (
+    SELECT credential_id FROM public.facebook_user_credential_bindings
+     WHERE social_account_id = v_reused
+  ) = (v_receipt ->> 'credential_id')::UUID,
+    'S24 the adopted account is bound to the new grant';
+  ASSERT NOT EXISTS (
+    SELECT 1 FROM public.facebook_user_credentials WHERE id = v_old_cred
+  ), 'S24 the orphaned older credential is collected';
+  SELECT sa.is_active, sa.access_token INTO v_account
+    FROM public.social_accounts AS sa WHERE sa.id = v_foreign;
+  ASSERT NOT v_account.is_active
+     AND v_account.access_token = 'synthetic-s24-foreign-secret',
+    'S24 another user''s account with the same Instagram id is untouched';
+  v_replay := public.commit_meta_oauth_selection(u_owner, v_stage);
+  ASSERT v_replay = v_receipt, 'S24 an identical retry returns the same receipt';
+
+  -- An existing Page row is still a typed conflict.
+  v_stage := pg_temp.moa_s24_page_attempt(
+    u_owner, 'moa-fbpage-s24-existing', 'moa-ig-s24-fresh', 'moa-fb-user-s24');
+  BEGIN
+    PERFORM public.commit_meta_oauth_selection(u_owner, v_stage);
+    RAISE EXCEPTION 'S24 failed: an existing Page row was adopted'
+      USING ERRCODE = 'assert_failure';
+  EXCEPTION WHEN SQLSTATE 'MOA05' THEN NULL;
+  END;
+  ASSERT NOT EXISTS (
+    SELECT 1 FROM public.social_accounts WHERE platform_user_id = 'moa-ig-s24-fresh'
+  ), 'S24 the refused Page created no Instagram row';
+
+  -- A direct-login Instagram is not converted.
+  v_stage := pg_temp.moa_s24_page_attempt(
+    u_owner, 'moa-fbpage-s24-direct', 'moa-ig-s24-direct', 'moa-fb-user-s24');
+  BEGIN
+    PERFORM public.commit_meta_oauth_selection(u_owner, v_stage);
+    RAISE EXCEPTION 'S24 failed: a direct-login Instagram was adopted'
+      USING ERRCODE = 'assert_failure';
+  EXCEPTION WHEN SQLSTATE 'MOA05' THEN NULL;
+  END;
+  ASSERT (
+    SELECT access_token FROM public.social_accounts WHERE id = v_direct
+  ) = 'synthetic-s24-direct-secret', 'S24 the direct account keeps its token';
+  ASSERT NOT EXISTS (
+    SELECT 1 FROM public.social_accounts WHERE platform_user_id = 'moa-fbpage-s24-direct'
+  ), 'S24 the refused direct adoption created no Page';
+
+  -- A different Facebook user is a rebind, not an adoption.
+  v_stage := pg_temp.moa_s24_page_attempt(
+    u_owner, 'moa-fbpage-s24-subject', 'moa-ig-s24-subject', 'moa-fb-user-s24');
+  BEGIN
+    PERFORM public.commit_meta_oauth_selection(u_owner, v_stage);
+    RAISE EXCEPTION 'S24 failed: an account of a different Facebook user was adopted'
+      USING ERRCODE = 'assert_failure';
+  EXCEPTION WHEN SQLSTATE 'MOA05' THEN NULL;
+  END;
+  ASSERT (
+    SELECT credential_id FROM public.facebook_user_credential_bindings
+     WHERE social_account_id = v_other_subject
+  ) = v_other_cred, 'S24 the other subject keeps its binding';
+END
+$s24$;
+
+-- ---------------------------------------------------------------------------
+-- S25. An adopted Instagram already bound to the grant this attempt extends
+--      is rebound to the selected Page, not left naming the Page it was
+--      first verified through (refresh-tokens reconciles that Page).
+-- ---------------------------------------------------------------------------
+DO $s25$
+DECLARE
+  u_owner UUID := '0ea00001-0000-4000-8000-000000000001';
+  v_source UUID := '0ea20001-0000-4000-8000-0000000000b1';
+  v_ig UUID := '0ea20001-0000-4000-8000-0000000000b2';
+  v_cred UUID := '0ea90001-0000-4000-8000-0000000000b1';
+  v_legacy_linked UUID := '0ea20001-0000-4000-8000-0000000000b3';
+  v_legacy_direct UUID := '0ea20001-0000-4000-8000-0000000000b4';
+  v_stage JSONB;
+  v_receipt JSONB;
+  v_binding RECORD;
+BEGIN
+  INSERT INTO public.facebook_user_credentials (
+    id, user_id, token, revision, lifecycle, provider_user_id,
+    provenance_source, provenance_captured_at
+  ) VALUES (v_cred, u_owner, 'synthetic-not-a-live-secret', 1, 'active',
+            'moa-fb-user-s25', 'oauth_exchange', now());
+
+  INSERT INTO public.social_accounts (
+    id, user_id, platform, platform_user_id, platform_username, access_token,
+    is_active, social_profile_id, account_metadata, ig_auth_type
+  ) VALUES
+    (v_source, u_owner, 'facebook', 'moa-fbpage-s25-source', 'MOA S25 Source',
+     'synthetic-s25-source-secret', true, NULL, NULL, NULL),
+    (v_ig, u_owner, 'instagram', 'moa-ig-s25', 'moa_s25_handle',
+     'synthetic-s25-stale-secret', true, NULL, NULL, 'facebook_page');
+
+  INSERT INTO public.facebook_user_credential_bindings (
+    social_account_id, user_id, platform, credential_id,
+    verified_facebook_user_id, verified_facebook_page_id,
+    verified_instagram_user_id, evidence_source, connection_version
+  ) VALUES
+    (v_source, u_owner, 'facebook', v_cred,
+     'moa-fb-user-s25', NULL, NULL, 'oauth_exchange', 1),
+    (v_ig, u_owner, 'instagram', v_cred,
+     'moa-fb-user-s25', 'moa-fbpage-s25-old', 'moa-ig-s25', 'oauth_exchange', 2);
+
+  INSERT INTO public.facebook_user_credential_connection_fences (
+    social_account_id, user_id, platform, connection_version
+  ) VALUES (v_source, u_owner, 'facebook', 1), (v_ig, u_owner, 'instagram', 2);
+
+  INSERT INTO public.instagram_account_capabilities (
+    social_account_id, user_id, platform, login_kind, permission_read_state,
+    granted_scopes, scopes_read_at, credential_generation, credential_updated_at,
+    generation_reason
+  ) VALUES (v_ig, u_owner, 'instagram', 'page_linked', 'ok',
+            ARRAY['instagram_basic'], now(), 1, now(), 'credential_bound');
+
+  v_stage := pg_temp.moa_s24_page_attempt(
+    u_owner, 'moa-fbpage-s25-new', 'moa-ig-s25', 'moa-fb-user-s25',
+    jsonb_build_object('intent', 'add_to_existing_grant',
+                       'source_social_account_id', v_source));
+  v_receipt := public.commit_meta_oauth_selection(u_owner, v_stage);
+  ASSERT (v_receipt ->> 'credential_id')::UUID = v_cred,
+    'S25 the selection extends the captured grant';
+  ASSERT (v_receipt ->> 'companion_social_account_id')::UUID = v_ig,
+    'S25 the existing Instagram row is the companion';
+
+  SELECT b.credential_id, b.verified_facebook_page_id, b.connection_version
+    INTO v_binding
+    FROM public.facebook_user_credential_bindings AS b
+   WHERE b.social_account_id = v_ig;
+  ASSERT v_binding.credential_id = v_cred,
+    'S25 the adopted account stays on the extended grant';
+  ASSERT v_binding.verified_facebook_page_id = 'moa-fbpage-s25-new',
+    'S25 the adopted binding names the selected Page';
+  ASSERT v_binding.connection_version > 2,
+    'S25 the adopted binding advances past the old fence';
+  ASSERT EXISTS (SELECT 1 FROM public.facebook_user_credentials WHERE id = v_cred),
+    'S25 the shared grant credential survives the rebind';
+
+  -- Legacy rows without a capability row fall back to ig_auth_type.
+  INSERT INTO public.social_accounts (
+    id, user_id, platform, platform_user_id, platform_username, access_token,
+    is_active, social_profile_id, account_metadata, ig_auth_type
+  ) VALUES
+    (v_legacy_linked, u_owner, 'instagram', 'moa-ig-s25-legacy', 'moa_s25_legacy',
+     'synthetic-s25-legacy-secret', false, NULL, NULL, 'facebook_page'),
+    (v_legacy_direct, u_owner, 'instagram', 'moa-ig-s25-legacy-direct', 'moa_s25_direct',
+     'synthetic-s25-direct-secret', true, NULL, NULL, 'business_login');
+
+  -- An unbound legacy page-linked row is adopted and bound to the new grant.
+  v_stage := pg_temp.moa_s24_page_attempt(
+    u_owner, 'moa-fbpage-s25-legacy', 'moa-ig-s25-legacy', 'moa-fb-user-s25-legacy');
+  v_receipt := public.commit_meta_oauth_selection(u_owner, v_stage);
+  ASSERT (v_receipt ->> 'companion_social_account_id')::UUID = v_legacy_linked,
+    'S25 an unbound legacy page-linked row is the companion';
+  SELECT b.credential_id, b.verified_facebook_page_id
+    INTO v_binding
+    FROM public.facebook_user_credential_bindings AS b
+   WHERE b.social_account_id = v_legacy_linked;
+  ASSERT v_binding.credential_id = (v_receipt ->> 'credential_id')::UUID
+     AND v_binding.verified_facebook_page_id = 'moa-fbpage-s25-legacy',
+    'S25 the adopted legacy row is bound through the selected Page';
+  ASSERT (SELECT is_active FROM public.social_accounts WHERE id = v_legacy_linked),
+    'S25 the adopted legacy row is reactivated';
+
+  -- A legacy business-login row is still refused.
+  v_stage := pg_temp.moa_s24_page_attempt(
+    u_owner, 'moa-fbpage-s25-legacy-direct', 'moa-ig-s25-legacy-direct', 'moa-fb-user-s25-legacy');
+  BEGIN
+    PERFORM public.commit_meta_oauth_selection(u_owner, v_stage);
+    RAISE EXCEPTION 'S25 failed: a legacy business-login Instagram was adopted'
+      USING ERRCODE = 'assert_failure';
+  EXCEPTION WHEN SQLSTATE 'MOA05' THEN NULL;
+  END;
+  ASSERT (
+    SELECT access_token FROM public.social_accounts WHERE id = v_legacy_direct
+  ) = 'synthetic-s25-direct-secret', 'S25 the legacy direct account keeps its token';
+END
+$s25$;
+
 ROLLBACK;
 
 \echo '=== meta_oauth_attempt_lifecycle: ALL CHECKS PASSED ==='
