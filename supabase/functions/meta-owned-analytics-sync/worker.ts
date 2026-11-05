@@ -87,10 +87,15 @@ async function captureVisit(input: DrainInput, job: AnalyticsClaim, provider: Co
   return plans.every((plan) => accepted.has(plan.key));
 }
 
+/** Only a success can be refused for incompleteness; any other refusal breaks the worker's contract. */
+async function completeOrInvalidContract(input: DrainInput, job: AnalyticsClaim, outcome: "success" | "partial" | "failed" | "retry", reason: string | null, retryAt: string | null = null): Promise<void> {
+  try { await input.store.complete(job, outcome, reason, retryAt); }
+  catch (error) { throw error instanceof CompletionRefused ? new AnalyticsWorkerStopped("invalid_contract") : error; }
+}
+
 /** The database judges completeness more strictly than the worker; a refused success is released as a failure. */
 async function releaseRefusedCompletion(input: DrainInput, job: AnalyticsClaim): Promise<"refused"> {
-  try { await input.store.complete(job, "failed", "completion_refused", null); }
-  catch (error) { throw error instanceof CompletionRefused ? new AnalyticsWorkerStopped("invalid_contract") : error; }
+  await completeOrInvalidContract(input, job, "failed", "completion_refused", null);
   return "refused";
 }
 
@@ -106,21 +111,22 @@ async function collectJob(input: DrainInput, job: AnalyticsClaim): Promise<"succ
     // A bounded prefix is useful history but can never become a full inventory.
     // Once its captures are saved, stop reclaiming this date ahead of newer jobs.
     const terminalTruncation = capturesComplete && state.checkpoint.inventory_truncated;
-    try {
-      await input.store.complete(job, complete ? "success" : terminalTruncation ? "failed" : "partial",
-        complete ? null : state.checkpoint.inventory_truncated ? "inventory_truncated" : "collection_incomplete",
-        complete || terminalTruncation ? null : new Date(Date.now() + 60_000).toISOString());
-    } catch (error) {
-      if (!(error instanceof CompletionRefused)) throw error;
-      // The database holds the stricter definition of "complete"; a refusal of any other outcome
-      // breaks the worker's contract instead of releasing a job it cannot judge.
-      if (!complete) throw new AnalyticsWorkerStopped("invalid_contract");
-      return await releaseRefusedCompletion(input, job);
+    if (complete) {
+      try { await input.store.complete(job, "success", null, null); }
+      catch (error) {
+        if (!(error instanceof CompletionRefused)) throw error;
+        // The database holds the stricter definition of "complete"; this job is finished either way.
+        return await releaseRefusedCompletion(input, job);
+      }
+    } else {
+      await completeOrInvalidContract(input, job, terminalTruncation ? "failed" : "partial",
+        state.checkpoint.inventory_truncated ? "inventory_truncated" : "collection_incomplete",
+        terminalTruncation ? null : new Date(Date.now() + 60_000).toISOString());
     }
     return complete ? "success" : "partial";
   } catch (error) {
     if (error instanceof CollectionVisitPaused) {
-      await input.store.complete(job, "partial", "visit_budget", new Date(Date.now() + 60_000).toISOString());
+      await completeOrInvalidContract(input, job, "partial", "visit_budget", new Date(Date.now() + 60_000).toISOString());
       return "partial";
     }
     if (!(error instanceof CollectionProviderRefused)) throw error;
@@ -129,7 +135,7 @@ async function collectJob(input: DrainInput, job: AnalyticsClaim): Promise<"succ
     const persistedRetry = retry ? await throttle.refuse(error.retryAt) : null;
     const retryAt = new Date(Math.min(now + 86_000_000, Math.max(now + 60_000, Date.parse(persistedRetry ?? "") || 0))).toISOString();
     const terminal = error.reason === "reauth_required" || error.reason === "permission_missing";
-    await input.store.complete(job, retry ? "retry" : terminal ? "failed" : "partial", error.reason,
+    await completeOrInvalidContract(input, job, retry ? "retry" : terminal ? "failed" : "partial", error.reason,
       retry ? retryAt : terminal ? null : new Date(Date.now() + 60_000).toISOString());
     return retry ? "rate_limited" : "refused";
   }
