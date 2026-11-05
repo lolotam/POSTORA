@@ -919,7 +919,7 @@ routeTest("the protected Facebook callback offers a linked Page with and without
   const candidates = stash.candidates as Record<string, unknown>[];
   assertEquals(
     candidates.map((candidate) => [candidate.candidate_kind, candidate.facebook_page_id, candidate.ig_user_id ?? null]),
-    [["page_plus_ig", "page-1", "ig-1"], ["page_only", "page-1", null]],
+    [["page_only", "page-1", null], ["page_plus_ig", "page-1", "ig-1"]],
   );
   assertEquals(candidates.every((candidate) => candidate.facebook_user_id === "fb-user-1"), true);
 });

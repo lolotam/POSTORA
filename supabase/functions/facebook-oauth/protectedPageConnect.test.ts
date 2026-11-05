@@ -263,7 +263,7 @@ Deno.test("a Page with a linked Instagram offers the owner both the linked and t
   });
   assertEquals(
     candidates.map((candidate) => [candidate.facebook_page_id, candidate.candidate_kind, candidate.ig_user_id ?? null]),
-    [["p1", "page_plus_ig", "ig1"], ["p2", "page_only", null], ["p1", "page_only", null]],
+    [["p1", "page_only", null], ["p1", "page_plus_ig", "ig1"], ["p2", "page_only", null]],
   );
 });
 
@@ -276,11 +276,40 @@ Deno.test("the Instagram flow offers only the linked Instagram accounts", () => 
   assertEquals(candidates.map((candidate) => candidate.candidate_kind), ["ig_only"]);
 });
 
-Deno.test("Page-only alternatives never push a Page past the stash limit", () => {
+// MergePilot on PR #380 (2026-11-05): dropping Page-only alternatives past the
+// stash limit left those Pages without a choice, so the picker connected their
+// Instagram without asking. The Page-only key is the one every Page keeps.
+Deno.test("past the stash limit every Page keeps its Page-only key and the last Pages lose the Instagram key", () => {
   const pages = Array.from({ length: 30 }, (_, index) => managedPage(`p${index}`, `ig${index}`));
   const candidates = buildProtectedPageCandidates({ flow: "facebook_page", pages, facebookUserId: "fb-user" });
   assertEquals(candidates.length, MAX_PICKER_CANDIDATES);
-  assertEquals(candidates.filter((candidate) => candidate.candidate_kind === "page_plus_ig").length, 30);
+  const pageOnly = candidates.filter((candidate) => candidate.candidate_kind === "page_only");
+  const withInstagram = candidates.filter((candidate) => candidate.candidate_kind === "page_plus_ig");
+  assertEquals(pageOnly.map((candidate) => candidate.facebook_page_id), pages.map((page) => page.id));
+  assertEquals(withInstagram.map((candidate) => candidate.facebook_page_id), pages.slice(0, 20).map((page) => page.id));
+});
+
+Deno.test("a Page whose Instagram key was left out is projected as a plain Page", () => {
+  const projected = projectFacebookPicker({
+    attempt_id: "attempt-1",
+    flow: "facebook_page",
+    intent: "connect",
+    social_profile_id: null,
+    expired: false,
+    committed_selection_keys: [],
+    candidates: [{
+      selection_key: "only-p1",
+      ig_user_id: null,
+      ig_username: null,
+      ig_profile_picture_url: null,
+      facebook_page_id: "p1",
+      facebook_page_name: "Page p1",
+    }],
+  });
+  assertEquals(
+    projected.pages.map((page) => [page.selection_key, page.has_instagram, page.facebook_only_selection_key]),
+    [["only-p1", false, null]],
+  );
 });
 
 Deno.test("the picker shows a linked Page once and carries its Page-only key", () => {
