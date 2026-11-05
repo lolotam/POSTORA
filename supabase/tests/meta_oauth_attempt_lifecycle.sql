@@ -4126,6 +4126,135 @@ BEGIN
 END
 $s26$;
 
+-- ---------------------------------------------------------------------------
+-- S27. A Page reconnect that captured the linked Instagram companion accepts
+--      the page_only alternative: the Page is refreshed, the companion and its
+--      binding are left as they were, and both alternatives are consumed.
+--      The page_plus_ig alternative still has to name the captured identity.
+--      (MergePilot on PR #380, 2026-11-05: page_only raised MOA07 here.)
+-- ---------------------------------------------------------------------------
+CREATE FUNCTION pg_temp.moa_s27_reconnect(
+  p_owner UUID, p_target UUID, p_linked UUID, p_ig TEXT
+) RETURNS UUID
+LANGUAGE plpgsql
+AS $moa_s27_reconnect$
+DECLARE
+  v_result JSONB;
+  v_attempt UUID;
+  v_base JSONB := jsonb_build_object(
+    'facebook_page_id', 'moa-fbpage-s27',
+    'facebook_page_name', 'MOA S27 Page',
+    'page_access_token', 'synthetic-s27-page-refreshed',
+    'facebook_user_id', 'moa-fb-user-s27',
+    'page_token_expires_in', 7200);
+BEGIN
+  v_result := public.begin_meta_oauth_attempt(p_owner, jsonb_build_object(
+    'flow', 'facebook_page', 'intent', 'reconnect',
+    'target_social_account_id', p_target,
+    'linked_target_social_account_id', p_linked));
+  v_attempt := (v_result ->> 'attempt_id')::UUID;
+  v_result := public.claim_meta_oauth_callback(p_owner, jsonb_build_object(
+    'attempt_id', v_attempt, 'nonce', v_result ->> 'nonce', 'flow', 'facebook_page'));
+  PERFORM public.complete_meta_oauth_callback(p_owner, jsonb_build_object(
+    'attempt_id', v_attempt, 'claim_token', v_result ->> 'claim_token',
+    'stash', jsonb_build_object(
+      'candidates', jsonb_build_array(
+        v_base || jsonb_build_object('candidate_kind', 'page_only'),
+        v_base || jsonb_build_object('candidate_kind', 'page_plus_ig',
+          'ig_user_id', p_ig, 'ig_username', 'moa_s27')),
+      'user_token', 'synthetic-s27-user-refreshed',
+      'user_token_expires_in', 90000)));
+  RETURN v_attempt;
+END
+$moa_s27_reconnect$;
+
+DO $s27$
+DECLARE
+  u_owner UUID := '0ea00001-0000-4000-8000-000000000001';
+  v_page UUID := '0ea27001-0000-4000-8000-000000000001';
+  v_ig UUID := '0ea27001-0000-4000-8000-000000000002';
+  v_cred UUID := '0ea97001-0000-4000-8000-000000000001';
+  v_attempt UUID;
+  v_receipt JSONB;
+  v_binding_before RECORD;
+  v_binding_after RECORD;
+BEGIN
+  INSERT INTO public.facebook_user_credentials (
+    id, user_id, token, revision, lifecycle, provider_user_id,
+    provenance_source, provenance_captured_at
+  ) VALUES (
+    v_cred, u_owner, 'synthetic-s27-user', 1, 'active', 'moa-fb-user-s27',
+    'oauth_exchange', '2026-11-05 09:00:00+00'::timestamptz
+  );
+  INSERT INTO public.social_accounts (
+    id, user_id, platform, platform_user_id, platform_username, access_token,
+    is_active, ig_auth_type
+  ) VALUES
+    (v_page, u_owner, 'facebook', 'moa-fbpage-s27', 'moa_s27_page',
+     'synthetic-page-s27', true, 'facebook_page'),
+    (v_ig, u_owner, 'instagram', 'moa-ig-s27', 'moa_s27',
+     'synthetic-companion-s27', true, 'facebook_page');
+  INSERT INTO public.facebook_user_credential_bindings (
+    social_account_id, user_id, platform, credential_id,
+    verified_facebook_user_id, verified_facebook_page_id,
+    verified_instagram_user_id, evidence_source, connection_version
+  ) VALUES
+    (v_page, u_owner, 'facebook', v_cred, 'moa-fb-user-s27', NULL, NULL,
+     'oauth_exchange', 1),
+    (v_ig, u_owner, 'instagram', v_cred, 'moa-fb-user-s27', 'moa-fbpage-s27',
+     'moa-ig-s27', 'oauth_exchange', 1);
+  INSERT INTO public.facebook_user_credential_connection_fences (
+    social_account_id, user_id, platform, connection_version
+  ) VALUES
+    (v_page, u_owner, 'facebook', 1),
+    (v_ig, u_owner, 'instagram', 1);
+  INSERT INTO public.instagram_account_capabilities (
+    social_account_id, user_id, platform, login_kind, permission_read_state,
+    granted_scopes, credential_generation, credential_updated_at, generation_reason
+  ) VALUES
+    (v_ig, u_owner, 'instagram', 'page_linked', 'unknown', ARRAY[]::TEXT[], 1,
+     '2026-11-05 09:00:00+00'::timestamptz, 'credential_bound');
+  INSERT INTO public.instagram_account_credentials (
+    social_account_id, user_id, platform, credential_id
+  ) VALUES
+    (v_ig, u_owner, 'instagram', v_cred);
+  SELECT credential_id, connection_version INTO v_binding_before
+    FROM public.facebook_user_credential_bindings WHERE social_account_id = v_ig;
+
+  -- Facebook only: accepted, the companion is left alone.
+  v_attempt := pg_temp.moa_s27_reconnect(u_owner, v_page, v_ig, 'moa-ig-s27');
+  v_receipt := public.commit_meta_oauth_selection(u_owner, jsonb_build_object(
+    'attempt_id', v_attempt,
+    'selection_key', 'facebook_page:page:moa-fbpage-s27'));
+  ASSERT (v_receipt ->> 'social_account_id')::UUID = v_page
+     AND (v_receipt ->> 'companion_social_account_id') IS NULL,
+    'S27 a Facebook-only reconnect refreshes the Page and names no companion';
+  ASSERT (SELECT access_token FROM public.social_accounts WHERE id = v_page)
+         = 'synthetic-s27-page-refreshed',
+    'S27 a Facebook-only reconnect stores the refreshed Page token';
+  ASSERT (SELECT access_token FROM public.social_accounts WHERE id = v_ig)
+         = 'synthetic-companion-s27',
+    'S27 a Facebook-only reconnect leaves the companion token as it was';
+  SELECT credential_id, connection_version INTO v_binding_after
+    FROM public.facebook_user_credential_bindings WHERE social_account_id = v_ig;
+  ASSERT v_binding_after.credential_id = v_binding_before.credential_id
+     AND v_binding_after.connection_version = v_binding_before.connection_version,
+    'S27 a Facebook-only reconnect leaves the companion binding as it was';
+  ASSERT (SELECT status FROM public.meta_oauth_attempts WHERE id = v_attempt) = 'completed',
+    'S27 a Facebook-only reconnect consumes both alternatives of the Page';
+
+  -- Page plus Instagram: the captured identity is still enforced.
+  v_attempt := pg_temp.moa_s27_reconnect(u_owner, v_page, v_ig, 'moa-ig-s27-other');
+  BEGIN
+    PERFORM public.commit_meta_oauth_selection(u_owner, jsonb_build_object(
+      'attempt_id', v_attempt,
+      'selection_key', 'facebook_page:page:moa-fbpage-s27:ig:moa-ig-s27-other'));
+    RAISE EXCEPTION 'S27 failed: a page_plus_ig reconnect accepted a different Instagram identity';
+  EXCEPTION WHEN SQLSTATE 'MOA07' THEN NULL;
+  END;
+END
+$s27$;
+
 ROLLBACK;
 
 \echo '=== meta_oauth_attempt_lifecycle: ALL CHECKS PASSED ==='

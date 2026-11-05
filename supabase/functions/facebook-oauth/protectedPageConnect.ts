@@ -350,10 +350,13 @@ export const MAX_PICKER_CANDIDATES = 50;
  * The candidates one protected Facebook grant offers.
  *
  * In the Facebook Page flow, a Page with a linked Instagram account offers two
- * keys: the Page with its Instagram, and the Page alone. The owner chooses in
+ * keys: the Page alone, and the Page with its Instagram. The owner chooses in
  * the picker, so the Instagram account is never connected without being
- * asked. Page-alone alternatives are added only while the stash limit allows,
- * so a grant with many Pages still offers every Page.
+ * asked. The Page-alone key is the one every Page is guaranteed; when a grant
+ * holds more alternatives than the stash limit, the Page-plus-Instagram keys
+ * of the last Pages are the ones left out. A Page without that key is shown
+ * as a plain Page and connects without its Instagram, never the other way
+ * round.
  */
 export function buildProtectedPageCandidates(input: {
   flow: MetaOAuthFlow;
@@ -361,7 +364,6 @@ export function buildProtectedPageCandidates(input: {
   facebookUserId: string;
 }): MetaOAuthCandidate[] {
   const candidates: MetaOAuthCandidate[] = [];
-  const facebookOnly: MetaOAuthCandidate[] = [];
   for (const page of input.pages) {
     const base: MetaOAuthCandidate = {
       facebook_page_id: page.id,
@@ -369,24 +371,26 @@ export function buildProtectedPageCandidates(input: {
       page_access_token: page.accessToken,
       facebook_user_id: input.facebookUserId,
     };
-    if (page.instagram === null) {
-      if (input.flow === "facebook_page") candidates.push({ ...base, candidate_kind: "page_only" });
-      continue;
-    }
+    if (input.flow === "facebook_page") candidates.push({ ...base, candidate_kind: "page_only" });
+    if (page.instagram === null) continue;
     const instagram = {
       ig_user_id: page.instagram.id,
       ig_username: page.instagram.username ?? `ig_${page.instagram.id}`,
       ig_profile_picture_url: page.instagram.profilePictureUrl,
     };
-    if (input.flow === "facebook_page") {
-      candidates.push({ ...base, candidate_kind: "page_plus_ig", ...instagram });
-      facebookOnly.push({ ...base, candidate_kind: "page_only" });
-    } else {
-      candidates.push({ ...base, candidate_kind: "ig_only", ...instagram });
-    }
+    candidates.push({
+      ...base,
+      candidate_kind: input.flow === "facebook_page" ? "page_plus_ig" : "ig_only",
+      ...instagram,
+    });
   }
-  const room = Math.max(0, MAX_PICKER_CANDIDATES - candidates.length);
-  return [...candidates, ...facebookOnly.slice(0, room)];
+  let excess = candidates.length - MAX_PICKER_CANDIDATES;
+  for (let index = candidates.length - 1; index >= 0 && excess > 0; index -= 1) {
+    if (candidates[index].candidate_kind !== "page_plus_ig") continue;
+    candidates.splice(index, 1);
+    excess -= 1;
+  }
+  return candidates;
 }
 
 /**
