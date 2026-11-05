@@ -25,7 +25,11 @@ export async function createCarouselChildren(
   return replies.map((reply) => {
     const error = reply.error as { message?: string } | undefined;
     if (error) throw new Error(error.message ?? "Instagram rejected a carousel item");
-    return String(reply.id);
+    const id = reply.id;
+    if (typeof id === "number" && Number.isFinite(id)) return String(id);
+    if (typeof id === "string" && id) return id;
+    // A reply with no id would publish a carousel with an "undefined" child.
+    throw new Error("Instagram returned no container id for a carousel item");
   });
 }
 

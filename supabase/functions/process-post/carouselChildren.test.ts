@@ -7,15 +7,27 @@ const body = (url: string) => ({ image_url: url, is_carousel_item: true });
 
 Deno.test("every child is created at once and the ids keep the media order", async () => {
   const started: string[] = [];
+  const resolvers: (() => void)[] = [];
   const create = (childBody: Record<string, unknown>) => {
     started.push(childBody.image_url as string);
-    // The last child answers first: order must come from the input, not from the replies.
-    const delay = childBody.image_url === "u3" ? 0 : 5;
-    return new Promise<Record<string, unknown>>((resolve) => setTimeout(() => resolve({ id: `c-${childBody.image_url}` }), delay));
+    return new Promise<Record<string, unknown>>((resolve) => {
+      resolvers.push(() => resolve({ id: `c-${childBody.image_url}` }));
+    });
   };
-  const ids = await createCarouselChildren(["u1", "u2", "u3"], body, create);
-  assertEquals(ids, ["c-u1", "c-u2", "c-u3"]);
+  const pending = createCarouselChildren(["u1", "u2", "u3"], body, create);
+  // Every child is created before any of them answers: the wait is not paid one child at a time.
   assertEquals(started, ["u1", "u2", "u3"]);
+  assertEquals(resolvers.length, 3);
+  // The last child answers first: the ids still come back in the media order.
+  resolvers[2]();
+  resolvers[1]();
+  resolvers[0]();
+  assertEquals(await pending, ["c-u1", "c-u2", "c-u3"]);
+});
+
+Deno.test("a reply without a container id fails the carousel instead of publishing an empty child", async () => {
+  const create = () => Promise.resolve({});
+  await assertRejects(() => createCarouselChildren(["u1"], body, create), Error, "Instagram returned no container id for a carousel item");
 });
 
 Deno.test("the first Meta error fails the whole carousel with Meta's message", async () => {

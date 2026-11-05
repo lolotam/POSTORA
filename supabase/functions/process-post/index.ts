@@ -4709,7 +4709,8 @@ async function postToInstagram(
         optimizedMediaUrls.slice(0, 10),
         (url) => ({ image_url: url, is_carousel_item: true, access_token: accessToken, ...(igAltText ? { alt_text: igAltText } : {}) }),
         async (childBody) => {
-          const response = await fetch(childEndpoint, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(childBody) });
+          // Bounded like every other Meta call: ten parallel creates cannot hang the worker.
+          const response = await fetchWithTimeout(childEndpoint, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(childBody) }, 20000);
           return await response.json();
         },
       );
@@ -5484,7 +5485,8 @@ async function postToInstagramBusinessLogin(
             optimizedMediaUrls.slice(0, 10),
             (url) => ({ image_url: url, is_carousel_item: true, access_token: accessToken, ...(igAltText ? { alt_text: igAltText } : {}) }),
             async (childBody) => {
-              const response = await fetch(childEndpoint, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(childBody) });
+              // Bounded like every other Meta call: ten parallel creates cannot hang the worker.
+              const response = await fetchWithTimeout(childEndpoint, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(childBody) }, 20000);
               return await response.json();
             },
           );
