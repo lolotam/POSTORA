@@ -4038,6 +4038,94 @@ BEGIN
 END
 $s25$;
 
+-- ---------------------------------------------------------------------------
+-- S26. A Page with a linked Instagram is stashed twice, as page_plus_ig and
+--      as page_only, so the owner is asked (2026-11-05: connecting a Page
+--      linked its Instagram without asking). Committing either alternative
+--      consumes both, leaves the other Pages selectable, and the attempt
+--      completes once every Page is connected.
+-- ---------------------------------------------------------------------------
+CREATE FUNCTION pg_temp.moa_s26_attempt(p_owner UUID, p_suffix TEXT) RETURNS UUID
+LANGUAGE plpgsql
+AS $moa_s26_attempt$
+DECLARE
+  v_result JSONB;
+  v_attempt UUID;
+  v_base JSONB := jsonb_build_object(
+    'page_access_token', 'synthetic-s26-page-secret',
+    'facebook_user_id', 'moa-fb-user-s26-' || p_suffix,
+    'page_token_expires_in', 7200);
+BEGIN
+  v_result := public.begin_meta_oauth_attempt(p_owner,
+    jsonb_build_object('flow', 'facebook_page', 'intent', 'connect_new'));
+  v_attempt := (v_result ->> 'attempt_id')::UUID;
+  v_result := public.claim_meta_oauth_callback(p_owner, jsonb_build_object(
+    'attempt_id', v_attempt, 'nonce', v_result ->> 'nonce', 'flow', 'facebook_page'));
+  PERFORM public.complete_meta_oauth_callback(p_owner, jsonb_build_object(
+    'attempt_id', v_attempt, 'claim_token', v_result ->> 'claim_token',
+    'stash', jsonb_build_object(
+      'candidates', jsonb_build_array(
+        v_base || jsonb_build_object('candidate_kind', 'page_plus_ig',
+          'facebook_page_id', 'moa-fbpage-s26-linked-' || p_suffix,
+          'facebook_page_name', 'MOA S26 Linked',
+          'ig_user_id', 'moa-ig-s26-' || p_suffix, 'ig_username', 'moa_s26_' || p_suffix),
+        v_base || jsonb_build_object('candidate_kind', 'page_only',
+          'facebook_page_id', 'moa-fbpage-s26-linked-' || p_suffix,
+          'facebook_page_name', 'MOA S26 Linked'),
+        v_base || jsonb_build_object('candidate_kind', 'page_only',
+          'facebook_page_id', 'moa-fbpage-s26-plain-' || p_suffix,
+          'facebook_page_name', 'MOA S26 Plain')),
+      'user_token', 'synthetic-s26-user-secret',
+      'user_token_expires_in', 90000)));
+  RETURN v_attempt;
+END
+$moa_s26_attempt$;
+
+CREATE FUNCTION pg_temp.moa_s26_stash_keys(p_attempt UUID) RETURNS TEXT[]
+LANGUAGE sql
+AS $moa_s26_stash_keys$
+  SELECT COALESCE(array_agg(
+           public.meta_oauth_attempt_selection_key('facebook_page', e.value) ORDER BY 1), '{}')
+    FROM public.meta_oauth_attempts AS a
+    JOIN public.oauth_pending_instagram_selections AS ps ON ps.id = a.pending_selection_id
+    CROSS JOIN LATERAL jsonb_array_elements(ps.ig_candidates_json) AS e(value)
+   WHERE a.id = p_attempt;
+$moa_s26_stash_keys$;
+
+DO $s26$
+DECLARE
+  u_owner UUID := '0ea00001-0000-4000-8000-000000000001';
+  v_case RECORD;
+  v_attempt UUID;
+  v_receipt JSONB;
+BEGIN
+  FOR v_case IN
+    SELECT * FROM (VALUES
+      ('both', ':ig:moa-ig-s26-both', true),
+      ('fbonly', '', false)
+    ) AS c(suffix, key_tail, links_instagram)
+  LOOP
+    v_attempt := pg_temp.moa_s26_attempt(u_owner, v_case.suffix);
+    v_receipt := public.commit_meta_oauth_selection(u_owner, jsonb_build_object(
+      'attempt_id', v_attempt,
+      'selection_key', 'facebook_page:page:moa-fbpage-s26-linked-' || v_case.suffix || v_case.key_tail));
+    ASSERT ((v_receipt ->> 'companion_social_account_id') IS NOT NULL) = v_case.links_instagram,
+      format('S26 %s: the Instagram companion follows the chosen alternative', v_case.suffix);
+    ASSERT pg_temp.moa_s26_stash_keys(v_attempt)
+         = ARRAY['facebook_page:page:moa-fbpage-s26-plain-' || v_case.suffix],
+      format('S26 %s: both alternatives of the Page are consumed', v_case.suffix);
+    ASSERT (SELECT status FROM public.meta_oauth_attempts WHERE id = v_attempt) <> 'completed',
+      format('S26 %s: another Page is still selectable', v_case.suffix);
+
+    PERFORM public.commit_meta_oauth_selection(u_owner, jsonb_build_object(
+      'attempt_id', v_attempt,
+      'selection_key', 'facebook_page:page:moa-fbpage-s26-plain-' || v_case.suffix));
+    ASSERT (SELECT status FROM public.meta_oauth_attempts WHERE id = v_attempt) = 'completed',
+      format('S26 %s: the attempt completes once every Page is connected', v_case.suffix);
+  END LOOP;
+END
+$s26$;
+
 ROLLBACK;
 
 \echo '=== meta_oauth_attempt_lifecycle: ALL CHECKS PASSED ==='
