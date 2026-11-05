@@ -4212,7 +4212,7 @@ BEGIN
     social_account_id, user_id, platform, login_kind, permission_read_state,
     granted_scopes, credential_generation, credential_updated_at, generation_reason
   ) VALUES
-    (v_ig, u_owner, 'instagram', 'page_linked', 'ok', ARRAY['instagram_basic'], 1,
+    (v_ig, u_owner, 'instagram', 'page_linked', 'unknown', ARRAY[]::TEXT[], 1,
      '2026-11-05 09:00:00+00'::timestamptz, 'credential_bound');
   INSERT INTO public.instagram_account_credentials (
     social_account_id, user_id, platform, credential_id
