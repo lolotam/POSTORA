@@ -88,3 +88,4 @@ BEGIN
 END $$;
 
 ROLLBACK;
+\echo 'social_account_disconnect_credentials: ALL CHECKS PASSED'
