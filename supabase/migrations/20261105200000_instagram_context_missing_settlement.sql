@@ -47,8 +47,8 @@
 --      worker parses exactly, so the gap is observed in the audit trail
 --      instead, one row per page. The competitor branch is unchanged.
 --
---   This migration is additive: no table, constraint, existing function,
---   grant or policy is changed.
+--   This migration replaces two existing functions (CREATE OR REPLACE) and
+--   changes no table, constraint, grant or policy.
 -- ===========================================================================
 
 BEGIN;

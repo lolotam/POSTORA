@@ -4,7 +4,7 @@
 
 **Goal:** A claimed owner job whose account has no capability row is settled `unavailable` / `capability_missing` on its first claim instead of being re-leased every two minutes, and the daily service enqueue skips such accounts and reports how many it skipped.
 
-**Architecture:** One migration replaces two SQL functions (the capability-unavailable settlement gains a context-less owner branch; the daily page enqueue filters owner candidates on an existing capability row and returns `skipped_reconnect_required`). The worker's `readJobContext` routes a context-less job to the existing `settleCapabilityMissing` helper instead of abandoning it. No report or UI change.
+**Architecture:** One migration replaces two SQL functions (the capability-unavailable settlement gains a context-less owner branch; the daily page enqueue decides enrolment inside its bounded window and audits the skipped count per page). The worker's `readJobContext` routes a context-less job to the existing `settleCapabilityMissing` helper instead of abandoning it. No report or UI change.
 
 **Tech Stack:** Postgres (plpgsql, `SECURITY DEFINER`), Deno edge function `instagram-insights-sync`, `std@0.224.0` asserts, SQL suites under `supabase/tests` run by CI (`scripts/db-harness.sh`).
 
@@ -28,7 +28,7 @@
 - Modify: `supabase/tests/instagram_owner_enqueue_reconnect_required.sql` (append DO blocks before the final `ROLLBACK;`)
 
 **Interfaces:**
-- Produces: `complete_instagram_collection_job_capability_unavailable(uuid,uuid,bigint)` settles a context-less **owner** job whose `social_account_id` has no `instagram_account_capabilities` row (same UPDATE and JSON as the bound-context success branch, `reason_code = 'capability_missing'`); still raises `IG_COLLECTION_CONTEXT_MISSING` for any other context-less job. `enqueue_instagram_collection_daily_page(text, boolean)` returns the extra key `skipped_reconnect_required` (integer) in its accepted receipt and never enqueues an owner account without a capability row. Task 2's worker relies on the first; nothing relies on the second beyond the receipt.
+- Produces: `complete_instagram_collection_job_capability_unavailable(uuid,uuid,bigint)` settles a context-less **owner** job whose `social_account_id` has no `instagram_account_capabilities` row (same UPDATE and JSON as the bound-context success branch, `reason_code = 'capability_missing'`); still raises `IG_COLLECTION_CONTEXT_MISSING` for any other context-less job. `enqueue_instagram_collection_daily_page(text, boolean)` keeps its receipt unchanged, never enqueues an owner account without a capability row, and writes one rollout-audit row per page (`collection_daily_enqueue_skipped_reconnect_required`, `details.skipped`) when it skipped any. Task 2's worker relies on the first; nothing relies on the second beyond the receipt.
 
 - [ ] **Step 1: Read the two current definitions**
 
@@ -45,7 +45,7 @@ BEGIN
   PERFORM set_config('request.jwt.claim.role','service_role',true);
   v_result := public.enqueue_instagram_collection_daily_page('owner', true);
   ASSERT (v_result->>'accepted')::boolean, 'the daily page is accepted: ' || v_result;
-  ASSERT (v_result->>'skipped_reconnect_required')::int = 1, 'one account without a capability row is reported skipped: ' || v_result;
+  ASSERT v_result ? 'skipped_reconnect_required' IS FALSE, 'the receipt carries no skipped key; the gap is audited instead: ' || v_result;
   ASSERT EXISTS(SELECT 1 FROM public.instagram_collection_jobs WHERE target_id='f3120000-0000-4000-8000-000000000002' AND target_kind='owner'),
     'the account with a capability row is enqueued';
   ASSERT NOT EXISTS(SELECT 1 FROM public.instagram_collection_jobs WHERE target_id='f3120000-0000-4000-8000-000000000001'),
@@ -119,7 +119,7 @@ Adjust column names and the `claim_instagram_collection_jobs` row shape to what 
 
 (`v_reason` is the function's existing constant `'capability_missing'`; if it is declared later than this point, move the declaration up rather than hard-coding the literal twice.)
 
-2. `CREATE OR REPLACE FUNCTION public.enqueue_instagram_collection_daily_page(p_target_kind text, p_start boolean DEFAULT false)` copied from 20261031091000 with: (a) in the owner candidate SELECT over `public.social_accounts AS sa`, the predicate `AND EXISTS (SELECT 1 FROM public.instagram_account_capabilities AS c WHERE c.social_account_id = sa.id)` added right after `AND sa.is_active`; (b) a new `v_skipped integer := 0;` computed only in the owner branch as the COUNT of the same page window with `NOT EXISTS` in place of `EXISTS` (same `sa.platform`, `sa.is_active`, allowlist, cursor and anti-join predicates, same `LIMIT v_page_limit`); (c) `'skipped_reconnect_required', v_skipped` added to every accepted `RETURN jsonb_build_object(` of the function (the early "nothing to do" returns use 0). Keep the comment block above the candidates and add two sentences explaining why the capability filter lives in the WHERE (a skipped account is not a refused candidate, so it must not consume a page slot).
+2. `CREATE OR REPLACE FUNCTION public.enqueue_instagram_collection_daily_page(p_target_kind text, p_start boolean DEFAULT false)` copied from 20261031091000 with: (a) in the owner candidate SELECT over `public.social_accounts AS sa`, the predicate `AND EXISTS (SELECT 1 FROM public.instagram_account_capabilities AS c WHERE c.social_account_id = sa.id)` added right after `AND sa.is_active`; (b) a new `v_skipped integer := 0;` computed only in the owner branch as the COUNT of the same page window with `NOT EXISTS` in place of `EXISTS` (same `sa.platform`, `sa.is_active`, allowlist, cursor and anti-join predicates, same `LIMIT v_page_limit`); (c) when `v_skipped > 0`, one `ig_collection_rollout_audit` row per page (`event 'collection_daily_enqueue_skipped_reconnect_required'`, `details.skipped`); the receipt is NOT changed (its Deno projection is a closed key set). Keep the comment block above the candidates and add two sentences explaining why the capability filter lives in the WHERE (a skipped account is not a refused candidate, so it must not consume a page slot).
 
 3. Re-issue the same `REVOKE`/`GRANT`/`COMMENT` statements the two source migrations end with for these functions.
 

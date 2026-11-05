@@ -57,7 +57,7 @@ END $with_capability$;
 -- a job the claim could never bind:
 --
 --   1. the daily page enqueues the account WITH a capability row, skips the
---      account WITHOUT one, and reports the gap as skipped_reconnect_required;
+--      account WITHOUT one, and audits the gap (one rollout-audit row per page);
 --   2. a context-less owner job whose account has NO capability row is
 --      settled once, as unavailable / capability_missing, with the lease
 --      cleared, so it can never come back;
