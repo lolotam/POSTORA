@@ -143,6 +143,7 @@ import {
   type ResumeContext,
   unfinishedError,
 } from "./deferredPublish.ts";
+import { createCarouselChildren, waitForCarouselChildren } from "./carouselChildren.ts";
 import { claimFinalNotification } from "./finalNotification.ts";
 import {
   dropRecordedStory,
@@ -2189,7 +2190,7 @@ Deno.serve(async (req) => {
             continue;
           }
           console.error(`[${account.platform}] could not record the deferred container:`, recorded.error);
-          error = new Error(`${account.platform === "threads" ? "Threads" : "Instagram"} was still processing the video and it could not be finished later. Safe to retry.`);
+          error = new Error(`${account.platform === "threads" ? "Threads" : "Instagram"} was still processing the media and it could not be finished later. Safe to retry.`);
         }
         console.error(`Error posting to ${account.platform}:`, error);
 
@@ -4698,83 +4699,105 @@ async function postToInstagram(
     // ─────────────────────────────────────────────────────────────────────
     // Carousel Post (2-10 images)
     // ─────────────────────────────────────────────────────────────────────
-    const containerIds: string[] = [];
+    // A resumed run already has the carousel container; creating another would publish twice.
+    let carouselId: string;
+    if (timing.resume) {
+      carouselId = timing.resume.deferral.container_id;
+    } else {
+      const childEndpoint = `https://graph.facebook.com/v18.0/${igUserId}/media`;
+      const containerIds = await createCarouselChildren(
+        optimizedMediaUrls.slice(0, 10),
+        (url) => ({ image_url: url, is_carousel_item: true, access_token: accessToken, ...(igAltText ? { alt_text: igAltText } : {}) }),
+        async (childBody) => {
+          const response = await fetch(childEndpoint, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(childBody) });
+          return await response.json();
+        },
+      );
+      // The children share the carousel's deferrable budget so the publish still fits the worker.
+      const children = await waitForCarouselChildren(
+        "instagram",
+        containerIds,
+        (id) => `https://graph.facebook.com/v18.0/${id}?fields=${CONTAINER_STATUS_FIELDS.instagram}&access_token=${accessToken}`,
+        { deadlineMs: deferrableDeadline(timing.deadlineMs, WORKER_STARTED_AT_MS), maxAttempts: 30, intervalMs: 2000 },
+      );
+      // Instagram refuses a carousel missing a child, so one failed child fails the carousel.
+      if (children.dropped.length > 0) throw new Error(containerFailureMessage("instagram", children.dropped[0].reason));
 
-    // Create item containers
-    for (const url of optimizedMediaUrls.slice(0, 10)) {
-      const childBody: Record<string, unknown> = {
-        image_url: url,
-        is_carousel_item: true,
+      const carouselBody: Record<string, unknown> = {
+        media_type: "CAROUSEL",
+        children: children.finished.join(","),
+        caption: post.caption,
         access_token: accessToken,
       };
-      if (igAltText) childBody.alt_text = igAltText;
-      const response = await fetch(
-        `https://graph.facebook.com/v18.0/${igUserId}/media`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(childBody),
+
+      // Add collaborator for carousel posts too
+      if (collaborator) {
+        const cleanCollaborator = collaborator.replace("@", "").trim();
+        if (cleanCollaborator) {
+          carouselBody.collaborators = [cleanCollaborator];
         }
-      );
-
-      const data = await response.json();
-      if (data.error) throw new Error(data.error.message);
-
-      // Poll each item container
-      await pollContainerStatus(data.id, accessToken, { deadlineMs: timing.deadlineMs });
-      containerIds.push(data.id);
-    }
-
-    // Create carousel container
-    const carouselBody: Record<string, unknown> = {
-      media_type: "CAROUSEL",
-      children: containerIds.join(","),
-      caption: post.caption,
-      access_token: accessToken,
-    };
-
-    // Add collaborator for carousel posts too
-    if (collaborator) {
-      const cleanCollaborator = collaborator.replace("@", "").trim();
-      if (cleanCollaborator) {
-        carouselBody.collaborators = [cleanCollaborator];
       }
-    }
 
-    // Add location if eligible (pre-checked via Graph API to avoid silent drop)
-    if (await checkIgLocationEligibility()) {
-      carouselBody.location_id = igLocationId;
-    }
+      // Add location if eligible (pre-checked via Graph API to avoid silent drop)
+      if (await checkIgLocationEligibility()) {
+        carouselBody.location_id = igLocationId;
+      }
 
-    let carouselData = await igMediaCreateWithLocationRetry(
-      `https://graph.facebook.com/v18.0/${igUserId}/media`,
-      carouselBody,
-    );
-
-    // Retry without collaborator if "User not visible" error
-    if (carouselData.error && carouselBody.collaborators && (carouselData.error.code === 210 || carouselData.error.message?.includes("not visible"))) {
-      const skippedCollaborator = (carouselBody.collaborators as string[])[0];
-      console.warn("Collaborator rejected by Instagram API, retrying without collaborator:", carouselData.error.message);
-      delete carouselBody.collaborators;
-      warnings.push(`Collaborator @${skippedCollaborator} was skipped — their account must be a Business or Creator account to accept API collaboration invites`);
-      carouselData = await igMediaCreateWithLocationRetry(
+      let carouselData = await igMediaCreateWithLocationRetry(
         `https://graph.facebook.com/v18.0/${igUserId}/media`,
         carouselBody,
       );
+
+      // Retry without collaborator if "User not visible" error
+      if (carouselData.error && carouselBody.collaborators && (carouselData.error.code === 210 || carouselData.error.message?.includes("not visible"))) {
+        const skippedCollaborator = (carouselBody.collaborators as string[])[0];
+        console.warn("Collaborator rejected by Instagram API, retrying without collaborator:", carouselData.error.message);
+        delete carouselBody.collaborators;
+        warnings.push(`Collaborator @${skippedCollaborator} was skipped — their account must be a Business or Creator account to accept API collaboration invites`);
+        carouselData = await igMediaCreateWithLocationRetry(
+          `https://graph.facebook.com/v18.0/${igUserId}/media`,
+          carouselBody,
+        );
+      }
+
+      if (carouselData.error) throw new Error(carouselData.error.message);
+      carouselId = graphId(carouselData, "Instagram carousel container");
     }
 
-    if (carouselData.error) throw new Error(carouselData.error.message);
-    const carouselId = graphId(carouselData, "Instagram carousel container");
+    // The carousel can be finished later like a reel: the reconciler resumes a still-processing one.
+    const carouselStatus = await pollContainerStatus(carouselId, accessToken, {
+      deferKind: "ig_carousel",
+      deadlineMs: deferrableDeadline(timing.deadlineMs, WORKER_STARTED_AT_MS),
+    });
+    let publishData: { id: string };
+    if (carouselStatus === "PUBLISHED") {
+      // Only a resumed run sees this: an earlier run's publish went unanswered, or its worker
+      // stopped, after Instagram published. The container id is not the media id: find the media.
+      const firstDeferredAt = Date.parse(timing.resume?.deferral.first_deferred_at ?? "");
+      const media = await findPublishedMedia(
+        `https://graph.facebook.com/v18.0/${igUserId}/media`,
+        accessToken,
+        post.caption,
+        (Number.isFinite(firstDeferredAt) ? firstDeferredAt : Date.now()) - PUBLISHED_LOOKBACK_MS,
+      );
+      if (!media) {
+        return {
+          url: username ? `https://www.instagram.com/${username}/` : `https://instagram.com`,
+          warnings: [...warnings, "Instagram had already published this carousel, but it could not be identified, so its first comment, comment setting and story share were not applied."],
+          ...(unrecordedStory ? { unrecorded_story: unrecordedStory } : {}),
+        };
+      }
+      publishData = { id: media.id };
+    } else {
+      publishData = await publishInstagramMedia(igUserId, carouselId, accessToken, "ig_carousel");
+    }
 
-    // Poll carousel container
-    await pollContainerStatus(carouselId, accessToken, { deadlineMs: timing.deadlineMs });
-
-    // Publish carousel with retry logic
-    const publishData = await publishInstagramMedia(igUserId, carouselId, accessToken);
-
-    // Post first comment
-    await postInstagramFirstComment(publishData.id);
-    await disableIgComments(publishData.id);
+    // On a resumed run they may have run once already, before a worker stopped: never twice.
+    const followUps = await claimFollowUps(timing.resume);
+    if (followUps) {
+      await postInstagramFirstComment(publishData.id);
+      await disableIgComments(publishData.id);
+    }
 
     // Get the permalink
     const mediaResponse = await fetch(
@@ -4783,7 +4806,7 @@ async function postToInstagram(
     const mediaData = await mediaResponse.json();
 
     // Mirror to Story if toggle is on (and Story wasn't already in post types)
-    if (shareToStory && !igPostTypes.includes("story")) {
+    if (followUps && shareToStory && !igPostTypes.includes("story")) {
       await publishAndRecordStoryMirror();
     }
 
@@ -5451,63 +5474,101 @@ async function postToInstagramBusinessLogin(
         }
       } else {
         // Carousel
-        const containerIds: string[] = [];
-        for (const url of optimizedMediaUrls.slice(0, 10)) {
-          const childBody: Record<string, unknown> = {
-            image_url: url,
-            is_carousel_item: true,
+        // A resumed run already has the carousel container; creating another would publish twice.
+        let carouselId: string;
+        if (timing.resume) {
+          carouselId = timing.resume.deferral.container_id;
+        } else {
+          const childEndpoint = `https://graph.instagram.com/v22.0/${igUserId}/media`;
+          const containerIds = await createCarouselChildren(
+            optimizedMediaUrls.slice(0, 10),
+            (url) => ({ image_url: url, is_carousel_item: true, access_token: accessToken, ...(igAltText ? { alt_text: igAltText } : {}) }),
+            async (childBody) => {
+              const response = await fetch(childEndpoint, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(childBody) });
+              return await response.json();
+            },
+          );
+          // The children share the carousel's deferrable budget so the publish still fits the worker.
+          const children = await waitForCarouselChildren(
+            "instagram",
+            containerIds,
+            (id) => `https://graph.instagram.com/v22.0/${id}?fields=${CONTAINER_STATUS_FIELDS.instagram}&access_token=${accessToken}`,
+            { deadlineMs: deferrableDeadline(timing.deadlineMs, WORKER_STARTED_AT_MS), maxAttempts: 30, intervalMs: 2000 },
+          );
+          // Instagram refuses a carousel missing a child, so one failed child fails the carousel.
+          if (children.dropped.length > 0) throw new Error(containerFailureMessage("instagram", children.dropped[0].reason));
+
+          const carouselBody: Record<string, unknown> = {
+            media_type: "CAROUSEL",
+            children: children.finished.join(","),
+            caption: post.caption,
             access_token: accessToken,
           };
-          if (igAltText) childBody.alt_text = igAltText;
-          const response = await fetch(
-            `https://graph.instagram.com/v22.0/${igUserId}/media`,
-            { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(childBody) }
-          );
-          const data = await response.json();
-          if (data.error) throw new Error(data.error.message);
-          await pollBusinessLoginContainerStatus(data.id, accessToken, { deadlineMs: timing.deadlineMs });
-          containerIds.push(data.id);
-        }
+          if (collaborator) {
+            const cleanCollaborator = collaborator.replace("@", "").trim();
+            if (cleanCollaborator) carouselBody.collaborators = [cleanCollaborator];
+          }
+          if (await checkBLLocationEligibility()) carouselBody.location_id = instagramLocationId;
 
-        const carouselBody: Record<string, unknown> = {
-          media_type: "CAROUSEL",
-          children: containerIds.join(","),
-          caption: post.caption,
-          access_token: accessToken,
-        };
-        if (collaborator) {
-          const cleanCollaborator = collaborator.replace("@", "").trim();
-          if (cleanCollaborator) carouselBody.collaborators = [cleanCollaborator];
-        }
-        if (await checkBLLocationEligibility()) carouselBody.location_id = instagramLocationId;
-
-        let carouselData = await blMediaCreateWithLocationRetry(
-          `https://graph.instagram.com/v22.0/${igUserId}/media`,
-          carouselBody,
-        );
-
-        if (carouselData.error && carouselBody.collaborators && (carouselData.error.code === 210 || carouselData.error.message?.includes("not visible"))) {
-          const skipped = (carouselBody.collaborators as string[])[0];
-          delete carouselBody.collaborators;
-          warnings.push(`Collaborator @${skipped} skipped.`);
-          carouselData = await blMediaCreateWithLocationRetry(
+          let carouselData = await blMediaCreateWithLocationRetry(
             `https://graph.instagram.com/v22.0/${igUserId}/media`,
             carouselBody,
           );
+
+          if (carouselData.error && carouselBody.collaborators && (carouselData.error.code === 210 || carouselData.error.message?.includes("not visible"))) {
+            const skipped = (carouselBody.collaborators as string[])[0];
+            delete carouselBody.collaborators;
+            warnings.push(`Collaborator @${skipped} skipped.`);
+            carouselData = await blMediaCreateWithLocationRetry(
+              `https://graph.instagram.com/v22.0/${igUserId}/media`,
+              carouselBody,
+            );
+          }
+
+          if (carouselData.error) throw new Error(carouselData.error.message);
+          carouselId = graphId(carouselData, "Instagram carousel container");
         }
 
-        if (carouselData.error) throw new Error(carouselData.error.message);
-        const carouselId = graphId(carouselData, "Instagram carousel container");
-
-        await pollBusinessLoginContainerStatus(carouselId, accessToken, { deadlineMs: timing.deadlineMs });
-        const publishData = await publishBusinessLoginMedia(igUserId, carouselId, accessToken);
+        // The carousel can be finished later like a reel: the reconciler resumes a still-processing one.
+        const carouselStatus = await pollBusinessLoginContainerStatus(carouselId, accessToken, {
+          deferKind: "ig_carousel",
+          deadlineMs: deferrableDeadline(timing.deadlineMs, WORKER_STARTED_AT_MS),
+        }, 30, 2000);
         const fallbackUrl = `https://instagram.com`;
-        const blDebug = await finalizeBLLocationDebug(publishData.id);
-        const rowId = await insertIGRow("feed", "success", publishData.id, fallbackUrl, undefined, blDebug ? { location_debug: blDebug } : undefined);
-        subResults.push({ subtype: "feed", status: "success", id: publishData.id, url: fallbackUrl });
-        enrichInBackground(rowId, publishData.id, "feed", fallbackUrl);
+        if (carouselStatus === "PUBLISHED") {
+          // Only a resumed run sees this: an earlier run's publish went unanswered, or its worker
+          // stopped, after Instagram published. Find the media so its follow-up steps still run.
+          const firstDeferredAt = Date.parse(timing.resume?.deferral.first_deferred_at ?? "");
+          const media = await findPublishedMedia(
+            `https://graph.instagram.com/v22.0/${igUserId}/media`,
+            accessToken,
+            post.caption,
+            (Number.isFinite(firstDeferredAt) ? firstDeferredAt : Date.now()) - PUBLISHED_LOOKBACK_MS,
+          );
+          if (media) {
+            const url = media.permalink ?? fallbackUrl;
+            const rowId = await insertIGRow("feed", "success", media.id, url);
+            subResults.push({ subtype: "feed", status: "success", id: media.id, url });
+            // A row that did not settle stays pending and is resumed: its follow-ups run then, once.
+            if (rowId) enrichInBackground(rowId, media.id, "feed", url);
+          } else {
+            const note = "Instagram had already published this carousel, but it could not be identified, so its first comment and comment setting were not applied.";
+            await insertIGRow("feed", "success", undefined, fallbackUrl, undefined, { warnings: [note] });
+            subResults.push({ subtype: "feed", status: "success", url: fallbackUrl });
+            warnings.push(note);
+          }
+        } else {
+          const publishData = await publishBusinessLoginMedia(igUserId, carouselId, accessToken, "ig_carousel");
+          const blDebug = await finalizeBLLocationDebug(publishData.id);
+          const rowId = await insertIGRow("feed", "success", publishData.id, fallbackUrl, undefined, blDebug ? { location_debug: blDebug } : undefined);
+          subResults.push({ subtype: "feed", status: "success", id: publishData.id, url: fallbackUrl });
+          // A first run has no pending row to come back to, so it enriches whatever the record did.
+          if (rowId || !timing.resume) enrichInBackground(rowId, publishData.id, "feed", fallbackUrl);
+        }
       }
     } catch (e) {
+      // Not a failure: the main loop records the container for the reconciler to finish.
+      if (e instanceof ContainerStillProcessing) throw e;
       const msg = e instanceof Error ? e.message : String(e);
       await insertIGRow("feed", "failed", undefined, undefined, msg);
       subResults.push({ subtype: "feed", status: "failed", error: msg });
