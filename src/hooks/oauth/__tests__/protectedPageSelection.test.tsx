@@ -230,6 +230,75 @@ describe("protected page selection", () => {
     fireEvent.click(screen.getByRole("button", { name: /Shop/ }));
   });
 
+  // 2026-11-05: connecting a Page linked its Instagram without asking the owner.
+  const linkedPage = {
+    id: "page-1",
+    name: "Shop",
+    has_instagram: true,
+    ig_username: "shop_ig",
+    selection_key: "linked-k1",
+    facebook_only_selection_key: "only-k1",
+  };
+
+  it.each([
+    ["Connect Facebook and Instagram", "linked-k1"],
+    ["Facebook only", "only-k1"],
+  ])("a linked Page asks first and %s commits its key", (choice, expectedKey) => {
+    const onSelectPage = vi.fn();
+    render(
+      <PageSelectionDialog
+        open
+        onOpenChange={vi.fn()}
+        pages={[linkedPage]}
+        pageSearchQuery=""
+        onPageSearchChange={vi.fn()}
+        onSelectPage={onSelectPage}
+        selectingPage={null}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: /Shop/ }));
+    expect(onSelectPage).not.toHaveBeenCalled();
+    expect(screen.getByText(/@shop_ig/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: choice }));
+    expect(onSelectPage).toHaveBeenCalledWith("page-1", expectedKey);
+  });
+
+  it("a linked Page committed as Facebook only is disabled", () => {
+    render(
+      <PageSelectionDialog
+        open
+        onOpenChange={vi.fn()}
+        pages={[linkedPage]}
+        pageSearchQuery=""
+        onPageSearchChange={vi.fn()}
+        onSelectPage={vi.fn()}
+        selectingPage={null}
+        committedSelectionKeys={["only-k1"]}
+      />,
+    );
+    expect(screen.getByRole("button", { name: /Shop/ })).toBeDisabled();
+  });
+
+  it("committing the only Page as Facebook only closes the picker", async () => {
+    mocks.invoke.mockResolvedValueOnce({
+      data: { ...pendingPages("attempt-1").data, pages: [linkedPage] },
+      error: null,
+    });
+    mocks.invoke.mockResolvedValueOnce({
+      data: { success: true, page_name: "Shop", has_instagram: false },
+      error: null,
+    });
+    const { result } = renderHook(() => useFacebookOAuth(vi.fn(), vi.fn()));
+    await act(async () => {
+      await result.current.loadPendingFacebookSelection("sel-1");
+    });
+    await act(async () => {
+      await result.current.handleSelectPage("page-1", "only-k1");
+    });
+    expect(mocks.invoke.mock.calls[1][1].body.selection_key).toBe("only-k1");
+    expect(result.current.pageSelectionData).toBeNull();
+  });
+
   it("adds the sanitized subscription warning and ignores any other warning", () => {
     mocks.searchParams.set("connected", "instagram");
     mocks.searchParams.set("username", "shop");

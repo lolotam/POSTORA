@@ -36,8 +36,10 @@ import {
 } from "../_shared/facebookCredentialMode.ts";
 import type {
   MetaOAuthAttemptStore,
+  MetaOAuthCandidate,
   MetaOAuthFlow,
 } from "../_shared/metaOAuthAttemptStore.ts";
+import type { ProtectedManagedPage } from "../_shared/metaOAuthProtectedBoundary.ts";
 import {
   ProtectedOAuthError,
   type PendingLinkageReader,
@@ -250,6 +252,12 @@ export interface FacebookProtectedCandidate {
   name: string;
   /** True when the candidate carries a linked Instagram identity. */
   has_instagram: boolean;
+  /**
+   * The key that connects this Page without its linked Instagram. Present
+   * only on a Page that also offers the Page-plus-Instagram key, so the
+   * picker can ask the owner before the Instagram account is connected.
+   */
+  facebook_only_selection_key: string | null;
   ig_user_id: string | null;
   ig_username: string | null;
   ig_profile_picture_url: string | null;
@@ -293,17 +301,33 @@ export function projectFacebookPicker(projection: {
   const pages: FacebookProtectedCandidate[] = [];
   const standalone: FacebookProtectedCandidate[] = [];
 
+  // A Page that offers both keys appears once; its Page-only key becomes the
+  // alternative the picker offers when the owner declines the Instagram.
+  const linkedPageIds = new Set(projection.candidates
+    .filter((candidate) => candidate.facebook_page_id !== null && candidate.ig_user_id !== null)
+    .map((candidate) => candidate.facebook_page_id));
+  const facebookOnlyKeys = new Map<string, string>();
   for (const candidate of projection.candidates) {
+    if (candidate.facebook_page_id !== null && candidate.ig_user_id === null
+      && linkedPageIds.has(candidate.facebook_page_id)) {
+      facebookOnlyKeys.set(candidate.facebook_page_id, candidate.selection_key);
+    }
+  }
+
+  for (const candidate of projection.candidates) {
+    const pageId = candidate.facebook_page_id;
+    if (pageId !== null && candidate.ig_user_id === null && linkedPageIds.has(pageId)) continue;
     const entry: FacebookProtectedCandidate = {
       selection_key: candidate.selection_key,
-      id: candidate.facebook_page_id ?? candidate.ig_user_id ?? "",
+      id: pageId ?? candidate.ig_user_id ?? "",
       name: candidate.facebook_page_name ?? candidate.ig_username ?? "",
       has_instagram: candidate.ig_user_id !== null,
+      facebook_only_selection_key: pageId === null ? null : facebookOnlyKeys.get(pageId) ?? null,
       ig_user_id: candidate.ig_user_id,
       ig_username: candidate.ig_username,
       ig_profile_picture_url: candidate.ig_profile_picture_url,
     };
-    if (candidate.facebook_page_id !== null) pages.push(entry);
+    if (pageId !== null) pages.push(entry);
     else standalone.push(entry);
   }
 
@@ -317,6 +341,52 @@ export function projectFacebookPicker(projection: {
     pages,
     standalone_instagram: standalone,
   };
+}
+
+/** The pending-selection stash refuses more candidates than this. */
+export const MAX_PICKER_CANDIDATES = 50;
+
+/**
+ * The candidates one protected Facebook grant offers.
+ *
+ * In the Facebook Page flow, a Page with a linked Instagram account offers two
+ * keys: the Page with its Instagram, and the Page alone. The owner chooses in
+ * the picker, so the Instagram account is never connected without being
+ * asked. Page-alone alternatives are added only while the stash limit allows,
+ * so a grant with many Pages still offers every Page.
+ */
+export function buildProtectedPageCandidates(input: {
+  flow: MetaOAuthFlow;
+  pages: ProtectedManagedPage[];
+  facebookUserId: string;
+}): MetaOAuthCandidate[] {
+  const candidates: MetaOAuthCandidate[] = [];
+  const facebookOnly: MetaOAuthCandidate[] = [];
+  for (const page of input.pages) {
+    const base: MetaOAuthCandidate = {
+      facebook_page_id: page.id,
+      facebook_page_name: page.name,
+      page_access_token: page.accessToken,
+      facebook_user_id: input.facebookUserId,
+    };
+    if (page.instagram === null) {
+      if (input.flow === "facebook_page") candidates.push({ ...base, candidate_kind: "page_only" });
+      continue;
+    }
+    const instagram = {
+      ig_user_id: page.instagram.id,
+      ig_username: page.instagram.username ?? `ig_${page.instagram.id}`,
+      ig_profile_picture_url: page.instagram.profilePictureUrl,
+    };
+    if (input.flow === "facebook_page") {
+      candidates.push({ ...base, candidate_kind: "page_plus_ig", ...instagram });
+      facebookOnly.push({ ...base, candidate_kind: "page_only" });
+    } else {
+      candidates.push({ ...base, candidate_kind: "ig_only", ...instagram });
+    }
+  }
+  const room = Math.max(0, MAX_PICKER_CANDIDATES - candidates.length);
+  return [...candidates, ...facebookOnly.slice(0, room)];
 }
 
 /**

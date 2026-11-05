@@ -11,25 +11,11 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
-
-interface FacebookPage {
-  id: string;
-  name: string;
-  has_instagram?: boolean;
-  picture_url?: string;
-  /**
-   * The opaque authority of a protected candidate. The protected store action
-   * accepts the attempt id plus this key, never a page name.
-   */
-  selection_key?: string;
-}
-
-interface StandaloneInstagram {
-  id: string;
-  username: string;
-  profile_picture_url?: string;
-  selection_key?: string;
-}
+import {
+  choiceSelectionKeys,
+  type FacebookPage,
+  type StandaloneInstagram,
+} from "@/hooks/oauth/useFacebookOAuth";
 
 interface PageSelectionDialogProps {
   open: boolean;
@@ -94,9 +80,24 @@ export function PageSelectionDialog({
     [standaloneInstagram, q],
   );
 
+  // A Page with a linked Instagram is held here until the owner chooses
+  // whether the Instagram account is connected too.
+  const [linkedPage, setLinkedPage] = useState<FacebookPage | null>(null);
+
   const handleOpenChange = (next: boolean) => {
     if (!next) onPageSearchChange("");
     onOpenChange(next);
+  };
+
+  const handlePageClick = (page: FacebookPage) => {
+    if (page.facebook_only_selection_key) setLinkedPage(page);
+    else onSelectPage(page.id, page.selection_key);
+  };
+
+  const chooseLinkedPage = (selectionKey: string | null | undefined) => {
+    if (!linkedPage) return;
+    onSelectPage(linkedPage.id, selectionKey ?? undefined);
+    setLinkedPage(null);
   };
 
   return (
@@ -135,14 +136,14 @@ export function PageSelectionDialog({
               <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3">
                 {filteredPages.map((page) => {
                   const isSelecting = selectingPage === page.id;
-                  const isCommitted = !!page.selection_key && committedSelectionKeys.includes(page.selection_key);
+                  const isCommitted = choiceSelectionKeys(page).some((key) => committedSelectionKeys.includes(key));
                   const disabled = !!selectingPage || isCommitted;
                   return (
                     <button
                       key={page.id}
                       type="button"
                       disabled={disabled}
-                      onClick={() => onSelectPage(page.id, page.selection_key)}
+                      onClick={() => handlePageClick(page)}
                       className={cn(
                         "group flex w-full flex-col items-center gap-2.5 rounded-lg border border-input p-2.5 text-center transition-all",
                         "hover:bg-accent/50 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary",
@@ -239,6 +240,33 @@ export function PageSelectionDialog({
             Cancel
           </Button>
         </DialogFooter>
+
+        <Dialog open={!!linkedPage} onOpenChange={(next) => { if (!next) setLinkedPage(null); }}>
+          <DialogContent className="sm:max-w-md">
+            <DialogHeader>
+              <DialogTitle>Connect the linked Instagram account too?</DialogTitle>
+              <DialogDescription>
+                {linkedPage?.name} has a connected Instagram account
+                {linkedPage?.ig_username ? ` @${linkedPage.ig_username}` : ""}. Do you want to
+                connect it as well?
+              </DialogDescription>
+            </DialogHeader>
+            <DialogFooter className="gap-2 sm:gap-0">
+              <Button variant="outline" onClick={() => setLinkedPage(null)}>
+                Cancel
+              </Button>
+              <Button
+                variant="secondary"
+                onClick={() => chooseLinkedPage(linkedPage?.facebook_only_selection_key)}
+              >
+                Facebook only
+              </Button>
+              <Button onClick={() => chooseLinkedPage(linkedPage?.selection_key)}>
+                Connect Facebook and Instagram
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
       </DialogContent>
     </Dialog>
   );
