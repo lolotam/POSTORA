@@ -3819,14 +3819,15 @@ BEGIN
 
   INSERT INTO public.instagram_account_capabilities (
     social_account_id, user_id, platform, login_kind, permission_read_state,
-    granted_scopes, credential_generation, credential_updated_at, generation_reason
+    granted_scopes, scopes_read_at, credential_generation, credential_updated_at,
+    generation_reason
   ) VALUES
     (v_reused, u_owner, 'instagram', 'page_linked', 'ok',
-     ARRAY['instagram_basic'], 7, now(), 'credential_bound'),
+     ARRAY['instagram_basic'], now(), 7, now(), 'credential_bound'),
     (v_direct, u_owner, 'instagram', 'direct', 'ok',
-     ARRAY['instagram_business_basic'], 2, now(), 'credential_bound'),
+     ARRAY['instagram_business_basic'], now(), 2, now(), 'credential_bound'),
     (v_other_subject, u_owner, 'instagram', 'page_linked', 'ok',
-     ARRAY['instagram_basic'], 1, now(), 'credential_bound');
+     ARRAY['instagram_basic'], now(), 1, now(), 'credential_bound');
 
   -- Adoption.
   v_stage := pg_temp.moa_s24_page_attempt(
