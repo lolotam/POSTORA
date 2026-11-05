@@ -324,3 +324,9 @@ Deno.test("only a run its caller retries on its own is refused on a worker near 
   // Every other caller would not retry a refusal: always started, bounded by the deadlines.
   assertEquals(refuseOnSpentWorker({ resume: false, scheduled: false }, start, late), false);
 });
+
+Deno.test("a deferred carousel is read off its row and given up by name", () => {
+  const deferral = newDeferral("ig_carousel", "c-7", NOW);
+  assertEquals(readDeferral({ deferred: deferral }), deferral);
+  assertEquals(giveUpMessage("ig_carousel"), "Instagram did not finish processing the carousel within 30 minutes. Safe to retry.");
+});
