@@ -4,9 +4,17 @@ import { AnalyticsWorkerStopped } from "./deadline.ts";
 import { isPermanentMetaError, parseMetaError } from "../_shared/metaErrors.ts";
 import type { AdmissionCredential, OwnedAnalyticsPlatform } from "./store.ts";
 
-type PermissionFailure = "provider_error" | "reauth_required" | "rate_limited" | "permission_missing";
+type PermissionFailure = "provider_error" | "reauth_required" | "rate_limited" | "permission_missing" | "app_mismatch";
 export class AdmissionProviderUnavailable extends AnalyticsWorkerStopped {
   constructor(reason: "provider_unavailable" | "invalid_contract") { super(reason); }
+}
+// Meta answers debug_token for a token minted by another app with HTTP 500 and code 100.
+// The status reads as transient, but no retry helps until the account reconnects through
+// the configured app, so it must refuse instead of holding the dispatch target forever.
+const FOREIGN_APP_TOKEN_MESSAGE = /did not match the viewing app/i;
+function isForeignAppToken(code: number | undefined, message: string | undefined, payload: unknown): boolean {
+  const declaredTransient = (payload as { error?: { is_transient?: unknown } } | null)?.error?.is_transient === true;
+  return code === 100 && !declaredTransient && FOREIGN_APP_TOKEN_MESSAGE.test(message ?? "");
 }
 export type PermissionVerification = { ok: true; scopes: string[]; observedAt: string }
   | { ok: false; reason: PermissionFailure | "identity_mismatch" | "app_mismatch" };
@@ -46,6 +54,7 @@ export async function verifyAdmissionPermission(input: {
       }
       const error = parseMetaError(status, payload);
       const reason: PermissionFailure = status === 429 || [4,17,32,613].includes(error.code ?? -1) ? "rate_limited"
+        : isForeignAppToken(error.code, error.message, payload) ? "app_mismatch"
         : isPermanentMetaError(error) || error.code === 190 && !error.transient ? "reauth_required"
         : !error.transient && [10, 200].includes(error.code ?? -1) ? "permission_missing" : "provider_error";
       return metaAnalyticsFailure(status, "provider", reason,

@@ -32,6 +32,8 @@ const OWNER = "c1000000-0000-4000-8000-000000000001";
 const authority = { platform_user_id: "793001", credential_generation: 1, token_expires_at: null };
 const credential = { account_id: ACCOUNT, user_id: OWNER, authority, access_token: "fixture-op", permission_token: "fixture-op" };
 const ticket = { platform: "threads", due_on: "2026-11-01", policy_digest: DIGEST, round: 1, after_account_id: null, account_id: ACCOUNT };
+const FOREIGN_APP_TOKEN_ERROR = { type: "OAuthException", code: 100,
+  message: "(#100) The App_id in the input_token did not match the Viewing App" };
 
 Deno.test("the shared 50-target cap yields to an unstarted platform on the next invocation", async () => {
   const positions = { facebook: 0, threads: 0 };
@@ -147,7 +149,7 @@ Deno.test("malformed configuration is unavailable and a caller cannot choose dis
 });
 
 Deno.test("transient or undecodable admission leaves the durable dispatch target resumable", async (test) => {
-  for (const stage of ["debug_token", "me"]) for (const failure of ["transport", "server_error", "transient_error", "transient_permission", "transient_auth", "invalid_response"]) {
+  for (const stage of ["debug_token", "me"]) for (const failure of ["transport", "server_error", "transient_error", "transient_permission", "transient_auth", "transient_app_mismatch", "invalid_response"]) {
     await test.step(`${stage}: ${failure}`, async () => {
       let commits = 0, observations = 0;
       const handler = createOwnedAnalyticsSyncHandler({ authorize: () => ({ ok: true }), app: () => ({ id: "790001", secret: "fixture-app" }), audit: async () => true,
@@ -166,6 +168,7 @@ Deno.test("transient or undecodable admission leaves the durable dispatch target
             if (failure === "transient_error") return Response.json({ error: { code: 2, is_transient: true } }, { status: 400 });
             if (failure === "transient_permission") return Response.json({ error: { code: 200, is_transient: true } }, { status: 400 });
             if (failure === "transient_auth") return Response.json({ error: { code: 190, is_transient: true } }, { status: 400 });
+            if (failure === "transient_app_mismatch") return Response.json({ error: { ...FOREIGN_APP_TOKEN_ERROR, is_transient: true } }, { status: 500 });
             return Response.json({ unexpected: true });
           }
           return Response.json({ data: { is_valid: true, user_id: authority.platform_user_id, scopes: ["threads_basic", "threads_manage_insights"] } });
@@ -225,6 +228,26 @@ Deno.test("known permission and auth refusals advance without fabricated observa
     assertEquals(response.status, 200);
     assertEquals((await response.json()).counts, { visited: 1, queued: 0, refused: 1 });
   });
+});
+
+// Production 2026-11-04: Threads tokens issued before THREADS_APP_ID changed kept every
+// dispatch target "admission_unavailable" because this HTTP 500 read as transient.
+Deno.test("a token minted by another Meta app refuses as app_mismatch instead of retrying", async () => {
+  let commits = 0;
+  const handler = createOwnedAnalyticsSyncHandler({ authorize: () => ({ ok: true }), app: () => ({ id: "790001", secret: "fixture-app" }), audit: async () => true,
+    rpc: async (name, args) => {
+      if (name === "next_meta_analytics_dispatch_target") return { data: { state: "target", ticket, served_at: STAMP }, error: null };
+      if (name === "read_threads_analytics_admission_credential") return { data: credential, error: null };
+      assertEquals(name, "commit_meta_analytics_dispatch_target");
+      if (++commits === 1) return { data: { state: "needs_admission" }, error: null };
+      assertEquals(args.p_outcome, "refused");
+      assertEquals(args.p_reason, "app_mismatch");
+      return { data: { state: "advanced", outcome: "refused", complete: true, refused_count: 1 }, error: null };
+    }, fetch: async (input) => String(input).includes("debug_token") ? Response.json({ error: FOREIGN_APP_TOKEN_ERROR }, { status: 500 })
+      : Response.json({ id: authority.platform_user_id }) });
+  const response = await handler(request("threads"));
+  assertEquals(response.status, 200);
+  assertEquals((await response.json()).counts, { visited: 1, queued: 0, refused: 1 });
 });
 
 Deno.test("persisted admission failures release the next account without reporting collection success", async () => {
