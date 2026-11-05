@@ -66,7 +66,7 @@ Deno.test("a resumed run is abandoned past its deadline or once the post has cha
   const inTime = new Date(NOW.getTime() + DEFERRAL_GIVE_UP_MS - 1);
   assertEquals(abandonReason(deferral, "processing", inTime), null);
   assertEquals(abandonReason(deferral, "processing", new Date(NOW.getTime() + DEFERRAL_GIVE_UP_MS)), giveUpMessage("ig_reel"));
-  assertEquals(abandonReason(deferral, "failed", inTime), "The post was changed while the video was processing. Safe to retry.");
+  assertEquals(abandonReason(deferral, "failed", inTime), "The post was changed while the media was processing. Safe to retry.");
 });
 
 Deno.test("a resumed run checks once; a first run waits within its budget", () => {

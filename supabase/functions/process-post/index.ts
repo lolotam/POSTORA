@@ -4305,8 +4305,8 @@ async function postToInstagram(
   // travels on the pending row, so the resumed or abandoned run writes the missing row.
   let unrecordedStory: StoryRef | null = null;
 
-  // A resumed run finishes only the deferred reel: the story was handled the first time. A retry
-  // posts it again only when no earlier run recorded it.
+  // A resumed run finishes only the deferred reel or carousel: the story was handled the first time.
+  // A retry posts it again only when no earlier run recorded it.
   if (!timing.resume && !retry.storyRecorded && igPostTypes.includes("story") && mediaUrls.length > 0) {
     const storyBody: Record<string, unknown> = {
       media_type: "STORIES",
@@ -4703,6 +4703,17 @@ async function postToInstagram(
     let carouselId: string;
     if (timing.resume) {
       carouselId = timing.resume.deferral.container_id;
+      // The first run published a story it could not record: record it now (the story itself
+      // is never published again).
+      const carried = timing.resume.unrecordedStory;
+      if (carried && recordStory) {
+        const recordError = await recordStory(carried);
+        if (recordError) {
+          console.error(`[IG story] still not recorded on resume: ${recordError}`);
+          warnings.push("The Instagram Story was published but could not be recorded.");
+          unrecordedStory = carried;
+        }
+      }
     } else {
       const childEndpoint = `https://graph.facebook.com/v18.0/${igUserId}/media`;
       const containerIds = await createCarouselChildren(
@@ -4766,10 +4777,17 @@ async function postToInstagram(
     }
 
     // The carousel can be finished later like a reel: the reconciler resumes a still-processing one.
-    const carouselStatus = await pollContainerStatus(carouselId, accessToken, {
-      deferKind: "ig_carousel",
-      deadlineMs: deferrableDeadline(timing.deadlineMs, WORKER_STARTED_AT_MS),
-    });
+    let carouselStatus: string;
+    try {
+      carouselStatus = await pollContainerStatus(carouselId, accessToken, {
+        deferKind: "ig_carousel",
+        deadlineMs: deferrableDeadline(timing.deadlineMs, WORKER_STARTED_AT_MS),
+      });
+    } catch (waitError) {
+      // The pending row carries a story that could not be recorded, or it would be lost here.
+      if (waitError instanceof ContainerStillProcessing && unrecordedStory) waitError.unrecordedStory = unrecordedStory;
+      throw waitError;
+    }
     let publishData: { id: string };
     if (carouselStatus === "PUBLISHED") {
       // Only a resumed run sees this: an earlier run's publish went unanswered, or its worker
@@ -4790,7 +4808,14 @@ async function postToInstagram(
       }
       publishData = { id: media.id };
     } else {
-      publishData = await publishInstagramMedia(igUserId, carouselId, accessToken, "ig_carousel");
+      // A publish Instagram did not confirm is left for the reconciler, carrying the unrecorded
+      // story like the wait above.
+      try {
+        publishData = await publishInstagramMedia(igUserId, carouselId, accessToken, "ig_carousel");
+      } catch (publishError) {
+        if (publishError instanceof ContainerStillProcessing && unrecordedStory) publishError.unrecordedStory = unrecordedStory;
+        throw publishError;
+      }
     }
 
     // On a resumed run they may have run once already, before a worker stopped: never twice.
@@ -5194,7 +5219,7 @@ async function postToInstagramBusinessLogin(
       // keying the event on the POST id rather than the row id would collapse
       // them into one.
       const settled = await settlePlatformPost(supabase, {
-        // A resumed run settles the pending row the first run left; only the reel resumes.
+        // A resumed run settles the pending row the first run left; only the reel or carousel resumes.
         platformPostId: subtype !== "story" ? timing.resume?.platformPostId ?? null : null,
         postId,
         socialAccountId: account.id,
@@ -5268,8 +5293,8 @@ async function postToInstagramBusinessLogin(
 
   // ─── 1. STORY ──────────────────────────────────────────────────────────────
   const wantStory = blPostTypes.includes("story") || (shareToStory && mediaUrls.length > 0);
-  // A resumed run finishes only the deferred reel: the story was handled the first time. A retry
-  // posts it again only when no earlier run recorded it.
+  // A resumed run finishes only the deferred reel or carousel: the story was handled the first time.
+  // A retry posts it again only when no earlier run recorded it.
   if (wantStory && !timing.resume && !retry.storyRecorded) {
     try {
       const storyBody: Record<string, unknown> = {

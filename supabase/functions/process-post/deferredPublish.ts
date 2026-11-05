@@ -142,7 +142,7 @@ export function giveUpMessage(kind: DeferredKind): string {
 /** Why a resumed run settles its row failed without asking Meta again, or null to go on. */
 export function abandonReason(deferral: Deferral, postStatus: string | null, now: Date): string | null {
   if (isPastGiveUp(deferral, now)) return giveUpMessage(deferral.kind);
-  if (postStatus !== "processing") return "The post was changed while the video was processing. Safe to retry.";
+  if (postStatus !== "processing") return "The post was changed while the media was processing. Safe to retry.";
   return null;
 }
 
