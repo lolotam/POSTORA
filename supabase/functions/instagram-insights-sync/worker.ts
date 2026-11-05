@@ -1375,9 +1375,14 @@ function createVisitState(job: ClaimedOwnerJob): OwnerVisitState {
  * The bound context of this visit, and the truth it starts from.
  *
  * A job without a captured context cannot be written at all: the accepted
- * SQL refuses every provider result write without one. Such a job is
- * abandoned to its lease and the run continues - one unusable job must not
- * stall every other owner.
+ * SQL refuses every provider result write without one. An unbound context
+ * is either an account with NO capability row, so the claim could not bind
+ * one, or a claim whose bound viewer is not the target. The DATABASE
+ * decides which of the two may be settled: it settles the first one, once,
+ * so a job that keeps coming back stops coming back, and it refuses the
+ * second one, which is then abandoned to its lease exactly as before.
+ * Either way the run continues - one unusable job must not stall every
+ * other owner.
  *
  * A job that keeps coming back must stop coming back, so a continuation
  * that outlived its capture day is finished here, before a provider call is
@@ -1386,24 +1391,17 @@ function createVisitState(job: ClaimedOwnerJob): OwnerVisitState {
 async function readJobContext(
   context: JobContext,
 ): Promise<StepResult<OwnerVisitState>> {
-  const { ports, job } = context;
+  const { job } = context;
 
   if (!verifyBoundContext(job)) {
-    // Nothing can be written for this job, so there is nothing to record.
-    // The lease is left to expire and the job is recovered later - but the
-    // RUN continues: one unusable job must not stall every other owner.
-    ports.log({
-      event: "owner_job_abandoned",
-      jobId: job.jobId,
-      socialAccountId: job.socialAccountId,
-      outcome: "abandoned",
-      reasonCode: "context_missing",
-      durationMs: ports.now() - context.startedAt,
-    });
-    return {
-      kind: "end",
-      step: { job: result(context, "abandoned", "context_missing"), stopRun: false },
-    };
+    // The context is not bound: either the account has no capability row,
+    // so the claim could not bind one, or the bound viewer is not the
+    // target. The DATABASE decides which of the two may be settled. The
+    // settlement is asked for once, so a job that keeps coming back stops
+    // coming back; a settlement the database refuses abandons it exactly
+    // as before, and the RUN continues either way - one unusable job must
+    // not stall every other owner.
+    return { kind: "end", step: await settleCapabilityMissing(context) };
   }
 
   const visit = createVisitState(job);

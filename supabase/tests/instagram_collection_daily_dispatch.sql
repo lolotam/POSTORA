@@ -135,6 +135,40 @@ BEGIN
 END
 $fixtures$;
 
+-- ---------------------------------------------------------------------------
+-- The enrolment of the synthetic accounts.
+--
+-- The daily page never selects an owner account that has NO capability row:
+-- an account the claim could never bind is SKIPPED, not refused. Every
+-- synthetic account of this suite is therefore ENROLLED - it has a capability
+-- row - so the blocks below keep proving exactly what they proved before
+-- that filter existed: the POLICY decides which targets are admitted, and
+-- the evaluator refuses at insert time.
+--
+-- The rows are minimal: a page-linked account whose permission read landed,
+-- at credential generation 1.
+-- ---------------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION pg_temp.igdaily_enrol(p_ids uuid[])
+RETURNS void LANGUAGE plpgsql AS $fn$
+BEGIN
+  INSERT INTO public.instagram_account_capabilities
+    (social_account_id, user_id, platform, login_kind, permission_read_state,
+     granted_scopes, scopes_read_at, credential_generation)
+  SELECT sa.id, sa.user_id, sa.platform, 'page_linked', 'ok',
+         ARRAY['instagram_manage_insights'], now(), 1
+    FROM public.social_accounts AS sa
+   WHERE sa.id = ANY(p_ids)
+  ON CONFLICT (social_account_id) DO NOTHING;
+END
+$fn$;
+
+-- Owner A's thirty accounts and owner B's one.
+SELECT pg_temp.igdaily_enrol(
+  ARRAY(
+    SELECT ('ad200000-0000-4000-8000-' || lpad(i::text, 12, '0'))::uuid
+      FROM generate_series(1, 30) AS i
+  ) || ARRAY['bd200000-0000-4000-8000-000000000001'::uuid]);
+
 -- The capture day the suite works on. The DATABASE chooses it; the suite
 -- only reads it back, exactly like the dispatch does.
 CREATE TEMP TABLE igdaily_ctx (
@@ -641,6 +675,12 @@ BEGIN
     ('bd200000-0000-4000-8000-0000000000bb', 'bd100000-0000-4000-8000-000000000002',
      'instagram', 'ig-daily-bb', 'igdaily_bb', 'token-bb', 'facebook_page', true, false);
 
+  -- Both new accounts are enrolled, so the exclusion below is proved by the
+  -- POLICY and not by the enrolment state of the target.
+  PERFORM pg_temp.igdaily_enrol(ARRAY[
+    'ad200000-0000-4000-8000-0000000000aa'::uuid,
+    'bd200000-0000-4000-8000-0000000000bb'::uuid]);
+
   -- The policy admits exactly ONE account: owner A's new one. The other
   -- tenant's new account is not on the list, so it is not even a candidate.
   PERFORM pg_temp.igdaily_set_policy(pg_temp.igdaily_owner_policy(
@@ -687,6 +727,8 @@ BEGIN
   VALUES
     ('ad200000-0000-4000-8000-0000000000bb', 'ad100000-0000-4000-8000-000000000001',
      'instagram', 'ig-daily-bb', 'igdaily_bb', 'token-bb', 'facebook_page', true, false);
+
+  PERFORM pg_temp.igdaily_enrol(ARRAY['ad200000-0000-4000-8000-0000000000bb'::uuid]);
 
   PERFORM pg_temp.igdaily_set_policy(pg_temp.igdaily_owner_policy(ARRAY[
     'ad200000-0000-4000-8000-0000000000aa'::text,
@@ -1077,6 +1119,8 @@ BEGIN
     (v_good_viewer, u_a, 'instagram', 'ig-d16-viewer', 'igd16viewer',
      'token-d16-viewer', 'facebook_page', true, false);
 
+  PERFORM pg_temp.igdaily_enrol(ARRAY[v_good_viewer]);
+
   INSERT INTO public.competitor_watchlist (id, user_id, platform, username)
   SELECT ('c0e16000-0000-4000-8000-' || lpad(n::text, 12, '0'))::uuid,
          u_a,
@@ -1244,6 +1288,15 @@ BEGIN
     false
   FROM generate_series(1, 26) AS n;
 
+  -- The refused prefix is a prefix of CANDIDATES: the evaluator refuses these
+  -- twenty five accounts, and the twenty sixth is admitted. That is only the
+  -- proof when every one of them is enrolled.
+  PERFORM pg_temp.igdaily_enrol(
+    ARRAY(
+      SELECT ('a0d17000-0000-4000-8000-' || lpad(n::text, 12, '0'))::uuid
+        FROM generate_series(1, 26) AS n
+    ));
+
   PERFORM pg_temp.igdaily_set_policy(jsonb_build_object(
     'version', 1,
     'owners', jsonb_build_object('mode', 'all', 'account_ids', '[]'::jsonb),
@@ -1341,6 +1394,8 @@ BEGIN
   VALUES
     (v_good_viewer, u_a, 'instagram', 'ig-d18-viewer', 'igd18viewer',
      'token-d18-viewer', 'facebook_page', true, false);
+
+  PERFORM pg_temp.igdaily_enrol(ARRAY[v_good_viewer]);
 
   INSERT INTO public.competitor_watchlist (id, user_id, platform, username)
   SELECT ('c0e18000-0000-4000-8000-' || lpad(n::text, 12, '0'))::uuid,

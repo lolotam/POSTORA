@@ -850,6 +850,7 @@ Deno.test("a usage stop during the first media page leaves the job resumable", a
 
 Deno.test("a job without a bound context does not stall the next owner", async () => {
   const broken = createClaimedJob({
+    job_id: SECOND_JOB_ID,
     context: {
       viewer_social_account_id: null,
       credential_generation: null,
@@ -867,11 +868,61 @@ Deno.test("a job without a bound context does not stall the next owner", async (
   const summary = await runOwnerDrain(harness.ports);
 
   assertEquals(summary.claimed, 2);
-  assertEquals(summary.abandoned, 1);
+  // The job is SETTLED, not abandoned to its lease: an owner account with no
+  // capability row can never be bound, so the job must stop coming back.
+  assertEquals(summary.unavailable, 1);
+  assertEquals(summary.abandoned, 0);
   assertEquals(summary.completed, 1);
   assertEquals(summary.stoppedEarly, false);
-  assertEquals(summary.jobs[0]!.reasonCode, "context_missing");
+  assertEquals(summary.jobs[0]!.outcome, "unavailable");
+  assertEquals(summary.jobs[0]!.reasonCode, "capability_missing");
   assertEquals(summary.jobs[1]!.outcome, "completed");
+  // Asked for once, for the broken job only.
+  assertEquals(harness.calls.settlements, [
+    { jobId: SECOND_JOB_ID, jobGeneration: broken.jobGeneration },
+  ]);
+});
+
+Deno.test("a context-less job the database refuses to settle is still abandoned to its lease", async () => {
+  const broken = createClaimedJob({
+    job_id: SECOND_JOB_ID,
+    social_account_id: SECOND_ACCOUNT_ID,
+    target_id: SECOND_ACCOUNT_ID,
+    context: {
+      viewer_social_account_id: null,
+      credential_generation: null,
+      login_kind: null,
+      capability_present: false,
+      permission_read_state: null,
+      granted_scopes: [],
+    },
+  });
+
+  const harness = createHarness({
+    store: {
+      jobs: [broken, createClaimedJob()],
+      accounts: {
+        // The settlement is refused with a definitive refusal: the account
+        // turned out to be enrolled after all, so the database raises its
+        // context refusal instead of settling the job.
+        [SECOND_ACCOUNT_ID]: { settleFailure: "invalid" },
+      },
+    },
+  });
+
+  const summary = await runOwnerDrain(harness.ports);
+
+  assertEquals(summary.abandoned, 1);
+  assertEquals(summary.unavailable, 0);
+  assertEquals(summary.jobs[0]!.outcome, "abandoned");
+  assertEquals(summary.jobs[0]!.reasonCode, "capability_missing");
+  assertEquals(summary.jobs[1]!.outcome, "completed");
+  assertEquals(summary.stoppedEarly, false);
+  // The refusal is recorded, and the run goes on to the next owner.
+  assertEquals(
+    harness.logs.some((event) => event.event === "owner_capability_settlement_refused"),
+    true,
+  );
 });
 
 Deno.test("a target that is gone does not stall the next owner", async () => {
@@ -1165,8 +1216,12 @@ Deno.test("a job without a bound context spends no provider call", async () => {
 
   const summary = await runOwnerDrain(harness.ports);
 
-  assertEquals(summary.abandoned, 1);
-  assertEquals(summary.processed, 0);
+  // The job is SETTLED, not abandoned to its lease: an owner account with no
+  // capability row can never be bound, so it is closed once instead of being
+  // reclaimed every lease. It is closed, and no provider call was spent.
+  assertEquals(summary.unavailable, 1);
+  assertEquals(summary.abandoned, 0);
+  assertEquals(summary.processed, 1);
   assertEquals(harness.graphCalls.length, 0);
   assertEquals(harness.calls.completes.length, 0);
   assertEquals(harness.calls.snapshots.length, 0);
