@@ -2487,3 +2487,30 @@ routeTest("a direct identity with a control character never completes or commits
     assertEquals(logs.includes("\\u0000"), false);
   }
 });
+
+routeTest("disconnect is routed for an owned Meta account and removes nothing itself", async () => {
+  for (const platform of ["facebook", "instagram"] as const) {
+    const current = probe({ setting: "protected", socialRows: [{ id: ACCOUNT_ID, user_id: USER_ID, platform, is_active: true }] });
+    const handler = await loadHandler("facebook-oauth/index.ts", current);
+    const result = await callJson(handler, "https://synthetic.invalid/functions/v1/facebook-oauth", { action: "disconnect", social_account_id: ACCOUNT_ID });
+    assertEquals(result.status, 200, platform);
+    assertEquals(result.body, { success: true, revoked: false, reason: "no_binding" }, platform);
+    assertEquals(providerUrls(current), [], platform);
+    assertEquals(current.mutations, [], platform);
+  }
+});
+
+routeTest("disconnect refuses a foreign, non-Meta or malformed account id before any provider call", async () => {
+  const current = probe({ setting: "protected", socialRows: [
+    { id: ACCOUNT_ID, user_id: OTHER_USER_ID, platform: "facebook", is_active: true },
+    { id: TARGET_ID, user_id: USER_ID, platform: "threads", is_active: true },
+  ] });
+  const handler = await loadHandler("facebook-oauth/index.ts", current);
+  const foreign = await callJson(handler, "https://synthetic.invalid/functions/v1/facebook-oauth", { action: "disconnect", social_account_id: ACCOUNT_ID });
+  assertEquals(foreign.status, 404);
+  const threads = await callJson(handler, "https://synthetic.invalid/functions/v1/facebook-oauth", { action: "disconnect", social_account_id: TARGET_ID });
+  assertEquals(threads.status, 404);
+  const malformed = await callJson(handler, "https://synthetic.invalid/functions/v1/facebook-oauth", { action: "disconnect", social_account_id: "not-a-uuid" });
+  assertEquals(malformed.status, 400);
+  assertEquals(providerUrls(current), []);
+});

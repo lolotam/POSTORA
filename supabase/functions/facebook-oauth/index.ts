@@ -19,6 +19,7 @@ import {
   projectFacebookPicker,
   type FacebookProtectedRuntime,
 } from "./protectedPageConnect.ts";
+import { decideDisconnect } from "./disconnect.ts";
 import {
   createMetaOAuthAttemptStoreFromClient,
   type MetaOAuthFlow,
@@ -811,7 +812,7 @@ Deno.serve(async (req) => {
 
   const validActions = [
     "list_pages", "store_page", "store_account", "store_instagram",
-    "authorize", "get_pending_selection",
+    "authorize", "get_pending_selection", "disconnect",
   ];
   // Legacy actions that require the FB JS SDK provider_token. New backend
   // callback path uses `selection_id` instead, so providing either satisfies
@@ -827,7 +828,9 @@ Deno.serve(async (req) => {
       !body.selection_key) ||
     (body.action === "store_page" && !body.page_id && !body.selection_key) ||
     (body.action === "store_instagram" && !body.instagram_account_id) ||
-    (body.action === "get_pending_selection" && !body.selection_id);
+    (body.action === "get_pending_selection" && !body.selection_id) ||
+    (body.action === "disconnect" &&
+      !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(String(body.social_account_id ?? "")));
 
   if (!validActions.includes(body.action) || missingActionField) {
     return new Response(JSON.stringify({ error: "Invalid request body" }), {
@@ -873,6 +876,89 @@ Deno.serve(async (req) => {
         error: classificationError.message,
       }), {
         status: classificationError.status,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+
+    // Disconnect: withdraw the Facebook user grant when this account is its
+    // last member, then let the caller delete the row. Neither an OAuth
+    // attempt nor the credential schema is touched here, so it runs before
+    // the lifecycle decision.
+    if (action === "disconnect") {
+      const socialAccountId = String(body.social_account_id);
+      const logDisconnectEvent = async (message: string, metadata: Record<string, unknown>) => {
+        const { error: logError } = await supabase.from("system_logs").insert({
+          source: "facebook-oauth",
+          category: "auth",
+          level: "warn",
+          message,
+          user_id: user_id,
+          metadata: { action: "disconnect", social_account_id: socialAccountId, ...metadata },
+        }).abortSignal(AbortSignal.timeout(2_000));
+        if (logError) console.error("[facebook-oauth] Disconnect log rejected:", logError.message);
+      };
+
+      const { data: account, error: accountError } = await supabase
+        .from("social_accounts")
+        .select("id, platform")
+        .eq("id", socialAccountId)
+        .eq("user_id", user_id)
+        .maybeSingle();
+      if (accountError) throw new Error("Account lookup failed");
+      if (!account || !["facebook", "instagram"].includes(String(account.platform))) {
+        await logDisconnectEvent("Facebook disconnect refused: account not found for this caller", {});
+        return new Response(JSON.stringify({ error: "Account not found" }), {
+          status: 404,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+
+      const appId = Deno.env.get("FACEBOOK_APP_ID");
+      const appSecret = Deno.env.get("FACEBOOK_APP_SECRET");
+      if (!appId || !appSecret) {
+        await logDisconnectEvent("Facebook disconnect: app credentials not configured; account removed in Postora only", { reason: "credentials_missing" });
+        return new Response(JSON.stringify({ success: true, revoked: false, reason: "credentials_missing" }), {
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+
+      const outcome = await decideDisconnect({
+        readBinding: async (id) => {
+          const { data, error } = await supabase
+            .from("facebook_user_credential_bindings")
+            .select("credential_id")
+            .eq("social_account_id", id)
+            .eq("user_id", user_id)
+            .maybeSingle();
+          if (error) throw new Error("Binding lookup failed");
+          return data;
+        },
+        countGrantMembers: async (credentialId) => {
+          const { count, error } = await supabase
+            .from("facebook_user_credential_bindings")
+            .select("social_account_id", { count: "exact", head: true })
+            .eq("credential_id", credentialId)
+            .eq("user_id", user_id);
+          if (error) throw new Error("Grant member count failed");
+          return count ?? 0;
+        },
+        readProviderUserId: async (credentialId) => {
+          const { data, error } = await supabase
+            .from("facebook_user_credentials")
+            .select("provider_user_id")
+            .eq("id", credentialId)
+            .eq("user_id", user_id)
+            .maybeSingle();
+          if (error) throw new Error("Credential lookup failed");
+          return data?.provider_user_id ?? null;
+        },
+        fetch,
+      }, { appId, appSecret }, socialAccountId);
+
+      if (!outcome.revoked && outcome.reason !== "no_binding" && outcome.reason !== "grant_shared") {
+        await logDisconnectEvent("Facebook de-authorization did not succeed; account removed in Postora only", { reason: outcome.reason });
+      }
+      return new Response(JSON.stringify({ success: true, revoked: outcome.revoked, reason: outcome.reason }), {
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
