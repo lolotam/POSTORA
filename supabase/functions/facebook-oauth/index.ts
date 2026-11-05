@@ -19,6 +19,7 @@ import {
   projectFacebookPicker,
   type FacebookProtectedRuntime,
 } from "./protectedPageConnect.ts";
+import { decideDisconnect } from "./disconnect.ts";
 import {
   createMetaOAuthAttemptStoreFromClient,
   type MetaOAuthFlow,
@@ -43,6 +44,7 @@ import {
   type PendingReferenceOutcome,
   type ProtectedAttemptStateContext,
 } from "../_shared/metaOAuthProtectedFlow.ts";
+import { withMetaConsentPrompt } from "../_shared/metaConsentPrompt.ts";
 
 import {
   ProtectedProviderFailure,
@@ -80,6 +82,8 @@ const FB_OAUTH_SCOPES = [
   "ads_read", "ads_management",
   "leads_retrieval", "pages_manage_ads",
 ];
+// A disconnect names exactly one account, so its id has to be a UUID string.
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 
 interface FacebookPage {
@@ -781,7 +785,11 @@ Deno.serve(async (req) => {
     });
   }
 
-  if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY || !Deno.env.get("FACEBOOK_APP_ID")) {
+  // A disconnect never needs the Facebook app configuration: it has to be
+  // able to remove the account in Postora even when the provider is
+  // unconfigured, so it is exempt from the Facebook app id requirement.
+  if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY ||
+      (body.action !== "disconnect" && !Deno.env.get("FACEBOOK_APP_ID"))) {
     console.error("Facebook OAuth configuration is incomplete");
     return new Response(JSON.stringify({ error: "Service configuration error" }), {
       status: 500,
@@ -801,6 +809,36 @@ Deno.serve(async (req) => {
     });
   }
 
+  // Every disconnect refusal leaves one sanitized system_logs row: the
+  // request-boundary refusal, the failed lookups and the failed revoke. The
+  // account id is optional, because an invalid one is never copied into the
+  // log, and no raw request value ever reaches the metadata.
+  const logDisconnectEvent = async (
+    message: string,
+    metadata: Record<string, unknown>,
+    socialAccountId?: string,
+  ) => {
+    try {
+      const logClient = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
+      const { error: logError } = await logClient.from("system_logs").insert({
+        source: "facebook-oauth",
+        category: "auth",
+        level: "warn",
+        message,
+        user_id: user_id,
+        metadata: {
+          action: "disconnect",
+          ...(socialAccountId ? { social_account_id: socialAccountId } : {}),
+          ...metadata,
+        },
+      }).abortSignal(AbortSignal.timeout(2_000));
+      if (logError) console.error("[facebook-oauth] Disconnect log rejected:", logError.message);
+    } catch {
+      // A failed log must never change the response of the request.
+      console.error("[facebook-oauth] Disconnect log failed");
+    }
+  };
+
   if (!body.action) {
     return new Response(JSON.stringify({ error: "Invalid request body" }), {
       status: 400,
@@ -810,7 +848,7 @@ Deno.serve(async (req) => {
 
   const validActions = [
     "list_pages", "store_page", "store_account", "store_instagram",
-    "authorize", "get_pending_selection",
+    "authorize", "get_pending_selection", "disconnect",
   ];
   // Legacy actions that require the FB JS SDK provider_token. New backend
   // callback path uses `selection_id` instead, so providing either satisfies
@@ -818,6 +856,11 @@ Deno.serve(async (req) => {
   // the opaque selection key instead of a page id.
   const legacyTokenActions = ["list_pages", "store_account"];
   const selectionOrTokenActions = ["store_page", "store_instagram"];
+  // A disconnect names exactly one account, so its id has to be a UUID
+  // string. The refused raw value is never logged.
+  const disconnectIdInvalid = body.action === "disconnect" &&
+    (typeof body.social_account_id !== "string" ||
+      !UUID_PATTERN.test(body.social_account_id));
   const missingActionField =
     (legacyTokenActions.includes(body.action) && !body.provider_token) ||
     (selectionOrTokenActions.includes(body.action) &&
@@ -826,9 +869,16 @@ Deno.serve(async (req) => {
       !body.selection_key) ||
     (body.action === "store_page" && !body.page_id && !body.selection_key) ||
     (body.action === "store_instagram" && !body.instagram_account_id) ||
-    (body.action === "get_pending_selection" && !body.selection_id);
+    (body.action === "get_pending_selection" && !body.selection_id) ||
+    disconnectIdInvalid;
 
   if (!validActions.includes(body.action) || missingActionField) {
+    if (disconnectIdInvalid) {
+      await logDisconnectEvent(
+        "Facebook disconnect refused: invalid account id",
+        { reason: "invalid_account_id" },
+      );
+    }
     return new Response(JSON.stringify({ error: "Invalid request body" }), {
       status: 400,
       headers: { ...corsHeaders, "Content-Type": "application/json" },
@@ -872,6 +922,118 @@ Deno.serve(async (req) => {
         error: classificationError.message,
       }), {
         status: classificationError.status,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+
+    // Disconnect: withdraw the Facebook user grant when this account is its
+    // last member, then let the caller delete the row. Neither an OAuth
+    // attempt nor the credential schema is touched here, so it runs before
+    // the lifecycle decision.
+    if (action === "disconnect") {
+      const socialAccountId = String(body.social_account_id);
+
+      const { data: account, error: accountError } = await supabase
+        .from("social_accounts")
+        .select("id, platform")
+        .eq("id", socialAccountId)
+        .eq("user_id", user_id)
+        .maybeSingle();
+      if (accountError) {
+        await logDisconnectEvent(
+          "Facebook disconnect failed: account lookup failed",
+          { reason: "account_lookup_failed" },
+          socialAccountId,
+        );
+        throw new Error("Account lookup failed");
+      }
+      if (!account || !["facebook", "instagram"].includes(String(account.platform))) {
+        await logDisconnectEvent(
+          "Facebook disconnect refused: account not found for this caller",
+          { reason: "account_not_found" },
+          socialAccountId,
+        );
+        return new Response(JSON.stringify({ error: "Account not found" }), {
+          status: 404,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+
+      const appId = Deno.env.get("FACEBOOK_APP_ID");
+      const appSecret = Deno.env.get("FACEBOOK_APP_SECRET");
+      if (!appId || !appSecret) {
+        await logDisconnectEvent(
+          "Facebook disconnect: app credentials not configured; account removed in Postora only",
+          { reason: "credentials_missing" },
+          socialAccountId,
+        );
+        return new Response(JSON.stringify({ success: true, revoked: false, reason: "credentials_missing" }), {
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+
+      const outcome = await decideDisconnect({
+        readBinding: async (id) => {
+          const { data, error } = await supabase
+            .from("facebook_user_credential_bindings")
+            .select("credential_id")
+            .eq("social_account_id", id)
+            .eq("user_id", user_id)
+            .maybeSingle();
+          if (error) {
+            await logDisconnectEvent(
+              "Facebook disconnect failed: binding lookup failed",
+              { reason: "binding_lookup_failed" },
+              socialAccountId,
+            );
+            throw new Error("Binding lookup failed");
+          }
+          return data;
+        },
+        countGrantMembers: async (credentialId) => {
+          const { count, error } = await supabase
+            .from("facebook_user_credential_bindings")
+            .select("social_account_id", { count: "exact", head: true })
+            .eq("credential_id", credentialId)
+            .eq("user_id", user_id);
+          if (error) {
+            await logDisconnectEvent(
+              "Facebook disconnect failed: grant member count failed",
+              { reason: "grant_count_failed" },
+              socialAccountId,
+            );
+            throw new Error("Grant member count failed");
+          }
+          return count ?? 0;
+        },
+        readProviderUserId: async (credentialId) => {
+          const { data, error } = await supabase
+            .from("facebook_user_credentials")
+            .select("provider_user_id")
+            .eq("id", credentialId)
+            .eq("user_id", user_id)
+            .maybeSingle();
+          if (error) {
+            await logDisconnectEvent(
+              "Facebook disconnect failed: credential lookup failed",
+              { reason: "credential_lookup_failed" },
+              socialAccountId,
+            );
+            throw new Error("Credential lookup failed");
+          }
+          return data?.provider_user_id ?? null;
+        },
+        fetch,
+      }, { appId, appSecret }, socialAccountId);
+
+      if (!outcome.revoked && outcome.reason !== "no_binding" && outcome.reason !== "grant_shared") {
+        await logDisconnectEvent(
+          "Facebook de-authorization did not succeed; account removed in Postora only",
+          { reason: outcome.reason },
+          socialAccountId,
+        );
+      }
+      return new Response(JSON.stringify({ success: true, revoked: outcome.revoked, reason: outcome.reason }), {
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
@@ -962,13 +1124,17 @@ Deno.serve(async (req) => {
             [PROTECTED_ATTEMPT_STATE_KEY]: begun.stateContext,
           },
         });
-        const authorizeUrl =
-          `https://www.facebook.com/v22.0/dialog/oauth` +
-          `?client_id=${encodeURIComponent(appId)}` +
-          `&redirect_uri=${encodeURIComponent(FACEBOOK_REDIRECT_URI)}` +
-          `&state=${encodeURIComponent(state)}` +
-          `&response_type=code` +
-          `&scope=${encodeURIComponent(FB_OAUTH_SCOPES.join(","))}`;
+        const authorizeUrl = withMetaConsentPrompt(
+          new URL(
+            `https://www.facebook.com/v22.0/dialog/oauth` +
+              `?client_id=${encodeURIComponent(appId)}` +
+              `&redirect_uri=${encodeURIComponent(FACEBOOK_REDIRECT_URI)}` +
+              `&state=${encodeURIComponent(state)}` +
+              `&response_type=code` +
+              `&scope=${encodeURIComponent(FB_OAUTH_SCOPES.join(","))}`,
+          ),
+          "facebook_login",
+        ).toString();
         return new Response(JSON.stringify({ success: true, url: authorizeUrl }), {
           headers: { ...corsHeaders, "Content-Type": "application/json" },
         });
@@ -982,13 +1148,17 @@ Deno.serve(async (req) => {
         return_to: returnTo,
         extra: { target_platform: targetPlatform },
       });
-      const authorizeUrl =
-        `https://www.facebook.com/v22.0/dialog/oauth` +
-        `?client_id=${encodeURIComponent(appId)}` +
-        `&redirect_uri=${encodeURIComponent(FACEBOOK_REDIRECT_URI)}` +
-        `&state=${encodeURIComponent(state)}` +
-        `&response_type=code` +
-        `&scope=${encodeURIComponent(FB_OAUTH_SCOPES.join(","))}`;
+      const authorizeUrl = withMetaConsentPrompt(
+        new URL(
+          `https://www.facebook.com/v22.0/dialog/oauth` +
+            `?client_id=${encodeURIComponent(appId)}` +
+            `&redirect_uri=${encodeURIComponent(FACEBOOK_REDIRECT_URI)}` +
+            `&state=${encodeURIComponent(state)}` +
+            `&response_type=code` +
+            `&scope=${encodeURIComponent(FB_OAUTH_SCOPES.join(","))}`,
+        ),
+        "facebook_login",
+      ).toString();
       return new Response(JSON.stringify({ success: true, url: authorizeUrl }), {
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });

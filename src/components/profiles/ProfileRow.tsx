@@ -2,12 +2,13 @@ import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Badge } from "@/components/ui/badge";
+import { Badge, badgeVariants } from "@/components/ui/badge";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { PlatformIcon, getPlatformName } from "@/components/PlatformIcon";
 import { Platform } from "@/lib/types";
 import { ExtendedPlatform, PlatformConfig, isPlatformType } from "@/lib/platformConstants";
 import { isTokenExpired, isTokenExpiringSoon, formatTokenExpiry } from "@/lib/tokenUtils";
+import { cn } from "@/lib/utils";
 import { useFeatureFlags } from "@/hooks/useFeatureFlags";
 import { TokenLifetimeInfo, ReconnectionFrequencyBadge } from "./TokenLifetimeInfo";
 import { useToast } from "@/hooks/use-toast";
@@ -25,6 +26,7 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import {
   Loader2,
   X,
@@ -41,6 +43,7 @@ import {
   Lock,
   CheckCircle,
   Crown,
+  KeyRound,
 } from "lucide-react";
 import {
   Table,
@@ -687,6 +690,31 @@ export function ProfileRow({
                                     </TooltipContent>
                                   </Tooltip>
                                 </TooltipProvider>
+                              )}
+                              {account.platform === 'threads' && (
+                                <Popover>
+                                  <PopoverTrigger asChild>
+                                    <button
+                                      type="button"
+                                      aria-label="Show the permissions Postora holds for this Threads account"
+                                      className={cn(badgeVariants({ variant: "outline" }), "gap-1 cursor-pointer")}
+                                    >
+                                      <KeyRound className="w-3 h-3" />
+                                      Permissions
+                                    </button>
+                                  </PopoverTrigger>
+                                  <PopoverContent className="w-80 text-xs space-y-2">
+                                    <p className="font-medium">Permissions Postora holds for this Threads account</p>
+                                    <ul className="list-disc pl-4">
+                                      {((account.account_metadata as { granted_scopes?: string[] } | null)?.granted_scopes ?? []).map((scope) => (
+                                        <li key={scope}>{scope}</li>
+                                      ))}
+                                    </ul>
+                                    <p className="text-muted-foreground">
+                                      Threads does not offer a permission review on reconnect. To withdraw these, remove the app under Threads › Settings › Security › Apps and websites.
+                                    </p>
+                                  </PopoverContent>
+                                </Popover>
                               )}
                             </div>
                           </TableCell>

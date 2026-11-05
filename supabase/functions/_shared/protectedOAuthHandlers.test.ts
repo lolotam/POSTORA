@@ -48,6 +48,7 @@ const PENDING_ID = "d0000000-0000-4000-8000-000000000001";
 const ACCOUNT_ID = "a0000000-0000-4000-8000-000000000001";
 const TARGET_ID = "a0000000-0000-4000-8000-000000000002";
 const SOURCE_ID = "a0000000-0000-4000-8000-000000000003";
+const CREDENTIAL_ID = "e0000000-0000-4000-8000-000000000001";
 const NONCE = "synthetic-nonce-value";
 const CLAIM_TOKEN = "claim-token-must-not-leak";
 const PROVIDER_TOKEN = "provider-token-must-not-leak";
@@ -89,9 +90,12 @@ interface Probe {
   attemptRows: Row[];
   receiptRows: Row[];
   socialRows: Row[];
+  bindingRows: Row[];
+  credentialRows: Row[];
   failingTables: string[];
   http: Array<{ url: string; body?: string }>;
   mutations: Array<{ table: string; op: string }>;
+  inserts: Array<{ table: string; row: Record<string, unknown> }>;
   tableReads: string[];
   providerFetch: (url: string) => { status: number; body: unknown };
   handler?: (req: Request) => Response | Promise<Response>;
@@ -110,9 +114,12 @@ function probe(overrides: Partial<Probe> = {}): Probe {
     attemptRows: [],
     receiptRows: [],
     socialRows: [],
+    bindingRows: [],
+    credentialRows: [],
     failingTables: [],
     http: [],
     mutations: [],
+    inserts: [],
     tableReads: [],
     providerFetch: () => ({ status: 200, body: { data: [] } }),
     ...overrides,
@@ -371,6 +378,12 @@ function rowsFor(current: Probe, table: string): Row[] {
       return current.receiptRows;
     case "social_accounts":
       return current.socialRows;
+    // The credential schema of the protected Meta flow. A binding row has no
+    // id column in production, so its fixture id mirrors the account id.
+    case "facebook_user_credential_bindings":
+      return current.bindingRows;
+    case "facebook_user_credentials":
+      return current.credentialRows;
     default:
       return [];
   }
@@ -382,20 +395,24 @@ function installClient(current: Probe) {
     filters: Record<string, unknown> = {};
     op = "select";
     one = false;
+    head = false;
 
     constructor(table: string) {
       this.table = table;
     }
 
-    select() {
+    select(_columns?: string, options?: { count?: string; head?: boolean }) {
+      // The count form asks for the number of matching rows only.
+      this.head = options?.head === true;
       return this;
     }
     eq(key: string, value: unknown) {
       this.filters[key] = value;
       return this;
     }
-    insert() {
+    insert(row?: Record<string, unknown>) {
       this.op = "insert";
+      if (row) current.inserts.push({ table: this.table, row });
       return this;
     }
     update() {
@@ -453,6 +470,7 @@ function installClient(current: Probe) {
         }
         return true;
       });
+      if (this.head) return { count: rows.length, data: null, error: null };
       return { data: this.one ? rows[0] ?? null : rows, error: null };
     }
   }
@@ -799,6 +817,31 @@ routeTest("legacy authorize does not capture an attempt", async () => {
   assertEquals(result.status, 200);
   assertEquals(rpcNames(current), []);
   assertEquals(current.mutations, []);
+});
+
+routeTest("every Meta authorize URL asks the provider to show the permission screen again", async () => {
+  const cases = [
+    { entry: "facebook-oauth/index.ts", url: "https://synthetic.invalid/functions/v1/facebook-oauth", body: { action: "authorize", social_profile_id: null }, parameter: ["auth_type", "rerequest"] },
+    { entry: "facebook-oauth/index.ts", url: "https://synthetic.invalid/functions/v1/facebook-oauth", body: { action: "authorize", intent: "reconnect", target_social_account_id: TARGET_ID }, parameter: ["auth_type", "rerequest"] },
+    { entry: "instagram-business-oauth/index.ts", url: "https://synthetic.invalid/functions/v1/instagram-business-oauth", body: { action: "authorize", social_profile_id: null }, parameter: ["auth_type", "rerequest"] },
+    { entry: "instagram-oauth/index.ts", url: "https://synthetic.invalid/functions/v1/instagram-oauth", body: { action: "authorize", social_profile_id: null }, parameter: ["force_reauth", "true"] },
+  ] as const;
+  for (const scenario of cases) {
+    const current = probe({ setting: "protected" });
+    const handler = await loadHandler(scenario.entry, current);
+    const result = await callJson(handler, scenario.url, scenario.body);
+    assertEquals(result.status, 200, `${scenario.entry} ${JSON.stringify(scenario.body)}`);
+    const url = new URL(String(result.body.url));
+    assertEquals(url.searchParams.get(scenario.parameter[0]), scenario.parameter[1], scenario.entry);
+  }
+});
+
+routeTest("the legacy Facebook authorize URL asks for the permission screen too", async () => {
+  const current = probe({ setting: "absent" });
+  const handler = await loadHandler("facebook-oauth/index.ts", current);
+  const result = await callJson(handler, "https://synthetic.invalid/functions/v1/facebook-oauth", { action: "authorize" });
+  assertEquals(result.status, 200);
+  assertEquals(new URL(String(result.body.url)).searchParams.get("auth_type"), "rerequest");
 });
 
 routeTest("an unreadable mode is a typed failure and captures nothing", async () => {
@@ -2103,6 +2146,7 @@ routeTest("a committed Page-linked selection establishes current permission evid
     assertEquals(names.indexOf("read_facebook_user_account_credential") < names.indexOf("write_instagram_account_capability"), true);
     assertEquals(names.filter((name) => name === "commit_meta_oauth_selection").length, 1);
     assertEquals(current.mutations, [{ table: "system_logs", op: "insert" }]);
+    assertEquals(JSON.stringify(current.inserts).includes(SECRET), false);
     assertEquals(providerUrls(current).length, 1);
   }
 });
@@ -2461,4 +2505,135 @@ routeTest("a direct identity with a control character never completes or commits
     assertEquals(logs.includes(PROVIDER_TOKEN), false);
     assertEquals(logs.includes("\\u0000"), false);
   }
+});
+
+routeTest("disconnect is routed for an owned Meta account and removes nothing itself", async () => {
+  for (const platform of ["facebook", "instagram"] as const) {
+    const current = probe({ setting: "protected", socialRows: [{ id: ACCOUNT_ID, user_id: USER_ID, platform, is_active: true }] });
+    const handler = await loadHandler("facebook-oauth/index.ts", current);
+    const result = await callJson(handler, "https://synthetic.invalid/functions/v1/facebook-oauth", { action: "disconnect", social_account_id: ACCOUNT_ID });
+    assertEquals(result.status, 200, platform);
+    assertEquals(result.body, { success: true, revoked: false, reason: "no_binding" }, platform);
+    assertEquals(providerUrls(current), [], platform);
+    assertEquals(current.mutations, [], platform);
+  }
+});
+
+routeTest("disconnect refuses a foreign, non-Meta or malformed account id before any provider call", async () => {
+  const current = probe({ setting: "protected", socialRows: [
+    { id: ACCOUNT_ID, user_id: OTHER_USER_ID, platform: "facebook", is_active: true },
+    { id: TARGET_ID, user_id: USER_ID, platform: "threads", is_active: true },
+  ] });
+  const handler = await loadHandler("facebook-oauth/index.ts", current);
+  const foreign = await callJson(handler, "https://synthetic.invalid/functions/v1/facebook-oauth", { action: "disconnect", social_account_id: ACCOUNT_ID });
+  assertEquals(foreign.status, 404);
+  const threads = await callJson(handler, "https://synthetic.invalid/functions/v1/facebook-oauth", { action: "disconnect", social_account_id: TARGET_ID });
+  assertEquals(threads.status, 404);
+  const malformed = await callJson(handler, "https://synthetic.invalid/functions/v1/facebook-oauth", { action: "disconnect", social_account_id: "not-a-uuid" });
+  assertEquals(malformed.status, 400);
+  assertEquals(providerUrls(current), []);
+});
+
+routeTest("disconnect refuses a non-string account id before any provider call", async () => {
+  const current = probe({ setting: "protected", socialRows: [{ id: ACCOUNT_ID, user_id: USER_ID, platform: "facebook", is_active: true }] });
+  const handler = await loadHandler("facebook-oauth/index.ts", current);
+  const result = await callJson(handler, "https://synthetic.invalid/functions/v1/facebook-oauth", { action: "disconnect", social_account_id: [ACCOUNT_ID] });
+  assertEquals(result.status, 400);
+  assertEquals(providerUrls(current), []);
+});
+
+routeTest("disconnect removes the account in Postora when the app credentials are absent", async () => {
+  const current = probe({ setting: "protected", socialRows: [{ id: ACCOUNT_ID, user_id: USER_ID, platform: "facebook", is_active: true }] });
+  const handler = await loadHandler("facebook-oauth/index.ts", current);
+  Deno.env.delete("FACEBOOK_APP_ID");
+  const result = await callJson(handler, "https://synthetic.invalid/functions/v1/facebook-oauth", { action: "disconnect", social_account_id: ACCOUNT_ID });
+  assertEquals(result.status, 200);
+  assertEquals(result.body, { success: true, revoked: false, reason: "credentials_missing" });
+  assertEquals(providerUrls(current), []);
+});
+
+/**
+ * The disconnect decision runs against the real tables, so the harness seeds
+ * the grant schema the handler reads: one credential, its bindings and the
+ * provider user id the revoke is addressed to.
+ */
+function disconnectProbe(overrides: Partial<Probe> = {}): Probe {
+  return probe({
+    setting: "protected",
+    socialRows: [{ id: ACCOUNT_ID, user_id: USER_ID, platform: "facebook", is_active: true }],
+    bindingRows: [{
+      id: ACCOUNT_ID,
+      user_id: USER_ID,
+      social_account_id: ACCOUNT_ID,
+      credential_id: CREDENTIAL_ID,
+    }],
+    credentialRows: [{
+      id: CREDENTIAL_ID,
+      user_id: USER_ID,
+      provider_user_id: "fb-user-9",
+      token: SECRET,
+    }],
+    providerFetch: () => ({ status: 200, body: true }),
+    ...overrides,
+  });
+}
+
+routeTest("disconnect leaves a grant that a sibling account still shares alone", async () => {
+  const current = disconnectProbe({
+    bindingRows: [
+      { id: ACCOUNT_ID, user_id: USER_ID, social_account_id: ACCOUNT_ID, credential_id: CREDENTIAL_ID },
+      { id: TARGET_ID, user_id: USER_ID, social_account_id: TARGET_ID, credential_id: CREDENTIAL_ID },
+    ],
+  });
+  const handler = await loadHandler("facebook-oauth/index.ts", current);
+  const result = await callJson(handler, "https://synthetic.invalid/functions/v1/facebook-oauth", { action: "disconnect", social_account_id: ACCOUNT_ID });
+  assertEquals(result.status, 200);
+  assertEquals(result.body, { success: true, revoked: false, reason: "grant_shared" });
+  assertEquals(providerUrls(current).filter((url) => url.includes("/permissions")), []);
+  assertEquals(current.inserts.filter((insert) => insert.table === "system_logs"), []);
+});
+
+routeTest("disconnect withdraws the Meta grant when the account is its last member", async () => {
+  const current = disconnectProbe();
+  const handler = await loadHandler("facebook-oauth/index.ts", current);
+  const result = await callJson(handler, "https://synthetic.invalid/functions/v1/facebook-oauth", { action: "disconnect", social_account_id: ACCOUNT_ID });
+  assertEquals(result.status, 200);
+  assertEquals(result.body, { success: true, revoked: true, reason: null });
+  const revokeUrls = providerUrls(current).filter((url) => url.includes("/v22.0/fb-user-9/permissions"));
+  assertEquals(revokeUrls.length, 1);
+  assertEquals(
+    new URL(revokeUrls[0]).searchParams.get("access_token"),
+    `${ENV.FACEBOOK_APP_ID}|${ENV.FACEBOOK_APP_SECRET}`,
+  );
+  assertEquals(revokeUrls[0].includes(SECRET), false);
+  assertEquals(current.mutations.filter((mutation) => mutation.table === "social_accounts"), []);
+});
+
+routeTest("disconnect reports a failed Meta de-authorization and logs it without a token", async () => {
+  const current = disconnectProbe({
+    providerFetch: () => ({ status: 500, body: { error: {} } }),
+  });
+  const handler = await loadHandler("facebook-oauth/index.ts", current);
+  const result = await callJson(handler, "https://synthetic.invalid/functions/v1/facebook-oauth", { action: "disconnect", social_account_id: ACCOUNT_ID });
+  assertEquals(result.status, 200);
+  assertEquals(result.body, { success: true, revoked: false, reason: "revoke_failed" });
+  const logs = current.inserts.filter((insert) => insert.table === "system_logs");
+  assertEquals(logs.length, 1);
+  const metadata = logs[0].row.metadata as Record<string, unknown>;
+  assertEquals(metadata.reason, "revoke_failed");
+  assertEquals(JSON.stringify(logs[0].row).includes(SECRET), false);
+});
+
+routeTest("disconnect logs an invalid account id without copying the raw value", async () => {
+  const current = probe({ setting: "protected" });
+  const handler = await loadHandler("facebook-oauth/index.ts", current);
+  const result = await callJson(handler, "https://synthetic.invalid/functions/v1/facebook-oauth", { action: "disconnect", social_account_id: "not-a-uuid" });
+  assertEquals(result.status, 400);
+  assertEquals(result.body, { error: "Invalid request body" });
+  const logs = current.inserts.filter((insert) => insert.table === "system_logs");
+  assertEquals(logs.length, 1);
+  const metadata = logs[0].row.metadata as Record<string, unknown>;
+  assertEquals(metadata.reason, "invalid_account_id");
+  assertEquals(Object.prototype.hasOwnProperty.call(metadata, "social_account_id"), false);
+  assertEquals(JSON.stringify(logs[0].row).includes("not-a-uuid"), false);
 });
