@@ -324,6 +324,7 @@ jobs:
             supabase/functions/_shared/protectedAccountCutover.test.ts
             supabase/functions/_shared/facebookUserCredentialStore.test.ts
             supabase/functions/_shared/protectedFacebookCredentials.test.ts
+            supabase/functions/_shared/metaConsentPrompt.test.ts
             supabase/functions/facebook-oauth/protectedPageConnect.test.ts
             supabase/functions/refresh-tokens/protectedMetaRefresh.test.ts
             supabase/functions/refresh-tokens/protectedDirectRefresh.test.ts
