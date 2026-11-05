@@ -42,6 +42,32 @@ Deno.test("a collected day preserves zero and distinguishes missing, duplicate a
   }
 });
 
+// Production 2026-11-05: Graph answers a post metric asked for without a period
+// with a lifetime row beside a daily one, and every Facebook post capture ended
+// provider_error because the decoder counted both rows as answers.
+Deno.test("a Facebook post capture stores the lifetime row whatever rows Graph puts beside it", async (test) => {
+  const capture: AnalyticsCapture = { capture_id: "c1000000-0000-4000-8000-000000000002", capture_sequence: 1,
+    job_id: "c2000000-0000-4000-8000-000000000001", job_generation: 1, kind: "post", subject_id: "772001_1", metric_date: null,
+    since: null, until: null, timezone: null };
+  const definitions = analyticsDefinitions("facebook", "post").filter((entry) => entry.capability === "available");
+  const lifetime = (metric: string) => ({ name: metric, period: "lifetime", values: [{ value: 7 }] });
+  const daily = (metric: string) => ({ name: metric, period: "day", values: [{ value: 1, end_time: "2026-11-05T08:00:00+0000" }, { value: 2, end_time: "2026-11-06T08:00:00+0000" }] });
+  const scenarios = {
+    lifetime_beside_daily: { rows: (metric: string) => [lifetime(metric), daily(metric)], expected: { status: "available", value: 7 } },
+    lifetime_only: { rows: (metric: string) => [lifetime(metric)], expected: { status: "available", value: 7 } },
+    daily_only: { rows: (metric: string) => [daily(metric)], expected: { status: "unavailable", reason: "window_mismatch" } },
+    duplicate_lifetime: { rows: (metric: string) => [lifetime(metric), lifetime(metric)], expected: { status: "unavailable", reason: "provider_error" } },
+  } as const;
+  for (const [scenario, { rows, expected }] of Object.entries(scenarios)) {
+    await test.step(scenario, async () => {
+      const provider = new FacebookInsightsProvider({ token: "fixture-page", startedAt: Date.now(), signal: new AbortController().signal,
+        fetch: async (input) => Response.json({ data: rows(new URL(String(input)).searchParams.get("metric")!) }, { headers: { "facebook-api-version": "v25.0" } }) });
+      const { cells } = await facebookCollection(provider, "772001").metrics(capture, definitions);
+      for (const definition of definitions) assertEquals(cells[definition.key], expected);
+    });
+  }
+});
+
 Deno.test("Threads snapshots share live and saved decoding without inventing daily periods", async (test) => {
   const windows = closedAnalyticsPeriods({ now: "2026-11-01T12:00:00Z", days: 7, timezone: "America/Los_Angeles" });
   for (const kind of ["profile", "post"] as const) for (const scenario of ["zero_total", "single_lifetime_value", "null_total_with_value", "wrong_period", "missing_value"] as const) {

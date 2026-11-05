@@ -49,8 +49,14 @@ export function captureCell(reply: MetaAnalyticsResult<{ data: CollectionMetricR
     const reason = providerReason(reply.error.reason);
     return unavailableMetric(reason === "rate_limited" ? "provider_error" : reason);
   }
-  const rows = reply.data.data.filter((row) => row.name === definition.providerMetric);
-  if (rows.length !== 1) return unavailableMetric("provider_error");
+  const named = reply.data.data.filter((row) => row.name === definition.providerMetric);
+  // A Facebook post metric asked for without a period comes back as a lifetime
+  // row next to a daily one (post_total_media_view_unique, prod 2026-11-05).
+  // The lifetime row is the one this capture stores; the daily row is not a
+  // second answer to the same question.
+  const lifetimeOnly = capture.kind !== "account_day" && capture.kind !== "profile" && definition.platform !== "threads";
+  const rows = lifetimeOnly ? named.filter((row) => row.period === "lifetime") : named;
+  if (rows.length !== 1) return unavailableMetric(lifetimeOnly && named.length > 0 && rows.length === 0 ? "window_mismatch" : "provider_error");
   const row = rows[0];
   if (capture.kind === "account_day") {
     if (!capture.since || !capture.until || !capture.metric_date) return unavailableMetric("window_mismatch");
