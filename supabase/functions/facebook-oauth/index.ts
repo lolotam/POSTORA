@@ -56,6 +56,7 @@ import {
   PROTECTED_OPERATION_BUDGET_MS,
 } from "../_shared/metaOAuthProtectedBoundary.ts";
 import { restrictedCorsHeaders } from "../_shared/cors.ts";
+import { auditPermissionOutcome, refreshCompanionInstagramPermissions } from "../_shared/pageLinkedInstagramPermissions.ts";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
@@ -74,7 +75,7 @@ const FB_OAUTH_SCOPES = [
   "pages_manage_posts", "pages_manage_engagement", "pages_read_user_content", "business_management",
   "pages_manage_metadata", "pages_messaging", "read_insights",
   "instagram_basic", "instagram_content_publish", "instagram_manage_comments",
-  "instagram_manage_messages",
+  "instagram_manage_messages", "instagram_manage_insights",
   "whatsapp_business_messaging", "whatsapp_business_management",
   "ads_read", "ads_management",
   "leads_retrieval", "pages_manage_ads",
@@ -1157,6 +1158,23 @@ Deno.serve(async (req) => {
           },
         );
 
+        // The commit cleared the companion Instagram's permissions and advanced
+        // its generation. Without this read the account can never pass the
+        // collection fence (production 2026-11-05, xsellpoint_kw).
+        const instagramPermissions = committed.receipt.companionSocialAccountId === null
+          ? null
+          : await auditPermissionOutcome({
+            insert: async (row) => await supabase.from("system_logs").insert(row).abortSignal(AbortSignal.timeout(2_000)),
+            source: "facebook-oauth",
+            userId: user_id,
+            socialAccountId: committed.receipt.companionSocialAccountId,
+            outcome: await refreshCompanionInstagramPermissions({
+              userId: user_id,
+              receipt: committed.receipt,
+              rpc: async (name, args) => await supabase.rpc(name, args).abortSignal(AbortSignal.timeout(5_000)),
+            }),
+          });
+
         // Bounded, best effort, and only after the commit.
         const subscription = await assertWebhookSubscription({
           receipt: committed.receipt,
@@ -1189,6 +1207,7 @@ Deno.serve(async (req) => {
           selection_key: committed.receipt.selectionKey,
           page_name: committed.receipt.username,
           has_instagram: committed.receipt.companionSocialAccountId !== null,
+          instagram_permissions: instagramPermissions,
           subscription,
         }), {
           headers: { ...corsHeaders, "Content-Type": "application/json" },

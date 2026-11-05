@@ -75,7 +75,7 @@ import {
   PROTECTED_OPERATION_BUDGET_MS,
 } from "../_shared/metaOAuthProtectedBoundary.ts";
 import { restrictedCorsHeaders } from "../_shared/cors.ts";
-import { refreshPageLinkedInstagramPermissions } from "./permissions.ts";
+import { auditPermissionOutcome, refreshPageLinkedInstagramPermissions } from "../_shared/pageLinkedInstagramPermissions.ts";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
@@ -750,22 +750,17 @@ Deno.serve(async (req) => {
           selectionKey: selection_key,
           providerTokenPresent,
         });
-        let permissions = await refreshPageLinkedInstagramPermissions({
+        const permissions = await auditPermissionOutcome({
+          insert: async (row) => await supabase.from("system_logs").insert(row).abortSignal(AbortSignal.timeout(2_000)),
+          source: "instagram-business-oauth",
           userId: user_id,
-          receipt: committed.receipt,
-          rpc: async (name, args) => await supabase.rpc(name, args).abortSignal(AbortSignal.timeout(5_000)),
+          socialAccountId: committed.receipt.socialAccountId,
+          outcome: await refreshPageLinkedInstagramPermissions({
+            userId: user_id,
+            receipt: committed.receipt,
+            rpc: async (name, args) => await supabase.rpc(name, args).abortSignal(AbortSignal.timeout(5_000)),
+          }),
         });
-        try {
-          const audit = await supabase.from("system_logs").insert({
-            level: permissions.status === "ok" ? "info" : "warn", category: "auth", source: "instagram-business-oauth",
-            message: "Protected Instagram permission read finished", user_id,
-            metadata: { social_account_id: committed.receipt.socialAccountId, ...permissions },
-          }).abortSignal(AbortSignal.timeout(2_000));
-          if (audit.error) throw new Error("Permission audit unavailable");
-        } catch {
-          console.error("[instagram-business-oauth] permission audit unavailable", { event: "permission_audit_unavailable" });
-          permissions = { status: "unconfirmed" };
-        }
         const subscription = await assertWebhookSubscription({
           receipt: committed.receipt,
           userId: user_id,

@@ -1,8 +1,8 @@
 import {
   createFacebookUserCredentialStore, parseInstagramAccountCapability, type ServiceRpcCaller,
-} from "../_shared/facebookUserCredentialStore.ts";
-import type { MetaOAuthReceipt } from "../_shared/metaOAuthAttemptStore.ts";
-import { createOperationBudget, protectedFetchJson, readServiceEnvelope } from "../_shared/metaOAuthProtectedBoundary.ts";
+} from "./facebookUserCredentialStore.ts";
+import type { MetaOAuthReceipt } from "./metaOAuthAttemptStore.ts";
+import { createOperationBudget, protectedFetchJson, readServiceEnvelope } from "./metaOAuthProtectedBoundary.ts";
 
 export type PageLinkedPermissionOutcome =
   | { status: "ok"; insights_granted: boolean }
@@ -24,19 +24,57 @@ const WRITE_RPC = "write_instagram_account_capability";
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   value !== null && typeof value === "object" && !Array.isArray(value);
 
+/** The commit-time authority a permission read must still match before it may write. */
+type BoundAuthority = {
+  socialAccountId: string;
+  credentialId: string;
+  credentialRevision: number;
+  capabilityGeneration: number;
+  /** Null when the receipt does not carry this account's own connection version. */
+  connectionVersion: number | null;
+};
+
 /** Only complete, current protected-authority observations may establish a grant. */
 export async function refreshPageLinkedInstagramPermissions(input: RefreshInput): Promise<PageLinkedPermissionOutcome> {
   const { receipt } = input;
   if (receipt.platform !== "instagram" || receipt.loginKind !== "page_linked" || !receipt.socialAccountId
     || receipt.capabilityGeneration === null || receipt.credentialId === null || receipt.credentialRevision === null
     || receipt.connectionVersion === null) return { status: "unconfirmed" };
+  return await refreshBoundPermissions(input, {
+    socialAccountId: receipt.socialAccountId, credentialId: receipt.credentialId, credentialRevision: receipt.credentialRevision,
+    capabilityGeneration: receipt.capabilityGeneration, connectionVersion: receipt.connectionVersion,
+  });
+}
+
+/**
+ * The Instagram companion a Facebook Page commit created or adopted.
+ *
+ * The commit advances the companion's capability generation and clears its
+ * permissions, and the receipt carries that generation. The receipt's
+ * connection version belongs to the Page, so only the shared credential and
+ * the companion's generation fence this read.
+ */
+export async function refreshCompanionInstagramPermissions(input: RefreshInput): Promise<PageLinkedPermissionOutcome> {
+  const { receipt } = input;
+  if (receipt.flow !== "facebook_page" || receipt.platform !== "facebook" || !receipt.companionSocialAccountId
+    || receipt.capabilityGeneration === null || receipt.credentialId === null || receipt.credentialRevision === null) {
+    return { status: "unconfirmed" };
+  }
+  return await refreshBoundPermissions(input, {
+    socialAccountId: receipt.companionSocialAccountId, credentialId: receipt.credentialId,
+    credentialRevision: receipt.credentialRevision, capabilityGeneration: receipt.capabilityGeneration, connectionVersion: null,
+  });
+}
+
+async function refreshBoundPermissions(input: RefreshInput, authority: BoundAuthority): Promise<PageLinkedPermissionOutcome> {
   try {
     const credential = await createFacebookUserCredentialStore(input.rpc).readAccountCredential({
-      userId: input.userId, socialAccountId: receipt.socialAccountId,
+      userId: input.userId, socialAccountId: authority.socialAccountId,
     });
     if (!credential.found || credential.platform !== "instagram" || credential.credentialKind !== "facebook_user"
-      || !credential.token || credential.credentialId !== receipt.credentialId || credential.revision !== receipt.credentialRevision
-      || credential.capabilityGeneration !== receipt.capabilityGeneration || credential.connectionVersion !== receipt.connectionVersion) {
+      || !credential.token || credential.credentialId !== authority.credentialId || credential.revision !== authority.credentialRevision
+      || credential.capabilityGeneration !== authority.capabilityGeneration
+      || (authority.connectionVersion !== null && credential.connectionVersion !== authority.connectionVersion)) {
       return { status: "stale" };
     }
     const startedAt = (input.now?.() ?? new Date()).toISOString();
@@ -49,8 +87,8 @@ export async function refreshPageLinkedInstagramPermissions(input: RefreshInput)
       payload = { permission_read_state: "failed", read_failed_at: startedAt, read_error_code: "permission_read_failed" };
     }
     const envelope = await input.rpc(WRITE_RPC, {
-      p_user_id: input.userId, p_social_account_id: receipt.socialAccountId,
-      p_payload: { ...payload, login_kind: "page_linked", expected_credential_generation: receipt.capabilityGeneration },
+      p_user_id: input.userId, p_social_account_id: authority.socialAccountId,
+      p_payload: { ...payload, login_kind: "page_linked", expected_credential_generation: authority.capabilityGeneration },
     });
     if (isRecord(envelope) && isRecord(envelope.error) && typeof envelope.error.code === "string"
       && ["ICG01", "ICG02"].includes(envelope.error.code)) {
@@ -59,7 +97,7 @@ export async function refreshPageLinkedInstagramPermissions(input: RefreshInput)
     const written = readServiceEnvelope(envelope);
     if (written.status !== "row") return { status: "unconfirmed" };
     const capability = parseInstagramAccountCapability(WRITE_RPC, written.row);
-    if (capability.socialAccountId !== receipt.socialAccountId || capability.credentialGeneration !== receipt.capabilityGeneration
+    if (capability.socialAccountId !== authority.socialAccountId || capability.credentialGeneration !== authority.capabilityGeneration
       || capability.loginKind !== "page_linked") return { status: "unconfirmed" };
     if (payload.permission_read_state === "failed") return capability.permissionReadState !== "unknown"
       && Date.parse(capability.lastReadFailedAt ?? "") === Date.parse(startedAt) ? { status: "failed" } : { status: "unconfirmed" };
@@ -71,6 +109,41 @@ export async function refreshPageLinkedInstagramPermissions(input: RefreshInput)
     return { status: "ok", insights_granted: capability.grantedScopes.includes("instagram_manage_insights") };
   } catch {
     // The account commit is already durable. Never replay it after an uncertain read/write.
+    return { status: "unconfirmed" };
+  }
+}
+
+/** The audit row a permission read leaves; it never carries a credential, provider body or URL. */
+export type PermissionAuditRow = {
+  level: "info" | "warn";
+  category: "auth";
+  source: string;
+  message: string;
+  user_id: string;
+  metadata: { social_account_id: string | null } & PageLinkedPermissionOutcome;
+};
+
+/**
+ * Records the outcome of one permission read. An outcome that cannot be
+ * audited is reported as unconfirmed, never as a usable grant.
+ */
+export async function auditPermissionOutcome(input: {
+  insert: (row: PermissionAuditRow) => Promise<{ error: unknown }>;
+  source: string;
+  userId: string;
+  socialAccountId: string | null;
+  outcome: PageLinkedPermissionOutcome;
+}): Promise<PageLinkedPermissionOutcome> {
+  try {
+    const audit = await input.insert({
+      level: input.outcome.status === "ok" ? "info" : "warn", category: "auth", source: input.source,
+      message: "Protected Instagram permission read finished", user_id: input.userId,
+      metadata: { social_account_id: input.socialAccountId, ...input.outcome },
+    });
+    if (audit.error) throw new Error("Permission audit unavailable");
+    return input.outcome;
+  } catch {
+    console.error(`[${input.source}] permission audit unavailable`, { event: "permission_audit_unavailable" });
     return { status: "unconfirmed" };
   }
 }
