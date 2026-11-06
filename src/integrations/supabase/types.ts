@@ -12390,6 +12390,7 @@ export type Database = {
         Args: { p_user_id: string; p_model_id: string; p_params: Json; p_references: Json }
         Returns: string
       }
+      sweep_ai_image_jobs: { Args: Record<PropertyKey, never>; Returns: undefined }
       claim_ai_image_jobs: {
         Args: { p_limit?: number; p_lease?: unknown; p_max_per_user?: number }
         Returns: Database["public"]["Tables"]["ai_generation_jobs"]["Row"][]

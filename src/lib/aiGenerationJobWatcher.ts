@@ -11,9 +11,12 @@ export interface AiJobSnapshot {
   error: string | null; errorCode: string | null; elapsedSeconds: number;
 }
 
-export const DEFAULT_POLL_SECONDS = 5;
-export const MAX_POLL_MS = 10 * 60_000;
-export const READ_TIMEOUT_MS = 20_000;
+const DEFAULT_POLL_SECONDS = 5;
+// Mirrors sweep_ai_image_jobs in 20261107120000_ai_image_jobs_worker.sql:
+// 5 min queue + 3 attempts * 3 min lease, capped at 14 min total server age.
+// Two extra minutes cover the minute sweep and status polling before we give up.
+const MAX_POLL_MS = (5 + 3 * 3 + 2) * 60_000;
+const READ_TIMEOUT_MS = 20_000;
 const BACKOFF_SECONDS = [5, 10, 20, 30];
 const TERMINAL = new Set(["succeeded", "failed", "timeout", "canceled"]);
 const FATAL_HTTP = new Set([401, 403, 404]);

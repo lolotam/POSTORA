@@ -65,9 +65,22 @@ describe("aiGenerationJobWatcher", () => {
     await vi.advanceTimersByTimeAsync(5_000 + 20_000 + 5_000);
     expect(h.invoke.mock.calls[0][1].signal.aborted).toBe(true);
     expect(h.invoke.mock.calls.length).toBeGreaterThan(1);  // the read timed out and was retried
-    await vi.advanceTimersByTimeAsync(10 * 60_000);
+    await vi.advanceTimersByTimeAsync(16 * 60_000);
     await expect(done).resolves.toMatchObject({ status: "timeout" });
     expect(h.removeChannel).toHaveBeenCalled();
+  });
+
+  it("MEDIUM-3: still shows a late server result after the old ten-minute deadline", async () => {
+    h.invoke.mockResolvedValue(running);
+    const seen: string[] = [];
+    watchAiGenerationJob("late-job", (snapshot) => seen.push(snapshot.status));
+    await vi.advanceTimersByTimeAsync(15 * 60_000);
+    expect(seen.at(-1)).toBe("running");
+    expect(h.removeChannel).not.toHaveBeenCalled();
+    h.invoke.mockResolvedValue({ data: { status: "succeeded", imageUrl: "https://hf.invalid/late.png" }, error: null });
+    await vi.advanceTimersByTimeAsync(3_000);
+    expect(seen.at(-1)).toBe("succeeded");
+    expect(h.removeChannel).toHaveBeenCalledTimes(1);
   });
 
   it("resolveAiImageResponse passes a sync answer through and maps a failed job", async () => {

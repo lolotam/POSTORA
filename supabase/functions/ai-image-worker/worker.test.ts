@@ -62,3 +62,34 @@ Deno.test("job deadline leaves the save reserve", async () => {
   await runAiImageWorker(ports({ run: async (j) => { deadline = j.budget.deadlineMs; return { kind: "lease_lost" }; } }).p);
   assertEquals(deadline, L.workerLifetimeMs - L.saveReserveMs);
 });
+
+Deno.test("MEDIUM-2: transient completion failure retries the produced image", async () => {
+  let attempts = 0; let runs = 0;
+  const { p, completed } = ports();
+  const save = p.complete; const generate = p.run;
+  p.complete = async (c, signal) => { if (++attempts === 1) throw new Error("database unavailable"); return save(c, signal); };
+  p.run = async (...args) => { runs++; return generate(...args); };
+  assertEquals((await runAiImageWorker(p)).succeeded, 1);
+  assertEquals(completed.length, 1);
+  assertEquals([attempts, runs], [2, 1]);
+});
+
+Deno.test("MEDIUM-2: persistent completion failure is bounded and the next job still runs", async () => {
+  let attempts = 0;
+  const { p, completed } = ports({}, [job, { ...job, id: "j2" }]);
+  const save = p.complete;
+  p.complete = async (c, signal) => { if (c.jobId === "j1") { attempts++; throw new Error("database unavailable"); } return save(c, signal); };
+  const summary = await runAiImageWorker(p);
+  assertEquals([summary.claimed, summary.succeeded, summary.lost], [2, 1, 1]);
+  assertEquals(attempts, 3);
+  assertEquals((completed[0] as { jobId: string }).jobId, "j2");
+});
+
+Deno.test("MEDIUM-2: completion retries stop at the worker lifetime", async () => {
+  let now = 0; let attempts = 0;
+  const { p } = ports({ now: () => now, complete: async () => {
+    attempts++; now = L.workerLifetimeMs; throw new Error("save reserve spent");
+  } });
+  assertEquals((await runAiImageWorker(p)).lost, 1);
+  assertEquals(attempts, 1);
+});

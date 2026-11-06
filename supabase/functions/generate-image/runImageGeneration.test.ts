@@ -3,7 +3,7 @@ import { assert, assertEquals } from "https://deno.land/std@0.208.0/assert/mod.t
 import { McpError } from "../_shared/higgsfield-mcp.ts";
 import { HiggsfieldAuthError } from "../_shared/higgsfield-oauth.ts";
 import {
-  generateWithModel, runImageGeneration, isDefinitiveHiggsfieldRejection, ProviderOutcomeUnknownError, PROVIDER_MIN_MS,
+  defaultImageRunDeps, generateWithModel, runImageGeneration, isDefinitiveHiggsfieldRejection, ProviderOutcomeUnknownError, PROVIDER_MIN_MS,
   type ImageRunDeps, type ResolvedModel,
 } from "./runImageGeneration.ts";
 import type { CallBudget } from "./callBudget.ts";
@@ -127,3 +127,75 @@ Deno.test("B2: slow references: the Google signal is taken after they are read",
     assertEquals(seen, [20_000, 70_000]);
   } finally { globalThis.fetch = originalFetch; }
 });
+
+// Real routing, credentials, MCP and quota adapters; only database/HTTP/clock are faked.
+function higgsfieldDatabase(rpcs: string[]) {
+  return {
+    from(table: string) {
+      const rows: Record<string, unknown> = {
+        system_settings: { value: { provider_code: "higgsfield", model_id: "nano_banana_2" } },
+        ai_models: { model_id: "nano_banana_2", metadata: {}, admin_params: {},
+          ai_providers: { provider_code: "higgsfield", api_type: "higgsfield", is_active: true } },
+        provider_api_keys: { access_token: "test-token", api_key: "test-key" },
+      };
+      const b = new Proxy({}, { get: (_target, prop) => prop === "maybeSingle"
+        ? () => Promise.resolve({ data: rows[table] ?? null, error: null }) : () => b });
+      return b;
+    },
+    rpc(name: string) { rpcs.push(name); return Promise.resolve({ data: { allowed: true }, error: null }); },
+  } as unknown as Parameters<typeof defaultImageRunDeps>[0];
+}
+
+for (const reset of [false, true]) {
+  for (const failure of ["timeout", "5xx", "network"] as const) {
+    Deno.test(`HIGH-1: real initialize ${failure}${reset ? " after 401" : ""} refunds and falls back`, async () => {
+      const realFetch = globalThis.fetch;
+      const rpcs: string[] = []; let initializes = 0; let generationCalls = 0; let fallbackCalls = 0;
+      globalThis.fetch = (async (input, init) => {
+        if (String(input).includes(":generateContent")) {
+          fallbackCalls++;
+          return Response.json({ candidates: [{ content: { parts: [{ inline_data: { mime_type: "image/png", data: "AAAA" } }] } }] });
+        }
+        const rpc = JSON.parse(String(init?.body));
+        if (rpc.method === "initialize" && (++initializes > (reset ? 1 : 0))) {
+          if (failure === "5xx") return new Response("unavailable", { status: 503 });
+          throw failure === "timeout" ? new DOMException("initialize timed out", "TimeoutError") : new TypeError("network failed");
+        }
+        if (rpc.method === "tools/call") { generationCalls++; return new Response("expired", { status: 401 }); }
+        return Response.json({ jsonrpc: "2.0", id: rpc.id, result: {} });
+      }) as typeof fetch;
+      try {
+        const deps = defaultImageRunDeps(higgsfieldDatabase(rpcs), { onDispatch: async () => true, recordHiggsfieldSuccess: async () => {} });
+        const result = await runImageGeneration(deps, job());
+        assertEquals(result.kind, "succeeded"); // must never map to ai_outcome_unknown
+        assertEquals(fallbackCalls, 1);
+        assertEquals(generationCalls, reset ? 1 : 0);
+        assertEquals(rpcs, ["reserve_ai_generation_quota", "release_ai_generation_quota"]);
+      } finally { globalThis.fetch = realFetch; }
+    });
+  }
+}
+
+for (const worker of [false, true]) {
+  Deno.test(`MEDIUM-5: real Higgsfield ${worker ? "worker uses remaining budget" : "sync keeps 30 seconds"}`, async () => {
+    const realFetch = globalThis.fetch; const realNow = Date.now; const realTimeout = AbortSignal.timeout;
+    let now = 1_000_000; let lastTimeout = 0;
+    const seen: Array<[string, number]> = [];
+    Date.now = () => now;
+    AbortSignal.timeout = (ms) => { lastTimeout = ms; return new AbortController().signal; };
+    globalThis.fetch = (async (_input, init) => {
+      const rpc = JSON.parse(String(init?.body));
+      seen.push([rpc.method, lastTimeout]);
+      now += 1_000;
+      return Response.json({ jsonrpc: "2.0", id: rpc.id, result: { url: "https://hf.invalid/image.png" } });
+    }) as typeof fetch;
+    try {
+      const deps = defaultImageRunDeps(higgsfieldDatabase([]), { onDispatch: async () => true, recordHiggsfieldSuccess: async () => {} });
+      const result = await runImageGeneration(deps, { ...job(), budget: {
+        deadlineMs: worker ? now + 140_000 : Infinity, now: () => now, signal: (ms) => AbortSignal.timeout(ms),
+      } });
+      assertEquals(result.kind, "succeeded");
+      assertEquals(seen, [["initialize", 30_000], ["notifications/initialized", 30_000], ["tools/call", worker ? 138_000 : 30_000]]);
+    } finally { globalThis.fetch = realFetch; Date.now = realNow; AbortSignal.timeout = realTimeout; }
+  });
+}

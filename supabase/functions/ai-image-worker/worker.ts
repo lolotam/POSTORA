@@ -1,11 +1,12 @@
 // Background image generation worker. Decisions live here; deps.ts adapts them to Postgres.
 import { redactProviderError } from "../_shared/ai-routing-errors.ts";
 import { describeImageFailure } from "../generate-image/imageFailure.ts";
-import type { CallBudget } from "../generate-image/callBudget.ts";
+import { withinCallBudget, type CallBudget } from "../generate-image/callBudget.ts";
 import type { ImageJobInput, ImageRunResult } from "../generate-image/runImageGeneration.ts";
 import type { ReferenceInput } from "../_shared/image-references.ts";
 
 export const AI_IMAGE_WORKER_LIMITS = {
+  // Mirrors claim_ai_image_jobs/sweep_ai_image_jobs in 20261107120000_ai_image_jobs_worker.sql.
   lease: "3 minutes",            // > workerLifetimeMs: a live worker never loses its lease
   tickBudgetMs: 50_000,
   workerLifetimeMs: 150_000,     // edge runtime workerTimeoutMs
@@ -15,7 +16,7 @@ export const AI_IMAGE_WORKER_LIMITS = {
 } as const;
 
 export interface ClaimedImageJob { id: string; user_id: string; claim_token: string; params: Record<string, unknown> }
-export interface ImageJobCompletion { jobId: string; claimToken: string; status: "succeeded" | "failed"; resultUrl: string | null;
+interface ImageJobCompletion { jobId: string; claimToken: string; status: "succeeded" | "failed"; resultUrl: string | null;
   resultDataUrl: string | null; error: string | null; provider: string | null; modelId: string | null; credentialSource: string | null;
   params: Record<string, unknown> }
 export interface AiImageWorkerPorts {
@@ -25,10 +26,10 @@ export interface AiImageWorkerPorts {
   loadReferences(jobId: string): Promise<ReferenceInput[]>;          // throws if the payload row is missing
   markDispatched(jobId: string, claimToken: string): Promise<boolean>;
   run(job: ImageJobInput, onDispatch: () => Promise<boolean>): Promise<ImageRunResult>;
-  complete(c: ImageJobCompletion): Promise<boolean>;
+  complete(c: ImageJobCompletion, signal: AbortSignal): Promise<boolean>;
   log(level: "info" | "error", userId: string, message: string, metadata: Record<string, unknown>): Promise<void>;
 }
-export interface AiImageWorkerSummary { claimed: number; succeeded: number; failed: number; lost: number; stoppedForLifetime: boolean }
+interface AiImageWorkerSummary { claimed: number; succeeded: number; failed: number; lost: number; stoppedForLifetime: boolean }
 
 
 const asText = (v: unknown) => (typeof v === "string" ? v : undefined);
@@ -55,6 +56,24 @@ export function completionFor(job: ClaimedImageJob, r: ImageRunResult | { kind: 
       return { ...base, status: "failed", error: redactProviderError(message, ""), params: { error_code: code } };
     }
   }
+}
+
+async function saveCompletion(ports: AiImageWorkerPorts, completion: ImageJobCompletion): Promise<boolean> {
+  const deadlineMs = Math.min(ports.now() + AI_IMAGE_WORKER_LIMITS.saveReserveMs,
+    ports.workerStartedAtMs + AI_IMAGE_WORKER_LIMITS.workerLifetimeMs);
+  // Completion is fenced by claim token in SQL. Retry saving the same result,
+  // never re-run a charged generation. A false reply means the lease is gone.
+  for (let attempt = 1; attempt <= 3 && ports.now() < deadlineMs; attempt++) {
+    const timeoutMs = Math.min(3_000, deadlineMs - ports.now());
+    try {
+      return await withinCallBudget({ deadlineMs: ports.now() + timeoutMs, now: () => ports.now(), signal: (ms) => AbortSignal.timeout(ms) },
+        () => ports.complete(completion, AbortSignal.timeout(timeoutMs)));
+    } catch (error) {
+      console.error(`[ai-image-worker] job ${completion.jobId}: completion attempt ${attempt} failed:`,
+        redactProviderError(error instanceof Error ? error.message : String(error), ""));
+    }
+  }
+  return false;
 }
 
 export async function runAiImageWorker(ports: AiImageWorkerPorts): Promise<AiImageWorkerSummary> {
@@ -86,9 +105,9 @@ export async function runAiImageWorker(ports: AiImageWorkerPorts): Promise<AiIma
     }
 
     const completion = completionFor(job, result);
-    if (!completion || !(await ports.complete(completion))) {
+    if (!completion || !(await saveCompletion(ports, completion))) {
       summary.lost++;
-      console.warn(`[ai-image-worker] job ${job.id}: lease lost, result not written`);
+      console.warn(`[ai-image-worker] job ${job.id}: completion not confirmed (lease lost or save failed)`);
       continue;
     }
     if (completion.status === "succeeded") summary.succeeded++; else summary.failed++;

@@ -1,6 +1,6 @@
 import type { ReferenceInput } from "../_shared/image-references.ts";
 
-export const KICK_TIMEOUT_MS = 10_000;
+const KICK_TIMEOUT_MS = 10_000;
 
 export function buildEnqueueArgs(
   userId: string,

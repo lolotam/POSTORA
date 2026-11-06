@@ -10,10 +10,14 @@ export function timeLeftMs(b: CallBudget): number {
   return b.deadlineMs - b.now();
 }
 
-export function budgetSignal(b: CallBudget, minMs: number, capMs?: number): AbortSignal | undefined {
+export function assertTimeLeft(b: CallBudget, minMs: number): void {
   const left = timeLeftMs(b);
   if (left < minMs) throw new NotEnoughTimeError(`not enough time left (${Math.max(0, Math.round(left))} ms) to start this call`);
-  const ms = Math.min(capMs ?? Number.POSITIVE_INFINITY, left);
+}
+
+export function budgetSignal(b: CallBudget, minMs: number, capMs?: number): AbortSignal | undefined {
+  assertTimeLeft(b, minMs);
+  const ms = Math.min(capMs ?? Number.POSITIVE_INFINITY, timeLeftMs(b));
   return Number.isFinite(ms) ? b.signal(ms) : undefined;
 }
 

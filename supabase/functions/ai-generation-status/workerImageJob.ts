@@ -13,9 +13,9 @@ interface GenerationJob extends WorkerImageJob {
   created_at: string; credential_source: string; model_id: string; provider: string;
   provider_job_id: string | null; params: Record<string, unknown>;
 }
-export const WORKER_IMAGE_POLL_SECONDS = 3;
+const WORKER_IMAGE_POLL_SECONDS = 3;
 export const RETRYABLE_READ_BODY = { success: false, retryable: true, error: "Could not read the generation status. Retrying." };
-export type OwnedJobRead = { kind: "found"; job: GenerationJob } | { kind: "missing" } | { kind: "error"; message: string };
+type OwnedJobRead = { kind: "found"; job: GenerationJob } | { kind: "missing" } | { kind: "error"; message: string };
 
 const paramsOf = (job: { params: unknown }) =>
   job.params && typeof job.params === "object" ? (job.params as Record<string, unknown>) : {};

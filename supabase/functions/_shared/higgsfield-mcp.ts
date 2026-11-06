@@ -16,7 +16,8 @@ const MCP_ENDPOINT = "https://mcp.higgsfield.ai/mcp";
 const MCP_PROTOCOL_VERSION = "2025-06-18";
 
 /**
- * Ceiling on any single MCP request. Without it a stalled provider holds the
+ * Default ceiling for MCP requests; worker image calls use their absolute deadline.
+ * Without a ceiling a stalled provider holds the
  * edge invocation open until the platform kills it, which loses the job record.
  */
 const MCP_REQUEST_TIMEOUT_MS = 30_000;
@@ -159,20 +160,21 @@ export class HiggsfieldMcpClient {
     return headers;
   }
 
-  private async post(body: unknown): Promise<Response> {
+  private async post(body: unknown, capMs = MCP_REQUEST_TIMEOUT_MS): Promise<Response> {
     const left = this.deadlineMs - Date.now();
     if (left < 5_000) throw new McpError("Not enough time left to call Higgsfield", undefined, "rejected");
+    const timeoutMs = Math.min(capMs, left);
     let res: Response;
     try {
       res = await fetch(MCP_ENDPOINT, {
         method: "POST",
         headers: this.headers(),
         body: JSON.stringify(body),
-        signal: AbortSignal.timeout(Math.min(MCP_REQUEST_TIMEOUT_MS, left)),
+        signal: AbortSignal.timeout(timeoutMs),
       });
     } catch (err) {
       if (err instanceof DOMException && err.name === "TimeoutError") {
-        throw new McpError(`Higgsfield did not respond within ${MCP_REQUEST_TIMEOUT_MS / 1000}s`);
+        throw new McpError(`Higgsfield did not respond within ${timeoutMs / 1000}s`);
       }
       throw err;
     }
@@ -189,9 +191,9 @@ export class HiggsfieldMcpClient {
     return res;
   }
 
-  private async rpc(method: string, params: unknown): Promise<any> {
+  private async rpc(method: string, params: unknown, capMs = MCP_REQUEST_TIMEOUT_MS): Promise<any> {
     const id = this.nextId++;
-    const res = await this.post({ jsonrpc: "2.0", id, method, params });
+    const res = await this.post({ jsonrpc: "2.0", id, method, params }, capMs);
 
     if (!res.ok) {
       const detail = (await res.text()).slice(0, 300);
@@ -276,8 +278,19 @@ export class HiggsfieldMcpClient {
   }
 
   private async callToolOnce(name: string, args: Record<string, unknown>): Promise<any> {
-    await this.initialize();
-    const result = await this.rpc("tools/call", { name, arguments: args });
+    try {
+      await this.initialize();
+    } catch (err) {
+      if (err instanceof McpUnauthorizedError) throw err;
+      // No tools/call was sent, including after a 401 session reset. It is safe
+      // for image generation to release its reservation and try another provider.
+      throw new McpError(`Higgsfield initialization failed: ${err instanceof Error ? err.message : String(err)}`, undefined, "rejected");
+    }
+    // Only the worker supplies a finite deadline (already minus its save reserve).
+    // Keep initialization, other tools and every synchronous call at 30 seconds.
+    const capMs = name === "generate_image" && Number.isFinite(this.deadlineMs)
+      ? Number.POSITIVE_INFINITY : MCP_REQUEST_TIMEOUT_MS;
+    const result = await this.rpc("tools/call", { name, arguments: args }, capMs);
 
     if (result?.isError) {
       throw new McpError(`Higgsfield tool "${name}" reported an error`, extractToolPayload(result), "rejected");

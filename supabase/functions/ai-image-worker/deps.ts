@@ -26,12 +26,12 @@ export function createAiImageWorkerPorts(admin: SupabaseClient, workerStartedAtM
       return !error && (data?.length ?? 0) === 1;
     },
     run: (job, onDispatch) => runImageGeneration(defaultImageRunDeps(admin, { onDispatch, recordHiggsfieldSuccess: async () => {} }), job),
-    async complete(c) {
+    async complete(c, signal) {
       const { data, error } = await admin.rpc("complete_ai_image_job", {
         p_job_id: c.jobId, p_claim_token: c.claimToken, p_status: c.status, p_result_url: c.resultUrl,
         p_result_data_url: c.resultDataUrl, p_error: c.error, p_provider: c.provider, p_model_id: c.modelId,
         p_credential_source: c.credentialSource, p_params: c.params,
-      });
+      }).abortSignal(signal);
       if (error) throw new Error(`complete_ai_image_job: ${error.message}`);
       return data === true;
     },

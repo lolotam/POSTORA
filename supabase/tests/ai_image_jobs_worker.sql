@@ -8,7 +8,7 @@
 --   W4  an expired, undispatched lease is re-claimed with a NEW token
 --   W5  an expired, dispatched lease fails as ai_interrupted, never re-claimed
 --   W6  an expired lease with attempts >= 3 fails as ai_attempts_exhausted
---   W7  a job queued > 15 minutes times out as ai_queue_timeout
+--   W7  a job queued > 5 minutes times out as ai_queue_timeout
 --   W8  complete with a stale token writes nothing and returns false
 --   W9  complete with the live token writes job + payload once
 --   W10 video rows and sync image rows are never claimed
@@ -17,6 +17,8 @@
 --   W13 cron commands resolve the secret at run time
 --   W14 an orphan (no payload) older than a healthy job neither blocks it nor survives
 --   W15 at most p_max_per_user running worker jobs per user; other users unaffected
+--   W16 a running worker row whose payload was purged fails without a worker call
+--   W17 delayed reclaims cannot extend the server lifetime beyond the client deadline
 -- ============================================================================
 \set ON_ERROR_STOP on
 BEGIN;
@@ -84,23 +86,46 @@ BEGIN
   SELECT public.complete_ai_image_job(j1, r1.claim_token, 'failed', NULL, NULL, 'x', NULL, NULL, NULL, '{}') INTO ok;
   ASSERT ok IS FALSE, 'W9: completes once';
 
-  -- W5
+  -- W5: standalone sweep works even when the edge worker is down.
   UPDATE public.ai_generation_jobs SET dispatched_at = now() - interval '4 minutes', claimed_at = now() - interval '4 minutes' WHERE id = j2;
-  SELECT count(*) INTO n FROM public.claim_ai_image_jobs(5, interval '3 minutes');
-  ASSERT n = 0 AND (SELECT status = 'failed' AND params->>'error_code' = 'ai_interrupted' FROM public.ai_generation_jobs WHERE id = j2), 'W5';
+  PERFORM public.sweep_ai_image_jobs();
+  ASSERT (SELECT status = 'failed' AND params->>'error_code' = 'ai_interrupted' FROM public.ai_generation_jobs WHERE id = j2), 'W5';
 
   -- W6
   j3 := public.enqueue_ai_image_job(u_a, NULL, '{"prompt":"c"}', '[]');
   UPDATE public.ai_generation_jobs SET status = 'running', claimed_at = now() - interval '4 minutes', attempts = 3,
          claim_token = gen_random_uuid() WHERE id = j3;
-  PERFORM public.claim_ai_image_jobs(5, interval '3 minutes');
+  PERFORM public.sweep_ai_image_jobs();
   ASSERT (SELECT status = 'failed' AND params->>'error_code' = 'ai_attempts_exhausted' FROM public.ai_generation_jobs WHERE id = j3), 'W6';
 
   -- W7
   j3 := public.enqueue_ai_image_job(u_a, NULL, '{"prompt":"d"}', '[]');
-  UPDATE public.ai_generation_jobs SET created_at = now() - interval '16 minutes' WHERE id = j3;
-  PERFORM public.claim_ai_image_jobs(1, interval '3 minutes');
+  UPDATE public.ai_generation_jobs SET created_at = now() - interval '4 minutes 59 seconds' WHERE id = j3;
+  PERFORM public.sweep_ai_image_jobs();
+  ASSERT (SELECT status = 'queued' FROM public.ai_generation_jobs WHERE id = j3), 'W7: keep the full five-minute queue window';
+  UPDATE public.ai_generation_jobs SET created_at = now() - interval '5 minutes 1 second' WHERE id = j3;
+  PERFORM public.sweep_ai_image_jobs();
   ASSERT (SELECT status = 'timeout' AND params->>'error_code' = 'ai_queue_timeout' FROM public.ai_generation_jobs WHERE id = j3), 'W7';
+
+  -- W16: payload purged before an undispatched lease can be reclaimed.
+  j3 := public.enqueue_ai_image_job(u_a, NULL, '{"prompt":"purged"}', '[]');
+  UPDATE public.ai_generation_jobs SET status = 'running', claimed_at = now() - interval '4 minutes', attempts = 1,
+         claim_token = gen_random_uuid() WHERE id = j3;
+  DELETE FROM public.ai_image_job_payloads WHERE job_id = j3;
+  PERFORM public.sweep_ai_image_jobs();
+  ASSERT (SELECT status = 'failed' AND params->>'error_code' = 'ai_payload_missing' AND claim_token IS NULL
+            FROM public.ai_generation_jobs WHERE id = j3), 'W16: running orphan stops occupying the user cap';
+
+  -- W17: delayed reclaims cannot extend the total lifetime beyond the browser deadline.
+  j3 := public.enqueue_ai_image_job(u_a, NULL, '{"prompt":"delayed reclaim"}', '[]');
+  UPDATE public.ai_generation_jobs SET status = 'running', claimed_at = now() - interval '4 minutes', attempts = 1,
+         created_at = now() - interval '11 minutes 1 second', claim_token = gen_random_uuid() WHERE id = j3;
+  SELECT count(*) INTO n FROM public.claim_ai_image_jobs(1);
+  ASSERT n = 0, 'W17: no late reclaim that could outlive the total age bound';
+  UPDATE public.ai_generation_jobs SET created_at = now() - interval '14 minutes 1 second' WHERE id = j3;
+  PERFORM public.sweep_ai_image_jobs();
+  ASSERT (SELECT status = 'failed' AND params->>'error_code' = 'ai_attempts_exhausted'
+            FROM public.ai_generation_jobs WHERE id = j3), 'W17: absolute age bound with attempts left';
 
   -- W14: orphan older than a healthy job (rows inserted directly; enqueue can no longer make one)
   INSERT INTO public.ai_generation_jobs (user_id, provider, model_id, modality, credential_source, status, params, created_at)
@@ -130,6 +155,11 @@ BEGIN
   ASSERT NOT EXISTS (SELECT 1 FROM pg_publication_tables WHERE pubname = 'supabase_realtime' AND schemaname = 'public' AND tablename = 'ai_image_job_payloads'), 'W12b';
 
   -- W11 grants
+  ASSERT NOT has_function_privilege('authenticated', 'public.sweep_ai_image_jobs()', 'EXECUTE'), 'W11 sweep authenticated';
+  ASSERT NOT has_function_privilege('anon', 'public.sweep_ai_image_jobs()', 'EXECUTE'), 'W11 sweep anon';
+  ASSERT has_function_privilege('service_role', 'public.sweep_ai_image_jobs()', 'EXECUTE'), 'W11 sweep service_role';
+  ASSERT (SELECT prosecdef AND proconfig @> ARRAY['search_path=public, pg_temp'] FROM pg_proc
+            WHERE oid = 'public.sweep_ai_image_jobs()'::regprocedure), 'W11 sweep definer and search_path';
   ASSERT NOT has_function_privilege('authenticated', 'public.enqueue_ai_image_job(uuid, text, jsonb, jsonb)', 'EXECUTE'), 'W11 enqueue';
   ASSERT NOT has_function_privilege('authenticated', 'public.claim_ai_image_jobs(integer, interval, integer)', 'EXECUTE'), 'W11 claim';
   ASSERT NOT has_function_privilege('anon', 'public.claim_ai_image_jobs(integer, interval, integer)', 'EXECUTE'), 'W11 claim anon';
@@ -139,6 +169,9 @@ BEGIN
   ASSERT NOT has_table_privilege('authenticated', 'public.ai_image_job_payloads', 'SELECT'), 'W11 payloads';
 
   -- W1/W13
+  ASSERT (SELECT count(*) FROM cron.job WHERE jobname = 'sweep-ai-image-jobs') = 1, 'W1 sweep cron once';
+  ASSERT (SELECT schedule = '* * * * *' AND command = 'SELECT public.sweep_ai_image_jobs();'
+            FROM cron.job WHERE jobname = 'sweep-ai-image-jobs'), 'W13 sweep is pure SQL every minute';
   ASSERT (SELECT count(*) FROM cron.job WHERE jobname = 'ai-image-worker') = 1, 'W1 worker cron once';
   ASSERT (SELECT count(*) FROM cron.job WHERE jobname = 'purge-ai-image-payloads') = 1, 'W1 purge cron once';
   ASSERT (SELECT schedule FROM cron.job WHERE jobname = 'ai-image-worker') = '* * * * *', 'W13 schedule';

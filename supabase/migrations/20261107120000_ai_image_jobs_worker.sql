@@ -53,6 +53,61 @@ BEGIN
 END;
 $$;
 
+-- Pure SQL: pg_cron must be able to settle jobs even when the edge worker is down.
+-- The 3-minute lease mirrors AI_IMAGE_WORKER_LIMITS.lease in ai-image-worker/worker.ts.
+CREATE OR REPLACE FUNCTION public.sweep_ai_image_jobs()
+RETURNS void
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+BEGIN
+  -- (e) Orphans: a queued or running worker row with no payload can never run. enqueue_ai_image_job
+  -- makes this impossible; this keeps a hand-written or legacy row from lingering.
+  UPDATE public.ai_generation_jobs j
+     SET status = 'failed', error = 'Image generation could not be started. Please try again.',
+         params = j.params || jsonb_build_object('error_code', 'ai_payload_missing'), claim_token = NULL, updated_at = now()
+   WHERE j.modality = 'image' AND j.params->>'worker' = 'true' AND j.status IN ('queued', 'running')
+     AND NOT EXISTS (SELECT 1 FROM public.ai_image_job_payloads p WHERE p.job_id = j.id);
+
+  -- (a) Dispatched, lease expired: indeterminate. Fail, never re-run, never release.
+  WITH done AS (
+    UPDATE public.ai_generation_jobs
+       SET status = 'failed', error = 'The generation was interrupted before it finished. Please try again.',
+           params = params || jsonb_build_object('error_code', 'ai_interrupted'), claim_token = NULL, updated_at = now()
+     WHERE modality = 'image' AND params->>'worker' = 'true'
+       AND status = 'running' AND dispatched_at IS NOT NULL AND claimed_at < now() - interval '3 minutes'
+    RETURNING id)
+  UPDATE public.ai_image_job_payloads SET reference_images = '[]'::jsonb WHERE job_id IN (SELECT id FROM done);
+
+  -- (b) Never dispatched, out of attempts or total lifetime spent. The absolute
+  -- bound also covers delayed reclaims and a worker that never comes back.
+  -- Queue 5 min + 3 attempts * 3 min lease = 14 min; the watcher allows 16 min.
+  -- Keep src/lib/aiGenerationJobWatcher.ts in sync with this policy.
+  WITH done AS (
+    UPDATE public.ai_generation_jobs
+       SET status = 'failed', error = 'Image generation could not be started. Please try again.',
+           params = params || jsonb_build_object('error_code', 'ai_attempts_exhausted'), claim_token = NULL, updated_at = now()
+     WHERE modality = 'image' AND params->>'worker' = 'true'
+       AND status = 'running' AND dispatched_at IS NULL
+       AND ((claimed_at < now() - interval '3 minutes' AND attempts >= 3)
+            OR created_at < now() - interval '14 minutes')
+    RETURNING id)
+  UPDATE public.ai_image_job_payloads SET reference_images = '[]'::jsonb WHERE job_id IN (SELECT id FROM done);
+
+  -- (c) Queued too long (worker down). Nothing was reserved.
+  WITH done AS (
+    UPDATE public.ai_generation_jobs
+       SET status = 'timeout', error = 'Image generation did not start in time. Please try again.',
+           params = params || jsonb_build_object('error_code', 'ai_queue_timeout'), updated_at = now()
+     WHERE modality = 'image' AND params->>'worker' = 'true'
+       AND status = 'queued' AND created_at < now() - interval '5 minutes'
+    RETURNING id)
+  UPDATE public.ai_image_job_payloads SET reference_images = '[]'::jsonb WHERE job_id IN (SELECT id FROM done);
+
+END;
+$$;
+
 CREATE OR REPLACE FUNCTION public.claim_ai_image_jobs(
   p_limit integer DEFAULT 1,
   p_lease interval DEFAULT interval '3 minutes',
@@ -68,43 +123,7 @@ DECLARE
   v_running integer;
   v_claimed integer := 0;
 BEGIN
-  -- (a) Dispatched, lease expired: indeterminate. Fail, never re-run, never release.
-  WITH done AS (
-    UPDATE public.ai_generation_jobs
-       SET status = 'failed', error = 'The generation was interrupted before it finished. Please try again.',
-           params = params || jsonb_build_object('error_code', 'ai_interrupted'), claim_token = NULL, updated_at = now()
-     WHERE modality = 'image' AND params->>'worker' = 'true'
-       AND status = 'running' AND dispatched_at IS NOT NULL AND claimed_at < now() - p_lease
-    RETURNING id)
-  UPDATE public.ai_image_job_payloads SET reference_images = '[]'::jsonb WHERE job_id IN (SELECT id FROM done);
-
-  -- (b) Never dispatched, out of attempts.
-  WITH done AS (
-    UPDATE public.ai_generation_jobs
-       SET status = 'failed', error = 'Image generation could not be started. Please try again.',
-           params = params || jsonb_build_object('error_code', 'ai_attempts_exhausted'), claim_token = NULL, updated_at = now()
-     WHERE modality = 'image' AND params->>'worker' = 'true'
-       AND status = 'running' AND dispatched_at IS NULL AND claimed_at < now() - p_lease AND attempts >= 3
-    RETURNING id)
-  UPDATE public.ai_image_job_payloads SET reference_images = '[]'::jsonb WHERE job_id IN (SELECT id FROM done);
-
-  -- (c) Queued too long (worker down). Nothing was reserved.
-  WITH done AS (
-    UPDATE public.ai_generation_jobs
-       SET status = 'timeout', error = 'Image generation did not start in time. Please try again.',
-           params = params || jsonb_build_object('error_code', 'ai_queue_timeout'), updated_at = now()
-     WHERE modality = 'image' AND params->>'worker' = 'true'
-       AND status = 'queued' AND created_at < now() - interval '15 minutes'
-    RETURNING id)
-  UPDATE public.ai_image_job_payloads SET reference_images = '[]'::jsonb WHERE job_id IN (SELECT id FROM done);
-
-  -- (e) Orphans: a queued worker row with no payload can never run. enqueue_ai_image_job
-  -- makes this impossible; this keeps a hand-written or legacy row from lingering.
-  UPDATE public.ai_generation_jobs j
-     SET status = 'failed', error = 'Image generation could not be started. Please try again.',
-         params = j.params || jsonb_build_object('error_code', 'ai_payload_missing'), updated_at = now()
-   WHERE j.modality = 'image' AND j.params->>'worker' = 'true' AND j.status = 'queued'
-     AND NOT EXISTS (SELECT 1 FROM public.ai_image_job_payloads p WHERE p.job_id = j.id);
+  PERFORM public.sweep_ai_image_jobs();
 
   -- (d) Claim, oldest first, at most p_max_per_user running jobs per user. The per-user
   -- advisory lock serialises concurrent claimers for one user, so each sees the other's
@@ -118,7 +137,9 @@ BEGIN
      WHERE j.modality = 'image' AND j.params->>'worker' = 'true'
        AND EXISTS (SELECT 1 FROM public.ai_image_job_payloads p WHERE p.job_id = j.id)
        AND (j.status = 'queued'
-            OR (j.status = 'running' AND j.dispatched_at IS NULL AND j.claimed_at < now() - p_lease AND j.attempts < 3))
+            OR (j.status = 'running' AND j.dispatched_at IS NULL AND j.claimed_at < now() - p_lease AND j.attempts < 3
+                -- Leave a full lease before the sweep's 14-minute total-age bound.
+                AND j.created_at >= now() - interval '11 minutes'))
      ORDER BY j.created_at
      FOR UPDATE OF j SKIP LOCKED
   LOOP
@@ -180,6 +201,9 @@ BEGIN
 END;
 $$;
 
+REVOKE ALL ON FUNCTION public.sweep_ai_image_jobs() FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.sweep_ai_image_jobs() TO service_role;
+
 REVOKE ALL ON FUNCTION public.enqueue_ai_image_job(uuid, text, jsonb, jsonb) FROM PUBLIC, anon, authenticated;
 REVOKE ALL ON FUNCTION public.claim_ai_image_jobs(integer, interval, integer) FROM PUBLIC, anon, authenticated;
 REVOKE ALL ON FUNCTION public.complete_ai_image_job(uuid, uuid, text, text, text, text, text, text, text, jsonb) FROM PUBLIC, anon, authenticated;
@@ -198,21 +222,26 @@ $$;
 
 DO $do_cron_ai_image$
 BEGIN
-  IF NOT EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'pg_cron')
-     OR to_regprocedure('public.get_cron_secret()') IS NULL THEN
-    RAISE NOTICE 'pg_cron or get_cron_secret() missing; ai-image-worker crons not scheduled';
+  IF NOT EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'pg_cron') THEN
+    RAISE NOTICE 'pg_cron missing; ai-image-worker crons not scheduled';
     RETURN;
   END IF;
-  PERFORM cron.unschedule(jobid) FROM cron.job WHERE jobname IN ('ai-image-worker', 'purge-ai-image-payloads');
+  PERFORM cron.unschedule(jobid) FROM cron.job WHERE jobname IN ('sweep-ai-image-jobs', 'purge-ai-image-payloads');
+  PERFORM cron.schedule('sweep-ai-image-jobs', '* * * * *', 'SELECT public.sweep_ai_image_jobs();');
+  PERFORM cron.schedule('purge-ai-image-payloads', '17 * * * *', $cron$
+    DELETE FROM public.ai_image_job_payloads WHERE created_at < now() - interval '24 hours';
+  $cron$);
+  IF to_regprocedure('public.get_cron_secret()') IS NULL THEN
+    RAISE NOTICE 'get_cron_secret() missing; ai-image-worker HTTP cron not scheduled';
+    RETURN;
+  END IF;
+  PERFORM cron.unschedule(jobid) FROM cron.job WHERE jobname = 'ai-image-worker';
   PERFORM cron.schedule('ai-image-worker', '* * * * *', $cron$
     SELECT net.http_post(
       url := 'https://api.postora.cloud/functions/v1/ai-image-worker',
       headers := jsonb_build_object('Content-Type', 'application/json', 'Authorization', 'Bearer ' || get_cron_secret()),
       body := '{}'::jsonb
     );
-  $cron$);
-  PERFORM cron.schedule('purge-ai-image-payloads', '17 * * * *', $cron$
-    DELETE FROM public.ai_image_job_payloads WHERE created_at < now() - interval '24 hours';
   $cron$);
 END
 $do_cron_ai_image$;

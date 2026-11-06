@@ -8,7 +8,7 @@ import type { ReferenceInput } from "../_shared/image-references.ts";
 import { vercelGenerateImage } from "../_shared/vercelGateway.ts";
 import { pickRequestedModelRow } from "./modelChoice.ts";
 import { isPublicHttpsUrl, parseDataUrl } from "../_shared/image-references.ts";
-import { withinCallBudget, budgetSignal, timeLeftMs, NotEnoughTimeError, type CallBudget } from "./callBudget.ts";
+import { withinCallBudget, assertTimeLeft, budgetSignal, timeLeftMs, NotEnoughTimeError, type CallBudget } from "./callBudget.ts";
 
 export const PROVIDER_MIN_MS: Record<string, number> = { higgsfield: 45_000, openai: 45_000, google: 20_000, vercel: 20_000 };
 export class ProviderOutcomeUnknownError extends Error {}
@@ -19,7 +19,7 @@ export type ImageRunResult =
   | { kind: "refused"; status: 402 | 429; message: string; errorCode: "ai_quota_exhausted" | "ai_rate_limited" }
   | { kind: "outcome_unknown"; message: string; usedModel: ResolvedModel; credentialSource: "platform" | "byo" }
   | { kind: "lease_lost" }
-  | { kind: "failed"; message: string; attemptErrors: string[] };
+  | { kind: "failed"; message: string };
 export interface ImageRunDeps {
   onDispatch(): Promise<boolean>;
   resolveChain(requestedModel?: string): Promise<ResolvedModel[]>;
@@ -305,11 +305,11 @@ async function stageReferenceUrl(
 
   const extension = contentType.split('/')[1]?.replace('jpeg', 'jpg') || 'png';
   const path = `${userId}/ai-references/${crypto.randomUUID()}.${extension}`;
-  budgetSignal(budget, 2_000);
+  assertTimeLeft(budget, 2_000);
   const { error } = await withinCallBudget(budget, () => supabaseAdmin.storage.from('media').upload(path, bytes, { contentType }));
   if (error) throw new Error(`could not stage the reference image: ${error.message}`);
 
-  budgetSignal(budget, 2_000);
+  assertTimeLeft(budget, 2_000);
   const { data, error: signError } = await withinCallBudget(budget, () => supabaseAdmin.storage
     .from('media')
     .createSignedUrl(path, REFERENCE_URL_TTL_SECONDS));
@@ -472,7 +472,7 @@ export async function generateWithModel(
 ): Promise<{ imageUrl: string; description: string }> {
   if (m.provider_code === 'vercel') {
     if (references.length > 0) throw new Error('cannot take a reference image');
-    budgetSignal(budget, PROVIDER_MIN_MS.vercel);
+    assertTimeLeft(budget, PROVIDER_MIN_MS.vercel);
     return vercelGenerateImage(apiKey, m.model_id, prompt, aspectRatio, Math.min(50_000, Math.max(0, timeLeftMs(budget))));
   }
   if (m.api_type === 'openai' || m.provider_code === 'openai') {
@@ -488,7 +488,7 @@ export async function generateWithModel(
   throw new Error(`Unsupported provider api_type='${m.api_type}' (provider=${m.provider_code})`);
 }
 
-export function buildImagePrompt(prompt: string, references: ReferenceInput[], aspectRatio?: string, quality?: string): string {
+function buildImagePrompt(prompt: string, references: ReferenceInput[], aspectRatio?: string, quality?: string): string {
 // Build prompt with reference image context if available
 let referenceContext = '';
 if (references.length > 0) {
@@ -610,7 +610,7 @@ export async function runImageGeneration(deps: ImageRunDeps, job: ImageJobInput)
       record(m, err);
     }
   }
-  return { kind: "failed", message: `All image providers failed. Attempts: ${attemptErrors.join(" | ")}`, attemptErrors };
+  return { kind: "failed", message: `All image providers failed. Attempts: ${attemptErrors.join(" | ")}` };
 }
 
 // The SDK client stays at the infrastructure adapter seam.

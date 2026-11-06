@@ -3,10 +3,18 @@ import { assert, assertEquals } from "https://deno.land/std@0.208.0/assert/mod.t
 import { handleGenerateImageRequest, type GenerateImageHandlerDeps } from "./handler.ts";
 
 type Calls = { inserts: Array<[string, unknown]>; rpcs: Array<[string, unknown]>; fetches: string[] };
-function fakeClient(opts: { admin?: boolean; calls: Calls }) {
+function fakeClient(opts: { admin?: boolean; calls: Calls; rateLimited?: boolean; higgsfieldUnknown?: boolean }) {
   const tableData: Record<string, unknown> = { user_roles: opts.admin ? { role: "admin" } : null };
+  if (opts.higgsfieldUnknown) {
+    Object.assign(tableData, {
+      system_settings: { value: { provider_code: "higgsfield", model_id: "nano_banana_2" } },
+      ai_models: { model_id: "nano_banana_2", metadata: {}, admin_params: {},
+        ai_providers: { provider_code: "higgsfield", api_type: "higgsfield", is_active: true } },
+      provider_api_keys: { access_token: "test-token" },
+    });
+  }
   const builder = (table: string) => {
-    const result = { data: tableData[table] ?? null, error: null, count: 0 };
+    const result = { data: tableData[table] ?? null, error: null, count: opts.rateLimited && table === "api_logs" ? 50 : 0 };
     const b = new Proxy({}, {
       get(_t, prop) {
         if (prop === "then") return (res: (v: unknown) => void) => res(result);
@@ -19,22 +27,27 @@ function fakeClient(opts: { admin?: boolean; calls: Calls }) {
   };
   return {
     from: builder,
-    rpc: (name: string, args: unknown) => { opts.calls.rpcs.push([name, args]); return Promise.resolve({ data: name === "enqueue_ai_image_job" ? "job-1" : null, error: null }); },
+    rpc: (name: string, args: unknown) => { opts.calls.rpcs.push([name, args]); return Promise.resolve({ data: name === "enqueue_ai_image_job" ? "job-1" : name === "reserve_ai_generation_quota" ? { allowed: true } : null, error: null }); },
     auth: { getUser: () => Promise.resolve({ data: { user: { id: "11111111-1111-4111-8111-111111111111" } }, error: null }) },
     storage: { from: () => ({ remove: () => Promise.resolve({ error: null }) }) },
   };
 }
-function run(body: unknown, opts: { admin?: boolean; googleOk?: boolean } = {}) {
+function run(body: unknown, opts: { admin?: boolean; googleOk?: boolean; rateLimited?: boolean; higgsfieldUnknown?: boolean } = {}) {
   const calls: Calls = { inserts: [], rpcs: [], fetches: [] };
   // This fake implements only the SDK operations exercised by the HTTP boundary.
-  const client = fakeClient({ admin: opts.admin ?? true, calls }) as unknown as GenerateImageHandlerDeps["admin"];
+  const client = fakeClient({ ...opts, admin: opts.admin ?? true, calls }) as unknown as GenerateImageHandlerDeps["admin"];
   const originalKey = Deno.env.get("GOOGLE_AI_STUDIO_KEY");
   Deno.env.set("GOOGLE_AI_STUDIO_KEY", "test-key");
   const realFetch = globalThis.fetch;
-  globalThis.fetch = (async (input: string | URL | Request) => {
+  globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
     const url = String(input instanceof Request ? input.url : input);
     calls.fetches.push(url);
     if (url.endsWith("/functions/v1/ai-image-worker")) return new Response("{}", { status: 202 });
+    if (url === "https://mcp.higgsfield.ai/mcp") {
+      const rpc = JSON.parse(String(init?.body));
+      if (rpc.method === "tools/call") throw new DOMException("generation timed out", "TimeoutError");
+      return Response.json({ jsonrpc: "2.0", id: rpc.id, result: {} });
+    }
     if (!url.includes(":generateContent")) throw new Error(`unexpected fetch ${url}`);
     return opts.googleOk === false
       ? new Response("boom", { status: 500 })
@@ -84,4 +97,25 @@ Deno.test("async: queues exactly once, answers 202, and never calls the provider
   assertEquals(json, { success: true, jobId: "job-1", status: "queued" });
   assertEquals(calls.rpcs.filter(([name]) => name === "enqueue_ai_image_job").length, 1);
   assertEquals(calls.fetches.filter((url) => url.includes(":generateContent")).length, 0);
+});
+
+Deno.test("sync rate limit: 429 keeps body and rate-limit headers and never queues", async () => {
+  const { res, json, calls } = await run({ prompt: "a cat" }, { rateLimited: true });
+  assertEquals(res.status, 429);
+  assertEquals(json, { error: "Rate limit exceeded",
+    message: "You've reached the hourly limit of 50 AI image generations. Please wait an hour.",
+    remainingHour: 0, remainingDay: 200, retryAfter: 3600 });
+  assertEquals(["X-RateLimit-Limit-Hour", "X-RateLimit-Limit-Day", "X-RateLimit-Remaining-Hour",
+    "X-RateLimit-Remaining-Day", "Retry-After"].map((name) => res.headers.get(name)), ["50", "250", "0", "200", "3600"]);
+  assertEquals(calls.fetches, []);
+  assertEquals(calls.rpcs, []);
+});
+
+Deno.test("sync unknown Higgsfield outcome: stable 200 error, no refund, fallback or enqueue", async () => {
+  const { res, json, calls } = await run({ prompt: "a cat" }, { higgsfieldUnknown: true });
+  assertEquals(res.status, 200);
+  assertEquals(json, { success: false, error_code: "ai_outcome_unknown",
+    message: "The image provider did not confirm the result. Check your Higgsfield history before trying again." });
+  assertEquals(calls.rpcs.map(([name]) => name), ["reserve_ai_generation_quota"]);
+  assertEquals(calls.fetches.filter((url) => url.includes(":generateContent")), []);
 });
