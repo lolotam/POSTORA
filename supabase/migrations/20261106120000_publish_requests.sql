@@ -153,10 +153,10 @@ GRANT EXECUTE ON FUNCTION public.request_immediate_publish(uuid, uuid) TO servic
 --   * p_account_ids given: those accounts, which must belong to the owner;
 --   * otherwise: every account with a failed result on this post.
 -- Either way an account that already has a successful or pending result on
--- this post is dropped: it was published, or is being published. An Instagram
--- story's success row does not count: the story is a separate result of the
--- same account, and process-post's retry guard skips a story already live
--- while publishing the feed post or reel that failed.
+-- this post is dropped: it was published, or is being published. Instagram is
+-- the exception while the account still has a failed result: its feed post or
+-- reel and its story are separate results, and process-post's retry guard
+-- (recordedOnRetryRows) skips whichever of them is already live.
 --
 -- A post an agent retry (n8n or MCP) is holding under a live action lease is
 -- not retryable: that retry calls process-post without a claim expectation,
@@ -225,8 +225,11 @@ BEGIN
         AND pp.social_account_id = t
         AND (pp.status = 'pending'
              OR (pp.status = 'success'
-                 AND coalesce(pp.response_data ->> 'ig_post_subtype', '') <> 'story'
-                 AND coalesce(pp.response_data ->> 'story_recorded_on_reel_row', '') <> 'true'))
+                 AND NOT (pp.platform = 'instagram'
+                          AND EXISTS (SELECT 1 FROM public.platform_posts failed
+                                       WHERE failed.post_id = p_post_id
+                                         AND failed.social_account_id = t
+                                         AND failed.status = 'failed'))))
    );
 
   IF v_targets IS NULL OR cardinality(v_targets) = 0 THEN
@@ -277,9 +280,13 @@ GRANT EXECUTE ON FUNCTION public.request_post_retry(uuid, uuid, uuid[]) TO servi
 -- request_immediate_publish moves both columns at once and is not affected.
 -- A queued retry keeps its request: dropping it would orphan the retry marker
 -- and the scheduled run would republish accounts that already succeeded.
+-- SECURITY DEFINER: the browser reschedules as authenticated, which may not
+-- execute publish_request_is_retry, and Postgres checks that privilege for the
+-- whole IF expression even when an earlier condition is false.
 CREATE OR REPLACE FUNCTION public.posts_drop_request_on_reschedule()
 RETURNS trigger
 LANGUAGE plpgsql
+SECURITY DEFINER
 SET search_path = public
 AS $$
 BEGIN

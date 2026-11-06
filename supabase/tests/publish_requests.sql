@@ -22,6 +22,8 @@ DECLARE
   p_leased    uuid := 'c0000000-0000-4000-8000-000000000009';
   p_marker    uuid := 'c0000000-0000-4000-8000-00000000000a';
   p_resched   uuid := 'c0000000-0000-4000-8000-00000000000b';
+  p_feed_ok   uuid := 'c0000000-0000-4000-8000-00000000000e';
+  p_all_ok    uuid := 'c0000000-0000-4000-8000-00000000000f';
   v_stamp timestamptz;
   v_result jsonb;
   v_rows int;
@@ -169,6 +171,20 @@ BEGIN
   ASSERT (SELECT count(*) FROM public.platform_posts WHERE post_id = p_story AND status = 'success') = 1,
     'R15b the story''s success result is kept for process-post''s retry guard';
 
+  -- R18/R19: Instagram feed post live, story failed: the story is retried. Both live: nothing is.
+  INSERT INTO public.posts (id, user_id, platforms, status, source) VALUES
+    (p_feed_ok, u_a, ARRAY['instagram'], 'completed', 'manual'),
+    (p_all_ok,  u_a, ARRAY['instagram'], 'completed', 'manual');
+  INSERT INTO public.platform_posts (post_id, social_account_id, platform, status, response_data) VALUES
+    (p_feed_ok, acct_ig, 'instagram', 'success', '{"ig_post_subtype": "feed"}'),
+    (p_feed_ok, acct_ig, 'instagram', 'failed',  '{"ig_post_subtype": "story"}'),
+    (p_all_ok,  acct_ig, 'instagram', 'success', '{"ig_post_subtype": "feed"}'),
+    (p_all_ok,  acct_ig, 'instagram', 'success', '{"ig_post_subtype": "story"}');
+  ASSERT public.request_post_retry(p_feed_ok, u_a, ARRAY[acct_ig])->'account_ids' = to_jsonb(ARRAY[acct_ig]),
+    'R18 the account whose feed post is live is retried for its failed story';
+  ASSERT public.request_post_retry(p_all_ok, u_a, ARRAY[acct_ig])->>'reason' = 'no_targets',
+    'R19 an Instagram account with nothing failed is not retried';
+
   -- R16/R17: an agent retry's live action lease blocks a second run; an expired one does not.
   INSERT INTO public.posts (id, user_id, platforms, status, source, action_claim_id, action_claimed_at)
   VALUES (p_leased, u_a, ARRAY['facebook'], 'failed', 'manual', gen_random_uuid(), now());
@@ -225,6 +241,40 @@ BEGIN
     'G8 the due-request index exists';
 END $$;
 
+ROLLBACK;
+
+-- S4-S5: the browser reschedules as authenticated. Regression (PR #390 review):
+-- the reschedule trigger called a helper authenticated may not execute, which
+-- failed every browser reschedule, with or without a request. Own transaction:
+-- PL/pgSQL checks that privilege once per transaction, so an earlier firing as
+-- the superuser would hide it.
+BEGIN;
+INSERT INTO auth.users (id, email) VALUES ('a1a1a1a1-1111-4111-8111-a1a1a1a1a1a1', 'publish-requests-a@example.invalid');
+INSERT INTO public.user_quotas (user_id, max_posts_per_day, max_posts_per_month, max_media_uploads_per_day)
+VALUES ('a1a1a1a1-1111-4111-8111-a1a1a1a1a1a1', -1, -1, -1)
+ON CONFLICT (user_id) DO UPDATE SET
+  max_posts_per_day = EXCLUDED.max_posts_per_day,
+  max_posts_per_month = EXCLUDED.max_posts_per_month,
+  max_media_uploads_per_day = EXCLUDED.max_media_uploads_per_day;
+INSERT INTO public.posts (id, user_id, platforms, status, scheduled_at, publish_requested_at, source) VALUES
+  ('c0000000-0000-4000-8000-00000000000c', 'a1a1a1a1-1111-4111-8111-a1a1a1a1a1a1', ARRAY['facebook'], 'scheduled', now() + interval '1 day', NULL, 'manual'),
+  ('c0000000-0000-4000-8000-00000000000d', 'a1a1a1a1-1111-4111-8111-a1a1a1a1a1a1', ARRAY['facebook'], 'pending', NULL, now(), 'manual');
+SELECT set_config('request.jwt.claims', '{"sub":"a1a1a1a1-1111-4111-8111-a1a1a1a1a1a1","role":"authenticated"}', true);
+SELECT set_config('request.jwt.claim.sub', 'a1a1a1a1-1111-4111-8111-a1a1a1a1a1a1', true);
+SET LOCAL ROLE authenticated;
+DO $$
+DECLARE
+  v_rows int;
+BEGIN
+  UPDATE public.posts SET scheduled_at = scheduled_at + interval '1 hour'
+   WHERE id = 'c0000000-0000-4000-8000-00000000000c';
+  GET DIAGNOSTICS v_rows = ROW_COUNT;
+  ASSERT v_rows = 1, 'S4 the owner can reschedule a post that has no request';
+  UPDATE public.posts SET scheduled_at = now() + interval '1 day', status = 'scheduled'
+   WHERE id = 'c0000000-0000-4000-8000-00000000000d';
+  ASSERT (SELECT publish_requested_at FROM public.posts WHERE id = 'c0000000-0000-4000-8000-00000000000d') IS NULL,
+    'S5 an owner reschedule drops the unclaimed request';
+END $$;
 ROLLBACK;
 
 \echo '=== publish_requests: ALL CHECKS PASSED ==='
