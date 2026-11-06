@@ -76,35 +76,6 @@ export function PublishingProvider({ children }: { children: React.ReactNode }) 
     }
   }, [realtimeHook.recentUpdates, pushEnabled, sendNotification, playSuccessSound, playErrorSound, soundEnabled]);
 
-  // Check for fully completed posts and send summary notification
-  useEffect(() => {
-    if (!pushEnabled) return;
-
-    realtimeHook.publishingPosts.forEach((post) => {
-      if (post.platforms.length === post.completedPlatforms.size) {
-        const successful = Array.from(post.completedPlatforms.values()).filter(
-          (s) => s === "success"
-        ).length;
-        const failed = Array.from(post.completedPlatforms.values()).filter(
-          (s) => s === "failed"
-        ).length;
-
-        if (successful === post.platforms.length) {
-          sendNotification("🎉 All platforms published!", {
-            body: `Your post was published to ${successful} platform${successful > 1 ? "s" : ""}.`,
-            tag: `publish-complete-${post.postId}`,
-          });
-        } else if (failed > 0) {
-          sendNotification("⚠️ Publishing completed with errors", {
-            body: `${successful} succeeded, ${failed} failed.`,
-            tag: `publish-complete-${post.postId}`,
-            requireInteraction: true,
-          });
-        }
-      }
-    });
-  }, [realtimeHook.publishingPosts, pushEnabled, sendNotification]);
-
   return (
     <PublishingContext.Provider value={realtimeHook}>
       {children}

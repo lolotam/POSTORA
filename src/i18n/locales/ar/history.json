@@ -98,7 +98,8 @@
     "platformsProgress": "{{completed}} من أصل {{total}} منصات",
     "publishing": "جاري النشر...",
     "publishingPosts": "جاري نشر {{count}} منشور...",
-    "uploading": "جاري الرفع..."
+    "uploading": "جاري الرفع...",
+    "stillPublishingPosts": "??? ????? {{count}} ?????..."
   },
   "mediaOps": {
     "allOperations": "كل العمليات",
