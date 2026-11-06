@@ -1,3 +1,4 @@
+import type { SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2.7.1";
 import { encode as base64Encode, decode as base64Decode } from "https://deno.land/std@0.168.0/encoding/base64.ts";
 import { HiggsfieldAuthError, resolveHiggsfieldCredential } from "../_shared/higgsfield-oauth.ts";
 import { HiggsfieldMcpClient, McpError, findJobId, findOutputUrl } from "../_shared/higgsfield-mcp.ts";
@@ -7,7 +8,7 @@ import type { ReferenceInput } from "../_shared/image-references.ts";
 import { vercelGenerateImage } from "../_shared/vercelGateway.ts";
 import { pickRequestedModelRow } from "./modelChoice.ts";
 import { isPublicHttpsUrl, parseDataUrl } from "../_shared/image-references.ts";
-import { budgetSignal, timeLeftMs, NotEnoughTimeError, type CallBudget } from "./callBudget.ts";
+import { withinCallBudget, budgetSignal, timeLeftMs, NotEnoughTimeError, type CallBudget } from "./callBudget.ts";
 
 export const PROVIDER_MIN_MS: Record<string, number> = { higgsfield: 45_000, openai: 45_000, google: 20_000, vercel: 20_000 };
 export class ProviderOutcomeUnknownError extends Error {}
@@ -71,7 +72,7 @@ const HARDCODED_FALLBACK: ResolvedModel = {
 };
 
 async function lookupModelByProviderAndId(
-  supabaseAdmin: any,
+  supabaseAdmin: SupabaseClient,
   provider_code: string,
   model_id: string,
   source: ResolvedModel['source'],
@@ -96,7 +97,7 @@ async function lookupModelByProviderAndId(
 }
 
 async function getSystemSettingModel(
-  supabaseAdmin: any,
+  supabaseAdmin: SupabaseClient,
   key: string,
   source: ResolvedModel['source'],
 ): Promise<ResolvedModel | null> {
@@ -106,7 +107,7 @@ async function getSystemSettingModel(
   return lookupModelByProviderAndId(supabaseAdmin, v.provider_code, v.model_id, source);
 }
 
-async function resolveModelChain(supabaseAdmin: any, requestedModelId?: string): Promise<ResolvedModel[]> {
+async function resolveModelChain(supabaseAdmin: SupabaseClient, requestedModelId?: string): Promise<ResolvedModel[]> {
   const chain: ResolvedModel[] = [];
   const seen = new Set<string>();
   const push = (m: ResolvedModel | null) => {
@@ -161,7 +162,7 @@ async function resolveModelChain(supabaseAdmin: any, requestedModelId?: string):
   return chain;
 }
 
-async function getProviderApiKey(supabaseAdmin: any, m: ResolvedModel): Promise<string | null> {
+async function getProviderApiKey(supabaseAdmin: SupabaseClient, m: ResolvedModel): Promise<string | null> {
   const fromEnv = Deno.env.get(m.api_key_env_var);
   if (fromEnv) return fromEnv;
   const { data } = await supabaseAdmin
@@ -289,7 +290,7 @@ function publicSupabaseOrigin(): string {
  * short-lived signed URL rather than the bucket being opened up.
  */
 async function stageReferenceUrl(
-  supabaseAdmin: any,
+  supabaseAdmin: SupabaseClient,
   userId: string,
   url: string,
   budget: CallBudget,
@@ -305,13 +306,13 @@ async function stageReferenceUrl(
   const extension = contentType.split('/')[1]?.replace('jpeg', 'jpg') || 'png';
   const path = `${userId}/ai-references/${crypto.randomUUID()}.${extension}`;
   budgetSignal(budget, 2_000);
-  const { error } = await supabaseAdmin.storage.from('media').upload(path, bytes, { contentType });
+  const { error } = await withinCallBudget(budget, () => supabaseAdmin.storage.from('media').upload(path, bytes, { contentType }));
   if (error) throw new Error(`could not stage the reference image: ${error.message}`);
 
   budgetSignal(budget, 2_000);
-  const { data, error: signError } = await supabaseAdmin.storage
+  const { data, error: signError } = await withinCallBudget(budget, () => supabaseAdmin.storage
     .from('media')
-    .createSignedUrl(path, REFERENCE_URL_TTL_SECONDS);
+    .createSignedUrl(path, REFERENCE_URL_TTL_SECONDS));
   if (signError || !data?.signedUrl) {
     throw new Error(`could not sign the reference image: ${signError?.message || 'no URL returned'}`);
   }
@@ -331,7 +332,7 @@ async function stageReferenceUrl(
  */
 interface ReferenceImportRequest {
   mcp: HiggsfieldMcpClient;
-  supabaseAdmin: any;
+  supabaseAdmin: SupabaseClient;
   userId: string;
   spec: { maxReferenceImages: number; referenceRoles: string[]; requiresReferenceImage: boolean };
   references: ReferenceInput[];
@@ -427,7 +428,7 @@ async function callGoogleGenerateContent(
     const { mimeType, base64 } = await readReferenceBytes(ref.url, budget);
     promptParts.push({ inline_data: { mime_type: mimeType, data: base64 } });
   }
-  const body: any = {
+  const body: Record<string, unknown> = {
     contents: [{ parts: promptParts }],
   };
   // Image-capable Gemini models accept imageConfig under generationConfig
@@ -448,15 +449,16 @@ async function callGoogleGenerateContent(
     throw new Error(`Google ${resp.status}: ${text.slice(0, 300)}`);
   }
   const data = await resp.json();
-  const parts = data?.candidates?.[0]?.content?.parts || [];
-  const imagePart = parts.find((p: any) => p.inline_data?.mime_type?.startsWith('image/') || p.inlineData?.mimeType?.startsWith('image/'));
+  const parts: Array<{ text?: string; inline_data?: { mime_type: string; data: string }; inlineData?: { mimeType: string; data: string } }> = data?.candidates?.[0]?.content?.parts || [];
+  const imagePart = parts.find((p) => p.inline_data?.mime_type?.startsWith('image/') || p.inlineData?.mimeType?.startsWith('image/'));
   if (!imagePart) {
     throw new Error(`Google returned no image: ${JSON.stringify(data).slice(0, 200)}`);
   }
-  const inline = imagePart.inline_data || imagePart.inlineData;
-  const mime = inline.mime_type || inline.mimeType;
+  // The predicate above only selects a part carrying one of these image fields.
+  const inline = (imagePart.inline_data || imagePart.inlineData)!;
+  const mime = 'mime_type' in inline ? inline.mime_type : inline.mimeType;
   const b64 = inline.data;
-  const textPart = parts.find((p: any) => p.text);
+  const textPart = parts.find((p) => p.text);
   return { imageUrl: `data:${mime};base64,${b64}`, description: textPart?.text || 'Image generated successfully' };
 }
 
@@ -611,9 +613,8 @@ export async function runImageGeneration(deps: ImageRunDeps, job: ImageJobInput)
   return { kind: "failed", message: `All image providers failed. Attempts: ${attemptErrors.join(" | ")}`, attemptErrors };
 }
 
-// The Supabase SDK client is untyped at this adapter seam, as in the moved handler.
-// deno-lint-ignore no-explicit-any
-export function defaultImageRunDeps(admin: any, overrides: Pick<ImageRunDeps, "onDispatch" | "recordHiggsfieldSuccess">): ImageRunDeps {
+// The SDK client stays at the infrastructure adapter seam.
+export function defaultImageRunDeps(admin: SupabaseClient, overrides: Pick<ImageRunDeps, "onDispatch" | "recordHiggsfieldSuccess">): ImageRunDeps {
   return {
     ...overrides,
     resolveChain: (requested) => resolveModelChain(admin, requested),
@@ -622,14 +623,12 @@ export function defaultImageRunDeps(admin: any, overrides: Pick<ImageRunDeps, "o
     resolveHiggsfieldCredential: (userId) => resolveHiggsfieldCredential(admin, userId),
     checkByoLimits: (userId) => checkByoGenerationLimits(admin, userId),
     async reserveQuota(userId) {
-      const { data, error } = await admin.rpc('reserve_ai_generation_quota', { p_user_id: userId });
-      if (error) throw error;
+      const { data } = await admin.rpc('reserve_ai_generation_quota', { p_user_id: userId });
       const quota = Array.isArray(data) ? data[0] : data;
       return quota?.allowed === true;
     },
     async releaseQuota(userId) {
-      const { error } = await admin.rpc('release_ai_generation_quota', { p_user_id: userId });
-      if (error) throw error;
+      await admin.rpc('release_ai_generation_quota', { p_user_id: userId });
     },
     async generateWithHiggsfield({ m, cred, prompt, aspectRatio, references, userId, budget }) {
       // Removed once the attempt is over: cleanup-media only walks media_files
@@ -682,7 +681,7 @@ export function defaultImageRunDeps(admin: any, overrides: Pick<ImageRunDeps, "o
               timer = setTimeout(() => reject(new Error("reference cleanup timed out")), Math.max(1_000, Math.min(5_000, timeLeftMs(budget))));
             });
             const { error } = await Promise.race([admin.storage.from('media').remove(stagedPaths), timeout]);
-            if (error) throw error;
+            if (error) console.warn('[generate-image] could not remove staged references:', error.message);
           } catch (error) {
             console.warn('[generate-image] could not remove staged references:', error instanceof Error ? error.message : String(error));
           } finally {

@@ -1,13 +1,13 @@
-// deno-lint-ignore-file no-import-prefix no-explicit-any
+// deno-lint-ignore-file no-import-prefix
 import { assert, assertEquals } from "https://deno.land/std@0.208.0/assert/mod.ts";
-import { handleGenerateImageRequest } from "./handler.ts";
+import { handleGenerateImageRequest, type GenerateImageHandlerDeps } from "./handler.ts";
 
 type Calls = { inserts: Array<[string, unknown]>; rpcs: Array<[string, unknown]>; fetches: string[] };
 function fakeClient(opts: { admin?: boolean; calls: Calls }) {
   const tableData: Record<string, unknown> = { user_roles: opts.admin ? { role: "admin" } : null };
-  const builder = (table: string): any => {
+  const builder = (table: string) => {
     const result = { data: tableData[table] ?? null, error: null, count: 0 };
-    const b: any = new Proxy({}, {
+    const b = new Proxy({}, {
       get(_t, prop) {
         if (prop === "then") return (res: (v: unknown) => void) => res(result);
         if (prop === "maybeSingle" || prop === "single") return () => Promise.resolve(result);
@@ -26,7 +26,9 @@ function fakeClient(opts: { admin?: boolean; calls: Calls }) {
 }
 function run(body: unknown, opts: { admin?: boolean; googleOk?: boolean } = {}) {
   const calls: Calls = { inserts: [], rpcs: [], fetches: [] };
-  const client = fakeClient({ admin: opts.admin ?? true, calls });
+  // This fake implements only the SDK operations exercised by the HTTP boundary.
+  const client = fakeClient({ admin: opts.admin ?? true, calls }) as unknown as GenerateImageHandlerDeps["admin"];
+  const originalKey = Deno.env.get("GOOGLE_AI_STUDIO_KEY");
   Deno.env.set("GOOGLE_AI_STUDIO_KEY", "test-key");
   const realFetch = globalThis.fetch;
   globalThis.fetch = (async (input: string | URL | Request) => {
@@ -43,7 +45,11 @@ function run(body: unknown, opts: { admin?: boolean; googleOk?: boolean } = {}) 
   });
   return handleGenerateImageRequest(req, { admin: client, userClient: () => client, serviceRoleCallerUserId: async () => null })
     .then(async (res) => ({ res, json: await res.json(), calls }))
-    .finally(() => { globalThis.fetch = realFetch; });
+    .finally(() => {
+      globalThis.fetch = realFetch;
+      if (originalKey === undefined) Deno.env.delete("GOOGLE_AI_STUDIO_KEY");
+      else Deno.env.set("GOOGLE_AI_STUDIO_KEY", originalKey);
+    });
 }
 
 Deno.test("sync success: 200 { imageUrl, description } with rate-limit headers, nothing queued", async () => {

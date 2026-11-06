@@ -4,15 +4,23 @@
  * browser's wait on an image that exists. Worker image jobs must never reach index.ts's provider
  * or 30-minute branches, which would refund a reservation the worker never made.
  */
-// deno-lint-ignore-file no-explicit-any
+import type { SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2.7.1";
+
+export interface WorkerImageJob {
+  id: string; modality: string; status: string; params: unknown; result_url: string | null; error: string | null;
+}
+interface GenerationJob extends WorkerImageJob {
+  created_at: string; credential_source: string; model_id: string; provider: string;
+  provider_job_id: string | null; params: Record<string, unknown>;
+}
 export const WORKER_IMAGE_POLL_SECONDS = 3;
 export const RETRYABLE_READ_BODY = { success: false, retryable: true, error: "Could not read the generation status. Retrying." };
-export type OwnedJobRead = { kind: "found"; job: any } | { kind: "missing" } | { kind: "error"; message: string };
+export type OwnedJobRead = { kind: "found"; job: GenerationJob } | { kind: "missing" } | { kind: "error"; message: string };
 
 const paramsOf = (job: { params: unknown }) =>
   job.params && typeof job.params === "object" ? (job.params as Record<string, unknown>) : {};
 
-export async function loadOwnedJob(db: any, jobId: unknown, userId: string): Promise<OwnedJobRead> {
+export async function loadOwnedJob(db: SupabaseClient, jobId: unknown, userId: string): Promise<OwnedJobRead> {
   if (typeof jobId !== "string" || jobId.length === 0) return { kind: "missing" };
   const { data, error } = await db.from("ai_generation_jobs").select("*").eq("id", jobId).eq("user_id", userId).maybeSingle();
   if (error) return { kind: "error", message: String(error.message ?? error) };
@@ -23,7 +31,7 @@ export function isWorkerImageJob(job: { modality: string; params: unknown }): bo
   return job.modality === "image" && paramsOf(job).worker === true;
 }
 
-export async function answerWorkerImageJob(db: any, job: any): Promise<{ status: number; body: Record<string, unknown> }> {
+export async function answerWorkerImageJob(db: SupabaseClient, job: WorkerImageJob): Promise<{ status: number; body: Record<string, unknown> }> {
   const params = paramsOf(job);
   if (job.status === "succeeded") {
     let imageUrl: string | null = job.result_url ?? null;

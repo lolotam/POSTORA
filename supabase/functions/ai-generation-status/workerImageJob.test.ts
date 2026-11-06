@@ -1,13 +1,14 @@
-// deno-lint-ignore-file no-import-prefix no-explicit-any
+// deno-lint-ignore-file no-import-prefix
+import type { SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2.7.1";
 import { assertEquals } from "https://deno.land/std@0.208.0/assert/mod.ts";
 import { answerWorkerImageJob, isWorkerImageJob, loadOwnedJob, RETRYABLE_READ_BODY } from "./workerImageJob.ts";
 
 const db = (tables: Record<string, { data: unknown; error: unknown }>) => ({
   from: (t: string) => {
-    const b: any = { select: () => b, eq: () => b, maybeSingle: () => Promise.resolve(tables[t]) };
+    const b = { select: () => b, eq: () => b, maybeSingle: () => Promise.resolve(tables[t]) };
     return b;
   },
-});
+}) as unknown as SupabaseClient;
 const row = (o: Record<string, unknown> = {}) =>
   ({ id: "j1", modality: "image", status: "queued", params: { worker: true }, result_url: null, error: null, ...o });
 

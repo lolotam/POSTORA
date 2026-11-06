@@ -1,3 +1,4 @@
+import type { SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2.7.1";
 import { buildEnqueueArgs, kickAiImageWorker } from "./asyncJob.ts";
 import { runInBackground } from "../_shared/background.ts";
 import { describeImageFailure } from "./imageFailure.ts";
@@ -52,7 +53,7 @@ interface RateLimitResult {
 }
 
 // Get user's subscription plan
-async function getUserPlan(supabaseAdmin: any, userId: string): Promise<string> {
+async function getUserPlan(supabaseAdmin: SupabaseClient, userId: string): Promise<string> {
   try {
     const { data: subscription } = await supabaseAdmin
       .from('user_subscriptions')
@@ -73,7 +74,7 @@ async function getUserPlan(supabaseAdmin: any, userId: string): Promise<string> 
 }
 
 // Fetch tier-based rate limit configuration from database
-async function getTierRateLimitConfig(supabaseAdmin: any, userId: string, planSlug: string): Promise<TierRateLimitConfig> {
+async function getTierRateLimitConfig(supabaseAdmin: SupabaseClient, userId: string, planSlug: string): Promise<TierRateLimitConfig> {
   const endpoint = 'generate-image';
   
   try {
@@ -128,7 +129,7 @@ async function getTierRateLimitConfig(supabaseAdmin: any, userId: string, planSl
 }
 
 // Check rate limit for a user (both hourly and daily)
-async function checkRateLimit(supabaseAdmin: any, userId: string, config: TierRateLimitConfig): Promise<RateLimitResult> {
+async function checkRateLimit(supabaseAdmin: SupabaseClient, userId: string, config: TierRateLimitConfig): Promise<RateLimitResult> {
   // If rate limiting is disabled, allow all requests
   if (!config.isActive) {
     return { 
@@ -223,7 +224,7 @@ async function checkRateLimit(supabaseAdmin: any, userId: string, config: TierRa
 }
 
 // Log API request for rate limiting
-async function logApiRequest(supabaseAdmin: any, userId: string, statusCode: number): Promise<void> {
+async function logApiRequest(supabaseAdmin: SupabaseClient, userId: string, statusCode: number): Promise<void> {
   try {
     await supabaseAdmin.from('api_logs').insert({
       user_id: userId,
@@ -245,7 +246,7 @@ interface SubscriptionCheck {
 }
 
 // Check if user has AI access based on their subscription
-async function checkAIAccess(supabase: any, userId: string): Promise<SubscriptionCheck> {
+async function checkAIAccess(supabase: SupabaseClient, userId: string): Promise<SubscriptionCheck> {
   // Check if user is admin (admins always have access)
   const { data: role } = await supabase
     .from('user_roles')
@@ -299,8 +300,8 @@ async function checkAIAccess(supabase: any, userId: string): Promise<Subscriptio
 }
 
 export interface GenerateImageHandlerDeps {
-  admin: any;                                   // service-role client
-  userClient(authHeader: string): any;           // anon client carrying the caller's JWT
+  admin: SupabaseClient;                                   // service-role client
+  userClient(authHeader: string): SupabaseClient;           // anon client carrying the caller's JWT
   serviceRoleCallerUserId(req: Request): Promise<string | null>;
 }
 export async function handleGenerateImageRequest(req: Request, deps: GenerateImageHandlerDeps): Promise<Response> {

@@ -1,8 +1,8 @@
+import type { SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2.7.1";
 import { defaultImageRunDeps, runImageGeneration } from "../generate-image/runImageGeneration.ts";
 import type { AiImageWorkerPorts, ClaimedImageJob } from "./worker.ts";
 
-// deno-lint-ignore no-explicit-any
-export function createAiImageWorkerPorts(admin: any, workerStartedAtMs: number): AiImageWorkerPorts {
+export function createAiImageWorkerPorts(admin: SupabaseClient, workerStartedAtMs: number): AiImageWorkerPorts {
   const nowIso = () => new Date().toISOString();
   return {
     now: () => Date.now(),

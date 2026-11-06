@@ -2350,6 +2350,10 @@ export type Database = {
       }
       ai_generation_jobs: {
         Row: {
+          attempts: number
+          claim_token: string | null
+          claimed_at: string | null
+          dispatched_at: string | null
           created_at: string
           credential_source: string
           error: string | null
@@ -2366,6 +2370,10 @@ export type Database = {
           user_id: string
         }
         Insert: {
+          attempts?: number
+          claim_token?: string | null
+          claimed_at?: string | null
+          dispatched_at?: string | null
           created_at?: string
           credential_source: string
           error?: string | null
@@ -2382,6 +2390,10 @@ export type Database = {
           user_id: string
         }
         Update: {
+          attempts?: number
+          claim_token?: string | null
+          claimed_at?: string | null
+          dispatched_at?: string | null
           created_at?: string
           credential_source?: string
           error?: string | null
@@ -2398,6 +2410,35 @@ export type Database = {
           user_id?: string
         }
         Relationships: []
+      }
+      ai_image_job_payloads: {
+        Row: {
+          created_at: string
+          job_id: string
+          reference_images: Json
+          result_data_url: string | null
+        }
+        Insert: {
+          created_at?: string
+          job_id: string
+          reference_images?: Json
+          result_data_url?: string | null
+        }
+        Update: {
+          created_at?: string
+          job_id?: string
+          reference_images?: Json
+          result_data_url?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "ai_image_job_payloads_job_id_fkey"
+            columns: ["job_id"]
+            isOneToOne: true
+            referencedRelation: "ai_generation_jobs"
+            referencedColumns: ["id"]
+          },
+        ]
       }
       ai_knowledge_chunks: {
         Row: {
@@ -12344,6 +12385,29 @@ export type Database = {
       redeem_coupon: {
         Args: { p_subscription_id?: string; p_user_id: string; p_code: string }
         Returns: string
+      }
+      enqueue_ai_image_job: {
+        Args: { p_user_id: string; p_model_id: string; p_params: Json; p_references: Json }
+        Returns: string
+      }
+      claim_ai_image_jobs: {
+        Args: { p_limit?: number; p_lease?: unknown; p_max_per_user?: number }
+        Returns: Database["public"]["Tables"]["ai_generation_jobs"]["Row"][]
+      }
+      complete_ai_image_job: {
+        Args: {
+          p_job_id: string
+          p_claim_token: string
+          p_status: string
+          p_result_url?: string
+          p_result_data_url?: string
+          p_error?: string
+          p_provider?: string
+          p_model_id?: string
+          p_credential_source?: string
+          p_params?: Json
+        }
+        Returns: boolean
       }
       release_ai_generation_quota: {
         Args: { p_user_id: string }
