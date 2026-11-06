@@ -144,7 +144,8 @@ DECLARE
     '11111111-1111-4111-8111-111111111117',
     '11111111-1111-4111-8111-111111111118',
     '11111111-1111-4111-8111-111111111119',
-    '11111111-1111-4111-8111-11111111111a'
+    '11111111-1111-4111-8111-11111111111a',
+    '11111111-1111-4111-8111-11111111113f'
   ];
   fid uuid;
 BEGIN
@@ -181,6 +182,13 @@ BEGIN
   PERFORM pg_temp.mfile(protected[23], u_a);
   PERFORM pg_temp.mfile(protected[24], u_a); -- shared object
   PERFORM pg_temp.mfile(protected[25], u_a); -- alias target
+  PERFORM pg_temp.mfile(protected[26], u_a);
+  -- A queued background image job references this file only through its
+  -- reference_urls; the sweep must treat it as in use (Phase B, B8).
+  PERFORM public.enqueue_ai_image_job(u_a, NULL,
+    jsonb_build_object('prompt', 'p', 'reference_urls',
+      jsonb_build_array((SELECT file_path FROM public.media_files WHERE id = protected[26]))),
+    jsonb_build_array(jsonb_build_object('url', (SELECT file_path FROM public.media_files WHERE id = protected[26]))));
 
   -- Canvas duplicates share a file_path. Object-identity and address-alias
   -- holders live in partner-media so they are references, not candidates.

@@ -1,3 +1,4 @@
+import { resolveAiImageResponse } from "@/lib/aiGenerationJobWatcher";
 import { memo, useState, useCallback, useEffect } from "react";
 import { Handle, Position, type NodeProps, NodeResizer, useReactFlow } from "@xyflow/react";
 import { Image, Upload, Sparkles, FolderOpen, Plus, X, Loader2, Video, FileImage, RefreshCw, Play, Maximize2, Copy, Trash2, Download, Check, AlertCircle } from "lucide-react";
@@ -138,17 +139,20 @@ function MediaNodeComponent({ id, data, selected }: NodeProps) {
     }
     setIsGenerating(true);
     try {
-      const { data, error } = await supabase.functions.invoke('generate-image', {
-        body: { prompt: generatePrompt, style: 'realistic', size: '1024x1024' },
+      const { data: raw, error } = await supabase.functions.invoke('generate-image', {
+        body: { prompt: generatePrompt, style: 'realistic', size: '1024x1024', async: true },
       });
       if (error) throw error;
-      if (data?.imageUrl) {
+      const data = await resolveAiImageResponse(raw);
+      if (data?.success === false) throw new Error(String(data.message ?? "Image generation failed"));
+      if (typeof data?.imageUrl === "string") {
+        const imageUrl = data.imageUrl;
         // Upload base64 to Cloudinary for a stable URL
-        let finalUrl = data.imageUrl;
-        if (data.imageUrl.startsWith('data:')) {
+        let finalUrl = imageUrl;
+        if (imageUrl.startsWith('data:')) {
           try {
             const { data: uploadData, error: uploadError } = await supabase.functions.invoke('cloudinary-upload', {
-              body: { fileData: data.imageUrl, fileName: `ai-generated-${Date.now()}.png`, fileType: 'image', platforms: [], socialAccountIds: [] },
+              body: { fileData: imageUrl, fileName: `ai-generated-${Date.now()}.png`, fileType: 'image', platforms: [], socialAccountIds: [] },
             });
             if (!uploadError && uploadData?.url) {
               finalUrl = uploadData.url;

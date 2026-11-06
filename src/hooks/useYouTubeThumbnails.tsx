@@ -3,6 +3,7 @@
  * Extracts thumbnail logic from CreatePost.tsx for better maintainability
  */
 
+import { resolveAiImageResponse } from "@/lib/aiGenerationJobWatcher";
 import { useState, useCallback } from "react";
 import { useToast } from "@/hooks/use-toast";
 import { supabase } from "@/integrations/supabase/client";
@@ -116,7 +117,7 @@ export function useYouTubeThumbnails({
     setYoutubeGeneratingAiThumbnail(true);
 
     try {
-      const { data, error } = await supabase.functions.invoke("generate-image", {
+      const { data: raw, error } = await supabase.functions.invoke("generate-image", {
         body: {
           // No model and no quality: generate-image resolves the chain from
           // admin settings and applies the administrator's knobs. 16:9 is the
@@ -124,14 +125,18 @@ export function useYouTubeThumbnails({
           prompt,
           aspectRatio: "16:9",
           referenceImage: refImage || undefined,
+          async: true,
         },
       });
 
       if (error) throw error;
-      if (data?.error) throw new Error(data.error);
+      const data = await resolveAiImageResponse(raw);
+      if (data?.success === false) throw new Error(String(data.message ?? "Image generation failed"));
+      if (data?.error) throw new Error(String(data.error));
 
-      if (data?.imageUrl) {
-        setYoutubeAiGeneratedThumbnails(prev => [...prev, data.imageUrl]);
+      if (typeof data?.imageUrl === "string") {
+        const imageUrl = data.imageUrl;
+        setYoutubeAiGeneratedThumbnails(prev => [...prev, imageUrl]);
         toast({ title: "Thumbnail generated!", description: "AI thumbnail has been created." });
       }
     } catch (error) {

@@ -1,3 +1,4 @@
+import { loadOwnedJob, isWorkerImageJob, answerWorkerImageJob, RETRYABLE_READ_BODY } from "./workerImageJob.ts";
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.7.1";
 import { corsHeaders } from "../_shared/cors.ts";
@@ -25,13 +26,17 @@ serve(async (req) => {
     } = await supabase.auth.getUser(h.slice(7));
     if (!user) return json({ error: "Unauthorized" }, 401);
     const { jobId } = await req.json();
-    const { data: job } = await supabase
-      .from("ai_generation_jobs")
-      .select("*")
-      .eq("id", jobId)
-      .eq("user_id", user.id)
-      .maybeSingle();
-    if (!job) return json({ error: "Job not found" }, 404);
+    const owned = await loadOwnedJob(supabase, jobId, user.id);
+    if (owned.kind === "error") {
+      console.error("[ai-generation-status] job read failed:", owned.message);
+      return json(RETRYABLE_READ_BODY, 503);
+    }
+    if (owned.kind === "missing") return json({ error: "Job not found" }, 404);
+    const job = owned.job;
+    if (isWorkerImageJob(job)) {
+      const answer = await answerWorkerImageJob(supabase, job, user.id);
+      return json(answer.body, answer.status);
+    }
     if (["succeeded", "failed", "timeout"].includes(job.status))
       return json({ success: true, status: job.status, videoUrl: job.modality === "video" ? job.result_url : null, imageUrl: job.modality === "image" ? job.result_url : null, url: job.result_url, error: job.error });
     if (Date.now() - Date.parse(job.created_at) > 30 * 60_000) {
