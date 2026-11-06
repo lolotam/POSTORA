@@ -14,6 +14,8 @@ export interface RealtimeUpdate {
 const STILL_PUBLISHING_AFTER_MS = 60_000;
 // Matches process-post's deferral give-up, after which the post's own status is final.
 const TRACKING_CAP_MS = 35 * 60_000;
+const STATUS_POLL_MS = 5_000;
+const TERMINAL_POST_STATUSES = new Set(["completed", "failed"]);
 
 export interface PublishingPost {
   postId: string;
@@ -84,6 +86,24 @@ export function useRealtimePostUpdates() {
       return newMap;
     });
   }, []);
+
+  // Realtime events can be missed (a phone suspends the socket, or the table was not in the
+  // publication: 2026-11-06), so the tracked posts' own status is also read on an interval.
+  const trackedIds = Array.from(publishingPosts.keys()).sort().join(",");
+  useEffect(() => {
+    if (!trackedIds) return;
+    const ids = trackedIds.split(",");
+    const timer = setInterval(async () => {
+      const { data } = await supabase.from("posts").select("id, status").in("id", ids);
+      const settled = (data ?? []).filter((post) => TERMINAL_POST_STATUSES.has(post.status));
+      if (settled.length === 0) return;
+      settled.forEach((post) => clearPublishingPost(post.id));
+      queryClient.refetchQueries({ queryKey: ["posts_with_results"] });
+      queryClient.refetchQueries({ queryKey: ["posts"] });
+      queryClient.refetchQueries({ queryKey: ["scheduled_posts"] });
+    }, STATUS_POLL_MS);
+    return () => clearInterval(timer);
+  }, [trackedIds, queryClient, clearPublishingPost]);
 
   useEffect(() => {
     toastedRows.current.clear();
