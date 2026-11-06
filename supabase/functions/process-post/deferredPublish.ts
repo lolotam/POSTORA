@@ -214,6 +214,18 @@ export function deferrableDeadline(deadlineMs: number, workerStartedAtMs: number
 }
 
 /**
+ * The timing one account publishes with. Accounts publish one after another, so a single poll
+ * budget counted from the request start is spent by the earlier ones: on 2026-11-06 an Instagram
+ * feed image created after Threads, Pinterest and a story was failed before Meta was asked once.
+ * Each account's first-run budget therefore starts when that account does, cut so its publish
+ * still fits in the worker. A resumed run (check once) and a run with no deadline keep theirs.
+ */
+export function accountTiming(timing: PublishTiming, accountStartedAtMs: number, workerStartedAtMs: number): PublishTiming {
+  if (timing.resume || !Number.isFinite(timing.deadlineMs)) return timing;
+  return { ...timing, deadlineMs: deferrableDeadline(pollDeadline(accountStartedAtMs, false), workerStartedAtMs) };
+}
+
+/**
  * Whether this worker is too old to start a run whose caller retries on its own: the
  * reconciler's resume (it calls again next minute) and the scheduler's run (the post stays
  * `scheduled` and is picked up on the next tick). Such a run is refused before it reads or

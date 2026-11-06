@@ -123,6 +123,7 @@ import { firstPublicPostId } from "../_shared/tiktokPublishOutcome.ts";
 import { CHECK_ONCE_DEADLINE, classifyContainerStatus, CONTAINER_STATUS_FIELDS, type ContainerState, containerFailureMessage, pollContainer } from "../_shared/metaContainerStatus.ts";
 import {
   abandonReason,
+  accountTiming,
   bufferAfterFinishedMs,
   type ContainerWait,
   ContainerStillProcessing,
@@ -1983,6 +1984,7 @@ Deno.serve(async (req) => {
       // whether or not their row was written, so they count in the roll-up and the notifications
       // (below); only the ones whose row was written may be dropped from a pending row's carry.
       const stories = newStoryLedger();
+      const timingForAccount = accountTiming(timing, Date.now(), WORKER_STARTED_AT_MS);
 
       try {
         let result: PlatformPostResult;
@@ -2006,9 +2008,9 @@ Deno.serve(async (req) => {
               }
               : NOT_A_RETRY;
             if (igAuthType === 'business_login') {
-              result = await postToInstagramBusinessLogin(account, post, mediaUrls, mediaFiles, supabase, post_id, timing, retry);
+              result = await postToInstagramBusinessLogin(account, post, mediaUrls, mediaFiles, supabase, post_id, timingForAccount, retry);
             } else {
-              result = await postToInstagram(account, post, mediaUrls, mediaFiles, timing, (story) =>
+              result = await postToInstagram(account, post, mediaUrls, mediaFiles, timingForAccount, (story) =>
                 recordLiveStory(supabase, { postId: post_id, account, story }, stories), retry, async (error) => {
                 const settled = await settlePlatformPost(supabase, {
                   platformPostId: null,
@@ -2034,7 +2036,7 @@ Deno.serve(async (req) => {
             result = await postToReddit(account, post, mediaUrls);
             break;
           case "threads":
-            result = await postToThreads(account, post, mediaUrls, timing);
+            result = await postToThreads(account, post, mediaUrls, timingForAccount);
             break;
           case "tiktok": {
             const reviewSubmissionId = requiredReviewSubmissionId(post);
