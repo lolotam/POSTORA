@@ -16,6 +16,8 @@ vi.mock("@/hooks/use-toast", () => ({
 const mockInvoke = vi.fn();
 vi.mock("@/integrations/supabase/client", () => ({
   supabase: {
+    channel: () => { const channel = { on: () => channel, subscribe: () => channel }; return channel; },
+    removeChannel: vi.fn(),
     functions: {
       invoke: (...args: unknown[]) => mockInvoke(...args),
     },
@@ -48,6 +50,7 @@ describe("useYouTubeThumbnails", () => {
 
   afterEach(() => {
     vi.resetAllMocks();
+    vi.useRealTimers();
   });
 
   describe("generateAutoThumbnails", () => {
@@ -67,6 +70,34 @@ describe("useYouTubeThumbnails", () => {
   });
 
   describe("generateAiThumbnail", () => {
+
+    it.each(["succeeded", "failed"])("waits for a queued image job to finish as %s", async (status) => {
+      vi.useFakeTimers();
+      mockInvoke.mockImplementation((name: string) => Promise.resolve({
+        data: name === "generate-image"
+          ? { success: true, jobId: "j1", status: "queued" }
+          : { success: true, status, imageUrl: status === "succeeded" ? "data:image/png;base64,AA" : null,
+            error: status === "failed" ? "Provider failed" : null },
+        error: null,
+      }));
+      const { result } = renderHook(() => useYouTubeThumbnails(defaultProps));
+      let done: Promise<void>;
+      await act(async () => { done = result.current.generateAiThumbnail("cat"); });
+      expect(result.current.isGeneratingAi).toBe(true);
+      expect(mockSetAiGeneratedThumbnails).not.toHaveBeenCalled();
+      expect(mockSetGeneratingAiThumbnail).not.toHaveBeenCalledWith(false);
+      await act(async () => { await vi.advanceTimersByTimeAsync(5_000); await done; });
+      expect(result.current.isGeneratingAi).toBe(false);
+      if (status === "succeeded") {
+        expect(mockSetAiGeneratedThumbnails).toHaveBeenCalledTimes(1);
+        expect(mockSetAiGeneratedThumbnails.mock.calls[0][0](["prior"])).toEqual(["prior", "data:image/png;base64,AA"]);
+        expect(mockSetAiGeneratedThumbnails.mock.invocationCallOrder[0]).toBeLessThan(mockSetGeneratingAiThumbnail.mock.invocationCallOrder[1]);
+      } else {
+        expect(mockSetAiGeneratedThumbnails).not.toHaveBeenCalled();
+        expect(mockToast).toHaveBeenCalledWith(expect.objectContaining({ title: "Failed to generate", variant: "destructive" }));
+      }
+    });
+
     it("sends the prompt and ratio, leaving the model to the server", async () => {
       mockInvoke.mockResolvedValue({
         data: { imageUrl: "https://generated-image.jpg" },
@@ -84,6 +115,7 @@ describe("useYouTubeThumbnails", () => {
           prompt: "A beautiful thumbnail",
           aspectRatio: "16:9",
           referenceImage: undefined,
+          async: true,
         },
       });
     });
@@ -127,6 +159,7 @@ describe("useYouTubeThumbnails", () => {
       expect(mockInvoke).toHaveBeenCalledWith("generate-image", {
         body: expect.objectContaining({
           referenceImage: "data:image/jpeg;base64,refimage",
+          async: true,
         }),
       });
     });

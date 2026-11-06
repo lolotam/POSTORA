@@ -1,3 +1,4 @@
+import { resolveAiImageResponse } from "@/lib/aiGenerationJobWatcher";
 import { useState, useRef, useCallback } from "react";
 import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
@@ -267,10 +268,11 @@ export function ImageGenerator({ onImageGenerated, buttonClassName }: ImageGener
         priority: idx + 1,
       }));
 
-      const { data, error } = await supabase.functions.invoke("generate-image", {
+      const { data: raw, error } = await supabase.functions.invoke("generate-image", {
         body: {
           prompt,
           aspectRatio,
+          async: true,
           referenceImage: supportsReference && referenceImages.length > 0 ? referenceImages[0].url : undefined,
           referenceImages: supportsReference && referenceImages.length > 0 ? referenceImagesData : undefined,
           width: selectedRatio ? selectedRatio.width : 1024,
@@ -279,7 +281,7 @@ export function ImageGenerator({ onImageGenerated, buttonClassName }: ImageGener
       });
 
       // Debug: log full response so we can see exactly what the edge function returned
-      console.log('[ImageGenerator] generate-image raw response', { data, error });
+      console.log('[ImageGenerator] generate-image raw response', { raw, error });
 
       if (error) {
         console.error('Image generation error:', error);
@@ -318,12 +320,14 @@ export function ImageGenerator({ onImageGenerated, buttonClassName }: ImageGener
         return;
       }
 
+      const data = await resolveAiImageResponse(raw);
+
       // New structured failure shape from edge function (returns 200 with success:false)
       if (data && data.success === false) {
         const code = data.error_code as string | undefined;
         const message = (data.message as string | undefined) || 'Image generation failed';
         console.error('[ImageGenerator] structured failure', { code, message, data });
-        if (code === 'ai_credits_exhausted') {
+        if (code === 'ai_credits_exhausted' || code === 'ai_quota_exhausted') {
           handleAIError({ status: 402, message }, 'Image generation');
         } else if (code === 'ai_rate_limited') {
           handleAIError({ status: 429, message }, 'Image generation');
@@ -338,21 +342,23 @@ export function ImageGenerator({ onImageGenerated, buttonClassName }: ImageGener
       }
 
       if (data?.error) {
-        const errorMsg = data.error.toLowerCase();
+        const providerError = String(data.error);
+        const errorMsg = providerError.toLowerCase();
         if (errorMsg.includes("401") || errorMsg.includes("unauthorized")) {
-          handleAIError({ status: 401, message: data.error }, "Image generation");
+          handleAIError({ status: 401, message: providerError }, "Image generation");
         } else if (errorMsg.includes("402") || errorMsg.includes("credits")) {
-          handleAIError({ status: 402, message: data.error }, "Image generation");
+          handleAIError({ status: 402, message: providerError }, "Image generation");
         } else if (errorMsg.includes("429") || errorMsg.includes("rate limit")) {
-          handleAIError({ status: 429, message: data.error }, "Image generation");
+          handleAIError({ status: 429, message: providerError }, "Image generation");
         } else {
-          throw new Error(data.error);
+          throw new Error(providerError);
         }
         return;
       }
 
-      if (data?.imageUrl) {
-        setGeneratedImage(data.imageUrl);
+      if (typeof data?.imageUrl === "string") {
+        const imageUrl = data.imageUrl;
+        setGeneratedImage(imageUrl);
         toast({
           title: t("imageGen.toastSuccess", "Image generated!"),
           description: t("imageGen.toastSuccessDesc", "Your AI image is ready. Click 'Use Image' to add it to your post."),

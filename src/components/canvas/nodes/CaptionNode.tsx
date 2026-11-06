@@ -1,3 +1,4 @@
+import { resolveAiImageResponse } from "@/lib/aiGenerationJobWatcher";
 import { memo, useState, useCallback, useEffect } from "react";
 import { Handle, Position, type NodeProps, NodeResizer, useReactFlow } from "@xyflow/react";
 import { Image as ImageIcon, Loader2, Wand2, Play, Maximize2, Copy, Trash2, Minus, Plus, ArrowRight, Upload, X } from "lucide-react";
@@ -95,17 +96,21 @@ function CaptionNodeComponent({ id, data, selected }: NodeProps) {
         model,
         aspectRatio,
         count: imageCount,
+        async: true,
       };
       if (referenceImage) {
         body.referenceImage = referenceImage;
       }
 
-      const { data, error } = await supabase.functions.invoke("generate-image", { body });
+      const { data: raw, error } = await supabase.functions.invoke("generate-image", { body });
 
       if (error) throw error;
+      const data = await resolveAiImageResponse(raw);
+      if (data?.success === false) throw new Error(String(data.message ?? "Image generation failed"));
 
-      if (data?.imageUrl) {
-        setGeneratedImage(data.imageUrl);
+      if (typeof data?.imageUrl === "string") {
+        const imageUrl = data.imageUrl;
+        setGeneratedImage(imageUrl);
         toast({ title: "Image generated!", description: "Your AI-generated image is ready." });
       }
     } catch (error: any) {
