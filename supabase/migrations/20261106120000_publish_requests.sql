@@ -82,28 +82,39 @@ SECURITY DEFINER
 SET search_path = public
 AS $$
 DECLARE
-  v_requested_at timestamptz;
+  v_post record;
+  v_requested_at timestamptz := now();
 BEGIN
-  UPDATE public.posts
-     SET publish_requested_at = CASE WHEN queued_retry THEN publish_requested_at ELSE now() END,
-         scheduled_at = CASE
-           WHEN queued_retry OR scheduled_at IS NULL THEN scheduled_at
-           ELSE now()
-         END
-    FROM (
-      SELECT p.id AS queued_id,
-             p.publish_requested_at IS NOT NULL
-               AND (p.metadata -> 'retry_request' ->> 'requested_at')::timestamptz
-                   = p.publish_requested_at AS queued_retry
-        FROM public.posts p
-       WHERE p.id = p_post_id
-    ) q
-   WHERE id = q.queued_id
-     AND id = p_post_id
+  -- Row lock first, as request_post_retry does, so a retry committing in
+  -- between cannot be overwritten by a decision made on the older row.
+  SELECT status, source, scheduled_at, publish_requested_at, metadata
+    INTO v_post
+    FROM public.posts
+   WHERE id = p_post_id
      AND user_id = p_user_id
-     AND status IN ('pending', 'scheduled')
-     AND source IS DISTINCT FROM 'tiktok_review'
-  RETURNING publish_requested_at INTO v_requested_at;
+   FOR UPDATE;
+
+  IF NOT FOUND
+     OR v_post.status NOT IN ('pending', 'scheduled')
+     OR v_post.source IS NOT DISTINCT FROM 'tiktok_review' THEN
+    RETURN NULL;
+  END IF;
+
+  IF v_post.publish_requested_at IS NOT NULL
+     AND (v_post.metadata -> 'retry_request' ->> 'requested_at')::timestamptz
+         = v_post.publish_requested_at THEN
+    RETURN v_post.publish_requested_at;
+  END IF;
+
+  -- scheduled_at is written only when the post is actually scheduled.
+  IF v_post.scheduled_at IS NULL THEN
+    UPDATE public.posts SET publish_requested_at = v_requested_at WHERE id = p_post_id;
+  ELSE
+    UPDATE public.posts
+       SET publish_requested_at = v_requested_at,
+           scheduled_at = v_requested_at
+     WHERE id = p_post_id;
+  END IF;
 
   RETURN v_requested_at;
 END;
