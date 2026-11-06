@@ -109,7 +109,6 @@
     "postsRescheduled": "تمت إعادة جدولة المنشورات",
     "postsRescheduledDesc": "تمت إعادة جدولة {{count}} منشور لـ {{date}}.",
     "publishFailed": "فشل النشر",
-    "publishingStarted": "بدأ النشر",
     "publishingStartedDesc": "منشورك بيتنشر دلوقتي.",
     "rescheduleFailed": "فشلت إعادة الجدولة",
     "rescheduled": "تمت إعادة جدولة المنشور",

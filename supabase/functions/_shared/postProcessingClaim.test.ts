@@ -25,6 +25,27 @@ function stub(rowsMatched: number, fail = false) {
   return { client: { from: () => chain }, filters, payload: () => payload };
 }
 
+for (const scheduledAt of [undefined, null, "2026-11-06T10:00:00Z"]) {
+  Deno.test(`a publish request claim takes precedence over scheduled_at=${scheduledAt}`, async () => {
+    const { client, filters } = stub(1);
+    const requestedAt = "2026-11-06T11:00:00+00:00";
+    const outcome = await claimPostForProcessing(client, "post-1", scheduledAt, requestedAt);
+    assertEquals(outcome, { claimed: true, error: null });
+    assertEquals(filters, [
+      ["eq", "id", "post-1"],
+      ["eq", "publish_requested_at", requestedAt],
+      ["in", "status", ["pending", "scheduled"]],
+    ]);
+  });
+}
+
+Deno.test("an already claimed publish request does not publish again", async () => {
+  const { client } = stub(0);
+  assertEquals(await claimPostForProcessing(client, "post-1", undefined, "2026-11-06T11:00:00Z"), {
+    claimed: false, error: null,
+  });
+});
+
 Deno.test("a scheduler-originated claim is conditioned on the scheduled_at it selected", async () => {
   const { client, filters } = stub(1);
   const outcome = await claimPostForProcessing(client, "post-1", "2026-09-03T14:00:00+00:00");

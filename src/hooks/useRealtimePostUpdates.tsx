@@ -11,15 +11,21 @@ export interface RealtimeUpdate {
   timestamp: number;
 }
 
+const STILL_PUBLISHING_AFTER_MS = 60_000;
+// Matches process-post's deferral give-up, after which the post's own status is final.
+const TRACKING_CAP_MS = 35 * 60_000;
+
 export interface PublishingPost {
   postId: string;
   platforms: string[];
   startedAt: number;
+  stillPublishing: boolean;
   completedPlatforms: Map<string, "success" | "failed" | "pending_inbox">;
 }
 
 /** The platform_posts columns a realtime change event is read for. */
 interface PlatformPostChange {
+  id?: string;
   post_id?: string;
   platform?: string;
   status?: RealtimeUpdate["status"];
@@ -35,6 +41,7 @@ export function useRealtimePostUpdates() {
   toastRef.current = toast;
   const [publishingPosts, setPublishingPosts] = useState<Map<string, PublishingPost>>(new Map());
   const [recentUpdates, setRecentUpdates] = useState<RealtimeUpdate[]>([]);
+  const toastedRows = useRef(new Set<string>());
 
   // Track a new post that's being published
   const trackPublishingPost = useCallback((postId: string, platforms: string[]) => {
@@ -44,24 +51,30 @@ export function useRealtimePostUpdates() {
         postId,
         platforms,
         startedAt: Date.now(),
+        stillPublishing: false,
         completedPlatforms: new Map(),
       });
       return newMap;
     });
-
-    // Auto-remove after 60 seconds if not completed (reduced from 5 minutes for better UX)
-    setTimeout(() => {
-      setPublishingPosts((prev) => {
-        if (prev.has(postId)) {
-          console.log("[Realtime] Auto-clearing stale publishing post:", postId);
-          const newMap = new Map(prev);
-          newMap.delete(postId);
-          return newMap;
-        }
-        return prev;
-      });
-    }, 60 * 1000);
   }, []);
+
+  useEffect(() => {
+    if (publishingPosts.size === 0) return;
+    const nextDeadline = Math.min(...Array.from(publishingPosts.values(), (post) =>
+      post.startedAt + (post.stillPublishing ? TRACKING_CAP_MS : STILL_PUBLISHING_AFTER_MS)));
+    const timer = setTimeout(() => {
+      setPublishingPosts((previous) => {
+        const updated = new Map(previous);
+        for (const [postId, post] of updated) {
+          const elapsed = Date.now() - post.startedAt;
+          if (elapsed >= TRACKING_CAP_MS) updated.delete(postId);
+          else if (elapsed >= STILL_PUBLISHING_AFTER_MS) updated.set(postId, { ...post, stillPublishing: true });
+        }
+        return updated;
+      });
+    }, Math.max(0, nextDeadline - Date.now()));
+    return () => clearTimeout(timer);
+  }, [publishingPosts]);
 
   // Clear a completed post from tracking
   const clearPublishingPost = useCallback((postId: string) => {
@@ -73,6 +86,7 @@ export function useRealtimePostUpdates() {
   }, []);
 
   useEffect(() => {
+    toastedRows.current.clear();
     if (!user?.id) return;
 
     console.log("[Realtime] Setting up realtime subscriptions for user:", user.id);
@@ -119,18 +133,8 @@ export function useRealtimePostUpdates() {
             const publishingPost = prev.get(newRecord.post_id);
             if (publishingPost && newRecord.status !== "pending") {
               const newMap = new Map(prev);
-              const updatedPost = { ...publishingPost };
+              const updatedPost = { ...publishingPost, completedPlatforms: new Map(publishingPost.completedPlatforms) };
               updatedPost.completedPlatforms.set(newRecord.platform, newRecord.status);
-
-              // Check if all platforms are done
-              const allDone = publishingPost.platforms.every(
-                (p) => updatedPost.completedPlatforms.has(p)
-              );
-
-              if (allDone) {
-                // Remove from tracking after a short delay
-                setTimeout(() => clearPublishingPost(newRecord.post_id), 2000);
-              }
 
               newMap.set(newRecord.post_id, updatedPost);
               return newMap;
@@ -153,8 +157,15 @@ export function useRealtimePostUpdates() {
             }, 3000);
           }
 
-          // Show toast for status changes
-          if (payload.eventType === "UPDATE" && oldRecord?.status !== newRecord.status) {
+          // INSERT can already be terminal. Replayed events for the same row must not toast twice.
+          const terminal = newRecord.status === "success" || newRecord.status === "failed";
+          const statusChanged = payload.eventType === "INSERT" ||
+            (payload.eventType === "UPDATE" && oldRecord?.status !== newRecord.status);
+          const shouldToast = terminal
+            ? statusChanged && newRecord.id && !toastedRows.current.has(newRecord.id)
+            : payload.eventType === "UPDATE" && oldRecord?.status !== newRecord.status;
+          if (shouldToast) {
+            if (terminal) toastedRows.current.add(newRecord.id);
             if (newRecord.status === "success") {
               toastRef.current({
                 title: `Published to ${newRecord.platform}`,

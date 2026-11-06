@@ -98,7 +98,8 @@
     "platformsProgress": "{{completed}} من أصل {{total}} منصات",
     "publishing": "جاري النشر...",
     "publishingPosts": "جاري نشر {{count}} منشور...",
-    "uploading": "جاري الرفع..."
+    "uploading": "جاري الرفع...",
+    "stillPublishingPosts": "لسه بيتنشر {{count}} منشور..."
   },
   "mediaOps": {
     "allOperations": "كل العمليات",
@@ -209,6 +210,9 @@
   },
   "toast": {
     "exportComplete": "اكتمل التصدير",
-    "exportDesc": "تم تصدير السجل بصيغة {{format}}."
+    "exportDesc": "تم تصدير السجل بصيغة {{format}}.",
+    "retrySubmitted": "تم إرسال طلب إعادة المحاولة",
+    "retryRequestsSubmitted": "تم إرسال طلبات إعادة المحاولة",
+    "retryRequestsSummary": "اتقبل {{accepted}} طلب و{{failed}} متأكدش. راجع السجل عشان نتايج النشر."
   }
 }

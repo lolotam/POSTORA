@@ -297,7 +297,8 @@ jobs:
           set -euo pipefail
           map=".github/deno/process-post-import-map.json"
           deno check --node-modules-dir=none --import-map="${map}" supabase/functions/process-post/index.ts
-          deno test --allow-env --node-modules-dir=none --import-map="${map}" supabase/functions/process-post/ supabase/functions/_shared/composioFiles.test.ts
+          deno check --node-modules-dir=none --import-map="${map}" supabase/functions/process-scheduled-posts/index.ts supabase/functions/enqueue-post-publish/index.ts
+          deno test --allow-env --node-modules-dir=none --import-map="${map}" supabase/functions/process-post/ supabase/functions/_shared/composioFiles.test.ts supabase/functions/_shared/postProcessingClaim.test.ts supabase/functions/_shared/publishRequest.test.ts supabase/functions/process-scheduled-posts/ supabase/functions/enqueue-post-publish/
 
       - name: Typecheck process-scheduled-posts
         run: deno check --node-modules-dir=none supabase/functions/process-scheduled-posts/index.ts

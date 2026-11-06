@@ -15,7 +15,7 @@ import { usePublishing } from "@/contexts/PublishingContext";
 import { useUnsplashAttribution } from "@/hooks/useUnsplashAttribution";
 import { supabase } from "@/integrations/supabase/client";
 import { TIKTOK_PHOTO_WARNING } from "@/lib/platformConstants";
-import { openExternalPostUrl } from "@/lib/openExternalPostUrl";
+import { enqueuePostPublish } from "@/features/publishing/infrastructure/enqueuePostPublish";
 import { TikTokSettingsState } from "@/components/post/settings/TikTokSettings";
 import { YouTubeSettingsState } from "@/components/post/settings/YouTubeSettings";
 import { youtubeOptionsUnsupportedOnComposio } from "@/lib/youtubeComposioOptions";
@@ -458,6 +458,9 @@ export default function CreatePost() {
         platforms: platformsForInsert,
         media_file_ids: mediaFileIds.length > 0 ? mediaFileIds : null,
         scheduled_at: scheduleEnabled && scheduledAt ? scheduledAt.toISOString() : null,
+        // Recorded with the save, new or edited, so the scheduler publishes the post even if
+        // enqueue-post-publish is never reached. The database pins it to its own clock.
+        publish_requested_at: scheduleEnabled && scheduledAt ? null : new Date().toISOString(),
         status: scheduleEnabled && scheduledAt ? "scheduled" : "pending",
         metadata: {
           ...platformSettings.buildPostMetadata(),
@@ -533,86 +536,20 @@ export default function CreatePost() {
         // Track this post for realtime updates
         trackPublishingPost(post.id, platformsForInsert);
 
-        // Optimistic publishing: Show success immediately, process in background
-        toast({
-          title: t("toast.publishingTitle", "Publishing..."),
-          description: (
-            <div className="space-y-2">
-              <p>{t("toast.publishingDesc", "Your post is being published to {{count}} account(s).", { count: selectedAccountIds.length })}</p>
-              <p className="text-xs text-muted-foreground">
-                {t("toast.checkHistory", "Check the History page for real-time status updates.")}
-              </p>
-            </div>
-          ),
-          duration: 5000,
-        });
-
-        // Fire and forget - don't await the edge function
-        supabase.functions.invoke("process-post", {
-          body: { post_id: post.id },
-        }).then(({ data: result, error: funcError }) => {
-          // CRITICAL: Always clear publishing state when edge function returns
-          clearPublishingPost(post.id);
-
-          if (funcError) {
-            console.error("Background publish error:", funcError);
-            toast({
-              title: t("toast.publishingIssueTitle", "Publishing issue"),
-              description: t("toast.publishingIssueDesc", "Some platforms may have failed. Check History for details."),
-              variant: "destructive",
-              duration: 8000,
-            });
-            return;
-          }
-
-          // Show success notification with links when done
-          if (result?.status === "completed" && result?.platform_results) {
-            const successfulPosts = result.platform_results.filter((p: any) => p.status === "success" && p.platform_post_url);
-            if (successfulPosts.length > 0) {
-              toast({
-                title: t("toast.postPublishedTitle", "Post published!"),
-                description: (
-                  <div className="space-y-2">
-                    <p>{t("toast.postPublishedDesc", "Your post has been published successfully.")}</p>
-                    <div className="flex flex-wrap gap-2 mt-2">
-                      {successfulPosts.map((p: any) => (
-                        <a
-                          key={p.platform}
-                          href={p.platform_post_url}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          referrerPolicy="no-referrer"
-                          className="inline-flex items-center gap-1.5 px-2 py-1 text-xs rounded-md bg-primary/10 text-primary hover:bg-primary/20 transition-colors"
-                          onClick={(e) => {
-                            e.preventDefault();
-                            openExternalPostUrl(p.platform_post_url);
-                          }}
-                        >
-                          {t("toast.viewOnPlatform", "View on {{platform}}", { platform: p.platform.charAt(0).toUpperCase() + p.platform.slice(1) })}
-                        </a>
-                      ))}
-                    </div>
-                  </div>
-                ),
-                duration: 10000,
-              });
-            }
-          }
-
-          // Show TikTok inbox reminder
-          if (selectedPlatforms.includes("tiktok")) {
-            setTimeout(() => {
-              showSuccessToast(
-                t("toast.tiktokInboxTitle", "Check your TikTok inbox"),
-                t("toast.tiktokInboxDesc", "TikTok posts are sent to your inbox. Open the TikTok app to complete posting.")
-              );
-            }, 1000);
-          }
-        }).catch((error) => {
-          console.error("Background publish error:", error);
-          // Clear publishing state even on error
-          clearPublishingPost(post.id);
-        });
+        const acceptance = await enqueuePostPublish({ postId: post.id, mode: "publish_now" });
+        if (acceptance.accepted === false) {
+          if (acceptance.reason !== "error") clearPublishingPost(post.id);
+          toast({
+            title: t("toast.publishingIssueTitle", "Publishing issue"),
+            description: t("common:publishing.unconfirmed", "Could not confirm the publish request. Check History for its status."),
+            variant: "destructive",
+          });
+        } else {
+          toast({
+            title: t("common:publishing.submitted", "Submitted, publishing"),
+            description: t("toast.checkHistory", "Check the History page for real-time status updates."),
+          });
+        }
       } else {
         const actionLabel = editPostId
           ? t("toast.postUpdatedScheduled", "Post updated & scheduled!")

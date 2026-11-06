@@ -1,7 +1,10 @@
 import type { ReactNode } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+
+const { invoke, toast } = vi.hoisted(() => ({ invoke: vi.fn(), toast: vi.fn() }));
+vi.mock("@/hooks/use-toast", () => ({ useToast: () => ({ toast }) }));
 
 const translate = vi.hoisted(() => (
   key: string,
@@ -75,7 +78,7 @@ vi.mock("@/integrations/supabase/client", () => ({
         }),
       }),
     }),
-    functions: { invoke: vi.fn() },
+    functions: { invoke },
   },
 }));
 
@@ -92,6 +95,7 @@ function renderPage() {
 
 describe("ScheduledPosts WhatsApp board", () => {
   beforeEach(() => {
+    vi.clearAllMocks();
     whatsAppState.error = null;
     whatsAppState.isLoading = false;
     whatsAppState.data = {
@@ -135,4 +139,19 @@ describe("ScheduledPosts WhatsApp board", () => {
     expect(screen.getByRole("menuitem", { name: "Publish Now" })).toBeInTheDocument();
     expect(document.body.innerHTML).not.toContain("96550001111");
   });
+
+  it.each([true, false])("shows submission only after server acceptance (%s)", async (accepted) => {
+    let acknowledge: (response: unknown) => void;
+    invoke.mockImplementation(() => new Promise((resolve) => { acknowledge = resolve; }));
+    renderPage();
+    fireEvent.pointerDown(screen.getByRole("button", { name: "View more options" }), { button: 0, pointerType: "mouse" });
+    fireEvent.click(screen.getByRole("menuitem", { name: "Publish Now" }));
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith("enqueue-post-publish", { body: { post_id: "post-1", mode: "publish_now" } }));
+    expect(toast).not.toHaveBeenCalled();
+    acknowledge(accepted
+      ? { data: { accepted: true, post_id: "post-1", status: "processing" }, error: null }
+      : { data: null, error: new Error("offline") });
+    await waitFor(() => expect(toast).toHaveBeenCalledWith(expect.objectContaining({ title: accepted ? "Submitted, publishing" : "Publish failed" })));
+  });
+
 });

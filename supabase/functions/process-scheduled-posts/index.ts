@@ -1,4 +1,5 @@
 import { verifyCronAuth } from "../_shared/cron-auth.ts";
+import { mergeDuePosts } from "./dueRequests.ts";
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 
 const corsHeaders = {
@@ -15,6 +16,7 @@ import {
   refreshPinterestToken
 } from '../_shared/social-auth.ts';
 import { metaRefreshStrategy } from '../_shared/refreshEligibility.ts';
+import { redactSensitive } from '../_shared/logging.ts';
 
 /** The lease row this function holds while it runs; see migration 20261031100000. */
 const LEASE_JOB = 'process-scheduled-posts';
@@ -26,6 +28,8 @@ const LEASE_JOB = 'process-scheduled-posts';
 const LEASE_TTL = '5 minutes';
 /** No new post is started after this much of the run: the rest waits for the next tick. */
 const RUN_BUDGET_MS = 100 * 1000;
+/** A request's own kick normally claims it within a second; only requests older than this are swept. */
+const REQUEST_GRACE_MS = 30 * 1000;
 
 // Returns true if token expires in less than N minutes or is already expired
 function isTokenExpiring(expiresAt: string | null, platform?: string): boolean {
@@ -118,7 +122,7 @@ Deno.serve(async (req) => {
 
     const { data: scheduledPosts, error: fetchError } = await supabaseAdmin
       .from('posts')
-      .select('id, user_id, caption, platforms, media_file_ids, scheduled_at, metadata')
+      .select('id, user_id, caption, platforms, media_file_ids, scheduled_at, publish_requested_at, metadata')
       .in('status', ['pending', 'scheduled'])
       .not('scheduled_at', 'is', null)
       .lte('scheduled_at', now);
@@ -128,7 +132,17 @@ Deno.serve(async (req) => {
       throw fetchError;
     }
 
-    const postCount = scheduledPosts?.length || 0;
+    const { data: requestedPosts, error: requestFetchError } = await supabaseAdmin
+      .from('posts')
+      .select('id, user_id, caption, platforms, media_file_ids, scheduled_at, publish_requested_at, metadata')
+      .in('status', ['pending', 'scheduled'])
+      .not('publish_requested_at', 'is', null)
+      .lte('publish_requested_at', new Date(Date.now() - REQUEST_GRACE_MS).toISOString())
+      .or('source.is.null,source.neq.tiktok_review');
+    if (requestFetchError) throw requestFetchError;
+
+    const duePosts = mergeDuePosts(scheduledPosts ?? [], requestedPosts ?? []);
+    const postCount = duePosts.length;
     console.log(`Found ${postCount} scheduled posts to process`);
 
     // Log: scheduler started (only when there are posts to process)
@@ -142,7 +156,7 @@ Deno.serve(async (req) => {
       });
     }
 
-    if (!scheduledPosts || scheduledPosts.length === 0) {
+    if (postCount === 0) {
       return new Response(
         JSON.stringify({ message: 'No scheduled posts to process', processed: 0 }),
         { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
@@ -151,7 +165,7 @@ Deno.serve(async (req) => {
 
     const results = [];
 
-    for (const post of scheduledPosts) {
+    for (const { post, expectation } of duePosts) {
       // Stop taking posts once the budget is spent or the lease is lost (renewal refused or
       // unreadable); the remaining posts stay pending for the next run.
       if (Date.now() - runStartedAt > RUN_BUDGET_MS) {
@@ -295,7 +309,12 @@ Deno.serve(async (req) => {
             // only if it still carries it, so an unschedule or reschedule that
             // landed after the SELECT above -- from /v1 or the UI -- is honoured
             // instead of published over. See _shared/postProcessingClaim.ts.
-            body: JSON.stringify({ post_id: post.id, expected_scheduled_at: post.scheduled_at })
+            body: JSON.stringify({
+              post_id: post.id,
+              ...(expectation.kind === 'scheduled'
+                ? { expected_scheduled_at: expectation.value }
+                : { expected_publish_requested_at: expectation.value }),
+            })
           }
         );
 
@@ -321,7 +340,24 @@ Deno.serve(async (req) => {
       } catch (postError: unknown) {
         console.error(`Error processing post ${post.id}:`, postError);
 
-        const errorMsg = postError instanceof Error ? postError.message : 'Unknown error';
+        // Persisted in system_logs below, so it goes through the shared redactor first.
+        const errorMsg = redactSensitive(postError instanceof Error ? postError.message : 'Unknown error') as string;
+
+        // A publish request stays queued: the owner's request was accepted, and a retry's failed
+        // results are already cleared, so `failed` would leave nothing to retry. The next run
+        // sweeps it again with the same expectation.
+        if (expectation.kind === 'requested') {
+          await supabaseAdmin.from('system_logs').insert({
+            level: 'warn',
+            category: 'post',
+            source: 'process-scheduled-posts',
+            message: `Scheduler call failed; the publish request stays queued for the next run: ${errorMsg}`,
+            user_id: post.user_id,
+            metadata: { post_id: post.id, platforms: post.platforms, error: errorMsg, marked_failed: false },
+          });
+          results.push({ postId: post.id, status: 'skipped', error: errorMsg });
+          continue;
+        }
 
         // Mark the post failed only while nobody holds it: still due at the scheduled_at this
         // run selected and still claimable. If process-post claimed it before the call failed
@@ -331,7 +367,7 @@ Deno.serve(async (req) => {
           .from('posts')
           .update({ status: 'failed' })
           .eq('id', post.id)
-          .eq('scheduled_at', post.scheduled_at)
+          .eq('scheduled_at', expectation.value)
           .in('status', ['pending', 'scheduled'])
           .select('id');
         if (markError) console.error(`Could not mark post ${post.id} failed:`, markError.message);

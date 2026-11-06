@@ -112,6 +112,7 @@ import { validateRequestBody, validationErrorResponse } from "../_shared/validat
 import { postWebhook, validateWebhookTarget } from "../_shared/webhookSecurity.ts";
 import { getMissingMediaFileIds } from "../_shared/post-media.ts";
 import { claimPostForProcessing } from "../_shared/postProcessingClaim.ts";
+import { activeRetryRequest } from "../_shared/publishRequest.ts";
 import { mediaSendability } from "../_shared/partnerMediaStore.ts";
 import { selectedLinkedInDestinationIds } from "../_shared/linkedinDestinations.ts";
 import { fetchWithTimeout } from "../_shared/request-timeout.ts";
@@ -180,6 +181,7 @@ const ProcessPostSchema = z.object({
   // processing claim honours it (see _shared/postProcessingClaim.ts), so a
   // post unscheduled after selection is declined rather than published.
   expected_scheduled_at: z.string().max(64).nullable().optional(),
+  expected_publish_requested_at: z.string().max(64).optional(),
   // Sent by reconcile-deferred-publishes (service role only): finish the pending row
   // a Meta container was deferred on, instead of publishing the post afresh.
   resume_platform_post_id: z.string().uuid().optional(),
@@ -1440,6 +1442,7 @@ Deno.serve(async (req) => {
     const {
       post_id,
       expected_scheduled_at: expectedScheduledAt,
+      expected_publish_requested_at: expectedPublishRequestedAt,
       resume_platform_post_id: resumePlatformPostId,
     } = validation.data;
     // A resumed run narrows both to the deferred row's account (below).
@@ -1503,8 +1506,13 @@ Deno.serve(async (req) => {
 
     // A run its caller retries on its own is not started on a worker near its end: it would be
     // stopped between creating a container and recording it. Refused before any read or claim.
-    if (refuseOnSpentWorker({ resume: !!resumePlatformPostId, scheduled: typeof expectedScheduledAt === "string" }, WORKER_STARTED_AT_MS, Date.now())) {
+    if (refuseOnSpentWorker({ resume: !!resumePlatformPostId, scheduled: typeof expectedScheduledAt === "string" || typeof expectedPublishRequestedAt === "string" }, WORKER_STARTED_AT_MS, Date.now())) {
       console.warn(`[process-post] worker too old to start post ${post_id}; the caller retries on a fresh one`);
+      const logError = await writeLogRow(supabase, {
+        level: "info", category: "post", source: "process-post", message: "worker_admission_refused",
+        user_id: authenticatedUserId, metadata: { post_id },
+      });
+      if (logError) console.error("worker_admission_refused log failed:", logError);
       return createErrorResponse("This worker is about to stop, so the run was not started. Retrying shortly is safe.", 503);
     }
 
@@ -1644,6 +1652,12 @@ Deno.serve(async (req) => {
       console.log("Resuming deferred publish", { post_id, platform_post_id: row.id, kind: deferral.kind, attempts: deferral.attempts });
     }
     const timing: PublishTiming = { resume, deadlineMs: pollDeadline(requestStartedAt, !!resume), startedAtMs: requestStartedAt };
+    const retryRequest = resume ? null : activeRetryRequest(post);
+    if (retryRequest) {
+      overridePlatforms ??= retryRequest.platforms;
+      overrideAccountIds ??= retryRequest.accountIds;
+    }
+    const retryRun = isRetryRun(post.status, !!resume) || retryRequest !== null;
 
     // The transition to `processing` is a CLAIM: when the scheduler says
     // which scheduled_at it selected, a row that no longer carries it -- the
@@ -1652,7 +1666,7 @@ Deno.serve(async (req) => {
     // touched. Callers with no expectation keep the unconditional transition.
     // A resumed run continues the original run's claim; claiming again would also
     // restart the stale-post clock.
-    const claim = resume ? { claimed: true, error: null } : await claimPostForProcessing(supabase, post_id, expectedScheduledAt);
+    const claim = resume ? { claimed: true, error: null } : await claimPostForProcessing(supabase, post_id, expectedScheduledAt, expectedPublishRequestedAt);
     if (claim.error) {
       return createErrorResponse(`Could not claim post for processing: ${claim.error}`, 500);
     }
@@ -1660,6 +1674,7 @@ Deno.serve(async (req) => {
       console.log("Declining publish: the post was rescheduled, or another scheduler run already claimed it", {
         post_id,
         expected_scheduled_at: expectedScheduledAt,
+        expected_publish_requested_at: expectedPublishRequestedAt,
       });
       // Best effort: a failed log write must never replace the 409 the scheduler skips on.
       try {
@@ -1673,6 +1688,7 @@ Deno.serve(async (req) => {
             event: "claim_declined",
             post_id,
             expected_scheduled_at: expectedScheduledAt ?? null,
+            expected_publish_requested_at: expectedPublishRequestedAt ?? null,
           },
         });
         if (logError) console.error("claim_declined log insert failed:", logError.message);
@@ -1981,7 +1997,7 @@ Deno.serve(async (req) => {
             break;
           case "instagram": {
             const igAuthType = (account as any).ig_auth_type || (account.account_metadata as Record<string, unknown>)?.account_type;
-            const recorded = isRetryRun(post.status, !!resume) ? await recordedOnRetry(supabase, post_id, account.id) : null;
+            const recorded = retryRun ? await recordedOnRetry(supabase, post_id, account.id) : null;
             const retry: RetryState = recorded
               ? {
                 storyRecorded: recorded.story,
