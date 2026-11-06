@@ -1,0 +1,80 @@
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+
+const h = vi.hoisted(() => ({ onUpdate: null as null | ((p: unknown) => void), invoke: vi.fn(), removeChannel: vi.fn() }));
+vi.mock("@/integrations/supabase/client", () => {
+  const channel = { on: (_e: string, _f: unknown, cb: (p: unknown) => void) => { h.onUpdate = cb; return channel; }, subscribe: () => channel };
+  return { supabase: { channel: () => channel, removeChannel: h.removeChannel, functions: { invoke: h.invoke } } };
+});
+import { watchAiGenerationJob, awaitAiGenerationJob, resolveAiImageResponse } from "@/lib/aiGenerationJobWatcher";
+
+const httpError = (status: number) => Object.assign(new Error(`HTTP ${status}`), { context: { status } });
+const running = { data: { success: true, status: "running", pollAfterSeconds: 3 }, error: null };
+
+describe("aiGenerationJobWatcher", () => {
+  beforeEach(() => { vi.useFakeTimers(); h.invoke.mockReset(); h.removeChannel.mockReset(); });
+  afterEach(() => vi.useRealTimers());
+
+  it("polls immediately when Realtime reports a terminal status", async () => {
+    h.invoke.mockResolvedValue({ data: { success: true, status: "succeeded", imageUrl: "data:image/png;base64,AA" }, error: null });
+    const seen: string[] = [];
+    watchAiGenerationJob("j1", (s) => seen.push(s.status));
+    h.onUpdate!({ new: { status: "succeeded" } });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(h.invoke).toHaveBeenCalledTimes(1);
+    expect(seen.at(-1)).toBe("succeeded");
+    expect(h.removeChannel).toHaveBeenCalled();
+  });
+
+  it("B6: a Realtime event during a pending read never runs two reads at once", async () => {
+    let active = 0; let maxActive = 0; let release!: (v: unknown) => void;
+    h.invoke.mockImplementation(() => {
+      active++; maxActive = Math.max(maxActive, active);
+      const p = h.invoke.mock.calls.length === 1 ? new Promise((r) => { release = r; }) : Promise.resolve(running);
+      return p.finally(() => { active--; });
+    });
+    watchAiGenerationJob("j1", () => {});
+    await vi.advanceTimersByTimeAsync(5_000);           // first read starts and hangs
+    h.onUpdate!({ new: { status: "succeeded" } });       // event while it is in flight
+    release(running);                                    // the stale read says running
+    await vi.advanceTimersByTimeAsync(0);                // immediate re-poll (read 2) answers running
+    await vi.advanceTimersByTimeAsync(3_000);            // exactly one scheduled read (read 3)
+    expect(maxActive).toBe(1);
+    expect(h.invoke).toHaveBeenCalledTimes(3);
+  });
+
+  it("a failed read is never terminal: it backs off and keeps polling", async () => {
+    h.invoke
+      .mockResolvedValueOnce({ data: null, error: httpError(500) })
+      .mockResolvedValueOnce({ data: null, error: httpError(503) })
+      .mockResolvedValueOnce({ data: { success: true, status: "succeeded", imageUrl: "https://h/i.png" }, error: null });
+    const done = awaitAiGenerationJob("j1");
+    await vi.advanceTimersByTimeAsync(5_000 + 5_000 + 10_000);
+    await expect(done).resolves.toMatchObject({ status: "succeeded", imageUrl: "https://h/i.png" });
+  });
+
+  it("404 ends the watch as failed", async () => {
+    h.invoke.mockResolvedValue({ data: null, error: httpError(404) });
+    const done = awaitAiGenerationJob("j1");
+    await vi.advanceTimersByTimeAsync(5_000);
+    await expect(done).resolves.toMatchObject({ status: "failed", errorCode: "job_not_found" });
+  });
+
+  it("B7: a read that never settles still ends the wait and removes the channel", async () => {
+    h.invoke.mockImplementation(() => new Promise(() => {}));
+    const done = awaitAiGenerationJob("j1");
+    await vi.advanceTimersByTimeAsync(5_000 + 20_000 + 5_000);
+    expect(h.invoke.mock.calls[0][1].signal.aborted).toBe(true);
+    expect(h.invoke.mock.calls.length).toBeGreaterThan(1);  // the read timed out and was retried
+    await vi.advanceTimersByTimeAsync(10 * 60_000);
+    await expect(done).resolves.toMatchObject({ status: "timeout" });
+    expect(h.removeChannel).toHaveBeenCalled();
+  });
+
+  it("resolveAiImageResponse passes a sync answer through and maps a failed job", async () => {
+    await expect(resolveAiImageResponse({ imageUrl: "data:x" })).resolves.toEqual({ imageUrl: "data:x" });
+    h.invoke.mockResolvedValue({ data: { success: true, status: "failed", error: "Daily AI generation limit reached", errorCode: "ai_quota_exhausted" }, error: null });
+    const r = resolveAiImageResponse({ success: true, jobId: "j1", status: "queued" });
+    await vi.advanceTimersByTimeAsync(5_000);
+    await expect(r).resolves.toEqual({ success: false, error_code: "ai_quota_exhausted", message: "Daily AI generation limit reached" });
+  });
+});
