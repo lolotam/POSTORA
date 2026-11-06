@@ -27,6 +27,8 @@ const LEASE_JOB = 'process-scheduled-posts';
 const LEASE_TTL = '5 minutes';
 /** No new post is started after this much of the run: the rest waits for the next tick. */
 const RUN_BUDGET_MS = 100 * 1000;
+/** A request's own kick normally claims it within a second; only requests older than this are swept. */
+const REQUEST_GRACE_MS = 30 * 1000;
 
 // Returns true if token expires in less than N minutes or is already expired
 function isTokenExpiring(expiresAt: string | null, platform?: string): boolean {
@@ -134,7 +136,7 @@ Deno.serve(async (req) => {
       .select('id, user_id, caption, platforms, media_file_ids, scheduled_at, publish_requested_at, metadata')
       .in('status', ['pending', 'scheduled'])
       .not('publish_requested_at', 'is', null)
-      .lte('publish_requested_at', new Date(Date.now() - 30_000).toISOString())
+      .lte('publish_requested_at', new Date(Date.now() - REQUEST_GRACE_MS).toISOString())
       .or('source.is.null,source.neq.tiktok_review');
     if (requestFetchError) throw requestFetchError;
 

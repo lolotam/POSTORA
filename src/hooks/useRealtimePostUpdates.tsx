@@ -11,6 +11,10 @@ export interface RealtimeUpdate {
   timestamp: number;
 }
 
+const STILL_PUBLISHING_AFTER_MS = 60_000;
+// Matches process-post's deferral give-up, after which the post's own status is final.
+const TRACKING_CAP_MS = 35 * 60_000;
+
 export interface PublishingPost {
   postId: string;
   platforms: string[];
@@ -57,14 +61,14 @@ export function useRealtimePostUpdates() {
   useEffect(() => {
     if (publishingPosts.size === 0) return;
     const nextDeadline = Math.min(...Array.from(publishingPosts.values(), (post) =>
-      post.startedAt + (post.stillPublishing ? 35 * 60_000 : 60_000)));
+      post.startedAt + (post.stillPublishing ? TRACKING_CAP_MS : STILL_PUBLISHING_AFTER_MS)));
     const timer = setTimeout(() => {
       setPublishingPosts((previous) => {
         const updated = new Map(previous);
         for (const [postId, post] of updated) {
           const elapsed = Date.now() - post.startedAt;
-          if (elapsed >= 35 * 60_000) updated.delete(postId);
-          else if (elapsed >= 60_000) updated.set(postId, { ...post, stillPublishing: true });
+          if (elapsed >= TRACKING_CAP_MS) updated.delete(postId);
+          else if (elapsed >= STILL_PUBLISHING_AFTER_MS) updated.set(postId, { ...post, stillPublishing: true });
         }
         return updated;
       });

@@ -10,7 +10,7 @@ interface PublishRequest {
 type RefusalReason = "not_found" | "not_publishable" | "not_retryable" | "no_targets";
 type PublishAcceptance =
   | { accepted: true; alreadyRunning: boolean }
-  | { accepted: false; reason: RefusalReason | "error"; message?: string };
+  | { accepted: false; reason: RefusalReason | "error" };
 
 function isRecord(payload: unknown): payload is Record<string, unknown> {
   return typeof payload === "object" && payload !== null;
