@@ -1,4 +1,14 @@
-// deno-lint-ignore-file no-explicit-any
+/** The slice of the Supabase client this update uses, so tests can record the predicate. */
+export interface FailedMarkQuery {
+  eq(column: string, value: string): FailedMarkQuery;
+  in(column: string, values: string[]): FailedMarkQuery;
+  is(column: string, value: null): FailedMarkQuery;
+  select(columns: string): PromiseLike<{ data: unknown[] | null; error: { message: string } | null }>;
+}
+
+export interface PostsClient {
+  from(table: "posts"): { update(values: { status: "failed" }): FailedMarkQuery };
+}
 
 /**
  * Marks a scheduled post failed after the scheduler's call to process-post failed, but only while
@@ -12,7 +22,7 @@
  * `marked` is true only when the update confirmed a row; an update error leaves the state unknown.
  */
 export async function markScheduledPostFailed(
-  supabase: any,
+  supabase: PostsClient,
   postId: string,
   scheduledAt: string,
 ): Promise<{ marked: boolean; error: string | null }> {

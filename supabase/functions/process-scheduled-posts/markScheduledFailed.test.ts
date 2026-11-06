@@ -1,16 +1,14 @@
-// deno-lint-ignore-file no-explicit-any
 import { assertEquals } from "https://deno.land/std@0.208.0/assert/mod.ts";
-import { markScheduledPostFailed } from "./markScheduledFailed.ts";
+import { type FailedMarkQuery, markScheduledPostFailed, type PostsClient } from "./markScheduledFailed.ts";
 
 // The guard is the predicate that reaches the database, so the stub records the filter chain and
 // returns the row count the test chooses, as postProcessingClaim.test.ts does for the claim.
 function stub(rowsMatched: number, fail = false) {
   const filters: [string, string, unknown][] = [];
-  const chain: any = {
-    update: () => chain,
-    eq: (col: string, val: unknown) => (filters.push(["eq", col, val]), chain),
-    is: (col: string, val: unknown) => (filters.push(["is", col, val]), chain),
-    in: (col: string, val: unknown) => (filters.push(["in", col, val]), chain),
+  const chain: FailedMarkQuery = {
+    eq: (col, val) => (filters.push(["eq", col, val]), chain),
+    is: (col, val) => (filters.push(["is", col, val]), chain),
+    in: (col, val) => (filters.push(["in", col, val]), chain),
     select: () =>
       Promise.resolve(
         fail
@@ -18,7 +16,8 @@ function stub(rowsMatched: number, fail = false) {
           : { data: Array.from({ length: rowsMatched }, (_, i) => ({ id: `row-${i}` })), error: null },
       ),
   };
-  return { client: { from: () => chain }, filters };
+  const client: PostsClient = { from: () => ({ update: () => chain }) };
+  return { client, filters };
 }
 
 const SCHEDULED_AT = "2026-11-06T10:00:00+00:00";
