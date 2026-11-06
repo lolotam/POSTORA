@@ -1,3 +1,5 @@
+import { buildEnqueueArgs, kickAiImageWorker } from "./asyncJob.ts";
+import { runInBackground } from "../_shared/background.ts";
 import { describeImageFailure } from "./imageFailure.ts";
 import { defaultImageRunDeps, runImageGeneration } from "./runImageGeneration.ts";
 import { UNBOUNDED } from "./callBudget.ts";
@@ -22,6 +24,7 @@ const ReferenceImageSchema = z.object({
 });
 
 const GenerateImageSchema = z.object({
+  async: z.boolean().optional(),
   prompt: z.string().min(1).max(5000),
   model: z.string().max(100).optional(),
   aspectRatio: z.string().max(20).optional(),
@@ -390,9 +393,27 @@ export async function handleGenerateImageRequest(req: Request, deps: GenerateIma
     if (!validation.success) {
       return validationErrorResponse(validation, corsHeaders);
     }
-    const { prompt, model: requestedModel, aspectRatio, quality, referenceImage, referenceImages } = validation.data;
+    const { async: wantsAsync, prompt, model: requestedModel, aspectRatio, quality, referenceImage, referenceImages } = validation.data;
 
     const references = collectReferences(referenceImage, referenceImages);
+
+    if (wantsAsync === true) {
+      const { data: jobId, error: queueError } = await supabaseAdmin.rpc('enqueue_ai_image_job',
+        buildEnqueueArgs(user.id, { prompt, requestedModel, aspectRatio, quality }, references));
+      if (queueError || typeof jobId !== 'string') throw queueError ?? new Error('could not queue the image job');
+      await runInBackground('kick ai-image-worker', () =>
+        kickAiImageWorker(fetch, Deno.env.get('SUPABASE_URL') ?? '', Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''));
+      return new Response(JSON.stringify({ success: true, jobId, status: 'queued' }), {
+        status: 202,
+        headers: {
+          ...corsHeaders, 'Content-Type': 'application/json',
+          'X-RateLimit-Limit-Hour': String(rateLimitResult.limitHour),
+          'X-RateLimit-Limit-Day': String(rateLimitResult.limitDay),
+          'X-RateLimit-Remaining-Hour': String(Math.max(0, rateLimitResult.remainingHour - 1)),
+          'X-RateLimit-Remaining-Day': String(Math.max(0, rateLimitResult.remainingDay - 1)),
+        },
+      });
+    }
 
     const run = await runImageGeneration(
       defaultImageRunDeps(supabaseAdmin, {

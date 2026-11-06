@@ -2,7 +2,7 @@
 import { assert, assertEquals } from "https://deno.land/std@0.208.0/assert/mod.ts";
 import { handleGenerateImageRequest } from "./handler.ts";
 
-type Calls = { inserts: Array<[string, unknown]>; rpcs: Array<[string, unknown]> };
+type Calls = { inserts: Array<[string, unknown]>; rpcs: Array<[string, unknown]>; fetches: string[] };
 function fakeClient(opts: { admin?: boolean; calls: Calls }) {
   const tableData: Record<string, unknown> = { user_roles: opts.admin ? { role: "admin" } : null };
   const builder = (table: string): any => {
@@ -19,18 +19,20 @@ function fakeClient(opts: { admin?: boolean; calls: Calls }) {
   };
   return {
     from: builder,
-    rpc: (name: string, args: unknown) => { opts.calls.rpcs.push([name, args]); return Promise.resolve({ data: null, error: null }); },
+    rpc: (name: string, args: unknown) => { opts.calls.rpcs.push([name, args]); return Promise.resolve({ data: name === "enqueue_ai_image_job" ? "job-1" : null, error: null }); },
     auth: { getUser: () => Promise.resolve({ data: { user: { id: "11111111-1111-4111-8111-111111111111" } }, error: null }) },
     storage: { from: () => ({ remove: () => Promise.resolve({ error: null }) }) },
   };
 }
 function run(body: unknown, opts: { admin?: boolean; googleOk?: boolean } = {}) {
-  const calls: Calls = { inserts: [], rpcs: [] };
+  const calls: Calls = { inserts: [], rpcs: [], fetches: [] };
   const client = fakeClient({ admin: opts.admin ?? true, calls });
   Deno.env.set("GOOGLE_AI_STUDIO_KEY", "test-key");
   const realFetch = globalThis.fetch;
   globalThis.fetch = (async (input: string | URL | Request) => {
     const url = String(input instanceof Request ? input.url : input);
+    calls.fetches.push(url);
+    if (url.endsWith("/functions/v1/ai-image-worker")) return new Response("{}", { status: 202 });
     if (!url.includes(":generateContent")) throw new Error(`unexpected fetch ${url}`);
     return opts.googleOk === false
       ? new Response("boom", { status: 500 })
@@ -68,4 +70,12 @@ Deno.test("no AI access: 403", async () => {
 Deno.test("invalid body: 400 before any provider call", async () => {
   const { res } = await run({ prompt: "" });
   assertEquals(res.status, 400);
+});
+
+Deno.test("async: queues exactly once, answers 202, and never calls the provider", async () => {
+  const { res, json, calls } = await run({ prompt: "a cat", async: true });
+  assertEquals(res.status, 202);
+  assertEquals(json, { success: true, jobId: "job-1", status: "queued" });
+  assertEquals(calls.rpcs.filter(([name]) => name === "enqueue_ai_image_job").length, 1);
+  assertEquals(calls.fetches.filter((url) => url.includes(":generateContent")).length, 0);
 });
