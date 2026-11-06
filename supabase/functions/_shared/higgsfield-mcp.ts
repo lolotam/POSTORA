@@ -191,7 +191,7 @@ export class HiggsfieldMcpClient {
     return res;
   }
 
-  private async rpc(method: string, params: unknown, capMs = MCP_REQUEST_TIMEOUT_MS): Promise<any> {
+  private async rpc(method: string, params: unknown, capMs = MCP_REQUEST_TIMEOUT_MS): Promise<unknown> {
     const id = this.nextId++;
     const res = await this.post({ jsonrpc: "2.0", id, method, params }, capMs);
 
@@ -290,7 +290,7 @@ export class HiggsfieldMcpClient {
     // Keep initialization, other tools and every synchronous call at 30 seconds.
     const capMs = name === "generate_image" && Number.isFinite(this.deadlineMs)
       ? Number.POSITIVE_INFINITY : MCP_REQUEST_TIMEOUT_MS;
-    const result = await this.rpc("tools/call", { name, arguments: args }, capMs);
+    const result = await this.rpc("tools/call", { name, arguments: args }, capMs) as { isError?: boolean } | undefined;
 
     if (result?.isError) {
       throw new McpError(`Higgsfield tool "${name}" reported an error`, extractToolPayload(result), "rejected");
