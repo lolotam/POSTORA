@@ -33,11 +33,13 @@ export interface PostProcessingClaim {
   error: string | null;
 }
 
+/** A request stamp takes precedence over any scheduled_at expectation, including null. */
 export async function claimPostForProcessing(
   // deno-lint-ignore no-explicit-any
   supabase: any,
   postId: string,
   expectedScheduledAt?: string | null,
+  expectedPublishRequestedAt?: string,
 ): Promise<PostProcessingClaim> {
   // processing_started_at lets sweep_stale_processing_posts() tell a post stranded by a
   // killed worker from one claimed a minute ago.
@@ -46,7 +48,11 @@ export async function claimPostForProcessing(
     .update({ status: "processing", processing_started_at: new Date().toISOString() })
     .eq("id", postId);
 
-  if (expectedScheduledAt === null) {
+  if (typeof expectedPublishRequestedAt === "string") {
+    transition = transition
+      .eq("publish_requested_at", expectedPublishRequestedAt)
+      .in("status", SCHEDULER_CLAIMABLE_STATUSES);
+  } else if (expectedScheduledAt === null) {
     // PostgREST's `eq.null` matches nothing; NULL needs `is`.
     transition = transition.is("scheduled_at", null);
   } else if (expectedScheduledAt !== undefined) {
