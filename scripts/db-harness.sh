@@ -139,6 +139,7 @@ SUITES=(
   deferred_publishes.sql
   instagram_story_recording.sql
   publish_requests.sql
+  ai_image_jobs_worker.sql
   cron_run_lease.sql
   tiktok_review_lifecycle.sql
   whatsapp_account_continuity.sql
