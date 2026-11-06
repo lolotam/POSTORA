@@ -14,6 +14,8 @@ export interface RealtimeUpdate {
 const STILL_PUBLISHING_AFTER_MS = 60_000;
 // Matches process-post's deferral give-up, after which the post's own status is final.
 const TRACKING_CAP_MS = 35 * 60_000;
+const STATUS_POLL_MS = 5_000;
+const TERMINAL_POST_STATUSES = new Set(["completed", "failed"]);
 
 export interface PublishingPost {
   postId: string;
@@ -84,6 +86,50 @@ export function useRealtimePostUpdates() {
       return newMap;
     });
   }, []);
+
+  // A read only settles attempts tracked before it began: a post tracked again while the read
+  // was in flight is a new attempt, and the status read belongs to the previous one.
+  const settleFinishedPosts = useCallback((posts: { id: string; status: string }[], readStartedAt: number) => {
+    const finished = posts.filter((post) => TERMINAL_POST_STATUSES.has(post.status));
+    if (finished.length === 0) return;
+    setPublishingPosts((prev) => {
+      const next = new Map(prev);
+      for (const post of finished) {
+        // Strictly before: an attempt tracked in the same millisecond may postdate the query.
+        if ((next.get(post.id)?.startedAt ?? Infinity) < readStartedAt) next.delete(post.id);
+      }
+      return next;
+    });
+    queryClient.refetchQueries({ queryKey: ["posts_with_results"] });
+    queryClient.refetchQueries({ queryKey: ["posts"] });
+    queryClient.refetchQueries({ queryKey: ["post_stats"] });
+    queryClient.refetchQueries({ queryKey: ["scheduled_posts"] });
+  }, [queryClient]);
+
+  // Realtime events can be missed (a phone suspends the socket, or the table was not in the
+  // publication: 2026-11-06), so the tracked posts' own status is also read. Each read is
+  // scheduled after the previous one ends, so responses never arrive out of order.
+  const trackedIds = Array.from(publishingPosts.keys()).sort().join(",");
+  useEffect(() => {
+    if (!trackedIds) return;
+    const ids = trackedIds.split(",");
+    let stopped = false;
+    let timer: ReturnType<typeof setTimeout>;
+    const readStatus = async () => {
+      const readStartedAt = Date.now();
+      const { data, error } = await supabase.from("posts").select("id, status").in("id", ids);
+      if (stopped) return;
+      // A failed read is not an empty one: the posts stay tracked and the next read retries.
+      if (error) console.error("[Publishing] Could not read the tracked posts' status:", error.message);
+      else settleFinishedPosts(data ?? [], readStartedAt);
+      timer = setTimeout(readStatus, STATUS_POLL_MS);
+    };
+    timer = setTimeout(readStatus, STATUS_POLL_MS);
+    return () => {
+      stopped = true;
+      clearTimeout(timer);
+    };
+  }, [trackedIds, settleFinishedPosts]);
 
   useEffect(() => {
     toastedRows.current.clear();
