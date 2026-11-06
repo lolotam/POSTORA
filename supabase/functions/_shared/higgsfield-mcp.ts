@@ -25,6 +25,7 @@ export class McpError extends Error {
   constructor(
     message: string,
     public readonly data?: unknown,
+    public readonly outcome: "rejected" | "unknown" = "unknown",
   ) {
     super(message);
     this.name = "McpError";
@@ -89,6 +90,12 @@ export class HiggsfieldMcpClient {
   private sessionId: string | null = null;
   private initialized = false;
   private nextId = 1;
+  private deadlineMs = Number.POSITIVE_INFINITY;
+
+  withDeadline(ms: number): this {
+    this.deadlineMs = ms;
+    return this;
+  }
 
   private constructor(
     private accessToken: string,
@@ -153,13 +160,15 @@ export class HiggsfieldMcpClient {
   }
 
   private async post(body: unknown): Promise<Response> {
+    const left = this.deadlineMs - Date.now();
+    if (left < 5_000) throw new McpError("Not enough time left to call Higgsfield", undefined, "rejected");
     let res: Response;
     try {
       res = await fetch(MCP_ENDPOINT, {
         method: "POST",
         headers: this.headers(),
         body: JSON.stringify(body),
-        signal: AbortSignal.timeout(MCP_REQUEST_TIMEOUT_MS),
+        signal: AbortSignal.timeout(Math.min(MCP_REQUEST_TIMEOUT_MS, left)),
       });
     } catch (err) {
       if (err instanceof DOMException && err.name === "TimeoutError") {
@@ -186,7 +195,7 @@ export class HiggsfieldMcpClient {
 
     if (!res.ok) {
       const detail = (await res.text()).slice(0, 300);
-      throw new McpError(`Higgsfield MCP ${method} failed (${res.status}): ${detail}`);
+      throw new McpError(`Higgsfield MCP ${method} failed (${res.status}): ${detail}`, undefined, res.status >= 400 && res.status < 500 && res.status !== 408 ? "rejected" : "unknown");
     }
 
     const message = await readRpcResponse(res, id);
@@ -194,7 +203,7 @@ export class HiggsfieldMcpClient {
       throw new McpError(`Higgsfield MCP ${method} returned no response`);
     }
     if (message.error) {
-      throw new McpError(`Higgsfield MCP ${method}: ${message.error.message}`, message.error.data);
+      throw new McpError(`Higgsfield MCP ${method}: ${message.error.message}`, message.error.data, "rejected");
     }
     return message.result;
   }
@@ -249,7 +258,7 @@ export class HiggsfieldMcpClient {
       } catch (refreshErr) {
         throw refreshErr instanceof HiggsfieldAuthError
           ? refreshErr
-          : new McpError("Higgsfield authorization failed and could not be refreshed");
+          : new McpError("Higgsfield authorization failed and could not be refreshed", undefined, "rejected");
       }
 
       try {
@@ -271,7 +280,7 @@ export class HiggsfieldMcpClient {
     const result = await this.rpc("tools/call", { name, arguments: args });
 
     if (result?.isError) {
-      throw new McpError(`Higgsfield tool "${name}" reported an error`, extractToolPayload(result));
+      throw new McpError(`Higgsfield tool "${name}" reported an error`, extractToolPayload(result), "rejected");
     }
     return extractToolPayload(result);
   }

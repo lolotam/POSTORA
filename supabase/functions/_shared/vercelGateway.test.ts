@@ -1,7 +1,7 @@
 // deno-lint-ignore-file no-import-prefix
 import { assertEquals, assertRejects } from "https://deno.land/std@0.208.0/assert/mod.ts";
 import type { RowReader } from "./providerEndpoint.ts";
-import { memoizeRetryable, resolveVercelKey, toVideoSnapshot } from "./vercelGateway.ts";
+import { vercelGenerateImage, memoizeRetryable, resolveVercelKey, toVideoSnapshot } from "./vercelGateway.ts";
 
 Deno.test("pending maps to running with a poll delay", () => {
   const s = toVideoSnapshot({ status: "pending" });
@@ -68,4 +68,16 @@ Deno.test("memoizeRetryable retries after a rejected load, then memoizes success
   // Once it has succeeded, the result is memoized: fn() is not called a third time.
   assertEquals(await load(), "ok-2");
   assertEquals(calls, 2);
+});
+
+Deno.test("image timeout keeps the default and accepts the remaining budget", async () => {
+  const originalTimeout = AbortSignal.timeout;
+  const observed: number[] = [];
+  const stopBeforeNetwork = new Error("timeout boundary reached");
+  AbortSignal.timeout = (ms: number) => { observed.push(ms); throw stopBeforeNetwork; };
+  try {
+    await assertRejects(() => vercelGenerateImage("key", "model", "prompt", "1:1"));
+    await assertRejects(() => vercelGenerateImage("key", "model", "prompt", "1:1", 7_000));
+    assertEquals(observed, [50_000, 7_000]);
+  } finally { AbortSignal.timeout = originalTimeout; }
 });

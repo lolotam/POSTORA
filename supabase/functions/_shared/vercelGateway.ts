@@ -75,12 +75,13 @@ export function toVideoSnapshot(status: VideoStatusLike): VercelVideoSnapshot {
   return { ...base, state: "succeeded", status: "completed", outputBase64: b64, outputMediaType: video.mediaType ?? "video/mp4" } as VercelVideoSnapshot;
 }
 
-export async function vercelGenerateImage(apiKey: string, modelId: string, prompt: string, aspectRatio: string) {
+export async function vercelGenerateImage(apiKey: string, modelId: string, prompt: string, aspectRatio: string, timeoutMs = 50_000) {
+  const abortSignal = AbortSignal.timeout(timeoutMs);
   const { ai, gw } = await loadSdk();
   const ratio = /^\d+:\d+$/.test(aspectRatio) ? aspectRatio as `${number}:${number}` : undefined;
   const { image } = await ai.generateImage({
     model: gw.createGateway({ apiKey }).imageModel(modelId), prompt, aspectRatio: ratio,
-    abortSignal: AbortSignal.timeout(50_000),
+    abortSignal,
   });
   return { imageUrl: `data:${image.mediaType};base64,${image.base64}`, description: "Image generated successfully" };
 }
