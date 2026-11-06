@@ -21,6 +21,9 @@
 --    pins it to the database clock.
 -- 2. request_immediate_publish: the "Publish now" stamp.
 -- 3. request_post_retry: the "Retry" stamp, with server-side targets.
+-- 4. A reschedule drops a request nobody has claimed yet.
+
+BEGIN;
 
 -- ---------------------------------------------------------------------------
 -- 1. The request column
@@ -58,6 +61,24 @@ CREATE TRIGGER trg_posts_pin_publish_requested_at
   BEFORE INSERT ON public.posts
   FOR EACH ROW
   EXECUTE FUNCTION public.posts_pin_publish_requested_at();
+
+-- Whether the post's current request is a queued retry: its marker carries the
+-- same timestamp. metadata is writable by the owner, so a malformed marker
+-- reads as "no retry" instead of failing the caller.
+CREATE OR REPLACE FUNCTION public.publish_request_is_retry(p_requested_at timestamptz, p_metadata jsonb)
+RETURNS boolean
+LANGUAGE plpgsql
+STABLE
+SET search_path = public
+AS $$
+BEGIN
+  RETURN coalesce((p_metadata -> 'retry_request' ->> 'requested_at')::timestamptz = p_requested_at, false);
+EXCEPTION WHEN data_exception THEN
+  RETURN false;
+END;
+$$;
+
+REVOKE ALL ON FUNCTION public.publish_request_is_retry(timestamptz, jsonb) FROM PUBLIC, anon, authenticated;
 
 -- ---------------------------------------------------------------------------
 -- 2. request_immediate_publish
@@ -100,9 +121,7 @@ BEGIN
     RETURN NULL;
   END IF;
 
-  IF v_post.publish_requested_at IS NOT NULL
-     AND (v_post.metadata -> 'retry_request' ->> 'requested_at')::timestamptz
-         = v_post.publish_requested_at THEN
+  IF public.publish_request_is_retry(v_post.publish_requested_at, v_post.metadata) THEN
     RETURN v_post.publish_requested_at;
   END IF;
 
@@ -134,7 +153,14 @@ GRANT EXECUTE ON FUNCTION public.request_immediate_publish(uuid, uuid) TO servic
 --   * p_account_ids given: those accounts, which must belong to the owner;
 --   * otherwise: every account with a failed result on this post.
 -- Either way an account that already has a successful or pending result on
--- this post is dropped: it was published, or is being published.
+-- this post is dropped: it was published, or is being published. An Instagram
+-- story's success row does not count: the story is a separate result of the
+-- same account, and process-post's retry guard skips a story already live
+-- while publishing the feed post or reel that failed.
+--
+-- A post an agent retry (n8n or MCP) is holding under a live action lease is
+-- not retryable: that retry calls process-post without a claim expectation,
+-- so a second run queued here would publish the same accounts twice.
 --
 -- The post moves to pending with a fresh publish_requested_at, and
 -- metadata.retry_request records the targets under the same timestamp.
@@ -171,8 +197,10 @@ BEGIN
     RETURN jsonb_build_object('status', 'refused', 'reason', 'not_found');
   END IF;
 
+  -- The lease length is mcp_claim_post_action's default, the only one its callers use.
   IF v_post.status NOT IN ('failed', 'completed')
-     OR v_post.source IS NOT DISTINCT FROM 'tiktok_review' THEN
+     OR v_post.source IS NOT DISTINCT FROM 'tiktok_review'
+     OR (v_post.action_claim_id IS NOT NULL AND v_post.action_claimed_at > now() - interval '15 minutes') THEN
     RETURN jsonb_build_object('status', 'refused', 'reason', 'not_retryable');
   END IF;
 
@@ -195,7 +223,10 @@ BEGIN
      SELECT 1 FROM public.platform_posts pp
       WHERE pp.post_id = p_post_id
         AND pp.social_account_id = t
-        AND pp.status IN ('success', 'pending')
+        AND (pp.status = 'pending'
+             OR (pp.status = 'success'
+                 AND coalesce(pp.response_data ->> 'ig_post_subtype', '') <> 'story'
+                 AND coalesce(pp.response_data ->> 'story_recorded_on_reel_row', '') <> 'true'))
    );
 
   IF v_targets IS NULL OR cardinality(v_targets) = 0 THEN
@@ -236,4 +267,40 @@ $$;
 REVOKE ALL ON FUNCTION public.request_post_retry(uuid, uuid, uuid[]) FROM PUBLIC, anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.request_post_retry(uuid, uuid, uuid[]) TO service_role;
 
+-- ---------------------------------------------------------------------------
+-- 4. A reschedule drops a request nobody has claimed yet
+-- ---------------------------------------------------------------------------
+-- Between "Publish now" and its claim (normally a second, at most one
+-- scheduler tick when the kick is lost) the owner, the Calendar or the partner
+-- API may reschedule or unschedule the post. The later decision wins: the
+-- request is dropped, so neither the kick nor the sweep can publish over it.
+-- request_immediate_publish moves both columns at once and is not affected.
+-- A queued retry keeps its request: dropping it would orphan the retry marker
+-- and the scheduled run would republish accounts that already succeeded.
+CREATE OR REPLACE FUNCTION public.posts_drop_request_on_reschedule()
+RETURNS trigger
+LANGUAGE plpgsql
+SET search_path = public
+AS $$
+BEGIN
+  IF NEW.scheduled_at IS DISTINCT FROM OLD.scheduled_at
+     AND OLD.publish_requested_at IS NOT NULL
+     AND NEW.publish_requested_at IS NOT DISTINCT FROM OLD.publish_requested_at
+     AND NOT public.publish_request_is_retry(OLD.publish_requested_at, NEW.metadata) THEN
+    NEW.publish_requested_at := NULL;
+  END IF;
+  RETURN NEW;
+END;
+$$;
+
+REVOKE ALL ON FUNCTION public.posts_drop_request_on_reschedule() FROM PUBLIC, anon, authenticated;
+
+DROP TRIGGER IF EXISTS trg_posts_drop_request_on_reschedule ON public.posts;
+CREATE TRIGGER trg_posts_drop_request_on_reschedule
+  BEFORE UPDATE OF scheduled_at ON public.posts
+  FOR EACH ROW
+  EXECUTE FUNCTION public.posts_drop_request_on_reschedule();
+
 NOTIFY pgrst, 'reload schema';
+
+COMMIT;

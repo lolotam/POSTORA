@@ -18,6 +18,10 @@ DECLARE
   p_running   uuid := 'c0000000-0000-4000-8000-000000000005';
   p_tiktok    uuid := 'c0000000-0000-4000-8000-000000000006';
   p_insert    uuid := 'c0000000-0000-4000-8000-000000000007';
+  p_story     uuid := 'c0000000-0000-4000-8000-000000000008';
+  p_leased    uuid := 'c0000000-0000-4000-8000-000000000009';
+  p_marker    uuid := 'c0000000-0000-4000-8000-00000000000a';
+  p_resched   uuid := 'c0000000-0000-4000-8000-00000000000b';
   v_stamp timestamptz;
   v_result jsonb;
   v_rows int;
@@ -152,6 +156,49 @@ BEGIN
   UPDATE public.posts SET status = 'failed' WHERE id = p_tiktok;
   ASSERT public.request_post_retry(p_tiktok, u_a)->>'reason' = 'not_retryable',
     'R14 a TikTok review post is retried in TikTok review, not here';
+
+  -- R15: an Instagram story that went live does not stop the feed post's retry.
+  INSERT INTO public.posts (id, user_id, platforms, status, source)
+  VALUES (p_story, u_a, ARRAY['instagram'], 'completed', 'manual');
+  INSERT INTO public.platform_posts (post_id, social_account_id, platform, status, response_data) VALUES
+    (p_story, acct_ig, 'instagram', 'success', '{"ig_post_subtype": "story"}'),
+    (p_story, acct_ig, 'instagram', 'failed', NULL);
+  v_result := public.request_post_retry(p_story, u_a);
+  ASSERT v_result->'account_ids' = to_jsonb(ARRAY[acct_ig]),
+    'R15 the account whose story succeeded is retried for its failed feed post';
+  ASSERT (SELECT count(*) FROM public.platform_posts WHERE post_id = p_story AND status = 'success') = 1,
+    'R15b the story''s success result is kept for process-post''s retry guard';
+
+  -- R16/R17: an agent retry's live action lease blocks a second run; an expired one does not.
+  INSERT INTO public.posts (id, user_id, platforms, status, source, action_claim_id, action_claimed_at)
+  VALUES (p_leased, u_a, ARRAY['facebook'], 'failed', 'manual', gen_random_uuid(), now());
+  INSERT INTO public.platform_posts (post_id, social_account_id, platform, status)
+  VALUES (p_leased, acct_fb, 'facebook', 'failed');
+  ASSERT public.request_post_retry(p_leased, u_a)->>'reason' = 'not_retryable',
+    'R16 a post under a live agent retry lease is not retried again';
+  UPDATE public.posts SET action_claimed_at = now() - interval '20 minutes' WHERE id = p_leased;
+  ASSERT public.request_post_retry(p_leased, u_a)->>'status' = 'accepted',
+    'R17 an expired lease no longer blocks a retry';
+
+  -- M1: a malformed retry marker written by the owner does not break "Publish now".
+  INSERT INTO public.posts (id, user_id, platforms, status, source, metadata)
+  VALUES (p_marker, u_a, ARRAY['facebook'], 'pending', 'manual', '{"retry_request": {"requested_at": "garbage"}}');
+  ASSERT public.request_immediate_publish(p_marker, u_a) = now(),
+    'M1 a malformed marker reads as no queued retry';
+
+  -- S1-S3: a later reschedule or unschedule beats a request nobody has claimed.
+  INSERT INTO public.posts (id, user_id, platforms, status, source)
+  VALUES (p_resched, u_a, ARRAY['facebook'], 'pending', 'manual');
+  PERFORM public.request_immediate_publish(p_resched, u_a);
+  UPDATE public.posts SET scheduled_at = now() + interval '1 day', status = 'scheduled' WHERE id = p_resched;
+  ASSERT (SELECT publish_requested_at FROM public.posts WHERE id = p_resched) IS NULL,
+    'S1 rescheduling drops the unclaimed publish request';
+  UPDATE public.posts SET scheduled_at = NULL, status = 'pending' WHERE id = p_scheduled;
+  ASSERT (SELECT publish_requested_at FROM public.posts WHERE id = p_scheduled) IS NULL,
+    'S2 unscheduling a post published early drops its unclaimed request';
+  UPDATE public.posts SET scheduled_at = now() + interval '1 day' WHERE id = p_failed;
+  ASSERT (SELECT publish_requested_at FROM public.posts WHERE id = p_failed) = now() - interval '1 minute',
+    'S3 a queued retry keeps its request so its marker still applies';
 END $$;
 
 -- G1-G8: privileges, definer settings and the due-row index.
