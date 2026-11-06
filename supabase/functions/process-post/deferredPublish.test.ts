@@ -3,6 +3,7 @@ import { CHECK_ONCE_DEADLINE, pollContainer } from "../_shared/metaContainerStat
 import { CHECK_TIMEOUT_MS } from "./instagramPublish.ts";
 import {
   abandonReason,
+  accountTiming,
   claimFollowUps,
   FOLLOW_UP_REQUEST_MS,
   followUpTimeoutMs,
@@ -72,6 +73,31 @@ Deno.test("a resumed run is abandoned past its deadline or once the post has cha
 Deno.test("a resumed run checks once; a first run waits within its budget", () => {
   assertEquals(pollDeadline(1_000, true), 0);
   assertEquals(pollDeadline(1_000, false), 1_000 + FIRST_RUN_POLL_BUDGET_MS);
+});
+
+// Regression, 2026-11-06 post 52af4f1a: Threads, Pinterest and an Instagram story used the whole
+// request budget, so the Instagram feed image after them failed before Meta was asked once.
+Deno.test("a later account gets its own poll budget, cut to what its worker can still publish", () => {
+  const worker = 0;
+  const run = { resume: null, deadlineMs: pollDeadline(worker, false), startedAtMs: worker };
+  const accountStart = worker + 42_000;
+  assertEquals(accountTiming(run, accountStart, worker).deadlineMs, accountStart + FIRST_RUN_POLL_BUDGET_MS);
+  const lateStart = worker + 70_000;
+  assertEquals(accountTiming(run, lateStart, worker).deadlineMs, worker + WORKER_LIFETIME_MS - PUBLISH_RESERVE_MS);
+});
+
+Deno.test("an account starting inside the publish reserve waits for nothing it could not record", () => {
+  const worker = 0;
+  const spentStart = worker + WORKER_LIFETIME_MS - PUBLISH_RESERVE_MS + 5_000;
+  const spent = accountTiming({ resume: null, deadlineMs: pollDeadline(spentStart, false) }, spentStart, worker);
+  assertEquals(spent.deadlineMs <= spentStart, true);
+});
+
+Deno.test("a resumed run and a run with no deadline keep their own timing per account", () => {
+  const resumed = { resume: {} as never, deadlineMs: pollDeadline(0, true), startedAtMs: 0 };
+  assertEquals(accountTiming(resumed, 42_000, 0), resumed);
+  const unbounded = { resume: null, deadlineMs: Infinity };
+  assertEquals(accountTiming(unbounded, 42_000, 0), unbounded);
 });
 
 Deno.test("a container this run creates and finishes gets a real bound even on a resumed run", () => {
