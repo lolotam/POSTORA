@@ -1,3 +1,5 @@
+import { useTranslation } from "react-i18next";
+import { enqueuePostPublish } from "@/features/publishing/infrastructure/enqueuePostPublish";
 import { useState, useCallback } from "react";
 import { Node, Edge } from "@xyflow/react";
 import { supabase } from "@/integrations/supabase/client";
@@ -18,7 +20,7 @@ export interface WorkflowData {
 }
 
 interface ExecutionResult {
-  success: boolean;
+  status: "submitted" | "scheduled" | "failed";
   postId?: string;
   errors?: string[];
 }
@@ -30,11 +32,10 @@ type PlatformNodeData = {
   scheduledAt?: string;
 };
 
-type ProcessPostResult = { success: boolean; platform?: string; error?: string };
-
 export function useCanvasWorkflow() {
   const { user } = useAuth();
   const { toast } = useToast();
+  const { t } = useTranslation("common");
   const queryClient = useQueryClient();
   const { canCreatePost } = useQuotas();
   const [isSaving, setIsSaving] = useState(false);
@@ -151,7 +152,7 @@ export function useCanvasWorkflow() {
   ): Promise<ExecutionResult> => {
     if (!user) {
       toast({ title: "Login required", variant: "destructive" });
-      return { success: false, errors: ["Not authenticated"] };
+      return { status: "failed", errors: ["Not authenticated"] };
     }
 
     const quotaCheck = await canCreatePost();
@@ -161,11 +162,10 @@ export function useCanvasWorkflow() {
         description: quotaCheck.message || "You've reached your post quota.",
         variant: "destructive",
       });
-      return { success: false, errors: [quotaCheck.message || "Post quota exceeded"] };
+      return { status: "failed", errors: [quotaCheck.message || "Post quota exceeded"] };
     }
 
     setIsExecuting(true);
-    const errors: string[] = [];
 
     try {
       // Find nodes - support both text_caption and caption (image gen) as caption source
@@ -239,7 +239,8 @@ export function useCanvasWorkflow() {
           caption,
           platforms: platforms as string[],
           media_file_ids: mediaFileIds.length > 0 ? mediaFileIds : null,
-          status: scheduledTime ? "pending" : "processing",
+          status: "pending",
+          publish_requested_at: scheduledTime ? null : new Date().toISOString(),
           scheduled_at: scheduledTime?.toISOString() || null,
           metadata: {
             platform_settings: platformSettings,
@@ -252,79 +253,32 @@ export function useCanvasWorkflow() {
 
       if (postError) throw new Error(postError.message);
 
-      // Create platform_posts entries with social_account_ids
-      if (selectedAccountIds.length > 0) {
-        // Fetch account details to get platforms
-        const { data: accounts } = await supabase
-          .from("social_accounts")
-          .select("id, platform")
-          .in("id", selectedAccountIds);
-
-        for (const account of (accounts || [])) {
-          await supabase.from("platform_posts").insert({
-            post_id: post.id,
-            platform: account.platform,
-            social_account_id: account.id,
-            status: scheduledTime ? "pending" : "processing",
-          });
-        }
-      } else {
-        // Fallback: create without account IDs
-        for (const platform of platforms) {
-          await supabase.from("platform_posts").insert({
-            post_id: post.id,
-            platform: platform as string,
-            status: scheduledTime ? "pending" : "processing",
-          });
-        }
-      }
-
       if (scheduledTime) {
         toast({ 
           title: "Post scheduled!", 
           description: `Your post will be published on ${scheduledTime.toLocaleDateString()} at ${scheduledTime.toLocaleTimeString()}.` 
         });
-        return { success: true, postId: post.id };
+        return { status: "scheduled", postId: post.id };
       }
 
-      toast({ title: "Publishing...", description: "Your post is being published." });
-
-      const { data: processResult, error: processError } = await supabase.functions.invoke(
-        "process-post",
-        { body: { post_id: post.id } }
-      );
-
-      if (processError) {
-        errors.push(processError.message);
+      const acceptance = await enqueuePostPublish({ postId: post.id, mode: "publish_now" });
+      if (acceptance.accepted === false) {
+        throw new Error(t("publishing.unconfirmed", "Could not confirm the publish request. Check History for its status."));
       }
-
-      if (processResult?.results) {
-        const failed = processResult.results.filter((r: ProcessPostResult) => !r.success);
-        const succeeded = processResult.results.filter((r: ProcessPostResult) => r.success);
-        if (failed.length > 0) {
-          failed.forEach((f: ProcessPostResult) => errors.push(`${f.platform}: ${f.error}`));
-        }
-        if (succeeded.length > 0) {
-          toast({ title: "Published!", description: `Successfully published to ${succeeded.length} platform(s).` });
-        }
-      }
+      toast({ title: t("publishing.submitted", "Submitted, publishing") });
 
       queryClient.invalidateQueries({ queryKey: ["posts"] });
       queryClient.invalidateQueries({ queryKey: ["platform-posts"] });
 
-      return { 
-        success: errors.length === 0, 
-        postId: post.id,
-        errors: errors.length > 0 ? errors : undefined,
-      };
+      return { status: "submitted", postId: post.id };
     } catch (error: unknown) {
       console.error("Execute workflow error:", error);
       toast({ title: "Execution failed", description: error instanceof Error ? error.message : String(error), variant: "destructive" });
-      return { success: false, errors: [error instanceof Error ? error.message : String(error)] };
+      return { status: "failed", errors: [error instanceof Error ? error.message : String(error)] };
     } finally {
       setIsExecuting(false);
     }
-  }, [user, toast, queryClient, canCreatePost]);
+  }, [user, toast, queryClient, canCreatePost, t]);
 
   const createExecution = useCallback(async (
     workflowId: string,

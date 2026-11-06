@@ -1,3 +1,5 @@
+import { useTranslation } from "react-i18next";
+import { enqueuePostPublish } from "@/features/publishing/infrastructure/enqueuePostPublish";
 import { useState, useRef } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { buildPostoraFileName } from "@/lib/postoraFileName";
@@ -6,12 +8,22 @@ import { useToast } from "@/hooks/use-toast";
 import { useQueryClient } from "@tanstack/react-query";
 import {
   PostWithResults, invalidatePostQueries,
-  deleteFailedPlatformPosts, deletePlatformPost, invokeProcessPost, takeFailedRetryRows,
 } from "./historyUtils";
 import { failedRetryTargets } from "./retryTargets";
 
 export function usePostRetry() {
   const { toast } = useToast();
+  const { t } = useTranslation("history");
+  const submitRetry = async (postId: string, accountIds?: string[]) => {
+    const acceptance = await enqueuePostPublish({ postId, mode: "retry", accountIds });
+    if (acceptance.accepted === false) {
+      throw new Error(t("common:publishing.unconfirmed", "Could not confirm the publish request. Check History for its status."));
+    }
+  };
+  const notifyRetrySubmitted = () => toast({
+    title: t("toast.retrySubmitted", "Retry submitted"),
+    description: t("common:publishing.submitted", "Submitted, publishing"),
+  });
   const queryClient = useQueryClient();
 
   const [retryingPostId, setRetryingPostId] = useState<string | null>(null);
@@ -59,9 +71,8 @@ export function usePostRetry() {
     }
     setRetryingPostId(postId);
     try {
-      await deletePlatformPost(platformPostId);
-      await invokeProcessPost(postId, [platform], [accountId]);
-      toast({ title: "Retry initiated", description: `Retrying ${platform}...` });
+      await submitRetry(postId, [accountId]);
+      notifyRetrySubmitted();
       invalidatePostQueries(queryClient);
     } catch (error) {
       console.error("Single platform retry error:", error);
@@ -81,11 +92,9 @@ export function usePostRetry() {
 
     setRetryingPostId(post.id);
     try {
-      // Targets come from the rows actually removed, so a row that failed since the page loaded is retried too.
-      const targets = failedRetryTargets(await takeFailedRetryRows(post.id));
-      if (targets.accountIds.length === 0) throw new Error("This post has no failed platforms left to retry.");
-      await invokeProcessPost(post.id, targets.platforms, targets.accountIds);
-      toast({ title: "Retry initiated", description: `Retrying ${failedPlatforms.length} failed platform(s).` });
+      // The server selects current failed accounts atomically, including failures since the last read.
+      await submitRetry(post.id);
+      notifyRetrySubmitted();
       invalidatePostQueries(queryClient);
     } catch (error) {
       console.error("Retry error:", error);
@@ -97,13 +106,12 @@ export function usePostRetry() {
     if (!retryDialogPost || retrySelectedAccountIds.length === 0) return;
     setRetryLoading(true);
     try {
-      await deleteFailedPlatformPosts(retryDialogPost.id);
       const { error: updateError } = await supabase.from("posts").update({
         metadata: { ...(retryDialogPost.metadata || {}), selected_account_ids: retrySelectedAccountIds },
       }).eq("id", retryDialogPost.id);
       if (updateError) throw updateError;
-      await invokeProcessPost(retryDialogPost.id);
-      toast({ title: "Retry initiated", description: `Retrying with ${retrySelectedAccountIds.length} selected account(s).` });
+      await submitRetry(retryDialogPost.id, retrySelectedAccountIds);
+      notifyRetrySubmitted();
       invalidatePostQueries(queryClient);
       setRetryDialogPost(null);
     } catch (error) {
@@ -153,12 +161,11 @@ export function usePostRetry() {
       }
       const newMediaFiles = stored;
 
-      await deleteFailedPlatformPosts(retryMediaDialogPost.id);
-      const { error: updateError } = await supabase.from("posts").update({ media_file_ids: newMediaFiles.map((mediaFile) => mediaFile.id), status: "pending" }).eq("id", retryMediaDialogPost.id);
+      const { error: updateError } = await supabase.from("posts").update({ media_file_ids: newMediaFiles.map((mediaFile) => mediaFile.id) }).eq("id", retryMediaDialogPost.id);
       if (updateError) throw updateError;
 
-      await invokeProcessPost(retryMediaDialogPost.id);
-      toast({ title: "Retry initiated with new media", description: `Your post is being processed with ${newMediaFiles.length} replacement media file(s).` });
+      await submitRetry(retryMediaDialogPost.id);
+      notifyRetrySubmitted();
       invalidatePostQueries(queryClient);
       setRetryMediaDialogPost(null);
       setRetryMediaFiles([]);
@@ -172,20 +179,22 @@ export function usePostRetry() {
     if (failedPosts.length === 0) { toast({ title: "No failed posts", description: "There are no failed posts to retry." }); return; }
     setBulkRetrying(true);
     setBulkRetryProgress({ current: 0, total: failedPosts.length });
-    let successCount = 0, errorCount = 0;
+    let acceptedCount = 0, errorCount = 0;
     for (let i = 0; i < failedPosts.length; i++) {
       setBulkRetryProgress({ current: i + 1, total: failedPosts.length });
       try {
-        const targets = failedRetryTargets(await takeFailedRetryRows(failedPosts[i].id));
-        if (targets.accountIds.length === 0) throw new Error("No failed result names an account");
-        await invokeProcessPost(failedPosts[i].id, targets.platforms, targets.accountIds);
-        successCount++;
+        await submitRetry(failedPosts[i].id);
+        acceptedCount++;
       }
       catch { errorCount++; }
     }
     setBulkRetrying(false);
     invalidatePostQueries(queryClient);
-    toast({ title: "Bulk retry complete", description: `${successCount} post(s) retried successfully${errorCount > 0 ? `, ${errorCount} failed` : ""}.` });
+    toast({
+      title: t("toast.retryRequestsSubmitted", "Retry requests submitted"),
+      description: t("toast.retryRequestsSummary", "{{accepted}} request(s) accepted, {{failed}} not confirmed. Check History for publishing results.", { accepted: acceptedCount, failed: errorCount }),
+      ...(errorCount > 0 ? { variant: "destructive" as const } : {}),
+    });
   };
 
   const toggleRetryAccountSelection = (accountId: string) => {

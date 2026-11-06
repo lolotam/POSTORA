@@ -1,3 +1,4 @@
+import { enqueuePostPublish } from "@/features/publishing/infrastructure/enqueuePostPublish";
 import { useState, useEffect } from "react";
 import { useTranslation } from "react-i18next";
 import { DashboardLayout } from "@/components/layout/DashboardLayout";
@@ -461,23 +462,13 @@ export default function ScheduledPosts() {
     setPublishingPostId(post.id);
 
     try {
-      // Update the scheduled_at to now and trigger processing
-      const { error: updateError } = await supabase
-        .from("posts")
-        .update({ scheduled_at: new Date().toISOString() })
-        .eq("id", post.id);
-
-      if (updateError) throw updateError;
-
-      // Trigger the process-post function
-      const { error } = await supabase.functions.invoke("process-post", {
-        body: { post_id: post.id },
-      });
-
-      if (error) throw error;
+      const acceptance = await enqueuePostPublish({ postId: post.id, mode: "publish_now" });
+      if (acceptance.accepted === false) {
+        throw new Error(t("common:publishing.unconfirmed", "Could not confirm the publish request. Check History for its status."));
+      }
 
       toast({
-        title: t("toast.publishingStarted", "Publishing started"),
+        title: t("common:publishing.submitted", "Submitted, publishing"),
         description: t("toast.publishingStartedDesc", "Your post is now being published."),
       });
 
