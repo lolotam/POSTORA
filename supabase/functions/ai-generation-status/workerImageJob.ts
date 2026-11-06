@@ -31,12 +31,14 @@ export function isWorkerImageJob(job: { modality: string; params: unknown }): bo
   return job.modality === "image" && paramsOf(job).worker === true;
 }
 
-export async function answerWorkerImageJob(db: SupabaseClient, job: WorkerImageJob): Promise<{ status: number; body: Record<string, unknown> }> {
+export async function answerWorkerImageJob(db: SupabaseClient, job: WorkerImageJob, userId: string): Promise<{ status: number; body: Record<string, unknown> }> {
   const params = paramsOf(job);
   if (job.status === "succeeded") {
     let imageUrl: string | null = job.result_url ?? null;
     if (!imageUrl) {
-      const { data, error } = await db.from("ai_image_job_payloads").select("result_data_url").eq("job_id", job.id).maybeSingle();
+      // Ownership is enforced in the read itself, not only by the caller: the payload holds the image.
+      const { data, error } = await db.from("ai_image_job_payloads").select("result_data_url, ai_generation_jobs!inner(user_id)")
+        .eq("job_id", job.id).eq("ai_generation_jobs.user_id", userId).maybeSingle();
       if (error) return { status: 503, body: RETRYABLE_READ_BODY };
       imageUrl = data?.result_data_url ?? null;
     }

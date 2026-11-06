@@ -137,7 +137,7 @@ BEGIN
   ASSERT (SELECT status = 'failed' AND params->>'error_code' = 'ai_payload_missing' FROM public.ai_generation_jobs WHERE id = orphan),
     'W14: the orphan is settled as failed';
 
-  -- W15: per-user cap (sequential claims; the advisory lock serialises concurrent ones the same way)
+  -- W15: per-user cap (sequential claims; the advisory try-lock serialises concurrent ones, skipping a busy user)
   PERFORM public.enqueue_ai_image_job(u_c, NULL, '{"prompt":"c1"}', '[]');
   PERFORM public.enqueue_ai_image_job(u_c, NULL, '{"prompt":"c2"}', '[]');
   PERFORM public.enqueue_ai_image_job(u_c, NULL, '{"prompt":"c3"}', '[]');

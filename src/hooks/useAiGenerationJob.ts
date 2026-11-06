@@ -12,7 +12,7 @@
  */
 
 import { useEffect, useState } from "react";
-import { watchAiGenerationJob, type AiJobSnapshot } from "@/lib/aiGenerationJobWatcher";
+import { watchAiGenerationJob, VIDEO_JOB_MAX_WAIT_MS, type AiJobSnapshot } from "@/lib/aiGenerationJobWatcher";
 export type { AiJobStatus } from "@/lib/aiGenerationJobWatcher";
 
 export interface AiGenerationJobState extends AiJobSnapshot { isPolling: boolean }
@@ -22,7 +22,7 @@ export function useAiGenerationJob(jobId: string | null): AiGenerationJobState {
   const [state, setState] = useState<AiGenerationJobState>(INITIAL);
   useEffect(() => {
     if (!jobId) { setState(INITIAL); return; }
-    return watchAiGenerationJob(jobId, (s) => setState({ ...s, isPolling: s.status === "running" }));
+    return watchAiGenerationJob(jobId, (s) => setState({ ...s, isPolling: s.status === "running" }), VIDEO_JOB_MAX_WAIT_MS);
   }, [jobId]);
   return state;
 }

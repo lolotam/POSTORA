@@ -34,7 +34,7 @@ serve(async (req) => {
     if (owned.kind === "missing") return json({ error: "Job not found" }, 404);
     const job = owned.job;
     if (isWorkerImageJob(job)) {
-      const answer = await answerWorkerImageJob(supabase, job);
+      const answer = await answerWorkerImageJob(supabase, job, user.id);
       return json(answer.body, answer.status);
     }
     if (["succeeded", "failed", "timeout"].includes(job.status))

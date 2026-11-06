@@ -1,23 +1,23 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
-const h = vi.hoisted(() => ({ onUpdate: null as null | ((p: unknown) => void), invoke: vi.fn(), removeChannel: vi.fn() }));
+const h = vi.hoisted(() => ({ onUpdate: null as null | ((p: unknown) => void), invoke: vi.fn(), removeChannel: vi.fn(), topics: [] as string[] }));
 vi.mock("@/integrations/supabase/client", () => {
   const channel = { on: (_e: string, _f: unknown, cb: (p: unknown) => void) => { h.onUpdate = cb; return channel; }, subscribe: () => channel };
-  return { supabase: { channel: () => channel, removeChannel: h.removeChannel, functions: { invoke: h.invoke } } };
+  return { supabase: { channel: (topic: string) => { h.topics.push(topic); return channel; }, removeChannel: h.removeChannel, functions: { invoke: h.invoke } } };
 });
-import { watchAiGenerationJob, awaitAiGenerationJob, resolveAiImageResponse } from "@/lib/aiGenerationJobWatcher";
+import { watchAiGenerationJob, awaitAiGenerationJob, resolveAiImageResponse, IMAGE_JOB_MAX_WAIT_MS } from "@/lib/aiGenerationJobWatcher";
 
 const httpError = (status: number) => Object.assign(new Error(`HTTP ${status}`), { context: { status } });
 const running = { data: { success: true, status: "running", pollAfterSeconds: 3 }, error: null };
 
 describe("aiGenerationJobWatcher", () => {
-  beforeEach(() => { vi.useFakeTimers(); h.invoke.mockReset(); h.removeChannel.mockReset(); });
+  beforeEach(() => { vi.useFakeTimers(); h.invoke.mockReset(); h.removeChannel.mockReset(); h.topics.length = 0; });
   afterEach(() => vi.useRealTimers());
 
   it("polls immediately when Realtime reports a terminal status", async () => {
     h.invoke.mockResolvedValue({ data: { success: true, status: "succeeded", imageUrl: "data:image/png;base64,AA" }, error: null });
     const seen: string[] = [];
-    watchAiGenerationJob("j1", (s) => seen.push(s.status));
+    watchAiGenerationJob("j1", (s) => seen.push(s.status), IMAGE_JOB_MAX_WAIT_MS);
     h.onUpdate!({ new: { status: "succeeded" } });
     await vi.advanceTimersByTimeAsync(0);
     expect(h.invoke).toHaveBeenCalledTimes(1);
@@ -32,7 +32,7 @@ describe("aiGenerationJobWatcher", () => {
       const p = h.invoke.mock.calls.length === 1 ? new Promise((r) => { release = r; }) : Promise.resolve(running);
       return p.finally(() => { active--; });
     });
-    watchAiGenerationJob("j1", () => {});
+    watchAiGenerationJob("j1", () => {}, IMAGE_JOB_MAX_WAIT_MS);
     await vi.advanceTimersByTimeAsync(5_000);           // first read starts and hangs
     h.onUpdate!({ new: { status: "succeeded" } });       // event while it is in flight
     release(running);                                    // the stale read says running
@@ -73,7 +73,7 @@ describe("aiGenerationJobWatcher", () => {
   it("MEDIUM-3: still shows a late server result after the old ten-minute deadline", async () => {
     h.invoke.mockResolvedValue(running);
     const seen: string[] = [];
-    watchAiGenerationJob("late-job", (snapshot) => seen.push(snapshot.status));
+    watchAiGenerationJob("late-job", (snapshot) => seen.push(snapshot.status), IMAGE_JOB_MAX_WAIT_MS);
     await vi.advanceTimersByTimeAsync(15 * 60_000);
     expect(seen.at(-1)).toBe("running");
     expect(h.removeChannel).not.toHaveBeenCalled();
@@ -81,6 +81,15 @@ describe("aiGenerationJobWatcher", () => {
     await vi.advanceTimersByTimeAsync(3_000);
     expect(seen.at(-1)).toBe("succeeded");
     expect(h.removeChannel).toHaveBeenCalledTimes(1);
+  });
+
+  it("two watchers on the same job subscribe to distinct Realtime topics", () => {
+    h.invoke.mockResolvedValue(running);
+    watchAiGenerationJob("same-job", () => {}, IMAGE_JOB_MAX_WAIT_MS);
+    watchAiGenerationJob("same-job", () => {}, IMAGE_JOB_MAX_WAIT_MS);
+    expect(h.topics).toHaveLength(2);
+    expect(h.topics[0]).not.toBe(h.topics[1]);
+    expect(h.topics.every((t) => t.includes("same-job"))).toBe(true);
   });
 
   it("resolveAiImageResponse passes a sync answer through and maps a failed job", async () => {

@@ -126,8 +126,9 @@ BEGIN
   PERFORM public.sweep_ai_image_jobs();
 
   -- (d) Claim, oldest first, at most p_max_per_user running jobs per user. The per-user
-  -- advisory lock serialises concurrent claimers for one user, so each sees the other's
-  -- committed claim (READ COMMITTED: every statement takes a fresh snapshot).
+  -- advisory lock serialises concurrent claimers for one user, so the cap count is never
+  -- read by two claimers at once. It is a try-lock: a claimer holding one user's lock never
+  -- waits on another's, which would deadlock two claimers; a busy user is simply skipped.
   IF p_limit IS NULL OR p_limit <= 0 THEN
     RETURN;
   END IF;
@@ -143,7 +144,7 @@ BEGIN
      ORDER BY j.created_at
      FOR UPDATE OF j SKIP LOCKED
   LOOP
-    PERFORM pg_advisory_xact_lock(hashtextextended('claim_ai_image_jobs:' || v_cand.user_id::text, 0));
+    CONTINUE WHEN NOT pg_try_advisory_xact_lock(hashtextextended('claim_ai_image_jobs:' || v_cand.user_id::text, 0));
     SELECT count(*) INTO v_running
       FROM public.ai_generation_jobs r
      WHERE r.user_id = v_cand.user_id AND r.modality = 'image' AND r.params->>'worker' = 'true'

@@ -30,4 +30,12 @@ describe("useAiGenerationJob", () => {
     unmount();
     expect(h.removeChannel).toHaveBeenCalled();
   });
+  it("keeps following a video past the image deadline, up to the 30-minute server limit", async () => {
+    h.invoke.mockResolvedValue({ data: { success: true, status: "running", pollAfterSeconds: 30 }, error: null });
+    const { result } = renderHook(() => useAiGenerationJob("v1"));
+    await act(() => vi.advanceTimersByTimeAsync(20 * 60_000));
+    expect(result.current.status).toBe("running");
+    await act(() => vi.advanceTimersByTimeAsync(12 * 60_000));
+    expect(result.current.status).toBe("timeout");
+  });
 });

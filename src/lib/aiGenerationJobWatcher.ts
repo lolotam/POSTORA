@@ -15,7 +15,9 @@ const DEFAULT_POLL_SECONDS = 5;
 // Mirrors sweep_ai_image_jobs in 20261107120000_ai_image_jobs_worker.sql:
 // 5 min queue + 3 attempts * 3 min lease, capped at 14 min total server age.
 // Two extra minutes cover the minute sweep and status polling before we give up.
-const MAX_POLL_MS = (5 + 3 * 3 + 2) * 60_000;
+export const IMAGE_JOB_MAX_WAIT_MS = (5 + 3 * 3 + 2) * 60_000;
+// ai-generation-status times a provider video job out after 30 minutes; same two-minute margin.
+export const VIDEO_JOB_MAX_WAIT_MS = (30 + 2) * 60_000;
 const READ_TIMEOUT_MS = 20_000;
 const BACKOFF_SECONDS = [5, 10, 20, 30];
 const TERMINAL = new Set(["succeeded", "failed", "timeout", "canceled"]);
@@ -26,7 +28,7 @@ function httpStatusOf(error: unknown): number | null {
   return typeof status === "number" ? status : null;
 }
 
-export function watchAiGenerationJob(jobId: string, onChange: (s: AiJobSnapshot) => void): () => void {
+export function watchAiGenerationJob(jobId: string, onChange: (s: AiJobSnapshot) => void, maxWaitMs: number): () => void {
   const startedAt = Date.now();
   let active = true;
   let inFlight = false;
@@ -41,7 +43,8 @@ export function watchAiGenerationJob(jobId: string, onChange: (s: AiJobSnapshot)
     elapsedSeconds: Math.round((Date.now() - startedAt) / 1000), ...patch,
   });
 
-  const channel = supabase.channel(`ai-generation-job-${jobId}`);
+  // A topic per watcher: two watchers on one job must not share a channel, or the second .on() throws.
+  const channel = supabase.channel(`ai-generation-job-${jobId}-${crypto.randomUUID()}`);
   const stop = () => {
     if (!active) return;
     active = false;
@@ -57,7 +60,7 @@ export function watchAiGenerationJob(jobId: string, onChange: (s: AiJobSnapshot)
     onChange(last);
   };
   const deadlineTimer = setTimeout(() => finish({ status: "timeout",
-    error: "The generation is taking longer than expected. Check back shortly." }), MAX_POLL_MS);
+    error: "The generation is taking longer than expected. Check back shortly." }), maxWaitMs);
 
   const schedule = (seconds: number) => {
     if (!active) return;
@@ -143,7 +146,7 @@ export function watchAiGenerationJob(jobId: string, onChange: (s: AiJobSnapshot)
 
 export function awaitAiGenerationJob(jobId: string): Promise<AiJobSnapshot> {
   return new Promise((resolve) => {
-    watchAiGenerationJob(jobId, (s) => { if (s.status !== "running" && s.status !== "idle") resolve(s); });
+    watchAiGenerationJob(jobId, (s) => { if (s.status !== "running" && s.status !== "idle") resolve(s); }, IMAGE_JOB_MAX_WAIT_MS);
   });
 }
 
