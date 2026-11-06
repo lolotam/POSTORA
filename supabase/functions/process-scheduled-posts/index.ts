@@ -1,5 +1,6 @@
 import { verifyCronAuth } from "../_shared/cron-auth.ts";
 import { mergeDuePosts } from "./dueRequests.ts";
+import { markScheduledPostFailed } from "./markScheduledFailed.ts";
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 
 const corsHeaders = {
@@ -359,24 +360,10 @@ Deno.serve(async (req) => {
           continue;
         }
 
-        // Mark the post failed only while nobody holds it: still due at the scheduled_at this
-        // run selected and still claimable. If process-post claimed it before the call failed
-        // (a dropped connection while it publishes), it is `processing` and process-post or the
-        // stale-processing sweeper settles it; a `completed` row must never become `failed`.
-        // A row that carries a publish request is left queued too: the request query skips it
-        // during its grace period, and a retry's failed results are already cleared, so
-        // `failed` would leave nothing for the next run to pick up.
-        const { data: markedFailed, error: markError } = await supabaseAdmin
-          .from('posts')
-          .update({ status: 'failed' })
-          .eq('id', post.id)
-          .eq('scheduled_at', expectation.value)
-          .in('status', ['pending', 'scheduled'])
-          .is('publish_requested_at', null)
-          .select('id');
-        if (markError) console.error(`Could not mark post ${post.id} failed:`, markError.message);
-        // `failed` only when the update confirmed a row; an update error leaves the state unknown.
-        const markedAsFailed = !markError && (markedFailed ?? []).length > 0;
+        const { marked: markedAsFailed, error: markError } = await markScheduledPostFailed(
+          supabaseAdmin, post.id, expectation.value,
+        );
+        if (markError) console.error(`Could not mark post ${post.id} failed:`, markError);
         const leftForOwner = !markedAsFailed;
 
         // Log: per-post failure
