@@ -44,6 +44,57 @@
 | `status` includes `cancelled` | `queued, running, succeeded, failed` | No cancel path exists (§1). C' can widen the check when it ships a cancel. |
 | Shared client layer `src/features/background-jobs/` (`useBackgroundJob`, `JobStatusBadge`, `submittedToast`) | Deferred to Phase C' | The broadcast UI already reads its own row (counts, status); `useBackgroundJob` and `JobStatusBadge` would have no caller in this PR (§1). C' has six callers and builds them there. |
 
+## Debate revisions (Codex gpt-6-astra, 2026-11-07) — binding
+
+These supersede anything below that conflicts. Each one was checked against the code before it was accepted.
+
+- **R1 — Stalled jobs.** A worker outage would leave a job `queued`, or `running` at attempt 1, forever: the sweep only handles exhausted leases.
+  - **Fix:** `sweep_background_jobs` also fails any `queued`/`running` job with `updated_at < now() - interval '15 minutes'` (`error = 'stalled'`). A live job's `updated_at` moves at every claim and continue, at most every 3 minutes.
+  - The broadcast settlement then covers it.
+  - Proof **BJ18**: a queued job untouched for 16 minutes is failed and its broadcast is settled.
+  - The frontend poll also stops for a broadcast whose `updated_at` is older than 20 minutes (Task 5).
+- **R2 — Adapters throw.** Today's `whatsapp-broadcast/index.ts` turns DB errors into `null` or `[]` and ignores write errors. Moved into the chunk as they are, a transient read error would finish the job `succeeded` with the broadcast still `sending`.
+  - **Fix:** every `chunkDeps.ts` adapter checks `{ error }` and throws.
+  - `loadBroadcast` uses `.maybeSingle()` and returns `null` only for a confirmed missing row.
+  - The handler's `deps` in `index.ts` follow the same rule.
+  - New test `chunkDeps.test.ts` uses a stub client that returns `{ data: null, error }` and asserts that every adapter throws.
+- **R3 — Network deadline.**
+  - **Fix:**
+    - `postTemplate(phoneNumberId, accessToken, body, signal)` uses `AbortSignal.timeout(min(15_000, deadlineMs - now()))`, and the JSON body is read under the same signal.
+    - The loop stops before `beginSend` when `deadlineMs - now() < 20_000`. That is the send reserve: one 15 s request plus its writes.
+    - An abort, or a network error **after** the fetch began, marks the recipient `failed` with `error_message = 'outcome_unknown'`. It is never resent.
+    - Only a Meta HTTP error response marks it `failed` with Meta's message.
+  - Tests: `a hung Meta call is aborted at the deadline and recorded outcome_unknown`; `no recipient is begun inside the send reserve`.
+- **R4 — Outbound message row.** The insert today uses columns `whatsapp_messages` does not have (`content`, `wa_message_id`, `phone_number_id`, `contact_phone`) and omits the NOT NULL `social_account_id`. It has failed silently on every broadcast.
+  - **Fix:**
+    - `loadWhatsAppAccounts` selects `id` too.
+    - The chunk takes the chosen account as `accounts.find(isCloudApiAccount)` (exported from `_shared/whatsappCloudCredentials.ts`) after `resolveWhatsAppCloudCredentials` returns `ok`.
+    - It inserts `{ user_id, social_account_id: account.id, conversation_id: \`wa_${phoneNumberId}_${digits}\`, message_id: waMessageId, to_phone: recipient.phone_number, message_text: \`[Broadcast: ${name}] Template: ${template_name}\`, message_type: "template", direction: "outbound", status: "sent" }`.
+  - **Order:**
+    1. `markRecipientSent` first. If it throws, the row stays `sending`, and the next chunk records it `outcome_unknown`. It is never resent.
+    2. `insertOutbound` second, best effort. If it throws, log the recipient id and continue. The recipient stays `sent`, which is correct.
+  - SQL proof **BJ19** inserts that exact row shape into `whatsapp_messages` as `service_role` and succeeds.
+- **R5 — Client guards.** The owner's UPDATE policy on recipients lets a browser move `sent` back to `pending`, which would make the next chunk resend it.
+  - **Fix:** two `BEFORE INSERT OR UPDATE` triggers, `SECURITY INVOKER`, acting only when `current_user IN ('authenticated','anon')`, modelled on `whatsapp_scheduled_messages_client_guard` (`20260930100000_whatsapp_scheduled_sender.sql:166-215`):
+    - **`whatsapp_broadcast_recipients_client_guard`:**
+      - INSERT only `status = 'pending'` rows with `sent_at IS NULL`, into a broadcast that is still `pending`.
+      - Any UPDATE is rejected. The browser never updates recipients; grep confirms the only browser write is the insert in `createBroadcast`.
+    - **`whatsapp_broadcasts_client_guard`:**
+      - INSERT only with `status = 'pending'` and zero `sent_count`/`failed_count`/`delivered_count`.
+      - UPDATE may not change `status`, `sent_count`, `failed_count`, `delivered_count`, `template_name` or `template_components`, and may not touch a row whose `OLD.status <> 'pending'`.
+      - DELETE stays allowed. A broadcast deleted mid-send cascades its recipients, and the chunk ends `done` (`loadBroadcast` → null).
+  - Errors use SQLSTATE `42501`. EXECUTE on both trigger functions is granted to `service_role` only.
+  - Proofs **BJ20–BJ22**, run as `authenticated` owner: `sent → pending` is refused; inserting a `sent` recipient is refused; setting a broadcast's `status = 'completed'` is refused. A name-only update on a pending broadcast is allowed.
+- **R6 — Atomic per-user cap.**
+  - **Fix:** `enqueue_background_job` takes `pg_advisory_xact_lock(hashtextextended('enqueue_background_job:' || p_user_id::text, 0))` before counting.
+  - Proof **BJ23**: with the cap at 25, a 25th insert succeeds and a 26th raises `P0001`. The lock ordering is argued in a comment; the harness has no two-session runner.
+- **R7 — Final toast tracking.**
+  - **Fix:** on a 202, `sendBroadcast.onSuccess` adds `broadcast_id` to the tracked set **before** invalidating. A first read that already shows `completed` therefore still toasts once.
+  - Test: `a broadcast that finishes before the first refetch still toasts its result`.
+- **R8 — Recipient details refresh.**
+  - **Fix:** whenever a Realtime update arrives for a broadcast, and whenever polled data shows a tracked broadcast changed (counts or status, including the terminal change), invalidate `["whatsapp-broadcast-recipients", id]` as well as the list.
+  - Test: `an open broadcast's recipient list refreshes while it sends and once at the end`.
+
 ## Global Constraints
 
 - **Never send twice.** A recipient moves `pending → sending` by a conditional update (`WHERE status = 'pending'`) and only the row that won the update is sent. `sent` is written only with a Meta message id. A `sending` row found at the start of a chunk is failed with `error_message = 'outcome_unknown'` and is never resent.
