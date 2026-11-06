@@ -341,6 +341,22 @@ Deno.serve(async (req) => {
 
         const errorMsg = postError instanceof Error ? postError.message : 'Unknown error';
 
+        // A publish request stays queued: the owner's request was accepted, and a retry's failed
+        // results are already cleared, so `failed` would leave nothing to retry. The next run
+        // sweeps it again with the same expectation.
+        if (expectation.kind === 'requested') {
+          await supabaseAdmin.from('system_logs').insert({
+            level: 'warn',
+            category: 'post',
+            source: 'process-scheduled-posts',
+            message: `Scheduler call failed; the publish request stays queued for the next run: ${errorMsg}`,
+            user_id: post.user_id,
+            metadata: { post_id: post.id, platforms: post.platforms, error: errorMsg, marked_failed: false },
+          });
+          results.push({ postId: post.id, status: 'skipped', error: errorMsg });
+          continue;
+        }
+
         // Mark the post failed only while nobody holds it: still due at the scheduled_at this
         // run selected and still claimable. If process-post claimed it before the call failed
         // (a dropped connection while it publishes), it is `processing` and process-post or the
@@ -349,7 +365,7 @@ Deno.serve(async (req) => {
           .from('posts')
           .update({ status: 'failed' })
           .eq('id', post.id)
-          .eq(expectation.kind === 'scheduled' ? 'scheduled_at' : 'publish_requested_at', expectation.value)
+          .eq('scheduled_at', expectation.value)
           .in('status', ['pending', 'scheduled'])
           .select('id');
         if (markError) console.error(`Could not mark post ${post.id} failed:`, markError.message);

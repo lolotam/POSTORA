@@ -44,25 +44,19 @@ Brainstorming path: architectural. The spec file `docs/superpowers/specs/2026-11
 - `src/pages/ScheduledPosts.tsx:460-495` writes `scheduled_at = now()` then invokes `process-post` with no `expected_scheduled_at`. `claimPostForProcessing` (`supabase/functions/_shared/postProcessingClaim.ts:36-61`) only applies the status guard on the string-expectation branch, so a cron tick in between claims the same post → double publish.
 - `src/pages/CreatePost.tsx:551` inserts `status='pending', scheduled_at=null` and fire-and-forgets. The cron predicate (`process-scheduled-posts/index.ts:121-124`, `.not('scheduled_at','is',null)`) never sees it, so a lost invoke orphans the post.
 
-### Rule
-Immediate publishes write `scheduled_at = now()` (status stays `pending`) through an atomic owner-scoped RPC, and the kick passes the RETURNED `scheduled_at` string as `expected_scheduled_at`. Kick and cron then share the guarded claim; cron covers the orphan gap with no scheduler SQL change. Retries keep `status='failed'|'completed'` (the Instagram retry guard `process-post/instagramRetryGuard.ts:74` reads it) and pass `expected_status:[status]`, so a double click claims once (closes the mem0 open follow-up "atomic retry claim"); `sweep_stale_processing_posts` is the net.
+### Rule (as implemented)
+A publish request is durable before anything runs. `posts.publish_requested_at` records when the owner asked; `scheduled_at` keeps meaning "when the owner scheduled it" and is not changed for an unscheduled post, so Calendar, Analytics, the Scheduled board and the partner `post.scheduled` webhook are unaffected.
 
-### Claim change `supabase/functions/_shared/postProcessingClaim.ts`
-- `claimPostForProcessing(supabase, postId, expectedScheduledAt?, expectedStatuses?: string[])`: when `expectedScheduledAt === undefined` and `expectedStatuses` given → add `.in("status", expectedStatuses)`. Existing branches unchanged.
-- `process-post/index.ts` `ProcessPostSchema`: add `expected_status: z.array(z.enum(["failed","completed"])).min(1).max(2).optional()`; pass to the claim call (~line 1655). Declined claim already logs `claim_declined` + 409.
-- Deno tests in `postProcessingClaim.test.ts` (filter-recording stub, same style).
+- Publish now: `request_immediate_publish(post, user)` stamps `publish_requested_at = now()` on an owner's `pending`/`scheduled` post and returns the stamp.
+- Retry: `request_post_retry(post, user, account_ids?)` picks the targets on the server (failed results, never an account that succeeded or is pending; an Instagram account with a failed result stays eligible because process-post's retry guard skips whichever result is live), deletes only those failed results, moves the post to `pending` with a fresh `publish_requested_at`, and records `metadata.retry_request {requested_at, account_ids, platforms, prior_status}`. process-post uses that marker only while `requested_at` equals the row's `publish_requested_at`.
+- One claim: `claimPostForProcessing` takes `expected_publish_requested_at`; the kick and the scheduler pass the same stamp, so exactly one run moves the post to `processing`.
+- Recovery: process-scheduled-posts also sweeps requests older than 30 s that nobody claimed, so a lost kick costs at most one tick. A sweep whose call to process-post fails leaves the request queued for the next tick.
+- A reschedule or unschedule drops a request nobody has claimed yet (trigger `trg_posts_drop_request_on_reschedule`, SECURITY DEFINER because the browser writes `scheduled_at` as `authenticated`); a queued retry keeps its request.
 
 ### New edge function `supabase/functions/enqueue-post-publish/`
-- `index.ts` adapter (§12): `handleRestrictedCorsOptions` / `restrictedJsonResponse` (§25), `authenticateCaller(req)`, Zod body `{ post_id: uuid, mode: 'publish_now'|'retry', platforms?, account_ids? }`, builds deps, calls `run()`. `config.toml` entry only if the gateway JWT check must be off (auth done in-handler like siblings).
-- `run.ts` (deps seam like `whatsapp-broadcast/handler.ts`):
-  1. Load post; missing or `user_id !== callerId` → non-enumerable 404.
-  2. `publish_now` + status `pending|scheduled`: RPC `request_immediate_publish(post_id, user_id)` → returned `scheduled_at`; NULL → 409.
-  3. `retry` + status `failed|completed`: no row change; kick with `expected_status:[status]`.
-  4. Any other combination → 409 (log row per AGENTS.md "every refusal logs").
-  5. Kick: `await runInBackground('kick process-post', () => fetch(${SUPABASE_URL}/functions/v1/process-post, { service-role bearer, body }))`; read body fully; 409/503 expected; network/other → one sanitized `system_logs` row `publish_kick_failed`. Never surfaced.
-  6. Return 202 `{ accepted: true, post_id, status: 'processing' }`.
-- `run.test.ts` (Deno): 202 even when kick rejects; expectation equals RPC value; retry passes `expected_status` and no `expected_scheduled_at`; cross-user 404; wrong status 409; RPC NULL 409.
-- CI: add to the process-post typecheck/test step in `.github/workflows/ci.yml` (same import map).
+- `index.ts` adapter (§12): restricted CORS, `authenticateCaller(req)`, strict Zod body `{ post_id: uuid, mode: 'publish_now'|'retry', account_ids?: uuid[] (retry only) }`, builds deps, calls `run()`.
+- `run.ts`: calls the matching RPC; 404 `not_found` for a missing or another user's post; 409 `not_publishable` | `not_retryable` | `no_targets`; on accept, kicks process-post in `runInBackground` with `expected_publish_requested_at` and returns 202 `{ accepted: true, post_id, status: 'processing' }`. A 2xx, 409 or 503 kick response is silent; anything else, or a network error, writes one `publish_kick_failed` row. The kick never changes the response.
+- Tests: `run.test.ts` (Deno) and `supabase/tests/publish_requests.sql` (harness).
 
 ### Modify
 - New tiny adapter `src/features/publishing/infrastructure/enqueuePostPublish.ts` wrapping `supabase.functions.invoke('enqueue-post-publish')` (§11: no raw calls in pages).
@@ -71,17 +65,16 @@ Immediate publishes write `scheduled_at = now()` (status stays `pending`) throug
 - `src/hooks/history/historyUtils.ts:89-95` `invokeProcessPost` → `requestPostRetry(postId, platforms, accountIds)` with `mode:'retry'`; the five call sites in `src/hooks/history/usePostRetry.ts:54/72/96/115/171` keep signatures; copy "Retry submitted".
 - `src/hooks/useCanvasWorkflow.ts:292`: same adapter.
 - `src/hooks/useRealtimePostUpdates.tsx:52-62`: replace the 60s auto-clear with clear-on-terminal (`completed|failed`, already handled at :224) plus a 35 min hard cap (aligned with `DEFERRAL_GIVE_UP_MS`); after 60s show "still publishing" copy instead of dropping the badge.
-- Not changed (decided): `scheduledBoard.ts` (claim lands in ~1s, exclusion is YAGNI); `n8n-api` (public contract §36 → follow-up for async opt-in with a node release); `process-scheduled-posts` (no change needed).
+- Not changed (decided): `scheduledBoard.ts` (claim lands in ~1s, exclusion is YAGNI); `n8n-api` (public contract §36 → follow-up for async opt-in with a node release).
 
-### Migration `supabase/migrations/20261106120000_request_immediate_publish.sql` (Migrations lane: Muse Spark → orchestrator)
-- `public.request_immediate_publish(p_post_id uuid, p_user_id uuid) RETURNS timestamptz`, SECURITY DEFINER, `SET search_path = public, pg_temp`: `UPDATE posts SET scheduled_at = now(), metadata = coalesce(metadata,'{}'::jsonb) || jsonb_build_object('publish_mode','immediate') WHERE id = p_post_id AND user_id = p_user_id AND status IN ('pending','scheduled') RETURNING scheduled_at` (NULL when no row). Ownership structural in SQL.
-- `REVOKE ALL ON FUNCTION ... FROM PUBLIC, anon, authenticated; GRANT EXECUTE ... TO service_role;`
-- `CREATE INDEX IF NOT EXISTS posts_due_pending_idx ON public.posts (scheduled_at) WHERE status IN ('pending','scheduled') AND scheduled_at IS NOT NULL;`
-- `NOTIFY pgrst, 'reload schema';` Regenerate `src/integrations/supabase/types.ts` (§23).
+### Migration `supabase/migrations/20261106120000_publish_requests.sql`
+- `posts.publish_requested_at timestamptz`, pinned to the database clock on insert; partial index `posts_publish_requested_due_idx` on due requests.
+- `request_immediate_publish` and `request_post_retry`: SECURITY DEFINER, `search_path = public`, owner-scoped, TikTok review posts excluded, service_role only; a post an agent retry holds under a live action lease is not retryable.
+- `publish_request_is_retry` helper and `trg_posts_drop_request_on_reschedule` (see Rule).
 
 ### Tests
-- Deno: `enqueue-post-publish/run.test.ts`, `postProcessingClaim.test.ts`.
-- SQL proof `supabase/tests/immediate_publish_claim.sql` (register in `scripts/db-harness.sh` SUITES): owner's pending post gets now() and the scheduler predicate selects it; cross-user call → NULL; processing/failed/completed → NULL; claim CAS with returned value succeeds once, second identical CAS matches 0 rows; retry CAS on `status IN ('failed')` succeeds once.
+- Deno: `enqueue-post-publish/run.test.ts`, `postProcessingClaim.test.ts`, `_shared/publishRequest.test.ts`, `process-scheduled-posts/dueRequests.test.ts`.
+- SQL proof `supabase/tests/publish_requests.sql` (registered in `scripts/db-harness.sh`): the insert pin, both RPCs and their refusals, retry targets, the reschedule trigger as `authenticated` in its own transaction, grants and the index.
 - Vitest: adapter test; `usePostRetry` asserts `mode:'retry'`; `useRealtimePostUpdates` terminal-clear + 35 min cap; `useCanvasWorkflow.errors.test.tsx` updated for accepted response.
 
 ### Pre-merge check
@@ -132,7 +125,7 @@ background_jobs(id uuid pk, user_id uuid not null → auth.users, kind text not 
 - Cron `background-jobs-worker` every minute; nightly purge of terminal rows > 7 days.
 
 ### Worker `supabase/functions/background-jobs-worker/`
-- `index.ts` cron-auth door; `worker.ts`: claim(kinds, limit 5, lease 3 min), run handlers sequentially until 50s budget; handler returns `{done,result} | {continue,payloadPatch,progress,runAfter} | {failed,error,retryable}`; registry `handlers/index.ts` maps kind → handler.
+- `index.ts` cron-auth door; `worker.ts`: claims one job at a time (limit 1, lease 3 min) and runs it before claiming the next, until the 50s budget; a job is never leased before the worker can start it; handler returns `{done,result} | {continue,payloadPatch,progress,runAfter} | {failed,error,retryable}`; registry `handlers/index.ts` maps kind → handler.
 - `_shared/backgroundJobs.ts`: `enqueueAndKick(admin, { userId, kind, payload })` — RPC + `runInBackground(fetch(worker URL, service role))`. Only place the kick lives.
 
 ### First kind `whatsapp_broadcast_chunk`
@@ -170,7 +163,7 @@ SQL proof `supabase/tests/background_jobs.sql`; Deno `background-jobs-worker/wor
 6. mem0 save + final report.
 
 ## Verification (end to end)
-- Phase A: in the live app press Publish Now on a scheduled post → toast within <1s, badge `processing`, flips to success via Realtime; `posts.status` goes pending→processing→completed exactly once (check `platform_posts` count = accounts). Kill the kick (block the URL in a test) → cron publishes within 60s, no duplicate.
+- Phase A: in the live app press Publish Now on a scheduled post → toast within <1s, badge `processing`, flips to success via Realtime; `posts.status` goes pending→processing→completed exactly once (check `platform_posts` count = accounts). Kill the kick (block the URL in a test) → cron publishes within about 90s (30s grace plus a one-minute tick), no duplicate.
 - Phase B: generate image → 202 with `jobId`, `ai_generation_jobs` row `queued`→`running`→`succeeded`, image renders without reload.
 - Phase C: broadcast to >150 recipients → 202, `whatsapp_broadcast_recipients` fill in chunks, counts update live, no recipient receives twice.
 - Phase C': compress a video → dialog shows submitted → result appears; `media_operations_history` consistent.
