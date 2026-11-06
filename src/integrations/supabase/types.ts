@@ -6676,6 +6676,7 @@ export type Database = {
           media_file_ids: string[] | null
           metadata: Json | null
           platforms: string[]
+          publish_requested_at: string | null
           posted_at: string | null
           scheduled_at: string | null
           source: string | null
@@ -6689,6 +6690,7 @@ export type Database = {
           media_file_ids?: string[] | null
           metadata?: Json | null
           platforms: string[]
+          publish_requested_at?: string | null
           posted_at?: string | null
           scheduled_at?: string | null
           source?: string | null
@@ -6702,6 +6704,7 @@ export type Database = {
           media_file_ids?: string[] | null
           metadata?: Json | null
           platforms?: string[]
+          publish_requested_at?: string | null
           posted_at?: string | null
           scheduled_at?: string | null
           source?: string | null
@@ -10875,6 +10878,14 @@ export type Database = {
       }
     }
     Functions: {
+      request_immediate_publish: {
+        Args: { p_post_id: string; p_user_id: string }
+        Returns: string | null
+      }
+      request_post_retry: {
+        Args: { p_post_id: string; p_user_id: string; p_account_ids?: string[] }
+        Returns: Json
+      }
       claim_meta_analytics_collection_job: {
         Args: {
           p_platform: string
