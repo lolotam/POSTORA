@@ -1,4 +1,5 @@
 import { verifyCronAuth } from "../_shared/cron-auth.ts";
+import { mergeDuePosts } from "./dueRequests.ts";
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 
 const corsHeaders = {
@@ -118,9 +119,10 @@ Deno.serve(async (req) => {
 
     const { data: scheduledPosts, error: fetchError } = await supabaseAdmin
       .from('posts')
-      .select('id, user_id, caption, platforms, media_file_ids, scheduled_at, metadata')
+      .select('id, user_id, caption, platforms, media_file_ids, scheduled_at, publish_requested_at, metadata')
       .in('status', ['pending', 'scheduled'])
       .not('scheduled_at', 'is', null)
+      .or('source.is.null,source.neq.tiktok_review')
       .lte('scheduled_at', now);
 
     if (fetchError) {
@@ -128,7 +130,17 @@ Deno.serve(async (req) => {
       throw fetchError;
     }
 
-    const postCount = scheduledPosts?.length || 0;
+    const { data: requestedPosts, error: requestFetchError } = await supabaseAdmin
+      .from('posts')
+      .select('id, user_id, caption, platforms, media_file_ids, scheduled_at, publish_requested_at, metadata')
+      .in('status', ['pending', 'scheduled'])
+      .not('publish_requested_at', 'is', null)
+      .lte('publish_requested_at', new Date(Date.now() - 30_000).toISOString())
+      .or('source.is.null,source.neq.tiktok_review');
+    if (requestFetchError) throw requestFetchError;
+
+    const duePosts = mergeDuePosts(scheduledPosts ?? [], requestedPosts ?? []);
+    const postCount = duePosts.length;
     console.log(`Found ${postCount} scheduled posts to process`);
 
     // Log: scheduler started (only when there are posts to process)
@@ -142,7 +154,7 @@ Deno.serve(async (req) => {
       });
     }
 
-    if (!scheduledPosts || scheduledPosts.length === 0) {
+    if (postCount === 0) {
       return new Response(
         JSON.stringify({ message: 'No scheduled posts to process', processed: 0 }),
         { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
@@ -151,7 +163,7 @@ Deno.serve(async (req) => {
 
     const results = [];
 
-    for (const post of scheduledPosts) {
+    for (const { post, expectation } of duePosts) {
       // Stop taking posts once the budget is spent or the lease is lost (renewal refused or
       // unreadable); the remaining posts stay pending for the next run.
       if (Date.now() - runStartedAt > RUN_BUDGET_MS) {
@@ -295,7 +307,12 @@ Deno.serve(async (req) => {
             // only if it still carries it, so an unschedule or reschedule that
             // landed after the SELECT above -- from /v1 or the UI -- is honoured
             // instead of published over. See _shared/postProcessingClaim.ts.
-            body: JSON.stringify({ post_id: post.id, expected_scheduled_at: post.scheduled_at })
+            body: JSON.stringify({
+              post_id: post.id,
+              ...(expectation.kind === 'scheduled'
+                ? { expected_scheduled_at: expectation.value }
+                : { expected_publish_requested_at: expectation.value }),
+            })
           }
         );
 
@@ -331,7 +348,7 @@ Deno.serve(async (req) => {
           .from('posts')
           .update({ status: 'failed' })
           .eq('id', post.id)
-          .eq('scheduled_at', post.scheduled_at)
+          .eq(expectation.kind === 'scheduled' ? 'scheduled_at' : 'publish_requested_at', expectation.value)
           .in('status', ['pending', 'scheduled'])
           .select('id');
         if (markError) console.error(`Could not mark post ${post.id} failed:`, markError.message);
