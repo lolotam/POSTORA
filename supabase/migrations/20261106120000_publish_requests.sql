@@ -37,17 +37,19 @@ CREATE INDEX IF NOT EXISTS posts_publish_requested_due_idx
   ON public.posts (publish_requested_at)
   WHERE status IN ('pending', 'scheduled') AND publish_requested_at IS NOT NULL;
 
--- The composer inserts an immediate post with publish_requested_at set, so the
--- scheduler can publish it even if the browser never reaches
--- enqueue-post-publish. A browser clock running ahead would delay that net by
--- the skew; the database clock does not.
+-- The composer writes publish_requested_at when it saves an immediate post,
+-- new or edited, so the scheduler can publish it even if the browser never
+-- reaches enqueue-post-publish. A browser clock running ahead would delay that
+-- net by the skew; the database clock does not. The RPCs below stamp now()
+-- themselves, which this leaves unchanged.
 CREATE OR REPLACE FUNCTION public.posts_pin_publish_requested_at()
 RETURNS trigger
 LANGUAGE plpgsql
 SET search_path = public
 AS $$
 BEGIN
-  IF NEW.publish_requested_at IS NOT NULL THEN
+  IF NEW.publish_requested_at IS NOT NULL
+     AND (TG_OP = 'INSERT' OR NEW.publish_requested_at IS DISTINCT FROM OLD.publish_requested_at) THEN
     NEW.publish_requested_at := now();
   END IF;
   RETURN NEW;
@@ -58,7 +60,7 @@ REVOKE ALL ON FUNCTION public.posts_pin_publish_requested_at() FROM PUBLIC, anon
 
 DROP TRIGGER IF EXISTS trg_posts_pin_publish_requested_at ON public.posts;
 CREATE TRIGGER trg_posts_pin_publish_requested_at
-  BEFORE INSERT ON public.posts
+  BEFORE INSERT OR UPDATE OF publish_requested_at ON public.posts
   FOR EACH ROW
   EXECUTE FUNCTION public.posts_pin_publish_requested_at();
 
@@ -210,11 +212,14 @@ BEGIN
      WHERE sa.id = ANY (p_account_ids)
        AND sa.user_id = p_user_id;
   ELSE
+    -- Joined to social_accounts so a result row that names another user's
+    -- account never becomes a target, the same rule as the explicit list.
     SELECT array_agg(DISTINCT pp.social_account_id) INTO v_targets
       FROM public.platform_posts pp
+      JOIN public.social_accounts sa ON sa.id = pp.social_account_id
      WHERE pp.post_id = p_post_id
        AND pp.status = 'failed'
-       AND pp.social_account_id IS NOT NULL;
+       AND sa.user_id = p_user_id;
   END IF;
 
   SELECT array_agg(t) INTO v_targets
@@ -248,7 +253,10 @@ BEGIN
   UPDATE public.posts
      SET status = 'pending',
          publish_requested_at = v_requested_at,
-         metadata = coalesce(metadata, '{}'::jsonb) || jsonb_build_object(
+         -- metadata is owner-writable and may hold a non-object; || on a
+         -- scalar or array would build an array instead of adding a key.
+         metadata = (CASE WHEN jsonb_typeof(metadata) = 'object' THEN metadata ELSE '{}'::jsonb END)
+                    || jsonb_build_object(
            'retry_request', jsonb_build_object(
              'requested_at', v_requested_at,
              'account_ids', to_jsonb(v_targets),

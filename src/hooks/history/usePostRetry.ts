@@ -106,10 +106,7 @@ export function usePostRetry() {
     if (!retryDialogPost || retrySelectedAccountIds.length === 0) return;
     setRetryLoading(true);
     try {
-      const { error: updateError } = await supabase.from("posts").update({
-        metadata: { ...(retryDialogPost.metadata || {}), selected_account_ids: retrySelectedAccountIds },
-      }).eq("id", retryDialogPost.id);
-      if (updateError) throw updateError;
+      // The retry request records these accounts; the post's own selection stays as composed.
       await submitRetry(retryDialogPost.id, retrySelectedAccountIds);
       notifyRetrySubmitted();
       invalidatePostQueries(queryClient);

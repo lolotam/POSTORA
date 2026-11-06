@@ -16,6 +16,7 @@ import {
   refreshPinterestToken
 } from '../_shared/social-auth.ts';
 import { metaRefreshStrategy } from '../_shared/refreshEligibility.ts';
+import { redactSensitive } from '../_shared/logging.ts';
 
 /** The lease row this function holds while it runs; see migration 20261031100000. */
 const LEASE_JOB = 'process-scheduled-posts';
@@ -339,7 +340,8 @@ Deno.serve(async (req) => {
       } catch (postError: unknown) {
         console.error(`Error processing post ${post.id}:`, postError);
 
-        const errorMsg = postError instanceof Error ? postError.message : 'Unknown error';
+        // Persisted in system_logs below, so it goes through the shared redactor first.
+        const errorMsg = redactSensitive(postError instanceof Error ? postError.message : 'Unknown error') as string;
 
         // A publish request stays queued: the owner's request was accepted, and a retry's failed
         // results are already cleared, so `failed` would leave nothing to retry. The next run

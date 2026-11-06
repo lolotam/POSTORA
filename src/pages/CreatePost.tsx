@@ -458,6 +458,9 @@ export default function CreatePost() {
         platforms: platformsForInsert,
         media_file_ids: mediaFileIds.length > 0 ? mediaFileIds : null,
         scheduled_at: scheduleEnabled && scheduledAt ? scheduledAt.toISOString() : null,
+        // Recorded with the save, new or edited, so the scheduler publishes the post even if
+        // enqueue-post-publish is never reached. The database pins it to its own clock.
+        publish_requested_at: scheduleEnabled && scheduledAt ? null : new Date().toISOString(),
         status: scheduleEnabled && scheduledAt ? "scheduled" : "pending",
         metadata: {
           ...platformSettings.buildPostMetadata(),
@@ -481,7 +484,7 @@ export default function CreatePost() {
         // Create new post (DB trigger also enforces quota server-side)
         const { data, error } = await supabase
           .from("posts")
-          .insert({ ...postPayload, publish_requested_at: scheduleEnabled && scheduledAt ? null : new Date().toISOString() })
+          .insert(postPayload)
           .select()
           .single();
         if (error) {

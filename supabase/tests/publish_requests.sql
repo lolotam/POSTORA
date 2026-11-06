@@ -24,6 +24,8 @@ DECLARE
   p_resched   uuid := 'c0000000-0000-4000-8000-00000000000b';
   p_feed_ok   uuid := 'c0000000-0000-4000-8000-00000000000e';
   p_all_ok    uuid := 'c0000000-0000-4000-8000-00000000000f';
+  p_foreign   uuid := 'c0000000-0000-4000-8000-000000000010';
+  p_array_md  uuid := 'c0000000-0000-4000-8000-000000000011';
   v_stamp timestamptz;
   v_result jsonb;
   v_rows int;
@@ -64,6 +66,11 @@ BEGIN
     'T1 an inserted request time is pinned to now()';
   ASSERT (SELECT publish_requested_at FROM public.posts WHERE id = p_new) IS NULL,
     'T2 a post inserted without a request keeps it NULL';
+  -- T3: an edit that saves the post for immediate publishing is pinned the same way.
+  UPDATE public.posts SET publish_requested_at = now() + interval '3 hours' WHERE id = p_new;
+  ASSERT (SELECT publish_requested_at FROM public.posts WHERE id = p_new) = now(),
+    'T3 an edited request time is pinned to now()';
+  UPDATE public.posts SET publish_requested_at = NULL WHERE id = p_new;
 
   -- I1-I4: "Publish now" on an unscheduled pending post.
   v_stamp := public.request_immediate_publish(p_new, u_a);
@@ -125,10 +132,13 @@ BEGIN
   ASSERT v_result->>'reason' = 'not_retryable', 'R7 a second retry of a queued post is refused';
 
   -- R7b: "Publish now" on a queued retry keeps the retry's stamp and marker.
+  -- The fixture ages the stamp, which the pin trigger would reset to now().
+  PERFORM set_config('session_replication_role', 'replica', true);
   UPDATE public.posts
      SET publish_requested_at = now() - interval '1 minute',
          metadata = jsonb_set(metadata, '{retry_request,requested_at}', to_jsonb(now() - interval '1 minute'))
    WHERE id = p_failed;
+  PERFORM set_config('session_replication_role', 'origin', true);
   ASSERT public.request_immediate_publish(p_failed, u_a) = now() - interval '1 minute',
     'R7b publish-now returns the queued retry''s stamp instead of orphaning its marker';
   ASSERT (SELECT publish_requested_at FROM public.posts WHERE id = p_failed) = now() - interval '1 minute',
@@ -195,6 +205,27 @@ BEGIN
   UPDATE public.posts SET action_claimed_at = now() - interval '20 minutes' WHERE id = p_leased;
   ASSERT public.request_post_retry(p_leased, u_a)->>'status' = 'accepted',
     'R17 an expired lease no longer blocks a retry';
+
+  -- R20: a failed result naming another user's account is never an inferred target.
+  INSERT INTO public.posts (id, user_id, platforms, status, source)
+  VALUES (p_foreign, u_a, ARRAY['facebook'], 'failed', 'manual');
+  INSERT INTO public.platform_posts (post_id, social_account_id, platform, status) VALUES
+    (p_foreign, acct_fb, 'facebook', 'failed'),
+    (p_foreign, acct_b,  'facebook', 'failed');
+  ASSERT public.request_post_retry(p_foreign, u_a)->'account_ids' = to_jsonb(ARRAY[acct_fb]),
+    'R20 inferred targets keep only the owner''s accounts';
+  ASSERT EXISTS (SELECT 1 FROM public.platform_posts WHERE post_id = p_foreign AND social_account_id = acct_b),
+    'R20b the other user''s result row is left alone';
+
+  -- R21: metadata that is not an object is replaced, so the marker is a real key.
+  INSERT INTO public.posts (id, user_id, platforms, status, source, metadata)
+  VALUES (p_array_md, u_a, ARRAY['facebook'], 'failed', 'manual', '["x"]'::jsonb);
+  INSERT INTO public.platform_posts (post_id, social_account_id, platform, status)
+  VALUES (p_array_md, acct_fb, 'facebook', 'failed');
+  ASSERT public.request_post_retry(p_array_md, u_a)->>'status' = 'accepted', 'R21 retry accepted';
+  ASSERT (SELECT jsonb_typeof(metadata) = 'object' AND metadata ? 'retry_request'
+            FROM public.posts WHERE id = p_array_md),
+    'R21b the retry marker is stored as an object key';
 
   -- M1: a malformed retry marker written by the owner does not break "Publish now".
   INSERT INTO public.posts (id, user_id, platforms, status, source, metadata)

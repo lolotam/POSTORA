@@ -18,11 +18,11 @@ Deno.test("due posts keep query order and carry the matching claim expectation",
   ]);
 });
 
-Deno.test("a post due by schedule and request is kicked once using the scheduled snapshot", () => {
+Deno.test("a post due by schedule and request is kicked once under its request", () => {
   const scheduled = { id: "both", scheduled_at: "2026-11-06T09:00:00Z", publish_requested_at: null };
   const requested = { ...scheduled, publish_requested_at: "2026-11-06T10:00:00Z" };
   assertEquals(mergeDuePosts([scheduled], [requested, requested]), [
-    { post: scheduled, expectation: { kind: "scheduled", value: scheduled.scheduled_at } },
+    { post: requested, expectation: { kind: "requested", value: requested.publish_requested_at } },
   ]);
 });
 

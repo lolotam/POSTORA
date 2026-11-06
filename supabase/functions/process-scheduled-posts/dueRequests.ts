@@ -6,20 +6,25 @@ interface DuePost {
 
 type DueExpectation = { kind: "scheduled"; value: string } | { kind: "requested"; value: string };
 
-/** Each query excludes null stamps; keep the scheduled snapshot when both queries see a post. */
+/**
+ * Each query excludes null stamps. When both queries see a post, its request wins: a failed
+ * kick then leaves the request queued instead of marking the post failed, which matters for a
+ * retry whose failed results the request already cleared.
+ */
 export function mergeDuePosts<S extends DuePost, R extends DuePost>(
   scheduled: S[],
   requested: R[],
 ): Array<{ post: S | R; expectation: DueExpectation }> {
+  const requestedById = new Map(requested.map((post) => [post.id, post]));
   const seen = new Set<string>();
   const due: Array<{ post: S | R; expectation: DueExpectation }> = [];
-  for (const [kind, posts] of [["scheduled", scheduled], ["requested", requested]] as const) {
-    for (const post of posts) {
-      if (seen.has(post.id)) continue;
-      seen.add(post.id);
-      const value = kind === "scheduled" ? post.scheduled_at! : post.publish_requested_at!;
-      due.push({ post, expectation: { kind, value } });
-    }
+  for (const candidate of [...scheduled, ...requested]) {
+    if (seen.has(candidate.id)) continue;
+    seen.add(candidate.id);
+    const request = requestedById.get(candidate.id);
+    due.push(request
+      ? { post: request, expectation: { kind: "requested", value: request.publish_requested_at! } }
+      : { post: candidate, expectation: { kind: "scheduled", value: candidate.scheduled_at! } });
   }
   return due;
 }
