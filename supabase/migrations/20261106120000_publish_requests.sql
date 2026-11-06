@@ -70,6 +70,11 @@ CREATE TRIGGER trg_posts_pin_publish_requested_at
 -- A scheduled post published early gets scheduled_at = now() as well, which is
 -- what "Publish now" on the Scheduled page always wrote: the post then shows at
 -- the time it actually went out. An unscheduled post keeps scheduled_at NULL.
+--
+-- A post already queued by request_post_retry keeps its request untouched and
+-- the existing stamp is returned: re-stamping would orphan the retry marker,
+-- and the run would then publish to every platform, including accounts that
+-- already succeeded.
 CREATE OR REPLACE FUNCTION public.request_immediate_publish(p_post_id uuid, p_user_id uuid)
 RETURNS timestamptz
 LANGUAGE plpgsql
@@ -80,9 +85,21 @@ DECLARE
   v_requested_at timestamptz;
 BEGIN
   UPDATE public.posts
-     SET publish_requested_at = now(),
-         scheduled_at = CASE WHEN scheduled_at IS NULL THEN NULL ELSE now() END
-   WHERE id = p_post_id
+     SET publish_requested_at = CASE WHEN queued_retry THEN publish_requested_at ELSE now() END,
+         scheduled_at = CASE
+           WHEN queued_retry OR scheduled_at IS NULL THEN scheduled_at
+           ELSE now()
+         END
+    FROM (
+      SELECT p.id AS queued_id,
+             p.publish_requested_at IS NOT NULL
+               AND (p.metadata -> 'retry_request' ->> 'requested_at')::timestamptz
+                   = p.publish_requested_at AS queued_retry
+        FROM public.posts p
+       WHERE p.id = p_post_id
+    ) q
+   WHERE id = q.queued_id
+     AND id = p_post_id
      AND user_id = p_user_id
      AND status IN ('pending', 'scheduled')
      AND source IS DISTINCT FROM 'tiktok_review'

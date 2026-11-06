@@ -118,6 +118,16 @@ BEGIN
   v_result := public.request_post_retry(p_failed, u_a);
   ASSERT v_result->>'reason' = 'not_retryable', 'R7 a second retry of a queued post is refused';
 
+  -- R7b: "Publish now" on a queued retry keeps the retry's stamp and marker.
+  UPDATE public.posts
+     SET publish_requested_at = now() - interval '1 minute',
+         metadata = jsonb_set(metadata, '{retry_request,requested_at}', to_jsonb(now() - interval '1 minute'))
+   WHERE id = p_failed;
+  ASSERT public.request_immediate_publish(p_failed, u_a) = now() - interval '1 minute',
+    'R7b publish-now returns the queued retry''s stamp instead of orphaning its marker';
+  ASSERT (SELECT publish_requested_at FROM public.posts WHERE id = p_failed) = now() - interval '1 minute',
+    'R7c the queued retry''s stamp is unchanged';
+
   -- R8/R9: a partly published post retries only the account that failed.
   v_result := public.request_post_retry(p_partial, u_a);
   ASSERT v_result->'account_ids' = to_jsonb(ARRAY[acct_ig]), 'R8 the successful account is not republished';
