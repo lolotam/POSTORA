@@ -122,7 +122,6 @@ Deno.serve(async (req) => {
       .select('id, user_id, caption, platforms, media_file_ids, scheduled_at, publish_requested_at, metadata')
       .in('status', ['pending', 'scheduled'])
       .not('scheduled_at', 'is', null)
-      .or('source.is.null,source.neq.tiktok_review')
       .lte('scheduled_at', now);
 
     if (fetchError) {
