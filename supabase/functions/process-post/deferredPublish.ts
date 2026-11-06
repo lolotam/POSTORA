@@ -217,12 +217,15 @@ export function deferrableDeadline(deadlineMs: number, workerStartedAtMs: number
  * The timing one account publishes with. Accounts publish one after another, so a single poll
  * budget counted from the request start is spent by the earlier ones: on 2026-11-06 an Instagram
  * feed image created after Threads, Pinterest and a story was failed before Meta was asked once.
- * Each account's first-run budget therefore starts when that account does, cut so its publish
- * still fits in the worker. A resumed run (check once) and a run with no deadline keep theirs.
+ * Each account's first-run budget therefore starts when that account does, cut to the worker's
+ * publish deadline. A deferrable wait is cut further by deferrableDeadline where it polls; a
+ * non-deferrable one (an image, a story) keeps the longer bound, so a request that starts late on
+ * a reused worker still asks Meta. A resumed run (check once) and a run with no deadline keep theirs.
  */
 export function accountTiming(timing: PublishTiming, accountStartedAtMs: number, workerStartedAtMs: number): PublishTiming {
   if (timing.resume || !Number.isFinite(timing.deadlineMs)) return timing;
-  return { ...timing, deadlineMs: deferrableDeadline(pollDeadline(accountStartedAtMs, false), workerStartedAtMs) };
+  const deadlineMs = Math.min(pollDeadline(accountStartedAtMs, false), workerPublishDeadline(workerStartedAtMs));
+  return { ...timing, deadlineMs };
 }
 
 /**

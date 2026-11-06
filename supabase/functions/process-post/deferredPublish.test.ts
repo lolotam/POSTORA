@@ -82,8 +82,18 @@ Deno.test("a later account gets its own poll budget, cut to what its worker can 
   const run = { resume: null, deadlineMs: pollDeadline(worker, false), startedAtMs: worker };
   const accountStart = worker + 42_000;
   assertEquals(accountTiming(run, accountStart, worker).deadlineMs, accountStart + FIRST_RUN_POLL_BUDGET_MS);
-  const lateStart = worker + 70_000;
-  assertEquals(accountTiming(run, lateStart, worker).deadlineMs, worker + WORKER_LIFETIME_MS - PUBLISH_RESERVE_MS);
+  const lateStart = worker + 100_000;
+  assertEquals(accountTiming(run, lateStart, worker).deadlineMs, workerPublishDeadline(worker));
+});
+
+Deno.test("an account starting late on a reused worker still gets a check; a reel still defers early", () => {
+  const worker = 0;
+  const lateRequest = worker + 90_000;
+  const late = accountTiming({ resume: null, deadlineMs: pollDeadline(lateRequest, false) }, lateRequest, worker);
+  // An image or story wait polls against this deadline directly: it is still ahead.
+  assertEquals(late.deadlineMs > lateRequest, true);
+  // A reel's wait is cut where it polls, so it is handed to the reconciler before the publish reserve.
+  assertEquals(deferrableDeadline(late.deadlineMs, worker), worker + WORKER_LIFETIME_MS - PUBLISH_RESERVE_MS);
 });
 
 Deno.test("a resumed run and a run with no deadline keep their own timing per account", () => {
