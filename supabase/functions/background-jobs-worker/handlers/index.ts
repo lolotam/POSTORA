@@ -13,7 +13,7 @@ export function backgroundJobHandlers(admin: SupabaseClient): Record<string, Job
         userId: job.user_id,
         deadlineMs,
       });
-      if (outcome.kind === "continue") return { kind: "continue", progress: outcome.progress };
+      if (outcome.kind === "continue") return outcome;
       if (outcome.kind === "done") return { kind: "done", result: outcome.result };
       return { kind: "failed", error: outcome.error, retryable: outcome.retryable };
     },

@@ -182,6 +182,7 @@ BEGIN
   -- BJ11: the totals are read from the recipient rows, and only a finishing call moves the status.
   SELECT sent, failed, skipped, pending, final_status INTO v_sent, v_failed, v_skipped, v_pending, v_status
     FROM public.refresh_whatsapp_broadcast_totals(b1, false);
+  ASSERT v_status IS NOT DISTINCT FROM 'sending', 'BJ11: a non-finishing call returns sending';
   ASSERT v_sent = 1 AND v_failed = 2 AND v_skipped = 0 AND v_pending = 1, 'BJ11: the counts come from the rows';
   ASSERT (SELECT sent_count = 1 AND failed_count = 2 FROM public.whatsapp_broadcasts WHERE id = b1),
     'BJ11: the counters are written';

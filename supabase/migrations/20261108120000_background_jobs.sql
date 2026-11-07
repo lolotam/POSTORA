@@ -196,7 +196,7 @@ BEGIN
   SET sent_count = v_sent, failed_count = v_failed,
       status = coalesce(v_status, b.status), updated_at = now()
   WHERE b.id = p_broadcast_id;
-  RETURN QUERY SELECT v_sent, v_failed, v_skipped, v_pending, v_status;
+  RETURN QUERY SELECT v_sent, v_failed, v_skipped, v_pending, coalesce(v_status, 'sending');
 END $fn$;
 
 -- Settles every broadcast whose job has failed but that is still 'sending'.

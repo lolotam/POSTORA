@@ -58,7 +58,7 @@ export interface BroadcastChunkPorts {
 
 export type ChunkOutcome =
   | { kind: "done"; result: { sent: number; failed: number; skipped: number; status: string } }
-  | { kind: "continue"; progress: { sent: number; failed: number; skipped: number; pending: number } }
+  | { kind: "continue"; runAfterMs?: number; progress: { sent: number; failed: number; skipped: number; pending: number } }
   | { kind: "failed"; error: string; retryable: boolean };
 
 /** The Meta template body for one recipient. Language defaults to en_US, as before. */
@@ -166,6 +166,7 @@ export async function runBroadcastChunk(
     });
   }
 
+  let transportFailed = false;
   for (const recipient of send) {
     if (ports.now() >= input.deadlineMs) break;
     // Never begin a send that cannot finish inside the reserve.
@@ -188,8 +189,9 @@ export async function runBroadcastChunk(
       // The request was sent but its outcome is unknown. It is never resent.
       console.error("[whatsapp-broadcast] meta request failed", { recipient_id: recipient.id });
       await ports.markRecipientFailed(recipient.id, "outcome_unknown");
-      await ports.sleep(100);
-      continue;
+      // Do not turn a transport outage into terminal failures for the rest of the batch.
+      transportFailed = true;
+      break;
     }
 
     const waMessageId = response.data.messages?.[0]?.id;
@@ -241,6 +243,7 @@ export async function runBroadcastChunk(
   }
   return {
     kind: "continue",
+    ...(transportFailed ? { runAfterMs: 60_000 } : {}),
     progress: {
       sent: totals.sent,
       failed: totals.failed,

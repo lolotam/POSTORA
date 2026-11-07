@@ -292,5 +292,8 @@ describe("useWhatsAppBroadcasts", () => {
     await waitFor(() =>
       expect(invalidate).toHaveBeenCalledWith({ queryKey: ["whatsapp-broadcast-recipients", "b1"] })
     );
+    expect(invalidate.mock.calls.filter(
+      ([arg]) => arg.queryKey?.[0] === "whatsapp-broadcast-recipients",
+    )).toHaveLength(1);
   });
 });

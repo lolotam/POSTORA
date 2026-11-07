@@ -368,3 +368,26 @@ Deno.test("no recipient is begun inside the send reserve", async () => {
     progress: { sent: 0, failed: 0, skipped: 0, pending: 2 },
   });
 });
+
+Deno.test("a transport outage stops after one unknown send and delays only untouched recipients", async () => {
+  const { ports, state } = fakePorts();
+  seed(state, recipients("r1", "r2", "r3"));
+  ports.postTemplate = async () => { throw new Error("transport unavailable"); };
+
+  const outcome = await runBroadcastChunk(ports, { broadcastId: "b1", userId: USER, deadlineMs: DEADLINE });
+
+  assertEquals(state.failed, [{ id: "r1", message: "outcome_unknown" }]);
+  assertEquals(state.calls.filter((call) => call.startsWith("beginSend:")), ["beginSend:r1"]);
+  assertEquals([...state.status], [["r1", "failed"], ["r2", "pending"], ["r3", "pending"]]);
+  assertEquals(outcome, {
+    kind: "continue", runAfterMs: 60_000,
+    progress: { sent: 0, failed: 1, skipped: 0, pending: 2 },
+  });
+
+  // Once transport recovers, the next chunk sends only the untouched recipients.
+  ports.postTemplate = async () => ({ ok: true, data: { messages: [{ id: "wamid" }] } });
+  const recovered = await runBroadcastChunk(ports, { broadcastId: "b1", userId: USER, deadlineMs: DEADLINE });
+  assertEquals(state.sent, ["r2", "r3"]);
+  assertEquals(state.failed, [{ id: "r1", message: "outcome_unknown" }]);
+  assertEquals(recovered.kind, "done");
+});
