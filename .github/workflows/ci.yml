@@ -297,6 +297,15 @@ jobs:
           deno check --node-modules-dir=none "${fn}/generate-image/index.ts" "${fn}/ai-image-worker/index.ts" "${fn}/ai-generation-status/index.ts" "${fn}/generate-video/index.ts"
           deno test --allow-env --allow-read --allow-net=127.0.0.1 --node-modules-dir=none "${fn}/generate-image/" "${fn}/ai-image-worker/" "${fn}/ai-generation-status/" "${fn}/_shared/vercelGateway.test.ts"
 
+      # The background worker claims jobs and the broadcast sends in chunks; both are pure and
+      # need no network and no file system, so the permissions stay at --allow-env.
+      - name: Typecheck and test background jobs and WhatsApp broadcasts
+        run: |
+          set -euo pipefail
+          fn="supabase/functions"
+          deno check --node-modules-dir=none "${fn}/background-jobs-worker/index.ts" "${fn}/whatsapp-broadcast/index.ts"
+          deno test --allow-env --node-modules-dir=none "${fn}/background-jobs-worker/" "${fn}/whatsapp-broadcast/"
+
       # The import map only swaps deno.land std@0.224.0/crypto for the same release published on
       # JSR (pinned to 0.224.0): the deno.land wasm build carries a `.d.mts` types directive that
       # Deno 2.9 cannot load. The deployed function still imports deno.land 0.224.0.

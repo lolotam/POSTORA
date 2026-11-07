@@ -87,3 +87,7 @@ verify_jwt = true
 # Cron and generate-image's service-role kick call it; verifyCronAuth is the gate.
 [functions.ai-image-worker]
 verify_jwt = false
+
+# Cron uses the shared secret; verifyCronAuth remains the authentication gate.
+[functions.background-jobs-worker]
+verify_jwt = false

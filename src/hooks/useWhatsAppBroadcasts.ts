@@ -1,3 +1,4 @@
+import { useEffect, useId, useRef, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
@@ -29,11 +30,31 @@ export interface BroadcastRecipient {
   created_at: string;
 }
 
+/** How often the list is refreshed while a broadcast is sending. */
+const BROADCAST_POLL_MS = 4_000;
+/**
+ * A broadcast nobody touched for this long is not going to finish. The worker would have
+ * failed it as stalled by now, so the poll stops instead of asking forever.
+ */
+const BROADCAST_STALE_MS = 20 * 60 * 1000;
+const EMPTY_BROADCASTS: WhatsAppBroadcast[] = [];
+/** Stable so the realtime effect does not resubscribe on every render. */
+const BROADCASTS_QUERY_KEY = ["whatsapp-broadcasts"];
+
 export function useWhatsAppBroadcasts() {
   const queryClient = useQueryClient();
-  const queryKey = ["whatsapp-broadcasts"];
+  const queryKey = BROADCASTS_QUERY_KEY;
+  const subscriptionId = useId();
+  const [submissionVersion, setSubmissionVersion] = useState(0);
 
-  const { data: broadcasts = [], isLoading } = useQuery({
+  /** Broadcasts this tab is waiting for. */
+  const trackedRef = useRef<Set<string>>(new Set());
+  /** Broadcasts whose final toast was already shown. */
+  const toastedRef = useRef<Set<string>>(new Set());
+  /** The last counts and status seen per broadcast, to spot a change. */
+  const snapshotRef = useRef<Map<string, string>>(new Map());
+
+  const { data: broadcasts = EMPTY_BROADCASTS, isLoading } = useQuery({
     queryKey,
     queryFn: async () => {
       const { data, error } = await supabase
@@ -42,6 +63,15 @@ export function useWhatsAppBroadcasts() {
         .order("created_at", { ascending: false });
       if (error) throw error;
       return (data || []) as WhatsAppBroadcast[];
+    },
+    refetchInterval: (query) => {
+      const rows = (query.state.data ?? []) as WhatsAppBroadcast[];
+      const sending = rows.filter((broadcast) => broadcast.status === "sending");
+      if (sending.length === 0) return false;
+      const stale = sending.every(
+        (broadcast) => Date.now() - new Date(broadcast.updated_at).getTime() > BROADCAST_STALE_MS,
+      );
+      return stale ? false : BROADCAST_POLL_MS;
     },
   });
 
@@ -119,9 +149,13 @@ export function useWhatsAppBroadcasts() {
       if (!res.ok) throw new Error(data.error || "Broadcast failed");
       return data;
     },
-    onSuccess: (data) => {
+    onSuccess: (_data, broadcastId) => {
+      // The broadcast is tracked before the list is invalidated: a broadcast that finishes
+      // before the first refetch still has to toast its result exactly once.
+      trackedRef.current.add(broadcastId);
+      setSubmissionVersion((version) => version + 1);
+      toast.success("Broadcast submitted — sending in the background");
       queryClient.invalidateQueries({ queryKey });
-      toast.success(`Broadcast complete: ${data.sent} sent, ${data.failed} failed`);
     },
     onError: (e: Error) => toast.error("Broadcast failed: " + e.message),
   });
@@ -140,6 +174,79 @@ export function useWhatsAppBroadcasts() {
     },
     onError: (e: Error) => toast.error("Delete failed: " + e.message),
   });
+
+  // The final toast and the recipient refresh. Both read the same fresh rows.
+  useEffect(() => {
+    for (const broadcast of broadcasts) {
+      const snapshot = [
+        broadcast.status,
+        broadcast.sent_count,
+        broadcast.failed_count,
+        broadcast.delivered_count,
+      ].join(":");
+      const previous = snapshotRef.current.get(broadcast.id);
+      const unsettledTerminal = trackedRef.current.has(broadcast.id) && !toastedRef.current.has(broadcast.id) &&
+        (broadcast.status === "completed" || broadcast.status === "failed");
+      if ((previous !== undefined && previous !== snapshot) || unsettledTerminal) {
+        queryClient.invalidateQueries({ queryKey: ["whatsapp-broadcast-recipients", broadcast.id] });
+      }
+      snapshotRef.current.set(broadcast.id, snapshot);
+
+      if (broadcast.status === "sending") trackedRef.current.add(broadcast.id);
+      if (broadcast.status !== "completed" && broadcast.status !== "failed") continue;
+      if (!trackedRef.current.has(broadcast.id)) continue;
+      if (toastedRef.current.has(broadcast.id)) continue;
+
+      toastedRef.current.add(broadcast.id);
+      trackedRef.current.delete(broadcast.id);
+      if (broadcast.status === "completed") {
+        toast.success(
+          `Broadcast complete: ${broadcast.sent_count} sent, ${broadcast.failed_count} failed`,
+        );
+      } else {
+        toast.error(`Broadcast failed: ${broadcast.failed_count} failed`);
+      }
+    }
+  }, [broadcasts, queryClient, submissionVersion]);
+
+  // One subscription per hook instance. A shared topic throws on the second `.on()`.
+  useEffect(() => {
+    let active = true;
+    let channel: ReturnType<typeof supabase.channel> | null = null;
+
+    void supabase.auth.getUser()
+      .then(({ data: { user } }) => {
+        if (!active || !user) return;
+        channel = supabase
+          .channel(`whatsapp-broadcasts-${user.id}-${subscriptionId}`)
+          .on(
+            "postgres_changes",
+            {
+              event: "UPDATE",
+              schema: "public",
+              table: "whatsapp_broadcasts",
+              filter: `user_id=eq.${user.id}`,
+            },
+            (payload) => {
+              const changed = payload as { new?: { id?: string } };
+              const id = changed.new?.id;
+              if (id) {
+                queryClient.invalidateQueries({ queryKey: ["whatsapp-broadcast-recipients", id] });
+              }
+              queryClient.invalidateQueries({ queryKey: BROADCASTS_QUERY_KEY });
+            },
+          )
+          .subscribe();
+      })
+      .catch((error: unknown) => {
+        console.error("[whatsapp-broadcasts] realtime subscription failed", error);
+      });
+
+    return () => {
+      active = false;
+      if (channel) void supabase.removeChannel(channel);
+    };
+  }, [queryClient, subscriptionId]);
 
   return {
     broadcasts,

@@ -1,109 +1,214 @@
 import { assertEquals } from "jsr:@std/assert@1";
-import { handleWhatsAppBroadcast, type BroadcastDeps, type BroadcastRecipient } from "./handler.ts";
+import { handleWhatsAppBroadcast, type BroadcastDeps } from "./handler.ts";
 
 const USER = "user-1";
-const PHONE = "+965 5000-1111";
-const OTHER = "96550002222";
-
-function recipient(id: string, phone_number: string): BroadcastRecipient {
-  return { id, phone_number };
-}
+const BROADCAST_ID = "11111111-1111-4111-8111-111111111111";
 
 function deps(extra: Partial<BroadcastDeps> = {}) {
   const gate = {
-    graph: 0,
-    sending: 0,
-    lookups: [] as Array<{ userId: string; phones: string[] }>,
-    logs: [] as Array<{ reason: string; metadata: Record<string, unknown> }>,
-    skipped: [] as string[][],
+    kicks: 0,
+    refusals: [] as Array<{ userId: string; broadcastId: string }>,
+    logRecipientReadFailure: async (userId: string, broadcastId: string) => {
+      gate.refusals.push({ userId, broadcastId });
+    },
+    starts: [] as string[],
     authenticate: async () => ({ userId: USER }),
     loadBroadcast: async () => ({
-      id: "b1", status: "pending", name: "Promo", template_name: "hello",
-      template_components: { language: "en_US" }, sent_count: 0, failed_count: 0,
+      id: BROADCAST_ID,
+      status: "pending",
+      name: "Promo",
+      template_name: "hello",
+      template_components: { language: "en_US" },
+      sent_count: 0,
+      failed_count: 0,
     }),
-    loadWhatsAppAccounts: async () => [{ access_token: "cloud-token", platform_user_id: "phone-number-id", account_metadata: {} }],
-    loadPendingRecipients: async () => [recipient("r1", PHONE), recipient("r2", OTHER)],
-    markSending: async () => { gate.sending += 1; },
-    skipRecipients: async (_broadcastId: string, ids: string[]) => { gate.skipped.push(ids); },
-    markRecipientSent: async () => {},
-    markRecipientFailed: async () => {},
-    insertOutbound: async () => {},
-    finish: async () => {},
-    optedOutPhones: async (userId: string, phones: string[]) => {
-      gate.lookups.push({ userId, phones });
-      return new Set<string>();
+    loadWhatsAppAccounts: async () => [
+      { access_token: "cloud-token", platform_user_id: "phone-number-id", account_metadata: {} },
+    ],
+    hasPendingRecipients: async () => true,
+    startBroadcast: async (_userId: string, broadcastId: string) => {
+      gate.starts.push(broadcastId);
+      return "job-1";
     },
-    logSendRefused: async (input: { reason: string; metadata: Record<string, unknown> }) => {
-      gate.logs.push({ reason: input.reason, metadata: input.metadata });
+    kickWorker: async () => {
+      gate.kicks += 1;
     },
-    postTemplate: async () => {
-      gate.graph += 1;
-      return { ok: true, data: { messages: [{ id: "wamid" }] } };
-    },
-    sleep: async () => {},
   };
   return Object.assign(gate, extra);
 }
 
-function request(body: Record<string, unknown> = { broadcast_id: "b1" }): Request {
-  return new Request("https://api.example/whatsapp-broadcast", { method: "POST", body: JSON.stringify(body) });
+function request(body: Record<string, unknown> = { broadcast_id: BROADCAST_ID }): Request {
+  return new Request("https://api.example/whatsapp-broadcast", {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
 }
 
-Deno.test("broadcast lookup failure returns 500, sends nothing, and does not mark the broadcast sending", async () => {
+Deno.test("a valid send answers 202 with the job id and kicks the worker", async () => {
+  const gate = deps();
+
+  const response = await handleWhatsAppBroadcast(request(), gate);
+
+  assertEquals(response.status, 202);
+  assertEquals(await response.json(), {
+    accepted: true,
+    jobId: "job-1",
+    broadcast_id: BROADCAST_ID,
+    status: "sending",
+  });
+  assertEquals(gate.kicks, 1);
+  assertEquals(gate.starts, [BROADCAST_ID]);
+});
+
+Deno.test("a broadcast that is not pending answers 400 as before", async () => {
   const gate = deps({
-    optedOutPhones: async (userId, phones) => {
-      gate.lookups.push({ userId, phones });
-      throw new Error("opt_out_lookup_failed");
+    loadBroadcast: async () => ({
+      id: BROADCAST_ID,
+      status: "sending",
+      name: "Promo",
+      template_name: "hello",
+      template_components: null,
+      sent_count: 0,
+      failed_count: 0,
+    }),
+  });
+
+  const response = await handleWhatsAppBroadcast(request(), gate);
+
+  assertEquals(response.status, 400);
+  assertEquals(await response.json(), { error: "Broadcast already sending" });
+  assertEquals(gate.kicks, 0);
+});
+
+Deno.test("a missing broadcast answers 404", async () => {
+  const gate = deps({ loadBroadcast: async () => null });
+
+  const response = await handleWhatsAppBroadcast(request(), gate);
+
+  assertEquals(response.status, 404);
+  assertEquals(await response.json(), { error: "Broadcast not found" });
+});
+
+Deno.test("the loser of two starts answers 409 and never kicks", async () => {
+  const gate = deps({ startBroadcast: async () => null });
+
+  const response = await handleWhatsAppBroadcast(request(), gate);
+
+  assertEquals(response.status, 409);
+  assertEquals(await response.json(), { error: "Broadcast already started" });
+  assertEquals(gate.kicks, 0);
+});
+
+Deno.test("QR-only credentials keep their 400 code", async () => {
+  const gate = deps({
+    loadWhatsAppAccounts: async () => [
+      { access_token: null, platform_user_id: null, account_metadata: { connection_mode: "evolution_qr" } },
+    ],
+  });
+
+  const response = await handleWhatsAppBroadcast(request(), gate);
+
+  assertEquals(response.status, 400);
+  const body = await response.json() as { code: string };
+  assertEquals(body.code, "BROADCAST_REQUIRES_CLOUD_API");
+});
+
+Deno.test("incomplete cloud credentials keep their 400 code", async () => {
+  const gate = deps({
+    loadWhatsAppAccounts: async () => [
+      { access_token: "cloud-token", platform_user_id: null, account_metadata: {} },
+    ],
+  });
+
+  const response = await handleWhatsAppBroadcast(request(), gate);
+
+  assertEquals(response.status, 400);
+  const body = await response.json() as { code: string };
+  assertEquals(body.code, "BROADCAST_REQUIRES_CLOUD_API");
+});
+
+Deno.test("no connected whatsapp account keeps its 400 code", async () => {
+  const gate = deps({ loadWhatsAppAccounts: async () => [] });
+
+  const response = await handleWhatsAppBroadcast(request(), gate);
+
+  assertEquals(response.status, 400);
+  const body = await response.json() as { code: string };
+  assertEquals(body.code, "NO_WHATSAPP_ACCOUNT");
+});
+
+Deno.test("no pending recipients answers 400", async () => {
+  const gate = deps({ hasPendingRecipients: async () => false });
+
+  const response = await handleWhatsAppBroadcast(request(), gate);
+
+  assertEquals(response.status, 400);
+  assertEquals(await response.json(), { error: "No pending recipients" });
+  assertEquals(gate.kicks, 0);
+});
+
+Deno.test("a recipient read error records its refusal before answering 500", async () => {
+  const gate = deps({ hasPendingRecipients: async () => null });
+
+  const response = await handleWhatsAppBroadcast(request(), gate);
+
+  assertEquals(response.status, 500);
+  assertEquals(gate.refusals, [{ userId: USER, broadcastId: BROADCAST_ID }]);
+  assertEquals(gate.starts, []);
+  assertEquals(await response.json(), { error: "Could not read recipients" });
+  assertEquals(gate.kicks, 0);
+});
+
+Deno.test("a non-uuid broadcast_id answers 400", async () => {
+  const gate = deps();
+
+  const response = await handleWhatsAppBroadcast(request({ broadcast_id: "b1" }), gate);
+
+  assertEquals(response.status, 400);
+  assertEquals(await response.json(), { error: "broadcast_id required" });
+  assertEquals(gate.kicks, 0);
+});
+
+Deno.test("a missing broadcast_id answers 400", async () => {
+  const gate = deps();
+
+  const response = await handleWhatsAppBroadcast(request({}), gate);
+
+  assertEquals(response.status, 400);
+  assertEquals(await response.json(), { error: "broadcast_id required" });
+});
+
+Deno.test("a kick that throws still answers 202", async () => {
+  const gate = deps({
+    kickWorker: async () => {
+      throw new Error("kick failed");
     },
   });
-  const response = await handleWhatsAppBroadcast(request({ broadcast_id: "b1", user_id: "someone-else" }), gate);
-  assertEquals(response.status, 500);
-  assertEquals(await response.json(), { error: "opt_out_lookup_failed" });
-  assertEquals(gate.graph, 0);
-  assertEquals(gate.sending, 0);
-  assertEquals(gate.lookups, [{ userId: USER, phones: [PHONE, OTHER] }]);
-  assertEquals(gate.logs[0]?.reason, "opt_out_lookup_failed");
-  assertEquals(JSON.stringify(gate.logs).includes("50001111"), false);
+
+  const response = await handleWhatsAppBroadcast(request(), gate);
+
+  assertEquals(response.status, 202);
+  assertEquals((await response.json() as { accepted: boolean }).accepted, true);
 });
 
-Deno.test("broadcast skip-write failure returns 500 before any send", async () => {
+Deno.test("an unauthenticated request answers 401", async () => {
   const gate = deps({
-    loadPendingRecipients: async () => [recipient("r1", PHONE)],
-    optedOutPhones: async () => new Set(["96550001111"]),
-    skipRecipients: async () => { throw new Error("opt_out_skip_failed"); },
+    authenticate: async () => ({ response: new Response("{}", { status: 401 }) }),
+  });
+
+  const response = await handleWhatsAppBroadcast(request(), gate);
+
+  assertEquals(response.status, 401);
+  assertEquals(gate.kicks, 0);
+});
+
+Deno.test("a refusal log write failure still refuses dispatch", async () => {
+  const gate = deps({
+    hasPendingRecipients: async () => null,
+    logRecipientReadFailure: async () => { throw new Error("audit unavailable"); },
   });
   const response = await handleWhatsAppBroadcast(request(), gate);
   assertEquals(response.status, 500);
-  assertEquals(gate.graph, 0);
-  assertEquals(gate.sending, 0);
-  assertEquals(gate.logs.map((log) => log.reason), ["opt_out_skip_failed"]);
-});
-
-Deno.test("a mixed broadcast sends only the numbers that are not opted out", async () => {
-  const sent: string[] = [];
-  const gate = deps({
-    optedOutPhones: async () => new Set(["96550001111"]),
-    postTemplate: async (_phoneNumberId, _token, body) => {
-      gate.graph += 1;
-      sent.push(String(body.to));
-      return { ok: true, data: { messages: [{ id: "wamid" }] } };
-    },
-  });
-  const response = await handleWhatsAppBroadcast(request(), gate);
-  assertEquals(response.status, 200);
-  assertEquals(await response.json(), { success: true, sent: 1, failed: 0, skipped: 1, status: "completed" });
-  assertEquals(sent, [OTHER]);
-  assertEquals(gate.skipped, [["r1"]]);
-  assertEquals(gate.logs[0], { reason: "opted_out", metadata: { broadcast_id: "b1", skipped_count: 1 } });
-});
-
-Deno.test("a broadcast whose whole batch opted out completes with nothing sent", async () => {
-  const gate = deps({
-    loadPendingRecipients: async () => [recipient("r1", PHONE), recipient("r2", "+965 5000-2222")],
-    optedOutPhones: async () => new Set(["96550001111", "96550002222"]),
-  });
-  const response = await handleWhatsAppBroadcast(request(), gate);
-  assertEquals(await response.json(), { success: true, sent: 0, failed: 0, skipped: 2, status: "completed" });
-  assertEquals(gate.graph, 0);
-  assertEquals(gate.sending, 0);
+  assertEquals(gate.starts, []);
+  assertEquals(gate.kicks, 0);
 });

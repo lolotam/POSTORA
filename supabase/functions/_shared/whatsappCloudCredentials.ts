@@ -14,6 +14,8 @@
  */
 
 export interface WhatsAppAccountRow {
+  /** The account row id. Optional because callers that only resolve credentials do not need it. */
+  id?: string | null;
   access_token?: string | null;
   platform_user_id?: string | null;
   account_metadata?: Record<string, unknown> | null;

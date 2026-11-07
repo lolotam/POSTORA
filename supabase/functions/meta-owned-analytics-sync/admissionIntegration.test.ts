@@ -197,6 +197,8 @@ Deno.test("registered admission and dispatch preserve real SQL fences and durabl
         const accountId = platform === "facebook" ? PAGE : THREADS;
         const providerId = platform === "facebook" ? "772001" : "773001";
         const postId = platform === "facebook" ? `${providerId}_9001` : "7739001";
+        // Keep the synthetic post safely inside the reader's rolling seven-day window.
+        const publishedAt = new Date(Date.now() - 3 * 86_400_000).toISOString();
         const capturedRequests: string[] = [];
         let metricScenario: "normal" | "permission" | "credential" = "normal";
         globalThis.fetch = async (input, init) => {
@@ -206,8 +208,8 @@ Deno.test("registered admission and dispatch preserve real SQL fences and durabl
           assertEquals(url.origin, platform === "facebook" ? "https://graph.facebook.com" : "https://graph.threads.net");
           assertEquals(outgoing.headers.get("authorization"), platform === "facebook" ? "Bearer synthetic-page" : "Bearer fixture-rotated");
           const reply = (payload: unknown) => Response.json(payload, { headers: platform === "facebook" ? { "facebook-api-version": "v25.0" } : {} });
-          const post = platform === "facebook" ? { id: postId, created_time: "2026-10-30T12:00:00Z", message: "Synthetic Page post", permalink_url: "https://facebook.com/9001" }
-            : { id: postId, timestamp: "2026-10-30T12:00:00Z", text: "Synthetic Threads post", permalink: "https://threads.net/9001" };
+          const post = platform === "facebook" ? { id: postId, created_time: publishedAt, message: "Synthetic Page post", permalink_url: "https://facebook.com/9001" }
+            : { id: postId, timestamp: publishedAt, text: "Synthetic Threads post", permalink: "https://threads.net/9001" };
           if (url.pathname.endsWith("/posts") || url.pathname.endsWith("/threads")) return reply({ data: [post] });
           if (url.pathname.endsWith(`/${postId}`)) return reply(post);
           const metrics = url.searchParams.get("metric")!.split(",");
@@ -250,6 +252,7 @@ Deno.test("registered admission and dispatch preserve real SQL fences and durabl
         assertEquals(canonical.platform, platform);
         assertEquals(canonical.metrics.find((metric: { definition: { key: string } }) => metric.definition.key === (platform === "facebook" ? "views" : "profile_views")).current,
           { status: "partial", value: 0, coverage: { availableDays: 2, expectedDays: 7 } });
+        assertEquals(canonical.posts.items.length, 1, "The synthetic post remains inside the requested rolling window");
         assertEquals(canonical.posts.items[0].metrics.find((metric: { definition: { key: string } }) => metric.definition.key === "views").current, { status: "available", value: 0 });
         if (platform === "threads") assertEquals(canonical.metrics.find((metric: { definition: { key: string } }) => metric.definition.key === "followers").current,
           { status: "available", value: 0 }, "A real current point sample is usable on its capture day without pretending it is a period total");
