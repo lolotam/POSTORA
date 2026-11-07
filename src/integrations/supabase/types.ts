@@ -2976,6 +2976,63 @@ export type Database = {
         }
         Relationships: []
       }
+      background_jobs: {
+        Row: {
+          attempts: number
+          claim_token: string | null
+          claimed_at: string | null
+          created_at: string
+          error: string | null
+          finished_at: string | null
+          id: string
+          kind: string
+          max_attempts: number
+          payload: Json
+          progress: Json | null
+          result: Json | null
+          run_after: string
+          status: string
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          attempts?: number
+          claim_token?: string | null
+          claimed_at?: string | null
+          created_at?: string
+          error?: string | null
+          finished_at?: string | null
+          id?: string
+          kind: string
+          max_attempts?: number
+          payload?: Json
+          progress?: Json | null
+          result?: Json | null
+          run_after?: string
+          status?: string
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          attempts?: number
+          claim_token?: string | null
+          claimed_at?: string | null
+          created_at?: string
+          error?: string | null
+          finished_at?: string | null
+          id?: string
+          kind?: string
+          max_attempts?: number
+          payload?: Json
+          progress?: Json | null
+          result?: Json | null
+          run_after?: string
+          status?: string
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
       backup_codes: {
         Row: {
           code_hash: string
@@ -12835,6 +12892,67 @@ export type Database = {
       write_meta_page_reconciliation_success: {
         Args: { p_user_id: string; p_payload: Json }
         Returns: Json
+      }
+      enqueue_background_job: {
+        Args: { p_kind: string; p_payload: Json; p_user_id: string }
+        Returns: string
+      }
+      start_whatsapp_broadcast: {
+        Args: { p_broadcast_id: string; p_user_id: string }
+        Returns: string
+      }
+      claim_background_job: {
+        Args: { p_kinds: string[]; p_lease: string }
+        Returns: {
+          attempts: number
+          claim_token: string
+          id: string
+          kind: string
+          payload: Json
+          user_id: string
+        }[]
+      }
+      continue_background_job: {
+        Args: {
+          p_id: string
+          p_payload: Json
+          p_progress: Json
+          p_run_after: string
+          p_token: string
+        }
+        Returns: boolean
+      }
+      complete_background_job: {
+        Args: {
+          p_error: string
+          p_id: string
+          p_result: Json
+          p_status: string
+          p_token: string
+        }
+        Returns: boolean
+      }
+      begin_broadcast_recipient_send: {
+        Args: { p_recipient_id: string }
+        Returns: boolean
+      }
+      fail_stale_broadcast_sends: {
+        Args: { p_broadcast_id: string }
+        Returns: number
+      }
+      refresh_whatsapp_broadcast_totals: {
+        Args: { p_broadcast_id: string; p_finish: boolean }
+        Returns: {
+          failed: number
+          final_status: string
+          pending: number
+          sent: number
+          skipped: number
+        }[]
+      }
+      sweep_background_jobs: {
+        Args: Record<PropertyKey, never>
+        Returns: number
       }
     }
     Enums: {
