@@ -324,7 +324,7 @@ Every refusal is **audited**, and a refusal is never an empty success.
 
 | Refusal | Where the row is written | Reason code |
 |---|---|---|
-| the claim admitted nothing | the accepted SQL, in the committed transaction | `collection_not_eligible` / `collection_queue_empty` |
+| the claim admitted none of the due work (an idle queue writes no row) | the accepted SQL, in the committed transaction | `collection_not_eligible` / `collection_queue_empty` |
 | the enqueue refused a target | the accepted SQL, in the committed transaction | `collection_not_eligible` |
 | the provider permit refused a call | the accepted SQL, in the committed transaction | the closed permit refusal union |
 | the permit could not be read at all | the Edge adapter, in a **separate** bounded call | `permit_read_failed` / `malformed_envelope` / `schema_unavailable` |
