@@ -79,6 +79,17 @@ function broadcastDeps(): BroadcastDeps {
       if (error) throw new Error(`start broadcast: ${error.message}`);
       return typeof data === "string" ? data : null;
     },
+    async logRecipientReadFailure(userId, broadcastId) {
+      const { error } = await admin.from("system_logs").insert({
+        level: "error",
+        category: "system",
+        source: "whatsapp-broadcast",
+        message: "Broadcast refused: recipient read failed",
+        user_id: userId,
+        metadata: { broadcast_id: broadcastId, reason: "recipient_read_failed" },
+      });
+      if (error) throw new Error("Could not record broadcast refusal");
+    },
     kickWorker() {
       return kickBackgroundJobsWorker(fetch, supabaseUrl, serviceRoleKey);
     },

@@ -7,6 +7,10 @@ const BROADCAST_ID = "11111111-1111-4111-8111-111111111111";
 function deps(extra: Partial<BroadcastDeps> = {}) {
   const gate = {
     kicks: 0,
+    refusals: [] as Array<{ userId: string; broadcastId: string }>,
+    logRecipientReadFailure: async (userId: string, broadcastId: string) => {
+      gate.refusals.push({ userId, broadcastId });
+    },
     starts: [] as string[],
     authenticate: async () => ({ userId: USER }),
     loadBroadcast: async () => ({
@@ -143,12 +147,14 @@ Deno.test("no pending recipients answers 400", async () => {
   assertEquals(gate.kicks, 0);
 });
 
-Deno.test("a recipient read error answers 500", async () => {
+Deno.test("a recipient read error records its refusal before answering 500", async () => {
   const gate = deps({ hasPendingRecipients: async () => null });
 
   const response = await handleWhatsAppBroadcast(request(), gate);
 
   assertEquals(response.status, 500);
+  assertEquals(gate.refusals, [{ userId: USER, broadcastId: BROADCAST_ID }]);
+  assertEquals(gate.starts, []);
   assertEquals(await response.json(), { error: "Could not read recipients" });
   assertEquals(gate.kicks, 0);
 });
@@ -193,5 +199,16 @@ Deno.test("an unauthenticated request answers 401", async () => {
   const response = await handleWhatsAppBroadcast(request(), gate);
 
   assertEquals(response.status, 401);
+  assertEquals(gate.kicks, 0);
+});
+
+Deno.test("a refusal log write failure still refuses dispatch", async () => {
+  const gate = deps({
+    hasPendingRecipients: async () => null,
+    logRecipientReadFailure: async () => { throw new Error("audit unavailable"); },
+  });
+  const response = await handleWhatsAppBroadcast(request(), gate);
+  assertEquals(response.status, 500);
+  assertEquals(gate.starts, []);
   assertEquals(gate.kicks, 0);
 });

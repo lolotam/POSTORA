@@ -29,7 +29,7 @@ export const BROADCAST_META_TIMEOUT_MS = 15_000;
 
 export interface BroadcastChunkPorts {
   now(): number;
-  loadBroadcast(broadcastId: string): Promise<(BroadcastRecord & { user_id: string }) | null>;
+  loadBroadcast(broadcastId: string, userId: string): Promise<(BroadcastRecord & { user_id: string }) | null>;
   loadWhatsAppAccounts(userId: string): Promise<WhatsAppAccountRow[]>;
   failStaleSends(broadcastId: string): Promise<number>;
   loadPendingRecipients(broadcastId: string, limit: number): Promise<BroadcastRecipient[]>;
@@ -88,9 +88,9 @@ export function templateMessageBody(
 
 export async function runBroadcastChunk(
   ports: BroadcastChunkPorts,
-  input: { broadcastId: string; deadlineMs: number },
+  input: { broadcastId: string; userId: string; deadlineMs: number },
 ): Promise<ChunkOutcome> {
-  const broadcast = await ports.loadBroadcast(input.broadcastId);
+  const broadcast = await ports.loadBroadcast(input.broadcastId, input.userId);
   if (!broadcast || broadcast.status !== "sending") {
     // The broadcast was deleted or already terminal. There is nothing left to send.
     return {

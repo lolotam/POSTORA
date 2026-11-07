@@ -10,6 +10,7 @@ export function backgroundJobHandlers(admin: SupabaseClient): Record<string, Job
     whatsapp_broadcast_chunk: async (job, deadlineMs) => {
       const outcome = await runBroadcastChunk(createBroadcastChunkPorts(admin), {
         broadcastId: String(job.payload.broadcast_id),
+        userId: job.user_id,
         deadlineMs,
       });
       if (outcome.kind === "continue") return { kind: "continue", progress: outcome.progress };

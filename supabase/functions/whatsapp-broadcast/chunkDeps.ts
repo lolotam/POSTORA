@@ -21,11 +21,12 @@ export function createBroadcastChunkPorts(admin: SupabaseClient): BroadcastChunk
   return {
     now: () => Date.now(),
 
-    async loadBroadcast(broadcastId) {
+    async loadBroadcast(broadcastId, userId) {
       const { data, error } = await admin
         .from("whatsapp_broadcasts")
         .select("id, user_id, status, name, template_name, template_components, sent_count, failed_count")
         .eq("id", broadcastId)
+        .eq("user_id", userId)
         .maybeSingle();
       if (error) throw new Error(`load broadcast: ${error.message}`);
       return data ?? null;

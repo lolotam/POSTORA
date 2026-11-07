@@ -139,7 +139,7 @@ Deno.test("sends every pending recipient once and finishes completed", async () 
   const { ports, state } = fakePorts();
   seed(state, recipients("r1", "r2", "r3"));
 
-  const outcome = await runBroadcastChunk(ports, { broadcastId: "b1", deadlineMs: DEADLINE });
+  const outcome = await runBroadcastChunk(ports, { broadcastId: "b1", userId: USER, deadlineMs: DEADLINE });
 
   assertEquals(outcome, {
     kind: "done",
@@ -161,7 +161,7 @@ Deno.test("a recipient another worker began is not posted", async () => {
     return true;
   };
 
-  const outcome = await runBroadcastChunk(ports, { broadcastId: "b1", deadlineMs: DEADLINE });
+  const outcome = await runBroadcastChunk(ports, { broadcastId: "b1", userId: USER, deadlineMs: DEADLINE });
 
   assertEquals(state.sent, ["r2", "r3"]);
   assertEquals(state.posted.length, 2);
@@ -181,7 +181,7 @@ Deno.test("stops at the deadline and continues", async () => {
     return result;
   };
 
-  const outcome = await runBroadcastChunk(ports, { broadcastId: "b1", deadlineMs: DEADLINE });
+  const outcome = await runBroadcastChunk(ports, { broadcastId: "b1", userId: USER, deadlineMs: DEADLINE });
 
   assertEquals(outcome, {
     kind: "continue",
@@ -194,7 +194,7 @@ Deno.test("a stale sending row is failed before any send", async () => {
   const { ports, state } = fakePorts();
   seed(state, recipients("r1"));
 
-  await runBroadcastChunk(ports, { broadcastId: "b1", deadlineMs: DEADLINE });
+  await runBroadcastChunk(ports, { broadcastId: "b1", userId: USER, deadlineMs: DEADLINE });
 
   const stale = state.calls.indexOf("failStaleSends");
   const firstSend = state.calls.indexOf("beginSend:r1");
@@ -207,7 +207,7 @@ Deno.test("a Meta error marks the recipient failed with Meta's message", async (
   });
   seed(state, recipients("r1"));
 
-  const outcome = await runBroadcastChunk(ports, { broadcastId: "b1", deadlineMs: DEADLINE });
+  const outcome = await runBroadcastChunk(ports, { broadcastId: "b1", userId: USER, deadlineMs: DEADLINE });
 
   assertEquals(state.failed, [{ id: "r1", message: "Template does not exist" }]);
   assertEquals(outcome.kind, "done");
@@ -221,7 +221,7 @@ Deno.test("a write error after Meta accepted never marks the recipient failed", 
   });
   seed(state, recipients("r1", "r2"));
 
-  const outcome = await runBroadcastChunk(ports, { broadcastId: "b1", deadlineMs: DEADLINE });
+  const outcome = await runBroadcastChunk(ports, { broadcastId: "b1", userId: USER, deadlineMs: DEADLINE });
 
   assertEquals(state.failed, []);
   assertEquals(state.calls.includes("markRecipientFailed:r1"), false);
@@ -237,7 +237,7 @@ Deno.test("all sends failing finishes failed", async () => {
   });
   seed(state, recipients("r1"));
 
-  const outcome = await runBroadcastChunk(ports, { broadcastId: "b1", deadlineMs: DEADLINE });
+  const outcome = await runBroadcastChunk(ports, { broadcastId: "b1", userId: USER, deadlineMs: DEADLINE });
 
   assertEquals(outcome, {
     kind: "done",
@@ -251,7 +251,7 @@ Deno.test("missing credentials fail the job without retry", async () => {
   });
   seed(state, recipients("r1"));
 
-  const outcome = await runBroadcastChunk(ports, { broadcastId: "b1", deadlineMs: DEADLINE });
+  const outcome = await runBroadcastChunk(ports, { broadcastId: "b1", userId: USER, deadlineMs: DEADLINE });
 
   assertEquals(outcome, { kind: "failed", error: "credentials_unavailable", retryable: false });
   assertEquals(state.posted.length, 0);
@@ -265,7 +265,7 @@ Deno.test("opt-out lookup failure fails retryably before any send", async () => 
   });
   seed(state, recipients("r1"));
 
-  const outcome = await runBroadcastChunk(ports, { broadcastId: "b1", deadlineMs: DEADLINE });
+  const outcome = await runBroadcastChunk(ports, { broadcastId: "b1", userId: USER, deadlineMs: DEADLINE });
 
   assertEquals(outcome, { kind: "failed", error: "opt_out_lookup_failed", retryable: true });
   assertEquals(state.posted.length, 0);
@@ -278,7 +278,7 @@ Deno.test("opted-out recipients are skipped and logged, others sent", async () =
   });
   seed(state, recipients("r1", "r2"));
 
-  const outcome = await runBroadcastChunk(ports, { broadcastId: "b1", deadlineMs: DEADLINE });
+  const outcome = await runBroadcastChunk(ports, { broadcastId: "b1", userId: USER, deadlineMs: DEADLINE });
 
   assertEquals(state.status.get("r1"), "skipped");
   assertEquals(state.sent, ["r2"]);
@@ -301,7 +301,7 @@ Deno.test("a broadcast no longer sending is done without sending", async () => {
   });
   seed(state, recipients("r1"));
 
-  const outcome = await runBroadcastChunk(ports, { broadcastId: "b1", deadlineMs: DEADLINE });
+  const outcome = await runBroadcastChunk(ports, { broadcastId: "b1", userId: USER, deadlineMs: DEADLINE });
 
   assertEquals(outcome, {
     kind: "done",
@@ -314,7 +314,7 @@ Deno.test("a missing broadcast is done without sending", async () => {
   const { ports, state } = fakePorts({ loadBroadcast: async () => null });
   seed(state, recipients("r1"));
 
-  const outcome = await runBroadcastChunk(ports, { broadcastId: "b1", deadlineMs: DEADLINE });
+  const outcome = await runBroadcastChunk(ports, { broadcastId: "b1", userId: USER, deadlineMs: DEADLINE });
 
   assertEquals(outcome, {
     kind: "done",
@@ -342,7 +342,7 @@ Deno.test("a hung Meta call is aborted at the deadline and recorded outcome_unkn
   );
   seed(state, recipients("r1"));
 
-  const outcome = await runBroadcastChunk(ports, { broadcastId: "b1", deadlineMs: DEADLINE });
+  const outcome = await runBroadcastChunk(ports, { broadcastId: "b1", userId: USER, deadlineMs: DEADLINE });
 
   assertEquals(state.failed, [{ id: "r1", message: "outcome_unknown" }]);
   assertEquals(state.sent, []);
@@ -357,7 +357,7 @@ Deno.test("no recipient is begun inside the send reserve", async () => {
   seed(state, recipients("r1", "r2"));
 
   const outcome = await runBroadcastChunk(ports, {
-    broadcastId: "b1",
+    broadcastId: "b1", userId: USER,
     deadlineMs: NOW + BROADCAST_SEND_RESERVE_MS - 1,
   });
 

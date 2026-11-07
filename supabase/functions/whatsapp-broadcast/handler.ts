@@ -35,6 +35,7 @@ export interface BroadcastDeps {
   /** The job id, or null when the broadcast was already started. Throws on a database error. */
   startBroadcast(userId: string, broadcastId: string): Promise<string | null>;
   kickWorker(): Promise<void>;
+  logRecipientReadFailure(userId: string, broadcastId: string): Promise<void>;
 }
 
 const broadcastBodySchema = z.object({ broadcast_id: z.string().uuid() });
@@ -85,7 +86,10 @@ export async function handleWhatsAppBroadcast(req: Request, deps: BroadcastDeps)
     }
 
     const hasPending = await deps.hasPendingRecipients(broadcast_id);
-    if (hasPending === null) return json({ error: "Could not read recipients" }, 500);
+    if (hasPending === null) {
+      await deps.logRecipientReadFailure(auth.userId, broadcast_id);
+      return json({ error: "Could not read recipients" }, 500);
+    }
     if (!hasPending) return json({ error: "No pending recipients" }, 400);
 
     // The state flip and the job insert happen in one database transaction. A null job id is the
