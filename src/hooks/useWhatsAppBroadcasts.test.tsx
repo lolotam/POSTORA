@@ -216,7 +216,8 @@ describe("useWhatsAppBroadcasts", () => {
     mocks.fetch.mockResolvedValue(
       jsonResponse(202, { accepted: true, jobId: "job-1", broadcast_id: "b1", status: "sending" }),
     );
-    const { wrapper } = createHarness();
+    const { queryClient, wrapper } = createHarness();
+    const invalidate = vi.spyOn(queryClient, "invalidateQueries");
 
     const { result } = renderHook(() => useWhatsAppBroadcasts(), { wrapper });
     await act(async () => {
@@ -232,6 +233,10 @@ describe("useWhatsAppBroadcasts", () => {
       String(message).startsWith("Broadcast complete")
     );
     expect(finals).toHaveLength(1);
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: ["whatsapp-broadcast-recipients", "b1"] });
+    expect(invalidate.mock.calls.filter(
+      ([arg]) => arg.queryKey?.[0] === "whatsapp-broadcast-recipients",
+    )).toHaveLength(1);
   });
 
   it("a realtime update on the user's broadcasts refetches the list and the recipients", async () => {

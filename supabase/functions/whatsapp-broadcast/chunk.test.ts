@@ -391,3 +391,21 @@ Deno.test("a transport outage stops after one unknown send and delays only untou
   assertEquals(state.failed, [{ id: "r1", message: "outcome_unknown" }]);
   assertEquals(recovered.kind, "done");
 });
+
+for (const components of [{ body_parameters: {} }, { body_parameters: "invalid" }, { body_parameters: [1] }, { language: {} }]) {
+  Deno.test(`invalid stored template is refused before recipient claiming: ${JSON.stringify(components)}`, async () => {
+    const { ports, state } = fakePorts();
+    const load = ports.loadBroadcast;
+    ports.loadBroadcast = async (...args) => ({
+      ...(await load(...args))!,
+      template_components: components as unknown as NonNullable<Awaited<ReturnType<typeof load>>>["template_components"],
+    });
+    seed(state, recipients("r1", "r2"));
+    const outcome = await runBroadcastChunk(ports, { broadcastId: "b1", userId: USER, deadlineMs: DEADLINE });
+    assertEquals(outcome, { kind: "failed", error: "invalid_template", retryable: false });
+    assertEquals(state.calls, []);
+    assertEquals(state.posted, []);
+    assertEquals(state.failed, []);
+    assertEquals([...state.status], [["r1", "pending"], ["r2", "pending"]]);
+  });
+}

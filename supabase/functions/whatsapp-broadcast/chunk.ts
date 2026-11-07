@@ -5,6 +5,7 @@
 // sent again. A recipient becomes 'sending' through a conditional update right before its Meta
 // call, so two workers can never both send it, and a worker that dies leaves exactly one
 // indeterminate row that the next chunk records as 'outcome_unknown'.
+import { z } from "npm:zod@3.23.8";
 import {
   isCloudApiAccount,
   resolveWhatsAppCloudCredentials,
@@ -61,9 +62,17 @@ export type ChunkOutcome =
   | { kind: "continue"; runAfterMs?: number; progress: { sent: number; failed: number; skipped: number; pending: number } }
   | { kind: "failed"; error: string; retryable: boolean };
 
+const broadcastTemplateSchema = z.object({
+  template_name: z.string().min(1),
+  template_components: z.object({
+    language: z.string().min(1).optional(),
+    body_parameters: z.array(z.string()).optional(),
+  }).nullable(),
+});
+
 /** The Meta template body for one recipient. Language defaults to en_US, as before. */
 export function templateMessageBody(
-  broadcast: BroadcastRecord,
+  broadcast: Pick<BroadcastRecord, "template_name" | "template_components">,
   phone: string,
 ): Record<string, unknown> {
   const body: Record<string, unknown> = {
@@ -97,6 +106,11 @@ export async function runBroadcastChunk(
       kind: "done",
       result: { sent: 0, failed: 0, skipped: 0, status: broadcast?.status ?? "missing" },
     };
+  }
+
+  const template = broadcastTemplateSchema.safeParse(broadcast);
+  if (!template.success) {
+    return { kind: "failed", error: "invalid_template", retryable: false };
   }
 
   const accounts = await ports.loadWhatsAppAccounts(broadcast.user_id);
@@ -172,10 +186,10 @@ export async function runBroadcastChunk(
     // Never begin a send that cannot finish inside the reserve.
     if (input.deadlineMs - ports.now() < BROADCAST_SEND_RESERVE_MS) break;
 
+    const body = templateMessageBody(template.data, recipient.phone_number);
     const began = await ports.beginSend(recipient.id);
     if (!began) continue; // another worker owns this recipient
 
-    const body = templateMessageBody(broadcast, recipient.phone_number);
     const timeoutMs = Math.min(
       BROADCAST_META_TIMEOUT_MS,
       Math.max(0, input.deadlineMs - ports.now()),

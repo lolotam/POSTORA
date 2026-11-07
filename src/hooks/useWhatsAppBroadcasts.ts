@@ -183,7 +183,9 @@ export function useWhatsAppBroadcasts() {
         broadcast.delivered_count,
       ].join(":");
       const previous = snapshotRef.current.get(broadcast.id);
-      if (previous !== undefined && previous !== snapshot) {
+      const firstTrackedTerminal = previous === undefined && trackedRef.current.has(broadcast.id) &&
+        (broadcast.status === "completed" || broadcast.status === "failed");
+      if ((previous !== undefined && previous !== snapshot) || firstTrackedTerminal) {
         queryClient.invalidateQueries({ queryKey: ["whatsapp-broadcast-recipients", broadcast.id] });
       }
       snapshotRef.current.set(broadcast.id, snapshot);
