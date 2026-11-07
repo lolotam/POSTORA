@@ -1,7 +1,6 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.49.4";
-import { logSendRefused as writeSendRefused, optedOutPhones as lookupOptedOutPhones } from "../_shared/optOutLookup.ts";
+import { kickBackgroundJobsWorker } from "../_shared/backgroundJobs.ts";
 import { handleWhatsAppBroadcast, type BroadcastDeps } from "./handler.ts";
-import { markRecipientsSkipped } from "./optOut.ts";
 
 function broadcastDeps(): BroadcastDeps {
   const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
@@ -47,64 +46,41 @@ function broadcastDeps(): BroadcastDeps {
         .select("id, status, name, template_name, template_components, sent_count, failed_count")
         .eq("id", broadcastId)
         .eq("user_id", userId)
-        .single();
-      if (error || !data) return null;
-      return data;
+        .maybeSingle();
+      if (error) throw new Error(`load broadcast: ${error.message}`);
+      return data ?? null;
     },
     async loadWhatsAppAccounts(userId) {
-      const { data } = await admin
+      const { data, error } = await admin
         .from("social_accounts")
         .select("platform_user_id, access_token, account_metadata")
         .eq("user_id", userId)
         .eq("platform", "whatsapp")
         .eq("is_active", true)
         .order("connected_at", { ascending: false });
+      if (error) throw new Error(`load accounts: ${error.message}`);
       return data ?? [];
     },
-    async loadPendingRecipients(broadcastId) {
+    async hasPendingRecipients(broadcastId) {
       const { data, error } = await admin
         .from("whatsapp_broadcast_recipients")
-        .select("id, phone_number")
+        .select("id")
         .eq("broadcast_id", broadcastId)
-        .eq("status", "pending");
+        .eq("status", "pending")
+        .limit(1);
       if (error) return null;
-      return data ?? [];
+      return (data ?? []).length > 0;
     },
-    async markSending(broadcastId) {
-      await admin.from("whatsapp_broadcasts").update({ status: "sending" }).eq("id", broadcastId);
-    },
-    skipRecipients(broadcastId, ids) {
-      return markRecipientsSkipped(admin, broadcastId, ids);
-    },
-    async markRecipientSent(id, sentAt) {
-      await admin.from("whatsapp_broadcast_recipients").update({ status: "sent", sent_at: sentAt }).eq("id", id);
-    },
-    async markRecipientFailed(id, errorMessage) {
-      await admin.from("whatsapp_broadcast_recipients").update({ status: "failed", error_message: errorMessage }).eq("id", id);
-    },
-    async insertOutbound(row) {
-      await admin.from("whatsapp_messages").insert(row);
-    },
-    async finish(broadcastId, patch) {
-      await admin.from("whatsapp_broadcasts").update(patch).eq("id", broadcastId);
-    },
-    optedOutPhones(userId, phones) {
-      return lookupOptedOutPhones(admin, userId, phones);
-    },
-    logSendRefused(input) {
-      return writeSendRefused(admin, input);
-    },
-    async postTemplate(phoneNumberId, accessToken, body) {
-      const res = await fetch(`https://graph.facebook.com/v21.0/${phoneNumberId}/messages`, {
-        method: "POST",
-        headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
-        body: JSON.stringify(body),
+    async startBroadcast(userId, broadcastId) {
+      const { data, error } = await admin.rpc("start_whatsapp_broadcast", {
+        p_user_id: userId,
+        p_broadcast_id: broadcastId,
       });
-      const data = await res.json();
-      return { ok: res.ok, data };
+      if (error) throw new Error(`start broadcast: ${error.message}`);
+      return typeof data === "string" ? data : null;
     },
-    sleep(ms) {
-      return new Promise((resolve) => setTimeout(resolve, ms));
+    kickWorker() {
+      return kickBackgroundJobsWorker(fetch, supabaseUrl, serviceRoleKey);
     },
   };
 }
