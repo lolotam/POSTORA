@@ -409,3 +409,24 @@ for (const components of [{ body_parameters: {} }, { body_parameters: "invalid" 
     assertEquals([...state.status], [["r1", "pending"], ["r2", "pending"]]);
   });
 }
+
+for (const components of [{ language: null }, { body_parameters: null }, { language: null, body_parameters: null }, { language: "" }]) {
+  Deno.test(`legacy nullish template fields preserve defaults: ${JSON.stringify(components)}`, async () => {
+    const { ports, state } = fakePorts();
+    const load = ports.loadBroadcast;
+    ports.loadBroadcast = async (...args) => ({
+      ...(await load(...args))!,
+      template_components: components as unknown as NonNullable<Awaited<ReturnType<typeof load>>>["template_components"],
+    });
+    const originalPost = ports.postTemplate;
+    ports.postTemplate = async (...args) => {
+      assertEquals(args[2].template, { name: "hello", language: { code: "en_US" } });
+      return await originalPost(...args);
+    };
+    seed(state, recipients("r1"));
+    const outcome = await runBroadcastChunk(ports, { broadcastId: "b1", userId: USER, deadlineMs: DEADLINE });
+    assertEquals(outcome.kind, "done");
+    assertEquals(state.sent, ["r1"]);
+    assertEquals(state.failed, []);
+  });
+}

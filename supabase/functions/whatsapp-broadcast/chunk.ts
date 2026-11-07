@@ -65,8 +65,8 @@ export type ChunkOutcome =
 const broadcastTemplateSchema = z.object({
   template_name: z.string().min(1),
   template_components: z.object({
-    language: z.string().min(1).optional(),
-    body_parameters: z.array(z.string()).optional(),
+    language: z.string().nullish().transform((value) => value || undefined),
+    body_parameters: z.array(z.string()).nullish().transform((value) => value ?? undefined),
   }).nullable(),
 });
 
