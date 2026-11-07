@@ -9,21 +9,15 @@ import type { WhatsAppAccountRow } from "../_shared/whatsappCloudCredentials.ts"
 import type { BroadcastChunkPorts } from "./chunk.ts";
 import { markRecipientsSkipped } from "./optOut.ts";
 import type { BroadcastRecipient } from "./handler.ts";
-
-/**
- * The client is deliberately loose: a precise builder type makes `deno check` instantiate the
- * Supabase client's generics until it gives up. Same reason as OptOutLookupAdmin.
- */
-export interface ChunkAdmin {
-  from(table: string): any;
-  rpc(fn: string, args?: Record<string, unknown>): any;
-}
+// The same pinned client type the worker hands over. A hand-written builder type would have to
+// be `any` to stay loose, and the Lint/i18n gate counts a new `any` as a regression.
+import type { SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2.7.1";
 
 function asRows<T>(data: unknown): T[] {
   return Array.isArray(data) ? (data as T[]) : [];
 }
 
-export function createBroadcastChunkPorts(admin: ChunkAdmin): BroadcastChunkPorts {
+export function createBroadcastChunkPorts(admin: SupabaseClient): BroadcastChunkPorts {
   return {
     now: () => Date.now(),
 

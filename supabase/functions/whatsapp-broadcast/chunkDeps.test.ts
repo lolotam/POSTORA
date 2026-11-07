@@ -1,4 +1,5 @@
 import { assertEquals, assertRejects } from "jsr:@std/assert@1";
+import type { SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2.7.1";
 import { createBroadcastChunkPorts } from "./chunkDeps.ts";
 
 interface StubResult {
@@ -25,7 +26,7 @@ function failingClient(result: StubResult = { data: null, error: { message: "boo
   return {
     from: () => chain,
     rpc: () => result,
-  };
+  } as unknown as SupabaseClient;
 }
 
 Deno.test("every chunk adapter throws when the database reports an error", async () => {
