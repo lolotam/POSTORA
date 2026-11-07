@@ -239,6 +239,32 @@ describe("useWhatsAppBroadcasts", () => {
     )).toHaveLength(1);
   });
 
+  it("completion cached before the 202 response is processed once despite identical refetch data", async () => {
+    let rows: WhatsAppBroadcast[] = [];
+    mockList(() => rows);
+    let release!: (response: ReturnType<typeof jsonResponse>) => void;
+    mocks.fetch.mockImplementation(() => new Promise((resolve) => { release = resolve; }));
+    const { queryClient, wrapper } = createHarness();
+    const invalidate = vi.spyOn(queryClient, "invalidateQueries");
+    const { result } = renderHook(() => useWhatsAppBroadcasts(), { wrapper });
+    act(() => result.current.sendBroadcast.mutate("b1"));
+    await waitFor(() => expect(mocks.fetch).toHaveBeenCalled());
+    rows = [broadcast({ status: "completed", sent_count: 3 })];
+    await act(async () => { queryClient.setQueryData(["whatsapp-broadcasts"], rows); });
+    await waitFor(() => expect(result.current.broadcasts[0]?.status).toBe("completed"));
+    expect(mocks.toastSuccess).not.toHaveBeenCalled();
+    const cached = queryClient.getQueryData(["whatsapp-broadcasts"]);
+    invalidate.mockClear();
+
+    await act(async () => {
+      release(jsonResponse(202, { accepted: true, jobId: "job-1", broadcast_id: "b1", status: "sending" }));
+    });
+    await waitFor(() => expect(mocks.toastSuccess).toHaveBeenCalledWith("Broadcast complete: 3 sent, 0 failed"));
+    expect(queryClient.getQueryData(["whatsapp-broadcasts"])).toBe(cached);
+    expect(mocks.toastSuccess.mock.calls.filter(([message]) => String(message).startsWith("Broadcast complete"))).toHaveLength(1);
+    expect(invalidate.mock.calls.filter(([arg]) => arg.queryKey?.[0] === "whatsapp-broadcast-recipients")).toHaveLength(1);
+  });
+
   it("a realtime update on the user's broadcasts refetches the list and the recipients", async () => {
     mockList(() => []);
     const { queryClient, wrapper } = createHarness();

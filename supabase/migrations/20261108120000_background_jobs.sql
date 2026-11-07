@@ -275,6 +275,8 @@ BEGIN
       OR NOT EXISTS (
         SELECT 1 FROM public.whatsapp_broadcasts AS b
         WHERE b.id = NEW.broadcast_id AND b.status = 'pending'
+        -- Hold admission against a concurrent pending -> sending transition until commit.
+        FOR SHARE
       ) THEN
       RAISE EXCEPTION 'whatsapp_broadcast_recipients: clients may only insert fresh pending recipients into a pending broadcast'
         USING ERRCODE = '42501';

@@ -362,6 +362,13 @@ SELECT set_config('request.jwt.claims', '{"sub":"aaaaaaaa-1111-4111-8111-aaaaaaa
 SELECT set_config('request.jwt.claim.sub', 'aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa', true);
 SET LOCAL ROLE authenticated;
 DO $guards$ BEGIN
+  -- Valid recipient admission must still work with the parent lock as authenticated owner.
+  INSERT INTO public.whatsapp_broadcast_recipients (broadcast_id, contact_id, phone_number, status)
+  VALUES ('b7000000-0000-4000-8000-000000000007',
+          'e1e1e1e1-0000-4000-8000-000000000002', '+96550002222', 'pending');
+  ASSERT (SELECT count(*) FROM public.whatsapp_broadcast_recipients
+          WHERE broadcast_id = 'b7000000-0000-4000-8000-000000000007' AND status = 'pending') = 1,
+    'BJ21: authenticated owner can admit a fresh recipient while the parent remains pending';
   -- BJ20: a sent recipient cannot be put back into pending, which would resend it.
   BEGIN
     UPDATE public.whatsapp_broadcast_recipients SET status = 'pending'

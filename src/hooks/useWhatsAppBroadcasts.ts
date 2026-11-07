@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
@@ -45,6 +45,7 @@ export function useWhatsAppBroadcasts() {
   const queryClient = useQueryClient();
   const queryKey = BROADCASTS_QUERY_KEY;
   const subscriptionId = useId();
+  const [submissionVersion, setSubmissionVersion] = useState(0);
 
   /** Broadcasts this tab is waiting for. */
   const trackedRef = useRef<Set<string>>(new Set());
@@ -152,6 +153,7 @@ export function useWhatsAppBroadcasts() {
       // The broadcast is tracked before the list is invalidated: a broadcast that finishes
       // before the first refetch still has to toast its result exactly once.
       trackedRef.current.add(broadcastId);
+      setSubmissionVersion((version) => version + 1);
       toast.success("Broadcast submitted — sending in the background");
       queryClient.invalidateQueries({ queryKey });
     },
@@ -183,9 +185,9 @@ export function useWhatsAppBroadcasts() {
         broadcast.delivered_count,
       ].join(":");
       const previous = snapshotRef.current.get(broadcast.id);
-      const firstTrackedTerminal = previous === undefined && trackedRef.current.has(broadcast.id) &&
+      const unsettledTerminal = trackedRef.current.has(broadcast.id) && !toastedRef.current.has(broadcast.id) &&
         (broadcast.status === "completed" || broadcast.status === "failed");
-      if ((previous !== undefined && previous !== snapshot) || firstTrackedTerminal) {
+      if ((previous !== undefined && previous !== snapshot) || unsettledTerminal) {
         queryClient.invalidateQueries({ queryKey: ["whatsapp-broadcast-recipients", broadcast.id] });
       }
       snapshotRef.current.set(broadcast.id, snapshot);
@@ -205,7 +207,7 @@ export function useWhatsAppBroadcasts() {
         toast.error(`Broadcast failed: ${broadcast.failed_count} failed`);
       }
     }
-  }, [broadcasts, queryClient]);
+  }, [broadcasts, queryClient, submissionVersion]);
 
   // One subscription per hook instance. A shared topic throws on the second `.on()`.
   useEffect(() => {
