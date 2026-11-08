@@ -20,7 +20,7 @@ The logical key is `(post_id, social_account_id, story)` with a monotonically in
 
 Required operations:
 
-- Enqueue requires an owned Instagram account, an owned post and a confirmed primary Reel result. A DB-enforced unique key prevents duplicate pending work. Repeated enqueue returns the existing work.
+- Enqueue requires an owned Instagram account, an owned post, a confirmed primary Reel result, and a persisted explicit Story-copy opt-in for that exact post/account. Missing, false, malformed, or withdrawn opt-in is ineligible; Reel success alone never authorizes a Story. Bind the opt-in version to the work and recheck it before dispatch. A DB-enforced unique key prevents duplicate pending work. Repeated enqueue returns the existing work.
 - Claims and checkpoints verify owner, logical key, active generation, claim token and unexpired lease. Time checks use acquisition time. Stale workers cannot write or dispatch after ownership changes.
 - Validate an authoritative Business account capability for the actual login route. Unknown capability refuses publication. Validate Story media separately; a valid Reel alone is insufficient. Unknown duration/format/dimensions must not be treated as valid. Do not crop, trim or transcode silently. Unsupported or missing inputs produce an actionable result.
 - Persist a creating phase before creating a provider container; persist its returned ID before publishing. Losing the creation response may leave an unpublished orphan container, but must not be represented as a published Story.

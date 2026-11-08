@@ -255,9 +255,10 @@ export function HistoryTable({
         <TableBody>
           {posts.map((post) => {
             const status = post.status as keyof typeof statusConfig;
-            const StatusIcon = statusConfig[status]?.icon || statusConfig.pending.icon;
-            const statusClass = statusConfig[status]?.className || "";
             const summary = publicationSummary(post.platformResults ?? []);
+            const badgeStatus = summary === "partialFailure" ? "failed" : summary === "partialPending" ? "pending" : status;
+            const StatusIcon = statusConfig[badgeStatus]?.icon || statusConfig.pending.icon;
+            const statusClass = statusConfig[badgeStatus]?.className || "";
             const statusLabel = summary
               ? summary === "partialFailure"
                 ? t("status.partialFailure", "Partially published — some items failed")
