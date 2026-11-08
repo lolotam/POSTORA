@@ -131,3 +131,4 @@ BEGIN
   ASSERT public.checkpoint_instagram_story(j,token,1,'creating') IS FALSE, 'restoring checkbox never revives old claim';
 END $$;
 ROLLBACK;
+\echo '=== instagram_story_jobs: ALL CHECKS PASSED ==='
