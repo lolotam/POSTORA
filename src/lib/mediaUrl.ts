@@ -160,6 +160,18 @@ export function resolveMediaPublicUrl(
   return transformMediaUrl(resolveBaseUrl(row, storageResolver, providerRows, config), transform, config?.openinary?.serverUrl);
 }
 
+/** Keep CDN delivery URLs intact; only private storage object paths need signing. */
+export async function resolveMediaPreviewUrl(
+  row: MediaFileUrlRow,
+  signStorage: (bucket: string, path: string) => Promise<string | null>,
+): Promise<string | null> {
+  const path = row.file_path;
+  if (!path) return null;
+  if (/^https?:\/\//i.test(path)) return resolveMediaPublicUrl(row);
+  if (!row.storage_bucket) return null;
+  return signStorage(row.storage_bucket, path);
+}
+
 /** Provider selection only — `resolveMediaPublicUrl` layers the transform on top. */
 function resolveBaseUrl(
   row: MediaFileUrlRow,
