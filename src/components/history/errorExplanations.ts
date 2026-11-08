@@ -13,6 +13,16 @@ interface ErrorPattern {
 
 const errorPatterns: ErrorPattern[] = [
   {
+    pattern: /^story_worker_gave_up$/,
+    platform: "instagram",
+    result: {
+      title: "Story processing stopped",
+      explanation: "The worker stopped before dispatching the Story. The published Reel is unchanged.",
+      recommendation: "Use the Story result's Retry button to start a new attempt.",
+      icon: "network",
+    },
+  },
+  {
     pattern: /^story_media_not_eligible$/,
     platform: "instagram",
     result: {

@@ -2550,9 +2550,11 @@ Deno.test("a retry with a non-uuid post id is refused before anything is claimed
 Deno.test("explicit Story retry never dispatches the primary publisher", async () => {
   const db = new FakeSupabase();
   db.queueRpc("retry_instagram_story", { data: true, error: null });
-  const result = await retryFailedPost(depsFor(db, noNetwork()), USER, { post_id: POST, story_result_id: CLAIM });
+  const result = await retryFailedPost(depsFor(db, noNetwork()), USER, { post_id: POST, story_result_id: ` ${CLAIM} ` });
   assertEquals(result.status, 202);
   assertEquals(db.rpcCalls.length, 1);
+  assertEquals(rpcCallFor(db, "retry_instagram_story")?.args.p_result_id, CLAIM);
+  assertEquals(result.body.story_result_id, CLAIM);
 });
 
 Deno.test("a retry whose claim function is not in the database yet is a 503 and publishes nothing", async () => {

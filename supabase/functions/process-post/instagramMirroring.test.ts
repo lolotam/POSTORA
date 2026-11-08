@@ -29,6 +29,7 @@ Deno.test("Instagram mirrors keep durable receipts and public collaborator warni
   let feedPublishes = 0;
   let nextContainer = 0;
   let storyPrepared = false;
+  let recoverLive = false;
   const unexpected: string[] = [];
   let rows: Row[] = [];
   let logs: Record<string, unknown>[] = [];
@@ -43,7 +44,7 @@ Deno.test("Instagram mirrors keep durable receipts and public collaborator warni
   }
   function reset(nextMode: string, businessLogin = false) {
     mode = nextMode; direct = businessLogin; failStory = false; failReceipt = false; rejectCollaborator = false;
-    storyPublishes = 0; feedPublishes = 0; rows = []; logs = []; containers.clear(); post = makePost(); storyPrepared = false;
+    storyPublishes = 0; feedPublishes = 0; rows = []; logs = []; containers.clear(); post = makePost(); storyPrepared = false; recoverLive = false;
   }
   function receipt(body: Record<string, unknown>, story: boolean) {
     assertEquals(body.p_post_id, POST);
@@ -67,6 +68,10 @@ Deno.test("Instagram mirrors keep durable receipts and public collaborator warni
     const request = new Request(input, init);
     const url = new URL(request.url);
     if (["graph.facebook.com", "graph.instagram.com"].includes(url.hostname)) {
+      if (recoverLive && request.method === "GET" && url.pathname.endsWith("/media")) {
+        return Response.json({ data: [{ id: "recovered-reel", media_type: "VIDEO", caption: post.caption,
+          timestamp: new Date().toISOString(), permalink: "https://www.instagram.com/reel/recovered/" }] });
+      }
       const body = request.method === "POST" ? await request.json() as Record<string, unknown> : {};
       if (url.pathname.endsWith("/media") && request.method === "POST") {
         if (body.media_type === "STORIES" && failStory) return Response.json({ error: { code: 100, message: "fixture Story refusal" } });
@@ -120,6 +125,10 @@ Deno.test("Instagram mirrors keep durable receipts and public collaborator warni
     if (table === "rpc/partner_settle_platform_post") return receipt(await request.json(), false);
     if (table === "platform_posts") {
       if (request.method === "PATCH") return Response.json([]);
+      if (url.searchParams.get("post_id") === `neq.${POST}`) {
+        assertEquals(url.searchParams.get("social_account_id"), `eq.${ACCOUNT}`);
+        return Response.json([]);
+      }
       assertEquals(url.searchParams.get("post_id"), `eq.${POST}`);
       if (url.searchParams.get("select")?.includes("story_subtype:")) return Response.json(rows.map((row) => ({ status: row.status,
         story_subtype: row.response_data.ig_post_subtype ?? null, story_on_reel: null, carried_story: row.response_data.unrecorded_story ?? null })));
@@ -162,6 +171,20 @@ Deno.test("Instagram mirrors keep durable receipts and public collaborator warni
         assertEquals(storyPublishes, 1);
         assert(!JSON.stringify(messages).includes("fixture-provider"), "Provider credentials must not enter Story diagnostics");
       } finally { console.log = previousLog; }
+    });
+    await test.step("a recovered Page-login Reel still queues the requested Story without republishing", async () => {
+      reset("reel"); post.status = "failed"; recoverLive = true;
+      await publish();
+      assertEquals(feedPublishes, 0);
+      assertEquals(storyPublishes, 0);
+      assertEquals(rows.find((row) => row.platform_post_id === "recovered-reel")?.response_data.ig_post_subtype, "reel");
+      assertEquals(rows.find((row) => row.id === "queued-story")?.status, "pending");
+    });
+    for (const business of [false, true]) await test.step(`an image labelled Reel retains inline Story (${business ? "direct" : "page"})`, async () => {
+      reset("image", business); post.metadata.instagram_post_type = "reel";
+      await publish();
+      assertEquals(storyPrepared, false);
+      assertEquals(storyPublishes, 1);
     });
     await test.step("a refused mirror can recover on retry without republishing the completed feed", async () => {
       reset("image"); failStory = true;

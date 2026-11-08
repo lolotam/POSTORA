@@ -11,10 +11,10 @@ DECLARE
 BEGIN
   ASSERT NOT has_function_privilege('authenticated','public.prepare_instagram_story(uuid,uuid,uuid)','EXECUTE'), 'clients cannot forge service identity';
   INSERT INTO auth.users(id,email) VALUES (u,'story-owner@example.invalid'),(other_user,'story-other@example.invalid');
-  -- Three independent scenarios need three posts; keep the owner non-admin and quota enforcement active.
-  INSERT INTO public.user_quotas(user_id,max_posts_per_day) VALUES(u,3)
+  -- Four independent scenarios need four posts; keep the owner non-admin and quota enforcement active.
+  INSERT INTO public.user_quotas(user_id,max_posts_per_day) VALUES(u,4)
     ON CONFLICT (user_id) DO UPDATE SET max_posts_per_day=EXCLUDED.max_posts_per_day;
-  ASSERT (SELECT max_posts_per_day FROM public.effective_user_quotas(u))=3, 'bounded fixture quota';
+  ASSERT (SELECT max_posts_per_day FROM public.effective_user_quotas(u))=4, 'bounded fixture quota';
   INSERT INTO public.social_accounts(id,user_id,platform,platform_user_id,platform_username,access_token,is_active)
     VALUES(a,u,'instagram','3910001','story_fixture','synthetic-unused',true);
   INSERT INTO public.instagram_account_capabilities(social_account_id,user_id,login_kind,permission_read_state,granted_scopes,scopes_read_at)
@@ -54,6 +54,8 @@ BEGIN
   UPDATE public.instagram_account_capabilities SET permission_read_state='ok' WHERE social_account_id=a;
   ASSERT public.checkpoint_instagram_story(j,token,1,'creating') IS TRUE, 'current owned consent permits creation';
   ASSERT public.checkpoint_instagram_story(j,token,1,'processing','391010') IS TRUE, 'save container';
+  UPDATE public.posts SET status='pending' WHERE id=p;
+  ASSERT (public.read_instagram_story_job(j,token)->>'authorized')::boolean IS TRUE, 'another platform retry does not revoke Story consent';
   ASSERT public.checkpoint_instagram_story(j,token,1,'publishing',NULL) IS FALSE, 'unknown container refuses';
   ASSERT public.checkpoint_instagram_story(j,token,1,'publishing','different') IS FALSE, 'container substitution refuses';
   ASSERT public.checkpoint_instagram_story(j,token,1,'publishing','391010') IS TRUE, 'one dispatch intent';
@@ -129,6 +131,30 @@ BEGIN
   ASSERT public.checkpoint_instagram_story(j,token,1,'creating') IS FALSE, 'withdrawn consent refuses';
   UPDATE public.posts SET metadata=jsonb_set(metadata,'{instagram_post_type}','["reel","story"]') WHERE id=p;
   ASSERT public.checkpoint_instagram_story(j,token,1,'creating') IS FALSE, 'restoring checkbox never revives old claim';
+
+  p := 'e3910000-0000-4000-8000-000000000009';
+  INSERT INTO public.posts(id,user_id,caption,platforms,media_file_ids,status,metadata)
+    VALUES(p,u,'Re-arm fixture',ARRAY['instagram'],ARRAY[m],'processing',
+      jsonb_build_object('instagram_post_type',jsonb_build_array('reel','story'),'selected_account_ids',jsonb_build_array(a)));
+  PERFORM public.prepare_instagram_story(p,a,u);
+  UPDATE public.posts SET metadata=jsonb_set(metadata,'{instagram_post_type}','["reel"]') WHERE id=p;
+  ASSERT (SELECT phase FROM public.instagram_story_jobs WHERE post_id=p) IS NOT DISTINCT FROM 'failed', 'pre-primary revocation retained';
+  UPDATE public.posts SET metadata=jsonb_set(metadata,'{instagram_post_type}','["reel","story"]') WHERE id=p;
+  ASSERT public.prepare_instagram_story(p,a,u) IS TRUE, 'explicit new prepare re-arms a never-dispatched intent';
+  ASSERT (SELECT generation FROM public.instagram_story_jobs WHERE post_id=p)=2, 're-armed intent advances generation';
+  INSERT INTO public.platform_posts(post_id,social_account_id,platform,status,platform_post_id,response_data)
+    VALUES(p,a,'instagram','success','391009',jsonb_build_object('ig_post_subtype','reel'));
+  SELECT background_job_id,result_id INTO j,r FROM public.instagram_story_jobs WHERE post_id=p;
+  ASSERT j IS NOT NULL AND r IS NOT NULL, 're-armed intent queues after Reel success';
+  UPDATE public.background_jobs SET status='failed' WHERE id=j;
+  ASSERT (SELECT error_message FROM public.platform_posts WHERE id=r) IS NOT DISTINCT FROM 'story_worker_gave_up', 'definite exhaustion has retry guidance';
+  ASSERT public.retry_instagram_story(p,r,u) IS TRUE, 'definite exhaustion can retry';
+  SELECT background_job_id,generation INTO j,count_before FROM public.instagram_story_jobs WHERE post_id=p;
+  UPDATE public.background_jobs SET status='running',claim_token=token,claimed_at=clock_timestamp() WHERE id=j;
+  ASSERT public.checkpoint_instagram_story(j,token,count_before::integer,'creating') IS TRUE, 'begin retried creation';
+  UPDATE public.background_jobs SET status='failed' WHERE id=j;
+  ASSERT (SELECT error_message FROM public.platform_posts WHERE id=r) IS NOT DISTINCT FROM 'story_worker_exhausted', 'uncertain exhaustion retains verification guidance';
+  ASSERT public.retry_instagram_story(p,r,u) IS FALSE, 'uncertain exhaustion never retries';
 END $$;
 ROLLBACK;
 \echo '=== instagram_story_jobs: ALL CHECKS PASSED ==='

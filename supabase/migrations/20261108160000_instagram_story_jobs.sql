@@ -62,8 +62,15 @@ BEGIN
     VALUES(p_user_id, p.id, p_account_id, p.media_file_ids[1],
       (SELECT current_object_version FROM public.media_files WHERE id=p.media_file_ids[1]), v,
       (SELECT credential_generation FROM public.instagram_account_capabilities WHERE social_account_id=p_account_id AND user_id=p_user_id))
-    ON CONFLICT (post_id, social_account_id) DO NOTHING;
-  -- An existing generation is never reset by another primary dispatch.
+    ON CONFLICT (post_id, social_account_id) DO UPDATE SET
+      phase='awaiting_reel', consent_version=EXCLUDED.consent_version,
+      media_file_id=EXCLUDED.media_file_id, media_object_version=EXCLUDED.media_object_version,
+      credential_generation=EXCLUDED.credential_generation, error=NULL,
+      generation=instagram_story_jobs.generation+1
+    WHERE instagram_story_jobs.result_id IS NULL AND
+      (instagram_story_jobs.phase='failed' OR instagram_story_jobs.consent_version IS DISTINCT FROM EXCLUDED.consent_version
+       OR instagram_story_jobs.media_object_version IS DISTINCT FROM EXCLUDED.media_object_version);
+  -- A generation with a Story result is never reset by another primary dispatch.
   RETURN true;
 END $$;
 
@@ -106,7 +113,7 @@ BEGIN
   IF j.claimed_at <= clock_timestamp() - interval '3 minutes' THEN RETURN NULL; END IF;
   SELECT EXISTS (SELECT 1 FROM public.posts p JOIN public.social_accounts a ON a.id = s.social_account_id
     JOIN public.media_files m ON m.id=s.media_file_id AND m.user_id=s.user_id AND m.current_object_version=s.media_object_version
-    WHERE p.id = s.post_id AND p.user_id = s.user_id AND p.status IN ('processing','completed','failed')
+    WHERE p.id = s.post_id AND p.user_id = s.user_id AND p.status IN ('pending','processing','completed','failed')
       AND a.user_id = s.user_id AND a.is_active AND a.platform = 'instagram'
       AND public.instagram_story_consent(p,a.id) = s.consent_version) INTO v_authorized;
   RETURN jsonb_build_object('id',s.id,'postId',s.post_id,'accountId',s.social_account_id,
@@ -198,16 +205,17 @@ END $$;
 
 CREATE FUNCTION public.reconcile_failed_story_job()
 RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $$
-DECLARE s public.instagram_story_jobs; v_state text;
+DECLARE s public.instagram_story_jobs; v_state text; v_error text;
 BEGIN
   IF NEW.kind <> 'instagram_story' OR NEW.status <> 'failed' THEN RETURN NEW; END IF;
   SELECT * INTO s FROM public.instagram_story_jobs WHERE background_job_id=NEW.id FOR UPDATE;
   IF NOT FOUND OR s.phase IN ('failed','uncertain') THEN RETURN NEW; END IF;
   v_state := CASE WHEN s.phase='published' THEN 'published' WHEN s.phase IN ('creating','publishing') THEN 'uncertain' ELSE 'failed' END;
-  UPDATE public.instagram_story_jobs SET phase=v_state,error='story_worker_exhausted' WHERE id=s.id;
+  v_error := CASE WHEN v_state='published' THEN NULL WHEN v_state='uncertain' THEN 'story_worker_exhausted' ELSE 'story_worker_gave_up' END;
+  UPDATE public.instagram_story_jobs SET phase=v_state,error=v_error WHERE id=s.id;
   PERFORM public.partner_settle_platform_post(s.result_id,s.post_id,s.social_account_id,'instagram',
     CASE WHEN v_state='published' THEN 'success' ELSE 'failed' END,
-    CASE WHEN v_state='published' THEN s.media_id END,NULL,CASE WHEN v_state='published' THEN NULL ELSE 'story_worker_exhausted' END,
+    CASE WHEN v_state='published' THEN s.media_id END,NULL,v_error,
     (SELECT response_data FROM public.platform_posts WHERE id=s.result_id) ||
       jsonb_build_object('story_state',v_state,'story_retryable',v_state='failed'));
   RETURN NEW;

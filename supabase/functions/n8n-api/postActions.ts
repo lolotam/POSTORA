@@ -1981,9 +1981,10 @@ export async function retryFailedPost(
   }
 
   if (body && typeof body === "object" && "story_result_id" in body) {
-    const resultId = (body as { story_result_id: unknown }).story_result_id;
-    if (!isValidUuid(resultId)) return await refuse(deps, route, { userId, postId },
+    const rawResultId = (body as { story_result_id: unknown }).story_result_id;
+    if (!isValidUuid(rawResultId)) return await refuse(deps, route, { userId, postId },
       error(400, "INVALID_STORY_RESULT", "Provide the Story result UUID from get_post."));
+    const resultId = rawResultId.trim();
     const { data, error: retryError } = await deps.supabase.rpc("retry_instagram_story", {
       p_post_id: postId, p_result_id: resultId, p_user_id: userId,
     });

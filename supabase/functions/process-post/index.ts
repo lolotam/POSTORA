@@ -2018,7 +2018,10 @@ Deno.serve(async (req) => {
             result = await postToFacebook(account, post, mediaUrls, mediaFiles);
             break;
           case "instagram": {
-            const primaryPost = await prepareIndependentStory(post, account.id, async (postId, accountId, userId) => {
+            const primaryIsVideo = mediaFiles.length > 0
+              ? (mediaFiles[0].file_type || (mediaFiles[0].mime_type?.startsWith("video/") ? "video" : "image")) === "video"
+              : isVideoUrl(mediaUrls[0]);
+            const primaryPost = await prepareIndependentStory(post, account.id, primaryIsVideo, async (postId, accountId, userId) => {
               const { data, error } = await supabase.rpc("prepare_instagram_story", {
                 p_post_id: postId, p_account_id: accountId, p_user_id: userId,
               });
@@ -4479,7 +4482,7 @@ async function postToInstagram(
     }
     const carried = unrecordedStory ? { unrecorded_story: unrecordedStory } : {};
     return live.kind === "already_live"
-      ? { id: live.media.id, url: live.media.permalink ?? profileUrl, warnings: [...warnings, ALREADY_LIVE_MESSAGE], ...carried }
+      ? { id: live.media.id, url: live.media.permalink ?? profileUrl, warnings: [...warnings, ALREADY_LIVE_MESSAGE], ...(isReel ? { publicationSubtype: "reel" as const } : {}), ...carried }
       : { url: profileUrl, warnings: [...warnings, alreadyLiveCopiesMessage(live.count)], ...carried };
   }
 
