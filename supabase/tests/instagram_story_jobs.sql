@@ -140,7 +140,13 @@ BEGIN
   UPDATE public.posts SET metadata=jsonb_set(metadata,'{instagram_post_type}','["reel"]') WHERE id=p;
   ASSERT (SELECT phase FROM public.instagram_story_jobs WHERE post_id=p) IS NOT DISTINCT FROM 'failed', 'pre-primary revocation retained';
   UPDATE public.posts SET metadata=jsonb_set(metadata,'{instagram_post_type}','["reel","story"]') WHERE id=p;
+  INSERT INTO public.media_files(id,user_id,file_path,file_type,file_size,mime_type,storage_bucket,current_object_version)
+    VALUES('e3910000-0000-4000-8000-000000000010',u,'replacement.jpg','image',100,'image/jpeg','media',2);
+  UPDATE public.posts SET media_file_ids=ARRAY['e3910000-0000-4000-8000-000000000010'::uuid] WHERE id=p;
   ASSERT public.prepare_instagram_story(p,a,u) IS TRUE, 'explicit new prepare re-arms a never-dispatched intent';
+  ASSERT (SELECT media_file_id FROM public.instagram_story_jobs WHERE post_id=p) IS NOT DISTINCT FROM
+    'e3910000-0000-4000-8000-000000000010'::uuid, 're-armed intent captures replacement media';
+  ASSERT (SELECT media_object_version FROM public.instagram_story_jobs WHERE post_id=p)=2, 're-armed intent captures replacement object version';
   ASSERT (SELECT generation FROM public.instagram_story_jobs WHERE post_id=p)=2, 're-armed intent advances generation';
   INSERT INTO public.platform_posts(post_id,social_account_id,platform,status,platform_post_id,response_data)
     VALUES(p,a,'instagram','success','391009',jsonb_build_object('ig_post_subtype','reel'));
