@@ -8,7 +8,7 @@
  */
 
 import { type ContainerState, type MetaContainerApi, pollContainer, type PollContainerOptions } from "../_shared/metaContainerStatus.ts";
-import { unfinishedError } from "./deferredPublish.ts";
+import { ContainerStillProcessing, deferrableDeadline, unfinishedError } from "./deferredPublish.ts";
 
 export interface CarouselChildCreate {
   /** POSTs one child container; resolves with Meta's JSON reply. */
@@ -37,11 +37,24 @@ export interface ChildWait {
   deadlineMs: number;
   maxAttempts: number;
   intervalMs: number;
+  /** Threads can retain the original child IDs and finish them on a later worker. */
+  deferThreads?: boolean;
 }
 
 export interface ChildWaitOutcome {
   finished: string[];
   dropped: { id: string; reason: string }[];
+}
+
+/** Resumed children share one worker budget while each child is checked only once. */
+export function threadsChildWait(deadlineMs: number, workerStartedAtMs: number): ChildWait {
+  const resumed = deadlineMs === 0;
+  return {
+    deadlineMs: deferrableDeadline(resumed ? Number.MAX_SAFE_INTEGER : deadlineMs, workerStartedAtMs),
+    maxAttempts: resumed ? 1 : 15,
+    intervalMs: 2000,
+    deferThreads: true,
+  };
 }
 
 type Poll = (api: MetaContainerApi, statusUrl: string, options: PollContainerOptions) => Promise<ContainerState>;
@@ -71,7 +84,14 @@ export async function waitForCarouselChildren(
       outcome.dropped.push({ id, reason: container.reason });
       continue;
     }
-    if (container.state === "waiting") throw unfinishedError({ deadlineMs: wait.deadlineMs }, id, api === "threads" ? "Threads" : "Instagram");
+    if (container.state === "waiting") {
+      if (api === "threads" && wait.deferThreads && Number.isFinite(wait.deadlineMs)) {
+        const pending = new ContainerStillProcessing("threads_carousel", ids[0]);
+        pending.carouselChildren = ids;
+        throw pending;
+      }
+      throw unfinishedError({ deadlineMs: wait.deadlineMs }, id, api === "threads" ? "Threads" : "Instagram");
+    }
     outcome.finished.push(id);
   }
   return outcome;

@@ -1,3 +1,4 @@
+import { publishThreadsContainer, threadsParentContainer, ThreadsCheckpointUnavailable } from "./threadsPublish.ts";
 /**
  * ============================================================================
  * PROCESS-POST EDGE FUNCTION
@@ -145,7 +146,7 @@ import {
   type ResumeContext,
   unfinishedError,
 } from "./deferredPublish.ts";
-import { createCarouselChildren, waitForCarouselChildren } from "./carouselChildren.ts";
+import { createCarouselChildren, threadsChildWait, waitForCarouselChildren } from "./carouselChildren.ts";
 import { claimFinalNotification } from "./finalNotification.ts";
 import {
   dropRecordedStory,
@@ -1635,11 +1636,26 @@ Deno.serve(async (req) => {
         platformPostId: row.id,
         deferral,
         unrecordedStory: readUnrecordedStory(row.response_data),
+        checkpointContainer: async (next) => {
+          const previous = resume?.deferral.container_id;
+          if (!previous) throw new Error("Missing deferred container checkpoint");
+          const responseData = { ...resumeResponseData, deferred: next };
+          const { data: changed, error: checkpointError } = await supabase
+            .from("platform_posts")
+            .update({ response_data: responseData })
+            .eq("id", row.id)
+            .eq("status", "pending")
+            .eq("response_data->deferred->>container_id", previous)
+            .select("id");
+          if (checkpointError || changed?.length !== 1) throw new Error("Could not checkpoint the Threads carousel; nothing was published");
+          resumeResponseData = responseData;
+          if (resume) resume.deferral = next;
+        },
         // Compare-and-set: only a pending row no run has marked yet, and it says whether it did.
         markFollowUpsStarted: async () => {
           const { data: marked, error: markError } = await supabase
             .from("platform_posts")
-            .update({ response_data: withFollowUpsStarted(row.response_data, new Date()) })
+            .update({ response_data: withFollowUpsStarted(resumeResponseData ?? row.response_data, new Date()) })
             .eq("id", row.id)
             .eq("status", "pending")
             .is("response_data->deferred->>followups_started_at", null)
@@ -2186,6 +2202,19 @@ Deno.serve(async (req) => {
         console.log(`Successfully posted to ${account.platform}${isTikTokProcessing ? " (processing in background)" : ""}`);
 
       } catch (caught) {
+        if (caught instanceof ThreadsCheckpointUnavailable) {
+          try {
+            const { error: logError } = await supabase.from("system_logs").insert({
+              level: "error", category: "post", source: "process-post", user_id: post.user_id,
+              message: "Threads carousel checkpoint unavailable; pending state retained",
+              metadata: { post_id, platform_post_id: resume?.platformPostId ?? null },
+            });
+            if (logError) console.error("Threads checkpoint refusal log failed");
+          } catch {
+            console.error("Threads checkpoint refusal log unavailable");
+          }
+          return createErrorResponse("Threads carousel checkpoint could not be confirmed. It will be checked again.", 503);
+        }
         let error = caught;
         if (error instanceof ContainerStillProcessing) {
           const recorded = await recordStillProcessing(supabase, settlePlatformPost, {
@@ -6643,16 +6672,18 @@ async function postToThreads(
   );
 
   // Handle media
-  if (mediaUrls.length > 0) {
+  if (mediaUrls.length > 0 || timing.resume) {
     // Threads has an 8MB per-image hard limit and rejects the whole carousel
     // (error 4279004 "Invalid carousel children") if any single child exceeds
     // it. Cloudinary URLs can be compressed on-the-fly to JPEG q_80 which
     // typically reduces PNGs by ~95% with no visible quality loss.
     const safeMediaUrls = compressMediaUrlsForPlatform(mediaUrls);
     const firstMediaUrl = safeMediaUrls[0];
-    const isVideo = isVideoUrl(firstMediaUrl);
+    const isVideo = firstMediaUrl ? isVideoUrl(firstMediaUrl) : false;
 
-    if (mediaUrls.length === 1) {
+    if (timing.resume && !timing.resume.deferral.carousel_children) {
+      containerParams.media_type = timing.resume.deferral.kind === "threads_carousel" ? "CAROUSEL" : "VIDEO";
+    } else if (mediaUrls.length === 1 && !timing.resume?.deferral.carousel_children) {
       // Single media
       if (isVideo) {
         containerParams.media_type = "VIDEO";
@@ -6664,9 +6695,9 @@ async function postToThreads(
     } else {
       // Carousel - create child containers first
       containerParams.media_type = "CAROUSEL";
-      const childIds: string[] = [];
+      const childIds: string[] = [...(timing.resume?.deferral.carousel_children ?? [])];
 
-      for (const mediaUrl of safeMediaUrls.slice(0, 10)) {
+      const childReplies = childIds.length ? [] : await Promise.all(safeMediaUrls.slice(0, 10).map(async (mediaUrl) => {
         const isChildVideo = isVideoUrl(mediaUrl);
         const childParams: Record<string, string> = {
           access_token: accessToken,
@@ -6686,7 +6717,7 @@ async function postToThreads(
           childUrl.searchParams.set(key, value);
         });
 
-        const childResponse = await fetch(childUrl.toString(), { method: "POST" });
+        const childResponse = await fetchWithTimeout(childUrl.toString(), { method: "POST" }, 20000);
         const childData = await childResponse.json();
 
         if (childData.error) {
@@ -6698,18 +6729,19 @@ async function postToThreads(
             "| error_subcode:",
             childData.error.error_subcode
           );
-          continue;
+          return null;
         }
-
-        childIds.push(childData.id);
-      }
+        if (!childData.id) throw new Error("Threads returned no child container id");
+        return String(childData.id);
+      }));
+      childIds.push(...childReplies.filter((id): id is string => id !== null));
 
       // Meta refuses a carousel whose children are still processing: every child is waited for.
       const children = await waitForCarouselChildren(
         "threads",
         childIds,
         (id) => `https://graph.threads.net/v1.0/${id}?fields=${CONTAINER_STATUS_FIELDS.threads}&access_token=${accessToken}`,
-        { deadlineMs: timing.deadlineMs, maxAttempts: 15, intervalMs: 2000 },
+        threadsChildWait(timing.deadlineMs, WORKER_STARTED_AT_MS),
       );
       for (const dropped of children.dropped) {
         console.error("Threads: Child container failed:", dropped.reason, "| id:", dropped.id);
@@ -6758,9 +6790,7 @@ async function postToThreads(
       containerUrl.searchParams.set(key, value);
     });
 
-    const containerResponse = await fetch(containerUrl.toString(), {
-      method: "POST",
-    });
+    const containerResponse = await fetchWithTimeout(containerUrl.toString(), { method: "POST" }, 20000);
     const containerData = await containerResponse.json();
 
     console.log("Threads: Container response:", JSON.stringify(containerData).slice(0, 200));
@@ -6806,7 +6836,7 @@ async function postToThreads(
         Object.entries(containerParams).forEach(([key, value]) => {
           retryUrl.searchParams.set(key, value);
         });
-        const retryResponse = await fetch(retryUrl.toString(), { method: "POST" });
+        const retryResponse = await fetchWithTimeout(retryUrl.toString(), { method: "POST" }, 20000);
         const retryData = await retryResponse.json();
         console.log("Threads: Retry container response:", JSON.stringify(retryData).slice(0, 200));
         if (retryData.error) {
@@ -6828,13 +6858,13 @@ async function postToThreads(
   };
 
   // A resumed run already has the container; creating another would post twice.
-  const containerId = timing.resume ? timing.resume.deferral.container_id : await createThreadsContainer();
+  const containerId = await threadsParentContainer(timing.resume, createThreadsContainer);
 
   // Poll container status until FINISHED (required by Threads API)
   const statusEndpoint = `https://graph.threads.net/v1.0/${containerId}?fields=${CONTAINER_STATUS_FIELDS.threads}&access_token=${accessToken}`;
   const pollInterval = 2000; // 2 seconds
   // Only a single video can be finished later; a resumed run checks once, now.
-  const deferrable = containerParams.media_type === "VIDEO";
+  const deferrable = containerParams.media_type === "VIDEO" || containerParams.media_type === "CAROUSEL";
   // The deadline bounds the requests as well as the sleeps, for every container.
   const container = await pollContainer("threads", statusEndpoint, {
     maxAttempts: 15,
@@ -6848,7 +6878,7 @@ async function postToThreads(
   // Meta's ERROR ends the wait, and a container that never finished is never published blindly.
   if (container.state === "failed") throw new Error(containerFailureMessage("threads", container.reason));
   if (container.state === "waiting") {
-    throw unfinishedError({ deadlineMs: timing.deadlineMs, deferKind: deferrable ? "threads" : undefined }, containerId, "Threads");
+    throw unfinishedError({ deadlineMs: timing.deadlineMs, deferKind: deferrable ? (containerParams.media_type === "CAROUSEL" ? "threads_carousel" : "threads") : undefined }, containerId, "Threads");
   }
   if (container.state === "published") {
     // Only a resumed run sees this: an earlier run published but died before recording it.
@@ -6866,21 +6896,19 @@ async function postToThreads(
   publishUrl.searchParams.set("access_token", accessToken);
   publishUrl.searchParams.set("creation_id", containerId);
 
-  const publishResponse = await fetch(publishUrl.toString(), {
-    method: "POST",
-  });
-  const publishData = await publishResponse.json();
-
-  console.log("Threads: Publish response:", JSON.stringify(publishData).slice(0, 200));
-
-  if (publishData.error) {
-    tLocationDebug.publish_success = false;
-    tLocationDebug.publish_error = redactMetaError(publishData.error);
-    throw new Error(`Threads publish error: ${publishData.error.message}`);
-  }
+  const publishData = await publishThreadsContainer(async (timeoutMs) => {
+    const response = await fetchWithTimeout(publishUrl.toString(), { method: "POST" }, timeoutMs);
+    return await response.json();
+  }, containerId, containerParams.media_type === "CAROUSEL" ? "threads_carousel" : "threads",
+  workerPublishDeadline(WORKER_STARTED_AT_MS));
   tLocationDebug.publish_success = true;
 
   const postId = publishData.id;
+  const followUpFetch = (url: string, init: RequestInit = {}) => {
+    const timeoutMs = followUpTimeoutMs(WORKER_STARTED_AT_MS, Date.now());
+    if (timeoutMs === 0) throw new Error("Threads follow-up skipped to preserve outcome recording time");
+    return fetchWithTimeout(url, init, timeoutMs);
+  };
 
   // Fetch permalink + verification fields. Helps us confirm what Meta actually
   // accepted (location_id, is_quote_post, shortcode) — surfaces silent ignores.
@@ -6888,7 +6916,7 @@ async function postToThreads(
   let verifyData: any = null;
   const crossShareStatus: string | null = null;
   try {
-    const verifyRes = await fetch(
+    const verifyRes = await followUpFetch(
       `https://graph.threads.net/v1.0/${postId}?fields=id,permalink,shortcode,is_quote_post,media_type,location,location_id,topic_tag,crossreshare_to_ig_status&access_token=${accessToken}`
     );
     verifyData = await verifyRes.json();
@@ -6992,7 +7020,7 @@ async function postToThreads(
   // ── First comment auto-reply (best-effort) ────────────────────────────
   // Same pattern as Instagram first_comment: never fail the main post if this fails.
   const rawFirstComment = (metadata?.threads_first_comment || "").toString().trim();
-  if (rawFirstComment && postId) {
+  if (rawFirstComment && postId && await claimFollowUps(timing.resume)) {
     try {
       let firstCommentText = rawFirstComment;
       if (firstCommentText.length > THREADS_CHAR_LIMIT) {
@@ -7008,7 +7036,7 @@ async function postToThreads(
       replyContainerUrl.searchParams.set("reply_to_id", String(postId));
 
       console.log("Threads: Creating first-comment container…");
-      const replyContainerRes = await fetch(replyContainerUrl.toString(), { method: "POST" });
+      const replyContainerRes = await followUpFetch(replyContainerUrl.toString(), { method: "POST" });
       const replyContainerData = await replyContainerRes.json().catch(() => ({}));
 
       if (replyContainerData?.error) {
@@ -7019,20 +7047,16 @@ async function postToThreads(
 
       // Poll status briefly
       const replyStatusUrl = `https://graph.threads.net/v1.0/${replyContainerId}?fields=status&access_token=${accessToken}`;
-      for (let attempt = 1; attempt <= 8; attempt++) {
-        await new Promise((r) => setTimeout(r, 1500));
-        try {
-          const sr = await fetch(replyStatusUrl);
-          const sd = await sr.json().catch(() => ({}));
-          if (sd?.status === "FINISHED") break;
-          if (sd?.status === "ERROR") throw new Error("first-comment processing ERROR");
-        } catch { /* keep polling */ }
-      }
+      const replyState = await pollContainer("threads", replyStatusUrl, {
+        maxAttempts: 8, intervalMs: 1500,
+        deadlineMs: Date.now() + followUpTimeoutMs(WORKER_STARTED_AT_MS, Date.now()),
+      });
+      if (replyState.state !== "finished") throw new Error("Threads first-comment container is not ready; main post remains published");
 
       const replyPublishUrl = new URL(publishEndpoint);
       replyPublishUrl.searchParams.set("access_token", accessToken);
       replyPublishUrl.searchParams.set("creation_id", replyContainerId);
-      const replyPublishRes = await fetch(replyPublishUrl.toString(), { method: "POST" });
+      const replyPublishRes = await followUpFetch(replyPublishUrl.toString(), { method: "POST" });
       const replyPublishData = await replyPublishRes.json().catch(() => ({}));
       if (replyPublishData?.error) {
         throw new Error(replyPublishData.error.message || "first-comment publish failed");

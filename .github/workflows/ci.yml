@@ -240,6 +240,16 @@ jobs:
           supabase/functions/n8n-api/serviceProxy.test.ts
           supabase/functions/n8n-api/analyticsFilters.test.ts
 
+      - name: Test deferred publishing and Threads carousel recovery
+        run: >-
+          deno test --no-config --no-lock --node-modules-dir=none
+          supabase/functions/process-post/threadsPublish.test.ts
+          supabase/functions/process-post/carouselChildren.test.ts
+          supabase/functions/process-post/deferredPublish.test.ts
+          supabase/functions/process-post/instagramPublish.test.ts
+          supabase/functions/process-post/postSettlement.test.ts
+          supabase/functions/reconcile-deferred-publishes/run.test.ts
+
       - name: Test Instagram Story sharing through registered MCP and API routes
         # The automation test imports the registered MCP/API routes with fixture-only env.
         run: >-
