@@ -1945,6 +1945,12 @@ function toPlatformResult(pp: any) {
     error_message: pp.error_message,
     posted_at: pp.posted_at,
     social_account_id: pp.social_account_id,
+    ...(pp.platform === "instagram" && pp.response_data?.ig_post_subtype === "story" && pp.response_data?.story_job_id ? {
+      story_result_id: pp.id,
+      publication_type: "story",
+      story_state: ["queued", "creating", "processing", "publishing", "published", "failed", "uncertain"].includes(pp.response_data.story_state) ? pp.response_data.story_state : "unknown",
+      story_retryable: pp.response_data.story_retryable === true,
+    } : {}),
     // Only the warnings are exposed — response_data itself stays internal.
     warnings: Array.isArray(pp.response_data?.warnings) ? pp.response_data.warnings : [],
   };

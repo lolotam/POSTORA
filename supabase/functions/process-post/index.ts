@@ -116,6 +116,7 @@ import { getMissingMediaFileIds } from "../_shared/post-media.ts";
 import { claimPostForProcessing } from "../_shared/postProcessingClaim.ts";
 import { activeRetryRequest } from "../_shared/publishRequest.ts";
 import { mediaSendability } from "../_shared/partnerMediaStore.ts";
+import { prepareIndependentStory } from "./independentStory.ts";
 import { selectedLinkedInDestinationIds } from "../_shared/linkedinDestinations.ts";
 import { fetchWithTimeout } from "../_shared/request-timeout.ts";
 import { composioClientFromEnv } from "../_shared/composioClient.ts";
@@ -520,6 +521,7 @@ interface PlatformPostResult {
   /** The platform's public post id when it differs from `id`. TikTok's `id` is the publish_id
    *  that webhooks are matched on, so the post id it reports on completion travels here. */
   providerPostId?: string;
+  publicationSubtype?: "reel";
   /** When true, the platform handler has already written its own platform_posts rows
    *  (one or more) and the outer loop must skip the default insert. */
   selfWroteRows?: boolean;
@@ -2005,6 +2007,7 @@ Deno.serve(async (req) => {
 
       try {
         let result: PlatformPostResult;
+        let independentStory = false;
 
         // Dispatch to platform-specific handler (alphabetical order)
         switch (account.platform) {
@@ -2015,6 +2018,14 @@ Deno.serve(async (req) => {
             result = await postToFacebook(account, post, mediaUrls, mediaFiles);
             break;
           case "instagram": {
+            const primaryPost = await prepareIndependentStory(post, account.id, async (postId, accountId, userId) => {
+              const { data, error } = await supabase.rpc("prepare_instagram_story", {
+                p_post_id: postId, p_account_id: accountId, p_user_id: userId,
+              });
+              if (error) throw new Error("story_intent_unavailable");
+              return data === true;
+            });
+            independentStory = primaryPost !== post;
             const igAuthType = (account as any).ig_auth_type || (account.account_metadata as Record<string, unknown>)?.account_type;
             const recorded = retryRun ? await recordedOnRetry(supabase, post_id, account.id) : null;
             const retry: RetryState = recorded
@@ -2025,9 +2036,9 @@ Deno.serve(async (req) => {
               }
               : NOT_A_RETRY;
             if (igAuthType === 'business_login') {
-              result = await postToInstagramBusinessLogin(account, post, mediaUrls, mediaFiles, supabase, post_id, timingForAccount, retry);
+              result = await postToInstagramBusinessLogin(account, primaryPost, mediaUrls, mediaFiles, supabase, post_id, timingForAccount, retry);
             } else {
-              result = await postToInstagram(account, post, mediaUrls, mediaFiles, timingForAccount, (story) =>
+              result = await postToInstagram(account, primaryPost, mediaUrls, mediaFiles, timingForAccount, (story) =>
                 recordLiveStory(supabase, { postId: post_id, account, story }, stories), retry, async (error) => {
                 const settled = await settlePlatformPost(supabase, {
                   platformPostId: null,
@@ -2120,6 +2131,7 @@ Deno.serve(async (req) => {
           if (logError) console.error("[process-post] could not log the unrecorded story either:", logError);
         }
         const responseData = {
+          ...(independentStory && result.publicationSubtype === "reel" ? { ig_post_subtype: "reel" } : {}),
           tiktok_publish_id: result.id,
           account_username: account.platform_username,
           account_metadata: account.account_metadata,
@@ -4649,6 +4661,7 @@ async function postToInstagram(
       url: postUrl,
       warnings,
       ...(reelDebug ? { location_debug: reelDebug } : {}),
+      publicationSubtype: "reel",
       // A live reel settles now; a story still unrecorded is kept on its row, never held over it.
       ...(unrecordedStory ? { unrecorded_story: unrecordedStory } : {}),
     };

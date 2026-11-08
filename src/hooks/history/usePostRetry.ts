@@ -73,7 +73,19 @@ export function usePostRetry() {
     }
     setRetryingPostId(postId);
     try {
-      await submitRetry(postId, [accountId]);
+      let detail: Record<string, unknown> | null = null;
+      if (platform === "instagram") {
+        const { data: result, error } = await supabase.from("platform_posts")
+          .select("response_data").eq("id", platformPostId).eq("post_id", postId).maybeSingle();
+        if (error || !result) throw new Error("Could not read this publication result.");
+        detail = result.response_data as Record<string, unknown> | null;
+      }
+      if (platform === "instagram" && detail?.story_job_id) {
+        const acceptance = await enqueuePostPublish({ postId, mode: "retry_story", resultId: platformPostId });
+        if (!acceptance.accepted) throw new Error("This Story is not safely retryable. Check its current status.");
+      } else {
+        await submitRetry(postId, [accountId]);
+      }
       notifyRetrySubmitted([platform as Platform]);
       invalidatePostQueries(queryClient);
     } catch (error) {

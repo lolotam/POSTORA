@@ -3,8 +3,9 @@ import { supabase } from "@/integrations/supabase/client";
 
 interface PublishRequest {
   postId: string;
-  mode: "publish_now" | "retry";
+  mode: "publish_now" | "retry" | "retry_story";
   accountIds?: string[];
+  resultId?: string;
 }
 
 type RefusalReason = "not_found" | "not_publishable" | "not_retryable" | "no_targets";
@@ -20,10 +21,10 @@ function isRefusal(reason: unknown): reason is RefusalReason {
   return reason === "not_found" || reason === "not_publishable" || reason === "not_retryable" || reason === "no_targets";
 }
 
-export async function enqueuePostPublish({ postId, mode, accountIds }: PublishRequest): Promise<PublishAcceptance> {
+export async function enqueuePostPublish({ postId, mode, accountIds, resultId }: PublishRequest): Promise<PublishAcceptance> {
   try {
     const { data: acknowledgement, error } = await supabase.functions.invoke<unknown>("enqueue-post-publish", {
-      body: { post_id: postId, mode, ...(accountIds ? { account_ids: accountIds } : {}) },
+      body: { post_id: postId, mode, ...(accountIds ? { account_ids: accountIds } : {}), ...(resultId ? { result_id: resultId } : {}) },
     });
     if (error instanceof FunctionsHttpError) {
       const refusal: unknown = await error.context.json();

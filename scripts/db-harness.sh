@@ -183,6 +183,7 @@ SUITES=(
   mcp_analytics_owner_boundaries.sql
   instagram_owner_enqueue_reconnect_required.sql
   background_jobs.sql
+  instagram_story_jobs.sql
 )
 # These fixtures build their own focused schema and apply the migration under
 # test. They must never run against the restored production-shaped database.

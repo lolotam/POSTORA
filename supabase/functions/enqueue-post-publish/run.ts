@@ -2,6 +2,7 @@ import { z } from "npm:zod@3.23.8";
 import { sanitizeErrorMessage } from "../_shared/errorSanitizer.ts";
 
 const BodySchema = z.discriminatedUnion("mode", [
+  z.object({ post_id: z.string().uuid(), mode: z.literal("retry_story"), result_id: z.string().uuid() }).strict(),
   z.object({ post_id: z.string().uuid(), mode: z.literal("publish_now") }).strict(),
   z.object({
     post_id: z.string().uuid(), mode: z.literal("retry"),
@@ -19,6 +20,7 @@ export interface KickPayload {
 }
 
 export interface EnqueueDependencies {
+  requestStoryRetry?(postId: string, resultId: string, userId: string): Promise<boolean>;
   requestImmediatePublish(postId: string, userId: string): Promise<string | null>;
   requestPostRetry(postId: string, userId: string, accountIds?: string[]): Promise<RetryResult>;
   readPostStatus(postId: string, userId: string): Promise<string | null>;
@@ -52,6 +54,13 @@ async function accept(deps: EnqueueDependencies, postId: string, requestedAt: st
 }
 
 async function enqueue(deps: EnqueueDependencies, callerId: string, body: z.infer<typeof BodySchema>): Promise<EnqueueResponse> {
+  if (body.mode === "retry_story") {
+    if (!deps.requestStoryRetry || !await deps.requestStoryRetry(body.post_id, body.result_id, callerId)) {
+      return await refuse(deps, callerId, body.post_id, "not_retryable");
+    }
+    // The periodic background worker owns delivery. Never kick the primary publisher.
+    return { status: 202, body: { accepted: true, post_id: body.post_id, status: "processing" } };
+  }
   if (body.mode === "retry") {
     const retry = await deps.requestPostRetry(body.post_id, callerId, body.account_ids);
     return retry.status === "accepted"

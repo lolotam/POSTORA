@@ -12,6 +12,36 @@ interface ErrorPattern {
 }
 
 const errorPatterns: ErrorPattern[] = [
+  {
+    pattern: /^story_media_not_eligible$/,
+    platform: "instagram",
+    result: {
+      title: "Story media needs attention",
+      explanation: "The separate Story copy could not pass the media checks. The published Reel is unchanged.",
+      recommendation: "Use a vertical JPEG up to 8 MB, or MP4/MOV up to 100 MB and 3–60 seconds. Dimensions and video duration must be available in the media library. Nothing is trimmed automatically.",
+      icon: "format",
+    },
+  },
+  {
+    pattern: /^story_account_not_eligible$/,
+    platform: "instagram",
+    result: {
+      title: "Story publishing unavailable",
+      explanation: "Postora could not verify a Business account with Story publishing permission for this connection.",
+      recommendation: "Check the account's connection and publishing permissions. The published Reel is unchanged.",
+      icon: "permission",
+    },
+  },
+  {
+    pattern: /^story_(publish_unconfirmed|worker_exhausted)$/,
+    platform: "instagram",
+    result: {
+      title: "Story outcome needs verification",
+      explanation: "The Story worker could not confirm the final result. The Reel is a separate publication.",
+      recommendation: "Check Instagram and the Story status before taking another action. Do not create another copy while its outcome is uncertain.",
+      icon: "network",
+    },
+  },
   // ── Bluesky ──
   {
     pattern: /blob too big/i,

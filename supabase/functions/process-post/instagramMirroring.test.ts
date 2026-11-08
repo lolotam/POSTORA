@@ -28,6 +28,7 @@ Deno.test("Instagram mirrors keep durable receipts and public collaborator warni
   let storyPublishes = 0;
   let feedPublishes = 0;
   let nextContainer = 0;
+  let storyPrepared = false;
   const unexpected: string[] = [];
   let rows: Row[] = [];
   let logs: Record<string, unknown>[] = [];
@@ -42,7 +43,7 @@ Deno.test("Instagram mirrors keep durable receipts and public collaborator warni
   }
   function reset(nextMode: string, businessLogin = false) {
     mode = nextMode; direct = businessLogin; failStory = false; failReceipt = false; rejectCollaborator = false;
-    storyPublishes = 0; feedPublishes = 0; rows = []; logs = []; containers.clear(); post = makePost();
+    storyPublishes = 0; feedPublishes = 0; rows = []; logs = []; containers.clear(); post = makePost(); storyPrepared = false;
   }
   function receipt(body: Record<string, unknown>, story: boolean) {
     assertEquals(body.p_post_id, POST);
@@ -55,6 +56,11 @@ Deno.test("Instagram mirrors keep durable receipts and public collaborator warni
       platform_post_url: String(story ? body.p_story_url : body.p_provider_post_url),
       response_data: { ...(body.p_response_data as Record<string, unknown>), ...(story ? { ig_post_subtype: "story" } : {}) } };
     rows.push(row);
+    if (storyPrepared && row.response_data.ig_post_subtype === "reel" && row.status === "success") {
+      rows.push({ id: "queued-story", post_id: POST, social_account_id: ACCOUNT, platform: "instagram",
+        status: "pending", platform_post_id: null, platform_post_url: null,
+        response_data: { ig_post_subtype: "story", story_job_id: "queued-job", story_state: "queued" } });
+    }
     return Response.json({ platform_post_id: row.id, recorded: true });
   }
   globalThis.fetch = async (input, init) => {
@@ -94,6 +100,13 @@ Deno.test("Instagram mirrors keep durable receipts and public collaborator warni
       file_type: mode === "reel" ? "video" : "image", storage_bucket: "openinary", mime_type: mode === "reel" ? "video/mp4" : "image/jpeg" })));
     if (table === "media_file_providers") return Response.json([]);
     if (table === "app_settings") return Response.json(null);
+    if (table === "rpc/prepare_instagram_story") {
+      const args = await request.json();
+      assertEquals(args, { p_post_id: POST, p_account_id: ACCOUNT, p_user_id: OWNER });
+      assertEquals(storyPublishes, 0, "Intent is persisted before any inline Story could publish");
+      storyPrepared = true;
+      return Response.json(true);
+    }
     if (table === "social_accounts") {
       assertEquals(url.searchParams.get("user_id"), `eq.${OWNER}`);
       return Response.json([{ id: ACCOUNT, user_id: OWNER, platform: "instagram", platform_user_id: "992001", platform_username: "fixture",
@@ -130,13 +143,14 @@ Deno.test("Instagram mirrors keep durable receipts and public collaborator warni
       assertEquals(response.status, 200, await response.clone().text());
       return await response.json();
     };
-    for (const variant of ["image", "reel", "carousel"]) await test.step(`${variant} mirror is recorded and a completed-post retry never publishes it twice`, async () => {
-      reset(variant);
+    for (const [variant, business] of [["image", false], ["reel", false], ["carousel", false], ["reel", true]] as const) await test.step(`${variant} (${business ? "direct" : "page"}) keeps receipts and never publishes twice`, async () => {
+      reset(variant, business);
       await publish();
-      assertEquals(rows.filter((row) => row.response_data.ig_post_subtype === "story").map((row) => row.platform_post_id), ["story-1"]);
+      assertEquals(rows.filter((row) => row.response_data.ig_post_subtype === "story").map((row) => row.platform_post_id), variant === "reel" ? [null] : ["story-1"]);
+      if (variant === "reel") assertEquals(rows.find((row) => row.id === "queued-story")?.status, "pending");
       assertEquals(post.status, "completed");
       await publish();
-      assertEquals({ storyPublishes, feedPublishes }, { storyPublishes: 1, feedPublishes: 1 });
+      assertEquals({ storyPublishes, feedPublishes }, { storyPublishes: variant === "reel" ? 0 : 1, feedPublishes: 1 });
     });
     await test.step("a successful standalone Story keeps its provider credential out of diagnostics", async () => {
       reset("image"); post.metadata.instagram_post_type = "story";

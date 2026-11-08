@@ -1974,6 +1974,20 @@ export async function retryFailedPost(
     return await refuse(deps, route, { userId }, postId);
   }
 
+  if (body && typeof body === "object" && "story_result_id" in body) {
+    const resultId = (body as { story_result_id: unknown }).story_result_id;
+    if (!isValidUuid(resultId)) return await refuse(deps, route, { userId, postId },
+      error(400, "INVALID_STORY_RESULT", "Provide the Story result UUID from get_post."));
+    const { data, error: retryError } = await deps.supabase.rpc("retry_instagram_story", {
+      p_post_id: postId, p_result_id: resultId, p_user_id: userId,
+    });
+    if (retryError) return await refuse(deps, route, { userId, postId },
+      error(503, "STORY_RETRY_UNAVAILABLE", "Story retry is currently unavailable."));
+    if (data !== true) return await refuse(deps, route, { userId, postId },
+      error(409, "STORY_NOT_RETRYABLE", "Only a definitely failed, owned Story can be retried."));
+    return ok({ post_id: postId, story_result_id: resultId, status: "results_pending" }, 202);
+  }
+
   // The claim comes before every read and every write: the post is worked on
   // under a lease, so two retries of the same post cannot both run.
   const { data: claim, error: claimError } = await deps.supabase.rpc(CLAIM_RPC, {

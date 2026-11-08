@@ -35,6 +35,11 @@ export function createDependencies(): HttpDependencies {
   return {
     authenticate: (req) => authenticateCaller(req),
     logRefusal,
+    requestStoryRetry: async (postId, resultId, userId) => {
+      const { data, error } = await admin.rpc("retry_instagram_story", { p_post_id: postId, p_result_id: resultId, p_user_id: userId });
+      if (error) throw error;
+      return data === true;
+    },
     requestImmediatePublish: async (postId, userId) => {
       const { data, error } = await admin.rpc("request_immediate_publish", { p_post_id: postId, p_user_id: userId });
       if (error) throw error;
