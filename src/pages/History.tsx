@@ -32,6 +32,7 @@ import {
 } from "@/components/history";
 import { PublishingStatusIndicator } from "@/components/history/PublishingStatusIndicator";
 import { useHistoryActions } from "@/hooks/useHistoryActions";
+import { resolveMediaPreviewUrl } from "@/lib/mediaUrl";
 
 interface PostWithResults extends Post {
   platformResults: PlatformPost[];
@@ -149,29 +150,16 @@ export default function History() {
         return;
       }
 
-      // Generate URLs for each media file
-      // Cloudinary files have the URL directly in file_path
-      // Supabase storage files need signed URLs
+      // CDN delivery URLs are direct; private storage object paths need signing.
       const previews: Array<{ id: string; url: string; kind: "image" | "video" }> = [];
       for (const m of mediaRows || []) {
-        if (!m.file_path) continue;
-        
-        let url: string;
-        
-        if (m.storage_bucket === "cloudinary") {
-          // Cloudinary files: file_path contains the full URL
-          url = m.file_path;
-        } else if (m.storage_bucket) {
-          // Supabase storage: create signed URL
+        const url = await resolveMediaPreviewUrl(m, async (bucket, path) => {
           const { data: signedUrlData, error: signedUrlError } = await supabase.storage
-            .from(m.storage_bucket)
-            .createSignedUrl(m.file_path, 3600); // 1 hour expiry
-          
-          if (signedUrlError || !signedUrlData?.signedUrl) continue;
-          url = signedUrlData.signedUrl;
-        } else {
-          continue;
-        }
+            .from(bucket)
+            .createSignedUrl(path, 3600);
+          return signedUrlError ? null : signedUrlData?.signedUrl ?? null;
+        });
+        if (!url) continue;
         
         const mime = (m.mime_type || "").toLowerCase();
         const kind: "image" | "video" = mime.startsWith("video/") || m.file_type === "video" ? "video" : "image";

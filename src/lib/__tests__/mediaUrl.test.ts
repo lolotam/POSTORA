@@ -1,5 +1,26 @@
-import { describe, it, expect } from "vitest";
-import { getMediaThumbnailUrl, resolveMediaPublicUrl, transformMediaUrl } from "../mediaUrl";
+import { describe, it, expect, vi } from "vitest";
+import { getMediaThumbnailUrl, resolveMediaPreviewUrl, resolveMediaPublicUrl, transformMediaUrl } from "../mediaUrl";
+
+describe("post details media previews", () => {
+  it.each(["openinary", "cloudinary"])("shows %s delivery URLs without private-bucket signing", async (storage_bucket) => {
+    // 2026-11-08: an existing API-post image disappeared because Openinary was treated as a bucket.
+    const file_path = `https://${storage_bucket}.example/post/image.png`;
+    const sign = vi.fn();
+    expect(await resolveMediaPreviewUrl({ storage_bucket, file_path }, sign)).toBe(file_path);
+    expect(sign).not.toHaveBeenCalled();
+  });
+
+  it("signs private storage paths instead of exposing an unsigned URL", async () => {
+    const sign = vi.fn().mockResolvedValue("https://storage.example/signed/image");
+    expect(await resolveMediaPreviewUrl({ storage_bucket: "media", file_path: "owner/image.png" }, sign))
+      .toBe("https://storage.example/signed/image");
+    expect(sign).toHaveBeenCalledWith("media", "owner/image.png");
+  });
+
+  it("keeps a failed private signing unavailable", async () => {
+    expect(await resolveMediaPreviewUrl({ storage_bucket: "media", file_path: "owner/image.png" }, async () => null)).toBeNull();
+  });
+});
 
 /**
  * Regression coverage for the broken-media-link incident (2026-06-20):
