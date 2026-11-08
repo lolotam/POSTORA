@@ -11,6 +11,10 @@ DECLARE
 BEGIN
   ASSERT NOT has_function_privilege('authenticated','public.prepare_instagram_story(uuid,uuid,uuid)','EXECUTE'), 'clients cannot forge service identity';
   INSERT INTO auth.users(id,email) VALUES (u,'story-owner@example.invalid'),(other_user,'story-other@example.invalid');
+  -- Three independent scenarios need three posts; keep the owner non-admin and quota enforcement active.
+  INSERT INTO public.user_quotas(user_id,max_posts_per_day) VALUES(u,3)
+    ON CONFLICT (user_id) DO UPDATE SET max_posts_per_day=EXCLUDED.max_posts_per_day;
+  ASSERT (SELECT max_posts_per_day FROM public.effective_user_quotas(u))=3, 'bounded fixture quota';
   INSERT INTO public.social_accounts(id,user_id,platform,platform_user_id,platform_username,access_token,is_active)
     VALUES(a,u,'instagram','3910001','story_fixture','synthetic-unused',true);
   INSERT INTO public.instagram_account_capabilities(social_account_id,user_id,login_kind,permission_read_state,granted_scopes,scopes_read_at)
