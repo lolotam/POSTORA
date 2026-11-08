@@ -18,6 +18,8 @@ export function publicationSummary(results: readonly PublicationResult[]): "part
   const outcomes = new Map<string, string | null>();
   const rank: Record<string, number> = { success: 3, pending: 2, pending_inbox: 2, failed: 1 };
   results.forEach((result, index) => {
+    // Missing ownership identity cannot prove that two rows target the same account.
+    // Keep them separate so another account's success cannot erase a failure.
     const account = result.social_account_id ?? result.id ?? String(index);
     const key = `${result.platform}:${account}:${instagramPublicationType(result) ?? "post"}`;
     const previous = outcomes.get(key);

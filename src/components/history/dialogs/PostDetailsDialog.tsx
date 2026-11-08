@@ -104,6 +104,10 @@ export function PostDetailsDialog({
     feed: t("publicationType.feed", "Feed"),
     carousel: t("publicationType.carousel", "Carousel"),
   };
+  const publicationLabel = (result: PlatformPost): string => {
+    const subtype = instagramPublicationType(result);
+    return subtype ? ` · ${subtypeLabels[subtype] ?? subtype}` : "";
+  };
   const { toast } = useToast();
   const navigate = useNavigate();
   const { flags } = useFeatureFlags();
@@ -352,9 +356,7 @@ export function PostDetailsDialog({
                               <PlatformIcon platform={result.platform as Platform} size="md" />
                               <div className="flex flex-col">
                                 <div className="flex items-center gap-2">
-                                  <span className="font-medium">{getPlatformName(result.platform as Platform)}{instagramPublicationType(result)
-                                    ? ` · ${subtypeLabels[instagramPublicationType(result)!]}`
-                                    : ""}</span>
+                                  <span className="font-medium">{getPlatformName(result.platform as Platform)}{publicationLabel(result)}</span>
                                   <Badge
                                     variant="secondary"
                                     className={cn(

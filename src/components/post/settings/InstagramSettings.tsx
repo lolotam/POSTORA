@@ -360,7 +360,7 @@ export function InstagramSettings({
                   <Sparkles className="w-4 h-4 text-muted-foreground" />
                   <div>
                     <p className="text-sm">{t("instagram.alsoShareToStory", "Publish a separate Story copy")}</p>
-                    <p className="text-xs text-muted-foreground">{t("instagram.alsoShareToStorySubtitle", "Upload the first photo or video as a separate Story, not a link to the Feed post or Reel")}</p>
+                    <p className="text-xs text-muted-foreground">{t("instagram.alsoShareToStorySubtitle", "Upload a photo or video as a separate Story, not a link to the Feed post or Reel")}</p>
                   </div>
                 </div>
               </TooltipTrigger>
