@@ -49,14 +49,14 @@ export function useRedditOAuth(
       });
       if (error) throw error;
       if (data?.success) {
-        toast({ title: "Reddit connected!", description: data.username ? `Connected account: u/${data.username}` : "Your Reddit account has been connected successfully." });
+        toast({ platform: "reddit", title: "Reddit connected!", description: data.username ? `Connected account: u/${data.username}` : "Your Reddit account has been connected successfully." });
         refetchSocialQueries(queryClient);
       } else {
         throw new Error(data?.error || "Failed to complete Reddit connection");
       }
     } catch (error) {
       console.error("Reddit callback error:", error);
-      toast({ title: "Connection failed", description: error instanceof Error ? error.message : "Failed to connect Reddit", variant: "destructive" });
+      toast({ platform: "reddit", title: "Connection failed", description: error instanceof Error ? error.message : "Failed to connect Reddit", variant: "destructive" });
     } finally {
       setConnectingPlatform(null);
       setConnectingProfile(null);

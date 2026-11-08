@@ -1,7 +1,7 @@
 import { useRef, useState, type ChangeEvent, type KeyboardEvent } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { FileAudio, FileIcon, Image, LayoutList, Loader2, Paperclip, Send, Video, X } from "lucide-react";
-import { toast } from "sonner";
+import { createSocialToast } from "@/components/ui/social-toast";
 import { InteractiveMessageBuilder } from "@/components/messaging/InteractiveMessageBuilder";
 import { QuickReplyPicker, SlashCommandSuggestions } from "@/components/messaging/QuickReplyPicker";
 import { Button } from "@/components/ui/button";
@@ -26,6 +26,8 @@ import {
 } from "../domain/whatsappCapabilities";
 import { useWhatsAppInboxApi } from "./WhatsAppInboxApiProvider";
 import { WhatsAppVoiceComposer } from "./WhatsAppVoiceComposer";
+
+const toast = createSocialToast("whatsapp");
 
 const MAX_ATTACHMENT_BYTES = 16 * 1024 * 1024;
 

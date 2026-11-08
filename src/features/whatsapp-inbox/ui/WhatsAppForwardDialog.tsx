@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { Send } from "lucide-react";
-import { toast } from "sonner";
+import { createSocialToast } from "@/components/ui/social-toast";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -11,6 +11,8 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { useWhatsAppInboxApi } from "./WhatsAppInboxApiProvider";
+
+const toast = createSocialToast("whatsapp");
 
 export interface ForwardTarget {
   phone: string;

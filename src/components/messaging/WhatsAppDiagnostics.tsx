@@ -13,9 +13,11 @@ import { Textarea } from "@/components/ui/textarea";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from "@/components/ui/command";
 import { Send, Zap, TestTube, Loader2, CheckCircle2, XCircle, Clock, ChevronsUpDown, Check } from "lucide-react";
-import { toast } from "sonner";
+import { createSocialToast } from "@/components/ui/social-toast";
 import { supabase } from "@/integrations/supabase/client";
 import { cn } from "@/lib/utils";
+
+const toast = createSocialToast("whatsapp");
 
 interface WhatsAppDiagnosticsProps {
   socialAccountId: string;

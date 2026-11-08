@@ -1,3 +1,4 @@
+import type { Platform } from "@/lib/types";
 import { useEffect } from "react";
 import { useSearchParams } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
@@ -186,7 +187,7 @@ export function useOAuthRedirectHandler(handlers: CallbackHandlers) {
         sessionStorage.setItem(dedupeKey, String(Date.now()));
         // Auto-expire after 10s so a future reconnect can toast again.
         setTimeout(() => sessionStorage.removeItem(dedupeKey), 10_000);
-        toast(shown);
+        toast({ ...shown, platform: (connected === "instagram_business" ? "instagram" : connected) as Platform });
         refetchSocialQueries(queryClient);
       }
       setSearchParams({});
