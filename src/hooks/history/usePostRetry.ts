@@ -10,6 +10,7 @@ import {
   PostWithResults, invalidatePostQueries,
 } from "./historyUtils";
 import { failedRetryTargets } from "./retryTargets";
+import type { Platform } from "@/lib/types";
 
 export function usePostRetry() {
   const { toast } = useToast();
@@ -20,7 +21,8 @@ export function usePostRetry() {
       throw new Error(t("common:publishing.unconfirmed", "Could not confirm the publish request. Check History for its status."));
     }
   };
-  const notifyRetrySubmitted = () => toast({
+  const notifyRetrySubmitted = (platforms?: Platform[]) => toast({
+    platforms,
     title: t("toast.retrySubmitted", "Retry submitted"),
     description: t("common:publishing.submitted", "Submitted, publishing"),
   });
@@ -66,17 +68,17 @@ export function usePostRetry() {
   const handleRetrySinglePlatform = async (postId: string, platformPostId: string, platform: string, accountId?: string | null) => {
     // Without an account, process-post would publish to every selected account on the platform.
     if (!accountId) {
-      toast({ title: "Cannot retry this result", description: "It names no account. Create the post again for the account you want.", variant: "destructive" });
+      toast({ platform: platform as Platform, title: "Cannot retry this result", description: "It names no account. Create the post again for the account you want.", variant: "destructive" });
       return;
     }
     setRetryingPostId(postId);
     try {
       await submitRetry(postId, [accountId]);
-      notifyRetrySubmitted();
+      notifyRetrySubmitted([platform as Platform]);
       invalidatePostQueries(queryClient);
     } catch (error) {
       console.error("Single platform retry error:", error);
-      toast({ title: "Retry failed", description: error instanceof Error ? error.message : "Failed to retry platform", variant: "destructive" });
+      toast({ platform: platform as Platform, title: "Retry failed", description: error instanceof Error ? error.message : "Failed to retry platform", variant: "destructive" });
     } finally { setRetryingPostId(null); }
   };
 
@@ -94,7 +96,7 @@ export function usePostRetry() {
     try {
       // The server selects current failed accounts atomically, including failures since the last read.
       await submitRetry(post.id);
-      notifyRetrySubmitted();
+      notifyRetrySubmitted(failedPlatforms as Platform[]);
       invalidatePostQueries(queryClient);
     } catch (error) {
       console.error("Retry error:", error);

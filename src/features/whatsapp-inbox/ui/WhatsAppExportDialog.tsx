@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { Loader2 } from "lucide-react";
-import { toast } from "sonner";
+import { createSocialToast } from "@/components/ui/social-toast";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
@@ -18,6 +18,8 @@ import {
   type ExportChatTarget,
   type ExportFormat,
 } from "../application/useConversationExport";
+
+const toast = createSocialToast("whatsapp");
 
 /** Past this an export is heavy enough that the user deserves a warning before starting it. */
 const MEDIA_WARNING_BYTES = 25 * 1024 * 1024;

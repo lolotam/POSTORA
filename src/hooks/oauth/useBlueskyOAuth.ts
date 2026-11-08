@@ -33,7 +33,7 @@ export function useBlueskyOAuth(
       if (data?.url) { window.location.href = data.url; } else { throw new Error("No authorization URL received"); }
     } catch (error) {
       console.error("Bluesky OAuth error:", error);
-      toast({ title: "Connection failed", description: error instanceof Error ? error.message : "Failed to start Bluesky OAuth", variant: "destructive" });
+      toast({ platform: "bluesky", title: "Connection failed", description: error instanceof Error ? error.message : "Failed to start Bluesky OAuth", variant: "destructive" });
       setConnectingPlatform(null);
       setConnectingProfile(null);
     }
@@ -47,14 +47,14 @@ export function useBlueskyOAuth(
       });
       if (error) throw error;
       if (data?.success) {
-        toast({ title: "Bluesky connected!", description: data.username ? `Connected account: @${data.username} (via OAuth)` : "Your Bluesky account has been connected successfully via OAuth." });
+        toast({ platform: "bluesky", title: "Bluesky connected!", description: data.username ? `Connected account: @${data.username} (via OAuth)` : "Your Bluesky account has been connected successfully via OAuth." });
         refetchSocialQueries(queryClient);
       } else {
         throw new Error(data?.error || "Failed to complete Bluesky OAuth");
       }
     } catch (error) {
       console.error("Bluesky OAuth callback error:", error);
-      toast({ title: "Connection failed", description: error instanceof Error ? error.message : "Failed to connect Bluesky", variant: "destructive" });
+      toast({ platform: "bluesky", title: "Connection failed", description: error instanceof Error ? error.message : "Failed to connect Bluesky", variant: "destructive" });
     } finally {
       setConnectingPlatform(null);
       setConnectingProfile(null);
@@ -77,7 +77,7 @@ export function useBlueskyOAuth(
       });
       if (error) throw error;
       if (data?.success) {
-        toast({ title: "Bluesky connected!", description: data.username ? `Connected account: @${data.username}` : "Your Bluesky account has been connected successfully." });
+        toast({ platform: "bluesky", title: "Bluesky connected!", description: data.username ? `Connected account: @${data.username}` : "Your Bluesky account has been connected successfully." });
         refetchSocialQueries(queryClient);
         setBlueskyDialogData(null);
       } else {
@@ -85,7 +85,7 @@ export function useBlueskyOAuth(
       }
     } catch (error) {
       console.error("Bluesky connection error:", error);
-      toast({ title: "Connection failed", description: error instanceof Error ? error.message : "Failed to connect Bluesky", variant: "destructive" });
+      toast({ platform: "bluesky", title: "Connection failed", description: error instanceof Error ? error.message : "Failed to connect Bluesky", variant: "destructive" });
     } finally {
       setConnectingPlatform(null);
       setConnectingProfile(null);

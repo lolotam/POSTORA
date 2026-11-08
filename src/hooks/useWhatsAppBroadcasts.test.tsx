@@ -105,6 +105,8 @@ function jsonResponse(status: number, body: unknown) {
   return { ok: status >= 200 && status < 300, status, json: async () => body };
 }
 
+const socialToastOptions = expect.objectContaining({ icon: expect.anything(), style: { direction: "ltr" } });
+
 describe("useWhatsAppBroadcasts", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -134,8 +136,8 @@ describe("useWhatsAppBroadcasts", () => {
       await result.current.sendBroadcast.mutateAsync("b1");
     });
 
-    expect(mocks.toastSuccess).toHaveBeenCalledWith("Broadcast submitted — sending in the background");
-    expect(mocks.toastSuccess).not.toHaveBeenCalledWith(expect.stringContaining("Broadcast complete"));
+    expect(mocks.toastSuccess).toHaveBeenCalledWith("Broadcast submitted — sending in the background", socialToastOptions);
+    expect(mocks.toastSuccess).not.toHaveBeenCalledWith(expect.stringContaining("Broadcast complete"), socialToastOptions);
   });
 
   it("a 409 send toasts the server error", async () => {
@@ -148,7 +150,7 @@ describe("useWhatsAppBroadcasts", () => {
       await result.current.sendBroadcast.mutateAsync("b1").catch(() => undefined);
     });
 
-    expect(mocks.toastError).toHaveBeenCalledWith("Broadcast failed: Broadcast already started");
+    expect(mocks.toastError).toHaveBeenCalledWith("Broadcast failed: Broadcast already started", socialToastOptions);
   });
 
   it("polls while a broadcast is sending and stops when none is", async () => {
@@ -198,7 +200,7 @@ describe("useWhatsAppBroadcasts", () => {
       );
     });
     await waitFor(() =>
-      expect(mocks.toastSuccess).toHaveBeenCalledWith("Broadcast complete: 2 sent, 1 failed")
+      expect(mocks.toastSuccess).toHaveBeenCalledWith("Broadcast complete: 2 sent, 1 failed", socialToastOptions)
     );
 
     await act(async () => {
@@ -227,7 +229,7 @@ describe("useWhatsAppBroadcasts", () => {
     list.release([broadcast({ status: "completed", sent_count: 3, failed_count: 0 })]);
 
     await waitFor(() =>
-      expect(mocks.toastSuccess).toHaveBeenCalledWith("Broadcast complete: 3 sent, 0 failed")
+      expect(mocks.toastSuccess).toHaveBeenCalledWith("Broadcast complete: 3 sent, 0 failed", socialToastOptions)
     );
     const finals = mocks.toastSuccess.mock.calls.filter(([message]) =>
       String(message).startsWith("Broadcast complete")
@@ -259,7 +261,7 @@ describe("useWhatsAppBroadcasts", () => {
     await act(async () => {
       release(jsonResponse(202, { accepted: true, jobId: "job-1", broadcast_id: "b1", status: "sending" }));
     });
-    await waitFor(() => expect(mocks.toastSuccess).toHaveBeenCalledWith("Broadcast complete: 3 sent, 0 failed"));
+    await waitFor(() => expect(mocks.toastSuccess).toHaveBeenCalledWith("Broadcast complete: 3 sent, 0 failed", socialToastOptions));
     expect(queryClient.getQueryData(["whatsapp-broadcasts"])).toBe(cached);
     expect(mocks.toastSuccess.mock.calls.filter(([message]) => String(message).startsWith("Broadcast complete"))).toHaveLength(1);
     expect(invalidate.mock.calls.filter(([arg]) => arg.queryKey?.[0] === "whatsapp-broadcast-recipients")).toHaveLength(1);

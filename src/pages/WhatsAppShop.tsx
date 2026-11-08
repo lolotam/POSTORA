@@ -61,12 +61,12 @@ export default function WhatsAppShop() {
     setProducts((prev) => [product, ...prev]);
     setCreateOpen(false);
     setNewProduct({ name: "", description: "", price: "", imageUrl: "" });
-    toast({ title: t("shop.productAdded", "Product added"), description: t("shop.productAddedDesc", "Product saved as draft. Connect WhatsApp Commerce API to sync.") });
+    toast({ platform: "whatsapp", title: t("shop.productAdded", "Product added"), description: t("shop.productAddedDesc", "Product saved as draft. Connect WhatsApp Commerce API to sync.") });
   };
 
   const handleDelete = (id: string) => {
     setProducts((prev) => prev.filter((p) => p.id !== id));
-    toast({ title: t("shop.productRemoved", "Product removed") });
+    toast({ platform: "whatsapp", title: t("shop.productRemoved", "Product removed") });
   };
 
   const handleToggleStatus = (id: string) => {

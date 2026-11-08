@@ -128,7 +128,7 @@ export function WhatsAppConversationPane({
       { socialAccountId, conversationId },
       { onError: () => {
         readState.failed = true;
-        toast({ title: "Couldn't mark the chat as read", variant: "destructive" });
+        toast({ platform: "whatsapp", title: "Couldn't mark the chat as read", variant: "destructive" });
       } },
     );
   }, [activeRole, conversationId, hasUnread, markConversationRead, socialAccountId]);

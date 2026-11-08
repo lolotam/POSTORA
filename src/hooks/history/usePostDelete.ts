@@ -125,7 +125,7 @@ export function usePostDelete() {
    */
   const handleDeletePlatformPost = async (platformPostRowId: string, platform: string) => {
     if (platform !== "threads") {
-      toast({ title: "Not supported", description: `Platform delete is only implemented for Threads.`, variant: "destructive" });
+      toast({ platform: "threads", title: "Not supported", description: `Platform delete is only implemented for Threads.`, variant: "destructive" });
       return;
     }
     try {
@@ -133,21 +133,21 @@ export function usePostDelete() {
         body: { platform_post_row_id: platformPostRowId },
       });
       if (error) {
-        toast({ title: "Delete failed", description: error.message, variant: "destructive" });
+        toast({ platform: "threads", title: "Delete failed", description: error.message, variant: "destructive" });
         return;
       }
       if (data && data.ok === false) {
-        toast({
+        toast({ platform: "threads",
           title: "Delete failed",
           description: data.message || data.reason || "Threads rejected the request",
           variant: "destructive",
         });
         return;
       }
-      toast({ title: "Deleted from Threads", description: "The live post was removed from Meta." });
+      toast({ platform: "threads", title: "Deleted from Threads", description: "The live post was removed from Meta." });
       invalidatePostQueries(queryClient);
     } catch (e) {
-      toast({
+      toast({ platform: "threads",
         title: "Delete failed",
         description: e instanceof Error ? e.message : "Unknown error",
         variant: "destructive",

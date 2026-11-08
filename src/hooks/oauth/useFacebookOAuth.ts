@@ -124,7 +124,7 @@ export function useFacebookOAuth(
     if (selectingRef.current) return;
     const protectedAttempt = Boolean(pageSelectionData.attemptId && selectionKey);
     if (pageSelectionData.attemptId && !selectionKey) {
-      toast({
+      toast({ platform: "facebook",
         title: "Connection failed",
         description: "This page cannot be selected. Please reconnect.",
         variant: "destructive",
@@ -159,7 +159,7 @@ export function useFacebookOAuth(
           // The protected writer binds the profile inside the SQL transaction.
           await linkAccountToProfile(user.id, pageSelectionData.platform, pageSelectionData.profileId);
         }
-        toast({ title: "Facebook Page connected!", description });
+        toast({ platform: "facebook", title: "Facebook Page connected!", description });
         refetchSocialQueries(queryClient);
         if (protectedAttempt && selectionKey) {
           const committed = [...(pageSelectionData.committedSelectionKeys ?? []), selectionKey];
@@ -181,7 +181,7 @@ export function useFacebookOAuth(
       }
     } catch (error) {
       console.error("Page selection error:", error);
-      toast({ title: "Connection failed", description: error instanceof Error ? error.message : "Failed to connect page", variant: "destructive" });
+      toast({ platform: "facebook", title: "Connection failed", description: error instanceof Error ? error.message : "Failed to connect page", variant: "destructive" });
       if (!protectedAttempt) setPageSelectionData(null);
     } finally {
       selectingRef.current = null;
@@ -207,14 +207,14 @@ export function useFacebookOAuth(
       if (error) throw error;
       if (data?.success) {
         await linkAccountToProfile(user.id, "instagram", pageSelectionData.profileId);
-        toast({ title: "Instagram connected!", description: `Connected standalone account: @${data.instagram_username}` });
+        toast({ platform: "instagram", title: "Instagram connected!", description: `Connected standalone account: @${data.instagram_username}` });
         refetchSocialQueries(queryClient);
       } else {
         throw new Error(data?.error || "Failed to store Instagram account");
       }
     } catch (error) {
       console.error("Standalone Instagram selection error:", error);
-      toast({ title: "Connection failed", description: error instanceof Error ? error.message : "Failed to connect Instagram", variant: "destructive" });
+      toast({ platform: "instagram", title: "Connection failed", description: error instanceof Error ? error.message : "Failed to connect Instagram", variant: "destructive" });
     } finally {
       setSelectingPage(null);
       setPageSelectionData(null);
@@ -241,7 +241,7 @@ export function useFacebookOAuth(
       // down. supabase-js surfaces the HTTP status on FunctionsHttpError.
       const status = (error as { context?: { status?: number } } | null)?.context?.status;
       const isExpired = status === 404 || /not found|expired/i.test(String(data?.error ?? ""));
-      toast({
+      toast({ platform: "facebook",
         title: isExpired ? "Connection expired" : "Connection failed",
         description: isExpired
           ? "The Facebook selection link expired. Please reconnect."

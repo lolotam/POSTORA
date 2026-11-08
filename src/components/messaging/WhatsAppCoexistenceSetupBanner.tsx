@@ -5,7 +5,9 @@ import { AlertTriangle, CheckCircle2, Loader2, ShieldOff } from "lucide-react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { useMessagingAccounts, useWhatsAppRegisterPhone } from "@/hooks/useMessaging";
-import { toast } from "sonner";
+import { createSocialToast } from "@/components/ui/social-toast";
+
+const toast = createSocialToast("whatsapp");
 
 /**
  * Shown for WhatsApp Coexistence accounts that have not yet completed

@@ -5,8 +5,10 @@ import { Button } from "@/components/ui/button";
 import { useWhatsAppCatalog, CatalogProduct } from "@/hooks/useWhatsAppCatalog";
 import { Loader2, ShoppingBag, ExternalLink, Package, AlertTriangle } from "lucide-react";
 import { useState } from "react";
-import { toast } from "sonner";
+import { createSocialToast } from "@/components/ui/social-toast";
 import { supabase } from "@/integrations/supabase/client";
+
+const toast = createSocialToast("whatsapp");
 
 async function callMessagingApi(action: string, body: Record<string, unknown>) {
   let { data: { session } } = await supabase.auth.getSession();

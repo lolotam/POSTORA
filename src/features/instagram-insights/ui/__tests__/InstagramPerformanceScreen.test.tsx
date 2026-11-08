@@ -82,7 +82,7 @@ describe("InstagramPerformanceScreen", () => {
     fireEvent.click(screen.getByRole("button", { name: /Sync now/i }));
 
     await waitFor(() => {
-      expect(errorToast).toHaveBeenCalledWith(expectedMessage);
+      expect(errorToast).toHaveBeenCalledWith(expectedMessage, expect.objectContaining({ icon: expect.anything(), style: { direction: "ltr" } }));
     });
     expect(await response.json()).toEqual({ error: code });
   });
@@ -108,7 +108,7 @@ describe("InstagramPerformanceScreen", () => {
     fireEvent.click(screen.getByRole("button", { name: /Sync now/i }));
 
     await waitFor(() => {
-      expect(errorToast).toHaveBeenCalledWith(expectedMessage);
+      expect(errorToast).toHaveBeenCalledWith(expectedMessage, expect.objectContaining({ icon: expect.anything(), style: { direction: "ltr" } }));
     });
   });
 

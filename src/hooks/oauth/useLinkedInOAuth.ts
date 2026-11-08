@@ -39,7 +39,7 @@ export function useLinkedInOAuth(
       setConnectingPlatform(null);
       setConnectingProfile(null);
       console.error("LinkedIn connect error:", error);
-      toast({
+      toast({ platform: "linkedin",
         title: "LinkedIn connection failed",
         description: error instanceof Error ? error.message : "Failed to start LinkedIn authorization",
         variant: "destructive",
@@ -57,7 +57,7 @@ export function useLinkedInOAuth(
       });
       if (error) throw error;
       if (data?.success) {
-        toast({
+        toast({ platform: "linkedin",
           title: "LinkedIn connected!",
           description: data.username
             ? `Connected account: ${data.username}`
@@ -69,7 +69,7 @@ export function useLinkedInOAuth(
       }
     } catch (error) {
       console.error("LinkedIn callback error:", error);
-      toast({
+      toast({ platform: "linkedin",
         title: "Connection failed",
         description: error instanceof Error ? error.message : "Failed to connect LinkedIn",
         variant: "destructive",

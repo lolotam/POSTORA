@@ -46,14 +46,14 @@ export function useYouTubeOAuth(
       });
       if (error) throw error;
       if (data?.success) {
-        toast({ title: "YouTube connected!", description: "Your YouTube channel has been connected successfully." });
+        toast({ platform: "youtube", title: "YouTube connected!", description: "Your YouTube channel has been connected successfully." });
         refetchSocialQueries(queryClient);
       } else {
         throw new Error(data?.error || "Failed to complete YouTube connection");
       }
     } catch (error) {
       console.error("YouTube callback error:", error);
-      toast({ title: "Connection failed", description: error instanceof Error ? error.message : "Failed to connect YouTube", variant: "destructive" });
+      toast({ platform: "youtube", title: "Connection failed", description: error instanceof Error ? error.message : "Failed to connect YouTube", variant: "destructive" });
     } finally {
       setConnectingPlatform(null);
       setConnectingProfile(null);

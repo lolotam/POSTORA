@@ -67,14 +67,14 @@ export function TikTokDebugPanel() {
     navigator.clipboard.writeText(text);
     setCopied(label);
     setTimeout(() => setCopied(null), 2000);
-    toast({ title: "Copied!", description: `${label} copied to clipboard` });
+    toast({ platform: "tiktok", title: "Copied!", description: `${label} copied to clipboard` });
   };
 
   const clearLastError = () => {
     sessionStorage.removeItem("tiktok_last_error");
     sessionStorage.removeItem("tiktok_last_error_timestamp");
     setDebugInfo(prev => prev ? { ...prev, lastError: null, lastErrorTimestamp: null } : null);
-    toast({ title: "Cleared", description: "Last error cleared" });
+    toast({ platform: "tiktok", title: "Cleared", description: "Last error cleared" });
   };
 
   return (

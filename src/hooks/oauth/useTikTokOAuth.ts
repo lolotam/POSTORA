@@ -62,7 +62,7 @@ export function useTikTokOAuth(
       });
       if (error) throw error;
       if (data?.success) {
-        toast({
+        toast({ platform: "tiktok",
           title: "TikTok connected!",
           description: "Your TikTok account has been connected successfully.",
         });
@@ -72,7 +72,7 @@ export function useTikTokOAuth(
       }
     } catch (error) {
       console.error("TikTok callback error:", error);
-      toast({
+      toast({ platform: "tiktok",
         title: "Connection failed",
         description:
           error instanceof Error ? error.message : "Failed to connect TikTok",

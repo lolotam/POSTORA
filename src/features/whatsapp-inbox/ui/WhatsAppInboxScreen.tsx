@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { CheckSquare, Download, Loader2, Plus, X } from "lucide-react";
 import { useSearchParams } from "react-router-dom";
-import { toast } from "sonner";
+import { createSocialToast } from "@/components/ui/social-toast";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -30,6 +30,8 @@ import { WhatsAppConnectionStatusChip } from "./WhatsAppConnectionStatusChip";
 import { WhatsAppConversationPane } from "./WhatsAppConversationPane";
 import { WhatsAppExportDialog } from "./WhatsAppExportDialog";
 import { WhatsAppInboxApiProvider } from "./WhatsAppInboxApiProvider";
+
+const toast = createSocialToast("whatsapp");
 
 export function WhatsAppInboxScreen(): JSX.Element {
   const api = useMemo(() => createWhatsAppInboxApi(), []);

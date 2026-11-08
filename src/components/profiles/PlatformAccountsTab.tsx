@@ -130,14 +130,14 @@ export function PlatformAccountsTab({
       });
       if (error) throw error;
       const refreshed = data?.refreshed || 0;
-      toast({
+      toast({ platform: "youtube",
         title: refreshed > 0 ? "YouTube token refreshed" : "No refresh needed",
         description: refreshed > 0
           ? `Successfully refreshed ${refreshed} YouTube token(s).`
           : "Tokens are still valid or could not be refreshed.",
       });
     } catch (err) {
-      toast({
+      toast({ platform: "youtube",
         title: "Refresh failed",
         description: err instanceof Error ? err.message : "Could not refresh YouTube tokens.",
         variant: "destructive",
