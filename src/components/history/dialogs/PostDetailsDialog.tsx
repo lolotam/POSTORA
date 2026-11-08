@@ -98,6 +98,12 @@ export function PostDetailsDialog({
 }: PostDetailsDialogProps) {
   const { t } = useTranslation("history");
   const summary = publicationSummary(post?.platformResults ?? []);
+  const subtypeLabels: Record<string, string> = {
+    story: t("publicationType.story", "Story"),
+    reel: t("publicationType.reel", "Reel"),
+    feed: t("publicationType.feed", "Feed"),
+    carousel: t("publicationType.carousel", "Carousel"),
+  };
   const { toast } = useToast();
   const navigate = useNavigate();
   const { flags } = useFeatureFlags();
@@ -283,7 +289,9 @@ export function PostDetailsDialog({
               <div>
                 <span className="text-muted-foreground">{t("table.status", "Status")}</span>
                 <p className="font-medium capitalize">{summary
-                  ? t(`status.${summary}`, summary === "partialFailure" ? "Partially published — some items failed" : "Partially published — some items pending")
+                  ? summary === "partialFailure"
+                    ? t("status.partialFailure", "Partially published — some items failed")
+                    : t("status.partialPending", "Partially published — some items pending")
                   : post.status}</p>
               </div>
               <div>
@@ -345,7 +353,7 @@ export function PostDetailsDialog({
                               <div className="flex flex-col">
                                 <div className="flex items-center gap-2">
                                   <span className="font-medium">{getPlatformName(result.platform as Platform)}{instagramPublicationType(result)
-                                    ? ` · ${t(`publicationType.${instagramPublicationType(result)}`, instagramPublicationType(result)!)}`
+                                    ? ` · ${subtypeLabels[instagramPublicationType(result)!]}`
                                     : ""}</span>
                                   <Badge
                                     variant="secondary"

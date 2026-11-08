@@ -259,7 +259,9 @@ export function HistoryTable({
             const statusClass = statusConfig[status]?.className || "";
             const summary = publicationSummary(post.platformResults ?? []);
             const statusLabel = summary
-              ? t(`status.${summary}`, summary === "partialFailure" ? "Partially published — some items failed" : "Partially published — some items pending")
+              ? summary === "partialFailure"
+                ? t("status.partialFailure", "Partially published — some items failed")
+                : t("status.partialPending", "Partially published — some items pending")
               : getStatusLabel(status);
             const hasFailedPlatforms = post.platformResults?.some((r) => r.status === "failed");
             const isRetrying = retryingPostId === post.id;
