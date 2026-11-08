@@ -9,8 +9,29 @@ import {
   MIN_REQUEST_MS,
   NOT_SENT_MESSAGE,
   publishContainer,
+  resolveInstagramShareToFeed,
   PUBLISHED_UNCONFIRMED_MESSAGE,
 } from "./instagramPublish.ts";
+
+for (const legacyDefault of [false, true]) {
+  for (const requested of [false, true]) {
+    Deno.test(`explicit flat share-to-feed=${requested} overrides legacy default=${legacyDefault}`, () => {
+      assertEquals(resolveInstagramShareToFeed({ instagram_share_to_feed: requested }, legacyDefault), requested);
+    });
+    Deno.test(`API nested share-to-feed=${requested} overrides legacy default=${legacyDefault}`, () => {
+      // 2026-11-08: API reel-only requests stored true here but the Business-login publisher sent false.
+      assertEquals(resolveInstagramShareToFeed({ instagram: { shareToFeed: requested } }, legacyDefault), requested);
+    });
+    Deno.test(`flat share-to-feed=${requested} takes precedence over conflicting legacy API data`, () => {
+      assertEquals(resolveInstagramShareToFeed({ instagram_share_to_feed: requested, instagram: { shareToFeed: !requested } }, legacyDefault), requested);
+    });
+  }
+  Deno.test(`old metadata without a boolean preserves login fallback=${legacyDefault}`, () => {
+    assertEquals(resolveInstagramShareToFeed(undefined, legacyDefault), legacyDefault);
+    assertEquals(resolveInstagramShareToFeed({}, legacyDefault), legacyDefault);
+    assertEquals(resolveInstagramShareToFeed({ instagram_share_to_feed: "false", instagram: { shareToFeed: null } }, legacyDefault), legacyDefault);
+  });
+}
 
 /**
  * Ports whose publish answers come from `replies` (an Error means the request went unanswered)

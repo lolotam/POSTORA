@@ -21,6 +21,17 @@ import { type ContainerState, containerFailureMessage } from "../_shared/metaCon
 import { ContainerStillProcessing, type DeferredKind } from "./deferredPublish.ts";
 import type { GraphError, GraphResponse } from "./graphResponse.ts";
 
+/** UI metadata is flat; API metadata nests this setting. Explicit booleans win over legacy defaults. */
+export function resolveInstagramShareToFeed(metadata: { instagram_share_to_feed?: unknown; instagram?: unknown } | null | undefined, legacyDefault: boolean): boolean {
+  if (typeof metadata?.instagram_share_to_feed === "boolean") return metadata.instagram_share_to_feed;
+  const instagram = metadata?.instagram;
+  if (instagram && typeof instagram === "object" && !Array.isArray(instagram)) {
+    const value = (instagram as Record<string, unknown>).shareToFeed;
+    if (typeof value === "boolean") return value;
+  }
+  return legacyDefault;
+}
+
 export interface PublishPorts {
   /** POSTs media_publish with this timeout. Throws when the request goes unanswered. */
   publish(timeoutMs: number): Promise<GraphResponse>;
