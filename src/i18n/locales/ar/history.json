@@ -179,8 +179,16 @@
     "upload": "رفع"
   },
   "status": {
+    "partialFailure": "تم النشر جزئيًا — بعض العناصر فشلت",
+    "partialPending": "تم النشر جزئيًا — بعض العناصر قيد التجهيز",
     "pendingInbox": "افتح صندوق الرسائل",
     "published": "تم النشر"
+  },
+  "publicationType": {
+    "story": "قصة (Story)",
+    "reel": "ريل (Reel)",
+    "feed": "منشور الخلاصة",
+    "carousel": "منشور متعدد الصور"
   },
   "table": {
     "account": "الحساب",

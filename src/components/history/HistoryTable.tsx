@@ -44,6 +44,7 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { useTranslation } from "react-i18next";
+import { publicationSummary } from "./publicationSummary";
 
 interface PlatformResult {
   id: string;
@@ -254,9 +255,15 @@ export function HistoryTable({
         <TableBody>
           {posts.map((post) => {
             const status = post.status as keyof typeof statusConfig;
-            const StatusIcon = statusConfig[status]?.icon || statusConfig.pending.icon;
-            const statusClass = statusConfig[status]?.className || "";
-            const statusLabel = getStatusLabel(status);
+            const summary = publicationSummary(post.platformResults ?? []);
+            const badgeStatus = summary === "partialFailure" ? "failed" : summary === "partialPending" ? "pending" : status;
+            const StatusIcon = statusConfig[badgeStatus]?.icon || statusConfig.pending.icon;
+            const statusClass = statusConfig[badgeStatus]?.className || "";
+            const statusLabel = summary
+              ? summary === "partialFailure"
+                ? t("status.partialFailure", "Partially published — some items failed")
+                : t("status.partialPending", "Partially published — some items pending")
+              : getStatusLabel(status);
             const hasFailedPlatforms = post.platformResults?.some((r) => r.status === "failed");
             const isRetrying = retryingPostId === post.id;
             const isSelected = selectedPosts.has(post.id);

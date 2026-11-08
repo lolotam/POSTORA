@@ -25,6 +25,7 @@ import { useThreadsCapabilities } from "@/hooks/useThreadsCapabilities";
 import { getErrorExplanation, type ErrorExplanation } from "@/components/history/errorExplanations";
 import { LocationDebugView } from "@/components/history/LocationDebugView";
 import { TopicTagDebugView } from "@/components/history/TopicTagDebugView";
+import { instagramPublicationType, publicationSummary } from "../publicationSummary";
 import {
   Collapsible,
   CollapsibleContent,
@@ -96,6 +97,17 @@ export function PostDetailsDialog({
   onDeletePlatformPost,
 }: PostDetailsDialogProps) {
   const { t } = useTranslation("history");
+  const summary = publicationSummary(post?.platformResults ?? []);
+  const subtypeLabels: Record<string, string> = {
+    story: t("publicationType.story", "Story"),
+    reel: t("publicationType.reel", "Reel"),
+    feed: t("publicationType.feed", "Feed"),
+    carousel: t("publicationType.carousel", "Carousel"),
+  };
+  const publicationLabel = (result: PlatformPost): string => {
+    const subtype = instagramPublicationType(result);
+    return subtype ? ` · ${subtypeLabels[subtype] ?? subtype}` : "";
+  };
   const { toast } = useToast();
   const navigate = useNavigate();
   const { flags } = useFeatureFlags();
@@ -280,7 +292,11 @@ export function PostDetailsDialog({
               </div>
               <div>
                 <span className="text-muted-foreground">{t("table.status", "Status")}</span>
-                <p className="font-medium capitalize">{post.status}</p>
+                <p className="font-medium capitalize">{summary
+                  ? summary === "partialFailure"
+                    ? t("status.partialFailure", "Partially published — some items failed")
+                    : t("status.partialPending", "Partially published — some items pending")
+                  : post.status}</p>
               </div>
               <div>
                 <span className="text-muted-foreground">{t("details.source", "Source")}</span>
@@ -340,7 +356,7 @@ export function PostDetailsDialog({
                               <PlatformIcon platform={result.platform as Platform} size="md" />
                               <div className="flex flex-col">
                                 <div className="flex items-center gap-2">
-                                  <span className="font-medium">{getPlatformName(result.platform as Platform)}</span>
+                                  <span className="font-medium">{getPlatformName(result.platform as Platform)}{publicationLabel(result)}</span>
                                   <Badge
                                     variant="secondary"
                                     className={cn(
