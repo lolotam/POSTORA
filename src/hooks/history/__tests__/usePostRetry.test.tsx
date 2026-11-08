@@ -29,6 +29,14 @@ beforeEach(() => {
 });
 
 describe("post retry submission", () => {
+  it("routes a managed Story result to Story-only retry", async () => {
+    const query = { select: vi.fn(), eq: vi.fn(), maybeSingle: vi.fn(async () => ({ data: { response_data: { story_job_id: "story-job" } }, error: null })) };
+    query.select.mockReturnValue(query); query.eq.mockReturnValue(query); from.mockReturnValue(query);
+    const { result } = renderRetry();
+    await act(async () => { await result.current.handleRetrySinglePlatform(post.id, "story-result", "instagram", "account-1"); });
+    expect(invoke).toHaveBeenCalledExactlyOnceWith("enqueue-post-publish", { body: { post_id: post.id, mode: "retry_story", result_id: "story-result" } });
+  });
+
   it.each(["single", "failed", "bulk"] as const)("submits %s retry without deleting result rows", async (kind) => {
     const { result } = renderRetry();
     await act(async () => {

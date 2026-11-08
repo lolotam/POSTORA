@@ -1591,6 +1591,7 @@ interface PlatformPostResult {
   social_account_id: string | null;
   status: string | null;
   error_message: string | null;
+  response_data?: { story_job_id?: unknown } | null;
 }
 
 // A failed result that is published again.
@@ -1635,6 +1636,11 @@ function pickRetryTargets(
   for (const row of rows) {
     // Only a failed result is a candidate for a retry.
     if (row.status !== "failed") continue;
+    if (row.response_data?.story_job_id) {
+      skipped.push({ account_id: row.social_account_id, platform: row.platform,
+        reason: "Use story_result_id to retry this managed Story independently." });
+      continue;
+    }
     const accountId = row.social_account_id;
     if (!accountId) {
       skipped.push({
@@ -1685,7 +1691,7 @@ async function readPlatformPostResults(
 ): Promise<PlatformPostResult[] | ActionResult> {
   const { data, error: readError } = await deps.supabase
     .from("platform_posts")
-    .select("id, platform, social_account_id, status, error_message, posts!inner(user_id)")
+    .select("id, platform, social_account_id, status, error_message, response_data, posts!inner(user_id)")
     .eq("post_id", request.postId)
     .eq("posts.user_id", request.userId);
 
@@ -1972,6 +1978,21 @@ export async function retryFailedPost(
   const postId = requirePostId(body);
   if (typeof postId !== "string") {
     return await refuse(deps, route, { userId }, postId);
+  }
+
+  if (body && typeof body === "object" && "story_result_id" in body) {
+    const rawResultId = (body as { story_result_id: unknown }).story_result_id;
+    if (!isValidUuid(rawResultId)) return await refuse(deps, route, { userId, postId },
+      error(400, "INVALID_STORY_RESULT", "Provide the Story result UUID from get_post."));
+    const resultId = rawResultId.trim();
+    const { data, error: retryError } = await deps.supabase.rpc("retry_instagram_story", {
+      p_post_id: postId, p_result_id: resultId, p_user_id: userId,
+    });
+    if (retryError) return await refuse(deps, route, { userId, postId },
+      error(503, "STORY_RETRY_UNAVAILABLE", "Story retry is currently unavailable."));
+    if (data !== true) return await refuse(deps, route, { userId, postId },
+      error(409, "STORY_NOT_RETRYABLE", "Only a definitely failed, owned Story can be retried."));
+    return ok({ post_id: postId, story_result_id: resultId, status: "results_pending" }, 202);
   }
 
   // The claim comes before every read and every write: the post is worked on

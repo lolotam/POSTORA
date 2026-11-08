@@ -2547,6 +2547,16 @@ Deno.test("a retry with a non-uuid post id is refused before anything is claimed
   assertEquals(callsFor(db, "system_logs", "insert").length, 1);
 });
 
+Deno.test("explicit Story retry never dispatches the primary publisher", async () => {
+  const db = new FakeSupabase();
+  db.queueRpc("retry_instagram_story", { data: true, error: null });
+  const result = await retryFailedPost(depsFor(db, noNetwork()), USER, { post_id: POST, story_result_id: ` ${CLAIM} ` });
+  assertEquals(result.status, 202);
+  assertEquals(db.rpcCalls.length, 1);
+  assertEquals(rpcCallFor(db, "retry_instagram_story")?.args.p_result_id, CLAIM);
+  assertEquals(result.body.story_result_id, CLAIM);
+});
+
 Deno.test("a retry whose claim function is not in the database yet is a 503 and publishes nothing", async () => {
   const db = new FakeSupabase();
   // The migration that creates the claim has not been applied to this
@@ -2692,6 +2702,20 @@ Deno.test("a failed result of an account that already published is not published
   assertEquals(errorCode(result), "NO_FAILED_PLATFORMS");
   // The account went out already, so the post is not published a second time.
   assertEquals(calls.length, 0);
+});
+
+Deno.test("generic retry never dispatches or deletes an independently managed Story result", async () => {
+  const db = new FakeSupabase();
+  claimQueued(db);
+  db.queue("platform_posts", { data: [{ ...platformResult("story-result", "instagram", ACCOUNT, "failed"),
+    response_data: { story_job_id: "managed-job" } }], error: null });
+  db.queueRpc(RELEASE_RPC, { data: true, error: null });
+  const { calls, fetcher } = fakeFetcher([]);
+  const result = await retryFailedPost(depsFor(db, fetcher), USER, { post_id: POST });
+  assertEquals(result.status, 409);
+  assertEquals(errorCode(result), "NO_FAILED_PLATFORMS");
+  assertEquals(calls.length, 0);
+  assertEquals(callsFor(db, "platform_posts", "delete").length, 0);
 });
 
 Deno.test("a retry publishes only the failed accounts and clears the rows it replaced", async () => {

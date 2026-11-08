@@ -427,7 +427,9 @@ export function PostDetailsDialog({
                               })()}
                               
                               {/* Retry button for failed platforms */}
-                              {result.status === "failed" && onRetrySinglePlatform && (
+                              {result.status === "failed" &&
+                                (!(result.response_data as Record<string, unknown> | null)?.story_job_id ||
+                                  (result.response_data as Record<string, unknown>)?.story_retryable === true) && onRetrySinglePlatform && (
                                 <Button
                                   size="sm"
                                   variant="outline"

@@ -4,9 +4,12 @@ import type { SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2.7.1"
 import { createBroadcastChunkPorts } from "../../whatsapp-broadcast/chunkDeps.ts";
 import { runBroadcastChunk } from "../../whatsapp-broadcast/chunk.ts";
 import type { JobHandler } from "../worker.ts";
+import { runInstagramStory } from "./instagramStory.ts";
+import { createInstagramStoryPorts } from "./instagramStoryDeps.ts";
 
 export function backgroundJobHandlers(admin: SupabaseClient): Record<string, JobHandler> {
   return {
+    instagram_story: (job, deadlineMs) => runInstagramStory(job, createInstagramStoryPorts(admin), deadlineMs),
     whatsapp_broadcast_chunk: async (job, deadlineMs) => {
       const outcome = await runBroadcastChunk(createBroadcastChunkPorts(admin), {
         broadcastId: String(job.payload.broadcast_id),

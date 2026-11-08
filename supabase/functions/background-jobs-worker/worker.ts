@@ -105,8 +105,8 @@ export async function runBackgroundJobsWorker(
     try {
       outcome = await ports.handlers[job.kind](job, deadlineMs);
     } catch {
-      // Nothing was confirmed, so a retry cannot double-send. The job stays running, its
-      // lease expires and it is reclaimed with one more attempt.
+      // A handler must persist dispatch intent before provider mutations. A reclaimed
+      // handler reloads that state; an exception alone never proves a send did not happen.
       outcome = { kind: "failed", error: "handler_failed", retryable: true };
     }
 

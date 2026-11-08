@@ -28,6 +28,24 @@ function fixture(overrides: Partial<EnqueueDependencies> = {}) {
   return { deps, kicks, logs, calls };
 }
 
+Deno.test("Story retry uses its exact result and never kicks the primary publisher", async () => {
+  const seen: unknown[] = [];
+  const f = fixture({ requestStoryRetry: async (...args) => { seen.push(args); return true; } });
+  const response = await run(f.deps, { callerId: OWNER, body: { post_id: POST, mode: "retry_story", result_id: ACCOUNT } });
+  assertEquals(response.status, 202);
+  assertEquals(seen, [[POST, ACCOUNT, OWNER]]);
+  assertEquals(f.kicks, []);
+  assertEquals(f.calls, []);
+});
+
+Deno.test("a refused Story retry logs the refusal and never falls back to generic retry", async () => {
+  const f = fixture({ requestStoryRetry: async () => false });
+  assertEquals((await run(f.deps, { callerId: OWNER, body: { post_id: POST, mode: "retry_story", result_id: ACCOUNT } })).status, 409);
+  assertEquals(f.calls, []);
+  assertEquals(f.kicks, []);
+  assertEquals(f.logs.length, 1);
+});
+
 Deno.test("publish_now accepts the owner RPC stamp verbatim and kicks once", async () => {
   const f = fixture();
   assertEquals(await run(f.deps, { callerId: OWNER, body: { post_id: POST, mode: "publish_now" } }), {
