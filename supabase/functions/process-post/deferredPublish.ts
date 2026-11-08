@@ -16,7 +16,7 @@ import { z } from "npm:zod@3.23.8";
 import { CHECK_ONCE_DEADLINE } from "../_shared/metaContainerStatus.ts";
 import { type StoryRef, UNRECORDED_STORY_KEY } from "./instagramStory.ts";
 
-export type DeferredKind = "ig_reel" | "ig_business_reel" | "ig_carousel" | "threads";
+export type DeferredKind = "ig_reel" | "ig_business_reel" | "ig_carousel" | "threads" | "threads_carousel";
 
 /** How long a deferred container may keep processing before it is given up. */
 export const DEFERRAL_GIVE_UP_MS = 30 * 60 * 1000;
@@ -26,8 +26,10 @@ export const DEFERRAL_RECHECK_MS = 60 * 1000;
 export const FIRST_RUN_POLL_BUDGET_MS = 35 * 1000;
 
 export const DeferralSchema = z.object({
-  kind: z.enum(["ig_reel", "ig_business_reel", "ig_carousel", "threads"]),
+  kind: z.enum(["ig_reel", "ig_business_reel", "ig_carousel", "threads", "threads_carousel"]),
   container_id: z.string().min(1),
+  /** Present only while a Threads carousel is waiting for its children, before creating its parent. */
+  carousel_children: z.array(z.string().min(1)).min(1).max(10).optional(),
   attempts: z.number().int().nonnegative(),
   first_deferred_at: z.string(),
   give_up_at: z.string(),
@@ -46,6 +48,7 @@ export class ContainerStillProcessing extends Error {
    * the resumed (or abandoned) run can write it, instead of the story being lost with the throw.
    */
   unrecordedStory: StoryRef | null = null;
+  carouselChildren?: string[];
 
   constructor(readonly kind: DeferredKind, readonly containerId: string) {
     super(`Meta is still processing container ${containerId}`);
@@ -57,6 +60,8 @@ export class ContainerStillProcessing extends Error {
 export interface ResumeContext {
   platformPostId: string;
   deferral: Deferral;
+  /** Persist the parent before publishing it so another run never recreates a published carousel. */
+  checkpointContainer?: (deferral: Deferral) => Promise<void>;
   /** A live story the first run could not record; the resumed run records it. */
   unrecordedStory?: StoryRef | null;
   /**
@@ -134,6 +139,7 @@ export function isPastGiveUp(deferral: Deferral, now: Date): boolean {
 }
 
 export function giveUpMessage(kind: DeferredKind): string {
+  if (kind === "threads_carousel") return "Threads did not finish processing the carousel within 30 minutes. Safe to retry.";
   if (kind === "threads") return "Threads did not finish processing the video within 30 minutes. Safe to retry.";
   const media = kind === "ig_carousel" ? "carousel" : "video";
   return `Instagram did not finish processing the ${media} within 30 minutes. Safe to retry.`;
@@ -343,7 +349,8 @@ export async function recordStillProcessing(
       p_post_id: args.postId,
       p_social_account_id: args.account.id,
       p_response_data: {
-        deferred: newDeferral(args.signal.kind, args.signal.containerId, now),
+        deferred: { ...newDeferral(args.signal.kind, args.signal.containerId, now),
+          ...(args.signal.carouselChildren ? { carousel_children: args.signal.carouselChildren } : {}) },
         account_username: args.account.platform_username,
         account_metadata: args.account.account_metadata,
         ...(args.signal.unrecordedStory ? { [UNRECORDED_STORY_KEY]: args.signal.unrecordedStory } : {}),

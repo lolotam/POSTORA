@@ -8,7 +8,7 @@
  */
 
 import { type ContainerState, type MetaContainerApi, pollContainer, type PollContainerOptions } from "../_shared/metaContainerStatus.ts";
-import { unfinishedError } from "./deferredPublish.ts";
+import { ContainerStillProcessing, unfinishedError } from "./deferredPublish.ts";
 
 export interface CarouselChildCreate {
   /** POSTs one child container; resolves with Meta's JSON reply. */
@@ -37,6 +37,8 @@ export interface ChildWait {
   deadlineMs: number;
   maxAttempts: number;
   intervalMs: number;
+  /** Threads can retain the original child IDs and finish them on a later worker. */
+  deferThreads?: boolean;
 }
 
 export interface ChildWaitOutcome {
@@ -71,7 +73,14 @@ export async function waitForCarouselChildren(
       outcome.dropped.push({ id, reason: container.reason });
       continue;
     }
-    if (container.state === "waiting") throw unfinishedError({ deadlineMs: wait.deadlineMs }, id, api === "threads" ? "Threads" : "Instagram");
+    if (container.state === "waiting") {
+      if (api === "threads" && wait.deferThreads && Number.isFinite(wait.deadlineMs)) {
+        const pending = new ContainerStillProcessing("threads_carousel", ids[0]);
+        pending.carouselChildren = ids;
+        throw pending;
+      }
+      throw unfinishedError({ deadlineMs: wait.deadlineMs }, id, api === "threads" ? "Threads" : "Instagram");
+    }
     outcome.finished.push(id);
   }
   return outcome;

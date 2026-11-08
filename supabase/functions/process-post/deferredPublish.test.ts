@@ -166,6 +166,20 @@ Deno.test("a first run records its pending row through the tenancy-checking SQL 
   assertEquals(args.p_response_data.account_username, "shop");
 });
 
+Deno.test("a Threads child checkpoint is persisted with all original IDs for the next worker", async () => {
+  const { db, writes } = fakeDb();
+  const signal = new ContainerStillProcessing("threads_carousel", "child-a");
+  signal.carouselChildren = ["child-a", "child-b", "child-c"];
+  await recordStillProcessing(db, noSettle, {
+    postId: "post-1", account: { ...ACCOUNT, platform: "threads" }, signal,
+    resume: null, resumeResponseData: null,
+  }, NOW);
+  const payload = (writes[0].values as { p_response_data: { deferred: unknown } }).p_response_data;
+  assertEquals(readDeferral(payload), {
+    ...newDeferral("threads_carousel", "child-a", NOW), carousel_children: signal.carouselChildren,
+  });
+});
+
 Deno.test("a story the first run could not record travels on the pending row", async () => {
   const { db, writes } = fakeDb();
   const signal = new ContainerStillProcessing("ig_reel", "c-9");
