@@ -146,7 +146,7 @@ import {
   type ResumeContext,
   unfinishedError,
 } from "./deferredPublish.ts";
-import { createCarouselChildren, waitForCarouselChildren } from "./carouselChildren.ts";
+import { createCarouselChildren, threadsChildWait, waitForCarouselChildren } from "./carouselChildren.ts";
 import { claimFinalNotification } from "./finalNotification.ts";
 import {
   dropRecordedStory,
@@ -6741,7 +6741,7 @@ async function postToThreads(
         "threads",
         childIds,
         (id) => `https://graph.threads.net/v1.0/${id}?fields=${CONTAINER_STATUS_FIELDS.threads}&access_token=${accessToken}`,
-        { deadlineMs: timing.deadlineMs, maxAttempts: 15, intervalMs: 2000, deferThreads: true },
+        threadsChildWait(timing.deadlineMs, WORKER_STARTED_AT_MS),
       );
       for (const dropped of children.dropped) {
         console.error("Threads: Child container failed:", dropped.reason, "| id:", dropped.id);

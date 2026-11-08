@@ -8,7 +8,7 @@
  */
 
 import { type ContainerState, type MetaContainerApi, pollContainer, type PollContainerOptions } from "../_shared/metaContainerStatus.ts";
-import { ContainerStillProcessing, unfinishedError } from "./deferredPublish.ts";
+import { ContainerStillProcessing, deferrableDeadline, unfinishedError } from "./deferredPublish.ts";
 
 export interface CarouselChildCreate {
   /** POSTs one child container; resolves with Meta's JSON reply. */
@@ -44,6 +44,17 @@ export interface ChildWait {
 export interface ChildWaitOutcome {
   finished: string[];
   dropped: { id: string; reason: string }[];
+}
+
+/** Resumed children share one worker budget while each child is checked only once. */
+export function threadsChildWait(deadlineMs: number, workerStartedAtMs: number): ChildWait {
+  const resumed = deadlineMs === 0;
+  return {
+    deadlineMs: deferrableDeadline(resumed ? Number.MAX_SAFE_INTEGER : deadlineMs, workerStartedAtMs),
+    maxAttempts: resumed ? 1 : 15,
+    intervalMs: 2000,
+    deferThreads: true,
+  };
 }
 
 type Poll = (api: MetaContainerApi, statusUrl: string, options: PollContainerOptions) => Promise<ContainerState>;

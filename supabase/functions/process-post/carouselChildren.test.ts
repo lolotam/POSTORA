@@ -1,7 +1,7 @@
 import { assertEquals, assertRejects } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import { ContainerStillProcessing, newDeferral, readDeferral } from "./deferredPublish.ts";
-import type { ContainerState, PollContainerOptions } from "../_shared/metaContainerStatus.ts";
-import { createCarouselChildren, waitForCarouselChildren } from "./carouselChildren.ts";
+import { type ContainerState, pollContainer, type PollContainerOptions } from "../_shared/metaContainerStatus.ts";
+import { createCarouselChildren, threadsChildWait, waitForCarouselChildren } from "./carouselChildren.ts";
 
 const body = (url: string) => ({ image_url: url, is_carousel_item: true });
 
@@ -42,6 +42,37 @@ function fakePoll(states: Record<string, ContainerState>, seen: PollContainerOpt
     const id = url.replace("status:", "");
     return Promise.resolve(states[id]);
   };
+}
+
+for (const latencyMs of [14_000, 100]) {
+  Deno.test(`resumed ten-child carousel preserves worker reserve with ${latencyMs}ms status responses`, async () => {
+    const start = 1000;
+    let now = start;
+    let requests = 0;
+    const ids = Array.from({ length: 10 }, (_, i) => `child-${i}`);
+    const wait = threadsChildWait(0, start);
+    const check = () => waitForCarouselChildren("threads", ids, (id) => `status:${id}`, wait,
+      (api, url, options) => pollContainer(api, url, {
+        ...options,
+        now: () => now,
+        fetcher: (_url, timeoutMs) => {
+          requests++;
+          now += Math.min(latencyMs, timeoutMs);
+          if (latencyMs > timeoutMs) return Promise.reject(new Error("timeout"));
+          return Promise.resolve(new Response(JSON.stringify({ status: "FINISHED" })));
+        },
+      }));
+    if (latencyMs === 14_000) {
+      const pending = await assertRejects(check, ContainerStillProcessing) as ContainerStillProcessing;
+      assertEquals(pending.carouselChildren, ids);
+      assertEquals(requests, 7);
+      assertEquals(now, wait.deadlineMs);
+    } else {
+      assertEquals(await check(), { finished: ids, dropped: [] });
+      assertEquals(requests, 10);
+      assertEquals(now, start + 1000);
+    }
+  });
 }
 
 const WAIT = { deadlineMs: 10_000, maxAttempts: 15, intervalMs: 2000 };
