@@ -3,6 +3,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "./useAuth";
 import { useQueryClient } from "@tanstack/react-query";
 import { useToast } from "./use-toast";
+import type { Platform } from "@/lib/types";
 
 export interface RealtimeUpdate {
   postId: string;
@@ -215,6 +216,7 @@ export function useRealtimePostUpdates() {
             if (newRecord.status === "success") {
               toastRef.current({
                 title: `Published to ${newRecord.platform}`,
+                platform: newRecord.platform as Platform,
                 description: newRecord.platform_post_url ? (
                   <a
                     href={newRecord.platform_post_url}
@@ -232,6 +234,7 @@ export function useRealtimePostUpdates() {
             } else if (newRecord.status === "failed") {
               toastRef.current({
                 title: `Failed on ${newRecord.platform}`,
+                platform: newRecord.platform as Platform,
                 description: newRecord.error_message || "Publishing failed",
                 variant: "destructive",
                 duration: 8000,
@@ -239,6 +242,7 @@ export function useRealtimePostUpdates() {
             } else if (newRecord.status === "pending_inbox") {
               toastRef.current({
                 title: "Check your TikTok inbox",
+                platform: "tiktok",
                 description: "TikTok posts are sent to your inbox. Open the TikTok app to complete posting.",
                 duration: 8000,
               });

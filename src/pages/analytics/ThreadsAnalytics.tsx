@@ -18,7 +18,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import { toast } from "sonner";
+import { createSocialToast } from "@/components/ui/social-toast";
 import { BrandSearchBar } from "@/components/brand-intelligence/BrandSearchBar";
 import { ProfileCard } from "@/components/brand-intelligence/ProfileCard";
 import { FilterToolbar } from "@/components/brand-intelligence/FilterToolbar";
@@ -34,6 +34,8 @@ import { useOwnedThreadsAccounts } from "@/hooks/useOwnedThreadsAccounts";
 import type { BrandPost, BrandScrapeFilters } from "@/types/brand-intelligence";
 import { Icon3D, GradientHeading, GradientRingCard, GradientDivider, Reveal } from "@/components/fx";
 import { cn } from "@/lib/utils";
+
+const toast = createSocialToast("threads");
 
 const DEFAULT_FILTERS: BrandScrapeFilters = {
   sortBy: "engagement",

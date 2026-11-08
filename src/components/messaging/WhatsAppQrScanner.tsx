@@ -85,7 +85,7 @@ export function WhatsAppQrScanner({ socialAccountId, onComplete, onConnectAsNew 
     } catch (err) {
       const message = err instanceof Error ? err.message : t("qr.refreshFailedFallback", "Unable to refresh QR code");
       setError(message);
-      toast({ title: t("qr.refreshFailed", "QR refresh failed"), description: message, variant: "destructive" });
+      toast({ platform: "whatsapp", title: t("qr.refreshFailed", "QR refresh failed"), description: message, variant: "destructive" });
     } finally {
       setIsRefreshing(false);
     }
@@ -119,7 +119,7 @@ export function WhatsAppQrScanner({ socialAccountId, onComplete, onConnectAsNew 
     } catch (err) {
       const message = err instanceof Error ? err.message : t("qr.refreshFailedFallback", "Unable to refresh QR code");
       setError(message);
-      toast({ title: t("qr.refreshFailed", "QR refresh failed"), description: message, variant: "destructive" });
+      toast({ platform: "whatsapp", title: t("qr.refreshFailed", "QR refresh failed"), description: message, variant: "destructive" });
     } finally {
       reconnectInFlight.current = false;
       setIsReconnecting(false);

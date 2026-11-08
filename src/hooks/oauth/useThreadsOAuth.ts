@@ -27,7 +27,7 @@ export function useThreadsOAuth(
     // without the row id the backend upsert would insert a duplicate account.
     const isReconnect = options.mode === "reconnect" && !!options.socialAccountId;
     if (typeof window !== "undefined" && window.location.protocol !== "https:") {
-      toast({
+      toast({ platform: "threads",
         title: "Threads requires HTTPS",
         description:
           "Meta blocks Threads OAuth from insecure origins. Please test from https://postora.lovable.app/profiles or https://postora.cloud/profiles.",
@@ -72,7 +72,7 @@ export function useThreadsOAuth(
         if (!sessionStorage.getItem(dedupeKey)) {
           sessionStorage.setItem(dedupeKey, String(Date.now()));
           setTimeout(() => sessionStorage.removeItem(dedupeKey), 10_000);
-          toast({ title: "Threads connected!", description: data.username ? `Connected account: @${data.username}` : "Your Threads account has been connected successfully." });
+          toast({ platform: "threads", title: "Threads connected!", description: data.username ? `Connected account: @${data.username}` : "Your Threads account has been connected successfully." });
         }
 
         await new Promise((resolve) => setTimeout(resolve, 1500));
@@ -85,7 +85,7 @@ export function useThreadsOAuth(
       }
     } catch (error) {
       console.error("Threads callback error:", error);
-      toast({ title: "Connection failed", description: error instanceof Error ? error.message : "Failed to connect Threads", variant: "destructive" });
+      toast({ platform: "threads", title: "Connection failed", description: error instanceof Error ? error.message : "Failed to connect Threads", variant: "destructive" });
     } finally {
       setConnectingPlatform(null);
       setConnectingProfile(null);

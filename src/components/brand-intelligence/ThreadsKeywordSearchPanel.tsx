@@ -29,7 +29,8 @@ import {
   Repeat2,
   Send,
 } from "lucide-react";
-import { toast } from "sonner";
+import { createSocialToast } from "@/components/ui/social-toast";
+const toast = createSocialToast("threads");
 import { format } from "date-fns";
 import { cn } from "@/lib/utils";
 import { mapThreadsReason, ThreadsErrorCard, type ThreadsErrorState } from "./ThreadsErrorCard";

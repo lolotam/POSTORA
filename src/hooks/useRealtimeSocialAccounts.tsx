@@ -56,7 +56,7 @@ export function useRealtimeSocialAccounts() {
           // Show toast for new account connections
           if (payload.eventType === "INSERT" && newRecord?.is_active) {
             const platformName = getPlatformName(newRecord.platform);
-            toastRef.current({
+            toastRef.current({ platform: newRecord.platform,
               title: `${platformName} connected!`,
               description: newRecord.platform_username
                 ? `Connected as ${newRecord.platform_username}`
@@ -71,7 +71,7 @@ export function useRealtimeSocialAccounts() {
             newRecord?.is_active
           ) {
             const platformName = getPlatformName(newRecord.platform);
-            toastRef.current({
+            toastRef.current({ platform: newRecord.platform,
               title: `${platformName} reconnected!`,
               description: `Your ${platformName} account is active again.`,
             });
@@ -84,7 +84,7 @@ export function useRealtimeSocialAccounts() {
             !newRecord?.is_active
           ) {
             const platformName = getPlatformName(newRecord.platform);
-            toastRef.current({
+            toastRef.current({ platform: newRecord.platform,
               title: `${platformName} disconnected`,
               description: `Your ${platformName} account has been disconnected.`,
               variant: "destructive",

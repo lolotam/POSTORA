@@ -153,7 +153,7 @@ export function useTikTokStatusPolling({
         stopPolling();
         const postUrl = `https://www.tiktok.com/@${data?.username || "user"}/video/${postId}`;
         
-        toast({
+        toast({ platform: "tiktok",
           title: "✅ TikTok post published!",
           description: (
             <a 
@@ -174,7 +174,7 @@ export function useTikTokStatusPolling({
       // Handle inbox delivery (considered success for API flow)
       if (newStatus === "SEND_TO_USER_INBOX") {
         stopPolling();
-        toast({
+        toast({ platform: "tiktok",
           title: "📬 Sent to your TikTok inbox",
           description: "Open the TikTok app to complete posting.",
           duration: 8000,
@@ -184,7 +184,7 @@ export function useTikTokStatusPolling({
       // Handle failure
       if (newStatus === "FAILED") {
         stopPolling();
-        toast({
+        toast({ platform: "tiktok",
           title: "❌ TikTok post failed",
           description: failReason || "An error occurred while publishing.",
           variant: "destructive",

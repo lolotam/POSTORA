@@ -314,7 +314,7 @@ export function usePlatformSettings(userId: string | undefined, selectedAccountI
         setPinterestBoards(data.boards);
         setSelectedPinterestBoard(data.boards[0].id);
       } else if (data?.error) {
-        toast({
+        toast({ platform: "pinterest",
           title: "Pinterest boards",
           description: data.error,
           variant: "destructive",
@@ -322,7 +322,7 @@ export function usePlatformSettings(userId: string | undefined, selectedAccountI
       }
     } catch (error) {
       console.error("Failed to fetch Pinterest boards:", error);
-      toast({
+      toast({ platform: "pinterest",
         title: "Failed to load boards",
         description: "Could not fetch your Pinterest boards.",
         variant: "destructive",
@@ -349,12 +349,12 @@ export function usePlatformSettings(userId: string | undefined, selectedAccountI
         if (!selectedPinterestBoard) {
           setSelectedPinterestBoard(data.boards[0].id);
         }
-        toast({
+        toast({ platform: "pinterest",
           title: "Boards refreshed",
           description: `Found ${data.boards.length} Pinterest board${data.boards.length > 1 ? 's' : ''}.`,
         });
       } else {
-        toast({
+        toast({ platform: "pinterest",
           title: "No boards found",
           description: "Create a board on Pinterest first, then click Refresh.",
           variant: "destructive",
@@ -362,7 +362,7 @@ export function usePlatformSettings(userId: string | undefined, selectedAccountI
       }
     } catch (error) {
       console.error("Failed to refresh Pinterest boards:", error);
-      toast({
+      toast({ platform: "pinterest",
         title: "Failed to refresh",
         description: "Could not fetch your Pinterest boards. Please try again.",
         variant: "destructive",
@@ -412,7 +412,7 @@ export function usePlatformSettings(userId: string | undefined, selectedAccountI
       if (!validIg) {
         safeInstagramLocationId = "";
         safeInstagramLocationObject = null;
-        toast({
+        toast({ platform: "instagram",
           title: "Instagram location removed",
           description: "Instagram location was removed because it is not taggable.",
         });
@@ -432,7 +432,7 @@ export function usePlatformSettings(userId: string | undefined, selectedAccountI
       if (!validTh) {
         safeThreadsLocationId = "";
         safeThreadsLocationObject = null;
-        toast({
+        toast({ platform: "threads",
           title: "Threads location removed",
           description: "Threads location was removed because it is not a native Threads location.",
         });

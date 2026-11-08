@@ -1,6 +1,6 @@
 import { useState, useMemo } from "react";
 import { useTranslation } from "react-i18next";
-import { toast } from "sonner";
+import { createSocialToast } from "@/components/ui/social-toast";
 import { useSocialAccounts } from "@/hooks/useSocialAccounts";
 import type { InstagramInsightsGateway } from "../application/ports";
 import { useInstagramInsightsReport } from "../application/useInstagramInsightsReport";
@@ -9,6 +9,8 @@ import { defaultInstagramInsightsGateway } from "../infrastructure/supabaseInsta
 import type { OwnerReportPeriodDays } from "../domain/types";
 import { collectReportMedia } from "../domain/reportPages";
 import { InstagramInsightsWorkspace } from "./InstagramInsightsWorkspace";
+
+const toast = createSocialToast("instagram");
 
 export type InstagramPerformanceScreenProps = {
   gateway?: InstagramInsightsGateway;

@@ -78,7 +78,7 @@ export function useInstagramOAuth(
       }
     } catch (err) {
       console.error("Instagram Business Login error:", err);
-      toast({
+      toast({ platform: "instagram",
         title: "Connection failed",
         description: err instanceof Error ? err.message : "Failed to start Instagram connection",
         variant: "destructive",
@@ -116,7 +116,7 @@ export function useInstagramOAuth(
         const igViaFbEnabled = flagData?.value === true;
 
         if (igViaFbEnabled) {
-          toast({
+          toast({ platform: "instagram",
             title: "Personal Account Detected",
             description:
               "Your Instagram account is Personal. Personal accounts must be connected through a Facebook Page. Redirecting to Facebook connection...",
@@ -125,7 +125,7 @@ export function useInstagramOAuth(
             handleFacebookConnect("instagram" as Platform, profileId);
           }, 1500);
         } else {
-          toast({
+          toast({ platform: "instagram",
             title: "Personal Account Not Supported",
             description:
               "Your Instagram account is a Personal account. Please switch to a Business or Creator account in Instagram Settings → Account → Switch to Professional Account, then try again.",
@@ -136,7 +136,7 @@ export function useInstagramOAuth(
       }
 
       if (data?.success) {
-        toast({
+        toast({ platform: "instagram",
           title: "Instagram connected!",
           description: data.username
             ? `Connected account: @${data.username} (Direct)`
@@ -148,7 +148,7 @@ export function useInstagramOAuth(
       }
     } catch (err) {
       console.error("Instagram Business callback error:", err);
-      toast({
+      toast({ platform: "instagram",
         title: "Connection failed",
         description: err instanceof Error ? err.message : "Failed to connect Instagram",
         variant: "destructive",
@@ -192,7 +192,7 @@ export function useInstagramOAuth(
       }
     } catch (err) {
       console.error("Instagram (Facebook Business) error:", err);
-      toast({
+      toast({ platform: "instagram",
         title: "Connection failed",
         description:
           err instanceof Error
@@ -237,7 +237,7 @@ export function useInstagramOAuth(
       if (error || !data?.success) {
         const status = (error as { context?: { status?: number } } | null)?.context?.status;
         const isExpired = status === 404 || /not found|expired/i.test(String(data?.error ?? ""));
-        toast({
+        toast({ platform: "instagram",
           title: isExpired ? "Selection expired" : "Couldn't load Instagram accounts",
           description: isExpired
             ? "The Instagram selection link expired. Please reconnect."
@@ -266,7 +266,7 @@ export function useInstagramOAuth(
     if (selectingRef.current) return;
     const protectedAttempt = Boolean(igSelectionData.attemptId && selectionKey);
     if (igSelectionData.attemptId && !selectionKey) {
-      toast({
+      toast({ platform: "instagram",
         title: "Connection failed",
         description: "This account cannot be selected. Please reconnect.",
         variant: "destructive",
@@ -300,7 +300,7 @@ export function useInstagramOAuth(
       const connected = data.ig_username
         ? `Connected @${data.ig_username}${data.facebook_page_name ? ` (via ${data.facebook_page_name})` : ""}`
         : "Account connected.";
-      toast({
+      toast({ platform: "instagram",
         title: "Instagram connected!",
         description: subscriptionFailed
           ? `${connected} The webhook subscription could not be confirmed.`
@@ -323,7 +323,7 @@ export function useInstagramOAuth(
       }
     } catch (err) {
       console.error("Instagram select error:", err);
-      toast({
+      toast({ platform: "instagram",
         title: "Connection failed",
         description: err instanceof Error ? err.message : "Failed to connect account",
         variant: "destructive",

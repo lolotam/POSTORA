@@ -126,8 +126,8 @@ export function WhatsAppTemplatesContent() {
       if (!waAccount) throw new Error(t("templates.noAccount", "No WhatsApp account"));
       return callMessagingApi("whatsapp_list_templates", { social_account_id: waAccount.id });
     },
-    onSuccess: () => { refetch(); toast({ title: t("templates.synced", "Templates synced from Meta") }); },
-    onError: (e: Error) => toast({ title: t("templates.syncFailed", "Sync failed"), description: e.message, variant: "destructive" }),
+    onSuccess: () => { refetch(); toast({ platform: "whatsapp", title: t("templates.synced", "Templates synced from Meta") }); },
+    onError: (e: Error) => toast({ platform: "whatsapp", title: t("templates.syncFailed", "Sync failed"), description: e.message, variant: "destructive" }),
   });
 
   const createMutation = useMutation({
@@ -172,12 +172,12 @@ export function WhatsAppTemplatesContent() {
       });
     },
     onSuccess: () => {
-      toast({ title: t("templates.submitted", "Template submitted for review") });
+      toast({ platform: "whatsapp", title: t("templates.submitted", "Template submitted for review") });
       setCreateOpen(false);
       resetForm();
       refetch();
     },
-    onError: (e: Error) => toast({ title: t("templates.createFailed", "Create failed"), description: e.message, variant: "destructive" }),
+    onError: (e: Error) => toast({ platform: "whatsapp", title: t("templates.createFailed", "Create failed"), description: e.message, variant: "destructive" }),
   });
 
   const deleteMutation = useMutation({
@@ -188,8 +188,8 @@ export function WhatsAppTemplatesContent() {
         template_name: templateName,
       });
     },
-    onSuccess: () => { toast({ title: t("templates.deleted", "Template deleted") }); refetch(); },
-    onError: (e: Error) => toast({ title: t("templates.deleteFailed", "Delete failed"), description: e.message, variant: "destructive" }),
+    onSuccess: () => { toast({ platform: "whatsapp", title: t("templates.deleted", "Template deleted") }); refetch(); },
+    onError: (e: Error) => toast({ platform: "whatsapp", title: t("templates.deleteFailed", "Delete failed"), description: e.message, variant: "destructive" }),
   });
 
   const addButton = (type: TemplateButton["type"]) => {
