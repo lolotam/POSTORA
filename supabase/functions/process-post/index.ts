@@ -106,6 +106,7 @@ import {
   matchPublishedMedia,
   type MediaSummary,
   publishContainer,
+  resolveInstagramShareToFeed,
   PUBLISHED_LOOKBACK_MS,
   PUBLISHED_SEARCH_LIMIT,
 } from "./instagramPublish.ts";
@@ -3971,7 +3972,7 @@ async function postToInstagram(
   const rawIgPostType = metadata?.instagram_post_type || "feed";
   // Normalize to array for multi-select support (backward compatible with string)
   const igPostTypes: string[] = Array.isArray(rawIgPostType) ? rawIgPostType : [rawIgPostType];
-  const shareToFeed = metadata?.instagram_share_to_feed !== false; // default true
+  const shareToFeed = resolveInstagramShareToFeed(metadata, true);
   const coverThumbnailOffset = metadata?.instagram_cover_thumbnail_offset || 0;
   const audioName = metadata?.instagram_audio_name;
   const collaborator = metadata?.instagram_collaborator;
@@ -5382,6 +5383,7 @@ async function postToInstagramBusinessLogin(
   // ─── 2. REEL or FEED-VIDEO ─────────────────────────────────────────────────
   const wantReel = blPostTypes.includes("reel");
   const wantFeed = blPostTypes.includes("feed");
+  const shareToFeed = resolveInstagramShareToFeed(metadata, wantFeed);
 
   // The feed post or reel is already live: recorded, not posted again (the story step above ran).
   // Already recorded on this post's own row, it is done: nothing to publish or write.
@@ -5400,16 +5402,16 @@ async function postToInstagramBusinessLogin(
   if (!live && !feedDone && mediaType === "VIDEO" && (wantReel || wantFeed)) {
     // Meta API: standalone feed videos must be posted as Reels.
     // If user picked "feed" alone, publish as Reel and warn.
-    // If user picked both feed+reel, publish ONE Reel with share_to_feed=true (mirrors to feed).
+    // Explicit UI/API share-to-feed controls visibility; type selection is only the legacy fallback.
     if (wantFeed && !wantReel) {
-      warnings.push("Instagram feed-video posts are published as Reels (Meta API requirement) and mirrored to your feed.");
+      warnings.push("Instagram feed-video posts are published as Reels (Meta API requirement).");
     }
     try {
       const reelsBody: Record<string, unknown> = {
         media_type: "REELS",
         video_url: mediaUrls[0],
         caption: post.caption,
-        share_to_feed: wantFeed, // mirror to feed when "feed" was selected
+        share_to_feed: shareToFeed,
         access_token: accessToken,
       };
       if (coverThumbnailOffset > 0) reelsBody.thumb_offset = coverThumbnailOffset;
@@ -5468,7 +5470,7 @@ async function postToInstagramBusinessLogin(
           );
           if (media) {
             const url = media.permalink ?? fallbackUrl;
-            const rowId = await insertIGRow(subtype, "success", media.id, url, undefined, { shared_to_feed: wantFeed });
+            const rowId = await insertIGRow(subtype, "success", media.id, url, undefined, { shared_to_feed: shareToFeed });
             subResults.push({ subtype, status: "success", id: media.id, url });
             // A row that did not settle stays pending and is resumed: its follow-ups run then, once.
             if (rowId) enrichInBackground(rowId, media.id, subtype, url);
@@ -5482,7 +5484,7 @@ async function postToInstagramBusinessLogin(
           const publishData = await publishBusinessLoginMedia(igUserId, containerId, accessToken, "ig_business_reel");
           const blDebug = await finalizeBLLocationDebug(publishData.id);
           const rowId = await insertIGRow(subtype, "success", publishData.id, fallbackUrl, undefined, {
-            shared_to_feed: wantFeed,
+            shared_to_feed: shareToFeed,
             ...(blDebug ? { location_debug: blDebug } : {}),
           });
           subResults.push({ subtype, status: "success", id: publishData.id, url: fallbackUrl });
