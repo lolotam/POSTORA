@@ -35,6 +35,7 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { useTranslation } from "react-i18next";
+import { publicationSummary } from "./publicationSummary";
 
 interface PlatformResult {
   id: string;
@@ -104,7 +105,10 @@ export function PostCard({
       default: return statusConfig[s as keyof typeof statusConfig]?.label || s;
     }
   };
-  const statusLabel = getStatusLabel(status);
+  const summary = publicationSummary(post.platformResults ?? []);
+  const statusLabel = summary
+    ? t(`status.${summary}`, summary === "partialFailure" ? "Partially published — some items failed" : "Partially published — some items pending")
+    : getStatusLabel(status);
   const hasFailedPlatforms = post.platformResults?.some((r) => r.status === "failed");
 
   // Extract post types from metadata + platforms (handles Pinterest inference)

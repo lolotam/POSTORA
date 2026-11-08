@@ -359,13 +359,13 @@ export function InstagramSettings({
                 <div className="flex items-center gap-2 cursor-help">
                   <Sparkles className="w-4 h-4 text-muted-foreground" />
                   <div>
-                    <p className="text-sm">{t("instagram.alsoShareToStory", "Also share to Story")}</p>
-                    <p className="text-xs text-muted-foreground">{t("instagram.alsoShareToStorySubtitle", "Publish your Feed/Reel and also share it as a Story")}</p>
+                    <p className="text-sm">{t("instagram.alsoShareToStory", "Publish a separate Story copy")}</p>
+                    <p className="text-xs text-muted-foreground">{t("instagram.alsoShareToStorySubtitle", "Upload the first photo or video as a separate Story, not a link to the Feed post or Reel")}</p>
                   </div>
                 </div>
               </TooltipTrigger>
               <TooltipContent>
-                <p>{t("instagram.alsoShareToStoryTooltip", "The first photo or video will be re-posted as a 24-hour Story")}</p>
+                <p>{t("instagram.alsoShareToStoryTooltip", "This is a separate 24-hour Story upload. It does not open the original Reel when tapped.")}</p>
               </TooltipContent>
             </Tooltip>
           </TooltipProvider>
