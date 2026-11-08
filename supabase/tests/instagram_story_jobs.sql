@@ -63,6 +63,19 @@ BEGIN
   ASSERT public.retry_instagram_story(p,r,u) IS FALSE, 'unknown outcome never retries';
   ASSERT (SELECT response_data->>'story_state' FROM public.platform_posts WHERE id=r) IS NOT DISTINCT FROM 'uncertain', 'UI keeps uncertainty';
 
+  -- General/bulk retry must preserve the managed result while retrying another failed account.
+  INSERT INTO public.social_accounts(id,user_id,platform,platform_user_id,access_token,is_active)
+    VALUES('e3910000-0000-4000-8000-000000000008',u,'facebook','391008','synthetic-unused',true);
+  INSERT INTO public.platform_posts(post_id,social_account_id,platform,status)
+    VALUES(p,'e3910000-0000-4000-8000-000000000008','facebook','failed');
+  v := public.request_post_retry(p,u,ARRAY[a,'e3910000-0000-4000-8000-000000000008'::uuid]);
+  ASSERT v->>'status' IS NOT DISTINCT FROM 'accepted', 'general retry can still accept other platforms';
+  ASSERT v->'account_ids' IS NOT DISTINCT FROM '["e3910000-0000-4000-8000-000000000008"]'::jsonb, 'managed account excluded';
+  ASSERT EXISTS(SELECT 1 FROM public.platform_posts WHERE id=r), 'managed Story result preserved';
+  UPDATE public.posts SET status='completed', publish_requested_at=NULL WHERE id=p;
+  v := public.request_post_retry(p,u);
+  ASSERT v->>'reason' IS NOT DISTINCT FROM 'no_targets', 'general retry excludes a sole managed failure';
+
   -- A distinct definitely-unpublished attempt may retry, without creating another Reel.
   p := 'e3910000-0000-4000-8000-000000000006';
   INSERT INTO public.posts(id,user_id,caption,platforms,media_file_ids,status,metadata)
@@ -78,7 +91,11 @@ BEGIN
   SELECT count(*) INTO count_before FROM public.platform_posts WHERE post_id=p AND response_data->>'ig_post_subtype'='reel';
   ASSERT public.retry_instagram_story(p,r,other_user) IS FALSE, 'retry cannot cross owner';
   ASSERT public.retry_instagram_story(gen_random_uuid(),r,u) IS FALSE, 'retry binds post as well as result';
+  UPDATE public.instagram_account_capabilities SET credential_generation=1,permission_read_state='unknown' WHERE social_account_id=a;
+  ASSERT public.retry_instagram_story(p,r,u) IS FALSE, 'unverified new credentials cannot start another generation';
+  UPDATE public.instagram_account_capabilities SET permission_read_state='ok' WHERE social_account_id=a;
   ASSERT public.retry_instagram_story(p,r,u) IS TRUE, 'definite failure retry accepted';
+  ASSERT (SELECT credential_generation FROM public.instagram_story_jobs WHERE post_id=p)=1, 'explicit retry captures refreshed credentials';
   ASSERT public.retry_instagram_story(p,r,u) IS FALSE, 'second retry refuses while queued';
   ASSERT (SELECT generation FROM public.instagram_story_jobs WHERE post_id=p)=2, 'one generation increment';
   ASSERT (SELECT count(*) FROM public.platform_posts WHERE post_id=p AND response_data->>'ig_post_subtype'='reel')=count_before, 'retry never adds a Reel';

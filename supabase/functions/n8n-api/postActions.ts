@@ -1591,6 +1591,7 @@ interface PlatformPostResult {
   social_account_id: string | null;
   status: string | null;
   error_message: string | null;
+  response_data?: { story_job_id?: unknown } | null;
 }
 
 // A failed result that is published again.
@@ -1635,6 +1636,11 @@ function pickRetryTargets(
   for (const row of rows) {
     // Only a failed result is a candidate for a retry.
     if (row.status !== "failed") continue;
+    if (row.response_data?.story_job_id) {
+      skipped.push({ account_id: row.social_account_id, platform: row.platform,
+        reason: "Use story_result_id to retry this managed Story independently." });
+      continue;
+    }
     const accountId = row.social_account_id;
     if (!accountId) {
       skipped.push({
@@ -1685,7 +1691,7 @@ async function readPlatformPostResults(
 ): Promise<PlatformPostResult[] | ActionResult> {
   const { data, error: readError } = await deps.supabase
     .from("platform_posts")
-    .select("id, platform, social_account_id, status, error_message, posts!inner(user_id)")
+    .select("id, platform, social_account_id, status, error_message, response_data, posts!inner(user_id)")
     .eq("post_id", request.postId)
     .eq("posts.user_id", request.userId);
 

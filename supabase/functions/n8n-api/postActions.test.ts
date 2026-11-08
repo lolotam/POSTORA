@@ -2702,6 +2702,20 @@ Deno.test("a failed result of an account that already published is not published
   assertEquals(calls.length, 0);
 });
 
+Deno.test("generic retry never dispatches or deletes an independently managed Story result", async () => {
+  const db = new FakeSupabase();
+  claimQueued(db);
+  db.queue("platform_posts", { data: [{ ...platformResult("story-result", "instagram", ACCOUNT, "failed"),
+    response_data: { story_job_id: "managed-job" } }], error: null });
+  db.queueRpc(RELEASE_RPC, { data: true, error: null });
+  const { calls, fetcher } = fakeFetcher([]);
+  const result = await retryFailedPost(depsFor(db, fetcher), USER, { post_id: POST });
+  assertEquals(result.status, 409);
+  assertEquals(errorCode(result), "NO_FAILED_PLATFORMS");
+  assertEquals(calls.length, 0);
+  assertEquals(callsFor(db, "platform_posts", "delete").length, 0);
+});
+
 Deno.test("a retry publishes only the failed accounts and clears the rows it replaced", async () => {
   const db = new FakeSupabase();
   claimQueued(db);

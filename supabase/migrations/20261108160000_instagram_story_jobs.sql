@@ -168,7 +168,7 @@ END $$;
 
 CREATE FUNCTION public.retry_instagram_story(p_post_id uuid, p_result_id uuid, p_user_id uuid)
 RETURNS boolean LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $$
-DECLARE s public.instagram_story_jobs; j uuid; v text;
+DECLARE s public.instagram_story_jobs; j uuid; v text; v_credential_generation bigint;
 BEGIN
   SELECT * INTO s FROM public.instagram_story_jobs WHERE post_id=p_post_id AND result_id=p_result_id AND user_id=p_user_id FOR UPDATE;
   IF NOT FOUND OR s.phase <> 'failed' THEN RETURN false; END IF;
@@ -176,10 +176,19 @@ BEGIN
     JOIN public.social_accounts a ON a.id=s.social_account_id
     WHERE p.id=s.post_id AND p.user_id=s.user_id AND a.user_id=s.user_id AND a.is_active;
   IF v IS DISTINCT FROM s.consent_version THEN RETURN false; END IF;
+  -- An explicit new attempt may adopt the current connection; existing attempts keep their fence.
+  SELECT c.credential_generation INTO v_credential_generation FROM public.instagram_account_capabilities c
+    WHERE c.social_account_id=s.social_account_id AND c.user_id=s.user_id
+      AND c.permission_read_state='ok' AND c.scopes_read_at IS NOT NULL
+      AND CASE c.login_kind WHEN 'direct' THEN 'instagram_business_content_publish'
+        WHEN 'page_linked' THEN 'instagram_content_publish' END = ANY(c.granted_scopes)
+    FOR SHARE;
+  IF NOT FOUND THEN RETURN false; END IF;
   IF EXISTS (SELECT 1 FROM public.background_jobs WHERE id=s.background_job_id AND status IN ('running','queued')) THEN RETURN false; END IF;
   INSERT INTO public.background_jobs(user_id,kind,payload)
     VALUES(s.user_id,'instagram_story',jsonb_build_object('storyJobId',s.id)) RETURNING id INTO j;
   UPDATE public.instagram_story_jobs SET generation=generation+1, phase='queued', background_job_id=j,
+    credential_generation=v_credential_generation,
     container_id=NULL, media_id=NULL, error=NULL, give_up_at=clock_timestamp()+interval '1 hour' WHERE id=s.id;
   UPDATE public.platform_posts SET status='pending', error_message=NULL,
     response_data=response_data || jsonb_build_object('story_generation',s.generation+1,'story_state','queued','story_retryable',false)
@@ -237,3 +246,113 @@ REVOKE ALL ON FUNCTION public.instagram_story_consent(public.posts,uuid),
 GRANT EXECUTE ON FUNCTION public.prepare_instagram_story(uuid,uuid,uuid), public.read_instagram_story_job(uuid,uuid),
   public.checkpoint_instagram_story(uuid,uuid,integer,text,text,text),
   public.settle_instagram_story(uuid,uuid,integer,boolean,text,boolean), public.retry_instagram_story(uuid,uuid,uuid) TO service_role;
+
+-- Preserve the existing generic retry contract, excluding independently managed Story accounts.
+CREATE OR REPLACE FUNCTION public.request_post_retry(
+  p_post_id uuid,
+  p_user_id uuid,
+  p_account_ids uuid[] DEFAULT NULL
+)
+RETURNS jsonb
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  v_post public.posts%ROWTYPE;
+  v_targets uuid[];
+  v_platforms text[];
+  v_requested_at timestamptz := now();
+BEGIN
+  SELECT * INTO v_post
+    FROM public.posts
+   WHERE id = p_post_id AND user_id = p_user_id
+   FOR UPDATE;
+
+  IF NOT FOUND THEN
+    RETURN jsonb_build_object('status', 'refused', 'reason', 'not_found');
+  END IF;
+
+  -- The lease length is mcp_claim_post_action's default, the only one its callers use.
+  IF v_post.status NOT IN ('failed', 'completed')
+     OR v_post.source IS NOT DISTINCT FROM 'tiktok_review'
+     OR (v_post.action_claim_id IS NOT NULL AND v_post.action_claimed_at > now() - interval '15 minutes') THEN
+    RETURN jsonb_build_object('status', 'refused', 'reason', 'not_retryable');
+  END IF;
+
+  IF p_account_ids IS NOT NULL AND cardinality(p_account_ids) > 0 THEN
+    SELECT array_agg(DISTINCT sa.id) INTO v_targets
+      FROM public.social_accounts sa
+     WHERE sa.id = ANY (p_account_ids)
+       AND sa.user_id = p_user_id;
+  ELSE
+    -- Joined to social_accounts so a result row that names another user's
+    -- account never becomes a target, the same rule as the explicit list.
+    SELECT array_agg(DISTINCT pp.social_account_id) INTO v_targets
+      FROM public.platform_posts pp
+      JOIN public.social_accounts sa ON sa.id = pp.social_account_id
+     WHERE pp.post_id = p_post_id
+       AND pp.status = 'failed'
+       AND sa.user_id = p_user_id;
+  END IF;
+
+  SELECT array_agg(t) INTO v_targets
+    FROM unnest(coalesce(v_targets, ARRAY[]::uuid[])) AS t
+   -- A managed Story has a confirmed primary and its own retry/generation protocol.
+   -- Exclude its account even from an explicit generic selection; other accounts remain eligible.
+   WHERE NOT EXISTS (SELECT 1 FROM public.instagram_story_jobs sj
+                      WHERE sj.post_id=p_post_id AND sj.social_account_id=t)
+     AND NOT EXISTS (
+     SELECT 1 FROM public.platform_posts pp
+      WHERE pp.post_id = p_post_id
+        AND pp.social_account_id = t
+        AND (pp.status = 'pending'
+             OR (pp.status = 'success'
+                 AND NOT (pp.platform = 'instagram'
+                          AND EXISTS (SELECT 1 FROM public.platform_posts failed
+                                       WHERE failed.post_id = p_post_id
+                                         AND failed.social_account_id = t
+                                         AND failed.status = 'failed'))))
+   );
+
+  IF v_targets IS NULL OR cardinality(v_targets) = 0 THEN
+    RETURN jsonb_build_object('status', 'refused', 'reason', 'no_targets');
+  END IF;
+
+  SELECT array_agg(DISTINCT sa.platform) INTO v_platforms
+    FROM public.social_accounts sa
+   WHERE sa.id = ANY (v_targets);
+
+  DELETE FROM public.platform_posts
+   WHERE post_id = p_post_id
+     AND status = 'failed'
+     AND social_account_id = ANY (v_targets)
+     AND NOT EXISTS (SELECT 1 FROM public.instagram_story_jobs sj WHERE sj.result_id=platform_posts.id);
+
+  UPDATE public.posts
+     SET status = 'pending',
+         publish_requested_at = v_requested_at,
+         -- metadata is owner-writable and may hold a non-object; || on a
+         -- scalar or array would build an array instead of adding a key.
+         metadata = (CASE WHEN jsonb_typeof(metadata) = 'object' THEN metadata ELSE '{}'::jsonb END)
+                    || jsonb_build_object(
+           'retry_request', jsonb_build_object(
+             'requested_at', v_requested_at,
+             'account_ids', to_jsonb(v_targets),
+             'platforms', to_jsonb(v_platforms),
+             'prior_status', v_post.status
+           )
+         )
+   WHERE id = p_post_id;
+
+  RETURN jsonb_build_object(
+    'status', 'accepted',
+    'requested_at', v_requested_at,
+    'account_ids', to_jsonb(v_targets),
+    'platforms', to_jsonb(v_platforms)
+  );
+END;
+$$;
+
+REVOKE ALL ON FUNCTION public.request_post_retry(uuid, uuid, uuid[]) FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.request_post_retry(uuid, uuid, uuid[]) TO service_role;
