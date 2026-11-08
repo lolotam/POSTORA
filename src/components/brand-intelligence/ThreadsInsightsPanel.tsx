@@ -17,7 +17,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { toast } from "sonner";
+import { createSocialToast } from "@/components/ui/social-toast";
+const toast = createSocialToast("threads");
 import { cn } from "@/lib/utils";
 
 interface InsightMetric {

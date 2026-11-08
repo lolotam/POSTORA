@@ -21,7 +21,8 @@ import {
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
 import { Loader2, Search, AtSign, ExternalLink, Eye, MessageCircle, BarChart3, Calendar, Shield, Trash2, MessageSquarePlus, Send } from "lucide-react";
-import { toast } from "sonner";
+import { createSocialToast } from "@/components/ui/social-toast";
+const toast = createSocialToast("threads");
 import { format } from "date-fns";
 import { mapThreadsReason, ThreadsErrorCard, type ThreadsErrorState } from "./ThreadsErrorCard";
 import { useOwnedThreadsAccounts } from "@/hooks/useOwnedThreadsAccounts";

@@ -130,7 +130,7 @@ export function WhatsAppSetup({ connectedAccounts }: WhatsAppSetupProps) {
         body: { action: "sync_past_chats", social_account_id: socialAccountId },
       });
       if (error) throw error;
-      toast({
+      toast({ platform: "whatsapp",
         title: t("setup.importing", "Importing your conversations"),
         description: t("setup.importingHint", "This can take a minute for large accounts."),
       });
@@ -145,12 +145,12 @@ export function WhatsAppSetup({ connectedAccounts }: WhatsAppSetupProps) {
           return;
         }
       }
-      toast({
+      toast({ platform: "whatsapp",
         title: t("setup.stillImporting", "Still importing"),
         description: t("setup.stillImportingHint", "Large accounts keep importing in the background. Check the inbox in a few minutes."),
       });
     } catch (error) {
-      toast({
+      toast({ platform: "whatsapp",
         title: t("setup.importFailed", "Could not import conversations"),
         description: error instanceof Error ? error.message : t("setup.tryAgain", "Please try again."),
         variant: "destructive",
@@ -169,7 +169,7 @@ export function WhatsAppSetup({ connectedAccounts }: WhatsAppSetupProps) {
         body: { action: "reconnect_qr", social_account_id: accountId },
       });
       if (error || data?.error) {
-        toast({ title: t("setup.qrReconnectFailed", "Couldn't start the reconnect. Try again in a minute."), variant: "destructive" });
+        toast({ platform: "whatsapp", title: t("setup.qrReconnectFailed", "Couldn't start the reconnect. Try again in a minute."), variant: "destructive" });
         return;
       }
       setQrAccountId(accountId);
@@ -180,7 +180,7 @@ export function WhatsAppSetup({ connectedAccounts }: WhatsAppSetupProps) {
 
   const handleConnect = (mode: "cloud_api" | "coexistence") => {
     if (tpStatus === "pending") {
-      toast({
+      toast({ platform: "whatsapp",
         title: t("setup.techPending", "Tech Provider approval pending"),
         description:
           t("setup.techPendingDesc", "Meta hasn't approved this app for Embedded Signup yet. The popup may not load. We'll notify you once approval is complete."),
@@ -202,7 +202,7 @@ export function WhatsAppSetup({ connectedAccounts }: WhatsAppSetupProps) {
     if (!disconnectTarget) return;
     disconnect.mutate(disconnectTarget.id, {
       onSuccess: () => {
-        toast({
+        toast({ platform: "whatsapp",
           title: t("setup.whatsappDisconnected", "WhatsApp disconnected"),
           description: t("setup.whatsappDisconnectedDesc", "WhatsApp disconnected from Postora."),
         });
@@ -744,7 +744,7 @@ export function WhatsAppSetup({ connectedAccounts }: WhatsAppSetupProps) {
             if (error || data?.error) throw new Error(error?.message || data?.error || t("setup.qrFailedFallback", "Unable to start QR connection"));
             setQrAccountId(data.social_account_id);
           } catch (error) {
-            toast({ title: t("setup.qrFailed", "QR connection failed"), description: error instanceof Error ? error.message : t("setup.qrFailedFallback", "Unable to start QR connection"), variant: "destructive" });
+            toast({ platform: "whatsapp", title: t("setup.qrFailed", "QR connection failed"), description: error instanceof Error ? error.message : t("setup.qrFailedFallback", "Unable to start QR connection"), variant: "destructive" });
           } finally {
             setQrConnecting(false);
           }

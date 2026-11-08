@@ -413,6 +413,7 @@ describe("WhatsAppConversationPane mark-read", () => {
     );
     const rerenderUnread = renderUnreadPane();
     await waitFor(() => expect(testState.toast).toHaveBeenCalledWith({
+      platform: "whatsapp",
       title: "Couldn't mark the chat as read",
       variant: "destructive",
     }));
