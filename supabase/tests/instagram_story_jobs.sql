@@ -82,6 +82,12 @@ BEGIN
     VALUES(p,u,'Second Story fixture',ARRAY['instagram'],ARRAY[m],'processing',
       jsonb_build_object('instagram_post_type',jsonb_build_array('reel','story'),'selected_account_ids',jsonb_build_array(a)));
   PERFORM public.prepare_instagram_story(p,a,u);
+  INSERT INTO public.platform_posts(post_id,social_account_id,platform,status)
+    VALUES(p,a,'instagram','failed');
+  UPDATE public.posts SET status='failed' WHERE id=p;
+  v := public.request_post_retry(p,u,ARRAY[a]);
+  ASSERT v->>'status' IS NOT DISTINCT FROM 'accepted', 'an intent awaiting its first Reel does not block primary retry';
+  UPDATE public.posts SET status='processing' WHERE id=p;
   INSERT INTO public.platform_posts(post_id,social_account_id,platform,status,platform_post_id,response_data)
     VALUES(p,a,'instagram','success','391002',jsonb_build_object('ig_post_subtype','reel'));
   SELECT background_job_id,result_id INTO j,r FROM public.instagram_story_jobs WHERE post_id=p;

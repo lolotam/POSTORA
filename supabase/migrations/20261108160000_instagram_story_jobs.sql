@@ -301,7 +301,7 @@ BEGIN
    -- A managed Story has a confirmed primary and its own retry/generation protocol.
    -- Exclude its account even from an explicit generic selection; other accounts remain eligible.
    WHERE NOT EXISTS (SELECT 1 FROM public.instagram_story_jobs sj
-                      WHERE sj.post_id=p_post_id AND sj.social_account_id=t)
+                      WHERE sj.post_id=p_post_id AND sj.social_account_id=t AND sj.result_id IS NOT NULL)
      AND NOT EXISTS (
      SELECT 1 FROM public.platform_posts pp
       WHERE pp.post_id = p_post_id
