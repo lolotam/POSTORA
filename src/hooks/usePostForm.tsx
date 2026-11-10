@@ -708,7 +708,7 @@ export function usePostForm() {
             const targetQuality = file.size > 5 * 1024 * 1024 ? 0.75 : 0.85;
             const maxDim = file.size > 10 * 1024 * 1024 ? 1920 : 2048;
             const compressed = await compressImage(file, targetQuality, maxDim, maxDim);
-            file = new File([compressed], file.name, { type: "image/jpeg" });
+            file = compressed;
             toast({
               title: "Image optimized",
               description: `Compressed from ${(originalFile.size / 1024 / 1024).toFixed(1)}MB to ${(file.size / 1024 / 1024).toFixed(1)}MB`,

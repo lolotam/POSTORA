@@ -8,6 +8,7 @@ import { useToast } from "@/hooks/use-toast";
 import { UploadedFile } from "@/hooks/usePostForm";
 import { AspectRatioSuggestion } from "@/components/post/ImageAspectRatioValidator";
 import { useProcessingJobsContext, ProcessingJob } from "@/contexts/ProcessingJobsContext";
+import { createJpegFile } from "@/lib/imageUtils";
 
 interface UseMediaEditorsProps {
   files: UploadedFile[];
@@ -186,7 +187,7 @@ export function useMediaEditors({
     }
 
     // For images, create new file and re-upload
-    const croppedFile = new File([croppedBlob], originalFile.file.name, { type: 'image/jpeg' });
+    const croppedFile = createJpegFile(croppedBlob, originalFile.file.name);
     URL.revokeObjectURL(originalFile.previewUrl);
 
     setFiles(prev => prev.map(f =>
