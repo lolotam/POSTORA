@@ -68,13 +68,14 @@ export function validateMediaForPlatforms(
   };
 }
 
+/** Wrap already JPEG-encoded bytes in a .jpg File; this does not transcode the blob. */
 export function createJpegFile(blob: Blob, originalName: string): File {
   // Canvas output must not retain a PNG/WebP extension: storage validates bytes.
   const stem = originalName.replace(/\.[^./\\]+$/, "");
   return new File([blob], `${stem}.jpg`, { type: "image/jpeg" });
 }
 
-// Compress image using Canvas API
+/** Resize and encode an image with canvas, returning JPEG bytes in a matching .jpg File. */
 export async function compressImage(
   file: File,
   quality: number = 0.8,
