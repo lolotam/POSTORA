@@ -68,13 +68,19 @@ export function validateMediaForPlatforms(
   };
 }
 
+export function createJpegFile(blob: Blob, originalName: string): File {
+  // Canvas output must not retain a PNG/WebP extension: storage validates bytes.
+  const stem = originalName.replace(/\.[^./\\]+$/, "");
+  return new File([blob], `${stem}.jpg`, { type: "image/jpeg" });
+}
+
 // Compress image using Canvas API
 export async function compressImage(
   file: File,
   quality: number = 0.8,
   maxWidth: number = 2048,
   maxHeight: number = 2048
-): Promise<Blob> {
+): Promise<File> {
   return new Promise((resolve, reject) => {
     const img = new Image();
     const canvas = document.createElement('canvas');
@@ -114,7 +120,7 @@ export async function compressImage(
       canvas.toBlob(
         (blob) => {
           if (blob) {
-            settle(resolve, blob);
+            settle(resolve, createJpegFile(blob, file.name));
           } else {
             settle(reject, new Error('Failed to compress image'));
           }

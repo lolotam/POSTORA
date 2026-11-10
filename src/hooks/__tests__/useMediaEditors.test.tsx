@@ -184,8 +184,8 @@ describe("useMediaEditors", () => {
   });
 
   describe("handleCropComplete", () => {
-    it("updates files with cropped image", async () => {
-      const mockFile = createMockFile();
+    it("uploads a cropped PNG as JPEG with a matching filename", async () => {
+      const mockFile = createMockFile({ file: new File(["source"], "03.png", { type: "image/png" }) });
       const props = createDefaultProps({ files: [mockFile] });
       const { result } = renderHook(() => useMediaEditors(props));
 
@@ -204,6 +204,10 @@ describe("useMediaEditors", () => {
       expect(mockRevokeObjectURL).toHaveBeenCalledWith("blob:test-url");
       expect(mockSetFiles).toHaveBeenCalled();
       expect(mockUploadFileToStorage).toHaveBeenCalled();
+      const uploaded = mockUploadFileToStorage.mock.calls[0][0].file as File;
+      expect(uploaded.name).toBe("03.jpg");
+      expect(uploaded.type).toBe("image/jpeg");
+      expect(uploaded.size).toBe(croppedBlob.size);
       expect(mockToast).toHaveBeenCalledWith({
         title: "Image cropped",
         description: "Your image has been cropped and re-uploaded.",
