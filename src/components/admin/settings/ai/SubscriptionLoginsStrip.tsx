@@ -20,7 +20,10 @@ const STATUS_BADGE: Record<Capability['status'], { label: string; className: str
  * unless a login is already stored and still needs to be seen or removed.
  */
 export function SubscriptionLoginsStrip({ onOpen }: { onOpen: (providerCode: Capability['provider_code']) => void }) {
-  const { data } = useAiProviderAuthCapabilities();
+  const { data, isLoading } = useAiProviderAuthCapabilities();
+  if (isLoading) {
+    return <div className="mb-3 h-9 rounded-md border bg-muted/40 animate-pulse" aria-label="Loading subscription logins" />;
+  }
   const visible = (data?.providers ?? []).filter(
     (capability) => data?.enabled || capability.status !== 'not_connected',
   );

@@ -4,10 +4,11 @@ import { SubscriptionLoginsStrip } from './SubscriptionLoginsStrip';
 
 const h = vi.hoisted(() => ({
   caps: undefined as { enabled: boolean; providers: Array<Record<string, unknown>> } | undefined,
+  loading: false,
 }));
 
 vi.mock('@/hooks/ai-config/useAiProviderAuth', () => ({
-  useAiProviderAuthCapabilities: () => ({ data: h.caps }),
+  useAiProviderAuthCapabilities: () => ({ data: h.caps, isLoading: h.loading }),
 }));
 
 const claude = {
@@ -25,6 +26,14 @@ const chatgpt = { ...claude, provider_code: 'openai', oauth_provider: 'openai-co
 describe('SubscriptionLoginsStrip', () => {
   beforeEach(() => {
     h.caps = { enabled: true, providers: [claude, chatgpt] };
+    h.loading = false;
+  });
+
+  it('shows a placeholder while the subscriptions are loading', () => {
+    h.caps = undefined;
+    h.loading = true;
+    render(<SubscriptionLoginsStrip onOpen={vi.fn()} />);
+    expect(screen.getByLabelText('Loading subscription logins')).toBeInTheDocument();
   });
 
   it('shows each subscription with its state and opens that provider on click', () => {
