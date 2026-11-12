@@ -53,6 +53,14 @@ describe("AgentIdentityCard escalation timeout", () => {
     expect(screen.getByLabelText("Escalation fallback timeout")).toBeInTheDocument();
   });
 
+  it.each<["ai_first" | "human_then_ai", RegExp]>([
+    ["ai_first", /assistant hands a customer to your team/],
+    ["human_then_ai", /team member takes over an escalated conversation/],
+  ])("explains the timeout in the words of the %s mode", (mode, help) => {
+    renderCard({ default_mode: mode });
+    expect(screen.getByText(help)).toBeInTheDocument();
+  });
+
   it("hours are stored as minutes", () => {
     const update = vi.fn();
     renderCard({ default_mode: "human_then_ai", escalation_timeout_minutes: 240 }, update);
