@@ -1,4 +1,4 @@
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2.45.0";
+import { createClient, type SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2.45.0";
 import { handleRestrictedCorsOptions, restrictedErrorResponse, restrictedJsonResponse } from "../_shared/cors.ts";
 import { createEvolutionApi } from "../_shared/evolutionApi.ts";
 import {
@@ -389,7 +389,7 @@ async function logoutInstance(admin: any, userId: string, body: BridgeBody) {
 
 // The owner closed the QR popup without pairing. Only a never-paired attempt is removed;
 // for a reconnect of a paired account (real number) this deletes nothing and says so.
-async function discardPendingQr(admin: any, userId: string, body: BridgeBody) {
+async function discardPendingQr(admin: SupabaseClient, userId: string, body: BridgeBody) {
   if (!body.social_account_id) throw new BridgeError("social_account_id is required", 400);
   const result = await discardPendingQrAccount(
     createPendingQrCleanupPorts(admin, createEvolutionApi(), "whatsapp-evolution-bridge"),

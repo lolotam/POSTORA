@@ -1,14 +1,12 @@
 /** The real ports for pendingQrCleanup.ts: the service-role client, Evolution and system_logs. */
 
+import type { SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2.45.0";
 import { EvolutionApiError, type EvolutionApi } from "./evolutionApi.ts";
 import { logToDatabase } from "./logging.ts";
 import type { PendingQrCleanupPorts } from "./pendingQrCleanup.ts";
 
-// deno-lint-ignore no-explicit-any -- service-role client, untyped like every other caller here
-type ServiceClient = any;
-
 export function createPendingQrCleanupPorts(
-  admin: ServiceClient,
+  admin: SupabaseClient,
   evolution: Pick<EvolutionApi, "deleteInstance">,
   source: string,
 ): PendingQrCleanupPorts {
