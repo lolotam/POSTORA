@@ -73,53 +73,91 @@ export interface WatchSummary {
   failed: string[];
 }
 
+/** What one account did in this run. */
+interface AccountOutcome {
+  skipped: number;
+  episodes: number;
+  flagged: number;
+  alerted: number;
+  failed: boolean;
+}
+
+type StateRead = { kind: "read"; state: string | null } | { kind: "failed" };
+
+/**
+ * The live state of one account, and the poll time that proves we looked. A read that throws
+ * is a failed account, never a state: an unreachable Evolution is not evidence.
+ */
+async function readStateFor(deps: WatchDeps, candidate: WatchCandidate): Promise<StateRead> {
+  try {
+    const state = await deps.readState(candidate.instance_name);
+    await deps.markPolled(candidate.instance_name, deps.now());
+    return { kind: "read", state };
+  } catch {
+    // One broken account must never stop the others. The account id identifies the row.
+    console.error(`[whatsapp-disconnect-watch] account ${candidate.id}: state read failed`);
+    return { kind: "failed" };
+  }
+}
+
+/** Applies one observed state to one account. */
+async function applyAccountState(
+  deps: WatchDeps,
+  candidate: WatchCandidate,
+  state: string | null,
+): Promise<AccountOutcome> {
+  const outcome: AccountOutcome = { skipped: 0, episodes: 0, flagged: 0, alerted: 0, failed: false };
+  const classification = classifyState(state);
+
+  if (classification === "unknown") {
+    // Evolution could not tell us. Never open an episode and never clear one on an
+    // unverifiable state.
+    outcome.skipped = 1;
+    return outcome;
+  }
+
+  try {
+    if (classification === "healthy") {
+      await deps.clear(candidate.id);
+      return outcome;
+    }
+
+    const terminal = classification === "terminal";
+    const episode = await deps.observe(candidate.id, state ?? "", terminal);
+    if (!episode) return outcome;
+
+    if (terminal) outcome.episodes = 1;
+    if (!isAlertDue(episode, deps.now())) return outcome;
+
+    await deps.markFlagged(candidate.id, DISCONNECT_REASON);
+    outcome.flagged = 1;
+    await deps.dispatchAlert(candidate.id);
+    outcome.alerted = 1;
+  } catch {
+    console.error(`[whatsapp-disconnect-watch] account ${candidate.id}: handling failed`);
+    outcome.failed = true;
+  }
+  return outcome;
+}
+
 export async function runWatch(deps: WatchDeps): Promise<WatchSummary> {
   const summary: WatchSummary = { polled: 0, skipped: 0, episodes: 0, flagged: 0, alerted: 0, failed: [] };
   const candidates = await deps.listCandidates(MAX_ACCOUNTS_PER_RUN);
 
   for (const candidate of candidates) {
-    let state: string | null = null;
-    try {
-      state = await deps.readState(candidate.instance_name);
-      await deps.markPolled(candidate.instance_name, deps.now());
-    } catch (error) {
-      // One broken account must never stop the others. The account id identifies the row.
-      console.error(`[whatsapp-disconnect-watch] account ${candidate.id}: state read failed`);
+    const read = await readStateFor(deps, candidate);
+    if (read.kind === "failed") {
       summary.failed.push(candidate.id);
       continue;
     }
-
     summary.polled += 1;
-    const classification = classifyState(state);
 
-    if (classification === "unknown") {
-      // Evolution could not tell us. Never open an episode and never clear one on an
-      // unverifiable state.
-      summary.skipped += 1;
-      continue;
-    }
-
-    try {
-      if (classification === "healthy") {
-        await deps.clear(candidate.id);
-        continue;
-      }
-
-      const terminal = classification === "terminal";
-      const episode = await deps.observe(candidate.id, state ?? "", terminal);
-      if (!episode) continue;
-
-      if (terminal) summary.episodes += 1;
-      if (!isAlertDue(episode, deps.now())) continue;
-
-      await deps.markFlagged(candidate.id, DISCONNECT_REASON);
-      summary.flagged += 1;
-      await deps.dispatchAlert(candidate.id);
-      summary.alerted += 1;
-    } catch (error) {
-      console.error(`[whatsapp-disconnect-watch] account ${candidate.id}: handling failed`);
-      summary.failed.push(candidate.id);
-    }
+    const outcome = await applyAccountState(deps, candidate, read.state);
+    summary.skipped += outcome.skipped;
+    summary.episodes += outcome.episodes;
+    summary.flagged += outcome.flagged;
+    summary.alerted += outcome.alerted;
+    if (outcome.failed) summary.failed.push(candidate.id);
   }
 
   return summary;

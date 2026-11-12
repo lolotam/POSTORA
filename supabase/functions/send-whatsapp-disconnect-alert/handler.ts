@@ -134,10 +134,91 @@ export function buildAdminEmail(account: AlertAccount, ownerName: string | null)
   );
 }
 
+/** One alert, addressed to one recipient group. */
+interface Delivery {
+  accountId: string;
+  kind: AlertKind;
+  to: string[];
+  subject: string;
+  html: string;
+}
+
+/** "not-claimed" means the episode was already alerted for this recipient. */
+type DeliveryOutcome = "sent" | "not-claimed" | "mark-refused";
+
 /**
- * Claim before send, mark after send. The owner and the admins are claimed independently, so a
- * failure on one side never blocks the other: each records its own outcome.
+ * Claim before send, mark after send. The owner and the admins are claimed independently, so
+ * a failure on one side never blocks the other: each records its own outcome.
  */
+async function deliverEmail(deps: SendAlertsDeps, delivery: Delivery): Promise<DeliveryOutcome> {
+  const claimed = await deps.claim(delivery.accountId, delivery.kind);
+  if (!claimed) return "not-claimed";
+
+  await deps.send({ to: delivery.to, subject: delivery.subject, html: delivery.html });
+
+  const marked = await deps.mark(delivery.accountId, delivery.kind);
+  if (!marked) return "mark-refused";
+  return "sent";
+}
+
+/** The outcome of one recipient group: did the email go out, and did anything fail. */
+interface RecipientOutcome {
+  sent: boolean;
+  failed: boolean;
+}
+
+async function deliverToOwner(
+  deps: SendAlertsDeps,
+  account: AlertAccount,
+  owner: OwnerProfile,
+): Promise<RecipientOutcome> {
+  try {
+    const outcome = await deliverEmail(deps, {
+      accountId: account.id,
+      kind: "user",
+      to: [owner.email],
+      subject: OWNER_SUBJECT,
+      html: buildOwnerEmail(account, owner.full_name),
+    });
+    if (outcome === "mark-refused") {
+      console.error(`[send-whatsapp-disconnect-alert] account ${account.id}: owner mark refused`);
+      return { sent: false, failed: true };
+    }
+    return { sent: outcome === "sent", failed: false };
+  } catch {
+    // Logged with the account id only: never the recipient address or a phone number.
+    console.error(`[send-whatsapp-disconnect-alert] account ${account.id}: owner email failed`);
+    return { sent: false, failed: true };
+  }
+}
+
+async function deliverToAdmins(
+  deps: SendAlertsDeps,
+  account: AlertAccount,
+  ownerName: string | null,
+): Promise<RecipientOutcome> {
+  try {
+    const admins = await deps.loadAdmins();
+    if (admins.length === 0) return { sent: false, failed: false };
+
+    const outcome = await deliverEmail(deps, {
+      accountId: account.id,
+      kind: "admin",
+      to: admins.map((admin) => admin.email),
+      subject: ADMIN_SUBJECT,
+      html: buildAdminEmail(account, ownerName),
+    });
+    if (outcome === "mark-refused") {
+      console.error(`[send-whatsapp-disconnect-alert] account ${account.id}: admin mark refused`);
+      return { sent: false, failed: true };
+    }
+    return { sent: outcome === "sent", failed: false };
+  } catch {
+    console.error(`[send-whatsapp-disconnect-alert] account ${account.id}: admin email failed`);
+    return { sent: false, failed: true };
+  }
+}
+
 export async function sendDisconnectAlerts(
   deps: SendAlertsDeps,
   accountId: string,
@@ -157,53 +238,15 @@ export async function sendDisconnectAlerts(
   const owner = await deps.loadOwnerProfile(account.user_id);
 
   if (owner && owner.email_notifications_enabled === true) {
-    try {
-      const claimed = await deps.claim(accountId, "user");
-      if (claimed) {
-        await deps.send({
-          to: [owner.email],
-          subject: OWNER_SUBJECT,
-          html: buildOwnerEmail(account, owner.full_name),
-        });
-        const marked = await deps.mark(accountId, "user");
-        if (!marked) {
-          console.error(`[send-whatsapp-disconnect-alert] account ${accountId}: owner mark refused`);
-          summary.failed.push(accountId);
-        } else {
-          summary.ownerSent = true;
-        }
-      }
-    } catch {
-      // Logged with the account id only: never the recipient address or a phone number.
-      console.error(`[send-whatsapp-disconnect-alert] account ${accountId}: owner email failed`);
-      summary.failed.push(accountId);
-    }
+    const outcome = await deliverToOwner(deps, account, owner);
+    summary.ownerSent = outcome.sent;
+    if (outcome.failed) summary.failed.push(account.id);
   }
 
   if (await deps.isAdminAlertEnabled()) {
-    try {
-      const admins = await deps.loadAdmins();
-      if (admins.length > 0) {
-        const claimed = await deps.claim(accountId, "admin");
-        if (claimed) {
-          await deps.send({
-            to: admins.map((admin) => admin.email),
-            subject: ADMIN_SUBJECT,
-            html: buildAdminEmail(account, owner?.full_name ?? null),
-          });
-          const marked = await deps.mark(accountId, "admin");
-          if (!marked) {
-            console.error(`[send-whatsapp-disconnect-alert] account ${accountId}: admin mark refused`);
-            summary.failed.push(accountId);
-          } else {
-            summary.adminSent = true;
-          }
-        }
-      }
-    } catch {
-      console.error(`[send-whatsapp-disconnect-alert] account ${accountId}: admin email failed`);
-      summary.failed.push(accountId);
-    }
+    const outcome = await deliverToAdmins(deps, account, owner?.full_name ?? null);
+    summary.adminSent = outcome.sent;
+    if (outcome.failed) summary.failed.push(account.id);
   }
 
   return summary;

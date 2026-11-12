@@ -15,7 +15,7 @@ export interface EvolutionQrAccount {
  * needs the whole client, only the statements it issues, so a test double can implement
  * exactly this shape.
  */
-export interface RpcCapableClient {
+interface RpcCapableClient {
   rpc(
     fn: string,
     args: Record<string, unknown>,
@@ -208,7 +208,7 @@ export async function clearUndeliveredSafely(admin: any, accountId: string): Pro
 // would fire on the second outage instead of the first. Best effort on purpose, exactly
 // like the undelivered flag above: a failed clear must never undo the activation the
 // callers depend on.
-export async function clearDisconnectEpisodeSafely(
+async function clearDisconnectEpisodeSafely(
   admin: RpcCapableClient,
   accountId: string,
 ): Promise<void> {
