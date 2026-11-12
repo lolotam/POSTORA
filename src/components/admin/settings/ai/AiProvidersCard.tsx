@@ -21,10 +21,24 @@ import {
 import type { AIProvider, TestConnectionResult } from '@/hooks/useAIConfiguration';
 import { SyncModelsButton } from './SyncModelsButton';
 import { SyncAllButton } from './SyncAllButton';
+import { SubscriptionLoginSection } from './SubscriptionLoginSection';
 import { SYNCABLE_PROVIDER_CODES } from '@/hooks/ai-config/useSyncModels';
 
 function isOAuthProvider(provider: AIProvider | null) {
   return !!provider && (provider.auth_type === 'oauth' || provider.provider_code === 'higgsfield' || provider.api_type === 'higgsfield');
+}
+
+// The providers that have a subscription login through pi-ai. The API key
+// section above stays exactly as it was for them; the subscription is a second
+// way in, not a replacement.
+const SUBSCRIPTION_PROVIDER_CODES = ['claude', 'openai'] as const;
+type SubscriptionProviderCode = (typeof SUBSCRIPTION_PROVIDER_CODES)[number];
+
+function subscriptionProviderCode(provider: AIProvider | null): SubscriptionProviderCode | null {
+  if (!provider) return null;
+  return (SUBSCRIPTION_PROVIDER_CODES as readonly string[]).includes(provider.provider_code)
+    ? (provider.provider_code as SubscriptionProviderCode)
+    : null;
 }
 
 /**
@@ -143,6 +157,7 @@ export function AiProvidersCard() {
   });
 
   const defaultModel = aiConfig?.defaultModel;
+  const subscriptionProvider = subscriptionProviderCode(selectedProvider);
 
   return (
     <div className="space-y-6">
@@ -270,6 +285,10 @@ export function AiProvidersCard() {
                 Save & Test
               </Button>
             </div>
+          )}
+
+          {subscriptionProvider && (
+            <SubscriptionLoginSection providerCode={subscriptionProvider} />
           )}
 
           {selectedProvider && (SYNCABLE_PROVIDER_CODES as readonly string[]).includes(selectedProvider.provider_code) && (
