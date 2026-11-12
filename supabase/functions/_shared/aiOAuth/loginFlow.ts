@@ -126,13 +126,16 @@ export async function finishLogin(
     throw new AiOAuthError("invalid_state", "the pasted text contains no state parameter");
   }
 
-  // Consume the row atomically: single use, scope bound, expiry checked in SQL.
+  // Consume the row atomically: single use, scope and admin bound, expiry
+  // checked in SQL. Binding the admin stops a state minted by one admin from
+  // being completed by another, e.g. through a forwarded callback link.
   const consumed = await deps.admin
     .from("oauth_states")
     .delete()
     .eq("state", parsed.state)
     .eq("provider_code", provider)
     .eq("scope_kind", "platform")
+    .eq("user_id", userId)
     .gt("expires_at", new Date(deps.now()).toISOString())
     .select("*")
     .maybeSingle();

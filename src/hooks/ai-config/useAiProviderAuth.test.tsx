@@ -40,7 +40,9 @@ describe("aiProviderAuthGateway", () => {
     expect(invoke).toHaveBeenCalledWith("ai-provider-auth", {
       body: { action: "start", oauth_provider: "anthropic" },
     });
-    expect(result).toEqual({ authorize_url: "https://claude.ai/oauth/authorize?code=1" });
+    // An answer without flow comes from an edge function older than the
+    // callback flow, so it is the paste flow.
+    expect(result).toEqual({ authorize_url: "https://claude.ai/oauth/authorize?code=1", flow: "pkce_paste" });
   });
 
   it("sends the pasted address on finish", async () => {

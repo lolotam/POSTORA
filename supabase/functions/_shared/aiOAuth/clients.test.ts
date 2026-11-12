@@ -64,9 +64,11 @@ Deno.test("the callback origin comes from PUBLIC_APP_ORIGIN and never from a req
 });
 
 Deno.test("a localhost PUBLIC_APP_ORIGIN is allowed and anything malformed falls back", () => {
-  withAppOrigin("http://127.0.0.1:5173", () => {
-    assertEquals(appOrigin(), "http://127.0.0.1:5173");
-  });
+  for (const local of ["http://127.0.0.1:5173", "http://localhost:5173", "http://[::1]:5173"]) {
+    withAppOrigin(local, () => {
+      assertEquals(appOrigin(), local, `origin: ${local}`);
+    });
+  }
 
   const rejected = ["not a url", "http://example.test", "https://user:pass@example.test", "https://example.test/app"];
   for (const value of rejected) {
@@ -120,11 +122,11 @@ Deno.test("an openrouter exchange response without a key is refused", () => {
 
 Deno.test("the anthropic token parsing is unchanged", () => {
   const { credentials, expiresAt, accountLabel } = OAUTH_CLIENTS.anthropic.credentialsFromToken(
-    { access_token: "sk-ant-oat-1", refresh_token: "refresh-1", expires_in: 3600 },
+    { access_token: "fake-anthropic-access", refresh_token: "refresh-1", expires_in: 3600 },
     1_700_000_000_000,
   );
 
-  assertEquals(credentials.access, "sk-ant-oat-1");
+  assertEquals(credentials.access, "fake-anthropic-access");
   assertEquals(credentials.refresh, "refresh-1");
   assertEquals(credentials.expires, 1_700_000_000_000 + 3600 * 1000 - 300_000);
   assertEquals(expiresAt, new Date(1_700_000_000_000 + 3600 * 1000 - 300_000).toISOString());
@@ -134,8 +136,8 @@ Deno.test("the anthropic token parsing is unchanged", () => {
 
 Deno.test("a token without the required fields is refused for anthropic too", () => {
   const bodies: unknown[] = [
-    { access_token: "sk-ant-oat-1" },
-    { access_token: "sk-ant-oat-1", refresh_token: "r" },
+    { access_token: "fake-anthropic-access" },
+    { access_token: "fake-anthropic-access", refresh_token: "r" },
     { refresh_token: "r", expires_in: 3600 },
     { access_token: "", refresh_token: "r", expires_in: 3600 },
   ];
@@ -156,12 +158,12 @@ Deno.test("the codex token parsing keeps the account id and the account label", 
   });
 
   const { credentials, accountLabel } = OAUTH_CLIENTS["openai-codex"].credentialsFromToken(
-    { access_token: access, refresh_token: "codex-refresh", expires_in: 3600 },
+    { access_token: access, refresh_token: "fake-codex-refresh", expires_in: 3600 },
     1_700_000_000_000,
   );
 
   assertEquals(credentials.accountId, "acc_1");
-  assertEquals(credentials.refresh, "codex-refresh");
+  assertEquals(credentials.refresh, "fake-codex-refresh");
   assertEquals(accountLabel, "dev@example.com");
 });
 
@@ -170,7 +172,7 @@ Deno.test("a codex token without a ChatGPT account id is refused", () => {
   assertThrows(
     () =>
       OAUTH_CLIENTS["openai-codex"].credentialsFromToken(
-        { access_token: access, refresh_token: "codex-refresh", expires_in: 3600 },
+        { access_token: access, refresh_token: "fake-codex-refresh", expires_in: 3600 },
         0,
       ),
     AiOAuthError,

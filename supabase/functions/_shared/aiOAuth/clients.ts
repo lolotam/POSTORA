@@ -240,6 +240,8 @@ const openaiCodexClient: OAuthClient = {
  * back to the default rather than producing a callback nobody can reach.
  */
 const DEFAULT_APP_ORIGIN = 'https://postora.cloud';
+// Plain http is only safe on the developer's own machine.
+const LOOPBACK_HOSTS = new Set(['127.0.0.1', 'localhost', '[::1]']);
 
 export function appOrigin(): string {
   const configured = Deno.env.get('PUBLIC_APP_ORIGIN');
@@ -247,7 +249,7 @@ export function appOrigin(): string {
   try {
     const url = new URL(configured);
     const allowedProtocol = url.protocol === 'https:' ||
-      (url.protocol === 'http:' && url.hostname === '127.0.0.1');
+      (url.protocol === 'http:' && LOOPBACK_HOSTS.has(url.hostname));
     if (!allowedProtocol || url.username || url.password) return DEFAULT_APP_ORIGIN;
     if (url.pathname !== '/' || url.search || url.hash) return DEFAULT_APP_ORIGIN;
     return url.origin;

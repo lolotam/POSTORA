@@ -27,12 +27,26 @@ const capabilitySchema = z.object({
   account_label: z.string().nullable(),
   expires_at: z.string().nullable(),
   models: z.array(z.string()),
-  flow: z.enum(["pkce_paste", "pkce_callback"]),
+  // An edge function deployed before this field existed sends none; every
+  // provider it knew then was a paste flow.
+  flow: z.enum(["pkce_paste", "pkce_callback"]).default("pkce_paste"),
 });
-const capabilitiesSchema = z.object({ enabled: z.boolean(), providers: z.array(capabilitySchema) });
+const capabilitiesSchema = z.object({
+  enabled: z.boolean(),
+  // The edge function and this bundle deploy separately. A provider this
+  // bundle does not know yet is dropped on its own instead of failing the
+  // whole list and hiding every other subscription.
+  providers: z.array(z.unknown()).transform((rows) =>
+    rows.flatMap((row) => {
+      const parsed = capabilitySchema.safeParse(row);
+      return parsed.success ? [parsed.data] : [];
+    }),
+  ),
+});
 const startSchema = z.object({
   authorize_url: z.string().url(),
-  flow: z.enum(["pkce_paste", "pkce_callback"]),
+  // Same rolling-deploy default as the capability's flow.
+  flow: z.enum(["pkce_paste", "pkce_callback"]).default("pkce_paste"),
 });
 const finishSchema = z.object({ status: z.literal("connected"), account_label: z.string().nullable() });
 const disconnectSchema = z.object({ status: z.literal("not_connected") });
