@@ -19,6 +19,7 @@ Deno.test("a dry run uses only the canonical allow-listed model override", async
       await resolveSandboxModelOverride({
         dryRun: true,
         requestedOverride,
+        isPlatformAdmin: () => Promise.resolve(true),
         readAllowedModels: () => Promise.resolve(allowedModels),
       }),
       { ok: true, modelRef },
@@ -32,6 +33,7 @@ Deno.test("a live request never reads or uses model_override, even when malforme
       await resolveSandboxModelOverride({
         dryRun: false,
         requestedOverride,
+        isPlatformAdmin: () => Promise.reject(new Error("live request reached the admin check")),
         readAllowedModels: () => Promise.reject(new Error("live request reached the model allow-list")),
       }),
       { ok: true, modelRef: null },
@@ -45,11 +47,24 @@ Deno.test("an invalid or unlisted dry-run override has a stable refusal code", a
       await resolveSandboxModelOverride({
         dryRun: true,
         requestedOverride,
+        isPlatformAdmin: () => Promise.resolve(true),
         readAllowedModels: () => Promise.resolve(allowedModels),
       }),
       { ok: false, error: INVALID_MODEL_OVERRIDE },
     );
   }
+});
+
+Deno.test("a non-admin sandbox run cannot spend platform credentials through an override", async () => {
+  assertEquals(
+    await resolveSandboxModelOverride({
+      dryRun: true,
+      requestedOverride: "gpt-5.5",
+      isPlatformAdmin: () => Promise.resolve(false),
+      readAllowedModels: () => Promise.resolve(allowedModels),
+    }),
+    { ok: false, error: INVALID_MODEL_OVERRIDE },
+  );
 });
 
 Deno.test("the override refusal log carries the stable code without the raw value", () => {

@@ -14,15 +14,19 @@ export type SandboxModelOverrideResult =
   | { ok: false; error: typeof INVALID_MODEL_OVERRIDE };
 
 /**
- * Only the authenticated sandbox may select a single allowed model. Live callers never reach
- * the allow-list read: their body cannot alter the configured chain or its credentials.
+ * Only a platform admin's sandbox run may select a single allowed model. Live callers never
+ * reach the allow-list read: their body cannot alter the configured chain or its credentials.
+ * The override runs on platform credentials and skips the user's own-key requirement, so any
+ * other signed-in user choosing it would spend the platform's quota (review, 2026-11-12).
  */
 export async function resolveSandboxModelOverride(input: {
   dryRun: boolean;
   requestedOverride: unknown;
+  isPlatformAdmin: () => Promise<boolean>;
   readAllowedModels: () => Promise<readonly AllowedAgentModel[]>;
 }): Promise<SandboxModelOverrideResult> {
   if (!input.dryRun || input.requestedOverride === undefined) return { ok: true, modelRef: null };
+  if (!(await input.isPlatformAdmin())) return { ok: false, error: INVALID_MODEL_OVERRIDE };
 
   const parsedOverride = ModelOverrideSchema.safeParse(input.requestedOverride);
   if (!parsedOverride.success) return { ok: false, error: INVALID_MODEL_OVERRIDE };

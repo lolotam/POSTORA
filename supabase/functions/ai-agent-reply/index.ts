@@ -821,6 +821,16 @@ Deno.serve(async (req) => {
     const modelOverride = await resolveSandboxModelOverride({
       dryRun,
       requestedOverride: body.model_override,
+      isPlatformAdmin: async () => {
+        const { data: adminRole, error } = await admin
+          .from("user_roles")
+          .select("role")
+          .eq("user_id", request.user_id)
+          .eq("role", "admin")
+          .maybeSingle();
+        if (error) throw error;
+        return adminRole !== null;
+      },
       readAllowedModels: async () => {
         const { data: allowedModelRows, error } = await admin
           .from("ai_agent_allowed_models")
