@@ -1,6 +1,6 @@
 // deno-lint-ignore-file no-import-prefix
 import { assertEquals, assertRejects } from "https://deno.land/std@0.208.0/assert/mod.ts";
-import { CatalogSyncError, type CatalogDb, runCatalogSync, syncFailureMessage } from "./modelCatalogSyncRun.ts";
+import { CatalogSyncError, type CatalogDb, defaultModelsInUse, runCatalogSync, syncFailureMessage } from "./modelCatalogSyncRun.ts";
 
 type Write = { table: string; op: string; payload: unknown; options?: unknown };
 type Result = { data: unknown; error: { message: string } | null };
@@ -102,7 +102,7 @@ Deno.test("inserts, changed rows and deactivations go out in one upsert on provi
   assertEquals([report.added, report.updated, report.deactivated], [1, 1, 1]);
   const upserts = modelUpserts(writes);
   assertEquals(upserts.length, 1);
-  assertEquals(upserts[0].options, { onConflict: "provider_id,model_id" });
+  assertEquals(upserts[0].options, { onConflict: "provider_id,model_id,auth_method" });
   const rows = upsertedRows(writes);
   assertEquals(rows.map((r) => [r.model_id, r.is_active]), [["openai/new", true], ["openai/gpt-5.5", true], ["openai/gone", false]]);
   assertEquals(rows[1].name, "GPT-5.5");
@@ -293,4 +293,77 @@ Deno.test("a rejected fetch logs the error name to the server, never the message
     assertEquals(warnings.length, 1);
     assertEquals(warnings[0], ["[model-sync] gemini /models request failed: TypeError"]);
     assertEquals(String(warnings[0]).includes("SECRET-KEY-123"), false);
+  }));
+
+// --- Task 5: the catalogue is keyed by credential kind ---
+
+Deno.test("the upsert targets the credential kind and never another one", () =>
+  withEnv(KEY_ENV, "test-anthropic-key", async () => {
+    const { db, writes } = fakeDb({ models: [], settings: [] });
+    const fetch = catalogue([{ id: "claude-sonnet-4", display_name: "Claude Sonnet 4" }]);
+    await runCatalogSync(db, "claude", fetch, { authMethod: "oauth" });
+    const upserts = modelUpserts(writes);
+    assertEquals(upserts[0].options, { onConflict: "provider_id,model_id,auth_method" });
+    const rows = upsertedRows(writes);
+    assertEquals((rows[0] as { auth_method: string }).auth_method, "oauth");
+  }));
+
+Deno.test("an api-key default does not protect an oauth model from being switched off", () => {
+  const inUse = defaultModelsInUse(
+    [{ value: { provider_code: "claude", model_id: "claude-sonnet-4" } }],
+    "claude",
+    "oauth",
+  );
+  assertEquals(inUse.size, 0);
+  assertEquals(
+    defaultModelsInUse([{ value: { provider_code: "claude", model_id: "claude-sonnet-4" } }], "claude", "api_key").size,
+    1,
+  );
+});
+
+Deno.test("an oauth default protects the oauth model", () => {
+  const inUse = defaultModelsInUse(
+    [{ value: { provider_code: "claude", model_id: "claude-sonnet-4", auth_method: "oauth" } }],
+    "claude",
+    "oauth",
+  );
+  assertEquals(inUse.size, 1);
+});
+
+Deno.test("an api-key sync keeps the historical stamp key and an oauth sync gets its own", () =>
+  withEnv(KEY_ENV, "test-anthropic-key", async () => {
+    const { db, writes } = fakeDb({ models: [], settings: [] });
+    const fetch = catalogue([{ id: "claude-sonnet-4", display_name: "Claude Sonnet 4" }]);
+    await runCatalogSync(db, "claude", fetch);
+    await runCatalogSync(db, "claude", fetch, { authMethod: "oauth" });
+    const keys = writes
+      .filter((w) => w.table === "system_settings")
+      .map((w) => (w.payload as { key: string }).key);
+    assertEquals(keys.includes("model_catalog_synced_at_claude"), true);
+    assertEquals(keys.includes("model_catalog_synced_at_claude_oauth"), true);
+  }));
+
+Deno.test("a catalogue the caller supplies skips the provider's own models request", () =>
+  withEnv(KEY_ENV, "test-anthropic-key", async () => {
+    const { db, writes } = fakeDb({ models: [], settings: [] });
+    const rejecting = (() => Promise.reject(new Error("must not be called"))) as unknown as typeof fetch;
+    const report = await runCatalogSync(db, "claude", rejecting, {
+      authMethod: "oauth",
+      catalogue: {
+        models: [{
+          model_id: "claude-sonnet-4",
+          name: "Claude Sonnet 4",
+          description: null,
+          capabilities: ["chat"],
+          context_limit: null,
+          cost_per_1m_input_tokens: null,
+          cost_per_1m_output_tokens: null,
+          metadata: {},
+        }],
+        skippedByType: {},
+        managedCapabilities: ["chat"],
+      },
+    });
+    assertEquals(report.added, 1);
+    assertEquals((upsertedRows(writes)[0] as { auth_method: string }).auth_method, "oauth");
   }));

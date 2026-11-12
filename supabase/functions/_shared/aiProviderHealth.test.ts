@@ -52,6 +52,10 @@ Deno.test("a rate limit is a failure, not a re-login", () => {
   assertEquals(classifyApiKeyFailure(429, '{"error":{"type":"rate_limit"}}').reason, "Rate limit exceeded");
 });
 
+Deno.test("a probe that timed out says so instead of quoting an HTTP status", () => {
+  assertEquals(classifyApiKeyFailure(504, "").reason, "The provider did not answer in time.");
+});
+
 Deno.test("an expired oauth refresh needs a re-login", () => {
   const out = classifyOAuthFailure("reauth_required");
   assertEquals(out.status, "needs_relogin");

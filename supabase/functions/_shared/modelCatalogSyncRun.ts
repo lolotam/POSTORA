@@ -8,6 +8,12 @@ export const SYNCABLE_PROVIDERS = [
   "vercel", "openrouter", "deepseek", "claude", "gemini", "openai", "zai", "minimax", "xai",
 ] as const;
 
+/**
+ * Which credential a catalogue belongs to. One provider can serve an API key and a
+ * subscription login, so the same model_id exists twice: once per kind.
+ */
+export type CatalogAuthMethod = "api_key" | "oauth";
+
 export interface SyncReport {
   added: number;
   updated: number;
@@ -100,7 +106,16 @@ export interface CatalogDb {
 const MODEL_COLUMNS =
   "id, model_id, name, description, is_active, capabilities, context_limit, cost_per_1m_input_tokens, cost_per_1m_output_tokens, metadata";
 
-function defaultModelsInUse(settings: Array<{ value: unknown }>, providerCode: string): Set<string> {
+/**
+ * The models a tier setting keeps alive. The tier's credential kind matters: an
+ * API-key default must not protect an OAuth row from being switched off, and the
+ * other way round.
+ */
+export function defaultModelsInUse(
+  settings: Array<{ value: unknown }>,
+  providerCode: string,
+  authMethod: CatalogAuthMethod,
+): Set<string> {
   const inUse = new Set<string>();
   for (const s of settings) {
     let v: unknown = s.value;
@@ -111,10 +126,13 @@ function defaultModelsInUse(settings: Array<{ value: unknown }>, providerCode: s
         continue; // A malformed setting names no model; skip it rather than abort the sync.
       }
     }
-    const setting = v as { provider_code?: unknown; model_id?: unknown } | null;
-    if (setting?.provider_code === providerCode && typeof setting.model_id === "string" && setting.model_id) {
-      inUse.add(setting.model_id);
-    }
+    const setting = v as { provider_code?: unknown; model_id?: unknown; auth_method?: unknown } | null;
+    if (!setting || setting.provider_code !== providerCode) continue;
+    if (typeof setting.model_id !== "string" || !setting.model_id) continue;
+    // A tier without auth_method is an API-key tier; an OAuth tier says so explicitly.
+    const tierAuthMethod: CatalogAuthMethod = setting.auth_method === "oauth" ? "oauth" : "api_key";
+    if (tierAuthMethod !== authMethod) continue;
+    inUse.add(setting.model_id);
   }
   return inUse;
 }
@@ -123,8 +141,9 @@ export async function runCatalogSync(
   db: CatalogDb,
   providerCode: string,
   fetchImpl: typeof fetch = fetch,
-  options: { dryRun?: boolean } = {},
+  options: { dryRun?: boolean; authMethod?: CatalogAuthMethod; catalogue?: MappedCatalog } = {},
 ): Promise<SyncReport> {
+  const authMethod = options.authMethod ?? "api_key";
   const source = CATALOGUE[providerCode];
   if (!source) throw new CatalogSyncError(`Provider ${providerCode} is not syncable`);
   const { data: providerRow, error: providerError } = await db.from("ai_providers")
@@ -134,38 +153,45 @@ export async function runCatalogSync(
   const provider = providerRow as { id: string; api_key_env_var: string } | null;
   if (!provider) throw new CatalogSyncError(`Provider ${providerCode} is missing`);
 
-  let key: string | null = null;
-  if (source.needsKey) {
-    key = await resolveProviderKey(db, providerCode);
-    if (!key) throw new CatalogSyncError(`API key ${provider.api_key_env_var} not configured`);
+  let mapped: MappedCatalog;
+  if (options.catalogue) {
+    // The caller already has the catalogue. The OAuth path uses this: its model list
+    // comes from pi-ai's registry, not from the provider's own /models endpoint.
+    mapped = options.catalogue;
+  } else {
+    let key: string | null = null;
+    if (source.needsKey) {
+      key = await resolveProviderKey(db, providerCode);
+      if (!key) throw new CatalogSyncError(`API key ${provider.api_key_env_var} not configured`);
+    }
+    const { url, headers } = source.request(key);
+    let res: Response;
+    try {
+      res = await fetchImpl(url, { headers, signal: AbortSignal.timeout(20_000) });
+    } catch (e) {
+      // A rejected fetch (DNS, connection refused, TLS, abort) throws a TypeError whose message embeds the
+      // request URL, and some provider request could carry a secret in that URL. Never surface that message
+      // or chain it as `cause` — a logger can serialise a cause just as readily as a top-level message —
+      // but the error NAME alone is safe and worth keeping server-side, since ai-config/index.ts skips its
+      // own logging for CatalogSyncErrors (their message is meant to be admin-facing already).
+      console.warn(`[model-sync] ${providerCode} /models request failed: ${e instanceof Error ? e.name : "error"}`);
+      throw new CatalogSyncError(`${providerCode} /models request failed`);
+    }
+    // Never interpolate `url` into this message: a provider request could carry a secret in its query string.
+    if (!res.ok) throw new CatalogSyncError(`${providerCode} /models returned HTTP ${res.status}`);
+    const body = await res.json();
+    mapped = source.map(source.list(body));
   }
-  const { url, headers } = source.request(key);
-  let res: Response;
-  try {
-    res = await fetchImpl(url, { headers, signal: AbortSignal.timeout(20_000) });
-  } catch (e) {
-    // A rejected fetch (DNS, connection refused, TLS, abort) throws a TypeError whose message embeds the
-    // request URL, and some provider request could carry a secret in that URL. Never surface that message
-    // or chain it as `cause` — a logger can serialise a cause just as readily as a top-level message —
-    // but the error NAME alone is safe and worth keeping server-side, since ai-config/index.ts skips its
-    // own logging for CatalogSyncErrors (their message is meant to be admin-facing already).
-    console.warn(`[model-sync] ${providerCode} /models request failed: ${e instanceof Error ? e.name : "error"}`);
-    throw new CatalogSyncError(`${providerCode} /models request failed`);
-  }
-  // Never interpolate `url` into this message: a provider request could carry a secret in its query string.
-  if (!res.ok) throw new CatalogSyncError(`${providerCode} /models returned HTTP ${res.status}`);
-  const body = await res.json();
-  const mapped = source.map(source.list(body));
   if (!mapped.models.length) throw new CatalogSyncError(`${providerCode} returned an empty model catalogue`);
 
   const { data: existingData, error: existingError } = await db.from("ai_models")
-    .select(MODEL_COLUMNS).eq("provider_id", provider.id);
+    .select(MODEL_COLUMNS).eq("provider_id", provider.id).eq("auth_method", authMethod);
   if (existingError) throw new Error("ai_models read failed");
   const existing = (existingData ?? []) as ExistingModelRow[];
   const { data: settings, error: settingsError } = await db.from("system_settings")
     .select("key, value").like("key", "default_ai_model%");
   if (settingsError) throw new Error("system_settings read failed");
-  const inUse = defaultModelsInUse((settings ?? []) as Array<{ value: unknown }>, providerCode);
+  const inUse = defaultModelsInUse((settings ?? []) as Array<{ value: unknown }>, providerCode, authMethod);
 
   const plan = planCatalogSync(existing, mapped, inUse);
   const now = new Date().toISOString();
@@ -175,7 +201,7 @@ export async function runCatalogSync(
     provider_id: provider.id, model_id: m.model_id, name: m.name, description: m.description,
     capabilities: m.capabilities, context_limit: m.context_limit,
     cost_per_1m_input_tokens: m.cost_per_1m_input_tokens, cost_per_1m_output_tokens: m.cost_per_1m_output_tokens,
-    metadata: m.metadata, is_active: m.is_active, updated_at: now,
+    metadata: m.metadata, is_active: m.is_active, updated_at: now, auth_method: authMethod,
   });
   const deactivated = existing.filter((r) => plan.deactivateIds.includes(r.id));
   const rows = [
@@ -186,11 +212,17 @@ export async function runCatalogSync(
   const dryRun = options.dryRun === true;
   if (!dryRun) {
     if (rows.length) {
-      const { error } = await db.from("ai_models").upsert(rows, { onConflict: "provider_id,model_id" });
+      const { error } = await db.from("ai_models").upsert(rows, { onConflict: "provider_id,model_id,auth_method" });
       if (error) throw new Error(`ai_models upsert failed: ${error.message}`);
     }
+    // The stamp key carries the credential kind, so an API-key sync and an OAuth
+    // sync of the same provider do not overwrite each other's stamp. The API-key
+    // key keeps its historical name: the admin card reads that exact key.
+    const stampKey = authMethod === "api_key"
+      ? `model_catalog_synced_at_${providerCode}`
+      : `model_catalog_synced_at_${providerCode}_${authMethod}`;
     const { error: stampError } = await db.from("system_settings").upsert(
-      { key: `model_catalog_synced_at_${providerCode}`, value: { at: now } }, { onConflict: "key" },
+      { key: stampKey, value: { at: now } }, { onConflict: "key" },
     );
     if (stampError) throw new Error(`system_settings write failed: ${stampError.message}`);
   }

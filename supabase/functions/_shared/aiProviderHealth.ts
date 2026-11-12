@@ -95,6 +95,11 @@ export function classifyApiKeyFailure(
   bodyText: string,
   apiKey?: string | null,
 ): { status: HealthStatus; reason: string } {
+  // A probe that timed out has no body to describe, and "API error: 504" would be a
+  // worse sentence than saying what actually happened.
+  if (status === 504) {
+    return { status: "failed", reason: "The provider did not answer in time." };
+  }
   return {
     status: "failed",
     reason: sanitizeReason(describeProviderFailure("Provider", status, bodyText), apiKey ?? null),
