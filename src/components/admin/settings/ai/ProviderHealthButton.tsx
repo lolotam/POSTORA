@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import type { TFunction } from 'i18next';
 import { Loader2, RefreshCw } from 'lucide-react';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
@@ -113,7 +114,7 @@ export function ProviderHealthButton() {
   );
 }
 
-function statusLabel(row: ProviderHealthRow, t: (key: string, fallback?: string) => string): string {
+function statusLabel(row: ProviderHealthRow, t: TFunction): string {
   if (row.status === 'connected') return t('adminai:statusConnected', 'Connected');
   if (row.status === 'needs_relogin') return t('adminai:statusNeedsRelogin', 'Needs re-login');
   return t('adminai:statusFailed', 'Failed');
