@@ -25,7 +25,7 @@ Not built: the Grok CLI proxy (`cli-chat-proxy.grok.com`). It works only by impe
 
 ## 3. Risk handling (owner chose full scope with the risks stated)
 
-1. **Admin only.** Every flow in this design connects the platform's own account. MiniMax, Kimi Code and Z.ai sign-ins are never offered at user level (§8); users get API keys or OpenRouter / xAI sign-in there.
+1. **Admin first.** Every flow in this design connects the platform's own account. This does **not** avoid Z.ai's multi-user clause: one admin plan answering for every Postora user is the "multi-user access" its usage policy forbids, and the Z.ai risk sentence says so. Whether users later get their own MiniMax, Kimi Code or Z.ai sign-in is an owner decision at the user phase (§12).
 2. **Explicit acknowledgement.** Before `start` for xAI, Kimi, MiniMax or Z.ai, the dialog shows the provider's specific risk sentence (table above) and requires a checkbox. The acknowledgement is sent as `acknowledged_risk: true`; the function refuses `start` without it for those four (`risk_not_acknowledged`, logged).
 3. **Per-provider switch.** New `system_settings` keys `feature_ai_oauth_<provider>` (default `false`) on top of the existing `feature_ai_provider_oauth`. Turning a provider's switch off hides its sign-in and stops it from being used for inference; a stored connection stays visible so it can be disconnected (same rule as today).
 4. **Honest identification.** Requests carry Postora's own User-Agent. Kimi's `X-Msh-Platform` is `postora`. MiniMax's gateway headers (`User-Agent: MiniMaxAgent`, `X-Mavis-Agent-Id`) are required by that gateway; this is the one place the design matches a vendor CLI's headers, and it is called out in the MiniMax risk sentence.
@@ -72,7 +72,13 @@ type StoredCredential =
   | { kind: "api_key"; key: string; accountLabel: string | null };
 ```
 
-`OAuthProviderId` widens to `"anthropic" | "openai-codex" | "openrouter" | "xai" | "kimi-coding" | "minimax-code" | "zai-coding"`. The ids are ours for the new five (pi-ai 0.73.1 has no OAuth for them), and `OAUTH_PROVIDER_CODE` maps them to the existing `ai_providers.provider_code`: `openrouter → openrouter`, `xai → xai`, `kimi-coding → moonshot`, `minimax-code → minimax`, `zai-coding → zai`.
+`OAuthProviderId` widens to `"anthropic" | "openai-codex" | "openrouter" | "xai" | "kimi-coding" | "minimax-code" | "zai-coding"`. The ids are ours for the new five (pi-ai 0.73.1 has no OAuth for them).
+
+Routing today (`_shared/ai-fallback.ts`, `callChatCompletion` and `callAiChain`): a tier carries `provider` (an `ai_providers.provider_code`) and `authMethod`. `authMethod === 'oauth'` sends it through `callOAuthTier`, which maps the code with `oauthProviderForCode` and validates the model with `isOAuthTierModel` against pi-ai's registry. Consequences:
+
+- `xai` and `openrouter` keep their existing provider rows. Key tiers and sign-in tiers for the same code are told apart by `authMethod`, as Claude and OpenAI already are.
+- Kimi Code, MiniMax Code and the Z.ai Coding Plan are **not** the Moonshot, MiniMax or Z.ai key products: different credentials, base URLs and model ids. They get **their own `ai_providers` rows**, `kimi-coding`, `minimax-code` and `zai-coding`, seeded inactive, so a key tier can never be routed to a coding-plan endpoint or the other way round.
+- `isOAuthTierModel` cannot use pi-ai's registry for the new ids. Each new client declares its model list (`models: readonly string[]`, seeded from pi-ai 1.5.2 and 9router), and `isOAuthTierModel` consults the client list first, pi-ai second.
 
 Constants are copied, not imported: pi-ai 1.5.2 (`@earendil-works/pi-ai`, `src/auth/oauth/{xai,kimi-coding,openrouter}.ts`) and 9router (`src/lib/oauth/providers/{minimax-code-shared,glm}.js`) are the references; the file header names the source and commit, as `clients.ts` already does. We do not upgrade pi-ai in this work: its OpenRouter module needs `node:http`, and the major bump is a separate change.
 
@@ -90,17 +96,22 @@ Rules:
 - The device code, poll handle, PKCE verifier and Z.ai poll token stay server-side in the login-attempt row; the browser only ever holds `attempt_id`. Same storage and 10-minute TTL as the PKCE verifier today (`loginFlow.ts`, `LOGIN_TTL_MS`); device attempts use the provider's own `expires_in`, capped at 15 minutes.
 - `poll` is rate-limited to the provider's `interval_sec` per attempt server-side (a too-early poll answers `pending` without calling the provider); a `slow_down` adds 5 s, per RFC 8628.
 - The browser drives polling (every `interval_sec`, stops on a terminal status, on dialog close, or at `expires_at`). The edge function makes at most one provider call per `poll`; no long-running loops inside a request.
-- OpenRouter's callback is a front-end route, `/admin/settings/ai/oauth/openrouter/callback`, which reads `code` and `state` and calls `finish`. `state` binds to the attempt row and the admin's user id. The callback URL is built from the app origin (`APP_ORIGIN` env), never from the request.
+- OpenRouter's callback is a front-end route, `/admin/settings/ai/oauth/openrouter/callback`, which reads `code` and `state` and calls `finish`. `state` is the `oauth_states` primary key and binds to the admin's user id. The callback origin comes from the allow-list the social OAuth flows already use for return origins (`_shared/oauthState.ts` and its return-origin checks), never from a raw request header. OpenRouter's docs accept any callback URL, localhost included, and recommend a public one; re-check scheme and port rules when building PR A.
 - Every refusal is logged (`logRefusal`) with a stable code: `risk_not_acknowledged`, `provider_disabled`, `attempt_not_found`, `attempt_expired`, `poll_too_early` (not logged; normal), `exchange_failed`, `device_denied`.
 
 ## 6. Storage
 
-New migration (do not edit `20261112120000`, already applied to prod):
+Live definitions:
+- Table `ai_provider_oauth_connections` (`20261112120000`).
+- RPCs `save_ai_oauth_credentials`, `claim_ai_oauth_refresh`, `complete_ai_oauth_refresh`, `fail_ai_oauth_refresh` as redefined in `20261112150000_ai_oauth_refresh_fence.sql`.
+- Login attempts in the shared `oauth_states` table (`20260820130000`: `state` PK, `provider_code`, `code_verifier`, `redirect_uri`, `scope_kind`, `user_id`, `return_to`, `expires_at`, RLS deny-all).
 
+New migration (never edit the applied ones):
 - Widen `ai_provider_oauth_connections.oauth_provider` CHECK to the seven ids.
-- Add `credential_kind text NOT NULL DEFAULT 'oauth' CHECK (credential_kind IN ('oauth','api_key'))`.
-- Login attempts: add `flow text`, `device_payload_secret_id uuid` (Vault, holds device code / poll token / verifier), `next_poll_at timestamptz`, `expires_at timestamptz` to the attempts table used by `loginFlow.ts`.
-- RPCs stay `SECURITY DEFINER`, `search_path = public, pg_temp`, service-role only. `save_ai_oauth_connection` gains `p_credential_kind`.
+- Add `credential_kind text NOT NULL DEFAULT 'oauth' CHECK (credential_kind IN ('oauth','api_key'))`; `save_ai_oauth_credentials` gains a defaulted `p_credential_kind`.
+- Seed inactive `ai_providers` rows `kimi-coding`, `minimax-code`, `zai-coding` (§4).
+- `oauth_states`: add `flow text`, `device_payload jsonb` (device code, poll token, Z.ai poll bearer; protected like `code_verifier` today: service-role only, RLS deny-all, deleted on finish or expiry) and `next_poll_at timestamptz`. MiniMax keeps its PKCE verifier in `code_verifier`; other device flows store an empty string there.
+- RPCs stay `SECURITY DEFINER`, `search_path = public, pg_temp`, service-role only.
 - Regenerate `src/integrations/supabase/types.ts`.
 - SQL proof in `supabase/tests/ai_oauth_more_providers.sql`, registered in `scripts/db-harness.sh`: new ids accepted, unknown id refused, anon/authenticated cannot read either table, an attempt cannot be polled after `expires_at`.
 
@@ -118,10 +129,12 @@ New migration (do not edit `20261112120000`, already applied to prod):
 |---|---|
 | OpenRouter, Z.ai | pi-ai 0.73.1 API-key provider (`openrouter`, `zai`) with the stored key as `apiKey`. |
 | xAI | pi-ai `xai` provider with the access token as `apiKey`. A 403 on inference is reported as `subscription_tier_not_allowed`, not as a broken login. |
-| Kimi Code | pi-ai model object with `baseUrl: https://api.kimi.com/coding/v1`, api `openai-completions`, Bearer access token, `X-Msh-Platform: postora`. |
+| Kimi Code | pi-ai 0.73.1 already ships provider `kimi-coding` (base `https://api.kimi.com/coding`, `anthropic-messages`): first choice, with the access token as `apiKey`. If the live probe shows that endpoint refuses an OAuth token, use a model object on `https://api.kimi.com/coding/v1`, `openai-completions` (pi 1.5.2's choice), with `X-Msh-Platform: postora`. |
 | MiniMax | pi-ai model object with `baseUrl: https://agent.minimax.io/mavis/api/v1/llm`, api `anthropic-messages`, Bearer access token, gateway headers from §3.4. |
 
 `test` uses the same path with one short prompt, as today.
+
+**Probe before building UI (PR B, PR C).** For each device-code provider, a live probe (`*.live.test.ts`) first proves that a token from its flow is accepted on the exact endpoint and API shape above. pi 1.5.2 sends xAI OAuth tokens through the Responses API, while pi-ai 0.73.1's `xai` provider uses chat completions; if chat completions refuses the token, xAI gets a Responses-shaped model object instead.
 
 ## 9. UI
 
@@ -137,7 +150,7 @@ New migration (do not edit `20261112120000`, already applied to prod):
 1. **PR A — framework + OpenRouter.** Union client type, storage migration, `pkce_callback`, callback route, `credential_kind`. Lowest risk; proves the framework.
 2. **PR B — device code + xAI + Kimi Code.** `poll` action, device UI, acknowledgement, per-provider switches.
 3. **PR C — MiniMax + Z.ai.** The two reverse-engineered flows, behind switches that stay off until the owner turns them on.
-4. **Later — users.** The user-level AI auth feature already queued reuses these flows for OpenRouter and xAI only; MiniMax, Kimi Code and Z.ai sign-ins stay admin-only (§3.1).
+4. **Later — users.** The user-level AI auth feature already queued reuses these flows; which providers it offers is the owner's decision at that phase (§12).
 
 ## 11. Tests
 
@@ -148,6 +161,9 @@ New migration (do not edit `20261112120000`, already applied to prod):
 - Live probes (`*.live.test.ts`, not in CI) per provider, run by the owner after connecting.
 
 ## 12. Open items
+
+- User phase: the owner chose "Everything 9router does" and "admin first, then users". Before the user phase, ask by card whether users get MiniMax, Kimi Code and Z.ai sign-ins given §2's terms risk, or only OpenRouter and xAI.
+- §9 builds on `SubscriptionLoginsStrip` from PR #407; PR A is cut after #407 merges, or based on its branch.
 
 - xAI subscription OAuth is documented only through third parties; if xAI publishes a per-app client registration, switch to it.
 - Model lists differ between sources for every provider; the admin's "Sync models" button stays the source of truth.
