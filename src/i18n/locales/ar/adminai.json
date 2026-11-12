@@ -1,0 +1,22 @@
+{
+  "busy": "الفحص اليومي شغال دلوقتي. جرّب تاني بعد شوية.",
+  "checkAndSyncAll": "افحص و sync كل الـ providers",
+  "columnAdded": "مضاف",
+  "columnChecked": "آخر فحص",
+  "columnCredential": "طريقة الاتصال",
+  "columnDeactivated": "مقفول",
+  "columnProvider": "الـ Provider",
+  "columnReason": "السبب",
+  "columnStatus": "الحالة",
+  "columnUpdated": "محدّث",
+  "credentialApiKey": "مفتاح API",
+  "credentialOauth": "اشتراك",
+  "empty": "لسه مفيش أي provider اتفحص.",
+  "lastChecked": "آخر فحص {{time}}",
+  "runFailed": "الفحص ما مكملش: {{message}}",
+  "running": "بنفحص الـ providers…",
+  "statusConnected": "شغال",
+  "statusFailed": "فشل",
+  "statusNeedsRelogin": "محتاج تسجيل دخول تاني",
+  "summary": "اتفحص {{total}} provider · {{connected}} شغالين · {{failed}} فشلوا"
+}
