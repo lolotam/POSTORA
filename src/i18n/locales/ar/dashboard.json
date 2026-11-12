@@ -14,9 +14,11 @@
     "accountWithUsernameNeedsReconnect": "حساب {{platform}} بتاعك (@{{username}}) محتاج يتعمله إعادة ربط.",
     "connecting": "جاري الربط...",
     "connectionExpired": "انتهت صلاحية اتصال {{platform}}",
+    "disconnected": "{{platform}} غير متصل",
     "dismiss": "تجاهل",
     "error": "خطأ: {{error}}",
-    "reconnect": "إعادة ربط"
+    "reconnect": "إعادة ربط",
+    "reconnectWhatsapp": "إعادة ربط واتساب"
   },
   "recentPosts": {
     "noPosts": "لسه مفيش منشورات. اعمل أول منشور ليك!",
