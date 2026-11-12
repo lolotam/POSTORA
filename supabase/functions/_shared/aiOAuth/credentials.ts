@@ -51,14 +51,21 @@ export function isReauthRefreshError(message: string): boolean {
 }
 
 /**
- * The RFC 6749 §5.2 `error` value of a token-endpoint body: the JSON field
- * when there is one, otherwise the whole plain-text body. Anthropic's wrapped
- * message appends "; stack=..." after the body, which is cut first.
+ * The RFC 6749 §5.2 `error` value of a token-endpoint body: the top-level
+ * JSON field when the body is JSON (a nested `error` is not the response's
+ * code), otherwise the whole plain-text body. Anthropic's wrapped message
+ * appends "; stack=..." after the body, which is cut first.
  */
 function oauthErrorCode(body: string): string {
   const text = body.replace(/; stack=[\s\S]*$/, "").trim();
-  const field = /"error"\s*:\s*"([^"]*)"/.exec(text);
-  return field ? field[1] : text;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    return text;
+  }
+  const code = parsed !== null && typeof parsed === "object" ? (parsed as { error?: unknown }).error : undefined;
+  return typeof code === "string" ? code : "";
 }
 
 /**
@@ -70,11 +77,13 @@ const REJECTED_REFRESH =
   /^(?:(?:Anthropic token refresh request failed\. url=[^;\s]*; details=Error: )?HTTP request failed\. status=(?:400|401); url=[^;\s]*; body=|OpenAI Codex token refresh failed \((?:400|401)\): )([\s\S]*)$/;
 
 /**
- * Longer than any refresh pi-ai can take (Anthropic aborts at 30 s), so a
- * caller that gave up waiting at its tier deadline cannot lose the lease to a
- * second refresher while its own rotation is still in flight.
+ * Longer than the edge worker can live (150 s wall clock), so the lease cannot
+ * expire while this worker's refresh is still in flight: Anthropic's refresh
+ * aborts at 30 s, Codex's has no timeout but dies with the worker. A caller
+ * that gave up at its tier deadline therefore never hands the lease to a
+ * second refresher mid-rotation.
  */
-const LEASE_SECONDS = 120;
+const LEASE_SECONDS = 180;
 const FRESH_MARGIN_MS = 60_000;
 const WAIT_MS = 750;
 const MAX_WAIT_ROUNDS = 4;

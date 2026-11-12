@@ -394,6 +394,8 @@ Deno.test("isReauthRefreshError asks for a re-login only on a 400/401 invalid_gr
       false,
     ],
     ['OpenAI Codex token refresh failed (401): {"error":"invalid_client","hint":"invalid_grant"}', false],
+    ['HTTP request failed. status=400; url=https://x/token; body={"details":{"error":"invalid_grant"}}', false],
+    ['OpenAI Codex token refresh failed (400): {"details":{"error":"invalid_grant"},"error":"invalid_request"}', false],
     ['HTTP request failed. status=503; url=https://x/token; body={"retry_after":400}', false],
     ["OpenAI Codex token refresh failed (503): retry in 401 ms", false],
     ["OpenAI Codex token refresh error: network timeout", false],
