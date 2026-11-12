@@ -117,7 +117,11 @@ const SERVICE_WINDOW_MS = 24 * 60 * 60 * 1000;
 // customer returning to an existing thread ("the one I asked about earlier") got an
 // agent with no idea what that referred to. The 4 was set when the prompt also carried
 // a long stale price list; prices now come from the connector, which freed the budget.
-const HISTORY_LIMIT = 6;
+//
+// Raised from 6 on 2026-11-12 (owner request): 6 rows is three exchanges, and a
+// curemedkw customer who described the product over several messages lost the
+// start of the thread. 14 rows is seven customer messages with their replies.
+const HISTORY_LIMIT = 14;
 
 // For WhatsApp, recipient_phone is the customer's phone and phone_number_id
 // the business number. For Facebook/Instagram, recipient_phone carries the
