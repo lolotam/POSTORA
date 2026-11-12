@@ -18,8 +18,10 @@ import { defaultCredentialDeps, getFreshOAuthCredential } from "../_shared/aiOAu
 import { OAUTH_PROVIDER_CODE, type OAuthProviderId } from "../_shared/aiOAuth/clients.ts";
 import { callPiOAuth, defaultPiCallDeps } from "../_shared/aiOAuth/piCall.ts";
 import { alertRowsToDegraded, sendDegradedProviderAlert, type AdminMailer } from "../_shared/aiProviderAlert.ts";
-import type { HealthTarget } from "../_shared/aiProviderHealth.ts";
-import type { HealthRunPorts } from "./run.ts";
+import { verifyCronOrAdmin } from "../_shared/cron-auth.ts";
+import type { HealthResult, HealthTarget } from "../_shared/aiProviderHealth.ts";
+import { runHealthChunk, type HealthRunPorts } from "./run.ts";
+import type { HealthHandlerPorts } from "./handler.ts";
 
 type Admin = SupabaseClient;
 
@@ -232,4 +234,81 @@ function firstOAuthModel(oauthProvider: OAuthProviderId): string {
   const id = models.map((m) => String(m.id ?? "")).find((value) => value.length > 0);
   if (!id) throw new Error(`No model is available for the ${OAUTH_PROVIDER_CODE[oauthProvider]} sign-in`);
   return id;
+}
+
+/**
+ * The ports the request handler uses: the runner, the stored results, the shared
+ * lease and the authorization.
+ */
+export async function createHealthHandlerPorts(): Promise<HealthHandlerPorts> {
+  const { createClient } = await import("https://esm.sh/@supabase/supabase-js@2");
+  const admin = createClient(
+    Deno.env.get("SUPABASE_URL") ?? "",
+    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "",
+  ) as unknown as SupabaseClient;
+  const runPorts = createHealthRunPorts(admin);
+
+  return {
+    async runChunk(chunk: number, runId: string, scope: "daily" | "manual") {
+      return runHealthChunk(runPorts, { runId, chunk });
+    },
+
+    async readResults(): Promise<HealthResult[]> {
+      const { data, error } = await admin
+        .from("ai_provider_health")
+        .select("provider_code, auth_method, status, reason, models_added, models_updated, models_deactivated, latency_ms, checked_at")
+        .order("provider_code");
+      if (error) throw new Error("provider health read failed");
+      const rows = (data ?? []) as Array<Record<string, unknown>>;
+      const names = new Map<string, string>();
+      for (const row of rows) {
+        const code = String(row.provider_code ?? "");
+        if (!code || names.has(code)) continue;
+        const { data: provider } = await admin
+          .from("ai_providers")
+          .select("name")
+          .eq("provider_code", code)
+          .maybeSingle();
+        names.set(code, String((provider as { name?: unknown } | null)?.name ?? code));
+      }
+      return rows.map((row) => {
+        const code = String(row.provider_code ?? "");
+        return {
+          provider_code: code,
+          auth_method: row.auth_method === "oauth" ? "oauth" : "api_key",
+          display_name: names.get(code) ?? code,
+          status: row.status === "failed" ? "failed" : row.status === "needs_relogin" ? "needs_relogin" : "connected",
+          reason: typeof row.reason === "string" ? row.reason : null,
+          models_added: typeof row.models_added === "number" ? row.models_added : null,
+          models_updated: typeof row.models_updated === "number" ? row.models_updated : null,
+          models_deactivated: typeof row.models_deactivated === "number" ? row.models_deactivated : null,
+          latency_ms: typeof row.latency_ms === "number" ? row.latency_ms : null,
+          checked_at: String(row.checked_at ?? ""),
+        };
+      });
+    },
+
+    async acquireLease(job: string, holder: string, ttlSeconds: number): Promise<boolean> {
+      const { data, error } = await admin.rpc("acquire_cron_run_lease", {
+        p_job: job,
+        p_holder: holder,
+        p_ttl: `${ttlSeconds} seconds`,
+      });
+      if (error) throw new Error("lease rpc failed");
+      return data === true;
+    },
+
+    async releaseLease(job: string, holder: string): Promise<boolean> {
+      const { data, error } = await admin.rpc("release_cron_run_lease", {
+        p_job: job,
+        p_holder: holder,
+      });
+      if (error) throw new Error("lease release rpc failed");
+      return data === true;
+    },
+
+    async isAuthorized(req: Request) {
+      return verifyCronOrAdmin(req);
+    },
+  };
 }
