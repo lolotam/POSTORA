@@ -1,5 +1,5 @@
 import { z } from "npm:zod@3.23.8";
-import { OAUTH_PROVIDER_CODE, type OAuthProviderId } from "../_shared/aiOAuth/clients.ts";
+import { OAUTH_CLIENTS, OAUTH_PROVIDER_CODE, type OAuthProviderId } from "../_shared/aiOAuth/clients.ts";
 import { AiOAuthError } from "../_shared/aiOAuth/errors.ts";
 
 export interface Caller {
@@ -18,7 +18,6 @@ export interface OAuthStatusRow {
 export interface HandlerDeps {
   isAdmin(userId: string): Promise<boolean>;
   oauthEnabled(): Promise<boolean>;
-  listOAuthProviders(): string[];
   listModels(oauthProvider: string): string[];
   /** The ai_providers row: its display name and the admin's on/off switch. */
   providerInfo(providerCode: string): Promise<{ name: string | null; active: boolean }>;
@@ -32,16 +31,16 @@ export interface HandlerDeps {
 
 const RequestSchema = z.discriminatedUnion("action", [
   z.object({ action: z.literal("capabilities") }),
-  z.object({ action: z.literal("start"), oauth_provider: z.enum(["anthropic", "openai-codex"]) }),
+  z.object({ action: z.literal("start"), oauth_provider: z.enum(["anthropic", "openai-codex", "openrouter"]) }),
   z.object({
     action: z.literal("finish"),
-    oauth_provider: z.enum(["anthropic", "openai-codex"]),
+    oauth_provider: z.enum(["anthropic", "openai-codex", "openrouter"]),
     pasted: z.string().min(1).max(4096),
   }),
-  z.object({ action: z.literal("disconnect"), oauth_provider: z.enum(["anthropic", "openai-codex"]) }),
+  z.object({ action: z.literal("disconnect"), oauth_provider: z.enum(["anthropic", "openai-codex", "openrouter"]) }),
   z.object({
     action: z.literal("test"),
-    oauth_provider: z.enum(["anthropic", "openai-codex"]),
+    oauth_provider: z.enum(["anthropic", "openai-codex", "openrouter"]),
     model_id: z.string().min(1).max(120),
   }),
 ]);
@@ -85,8 +84,9 @@ export async function handle(body: unknown, caller: Caller, deps: HandlerDeps): 
     const [statuses, enabled] = await Promise.all([deps.statuses(), deps.oauthEnabled()]);
     const providers = [];
     for (const [oauthProvider, providerCode] of Object.entries(OAUTH_PROVIDER_CODE)) {
-      // pi-ai is the capability registry: only providers it can OAuth may appear.
-      if (!deps.listOAuthProviders().includes(oauthProvider)) continue;
+      // Our own client registry is the capability registry: a provider without
+      // a client has no sign-in we could drive.
+      const client = OAUTH_CLIENTS[oauthProvider as OAuthProviderId];
       const row = statuses.find((s) => s.oauth_provider === oauthProvider);
       const info = await deps.providerInfo(providerCode);
       providers.push({
@@ -98,6 +98,7 @@ export async function handle(body: unknown, caller: Caller, deps: HandlerDeps): 
         account_label: row?.account_label ?? null,
         expires_at: row?.expires_at ?? null,
         models: deps.listModels(oauthProvider),
+        flow: client.flow,
       });
     }
     return json({ enabled, providers });
@@ -119,7 +120,9 @@ export async function handle(body: unknown, caller: Caller, deps: HandlerDeps): 
   switch (request.action) {
     case "start": {
       const { authorizeUrl } = await deps.start(request.oauth_provider, userId);
-      return json({ authorize_url: authorizeUrl });
+      // The flow tells the browser how the result comes back: a paste box or
+      // our own callback route.
+      return json({ authorize_url: authorizeUrl, flow: OAUTH_CLIENTS[request.oauth_provider].flow });
     }
     case "finish": {
       try {

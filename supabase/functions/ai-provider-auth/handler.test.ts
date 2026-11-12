@@ -8,13 +8,14 @@ function baseDeps(overrides: Partial<HandlerDeps> = {}): HandlerDeps {
   return {
     isAdmin: async () => true,
     oauthEnabled: async () => true,
-    listOAuthProviders: () => ["anthropic", "github-copilot", "openai-codex"],
     listModels: (oauthProvider: string) =>
       oauthProvider === "anthropic"
         ? ["claude-sonnet-4-5", "claude-opus-5"]
-        : ["gpt-5.2-codex"],
+        : oauthProvider === "openrouter"
+          ? ["anthropic/claude-sonnet-4.5"]
+          : ["gpt-5.2-codex"],
     providerInfo: async (providerCode) => ({
-      name: providerCode === "claude" ? "Anthropic API" : "OpenAI API",
+      name: providerCode === "claude" ? "Anthropic API" : providerCode === "openrouter" ? "OpenRouter" : "OpenAI API",
       active: providerCode === "claude",
     }),
     statuses: async () => [
@@ -85,28 +86,52 @@ Deno.test("start with flag off returns 409 oauth_disabled", async () => {
   assertEquals(refusals[0]?.reason, "oauth_disabled");
 });
 
-Deno.test("capabilities lists only anthropic and openai-codex and never includes token fields", async () => {
+Deno.test("start answers the authorize URL and the flow the browser needs", async () => {
+  const cases: Array<[string, string]> = [
+    ["openrouter", "pkce_callback"],
+    ["anthropic", "pkce_paste"],
+  ];
+  for (const [oauthProvider, flow] of cases) {
+    const response = await callHandler(
+      { action: "start", oauth_provider: oauthProvider },
+      baseDeps({ start: async () => ({ authorizeUrl: "https://provider.test/auth?x=1" }) }),
+    );
+    assertEquals(response.status, 200);
+    const body = await response.json();
+    assertEquals(body.authorize_url, "https://provider.test/auth?x=1");
+    assertEquals(body.flow, flow);
+  }
+});
+
+Deno.test("capabilities lists every provider with a client and never includes token fields", async () => {
   const response = await callHandler({ action: "capabilities" }, baseDeps());
   assertEquals(response.status, 200);
   const body = await response.json();
   assertEquals(body.enabled, true);
   const ids = body.providers.map((p: { oauth_provider: string }) => p.oauth_provider);
-  assertEquals(ids, ["anthropic", "openai-codex"]);
-  assert(!ids.includes("github-copilot"));
+  assertEquals(ids, ["anthropic", "openai-codex", "openrouter"]);
+  assert(!ids.includes("github-copilot"), "a provider without a client has no sign-in we could drive");
   const text = JSON.stringify(body);
   assert(!/refresh|access|sk-ant/.test(text), "no token-shaped field may appear");
   const anthropic = body.providers[0];
   assertEquals(anthropic.provider_code, "claude");
   assertEquals(anthropic.name, "Anthropic API");
   assertEquals(anthropic.active, true);
+  assertEquals(anthropic.flow, "pkce_paste");
   const codex = body.providers.find((p: { oauth_provider: string }) => p.oauth_provider === "openai-codex");
   assertEquals(codex.active, false, "a provider the admin switched off is reported inactive");
+  assertEquals(codex.flow, "pkce_paste");
   assertEquals(anthropic.status, "connected");
   assertEquals(anthropic.account_label, "me@example.com");
   assertEquals(anthropic.models, ["claude-sonnet-4-5", "claude-opus-5"]);
   const openai = body.providers[1];
   assertEquals(openai.provider_code, "openai");
   assertEquals(openai.status, "not_connected");
+  const openrouter = body.providers[2];
+  assertEquals(openrouter.provider_code, "openrouter");
+  assertEquals(openrouter.name, "OpenRouter");
+  assertEquals(openrouter.flow, "pkce_callback");
+  assertEquals(openrouter.models, ["anthropic/claude-sonnet-4.5"]);
 });
 
 Deno.test("capabilities works while the flag is off", async () => {
@@ -117,7 +142,7 @@ Deno.test("capabilities works while the flag is off", async () => {
   assertEquals(response.status, 200);
   const body = await response.json();
   assertEquals(body.enabled, false);
-  assertEquals(body.providers.length, 2);
+  assertEquals(body.providers.length, 3);
 });
 
 Deno.test("finish maps AiOAuthError invalid_state to 400 with code", async () => {

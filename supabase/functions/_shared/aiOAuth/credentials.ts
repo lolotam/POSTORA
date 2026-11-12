@@ -20,12 +20,26 @@ export function defaultCredentialDeps(admin: SupabaseClient): CredentialDeps {
   return {
     admin,
     async refresh(provider, refreshToken) {
+      // OpenRouter's credential is a permanent API key: there is nothing to
+      // rotate, and the key's expiry keeps it out of this path entirely.
+      if (provider === "openrouter") {
+        throw new AiOAuthError("oauth_unsupported_provider", provider);
+      }
       const refreshed = provider === "anthropic"
         ? await refreshAnthropicToken(refreshToken)
         : await refreshOpenAICodexToken(refreshToken);
       return refreshed as { access: string; refresh: string; expires: number; [k: string]: unknown };
     },
     getApiKey(provider, creds) {
+      // pi-ai has no OAuth provider for OpenRouter: the stored key IS the
+      // credential the request is sent with.
+      if (provider === "openrouter") {
+        const access = creds.access;
+        if (typeof access !== "string" || access.length === 0) {
+          throw new AiOAuthError("not_connected", provider);
+        }
+        return access;
+      }
       const oauthProvider = getOAuthProvider(provider);
       if (!oauthProvider) throw new AiOAuthError("oauth_unsupported_provider", provider);
       return oauthProvider.getApiKey(creds as never);

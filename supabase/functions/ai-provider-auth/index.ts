@@ -1,6 +1,5 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { getModels } from "npm:@mariozechner/pi-ai@0.73.1";
-import { getOAuthProviders as listOAuthProviderIds } from "npm:@mariozechner/pi-ai@0.73.1/oauth";
 import { authenticateCaller } from "../_shared/auth-helper.ts";
 import {
   handleRestrictedCorsOptions,
@@ -48,7 +47,6 @@ Deno.serve(async (req) => {
       return !error && !!data;
     },
     oauthEnabled: async () => isAiProviderOAuthEnabled(admin as never),
-    listOAuthProviders: () => listOAuthProviderIds().map((provider) => provider.id),
     listModels: (oauthProvider) => {
       try {
         // Infrastructure seam (ARCHITECTURE §31): pi-ai types the provider key
