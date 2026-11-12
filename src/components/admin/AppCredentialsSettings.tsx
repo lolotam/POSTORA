@@ -477,6 +477,7 @@ export function AppCredentialsSettings() {
                               <div className="relative">
                                 <Input
                                   type={showSecret[platform.key] ? "text" : "password"}
+                                  autoComplete="new-password"
                                   className="h-7 text-xs font-mono pe-8"
                                   placeholder="Leave empty to keep current"
                                   value={editValues.clientSecret}

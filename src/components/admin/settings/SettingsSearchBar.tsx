@@ -31,6 +31,10 @@ export function SettingsSearchBar({
         <Search className="w-4 h-4 absolute start-3 top-1/2 -translate-y-1/2 text-muted-foreground pointer-events-none" />
         <Input
           type="search"
+          // A password field elsewhere on the page makes browsers treat the first text
+          // field as the username and fill the admin's email into this search box.
+          name="settings-search"
+          autoComplete="off"
           value={query}
           onChange={(e) => onQueryChange(e.target.value)}
           placeholder="Search settings — try “logo”, “tiktok”, or “model”"
