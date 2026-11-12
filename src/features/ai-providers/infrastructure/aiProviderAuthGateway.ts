@@ -30,6 +30,12 @@ const capabilityFields = z.object({
   // An edge function deployed before this field existed sends none; every
   // provider it knew then was a paste flow.
   flow: z.enum(["pkce_paste", "pkce_callback"]).default("pkce_paste"),
+  /**
+   * Whether the provider also carries an API key. Null when the status could
+   * not be read, and optional so a function that predates the field still
+   * parses: an unknown answer keeps the provider in the API-key group.
+   */
+  has_api_key: z.boolean().nullable().optional(),
 });
 // The pairs are fixed: the UI finds a capability by oauth_provider, so a row
 // that names the wrong one would show one provider's login under another.

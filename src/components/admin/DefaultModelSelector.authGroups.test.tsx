@@ -148,6 +148,43 @@ describe('DefaultModelSelector — provider dropdown groups', () => {
     expect(screen.queryByRole('option', { name: /OpenAI — subscription/ })).not.toBeInTheDocument();
   });
 
+  it('keeps a provider without an API key out of the API key group', async () => {
+    // A subscription login is the only way in for this provider, so it belongs
+    // to the Auth group alone.
+    caps.current = { enabled: true, providers: [{ ...claudeCapability, has_api_key: false }] };
+    const { primarySection } = renderSelector('chat');
+    await waitFor(() => expect(invoke).toHaveBeenCalled());
+    await openProviderDropdown(primarySection);
+
+    expect(await screen.findByText('Auth (subscription)')).toBeInTheDocument();
+    expect(screen.queryByRole('option', { name: /^Anthropic API/ })).not.toBeInTheDocument();
+    expect(screen.getByRole('option', { name: /Anthropic \(Claude\) — subscription/ })).toBeInTheDocument();
+    // A provider that does have a key keeps its place in the API key group.
+    expect(screen.getByRole('option', { name: /^OpenAI/ })).toBeInTheDocument();
+  });
+
+  it('lists a provider with both a subscription and an API key in both groups', async () => {
+    caps.current = { enabled: true, providers: [{ ...claudeCapability, has_api_key: true }] };
+    const { primarySection } = renderSelector('chat');
+    await waitFor(() => expect(invoke).toHaveBeenCalled());
+    await openProviderDropdown(primarySection);
+
+    expect(await screen.findByText('Auth (subscription)')).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: /^Anthropic API/ })).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: /Anthropic \(Claude\) — subscription/ })).toBeInTheDocument();
+  });
+
+  it('keeps a provider in the API key group while its key status is unknown', async () => {
+    // An older function or a failed request answers without the key status.
+    // The provider then stays where it was instead of disappearing.
+    caps.current = { enabled: true, providers: [claudeCapability] };
+    const { primarySection } = renderSelector('chat');
+    await waitFor(() => expect(invoke).toHaveBeenCalled());
+    await openProviderDropdown(primarySection);
+
+    expect(screen.getByRole('option', { name: /^Anthropic API/ })).toBeInTheDocument();
+  });
+
   it.each<[Category, boolean]>([
     ['agent_triage', true],
     ['agent', false],
@@ -161,6 +198,30 @@ describe('DefaultModelSelector — provider dropdown groups', () => {
     else expect(screen.queryByText('Auth (subscription)')).not.toBeInTheDocument();
     // A category no subscription can serve never asks for the capabilities.
     expect(invoke).toHaveBeenCalledTimes(shown ? 1 : 0);
+  });
+
+  it.each([
+    ['the agent category', 'agent'],
+    ['the image category', 'image'],
+  ])('keeps a subscription-only provider in the API key group in %s', async (_label, category) => {
+    // A category no subscription can serve has no Auth group to move the
+    // provider to, so it keeps its API key entry.
+    caps.current = { enabled: true, providers: [{ ...claudeCapability, has_api_key: false }] };
+    const { primarySection } = renderSelector(category as Category);
+    await openProviderDropdown(primarySection, false);
+
+    expect(screen.getByRole('option', { name: /^Anthropic API/ })).toBeInTheDocument();
+  });
+
+  it('keeps a provider without a subscription in the API key group', async () => {
+    // No subscription means no Auth entry, so the provider stays where it was:
+    // a user's own key can still answer for it.
+    caps.current = { enabled: true, providers: [{ ...openaiCapability, has_api_key: false }] };
+    const { primarySection } = renderSelector('chat');
+    await waitFor(() => expect(invoke).toHaveBeenCalled());
+    await openProviderDropdown(primarySection);
+
+    expect(screen.getByRole('option', { name: /^OpenAI/ })).toBeInTheDocument();
   });
 
   it.each([

@@ -66,6 +66,7 @@ describe('SubscriptionLoginSection', () => {
     h.disconnect.mockReset();
     h.test.mockReset();
     vi.mocked(toast.error).mockClear();
+    vi.mocked(toast.success).mockClear();
   });
 
   afterEach(() => {
@@ -175,7 +176,8 @@ describe('SubscriptionLoginSection', () => {
     expect(screen.getByText(/me@example\.com/)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Disconnect/i })).toBeInTheDocument();
 
-    // The test picker lists the models the provider offers, not the api-key catalogue.
+    // Without catalogue rows the picker falls back to the subscription's own
+    // model list.
     const modelTrigger = screen.getByRole('combobox');
     fireEvent.pointerDown(modelTrigger, { button: 0, buttons: 1, pointerType: 'mouse' });
     fireEvent.click(modelTrigger);
@@ -189,6 +191,48 @@ describe('SubscriptionLoginSection', () => {
     expect(h.disconnect).not.toHaveBeenCalled();
     fireEvent.click(within(dialog).getByRole('button', { name: /Disconnect/i }));
     await waitFor(() => expect(h.disconnect).toHaveBeenCalledWith('anthropic'));
+  });
+
+  it('offers the provider catalogue the dialog lists next to it', async () => {
+    h.caps = { enabled: true, providers: [claudeConnected] };
+
+    render(
+      <SubscriptionLoginSection
+        providerCode="claude"
+        models={['claude-sonnet-4-5', 'claude-opus-5', 'claude-haiku-4-5']}
+      />,
+    );
+
+    const modelTrigger = screen.getByRole('combobox');
+    fireEvent.pointerDown(modelTrigger, { button: 0, buttons: 1, pointerType: 'mouse' });
+    fireEvent.click(modelTrigger);
+
+    // Every catalogue row is offered, including the ones the subscription's own
+    // model list does not name, so both lists show the same models.
+    expect(await screen.findByRole('option', { name: 'claude-haiku-4-5' })).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: 'claude-sonnet-4-5' })).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: 'claude-opus-5' })).toBeInTheDocument();
+  });
+
+  it('tests the first catalogue model by default', async () => {
+    // The subscription's own list starts with another model, so the default
+    // proves the catalogue is what the picker works from.
+    h.caps = { enabled: true, providers: [{ ...claudeConnected, models: ['claude-opus-5'] }] };
+    h.test.mockResolvedValue({ ok: true, latency_ms: 42 });
+
+    render(
+      <SubscriptionLoginSection
+        providerCode="claude"
+        models={['claude-sonnet-4-5', 'claude-haiku-4-5']}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: /^Test$/i }));
+
+    await waitFor(() =>
+      expect(h.test).toHaveBeenCalledWith({ provider: 'anthropic', modelId: 'claude-sonnet-4-5' }),
+    );
+    expect(toast.success).toHaveBeenCalledWith(expect.stringContaining('42ms'));
   });
 
   it('warns about the Claude Code identity prompt for Anthropic only', () => {

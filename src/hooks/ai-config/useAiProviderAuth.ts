@@ -36,6 +36,11 @@ export function useFinishAiOAuth() {
       aiProviderAuthGateway.finish(provider, pasted),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: AI_PROVIDER_AUTH_QUERY_KEY });
+      // A finished login changes what the provider can answer, so the model
+      // catalogue behind the provider's model list is read again too. Without
+      // this the list stays on what it was before the login, and closing and
+      // reopening the dialog shows the same stale rows.
+      queryClient.invalidateQueries({ queryKey: ["ai-config"] });
     },
   });
 }

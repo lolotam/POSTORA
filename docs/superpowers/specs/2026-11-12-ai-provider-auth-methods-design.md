@@ -311,7 +311,10 @@ Old rows keep working unchanged.
   2. A textarea reads: "After approving, your browser lands on a localhost page that will not load.
      Copy the full address from the address bar and paste it here."
   3. "Finish" calls `finish`.
-- **Test:** a model `<Select>` filled from `capabilities.models`, plus a button that runs `test`.
+- **Test:** a model `<Select>` filled from the provider's catalogue rows (`ai_models`), the same list the
+  provider dialog shows next to it, plus a button that runs `test`. Changed on 2026-11-13: the owner
+  asked for one model list in the admin UI, and `capabilities.models` is now only the fallback for a
+  provider whose catalogue is still empty. The tier picker above keeps `capabilities.models`.
 - **Disconnect** calls `disconnect`, with a confirm dialog.
 - For Anthropic, a warning note reads: "Calls through a Claude subscription are sent with Claude
   Code's identity prompt prepended."
