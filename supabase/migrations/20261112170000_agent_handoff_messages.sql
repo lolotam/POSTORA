@@ -28,12 +28,14 @@ COMMENT ON COLUMN public.ai_threads.unanswered_escalation_since IS
 -- acknowledgement. Only a live, bounded human_first window qualifies: a manual override
 -- (expires_at NULL) is an operator's decision and gets no automatic notice, and under
 -- human_then_ai the agent is still answering.
+-- Returns 'claimed' (send the notice), 'window' (a bounded window already notified: keep the
+-- message for the agent's return) or 'none' (no bounded window: nothing to do).
 CREATE OR REPLACE FUNCTION public.claim_human_mode_ack(
   p_user_id uuid,
   p_platform text,
   p_conversation_id text
 )
-RETURNS boolean
+RETURNS text
 LANGUAGE plpgsql
 SECURITY DEFINER
 SET search_path = public, pg_temp
@@ -47,7 +49,20 @@ BEGIN
     AND mode = 'human_first'
     AND expires_at > now()
     AND customer_ack_sent_at IS NULL;
-  RETURN FOUND;
+  IF FOUND THEN
+    RETURN 'claimed';
+  END IF;
+  IF EXISTS (
+    SELECT 1 FROM public.ai_conversation_modes
+    WHERE user_id = p_user_id
+      AND platform = p_platform
+      AND conversation_id = p_conversation_id
+      AND mode = 'human_first'
+      AND expires_at > now()
+  ) THEN
+    RETURN 'window';
+  END IF;
+  RETURN 'none';
 END;
 $$;
 

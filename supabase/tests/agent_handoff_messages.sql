@@ -4,7 +4,7 @@
 -- migration is applied. No secrets and no real accounts.
 --
 -- Conversations, one user:
---   c_live     human_first, expires in 1 hour        -> ack claimable once
+--   c_live     human_first, expires in 1 hour        -> ack claimable once, then 'window'
 --   c_shared   human_then_ai, expired 1 minute ago   -> never acked, never marked
 --   c_manual   human_first, no expiry                -> never acked
 --   c_ended    human_first, expired 1 minute ago     -> not acked; expiry marks its thread
@@ -35,15 +35,15 @@ BEGIN
     (gen_random_uuid(), u_a, 'whatsapp', 'c_manual', 'human_first', NULL, NULL),
     (m_ended, u_a, 'whatsapp', 'c_ended', 'human_first', v_expires, v_escalated);
 
-  -- H1: a live human_first window is acknowledged once; the second claim is refused.
-  ASSERT public.claim_human_mode_ack(u_a, 'whatsapp', 'c_live'), 'H1 the first claim wins';
-  ASSERT NOT public.claim_human_mode_ack(u_a, 'whatsapp', 'c_live'), 'H1 the second claim is refused';
-  ASSERT NOT public.claim_human_mode_ack(u_b, 'whatsapp', 'c_live'), 'H1 another tenant cannot claim it';
+  -- H1: a live human_first window is acknowledged once; later messages only learn it is open.
+  ASSERT public.claim_human_mode_ack(u_a, 'whatsapp', 'c_live') = 'claimed', 'H1 the first claim wins';
+  ASSERT public.claim_human_mode_ack(u_a, 'whatsapp', 'c_live') = 'window', 'H1 the second claim reports the window';
+  ASSERT public.claim_human_mode_ack(u_b, 'whatsapp', 'c_live') = 'none', 'H1 another tenant sees no window';
 
-  -- H2: no ack under human_then_ai, for a manual override, or after the window ended.
-  ASSERT NOT public.claim_human_mode_ack(u_a, 'whatsapp', 'c_shared'), 'H2 human_then_ai is not acknowledged';
-  ASSERT NOT public.claim_human_mode_ack(u_a, 'whatsapp', 'c_manual'), 'H2 a manual override is not acknowledged';
-  ASSERT NOT public.claim_human_mode_ack(u_a, 'whatsapp', 'c_ended'), 'H2 an expired window is not acknowledged';
+  -- H2: no ack and no window under human_then_ai, for a manual override, or after the window ended.
+  ASSERT public.claim_human_mode_ack(u_a, 'whatsapp', 'c_shared') = 'none', 'H2 human_then_ai is not acknowledged';
+  ASSERT public.claim_human_mode_ack(u_a, 'whatsapp', 'c_manual') = 'none', 'H2 a manual override is not acknowledged';
+  ASSERT public.claim_human_mode_ack(u_a, 'whatsapp', 'c_ended') = 'none', 'H2 an expired window is not acknowledged';
 
   -- H3: expiry needs the exact row observed: the wrong owner or a changed expires_at deletes nothing.
   ASSERT NOT public.expire_conversation_mode(m_ended, u_b, v_expires), 'H3 another tenant cannot expire it';

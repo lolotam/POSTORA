@@ -361,12 +361,16 @@ export function escalationApologyText(
 - [ ] Run `clean-code-guard` on production changes and `test-guard` on the tests. Run `graphify update .`.
 - [ ] Push the branch with `--no-track` semantics already set and open the PR.
 - [ ] Babysit the bot rounds.
-- [ ] Apply migration `20261112130000` on prod before merge.
+- [ ] Apply migration `20261112170000` on prod before merge.
 - [ ] Merge only after the owner card.
 - [ ] After the sync:
   - Verify hashes.
   - Run Task 1 Step 6 and Task 6 Step 3.
   - Ping T3-Curemedkw-Manager to re-test from +96555683677: greeting, Arabic product with link, image in Arabic, escalation ack.
+  - Prove the handoff wiring live. A sandbox run bypasses the gate, so only a real WhatsApp message exercises it:
+    1. Escalate, then send two messages. Expect exactly one ack, `ai_agent_logs.status = 'human_mode_ack'` once, and one held `user` row in `ai_thread_messages` for the second message.
+    2. Move `ai_conversation_modes.expires_at` into the past with psql and send a message. Expect a reply opening with the apology, and `ai_threads.unanswered_escalation_since` NULL afterwards.
+    3. Repeat with a staff reply (from the inbox) inside the window. Expect no apology, and the staff text as a `(staff)` assistant row in `ai_thread_messages`, visible to the following turn.
 - [ ] Save to mem0 and write the final report.
 
 ## Self-review
@@ -387,7 +391,6 @@ export function escalationApologyText(
   | Timeout field, history window | Done earlier on this branch (`dbdb44d4`, `6663fb3f`) |
 
 - **Owner input still needed:**
-  - Ack and apology wording (card).
   - The curemedkw anon key (secret card).
   - Primary and fallback model (card after Task 7).
   - Merge.

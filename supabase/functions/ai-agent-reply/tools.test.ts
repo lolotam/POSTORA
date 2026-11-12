@@ -931,8 +931,23 @@ Deno.test("the apology after an escalation is owed only when no staff member rep
     [since, 2, "ar", null],
     [null, 0, "ar", null],
   ];
-  for (const [marker, staffTurns, language, expected] of cases) {
-    assertEquals(escalationApologyText(marker, staffTurns, language), expected, `${marker} / ${staffTurns} / ${language}`);
+  for (const [marker, staffReplies, language, expected] of cases) {
+    assertEquals(escalationApologyText(marker, staffReplies, language), expected, `${marker} / ${staffReplies} / ${language}`);
+  }
+});
+
+Deno.test("a handoff notice follows the account setting, then the customer, then the thread, then Arabic", async () => {
+  const { handoffNoticeLanguage } = await import("./logic.ts");
+  const cases: Array<[string, "auto" | "ar" | "en", string | null, "ar" | "en" | null, "ar" | "en"]> = [
+    ["Hello, is the heel cream in stock?", "ar", null, null, "ar"],
+    ["عندكم كريم الكعب؟", "en", null, null, "en"],
+    ["Hello, is the heel cream in stock?", "auto", null, "ar", "en"],
+    ["🙏", "auto", null, "en", "en"],
+    ["12345", "auto", null, null, "ar"],
+    ["[voice note]", "auto", "en-US", null, "en"],
+  ];
+  for (const [text, mode, hint, stored, expected] of cases) {
+    assertEquals(handoffNoticeLanguage(text, mode, hint, stored), expected, `${text} / ${mode} / ${stored}`);
   }
 });
 

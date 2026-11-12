@@ -461,12 +461,27 @@ const ESCALATION_APOLOGY: Record<ReplyLanguage, string> = {
 
 /**
  * The apology that opens the assistant's first reply after a silent escalation ended.
- * `since` is the escalation the thread was marked with; null means nothing is owed. When a
- * staff member did reply in the window the customer was answered, so no apology -- their
- * replies go into the history instead (staffTurnsSince).
+ * `since` is the escalation the thread was marked with; null means nothing is owed. Any staff
+ * reply in the window -- a voice note or an image counts -- means the customer was answered,
+ * so no apology; the text replies go into the history instead (staffTurnsSince).
  */
-export function escalationApologyText(since: string | null, staffTurns: number, language: ReplyLanguage): string | null {
-  return since !== null && staffTurns === 0 ? ESCALATION_APOLOGY[language] : null;
+export function escalationApologyText(since: string | null, staffReplies: number, language: ReplyLanguage): string | null {
+  return since !== null && staffReplies === 0 ? ESCALATION_APOLOGY[language] : null;
+}
+
+/**
+ * The language of a handoff notice. Unlike a reply it has no thread to read and no model to
+ * defer to, so a message without letters (an emoji, an order number) falls back to the
+ * thread's stored language and then to Arabic, the language of the accounts it was made for.
+ */
+export function handoffNoticeLanguage(
+  inboundText: string,
+  languageMode: LanguageMode,
+  hint: string | null | undefined,
+  storedLanguage: ReplyLanguage | null,
+): ReplyLanguage {
+  if (languageMode === "ar" || languageMode === "en") return languageMode;
+  return customerLanguageSignal(inboundText, hint) ?? storedLanguage ?? "ar";
 }
 
 export interface MessageRow {
