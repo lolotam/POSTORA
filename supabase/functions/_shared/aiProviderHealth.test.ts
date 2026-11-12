@@ -91,3 +91,15 @@ Deno.test("the daily run id is stable for a day and the manual one follows its t
   assert(deriveRunId("daily", "cron", day) !== deriveRunId("daily", "cron", new Date("2026-11-14T03:05:00Z")));
   assert(deriveRunId("manual", "token-a", day) !== deriveRunId("manual", "token-b", day));
 });
+
+Deno.test("the run id is a real uuid, because the column it lands in is a uuid", () => {
+  // ai_provider_health.run_id and cron_run_leases.holder are both uuid columns, so a
+  // shape that only looks like a uuid would fail at the database, not here.
+  const UUID_V4 = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+  assert(UUID_V4.test(deriveRunId("daily", "cron", new Date("2026-11-13T03:05:00Z"))));
+  assert(UUID_V4.test(deriveRunId("manual", "token-a", new Date("2026-11-13T03:05:00Z"))));
+  // Pinned: the SQL proof in supabase/tests/ai_provider_health.sql feeds this exact
+  // string to a uuid column, so a change to the derivation must change it there too.
+  assertEquals(deriveRunId("daily", "cron", new Date("2026-11-13T03:05:00Z")), "13ed6566-d364-4712-8464-88a5cd647da0");
+  assertEquals(deriveRunId("manual", "token-a", new Date("2026-11-13T03:05:00Z")), "a28cdbaa-b588-45a6-8688-6739b78868cc");
+});

@@ -316,7 +316,32 @@ BEGIN
 END $aph_models$;
 
 -- ===========================================================================
--- 8. The status CHECK refuses a status nobody defined.
+-- 8. The run id the runner derives is a real uuid. The column is a uuid and
+--    the lease holder is a uuid, so a shape that only LOOKS like a uuid would
+--    fail at the database. The string below is the exact value
+--    deriveRunId('daily', 'cron', 2026-11-13T03:05:00Z) produces; the Deno
+--    test in _shared/aiProviderHealth.test.ts pins the same value.
+-- ===========================================================================
+\echo '--- run id: the derived id is accepted by a uuid column ---'
+DO $aph_run_id$
+DECLARE
+  v_run_id uuid;
+BEGIN
+  v_run_id := '13ed6566-d364-4712-8464-88a5cd647da0'::uuid;
+
+  PERFORM public.record_ai_provider_health(
+    'claude', 'api_key', 'connected', NULL, 0, 0, 0, 1, v_run_id);
+
+  IF NOT EXISTS (
+    SELECT 1 FROM public.ai_provider_health
+     WHERE provider_code = 'claude' AND auth_method = 'api_key' AND run_id = v_run_id
+  ) THEN
+    RAISE EXCEPTION 'FAIL: the derived run id was not stored in the uuid column';
+  END IF;
+END $aph_run_id$;
+
+-- ===========================================================================
+-- 9. The status CHECK refuses a status nobody defined.
 -- ===========================================================================
 \echo '--- checks: the status and the auth_method are constrained ---'
 DO $aph_checks$
@@ -339,7 +364,7 @@ BEGIN
 END $aph_checks$;
 
 -- ===========================================================================
--- 9. The daily schedule is four guarded pg_cron entries. The assertion is
+-- 10. The daily schedule is four guarded pg_cron entries. The assertion is
 --    skipped when pg_cron is not installed, so the suite passes on a database
 --    without it.
 -- ===========================================================================
