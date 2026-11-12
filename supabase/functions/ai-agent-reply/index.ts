@@ -2,6 +2,7 @@
 // webhooks (whatsapp-webhook) after auto-reply rules found no match.
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import type { SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { handleCorsOptions, jsonResponse, unauthorizedResponse, badRequestResponse, corsHeaders } from "../_shared/cors.ts";
 import { checkUserRateLimit, rateLimitExceededResponse } from "../_shared/rate-limiter.ts";
 import {
@@ -473,10 +474,10 @@ const AGENT_MODEL_KEYS = [
   "default_ai_model_agent_fallback_2",
 ] as const;
 
-function isModelSetting(value: any): value is { provider_code: string; model_id: string; auth_method?: unknown } {
-  return Boolean(value) &&
-    typeof value.provider_code === "string" && value.provider_code.length > 0 &&
-    typeof value.model_id === "string" && value.model_id.length > 0;
+function isModelSetting(value: unknown): value is { provider_code: string; model_id: string; auth_method?: unknown } {
+  const setting = value as { provider_code?: unknown; model_id?: unknown } | null | undefined;
+  return typeof setting?.provider_code === "string" && setting.provider_code.length > 0 &&
+    typeof setting.model_id === "string" && setting.model_id.length > 0;
 }
 
 /** One slot of the global agent model chain, as saved by the admin UI. */
@@ -496,7 +497,7 @@ interface GlobalModelSlot {
  * where it would run as the primary model and be logged with fallback_level 0 --
  * hiding both the misconfiguration and which tier actually answered.
  */
-async function loadGlobalModelChain(admin: any): Promise<GlobalModelSlot[]> {
+async function loadGlobalModelChain(admin: SupabaseClient): Promise<GlobalModelSlot[]> {
   const { data, error } = await admin
     .from("system_settings")
     .select("key, value")
