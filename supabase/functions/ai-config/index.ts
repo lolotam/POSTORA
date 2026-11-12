@@ -6,10 +6,10 @@ import { createLogger } from '../_shared/logging.ts';
 import {
   CatalogSyncError, type CatalogDb, runCatalogSync, SYNCABLE_PROVIDERS, syncFailureMessage,
 } from '../_shared/modelCatalogSyncRun.ts';
-import { describeProviderFailure, isBillingBlocked, ProviderTestError } from '../_shared/providerErrors.ts';
+import { isBillingBlocked, ProviderTestError } from '../_shared/providerErrors.ts';
 import { resolveProviderKey } from '../_shared/providerKeys.ts';
 import type { RowReader } from '../_shared/providerEndpoint.ts';
-import { providerTestKind } from './providerTestKind.ts';
+import { loadProbeTarget, probeProvider } from '../_shared/aiProviderTest.ts';
 
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!;
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
@@ -126,7 +126,7 @@ serve(async (req) => {
           // Same precedence as the runtime (saved key, then env), so the card tests the key requests use.
           const apiKey = await resolveProviderKey(supabase as unknown as RowReader, provider.provider_code);
           if (!apiKey) throw new Error(`API key ${provider.api_key_env_var} not configured`);
-          await runProviderTest(supabase, provider, apiKey);
+          await probeProvider(supabase, provider, apiKey);
           latency = Date.now() - startTime;
           success = true;
         } catch (e: any) {
@@ -167,11 +167,11 @@ serve(async (req) => {
           if (upsertErr) throw new Error(upsertErr.message);
         };
         try {
-          const provider = await testTarget(supabase as unknown as RowReader, provider_code);
+          const provider = await loadProbeTarget(supabase as unknown as RowReader, provider_code);
           if (!provider) {
             return new Response(JSON.stringify({ error: 'Unknown provider' }), { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
           }
-          await runProviderTest(supabase, provider, api_key);
+          await probeProvider(supabase, provider, api_key);
           const latency = Date.now() - startTime;
           await saveKey();
           return new Response(JSON.stringify({ success: true, latency }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
@@ -198,9 +198,9 @@ serve(async (req) => {
 
         const startTime = Date.now();
         try {
-          const provider = await testTarget(supabase as unknown as RowReader, provider_code);
+          const provider = await loadProbeTarget(supabase as unknown as RowReader, provider_code);
           if (!provider) return new Response(JSON.stringify({ error: 'Unknown provider' }), { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
-          await runProviderTest(supabase, provider, apiKey);
+          await probeProvider(supabase, provider, apiKey);
           return new Response(JSON.stringify({ success: true, latency: Date.now() - startTime }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
         } catch (e: any) {
           return new Response(JSON.stringify({ success: false, error: e.message, latency: Date.now() - startTime }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
@@ -306,211 +306,3 @@ serve(async (req) => {
     return new Response(JSON.stringify({ error: error.message }), { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
   }
 });
-
-// ── Test helpers ──
-interface TestTarget { id: string; provider_code: string; api_type: string | null; api_endpoint: string }
-
-// Firecrawl and Apify keys can be saved without an ai_providers row; they need no endpoint.
-async function testTarget(db: RowReader, providerCode: string): Promise<TestTarget | null> {
-  const { data } = await db.from('ai_providers').select('*').eq('provider_code', providerCode).maybeSingle();
-  if (data) return data as TestTarget;
-  if (providerCode === 'firecrawl' || providerCode === 'apify') {
-    return { id: '', provider_code: providerCode, api_type: 'rest', api_endpoint: '' };
-  }
-  return null;
-}
-
-async function runProviderTest(db: unknown, provider: TestTarget, key: string) {
-  const ep = provider.api_endpoint;
-  switch (providerTestKind(provider)) {
-    case 'firecrawl': return testFirecrawl(key);
-    case 'apify': return testApify(key);
-    case 'elevenlabs': return testElevenLabs(key, ep);
-    case 'brave': return testBrave(key);
-    case 'exa': return testExa(key);
-    case 'jina': return testJina(key);
-    case 'zai': return testZAI(key, ep);
-    case 'xai': return testXAI(key, ep);
-    case 'minimax': return testMinimax(key, ep);
-    case 'perplexity': return testPerplexity(key, ep);
-    case 'google': return testGemini(key, ep);
-    case 'anthropic': return testAnthropic(key, ep);
-    case 'openai': return testOpenAI(key, ep, await defaultTestModel(db, provider));
-  }
-}
-
-// Jina has no chat endpoint; one tiny embedding proves the key.
-async function testJina(key: string) {
-  const res = await fetch('https://api.jina.ai/v1/embeddings', {
-    method: 'POST',
-    headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ model: 'jina-embeddings-v5-omni-small', input: ['hi'] }),
-  });
-  await handleRes(res, 'Jina');
-}
-
-async function handleRes(res: Response, name: string) {
-  if (res.ok) return;
-  const t = await res.text();
-  console.error(`${name} test failed: ${res.status} - ${t.slice(0, 300)}`);
-  throw new ProviderTestError(describeProviderFailure(name, res.status, t), res.status, t);
-}
-
-function modelsUrl(ep: string, path = '/v1/models'): string {
-  return ep.replace(/\/v1\/?$/, '') + path;
-}
-
-async function testGemini(key: string, ep: string) {
-  const res = await fetch(`${ep}/models?key=${key}`, { headers: { 'x-goog-api-key': key } });
-  await handleRes(res, 'Gemini');
-}
-
-async function testOpenAI(key: string, ep: string, model: string) {
-  const url = ep.replace(/\/$/, '') + '/chat/completions';
-  const res = await fetch(url, {
-    method: 'POST',
-    headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
-    // 16, not 1: Vercel routes openai/* through the Responses API, which rejects max_output_tokens < 16.
-    body: JSON.stringify({ model, messages: [{ role: 'user', content: 'hi' }], max_tokens: 16 }),
-  });
-  await handleRes(res, 'OpenAI');
-}
-
-// The gateway and OpenRouter namespace ids by vendor; a bare "gpt-4o-mini" is
-// rejected there, so test with a chat model the provider actually lists.
-const TEST_MODEL_OVERRIDE: Record<string, string> = { vercel: 'openai/gpt-4o-mini', openrouter: 'openai/gpt-4o-mini' };
-// Used only when a provider has no active chat model yet (e.g. DeepSeek before its first sync).
-const TEST_MODEL_FALLBACK: Record<string, string> = { deepseek: 'deepseek-chat' };
-interface ChatModelQuery {
-  eq(column: string, value: unknown): ChatModelQuery;
-  contains(column: string, value: string[]): ChatModelQuery;
-  order(column: string): ChatModelQuery;
-  limit(count: number): ChatModelQuery;
-  maybeSingle(): PromiseLike<{ data: { model_id?: string } | null }>;
-}
-interface ChatModelDb { from(table: string): { select(columns: string): ChatModelQuery } }
-// Takes the client as unknown: checking the generated client type against ChatModelDb hits TS2589.
-async function defaultTestModel(client: unknown, provider: { id: string; provider_code: string }): Promise<string> {
-  if (TEST_MODEL_OVERRIDE[provider.provider_code]) return TEST_MODEL_OVERRIDE[provider.provider_code];
-  const { data } = await (client as ChatModelDb).from('ai_models').select('model_id').eq('provider_id', provider.id)
-    .eq('is_active', true).contains('capabilities', ['chat']).order('name').limit(1).maybeSingle();
-  return data?.model_id ?? TEST_MODEL_FALLBACK[provider.provider_code] ?? 'gpt-4o-mini';
-}
-
-async function testAnthropic(key: string, ep: string) {
-  const res = await fetch(modelsUrl(ep), { headers: { 'x-api-key': key, 'anthropic-version': '2023-06-01' } });
-  await handleRes(res, 'Anthropic');
-}
-
-async function testPerplexity(key: string, ep: string) {
-  // Perplexity requires max_tokens >= 16 (sending 1 returns 400 invalid_request).
-  const res = await fetch(`${ep.replace(/\/$/, '')}/chat/completions`, {
-    method: 'POST',
-    headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ model: 'sonar', messages: [{ role: 'user', content: 'hi' }], max_tokens: 16 }),
-  });
-  await handleRes(res, 'Perplexity');
-}
-
-async function testZAI(key: string, ep: string) {
-  // Validate the key with a lightweight GET /models. Chat completions fail on
-  // insufficient balance / rate limits (429), which do not reflect key
-  // validity. The model list is the cheapest authoritative check.
-  const url = ep.replace(/\/$/, '') + '/models';
-  const res = await fetch(url, {
-    headers: { Authorization: `Bearer ${key}` },
-  });
-  if (res.ok) {
-    const data = await res.json();
-    console.log(`Z.AI test passed. Available models: ${(data.data || []).map((m: any) => m.id).join(', ')}`);
-    return;
-  }
-  await handleRes(res, 'Z.AI');
-}
-
-async function testBrave(key: string) {
-  const res = await fetch('https://api.search.brave.com/res/v1/web/search?q=test&count=1', {
-    headers: { Accept: 'application/json', 'X-Subscription-Token': key },
-  });
-  await handleRes(res, 'Brave');
-}
-
-async function testExa(key: string) {
-  const res = await fetch('https://api.exa.ai/search', {
-    method: 'POST',
-    headers: { accept: 'application/json', 'content-type': 'application/json', 'x-api-key': key },
-    body: JSON.stringify({ query: 'test', numResults: 1 }),
-  });
-  await handleRes(res, 'Exa');
-}
-
-async function testElevenLabs(key: string, ep: string) {
-  const baseUrl = (ep || 'https://api.elevenlabs.io/v1').replace(/\/$/, '');
-  // A valid key may be scope-limited (missing models_read / voices_read /
-  // user_read). "missing_permissions" / "restricted" prove the key
-  // authenticates, so they count as a PASS, not a failure.
-  const probePaths = ['/user', '/models', '/voices'];
-  for (const path of probePaths) {
-    const res = await fetch(`${baseUrl}${path}`, { headers: { 'xi-api-key': key } });
-    if (res.ok) {
-      await res.text();
-      return;
-    }
-    const t = await res.text();
-    if (t.includes('missing_permissions') || t.includes('restricted')) {
-      // Key authenticates but lacks this read scope — try the next probe.
-      continue;
-    }
-    if (res.status === 401) throw new Error('Invalid API key');
-    if (res.status === 429) throw new Error('Rate limit exceeded');
-    // Other transient errors: keep trying the remaining probes.
-  }
-  // Reached the end having seen only scope-limited responses → key is valid.
-  console.log('ElevenLabs test passed (key authenticates; read scope limited).');
-}
-
-async function testXAI(key: string, ep: string) {
-  // Use lightweight GET /v1/models to validate API key without needing a specific model
-  const modelsEndpoint = ep.replace(/\/$/, '').replace(/\/v1\/?$/, '') + '/v1/models';
-  const res = await fetch(modelsEndpoint, {
-    headers: { Authorization: `Bearer ${key}` },
-  });
-  if (res.ok) {
-    const data = await res.json();
-    console.log(`xAI test passed. Available models: ${(data.data || []).map((m: any) => m.id).join(', ')}`);
-    return;
-  }
-  await handleRes(res, 'xAI');
-}
-
-async function testMinimax(key: string, ep: string) {
-  // Validate the key with a lightweight GET /models instead of a chat
-  // completion. Chat calls fail when the account has insufficient balance
-  // (HTTP 402 / code 1008), which says nothing about key validity.
-  const modelsEndpoint = ep.replace(/\/$/, '').replace(/\/v1\/?$/, '') + '/v1/models';
-  const res = await fetch(modelsEndpoint, {
-    headers: { Authorization: `Bearer ${key}` },
-  });
-  if (res.ok) {
-    const data = await res.json();
-    console.log(`MiniMax test passed. Available models: ${(data.data || []).map((m: any) => m.id).join(', ')}`);
-    return;
-  }
-  await handleRes(res, 'MiniMax');
-}
-
-async function testFirecrawl(key: string) {
-  // Firecrawl v2 is the current API. A minimal scrape of a stable URL
-  // validates the key: bad key -> 401, valid key -> 200.
-  const res = await fetch('https://api.firecrawl.dev/v2/scrape', {
-    method: 'POST',
-    headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ url: 'https://example.com', formats: ['markdown'] }),
-  });
-  await handleRes(res, 'Firecrawl');
-}
-
-async function testApify(key: string) {
-  const res = await fetch(`https://api.apify.com/v2/users/me?token=${key}`);
-  await handleRes(res, 'Apify');
-}
