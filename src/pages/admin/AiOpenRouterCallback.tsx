@@ -29,6 +29,18 @@ export function AiOpenRouterCallbackPanel() {
   const [phase, setPhase] = useState<Phase>("working");
   const [message, setMessage] = useState("Connecting OpenRouter…");
 
+  // The exchange may settle after the admin has left this page; a redirect
+  // then would replace the route they navigated to.
+  const mounted = useRef(true);
+  const redirectTimer = useRef<number | undefined>(undefined);
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+      window.clearTimeout(redirectTimer.current);
+    };
+  }, []);
+
   useEffect(() => {
     // React runs an effect twice in development, and the authorization code is
     // single use: the second attempt would spend it and fail the login.
@@ -45,12 +57,16 @@ export function AiOpenRouterCallbackPanel() {
     void finishLogin
       .mutateAsync({ provider: "openrouter", pasted: window.location.href })
       .then(() => {
+        // The toast still reports the connection; only the page update and
+        // the redirect belong to a page the admin is still on.
+        toast.success("OpenRouter connected");
+        if (!mounted.current) return;
         setPhase("success");
         setMessage("OpenRouter is connected.");
-        toast.success("OpenRouter connected");
-        window.setTimeout(() => navigate(SETTINGS_AI_TAB, { replace: true }), 900);
+        redirectTimer.current = window.setTimeout(() => navigate(SETTINGS_AI_TAB, { replace: true }), 900);
       })
       .catch((error) => {
+        if (!mounted.current) return;
         setPhase("error");
         setMessage(error instanceof Error ? error.message : "Could not connect OpenRouter.");
       });

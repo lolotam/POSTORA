@@ -4,7 +4,12 @@ import { render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { AiOpenRouterCallbackPanel } from './AiOpenRouterCallback';
 
-const h = vi.hoisted(() => ({ finish: vi.fn() }));
+const h = vi.hoisted(() => ({ finish: vi.fn(), navigate: vi.fn() }));
+
+vi.mock('react-router-dom', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('react-router-dom')>()),
+  useNavigate: () => h.navigate,
+}));
 
 vi.mock('@/hooks/ai-config/useAiProviderAuth', () => ({
   useFinishAiOAuth: () => ({ mutateAsync: h.finish, isPending: false }),
@@ -26,6 +31,7 @@ function renderPanel(strict = false) {
 describe('AiOpenRouterCallbackPanel', () => {
   beforeEach(() => {
     h.finish.mockReset();
+    h.navigate.mockReset();
     h.finish.mockResolvedValue({ status: 'connected', account_label: null });
     window.history.pushState({}, '', CALLBACK_PATH);
   });
@@ -73,5 +79,36 @@ describe('AiOpenRouterCallbackPanel', () => {
 
     expect(await screen.findByText('invalid_state')).toBeInTheDocument();
     expect(screen.getByRole('link', { name: /Back to the AI settings/i })).toBeInTheDocument();
+  });
+
+  it('returns to the AI settings once the sign-in is connected', async () => {
+    window.history.pushState({}, '', `${CALLBACK_PATH}?code=abc&state=xyz`);
+
+    renderPanel();
+
+    await waitFor(() => expect(h.navigate).toHaveBeenCalledWith('/admin/settings?tab=ai', { replace: true }), {
+      timeout: 2000,
+    });
+  });
+
+  it.each([
+    ['before the exchange settles', false],
+    ['during the redirect delay', true],
+  ])('never redirects an admin who left the page %s', async (_label, settleFirst) => {
+    window.history.pushState({}, '', `${CALLBACK_PATH}?code=abc&state=xyz`);
+    let settle: (value: unknown) => void = () => {};
+    h.finish.mockReturnValue(new Promise((resolve) => { settle = resolve; }));
+
+    const view = renderPanel();
+    await waitFor(() => expect(h.finish).toHaveBeenCalledTimes(1));
+    if (settleFirst) {
+      settle({ status: 'connected', account_label: null });
+      expect(await screen.findByText('OpenRouter is connected.')).toBeInTheDocument();
+    }
+    view.unmount();
+    settle({ status: 'connected', account_label: null });
+    await new Promise((resolve) => setTimeout(resolve, 1100));
+
+    expect(h.navigate).not.toHaveBeenCalled();
   });
 });
