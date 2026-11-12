@@ -111,6 +111,30 @@ export function useWhatsAppReconnect() {
   });
 }
 
+/**
+ * Removes a Direct QR attempt the owner closed before pairing. The server deletes only a
+ * never-paired attempt, so calling this when the popup was reconnecting a paired account is
+ * harmless. Silent: the owner chose to close, and a failure is left to the server's sweep.
+ */
+export function useDiscardPendingWhatsAppQr() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async (socialAccountId: string) => {
+      const { data, error } = await supabase.functions.invoke("whatsapp-evolution-bridge", {
+        body: { action: "discard_pending_qr", social_account_id: socialAccountId },
+      });
+      if (error) throw new Error(error.message || "Failed to discard the QR attempt.");
+      return data as { deleted?: boolean } | null;
+    },
+    onSettled: () => {
+      queryClient.invalidateQueries({ queryKey: ["social_accounts"] });
+      queryClient.invalidateQueries({ queryKey: ["messaging_accounts"] });
+      queryClient.invalidateQueries({ queryKey: ["whatsapp-reconnectable-qr"] });
+    },
+  });
+}
+
 export function useWhatsAppDisconnect() {
   const queryClient = useQueryClient();
 

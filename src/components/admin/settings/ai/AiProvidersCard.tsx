@@ -21,10 +21,25 @@ import {
 import type { AIProvider, TestConnectionResult } from '@/hooks/useAIConfiguration';
 import { SyncModelsButton } from './SyncModelsButton';
 import { SyncAllButton } from './SyncAllButton';
+import { SubscriptionLoginSection } from './SubscriptionLoginSection';
+import { SubscriptionLoginsStrip } from './SubscriptionLoginsStrip';
 import { SYNCABLE_PROVIDER_CODES } from '@/hooks/ai-config/useSyncModels';
 
 function isOAuthProvider(provider: AIProvider | null) {
   return !!provider && (provider.auth_type === 'oauth' || provider.provider_code === 'higgsfield' || provider.api_type === 'higgsfield');
+}
+
+// The providers that have a subscription login through pi-ai. The API key
+// section above stays exactly as it was for them; the subscription is a second
+// way in, not a replacement.
+const SUBSCRIPTION_PROVIDER_CODES = ['claude', 'openai'] as const;
+type SubscriptionProviderCode = (typeof SUBSCRIPTION_PROVIDER_CODES)[number];
+
+function subscriptionProviderCode(provider: AIProvider | null): SubscriptionProviderCode | null {
+  if (!provider) return null;
+  return (SUBSCRIPTION_PROVIDER_CODES as readonly string[]).includes(provider.provider_code)
+    ? (provider.provider_code as SubscriptionProviderCode)
+    : null;
 }
 
 /**
@@ -143,6 +158,12 @@ export function AiProvidersCard() {
   });
 
   const defaultModel = aiConfig?.defaultModel;
+  const subscriptionProvider = subscriptionProviderCode(selectedProvider);
+  const openProviderByCode = (code: string) => {
+    const provider = providers.find((p) => p.provider_code === code);
+    if (!provider) return;
+    setSelectedProvider(provider); setProviderApiKey(''); setShowProviderKey(false);
+  };
 
   return (
     <div className="space-y-6">
@@ -159,6 +180,7 @@ export function AiProvidersCard() {
           />
         </CardHeader>
         <CardContent>
+          <SubscriptionLoginsStrip onOpen={openProviderByCode} />
           <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-2">
             {providers.map(provider => {
               const providerModels = modelsByProvider[provider.id] || [];
@@ -270,6 +292,10 @@ export function AiProvidersCard() {
                 Save & Test
               </Button>
             </div>
+          )}
+
+          {subscriptionProvider && (
+            <SubscriptionLoginSection providerCode={subscriptionProvider} />
           )}
 
           {selectedProvider && (SYNCABLE_PROVIDER_CODES as readonly string[]).includes(selectedProvider.provider_code) && (

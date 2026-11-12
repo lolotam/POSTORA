@@ -2,6 +2,7 @@
 // webhooks (whatsapp-webhook) after auto-reply rules found no match.
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import type { SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { handleCorsOptions, jsonResponse, unauthorizedResponse, badRequestResponse, corsHeaders } from "../_shared/cors.ts";
 import { checkUserRateLimit, rateLimitExceededResponse } from "../_shared/rate-limiter.ts";
 import {
@@ -25,7 +26,6 @@ import {
   iterationBudget,
   jevStartKey,
   modelBudgetRemaining,
-  parseModelRef,
   evaluateGates,
   fixedGreeting,
   handoffNoticeLanguage,
@@ -622,10 +622,17 @@ const AGENT_MODEL_KEYS = [
   "default_ai_model_agent_fallback_2",
 ] as const;
 
-function isModelSetting(value: any): value is { provider_code: string; model_id: string } {
-  return Boolean(value) &&
-    typeof value.provider_code === "string" && value.provider_code.length > 0 &&
-    typeof value.model_id === "string" && value.model_id.length > 0;
+function isModelSetting(value: unknown): value is { provider_code: string; model_id: string; auth_method?: unknown } {
+  const setting = value as { provider_code?: unknown; model_id?: unknown } | null | undefined;
+  return typeof setting?.provider_code === "string" && setting.provider_code.length > 0 &&
+    typeof setting.model_id === "string" && setting.model_id.length > 0;
+}
+
+/** One slot of the global agent model chain, as saved by the admin UI. */
+interface GlobalModelSlot {
+  provider: string;
+  model: string;
+  authMethod?: "api_key" | "oauth";
 }
 
 /**
@@ -638,7 +645,7 @@ function isModelSetting(value: any): value is { provider_code: string; model_id:
  * where it would run as the primary model and be logged with fallback_level 0 --
  * hiding both the misconfiguration and which tier actually answered.
  */
-async function loadGlobalModelChain(admin: any): Promise<string[]> {
+async function loadGlobalModelChain(admin: SupabaseClient): Promise<GlobalModelSlot[]> {
   const { data, error } = await admin
     .from("system_settings")
     .select("key, value")
@@ -650,10 +657,14 @@ async function loadGlobalModelChain(admin: any): Promise<string[]> {
 
   if (!isModelSetting(slots[0])) return [];
 
-  const chain: string[] = [];
+  const chain: GlobalModelSlot[] = [];
   for (const slot of slots) {
     if (!isModelSetting(slot)) break;
-    chain.push(`${slot.provider_code}/${slot.model_id}`);
+    chain.push({
+      provider: slot.provider_code,
+      model: slot.model_id,
+      authMethod: slot.auth_method === "oauth" ? "oauth" : undefined,
+    });
   }
   return chain;
 }
@@ -1566,19 +1577,24 @@ Deno.serve(async (req) => {
     // docs/superpowers/specs/2026-08-27-agent-model-selection-design.md §3e.
     const routingAdmin = admin as unknown as AiRoutingAdmin;
     const route = await resolveUserAiRoute(routingAdmin, request.user_id, 'agent');
-    if (!modelOverride.modelRef && route.mode === 'user_only' && !route.userTier) {
+    if (!modelOverride.model && route.mode === 'user_only' && !route.userTier) {
       await logOutcome(admin, { ...baseLog, status: 'skipped', error: AI_CONNECTION_REQUIRED,
         latency_ms: Date.now() - startedAt }, { error_code: AI_CONNECTION_REQUIRED, dry_run: dryRun });
       if (outboxId) await cancelOutboxRow(admin, outboxId, AI_CONNECTION_REQUIRED);
       return jsonResponse({ ok: true, skipped: 'no_reply_generated', error: AI_CONNECTION_REQUIRED });
     }
-    const rawChain = modelOverride.modelRef || route.mode === 'user_only' ? [] : await loadGlobalModelChain(admin);
+    const rawChain = modelOverride.model || route.mode === 'user_only' ? [] : await loadGlobalModelChain(admin);
     // A sandbox comparison must measure exactly one platform model; user tiers and fallbacks
     // would make the result describe a different chain than the requested candidate.
-    modelChain = modelOverride.modelRef
-      ? [{ ...parseModelRef(modelOverride.modelRef), credentialSource: 'platform' }]
-      : composeAiTiers(route, rawChain.map((ref) => ({ ...parseModelRef(ref), credentialSource: 'platform' })));
-    if (!modelOverride.modelRef && route.reason === 'user_key_missing') fallbackReason = route.reason;
+    modelChain = modelOverride.model
+      ? [{ ...modelOverride.model, credentialSource: 'platform' as const }]
+      : composeAiTiers(route, rawChain.map((slot) => ({
+        provider: slot.provider,
+        model: slot.model,
+        credentialSource: 'platform' as const,
+        authMethod: slot.authMethod,
+      })));
+    if (!modelOverride.model && route.reason === 'user_key_missing') fallbackReason = route.reason;
     if (!modelChain.length) {
       // No hardcoded last resort. Calling a model no admin selected is how an
       // unlisted gpt-4o-mini kept answering; a human is the better fallback.

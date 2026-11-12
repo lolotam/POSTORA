@@ -31,9 +31,18 @@ export interface AIModel {
   };
 }
 
+/**
+ * How a tier reaches its provider. `api_key` is the default and is never
+ * written to `system_settings`; `oauth` marks a tier served by the admin's
+ * own Claude Pro/Max or ChatGPT subscription.
+ */
+export type AiAuthMethod = 'api_key' | 'oauth';
+
 export interface DefaultModel {
   provider_code: string;
   model_id: string;
+  /** Present only when the tier is served by a subscription. */
+  auth_method?: AiAuthMethod;
 }
 
 export type ModelCategory = 'chat' | 'image' | 'tts' | 'video' | 'search' | 'stt' | 'vision' | 'agent' | 'agent_triage' | 'embedding';

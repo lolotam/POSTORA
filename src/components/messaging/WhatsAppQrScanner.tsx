@@ -20,6 +20,12 @@ interface QrStatus {
   expectedLast4: string | null;
 }
 
+const QR_LIFETIME_MS = 45_000;
+
+function secondsUntil(deadline: number): number {
+  return Math.max(0, Math.ceil((deadline - Date.now()) / 1000));
+}
+
 function qrImageSource(qr: string): string {
   return qr.startsWith("data:image/") ? qr : `data:image/png;base64,${qr}`;
 }
@@ -27,7 +33,11 @@ function qrImageSource(qr: string): string {
 export function WhatsAppQrScanner({ socialAccountId, onComplete, onConnectAsNew }: WhatsAppQrScannerProps) {
   const { t } = useTranslation("whatsapp");
   const [status, setStatus] = useState<QrStatus>({ qr: null, state: null, expectedLast4: null });
-  const [secondsLeft, setSecondsLeft] = useState(45);
+  // The code's lifetime is a wall-clock deadline, not a count of timer ticks: browsers
+  // throttle intervals in background tabs, and a tick count would keep an expired code
+  // on screen without renewing it.
+  const qrDeadline = useRef(Date.now() + QR_LIFETIME_MS);
+  const [secondsLeft, setSecondsLeft] = useState(QR_LIFETIME_MS / 1000);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [isReconnecting, setIsReconnecting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -42,6 +52,19 @@ export function WhatsAppQrScanner({ socialAccountId, onComplete, onConnectAsNew 
   // True while the reconnect_qr request is in flight: the poll interval pauses so no
   // new status poll starts behind it.
   const reconnectInFlight = useRef(false);
+  // True while a refresh_qr request is in flight, manual or automatic: a second renewal
+  // waits for it, and the poll interval pauses so an older stored code cannot land last.
+  const renewalInFlight = useRef(false);
+  const completionTimer = useRef<number | null>(null);
+  // The parent passes a new onComplete on every render; reading it through a ref keeps
+  // the poll effect (and the pending completion timer) from restarting on each one.
+  const onCompleteRef = useRef(onComplete);
+  onCompleteRef.current = onComplete;
+
+  const restartQrClock = useCallback(() => {
+    qrDeadline.current = Date.now() + QR_LIFETIME_MS;
+    setSecondsLeft(QR_LIFETIME_MS / 1000);
+  }, []);
 
   const pollStatus = useCallback(async (refreshQr = false) => {
     const generation = pollGeneration.current;
@@ -60,25 +83,37 @@ export function WhatsAppQrScanner({ socialAccountId, onComplete, onConnectAsNew 
     if (data.state === "number_mismatch") mismatchSeen.current = true;
     if (data.state === "open" && !mismatchSeen.current && !completionReported.current) {
       completionReported.current = true;
-      window.setTimeout(onComplete, 1500);
+      completionTimer.current = window.setTimeout(() => onCompleteRef.current(), 1500);
     }
-    if (refreshQr) setSecondsLeft(45);
-  }, [onComplete, socialAccountId, t]);
+    if (refreshQr) restartQrClock();
+  }, [restartQrClock, socialAccountId, t]);
 
   useEffect(() => {
     void pollStatus().catch((err: Error) => setError(err.message));
     const pollTimer = window.setInterval(() => {
-      if (reconnectInFlight.current) return;
+      if (reconnectInFlight.current || renewalInFlight.current) return;
       void pollStatus().catch((err: Error) => setError(err.message));
     }, 2000);
-    const countdownTimer = window.setInterval(() => setSecondsLeft((value) => Math.max(0, value - 1)), 1000);
+    const countdownTimer = window.setInterval(() => setSecondsLeft(secondsUntil(qrDeadline.current)), 1000);
     return () => {
       window.clearInterval(pollTimer);
       window.clearInterval(countdownTimer);
     };
   }, [pollStatus]);
 
+  // Closing the popup unmounts the scanner: a completion still pending, or a poll answer
+  // still in flight, belongs to that closed popup and must not close a newer one.
+  useEffect(() => () => {
+    if (completionTimer.current !== null) window.clearTimeout(completionTimer.current);
+    pollGeneration.current += 1;
+  }, []);
+
   const refreshQr = async () => {
+    if (renewalInFlight.current) return;
+    renewalInFlight.current = true;
+    // A status poll issued before this renewal may still carry the expired stored code;
+    // moving the generation on discards its answer.
+    pollGeneration.current += 1;
     setIsRefreshing(true);
     try {
       await pollStatus(true);
@@ -87,9 +122,23 @@ export function WhatsAppQrScanner({ socialAccountId, onComplete, onConnectAsNew 
       setError(message);
       toast({ platform: "whatsapp", title: t("qr.refreshFailed", "QR refresh failed"), description: message, variant: "destructive" });
     } finally {
+      renewalInFlight.current = false;
       setIsRefreshing(false);
     }
   };
+
+  // An unscanned code is replaced when it expires, so the popup always shows a code the
+  // phone can still accept. It fires once per expiry: a failed refresh leaves the
+  // countdown at zero and waits for the owner's manual retry instead of looping.
+  const awaitingScan = status.state === null || status.state === "connecting";
+  const expired = secondsLeft === 0;
+  // refreshQr is recreated every render; reading it through a ref keeps the effect keyed on
+  // the expiry edge alone. refreshQr guards itself against overlapping a manual renewal.
+  const refreshQrRef = useRef(refreshQr);
+  refreshQrRef.current = refreshQr;
+  useEffect(() => {
+    if (expired && awaitingScan && !reconnectInFlight.current) void refreshQrRef.current();
+  }, [expired, awaitingScan]);
 
   // The owner chose to scan the right phone: restart the same connection's QR flow.
   const restartScan = async () => {
@@ -110,7 +159,7 @@ export function WhatsAppQrScanner({ socialAccountId, onComplete, onConnectAsNew 
       }
       mismatchSeen.current = false;
       setStatus({ qr: data.qr || null, state: data.state || null, expectedLast4: null });
-      setSecondsLeft(45);
+      restartQrClock();
       // The reconnect response is authoritative: a status answer issued before it
       // completed belongs to the abandoned attempt and must not overwrite the fresh
       // QR with a stale state. On failure there is no fresh QR, so the racing refresh
@@ -132,8 +181,8 @@ export function WhatsAppQrScanner({ socialAccountId, onComplete, onConnectAsNew 
 
   if (showMismatch) {
     return (
-      <Card className="border-destructive/40">
-        <CardContent className="space-y-4 p-6">
+      <Card className="border-0 shadow-none">
+        <CardContent className="space-y-4 p-0">
           <p className="text-sm font-medium text-destructive">
             {t("qr.mismatch", "You scanned a different phone. This connection belongs to the number ending {{last4}}.", { last4: status.expectedLast4 ?? "" })}
           </p>
@@ -155,8 +204,8 @@ export function WhatsAppQrScanner({ socialAccountId, onComplete, onConnectAsNew 
 
   if (status.state === "open") {
     return (
-      <Card className="border-green-500/40">
-        <CardContent className="flex items-center gap-3 p-6 text-green-700 dark:text-green-400">
+      <Card className="border-0 shadow-none">
+        <CardContent className="flex items-center gap-3 p-0 text-green-700 dark:text-green-400">
           <CheckCircle2 className="h-6 w-6" />
           <div><p className="font-medium">{t("qr.connected", "WhatsApp connected")}</p><p className="text-sm">{t("qr.connectedHint", "Your Direct QR session is now active.")}</p></div>
         </CardContent>
@@ -165,15 +214,15 @@ export function WhatsAppQrScanner({ socialAccountId, onComplete, onConnectAsNew 
   }
 
   return (
-    <Card>
-      <CardHeader>
+    <Card className="border-0 shadow-none">
+      <CardHeader className="px-0 pt-0">
         <CardTitle>{t("qr.scanTitle", "Scan the WhatsApp QR code")}</CardTitle>
         <CardDescription>{t("qr.scanHint", "Open WhatsApp on your phone, choose Linked devices, then scan this code.")}</CardDescription>
       </CardHeader>
-      <CardContent className="space-y-4">
-        <div className="flex min-h-[512px] items-center justify-center rounded-md border bg-white p-3">
+      <CardContent className="space-y-4 px-0 pb-0">
+        <div className="mx-auto flex aspect-square w-full max-w-[400px] items-center justify-center rounded-md border bg-white p-3">
           {status.qr && secondsLeft > 0 ? (
-            <img src={qrImageSource(status.qr)} alt={t("qr.alt", "WhatsApp connection QR code")} width={512} height={512} className="h-[512px] w-[512px] max-w-full" />
+            <img src={qrImageSource(status.qr)} alt={t("qr.alt", "WhatsApp connection QR code")} width={400} height={400} className="h-full w-full" />
           ) : (
             <div className="flex flex-col items-center gap-2 text-sm text-muted-foreground">
               <Loader2 className="h-6 w-6 animate-spin" />

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { Trans, useTranslation } from "react-i18next";
 import "@/i18n";
 import { useQueryClient } from "@tanstack/react-query";
@@ -47,6 +47,7 @@ import {
   useWhatsAppConnect,
   useWhatsAppDisconnect,
   useWhatsAppReconnect,
+  useDiscardPendingWhatsAppQr,
   useWhatsAppRequestSync,
 } from "@/hooks/useWhatsAppConnect";
 import { useReconnectableWhatsApp } from "@/hooks/useReconnectableWhatsApp";
@@ -75,6 +76,7 @@ export function WhatsAppSetup({ connectedAccounts }: WhatsAppSetupProps) {
   const connect = useWhatsAppConnect();
   const disconnect = useWhatsAppDisconnect();
   const reconnect = useWhatsAppReconnect();
+  const discardPendingQr = useDiscardPendingWhatsAppQr();
   const { data: reconnectable = [] } = useReconnectableWhatsApp();
   const { data: reconnectableQr = [], isError: qrAccountsError, refetch: refetchQrAccounts } = useReconnectableQrAccounts();
   const requestSync = useWhatsAppRequestSync();
@@ -91,6 +93,7 @@ export function WhatsAppSetup({ connectedAccounts }: WhatsAppSetupProps) {
   const [connectionName, setConnectionName] = useState<string | null>(null);
   const [qrDisclaimerOpen, setQrDisclaimerOpen] = useState(false);
   const [qrAccountId, setQrAccountId] = useState<string | null>(null);
+  const qrOpenerRef = useRef<HTMLElement | null>(null);
   const [qrConnecting, setQrConnecting] = useState(false);
   const [switchTarget, setSwitchTarget] = useState<MessagingAccount | null>(null);
   const [disconnectTarget, setDisconnectTarget] = useState<MessagingAccount | null>(null);
@@ -445,22 +448,49 @@ export function WhatsAppSetup({ connectedAccounts }: WhatsAppSetupProps) {
         </CardContent>
       </Card>
 
-      {qrAccountId && (
-        <WhatsAppQrScanner
-          key={qrAccountId}
-          socialAccountId={qrAccountId}
-          onComplete={() => {
-            setQrAccountId(null);
-            queryClient.invalidateQueries({ queryKey: ["social_accounts"] });
-            queryClient.invalidateQueries({ queryKey: ["messaging_accounts"] });
-            queryClient.invalidateQueries({ queryKey: ["whatsapp-reconnectable-qr"] });
+      {/* The QR opens as a popup so the owner can scan it without scrolling the page; a
+          successful scan closes it (onComplete). Closing it by hand removes a new attempt that never
+          paired; the server keeps a paired account that was only being reconnected. */}
+      <Dialog
+        open={qrAccountId !== null}
+        onOpenChange={(open) => {
+          if (open || !qrAccountId) return;
+          discardPendingQr.mutate(qrAccountId);
+          setQrAccountId(null);
+        }}
+      >
+        <DialogContent
+          className="max-h-[92vh] max-w-lg overflow-y-auto"
+          // The popup opens from a button that may re-render while it is open; focus goes back
+          // to the element that opened it, not to the top of the page.
+          onOpenAutoFocus={() => { qrOpenerRef.current = document.activeElement as HTMLElement | null; }}
+          onCloseAutoFocus={(event) => {
+            event.preventDefault();
+            qrOpenerRef.current?.focus();
           }}
-          onConnectAsNew={() => {
-            setQrAccountId(null);
-            setQrNameOpen(true);
-          }}
-        />
-      )}
+        >
+          <DialogHeader className="sr-only">
+            <DialogTitle>{t("qr.scanTitle", "Scan the WhatsApp QR code")}</DialogTitle>
+            <DialogDescription>{t("qr.scanHint", "Open WhatsApp on your phone, choose Linked devices, then scan this code.")}</DialogDescription>
+          </DialogHeader>
+          {qrAccountId && (
+            <WhatsAppQrScanner
+              key={qrAccountId}
+              socialAccountId={qrAccountId}
+              onComplete={() => {
+                setQrAccountId(null);
+                queryClient.invalidateQueries({ queryKey: ["social_accounts"] });
+                queryClient.invalidateQueries({ queryKey: ["messaging_accounts"] });
+                queryClient.invalidateQueries({ queryKey: ["whatsapp-reconnectable-qr"] });
+              }}
+              onConnectAsNew={() => {
+                setQrAccountId(null);
+                setQrNameOpen(true);
+              }}
+            />
+          )}
+        </DialogContent>
+      </Dialog>
 
       {/* Connection mode cards */}
       {!hasConnected && (!hideConnectButtons || evolutionQrEnabled) && (

@@ -11,9 +11,9 @@ const allowedModels = [
 ] as const;
 
 Deno.test("a dry run uses only the canonical allow-listed model override", async () => {
-  for (const [requestedOverride, modelRef] of [
-    ["gpt-5.5", "openai/gpt-5.5"],
-    ["openrouter/anthropic/claude-sonnet-5", "openrouter/anthropic/claude-sonnet-5"],
+  for (const [requestedOverride, model] of [
+    ["gpt-5.5", { provider: "openai", model: "gpt-5.5" }],
+    ["openrouter/anthropic/claude-sonnet-5", { provider: "openrouter", model: "anthropic/claude-sonnet-5" }],
   ] as const) {
     assertEquals(
       await resolveSandboxModelOverride({
@@ -22,7 +22,7 @@ Deno.test("a dry run uses only the canonical allow-listed model override", async
         isPlatformAdmin: () => Promise.resolve(true),
         readAllowedModels: () => Promise.resolve(allowedModels),
       }),
-      { ok: true, modelRef },
+      { ok: true, model },
     );
   }
 });
@@ -36,7 +36,7 @@ Deno.test("a live request never reads or uses model_override, even when malforme
         isPlatformAdmin: () => Promise.reject(new Error("live request reached the admin check")),
         readAllowedModels: () => Promise.reject(new Error("live request reached the model allow-list")),
       }),
-      { ok: true, modelRef: null },
+      { ok: true, model: null },
     );
   }
 });

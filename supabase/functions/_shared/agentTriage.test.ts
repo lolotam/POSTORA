@@ -252,6 +252,19 @@ Deno.test("a slot is a decision tier only when the catalogue says its model is a
   ]);
 });
 
+Deno.test("a subscription slot is a chat tier carrying its auth method, even for Claude or a decision model", () => {
+  const rows = [
+    enabled,
+    { key: "default_ai_model_agent_triage", value: { ...slot("claude", "claude-sonnet-4-5"), auth_method: "oauth" } },
+    { key: "default_ai_model_agent_triage_fallback", value: { ...slot("openrouter", "typesafe/jev-1.13"), auth_method: "oauth" } },
+    { key: "default_ai_model_agent_triage_fallback_2", value: slot("claude", "claude-sonnet-4-5") },
+  ];
+  assertEquals(triageChainFromSettings(rows, null), [
+    { provider: "claude", model: "claude-sonnet-4-5", kind: "chat", authMethod: "oauth" },
+    { provider: "openrouter", model: "typesafe/jev-1.13", kind: "chat", authMethod: "oauth" },
+  ]);
+});
+
 Deno.test("when the catalogue read fails, decision providers keep the decision API (Jev still works)", () => {
   const rows = [enabled, { key: "default_ai_model_agent_triage", value: slot("openrouter", "typesafe/jev-1.13") }];
   assertEquals(triageChainFromSettings(rows, null), [{ provider: "openrouter", model: "typesafe/jev-1.13", kind: "decision" }]);

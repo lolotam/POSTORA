@@ -144,7 +144,8 @@ export function resolveEngagementMode(override: string | null | undefined, defau
 // PROVIDER_ENDPOINTS in index.ts). "gemini" is the ai_providers catalog
 // code for Google; "google" is kept for values stored before that mapping.
 // Providers not listed in PROVIDER_ENDPOINTS resolve through ai_providers (providerEndpoint.ts).
-export const KNOWN_MODEL_PROVIDERS = ["openai", "openrouter", "google", "gemini", "claude", "vercel", "deepseek"] as const;
+// Keep in sync with AGENT_PROVIDER_CODES in src/components/admin/AdminAiAgentSection.tsx.
+export const KNOWN_MODEL_PROVIDERS = ["openai", "openrouter", "google", "gemini", "claude", "vercel", "deepseek", "moonshot"] as const;
 
 export interface ModelRef {
   provider: string;

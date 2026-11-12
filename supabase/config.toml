@@ -60,6 +60,12 @@ verify_jwt = false
 [functions.higgsfield-oauth]
 verify_jwt = true
 
+# Admin-only AI subscription login. Same posture as higgsfield-oauth: the
+# gateway verifies the user JWT and the function re-verifies the caller and
+# the admin role in-handler with authenticateCaller + has_role.
+[functions.ai-provider-auth]
+verify_jwt = true
+
 [functions.generate-video]
 verify_jwt = true
 
@@ -75,6 +81,9 @@ verify_jwt = true
 
 # Cron calls with the shared secret, not a user JWT (verifyCronAuth in the function).
 [functions.sweep-ai-image-staging]
+verify_jwt = false
+
+[functions.sweep-pending-whatsapp-qr]
 verify_jwt = false
 
 # The competitor tracking report verifies the caller's bearer itself: it

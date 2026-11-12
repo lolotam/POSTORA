@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { Bot } from 'lucide-react';
 import { DefaultModelSelector, openRouterModelsFor, servesCapability } from '../DefaultModelSelector';
 
@@ -20,6 +21,12 @@ vi.mock('@/hooks/useOpenRouterModels', () => ({
   }),
   extractSeries: (id: string) => id.split('/')[0] || 'unknown',
   formatPrice: () => 'Free',
+}));
+
+// The subscription capabilities are read over the network; this suite is about
+// the API-key catalogue, so the read is stubbed off.
+vi.mock('@/hooks/ai-config/useAiProviderAuth', () => ({
+  useAiProviderAuthCapabilities: () => ({ data: { enabled: false, providers: [] } }),
 }));
 
 const providers = [
@@ -50,24 +57,31 @@ function openSelect(trigger: HTMLElement) {
   fireEvent.click(trigger);
 }
 
+// The selector reads the subscription capabilities through react-query, so the
+// test needs a client the way the app root provides one. The assertions below
+// are untouched by this.
+const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+
 describe('DefaultModelSelector — agent_triage category', () => {
   it('offers the synced Jev model for the OpenRouter tier, not the live chat catalogue', async () => {
     render(
-      <DefaultModelSelector
-        category="agent_triage"
-        capability="triage"
-        title="Triage model"
-        description=""
-        icon={Bot}
-        providers={providers}
-        models={models}
-        currentDefault={null}
-        currentFallback={null}
-        currentFallback2={null}
-        onSetDefault={vi.fn()}
-        onSetFallback={vi.fn()}
-        onSetFallback2={vi.fn()}
-      />,
+      <QueryClientProvider client={queryClient}>
+        <DefaultModelSelector
+          category="agent_triage"
+          capability="triage"
+          title="Triage model"
+          description=""
+          icon={Bot}
+          providers={providers}
+          models={models}
+          currentDefault={null}
+          currentFallback={null}
+          currentFallback2={null}
+          onSetDefault={vi.fn()}
+          onSetFallback={vi.fn()}
+          onSetFallback2={vi.fn()}
+        />
+      </QueryClientProvider>,
     );
 
     const primarySection = screen.getByText('Primary').closest('div.space-y-2') as HTMLElement;

@@ -86,3 +86,24 @@ Deno.test("search and video have no floor: an unset last resort stays empty, nev
   const unknown = await fetchCategoryAiSettings(adminWith([]), "something_new");
   assertEquals([unknown.lastResortProvider, unknown.lastResortModel], ["google", "gemini-3-flash-preview"]);
 });
+
+Deno.test("a subscription third tier is validated against the subscription's models, not ai_models", async () => {
+  const known = await fetchCategoryAiSettings(adminWith([
+    {
+      key: "default_ai_model_chat_fallback_2",
+      value: { provider_code: "claude", model_id: "claude-sonnet-4-5", auth_method: "oauth" },
+    },
+  ], []), "chat");
+  assertEquals(known.lastResortProvider, "claude");
+  assertEquals(known.lastResortModel, "claude-sonnet-4-5");
+  assertEquals(known.lastResortAuthMethod, "oauth");
+
+  const unknown = await fetchCategoryAiSettings(adminWith([
+    {
+      key: "default_ai_model_chat_fallback_2",
+      value: { provider_code: "claude", model_id: "not-a-claude-model", auth_method: "oauth" },
+    },
+  ], ["claude/not-a-claude-model"]), "chat");
+  assertEquals(unknown.lastResortProvider, "google", "an unknown subscription model falls back to the floor");
+  assertEquals(unknown.lastResortAuthMethod, undefined);
+});

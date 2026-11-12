@@ -10,7 +10,7 @@ export interface AllowedAgentModel {
 }
 
 export type SandboxModelOverrideResult =
-  | { ok: true; modelRef: string | null }
+  | { ok: true; model: { provider: string; model: string } | null }
   | { ok: false; error: typeof INVALID_MODEL_OVERRIDE };
 
 /**
@@ -25,7 +25,7 @@ export async function resolveSandboxModelOverride(input: {
   isPlatformAdmin: () => Promise<boolean>;
   readAllowedModels: () => Promise<readonly AllowedAgentModel[]>;
 }): Promise<SandboxModelOverrideResult> {
-  if (!input.dryRun || input.requestedOverride === undefined) return { ok: true, modelRef: null };
+  if (!input.dryRun || input.requestedOverride === undefined) return { ok: true, model: null };
   if (!(await input.isPlatformAdmin())) return { ok: false, error: INVALID_MODEL_OVERRIDE };
 
   const parsedOverride = ModelOverrideSchema.safeParse(input.requestedOverride);
@@ -38,8 +38,8 @@ export async function resolveSandboxModelOverride(input: {
   );
   if (!matchedModel) return { ok: false, error: INVALID_MODEL_OVERRIDE };
 
-  // Canonical refs keep bare legacy model ids tied to the provider that allow-listed them.
-  return { ok: true, modelRef: `${matchedModel.provider}/${matchedModel.model_id}` };
+  // A bare legacy model id stays tied to the provider that allow-listed it.
+  return { ok: true, model: { provider: matchedModel.provider, model: matchedModel.model_id } };
 }
 
 export function invalidModelOverrideRefusalLog(input: {
