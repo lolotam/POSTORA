@@ -63,7 +63,8 @@
 | `supabase/functions/ai-agent-reply/logic.ts` | New pure helpers listed above |
 | `supabase/functions/ai-agent-reply/agentQuality.test.ts` | New: tests for those helpers |
 | `supabase/functions/ai-agent-reply/index.ts` | Wiring (gate, language, reply birth, history merge) |
-| `supabase/migrations/20261112130000_ai_conversation_modes_ack.sql` | `customer_ack_sent_at`, `apology_sent_at` + claim RPCs |
+| `supabase/functions/_shared/conversationModeOverride.ts` | Expiry through `expire_conversation_mode` |
+| `supabase/migrations/20261112130000_agent_handoff_messages.sql` | escalation/ack columns, thread marker, 3 RPCs, per-account texts |
 | `supabase/functions/ai-agent-adapters/supabase.ts` (+ test) | Allow-listed RPC mode |
 | `supabase/functions/_shared/connectorRegistry.ts` | `rpc_allow_list` setting, `query`/`max_results` parameters |
 | `supabase/functions/ai-agent-reply/logic.ts` `buildSystemPrompt` | Not-found / escalation rule |
@@ -71,6 +72,25 @@
 | `.github/workflows/ci.yml` | Run the `ai-agent-reply` + `ai-agent-adapters` Deno tests (today CI runs neither) |
 
 ---
+
+### Task 0: Pre-flight probes (before Tasks 4–7)
+
+The review on 2026-11-12 found four assumptions that need live evidence first.
+
+- [ ] **Catalog RPC is live.**
+  1. Get the curemedkw anon key through `request_secret`.
+  2. Curl `agent_search_products` once with `{"q":"كريم الكعب","max_results":3}`. Save the response, keys only and with no customer data, as `ai-agent-adapters/fixtures/curemed_search.json` for the Task 5 tests.
+  3. Read the function's volatility with T3-Curemedkw-Manager. It must be STABLE so that GET `/rpc/` also works. If it is not live, Tasks 5–6 wait and the rest proceeds.
+- [ ] **Why `curemedkw_supabase_catalog` disappeared after 2026-11-10.**
+  1. Check `ai_agent_config_archive`.
+  2. Check `system_logs` for tool deletes on user `146a9939-…`.
+  3. Ask the owner if nothing shows.
+
+  Re-create the tool through the app's own connector save path (Agent settings → Connectors). Do not use a raw INSERT, so the credential lands where the app stores it.
+- [ ] **Model chain availability.** Before Tasks 1–6, run one dry-run turn per allowed model (Task 7 probe, synthetic conversation). The customer-facing chain is broken today (gemini fails, nemotron times out, jev returns 403), and fixing it does not depend on any other task.
+- [ ] **Language diagnosis.** Turn Task 2 Step 0 into a test: feed the logged `inbound_text` of the English image reply and that thread's `customer_language` into `threadReplyLanguage`.
+  - If it returns `en`, Task 2 as written is the fix.
+  - If it returns `ar`, the model ignored the instruction. Task 2 then also adds a post-check: an `ar` turn whose reply has more Latin than Arabic letters (`letterLanguage`) gets one corrective regeneration.
 
 ### Task 1: CSV UTF-8 decode and re-ingest
 
@@ -92,7 +112,9 @@
   const text = new TextDecoder("utf-8").decode(await file.arrayBuffer()); // strips a BOM by default
   const workbook = XLSX.read(text, { type: "string" });
   ```
-  Keep `{ type: "array" }` for xlsx/xls.
+  Keep `{ type: "array" }` for xlsx/xls. `ai-knowledge-excel-worker/index.ts:88` has its own `XLSX.read(bytes, { type: "array" })`.
+  - Move the decision into one exported `readWorkbook(bytes, fileName)` in `parsing.ts`.
+  - Have the worker call it, so there is one CSV rule.
 - [ ] **Step 4:** Run the test. It is expected to PASS. Also run the full `ai-knowledge-ingest` suite.
 - [ ] **Step 5:** Commit `fix(knowledge): read CSV sources as UTF-8`.
 - [ ] **Step 6 (prod, after merge + sync):**
@@ -129,6 +151,7 @@ export function replyLanguageText(inboundText: string): string;
   - Plain Arabic text → unchanged.
   - Envelope with an English OCR body and no caption → `""`, so letterless and the thread decides.
   - Envelope plus an Arabic caption line outside the fence → the caption.
+  - Voice-transcript envelope (Arabic transcript) → the transcript. A transcript is the customer's own words. Key the drop on the image/OCR label `composeAgentText` writes (`inboundMediaPipeline.ts:375`), not on every fence.
 - [ ] **Step 2:** Run them. They are expected to FAIL (function missing).
 - [ ] **Step 3: Implement** in `logic.ts`.
   - Drop everything between `AGENT_TEXT_FENCE` lines, and drop the header lines. Reuse `AGENT_TEXT_FENCE` and `agentTextHeader`'s notice from `_shared/agentTextEnvelope.ts`; do not re-type the literals.
@@ -148,13 +171,14 @@ export function replyLanguageText(inboundText: string): string;
 
 **Interfaces — Produces:**
 ```ts
-export const GREETING = {
-  ar: "وعليكم السلام ورحمة الله، أهلاً بك في كيور ميد 🌿 كيف نقدر نساعدك؟",
-  en: "Welcome to CureMed 🌿 How can we help you?",
-} as const;
-/** reply with the greeting prepended unless the model already opened with it. */
-export function withGreeting(reply: string, language: ReplyLanguage): string;
+/** reply with the account's greeting prepended unless the model already opened with it. */
+export function withGreeting(reply: string, greetingText: string): string;
 ```
+Seed values for curemedkw:
+- `greeting_text_ar` = the spec text.
+- `greeting_text_en` = `Welcome to CureMed 🌿 How can we help you?`. This wording is not from the owner, so it goes on the wording card.
+
+No greeting while a store-event flow is active (`initialProcedureState?.origin === "event"`) or on a comment reply (`request.comment_id`).
 
 The greeting text is per account, so read it from `config.greeting_text_ar` / `config.greeting_text_en`. When a column is absent, do not greet.
 
@@ -179,12 +203,23 @@ The greeting text is per account, so read it from `config.greeting_text_ar` / `c
 
 ### Task 4: Human-mode acknowledgement and post-escalation apology
 
-**Migration:** `supabase/migrations/20261112130000_ai_conversation_modes_ack.sql`
+**Facts that shape this task (verified 2026-11-12):**
+- An expired override row is DELETED on read.
+  - `resolveConversationOverride` (`_shared/conversationModeOverride.ts:104`) deletes it.
+  - It is called from both `ai-agent-reply/index.ts:708` and `process-pending-replies/index.ts:208`.
+  - So the AI's next turn cannot "find the expired row". Expiry has to leave a durable marker at the moment of deletion.
+- The gate at `index.ts:759` runs before the sender (`:770`), history (`:894`) and `language` (`:1065`) exist. The ack path must build what it needs itself, and own the outbox row that is cancelled there today.
+- `escalationOverride` writes `mode='human_then_ai'` when no human is assigned. In that mode the AI never went silent, so it gets no ack and no apology. Only `mode='human_first'` rows count.
+
+**Migration:** `supabase/migrations/20261112130000_agent_handoff_messages.sql`
 
 ```sql
 ALTER TABLE public.ai_conversation_modes
-  ADD COLUMN IF NOT EXISTS customer_ack_sent_at timestamptz,
-  ADD COLUMN IF NOT EXISTS apology_sent_at timestamptz;
+  ADD COLUMN IF NOT EXISTS escalated_at timestamptz,
+  ADD COLUMN IF NOT EXISTS customer_ack_sent_at timestamptz;
+-- Set when a silent (human_first) escalation expires; consumed by the AI's first reply after it.
+ALTER TABLE public.ai_threads
+  ADD COLUMN IF NOT EXISTS unanswered_escalation_since timestamptz;
 ALTER TABLE public.ai_agent_configs
   ADD COLUMN IF NOT EXISTS greeting_text_ar text,
   ADD COLUMN IF NOT EXISTS greeting_text_en text,
@@ -193,87 +228,72 @@ ALTER TABLE public.ai_agent_configs
   ADD COLUMN IF NOT EXISTS escalation_apology_ar text,
   ADD COLUMN IF NOT EXISTS escalation_apology_en text;
 
--- Claims are single-flight: two webhook deliveries for one message must not both send.
-CREATE OR REPLACE FUNCTION public.claim_human_mode_ack(p_mode_id uuid)
-RETURNS boolean LANGUAGE sql SECURITY DEFINER SET search_path = public, pg_temp AS $$
-  WITH c AS (
-    UPDATE public.ai_conversation_modes SET customer_ack_sent_at = now()
-    WHERE id = p_mode_id AND customer_ack_sent_at IS NULL RETURNING 1)
-  SELECT EXISTS (SELECT 1 FROM c);
-$$;
-CREATE OR REPLACE FUNCTION public.claim_escalation_apology(p_mode_id uuid)
-RETURNS boolean LANGUAGE sql SECURITY DEFINER SET search_path = public, pg_temp AS $$
-  WITH c AS (
-    UPDATE public.ai_conversation_modes SET apology_sent_at = now()
-    WHERE id = p_mode_id AND apology_sent_at IS NULL RETURNING 1)
-  SELECT EXISTS (SELECT 1 FROM c);
-$$;
-REVOKE ALL ON FUNCTION public.claim_human_mode_ack(uuid), public.claim_escalation_apology(uuid)
-  FROM PUBLIC, anon, authenticated;
-GRANT EXECUTE ON FUNCTION public.claim_human_mode_ack(uuid), public.claim_escalation_apology(uuid)
-  TO service_role;
--- A new escalation re-arms both: escalateConversation upserts the row, so it must reset them.
-NOTIFY pgrst, 'reload schema';
+-- Single-flight: two deliveries of one message must not both send the ack.
+CREATE OR REPLACE FUNCTION public.claim_human_mode_ack(p_mode_id uuid) RETURNS boolean ...
+  -- UPDATE ... SET customer_ack_sent_at = now()
+  --   WHERE id = p_mode_id AND customer_ack_sent_at IS NULL AND mode = 'human_first'
+  --   AND expires_at > now() RETURNING 1
+
+-- Replaces the client-side delete: deletes the expired row and, for a human_first row, stamps
+-- the thread in the same statement, so whichever function observes the expiry leaves the marker.
+CREATE OR REPLACE FUNCTION public.expire_conversation_mode(p_mode_id uuid, p_expires_at timestamptz)
+RETURNS boolean ...
+
+-- Returns and clears the marker atomically (NULL when there is none).
+CREATE OR REPLACE FUNCTION public.take_unanswered_escalation(p_thread_id uuid)
+RETURNS timestamptz ...
+-- Each: SECURITY DEFINER, SET search_path = public, pg_temp; REVOKE from PUBLIC, anon,
+-- authenticated; GRANT EXECUTE to service_role. NOTIFY pgrst, 'reload schema'.
 ```
 
-- `escalateConversation` (`tools.ts:286`) must write `customer_ack_sent_at: null, apology_sent_at: null` in its upsert.
-- Seed curemedkw's six text columns in a separate data step (Step 7), not in the migration.
+The function bodies are written in full in the migration. Each one is proved in `supabase/tests/agent_handoff_messages.sql`, registered in `scripts/db-harness.sh` SUITES. The proof covers:
+- `claim_human_mode_ack` true then false.
+- It is false for `human_then_ai` and for expired rows.
+- `expire_conversation_mode` deletes once.
+- It stamps the thread only for `human_first`.
+- It keeps the original `escalated_at`.
+- `take_unanswered_escalation` returns the stamp once, then NULL.
+- `anon`/`authenticated` cannot execute any of the three.
+
+**Code changes:**
+- `escalateConversation` (`tools.ts:286`) writes `escalated_at: now` and `customer_ack_sent_at: null` in its upsert, which re-arms the ack for a new escalation.
+- `resolveConversationOverride` calls `expire_conversation_mode` instead of `.delete()`. Its existing tests keep their contract (returns null after expiry).
+- **Gate closed (`index.ts:759`):**
+  - Applies when the reason is `mode_human_first`, the platform is `whatsapp`, the dry run is off, and an active `human_first` row exists with `expires_at` not null. Manual overrides get no ack.
+  - Then `language` = `customerLanguageSignal(replyLanguageText(inbound))`, falling back to `thread.customer_language`, then `ar`.
+  - The account must have `human_mode_ack_<lang>`, and `claim_human_mode_ack` must return true.
+  - On success: build the sender, send the ack, insert the customer turn and the ack into `ai_thread_messages`, log `status: "human_mode_ack"`, and complete (not cancel) the outbox row through the same helper `persistDelivery` uses.
+  - Otherwise, today's skip.
+- **AI answering:** when `platform === "whatsapp"` and not a dry run, call `take_unanswered_escalation(thread.id)`.
+  - With a timestamp `since` and zero staff turns after it, prepend `escalation_apology_<lang>` to `replyText`, after the greeting step.
+  - With staff turns, merge them into history instead (below).
+- **Staff turns:** `whatsapp_messages` with `direction='outbound'` and `from_name='You'` (positive match; broadcasts, rules and store openers are also outbound), `created_at > since`. They are merged into the history window by `created_at`, as `assistant` turns prefixed `"(staff) "`.
+- **Step 0 (proof):**
+  - Confirm the staff marker on prod:
+    ```sql
+    select from_name, count(*) from whatsapp_messages where conversation_id like 'wa_96560003759%' and direction='outbound' group by 1;
+    ```
+  - Confirm customer messages skipped at the gate are stored in `ai_thread_messages`. If not, also load the inbound `whatsapp_messages` after `since`, so staff answers keep their questions.
 
 **Interfaces — Produces:**
 ```ts
-/** Staff replies sent from the inbox after `sinceIso`, as assistant turns the model can read. */
 export function staffTurnsSince(
   rows: Array<{ direction: string; from_name: string | null; body: string | null; created_at: string }>,
   sinceIso: string,
-): Array<{ role: "assistant"; content: string }>;
-/** True when the escalation expired and no staff reply exists after it began. */
-export function needsEscalationApology(
-  mode: { expires_at: string | null; updated_at: string; apology_sent_at: string | null } | null,
-  staffTurns: number,
-  nowMs: number,
-): boolean;
+): Array<{ role: "assistant"; content: string; created_at: string }>;
+export function escalationApologyText(
+  since: string | null, staffTurns: number, apology: string | null,
+): string | null; // non-null only when since is set, staffTurns === 0 and apology is configured
 ```
 
-**Behaviour:**
-
-1. **Gate closed (`index.ts:759`):**
-   - Applies when the reason is `mode_human_first` or `human_agent_active`, an escalation row is active (`expires_at > now`), and the account has `human_mode_ack_<lang>`.
-   - Call `claim_human_mode_ack(row.id)`. On `true`, send the ack through the same `buildReplySender` path. Store it in `ai_thread_messages` as `assistant` and log `status: "human_mode_ack"`.
-   - On `false`, keep today's skip.
-   - Manual overrides (`expires_at IS NULL`) and plain `human_first` accounts get no ack.
-2. **AI answering again:**
-   - Read the newest `ai_conversation_modes` row for the conversation. If `needsEscalationApology(...)` holds and `claim_escalation_apology` returns `true`, prepend `escalation_apology_<lang>` to `replyText`, after the greeting step.
-   - Staff turns = `whatsapp_messages` with `direction='outbound'`, `from_name` not `'AI Agent'` (`index.ts:797`), and `created_at` after the row's `updated_at`.
-3. **History:**
-   - Merge `staffTurnsSince(...)` into the window, ordered by `created_at`, so the AI continues from what staff said.
-   - Label each one `"(staff) "` in content so the model can tell it from its own words.
-
-**Step 0 (proof):** Confirm the staff-sender marker on prod before relying on it:
-```sql
-select from_name, count(*) from whatsapp_messages
-where conversation_id like 'wa_96560003759%' and direction='outbound' group by 1;
-```
-Expect `AI Agent` and `You`. If staff rows use another marker, use that and note it here.
-
-- [ ] **Step 1: Failing tests:**
-  - `staffTurnsSince`: filters AI rows, inbound rows and rows before `since`.
-  - `needsEscalationApology`, table-driven:
-    - Active row → false.
-    - Expired with staff turns → false.
-    - Expired, none, not sent → true.
-    - Already sent → false.
-    - Null row → false.
+- [ ] **Step 1:** Failing Deno tests, table-driven, for `staffTurnsSince` and `escalationApologyText`. Also the updated `conversationModeOverride` test, which asserts the RPC is called with `(id, expires_at)`.
 - [ ] **Step 2:** Run them. They are expected to FAIL.
-- [ ] **Step 3:** Implement the helpers, the migration, the `escalateConversation` reset and the wiring.
-- [ ] **Step 4:** SQL proof `supabase/tests/conversation_mode_claims.sql`, registered in `scripts/db-harness.sh` SUITES:
-  - Two claims on one row → `true`, then `false`.
-  - The escalate upsert re-arms the claim.
-  - `anon`/`authenticated` cannot execute either function.
-- [ ] **Step 5:** Run the Deno suite and the DB harness.
-- [ ] **Step 6:** Commit `feat(ai-agent): one human-mode acknowledgement and an apology after an unanswered escalation`.
-- [ ] **Step 7 (prod, before merge):**
+- [ ] **Step 3:** Migration, SQL proof and code wiring.
+- [ ] **Step 4:** Run the Deno suites and the DB harness. Expected: PASS.
+- [ ] **Step 5:** Commit `feat(ai-agent): one human-mode acknowledgement and an apology after an unanswered escalation`.
+- [ ] **Step 6 (prod, before merge):**
   1. Apply the migration.
-  2. Set curemedkw's text columns. The owner wording for the ack and apology comes from a card. The greeting is already fixed by the spec.
+  2. Seed curemedkw's six text columns. The ack, apology and English greeting wording come from one owner card.
 
 ### Task 5: Allow-listed RPC in the Supabase adapter
 
@@ -302,6 +322,8 @@ Expect `AI Agent` and `You`. If staff rows use another marker, use that and note
   - A model-supplied `table: "rpc/x"` → still `supabase_rpc_refused`.
   - `max_results: 99` → `25`.
   - No allow list → today's table GET (regression).
+  - The fixture `fixtures/curemed_search.json` (Task 0) passes through the output mapping with `product_url`, `price_hidden` and `shopping_enabled` intact.
+  - Zero rows for a multi-word query → exactly one retry with the query's longest word, and the result says `retried_with`. Spec §3 puts the loosened retry in the tool, not in the prompt, because the model already ignored a prompt rule.
 - [ ] **Step 2:** Run them. They are expected to FAIL.
 - [ ] **Step 3:** Implement in `supabase.ts` and the registry. Update `connectorUsageGuide("supabase")` so the model knows `query` is the product words in the customer's language.
 - [ ] **Step 4:** Run both suites (`ai-agent-adapters`, `ai-agent-reply` `connectorRouting`/`tools`). Expected: PASS.
@@ -309,7 +331,7 @@ Expect `AI Agent` and `You`. If staff rows use another marker, use that and note
 
 ### Task 6: curemedkw catalog tool and the not-found rule
 
-- [ ] **Step 1: Prompt rule.** In `buildSystemPrompt` (`logic.ts:529`), when a catalog tool is present, add one fixed paragraph:
+- [ ] **Step 1: Prompt rule.** The tool already retries once (Task 5). In `buildSystemPrompt` (`logic.ts:529`), when a catalog tool is present, add one fixed paragraph:
   - Search with the product words.
   - On no result, search once more with a looser query (brand only, or the English/Arabic name).
   - Then ask the customer for the product name or a photo.
@@ -330,7 +352,7 @@ Expect `AI Agent` and `You`. If staff rows use another marker, use that and note
        -d '{"q":"كريم الكعب","max_results":3}'
      ```
      Expect rows that carry `product_url`.
-  4. Insert the tool row:
+  4. Create the tool through the app (Agent settings → Connectors → Supabase), with project URL `https://supabase.curemedkw.com`, anon key, and RPC allow list `agent_search_products`. That way the credential lands where the app stores it. The SQL below is only a reference for the expected row, never run as-is:
      ```sql
      insert into ai_agent_tools (user_id, name, description, connector_type, tool_type, url,
        is_enabled, read_only_mode, auth_strategy, permissions, settings)
@@ -341,7 +363,6 @@ Expect `AI Agent` and `You`. If staff rows use another marker, use that and note
        jsonb_build_object('project_url','https://supabase.curemedkw.com','schema','public',
          'rpc_allow_list','agent_search_products','max_rows',8));
      ```
-  5. Store the anon key the same way the existing Supabase tools store it (`credentials_secret_id` / `configured_secret_fields`; copy the shape of tool `9aed0acc-…`).
   6. Link the account in `ai_agent_tool_accounts` (social account `7cf1b120-5172-4377-aca2-1abe85ab1c7f`).
 
 ### Task 7: Model dry-run table
@@ -354,6 +375,8 @@ Expect `AI Agent` and `You`. If staff rows use another marker, use that and note
   - Test: an override outside a dry run is ignored; an override not in the allowed list → 400.
 - [ ] **Step 2: Probe script.** Arguments: `--conversation wa_96560003759_96555683677 --models a,b,c,...`.
   - Reads the conversation's customer turns from `ai_thread_messages` with the service role.
+  - Replays under a synthetic conversation id `dryrun_<model>_<timestamp>`, never the real one. The sandbox still upserts `ai_threads` (`index.ts:713`) and resolves (and may expire) the conversation's override.
+  - Asserts `dryRun` skips the Task 4 claims and `take_unanswered_escalation`.
   - For each model, replays each turn through the sandbox with `dryRun`, carrying the same history.
   - Writes `docs/superpowers/reports/2026-11-12-curemed-model-dryrun.md` with columns: model, turn, latency ms, reply language correct (`detectReplyLanguage` vs expected), catalog tool called with non-empty query, product link present, reply excerpt (120 chars).
   - Nothing is sent: the sandbox path never calls a sender.
