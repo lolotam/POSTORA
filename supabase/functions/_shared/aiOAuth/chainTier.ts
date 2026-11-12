@@ -50,19 +50,41 @@ async function unsupportedCode(response: Response): Promise<string> {
   return UNSUPPORTED_CODES[code] ?? "oauth_request_unsupported";
 }
 
+type CredentialOutcome = { apiKey: string } | { error: string };
+
 /**
- * Bounds credential resolution by the tier deadline. pi-ai's refresh takes no
- * abort signal (Codex sets no timeout at all), so the refresh itself keeps
- * running after the deadline; its save stays fenced by the lease token, and
- * its eventual rejection is swallowed here.
+ * Bounds the gate checks and credential resolution by the tier deadline.
+ * pi-ai's refresh takes no abort signal (Codex sets no timeout at all), so the
+ * refresh itself keeps running after the deadline; it keeps its lease
+ * (credentials.ts LEASE_SECONDS) and its save stays fenced by the lease token.
+ * Its eventual rejection is swallowed here.
  */
-function credentialWithinDeadline(work: Promise<{ apiKey: string }>, timeoutMs: number) {
+function withinDeadline(work: Promise<CredentialOutcome>, timeoutMs: number): Promise<CredentialOutcome> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   const deadline = new Promise<never>((_, reject) => {
-    timer = setTimeout(() => reject(new AiOAuthError("refresh_timeout", "credential refresh outlasted the tier deadline")), timeoutMs);
+    timer = setTimeout(() => reject(new AiOAuthError("refresh_timeout", "credential resolution outlasted the tier deadline")), timeoutMs);
   });
   work.catch(() => {});
   return Promise.race([work, deadline]).finally(() => clearTimeout(timer));
+}
+
+async function resolveTierCredential(
+  admin: SupabaseClient | undefined,
+  providerCode: string,
+  oauthProvider: NonNullable<ReturnType<typeof oauthProviderForCode>>,
+  injected: OAuthChainDeps | undefined,
+): Promise<CredentialOutcome> {
+  const enabled = injected?.enabled ?? (() => isAiProviderOAuthEnabled(admin as unknown as SupabaseClient));
+  if (!(await enabled())) return { error: "oauth_disabled" };
+  const providerActive = injected?.providerActive ?? ((code: string) => isProviderActive(admin, code));
+  if (!(await providerActive(providerCode))) return { error: "oauth_provider_disabled" };
+  const credentials = injected?.credentials ?? defaultCredentialDeps(admin as unknown as SupabaseClient);
+  try {
+    return await getFreshOAuthCredential(credentials, oauthProvider);
+  } catch (cause) {
+    // Only the settings and catalogue reads above may throw out of the tier.
+    return { error: cause instanceof AiOAuthError ? cause.code : "refresh_failed" };
+  }
 }
 
 /**
@@ -84,18 +106,20 @@ export async function callOAuthTier(
   if (!oauthProvider) return { error: "oauth_unsupported_provider" };
   const startedAt = Date.now();
 
-  const enabled = injected?.enabled ?? (() => isAiProviderOAuthEnabled(admin as unknown as SupabaseClient));
-  if (!(await enabled())) return { error: "oauth_disabled" };
-  const providerActive = injected?.providerActive ?? ((code: string) => isProviderActive(admin, code));
-  if (!(await providerActive(tier.provider))) return { error: "oauth_provider_disabled" };
+  let resolved: CredentialOutcome;
+  try {
+    resolved = await withinDeadline(resolveTierCredential(admin, tier.provider, oauthProvider, injected), timeoutMs);
+  } catch (cause) {
+    if (cause instanceof AiOAuthError) return { error: cause.code };
+    throw cause; // settings or catalogue read failure
+  }
+  if ("error" in resolved) return resolved;
 
   try {
-    const credentials = injected?.credentials ?? defaultCredentialDeps(admin as unknown as SupabaseClient);
-    const { apiKey } = await credentialWithinDeadline(getFreshOAuthCredential(credentials, oauthProvider), timeoutMs);
     const remainingMs = timeoutMs - (Date.now() - startedAt);
     if (remainingMs <= 0) return { error: "refresh_timeout" };
     const pi = injected?.pi ?? defaultPiCallDeps();
-    const response = await callPiOAuth(pi, oauthProvider, tier.model, requestBody, apiKey, remainingMs);
+    const response = await callPiOAuth(pi, oauthProvider, tier.model, requestBody, resolved.apiKey, remainingMs);
     if (response.status === 422) return { error: await unsupportedCode(response) };
     return { response };
   } catch (cause) {

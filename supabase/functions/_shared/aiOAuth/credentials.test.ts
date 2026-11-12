@@ -251,6 +251,27 @@ Deno.test("refresh 400 marks reauth_required and throws reauth_required", async 
   assertEquals(fake.row.status, "reauth_required");
 });
 
+Deno.test("a 503 whose body quotes status=400 stays retryable and the next call refreshes", async () => {
+  const fake = fakeAdmin({ credentials: { access: "a", refresh: "r", expires: 5_000 } });
+  let attempts = 0;
+  const deps = testDeps(fake, {
+    refresh: async () => {
+      if (++attempts === 1) {
+        throw new Error(
+          "Anthropic token refresh request failed. url=https://x/token; details=Error: HTTP request failed. status=503; url=https://x/token; body=retry: status=400; invalid_grant",
+        );
+      }
+      return { access: "second-access", refresh: "rotated", expires: 900_000 };
+    },
+  });
+
+  const first = await assertRejects(() => getFreshOAuthCredential(deps, "anthropic"), AiOAuthError);
+  assertEquals(first.code, "refresh_failed");
+  assertEquals(fake.row.status, "connected");
+
+  assertEquals(await getFreshOAuthCredential(deps, "anthropic"), { apiKey: "api-key-from-second-access" });
+});
+
 Deno.test("a revoked refresh whose failure cannot be recorded is not reported as reauth_required", async () => {
   const fake = fakeAdmin({ credentials: { access: "a", refresh: "revoked", expires: 5_000 } });
   const storeRpc = fake.admin.rpc.bind(fake.admin);
@@ -344,6 +365,16 @@ Deno.test("isReauthRefreshError asks for a re-login only on a 400/401 invalid_gr
     ['HTTP request failed. status=401; url=https://x/token; body={"error":"invalid_client"}', false],
     ["OpenAI Codex token refresh failed (401): Unauthorized", false],
     ['HTTP request failed. status=503; url=https://x/token; body={"error":"invalid_grant"}', false],
+    [
+      'Anthropic token refresh request failed. url=https://x/token; details=Error: HTTP request failed. status=400; url=https://x/token; body={"error":"invalid_grant"}; stack=Error',
+      true,
+    ],
+    [
+      'Anthropic token refresh request failed. url=https://x/token; details=Error: HTTP request failed. status=503; url=https://x/token; body=upstream said status=400; invalid_grant',
+      false,
+    ],
+    ['OpenAI Codex token refresh failed (503): status=400; {"error":"invalid_grant"}', false],
+    ['OpenAI Codex token refresh error: token refresh failed (401): invalid_grant', false],
     ['HTTP request failed. status=503; url=https://x/token; body={"retry_after":400}', false],
     ["OpenAI Codex token refresh failed (503): retry in 401 ms", false],
     ["OpenAI Codex token refresh error: network timeout", false],

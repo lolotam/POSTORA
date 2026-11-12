@@ -46,11 +46,24 @@ export function defaultCredentialDeps(admin: SupabaseClient): CredentialDeps {
  * means the token itself was revoked.
  */
 export function isReauthRefreshError(message: string): boolean {
-  const rejected = /(?:status=(?:400|401);|token refresh failed \((?:400|401)\))([\s\S]*)$/.exec(message);
+  const rejected = REJECTED_REFRESH.exec(message);
   return rejected !== null && rejected[1].includes("invalid_grant");
 }
 
-const LEASE_SECONDS = 30;
+/**
+ * Anchored to the start of the message so status-shaped text inside a body
+ * can never match. refreshAnthropicToken wraps the HTTP error:
+ * "Anthropic token refresh request failed. url=<TOKEN_URL>; details=Error: HTTP request failed. status=400; ...".
+ */
+const REJECTED_REFRESH =
+  /^(?:(?:Anthropic token refresh request failed\. url=[^;\s]*; details=Error: )?HTTP request failed\. status=(?:400|401); |OpenAI Codex token refresh failed \((?:400|401)\): )([\s\S]*)$/;
+
+/**
+ * Longer than any refresh pi-ai can take (Anthropic aborts at 30 s), so a
+ * caller that gave up waiting at its tier deadline cannot lose the lease to a
+ * second refresher while its own rotation is still in flight.
+ */
+const LEASE_SECONDS = 120;
 const FRESH_MARGIN_MS = 60_000;
 const WAIT_MS = 750;
 const MAX_WAIT_ROUNDS = 4;

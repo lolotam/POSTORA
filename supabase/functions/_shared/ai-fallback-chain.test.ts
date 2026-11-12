@@ -706,6 +706,16 @@ Deno.test("an oauth refresh that outlasts the tier deadline records refresh_time
   assertEquals(outcome, { error: "refresh_timeout" });
 });
 
+Deno.test("a stalled oauth gate check counts against the same tier deadline", async () => {
+  const outcome = await callOAuthTier(undefined, claudeOauthTier, { max_tokens: 10 }, 20, {
+    enabled: () => new Promise(() => {}), // the flag read never answers
+    providerActive: async () => true,
+    credentials: oauthCredentialDeps({ access: "a", refresh: "r", expires: 1_000_000 }),
+    pi: piAnswering("unused"),
+  });
+  assertEquals(outcome, { error: "refresh_timeout" });
+});
+
 Deno.test("callChatCompletion refuses Claude and a missing key without calling out", async () => {
   const original = globalThis.fetch;
   try {
