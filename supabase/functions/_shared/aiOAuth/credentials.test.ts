@@ -183,6 +183,49 @@ Deno.test("lease never released throws refresh_failed after 4 re-reads", async (
   assertEquals(sleeps, [750, 750, 750, 750]);
 });
 
+Deno.test("lease won after another worker rotated the token returns the saved token without refreshing", async () => {
+  const fake = fakeAdmin({
+    credentials: { access: "a", refresh: "spent-refresh", expires: 5_000 },
+  });
+  const rpc = fake.admin.rpc.bind(fake.admin);
+  fake.admin.rpc = (name, args) => {
+    if (name === "begin_ai_oauth_refresh") {
+      // The previous lease holder saved its rotation between our read and our lease.
+      fake.row.credentials = { access: "rotated-access", refresh: "next-refresh", expires: 900_000 };
+    }
+    return rpc(name, args);
+  };
+  const deps = testDeps(fake, {
+    refresh: async () => {
+      throw new Error("must not spend the already-rotated refresh token");
+    },
+  });
+
+  const { apiKey } = await getFreshOAuthCredential(deps, "anthropic");
+
+  assertEquals(apiKey, "api-key-from-rotated-access");
+  assertEquals(fake.row.credentials?.refresh, "next-refresh");
+});
+
+Deno.test("refresh failure stores a fixed message, never the token endpoint body", async () => {
+  const fake = fakeAdmin({
+    credentials: { access: "a", refresh: "r", expires: 5_000 },
+  });
+  const deps = testDeps(fake, {
+    refresh: async () => {
+      throw new Error('status 503: {"echo":"sk-ant-ort01-secret"}');
+    },
+  });
+
+  const error = await assertRejects(() => getFreshOAuthCredential(deps, "anthropic"), AiOAuthError);
+  assertEquals(error.code, "refresh_failed");
+  const fail = fake.calls.find((c) => c.name === "fail_ai_oauth_refresh");
+  assert(fail !== undefined);
+  assert(!String(fail.args.p_error).includes("sk-ant"), "stored error must not quote the response body");
+  assert(!error.message.includes("sk-ant"), "thrown error must not quote the response body");
+  assertEquals(fail.args.p_reauth, false);
+});
+
 Deno.test("refresh 400 marks reauth_required and throws reauth_required", async () => {
   const fake = fakeAdmin({
     credentials: { access: "a", refresh: "revoked", expires: 5_000 },

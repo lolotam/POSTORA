@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
+import { toast } from 'sonner';
 import { SubscriptionLoginSection } from './SubscriptionLoginSection';
 
 const h = vi.hoisted(() => ({
@@ -44,6 +45,7 @@ describe('SubscriptionLoginSection', () => {
     h.finish.mockReset();
     h.disconnect.mockReset();
     h.test.mockReset();
+    vi.mocked(toast.error).mockClear();
   });
 
   it('renders nothing while the feature is disabled', () => {
@@ -121,5 +123,24 @@ describe('SubscriptionLoginSection', () => {
 
     render(<SubscriptionLoginSection providerCode="openai" />);
     expect(screen.queryByText(/Claude Code's identity prompt/)).not.toBeInTheDocument();
+  });
+
+  it.each([
+    ['invalid_state', /expired or was already used/],
+    ['SOMETHING_UNKNOWN', /Could not connect the subscription/],
+  ])('turns the server code %s into a readable toast', async (code, message) => {
+    h.finish.mockRejectedValue(new Error(code));
+
+    render(<SubscriptionLoginSection providerCode="claude" />);
+    fireEvent.change(screen.getByRole('textbox'), { target: { value: 'code#state' } });
+    fireEvent.click(screen.getByRole('button', { name: /^Finish$/i }));
+
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith(expect.stringMatching(message)));
+  });
+
+  it('shows a reconnect state when the subscription needs a new login', () => {
+    h.caps = { enabled: true, providers: [{ ...claudeConnected, status: 'reauth_required' }] };
+    render(<SubscriptionLoginSection providerCode="claude" />);
+    expect(screen.getByText('Reconnect required')).toBeInTheDocument();
   });
 });

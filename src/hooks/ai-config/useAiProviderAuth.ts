@@ -10,11 +10,12 @@ export type { AiOAuthCapabilities, OAuthProviderId };
 /** One cache identity for every subscription-auth read and write. */
 export const AI_PROVIDER_AUTH_QUERY_KEY = ["ai-provider-auth"] as const;
 
-export function useAiProviderAuthCapabilities() {
+export function useAiProviderAuthCapabilities({ enabled = true }: { enabled?: boolean } = {}) {
   return useQuery({
     queryKey: AI_PROVIDER_AUTH_QUERY_KEY,
     queryFn: () => aiProviderAuthGateway.capabilities(),
     retry: false,
+    enabled,
   });
 }
 

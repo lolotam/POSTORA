@@ -103,7 +103,6 @@ interface DefaultModelSelectorProps {
   onSetDefault: (providerCode: string, modelId: string, authMethod?: AiAuthMethod) => void;
   onSetFallback: (providerCode: string, modelId: string, authMethod?: AiAuthMethod) => void;
   onSetFallback2: (providerCode: string, modelId: string, authMethod?: AiAuthMethod) => void;
-  /** Persist the primary model's knobs. Receives the ai_models row id. */
   /**
    * Persist the primary model's knobs. Omit to hide the parameter controls
    * entirely -- a category whose engine does not read ai_models.admin_params
@@ -288,22 +287,31 @@ interface TierSelectorProps {
 }
 
 function TierSelector({ label, icon, providers, allProviders, filteredModels, currentModel, onSelect, isSaving, category, modelNote }: TierSelectorProps) {
-  const { data: caps } = useAiProviderAuthCapabilities();
+  const oauthCategory = isOAuthCategory(category);
+  const { data: caps } = useAiProviderAuthCapabilities({ enabled: oauthCategory });
 
   // A provider that was never connected has nothing to offer, so it is not
   // listed at all. One that needs a reconnect stays visible but disabled.
+  // With the flag off, or in a category that cannot be served by a
+  // subscription, no Auth entry exists, so a stored oauth tier shows as unset.
   const oauthProviders = useMemo(
-    () => (caps?.providers ?? []).filter(p => p.status === 'connected' || p.status === 'reauth_required'),
-    [caps],
+    () => caps?.enabled && oauthCategory
+      ? caps.providers.filter(p => p.status === 'connected' || p.status === 'reauth_required')
+      : [],
+    [caps, oauthCategory],
   );
 
-  const showAuthGroup = Boolean(caps?.enabled) && isOAuthCategory(category) && oauthProviders.length > 0;
+  const showAuthGroup = oauthProviders.length > 0;
+  // An oauth tier must never read as an API-key tier of the same provider: it
+  // would look valid while the subscription is gone, and Radix would swallow a
+  // re-pick of the same model as "unchanged".
+  const apiModelId = currentModel?.auth_method === 'oauth' ? '' : currentModel?.model_id || '';
 
   const initialSelection = useMemo(() => {
     if (!currentModel?.provider_code) return '';
     if (currentModel.auth_method === 'oauth') {
       const known = oauthProviders.some(p => p.provider_code === currentModel.provider_code);
-      if (known) return `oauth:${currentModel.provider_code}`;
+      return known ? `oauth:${currentModel.provider_code}` : '';
     }
     const p = providers.find(p => p.provider_code === currentModel.provider_code);
     return p ? `api:${p.id}` : '';
@@ -411,7 +419,7 @@ function TierSelector({ label, icon, providers, allProviders, filteredModels, cu
         {selectedOAuthCode ? (
           <Select
             value={currentModel?.auth_method === 'oauth' && currentModel?.provider_code === selectedOAuthCode ? currentModel?.model_id || '' : ''}
-            onValueChange={handleModelChange} disabled={isSaving}>
+            onValueChange={handleModelChange} disabled={isSaving || selectedOAuthCapability?.status !== 'connected'}>
             <SelectTrigger className="w-full text-xs h-8">
               <SelectValue placeholder="Model..." />
             </SelectTrigger>
@@ -430,8 +438,8 @@ function TierSelector({ label, icon, providers, allProviders, filteredModels, cu
                 className="w-full justify-between font-normal text-xs h-8" disabled={isSaving || orLoading}>
                 {orLoading ? (
                   <span className="flex items-center gap-1"><Loader2 className="w-3 h-3 animate-spin" />Loading...</span>
-                ) : currentModel?.provider_code === 'openrouter' && currentModel?.model_id ? (
-                  <span className="truncate text-xs">{currentModel.model_id}</span>
+                ) : currentModel?.provider_code === 'openrouter' && apiModelId ? (
+                  <span className="truncate text-xs">{apiModelId}</span>
                 ) : 'Model...'}
                 <ChevronsUpDown className="ms-1 h-3 w-3 shrink-0 opacity-50" />
               </Button>
@@ -460,11 +468,11 @@ function TierSelector({ label, icon, providers, allProviders, filteredModels, cu
         ) : selectedProviderId && providerModels.length > LARGE_PROVIDER_THRESHOLD ? (
           <SearchableModelPicker
             models={providerModels}
-            value={currentModel?.provider_code === selectedProvider?.provider_code ? currentModel?.model_id || '' : ''}
+            value={currentModel?.provider_code === selectedProvider?.provider_code ? apiModelId : ''}
             onSelect={handleModelChange} disabled={isSaving} modelNote={modelNote} />
         ) : selectedProviderId ? (
           <Select
-            value={currentModel?.provider_code === selectedProvider?.provider_code ? currentModel?.model_id || '' : ''}
+            value={currentModel?.provider_code === selectedProvider?.provider_code ? apiModelId : ''}
             onValueChange={handleModelChange} disabled={isSaving}>
             <SelectTrigger className="w-full text-xs h-8">
               <SelectValue placeholder="Model..." />

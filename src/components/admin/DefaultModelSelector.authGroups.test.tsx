@@ -1,14 +1,18 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { Bot } from 'lucide-react';
 import { DefaultModelSelector } from './DefaultModelSelector';
 
-const caps = vi.hoisted(() => ({
-  current: { enabled: false, providers: [] as unknown[] },
+// The capabilities come from the ai-provider-auth edge function, so the
+// network boundary is the supabase client, not the project's own hook.
+const { invoke, caps } = vi.hoisted(() => ({
+  invoke: vi.fn(),
+  caps: { current: { enabled: false, providers: [] as unknown[] } },
 }));
 
-vi.mock('@/hooks/ai-config/useAiProviderAuth', () => ({
-  useAiProviderAuthCapabilities: () => ({ data: caps.current }),
+vi.mock('@/integrations/supabase/client', () => ({
+  supabase: { functions: { invoke } },
 }));
 
 vi.mock('@/hooks/useOpenRouterModels', () => ({
@@ -63,15 +67,19 @@ const openaiCapability = {
   models: ['gpt-5.2-codex'],
 };
 
+type Category = 'chat' | 'image' | 'agent' | 'agent_triage';
+
 function renderSelector(
-  category: 'chat' | 'image',
+  category: Category,
   onSetDefault = vi.fn(),
   currentDefault: unknown = null,
 ) {
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   render(
+    <QueryClientProvider client={queryClient}>
     <DefaultModelSelector
       category={category}
-      capability={category}
+      capability={category === 'image' ? 'image' : 'chat'}
       title="Chat Models"
       description=""
       icon={Bot}
@@ -83,7 +91,8 @@ function renderSelector(
       onSetDefault={onSetDefault}
       onSetFallback={vi.fn()}
       onSetFallback2={vi.fn()}
-    />,
+    />
+    </QueryClientProvider>,
   );
   const primarySection = screen.getByText('Primary').closest('div.space-y-2') as HTMLElement;
   return { primarySection, onSetDefault };
@@ -95,7 +104,10 @@ function openSelect(trigger: HTMLElement) {
   fireEvent.click(trigger);
 }
 
-async function openProviderDropdown(primarySection: HTMLElement) {
+async function openProviderDropdown(primarySection: HTMLElement, capabilitiesRequested = true) {
+  // Let the capabilities request settle so the Auth group has its answer.
+  if (capabilitiesRequested) await waitFor(() => expect(invoke).toHaveBeenCalled());
+  await new Promise((resolve) => setTimeout(resolve, 0));
   const providerTrigger = within(primarySection).getByRole('combobox');
   openSelect(providerTrigger);
   await waitFor(() => expect(screen.getAllByRole('option').length).toBeGreaterThan(0));
@@ -110,10 +122,13 @@ async function pickOption(name: RegExp) {
 describe('DefaultModelSelector — provider dropdown groups', () => {
   beforeEach(() => {
     caps.current = { enabled: false, providers: [] };
+    invoke.mockReset();
+    invoke.mockImplementation(async () => ({ data: caps.current, error: null }));
   });
 
   it('shows only the API key group while the flag is off', async () => {
     const { primarySection } = renderSelector('chat');
+    await waitFor(() => expect(invoke).toHaveBeenCalled());
     await openProviderDropdown(primarySection);
 
     expect(screen.getByText('API key')).toBeInTheDocument();
@@ -123,18 +138,39 @@ describe('DefaultModelSelector — provider dropdown groups', () => {
   it('lists a connected subscription under the Auth group and hides a not-connected one', async () => {
     caps.current = { enabled: true, providers: [claudeCapability, openaiCapability] };
     const { primarySection } = renderSelector('chat');
+    await waitFor(() => expect(invoke).toHaveBeenCalled());
     await openProviderDropdown(primarySection);
 
-    expect(screen.getByText('Auth (subscription)')).toBeInTheDocument();
+    expect(await screen.findByText('Auth (subscription)')).toBeInTheDocument();
     expect(screen.getByRole('option', { name: /Anthropic \(Claude\) — subscription/ })).toBeInTheDocument();
     expect(screen.queryByRole('option', { name: /OpenAI — subscription/ })).not.toBeInTheDocument();
   });
 
-  it('never shows the Auth group for a non-text category', async () => {
+  it.each<[Category, boolean]>([
+    ['agent_triage', true],
+    ['agent', false],
+    ['image', false],
+  ])('in the %s category the Auth group shows: %s', async (category, shown) => {
     caps.current = { enabled: true, providers: [claudeCapability] };
-    const { primarySection } = renderSelector('image');
+    const { primarySection } = renderSelector(category);
+    await openProviderDropdown(primarySection, shown);
+
+    if (shown) expect(await screen.findByText('Auth (subscription)')).toBeInTheDocument();
+    else expect(screen.queryByText('Auth (subscription)')).not.toBeInTheDocument();
+    // A category no subscription can serve never asks for the capabilities.
+    expect(invoke).toHaveBeenCalledTimes(shown ? 1 : 0);
+  });
+
+  it.each([
+    ['fails', () => Promise.reject(new Error('network down'))],
+    ['is still loading', () => new Promise(() => {})],
+  ])('keeps the API key providers when the capabilities request %s', async (_label, answer) => {
+    invoke.mockImplementation(answer);
+    const { primarySection } = renderSelector('chat');
+    await waitFor(() => expect(invoke).toHaveBeenCalled());
     await openProviderDropdown(primarySection);
 
+    expect(screen.getByRole('option', { name: /^OpenAI/ })).toBeInTheDocument();
     expect(screen.queryByText('Auth (subscription)')).not.toBeInTheDocument();
   });
 
@@ -162,9 +198,10 @@ describe('DefaultModelSelector — provider dropdown groups', () => {
       return triggers[1];
     });
     openSelect(modelTrigger);
-    await pickOption(/claude-sonnet-4-5/);
+    // claude-opus-5 exists only in the subscription's model list, not in ai_models.
+    await pickOption(/claude-opus-5/);
 
-    expect(onSetDefault).toHaveBeenCalledWith('claude', 'claude-sonnet-4-5', 'oauth');
+    expect(onSetDefault).toHaveBeenCalledWith('claude', 'claude-opus-5', 'oauth');
   });
 
   it('saves the tier without an auth method when an API key item is picked', async () => {
@@ -194,6 +231,60 @@ describe('DefaultModelSelector — provider dropdown groups', () => {
     });
 
     const providerTrigger = within(primarySection).getAllByRole('combobox')[0];
-    expect(providerTrigger).toHaveTextContent('Anthropic (Claude) — subscription');
+    await waitFor(() => expect(providerTrigger).toHaveTextContent('Anthropic (Claude) — subscription'));
+  });
+
+  it.each([
+    ['the flag is off', { enabled: false, providers: [claudeCapability] }],
+    ['the subscription was disconnected', { enabled: true, providers: [{ ...claudeCapability, status: 'not_connected' }] }],
+  ])('leaves a stored oauth tier unset instead of showing it as an API key tier when %s', async (_label, answer) => {
+    caps.current = answer;
+    const { primarySection } = renderSelector('chat', vi.fn(), {
+      provider_code: 'claude',
+      model_id: 'claude-sonnet-4-5',
+      auth_method: 'oauth',
+    });
+    await waitFor(() => expect(invoke).toHaveBeenCalled());
+
+    const triggers = within(primarySection).getAllByRole('combobox');
+    expect(triggers).toHaveLength(1);
+    expect(triggers[0]).not.toHaveTextContent('Anthropic API');
+  });
+
+  it('converts an oauth tier back to the API key for the same model', async () => {
+    caps.current = { enabled: true, providers: [claudeCapability] };
+    const { primarySection, onSetDefault } = renderSelector('chat', vi.fn(), {
+      provider_code: 'claude',
+      model_id: 'claude-sonnet-4-5',
+      auth_method: 'oauth',
+    });
+    const providerTrigger = within(primarySection).getAllByRole('combobox')[0];
+    await waitFor(() => expect(providerTrigger).toHaveTextContent('Anthropic (Claude) — subscription'));
+
+    openSelect(providerTrigger);
+    await pickOption(/^Anthropic API/);
+    const modelTrigger = within(primarySection).getAllByRole('combobox')[1];
+    expect(modelTrigger).toHaveTextContent('Model...');
+    openSelect(modelTrigger);
+    await pickOption(/Claude Sonnet 4.5/);
+
+    expect(onSetDefault).toHaveBeenCalledWith('claude', 'claude-sonnet-4-5');
+    expect(onSetDefault.mock.calls[0][2]).toBeUndefined();
+  });
+
+  it('disables the model list of a subscription that needs a reconnect', async () => {
+    caps.current = { enabled: true, providers: [{ ...claudeCapability, status: 'reauth_required' }] };
+    const { primarySection } = renderSelector('chat', vi.fn(), {
+      provider_code: 'claude',
+      model_id: 'claude-sonnet-4-5',
+      auth_method: 'oauth',
+    });
+
+    const modelTrigger = await waitFor(() => {
+      const triggers = within(primarySection).getAllByRole('combobox');
+      expect(triggers).toHaveLength(2);
+      return triggers[1];
+    });
+    expect(modelTrigger).toBeDisabled();
   });
 });

@@ -23,8 +23,24 @@ import {
 
 const OAUTH_PROVIDER_FOR_CODE: Record<'claude' | 'openai', OAuthProviderId> = {
   claude: 'anthropic',
-  'openai': 'openai-codex',
+  openai: 'openai-codex',
 };
+
+// The edge function answers with stable codes; the admin reads sentences.
+const ERROR_MESSAGES: Record<string, string> = {
+  invalid_state: 'This login link expired or was already used. Open the login again.',
+  invalid_code: 'The pasted address has no login code. Paste the full address from the new tab.',
+  exchange_failed: 'The provider refused the login code. Open the login again.',
+  oauth_disabled: 'Subscription login is switched off.',
+  not_connected: 'This subscription is not connected.',
+  reauth_required: 'The subscription needs a new login.',
+  refresh_failed: 'The provider did not renew the login. Try again in a minute.',
+};
+
+function describeError(error: unknown, fallback: string): string {
+  const code = error instanceof Error ? error.message : typeof error === 'string' ? error : '';
+  return ERROR_MESSAGES[code] ?? fallback;
+}
 
 /**
  * Subscription login for one provider.
@@ -60,7 +76,7 @@ export function SubscriptionLoginSection({ providerCode }: { providerCode: 'clau
       window.open(authorize_url, '_blank', 'noopener,noreferrer');
       toast.success('Approve the login in the new tab, then paste the address here');
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : 'Could not start the login');
+      toast.error(describeError(error, 'Could not start the login'));
     }
   };
 
@@ -71,7 +87,7 @@ export function SubscriptionLoginSection({ providerCode }: { providerCode: 'clau
       setPasted('');
       toast.success('Subscription connected');
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : 'Could not connect the subscription');
+      toast.error(describeError(error, 'Could not connect the subscription'));
     }
   };
 
@@ -81,7 +97,7 @@ export function SubscriptionLoginSection({ providerCode }: { providerCode: 'clau
       await disconnect.mutateAsync(oauthProvider);
       toast.success('Subscription disconnected');
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : 'Could not disconnect the subscription');
+      toast.error(describeError(error, 'Could not disconnect the subscription'));
     }
   };
 
@@ -90,9 +106,9 @@ export function SubscriptionLoginSection({ providerCode }: { providerCode: 'clau
     try {
       const result = await testConnection.mutateAsync({ provider: oauthProvider, modelId: effectiveTestModel });
       if (result.ok) toast.success(`Subscription answered in ${result.latency_ms}ms`);
-      else toast.error(result.error || 'The subscription did not answer');
+      else toast.error(describeError(result.error, result.error || 'The subscription did not answer'));
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : 'The test failed');
+      toast.error(describeError(error, 'The test failed'));
     }
   };
 

@@ -106,12 +106,18 @@ export async function getFreshOAuthCredential(
   if (leaseError) throw new AiOAuthError("refresh_failed", `lease rpc failed: ${leaseError.message}`);
 
   if (wonLease === true) {
-    if (!credentials.refresh) {
+    // Refresh tokens rotate: a worker that held the previous lease may already
+    // have spent the token read above, so the refresh must use the stored one.
+    const current = await readCredentials(deps, provider);
+    if (!current) throw new AiOAuthError("not_connected", provider);
+    if (current.status === "reauth_required") throw new AiOAuthError("reauth_required", provider);
+    if (isFresh(current, deps.now())) return { apiKey: deps.getApiKey(provider, current) };
+    if (!current.refresh) {
       // Nothing to rotate: only a fresh browser login can fix this row.
       await throwAfterFail(deps, provider, "reauth_required", "stored credential carries no refresh token", true);
     }
     try {
-      const rotated = await deps.refresh(provider, credentials.refresh);
+      const rotated = await deps.refresh(provider, current.refresh);
       const { error } = await deps.admin.rpc("save_ai_oauth_credentials", {
         p_oauth_provider: provider,
         p_provider_code: provider === "anthropic" ? "claude" : "openai",
@@ -123,11 +129,14 @@ export async function getFreshOAuthCredential(
       if (error) throw new AiOAuthError("refresh_failed", `could not save rotated credentials: ${error.message}`);
       return { apiKey: deps.getApiKey(provider, rotated) };
     } catch (cause) {
-      const message = cause instanceof Error ? cause.message : "refresh failed";
+      if (cause instanceof AiOAuthError) await throwAfterFail(deps, provider, cause.code, cause.message, false);
+      // pi-ai's message can quote the token endpoint's response body, so only
+      // a fixed sentence is stored and returned.
+      const message = cause instanceof Error ? cause.message : "";
       if (isReauthRefreshError(message)) {
         await throwAfterFail(deps, provider, "reauth_required", "refresh token was rejected by the provider", true);
       }
-      await throwAfterFail(deps, provider, "refresh_failed", message, false);
+      await throwAfterFail(deps, provider, "refresh_failed", "the provider token endpoint refused the refresh", false);
     }
   }
 
