@@ -18,6 +18,37 @@ export interface LoginDeps {
 const LOGIN_TTL_MS = 10 * 60 * 1000;
 // pi-ai's own expiry margin: refresh five minutes before the provider says so.
 const EXPIRY_SAFETY_MS = 5 * 60 * 1000;
+// Bounds the whole exchange, response body included. The authorization code is
+// single use, so a timed-out exchange is reported, never retried.
+const EXCHANGE_TIMEOUT_MS = 15_000;
+
+/** One bounded POST to the token endpoint; the signal also cuts a stalled body read. */
+async function exchangeCode(
+  deps: LoginDeps,
+  request: { url: string; init: RequestInit },
+): Promise<OAuthTokenResponse> {
+  try {
+    const response = await deps.fetch(request.url, {
+      ...request.init,
+      signal: AbortSignal.timeout(EXCHANGE_TIMEOUT_MS),
+    });
+    if (!response.ok) {
+      const body = await response.text().catch(() => "");
+      throw new AiOAuthError(
+        "exchange_failed",
+        redactProviderError(`token exchange failed with status ${response.status}: ${body}`, ""),
+      );
+    }
+    return (await response.json()) as OAuthTokenResponse;
+  } catch (cause) {
+    if (cause instanceof AiOAuthError) throw cause;
+    const timedOut = cause instanceof DOMException && cause.name === "TimeoutError";
+    throw new AiOAuthError(
+      "exchange_failed",
+      timedOut ? "token exchange timed out" : "token exchange request failed",
+    );
+  }
+}
 
 /**
  * Parses what the admin pasted after approving in the browser. Accepts, in
@@ -118,16 +149,7 @@ export async function finishLogin(
   }
   const stored = consumed.data as { code_verifier: string };
 
-  const { url, init } = client.exchangeRequest(parsed.code, parsed.state, stored.code_verifier);
-  const response = await deps.fetch(url, init);
-  if (!response.ok) {
-    const body = await response.text().catch(() => "");
-    throw new AiOAuthError(
-      "exchange_failed",
-      redactProviderError(`token exchange failed with status ${response.status}: ${body}`, ""),
-    );
-  }
-  const token = (await response.json()) as OAuthTokenResponse;
+  const token = await exchangeCode(deps, client.exchangeRequest(parsed.code, parsed.state, stored.code_verifier));
   const { access_token: access, refresh_token: refresh, expires_in: expiresIn } = token;
   if (!access || !refresh || typeof expiresIn !== "number") {
     throw new AiOAuthError("exchange_failed", "token response is missing required fields");

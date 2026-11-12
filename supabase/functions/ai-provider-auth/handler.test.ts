@@ -13,7 +13,10 @@ function baseDeps(overrides: Partial<HandlerDeps> = {}): HandlerDeps {
       oauthProvider === "anthropic"
         ? ["claude-sonnet-4-5", "claude-opus-5"]
         : ["gpt-5.2-codex"],
-    providerName: async (providerCode) => (providerCode === "claude" ? "Anthropic API" : "OpenAI API"),
+    providerInfo: async (providerCode) => ({
+      name: providerCode === "claude" ? "Anthropic API" : "OpenAI API",
+      active: providerCode === "claude",
+    }),
     statuses: async () => [
       {
         oauth_provider: "anthropic",
@@ -95,6 +98,9 @@ Deno.test("capabilities lists only anthropic and openai-codex and never includes
   const anthropic = body.providers[0];
   assertEquals(anthropic.provider_code, "claude");
   assertEquals(anthropic.name, "Anthropic API");
+  assertEquals(anthropic.active, true);
+  const codex = body.providers.find((p: { oauth_provider: string }) => p.oauth_provider === "openai-codex");
+  assertEquals(codex.active, false, "a provider the admin switched off is reported inactive");
   assertEquals(anthropic.status, "connected");
   assertEquals(anthropic.account_label, "me@example.com");
   assertEquals(anthropic.models, ["claude-sonnet-4-5", "claude-opus-5"]);
@@ -129,10 +135,17 @@ Deno.test("finish maps AiOAuthError invalid_state to 400 with code", async () =>
 });
 
 Deno.test("finish returns the connected account label", async () => {
+  let finishArgs: { provider: string; pasted: string; userId: string } | null = null;
   const response = await callHandler(
     { action: "finish", oauth_provider: "openai-codex", pasted: "code#state" },
-    baseDeps({ finish: async () => ({ accountLabel: "dev@example.com" }) }),
+    baseDeps({
+      finish: async (provider, pasted, userId) => {
+        finishArgs = { provider, pasted, userId };
+        return { accountLabel: "dev@example.com" };
+      },
+    }),
   );
+  assertEquals(finishArgs, { provider: "openai-codex", pasted: "code#state", userId: USER_ID });
   assertEquals(response.status, 200);
   const body = await response.json();
   assertEquals(body.status, "connected");

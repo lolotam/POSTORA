@@ -9,7 +9,7 @@ vi.mock("@/integrations/supabase/client", () => ({
   supabase: { functions: { invoke } },
 }));
 
-import { aiProviderAuthGateway } from "@/features/ai-providers/infrastructure/aiProviderAuthGateway";
+import { aiProviderAuthGateway, INVALID_RESPONSE } from "@/features/ai-providers/infrastructure/aiProviderAuthGateway";
 import {
   useAiProviderAuthCapabilities,
   useDisconnectAiOAuth,
@@ -61,6 +61,19 @@ describe("aiProviderAuthGateway", () => {
     invoke.mockResolvedValue({ data: null, error: { context } });
 
     await expect(aiProviderAuthGateway.finish("anthropic", "code#state")).rejects.toThrow("invalid_state");
+  });
+
+  it.each([
+    ["a capabilities answer without the provider list", "capabilities", { enabled: true }],
+    ["a start answer whose authorize_url is not a URL", "start", { authorize_url: "not a url" }],
+  ])("rejects %s instead of handing it to the UI", async (_label, action, data) => {
+    invoke.mockResolvedValue({ data, error: null });
+
+    const call = action === "start"
+      ? aiProviderAuthGateway.start("anthropic")
+      : aiProviderAuthGateway.capabilities();
+
+    await expect(call).rejects.toThrow(INVALID_RESPONSE);
   });
 
   it("falls back to a generic message when the server sent no envelope", async () => {

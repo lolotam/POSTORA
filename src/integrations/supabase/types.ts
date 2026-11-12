@@ -10991,13 +10991,27 @@ export type Database = {
         Args: { p_oauth_provider: string }
         Returns: Json
       }
-      begin_ai_oauth_refresh: {
+      claim_ai_oauth_refresh: {
         Args: { p_oauth_provider: string; p_lease_seconds: number }
+        Returns: string | null
+      }
+      complete_ai_oauth_refresh: {
+        Args: {
+          p_oauth_provider: string
+          p_lease_token: string
+          p_credentials: Json
+          p_expires_at: string | null
+        }
         Returns: boolean
       }
       fail_ai_oauth_refresh: {
-        Args: { p_oauth_provider: string; p_error: string; p_reauth: boolean }
-        Returns: undefined
+        Args: {
+          p_oauth_provider: string
+          p_lease_token: string
+          p_error: string
+          p_reauth: boolean
+        }
+        Returns: boolean
       }
       delete_ai_oauth_connection: {
         Args: { p_oauth_provider: string }

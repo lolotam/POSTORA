@@ -146,6 +146,7 @@ Deno.test("body with tools returns 422 without calling complete", async () => {
   );
 
   assertEquals(response.status, 422);
+  assertEquals((await response.json()).error.code, "tools_unsupported");
   assertEquals(completeCalls, 0);
   assertEquals(captured.model, undefined);
 });
@@ -202,13 +203,40 @@ Deno.test("timeout error returns 504", async () => {
   assertEquals(response.status, 504);
 });
 
-Deno.test("passes temperature and max_tokens as temperature/maxTokens", async () => {
+Deno.test("passes temperature and the output cap as temperature/maxTokens", async () => {
   const { deps, captured } = captureDeps();
-  await callPiOAuth(deps, "openai-codex", "gpt-5.2-codex", BODY, "key-1", 1000);
+  await callPiOAuth(deps, "anthropic", "claude-sonnet-4-5", BODY, "key-1", 1000);
   assertEquals(captured.options.temperature, 0.4);
   assertEquals(captured.options.maxTokens, 128);
   assertEquals(captured.options.apiKey, "key-1");
   assert(captured.options.signal instanceof AbortSignal);
+});
+
+Deno.test("max_completion_tokens is honoured as the output cap", async () => {
+  const { deps, captured } = captureDeps();
+  const { max_tokens: _dropped, ...rest } = BODY;
+  await callPiOAuth(deps, "anthropic", "claude-sonnet-4-5", { ...rest, max_completion_tokens: 64 }, "key-1", 1000);
+  assertEquals(captured.options.maxTokens, 64);
+});
+
+Deno.test("a Codex request with an output cap is refused, since pi-ai cannot enforce it", async () => {
+  const { deps, captured } = captureDeps();
+  const { max_tokens: _dropped, ...rest } = BODY;
+  const capped = await callPiOAuth(deps, "openai-codex", "gpt-5.2-codex", { ...rest, max_completion_tokens: 200 }, "k", 1000);
+  assertEquals(capped.status, 422);
+  assertEquals((await capped.json()).error.code, "max_tokens_unsupported");
+  assertEquals(captured.model, undefined, "complete must not run");
+
+  const uncapped = await callPiOAuth(deps, "openai-codex", "gpt-5.2-codex", rest, "k", 1000);
+  assertEquals(uncapped.status, 200);
+});
+
+Deno.test("prompt_tokens includes cached prompt tokens", async () => {
+  const { deps } = captureDeps({ usage: { input: 100, output: 10, cacheRead: 900, cacheWrite: 50, totalTokens: 1060 } });
+  const response = await callPiOAuth(deps, "anthropic", "claude-sonnet-4-5", BODY, "key-1", 1000);
+  const json = await response.json();
+  assertEquals(json.usage.prompt_tokens, 1050);
+  assertEquals(json.usage.total_tokens, 1060);
 });
 
 Deno.test("defaultPiCallDeps resolves a real pi model", () => {

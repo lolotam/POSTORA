@@ -35,9 +35,15 @@ export function defaultCredentialDeps(admin: SupabaseClient): CredentialDeps {
   };
 }
 
-/** pi-ai throws an Error whose message carries the HTTP status of the token URL. */
+/**
+ * pi-ai 0.73.1 puts the token endpoint's HTTP status in a fixed position:
+ * Anthropic "HTTP request failed. status=400; url=...; body=...", Codex
+ * "OpenAI Codex token refresh failed (401): ...". Only that position is read:
+ * the response body follows it and can quote any number, so a transient 503
+ * whose body mentions 400 must stay a retryable failure.
+ */
 export function isReauthRefreshError(message: string): boolean {
-  return /\b(400|401)\b|invalid_grant/i.test(message);
+  return /status=(400|401);|token refresh failed \((400|401)\)/.test(message);
 }
 
 const LEASE_SECONDS = 30;
@@ -66,19 +72,63 @@ async function readCredentials(
   return data as StoredCredentials;
 }
 
+interface Lease {
+  provider: OAuthProviderId;
+  token: string;
+}
+
+/** Records the failure on the row only while this caller still holds the lease. */
 async function throwAfterFail(
   deps: CredentialDeps,
-  provider: OAuthProviderId,
+  lease: Lease,
   code: AiOAuthErrorCode,
   message: string,
   reauth: boolean,
 ): Promise<never> {
   await deps.admin.rpc("fail_ai_oauth_refresh", {
-    p_oauth_provider: provider,
+    p_oauth_provider: lease.provider,
+    p_lease_token: lease.token,
     p_error: message,
     p_reauth: reauth,
   });
   throw new AiOAuthError(code, message);
+}
+
+/**
+ * Rotates the stored refresh token under the lease. The save is fenced on the
+ * lease token: a disconnect or reconnect while the provider call is in flight
+ * clears the token, so this refresh writes nothing and is reported as failed.
+ */
+async function refreshUnderLease(
+  deps: CredentialDeps,
+  lease: Lease,
+  current: StoredCredentials,
+): Promise<{ apiKey: string }> {
+  if (!current.refresh) {
+    // Nothing to rotate: only a fresh browser login can fix this row.
+    await throwAfterFail(deps, lease, "reauth_required", "stored credential carries no refresh token", true);
+  }
+  try {
+    const rotated = await deps.refresh(lease.provider, current.refresh);
+    const { data: saved, error } = await deps.admin.rpc("complete_ai_oauth_refresh", {
+      p_oauth_provider: lease.provider,
+      p_lease_token: lease.token,
+      p_credentials: rotated,
+      p_expires_at: new Date(rotated.expires).toISOString(),
+    });
+    if (error) throw new AiOAuthError("refresh_failed", `could not save rotated credentials: ${error.message}`);
+    if (saved !== true) throw new AiOAuthError("refresh_failed", "the connection changed while refreshing");
+    return { apiKey: deps.getApiKey(lease.provider, rotated) };
+  } catch (cause) {
+    if (cause instanceof AiOAuthError) await throwAfterFail(deps, lease, cause.code, cause.message, false);
+    // pi-ai's message can quote the token endpoint's response body, so only
+    // a fixed sentence is stored and returned.
+    const message = cause instanceof Error ? cause.message : "";
+    if (isReauthRefreshError(message)) {
+      await throwAfterFail(deps, lease, "reauth_required", "refresh token was rejected by the provider", true);
+    }
+    return await throwAfterFail(deps, lease, "refresh_failed", "the provider token endpoint refused the refresh", false);
+  }
 }
 
 /**
@@ -99,45 +149,20 @@ export async function getFreshOAuthCredential(
     return { apiKey: deps.getApiKey(provider, credentials) };
   }
 
-  const { data: wonLease, error: leaseError } = await deps.admin.rpc("begin_ai_oauth_refresh", {
+  const { data: leaseToken, error: leaseError } = await deps.admin.rpc("claim_ai_oauth_refresh", {
     p_oauth_provider: provider,
     p_lease_seconds: LEASE_SECONDS,
   });
   if (leaseError) throw new AiOAuthError("refresh_failed", `lease rpc failed: ${leaseError.message}`);
 
-  if (wonLease === true) {
+  if (typeof leaseToken === "string") {
     // Refresh tokens rotate: a worker that held the previous lease may already
     // have spent the token read above, so the refresh must use the stored one.
     const current = await readCredentials(deps, provider);
     if (!current) throw new AiOAuthError("not_connected", provider);
     if (current.status === "reauth_required") throw new AiOAuthError("reauth_required", provider);
     if (isFresh(current, deps.now())) return { apiKey: deps.getApiKey(provider, current) };
-    if (!current.refresh) {
-      // Nothing to rotate: only a fresh browser login can fix this row.
-      await throwAfterFail(deps, provider, "reauth_required", "stored credential carries no refresh token", true);
-    }
-    try {
-      const rotated = await deps.refresh(provider, current.refresh);
-      const { error } = await deps.admin.rpc("save_ai_oauth_credentials", {
-        p_oauth_provider: provider,
-        p_provider_code: provider === "anthropic" ? "claude" : "openai",
-        p_credentials: rotated,
-        p_account_label: null,
-        p_expires_at: new Date(rotated.expires).toISOString(),
-        p_user: null,
-      });
-      if (error) throw new AiOAuthError("refresh_failed", `could not save rotated credentials: ${error.message}`);
-      return { apiKey: deps.getApiKey(provider, rotated) };
-    } catch (cause) {
-      if (cause instanceof AiOAuthError) await throwAfterFail(deps, provider, cause.code, cause.message, false);
-      // pi-ai's message can quote the token endpoint's response body, so only
-      // a fixed sentence is stored and returned.
-      const message = cause instanceof Error ? cause.message : "";
-      if (isReauthRefreshError(message)) {
-        await throwAfterFail(deps, provider, "reauth_required", "refresh token was rejected by the provider", true);
-      }
-      await throwAfterFail(deps, provider, "refresh_failed", "the provider token endpoint refused the refresh", false);
-    }
+    return await refreshUnderLease(deps, { provider, token: leaseToken }, current);
   }
 
   // Lost the lease: a concurrent caller is refreshing. Wait, re-read, repeat.

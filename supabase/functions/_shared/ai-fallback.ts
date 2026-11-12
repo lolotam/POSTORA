@@ -3,7 +3,7 @@ import { AI_USER_KEY_INVALID, redactProviderError } from "./ai-routing-errors.ts
 import type { SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2";
 import type { AiRoutingAdmin } from "./ai-user-routing.ts";
 import type { OAuthChainDeps } from "./aiOAuth/chainTier.ts";
-import { callOAuthTier } from "./aiOAuth/chainTier.ts";
+import { callOAuthTier, isOAuthTierModel } from "./aiOAuth/chainTier.ts";
 import { BUILTIN_CHAT_PROVIDERS, loadOpenAiCompatibleBase } from "./providerEndpoint.ts";
 import { resolveProviderKey } from "./providerKeys.ts";
 
@@ -258,7 +258,17 @@ export async function fetchCategoryAiSettings(supabaseAdmin: any, category: stri
   // silently replaced chat's known-good floor with an unvalidated model. A stale setting
   // must not be able to take out the last line of defence for every AI category.
   let useConfiguredLastResort = false;
-  if (configuredLastResortProvider && configuredLastResortModel) {
+  if (configuredLastResortAuthMethod === 'oauth') {
+    // A subscription model has no ai_models row; the subscription's own model
+    // registry is its catalogue.
+    useConfiguredLastResort = isOAuthTierModel(configuredLastResortProvider, configuredLastResortModel);
+    if (!useConfiguredLastResort) {
+      console.warn(
+        `[ai-fallback] ignoring ${category} third tier ` +
+        `${configuredLastResortProvider}/${configuredLastResortModel}: not a subscription model`,
+      );
+    }
+  } else if (configuredLastResortProvider && configuredLastResortModel) {
     const { data: known, error: modelError } = await supabaseAdmin
       .from('ai_models')
       .select('id, ai_providers!inner(provider_code)')

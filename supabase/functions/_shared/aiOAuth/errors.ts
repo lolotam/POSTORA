@@ -2,6 +2,7 @@ export type AiOAuthErrorCode =
   | 'not_connected'
   | 'reauth_required'
   | 'refresh_failed'
+  | 'refresh_timeout'
   | 'oauth_disabled'
   | 'invalid_state'
   | 'invalid_code'

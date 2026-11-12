@@ -25,6 +25,7 @@ const claudeNotConnected = {
   provider_code: 'claude',
   oauth_provider: 'anthropic',
   name: 'Anthropic (Claude)',
+  active: true,
   status: 'not_connected',
   account_label: null,
   expires_at: null,
@@ -48,13 +49,27 @@ describe('SubscriptionLoginSection', () => {
     vi.mocked(toast.error).mockClear();
   });
 
-  it('renders nothing while the feature is disabled', () => {
-    h.caps = { enabled: false, providers: [claudeConnected] };
+  it('renders nothing while the feature is disabled and nothing is stored', () => {
+    h.caps = { enabled: false, providers: [claudeNotConnected] };
     const { container } = render(<SubscriptionLoginSection providerCode="claude" />);
     expect(container).toBeEmptyDOMElement();
   });
 
-  it('opens the provider login page in a new tab', async () => {
+  it('keeps a stored login and its disconnect control visible while the feature is disabled', async () => {
+    h.caps = { enabled: false, providers: [claudeConnected] };
+    h.disconnect.mockResolvedValue(undefined);
+
+    render(<SubscriptionLoginSection providerCode="claude" />);
+
+    expect(screen.getByText(/me@example\.com/)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Open login/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^Test$/i })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /Disconnect/i }));
+    fireEvent.click(within(await screen.findByRole('alertdialog')).getByRole('button', { name: /Disconnect/i }));
+    await waitFor(() => expect(h.disconnect).toHaveBeenCalledWith('anthropic'));
+  });
+
+  it('shows the provider login page as a link the admin opens', async () => {
     const open = vi.spyOn(window, 'open').mockImplementation(() => null);
     h.start.mockResolvedValue({ authorize_url: 'https://claude.ai/oauth/authorize?x=1' });
 
@@ -62,10 +77,26 @@ describe('SubscriptionLoginSection', () => {
     fireEvent.click(screen.getByRole('button', { name: /Open login/i }));
 
     await waitFor(() => expect(h.start).toHaveBeenCalledWith('anthropic'));
-    await waitFor(() =>
-      expect(open).toHaveBeenCalledWith('https://claude.ai/oauth/authorize?x=1', '_blank', 'noopener,noreferrer'),
-    );
+    const link = await screen.findByRole('link', { name: /login page/i });
+    expect(link).toHaveAttribute('href', 'https://claude.ai/oauth/authorize?x=1');
+    expect(link).toHaveAttribute('target', '_blank');
+    expect(link).toHaveAttribute('rel', 'noopener noreferrer');
+    expect(open).not.toHaveBeenCalled();
     open.mockRestore();
+  });
+
+  it('offers a new login after a failed finish instead of the spent link', async () => {
+    h.start.mockResolvedValue({ authorize_url: 'https://claude.ai/oauth/authorize?x=1' });
+    h.finish.mockRejectedValue(new Error('invalid_state'));
+
+    render(<SubscriptionLoginSection providerCode="claude" />);
+    fireEvent.click(screen.getByRole('button', { name: /Open login/i }));
+    await screen.findByRole('link', { name: /login page/i });
+    fireEvent.change(screen.getByRole('textbox'), { target: { value: 'code#state' } });
+    fireEvent.click(screen.getByRole('button', { name: /^Finish$/i }));
+
+    expect(await screen.findByRole('button', { name: /Open login/i })).toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: /login page/i })).not.toBeInTheDocument();
   });
 
   it('sends the pasted address and shows the connected account', async () => {

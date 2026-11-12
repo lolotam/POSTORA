@@ -1,14 +1,16 @@
 -- ============================================================================
 -- ai_provider_oauth.sql
 --
--- Proof for 20261112120000_ai_provider_oauth.sql (spec
+-- Proof for 20261112120000_ai_provider_oauth.sql and
+-- 20261112150000_ai_oauth_refresh_fence.sql (spec
 -- 2026-11-12-ai-provider-auth-methods-design.md §5, §8, §9):
 --
 --   public.ai_provider_oauth_connections  (deny-all RLS, no grants)
---   public.save_ai_oauth_credentials
+--   public.save_ai_oauth_credentials      (also voids a refresh in flight)
 --   public.get_ai_oauth_credentials
---   public.begin_ai_oauth_refresh         (single-flight lease)
---   public.fail_ai_oauth_refresh
+--   public.claim_ai_oauth_refresh         (single-flight lease, returns its token)
+--   public.complete_ai_oauth_refresh      (fenced on the lease token)
+--   public.fail_ai_oauth_refresh          (fenced on the lease token)
 --   public.delete_ai_oauth_connection     (reclaims the Vault secret)
 --   public.get_ai_oauth_statuses
 --   Kimi (moonshot) provider + 4 seeded models
@@ -25,7 +27,7 @@
 --     every expected refusal sits in its own BEGIN/EXCEPTION block, every
 --     failure RAISES with a FAIL: prefix, and an accepted write that should
 --     have been refused exits psql non-zero via ON_ERROR_STOP.
---   * Vault-backed positive reads (save/get/begin/fail/delete) are asserted
+--   * Vault-backed positive reads (save/get/claim/complete/fail/delete) are asserted
 --     only when supabase_vault is installed; the harness creates it, but a
 --     baseline without it must still pass the structural assertions. One
 --     NOTICE covers the skip.
@@ -110,8 +112,9 @@ DECLARE
 BEGIN
   FOREACH f IN ARRAY ARRAY[
     'save_ai_oauth_credentials(text,text,jsonb,text,timestamptz,uuid)',
-    'begin_ai_oauth_refresh(text,int)',
-    'fail_ai_oauth_refresh(text,text,boolean)',
+    'claim_ai_oauth_refresh(text,int)',
+    'complete_ai_oauth_refresh(text,uuid,jsonb,timestamptz)',
+    'fail_ai_oauth_refresh(text,uuid,text,boolean)',
     'delete_ai_oauth_connection(text)',
     'get_ai_oauth_statuses()'] LOOP
     IF has_function_privilege('authenticated',
@@ -123,6 +126,11 @@ BEGIN
       RAISE EXCEPTION 'FAIL: % is NOT EXECUTEable as service_role', f;
     END IF;
   END LOOP;
+  -- The unfenced lease pair is gone, so nothing can bypass the fence.
+  IF to_regprocedure('public.begin_ai_oauth_refresh(text,int)') IS NOT NULL
+     OR to_regprocedure('public.fail_ai_oauth_refresh(text,text,boolean)') IS NOT NULL THEN
+    RAISE EXCEPTION 'FAIL: an unfenced refresh function still exists';
+  END IF;
 END $aio_auth_privs$;
 
 -- ===========================================================================
@@ -140,6 +148,8 @@ DECLARE
   v_lock timestamptz;
   v_secret uuid;
   v_rows integer;
+  v_token uuid;
+  v_stale uuid;
 BEGIN
   SELECT EXISTS(SELECT 1 FROM pg_extension WHERE extname = 'supabase_vault')
     INTO v_present;
@@ -166,22 +176,65 @@ BEGIN
     RAISE EXCEPTION 'FAIL: save left no linked Vault secret';
   END IF;
 
-  -- 3. The refresh lease is won exactly once; an expired lease is reclaimable.
-  IF public.begin_ai_oauth_refresh('anthropic', 30) IS DISTINCT FROM true THEN
-    RAISE EXCEPTION 'FAIL: first begin_ai_oauth_refresh did not win the lease';
+  -- 3. The refresh lease is won exactly once; an expired lease is reclaimable
+  --    and the reclaim voids the earlier token.
+  v_stale := public.claim_ai_oauth_refresh('anthropic', 30);
+  IF v_stale IS NULL THEN
+    RAISE EXCEPTION 'FAIL: first claim_ai_oauth_refresh did not win the lease';
   END IF;
-  IF public.begin_ai_oauth_refresh('anthropic', 30) IS DISTINCT FROM false THEN
-    RAISE EXCEPTION 'FAIL: second begin_ai_oauth_refresh won a held lease';
+  IF public.claim_ai_oauth_refresh('anthropic', 30) IS NOT NULL THEN
+    RAISE EXCEPTION 'FAIL: second claim_ai_oauth_refresh won a held lease';
   END IF;
   UPDATE public.ai_provider_oauth_connections
      SET refresh_lock_until = now() - interval '1 second'
    WHERE oauth_provider = 'anthropic';
-  IF public.begin_ai_oauth_refresh('anthropic', 30) IS DISTINCT FROM true THEN
+  v_token := public.claim_ai_oauth_refresh('anthropic', 30);
+  IF v_token IS NULL THEN
     RAISE EXCEPTION 'FAIL: expired lease was not reclaimable';
+  END IF;
+  IF public.complete_ai_oauth_refresh('anthropic', v_stale,
+       '{"access":"x","refresh":"stale","expires":1}'::jsonb, now()) IS DISTINCT FROM false THEN
+    RAISE EXCEPTION 'FAIL: a superseded lease token completed a refresh';
+  END IF;
+  IF public.fail_ai_oauth_refresh('anthropic', v_stale, 'x', true) IS DISTINCT FROM false THEN
+    RAISE EXCEPTION 'FAIL: a superseded lease token failed a refresh';
+  END IF;
+
+  -- 3b. The current token completes: credentials rotate, lease released.
+  IF public.complete_ai_oauth_refresh('anthropic', v_token,
+       '{"access":"a1","refresh":"r1","expires":1}'::jsonb, now()) IS DISTINCT FROM true THEN
+    RAISE EXCEPTION 'FAIL: the current lease token did not complete the refresh';
+  END IF;
+  v_creds := public.get_ai_oauth_credentials('anthropic');
+  IF v_creds->>'refresh' IS DISTINCT FROM 'r1' THEN
+    RAISE EXCEPTION 'FAIL: complete stored refresh %, expected r1', v_creds->>'refresh';
+  END IF;
+  SELECT refresh_lock_until INTO v_lock FROM public.ai_provider_oauth_connections
+   WHERE oauth_provider = 'anthropic';
+  IF v_lock IS NOT NULL THEN
+    RAISE EXCEPTION 'FAIL: complete left the refresh lease held';
+  END IF;
+
+  -- 3c. A login save during a refresh voids the lease: the late refresh
+  --     must not overwrite the new login.
+  v_token := public.claim_ai_oauth_refresh('anthropic', 30);
+  PERFORM public.save_ai_oauth_credentials(
+    'anthropic', 'claude', '{"access":"l","refresh":"login","expires":1}'::jsonb,
+    'me', now(), NULL);
+  IF public.complete_ai_oauth_refresh('anthropic', v_token,
+       '{"access":"x","refresh":"late","expires":1}'::jsonb, now()) IS DISTINCT FROM false THEN
+    RAISE EXCEPTION 'FAIL: a refresh completed across a login save';
+  END IF;
+  v_creds := public.get_ai_oauth_credentials('anthropic');
+  IF v_creds->>'refresh' IS DISTINCT FROM 'login' THEN
+    RAISE EXCEPTION 'FAIL: a late refresh replaced the new login (refresh %)', v_creds->>'refresh';
   END IF;
 
   -- 4. fail(..., reauth := true) flips the status and releases the lock.
-  PERFORM public.fail_ai_oauth_refresh('anthropic', 'x', true);
+  v_token := public.claim_ai_oauth_refresh('anthropic', 30);
+  IF public.fail_ai_oauth_refresh('anthropic', v_token, 'x', true) IS DISTINCT FROM true THEN
+    RAISE EXCEPTION 'FAIL: the current lease token did not fail the refresh';
+  END IF;
   SELECT status, refresh_lock_until INTO v_status, v_lock
     FROM public.ai_provider_oauth_connections
    WHERE oauth_provider = 'anthropic';
@@ -221,6 +274,22 @@ BEGIN
   SELECT count(*) INTO v_rows FROM vault.secrets WHERE id = v_secret;
   IF v_rows <> 0 THEN
     RAISE EXCEPTION 'FAIL: Vault secret % survives delete_ai_oauth_connection', v_secret;
+  END IF;
+
+  -- 6b. A refresh in flight across a disconnect writes nothing back.
+  PERFORM public.save_ai_oauth_credentials(
+    'anthropic', 'claude', '{"access":"a3","refresh":"r3","expires":1}'::jsonb,
+    'me', now(), NULL);
+  v_token := public.claim_ai_oauth_refresh('anthropic', 30);
+  PERFORM public.delete_ai_oauth_connection('anthropic');
+  IF public.complete_ai_oauth_refresh('anthropic', v_token,
+       '{"access":"x","refresh":"late","expires":1}'::jsonb, now()) IS DISTINCT FROM false THEN
+    RAISE EXCEPTION 'FAIL: a refresh completed after the connection was deleted';
+  END IF;
+  SELECT count(*) INTO v_rows FROM public.ai_provider_oauth_connections
+   WHERE oauth_provider = 'anthropic';
+  IF v_rows <> 0 THEN
+    RAISE EXCEPTION 'FAIL: a late refresh re-created a deleted connection';
   END IF;
 END $aio_lifecycle$;
 

@@ -58,21 +58,30 @@ Deno.serve(async (req) => {
         return [];
       }
     },
-    providerName: async (providerCode) => {
-      const { data } = await admin.from("ai_providers")
-        .select("name").eq("provider_code", providerCode).maybeSingle();
-      return (data?.name as string | undefined) ?? null;
+    providerInfo: async (providerCode) => {
+      const { data, error } = await admin.from("ai_providers")
+        .select("name, is_active").eq("provider_code", providerCode).maybeSingle();
+      if (error) throw new Error("AI provider read failed");
+      return {
+        name: (data?.name as string | undefined) ?? null,
+        active: data?.is_active === true,
+      };
     },
     statuses: async () => {
+      // A failed read must not look like "nothing connected": the admin would
+      // see every subscription as disconnected. Throwing surfaces a 500.
       const { data, error } = await admin.rpc("get_ai_oauth_statuses");
-      if (error) return [];
+      if (error) throw new Error("OAuth status read failed");
       return (data ?? []) as OAuthStatusRow[];
     },
     start: (provider: OAuthProviderId, userId) => startLogin(loginDeps, provider, userId),
     finish: (provider: OAuthProviderId, pasted: string, userId) =>
       finishLogin(loginDeps, provider, pasted, userId),
     disconnect: async (provider) => {
-      await admin.rpc("delete_ai_oauth_connection", { p_oauth_provider: provider });
+      // Reporting not_connected after a failed delete would leave a live
+      // credential the admin believes is gone.
+      const { error } = await admin.rpc("delete_ai_oauth_connection", { p_oauth_provider: provider });
+      if (error) throw new Error("OAuth disconnect failed");
     },
     test: async (provider, modelId) => {
       const startedAt = Date.now();

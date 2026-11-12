@@ -11,7 +11,8 @@ export interface PiAssistant {
   content: Array<{ type: string; text?: string }>;
   stopReason: string;
   errorMessage?: string;
-  usage?: { input: number; output: number; totalTokens: number };
+  /** pi-ai reports cached prompt tokens apart from `input`. */
+  usage?: { input: number; output: number; cacheRead?: number; cacheWrite?: number; totalTokens: number };
 }
 
 export interface PiCallDeps {
@@ -87,7 +88,8 @@ function toPiContext(openAiBody: Record<string, unknown>): {
 }
 
 function openAiShape(text: string, usage: PiAssistant["usage"]): string {
-  const input = usage?.input ?? 0;
+  // OpenAI's prompt_tokens counts every prompt token, cached or not.
+  const input = (usage?.input ?? 0) + (usage?.cacheRead ?? 0) + (usage?.cacheWrite ?? 0);
   const output = usage?.output ?? 0;
   return JSON.stringify({
     choices: [{ message: { role: "assistant", content: text } }],
@@ -97,6 +99,22 @@ function openAiShape(text: string, usage: PiAssistant["usage"]): string {
       total_tokens: usage?.totalTokens ?? input + output,
     },
   });
+}
+
+/** The request needs something this subscription tier cannot honour; the chain skips the tier. */
+type UnsupportedReason = "tools_unsupported" | "max_tokens_unsupported";
+
+function unsupported(reason: UnsupportedReason): Response {
+  return new Response(JSON.stringify({ error: { code: reason } }), {
+    status: 422,
+    headers: { "content-type": "application/json" },
+  });
+}
+
+/** The caller's output cap, under either name chatRequestForTier may have left it. */
+function outputTokenLimit(openAiBody: Record<string, unknown>): number | undefined {
+  const limit = openAiBody.max_tokens ?? openAiBody.max_completion_tokens;
+  return typeof limit === "number" ? limit : undefined;
 }
 
 function errorShape(message: string, status: number): Response {
@@ -122,9 +140,11 @@ export async function callPiOAuth(
 ): Promise<Response> {
   // Tool calling is out of scope for subscription tiers (spec §4): refuse
   // without a network call so the chain falls over to the next tier.
-  if (openAiBody.tools !== undefined) {
-    return new Response(null, { status: 422 });
-  }
+  if (openAiBody.tools !== undefined) return unsupported("tools_unsupported");
+  // pi-ai 0.73.1's Codex request builder never serializes maxTokens, so a cap
+  // the caller relies on would be silently ignored. Refuse instead.
+  const maxTokens = outputTokenLimit(openAiBody);
+  if (provider === "openai-codex" && maxTokens !== undefined) return unsupported("max_tokens_unsupported");
 
   const model = deps.getModel(provider, modelId);
   if (!model) return errorShape(`unknown model ${modelId} for ${provider}`, 424);
@@ -134,7 +154,7 @@ export async function callPiOAuth(
       apiKey,
       signal: AbortSignal.timeout(timeoutMs),
       temperature: typeof openAiBody.temperature === "number" ? openAiBody.temperature : undefined,
-      maxTokens: typeof openAiBody.max_tokens === "number" ? openAiBody.max_tokens : undefined,
+      maxTokens,
     });
 
     if (assistant.stopReason === "error" || assistant.errorMessage) {

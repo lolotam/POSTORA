@@ -13,7 +13,7 @@ function fakeAdmin(stateRows: Array<Record<string, unknown>> = []) {
   const inserts: Array<Record<string, unknown>> = [];
   const consumed: Array<Record<string, unknown>> = [];
   const rpcCalls: Array<{ name: string; args: Record<string, unknown> }> = [];
-  let rows = stateRows;
+  const rows = stateRows;
   const admin = {
     from(table: string) {
       assertEquals(table, "oauth_states");
@@ -186,6 +186,7 @@ Deno.test("finishLogin anthropic posts JSON body and saves credentials through r
   assertEquals(consumed.length, 1, "the state row must be consumed exactly once");
   assertEquals(fetchCalls.length, 1);
   assertEquals(fetchCalls[0].url, "https://platform.claude.com/v1/oauth/token");
+  assert(fetchCalls[0].init.signal instanceof AbortSignal, "the exchange must carry a timeout signal");
   assertEquals((fetchCalls[0].init.headers as Record<string, string>)["content-type"], "application/json");
   const body = JSON.parse(String(fetchCalls[0].init.body));
   assertEquals(body.grant_type, "authorization_code");
@@ -245,4 +246,25 @@ Deno.test("finishLogin openai-codex posts form body and stores accountId from JW
   const credentials = save.args.p_credentials as Record<string, unknown>;
   assertEquals(credentials.accountId, "acc_1");
   assertEquals(result.accountLabel, "dev@example.com");
+});
+
+Deno.test("finishLogin reports a timed-out exchange as exchange_failed and saves nothing", async () => {
+  const storedState = "timeout-state-1";
+  const { admin, rpcCalls } = fakeAdmin([
+    { state: storedState, provider_code: "anthropic", scope_kind: "platform", code_verifier: "verifier-3" },
+  ]);
+  const deps: LoginDeps = {
+    admin: admin as never,
+    fetch: () => Promise.reject(new DOMException("signal timed out", "TimeoutError")),
+    now: () => 1_700_000_000_000,
+  };
+
+  const error = await assertRejects(
+    () => finishLogin(deps, "anthropic", `http://localhost:53692/callback?code=c&state=${storedState}`, "user-1"),
+    AiOAuthError,
+  );
+
+  assertEquals(error.code, "exchange_failed");
+  assertEquals(error.message, "token exchange timed out");
+  assertEquals(rpcCalls.filter((c) => c.name === "save_ai_oauth_credentials").length, 0);
 });

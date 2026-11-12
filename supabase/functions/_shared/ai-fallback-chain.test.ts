@@ -12,6 +12,7 @@ import {
 } from "./ai-fallback.ts";
 import type { AiRoutingAdmin } from "./ai-user-routing.ts";
 import { clearProviderEndpointCache } from "./providerEndpoint.ts";
+import { callOAuthTier } from "./aiOAuth/chainTier.ts";
 import type { CredentialDeps } from "./aiOAuth/credentials.ts";
 import type { PiCallDeps } from "./aiOAuth/piCall.ts";
 
@@ -606,6 +607,7 @@ Deno.test("oauth tier with flag on answers through pi and records authMethod oau
     };
     const result = await callAiChain(fake.admin, { max_tokens: 10 }, [claudeOauthTier], {
       enabled: async () => true,
+      providerActive: async () => true,
       credentials: oauthCredentialDeps({ access: "a", refresh: "r", expires: 1_000_000 }),
       pi: piAnswering("ok"),
     });
@@ -628,6 +630,7 @@ Deno.test("oauth tier with tools records oauth_tools_unsupported", async () => {
     tools: [{ type: "function", function: { name: "x" } }],
   }, [claudeOauthTier], {
     enabled: async () => true,
+    providerActive: async () => true,
     credentials: oauthCredentialDeps({ access: "a", refresh: "r", expires: 1_000_000 }),
     pi: piAnswering("unused"),
   });
@@ -640,6 +643,7 @@ Deno.test("oauth tier on provider without pi oauth records oauth_unsupported_pro
     { ...claudeOauthTier, provider: "xai", model: "grok-4.3" },
   ], {
     enabled: async () => true,
+    providerActive: async () => true,
     credentials: oauthCredentialDeps({ access: "a", refresh: "r", expires: 1_000_000 }),
     pi: piAnswering("unused"),
   });
@@ -656,6 +660,7 @@ Deno.test("oauth credential reauth_required records the code and falls over", as
       { ...platformTier, provider: "openai", model: "platform-model" },
     ], {
       enabled: async () => true,
+      providerActive: async () => true,
       credentials: oauthCredentialDeps({ access: "a", refresh: "r", expires: 1_000_000 }, "reauth_required"),
       pi: piAnswering("unused"),
     });
@@ -664,6 +669,41 @@ Deno.test("oauth credential reauth_required records the code and falls over", as
   } finally {
     globalThis.fetch = original;
   }
+});
+
+Deno.test("oauth tier on a deactivated provider records oauth_provider_disabled without reading credentials", async () => {
+  let credentialReads = 0;
+  const credentials = oauthCredentialDeps({ access: "a", refresh: "r", expires: 1_000_000 });
+  const admin = credentials.admin as unknown as { rpc: (n: string, a: Record<string, unknown>) => Promise<unknown> };
+  const rpc = admin.rpc.bind(admin);
+  admin.rpc = (n, a) => {
+    credentialReads++;
+    return rpc(n, a);
+  };
+  const result = await callAiChain(platformAdmin().admin, { max_tokens: 10 }, [claudeOauthTier], {
+    enabled: async () => true,
+    providerActive: async () => false,
+    credentials,
+    pi: piAnswering("unused"),
+  });
+  assertEquals(result.tiers[0].error, "oauth_provider_disabled");
+  assertEquals(credentialReads, 0);
+});
+
+Deno.test("an oauth refresh that outlasts the tier deadline records refresh_timeout", async () => {
+  const credentials: CredentialDeps = {
+    ...oauthCredentialDeps({ access: "a", refresh: "r", expires: 1_000_000 }),
+    admin: {
+      rpc: () => new Promise(() => {}), // the credential read never answers
+    } as never,
+  };
+  const outcome = await callOAuthTier(undefined, claudeOauthTier, { max_tokens: 10 }, 20, {
+    enabled: async () => true,
+    providerActive: async () => true,
+    credentials,
+    pi: piAnswering("unused"),
+  });
+  assertEquals(outcome, { error: "refresh_timeout" });
 });
 
 Deno.test("callChatCompletion refuses Claude and a missing key without calling out", async () => {

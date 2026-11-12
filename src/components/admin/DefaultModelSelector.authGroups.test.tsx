@@ -51,6 +51,7 @@ const claudeCapability = {
   provider_code: 'claude',
   oauth_provider: 'anthropic',
   name: 'Anthropic (Claude)',
+  active: true,
   status: 'connected',
   account_label: 'me@example.com',
   expires_at: '2026-12-01T00:00:00.000Z',
@@ -61,6 +62,7 @@ const openaiCapability = {
   provider_code: 'openai',
   oauth_provider: 'openai-codex',
   name: 'OpenAI',
+  active: true,
   status: 'not_connected',
   account_label: null,
   expires_at: null,
@@ -95,7 +97,7 @@ function renderSelector(
     </QueryClientProvider>,
   );
   const primarySection = screen.getByText('Primary').closest('div.space-y-2') as HTMLElement;
-  return { primarySection, onSetDefault };
+  return { primarySection, onSetDefault, queryClient };
 }
 
 /** Opens a radix select trigger the same way the sibling selector test does. */
@@ -237,6 +239,7 @@ describe('DefaultModelSelector — provider dropdown groups', () => {
   it.each([
     ['the flag is off', { enabled: false, providers: [claudeCapability] }],
     ['the subscription was disconnected', { enabled: true, providers: [{ ...claudeCapability, status: 'not_connected' }] }],
+    ['the admin switched the provider off', { enabled: true, providers: [{ ...claudeCapability, active: false }] }],
   ])('leaves a stored oauth tier unset instead of showing it as an API key tier when %s', async (_label, answer) => {
     caps.current = answer;
     const { primarySection } = renderSelector('chat', vi.fn(), {
@@ -249,6 +252,22 @@ describe('DefaultModelSelector — provider dropdown groups', () => {
     const triggers = within(primarySection).getAllByRole('combobox');
     expect(triggers).toHaveLength(1);
     expect(triggers[0]).not.toHaveTextContent('Anthropic API');
+  });
+
+  it('drops the Auth selection and its model list when the subscription disappears', async () => {
+    caps.current = { enabled: true, providers: [claudeCapability] };
+    const { primarySection, queryClient } = renderSelector('chat', vi.fn(), {
+      provider_code: 'claude',
+      model_id: 'claude-sonnet-4-5',
+      auth_method: 'oauth',
+    });
+    await waitFor(() => expect(within(primarySection).getAllByRole('combobox')).toHaveLength(2));
+
+    caps.current = { enabled: true, providers: [{ ...claudeCapability, status: 'not_connected' }] };
+    await queryClient.invalidateQueries();
+
+    await waitFor(() => expect(within(primarySection).getAllByRole('combobox')).toHaveLength(1));
+    expect(within(primarySection).getByRole('combobox')).not.toHaveTextContent('subscription');
   });
 
   it('converts an oauth tier back to the API key for the same model', async () => {

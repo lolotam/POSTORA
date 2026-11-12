@@ -20,7 +20,8 @@ export interface HandlerDeps {
   oauthEnabled(): Promise<boolean>;
   listOAuthProviders(): string[];
   listModels(oauthProvider: string): string[];
-  providerName(providerCode: string): Promise<string | null>;
+  /** The ai_providers row: its display name and the admin's on/off switch. */
+  providerInfo(providerCode: string): Promise<{ name: string | null; active: boolean }>;
   statuses(): Promise<OAuthStatusRow[]>;
   start(provider: OAuthProviderId, userId: string): Promise<{ authorizeUrl: string }>;
   finish(provider: OAuthProviderId, pasted: string, userId: string): Promise<{ accountLabel: string | null }>;
@@ -87,10 +88,12 @@ export async function handle(body: unknown, caller: Caller, deps: HandlerDeps): 
       // pi-ai is the capability registry: only providers it can OAuth may appear.
       if (!deps.listOAuthProviders().includes(oauthProvider)) continue;
       const row = statuses.find((s) => s.oauth_provider === oauthProvider);
+      const info = await deps.providerInfo(providerCode);
       providers.push({
         provider_code: providerCode,
         oauth_provider: oauthProvider,
-        name: await deps.providerName(providerCode),
+        name: info.name,
+        active: info.active,
         status: row?.status ?? "not_connected",
         account_label: row?.account_label ?? null,
         expires_at: row?.expires_at ?? null,

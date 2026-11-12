@@ -83,7 +83,7 @@ const CATEGORY_LAST_RESORT: Record<string, { provider: string; model: string } |
  * carries tools, so a subscription tier there would be skipped at request
  * time. `agent_triage` carries no tools and does qualify.
  */
-export const OAUTH_CATEGORIES = ['chat', 'agent_triage'] as const;
+const OAUTH_CATEGORIES = ['chat', 'agent_triage'] as const;
 
 function isOAuthCategory(category: string): boolean {
   return (OAUTH_CATEGORIES as readonly string[]).includes(category);
@@ -292,11 +292,12 @@ function TierSelector({ label, icon, providers, allProviders, filteredModels, cu
 
   // A provider that was never connected has nothing to offer, so it is not
   // listed at all. One that needs a reconnect stays visible but disabled.
-  // With the flag off, or in a category that cannot be served by a
-  // subscription, no Auth entry exists, so a stored oauth tier shows as unset.
+  // With the flag off, in a category that cannot be served by a
+  // subscription, or for a provider the admin switched off, no Auth entry
+  // exists, so a stored oauth tier shows as unset.
   const oauthProviders = useMemo(
     () => caps?.enabled && oauthCategory
-      ? caps.providers.filter(p => p.status === 'connected' || p.status === 'reauth_required')
+      ? caps.providers.filter(p => p.active && (p.status === 'connected' || p.status === 'reauth_required'))
       : [],
     [caps, oauthCategory],
   );
@@ -320,7 +321,10 @@ function TierSelector({ label, icon, providers, allProviders, filteredModels, cu
   const [selection, setSelection] = useState(initialSelection);
 
   useEffect(() => {
-    if (initialSelection) setSelection(initialSelection);
+    // A stored tier wins. When it disappears, an Auth selection that pointed at
+    // it is cleared so its model list does not linger; an API-key provider the
+    // admin is still choosing a model for is kept.
+    setSelection(prev => initialSelection || (prev.startsWith('oauth:') ? '' : prev));
   }, [initialSelection]);
 
   const selectedProviderId = selection.startsWith('api:') ? selection.slice('api:'.length) : '';
@@ -401,7 +405,7 @@ function TierSelector({ label, icon, providers, allProviders, filteredModels, cu
                     disabled={o.status !== 'connected'}
                   >
                     <div className="flex items-center gap-1.5">
-                      <span className="text-xs">{o.name} — subscription</span>
+                      <span className="text-xs">{o.name ?? o.provider_code} — subscription</span>
                       <Badge variant="outline" className="text-[9px] py-0">
                         {o.status === 'connected' ? 'oauth' : 'reconnect'}
                       </Badge>

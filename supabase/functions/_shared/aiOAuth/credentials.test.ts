@@ -12,6 +12,8 @@ interface MemRow {
   credentials: Record<string, unknown> | null;
   status: string;
   lockUntil: number | null;
+  /** The current lease token; cleared by completion, failure and login saves. */
+  leaseToken: string | null;
   /** The system_settings row the flag test reads, if any. */
   settingsRow?: unknown;
 }
@@ -27,7 +29,8 @@ interface FakeResult {
 
 /** In-memory rpc backing store so a second caller sees what the winner saved. */
 function fakeAdmin(initial: Partial<MemRow> = {}, now: () => number = () => 0): FakeResult {
-  const row: MemRow = { credentials: null, status: "connected", lockUntil: null, ...initial };
+  const row: MemRow = { credentials: null, status: "connected", lockUntil: null, leaseToken: null, ...initial };
+  let leases = 0;
   const calls: Array<{ name: string; args: Record<string, unknown> }> = [];
   const admin = {
     rpc(name: string, args: Record<string, unknown>) {
@@ -41,23 +44,30 @@ function fakeAdmin(initial: Partial<MemRow> = {}, now: () => number = () => 0): 
             error: null,
           });
         }
-        case "begin_ai_oauth_refresh": {
-          if (row.lockUntil === null || row.lockUntil < nowMs) {
+        case "claim_ai_oauth_refresh": {
+          if (row.credentials !== null && (row.lockUntil === null || row.lockUntil < nowMs)) {
             row.lockUntil = nowMs + Number(args.p_lease_seconds) * 1000;
-            return Promise.resolve({ data: true, error: null });
+            row.leaseToken = `lease-${++leases}`;
+            return Promise.resolve({ data: row.leaseToken, error: null });
           }
-          return Promise.resolve({ data: false, error: null });
+          return Promise.resolve({ data: null, error: null });
         }
-        case "save_ai_oauth_credentials": {
+        case "complete_ai_oauth_refresh": {
+          if (row.credentials === null || row.leaseToken !== args.p_lease_token) {
+            return Promise.resolve({ data: false, error: null });
+          }
           row.credentials = { ...(args.p_credentials as Record<string, unknown>) };
           row.status = "connected";
           row.lockUntil = null;
-          return Promise.resolve({ data: null, error: null });
+          row.leaseToken = null;
+          return Promise.resolve({ data: true, error: null });
         }
         case "fail_ai_oauth_refresh": {
+          if (row.leaseToken !== args.p_lease_token) return Promise.resolve({ data: false, error: null });
           row.lockUntil = null;
+          row.leaseToken = null;
           if (args.p_reauth === true) row.status = "reauth_required";
-          return Promise.resolve({ data: null, error: null });
+          return Promise.resolve({ data: true, error: null });
         }
         default:
           return Promise.resolve({ data: null, error: null });
@@ -114,7 +124,7 @@ Deno.test("fresh credential returns api key without refresh", async () => {
   const { apiKey } = await getFreshOAuthCredential(deps, "anthropic");
   assertEquals(apiKey, "api-key-from-a");
   assertEquals(refreshCalls, 0);
-  assertEquals(fake.calls.filter((c) => c.name === "begin_ai_oauth_refresh").length, 0);
+  assertEquals(fake.calls.filter((c) => c.name === "claim_ai_oauth_refresh").length, 0);
 });
 
 Deno.test("expired credential with lease won refreshes once and saves rotated refresh token", async () => {
@@ -126,12 +136,9 @@ Deno.test("expired credential with lease won refreshes once and saves rotated re
   const { apiKey } = await getFreshOAuthCredential(deps, "anthropic");
 
   assertEquals(apiKey, "api-key-from-fresh-access-for-old-refresh");
-  const save = fake.calls.find((c) => c.name === "save_ai_oauth_credentials");
-  assert(save !== undefined, "the rotated credentials must be saved");
-  const savedCredentials = save.args.p_credentials as Record<string, unknown>;
-  assertEquals(savedCredentials.refresh, "rotated-refresh");
   assertEquals(fake.row.credentials?.refresh, "rotated-refresh");
-  assertEquals(fake.row.lockUntil, null, "save clears the lease");
+  assertEquals(fake.row.lockUntil, null, "completion clears the lease");
+  assertEquals(fake.row.leaseToken, null);
 });
 
 Deno.test("expired credential with lease lost waits and returns the token saved by the winner", async () => {
@@ -161,7 +168,7 @@ Deno.test("expired credential with lease lost waits and returns the token saved 
   assertEquals(apiKey, "api-key-from-winner-access");
   assertEquals(sleeps.length, 2, "one wait per re-read before the winner's save appeared");
   assertEquals(
-    fake.calls.filter((c) => c.name === "refresh" || c.name === "save_ai_oauth_credentials").length,
+    fake.calls.filter((c) => c.name === "complete_ai_oauth_refresh").length,
     0,
   );
 });
@@ -189,7 +196,7 @@ Deno.test("lease won after another worker rotated the token returns the saved to
   });
   const rpc = fake.admin.rpc.bind(fake.admin);
   fake.admin.rpc = (name, args) => {
-    if (name === "begin_ai_oauth_refresh") {
+    if (name === "claim_ai_oauth_refresh") {
       // The previous lease holder saved its rotation between our read and our lease.
       fake.row.credentials = { access: "rotated-access", refresh: "next-refresh", expires: 900_000 };
     }
@@ -232,9 +239,7 @@ Deno.test("refresh 400 marks reauth_required and throws reauth_required", async 
   });
   const deps = testDeps(fake, {
     refresh: async () => {
-      const failure = new Error("token refresh failed with status 400: invalid_grant") as Error & { status?: number };
-      failure.status = 400;
-      throw failure;
+      throw new Error('HTTP request failed. status=400; url=https://x/token; body={"error":"invalid_grant"}');
     },
   });
 
@@ -244,6 +249,40 @@ Deno.test("refresh 400 marks reauth_required and throws reauth_required", async 
   assert(fail !== undefined);
   assertEquals(fail.args.p_reauth, true);
   assertEquals(fake.row.status, "reauth_required");
+});
+
+Deno.test("a disconnect during the refresh is not undone by the refresh completing", async () => {
+  const fake = fakeAdmin({ credentials: { access: "a", refresh: "r", expires: 5_000 } });
+  const deps = testDeps(fake, {
+    refresh: async () => {
+      fake.row.credentials = null; // admin pressed Disconnect while the provider answered
+      fake.row.leaseToken = null;
+      return { access: "late-access", refresh: "late-refresh", expires: 900_000 };
+    },
+  });
+
+  const error = await assertRejects(() => getFreshOAuthCredential(deps, "anthropic"), AiOAuthError);
+
+  assertEquals(error.code, "refresh_failed");
+  assertEquals(fake.row.credentials, null, "the deleted connection must stay deleted");
+});
+
+Deno.test("a reconnect during the refresh keeps the new login's credentials", async () => {
+  const fake = fakeAdmin({ credentials: { access: "a", refresh: "r", expires: 5_000 } });
+  const deps = testDeps(fake, {
+    refresh: async () => {
+      // A fresh login saved new credentials, which voids the lease.
+      fake.row.credentials = { access: "login-access", refresh: "login-refresh", expires: 900_000 };
+      fake.row.leaseToken = null;
+      fake.row.lockUntil = null;
+      return { access: "late-access", refresh: "late-refresh", expires: 900_000 };
+    },
+  });
+
+  await assertRejects(() => getFreshOAuthCredential(deps, "anthropic"), AiOAuthError);
+
+  assertEquals(fake.row.credentials?.refresh, "login-refresh");
+  assertEquals(fake.row.status, "connected", "a stale refresh must not mark the new login failed");
 });
 
 Deno.test("missing row throws not_connected", async () => {
@@ -271,14 +310,16 @@ Deno.test("status reauth_required throws reauth_required without refresh", async
   assertEquals(error.code, "reauth_required");
 });
 
-Deno.test("isReauthRefreshError matches status codes and invalid_grant only", () => {
+Deno.test("isReauthRefreshError reads only the status pi-ai reports, never the body", () => {
   const cases: Array<[string, boolean]> = [
-    ["token refresh failed with status 400: invalid_grant", true],
-    ["status 401 unauthorized", true],
-    ["status 500 internal error", false],
-    ["network timeout", false],
-    ["status 4003 too many requests", false],
-    ["grant_type invalid_grant rejected", true],
+    ['HTTP request failed. status=400; url=https://x/token; body={"error":"invalid_grant"}', true],
+    ["HTTP request failed. status=401; url=https://x/token; body=", true],
+    ["OpenAI Codex token refresh failed (400): invalid_grant", true],
+    ["OpenAI Codex token refresh failed (401): Unauthorized", true],
+    ['HTTP request failed. status=503; url=https://x/token; body={"retry_after":400}', false],
+    ["OpenAI Codex token refresh failed (503): retry in 401 ms", false],
+    ["OpenAI Codex token refresh error: network timeout", false],
+    ["HTTP request failed. status=4003; url=https://x/token; body=", false],
   ];
   for (const [message, expected] of cases) {
     assertEquals(isReauthRefreshError(message), expected, `message: ${message}`);

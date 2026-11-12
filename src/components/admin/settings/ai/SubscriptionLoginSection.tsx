@@ -10,7 +10,7 @@ import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
   AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
-import { AlertTriangle, Loader2 } from 'lucide-react';
+import { AlertTriangle, ExternalLink, Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
 import {
   useAiProviderAuthCapabilities,
@@ -60,21 +60,26 @@ export function SubscriptionLoginSection({ providerCode }: { providerCode: 'clau
   const [pasted, setPasted] = useState('');
   const [testModel, setTestModel] = useState('');
   const [confirmDisconnect, setConfirmDisconnect] = useState(false);
-
-  // The section exists only while the feature flag is on.
-  if (!capabilities?.enabled) return null;
+  const [authorizeUrl, setAuthorizeUrl] = useState<string | null>(null);
 
   const oauthProvider = OAUTH_PROVIDER_FOR_CODE[providerCode];
-  const capability = capabilities.providers.find(p => p.oauth_provider === oauthProvider);
+  const capability = capabilities?.providers.find(p => p.oauth_provider === oauthProvider);
   const connected = capability?.status === 'connected';
   const needsReconnect = capability?.status === 'reauth_required';
+  const hasStoredLogin = connected || needsReconnect;
+  const enabled = capabilities?.enabled === true;
+  // With the flag off the subscription pathway is closed, but a stored login
+  // must stay visible so the admin can still delete it.
+  if (!capabilities || (!enabled && !hasStoredLogin)) return null;
+
   const effectiveTestModel = testModel || capability?.models?.[0] || '';
 
-  const handleOpenLogin = async () => {
+  // The URL is shown as a link the admin clicks: a window.open after an await
+  // runs outside the click gesture and popup blockers drop it silently.
+  const handleStartLogin = async () => {
     try {
       const { authorize_url } = await startLogin.mutateAsync(oauthProvider);
-      window.open(authorize_url, '_blank', 'noopener,noreferrer');
-      toast.success('Approve the login in the new tab, then paste the address here');
+      setAuthorizeUrl(authorize_url);
     } catch (error) {
       toast.error(describeError(error, 'Could not start the login'));
     }
@@ -85,8 +90,12 @@ export function SubscriptionLoginSection({ providerCode }: { providerCode: 'clau
     try {
       await finishLogin.mutateAsync({ provider: oauthProvider, pasted: pasted.trim() });
       setPasted('');
+      setAuthorizeUrl(null);
       toast.success('Subscription connected');
     } catch (error) {
+      // The login state is single use: a failed finish has spent it, so the
+      // link is dropped and the admin starts a new login.
+      setAuthorizeUrl(null);
       toast.error(describeError(error, 'Could not connect the subscription'));
     }
   };
@@ -135,6 +144,12 @@ export function SubscriptionLoginSection({ providerCode }: { providerCode: 'clau
               : 'Use a Claude Pro/Max or ChatGPT subscription instead of an API key.'}
       </p>
 
+      {!enabled && (
+        <p className="text-xs text-muted-foreground">
+          Subscription login is switched off. The stored login is unused until it is switched back on.
+        </p>
+      )}
+
       {providerCode === 'claude' && (
         <Alert>
           <AlertTriangle className="h-4 w-4 !text-warning" />
@@ -144,13 +159,22 @@ export function SubscriptionLoginSection({ providerCode }: { providerCode: 'clau
         </Alert>
       )}
 
-      {!connected && (
+      {enabled && !connected && (
         <>
-          <Button size="sm" variant="outline" className="w-full h-7 text-xs" onClick={handleOpenLogin}
-            disabled={startLogin.isPending}>
-            {startLogin.isPending ? <Loader2 className="w-3 h-3 animate-spin me-1" /> : null}
-            Open login
-          </Button>
+          {authorizeUrl ? (
+            <Button asChild size="sm" variant="outline" className="w-full h-7 text-xs">
+              <a href={authorizeUrl} target="_blank" rel="noopener noreferrer">
+                <ExternalLink className="w-3 h-3 me-1" />
+                Open the provider&apos;s login page
+              </a>
+            </Button>
+          ) : (
+            <Button size="sm" variant="outline" className="w-full h-7 text-xs" onClick={handleStartLogin}
+              disabled={startLogin.isPending}>
+              {startLogin.isPending ? <Loader2 className="w-3 h-3 animate-spin me-1" /> : null}
+              Open login
+            </Button>
+          )}
           <p className="text-xs text-muted-foreground">
             After approving, your browser opens a localhost page that does not load. Copy the full address
             from the address bar and paste it here.
@@ -170,9 +194,8 @@ export function SubscriptionLoginSection({ providerCode }: { providerCode: 'clau
         </>
       )}
 
-      {connected && (
-        <>
-          <div className="flex gap-2">
+      {enabled && connected && (
+        <div className="flex gap-2">
             <Select value={effectiveTestModel} onValueChange={setTestModel} disabled={testConnection.isPending}>
               <SelectTrigger className="w-full text-xs h-7">
                 <SelectValue placeholder="Model..." />
@@ -190,11 +213,13 @@ export function SubscriptionLoginSection({ providerCode }: { providerCode: 'clau
               {testConnection.isPending ? <Loader2 className="w-3 h-3 animate-spin" /> : null}
               Test
             </Button>
-          </div>
-          <Button size="sm" variant="outline" className="w-full h-7 text-xs" onClick={() => setConfirmDisconnect(true)}>
-            Disconnect
-          </Button>
-        </>
+        </div>
+      )}
+
+      {hasStoredLogin && (
+        <Button size="sm" variant="outline" className="w-full h-7 text-xs" onClick={() => setConfirmDisconnect(true)}>
+          Disconnect
+        </Button>
       )}
 
       <AlertDialog open={confirmDisconnect} onOpenChange={setConfirmDisconnect}>
