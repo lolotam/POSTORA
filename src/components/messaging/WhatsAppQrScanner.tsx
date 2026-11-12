@@ -91,6 +91,17 @@ export function WhatsAppQrScanner({ socialAccountId, onComplete, onConnectAsNew 
     }
   };
 
+  // An unscanned code is replaced when it expires, so the popup always shows a code the
+  // phone can still accept. It fires once per expiry: a failed refresh leaves the
+  // countdown at zero and waits for the owner's manual retry instead of looping.
+  const awaitingScan = status.state === null || status.state === "connecting";
+  const expired = secondsLeft === 0;
+  useEffect(() => {
+    if (expired && awaitingScan && !reconnectInFlight.current) void refreshQr();
+    // refreshQr is recreated every render; only the expiry edge may trigger it.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [expired, awaitingScan]);
+
   // The owner chose to scan the right phone: restart the same connection's QR flow.
   const restartScan = async () => {
     setIsReconnecting(true);
@@ -132,8 +143,8 @@ export function WhatsAppQrScanner({ socialAccountId, onComplete, onConnectAsNew 
 
   if (showMismatch) {
     return (
-      <Card className="border-destructive/40">
-        <CardContent className="space-y-4 p-6">
+      <Card className="border-0 shadow-none">
+        <CardContent className="space-y-4 p-0">
           <p className="text-sm font-medium text-destructive">
             {t("qr.mismatch", "You scanned a different phone. This connection belongs to the number ending {{last4}}.", { last4: status.expectedLast4 ?? "" })}
           </p>
@@ -155,8 +166,8 @@ export function WhatsAppQrScanner({ socialAccountId, onComplete, onConnectAsNew 
 
   if (status.state === "open") {
     return (
-      <Card className="border-green-500/40">
-        <CardContent className="flex items-center gap-3 p-6 text-green-700 dark:text-green-400">
+      <Card className="border-0 shadow-none">
+        <CardContent className="flex items-center gap-3 p-0 text-green-700 dark:text-green-400">
           <CheckCircle2 className="h-6 w-6" />
           <div><p className="font-medium">{t("qr.connected", "WhatsApp connected")}</p><p className="text-sm">{t("qr.connectedHint", "Your Direct QR session is now active.")}</p></div>
         </CardContent>
@@ -165,15 +176,15 @@ export function WhatsAppQrScanner({ socialAccountId, onComplete, onConnectAsNew 
   }
 
   return (
-    <Card>
-      <CardHeader>
+    <Card className="border-0 shadow-none">
+      <CardHeader className="px-0 pt-0">
         <CardTitle>{t("qr.scanTitle", "Scan the WhatsApp QR code")}</CardTitle>
         <CardDescription>{t("qr.scanHint", "Open WhatsApp on your phone, choose Linked devices, then scan this code.")}</CardDescription>
       </CardHeader>
-      <CardContent className="space-y-4">
-        <div className="flex min-h-[512px] items-center justify-center rounded-md border bg-white p-3">
+      <CardContent className="space-y-4 px-0 pb-0">
+        <div className="mx-auto flex aspect-square w-full max-w-[400px] items-center justify-center rounded-md border bg-white p-3">
           {status.qr && secondsLeft > 0 ? (
-            <img src={qrImageSource(status.qr)} alt={t("qr.alt", "WhatsApp connection QR code")} width={512} height={512} className="h-[512px] w-[512px] max-w-full" />
+            <img src={qrImageSource(status.qr)} alt={t("qr.alt", "WhatsApp connection QR code")} width={400} height={400} className="h-full w-full" />
           ) : (
             <div className="flex flex-col items-center gap-2 text-sm text-muted-foreground">
               <Loader2 className="h-6 w-6 animate-spin" />

@@ -445,22 +445,32 @@ export function WhatsAppSetup({ connectedAccounts }: WhatsAppSetupProps) {
         </CardContent>
       </Card>
 
-      {qrAccountId && (
-        <WhatsAppQrScanner
-          key={qrAccountId}
-          socialAccountId={qrAccountId}
-          onComplete={() => {
-            setQrAccountId(null);
-            queryClient.invalidateQueries({ queryKey: ["social_accounts"] });
-            queryClient.invalidateQueries({ queryKey: ["messaging_accounts"] });
-            queryClient.invalidateQueries({ queryKey: ["whatsapp-reconnectable-qr"] });
-          }}
-          onConnectAsNew={() => {
-            setQrAccountId(null);
-            setQrNameOpen(true);
-          }}
-        />
-      )}
+      {/* The QR opens as a popup so the owner can scan it without scrolling the page; a
+          successful scan closes it (onComplete), closing it by hand abandons the scan. */}
+      <Dialog open={qrAccountId !== null} onOpenChange={(open) => { if (!open) setQrAccountId(null); }}>
+        <DialogContent className="max-h-[92vh] max-w-lg overflow-y-auto">
+          <DialogHeader className="sr-only">
+            <DialogTitle>{t("qr.scanTitle", "Scan the WhatsApp QR code")}</DialogTitle>
+            <DialogDescription>{t("qr.scanHint", "Open WhatsApp on your phone, choose Linked devices, then scan this code.")}</DialogDescription>
+          </DialogHeader>
+          {qrAccountId && (
+            <WhatsAppQrScanner
+              key={qrAccountId}
+              socialAccountId={qrAccountId}
+              onComplete={() => {
+                setQrAccountId(null);
+                queryClient.invalidateQueries({ queryKey: ["social_accounts"] });
+                queryClient.invalidateQueries({ queryKey: ["messaging_accounts"] });
+                queryClient.invalidateQueries({ queryKey: ["whatsapp-reconnectable-qr"] });
+              }}
+              onConnectAsNew={() => {
+                setQrAccountId(null);
+                setQrNameOpen(true);
+              }}
+            />
+          )}
+        </DialogContent>
+      </Dialog>
 
       {/* Connection mode cards */}
       {!hasConnected && (!hideConnectButtons || evolutionQrEnabled) && (
