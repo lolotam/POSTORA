@@ -895,6 +895,42 @@ Deno.test("a greeting is scoped to the first reply, not every reply", async () =
   assertEquals(prompt.includes("Welcome to Xsellpoint."), true);
 });
 
+// curemedkw 2026-11-12: the greeting was only a prompt instruction and the model skipped it.
+Deno.test("the configured greeting is sent by code only in its own language", async () => {
+  const { fixedGreeting } = await import("./logic.ts");
+  const arabic = "  يا هلا وسهلا فيك، شلون أقدر أساعدك؟ 😊 ";
+  const cases: Array<[string | undefined, "ar" | "en", string | null]> = [
+    [arabic, "ar", arabic.trim()],
+    [arabic, "en", null],
+    ["Welcome to Xsellpoint.", "en", "Welcome to Xsellpoint."],
+    ["🌿", "en", "🌿"],
+    [undefined, "ar", null],
+    ["   ", "ar", null],
+  ];
+  for (const [greeting, language, expected] of cases) {
+    assertEquals(fixedGreeting(greeting, language), expected, `${greeting} / ${language}`);
+  }
+});
+
+Deno.test("the greeting opens the reply once, and stands alone when the reply is empty", async () => {
+  const { withGreeting } = await import("./logic.ts");
+  const greeting = "أهلاً بك في كيور ميد";
+  assertEquals(withGreeting("كريم الكعب متوفر بسعر 6 د.ك", greeting), `${greeting}\n\nكريم الكعب متوفر بسعر 6 د.ك`);
+  assertEquals(withGreeting(`${greeting}، كريم الكعب متوفر`, greeting), `${greeting}، كريم الكعب متوفر`);
+  assertEquals(withGreeting("", greeting), greeting);
+});
+
+Deno.test("when the system sends the greeting the model is told not to greet", async () => {
+  const { buildSystemPrompt } = await import("./logic.ts");
+  const prompt = buildSystemPrompt({
+    ...promptBase,
+    behavior: { greeting: "Welcome to Xsellpoint." },
+    greetingSent: true,
+  });
+  assertEquals(prompt.includes("open with"), false);
+  assertEquals(prompt.includes("Do not greet"), true);
+});
+
 Deno.test("instruction blocks render with their titles", async () => {
   const { buildSystemPrompt } = await import("./logic.ts");
   const prompt = buildSystemPrompt({

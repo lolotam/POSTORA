@@ -300,6 +300,11 @@ export interface SystemPromptParams {
    */
   behavior?: AgentBehavior | null;
   /**
+   * True when the system itself opens this reply with the configured greeting
+   * (fixedGreeting). The model is then told not to greet, or the customer reads two.
+   */
+  greetingSent?: boolean;
+  /**
    * The two stored handoff switches. They default to true wherever they are
    * read, because that is the column default every existing row carries -- an
    * undefined must never read as "off" and strip escalation from live agents.
@@ -425,6 +430,24 @@ const GOAL_RULES: Record<AgentGoal, string> = {
 };
 
 /**
+ * The configured greeting, to be sent verbatim by code, when its script matches the reply
+ * language. Null otherwise: an Arabic greeting must not open an English conversation, so
+ * that case stays with the model. A greeting with no letters (an emoji) fits either.
+ */
+export function fixedGreeting(greeting: string | undefined, language: ReplyLanguage): string | null {
+  const text = greeting?.trim();
+  if (!text) return null;
+  const script = letterLanguage(text);
+  return script === null || script === language ? text : null;
+}
+
+/** The reply opened by the greeting, unless the model already opened with it. */
+export function withGreeting(reply: string, greeting: string): string {
+  if (reply.startsWith(greeting)) return reply;
+  return reply ? `${greeting}\n\n${reply}` : greeting;
+}
+
+/**
  * The business's configuration, rendered as prompt lines.
  *
  * Additive by construction: an empty behavior returns an empty list, so every
@@ -432,7 +455,7 @@ const GOAL_RULES: Record<AgentGoal, string> = {
  * config. Nothing here can REMOVE a rule -- the guards that must not be
  * switchable are written directly into buildSystemPrompt below.
  */
-export function behaviorRules(behavior?: AgentBehavior | null): string[] {
+export function behaviorRules(behavior?: AgentBehavior | null, greetingSent = false): string[] {
   if (!behavior) return [];
   const lines: string[] = [];
   if (behavior.tone) lines.push(TONE_RULES[behavior.tone]);
@@ -446,7 +469,11 @@ export function behaviorRules(behavior?: AgentBehavior | null): string[] {
     );
   }
   const greeting = behavior.greeting?.trim();
-  if (greeting) {
+  if (greetingSent) {
+    lines.push(
+      "The system opens this reply with the business's greeting. Do not greet or introduce yourself; answer the customer's message directly.",
+    );
+  } else if (greeting) {
     // Scoped to the opening turn. Unscoped, the model repeats the greeting on
     // every reply, which reads as a bot that has forgotten the conversation.
     lines.push(`If this is your first reply in the conversation, open with: ${greeting}`);
@@ -560,7 +587,7 @@ export function buildSystemPrompt(params: SystemPromptParams): string {
     surfaceInstructions.intro,
     adminInstruction,
     params.persona ? `Business persona and instructions:\n${params.persona}` : "",
-    ...behaviorRules(params.behavior),
+    ...behaviorRules(params.behavior, params.greetingSent),
     languageInstruction,
     "Rules:",
     knowledgeOnlyRule(params.connectorNames),

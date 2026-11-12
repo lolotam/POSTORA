@@ -25,6 +25,7 @@ import {
   modelBudgetRemaining,
   parseModelRef,
   evaluateGates,
+  fixedGreeting,
   parallelizable,
   phaseTimings,
   procedurePromptBlock,
@@ -41,6 +42,7 @@ import {
   threadReplyLanguage,
   triageSystemHint,
   waRecipient,
+  withGreeting,
 } from "./logic.ts";
 import { repairChatReply } from "./chatLinks.ts";
 import {
@@ -1079,6 +1081,14 @@ Deno.serve(async (req) => {
       storedTurns: historyRows || [],
       windowTurns: history,
     });
+    // Sent by code on a conversation's first reply: as a prompt instruction the model skipped
+    // it (curemedkw, 2026-11-12). "First" means no stored turn at all -- not the window, which
+    // also empties after a quiet week -- and a failed history read is not a first message.
+    // Comments and store-event flows have their own openers.
+    const openingGreeting = !historyError && !historyRows?.length && !request.comment_id &&
+        initialProcedureState?.origin !== "event"
+      ? fixedGreeting(config.agent_behavior?.greeting, language)
+      : null;
     // Resolved on first use rather than up front. buildAdminNotifier throws when the user has
     // no connected WhatsApp account, and awaiting it here made that throw abort the entire
     // reply -- so a Facebook, Instagram or Threads user without WhatsApp got no answer at all,
@@ -1251,6 +1261,7 @@ Deno.serve(async (req) => {
     const systemPrompt = buildSystemPrompt({
       persona: config.persona_instructions,
       behavior: config.agent_behavior,
+      greetingSent: openingGreeting !== null,
       handoffOnRequest: config.handoff_on_request,
       handoffOnLowConfidence: config.handoff_on_low_confidence,
       language,
@@ -1491,6 +1502,7 @@ Deno.serve(async (req) => {
         // rule on a live reply (11:10 UTC), so rendering safety cannot
         // depend on it complying.
         replyText = repairChatReply((choice.content || "").trim());
+        if (openingGreeting) replyText = withGreeting(replyText, openingGreeting);
         break;
       }
 
