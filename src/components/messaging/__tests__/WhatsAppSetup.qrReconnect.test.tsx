@@ -27,6 +27,7 @@ const toastSpy = vi.hoisted(() => vi.fn());
 vi.mock("@/hooks/use-toast", () => ({ toast: toastSpy }));
 
 const invoke = vi.hoisted(() => vi.fn());
+const discardPendingQr = vi.hoisted(() => vi.fn());
 vi.mock("@/integrations/supabase/client", () => ({
   supabase: {
     functions: { invoke },
@@ -62,6 +63,7 @@ vi.mock("@/hooks/useWhatsAppConnect", () => ({
   useWhatsAppDisconnect: () => ({ mutate: vi.fn(), isPending: false }),
   useWhatsAppReconnect: () => ({ mutate: vi.fn(), isPending: false }),
   useWhatsAppRequestSync: () => ({ mutate: vi.fn(), isPending: false }),
+  useDiscardPendingWhatsAppQr: () => ({ mutate: discardPendingQr, isPending: false }),
 }));
 
 vi.mock("@/hooks/useUserRole", () => ({
@@ -208,6 +210,24 @@ describe("WhatsAppSetup QR reconnect", () => {
       expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
       expect(screen.queryByTestId("qr-scanner")).not.toBeInTheDocument();
     });
+    expect(discardPendingQr).not.toHaveBeenCalled();
+  });
+
+  it("asks the server to discard the attempt when the owner closes the popup unscanned", async () => {
+    invoke.mockResolvedValue({
+      data: { success: true, social_account_id: "qr-acc-1", qr: "qr-code", state: "connecting" },
+      error: null,
+    });
+
+    renderSetup();
+    fireEvent.click(screen.getByRole("button", { name: "Reconnect" }));
+    await screen.findByRole("dialog");
+
+    fireEvent.keyDown(document.activeElement ?? document.body, { key: "Escape" });
+
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(discardPendingQr).toHaveBeenCalledTimes(1);
+    expect(discardPendingQr).toHaveBeenCalledWith("qr-acc-1");
   });
 
   it("scanner mock renders button that calls onConnectAsNew: clicking it unmounts scanner and opens connection-name dialog", async () => {

@@ -83,6 +83,9 @@ verify_jwt = true
 [functions.sweep-ai-image-staging]
 verify_jwt = false
 
+[functions.sweep-pending-whatsapp-qr]
+verify_jwt = false
+
 # The competitor tracking report verifies the caller's bearer itself: it
 # resolves the owner from the verified identity and refuses a service
 # credential, because the database reader derives the owner from auth.uid().

@@ -10,6 +10,8 @@ import { importEvolutionHistory } from "../_shared/whatsappSyncEngine.ts";
 import { runInBackground } from "../_shared/background.ts";
 import { disconnectWhatsAppAccount, type WhatsAppDisconnectAdmin } from "../_shared/whatsappDisconnect.ts";
 import { resolveMaxSocialAccounts, type SocialAccountQuotaClient } from "../_shared/socialAccountQuota.ts";
+import { discardPendingQrAccount } from "../_shared/pendingQrCleanup.ts";
+import { createPendingQrCleanupPorts } from "../_shared/pendingQrCleanupPorts.ts";
 import { extractQr, extractState } from "./qr.ts";
 import { buildQrStatusDeps, getQrStatusResult } from "./qrStatus.ts";
 import { reconnectQr, ReconnectError } from "./reconnect.ts";
@@ -38,7 +40,8 @@ interface BridgeBody {
     | "get_sync_status"
     | "resubscribe_webhook"
     | "move_setup"
-    | "dismiss_setup_move";
+    | "dismiss_setup_move"
+    | "discard_pending_qr";
   social_account_id?: string;
   workspace_id?: string;
   risk_consent?: boolean;
@@ -384,6 +387,17 @@ async function logoutInstance(admin: any, userId: string, body: BridgeBody) {
   return { success: true, teardown };
 }
 
+// The owner closed the QR popup without pairing. Only a never-paired attempt is removed;
+// for a reconnect of a paired account (real number) this deletes nothing and says so.
+async function discardPendingQr(admin: any, userId: string, body: BridgeBody) {
+  if (!body.social_account_id) throw new BridgeError("social_account_id is required", 400);
+  const result = await discardPendingQrAccount(
+    createPendingQrCleanupPorts(admin, createEvolutionApi(), "whatsapp-evolution-bridge"),
+    { accountId: body.social_account_id, ownerId: userId, reason: "abandoned" },
+  );
+  return { success: true, social_account_id: body.social_account_id, deleted: result.deleted };
+}
+
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return handleRestrictedCorsOptions(req);
   try {
@@ -444,6 +458,9 @@ Deno.serve(async (req) => {
         if (error instanceof MoveSetupError) throw new BridgeError(error.code, error.status);
         throw error;
       }
+    }
+    if (body.action === "discard_pending_qr") {
+      return restrictedJsonResponse(req, await discardPendingQr(context.admin, context.user.id, body));
     }
     if (body.action === "logout_instance") {
       return restrictedJsonResponse(req, await logoutInstance(context.admin, context.user.id, body));
