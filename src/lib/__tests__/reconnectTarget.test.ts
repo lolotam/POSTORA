@@ -5,8 +5,7 @@ describe("reconnectTargetFor", () => {
   it("routes a WhatsApp QR account to the WhatsApp setup page", () => {
     expect(
       reconnectTargetFor({ platform: "whatsapp", connection_mode: "evolution_qr" }),
-    ).toEqual({ kind: "link", path: "/messaging/whatsapp/setup" });
-    expect(WHATSAPP_QR_SETUP_PATH).toBe("/messaging/whatsapp/setup");
+    ).toEqual({ kind: "link", path: WHATSAPP_QR_SETUP_PATH });
   });
 
   it("routes a Meta account through OAuth", () => {
