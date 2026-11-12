@@ -64,7 +64,7 @@
 | `supabase/functions/ai-agent-reply/agentQuality.test.ts` | New: tests for those helpers |
 | `supabase/functions/ai-agent-reply/index.ts` | Wiring (gate, language, reply birth, history merge) |
 | `supabase/functions/_shared/conversationModeOverride.ts` | Expiry through `expire_conversation_mode` |
-| `supabase/migrations/20261112130000_agent_handoff_messages.sql` | escalation/ack columns, thread marker, 3 RPCs |
+| `supabase/migrations/20261112170000_agent_handoff_messages.sql` | escalation/ack columns, thread marker, 3 RPCs |
 | `supabase/functions/ai-agent-adapters/supabase.ts` (+ test) | Allow-listed RPC mode |
 | `supabase/functions/_shared/connectorRegistry.ts` | `rpc_allow_list` setting, `query`/`max_results` parameters |
 | `supabase/functions/ai-agent-reply/logic.ts` `buildSystemPrompt` | Not-found / escalation rule |
@@ -187,7 +187,7 @@ export function replyLanguageText(inboundText: string): string;
 - The gate at `index.ts:759` runs before the sender (`:770`), history (`:894`) and `language` (`:1065`) exist. The ack path must build what it needs itself, and own the outbox row that is cancelled there today.
 - `escalationOverride` writes `mode='human_then_ai'` when no human is assigned. In that mode the AI never went silent, so it gets no ack and no apology. Only `mode='human_first'` rows count.
 
-**Migration:** `supabase/migrations/20261112130000_agent_handoff_messages.sql`
+**Migration:** `supabase/migrations/20261112170000_agent_handoff_messages.sql`
 
 ```sql
 ALTER TABLE public.ai_conversation_modes
@@ -199,18 +199,18 @@ ALTER TABLE public.ai_threads
 -- Texts are code constants (owner card 2026-11-12), not per-account columns.
 
 -- Single-flight: two deliveries of one message must not both send the ack.
-CREATE OR REPLACE FUNCTION public.claim_human_mode_ack(p_mode_id uuid) RETURNS boolean ...
+CREATE OR REPLACE FUNCTION public.claim_human_mode_ack(p_user_id uuid, p_platform text, p_conversation_id text) RETURNS boolean ...
   -- UPDATE ... SET customer_ack_sent_at = now()
-  --   WHERE id = p_mode_id AND customer_ack_sent_at IS NULL AND mode = 'human_first'
+  --   WHERE (user_id, platform, conversation_id) match AND customer_ack_sent_at IS NULL AND mode = 'human_first'
   --   AND expires_at > now() RETURNING 1
 
 -- Replaces the client-side delete: deletes the expired row and, for a human_first row, stamps
 -- the thread in the same statement, so whichever function observes the expiry leaves the marker.
-CREATE OR REPLACE FUNCTION public.expire_conversation_mode(p_mode_id uuid, p_expires_at timestamptz)
+CREATE OR REPLACE FUNCTION public.expire_conversation_mode(p_mode_id uuid, p_user_id uuid, p_expires_at timestamptz)
 RETURNS boolean ...
 
 -- Returns and clears the marker atomically (NULL when there is none).
-CREATE OR REPLACE FUNCTION public.take_unanswered_escalation(p_thread_id uuid)
+CREATE OR REPLACE FUNCTION public.take_unanswered_escalation(p_thread_id uuid, p_user_id uuid)
 RETURNS timestamptz ...
 -- Each: SECURITY DEFINER, SET search_path = public, pg_temp; REVOKE from PUBLIC, anon,
 -- authenticated; GRANT EXECUTE to service_role. NOTIFY pgrst, 'reload schema'.
@@ -247,10 +247,8 @@ The function bodies are written in full in the migration. Each one is proved in 
 
 **Interfaces — Produces:**
 ```ts
-export function staffTurnsSince(
-  rows: Array<{ direction: string; from_name: string | null; body: string | null; created_at: string }>,
-  sinceIso: string,
-): Array<{ role: "assistant"; content: string; created_at: string }>;
+export function staffTurnsSince(rows: MessageRow[], sinceIso: string): StoredTurn[];
+// MessageRow = { direction, from_name, message_text, created_at } (whatsapp_messages columns)
 export function escalationApologyText(
   since: string | null, staffTurns: number, language: ReplyLanguage,
 ): string | null; // ESCALATION_APOLOGY[language] only when since is set and staffTurns === 0

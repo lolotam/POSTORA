@@ -295,6 +295,7 @@ export async function escalateConversation(
   const msLeft = () => (deadlineAt === undefined ? undefined : Math.max(0, deadlineAt - Date.now()));
 
   const nowMs = Date.now();
+  const escalatedAt = new Date(nowMs).toISOString();
   // What the conversation already holds decides whether this escalation may
   // write at all. A manual override (no expiry) is the operator's decision and
   // outranks the escalation: it is left untouched, so expiry can never undo a
@@ -358,6 +359,8 @@ export async function escalateConversation(
           expires_at: proposed.expires_at,
           handoff_summary: summary,
           handoff_summary_at: summaryAt,
+          escalated_at: escalatedAt,
+          customer_ack_sent_at: null,
         });
       if (insertError && insertError.code !== "23505") throw insertError;
       written = !insertError;
@@ -369,6 +372,9 @@ export async function escalateConversation(
           expires_at: proposed.expires_at,
           handoff_summary: summary,
           handoff_summary_at: summaryAt,
+          // A new window: staff replies count from here, and the customer is told once again.
+          escalated_at: escalatedAt,
+          customer_ack_sent_at: null,
         })
         .eq("id", existing.id)
         .eq("user_id", target.userId)

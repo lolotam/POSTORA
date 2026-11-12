@@ -41,13 +41,14 @@ Deno.test("escalation timeout defaults to 240 minutes and is clamped to the allo
   assertEquals(escalationOverride("ai_first", false, -5, NOW).expires_at, "2026-09-13T10:01:00.000Z");
 });
 
-// A fake PostgREST client for the reader: one stored row (or none), a delete
-// that honours its own filters, and a hook that lets a test change the row
-// between the reader's first read and its delete -- the operator race.
+// A fake PostgREST client for the reader: one stored row (or none), the
+// expire_conversation_mode RPC honouring its own arguments, and a hook that
+// lets a test change the row between the reader's first read and the expiry
+// -- the operator race.
 type StoredRow = Record<string, unknown> | null;
 function readerClient(
   initial: StoredRow,
-  options: { afterFirstRead?: () => StoredRow; failDelete?: boolean } = {},
+  options: { afterFirstRead?: () => StoredRow; failExpire?: boolean } = {},
 ) {
   const calls: string[] = [];
   let current = initial;
@@ -57,10 +58,8 @@ function readerClient(
   const admin = {
     from(_table: string) {
       const filters: [string, unknown][] = [];
-      let op = "select";
       const query = {
         select: () => query,
-        delete: () => { op = "delete"; return query; },
         eq: (key: string, value: unknown) => { filters.push([key, value]); return query; },
         maybeSingle: () => {
           calls.push("read");
@@ -69,16 +68,15 @@ function readerClient(
           if (reads === 1 && options.afterFirstRead) current = options.afterFirstRead();
           return Promise.resolve({ data, error: null });
         },
-        then: (resolve: (value: unknown) => unknown) => {
-          calls.push(op);
-          if (options.failDelete) return Promise.resolve({ data: null, error: { message: "timeout" } }).then(resolve);
-          const hit = matches(filters);
-          const deleted = hit ? [{ id: current!.id }] : [];
-          if (hit) current = null;
-          return Promise.resolve({ data: deleted, error: null }).then(resolve);
-        },
       };
       return query;
+    },
+    rpc(name: string, args: Record<string, unknown>) {
+      calls.push(name);
+      if (options.failExpire) return Promise.resolve({ data: null, error: { message: "timeout" } });
+      const hit = matches([["id", args.p_mode_id], ["user_id", args.p_user_id], ["expires_at", args.p_expires_at]]);
+      if (hit) current = null;
+      return Promise.resolve({ data: hit, error: null });
     },
   };
   return { admin, calls, stored: () => current };
@@ -87,34 +85,34 @@ function readerClient(
 const SCOPE = { userId: "u1", platform: "whatsapp", conversationId: "c1" };
 const ROW = { id: "m1", user_id: "u1", platform: "whatsapp", conversation_id: "c1" };
 
-Deno.test("reader: an active override is returned and nothing is deleted", async () => {
+Deno.test("reader: an active override is returned and nothing is expired", async () => {
   const c = readerClient({ ...ROW, mode: "human_first", expires_at: "2026-09-13T11:00:00Z" });
   assertEquals(await resolveConversationOverride(c.admin, SCOPE, NOW), "human_first");
   assertEquals(c.calls, ["read"]);
 });
 
-Deno.test("reader: an expired override reads as absent and the exact row is deleted", async () => {
+Deno.test("reader: an expired override reads as absent and the exact row is expired", async () => {
   const c = readerClient({ ...ROW, mode: "human_first", expires_at: "2026-09-13T09:00:00Z" });
   assertEquals(await resolveConversationOverride(c.admin, SCOPE, NOW), null);
-  assertEquals(c.calls, ["read", "delete"]);
+  assertEquals(c.calls, ["read", "expire_conversation_mode"]);
   assertEquals(c.stored(), null);
 });
 
-Deno.test("reader: a manual row written after the read is not deleted and wins", async () => {
-  // Between the read and the delete an operator sets a manual human_first
-  // (expires_at null). The delete filters on the observed expires_at, so it
+Deno.test("reader: a manual row written after the read is not expired and wins", async () => {
+  // Between the read and the expiry an operator sets a manual human_first
+  // (expires_at null). The expiry matches on the observed expires_at, so it
   // removes nothing; the re-read then honours the operator's row.
   const c = readerClient(
     { ...ROW, mode: "human_first", expires_at: "2026-09-13T09:00:00Z" },
     { afterFirstRead: () => ({ ...ROW, mode: "human_first", expires_at: null }) },
   );
   assertEquals(await resolveConversationOverride(c.admin, SCOPE, NOW), "human_first");
-  assertEquals(c.calls, ["read", "delete", "read"]);
+  assertEquals(c.calls, ["read", "expire_conversation_mode", "read"]);
   assertEquals(c.stored()?.expires_at, null);
 });
 
-Deno.test("reader: a failed delete is logged, not fatal, and the expired row is ignored", async () => {
-  const c = readerClient({ ...ROW, mode: "human_first", expires_at: "2026-09-13T09:00:00Z" }, { failDelete: true });
+Deno.test("reader: a failed expiry is logged, not fatal, and the expired row is ignored", async () => {
+  const c = readerClient({ ...ROW, mode: "human_first", expires_at: "2026-09-13T09:00:00Z" }, { failExpire: true });
   const originalError = console.error;
   const logged: unknown[][] = [];
   console.error = (...args: unknown[]) => { logged.push(args); };

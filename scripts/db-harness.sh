@@ -184,6 +184,7 @@ SUITES=(
   instagram_owner_enqueue_reconnect_required.sql
   background_jobs.sql
   instagram_story_jobs.sql
+  agent_handoff_messages.sql
 )
 # These fixtures build their own focused schema and apply the migration under
 # test. They must never run against the restored production-shaped database.

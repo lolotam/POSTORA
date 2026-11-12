@@ -913,11 +913,49 @@ Deno.test("the configured greeting is sent by code only in its own language", as
 });
 
 Deno.test("the greeting opens the reply once, and stands alone when the reply is empty", async () => {
-  const { withGreeting } = await import("./logic.ts");
+  const { withOpening } = await import("./logic.ts");
   const greeting = "أهلاً بك في كيور ميد";
-  assertEquals(withGreeting("كريم الكعب متوفر بسعر 6 د.ك", greeting), `${greeting}\n\nكريم الكعب متوفر بسعر 6 د.ك`);
-  assertEquals(withGreeting(`${greeting}، كريم الكعب متوفر`, greeting), `${greeting}، كريم الكعب متوفر`);
-  assertEquals(withGreeting("", greeting), greeting);
+  assertEquals(withOpening("كريم الكعب متوفر بسعر 6 د.ك", greeting), `${greeting}\n\nكريم الكعب متوفر بسعر 6 د.ك`);
+  assertEquals(withOpening(`${greeting}، كريم الكعب متوفر`, greeting), `${greeting}، كريم الكعب متوفر`);
+  assertEquals(withOpening("", greeting), greeting);
+});
+
+// curemedkw 2026-11-12: after a silent escalation nobody answered, and the agent resumed as if
+// nothing had happened. The apology is owed only when no staff member replied in the window.
+Deno.test("the apology after an escalation is owed only when no staff member replied", async () => {
+  const { escalationApologyText } = await import("./logic.ts");
+  const since = "2026-11-12T08:00:00.000Z";
+  const cases: Array<[string | null, number, "ar" | "en", string | null]> = [
+    [since, 0, "ar", "نعتذر عن التأخير في الرد 🙏"],
+    [since, 0, "en", "Sorry for the delay in getting back to you."],
+    [since, 2, "ar", null],
+    [null, 0, "ar", null],
+  ];
+  for (const [marker, staffTurns, language, expected] of cases) {
+    assertEquals(escalationApologyText(marker, staffTurns, language), expected, `${marker} / ${staffTurns} / ${language}`);
+  }
+});
+
+Deno.test("only the staff's own replies after the escalation become history turns, oldest first", async () => {
+  const { staffTurnsSince } = await import("./logic.ts");
+  const since = "2026-11-12T08:00:00.000Z";
+  const row = (from_name: string | null, message_text: string | null, created_at: string, direction = "outbound") => ({
+    direction, from_name, message_text, created_at,
+  });
+  const turns = staffTurnsSince([
+    row("You", "متوفر عندنا، تبي أحجزه لك؟", "2026-11-12T09:30:00.000Z"),
+    row("You", "مرحبا، شلون أقدر أساعدك؟", "2026-11-12T09:00:00.000Z"),
+    row("You", "a reply from before the escalation", "2026-11-12T07:59:00.000Z"),
+    row("AI Agent", "the agent's own reply", "2026-11-12T09:10:00.000Z"),
+    row("Auto-Reply", "away message", "2026-11-12T09:11:00.000Z"),
+    row("Store", "your order shipped", "2026-11-12T09:12:00.000Z"),
+    row("Customer", "the customer's question", "2026-11-12T09:13:00.000Z", "inbound"),
+    row("You", null, "2026-11-12T09:14:00.000Z"),
+  ], since);
+  assertEquals(turns, [
+    { role: "assistant", content: "(staff) مرحبا، شلون أقدر أساعدك؟", created_at: "2026-11-12T09:00:00.000Z" },
+    { role: "assistant", content: "(staff) متوفر عندنا، تبي أحجزه لك؟", created_at: "2026-11-12T09:30:00.000Z" },
+  ]);
 });
 
 Deno.test("when the system sends the greeting the model is told not to greet", async () => {
@@ -1221,6 +1259,21 @@ Deno.test("a repeated escalation updates only the summary columns of the untouch
   assertEquals(db.tables.ai_conversation_modes[0].mode, "human_then_ai");
   assertEquals(db.tables.ai_conversation_modes[0].expires_at, until);
   assertEquals(db.tables.ai_conversation_modes[0].handoff_summary, TOOL_SUMMARY);
+});
+
+Deno.test("a new escalation over an ended window restarts its clock and re-arms the customer notice", async () => {
+  const db = escalationDatabase();
+  db.tables.whatsapp_agents.forEach((agent) => { agent.status = "offline"; });
+  db.tables.ai_conversation_modes.push({
+    id: "m1", user_id: "owner-a", platform: "whatsapp", conversation_id: "shared-key",
+    mode: "human_first", expires_at: "2000-01-01T04:00:00.000Z",
+    escalated_at: "2000-01-01T00:00:00.000Z", customer_ack_sent_at: "2000-01-01T00:01:00.000Z",
+  });
+  const before = new Date().toISOString();
+  await escalateConversation(escalationTarget(db.admin, { defaultMode: "human_first" }), "help again");
+  const row = db.tables.ai_conversation_modes[0];
+  assertEquals(row.customer_ack_sent_at, null);
+  assertEquals(typeof row.escalated_at === "string" && row.escalated_at >= before, true);
 });
 
 Deno.test("a manual override written between the read and the first write wins", async () => {

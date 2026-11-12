@@ -15,10 +15,13 @@ import {
   buildSystemPrompt,
   completionFailure,
   customerLanguageSignal,
+  detectReplyLanguage,
+  escalationApologyText,
   formatRelatedFacts,
   formatModelRef,
   type GraphRelationFact,
   historyWindow,
+  HUMAN_MODE_ACK,
   ModelChainExhaustedError,
   iterationBudget,
   jevStartKey,
@@ -39,10 +42,12 @@ import {
   type ReplyLanguage,
   SIMILARITY_FLOOR,
   shouldAiReply,
+  staffTurnsSince,
+  type StoredTurn,
   threadReplyLanguage,
   triageSystemHint,
   waRecipient,
-  withGreeting,
+  withOpening,
 } from "./logic.ts";
 import { repairChatReply } from "./chatLinks.ts";
 import {
@@ -124,6 +129,8 @@ const SERVICE_WINDOW_MS = 24 * 60 * 60 * 1000;
 // curemedkw customer who described the product over several messages lost the
 // start of the thread. 14 rows is seven customer messages with their replies.
 const HISTORY_LIMIT = 14;
+// Staff replies merged in after an escalation window; the same order of size as the history.
+const STAFF_TURN_LIMIT = 14;
 
 // For WhatsApp, recipient_phone is the customer's phone and phone_number_id
 // the business number. For Facebook/Instagram, recipient_phone carries the
@@ -266,6 +273,80 @@ async function isWithinServiceWindow(admin: any, userId: string, conversationId:
     .maybeSingle();
   if (!lastInbound?.timestamp) return false;
   return Date.now() - new Date(lastInbound.timestamp).getTime() < SERVICE_WINDOW_MS;
+}
+
+/**
+ * Whether this closed gate owes the customer the one-time "our team has your conversation"
+ * notice. Only a WhatsApp chat in a bounded human_first window qualifies (the RPC checks the
+ * window); the claim is single-flight, so a second message or a redelivery sends nothing.
+ * A failed claim sends nothing: silence is what the gate decided anyway.
+ */
+async function claimHumanModeAck(admin: any, request: ReplyRequest, gateReason: string): Promise<boolean> {
+  if (gateReason !== "mode_human_first" || request.platform !== "whatsapp" || request.comment_id) return false;
+  const { data, error } = await admin.rpc("claim_human_mode_ack", {
+    p_user_id: request.user_id,
+    p_platform: request.platform,
+    p_conversation_id: request.conversation_id,
+  });
+  if (error) {
+    console.error("[ai-agent-reply] human-mode ack claim failed:", error.message);
+    return false;
+  }
+  return data === true;
+}
+
+/**
+ * A message the human_first gate holds back is still part of the conversation. Kept in the
+ * thread so that, when the window ends, the agent reads what the customer asked meanwhile.
+ */
+async function recordHeldCustomerTurn(admin: any, threadId: string, request: ReplyRequest): Promise<void> {
+  const { error } = await admin.from("ai_thread_messages").insert({
+    thread_id: threadId,
+    user_id: request.user_id,
+    role: "user",
+    content: request.inbound_text,
+  });
+  if (error) console.error("[ai-agent-reply] held customer turn write failed:", error.message);
+}
+
+interface EscalationAftermath {
+  /** When the silent window that ended unanswered began; null when nothing is owed. */
+  since: string | null;
+  staffTurns: StoredTurn[];
+}
+
+/**
+ * Takes the thread's unanswered-escalation marker and what staff wrote since it.
+ *
+ * The marker is cleared by the take, so only this reply acts on it. A failed staff read
+ * owes no apology: claiming a delay staff may in fact have answered is worse than omitting one.
+ */
+async function escalationAftermath(admin: any, request: ReplyRequest, threadId: string): Promise<EscalationAftermath> {
+  const none: EscalationAftermath = { since: null, staffTurns: [] };
+  const { data: since, error } = await admin.rpc("take_unanswered_escalation", {
+    p_thread_id: threadId,
+    p_user_id: request.user_id,
+  });
+  if (error) {
+    console.error("[ai-agent-reply] unanswered-escalation take failed:", error.message);
+    return none;
+  }
+  if (typeof since !== "string") return none;
+  const { data: rows, error: rowsError } = await admin
+    .from("whatsapp_messages")
+    .select("direction, from_name, message_text, created_at")
+    .eq("user_id", request.user_id)
+    .eq("conversation_id", request.conversation_id)
+    .eq("direction", "outbound")
+    .eq("from_name", "You")
+    .gt("created_at", since)
+    .order("created_at", { ascending: true })
+    .limit(STAFF_TURN_LIMIT);
+  if (rowsError) {
+    console.error("[ai-agent-reply] staff replies read failed:", rowsError.message);
+    return none;
+  }
+  return { since, staffTurns: staffTurnsSince(rows ?? [], since) };
 }
 
 async function isCooldownActive(admin: any, threadId: string, cooldownSeconds: number): Promise<boolean> {
@@ -728,6 +809,8 @@ Deno.serve(async (req) => {
     const mode = resolveEngagementMode(overrideMode, config.default_mode);
     const { data: thread, error: threadError } = threadResult;
     if (threadError) throw threadError;
+    const storedCustomerLanguage: ReplyLanguage | null =
+      thread.customer_language === "ar" || thread.customer_language === "en" ? thread.customer_language : null;
 
     const procedureConfig = readProcedureConfig(config.agent_behavior?.procedures);
     // A live store-event opener is not a flow yet; the turn leaves it alone. A stale one is not live.
@@ -738,6 +821,11 @@ Deno.serve(async (req) => {
     // The claim port advances this. The final write must expect it, not the value read above:
     // the winner then moves claimed -> null, and the loser's compare-and-set still expects what it read.
     const durableProcedureState = { current: thread.procedure_state ?? null };
+
+    // Set when a closed human_first gate still owes the customer its one-time notice. The
+    // notice is then the whole reply: it goes out below, after the sender and the outbox row
+    // are in hand, and no model is called.
+    let humanModeAck: string | null = null;
 
     // Sandbox runs bypass the delivery gates — they test the agent's brain,
     // not the conversation's delivery state. The sender is built only after
@@ -759,11 +847,22 @@ Deno.serve(async (req) => {
         ...gateChecks,
       });
       if (!gate.reply) {
-        await logOutcome(admin, { ...baseLog, status: "skipped", error: gate.reason });
-        // Terminal for the work item: a closed gate is a decision, and recovery re-driving
-        // the row would only reach the same gate.
-        if (outboxId) await cancelOutboxRow(admin, outboxId, gate.reason);
-        return jsonResponse({ ok: true, skipped: gate.reason });
+        if (await claimHumanModeAck(admin, request, gate.reason)) {
+          humanModeAck = HUMAN_MODE_ACK[
+            detectReplyLanguage(request.inbound_text, config.language_mode, request.language_hint, {
+              customerLanguage: storedCustomerLanguage,
+            })
+          ];
+        } else {
+          if (gate.reason === "mode_human_first" && request.platform === "whatsapp") {
+            await recordHeldCustomerTurn(admin, thread.id, request);
+          }
+          await logOutcome(admin, { ...baseLog, status: "skipped", error: gate.reason });
+          // Terminal for the work item: a closed gate is a decision, and recovery re-driving
+          // the row would only reach the same gate.
+          if (outboxId) await cancelOutboxRow(admin, outboxId, gate.reason);
+          return jsonResponse({ ok: true, skipped: gate.reason });
+        }
       }
     }
 
@@ -864,6 +963,28 @@ Deno.serve(async (req) => {
       }
     }
 
+    // The human_first notice travels the same durable send as a generated reply, so a kill
+    // mid-send leaves a row recovery can classify, and it leaves the same thread trail.
+    if (humanModeAck && replySender) {
+      const sender = replySender;
+      const outboundMessageId = outboxId
+        ? await deliverGeneratedReply(
+          admin,
+          outboxId,
+          { text: humanModeAck, toolCalls: [] },
+          (text) => sender(request.recipient_phone, text),
+        )
+        : await sender(request.recipient_phone, humanModeAck);
+      await persistDelivery(humanModeAck, outboundMessageId, []);
+      await logOutcome(admin, {
+        ...baseLog,
+        reply_text: humanModeAck,
+        latency_ms: Date.now() - startedAt,
+        status: "human_mode_ack",
+      }, { outbound_message_id: outboundMessageId });
+      return jsonResponse({ ok: true, human_mode_ack: true, reply: humanModeAck });
+    }
+
     // The sandbox passes the literal "test" when a caller names no account, and
     // .eq() against a uuid column with a non-uuid raises 22P02 -- which would
     // kill a reply over a tool list. Anything unusable degrades to the
@@ -882,16 +1003,17 @@ Deno.serve(async (req) => {
       cachedConversationQuery = cachedConversationQuery.eq("social_account_id", request.social_account_id);
     }
 
-    // These five reads do not use each other's results. Promise.all, not
+    // These six reads do not use each other's results. Promise.all, not
     // allSettled: a read that threw before still throws and the reply fails
-    // the same way. The link read is the exception that already returned an
-    // error instead of throwing; that handling stays after the group.
+    // the same way. The link read and the escalation aftermath are the
+    // exceptions that report an error instead of throwing.
     const [
       historyResult,
       embeddingConfig,
       cachedConversationResult,
       customToolResult,
       linkResult,
+      aftermath,
     ] = await Promise.all([
       admin
         .from("ai_thread_messages")
@@ -921,6 +1043,11 @@ Deno.serve(async (req) => {
           .eq("user_id", request.user_id)
           .eq("social_account_id", scopedAccountId)
         : Promise.resolve({ data: null, error: null }),
+      // Only WhatsApp keeps staff messages locally, and a sandbox run must not consume the
+      // marker a real customer's next reply is owed.
+      request.platform === "whatsapp" && !dryRun
+        ? escalationAftermath(admin, request, thread.id)
+        : Promise.resolve<EscalationAftermath>({ since: null, staffTurns: [] }),
     ]);
 
     const { data: historyRows, error: historyError } = historyResult;
@@ -929,7 +1056,13 @@ Deno.serve(async (req) => {
       // thread, which also leaves a letterless message ("5", an emoji) to the English default.
       console.error("[ai-agent-reply] history read failed; replying without the thread:", historyError.message);
     }
-    const { turns: history, staleNote: historyStaleNote } = historyWindow(historyRows || [], Date.now());
+    // What staff told the customer during the escalation window is part of the conversation
+    // the agent resumes; without it the agent would repeat or contradict them.
+    const storedTurns: StoredTurn[] = aftermath.staffTurns.length
+      ? [...(historyRows || []), ...aftermath.staffTurns]
+        .sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at))
+      : historyRows || [];
+    const { turns: history, staleNote: historyStaleNote } = historyWindow(storedTurns, Date.now());
 
     let toolLinks: ToolAccountLink[] = [];
     let toolLinksDegraded = false;
@@ -1075,9 +1208,7 @@ Deno.serve(async (req) => {
           openerLanguage: initialProcedureState.opener_language ?? openerLanguage(config.language_mode),
         }
         : null,
-      customerLanguage: thread.customer_language === "ar" || thread.customer_language === "en"
-        ? thread.customer_language
-        : null,
+      customerLanguage: storedCustomerLanguage,
       storedTurns: historyRows || [],
       windowTurns: history,
     });
@@ -1089,6 +1220,8 @@ Deno.serve(async (req) => {
         initialProcedureState?.origin !== "event"
       ? fixedGreeting(config.agent_behavior?.greeting, language)
       : null;
+    // Owed when the silent escalation that just ended went unanswered by staff.
+    const escalationApology = escalationApologyText(aftermath.since, aftermath.staffTurns.length, language);
     // Resolved on first use rather than up front. buildAdminNotifier throws when the user has
     // no connected WhatsApp account, and awaiting it here made that throw abort the entire
     // reply -- so a Facebook, Instagram or Threads user without WhatsApp got no answer at all,
@@ -1502,7 +1635,8 @@ Deno.serve(async (req) => {
         // rule on a live reply (11:10 UTC), so rendering safety cannot
         // depend on it complying.
         replyText = repairChatReply((choice.content || "").trim());
-        if (openingGreeting) replyText = withGreeting(replyText, openingGreeting);
+        if (openingGreeting) replyText = withOpening(replyText, openingGreeting);
+        if (escalationApology) replyText = withOpening(replyText, escalationApology);
         break;
       }
 

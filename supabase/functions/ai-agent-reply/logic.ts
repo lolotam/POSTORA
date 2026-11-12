@@ -441,10 +441,57 @@ export function fixedGreeting(greeting: string | undefined, language: ReplyLangu
   return script === null || script === language ? text : null;
 }
 
-/** The reply opened by the greeting, unless the model already opened with it. */
-export function withGreeting(reply: string, greeting: string): string {
-  if (reply.startsWith(greeting)) return reply;
-  return reply ? `${greeting}\n\n${reply}` : greeting;
+/** The reply opened by a fixed text (greeting, apology), unless the model already opened with it. */
+export function withOpening(reply: string, opening: string): string {
+  if (reply.startsWith(opening)) return reply;
+  return reply ? `${opening}\n\n${reply}` : opening;
+}
+
+// Wording approved by the account owner on 2026-11-12. Fixed in code rather than per account:
+// they are system notices, not conversation, and the model is never asked to write them.
+export const HUMAN_MODE_ACK: Record<ReplyLanguage, string> = {
+  ar: "تم تحويل محادثتك لفريقنا، وراح يرد عليك أحد الموظفين بأقرب وقت 🌿",
+  en: "Your conversation is now with our team; a staff member will reply as soon as possible.",
+};
+
+const ESCALATION_APOLOGY: Record<ReplyLanguage, string> = {
+  ar: "نعتذر عن التأخير في الرد 🙏",
+  en: "Sorry for the delay in getting back to you.",
+};
+
+/**
+ * The apology that opens the assistant's first reply after a silent escalation ended.
+ * `since` is the escalation the thread was marked with; null means nothing is owed. When a
+ * staff member did reply in the window the customer was answered, so no apology -- their
+ * replies go into the history instead (staffTurnsSince).
+ */
+export function escalationApologyText(since: string | null, staffTurns: number, language: ReplyLanguage): string | null {
+  return since !== null && staffTurns === 0 ? ESCALATION_APOLOGY[language] : null;
+}
+
+export interface MessageRow {
+  direction: string;
+  from_name: string | null;
+  message_text: string | null;
+  created_at: string;
+}
+
+/**
+ * What staff wrote to the customer after `sinceIso`, as assistant turns, oldest first.
+ *
+ * A positive match on from_name "You", the marker every staff send path writes. Every other
+ * outbound row (the agent, auto-reply rules, store openers, broadcasts) is not a staff answer.
+ * The "(staff)" prefix keeps the model from taking those words for its own.
+ */
+export function staffTurnsSince(rows: MessageRow[], sinceIso: string): StoredTurn[] {
+  const since = Date.parse(sinceIso);
+  return rows
+    .filter((row) =>
+      row.direction === "outbound" && row.from_name === "You" && Boolean(row.message_text?.trim()) &&
+      Date.parse(row.created_at) > since
+    )
+    .sort((a, b) => Date.parse(a.created_at) - Date.parse(b.created_at))
+    .map((row) => ({ role: "assistant", content: `(staff) ${row.message_text!.trim()}`, created_at: row.created_at }));
 }
 
 /**

@@ -66,6 +66,8 @@ export function escalationOverride(
 export interface OverrideReaderClient {
   // deno-lint-ignore no-explicit-any
   from(table: string): any;
+  // deno-lint-ignore no-explicit-any
+  rpc(fn: string, args: Record<string, unknown>): PromiseLike<{ data: any; error: any }>;
 }
 
 export interface ConversationScope {
@@ -90,13 +92,18 @@ function scoped(query: any, scope: ConversationScope) {
  * The override that applies to a conversation right now, with expired rows
  * cleaned up on the way.
  *
- * Reads the row, treats an expired one as absent, and deletes it -- but only
+ * Reads the row, treats an expired one as absent, and expires it -- but only
  * the exact row observed (id AND the expires_at it carried): an operator may
  * have replaced it meanwhile, and that newer decision wins, so when nothing
- * was deleted the row is read again and judged afresh. A failed read is
+ * was expired the row is read again and judged afresh. A failed read is
  * thrown, never turned into "no override": that would let the assistant
  * answer a chat a human has taken (AGENTS.md reviewer rule 3). A failed
- * delete is logged and ignored; the row is merely ignored until next time.
+ * expiry is logged and ignored; the row is merely ignored until next time.
+ *
+ * Expiry is the expire_conversation_mode RPC, not a plain delete: whichever
+ * function happens to observe a silent (human_first) window ending must leave
+ * the thread marked, in the same statement, so the assistant's first reply
+ * afterwards knows the customer may have waited unanswered.
  *
  * Every query carries user_id because callers run as the service role and
  * tenancy has to be structural (ARCHITECTURE.md §24).
@@ -115,18 +122,16 @@ export async function resolveConversationOverride(
   const active = activeOverrideMode(observed, nowMs);
   if (!observed || active !== null) return active;
 
-  const { data: deleted, error: deleteError } = await admin
-    .from("ai_conversation_modes")
-    .delete()
-    .eq("id", observed.id)
-    .eq("user_id", scope.userId)
-    .eq("expires_at", observed.expires_at)
-    .select("id");
-  if (deleteError) {
-    console.error("[conversation-mode] expired override cleanup failed:", String(deleteError.message ?? deleteError));
+  const { data: expired, error: expireError } = await admin.rpc("expire_conversation_mode", {
+    p_mode_id: observed.id,
+    p_user_id: scope.userId,
+    p_expires_at: observed.expires_at,
+  });
+  if (expireError) {
+    console.error("[conversation-mode] expired override cleanup failed:", String(expireError.message ?? expireError));
     return null;
   }
-  if (Array.isArray(deleted) && deleted.length > 0) return null;
+  if (expired === true) return null;
 
   const { data: replaced, error: replacedError } = await scoped(
     admin.from("ai_conversation_modes").select("id, mode, expires_at"),
