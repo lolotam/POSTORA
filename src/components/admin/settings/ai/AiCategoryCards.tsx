@@ -14,7 +14,7 @@ import {
   useSetFallback2Model,
   useSetModelAdminParams,
 } from '@/hooks/useAIConfiguration';
-import type { AIModel, ModelCategory } from '@/hooks/useAIConfiguration';
+import type { AIModel, AiAuthMethod, ModelCategory } from '@/hooks/useAIConfiguration';
 import { embeddingModelNote } from '@/hooks/ai-config/embeddingDimensions';
 import { reEmbedWarningFor, useEmbeddingColumnOwners } from '@/hooks/useEmbeddingColumnOwners';
 import { supabase } from '@/integrations/supabase/client';
@@ -47,7 +47,7 @@ function AiCategoryCard({
   const setModelAdminParams = useSetModelAdminParams();
   const { data: columnOwners = {} } = useEmbeddingColumnOwners();
 
-  const handleSetDefault = async (providerCode: string, modelId: string) => {
+  const handleSetDefault = async (providerCode: string, modelId: string, authMethod?: AiAuthMethod) => {
     // Embedding is the one category where changing the model destroys value: the stored
     // vectors stop being comparable to new queries. The edge function refuses, but only
     // after the click — ask first, and say what it costs.
@@ -61,25 +61,25 @@ function AiCategoryCard({
       if (warning && !window.confirm(`${warning}\n\nSwitch anyway?`)) return;
     }
     try {
-      await setDefaultModel.mutateAsync({ provider_code: providerCode, model_id: modelId, category });
+      await setDefaultModel.mutateAsync({ provider_code: providerCode, model_id: modelId, category, auth_method: authMethod });
       toast.success('Default model updated');
     } catch {
       toast.error('Failed to update default');
     }
   };
 
-  const handleSetFallback = async (providerCode: string, modelId: string) => {
+  const handleSetFallback = async (providerCode: string, modelId: string, authMethod?: AiAuthMethod) => {
     try {
-      await setFallbackModel.mutateAsync({ provider_code: providerCode, model_id: modelId, category });
+      await setFallbackModel.mutateAsync({ provider_code: providerCode, model_id: modelId, category, auth_method: authMethod });
       toast.success('Fallback model updated');
     } catch {
       toast.error('Failed to update fallback');
     }
   };
 
-  const handleSetFallback2 = (providerCode: string, modelId: string) => {
+  const handleSetFallback2 = (providerCode: string, modelId: string, authMethod?: AiAuthMethod) => {
     setFallback2Model.mutate(
-      { provider_code: providerCode, model_id: modelId, category },
+      { provider_code: providerCode, model_id: modelId, category, auth_method: authMethod },
       {
         onSuccess: () => toast.success('Second fallback updated'),
         onError: (error: Error) => toast.error(error.message),

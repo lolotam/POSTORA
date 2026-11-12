@@ -3,13 +3,14 @@ import {
   Card, CardContent, CardDescription, CardHeader, CardTitle,
 } from '@/components/ui/card';
 import {
-  Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
+  Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectTrigger, SelectValue,
 } from '@/components/ui/select';
 import { Badge } from '@/components/ui/badge';
 import { Label } from '@/components/ui/label';
 import { Check, ChevronsUpDown, Loader2, Shield, ShieldAlert } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
-import type { AIProvider, AIModel, DefaultModel, ModelCategory } from '@/hooks/useAIConfiguration';
+import type { AIProvider, AIModel, AiAuthMethod, DefaultModel, ModelCategory } from '@/hooks/useAIConfiguration';
+import { useAiProviderAuthCapabilities } from '@/hooks/ai-config/useAiProviderAuth';
 import { useOpenRouterModels, extractSeries, formatPrice } from '@/hooks/useOpenRouterModels';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from '@/components/ui/command';
@@ -75,6 +76,19 @@ const CATEGORY_LAST_RESORT: Record<string, { provider: string; model: string } |
   agent: null,
 };
 
+/**
+ * The categories a subscription tier may serve.
+ *
+ * Tool calling is out of scope for OAuth tiers (spec §4): the agent category
+ * carries tools, so a subscription tier there would be skipped at request
+ * time. `agent_triage` carries no tools and does qualify.
+ */
+export const OAUTH_CATEGORIES = ['chat', 'agent_triage'] as const;
+
+function isOAuthCategory(category: string): boolean {
+  return (OAUTH_CATEGORIES as readonly string[]).includes(category);
+}
+
 interface DefaultModelSelectorProps {
   category: ModelCategory;
   capability: string;
@@ -86,9 +100,9 @@ interface DefaultModelSelectorProps {
   currentDefault: DefaultModel | null;
   currentFallback: DefaultModel | null;
   currentFallback2: DefaultModel | null;
-  onSetDefault: (providerCode: string, modelId: string) => void;
-  onSetFallback: (providerCode: string, modelId: string) => void;
-  onSetFallback2: (providerCode: string, modelId: string) => void;
+  onSetDefault: (providerCode: string, modelId: string, authMethod?: AiAuthMethod) => void;
+  onSetFallback: (providerCode: string, modelId: string, authMethod?: AiAuthMethod) => void;
+  onSetFallback2: (providerCode: string, modelId: string, authMethod?: AiAuthMethod) => void;
   /** Persist the primary model's knobs. Receives the ai_models row id. */
   /**
    * Persist the primary model's knobs. Omit to hide the parameter controls
@@ -267,24 +281,48 @@ interface TierSelectorProps {
   allProviders: AIProvider[];
   filteredModels: AIModel[];
   currentModel: DefaultModel | null;
-  onSelect: (providerCode: string, modelId: string) => void;
+  onSelect: (providerCode: string, modelId: string, authMethod?: AiAuthMethod) => void;
   isSaving?: boolean;
-  category: string;
+  category: ModelCategory;
   modelNote?: (model: AIModel) => string | null;
 }
 
 function TierSelector({ label, icon, providers, allProviders, filteredModels, currentModel, onSelect, isSaving, category, modelNote }: TierSelectorProps) {
-  const initialProvider = useMemo(() => {
-    if (!currentModel?.provider_code) return '';
-    const p = providers.find(p => p.provider_code === currentModel.provider_code);
-    return p?.id || '';
-  }, [currentModel, providers]);
+  const { data: caps } = useAiProviderAuthCapabilities();
 
-  const [selectedProviderId, setSelectedProviderId] = useState(initialProvider);
+  // A provider that was never connected has nothing to offer, so it is not
+  // listed at all. One that needs a reconnect stays visible but disabled.
+  const oauthProviders = useMemo(
+    () => (caps?.providers ?? []).filter(p => p.status === 'connected' || p.status === 'reauth_required'),
+    [caps],
+  );
+
+  const showAuthGroup = Boolean(caps?.enabled) && isOAuthCategory(category) && oauthProviders.length > 0;
+
+  const initialSelection = useMemo(() => {
+    if (!currentModel?.provider_code) return '';
+    if (currentModel.auth_method === 'oauth') {
+      const known = oauthProviders.some(p => p.provider_code === currentModel.provider_code);
+      if (known) return `oauth:${currentModel.provider_code}`;
+    }
+    const p = providers.find(p => p.provider_code === currentModel.provider_code);
+    return p ? `api:${p.id}` : '';
+  }, [currentModel, providers, oauthProviders]);
+
+  const [selection, setSelection] = useState(initialSelection);
 
   useEffect(() => {
-    if (initialProvider) setSelectedProviderId(initialProvider);
-  }, [initialProvider]);
+    if (initialSelection) setSelection(initialSelection);
+  }, [initialSelection]);
+
+  const selectedProviderId = selection.startsWith('api:') ? selection.slice('api:'.length) : '';
+  const selectedOAuthCode = selection.startsWith('oauth:') ? selection.slice('oauth:'.length) : '';
+
+  const selectedOAuthCapability = useMemo(
+    () => oauthProviders.find(p => p.provider_code === selectedOAuthCode) ?? null,
+    [oauthProviders, selectedOAuthCode],
+  );
+  const oauthModelIds = selectedOAuthCapability?.models ?? [];
 
   const providerModels = useMemo(
     () => filteredModels.filter(m => m.provider_id === selectedProviderId),
@@ -312,6 +350,12 @@ function TierSelector({ label, icon, providers, allProviders, filteredModels, cu
   }, [filteredORModels, orSearch]);
 
   const handleModelChange = (modelId: string) => {
+    // A subscription tier is saved with its auth method, so the backend knows
+    // to serve it through the stored OAuth credential.
+    if (selectedOAuthCode) {
+      onSelect(selectedOAuthCode, modelId, 'oauth');
+      return;
+    }
     const provider = allProviders.find(p => p.id === selectedProviderId);
     if (provider) onSelect(provider.provider_code, modelId);
   };
@@ -323,26 +367,63 @@ function TierSelector({ label, icon, providers, allProviders, filteredModels, cu
         {label}
       </Label>
       <div className="grid grid-cols-2 gap-2">
-        <Select value={selectedProviderId} onValueChange={setSelectedProviderId}>
+        <Select value={selection} onValueChange={setSelection}>
           <SelectTrigger className="w-full text-xs h-8">
             <SelectValue placeholder="Provider..." />
           </SelectTrigger>
           <SelectContent>
-            {providers.map(p => (
-              <SelectItem key={p.id} value={p.id}>
-                <div className="flex items-center gap-1.5">
-                  <span className="text-xs">{p.name}</span>
-                  <Badge variant="outline" className="text-[9px] py-0">{p.provider_code}</Badge>
-                </div>
-              </SelectItem>
-            ))}
+            <SelectGroup>
+              <SelectLabel className="text-[10px]">API key</SelectLabel>
+              {providers.map(p => (
+                <SelectItem key={p.id} value={`api:${p.id}`}>
+                  <div className="flex items-center gap-1.5">
+                    <span className="text-xs">{p.name}</span>
+                    <Badge variant="outline" className="text-[9px] py-0">{p.provider_code}</Badge>
+                  </div>
+                </SelectItem>
+              ))}
+            </SelectGroup>
+            {showAuthGroup && (
+              <SelectGroup>
+                <SelectLabel className="text-[10px]">Auth (subscription)</SelectLabel>
+                {oauthProviders.map(o => (
+                  <SelectItem
+                    key={o.oauth_provider}
+                    value={`oauth:${o.provider_code}`}
+                    disabled={o.status !== 'connected'}
+                  >
+                    <div className="flex items-center gap-1.5">
+                      <span className="text-xs">{o.name} — subscription</span>
+                      <Badge variant="outline" className="text-[9px] py-0">
+                        {o.status === 'connected' ? 'oauth' : 'reconnect'}
+                      </Badge>
+                    </div>
+                  </SelectItem>
+                ))}
+              </SelectGroup>
+            )}
           </SelectContent>
         </Select>
 
         {/* Triage models list from the synced ai_models rows, not the live OpenRouter catalogue below:
             openrouter-models never requests output_modalities=all, so Jev's "decisions" modality
             never reaches that picker and a chat model would show up in its place. */}
-        {selectedProviderId && isOpenRouter && category !== 'agent_triage' ? (
+        {selectedOAuthCode ? (
+          <Select
+            value={currentModel?.auth_method === 'oauth' && currentModel?.provider_code === selectedOAuthCode ? currentModel?.model_id || '' : ''}
+            onValueChange={handleModelChange} disabled={isSaving}>
+            <SelectTrigger className="w-full text-xs h-8">
+              <SelectValue placeholder="Model..." />
+            </SelectTrigger>
+            <SelectContent>
+              {oauthModelIds.map(id => (
+                <SelectItem key={id} value={id}>
+                  <span className="text-xs">{id}</span>
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        ) : selectedProviderId && isOpenRouter && category !== 'agent_triage' ? (
           <Popover open={orOpen} onOpenChange={setOrOpen}>
             <PopoverTrigger asChild>
               <Button variant="outline" role="combobox" aria-expanded={orOpen}

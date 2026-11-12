@@ -1,0 +1,199 @@
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
+import { Bot } from 'lucide-react';
+import { DefaultModelSelector } from './DefaultModelSelector';
+
+const caps = vi.hoisted(() => ({
+  current: { enabled: false, providers: [] as unknown[] },
+}));
+
+vi.mock('@/hooks/ai-config/useAiProviderAuth', () => ({
+  useAiProviderAuthCapabilities: () => ({ data: caps.current }),
+}));
+
+vi.mock('@/hooks/useOpenRouterModels', () => ({
+  useOpenRouterModels: () => ({ data: [], isLoading: false }),
+  extractSeries: (id: string) => id.split('/')[0] || 'unknown',
+  formatPrice: () => 'Free',
+}));
+
+const providers = [
+  {
+    id: 'prov-openai', provider_code: 'openai', name: 'OpenAI',
+    api_endpoint: '', api_key_env_var: '', api_type: '', supports_streaming: true, is_active: true,
+  },
+  {
+    id: 'prov-claude', provider_code: 'claude', name: 'Anthropic API',
+    api_endpoint: '', api_key_env_var: '', api_type: '', supports_streaming: true, is_active: true,
+  },
+] as never;
+
+const models = [
+  {
+    id: 'model-gpt', provider_id: 'prov-openai', model_id: 'gpt-4o-mini', name: 'GPT-4o mini',
+    description: null, capabilities: ['chat', 'image'], context_limit: null, is_active: true,
+    cost_per_1m_input_tokens: null, cost_per_1m_output_tokens: null,
+    ai_providers: { provider_code: 'openai', name: 'OpenAI' },
+  },
+  {
+    id: 'model-sonnet', provider_id: 'prov-claude', model_id: 'claude-sonnet-4-5', name: 'Claude Sonnet 4.5',
+    description: null, capabilities: ['chat', 'image'], context_limit: null, is_active: true,
+    cost_per_1m_input_tokens: null, cost_per_1m_output_tokens: null,
+    ai_providers: { provider_code: 'claude', name: 'Anthropic API' },
+  },
+] as never;
+
+const claudeCapability = {
+  provider_code: 'claude',
+  oauth_provider: 'anthropic',
+  name: 'Anthropic (Claude)',
+  status: 'connected',
+  account_label: 'me@example.com',
+  expires_at: '2026-12-01T00:00:00.000Z',
+  models: ['claude-sonnet-4-5', 'claude-opus-5'],
+};
+
+const openaiCapability = {
+  provider_code: 'openai',
+  oauth_provider: 'openai-codex',
+  name: 'OpenAI',
+  status: 'not_connected',
+  account_label: null,
+  expires_at: null,
+  models: ['gpt-5.2-codex'],
+};
+
+function renderSelector(
+  category: 'chat' | 'image',
+  onSetDefault = vi.fn(),
+  currentDefault: unknown = null,
+) {
+  render(
+    <DefaultModelSelector
+      category={category}
+      capability={category}
+      title="Chat Models"
+      description=""
+      icon={Bot}
+      providers={providers}
+      models={models}
+      currentDefault={currentDefault as never}
+      currentFallback={null}
+      currentFallback2={null}
+      onSetDefault={onSetDefault}
+      onSetFallback={vi.fn()}
+      onSetFallback2={vi.fn()}
+    />,
+  );
+  const primarySection = screen.getByText('Primary').closest('div.space-y-2') as HTMLElement;
+  return { primarySection, onSetDefault };
+}
+
+/** Opens a radix select trigger the same way the sibling selector test does. */
+function openSelect(trigger: HTMLElement) {
+  fireEvent.pointerDown(trigger, { button: 0, buttons: 1, pointerType: 'mouse' });
+  fireEvent.click(trigger);
+}
+
+async function openProviderDropdown(primarySection: HTMLElement) {
+  const providerTrigger = within(primarySection).getByRole('combobox');
+  openSelect(providerTrigger);
+  await waitFor(() => expect(screen.getAllByRole('option').length).toBeGreaterThan(0));
+}
+
+async function pickOption(name: RegExp) {
+  const option = await waitFor(() => screen.getByRole('option', { name }));
+  fireEvent.click(option);
+  return option;
+}
+
+describe('DefaultModelSelector — provider dropdown groups', () => {
+  beforeEach(() => {
+    caps.current = { enabled: false, providers: [] };
+  });
+
+  it('shows only the API key group while the flag is off', async () => {
+    const { primarySection } = renderSelector('chat');
+    await openProviderDropdown(primarySection);
+
+    expect(screen.getByText('API key')).toBeInTheDocument();
+    expect(screen.queryByText('Auth (subscription)')).not.toBeInTheDocument();
+  });
+
+  it('lists a connected subscription under the Auth group and hides a not-connected one', async () => {
+    caps.current = { enabled: true, providers: [claudeCapability, openaiCapability] };
+    const { primarySection } = renderSelector('chat');
+    await openProviderDropdown(primarySection);
+
+    expect(screen.getByText('Auth (subscription)')).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: /Anthropic \(Claude\) — subscription/ })).toBeInTheDocument();
+    expect(screen.queryByRole('option', { name: /OpenAI — subscription/ })).not.toBeInTheDocument();
+  });
+
+  it('never shows the Auth group for a non-text category', async () => {
+    caps.current = { enabled: true, providers: [claudeCapability] };
+    const { primarySection } = renderSelector('image');
+    await openProviderDropdown(primarySection);
+
+    expect(screen.queryByText('Auth (subscription)')).not.toBeInTheDocument();
+  });
+
+  it('renders a reauth_required provider as a disabled item', async () => {
+    caps.current = {
+      enabled: true,
+      providers: [{ ...claudeCapability, status: 'reauth_required' }],
+    };
+    const { primarySection } = renderSelector('chat');
+    await openProviderDropdown(primarySection);
+
+    const option = screen.getByRole('option', { name: /Anthropic \(Claude\) — subscription/ });
+    expect(option).toHaveAttribute('aria-disabled', 'true');
+  });
+
+  it('saves the tier as an oauth one when an Auth item and a model are picked', async () => {
+    caps.current = { enabled: true, providers: [claudeCapability] };
+    const { primarySection, onSetDefault } = renderSelector('chat');
+    await openProviderDropdown(primarySection);
+    await pickOption(/Anthropic \(Claude\) — subscription/);
+
+    const modelTrigger = await waitFor(() => {
+      const triggers = within(primarySection).getAllByRole('combobox');
+      expect(triggers.length).toBe(2);
+      return triggers[1];
+    });
+    openSelect(modelTrigger);
+    await pickOption(/claude-sonnet-4-5/);
+
+    expect(onSetDefault).toHaveBeenCalledWith('claude', 'claude-sonnet-4-5', 'oauth');
+  });
+
+  it('saves the tier without an auth method when an API key item is picked', async () => {
+    caps.current = { enabled: true, providers: [claudeCapability] };
+    const { primarySection, onSetDefault } = renderSelector('chat');
+    await openProviderDropdown(primarySection);
+    await pickOption(/^OpenAI/);
+
+    const modelTrigger = await waitFor(() => {
+      const triggers = within(primarySection).getAllByRole('combobox');
+      expect(triggers.length).toBe(2);
+      return triggers[1];
+    });
+    openSelect(modelTrigger);
+    await pickOption(/GPT-4o mini/);
+
+    expect(onSetDefault).toHaveBeenCalledWith('openai', 'gpt-4o-mini');
+    expect(onSetDefault.mock.calls[0][2]).toBeUndefined();
+  });
+
+  it('opens on the Auth branch for a tier that was saved as oauth', async () => {
+    caps.current = { enabled: true, providers: [claudeCapability] };
+    const { primarySection } = renderSelector('chat', vi.fn(), {
+      provider_code: 'claude',
+      model_id: 'claude-sonnet-4-5',
+      auth_method: 'oauth',
+    });
+
+    const providerTrigger = within(primarySection).getAllByRole('combobox')[0];
+    expect(providerTrigger).toHaveTextContent('Anthropic (Claude) — subscription');
+  });
+});
