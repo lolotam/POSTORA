@@ -13,10 +13,13 @@ import {
   releaseHumanModeAck,
   replyIsDurable,
   restoreUnansweredEscalation,
+  settleClosedGate,
   settleEscalationAftermath,
+  storeHeldCustomerTurn,
   type HandoffScope,
 } from "./handoffWindow.ts";
 import { ReplyNotPersistedError } from "./outbox.ts";
+import { parseAgentReplyResult } from "../_shared/agentReplyResult.ts";
 
 const SCOPE: HandoffScope = {
   userId: "00000000-0000-0000-0000-000000000001",
@@ -42,6 +45,7 @@ function adminStub(options: {
   staff?: StaffRow[];
   takeResult?: string | null;
   insertError?: { message: string } | null;
+  outboxStatus?: string;
 } = {}) {
   const calls: Array<{ kind: string; args?: Record<string, unknown> }> = [];
   const staff = options.staff ?? [];
@@ -55,7 +59,11 @@ function adminStub(options: {
       query.select = () => query;
       query.maybeSingle = () =>
         Promise.resolve({
-          data: table === "ai_threads" ? { unanswered_escalation_since: options.marker ?? null } : null,
+          data: table === "ai_threads"
+            ? { unanswered_escalation_since: options.marker ?? null }
+            : table === "pending_agent_replies"
+            ? { status: options.outboxStatus ?? "pending" }
+            : null,
           error: null,
         });
       query.then = (resolve: (value: unknown) => void) =>
@@ -212,4 +220,45 @@ Deno.test("a staff context that could not be stored sends the marker back", asyn
 
   assertEquals(settlement.staffWriteFailed, true);
   assertEquals(settlement.marker, since);
+});
+
+// A customer wrote during a window that was already notified. The assistant is silent
+// for the whole window, so that turn is the only durable record of a question nobody
+// answered. When the write fails the question is lost for good, so the work item must
+// not be settled as done -- and the caller must be told the turn failed, not that the
+// reply was skipped: "skipped" is terminal and would claim the question was handled.
+Deno.test("a customer turn that could not be stored keeps the work item retryable", async () => {
+  const { admin, calls } = adminStub({ insertError: { message: "write failed" } });
+
+  const settlement = await settleClosedGate({
+    admin,
+    outboxId: "outbox-1",
+    gateReason: "mode_human_first",
+    humanWindow: "window",
+    threadId: THREAD_ID,
+    turn: { userId: SCOPE.userId, content: "عندكم كريم الكعب؟" },
+  });
+
+  // The work item is not settled as done: the row stays where it is, unsettled, so the
+  // outbox's own retry path may try again.
+  assertEquals(settlement.cancelWorkItem, false);
+  assertEquals(
+    calls.find((call) => call.kind === "rpc:advance_agent_reply"),
+    undefined,
+    "the work item must not be cancelled",
+  );
+  // The caller reads the body, not the HTTP status, so the body has to say failure.
+  assertEquals(parseAgentReplyResult(200, settlement.body).kind, "retryable");
+
+  // A turn that WAS stored leaves the closed gate terminal, as before.
+  const written = await settleClosedGate({
+    admin: adminStub().admin,
+    outboxId: "outbox-1",
+    gateReason: "mode_human_first",
+    humanWindow: "window",
+    threadId: THREAD_ID,
+    turn: { userId: SCOPE.userId, content: "عندكم كريم الكعب؟" },
+  });
+  assertEquals(written.body, { ok: true, skipped: "mode_human_first" });
+  assertEquals(written.cancelWorkItem, true);
 });

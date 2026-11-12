@@ -85,6 +85,7 @@ import {
   releaseHumanModeAck,
   replyIsDurable,
   restoreUnansweredEscalation,
+  settleClosedGate,
   settleEscalationAftermath,
   type HandoffScope,
 } from "./handoffWindow.ts";
@@ -298,21 +299,6 @@ function handoffScope(request: ReplyRequest): HandoffScope {
     platform: request.platform,
     conversationId: request.conversation_id,
   };
-}
-
-/**
- * A message held back during a bounded escalation window is still part of the conversation.
- * Kept in the thread so that, when the window ends, the agent reads what the customer asked
- * meanwhile.
- */
-async function recordHeldCustomerTurn(admin: SupabaseClient, threadId: string, request: ReplyRequest): Promise<void> {
-  const { error } = await admin.from("ai_thread_messages").insert({
-    thread_id: threadId,
-    user_id: request.user_id,
-    role: "user",
-    content: request.inbound_text,
-  });
-  if (error) console.error("[ai-agent-reply] held customer turn write failed:", error.message);
 }
 
 async function isCooldownActive(admin: any, threadId: string, cooldownSeconds: number): Promise<boolean> {
@@ -869,12 +855,24 @@ Deno.serve(async (req) => {
             handoffNoticeLanguage(request.inbound_text, config.language_mode, request.language_hint, storedCustomerLanguage)
           ];
         } else {
-          if (humanWindow === "window") await recordHeldCustomerTurn(admin, thread.id, request);
-          await logOutcome(admin, { ...baseLog, status: "skipped", error: gate.reason });
-          // Terminal for the work item: a closed gate is a decision, and recovery re-driving
-          // the row would only reach the same gate.
-          if (outboxId) await cancelOutboxRow(admin, outboxId, gate.reason);
-          return jsonResponse({ ok: true, skipped: gate.reason });
+          const settlement = await settleClosedGate({
+            admin,
+            outboxId,
+            gateReason: gate.reason,
+            humanWindow,
+            threadId: thread.id,
+            turn: { userId: request.user_id, content: request.inbound_text },
+          });
+          if (settlement.body.ok) {
+            await logOutcome(admin, { ...baseLog, status: "skipped", error: gate.reason });
+            return jsonResponse(settlement.body);
+          }
+          // The customer's question is not durable anywhere. The work item was left
+          // unsettled -- not cancelled, not marked done -- so the outbox can try again,
+          // and the caller is told the turn failed. "Skipped" would be a lie: it would
+          // say the question was handled.
+          await logOutcome(admin, { ...baseLog, status: "error", error: settlement.body.error });
+          return jsonResponse(settlement.body);
         }
       }
     }

@@ -1,6 +1,6 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { z } from "npm:zod@3.23.8";
-import { detectReplyLanguage } from "../../supabase/functions/ai-agent-reply/logic.ts";
+import { detectReplyLanguage, threadReplyLanguage, type ReplyLanguage } from "../../supabase/functions/ai-agent-reply/logic.ts";
 
 const REPORT_PATH = "docs/superpowers/reports/2026-11-12-curemed-model-dryrun.md";
 const REPORT_URL = new URL(`../../${REPORT_PATH}`, import.meta.url);
@@ -41,6 +41,8 @@ interface ReplaySource {
   platform: string;
   socialAccountId: string;
   customerTurns: string[];
+  /** ai_threads.customer_language: the language the customer's own words showed. */
+  customerLanguage: ReplyLanguage | null;
 }
 
 interface ReplayTurnInput {
@@ -52,7 +54,32 @@ interface ReplayTurnInput {
   platform: string;
   socialAccountId: string;
   inboundText: string;
-  expectedLanguage: ReturnType<typeof detectReplyLanguage>;
+  expectedLanguage: ReplyLanguage;
+}
+
+/**
+ * The language a replayed turn is expected to be answered in.
+ *
+ * The thread's stored customer language counts, exactly as it does in production:
+ * ai-agent-reply reads ai_threads.customer_language when a turn shows no language of
+ * its own. A caption-less photo, a rating, an emoji -- none of them say what language
+ * the customer speaks -- so without the thread's language an Arabic thread was scored
+ * as English and every Arabic reply counted as a wrong answer.
+ */
+export function expectedReplayLanguage(
+  inboundText: string,
+  customerLanguage: ReplyLanguage | null,
+  earlierTurns: string[],
+): ReplyLanguage {
+  return threadReplyLanguage({
+    inboundText,
+    languageMode: "auto",
+    hint: null,
+    eventFlow: null,
+    customerLanguage,
+    storedTurns: [],
+    windowTurns: earlierTurns.map((content) => ({ role: "user", content })),
+  });
 }
 
 function requiredEnv(name: string): string {
@@ -153,7 +180,7 @@ async function loadReplaySource(
 
   const { data: thread, error: threadError } = await admin
     .from("ai_threads")
-    .select("id")
+    .select("id, customer_language")
     .eq("user_id", owner.user_id)
     .eq("platform", owner.platform)
     .eq("conversation_id", conversation)
@@ -172,7 +199,15 @@ async function loadReplaySource(
     .filter((content): content is string => typeof content === "string" && content.trim().length > 0);
   if (customerTurns.length === 0) throw new Error("The source thread has no customer turns to replay");
 
-  return { platform: owner.platform, socialAccountId: owner.social_account_id, customerTurns };
+  // The thread's stored customer language is what a letterless turn falls back to,
+  // in production and here alike. Without it an Arabic thread's photo-only turn
+  // would be expected to be answered in English.
+  const storedLanguage = thread.customer_language;
+  const customerLanguage: ReplyLanguage | null = storedLanguage === "ar" || storedLanguage === "en"
+    ? storedLanguage
+    : null;
+
+  return { platform: owner.platform, socialAccountId: owner.social_account_id, customerTurns, customerLanguage };
 }
 
 async function replayTurn(input: ReplayTurnInput): Promise<Omit<ResultRow, "model" | "turn">> {
@@ -233,9 +268,11 @@ async function main(): Promise<void> {
     const modelKey = model.replace(/[^A-Za-z0-9_-]/g, "_").slice(0, 24);
     const testCaseKey = `dryrun_${modelKey}_${Date.now()}`;
     for (const [index, inboundText] of replaySource.customerTurns.entries()) {
-      const expectedLanguage = detectReplyLanguage(inboundText, "auto", null, {
-        earlierTurns: replaySource.customerTurns.slice(0, index).reverse(),
-      });
+      const expectedLanguage = expectedReplayLanguage(
+        inboundText,
+        replaySource.customerLanguage,
+        replaySource.customerTurns.slice(0, index).reverse(),
+      );
       const startedAt = Date.now();
       let measurement: Omit<ResultRow, "model" | "turn">;
       try {

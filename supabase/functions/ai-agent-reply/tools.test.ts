@@ -973,6 +973,22 @@ Deno.test("a handoff notice follows the account setting, then the customer, then
   }
 });
 
+// The vision model writes an image description in English, so a photo from an Arabic
+// customer used to make the handoff notice English: the description counted as the
+// customer's words. Both language signals look past the envelope's description
+// (agentTextEnvelope.ts), so the thread's stored language decides instead.
+Deno.test("an image description never decides the handoff notice's language", async () => {
+  const { handoffNoticeLanguage, customerLanguageSignal } = await import("./logic.ts");
+  const { composeAgentText } = await import("../_shared/inboundMediaPipeline.ts");
+  const image = composeAgentText("image", "A product packaging image for DenTek Professional-Fit Dental Guard.");
+
+  // The thread speaks Arabic and the photo says nothing about the language.
+  assertEquals(handoffNoticeLanguage(image, "auto", null, "ar"), "ar");
+  // Neither language signal reads the description: the thread's stored language is
+  // not overwritten by an English one either.
+  assertEquals(customerLanguageSignal(image, null), null);
+});
+
 Deno.test("only the staff's own replies after the escalation become history turns, oldest first", async () => {
   const { staffTurnsSince } = await import("./logic.ts");
   const since = "2026-11-12T08:00:00.000Z";

@@ -21,7 +21,7 @@ import {
   type StoredTurn,
   withOpening,
 } from "./logic.ts";
-import { ReplyNotPersistedError } from "./outbox.ts";
+import { ReplyNotPersistedError, cancelOutboxRow } from "./outbox.ts";
 
 /** Staff replies merged in after an escalation window; the same order of size as the history. */
 const STAFF_TURN_LIMIT = 14;
@@ -112,6 +112,80 @@ export async function releaseHumanModeAck(
     return false;
   }
   return data === true;
+}
+
+/**
+ * The customer's turn that arrived while the window was already notified.
+ *
+ * The assistant is silent for the whole window, so this turn is the ONLY durable record
+ * of a question the customer asked and nobody answered: the reply path stores turns as
+ * it answers them, and this one is never answered. A failed write is therefore reported,
+ * not swallowed -- the caller keeps the work item unsettled so the turn can be stored
+ * again, instead of settling a conversation whose question was lost.
+ */
+export async function storeHeldCustomerTurn(
+  admin: SupabaseClient,
+  threadId: string,
+  turn: { userId: string; content: string },
+): Promise<{ stored: boolean; error: string | null }> {
+  const { error } = await admin.from("ai_thread_messages").insert({
+    thread_id: threadId,
+    user_id: turn.userId,
+    role: "user",
+    content: turn.content,
+  });
+  if (error) {
+    console.error("[ai-agent-reply] held customer turn write failed:", error.message);
+    return { stored: false, error: error.message };
+  }
+  return { stored: true, error: null };
+}
+
+/**
+ * What a closed gate does with the work item.
+ *
+ * A closed gate is a decision, so the work item is normally terminal: it is cancelled
+ * and the caller is told the reply was skipped. The exception is the customer's turn
+ * during an open window. That turn is the only record of a question nobody answered,
+ * and when it cannot be stored the question is lost for good -- so the work item stays
+ * unsettled and the caller is told the turn FAILED, not that the reply was skipped.
+ * "Skipped" is terminal: it would tell the outbox the question was handled.
+ */
+export interface ClosedGateSettlement {
+  /** The body the caller returns. `ok: false` is a failure the outbox may retry. */
+  body: { ok: false; error: string } | { ok: true; skipped: string };
+  /** Whether the work item was settled as done. */
+  cancelWorkItem: boolean;
+}
+
+export async function settleClosedGate(input: {
+  admin: SupabaseClient;
+  outboxId: string | null;
+  gateReason: string;
+  humanWindow: HumanModeWindow;
+  threadId: string;
+  turn: { userId: string; content: string };
+}): Promise<ClosedGateSettlement> {
+  // The customer's turn during an open window is the only durable record of a
+  // question nobody answered, so it is stored before the turn is settled.
+  const heldTurn = input.humanWindow === "window"
+    ? await storeHeldCustomerTurn(input.admin, input.threadId, input.turn)
+    : { stored: true, error: null };
+
+  if (!heldTurn.stored) {
+    // The question is not durable anywhere. The work item is left unsettled -- not
+    // cancelled, not marked done -- so the outbox can try again, and the caller is
+    // told the turn failed.
+    return {
+      body: { ok: false, error: heldTurn.error ?? "the customer's turn could not be stored" },
+      cancelWorkItem: false,
+    };
+  }
+
+  // Terminal for the work item: a closed gate is a decision, and recovery re-driving
+  // the row would only reach the same gate.
+  if (input.outboxId) await cancelOutboxRow(input.admin, input.outboxId, input.gateReason);
+  return { body: { ok: true, skipped: input.gateReason }, cancelWorkItem: true };
 }
 
 /**
