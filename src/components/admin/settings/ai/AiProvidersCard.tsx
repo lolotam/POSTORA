@@ -20,7 +20,7 @@ import {
 } from '@/hooks/useAIConfiguration';
 import type { AIProvider, TestConnectionResult } from '@/hooks/useAIConfiguration';
 import { SyncModelsButton } from './SyncModelsButton';
-import { SyncAllButton } from './SyncAllButton';
+import { ProviderHealthButton } from './ProviderHealthButton';
 import { SubscriptionLoginSection } from './SubscriptionLoginSection';
 import { SubscriptionLoginsStrip } from './SubscriptionLoginsStrip';
 import { SYNCABLE_PROVIDER_CODES } from '@/hooks/ai-config/useSyncModels';
@@ -168,18 +168,16 @@ export function AiProvidersCard() {
   return (
     <div className="space-y-6">
       <Card>
-        <CardHeader className="flex flex-row items-center justify-between gap-2 space-y-0">
+        <CardHeader className="space-y-0">
           <div>
             <CardTitle>AI Providers</CardTitle>
             <CardDescription>Manage AI providers and their connection status</CardDescription>
           </div>
-          <SyncAllButton
-            providerCodes={providers
-              .filter((p) => p.is_active && (SYNCABLE_PROVIDER_CODES as readonly string[]).includes(p.provider_code))
-              .map((p) => p.provider_code)}
-          />
         </CardHeader>
-        <CardContent>
+        <CardContent className="space-y-6">
+          {/* The one button: it tests every provider and syncs the ones that answer.
+              It renders its own result table, so it sits in the body, not the header. */}
+          <ProviderHealthButton />
           <SubscriptionLoginsStrip onOpen={openProviderByCode} />
           <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-2">
             {providers.map(provider => {
