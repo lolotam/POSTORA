@@ -115,6 +115,11 @@ import {
   type StoreBindingPort,
 } from "./procedureRuntime.ts";
 import { PROCEDURE_STATE_CONFLICT, persistProcedureState } from "./procedureState.ts";
+import {
+  INVALID_MODEL_OVERRIDE,
+  invalidModelOverrideRefusalLog,
+  resolveSandboxModelOverride,
+} from "./modelOverride.ts";
 
 const OPENAI_API = "https://api.openai.com/v1";
 const SERVICE_WINDOW_MS = 24 * 60 * 60 * 1000;
@@ -813,6 +818,32 @@ Deno.serve(async (req) => {
   let sideEffectsHappened = false;
 
   try {
+    const modelOverride = await resolveSandboxModelOverride({
+      dryRun,
+      requestedOverride: body.model_override,
+      readAllowedModels: async () => {
+        const { data: allowedModelRows, error } = await admin
+          .from("ai_agent_allowed_models")
+          .select("provider, model_id")
+          .eq("is_active", true);
+        if (error) throw error;
+        return allowedModelRows ?? [];
+      },
+    });
+    if (!modelOverride.ok) {
+      const { error: refusalLogError } = await admin.from("system_logs").insert(
+        invalidModelOverrideRefusalLog({
+          userId: request.user_id,
+          platform: request.platform,
+          requestedOverride: body.model_override,
+        }),
+      );
+      if (refusalLogError) {
+        console.error("[ai-agent-reply] Sandbox refusal log rejected:", refusalLogError.message);
+      }
+      return badRequestResponse(INVALID_MODEL_OVERRIDE);
+    }
+
     const knowledgeAccountId = await resolveAgentAccountId(
       admin as unknown as AccountScopeAdminClient,
       request,
@@ -1525,15 +1556,19 @@ Deno.serve(async (req) => {
     // docs/superpowers/specs/2026-08-27-agent-model-selection-design.md §3e.
     const routingAdmin = admin as unknown as AiRoutingAdmin;
     const route = await resolveUserAiRoute(routingAdmin, request.user_id, 'agent');
-    if (route.mode === 'user_only' && !route.userTier) {
+    if (!modelOverride.modelRef && route.mode === 'user_only' && !route.userTier) {
       await logOutcome(admin, { ...baseLog, status: 'skipped', error: AI_CONNECTION_REQUIRED,
         latency_ms: Date.now() - startedAt }, { error_code: AI_CONNECTION_REQUIRED, dry_run: dryRun });
       if (outboxId) await cancelOutboxRow(admin, outboxId, AI_CONNECTION_REQUIRED);
       return jsonResponse({ ok: true, skipped: 'no_reply_generated', error: AI_CONNECTION_REQUIRED });
     }
-    const rawChain = route.mode === 'user_only' ? [] : await loadGlobalModelChain(admin);
-    modelChain = composeAiTiers(route, rawChain.map((ref) => ({ ...parseModelRef(ref), credentialSource: 'platform' })));
-    if (route.reason === 'user_key_missing') fallbackReason = route.reason;
+    const rawChain = modelOverride.modelRef || route.mode === 'user_only' ? [] : await loadGlobalModelChain(admin);
+    // A sandbox comparison must measure exactly one platform model; user tiers and fallbacks
+    // would make the result describe a different chain than the requested candidate.
+    modelChain = modelOverride.modelRef
+      ? [{ ...parseModelRef(modelOverride.modelRef), credentialSource: 'platform' }]
+      : composeAiTiers(route, rawChain.map((ref) => ({ ...parseModelRef(ref), credentialSource: 'platform' })));
+    if (!modelOverride.modelRef && route.reason === 'user_key_missing') fallbackReason = route.reason;
     if (!modelChain.length) {
       // No hardcoded last resort. Calling a model no admin selected is how an
       // unlisted gpt-4o-mini kept answering; a human is the better fallback.
