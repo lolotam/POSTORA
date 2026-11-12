@@ -40,10 +40,14 @@ export function defaultCredentialDeps(admin: SupabaseClient): CredentialDeps {
  * Anthropic "HTTP request failed. status=400; url=...; body=...", Codex
  * "OpenAI Codex token refresh failed (401): ...". Only that position is read:
  * the response body follows it and can quote any number, so a transient 503
- * whose body mentions 400 must stay a retryable failure.
+ * whose body mentions 400 must stay a retryable failure. A 400/401 alone is
+ * not enough either: RFC 6749 §5.2 also uses them for invalid_request and
+ * invalid_client, which leave the refresh token valid. Only invalid_grant
+ * means the token itself was revoked.
  */
 export function isReauthRefreshError(message: string): boolean {
-  return /status=(400|401);|token refresh failed \((400|401)\)/.test(message);
+  const rejected = /(?:status=(?:400|401);|token refresh failed \((?:400|401)\))([\s\S]*)$/.exec(message);
+  return rejected !== null && rejected[1].includes("invalid_grant");
 }
 
 const LEASE_SECONDS = 30;
@@ -85,12 +89,15 @@ async function throwAfterFail(
   message: string,
   reauth: boolean,
 ): Promise<never> {
-  await deps.admin.rpc("fail_ai_oauth_refresh", {
+  const { error } = await deps.admin.rpc("fail_ai_oauth_refresh", {
     p_oauth_provider: lease.provider,
     p_lease_token: lease.token,
     p_error: message,
     p_reauth: reauth,
   });
+  // The row still says connected and holds the lease, so the requested
+  // status transition did not happen: report that instead of claiming it.
+  if (error) throw new AiOAuthError("refresh_failed", `could not record the refresh failure: ${error.message}`);
   throw new AiOAuthError(code, message);
 }
 

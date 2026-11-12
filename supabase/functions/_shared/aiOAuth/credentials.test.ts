@@ -251,6 +251,30 @@ Deno.test("refresh 400 marks reauth_required and throws reauth_required", async 
   assertEquals(fake.row.status, "reauth_required");
 });
 
+Deno.test("a revoked refresh whose failure cannot be recorded is not reported as reauth_required", async () => {
+  const fake = fakeAdmin({ credentials: { access: "a", refresh: "revoked", expires: 5_000 } });
+  const storeRpc = fake.admin.rpc.bind(fake.admin);
+  const admin = {
+    ...fake.admin,
+    rpc: (name: string, args: Record<string, unknown>) =>
+      name === "fail_ai_oauth_refresh"
+        ? Promise.resolve({ data: null, error: { message: "connection reset" } })
+        : storeRpc(name, args),
+  };
+  const deps = {
+    ...testDeps(fake, {
+      refresh: async () => {
+        throw new Error('HTTP request failed. status=400; url=https://x/token; body={"error":"invalid_grant"}');
+      },
+    }),
+    admin: admin as never,
+  };
+
+  const error = await assertRejects(() => getFreshOAuthCredential(deps, "anthropic"), AiOAuthError);
+  assertEquals(error.code, "refresh_failed");
+  assertEquals(fake.row.status, "connected");
+});
+
 Deno.test("a disconnect during the refresh is not undone by the refresh completing", async () => {
   const fake = fakeAdmin({ credentials: { access: "a", refresh: "r", expires: 5_000 } });
   const deps = testDeps(fake, {
@@ -310,12 +334,16 @@ Deno.test("status reauth_required throws reauth_required without refresh", async
   assertEquals(error.code, "reauth_required");
 });
 
-Deno.test("isReauthRefreshError reads only the status pi-ai reports, never the body", () => {
+Deno.test("isReauthRefreshError asks for a re-login only on a 400/401 invalid_grant", () => {
   const cases: Array<[string, boolean]> = [
     ['HTTP request failed. status=400; url=https://x/token; body={"error":"invalid_grant"}', true],
-    ["HTTP request failed. status=401; url=https://x/token; body=", true],
+    ['OpenAI Codex token refresh failed (401): {"error":"invalid_grant"}', true],
     ["OpenAI Codex token refresh failed (400): invalid_grant", true],
-    ["OpenAI Codex token refresh failed (401): Unauthorized", true],
+    ["HTTP request failed. status=401; url=https://x/token; body=", false],
+    ['HTTP request failed. status=400; url=https://x/token; body={"error":"invalid_request"}', false],
+    ['HTTP request failed. status=401; url=https://x/token; body={"error":"invalid_client"}', false],
+    ["OpenAI Codex token refresh failed (401): Unauthorized", false],
+    ['HTTP request failed. status=503; url=https://x/token; body={"error":"invalid_grant"}', false],
     ['HTTP request failed. status=503; url=https://x/token; body={"retry_after":400}', false],
     ["OpenAI Codex token refresh failed (503): retry in 401 ms", false],
     ["OpenAI Codex token refresh error: network timeout", false],
