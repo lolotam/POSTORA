@@ -272,6 +272,20 @@ Deno.test("a 503 whose body quotes status=400 stays retryable and the next call 
   assertEquals(await getFreshOAuthCredential(deps, "anthropic"), { apiKey: "api-key-from-second-access" });
 });
 
+Deno.test("a revoked refresh whose lease was replaced meanwhile is not reported as reauth_required", async () => {
+  const fake = fakeAdmin({ credentials: { access: "a", refresh: "revoked", expires: 5_000 } });
+  const deps = testDeps(fake, {
+    refresh: async () => {
+      fake.row.leaseToken = null; // admin reconnected while the provider answered
+      throw new Error('HTTP request failed. status=400; url=https://x/token; body={"error":"invalid_grant"}');
+    },
+  });
+
+  const error = await assertRejects(() => getFreshOAuthCredential(deps, "anthropic"), AiOAuthError);
+  assertEquals(error.code, "refresh_failed");
+  assertEquals(fake.row.status, "connected");
+});
+
 Deno.test("a revoked refresh whose failure cannot be recorded is not reported as reauth_required", async () => {
   const fake = fakeAdmin({ credentials: { access: "a", refresh: "revoked", expires: 5_000 } });
   const storeRpc = fake.admin.rpc.bind(fake.admin);
@@ -375,6 +389,11 @@ Deno.test("isReauthRefreshError asks for a re-login only on a 400/401 invalid_gr
     ],
     ['OpenAI Codex token refresh failed (503): status=400; {"error":"invalid_grant"}', false],
     ['OpenAI Codex token refresh error: token refresh failed (401): invalid_grant', false],
+    [
+      'HTTP request failed. status=400; url=https://x/token; body={"error":"invalid_request","error_description":"not invalid_grant"}',
+      false,
+    ],
+    ['OpenAI Codex token refresh failed (401): {"error":"invalid_client","hint":"invalid_grant"}', false],
     ['HTTP request failed. status=503; url=https://x/token; body={"retry_after":400}', false],
     ["OpenAI Codex token refresh failed (503): retry in 401 ms", false],
     ["OpenAI Codex token refresh error: network timeout", false],

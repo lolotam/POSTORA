@@ -47,7 +47,18 @@ export function defaultCredentialDeps(admin: SupabaseClient): CredentialDeps {
  */
 export function isReauthRefreshError(message: string): boolean {
   const rejected = REJECTED_REFRESH.exec(message);
-  return rejected !== null && rejected[1].includes("invalid_grant");
+  return rejected !== null && oauthErrorCode(rejected[1]) === "invalid_grant";
+}
+
+/**
+ * The RFC 6749 §5.2 `error` value of a token-endpoint body: the JSON field
+ * when there is one, otherwise the whole plain-text body. Anthropic's wrapped
+ * message appends "; stack=..." after the body, which is cut first.
+ */
+function oauthErrorCode(body: string): string {
+  const text = body.replace(/; stack=[\s\S]*$/, "").trim();
+  const field = /"error"\s*:\s*"([^"]*)"/.exec(text);
+  return field ? field[1] : text;
 }
 
 /**
@@ -56,7 +67,7 @@ export function isReauthRefreshError(message: string): boolean {
  * "Anthropic token refresh request failed. url=<TOKEN_URL>; details=Error: HTTP request failed. status=400; ...".
  */
 const REJECTED_REFRESH =
-  /^(?:(?:Anthropic token refresh request failed\. url=[^;\s]*; details=Error: )?HTTP request failed\. status=(?:400|401); |OpenAI Codex token refresh failed \((?:400|401)\): )([\s\S]*)$/;
+  /^(?:(?:Anthropic token refresh request failed\. url=[^;\s]*; details=Error: )?HTTP request failed\. status=(?:400|401); url=[^;\s]*; body=|OpenAI Codex token refresh failed \((?:400|401)\): )([\s\S]*)$/;
 
 /**
  * Longer than any refresh pi-ai can take (Anthropic aborts at 30 s), so a
@@ -102,7 +113,7 @@ async function throwAfterFail(
   message: string,
   reauth: boolean,
 ): Promise<never> {
-  const { error } = await deps.admin.rpc("fail_ai_oauth_refresh", {
+  const { data: recorded, error } = await deps.admin.rpc("fail_ai_oauth_refresh", {
     p_oauth_provider: lease.provider,
     p_lease_token: lease.token,
     p_error: message,
@@ -111,6 +122,9 @@ async function throwAfterFail(
   // The row still says connected and holds the lease, so the requested
   // status transition did not happen: report that instead of claiming it.
   if (error) throw new AiOAuthError("refresh_failed", `could not record the refresh failure: ${error.message}`);
+  // false: a disconnect or reconnect replaced this lease, so the row never
+  // took the requested status and must not be reported as if it had.
+  if (recorded !== true) throw new AiOAuthError("refresh_failed", "the connection changed while refreshing");
   throw new AiOAuthError(code, message);
 }
 
