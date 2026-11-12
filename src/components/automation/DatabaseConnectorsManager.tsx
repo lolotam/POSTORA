@@ -1432,6 +1432,11 @@ function DatabaseConnectorsEditor({
       column_map: "{}",
       // "-" cannot be a column name, so it unambiguously means "no ordering".
       order_by: "-",
+      // "-" cannot be a function or argument name either: it turns catalog
+      // search off, or puts an argument back to its default.
+      rpc_allow_list: "-",
+      rpc_query_param: "-",
+      rpc_limit_param: "-",
     };
     const credentials: Record<string, string> = {};
     for (const field of fields) {

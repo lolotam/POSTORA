@@ -370,6 +370,18 @@ function buildUrl(invocation: ConnectorInvocation): { url: URL; schema: string; 
   return { url, schema, columns };
 }
 
+/**
+ * Order per C7: strip credentials, then trim cells, so a credential longer than
+ * the cell cap cannot survive trimming as an unmatchable prefix. Columns the
+ * operator named skip the key-name redaction; anything else (`select=*`, an RPC
+ * result) still gets it.
+ */
+function vetRow(row: unknown, columnsExplicit: boolean, secrets: ReturnType<typeof credentialSecrets>): unknown {
+  const vetted = columnsExplicit ? row : redactSensitive(row);
+  const stripped = stripCredentialValues(vetted, secrets);
+  return (trimRows([stripped]) as unknown[])[0];
+}
+
 /** PostgREST answers `0-24/4213`, or `*` in place of the range on a count probe. */
 function parseTotal(contentRange: string | null): number | null {
   if (!contentRange) return null;
@@ -606,9 +618,7 @@ async function readPages(
       // When they did not -- `select=*` -- the row may carry a `password`,
       // `refresh_token` or cookie nobody chose to expose, so the structural
       // key-name pass still applies.
-      const vetted = limits.columnsExplicit ? row : redactSensitive(row);
-      const stripped = stripCredentialValues(vetted, secrets);
-      const trimmed = (trimRows([stripped]) as unknown[])[0];
+      const trimmed = vetRow(row, limits.columnsExplicit, secrets);
       const cost = JSON.stringify(trimmed).length + (collected.length ? 1 : 0);
       if (chars + cost > SUPABASE_CHAR_BUDGET) { budgetHit = true; break; }
       collected.push(trimmed);
@@ -692,6 +702,169 @@ async function readPages(
   };
 }
 
+export const DEFAULT_RPC_RESULTS = 8;
+export const MAX_RPC_RESULTS = 25;
+const BARE_IDENTIFIER = /^[a-z_][a-z0-9_]*$/;
+
+/**
+ * Only the operator names a function, and only as a bare identifier: the
+ * model-supplied `table` stays barred from `rpc/` (validateResource). An entry
+ * that is not a bare name makes the whole list invalid rather than silently
+ * skipping to the next one.
+ */
+function rpcFunction(settings: Record<string, unknown>): string | null {
+  // "-" is the card's cleared-field marker, as for order_by.
+  const names = splitColumns(settings.rpc_allow_list).filter((name) => name !== "-");
+  if (names.length === 0) return null;
+  if (!names.every((name) => BARE_IDENTIFIER.test(name))) {
+    throw new SupabaseValidationError("supabase_configuration_invalid", "Supabase is not fully configured.");
+  }
+  return names[0];
+}
+
+function rpcParamName(settings: Record<string, unknown>, key: string, fallback: string): string {
+  const raw = settings[key];
+  if (typeof raw !== "string" || !raw.trim() || raw.trim() === "-") return fallback;
+  const name = raw.trim();
+  if (!BARE_IDENTIFIER.test(name)) {
+    throw new SupabaseValidationError("supabase_configuration_invalid", "Supabase is not fully configured.");
+  }
+  return name;
+}
+
+/** The longest word of a multi-word query, or null when there is only one word. */
+function looserQuery(query: string): string | null {
+  const words = query.split(/\s+/).filter(Boolean);
+  if (words.length < 2) return null;
+  return words.reduce((longest, word) => (word.length > longest.length ? word : longest));
+}
+
+interface RpcSearch {
+  url: string;
+  headers: Record<string, string>;
+  queryParam: string;
+  limitParam: string;
+  limit: number;
+}
+
+async function postRpc(
+  search: RpcSearch,
+  query: string,
+  dependencies: AdapterDependencies,
+  deadline: number,
+): Promise<unknown[]> {
+  const abort = new AbortController();
+  const hopDependencies = {
+    ...dependencies,
+    timeoutMs: Math.max(0, Math.min(dependencies.timeoutMs, deadline - Date.now())),
+  };
+  const response = await withDeadline(
+    safeVendorFetch(
+      search.url,
+      {
+        method: "POST",
+        headers: search.headers,
+        body: JSON.stringify({ [search.queryParam]: query, [search.limitParam]: search.limit }),
+        signal: abort.signal,
+      },
+      hopDependencies,
+    ),
+    deadline - Date.now(),
+    abort,
+  );
+  if (!response.ok) {
+    throw new SupabaseValidationError("supabase_http_error", "Supabase rejected the request.", response.status);
+  }
+  const payload = await withDeadline(readJson(response), deadline - Date.now(), abort);
+  if (isPostgrestErrorBody(payload)) {
+    throw new SupabaseValidationError("supabase_postgrest_error", "Supabase returned a PostgREST error.", response.status);
+  }
+  if (!Array.isArray(payload)) {
+    throw new SupabaseValidationError("supabase_response_invalid", "Supabase returned an invalid response.", response.status);
+  }
+  return payload;
+}
+
+function rpcSearchFor(invocation: ConnectorInvocation, fn: string, anonKey: string): RpcSearch {
+  const settings = invocation.tool.settings;
+  const projectUrl = requiredString(settings, "project_url");
+  const schema = requiredString(settings, "schema");
+  if (!projectUrl || !schema) {
+    throw new SupabaseValidationError("supabase_configuration_invalid", "Supabase is not fully configured.");
+  }
+  return {
+    url: `${projectUrl.replace(/\/+$/, "")}/rest/v1/rpc/${fn}`,
+    headers: {
+      Accept: "application/json",
+      "Content-Type": "application/json",
+      apikey: anonKey,
+      Authorization: `Bearer ${anonKey}`,
+      "Content-Profile": schema,
+      "Accept-Profile": schema,
+    },
+    queryParam: rpcParamName(settings, "rpc_query_param", "q"),
+    limitParam: rpcParamName(settings, "rpc_limit_param", "max_results"),
+    limit: clampInteger(invocation.request.parameters.max_results, DEFAULT_RPC_RESULTS, 1, MAX_RPC_RESULTS),
+  };
+}
+
+/**
+ * Catalog search through the store's own function, which does the Arabic
+ * normalisation and fuzzy ranking an exact-match table filter cannot
+ * (2026-11-12). When several words find nothing, the tool retries once with
+ * the longest word itself: the model had already ignored a prompt rule asking
+ * it to loosen the query.
+ */
+async function searchViaRpc(
+  invocation: ConnectorInvocation,
+  dependencies: AdapterDependencies,
+  fn: string,
+  anonKey: string,
+): Promise<SupabaseReadEnvelope & { retried_with?: string }> {
+  const raw = invocation.request.parameters.query;
+  const query = typeof raw === "string" ? raw.trim() : "";
+  if (!query) {
+    // Never call with an empty query: on 2026-11-10 an empty-filter call
+    // answered the customer with an arbitrary slice of the catalog.
+    throw new SupabaseValidationError(
+      "supabase_query_required",
+      "Pass `query`: the product words from the customer's message, in their language.",
+    );
+  }
+  const search = rpcSearchFor(invocation, fn, anonKey);
+  const callerBudget = dependencies.callBudgetMs ?? SUPABASE_CALL_TIMEOUT_MS;
+  const deadline = Date.now() + Math.min(SUPABASE_LOOP_BUDGET_MS, callerBudget - SUPABASE_MIN_HOP_MS);
+
+  let rows = await postRpc(search, query, dependencies, deadline);
+  let retriedWith: string | undefined;
+  const looser = rows.length === 0 ? looserQuery(query) : null;
+  if (looser && deadline - Date.now() >= SUPABASE_MIN_HOP_MS) {
+    rows = await postRpc(search, looser, dependencies, deadline);
+    retriedWith = looser;
+  }
+
+  const secrets = credentialSecrets(invocation.credentials);
+  const collected: unknown[] = [];
+  let chars = 2; // the enclosing [] of the serialized array
+  let truncated: SupabaseReadEnvelope["truncated_by"] = null;
+  for (const row of rows.slice(0, search.limit)) {
+    const vetted = vetRow(row, false, secrets);
+    const cost = JSON.stringify(vetted).length + (collected.length ? 1 : 0);
+    if (chars + cost > SUPABASE_CHAR_BUDGET) { truncated = "char_budget"; break; }
+    collected.push(vetted);
+    chars += cost;
+  }
+  return {
+    rows: collected,
+    row_count: collected.length,
+    total: null,
+    has_more: false,
+    next_offset: null,
+    truncated_by: truncated,
+    ...(retriedWith === undefined ? {} : { retried_with: retriedWith }),
+  };
+}
+
 async function callSupabase(
   invocation: ConnectorInvocation,
   dependencies: AdapterDependencies,
@@ -748,6 +921,12 @@ async function callSupabase(
     // the boundary re-check so the adapter cannot be called around it.
     if (!capability) {
       return supabaseFailure("capability_unsupported", "The requested connector capability is not supported.");
+    }
+
+    const fn = capability === "search_products" ? rpcFunction(invocation.tool.settings) : null;
+    if (fn) {
+      const data = await searchViaRpc(invocation, dependencies, fn, anonKey);
+      return { ok: true, vendor: "supabase", action: "execute", capability, data };
     }
 
     // Count mode is routed first (C3): it needs no ordering and reads no rows.
