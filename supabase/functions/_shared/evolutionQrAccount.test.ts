@@ -30,6 +30,7 @@ function recordingAdmin(
     active?: boolean; workspaceId?: string | null; updatedAt?: string;
     emissionFailure?: "lookup" | "insert";
     clearError?: unknown;
+    episodeClearError?: unknown;
     flagMismatchError?: unknown;
   } = {},
 ) {
@@ -58,6 +59,12 @@ function recordingAdmin(
         return Promise.resolve({
           data: null,
           error: overrides.clearError ?? null,
+        });
+      }
+      if (name === "clear_whatsapp_disconnect_episode") {
+        return Promise.resolve({
+          data: null,
+          error: overrides.episodeClearError ?? null,
         });
       }
       if (name === "flag_whatsapp_number_mismatch") {
@@ -231,6 +238,7 @@ Deno.test("a linked session names the account from whichever identity source rep
       assertEquals(admin.rpcs.map((r) => r.name), [
         "activate_evolution_qr_account",
         "clear_undelivered_store_events",
+        "clear_whatsapp_disconnect_episode",
       ]);
     });
   }
@@ -512,9 +520,26 @@ Deno.test("claim path calls clear once after the claim RPC", async () => {
   assertEquals(admin.rpcs.map((r) => r.name), [
     "activate_evolution_qr_account",
     "clear_undelivered_store_events",
+    "clear_whatsapp_disconnect_episode",
   ]);
   const clearCall = admin.rpcs.find((r) => r.name === "clear_undelivered_store_events");
   assertEquals(clearCall?.args, { p_account_id: "acc-1" });
+});
+
+Deno.test("the open branch clears the disconnect episode", async () => {
+  const admin = recordingAdmin();
+  const connected = { id: "acc-2", platform_user_id: "96597950350" };
+  await syncEvolutionAccountConnection(admin, connected, "open", { ownerJid: "96597950350@s.whatsapp.net" });
+  const episodeClear = admin.rpcs.find((r) => r.name === "clear_whatsapp_disconnect_episode");
+  assertEquals(episodeClear?.args, { p_account_id: "acc-2" });
+});
+
+Deno.test("a failed disconnect episode clear does not reject", async () => {
+  const admin = recordingAdmin(null, { episodeClearError: { message: "clear failed" } });
+  const connected = { id: "acc-2", platform_user_id: "96597950350" };
+  const result = await syncEvolutionAccountConnection(admin, connected, "open", { ownerJid: "96597950350@s.whatsapp.net" });
+  assertEquals(result, "96597950350");
+  assertEquals(admin.active, true);
 });
 
 Deno.test("clear error does not reject", async () => {
@@ -531,5 +556,8 @@ Deno.test("open->close does not call clear", async () => {
   await syncEvolutionAccountConnection(admin, connected, "close", null);
   const clearCalls = admin.rpcs.filter((r) => r.name === "clear_undelivered_store_events");
   assertEquals(clearCalls, []);
+  // The close branch is the outage itself: it must not clear the episode it is opening.
+  const episodeClears = admin.rpcs.filter((r) => r.name === "clear_whatsapp_disconnect_episode");
+  assertEquals(episodeClears, []);
 });
 

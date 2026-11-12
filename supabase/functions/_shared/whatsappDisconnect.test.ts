@@ -154,6 +154,49 @@ Deno.test("an evolution_qr account is torn down at Evolution, recorded locally, 
   assertEquals(result, { deactivated: true, evolution: "ok", graph: "skipped", warnings: [] });
 });
 
+Deno.test("a deliberate evolution_qr disconnect is marked as deliberate", async () => {
+  // A disconnect the owner asked for is not an outage: without the marker the watcher
+  // would alert them about the session they just closed on purpose.
+  const { rpcs, admin } = recordingAdmin({ instanceRow: { instance_name: "postora_acc-1" } });
+
+  await disconnectWhatsAppAccount(
+    { accountId: "acc-1", workspaceId: "ws-1", connectionMode: "evolution_qr" },
+    { admin, evolution: evolutionRecorder([]), fetcher: graphRecorder([]) },
+  );
+
+  assertEquals(rpcs, [
+    { name: "mark_whatsapp_user_disconnected", args: { p_account_id: "acc-1" } },
+  ]);
+});
+
+Deno.test("a Meta-mode disconnect is not marked as deliberate", async () => {
+  // The watcher only polls Evolution QR accounts, so a Meta-mode account needs no marker.
+  const { rpcs, admin } = recordingAdmin();
+
+  await disconnectWhatsAppAccount(
+    { accountId: "acc-1", workspaceId: "ws-1", connectionMode: "coexistence" },
+    { admin, evolution: evolutionRecorder([]), fetcher: graphRecorder([]) },
+  );
+
+  assertEquals(rpcs, []);
+});
+
+Deno.test("a failed deliberate mark is reported as a warning, not as a failed disconnect", async () => {
+  const { admin } = recordingAdmin({
+    instanceRow: { instance_name: "postora_acc-1" },
+    rpcError: { message: "mark failed" },
+  });
+
+  const result = await disconnectWhatsAppAccount(
+    { accountId: "acc-1", workspaceId: "ws-1", connectionMode: "evolution_qr" },
+    { admin, evolution: evolutionRecorder([]), fetcher: graphRecorder([]) },
+  );
+
+  assertEquals(result.deactivated, true);
+  assertEquals(result.warnings.length, 1);
+  assertEquals(result.warnings[0].includes("Deliberate disconnect marker"), true);
+});
+
 Deno.test("a coexistence account unsubscribes the WABA webhook, never touches Evolution, and deactivates", async () => {
   const { updates, admin } = recordingAdmin();
   const evolutionCalls: Array<{ url: string; method?: string }> = [];

@@ -10,6 +10,18 @@ export interface EvolutionQrAccount {
   platform_user_id: string;
 }
 
+/**
+ * The slice of the service-role client this module needs for an rpc call. The module never
+ * needs the whole client, only the statements it issues, so a test double can implement
+ * exactly this shape.
+ */
+export interface RpcCapableClient {
+  rpc(
+    fn: string,
+    args: Record<string, unknown>,
+  ): PromiseLike<{ error: { message: string } | null }>;
+}
+
 // Thrown when a different phone was scanned onto an established connection. The row is
 // flagged and deactivated before this is raised, so callers treat it as a blocked state,
 // not a transient error.
@@ -189,6 +201,25 @@ export async function clearUndeliveredSafely(admin: any, accountId: string): Pro
   }
 }
 
+// The WhatsApp disconnect episode (spec 2026-11-13-whatsapp-disconnect-alerts-design.md)
+// is the record of the outage that ended with this reconnect. The account is live again,
+// so the episode, the red flag and the email markers go with it: without the clear the
+// next outage would inherit the old episode and its first_seen anchor, and the backstop
+// would fire on the second outage instead of the first. Best effort on purpose, exactly
+// like the undelivered flag above: a failed clear must never undo the activation the
+// callers depend on.
+export async function clearDisconnectEpisodeSafely(
+  admin: RpcCapableClient,
+  accountId: string,
+): Promise<void> {
+  const { error } = await admin.rpc("clear_whatsapp_disconnect_episode", {
+    p_account_id: accountId,
+  });
+  if (error) {
+    console.error(`[evolution-qr] account ${accountId}: disconnect episode clear failed`);
+  }
+}
+
 // Returns the owner number now stored for the account. Callers need it because activation
 // replaces a provisional "pending_<uuid>" placeholder, and anything that builds conversation
 // ids straight afterwards would otherwise use the stale value it passed in -- writing a whole
@@ -296,6 +327,7 @@ export async function syncEvolutionAccountConnection(
   // already derived from it.
   if (!claimsIdentity) {
     await clearUndeliveredSafely(admin, account.id);
+    await clearDisconnectEpisodeSafely(admin, account.id);
     await emitConnectionTransition(admin, account.id, previous, true);
     return account.platform_user_id;
   }
@@ -309,6 +341,7 @@ export async function syncEvolutionAccountConnection(
   });
   if (claimError) throw claimError;
   await clearUndeliveredSafely(admin, account.id);
+  await clearDisconnectEpisodeSafely(admin, account.id);
   await emitConnectionTransition(admin, account.id, previous, true);
   return (claimed as string | null) ?? account.platform_user_id;
 }
