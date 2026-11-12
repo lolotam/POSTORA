@@ -82,24 +82,35 @@ export async function extractImageText(bytes: Uint8Array, fileName: string): Pro
   return text;
 }
 
+/**
+ * A CSV or Excel source as chunks. CSV bytes are decoded as UTF-8 first: SheetJS
+ * reads raw CSV bytes as Latin-1, which stored curemedkw's Arabic products as
+ * "Ø§Ù„Ø¹..." (2026-11-12). TextDecoder drops a leading BOM.
+ */
+export function tabularChunks(bytes: ArrayBuffer, sourceType: "csv" | "excel"): KnowledgeChunk[] {
+  const workbook = sourceType === "csv"
+    ? XLSX.read(new TextDecoder("utf-8").decode(bytes), { type: "string" })
+    : XLSX.read(bytes, { type: "array" });
+  const rows: Array<{ text: string; sheet: string; row: number }> = [];
+  for (const sheet of workbook.SheetNames) {
+    XLSX.utils
+      .sheet_to_json<Record<string, unknown>>(workbook.Sheets[sheet], {
+        defval: "",
+      })
+      .forEach((row, index) =>
+        rows.push({ text: rowToText(row), sheet, row: index + 2 }),
+      );
+  }
+  return chunkRows(rows);
+}
+
 export async function parseSourceFile(
   sourceType: string,
   fileName: string,
   file: Blob,
 ): Promise<KnowledgeChunk[]> {
   if (sourceType === "csv" || sourceType === "excel") {
-    const workbook = XLSX.read(await file.arrayBuffer(), { type: "array" });
-    const rows: Array<{ text: string; sheet: string; row: number }> = [];
-    for (const sheet of workbook.SheetNames) {
-      XLSX.utils
-        .sheet_to_json<Record<string, unknown>>(workbook.Sheets[sheet], {
-          defval: "",
-        })
-        .forEach((row, index) =>
-          rows.push({ text: rowToText(row), sheet, row: index + 2 }),
-        );
-    }
-    return chunkRows(rows);
+    return tabularChunks(await file.arrayBuffer(), sourceType);
   }
   if (sourceType === "pdf") {
     const pdf = await getDocumentProxy(new Uint8Array(await file.arrayBuffer()));
