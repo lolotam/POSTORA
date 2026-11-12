@@ -47,6 +47,7 @@ import {
   useWhatsAppConnect,
   useWhatsAppDisconnect,
   useWhatsAppReconnect,
+  useDiscardPendingWhatsAppQr,
   useWhatsAppRequestSync,
 } from "@/hooks/useWhatsAppConnect";
 import { useReconnectableWhatsApp } from "@/hooks/useReconnectableWhatsApp";
@@ -75,6 +76,7 @@ export function WhatsAppSetup({ connectedAccounts }: WhatsAppSetupProps) {
   const connect = useWhatsAppConnect();
   const disconnect = useWhatsAppDisconnect();
   const reconnect = useWhatsAppReconnect();
+  const discardPendingQr = useDiscardPendingWhatsAppQr();
   const { data: reconnectable = [] } = useReconnectableWhatsApp();
   const { data: reconnectableQr = [], isError: qrAccountsError, refetch: refetchQrAccounts } = useReconnectableQrAccounts();
   const requestSync = useWhatsAppRequestSync();
@@ -447,9 +449,16 @@ export function WhatsAppSetup({ connectedAccounts }: WhatsAppSetupProps) {
       </Card>
 
       {/* The QR opens as a popup so the owner can scan it without scrolling the page; a
-          successful scan closes it (onComplete). Closing it by hand only stops watching: an unscanned
-          code expires on the provider side. */}
-      <Dialog open={qrAccountId !== null} onOpenChange={(open) => { if (!open) setQrAccountId(null); }}>
+          successful scan closes it (onComplete). Closing it by hand removes a new attempt that never
+          paired; the server keeps a paired account that was only being reconnected. */}
+      <Dialog
+        open={qrAccountId !== null}
+        onOpenChange={(open) => {
+          if (open || !qrAccountId) return;
+          discardPendingQr.mutate(qrAccountId);
+          setQrAccountId(null);
+        }}
+      >
         <DialogContent
           className="max-h-[92vh] max-w-lg overflow-y-auto"
           // The popup opens from a button that may re-render while it is open; focus goes back
