@@ -1,4 +1,4 @@
-import { act, render } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { WhatsAppQrScanner } from "../WhatsAppQrScanner";
 
@@ -45,6 +45,26 @@ describe("WhatsAppQrScanner expiry", () => {
       await vi.advanceTimersByTimeAsync(1500);
     });
     expect(refreshCalls()).toBe(1);
+  });
+
+  it("tries a failed renewal once, then leaves the retry to the owner", async () => {
+    invoke.mockImplementation(async (_name: string, options: { body: { refresh_qr?: boolean } }) => (
+      options.body.refresh_qr
+        ? { data: { error: "Evolution unavailable" }, error: null }
+        : { data: { qr: "qr-code", state: "connecting" }, error: null }
+    ));
+
+    render(<WhatsAppQrScanner socialAccountId="acc-1" onComplete={vi.fn()} />);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(QR_LIFETIME_MS + 10_000);
+    });
+    expect(refreshCalls()).toBe(1);
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Refresh QR code" }));
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(refreshCalls()).toBe(2);
   });
 
   it("does not refresh the code once the phone has connected", async () => {

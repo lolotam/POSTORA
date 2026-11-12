@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { Trans, useTranslation } from "react-i18next";
 import "@/i18n";
 import { useQueryClient } from "@tanstack/react-query";
@@ -91,6 +91,7 @@ export function WhatsAppSetup({ connectedAccounts }: WhatsAppSetupProps) {
   const [connectionName, setConnectionName] = useState<string | null>(null);
   const [qrDisclaimerOpen, setQrDisclaimerOpen] = useState(false);
   const [qrAccountId, setQrAccountId] = useState<string | null>(null);
+  const qrOpenerRef = useRef<HTMLElement | null>(null);
   const [qrConnecting, setQrConnecting] = useState(false);
   const [switchTarget, setSwitchTarget] = useState<MessagingAccount | null>(null);
   const [disconnectTarget, setDisconnectTarget] = useState<MessagingAccount | null>(null);
@@ -446,9 +447,19 @@ export function WhatsAppSetup({ connectedAccounts }: WhatsAppSetupProps) {
       </Card>
 
       {/* The QR opens as a popup so the owner can scan it without scrolling the page; a
-          successful scan closes it (onComplete), closing it by hand abandons the scan. */}
+          successful scan closes it (onComplete). Closing it by hand only stops watching: an unscanned
+          code expires on the provider side. */}
       <Dialog open={qrAccountId !== null} onOpenChange={(open) => { if (!open) setQrAccountId(null); }}>
-        <DialogContent className="max-h-[92vh] max-w-lg overflow-y-auto">
+        <DialogContent
+          className="max-h-[92vh] max-w-lg overflow-y-auto"
+          // The popup opens from a button that may re-render while it is open; focus goes back
+          // to the element that opened it, not to the top of the page.
+          onOpenAutoFocus={() => { qrOpenerRef.current = document.activeElement as HTMLElement | null; }}
+          onCloseAutoFocus={(event) => {
+            event.preventDefault();
+            qrOpenerRef.current?.focus();
+          }}
+        >
           <DialogHeader className="sr-only">
             <DialogTitle>{t("qr.scanTitle", "Scan the WhatsApp QR code")}</DialogTitle>
             <DialogDescription>{t("qr.scanHint", "Open WhatsApp on your phone, choose Linked devices, then scan this code.")}</DialogDescription>
