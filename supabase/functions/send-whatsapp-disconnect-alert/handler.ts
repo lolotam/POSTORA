@@ -1,0 +1,210 @@
+// Pure selection, HTML rendering and the per-recipient send for the WhatsApp disconnect
+// alert. The Deno.serve entrypoint builds the deps; everything here is I/O free so the
+// behaviour is testable without Supabase or Resend.
+
+export const OWNER_SUBJECT = "Your WhatsApp account needs to be reconnected";
+export const ADMIN_SUBJECT = "A Postora user's WhatsApp account needs to be reconnected";
+export const RECONNECT_URL = "https://postora.cloud/messaging/whatsapp/setup";
+
+export type AlertKind = "user" | "admin";
+
+export interface AlertAccount {
+  id: string;
+  user_id: string;
+  platform_username: string | null;
+  /** The owner's phone number. It must never reach an email. */
+  platform_user_id: string;
+}
+
+export interface OwnerProfile {
+  email: string;
+  full_name: string | null;
+  email_notifications_enabled: boolean | null;
+}
+
+export interface AdminProfile {
+  email: string;
+  full_name: string | null;
+}
+
+export interface SendAlertsDeps {
+  loadAccount(accountId: string): Promise<AlertAccount | null>;
+  loadOwnerProfile(userId: string): Promise<OwnerProfile | null>;
+  loadAdmins(): Promise<AdminProfile[]>;
+  isGlobalEmailEnabled(): Promise<boolean>;
+  isAdminAlertEnabled(): Promise<boolean>;
+  claim(accountId: string, kind: AlertKind): Promise<boolean>;
+  send(payload: { to: string[]; subject: string; html: string }): Promise<void>;
+  mark(accountId: string, kind: AlertKind): Promise<boolean>;
+}
+
+export interface SendSummary {
+  ownerSent: boolean;
+  adminSent: boolean;
+  skipped: string | null;
+  failed: string[];
+}
+
+// HTML emails interpolate user-controlled values (account name, profile name); every one of
+// them goes through this before it reaches the template.
+function escapeHtml(s: string): string {
+  return s
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+/**
+ * The account name is the only identity this email may carry: the row also holds the owner's
+ * phone number, and a notification email is forwarded, quoted and searched — never a place
+ * for it.
+ */
+function accountLabel(account: AlertAccount): string {
+  return escapeHtml(account.platform_username || "WhatsApp");
+}
+
+function emailShell(headerGradient: string, headline: string, body: string, cta: string): string {
+  return `
+    <!DOCTYPE html>
+    <html>
+    <head><meta charset="utf-8"></head>
+    <body style="margin: 0; padding: 0; background-color: #f3f4f6; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;">
+      <table cellpadding="0" cellspacing="0" width="100%" style="max-width: 600px; margin: 0 auto; background-color: #ffffff;">
+        <tr>
+          <td style="padding: 32px 24px; background: ${headerGradient};">
+            <h1 style="margin: 0; color: #ffffff; font-size: 22px; font-weight: 700;">
+              ${headline}
+            </h1>
+          </td>
+        </tr>
+        <tr>
+          <td style="padding: 24px;">
+            ${body}
+            <div style="margin: 24px 0; text-align: center;">
+              <a href="${RECONNECT_URL}" style="display: inline-block; padding: 14px 32px; background-color: #ef4444; color: #ffffff; text-decoration: none; border-radius: 8px; font-weight: 600; font-size: 16px;">
+                ${cta}
+              </a>
+            </div>
+          </td>
+        </tr>
+        <tr>
+          <td style="padding: 24px; background-color: #f9fafb; border-top: 1px solid #e5e7eb;">
+            <p style="margin: 0; color: #6b7280; font-size: 12px; text-align: center;">
+              This is an automated alert from Postora.
+            </p>
+          </td>
+        </tr>
+      </table>
+    </body>
+    </html>
+  `;
+}
+
+export function buildOwnerEmail(account: AlertAccount, fullName: string | null): string {
+  const body = `
+            <p style="margin: 0 0 16px 0; color: #374151; font-size: 16px; line-height: 1.6;">
+              Hi ${escapeHtml(fullName || "there")},
+            </p>
+            <p style="margin: 0 0 16px 0; color: #374151; font-size: 16px; line-height: 1.6;">
+              Your WhatsApp account <strong>${accountLabel(account)}</strong> is no longer connected.
+              Messages sent to it are not being delivered until you scan a new QR code.
+            </p>`;
+  return emailShell(
+    "linear-gradient(135deg, #ef4444 0%, #d97706 100%)",
+    "WhatsApp needs reconnecting",
+    body,
+    "Reconnect WhatsApp",
+  );
+}
+
+export function buildAdminEmail(account: AlertAccount, ownerName: string | null): string {
+  const owner = escapeHtml(ownerName || "a Postora user");
+  const body = `
+            <p style="margin: 0 0 16px 0; color: #374151; font-size: 16px; line-height: 1.6;">
+              The WhatsApp account <strong>${accountLabel(account)}</strong> of ${owner} is no longer
+              connected and needs a new QR code before it can receive messages again.
+            </p>`;
+  return emailShell(
+    "linear-gradient(135deg, #334155 0%, #0f172a 100%)",
+    "WhatsApp account needs reconnecting",
+    body,
+    "Reconnect WhatsApp",
+  );
+}
+
+/**
+ * Claim before send, mark after send. The owner and the admins are claimed independently, so a
+ * failure on one side never blocks the other: each records its own outcome.
+ */
+export async function sendDisconnectAlerts(
+  deps: SendAlertsDeps,
+  accountId: string,
+): Promise<SendSummary> {
+  const summary: SendSummary = { ownerSent: false, adminSent: false, skipped: null, failed: [] };
+
+  const account = await deps.loadAccount(accountId);
+  if (!account) {
+    summary.skipped = "account not found";
+    return summary;
+  }
+  if (!(await deps.isGlobalEmailEnabled())) {
+    summary.skipped = "email notifications disabled";
+    return summary;
+  }
+
+  const owner = await deps.loadOwnerProfile(account.user_id);
+
+  if (owner && owner.email_notifications_enabled === true) {
+    try {
+      const claimed = await deps.claim(accountId, "user");
+      if (claimed) {
+        await deps.send({
+          to: [owner.email],
+          subject: OWNER_SUBJECT,
+          html: buildOwnerEmail(account, owner.full_name),
+        });
+        const marked = await deps.mark(accountId, "user");
+        if (!marked) {
+          console.error(`[send-whatsapp-disconnect-alert] account ${accountId}: owner mark refused`);
+          summary.failed.push(accountId);
+        } else {
+          summary.ownerSent = true;
+        }
+      }
+    } catch {
+      // Logged with the account id only: never the recipient address or a phone number.
+      console.error(`[send-whatsapp-disconnect-alert] account ${accountId}: owner email failed`);
+      summary.failed.push(accountId);
+    }
+  }
+
+  if (await deps.isAdminAlertEnabled()) {
+    try {
+      const admins = await deps.loadAdmins();
+      if (admins.length > 0) {
+        const claimed = await deps.claim(accountId, "admin");
+        if (claimed) {
+          await deps.send({
+            to: admins.map((admin) => admin.email),
+            subject: ADMIN_SUBJECT,
+            html: buildAdminEmail(account, owner?.full_name ?? null),
+          });
+          const marked = await deps.mark(accountId, "admin");
+          if (!marked) {
+            console.error(`[send-whatsapp-disconnect-alert] account ${accountId}: admin mark refused`);
+            summary.failed.push(accountId);
+          } else {
+            summary.adminSent = true;
+          }
+        }
+      }
+    } catch {
+      console.error(`[send-whatsapp-disconnect-alert] account ${accountId}: admin email failed`);
+      summary.failed.push(accountId);
+    }
+  }
+
+  return summary;
+}
