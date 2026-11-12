@@ -291,7 +291,7 @@ type HumanModeWindow = "claimed" | "window" | "none";
  * message or a concurrent delivery never claims twice. A failed claim reads as "none":
  * silence is what the gate decided anyway.
  */
-async function claimHumanModeWindow(admin: any, request: ReplyRequest, gateReason: string): Promise<HumanModeWindow> {
+async function claimHumanModeWindow(admin: SupabaseClient, request: ReplyRequest, gateReason: string): Promise<HumanModeWindow> {
   if (gateReason !== "mode_human_first" || request.platform !== "whatsapp" || request.comment_id) return "none";
   const { data, error } = await admin.rpc("claim_human_mode_ack", {
     p_user_id: request.user_id,
@@ -310,7 +310,7 @@ async function claimHumanModeWindow(admin: any, request: ReplyRequest, gateReaso
  * Kept in the thread so that, when the window ends, the agent reads what the customer asked
  * meanwhile.
  */
-async function recordHeldCustomerTurn(admin: any, threadId: string, request: ReplyRequest): Promise<void> {
+async function recordHeldCustomerTurn(admin: SupabaseClient, threadId: string, request: ReplyRequest): Promise<void> {
   const { error } = await admin.from("ai_thread_messages").insert({
     thread_id: threadId,
     user_id: request.user_id,
@@ -340,7 +340,7 @@ const NO_AFTERMATH: EscalationAftermath = { since: null, staffReplies: 0, staffT
  * upsert is what writes the marker. A failed staff read reports no marker: claiming a delay
  * staff may in fact have answered is worse than omitting the apology.
  */
-async function readEscalationAftermath(admin: any, request: ReplyRequest, threadId: string): Promise<EscalationAftermath> {
+async function readEscalationAftermath(admin: SupabaseClient, request: ReplyRequest, threadId: string): Promise<EscalationAftermath> {
   const { data: marked, error } = await admin
     .from("ai_threads")
     .select("unanswered_escalation_since")
@@ -378,7 +378,7 @@ async function readEscalationAftermath(admin: any, request: ReplyRequest, thread
  * apology; otherwise the staff turns are stored in the thread so later turns keep them too.
  */
 async function settleEscalationAftermath(
-  admin: any,
+  admin: SupabaseClient,
   context: { request: ReplyRequest; threadId: string; language: ReplyLanguage },
   aftermath: EscalationAftermath,
   replyText: string,
