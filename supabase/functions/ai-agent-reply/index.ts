@@ -16,7 +16,6 @@ import {
   buildSystemPrompt,
   completionFailure,
   customerLanguageSignal,
-  escalationApologyText,
   formatRelatedFacts,
   formatModelRef,
   type GraphRelationFact,
@@ -42,11 +41,11 @@ import {
   type ReplyLanguage,
   SIMILARITY_FLOOR,
   shouldAiReply,
-  staffTurnsSince,
   type StoredTurn,
   threadReplyLanguage,
   triageSystemHint,
   waRecipient,
+  withGreeting,
   withOpening,
 } from "./logic.ts";
 import { repairChatReply } from "./chatLinks.ts";
@@ -79,6 +78,16 @@ import {
   takeOutboxRow,
 } from "./outbox.ts";
 import { adminToolDefinitions, executeAdminTool } from "./admin-tools.ts";
+import {
+  claimHumanModeAck,
+  NO_AFTERMATH,
+  readEscalationAftermath,
+  releaseHumanModeAck,
+  replyIsDurable,
+  restoreUnansweredEscalation,
+  settleEscalationAftermath,
+  type HandoffScope,
+} from "./handoffWindow.ts";
 import { getSendCredentials } from "../_shared/messengerCredentials.ts";
 import { replyToComment } from "../_shared/commentActions.ts";
 import { commentConversationLikePrefix, isCommentConversationId } from "../_shared/commentConversation.ts";
@@ -135,9 +144,6 @@ const SERVICE_WINDOW_MS = 24 * 60 * 60 * 1000;
 // curemedkw customer who described the product over several messages lost the
 // start of the thread. 14 rows is seven customer messages with their replies.
 const HISTORY_LIMIT = 14;
-// Staff replies merged in after an escalation window; the same order of size as the history.
-const STAFF_TURN_LIMIT = 14;
-
 // For WhatsApp, recipient_phone is the customer's phone and phone_number_id
 // the business number. For Facebook/Instagram, recipient_phone carries the
 // sender PSID and phone_number_id is unused.
@@ -281,28 +287,17 @@ async function isWithinServiceWindow(admin: any, userId: string, conversationId:
   return Date.now() - new Date(lastInbound.timestamp).getTime() < SERVICE_WINDOW_MS;
 }
 
-type HumanModeWindow = "claimed" | "window" | "none";
-
 /**
- * Where a closed gate stands with the one-time "our team has your conversation" notice.
- * "claimed": this message is the first into a bounded human_first window and owes the notice.
- * "window": the window was already notified. "none": no bounded window (manual override, a
- * human_first default, human_then_ai, another gate). The RPC is single-flight, so a second
- * message or a concurrent delivery never claims twice. A failed claim reads as "none":
- * silence is what the gate decided anyway.
+ * The conversation the handoff claims belong to. Every claim query carries user_id
+ * because the caller runs as the service role and tenancy has to be structural
+ * (ARCHITECTURE.md §24).
  */
-async function claimHumanModeWindow(admin: SupabaseClient, request: ReplyRequest, gateReason: string): Promise<HumanModeWindow> {
-  if (gateReason !== "mode_human_first" || request.platform !== "whatsapp" || request.comment_id) return "none";
-  const { data, error } = await admin.rpc("claim_human_mode_ack", {
-    p_user_id: request.user_id,
-    p_platform: request.platform,
-    p_conversation_id: request.conversation_id,
-  });
-  if (error) {
-    console.error("[ai-agent-reply] human-mode ack claim failed:", error.message);
-    return "none";
-  }
-  return data === "claimed" || data === "window" ? data : "none";
+function handoffScope(request: ReplyRequest): HandoffScope {
+  return {
+    userId: request.user_id,
+    platform: request.platform,
+    conversationId: request.conversation_id,
+  };
 }
 
 /**
@@ -318,96 +313,6 @@ async function recordHeldCustomerTurn(admin: SupabaseClient, threadId: string, r
     content: request.inbound_text,
   });
   if (error) console.error("[ai-agent-reply] held customer turn write failed:", error.message);
-}
-
-interface EscalationAftermath {
-  /** When the silent window that ended began; null when the thread carries no marker. */
-  since: string | null;
-  /** Every staff send in the window, voice notes and images included. */
-  staffReplies: number;
-  /** The text of those sends, as history turns. */
-  staffTurns: StoredTurn[];
-}
-
-const NO_AFTERMATH: EscalationAftermath = { since: null, staffReplies: 0, staffTurns: [] };
-
-/**
- * The thread's unanswered-escalation marker and what staff sent since it. Read only: the
- * marker is taken by settleEscalationAftermath once the reply is final, so a turn that fails
- * before sending leaves it for the next one.
- *
- * Read fresh rather than from the thread upsert: the override read that runs beside the
- * upsert is what writes the marker. A failed staff read reports no marker: claiming a delay
- * staff may in fact have answered is worse than omitting the apology.
- */
-async function readEscalationAftermath(admin: SupabaseClient, request: ReplyRequest, threadId: string): Promise<EscalationAftermath> {
-  const { data: marked, error } = await admin
-    .from("ai_threads")
-    .select("unanswered_escalation_since")
-    .eq("id", threadId)
-    .eq("user_id", request.user_id)
-    .maybeSingle();
-  if (error) {
-    console.error("[ai-agent-reply] unanswered-escalation read failed:", error.message);
-    return NO_AFTERMATH;
-  }
-  const since = marked?.unanswered_escalation_since;
-  if (typeof since !== "string") return NO_AFTERMATH;
-  const { data: rows, error: rowsError } = await admin
-    .from("whatsapp_messages")
-    .select("direction, from_name, message_text, created_at")
-    .eq("user_id", request.user_id)
-    .eq("conversation_id", request.conversation_id)
-    .eq("direction", "outbound")
-    .eq("from_name", "You")
-    .gt("created_at", since)
-    .order("created_at", { ascending: false })
-    .limit(STAFF_TURN_LIMIT);
-  if (rowsError) {
-    console.error("[ai-agent-reply] staff replies read failed:", rowsError.message);
-    return NO_AFTERMATH;
-  }
-  const staffRows = rows ?? [];
-  return { since, staffReplies: staffRows.length, staffTurns: staffTurnsSince(staffRows, since) };
-}
-
-/**
- * Takes the marker for the reply about to be sent, and returns that reply.
- *
- * Only the turn whose take succeeds acts: with no staff reply in the window it opens with the
- * apology; otherwise the staff turns are stored in the thread so later turns keep them too.
- */
-async function settleEscalationAftermath(
-  admin: SupabaseClient,
-  context: { request: ReplyRequest; threadId: string; language: ReplyLanguage },
-  aftermath: EscalationAftermath,
-  replyText: string,
-): Promise<string> {
-  if (aftermath.since === null) return replyText;
-  const { data: taken, error } = await admin.rpc("take_unanswered_escalation", {
-    p_thread_id: context.threadId,
-    p_user_id: context.request.user_id,
-  });
-  if (error) {
-    console.error("[ai-agent-reply] unanswered-escalation take failed:", error.message);
-    return replyText;
-  }
-  if (typeof taken !== "string") return replyText;
-  const apology = escalationApologyText(taken, aftermath.staffReplies, context.language);
-  if (apology) return withOpening(replyText, apology);
-  if (aftermath.staffTurns.length) {
-    const { error: staffWriteError } = await admin.from("ai_thread_messages").insert(
-      aftermath.staffTurns.map((turn) => ({
-        thread_id: context.threadId,
-        user_id: context.request.user_id,
-        role: turn.role,
-        content: turn.content,
-        created_at: turn.created_at,
-      })),
-    );
-    if (staffWriteError) console.error("[ai-agent-reply] staff turn write failed:", staffWriteError.message);
-  }
-  return replyText;
 }
 
 async function isCooldownActive(admin: any, threadId: string, cooldownSeconds: number): Promise<boolean> {
@@ -955,7 +860,10 @@ Deno.serve(async (req) => {
         ...gateChecks,
       });
       if (!gate.reply) {
-        const humanWindow = await claimHumanModeWindow(admin, request, gate.reason);
+        const humanWindow = await claimHumanModeAck(admin, handoffScope(request), {
+          gateReason: gate.reason,
+          isComment: Boolean(request.comment_id),
+        });
         if (humanWindow === "claimed") {
           humanModeAck = HUMAN_MODE_ACK[
             handoffNoticeLanguage(request.inbound_text, config.language_mode, request.language_hint, storedCustomerLanguage)
@@ -973,7 +881,14 @@ Deno.serve(async (req) => {
 
     // Everything the reply is delivered through, resolved before any billable work so the
     // redelivery branch below can send without paying for retrieval it will not use.
-    replySender = dryRun ? null : await buildReplySender(admin, request);
+    try {
+      replySender = dryRun ? null : await buildReplySender(admin, request);
+    } catch (senderError) {
+      // The acknowledgement claim was spent before the sender existed. Nothing reached
+      // the customer, so the claim goes back and the notice is still owed.
+      if (humanModeAck) await releaseHumanModeAck(admin, handoffScope(request));
+      throw senderError;
+    }
 
     // Declared here rather than beside the tool loop because persistDelivery reads it, and a
     // redelivery persists before the loop has run at all. Empty is the truthful value there:
@@ -1071,16 +986,26 @@ Deno.serve(async (req) => {
     // The human_first notice travels the same send path as a generated reply and leaves the
     // same thread trail. It is at most once: the claim is spent before the send, so a row
     // recovery re-drives meets the closed gate as "window" and is cancelled, not re-sent.
+    // The one exception is a send that never became durable: nothing reached the customer
+    // and nothing was stored, so the claim goes back and the notice is still owed.
     if (humanModeAck && replySender) {
       const sender = replySender;
-      const outboundMessageId = outboxId
-        ? await deliverGeneratedReply(
-          admin,
-          outboxId,
-          { text: humanModeAck, toolCalls: [] },
-          (text) => sender(request.recipient_phone, text),
-        )
-        : await sender(request.recipient_phone, humanModeAck);
+      let outboundMessageId: string | null;
+      try {
+        outboundMessageId = outboxId
+          ? await deliverGeneratedReply(
+            admin,
+            outboxId,
+            { text: humanModeAck, toolCalls: [] },
+            (text) => sender(request.recipient_phone, text),
+          )
+          : await sender(request.recipient_phone, humanModeAck);
+      } catch (ackError) {
+        if (!replyIsDurable(outboxId, ackError)) {
+          await releaseHumanModeAck(admin, handoffScope(request));
+        }
+        throw ackError;
+      }
       await persistDelivery(humanModeAck, outboundMessageId, []);
       await logOutcome(admin, {
         ...baseLog,
@@ -1152,7 +1077,7 @@ Deno.serve(async (req) => {
       // Only WhatsApp keeps staff messages locally, and a sandbox run must not consume the
       // marker a real customer's next reply is owed.
       request.platform === "whatsapp" && !dryRun
-        ? readEscalationAftermath(admin, request, thread.id)
+        ? readEscalationAftermath(admin, handoffScope(request), thread.id)
         : Promise.resolve(NO_AFTERMATH),
     ]);
 
@@ -1749,7 +1674,9 @@ Deno.serve(async (req) => {
         // rule on a live reply (11:10 UTC), so rendering safety cannot
         // depend on it complying.
         replyText = repairChatReply((choice.content || "").trim());
-        if (openingGreeting) replyText = withOpening(replyText, openingGreeting);
+        // The greeting OPENS a reply; it must never BE the reply. An empty answer
+        // stays on the no-reply path below instead of going out as a bare greeting.
+        replyText = withGreeting(replyText, openingGreeting);
         break;
       }
 
@@ -1889,23 +1816,42 @@ Deno.serve(async (req) => {
 
     // Last, so the apology is decided only for a reply that is about to go out: a turn that
     // failed above leaves the marker for the next one.
-    replyText = await settleEscalationAftermath(admin, { request, threadId: thread.id, language }, aftermath, replyText);
+    const settlement = await settleEscalationAftermath(
+      admin,
+      { scope: handoffScope(request), threadId: thread.id, language },
+      aftermath,
+      replyText,
+    );
+    replyText = settlement.replyText;
 
     let outboundMessageId: string | null = null;
-    if (!dryRun && replySender) {
-      const sender = replySender;
-      // With an outbox row, the send is wrapped in three durable steps (persist the text,
-      // mark sending, mark sent) so a kill at any point leaves a state recovery can act on
-      // without guessing. Without one -- callers that predate the outbox -- it is the plain
-      // send it always was.
-      outboundMessageId = outboxId
-        ? await deliverGeneratedReply(
-          admin,
-          outboxId,
-          { text: replyText, toolCalls: executedToolCalls },
-          (text) => sender(request.recipient_phone, text),
-        )
-        : await sender(request.recipient_phone, replyText);
+    let replyWithoutDurableCopy = false;
+    try {
+      if (!dryRun && replySender) {
+        const sender = replySender;
+        // With an outbox row, the send is wrapped in three durable steps (persist the text,
+        // mark sending, mark sent) so a kill at any point leaves a state recovery can act on
+        // without guessing. Without one -- callers that predate the outbox -- it is the plain
+        // send it always was.
+        outboundMessageId = outboxId
+          ? await deliverGeneratedReply(
+            admin,
+            outboxId,
+            { text: replyText, toolCalls: executedToolCalls },
+            (text) => sender(request.recipient_phone, text),
+          )
+          : await sender(request.recipient_phone, replyText);
+      }
+    } catch (deliveryError) {
+      replyWithoutDurableCopy = !replyIsDurable(outboxId, deliveryError);
+      throw deliveryError;
+    } finally {
+      // The marker is a claim, not a receipt. It is spent before the reply is durable,
+      // so a reply that never became durable leaves the apology owed to nobody --
+      // and a staff context that could not be stored is lost with it.
+      if (settlement.marker && (replyWithoutDurableCopy || settlement.staffWriteFailed)) {
+        await restoreUnansweredEscalation(admin, handoffScope(request), thread.id, settlement.marker);
+      }
     }
     timings.mark("sent");
     // Customer-perceived: request start to the send completing (marks are per-phase deltas).

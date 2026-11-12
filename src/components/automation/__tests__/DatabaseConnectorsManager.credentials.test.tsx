@@ -304,6 +304,29 @@ describe("registry-driven credential fields", () => {
     expect(screen.getByText("Store URL is required.")).toBeInTheDocument();
     expect(upsertTool.mutate).not.toHaveBeenCalled();
   });
+
+  it("lets a catalog search function stand in for the table allow-list", () => {
+    // A connector that searches through the store's own function reads no table,
+    // so the table allow-list is not required (2026-11-13).
+    tools = [tool({
+      id: "supa-3",
+      name: "supa_catalog",
+      connector_type: "supabase",
+      settings: {
+        project_url: "https://project.example.com",
+        schema: "public",
+        rpc_allow_list: "agent_search_products",
+      },
+      configured_secret_fields: ["anon_key"],
+    })];
+    renderManager();
+    openEdit("supa_catalog");
+    fireEvent.change(screen.getByLabelText("Table allow-list"), { target: { value: "" } });
+    saveTool();
+
+    expect(screen.queryByText("Table allow-list is required.")).not.toBeInTheDocument();
+    expect(upsertTool.mutate).toHaveBeenCalled();
+  });
 });
 
 describe("Test connection", () => {

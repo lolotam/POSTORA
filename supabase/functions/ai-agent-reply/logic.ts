@@ -407,19 +407,37 @@ function connectorRules(connectorNames?: string[]): string[] {
 }
 
 /**
+ * The product-question handover, from the account's own two switches.
+ *
+ * The tool description is written from the same switches, so a trigger the
+ * tool does not allow would have the model call a tool that refuses the call:
+ * with `handoffOnRequest` off the tool says "Do NOT use it merely because the
+ * customer asked for a person", so the rules must not offer that trigger.
+ */
+function catalogHandoffRule(handoffOnRequest: boolean, handoffOnLowConfidence: boolean): string {
+  if (!handoffOnLowConfidence) return "";
+  const triggers = handoffOnRequest
+    ? ["the customer asks for one", "after two searches for the same request have found nothing"]
+    : ["two searches for the same request have found nothing"];
+  return `- For product questions, hand the conversation to a person only when ${triggers.join(", or ")}.`;
+}
+
+/**
  * Said only when a connector searches the catalog through the store's own
  * function. Without it the model treated one empty search as "we do not sell
  * this" and handed over, and wrote product links of its own instead of the
  * one the catalog returned (curemedkw, 2026-11-12 plan, Task 6).
  */
-function catalogSearchRules(catalogSearch: boolean | undefined, handoffOnLowConfidence: boolean): string[] {
+function catalogSearchRules(
+  catalogSearch: boolean | undefined,
+  handoffOnRequest: boolean,
+  handoffOnLowConfidence: boolean,
+): string[] {
   if (!catalogSearch) return [];
   return [
     "- To find a product, call the catalog search with `query` set to the product words from the customer's message, exactly as they wrote them.",
     "- If the search finds nothing (the tool has already retried with a shorter word by itself), ask the customer for the product name as printed on the pack, or for a photo. Do not say the store does not sell it.",
-    handoffOnLowConfidence
-      ? "- For product questions, hand the conversation to a person only when the customer asks for one, or after two searches for the same request have found nothing."
-      : "",
+    catalogHandoffRule(handoffOnRequest, handoffOnLowConfidence),
     "- When you mention a product, give its product_url exactly as the tool returned it. Never build or guess a link.",
     "- If price_hidden is true, say the price is available on request instead of quoting one. If shopping_enabled is false, say the product can be viewed but not ordered online.",
   ].filter(Boolean);
@@ -452,6 +470,18 @@ const GOAL_RULES: Record<AgentGoal, string> = {
 };
 
 /**
+ * The CureMed greeting pair, approved by the account owner on 2026-11-12 (plan,
+ * Global Constraints). The account's "Opening message" field holds the Arabic
+ * text; an English first message gets the mirror instead of no greeting at all.
+ *
+ * Only this exact pair is mirrored. Every other greeting keeps the rule below,
+ * so an account that has its own words is never given someone else's.
+ */
+const GREETING_MIRRORS: Record<string, string> = {
+  "وعليكم السلام ورحمة الله، أهلاً بك في كيور ميد 🌿 كيف نقدر نساعدك؟": "Welcome to CureMed 🌿 How can we help you?",
+};
+
+/**
  * The configured greeting, to be sent verbatim by code, when its script matches the reply
  * language. Null otherwise: an Arabic greeting must not open an English conversation, so
  * that case stays with the model. A greeting with no letters (an emoji) fits either.
@@ -460,13 +490,27 @@ export function fixedGreeting(greeting: string | undefined, language: ReplyLangu
   const text = greeting?.trim();
   if (!text) return null;
   const script = letterLanguage(text);
-  return script === null || script === language ? text : null;
+  if (script === null || script === language) return text;
+  const mirror = GREETING_MIRRORS[text];
+  return mirror && letterLanguage(mirror) === language ? mirror : null;
 }
 
 /** The reply opened by a fixed text (greeting, apology), unless the model already opened with it. */
 export function withOpening(reply: string, opening: string): string {
   if (reply.startsWith(opening)) return reply;
   return reply ? `${opening}\n\n${reply}` : opening;
+}
+
+/**
+ * The reply with the greeting opening it.
+ *
+ * The greeting OPENS a reply; it must never BE the reply. An empty answer stays
+ * empty, so the caller takes its no-reply path instead of sending the customer a
+ * bare greeting and nothing else (curemedkw, 2026-11-13).
+ */
+export function withGreeting(reply: string, greeting: string | null): string {
+  if (!greeting || !reply) return reply;
+  return withOpening(reply, greeting);
 }
 
 // Wording approved by the account owner on 2026-11-12. Fixed in code rather than per account:
@@ -680,13 +724,26 @@ export function buildSystemPrompt(params: SystemPromptParams): string {
     // carries. With a switch off nobody is notified, so the replacement
     // wording must not promise a follow-up -- escalateConversation is the only
     // thing that reaches a human, and it is exactly what the off branch skips.
+    //
+    // The catalog rules below own the product questions, so the general rule
+    // is scoped away from them: without that, a product missing from the
+    // knowledge read as "no answer here" and the model handed over on the
+    // first miss instead of searching twice (curemedkw, 2026-11-12).
     (params.handoffOnLowConfidence ?? true)
-      ? "- If the knowledge does not contain the answer, say you will check with the team, and use the escalate_to_human tool."
-      : "- If the knowledge does not contain the answer, say plainly that you do not have that information. Do not promise that anyone will follow up.",
+      ? params.catalogSearch
+        ? "- If the knowledge does not contain the answer, and the question is not about a product, say you will check with the team, and use the escalate_to_human tool."
+        : "- If the knowledge does not contain the answer, say you will check with the team, and use the escalate_to_human tool."
+      : params.catalogSearch
+        ? "- If the knowledge does not contain the answer, and the question is not about a product, say plainly that you do not have that information. Do not promise that anyone will follow up."
+        : "- If the knowledge does not contain the answer, say plainly that you do not have that information. Do not promise that anyone will follow up.",
     (params.handoffOnRequest ?? true)
       ? "- If the customer asks for a person/human/agent, use the escalate_to_human tool and tell them someone will follow up."
       : "",
-    ...catalogSearchRules(params.catalogSearch, params.handoffOnLowConfidence ?? true),
+    ...catalogSearchRules(
+      params.catalogSearch,
+      params.handoffOnRequest ?? true,
+      params.handoffOnLowConfidence ?? true,
+    ),
     "- Use the search_knowledge tool to look up product or policy details before saying something is unavailable.",
     ...LINK_RULES,
     ...surfaceInstructions.rules,

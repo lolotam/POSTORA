@@ -3,6 +3,15 @@ export interface Field {
   label: string;
   kind: "text" | "secret" | "url" | "hidden";
   required: boolean;
+  /**
+   * Another field whose value makes this one unnecessary.
+   *
+   * The Supabase table allow-list is only required when no catalog search
+   * function is named: a connector that searches through the store's own
+   * function reads no table, and the adapter resolves that path before the
+   * table settings are read (2026-11-13).
+   */
+  optionalWhen?: string;
   help: string;
 }
 
@@ -196,7 +205,8 @@ const CONNECTOR_DEFINITIONS: Record<ConnectorType, ConnectorDefinition> = {
         label: "Table allow-list",
         kind: "text",
         required: true,
-        help: "The tables this connector may query, subject to the target project's RLS.",
+        optionalWhen: "rpc_allow_list",
+        help: "The tables this connector may query, subject to the target project's RLS. Not needed when a catalog search function is set: that connector reads no table.",
       },
       {
         key: "select_columns",

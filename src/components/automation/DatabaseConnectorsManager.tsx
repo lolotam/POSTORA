@@ -556,7 +556,9 @@ function settingsValueFor(field: Field, tool: AiAgentTool): string {
 
 /** The first required field with no value, or null. A required secret that is
  *  already stored never counts as missing: blank means "keep existing" on an
- *  existing connector, exactly like the old single-secret form. */
+ *  existing connector, exactly like the old single-secret form. A field another
+ *  filled field makes unnecessary (the table allow-list, once a catalog search
+ *  function is named) never counts as missing either. */
 function missingRequiredCredentialField(
   fields: readonly Field[],
   values: Record<string, string>,
@@ -566,6 +568,7 @@ function missingRequiredCredentialField(
   for (const field of fields) {
     if (!field.required) continue;
     if ((values[field.key] ?? "").trim() !== "") continue;
+    if (field.optionalWhen && (values[field.optionalWhen] ?? "").trim() !== "") continue;
     if (field.kind === "secret" && editingTool && configuredSecretFields.has(field.key)) continue;
     return field;
   }
@@ -2393,6 +2396,11 @@ function DatabaseConnectorsEditor({
                       field.kind === "secret" &&
                       editingTool !== null &&
                       (editingTool.configured_secret_fields ?? []).includes(field.key);
+                    // A field another filled field makes unnecessary is not required
+                    // right now, and the badge must say so.
+                    const optionalWhenFilled = field.optionalWhen
+                      ? (form.credentials[field.optionalWhen] ?? "").trim() !== ""
+                      : false;
                     return (
                       <div className="space-y-1.5" key={field.key}>
                         <div className="flex items-center justify-between gap-2">
@@ -2400,7 +2408,7 @@ function DatabaseConnectorsEditor({
                             {field.label}
                           </Label>
                           <span className="text-[10px] text-muted-foreground">
-                            {isStoredSecret ? t("form.storedKeep", "Stored — leave blank to keep") : field.required ? t("form.required", "Required") : null}
+                            {isStoredSecret ? t("form.storedKeep", "Stored — leave blank to keep") : field.required && !optionalWhenFilled ? t("form.required", "Required") : null}
                           </span>
                         </div>
                         <Input

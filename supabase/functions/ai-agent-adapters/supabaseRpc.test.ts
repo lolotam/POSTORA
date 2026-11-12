@@ -176,3 +176,104 @@ Deno.test("a cleared argument name falls back to its default", async () => {
 
   assertEquals(calls[0].body, { q: "heel", max_results: 8 });
 });
+
+// ---------------------------------------------------------------------------
+// The catalog connector names a FUNCTION, not a table (curemedkw, 2026-11-12).
+// The plan's reference connector carries no table allow-list at all, so the
+// table settings cannot be read before the execution path is chosen.
+// ---------------------------------------------------------------------------
+
+function rpcOnlyTool(extra: Record<string, unknown> = {}): ConnectorTool {
+  return {
+    id: "00000000-0000-0000-0000-000000000004",
+    connector_type: "supabase",
+    settings: {
+      project_url: "https://catalog.example.com",
+      schema: "public",
+      rpc_allow_list: "agent_search_products",
+      ...extra,
+    },
+    permissions: { search_products: true, check_stock: false, lookup_orders: false },
+    read_only_mode: true,
+  };
+}
+
+Deno.test("a connector with only the catalog function is not refused for having no table", async () => {
+  const { deps, calls } = recordingDeps([FIXTURE]);
+
+  const result = await search(rpcOnlyTool(), { query: "كريم الكعب" }, deps);
+
+  assertEquals(errorCodeOf(result), undefined);
+  assertEquals(calls.map(({ url, method }) => [new URL(url).pathname, method]), [
+    ["/rest/v1/rpc/agent_search_products", "POST"],
+  ]);
+  assertEquals(calls[0].body, { q: "كريم الكعب", max_results: 8 });
+  assertEquals(dataOf(result).row_count, 2);
+});
+
+Deno.test("the connection probe asks the function when the connector has no table", async () => {
+  const { deps, calls } = recordingDeps([[]]);
+
+  const result = await executeConnector(
+    {
+      tool: rpcOnlyTool(),
+      credentials: { anon_key: ANON_KEY },
+      request: { action: "test_connection", parameters: {} },
+    },
+    deps,
+  );
+
+  assertEquals(result.ok, true, JSON.stringify(result));
+  assertEquals(calls.map(({ url, method }) => [new URL(url).pathname, method]), [
+    ["/rest/v1/rpc/agent_search_products", "POST"],
+  ]);
+  // One row, and a query no catalog holds: the probe reads nothing.
+  assertEquals(calls[0].body, { q: "postora-connection-probe", max_results: 1 });
+});
+
+Deno.test("the operator's row ceiling caps the function's result count", async () => {
+  const { deps, calls } = recordingDeps([FIXTURE]);
+
+  const data = dataOf(await search(rpcOnlyTool({ max_rows: "2" }), { query: "heel" }, deps));
+
+  assertEquals(calls[0].body, { q: "heel", max_results: 2 });
+  assertEquals(data.row_count, 2);
+});
+
+Deno.test("the configured column restriction applies to the function's rows", async () => {
+  const { deps } = recordingDeps([FIXTURE]);
+
+  const rows = dataOf(
+    await search(rpcOnlyTool({ select_columns: "name_ar,product_url" }), { query: "heel" }, deps),
+  ).rows as Record<string, unknown>[];
+
+  for (const row of rows) {
+    assertEquals(Object.keys(row).sort(), ["name_ar", "product_url"]);
+  }
+});
+
+Deno.test("a per-table column map applies to the function's rows too", async () => {
+  const { deps } = recordingDeps([FIXTURE]);
+
+  const rows = dataOf(
+    await search(
+      rpcOnlyTool({ column_map: JSON.stringify({ agent_catalog_products: ["product_url"] }) }),
+      { query: "heel" },
+      deps,
+    ),
+  ).rows as Record<string, unknown>[];
+
+  for (const row of rows) {
+    assertEquals(Object.keys(row), ["product_url"]);
+  }
+});
+
+Deno.test("the catalog's product link is copied verbatim, never shortened", async () => {
+  const longUrl = `https://curemedkw.com/brand/product/${"slug-".repeat(40)}`;
+  const { deps } = recordingDeps([[{ product_url: longUrl, name_ar: "كريم" }]]);
+
+  const rows = dataOf(await search(rpcOnlyTool(), { query: "heel" }, deps)).rows as Record<string, unknown>[];
+
+  assertEquals(rows[0].product_url, longUrl);
+  assertEquals(String(rows[0].product_url).includes("truncated"), false);
+});

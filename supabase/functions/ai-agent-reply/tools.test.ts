@@ -912,12 +912,34 @@ Deno.test("the configured greeting is sent by code only in its own language", as
   }
 });
 
+// curemedkw 2026-11-12: the plan names the English mirror of the CureMed greeting, so an
+// English first message gets a greeting by code instead of none. Only that exact pair is
+// mirrored: another account's own words are never replaced.
+Deno.test("the CureMed greeting has the English mirror the plan names", async () => {
+  const { fixedGreeting } = await import("./logic.ts");
+  const arabic = "وعليكم السلام ورحمة الله، أهلاً بك في كيور ميد 🌿 كيف نقدر نساعدك؟";
+  assertEquals(fixedGreeting(arabic, "ar"), arabic);
+  assertEquals(fixedGreeting(arabic, "en"), "Welcome to CureMed 🌿 How can we help you?");
+  // Another account's greeting keeps the old rule: code sends it only in its own language.
+  assertEquals(fixedGreeting("يا هلا وسهلا فيك، شلون أقدر أساعدك؟ 😊", "en"), null);
+});
+
 Deno.test("the greeting opens the reply once, and stands alone when the reply is empty", async () => {
   const { withOpening } = await import("./logic.ts");
   const greeting = "أهلاً بك في كيور ميد";
   assertEquals(withOpening("كريم الكعب متوفر بسعر 6 د.ك", greeting), `${greeting}\n\nكريم الكعب متوفر بسعر 6 د.ك`);
   assertEquals(withOpening(`${greeting}، كريم الكعب متوفر`, greeting), `${greeting}، كريم الكعب متوفر`);
   assertEquals(withOpening("", greeting), greeting);
+});
+
+// The greeting OPENS a reply; it must never BE the reply. A greeting on its own
+// tells the customer nothing and answers nothing.
+Deno.test("the greeting never becomes the whole answer", async () => {
+  const { withGreeting } = await import("./logic.ts");
+  const greeting = "أهلاً بك في كيور ميد";
+  assertEquals(withGreeting("", greeting), "");
+  assertEquals(withGreeting("كريم الكعب متوفر", greeting), `${greeting}\n\nكريم الكعب متوفر`);
+  assertEquals(withGreeting("كريم الكعب متوفر", null), "كريم الكعب متوفر");
 });
 
 // curemedkw 2026-11-12: after a silent escalation nobody answered, and the agent resumed as if
@@ -1466,6 +1488,51 @@ Deno.test("with low-confidence handoff off the catalog rules never promise a per
 
   assertStringIncludes(prompt, "ask the customer for the product name as printed on the pack");
   assertEquals(prompt.includes("hand the conversation to a person"), false);
+});
+
+// The escalate_to_human tool's own description is written from the account's switches:
+// with handoffOnRequest off it says "Do NOT use it merely because the customer asked for
+// a person". The catalog rules must not offer that trigger, or the model calls a tool
+// the switch turned off.
+Deno.test("with request handoff off the catalog rules never offer the request trigger", async () => {
+  const { buildSystemPrompt } = await import("./logic.ts");
+  const prompt = buildSystemPrompt({
+    persona: null,
+    language: "ar",
+    knowledgeBlocks: [],
+    nowIso: "2026-11-12T00:00:00Z",
+    catalogSearch: true,
+    handoffOnRequest: false,
+    handoffOnLowConfidence: true,
+  });
+
+  assertEquals(prompt.includes("the customer asks for one"), false);
+  // The low-confidence trigger is a different switch and stays.
+  assertStringIncludes(prompt, "two searches for the same request have found nothing");
+  // The general request rule is gone with the switch.
+  assertEquals(prompt.includes("If the customer asks for a person/human/agent"), false);
+});
+
+// With a catalog connector the product questions belong to the catalog rules: search,
+// search again, then ask for the name. The general rule must not hand over on the
+// first miss there, or the model escalates instead of searching twice.
+Deno.test("the general knowledge rule leaves the product questions to the catalog rules", async () => {
+  const { buildSystemPrompt } = await import("./logic.ts");
+  const base = { persona: null, language: "ar" as const, knowledgeBlocks: [], nowIso: "2026-11-12T00:00:00Z" };
+
+  const withCatalog = buildSystemPrompt({ ...base, catalogSearch: true });
+  const withoutCatalog = buildSystemPrompt({ ...base, catalogSearch: false });
+
+  assertEquals(
+    withCatalog.includes("If the knowledge does not contain the answer, say you will check with the team"),
+    false,
+  );
+  assertStringIncludes(withCatalog, "the question is not about a product");
+  // Without a catalog connector the general rule is unchanged.
+  assertStringIncludes(
+    withoutCatalog,
+    "If the knowledge does not contain the answer, say you will check with the team",
+  );
 });
 
 Deno.test("only a Supabase connector with a named search function counts as catalog search", async () => {

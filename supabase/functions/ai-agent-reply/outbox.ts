@@ -100,6 +100,22 @@ async function sendAndSettle(
 }
 
 /**
+ * The reply text could not be persisted before the send, so nothing durable
+ * exists anywhere.
+ *
+ * The caller needs to tell this apart from a send that failed AFTER the text
+ * was stored: in that case the outbox row holds the reply and recovery can
+ * still deliver it, so a claim spent on that reply must stay spent. Here
+ * nothing was written, so a claim the caller holds has to come back.
+ */
+export class ReplyNotPersistedError extends Error {
+  constructor(message = "could not persist the reply before sending; refusing to send") {
+    super(message);
+    this.name = "ReplyNotPersistedError";
+  }
+}
+
+/**
  * Sends a freshly generated reply, persisting it first.
  *
  * `running -> ready_to_send` is fail-closed: an unpersisted reply that goes out is one
@@ -123,7 +139,7 @@ export async function deliverGeneratedReply(
     // without knowing what produced it.
     generatedToolCalls: reply.toolCalls,
   });
-  if (!persisted) throw new Error("could not persist the reply before sending; refusing to send");
+  if (!persisted) throw new ReplyNotPersistedError();
   return await sendAndSettle(admin, outboxId, text, send);
 }
 

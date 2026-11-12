@@ -1,13 +1,15 @@
 -- supabase/tests/agent_handoff_messages.sql
--- Handoff acknowledgement and unanswered-escalation marker (migration 20261112170000). One
--- transaction, synthetic fixtures, labelled H1..Hn ASSERTs, ROLLBACK, sentinel last. Assumes the
--- migration is applied. No secrets and no real accounts.
+-- Handoff acknowledgement and unanswered-escalation marker (migration 20261112170000, and the
+-- release path added by 20261113120000_agent_handoff_messages_followup.sql). One transaction,
+-- synthetic fixtures, labelled H1..Hn ASSERTs, ROLLBACK, sentinel last. Assumes the migrations are
+-- applied. No secrets and no real accounts.
 --
 -- Conversations, one user:
 --   c_live     human_first, expires in 1 hour        -> ack claimable once, then 'window'
 --   c_shared   human_then_ai, expired 1 minute ago   -> never acked, never marked
 --   c_manual   human_first, no expiry                -> never acked
 --   c_ended    human_first, expired 1 minute ago     -> not acked; expiry marks its thread
+--   c_hybrid   human_then_ai with a stray claim      -> the release never touches it
 BEGIN;
 DO $$
 DECLARE
@@ -34,6 +36,13 @@ BEGIN
     (m_shared, u_a, 'whatsapp', 'c_shared', 'human_then_ai', v_expires, v_escalated),
     (gen_random_uuid(), u_a, 'whatsapp', 'c_manual', 'human_first', NULL, NULL),
     (m_ended, u_a, 'whatsapp', 'c_ended', 'human_first', v_expires, v_escalated);
+
+  -- A human_then_ai row never carries an acknowledgement claim. This one does, on purpose:
+  -- the release must not clear a claim it never made.
+  INSERT INTO public.ai_conversation_modes
+    (id, user_id, platform, conversation_id, mode, expires_at, escalated_at, customer_ack_sent_at)
+  VALUES
+    (gen_random_uuid(), u_a, 'whatsapp', 'c_hybrid', 'human_then_ai', now() + interval '1 hour', now(), now());
 
   -- H1: a live human_first window is acknowledged once; later messages only learn it is open.
   ASSERT public.claim_human_mode_ack(u_a, 'whatsapp', 'c_live') = 'claimed', 'H1 the first claim wins';
@@ -83,6 +92,61 @@ BEGIN
     'H7 authenticated cannot take the marker';
   ASSERT has_function_privilege('service_role', 'public.take_unanswered_escalation(uuid, uuid)', 'EXECUTE'),
     'H7 service_role can take the marker';
+
+  -- H8: the acknowledgement claim comes back when the notice never became durable.
+  ASSERT NOT public.release_human_mode_ack(u_b, 'whatsapp', 'c_live'),
+    'H8 another tenant releases no claim';
+  ASSERT (SELECT customer_ack_sent_at FROM public.ai_conversation_modes
+          WHERE user_id = u_a AND conversation_id = 'c_live') IS NOT NULL,
+    'H8 the other tenant did not touch the claim';
+  ASSERT NOT public.release_human_mode_ack(u_a, 'whatsapp', 'c_manual'),
+    'H8 a conversation with no claim releases nothing';
+  ASSERT NOT public.release_human_mode_ack(u_a, 'whatsapp', 'c_hybrid'),
+    'H8 a human_then_ai row is never released';
+  ASSERT (SELECT customer_ack_sent_at FROM public.ai_conversation_modes
+          WHERE user_id = u_a AND conversation_id = 'c_hybrid') IS NOT NULL,
+    'H8 the stray claim is left alone';
+  ASSERT public.release_human_mode_ack(u_a, 'whatsapp', 'c_live'),
+    'H8 the spent claim is released';
+  ASSERT (SELECT customer_ack_sent_at FROM public.ai_conversation_modes
+          WHERE user_id = u_a AND conversation_id = 'c_live') IS NULL,
+    'H8 the claim is NULL again';
+  ASSERT public.claim_human_mode_ack(u_a, 'whatsapp', 'c_live') = 'claimed',
+    'H8 the notice can be claimed again';
+
+  -- H9: the escalation marker comes back when the reply never became durable.
+  ASSERT NOT public.restore_unanswered_escalation(t_ended, u_b, v_escalated),
+    'H9 another tenant restores no marker';
+  ASSERT (SELECT unanswered_escalation_since FROM public.ai_threads WHERE id = t_ended) IS NULL,
+    'H9 the marker is still NULL';
+  ASSERT public.restore_unanswered_escalation(t_ended, u_a, v_escalated),
+    'H9 the taken marker is restored';
+  ASSERT (SELECT unanswered_escalation_since FROM public.ai_threads WHERE id = t_ended) = v_escalated,
+    'H9 the marker carries the escalation time again';
+  ASSERT NOT public.restore_unanswered_escalation(t_ended, u_a, v_escalated),
+    'H9 a marker that is already set is not restored twice';
+  UPDATE public.ai_threads
+     SET unanswered_escalation_since = v_escalated + interval '1 hour'
+   WHERE id = t_ended;
+  ASSERT NOT public.restore_unanswered_escalation(t_ended, u_a, v_escalated),
+    'H9 a newer marker is not overwritten';
+  ASSERT (SELECT unanswered_escalation_since FROM public.ai_threads WHERE id = t_ended)
+      = v_escalated + interval '1 hour',
+    'H9 the newer marker stays';
+
+  -- H10: only service_role reaches the two release functions.
+  ASSERT NOT has_function_privilege('anon', 'public.release_human_mode_ack(uuid, text, text)', 'EXECUTE'),
+    'H10 anon cannot release an ack';
+  ASSERT NOT has_function_privilege('authenticated', 'public.release_human_mode_ack(uuid, text, text)', 'EXECUTE'),
+    'H10 authenticated cannot release an ack';
+  ASSERT NOT has_function_privilege('anon', 'public.restore_unanswered_escalation(uuid, uuid, timestamptz)', 'EXECUTE'),
+    'H10 anon cannot restore the marker';
+  ASSERT NOT has_function_privilege('authenticated', 'public.restore_unanswered_escalation(uuid, uuid, timestamptz)', 'EXECUTE'),
+    'H10 authenticated cannot restore the marker';
+  ASSERT has_function_privilege('service_role', 'public.release_human_mode_ack(uuid, text, text)', 'EXECUTE'),
+    'H10 service_role can release an ack';
+  ASSERT has_function_privilege('service_role', 'public.restore_unanswered_escalation(uuid, uuid, timestamptz)', 'EXECUTE'),
+    'H10 service_role can restore the marker';
 END $$;
 
 ROLLBACK;

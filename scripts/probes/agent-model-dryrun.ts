@@ -33,6 +33,8 @@ interface ResultRow {
   catalogQuery: boolean;
   productLink: boolean;
   excerpt: string;
+  /** Set when the turn failed. The probe records it and carries on with the next turn. */
+  failure?: string;
 }
 
 interface ReplaySource {
@@ -97,10 +99,10 @@ function renderReport(resultRows: readonly ResultRow[], conversation: string): s
     "",
     "## Results",
     "",
-    "| Model | Turn | Latency ms | Reply language correct | Catalog tool called with non-empty query | Product link present | Reply excerpt (120 chars) |",
-    "|---|---:|---:|---|---|---|---|",
+    "| Model | Turn | Latency ms | Reply language correct | Catalog tool called with non-empty query | Product link present | Reply excerpt (120 chars) | Status |",
+    "|---|---:|---:|---|---|---|---|---|",
     ...resultRows.map((row) =>
-      `| ${markdownCell(row.model)} | ${row.turn} | ${row.latencyMs} | ${row.languageCorrect ? "yes" : "no"} | ${row.catalogQuery ? "yes" : "no"} | ${row.productLink ? "yes" : "no"} | ${row.excerpt || "(no reply)"} |`
+      `| ${markdownCell(row.model)} | ${row.turn} | ${row.latencyMs} | ${row.languageCorrect ? "yes" : "no"} | ${row.catalogQuery ? "yes" : "no"} | ${row.productLink ? "yes" : "no"} | ${row.excerpt || "(no reply)"} | ${row.failure ? `failed: ${markdownCell(row.failure)}` : "ok"} |`
     ),
     "",
     "## Model selection",
@@ -124,7 +126,7 @@ async function assertSandboxGuards(): Promise<void> {
   const gateStart = source.indexOf("if (!dryRun) {", source.indexOf("Sandbox runs bypass"));
   const gateEnd = source.indexOf("replySender =", gateStart);
   const handoffClaimGuarded = gateStart >= 0 && gateEnd > gateStart &&
-    source.slice(gateStart, gateEnd).includes("claimHumanModeWindow");
+    source.slice(gateStart, gateEnd).includes("claimHumanModeAck");
   if (!handoffClaimGuarded || requiredGuards.some((guard) => !source.includes(guard))) {
     throw new Error("A sandbox no-send/handoff guard changed; inspect ai-agent-reply before running this probe");
   }
@@ -226,6 +228,7 @@ async function main(): Promise<void> {
   const replaySource = await loadReplaySource(admin, conversation, user.id);
 
   const resultRows: ResultRow[] = [];
+  let failures = 0;
   for (const model of models) {
     const modelKey = model.replace(/[^A-Za-z0-9_-]/g, "_").slice(0, 24);
     const testCaseKey = `dryrun_${modelKey}_${Date.now()}`;
@@ -233,23 +236,40 @@ async function main(): Promise<void> {
       const expectedLanguage = detectReplyLanguage(inboundText, "auto", null, {
         earlierTurns: replaySource.customerTurns.slice(0, index).reverse(),
       });
-      const measurement = await replayTurn({
-        supabaseUrl,
-        anonKey,
-        userJwt,
-        model,
-        testCaseKey,
-        platform: replaySource.platform,
-        socialAccountId: replaySource.socialAccountId,
-        inboundText,
-        expectedLanguage,
-      });
+      const startedAt = Date.now();
+      let measurement: Omit<ResultRow, "model" | "turn">;
+      try {
+        measurement = await replayTurn({
+          supabaseUrl,
+          anonKey,
+          userJwt,
+          model,
+          testCaseKey,
+          platform: replaySource.platform,
+          socialAccountId: replaySource.socialAccountId,
+          inboundText,
+          expectedLanguage,
+        });
+      } catch (error) {
+        // One model or turn failing must not end the comparison: the report says
+        // which one failed, and the remaining models and turns still run.
+        failures += 1;
+        measurement = {
+          latencyMs: Date.now() - startedAt,
+          languageCorrect: false,
+          catalogQuery: false,
+          productLink: false,
+          excerpt: "",
+          failure: error instanceof Error ? error.message : String(error),
+        };
+      }
       resultRows.push({ model, turn: index + 1, ...measurement });
       await Deno.writeTextFile(REPORT_URL, renderReport(resultRows, conversation));
       console.log(`Completed ${model} turn ${index + 1}/${replaySource.customerTurns.length}`);
     }
   }
   console.log(`Report written: ${REPORT_PATH}`);
+  if (failures > 0) console.log(`${failures} turn(s) failed; see the Status column in the report`);
 }
 
 if (import.meta.main) {

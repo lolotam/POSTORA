@@ -100,11 +100,22 @@ function trimValue(value: unknown): unknown {
   return `${value.slice(0, MAX_VALUE_CHARS)}…[truncated]`;
 }
 
+/**
+ * The catalog's product link is copied verbatim: the agent must hand over the
+ * store's own URL, and a shortened one reads as a working link while pointing
+ * nowhere (curemedkw, 2026-11-12). Every other cell is still bounded, and the
+ * envelope's character budget still decides how many rows fit.
+ */
+const VERBATIM_COLUMNS = new Set(["product_url"]);
+
 function trimRows(payload: unknown): unknown {
   const trimRow = (row: unknown): unknown => {
     if (typeof row !== "object" || row === null || Array.isArray(row)) return trimValue(row);
     return Object.fromEntries(
-      Object.entries(row as Record<string, unknown>).map(([key, value]) => [key, trimValue(value)]),
+      Object.entries(row as Record<string, unknown>).map(([key, value]) => [
+        key,
+        VERBATIM_COLUMNS.has(key) ? value : trimValue(value),
+      ]),
     );
   };
   return Array.isArray(payload) ? payload.map(trimRow) : trimRow(payload);
@@ -202,10 +213,6 @@ function splitColumns(raw: unknown): string[] {
  * The flat select_columns is one string applied to whichever table the model
  * picked, so allowing two tables with different columns made the second fail
  * with PostgREST 42703. column_map fixes that.
- *
- * It fails CLOSED. A map that will not parse, or that names this table with an
- * empty list, refuses the call instead of falling through to star — otherwise a
- * typo, or deleting the last column from a table, silently returns every column.
  */
 export interface ResolvedColumns {
   select: string;
@@ -217,29 +224,41 @@ export interface ResolvedColumns {
   explicit: boolean;
 }
 
+/**
+ * The operator's per-table column map, parsed once. NULL when there is none.
+ *
+ * It fails CLOSED. A map that will not parse, or that names this table with an
+ * empty list, refuses the call instead of falling through to star — otherwise a
+ * typo, or deleting the last column from a table, silently returns every column.
+ */
+function columnMap(settings: Record<string, unknown>): Record<string, unknown> | null {
+  const raw = settings.column_map;
+  if (typeof raw !== "string" || !raw.trim()) return null;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    throw new SupabaseValidationError(
+      "supabase_column_map_invalid",
+      "This connector's per-table column list is not valid JSON.",
+    );
+  }
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+    throw new SupabaseValidationError(
+      "supabase_column_map_invalid",
+      "This connector's per-table column list is not valid JSON.",
+    );
+  }
+  return parsed as Record<string, unknown>;
+}
+
 export function resolveColumns(
   settings: Record<string, unknown>,
   table: string,
   modelSelect: string | null,
 ): ResolvedColumns {
-  const raw = settings.column_map;
-  if (typeof raw === "string" && raw.trim()) {
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(raw);
-    } catch {
-      throw new SupabaseValidationError(
-        "supabase_column_map_invalid",
-        "This connector's per-table column list is not valid JSON.",
-      );
-    }
-    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
-      throw new SupabaseValidationError(
-        "supabase_column_map_invalid",
-        "This connector's per-table column list is not valid JSON.",
-      );
-    }
-    const map = parsed as Record<string, unknown>;
+  const map = columnMap(settings);
+  if (map) {
     const entry = map[table];
     if (entry !== undefined) {
       // "*" is an explicit "no restriction on this table", so a map can name
@@ -272,6 +291,49 @@ export function resolveColumns(
   const fromModel = splitColumns(modelSelect);
   if (fromModel.length) return { select: fromModel.join(","), explicit: false };
   return { select: "*", explicit: false };
+}
+
+/**
+ * The column restriction the RPC result carries.
+ *
+ * The search function returns catalog rows, so the operator's restriction
+ * applies to them exactly as it does to a table read (plan Task 5). column_map
+ * is keyed by table, so the catalog table is the table the connector may read;
+ * a connector that has only the function takes the table its map names, and a
+ * map naming several tables cannot say which one the function returns, so it
+ * is refused rather than guessed.
+ */
+function rpcColumns(invocation: ConnectorInvocation): ResolvedColumns {
+  const settings = invocation.tool.settings;
+  const allowList = tableAllowList(settings);
+  if (allowList.length > 0) return resolveColumns(settings, allowList[0], null);
+  const map = columnMap(settings);
+  if (map) {
+    const keys = Object.keys(map);
+    if (keys.length === 1) return resolveColumns(settings, keys[0], null);
+    if (keys.length > 1) {
+      throw new SupabaseValidationError(
+        "supabase_columns_unmapped",
+        "This connector's per-table column list does not name the catalog table the search function returns.",
+      );
+    }
+  }
+  const flat = splitColumns(settings.select_columns);
+  if (flat.length) return { select: flat.join(","), explicit: true };
+  return { select: "*", explicit: false };
+}
+
+/**
+ * The projection PostgREST applies for a table read, applied here to an RPC
+ * result: a column the operator did not allow never leaves the adapter.
+ */
+function projectColumns(row: unknown, columns: ResolvedColumns): unknown {
+  if (!columns.explicit) return row;
+  if (typeof row !== "object" || row === null || Array.isArray(row)) return row;
+  const allowed = new Set(columns.select.split(",").map((column) => column.trim()));
+  return Object.fromEntries(
+    Object.entries(row as Record<string, unknown>).filter(([key]) => allowed.has(key)),
+  );
 }
 
 function validateResource(table: string, select: string, allowList: string[]): void {
@@ -722,6 +784,16 @@ function rpcFunction(settings: Record<string, unknown>): string | null {
   return names[0];
 }
 
+/**
+ * The connector names only a function: no table allow-list, and a function to
+ * search the catalog with. The search path reaches the function instead of the
+ * table, and the connection probe asks the function too (curemedkw, 2026-11-12).
+ */
+function rpcOnlyConnector(settings: Record<string, unknown>): boolean {
+  if (tableAllowList(settings).length > 0) return false;
+  return splitColumns(settings.rpc_allow_list).some((name) => name !== "-");
+}
+
 function rpcParamName(settings: Record<string, unknown>, key: string, fallback: string): string {
   const raw = settings[key];
   if (typeof raw !== "string" || !raw.trim() || raw.trim() === "-") return fallback;
@@ -730,6 +802,29 @@ function rpcParamName(settings: Record<string, unknown>, key: string, fallback: 
     throw new SupabaseValidationError("supabase_configuration_invalid", "Supabase is not fully configured.");
   }
   return name;
+}
+
+/**
+ * The connection probe's query: one word no catalog holds, so the probe reads
+ * nothing and still proves the project URL, the anon key, the schema and the
+ * function. It is a read, with the same headers the search path uses.
+ */
+const CONNECTION_PROBE_QUERY = "postora-connection-probe";
+
+/**
+ * The probe for a connector that has only the function. The table probe reads
+ * one row of a table; this asks the function for one row instead.
+ */
+async function probeRpc(
+  invocation: ConnectorInvocation,
+  dependencies: AdapterDependencies,
+  fn: string,
+  anonKey: string,
+): Promise<void> {
+  const search: RpcSearch = { ...rpcSearchFor(invocation, fn, anonKey), limit: 1 };
+  const callerBudget = dependencies.callBudgetMs ?? SUPABASE_CALL_TIMEOUT_MS;
+  const deadline = Date.now() + Math.min(SUPABASE_LOOP_BUDGET_MS, callerBudget - SUPABASE_MIN_HOP_MS);
+  await postRpc(search, CONNECTION_PROBE_QUERY, dependencies, deadline);
 }
 
 /** The longest word of a multi-word query, or null when there is only one word. */
@@ -804,7 +899,13 @@ function rpcSearchFor(invocation: ConnectorInvocation, fn: string, anonKey: stri
     },
     queryParam: rpcParamName(settings, "rpc_query_param", "q"),
     limitParam: rpcParamName(settings, "rpc_limit_param", "max_results"),
-    limit: clampInteger(invocation.request.parameters.max_results, DEFAULT_RPC_RESULTS, 1, MAX_RPC_RESULTS),
+    // The operator's row ceiling binds the function too: the search path
+    // reuses max_rows, so a model asking for more rows cannot outrun the
+    // limit the connector card shows.
+    limit: Math.min(
+      clampInteger(invocation.request.parameters.max_results, DEFAULT_RPC_RESULTS, 1, MAX_RPC_RESULTS),
+      resolveMaxRows(settings),
+    ),
   };
 }
 
@@ -844,11 +945,12 @@ async function searchViaRpc(
   }
 
   const secrets = credentialSecrets(invocation.credentials);
+  const columns = rpcColumns(invocation);
   const collected: unknown[] = [];
   let chars = 2; // the enclosing [] of the serialized array
   let truncated: SupabaseReadEnvelope["truncated_by"] = null;
   for (const row of rows.slice(0, search.limit)) {
-    const vetted = vetRow(row, false, secrets);
+    const vetted = vetRow(projectColumns(row, columns), columns.explicit, secrets);
     const cost = JSON.stringify(vetted).length + (collected.length ? 1 : 0);
     if (chars + cost > SUPABASE_CHAR_BUDGET) { truncated = "char_budget"; break; }
     collected.push(vetted);
@@ -875,17 +977,35 @@ async function callSupabase(
 
   try {
     validateSupabaseAnonKey(anonKey);
-    const { url: baseUrl, schema, columns } = buildUrl(invocation);
-    const headers = {
-      Accept: "application/json",
-      apikey: anonKey,
-      Authorization: `Bearer ${anonKey}`,
-      "Accept-Profile": schema,
-    };
+    const settings = invocation.tool.settings;
+    // The execution path is resolved BEFORE the table settings are read. A
+    // catalog connector names a function, not a table, and must not be refused
+    // for having no table allow-list (curemedkw, 2026-11-12).
+    const fn = capability === "search_products" ? rpcFunction(settings) : null;
 
-    // The probe stays a single one-row read; paging would test N requests the
-    // operator never configured.
     if (invocation.request.action === "test_connection") {
+      // A connector that has only the function has no table to read, so the
+      // probe asks the function itself.
+      const probeFunction = rpcOnlyConnector(settings) ? rpcFunction(settings) : null;
+      if (probeFunction) {
+        await probeRpc(invocation, dependencies, probeFunction, anonKey);
+        return {
+          ok: true,
+          vendor: "supabase",
+          action: "test_connection",
+          capabilities: SUPABASE_CAPABILITIES,
+          read_only: true,
+        };
+      }
+      const { url: baseUrl, schema } = buildUrl(invocation);
+      const headers = {
+        Accept: "application/json",
+        apikey: anonKey,
+        Authorization: `Bearer ${anonKey}`,
+        "Accept-Profile": schema,
+      };
+      // The probe stays a single one-row read; paging would test N requests the
+      // operator never configured.
       const url = new URL(baseUrl.toString());
       url.searchParams.set("limit", "1");
       const response = await safeVendorFetch(url.toString(), { method: "GET", headers }, dependencies);
@@ -923,11 +1043,18 @@ async function callSupabase(
       return supabaseFailure("capability_unsupported", "The requested connector capability is not supported.");
     }
 
-    const fn = capability === "search_products" ? rpcFunction(invocation.tool.settings) : null;
     if (fn) {
       const data = await searchViaRpc(invocation, dependencies, fn, anonKey);
       return { ok: true, vendor: "supabase", action: "execute", capability, data };
     }
+
+    const { url: baseUrl, schema, columns } = buildUrl(invocation);
+    const headers = {
+      Accept: "application/json",
+      apikey: anonKey,
+      Authorization: `Bearer ${anonKey}`,
+      "Accept-Profile": schema,
+    };
 
     // Count mode is routed first (C3): it needs no ordering and reads no rows.
     if (invocation.request.parameters.mode === "count") {
