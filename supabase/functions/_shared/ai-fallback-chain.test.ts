@@ -12,6 +12,8 @@ import {
 } from "./ai-fallback.ts";
 import type { AiRoutingAdmin } from "./ai-user-routing.ts";
 import { clearProviderEndpointCache } from "./providerEndpoint.ts";
+import type { CredentialDeps } from "./aiOAuth/credentials.ts";
+import type { PiCallDeps } from "./aiOAuth/piCall.ts";
 
 function platformAdmin(
   key: string | null = "platform-secret",
@@ -517,6 +519,148 @@ Deno.test("callChatCompletion sends one shaped request to one tier, with the pla
       1000,
     );
     assertEquals(response.status, 200);
+  } finally {
+    globalThis.fetch = original;
+  }
+});
+
+// ===========================================================================
+// OAuth tiers (spec 2026-11-12-ai-provider-auth-methods-design.md §6.2).
+// The pi-ai boundary is injected; no test below reaches the network through
+// callPiOAuth. globalThis.fetch is still stubbed for the API-key tiers that
+// the OAuth tiers fall over to.
+// ===========================================================================
+
+const claudeOauthTier: AiTier = {
+  provider: "claude",
+  model: "claude-sonnet-4-5",
+  credentialSource: "platform",
+  authMethod: "oauth",
+};
+
+/** CredentialDeps backed by one in-memory connection row. */
+function oauthCredentialDeps(
+  credentials: Record<string, unknown> | null,
+  status = "connected",
+): CredentialDeps {
+  const row = { credentials, status };
+  return {
+    admin: {
+      rpc(name: string, _args: Record<string, unknown>) {
+        if (name === "get_ai_oauth_credentials") {
+          return Promise.resolve({
+            data: credentials === null ? null : { ...credentials, status: row.status },
+            error: null,
+          });
+        }
+        return Promise.resolve({ data: null, error: null });
+      },
+    } as never,
+    refresh: async () => {
+      throw new Error("must not refresh in chain tests");
+    },
+    getApiKey: () => "oauth-key",
+    now: () => 0,
+    sleep: async () => {},
+  };
+}
+
+function piAnswering(text: string): PiCallDeps {
+  return {
+    getModel: () => ({ id: "stub" }),
+    complete: async () => ({
+      content: [{ type: "text", text }],
+      stopReason: "stop",
+      usage: { input: 1, output: 1, totalTokens: 2 },
+    }),
+  };
+}
+
+Deno.test("oauth tier with flag off records oauth_disabled and falls to api-key tier 2", async () => {
+  const original = globalThis.fetch;
+  const fake = platformAdmin("platform-secret");
+  try {
+    globalThis.fetch = () => Promise.resolve(new Response("{}", { status: 200 }));
+    const result = await callAiChain(fake.admin, { max_tokens: 10 }, [
+      claudeOauthTier,
+      { ...platformTier, provider: "openai", model: "platform-model" },
+    ], { enabled: async () => false });
+    assertEquals(result.tierUsed, "fallback");
+    assertEquals(result.providerUsed, "openai");
+    assertEquals(result.tiers[0].authMethod, "oauth");
+    assertEquals(result.tiers[0].error, "oauth_disabled");
+    assertEquals(result.tiers[1].status, 200);
+  } finally {
+    globalThis.fetch = original;
+  }
+});
+
+Deno.test("oauth tier with flag on answers through pi and records authMethod oauth", async () => {
+  const original = globalThis.fetch;
+  const fake = platformAdmin("platform-secret");
+  let providerFetches = 0;
+  try {
+    globalThis.fetch = () => {
+      providerFetches++;
+      return Promise.resolve(new Response("{}", { status: 500 }));
+    };
+    const result = await callAiChain(fake.admin, { max_tokens: 10 }, [claudeOauthTier], {
+      enabled: async () => true,
+      credentials: oauthCredentialDeps({ access: "a", refresh: "r", expires: 1_000_000 }),
+      pi: piAnswering("ok"),
+    });
+    assertEquals(providerFetches, 0, "an oauth tier must not hit the provider REST endpoint");
+    assertEquals(result.tierUsed, "primary");
+    assertEquals(result.providerUsed, "claude");
+    assertEquals(result.modelUsed, "claude-sonnet-4-5");
+    assertEquals(result.tiers[0].authMethod, "oauth");
+    assertEquals(result.tiers[0].status, 200);
+    const body = await result.response.json();
+    assertEquals(body.choices[0].message.content, "ok");
+  } finally {
+    globalThis.fetch = original;
+  }
+});
+
+Deno.test("oauth tier with tools records oauth_tools_unsupported", async () => {
+  const result = await callAiChain(platformAdmin().admin, {
+    max_tokens: 10,
+    tools: [{ type: "function", function: { name: "x" } }],
+  }, [claudeOauthTier], {
+    enabled: async () => true,
+    credentials: oauthCredentialDeps({ access: "a", refresh: "r", expires: 1_000_000 }),
+    pi: piAnswering("unused"),
+  });
+  assertEquals(result.tiers[0].error, "oauth_tools_unsupported");
+  assertEquals(result.response.status, 502);
+});
+
+Deno.test("oauth tier on provider without pi oauth records oauth_unsupported_provider", async () => {
+  const result = await callAiChain(platformAdmin().admin, { max_tokens: 10 }, [
+    { ...claudeOauthTier, provider: "xai", model: "grok-4.3" },
+  ], {
+    enabled: async () => true,
+    credentials: oauthCredentialDeps({ access: "a", refresh: "r", expires: 1_000_000 }),
+    pi: piAnswering("unused"),
+  });
+  assertEquals(result.tiers[0].error, "oauth_unsupported_provider");
+});
+
+Deno.test("oauth credential reauth_required records the code and falls over", async () => {
+  const original = globalThis.fetch;
+  const fake = platformAdmin("platform-secret");
+  try {
+    globalThis.fetch = () => Promise.resolve(new Response("{}", { status: 200 }));
+    const result = await callAiChain(fake.admin, { max_tokens: 10 }, [
+      claudeOauthTier,
+      { ...platformTier, provider: "openai", model: "platform-model" },
+    ], {
+      enabled: async () => true,
+      credentials: oauthCredentialDeps({ access: "a", refresh: "r", expires: 1_000_000 }, "reauth_required"),
+      pi: piAnswering("unused"),
+    });
+    assertEquals(result.tiers[0].error, "reauth_required");
+    assertEquals(result.tierUsed, "fallback");
   } finally {
     globalThis.fetch = original;
   }

@@ -23,7 +23,6 @@ import {
   iterationBudget,
   jevStartKey,
   modelBudgetRemaining,
-  parseModelRef,
   evaluateGates,
   parallelizable,
   phaseTimings,
@@ -474,10 +473,17 @@ const AGENT_MODEL_KEYS = [
   "default_ai_model_agent_fallback_2",
 ] as const;
 
-function isModelSetting(value: any): value is { provider_code: string; model_id: string } {
+function isModelSetting(value: any): value is { provider_code: string; model_id: string; auth_method?: unknown } {
   return Boolean(value) &&
     typeof value.provider_code === "string" && value.provider_code.length > 0 &&
     typeof value.model_id === "string" && value.model_id.length > 0;
+}
+
+/** One slot of the global agent model chain, as saved by the admin UI. */
+interface GlobalModelSlot {
+  provider: string;
+  model: string;
+  authMethod?: "api_key" | "oauth";
 }
 
 /**
@@ -490,7 +496,7 @@ function isModelSetting(value: any): value is { provider_code: string; model_id:
  * where it would run as the primary model and be logged with fallback_level 0 --
  * hiding both the misconfiguration and which tier actually answered.
  */
-async function loadGlobalModelChain(admin: any): Promise<string[]> {
+async function loadGlobalModelChain(admin: any): Promise<GlobalModelSlot[]> {
   const { data, error } = await admin
     .from("system_settings")
     .select("key, value")
@@ -502,10 +508,14 @@ async function loadGlobalModelChain(admin: any): Promise<string[]> {
 
   if (!isModelSetting(slots[0])) return [];
 
-  const chain: string[] = [];
+  const chain: GlobalModelSlot[] = [];
   for (const slot of slots) {
     if (!isModelSetting(slot)) break;
-    chain.push(`${slot.provider_code}/${slot.model_id}`);
+    chain.push({
+      provider: slot.provider_code,
+      model: slot.model_id,
+      authMethod: slot.auth_method === "oauth" ? "oauth" : undefined,
+    });
   }
   return chain;
 }
@@ -1331,7 +1341,12 @@ Deno.serve(async (req) => {
       return jsonResponse({ ok: true, skipped: 'no_reply_generated', error: AI_CONNECTION_REQUIRED });
     }
     const rawChain = route.mode === 'user_only' ? [] : await loadGlobalModelChain(admin);
-    modelChain = composeAiTiers(route, rawChain.map((ref) => ({ ...parseModelRef(ref), credentialSource: 'platform' })));
+    modelChain = composeAiTiers(route, rawChain.map((slot) => ({
+      provider: slot.provider,
+      model: slot.model,
+      credentialSource: 'platform' as const,
+      authMethod: slot.authMethod,
+    })));
     if (route.reason === 'user_key_missing') fallbackReason = route.reason;
     if (!modelChain.length) {
       // No hardcoded last resort. Calling a model no admin selected is how an
