@@ -12,6 +12,11 @@
 --                                          ({user: <timestamp>, admin: <timestamp>}), each with a
 --                                          30 minute stale window
 --   whatsapp_user_disconnected_at       = the owner disconnected this account on purpose
+--
+-- needs_reauth on an evolution_qr row belongs to this feature: the token-refresh sweep never
+-- selects those rows (no token_expires_at, auth_provider = 'native'), so the two never collide.
+-- If Evolution QR accounts are ever given a refresh token, that assumption breaks and the
+-- token-refresh path starts owning needs_reauth on these rows too.
 
 -- 1. Poll freshness for the watch function's round robin.
 --    whatsapp_evolution_instances is absent from src/integrations/supabase/types.ts (its RLS
