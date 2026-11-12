@@ -2,6 +2,7 @@
 import { assert, assertEquals } from "https://deno.land/std@0.208.0/assert/mod.ts";
 import { runHealthChunk, type HealthRunPorts } from "./run.ts";
 import { AiOAuthError } from "../_shared/aiOAuth/errors.ts";
+import { buildAlertTitle } from "../_shared/aiProviderAlert.ts";
 
 function fakePorts(overrides: Partial<HealthRunPorts> = {}) {
   const recorded: Array<{ provider_code: string; auth_method: string; status: string }> = [];
@@ -136,4 +137,57 @@ Deno.test("the results keep the target order whatever order the probes finish in
   });
   const out = await runHealthChunk(ports, { runId: "run-1", chunk: 1 });
   assertEquals(out.results.map((r) => r.provider_code), ["fast", "slow"]);
+});
+
+// --- the admin alert ---
+
+Deno.test("a provider that just degraded produces one admin alert", async () => {
+  const alerts: string[] = [];
+  const { ports } = fakePorts({
+    probeApiKey: async (t) => { if (t.provider_code === "openai") throw new Error("boom"); },
+    claimAlerts: async () => ([
+      { provider_code: "openai", auth_method: "api_key", status: "failed", reason: "Invalid API key" },
+    ]),
+    sendAlert: async (row) => { alerts.push(buildAlertTitle(row)); },
+  });
+  await runHealthChunk(ports, { runId: "run-1", chunk: 1 });
+  assertEquals(alerts.length, 1);
+  assert(alerts[0].includes("openai"));
+});
+
+Deno.test("the claim is closed only after every alert was sent", async () => {
+  const closed: string[] = [];
+  const { ports } = fakePorts({
+    claimAlerts: async () => ([
+      { provider_code: "openai", auth_method: "api_key", status: "failed", reason: "Invalid API key" },
+    ]),
+    sendAlert: async () => {},
+    markAlertsNotified: async (token) => { closed.push(token); },
+  });
+  await runHealthChunk(ports, { runId: "run-1", chunk: 1 });
+  assertEquals(closed.length, 1);
+});
+
+Deno.test("a failed alert leaves the claim open so the next run re-claims the row", async () => {
+  const closed: string[] = [];
+  const { ports } = fakePorts({
+    claimAlerts: async () => ([
+      { provider_code: "openai", auth_method: "api_key", status: "failed", reason: "Invalid API key" },
+    ]),
+    sendAlert: async () => { throw new Error("the mail provider refused it"); },
+    markAlertsNotified: async (token) => { closed.push(token); },
+  });
+  const out = await runHealthChunk(ports, { runId: "run-1", chunk: 1 });
+  assertEquals(closed.length, 0);
+  // The run itself still succeeded: the health check is not the alert's hostage.
+  assertEquals(out.summary.total, 2);
+});
+
+Deno.test("nothing is claimed when no provider degraded", async () => {
+  let claimed = 0;
+  const { ports } = fakePorts({
+    claimAlerts: async () => { claimed++; return []; },
+  });
+  await runHealthChunk(ports, { runId: "run-1", chunk: 1 });
+  assertEquals(claimed, 1);
 });

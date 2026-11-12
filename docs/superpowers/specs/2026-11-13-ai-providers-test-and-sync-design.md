@@ -30,7 +30,10 @@
    - It stores the latest per-provider result, so the UI shows **"last checked"** and
      the status.
    - It **notifies admins** when a provider changes from `connected` to `failed` or
-     `needs re-login`. Reuse the existing admin notification mechanism; do not invent one.
+     `needs re-login`. The channel is the existing **admin-only email** pattern
+     (`notify-expiring-ai-overrides`: the admins from `user_roles`/`profiles` + Resend),
+     **not** `admin_notifications` — that table is a broadcast to every signed-in user
+     (see §6.9 and §11.1).
 
 ---
 
@@ -106,7 +109,7 @@ The daily job and the button must therefore be **one implementation**, not two.
 | Cron **or** admin authorizer, already existing | `supabase/functions/_shared/cron-auth.ts` (`verifyCronOrAdmin`) |
 | Generic run lease (acquire/extend/release) | `supabase/migrations/20261031100000_cron_run_lease.sql` |
 | Guarded cron schedule pattern (no literal secret) | `supabase/migrations/20261030140000_sweep_ai_image_staging_cron.sql` |
-| Admin notification table + bell + admin page | `admin_notifications` (`supabase/migrations/20260107000440_…sql`), `src/hooks/useNotifications.tsx`, `src/pages/admin/AdminNotifications.tsx` |
+| Admin-only alert channel (email) | `supabase/functions/notify-expiring-ai-overrides` (admins from `user_roles`/`profiles` + Resend) |
 | i18n gate (ar bundles only; English is the call-site default) | `scripts/check-i18n-coverage.mjs`, `src/i18n/index.ts` |
 
 ### 4.1 The planner's safety rules (inherited, not restated)
@@ -201,7 +204,7 @@ Providers with no configured credential are **not** targets. They are not failur
                                 ▼
                      public.ai_provider_health   (latest result per target)
                      public.ai_models             (models, per auth_method)
-                     public.admin_notifications   (the admin alert)
+                     the admin-only alert email   (the admin alert)
 ```
 
 New files:
@@ -479,12 +482,16 @@ when a provider is already struggling.
 
 ### 6.9 The notification path
 
-**Mechanism: the existing `public.admin_notifications` table.** It is the codebase's
-admin notification mechanism — created by the admin UI
-(`src/pages/admin/AdminNotifications.tsx`), read by the bell
-(`src/hooks/useNotifications.tsx`) and by `src/pages/admin/AdminNotifications.tsx`
-itself. The runner inserts one row with `title` and `message`; `created_by` stays NULL
-because the writer is the service role, not a person.
+**Mechanism: the existing admin-only email.** The alert reuses the admin-email pattern
+of `supabase/functions/notify-expiring-ai-overrides`: the admins come from
+`user_roles` (role `admin`) joined to `profiles` for their addresses, and the mail goes
+out through Resend. The HTML follows that function's template style.
+
+**Why not `admin_notifications`:** that table is the one behind the global bell. It is
+a **broadcast to every signed-in user**, so a Postora user would read "the operator's
+OpenAI key is failing". A degradation alert names the operator's own provider and its
+credential kind, so it belongs in the admin-only channel. This is the owner's decision
+(§11.1).
 
 **When:** exactly when a row transitions `connected → failed` or
 `connected → needs_relogin`.
@@ -496,20 +503,16 @@ because the writer is the service role, not a person.
 2. `claim_ai_provider_health_notifications` claims that row (sets `claim_token`,
    `claimed_at`) and returns it. Rows claimed more than 10 minutes ago with no
    `notified_at` are re-claimable, so a crash does not lose the alert.
-3. The runner inserts the `admin_notifications` row.
+3. The runner sends one email per claimed row.
 4. `mark_ai_provider_health_notified` sets `notified_at` and clears the claim.
 
+A mail that fails is caught: the run still succeeds and the claim stays open, so the
+row is re-claimed after ten minutes instead of the alert being lost.
+
 **Content:** the provider name, the credential kind, and the sanitized reason. No key,
-no token, no user data. The title is
+no token, no user data. The subject is
 `"AI provider needs attention: <Provider>"` and the message is
 `"<Provider> (<api key|subscription>) is <failed|needs re-login>: <sanitized reason>."`
-
-**Caveat, stated plainly:** `admin_notifications` is a **broadcast to every signed-in
-user** — it is the table behind the global bell. The message therefore carries no
-secret and no user data, but a Postora user will see "the operator's OpenAI key is
-failing". If the owner prefers an admin-only channel, the alternative is the existing
-admin-email pattern (`notify-expiring-ai-overrides`: an `app_settings` toggle + the
-admins from `user_roles`/`profiles` + Resend). That is **open question 1** in §11.
 
 **No duplicate spam:** the transition is detected in SQL, so a second run on the same
 day that also finds the provider broken does **not** notify again — `previous_status`
@@ -672,7 +675,7 @@ frontend grouping is unchanged by this design either way.
 | A key leaks into the API response | the browser only receives `{ provider_code, auth_method, status, reason, counts, latency_ms, checked_at }`. `reason` is a fixed sentence or a redacted, truncated string. |
 | A key leaks into the DB | no code path writes a key to `ai_provider_health`. `reason` is produced by `describeProviderFailure` + `redactProviderError`. |
 | A key leaks into the logs | `redactProviderError` runs before logging; the log fields are `event`, `provider_code`, `auth_method`, `error_code`, `duration_ms` (`ARCHITECTURE.md` §17). |
-| A key leaks into `admin_notifications` | the message is built from the provider name and the sanitized reason only. |
+| A key leaks into the admin email | the subject and the body are built from the provider name and the sanitized reason only, and only the admins receive it. |
 | A non-admin triggers a run | `verifyCronOrAdmin` resolves the bearer token to a signed-in admin (`user_roles.role = 'admin'`). Anything else is `401`. A route guard alone is never the control (`ARCHITECTURE.md` §39). |
 | A non-admin reads the results | `ai_provider_health` has an admin-only policy; the `status` action goes through the same authorizer; the table is not granted to `anon`. |
 | A caller forges the cron secret | `verifyCronOrAdmin` compares with a constant-time check against `CRON_SECRET`; a mismatch is `401`. The secret never appears in a migration. |
@@ -686,23 +689,28 @@ frontend grouping is unchanged by this design either way.
 
 ## 11. Open questions for the owner
 
-1. **Which channel should the degradation alert use?**
+1. **Which channel should the degradation alert use? — ANSWERED: the admin-only email.**
    `admin_notifications` is the existing admin notification mechanism, but it is a
    **broadcast to every signed-in user**. The alternative is the existing admin-email
    pattern (`notify-expiring-ai-overrides`: an `app_settings` toggle + the admins from
    `user_roles`/`profiles` + Resend), which reaches only the operator.
-   *Recommendation: keep `admin_notifications` (it is what "reuse the existing admin
-   notification mechanism" names) and accept the broadcast; the message contains no
-   secret and no user data. Say the word if you want email-only.*
+   *Decision (2026-11-13): the admin-only **email**. `admin_notifications` is not used:
+   a degradation alert names the operator's own provider and credential kind, and
+   every signed-in user has no business reading it. The two-phase exactly-once claim
+   is unchanged; only the channel differs (§6.9).*
 2. **Should the manual click be blocked during the daily window (03:05–03:41 UTC)?**
    The lease is shared, so a click inside that window gets *"the daily check is
    running"*. The alternative is a second lease job name for manual runs, which would
    allow the two to overlap — the thing the lease exists to prevent.
    *Recommendation: keep the shared lease.*
+   *Decision (2026-11-13): keep the shared lease. A manual click during the daily
+   window gets `409 busy`.*
 3. **Should a provider with no configured credential appear in the table at all?**
    This design says no (it is not a target). The alternative is a `not_configured` row,
    which would add a fourth status and a fourth colour to the table.
    *Recommendation: keep it out.*
+   *Decision (2026-11-13): keep it out. A provider with no configured credential is
+   not a target and not a failure.*
 
 ---
 

@@ -60,10 +60,12 @@ fully before Task 1; §6 holds the design decisions and §11 the open questions.
   an API-key tier must not protect an OAuth row and the other way round.
 - An OAuth target that fails its test gets **no sync at all**. Its models are never
   deactivated, never deleted.
-- The only writer of `ai_models`, `ai_provider_health` and `admin_notifications` is the service
+- The only writer of `ai_models`, `ai_provider_health` and the alert claim is the service
   role inside the edge function. The browser never writes them.
-- `admin_notifications` is a **broadcast to every signed-in user**. Its message carries no
-  secret and no user data.
+- The degradation alert travels on the **admin-only email** (the `notify-expiring-ai-overrides`
+  pattern: the admins from `user_roles`/`profiles` + Resend). It is **not** an
+  `admin_notifications` row — that table is a broadcast to every signed-in user. The
+  alert carries no secret and no user data either way.
 - The cron secret is never a literal in a migration: the job body calls `get_cron_secret()`.
 - The migration timestamp is `20261113180000` or later. Never edit an already-applied
   migration.
@@ -78,7 +80,7 @@ fully before Task 1; §6 holds the design decisions and §11 the open questions.
 - No `git stash`. Commit with explicit paths: `git commit -- <paths>`. Never commit
   `graphify-out/`, `.env*`, logs or secrets.
 - Commit trailer on every commit in this plan:
-  `Co-Authored-By: MiniMax <noreply@minimax.io>`.
+  `Co-Authored-By: MiniMax M3.1 <noreply@minimax.io>`.
 - Deno tests: run **before** vitest, never after it in the same session (Deno can corrupt
   `node_modules`). If vitest then fails with `ERR_PACKAGE_PATH_NOT_EXPORTED`, run
   `bun install --frozen-lockfile` and retry.
@@ -451,7 +453,7 @@ fully before Task 1; §6 holds the design decisions and §11 the open questions.
   End the message with the trailer:
 
   ```
-  Co-Authored-By: MiniMax <noreply@minimax.io>
+  Co-Authored-By: MiniMax M3.1 <noreply@minimax.io>
   ```
 
 ---
@@ -747,7 +749,7 @@ fully before Task 1; §6 holds the design decisions and §11 the open questions.
   ```
 
   End the message with the trailer:
-  `Co-Authored-By: MiniMax <noreply@minimax.io>`.
+  `Co-Authored-By: MiniMax M3.1 <noreply@minimax.io>`.
 
 ---
 
@@ -906,7 +908,7 @@ implementation and, more importantly, one place to add the timeout the probes st
   ```
 
   End the message with the trailer:
-  `Co-Authored-By: MiniMax <noreply@minimax.io>`.
+  `Co-Authored-By: MiniMax M3.1 <noreply@minimax.io>`.
 
 ---
 
@@ -932,6 +934,7 @@ Task 3, `runCatalogSync` from `_shared/modelCatalogSyncRun.ts`.
   `  recordResult(result: HealthResult, runId: string): Promise<void>;`
   `  claimAlerts(claimToken: string): Promise<DegradedProvider[]>;`
   `  sendAlert(provider: DegradedProvider): Promise<void>;`
+  `  markAlertsNotified(claimToken: string): Promise<void>;`
   `  now(): Date;`
   `}`
 - `export interface HealthRunOptions { runId: string; chunk: number; deadlineMs?: number; concurrency?: number }`
@@ -963,6 +966,7 @@ Task 3, `runCatalogSync` from `_shared/modelCatalogSyncRun.ts`.
       recordResult: async (result) => { recorded.push(result); },
       claimAlerts: async () => [],
       sendAlert: async () => {},
+      markAlertsNotified: async () => {},
       now: () => new Date("2026-11-13T03:05:00Z"),
       ...overrides,
     };
@@ -1068,6 +1072,7 @@ Task 3, `runCatalogSync` from `_shared/modelCatalogSyncRun.ts`.
     recordResult(result: HealthResult, runId: string): Promise<void>;
     claimAlerts(claimToken: string): Promise<DegradedProvider[]>;
     sendAlert(provider: DegradedProvider): Promise<void>;
+    markAlertsNotified(claimToken: string): Promise<void>;
     now(): Date;
   }
 
@@ -1262,7 +1267,7 @@ Task 3, `runCatalogSync` from `_shared/modelCatalogSyncRun.ts`.
   ```
 
   End the message with the trailer:
-  `Co-Authored-By: MiniMax <noreply@minimax.io>`.
+  `Co-Authored-By: MiniMax M3.1 <noreply@minimax.io>`.
 
 ---
 
@@ -1431,7 +1436,7 @@ catalogue of `claude`, and the OAuth rows could never be stored at all.
   ```
 
   End the message with the trailer:
-  `Co-Authored-By: MiniMax <noreply@minimax.io>`.
+  `Co-Authored-By: MiniMax M3.1 <noreply@minimax.io>`.
 
 ---
 
@@ -1637,7 +1642,7 @@ database.
   ```
 
   End the message with the trailer:
-  `Co-Authored-By: MiniMax <noreply@minimax.io>`.
+  `Co-Authored-By: MiniMax M3.1 <noreply@minimax.io>`.
 
 ---
 
@@ -1705,13 +1710,16 @@ database.
   ```ts
   // The admin alert for a provider that just degraded.
   //
-  // WHY admin_notifications
-  // It is the existing admin notification mechanism: the admin UI writes it, the bell reads
-  // it, /admin/notifications lists it. Reusing it adds no table, no channel and no UI.
+  // WHY an admin-only email
+  // admin_notifications is the table behind the global bell: it is a BROADCAST to every
+  // signed-in user, so every Postora user would read "the operator's OpenAI key is
+  // failing". A degradation alert names the operator's own provider and credential kind,
+  // so it belongs in the admin-only channel: the existing admin-email pattern of
+  // notify-expiring-ai-overrides (the admins from user_roles/profiles + Resend).
   //
   // WHY the message is so plain
-  // admin_notifications is a broadcast to every signed-in user, so the message carries no
-  // secret and no user data — a provider code, a credential kind and a sanitized sentence.
+  // The mail reaches only the operator, but it still carries no secret and no user data —
+  // a provider code, a credential kind and a sanitized sentence.
 
   import type { DegradedProvider } from "./aiProviderHealth.ts";
 
@@ -1740,20 +1748,23 @@ database.
   }
   ```
 
-- [ ] **Step 4: Wire the alert into the runner.** The two ports already exist on
-  `HealthRunPorts` from Task 4 (`claimAlerts`, `sendAlert`); implement them in `deps.ts`:
+- [ ] **Step 4: Wire the alert into the runner.** The ports already exist on
+  `HealthRunPorts` from Task 4 (`claimAlerts`, `sendAlert`, `markAlertsNotified`);
+  implement them in `deps.ts`:
 
   1. `claimAlerts` calls `claim_ai_provider_health_notifications` with a fresh claim token
      and maps the rows with `alertRowsToDegraded`;
-  2. `sendAlert` inserts an `admin_notifications` row with `buildAlertTitle` /
-     `buildAlertMessage`;
+  2. `sendAlert` sends the **admin-only email** with `buildAlertTitle` /
+     `buildAlertMessage` / `buildAlertHtml` — the recipients are the admins
+     (`user_roles` role `admin` joined to `profiles`) and the transport is Resend, exactly
+     the pattern of `notify-expiring-ai-overrides`;
   3. after the alerts are sent, the runner calls `mark_ai_provider_health_notified` with the
      same claim token.
 
   The runner calls `ports.claimAlerts(claimToken)` after the chunk's results are written,
   sends each claimed row with `ports.sendAlert(row)`, and then closes the claim.
 
-  A failed insert must not fail the run: catch it, log
+  A failed send must not fail the run: catch it, log
   `event: 'ai_provider_alert_failed'`, and leave the claim open so the next run re-claims
   the row after 10 minutes.
 
@@ -1766,7 +1777,7 @@ database.
     const { ports } = fakePorts({
       probeApiKey: async (t) => { if (t.provider_code === "openai") throw new Error("boom"); },
       claimAlerts: async () => ([
-        { provider_code: "openai", auth_method: "api_key", status: "failed", reason: "Invalid API key", previous_status: "connected" },
+        { provider_code: "openai", auth_method: "api_key", status: "failed", reason: "Invalid API key" },
       ]),
       sendAlert: async (row) => { alerts.push(buildAlertTitle(row)); },
     });
@@ -1776,8 +1787,8 @@ database.
   });
   ```
 
-  Add `claimAlerts` and `sendAlert` to `HealthRunPorts` (both optional in the fake so the
-  earlier tests keep working — give them defaults that return `[]` and do nothing).
+  Add `claimAlerts`, `sendAlert` and `markAlertsNotified` to `HealthRunPorts` (the fake
+  gives them defaults that return `[]` and do nothing, so the earlier tests keep working).
 
 - [ ] **Step 5: Run and see it pass**
 
@@ -1793,7 +1804,7 @@ database.
   ```
 
   End the message with the trailer:
-  `Co-Authored-By: MiniMax <noreply@minimax.io>`.
+  `Co-Authored-By: MiniMax M3.1 <noreply@minimax.io>`.
 
 ---
 
@@ -1924,7 +1935,7 @@ database.
   ```
 
   End the message with the trailer:
-  `Co-Authored-By: MiniMax <noreply@minimax.io>`.
+  `Co-Authored-By: MiniMax M3.1 <noreply@minimax.io>`.
 
 ---
 
@@ -2090,7 +2101,7 @@ database.
   ```
 
   End the message with the trailer:
-  `Co-Authored-By: MiniMax <noreply@minimax.io>`.
+  `Co-Authored-By: MiniMax M3.1 <noreply@minimax.io>`.
 
 ---
 
@@ -2165,7 +2176,7 @@ same keys):
   ```
 
   End the message with the trailer:
-  `Co-Authored-By: MiniMax <noreply@minimax.io>`.
+  `Co-Authored-By: MiniMax M3.1 <noreply@minimax.io>`.
 
 ---
 
