@@ -730,6 +730,19 @@ function allowedTables(settings: Record<string, unknown> | null | undefined): st
 }
 
 /**
+ * True when one of these connectors searches the catalog through an
+ * operator-named database function. Read the way the Supabase adapter reads
+ * rpc_allow_list; "-" is what the connector card saves for a cleared field.
+ */
+export function offersCatalogSearch(tools: Pick<CustomTool, "connector_type" | "settings">[]): boolean {
+  return tools.some((tool) => {
+    const raw = tool.settings?.rpc_allow_list;
+    if (tool.connector_type !== "supabase" || typeof raw !== "string") return false;
+    return raw.split(/[,\n]/).map((name) => name.trim()).some((name) => name !== "" && name !== "-");
+  });
+}
+
+/**
  * Replaces the registry's generic `table` wording with the names this connector
  * actually allows.
  *

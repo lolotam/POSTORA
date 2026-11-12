@@ -54,6 +54,7 @@ import {
   customToolDefinitions,
   type EscalationTarget,
   executeTool,
+  offersCatalogSearch,
   agentToolDefinitions,
   webSearchToolDefinition,
   type CustomTool,
@@ -1459,6 +1460,7 @@ Deno.serve(async (req) => {
       isAdmin,
       surface: request.comment_id ? "comment" : "dm",
       connectorNames: offeredTools.map((tool) => tool.name),
+      catalogSearch: offersCatalogSearch(offeredTools),
     });
 
     if (toolResolution.droppedDuplicates.length > 0) {

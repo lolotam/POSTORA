@@ -311,6 +311,8 @@ export interface SystemPromptParams {
    */
   handoffOnRequest?: boolean;
   handoffOnLowConfidence?: boolean;
+  /** A connector offered for this reply searches the catalog by the customer's words. */
+  catalogSearch?: boolean;
 }
 
 const SURFACE_INSTRUCTIONS: Record<ReplySurface, { intro: string; rules: string[] }> = {
@@ -401,6 +403,25 @@ function connectorRules(connectorNames?: string[]): string[] {
     `- This account has live business connectors: ${named}. Their data is current; the business knowledge below is an index and can be out of date.`,
     "- For anything about current prices, stock, availability, catalogue contents or orders, call the connector tool BEFORE answering from the business knowledge, and before saying you do not have the information. Say you cannot find something only after the connector has actually been asked.",
   ];
+}
+
+/**
+ * Said only when a connector searches the catalog through the store's own
+ * function. Without it the model treated one empty search as "we do not sell
+ * this" and handed over, and wrote product links of its own instead of the
+ * one the catalog returned (curemedkw, 2026-11-12 plan, Task 6).
+ */
+function catalogSearchRules(catalogSearch: boolean | undefined, handoffOnLowConfidence: boolean): string[] {
+  if (!catalogSearch) return [];
+  return [
+    "- To find a product, call the catalog search with `query` set to the product words from the customer's message, exactly as they wrote them.",
+    "- If the search finds nothing (the tool has already retried with a shorter word by itself), ask the customer for the product name as printed on the pack, or for a photo. Do not say the store does not sell it.",
+    handoffOnLowConfidence
+      ? "- For product questions, hand the conversation to a person only when the customer asks for one, or after two searches for the same request have found nothing."
+      : "",
+    "- When you mention a product, give its product_url exactly as the tool returned it. Never build or guess a link.",
+    "- If price_hidden is true, say the price is available on request instead of quoting one. If shopping_enabled is false, say the product can be viewed but not ordered online.",
+  ].filter(Boolean);
 }
 
 const TONE_RULES: Record<AgentTone, string> = {
@@ -664,6 +685,7 @@ export function buildSystemPrompt(params: SystemPromptParams): string {
     (params.handoffOnRequest ?? true)
       ? "- If the customer asks for a person/human/agent, use the escalate_to_human tool and tell them someone will follow up."
       : "",
+    ...catalogSearchRules(params.catalogSearch, params.handoffOnLowConfidence ?? true),
     "- Use the search_knowledge tool to look up product or policy details before saying something is unavailable.",
     ...LINK_RULES,
     ...surfaceInstructions.rules,

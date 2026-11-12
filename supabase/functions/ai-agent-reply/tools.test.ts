@@ -1440,3 +1440,43 @@ Deno.test("web_search with no usable search provider says so instead of guessing
   );
   assertStringIncludes(result.output, "not available");
 });
+
+Deno.test("catalog search rules appear only when a connector searches the catalog", async () => {
+  const { buildSystemPrompt } = await import("./logic.ts");
+  const base = { persona: null, language: "ar" as const, knowledgeBlocks: [], nowIso: "2026-11-12T00:00:00Z", connectorNames: ["catalog"] };
+
+  const withCatalog = buildSystemPrompt({ ...base, catalogSearch: true });
+  const withoutCatalog = buildSystemPrompt({ ...base, catalogSearch: false });
+
+  assertStringIncludes(withCatalog, "give its product_url exactly as the tool returned it");
+  assertStringIncludes(withCatalog, "after two searches for the same request have found nothing");
+  assertEquals(withoutCatalog.includes("product_url"), false);
+});
+
+Deno.test("with low-confidence handoff off the catalog rules never promise a person", async () => {
+  const { buildSystemPrompt } = await import("./logic.ts");
+  const prompt = buildSystemPrompt({
+    persona: null,
+    language: "ar",
+    knowledgeBlocks: [],
+    nowIso: "2026-11-12T00:00:00Z",
+    catalogSearch: true,
+    handoffOnLowConfidence: false,
+  });
+
+  assertStringIncludes(prompt, "ask the customer for the product name as printed on the pack");
+  assertEquals(prompt.includes("hand the conversation to a person"), false);
+});
+
+Deno.test("only a Supabase connector with a named search function counts as catalog search", async () => {
+  const { offersCatalogSearch } = await import("./tools.ts");
+  const cases: Array<[string, Record<string, unknown> | null, boolean]> = [
+    ["supabase", { rpc_allow_list: "agent_search_products" }, true],
+    ["supabase", { rpc_allow_list: "-" }, false], // the card's cleared value
+    ["supabase", { table_allow_list: "agent_catalog_products" }, false],
+    ["custom_rest", { rpc_allow_list: "agent_search_products" }, false],
+  ];
+  for (const [connector_type, settings, expected] of cases) {
+    assertEquals(offersCatalogSearch([{ connector_type, settings }]), expected, `${connector_type} ${JSON.stringify(settings)}`);
+  }
+});
