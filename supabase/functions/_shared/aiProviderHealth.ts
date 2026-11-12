@@ -19,6 +19,11 @@ export interface HealthTarget {
   display_name: string;
   /** The pi-ai OAuth provider id; present only for auth_method 'oauth'. */
   oauth_provider?: string;
+  /**
+   * The stored credential is already revoked. The target is reported as "needs
+   * re-login" without a probe and without touching its models.
+   */
+  needs_relogin?: boolean;
 }
 
 export interface HealthResult {
