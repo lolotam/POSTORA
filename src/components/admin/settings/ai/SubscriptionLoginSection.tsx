@@ -21,9 +21,10 @@ import {
   type OAuthProviderId,
 } from '@/hooks/ai-config/useAiProviderAuth';
 
-const OAUTH_PROVIDER_FOR_CODE: Record<'claude' | 'openai', OAuthProviderId> = {
+const OAUTH_PROVIDER_FOR_CODE: Record<'claude' | 'openai' | 'openrouter', OAuthProviderId> = {
   claude: 'anthropic',
   openai: 'openai-codex',
+  openrouter: 'openrouter',
 };
 
 // The edge function answers with stable codes; the admin reads sentences.
@@ -49,8 +50,11 @@ function describeError(error: unknown, fallback: string): string {
  * Vault and answers with a status, an account label and a model list. The
  * admin approves the provider's consent page in a new tab and pastes the
  * address it lands on back here.
+ *
+ * A provider whose flow is `pkce_callback` redirects to our own route
+ * instead: the browser goes there directly and there is nothing to paste.
  */
-export function SubscriptionLoginSection({ providerCode }: { providerCode: 'claude' | 'openai' }) {
+export function SubscriptionLoginSection({ providerCode }: { providerCode: 'claude' | 'openai' | 'openrouter' }) {
   const { data: capabilities } = useAiProviderAuthCapabilities();
   const startLogin = useStartAiOAuth();
   const finishLogin = useFinishAiOAuth();
@@ -68,6 +72,7 @@ export function SubscriptionLoginSection({ providerCode }: { providerCode: 'clau
   const needsReconnect = capability?.status === 'reauth_required';
   const hasStoredLogin = connected || needsReconnect;
   const enabled = capabilities?.enabled === true;
+  const usesCallbackFlow = capability?.flow === 'pkce_callback';
   // With the flag off the subscription pathway is closed, but a stored login
   // must stay visible so the admin can still delete it.
   if (!capabilities || (!enabled && !hasStoredLogin)) return null;
@@ -80,6 +85,17 @@ export function SubscriptionLoginSection({ providerCode }: { providerCode: 'clau
     try {
       const { authorize_url } = await startLogin.mutateAsync(oauthProvider);
       setAuthorizeUrl(authorize_url);
+    } catch (error) {
+      toast.error(describeError(error, 'Could not start the login'));
+    }
+  };
+
+  // A callback flow leaves this page: the provider sends the browser to our
+  // own route, which finishes the login on its own.
+  const handleStartCallbackLogin = async () => {
+    try {
+      const { authorize_url } = await startLogin.mutateAsync(oauthProvider);
+      window.location.assign(authorize_url);
     } catch (error) {
       toast.error(describeError(error, 'Could not start the login'));
     }
@@ -141,7 +157,9 @@ export function SubscriptionLoginSection({ providerCode }: { providerCode: 'clau
             ? `Connected${capability?.expires_at ? `, expires ${capability.expires_at}` : ''}`
             : needsReconnect
               ? 'The stored subscription was rejected. Connect it again.'
-              : 'Use a Claude Pro/Max or ChatGPT subscription instead of an API key.'}
+              : providerCode === 'openrouter'
+                ? 'Sign in with your OpenRouter account instead of an API key.'
+                : 'Use a Claude Pro/Max or ChatGPT subscription instead of an API key.'}
       </p>
 
       {!enabled && (
@@ -160,38 +178,51 @@ export function SubscriptionLoginSection({ providerCode }: { providerCode: 'clau
       )}
 
       {enabled && !connected && (
-        <>
-          {authorizeUrl ? (
-            <Button asChild size="sm" variant="outline" className="w-full h-7 text-xs">
-              <a href={authorizeUrl} target="_blank" rel="noopener noreferrer">
-                <ExternalLink className="w-3 h-3 me-1" />
-                Open the provider&apos;s login page
-              </a>
-            </Button>
-          ) : (
-            <Button size="sm" variant="outline" className="w-full h-7 text-xs" onClick={handleStartLogin}
+        usesCallbackFlow ? (
+          <>
+            <Button size="sm" variant="outline" className="w-full h-7 text-xs" onClick={handleStartCallbackLogin}
               disabled={startLogin.isPending}>
               {startLogin.isPending ? <Loader2 className="w-3 h-3 animate-spin me-1" /> : null}
-              Open login
+              Sign in with {capability?.name ?? 'the provider'}
             </Button>
-          )}
-          <p className="text-xs text-muted-foreground">
-            After approving, your browser opens a localhost page that does not load. Copy the full address
-            from the address bar and paste it here.
-          </p>
-          <Textarea
-            value={pasted}
-            onChange={(e) => setPasted(e.target.value)}
-            placeholder="Paste the address you were redirected to..."
-            className="text-xs min-h-[60px]"
-            maxLength={4096}
-          />
-          <Button size="sm" className="w-full h-7 text-xs" onClick={handleFinishLogin}
-            disabled={!pasted.trim() || finishLogin.isPending}>
-            {finishLogin.isPending ? <Loader2 className="w-3 h-3 animate-spin me-1" /> : null}
-            Finish
-          </Button>
-        </>
+            <p className="text-xs text-muted-foreground">
+              Your browser opens the provider&apos;s consent page and comes back here when it is done.
+            </p>
+          </>
+        ) : (
+          <>
+            {authorizeUrl ? (
+              <Button asChild size="sm" variant="outline" className="w-full h-7 text-xs">
+                <a href={authorizeUrl} target="_blank" rel="noopener noreferrer">
+                  <ExternalLink className="w-3 h-3 me-1" />
+                  Open the provider&apos;s login page
+                </a>
+              </Button>
+            ) : (
+              <Button size="sm" variant="outline" className="w-full h-7 text-xs" onClick={handleStartLogin}
+                disabled={startLogin.isPending}>
+                {startLogin.isPending ? <Loader2 className="w-3 h-3 animate-spin me-1" /> : null}
+                Open login
+              </Button>
+            )}
+            <p className="text-xs text-muted-foreground">
+              After approving, your browser opens a localhost page that does not load. Copy the full address
+              from the address bar and paste it here.
+            </p>
+            <Textarea
+              value={pasted}
+              onChange={(e) => setPasted(e.target.value)}
+              placeholder="Paste the address you were redirected to..."
+              className="text-xs min-h-[60px]"
+              maxLength={4096}
+            />
+            <Button size="sm" className="w-full h-7 text-xs" onClick={handleFinishLogin}
+              disabled={!pasted.trim() || finishLogin.isPending}>
+              {finishLogin.isPending ? <Loader2 className="w-3 h-3 animate-spin me-1" /> : null}
+              Finish
+            </Button>
+          </>
+        )
       )}
 
       {enabled && connected && (

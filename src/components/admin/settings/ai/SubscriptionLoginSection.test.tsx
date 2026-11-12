@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import { toast } from 'sonner';
 import { SubscriptionLoginSection } from './SubscriptionLoginSection';
@@ -30,6 +30,7 @@ const claudeNotConnected = {
   account_label: null,
   expires_at: null,
   models: ['claude-sonnet-4-5', 'claude-opus-5'],
+  flow: 'pkce_paste',
 };
 
 const claudeConnected = {
@@ -39,7 +40,23 @@ const claudeConnected = {
   expires_at: '2026-12-01T00:00:00.000Z',
 };
 
+const openrouterNotConnected = {
+  provider_code: 'openrouter',
+  oauth_provider: 'openrouter',
+  name: 'OpenRouter',
+  active: true,
+  status: 'not_connected',
+  account_label: null,
+  expires_at: null,
+  models: ['anthropic/claude-sonnet-4.5'],
+  flow: 'pkce_callback',
+};
+
 describe('SubscriptionLoginSection', () => {
+  // The callback flow navigates the tab, so the location is replaced for that
+  // one test and put back afterwards.
+  const originalLocation = Object.getOwnPropertyDescriptor(window, 'location');
+
   beforeEach(() => {
     h.caps = { enabled: true, providers: [claudeNotConnected] };
     h.start.mockReset();
@@ -47,6 +64,10 @@ describe('SubscriptionLoginSection', () => {
     h.disconnect.mockReset();
     h.test.mockReset();
     vi.mocked(toast.error).mockClear();
+  });
+
+  afterEach(() => {
+    if (originalLocation) Object.defineProperty(window, 'location', originalLocation);
   });
 
   it('renders nothing while the feature is disabled and nothing is stored', () => {
@@ -173,5 +194,36 @@ describe('SubscriptionLoginSection', () => {
     h.caps = { enabled: true, providers: [{ ...claudeConnected, status: 'reauth_required' }] };
     render(<SubscriptionLoginSection providerCode="claude" />);
     expect(screen.getByText('Reconnect required')).toBeInTheDocument();
+  });
+
+  it('sends the browser to the provider instead of asking for a paste when the flow is a callback', async () => {
+    const assign = vi.fn();
+    Object.defineProperty(window, 'location', {
+      value: { ...window.location, assign },
+      writable: true,
+    });
+    h.caps = { enabled: true, providers: [openrouterNotConnected] };
+    h.start.mockResolvedValue({
+      authorize_url: 'https://openrouter.ai/auth?code_challenge=x',
+      flow: 'pkce_callback',
+    });
+
+    render(<SubscriptionLoginSection providerCode="openrouter" />);
+
+    // A callback flow has nothing to paste: the provider comes back to us.
+    expect(screen.queryByRole('textbox')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /Sign in with OpenRouter/i }));
+
+    await waitFor(() => expect(h.start).toHaveBeenCalledWith('openrouter'));
+    await waitFor(() =>
+      expect(assign).toHaveBeenCalledWith('https://openrouter.ai/auth?code_challenge=x'),
+    );
+  });
+
+  it('keeps the paste box for a provider whose flow is a paste', () => {
+    h.caps = { enabled: true, providers: [claudeNotConnected] };
+    render(<SubscriptionLoginSection providerCode="claude" />);
+    expect(screen.getByRole('textbox')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Sign in with OpenRouter/i })).not.toBeInTheDocument();
   });
 });

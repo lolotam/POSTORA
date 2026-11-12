@@ -2,16 +2,23 @@ import { z } from "zod";
 import { supabase } from "@/integrations/supabase/client";
 
 /**
- * The pi-ai OAuth provider ids that own a subscription login. The ids are
- * pi-ai's, not ours: `anthropic` and `openai-codex`.
+ * The OAuth provider ids that own a subscription login. `anthropic` and
+ * `openai-codex` are pi-ai's; `openrouter` is ours, because pi-ai 0.73.1 ships
+ * an API-key provider for OpenRouter but no OAuth one.
  */
-export type OAuthProviderId = "anthropic" | "openai-codex";
+export type OAuthProviderId = "anthropic" | "openai-codex" | "openrouter";
+
+/**
+ * How the authorization result comes back: a paste box, or a redirect to our
+ * own callback route.
+ */
+export type OAuthFlow = "pkce_paste" | "pkce_callback";
 
 // The edge function's responses are validated at this boundary, so a contract
 // drift fails here with one stable code instead of deep inside a component.
 const capabilitySchema = z.object({
-  provider_code: z.enum(["claude", "openai"]),
-  oauth_provider: z.enum(["anthropic", "openai-codex"]),
+  provider_code: z.enum(["claude", "openai", "openrouter"]),
+  oauth_provider: z.enum(["anthropic", "openai-codex", "openrouter"]),
   /** Null when the ai_providers row has no name. */
   name: z.string().nullable(),
   /** The admin's ai_providers.is_active switch for this provider. */
@@ -20,9 +27,13 @@ const capabilitySchema = z.object({
   account_label: z.string().nullable(),
   expires_at: z.string().nullable(),
   models: z.array(z.string()),
+  flow: z.enum(["pkce_paste", "pkce_callback"]),
 });
 const capabilitiesSchema = z.object({ enabled: z.boolean(), providers: z.array(capabilitySchema) });
-const startSchema = z.object({ authorize_url: z.string().url() });
+const startSchema = z.object({
+  authorize_url: z.string().url(),
+  flow: z.enum(["pkce_paste", "pkce_callback"]),
+});
 const finishSchema = z.object({ status: z.literal("connected"), account_label: z.string().nullable() });
 const disconnectSchema = z.object({ status: z.literal("not_connected") });
 const testSchema = z.object({ ok: z.boolean(), latency_ms: z.number(), error: z.string().optional() });
