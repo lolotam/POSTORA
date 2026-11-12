@@ -10976,6 +10976,43 @@ export type Database = {
       }
     }
     Functions: {
+      save_ai_oauth_credentials: {
+        Args: {
+          p_oauth_provider: string
+          p_provider_code: string
+          p_credentials: Json
+          p_account_label: string | null
+          p_expires_at: string | null
+          p_user: string | null
+        }
+        Returns: undefined
+      }
+      get_ai_oauth_credentials: {
+        Args: { p_oauth_provider: string }
+        Returns: Json
+      }
+      begin_ai_oauth_refresh: {
+        Args: { p_oauth_provider: string; p_lease_seconds: number }
+        Returns: boolean
+      }
+      fail_ai_oauth_refresh: {
+        Args: { p_oauth_provider: string; p_error: string; p_reauth: boolean }
+        Returns: undefined
+      }
+      delete_ai_oauth_connection: {
+        Args: { p_oauth_provider: string }
+        Returns: undefined
+      }
+      get_ai_oauth_statuses: {
+        Args: Record<PropertyKey, never>
+        Returns: {
+          oauth_provider: string
+          provider_code: string
+          status: string
+          account_label: string | null
+          expires_at: string | null
+        }[]
+      }
       request_immediate_publish: {
         Args: { p_post_id: string; p_user_id: string }
         Returns: string | null
