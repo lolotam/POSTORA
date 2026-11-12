@@ -129,7 +129,8 @@ export async function handle(body: unknown, caller: Caller, deps: HandlerDeps): 
         const { accountLabel } = await deps.finish(request.oauth_provider, request.pasted, userId);
         return json({ status: "connected", account_label: accountLabel });
       } catch (cause) {
-        if (cause instanceof AiOAuthError) return json({ error: cause.code }, 400);
+        // The stable code only: the error message can quote provider output.
+        if (cause instanceof AiOAuthError) return refusal(deps, "finish", cause.code, userId, 400);
         throw cause;
       }
     }

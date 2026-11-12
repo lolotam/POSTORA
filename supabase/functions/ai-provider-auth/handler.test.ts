@@ -145,18 +145,23 @@ Deno.test("capabilities works while the flag is off", async () => {
   assertEquals(body.providers.length, 3);
 });
 
-Deno.test("finish maps AiOAuthError invalid_state to 400 with code", async () => {
+Deno.test("a refused finish answers 400 with its code and logs only the code", async () => {
+  const refusals: Array<{ action: string; reason: string; userId: string | null }> = [];
   const response = await callHandler(
     { action: "finish", oauth_provider: "anthropic", pasted: "http://localhost:53692/callback?code=x&state=y" },
     baseDeps({
       finish: async () => {
         throw new AiOAuthError("invalid_state", "login state is unknown, expired or already used");
       },
+      logRefusal: async (details) => {
+        refusals.push(details);
+      },
     }),
   );
   assertEquals(response.status, 400);
   const body = await response.json();
   assertEquals(body.error, "invalid_state");
+  assertEquals(refusals, [{ action: "finish", reason: "invalid_state", userId: USER_ID }]);
 });
 
 Deno.test("finish returns the connected account label", async () => {
