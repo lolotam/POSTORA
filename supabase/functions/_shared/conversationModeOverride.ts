@@ -66,8 +66,7 @@ export function escalationOverride(
 export interface OverrideReaderClient {
   // deno-lint-ignore no-explicit-any
   from(table: string): any;
-  // deno-lint-ignore no-explicit-any
-  rpc(fn: string, args: Record<string, unknown>): PromiseLike<{ data: any; error: any }>;
+  rpc(fn: string, args: Record<string, unknown>): PromiseLike<{ data: unknown; error: { message?: string } | null }>;
 }
 
 export interface ConversationScope {
