@@ -2718,6 +2718,7 @@ export type Database = {
       }
       ai_models: {
         Row: {
+          auth_method: string
           capabilities: string[]
           context_limit: number | null
           cost_per_1m_input_tokens: number | null
@@ -2733,6 +2734,7 @@ export type Database = {
           updated_at: string
         }
         Insert: {
+          auth_method?: string
           capabilities?: string[]
           context_limit?: number | null
           cost_per_1m_input_tokens?: number | null
@@ -2748,6 +2750,7 @@ export type Database = {
           updated_at?: string
         }
         Update: {
+          auth_method?: string
           capabilities?: string[]
           context_limit?: number | null
           cost_per_1m_input_tokens?: number | null
@@ -2768,6 +2771,64 @@ export type Database = {
             columns: ["provider_id"]
             referencedRelation: "ai_providers"
             referencedColumns: ["id"]
+          },
+        ]
+      }
+      ai_provider_health: {
+        Row: {
+          auth_method: string
+          checked_at: string
+          claim_token: string | null
+          claimed_at: string | null
+          latency_ms: number | null
+          models_added: number
+          models_deactivated: number
+          models_updated: number
+          notified_at: string | null
+          previous_status: string | null
+          provider_code: string
+          reason: string | null
+          run_id: string | null
+          status: string
+        }
+        Insert: {
+          auth_method?: string
+          checked_at?: string
+          claim_token?: string | null
+          claimed_at?: string | null
+          latency_ms?: number | null
+          models_added?: number
+          models_deactivated?: number
+          models_updated?: number
+          notified_at?: string | null
+          previous_status?: string | null
+          provider_code: string
+          reason?: string | null
+          run_id?: string | null
+          status: string
+        }
+        Update: {
+          auth_method?: string
+          checked_at?: string
+          claim_token?: string | null
+          claimed_at?: string | null
+          latency_ms?: number | null
+          models_added?: number
+          models_deactivated?: number
+          models_updated?: number
+          notified_at?: string | null
+          previous_status?: string | null
+          provider_code?: string
+          reason?: string | null
+          run_id?: string | null
+          status?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "ai_provider_health_provider_code_fkey"
+            columns: ["provider_code"]
+            referencedRelation: "ai_providers"
+            referencedColumns: ["provider_code"]
           },
         ]
       }
@@ -13004,6 +13065,34 @@ export type Database = {
       sweep_background_jobs: {
         Args: Record<PropertyKey, never>
         Returns: number
+      }
+      record_ai_provider_health: {
+        Args: {
+          p_provider_code: string
+          p_auth_method: string
+          p_status: string
+          p_reason: string | null
+          p_models_added: number
+          p_models_updated: number
+          p_models_deactivated: number
+          p_latency_ms: number
+          p_run_id: string | null
+        }
+        Returns: undefined
+      }
+      claim_ai_provider_health_notifications: {
+        Args: { p_claim_token: string }
+        Returns: {
+          provider_code: string
+          auth_method: string
+          status: string
+          reason: string | null
+          previous_status: string | null
+        }[]
+      }
+      mark_ai_provider_health_notified: {
+        Args: { p_claim_token: string }
+        Returns: undefined
       }
     }
     Enums: {
