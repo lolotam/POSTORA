@@ -22,6 +22,7 @@ import type { AIProvider, TestConnectionResult } from '@/hooks/useAIConfiguratio
 import { SyncModelsButton } from './SyncModelsButton';
 import { SyncAllButton } from './SyncAllButton';
 import { SubscriptionLoginSection } from './SubscriptionLoginSection';
+import { SubscriptionLoginsStrip } from './SubscriptionLoginsStrip';
 import { SYNCABLE_PROVIDER_CODES } from '@/hooks/ai-config/useSyncModels';
 
 function isOAuthProvider(provider: AIProvider | null) {
@@ -158,6 +159,11 @@ export function AiProvidersCard() {
 
   const defaultModel = aiConfig?.defaultModel;
   const subscriptionProvider = subscriptionProviderCode(selectedProvider);
+  const openProviderByCode = (code: string) => {
+    const provider = providers.find((p) => p.provider_code === code);
+    if (!provider) return;
+    setSelectedProvider(provider); setProviderApiKey(''); setShowProviderKey(false);
+  };
 
   return (
     <div className="space-y-6">
@@ -174,6 +180,7 @@ export function AiProvidersCard() {
           />
         </CardHeader>
         <CardContent>
+          <SubscriptionLoginsStrip onOpen={openProviderByCode} />
           <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-2">
             {providers.map(provider => {
               const providerModels = modelsByProvider[provider.id] || [];
