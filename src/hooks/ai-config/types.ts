@@ -118,3 +118,10 @@ export interface AIConfigData {
   categoryFallbacks: CategoryFallbacks;
   categoryFallbacks2: CategoryFallbacks2;
 }
+
+/** The provider health types, re-exported so the admin UI has one import place. */
+export type {
+  ProviderHealthChunk,
+  ProviderHealthRow,
+  ProviderHealthStatus,
+} from "@/features/ai-providers/infrastructure/aiProviderHealthGateway";
