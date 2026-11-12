@@ -64,7 +64,7 @@
 | `supabase/functions/ai-agent-reply/agentQuality.test.ts` | New: tests for those helpers |
 | `supabase/functions/ai-agent-reply/index.ts` | Wiring (gate, language, reply birth, history merge) |
 | `supabase/functions/_shared/conversationModeOverride.ts` | Expiry through `expire_conversation_mode` |
-| `supabase/migrations/20261112130000_agent_handoff_messages.sql` | escalation/ack columns, thread marker, 3 RPCs, per-account texts |
+| `supabase/migrations/20261112130000_agent_handoff_messages.sql` | escalation/ack columns, thread marker, 3 RPCs |
 | `supabase/functions/ai-agent-adapters/supabase.ts` (+ test) | Allow-listed RPC mode |
 | `supabase/functions/_shared/connectorRegistry.ts` | `rpc_allow_list` setting, `query`/`max_results` parameters |
 | `supabase/functions/ai-agent-reply/logic.ts` `buildSystemPrompt` | Not-found / escalation rule |
@@ -163,43 +163,19 @@ export function replyLanguageText(inboundText: string): string;
 - [ ] **Step 4:** Run the tests. They are expected to PASS. Then run the full `ai-agent-reply` suite.
 - [ ] **Step 5:** Commit `fix(ai-agent): judge reply language by the customer's words, not the image description`.
 
-### Task 3: Fixed greeting on the first message
+### Task 3: Fixed greeting on the first message — DONE `4368f843`
 
-**First message:**
-- `historyRows.length === 0` on the raw query result (`index.ts:~924`).
-- Not on `history`, which `historyWindow` also empties after seven quiet days.
+**Owner (card, 2026-11-12):**
+- Every agent respects its "Opening message" field (`agent_behavior.greeting`).
+- When that field is empty, the agent follows "Additional instructions" (`persona_instructions`).
 
-**Interfaces — Produces:**
-```ts
-/** reply with the account's greeting prepended unless the model already opened with it. */
-export function withGreeting(reply: string, greetingText: string): string;
-```
-Seed values for curemedkw:
-- `greeting_text_ar` = the spec text.
-- `greeting_text_en` = `Welcome to CureMed 🌿 How can we help you?`. This wording is not from the owner, so it goes on the wording card.
-
-No greeting while a store-event flow is active (`initialProcedureState?.origin === "event"`) or on a comment reply (`request.comment_id`).
-
-The greeting text is per account, so read it from `config.greeting_text_ar` / `config.greeting_text_en`. When a column is absent, do not greet.
-
-- Check `ai_agent_configs` first. Add the columns (nullable text) in the Task 4 migration file.
-- Set them only for the curemedkw config row. The constant above is the seed value, not a global default.
-
-- [ ] **Step 1: Failing tests:**
-  - Arabic → `GREETING.ar + "\n\n" + reply`.
-  - Reply already starting with the greeting → unchanged.
-  - Empty reply → greeting alone.
-  - English case.
-- [ ] **Step 2:** Run them. They are expected to FAIL.
-- [ ] **Step 3: Implement** `withGreeting(reply, greetingText)`, taking the text, not the language.
-  - In `index.ts`, after `repairChatReply` (`:1493`):
-    ```ts
-    if (isFirstMessage && greetingText) replyText = withGreeting(replyText, greetingText);
-    ```
-  - `greetingText` comes from `language === "ar" ? config.greeting_text_ar : config.greeting_text_en`.
-  - Remove the greeting instruction from `buildSystemPrompt` when the account has a fixed greeting, so the model does not greet twice.
-- [ ] **Step 4:** Run the tests. They are expected to PASS. Then run the suite.
-- [ ] **Step 5:** Commit `feat(ai-agent): send the account's fixed greeting on a conversation's first message`.
+**Implemented:**
+- `fixedGreeting(greeting, language)`: returns the field text when its script matches the reply language.
+- `withGreeting(reply, greeting)`: prepends it once.
+- Applied at the reply birth site, only when the conversation has no stored turn and the history read succeeded. Never on comments or store-event flows.
+- The prompt tells the model not to greet when code already did (`greetingSent`).
+- An empty field changes nothing; when the language does not match, the old prompt instruction stays.
+- No new columns.
 
 ### Task 4: Human-mode acknowledgement and post-escalation apology
 
@@ -220,13 +196,7 @@ ALTER TABLE public.ai_conversation_modes
 -- Set when a silent (human_first) escalation expires; consumed by the AI's first reply after it.
 ALTER TABLE public.ai_threads
   ADD COLUMN IF NOT EXISTS unanswered_escalation_since timestamptz;
-ALTER TABLE public.ai_agent_configs
-  ADD COLUMN IF NOT EXISTS greeting_text_ar text,
-  ADD COLUMN IF NOT EXISTS greeting_text_en text,
-  ADD COLUMN IF NOT EXISTS human_mode_ack_ar text,
-  ADD COLUMN IF NOT EXISTS human_mode_ack_en text,
-  ADD COLUMN IF NOT EXISTS escalation_apology_ar text,
-  ADD COLUMN IF NOT EXISTS escalation_apology_en text;
+-- Texts are code constants (owner card 2026-11-12), not per-account columns.
 
 -- Single-flight: two deliveries of one message must not both send the ack.
 CREATE OR REPLACE FUNCTION public.claim_human_mode_ack(p_mode_id uuid) RETURNS boolean ...
@@ -261,11 +231,11 @@ The function bodies are written in full in the migration. Each one is proved in 
 - **Gate closed (`index.ts:759`):**
   - Applies when the reason is `mode_human_first`, the platform is `whatsapp`, the dry run is off, and an active `human_first` row exists with `expires_at` not null. Manual overrides get no ack.
   - Then `language` = `customerLanguageSignal(replyLanguageText(inbound))`, falling back to `thread.customer_language`, then `ar`.
-  - The account must have `human_mode_ack_<lang>`, and `claim_human_mode_ack` must return true.
+  - `claim_human_mode_ack` must return true.
   - On success: build the sender, send the ack, insert the customer turn and the ack into `ai_thread_messages`, log `status: "human_mode_ack"`, and complete (not cancel) the outbox row through the same helper `persistDelivery` uses.
   - Otherwise, today's skip.
 - **AI answering:** when `platform === "whatsapp"` and not a dry run, call `take_unanswered_escalation(thread.id)`.
-  - With a timestamp `since` and zero staff turns after it, prepend `escalation_apology_<lang>` to `replyText`, after the greeting step.
+  - With a timestamp `since` and zero staff turns after it, prepend `ESCALATION_APOLOGY[language]` to `replyText`, after the greeting step.
   - With staff turns, merge them into history instead (below).
 - **Staff turns:** `whatsapp_messages` with `direction='outbound'` and `from_name='You'` (positive match; broadcasts, rules and store openers are also outbound), `created_at > since`. They are merged into the history window by `created_at`, as `assistant` turns prefixed `"(staff) "`.
 - **Step 0 (proof):**
@@ -282,8 +252,8 @@ export function staffTurnsSince(
   sinceIso: string,
 ): Array<{ role: "assistant"; content: string; created_at: string }>;
 export function escalationApologyText(
-  since: string | null, staffTurns: number, apology: string | null,
-): string | null; // non-null only when since is set, staffTurns === 0 and apology is configured
+  since: string | null, staffTurns: number, language: ReplyLanguage,
+): string | null; // ESCALATION_APOLOGY[language] only when since is set and staffTurns === 0
 ```
 
 - [ ] **Step 1:** Failing Deno tests, table-driven, for `staffTurnsSince` and `escalationApologyText`. Also the updated `conversationModeOverride` test, which asserts the RPC is called with `(id, expires_at)`.
@@ -293,7 +263,11 @@ export function escalationApologyText(
 - [ ] **Step 5:** Commit `feat(ai-agent): one human-mode acknowledgement and an apology after an unanswered escalation`.
 - [ ] **Step 6 (prod, before merge):**
   1. Apply the migration.
-  2. Seed curemedkw's six text columns. The ack, apology and English greeting wording come from one owner card.
+  2. Texts are fixed in code (`logic.ts` `HUMAN_MODE_ACK`, `ESCALATION_APOLOGY`). The owner approved them by card on 2026-11-12:
+     - Ack AR: `تم تحويل محادثتك لفريقنا، وراح يرد عليك أحد الموظفين بأقرب وقت 🌿`
+     - Ack EN: `Your conversation is now with our team; a staff member will reply as soon as possible.`
+     - Apology AR: `نعتذر عن التأخير في الرد 🙏`
+     - Apology EN: `Sorry for the delay in getting back to you.`
 
 ### Task 5: Allow-listed RPC in the Supabase adapter
 
