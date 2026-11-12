@@ -26,7 +26,7 @@ const TRIAGE_EXCLUDED_PROVIDERS = ["claude"];
 // cosmetic slip: parseModelRef rewrites an unknown provider prefix to "openai",
 // so a Claude or Z AI model would be posted to OpenAI's endpoint under a name it
 // does not have.
-const AGENT_PROVIDER_CODES = ["openai", "openrouter", "gemini", "claude", "vercel", "deepseek"];
+const AGENT_PROVIDER_CODES = ["openai", "openrouter", "gemini", "claude", "vercel", "deepseek", "moonshot"];
 
 export function AdminAiAgentSection() {
   const { data: aiConfig } = useAIConfiguration();
@@ -73,9 +73,9 @@ export function AdminAiAgentSection() {
           currentDefault={aiConfig?.categoryDefaults.agent ?? null}
           currentFallback={aiConfig?.categoryFallbacks.agent ?? null}
           currentFallback2={aiConfig?.categoryFallbacks2.agent ?? null}
-          onSetDefault={(pc, mid) => setDefaultModel.mutate({ provider_code: pc, model_id: mid, category: "agent" })}
-          onSetFallback={(pc, mid) => setFallbackModel.mutate({ provider_code: pc, model_id: mid, category: "agent" })}
-          onSetFallback2={(pc, mid) => setFallback2Model.mutate({ provider_code: pc, model_id: mid, category: "agent" })}
+          onSetDefault={(pc, mid, am) => setDefaultModel.mutate({ provider_code: pc, model_id: mid, category: "agent", auth_method: am })}
+          onSetFallback={(pc, mid, am) => setFallbackModel.mutate({ provider_code: pc, model_id: mid, category: "agent", auth_method: am })}
+          onSetFallback2={(pc, mid, am) => setFallback2Model.mutate({ provider_code: pc, model_id: mid, category: "agent", auth_method: am })}
           isSaving={setDefaultModel.isPending || setFallbackModel.isPending || setFallback2Model.isPending}
         />
 
@@ -114,9 +114,9 @@ export function AdminAiAgentSection() {
             currentDefault={aiConfig?.categoryDefaults.agent_triage ?? null}
             currentFallback={aiConfig?.categoryFallbacks.agent_triage ?? null}
             currentFallback2={aiConfig?.categoryFallbacks2.agent_triage ?? null}
-            onSetDefault={(pc, mid) => setDefaultModel.mutate({ provider_code: pc, model_id: mid, category: "agent_triage" })}
-            onSetFallback={(pc, mid) => setFallbackModel.mutate({ provider_code: pc, model_id: mid, category: "agent_triage" })}
-            onSetFallback2={(pc, mid) => setFallback2Model.mutate({ provider_code: pc, model_id: mid, category: "agent_triage" })}
+            onSetDefault={(pc, mid, am) => setDefaultModel.mutate({ provider_code: pc, model_id: mid, category: "agent_triage", auth_method: am })}
+            onSetFallback={(pc, mid, am) => setFallbackModel.mutate({ provider_code: pc, model_id: mid, category: "agent_triage", auth_method: am })}
+            onSetFallback2={(pc, mid, am) => setFallback2Model.mutate({ provider_code: pc, model_id: mid, category: "agent_triage", auth_method: am })}
             isSaving={setDefaultModel.isPending || setFallbackModel.isPending || setFallback2Model.isPending}
           />
         </div>

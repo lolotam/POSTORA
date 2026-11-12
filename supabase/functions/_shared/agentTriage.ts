@@ -11,7 +11,7 @@
 /** Providers that serve the decision API. */
 export type TriageProvider = "openrouter" | "vercel";
 export type TriageKind = "decision" | "chat";
-export interface TriageTier { provider: string; model: string; kind: TriageKind }
+export interface TriageTier { provider: string; model: string; kind: TriageKind; authMethod?: "oauth" }
 export interface TriageConnector { name: string; description: string }
 export interface TriageInput {
   message: string;
@@ -283,15 +283,21 @@ export interface TriageRun { outcome: TriageOutcome | null; errors: Array<{ mode
 export const isTriageProvider = (code: unknown): code is TriageProvider => code === "openrouter" || code === "vercel";
 
 /** The configured slots, in order, before each is classified. */
-export function triageSlotsFromSettings(rows: Array<{ key: string; value: unknown }>): Array<{ provider: string; model: string }> {
+export function triageSlotsFromSettings(
+  rows: Array<{ key: string; value: unknown }>,
+): Array<{ provider: string; model: string; authMethod?: "oauth" }> {
   const byKey = new Map(rows.map((row) => [row.key, row.value]));
   if ((byKey.get(ENABLED_KEY) as { enabled?: unknown } | undefined)?.enabled !== true) return [];
-  const slots: Array<{ provider: string; model: string }> = [];
+  const slots: Array<{ provider: string; model: string; authMethod?: "oauth" }> = [];
   for (const key of SLOT_KEYS) {
-    const slotValue = byKey.get(key) as { provider_code?: unknown; model_id?: unknown } | undefined;
+    const slotValue = byKey.get(key) as { provider_code?: unknown; model_id?: unknown; auth_method?: unknown } | undefined;
     if (typeof slotValue?.provider_code === "string" && slotValue.provider_code &&
       typeof slotValue.model_id === "string" && slotValue.model_id) {
-      slots.push({ provider: slotValue.provider_code, model: slotValue.model_id });
+      slots.push({
+        provider: slotValue.provider_code,
+        model: slotValue.model_id,
+        ...(slotValue.auth_method === "oauth" ? { authMethod: "oauth" as const } : {}),
+      });
     }
   }
   return slots;
@@ -309,10 +315,12 @@ export function triageChainFromSettings(
   decisionModels: ReadonlySet<string> | null = null,
 ): TriageTier[] {
   return triageSlotsFromSettings(rows)
-    // Claude speaks the Anthropic Messages API, not chat-completions JSON mode; a slot
-    // naming it stays ignored, as every non-decision slot was before chat tiers.
-    .filter(({ provider }) => provider !== "claude")
-    .map(({ provider, model }): TriageTier => {
+    // Claude's API key speaks the Anthropic Messages API, not chat-completions JSON
+    // mode, so a key slot naming it stays ignored. A subscription slot goes through
+    // pi-ai, which accepts the chat-completions body, so it stays.
+    .filter(({ provider, authMethod }) => provider !== "claude" || authMethod === "oauth")
+    .map(({ provider, model, authMethod }): TriageTier => {
+      if (authMethod === "oauth") return { provider, model, kind: "chat", authMethod };
       const decision = isTriageProvider(provider) &&
         (decisionModels === null || decisionModels.has(`${provider}/${model}`));
       return { provider, model, kind: decision ? "decision" : "chat" };

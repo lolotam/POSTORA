@@ -1,12 +1,17 @@
 import { callAnthropic } from "./anthropic-adapter.ts";
 import { AI_USER_KEY_INVALID, redactProviderError } from "./ai-routing-errors.ts";
+import type { SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2";
 import type { AiRoutingAdmin } from "./ai-user-routing.ts";
+import type { OAuthChainDeps } from "./aiOAuth/chainTier.ts";
+import { callOAuthTier, isOAuthTierModel } from "./aiOAuth/chainTier.ts";
 import { BUILTIN_CHAT_PROVIDERS, loadOpenAiCompatibleBase } from "./providerEndpoint.ts";
 import { resolveProviderKey } from "./providerKeys.ts";
 
+export type AiAuthMethod = 'api_key' | 'oauth';
+
 export type AiTier =
   | { provider: string; model: string; credentialSource: 'user'; apiKey: string }
-  | { provider: string; model: string; credentialSource: 'platform'; apiKey?: string };
+  | { provider: string; model: string; credentialSource: 'platform'; apiKey?: string; authMethod?: AiAuthMethod };
 
 export interface AiEndpoint {
   kind?: 'anthropic';
@@ -22,6 +27,7 @@ export interface AiTierResult {
   status: number;
   error?: string;
   credentialSource?: 'user' | 'platform';
+  authMethod?: AiAuthMethod;
   reason?: 'tier_cap';
 }
 
@@ -177,15 +183,26 @@ export async function fetchAiSettings(supabaseAdmin: any): Promise<{
 }
 
 /**
+ * Saved tier values carry `auth_method` only when the admin chose the
+ * subscription pathway; anything else (including old rows) is the API-key path.
+ */
+function authMethodFrom(val: { auth_method?: unknown } | null | undefined): 'oauth' | undefined {
+  return val?.auth_method === 'oauth' ? 'oauth' : undefined;
+}
+
+/**
  * Fetch per-category AI settings from system_settings table.
  */
 export async function fetchCategoryAiSettings(supabaseAdmin: any, category: string): Promise<{
   primaryProvider: string;
   primaryModel: string;
+  primaryAuthMethod: 'oauth' | undefined;
   fallbackProvider: string;
   fallbackModel: string;
+  fallbackAuthMethod: 'oauth' | undefined;
   lastResortProvider: string;
   lastResortModel: string;
+  lastResortAuthMethod: 'oauth' | undefined;
 }> {
   const primaryKey = `default_ai_model_${category}`;
   const fallbackKey = `default_ai_model_${category}_fallback`;
@@ -203,10 +220,13 @@ export async function fetchCategoryAiSettings(supabaseAdmin: any, category: stri
 
   let primaryProvider = 'google';
   let primaryModel = 'google/gemini-3.1-flash-lite';
+  let primaryAuthMethod: 'oauth' | undefined;
   let fallbackProvider = '';
   let fallbackModel = '';
+  let fallbackAuthMethod: 'oauth' | undefined;
   let configuredLastResortProvider = '';
   let configuredLastResortModel = '';
+  let configuredLastResortAuthMethod: 'oauth' | undefined;
 
   for (const s of settings || []) {
     try {
@@ -214,14 +234,17 @@ export async function fetchCategoryAiSettings(supabaseAdmin: any, category: stri
       if (s.key === primaryKey && val?.provider_code && val?.model_id) {
         primaryProvider = val.provider_code;
         primaryModel = val.model_id;
+        primaryAuthMethod = authMethodFrom(val);
       }
       if (s.key === fallbackKey && val?.provider_code && val?.model_id) {
         fallbackProvider = val.provider_code;
         fallbackModel = val.model_id;
+        fallbackAuthMethod = authMethodFrom(val);
       }
       if (s.key === fallback2Key && val?.provider_code && val?.model_id) {
         configuredLastResortProvider = val.provider_code;
         configuredLastResortModel = val.model_id;
+        configuredLastResortAuthMethod = authMethodFrom(val);
       }
     } catch { /* use defaults */ }
   }
@@ -235,7 +258,17 @@ export async function fetchCategoryAiSettings(supabaseAdmin: any, category: stri
   // silently replaced chat's known-good floor with an unvalidated model. A stale setting
   // must not be able to take out the last line of defence for every AI category.
   let useConfiguredLastResort = false;
-  if (configuredLastResortProvider && configuredLastResortModel) {
+  if (configuredLastResortAuthMethod === 'oauth') {
+    // A subscription model has no ai_models row; the subscription's own model
+    // registry is its catalogue.
+    useConfiguredLastResort = isOAuthTierModel(configuredLastResortProvider, configuredLastResortModel);
+    if (!useConfiguredLastResort) {
+      console.warn(
+        `[ai-fallback] ignoring ${category} third tier ` +
+        `${configuredLastResortProvider}/${configuredLastResortModel}: not a subscription model`,
+      );
+    }
+  } else if (configuredLastResortProvider && configuredLastResortModel) {
     const { data: known, error: modelError } = await supabaseAdmin
       .from('ai_models')
       .select('id, ai_providers!inner(provider_code)')
@@ -264,8 +297,9 @@ export async function fetchCategoryAiSettings(supabaseAdmin: any, category: stri
   const lastResortModel = useConfiguredLastResort
     ? configuredLastResortModel
     : (lastResort ? lastResort.model : '');
+  const lastResortAuthMethod = useConfiguredLastResort ? configuredLastResortAuthMethod : undefined;
 
-  return { primaryProvider, primaryModel, fallbackProvider, fallbackModel, lastResortProvider, lastResortModel };
+  return { primaryProvider, primaryModel, primaryAuthMethod, fallbackProvider, fallbackModel, fallbackAuthMethod, lastResortProvider, lastResortModel, lastResortAuthMethod };
 }
 
 /**
@@ -283,10 +317,13 @@ export async function resolveChatModelConfig(
 ): Promise<{
   primaryProvider: string;
   primaryModel: string;
+  primaryAuthMethod: 'oauth' | undefined;
   fallbackProvider: string;
   fallbackModel: string;
+  fallbackAuthMethod: 'oauth' | undefined;
   lastResortProvider: string;
   lastResortModel: string;
+  lastResortAuthMethod: 'oauth' | undefined;
   source: 'user_override' | 'admin_chat' | 'hardcoded';
 }> {
   const adminConfig = await fetchCategoryAiSettings(supabaseAdmin, 'chat');
@@ -304,10 +341,15 @@ export async function resolveChatModelConfig(
       return {
         primaryProvider: userOverride.provider,
         primaryModel: userOverride.model,
+        primaryAuthMethod: undefined,
         fallbackProvider: adminConfig.primaryProvider,
         fallbackModel: adminConfig.primaryModel,
+        fallbackAuthMethod: adminConfig.primaryAuthMethod,
         lastResortProvider: adminConfig.fallbackProvider || adminConfig.lastResortProvider,
         lastResortModel: adminConfig.fallbackModel || adminConfig.lastResortModel,
+        lastResortAuthMethod: adminConfig.fallbackProvider
+          ? adminConfig.fallbackAuthMethod
+          : adminConfig.lastResortAuthMethod,
         source: 'user_override',
       };
     }
@@ -316,10 +358,13 @@ export async function resolveChatModelConfig(
   return {
     primaryProvider: adminConfig.primaryProvider,
     primaryModel: adminConfig.primaryModel,
+    primaryAuthMethod: adminConfig.primaryAuthMethod,
     fallbackProvider: adminConfig.fallbackProvider,
     fallbackModel: adminConfig.fallbackModel,
+    fallbackAuthMethod: adminConfig.fallbackAuthMethod,
     lastResortProvider: adminConfig.lastResortProvider,
     lastResortModel: adminConfig.lastResortModel,
+    lastResortAuthMethod: adminConfig.lastResortAuthMethod,
     source: 'admin_chat',
   };
 }
@@ -349,15 +394,16 @@ export async function fetchWithTimeout(url: string, init: RequestInit, timeoutMs
 }
 
 export function platformChatTiers(config: {
-  primaryProvider: string; primaryModel: string; fallbackProvider: string; fallbackModel: string;
-  lastResortProvider?: string; lastResortModel?: string;
+  primaryProvider: string; primaryModel: string; primaryAuthMethod?: AiAuthMethod;
+  fallbackProvider: string; fallbackModel: string; fallbackAuthMethod?: AiAuthMethod;
+  lastResortProvider?: string; lastResortModel?: string; lastResortAuthMethod?: AiAuthMethod;
 }): AiTier[] {
   // ── Tier 1: Primary ──
-  const tiers: AiTier[] = [{ provider: config.primaryProvider, model: config.primaryModel, credentialSource: 'platform' }];
+  const tiers: AiTier[] = [{ provider: config.primaryProvider, model: config.primaryModel, credentialSource: 'platform', authMethod: config.primaryAuthMethod }];
   // ── Tier 2: Fallback ──
-  if (config.fallbackProvider && config.fallbackModel) tiers.push({ provider: config.fallbackProvider, model: config.fallbackModel, credentialSource: 'platform' });
+  if (config.fallbackProvider && config.fallbackModel) tiers.push({ provider: config.fallbackProvider, model: config.fallbackModel, credentialSource: 'platform', authMethod: config.fallbackAuthMethod });
   // ── Tier 3: Last Resort ──
-  tiers.push({ provider: config.lastResortProvider || 'google', model: config.lastResortModel || 'gemini-3-flash-preview', credentialSource: 'platform' });
+  tiers.push({ provider: config.lastResortProvider || 'google', model: config.lastResortModel || 'gemini-3-flash-preview', credentialSource: 'platform', authMethod: config.lastResortAuthMethod });
   return tiers;
 }
 
@@ -369,10 +415,19 @@ export function platformChatTiers(config: {
  */
 export async function callChatCompletion(
   admin: AiRoutingAdmin | undefined,
-  tier: { provider: string; model: string },
+  tier: { provider: string; model: string; authMethod?: AiAuthMethod },
   requestBody: Record<string, unknown>,
   timeoutMs: number,
 ): Promise<Response> {
+  const body = chatRequestForTier(requestBody, { ...tier, credentialSource: 'platform' });
+  if (tier.authMethod === 'oauth') {
+    // The subscription pathway supports Claude: pi-ai owns the endpoint, so the
+    // plain-key Claude refusal below does not apply here.
+    const outcome = await callOAuthTier(admin as unknown as SupabaseClient | undefined, tier, body, timeoutMs);
+    return 'response' in outcome
+      ? outcome.response
+      : new Response(JSON.stringify({ error: outcome.error }), { status: 502, headers: { 'content-type': 'application/json' } });
+  }
   if (tier.provider === 'claude') return new Response(null, { status: 400 });
   const apiKey = await resolvePlatformApiKey(admin, tier.provider);
   if (!apiKey) return new Response(null, { status: 401 });
@@ -383,11 +438,10 @@ export async function callChatCompletion(
     baseUrl = base;
   }
   const endpoint = getAiEndpoint(tier.provider, apiKey, baseUrl);
-  const body = chatRequestForTier(requestBody, { ...tier, credentialSource: 'platform' });
   return await fetchWithTimeout(endpoint.apiUrl, { method: 'POST', headers: endpoint.headers, body: JSON.stringify(body) }, timeoutMs);
 }
 
-export async function callAiChain(admin: AiRoutingAdmin | undefined, requestBody: Record<string, unknown>, candidates: AiTier[]): Promise<AiCallResult> {
+export async function callAiChain(admin: AiRoutingAdmin | undefined, requestBody: Record<string, unknown>, candidates: AiTier[], oauth?: OAuthChainDeps): Promise<AiCallResult> {
   if (candidates.some((tier) => tier.credentialSource === 'user' && !tier.apiKey?.trim())) throw new Error('User AI tier requires an API key');
   const labels = ['primary', 'fallback', 'last_resort'] as const;
   const skipped: AiTierResult[] = candidates.slice(3).map((tier) => ({
@@ -397,14 +451,30 @@ export async function callAiChain(admin: AiRoutingAdmin | undefined, requestBody
   const platformKeys = new Map<string, string>();
   let fallbackReason: string | undefined;
   for (const [index, tier] of candidates.slice(0, 3).entries()) {
+    const attempt: AiTierResult = { tier: labels[index], provider: tier.provider, model: tier.model, status: 0, credentialSource: tier.credentialSource };
+    if (tier.credentialSource === 'platform') attempt.authMethod = tier.authMethod;
+    tiers.push(attempt);
+    // The subscription pathway never resolves a platform API key: its
+    // credential comes from the Vault through callOAuthTier.
+    if (attempt.authMethod === 'oauth') {
+      const body = chatRequestForTier(requestBody, tier);
+      const outcome = await callOAuthTier(admin as unknown as SupabaseClient | undefined, tier, body, AI_TIER_TIMEOUT_MS, oauth);
+      if ('response' in outcome) {
+        attempt.status = outcome.response.status;
+        if (outcome.response.ok) return { response: outcome.response, tierUsed: attempt.tier, modelUsed: tier.model, providerUsed: tier.provider,
+          credentialSource: tier.credentialSource, fallbackReason, tiers: [...tiers, ...skipped] };
+        attempt.error = redactProviderError(await outcome.response.text(), '');
+      } else {
+        attempt.error = outcome.error;
+      }
+      continue;
+    }
     // Resolve outside the provider catch: failed database reads are not missing keys.
     let apiKey = tier.apiKey;
     if (tier.credentialSource === 'platform') {
       if (!platformKeys.has(tier.provider)) platformKeys.set(tier.provider, await resolvePlatformApiKey(admin, tier.provider));
       apiKey = platformKeys.get(tier.provider)!;
     }
-    const attempt: AiTierResult = { tier: labels[index], provider: tier.provider, model: tier.model, status: 0, credentialSource: tier.credentialSource };
-    tiers.push(attempt);
     if (!apiKey) { attempt.error = 'API key not configured'; continue; }
     try {
       let baseUrl: string | undefined;

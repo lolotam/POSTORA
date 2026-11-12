@@ -12,6 +12,9 @@ import {
 } from "./ai-fallback.ts";
 import type { AiRoutingAdmin } from "./ai-user-routing.ts";
 import { clearProviderEndpointCache } from "./providerEndpoint.ts";
+import { callOAuthTier } from "./aiOAuth/chainTier.ts";
+import type { CredentialDeps } from "./aiOAuth/credentials.ts";
+import type { PiCallDeps } from "./aiOAuth/piCall.ts";
 
 function platformAdmin(
   key: string | null = "platform-secret",
@@ -520,6 +523,197 @@ Deno.test("callChatCompletion sends one shaped request to one tier, with the pla
   } finally {
     globalThis.fetch = original;
   }
+});
+
+// ===========================================================================
+// OAuth tiers (spec 2026-11-12-ai-provider-auth-methods-design.md §6.2).
+// The pi-ai boundary is injected; no test below reaches the network through
+// callPiOAuth. globalThis.fetch is still stubbed for the API-key tiers that
+// the OAuth tiers fall over to.
+// ===========================================================================
+
+const claudeOauthTier: AiTier = {
+  provider: "claude",
+  model: "claude-sonnet-4-5",
+  credentialSource: "platform",
+  authMethod: "oauth",
+};
+
+/** CredentialDeps backed by one in-memory connection row. */
+function oauthCredentialDeps(
+  credentials: Record<string, unknown> | null,
+  status = "connected",
+): CredentialDeps {
+  const row = { credentials, status };
+  return {
+    admin: {
+      rpc(name: string, _args: Record<string, unknown>) {
+        if (name === "get_ai_oauth_credentials") {
+          return Promise.resolve({
+            data: credentials === null ? null : { ...credentials, status: row.status },
+            error: null,
+          });
+        }
+        return Promise.resolve({ data: null, error: null });
+      },
+    } as never,
+    refresh: async () => {
+      throw new Error("must not refresh in chain tests");
+    },
+    getApiKey: () => "oauth-key",
+    now: () => 0,
+    sleep: async () => {},
+  };
+}
+
+function piAnswering(text: string): PiCallDeps {
+  return {
+    getModel: () => ({ id: "stub" }),
+    complete: async () => ({
+      content: [{ type: "text", text }],
+      stopReason: "stop",
+      usage: { input: 1, output: 1, totalTokens: 2 },
+    }),
+  };
+}
+
+Deno.test("oauth tier with flag off records oauth_disabled and falls to api-key tier 2", async () => {
+  const original = globalThis.fetch;
+  const fake = platformAdmin("platform-secret");
+  try {
+    globalThis.fetch = () => Promise.resolve(new Response("{}", { status: 200 }));
+    const result = await callAiChain(fake.admin, { max_tokens: 10 }, [
+      claudeOauthTier,
+      { ...platformTier, provider: "openai", model: "platform-model" },
+    ], { enabled: async () => false });
+    assertEquals(result.tierUsed, "fallback");
+    assertEquals(result.providerUsed, "openai");
+    assertEquals(result.tiers[0].authMethod, "oauth");
+    assertEquals(result.tiers[0].error, "oauth_disabled");
+    assertEquals(result.tiers[1].status, 200);
+  } finally {
+    globalThis.fetch = original;
+  }
+});
+
+Deno.test("oauth tier with flag on answers through pi and records authMethod oauth", async () => {
+  const original = globalThis.fetch;
+  const fake = platformAdmin("platform-secret");
+  let providerFetches = 0;
+  try {
+    globalThis.fetch = () => {
+      providerFetches++;
+      return Promise.resolve(new Response("{}", { status: 500 }));
+    };
+    const result = await callAiChain(fake.admin, { max_tokens: 10 }, [claudeOauthTier], {
+      enabled: async () => true,
+      providerActive: async () => true,
+      credentials: oauthCredentialDeps({ access: "a", refresh: "r", expires: 1_000_000 }),
+      pi: piAnswering("ok"),
+    });
+    assertEquals(providerFetches, 0, "an oauth tier must not hit the provider REST endpoint");
+    assertEquals(result.tierUsed, "primary");
+    assertEquals(result.providerUsed, "claude");
+    assertEquals(result.modelUsed, "claude-sonnet-4-5");
+    assertEquals(result.tiers[0].authMethod, "oauth");
+    assertEquals(result.tiers[0].status, 200);
+    const body = await result.response.json();
+    assertEquals(body.choices[0].message.content, "ok");
+  } finally {
+    globalThis.fetch = original;
+  }
+});
+
+Deno.test("oauth tier with tools records oauth_tools_unsupported", async () => {
+  const result = await callAiChain(platformAdmin().admin, {
+    max_tokens: 10,
+    tools: [{ type: "function", function: { name: "x" } }],
+  }, [claudeOauthTier], {
+    enabled: async () => true,
+    providerActive: async () => true,
+    credentials: oauthCredentialDeps({ access: "a", refresh: "r", expires: 1_000_000 }),
+    pi: piAnswering("unused"),
+  });
+  assertEquals(result.tiers[0].error, "oauth_tools_unsupported");
+  assertEquals(result.response.status, 502);
+});
+
+Deno.test("oauth tier on provider without pi oauth records oauth_unsupported_provider", async () => {
+  const result = await callAiChain(platformAdmin().admin, { max_tokens: 10 }, [
+    { ...claudeOauthTier, provider: "xai", model: "grok-4.3" },
+  ], {
+    enabled: async () => true,
+    providerActive: async () => true,
+    credentials: oauthCredentialDeps({ access: "a", refresh: "r", expires: 1_000_000 }),
+    pi: piAnswering("unused"),
+  });
+  assertEquals(result.tiers[0].error, "oauth_unsupported_provider");
+});
+
+Deno.test("oauth credential reauth_required records the code and falls over", async () => {
+  const original = globalThis.fetch;
+  const fake = platformAdmin("platform-secret");
+  try {
+    globalThis.fetch = () => Promise.resolve(new Response("{}", { status: 200 }));
+    const result = await callAiChain(fake.admin, { max_tokens: 10 }, [
+      claudeOauthTier,
+      { ...platformTier, provider: "openai", model: "platform-model" },
+    ], {
+      enabled: async () => true,
+      providerActive: async () => true,
+      credentials: oauthCredentialDeps({ access: "a", refresh: "r", expires: 1_000_000 }, "reauth_required"),
+      pi: piAnswering("unused"),
+    });
+    assertEquals(result.tiers[0].error, "reauth_required");
+    assertEquals(result.tierUsed, "fallback");
+  } finally {
+    globalThis.fetch = original;
+  }
+});
+
+Deno.test("oauth tier on a deactivated provider records oauth_provider_disabled without reading credentials", async () => {
+  let credentialReads = 0;
+  const credentials = oauthCredentialDeps({ access: "a", refresh: "r", expires: 1_000_000 });
+  const admin = credentials.admin as unknown as { rpc: (n: string, a: Record<string, unknown>) => Promise<unknown> };
+  const rpc = admin.rpc.bind(admin);
+  admin.rpc = (n, a) => {
+    credentialReads++;
+    return rpc(n, a);
+  };
+  const result = await callAiChain(platformAdmin().admin, { max_tokens: 10 }, [claudeOauthTier], {
+    enabled: async () => true,
+    providerActive: async () => false,
+    credentials,
+    pi: piAnswering("unused"),
+  });
+  assertEquals(result.tiers[0].error, "oauth_provider_disabled");
+  assertEquals(credentialReads, 0);
+});
+
+Deno.test("an oauth refresh that outlasts the tier deadline records refresh_timeout", async () => {
+  const credentials: CredentialDeps = {
+    ...oauthCredentialDeps({ access: "a", refresh: "r", expires: 1_000_000 }),
+    admin: {
+      rpc: () => new Promise(() => {}), // the credential read never answers
+    } as never,
+  };
+  const outcome = await callOAuthTier(undefined, claudeOauthTier, { max_tokens: 10 }, 20, {
+    enabled: async () => true,
+    providerActive: async () => true,
+    credentials,
+    pi: piAnswering("unused"),
+  });
+  assertEquals(outcome, { error: "refresh_timeout" });
+});
+
+Deno.test("a stalled oauth gate check counts against the same tier deadline", async () => {
+  const outcome = await callOAuthTier(undefined, claudeOauthTier, { max_tokens: 10 }, 20, {
+    enabled: () => new Promise(() => {}), // the flag read never answers
+    providerActive: async () => true,
+    credentials: oauthCredentialDeps({ access: "a", refresh: "r", expires: 1_000_000 }),
+    pi: piAnswering("unused"),
+  });
+  assertEquals(outcome, { error: "refresh_timeout" });
 });
 
 Deno.test("callChatCompletion refuses Claude and a missing key without calling out", async () => {

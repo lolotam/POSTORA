@@ -147,6 +147,7 @@ export const SETTINGS_SECTIONS = [
     keywords: [
       "provider", "api key", "openai", "gemini", "google", "openrouter", "anthropic",
       "connection", "test", "firecrawl", "apify", "scraping", "credentials",
+      "kimi", "moonshot", "subscription", "oauth",
     ],
   },
   {

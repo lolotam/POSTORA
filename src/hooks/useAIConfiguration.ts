@@ -8,17 +8,34 @@ import type {
   CategoryFallbacks,
   CategoryFallbacks2,
   AIConfigData,
+  AiAuthMethod,
   ModelCategory,
   SystemSettingRow,
 } from './ai-config/types';
 
-export type { AIProvider, AIModel, DefaultModel, CategoryDefaults, CategoryFallbacks, CategoryFallbacks2, AIConfigData, ModelCategory, SystemSettingRow };
+export type { AIProvider, AIModel, DefaultModel, CategoryDefaults, CategoryFallbacks, CategoryFallbacks2, AIConfigData, AiAuthMethod, ModelCategory, SystemSettingRow };
 
 function parseDefault(val: unknown): DefaultModel | null {
   if (!val || typeof val !== 'object') return null;
   const obj = val as Record<string, string>;
-  if (obj.provider_code && obj.model_id) return { provider_code: obj.provider_code, model_id: obj.model_id };
+  if (obj.provider_code && obj.model_id) {
+    const parsed: DefaultModel = { provider_code: obj.provider_code, model_id: obj.model_id };
+    // `auth_method` only ever carries 'oauth' on disk; api-key tiers keep the
+    // old two-key shape so existing rows stay byte-identical.
+    if (obj.auth_method === 'oauth') parsed.auth_method = 'oauth';
+    return parsed;
+  }
   return null;
+}
+
+/**
+ * The stored tier value. `auth_method` is written only for subscription
+ * tiers, so an api-key tier saves exactly the shape it always did.
+ */
+function settingValue(provider_code: string, model_id: string, auth_method?: AiAuthMethod) {
+  return auth_method === 'oauth'
+    ? { provider_code, model_id, auth_method }
+    : { provider_code, model_id };
 }
 
 const emptyCategoryDefaults: CategoryDefaults = { chat: null, image: null, tts: null, video: null, search: null, stt: null, vision: null, agent: null, agent_triage: null, embedding: null };
@@ -103,13 +120,13 @@ export function useAIConfiguration() {
 export function useSetDefaultModel() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: async ({ provider_code, model_id, category }: { provider_code: string; model_id: string; category?: ModelCategory }) => {
+    mutationFn: async ({ provider_code, model_id, category, auth_method }: { provider_code: string; model_id: string; category?: ModelCategory; auth_method?: AiAuthMethod }) => {
       const key = category ? `default_ai_model_${category}` : 'default_ai_model';
       const { error } = await supabase
         .from('system_settings')
-        .upsert({ key, value: { provider_code, model_id }, updated_at: new Date().toISOString() }, { onConflict: 'key' });
+        .upsert({ key, value: settingValue(provider_code, model_id, auth_method), updated_at: new Date().toISOString() }, { onConflict: 'key' });
       if (error) throw new Error(error.message);
-      return { success: true, provider_code, model_id, category };
+      return { success: true, provider_code, model_id, category, auth_method };
     },
     onSuccess: () => { queryClient.invalidateQueries({ queryKey: ['ai-config'] }); },
   });
@@ -118,13 +135,13 @@ export function useSetDefaultModel() {
 export function useSetFallbackModel() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: async ({ provider_code, model_id, category }: { provider_code: string; model_id: string; category: ModelCategory }) => {
+    mutationFn: async ({ provider_code, model_id, category, auth_method }: { provider_code: string; model_id: string; category: ModelCategory; auth_method?: AiAuthMethod }) => {
       const key = `default_ai_model_${category}_fallback`;
       const { error } = await supabase
         .from('system_settings')
-        .upsert({ key, value: { provider_code, model_id }, updated_at: new Date().toISOString() }, { onConflict: 'key' });
+        .upsert({ key, value: settingValue(provider_code, model_id, auth_method), updated_at: new Date().toISOString() }, { onConflict: 'key' });
       if (error) throw new Error(error.message);
-      return { success: true, provider_code, model_id, category };
+      return { success: true, provider_code, model_id, category, auth_method };
     },
     onSuccess: () => { queryClient.invalidateQueries({ queryKey: ['ai-config'] }); },
   });
@@ -133,13 +150,13 @@ export function useSetFallbackModel() {
 export function useSetFallback2Model() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: async ({ provider_code, model_id, category }: { provider_code: string; model_id: string; category: ModelCategory }) => {
+    mutationFn: async ({ provider_code, model_id, category, auth_method }: { provider_code: string; model_id: string; category: ModelCategory; auth_method?: AiAuthMethod }) => {
       const key = `default_ai_model_${category}_fallback_2`;
       const { error } = await supabase
         .from('system_settings')
-        .upsert({ key, value: { provider_code, model_id }, updated_at: new Date().toISOString() }, { onConflict: 'key' });
+        .upsert({ key, value: settingValue(provider_code, model_id, auth_method), updated_at: new Date().toISOString() }, { onConflict: 'key' });
       if (error) throw new Error(error.message);
-      return { success: true, provider_code, model_id, category };
+      return { success: true, provider_code, model_id, category, auth_method };
     },
     onSuccess: () => { queryClient.invalidateQueries({ queryKey: ['ai-config'] }); },
   });
