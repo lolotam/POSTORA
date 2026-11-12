@@ -277,6 +277,7 @@ export function AiProvidersCard() {
               <div className="flex gap-2">
                 <Input
                   type={showProviderKey ? 'text' : 'password'}
+                  autoComplete="new-password"
                   placeholder="Enter API key..."
                   value={providerApiKey}
                   onChange={(e) => setProviderApiKey(e.target.value)}
@@ -430,7 +431,7 @@ function ExternalServiceCard({ name, description, hasKey, onSaveKey, onTest, isS
       {expanded && (
         <div className="space-y-2 pt-1 border-t border-border">
           <div className="flex gap-2">
-            <Input type={showKey ? 'text' : 'password'} placeholder="Enter API key..." value={apiKey}
+            <Input type={showKey ? 'text' : 'password'} autoComplete="new-password" placeholder="Enter API key..." value={apiKey}
               onChange={(e) => setApiKey(e.target.value)} className="h-7 text-xs flex-1" />
             <Button size="sm" variant="ghost" className="h-7 px-2 text-[10px]" onClick={() => setShowKey(!showKey)}>
               {showKey ? 'Hide' : 'Show'}
