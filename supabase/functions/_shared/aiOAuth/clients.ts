@@ -271,10 +271,10 @@ const openrouterClient: OAuthClient = {
   createState: () => hexRandom(),
   authorizeUrl(challenge, state) {
     const params = new URLSearchParams({
-      // The state rides in the callback's own query string as well: OpenRouter
-      // documents that it echoes the state back, but a callback that carries
-      // it binds the attempt even when it does not.
-      callback_url: `${this.redirectUri()}?state=${state}`,
+      // OpenRouter documents that it returns `state` unchanged on the callback.
+      // The callback itself carries no query string: a provider that appends
+      // `?code=` to it would otherwise produce an address with two `?`.
+      callback_url: this.redirectUri(),
       code_challenge: challenge,
       code_challenge_method: 'S256',
       state,

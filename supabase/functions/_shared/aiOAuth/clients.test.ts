@@ -37,7 +37,7 @@ Deno.test("the openrouter client is a callback flow and the other two stay paste
   assertEquals(OAUTH_CLIENTS["openai-codex"].flow, "pkce_paste");
 });
 
-Deno.test("the openrouter authorize URL carries the S256 challenge and the state twice", () => {
+Deno.test("the openrouter authorize URL carries the S256 challenge, the state and a bare callback", () => {
   const url = new URL(OAUTH_CLIENTS.openrouter.authorizeUrl("challenge-1", "state-1"));
 
   assertEquals(url.host, "openrouter.ai");
@@ -46,11 +46,11 @@ Deno.test("the openrouter authorize URL carries the S256 challenge and the state
   assertEquals(url.searchParams.get("code_challenge_method"), "S256");
   assertEquals(url.searchParams.get("state"), "state-1");
 
-  // The state rides in the callback's own query string as well, so the attempt
-  // is bound even when the provider does not echo the state back.
+  // OpenRouter appends the code to the callback; a callback that already had a
+  // query string could come back with two `?` and lose the code.
   const callback = new URL(url.searchParams.get("callback_url") ?? "");
   assertEquals(callback.pathname, "/admin/settings/ai/oauth/openrouter/callback");
-  assertEquals(callback.searchParams.get("state"), "state-1");
+  assertEquals(callback.search, "");
 });
 
 Deno.test("the callback origin comes from PUBLIC_APP_ORIGIN and never from a request header", () => {
