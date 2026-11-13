@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, fireEvent } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter } from "react-router-dom";
 import { expect, it, vi, beforeEach, type Mock } from "vitest";
@@ -20,6 +20,18 @@ const whatsappAccount = {
   is_active: false,
 };
 
+/** A Meta-hosted WhatsApp account: it has no OAuth branch and reconnects in product. */
+const metaWhatsappAccount = {
+  id: "wa-meta-1",
+  platform: "whatsapp",
+  platform_username: "Postora Meta",
+  needs_reauth: true,
+  last_refresh_error: null,
+  social_profile_id: "profile-1",
+  connection_mode: "cloud_api",
+  is_active: true,
+};
+
 vi.mock("@/hooks/useAuth", () => ({
   useAuth: () => ({ user: { id: "user-1" } }),
 }));
@@ -38,6 +50,12 @@ vi.mock("@/hooks/useProfileOAuth", () => ({
     selectInstagramFlow: vi.fn(),
     clearInstagramFlowRequest: vi.fn(),
   }),
+}));
+
+const reconnectWhatsApp = vi.fn();
+
+vi.mock("@/hooks/useWhatsAppConnect", () => ({
+  useWhatsAppReconnect: () => ({ mutate: reconnectWhatsApp, isPending: false }),
 }));
 
 /** The builder answers any number of filters, and each call answers with its own result. */
@@ -83,4 +101,17 @@ it("calls a dropped WhatsApp session disconnected, not expired", async () => {
 
   expect(await screen.findByText(/disconnected/i)).toBeInTheDocument();
   expect(screen.queryByText(/connection expired/i)).not.toBeInTheDocument();
+});
+
+it("reconnects a Meta WhatsApp account through the WhatsApp flow, not OAuth", async () => {
+  answerWith([
+    { data: [metaWhatsappAccount], error: null },
+    { data: [], error: null },
+  ]);
+  renderBanner();
+
+  const button = await screen.findByRole("button", { name: /reconnect whatsapp/i });
+  fireEvent.click(button);
+
+  expect(reconnectWhatsApp).toHaveBeenCalledWith("wa-meta-1");
 });

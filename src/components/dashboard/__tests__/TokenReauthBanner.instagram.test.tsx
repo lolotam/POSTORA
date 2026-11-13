@@ -74,6 +74,10 @@ vi.mock("@/hooks/useProfileOAuth", async () => {
   };
 });
 
+vi.mock("@/hooks/useWhatsAppConnect", () => ({
+  useWhatsAppReconnect: () => ({ mutate: vi.fn(), isPending: false }),
+}));
+
 const renderBanner = () =>
   render(
     <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>

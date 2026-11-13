@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { AlertTriangle, RefreshCw, X } from "lucide-react";
 import { PlatformIcon, getPlatformName, ExtendedPlatform } from "@/components/PlatformIcon";
 import { useProfileOAuth } from "@/hooks/useProfileOAuth";
+import { useWhatsAppReconnect } from "@/hooks/useWhatsAppConnect";
 import { InstagramConnectDialog, type InstagramFlow } from "@/components/profiles/InstagramConnectDialog";
 import { useState } from "react";
 import { Platform } from "@/lib/types";
@@ -26,6 +27,10 @@ export function TokenReauthBanner() {
   } = useProfileOAuth();
 
   const { data: accountsNeedingReauth = [] } = useAccountsNeedingReconnect();
+
+  // A Meta-hosted WhatsApp account has no OAuth branch to fall back on, so it reconnects
+  // through the WhatsApp reconnect flow instead.
+  const reconnectWhatsApp = useWhatsAppReconnect();
 
   // Filter out dismissed accounts
   const visibleAccounts = accountsNeedingReauth.filter(
@@ -119,6 +124,24 @@ export function TokenReauthBanner() {
                         <RefreshCw className="w-3 h-3 me-1" />
                         {t("reauth.reconnectWhatsapp", "Reconnect WhatsApp")}
                       </Link>
+                    </Button>
+                  ) : target.kind === "whatsapp_meta" ? (
+                    <Button
+                      size="sm"
+                      onClick={() => reconnectWhatsApp.mutate(account.id)}
+                      disabled={reconnectWhatsApp.isPending}
+                    >
+                      {reconnectWhatsApp.isPending ? (
+                        <>
+                          <RefreshCw className="w-3 h-3 me-1 animate-spin" />
+                          {t("reauth.connecting", "Connecting...")}
+                        </>
+                      ) : (
+                        <>
+                          <RefreshCw className="w-3 h-3 me-1" />
+                          {t("reauth.reconnectWhatsapp", "Reconnect WhatsApp")}
+                        </>
+                      )}
                     </Button>
                   ) : (
                     <Button

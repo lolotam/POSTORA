@@ -14,14 +14,13 @@ describe("reconnectTargetFor", () => {
     }
   });
 
-  it("routes a WhatsApp account that is not a QR account through OAuth", () => {
-    // The Meta WhatsApp modes do reconnect through OAuth; only the Evolution QR session
-    // needs a new QR code.
-    expect(reconnectTargetFor({ platform: "whatsapp", connection_mode: "cloud_api" })).toEqual({
-      kind: "oauth",
-    });
-    expect(reconnectTargetFor({ platform: "whatsapp", connection_mode: null })).toEqual({
-      kind: "oauth",
-    });
+  it("routes a Meta WhatsApp account to the WhatsApp reconnect flow", () => {
+    // The OAuth flow has no WhatsApp branch, so a Meta WhatsApp account must not be sent
+    // there: the button would spin and reconnect nothing.
+    for (const connection_mode of ["cloud_api", "coexistence", null]) {
+      expect(reconnectTargetFor({ platform: "whatsapp", connection_mode })).toEqual({
+        kind: "whatsapp_meta",
+      });
+    }
   });
 });
