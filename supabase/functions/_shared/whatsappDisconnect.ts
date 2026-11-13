@@ -45,7 +45,8 @@ export interface WhatsAppDisconnectAdmin {
     select(columns: string): WhatsAppDisconnectSelect;
     update(values: Record<string, unknown>): WhatsAppDisconnectUpdate;
   };
-  /** Optional: a client without rpc cannot record the deliberate-disconnect marker. */
+  /** Optional for a Meta-mode disconnect. An Evolution QR disconnect requires it: without
+   *  the deliberate-disconnect marker the teardown refuses to start. */
   rpc?(fn: string, args: Record<string, unknown>): PromiseLike<{ error: unknown }>;
 }
 
@@ -221,11 +222,36 @@ export async function reconnectWhatsAppAccount(
   return { deactivated: false, evolution: "skipped", graph, warnings };
 }
 
+/**
+ * Stamps the deliberate-disconnect marker. Raised, never downgraded to a warning: a teardown
+ * without it would let the watcher alert the owner about the session they closed on purpose.
+ */
+async function markDeliberateDisconnect(
+  accountId: string,
+  deps: WhatsAppDisconnectDeps,
+): Promise<void> {
+  if (!deps.admin.rpc) {
+    throw new Error("Deliberate disconnect marker cannot be recorded: the admin client has no rpc");
+  }
+  const { error } = await deps.admin.rpc("mark_whatsapp_user_disconnected", {
+    p_account_id: accountId,
+  });
+  if (error) throw error;
+}
+
 export async function disconnectWhatsAppAccount(
   input: WhatsAppDisconnectInput,
   deps: WhatsAppDisconnectDeps,
 ): Promise<WhatsAppDisconnectResult> {
   const isEvolution = input.connectionMode === "evolution_qr";
+  // A disconnect the owner asked for is not an outage, so the watcher must never alert them
+  // about it (spec 2026-11-13-whatsapp-disconnect-alerts-design.md). The marker is recorded
+  // FIRST and is mandatory: once the remote session is gone the watcher sees a terminal state,
+  // so an unmarked teardown is exactly the false alert the rule forbids. If it fails, nothing
+  // has been torn down yet and the owner retries. Only an Evolution QR account needs it: the
+  // watcher never polls a Meta-mode account.
+  if (isEvolution) await markDeliberateDisconnect(input.accountId, deps);
+
   const remote = isEvolution
     ? await logoutEvolutionSession(input, deps)
     : await unsubscribeWabaWebhook(input, deps);
@@ -241,24 +267,6 @@ export async function disconnectWhatsAppAccount(
       .eq("id", input.accountId);
   const { error: deactivateError } = await deactivation;
   if (deactivateError) throw deactivateError;
-
-  // A disconnect the owner asked for is not an outage, so the watcher must not alert them
-  // about it later (spec 2026-11-13-whatsapp-disconnect-alerts-design.md). Only an Evolution
-  // QR account needs the marker: a Meta-mode account has no QR to rescan and the watcher
-  // never polls it. Best effort, like the steps above: the disconnect has already
-  // succeeded, so a failed mark is reported as a warning and never as an error.
-  if (isEvolution && deps.admin.rpc) {
-    try {
-      const { error: markError } = await deps.admin.rpc("mark_whatsapp_user_disconnected", {
-        p_account_id: input.accountId,
-      });
-      if (markError) {
-        remote.warnings.push(`Deliberate disconnect marker not recorded: ${warningText(markError)}`);
-      }
-    } catch (e) {
-      remote.warnings.push(`Deliberate disconnect marker not recorded: ${warningText(e)}`);
-    }
-  }
 
   return {
     deactivated: true,

@@ -106,16 +106,16 @@ Deno.serve(async (req) => {
         });
         if (error) throw error;
       },
-      async markFlagged(accountId: string, reason: string): Promise<void> {
-        // is_active goes with needs_reauth: a dead Evolution session is inactive by design
-        // (the webhook deactivates the row the same way), and the reconnectable list and the
-        // QR setup page only offer an INACTIVE account. Leaving the row active would show the
-        // red banner but leave the owner unable to resume the session.
-        const { error } = await admin
-          .from("social_accounts")
-          .update({ is_active: false, needs_reauth: true, last_refresh_error: reason })
-          .eq("id", accountId);
+      async markFlagged(accountId: string, episodeId: string, reason: string): Promise<boolean> {
+        // Conditional on the observed episode still being open (and the account not marked as
+        // deliberately disconnected), so a reconnect between observe and flag always wins.
+        const { data, error } = await admin.rpc("flag_whatsapp_disconnect_episode", {
+          p_account_id: accountId,
+          p_episode_id: episodeId,
+          p_reason: reason,
+        });
         if (error) throw error;
+        return data === true;
       },
       async dispatchAlert(accountId: string): Promise<void> {
         // The same service-role bearer relationship refresh-tokens has with

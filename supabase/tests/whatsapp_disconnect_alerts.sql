@@ -232,6 +232,35 @@ BEGIN
   ASSERT public.clear_whatsapp_disconnect_episode(acc) = false,
     'E13 clearing twice is a no-op';
 
+  -- ---------- E18: the watcher flags only while the observed episode is still open
+  -- Observe and flag are two calls. A reconnect or a deliberate disconnect between them must
+  -- win: a stale flag would re-raise the banner on a healthy or deliberately closed account.
+  ep := public.observe_whatsapp_disconnect_state(acc, 'close', true);
+  ASSERT ep IS NOT NULL, 'E18 a fresh episode opens';
+  ASSERT public.flag_whatsapp_disconnect_episode(acc, 'not-the-open-episode', 'wda reason') = false,
+    'E18 a flag for another episode is refused';
+  ASSERT (SELECT NOT needs_reauth AND is_active FROM public.social_accounts WHERE id = acc),
+    'E18 the refused flag wrote nothing';
+  ASSERT public.flag_whatsapp_disconnect_episode(acc, ep->>'episode_id', 'wda reason') = true,
+    'E18 the open episode is flagged';
+  ASSERT (SELECT needs_reauth AND NOT is_active AND last_refresh_error = 'wda reason'
+            FROM public.social_accounts WHERE id = acc),
+    'E18 the flag deactivates the row and raises the reconnect state';
+  UPDATE public.social_accounts SET is_active = true WHERE id = acc;
+  ASSERT public.flag_whatsapp_disconnect_episode(acc, ep->>'episode_id', 'wda reason') = false,
+    'E18 a flag that arrives after the reconnect is refused';
+  ASSERT (SELECT NOT needs_reauth AND is_active FROM public.social_accounts WHERE id = acc),
+    'E18 the reconnect survives the stale flag';
+  ep := public.observe_whatsapp_disconnect_state(acc, 'close', true);
+  ASSERT public.mark_whatsapp_user_disconnected(acc) = true,
+    'E18 the owner disconnects on purpose after the observation';
+  ASSERT public.flag_whatsapp_disconnect_episode(acc, ep->>'episode_id', 'wda reason') = false,
+    'E18 a deliberately disconnected account is never flagged';
+  ASSERT public.flag_whatsapp_disconnect_episode(acc_cloud, ep->>'episode_id', 'wda reason') = false,
+    'E18 a Cloud API WhatsApp row is never flagged';
+  UPDATE public.social_accounts SET is_active = false WHERE id = acc;
+  UPDATE public.social_accounts SET is_active = true WHERE id = acc;
+
   -- --------------------------------- E14: a foreign account is never touched
   ASSERT public.observe_whatsapp_disconnect_state(acc_cloud, 'close', true) IS NULL,
     'E14 a Cloud API WhatsApp row opens no episode';
@@ -284,6 +313,15 @@ BEGIN
   ASSERT NOT has_function_privilege('anon',
         'public.mark_whatsapp_user_disconnected(uuid)', 'EXECUTE'),
     'E15 the deliberate marker is not anon-callable';
+  ASSERT NOT has_function_privilege('authenticated',
+        'public.flag_whatsapp_disconnect_episode(uuid,text,text)', 'EXECUTE'),
+    'E15 the conditional flag is not browser-callable';
+  ASSERT NOT has_function_privilege('anon',
+        'public.flag_whatsapp_disconnect_episode(uuid,text,text)', 'EXECUTE'),
+    'E15 the conditional flag is not anon-callable';
+  ASSERT has_function_privilege('service_role',
+        'public.flag_whatsapp_disconnect_episode(uuid,text,text)', 'EXECUTE'),
+    'E15 the service role may flag';
   ASSERT NOT has_function_privilege('authenticated',
         'public.get_cron_functions_base_url()', 'EXECUTE'),
     'E15 the base url resolver is not browser-callable';

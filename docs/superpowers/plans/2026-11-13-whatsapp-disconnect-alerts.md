@@ -130,6 +130,9 @@ add behaviour rather than correct a stated one:
 - RPC `public.mark_whatsapp_disconnect_emailed(p_account_id uuid, p_kind text, p_episode_id uuid) → boolean`
   (SUPERSEDED, the plan first had no episode id)
 - RPC `public.clear_whatsapp_disconnect_episode(p_account_id uuid) → boolean`
+-- SUPERSEDED (review round): the shipped mark also CLOSES the open episode with its claims
+-- and email markers, and clears needs_reauth / last_refresh_error, so a deliberate disconnect
+-- leaves no alert behind. The teardown calls it FIRST and treats a failure as fatal (spec §8).
 - RPC `public.mark_whatsapp_user_disconnected(p_account_id uuid) → boolean`
 - Trigger `social_accounts_clear_whatsapp_disconnect_on_reactivate` on `social_accounts`
 - Function `public.get_cron_functions_base_url() → text`
@@ -452,6 +455,9 @@ GRANT EXECUTE ON FUNCTION public.mark_whatsapp_disconnect_emailed(uuid, text, uu
 -- 5. Close the episode: the account is healthy again, or it has been reconnected. The red
 --    flag goes with it. Only evolution_qr rows are touched: on every other platform
 --    needs_reauth and last_refresh_error belong to the token-refresh path.
+-- SUPERSEDED (review round): the shipped clear REFUSES a deliberately disconnected row (it
+-- returns false and touches nothing) and never removes whatsapp_user_disconnected_at. Only the
+-- reactivation trigger removes that marker. The body below is the first draft.
 CREATE OR REPLACE FUNCTION public.clear_whatsapp_disconnect_episode(p_account_id uuid)
 RETURNS boolean
 LANGUAGE plpgsql
@@ -706,6 +712,9 @@ export async function runWatch(deps: WatchDeps): Promise<WatchSummary> {
       if (terminal) summary.episodes += 1;
       if (!isAlertDue(episode, deps.now())) continue;
 
+      // SUPERSEDED (review round): the shipped flag is conditional on the observed episode
+      // (flag_whatsapp_disconnect_episode) and returns false when the owner reconnected or
+      // disconnected on purpose since the observation; no alert is dispatched then.
       await deps.markFlagged(candidate.id, DISCONNECT_REASON);
       summary.flagged += 1;
       await deps.dispatchAlert(candidate.id);
@@ -971,6 +980,10 @@ export interface AdminProfile {
   full_name: string | null;
 }
 
+// SUPERSEDED (review round): the shipped claim returns the open episode's id (or null), and the
+// mark takes that episode id, so a send is bound to the episode it was claimed for. send() also
+// carries an idempotency key derived from the episode, so a retried send is delivered at most
+// once. See Task 5's shipped snippet and supabase/functions/send-whatsapp-disconnect-alert.
 export interface SendAlertsDeps {
   loadAccount(accountId: string): Promise<AlertAccount | null>;
   loadOwnerProfile(userId: string): Promise<OwnerProfile | null>;
@@ -1009,6 +1022,9 @@ function accountLabel(account: AlertAccount): string {
   return escapeHtml(account.platform_username || "WhatsApp");
 }
 
+// SUPERSEDED (review round): the shipped admin email has NO reconnect button. The setup page
+// lists only the accounts of whoever opens it, so an admin cannot reach the affected account
+// through it (spec §6.3). Only the owner email renders the CTA.
 function emailShell(headerGradient: string, headline: string, body: string, cta: string): string {
   return `
     <!DOCTYPE html>
@@ -1423,15 +1439,18 @@ git commit -- supabase/functions/_shared/evolutionQrAccount.ts supabase/function
 - Create: `src/hooks/__tests__/useAccountsNeedingReconnect.test.tsx`
 
 **Interfaces — Produces:**
-- `reconnectTargetFor(account): { kind: "oauth" } | { kind: "link"; path: string }`
+- `reconnectTargetFor(account): { kind: "oauth" } | { kind: "link"; path: string } | { kind: "whatsapp_meta" }`
+  (SUPERSEDED, the plan first had no `whatsapp_meta` target)
 - `useAccountsNeedingReconnect()` — a React Query hook returning the accounts the banner must render.
 
 - [ ] **Step 1: Write the Vitest tests first.**
   `src/lib/__tests__/reconnectTarget.test.ts`:
   1. A WhatsApp `evolution_qr` account resolves to `{ kind: "link", path: "/messaging/whatsapp/setup" }`.
   2. A Meta account (facebook, instagram, …) resolves to `{ kind: "oauth" }`.
-  3. A WhatsApp account that is **not** `evolution_qr` resolves to `{ kind: "oauth" }` — the Meta
-     WhatsApp modes do reconnect through OAuth.
+  3. ~~A WhatsApp account that is **not** `evolution_qr` resolves to `{ kind: "oauth" }`.~~
+     **SUPERSEDED (review round):** it resolves to `{ kind: "whatsapp_meta" }`. The OAuth flow has
+     no WhatsApp branch (spec §5), so a `cloud_api` or `coexistence` account sent there would never
+     reconnect. See `src/lib/reconnectTarget.ts`.
 
   `src/hooks/__tests__/useAccountsNeedingReconnect.test.tsx`:
   1. The hook queries `social_accounts` twice: once for `is_active = true` rows with
@@ -1580,7 +1599,9 @@ const target = reconnectTargetFor(account);
 ```
 
   and render a `Link` to `target.path` when `target.kind === "link"`, keeping the existing
-  `handleReconnectPlatform` call for `target.kind === "oauth"`. The link button must read
+  `handleReconnectPlatform` call for `target.kind === "oauth"`. **SUPERSEDED (review round):** a
+  `target.kind === "whatsapp_meta"` account re-subscribes its WABA webhook instead; it never enters
+  the OAuth flow, which has no WhatsApp branch. The link button must read
   `t("reauth.reconnectWhatsapp", "Reconnect WhatsApp")`; the OAuth button keeps
   `t("reauth.reconnect", "Reconnect")`.
 

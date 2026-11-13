@@ -60,7 +60,12 @@ export interface WatchDeps {
   readState(instanceName: string): Promise<string | null>;
   observe(accountId: string, state: string, terminal: boolean): Promise<Episode | null>;
   clear(accountId: string): Promise<void>;
-  markFlagged(accountId: string, reason: string): Promise<void>;
+  /**
+   * Flags the account for reconnect, but only while `episodeId` is still its open episode.
+   * False means the owner reconnected or disconnected on purpose since the observation, and
+   * the watcher then sends no alert.
+   */
+  markFlagged(accountId: string, episodeId: string, reason: string): Promise<boolean>;
   dispatchAlert(accountId: string): Promise<void>;
   markPolled(instanceName: string, at: Date): Promise<void>;
   now(): Date;
@@ -131,7 +136,8 @@ async function applyAccountState(
     if (terminal) outcome.episodes = 1;
     if (!isAlertDue(episode, deps.now())) return outcome;
 
-    await deps.markFlagged(candidate.id, DISCONNECT_REASON);
+    const flagged = await deps.markFlagged(candidate.id, episode.episode_id, DISCONNECT_REASON);
+    if (!flagged) return outcome;
     outcome.flagged = 1;
     await deps.dispatchAlert(candidate.id);
     outcome.alerted = 1;

@@ -26,6 +26,7 @@ interface Recorder {
   calls: string[];
   observeCalls: Array<{ accountId: string; state: string; terminal: boolean }>;
   polled: Array<{ instanceName: string; at: Date }>;
+  flaggedEpisodes: string[];
 }
 
 /**
@@ -37,8 +38,9 @@ function fakeDeps(
   states: Record<string, string | null>,
   observed: Episode | null = episode(minutesAgo(30), minutesAgo(30)),
   failingReads: Set<string> = new Set(),
+  episodeStillOpen = true,
 ): { deps: WatchDeps; rec: Recorder } {
-  const rec: Recorder = { calls: [], observeCalls: [], polled: [] };
+  const rec: Recorder = { calls: [], observeCalls: [], polled: [], flaggedEpisodes: [] };
   const deps: WatchDeps = {
     listCandidates: (limit) => {
       rec.calls.push("listCandidates");
@@ -59,9 +61,10 @@ function fakeDeps(
       rec.calls.push(`clear:${accountId}`);
       return Promise.resolve();
     },
-    markFlagged: (accountId) => {
+    markFlagged: (accountId, episodeId) => {
       rec.calls.push(`markFlagged:${accountId}`);
-      return Promise.resolve();
+      rec.flaggedEpisodes.push(episodeId);
+      return Promise.resolve(episodeStillOpen);
     },
     dispatchAlert: (accountId) => {
       rec.calls.push(`dispatchAlert:${accountId}`);
@@ -163,6 +166,25 @@ Deno.test("an episode that keeps flapping still alerts at the backstop", async (
   assertEquals(rec.calls.includes("dispatchAlert:acc-1"), true);
   assertEquals(summary.flagged, 1);
   assertEquals(summary.alerted, 1);
+});
+
+Deno.test("an episode that closed after the observation is neither flagged nor alerted", async () => {
+  // The owner reconnected (or disconnected on purpose) between observe and flag: the
+  // conditional flag refuses, so the banner is not re-raised and no email goes out.
+  const { deps, rec } = fakeDeps(
+    [{ id: "acc-1", instance_name: "postora_acc-1" }],
+    { "acc-1": "close" },
+    episode(minutesAgo(30), minutesAgo(30)),
+    new Set(),
+    false,
+  );
+
+  const summary = await runWatch(deps);
+
+  assertEquals(rec.flaggedEpisodes, ["ep-1"]);
+  assertEquals(rec.calls.includes("dispatchAlert:acc-1"), false);
+  assertEquals(summary.flagged, 0);
+  assertEquals(summary.alerted, 0);
 });
 
 Deno.test("an unknown state skips the account entirely", async () => {

@@ -181,20 +181,24 @@ Deno.test("a Meta-mode disconnect is not marked as deliberate", async () => {
   assertEquals(rpcs, []);
 });
 
-Deno.test("a failed deliberate mark is reported as a warning, not as a failed disconnect", async () => {
-  const { admin } = recordingAdmin({
+Deno.test("a failed deliberate mark stops the disconnect before anything is torn down", async () => {
+  // Without the marker the watcher would see the closed session as an outage and email the
+  // owner about a disconnect they asked for, so the teardown must not start unmarked.
+  const { admin, updates } = recordingAdmin({
     instanceRow: { instance_name: "postora_acc-1" },
     rpcError: { message: "mark failed" },
   });
+  const evolutionCalls: Array<{ url: string; method?: string }> = [];
 
-  const result = await disconnectWhatsAppAccount(
-    { accountId: "acc-1", workspaceId: "ws-1", connectionMode: "evolution_qr" },
-    { admin, evolution: evolutionRecorder([]), fetcher: graphRecorder([]) },
+  await assertRejects(() =>
+    disconnectWhatsAppAccount(
+      { accountId: "acc-1", workspaceId: "ws-1", connectionMode: "evolution_qr" },
+      { admin, evolution: evolutionRecorder(evolutionCalls), fetcher: graphRecorder([]) },
+    )
   );
 
-  assertEquals(result.deactivated, true);
-  assertEquals(result.warnings.length, 1);
-  assertEquals(result.warnings[0].includes("Deliberate disconnect marker"), true);
+  assertEquals(evolutionCalls, []);
+  assertEquals(updates, []);
 });
 
 Deno.test("a coexistence account unsubscribes the WABA webhook, never touches Evolution, and deactivates", async () => {

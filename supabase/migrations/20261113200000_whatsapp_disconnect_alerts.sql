@@ -365,6 +365,42 @@ $fn$;
 REVOKE ALL ON FUNCTION public.mark_whatsapp_user_disconnected(uuid) FROM PUBLIC, anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.mark_whatsapp_user_disconnected(uuid) TO service_role;
 
+-- 6b. The watcher flags an account only while the episode it observed is still the open one.
+--     Observing and flagging are two calls, and between them the owner may reconnect (the
+--     reactivation trigger clears the episode) or disconnect on purpose (the marker). An
+--     unconditional update would then re-raise the banner on an account that is healthy or
+--     deliberately closed. Checking the episode_id under the row lock makes the reconnect and
+--     the deliberate disconnect win. Returns false when the episode is no longer current, and
+--     the watcher then sends no alert.
+CREATE OR REPLACE FUNCTION public.flag_whatsapp_disconnect_episode(
+  p_account_id uuid,
+  p_episode_id text,
+  p_reason text
+) RETURNS boolean
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $fn$
+BEGIN
+  -- is_active goes with needs_reauth: a dead Evolution session is inactive by design (the
+  -- webhook deactivates the row the same way), and the QR setup page only offers an inactive
+  -- account for a rescan.
+  UPDATE public.social_accounts
+     SET is_active = false,
+         needs_reauth = true,
+         last_refresh_error = p_reason
+   WHERE id = p_account_id
+     AND platform = 'whatsapp'
+     AND connection_mode = 'evolution_qr'
+     AND NOT (COALESCE(account_metadata, '{}'::jsonb) ? 'whatsapp_user_disconnected_at')
+     AND account_metadata->'whatsapp_disconnect'->>'episode_id' = p_episode_id;
+
+  RETURN FOUND;
+END;
+$fn$;
+REVOKE ALL ON FUNCTION public.flag_whatsapp_disconnect_episode(uuid, text, text) FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.flag_whatsapp_disconnect_episode(uuid, text, text) TO service_role;
+
 -- 7. Reactivating a WhatsApp QR account closes its disconnect episode in the SAME statement.
 --    The reset used to be a separate best-effort call, and when it failed the old episode and
 --    its "already emailed" marker survived the reconnect: the next outage reused that episode

@@ -218,9 +218,13 @@ For each candidate account, in one run:
 6. **Terminal** → `observe_whatsapp_disconnect_state(..., terminal = true)`: opens the episode if there is
    none, keeps `since` / `first_seen` otherwise.
 7. Evaluate the debounce against the returned episode. If due:
-   - set `is_active = false`, `needs_reauth = true` and `last_refresh_error = <sanitized message>`
-     on the account row;
-   - POST to `send-whatsapp-disconnect-alert` with the account id.
+   - call `flag_whatsapp_disconnect_episode(account_id, episode_id, <sanitized message>)`, which sets
+     `is_active = false`, `needs_reauth = true` and `last_refresh_error` **only while that episode is
+     still the open one** and the account carries no deliberate-disconnect marker. Observing and
+     flagging are two calls, and an owner who reconnects (or disconnects on purpose) between them
+     must win: an unconditional update would re-raise the banner on a healthy account;
+   - if the flag was refused, stop: no alert is sent for an episode that is already over;
+   - otherwise POST to `send-whatsapp-disconnect-alert` with the account id.
 
 **Candidates are not filtered by `is_active`.** A disconnected Evolution account is inactive by
 design — the webhook deactivates the row — so an `is_active = true` filter would skip exactly
@@ -556,7 +560,13 @@ Without a marker, the watch function would poll Evolution, find no instance (or 
 the owner "please reconnect" about a disconnect they performed on purpose.
 
 The teardown therefore stamps `account_metadata.whatsapp_user_disconnected_at` through
-`mark_whatsapp_user_disconnected`. The watch function skips any account carrying that marker, and
+`mark_whatsapp_user_disconnected`, **before** it touches the remote session, and the stamp is
+mandatory: if it fails, the teardown raises before logging out or deactivating anything and the
+owner retries. Once the session is gone the watcher sees a terminal state, so a teardown that
+continued without the marker would produce exactly the false alert this section forbids. A marker
+on a row whose later deactivation then fails is harmless: the account stays active and its session
+is untouched or already gone at the owner's request, and the reactivation trigger is what removes
+the marker. The watch function skips any account carrying that marker, and
 so do the two RPCs that write: `observe_whatsapp_disconnect_state` refuses to open an episode and
 `claim_whatsapp_disconnect_email` refuses to claim, both re-checking the marker **under the row
 lock**. Without that re-check a disconnect that lands between the watcher listing the account
@@ -620,7 +630,11 @@ ALTER TABLE public.whatsapp_evolution_instances
 ```
 
 That is the **only** schema change. Everything else is `account_metadata` JSONB keys, `needs_reauth`,
-`last_refresh_error` — all already typed — plus five SECURITY DEFINER RPCs.
+`last_refresh_error` — all already typed — plus six service-role-only SECURITY DEFINER RPCs
+(`observe_whatsapp_disconnect_state`, `claim_whatsapp_disconnect_email`,
+`mark_whatsapp_disconnect_emailed`, `clear_whatsapp_disconnect_episode`,
+`mark_whatsapp_user_disconnected`, `flag_whatsapp_disconnect_episode`), the cron base-URL resolver
+`get_cron_functions_base_url()` and the reactivation trigger function.
 
 Index (ARCHITECTURE.md §23, "index foreign keys and frequent filters where appropriate"):
 
@@ -649,12 +663,33 @@ BEGIN
       'whatsapp-disconnect-watch',
       '2,7,12,17,22,27,32,37,42,47,52,57 * * * *',
       $$
-      SELECT net.http_post(url := 'https://api.postora.cloud/functions/v1/whatsapp-disconnect-watch', headers := jsonb_build_object('Content-Type','application/json','Authorization','Bearer ' || get_cron_secret()), body := '{}'::jsonb);
+      DO $do_call$
+      DECLARE
+        v_url text;
+      BEGIN
+        SELECT public.get_cron_functions_base_url() || '/functions/v1/whatsapp-disconnect-watch' INTO v_url;
+        IF v_url IS NULL THEN
+          RAISE NOTICE 'whatsapp-disconnect-watch: no functions base URL configured, skipping this run';
+          RETURN;
+        END IF;
+        PERFORM net.http_post(url := v_url, headers := jsonb_build_object('Content-Type','application/json','Authorization','Bearer ' || get_cron_secret()), body := '{}'::jsonb);
+      END
+      $do_call$;
       $$
     );
   END IF;
 END $do_cron_whatsapp_disconnect_watch$;
 ```
+
+The endpoint is resolved at run time through `public.get_cron_functions_base_url()` (the
+`app.settings.supabase_url` database setting, then an `app_settings` row with key `functions_base_url`,
+then the vault secret of that name), so a staging or self-hosted database calls its own watcher and
+never production's. A database with none of the three keeps the job but skips every call.
+
+**Rollout prerequisite.** Before relying on the watcher in production, configure one of the three
+sources (for Postora, an `app_settings` row `functions_base_url = 'https://api.postora.cloud'`) and
+verify `SELECT public.get_cron_functions_base_url();` returns that trusted URL. The migration raises
+a `WARNING` when it finds none, and every skipped run logs a `NOTICE`.
 
 The minutes are offset from the top of the hour so the run does not land on `*/5` with the other jobs.
 The cron secret is resolved at run time through `public.get_cron_secret()`; no credential is stored in
