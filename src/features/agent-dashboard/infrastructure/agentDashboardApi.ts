@@ -21,6 +21,7 @@ export async function fetchModelPrices(): Promise<ModelPrice[]> {
   const { data, error } = await supabase
     .from("ai_models")
     .select("model_id, cost_per_1m_input_tokens, cost_per_1m_output_tokens")
+    .eq("auth_method", "api_key")
     .not("cost_per_1m_input_tokens", "is", null)
     .not("cost_per_1m_output_tokens", "is", null);
   if (error) throw error;

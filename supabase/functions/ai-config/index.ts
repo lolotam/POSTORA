@@ -64,7 +64,9 @@ serve(async (req) => {
       if (action === 'list') {
         const [pRes, mRes, sRes] = await Promise.all([
           supabase.from('ai_providers').select('*').order('name'),
-          supabase.from('ai_models').select('*, ai_providers(provider_code, name)').order('name'),
+          // The catalogue is keyed by credential kind. This list is the API-key
+          // catalogue: an OAuth row of the same model_id would show up twice.
+          supabase.from('ai_models').select('*, ai_providers(provider_code, name)').eq('auth_method', 'api_key').order('name'),
           // Widened beyond the default_ai_model* tier rows so the admin UI can also
           // read the model_catalog_synced_at_<code> rows sync-models writes, and the
           // agent_triage_enabled on/off switch.
@@ -292,6 +294,8 @@ serve(async (req) => {
           description: body.description, capabilities: body.capabilities || ['chat'],
           context_limit: body.context_limit, cost_per_1m_input_tokens: body.cost_per_1m_input_tokens,
           cost_per_1m_output_tokens: body.cost_per_1m_output_tokens,
+          // The catalogue is keyed by credential kind; an admin adds an API-key model.
+          auth_method: 'api_key',
         }).select().single();
         if (error) throw new Error(error.message);
         return new Response(JSON.stringify({ success: true, model: data }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });

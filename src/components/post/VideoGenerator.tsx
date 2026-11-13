@@ -68,6 +68,7 @@ export function VideoGenerator({
     void supabase
       .from("ai_models")
       .select("model_id,name,metadata,capabilities,is_active")
+      .eq("auth_method", "api_key")
       .eq("is_active", true)
       .contains("capabilities", ["video"])
       .then(({ data }) => {

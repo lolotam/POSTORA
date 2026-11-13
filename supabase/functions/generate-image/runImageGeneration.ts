@@ -80,6 +80,7 @@ async function lookupModelByProviderAndId(
   const { data } = await supabaseAdmin
     .from('ai_models')
     .select('model_id, admin_params, ai_providers!inner(provider_code, api_endpoint, api_key_env_var, api_type, is_active)')
+    .eq('auth_method', 'api_key')
     .eq('model_id', model_id)
     .eq('ai_providers.provider_code', provider_code)
     .eq('is_active', true)
@@ -126,6 +127,7 @@ async function resolveModelChain(supabaseAdmin: SupabaseClient, requestedModelId
     const { data: rows } = await supabaseAdmin
       .from('ai_models')
       .select('model_id, admin_params, ai_providers!inner(provider_code, api_endpoint, api_key_env_var, api_type, is_active)')
+      .eq('auth_method', 'api_key')
       .eq('model_id', requestedModelId)
       .eq('is_active', true)
       .contains('capabilities', ['image']);
@@ -636,7 +638,7 @@ export function defaultImageRunDeps(admin: SupabaseClient, overrides: Pick<Image
       // so nothing else would ever collect them.
       const stagedPaths: string[] = [];
       try {
-        const { data: catalog } = await admin.from('ai_models').select('metadata').eq('model_id', m.model_id).maybeSingle();
+        const { data: catalog } = await admin.from('ai_models').select('metadata').eq('auth_method', 'api_key').eq('model_id', m.model_id).maybeSingle();
         const spec = mergeModelSpec(m.model_id, catalog?.metadata, 'image');
         // Spec defaults are the floor, the administrator overrides them, and the
         // user's aspect ratio is applied last. sanitizeParams then drops anything

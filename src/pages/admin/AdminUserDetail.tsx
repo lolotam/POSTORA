@@ -304,6 +304,7 @@ export default function AdminUserDetail() {
       const { data, error } = await supabase
         .from("ai_models")
         .select("cost_per_1m_input_tokens, cost_per_1m_output_tokens")
+        .eq("auth_method", "api_key")
         .eq("is_active", true);
       if (error) throw error;
       // Calculate average cost across all active models

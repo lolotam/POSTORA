@@ -189,7 +189,7 @@ interface ChatModelDb { from(table: string): { select(columns: string): ChatMode
 async function defaultTestModel(client: unknown, provider: { id: string; provider_code: string }): Promise<string> {
   if (TEST_MODEL_OVERRIDE[provider.provider_code]) return TEST_MODEL_OVERRIDE[provider.provider_code];
   const { data } = await (client as ChatModelDb).from('ai_models').select('model_id').eq('provider_id', provider.id)
-    .eq('is_active', true).contains('capabilities', ['chat']).order('name').limit(1).maybeSingle();
+    .eq('auth_method', 'api_key').eq('is_active', true).contains('capabilities', ['chat']).order('name').limit(1).maybeSingle();
   return data?.model_id ?? TEST_MODEL_FALLBACK[provider.provider_code] ?? 'gpt-4o-mini';
 }
 

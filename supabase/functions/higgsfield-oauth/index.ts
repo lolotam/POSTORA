@@ -111,7 +111,11 @@ async function syncHiggsfieldCatalog(db: any) {
   }
   if (!found.size) throw new Error("Higgsfield returned an empty model catalog");
   for (const [model_id, x] of found) {
-    await db.from("ai_models").upsert(
+    // The catalogue is keyed by credential kind since 20261113180000_ai_provider_health.sql:
+    // the conflict target must name auth_method too, or PostgREST answers 42P10 and the
+    // sync silently syncs nothing. auth_method is written explicitly so the row is an
+    // API-key model even if the column default ever changes.
+    const { error } = await db.from("ai_models").upsert(
       {
         provider_id: provider.id,
         model_id,
@@ -120,14 +124,18 @@ async function syncHiggsfieldCatalog(db: any) {
         capabilities: [x.capability],
         metadata: x.model.metadata,
         is_active: true,
+        auth_method: "api_key",
       },
-      { onConflict: "provider_id,model_id" },
+      { onConflict: "provider_id,model_id,auth_method" },
     );
+    // The error was never read here: a refused upsert looked like a successful sync.
+    if (error) throw new Error(`ai_models upsert failed for ${model_id}`);
   }
   const { data: stale } = await db
     .from("ai_models")
     .select("id, model_id")
     .eq("provider_id", provider.id)
+    .eq("auth_method", "api_key")
     .eq("is_active", true);
   const ids = (stale ?? []).filter((x: any) => !found.has(x.model_id)).map((x: any) => x.id);
   if (ids.length) await db.from("ai_models").update({ is_active: false }).in("id", ids);

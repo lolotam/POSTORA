@@ -95,7 +95,10 @@ export function useAIConfiguration() {
 
       const [providersResult, modelsResult, settingsResult] = await Promise.all([
         supabase.from('ai_providers').select('*').order('name'),
-        supabase.from('ai_models').select('*, ai_providers(provider_code, name)').order('name'),
+        // The catalogue is keyed by credential kind: the same model_id exists once
+        // per auth_method. This list is the API-key catalogue, so an OAuth row of
+        // the same model would show up as a second, identical model.
+        supabase.from('ai_models').select('*, ai_providers(provider_code, name)').eq('auth_method', 'api_key').order('name'),
         // Widened beyond the default_ai_model* tier rows so the admin UI can also
         // read the model_catalog_synced_at_<code> rows the sync-models action writes,
         // and the agent_triage_enabled on/off switch. Deviation from the task-5 brief:

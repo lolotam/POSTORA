@@ -160,6 +160,7 @@ async function saveKey(
 async function listModels(deps: Dependencies): Promise<Result> {
   const { data, error } = await deps.admin.from("ai_models")
     .select("id, model_id, name, ai_providers!inner(provider_code)")
+    .eq("auth_method", "api_key")
     .eq("is_active", true)
     .contains("capabilities", ["chat"])
     .in("ai_providers.provider_code", PROVIDERS);
