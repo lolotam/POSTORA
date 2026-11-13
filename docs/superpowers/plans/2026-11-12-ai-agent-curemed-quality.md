@@ -32,6 +32,10 @@
 
 **Spec:** `docs/superpowers/specs/2026-11-12-ai-agent-curemed-quality-design.md`
 
+## Operator placeholders
+
+All tenant/account identifiers in this plan are placeholders, never live identifiers. Before any operational SQL, obtain and verify the CureMed user UUID and its social-account UUID through the app. Supply `curemed_user_id` as a psql variable with `-v curemed_user_id=<VERIFIED_USER_UUID>`; replace `<CUREMED_SOCIAL_ACCOUNT_ID>` with the separately verified account UUID. Do not execute examples with an unset variable, a sentinel UUID, or an unverified account relationship. The connector INSERT remains illustrative only; save it through the app as instructed below.
+
 ## Global Constraints
 
 - Read `ARCHITECTURE.md` before touching `supabase/functions/**`. It covers §12–16 (function shape, sanitized errors), §23 (RLS/grants/types) and §26–28 (idempotency, atomic claim).
@@ -123,7 +127,7 @@ The review on 2026-11-12 found four assumptions that need live evidence first.
   1. Find the two curemedkw sources:
      ```sql
      select id,file_name,status from ai_knowledge_sources
-     where user_id='00000000-0000-4000-8000-000000000001'
+     where user_id=:'curemed_user_id'::uuid
        and file_name in ('products_rows.csv','categories_rows.csv');
      ```
   2. Re-run ingest for each one through the existing re-ingest path (Admin knowledge page "re-process", or the `ai-knowledge-ingest` invoke the page uses).
@@ -336,14 +340,14 @@ export function escalationApologyText(
      ```sql
      insert into ai_agent_tools (user_id, name, description, connector_type, tool_type, url,
        is_enabled, read_only_mode, auth_strategy, permissions, settings)
-     values ('00000000-0000-4000-8000-000000000001', 'curemedkw_product_catalog',
+     values (:'curemed_user_id'::uuid, 'curemedkw_product_catalog',
        'CureMed product catalog: names (Arabic and English), price, stock and the product page link.',
        'supabase', 'n8n_webhook', 'https://supabase.curemedkw.com', true, true, 'manual_credentials',
        '{"search_products": true, "check_stock": false, "lookup_orders": false}',
        jsonb_build_object('project_url','https://supabase.curemedkw.com','schema','public',
          'rpc_allow_list','agent_search_products','max_rows',8));
      ```
-  6. Link the account in `ai_agent_tool_accounts` (social account `00000000-0000-4000-8000-000000000001`).
+  6. Link the account in `ai_agent_tool_accounts` (social account `<CUREMED_SOCIAL_ACCOUNT_ID>`).
 
 ### Task 7: Model dry-run table
 
@@ -372,7 +376,7 @@ export function escalationApologyText(
 - [ ] Resolve review findings and verify CI on the final head.
 - [ ] Apply the handoff migrations on prod before merge, in this order:
   - Already applied: `20261112170000_agent_handoff_messages.sql` and `20261113120000_agent_handoff_messages_followup.sql`. Do not edit or reapply them.
-  - Before merge, apply only `20261113210000_agent_handoff_claim_lease.sql`. It consolidates all ten previously unapplied handoff deltas: leases, tenant/conversation binding, atomic notice persistence/replacement, payload-checked delivery and durable receipts for expired windows. Arbitrary, superseded and consumed tokens are refused even after the mode row is deleted.
+  - Before merge, apply only `20261113210000_agent_handoff_claim_lease.sql`. It consolidates all ten previously unapplied handoff deltas: leases, tenant/conversation binding, atomic notice persistence/replacement, payload-checked delivery and durable receipts for expired windows. Arbitrary, superseded and consumed tokens are refused even after the mode row is deleted. A live notice claim carries its fixed text and scoped outbox row; if the worker dies, expiry makes that notice ready for normal outbox recovery. Legacy callers without an outbox retain the existing best-effort delivery limitation.
   - The migration preserves current main's `advance_agent_reply` signature and grants. The two newer tenant-less helpers are inaccessible to service_role. The new edge build uses only `*_for_owner` transitions. The existing legacy function is a temporary compatibility surface, not a tenant boundary.
   - Before deployment, run `bash scripts/db-harness.sh` against a disposable Supabase Postgres instance. The suites prove current main's legacy transition remains callable before retirement, the new owner-bound transitions reject cross-tenant/cross-conversation writes, and the guarded retirement script removes legacy access.
 - [ ] Owner approves merge only after CI and rollout review. No deployment is performed by this implementation task.

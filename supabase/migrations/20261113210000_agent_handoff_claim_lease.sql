@@ -11,6 +11,12 @@ ALTER TABLE public.ai_conversation_modes
   ADD COLUMN IF NOT EXISTS customer_ack_claimed_at timestamptz;
 ALTER TABLE public.ai_conversation_modes
   ADD COLUMN IF NOT EXISTS customer_ack_delivered_at timestamptz;
+ALTER TABLE public.ai_conversation_modes
+  ADD COLUMN IF NOT EXISTS customer_ack_reply_id uuid REFERENCES public.pending_agent_replies(id) ON DELETE SET NULL;
+ALTER TABLE public.ai_conversation_modes
+  ADD COLUMN IF NOT EXISTS customer_ack_text text;
+CREATE INDEX IF NOT EXISTS ai_conversation_modes_ack_reply_idx
+  ON public.ai_conversation_modes(customer_ack_reply_id) WHERE customer_ack_reply_id IS NOT NULL;
 ALTER TABLE public.ai_threads
   ADD COLUMN IF NOT EXISTS unanswered_escalation_claimed_at timestamptz;
 ALTER TABLE public.pending_agent_replies
@@ -50,13 +56,28 @@ LANGUAGE plpgsql
 SECURITY DEFINER
 SET search_path = public, pg_temp
 AS $$
+DECLARE
+  v_delivered_at timestamptz := OLD.customer_ack_delivered_at;
 BEGIN
   IF OLD.customer_ack_claimed_at IS NOT NULL AND OLD.customer_ack_sent_at IS NOT NULL
      AND EXISTS (SELECT 1 FROM auth.users WHERE id = OLD.user_id) THEN
+    -- The worker may have died after claiming but before persistence. The claim
+    -- carries its exact fixed text and tenant-bound outbox row, so expiry makes
+    -- that promise durable for normal outbox recovery instead of orphaning a token.
+    IF v_delivered_at IS NULL AND OLD.customer_ack_reply_id IS NOT NULL AND OLD.customer_ack_text IS NOT NULL THEN
+      UPDATE public.pending_agent_replies AS r
+         SET status = 'ready_to_send', generated_reply = OLD.customer_ack_text,
+             generated_kind = 'human_mode_ack', generated_tool_calls = NULL,
+             lease_expires_at = clock_timestamp() - interval '1 second'
+       WHERE r.id = OLD.customer_ack_reply_id AND r.user_id = OLD.user_id
+         AND r.platform = OLD.platform AND r.conversation_id = OLD.conversation_id
+         AND r.status IN ('pending', 'running', 'ready_to_send');
+      IF FOUND THEN v_delivered_at := clock_timestamp(); END IF;
+    END IF;
     INSERT INTO public.ai_handoff_ack_receipts
       (user_id, platform, conversation_id, claim_token, delivered_at)
     VALUES (OLD.user_id, OLD.platform, OLD.conversation_id,
-            OLD.customer_ack_claimed_at, OLD.customer_ack_delivered_at)
+            OLD.customer_ack_claimed_at, v_delivered_at)
     ON CONFLICT (user_id, platform, conversation_id, claim_token)
     DO UPDATE SET delivered_at = coalesce(ai_handoff_ack_receipts.delivered_at, EXCLUDED.delivered_at);
   END IF;
@@ -195,7 +216,9 @@ CREATE OR REPLACE FUNCTION public.claim_human_mode_ack_leased(
   p_user_id uuid,
   p_platform text,
   p_conversation_id text,
-  p_lease_seconds integer DEFAULT 180
+  p_lease_seconds integer DEFAULT 180,
+  p_reply_id uuid DEFAULT NULL,
+  p_notice_text text DEFAULT NULL
 )
 RETURNS jsonb
 LANGUAGE plpgsql
@@ -223,6 +246,13 @@ BEGIN
     RETURN jsonb_build_object('result', 'delivered', 'claim_token', NULL);
   END IF;
 
+  IF p_reply_id IS NOT NULL AND (p_notice_text IS NULL OR char_length(p_notice_text) NOT BETWEEN 1 AND 4096
+     OR NOT EXISTS (SELECT 1 FROM public.pending_agent_replies r
+       WHERE r.id = p_reply_id AND r.user_id = p_user_id AND r.platform = p_platform
+         AND r.conversation_id = p_conversation_id AND r.status IN ('pending', 'running', 'ready_to_send'))) THEN
+    RETURN jsonb_build_object('result', 'failed', 'claim_token', NULL);
+  END IF;
+
   IF v_row.customer_ack_sent_at IS NULL THEN
     -- The first claim of this window. The lease is stamped with the WALL clock, not
     -- now(): now() is the transaction's timestamp, so two claims inside one
@@ -231,7 +261,9 @@ BEGIN
     UPDATE public.ai_conversation_modes
        SET customer_ack_sent_at = clock_timestamp(),
            customer_ack_claimed_at = clock_timestamp(),
-           customer_ack_delivered_at = NULL
+           customer_ack_delivered_at = NULL,
+           customer_ack_reply_id = p_reply_id,
+           customer_ack_text = p_notice_text
      WHERE id = v_row.id
        AND customer_ack_sent_at IS NULL
        AND customer_ack_delivered_at IS NULL
@@ -248,7 +280,9 @@ BEGIN
   -- sent is its clock, so it lapses like any other claim.
   IF coalesce(v_row.customer_ack_claimed_at, v_row.customer_ack_sent_at) < clock_timestamp() - v_lease THEN
     UPDATE public.ai_conversation_modes
-       SET customer_ack_claimed_at = clock_timestamp()
+       SET customer_ack_claimed_at = clock_timestamp(),
+           customer_ack_reply_id = coalesce(p_reply_id, customer_ack_reply_id),
+           customer_ack_text = coalesce(p_notice_text, customer_ack_text)
      WHERE id = v_row.id
        AND coalesce(customer_ack_claimed_at, customer_ack_sent_at) = coalesce(v_row.customer_ack_claimed_at, v_row.customer_ack_sent_at)
        AND customer_ack_delivered_at IS NULL
@@ -263,9 +297,9 @@ BEGIN
 END;
 $$;
 
-REVOKE ALL ON FUNCTION public.claim_human_mode_ack_leased(uuid, text, text, integer) FROM PUBLIC, anon, authenticated;
+REVOKE ALL ON FUNCTION public.claim_human_mode_ack_leased(uuid, text, text, integer, uuid, text) FROM PUBLIC, anon, authenticated;
 
-GRANT EXECUTE ON FUNCTION public.claim_human_mode_ack_leased(uuid, text, text, integer) TO service_role;
+GRANT EXECUTE ON FUNCTION public.claim_human_mode_ack_leased(uuid, text, text, integer, uuid, text) TO service_role;
 
 CREATE OR REPLACE FUNCTION public.complete_human_mode_ack(
   p_user_id uuid,

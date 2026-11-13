@@ -167,7 +167,7 @@ export interface AftermathSettlement {
 export async function claimHumanModeAck(
   admin: SupabaseClient,
   scope: HandoffScope,
-  options: { gateReason: string; isComment: boolean },
+  options: { gateReason: string; isComment: boolean; outboxId?: string | null; noticeText?: string },
 ): Promise<AckClaim> {
   if (options.gateReason !== "mode_human_first" || scope.platform !== "whatsapp" || options.isComment) {
     return { result: "none", claimToken: null };
@@ -177,6 +177,7 @@ export async function claimHumanModeAck(
     p_platform: scope.platform,
     p_conversation_id: scope.conversationId,
     p_lease_seconds: ACK_CLAIM_LEASE_SECONDS,
+    ...(options.outboxId && options.noticeText ? { p_reply_id: options.outboxId, p_notice_text: options.noticeText } : {}),
   });
   if (error) {
     console.error("[ai-agent-reply] human-mode ack claim failed:", error.message);
@@ -430,6 +431,8 @@ export async function settleClosedGateNotice(input: {
   const claim = await claimHumanModeAck(input.admin, input.scope, {
     gateReason: input.gateReason,
     isComment: input.isComment,
+    outboxId: input.outboxId,
+    noticeText: HUMAN_MODE_ACK[input.language],
   });
 
   if (claim.result === "failed") {
@@ -986,4 +989,21 @@ export function escalationForReply(
     since: settlement.marker,
     claimToken: settlement.claimToken,
   };
+}
+
+export interface EscalationLeaseState {
+  threadId: string;
+  marker: string;
+  claimToken: string;
+  replyDurable: boolean;
+}
+
+/** Every exit before durable persistence gives an early lease back, including setup failures. */
+export async function releaseUnpersistedEscalation(
+  admin: SupabaseClient,
+  scope: HandoffScope,
+  lease: EscalationLeaseState | null,
+): Promise<void> {
+  if (!lease || lease.replyDurable) return;
+  await releaseUnansweredEscalationClaim(admin, scope, lease.threadId, lease.marker, lease.claimToken);
 }

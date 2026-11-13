@@ -28,13 +28,23 @@ export function catalogEvidenceFromOutput(output: string): CatalogEvidence[] {
   });
 }
 
+/** Reject short/numeric identities that can match quantities or generic prose. */
+function specificIdentities(row: CatalogEvidence): string[] {
+  const identifiers = [row.id, row.sku].filter((value): value is string =>
+    Boolean(value && value.trim().length >= 6 && /\p{L}/u.test(value))
+  );
+  const names = [row.name_ar, row.name_en].filter((value): value is string =>
+    Boolean(value && (value.match(/\p{L}/gu)?.length ?? 0) >= 8 && value.trim().split(/\s+/u).length >= 2)
+  );
+  const url = row.product_url;
+  return [...identifiers, ...names, ...(url && /^https?:\/\/[^/\s]+\/\S+/i.test(url) ? [url] : [])];
+}
+
 /** Identity-match score, not a verification of every factual claim in the reply. */
 export function catalogGrounded(reply: string, rows: readonly CatalogEvidence[]): boolean {
   const text = reply.normalize("NFKC").toLowerCase();
-  return rows.some((row) => Object.values(row).some((value) => {
-    if (!value?.trim()) return false;
+  return rows.some((row) => specificIdentities(row).some((value) => {
     const identity = value.normalize("NFKC").toLowerCase();
-    // A boundary prevents a short SKU or name matching the middle of an unrelated word.
     const escaped = identity.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
     return new RegExp(`(?<![\\p{L}\\p{N}])${escaped}(?![\\p{L}\\p{N}])`, "u").test(text);
   }));

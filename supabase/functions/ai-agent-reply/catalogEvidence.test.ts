@@ -13,3 +13,11 @@ Deno.test("sandbox catalog evidence exposes identity fields and distinguishes un
   assertEquals(catalogEvidenceFromOutput('Connector "Catalog" failed'), []);
   assertEquals(catalogEvidenceFromOutput('Connector "Catalog" returned: truncated {'), []);
 });
+
+Deno.test("quantities and short generic catalog identities cannot score grounding", () => {
+  for (const identity of [{ id: "1" }, { sku: "2" }, { name_en: "Cream" }, { name_ar: "????" }]) {
+    assertEquals(catalogGrounded("Take 1 tablet, use 2 Cream ????", [identity]), false);
+  }
+  assertEquals(catalogGrounded("Heel Cream is listed", [{ name_en: "Heel Cream" }]), true);
+  assertEquals(catalogGrounded("Use TEST-HEEL-01", [{ sku: "TEST-HEEL-01" }]), true);
+});

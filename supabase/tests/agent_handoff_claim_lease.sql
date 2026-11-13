@@ -155,9 +155,9 @@ BEGIN
     'L9 the apology can be leased again';
 
   -- L10: only service_role reaches the lease functions.
-  ASSERT NOT has_function_privilege('anon', 'public.claim_human_mode_ack_leased(uuid, text, text, integer)', 'EXECUTE'),
+  ASSERT NOT has_function_privilege('anon', 'public.claim_human_mode_ack_leased(uuid, text, text, integer, uuid, text)', 'EXECUTE'),
     'L10 anon cannot claim an ack';
-  ASSERT NOT has_function_privilege('authenticated', 'public.claim_human_mode_ack_leased(uuid, text, text, integer)', 'EXECUTE'),
+  ASSERT NOT has_function_privilege('authenticated', 'public.claim_human_mode_ack_leased(uuid, text, text, integer, uuid, text)', 'EXECUTE'),
     'L10 authenticated cannot lease an ack';
   ASSERT NOT has_function_privilege('anon', 'public.complete_human_mode_ack(uuid, text, text, timestamptz)', 'EXECUTE'),
     'L10 anon cannot complete an ack';
@@ -169,7 +169,7 @@ BEGIN
     'L10 authenticated cannot complete the marker';
   ASSERT NOT has_function_privilege('authenticated', 'public.release_unanswered_escalation_claim(uuid, uuid, timestamptz, timestamptz)', 'EXECUTE'),
     'L10 authenticated cannot release the marker';
-  ASSERT has_function_privilege('service_role', 'public.claim_human_mode_ack_leased(uuid, text, text, integer)', 'EXECUTE'),
+  ASSERT has_function_privilege('service_role', 'public.claim_human_mode_ack_leased(uuid, text, text, integer, uuid, text)', 'EXECUTE'),
     'L10 service_role can claim an ack';
   ASSERT has_function_privilege('service_role', 'public.claim_unanswered_escalation(uuid, uuid, integer)', 'EXECUTE'),
     'L10 service_role can lease the marker';

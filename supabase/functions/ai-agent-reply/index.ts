@@ -89,6 +89,8 @@ import {
   readEscalationAftermath,
   releaseHumanModeAck,
   releaseUnansweredEscalationClaim,
+  releaseUnpersistedEscalation,
+  type EscalationLeaseState,
   replyIsDurable,
   settleClosedGate,
   settleClosedGateNotice,
@@ -768,6 +770,7 @@ Deno.serve(async (req) => {
   // outage floor sent something. Decides whether the outbox row may be retried (nothing
   // happened) or must go to a human (something may have).
   let sideEffectsHappened = false;
+  let earlyEscalationLease: EscalationLeaseState | null = null;
 
   try {
     const modelOverride = await resolveSandboxModelOverride({
@@ -1226,6 +1229,10 @@ Deno.serve(async (req) => {
       : undefined;
     if (preclaimedEscalation?.failed) {
       throw new Error("the unanswered-escalation claim could not be read");
+    }
+    if (preclaimedEscalation?.claimed && preclaimedEscalation.marker && preclaimedEscalation.token) {
+      earlyEscalationLease = { threadId: thread.id, marker: preclaimedEscalation.marker,
+        claimToken: preclaimedEscalation.token, replyDurable: false };
     }
 
     const { data: historyRows, error: historyError } = historyResult;
@@ -2093,12 +2100,14 @@ Deno.serve(async (req) => {
           // the customer received, not what this invocation meant to send.
           replyText = delivered.text;
         }
+        if (earlyEscalationLease) earlyEscalationLease.replyDurable = true;
         // Without an outbox row there is no persist to hang the completion on, so the
         // window is resolved once the reply has been sent.
         if (!outboxId) await completeEscalation();
       }
     } catch (deliveryError) {
       replyWithoutDurableCopy = !replyIsDurable(outboxId, deliveryError);
+      if (earlyEscalationLease && !replyWithoutDurableCopy) earlyEscalationLease.replyDurable = true;
       throw deliveryError;
     } finally {
       // The marker is a lease, not a receipt. A reply that never became durable, a staff
@@ -2261,5 +2270,12 @@ Deno.serve(async (req) => {
       await releaseAfterError(admin, outboxId, { sideEffectsHappened, error: errorMessage(error) }, request.user_id);
     }
     return jsonResponse({ ok: false, error: errorMessage(error) });
+  } finally {
+    try {
+      await releaseUnpersistedEscalation(admin, handoffScope(request), earlyEscalationLease);
+    } catch (cleanupError) {
+      // Preserve the original outcome; the token-bound lease remains recoverable on expiry.
+      console.error("[ai-agent-reply] escalation lease cleanup failed:", errorMessage(cleanupError));
+    }
   }
 });

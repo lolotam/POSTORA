@@ -18,6 +18,7 @@ import {
   readEscalationAftermath,
   releaseHumanModeAck,
   releaseUnansweredEscalationClaim,
+  releaseUnpersistedEscalation,
   replyIsDurable,
   settleClosedGate,
   settleClosedGateNotice,
@@ -1232,4 +1233,24 @@ Deno.test("a preclaimed escalation settles without a second fallible claim read"
   assertEquals(result.marker, marker);
   assertEquals(result.claimToken, CLAIM_TOKEN);
   assertEquals(calls.some((call) => call.kind === "rpc:claim_unanswered_escalation"), false);
+});
+
+Deno.test("early setup failures release their escalation lease while durable replies retain it", async () => {
+  for (const replyDurable of [false, true]) {
+    const { admin, calls } = adminStub();
+    await releaseUnpersistedEscalation(admin, SCOPE, {
+      threadId: THREAD_ID, marker: "2026-11-12T08:00:00Z", claimToken: CLAIM_TOKEN, replyDurable,
+    });
+    assertEquals(calls.some((call) => call.kind === "rpc:release_unanswered_escalation_claim"), !replyDurable);
+  }
+});
+
+Deno.test("a notice claim records its recoverable text and outbox scope together", async () => {
+  const { admin, calls } = adminStub();
+  await claimHumanModeAck(admin, SCOPE, {
+    gateReason: "mode_human_first", isComment: false, outboxId: "outbox-1", noticeText: "One fixed notice",
+  });
+  const claim = calls.find((call) => call.kind === "rpc:claim_human_mode_ack_leased");
+  assertEquals(claim?.args?.p_reply_id, "outbox-1");
+  assertEquals(claim?.args?.p_notice_text, "One fixed notice");
 });

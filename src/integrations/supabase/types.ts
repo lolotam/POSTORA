@@ -2311,6 +2311,8 @@ export type Database = {
       }
       ai_conversation_modes: {
         Row: {
+          customer_ack_reply_id: string | null
+          customer_ack_text: string | null
           customer_ack_sent_at: string | null
           customer_ack_claimed_at: string | null
           customer_ack_delivered_at: string | null
@@ -2327,6 +2329,8 @@ export type Database = {
           user_id: string
         }
         Insert: {
+          customer_ack_reply_id?: string | null
+          customer_ack_text?: string | null
           customer_ack_sent_at?: string | null
           customer_ack_claimed_at?: string | null
           customer_ack_delivered_at?: string | null
@@ -2343,6 +2347,8 @@ export type Database = {
           user_id: string
         }
         Update: {
+          customer_ack_reply_id?: string | null
+          customer_ack_text?: string | null
           customer_ack_sent_at?: string | null
           customer_ack_claimed_at?: string | null
           customer_ack_delivered_at?: string | null
@@ -2358,7 +2364,15 @@ export type Database = {
           updated_at?: string | null
           user_id?: string
         }
-        Relationships: []
+        Relationships: [
+          {
+            foreignKeyName: "ai_conversation_modes_customer_ack_reply_id_fkey"
+            columns: ["customer_ack_reply_id"]
+            isOneToOne: false
+            referencedRelation: "pending_agent_replies"
+            referencedColumns: ["id"]
+          },
+        ]
       }
       ai_generation_jobs: {
         Row: {
@@ -11058,6 +11072,8 @@ export type Database = {
           p_platform: string
           p_conversation_id: string
           p_lease_seconds?: number
+          p_reply_id?: string
+          p_notice_text?: string
         }
         Returns: Json
       }

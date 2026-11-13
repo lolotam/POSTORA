@@ -196,7 +196,32 @@ BEGIN
     r_again, 'running', 'ready_to_send', v_notice, NULL, NULL, 'human_mode_ack',
     u_a, 'whatsapp', 'c_complete', v_token), 'T7 completed receipt cannot persist another notice';
 
-  -- T8: only service_role reaches the function.
+  -- T8: a worker dies after leasing. Expiry persists its exact notice for the normal
+  -- outbox retry path, so recovery never needs to discover an orphaned receipt token.
+  INSERT INTO public.ai_conversation_modes (user_id, platform, conversation_id, mode, expires_at)
+    VALUES (u_a, 'whatsapp', 'c_recover', 'human_first', now() + interval '1 hour') RETURNING id INTO v_mode;
+  v_claim := public.claim_human_mode_ack_leased(u_a, 'whatsapp', 'c_recover', 120, r_other, 'One fixed notice');
+  ASSERT v_claim->>'result' = 'failed', 'T8 a different conversation cannot bind the recovery row';
+  UPDATE public.pending_agent_replies SET conversation_id = 'c_recover' WHERE id IN (r_again, r_notoken);
+  v_claim := public.claim_human_mode_ack_leased(u_a, 'whatsapp', 'c_recover', 120, r_again, 'One fixed notice');
+  ASSERT v_claim->>'result' = 'claimed', 'T8 the notice recipe is bound with the lease';
+  v_token := (v_claim->>'claim_token')::timestamptz;
+  UPDATE public.ai_conversation_modes SET expires_at = now() - interval '1 minute' WHERE id = v_mode;
+  ASSERT public.expire_conversation_mode(v_mode, u_a,
+    (SELECT expires_at FROM public.ai_conversation_modes WHERE id = v_mode)), 'T8 mode expires after worker death';
+  ASSERT (SELECT generated_reply FROM public.pending_agent_replies WHERE id = r_again) = 'One fixed notice',
+    'T8 expiry preserves the promised text';
+  ASSERT (SELECT generated_kind FROM public.pending_agent_replies WHERE id = r_again) = 'human_mode_ack',
+    'T8 recovery knows this is an acknowledgement';
+  ASSERT (SELECT lease_expires_at FROM public.pending_agent_replies WHERE id = r_again) < clock_timestamp(),
+    'T8 normal outbox recovery can pick the row up immediately';
+  ASSERT public.claim_agent_reply_for_delivery_for_owner(u_a, r_again,
+    'ready_to_send', 'sending', 'One fixed notice', 'human_mode_ack'), 'T8 recovery claims the durable notice';
+  ASSERT NOT public.persist_human_mode_ack_and_complete_claim(
+    r_notoken, 'running', 'ready_to_send', v_notice, NULL, NULL, 'human_mode_ack',
+    u_a, 'whatsapp', 'c_recover', v_token), 'T8 the old worker cannot create a duplicate notice';
+
+  -- T9: only service_role reaches the function.
   ASSERT NOT has_function_privilege('anon', 'public.persist_human_mode_ack_and_complete_claim(uuid, text, text, text, text, jsonb, text, uuid, text, text, timestamptz)', 'EXECUTE'),
     'T4 anon cannot persist a notice';
   ASSERT NOT has_function_privilege('authenticated', 'public.persist_human_mode_ack_and_complete_claim(uuid, text, text, text, text, jsonb, text, uuid, text, text, timestamptz)', 'EXECUTE'),

@@ -97,7 +97,7 @@ BEGIN
     'M8 authenticated cannot claim an ack';
   ASSERT NOT has_function_privilege('anon', 'public.release_human_mode_ack(uuid, text, text)', 'EXECUTE'),
     'M8 anon cannot release an ack';
-  ASSERT NOT has_function_privilege('authenticated', 'public.claim_human_mode_ack_leased(uuid, text, text, integer)', 'EXECUTE'),
+  ASSERT NOT has_function_privilege('authenticated', 'public.claim_human_mode_ack_leased(uuid, text, text, integer, uuid, text)', 'EXECUTE'),
     'M8 authenticated cannot lease an ack';
   ASSERT has_function_privilege('service_role', 'public.claim_human_mode_ack(uuid, text, text)', 'EXECUTE'),
     'M8 service_role can claim an ack';

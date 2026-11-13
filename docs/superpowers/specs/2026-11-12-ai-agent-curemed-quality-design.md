@@ -42,12 +42,17 @@ Date: 2026-11-12 · Owner: Waleed · Status: decisions locked, catalog details p
 - **Greeting / language / human-mode acknowledgement.** Deterministic steps in
   `ai-agent-reply` before and after the model call, each with a unit test.
 - **Model chain.** A dry-run script replays a recorded conversation against candidate models and
-  writes a comparison table (latency, language correctness, whether the catalog was searched). No sends.
-  The table carries no customer data: the conversation id is redacted and the reply text is never
-  written, only its length; the unredacted detail goes to an ignored `.local` copy. Catalog GROUNDING
-  is not one of the columns: the sandbox hands the probe the tool calls it made and never the rows
-  the catalog returned, so a model that searches and then answers something unrelated cannot be told
-  apart from one that answers from the rows. The report says so instead of pretending to measure it.
+  writes latency, language correctness, catalog-query use, URL presence, and catalog identity matches. No sends.
+  The authenticated sandbox exposes at most 100 catalog evidence rows containing only `id`, `sku`,
+  `name_ar`, `name_en` and `product_url`; arbitrary extra catalog fields are excluded. A grounding yes
+  means an exact returned HTTP(S) product URL or a sufficiently specific returned name/identifier
+  occurs in the answer. Numeric-only or short generic identities cannot score a yes. This metric
+  does not verify every price, medical statement or factual claim. An older sandbox response without
+  evidence is not measured. The tracked report contains no customer conversation identifier or reply
+  text, only reply length; unredacted excerpts go to the ignored `.local` copy.
+  This evidence/scoring refinement implements the PR #408 review requirement to distinguish an
+  answer identifying returned products from an unrelated answer after a tool call. Primary/fallback
+  selection remains the owner's decision; no new live model choice is authorized here.
 
 - **Answer instead of escalating.** Escalation mostly happens when retrieval misses, so the
   fix is retrieval, not the timeout: the catalog RPC above, the UTF-8 re-ingest, and the
