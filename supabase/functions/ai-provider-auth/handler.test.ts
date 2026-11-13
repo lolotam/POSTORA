@@ -18,6 +18,7 @@ function baseDeps(overrides: Partial<HandlerDeps> = {}): HandlerDeps {
       name: providerCode === "claude" ? "Anthropic API" : providerCode === "openrouter" ? "OpenRouter" : "OpenAI API",
       active: providerCode === "claude",
     }),
+    providerHasApiKey: async () => true,
     statuses: async () => [
       {
         oauth_provider: "anthropic",
@@ -143,6 +144,31 @@ Deno.test("capabilities works while the flag is off", async () => {
   const body = await response.json();
   assertEquals(body.enabled, false);
   assertEquals(body.providers.length, 3);
+});
+
+Deno.test("capabilities report whether the provider also carries an API key", async () => {
+  const response = await callHandler({ action: "capabilities" }, baseDeps({
+    providerHasApiKey: async (providerCode) => providerCode === "claude",
+  }));
+  assertEquals(response.status, 200);
+  const body = await response.json();
+  const anthropic = body.providers.find((p: { provider_code: string }) => p.provider_code === "claude");
+  const openai = body.providers.find((p: { provider_code: string }) => p.provider_code === "openai");
+  assertEquals(anthropic.has_api_key, true);
+  assertEquals(openai.has_api_key, false);
+});
+
+Deno.test("a failed key read leaves the key status unknown", async () => {
+  const response = await callHandler({ action: "capabilities" }, baseDeps({
+    providerHasApiKey: async () => {
+      throw new Error("provider_api_keys unreadable");
+    },
+  }));
+  assertEquals(response.status, 200);
+  const body = await response.json();
+  for (const provider of body.providers) {
+    assertEquals(provider.has_api_key, null, "an unreadable key table is not a missing key");
+  }
 });
 
 Deno.test("a refused finish answers 400 with its code and logs only the code", async () => {

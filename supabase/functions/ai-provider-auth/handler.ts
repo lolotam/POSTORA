@@ -21,6 +21,13 @@ export interface HandlerDeps {
   listModels(oauthProvider: string): string[];
   /** The ai_providers row: its display name and the admin's on/off switch. */
   providerInfo(providerCode: string): Promise<{ name: string | null; active: boolean }>;
+  /**
+   * Whether the provider also carries an API key (the env var its ai_providers
+   * row names, or a saved provider_api_keys row). Null when the status could
+   * not be read: only the server can see the env var, so the browser asks here
+   * instead of guessing.
+   */
+  providerHasApiKey(providerCode: string): Promise<boolean | null>;
   statuses(): Promise<OAuthStatusRow[]>;
   start(provider: OAuthProviderId, userId: string): Promise<{ authorizeUrl: string }>;
   finish(provider: OAuthProviderId, pasted: string, userId: string): Promise<{ accountLabel: string | null }>;
@@ -68,6 +75,24 @@ async function refusal(
   return json({ error: reason }, status);
 }
 
+/**
+ * The provider's API key status. A failed key read is not a missing key, so
+ * the status stays unknown (null) and the provider keeps its place in the
+ * admin's API-key group instead of vanishing from the picker.
+ */
+async function apiKeyStatus(deps: HandlerDeps, providerCode: string): Promise<boolean | null> {
+  try {
+    return await deps.providerHasApiKey(providerCode);
+  } catch (error) {
+    console.warn({
+      event: "ai_provider_auth_key_status_failed",
+      provider_code: providerCode,
+      error: error instanceof Error ? error.message : "unknown",
+    });
+    return null;
+  }
+}
+
 export async function handle(body: unknown, caller: Caller, deps: HandlerDeps): Promise<Response> {
   const parsed = RequestSchema.safeParse(body);
   if (!parsed.success) return json({ error: "invalid_request" }, 400);
@@ -99,6 +124,7 @@ export async function handle(body: unknown, caller: Caller, deps: HandlerDeps): 
         expires_at: row?.expires_at ?? null,
         models: deps.listModels(oauthProvider),
         flow: client.flow,
+        has_api_key: await apiKeyStatus(deps, providerCode),
       });
     }
     return json({ enabled, providers });

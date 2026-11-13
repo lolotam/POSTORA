@@ -288,6 +288,9 @@ interface TierSelectorProps {
 
 function TierSelector({ label, icon, providers, allProviders, filteredModels, currentModel, onSelect, isSaving, category, modelNote }: TierSelectorProps) {
   const oauthCategory = isOAuthCategory(category);
+  // The capabilities answer carries each provider's key status, which a
+  // category that can be served by a subscription needs to tell an API-key
+  // provider from a subscription-only one.
   const { data: caps } = useAiProviderAuthCapabilities({ enabled: oauthCategory });
 
   // A provider that was never connected has nothing to offer, so it is not
@@ -303,6 +306,21 @@ function TierSelector({ label, icon, providers, allProviders, filteredModels, cu
   );
 
   const showAuthGroup = oauthProviders.length > 0;
+
+  // A provider that answers through a subscription belongs to the Auth group.
+  // It stays in the API key group only when it carries an API key of its own,
+  // so the admin cannot save a tier with no key behind it. A provider without
+  // a subscription keeps its place: a user's own key can still answer for it.
+  const apiKeyProviders = useMemo(() => {
+    if (!oauthCategory || !caps?.enabled) return providers;
+    const subscriptionOnly = new Set<string>(
+      caps.providers
+        .filter(p => p.has_api_key === false && (p.status === 'connected' || p.status === 'reauth_required'))
+        .map(p => p.provider_code),
+    );
+    return providers.filter(p => !subscriptionOnly.has(p.provider_code));
+  }, [providers, caps, oauthCategory]);
+
   // An oauth tier must never read as an API-key tier of the same provider: it
   // would look valid while the subscription is gone, and Radix would swallow a
   // re-pick of the same model as "unchanged".
@@ -314,9 +332,9 @@ function TierSelector({ label, icon, providers, allProviders, filteredModels, cu
       const known = oauthProviders.some(p => p.provider_code === currentModel.provider_code);
       return known ? `oauth:${currentModel.provider_code}` : '';
     }
-    const p = providers.find(p => p.provider_code === currentModel.provider_code);
+    const p = apiKeyProviders.find(p => p.provider_code === currentModel.provider_code);
     return p ? `api:${p.id}` : '';
-  }, [currentModel, providers, oauthProviders]);
+  }, [currentModel, apiKeyProviders, oauthProviders]);
 
   const [selection, setSelection] = useState(initialSelection);
 
@@ -386,7 +404,7 @@ function TierSelector({ label, icon, providers, allProviders, filteredModels, cu
           <SelectContent>
             <SelectGroup>
               <SelectLabel className="text-[10px]">API key</SelectLabel>
-              {providers.map(p => (
+              {apiKeyProviders.map(p => (
                 <SelectItem key={p.id} value={`api:${p.id}`}>
                   <div className="flex items-center gap-1.5">
                     <span className="text-xs">{p.name}</span>

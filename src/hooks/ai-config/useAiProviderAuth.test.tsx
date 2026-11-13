@@ -13,6 +13,7 @@ import { aiProviderAuthGateway, INVALID_RESPONSE } from "@/features/ai-providers
 import {
   useAiProviderAuthCapabilities,
   useDisconnectAiOAuth,
+  useFinishAiOAuth,
   useStartAiOAuth,
 } from "./useAiProviderAuth";
 
@@ -142,5 +143,19 @@ describe("useAiProviderAuth", () => {
 
     expect(client.getQueryData<{ providers: Array<{ status: string }> }>(["ai-provider-auth"])?.providers[0].status)
       .toBe("not_connected");
+  });
+
+  it("invalidates the model catalogue after a finished login", async () => {
+    invoke.mockResolvedValue({ data: { status: "connected", account_label: null }, error: null });
+    const { client, wrapper } = queryWrapper();
+    const invalidate = vi.spyOn(client, "invalidateQueries");
+
+    const { result } = renderHook(() => useFinishAiOAuth(), { wrapper });
+    await result.current.mutateAsync({ provider: "anthropic", pasted: "code#state" });
+
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: ["ai-provider-auth"] });
+    // The model list the provider dialog shows comes from the catalogue, so a
+    // finished login has to read it again.
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: ["ai-config"] });
   });
 });

@@ -54,8 +54,19 @@ function describeError(error: unknown, fallback: string): string {
  *
  * A provider whose flow is `pkce_callback` redirects to our own route
  * instead: the browser goes there directly and there is nothing to paste.
+ *
+ * `models` is the provider's catalogue (the ai_models rows the provider dialog
+ * lists right next to this section), so the picker here and the list there are
+ * one list. Without it the picker falls back to the subscription's own model
+ * list, which only matters while the provider has no catalogue rows at all.
  */
-export function SubscriptionLoginSection({ providerCode }: { providerCode: 'claude' | 'openai' | 'openrouter' }) {
+export function SubscriptionLoginSection({
+  providerCode,
+  models,
+}: {
+  providerCode: 'claude' | 'openai' | 'openrouter';
+  models?: string[];
+}) {
   const { data: capabilities, error: capabilitiesError } = useAiProviderAuthCapabilities();
   const startLogin = useStartAiOAuth();
   const finishLogin = useFinishAiOAuth();
@@ -90,7 +101,11 @@ export function SubscriptionLoginSection({ providerCode }: { providerCode: 'clau
   }
   if (!capabilities || !capability || (!enabled && !hasStoredLogin)) return null;
 
-  const effectiveTestModel = testModel || capability?.models?.[0] || '';
+  // The catalogue is the one list of models this provider has; the
+  // subscription's own list is only a fallback for a provider whose catalogue
+  // is still empty.
+  const testModels = models && models.length > 0 ? models : capability?.models ?? [];
+  const effectiveTestModel = testModel || testModels[0] || '';
 
   // The URL is shown as a link the admin clicks: a window.open after an await
   // runs outside the click gesture and popup blockers drop it silently.
@@ -250,7 +265,7 @@ export function SubscriptionLoginSection({ providerCode }: { providerCode: 'clau
                 <SelectValue placeholder="Model..." />
               </SelectTrigger>
               <SelectContent>
-                {(capability?.models ?? []).map(id => (
+                {testModels.map(id => (
                   <SelectItem key={id} value={id}>
                     <span className="text-xs">{id}</span>
                   </SelectItem>
