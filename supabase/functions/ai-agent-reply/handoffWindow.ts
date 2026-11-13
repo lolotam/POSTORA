@@ -105,6 +105,14 @@ export interface AftermathSettlement {
   replyText: string;
   /** The marker this turn leased, when it leased one. */
   marker: string | null;
+  /**
+   * The lease token this turn holds on that marker.
+   *
+   * The marker alone does not say WHICH lease is being acted on: two workers that leased
+   * the same marker hold the same marker. The token is what a stale worker is refused
+   * on, so it travels with the reply to the statement that writes it.
+   */
+  claimToken: string | null;
   /** The window could not be read, so the marker has to come back. */
   staffReadFailed: boolean;
   /** The staff context could not be stored, so the marker has to come back. */
@@ -487,12 +495,18 @@ async function settleUnderClosedGate(
  * belonged to became durable.
  *
  * A marker that is already leased by a live claim is not handed out twice.
+ *
+ * The claim comes with a TOKEN: the lease stamp it was taken with. Two workers that
+ * leased the same marker hold the same marker, so the marker alone cannot say which
+ * lease a release or a completion is about. The token can, and every takeover writes a
+ * new one, so a worker that outlived its lease is refused instead of acting on the
+ * lease that replaced it.
  */
 export async function claimUnansweredEscalation(
   admin: SupabaseClient,
   scope: HandoffScope,
   threadId: string,
-): Promise<{ marker: string | null; claimed: boolean }> {
+): Promise<{ marker: string | null; token: string | null; claimed: boolean }> {
   const { data, error } = await admin.rpc("claim_unanswered_escalation", {
     p_thread_id: threadId,
     p_user_id: scope.userId,
@@ -500,29 +514,38 @@ export async function claimUnansweredEscalation(
   });
   if (error) {
     console.error("[ai-agent-reply] unanswered-escalation claim failed:", error.message);
-    return { marker: null, claimed: false };
+    return { marker: null, token: null, claimed: false };
   }
-  if (typeof data !== "string") return { marker: null, claimed: false };
-  return { marker: data, claimed: true };
+  const claim = (data ?? {}) as { marker?: unknown; token?: unknown };
+  const marker = typeof claim.marker === "string" ? claim.marker : null;
+  const token = typeof claim.token === "string" ? claim.token : null;
+  // A lease without a token is a lease nobody can act on: the marker alone would let a
+  // stale worker release the claim that replaced it.
+  if (marker === null || token === null) return { marker: null, token: null, claimed: false };
+  return { marker, token, claimed: true };
 }
 
 /**
  * Consumes the escalation marker: the reply it belonged to became durable, so the
  * window is resolved and no later turn apologises for it.
  *
- * The marker has to be the one this turn leased, so a stale completion can never
- * clear a marker a newer window set.
+ * The marker AND the lease have to be the ones this turn holds, so a stale completion
+ * can never clear a marker a newer window set -- nor the lease a newer worker is
+ * working under.
  */
 export async function completeUnansweredEscalation(
   admin: SupabaseClient,
   scope: HandoffScope,
   threadId: string,
   since: string,
+  claimToken: string | null,
 ): Promise<boolean> {
+  if (!claimToken) return false;
   const { data, error } = await admin.rpc("complete_unanswered_escalation", {
     p_thread_id: threadId,
     p_user_id: scope.userId,
     p_since: since,
+    p_claim_token: claimToken,
   });
   if (error) {
     console.error("[ai-agent-reply] unanswered-escalation completion failed:", error.message);
@@ -535,20 +558,24 @@ export async function completeUnansweredEscalation(
  * Gives the escalation lease back so the apology is still owed.
  *
  * The marker itself was never cleared -- it is only leased -- so giving the lease
- * back is what lets a later turn claim it. A marker that is already set to a
- * different value is newer than this one and is left alone: overwriting it would
- * lose that window and its staff replies.
+ * back is what lets a later turn claim it. Only the lease this caller holds is
+ * given back: a worker that was overtaken cannot free the lease its replacement is
+ * working under. A marker that is already set to a different value is newer than this
+ * one and is left alone: overwriting it would lose that window and its staff replies.
  */
 export async function releaseUnansweredEscalationClaim(
   admin: SupabaseClient,
   scope: HandoffScope,
   threadId: string,
   since: string,
+  claimToken: string | null,
 ): Promise<boolean> {
+  if (!claimToken) return false;
   const { data, error } = await admin.rpc("release_unanswered_escalation_claim", {
     p_thread_id: threadId,
     p_user_id: scope.userId,
     p_since: since,
+    p_claim_token: claimToken,
   });
   if (error) {
     console.error("[ai-agent-reply] unanswered-escalation release failed:", error.message);
@@ -651,27 +678,28 @@ export async function settleEscalationAftermath(
   replyText: string,
 ): Promise<AftermathSettlement> {
   if (aftermath.since === null) {
-    return { replyText, marker: null, staffReadFailed: false, staffWriteFailed: false };
+    return { replyText, marker: null, claimToken: null, staffReadFailed: false, staffWriteFailed: false };
   }
   const claim = await claimUnansweredEscalation(admin, context.scope, context.threadId);
-  if (!claim.claimed || claim.marker === null) {
-    return { replyText, marker: null, staffReadFailed: false, staffWriteFailed: false };
+  if (!claim.claimed || claim.marker === null || claim.token === null) {
+    return { replyText, marker: null, claimToken: null, staffReadFailed: false, staffWriteFailed: false };
   }
   const taken = claim.marker;
+  const token = claim.token;
 
   const staff = await readStaffReplies(admin, context.scope, taken);
   if (staff.failed) {
     // The window could not be read, so nothing is claimed about it: no apology
     // (staff may have answered) and no staff turns to store. The lease goes back,
     // so the next turn reads the window again instead of finding it consumed.
-    return { replyText, marker: taken, staffReadFailed: true, staffWriteFailed: false };
+    return { replyText, marker: taken, claimToken: token, staffReadFailed: true, staffWriteFailed: false };
   }
   const apology = escalationApologyText(taken, staff.rows.length, context.language);
   if (apology) {
-    return { replyText: withOpening(replyText, apology), marker: taken, staffReadFailed: false, staffWriteFailed: false };
+    return { replyText: withOpening(replyText, apology), marker: taken, claimToken: token, staffReadFailed: false, staffWriteFailed: false };
   }
   if (!staff.rows.length) {
-    return { replyText, marker: taken, staffReadFailed: false, staffWriteFailed: false };
+    return { replyText, marker: taken, claimToken: token, staffReadFailed: false, staffWriteFailed: false };
   }
 
   const { error: staffWriteError } = await admin.from("ai_thread_messages").insert(
@@ -687,9 +715,9 @@ export async function settleEscalationAftermath(
     console.error("[ai-agent-reply] staff turn write failed:", staffWriteError.message);
     // The staff context is still owed to the thread. The marker carries it, so the
     // lease goes back and the next turn can store the staff replies that this one lost.
-    return { replyText, marker: taken, staffReadFailed: false, staffWriteFailed: true };
+    return { replyText, marker: taken, claimToken: token, staffReadFailed: false, staffWriteFailed: true };
   }
-  return { replyText, marker: taken, staffReadFailed: false, staffWriteFailed: false };
+  return { replyText, marker: taken, claimToken: token, staffReadFailed: false, staffWriteFailed: false };
 }
 
 /**
@@ -700,7 +728,10 @@ export async function settleEscalationAftermath(
  * this one lost. Consuming the marker here would drop them for good.
  *
  * Set, the marker is consumed by the SAME statement that writes the reply, so a worker
- * killed between the two cannot leave the apology owed a second time.
+ * killed between the two cannot leave the apology owed a second time. The lease token
+ * travels with it: the marker alone cannot say which lease is being consumed, and a
+ * worker whose lease lapsed must not store another apology against the lease that
+ * replaced it.
  */
 export function escalationForReply(
   settlement: AftermathSettlement,
@@ -708,5 +739,11 @@ export function escalationForReply(
 ): ReplyEscalation | null {
   if (!settlement.marker) return null;
   if (settlement.staffWriteFailed || settlement.staffReadFailed) return null;
-  return { threadId: scope.threadId, userId: scope.userId, since: settlement.marker };
+  if (!settlement.claimToken) return null;
+  return {
+    threadId: scope.threadId,
+    userId: scope.userId,
+    since: settlement.marker,
+    claimToken: settlement.claimToken,
+  };
 }

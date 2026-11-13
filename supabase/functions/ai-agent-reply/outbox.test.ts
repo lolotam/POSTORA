@@ -11,6 +11,15 @@ import {
 
 const REPLY = { text: "hello", toolCalls: [] };
 
+const NOTICE = "تم تحويل محادثتك لفريقنا";
+
+const ACK_CLAIM = {
+  userId: "user-1",
+  platform: "whatsapp",
+  conversationId: "conversation-1",
+  claimToken: "2026-11-13T08:00:00.000Z",
+};
+
 /**
  * A stub that plays the database's part faithfully: advance_agent_reply only succeeds when
  * the row really is in the from-state, and records every transition in order. That is what
@@ -25,20 +34,71 @@ function stubOutbox(
       generated_kind?: string | null;
     }
     | null,
+  options: {
+    /**
+     * Whether the acknowledgement claim this caller holds is the live one. False is a
+     * completion that fails: the notice must not become durable either.
+     */
+    ackClaimLive?: boolean;
+  } = {},
 ) {
   const row = initial ? { ...initial } : null;
   const transitions: string[] = [];
   /** The escalation windows a reply resolved, in the order they were written. */
-  const escalations: Array<{ threadId: string; userId: string; since: string }> = [];
+  const escalations: Array<{
+    threadId: string;
+    userId: string;
+    since: string;
+    claimToken: string;
+  }> = [];
+  /** The acknowledgement claims a notice spent. */
+  const acks: Array<{ conversationId: string; claimToken: string }> = [];
   type RpcResult = Promise<{ data: unknown; error: { message: string } | null }>;
   const admin = {
     rpc: (name: string, args: Record<string, unknown>): RpcResult => {
       if (
         name !== "advance_agent_reply" &&
         name !== "advance_agent_reply_kind" &&
+        name !== "claim_agent_reply_for_delivery" &&
+        name !== "persist_human_mode_ack_and_complete_claim" &&
         name !== "persist_agent_reply_and_complete_escalation"
       ) {
         throw new Error(`unexpected rpc ${name}`);
+      }
+      if (name === "claim_agent_reply_for_delivery") {
+        // The claim carries the payload the caller read: the row is only moved while it
+        // still holds exactly that text and that kind. A row whose payload was replaced
+        // is not moved, and nothing is sent.
+        const holdsPayload =
+          row &&
+          row.status === args.p_from &&
+          (row.generated_reply ?? null) === (args.p_expected_reply ?? null) &&
+          (row.generated_kind ?? null) === (args.p_expected_kind ?? null);
+        if (!holdsPayload) {
+          transitions.push(`REFUSED ${args.p_from}->${args.p_to}`);
+          return Promise.resolve({ data: false, error: null });
+        }
+        row!.status = String(args.p_to);
+        transitions.push(`${args.p_from}->${args.p_to}`);
+        return Promise.resolve({ data: true, error: null });
+      }
+      if (name === "persist_human_mode_ack_and_complete_claim") {
+        // The notice and the claim it spends are ONE statement, and the claim has to be
+        // the live one: a notice persisted with its claim still owed is a notice the
+        // next turn sends again.
+        if (!row || row.status !== args.p_from || options.ackClaimLive === false) {
+          transitions.push(`REFUSED ${args.p_from}->${args.p_to}`);
+          return Promise.resolve({ data: false, error: null });
+        }
+        row.status = String(args.p_to);
+        if (typeof args.p_generated_reply === "string") row.generated_reply = args.p_generated_reply;
+        if (typeof args.p_generated_kind === "string") row.generated_kind = args.p_generated_kind;
+        acks.push({
+          conversationId: String(args.p_conversation_id),
+          claimToken: String(args.p_claim_token),
+        });
+        transitions.push(`${args.p_from}->${args.p_to}+ack`);
+        return Promise.resolve({ data: true, error: null });
       }
       if (row && row.status === args.p_from) {
         row.status = String(args.p_to);
@@ -52,6 +112,7 @@ function stubOutbox(
             threadId: String(args.p_thread_id),
             userId: String(args.p_user_id),
             since: String(args.p_since),
+            claimToken: String(args.p_claim_token),
           });
           transitions.push(`${args.p_from}->${args.p_to}+escalation`);
         } else {
@@ -74,7 +135,7 @@ function stubOutbox(
   // The stub is handed over twice: `admin` is the client the module under test
   // takes, and `stub` is the same object with its own shape, so a test can
   // replace a method without restating the client's whole signature.
-  return { admin: admin as unknown as SupabaseClient, stub: admin, row, transitions, escalations };
+  return { admin: admin as unknown as SupabaseClient, stub: admin, row, transitions, escalations, acks };
 }
 
 Deno.test("a send is wrapped in three durable steps, in that order, and sends once", async () => {
@@ -87,8 +148,10 @@ Deno.test("a send is wrapped in three durable steps, in that order, and sends on
     sends.push(text);
     return Promise.resolve("wamid.1");
   };
-  const id = await deliverGeneratedReply(admin, "row-1", REPLY, send);
-  assertEquals(id, "wamid.1");
+  const delivered = await deliverGeneratedReply(admin, "row-1", REPLY, send);
+  assertEquals(delivered.messageId, "wamid.1");
+  assertEquals(delivered.text, "hello");
+  assertEquals(delivered.kind, "reply");
   assertEquals(sends, ["hello"]);
   assertEquals(transitions, ["running->ready_to_send", "ready_to_send->sending", "sending->sent"]);
 });
@@ -114,12 +177,166 @@ Deno.test("a row another worker is already delivering is NOT sent again", async 
   const { admin, transitions } = stubOutbox({ status: "sending", generated_reply: "hello" });
   let sent = 0;
   await assertRejects(
-    () => deliverStoredReply(admin, "row-1", "hello", () => { sent++; return Promise.resolve("x"); }),
+    () => deliverStoredReply(
+      admin,
+      "row-1",
+      { text: "hello", kind: "reply" },
+      () => { sent++; return Promise.resolve("x"); },
+    ),
     Error,
     "already delivering",
   );
   assertEquals(sent, 0);
   assertEquals(transitions, ["REFUSED ready_to_send->sending"]);
+});
+
+Deno.test("a delivery whose text was replaced in the meantime is NOT sent", async () => {
+  // The row's text is read without a lock, so a closed gate can replace it between the
+  // read and the claim -- the row stays `ready_to_send`, so the replacement is not
+  // refused. A delivery that sent the OLD text would hand the customer the answer the
+  // closed gate was meant to block, and the notice would never go out.
+  const { admin, stub, row } = stubOutbox({ status: "ready_to_send", generated_reply: "the answer" });
+  const original = stub.rpc;
+  let calls = 0;
+  stub.rpc = (name: string, args: Record<string, unknown>) => {
+    calls += 1;
+    if (calls === 1 && name === "claim_agent_reply_for_delivery") {
+      // The closed gate takes the row's place with the notice it owes.
+      row!.generated_reply = NOTICE;
+      row!.generated_kind = "human_mode_ack";
+    }
+    return original(name, args);
+  };
+
+  const entry = await takeOutboxRow(admin, "row-1");
+  if (entry.mode !== "redeliver") throw new Error("the row was expected to be redelivered");
+  let sent = 0;
+  await assertRejects(
+    () => deliverStoredReply(
+      admin,
+      "row-1",
+      { text: entry.text, kind: entry.kind },
+      () => { sent++; return Promise.resolve("x"); },
+    ),
+    Error,
+    "not deliverable",
+  );
+  // Nothing went out, and the row still holds the notice for the turn that owes it.
+  assertEquals(sent, 0);
+  assertEquals(row?.status, "ready_to_send");
+  assertEquals(row?.generated_reply, NOTICE);
+});
+
+Deno.test("a delivery whose KIND changed is refused as well", async () => {
+  // The kind is part of the payload: the row that holds the notice must never be sent
+  // as an answer, and the row that holds an answer must never be sent as the notice.
+  const { admin, row } = stubOutbox({
+    status: "ready_to_send",
+    generated_reply: NOTICE,
+    generated_kind: "human_mode_ack",
+  });
+  let sent = 0;
+  await assertRejects(
+    () => deliverStoredReply(
+      admin,
+      "row-1",
+      { text: NOTICE, kind: "reply" },
+      () => { sent++; return Promise.resolve("x"); },
+    ),
+    Error,
+    "not deliverable",
+  );
+  assertEquals(sent, 0);
+  assertEquals(row?.status, "ready_to_send");
+});
+
+Deno.test("the delivery reports the text and the kind the ROW holds", async () => {
+  // The caller writes the thread turn and the log from what it sent, so it has to be
+  // what the row holds -- not what this invocation remembers.
+  const { admin } = stubOutbox({
+    status: "ready_to_send",
+    generated_reply: NOTICE,
+    generated_kind: "human_mode_ack",
+  });
+
+  const delivered = await deliverStoredReply(
+    admin,
+    "row-1",
+    { text: NOTICE, kind: "human_mode_ack" },
+    () => Promise.resolve("wamid.3"),
+  );
+
+  assertEquals(delivered.messageId, "wamid.3");
+  assertEquals(delivered.text, NOTICE);
+  assertEquals(delivered.kind, "human_mode_ack");
+});
+
+Deno.test("the notice and the claim it spends are written by ONE statement", async () => {
+  // A notice that is durable with its claim still owed is a notice the next turn sends
+  // again: the customer is told twice that a human has the conversation. The notice and
+  // the completion of the claim it spends are therefore one statement.
+  const { admin, row, transitions, acks } = stubOutbox({ status: "running" });
+
+  const delivered = await deliverGeneratedReply(
+    admin,
+    "row-1",
+    { text: NOTICE, toolCalls: [], kind: "human_mode_ack", humanModeAck: ACK_CLAIM },
+    () => Promise.resolve("wamid.4"),
+  );
+
+  assertEquals(acks, [{ conversationId: ACK_CLAIM.conversationId, claimToken: ACK_CLAIM.claimToken }]);
+  assertEquals(transitions, [
+    "running->ready_to_send+ack",
+    "ready_to_send->sending",
+    "sending->sent",
+  ]);
+  assertEquals(row?.generated_reply, NOTICE);
+  assertEquals(row?.generated_kind, "human_mode_ack");
+  assertEquals(delivered.kind, "human_mode_ack");
+});
+
+Deno.test("a notice whose claim could not be spent is neither persisted nor sent", async () => {
+  // The completion failed: the claim this caller holds is not the live one. The notice
+  // must not become durable either -- a durable notice with an owed claim is the second
+  // notice the customer gets.
+  const { admin, row, transitions } = stubOutbox({ status: "running" }, { ackClaimLive: false });
+
+  let sent = 0;
+  await assertRejects(
+    () => deliverGeneratedReply(
+      admin,
+      "row-1",
+      { text: NOTICE, toolCalls: [], kind: "human_mode_ack", humanModeAck: ACK_CLAIM },
+      () => { sent++; return Promise.resolve("x"); },
+    ),
+    Error,
+    "persist",
+  );
+
+  assertEquals(sent, 0);
+  assertEquals(row?.status, "running");
+  assertEquals(row?.generated_reply, undefined);
+  assertEquals(transitions, ["REFUSED running->ready_to_send"]);
+});
+
+Deno.test("a notice with no claim at all is never persisted", async () => {
+  // There is nothing to spend, so there is nothing that makes the notice single-flight.
+  // The work item stays unsettled and the outbox tries again.
+  const { admin, row } = stubOutbox({ status: "running" });
+
+  await assertRejects(
+    () => deliverGeneratedReply(
+      admin,
+      "row-1",
+      { text: NOTICE, toolCalls: [], kind: "human_mode_ack" },
+      () => Promise.resolve("wamid.5"),
+    ),
+    Error,
+    "claim",
+  );
+
+  assertEquals(row?.status, "running");
+  assertEquals(row?.generated_reply, undefined);
 });
 
 Deno.test("a provider that throws leaves the row delivery_unknown, never ready_to_send", async () => {
@@ -144,8 +361,8 @@ Deno.test("a failed sending->sent bookkeeping update does not undo a delivery", 
     if (args.p_to === "sent") return Promise.resolve({ data: null, error: { message: "db down" } });
     return original(name, args);
   };
-  const id = await deliverGeneratedReply(admin, "row-1", REPLY, () => Promise.resolve("wamid.2"));
-  assertEquals(id, "wamid.2");
+  const delivered = await deliverGeneratedReply(admin, "row-1", REPLY, () => Promise.resolve("wamid.2"));
+  assertEquals(delivered.messageId, "wamid.2");
   assertEquals(calls, 3);
 });
 
@@ -223,7 +440,14 @@ Deno.test("the reply and the escalation window it resolves are written by ONE st
     {
       text: "نعتذر على التأخير",
       toolCalls: [],
-      escalation: { threadId: "thread-1", userId: "user-1", since: "2026-11-12T08:00:00.000Z" },
+      escalation: {
+        threadId: "thread-1",
+        userId: "user-1",
+        since: "2026-11-12T08:00:00.000Z",
+        // The lease this turn holds on the marker. The marker alone cannot say WHICH
+        // lease is being consumed.
+        claimToken: "2026-11-12T08:00:01.000Z",
+      },
     },
     () => Promise.resolve("m1"),
   );
@@ -235,7 +459,12 @@ Deno.test("the reply and the escalation window it resolves are written by ONE st
     "sending->sent",
   ]);
   assertEquals(escalations, [
-    { threadId: "thread-1", userId: "user-1", since: "2026-11-12T08:00:00.000Z" },
+    {
+      threadId: "thread-1",
+      userId: "user-1",
+      since: "2026-11-12T08:00:00.000Z",
+      claimToken: "2026-11-12T08:00:01.000Z",
+    },
   ]);
 });
 

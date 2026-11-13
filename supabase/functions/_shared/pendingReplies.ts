@@ -183,6 +183,53 @@ export interface ReplyEscalation {
   userId: string;
   /** The marker this turn leased. A newer window's marker is left alone. */
   since: string;
+  /**
+   * The lease token this turn holds on that marker.
+   *
+   * The marker alone does not say WHICH lease is being acted on: two workers that leased
+   * the same marker hold the same `since`. The token is what a stale worker is refused
+   * on, so it travels with the reply all the way to the statement that writes it.
+   */
+  claimToken: string;
+}
+
+/**
+ * The one-time acknowledgement claim a notice is written under.
+ *
+ * The notice and the claim it spends are one fact: the customer is told a human has the
+ * conversation, and no later turn may tell them again. Written as two statements, a
+ * completion that failed left the notice delivered with the claim still owed.
+ */
+export interface HumanModeAckClaim {
+  /** The conversation the claim belongs to. */
+  userId: string;
+  platform: string;
+  conversationId: string;
+  /**
+   * The lease token of the claim this caller holds.
+   *
+   * Only the claim this caller holds can be spent, so a worker that was overtaken writes
+   * nothing at all.
+   */
+  claimToken: string;
+}
+
+/**
+ * The payload a row is expected to hold when a transition runs.
+ *
+ * The row's text is read without a lock, so anything that changes it can do so between
+ * the read and the write. A transition that carries the payload only happens while the
+ * row still holds exactly that payload, which is what keeps a replaced row from being
+ * delivered.
+ */
+export interface ReplyPayload {
+  /** The text the row is expected to hold. */
+  text: string;
+  /**
+   * What that text is, as the row records it: null for an answer the model produced,
+   * "human_mode_ack" for the one-time handoff notice.
+   */
+  kind: string | null;
 }
 
 /**
@@ -214,6 +261,23 @@ export interface ReplyTransition {
    */
   escalation?: ReplyEscalation | null;
   /**
+   * The acknowledgement claim the one-time notice spends, when the text is that notice.
+   *
+   * Set, the text and the completion of the claim are written by ONE statement, and the
+   * claim has to be the one this caller holds. A notice persisted without its claim
+   * spent is a notice a later turn sends again.
+   */
+  humanModeAck?: HumanModeAckClaim | null;
+  /**
+   * The payload the row is expected to hold when this transition runs.
+   *
+   * Set on the delivery claim. The row's text is read without a lock, so a closed gate
+   * can replace it between the read and the claim; the claim then moves the row only if
+   * it still holds what the caller read, and the refusal is fail-closed -- nothing is
+   * sent.
+   */
+  expectedPayload?: ReplyPayload | null;
+  /**
    * What `generatedReply` is: null for an answer the model produced, "human_mode_ack" for
    * the one-time notice a human takeover owes the customer. A gate that is closed for the
    * answer is not closed for the notice, so a later turn has to be able to tell them apart.
@@ -230,31 +294,89 @@ export async function advanceReply(
   // Named fields rather than positional: `from` and `to` are adjacent same-typed strings, and
   // a transposition would silently move the row backwards through the state machine.
   const { id, from, to } = transition;
-  // The kind is written by the RPC that carries it, so a transition that does not need one
-  // keeps working against a database that does not have the column yet.
-  const rpc = transition.escalation
-    ? "persist_agent_reply_and_complete_escalation"
-    : transition.generatedKind
-    ? "advance_agent_reply_kind"
-    : "advance_agent_reply";
-  const args: Record<string, unknown> = {
-    p_id: id,
-    p_from: from,
-    p_to: to,
-    p_generated_reply: transition.generatedReply ?? null,
-    p_error: transition.error?.slice(0, 500) ?? null,
-    p_tool_calls: transition.generatedToolCalls?.length ? transition.generatedToolCalls : null,
-  };
-  if (transition.generatedKind) args.p_generated_kind = transition.generatedKind;
+  const generatedReply = transition.generatedReply ?? null;
+  const error = transition.error?.slice(0, 500) ?? null;
+  const toolCalls = transition.generatedToolCalls?.length ? transition.generatedToolCalls : null;
+
+  // One RPC per KIND of transition, because each of them carries something the others do
+  // not: the escalation window, the acknowledgement claim, or the payload the row is
+  // expected to hold. The arguments are named exactly as the function declares them --
+  // PostgREST matches a call by its argument names, and an argument the function does
+  // not have is an error, not a default.
+  let rpc: string;
+  let args: Record<string, unknown>;
   if (transition.escalation) {
-    args.p_thread_id = transition.escalation.threadId;
-    args.p_user_id = transition.escalation.userId;
-    args.p_since = transition.escalation.since;
+    // The reply and the window it resolves are ONE statement, and the window is only
+    // consumed for the lease this caller holds.
+    rpc = "persist_agent_reply_and_complete_escalation";
+    args = {
+      p_id: id,
+      p_from: from,
+      p_to: to,
+      p_generated_reply: generatedReply,
+      p_error: error,
+      p_tool_calls: toolCalls,
+      p_thread_id: transition.escalation.threadId,
+      p_user_id: transition.escalation.userId,
+      p_since: transition.escalation.since,
+      p_claim_token: transition.escalation.claimToken,
+    };
+  } else if (transition.humanModeAck) {
+    // The notice and the claim it spends are ONE statement, so a notice is never
+    // delivered with its claim still owed.
+    rpc = "persist_human_mode_ack_and_complete_claim";
+    args = {
+      p_id: id,
+      p_from: from,
+      p_to: to,
+      p_generated_reply: generatedReply,
+      p_error: error,
+      p_tool_calls: toolCalls,
+      p_generated_kind: transition.generatedKind ?? null,
+      p_user_id: transition.humanModeAck.userId,
+      p_platform: transition.humanModeAck.platform,
+      p_conversation_id: transition.humanModeAck.conversationId,
+      p_claim_token: transition.humanModeAck.claimToken,
+    };
+  } else if (transition.expectedPayload) {
+    // The delivery claim carries the payload the caller read, so a row whose text was
+    // replaced in the meantime is not moved and nothing is sent.
+    rpc = "claim_agent_reply_for_delivery";
+    args = {
+      p_id: id,
+      p_from: from,
+      p_to: to,
+      p_expected_reply: transition.expectedPayload.text,
+      p_expected_kind: transition.expectedPayload.kind,
+    };
+  } else if (transition.generatedKind) {
+    // The kind is written by the RPC that carries it, so a transition that does not need
+    // one keeps working against a database that does not have the column yet.
+    rpc = "advance_agent_reply_kind";
+    args = {
+      p_id: id,
+      p_from: from,
+      p_to: to,
+      p_generated_reply: generatedReply,
+      p_error: error,
+      p_tool_calls: toolCalls,
+      p_generated_kind: transition.generatedKind,
+    };
+  } else {
+    rpc = "advance_agent_reply";
+    args = {
+      p_id: id,
+      p_from: from,
+      p_to: to,
+      p_generated_reply: generatedReply,
+      p_error: error,
+      p_tool_calls: toolCalls,
+    };
   }
   try {
-    const { data, error } = await admin.rpc(rpc, args);
-    if (error) {
-      console.error(`[outbox] ${from} -> ${to} failed for ${id}: ${error.message}`);
+    const { data, error: rpcError } = await admin.rpc(rpc, args);
+    if (rpcError) {
+      console.error(`[outbox] ${from} -> ${to} failed for ${id}: ${rpcError.message}`);
       return false;
     }
     if (data !== true) console.warn(`[outbox] ${from} -> ${to} refused for ${id}: not in ${from}`);

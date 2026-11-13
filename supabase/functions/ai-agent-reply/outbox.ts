@@ -7,9 +7,13 @@
 //
 // Design: docs/superpowers/plans/2026-08-27-durable-reply-outbox.md, Task 4.
 import type { SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2";
-import { advanceReply, type ReplyEscalation } from "../_shared/pendingReplies.ts";
+import {
+  advanceReply,
+  type HumanModeAckClaim,
+  type ReplyEscalation,
+} from "../_shared/pendingReplies.ts";
 
-export type { ReplyEscalation };
+export type { HumanModeAckClaim, ReplyEscalation };
 
 /**
  * What a row's stored text is.
@@ -20,6 +24,33 @@ export type { ReplyEscalation };
  * while the notice is a promise that was already made.
  */
 export type StoredReplyKind = "reply" | "human_mode_ack";
+
+/**
+ * What the row's kind column holds for a stored text of this kind.
+ *
+ * The column is NULL for an answer the model produced and 'human_mode_ack' for the
+ * one-time notice; that is the contract the migration documents. The delivery claim
+ * compares against the COLUMN, so the value it is given has to be the column's.
+ */
+export function storedKindValue(kind: StoredReplyKind): string | null {
+  return kind === "human_mode_ack" ? "human_mode_ack" : null;
+}
+
+/**
+ * What was actually sent, and what it was.
+ *
+ * The text is the STORED one: the row is the record of what the customer is owed, and a
+ * caller that sent its own snapshot would write a thread turn that says something the
+ * customer never received.
+ */
+export interface DeliveredReply {
+  /** The id the provider returned for the message. */
+  messageId: string;
+  /** The text that went out. */
+  text: string;
+  /** What that text is. */
+  kind: StoredReplyKind;
+}
 
 export type OutboxEntry =
   /**
@@ -153,8 +184,57 @@ export async function replaceStoredReply(
     from: "ready_to_send",
     to: "ready_to_send",
     generatedReply: replacement.text,
-    generatedKind: replacement.kind,
+    // The COLUMN's value, not the kind's name: the column is NULL for an answer and
+    // 'human_mode_ack' for the notice, and the delivery claim compares against it.
+    generatedKind: storedKindValue(replacement.kind),
   });
+}
+
+/**
+ * The row was not deliverable as the caller read it.
+ *
+ * Either another worker is already delivering it, or its text was replaced between the
+ * read and the claim -- a closed gate takes the row's place with the notice it owes.
+ * Both are refusals, and both are fail-closed: nothing is sent.
+ */
+export class ReplyNotDeliverableError extends Error {
+  constructor(
+    message = "the row is not deliverable as it was read: another worker is already delivering it, or its text was replaced",
+  ) {
+    super(message);
+    this.name = "ReplyNotDeliverableError";
+  }
+}
+
+/**
+ * The payload the row holds, read after the delivery claim.
+ *
+ * The claim proved the row still holds what the caller read. Reading it again is what
+ * makes the send use the STORED text rather than the caller's snapshot: the row is the
+ * record of what the customer is owed.
+ *
+ * A read that fails is a failure, not an empty row. The row's state is unknown, so
+ * nothing may be sent on it.
+ */
+async function readStoredPayload(
+  admin: SupabaseClient,
+  outboxId: string,
+): Promise<{ text: string; kind: StoredReplyKind } | null> {
+  const { data: row, error } = await admin
+    .from("pending_agent_replies")
+    .select("status, generated_reply, generated_kind")
+    .eq("id", outboxId)
+    .maybeSingle();
+  if (error || !row || typeof row.generated_reply !== "string") {
+    console.error(
+      `[outbox] could not read the stored reply of ${outboxId}: ${error?.message ?? "missing"}`,
+    );
+    return null;
+  }
+  return {
+    text: row.generated_reply,
+    kind: row.generated_kind === "human_mode_ack" ? "human_mode_ack" : "reply",
+  };
 }
 
 /**
@@ -166,6 +246,13 @@ export async function replaceStoredReply(
  * The first is fail-closed: a row another worker has already moved to `sending` is being
  * delivered by that worker, and sending again is the duplicate reply this design prevents.
  *
+ * It is fail-closed about the PAYLOAD too. The row's text is read without a lock, so a
+ * closed gate can replace it between the read and the claim -- the row stays in
+ * `ready_to_send`, so the replacement is not refused. A delivery that sent the OLD text
+ * would hand the customer an answer the closed gate was meant to block, and the notice
+ * would never go out. The claim therefore carries the payload the caller read, and the
+ * row is only moved while it holds exactly that payload.
+ *
  * The second is deliberately unchecked. By then the customer has the message; a failed
  * bookkeeping update must not turn a delivered reply into an error. The row stays in
  * `sending`, its lease lapses, and recovery classifies it delivery_unknown -- which is true.
@@ -173,15 +260,29 @@ export async function replaceStoredReply(
 async function sendAndSettle(
   admin: SupabaseClient,
   outboxId: string,
-  text: string,
+  expected: { text: string; kind: StoredReplyKind },
   send: (text: string) => Promise<string>,
-): Promise<string> {
-  const claimed = await advanceReply(admin, { id: outboxId, from: "ready_to_send", to: "sending" });
-  if (!claimed) throw new Error("another worker is already delivering this reply");
+): Promise<DeliveredReply> {
+  const claimed = await advanceReply(admin, {
+    id: outboxId,
+    from: "ready_to_send",
+    to: "sending",
+    expectedPayload: { text: expected.text, kind: storedKindValue(expected.kind) },
+  });
+  if (!claimed) throw new ReplyNotDeliverableError();
+
+  // The row holds the payload it was claimed with, and it is in `sending` now, so
+  // nothing may replace it: this read is the text that goes out.
+  const stored = await readStoredPayload(admin, outboxId);
+  if (!stored) {
+    // The row's state is unknown, so nothing may be sent on it. It stays in `sending`,
+    // its lease lapses, and recovery classifies it delivery_unknown.
+    throw new ReplyNotDeliverableError("the stored reply could not be read after the delivery claim");
+  }
 
   let outboundMessageId: string;
   try {
-    outboundMessageId = await send(text);
+    outboundMessageId = await send(stored.text);
   } catch (error) {
     // Only reached when this process survives the throw. A killed isolate runs no catch --
     // which is why `sending` is durable and this is a courtesy, not the guarantee.
@@ -195,7 +296,7 @@ async function sendAndSettle(
   }
 
   await advanceReply(admin, { id: outboxId, from: "sending", to: "sent" });
-  return outboundMessageId;
+  return { messageId: outboundMessageId, text: stored.text, kind: stored.kind };
 }
 
 /**
@@ -229,6 +330,12 @@ export class ReplyNotPersistedError extends Error {
  * apology, so the window it resolves and the reply that carries it are one fact: a worker
  * killed between "the reply is durable" and "the window is consumed" leaves the apology
  * owed a second time, and the customer is apologised to twice.
+ *
+ * `humanModeAck` is the same promise for the one-time notice: the notice and the claim
+ * it spends are ONE statement. A notice persisted with its claim still owed is a notice
+ * a later turn sends again, and the customer is told twice that a human has the
+ * conversation. It is mutually exclusive with `escalation` -- a notice resolves no
+ * window, and a reply with an apology is not the notice.
  */
 export async function deliverGeneratedReply(
   admin: SupabaseClient,
@@ -244,16 +351,26 @@ export async function deliverGeneratedReply(
      * no point between them at which a worker can die and leave the apology owed twice.
      */
     escalation?: ReplyEscalation | null;
+    /**
+     * The acknowledgement claim the one-time notice spends, when the text is that notice.
+     *
+     * Set, the notice and the completion of the claim are written by ONE statement, so
+     * there is no point between them at which a worker can die and leave the claim owed
+     * on a notice the customer already has.
+     */
+    humanModeAck?: HumanModeAckClaim | null;
   },
   send: (text: string) => Promise<string>,
-  /**
-   * Runs once the text is durable, before the send. A claim spent on this reply may be
-   * consumed here: the reply exists, so a later turn must not make the same promise
-   * again.
-   */
-  onPersisted?: () => Promise<void>,
-): Promise<string> {
+): Promise<DeliveredReply> {
   const { text } = reply;
+  if (reply.kind === "human_mode_ack" && !reply.humanModeAck) {
+    // A notice is never persisted without the claim it spends. The notice and the claim
+    // are one fact, and a notice that is durable with its claim still owed is a notice
+    // the next turn sends again: the customer is told twice that a human has the
+    // conversation. Refusing to persist it leaves the work item unsettled, so the outbox
+    // tries again and the claim is taken with a token.
+    throw new ReplyNotPersistedError("the notice has no acknowledgement claim to spend");
+  }
   const persisted = await advanceReply(admin, {
     id: outboxId,
     from: "running",
@@ -262,33 +379,31 @@ export async function deliverGeneratedReply(
     // Stored WITH the reply, in the same statement, so a redelivery can never have the text
     // without knowing what produced it.
     generatedToolCalls: reply.toolCalls,
-    generatedKind: reply.kind ?? null,
+    // The COLUMN's value: NULL for an answer the model produced, 'human_mode_ack' for
+    // the notice. The delivery claim compares against the column, so a kind name that
+    // is not the column's value would make the row refuse its own delivery.
+    generatedKind: reply.kind ? storedKindValue(reply.kind) : null,
     escalation: reply.escalation ?? null,
+    humanModeAck: reply.humanModeAck ?? null,
   });
   if (!persisted) throw new ReplyNotPersistedError();
-  if (onPersisted) {
-    try {
-      await onPersisted();
-    } catch (error) {
-      // The reply is durable either way. A claim that could not be consumed here is
-      // still leased, so the next turn takes it over rather than sending twice.
-      console.error("[outbox] the post-persist hook failed:", (error as Error)?.message ?? String(error));
-    }
-  }
-  return await sendAndSettle(admin, outboxId, text, send);
+  return await sendAndSettle(admin, outboxId, { text, kind: reply.kind ?? "reply" }, send);
 }
 
 /**
  * Sends text an earlier attempt already persisted. Regenerates nothing, so no tool call,
  * escalation or notification can repeat.
+ *
+ * The payload the caller read travels with the claim, so a row whose text was replaced
+ * in the meantime is not sent: what goes out is what the row holds.
  */
-export function deliverStoredReply(
+export async function deliverStoredReply(
   admin: SupabaseClient,
   outboxId: string,
-  text: string,
+  stored: { text: string; kind: StoredReplyKind },
   send: (text: string) => Promise<string>,
-): Promise<string> {
-  return sendAndSettle(admin, outboxId, text, send);
+): Promise<DeliveredReply> {
+  return await sendAndSettle(admin, outboxId, stored, send);
 }
 
 /**

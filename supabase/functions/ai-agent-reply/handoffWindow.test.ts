@@ -52,8 +52,8 @@ interface StaffRow {
 function adminStub(options: {
   marker?: string | null;
   staff?: StaffRow[];
-  /** What the leased claim returns: the marker, or null when there is none. */
-  claimResult?: string | null;
+  /** What the leased claim returns: the marker, and the token that identifies the lease. */
+  claim?: { marker: string | null; token: string | null };
   insertError?: { message: string; code?: string } | null;
   outboxStatus?: string;
   /** The outbox row cannot be read, so its state is unknown. */
@@ -127,7 +127,19 @@ function adminStub(options: {
         });
       }
       if (fn === "claim_unanswered_escalation") {
-        return Promise.resolve({ data: options.claimResult ?? null, error: null });
+        // The claim comes with the marker AND the token of the lease it took: the marker
+        // alone cannot say which lease a release or a completion is about.
+        return Promise.resolve({
+          data: options.claim ?? { marker: null, token: null },
+          error: null,
+        });
+      }
+      if (fn === "complete_human_mode_ack" || fn === "release_human_mode_ack_claim") {
+        // Only the claim the caller holds can be completed or released. A token that is
+        // not the live one -- a lease that lapsed and was taken over -- touches nothing.
+        const live = ackClaim.claimToken ?? null;
+        const held = args.p_claim_token ?? null;
+        return Promise.resolve({ data: live !== null && held === live, error: null });
       }
       return Promise.resolve({ data: true, error: null });
     },
@@ -193,7 +205,7 @@ Deno.test("the escalation marker comes back when the reply never became durable"
   const since = "2026-11-12T08:00:00.000Z";
   const { admin, calls } = adminStub();
 
-  const released = await releaseUnansweredEscalationClaim(admin, SCOPE, THREAD_ID, since);
+  const released = await releaseUnansweredEscalationClaim(admin, SCOPE, THREAD_ID, since, CLAIM_TOKEN);
 
   assertEquals(released, true);
   const rpc = calls.find((call) => call.kind === "rpc:release_unanswered_escalation_claim");
@@ -202,17 +214,43 @@ Deno.test("the escalation marker comes back when the reply never became durable"
     p_thread_id: THREAD_ID,
     p_user_id: SCOPE.userId,
     p_since: since,
+    // The token of the lease the caller holds: the marker alone cannot say which lease
+    // is being given back.
+    p_claim_token: CLAIM_TOKEN,
   });
+});
+
+Deno.test("a lease the caller does not hold is never given back", async () => {
+  // A worker that outlived its lease must not free the lease the worker that replaced
+  // it is working under: a third worker could claim the marker while the second is still
+  // on it.
+  const since = "2026-11-12T08:00:00.000Z";
+  const { admin, calls } = adminStub();
+
+  const released = await releaseUnansweredEscalationClaim(admin, SCOPE, THREAD_ID, since, null);
+
+  assertEquals(released, false);
+  assertEquals(
+    calls.find((call) => call.kind === "rpc:release_unanswered_escalation_claim"),
+    undefined,
+    "a caller that holds no lease may not release one",
+  );
 });
 
 Deno.test("the escalation marker is leased, not taken, so a killed turn leaves it owed", async () => {
   const since = "2026-11-12T08:00:00.000Z";
-  const { admin, calls } = adminStub({ marker: since, claimResult: since });
+  const { admin, calls } = adminStub({
+    marker: since,
+    claim: { marker: since, token: CLAIM_TOKEN },
+  });
 
   const claim = await claimUnansweredEscalation(admin, SCOPE, THREAD_ID);
 
   assertEquals(claim.claimed, true);
   assertEquals(claim.marker, since);
+  // The lease comes with the token that identifies it: the marker alone cannot say which
+  // lease a later release or completion is about.
+  assertEquals(claim.token, CLAIM_TOKEN);
   const rpc = calls.find((call) => call.kind === "rpc:claim_unanswered_escalation");
   assert(rpc, "the marker must be leased through the claim RPC");
   assert(
@@ -221,10 +259,27 @@ Deno.test("the escalation marker is leased, not taken, so a killed turn leaves i
   );
 });
 
+Deno.test("a lease without a token is not a lease anybody can act on", async () => {
+  // A claim that cannot be named cannot be released or completed, so it is refused
+  // rather than half-honoured.
+  const since = "2026-11-12T08:00:00.000Z";
+  const { admin } = adminStub({ marker: since, claim: { marker: since, token: null } });
+
+  const claim = await claimUnansweredEscalation(admin, SCOPE, THREAD_ID);
+
+  assertEquals(claim.claimed, false);
+  assertEquals(claim.marker, null);
+  assertEquals(claim.token, null);
+});
+
 Deno.test("a staff reply that lands while the model answers suppresses the apology", async () => {
   const since = "2026-11-12T08:00:00.000Z";
   // The first read (before the model) saw no staff reply.
-  const { admin } = adminStub({ marker: since, staff: [], claimResult: since });
+  const { admin } = adminStub({
+    marker: since,
+    staff: [],
+    claim: { marker: since, token: CLAIM_TOKEN },
+  });
   const aftermath = await readEscalationAftermath(admin, SCOPE, THREAD_ID);
   assertEquals(aftermath.staffReplies, 0);
 
@@ -237,7 +292,7 @@ Deno.test("a staff reply that lands while the model answers suppresses the apolo
       message_text: "نعم متوفر عندنا",
       created_at: "2026-11-12T08:05:00.000Z",
     }],
-    claimResult: since,
+    claim: { marker: since, token: CLAIM_TOKEN },
   });
   const settlement = await settleEscalationAftermath(
     late.admin,
@@ -249,12 +304,17 @@ Deno.test("a staff reply that lands while the model answers suppresses the apolo
   assertEquals(settlement.replyText, "كريم الكعب متوفر");
   assertEquals(settlement.replyText.includes("نعتذر"), false);
   assertEquals(settlement.marker, since);
+  assertEquals(settlement.claimToken, CLAIM_TOKEN);
   assertEquals(settlement.staffReadFailed, false);
 });
 
 Deno.test("a window nobody answered still gets the apology", async () => {
   const since = "2026-11-12T08:00:00.000Z";
-  const { admin } = adminStub({ marker: since, staff: [], claimResult: since });
+  const { admin } = adminStub({
+    marker: since,
+    staff: [],
+    claim: { marker: since, token: CLAIM_TOKEN },
+  });
   const aftermath = await readEscalationAftermath(admin, SCOPE, THREAD_ID);
 
   const settlement = await settleEscalationAftermath(
@@ -266,6 +326,7 @@ Deno.test("a window nobody answered still gets the apology", async () => {
 
   assertEquals(settlement.replyText.includes("نعتذر"), true);
   assertEquals(settlement.marker, since);
+  assertEquals(settlement.claimToken, CLAIM_TOKEN);
   assertEquals(settlement.staffWriteFailed, false);
 });
 
@@ -280,7 +341,7 @@ Deno.test("a staff context that could not be stored sends the marker back", asyn
   const { admin } = adminStub({
     marker: since,
     staff,
-    claimResult: since,
+    claim: { marker: since, token: CLAIM_TOKEN },
     insertError: { message: "write failed" },
   });
   const aftermath = await readEscalationAftermath(admin, SCOPE, THREAD_ID);
@@ -294,6 +355,9 @@ Deno.test("a staff context that could not be stored sends the marker back", asyn
 
   assertEquals(settlement.staffWriteFailed, true);
   assertEquals(settlement.marker, since);
+  // The lease comes back with the marker: the turn that gives it back has to name the
+  // lease it is giving back.
+  assertEquals(settlement.claimToken, CLAIM_TOKEN);
 });
 
 // A customer wrote during a window that was already notified. The assistant is silent
@@ -590,6 +654,20 @@ Deno.test("the acknowledgement is only completed for the claim the caller holds"
   assertEquals(bareCalls.length, 0);
 });
 
+// The claim is a lease: a worker that outlived its lease does not hold the claim any
+// more. Its token names a claim that was taken over, and completing or releasing that
+// token would spend the claim the worker that replaced it is holding.
+Deno.test("an acknowledgement claim that was taken over is not the caller's to spend", async () => {
+  const stale = "2026-11-13T07:00:00.000Z";
+  const live = "2026-11-13T08:00:00.000Z";
+  const { admin } = adminStub({ ackClaim: { result: "claimed", claimToken: live } });
+
+  assertEquals(await completeHumanModeAck(admin, SCOPE, stale), false);
+  assertEquals(await releaseHumanModeAck(admin, SCOPE, stale), false);
+  // The claim that IS live can still be spent.
+  assertEquals(await completeHumanModeAck(admin, SCOPE, live), true);
+});
+
 // The turn write and the cancellation that follows it are two statements, and a worker
 // killed between them leaves the work item open. Recovery re-drives it, reaches the
 // same gate and stores the same question again -- so the question is stored under the
@@ -631,7 +709,8 @@ Deno.test("a work item whose row cannot be read is not reported as settled", asy
 // The reply carries the apology, so the reply and the window it resolves are one fact.
 // The marker is consumed by the SAME statement that writes the reply: a worker killed
 // between the two would leave the apology owed a second time, and the customer would be
-// apologised to twice.
+// apologised to twice. The lease token travels with it, so a worker whose lease lapsed
+// cannot consume the window a newer worker is working on.
 Deno.test("the reply resolves the escalation window it was owed", () => {
   const since = "2026-11-12T08:00:00.000Z";
 
@@ -640,12 +719,13 @@ Deno.test("the reply resolves the escalation window it was owed", () => {
       {
         replyText: "كريم الكعب متوفر",
         marker: since,
+        claimToken: CLAIM_TOKEN,
         staffReadFailed: false,
         staffWriteFailed: false,
       },
       { threadId: THREAD_ID, userId: SCOPE.userId },
     ),
-    { threadId: THREAD_ID, userId: SCOPE.userId, since },
+    { threadId: THREAD_ID, userId: SCOPE.userId, since, claimToken: CLAIM_TOKEN },
   );
 
   // No window, nothing to resolve.
@@ -654,6 +734,23 @@ Deno.test("the reply resolves the escalation window it was owed", () => {
       {
         replyText: "كريم الكعب متوفر",
         marker: null,
+        claimToken: null,
+        staffReadFailed: false,
+        staffWriteFailed: false,
+      },
+      { threadId: THREAD_ID, userId: SCOPE.userId },
+    ),
+    null,
+  );
+
+  // A window without a lease token is no window: it cannot be consumed by name, and a
+  // reply that carries it would be stored against a window nobody owns.
+  assertEquals(
+    escalationForReply(
+      {
+        replyText: "كريم الكعب متوفر",
+        marker: since,
+        claimToken: null,
         staffReadFailed: false,
         staffWriteFailed: false,
       },
@@ -674,6 +771,7 @@ Deno.test("a staff context that failed leaves the escalation window owed", () =>
       {
         replyText: "كريم الكعب متوفر",
         marker: since,
+        claimToken: CLAIM_TOKEN,
         staffReadFailed: true,
         staffWriteFailed: false,
       },
@@ -687,6 +785,7 @@ Deno.test("a staff context that failed leaves the escalation window owed", () =>
       {
         replyText: "كريم الكعب متوفر",
         marker: since,
+        claimToken: CLAIM_TOKEN,
         staffReadFailed: false,
         staffWriteFailed: true,
       },

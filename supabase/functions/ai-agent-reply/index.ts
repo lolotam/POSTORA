@@ -985,8 +985,14 @@ Deno.serve(async (req) => {
       }
       if (entry.mode === "redeliver") {
         const sender = replySender;
-        const outboundMessageId = await deliverStoredReply(
-          admin, outboxId, entry.text, (text) => sender(request.recipient_phone, text),
+        // The payload the caller read travels with the claim: a row whose text was
+        // replaced between the read and the claim is not sent, and what goes out is what
+        // the row holds.
+        const delivered = await deliverStoredReply(
+          admin,
+          outboxId,
+          { text: entry.text, kind: entry.kind },
+          (text) => sender(request.recipient_phone, text),
         );
         // The same trail a fresh delivery leaves. Without it the customer has a reply that
         // is missing from the inbox UI and from the thread the next turn reads -- so the
@@ -997,20 +1003,21 @@ Deno.serve(async (req) => {
         //
         // The tool calls come from the ROW, not from this invocation -- which ran none. An
         // empty list here would record a reply that had used tools as having used none.
-        await persistDelivery(entry.text, outboundMessageId, entry.toolCalls ?? []);
-        // A redelivered NOTICE is the one-time handoff acknowledgement, and it is now
-        // delivered: the claim that owed it is consumed, so no later turn sends it again.
+        await persistDelivery(delivered.text, delivered.messageId, entry.toolCalls ?? []);
+        // A redelivered NOTICE is the one-time handoff acknowledgement. Its claim is
+        // normally spent already -- the notice and the claim it spends are written by ONE
+        // statement -- so this is the net under a notice that was persisted without it.
         if (entry.kind === "human_mode_ack") {
           await completeHumanModeAck(admin, handoffScope(request), humanModeAckToken);
         }
         await logOutcome(admin, {
           ...baseLog,
-          reply_text: entry.text.slice(0, 4000),
+          reply_text: delivered.text.slice(0, 4000),
           tool_calls: entry.toolCalls?.length ? entry.toolCalls : null,
           latency_ms: Date.now() - startedAt,
           status: entry.kind === "human_mode_ack" ? "human_mode_ack" : "sent",
-        }, { redelivered: true, outbound_message_id: outboundMessageId });
-        return jsonResponse({ ok: true, redelivered: true, reply: entry.text });
+        }, { redelivered: true, outbound_message_id: delivered.messageId });
+        return jsonResponse({ ok: true, redelivered: true, reply: delivered.text });
       }
     }
 
@@ -1022,20 +1029,34 @@ Deno.serve(async (req) => {
     if (humanModeAck && replySender) {
       const sender = replySender;
       let outboundMessageId: string | null;
+      let noticeText = humanModeAck;
+      // The claim the notice spends. Without it the notice cannot be persisted at all:
+      // a notice that is durable with its claim still owed is a notice the next turn
+      // sends again, and the customer is told twice that a human has the conversation.
+      const ackClaim = humanModeAckToken
+        ? { ...handoffScope(request), claimToken: humanModeAckToken }
+        : null;
       try {
-        outboundMessageId = outboxId
-          ? await deliverGeneratedReply(
+        if (outboxId) {
+          const delivered = await deliverGeneratedReply(
             admin,
             outboxId,
-            { text: humanModeAck, toolCalls: [], kind: "human_mode_ack" },
-            (text) => sender(request.recipient_phone, text),
-            // The notice is durable from here, so the claim that owed it is consumed: no
-            // later turn sends it a second time.
-            async () => {
-              await completeHumanModeAck(admin, handoffScope(request), humanModeAckToken);
+            {
+              text: humanModeAck,
+              toolCalls: [],
+              kind: "human_mode_ack",
+              // The notice and the claim it spends are written by ONE statement, so a
+              // worker that dies between them cannot leave the customer owed a notice
+              // whose claim is already spent -- or a notice that was sent twice.
+              humanModeAck: ackClaim,
             },
-          )
-          : await sender(request.recipient_phone, humanModeAck);
+            (text) => sender(request.recipient_phone, text),
+          );
+          outboundMessageId = delivered.messageId;
+          noticeText = delivered.text;
+        } else {
+          outboundMessageId = await sender(request.recipient_phone, humanModeAck);
+        }
       } catch (ackError) {
         if (!replyIsDurable(outboxId, ackError)) {
           const released = await releaseHumanModeAck(admin, handoffScope(request), humanModeAckToken);
@@ -1052,14 +1073,14 @@ Deno.serve(async (req) => {
       if (!outboxId) {
         await completeHumanModeAck(admin, handoffScope(request), humanModeAckToken);
       }
-      await persistDelivery(humanModeAck, outboundMessageId, []);
+      await persistDelivery(noticeText, outboundMessageId, []);
       await logOutcome(admin, {
         ...baseLog,
-        reply_text: humanModeAck,
+        reply_text: noticeText,
         latency_ms: Date.now() - startedAt,
         status: "human_mode_ack",
       }, { outbound_message_id: outboundMessageId });
-      return jsonResponse({ ok: true, human_mode_ack: true, reply: humanModeAck });
+      return jsonResponse({ ok: true, human_mode_ack: true, reply: noticeText });
     }
 
     // The sandbox passes the literal "test" when a caller names no account, and
@@ -1879,6 +1900,10 @@ Deno.serve(async (req) => {
      * apology owed instead of lost. A staff context that could not be stored or read
      * keeps the lease, so the next turn tries again.
      *
+     * The lease token travels with it: the marker alone cannot say which lease is being
+     * consumed, and a worker whose lease lapsed must not clear the window a newer
+     * worker is working on.
+     *
      * Only the path WITHOUT an outbox row needs this: with a row, the window is
      * consumed by the same statement that writes the reply, so there is no point between
      * the two at which a worker can die and leave the apology owed twice.
@@ -1887,7 +1912,13 @@ Deno.serve(async (req) => {
       if (!settlement.marker || escalationCompleted) return;
       if (settlement.staffWriteFailed || settlement.staffReadFailed) return;
       escalationCompleted = true;
-      await completeUnansweredEscalation(admin, handoffScope(request), thread.id, settlement.marker);
+      await completeUnansweredEscalation(
+        admin,
+        handoffScope(request),
+        thread.id,
+        settlement.marker,
+        settlement.claimToken,
+      );
     };
     try {
       if (!dryRun && replySender) {
@@ -1896,7 +1927,7 @@ Deno.serve(async (req) => {
         // mark sending, mark sent) so a kill at any point leaves a state recovery can act on
         // without guessing. Without one -- callers that predate the outbox -- it is the plain
         // send it always was.
-        outboundMessageId = outboxId
+        const delivered = outboxId
           ? await deliverGeneratedReply(
             admin,
             outboxId,
@@ -1913,7 +1944,15 @@ Deno.serve(async (req) => {
             },
             (text) => sender(request.recipient_phone, text),
           )
+          : null;
+        outboundMessageId = delivered
+          ? delivered.messageId
           : await sender(request.recipient_phone, replyText);
+        if (delivered) {
+          // What went out is what the row holds: the thread turn and the log say what
+          // the customer received, not what this invocation meant to send.
+          replyText = delivered.text;
+        }
         // Without an outbox row there is no persist to hang the completion on, so the
         // window is resolved once the reply has been sent.
         if (!outboxId) await completeEscalation();
@@ -1935,6 +1974,7 @@ Deno.serve(async (req) => {
           handoffScope(request),
           thread.id,
           settlement.marker,
+          settlement.claimToken,
         );
         if (!released) {
           // The lease still stands: a later turn takes the apology over once it lapses,
