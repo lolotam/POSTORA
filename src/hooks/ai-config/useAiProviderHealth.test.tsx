@@ -28,7 +28,7 @@ describe("useAiProviderHealth", () => {
   it('refreshes both catalogue and health after a completed sync', async () => {
     queryClient.setQueryData(['ai-config'], { models: ['old'] });
     queryClient.setQueryData(['ai-provider-health'], []);
-    invoke.mockResolvedValue({ data: { done: true, results: [], skipped: [], summary: {} }, error: null });
+    invoke.mockResolvedValue({ data: { run_id: "r", chunk: 1, next_chunk: null, done: true, results: [], skipped: [], summary: { total: 0, connected: 0, failed: 0, needs_relogin: 0 } }, error: null });
     const { result } = renderHook(() => useRunProviderHealth(), { wrapper });
     await result.current.run();
     expect(queryClient.getQueryState(['ai-config'])?.isInvalidated).toBe(true);
@@ -54,8 +54,8 @@ describe("useAiProviderHealth", () => {
 
   it("walks the chunks until the server says it is done", async () => {
     invoke
-      .mockResolvedValueOnce({ data: { run_id: "r", chunk: 1, done: false, next_chunk: 2, results: [], summary: {} }, error: null })
-      .mockResolvedValueOnce({ data: { run_id: "r", chunk: 2, done: true, next_chunk: null, results: [{ provider_code: "xai", auth_method: "api_key", status: "failed" }], summary: {} }, error: null });
+      .mockResolvedValueOnce({ data: { run_id: "r", chunk: 1, done: false, next_chunk: 2, results: [], skipped: [], summary: { total: 0, connected: 0, failed: 0, needs_relogin: 0 } }, error: null })
+      .mockResolvedValueOnce({ data: { run_id: "r", chunk: 2, done: true, next_chunk: null, results: [{ provider_code: "xai", auth_method: "api_key", status: "failed" }], skipped: [], summary: { total: 0, connected: 0, failed: 0, needs_relogin: 0 } }, error: null });
     const { result } = renderHook(() => useRunProviderHealth(), { wrapper });
     const run = await result.current.run();
     expect(invoke).toHaveBeenCalledTimes(2);
@@ -74,7 +74,7 @@ describe("useAiProviderHealth", () => {
           next_chunk: 2,
           results: [{ provider_code: "xai", auth_method: "api_key", status: "failed" }],
           skipped: [{ provider_code: "claude", auth_method: "api_key", reason: "ran out of time" }],
-          summary: {},
+          summary: { total: 0, connected: 0, failed: 0, needs_relogin: 0 },
         },
         error: null,
       })
@@ -86,7 +86,7 @@ describe("useAiProviderHealth", () => {
           next_chunk: null,
           results: [{ provider_code: "claude", auth_method: "api_key", status: "connected" }],
           skipped: [],
-          summary: {},
+          summary: { total: 0, connected: 0, failed: 0, needs_relogin: 0 },
         },
         error: null,
       });
@@ -106,7 +106,7 @@ describe("useAiProviderHealth", () => {
         next_chunk: 2,
         results: [],
         skipped: [{ provider_code: "claude", auth_method: "api_key", reason: "ran out of time" }],
-        summary: {},
+        summary: { total: 0, connected: 0, failed: 0, needs_relogin: 0 },
       },
       error: null,
     });
@@ -128,7 +128,7 @@ describe("useAiProviderHealth", () => {
   });
 
   it("stops running once the run is over", async () => {
-    invoke.mockResolvedValue({ data: { run_id: "r", chunk: 1, done: true, next_chunk: null, results: [], summary: {} }, error: null });
+    invoke.mockResolvedValue({ data: { run_id: "r", chunk: 1, done: true, next_chunk: null, results: [], skipped: [], summary: { total: 0, connected: 0, failed: 0, needs_relogin: 0 } }, error: null });
     const { result } = renderHook(() => useRunProviderHealth(), { wrapper });
     await result.current.run();
     await waitFor(() => expect(result.current.isRunning).toBe(false));

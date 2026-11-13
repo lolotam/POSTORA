@@ -1,5 +1,5 @@
 // deno-lint-ignore-file no-import-prefix
-import { assert, assertEquals } from "https://deno.land/std@0.208.0/assert/mod.ts";
+import { assert, assertEquals, assertRejects } from "https://deno.land/std@0.208.0/assert/mod.ts";
 import {
   alertRowsToDegraded,
   buildAlertHtml,
@@ -123,20 +123,20 @@ Deno.test("the alert hands the send the signal that bounds it", async () => {
   assert(received === controller.signal);
 });
 
-Deno.test("with no admin address there is nobody to tell and nothing is sent", async () => {
+Deno.test("missing admin addresses leave the event retryable without sending", async () => {
   let sent = false;
   const mailer: AdminMailer = {
     adminRecipients: async () => [],
     send: async () => { sent = true; },
   };
-  await sendDegradedProviderAlert(mailer, {
+  await assertRejects(() => sendDegradedProviderAlert(mailer, {
     provider_code: "openrouter",
     display_name: "OpenRouter",
     auth_method: "api_key",
     status: "failed",
     reason: null,
     alert_id: null,
-  });
+  }), Error, "No admin alert recipients");
   assertEquals(sent, false);
 });
 

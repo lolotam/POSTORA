@@ -1,4 +1,4 @@
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { createClient, type SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { authenticateCaller } from "../_shared/auth-helper.ts";
 import {
   HIGGSFIELD_PROVIDER_CODE,
@@ -14,7 +14,7 @@ import {
   loadConnection,
   persistTokens,
 } from "../_shared/higgsfield-oauth.ts";
-import { HiggsfieldMcpClient } from "../_shared/higgsfield-mcp.ts";
+import { syncHiggsfieldCatalog } from "./syncCatalog.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -56,90 +56,14 @@ function safeReturnTo(raw: unknown, scope: "platform" | "user"): string {
   return raw;
 }
 
-function isAdmin(db: any, userId: string) {
+function isAdmin(db: SupabaseClient, userId: string) {
   return db
     .from("user_roles")
     .select("role")
     .eq("user_id", userId)
     .eq("role", "admin")
     .maybeSingle()
-    .then((r: any) => !r.error && !!r.data);
-}
-function catalog(payload: any) {
-  const items = Array.isArray(payload?.items)
-    ? payload.items
-    : Array.isArray(payload)
-      ? payload
-      : [];
-  const keys = [
-    "parameters",
-    "aspect_ratios",
-    "durations",
-    "duration_range",
-    "medias",
-    "tags",
-    "supports_unlim",
-    "output_type",
-    "provider_name",
-  ];
-  return items
-    .filter((x: any) => x && typeof x.id === "string")
-    .map((x: any) => ({
-      id: x.id,
-      name: x.name,
-      description: x.description,
-      metadata: Object.fromEntries(keys.filter((k) => x[k] !== undefined).map((k) => [k, x[k]])),
-    }));
-}
-
-async function syncHiggsfieldCatalog(db: any) {
-  const { data: provider } = await db
-    .from("ai_providers")
-    .select("id")
-    .eq("provider_code", HIGGSFIELD_PROVIDER_CODE)
-    .maybeSingle();
-  if (!provider) throw new Error("Higgsfield provider row is missing");
-  await getValidAccessToken(db);
-  const mcp = await HiggsfieldMcpClient.create(db);
-  const found = new Map<string, any>();
-  for (const capability of ["video", "image"] as const) {
-    for (const model of catalog(
-      await mcp.callTool("models_explore", { action: "list", type: capability, limit: 100 }),
-    )) {
-      found.set(model.id, { model, capability });
-    }
-  }
-  if (!found.size) throw new Error("Higgsfield returned an empty model catalog");
-  for (const [model_id, x] of found) {
-    // The catalogue is keyed by credential kind since 20261113180000_ai_provider_health.sql:
-    // the conflict target must name auth_method too, or PostgREST answers 42P10 and the
-    // sync silently syncs nothing. auth_method is written explicitly so the row is an
-    // API-key model even if the column default ever changes.
-    const { error } = await db.from("ai_models").upsert(
-      {
-        provider_id: provider.id,
-        model_id,
-        name: x.model.name || model_id,
-        description: x.model.description ?? null,
-        capabilities: [x.capability],
-        metadata: x.model.metadata,
-        is_active: true,
-        auth_method: "api_key",
-      },
-      { onConflict: "provider_id,model_id,auth_method" },
-    );
-    // The error was never read here: a refused upsert looked like a successful sync.
-    if (error) throw new Error(`ai_models upsert failed for ${model_id}`);
-  }
-  const { data: stale } = await db
-    .from("ai_models")
-    .select("id, model_id")
-    .eq("provider_id", provider.id)
-    .eq("auth_method", "api_key")
-    .eq("is_active", true);
-  const ids = (stale ?? []).filter((x: any) => !found.has(x.model_id)).map((x: any) => x.id);
-  if (ids.length) await db.from("ai_models").update({ is_active: false }).in("id", ids);
-  return { discovered: found.size, activated: found.size, deactivated: ids.length };
+    .then((r) => !r.error && !!r.data);
 }
 
 Deno.serve(async (req) => {

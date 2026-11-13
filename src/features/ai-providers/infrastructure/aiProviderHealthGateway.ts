@@ -24,13 +24,13 @@ const healthRowSchema = z.object({
 });
 
 const summarySchema = z.object({
-  total: z.number().default(0),
-  connected: z.number().default(0),
-  failed: z.number().default(0),
-  needs_relogin: z.number().default(0),
+  total: z.number(),
+  connected: z.number(),
+  failed: z.number(),
+  needs_relogin: z.number(),
 });
 
-const resultsSchema = z.object({ results: z.array(healthRowSchema).default([]) });
+const resultsSchema = z.object({ results: z.array(healthRowSchema) });
 
 /** A target the run's time budget never reached. It was not tested. */
 const skippedSchema = z.object({
@@ -40,13 +40,13 @@ const skippedSchema = z.object({
 });
 
 const chunkSchema = z.object({
-  run_id: z.string().default(""),
-  chunk: z.number().default(1),
-  done: z.boolean().default(true),
-  next_chunk: z.number().nullable().default(null),
-  results: z.array(healthRowSchema).default([]),
-  skipped: z.array(skippedSchema).default([]),
-  summary: summarySchema.default({ total: 0, connected: 0, failed: 0, needs_relogin: 0 }),
+  run_id: z.string().min(1),
+  chunk: z.number().int().positive(),
+  done: z.boolean(),
+  next_chunk: z.number().int().positive().nullable(),
+  results: z.array(healthRowSchema),
+  skipped: z.array(skippedSchema),
+  summary: summarySchema,
 });
 
 export type ProviderHealthRow = z.infer<typeof healthRowSchema>;

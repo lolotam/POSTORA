@@ -28,7 +28,7 @@ describe("aiProviderHealthGateway", () => {
 
   it("runs one chunk with the run token", async () => {
     invoke.mockResolvedValue({
-      data: { run_id: "r", chunk: 1, done: true, next_chunk: null, results: [], summary: {} },
+      data: { run_id: "r", chunk: 1, done: true, next_chunk: null, results: [], skipped: [], summary: { total: 0, connected: 0, failed: 0, needs_relogin: 0 } },
       error: null,
     });
     const chunk = await runProviderHealthChunk(2, "token-a");
@@ -70,6 +70,16 @@ describe("aiProviderHealthGateway", () => {
 
   it("rejects a response that is not the agreed shape", async () => {
     invoke.mockResolvedValue({ data: { results: "not an array" }, error: null });
+    await expect(fetchProviderHealth()).rejects.toThrow(INVALID_RESPONSE);
+  });
+
+  it.each([{}, { unrelated: true }, { done: true, results: [] }])("rejects incomplete envelopes %j", async (data) => {
+    invoke.mockResolvedValue({ data, error: null });
+    await expect(runProviderHealthChunk(1, "token-a")).rejects.toThrow(INVALID_RESPONSE);
+  });
+
+  it.each([{}, { unrelated: true }])("rejects status without results %j", async (data) => {
+    invoke.mockResolvedValue({ data, error: null });
     await expect(fetchProviderHealth()).rejects.toThrow(INVALID_RESPONSE);
   });
 

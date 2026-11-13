@@ -30,6 +30,7 @@ const chunk = (results: unknown[], done = true) => ({
     done,
     next_chunk: done ? null : 2,
     results,
+    skipped: [],
     summary: { total: results.length, connected: 1, failed: 1, needs_relogin: 0 },
   },
   error: null,

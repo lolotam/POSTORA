@@ -2,6 +2,7 @@
 import { assert, assertEquals, assertRejects } from "https://deno.land/std@0.208.0/assert/mod.ts";
 import { runHealthChunk, type HealthRunPorts } from "./run.ts";
 import { AiOAuthError } from "../_shared/aiOAuth/errors.ts";
+import { OAuthProbeError } from "../_shared/providerErrors.ts";
 import { buildAlertTitle } from "../_shared/aiProviderAlert.ts";
 import { ProviderReadError } from "../_shared/aiProviderTest.ts";
 import type { DegradedProvider, HealthResult } from "../_shared/aiProviderHealth.ts";
@@ -44,20 +45,20 @@ Deno.test("slow discovery consumes the run budget and never reaches a provider",
   assertEquals(probed, false);
 });
 
-Deno.test("a hung target receives only the remaining global budget", async () => {
-  let claimed = false;
+Deno.test("a hung target retains time to record failure within the remaining global budget", async () => {
   const { ports } = fakePorts({
+    listOAuthConnections: async () => [],
     probeApiKey: (_target, _key, signal) => new Promise((_resolve, reject) => {
       signal.addEventListener('abort', () => reject(signal.reason), { once: true });
     }),
-    claimAlerts: async () => { claimed = true; return []; },
+    claimAlerts: async (_token, signal) => { assert(!signal.aborted); return []; },
   });
   const start = Date.now();
-  const out = await runHealthChunk(ports, { runId: 'r', chunk: 1, deadlineMs: 20 });
-  assertEquals(out.done, false);
-  assert(out.skipped.length > 0);
-  assert(Date.now() - start < 500);
-  assertEquals(claimed, false);
+  const out = await runHealthChunk(ports, { runId: 'r', chunk: 1, deadlineMs: 200 });
+  assertEquals(out.done, true);
+  assertEquals(out.skipped, []);
+  assertEquals(out.results.find((row) => row.auth_method === "api_key")?.status, "failed");
+  assert(Date.now() - start < 1000);
 });
 
 /** The rows the database would claim: a provider that was connected and is now failing. */
@@ -268,7 +269,7 @@ Deno.test("a chunk that covered everything is done", async () => {
   assertEquals(out.skipped.length, 0);
 });
 
-Deno.test("every phase of a target shares one signal", async () => {
+Deno.test("probe and catalogue phases share one signal before the reserved write budget", async () => {
   const signals: AbortSignal[] = [];
   const { ports } = fakePorts({
     probeApiKey: async (_target, _key, signal) => { signals.push(signal); },
@@ -499,3 +500,54 @@ Deno.test("an alert send is bounded and a timeout leaves the claim open", async 
   // open, so the next run re-claims it.
   assertEquals(closed, []);
 });
+
+for (const phase of ['oauth', 'sync'] as const) {
+  Deno.test(`a ${phase} timeout is recorded and can alert using the reserved write budget`, async () => {
+    const hang = (signal: AbortSignal) => new Promise<never>((_resolve, reject) => {
+      signal.addEventListener('abort', () => reject(signal.reason), { once: true });
+    });
+    let alerted = false;
+    const { ports, recorded } = fakePorts({
+      listApiKeyProviders: async () => [],
+      probeOAuth: (_target, signal) => phase === 'oauth' ? hang(signal) : Promise.resolve(),
+      syncOAuthCatalogue: (_target, signal) => hang(signal),
+      recordResult: async (result, _runId, signal) => {
+        assertEquals(signal.aborted, false, 'write must retain a live deadline');
+        recorded.push(result);
+      },
+      claimAlerts: async () => recorded.map((result) => ({ ...result, status: 'failed' as const, alert_id: 'event' })),
+      sendAlert: async () => { alerted = true; },
+    });
+    const out = await runHealthChunk(ports, { runId: 'r', chunk: 1, targetBudgetMs: 80, deadlineMs: 1000 });
+    assertEquals(out.done, true);
+    assertEquals(out.skipped, []);
+    assertEquals(out.results[0].status, 'failed');
+    assertEquals(recorded.length, 1);
+    assert(alerted);
+  });
+}
+
+Deno.test('second credential lookup failure neither degrades nor alerts the provider', async () => {
+  let reads = 0;
+  let sent = false;
+  const { ports, recorded } = fakePorts({
+    listApiKeyProviders: async () => [{ provider_code: 'openai', name: 'OpenAI' }],
+    listOAuthConnections: async () => [],
+    resolveApiKey: async () => { if (++reads === 2) throw new ProviderReadError('storage down'); return 'key'; },
+    sendAlert: async () => { sent = true; },
+  });
+  const out = await runHealthChunk(ports, { runId: 'r', chunk: 1 });
+  assertEquals(recorded.length, 0);
+  assertEquals(out.skipped.length, 1);
+  assertEquals(out.done, false);
+  assertEquals(sent, false);
+});
+
+for (const status of [401, 429, 502]) {
+  Deno.test(`OAuth refusal preserves safe HTTP ${status} in results and alerts`, async () => {
+    const { ports } = fakePorts({ listApiKeyProviders: async () => [],
+      probeOAuth: async () => { throw new OAuthProbeError(status); } });
+    const out = await runHealthChunk(ports, { runId: 'r', chunk: 1 });
+    assertEquals(out.results[0].reason, `The subscription sign-in was refused (HTTP ${status}).`);
+  });
+}

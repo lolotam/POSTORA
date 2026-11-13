@@ -9,6 +9,13 @@ export class ProviderTestError extends Error {
   }
 }
 
+/** Safe HTTP refusal from a subscription probe; never carries an upstream body. */
+export class OAuthProbeError extends ProviderTestError {
+  constructor(status: number) {
+    super(`The subscription sign-in was refused (HTTP ${status}).`, status, "");
+  }
+}
+
 // Maps a provider's failed HTTP response to the message the admin Test card shows.
 export function describeProviderFailure(name: string, status: number, bodyText: string): string {
   if (isBillingBlocked(status, bodyText)) {
@@ -26,10 +33,5 @@ export function describeProviderFailure(name: string, status: number, bodyText: 
     }
     return "Rate limit exceeded";
   }
-  try {
-    const parsed = JSON.parse(bodyText);
-    const message = parsed?.error?.message || parsed?.message || parsed?.error;
-    if (typeof message === "string" && message) return `${name}: ${message}`;
-  } catch { /* not JSON */ }
   return `${name} API error: ${status}`;
 }

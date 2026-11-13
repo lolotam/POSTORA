@@ -103,8 +103,11 @@ async function routeHealthRequest(req: Request, ports: HealthHandlerPorts, deadl
   if (parsed.scope === "manual" && !parsed.runToken) {
     return restrictedJsonResponse(req, { error: "run_token is required" }, 400);
   }
+  if (parsed.scope === "manual" && !z.string().uuid().safeParse(parsed.runToken).success) {
+    return restrictedJsonResponse(req, { error: "run_token must be a UUID" }, 400);
+  }
 
-  const runId = deriveRunId(parsed.scope, parsed.runToken ?? "cron", new Date());
+  const runId = await deriveRunId(parsed.scope, parsed.runToken ?? "cron", new Date());
   // A lease permits its holder to renew it. Each request needs a distinct holder,
   // otherwise two concurrent retries of the same run could both acquire it.
   const holder = crypto.randomUUID();

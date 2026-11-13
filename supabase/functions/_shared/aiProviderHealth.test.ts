@@ -1,5 +1,5 @@
 // deno-lint-ignore-file no-import-prefix
-import { assert, assertEquals } from "https://deno.land/std@0.208.0/assert/mod.ts";
+import { assert, assertEquals, assertRejects } from "https://deno.land/std@0.208.0/assert/mod.ts";
 import {
   classifyApiKeyFailure,
   classifyOAuthFailure,
@@ -8,6 +8,7 @@ import {
   sanitizeReason,
   sliceHealthChunk,
   summarizeHealthResults,
+  withSignal,
   type HealthResult,
 } from "./aiProviderHealth.ts";
 
@@ -108,24 +109,24 @@ Deno.test("the summary counts every status", () => {
   ]), { total: 3, connected: 1, failed: 1, needs_relogin: 1 });
 });
 
-Deno.test("the daily run id is stable for a day and the manual one follows its token", () => {
+Deno.test("run identities preserve random UUIDs and share a cryptographic daily id", async () => {
   const day = new Date("2026-11-13T03:05:00Z");
-  assertEquals(
-    deriveRunId("daily", "cron", day),
-    deriveRunId("daily", "cron", new Date("2026-11-13T03:26:00Z")),
-  );
-  assert(deriveRunId("daily", "cron", day) !== deriveRunId("daily", "cron", new Date("2026-11-14T03:05:00Z")));
-  assert(deriveRunId("manual", "token-a", day) !== deriveRunId("manual", "token-b", day));
+  const token = crypto.randomUUID();
+  assertEquals(await deriveRunId("manual", token, day), token);
+  assertEquals(await deriveRunId("manual", token, new Date("2026-11-14")), token);
+  assert(await deriveRunId("manual", crypto.randomUUID(), day) !== token);
+  const daily = await deriveRunId("daily", "cron", day);
+  assertEquals(daily, await deriveRunId("daily", "other", new Date("2026-11-13T03:26:00Z")));
+  assert(daily !== await deriveRunId("daily", "cron", new Date("2026-11-14")));
+  assert(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-8[0-9a-f]{3}-[0-9a-f]{12}$/.test(daily));
+  // The SQL suite accepts this exact derived value into its UUID run column.
+  assertEquals(daily, "357b4318-de5b-440e-8ca0-bf781a6bfc1b");
 });
 
-Deno.test("the run id is a real uuid, because the column it lands in is a uuid", () => {
-  // ai_provider_health.run_id and cron_run_leases.holder are both uuid columns, so a
-  // shape that only looks like a uuid would fail at the database, not here.
-  const UUID_V4 = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
-  assert(UUID_V4.test(deriveRunId("daily", "cron", new Date("2026-11-13T03:05:00Z"))));
-  assert(UUID_V4.test(deriveRunId("manual", "token-a", new Date("2026-11-13T03:05:00Z"))));
-  // Pinned: the SQL proof in supabase/tests/ai_provider_health.sql feeds this exact
-  // string to a uuid column, so a change to the derivation must change it there too.
-  assertEquals(deriveRunId("daily", "cron", new Date("2026-11-13T03:05:00Z")), "13ed6566-d364-4712-8464-88a5cd647da0");
-  assertEquals(deriveRunId("manual", "token-a", new Date("2026-11-13T03:05:00Z")), "a28cdbaa-b588-45a6-8688-6739b78868cc");
+Deno.test("already-aborted waits observe the input promise rejection", async () => {
+  const controller = new AbortController();
+  controller.abort(new Error("cancelled"));
+  const late = Promise.reject(new Error("operation failed"));
+  await assertRejects(() => withSignal(late, controller.signal), Error, "cancelled");
+  await new Promise((resolve) => setTimeout(resolve, 0));
 });

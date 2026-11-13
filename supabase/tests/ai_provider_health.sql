@@ -348,7 +348,7 @@ DO $aph_run_id$
 DECLARE
   v_run_id uuid;
 BEGIN
-  v_run_id := '13ed6566-d364-4712-8464-88a5cd647da0'::uuid;
+  v_run_id := '357b4318-de5b-440e-8ca0-bf781a6bfc1b'::uuid;
 
   PERFORM public.record_ai_provider_health(
     'claude', 'api_key', 'connected', NULL, 0, 0, 0, 1, v_run_id);
@@ -409,6 +409,33 @@ BEGIN
       v_jobs, coalesce(v_names, 'none');
   END IF;
 END $aph_cron$;
+
+-- Execute the actual scheduled bodies against a local URL fixture. Substitute
+-- only the HTTP boundary: the no-URL guard and URL construction run unchanged.
+BEGIN;
+CREATE OR REPLACE FUNCTION public.get_cron_functions_base_url() RETURNS text
+LANGUAGE sql STABLE AS $$ SELECT nullif(current_setting('postora.test_functions_url', true), '') $$;
+DO $aph_cron_url$
+DECLARE v_command text; v_test text;
+BEGIN
+  IF to_regclass('cron.job') IS NULL THEN RETURN; END IF;
+  FOR v_command IN SELECT command FROM cron.job WHERE jobname LIKE 'ai-provider-health-%' LOOP
+    IF v_command NOT LIKE '%public.get_cron_functions_base_url()%'
+       OR v_command NOT LIKE '%url := v_url%'
+       OR v_command LIKE '%api.postora.cloud%' THEN
+      RAISE EXCEPTION 'FAIL: cron sends credentials to a literal host';
+    END IF;
+    PERFORM set_config('postora.test_functions_url', '', true);
+    v_test := regexp_replace(v_command, 'PERFORM net.http_post\([^;]+;',
+      'RAISE EXCEPTION ''FAIL: missing URL did not skip HTTP'';');
+    EXECUTE v_test;
+    PERFORM set_config('postora.test_functions_url', 'https://staging.example.test/', true);
+    v_test := regexp_replace(v_command, 'PERFORM net.http_post\([^;]+;',
+      'IF v_url IS DISTINCT FROM ''https://staging.example.test/functions/v1/ai-provider-health'' THEN RAISE EXCEPTION ''FAIL: cron URL does not follow the environment''; END IF;');
+    EXECUTE v_test;
+  END LOOP;
+END $aph_cron_url$;
+ROLLBACK;
 
 -- ===========================================================================
 -- 11. A provider that is re-checked while it is STILL broken keeps its
@@ -725,16 +752,16 @@ DECLARE
   v_daily uuid := gen_random_uuid(); v_manual uuid := gen_random_uuid();
   v_admin uuid := gen_random_uuid(); v_next uuid := gen_random_uuid();
 BEGIN
-  IF public.admit_ai_provider_health_run('daily', v_daily, NULL) <> 'ready' THEN RAISE EXCEPTION 'FAIL: daily admission'; END IF;
-  IF public.admit_ai_provider_health_run('manual', v_manual, v_admin) <> 'busy' THEN RAISE EXCEPTION 'FAIL: manual entered between daily chunks'; END IF;
+  IF public.admit_ai_provider_health_run('daily', v_daily, NULL) IS DISTINCT FROM 'ready' THEN RAISE EXCEPTION 'FAIL: daily admission'; END IF;
+  IF public.admit_ai_provider_health_run('manual', v_manual, v_admin) IS DISTINCT FROM 'busy' THEN RAISE EXCEPTION 'FAIL: manual entered between daily chunks'; END IF;
   PERFORM public.complete_ai_provider_health_run(v_daily);
-  IF public.admit_ai_provider_health_run('daily', v_daily, NULL) <> 'complete' THEN RAISE EXCEPTION 'FAIL: completed daily replay'; END IF;
-  IF public.admit_ai_provider_health_run('manual', v_manual, v_admin) <> 'ready' THEN RAISE EXCEPTION 'FAIL: manual admission after daily'; END IF;
-  IF public.admit_ai_provider_health_run('manual', v_manual, v_admin) <> 'ready' THEN RAISE EXCEPTION 'FAIL: manual chunk continuation'; END IF;
+  IF public.admit_ai_provider_health_run('daily', v_daily, NULL) IS DISTINCT FROM 'complete' THEN RAISE EXCEPTION 'FAIL: completed daily replay'; END IF;
+  IF public.admit_ai_provider_health_run('manual', v_manual, v_admin) IS DISTINCT FROM 'ready' THEN RAISE EXCEPTION 'FAIL: manual admission after daily'; END IF;
+  IF public.admit_ai_provider_health_run('manual', v_manual, v_admin) IS DISTINCT FROM 'ready' THEN RAISE EXCEPTION 'FAIL: manual chunk continuation'; END IF;
   PERFORM public.complete_ai_provider_health_run(v_manual);
-  IF public.admit_ai_provider_health_run('manual', v_next, v_admin) <> 'cooldown' THEN RAISE EXCEPTION 'FAIL: missing per-admin cooldown'; END IF;
+  IF public.admit_ai_provider_health_run('manual', v_next, v_admin) IS DISTINCT FROM 'cooldown' THEN RAISE EXCEPTION 'FAIL: missing per-admin cooldown'; END IF;
   UPDATE public.ai_provider_health_runs SET completed_at = now() - interval '61 seconds' WHERE run_id = v_manual;
-  IF public.admit_ai_provider_health_run('manual', v_next, v_admin) <> 'ready' THEN RAISE EXCEPTION 'FAIL: cooldown never expired'; END IF;
+  IF public.admit_ai_provider_health_run('manual', v_next, v_admin) IS DISTINCT FROM 'ready' THEN RAISE EXCEPTION 'FAIL: cooldown never expired'; END IF;
   PERFORM public.record_ai_provider_health('claude','api_key','connected',NULL,0,0,0,1,v_daily);
   PERFORM public.record_ai_provider_health('claude','api_key','connected',NULL,0,0,0,1,v_manual);
   IF NOT EXISTS (SELECT 1 FROM public.ai_provider_health_completions WHERE run_id = v_daily AND provider_code = 'claude') THEN
@@ -759,7 +786,7 @@ BEGIN
   -- First send closes only its event; the second break remains pending.
   PERFORM public.mark_ai_provider_health_notified(v_token,'openai','api_key',v_first);
   SELECT * INTO v_claim FROM public.claim_ai_provider_health_notifications(gen_random_uuid()) WHERE provider_code = 'openai';
-  IF v_claim.alert_id IS NULL OR v_claim.alert_id = v_first OR v_claim.reason <> 'Second failure' THEN
+  IF v_claim.alert_id IS NULL OR v_claim.alert_id = v_first OR v_claim.reason IS DISTINCT FROM 'Second failure' THEN
     RAISE EXCEPTION 'FAIL: a later break was lost or an event payload changed';
   END IF;
 END $aph_recovery_outbox$;

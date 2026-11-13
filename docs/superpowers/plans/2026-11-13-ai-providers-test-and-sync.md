@@ -80,8 +80,9 @@ Regression suites: `run.test.ts`, `handler.test.ts`, `deps.test.ts` and SQL heal
   it does not ask pi-ai for an OpenRouter OAuth refresh adapter.
 - `needs_relogin` is a declared target marker. Report a stored reauth requirement
   immediately without a probe or sync.
-- Use the production `deriveRunId`: a valid deterministic UUID, tested for UUID
-  shape, stable UTC-day identity and distinct manual tokens.
+- Use `deriveRunId`: SHA-256 of the UTC day for daily scope; preserve the browser
+  `crypto.randomUUID()` token unchanged for manual scope. Validate manual UUIDs at
+  the handler boundary so every chunk and retry keeps the same identity.
 - Generate a fresh lease-holder UUID for EVERY HTTP request. Do not derive the
   holder from the stable logical run ID; same-holder renewals permit overlap.
 - `admit_ai_provider_health_run` serializes logical admission. An unfinished daily
@@ -94,7 +95,8 @@ Regression suites: `run.test.ts`, `handler.test.ts`, `deps.test.ts` and SQL heal
 - Remove recorded targets, then select the first six unfinished targets on each call.
   Re-plan after membership changes; never use a numeric target offset.
 - Allow three providers concurrently, but serialize API-key/OAuth work for the same
-  `provider_code`. Probe, refresh, sync and persistence share one target signal.
+  `provider_code`. Probe, refresh and sync share one signal; reserve up to two
+  seconds of the same target budget for persistence with a later write deadline.
 - Start the 40-second runner deadline BEFORE discovery and key reads. Every target
   receives the smaller of its 15-second budget and remaining run time. Alerts receive
   at most eight seconds of the SAME remaining budget; each send at most five seconds.
@@ -128,8 +130,8 @@ non-resend.dev address. No global `admin_notifications` broadcast is created.
 
 Sources: `useAiProviderHealth.ts`, `ProviderHealthButton.tsx`, `AiProvidersCard.tsx`.
 
-One button replaces the mounted Sync all control; the old component remains only
-for compatibility and is not mounted beside the health button. One table row per
+One button replaces the mounted Sync all control. The unused old component and
+its test are removed under `ARCHITECTURE.md` §1. One table row per
 provider connection includes credential kind, status, sanitized reason, nullable
 model counts and last checked time. OAuth models remain separate in `oauthModels`.
 

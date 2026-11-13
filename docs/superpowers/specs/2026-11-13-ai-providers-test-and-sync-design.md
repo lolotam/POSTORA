@@ -69,8 +69,9 @@ or an authenticated admin JWT and supplies the verified admin identity for coold
 Gateway `verify_jwt = false` follows `process-store-events`; this allows the cron
 secret through to the mandatory in-handler authentication.
 
-`deriveRunId` emits a valid UUID based on UTC date for daily scope and browser token
-for manual scope. Every HTTP request has a fresh, independent lease-holder UUID.
+`deriveRunId` hashes the UTC date with SHA-256 for daily scope. Manual scope
+preserves the browser-generated `crypto.randomUUID()` token after UUID validation.
+Every HTTP request has a fresh, independent lease-holder UUID.
 A stable logical run ID must never be reused as the generic lease holder, because a
 holder can renew its own lease and let concurrent retries overlap.
 
@@ -95,8 +96,10 @@ short-circuit before either network operation. Failures remain isolated per conn
 
 The runner starts its 40-second deadline before discovery, key resolution and recorded
 marker reads. Discovery and database calls carry cancellation. Each target receives
-one signal capped by 15 seconds and the remaining global deadline, including refresh,
-probe, catalogue reads/writes and result recording. The probe itself has a 12-second
+a total budget capped by 15 seconds and the remaining global deadline. Refresh,
+probe and catalogue reads/writes share an earlier signal; up to two seconds of
+the same total budget are reserved for result recording with a later write signal.
+The probe itself has a 12-second
 HTTP timeout. Alerts receive at most eight seconds of remaining global time and each
 send at most five seconds. The handler caps a request at 45 seconds, reduces runner
 time for earlier authorization/admission and reserves lease-release headroom beneath
@@ -150,7 +153,8 @@ the remaining request budget.
 ## 8. UI, authorization and observability
 
 One mounted Check & sync all providers control shows Checking providers while running.
-The existing `SyncAllButton` remains as an unmounted compatibility component. The table
+The unused `SyncAllButton` and its tests are removed: no production caller remains,
+as required by `ARCHITECTURE.md` §1 (zero dead modules). The table
 shows one row per connection, credential kind, status, safe reason, nullable counts and
 last checked time. NULL counts display a dash. A successful empty status read clears
 stale rows; a failed status read shows a warning, even over cached results, and never

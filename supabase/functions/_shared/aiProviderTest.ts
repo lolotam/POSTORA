@@ -12,10 +12,12 @@
 // platform killed it. Every fetch now carries an AbortSignal and races a timer, so a
 // hung provider becomes a failed probe instead of a hung request.
 
-import { HEALTH_TARGET_TIMEOUT_MS } from "./aiProviderHealth.ts";
+import { HEALTH_TARGET_TIMEOUT_MS, withSignal } from "./aiProviderHealth.ts";
 import { describeProviderFailure, ProviderTestError } from "./providerErrors.ts";
 import { redactProviderError } from "./ai-routing-errors.ts";
 import type { RowReader } from "./providerEndpoint.ts";
+import { ProviderReadError } from "./providerEndpoint.ts";
+export { ProviderReadError } from "./providerEndpoint.ts";
 import { providerFetch } from './providerUrlPolicy.ts';
 
 // Which probe proves a provider's key works. test-connection, set-service-key and
@@ -80,7 +82,8 @@ async function fetchWithTimeout(
   });
   try {
     return await Promise.race([
-      providerFetch(fetchImpl)(url, { ...init, signal: AbortSignal.timeout(timeoutMs) }),
+      providerFetch(fetchImpl)(url, { ...init, signal: init.signal
+        ? AbortSignal.any([init.signal, AbortSignal.timeout(timeoutMs)]) : AbortSignal.timeout(timeoutMs) }),
       expiry,
     ]);
   } finally {
@@ -88,22 +91,12 @@ async function fetchWithTimeout(
   }
 }
 
-/**
- * The provider's own row could not be read.
- *
- * WHY a distinct error
- * A failed read and a missing provider look the same to a caller that only sees
- * "no row": one is a server that is unwell, the other is a configuration the admin
- * can fix. Only the second one is a provider degradation, so they must not share
- * an error type.
- */
-export class ProviderReadError extends Error {
-  override name = "ProviderReadError";
-}
-
 // Firecrawl and Apify keys can be saved without an ai_providers row; they need no endpoint.
-export async function loadProbeTarget(db: RowReader, providerCode: string): Promise<ProviderProbeTarget | null> {
-  const { data, error } = await db.from('ai_providers').select('*').eq('provider_code', providerCode).maybeSingle();
+export async function loadProbeTarget(db: RowReader, providerCode: string, signal?: AbortSignal): Promise<ProviderProbeTarget | null> {
+  const query = db.from('ai_providers').select('*').eq('provider_code', providerCode);
+  signal?.throwIfAborted();
+  if (signal && !query.abortSignal) throw new ProviderReadError('Provider read cancellation is unavailable');
+  const { data, error } = await (signal ? query.abortSignal!(signal) : query).maybeSingle();
   // A failed read must never look like a missing row: the first is the server's
   // problem, the second is the admin's.
   if (error) throw new ProviderReadError('The provider configuration could not be read');
@@ -127,7 +120,16 @@ export async function probeProvider(
   signal?: AbortSignal,
 ): Promise<void> {
   const ep = provider.api_endpoint;
+  const transport = fetchImpl;
+  // All probe helpers, including ElevenLabs' sequential fallback requests, share
+  // the caller's cancellation. Do not start another request after cancellation.
+  if (signal) fetchImpl = (input, init) => {
+    signal.throwIfAborted();
+    const combined = init?.signal ? AbortSignal.any([signal, init.signal]) : signal;
+    return withSignal(transport(input, { ...init, signal: combined }), combined);
+  };
   try {
+    signal?.throwIfAborted();
     switch (providerTestKind(provider)) {
       case 'firecrawl': return await testFirecrawl(key, timeoutMs, fetchImpl);
       case 'apify': return await testApify(key, timeoutMs, fetchImpl);
@@ -152,11 +154,10 @@ export async function probeProvider(
       throw new ProviderTestError('The provider did not answer in time', 504, '');
     }
     // A rejected fetch (DNS, connection refused, TLS) carries the request URL in its
-    // message, and a URL can carry the credential. The message is redacted before it
+    // message, and a URL can carry the credential. Only a fixed sentence
     // leaves this function, and the raw error is never chained as a cause: a logger
     // serialises a cause just as readily as a top-level message.
-    const message = error instanceof Error ? error.message : 'The provider request failed';
-    throw new Error(redactProviderError(message, key));
+    throw new Error('The provider request failed');
   }
 }
 
@@ -292,8 +293,9 @@ async function testElevenLabs(key: string, ep: string, timeoutMs: number, fetchI
       sawScopeLimited = true;
       continue;
     }
-    if (res.status === 401) throw new Error('Invalid API key');
-    if (res.status === 429) throw new Error('Rate limit exceeded');
+    if (res.status === 401 || res.status === 429) {
+      throw new ProviderTestError(describeProviderFailure('ElevenLabs', res.status, t), res.status, t);
+    }
     // Another failure: keep the last one, so the reason names what really happened.
     console.error(`ElevenLabs test failed: HTTP ${res.status}`);
     lastFailure = new ProviderTestError(

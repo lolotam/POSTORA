@@ -218,3 +218,52 @@ Deno.test("a provider that does not exist is still a missing provider", async ()
   };
   assertEquals(await loadProbeTarget(emptyDb as never, "claude"), null);
 });
+
+Deno.test('all sequential ElevenLabs probes honor caller cancellation', async () => {
+  const controller = new AbortController();
+  let calls = 0;
+  const received: AbortSignal[] = [];
+  const transport = (async (_url, init) => {
+    calls++;
+    if (init?.signal) received.push(init.signal);
+    if (calls === 1) return new Response('temporary outage', { status: 503 });
+    controller.abort();
+    assert(init?.signal?.aborted, 'caller abort must cancel the actual request before its request timeout');
+    return new Promise<Response>((_resolve) => {});
+  }) as typeof fetch;
+  await assertRejects(() => probeProvider({}, { ...XAI_TARGET, provider_code: 'elevenlabs',
+    api_endpoint: 'https://api.elevenlabs.io/v1' }, 'key', 1000, transport, controller.signal), ProviderTestError);
+  assertEquals(calls, 2);
+  assert(received[1].aborted);
+});
+
+Deno.test('provider row reads carry the caller signal', async () => {
+  const signal = AbortSignal.timeout(1000);
+  let observed: AbortSignal | undefined;
+  const finish = { maybeSingle: async () => ({ data: null, error: null }) };
+  await loadProbeTarget({ from: () => ({ select: () => ({ eq: () => ({ ...finish,
+    abortSignal: (value) => { observed = value; return finish; } }) }) }) }, 'custom', signal);
+  assertEquals(observed, signal);
+});
+
+Deno.test('provider responses and network diagnostics never become browser messages', async () => {
+  for (const failure of ['http', 'network']) {
+    const transport = (async () => {
+      if (failure === 'network') throw new Error('customer-private upstream diagnostics');
+      return new Response('{"error":{"message":"customer-private upstream diagnostics"}}', { status: 500 });
+    }) as typeof fetch;
+    const error = await assertRejects(() => probeProvider({}, XAI_TARGET, 'key', 1000, transport));
+    assert(error instanceof Error);
+    assert(!error.message.includes('customer-private'));
+    assert(!error.message.includes('diagnostics'));
+  }
+});
+
+for (const status of [401, 429]) {
+  Deno.test(`ElevenLabs preserves HTTP ${status} for classification`, async () => {
+    const transport = (async () => new Response('provider diagnostic', { status })) as typeof fetch;
+    const error = await assertRejects(() => probeProvider({}, { ...XAI_TARGET, provider_code: 'elevenlabs',
+      api_endpoint: 'https://api.elevenlabs.io/v1' }, 'key', 1000, transport), ProviderTestError);
+    assertEquals((error as ProviderTestError).status, status);
+  });
+}

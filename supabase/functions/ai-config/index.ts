@@ -4,7 +4,7 @@ import { getValidAccessToken } from '../_shared/higgsfield-oauth.ts';
 import { HiggsfieldMcpClient } from '../_shared/higgsfield-mcp.ts';
 import { createLogger } from '../_shared/logging.ts';
 import {
-  CatalogSyncError, type CatalogDb, runCatalogSync, SYNCABLE_PROVIDERS, syncFailureMessage,
+  CatalogSyncError, type CatalogDb, SYNCABLE_PROVIDERS, syncFailureMessage,
 } from '../_shared/modelCatalogSyncRun.ts';
 import { isBillingBlocked, ProviderTestError } from '../_shared/providerErrors.ts';
 import { resolveProviderKey } from '../_shared/providerKeys.ts';
@@ -12,6 +12,7 @@ import type { RowReader } from '../_shared/providerEndpoint.ts';
 import { loadProbeTarget, probeProvider } from '../_shared/aiProviderTest.ts';
 import { groupCatalogueRows } from '../_shared/aiModelCatalogue.ts';
 import { assertProviderUrl } from '../_shared/providerUrlPolicy.ts';
+import { syncModels } from './syncModels.ts';
 
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!;
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
@@ -250,7 +251,7 @@ serve(async (req) => {
         const dryRun = body.dry_run === true;
         try {
           // The generated client type is too deep for a structural check; it satisfies CatalogDb at runtime.
-          const report = await runCatalogSync(supabase as unknown as CatalogDb, provider_code, fetch, { dryRun });
+          const report = await syncModels(supabase as unknown as CatalogDb, provider_code, dryRun);
           return new Response(JSON.stringify(report), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
         } catch (e) {
           // 502 would be masked by Cloudflare, so answer 200 with an error body the UI shows as a

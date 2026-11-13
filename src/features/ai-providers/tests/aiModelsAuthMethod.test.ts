@@ -53,7 +53,10 @@ function unscopedReaders(source: string): string[] {
   for (const match of readable.matchAll(READER)) {
     const index = match.index ?? 0;
     const chain = chainAt(readable, index);
-    const pinnedByKind = /auth_method/.test(chain);
+    const isWrite = /\.(?:insert|upsert)\(/.test(chain);
+    const pinnedByKind = isWrite
+      ? /\bauth_method\s*[:,]/.test(chain) || /onConflict:\s*["'][^"']*\bauth_method\b/.test(chain)
+      : /\.(?:eq|in)\(\s*["']auth_method["']\s*,/.test(chain);
     // A row addressed by its primary key is unambiguous: the key is unique
     // across the credential kinds.
     const pinnedByPrimaryKey = /\.(?:eq|in)\(\s*["']id["']/.test(chain);
@@ -130,7 +133,11 @@ const READER_AFTER_A_COMMENT = [
 describe("the ai_models reader scanner", () => {
   const cases: Array<[string, string, number]> = [
     ["an unscoped reader", UNSCOPED_READER, 1],
+    ["a selected credential column without a filter", `db.from('ai_models').select('model_id, auth_method').eq('model_id', id).maybeSingle();`, 1],
+    ["an update mentioning auth_method without a filter", `db.from('ai_models').update({ auth_method: 'oauth' }).eq('model_id', id);`, 1],
     ["a kind-scoped reader", SCOPED_READER, 0],
+    ["an explicit mixed-kind admin list", `db.from('ai_models').select('*').in('auth_method', ['api_key', 'oauth']).order('name');`, 0],
+    ["a kind-keyed bulk upsert", `db.from('ai_models').upsert(rows, { onConflict: 'provider_id,model_id,auth_method' });`, 0],
     ["a reader addressed by one id", READER_BY_ID, 0],
     ["a reader addressed by a list of ids", READER_BY_ID_LIST, 0],
     ["a reader whose filter follows a comment", READER_AFTER_A_COMMENT, 0],

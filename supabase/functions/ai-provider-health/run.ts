@@ -25,7 +25,7 @@ import {
   type HealthTarget,
 } from "../_shared/aiProviderHealth.ts";
 import { AiOAuthError } from "../_shared/aiOAuth/errors.ts";
-import { ProviderTestError } from "../_shared/providerErrors.ts";
+import { OAuthProbeError, ProviderTestError } from "../_shared/providerErrors.ts";
 import { ProviderReadError } from "../_shared/aiProviderTest.ts";
 
 export interface HealthRunPorts {
@@ -72,6 +72,7 @@ export interface HealthRunOptions {
   deadlineMs?: number;
   concurrency?: number;
   alertBudgetMs?: number;
+  targetBudgetMs?: number;
 }
 
 /** A target the time budget never reached. It was not tested, so it has no result. */
@@ -97,6 +98,7 @@ function classifyTargetFailure(
   apiKey: string | null,
 ): { status: HealthStatus; reason: string } {
   if (error instanceof AiOAuthError) return classifyOAuthFailure(error.code);
+  if (error instanceof OAuthProbeError) return { status: "failed", reason: error.message };
   if (error instanceof ProviderTestError) return classifyApiKeyFailure(error.status, error.body, apiKey);
   return { status: "failed", reason: "The provider could not be checked." };
 }
@@ -187,6 +189,7 @@ async function syncTarget(
       models_deactivated: report.deactivated,
     };
   } catch (error) {
+    if (error instanceof ProviderReadError) throw error;
     return {
       status: "failed",
       reason: "The provider model catalogue could not be synchronized.",
@@ -224,12 +227,15 @@ async function runOneTarget(
   target: HealthTarget,
   runId: string,
   signal: AbortSignal,
+  writeSignal: AbortSignal,
 ): Promise<{ result?: HealthResult; skipReason?: string }> {
   const started = Date.now();
   const checkedAt = ports.now().toISOString();
   let probe: TargetProbe;
+  let outcome: TargetOutcome;
   try {
     probe = await probeTarget(ports, target, signal);
+    outcome = await syncTarget(ports, target, signal, probe);
   } catch (error) {
     if (error instanceof ProviderReadError) {
       // A run error, not a degradation. The reason is a fixed sentence: the
@@ -239,7 +245,6 @@ async function runOneTarget(
     }
     throw error;
   }
-  const outcome = await syncTarget(ports, target, signal, probe);
   const result: HealthResult = {
     provider_code: target.provider_code,
     auth_method: target.auth_method,
@@ -252,7 +257,7 @@ async function runOneTarget(
     latency_ms: Date.now() - started,
     checked_at: checkedAt,
   };
-  const recorded = await recordTargetResult(ports, result, runId, signal);
+  const recorded = await recordTargetResult(ports, result, runId, writeSignal);
   return recorded ? { result: recorded } : { skipReason: "The result could not be recorded." };
 }
 
@@ -385,10 +390,14 @@ export async function runHealthChunk(
       pending.delete(position);
       const target = slice[position];
       activeProviders.add(target.provider_code);
-      const signal = AbortSignal.any([runSignal, AbortSignal.timeout(Math.max(1,
-        Math.min(HEALTH_TARGET_BUDGET_MS, Math.floor(deadline - Date.now()))))]);
+      const budget = Math.max(1, Math.min(HEALTH_TARGET_BUDGET_MS, options.targetBudgetMs ?? HEALTH_TARGET_BUDGET_MS, Math.floor(deadline - Date.now())));
+      const writeSignal = AbortSignal.any([runSignal, AbortSignal.timeout(budget)]);
+      // Reserve part of the SAME target/global budget for the result write. A
+      // hanging provider must not leave yesterday's healthy row untouched.
+      const signal = AbortSignal.any([writeSignal, AbortSignal.timeout(Math.max(1,
+        Math.floor(budget - Math.min(2_000, budget / 4))))]);
       try {
-        const outcome = await runOneTarget(ports, target, options.runId, signal);
+        const outcome = await runOneTarget(ports, target, options.runId, signal, writeSignal);
         collected.push({ position, ...outcome });
       } finally {
         activeProviders.delete(target.provider_code);

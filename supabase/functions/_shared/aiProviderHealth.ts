@@ -107,7 +107,11 @@ export function boundedFetch(signal: AbortSignal): typeof fetch {
  * the target's budget is over, instead of waiting for it.
  */
 export function withSignal<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
-  if (signal.aborted) return Promise.reject(signal.reason);
+  if (signal.aborted) {
+    // The caller already started this operation; observe a later rejection too.
+    promise.catch(() => {});
+    return Promise.reject(signal.reason);
+  }
   return new Promise<T>((resolve, reject) => {
     const onAbort = () => reject(signal.reason);
     signal.addEventListener("abort", onAbort, { once: true });
@@ -212,27 +216,21 @@ export function classifyOAuthFailure(code: string): { status: HealthStatus; reas
   return { status: "failed", reason: "The subscription sign-in could not be checked." };
 }
 
-/** FNV-1a: a small, dependency-free hash so the run id is stable across processes. */
-function fnv1a(seed: string): number {
-  let h = 2166136261;
-  for (const ch of seed) {
-    h ^= ch.charCodeAt(0);
-    h = Math.imul(h, 16777619) >>> 0;
-  }
-  return h;
-}
-
 /**
  * A stable UUID-shaped run id. The daily id depends only on the UTC date, so the four
  * cron entries of one day share a run id; the manual id depends on the browser's token,
  * so two clicks never share one. The shape is a real UUID because the database column
  * it lands in is a uuid.
  */
-export function deriveRunId(scope: "daily" | "manual", token: string, now: Date): string {
+export async function deriveRunId(scope: "daily" | "manual", token: string, now: Date): Promise<string> {
+  // The browser creates this UUID with crypto.randomUUID() once per click and
+  // reuses it for every chunk. Preserve all its entropy and retry identity.
+  if (scope === "manual") return token;
   const day = now.toISOString().slice(0, 10);
-  const seed = scope === "daily" ? `daily:${day}` : `manual:${token}`;
-  const hex = (n: number) => (n >>> 0).toString(16).padStart(8, "0");
-  const s = hex(fnv1a(seed)) + hex(fnv1a(`${seed}:2`)) + hex(fnv1a(`${seed}:3`)) + hex(fnv1a(`${seed}:4`));
+  // Daily cron calls have no shared browser token: hash the UTC day so retries
+  // and all four cron entries keep one identity, without a 32-bit bottleneck.
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(`daily:${day}`));
+  const s = Array.from(new Uint8Array(digest).slice(0, 16), (n) => n.toString(16).padStart(2, "0")).join("");
   return `${s.slice(0, 8)}-${s.slice(8, 12)}-4${s.slice(13, 16)}-8${s.slice(17, 20)}-${s.slice(20, 32)}`;
 }
 

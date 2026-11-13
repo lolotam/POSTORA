@@ -426,7 +426,8 @@ GRANT EXECUTE ON FUNCTION public.mark_ai_provider_health_notified(uuid, text, te
 -- The body carries the chunk number; chunk 1..4 cover today's maximum of sixteen targets.
 --
 -- The four bodies are written out one by one on purpose: cron.schedule runs the third
--- argument as a single SQL statement, and a literal body is provably one statement.
+-- argument as one statement. Each DO block resolves the environment URL at runtime
+-- and skips with a NOTICE until the operator has configured it.
 DO $do_ai_provider_health_cron$
 BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'pg_cron')
@@ -440,7 +441,16 @@ BEGIN
       'ai-provider-health-1',
       '5 3 * * *',
       $$
-      SELECT net.http_post(url := 'https://api.postora.cloud/functions/v1/ai-provider-health', headers := jsonb_build_object('Content-Type','application/json','Authorization','Bearer ' || get_cron_secret()), body := '{"action":"run","scope":"daily","chunk":1}'::jsonb);
+      DO $do_call$
+      DECLARE v_url text;
+      BEGIN
+        SELECT rtrim(public.get_cron_functions_base_url(), '/') || '/functions/v1/ai-provider-health' INTO v_url;
+        IF v_url IS NULL THEN
+          RAISE NOTICE 'ai-provider-health: no functions base URL configured, skipping this run';
+          RETURN;
+        END IF;
+        PERFORM net.http_post(url := v_url, headers := jsonb_build_object('Content-Type','application/json','Authorization','Bearer ' || get_cron_secret()), body := '{"action":"run","scope":"daily","chunk":1}'::jsonb);
+      END $do_call$;
       $$
     );
   END IF;
@@ -450,7 +460,16 @@ BEGIN
       'ai-provider-health-2',
       '12 3 * * *',
       $$
-      SELECT net.http_post(url := 'https://api.postora.cloud/functions/v1/ai-provider-health', headers := jsonb_build_object('Content-Type','application/json','Authorization','Bearer ' || get_cron_secret()), body := '{"action":"run","scope":"daily","chunk":2}'::jsonb);
+      DO $do_call$
+      DECLARE v_url text;
+      BEGIN
+        SELECT rtrim(public.get_cron_functions_base_url(), '/') || '/functions/v1/ai-provider-health' INTO v_url;
+        IF v_url IS NULL THEN
+          RAISE NOTICE 'ai-provider-health: no functions base URL configured, skipping this run';
+          RETURN;
+        END IF;
+        PERFORM net.http_post(url := v_url, headers := jsonb_build_object('Content-Type','application/json','Authorization','Bearer ' || get_cron_secret()), body := '{"action":"run","scope":"daily","chunk":2}'::jsonb);
+      END $do_call$;
       $$
     );
   END IF;
@@ -460,7 +479,16 @@ BEGIN
       'ai-provider-health-3',
       '19 3 * * *',
       $$
-      SELECT net.http_post(url := 'https://api.postora.cloud/functions/v1/ai-provider-health', headers := jsonb_build_object('Content-Type','application/json','Authorization','Bearer ' || get_cron_secret()), body := '{"action":"run","scope":"daily","chunk":3}'::jsonb);
+      DO $do_call$
+      DECLARE v_url text;
+      BEGIN
+        SELECT rtrim(public.get_cron_functions_base_url(), '/') || '/functions/v1/ai-provider-health' INTO v_url;
+        IF v_url IS NULL THEN
+          RAISE NOTICE 'ai-provider-health: no functions base URL configured, skipping this run';
+          RETURN;
+        END IF;
+        PERFORM net.http_post(url := v_url, headers := jsonb_build_object('Content-Type','application/json','Authorization','Bearer ' || get_cron_secret()), body := '{"action":"run","scope":"daily","chunk":3}'::jsonb);
+      END $do_call$;
       $$
     );
   END IF;
@@ -470,7 +498,16 @@ BEGIN
       'ai-provider-health-4',
       '26 3 * * *',
       $$
-      SELECT net.http_post(url := 'https://api.postora.cloud/functions/v1/ai-provider-health', headers := jsonb_build_object('Content-Type','application/json','Authorization','Bearer ' || get_cron_secret()), body := '{"action":"run","scope":"daily","chunk":4}'::jsonb);
+      DO $do_call$
+      DECLARE v_url text;
+      BEGIN
+        SELECT rtrim(public.get_cron_functions_base_url(), '/') || '/functions/v1/ai-provider-health' INTO v_url;
+        IF v_url IS NULL THEN
+          RAISE NOTICE 'ai-provider-health: no functions base URL configured, skipping this run';
+          RETURN;
+        END IF;
+        PERFORM net.http_post(url := v_url, headers := jsonb_build_object('Content-Type','application/json','Authorization','Bearer ' || get_cron_secret()), body := '{"action":"run","scope":"daily","chunk":4}'::jsonb);
+      END $do_call$;
       $$
     );
   END IF;

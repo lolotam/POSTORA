@@ -1,4 +1,4 @@
-import { type RowReader, serviceClient } from "./providerEndpoint.ts";
+import { type RowReader, serviceClient, ProviderReadError } from "./providerEndpoint.ts";
 
 /**
  * The platform key for a provider: the admin-saved provider_api_keys row first,
@@ -14,12 +14,12 @@ export async function resolveProviderKey(db: RowReader | undefined, providerCode
     return (signal ? query.abortSignal!(signal) : query).maybeSingle();
   };
   const saved = await read("provider_api_keys", "api_key");
-  if (saved.error) throw new Error("Provider key read failed");
+  if (saved.error) throw new ProviderReadError("Provider key read failed");
   const key = (saved.data as { api_key?: unknown } | null)?.api_key;
   if (typeof key === "string" && key.trim()) return key;
 
   const provider = await read("ai_providers", "api_key_env_var");
-  if (provider.error) throw new Error("AI provider read failed");
+  if (provider.error) throw new ProviderReadError("AI provider read failed");
   const envVar = (provider.data as { api_key_env_var?: unknown } | null)?.api_key_env_var;
   if (typeof envVar !== "string" || !envVar.trim()) return null;
   return Deno.env.get(envVar) || null;

@@ -156,8 +156,8 @@ export interface AdminMailer {
 }
 
 /**
- * Sends one degradation alert to the admins. With no admin address there is nobody
- * to tell, so the alert is dropped rather than failing the run.
+ * Sends one degradation alert to the admins. Missing recipients leave the event
+ * retryable; the runner catches the failure without acknowledging the outbox.
  */
 export async function sendDegradedProviderAlert(
   mailer: AdminMailer,
@@ -165,7 +165,7 @@ export async function sendDegradedProviderAlert(
   signal?: AbortSignal,
 ): Promise<void> {
   const to = await mailer.adminRecipients(signal);
-  if (!to.length) return;
+  if (!to.length) throw new Error("No admin alert recipients are available");
   await mailer.send({
     to,
     subject: buildAlertTitle(degraded),

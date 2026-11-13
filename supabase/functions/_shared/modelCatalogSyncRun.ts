@@ -3,6 +3,7 @@ import {
   mapIdOnlyChatCatalog, mapOpenAICatalog, mapOpenRouterCatalog, mapVercelCatalog, mapXaiCatalog, planCatalogSync,
 } from "./modelCatalogSync.ts";
 import { resolveProviderKey } from "./providerKeys.ts";
+import { ProviderReadError } from "./providerEndpoint.ts";
 import { providerFetch } from './providerUrlPolicy.ts';
 
 export const SYNCABLE_PROVIDERS = [
@@ -178,7 +179,7 @@ export async function runCatalogSync(
   const { data: providerRow, error: providerError } = await bounded(db.from("ai_providers")
     .select("id, provider_code, api_key_env_var").eq("provider_code", providerCode)).maybeSingle();
   // A failed read must not read as "provider missing".
-  if (providerError) throw new Error("ai_providers read failed");
+  if (providerError) throw new ProviderReadError("ai_providers read failed");
   const provider = providerRow as { id: string; api_key_env_var: string } | null;
   if (!provider) throw new CatalogSyncError(`Provider ${providerCode} is missing`);
 
@@ -215,11 +216,11 @@ export async function runCatalogSync(
 
   const { data: existingData, error: existingError } = await bounded(db.from("ai_models")
     .select(MODEL_COLUMNS).eq("provider_id", provider.id).eq("auth_method", authMethod));
-  if (existingError) throw new Error("ai_models read failed");
+  if (existingError) throw new ProviderReadError("ai_models read failed");
   const existing = (existingData ?? []) as ExistingModelRow[];
   const { data: settings, error: settingsError } = await bounded(db.from("system_settings")
     .select("key, value").like("key", "default_ai_model%"));
-  if (settingsError) throw new Error("system_settings read failed");
+  if (settingsError) throw new ProviderReadError("system_settings read failed");
   const inUse = defaultModelsInUse((settings ?? []) as Array<{ value: unknown }>, providerCode, authMethod);
 
   const plan = planCatalogSync(existing, mapped, inUse);

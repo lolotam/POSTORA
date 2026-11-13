@@ -8,7 +8,7 @@ for (const admission of ['busy', 'cooldown', 'complete'] as const) {
     const { ports, leases } = fakePorts({ admitRun: async () => admission,
       runChunk: async () => { ran = true; throw new Error('must not run'); } });
     const res = await handleHealthRequest(new Request('https://x.test', { method: 'POST',
-      body: JSON.stringify({ action: 'run', run_token: 't' }) }), ports);
+      body: JSON.stringify({ action: 'run', run_token: '12000000-0000-4000-8000-000000000001' }) }), ports);
     assertEquals(res.status, admission === 'busy' ? 409 : admission === 'cooldown' ? 429 : 200);
     assertEquals(ran, false);
     assertEquals(leases.length, 2);
@@ -65,7 +65,7 @@ Deno.test("a busy lease answers 409 and runs nothing", async () => {
     runChunk: async () => { ran = true; throw new Error("must not run"); },
   });
   const res = await handleHealthRequest(
-    new Request("https://x.test", { method: "POST", body: JSON.stringify({ action: "run", scope: "manual", run_token: "t" }) }),
+    new Request("https://x.test", { method: "POST", body: JSON.stringify({ action: "run", scope: "manual", run_token: "12000000-0000-4000-8000-000000000001" }) }),
     ports,
   );
   assertEquals(res.status, 409);
@@ -75,7 +75,7 @@ Deno.test("a busy lease answers 409 and runs nothing", async () => {
 Deno.test("a manual run takes and releases the shared lease", async () => {
   const { ports, leases } = fakePorts();
   const res = await handleHealthRequest(
-    new Request("https://x.test", { method: "POST", body: JSON.stringify({ action: "run", scope: "manual", run_token: "token-a" }) }),
+    new Request("https://x.test", { method: "POST", body: JSON.stringify({ action: "run", scope: "manual", run_token: "12000000-0000-4000-8000-000000000001" }) }),
     ports,
   );
   assertEquals(res.status, 200);
@@ -174,4 +174,12 @@ Deno.test("a release that fails does not replace the answer", async () => {
     ports,
   );
   assertEquals(res.status, 200);
+});
+
+Deno.test("manual run rejects a non-UUID token before taking a lease", async () => {
+  const { ports, leases } = fakePorts();
+  const res = await handleHealthRequest(new Request("https://x.test", { method: "POST",
+    body: JSON.stringify({ action: "run", run_token: "token-a" }) }), ports);
+  assertEquals(res.status, 400);
+  assertEquals(leases.length, 0);
 });

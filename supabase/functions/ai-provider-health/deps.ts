@@ -10,6 +10,7 @@
 import { type SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { getModels } from "npm:@mariozechner/pi-ai@0.73.1";
 import { loadProbeTarget, probeProvider } from "../_shared/aiProviderTest.ts";
+import { OAuthProbeError } from "../_shared/providerErrors.ts";
 import { resolveProviderKey } from "../_shared/providerKeys.ts";
 import type { RowReader } from "../_shared/providerEndpoint.ts";
 import { mapIdOnlyChatCatalog, type MappedCatalog } from "../_shared/modelCatalogSync.ts";
@@ -83,7 +84,6 @@ export function createHealthRunPorts(admin: Admin, leaseHolder?: string): Health
       const { data, error } = await admin
         .from("ai_providers")
         .select("provider_code, name")
-        .in("provider_code", [...SYNCABLE_PROVIDERS])
         .eq("is_active", true).abortSignal(signal);
       if (error) throw new Error("AI provider read failed");
       return (data ?? []).map((row) => ({
@@ -131,7 +131,7 @@ export function createHealthRunPorts(admin: Admin, leaseHolder?: string): Health
     },
 
     async probeApiKey(target: HealthTarget, key: string, signal: AbortSignal): Promise<void> {
-      const provider = await loadProbeTarget(signalReader(admin, signal), target.provider_code);
+      const provider = await loadProbeTarget(admin as unknown as RowReader, target.provider_code, signal);
       if (!provider) throw new Error(`Provider ${target.provider_code} is missing`);
       // The probe's own fetch is bounded by the target's signal, so a target that
       // runs out of time stops working instead of being abandoned.
@@ -166,11 +166,15 @@ export function createHealthRunPorts(admin: Admin, leaseHolder?: string): Health
       if (!response.ok) {
         // The upstream body can quote the request, so it is never stored: the
         // reason is a fixed sentence with the status code and nothing else.
-        throw new Error(`The subscription sign-in was refused (HTTP ${response.status}).`);
+        throw new OAuthProbeError(response.status);
       }
     },
 
     async syncApiKeyCatalogue(providerCode: string, signal: AbortSignal) {
+      // Every configured provider is probed, even when it has no catalogue API.
+      if (!(SYNCABLE_PROVIDERS as readonly string[]).includes(providerCode)) {
+        return { added: 0, updated: 0, deactivated: 0 };
+      }
       const report = await runCatalogSync(admin as never, providerCode, boundedFetch(signal), {
         authMethod: "api_key", signal, leaseHolder,
       });
