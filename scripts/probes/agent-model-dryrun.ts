@@ -1,6 +1,11 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { z } from "npm:zod@3.23.8";
-import { detectReplyLanguage, threadReplyLanguage, type ReplyLanguage } from "../../supabase/functions/ai-agent-reply/logic.ts";
+import {
+  customerLanguageSignal,
+  detectReplyLanguage,
+  threadReplyLanguage,
+  type ReplyLanguage,
+} from "../../supabase/functions/ai-agent-reply/logic.ts";
 
 const REPORT_PATH = "docs/superpowers/reports/2026-11-12-curemed-model-dryrun.md";
 const REPORT_URL = new URL(`../../${REPORT_PATH}`, import.meta.url);
@@ -41,8 +46,6 @@ interface ReplaySource {
   platform: string;
   socialAccountId: string;
   customerTurns: string[];
-  /** ai_threads.customer_language: the language the customer's own words showed. */
-  customerLanguage: ReplyLanguage | null;
 }
 
 interface ReplayTurnInput {
@@ -60,11 +63,23 @@ interface ReplayTurnInput {
 /**
  * The language a replayed turn is expected to be answered in.
  *
+ * THE MEASUREMENT TARGET: the language the SANDBOX would answer in at that
+ * turn. The replay builds its own thread, and that thread starts empty -- so the
+ * language it carries at a turn is the one the turns replayed before it left
+ * behind, not the source thread's final language, which belongs to a different
+ * conversation and includes turns this replay has not reached yet. The probe
+ * therefore tracks that per-turn state and passes it as the thread's language.
+ *
  * The thread's stored customer language counts, exactly as it does in production:
  * ai-agent-reply reads ai_threads.customer_language when a turn shows no language of
  * its own. A caption-less photo, a rating, an emoji -- none of them say what language
  * the customer speaks -- so without the thread's language an Arabic thread was scored
  * as English and every Arabic reply counted as a wrong answer.
+ *
+ * `earlierTurns` is the replayed prefix in CHRONOLOGICAL order, the order the chat
+ * model sees the window in. threadReplyLanguage reads it newest-first itself, so
+ * reversing it here would make the fallback consult the OLDEST turn instead of the
+ * newest one.
  */
 export function expectedReplayLanguage(
   inboundText: string,
@@ -180,7 +195,7 @@ async function loadReplaySource(
 
   const { data: thread, error: threadError } = await admin
     .from("ai_threads")
-    .select("id, customer_language")
+    .select("id")
     .eq("user_id", owner.user_id)
     .eq("platform", owner.platform)
     .eq("conversation_id", conversation)
@@ -199,15 +214,11 @@ async function loadReplaySource(
     .filter((content): content is string => typeof content === "string" && content.trim().length > 0);
   if (customerTurns.length === 0) throw new Error("The source thread has no customer turns to replay");
 
-  // The thread's stored customer language is what a letterless turn falls back to,
-  // in production and here alike. Without it an Arabic thread's photo-only turn
-  // would be expected to be answered in English.
-  const storedLanguage = thread.customer_language;
-  const customerLanguage: ReplyLanguage | null = storedLanguage === "ar" || storedLanguage === "en"
-    ? storedLanguage
-    : null;
-
-  return { platform: owner.platform, socialAccountId: owner.social_account_id, customerTurns, customerLanguage };
+  // The source thread's own customer_language is deliberately NOT read: it holds the
+  // language of the conversation's LAST turn, which the replay has not reached at an
+  // earlier turn. The sandbox's thread starts empty, so the probe tracks the language
+  // the replayed turns leave behind instead (see expectedReplayLanguage).
+  return { platform: owner.platform, socialAccountId: owner.social_account_id, customerTurns };
 }
 
 async function replayTurn(input: ReplayTurnInput): Promise<Omit<ResultRow, "model" | "turn">> {
@@ -267,12 +278,16 @@ async function main(): Promise<void> {
   for (const model of models) {
     const modelKey = model.replace(/[^A-Za-z0-9_-]/g, "_").slice(0, 24);
     const testCaseKey = `dryrun_${modelKey}_${Date.now()}`;
+    // The language the sandbox's own thread carries: what the turns replayed so
+    // far left behind, exactly as ai-agent-reply writes ai_threads.customer_language
+    // after every reply. Each model replays into its own sandbox thread, so the
+    // state starts empty for every model.
+    let sandboxLanguage: ReplyLanguage | null = null;
     for (const [index, inboundText] of replaySource.customerTurns.entries()) {
-      const expectedLanguage = expectedReplayLanguage(
-        inboundText,
-        replaySource.customerLanguage,
-        replaySource.customerTurns.slice(0, index).reverse(),
-      );
+      // The prefix in chronological order: the order the chat model sees the window
+      // in, and the order threadReplyLanguage reads it in.
+      const earlierTurns = replaySource.customerTurns.slice(0, index);
+      const expectedLanguage = expectedReplayLanguage(inboundText, sandboxLanguage, earlierTurns);
       const startedAt = Date.now();
       let measurement: Omit<ResultRow, "model" | "turn">;
       try {
@@ -301,6 +316,10 @@ async function main(): Promise<void> {
         };
       }
       resultRows.push({ model, turn: index + 1, ...measurement });
+      // The turn's own words are what the sandbox's thread would remember, so the
+      // next turn is scored against the language the sandbox would really carry.
+      const signal = customerLanguageSignal(inboundText, null);
+      if (signal) sandboxLanguage = signal;
       await Deno.writeTextFile(REPORT_URL, renderReport(resultRows, conversation));
       console.log(`Completed ${model} turn ${index + 1}/${replaySource.customerTurns.length}`);
     }

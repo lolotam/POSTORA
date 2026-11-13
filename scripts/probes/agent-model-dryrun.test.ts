@@ -23,3 +23,19 @@ Deno.test("a photo-only turn is expected in the thread's stored language", () =>
   // the English default. This is the miss the stored language fixes.
   assertEquals(expectedReplayLanguage(IMAGE_TURN, null, []), "en");
 });
+
+Deno.test("a letterless turn falls back to the NEWEST earlier turn, not the oldest", () => {
+  // The window is read newest-first, the order the chat model sees it in. Reading it
+  // the other way round made the fallback consult the OLDEST turn, so a customer who
+  // switched from English to Arabic was still expected to be answered in English.
+  const earlierTurns = ["hello, do you have cream?", "كريم الكعب متوفر؟"];
+  assertEquals(expectedReplayLanguage(IMAGE_TURN, null, earlierTurns), "ar");
+  assertEquals(expectedReplayLanguage(IMAGE_TURN, null, [...earlierTurns].reverse()), "en");
+});
+
+Deno.test("the first replayed turn expects the language the sandbox itself would use", () => {
+  // The replay builds its own thread, and it starts empty: a letterless first turn has
+  // no thread language and no window to read, so it falls back to the default -- which
+  // is exactly what the sandbox would answer in.
+  assertEquals(expectedReplayLanguage(IMAGE_TURN, null, []), "en");
+});
