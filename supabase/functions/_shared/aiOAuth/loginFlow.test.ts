@@ -23,8 +23,11 @@ function fakeAdmin(stateRows: Array<Record<string, unknown>> = []) {
           return { error: null };
         },
         delete() {
+          // Only the equality filters decide which row is consumed, as in SQL.
+          const filters: Array<[string, unknown]> = [];
           const builder = {
-            eq() {
+            eq(column: string, value: unknown) {
+              filters.push([column, value]);
               return builder;
             },
             gt() {
@@ -33,7 +36,8 @@ function fakeAdmin(stateRows: Array<Record<string, unknown>> = []) {
             select(_cols: string) {
               return {
                 maybeSingle: async () => {
-                  const row = rows.shift() ?? null;
+                  const index = rows.findIndex((r) => filters.every(([c, v]) => r[c] === v));
+                  const row = index < 0 ? null : rows.splice(index, 1)[0];
                   if (row) consumed.push(row);
                   return { data: row, error: null };
                 },
@@ -167,7 +171,7 @@ Deno.test("finishLogin rejects unknown or expired state without calling fetch", 
 Deno.test("finishLogin anthropic posts JSON body and saves credentials through rpc", async () => {
   const storedState = "platform-state-1";
   const { admin, consumed, rpcCalls } = fakeAdmin([
-    { state: storedState, provider_code: "anthropic", scope_kind: "platform", code_verifier: "verifier-1" },
+    { state: storedState, provider_code: "anthropic", scope_kind: "platform", user_id: "user-1", code_verifier: "verifier-1" },
   ]);
   const fetchCalls: Array<{ url: string; init: RequestInit }> = [];
   const deps: LoginDeps = {
@@ -209,7 +213,7 @@ Deno.test("finishLogin anthropic posts JSON body and saves credentials through r
 Deno.test("finishLogin openai-codex posts form body and stores accountId from JWT claim", async () => {
   const storedState = "codex-state-1";
   const { admin, rpcCalls } = fakeAdmin([
-    { state: storedState, provider_code: "openai-codex", scope_kind: "platform", code_verifier: "verifier-2" },
+    { state: storedState, provider_code: "openai-codex", scope_kind: "platform", user_id: "user-1", code_verifier: "verifier-2" },
   ]);
   const access = jwtWithPayload({
     email: "dev@example.com",
@@ -251,7 +255,7 @@ Deno.test("finishLogin openai-codex posts form body and stores accountId from JW
 Deno.test("finishLogin reports a timed-out exchange as exchange_failed and saves nothing", async () => {
   const storedState = "timeout-state-1";
   const { admin, rpcCalls } = fakeAdmin([
-    { state: storedState, provider_code: "anthropic", scope_kind: "platform", code_verifier: "verifier-3" },
+    { state: storedState, provider_code: "anthropic", scope_kind: "platform", user_id: "user-1", code_verifier: "verifier-3" },
   ]);
   const deps: LoginDeps = {
     admin: admin as never,
@@ -267,4 +271,21 @@ Deno.test("finishLogin reports a timed-out exchange as exchange_failed and saves
   assertEquals(error.code, "exchange_failed");
   assertEquals(error.message, "token exchange timed out");
   assertEquals(rpcCalls.filter((c) => c.name === "save_ai_oauth_credentials").length, 0);
+});
+
+Deno.test("finishLogin refuses a state minted by another admin and leaves it unconsumed", async () => {
+  const storedState = "foreign-state-1";
+  const { admin, consumed, rpcCalls } = fakeAdmin([
+    { state: storedState, provider_code: "anthropic", scope_kind: "platform", user_id: "admin-a", code_verifier: "v" },
+  ]);
+  const deps: LoginDeps = { admin: admin as never, fetch: neverFetch(), now: () => 1_700_000_000_000 };
+
+  const error = await assertRejects(
+    () => finishLogin(deps, "anthropic", `http://localhost:53692/callback?code=c&state=${storedState}`, "admin-b"),
+    AiOAuthError,
+  );
+
+  assertEquals(error.code, "invalid_state");
+  assertEquals(consumed.length, 0);
+  assertEquals(rpcCalls.length, 0);
 });

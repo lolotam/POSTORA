@@ -106,6 +106,7 @@ const McpAuthorize = lazyWithRetry(() => import("@/pages/McpAuthorize"), "McpAut
 const BrandIntelligencePost = lazyWithRetry(() => import("@/pages/BrandIntelligencePost"), "BrandIntelligencePost");
 const OAuthCallback = lazyWithRetry(() => import("@/pages/OAuthCallback"), "OAuthCallback");
 const AdminHiggsfieldCallback = lazyWithRetry(() => import("@/pages/AdminHiggsfieldCallback"), "AdminHiggsfieldCallback");
+const AdminAiOpenRouterCallback = lazyWithRetry(() => import("@/pages/admin/AiOpenRouterCallback"), "AdminAiOpenRouterCallback");
 const ApiDocumentation = lazyWithRetry(() => import("@/pages/ApiDocumentation"), "ApiDocumentation");
 const EcommerceWhatsAppApi = lazyWithRetry(() => import("@/pages/docs/EcommerceWhatsAppApi"), "EcommerceWhatsAppApi");
 const AutomationHub = lazyWithRetry(() => import("@/pages/automation/AutomationHub"), "AutomationHub");
@@ -169,6 +170,9 @@ export function AnimatedRoutes() {
         <Route path="/mcp/authorize" element={<AnimatedPage><McpAuthorize /></AnimatedPage>} />
         <Route path="/auth/oauth/callback" element={<AnimatedPage><OAuthCallback /></AnimatedPage>} />
         <Route path="/admin/oauth/higgsfield/callback" element={<AnimatedPage><AdminHiggsfieldCallback /></AnimatedPage>} />
+        {/* OpenRouter sends the admin back here after the consent page: the
+            route is the callback the edge function stored with the login state. */}
+        <Route path="/admin/settings/ai/oauth/openrouter/callback" element={<AnimatedPage><AdminAiOpenRouterCallback /></AnimatedPage>} />
         <Route path="/reset-password" element={<AnimatedPage><ResetPassword /></AnimatedPage>} />
         <Route
           path="/dashboard"

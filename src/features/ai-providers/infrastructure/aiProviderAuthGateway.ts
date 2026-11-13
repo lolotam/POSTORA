@@ -2,16 +2,23 @@ import { z } from "zod";
 import { supabase } from "@/integrations/supabase/client";
 
 /**
- * The pi-ai OAuth provider ids that own a subscription login. The ids are
- * pi-ai's, not ours: `anthropic` and `openai-codex`.
+ * The OAuth provider ids that own a subscription login. `anthropic` and
+ * `openai-codex` are pi-ai's; `openrouter` is ours, because pi-ai 0.73.1 ships
+ * an API-key provider for OpenRouter but no OAuth one.
  */
-export type OAuthProviderId = "anthropic" | "openai-codex";
+export type OAuthProviderId = "anthropic" | "openai-codex" | "openrouter";
+
+/**
+ * How the authorization result comes back: a paste box, or a redirect to our
+ * own callback route.
+ */
+export type OAuthFlow = "pkce_paste" | "pkce_callback";
 
 // The edge function's responses are validated at this boundary, so a contract
 // drift fails here with one stable code instead of deep inside a component.
-const capabilitySchema = z.object({
-  provider_code: z.enum(["claude", "openai"]),
-  oauth_provider: z.enum(["anthropic", "openai-codex"]),
+const capabilityFields = z.object({
+  provider_code: z.enum(["claude", "openai", "openrouter"]),
+  oauth_provider: z.enum(["anthropic", "openai-codex", "openrouter"]),
   /** Null when the ai_providers row has no name. */
   name: z.string().nullable(),
   /** The admin's ai_providers.is_active switch for this provider. */
@@ -20,9 +27,46 @@ const capabilitySchema = z.object({
   account_label: z.string().nullable(),
   expires_at: z.string().nullable(),
   models: z.array(z.string()),
+  // An edge function deployed before this field existed sends none; every
+  // provider it knew then was a paste flow.
+  flow: z.enum(["pkce_paste", "pkce_callback"]).default("pkce_paste"),
 });
-const capabilitiesSchema = z.object({ enabled: z.boolean(), providers: z.array(capabilitySchema) });
-const startSchema = z.object({ authorize_url: z.string().url() });
+// The pairs are fixed: the UI finds a capability by oauth_provider, so a row
+// that names the wrong one would show one provider's login under another.
+const OAUTH_PROVIDER_OF: Record<z.infer<typeof capabilityFields>["provider_code"], OAuthProviderId> = {
+  claude: "anthropic",
+  openai: "openai-codex",
+  openrouter: "openrouter",
+};
+const capabilitySchema = capabilityFields.refine(
+  (row) => OAUTH_PROVIDER_OF[row.provider_code] === row.oauth_provider,
+  { message: "provider_code and oauth_provider do not belong together" },
+);
+const KNOWN_PROVIDER_CODES: readonly unknown[] = capabilityFields.shape.provider_code.options;
+
+const capabilitiesSchema = z.object({
+  enabled: z.boolean(),
+  // The edge function and this bundle deploy separately. A provider this
+  // bundle does not know yet is dropped on its own instead of failing the
+  // whole list and hiding every other subscription. A known provider that
+  // breaks the contract still fails the read: that is drift, not an absence.
+  providers: z.array(z.unknown()).transform((rows, ctx) =>
+    rows.flatMap((row) => {
+      const parsed = capabilitySchema.safeParse(row);
+      if (parsed.success) return [parsed.data];
+      const code = (row as { provider_code?: unknown } | null)?.provider_code;
+      if (KNOWN_PROVIDER_CODES.includes(code)) {
+        ctx.addIssue({ code: z.ZodIssueCode.custom, message: "malformed capability" });
+      }
+      return [];
+    }),
+  ),
+});
+const startSchema = z.object({
+  authorize_url: z.string().url(),
+  // Same rolling-deploy default as the capability's flow.
+  flow: z.enum(["pkce_paste", "pkce_callback"]).default("pkce_paste"),
+});
 const finishSchema = z.object({ status: z.literal("connected"), account_label: z.string().nullable() });
 const disconnectSchema = z.object({ status: z.literal("not_connected") });
 const testSchema = z.object({ ok: z.boolean(), latency_ms: z.number(), error: z.string().optional() });

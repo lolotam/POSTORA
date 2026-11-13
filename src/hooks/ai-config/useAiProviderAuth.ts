@@ -44,7 +44,19 @@ export function useDisconnectAiOAuth() {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: (provider: OAuthProviderId) => aiProviderAuthGateway.disconnect(provider),
-    onSuccess: () => {
+    onSuccess: (_result, provider) => {
+      // The server confirmed the delete, so the cache says so at once: a
+      // refetch that fails afterwards must not leave the login shown as connected.
+      queryClient.setQueryData<AiOAuthCapabilities>(AI_PROVIDER_AUTH_QUERY_KEY, (current) =>
+        current && {
+          ...current,
+          providers: current.providers.map((p) =>
+            p.oauth_provider === provider
+              ? { ...p, status: "not_connected", account_label: null, expires_at: null }
+              : p,
+          ),
+        },
+      );
       queryClient.invalidateQueries({ queryKey: AI_PROVIDER_AUTH_QUERY_KEY });
       // A disconnected subscription can leave a tier pointing at a provider that
       // can no longer answer, so the tier list is refreshed too.

@@ -185,6 +185,7 @@ SUITES=(
   background_jobs.sql
   instagram_story_jobs.sql
   ai_provider_oauth.sql
+  ai_oauth_openrouter.sql
 )
 # These fixtures build their own focused schema and apply the migration under
 # test. They must never run against the restored production-shaped database.

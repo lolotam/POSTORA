@@ -29,10 +29,11 @@ function isOAuthProvider(provider: AIProvider | null) {
   return !!provider && (provider.auth_type === 'oauth' || provider.provider_code === 'higgsfield' || provider.api_type === 'higgsfield');
 }
 
-// The providers that have a subscription login through pi-ai. The API key
-// section above stays exactly as it was for them; the subscription is a second
-// way in, not a replacement.
-const SUBSCRIPTION_PROVIDER_CODES = ['claude', 'openai'] as const;
+// The providers that have a subscription login. The API key section above
+// stays exactly as it was for them; the subscription is a second way in, not a
+// replacement. OpenRouter signs in through its own OAuth flow, pi-ai has only
+// the API-key provider for it.
+const SUBSCRIPTION_PROVIDER_CODES = ['claude', 'openai', 'openrouter'] as const;
 type SubscriptionProviderCode = (typeof SUBSCRIPTION_PROVIDER_CODES)[number];
 
 function subscriptionProviderCode(provider: AIProvider | null): SubscriptionProviderCode | null {
