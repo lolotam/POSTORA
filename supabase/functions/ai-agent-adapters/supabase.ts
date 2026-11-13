@@ -910,7 +910,14 @@ function usableCapabilities(settings: Record<string, unknown>): Capability[] {
   return rpcOnlyConnector(settings) ? ["search_products"] : SUPABASE_CAPABILITIES;
 }
 
-/** The longest word of a multi-word query, or null when there is only one word. */
+/**
+ * The one looser query a search that found nothing is retried with.
+ *
+ * The longest word is the plan's "brand only" form of the customer's words: a
+ * product name searched as one word reaches the row the full phrase did not.
+ * A single word has no shorter form, so there is nothing to loosen it to --
+ * that case is the model's own second search, not this retry.
+ */
 function looserQuery(query: string): string | null {
   const words = query.split(/\s+/).filter(Boolean);
   if (words.length < 2) return null;
@@ -923,6 +930,32 @@ interface RpcSearch {
   queryParam: string;
   limitParam: string;
   limit: number;
+}
+
+/**
+ * The preference that makes a function call unable to commit anything.
+ *
+ * A function runs with the rights of its owner, so an allow-listed function can
+ * write even when the anon role cannot: the connector's read-only promise is
+ * only true if the CALL cannot leave a write behind, whatever the function does.
+ * PostgREST's `tx=rollback` runs the request in a transaction it rolls back
+ * afterwards, which makes the call read-only whatever the function's body is.
+ *
+ * The preference is honoured only where the target allows the client to choose
+ * how the transaction ends (`db-tx-end = "commit-allow-override"`); a target
+ * whose PostgREST commits by default ignores it. PostgREST says which of the
+ * two happened in the `Preference-Applied` header, so the connector can tell a
+ * read-only call from one that was only asked to be read-only.
+ */
+const READ_ONLY_PREFER = "tx=rollback";
+
+/** Whether the target's PostgREST applied the read-only transaction. */
+function readOnlyApplied(response: Response): boolean {
+  const applied = response.headers.get("Preference-Applied") ?? "";
+  return applied
+    .split(",")
+    .map((token) => token.trim().toLowerCase())
+    .includes(READ_ONLY_PREFER);
 }
 
 async function postRpc(
@@ -953,6 +986,15 @@ async function postRpc(
   if (!response.ok) {
     throw new SupabaseValidationError("supabase_http_error", "Supabase rejected the request.", response.status);
   }
+  if (!readOnlyApplied(response)) {
+    // The call was answered, but the target committed it: a function that writes
+    // would have written. The connector promised a reader, so it refuses the
+    // result rather than pass off an unproven call as a read.
+    throw new SupabaseValidationError(
+      "supabase_read_only_unenforced",
+      "The search function was not called: this project's PostgREST does not apply `tx=rollback`, so the call cannot be proven read-only. Set `db-tx-end = \"commit-allow-override\"` on the project's PostgREST and try again.",
+    );
+  }
   const payload = await withDeadline(readJson(response), deadline - Date.now(), abort);
   if (isPostgrestErrorBody(payload)) {
     throw new SupabaseValidationError("supabase_postgrest_error", "Supabase returned a PostgREST error.", response.status);
@@ -970,6 +1012,17 @@ function rpcSearchFor(invocation: ConnectorInvocation, fn: string, anonKey: stri
   if (!projectUrl || !schema) {
     throw new SupabaseValidationError("supabase_configuration_invalid", "Supabase is not fully configured.");
   }
+  const queryParam = rpcParamName(settings, "rpc_query_param", "q");
+  const limitParam = rpcParamName(settings, "rpc_limit_param", "max_results");
+  if (queryParam === limitParam) {
+    // The body is one object, so two arguments with the same name are one
+    // argument: the query would be dropped and the function would search with
+    // the row count instead. The search is silently wrong, so it is refused.
+    throw new SupabaseValidationError(
+      "supabase_configuration_invalid",
+      "Supabase is not fully configured.",
+    );
+  }
   return {
     url: `${projectUrl.replace(/\/+$/, "")}/rest/v1/rpc/${fn}`,
     headers: {
@@ -979,9 +1032,11 @@ function rpcSearchFor(invocation: ConnectorInvocation, fn: string, anonKey: stri
       Authorization: `Bearer ${anonKey}`,
       "Content-Profile": schema,
       "Accept-Profile": schema,
+      // The call runs in a transaction the target rolls back: see READ_ONLY_PREFER.
+      Prefer: READ_ONLY_PREFER,
     },
-    queryParam: rpcParamName(settings, "rpc_query_param", "q"),
-    limitParam: rpcParamName(settings, "rpc_limit_param", "max_results"),
+    queryParam,
+    limitParam,
     // The operator's row ceiling binds the function too: the search path
     // reuses max_rows, so a model asking for more rows cannot outrun the
     // limit the connector card shows.

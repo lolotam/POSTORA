@@ -6,12 +6,7 @@
 // state, exactly as advance_agent_reply does.
 //
 // Design: docs/superpowers/plans/2026-08-27-durable-reply-outbox.md, Task 4.
-//
-// The admin client is the service-role client, whose PostgREST builders have no
-// generated type here: a structural type narrow enough to be useful would have to
-// restate supabase-js's builder and would then drift from it. The same shape as
-// the sibling edge modules.
-/* eslint-disable @typescript-eslint/no-explicit-any */
+import type { SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { advanceReply, type ReplyEscalation } from "../_shared/pendingReplies.ts";
 
 export type { ReplyEscalation };
@@ -51,8 +46,7 @@ export type OutboxEntry =
  * tool/escalation replay this whole design exists to prevent.
  */
 export async function takeOutboxRow(
-  // deno-lint-ignore no-explicit-any
-  admin: any,
+  admin: SupabaseClient,
   outboxId: string,
 ): Promise<OutboxEntry> {
   const { data: row, error } = await admin
@@ -115,8 +109,7 @@ export type StoredReplyPeek =
  * being sent twice.
  */
 export async function peekStoredReply(
-  // deno-lint-ignore no-explicit-any
-  admin: any,
+  admin: SupabaseClient,
   outboxId: string,
 ): Promise<StoredReplyPeek> {
   const { data: row, error } = await admin
@@ -151,8 +144,7 @@ export async function peekStoredReply(
  * somebody else's now, and the caller has to know that rather than assume it.
  */
 export async function replaceStoredReply(
-  // deno-lint-ignore no-explicit-any
-  admin: any,
+  admin: SupabaseClient,
   outboxId: string,
   replacement: { text: string; kind: StoredReplyKind },
 ): Promise<boolean> {
@@ -179,8 +171,7 @@ export async function replaceStoredReply(
  * `sending`, its lease lapses, and recovery classifies it delivery_unknown -- which is true.
  */
 async function sendAndSettle(
-  // deno-lint-ignore no-explicit-any
-  admin: any,
+  admin: SupabaseClient,
   outboxId: string,
   text: string,
   send: (text: string) => Promise<string>,
@@ -240,8 +231,7 @@ export class ReplyNotPersistedError extends Error {
  * owed a second time, and the customer is apologised to twice.
  */
 export async function deliverGeneratedReply(
-  // deno-lint-ignore no-explicit-any
-  admin: any,
+  admin: SupabaseClient,
   outboxId: string,
   reply: {
     text: string;
@@ -293,8 +283,7 @@ export async function deliverGeneratedReply(
  * escalation or notification can repeat.
  */
 export function deliverStoredReply(
-  // deno-lint-ignore no-explicit-any
-  admin: any,
+  admin: SupabaseClient,
   outboxId: string,
   text: string,
   send: (text: string) => Promise<string>,
@@ -311,8 +300,7 @@ export function deliverStoredReply(
  * retry it. If one did, it stays `running` -- the state recovery reads as "hand to a human".
  */
 export async function releaseAfterError(
-  // deno-lint-ignore no-explicit-any
-  admin: any,
+  admin: SupabaseClient,
   outboxId: string,
   outcome: { sideEffectsHappened: boolean; error: string },
 ): Promise<void> {
@@ -335,8 +323,7 @@ export async function releaseAfterError(
  * named, so a row someone else has taken in the meantime is refused, which is correct.
  */
 export async function cancelOutboxRow(
-  // deno-lint-ignore no-explicit-any
-  admin: any,
+  admin: SupabaseClient,
   outboxId: string,
   reason: string,
 ): Promise<boolean> {
@@ -381,8 +368,7 @@ export type OutboxSettlement = "cancelled" | "settled" | "unsettled";
  * caller says "skipped" is a work item that recovery re-drives into the same gate.
  */
 export async function settleOutboxRow(
-  // deno-lint-ignore no-explicit-any
-  admin: any,
+  admin: SupabaseClient,
   outboxId: string,
   reason: string,
 ): Promise<OutboxSettlement> {

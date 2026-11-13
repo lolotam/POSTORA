@@ -436,7 +436,7 @@ function catalogSearchRules(
   if (!catalogSearch) return [];
   return [
     "- To find a product, call the catalog search with `query` set to the product words from the customer's message, exactly as they wrote them.",
-    "- If the search finds nothing (the tool has already retried with a shorter word by itself), search the knowledge base for the product before you ask the customer for anything: the catalog can be stale or incomplete, and the re-ingested product sheet still knows the product. Only when the knowledge base has nothing either, ask the customer for the product name as printed on the pack, or for a photo. Do not say the store does not sell it.",
+    "- If the search finds nothing (the tool has already retried with a shorter word by itself when the query had more than one word), search the knowledge base for the product before you ask the customer for anything: the catalog can be stale or incomplete, and the re-ingested product sheet still knows the product. Only when the knowledge base has nothing either, ask the customer for the product name as printed on the pack, or for a photo. Do not say the store does not sell it.",
     catalogHandoffRule(handoffOnRequest, handoffOnLowConfidence),
     "- When you mention a product, give its product_url exactly as the tool returned it. Never build or guess a link.",
     "- If price_hidden is true, say the price is available on request instead of quoting one. If shopping_enabled is false, say the product can be viewed but not ordered online.",

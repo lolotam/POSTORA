@@ -243,7 +243,7 @@ The function bodies are written in full in the migration. Each one is proved in 
 - **AI answering:** when `platform === "whatsapp"` and not a dry run, call `take_unanswered_escalation(thread.id)`.
   - With a timestamp `since` and zero staff turns after it, prepend `ESCALATION_APOLOGY[language]` to `replyText`, after the greeting step.
   - With staff turns, merge them into history instead (below).
-- **Staff turns:** `whatsapp_messages` with `direction='outbound'` and `from_name='You'` (positive match; broadcasts, rules and store openers are also outbound), `created_at > since`. They are merged into the history window by `created_at`, as `assistant` turns prefixed `"(staff) "`.
+- **Staff turns:** `whatsapp_messages` with `direction='outbound'` and `from_name='You'`, `created_at > since`. `from_name='You'` is the marker the staff send path writes, and it is the ONLY one: the agent writes `AI Agent` (`ai-agent-reply/index.ts:944`), the auto-reply rules write `Auto-Reply` (`whatsapp-webhook/index.ts:1099`), the store openers write `Store` (`ecommerce-whatsapp-api/handler.ts:332`), and a broadcast writes no `from_name` at all (`whatsapp-broadcast/chunk.ts:224`). So a positive match on `You` is a person, never an automation -- the other outbound rows are not staff turns and must not be counted as the answer to a silent window. They are merged into the history window by `created_at`, as `assistant` turns prefixed `"(staff) "`.
 - **Step 0 (proof):**
   - Confirm the staff marker on prod:
     ```sql
@@ -356,7 +356,7 @@ export function escalationApologyText(
   - Replays under a synthetic conversation id `dryrun_<model>_<timestamp>`, never the real one. The sandbox still upserts `ai_threads` (`index.ts:713`) and resolves (and may expire) the conversation's override.
   - Asserts `dryRun` skips the Task 4 claims and `take_unanswered_escalation`.
   - For each model, replays each turn through the sandbox with `dryRun`, carrying the same history.
-  - Writes `docs/superpowers/reports/2026-11-12-curemed-model-dryrun.md` with columns: model, turn, latency ms, reply language correct (`detectReplyLanguage` vs expected), catalog tool called with non-empty query, product link present, reply excerpt (120 chars).
+  - Writes `docs/superpowers/reports/2026-11-12-curemed-model-dryrun.md` with columns: model, turn, latency ms, reply language correct (`dominantReplyLanguage` vs expected), catalog tool called with non-empty query, any URL present, reply excerpt (120 chars). The URL column says "any URL present" and not "product link present": the sandbox hands the probe the tool CALLS it made and never the rows the catalog returned, so the probe cannot tell the catalog's `product_url` from a homepage or a tracking link.
   - Nothing is sent: the sandbox path never calls a sender.
 - [ ] **Step 3:** Run against 5–6 models from `ai_agent_allowed_models`, after Tasks 1–6 are live. Commit the report.
 - [ ] **Step 4:** Owner card: pick the primary and the fallback. Then set `system_settings` `default_ai_model_agent*`, or the account's own tier, as chosen.
@@ -371,6 +371,13 @@ export function escalationApologyText(
   1. `20261112170000` — the handoff columns, the thread marker and the first RPCs.
   2. `20261113120000` — the follow-up RPCs (`release_human_mode_ack`, `restore_unanswered_escalation`).
   3. `20261113210000` — the claim LEASES (`claim_human_mode_ack_leased`, `complete_human_mode_ack`, `release_human_mode_ack_claim`, `claim_unanswered_escalation`, `complete_unanswered_escalation`, `release_unanswered_escalation_claim`) and the outbox's `generated_kind`. It must land BEFORE the edge functions: the edge build calls the lease RPCs and the kind-aware transition, and it is backward compatible with the edge code that is live now, so the two orders never meet a half-migrated database.
+  4. `20261113220000` — the claim of a build that predates the lease is lease-shaped too, so no claim can be stranded: a claim that cannot lapse is a notice nobody will ever send.
+  5. `20261113230000` — the escalation marker of an expired window is written the way the thread is (an upsert), so it survives a thread that is created at the same moment.
+  - The order is a strict order, and every step before the edge deployment is backward compatible with the edge code that is live now:
+    - The edge build that is live now calls exactly one of these functions, `advance_agent_reply` (`_shared/pendingReplies.ts:239`), and every migration above leaves it exactly as it is.
+    - The edge build that is live now calls NONE of `claim_human_mode_ack`, `release_human_mode_ack`, `take_unanswered_escalation`, `restore_unanswered_escalation` — they are new in this branch, and the build that ships with it calls the LEASED variants instead. So no claim can exist in the shape the old functions write, and the rollout gap cannot strand one.
+    - The new edge build calls the lease RPCs and `advance_agent_reply_kind`, so it may only be deployed AFTER steps 3 to 5 are applied. Nothing in the new build works against a database without them.
+    - Every step redefines functions only: no table is changed, so a step that is applied twice, or a step that is applied while an old edge build is still running, leaves the old build working.
 - [ ] Merge only after the owner card.
 - [ ] After the sync:
   - Verify hashes.

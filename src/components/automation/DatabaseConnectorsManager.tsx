@@ -587,6 +587,20 @@ function missingRequiredCredentialField(
   return null;
 }
 
+/** True when a capability this connector enables reads a table.
+ *
+ * The stock and order lookups read a table, so a connector that enables them
+ * still needs the table allow-list even when a catalog search function is
+ * named: the function replaces the PRODUCT search only. The badge on the field
+ * and the save-time check have to agree on this -- otherwise the form asks for
+ * a field it does not demand, and refuses a form it accepts. */
+function readsATable(form: {
+  permission_check_stock: boolean;
+  permission_lookup_orders: boolean;
+}): boolean {
+  return form.permission_check_stock || form.permission_lookup_orders;
+}
+
 /** One rendered test-connection outcome: either just probed (live) or the
  *  row's stored last_test_* state. Never carries a credential value. */
 interface ConnectionTestView {
@@ -1417,8 +1431,7 @@ function DatabaseConnectorsEditor({
     // The stock and order lookups read a table, so a connector that enables
     // them still needs the table allow-list even when a catalog search function
     // is named.
-    const tableBackedCapabilityEnabled =
-      form.permission_check_stock || form.permission_lookup_orders;
+    const tableBackedCapabilityEnabled = readsATable(form);
     const missingField = missingRequiredCredentialField(
       safeCredentialFields(form.connector_type),
       form.credentials,
@@ -2420,9 +2433,13 @@ function DatabaseConnectorsEditor({
                       editingTool !== null &&
                       (editingTool.configured_secret_fields ?? []).includes(field.key);
                     // A field another filled field makes unnecessary is not required
-                    // right now, and the badge must say so.
+                    // right now, and the badge must say so. The table allow-list
+                    // is the one field that stays required while a table-backed
+                    // capability is enabled, so the badge asks the same question
+                    // the save-time check asks.
                     const optionalWhenFilled = field.optionalWhen
-                      ? (form.credentials[field.optionalWhen] ?? "").trim() !== ""
+                      ? (form.credentials[field.optionalWhen] ?? "").trim() !== "" &&
+                        !readsATable(form)
                       : false;
                     return (
                       <div className="space-y-1.5" key={field.key}>

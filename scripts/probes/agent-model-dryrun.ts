@@ -1,7 +1,6 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { z } from "npm:zod@3.23.8";
 import {
-  detectReplyLanguage,
   sandboxConversationId,
   threadReplyLanguage,
   type LanguageMode,
@@ -40,13 +39,14 @@ type AdminClient = ReturnType<typeof createAdminClient>;
  */
 export type LanguageScore = "correct" | "incorrect" | "indeterminate";
 
-interface ResultRow {
+export interface ResultRow {
   model: string;
   turn: number;
   latencyMs: number;
   languageScore: LanguageScore;
   catalogQuery: boolean;
-  productLink: boolean;
+  /** Whether the reply carried a URL at all. Not a product-link measurement; see hasUrl. */
+  urlPresent: boolean;
   excerpt: string;
   /** Set when the turn failed. The probe records it and carries on with the next turn. */
   failure?: string;
@@ -190,6 +190,22 @@ function catalogCalledWithQuery(sandboxResponse: SandboxResponse): boolean {
   });
 }
 
+/**
+ * Whether the reply carried a URL at all.
+ *
+ * This is NOT a product-link measurement, and the report column says so. The
+ * sandbox hands the probe the tool calls it made -- name and arguments -- and
+ * never the catalog rows the tool returned, so the probe cannot tell the
+ * catalog's product_url from a homepage, a support link or a tracking URL. A
+ * column labelled "product link present" called a model product-link capable
+ * when it had omitted the product page; "any URL present" is what the probe can
+ * actually see, and the catalog column next to it says whether the catalog was
+ * searched at all.
+ */
+export function hasUrl(reply: string): boolean {
+  return /https?:\/\/[^\s)]+/i.test(reply);
+}
+
 function excerpt(text: string): string {
   const singleLine = text.replaceAll("|", "\\|").replaceAll(/\s+/g, " ").trim();
   return Array.from(singleLine).slice(0, 120).join("");
@@ -199,7 +215,7 @@ function markdownCell(text: string): string {
   return text.replaceAll("\n", " ").trim();
 }
 
-function renderReport(resultRows: readonly ResultRow[], conversation: string): string {
+export function renderReport(resultRows: readonly ResultRow[], conversation: string): string {
   const lines = [
     "# CureMed model dry-run comparison",
     "",
@@ -208,10 +224,10 @@ function renderReport(resultRows: readonly ResultRow[], conversation: string): s
     "",
     "## Results",
     "",
-    "| Model | Turn | Latency ms | Reply language correct | Catalog tool called with non-empty query | Product link present | Reply excerpt (120 chars) | Status |",
+    "| Model | Turn | Latency ms | Reply language correct | Catalog tool called with non-empty query | Any URL present | Reply excerpt (120 chars) | Status |",
     "|---|---:|---:|---|---|---|---|---|",
     ...resultRows.map((row) =>
-      `| ${markdownCell(row.model)} | ${row.turn} | ${row.latencyMs} | ${languageCell(row.languageScore)} | ${row.catalogQuery ? "yes" : "no"} | ${row.productLink ? "yes" : "no"} | ${row.excerpt || "(no reply)"} | ${row.failure ? `failed: ${markdownCell(row.failure)}` : "ok"} |`
+      `| ${markdownCell(row.model)} | ${row.turn} | ${row.latencyMs} | ${languageCell(row.languageScore)} | ${row.catalogQuery ? "yes" : "no"} | ${row.urlPresent ? "yes" : "no"} | ${row.excerpt || "(no reply)"} | ${row.failure ? `failed: ${markdownCell(row.failure)}` : "ok"} |`
     ),
     "",
     "## Model selection",
@@ -253,15 +269,65 @@ async function assertSandboxGuards(): Promise<void> {
   }
 }
 
-async function loadReplaySource(
-  admin: AdminClient,
+/**
+ * The agent log row that owns a conversation.
+ */
+export interface ConversationOwnerRow {
+  user_id: string | null;
+  platform: string | null;
+  social_account_id: string | null;
+}
+
+/**
+ * The slice of the service-role client the owner lookup uses.
+ *
+ * A structural seam over the Supabase builder, in the register of
+ * ai-agent-reply/accountScope.ts: only the surface this lookup touches, so the
+ * lookup can be exercised against a fake client at the database boundary.
+ */
+export interface ConversationOwnerQuery {
+  select(columns: string): ConversationOwnerQuery;
+  eq(column: string, value: unknown): ConversationOwnerQuery;
+  not(column: string, operator: string, value: unknown): ConversationOwnerQuery;
+  order(column: string, options: { ascending: boolean }): ConversationOwnerQuery;
+  limit(count: number): ConversationOwnerQuery;
+  maybeSingle(): Promise<{ data: ConversationOwnerRow | null; error: { message: string } | null }>;
+}
+
+export interface ConversationOwnerClient {
+  from(table: string): { select(columns: string): ConversationOwnerQuery };
+}
+
+/**
+ * The conversation's owner: the user, the platform and the account whose agent
+ * log holds the conversation's turns.
+ */
+export interface ConversationOwner {
+  userId: string;
+  platform: string;
+  socialAccountId: string;
+}
+
+/**
+ * The owner of a conversation.
+ *
+ * The lookup is scoped to the AUTHENTICATED owner. Conversation ids are not
+ * unique across tenants: another account's agent log can carry the same id, and
+ * a lookup that took the newest matching row across every tenant returned THAT
+ * account's row whenever it had used the id more recently -- so the owner check
+ * then refused a probe whose owner's turns do exist. The platform cannot be
+ * part of the scope: the platform is what the lookup is trying to find.
+ */
+export async function findConversationOwner(
+  admin: ConversationOwnerClient,
   conversation: string,
   userId: string,
-): Promise<ReplaySource> {
+): Promise<ConversationOwner> {
   const { data: owner, error: ownerError } = await admin
     .from("ai_agent_logs")
     .select("user_id, platform, social_account_id")
     .eq("conversation_id", conversation)
+    .eq("user_id", userId)
     .not("social_account_id", "is", null)
     .order("created_at", { ascending: false })
     .limit(1)
@@ -270,12 +336,29 @@ async function loadReplaySource(
   if (!owner?.user_id || !owner.platform || !owner.social_account_id) {
     throw new Error("No account-scoped agent log exists for this conversation");
   }
+  // Defence in depth: the lookup above already filters by the authenticated
+  // owner, so this cannot fire for the owner's own row -- and it must not reject
+  // it either. A lookup that loses its scope has to fail here rather than
+  // replay another account's conversation.
   if (owner.user_id !== userId) throw new Error("SUPABASE_USER_JWT does not belong to the conversation owner");
+  return { userId: owner.user_id, platform: owner.platform, socialAccountId: owner.social_account_id };
+}
+
+async function loadReplaySource(
+  admin: AdminClient,
+  conversation: string,
+  userId: string,
+): Promise<ReplaySource> {
+  const owner = await findConversationOwner(
+    admin as unknown as ConversationOwnerClient,
+    conversation,
+    userId,
+  );
 
   const { data: thread, error: threadError } = await admin
     .from("ai_threads")
     .select("id")
-    .eq("user_id", owner.user_id)
+    .eq("user_id", owner.userId)
     .eq("platform", owner.platform)
     .eq("conversation_id", conversation)
     .maybeSingle();
@@ -297,7 +380,7 @@ async function loadReplaySource(
   // language of the conversation's LAST turn, which the replay has not reached at an
   // earlier turn. The sandbox's thread starts empty, so the probe tracks the language
   // the replayed turns leave behind instead (see expectedReplayLanguage).
-  return { platform: owner.platform, socialAccountId: owner.social_account_id, customerTurns };
+  return { platform: owner.platform, socialAccountId: owner.socialAccountId, customerTurns };
 }
 
 async function replayTurn(input: ReplayTurnInput): Promise<Omit<ResultRow, "model" | "turn">> {
@@ -329,9 +412,88 @@ async function replayTurn(input: ReplayTurnInput): Promise<Omit<ResultRow, "mode
     latencyMs,
     languageScore: scoreLanguage(reply, input.expectedLanguage),
     catalogQuery: catalogCalledWithQuery(sandboxResponse),
-    productLink: /https?:\/\/[^\s)]+/i.test(reply),
+    urlPresent: hasUrl(reply),
     excerpt: excerpt(reply),
   };
+}
+
+/**
+ * The English words that mark a Latin fragment as English PROSE.
+ *
+ * Function words only, deliberately. "Product:" and "Brand:" are labels an Arabic
+ * answer carries, and a content word such as "price" would read the English
+ * product description an Arabic answer quotes as an English answer.
+ */
+const ENGLISH_FUNCTION_WORDS = new Set([
+  "a", "an", "and", "are", "as", "at", "be", "been", "but", "by", "can", "could",
+  "did", "do", "does", "for", "from", "had", "has", "have", "he", "her", "him",
+  "his", "how", "i", "if", "in", "is", "it", "its", "me", "my", "no", "not", "of",
+  "on", "or", "our", "out", "she", "should", "so", "than", "that", "the", "their",
+  "them", "then", "there", "these", "they", "this", "those", "to", "too", "up",
+  "us", "was", "we", "were", "what", "when", "where", "which", "who", "why",
+  "will", "with", "would", "you", "your",
+]);
+
+const URL_RE = /https?:\/\/\S+/gi;
+const WWW_URL_RE = /\bwww\.\S+/gi;
+const LATIN_WORD_RE = /[A-Za-z]+/g;
+const LATIN_LETTER_RE = /[A-Za-z]/g;
+const ARABIC_LETTER_RE = /[\u0600-\u06FF]/g;
+const SENTENCE_BREAK_RE = /[\n.!?؟]+/;
+
+/**
+ * Whether a fragment carries an English function word.
+ *
+ * The words are read as whole words, so "there" is not a match for "the" and a
+ * product name such as "Dentek" is not a match for anything.
+ */
+function carriesEnglishFunctionWord(fragment: string): boolean {
+  const words = fragment.match(LATIN_WORD_RE) ?? [];
+  return words.some((word) => ENGLISH_FUNCTION_WORDS.has(word.toLowerCase()));
+}
+
+/**
+ * The language a reply is written in, decided by the script that owns its PROSE.
+ *
+ * The reply is read in its own language -- the "auto" the old detection call used,
+ * with no mode forced on it -- because the mode belongs to the account's config and
+ * is read on the EXPECTED side (readConfiguredLanguageMode).
+ *
+ * The old judgement counted every Latin character in the reply, and a CureMed
+ * answer in Arabic carries the product's English name and the catalog's
+ * product_url. Those ASCII characters can outnumber the Arabic prose, so an
+ * Arabic reply was read as English and a correct Arabic model was rejected in
+ * favour of another one.
+ *
+ * So the links go first -- a link is a link, not prose -- and what is left is
+ * read segment by segment. A segment with Arabic letters is Arabic prose. A
+ * Latin segment is prose only when it carries English function words: a product
+ * name, a brand or a label is data the answer quotes, not the language the
+ * answer is written in. A reply with no prose in it at all (only names, digits
+ * and punctuation) is decided by its letters, as it was before.
+ */
+export function dominantReplyLanguage(reply: string): ReplyLanguage {
+  const text = reply.replace(URL_RE, " ").replace(WWW_URL_RE, " ");
+  let arabicProse = 0;
+  let latinProse = 0;
+  let arabicLetters = 0;
+  let latinLetters = 0;
+  for (const segment of text.split(SENTENCE_BREAK_RE)) {
+    const arabic = (segment.match(ARABIC_LETTER_RE) ?? []).length;
+    const latin = (segment.match(LATIN_LETTER_RE) ?? []).length;
+    arabicLetters += arabic;
+    latinLetters += latin;
+    arabicProse += arabic;
+    if (carriesEnglishFunctionWord(segment)) latinProse += latin;
+  }
+  if (arabicProse > 0 || latinProse > 0) {
+    if (arabicProse > latinProse) return "ar";
+    if (latinProse > arabicProse) return "en";
+    // Two scripts carry the same prose: the old tie-break answers English.
+    return "en";
+  }
+  // No prose anywhere: the letters decide, as they did before.
+  return arabicLetters > latinLetters ? "ar" : "en";
 }
 
 /**
@@ -343,7 +505,7 @@ async function replayTurn(input: ReplayTurnInput): Promise<Omit<ResultRow, "mode
 export function scoreLanguage(reply: string, expectedLanguage: ReplyLanguage | null): LanguageScore {
   if (expectedLanguage === null) return "indeterminate";
   if (reply.length === 0) return "incorrect";
-  return detectReplyLanguage(reply, "auto") === expectedLanguage ? "correct" : "incorrect";
+  return dominantReplyLanguage(reply) === expectedLanguage ? "correct" : "incorrect";
 }
 
 /**
@@ -475,7 +637,7 @@ async function main(): Promise<void> {
           latencyMs: Date.now() - startedAt,
           languageScore: "indeterminate",
           catalogQuery: false,
-          productLink: false,
+          urlPresent: false,
           excerpt: "",
           failure: error instanceof Error ? error.message : String(error),
         };

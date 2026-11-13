@@ -260,7 +260,7 @@ const CONNECTOR_DEFINITIONS: Record<ConnectorType, ConnectorDefinition> = {
         kind: "text",
         required: false,
         help:
-          "The name of a read-only database function that searches your catalog, e.g. agent_search_products. When set, product searches call it with the customer's words instead of reading a table. Only the name you enter here can be called.",
+          "The name of a read-only database function that searches your catalog, e.g. agent_search_products. When set, product searches call it with the customer's words instead of reading a table. Only the name you enter here can be called. The call runs in a transaction the project's PostgREST rolls back, so it cannot write; the project needs db-tx-end = 'commit-allow-override' for that.",
       },
       {
         key: "rpc_query_param",

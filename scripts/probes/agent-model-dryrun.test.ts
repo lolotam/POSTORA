@@ -12,12 +12,24 @@
 // language its thread really carried, the turns it really processed, and the language
 // mode its config really forces. A state that cannot be established is indeterminate,
 // not a miss.
-import { assertEquals } from "https://deno.land/std@0.208.0/assert/mod.ts";
+//
+// The same honesty applies to the other two columns. The owner lookup is scoped to
+// the authenticated account, because conversation ids are not unique across tenants,
+// and the URL column says "any URL present" because the probe never sees the catalog
+// rows the model read.
+import { assertEquals, assertRejects } from "https://deno.land/std@0.208.0/assert/mod.ts";
 import {
+  dominantReplyLanguage,
   expectedReplayLanguage,
   expectedSandboxLanguage,
+  findConversationOwner,
+  hasUrl,
+  renderReport,
   sandboxStateAfterTurn,
   scoreLanguage,
+  type ConversationOwnerQuery,
+  type ConversationOwnerRow,
+  type ResultRow,
   type SandboxState,
 } from "./agent-model-dryrun.ts";
 
@@ -101,4 +113,167 @@ Deno.test("a state that cannot be established is indeterminate, not a miss", () 
   assertEquals(scoreLanguage("كريم الكعب متوفر", null), "indeterminate");
   assertEquals(scoreLanguage("كريم الكعب متوفر", "ar"), "correct");
   assertEquals(scoreLanguage("كريم الكعب متوفر", "en"), "incorrect");
+});
+
+// A CureMed answer in Arabic carries the product's English name and the catalog's
+// product_url. Those ASCII characters can outnumber the Arabic prose, and the reply
+// was then read as English -- so a correct Arabic model was rejected in favour of
+// another one.
+Deno.test("an Arabic reply with an English product name and a link is still Arabic", () => {
+  const reply = "كريم الكعب متوفر. DenTek Professional-Fit Dental Guard. " +
+    "https://curemedkw.com/dentek/product/heel-cream";
+  assertEquals(dominantReplyLanguage(reply), "ar");
+  assertEquals(scoreLanguage(reply, "ar"), "correct");
+  assertEquals(scoreLanguage(reply, "en"), "incorrect");
+});
+
+Deno.test("an English reply is still English", () => {
+  const reply = "We have the DenTek heel cream in stock. The price is on request.";
+  assertEquals(dominantReplyLanguage(reply), "en");
+  assertEquals(scoreLanguage(reply, "en"), "correct");
+  assertEquals(scoreLanguage(reply, "ar"), "incorrect");
+});
+
+Deno.test("a reply with no prose in it is decided by its letters", () => {
+  // A bare product name says nothing about the language it is written in, and the
+  // letters are all the probe has -- as they were before.
+  assertEquals(dominantReplyLanguage("DenTek Professional-Fit Dental Guard"), "en");
+  assertEquals(dominantReplyLanguage("كريم الكعب"), "ar");
+  assertEquals(dominantReplyLanguage("🌿"), "en");
+});
+
+const OWNER = "user-owner";
+const OTHER_TENANT = "user-other";
+const CONVERSATION = "wa_96560003759_96555683677";
+
+interface FakeLogRow extends ConversationOwnerRow {
+  /** The fake filters rows by column name, so the row reads like the table does. */
+  [column: string]: unknown;
+  conversation_id: string;
+  created_at: string;
+}
+
+interface FakeFilters {
+  equals: Record<string, unknown>;
+  notNull: string[];
+}
+
+/**
+ * Fake service-role client at the database boundary; the filters are the behaviour
+ * under test, in the register of ai-agent-reply/accountScope.test.ts.
+ *
+ * `unscoped` models a lookup that does not scope itself to the owner: the rows come
+ * back whatever the filters say, which is what the owner check is there for.
+ */
+function fakeOwnerClient(rows: FakeLogRow[], options: { unscoped?: boolean } = {}) {
+  const builder = (filters: FakeFilters): ConversationOwnerQuery => ({
+    select: () => builder(filters),
+    eq: (column: string, value: unknown) =>
+      builder({ ...filters, equals: { ...filters.equals, [column]: value } }),
+    not: (column: string, operator: string, value: unknown) =>
+      operator === "is" && value === null
+        ? builder({ ...filters, notNull: [...filters.notNull, column] })
+        : builder(filters),
+    order: () => builder(filters),
+    limit: () => builder(filters),
+    maybeSingle: () => {
+      const matching = options.unscoped
+        ? rows
+        : rows.filter((row) =>
+          Object.entries(filters.equals).every(([column, value]) => row[column] === value) &&
+          filters.notNull.every((column) => row[column] !== null && row[column] !== undefined)
+        );
+      const [newest] = [...matching].sort((left, right) => right.created_at.localeCompare(left.created_at));
+      return Promise.resolve({ data: newest ?? null, error: null });
+    },
+  });
+  return { from: () => builder({ equals: {}, notNull: [] }) };
+}
+
+Deno.test("the owner lookup takes the owner's row, not another tenant's newer one", async () => {
+  // Conversation ids are not unique across tenants. Another account used the same id
+  // more recently, so a lookup without an owner filter returned ITS row and the
+  // owner check then refused a probe whose owner's turns do exist.
+  const admin = fakeOwnerClient([
+    {
+      user_id: OWNER,
+      platform: "whatsapp",
+      social_account_id: "acc-owner",
+      conversation_id: CONVERSATION,
+      created_at: "2026-11-12T10:00:00Z",
+    },
+    {
+      user_id: OTHER_TENANT,
+      platform: "whatsapp",
+      social_account_id: "acc-other",
+      conversation_id: CONVERSATION,
+      created_at: "2026-11-12T11:00:00Z",
+    },
+  ]);
+
+  const owner = await findConversationOwner(admin, CONVERSATION, OWNER);
+  assertEquals(owner.userId, OWNER);
+  assertEquals(owner.platform, "whatsapp");
+  assertEquals(owner.socialAccountId, "acc-owner");
+});
+
+Deno.test("a conversation with no log of the owner's own is not replayed", async () => {
+  const admin = fakeOwnerClient([
+    {
+      user_id: OTHER_TENANT,
+      platform: "whatsapp",
+      social_account_id: "acc-other",
+      conversation_id: CONVERSATION,
+      created_at: "2026-11-12T11:00:00Z",
+    },
+  ]);
+
+  await assertRejects(
+    () => findConversationOwner(admin, CONVERSATION, OWNER),
+    Error,
+    "No account-scoped agent log exists for this conversation",
+  );
+});
+
+Deno.test("a row from another account is refused even when the lookup hands one over", async () => {
+  // Defence in depth: the lookup is scoped to the authenticated owner, but a lookup
+  // that loses its scope has to fail here rather than replay another account's turns.
+  const admin = fakeOwnerClient([
+    {
+      user_id: OTHER_TENANT,
+      platform: "whatsapp",
+      social_account_id: "acc-other",
+      conversation_id: CONVERSATION,
+      created_at: "2026-11-12T11:00:00Z",
+    },
+  ], { unscoped: true });
+
+  await assertRejects(
+    () => findConversationOwner(admin, CONVERSATION, OWNER),
+    Error,
+    "SUPABASE_USER_JWT does not belong to the conversation owner",
+  );
+});
+
+Deno.test("the report's URL column says it measures a URL, not a product link", () => {
+  const row: ResultRow = {
+    model: "model-a",
+    turn: 1,
+    latencyMs: 12,
+    languageScore: "correct",
+    catalogQuery: true,
+    urlPresent: true,
+    excerpt: "reply",
+  };
+  const report = renderReport([row], CONVERSATION);
+  assertEquals(report.includes("| Any URL present |"), true);
+  assertEquals(report.includes("Product link"), false);
+});
+
+Deno.test("the URL metric counts any URL, which is why the column says so", () => {
+  assertEquals(hasUrl("See https://curemedkw.com/dentek/product/heel-cream"), true);
+  // A homepage is a URL too. The probe never sees the catalog rows the model read,
+  // so it cannot tell the product page from the shop's front door.
+  assertEquals(hasUrl("See https://curemedkw.com/ for more"), true);
+  assertEquals(hasUrl("كريم الكعب متوفر لدينا"), false);
 });

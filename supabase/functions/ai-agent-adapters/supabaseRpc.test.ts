@@ -30,9 +30,17 @@ function catalogTool(extra: Record<string, unknown> = { rpc_allow_list: "agent_s
   };
 }
 
-interface Call { url: string; method: string; body: unknown }
+interface Call { url: string; method: string; body: unknown; headers: Record<string, string> }
 
-function recordingDeps(answers: unknown[][]): { deps: AdapterDependencies; calls: Call[] } {
+/**
+ * The answers a target gives. `applied` is what PostgREST says it applied:
+ * `null` models a target whose PostgREST ignores the read-only preference.
+ */
+function recordingDeps(
+  answers: unknown[][],
+  options: { applied?: string | null } = {},
+): { deps: AdapterDependencies; calls: Call[] } {
+  const applied = options.applied === undefined ? "tx=rollback" : options.applied;
   const calls: Call[] = [];
   const deps: AdapterDependencies = {
     fetch: (url, init) => {
@@ -40,10 +48,17 @@ function recordingDeps(answers: unknown[][]): { deps: AdapterDependencies; calls
         url: String(url),
         method: init?.method ?? "GET",
         body: typeof init?.body === "string" ? JSON.parse(init.body) : null,
+        headers: (init?.headers ?? {}) as Record<string, string>,
       });
       const rows = answers[Math.min(calls.length - 1, answers.length - 1)];
       return Promise.resolve(
-        new Response(JSON.stringify(rows), { status: 200, headers: { "Content-Type": "application/json" } }),
+        new Response(JSON.stringify(rows), {
+          status: 200,
+          headers: {
+            "Content-Type": "application/json",
+            ...(applied === null ? {} : { "Preference-Applied": applied }),
+          },
+        }),
       );
     },
     timeoutMs: 1_000,
@@ -175,6 +190,34 @@ Deno.test("a cleared argument name falls back to its default", async () => {
   await search(catalogTool({ rpc_allow_list: "agent_search_products", rpc_query_param: "-" }), { query: "heel" }, deps);
 
   assertEquals(calls[0].body, { q: "heel", max_results: 8 });
+});
+
+Deno.test("the function call runs in a transaction the target rolls back", async () => {
+  const { deps, calls } = recordingDeps([FIXTURE]);
+
+  await search(catalogTool(), { query: "heel" }, deps);
+
+  assertEquals(calls[0].headers.Prefer, "tx=rollback");
+});
+
+Deno.test("a target that does not apply the read-only transaction is refused", async () => {
+  const { deps } = recordingDeps([FIXTURE], { applied: null });
+
+  const result = await search(catalogTool(), { query: "heel" }, deps);
+
+  assertEquals(errorCodeOf(result), "supabase_read_only_unenforced");
+});
+
+Deno.test("two argument names that are the same are refused before any request", async () => {
+  const { deps, calls } = recordingDeps([FIXTURE]);
+
+  const result = await search(
+    catalogTool({ rpc_allow_list: "agent_search_products", rpc_query_param: "term", rpc_limit_param: "term" }),
+    { query: "heel" },
+    deps,
+  );
+
+  assertEquals([errorCodeOf(result), calls.length], ["supabase_configuration_invalid", 0]);
 });
 
 // ---------------------------------------------------------------------------

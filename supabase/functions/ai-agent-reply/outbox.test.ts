@@ -1,5 +1,6 @@
 // deno-lint-ignore-file no-import-prefix no-explicit-any
 import { assert, assertEquals, assertRejects } from "https://deno.land/std@0.208.0/assert/mod.ts";
+import type { SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2";
 import {
   cancelOutboxRow,
   deliverGeneratedReply,
@@ -70,7 +71,10 @@ function stubOutbox(
       };
     },
   };
-  return { admin, row, transitions, escalations };
+  // The stub is handed over twice: `admin` is the client the module under test
+  // takes, and `stub` is the same object with its own shape, so a test can
+  // replace a method without restating the client's whole signature.
+  return { admin: admin as unknown as SupabaseClient, stub: admin, row, transitions, escalations };
 }
 
 Deno.test("a send is wrapped in three durable steps, in that order, and sends once", async () => {
@@ -132,10 +136,10 @@ Deno.test("a provider that throws leaves the row delivery_unknown, never ready_t
 
 Deno.test("a failed sending->sent bookkeeping update does not undo a delivery", async () => {
   // After the provider accepted the message, the last transition is deliberately unchecked.
-  const { admin } = stubOutbox({ status: "running" });
+  const { admin, stub } = stubOutbox({ status: "running" });
   let calls = 0;
-  const original = admin.rpc;
-  admin.rpc = (name: string, args: Record<string, unknown>) => {
+  const original = stub.rpc;
+  stub.rpc = (name: string, args: Record<string, unknown>) => {
     calls++;
     if (args.p_to === "sent") return Promise.resolve({ data: null, error: { message: "db down" } });
     return original(name, args);
@@ -194,9 +198,9 @@ Deno.test("a redelivery says whether the stored text is the handoff notice", asy
 Deno.test("the reply and the tools that produced it are persisted in one statement", async () => {
   // Two statements could leave text without its provenance if the second failed.
   let saved: Record<string, unknown> | null = null;
-  const { admin } = stubOutbox({ status: "running" });
-  const original = admin.rpc;
-  admin.rpc = (name: string, args: Record<string, unknown>) => {
+  const { admin, stub } = stubOutbox({ status: "running" });
+  const original = stub.rpc;
+  stub.rpc = (name: string, args: Record<string, unknown>) => {
     if (args.p_to === "ready_to_send") saved = args;
     return original(name, args);
   };
