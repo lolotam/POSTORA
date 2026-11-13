@@ -27,11 +27,15 @@ interface RecordedRpc {
 // Stands in for the Supabase client the way evolutionQrAccount.test.ts does: the
 // assertions are on the rows the teardown would write, not on how it called the
 // client. `updateError` makes the write for one table fail, for the propagation case.
+// `rpcData` is what the RPC returned: the deliberate-disconnect marker writes `true`
+// when it wrote the marker and `false` when the row did not match, and the teardown
+// treats anything but `true` as a failed mark.
 function recordingAdmin(
   options: {
     instanceRow?: { instance_name: string } | null;
     updateError?: { table: string; error: unknown };
     rpcError?: unknown;
+    rpcData?: unknown;
   } = {},
 ) {
   const updates: RecordedUpdate[] = [];
@@ -39,7 +43,10 @@ function recordingAdmin(
   const admin = {
     rpc(name: string, args: Record<string, unknown>) {
       rpcs.push({ name, args });
-      return Promise.resolve({ data: null, error: options.rpcError ?? null });
+      return Promise.resolve({
+        data: options.rpcData === undefined ? true : options.rpcData,
+        error: options.rpcError ?? null,
+      });
     },
     from(table: string) {
       return {
@@ -199,6 +206,75 @@ Deno.test("a failed deliberate mark stops the disconnect before anything is torn
 
   assertEquals(evolutionCalls, []);
   assertEquals(updates, []);
+});
+
+Deno.test("a deliberate mark that wrote nothing stops the disconnect before anything is torn down", async () => {
+  // The RPC answers `false` when the row did not match its predicate: nothing was
+  // written, so the watcher would still read the session as an outage and alert the
+  // owner about a disconnect they asked for. An unanswered mark is not a successful one.
+  const { admin, updates } = recordingAdmin({
+    instanceRow: { instance_name: "postora_acc-1" },
+    rpcData: false,
+  });
+  const evolutionCalls: Array<{ url: string; method?: string }> = [];
+
+  await assertRejects(() =>
+    disconnectWhatsAppAccount(
+      { accountId: "acc-1", workspaceId: "ws-1", connectionMode: "evolution_qr" },
+      { admin, evolution: evolutionRecorder(evolutionCalls), fetcher: graphRecorder([]) },
+    )
+  );
+
+  assertEquals(evolutionCalls, []);
+  assertEquals(updates, []);
+});
+
+Deno.test("a failed deactivation rolls the deliberate marker back and rethrows", async () => {
+  // The marker is written before the deactivation. When the deactivation fails, the row
+  // stays active WITH the marker, and the watcher skips every account that carries it:
+  // a live account whose session is gone would never be polled again. The marker goes
+  // back, and the caller still sees the deactivation failure.
+  const { rpcs, admin, updates } = recordingAdmin({
+    instanceRow: { instance_name: "postora_acc-7" },
+    updateError: { table: "social_accounts", error: { message: "row is locked" } },
+  });
+
+  const rejection = await assertRejects(
+    () =>
+      disconnectWhatsAppAccount(
+        { accountId: "acc-7", workspaceId: "ws-7", connectionMode: "evolution_qr" },
+        { admin, evolution: evolutionRecorder([]) },
+      ),
+  );
+
+  assertEquals(rejection, { message: "row is locked" });
+  assertEquals(rpcs, [
+    { name: "mark_whatsapp_user_disconnected", args: { p_account_id: "acc-7" } },
+    { name: "unmark_whatsapp_user_disconnected", args: { p_account_id: "acc-7" } },
+  ]);
+  assertEquals(deactivationOf(updates)?.values, { is_active: false });
+});
+
+Deno.test("a failed deactivation of a Meta account rolls no marker back", async () => {
+  // A Meta-mode disconnect never writes the marker, so there is nothing to undo.
+  const { rpcs, admin } = recordingAdmin({
+    updateError: { table: "social_accounts", error: { message: "row is locked" } },
+  });
+
+  await assertRejects(() =>
+    disconnectWhatsAppAccount(
+      {
+        accountId: "acc-8",
+        workspaceId: "ws-8",
+        connectionMode: "coexistence",
+        wabaId: "waba-8",
+        accessToken: "token-8",
+      },
+      { admin, fetcher: graphRecorder([]) },
+    )
+  );
+
+  assertEquals(rpcs, []);
 });
 
 Deno.test("a coexistence account unsubscribes the WABA webhook, never touches Evolution, and deactivates", async () => {

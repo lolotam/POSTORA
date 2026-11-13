@@ -6,9 +6,12 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { verifyCronAuth } from "../_shared/cron-auth.ts";
 import { restrictedCorsHeaders } from "../_shared/cors.ts";
+import { sanitizedError } from "../_shared/errorContext.ts";
 import { createEvolutionApi } from "../_shared/evolutionApi.ts";
-import { extractState } from "../whatsapp-evolution-bridge/qr.ts";
+import { redactSensitive } from "../_shared/logging.ts";
+import { dispatchDisconnectAlert } from "./dispatch.ts";
 import { runWatch, type Episode, type WatchCandidate } from "./run.ts";
+import { readConnectionState } from "./stateReader.ts";
 
 /**
  * A candidate polled less than this many minutes ago is skipped: the cron runs every five
@@ -21,6 +24,23 @@ interface CandidateRow {
   social_account_id: string;
   instance_name: string;
   last_polled_at: string | null;
+  /** The embedded account row: one-to-one in the database, an array in some clients. */
+  social_accounts: { id: string; is_active: boolean } | { id: string; is_active: boolean }[] | null;
+}
+
+/**
+ * Whether the account row is still active.
+ *
+ * The flag only guards the clear. An account whose flag cannot be read is treated as
+ * active: the inner join guarantees the embedded row exists, so this is only the
+ * fallback for a shape the client answered differently -- and a stale episode on a
+ * connected account is worse than a missing clear on a disconnected one.
+ */
+function isActiveOf(row: CandidateRow): boolean {
+  const embedded = row.social_accounts;
+  const record = Array.isArray(embedded) ? embedded[0] : embedded;
+  if (!record || typeof record !== "object") return true;
+  return record.is_active !== false;
 }
 
 Deno.serve(async (req) => {
@@ -56,7 +76,7 @@ Deno.serve(async (req) => {
       async listCandidates(limit: number): Promise<WatchCandidate[]> {
         const { data, error } = await admin
           .from("whatsapp_evolution_instances")
-          .select("social_account_id, instance_name, last_polled_at, social_accounts!inner(id)")
+          .select("social_account_id, instance_name, last_polled_at, social_accounts!inner(id, is_active)")
           .eq("social_accounts.platform", "whatsapp")
           .eq("social_accounts.connection_mode", "evolution_qr")
           // is_active is deliberately NOT a filter: a disconnected Evolution account is
@@ -73,23 +93,25 @@ Deno.serve(async (req) => {
 
         const cutoff = Date.now() - POLL_FRESHNESS_MINUTES * 60_000;
         const candidates: WatchCandidate[] = [];
-        for (const row of (data ?? []) as CandidateRow[]) {
+        for (const row of (data ?? []) as unknown as CandidateRow[]) {
           if (row.last_polled_at !== null) {
             const polledAt = Date.parse(row.last_polled_at);
             // An unreadable poll time is treated as never polled: the account is checked.
             if (Number.isFinite(polledAt) && polledAt > cutoff) continue;
           }
-          candidates.push({ id: row.social_account_id, instance_name: row.instance_name });
+          candidates.push({
+            id: row.social_account_id,
+            instance_name: row.instance_name,
+            is_active: isActiveOf(row),
+          });
         }
         return candidates;
       },
       async readState(instanceName: string): Promise<string | null> {
-        try {
-          return extractState(await api.connectionState(instanceName));
-        } catch {
-          // An unreachable Evolution is not evidence about the account.
-          return null;
-        }
+        // A read that cannot be answered raises: an unreachable Evolution is a failed
+        // account, not a state. Answering null here would record the account as polled
+        // and skip it, and the outage would then go unnoticed.
+        return await readConnectionState(api, instanceName);
       },
       async observe(accountId: string, state: string, terminal: boolean): Promise<Episode | null> {
         const { data, error } = await admin.rpc("observe_whatsapp_disconnect_state", {
@@ -117,23 +139,16 @@ Deno.serve(async (req) => {
         if (error) throw error;
         return data === true;
       },
-      async dispatchAlert(accountId: string): Promise<void> {
+      async dispatchAlert(accountId: string) {
         // The same service-role bearer relationship refresh-tokens has with
         // send-token-failure-alert: the sender is an internal function, never a browser one.
-        const response = await fetch(
-          `${supabaseUrl}/functions/v1/send-whatsapp-disconnect-alert`,
-          {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              "Authorization": `Bearer ${serviceRoleKey}`,
-            },
-            body: JSON.stringify({ account_id: accountId }),
-          },
-        );
-        if (!response.ok) {
-          throw new Error(`alert dispatch failed with status ${response.status}`);
-        }
+        // The dispatch carries its own timeout, and the sender's summary decides whether
+        // an alert really went out: it answers 200 even when a recipient failed.
+        return await dispatchDisconnectAlert({
+          url: `${supabaseUrl}/functions/v1/send-whatsapp-disconnect-alert`,
+          serviceRoleKey,
+          accountId,
+        });
       },
       async markPolled(instanceName: string, at: Date): Promise<void> {
         const { error } = await admin
@@ -142,6 +157,7 @@ Deno.serve(async (req) => {
           .eq("instance_name", instanceName);
         if (error) throw error;
       },
+      monotonicNow: () => performance.now(),
       now: () => new Date(),
     });
 
@@ -151,10 +167,15 @@ Deno.serve(async (req) => {
       { headers: { ...corsHeaders, "Content-Type": "application/json" } },
     );
   } catch (error) {
-    // Raw provider errors stay in the log; the response is generic.
+    // The raw provider/database error can carry an address, a phone number or a provider
+    // payload, so it never reaches the log as it is. What is logged is a sanitized code
+    // plus the operational context needed to find the run again.
     console.error(
-      "[whatsapp-disconnect-watch] run failed:",
-      error instanceof Error ? error.message : String(error),
+      "[whatsapp-disconnect-watch] run failed",
+      redactSensitive({
+        event: "whatsapp_disconnect_watch_failed",
+        ...sanitizedError(error),
+      }),
     );
     return new Response(
       JSON.stringify({ error: "watcher run failed" }),

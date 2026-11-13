@@ -1,4 +1,4 @@
-import { render, screen, fireEvent } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter } from "react-router-dom";
 import { expect, it, vi, beforeEach, type Mock } from "vitest";
@@ -20,7 +20,7 @@ const whatsappAccount = {
   is_active: false,
 };
 
-/** A Meta-hosted WhatsApp account: it has no OAuth branch and reconnects in product. */
+/** A Meta-hosted WhatsApp account: it has no OAuth branch and its credential expired. */
 const metaWhatsappAccount = {
   id: "wa-meta-1",
   platform: "whatsapp",
@@ -53,13 +53,15 @@ vi.mock("@/hooks/useProfileOAuth", () => ({
 }));
 
 const reconnectWhatsApp = vi.fn();
+const connectWhatsApp = vi.fn();
 
 vi.mock("@/hooks/useWhatsAppConnect", () => ({
   useWhatsAppReconnect: () => ({ mutate: reconnectWhatsApp, isPending: false }),
+  useWhatsAppConnect: () => ({ mutate: connectWhatsApp, isPending: false }),
 }));
 
 /** The builder answers any number of filters, and each call answers with its own result. */
-function answerWith(results: Array<{ data: unknown[]; error: null }>) {
+function answerWith(results: Array<{ data: unknown[]; error: unknown }>) {
   let call = 0;
   (supabase.from as Mock).mockImplementation(() => {
     const result = results[call] ?? { data: [], error: null };
@@ -103,7 +105,11 @@ it("calls a dropped WhatsApp session disconnected, not expired", async () => {
   expect(screen.queryByText(/connection expired/i)).not.toBeInTheDocument();
 });
 
-it("reconnects a Meta WhatsApp account through the WhatsApp flow, not OAuth", async () => {
+// The `reconnect` action re-subscribes the app to the WABA with the STORED access
+// token. It never refreshes that token and never clears needs_reauth, so a flagged
+// Meta account sent there stays flagged forever. The credential has to be renewed
+// through the Embedded Signup connect flow instead.
+it("renews the credential of a flagged Meta WhatsApp account instead of resubscribing", async () => {
   answerWith([
     { data: [metaWhatsappAccount], error: null },
     { data: [], error: null },
@@ -113,5 +119,32 @@ it("reconnects a Meta WhatsApp account through the WhatsApp flow, not OAuth", as
   const button = await screen.findByRole("button", { name: /reconnect whatsapp/i });
   fireEvent.click(button);
 
-  expect(reconnectWhatsApp).toHaveBeenCalledWith("wa-meta-1");
+  expect(connectWhatsApp).toHaveBeenCalledWith("cloud_api");
+  expect(reconnectWhatsApp).not.toHaveBeenCalled();
+});
+
+it("reports a partial check failure and keeps the accounts that loaded", async () => {
+  answerWith([
+    { data: [metaWhatsappAccount], error: null },
+    { data: null, error: new Error("qr query failed") },
+  ]);
+  renderBanner();
+
+  expect(await screen.findByText(/could not be checked/i)).toBeInTheDocument();
+  // The account that did load is still offered for a reconnect.
+  expect(await screen.findByRole("button", { name: /reconnect whatsapp/i })).toBeInTheDocument();
+});
+
+it("offers a retry when a check failed", async () => {
+  answerWith([
+    { data: [], error: null },
+    { data: null, error: new Error("qr query failed") },
+  ]);
+  renderBanner();
+
+  const retry = await screen.findByRole("button", { name: /retry/i });
+  await waitFor(() => expect(retry).toBeEnabled());
+  fireEvent.click(retry);
+
+  expect(supabase.from).toHaveBeenCalled();
 });

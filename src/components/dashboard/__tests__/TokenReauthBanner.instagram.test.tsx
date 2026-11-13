@@ -76,6 +76,7 @@ vi.mock("@/hooks/useProfileOAuth", async () => {
 
 vi.mock("@/hooks/useWhatsAppConnect", () => ({
   useWhatsAppReconnect: () => ({ mutate: vi.fn(), isPending: false }),
+  useWhatsAppConnect: () => ({ mutate: vi.fn(), isPending: false }),
 }));
 
 const renderBanner = () =>

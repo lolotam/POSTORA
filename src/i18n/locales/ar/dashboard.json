@@ -12,13 +12,16 @@
   "reauth": {
     "accountNeedsReconnect": "حساب {{platform}} بتاعك محتاج يتعمله إعادة ربط.",
     "accountWithUsernameNeedsReconnect": "حساب {{platform}} بتاعك (@{{username}}) محتاج يتعمله إعادة ربط.",
+    "checkFailed": "تعذّر فحص بعض الحسابات",
+    "checkFailedDescription": "لم يتم تحميل قائمة الحسابات التي تحتاج إلى إعادة ربط بالكامل. الحسابات التي نعرف أنها تحتاج إلى إعادة ربط لا تزال معروضة أدناه.",
     "connecting": "جاري الربط...",
     "connectionExpired": "انتهت صلاحية اتصال {{platform}}",
     "disconnected": "{{platform}} غير متصل",
     "dismiss": "تجاهل",
     "error": "خطأ: {{error}}",
     "reconnect": "إعادة ربط",
-    "reconnectWhatsapp": "إعادة ربط واتساب"
+    "reconnectWhatsapp": "إعادة ربط واتساب",
+    "retry": "إعادة المحاولة"
   },
   "recentPosts": {
     "noPosts": "لسه مفيش منشورات. اعمل أول منشور ليك!",

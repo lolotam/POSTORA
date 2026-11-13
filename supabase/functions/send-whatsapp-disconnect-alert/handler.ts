@@ -70,7 +70,13 @@ function escapeHtml(s: string): string {
  * for it.
  */
 function accountLabel(account: AlertAccount): string {
-  return escapeHtml(account.platform_username || "WhatsApp");
+  const username = account.platform_username;
+  // The username may BE the phone number. A WhatsApp row whose display name was never
+  // set stores the number in platform_username, and platform_user_id holds the same
+  // digits. Naming it would put the owner's number in both emails, so the generic
+  // label is used instead.
+  if (!username || username === account.platform_user_id) return "WhatsApp";
+  return escapeHtml(username);
 }
 
 function emailShell(

@@ -6,6 +6,8 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { z } from "https://esm.sh/zod@3.23.8";
 import { restrictedCorsHeaders } from "../_shared/cors.ts";
+import { sanitizedError } from "../_shared/errorContext.ts";
+import { redactSensitive } from "../_shared/logging.ts";
 import {
   sendDisconnectAlerts,
   type AdminProfile,
@@ -13,6 +15,7 @@ import {
   type OwnerProfile,
   type SendAlertsDeps,
 } from "./handler.ts";
+import { sendResendEmail } from "./resend.ts";
 
 const FROM_SENDER = "Postora <notifications@postora.cloud>";
 
@@ -178,24 +181,9 @@ Deno.serve(async (req) => {
       async send(payload) {
         // Raw fetch instead of the SDK: the SDK version this function pins cannot set the
         // Idempotency-Key header, and that header is what makes a retry the same email.
-        const response = await fetch("https://api.resend.com/emails", {
-          method: "POST",
-          headers: {
-            Authorization: `Bearer ${resendApiKey}`,
-            "Content-Type": "application/json",
-            "Idempotency-Key": payload.idempotencyKey,
-          },
-          body: JSON.stringify({
-            from: FROM_SENDER,
-            to: payload.to,
-            subject: payload.subject,
-            html: payload.html,
-          }),
-        });
-        if (!response.ok) {
-          const body = await response.text();
-          throw new Error(`Resend returned ${response.status}: ${body.slice(0, 200)}`);
-        }
+        // The timeout, the bounded retry and the idempotency-key handling live in
+        // resend.ts, where they are tested without a network.
+        await sendResendEmail(payload, { apiKey: resendApiKey, from: FROM_SENDER });
       },
       async mark(accountId, kind, episodeId) {
         const { data, error } = await admin.rpc("mark_whatsapp_disconnect_emailed", {
@@ -222,10 +210,16 @@ Deno.serve(async (req) => {
       { headers: { ...corsHeaders, "Content-Type": "application/json" } },
     );
   } catch (error) {
-    // Raw database/provider errors stay in the log; the response is generic.
+    // The raw provider/database error can carry the recipient address, a phone number
+    // or a fragment of the message, so it never reaches the log as it is. What is
+    // logged is a sanitized code plus the operational context needed to find the run
+    // again; the response stays generic.
     console.error(
-      "[send-whatsapp-disconnect-alert] run failed:",
-      error instanceof Error ? error.message : String(error),
+      "[send-whatsapp-disconnect-alert] run failed",
+      redactSensitive({
+        event: "send_whatsapp_disconnect_alert_failed",
+        ...sanitizedError(error),
+      }),
     );
     return new Response(
       JSON.stringify({ error: "alert run failed" }),

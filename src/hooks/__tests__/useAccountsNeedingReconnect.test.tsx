@@ -112,7 +112,8 @@ describe("useAccountsNeedingReconnect", () => {
 
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
 
-    expect(result.current.data).toEqual([active, whatsappQr]);
+    expect(result.current.data?.accounts).toEqual([active, whatsappQr]);
+    expect(result.current.data?.partialError).toBeNull();
   });
 
   it("returns an account once when both queries returned it", async () => {
@@ -128,14 +129,53 @@ describe("useAccountsNeedingReconnect", () => {
 
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
 
-    expect(result.current.data).toEqual([account]);
+    expect(result.current.data?.accounts).toEqual([account]);
   });
 
-  it("surfaces a query error instead of swallowing it", async () => {
+  it("keeps the accounts that loaded when the WhatsApp QR query failed", async () => {
+    // The WhatsApp QR query is the one that fails in production: it filters on
+    // connection_mode, and a row that predates that column makes PostgREST reject the
+    // whole query. Throwing there used to throw away the active accounts too, so the
+    // banner showed nothing at all for an owner whose OAuth accounts DID need a
+    // reconnect.
+    const active = { id: "acc-1", platform: "instagram", is_active: true };
+    results = [
+      { data: [active], error: null },
+      { data: null, error: new Error("qr query failed") },
+    ];
+
+    const { result } = renderHook(() => useAccountsNeedingReconnect(), {
+      wrapper: createWrapper(),
+    });
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+
+    expect(result.current.data?.accounts).toEqual([active]);
+    expect(result.current.data?.partialError).toEqual({ scope: "whatsapp_qr" });
+  });
+
+  it("keeps the WhatsApp QR accounts when the active query failed", async () => {
+    const whatsappQr = { id: "acc-2", platform: "whatsapp", is_active: false };
+    results = [
+      { data: null, error: new Error("active query failed") },
+      { data: [whatsappQr], error: null },
+    ];
+
+    const { result } = renderHook(() => useAccountsNeedingReconnect(), {
+      wrapper: createWrapper(),
+    });
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+
+    expect(result.current.data?.accounts).toEqual([whatsappQr]);
+    expect(result.current.data?.partialError).toEqual({ scope: "active" });
+  });
+
+  it("fails the query when both queries failed", async () => {
     const dbError = new Error("db failure");
     results = [
       { data: null, error: dbError },
-      { data: [], error: null },
+      { data: null, error: dbError },
     ];
 
     const { result } = renderHook(() => useAccountsNeedingReconnect(), {

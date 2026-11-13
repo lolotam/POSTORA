@@ -477,6 +477,7 @@ One RPC per write, each `SECURITY DEFINER`, `SET search_path = public`, executab
 | `mark_whatsapp_disconnect_emailed(p_account_id uuid, p_kind text, p_episode_id uuid)` | Sets the recipient's marker after a successful send, **only** when the open episode still carries `p_episode_id` and the recipient holds a claim. |
 | `clear_whatsapp_disconnect_episode(p_account_id uuid)` | Removes the episode, both markers and the red flag. Refuses to touch a deliberately disconnected account. |
 | `mark_whatsapp_user_disconnected(p_account_id uuid)` | Sets the deliberate-disconnect marker **and** closes the open episode with its claims and markers: a disconnect the owner asked for must not leave an alert behind, and the next outage has to start from a clean episode. |
+| `unmark_whatsapp_user_disconnected(p_account_id uuid)` | Removes the deliberate-disconnect marker again, but **only** while the row is still `is_active = true` and is still an `evolution_qr` WhatsApp row. It exists for the teardown that marked first and then failed to deactivate: that state would leave a live account whose session is gone permanently excluded from the watcher's polling. |
 
 The claim shape is copied from the existing incident claim, including its stale-claim window:
 
@@ -563,10 +564,17 @@ The teardown therefore stamps `account_metadata.whatsapp_user_disconnected_at` t
 `mark_whatsapp_user_disconnected`, **before** it touches the remote session, and the stamp is
 mandatory: if it fails, the teardown raises before logging out or deactivating anything and the
 owner retries. Once the session is gone the watcher sees a terminal state, so a teardown that
-continued without the marker would produce exactly the false alert this section forbids. A marker
-on a row whose later deactivation then fails is harmless: the account stays active and its session
-is untouched or already gone at the owner's request, and the reactivation trigger is what removes
-the marker. The watch function skips any account carrying that marker, and
+continued without the marker would produce exactly the false alert this section forbids.
+
+A marker whose **later** deactivation failed is NOT harmless: the row would stay active and
+carry the marker, and the watcher skips every account carrying it — so a live account whose
+session is gone would never be polled and the owner would never hear about it. The teardown
+therefore rolls the marker back through `unmark_whatsapp_user_disconnected` when the
+deactivation fails, and rethrows the original error. That RPC refuses to touch an inactive
+row (the disconnect did happen there) and refuses any row that is not an `evolution_qr`
+WhatsApp account.
+
+The watch function skips any account carrying that marker, and
 so do the two RPCs that write: `observe_whatsapp_disconnect_state` refuses to open an episode and
 `claim_whatsapp_disconnect_email` refuses to claim, both re-checking the marker **under the row
 lock**. Without that re-check a disconnect that lands between the watcher listing the account
@@ -630,10 +638,11 @@ ALTER TABLE public.whatsapp_evolution_instances
 ```
 
 That is the **only** schema change. Everything else is `account_metadata` JSONB keys, `needs_reauth`,
-`last_refresh_error` — all already typed — plus six service-role-only SECURITY DEFINER RPCs
+`last_refresh_error` — all already typed — plus seven service-role-only SECURITY DEFINER RPCs
 (`observe_whatsapp_disconnect_state`, `claim_whatsapp_disconnect_email`,
 `mark_whatsapp_disconnect_emailed`, `clear_whatsapp_disconnect_episode`,
-`mark_whatsapp_user_disconnected`, `flag_whatsapp_disconnect_episode`), the cron base-URL resolver
+`mark_whatsapp_user_disconnected`, `unmark_whatsapp_user_disconnected`,
+`flag_whatsapp_disconnect_episode`), the cron base-URL resolver
 `get_cron_functions_base_url()` and the reactivation trigger function.
 
 Index (ARCHITECTURE.md §23, "index foreign keys and frequent filters where appropriate"):
@@ -682,14 +691,21 @@ END $do_cron_whatsapp_disconnect_watch$;
 ```
 
 The endpoint is resolved at run time through `public.get_cron_functions_base_url()` (the
-`app.settings.supabase_url` database setting, then an `app_settings` row with key `functions_base_url`,
-then the vault secret of that name), so a staging or self-hosted database calls its own watcher and
-never production's. A database with none of the three keeps the job but skips every call.
+`app.settings.supabase_url` database setting, then the vault secret `functions_base_url`),
+so a staging or self-hosted database calls its own watcher and never production's. A
+database with neither keeps the job but skips every call.
 
-**Rollout prerequisite.** Before relying on the watcher in production, configure one of the three
-sources (for Postora, an `app_settings` row `functions_base_url = 'https://api.postora.cloud'`) and
-verify `SELECT public.get_cron_functions_base_url();` returns that trusted URL. The migration raises
-a `WARNING` when it finds none, and every skipped run logs a `NOTICE`.
+An `app_settings` row is deliberately **not** a source. That table is editable by an
+application admin, and the resolved value is the host the cron secret is sent to in an
+`Authorization` header: an editable row would let an admin redirect the secret to a host
+of their choosing.
+
+**Rollout prerequisite.** Before relying on the watcher in production, the operator sets
+the vault secret `functions_base_url` (for Postora,
+`SELECT vault.create_secret('https://api.postora.cloud', 'functions_base_url');`) — or
+sets the `app.settings.supabase_url` database setting — and verifies
+`SELECT public.get_cron_functions_base_url();` returns that trusted URL. The migration
+raises a `WARNING` when it finds neither, and every skipped run logs a `NOTICE`.
 
 The minutes are offset from the top of the hour so the run does not land on `*/5` with the other jobs.
 The cron secret is resolved at run time through `public.get_cron_secret()`; no credential is stored in

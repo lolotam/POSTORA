@@ -13,6 +13,20 @@ export interface AccountNeedingReconnect {
   is_active: boolean;
 }
 
+/** Which of the two queries failed. */
+export type ReconnectCheckScope = "active" | "whatsapp_qr";
+
+export interface AccountsNeedingReconnectResult {
+  /** Every account the banner must render. */
+  accounts: AccountNeedingReconnect[];
+  /**
+   * Set when exactly one of the two queries failed. The other half is still shown:
+   * a WhatsApp QR query that errors must not hide the OAuth accounts that loaded
+   * fine, and vice versa. The banner shows the flag and offers a retry.
+   */
+  partialError: { scope: ReconnectCheckScope } | null;
+}
+
 const COLUMNS =
   "id, platform, platform_username, needs_reauth, last_refresh_error, social_profile_id, connection_mode, is_active";
 
@@ -32,8 +46,8 @@ export function useAccountsNeedingReconnect() {
     queryKey: ["accounts-needing-reauth", user?.id],
     enabled: !!user,
     refetchInterval: 60000, // Check every minute
-    queryFn: async () => {
-      if (!user) return [];
+    queryFn: async (): Promise<AccountsNeedingReconnectResult> => {
+      if (!user) return { accounts: [], partialError: null };
 
       const activeQuery = supabase
         .from("social_accounts")
@@ -52,16 +66,29 @@ export function useAccountsNeedingReconnect() {
         .eq("needs_reauth", true);
 
       const [active, whatsappQr] = await Promise.all([activeQuery, whatsappQrQuery]);
-      if (active.error) throw active.error;
-      if (whatsappQr.error) throw whatsappQr.error;
 
-      const merged = [...(active.data ?? []), ...(whatsappQr.data ?? [])];
+      // Both halves failed: there is nothing to show and nothing partial about it.
+      // Rethrowing keeps react-query's failed state, its backoff and its retry.
+      if (active.error && whatsappQr.error) throw active.error;
+
+      const activeRows = (active.error ? [] : (active.data ?? [])) as AccountNeedingReconnect[];
+      const qrRows = (whatsappQr.error ? [] : (whatsappQr.data ?? [])) as AccountNeedingReconnect[];
+
+      const merged = [...activeRows, ...qrRows];
       const seen = new Set<string>();
-      return merged.filter((account) => {
+      const accounts = merged.filter((account) => {
         if (seen.has(account.id)) return false;
         seen.add(account.id);
         return true;
-      }) as AccountNeedingReconnect[];
+      });
+
+      const partialError = active.error
+        ? ({ scope: "active" } as const)
+        : whatsappQr.error
+          ? ({ scope: "whatsapp_qr" } as const)
+          : null;
+
+      return { accounts, partialError };
     },
   });
 }

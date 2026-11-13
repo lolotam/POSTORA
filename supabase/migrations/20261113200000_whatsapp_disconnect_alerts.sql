@@ -23,9 +23,10 @@
 --
 -- Deployment note: the cron job calls the watcher through public.get_cron_functions_base_url(),
 -- so this database needs one of those configured before the watcher runs: the database setting
--- "app.settings.supabase_url", an app_settings row with key functions_base_url, or the vault
--- secret functions_base_url. Without one the migration raises a warning and the scheduled job
--- skips its call (and says so in the log) until a base URL is configured.
+-- "app.settings.supabase_url" or the vault secret functions_base_url. Without one the migration
+-- raises a warning and the scheduled job skips its call (and says so in the log) until a base URL
+-- is configured. An app_settings row is deliberately NOT a source: an application admin can edit
+-- that table, and the value becomes the host the cron secret is sent to.
 
 -- 1. Poll freshness for the watch function's round robin.
 --    whatsapp_evolution_instances is absent from src/integrations/supabase/types.ts (its RLS
@@ -365,6 +366,38 @@ $fn$;
 REVOKE ALL ON FUNCTION public.mark_whatsapp_user_disconnected(uuid) FROM PUBLIC, anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.mark_whatsapp_user_disconnected(uuid) TO service_role;
 
+-- 6a. Undoes a deliberate-disconnect marker that was written for a teardown which then
+--     failed. The teardown marks FIRST (so a completed disconnect is never alerted on) and
+--     deactivates second; when the deactivation fails, the account stays active with the
+--     marker on it. That state is the worst of both: the watcher skips every account
+--     carrying the marker, so a live account whose session is gone is never polled and the
+--     owner is never told.
+--     The marker is therefore cleared again -- but ONLY while the row is still active and is
+--     still an evolution_qr WhatsApp row. An inactive row carries the marker legitimately
+--     (the disconnect did happen), and a row that is no longer a QR account never had the
+--     marker in the first place.
+CREATE OR REPLACE FUNCTION public.unmark_whatsapp_user_disconnected(p_account_id uuid)
+RETURNS boolean
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $fn$
+BEGIN
+  UPDATE public.social_accounts
+     SET account_metadata = COALESCE(account_metadata, '{}'::jsonb)
+                             - 'whatsapp_user_disconnected_at'
+   WHERE id = p_account_id
+     AND is_active = true
+     AND platform = 'whatsapp'
+     AND connection_mode = 'evolution_qr'
+     AND (COALESCE(account_metadata, '{}'::jsonb) ? 'whatsapp_user_disconnected_at');
+
+  RETURN FOUND;
+END;
+$fn$;
+REVOKE ALL ON FUNCTION public.unmark_whatsapp_user_disconnected(uuid) FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.unmark_whatsapp_user_disconnected(uuid) TO service_role;
+
 -- 6b. The watcher flags an account only while the episode it observed is still the open one.
 --     Observing and flagging are two calls, and between them the owner may reconnect (the
 --     reactivation trigger clears the episode) or disconnect on purpose (the marker). An
@@ -443,8 +476,12 @@ CREATE TRIGGER social_accounts_clear_whatsapp_disconnect_on_reactivate
 -- 8. The base URL the cron job calls. It is never a literal domain in this file: the
 --    deployment supplies it, the same way the cron secret is supplied through the vault.
 --    Resolution order: the database-level app.settings.supabase_url setting, then the
---    app_settings row an admin can change without a migration, then the vault secret
---    functions_base_url. NULL means "not configured".
+--    vault secret functions_base_url. NULL means "not configured".
+--    An app_settings row is NOT a source. That table is editable by an application admin,
+--    and the resolved value is the host the cron secret is sent to in an Authorization
+--    header: an editable row would let an admin redirect the secret to a host of their
+--    choosing. The operator therefore sets the vault secret (or the database setting),
+--    neither of which the application can write.
 CREATE OR REPLACE FUNCTION public.get_cron_functions_base_url()
 RETURNS text
 LANGUAGE plpgsql
@@ -460,15 +497,7 @@ BEGIN
     RETURN v_base;
   END IF;
 
-  SELECT nullif(btrim(coalesce(value #>> '{}', '')), '') INTO v_base
-    FROM public.app_settings
-   WHERE key = 'functions_base_url'
-   LIMIT 1;
-  IF v_base IS NOT NULL THEN
-    RETURN v_base;
-  END IF;
-
-  -- The vault is optional: a database without it still resolves the other two sources.
+  -- The vault is optional: a database without it still resolves the setting above.
   BEGIN
     SELECT nullif(btrim(coalesce(decrypted_secret, '')), '') INTO v_base
       FROM vault.decrypted_secrets
@@ -500,7 +529,7 @@ BEGIN
   END IF;
 
   IF public.get_cron_functions_base_url() IS NULL THEN
-    RAISE WARNING 'whatsapp-disconnect-watch has no functions base URL yet: set the app.settings.supabase_url database setting, an app_settings row with key functions_base_url, or the vault secret functions_base_url. The job skips its call until one is configured.';
+    RAISE WARNING 'whatsapp-disconnect-watch has no functions base URL yet: set the app.settings.supabase_url database setting or the vault secret functions_base_url. The job skips its call until one is configured.';
   END IF;
 
   IF NOT EXISTS (SELECT 1 FROM cron.job WHERE jobname = 'whatsapp-disconnect-watch') THEN

@@ -396,11 +396,57 @@ BEGIN
   ASSERT public.get_cron_functions_base_url() IS NULL
          OR public.get_cron_functions_base_url() !~ 'postora\.cloud',
     'E19 the resolver returns the configured base url, never a baked-in domain';
+  -- An app_settings row is NOT a source. That table is editable by an application admin,
+  -- and the resolved value is the host the cron secret is sent to in an Authorization
+  -- header: an editable row would let an admin redirect the secret to a host of their
+  -- choosing. The row below must therefore be ignored outright.
   INSERT INTO public.app_settings (key, value, description)
   VALUES ('functions_base_url', '"https://wda.example.invalid"'::jsonb, 'wda synthetic');
-  ASSERT public.get_cron_functions_base_url() = 'https://wda.example.invalid',
-    'E19 the app_settings row is read as the base url';
+  ASSERT public.get_cron_functions_base_url() IS DISTINCT FROM 'https://wda.example.invalid',
+    'E19 an app_settings row is not a trusted source for the cron base url';
   DELETE FROM public.app_settings WHERE key = 'functions_base_url';
+  -- The database setting IS a source: the operator points it at this deployment.
+  SET app.settings.supabase_url = 'https://wda.example.invalid';
+  ASSERT public.get_cron_functions_base_url() = 'https://wda.example.invalid',
+    'E19 the database setting is read as the base url';
+  RESET app.settings.supabase_url;
+
+  -- ------------------ E20: the deliberate marker can be rolled back, but only when it is owed
+  -- The teardown marks first and deactivates second. When the deactivation fails, the row
+  -- stays active with the marker on it, and the watcher skips every account carrying the
+  -- marker: a live account whose session is gone would never be polled again.
+  ASSERT public.mark_whatsapp_user_disconnected(acc_delib) = true,
+    'E20 the deliberate marker is written';
+  ASSERT public.unmark_whatsapp_user_disconnected(acc_delib) = true,
+    'E20 the marker is cleared while the row is still active';
+  ASSERT (SELECT account_metadata->'whatsapp_user_disconnected_at' IS NULL
+            FROM public.social_accounts WHERE id = acc_delib),
+    'E20 the marker is gone from the row';
+  ASSERT public.unmark_whatsapp_user_disconnected(acc_delib) = false,
+    'E20 clearing a row that carries no marker is a no-op';
+  ASSERT public.unmark_whatsapp_user_disconnected(acc_cloud) = false,
+    'E20 a Cloud API WhatsApp row is never unmarked';
+  ASSERT public.unmark_whatsapp_user_disconnected(acc_meta) = false,
+    'E20 a Meta row is never unmarked';
+  ASSERT public.mark_whatsapp_user_disconnected(acc_delib) = true,
+    'E20 the deliberate marker is written again';
+  UPDATE public.social_accounts SET is_active = false WHERE id = acc_delib;
+  ASSERT public.unmark_whatsapp_user_disconnected(acc_delib) = false,
+    'E20 an inactive row keeps its marker: the disconnect did happen there';
+  ASSERT (SELECT account_metadata->'whatsapp_user_disconnected_at' IS NOT NULL
+            FROM public.social_accounts WHERE id = acc_delib),
+    'E20 the marker survives an unmark on an inactive row';
+
+  -- ------------------ E21: the marker rollback is service-role only
+  ASSERT NOT has_function_privilege('authenticated',
+        'public.unmark_whatsapp_user_disconnected(uuid)', 'EXECUTE'),
+    'E21 the marker rollback is not browser-callable';
+  ASSERT NOT has_function_privilege('anon',
+        'public.unmark_whatsapp_user_disconnected(uuid)', 'EXECUTE'),
+    'E21 the marker rollback is not anon-callable';
+  ASSERT has_function_privilege('service_role',
+        'public.unmark_whatsapp_user_disconnected(uuid)', 'EXECUTE'),
+    'E21 the service role may roll the marker back';
 END $$;
 
 ROLLBACK;

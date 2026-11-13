@@ -1412,6 +1412,16 @@ git commit -- supabase/functions/send-whatsapp-disconnect-alert/index.ts
   marked. The mark is best effort: a failure must not turn a completed disconnect into an error for the
   user (same rule as the warnings above it).
 
+  **SUPERSEDED (review round):** the shipped code does NOT mark after the deactivation, and the mark
+  is NOT best effort. It marks **FIRST**, before the local deactivation, and **aborts the whole
+  disconnect** when the mark fails (a failed or non-`true` RPC result raises, so the account is left
+  active rather than deactivated without a marker — a deactivated account with no marker is polled
+  again and would raise a second, spurious disconnect alert). If the mark succeeds but the later
+  deactivation fails, the marker is rolled back through
+  `public.unmark_whatsapp_user_disconnected(p_account_id uuid)` — a SECURITY DEFINER RPC that clears
+  the marker only while the row is still `is_active = true` and is an `evolution_qr` WhatsApp row —
+  and the original deactivation error is rethrown.
+
 - [ ] **Step 3: Typecheck both modules.**
   `deno check --node-modules-dir=none supabase/functions/_shared/evolutionQrAccount.ts supabase/functions/_shared/whatsappDisconnect.ts`.
   Expected: PASS.

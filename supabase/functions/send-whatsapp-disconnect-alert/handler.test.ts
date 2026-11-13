@@ -45,20 +45,53 @@ interface Recorder {
   marks: Array<{ kind: string; episodeId: string }>;
 }
 
+/** How long a claim stays live. The RPC retakes a claim only once it went stale. */
+const CLAIM_STALE_MS = 30 * 60 * 1000;
+
+/** The claim state of one recipient, exactly what the claim RPC keeps on the row. */
+interface RecipientState {
+  episodeId: string;
+  claimedAt: number;
+  marked: boolean;
+}
+
 /**
  * A recording fake. Every side effect the handler performs is observable through the call
  * order, so the tests assert behaviour rather than implementation.
+ *
+ * The claim and the mark are ONE state machine per recipient, because that is what the
+ * claim RPC is: a marked recipient is never claimed again, a live claim blocks a second
+ * one, and only a stale claim is retaken. A fake that always hands out an episode would
+ * let a test pass that the real RPC refuses.
  */
-function fakeDeps(overrides: Partial<SendAlertsDeps> = {}): { deps: SendAlertsDeps; rec: Recorder } {
+function fakeDeps(overrides: Partial<SendAlertsDeps> = {}): {
+  deps: SendAlertsDeps;
+  rec: Recorder;
+  advance: (ms: number) => void;
+} {
   const rec: Recorder = { calls: [], sent: [], marks: [] };
+  const state = new Map<string, RecipientState>();
+  let clock = 0;
+
   const deps: SendAlertsDeps = {
     loadAccount: () => Promise.resolve(ACCOUNT),
     loadOwnerProfile: () => Promise.resolve(OWNER),
     loadAdmins: () => Promise.resolve(ADMINS),
     isGlobalEmailEnabled: () => Promise.resolve(true),
     isAdminAlertEnabled: () => Promise.resolve(true),
-    claim: (_accountId, kind) => {
+    claim: (accountId, kind) => {
       rec.calls.push(`claim:${kind}`);
+      const key = `${accountId}:${kind}`;
+      const current = state.get(key);
+      if (!current) {
+        state.set(key, { episodeId: EPISODE, claimedAt: clock, marked: false });
+        return Promise.resolve(EPISODE);
+      }
+      // Already emailed for this episode: the RPC refuses.
+      if (current.marked) return Promise.resolve(null);
+      // A live claim blocks another one; only a stale claim is retaken.
+      if (clock - current.claimedAt < CLAIM_STALE_MS) return Promise.resolve(null);
+      current.claimedAt = clock;
       return Promise.resolve(EPISODE);
     },
     send: (payload) => {
@@ -66,14 +99,20 @@ function fakeDeps(overrides: Partial<SendAlertsDeps> = {}): { deps: SendAlertsDe
       rec.sent.push(payload);
       return Promise.resolve();
     },
-    mark: (_accountId, kind, episodeId) => {
+    mark: (accountId, kind, episodeId) => {
       rec.calls.push(`mark:${kind}`);
       rec.marks.push({ kind, episodeId });
+      const current = state.get(`${accountId}:${kind}`);
+      // A mark without a live claim, or for another episode, writes nothing.
+      if (!current || current.episodeId !== episodeId || current.marked) {
+        return Promise.resolve(false);
+      }
+      current.marked = true;
       return Promise.resolve(true);
     },
     ...overrides,
   };
-  return { deps, rec };
+  return { deps, rec, advance: (ms: number) => void (clock += ms) };
 }
 
 Deno.test("the owner email links to the reconnect page", () => {
@@ -112,6 +151,21 @@ Deno.test("the admin email has no reconnect button: the page lists the reader's 
 
 Deno.test("the admin email carries no phone number", () => {
   assertFalse(buildAdminEmail(ACCOUNT, OWNER.full_name).includes("96566600001"));
+});
+
+Deno.test("neither email carries the phone number when the account name IS the phone number", () => {
+  // A WhatsApp row whose display name was never set stores the number in
+  // platform_username, and platform_user_id holds the same digits. Naming the account
+  // would put the owner's number in both emails, so the generic label is used.
+  const account: AlertAccount = { ...ACCOUNT, platform_username: "96566600001" };
+
+  const ownerHtml = buildOwnerEmail(account, OWNER.full_name);
+  const adminHtml = buildAdminEmail(account, OWNER.full_name);
+
+  assertFalse(ownerHtml.includes("96566600001"));
+  assertFalse(adminHtml.includes("96566600001"));
+  assertStringIncludes(ownerHtml, "WhatsApp");
+  assertStringIncludes(adminHtml, "WhatsApp");
 });
 
 Deno.test("one owner email is sent when the owner has notifications enabled", async () => {
@@ -171,14 +225,51 @@ Deno.test("every send carries an idempotency key bound to the account, the episo
   );
 });
 
-Deno.test("a retry of the same episode reuses the same idempotency key", async () => {
+Deno.test("a marked recipient is never emailed twice", async () => {
+  // The claim RPC refuses a recipient that was already emailed for this episode, so
+  // the second run sends nothing at all. A fake that always handed out an episode
+  // would hide exactly this.
   const { deps, rec } = fakeDeps();
 
   await sendDisconnectAlerts(deps, "acc-1");
-  const first = rec.sent[0].idempotencyKey;
+  const firstRun = rec.sent.length;
   await sendDisconnectAlerts(deps, "acc-1");
 
-  assertEquals(rec.sent[2].idempotencyKey, first);
+  assertEquals(firstRun, 2);
+  assertEquals(rec.sent.length, 2);
+});
+
+Deno.test("a stale claim that was never marked is retaken with the same idempotency key", async () => {
+  // A crash between the send and the mark leaves the claim open. The live claim
+  // blocks the next run, and once it went stale the recipient can be claimed again.
+  // The key is the same either way, so the provider sends the same email instead of
+  // a second copy.
+  let ownerSendFails = true;
+  const { deps, rec, advance } = fakeDeps({
+    send: (payload) => {
+      rec.calls.push("send");
+      rec.sent.push(payload);
+      if (ownerSendFails && payload.subject === OWNER_SUBJECT) {
+        return Promise.reject(new Error("resend down"));
+      }
+      return Promise.resolve();
+    },
+  });
+
+  await sendDisconnectAlerts(deps, "acc-1");
+  const first = rec.sent[0].idempotencyKey;
+
+  // The claim is still live: the owner is not emailed again.
+  await sendDisconnectAlerts(deps, "acc-1");
+  assertEquals(rec.sent.filter((payload) => payload.subject === OWNER_SUBJECT).length, 1);
+
+  advance(CLAIM_STALE_MS + 1);
+  ownerSendFails = false;
+  await sendDisconnectAlerts(deps, "acc-1");
+
+  const ownerSends = rec.sent.filter((payload) => payload.subject === OWNER_SUBJECT);
+  assertEquals(ownerSends.length, 2);
+  assertEquals(ownerSends[1].idempotencyKey, first);
 });
 
 Deno.test("nothing is sent when the claim is refused", async () => {

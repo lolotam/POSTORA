@@ -1,6 +1,8 @@
 // The pure state machine of the WhatsApp disconnect watcher. Everything the watcher decides
 // lives here so it can be tested without Evolution, without Postgres and without a network.
 
+import type { AlertDispatchResult } from "./dispatch.ts";
+
 export type ConnectionClass = "healthy" | "transient" | "terminal" | "unknown";
 
 /** How long a terminal state must persist before the account is alerted. */
@@ -9,6 +11,12 @@ export const DISCONNECT_GRACE_MINUTES = 10;
 export const DISCONNECT_BACKSTOP_MINUTES = 60;
 /** How many accounts one run polls. */
 export const MAX_ACCOUNTS_PER_RUN = 50;
+/**
+ * How long one run may take. The candidates that are left over are not polled, so the next
+ * run picks them up: a run that overruns its budget must not be cut off mid-account, and it
+ * must not be allowed to run until the platform kills it either.
+ */
+export const RUN_BUDGET_MS = 50_000;
 /** The message the dashboard banner shows under the headline. No phone number, ever. */
 export const DISCONNECT_REASON = "WhatsApp session disconnected. Scan a new QR code to reconnect.";
 
@@ -24,6 +32,11 @@ export interface Episode {
 export interface WatchCandidate {
   id: string;
   instance_name: string;
+  /**
+   * Whether the account row is still active. A `close` webhook deactivates it, and an
+   * inactive account is the one the dashboard banner asks the owner to reconnect.
+   */
+  is_active: boolean;
 }
 
 /**
@@ -66,8 +79,10 @@ export interface WatchDeps {
    * the watcher then sends no alert.
    */
   markFlagged(accountId: string, episodeId: string, reason: string): Promise<boolean>;
-  dispatchAlert(accountId: string): Promise<void>;
+  dispatchAlert(accountId: string): Promise<AlertDispatchResult>;
   markPolled(instanceName: string, at: Date): Promise<void>;
+  /** A monotonic clock, used only for the run deadline. */
+  monotonicNow(): number;
   now(): Date;
 }
 
@@ -78,6 +93,8 @@ export interface WatchSummary {
   flagged: number;
   alerted: number;
   failed: string[];
+  /** The candidates this run did not reach because it ran out of time. */
+  deferred: number;
 }
 
 /** What one account did in this run. */
@@ -125,7 +142,11 @@ async function applyAccountState(
 
   try {
     if (classification === "healthy") {
-      await deps.clear(candidate.id);
+      // The episode and the reconnect flag are only cleared for an account that is still
+      // active. A `close` webhook deactivates the row, and clearing the flag then would
+      // remove `needs_reauth` from an account that is still disconnected: the banner would
+      // stop asking for the QR code the owner still needs.
+      if (candidate.is_active) await deps.clear(candidate.id);
       return outcome;
     }
 
@@ -139,8 +160,15 @@ async function applyAccountState(
     const flagged = await deps.markFlagged(candidate.id, episode.episode_id, DISCONNECT_REASON);
     if (!flagged) return outcome;
     outcome.flagged = 1;
-    await deps.dispatchAlert(candidate.id);
-    outcome.alerted = 1;
+
+    // The sender answers 200 even when it could not reach a recipient, so the alert is
+    // counted only for a mail that really went out, and a recipient the sender could not
+    // reach is reported as a failure of this account.
+    const dispatch = await deps.dispatchAlert(candidate.id);
+    if (dispatch.ownerSent || dispatch.adminSent) outcome.alerted = 1;
+    if (dispatch.failed.length > 0) {
+      outcome.failed = true;
+    }
   } catch {
     console.error(`[whatsapp-disconnect-watch] account ${candidate.id}: handling failed`);
     outcome.failed = true;
@@ -149,10 +177,26 @@ async function applyAccountState(
 }
 
 export async function runWatch(deps: WatchDeps): Promise<WatchSummary> {
-  const summary: WatchSummary = { polled: 0, skipped: 0, episodes: 0, flagged: 0, alerted: 0, failed: [] };
+  const summary: WatchSummary = {
+    polled: 0,
+    skipped: 0,
+    episodes: 0,
+    flagged: 0,
+    alerted: 0,
+    failed: [],
+    deferred: 0,
+  };
   const candidates = await deps.listCandidates(MAX_ACCOUNTS_PER_RUN);
+  const startedAt = deps.monotonicNow();
 
-  for (const candidate of candidates) {
+  for (const [index, candidate] of candidates.entries()) {
+    if (deps.monotonicNow() - startedAt >= RUN_BUDGET_MS) {
+      // The run is out of time. The candidates that were not reached are left untouched:
+      // they were not polled, so the next run picks them up.
+      summary.deferred = candidates.length - index;
+      break;
+    }
+
     const read = await readStateFor(deps, candidate);
     if (read.kind === "failed") {
       summary.failed.push(candidate.id);
