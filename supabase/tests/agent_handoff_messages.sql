@@ -134,7 +134,7 @@ BEGIN
       = v_escalated + interval '1 hour',
     'H9 the newer marker stays';
 
-  -- H10: only service_role reaches the two release functions.
+  -- H10: tokenless ack release is private; only service_role can restore a marker.
   ASSERT NOT has_function_privilege('anon', 'public.release_human_mode_ack(uuid, text, text)', 'EXECUTE'),
     'H10 anon cannot release an ack';
   ASSERT NOT has_function_privilege('authenticated', 'public.release_human_mode_ack(uuid, text, text)', 'EXECUTE'),
@@ -143,8 +143,8 @@ BEGIN
     'H10 anon cannot restore the marker';
   ASSERT NOT has_function_privilege('authenticated', 'public.restore_unanswered_escalation(uuid, uuid, timestamptz)', 'EXECUTE'),
     'H10 authenticated cannot restore the marker';
-  ASSERT has_function_privilege('service_role', 'public.release_human_mode_ack(uuid, text, text)', 'EXECUTE'),
-    'H10 service_role can release an ack';
+  ASSERT NOT has_function_privilege('service_role', 'public.release_human_mode_ack(uuid, text, text)', 'EXECUTE'),
+    'H10 service_role cannot release a tokenless ack';
   ASSERT has_function_privilege('service_role', 'public.restore_unanswered_escalation(uuid, uuid, timestamptz)', 'EXECUTE'),
     'H10 service_role can restore the marker';
 END $$;

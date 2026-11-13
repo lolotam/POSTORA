@@ -1,6 +1,6 @@
 -- supabase/tests/agent_handoff_tenant_less_revoke.sql
--- The two tenant-less transitions are off the service-role surface
--- (migration 20261113300000_agent_handoff_revoke_tenant_less_transitions.sql).
+-- Unused tenant-less transitions and tokenless acknowledgement claims are off the
+-- service-role surface (consolidated migration 20261113210000).
 -- One transaction, no fixtures needed, labelled ASSERTs, ROLLBACK, sentinel last. Assumes
 -- the migrations are applied. No secrets and no real accounts.
 --
@@ -63,6 +63,18 @@ $privileges$;
 SET ROLE service_role;
 DO $revoke_service$
 BEGIN
+  BEGIN
+    PERFORM public.claim_human_mode_ack('00000000-0000-4000-8000-000000000000'::uuid, 'whatsapp', 'fixture');
+    RAISE EXCEPTION 'FAIL: tokenless acknowledgement claim was ACCEPTED for service_role';
+  EXCEPTION WHEN insufficient_privilege THEN
+    RAISE NOTICE 'PASS: tokenless acknowledgement claim is refused for service_role';
+  END;
+  BEGIN
+    PERFORM public.release_human_mode_ack('00000000-0000-4000-8000-000000000000'::uuid, 'whatsapp', 'fixture');
+    RAISE EXCEPTION 'FAIL: tokenless acknowledgement release was ACCEPTED for service_role';
+  EXCEPTION WHEN insufficient_privilege THEN
+    RAISE NOTICE 'PASS: tokenless acknowledgement release is refused for service_role';
+  END;
   BEGIN
     PERFORM public.advance_agent_reply_kind(
       '00000000-0000-4000-8000-000000000000'::uuid, 'running', 'ready_to_send');

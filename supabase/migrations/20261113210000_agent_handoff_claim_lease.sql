@@ -523,7 +523,9 @@ $$;
 
 REVOKE ALL ON FUNCTION public.claim_human_mode_ack(uuid, text, text) FROM PUBLIC, anon, authenticated;
 
-GRANT EXECUTE ON FUNCTION public.claim_human_mode_ack(uuid, text, text) TO service_role;
+-- Current main does not call this tokenless acknowledgement API. Do not expose a
+-- legacy claimant that cannot identify its window generation or survive lease takeover.
+REVOKE ALL ON FUNCTION public.claim_human_mode_ack(uuid, text, text) FROM service_role;
 
 CREATE OR REPLACE FUNCTION public.release_human_mode_ack(
   p_user_id uuid,
@@ -553,7 +555,7 @@ $$;
 
 REVOKE ALL ON FUNCTION public.release_human_mode_ack(uuid, text, text) FROM PUBLIC, anon, authenticated;
 
-GRANT EXECUTE ON FUNCTION public.release_human_mode_ack(uuid, text, text) TO service_role;
+REVOKE ALL ON FUNCTION public.release_human_mode_ack(uuid, text, text) FROM service_role;
 
 CREATE OR REPLACE FUNCTION public.expire_conversation_mode(
   p_mode_id uuid,

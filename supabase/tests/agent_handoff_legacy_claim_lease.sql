@@ -98,10 +98,10 @@ BEGIN
     'M8 anon cannot release an ack';
   ASSERT NOT has_function_privilege('authenticated', 'public.claim_human_mode_ack_leased(uuid, text, text, integer, uuid, text)', 'EXECUTE'),
     'M8 authenticated cannot lease an ack';
-  ASSERT has_function_privilege('service_role', 'public.claim_human_mode_ack(uuid, text, text)', 'EXECUTE'),
-    'M8 service_role can claim an ack';
-  ASSERT has_function_privilege('service_role', 'public.release_human_mode_ack(uuid, text, text)', 'EXECUTE'),
-    'M8 service_role can release an ack';
+  ASSERT NOT has_function_privilege('service_role', 'public.claim_human_mode_ack(uuid, text, text)', 'EXECUTE'),
+    'M8 service_role cannot claim a tokenless ack';
+  ASSERT NOT has_function_privilege('service_role', 'public.release_human_mode_ack(uuid, text, text)', 'EXECUTE'),
+    'M8 service_role cannot release a tokenless ack';
 END $$;
 
 ROLLBACK;

@@ -134,14 +134,14 @@ BEGIN
     'G8 anon cannot claim an ack';
   ASSERT NOT has_function_privilege('authenticated', 'public.claim_human_mode_ack(uuid, text, text)', 'EXECUTE'),
     'G8 authenticated cannot claim an ack';
-  ASSERT has_function_privilege('service_role', 'public.claim_human_mode_ack(uuid, text, text)', 'EXECUTE'),
-    'G8 service_role can claim an ack';
+  ASSERT NOT has_function_privilege('service_role', 'public.claim_human_mode_ack(uuid, text, text)', 'EXECUTE'),
+    'G8 service_role cannot claim a tokenless ack';
   ASSERT NOT has_function_privilege('anon', 'public.release_human_mode_ack(uuid, text, text)', 'EXECUTE'),
     'G8 anon cannot release an ack';
   ASSERT NOT has_function_privilege('authenticated', 'public.release_human_mode_ack(uuid, text, text)', 'EXECUTE'),
     'G8 authenticated cannot release an ack';
-  ASSERT has_function_privilege('service_role', 'public.release_human_mode_ack(uuid, text, text)', 'EXECUTE'),
-    'G8 service_role can release an ack';
+  ASSERT NOT has_function_privilege('service_role', 'public.release_human_mode_ack(uuid, text, text)', 'EXECUTE'),
+    'G8 service_role cannot release a tokenless ack';
   ASSERT NOT has_function_privilege('anon', 'public.take_unanswered_escalation(uuid, uuid)', 'EXECUTE'),
     'G8 anon cannot take a marker';
   ASSERT NOT has_function_privilege('authenticated', 'public.take_unanswered_escalation(uuid, uuid)', 'EXECUTE'),
