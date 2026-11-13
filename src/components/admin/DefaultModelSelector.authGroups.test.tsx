@@ -30,6 +30,10 @@ const providers = [
     id: 'prov-claude', provider_code: 'claude', name: 'Anthropic API',
     api_endpoint: '', api_key_env_var: '', api_type: '', supports_streaming: true, is_active: true,
   },
+  {
+    id: 'prov-openrouter', provider_code: 'openrouter', name: 'OpenRouter',
+    api_endpoint: '', api_key_env_var: '', api_type: '', supports_streaming: true, is_active: true,
+  },
 ] as never;
 
 const models = [
@@ -44,6 +48,12 @@ const models = [
     description: null, capabilities: ['chat', 'image'], context_limit: null, is_active: true,
     cost_per_1m_input_tokens: null, cost_per_1m_output_tokens: null,
     ai_providers: { provider_code: 'claude', name: 'Anthropic API' },
+  },
+  {
+    id: 'model-or', provider_id: 'prov-openrouter', model_id: 'openai/gpt-4o-mini', name: 'GPT-4o mini via OpenRouter',
+    description: null, capabilities: ['chat', 'image'], context_limit: null, is_active: true,
+    cost_per_1m_input_tokens: null, cost_per_1m_output_tokens: null,
+    ai_providers: { provider_code: 'openrouter', name: 'OpenRouter' },
   },
 ] as never;
 
@@ -67,6 +77,17 @@ const openaiCapability = {
   account_label: null,
   expires_at: null,
   models: ['gpt-5.2-codex'],
+};
+
+const openRouterCapability = {
+  provider_code: 'openrouter',
+  oauth_provider: 'openrouter',
+  name: 'OpenRouter',
+  active: true,
+  status: 'connected',
+  account_label: 'me@example.com',
+  expires_at: null,
+  models: ['anthropic/claude-sonnet-4.5'],
 };
 
 type Category = 'chat' | 'image' | 'agent' | 'agent_triage';
@@ -222,6 +243,43 @@ describe('DefaultModelSelector — provider dropdown groups', () => {
     await openProviderDropdown(primarySection);
 
     expect(screen.getByRole('option', { name: /^OpenAI/ })).toBeInTheDocument();
+  });
+
+  it('moves a subscription-only OpenRouter into the Auth group', async () => {
+    // OpenRouter is the third provider code, so the grouping has to work for
+    // it too and not only for the Claude and OpenAI subscriptions.
+    caps.current = { enabled: true, providers: [{ ...openRouterCapability, has_api_key: false }] };
+    const { primarySection } = renderSelector('chat');
+    await waitFor(() => expect(invoke).toHaveBeenCalled());
+    await openProviderDropdown(primarySection);
+
+    expect(await screen.findByText('Auth (subscription)')).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: /OpenRouter — subscription/ })).toBeInTheDocument();
+    // It must not also sit in the API key group.
+    expect(screen.queryByRole('option', { name: /^OpenRouter openrouter/ })).not.toBeInTheDocument();
+    // Another provider keeps its API key entry.
+    expect(screen.getByRole('option', { name: /^OpenAI/ })).toBeInTheDocument();
+  });
+
+  it('lists an OpenRouter with both a subscription and an API key in both groups', async () => {
+    caps.current = { enabled: true, providers: [{ ...openRouterCapability, has_api_key: true }] };
+    const { primarySection } = renderSelector('chat');
+    await waitFor(() => expect(invoke).toHaveBeenCalled());
+    await openProviderDropdown(primarySection);
+
+    expect(await screen.findByText('Auth (subscription)')).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: /^OpenRouter openrouter/ })).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: /OpenRouter — subscription/ })).toBeInTheDocument();
+  });
+
+  it('keeps OpenRouter in the API key group while its key status is unknown', async () => {
+    // An older function or a failed request answers without the key status.
+    caps.current = { enabled: true, providers: [openRouterCapability] };
+    const { primarySection } = renderSelector('chat');
+    await waitFor(() => expect(invoke).toHaveBeenCalled());
+    await openProviderDropdown(primarySection);
+
+    expect(screen.getByRole('option', { name: /^OpenRouter openrouter/ })).toBeInTheDocument();
   });
 
   it.each([
