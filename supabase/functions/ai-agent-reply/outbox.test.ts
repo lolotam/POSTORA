@@ -27,17 +27,35 @@ function stubOutbox(
 ) {
   const row = initial ? { ...initial } : null;
   const transitions: string[] = [];
+  /** The escalation windows a reply resolved, in the order they were written. */
+  const escalations: Array<{ threadId: string; userId: string; since: string }> = [];
   type RpcResult = Promise<{ data: unknown; error: { message: string } | null }>;
   const admin = {
     rpc: (name: string, args: Record<string, unknown>): RpcResult => {
-      if (name !== "advance_agent_reply" && name !== "advance_agent_reply_kind") {
+      if (
+        name !== "advance_agent_reply" &&
+        name !== "advance_agent_reply_kind" &&
+        name !== "persist_agent_reply_and_complete_escalation"
+      ) {
         throw new Error(`unexpected rpc ${name}`);
       }
       if (row && row.status === args.p_from) {
         row.status = String(args.p_to);
         if (typeof args.p_generated_reply === "string") row.generated_reply = args.p_generated_reply;
         if (typeof args.p_generated_kind === "string") row.generated_kind = args.p_generated_kind;
-        transitions.push(`${args.p_from}->${args.p_to}`);
+        if (name === "persist_agent_reply_and_complete_escalation") {
+          // The reply and the window it resolves are ONE statement, so the marker is
+          // consumed by the same call that writes the text. There is no boundary between
+          // them for a worker to die in.
+          escalations.push({
+            threadId: String(args.p_thread_id),
+            userId: String(args.p_user_id),
+            since: String(args.p_since),
+          });
+          transitions.push(`${args.p_from}->${args.p_to}+escalation`);
+        } else {
+          transitions.push(`${args.p_from}->${args.p_to}`);
+        }
         return Promise.resolve({ data: true, error: null });
       }
       transitions.push(`REFUSED ${args.p_from}->${args.p_to}`);
@@ -52,7 +70,7 @@ function stubOutbox(
       };
     },
   };
-  return { admin, row, transitions };
+  return { admin, row, transitions, escalations };
 }
 
 Deno.test("a send is wrapped in three durable steps, in that order, and sends once", async () => {
@@ -186,6 +204,44 @@ Deno.test("the reply and the tools that produced it are persisted in one stateme
   await deliverGeneratedReply(admin, "row-1", { text: "hi", toolCalls: calls }, () => Promise.resolve("m1"));
   assertEquals(saved!.p_generated_reply, "hi");
   assertEquals(saved!.p_tool_calls, calls);
+});
+
+Deno.test("the reply and the escalation window it resolves are written by ONE statement", async () => {
+  // A worker killed between "the reply is durable" and "the window is consumed" leaves
+  // the apology owed a second time: the reply is redelivered, and a later turn takes the
+  // marker over once its lease lapses and apologises for the same window again. One
+  // statement has no such boundary.
+  const { admin, row, transitions, escalations } = stubOutbox({ status: "running" });
+
+  await deliverGeneratedReply(
+    admin,
+    "row-1",
+    {
+      text: "نعتذر على التأخير",
+      toolCalls: [],
+      escalation: { threadId: "thread-1", userId: "user-1", since: "2026-11-12T08:00:00.000Z" },
+    },
+    () => Promise.resolve("m1"),
+  );
+
+  assertEquals(row?.status, "sent");
+  assertEquals(transitions, [
+    "running->ready_to_send+escalation",
+    "ready_to_send->sending",
+    "sending->sent",
+  ]);
+  assertEquals(escalations, [
+    { threadId: "thread-1", userId: "user-1", since: "2026-11-12T08:00:00.000Z" },
+  ]);
+});
+
+Deno.test("a reply that resolves no window consumes no marker", async () => {
+  const { admin, transitions, escalations } = stubOutbox({ status: "running" });
+
+  await deliverGeneratedReply(admin, "row-1", REPLY, () => Promise.resolve("m1"));
+
+  assertEquals(escalations, []);
+  assertEquals(transitions, ["running->ready_to_send", "ready_to_send->sending", "sending->sent"]);
 });
 
 Deno.test("takeOutboxRow: a pending row is claimed into running before any tool can fire", async () => {

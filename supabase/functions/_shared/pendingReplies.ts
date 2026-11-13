@@ -171,6 +171,21 @@ async function findExistingRow(
 }
 
 /**
+ * The escalation window a reply resolves.
+ *
+ * The reply's text and the window's completion are written by ONE statement, so a worker
+ * killed between them cannot leave the apology owed a second time.
+ */
+export interface ReplyEscalation {
+  /** The thread whose marker this reply resolves. */
+  threadId: string;
+  /** The thread's owner. Tenancy is structural: the marker is only cleared for this user. */
+  userId: string;
+  /** The marker this turn leased. A newer window's marker is left alone. */
+  since: string;
+}
+
+/**
  * Moves the row from one state to the next, and reports whether it happened.
  *
  * This is the confirmed transition: the database only changes the row if it is still in
@@ -190,6 +205,15 @@ export interface ReplyTransition {
   /** The tools that produced `generatedReply`, so a redelivery can record them truthfully. */
   generatedToolCalls?: unknown[] | null;
   /**
+   * The escalation window this reply resolves, when it resolves one.
+   *
+   * Set, the text and the window's completion are written by ONE statement. Two statements
+   * could leave the text durable and the marker owed: the reply is redelivered, and a
+   * later turn takes the marker over once its lease lapses and apologises for the same
+   * window a second time.
+   */
+  escalation?: ReplyEscalation | null;
+  /**
    * What `generatedReply` is: null for an answer the model produced, "human_mode_ack" for
    * the one-time notice a human takeover owes the customer. A gate that is closed for the
    * answer is not closed for the notice, so a later turn has to be able to tell them apart.
@@ -208,7 +232,11 @@ export async function advanceReply(
   const { id, from, to } = transition;
   // The kind is written by the RPC that carries it, so a transition that does not need one
   // keeps working against a database that does not have the column yet.
-  const rpc = transition.generatedKind ? "advance_agent_reply_kind" : "advance_agent_reply";
+  const rpc = transition.escalation
+    ? "persist_agent_reply_and_complete_escalation"
+    : transition.generatedKind
+    ? "advance_agent_reply_kind"
+    : "advance_agent_reply";
   const args: Record<string, unknown> = {
     p_id: id,
     p_from: from,
@@ -218,6 +246,11 @@ export async function advanceReply(
     p_tool_calls: transition.generatedToolCalls?.length ? transition.generatedToolCalls : null,
   };
   if (transition.generatedKind) args.p_generated_kind = transition.generatedKind;
+  if (transition.escalation) {
+    args.p_thread_id = transition.escalation.threadId;
+    args.p_user_id = transition.escalation.userId;
+    args.p_since = transition.escalation.since;
+  }
   try {
     const { data, error } = await admin.rpc(rpc, args);
     if (error) {

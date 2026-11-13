@@ -1,9 +1,10 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { z } from "npm:zod@3.23.8";
 import {
-  customerLanguageSignal,
   detectReplyLanguage,
+  sandboxConversationId,
   threadReplyLanguage,
+  type LanguageMode,
   type ReplyLanguage,
 } from "../../supabase/functions/ai-agent-reply/logic.ts";
 
@@ -30,11 +31,20 @@ function createAdminClient(supabaseUrl: string, serviceRoleKey: string) {
 
 type AdminClient = ReturnType<typeof createAdminClient>;
 
+/**
+ * How a reply's language compared with the language the sandbox would have used.
+ *
+ * "indeterminate" is a real answer: the sandbox's own state could not be established,
+ * so the reply is neither right nor wrong. Scoring it either way would put a number in
+ * the report that says nothing about the model.
+ */
+export type LanguageScore = "correct" | "incorrect" | "indeterminate";
+
 interface ResultRow {
   model: string;
   turn: number;
   latencyMs: number;
-  languageCorrect: boolean;
+  languageScore: LanguageScore;
   catalogQuery: boolean;
   productLink: boolean;
   excerpt: string;
@@ -57,7 +67,29 @@ interface ReplayTurnInput {
   platform: string;
   socialAccountId: string;
   inboundText: string;
-  expectedLanguage: ReplyLanguage;
+  /** The language the sandbox would answer in, or null when it cannot be established. */
+  expectedLanguage: ReplyLanguage | null;
+}
+
+/**
+ * The state the sandbox's own thread carries at a turn.
+ *
+ * `customerLanguage` is ai_threads.customer_language, read from the sandbox's thread
+ * rather than guessed from the replayed turns: the sandbox writes it after every reply,
+ * so it holds exactly the language the sandbox itself would use at the next turn.
+ *
+ * `processedTurns` are the customer turns the sandbox actually processed. A turn whose
+ * request FAILED never reached the thread, so it is in neither the window nor the
+ * language -- and a later letterless turn scored against it would be judged against
+ * language the sandbox never stored.
+ */
+export interface SandboxState {
+  /** The language the sandbox's thread carries, or null when it carries none. */
+  customerLanguage: ReplyLanguage | null;
+  /** The customer turns the sandbox processed, oldest first. */
+  processedTurns: string[];
+  /** False when the sandbox's state could not be read at all. */
+  known: boolean;
 }
 
 /**
@@ -80,21 +112,56 @@ interface ReplayTurnInput {
  * model sees the window in. threadReplyLanguage reads it newest-first itself, so
  * reversing it here would make the fallback consult the OLDEST turn instead of the
  * newest one.
+ *
+ * `languageMode` is the account's CONFIGURED mode, which the sandbox obeys: a mode
+ * forced to Arabic or English decides the answer before the customer's own words are
+ * read. Scoring against "auto" instead would judge every forced-mode reply as a miss.
  */
 export function expectedReplayLanguage(
   inboundText: string,
   customerLanguage: ReplyLanguage | null,
   earlierTurns: string[],
+  languageMode: LanguageMode = "auto",
 ): ReplyLanguage {
   return threadReplyLanguage({
     inboundText,
-    languageMode: "auto",
+    languageMode,
     hint: null,
     eventFlow: null,
     customerLanguage,
     storedTurns: [],
     windowTurns: earlierTurns.map((content) => ({ role: "user", content })),
   });
+}
+
+/**
+ * The language the sandbox would answer a turn in, or null when it cannot be
+ * established.
+ *
+ * Null means INDETERMINATE: the sandbox's thread state or its configured language mode
+ * could not be read, so the turn is not judged at all.
+ */
+export function expectedSandboxLanguage(
+  state: SandboxState,
+  inboundText: string,
+  languageMode: LanguageMode | null,
+): ReplyLanguage | null {
+  if (!state.known || languageMode === null) return null;
+  return expectedReplayLanguage(inboundText, state.customerLanguage, state.processedTurns, languageMode);
+}
+
+/**
+ * The state the sandbox carries after a turn.
+ *
+ * A turn that never reached the sandbox changed nothing: its text is in neither the
+ * window nor the thread's language. A turn that did reach it joins the window.
+ */
+export function sandboxStateAfterTurn(
+  state: SandboxState,
+  turn: { text: string; reachedTheSandbox: boolean },
+): SandboxState {
+  if (!turn.reachedTheSandbox) return state;
+  return { ...state, processedTurns: [...state.processedTurns, turn.text] };
 }
 
 function requiredEnv(name: string): string {
@@ -144,7 +211,7 @@ function renderReport(resultRows: readonly ResultRow[], conversation: string): s
     "| Model | Turn | Latency ms | Reply language correct | Catalog tool called with non-empty query | Product link present | Reply excerpt (120 chars) | Status |",
     "|---|---:|---:|---|---|---|---|---|",
     ...resultRows.map((row) =>
-      `| ${markdownCell(row.model)} | ${row.turn} | ${row.latencyMs} | ${row.languageCorrect ? "yes" : "no"} | ${row.catalogQuery ? "yes" : "no"} | ${row.productLink ? "yes" : "no"} | ${row.excerpt || "(no reply)"} | ${row.failure ? `failed: ${markdownCell(row.failure)}` : "ok"} |`
+      `| ${markdownCell(row.model)} | ${row.turn} | ${row.latencyMs} | ${languageCell(row.languageScore)} | ${row.catalogQuery ? "yes" : "no"} | ${row.productLink ? "yes" : "no"} | ${row.excerpt || "(no reply)"} | ${row.failure ? `failed: ${markdownCell(row.failure)}` : "ok"} |`
     ),
     "",
     "## Model selection",
@@ -154,6 +221,18 @@ function renderReport(resultRows: readonly ResultRow[], conversation: string): s
     "",
   ];
   return lines.join("\n");
+}
+
+/**
+ * The language score as the report shows it.
+ *
+ * "indeterminate" is not a miss: the sandbox's own state could not be established, so
+ * the turn says nothing about the model.
+ */
+function languageCell(score: LanguageScore): string {
+  if (score === "correct") return "yes";
+  if (score === "incorrect") return "no";
+  return "indeterminate";
 }
 
 async function assertSandboxGuards(): Promise<void> {
@@ -248,11 +327,77 @@ async function replayTurn(input: ReplayTurnInput): Promise<Omit<ResultRow, "mode
 
   return {
     latencyMs,
-    languageCorrect: reply.length > 0 && detectReplyLanguage(reply, "auto") === input.expectedLanguage,
+    languageScore: scoreLanguage(reply, input.expectedLanguage),
     catalogQuery: catalogCalledWithQuery(sandboxResponse),
     productLink: /https?:\/\/[^\s)]+/i.test(reply),
     excerpt: excerpt(reply),
   };
+}
+
+/**
+ * How the reply's language compares with the language the sandbox would have used.
+ *
+ * Without a language to compare against the turn is INDETERMINATE: the sandbox's own
+ * state could not be established, so the reply says nothing about the model.
+ */
+export function scoreLanguage(reply: string, expectedLanguage: ReplyLanguage | null): LanguageScore {
+  if (expectedLanguage === null) return "indeterminate";
+  if (reply.length === 0) return "incorrect";
+  return detectReplyLanguage(reply, "auto") === expectedLanguage ? "correct" : "incorrect";
+}
+
+/**
+ * The language the account's config forces, or null when it cannot be established.
+ *
+ * The sandbox answers in this mode, whatever the customer writes: a mode forced to
+ * Arabic makes an English customer Arabic. A probe that scored against "auto" would
+ * call every such reply a miss.
+ */
+export async function readConfiguredLanguageMode(
+  admin: AdminClient,
+  userId: string,
+  socialAccountId: string,
+): Promise<LanguageMode | null> {
+  const { data, error } = await admin
+    .from("ai_agent_configs")
+    .select("language_mode")
+    .eq("user_id", userId)
+    .eq("social_account_id", socialAccountId)
+    .maybeSingle();
+  if (error) {
+    console.error(`[probe] the configured language mode could not be read: ${error.message}`);
+    return null;
+  }
+  const mode = (data as { language_mode?: string | null } | null)?.language_mode;
+  if (mode === "ar" || mode === "en") return mode;
+  // A config with no mode set answers in the customer's own language, and so does a
+  // mode that reads as anything else.
+  return "auto";
+}
+
+/**
+ * The language the sandbox's thread carries, or undefined when it cannot be read.
+ *
+ * Read from the sandbox's OWN thread, not derived from the replayed turns: the thread
+ * is what the sandbox answered from, so it holds the language the sandbox really used.
+ */
+export async function readSandboxThreadLanguage(
+  admin: AdminClient,
+  scope: { userId: string; platform: string; conversationId: string },
+): Promise<ReplyLanguage | null | undefined> {
+  const { data, error } = await admin
+    .from("ai_threads")
+    .select("customer_language")
+    .eq("user_id", scope.userId)
+    .eq("platform", scope.platform)
+    .eq("conversation_id", scope.conversationId)
+    .maybeSingle();
+  if (error) {
+    console.error(`[probe] the sandbox thread's language could not be read: ${error.message}`);
+    return undefined;
+  }
+  const language = (data as { customer_language?: string | null } | null)?.customer_language;
+  return language === "ar" || language === "en" ? language : null;
 }
 
 async function main(): Promise<void> {
@@ -275,21 +420,40 @@ async function main(): Promise<void> {
 
   const resultRows: ResultRow[] = [];
   let failures = 0;
+  // The account's CONFIGURED language mode, which the sandbox obeys. Read once: a mode
+  // forced to Arabic or English decides the answer before the customer's words are read.
+  const languageMode = await readConfiguredLanguageMode(admin, user.id, replaySource.socialAccountId);
+  if (languageMode === null) {
+    console.warn("[probe] the configured language mode could not be read; the language column is indeterminate");
+  }
   for (const model of models) {
     const modelKey = model.replace(/[^A-Za-z0-9_-]/g, "_").slice(0, 24);
     const testCaseKey = `dryrun_${modelKey}_${Date.now()}`;
-    // The language the sandbox's own thread carries: what the turns replayed so
-    // far left behind, exactly as ai-agent-reply writes ai_threads.customer_language
-    // after every reply. Each model replays into its own sandbox thread, so the
-    // state starts empty for every model.
-    let sandboxLanguage: ReplyLanguage | null = null;
+    // Each model replays into its own sandbox thread, so the state starts empty for
+    // every model.
+    const sandboxThread = sandboxConversationId(
+      replaySource.platform,
+      replaySource.socialAccountId,
+      testCaseKey,
+    );
+    if (!sandboxThread.ok) throw new Error(`The sandbox thread id is unusable: ${sandboxThread.error}`);
+    let state: SandboxState = { customerLanguage: null, processedTurns: [], known: true };
     for (const [index, inboundText] of replaySource.customerTurns.entries()) {
-      // The prefix in chronological order: the order the chat model sees the window
-      // in, and the order threadReplyLanguage reads it in.
-      const earlierTurns = replaySource.customerTurns.slice(0, index);
-      const expectedLanguage = expectedReplayLanguage(inboundText, sandboxLanguage, earlierTurns);
+      // The state the sandbox's OWN thread carries at this turn: the language it
+      // persisted, and the turns it processed. Read from the sandbox rather than
+      // guessed from the replayed words -- a turn the sandbox never saw changed
+      // nothing, and scoring against it would judge a later turn against language the
+      // sandbox never stored.
+      const persisted = await readSandboxThreadLanguage(admin, {
+        userId: user.id,
+        platform: replaySource.platform,
+        conversationId: sandboxThread.conversationId,
+      });
+      state = { ...state, customerLanguage: persisted ?? null, known: persisted !== undefined };
+      const expectedLanguage = expectedSandboxLanguage(state, inboundText, languageMode);
       const startedAt = Date.now();
       let measurement: Omit<ResultRow, "model" | "turn">;
+      let reachedTheSandbox = false;
       try {
         measurement = await replayTurn({
           supabaseUrl,
@@ -302,13 +466,14 @@ async function main(): Promise<void> {
           inboundText,
           expectedLanguage,
         });
+        reachedTheSandbox = true;
       } catch (error) {
         // One model or turn failing must not end the comparison: the report says
         // which one failed, and the remaining models and turns still run.
         failures += 1;
         measurement = {
           latencyMs: Date.now() - startedAt,
-          languageCorrect: false,
+          languageScore: "indeterminate",
           catalogQuery: false,
           productLink: false,
           excerpt: "",
@@ -316,10 +481,8 @@ async function main(): Promise<void> {
         };
       }
       resultRows.push({ model, turn: index + 1, ...measurement });
-      // The turn's own words are what the sandbox's thread would remember, so the
-      // next turn is scored against the language the sandbox would really carry.
-      const signal = customerLanguageSignal(inboundText, null);
-      if (signal) sandboxLanguage = signal;
+      // Only a turn the sandbox processed joins its window and its language.
+      state = sandboxStateAfterTurn(state, { text: inboundText, reachedTheSandbox });
       await Deno.writeTextFile(REPORT_URL, renderReport(resultRows, conversation));
       console.log(`Completed ${model} turn ${index + 1}/${replaySource.customerTurns.length}`);
     }

@@ -14,6 +14,7 @@ import {
   claimHumanModeAck,
   claimUnansweredEscalation,
   completeHumanModeAck,
+  escalationForReply,
   readEscalationAftermath,
   releaseHumanModeAck,
   releaseUnansweredEscalationClaim,
@@ -57,6 +58,12 @@ function adminStub(options: {
   outboxStatus?: string;
   /** The outbox row cannot be read, so its state is unknown. */
   outboxReadError?: { message: string } | null;
+  /**
+   * How many of the first reads of the outbox row fail. The reads after them succeed, so
+   * a test can watch a hiccup heal: the first attempt must not settle anything, and the
+   * next one must.
+   */
+  outboxReadFailures?: number;
   /** The text the outbox row already holds, and what it is. */
   storedReply?: { text: string; kind?: "reply" | "human_mode_ack" } | null;
   /** What the acknowledgement claim says about the window. */
@@ -67,6 +74,7 @@ function adminStub(options: {
   const calls: Array<{ kind: string; args?: Record<string, unknown> }> = [];
   const staff = options.staff ?? [];
   const ackClaim = options.ackClaim ?? { result: "claimed", claimToken: CLAIM_TOKEN };
+  let outboxReads = 0;
   const admin = {
     from(table: string) {
       const query: Record<string, unknown> = {};
@@ -75,21 +83,30 @@ function adminStub(options: {
       query.order = () => query;
       query.limit = () => query;
       query.select = () => query;
-      query.maybeSingle = () =>
-        Promise.resolve({
-          data: table === "ai_threads"
-            ? { unanswered_escalation_since: options.marker ?? null }
-            : table === "pending_agent_replies"
-            ? options.outboxReadError
-              ? null
-              : {
-                status: options.outboxStatus ?? "pending",
-                generated_reply: options.storedReply?.text ?? null,
-                generated_kind: options.storedReply?.kind ?? null,
-              }
+      query.maybeSingle = () => {
+        if (table !== "pending_agent_replies") {
+          return Promise.resolve({
+            data: table === "ai_threads" ? { unanswered_escalation_since: options.marker ?? null } : null,
+            error: null,
+          });
+        }
+        outboxReads += 1;
+        const readFails = options.outboxReadError
+          ? true
+          : outboxReads <= (options.outboxReadFailures ?? 0);
+        return Promise.resolve({
+          data: readFails
+            ? null
+            : {
+              status: options.outboxStatus ?? "pending",
+              generated_reply: options.storedReply?.text ?? null,
+              generated_kind: options.storedReply?.kind ?? null,
+            },
+          error: readFails
+            ? options.outboxReadError ?? { message: "connection reset" }
             : null,
-          error: table === "pending_agent_replies" ? options.outboxReadError ?? null : null,
         });
+      };
       query.then = (resolve: (value: unknown) => void) =>
         resolve({ data: table === "whatsapp_messages" ? staff : [], error: null });
       return {
@@ -378,11 +395,147 @@ Deno.test("a closed gate delivers the notice the row already holds", async () =>
   assertEquals(decision.claimToken, CLAIM_TOKEN);
 });
 
+// The claim was COMPLETED before the notice was sent: the worker that persisted it died
+// between the two. The claim says "delivered" and the row says the notice never went
+// out. Cancelling the row here would swallow the notice -- the customer would never
+// learn that a human has their conversation -- so the stored notice is delivered from
+// the row instead.
+Deno.test("a notice that was completed but never sent is delivered from the row", async () => {
+  const { admin, calls } = adminStub({
+    outboxStatus: "ready_to_send",
+    storedReply: { text: "تم تحويل محادثتك لفريقنا", kind: "human_mode_ack" },
+    // The claim was completed by the worker that persisted the notice.
+    ackClaim: { result: "delivered" },
+  });
+
+  const decision = await settleClosedGateNotice({
+    admin,
+    scope: SCOPE,
+    outboxId: "outbox-1",
+    gateReason: "mode_human_first",
+    isComment: false,
+    language: "ar",
+    threadId: THREAD_ID,
+    turn: { userId: SCOPE.userId, content: "عندكم كريم الكعب؟" },
+  });
+
+  // The notice the customer was promised goes out, and it is the STORED one.
+  assertEquals(decision.kind, "notice");
+  if (decision.kind !== "notice") return;
+  assertEquals(decision.text, "تم تحويل محادثتك لفريقنا");
+  assertEquals(decision.fromRow, true);
+  // The row is not cancelled: the notice it holds is still owed.
+  assertEquals(
+    calls.find((call) => call.args?.p_to === "cancelled"),
+    undefined,
+    "the row holding the notice must not be cancelled",
+  );
+});
+
+// The other side of that promise: a row that may already have gone out is never sent
+// again. `sending` and `delivery_unknown` mean an attempt was made, and the notice in
+// them may already be in the customer's inbox.
+Deno.test("a row past the point of no send never has the notice sent again", async () => {
+  for (const status of ["sending", "delivery_unknown", "sent"]) {
+    const { admin, calls } = adminStub({
+      outboxStatus: status,
+      storedReply: { text: "تم تحويل محادثتك لفريقنا", kind: "human_mode_ack" },
+      ackClaim: { result: "claimed" },
+    });
+
+    const decision = await settleClosedGateNotice({
+      admin,
+      scope: SCOPE,
+      outboxId: "outbox-1",
+      gateReason: "mode_human_first",
+      isComment: false,
+      language: "ar",
+      threadId: THREAD_ID,
+      turn: { userId: SCOPE.userId, content: "عندكم كريم الكعب؟" },
+    });
+
+    // No notice: the row may already carry it to the customer.
+    assertEquals(decision.kind, "skipped", `${status} must not produce a notice`);
+    if (decision.kind !== "skipped") return;
+    assertEquals(decision.settlement.body.ok, true);
+    // And the row is neither cancelled nor rewritten.
+    assertEquals(
+      calls.find((call) => call.args?.p_to === "cancelled"),
+      undefined,
+      `${status} must not be cancelled`,
+    );
+  }
+});
+
+// A read that FAILED is not an empty row. Reading it as one lets the gate take the
+// notice's claim and settle the work item on a row whose contents nobody could read --
+// and a stored answer in that row is then delivered by the outbox, under a gate that is
+// closed for it.
+Deno.test("a row that could not be read settles nothing and spends no claim", async () => {
+  const { admin, calls } = adminStub({ outboxReadError: { message: "db down" } });
+
+  const decision = await settleClosedGateNotice({
+    admin,
+    scope: SCOPE,
+    outboxId: "outbox-1",
+    gateReason: "mode_human_first",
+    isComment: false,
+    language: "ar",
+    threadId: THREAD_ID,
+    turn: { userId: SCOPE.userId, content: "عندكم كريم الكعب؟" },
+  });
+
+  // The work item stays unsettled: the outbox retries, and the row is read again.
+  assertEquals(decision.kind, "retryable");
+  // The claim is NOT spent on a row nobody could read.
+  assertEquals(
+    calls.find((call) => call.kind === "rpc:claim_human_mode_ack_leased"),
+    undefined,
+    "the claim must not be taken before the row is known",
+  );
+  assertEquals(
+    calls.find((call) => call.args?.p_to === "cancelled"),
+    undefined,
+    "nothing may be cancelled on the strength of a failed read",
+  );
+});
+
+// The same hiccup, one retry later: the read succeeds and the gate decides as it should.
+Deno.test("a failed read followed by a successful one decides the gate", async () => {
+  const { admin, calls } = adminStub({
+    outboxReadFailures: 1,
+    outboxStatus: "ready_to_send",
+    storedReply: { text: "تم تحويل محادثتك لفريقنا", kind: "human_mode_ack" },
+  });
+  const gate = {
+    admin,
+    scope: SCOPE,
+    outboxId: "outbox-1",
+    gateReason: "mode_human_first",
+    isComment: false,
+    language: "ar" as const,
+    threadId: THREAD_ID,
+    turn: { userId: SCOPE.userId, content: "عندكم كريم الكعب؟" },
+  };
+
+  const failed = await settleClosedGateNotice(gate);
+  assertEquals(failed.kind, "retryable");
+
+  const recovered = await settleClosedGateNotice(gate);
+  assertEquals(recovered.kind, "notice");
+  if (recovered.kind !== "notice") return;
+  assertEquals(recovered.text, "تم تحويل محادثتك لفريقنا");
+  // The claim is taken exactly once: on the attempt that could read the row.
+  assertEquals(
+    calls.filter((call) => call.kind === "rpc:claim_human_mode_ack_leased").length,
+    1,
+  );
+});
+
 // The claim is a lease. A turn that was killed before the notice was durable leaves the
 // lease behind, and a later turn takes it over instead of leaving the customer without
 // the notice.
-Deno.test("a notice another worker is delivering is left to that worker", async () => {
-  const { admin } = adminStub({
+Deno.test("a notice another worker is delivering is left to that worker", async () => {  const { admin } = adminStub({
     outboxStatus: "ready_to_send",
     storedReply: { text: "تم تحويل محادثتك لفريقنا", kind: "human_mode_ack" },
     ackClaim: { result: "window" },
@@ -473,4 +626,73 @@ Deno.test("a work item whose row cannot be read is not reported as settled", asy
 
   assertEquals(settlement.cancelWorkItem, false);
   assertEquals(parseAgentReplyResult(200, settlement.body).kind, "retryable");
+});
+
+// The reply carries the apology, so the reply and the window it resolves are one fact.
+// The marker is consumed by the SAME statement that writes the reply: a worker killed
+// between the two would leave the apology owed a second time, and the customer would be
+// apologised to twice.
+Deno.test("the reply resolves the escalation window it was owed", () => {
+  const since = "2026-11-12T08:00:00.000Z";
+
+  assertEquals(
+    escalationForReply(
+      {
+        replyText: "كريم الكعب متوفر",
+        marker: since,
+        staffReadFailed: false,
+        staffWriteFailed: false,
+      },
+      { threadId: THREAD_ID, userId: SCOPE.userId },
+    ),
+    { threadId: THREAD_ID, userId: SCOPE.userId, since },
+  );
+
+  // No window, nothing to resolve.
+  assertEquals(
+    escalationForReply(
+      {
+        replyText: "كريم الكعب متوفر",
+        marker: null,
+        staffReadFailed: false,
+        staffWriteFailed: false,
+      },
+      { threadId: THREAD_ID, userId: SCOPE.userId },
+    ),
+    null,
+  );
+});
+
+// A staff context that could not be read or stored resolves NOTHING: the marker is what
+// carries that context, so the lease goes back and a later turn stores the staff replies
+// this one lost. Consuming the marker here would drop them for good.
+Deno.test("a staff context that failed leaves the escalation window owed", () => {
+  const since = "2026-11-12T08:00:00.000Z";
+
+  assertEquals(
+    escalationForReply(
+      {
+        replyText: "كريم الكعب متوفر",
+        marker: since,
+        staffReadFailed: true,
+        staffWriteFailed: false,
+      },
+      { threadId: THREAD_ID, userId: SCOPE.userId },
+    ),
+    null,
+    "a window nobody could read must not be consumed",
+  );
+  assertEquals(
+    escalationForReply(
+      {
+        replyText: "كريم الكعب متوفر",
+        marker: since,
+        staffReadFailed: false,
+        staffWriteFailed: true,
+      },
+      { threadId: THREAD_ID, userId: SCOPE.userId },
+    ),
+    null,
+    "staff replies that could not be stored must not be dropped",
+  );
 });

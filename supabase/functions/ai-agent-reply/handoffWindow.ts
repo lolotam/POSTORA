@@ -28,7 +28,14 @@ import {
   type StoredTurn,
   withOpening,
 } from "./logic.ts";
-import { ReplyNotPersistedError, peekStoredReply, replaceStoredReply, settleOutboxRow } from "./outbox.ts";
+import {
+  ReplyNotPersistedError,
+  peekStoredReply,
+  replaceStoredReply,
+  settleOutboxRow,
+  type ReplyEscalation,
+  type StoredReplyRow,
+} from "./outbox.ts";
 
 /** Staff replies merged in after an escalation window; the same order of size as the history. */
 const STAFF_TURN_LIMIT = 14;
@@ -324,6 +331,10 @@ export type ClosedGateDecision =
  *   * a row that holds nothing is the ordinary case: the notice is persisted into it
  *     by the caller and sent.
  *
+ * A FAILED read is none of those cases: the row's state is unknown, so the notice's
+ * claim is not taken and nothing is settled. The outbox retries, and the row is read
+ * again.
+ *
  * The claim is taken AFTER the row is classified, so the claim is only ever spent on a
  * notice this turn is going to deliver, and it is a LEASE: a turn that dies before the
  * notice is durable hands it back after the lease lapses.
@@ -338,7 +349,16 @@ export async function settleClosedGateNotice(input: {
   threadId: string;
   turn: { userId: string; content: string; id?: string };
 }): Promise<ClosedGateDecision> {
-  const stored = input.outboxId ? await peekStoredReply(input.admin, input.outboxId) : null;
+  const peeked = input.outboxId
+    ? await peekStoredReply(input.admin, input.outboxId)
+    : { outcome: "read" as const, status: null, text: null, kind: null };
+  if (peeked.outcome === "read_failed") {
+    // The row's state is unknown. The notice's claim is NOT taken: a claim spent on a
+    // row nobody could read is a claim spent on nothing, and settling the row here
+    // would cancel the very answer that may still be in it.
+    return { kind: "retryable", error: "the stored reply could not be read" };
+  }
+
   const claim = await claimHumanModeAck(input.admin, input.scope, {
     gateReason: input.gateReason,
     isComment: input.isComment,
@@ -351,39 +371,106 @@ export async function settleClosedGateNotice(input: {
   }
 
   if (claim.result === "claimed") {
-    const notice = HUMAN_MODE_ACK[input.language];
-    if (stored?.kind === "human_mode_ack") {
-      // The notice was persisted by an earlier attempt. Deliver that text, not a new
-      // one: this is the promise the customer was given.
-      return { kind: "notice", text: stored.text, fromRow: true, claimToken: claim.claimToken };
-    }
-    if (stored && input.outboxId) {
-      const replaced = await replaceStoredReply(input.admin, input.outboxId, {
-        text: notice,
-        kind: "human_mode_ack",
-      });
-      if (!replaced) {
-        return { kind: "retryable", error: "the stored answer could not be replaced by the notice" };
-      }
-      return { kind: "notice", text: notice, fromRow: true, claimToken: claim.claimToken };
-    }
-    return { kind: "notice", text: notice, fromRow: false, claimToken: claim.claimToken };
+    return await noticeUnderClaim(input, claim.claimToken, peeked);
   }
 
-  if (stored?.kind === "human_mode_ack" && claim.result === "window") {
-    // Another worker holds the notice's claim and is delivering it. The row is left
-    // alone: cancelling it would take the notice away from that worker.
-    return { kind: "retryable", error: "the human-mode notice is being delivered by another turn" };
+  if (peeked.kind === "human_mode_ack" && peeked.text !== null) {
+    if (claim.result === "window") {
+      // Another worker holds the notice's claim and is delivering it. The row is left
+      // alone: cancelling it would take the notice away from that worker.
+      return { kind: "retryable", error: "the human-mode notice is being delivered by another turn" };
+    }
+    if (claim.result === "delivered") {
+      // The notice became durable, and the row says it never went out: the worker that
+      // completed the claim was killed between the completion and the send. The stored
+      // notice is delivered from the row -- settling the row here would swallow it, and
+      // the customer would never learn that a human has their conversation.
+      return { kind: "notice", text: peeked.text, fromRow: true, claimToken: null };
+    }
   }
 
   // Nothing is owed here: the window was notified already, the notice was delivered, or
   // there is no bounded window at all. The stored answer is settled under this gate so
   // it can never be delivered later, and the customer's turn is kept.
+  return await settleUnderClosedGate(input, claim.result);
+}
+
+/**
+ * The notice, for the turn that holds the claim.
+ *
+ * The claim is only ever spent on a notice this turn is going to deliver, so the row's
+ * contents decide which notice that is.
+ */
+async function noticeUnderClaim(
+  input: {
+    admin: SupabaseClient;
+    outboxId: string | null;
+    gateReason: string;
+    language: ReplyLanguage;
+    threadId: string;
+    turn: { userId: string; content: string; id?: string };
+  },
+  claimToken: string | null,
+  row: StoredReplyRow,
+): Promise<ClosedGateDecision> {
+  const notice = HUMAN_MODE_ACK[input.language];
+  if (row.kind === "human_mode_ack" && row.text !== null) {
+    // The notice was persisted by an earlier attempt. Deliver that text, not a new
+    // one: this is the promise the customer was given.
+    return { kind: "notice", text: row.text, fromRow: true, claimToken };
+  }
+  if (row.text !== null && input.outboxId) {
+    // The row holds an answer written while the gate was open. The notice takes its
+    // place in the row: the row stays the durable record of what the customer is owed.
+    const replaced = await replaceStoredReply(input.admin, input.outboxId, {
+      text: notice,
+      kind: "human_mode_ack",
+    });
+    if (!replaced) {
+      return { kind: "retryable", error: "the stored answer could not be replaced by the notice" };
+    }
+    return { kind: "notice", text: notice, fromRow: true, claimToken };
+  }
+  if (!rowTakesNotice(row.status)) {
+    // The row is past the point where a notice could be stored: a send was already
+    // attempted, or the work item is terminal. The notice is not written into a row
+    // that cannot carry it, and it is not sent from a row that may already have it.
+    return await settleUnderClosedGate(input, "claimed");
+  }
+  return { kind: "notice", text: notice, fromRow: false, claimToken };
+}
+
+/**
+ * Whether a notice can still be written into the row.
+ *
+ * A `pending` row is taken into `running` and the notice persisted into it; a `running`
+ * row has the notice persisted into it directly. Every other state is past the point
+ * where a notice could be stored: `ready_to_send` holds the text that is delivered from
+ * it (and is handled above), and `sending`, `sent` and `delivery_unknown` may already
+ * have gone out.
+ */
+function rowTakesNotice(status: string | null): boolean {
+  return status === null || status === "pending" || status === "running";
+}
+
+/**
+ * Settles the work item under a closed gate, with the window the claim reported.
+ */
+async function settleUnderClosedGate(
+  input: {
+    admin: SupabaseClient;
+    outboxId: string | null;
+    gateReason: string;
+    threadId: string;
+    turn: { userId: string; content: string; id?: string };
+  },
+  claimResult: AckClaimResult,
+): Promise<ClosedGateDecision> {
   const settlement = await settleClosedGate({
     admin: input.admin,
     outboxId: input.outboxId,
     gateReason: input.gateReason,
-    humanWindow: claim.result === "window" || claim.result === "delivered" ? "window" : "none",
+    humanWindow: claimResult === "window" || claimResult === "delivered" ? "window" : "none",
     threadId: input.threadId,
     turn: input.turn,
   });
@@ -603,4 +690,23 @@ export async function settleEscalationAftermath(
     return { replyText, marker: taken, staffReadFailed: false, staffWriteFailed: true };
   }
   return { replyText, marker: taken, staffReadFailed: false, staffWriteFailed: false };
+}
+
+/**
+ * The escalation window this reply resolves, or null when it resolves none.
+ *
+ * A staff context that could not be read or stored resolves NOTHING: the marker is what
+ * carries that context, so the lease goes back and a later turn stores the staff replies
+ * this one lost. Consuming the marker here would drop them for good.
+ *
+ * Set, the marker is consumed by the SAME statement that writes the reply, so a worker
+ * killed between the two cannot leave the apology owed a second time.
+ */
+export function escalationForReply(
+  settlement: AftermathSettlement,
+  scope: { threadId: string; userId: string },
+): ReplyEscalation | null {
+  if (!settlement.marker) return null;
+  if (settlement.staffWriteFailed || settlement.staffReadFailed) return null;
+  return { threadId: scope.threadId, userId: scope.userId, since: settlement.marker };
 }

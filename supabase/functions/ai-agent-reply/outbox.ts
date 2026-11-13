@@ -12,7 +12,9 @@
 // restate supabase-js's builder and would then drift from it. The same shape as
 // the sibling edge modules.
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import { advanceReply } from "../_shared/pendingReplies.ts";
+import { advanceReply, type ReplyEscalation } from "../_shared/pendingReplies.ts";
+
+export type { ReplyEscalation };
 
 /**
  * What a row's stored text is.
@@ -75,31 +77,64 @@ export async function takeOutboxRow(
 }
 
 /**
+ * What the outbox row holds, when the row could be read.
+ */
+export interface StoredReplyRow {
+  /** The row's status, or null when there is no row at all. */
+  status: string | null;
+  /** The text the row holds that may still be delivered, or null when it holds none. */
+  text: string | null;
+  /** What that text is, or null when the row holds no deliverable text. */
+  kind: StoredReplyKind | null;
+}
+
+/**
+ * What the outbox row holds.
+ *
+ * A FAILED READ is not an empty row. Reading one as the other lets a gate decide that the
+ * row holds nothing, take the notice's claim on that strength, and leave a stored answer
+ * in a row the outbox then delivers -- under a gate that is closed for that answer. The
+ * failed read is its own answer: the row's state is unknown, so nothing may be settled on
+ * the strength of it.
+ */
+export type StoredReplyPeek =
+  | { outcome: "read_failed"; error: string }
+  | ({ outcome: "read" } & StoredReplyRow);
+
+/**
  * The text a row already holds, without taking the row.
  *
  * Used to decide what a gate does with the row BEFORE anything is claimed: a row
  * that holds an answer written under an open gate may never be delivered under a
  * closed one, and a row that holds the notice has to be delivered as it was
  * persisted.
+ *
+ * A row that holds its text in `ready_to_send` is the only one that may still be
+ * delivered. A row in `sending`, `sent` or `delivery_unknown` may already have gone
+ * out, so it holds nothing deliverable -- and saying so is what keeps a notice from
+ * being sent twice.
  */
 export async function peekStoredReply(
   // deno-lint-ignore no-explicit-any
   admin: any,
   outboxId: string,
-): Promise<{ text: string; kind: StoredReplyKind } | null> {
+): Promise<StoredReplyPeek> {
   const { data: row, error } = await admin
     .from("pending_agent_replies")
     .select("status, generated_reply, generated_kind")
     .eq("id", outboxId)
     .maybeSingle();
-  if (error || !row) {
-    console.error(`[outbox] could not read ${outboxId}: ${error?.message ?? "missing"}`);
-    return null;
+  if (error) {
+    console.error(`[outbox] could not read ${outboxId}: ${error.message}`);
+    return { outcome: "read_failed", error: error.message };
   }
-  if (row.status !== "ready_to_send" || typeof row.generated_reply !== "string") return null;
+  if (!row) return { outcome: "read", status: null, text: null, kind: null };
+  const deliverable = row.status === "ready_to_send" && typeof row.generated_reply === "string";
   return {
-    text: row.generated_reply,
-    kind: row.generated_kind === "human_mode_ack" ? "human_mode_ack" : "reply",
+    outcome: "read",
+    status: row.status ?? null,
+    text: deliverable ? row.generated_reply : null,
+    kind: deliverable ? (row.generated_kind === "human_mode_ack" ? "human_mode_ack" : "reply") : null,
   };
 }
 
@@ -198,12 +233,28 @@ export class ReplyNotPersistedError extends Error {
  * `kind` is stored WITH the text, in the same statement, so a later turn that finds the
  * row knows what the text is: an answer the model produced, or the one-time notice a
  * human takeover owes the customer. The two are settled differently under a closed gate.
+ *
+ * `escalation` is written with the text too, in the SAME statement. The reply carries the
+ * apology, so the window it resolves and the reply that carries it are one fact: a worker
+ * killed between "the reply is durable" and "the window is consumed" leaves the apology
+ * owed a second time, and the customer is apologised to twice.
  */
 export async function deliverGeneratedReply(
   // deno-lint-ignore no-explicit-any
   admin: any,
   outboxId: string,
-  reply: { text: string; toolCalls: unknown[]; kind?: StoredReplyKind },
+  reply: {
+    text: string;
+    toolCalls: unknown[];
+    kind?: StoredReplyKind;
+    /**
+     * The escalation window this reply resolves, when it resolves one.
+     *
+     * Set, the text and the window's completion are written by ONE statement, so there is
+     * no point between them at which a worker can die and leave the apology owed twice.
+     */
+    escalation?: ReplyEscalation | null;
+  },
   send: (text: string) => Promise<string>,
   /**
    * Runs once the text is durable, before the send. A claim spent on this reply may be
@@ -222,6 +273,7 @@ export async function deliverGeneratedReply(
     // without knowing what produced it.
     generatedToolCalls: reply.toolCalls,
     generatedKind: reply.kind ?? null,
+    escalation: reply.escalation ?? null,
   });
   if (!persisted) throw new ReplyNotPersistedError();
   if (onPersisted) {

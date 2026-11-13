@@ -18,6 +18,10 @@ DECLARE
   u_a uuid := 'c1c1c1c1-1111-4111-8111-cccccccccccc';
   u_b uuid := 'c2c2c2c2-2222-4222-8222-cccccccccccc';
   t_marker uuid := 'd1d1d1d1-0001-4001-8001-dddddddddddd';
+  s_account uuid := 'e1e1e1e1-0001-4001-8001-eeeeeeeeeeee';
+  r_reply uuid := 'f1f1f1f1-0001-4001-8001-ffffffffffff';
+  r_reply2 uuid := 'f2f2f2f2-0001-4001-8001-ffffffffffff';
+  r_kind uuid := 'f3f3f3f3-0001-4001-8001-ffffffffffff';
   v_escalated timestamptz := now() - interval '4 hours';
   v_token text;
   v_token2 text;
@@ -156,6 +160,95 @@ BEGIN
     'L10 service_role can lease the marker';
   ASSERT has_function_privilege('service_role', 'public.complete_unanswered_escalation(uuid, uuid, timestamptz)', 'EXECUTE'),
     'L10 service_role can complete the marker';
+  -- L11: the kind-aware transition really runs. A function that names a column the table
+  -- does not have fails at the FIRST call -- long after the migration was applied, and
+  -- on the reply path that matters most.
+  INSERT INTO public.social_accounts (id, user_id, platform, platform_user_id, access_token)
+  VALUES (s_account, u_a, 'facebook', 'page-lease', 'token-lease');
+  INSERT INTO public.pending_agent_replies (
+    id, social_account_id, user_id, platform, message_id, conversation_id, recipient_id,
+    inbound_text, inbound_at, status
+  ) VALUES (
+    r_kind, s_account, u_a, 'facebook', 'm-kind', 'c_kind', 'r-kind',
+    'عندكم كريم الكعب؟', now(), 'running'
+  );
+  ASSERT public.advance_agent_reply_kind(r_kind, 'running', 'ready_to_send', 'كريم الكعب متوفر', NULL, NULL, 'human_mode_ack'),
+    'L11 the kind-aware transition runs';
+  ASSERT (SELECT generated_kind FROM public.pending_agent_replies WHERE id = r_kind) = 'human_mode_ack',
+    'L11 the kind is written with the text';
+
+  -- L11: the reply and the escalation window it resolves are written by ONE statement.
+  -- Two statements could leave the text durable and the marker owed: the reply is
+  -- redelivered, and a later turn takes the marker over once its lease lapses and
+  -- apologises for the same window a second time.
+  INSERT INTO public.pending_agent_replies (
+    id, social_account_id, user_id, platform, message_id, conversation_id, recipient_id,
+    inbound_text, inbound_at, status
+  ) VALUES (
+    r_reply, s_account, u_a, 'facebook', 'm-lease', 'c_reply', 'r-lease',
+    'عندكم كريم الكعب؟', now(), 'running'
+  );
+  UPDATE public.ai_threads
+     SET unanswered_escalation_since = v_escalated,
+         unanswered_escalation_claimed_at = now()
+   WHERE id = t_marker;
+  ASSERT public.persist_agent_reply_and_complete_escalation(
+           r_reply, 'running', 'ready_to_send', 'نعتذر على التأخير', NULL, NULL, NULL,
+           t_marker, u_a, v_escalated),
+    'L11 the reply is persisted';
+  ASSERT (SELECT status FROM public.pending_agent_replies WHERE id = r_reply) = 'ready_to_send',
+    'L11 the row holds the reply';
+  ASSERT (SELECT generated_reply FROM public.pending_agent_replies WHERE id = r_reply) = 'نعتذر على التأخير',
+    'L11 the text is written with the window it resolves';
+  ASSERT (SELECT unanswered_escalation_since FROM public.ai_threads WHERE id = t_marker) IS NULL,
+    'L11 the window the reply resolved is consumed';
+  ASSERT (SELECT unanswered_escalation_claimed_at FROM public.ai_threads WHERE id = t_marker) IS NULL,
+    'L11 the lease goes with it';
+
+  -- L11: a row that is no longer in the from-state is refused, and it consumes NOTHING:
+  -- the window stays owed, because the apology was never carried by a durable reply.
+  ASSERT NOT public.persist_agent_reply_and_complete_escalation(
+           r_reply, 'running', 'ready_to_send', 'نعتذر على التأخير', NULL, NULL, NULL,
+           t_marker, u_a, v_escalated),
+    'L11 a row that is no longer running is refused';
+  UPDATE public.ai_threads
+     SET unanswered_escalation_since = v_escalated,
+         unanswered_escalation_claimed_at = now()
+   WHERE id = t_marker;
+  ASSERT (SELECT unanswered_escalation_since FROM public.ai_threads WHERE id = t_marker) = v_escalated,
+    'L11 the refused call leaves the window owed';
+
+  -- L11: the window is cleared only for its own owner and for the marker that was
+  -- leased. Another tenant's completion changes nothing.
+  INSERT INTO public.pending_agent_replies (
+    id, social_account_id, user_id, platform, message_id, conversation_id, recipient_id,
+    inbound_text, inbound_at, status
+  ) VALUES (
+    r_reply2, s_account, u_a, 'facebook', 'm-lease-2', 'c_reply', 'r-lease',
+    'عندكم كريم الكعب؟', now(), 'running'
+  );
+  ASSERT public.persist_agent_reply_and_complete_escalation(
+           r_reply2, 'running', 'ready_to_send', 'x', NULL, NULL, NULL,
+           t_marker, u_b, v_escalated),
+    'L11 the reply is persisted';
+  ASSERT (SELECT unanswered_escalation_since FROM public.ai_threads WHERE id = t_marker) = v_escalated,
+    'L11 another tenant cannot consume the window';
+
+  -- L11: a marker that is not the leased one is not cleared.
+  ASSERT public.persist_agent_reply_and_complete_escalation(
+           r_reply2, 'ready_to_send', 'sent', NULL, NULL, NULL, NULL,
+           t_marker, u_a, v_escalated + interval '1 hour'),
+    'L11 the reply is still persisted';
+  ASSERT (SELECT unanswered_escalation_since FROM public.ai_threads WHERE id = t_marker) = v_escalated,
+    'L11 a marker that is not the leased one is not cleared';
+
+  -- L12: only service_role reaches the atomic reply and the window it resolves.
+  ASSERT NOT has_function_privilege('anon', 'public.persist_agent_reply_and_complete_escalation(uuid, text, text, text, text, jsonb, text, uuid, uuid, timestamptz)', 'EXECUTE'),
+    'L12 anon cannot persist a reply';
+  ASSERT NOT has_function_privilege('authenticated', 'public.persist_agent_reply_and_complete_escalation(uuid, text, text, text, text, jsonb, text, uuid, uuid, timestamptz)', 'EXECUTE'),
+    'L12 authenticated cannot persist a reply';
+  ASSERT has_function_privilege('service_role', 'public.persist_agent_reply_and_complete_escalation(uuid, text, text, text, text, jsonb, text, uuid, uuid, timestamptz)', 'EXECUTE'),
+    'L12 service_role can persist a reply';
 END $$;
 
 ROLLBACK;

@@ -80,6 +80,7 @@ import { adminToolDefinitions, executeAdminTool } from "./admin-tools.ts";
 import {
   completeHumanModeAck,
   completeUnansweredEscalation,
+  escalationForReply,
   NO_AFTERMATH,
   readEscalationAftermath,
   releaseHumanModeAck,
@@ -1877,6 +1878,10 @@ Deno.serve(async (req) => {
      * until the reply it belongs to is durable, so a turn that dies here leaves the
      * apology owed instead of lost. A staff context that could not be stored or read
      * keeps the lease, so the next turn tries again.
+     *
+     * Only the path WITHOUT an outbox row needs this: with a row, the window is
+     * consumed by the same statement that writes the reply, so there is no point between
+     * the two at which a worker can die and leave the apology owed twice.
      */
     const completeEscalation = async () => {
       if (!settlement.marker || escalationCompleted) return;
@@ -1895,10 +1900,18 @@ Deno.serve(async (req) => {
           ? await deliverGeneratedReply(
             admin,
             outboxId,
-            { text: replyText, toolCalls: executedToolCalls },
+            {
+              text: replyText,
+              toolCalls: executedToolCalls,
+              // The reply and the window it resolves are written by ONE statement. Two
+              // statements could leave the reply durable and the marker owed: the reply
+              // is redelivered, and a later turn apologises for the same window again.
+              escalation: escalationForReply(settlement, {
+                threadId: thread.id,
+                userId: request.user_id,
+              }),
+            },
             (text) => sender(request.recipient_phone, text),
-            // The reply is durable from here, so the window it belongs to is resolved.
-            completeEscalation,
           )
           : await sender(request.recipient_phone, replyText);
         // Without an outbox row there is no persist to hang the completion on, so the

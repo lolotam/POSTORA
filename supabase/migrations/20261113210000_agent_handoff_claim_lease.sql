@@ -78,11 +78,67 @@ BEGIN
       generated_kind = COALESCE(p_generated_kind, generated_kind),
       error = COALESCE(p_error, error),
       sent_at = CASE WHEN p_to = 'sent' THEN now() ELSE sent_at END,
-      lease_expires_at = CASE WHEN p_to IN ('sent', 'cancelled', 'failed', 'delivery_unknown') THEN NULL ELSE lease_expires_at END,
-      updated_at = now()
+      lease_expires_at = CASE WHEN p_to IN ('sent', 'cancelled', 'failed', 'delivery_unknown') THEN NULL ELSE lease_expires_at END
   WHERE id = p_id
     AND status = p_from;
   RETURN FOUND;
+END;
+$$;
+
+-- Writes the reply and consumes the escalation window it resolves, in ONE statement.
+--
+-- The reply carries the apology, so the reply and the window it resolves are one fact.
+-- Two statements could leave the text durable and the marker owed: the reply is
+-- redelivered, and a later turn takes the marker over once its lease lapses and
+-- apologises for the same window a second time. One transaction has no such boundary --
+-- the reply and the window are written together, or not at all.
+--
+-- The row is moved FIRST, and only a row that really was in the from-state is moved: a
+-- caller that lost the race consumed nothing, so the window it would have resolved stays
+-- owed. The marker is cleared only when it is the one this turn leased, so a stale
+-- completion can never clear a marker a newer window set. A reply that resolves no
+-- window clears nothing.
+CREATE OR REPLACE FUNCTION public.persist_agent_reply_and_complete_escalation(
+  p_id uuid,
+  p_from text,
+  p_to text,
+  p_generated_reply text DEFAULT NULL,
+  p_error text DEFAULT NULL,
+  p_tool_calls jsonb DEFAULT NULL,
+  p_generated_kind text DEFAULT NULL,
+  p_thread_id uuid DEFAULT NULL,
+  p_user_id uuid DEFAULT NULL,
+  p_since timestamptz DEFAULT NULL
+)
+RETURNS boolean
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+BEGIN
+  UPDATE public.pending_agent_replies
+  SET status = p_to,
+      generated_reply = COALESCE(p_generated_reply, generated_reply),
+      generated_tool_calls = COALESCE(p_tool_calls, generated_tool_calls),
+      generated_kind = COALESCE(p_generated_kind, generated_kind),
+      error = COALESCE(p_error, error),
+      sent_at = CASE WHEN p_to = 'sent' THEN now() ELSE sent_at END,
+      lease_expires_at = CASE WHEN p_to IN ('sent', 'cancelled', 'failed', 'delivery_unknown') THEN NULL ELSE lease_expires_at END
+  WHERE id = p_id
+    AND status = p_from;
+  IF NOT FOUND THEN
+    -- The row was not this caller's to move, so the window it would have resolved is
+    -- NOT consumed: the apology stays owed.
+    RETURN FALSE;
+  END IF;
+
+  UPDATE public.ai_threads
+  SET unanswered_escalation_since = NULL,
+      unanswered_escalation_claimed_at = NULL
+  WHERE id = p_thread_id
+    AND user_id = p_user_id
+    AND unanswered_escalation_since = p_since;
+  RETURN TRUE;
 END;
 $$;
 
@@ -331,6 +387,7 @@ END;
 $$;
 
 REVOKE ALL ON FUNCTION public.advance_agent_reply_kind(uuid, text, text, text, text, jsonb, text) FROM PUBLIC, anon, authenticated;
+REVOKE ALL ON FUNCTION public.persist_agent_reply_and_complete_escalation(uuid, text, text, text, text, jsonb, text, uuid, uuid, timestamptz) FROM PUBLIC, anon, authenticated;
 REVOKE ALL ON FUNCTION public.claim_human_mode_ack_leased(uuid, text, text, integer) FROM PUBLIC, anon, authenticated;
 REVOKE ALL ON FUNCTION public.complete_human_mode_ack(uuid, text, text, timestamptz) FROM PUBLIC, anon, authenticated;
 REVOKE ALL ON FUNCTION public.release_human_mode_ack_claim(uuid, text, text, timestamptz) FROM PUBLIC, anon, authenticated;
@@ -339,6 +396,7 @@ REVOKE ALL ON FUNCTION public.complete_unanswered_escalation(uuid, uuid, timesta
 REVOKE ALL ON FUNCTION public.release_unanswered_escalation_claim(uuid, uuid, timestamptz) FROM PUBLIC, anon, authenticated;
 
 GRANT EXECUTE ON FUNCTION public.advance_agent_reply_kind(uuid, text, text, text, text, jsonb, text) TO service_role;
+GRANT EXECUTE ON FUNCTION public.persist_agent_reply_and_complete_escalation(uuid, text, text, text, text, jsonb, text, uuid, uuid, timestamptz) TO service_role;
 GRANT EXECUTE ON FUNCTION public.claim_human_mode_ack_leased(uuid, text, text, integer) TO service_role;
 GRANT EXECUTE ON FUNCTION public.complete_human_mode_ack(uuid, text, text, timestamptz) TO service_role;
 GRANT EXECUTE ON FUNCTION public.release_human_mode_ack_claim(uuid, text, text, timestamptz) TO service_role;
