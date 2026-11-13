@@ -65,6 +65,8 @@
 | `supabase/functions/ai-agent-reply/index.ts` | Wiring (gate, language, reply birth, history merge) |
 | `supabase/functions/_shared/conversationModeOverride.ts` | Expiry through `expire_conversation_mode` |
 | `supabase/migrations/20261112170000_agent_handoff_messages.sql` | escalation/ack columns, thread marker, 3 RPCs |
+| `supabase/migrations/20261113120000_agent_handoff_messages_followup.sql` | the claim-release RPCs (`release_human_mode_ack`, `restore_unanswered_escalation`) |
+| `supabase/migrations/20261113210000_agent_handoff_claim_lease.sql` | the claim LEASES: `claim_human_mode_ack_leased`, `complete_human_mode_ack`, `release_human_mode_ack_claim`, `claim_unanswered_escalation`, `complete_unanswered_escalation`, `release_unanswered_escalation_claim`, the outbox's `generated_kind` |
 | `supabase/functions/ai-agent-adapters/supabase.ts` (+ test) | Allow-listed RPC mode |
 | `supabase/functions/_shared/connectorRegistry.ts` | `rpc_allow_list` setting, `query`/`max_results` parameters |
 | `supabase/functions/ai-agent-reply/logic.ts` `buildSystemPrompt` | Not-found / escalation rule |
@@ -187,7 +189,11 @@ export function replyLanguageText(inboundText: string): string;
 - The gate at `index.ts:759` runs before the sender (`:770`), history (`:894`) and `language` (`:1065`) exist. The ack path must build what it needs itself, and own the outbox row that is cancelled there today.
 - `escalationOverride` writes `mode='human_then_ai'` when no human is assigned. In that mode the AI never went silent, so it gets no ack and no apology. Only `mode='human_first'` rows count.
 
-**Migration:** `supabase/migrations/20261112170000_agent_handoff_messages.sql`
+**Migration:** `supabase/migrations/20261112170000_agent_handoff_messages.sql`, then
+`supabase/migrations/20261113120000_agent_handoff_messages_followup.sql` (the claim-release RPCs), then
+`supabase/migrations/20261113210000_agent_handoff_claim_lease.sql` (the claim LEASES and the outbox's
+`generated_kind`). All three land before the edge functions: a migration always lands before the code that
+depends on it, and the edge build calls the lease RPCs.
 
 ```sql
 ALTER TABLE public.ai_conversation_modes
@@ -361,7 +367,10 @@ export function escalationApologyText(
 - [ ] Run `clean-code-guard` on production changes and `test-guard` on the tests. Run `graphify update .`.
 - [ ] Push the branch with `--no-track` semantics already set and open the PR.
 - [ ] Babysit the bot rounds.
-- [ ] Apply migration `20261112170000` on prod before merge.
+- [ ] Apply the handoff migrations on prod before merge, in this order:
+  1. `20261112170000` — the handoff columns, the thread marker and the first RPCs.
+  2. `20261113120000` — the follow-up RPCs (`release_human_mode_ack`, `restore_unanswered_escalation`).
+  3. `20261113210000` — the claim LEASES (`claim_human_mode_ack_leased`, `complete_human_mode_ack`, `release_human_mode_ack_claim`, `claim_unanswered_escalation`, `complete_unanswered_escalation`, `release_unanswered_escalation_claim`) and the outbox's `generated_kind`. It must land BEFORE the edge functions: the edge build calls the lease RPCs and the kind-aware transition, and it is backward compatible with the edge code that is live now, so the two orders never meet a half-migrated database.
 - [ ] Merge only after the owner card.
 - [ ] After the sync:
   - Verify hashes.
