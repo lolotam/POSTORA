@@ -6,6 +6,15 @@ export interface Field {
   label: string;
   kind: "text" | "secret" | "url" | "hidden";
   required: boolean;
+  /**
+   * Another field whose value makes this one unnecessary.
+   *
+   * The Supabase table allow-list is only required when no catalog search
+   * function is named: a connector that searches through the store's own
+   * function reads no table, and the adapter resolves that path before the
+   * table settings are read (2026-11-13).
+   */
+  optionalWhen?: string;
   help: string;
 }
 
@@ -125,6 +134,15 @@ const SUPABASE_PARAMETERS: ConnectorParameterSchema = {
       description: "Exact-match column filters using string, number, or boolean values.",
       additionalProperties: { type: ["string", "number", "boolean"] },
     },
+    query: {
+      type: "string",
+      description:
+        "The product words from the customer's message, in their language. Required when this connector searches through a catalog function.",
+    },
+    max_results: {
+      type: "string",
+      description: "How many catalog matches to return, a number from 1 to 25. Defaults to 8.",
+    },
     offset: {
       type: "string",
       description:
@@ -172,7 +190,8 @@ const CONNECTOR_DEFINITIONS: Record<ConnectorType, ConnectorDefinition> = {
         label: "Table allow-list",
         kind: "text",
         required: true,
-        help: "The tables this connector may query, subject to the target project's RLS.",
+        optionalWhen: "rpc_allow_list",
+        help: "The tables this connector may query, subject to the target project's RLS. Not needed when a catalog search function is set: that connector reads no table.",
       },
       {
         key: "select_columns",
@@ -220,11 +239,33 @@ const CONNECTOR_DEFINITIONS: Record<ConnectorType, ConnectorDefinition> = {
         required: false,
         help: "How many rows to fetch per database request while paging. Defaults to 200.",
       },
+      {
+        key: "rpc_allow_list",
+        label: "Catalog search function (optional)",
+        kind: "text",
+        required: false,
+        help:
+          "The name of a read-only database function that searches your catalog, e.g. agent_search_products. When set, product searches call it with the customer's words instead of reading a table. Only the name you enter here can be called. The function is called with GET, which PostgREST runs in a read-only transaction, so it cannot write anything: a function that tries to write is refused and nothing is committed.",
+      },
+      {
+        key: "rpc_query_param",
+        label: "Search function: query argument (optional)",
+        kind: "text",
+        required: false,
+        help: "The function's argument that takes the search words. Defaults to q. It must not be named select, order, limit or offset, which PostgREST reads for itself.",
+      },
+      {
+        key: "rpc_limit_param",
+        label: "Search function: result-count argument (optional)",
+        kind: "text",
+        required: false,
+        help: "The function's argument that takes how many matches to return. Defaults to max_results. It must not be named select, order, limit or offset, which PostgREST reads for itself.",
+      },
     ],
     usageGuide: {
       whenToUse: "Live rows exposed by this Supabase project's PostgREST API. Prefer it when the answer depends on current database state.",
       requestExamples: ["find the current booking for this phone number", "look up this product's availability"],
-      limits: "Anon-key access only, so only rows this connector's key may see are returned; the target project's RLS and the configured schema and table allow-list constrain results. Large tables come back in pages: when a result says has_more, call again with offset set to its next_offset value. To answer how many rows match, pass mode \"count\" instead of reading them.",
+      limits: "Anon-key access only, so only rows this connector's key may see are returned; the target project's RLS and the configured schema and table allow-list constrain results. Large tables come back in pages: when a result says has_more, call again with offset set to its next_offset value. To answer how many rows match, pass mode \"count\" instead of reading them. When the connector searches through a catalog function, pass query with the product words exactly as the customer wrote them; if nothing matches, the tool already retried with the longest word and says so in retried_with.",
     },
     capabilities: CONNECTOR_CAPABILITY_NAMES.map((name) => ({
       name,

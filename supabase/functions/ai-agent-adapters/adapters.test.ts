@@ -814,7 +814,7 @@ Deno.test("WooCommerce product, stock, order and category URLs ask only for the 
   assertEquals(seen.length, 1);
   assertStringIncludes(seen[0], "_fields=id,status,payment_method,date_created,billing");
   assertEquals(procedureRead.ok, true);
-  if (procedureRead.ok) {
+  if (procedureRead.ok && "data" in procedureRead) {
     assertEquals(procedureRead.data, {
       status: "processing",
       payment_method: "cod",
@@ -1347,6 +1347,17 @@ Deno.test("an empty map object means unrestricted, the cleared-field sentinel", 
 
 Deno.test("column_map accepts a comma string per table as well as an array", () => {
   assertEquals(resolveColumns({ column_map: '{"products":"id, price"}' }, "products", null).select, "id,price");
+});
+
+Deno.test("a wildcard column list is not a named allow-list", () => {
+  // "*" means "every column the row has". Treating it as a named list made the
+  // RPC projection keep only a field literally named "*", which emptied every
+  // row, and it skipped the structural redaction pass nobody approved.
+  assertEquals(resolveColumns({ select_columns: "*" }, "products", null).select, "*");
+  assertEquals(resolveColumns({ select_columns: "*" }, "products", null).explicit, false);
+  assertEquals(resolveColumns({ column_map: '{"products":["*"]}' }, "products", null).explicit, false);
+  // A named list is still the operator's approval.
+  assertEquals(resolveColumns({ select_columns: "id,name" }, "products", null).explicit, true);
 });
 
 // ---------------------------------------------------------------------------
@@ -2293,7 +2304,10 @@ for (const liveId of [88, 77, 99]) {
     }) as typeof fetch;
     const deps = { ...dependencies(fetchImpl), cache: mem.cache };
     const result = await executeConnector(invocation, deps);
-    assertEquals(result.ok && result.data, liveId === 88 ? [{ id: 2, name: "Recovered product" }] : []);
+    assertEquals(
+      result.ok && "data" in result && result.data,
+      liveId === 88 ? [{ id: 2, name: "Recovered product" }] : [],
+    );
     assertEquals(urls.length, liveId === 77 ? 2 : 3);
     assertStringIncludes(urls[0], "category=77");
     assertStringIncludes(urls[1], "/products/categories?");

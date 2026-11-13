@@ -63,7 +63,7 @@ function fakeAdmin(options: {
       return Promise.resolve({ data: null, error: null });
     },
   };
-  return admin;
+  return admin as typeof admin & Parameters<typeof reconcileAccountConnection>[0]["admin"];
 }
 
 function fakeApi(options: {
@@ -100,7 +100,7 @@ Deno.test("reconcileAccountConnection: on NumberMismatchError calls api.logout o
     user_id: "user-bridge-123",
   };
 
-  const result = await (reconcileAccountConnection as any)({
+  const result = await reconcileAccountConnection({
     admin,
     api: api as unknown as EvolutionApi,
     account,
@@ -136,7 +136,7 @@ Deno.test("reconcileAccountConnection: bridge poll passes userId scope to syncEv
     user_id: "user-bridge-123",
   };
 
-  const result = await (reconcileAccountConnection as any)({
+  const result = await reconcileAccountConnection({
     admin,
     api: api as unknown as EvolutionApi,
     account,
@@ -175,7 +175,7 @@ Deno.test("reconcileAccountConnection: swallows api.logout rejection on mismatch
     user_id: "user-bridge-123",
   };
 
-  const result = await (reconcileAccountConnection as any)({
+  const result = await reconcileAccountConnection({
     admin,
     api: api as unknown as EvolutionApi,
     account,
@@ -207,7 +207,7 @@ Deno.test("reconcileAccountConnection: does not attempt whatsapp_evolution_insta
     user_id: "user-bridge-123",
   };
 
-  const result = await (reconcileAccountConnection as any)({
+  const result = await reconcileAccountConnection({
     admin,
     api: api as unknown as EvolutionApi,
     account,

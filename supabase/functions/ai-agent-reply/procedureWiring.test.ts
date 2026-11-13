@@ -58,7 +58,7 @@ Deno.test("procedureStateAfterTurn clears a stale opener when procedures are dis
 
 Deno.test("a stale pending opener expires before the runtime and the stored value is cleared", () => {
   assertEquals(expireIfStale(staleOpener, now), null);
-  const ports = { hasStoreCapability: () => false } as ProcedurePorts;
+  const ports = { hasStoreCapability: () => false } as unknown as ProcedurePorts;
   const turn = createProcedureTurn({
     state: expireIfStale(staleOpener, now),
     config: { lead_capture: { enabled: true, prompts: {}, closing: "" } },

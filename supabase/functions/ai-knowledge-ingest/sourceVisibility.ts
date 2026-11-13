@@ -70,15 +70,15 @@ export interface QueryBuilder extends PromiseLike<QueryOutcome> {
   select: (columns: string) => QueryBuilder;
   eq: (column: string, value: unknown) => QueryBuilder;
   in: (column: string, values: unknown[]) => QueryBuilder;
-  maybeSingle: () => Promise<QueryOutcome>;
+  maybeSingle: () => PromiseLike<QueryOutcome>;
 }
 
 type SupabaseLike = {
-  from: (table: string) => QueryBuilder;
+  from: (table: string) => Pick<QueryBuilder, "select">;
 };
 
 type RpcCapable = SupabaseLike & {
-  rpc: (name: string, args: Record<string, unknown>) => Promise<QueryOutcome>;
+  rpc: (name: string, args: Record<string, unknown>) => PromiseLike<QueryOutcome>;
 };
 
 // Returns the source's visibility and the ids explicitly linked to it, or

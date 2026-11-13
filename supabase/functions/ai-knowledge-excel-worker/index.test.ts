@@ -40,6 +40,14 @@ Deno.test("parseCsvChunks produces the same chunk shape as the Excel path", () =
   assertEquals(parseCsvChunks(csvBytes.buffer), parseExcelChunks(excelBytes));
 });
 
+Deno.test("the queue worker reads an Arabic CSV as UTF-8 too", () => {
+  const bytes = new TextEncoder().encode("name,price\nكريم الكعب,6\n");
+
+  const [chunk] = parseCsvChunks(bytes.buffer);
+
+  assertEquals(chunk.content.includes("name: كريم الكعب"), true, chunk.content);
+});
+
 // ---------------------------------------------------------------------------
 // Resumable processing (asserts on rows written and calls made)
 // ---------------------------------------------------------------------------

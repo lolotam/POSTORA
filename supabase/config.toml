@@ -90,6 +90,15 @@ verify_jwt = false
 [functions.sweep-pending-whatsapp-qr]
 verify_jwt = false
 
+# The disconnect watcher is called by cron with the shared secret, and the alert
+# sender is called by the watcher with the service role (verifyCronAuth in the
+# watcher, a service-role bearer in the sender). Neither is a browser call.
+[functions.whatsapp-disconnect-watch]
+verify_jwt = false
+
+[functions.send-whatsapp-disconnect-alert]
+verify_jwt = false
+
 # The competitor tracking report verifies the caller's bearer itself: it
 # resolves the owner from the verified identity and refuses a service
 # credential, because the database reader derives the owner from auth.uid().

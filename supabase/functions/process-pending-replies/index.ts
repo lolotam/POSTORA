@@ -314,7 +314,7 @@ async function settle(admin: any, row: OutboxRow, from: PendingReplyStatus, outc
       console.warn(`[recovery] ${row.id} retryable: ${outcome.detail}`);
       return;
     case "permanent":
-      await advanceReply(admin, { id: row.id, from, to: "failed", error: outcome.detail });
+      await advanceReply(admin, { id: row.id, userId: row.user_id, from, to: "failed", error: outcome.detail });
       await surfaceToHumans(admin, row, "recovery_failed", outcome.detail);
       return;
   }
@@ -328,7 +328,7 @@ async function processRow(admin: any, row: OutboxRow): Promise<string> {
     case "delivery_unknown": {
       // Gated on the transition. If it was refused, another worker owns this row and is
       // acting on it; writing a log row here too would double-report one interruption.
-      const claimed = await advanceReply(admin, { id: row.id, from, to: "delivery_unknown", error: "lease lapsed during a delivery attempt" });
+      const claimed = await advanceReply(admin, { id: row.id, userId: row.user_id, from, to: "delivery_unknown", error: "lease lapsed during a delivery attempt" });
       if (!claimed) return "conceded";
       await surfaceToHumans(admin, row, "delivery_unknown", "a reply may or may not have reached the customer");
       return action.kind;
@@ -342,7 +342,7 @@ async function processRow(admin: any, row: OutboxRow): Promise<string> {
       // retry the hand-off and nobody would be told (Codex P1, PR #178). Thrown
       // here, the row is still `running` and the next tick tries again.
       const config = await loadAgentConfig(admin, row);
-      const claimed = await advanceReply(admin, { id: row.id, from, to: "delivery_unknown", error: "lease lapsed while the agent was running" });
+      const claimed = await advanceReply(admin, { id: row.id, userId: row.user_id, from, to: "delivery_unknown", error: "lease lapsed while the agent was running" });
       if (!claimed) return "conceded";
       const handed = await handToHuman(admin, row, config);
       await surfaceToHumans(
@@ -356,14 +356,14 @@ async function processRow(admin: any, row: OutboxRow): Promise<string> {
       return action.kind;
     }
     case "cancel": {
-      const claimed = await advanceReply(admin, { id: row.id, from, to: "cancelled", error: action.reason });
+      const claimed = await advanceReply(admin, { id: row.id, userId: row.user_id, from, to: "cancelled", error: action.reason });
       return claimed ? `${action.kind}:${action.reason}` : "conceded";
     }
     case "deliver_stored":
     case "rerun_agent": {
       const account = await loadAccount(admin, row);
       if (!account) {
-        await advanceReply(admin, { id: row.id, from, to: "failed", error: "social account no longer exists" });
+        await advanceReply(admin, { id: row.id, userId: row.user_id, from, to: "failed", error: "social account no longer exists" });
         await surfaceToHumans(admin, row, "recovery_failed", "social account no longer exists");
         return "failed:no_account";
       }

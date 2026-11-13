@@ -20,8 +20,14 @@ import type { BehaviorCardProps } from "./types";
 
 const ESCALATION_TIMEOUT_TOOLTIP =
   "How long an escalated conversation stays with your team before the override expires and the account default applies again, so the AI can resume answering new messages.";
-const ESCALATION_TIMEOUT_HELP =
-  "When the assistant hands a conversation to your team, this timeout keeps it from staying muted for ever. After it expires the account default applies again to new messages; a message that arrived while the conversation was muted is not answered retroactively.";
+// The timeout means something different in each mode that has one, so each
+// mode explains it in its own words (Human First never shows the field).
+const ESCALATION_TIMEOUT_HELP: Record<"ai_first" | "human_then_ai", string> = {
+  ai_first:
+    "When the assistant hands a customer to your team, it stays silent in that conversation for this long, then starts answering new messages again. A message that arrived while it was silent is not answered afterwards.",
+  human_then_ai:
+    "Once a team member takes over an escalated conversation, the assistant stays silent in it for this long, then the normal Human then AI fallback applies again. A message that arrived while it was silent is not answered afterwards.",
+};
 const MAX_ESCALATION_TIMEOUT_MINUTES = 10080;
 
 type TimeoutUnit = "minutes" | "hours";
@@ -31,7 +37,11 @@ function displayValue(minutes: number, unit: TimeoutUnit): number {
   return unit === "hours" ? Math.round((minutes / 60) * 100) / 100 : minutes;
 }
 
-function EscalationTimeoutField({ minutes, onChange }: { minutes: number; onChange: (minutes: number) => void }) {
+function EscalationTimeoutField({ minutes, mode, onChange }: {
+  minutes: number;
+  mode: "ai_first" | "human_then_ai";
+  onChange: (minutes: number) => void;
+}) {
   const { t } = useTranslation("agent");
   // The stored value is always whole minutes; the unit is display state.
   // Switching the unit never changes the stored value (debate finding 15).
@@ -104,7 +114,11 @@ function EscalationTimeoutField({ minutes, onChange }: { minutes: number; onChan
           </SelectContent>
         </Select>
       </div>
-      <p className="text-sm text-muted-foreground">{t("identity.escalationHelp", ESCALATION_TIMEOUT_HELP)}</p>
+      <p className="text-sm text-muted-foreground">
+        {mode === "ai_first"
+          ? t("identity.escalationHelpAiFirst", ESCALATION_TIMEOUT_HELP.ai_first)
+          : t("identity.escalationHelpHumanThenAi", ESCALATION_TIMEOUT_HELP.human_then_ai)}
+      </p>
     </div>
   );
 }
@@ -195,6 +209,7 @@ export function AgentIdentityCard({ form, update, behavior, updateBehavior }: Be
             {selectedMode !== "human_first" && (
               <EscalationTimeoutField
                 minutes={form.escalation_timeout_minutes ?? 240}
+                mode={selectedMode}
                 onChange={(minutes) => update("escalation_timeout_minutes", minutes)}
               />
             )}

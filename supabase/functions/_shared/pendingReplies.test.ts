@@ -4,6 +4,7 @@ import {
   advanceReply,
   enqueueAgentReply,
   type PendingReplyItem,
+  type ReplyTransition,
   toEnqueueArgs,
 } from "./pendingReplies.ts";
 
@@ -149,11 +150,16 @@ Deno.test("a text-only message carries an empty media object, not a null one", (
 Deno.test("advanceReply reports the database's verdict, and refuses on error", async () => {
   // This is the confirmed transition. The caller gates a side effect on it, so an RPC error
   // must read as "refused", never as "proceed".
-  const transition = { id: "row-1", from: "ready_to_send", to: "sending" } as const;
+  const transition = {
+    id: "row-1",
+    from: "ready_to_send",
+    to: "sending",
+    userId: "user-1",
+  } as const;
 
   const accepted = stubRpc({ data: true });
   assert(await advanceReply(accepted.admin, transition));
-  assertEquals(accepted.calls[0].name, "advance_agent_reply");
+  assertEquals(accepted.calls[0].name, "advance_agent_reply_for_owner");
   assertEquals(accepted.calls[0].args, {
     p_id: "row-1",
     p_from: "ready_to_send",
@@ -161,6 +167,7 @@ Deno.test("advanceReply reports the database's verdict, and refuses on error", a
     p_generated_reply: null,
     p_error: null,
     p_tool_calls: null,
+    p_user_id: "user-1",
   });
 
   const refused = stubRpc({ data: false });
@@ -175,5 +182,266 @@ Deno.test("advanceReply never throws, because a bookkeeping failure must not und
   // an error response. The row is left in `sending`; its lease lapses; recovery classifies it
   // delivery_unknown -- which is exactly true.
   const admin = { rpc: () => Promise.reject(new Error("socket closed")) };
-  assert(!await advanceReply(admin, { id: "row-1", from: "sending", to: "sent" }));
+  assert(!await advanceReply(admin, {
+    id: "row-1",
+    from: "sending",
+    to: "sent",
+    userId: "user-1",
+  }));
+});
+
+// Every transition names the tenant the row belongs to, and every statement that moves a
+// row binds it to that tenant. The edge functions run as the service role, which bypasses
+// RLS, so the database has nothing else to go by: without the tenant, a statement that
+// moved a row id would move whatever row carried that id, whoever owned it.
+Deno.test("every transition carries the tenant the row belongs to", async () => {
+  const kinds: { name: string; transition: ReplyTransition; rpc: string }[] = [
+    {
+      name: "the plain transition",
+      transition: {
+        id: "row-1",
+        from: "pending",
+        to: "running",
+        userId: "user-1",
+      },
+      rpc: "advance_agent_reply_for_owner",
+    },
+    {
+      name: "the kind-aware transition",
+      transition: {
+        id: "row-1",
+        from: "running",
+        to: "ready_to_send",
+        generatedKind: "human_mode_ack",
+        userId: "user-1",
+      },
+      rpc: "advance_agent_reply_kind_for_owner",
+    },
+    {
+      name: "the delivery claim",
+      transition: {
+        id: "row-1",
+        from: "ready_to_send",
+        to: "sending",
+        expectedPayload: { text: "كريم الكعب متوفر", kind: null },
+        userId: "user-1",
+      },
+      rpc: "claim_agent_reply_for_delivery_for_owner",
+    },
+    {
+      name: "the notice and the claim it spends",
+      transition: {
+        id: "row-1",
+        from: "running",
+        to: "ready_to_send",
+        generatedReply: "تم تحويل محادثتك لفريقنا",
+        generatedKind: "human_mode_ack",
+        humanModeAck: {
+          userId: "user-1",
+          platform: "whatsapp",
+          conversationId: "conversation-1",
+          claimToken: "2026-11-13T08:00:00.000Z",
+        },
+        userId: "user-1",
+      },
+      rpc: "persist_human_mode_ack_and_complete_claim",
+    },
+    {
+      name: "the replacement and the claim it spends",
+      transition: {
+        id: "row-1",
+        from: "ready_to_send",
+        to: "ready_to_send",
+        generatedReply: "تم تحويل محادثتك لفريقنا",
+        generatedKind: "human_mode_ack",
+        replaceAndCompleteClaim: {
+          userId: "user-1",
+          platform: "whatsapp",
+          conversationId: "conversation-1",
+          claimToken: "2026-11-13T08:00:00.000Z",
+        },
+        userId: "user-1",
+      },
+      rpc: "replace_agent_reply_and_complete_claim",
+    },
+    {
+      name: "the escalation and the window it resolves",
+      transition: {
+        id: "row-1",
+        from: "running",
+        to: "ready_to_send",
+        generatedReply: "نعتذر على التأخير",
+        escalation: {
+          threadId: "thread-1",
+          userId: "user-1",
+          since: "2026-11-12T08:00:00.000Z",
+          claimToken: "2026-11-12T08:00:01.000Z",
+        },
+        userId: "user-1",
+      },
+      rpc: "persist_agent_reply_and_complete_escalation",
+    },
+  ];
+
+  for (const kind of kinds) {
+    const { admin, calls } = stubRpc({ data: true });
+    assert(await advanceReply(admin, kind.transition));
+    assertEquals(calls[0].name, kind.rpc, `${kind.name} calls the tenant-bound statement`);
+    assertEquals(calls[0].args.p_user_id, "user-1", `${kind.name} names the tenant`);
+  }
+});
+
+// A claim that names another tenant is refused before the database is asked: the row and
+// the claim would not be one fact, and the statement that spends the claim binds the row
+// to the tenant the transition claims.
+Deno.test("a claim that names another tenant is refused before the database is asked", async () => {
+  const { admin, calls } = stubRpc({ data: true });
+
+  const refused = await advanceReply(admin, {
+    id: "row-1",
+    from: "running",
+    to: "ready_to_send",
+    generatedReply: "نعتذر على التأخير",
+    escalation: {
+      threadId: "thread-1",
+      userId: "user-2",
+      since: "2026-11-12T08:00:00.000Z",
+      claimToken: "2026-11-12T08:00:01.000Z",
+    },
+    userId: "user-1",
+  });
+
+  assert(!refused);
+  assertEquals(calls.length, 0);
+});
+
+// The one-time notice and the claim it spends are ONE statement. A notice that is durable
+// with its claim still owed is a notice the next turn sends again, and the customer is told
+// twice that a human has the conversation.
+Deno.test("the notice is persisted together with the claim it spends", async () => {
+  const { admin, calls } = stubRpc({ data: true });
+
+  const accepted = await advanceReply(admin, {
+    id: "row-1",
+    from: "running",
+    to: "ready_to_send",
+    generatedReply: "تم تحويل محادثتك لفريقنا",
+    generatedKind: "human_mode_ack",
+    humanModeAck: {
+      userId: "user-1",
+      platform: "whatsapp",
+      conversationId: "conversation-1",
+      claimToken: "2026-11-13T08:00:00.000Z",
+    },
+    userId: "user-1",
+  });
+
+  assert(accepted);
+  assertEquals(calls[0].name, "persist_human_mode_ack_and_complete_claim");
+  assertEquals(calls[0].args, {
+    p_id: "row-1",
+    p_from: "running",
+    p_to: "ready_to_send",
+    p_generated_reply: "تم تحويل محادثتك لفريقنا",
+    p_error: null,
+    p_tool_calls: null,
+    p_generated_kind: "human_mode_ack",
+    p_user_id: "user-1",
+    p_platform: "whatsapp",
+    p_conversation_id: "conversation-1",
+    p_claim_token: "2026-11-13T08:00:00.000Z",
+  });
+});
+
+// The notice that takes a stored row's place and the claim it spends are ONE statement. A
+// notice that is durable with its claim still owed is a notice a later turn takes the
+// expired lease over and sends again, and the customer is told twice that a human has the
+// conversation.
+Deno.test("the replacement is written together with the claim it spends", async () => {
+  const { admin, calls } = stubRpc({ data: true });
+
+  const accepted = await advanceReply(admin, {
+    id: "row-1",
+    from: "ready_to_send",
+    to: "ready_to_send",
+    generatedReply: "تم تحويل محادثتك لفريقنا",
+    generatedKind: "human_mode_ack",
+    replaceAndCompleteClaim: {
+      userId: "user-1",
+      platform: "whatsapp",
+      conversationId: "conversation-1",
+      claimToken: "2026-11-13T08:00:00.000Z",
+    },
+    userId: "user-1",
+  });
+
+  assert(accepted);
+  assertEquals(calls[0].name, "replace_agent_reply_and_complete_claim");
+  assertEquals(calls[0].args, {
+    p_user_id: "user-1",
+    p_id: "row-1",
+    p_from: "ready_to_send",
+    p_to: "ready_to_send",
+    p_generated_reply: "تم تحويل محادثتك لفريقنا",
+    p_error: null,
+    p_tool_calls: null,
+    p_generated_kind: "human_mode_ack",
+    p_platform: "whatsapp",
+    p_conversation_id: "conversation-1",
+    p_claim_token: "2026-11-13T08:00:00.000Z",
+  });
+});
+
+// The delivery claim carries the payload the caller read. The row's text is read without a
+// lock, so a closed gate can replace it between the read and the claim -- the row stays in
+// `ready_to_send`, so the replacement is not refused, and the delivery would send the OLD
+// text.
+Deno.test("the delivery claim carries the payload the caller read", async () => {
+  const { admin, calls } = stubRpc({ data: true });
+
+  const accepted = await advanceReply(admin, {
+    id: "row-1",
+    from: "ready_to_send",
+    to: "sending",
+    expectedPayload: { text: "كريم الكعب متوفر", kind: null },
+    userId: "user-1",
+  });
+
+  assert(accepted);
+  assertEquals(calls[0].name, "claim_agent_reply_for_delivery_for_owner");
+  assertEquals(calls[0].args, {
+    p_id: "row-1",
+    p_from: "ready_to_send",
+    p_to: "sending",
+    p_expected_reply: "كريم الكعب متوفر",
+    p_expected_kind: null,
+    p_user_id: "user-1",
+  });
+});
+
+// The marker alone cannot say WHICH lease is being consumed: two workers that leased the
+// same marker hold the same marker. The token travels with the reply to the statement that
+// writes it.
+Deno.test("the escalation reply carries the lease token it resolves the window with", async () => {
+  const { admin, calls } = stubRpc({ data: true });
+
+  const accepted = await advanceReply(admin, {
+    id: "row-1",
+    from: "running",
+    to: "ready_to_send",
+    generatedReply: "نعتذر على التأخير",
+    escalation: {
+      threadId: "thread-1",
+      userId: "user-1",
+      since: "2026-11-12T08:00:00.000Z",
+      claimToken: "2026-11-12T08:00:01.000Z",
+    },
+    userId: "user-1",
+  });
+
+  assert(accepted);
+  assertEquals(calls[0].name, "persist_agent_reply_and_complete_escalation");
+  assertEquals(calls[0].args.p_claim_token, "2026-11-12T08:00:01.000Z");
+  assertEquals(calls[0].args.p_since, "2026-11-12T08:00:00.000Z");
+  assertEquals(calls[0].args.p_user_id, "user-1");
 });

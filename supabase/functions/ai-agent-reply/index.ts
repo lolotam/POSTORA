@@ -25,6 +25,8 @@ import {
   jevStartKey,
   modelBudgetRemaining,
   evaluateGates,
+  fixedGreeting,
+  handoffNoticeLanguage,
   parallelizable,
   phaseTimings,
   procedurePromptBlock,
@@ -38,15 +40,22 @@ import {
   type ReplyLanguage,
   SIMILARITY_FLOOR,
   shouldAiReply,
+  staffAnsweredNote,
+  type StoredTurn,
   threadReplyLanguage,
   triageSystemHint,
   waRecipient,
+  withGreeting,
+  withOpening,
 } from "./logic.ts";
+import { catalogEvidenceFromOutput, type CatalogEvidence } from "./catalogEvidence.ts";
+import { answerWithinBudget, refreshStaffDraft } from "./staffRefresh.ts";
 import { repairChatReply } from "./chatLinks.ts";
 import {
   customToolDefinitions,
   type EscalationTarget,
   executeTool,
+  offersCatalogSearch,
   agentToolDefinitions,
   webSearchToolDefinition,
   type CustomTool,
@@ -67,10 +76,26 @@ import {
   cancelOutboxRow,
   deliverGeneratedReply,
   deliverStoredReply,
-  releaseAfterError,
   takeOutboxRow,
 } from "./outbox.ts";
 import { adminToolDefinitions, executeAdminTool } from "./admin-tools.ts";
+import {
+  claimUnansweredEscalation,
+  completeHumanModeAck,
+  completeUnansweredEscalation,
+  escalationForReply,
+  NO_AFTERMATH,
+  readEscalationAftermath,
+  releaseHumanModeAck,
+  releaseUnpersistedEscalation,
+  releaseFailedEscalationTurn,
+  type EscalationLeaseState,
+  replyIsDurable,
+  settleStaffInterruptedTurn,
+  settleClosedGateNotice,
+  settleEscalationAftermath,
+  type HandoffScope,
+} from "./handoffWindow.ts";
 import { getSendCredentials } from "../_shared/messengerCredentials.ts";
 import { replyToComment } from "../_shared/commentActions.ts";
 import { commentConversationLikePrefix, isCommentConversationId } from "../_shared/commentConversation.ts";
@@ -107,6 +132,11 @@ import {
   type StoreBindingPort,
 } from "./procedureRuntime.ts";
 import { PROCEDURE_STATE_CONFLICT, persistProcedureState } from "./procedureState.ts";
+import {
+  INVALID_MODEL_OVERRIDE,
+  invalidModelOverrideRefusalLog,
+  resolveSandboxModelOverride,
+} from "./modelOverride.ts";
 
 const OPENAI_API = "https://api.openai.com/v1";
 const SERVICE_WINDOW_MS = 24 * 60 * 60 * 1000;
@@ -117,8 +147,11 @@ const SERVICE_WINDOW_MS = 24 * 60 * 60 * 1000;
 // customer returning to an existing thread ("the one I asked about earlier") got an
 // agent with no idea what that referred to. The 4 was set when the prompt also carried
 // a long stale price list; prices now come from the connector, which freed the budget.
-const HISTORY_LIMIT = 6;
-
+//
+// Raised from 6 on 2026-11-12 (owner request): 6 rows is three exchanges, and a
+// curemedkw customer who described the product over several messages lost the
+// start of the thread. 14 rows is seven customer messages with their replies.
+const HISTORY_LIMIT = 14;
 // For WhatsApp, recipient_phone is the customer's phone and phone_number_id
 // the business number. For Facebook/Instagram, recipient_phone carries the
 // sender PSID and phone_number_id is unused.
@@ -177,6 +210,50 @@ const PROVIDER_ENDPOINTS: Record<string, { url: string; keyEnv: string; kind?: "
   google: GOOGLE_ENDPOINT,
   gemini: GOOGLE_ENDPOINT,
 };
+
+/** One turn of the conversation the model is given. */
+interface ChatTurn {
+  role: string;
+  content: string | null;
+  tool_calls?: unknown[];
+  tool_call_id?: string;
+}
+
+/**
+ * The answer written again, with the staff reply that arrived while the model was
+ * answering in front of it.
+ *
+ * The answer that was drafted is written against a context that did not have the staff
+ * reply, so it may repeat or contradict what the customer has just read from the
+ * staff. The answer is asked for again -- once, and with no tools, because the tools
+ * have already run -- and only the second answer reaches the customer.
+ *
+ * Null when no second answer could be produced: the caller may not send the stale
+ * one, because it may contradict the staff.
+ */
+async function answerAgainAfterStaffReply(input: {
+  messages: ChatTurn[];
+  modelChain: AiTier[];
+  temperature: number;
+  routingAdmin: AiRoutingAdmin;
+  startedAt: number;
+  turns: StoredTurn[];
+}): Promise<string | null> {
+  const messages = [...input.messages];
+  // Every provider receives the same staff context; no tools run a second time.
+  messages.splice(1, 0, { role: "system", content: staffAnsweredNote(input.turns) });
+  return await answerWithinBudget({
+    tiers: input.modelChain,
+    startedAt: input.startedAt,
+    ceilingMs: CHAT_TIMEOUT_MS,
+    complete: async (tier, timeoutMs) => {
+      const completion = await chatCompletion(tier, {
+        model: tier.model, temperature: input.temperature, messages,
+      }, timeoutMs, input.routingAdmin);
+      return repairChatReply(String(completion?.choices?.[0]?.message?.content || "").trim()) || null;
+    },
+  });
+}
 
 export async function chatCompletion(
   tier: AiTier,
@@ -260,6 +337,19 @@ async function isWithinServiceWindow(admin: any, userId: string, conversationId:
     .maybeSingle();
   if (!lastInbound?.timestamp) return false;
   return Date.now() - new Date(lastInbound.timestamp).getTime() < SERVICE_WINDOW_MS;
+}
+
+/**
+ * The conversation the handoff claims belong to. Every claim query carries user_id
+ * because the caller runs as the service role and tenancy has to be structural
+ * (ARCHITECTURE.md §24).
+ */
+function handoffScope(request: ReplyRequest): HandoffScope {
+  return {
+    userId: request.user_id,
+    platform: request.platform,
+    conversationId: request.conversation_id,
+  };
 }
 
 async function isCooldownActive(admin: any, threadId: string, cooldownSeconds: number): Promise<boolean> {
@@ -679,8 +769,45 @@ Deno.serve(async (req) => {
   // outage floor sent something. Decides whether the outbox row may be retried (nothing
   // happened) or must go to a human (something may have).
   let sideEffectsHappened = false;
+  let earlyEscalationLease: EscalationLeaseState | null = null;
 
   try {
+    const modelOverride = await resolveSandboxModelOverride({
+      dryRun,
+      requestedOverride: body.model_override,
+      isPlatformAdmin: async () => {
+        const { data: adminRole, error } = await admin
+          .from("user_roles")
+          .select("role")
+          .eq("user_id", request.user_id)
+          .eq("role", "admin")
+          .maybeSingle();
+        if (error) throw error;
+        return adminRole !== null;
+      },
+      readAllowedModels: async () => {
+        const { data: allowedModelRows, error } = await admin
+          .from("ai_agent_allowed_models")
+          .select("provider, model_id")
+          .eq("is_active", true);
+        if (error) throw error;
+        return allowedModelRows ?? [];
+      },
+    });
+    if (!modelOverride.ok) {
+      const { error: refusalLogError } = await admin.from("system_logs").insert(
+        invalidModelOverrideRefusalLog({
+          userId: request.user_id,
+          platform: request.platform,
+          requestedOverride: body.model_override,
+        }),
+      );
+      if (refusalLogError) {
+        console.error("[ai-agent-reply] Sandbox refusal log rejected:", refusalLogError.message);
+      }
+      return badRequestResponse(INVALID_MODEL_OVERRIDE);
+    }
+
     const knowledgeAccountId = await resolveAgentAccountId(
       admin as unknown as AccountScopeAdminClient,
       request,
@@ -697,14 +824,14 @@ Deno.serve(async (req) => {
     // every other refusal in this function writes a row saying which gate closed.
     if (!config) {
       await logOutcome(admin, { ...baseLog, status: "skipped", error: "agent_not_configured" });
-      if (outboxId) await cancelOutboxRow(admin, outboxId, "agent_not_configured");
+      if (outboxId) await cancelOutboxRow(admin, outboxId, "agent_not_configured", request.user_id);
       return jsonResponse({ ok: true, skipped: "agent_not_configured" });
     }
     // The Test sandbox works while the agent is still disabled, so users can
     // tune it before switching it on for real customers.
     if (!config.is_enabled && !dryRun) {
       await logOutcome(admin, { ...baseLog, status: "skipped", error: "agent_disabled" });
-      if (outboxId) await cancelOutboxRow(admin, outboxId, "agent_disabled");
+      if (outboxId) await cancelOutboxRow(admin, outboxId, "agent_disabled", request.user_id);
       return jsonResponse({ ok: true, skipped: "agent_disabled" });
     }
 
@@ -733,6 +860,8 @@ Deno.serve(async (req) => {
     const mode = resolveEngagementMode(overrideMode, config.default_mode);
     const { data: thread, error: threadError } = threadResult;
     if (threadError) throw threadError;
+    const storedCustomerLanguage: ReplyLanguage | null =
+      thread.customer_language === "ar" || thread.customer_language === "en" ? thread.customer_language : null;
 
     const procedureConfig = readProcedureConfig(config.agent_behavior?.procedures);
     // A live store-event opener is not a flow yet; the turn leaves it alone. A stale one is not live.
@@ -743,6 +872,14 @@ Deno.serve(async (req) => {
     // The claim port advances this. The final write must expect it, not the value read above:
     // the winner then moves claimed -> null, and the loser's compare-and-set still expects what it read.
     const durableProcedureState = { current: thread.procedure_state ?? null };
+
+    // Set when a closed human_first gate still owes the customer its one-time notice. The
+    // notice is then the whole reply: it goes out below, after the sender and the outbox row
+    // are in hand, and no model is called.
+    let humanModeAck: string | null = null;
+    // The lease token of the acknowledgement claim this turn holds. It identifies the claim,
+    // so a release or a completion only ever touches the claim this turn took.
+    let humanModeAckToken: string | null = null;
 
     // Sandbox runs bypass the delivery gates — they test the agent's brain,
     // not the conversation's delivery state. The sender is built only after
@@ -764,21 +901,81 @@ Deno.serve(async (req) => {
         ...gateChecks,
       });
       if (!gate.reply) {
-        await logOutcome(admin, { ...baseLog, status: "skipped", error: gate.reason });
-        // Terminal for the work item: a closed gate is a decision, and recovery re-driving
-        // the row would only reach the same gate.
-        if (outboxId) await cancelOutboxRow(admin, outboxId, gate.reason);
-        return jsonResponse({ ok: true, skipped: gate.reason });
+        // What the outbox row holds decides what happens next, and the claim is only
+        // taken after that: a row that already holds an answer was written while the
+        // gate was open and may never be delivered under a closed one, and a row that
+        // holds the notice has to be delivered exactly as it was persisted.
+        const decision = await settleClosedGateNotice({
+          admin,
+          scope: handoffScope(request),
+          outboxId,
+          gateReason: gate.reason,
+          isComment: Boolean(request.comment_id),
+          language: handoffNoticeLanguage(
+            request.inbound_text,
+            config.language_mode,
+            request.language_hint,
+            storedCustomerLanguage,
+          ),
+          threadId: thread.id,
+          turn: {
+            userId: request.user_id,
+            content: request.inbound_text,
+            // The work item's id, so a retry stores this question once.
+            id: outboxId ?? undefined,
+          },
+          // The human_first gate takes precedence over the service window, so the
+          // notice path has to be told whether WhatsApp delivery is still allowed:
+          // outside the window the provider refuses a free-form message, and a notice
+          // that is never sent may not have its acknowledgement completed.
+          serviceWindowOpen: gateChecks.withinServiceWindow,
+        });
+        if (decision.kind === "retryable") {
+          // The claim's state could not be read, so nothing is settled on the strength of
+          // it: the work item stays unsettled and the customer's question is not lost
+          // over a hiccup.
+          await logOutcome(admin, { ...baseLog, status: "error", error: decision.error });
+          return jsonResponse({ ok: false, error: decision.error });
+        }
+        if (decision.kind === "skipped") {
+          if (decision.settlement.body.ok) {
+            await logOutcome(admin, { ...baseLog, status: "skipped", error: gate.reason });
+            return jsonResponse(decision.settlement.body);
+          }
+          // The customer's question is not durable anywhere. The work item was left
+          // unsettled -- not cancelled, not marked done -- so the outbox can try again,
+          // and the caller is told the turn failed. "Skipped" would be a lie: it would
+          // say the question was handled.
+          await logOutcome(admin, { ...baseLog, status: "error", error: decision.settlement.body.error });
+          return jsonResponse(decision.settlement.body);
+        }
+        humanModeAck = decision.text;
+        humanModeAckToken = decision.claimToken;
       }
     }
 
     // Everything the reply is delivered through, resolved before any billable work so the
     // redelivery branch below can send without paying for retrieval it will not use.
-    replySender = dryRun ? null : await buildReplySender(admin, request);
+    try {
+      replySender = dryRun ? null : await buildReplySender(admin, request);
+    } catch (senderError) {
+      // The acknowledgement claim was spent before the sender existed. Nothing reached
+      // the customer, so the claim goes back and the notice is still owed.
+      if (humanModeAck) {
+        const released = await releaseHumanModeAck(admin, handoffScope(request), humanModeAckToken);
+        if (!released) {
+          // The claim was not this turn's to release. The lease still stands, so a later
+          // turn takes it over once it lapses -- the notice is not lost, but it waits.
+          console.warn("[ai-agent-reply] the human-mode acknowledgement claim was not released");
+        }
+      }
+      throw senderError;
+    }
 
     // Declared here rather than beside the tool loop because persistDelivery reads it, and a
     // redelivery persists before the loop has run at all. Empty is the truthful value there:
     // a redelivered reply executed no tools on this invocation.
+    const catalogEvidence: CatalogEvidence[] = [];
     const executedToolCalls: Array<{ name: string; arguments: unknown }> = [];
 
     /**
@@ -838,15 +1035,22 @@ Deno.serve(async (req) => {
     // fire, so a later kill leaves a state recovery can classify rather than one that
     // wrongly reads as "nothing external happened".
     if (outboxId && replySender) {
-      const entry = await takeOutboxRow(admin, outboxId);
+      const entry = await takeOutboxRow(admin, outboxId, request.user_id);
       if (entry.mode === "refuse") {
         console.warn(`[ai-agent-reply] outbox row ${outboxId} not runnable: ${entry.status}`);
         return jsonResponse({ ok: false, error: `outbox row not runnable: ${entry.status}` }, 409);
       }
       if (entry.mode === "redeliver") {
         const sender = replySender;
-        const outboundMessageId = await deliverStoredReply(
-          admin, outboxId, entry.text, (text) => sender(request.recipient_phone, text),
+        // The payload the caller read travels with the claim: a row whose text was
+        // replaced between the read and the claim is not sent, and what goes out is what
+        // the row holds.
+        const delivered = await deliverStoredReply(
+          admin,
+          outboxId,
+          { text: entry.text, kind: entry.kind },
+          (text) => sender(request.recipient_phone, text),
+          request.user_id,
         );
         // The same trail a fresh delivery leaves. Without it the customer has a reply that
         // is missing from the inbox UI and from the thread the next turn reads -- so the
@@ -857,16 +1061,85 @@ Deno.serve(async (req) => {
         //
         // The tool calls come from the ROW, not from this invocation -- which ran none. An
         // empty list here would record a reply that had used tools as having used none.
-        await persistDelivery(entry.text, outboundMessageId, entry.toolCalls ?? []);
+        await persistDelivery(delivered.text, delivered.messageId, entry.toolCalls ?? []);
+        // A redelivered NOTICE is the one-time handoff acknowledgement. Its claim is
+        // normally spent already -- the notice and the claim it spends are written by ONE
+        // statement -- so this is the net under a notice that was persisted without it.
+        if (entry.kind === "human_mode_ack") {
+          await completeHumanModeAck(admin, handoffScope(request), humanModeAckToken);
+        }
         await logOutcome(admin, {
           ...baseLog,
-          reply_text: entry.text.slice(0, 4000),
+          reply_text: delivered.text.slice(0, 4000),
           tool_calls: entry.toolCalls?.length ? entry.toolCalls : null,
           latency_ms: Date.now() - startedAt,
-          status: "sent",
-        }, { redelivered: true, outbound_message_id: outboundMessageId });
-        return jsonResponse({ ok: true, redelivered: true, reply: entry.text });
+          status: entry.kind === "human_mode_ack" ? "human_mode_ack" : "sent",
+        }, { redelivered: true, outbound_message_id: delivered.messageId });
+        return jsonResponse({ ok: true, redelivered: true, reply: delivered.text });
       }
+    }
+
+    // The human_first notice travels the same send path as a generated reply and leaves the
+    // same thread trail. It is at most once: the claim is spent before the send, and it is
+    // a LEASE, so a turn that dies before the notice is durable hands it back and a later
+    // turn delivers it instead. The row carries the notice's kind, so a turn that finds the
+    // row already holding it delivers it from the row rather than writing it again.
+    if (humanModeAck && replySender) {
+      const sender = replySender;
+      let outboundMessageId: string | null;
+      let noticeText = humanModeAck;
+      // The claim the notice spends. Without it the notice cannot be persisted at all:
+      // a notice that is durable with its claim still owed is a notice the next turn
+      // sends again, and the customer is told twice that a human has the conversation.
+      const ackClaim = humanModeAckToken
+        ? { ...handoffScope(request), claimToken: humanModeAckToken }
+        : null;
+      try {
+        if (outboxId) {
+          const delivered = await deliverGeneratedReply(
+            admin,
+            outboxId,
+            {
+              text: humanModeAck,
+              toolCalls: [],
+              kind: "human_mode_ack",
+              // The notice and the claim it spends are written by ONE statement, so a
+              // worker that dies between them cannot leave the customer owed a notice
+              // whose claim is already spent -- or a notice that was sent twice.
+              humanModeAck: ackClaim,
+            },
+            (text) => sender(request.recipient_phone, text),
+            request.user_id,
+          );
+          outboundMessageId = delivered.messageId;
+          noticeText = delivered.text;
+        } else {
+          outboundMessageId = await sender(request.recipient_phone, humanModeAck);
+        }
+      } catch (ackError) {
+        if (!replyIsDurable(outboxId, ackError)) {
+          const released = await releaseHumanModeAck(admin, handoffScope(request), humanModeAckToken);
+          if (!released) {
+            // The lease still stands, so a later turn takes the notice over once it
+            // lapses. It waits, but it is not lost.
+            console.warn("[ai-agent-reply] the human-mode acknowledgement claim was not released");
+          }
+        }
+        throw ackError;
+      }
+      // Without an outbox row there is no persist to hang the completion on, so the notice
+      // is complete once it has been sent.
+      if (!outboxId) {
+        await completeHumanModeAck(admin, handoffScope(request), humanModeAckToken);
+      }
+      await persistDelivery(noticeText, outboundMessageId, []);
+      await logOutcome(admin, {
+        ...baseLog,
+        reply_text: noticeText,
+        latency_ms: Date.now() - startedAt,
+        status: "human_mode_ack",
+      }, { outbound_message_id: outboundMessageId });
+      return jsonResponse({ ok: true, human_mode_ack: true, reply: noticeText });
     }
 
     // The sandbox passes the literal "test" when a caller names no account, and
@@ -887,16 +1160,17 @@ Deno.serve(async (req) => {
       cachedConversationQuery = cachedConversationQuery.eq("social_account_id", request.social_account_id);
     }
 
-    // These five reads do not use each other's results. Promise.all, not
+    // These six reads do not use each other's results. Promise.all, not
     // allSettled: a read that threw before still throws and the reply fails
-    // the same way. The link read is the exception that already returned an
-    // error instead of throwing; that handling stays after the group.
+    // the same way. The link read and the escalation aftermath are the
+    // exceptions that report an error instead of throwing.
     const [
       historyResult,
       embeddingConfig,
       cachedConversationResult,
       customToolResult,
       linkResult,
+      aftermath,
     ] = await Promise.all([
       admin
         .from("ai_thread_messages")
@@ -926,7 +1200,39 @@ Deno.serve(async (req) => {
           .eq("user_id", request.user_id)
           .eq("social_account_id", scopedAccountId)
         : Promise.resolve({ data: null, error: null }),
+      // Only WhatsApp keeps staff messages locally, and a sandbox run must not consume the
+      // marker a real customer's next reply is owed.
+      request.platform === "whatsapp" && !dryRun
+        ? readEscalationAftermath(admin, handoffScope(request), thread.id)
+        : Promise.resolve(NO_AFTERMATH),
     ]);
+
+    // The window's state is unknown: the marker may be set, and the apology and the
+    // staff context that go with it are still owed. The reply may not go out as if the
+    // customer had never waited.
+    //
+    // This is refused HERE, before the model runs, before a tool is called and before
+    // the procedure state is written. A turn that had already run a tool -- even a
+    // read-only one -- is not retryable: the work item is left running and recovery
+    // hands it to a human, so a TRANSIENT read failure would cost the customer their
+    // answer and the turn's work. Refused here, nothing has happened yet, so the catch
+    // releases the work item and the outbox retries it.
+    if (aftermath.readFailed) {
+      throw new Error("the unanswered-escalation window could not be read");
+    }
+
+    // Claim failures must occur before tools or durable procedure transitions. The
+    // token travels to settlement so there is no second claim read after those effects.
+    const preclaimedEscalation = aftermath.since
+      ? await claimUnansweredEscalation(admin, handoffScope(request), thread.id, true)
+      : undefined;
+    if (preclaimedEscalation?.failed) {
+      throw new Error("the unanswered-escalation claim could not be read");
+    }
+    if (preclaimedEscalation?.claimed && preclaimedEscalation.marker && preclaimedEscalation.token) {
+      earlyEscalationLease = { threadId: thread.id, marker: preclaimedEscalation.marker,
+        claimToken: preclaimedEscalation.token, replyDurable: false };
+    }
 
     const { data: historyRows, error: historyError } = historyResult;
     if (historyError) {
@@ -934,7 +1240,13 @@ Deno.serve(async (req) => {
       // thread, which also leaves a letterless message ("5", an emoji) to the English default.
       console.error("[ai-agent-reply] history read failed; replying without the thread:", historyError.message);
     }
-    const { turns: history, staleNote: historyStaleNote } = historyWindow(historyRows || [], Date.now());
+    // What staff told the customer during the escalation window is part of the conversation
+    // the agent resumes; without it the agent would repeat or contradict them.
+    const storedTurns: StoredTurn[] = aftermath.staffTurns.length
+      ? [...(historyRows || []), ...aftermath.staffTurns]
+        .sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at))
+      : historyRows || [];
+    const { turns: history, staleNote: historyStaleNote } = historyWindow(storedTurns, Date.now());
 
     let toolLinks: ToolAccountLink[] = [];
     let toolLinksDegraded = false;
@@ -1081,12 +1393,18 @@ Deno.serve(async (req) => {
           openerLanguage: initialProcedureState.opener_language ?? openerLanguage(config.language_mode),
         }
         : null,
-      customerLanguage: thread.customer_language === "ar" || thread.customer_language === "en"
-        ? thread.customer_language
-        : null,
+      customerLanguage: storedCustomerLanguage,
       storedTurns: historyRows || [],
       windowTurns: history,
     });
+    // Sent by code on a conversation's first reply: as a prompt instruction the model skipped
+    // it (curemedkw, 2026-11-12). "First" means no stored turn at all -- not the window, which
+    // also empties after a quiet week -- and a failed history read is not a first message.
+    // Comments and store-event flows have their own openers.
+    const openingGreeting = !historyError && !historyRows?.length && !request.comment_id &&
+        initialProcedureState?.origin !== "event"
+      ? fixedGreeting(config.agent_behavior?.greeting, language)
+      : null;
     // Resolved on first use rather than up front. buildAdminNotifier throws when the user has
     // no connected WhatsApp account, and awaiting it here made that throw abort the entire
     // reply -- so a Facebook, Instagram or Threads user without WhatsApp got no answer at all,
@@ -1259,6 +1577,7 @@ Deno.serve(async (req) => {
     const systemPrompt = buildSystemPrompt({
       persona: config.persona_instructions,
       behavior: config.agent_behavior,
+      greetingSent: openingGreeting !== null,
       handoffOnRequest: config.handoff_on_request,
       handoffOnLowConfidence: config.handoff_on_low_confidence,
       language,
@@ -1272,6 +1591,7 @@ Deno.serve(async (req) => {
       isAdmin,
       surface: request.comment_id ? "comment" : "dm",
       connectorNames: offeredTools.map((tool) => tool.name),
+      catalogSearch: offersCatalogSearch(offeredTools),
     });
 
     if (toolResolution.droppedDuplicates.length > 0) {
@@ -1336,20 +1656,24 @@ Deno.serve(async (req) => {
     // docs/superpowers/specs/2026-08-27-agent-model-selection-design.md §3e.
     const routingAdmin = admin as unknown as AiRoutingAdmin;
     const route = await resolveUserAiRoute(routingAdmin, request.user_id, 'agent');
-    if (route.mode === 'user_only' && !route.userTier) {
+    if (!modelOverride.model && route.mode === 'user_only' && !route.userTier) {
       await logOutcome(admin, { ...baseLog, status: 'skipped', error: AI_CONNECTION_REQUIRED,
         latency_ms: Date.now() - startedAt }, { error_code: AI_CONNECTION_REQUIRED, dry_run: dryRun });
-      if (outboxId) await cancelOutboxRow(admin, outboxId, AI_CONNECTION_REQUIRED);
+      if (outboxId) await cancelOutboxRow(admin, outboxId, AI_CONNECTION_REQUIRED, request.user_id);
       return jsonResponse({ ok: true, skipped: 'no_reply_generated', error: AI_CONNECTION_REQUIRED });
     }
-    const rawChain = route.mode === 'user_only' ? [] : await loadGlobalModelChain(admin);
-    modelChain = composeAiTiers(route, rawChain.map((slot) => ({
-      provider: slot.provider,
-      model: slot.model,
-      credentialSource: 'platform' as const,
-      authMethod: slot.authMethod,
-    })));
-    if (route.reason === 'user_key_missing') fallbackReason = route.reason;
+    const rawChain = modelOverride.model || route.mode === 'user_only' ? [] : await loadGlobalModelChain(admin);
+    // A sandbox comparison must measure exactly one platform model; user tiers and fallbacks
+    // would make the result describe a different chain than the requested candidate.
+    modelChain = modelOverride.model
+      ? [{ ...modelOverride.model, credentialSource: 'platform' as const }]
+      : composeAiTiers(route, rawChain.map((slot) => ({
+        provider: slot.provider,
+        model: slot.model,
+        credentialSource: 'platform' as const,
+        authMethod: slot.authMethod,
+      })));
+    if (!modelOverride.model && route.reason === 'user_key_missing') fallbackReason = route.reason;
     if (!modelChain.length) {
       // No hardcoded last resort. Calling a model no admin selected is how an
       // unlisted gpt-4o-mini kept answering; a human is the better fallback.
@@ -1480,7 +1804,7 @@ Deno.serve(async (req) => {
           await logOutcome(admin, { ...baseLog, status: 'skipped', error: AI_USER_KEY_INVALID,
             latency_ms: Date.now() - startedAt }, { error_code: AI_USER_KEY_INVALID, dry_run: dryRun,
             model_errors: modelErrors });
-          if (outboxId) await cancelOutboxRow(admin, outboxId, AI_USER_KEY_INVALID);
+          if (outboxId) await cancelOutboxRow(admin, outboxId, AI_USER_KEY_INVALID, request.user_id);
           return jsonResponse({ ok: true, skipped: 'no_reply_generated', error: AI_USER_KEY_INVALID });
         }
         // Typed so the catch can tell a total model outage apart from the
@@ -1504,6 +1828,9 @@ Deno.serve(async (req) => {
         // rule on a live reply (11:10 UTC), so rendering safety cannot
         // depend on it complying.
         replyText = repairChatReply((choice.content || "").trim());
+        // The greeting OPENS a reply; it must never BE the reply. An empty answer
+        // stays on the no-reply path below instead of going out as a bare greeting.
+        replyText = withGreeting(replyText, openingGreeting);
         break;
       }
 
@@ -1545,6 +1872,9 @@ Deno.serve(async (req) => {
             )
             : (isAdmin ? await executeAdminTool(toolContext, toolCall.function.name, args) : null) ??
               (await executeTool(toolContext, toolCall.function.name, args)));
+        if (dryRun && customTool && args.capability === "search_products") {
+          catalogEvidence.push(...catalogEvidenceFromOutput(result.output).slice(0, Math.max(0, 100 - catalogEvidence.length)));
+        }
         if (customTool && args.capability === "check_stock") {
           stockSightings.push(...stockSightingsFromToolOutput(customTool.id, result.output));
         }
@@ -1619,7 +1949,7 @@ Deno.serve(async (req) => {
         timings: timings.toJSON(),
         triage: triage ? { outcome: triage.outcome, errors: triage.errors.length ? triage.errors : null } : null,
       });
-      if (outboxId) await cancelOutboxRow(admin, outboxId, "no_reply_generated");
+      if (outboxId) await cancelOutboxRow(admin, outboxId, "no_reply_generated", request.user_id);
       return jsonResponse({ ok: true, skipped: "no_reply_generated" });
     }
 
@@ -1637,25 +1967,162 @@ Deno.serve(async (req) => {
       // or the write failed). Sending it would re-ask answered questions next turn.
       await logOutcome(admin, { ...baseLog, status: "skipped", error: PROCEDURE_STATE_CONFLICT,
         latency_ms: Date.now() - startedAt }, { error_code: PROCEDURE_STATE_CONFLICT, dry_run: dryRun });
-      if (outboxId) await cancelOutboxRow(admin, outboxId, PROCEDURE_STATE_CONFLICT);
+      if (outboxId) await cancelOutboxRow(admin, outboxId, PROCEDURE_STATE_CONFLICT, request.user_id);
       return jsonResponse({ ok: true, skipped: "no_reply_generated", error: PROCEDURE_STATE_CONFLICT });
     }
 
+    // Last, so the apology is decided only for a reply that is about to go out: a turn that
+    // failed above leaves the marker for the next one.
+    const settlement = await settleEscalationAftermath(
+      admin,
+      { scope: handoffScope(request), threadId: thread.id, language, claim: preclaimedEscalation },
+      aftermath,
+      replyText,
+    );
+    replyText = settlement.replyText;
+
+    if (settlement.windowReadFailed) {
+      // No reply may claim to resolve a window whose state is unknown. Production
+      // acquires the claim before tools; this also protects callers using direct settlement.
+      throw new Error("the unanswered-escalation claim could not be read");
+    }
+
+    // A staff member answered while the model was answering. The answer that was
+    // drafted is written without that reply, so it may repeat or contradict what the
+    // customer has just read from the staff: it is written again with the reply in
+    // mind, and an answer that cannot be written again is not sent at all.
+    if (settlement.lateStaffTurns.length > 0) {
+      const refreshed = await refreshStaffDraft({
+        regenerate: () => answerAgainAfterStaffReply({
+          messages, modelChain, temperature: config.temperature ?? 0.4,
+          routingAdmin, startedAt, turns: settlement.lateStaffTurns,
+        }),
+        known: [...aftermath.staffTurns, ...settlement.lateStaffTurns],
+        readLatest: () => readEscalationAftermath(admin, handoffScope(request), thread.id),
+      });
+      if (refreshed) {
+        replyText = withGreeting(refreshed, openingGreeting);
+      } else {
+        // The drafted answer is stale and no second one could be produced. It may
+        // not go out: a reply that contradicts the staff is worse than no reply.
+        // The staff reply is already in the thread, so the agent's next answer
+        // carries it, and the window's lease goes back so a later turn can take it
+        // over -- unless the staff context itself is still owed to the thread, in
+        // which case the lease stays and the next turn stores it.
+        if (
+          settlement.marker && settlement.claimToken &&
+          !settlement.staffWriteFailed && !settlement.staffReadFailed
+        ) {
+          await releaseUnpersistedEscalation(admin, handoffScope(request), earlyEscalationLease);
+        }
+        // Nobody answered the question, so it is kept on the record: the thread
+        // carries it, and the agent's next answer is written against it.
+        const held = await settleStaffInterruptedTurn({
+          admin, outboxId, sideEffectsHappened, scope: handoffScope(request), lease: earlyEscalationLease,
+          threadId: thread.id,
+          turn: { userId: request.user_id, content: request.inbound_text, id: outboxId ?? undefined },
+        });
+        await logOutcome(admin, {
+          ...baseLog,
+          status: held.cancelWorkItem ? "skipped" : "failed",
+          error: held.cancelWorkItem ? "staff_answered_during_generation" : "held_customer_turn_not_durable",
+        });
+        return jsonResponse(held.body);
+      }
+    }
+
     let outboundMessageId: string | null = null;
-    if (!dryRun && replySender) {
-      const sender = replySender;
-      // With an outbox row, the send is wrapped in three durable steps (persist the text,
-      // mark sending, mark sent) so a kill at any point leaves a state recovery can act on
-      // without guessing. Without one -- callers that predate the outbox -- it is the plain
-      // send it always was.
-      outboundMessageId = outboxId
-        ? await deliverGeneratedReply(
-          admin,
-          outboxId,
-          { text: replyText, toolCalls: executedToolCalls },
-          (text) => sender(request.recipient_phone, text),
-        )
-        : await sender(request.recipient_phone, replyText);
+    let replyWithoutDurableCopy = false;
+    let escalationCompleted = false;
+    /**
+     * Consumes the escalation window. The marker is LEASED, not taken: it stays set
+     * until the reply it belongs to is durable, so a turn that dies here leaves the
+     * apology owed instead of lost. A staff context that could not be stored or read
+     * keeps the lease, so the next turn tries again.
+     *
+     * The lease token travels with it: the marker alone cannot say which lease is being
+     * consumed, and a worker whose lease lapsed must not clear the window a newer
+     * worker is working on.
+     *
+     * Only the path WITHOUT an outbox row needs this: with a row, the window is
+     * consumed by the same statement that writes the reply, so there is no point between
+     * the two at which a worker can die and leave the apology owed twice.
+     */
+    const completeEscalation = async () => {
+      if (!settlement.marker || escalationCompleted) return;
+      if (settlement.staffWriteFailed || settlement.staffReadFailed) return;
+      escalationCompleted = true;
+      await completeUnansweredEscalation(
+        admin,
+        handoffScope(request),
+        thread.id,
+        settlement.marker,
+        settlement.claimToken,
+      );
+    };
+    try {
+      if (!dryRun && replySender) {
+        const sender = replySender;
+        // With an outbox row, the send is wrapped in three durable steps (persist the text,
+        // mark sending, mark sent) so a kill at any point leaves a state recovery can act on
+        // without guessing. Without one -- callers that predate the outbox -- it is the plain
+        // send it always was.
+        const delivered = outboxId
+          ? await deliverGeneratedReply(
+            admin,
+            outboxId,
+            {
+              text: replyText,
+              toolCalls: executedToolCalls,
+              // The reply and the window it resolves are written by ONE statement. Two
+              // statements could leave the reply durable and the marker owed: the reply
+              // is redelivered, and a later turn apologises for the same window again.
+              escalation: escalationForReply(settlement, {
+                threadId: thread.id,
+                userId: request.user_id,
+              }),
+            },
+            (text) => sender(request.recipient_phone, text),
+            request.user_id,
+          )
+          : null;
+        outboundMessageId = delivered
+          ? delivered.messageId
+          : await sender(request.recipient_phone, replyText);
+        if (delivered) {
+          // What went out is what the row holds: the thread turn and the log say what
+          // the customer received, not what this invocation meant to send.
+          replyText = delivered.text;
+        }
+        if (earlyEscalationLease && !settlement.staffWriteFailed && !settlement.staffReadFailed) {
+          earlyEscalationLease.replyDurable = true;
+        }
+        // Without an outbox row there is no persist to hang the completion on, so the
+        // window is resolved once the reply has been sent.
+        if (!outboxId) await completeEscalation();
+      }
+    } catch (deliveryError) {
+      replyWithoutDurableCopy = !replyIsDurable(outboxId, deliveryError);
+      if (earlyEscalationLease && !replyWithoutDurableCopy && !settlement.staffWriteFailed && !settlement.staffReadFailed) {
+        earlyEscalationLease.replyDurable = true;
+      }
+      throw deliveryError;
+    } finally {
+      // The marker is a lease, not a receipt. A reply that never became durable, a staff
+      // context that could not be stored and a window that could not be read all give
+      // the lease back, so the apology is still owed to the customer.
+      if (
+        settlement.marker &&
+        !escalationCompleted &&
+        (replyWithoutDurableCopy || settlement.staffWriteFailed || settlement.staffReadFailed)
+      ) {
+        const released = await releaseUnpersistedEscalation(admin, handoffScope(request), earlyEscalationLease);
+        if (!released) {
+          // The lease still stands: a later turn takes the apology over once it lapses,
+          // so the apology is owed rather than lost.
+          console.warn("[ai-agent-reply] the unanswered-escalation lease was not released");
+        }
+      }
     }
     timings.mark("sent");
     // Customer-perceived: request start to the send completing (marks are per-phase deltas).
@@ -1725,6 +2192,7 @@ Deno.serve(async (req) => {
       reply: replyText,
       escalated,
       tool_calls: executedToolCalls,
+      ...(dryRun ? { catalog_evidence: catalogEvidence } : {}),
       is_admin: isAdmin,
       used_model: usedModel,
       ...replyIntentFields(triage),
@@ -1761,8 +2229,12 @@ Deno.serve(async (req) => {
         // Escalated means the floor did something external -- assigned a human, notified
         // admins, sent an apology. Terminal: recovery re-running this would do it all twice.
         // Unhandled means nothing happened, and the row may be retried once models recover.
-        if (floor.escalated) await cancelOutboxRow(admin, outboxId, "model outage handled by escalation");
-        else await releaseAfterError(admin, outboxId, { sideEffectsHappened, error: errorMessage(error) });
+        if (floor.escalated) {
+          await cancelOutboxRow(admin, outboxId, "model outage handled by escalation", request.user_id);
+        } else {
+          await releaseFailedEscalationTurn(admin, handoffScope(request), earlyEscalationLease, outboxId,
+            { sideEffectsHappened, error: errorMessage(error) });
+        }
       }
       // apology_sent and human_notified travel in the body so a caller can tell this apart
       // from an ordinary failure: parseAgentReplyResult reads `escalated` as terminal.
@@ -1787,7 +2259,17 @@ Deno.serve(async (req) => {
       model_errors: modelErrors.length ? modelErrors : null,
       triage: triage ? { outcome: triage.outcome, errors: triage.errors.length ? triage.errors : null } : null,
     });
-    if (outboxId) await releaseAfterError(admin, outboxId, { sideEffectsHappened, error: errorMessage(error) });
+    if (outboxId) {
+      await releaseFailedEscalationTurn(admin, handoffScope(request), earlyEscalationLease, outboxId,
+        { sideEffectsHappened, error: errorMessage(error) });
+    }
     return jsonResponse({ ok: false, error: errorMessage(error) });
+  } finally {
+    try {
+      await releaseUnpersistedEscalation(admin, handoffScope(request), earlyEscalationLease);
+    } catch (cleanupError) {
+      // Preserve the original outcome; the token-bound lease remains recoverable on expiry.
+      console.error("[ai-agent-reply] escalation lease cleanup failed:", errorMessage(cleanupError));
+    }
   }
 });

@@ -36,3 +36,9 @@ export function assertPreparedOwnerExecutionSource(root, command = execFileSync)
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   assertPreparedOwnerExecutionSource(process.cwd());
 }
+
+/** Archive every file the disposable database harness needs, from one immutable candidate. */
+export function archiveOwnerDatabaseInputs({ root, candidate, archive }) {
+  execFileSync("git", ["-c", "core.autocrlf=false", "archive", "--format=tar", `--output=${archive}`,
+    candidate, "scripts/db-harness.sh", "scripts/sql", "supabase/tests", "supabase/migrations", "supabase/manual-sql"], { cwd: root });
+}

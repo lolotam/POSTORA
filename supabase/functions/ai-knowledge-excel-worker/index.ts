@@ -1,7 +1,6 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
-import * as XLSX from "npm:xlsx@0.18.5";
-import { chunkRows, rowToText, type KnowledgeChunk } from "../ai-knowledge-ingest/chunking.ts";
-import { parseSourceFile } from "../ai-knowledge-ingest/parsing.ts";
+import type { KnowledgeChunk } from "../ai-knowledge-ingest/chunking.ts";
+import { parseSourceFile, tabularChunks } from "../ai-knowledge-ingest/parsing.ts";
 import { EMBED_BATCH_SIZE } from "../_shared/ollamaEmbeddings.ts";
 import {
   claimEmbeddingColumnOwnership,
@@ -84,26 +83,14 @@ const defaultDependencies: WorkerDependencies = {
   cancelCrawl: firecrawlCancelCrawl,
 };
 
-function workbookToChunks(bytes: ArrayBuffer): KnowledgeChunk[] {
-  const workbook = XLSX.read(bytes, { type: "array" });
-  const rows: Array<{ text: string; sheet: string; row: number }> = [];
-  for (const sheet of workbook.SheetNames) {
-    XLSX.utils
-      .sheet_to_json<Record<string, unknown>>(workbook.Sheets[sheet], { defval: "" })
-      .forEach((row, index) => rows.push({ text: rowToText(row), sheet, row: index + 2 }));
-  }
-  return chunkRows(rows);
-}
-
 export function parseExcelChunks(bytes: ArrayBuffer): KnowledgeChunk[] {
-  return workbookToChunks(bytes);
+  return tabularChunks(bytes, "excel");
 }
 
-// SheetJS sniffs the bytes, so CSV text arrives as a single-sheet workbook and
-// flows through the same rowToText/chunkRows pipeline as Excel — identical
-// chunk shapes for both tabular source types.
+// CSV becomes a single-sheet workbook and flows through the same
+// rowToText/chunkRows pipeline as Excel — identical chunk shapes for both.
 export function parseCsvChunks(bytes: ArrayBuffer): KnowledgeChunk[] {
-  return workbookToChunks(bytes);
+  return tabularChunks(bytes, "csv");
 }
 
 // file_path is owner-writable through RLS while this worker holds the service

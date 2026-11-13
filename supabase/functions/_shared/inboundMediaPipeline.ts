@@ -19,7 +19,7 @@ import {
   type UnderstandingLimits,
 } from "./inboundMediaUnderstanding.ts";
 import { fetchCategoryAiSettings } from "./ai-fallback.ts";
-import { AGENT_TEXT_FENCE as FENCE, agentTextHeader } from "./agentTextEnvelope.ts";
+import { AGENT_TEXT_FENCE as FENCE, AGENT_TEXT_LABELS as ENVELOPE_LABELS, agentTextHeader } from "./agentTextEnvelope.ts";
 import {
   CloudGraphFetcher,
   DirectUrlFetcher,
@@ -370,11 +370,7 @@ function neutralizeFence(text: string): string {
  * transcript rather than typed text, so a mis-transcription is not read as a confident
  * statement of fact -- and it marks the span as data rather than instruction.
  */
-const AGENT_TEXT_LABELS: Record<MediaKind, string> = {
-  audio: "Voice note transcription",
-  image: "Image description & OCR",
-  document: "Document summary & extracted text",
-};
+const AGENT_TEXT_LABELS: Record<MediaKind, string> = ENVELOPE_LABELS;
 
 export function composeAgentText(kind: MediaKind, understood: string, caption?: string | null): string {
   const label = AGENT_TEXT_LABELS[kind];

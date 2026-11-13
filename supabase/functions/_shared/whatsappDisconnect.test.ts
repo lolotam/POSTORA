@@ -27,11 +27,16 @@ interface RecordedRpc {
 // Stands in for the Supabase client the way evolutionQrAccount.test.ts does: the
 // assertions are on the rows the teardown would write, not on how it called the
 // client. `updateError` makes the write for one table fail, for the propagation case.
+// `rpcData` is what the RPC returned: the deliberate-disconnect marker writes `true`
+// when it wrote the marker and `false` when the row did not match, and the teardown
+// treats anything but `true` as a failed mark.
 function recordingAdmin(
   options: {
     instanceRow?: { instance_name: string } | null;
+    instanceError?: unknown;
     updateError?: { table: string; error: unknown };
     rpcError?: unknown;
+    rpcData?: unknown;
   } = {},
 ) {
   const updates: RecordedUpdate[] = [];
@@ -39,7 +44,18 @@ function recordingAdmin(
   const admin = {
     rpc(name: string, args: Record<string, unknown>) {
       rpcs.push({ name, args });
-      return Promise.resolve({ data: null, error: options.rpcError ?? null });
+      if (name === "deactivate_whatsapp_deliberately") {
+        const error = options.rpcError ?? (options.updateError?.table === "social_accounts" ? options.updateError.error : null);
+        if (!error && options.rpcData !== false) updates.push({
+          table: "social_accounts", values: { is_active: false },
+          filters: args.p_workspace_id ? [["id", args.p_account_id], ["workspace_id", args.p_workspace_id]] : [["id", args.p_account_id]],
+        });
+        return Promise.resolve({ data: options.rpcData === undefined ? true : options.rpcData, error });
+      }
+      return Promise.resolve({
+        data: options.rpcData === undefined ? true : options.rpcData,
+        error: options.rpcError ?? null,
+      });
     },
     from(table: string) {
       return {
@@ -49,7 +65,10 @@ function recordingAdmin(
               return this;
             },
             maybeSingle: () =>
-              Promise.resolve({ data: options.instanceRow ?? null, error: null }),
+              Promise.resolve({
+                data: options.instanceRow ?? null,
+                error: options.instanceError ?? null,
+              }),
           };
         },
         update(values: Record<string, unknown>) {
@@ -152,6 +171,123 @@ Deno.test("an evolution_qr account is torn down at Evolution, recorded locally, 
   });
   assertEquals(graphCalls, []);
   assertEquals(result, { deactivated: true, evolution: "ok", graph: "skipped", warnings: [] });
+});
+
+Deno.test("a deliberate evolution_qr disconnect is marked as deliberate", async () => {
+  // A disconnect the owner asked for is not an outage: without the marker the watcher
+  // would alert them about the session they just closed on purpose.
+  const { rpcs, admin } = recordingAdmin({ instanceRow: { instance_name: "postora_acc-1" } });
+
+  await disconnectWhatsAppAccount(
+    { accountId: "acc-1", workspaceId: "ws-1", connectionMode: "evolution_qr" },
+    { admin, evolution: evolutionRecorder([]), fetcher: graphRecorder([]) },
+  );
+
+  assertEquals(rpcs, [
+    { name: "deactivate_whatsapp_deliberately", args: { p_account_id: "acc-1", p_workspace_id: "ws-1" } },
+  ]);
+});
+
+Deno.test("a Meta-mode disconnect is not marked as deliberate", async () => {
+  // The watcher only polls Evolution QR accounts, so a Meta-mode account needs no marker.
+  const { rpcs, admin } = recordingAdmin();
+
+  await disconnectWhatsAppAccount(
+    { accountId: "acc-1", workspaceId: "ws-1", connectionMode: "coexistence" },
+    { admin, evolution: evolutionRecorder([]), fetcher: graphRecorder([]) },
+  );
+
+  assertEquals(rpcs, []);
+});
+
+Deno.test("a failed deliberate mark stops the disconnect before anything is torn down", async () => {
+  // Without the marker the watcher would see the closed session as an outage and email the
+  // owner about a disconnect they asked for, so the teardown must not start unmarked.
+  const { admin, updates } = recordingAdmin({
+    instanceRow: { instance_name: "postora_acc-1" },
+    rpcError: { message: "mark failed" },
+  });
+  const evolutionCalls: Array<{ url: string; method?: string }> = [];
+
+  await assertRejects(() =>
+    disconnectWhatsAppAccount(
+      { accountId: "acc-1", workspaceId: "ws-1", connectionMode: "evolution_qr" },
+      { admin, evolution: evolutionRecorder(evolutionCalls), fetcher: graphRecorder([]) },
+    )
+  );
+
+  assertEquals(evolutionCalls, []);
+  assertEquals(updates, []);
+});
+
+Deno.test("a deliberate mark that wrote nothing stops the disconnect before anything is torn down", async () => {
+  // The RPC answers `false` when the row did not match its predicate: nothing was
+  // written, so the watcher would still read the session as an outage and alert the
+  // owner about a disconnect they asked for. An unanswered mark is not a successful one.
+  const { admin, updates } = recordingAdmin({
+    instanceRow: { instance_name: "postora_acc-1" },
+    rpcData: false,
+  });
+  const evolutionCalls: Array<{ url: string; method?: string }> = [];
+
+  await assertRejects(() =>
+    disconnectWhatsAppAccount(
+      { accountId: "acc-1", workspaceId: "ws-1", connectionMode: "evolution_qr" },
+      { admin, evolution: evolutionRecorder(evolutionCalls), fetcher: graphRecorder([]) },
+    )
+  );
+
+  assertEquals(evolutionCalls, []);
+  assertEquals(updates, []);
+});
+
+Deno.test("a failed atomic deactivation preserves local state and never destroys the remote session", async () => {
+  const { rpcs, admin, updates } = recordingAdmin({
+    updateError: { table: "social_accounts", error: { message: "row is locked" } },
+  });
+  const remoteCalls: Array<{ url: string; method?: string }> = [];
+  await assertRejects(() => disconnectWhatsAppAccount(
+    { accountId: "acc-7", workspaceId: "ws-7", connectionMode: "evolution_qr" },
+    { admin, evolution: evolutionRecorder(remoteCalls) },
+  ));
+  assertEquals(rpcs, [{ name: "deactivate_whatsapp_deliberately", args: { p_account_id: "acc-7", p_workspace_id: "ws-7" } }]);
+  assertEquals(updates, []);
+  assertEquals(remoteCalls, []);
+});
+
+Deno.test("a remote lookup failure after atomic deactivation reports partial cleanup without undoing intent", async () => {
+  const { rpcs, admin, updates } = recordingAdmin({ instanceError: { message: "instances unreachable" } });
+  const result = await disconnectWhatsAppAccount(
+    { accountId: "acc-9", workspaceId: "ws-9", connectionMode: "evolution_qr" },
+    { admin, evolution: evolutionRecorder([]) },
+  );
+  assertEquals(result.deactivated, true);
+  assertEquals(result.evolution, "failed");
+  assertEquals(result.warnings.length, 1);
+  assertEquals(rpcs.length, 1);
+  assertEquals(deactivationOf(updates)?.values, { is_active: false });
+});
+
+Deno.test("a failed deactivation of a Meta account rolls no marker back", async () => {
+  // A Meta-mode disconnect never writes the marker, so there is nothing to undo.
+  const { rpcs, admin } = recordingAdmin({
+    updateError: { table: "social_accounts", error: { message: "row is locked" } },
+  });
+
+  await assertRejects(() =>
+    disconnectWhatsAppAccount(
+      {
+        accountId: "acc-8",
+        workspaceId: "ws-8",
+        connectionMode: "coexistence",
+        wabaId: "waba-8",
+        accessToken: "token-8",
+      },
+      { admin, fetcher: graphRecorder([]) },
+    )
+  );
+
+  assertEquals(rpcs, []);
 });
 
 Deno.test("a coexistence account unsubscribes the WABA webhook, never touches Evolution, and deactivates", async () => {
@@ -307,7 +443,7 @@ Deno.test("a failed local deactivation is raised, not swallowed", async () => {
       ),
   );
   assertEquals(rejection, { message: "row is locked" });
-  assertEquals(deactivationOf(updates)?.values, { is_active: false });
+  assertEquals(deactivationOf(updates), undefined);
 });
 
 Deno.test("an account with no workspace scoping deactivates by id alone", async () => {

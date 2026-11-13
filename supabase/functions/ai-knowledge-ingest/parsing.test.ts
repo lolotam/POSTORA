@@ -50,3 +50,30 @@ Deno.test("an unknown source type is refused by name", async () => {
     "Source type not supported: video",
   );
 });
+
+// curemedkw 2026-11-12: 202 of 297 product chunks were stored as Latin-1 mojibake
+// ("Ø§Ù„Ø¹...") because SheetJS reads CSV bytes as Latin-1 unless told otherwise.
+Deno.test("an Arabic UTF-8 CSV keeps its Arabic text, with or without a BOM", async () => {
+  for (const prefix of ["", "﻿"]) {
+    const bytes = new TextEncoder().encode(`${prefix}name,price\nكريم الكعب,6\n`);
+
+    const chunks = await parseSourceFile("csv", "products_rows.csv", new Blob([bytes]));
+
+    const content = chunks.map((chunk) => chunk.content).join("\n");
+    assertEquals(content.includes("name: كريم الكعب"), true, `prefix ${JSON.stringify(prefix)}: ${content}`);
+    assertEquals(content.includes("Ø"), false);
+  }
+});
+
+Deno.test("a CSV that is not UTF-8 is refused instead of stored as replacement characters", async () => {
+  // A lenient decoder replaces every byte it cannot read with U+FFFD, so the file would
+  // be indexed as a product sheet full of "" and the knowledge base would answer
+  // questions about a catalog nobody can read.
+  const latin1 = new Uint8Array([0x6e, 0x61, 0x6d, 0x65, 0x0a, 0x6b, 0x72, 0xe9, 0x6d, 0x0a]);
+
+  await assertRejects(
+    () => parseSourceFile("csv", "products.csv", new Blob([latin1])),
+    Error,
+    "not valid UTF-8",
+  );
+});

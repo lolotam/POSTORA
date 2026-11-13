@@ -301,12 +301,19 @@ export interface SystemPromptParams {
    */
   behavior?: AgentBehavior | null;
   /**
+   * True when the system itself opens this reply with the configured greeting
+   * (fixedGreeting). The model is then told not to greet, or the customer reads two.
+   */
+  greetingSent?: boolean;
+  /**
    * The two stored handoff switches. They default to true wherever they are
    * read, because that is the column default every existing row carries -- an
    * undefined must never read as "off" and strip escalation from live agents.
    */
   handoffOnRequest?: boolean;
   handoffOnLowConfidence?: boolean;
+  /** A connector offered for this reply searches the catalog by the customer's words. */
+  catalogSearch?: boolean;
 }
 
 const SURFACE_INSTRUCTIONS: Record<ReplySurface, { intro: string; rules: string[] }> = {
@@ -399,6 +406,43 @@ function connectorRules(connectorNames?: string[]): string[] {
   ];
 }
 
+/**
+ * The product-question handover, from the account's own two switches.
+ *
+ * The tool description is written from the same switches, so a trigger the
+ * tool does not allow would have the model call a tool that refuses the call:
+ * with `handoffOnRequest` off the tool says "Do NOT use it merely because the
+ * customer asked for a person", so the rules must not offer that trigger.
+ */
+function catalogHandoffRule(handoffOnRequest: boolean, handoffOnLowConfidence: boolean): string {
+  if (!handoffOnLowConfidence) return "";
+  const triggers = handoffOnRequest
+    ? ["the customer asks for one", "after two searches for the same request have found nothing"]
+    : ["two searches for the same request have found nothing"];
+  return `- For product questions, hand the conversation to a person only when ${triggers.join(", or ")}.`;
+}
+
+/**
+ * Said only when a connector searches the catalog through the store's own
+ * function. Without it the model treated one empty search as "we do not sell
+ * this" and handed over, and wrote product links of its own instead of the
+ * one the catalog returned (curemedkw, 2026-11-12 plan, Task 6).
+ */
+function catalogSearchRules(
+  catalogSearch: boolean | undefined,
+  handoffOnRequest: boolean,
+  handoffOnLowConfidence: boolean,
+): string[] {
+  if (!catalogSearch) return [];
+  return [
+    "- To find a product, call the catalog search with `query` set to the product words from the customer's message, exactly as they wrote them.",
+    "- If the search finds nothing, make a second catalog call with a looser Arabic/English synonym, transliteration, or brand variant, even for a one-word query. The tool may also shorten multi-word queries automatically. After that second catalog search, search the knowledge base for the product before you ask the customer for anything: the catalog can be stale or incomplete, and the re-ingested product sheet still knows the product. Only when the knowledge base has nothing either, ask the customer for the product name as printed on the pack, or for a photo. Do not say the store does not sell it.",
+    catalogHandoffRule(handoffOnRequest, handoffOnLowConfidence),
+    "- When you mention a product, give its product_url exactly as the tool returned it. Never build or guess a link.",
+    "- If price_hidden is true, say the price is available on request instead of quoting one. If shopping_enabled is false, say the product can be viewed but not ordered online.",
+  ].filter(Boolean);
+}
+
 const TONE_RULES: Record<AgentTone, string> = {
   friendly_professional:
     "Write in a warm but professional tone -- helpful, never so casual that it reads as careless.",
@@ -426,6 +470,208 @@ const GOAL_RULES: Record<AgentGoal, string> = {
 };
 
 /**
+ * The CureMed greeting pair, approved by the account owner on 2026-11-12 (plan,
+ * Global Constraints). The account's "Opening message" field holds the Arabic
+ * text; an English first message gets the mirror instead of no greeting at all.
+ *
+ * Only this exact pair is mirrored. Every other greeting keeps the rule below,
+ * so an account that has its own words is never given someone else's.
+ */
+const GREETING_MIRRORS: Record<string, string> = {
+  "وعليكم السلام ورحمة الله، أهلاً بك في كيور ميد 🌿 كيف نقدر نساعدك؟": "Welcome to CureMed 🌿 How can we help you?",
+};
+
+/**
+ * The configured greeting, to be sent verbatim by code, when its script matches the reply
+ * language. Null otherwise: an Arabic greeting must not open an English conversation, so
+ * that case stays with the model. A greeting with no letters (an emoji) fits either.
+ */
+export function fixedGreeting(greeting: string | undefined, language: ReplyLanguage): string | null {
+  const text = greeting?.trim();
+  if (!text) return null;
+  const script = letterLanguage(text);
+  if (script === null || script === language) return text;
+  const mirror = GREETING_MIRRORS[text];
+  return mirror && letterLanguage(mirror) === language ? mirror : null;
+}
+
+/** The reply opened by a fixed text (greeting, apology), unless the model already opened with it. */
+export function withOpening(reply: string, opening: string): string {
+  if (reply.startsWith(opening)) return reply;
+  return reply ? `${opening}\n\n${reply}` : opening;
+}
+
+/**
+ * The reply with the greeting opening it.
+ *
+ * The greeting OPENS a reply; it must never BE the reply. An empty answer stays
+ * empty, so the caller takes its no-reply path instead of sending the customer a
+ * bare greeting and nothing else (curemedkw, 2026-11-13).
+ */
+export function withGreeting(reply: string, greeting: string | null): string {
+  if (!greeting || !reply) return reply;
+  return withOpening(reply, greeting);
+}
+
+// Wording approved by the account owner on 2026-11-12. Fixed in code rather than per account:
+// they are system notices, not conversation, and the model is never asked to write them.
+export const HUMAN_MODE_ACK: Record<ReplyLanguage, string> = {
+  ar: "تم تحويل محادثتك لفريقنا، وراح يرد عليك أحد الموظفين بأقرب وقت 🌿",
+  en: "Your conversation is now with our team; a staff member will reply as soon as possible.",
+};
+
+const ESCALATION_APOLOGY: Record<ReplyLanguage, string> = {
+  ar: "نعتذر عن التأخير في الرد 🙏",
+  en: "Sorry for the delay in getting back to you.",
+};
+
+/**
+ * The apology that opens the assistant's first reply after a silent escalation ended.
+ * `since` is the escalation the thread was marked with; null means nothing is owed. Any staff
+ * reply in the window -- a voice note or an image counts -- means the customer was answered,
+ * so no apology; the text replies go into the history instead (staffTurnsSince).
+ */
+export function escalationApologyText(since: string | null, staffReplies: number, language: ReplyLanguage): string | null {
+  return since !== null && staffReplies === 0 ? ESCALATION_APOLOGY[language] : null;
+}
+
+/**
+ * The language of a handoff notice. Unlike a reply it has no thread to read and no model to
+ * defer to, so a message without letters (an emoji, an order number) falls back to the
+ * thread's stored language and then to Arabic, the language of the accounts it was made for.
+ *
+ * The customer's own words come FIRST: a notice is written for the customer who is
+ * waiting, and the customer's latest message is the strongest evidence of the language
+ * they are waiting in. The account's configured mode is only the last resort before
+ * Arabic, because a fixed setting that outranks the customer turns every Arabic
+ * customer of an English account into an English notice.
+ */
+export function handoffNoticeLanguage(
+  inboundText: string,
+  languageMode: LanguageMode,
+  hint: string | null | undefined,
+  storedLanguage: ReplyLanguage | null,
+): ReplyLanguage {
+  const fromCustomer = customerLanguageSignal(inboundText, hint);
+  if (fromCustomer) return fromCustomer;
+  if (storedLanguage) return storedLanguage;
+  return languageMode === "ar" || languageMode === "en" ? languageMode : "ar";
+}
+
+export interface MessageRow {
+  direction: string;
+  from_name: string | null;
+  message_text: string | null;
+  created_at: string;
+  /** The id of the message the row came from. */
+  id?: string | null;
+  /** The kind of message ("text", "image", "audio", ...). */
+  message_type?: string | null;
+  /** The media the message carried, when it carried one. */
+  media_url?: string | null;
+}
+
+/**
+ * The message types that carry something the customer can read instead of words,
+ * and what each of them is called in the thread.
+ *
+ * One map, not a set beside a label table: a type added to one and not the other
+ * would answer as an attachment and be named "[Attachment]" instead of what it was.
+ */
+const ATTACHMENT_LABELS = new Map<string, string>([
+  ["image", "[Image]"],
+  ["audio", "[Audio message]"],
+  ["video", "[Video]"],
+  ["document", "[Document]"],
+  ["sticker", "[Sticker]"],
+]);
+
+/**
+ * Whether the send is a staff answer: words, or an attachment the customer read.
+ *
+ * A voice note or an image counts. The send paths give a media send a preview text
+ * ("[Image]"), but a row may carry the attachment and no text at all, and such a
+ * send is the customer being answered just as much as a written one is.
+ */
+export function isStaffAnswer(row: MessageRow): boolean {
+  if (row.message_text?.trim()) return true;
+  if (row.media_url?.trim()) return true;
+  return ATTACHMENT_LABELS.has((row.message_type ?? "").trim().toLowerCase());
+}
+
+/** The turn a staff send becomes: their words, or what the attachment was. */
+function staffTurnContent(row: MessageRow): string {
+  const text = row.message_text?.trim();
+  if (text) return `(staff) ${text}`;
+  const kind = (row.message_type ?? "").trim().toLowerCase();
+  return `(staff) ${ATTACHMENT_LABELS.get(kind) ?? "[Attachment]"}`;
+}
+
+/**
+ * What staff wrote to the customer after `sinceIso`, as assistant turns, oldest first.
+ *
+ * A positive match on from_name "You", the marker every staff send path writes. Every other
+ * outbound row (the agent, auto-reply rules, store openers, broadcasts) is not a staff answer.
+ * The "(staff)" prefix keeps the model from taking those words for its own.
+ *
+ * Every turn keeps the id of the message it came from. That id is what makes the
+ * same staff send stored ONCE: a retry writes the same id, and the second write is
+ * refused as a duplicate instead of piling another copy of the same turn onto the
+ * thread and pushing the customer's own messages out of the bounded history.
+ */
+export function staffTurnsSince(rows: MessageRow[], sinceIso: string): StoredTurn[] {
+  const since = Date.parse(sinceIso);
+  return rows
+    .filter((row) =>
+      row.direction === "outbound" && row.from_name === "You" && isStaffAnswer(row) &&
+      Date.parse(row.created_at) > since
+    )
+    .sort((a, b) => Date.parse(a.created_at) - Date.parse(b.created_at))
+    .map((row) => ({
+      role: "assistant",
+      content: staffTurnContent(row),
+      created_at: row.created_at,
+      ...(row.id ? { source_id: row.id } : {}),
+    }));
+}
+
+/**
+ * The staff turns that arrived after the context an answer was written against.
+ *
+ * An answer is written against the history the model was given. A staff reply that
+ * lands while the model is answering is not in that history, so the answer may
+ * repeat or contradict what the customer has just read from the staff.
+ */
+export function lateStaffTurns(rows: MessageRow[], known: StoredTurn[], sinceIso: string): StoredTurn[] {
+  return unseenStaffTurns(staffTurnsSince(rows, sinceIso), known);
+}
+
+/** Source IDs distinguish identical sends; legacy history can only match timestamp and content. */
+export function unseenStaffTurns(turns: StoredTurn[], known: StoredTurn[]): StoredTurn[] {
+  const seenIds = new Set(known.flatMap((turn) => turn.source_id ? [turn.source_id] : []));
+  const legacy = new Set(known.filter((turn) => !turn.source_id).map((turn) => `${turn.created_at}|${turn.content}`));
+  return turns.filter((turn) =>
+    !(turn.source_id && seenIds.has(turn.source_id)) && !legacy.has(`${turn.created_at}|${turn.content}`)
+  );
+}
+
+/**
+ * The note that tells the model a staff member answered while it was answering.
+ *
+ * The answer has to be written again with that reply in mind: it is the only way
+ * the reply the customer receives can agree with what the customer has read.
+ */
+export function staffAnsweredNote(turns: StoredTurn[]): string {
+  return [
+    "A staff member replied to the customer while you were answering.",
+    "That reply is not in the answer you drafted, so answer the customer's last message again, with that reply in mind.",
+    "Do not repeat what the staff already said, and do not contradict it.",
+    "The staff replied:",
+    turns.map((turn) => turn.content).join("\n"),
+  ].join("\n");
+}
+
+/**
  * The business's configuration, rendered as prompt lines.
  *
  * Additive by construction: an empty behavior returns an empty list, so every
@@ -433,7 +679,7 @@ const GOAL_RULES: Record<AgentGoal, string> = {
  * config. Nothing here can REMOVE a rule -- the guards that must not be
  * switchable are written directly into buildSystemPrompt below.
  */
-export function behaviorRules(behavior?: AgentBehavior | null): string[] {
+export function behaviorRules(behavior?: AgentBehavior | null, greetingSent = false): string[] {
   if (!behavior) return [];
   const lines: string[] = [];
   if (behavior.tone) lines.push(TONE_RULES[behavior.tone]);
@@ -447,7 +693,11 @@ export function behaviorRules(behavior?: AgentBehavior | null): string[] {
     );
   }
   const greeting = behavior.greeting?.trim();
-  if (greeting) {
+  if (greetingSent) {
+    lines.push(
+      "The system opens this reply with the business's greeting. Do not greet or introduce yourself; answer the customer's message directly.",
+    );
+  } else if (greeting) {
     // Scoped to the opening turn. Unscoped, the model repeats the greeting on
     // every reply, which reads as a bot that has forgotten the conversation.
     lines.push(`If this is your first reply in the conversation, open with: ${greeting}`);
@@ -473,6 +723,14 @@ export interface StoredTurn {
   role: string;
   content: string | null;
   created_at: string;
+  /**
+   * The id of the message the turn came from, when it came from one.
+   *
+   * A turn built from a stored message carries the thread row's own id, which is
+   * not the id of any message; a turn built from a staff send carries the id of
+   * the whatsapp message it replays.
+   */
+  source_id?: string | null;
 }
 
 export interface HistoryWindow {
@@ -561,7 +819,7 @@ export function buildSystemPrompt(params: SystemPromptParams): string {
     surfaceInstructions.intro,
     adminInstruction,
     params.persona ? `Business persona and instructions:\n${params.persona}` : "",
-    ...behaviorRules(params.behavior),
+    ...behaviorRules(params.behavior, params.greetingSent),
     languageInstruction,
     "Rules:",
     knowledgeOnlyRule(params.connectorNames),
@@ -570,12 +828,26 @@ export function buildSystemPrompt(params: SystemPromptParams): string {
     // carries. With a switch off nobody is notified, so the replacement
     // wording must not promise a follow-up -- escalateConversation is the only
     // thing that reaches a human, and it is exactly what the off branch skips.
+    //
+    // The catalog rules below own the product questions, so the general rule
+    // is scoped away from them: without that, a product missing from the
+    // knowledge read as "no answer here" and the model handed over on the
+    // first miss instead of searching twice (curemedkw, 2026-11-12).
     (params.handoffOnLowConfidence ?? true)
-      ? "- If the knowledge does not contain the answer, say you will check with the team, and use the escalate_to_human tool."
-      : "- If the knowledge does not contain the answer, say plainly that you do not have that information. Do not promise that anyone will follow up.",
+      ? params.catalogSearch
+        ? "- If the knowledge does not contain the answer, and the question is not about a product, say you will check with the team, and use the escalate_to_human tool."
+        : "- If the knowledge does not contain the answer, say you will check with the team, and use the escalate_to_human tool."
+      : params.catalogSearch
+        ? "- If the knowledge does not contain the answer, and the question is not about a product, say plainly that you do not have that information. Do not promise that anyone will follow up."
+        : "- If the knowledge does not contain the answer, say plainly that you do not have that information. Do not promise that anyone will follow up.",
     (params.handoffOnRequest ?? true)
       ? "- If the customer asks for a person/human/agent, use the escalate_to_human tool and tell them someone will follow up."
       : "",
+    ...catalogSearchRules(
+      params.catalogSearch,
+      params.handoffOnRequest ?? true,
+      params.handoffOnLowConfidence ?? true,
+    ),
     "- Use the search_knowledge tool to look up product or policy details before saying something is unavailable.",
     ...LINK_RULES,
     ...surfaceInstructions.rules,
