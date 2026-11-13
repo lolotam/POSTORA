@@ -59,7 +59,11 @@ Deno.serve(async (req) => {
           .select("social_account_id, instance_name, last_polled_at, social_accounts!inner(id)")
           .eq("social_accounts.platform", "whatsapp")
           .eq("social_accounts.connection_mode", "evolution_qr")
-          .eq("social_accounts.is_active", true)
+          // is_active is deliberately NOT a filter: a disconnected Evolution account is
+          // inactive by design (the webhook deactivates it), so filtering on is_active
+          // would skip exactly the accounts this watcher exists to alert on. The
+          // deliberate-disconnect marker below is what excludes an account the owner
+          // disconnected on purpose.
           .not("social_accounts.platform_user_id", "like", "pending_%")
           .not("social_accounts.platform_user_id", "like", "retired_%")
           .is("social_accounts.account_metadata->whatsapp_user_disconnected_at", null)
@@ -103,9 +107,13 @@ Deno.serve(async (req) => {
         if (error) throw error;
       },
       async markFlagged(accountId: string, reason: string): Promise<void> {
+        // is_active goes with needs_reauth: a dead Evolution session is inactive by design
+        // (the webhook deactivates the row the same way), and the reconnectable list and the
+        // QR setup page only offer an INACTIVE account. Leaving the row active would show the
+        // red banner but leave the owner unable to resume the session.
         const { error } = await admin
           .from("social_accounts")
-          .update({ needs_reauth: true, last_refresh_error: reason })
+          .update({ is_active: false, needs_reauth: true, last_refresh_error: reason })
           .eq("id", accountId);
         if (error) throw error;
       },

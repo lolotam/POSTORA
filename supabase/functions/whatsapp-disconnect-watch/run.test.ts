@@ -15,7 +15,7 @@ const NOW = Date.parse("2026-11-13T12:00:00Z");
 const NOW_DATE = new Date(NOW);
 
 function episode(since: string, firstSeen: string, state = "close"): Episode {
-  return { since, first_seen: firstSeen, state, observed_at: since };
+  return { episode_id: "ep-1", since, first_seen: firstSeen, state, observed_at: since };
 }
 
 function minutesAgo(minutes: number): string {

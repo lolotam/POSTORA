@@ -13,6 +13,8 @@ export const MAX_ACCOUNTS_PER_RUN = 50;
 export const DISCONNECT_REASON = "WhatsApp session disconnected. Scan a new QR code to reconnect.";
 
 export interface Episode {
+  /** Identifies this episode: the claim returns it and the email's idempotency key uses it. */
+  episode_id: string;
   since: string;
   first_seen: string;
   state: string;
