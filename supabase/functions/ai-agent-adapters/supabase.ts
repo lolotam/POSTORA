@@ -826,6 +826,22 @@ function rpcParamName(settings: Record<string, unknown>, key: string, fallback: 
 }
 
 /**
+ * The two argument names the function call carries.
+ *
+ * The body is one object, so two arguments with the same name are one argument:
+ * the query would be dropped and the function would search with the row count
+ * instead. The search is silently wrong, so the configuration is refused.
+ */
+function rpcParamNames(settings: Record<string, unknown>): { queryParam: string; limitParam: string } {
+  const queryParam = rpcParamName(settings, "rpc_query_param", "q");
+  const limitParam = rpcParamName(settings, "rpc_limit_param", "max_results");
+  if (queryParam === limitParam) {
+    throw new SupabaseValidationError("supabase_configuration_invalid", "Supabase is not fully configured.");
+  }
+  return { queryParam, limitParam };
+}
+
+/**
  * The connection probe's query: one word no catalog holds, so the probe reads
  * nothing and still proves the project URL, the anon key, the schema and the
  * function. It is a read, with the same headers the search path uses.
@@ -1012,17 +1028,7 @@ function rpcSearchFor(invocation: ConnectorInvocation, fn: string, anonKey: stri
   if (!projectUrl || !schema) {
     throw new SupabaseValidationError("supabase_configuration_invalid", "Supabase is not fully configured.");
   }
-  const queryParam = rpcParamName(settings, "rpc_query_param", "q");
-  const limitParam = rpcParamName(settings, "rpc_limit_param", "max_results");
-  if (queryParam === limitParam) {
-    // The body is one object, so two arguments with the same name are one
-    // argument: the query would be dropped and the function would search with
-    // the row count instead. The search is silently wrong, so it is refused.
-    throw new SupabaseValidationError(
-      "supabase_configuration_invalid",
-      "Supabase is not fully configured.",
-    );
-  }
+  const { queryParam, limitParam } = rpcParamNames(settings);
   return {
     url: `${projectUrl.replace(/\/+$/, "")}/rest/v1/rpc/${fn}`,
     headers: {
