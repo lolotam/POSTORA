@@ -43,7 +43,7 @@
 - **Human mode:** exactly one fixed acknowledgement per escalation. After it, silence until staff replies or the escalation expires.
 - **Product links:** copied verbatim from the catalog's `product_url`. Never invented.
 - **Not found:** retry with a looser query. Then ask for the product name or a photo. Escalate only on an explicit request or after two failed searches.
-- **RPC:** only named functions in `settings.rpc_allow_list`, only POST with a JSON object body, and always with the tool's anon key. `read_only_mode` stays true, and the CALL enforces it: the request asks PostgREST for a transaction it rolls back, and a target that does not apply that preference is refused rather than called.
+- **RPC:** only named functions in `settings.rpc_allow_list`, called with GET so PostgREST runs them in a read-only transaction, and always with the tool's anon key. `read_only_mode` stays true, and the CALL enforces it: a GET is READ ONLY for every volatility class, so Postgres refuses a write inside it and nothing can be committed.
 - No customer-visible string is produced by the model where the spec fixes the wording.
 - **Test command:**
   `deno test --allow-env --allow-read --allow-write --allow-net --no-check --node-modules-dir=none supabase/functions/<dir>`
@@ -69,6 +69,7 @@
 | `supabase/migrations/20261113210000_agent_handoff_claim_lease.sql` | the claim LEASES: `claim_human_mode_ack_leased`, `complete_human_mode_ack`, `release_human_mode_ack_claim`, `claim_unanswered_escalation`, `complete_unanswered_escalation`, `release_unanswered_escalation_claim`, the outbox's `generated_kind` |
 | `supabase/migrations/20261113220000_agent_handoff_legacy_claim_lease.sql` | the claim of a build that predates the lease is lease-shaped too, so no claim can be stranded |
 | `supabase/migrations/20261113230000_agent_conversation_mode_expiry_marker.sql` | the escalation marker of an expired window is written the way the thread is (an upsert) |
+| `supabase/migrations/20261113240000_agent_handoff_claim_token.sql` | a claim token of its own for every handoff claim, the one-time notice written with the claim it spends, and a delivery claim that carries the payload it read |
 | `supabase/functions/ai-agent-adapters/supabase.ts` (+ test) | Allow-listed RPC mode |
 | `supabase/functions/_shared/connectorRegistry.ts` | `rpc_allow_list` setting, `query`/`max_results` parameters |
 | `supabase/functions/ai-agent-reply/logic.ts` `buildSystemPrompt` | Not-found / escalation rule |
@@ -290,12 +291,13 @@ export function escalationApologyText(
 
 **Execution:**
 - When `settings.rpc_allow_list` is non-empty and the capability is `search_products`:
-  - POST `${project_url}/rest/v1/rpc/${fn}` with body `{ [q]: query.trim(), [limit]: clamp(max_results,1,25) }` and the tool's anon key headers.
+  - GET `${project_url}/rest/v1/rpc/${fn}?${q}=<query.trim()>&${limit}=<clamp(max_results,1,25)>` with the tool's anon key headers. The arguments ride in the query string, where PostgREST matches them to the function's parameter names.
   - `fn` is the first allow-listed name.
   - Empty `query` → validation error `supabase_query_required`. Never call with an empty query; this is the 2026-11-10 failure.
   - The response is the same row array the table path returns, so `column_map` and `max_rows` handling are reused.
-  - The call carries `Prefer: tx=rollback`, so the function runs in a transaction the target rolls back. A function runs with the rights of its owner, so a SECURITY DEFINER one can write even when the anon role cannot: the only thing that makes the read-only promise true is the call being unable to leave a write behind. PostgREST says in `Preference-Applied` whether it applied the preference; a target whose PostgREST commits by default ignores it, and that target is refused with `supabase_read_only_unenforced` rather than called -- an unverifiable read-only promise is not one. The project needs `db-tx-end = "commit-allow-override"` for the override to be honoured, and the connector card's help text says so.
-  - `rpc_query_param` and `rpc_limit_param` may not be the same name: the body is one object, so two arguments with one name are one argument, and the query would be dropped.
+  - The call is a GET, and that is what makes the read-only promise true. PostgREST gives a GET a READ ONLY transaction for every volatility class -- VOLATILE, STABLE and IMMUTABLE alike -- so Postgres refuses a write inside it (SQLSTATE 25006) and nothing can be committed. A function runs with the rights of its owner, so a SECURITY DEFINER one can write even when the anon role cannot: the only thing that makes the read-only promise true is the call being unable to leave a write behind. The boundary is the server's own, not a preference the target may ignore, and it does not depend on how the project ends its transactions -- so the connector works on a stock Supabase project with no `db-tx-end` setting. The price is that a function that writes now fails instead of answering (PostgREST answers 405, which the adapter reports as `supabase_search_function_writes`); a reader that cannot write is better than a write it made by accident.
+  - `rpc_query_param` and `rpc_limit_param` may not be the same name: the query string is one place, so two arguments with one name are one argument, and the query would be dropped.
+  - `rpc_query_param` and `rpc_limit_param` may not be `select`, `order`, `limit` or `offset`: PostgREST reads those for itself on a GET, so an argument named after one of them would never reach the function. The configuration is refused rather than guessed at, and the connector card's help text says so.
 - Model-supplied `table` containing `rpc/` stays refused. Only settings can name a function.
 
 - [ ] **Step 1: Failing tests** in `ai-agent-adapters/supabase.test.ts`, with a fetch stub at the HTTP boundary asserting the request the adapter makes:
@@ -377,10 +379,11 @@ export function escalationApologyText(
   3. `20261113210000` — the claim LEASES (`claim_human_mode_ack_leased`, `complete_human_mode_ack`, `release_human_mode_ack_claim`, `claim_unanswered_escalation`, `complete_unanswered_escalation`, `release_unanswered_escalation_claim`) and the outbox's `generated_kind`. It must land BEFORE the edge functions: the edge build calls the lease RPCs and the kind-aware transition, and it is backward compatible with the edge code that is live now, so the two orders never meet a half-migrated database.
   4. `20261113220000` — the claim of a build that predates the lease is lease-shaped too, so no claim can be stranded: a claim that cannot lapse is a notice nobody will ever send.
   5. `20261113230000` — the escalation marker of an expired window is written the way the thread is (an upsert), so it survives a thread that is created at the same moment.
+  6. `20261113240000` — every handoff claim carries a token of its own, the one-time notice is written together with the claim it spends, and the delivery claim carries the payload it read. It must land BEFORE the edge deployment for the same reason as step 3: the new build calls `claim_unanswered_escalation` for a token, completes and releases the escalation with that token, persists the one-time notice with `persist_human_mode_ack_and_complete_claim`, and claims a row for delivery with `claim_agent_reply_for_delivery` — none of which exist before it. It is safe to apply while the build that is live now keeps running: that build calls none of them.
   - The order is a strict order, and every step before the edge deployment is backward compatible with the edge code that is live now:
     - The edge build that is live now calls exactly one of these functions, `advance_agent_reply` (`_shared/pendingReplies.ts:239`), and every migration above leaves it exactly as it is.
     - The edge build that is live now calls NONE of `claim_human_mode_ack`, `release_human_mode_ack`, `take_unanswered_escalation`, `restore_unanswered_escalation` — they are new in this branch, and the build that ships with it calls the LEASED variants instead. So no claim can exist in the shape the old functions write, and the rollout gap cannot strand one.
-    - The new edge build calls the lease RPCs and `advance_agent_reply_kind`, so it may only be deployed AFTER steps 3 to 5 are applied. Nothing in the new build works against a database without them.
+    - The new edge build calls the lease RPCs and `advance_agent_reply_kind`, so it may only be deployed AFTER steps 3 to 6 are applied. Nothing in the new build works against a database without them.
     - Every step redefines functions only: no table is changed, so a step that is applied twice, or a step that is applied while an old edge build is still running, leaves the old build working.
 - [ ] Merge only after the owner card.
 - [ ] After the sync:
