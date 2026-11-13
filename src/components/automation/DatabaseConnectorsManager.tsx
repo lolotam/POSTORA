@@ -543,12 +543,17 @@ function urlCredentialField(type: ConnectorType): Field | undefined {
 /** Repopulates a non-secret field from `settings`. Arrays (a
  *  table_allow_list can be stored either way) render joined; a url field on a
  *  legacy row falls back to the row url column, which held it before the
- *  settings split existed. */
+ *  settings split existed.
+ *
+ *  "-" is the marker a cleared field is stored as, so it renders as the empty
+ *  field the operator cleared -- never as a literal dash in the box. */
 function settingsValueFor(field: Field, tool: AiAgentTool): string {
   const value = tool.settings?.[field.key];
-  if (typeof value === "string") return value;
+  if (typeof value === "string") return value === "-" ? "" : value;
   if (Array.isArray(value)) {
-    return value.filter((entry): entry is string => typeof entry === "string").join(", ");
+    const entries = value.filter((entry): entry is string => typeof entry === "string")
+      .filter((entry) => entry !== "-");
+    return entries.join(", ");
   }
   if (field.kind === "url" && tool.url) return tool.url;
   return "";
@@ -556,20 +561,44 @@ function settingsValueFor(field: Field, tool: AiAgentTool): string {
 
 /** The first required field with no value, or null. A required secret that is
  *  already stored never counts as missing: blank means "keep existing" on an
- *  existing connector, exactly like the old single-secret form. */
+ *  existing connector, exactly like the old single-secret form. A field another
+ *  filled field makes unnecessary never counts as missing either -- but only
+ *  while nothing reads a table: a catalog search function replaces the PRODUCT
+ *  search, while the stock and order lookups still read a table, and a connector
+ *  that enables those without a table fails every lookup it promises. */
 function missingRequiredCredentialField(
   fields: readonly Field[],
   values: Record<string, string>,
   editingTool: AiAgentTool | null,
+  tableBackedCapabilityEnabled: boolean,
 ): Field | null {
   const configuredSecretFields = new Set(editingTool?.configured_secret_fields ?? []);
   for (const field of fields) {
     if (!field.required) continue;
     if ((values[field.key] ?? "").trim() !== "") continue;
+    if (
+      field.optionalWhen &&
+      !tableBackedCapabilityEnabled &&
+      (values[field.optionalWhen] ?? "").trim() !== ""
+    ) continue;
     if (field.kind === "secret" && editingTool && configuredSecretFields.has(field.key)) continue;
     return field;
   }
   return null;
+}
+
+/** True when a capability this connector enables reads a table.
+ *
+ * The stock and order lookups read a table, so a connector that enables them
+ * still needs the table allow-list even when a catalog search function is
+ * named: the function replaces the PRODUCT search only. The badge on the field
+ * and the save-time check have to agree on this -- otherwise the form asks for
+ * a field it does not demand, and refuses a form it accepts. */
+function readsATable(form: {
+  permission_check_stock: boolean;
+  permission_lookup_orders: boolean;
+}): boolean {
+  return form.permission_check_stock || form.permission_lookup_orders;
 }
 
 /** One rendered test-connection outcome: either just probed (live) or the
@@ -1398,10 +1427,16 @@ function DatabaseConnectorsEditor({
     // Required-field check first, so a blank registry field names itself
     // ("Store URL is required.") instead of the derived url failing a generic
     // format check.
+    //
+    // The stock and order lookups read a table, so a connector that enables
+    // them still needs the table allow-list even when a catalog search function
+    // is named.
+    const tableBackedCapabilityEnabled = readsATable(form);
     const missingField = missingRequiredCredentialField(
       safeCredentialFields(form.connector_type),
       form.credentials,
       editingTool,
+      tableBackedCapabilityEnabled,
     );
     if (missingField) {
       setFormError(t("errors.fieldRequired", "{{field}} is required.", { field: missingField.label }));
@@ -1432,6 +1467,15 @@ function DatabaseConnectorsEditor({
       column_map: "{}",
       // "-" cannot be a column name, so it unambiguously means "no ordering".
       order_by: "-",
+      // "-" cannot be a function or argument name either: it turns catalog
+      // search off, or puts an argument back to its default.
+      rpc_allow_list: "-",
+      rpc_query_param: "-",
+      rpc_limit_param: "-",
+      // "-" cannot be a table name, so it unambiguously means "this connector
+      // reads no table". Every reader has to agree: the adapter's table list, the
+      // tool's allowed tables and this form.
+      table_allow_list: "-",
     };
     const credentials: Record<string, string> = {};
     for (const field of fields) {
@@ -2388,6 +2432,15 @@ function DatabaseConnectorsEditor({
                       field.kind === "secret" &&
                       editingTool !== null &&
                       (editingTool.configured_secret_fields ?? []).includes(field.key);
+                    // A field another filled field makes unnecessary is not required
+                    // right now, and the badge must say so. The table allow-list
+                    // is the one field that stays required while a table-backed
+                    // capability is enabled, so the badge asks the same question
+                    // the save-time check asks.
+                    const optionalWhenFilled = field.optionalWhen
+                      ? (form.credentials[field.optionalWhen] ?? "").trim() !== "" &&
+                        !readsATable(form)
+                      : false;
                     return (
                       <div className="space-y-1.5" key={field.key}>
                         <div className="flex items-center justify-between gap-2">
@@ -2395,7 +2448,7 @@ function DatabaseConnectorsEditor({
                             {field.label}
                           </Label>
                           <span className="text-[10px] text-muted-foreground">
-                            {isStoredSecret ? t("form.storedKeep", "Stored — leave blank to keep") : field.required ? t("form.required", "Required") : null}
+                            {isStoredSecret ? t("form.storedKeep", "Stored — leave blank to keep") : field.required && !optionalWhenFilled ? t("form.required", "Required") : null}
                           </span>
                         </div>
                         <Input

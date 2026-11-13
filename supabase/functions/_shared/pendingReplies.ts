@@ -12,6 +12,23 @@
 //
 // Design: docs/superpowers/plans/2026-08-27-durable-reply-outbox.md
 
+interface ReplyRpcClient {
+  rpc(name: string, args: Record<string, unknown>): PromiseLike<{
+    data: unknown; error: { message: string } | null;
+  }>;
+}
+interface EnqueueClient extends ReplyRpcClient {
+  from?: (table: string) => {
+    select(columns: string): {
+      eq(column: string, value: string): {
+        eq(column: string, value: string): {
+          maybeSingle(): PromiseLike<{ data: { id: string } | null; error: { message: string } | null }>;
+        };
+      };
+    };
+  };
+}
+
 export interface PendingReplyItem {
   socialAccountId: string;
   platform: string;
@@ -86,8 +103,7 @@ export function toEnqueueArgs(item: PendingReplyItem): Record<string, unknown> {
  * webhook redelivery reply twice.
  */
 export async function enqueueAgentReply(
-  // deno-lint-ignore no-explicit-any
-  admin: any,
+  admin: EnqueueClient,
   item: PendingReplyItem,
 ): Promise<EnqueueOutcome | null> {
   const label = `${item.platform}/${item.messageId}`;
@@ -118,8 +134,7 @@ export async function enqueueAgentReply(
 }
 
 async function attemptEnqueue(
-  // deno-lint-ignore no-explicit-any
-  admin: any,
+  admin: EnqueueClient,
   item: PendingReplyItem,
   label: string,
 ): Promise<EnqueueOutcome | null | "unknown"> {
@@ -130,7 +145,8 @@ async function attemptEnqueue(
       return "unknown";
     }
     const row = Array.isArray(data) ? data[0] : data;
-    if (!row || typeof row.id !== "string" || typeof row.newly_enqueued !== "boolean") {
+    if (!row || typeof row !== "object" || !("id" in row) || !("newly_enqueued" in row) ||
+      typeof row.id !== "string" || typeof row.newly_enqueued !== "boolean") {
       // Unknown, NOT null. A response this code cannot read says nothing about whether the
       // insert committed, and answering row-less on a committed row is what produces a
       // recovery duplicate. The RPC is idempotent and the unique constraint stops a second
@@ -148,12 +164,12 @@ async function attemptEnqueue(
 
 /** Did an earlier attempt commit after all? Never reports ownership -- only that a row exists. */
 async function findExistingRow(
-  // deno-lint-ignore no-explicit-any
-  admin: any,
+  admin: EnqueueClient,
   item: PendingReplyItem,
   label: string,
 ): Promise<EnqueueOutcome | null> {
   try {
+    if (!admin.from) return null;
     const { data, error } = await admin
       .from("pending_agent_replies")
       .select("id")
@@ -168,6 +184,74 @@ async function findExistingRow(
   } catch {
     return null;
   }
+}
+
+/**
+ * The escalation window a reply resolves.
+ *
+ * The reply's text and the window's completion are written by ONE statement, so a worker
+ * killed between them cannot leave the apology owed a second time.
+ */
+export interface ReplyEscalation {
+  /** The thread whose marker this reply resolves. */
+  threadId: string;
+  /**
+   * The thread's owner. Tenancy is structural: the marker is only cleared for this user.
+   *
+   * It is the SAME tenant as the transition's `userId`: the reply and the window it
+   * resolves are one tenant's, and a transition whose claim names another tenant is
+   * refused before the database is asked.
+   */
+  userId: string;
+  /** The marker this turn leased. A newer window's marker is left alone. */
+  since: string;
+  /**
+   * The lease token this turn holds on that marker.
+   *
+   * The marker alone does not say WHICH lease is being acted on: two workers that leased
+   * the same marker hold the same `since`. The token is what a stale worker is refused
+   * on, so it travels with the reply all the way to the statement that writes it.
+   */
+  claimToken: string;
+}
+
+/**
+ * The one-time acknowledgement claim a notice is written under.
+ *
+ * The notice and the claim it spends are one fact: the customer is told a human has the
+ * conversation, and no later turn may tell them again. Written as two statements, a
+ * completion that failed left the notice delivered with the claim still owed.
+ */
+export interface HumanModeAckClaim {
+  /** The conversation the claim belongs to. */
+  userId: string;
+  platform: string;
+  conversationId: string;
+  /**
+   * The lease token of the claim this caller holds.
+   *
+   * Only the claim this caller holds can be spent, so a worker that was overtaken writes
+   * nothing at all.
+   */
+  claimToken: string;
+}
+
+/**
+ * The payload a row is expected to hold when a transition runs.
+ *
+ * The row's text is read without a lock, so anything that changes it can do so between
+ * the read and the write. A transition that carries the payload only happens while the
+ * row still holds exactly that payload, which is what keeps a replaced row from being
+ * delivered.
+ */
+export interface ReplyPayload {
+  /** The text the row is expected to hold. */
+  text: string;
+  /**
+   * What that text is, as the row records it: null for an answer the model produced,
+   * "human_mode_ack" for the one-time handoff notice.
+   */
+  kind: string | null;
 }
 
 /**
@@ -186,34 +270,199 @@ export interface ReplyTransition {
   id: string;
   from: PendingReplyStatus;
   to: PendingReplyStatus;
+  /**
+   * The tenant that owns the row this transition moves.
+   *
+   * Required, and not decoration: every statement that moves a row binds it to this
+   * tenant, so a row of another tenant is refused the way a row that is not in the
+   * from-state is refused. The edge functions run as the service role, which bypasses
+   * RLS, so the database has nothing else to go by: the caller has to say whose reply
+   * it is moving.
+   */
+  userId: string;
   generatedReply?: string | null;
   /** The tools that produced `generatedReply`, so a redelivery can record them truthfully. */
   generatedToolCalls?: unknown[] | null;
+  /**
+   * The escalation window this reply resolves, when it resolves one.
+   *
+   * Set, the text and the window's completion are written by ONE statement. Two statements
+   * could leave the text durable and the marker owed: the reply is redelivered, and a
+   * later turn takes the marker over once its lease lapses and apologises for the same
+   * window a second time.
+   */
+  escalation?: ReplyEscalation | null;
+  /**
+   * The acknowledgement claim the one-time notice spends, when the text is that notice.
+   *
+   * Set, the text and the completion of the claim are written by ONE statement, and the
+   * claim has to be the one this caller holds. A notice persisted without its claim
+   * spent is a notice a later turn sends again.
+   */
+  humanModeAck?: HumanModeAckClaim | null;
+  /**
+   * The claim a notice spends when the notice takes a stored row's place.
+   *
+   * The notice replaces an answer that may never be delivered, and the claim it spends
+   * has to be spent by the SAME statement: a notice that is durable with its claim still
+   * owed is a notice a later turn takes the expired lease over and sends again.
+   */
+  replaceAndCompleteClaim?: HumanModeAckClaim | null;
+  /**
+   * The payload the row is expected to hold when this transition runs.
+   *
+   * Set on the delivery claim. The row's text is read without a lock, so a closed gate
+   * can replace it between the read and the claim; the claim then moves the row only if
+   * it still holds what the caller read, and the refusal is fail-closed -- nothing is
+   * sent.
+   */
+  expectedPayload?: ReplyPayload | null;
+  /**
+   * What `generatedReply` is: null for an answer the model produced, "human_mode_ack" for
+   * the one-time notice a human takeover owes the customer. A gate that is closed for the
+   * answer is not closed for the notice, so a later turn has to be able to tell them apart.
+   */
+  generatedKind?: string | null;
   error?: string | null;
 }
 
 export async function advanceReply(
-  // deno-lint-ignore no-explicit-any
-  admin: any,
+  admin: ReplyRpcClient,
   transition: ReplyTransition,
 ): Promise<boolean> {
   // Named fields rather than positional: `from` and `to` are adjacent same-typed strings, and
   // a transposition would silently move the row backwards through the state machine.
-  const { id, from, to } = transition;
-  try {
-    const { data, error } = await admin.rpc("advance_agent_reply", {
+  const { id, from, to, userId } = transition;
+  const generatedReply = transition.generatedReply ?? null;
+  const error = transition.error?.slice(0, 500) ?? null;
+  const toolCalls = transition.generatedToolCalls?.length ? transition.generatedToolCalls : null;
+
+  // The escalation and the acknowledgement claim name a tenant of their own, and the
+  // statement that spends them binds the row to the tenant this transition claims. Two
+  // different tenants mean the row and the claim are not one fact, so the transition is
+  // refused here rather than half-written by the database.
+  const claimTenant = transition.escalation?.userId
+    ?? transition.humanModeAck?.userId
+    ?? transition.replaceAndCompleteClaim?.userId;
+  if (claimTenant !== undefined && claimTenant !== userId) {
+    console.error(`[outbox] ${from} -> ${to} refused for ${id}: the claim names another tenant`);
+    return false;
+  }
+
+  // One RPC per KIND of transition, because each of them carries something the others do
+  // not: the escalation window, the acknowledgement claim, the claim a replacement
+  // spends, or the payload the row is expected to hold. The arguments are named exactly
+  // as the function declares them -- PostgREST matches a call by its argument names, and
+  // an argument the function does not have is an error, not a default.
+  //
+  // Every one of them takes the tenant the row belongs to. That is the point of the
+  // change: a statement that moves a row binds it to the tenant the caller names, so a
+  // row id of another tenant is refused instead of moved.
+  let rpc: string;
+  let args: Record<string, unknown>;
+  if (transition.escalation) {
+    // The reply and the window it resolves are ONE statement, and the window is only
+    // consumed for the lease this caller holds.
+    rpc = "persist_agent_reply_and_complete_escalation";
+    args = {
       p_id: id,
       p_from: from,
       p_to: to,
-      p_generated_reply: transition.generatedReply ?? null,
-      p_error: transition.error?.slice(0, 500) ?? null,
-      p_tool_calls: transition.generatedToolCalls?.length ? transition.generatedToolCalls : null,
-    });
-    if (error) {
-      console.error(`[outbox] ${from} -> ${to} failed for ${id}: ${error.message}`);
+      p_generated_reply: generatedReply,
+      p_error: error,
+      p_tool_calls: toolCalls,
+      p_thread_id: transition.escalation.threadId,
+      p_user_id: userId,
+      p_since: transition.escalation.since,
+      p_claim_token: transition.escalation.claimToken,
+    };
+  } else if (transition.replaceAndCompleteClaim) {
+    // The notice that takes the row's place and the claim it spends are ONE statement:
+    // a notice that is durable with its claim still owed is a notice the next turn takes
+    // the expired lease over and sends again.
+    rpc = "replace_agent_reply_and_complete_claim";
+    args = {
+      p_user_id: userId,
+      p_id: id,
+      p_from: from,
+      p_to: to,
+      p_generated_reply: generatedReply,
+      p_error: error,
+      p_tool_calls: toolCalls,
+      p_generated_kind: transition.generatedKind ?? null,
+      p_platform: transition.replaceAndCompleteClaim.platform,
+      p_conversation_id: transition.replaceAndCompleteClaim.conversationId,
+      p_claim_token: transition.replaceAndCompleteClaim.claimToken,
+    };
+  } else if (transition.humanModeAck) {
+    // The notice and the claim it spends are ONE statement, so a notice is never
+    // delivered with its claim still owed.
+    rpc = "persist_human_mode_ack_and_complete_claim";
+    args = {
+      p_id: id,
+      p_from: from,
+      p_to: to,
+      p_generated_reply: generatedReply,
+      p_error: error,
+      p_tool_calls: toolCalls,
+      p_generated_kind: transition.generatedKind ?? null,
+      p_user_id: userId,
+      p_platform: transition.humanModeAck.platform,
+      p_conversation_id: transition.humanModeAck.conversationId,
+      p_claim_token: transition.humanModeAck.claimToken,
+    };
+  } else if (transition.expectedPayload) {
+    // The delivery claim carries the payload the caller read, so a row whose text was
+    // replaced in the meantime is not moved and nothing is sent.
+    rpc = "claim_agent_reply_for_delivery_for_owner";
+    args = {
+      p_id: id,
+      p_from: from,
+      p_to: to,
+      p_expected_reply: transition.expectedPayload.text,
+      p_expected_kind: transition.expectedPayload.kind,
+      p_user_id: userId,
+    };
+  } else if (transition.generatedKind) {
+    // The kind is written by the RPC that carries it, so a transition that does not need
+    // one keeps working against a database that does not have the column yet.
+    rpc = "advance_agent_reply_kind_for_owner";
+    args = {
+      p_id: id,
+      p_from: from,
+      p_to: to,
+      p_generated_reply: generatedReply,
+      p_error: error,
+      p_tool_calls: toolCalls,
+      p_generated_kind: transition.generatedKind,
+      p_user_id: userId,
+    };
+  } else {
+    // The plain transition. Not advance_agent_reply: the build that is live today calls
+    // that one, and a second arity of the same name would make its call ambiguous.
+    rpc = "advance_agent_reply_for_owner";
+    args = {
+      p_id: id,
+      p_from: from,
+      p_to: to,
+      p_generated_reply: generatedReply,
+      p_error: error,
+      p_tool_calls: toolCalls,
+      p_user_id: userId,
+    };
+  }
+  try {
+    const { data, error: rpcError } = await admin.rpc(rpc, args);
+    if (rpcError) {
+      console.error(`[outbox] ${from} -> ${to} failed for ${id}: ${rpcError.message}`);
       return false;
     }
-    if (data !== true) console.warn(`[outbox] ${from} -> ${to} refused for ${id}: not in ${from}`);
+    // The database refuses a row that is not in the from-state AND a row that belongs to
+    // another tenant, and it says which one it is not: it says neither. The message says
+    // both, because a refusal is a refusal and the caller may not act on it either way.
+    if (data !== true) {
+      console.warn(`[outbox] ${from} -> ${to} refused for ${id}: not in ${from}, or not this tenant's row`);
+    }
     return data === true;
   } catch (error) {
     console.error(`[outbox] ${from} -> ${to} threw for ${id}:`, (error as Error)?.message ?? error);

@@ -40,6 +40,12 @@
 # Playwright is not a job. e2e/seed-test-data.ts needs a service-role key,
 # and e2e/fixtures/auth.ts swallows login failure. The UI slice adds a mocked
 # fixture-backed journey later. This workflow does not add real-user auth.
+#
+# The AI agent reply and adapter suites run in the Deno job. Their live suites
+# (files ending in .live.test.ts) call real providers, so CI never runs them:
+# Deno's directory discovery picks those files up, and `deno test` has no
+# --exclude for test files, so the step enumerates the hermetic test files
+# instead of passing the two directories.
 
 name: CI
 
@@ -324,6 +330,53 @@ jobs:
           fn="supabase/functions"
           deno check --node-modules-dir=none "${fn}/generate-image/index.ts" "${fn}/ai-image-worker/index.ts" "${fn}/ai-generation-status/index.ts" "${fn}/generate-video/index.ts"
           deno test --allow-env --allow-read --allow-net=127.0.0.1 --node-modules-dir=none "${fn}/generate-image/" "${fn}/ai-image-worker/" "${fn}/ai-generation-status/" "${fn}/_shared/vercelGateway.test.ts"
+
+      # The AI agent suites ship live suites (files ending in .live.test.ts) that
+      # call real providers. Deno's directory discovery runs those too, and
+      # `deno test` has no --exclude for test files, so this step enumerates the
+      # hermetic test files instead of passing the two directories.
+      #
+      # The suites are typechecked, not just run: `deno test` checks every test
+      # file and everything it imports, and the step below checks the modules no
+      # test imports -- the entrypoints the platform actually deploys. `--no-check`
+      # used to hide a dozen type errors in exactly these files.
+      - name: Typecheck and test the AI agent reply and adapter suites
+        run: |
+          set -euo pipefail
+          fn="supabase/functions"
+          entrypoints=()
+          for file in "${fn}/ai-agent-reply/index.ts" "${fn}/ai-agent-adapters/index.ts"; do
+            if [ ! -f "${file}" ]; then
+              echo "AI agent entrypoint is required: ${file}"
+              exit 1
+            fi
+            entrypoints+=("${file}")
+          done
+          deno check --node-modules-dir=none "${entrypoints[@]}"
+          tests=()
+          for dir in supabase/functions/ai-agent-reply supabase/functions/ai-agent-adapters; do
+            if [ ! -d "${dir}" ]; then
+              echo "AI agent suite directory is required: ${dir}"
+              exit 1
+            fi
+            while IFS= read -r file; do
+              tests+=("${file}")
+            done < <(find "${dir}" -type f -name '*.test.ts' ! -name '*.live.test.ts' | sort)
+          done
+          tests+=(
+            supabase/functions/_shared/pendingReplies.test.ts
+            supabase/functions/_shared/conversationModeOverride.test.ts
+            scripts/probes/agent-model-dryrun.test.ts
+          )
+          if [ "${#tests[@]}" -eq 0 ]; then
+            echo "No AI agent test file was found. These suites are required."
+            exit 1
+          fi
+          # The network is restricted to loopback: these suites are hermetic, and the
+          # suites that talk to real providers are the .live.test.ts files this step
+          # deliberately leaves out. An accidental outbound call therefore cannot
+          # reach a provider -- and cannot cost anything -- from a test run.
+          deno test --no-config --allow-env --allow-read --allow-write --allow-net=127.0.0.1 --node-modules-dir=none "${tests[@]}"
 
       # The background worker claims jobs and the broadcast sends in chunks; both are pure and
       # need no network and no file system, so the permissions stay at --allow-env.

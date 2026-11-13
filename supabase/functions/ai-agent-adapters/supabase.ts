@@ -100,11 +100,22 @@ function trimValue(value: unknown): unknown {
   return `${value.slice(0, MAX_VALUE_CHARS)}…[truncated]`;
 }
 
+/**
+ * The catalog's product link is copied verbatim: the agent must hand over the
+ * store's own URL, and a shortened one reads as a working link while pointing
+ * nowhere (curemedkw, 2026-11-12). Every other cell is still bounded, and the
+ * envelope's character budget still decides how many rows fit.
+ */
+const VERBATIM_COLUMNS = new Set(["product_url"]);
+
 function trimRows(payload: unknown): unknown {
   const trimRow = (row: unknown): unknown => {
     if (typeof row !== "object" || row === null || Array.isArray(row)) return trimValue(row);
     return Object.fromEntries(
-      Object.entries(row as Record<string, unknown>).map(([key, value]) => [key, trimValue(value)]),
+      Object.entries(row as Record<string, unknown>).map(([key, value]) => [
+        key,
+        VERBATIM_COLUMNS.has(key) ? value : trimValue(value),
+      ]),
     );
   };
   return Array.isArray(payload) ? payload.map(trimRow) : trimRow(payload);
@@ -114,10 +125,10 @@ function tableAllowList(settings: Record<string, unknown>): string[] {
   const raw = settings.table_allow_list;
   if (Array.isArray(raw)) {
     return raw.filter((value): value is string => typeof value === "string")
-      .map((value) => value.trim()).filter(Boolean);
+      .map((value) => value.trim()).filter((value) => value !== "" && value !== "-");
   }
   if (typeof raw === "string") {
-    return raw.split(/[,\n]/).map((value) => value.trim()).filter(Boolean);
+    return raw.split(/[,\n]/).map((value) => value.trim()).filter((value) => value !== "" && value !== "-");
   }
   return [];
 }
@@ -197,15 +208,23 @@ function splitColumns(raw: unknown): string[] {
 }
 
 /**
+ * A wildcard is not a named allow-list.
+ *
+ * "*" means "every column the row has", so the rows must survive a projection
+ * built from it -- a projection that kept only a field literally named "*"
+ * would empty every ordinary row -- and nobody named a column, so nobody
+ * vouched for one: the structural redaction pass still applies.
+ */
+function isWildcardSelection(columns: string[]): boolean {
+  return columns.includes("*");
+}
+
+/**
  * Per-table columns beat the flat list, which beats the model, which beats star.
  *
  * The flat select_columns is one string applied to whichever table the model
  * picked, so allowing two tables with different columns made the second fail
  * with PostgREST 42703. column_map fixes that.
- *
- * It fails CLOSED. A map that will not parse, or that names this table with an
- * empty list, refuses the call instead of falling through to star — otherwise a
- * typo, or deleting the last column from a table, silently returns every column.
  */
 export interface ResolvedColumns {
   select: string;
@@ -217,29 +236,41 @@ export interface ResolvedColumns {
   explicit: boolean;
 }
 
+/**
+ * The operator's per-table column map, parsed once. NULL when there is none.
+ *
+ * It fails CLOSED. A map that will not parse, or that names this table with an
+ * empty list, refuses the call instead of falling through to star — otherwise a
+ * typo, or deleting the last column from a table, silently returns every column.
+ */
+function columnMap(settings: Record<string, unknown>): Record<string, unknown> | null {
+  const raw = settings.column_map;
+  if (typeof raw !== "string" || !raw.trim()) return null;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    throw new SupabaseValidationError(
+      "supabase_column_map_invalid",
+      "This connector's per-table column list is not valid JSON.",
+    );
+  }
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+    throw new SupabaseValidationError(
+      "supabase_column_map_invalid",
+      "This connector's per-table column list is not valid JSON.",
+    );
+  }
+  return parsed as Record<string, unknown>;
+}
+
 export function resolveColumns(
   settings: Record<string, unknown>,
   table: string,
   modelSelect: string | null,
 ): ResolvedColumns {
-  const raw = settings.column_map;
-  if (typeof raw === "string" && raw.trim()) {
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(raw);
-    } catch {
-      throw new SupabaseValidationError(
-        "supabase_column_map_invalid",
-        "This connector's per-table column list is not valid JSON.",
-      );
-    }
-    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
-      throw new SupabaseValidationError(
-        "supabase_column_map_invalid",
-        "This connector's per-table column list is not valid JSON.",
-      );
-    }
-    const map = parsed as Record<string, unknown>;
+  const map = columnMap(settings);
+  if (map) {
     const entry = map[table];
     if (entry !== undefined) {
       // "*" is an explicit "no restriction on this table", so a map can name
@@ -254,7 +285,7 @@ export function resolveColumns(
           `No columns are allowed on "${table}" for this connector.`,
         );
       }
-      return { select: columns.join(","), explicit: true };
+      return { select: columns.join(","), explicit: !isWildcardSelection(columns) };
     }
     // An ACTIVE map that does not name this table is refused, not widened.
     // Deleting or mistyping a table's entry would otherwise take the agent
@@ -268,10 +299,100 @@ export function resolveColumns(
     }
   }
   const flat = splitColumns(settings.select_columns);
-  if (flat.length) return { select: flat.join(","), explicit: true };
+  if (flat.length) return { select: flat.join(","), explicit: !isWildcardSelection(flat) };
   const fromModel = splitColumns(modelSelect);
   if (fromModel.length) return { select: fromModel.join(","), explicit: false };
   return { select: "*", explicit: false };
+}
+
+/**
+ * The column restriction the RPC result carries.
+ *
+ * The search function returns catalog rows, so the operator's restriction
+ * applies to them exactly as it does to a table read (plan Task 5). column_map
+ * is keyed by table, so the catalog table is the table the connector may read;
+ * a connector that has only the function takes the table its map names, and a
+ * map naming several tables cannot say which one the function returns, so it
+ * is refused rather than guessed.
+ *
+ * The same rule applies to the table allow-list: it may name several tables,
+ * and the function returns the rows of ONE of them. The first entry is not the
+ * catalog table by any rule the operator wrote, so a list of several is
+ * refused the same way a map of several is -- a guess filters away the product
+ * fields the agent needs, and the operator is told which table to name.
+ */
+function rpcColumns(invocation: ConnectorInvocation): ResolvedColumns {
+  const settings = invocation.tool.settings;
+  const map = columnMap(settings);
+  const mapTables = map ? Object.keys(map) : [];
+  const allowList = tableAllowList(settings);
+  // Exactly one named table names the catalog table: the per-table map first,
+  // because it is the operator's explicit per-table restriction.
+  const catalogTable = mapTables.length === 1
+    ? mapTables[0]
+    : allowList.length === 1
+    ? allowList[0]
+    : null;
+  if (catalogTable) {
+    // The allow-list and the map must AGREE about the table the function
+    // returns. A map that names a table the allow-list excludes must not grant
+    // it columns: the operator's table-scoped restriction has to hold, so a
+    // map naming an excluded table is refused instead of widening the result
+    // to every column.
+    if (allowList.length > 0 && !allowList.includes(catalogTable)) {
+      throw new SupabaseValidationError(
+        "supabase_resource_refused",
+        `Table "${catalogTable}" is not allowed for this connector. Allowed tables: ${allowList.join(", ")}.`,
+      );
+    }
+    return resolveColumns(settings, catalogTable, null);
+  }
+  if (mapTables.length > 1 || allowList.length > 1) {
+    throw new SupabaseValidationError(
+      "supabase_columns_unmapped",
+      "This connector's per-table column list does not name the catalog table the search function returns.",
+    );
+  }
+  const flat = splitColumns(settings.select_columns);
+  if (flat.length) return { select: flat.join(","), explicit: !isWildcardSelection(flat) };
+  return { select: "*", explicit: false };
+}
+
+/**
+ * The projection PostgREST applies for a table read, applied here to an RPC
+ * result: a column the operator did not allow never leaves the adapter.
+ *
+ * A row that is not a plain object cannot be projected onto a named column
+ * list -- a JSON array or a scalar has no field to keep -- so it is refused
+ * rather than passed through. Passing it through would hand the model whatever
+ * the function returned, outside the operator's projection, and the structural
+ * redaction pass does not run either, because the operator's list IS the
+ * approval. A configuration that allows every column has no projection to
+ * break, so those rows pass.
+ */
+function projectColumns(row: unknown, columns: ResolvedColumns): unknown {
+  if (!columns.explicit) return row;
+  if (typeof row !== "object" || row === null || Array.isArray(row)) {
+    throw new SupabaseValidationError(
+      "supabase_response_invalid",
+      "Supabase returned a row that is not an object, so the connector's column list cannot be applied to it.",
+    );
+  }
+  const allowed = new Set(columns.select.split(",").map((column) => column.trim()));
+  return Object.fromEntries(
+    Object.entries(row as Record<string, unknown>).filter(([key]) => allowed.has(key)),
+  );
+}
+
+/**
+ * Whether a projection left the row with no field at all.
+ *
+ * A row the operator's restriction covers none of is not a match, and saying so
+ * keeps it out of the row count.
+ */
+function isEmptyProjection(projected: unknown): boolean {
+  return typeof projected === "object" && projected !== null && !Array.isArray(projected) &&
+    Object.keys(projected as Record<string, unknown>).length === 0;
 }
 
 function validateResource(table: string, select: string, allowList: string[]): void {
@@ -368,6 +489,18 @@ function buildUrl(invocation: ConnectorInvocation): { url: URL; schema: string; 
   // No limit/offset here: the test-connection probe sets limit=1 itself and
   // the page loop owns paging (spec §5.1).
   return { url, schema, columns };
+}
+
+/**
+ * Order per C7: strip credentials, then trim cells, so a credential longer than
+ * the cell cap cannot survive trimming as an unmatchable prefix. Columns the
+ * operator named skip the key-name redaction; anything else (`select=*`, an RPC
+ * result) still gets it.
+ */
+function vetRow(row: unknown, columnsExplicit: boolean, secrets: ReturnType<typeof credentialSecrets>): unknown {
+  const vetted = columnsExplicit ? row : redactSensitive(row);
+  const stripped = stripCredentialValues(vetted, secrets);
+  return (trimRows([stripped]) as unknown[])[0];
 }
 
 /** PostgREST answers `0-24/4213`, or `*` in place of the range on a count probe. */
@@ -606,9 +739,7 @@ async function readPages(
       // When they did not -- `select=*` -- the row may carry a `password`,
       // `refresh_token` or cookie nobody chose to expose, so the structural
       // key-name pass still applies.
-      const vetted = limits.columnsExplicit ? row : redactSensitive(row);
-      const stripped = stripCredentialValues(vetted, secrets);
-      const trimmed = (trimRows([stripped]) as unknown[])[0];
+      const trimmed = vetRow(row, limits.columnsExplicit, secrets);
       const cost = JSON.stringify(trimmed).length + (collected.length ? 1 : 0);
       if (chars + cost > SUPABASE_CHAR_BUDGET) { budgetHit = true; break; }
       collected.push(trimmed);
@@ -692,6 +823,394 @@ async function readPages(
   };
 }
 
+export const DEFAULT_RPC_RESULTS = 8;
+export const MAX_RPC_RESULTS = 25;
+const BARE_IDENTIFIER = /^[a-z_][a-z0-9_]*$/;
+
+/**
+ * Only the operator names a function, and only as a bare identifier: the
+ * model-supplied `table` stays barred from `rpc/` (validateResource). An entry
+ * that is not a bare name makes the whole list invalid rather than silently
+ * skipping to the next one.
+ */
+function rpcFunction(settings: Record<string, unknown>): string | null {
+  // "-" is the card's cleared-field marker, as for order_by.
+  const names = splitColumns(settings.rpc_allow_list).filter((name) => name !== "-");
+  if (names.length === 0) return null;
+  if (!names.every((name) => BARE_IDENTIFIER.test(name))) {
+    throw new SupabaseValidationError("supabase_configuration_invalid", "Supabase is not fully configured.");
+  }
+  return names[0];
+}
+
+/**
+ * The connector names only a function: no table allow-list, and a function to
+ * search the catalog with. The search path reaches the function instead of the
+ * table, and the connection probe asks the function too (curemedkw, 2026-11-12).
+ */
+function rpcOnlyConnector(settings: Record<string, unknown>): boolean {
+  if (tableAllowList(settings).length > 0) return false;
+  return splitColumns(settings.rpc_allow_list).some((name) => name !== "-");
+}
+
+function rpcParamName(settings: Record<string, unknown>, key: string, fallback: string): string {
+  const raw = settings[key];
+  if (typeof raw !== "string" || !raw.trim() || raw.trim() === "-") return fallback;
+  const name = raw.trim();
+  if (!BARE_IDENTIFIER.test(name)) {
+    throw new SupabaseValidationError("supabase_configuration_invalid", "Supabase is not fully configured.");
+  }
+  return name;
+}
+
+/**
+ * The query parameter names PostgREST reads for itself on a GET.
+ *
+ * The catalog call is a GET, so its arguments ride in the query string beside
+ * the filters PostgREST understands: `?select=`, `?order=`, `?limit=`, `?offset=`
+ * and the logical operators `?or=`, `?and=`, `?not=`. An argument named after one
+ * of those would never reach the function -- PostgREST would take it as a filter
+ * -- so the configuration is refused rather than guessed at.
+ */
+const RESERVED_GET_PARAMS = ["select", "order", "limit", "offset", "and", "or", "not"];
+
+/**
+ * The two argument names the function call carries.
+ *
+ * The body is one object, so two arguments with the same name are one argument:
+ * the query would be dropped and the function would search with the row count
+ * instead. The search is silently wrong, so the configuration is refused.
+ */
+function rpcParamNames(settings: Record<string, unknown>): { queryParam: string; limitParam: string } {
+  const queryParam = rpcParamName(settings, "rpc_query_param", "q");
+  const limitParam = rpcParamName(settings, "rpc_limit_param", "max_results");
+  if (queryParam === limitParam) {
+    throw new SupabaseValidationError("supabase_configuration_invalid", "Supabase is not fully configured.");
+  }
+  if (RESERVED_GET_PARAMS.includes(queryParam) || RESERVED_GET_PARAMS.includes(limitParam)) {
+    throw new SupabaseValidationError(
+      "supabase_configuration_invalid",
+      `Supabase is not fully configured: the catalog function's argument names must not be ${RESERVED_GET_PARAMS.join(", ")}, which PostgREST reads for itself.`,
+    );
+  }
+  return { queryParam, limitParam };
+}
+
+/**
+ * The connection probe's query: one word no catalog holds, so the probe reads
+ * nothing and still proves the project URL, the anon key, the schema and the
+ * function. It is a read, with the same headers the search path uses.
+ */
+const CONNECTION_PROBE_QUERY = "postora-connection-probe";
+
+/**
+ * The probe for a connector that has only the function. The table probe reads
+ * one row of a table; this asks the function for one row instead.
+ *
+ * The probe proves the SEARCH configuration, not only the transport: the column
+ * restriction is resolved here too, so a column map that will not parse, or a
+ * list of tables that does not name the catalog table, fails the probe instead
+ * of failing every search afterwards.
+ */
+async function probeRpc(
+  invocation: ConnectorInvocation,
+  dependencies: AdapterDependencies,
+  fn: string,
+  anonKey: string,
+  deadline: number,
+): Promise<void> {
+  rpcColumns(invocation);
+  const search: RpcSearch = { ...rpcSearchFor(invocation, fn, anonKey), limit: 1 };
+  await getRpc(search, CONNECTION_PROBE_QUERY, dependencies, deadline);
+}
+
+/**
+ * The probe for a connector that may read a table: one row of one allowed table.
+ *
+ * Returns the failure to report, or null when the table answered.
+ *
+ * The deadline is the WHOLE probe's, shared with the function probe, so the
+ * table probe gets only the time the function probe left. safeVendorFetch
+ * restarts its timer per redirect hop, so the hop's own timeout is capped at
+ * the remaining time and the outer race bounds the request AND its body read.
+ */
+async function probeTable(
+  invocation: ConnectorInvocation,
+  dependencies: AdapterDependencies,
+  anonKey: string,
+  deadline: number,
+): Promise<ConnectorFailure | null> {
+  const { url: baseUrl, schema } = buildUrl(invocation);
+  const headers = {
+    Accept: "application/json",
+    apikey: anonKey,
+    Authorization: `Bearer ${anonKey}`,
+    "Accept-Profile": schema,
+  };
+  // The probe stays a single one-row read; paging would test N requests the
+  // operator never configured.
+  const url = new URL(baseUrl.toString());
+  url.searchParams.set("limit", "1");
+  const remaining = deadline - Date.now();
+  if (remaining <= 0) {
+    // Nothing is left for a request: starting one would overrun the caller.
+    throw new SupabaseDeadlineError();
+  }
+  const abort = new AbortController();
+  const response = await withDeadline(
+    safeVendorFetch(
+      url.toString(),
+      { method: "GET", headers, signal: abort.signal },
+      { ...dependencies, timeoutMs: Math.max(0, Math.min(dependencies.timeoutMs, remaining)) },
+    ),
+    remaining,
+    abort,
+  );
+  if (!response.ok) {
+    // A 400 here is almost always a column the model invented in `select`
+    // or `filters`; saying so lets it retry without them. The vendor's own
+    // message is NOT echoed: it names columns of the operator's database.
+    return supabaseFailure(
+      "supabase_http_error",
+      response.status === 400
+        ? "Supabase rejected the query. Retry the same capability with no `select` and no `filters`."
+        : "Supabase rejected the request.",
+      response.status,
+    );
+  }
+  const payload = await withDeadline(readJson(response), deadline - Date.now(), abort);
+  if (isPostgrestErrorBody(payload)) {
+    return supabaseFailure("supabase_postgrest_error", "Supabase returned a PostgREST error.", response.status);
+  }
+  if (!Array.isArray(payload)) {
+    return supabaseFailure("supabase_response_invalid", "Supabase returned an invalid response.", response.status);
+  }
+  return null;
+}
+
+/**
+ * The capabilities this connector can actually run.
+ *
+ * A connector that names only a function has no table to read, so every
+ * capability but the catalog search would fail on its first call. The probe
+ * advertises what the connector can do, not what the adapter could do with a
+ * table it was not given.
+ */
+function usableCapabilities(settings: Record<string, unknown>): Capability[] {
+  return rpcOnlyConnector(settings) ? ["search_products"] : SUPABASE_CAPABILITIES;
+}
+
+/**
+ * The one looser query a search that found nothing is retried with.
+ *
+ * The longest word is the plan's "brand only" form of the customer's words: a
+ * product name searched as one word reaches the row the full phrase did not.
+ * A single word has no shorter form, so there is nothing to loosen it to --
+ * that case is the model's own second search, not this retry.
+ */
+function looserQuery(query: string): string | null {
+  const words = query.split(/\s+/).filter(Boolean);
+  if (words.length < 2) return null;
+  return words.reduce((longest, word) => (word.length > longest.length ? word : longest));
+}
+
+interface RpcSearch {
+  url: string;
+  headers: Record<string, string>;
+  queryParam: string;
+  limitParam: string;
+  limit: number;
+}
+
+/**
+ * The call's URL, with the arguments in the query string.
+ *
+ * The arguments ride in the query string, where PostgREST matches them to the
+ * function's parameter names -- the same names the POST body used.
+ */
+function rpcCallUrl(search: RpcSearch, query: string): string {
+  const url = new URL(search.url);
+  url.searchParams.set(search.queryParam, query);
+  url.searchParams.set(search.limitParam, String(search.limit));
+  return url.toString();
+}
+
+/** The rows the target answered with, or the error its answer carries. */
+function rpcRows(payload: unknown, status: number): unknown[] {
+  if (isPostgrestErrorBody(payload)) {
+    throw new SupabaseValidationError("supabase_postgrest_error", "Supabase returned a PostgREST error.", status);
+  }
+  if (!Array.isArray(payload)) {
+    throw new SupabaseValidationError("supabase_response_invalid", "Supabase returned an invalid response.", status);
+  }
+  return payload;
+}
+
+/**
+ * How the catalog function is called, and why the call cannot write.
+ *
+ * A function runs with the rights of its owner, so an allow-listed function can
+ * write even when the anon role cannot: the connector's read-only promise is
+ * only true if the CALL cannot leave a write behind, whatever the function does.
+ *
+ * The call is a GET. PostgREST gives a GET a READ ONLY transaction for every
+ * volatility class -- VOLATILE, STABLE and IMMUTABLE alike -- so Postgres
+ * refuses a write inside it (SQLSTATE 25006) and nothing is committed. The
+ * boundary is the server's own, not a preference the target may ignore, and it
+ * does not depend on how the project ends its transactions.
+ *
+ * The price is that a function that writes now fails instead of answering.
+ * That is the price of a reader: the connector promised a read, and a write it
+ * cannot make is better than a write it made by accident.
+ */
+async function getRpc(
+  search: RpcSearch,
+  query: string,
+  dependencies: AdapterDependencies,
+  deadline: number,
+): Promise<unknown[]> {
+  const abort = new AbortController();
+  const hopDependencies = {
+    ...dependencies,
+    timeoutMs: Math.max(0, Math.min(dependencies.timeoutMs, deadline - Date.now())),
+  };
+  const response = await withDeadline(
+    safeVendorFetch(
+      rpcCallUrl(search, query),
+      { method: "GET", headers: search.headers, signal: abort.signal },
+      hopDependencies,
+    ),
+    deadline - Date.now(),
+    abort,
+  );
+  if (!response.ok) {
+    // PostgREST maps Postgres' 25006 -- cannot execute in a read-only
+    // transaction -- onto 405. The GET's read-only transaction refused the
+    // write, so nothing was committed: the call failed closed, which is the
+    // promise the connector makes.
+    if (response.status === 405) {
+      throw new SupabaseValidationError(
+        "supabase_search_function_writes",
+        "The search function tried to write. PostgREST calls a function with GET in a read-only transaction, so the write was refused and nothing was committed. Use a search function that only reads.",
+        response.status,
+      );
+    }
+    throw new SupabaseValidationError("supabase_http_error", "Supabase rejected the request.", response.status);
+  }
+  const payload = await withDeadline(readJson(response), deadline - Date.now(), abort);
+  return rpcRows(payload, response.status);
+}
+
+function rpcSearchFor(invocation: ConnectorInvocation, fn: string, anonKey: string): RpcSearch {
+  const settings = invocation.tool.settings;
+  const projectUrl = requiredString(settings, "project_url");
+  const schema = requiredString(settings, "schema");
+  if (!projectUrl || !schema) {
+    throw new SupabaseValidationError("supabase_configuration_invalid", "Supabase is not fully configured.");
+  }
+  const { queryParam, limitParam } = rpcParamNames(settings);
+  return {
+    url: `${projectUrl.replace(/\/+$/, "")}/rest/v1/rpc/${fn}`,
+    headers: {
+      Accept: "application/json",
+      apikey: anonKey,
+      Authorization: `Bearer ${anonKey}`,
+      // A GET has no body, so the schema of the call is the schema of the
+      // answer: Accept-Profile. The content headers have nothing to apply to.
+      "Accept-Profile": schema,
+      // A GET is cacheable by intermediaries, and a catalog row is not.
+      "Cache-Control": "no-store",
+    },
+    queryParam,
+    limitParam,
+    // The operator's row ceiling binds the function too: the search path
+    // reuses max_rows, so a model asking for more rows cannot outrun the
+    // limit the connector card shows.
+    limit: Math.min(
+      clampInteger(invocation.request.parameters.max_results, DEFAULT_RPC_RESULTS, 1, MAX_RPC_RESULTS),
+      resolveMaxRows(settings),
+    ),
+  };
+}
+
+/**
+ * Catalog search through the store's own function, which does the Arabic
+ * normalisation and fuzzy ranking an exact-match table filter cannot
+ * (2026-11-12). When several words find nothing, the tool retries once with
+ * the longest word itself: the model had already ignored a prompt rule asking
+ * it to loosen the query.
+ */
+async function searchViaRpc(
+  invocation: ConnectorInvocation,
+  dependencies: AdapterDependencies,
+  fn: string,
+  anonKey: string,
+): Promise<SupabaseReadEnvelope & { retried_with?: string }> {
+  const raw = invocation.request.parameters.query;
+  const query = typeof raw === "string" ? raw.trim() : "";
+  if (!query) {
+    // Never call with an empty query: on 2026-11-10 an empty-filter call
+    // answered the customer with an arbitrary slice of the catalog.
+    throw new SupabaseValidationError(
+      "supabase_query_required",
+      "Pass `query`: the product words from the customer's message, in their language.",
+    );
+  }
+  // The column restriction is resolved BEFORE the call: a configuration that cannot
+  // work is refused without spending a request on the vendor.
+  const columns = rpcColumns(invocation);
+  const secrets = credentialSecrets(invocation.credentials);
+  const search = rpcSearchFor(invocation, fn, anonKey);
+  const callerBudget = dependencies.callBudgetMs ?? SUPABASE_CALL_TIMEOUT_MS;
+  const deadline = Date.now() + Math.min(SUPABASE_LOOP_BUDGET_MS, callerBudget - SUPABASE_MIN_HOP_MS);
+
+  let rows = await getRpc(search, query, dependencies, deadline);
+  let retriedWith: string | undefined;
+  const looser = rows.length === 0 ? looserQuery(query) : null;
+  if (looser && deadline - Date.now() >= SUPABASE_MIN_HOP_MS) {
+    rows = await getRpc(search, looser, dependencies, deadline);
+    retriedWith = looser;
+  }
+
+  const collected: unknown[] = [];
+  let chars = 2; // the enclosing [] of the serialized array
+  let truncated: SupabaseReadEnvelope["truncated_by"] = null;
+  let projectedAway = 0;
+  for (const row of rows.slice(0, search.limit)) {
+    const projected = projectColumns(row, columns);
+    // A row the restriction projects to nothing is not a match: it carries no field
+    // the agent may show. Counting it would tell the agent the catalog has rows it
+    // cannot read, so it is dropped before it reaches the count.
+    if (columns.explicit && isEmptyProjection(projected)) {
+      projectedAway++;
+      continue;
+    }
+    const vetted = vetRow(projected, columns.explicit, secrets);
+    const cost = JSON.stringify(vetted).length + (collected.length ? 1 : 0);
+    if (chars + cost > SUPABASE_CHAR_BUDGET) { truncated = "char_budget"; break; }
+    collected.push(vetted);
+    chars += cost;
+  }
+  if (projectedAway > 0 && collected.length === 0) {
+    // Every row the function returned was projected away: the operator's restriction
+    // names none of the columns it returns. Saying so is better than an empty result
+    // that reads as "the catalog has nothing".
+    throw new SupabaseValidationError(
+      "supabase_columns_unmapped",
+      "This connector's per-table column list does not cover any column the search function returns.",
+    );
+  }
+  return {
+    rows: collected,
+    row_count: collected.length,
+    total: null,
+    has_more: false,
+    next_offset: null,
+    truncated_by: truncated,
+    ...(retriedWith === undefined ? {} : { retried_with: retriedWith }),
+  };
+}
+
 async function callSupabase(
   invocation: ConnectorInvocation,
   dependencies: AdapterDependencies,
@@ -702,39 +1221,42 @@ async function callSupabase(
 
   try {
     validateSupabaseAnonKey(anonKey);
-    const { url: baseUrl, schema, columns } = buildUrl(invocation);
-    const headers = {
-      Accept: "application/json",
-      apikey: anonKey,
-      Authorization: `Bearer ${anonKey}`,
-      "Accept-Profile": schema,
-    };
+    const settings = invocation.tool.settings;
+    // The execution path is resolved BEFORE the table settings are read. A
+    // catalog connector names a function, not a table, and must not be refused
+    // for having no table allow-list (curemedkw, 2026-11-12).
+    const fn = capability === "search_products" ? rpcFunction(settings) : null;
 
-    // The probe stays a single one-row read; paging would test N requests the
-    // operator never configured.
     if (invocation.request.action === "test_connection") {
-      const url = new URL(baseUrl.toString());
-      url.searchParams.set("limit", "1");
-      const response = await safeVendorFetch(url.toString(), { method: "GET", headers }, dependencies);
-      if (!response.ok) {
-        // A 400 here is almost always a column the model invented in `select`
-        // or `filters`; saying so lets it retry without them. The vendor's own
-        // message is NOT echoed: it names columns of the operator's database.
-        return supabaseFailure(
-          "supabase_http_error",
-          response.status === 400
-            ? "Supabase rejected the query. Retry the same capability with no `select` and no `filters`."
-            : "Supabase rejected the request.",
-          response.status,
-        );
+      // ONE deadline for the WHOLE probe. The caller's budget covers the whole
+      // adapter call, so the function probe and the table probe share it: the
+      // second probe gets only the time the first left, and a slow or
+      // redirecting endpoint cannot restart the clock.
+      const callerBudget = dependencies.callBudgetMs ?? SUPABASE_CALL_TIMEOUT_MS;
+      const probeDeadline = Date.now() + Math.min(SUPABASE_LOOP_BUDGET_MS, callerBudget - SUPABASE_MIN_HOP_MS);
+      // The probe asks the FUNCTION whenever the connector has one, because the
+      // catalog search uses it: a probe that only reads the table reports success
+      // for a connector whose function is missing, misnamed or unreachable, and
+      // every search afterwards fails.
+      const probeFunction = rpcFunction(settings);
+      if (probeFunction) {
+        await probeRpc(invocation, dependencies, probeFunction, anonKey, probeDeadline);
+        // A connector that may also read a table needs the table probe too: the
+        // capabilities that read rows go there.
+        if (tableAllowList(settings).length > 0) {
+          const tableFailure = await probeTable(invocation, dependencies, anonKey, probeDeadline);
+          if (tableFailure) return tableFailure;
+        }
+        return {
+          ok: true,
+          vendor: "supabase",
+          action: "test_connection",
+          capabilities: usableCapabilities(settings),
+          read_only: true,
+        };
       }
-      const payload = await readJson(response);
-      if (isPostgrestErrorBody(payload)) {
-        return supabaseFailure("supabase_postgrest_error", "Supabase returned a PostgREST error.", response.status);
-      }
-      if (!Array.isArray(payload)) {
-        return supabaseFailure("supabase_response_invalid", "Supabase returned an invalid response.", response.status);
-      }
+      const tableFailure = await probeTable(invocation, dependencies, anonKey, probeDeadline);
+      if (tableFailure) return tableFailure;
       return {
         ok: true,
         vendor: "supabase",
@@ -749,6 +1271,29 @@ async function callSupabase(
     if (!capability) {
       return supabaseFailure("capability_unsupported", "The requested connector capability is not supported.");
     }
+
+    if (fn) {
+      // The function's result is capped at the operator's row ceiling, so a count
+      // taken from it would be that cap, not the number of matches: the model would
+      // tell the customer a false total. Count mode is refused rather than answered
+      // with a number that is wrong.
+      if (invocation.request.parameters.mode === "count") {
+        throw new SupabaseValidationError(
+          "supabase_count_unsupported",
+          "This connector searches through a function, which cannot count the matches. Ask for the rows instead.",
+        );
+      }
+      const data = await searchViaRpc(invocation, dependencies, fn, anonKey);
+      return { ok: true, vendor: "supabase", action: "execute", capability, data };
+    }
+
+    const { url: baseUrl, schema, columns } = buildUrl(invocation);
+    const headers = {
+      Accept: "application/json",
+      apikey: anonKey,
+      Authorization: `Bearer ${anonKey}`,
+      "Accept-Profile": schema,
+    };
 
     // Count mode is routed first (C3): it needs no ordering and reads no rows.
     if (invocation.request.parameters.mode === "count") {

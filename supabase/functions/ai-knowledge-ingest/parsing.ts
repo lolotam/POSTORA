@@ -82,24 +82,52 @@ export async function extractImageText(bytes: Uint8Array, fileName: string): Pro
   return text;
 }
 
+/**
+ * CSV bytes as text, or a clear refusal.
+ *
+ * A lenient decoder replaces every byte it cannot read with U+FFFD, so a file that is
+ * not UTF-8 is stored as a product sheet full of replacement characters: the
+ * knowledge base then answers questions about a catalog nobody can read, and the
+ * damage is invisible until a customer is quoted a price from it. A fatal decoder
+ * refuses the file instead, and the operator is told what to do about it.
+ */
+function decodeCsvBytes(bytes: ArrayBuffer): string {
+  try {
+    return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+  } catch {
+    throw new Error("This CSV is not valid UTF-8. Export it as UTF-8 and upload it again.");
+  }
+}
+
+/**
+ * A CSV or Excel source as chunks. CSV bytes are decoded as UTF-8 first: SheetJS
+ * reads raw CSV bytes as Latin-1, which stored curemedkw's Arabic products as
+ * "Ø§Ù„Ø¹..." (2026-11-12). TextDecoder drops a leading BOM.
+ */
+export function tabularChunks(bytes: ArrayBuffer, sourceType: "csv" | "excel"): KnowledgeChunk[] {
+  const workbook = sourceType === "csv"
+    ? XLSX.read(decodeCsvBytes(bytes), { type: "string" })
+    : XLSX.read(bytes, { type: "array" });
+  const rows: Array<{ text: string; sheet: string; row: number }> = [];
+  for (const sheet of workbook.SheetNames) {
+    XLSX.utils
+      .sheet_to_json<Record<string, unknown>>(workbook.Sheets[sheet], {
+        defval: "",
+      })
+      .forEach((row, index) =>
+        rows.push({ text: rowToText(row), sheet, row: index + 2 }),
+      );
+  }
+  return chunkRows(rows);
+}
+
 export async function parseSourceFile(
   sourceType: string,
   fileName: string,
   file: Blob,
 ): Promise<KnowledgeChunk[]> {
   if (sourceType === "csv" || sourceType === "excel") {
-    const workbook = XLSX.read(await file.arrayBuffer(), { type: "array" });
-    const rows: Array<{ text: string; sheet: string; row: number }> = [];
-    for (const sheet of workbook.SheetNames) {
-      XLSX.utils
-        .sheet_to_json<Record<string, unknown>>(workbook.Sheets[sheet], {
-          defval: "",
-        })
-        .forEach((row, index) =>
-          rows.push({ text: rowToText(row), sheet, row: index + 2 }),
-        );
-    }
-    return chunkRows(rows);
+    return tabularChunks(await file.arrayBuffer(), sourceType);
   }
   if (sourceType === "pdf") {
     const pdf = await getDocumentProxy(new Uint8Array(await file.arrayBuffer()));

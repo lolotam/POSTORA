@@ -185,6 +185,17 @@ SUITES=(
   instagram_owner_enqueue_reconnect_required.sql
   background_jobs.sql
   instagram_story_jobs.sql
+  agent_handoff_messages.sql
+  agent_handoff_claim_lease.sql
+  agent_handoff_claim_atomicity.sql
+  agent_handoff_tenant_binding.sql
+  agent_handoff_legacy_claim_lease.sql
+  agent_conversation_mode_expiry_marker.sql
+  agent_handoff_ack_terminal_claim.sql
+  agent_handoff_legacy_claim_ownership.sql
+  agent_handoff_conversation_binding.sql
+  agent_handoff_tenant_less_revoke.sql
+  agent_handoff_retirement.sql
   ai_provider_oauth.sql
   ai_oauth_openrouter.sql
 )

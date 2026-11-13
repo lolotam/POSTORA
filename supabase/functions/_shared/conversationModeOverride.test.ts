@@ -1,6 +1,6 @@
 // deno-lint-ignore-file no-import-prefix
 // supabase/functions/_shared/conversationModeOverride.test.ts
-import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
+import { assertEquals, assertRejects } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import {
   activeOverrideMode,
   escalationOverride,
@@ -41,13 +41,14 @@ Deno.test("escalation timeout defaults to 240 minutes and is clamped to the allo
   assertEquals(escalationOverride("ai_first", false, -5, NOW).expires_at, "2026-09-13T10:01:00.000Z");
 });
 
-// A fake PostgREST client for the reader: one stored row (or none), a delete
-// that honours its own filters, and a hook that lets a test change the row
-// between the reader's first read and its delete -- the operator race.
+// A fake PostgREST client for the reader: one stored row (or none), the
+// expire_conversation_mode RPC honouring its own arguments, and a hook that
+// lets a test change the row between the reader's first read and the expiry
+// -- the operator race.
 type StoredRow = Record<string, unknown> | null;
 function readerClient(
   initial: StoredRow,
-  options: { afterFirstRead?: () => StoredRow; failDelete?: boolean } = {},
+  options: { afterFirstRead?: () => StoredRow; failExpire?: boolean; expireRefused?: boolean } = {},
 ) {
   const calls: string[] = [];
   let current = initial;
@@ -57,10 +58,8 @@ function readerClient(
   const admin = {
     from(_table: string) {
       const filters: [string, unknown][] = [];
-      let op = "select";
       const query = {
         select: () => query,
-        delete: () => { op = "delete"; return query; },
         eq: (key: string, value: unknown) => { filters.push([key, value]); return query; },
         maybeSingle: () => {
           calls.push("read");
@@ -69,16 +68,18 @@ function readerClient(
           if (reads === 1 && options.afterFirstRead) current = options.afterFirstRead();
           return Promise.resolve({ data, error: null });
         },
-        then: (resolve: (value: unknown) => unknown) => {
-          calls.push(op);
-          if (options.failDelete) return Promise.resolve({ data: null, error: { message: "timeout" } }).then(resolve);
-          const hit = matches(filters);
-          const deleted = hit ? [{ id: current!.id }] : [];
-          if (hit) current = null;
-          return Promise.resolve({ data: deleted, error: null }).then(resolve);
-        },
       };
       return query;
+    },
+    rpc(name: string, args: Record<string, unknown>) {
+      calls.push(name);
+      if (options.failExpire) return Promise.resolve({ data: null, error: { message: "timeout" } });
+      // The database's clock does not consider the row expired: the expiry matches
+      // nothing, so the row is still there and no marker was stamped.
+      if (options.expireRefused) return Promise.resolve({ data: false, error: null });
+      const hit = matches([["id", args.p_mode_id], ["user_id", args.p_user_id], ["expires_at", args.p_expires_at]]);
+      if (hit) current = null;
+      return Promise.resolve({ data: hit, error: null });
     },
   };
   return { admin, calls, stored: () => current };
@@ -87,41 +88,107 @@ function readerClient(
 const SCOPE = { userId: "u1", platform: "whatsapp", conversationId: "c1" };
 const ROW = { id: "m1", user_id: "u1", platform: "whatsapp", conversation_id: "c1" };
 
-Deno.test("reader: an active override is returned and nothing is deleted", async () => {
+Deno.test("reader: an active override is returned and nothing is expired", async () => {
   const c = readerClient({ ...ROW, mode: "human_first", expires_at: "2026-09-13T11:00:00Z" });
   assertEquals(await resolveConversationOverride(c.admin, SCOPE, NOW), "human_first");
   assertEquals(c.calls, ["read"]);
 });
 
-Deno.test("reader: an expired override reads as absent and the exact row is deleted", async () => {
+Deno.test("reader: an expired override reads as absent and the exact row is expired", async () => {
   const c = readerClient({ ...ROW, mode: "human_first", expires_at: "2026-09-13T09:00:00Z" });
   assertEquals(await resolveConversationOverride(c.admin, SCOPE, NOW), null);
-  assertEquals(c.calls, ["read", "delete"]);
+  assertEquals(c.calls, ["read", "expire_conversation_mode"]);
   assertEquals(c.stored(), null);
 });
 
-Deno.test("reader: a manual row written after the read is not deleted and wins", async () => {
-  // Between the read and the delete an operator sets a manual human_first
-  // (expires_at null). The delete filters on the observed expires_at, so it
+Deno.test("reader: a manual row written after the read is not expired and wins", async () => {
+  // Between the read and the expiry an operator sets a manual human_first
+  // (expires_at null). The expiry matches on the observed expires_at, so it
   // removes nothing; the re-read then honours the operator's row.
   const c = readerClient(
     { ...ROW, mode: "human_first", expires_at: "2026-09-13T09:00:00Z" },
     { afterFirstRead: () => ({ ...ROW, mode: "human_first", expires_at: null }) },
   );
   assertEquals(await resolveConversationOverride(c.admin, SCOPE, NOW), "human_first");
-  assertEquals(c.calls, ["read", "delete", "read"]);
+  assertEquals(c.calls, ["read", "expire_conversation_mode", "read"]);
   assertEquals(c.stored()?.expires_at, null);
 });
 
-Deno.test("reader: a failed delete is logged, not fatal, and the expired row is ignored", async () => {
-  const c = readerClient({ ...ROW, mode: "human_first", expires_at: "2026-09-13T09:00:00Z" }, { failDelete: true });
+Deno.test("reader: a failed expiry fails closed while the expired row is still there", async () => {
+  // The expiry RPC is the only thing that leaves the thread marked. When it fails, the
+  // marker is not durable, and a turn that goes on as if the window had ended cleanly
+  // loses the apology the customer is owed. The turn fails and is retried instead.
+  const c = readerClient({ ...ROW, mode: "human_first", expires_at: "2026-09-13T09:00:00Z" }, { failExpire: true });
   const originalError = console.error;
   const logged: unknown[][] = [];
   console.error = (...args: unknown[]) => { logged.push(args); };
+  try {
+    await assertRejects(() => resolveConversationOverride(c.admin, SCOPE, NOW), Error, "marker is not durable");
+  } finally {
+    console.error = originalError;
+  }
+  assertEquals(logged.length, 1);
+  // The row is read again to tell the failures apart.
+  assertEquals(c.calls, ["read", "expire_conversation_mode", "read"]);
+});
+
+Deno.test("reader: a failed expiry still honours a takeover installed meanwhile", async () => {
+  // The expiry failed, but an operator installed a fresh human_first row after the first
+  // read. That takeover is real, so the assistant stays silent: reading it as "no
+  // override" would let it answer a chat a human has taken.
+  const c = readerClient(
+    { ...ROW, mode: "human_first", expires_at: "2026-09-13T09:00:00Z" },
+    { failExpire: true, afterFirstRead: () => ({ ...ROW, mode: "human_first", expires_at: null }) },
+  );
+  const originalError = console.error;
+  console.error = () => {};
+  try {
+    assertEquals(await resolveConversationOverride(c.admin, SCOPE, NOW), "human_first");
+  } finally {
+    console.error = originalError;
+  }
+  assertEquals(c.calls, ["read", "expire_conversation_mode", "read"]);
+});
+
+Deno.test("reader: a failed expiry that did land reads as no override", async () => {
+  // The RPC reported an error, but the write had already happened: the row is gone, so
+  // the window really is over and the turn may continue.
+  const c = readerClient(
+    { ...ROW, mode: "human_first", expires_at: "2026-09-13T09:00:00Z" },
+    { failExpire: true, afterFirstRead: () => null },
+  );
+  const originalError = console.error;
+  console.error = () => {};
   try {
     assertEquals(await resolveConversationOverride(c.admin, SCOPE, NOW), null);
   } finally {
     console.error = originalError;
   }
-  assertEquals(logged.length, 1);
+});
+
+Deno.test("reader: an expiry the database refused is not read as no override", async () => {
+  // The edge clock says the window is over, the database's clock does not: the expiry
+  // matched nothing, so the row is still there and no marker was stamped. Reading that
+  // as "no override" lets the assistant answer a customer nobody answered, and the
+  // apology the marker stands for is lost. The state the database holds decides: the
+  // row is still expired, so the turn fails and is retried once the expiry lands.
+  const c = readerClient(
+    { ...ROW, mode: "human_first", expires_at: "2026-09-13T09:00:00Z" },
+    { expireRefused: true },
+  );
+  const originalError = console.error;
+  console.error = () => {};
+  try {
+    await assertRejects(
+      () => resolveConversationOverride(c.admin, SCOPE, NOW),
+      Error,
+      "marker is not durable",
+    );
+  } finally {
+    console.error = originalError;
+  }
+  // The row is read again: what the database holds is what decides.
+  assertEquals(c.calls, ["read", "expire_conversation_mode", "read"]);
+  // And it is still there: the database never expired it.
+  assertEquals(c.stored()?.expires_at, "2026-09-13T09:00:00Z");
 });
