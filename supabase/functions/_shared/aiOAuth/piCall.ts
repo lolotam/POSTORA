@@ -137,6 +137,7 @@ export async function callPiOAuth(
   openAiBody: Record<string, unknown>,
   apiKey: string,
   timeoutMs: number,
+  outerSignal?: AbortSignal,
 ): Promise<Response> {
   // Tool calling is out of scope for subscription tiers (spec §4): refuse
   // without a network call so the chain falls over to the next tier.
@@ -152,7 +153,10 @@ export async function callPiOAuth(
   try {
     const assistant = await deps.complete(model, toPiContext(openAiBody), {
       apiKey,
-      signal: AbortSignal.timeout(timeoutMs),
+      // The caller's budget and the request's own timeout: the tighter one wins.
+      signal: outerSignal
+        ? AbortSignal.any([outerSignal, AbortSignal.timeout(timeoutMs)])
+        : AbortSignal.timeout(timeoutMs),
       temperature: typeof openAiBody.temperature === "number" ? openAiBody.temperature : undefined,
       maxTokens,
     });

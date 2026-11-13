@@ -16,6 +16,14 @@
 -- The notification is sent in two phases: claim the row, send, then mark it notified. A
 -- run that dies between the send and the mark re-claims the row after 10 minutes instead of
 -- losing the alert or sending it twice.
+--
+-- WHY alert_pending
+-- previous_status answers "did it just break?", but it is overwritten by the next write:
+-- re-checking a provider that is still broken turns previous_status into 'failed', and the
+-- pending alert is lost before anyone was told. alert_pending is a durable flag instead.
+-- It is set on the transition into a broken state and stays set until the alert is sent,
+-- so a provider that breaks, is re-checked while still broken, and then breaks again
+-- after a recovery raises an alert every time it breaks -- and exactly once per break.
 
 CREATE TABLE IF NOT EXISTS public.ai_provider_health (
   provider_code       text NOT NULL REFERENCES public.ai_providers(provider_code) ON DELETE CASCADE,
@@ -32,6 +40,7 @@ CREATE TABLE IF NOT EXISTS public.ai_provider_health (
   notified_at        timestamptz,
   claim_token        uuid,
   claimed_at         timestamptz,
+  alert_pending      boolean NOT NULL DEFAULT false,
   PRIMARY KEY (provider_code, auth_method)
 );
 
@@ -39,14 +48,18 @@ CREATE INDEX IF NOT EXISTS ai_provider_health_checked_at_idx
   ON public.ai_provider_health (checked_at DESC);
 
 ALTER TABLE public.ai_provider_health ENABLE ROW LEVEL SECURITY;
-REVOKE ALL ON TABLE public.ai_provider_health FROM PUBLIC, anon;
+REVOKE ALL ON TABLE public.ai_provider_health FROM PUBLIC, anon, authenticated;
 
--- Admin only: a normal authenticated user reads no row and writes none. The
--- grant is explicit so the policy, not a missing privilege, is what hides the
--- rows from a non-admin.
+-- Admin only, and read only: a normal authenticated user reads no row, and an
+-- authenticated admin cannot write one either. The health rows are written by the
+-- edge function through the service role, never from the browser -- an admin who
+-- could UPDATE notified_at could silence an alert by hand, so the privilege is
+-- not granted. The grant is explicit so the policy, not a missing privilege, is
+-- what hides the rows from a non-admin.
 DROP POLICY IF EXISTS ai_provider_health_admin_all ON public.ai_provider_health;
-CREATE POLICY ai_provider_health_admin_all ON public.ai_provider_health
-  FOR ALL TO authenticated USING (public.has_role(auth.uid(), 'admin'));
+DROP POLICY IF EXISTS ai_provider_health_admin_select ON public.ai_provider_health;
+CREATE POLICY ai_provider_health_admin_select ON public.ai_provider_health
+  FOR SELECT TO authenticated USING (public.has_role(auth.uid(), 'admin'));
 
 GRANT SELECT ON TABLE public.ai_provider_health TO authenticated;
 GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.ai_provider_health TO service_role;
@@ -79,6 +92,9 @@ SET search_path = public
 AS $$
 DECLARE
   v_old text;
+  v_old_pending boolean := false;
+  v_pending boolean := false;
+  v_changed boolean;
 BEGIN
   IF coalesce(p_provider_code, '') = '' OR coalesce(p_auth_method, '') = '' THEN
     RAISE EXCEPTION 'record_ai_provider_health: provider_code and auth_method are required'
@@ -89,19 +105,40 @@ BEGIN
       USING ERRCODE = 'invalid_parameter_value';
   END IF;
 
-  SELECT status INTO v_old FROM public.ai_provider_health
+  SELECT status, alert_pending INTO v_old, v_old_pending FROM public.ai_provider_health
     WHERE provider_code = p_provider_code AND auth_method = p_auth_method
     FOR UPDATE;
 
+  -- A status change is a new state, so the notification state of the old one is
+  -- dropped and the row becomes claimable again. An unchanged status keeps it:
+  -- a provider that is still broken raises no second alert, and an alert that was
+  -- never sent survives a re-check.
+  v_changed := (v_old IS DISTINCT FROM p_status);
+  IF v_changed THEN
+    IF p_status IN ('failed','needs_relogin')
+       AND (v_old = 'connected'
+            OR (v_old IN ('failed','needs_relogin') AND coalesce(v_old_pending, false))) THEN
+      -- It just broke, or it is still broken with an alert nobody sent yet.
+      v_pending := true;
+    ELSE
+      -- It recovered, or it was never connected: there is nothing to alert about.
+      v_pending := false;
+    END IF;
+  ELSE
+    v_pending := coalesce(v_old_pending, false);
+  END IF;
+
   INSERT INTO public.ai_provider_health AS h (
     provider_code, auth_method, status, previous_status, reason,
-    models_added, models_updated, models_deactivated, latency_ms, run_id, checked_at
+    models_added, models_updated, models_deactivated, latency_ms, run_id, checked_at,
+    alert_pending
   )
   VALUES (
     p_provider_code, p_auth_method, p_status, v_old,
     left(coalesce(p_reason, ''), 500),
     coalesce(p_models_added, 0), coalesce(p_models_updated, 0), coalesce(p_models_deactivated, 0),
-    p_latency_ms, p_run_id, now()
+    p_latency_ms, p_run_id, now(),
+    v_pending
   )
   ON CONFLICT (provider_code, auth_method) DO UPDATE SET
     status = EXCLUDED.status,
@@ -112,14 +149,20 @@ BEGIN
     models_deactivated = EXCLUDED.models_deactivated,
     latency_ms = EXCLUDED.latency_ms,
     run_id = EXCLUDED.run_id,
-    checked_at = EXCLUDED.checked_at;
+    checked_at = EXCLUDED.checked_at,
+    alert_pending = EXCLUDED.alert_pending,
+    notified_at = CASE WHEN v_changed THEN NULL ELSE h.notified_at END,
+    claim_token = CASE WHEN v_changed THEN NULL ELSE h.claim_token END,
+    claimed_at = CASE WHEN v_changed THEN NULL ELSE h.claimed_at END;
 END;
 $$;
 
 REVOKE ALL ON FUNCTION public.record_ai_provider_health(text, text, text, text, int, int, int, int, uuid) FROM PUBLIC, anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.record_ai_provider_health(text, text, text, text, int, int, int, int, uuid) TO service_role;
 
--- claim_ai_provider_health_notifications returns the newly-degraded rows and claims them.
+-- claim_ai_provider_health_notifications returns the rows whose alert is still
+-- pending and claims them. The pending flag, not previous_status, decides: a
+-- provider that is re-checked while still broken keeps its pending alert.
 -- A claim older than 10 minutes with no notified_at is re-claimable, so a run that died
 -- mid-notification does not lose the alert.
 CREATE OR REPLACE FUNCTION public.claim_ai_provider_health_notifications(p_claim_token uuid)
@@ -139,7 +182,7 @@ BEGIN
   RETURN QUERY
   UPDATE public.ai_provider_health h
      SET claim_token = p_claim_token, claimed_at = now()
-   WHERE h.previous_status = 'connected'
+   WHERE h.alert_pending
      AND h.status IN ('failed','needs_relogin')
      AND h.notified_at IS NULL
      AND (h.claim_token IS NULL OR h.claimed_at IS NULL OR h.claimed_at < now() - interval '10 minutes')
@@ -150,21 +193,37 @@ $$;
 REVOKE ALL ON FUNCTION public.claim_ai_provider_health_notifications(uuid) FROM PUBLIC, anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.claim_ai_provider_health_notifications(uuid) TO service_role;
 
-CREATE OR REPLACE FUNCTION public.mark_ai_provider_health_notified(p_claim_token uuid)
+-- One row per call: the alert is sent provider by provider, and a send that
+-- failed for one of them must not close the alert of the others. The single
+-- argument form closed the whole claim and is gone.
+DROP FUNCTION IF EXISTS public.mark_ai_provider_health_notified(uuid);
+
+CREATE OR REPLACE FUNCTION public.mark_ai_provider_health_notified(
+  p_claim_token uuid,
+  p_provider_code text,
+  p_auth_method text
+)
 RETURNS void
 LANGUAGE plpgsql
 SECURITY DEFINER
 SET search_path = public
 AS $$
 BEGIN
+  IF p_claim_token IS NULL OR coalesce(p_provider_code, '') = '' OR coalesce(p_auth_method, '') = '' THEN
+    RAISE EXCEPTION 'mark_ai_provider_health_notified: claim token, provider_code and auth_method are required'
+      USING ERRCODE = 'invalid_parameter_value';
+  END IF;
+
   UPDATE public.ai_provider_health
-     SET notified_at = now(), claim_token = NULL, claimed_at = NULL
-   WHERE claim_token = p_claim_token;
+     SET notified_at = now(), claim_token = NULL, claimed_at = NULL, alert_pending = false
+   WHERE claim_token = p_claim_token
+     AND provider_code = p_provider_code
+     AND auth_method = p_auth_method;
 END;
 $$;
 
-REVOKE ALL ON FUNCTION public.mark_ai_provider_health_notified(uuid) FROM PUBLIC, anon, authenticated;
-GRANT EXECUTE ON FUNCTION public.mark_ai_provider_health_notified(uuid) TO service_role;
+REVOKE ALL ON FUNCTION public.mark_ai_provider_health_notified(uuid, text, text) FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.mark_ai_provider_health_notified(uuid, text, text) TO service_role;
 
 -- Once a day: test every configured AI provider and sync the catalogue of the ones that
 -- pass. The run is split over four entries seven minutes apart because a single edge

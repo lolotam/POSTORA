@@ -3,10 +3,32 @@ import { assert, assertEquals } from "https://deno.land/std@0.208.0/assert/mod.t
 import { runHealthChunk, type HealthRunPorts } from "./run.ts";
 import { AiOAuthError } from "../_shared/aiOAuth/errors.ts";
 import { buildAlertTitle } from "../_shared/aiProviderAlert.ts";
+import type { DegradedProvider, HealthResult } from "../_shared/aiProviderHealth.ts";
+
+/** The rows the database would claim: a provider that was connected and is now failing. */
+function transitionClaim(
+  transitions: Array<{ result: HealthResult; previous_status: string | null }>,
+): DegradedProvider[] {
+  return transitions
+    .filter((t) => t.previous_status === "connected" && t.result.status === "failed")
+    .map((t) => ({
+      provider_code: t.result.provider_code,
+      display_name: t.result.display_name,
+      auth_method: t.result.auth_method,
+      status: "failed" as const,
+      reason: t.result.reason,
+    }));
+}
 
 function fakePorts(overrides: Partial<HealthRunPorts> = {}) {
-  const recorded: Array<{ provider_code: string; auth_method: string; status: string }> = [];
+  const recorded: HealthResult[] = [];
   const synced: string[] = [];
+  const transitions: Array<{ result: HealthResult; previous_status: string | null }> = [];
+  // The rows the last run left behind: both providers answered then.
+  const previous = new Map<string, string>([
+    ["openai:api_key", "connected"],
+    ["claude:oauth", "connected"],
+  ]);
   const ports: HealthRunPorts = {
     listApiKeyProviders: async () => [
       { provider_code: "openai", name: "OpenAI" },
@@ -27,15 +49,19 @@ function fakePorts(overrides: Partial<HealthRunPorts> = {}) {
       return { added: 0, updated: 0, deactivated: 0 };
     },
     recordResult: async (result) => {
+      const key = `${result.provider_code}:${result.auth_method}`;
+      transitions.push({ result, previous_status: previous.get(key) ?? null });
+      previous.set(key, result.status);
       recorded.push(result);
     },
-    claimAlerts: async () => [],
+    // The claim sees what the run recorded, the way the database does.
+    claimAlerts: async () => transitionClaim(transitions),
     sendAlert: async () => {},
-    markAlertsNotified: async () => {},
+    markAlertNotified: async () => {},
     now: () => new Date("2026-11-13T03:05:00Z"),
     ...overrides,
   };
-  return { ports, recorded, synced };
+  return { ports, recorded, synced, transitions };
 }
 
 Deno.test("a provider without a key is not a target", async () => {
@@ -139,51 +165,128 @@ Deno.test("the results keep the target order whatever order the probes finish in
   assertEquals(out.results.map((r) => r.provider_code), ["fast", "slow"]);
 });
 
+// --- the time budget ---
+
+Deno.test("a target the budget never reached is reported as skipped and the chunk is not done", async () => {
+  const { ports, recorded } = fakePorts();
+  // The deadline is already over when the chunk starts.
+  const out = await runHealthChunk(ports, { runId: "run-1", chunk: 1, deadlineMs: 0 });
+  assertEquals(out.results.length, 0);
+  assertEquals(recorded.length, 0);
+  assertEquals(out.skipped.map((s) => s.provider_code), ["openai", "claude"]);
+  assert(out.skipped.every((s) => s.reason.length > 0));
+  assertEquals(out.done, false);
+});
+
+Deno.test("a chunk that covered everything is done", async () => {
+  const { ports } = fakePorts();
+  const out = await runHealthChunk(ports, { runId: "run-1", chunk: 1 });
+  assertEquals(out.done, true);
+  assertEquals(out.skipped.length, 0);
+});
+
+Deno.test("every phase of a target shares one signal", async () => {
+  const signals: AbortSignal[] = [];
+  const { ports } = fakePorts({
+    probeApiKey: async (_target, _key, signal) => { signals.push(signal); },
+    syncApiKeyCatalogue: async (_code, signal) => {
+      signals.push(signal);
+      return { added: 0, updated: 0, deactivated: 0 };
+    },
+  });
+  await runHealthChunk(ports, { runId: "run-1", chunk: 1 });
+  // The probe and the sync of the same target share one budget.
+  assertEquals(signals.length, 2);
+  assert(signals[0] === signals[1]);
+});
+
+// --- the write ---
+
+Deno.test("a failed write does not take the chunk down", async () => {
+  const { ports, recorded } = fakePorts({
+    recordResult: async () => { throw new Error("the database is down"); },
+  });
+  const out = await runHealthChunk(ports, { runId: "run-1", chunk: 1 });
+  assertEquals(recorded.length, 0);
+  assertEquals(out.results.length, 2);
+  assert(out.results.every((r) => r.status === "failed"));
+  assert(out.results.every((r) => r.reason === "The result could not be recorded."));
+});
+
 // --- the admin alert ---
 
 Deno.test("a provider that just degraded produces one admin alert", async () => {
   const alerts: string[] = [];
   const { ports } = fakePorts({
     probeApiKey: async (t) => { if (t.provider_code === "openai") throw new Error("boom"); },
-    claimAlerts: async () => ([
-      { provider_code: "openai", auth_method: "api_key", status: "failed", reason: "Invalid API key" },
-    ]),
     sendAlert: async (row) => { alerts.push(buildAlertTitle(row)); },
   });
   await runHealthChunk(ports, { runId: "run-1", chunk: 1 });
+  // The claim is derived from the recorded transition, not from a fixed row.
   assertEquals(alerts.length, 1);
-  assert(alerts[0].includes("openai"));
+  assert(alerts[0].includes("OpenAI"));
 });
 
-Deno.test("the claim is closed only after every alert was sent", async () => {
-  const closed: string[] = [];
+Deno.test("a provider that did not degrade produces no alert", async () => {
+  const alerts: string[] = [];
   const { ports } = fakePorts({
-    claimAlerts: async () => ([
-      { provider_code: "openai", auth_method: "api_key", status: "failed", reason: "Invalid API key" },
-    ]),
-    sendAlert: async () => {},
-    markAlertsNotified: async (token) => { closed.push(token); },
+    sendAlert: async (row) => { alerts.push(buildAlertTitle(row)); },
   });
   await runHealthChunk(ports, { runId: "run-1", chunk: 1 });
-  assertEquals(closed.length, 1);
+  assertEquals(alerts.length, 0);
 });
 
-Deno.test("a failed alert leaves the claim open so the next run re-claims the row", async () => {
+Deno.test("the claim is closed row by row after the alert was sent", async () => {
   const closed: string[] = [];
   const { ports } = fakePorts({
     claimAlerts: async () => ([
-      { provider_code: "openai", auth_method: "api_key", status: "failed", reason: "Invalid API key" },
+      {
+        provider_code: "openai",
+        display_name: "OpenAI",
+        auth_method: "api_key",
+        status: "failed",
+        reason: "Invalid API key",
+      },
     ]),
-    sendAlert: async () => { throw new Error("the mail provider refused it"); },
-    markAlertsNotified: async (token) => { closed.push(token); },
+    sendAlert: async () => {},
+    markAlertNotified: async (_token, provider) => { closed.push(provider.provider_code); },
+  });
+  await runHealthChunk(ports, { runId: "run-1", chunk: 1 });
+  assertEquals(closed, ["openai"]);
+});
+
+Deno.test("a failed alert leaves only that row's claim open, and the run still succeeds", async () => {
+  const closed: string[] = [];
+  const { ports } = fakePorts({
+    claimAlerts: async () => ([
+      {
+        provider_code: "openai",
+        display_name: "OpenAI",
+        auth_method: "api_key",
+        status: "failed",
+        reason: "Invalid API key",
+      },
+      {
+        provider_code: "claude",
+        display_name: "Claude",
+        auth_method: "oauth",
+        status: "failed",
+        reason: "Invalid API key",
+      },
+    ]),
+    sendAlert: async (provider) => {
+      if (provider.provider_code === "openai") throw new Error("the mail provider refused it");
+    },
+    markAlertNotified: async (_token, provider) => { closed.push(provider.provider_code); },
   });
   const out = await runHealthChunk(ports, { runId: "run-1", chunk: 1 });
-  assertEquals(closed.length, 0);
+  // The provider that was sent is closed; the one that failed stays open.
+  assertEquals(closed, ["claude"]);
   // The run itself still succeeded: the health check is not the alert's hostage.
   assertEquals(out.summary.total, 2);
 });
 
-Deno.test("nothing is claimed when no provider degraded", async () => {
+Deno.test("the claim is asked once per run, not once per target", async () => {
   let claimed = 0;
   const { ports } = fakePorts({
     claimAlerts: async () => { claimed++; return []; },

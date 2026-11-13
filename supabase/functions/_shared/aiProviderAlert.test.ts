@@ -9,23 +9,48 @@ import {
   type AdminMailer,
 } from "./aiProviderAlert.ts";
 
-Deno.test("the title names the provider", () => {
-  assertEquals(
-    buildAlertTitle({ provider_code: "claude", auth_method: "oauth", status: "needs_relogin", reason: null }),
-    "AI provider needs attention: claude",
-  );
+const TITLE_CASES: Array<[string, string]> = [
+  ["Anthropic", "AI provider needs attention: Anthropic"],
+  ["", "AI provider needs attention: claude"],
+];
+
+Deno.test("the title names the provider, not its code", () => {
+  for (const [displayName, expected] of TITLE_CASES) {
+    assertEquals(
+      buildAlertTitle({
+        provider_code: "claude",
+        display_name: displayName,
+        auth_method: "oauth",
+        status: "needs_relogin",
+        reason: null,
+      }),
+      expected,
+    );
+  }
 });
 
 Deno.test("the message names the credential kind and the sanitized reason", () => {
   assertEquals(
-    buildAlertMessage({ provider_code: "claude", auth_method: "oauth", status: "needs_relogin", reason: "The subscription sign-in expired. Sign in again." }),
-    "claude (subscription) needs re-login: The subscription sign-in expired. Sign in again.",
+    buildAlertMessage({
+      provider_code: "claude",
+      display_name: "Anthropic",
+      auth_method: "oauth",
+      status: "needs_relogin",
+      reason: "The subscription sign-in expired. Sign in again.",
+    }),
+    "Anthropic (subscription) is needs re-login: The subscription sign-in expired. Sign in again.",
   );
 });
 
 Deno.test("a null reason still produces a readable message", () => {
-  const message = buildAlertMessage({ provider_code: "openrouter", auth_method: "api_key", status: "failed", reason: null });
-  assert(message.includes("openrouter"));
+  const message = buildAlertMessage({
+    provider_code: "openrouter",
+    display_name: "OpenRouter",
+    auth_method: "api_key",
+    status: "failed",
+    reason: null,
+  });
+  assert(message.includes("OpenRouter"));
   assert(message.includes("API key"));
 });
 
@@ -38,20 +63,23 @@ Deno.test("the claim rows become degraded providers", () => {
 });
 
 Deno.test("the alert reaches the admins and nobody else", async () => {
-  const sent: Array<{ to: string[]; subject: string; html: string }> = [];
+  const sent: Array<{ to: string[]; subject: string; html: string; text?: string }> = [];
   const mailer: AdminMailer = {
     adminRecipients: async () => ["ops@example.com", "second@example.com"],
-    send: async (to, subject, html) => { sent.push({ to, subject, html }); },
+    send: async (to, subject, html, text) => { sent.push({ to, subject, html, text }); },
   };
   await sendDegradedProviderAlert(mailer, {
     provider_code: "openrouter",
+    display_name: "OpenRouter",
     auth_method: "api_key",
     status: "failed",
     reason: "Invalid API key",
   });
   assertEquals(sent.length, 1);
   assertEquals(sent[0].to, ["ops@example.com", "second@example.com"]);
-  assertEquals(sent[0].subject, "AI provider needs attention: openrouter");
+  assertEquals(sent[0].subject, "AI provider needs attention: OpenRouter");
+  // The plain text body is the message the spec describes.
+  assertEquals(sent[0].text, "OpenRouter (API key) is failed: Invalid API key");
 });
 
 Deno.test("with no admin address there is nobody to tell and nothing is sent", async () => {
@@ -62,6 +90,7 @@ Deno.test("with no admin address there is nobody to tell and nothing is sent", a
   };
   await sendDegradedProviderAlert(mailer, {
     provider_code: "openrouter",
+    display_name: "OpenRouter",
     auth_method: "api_key",
     status: "failed",
     reason: null,
@@ -71,10 +100,46 @@ Deno.test("with no admin address there is nobody to tell and nothing is sent", a
 
 Deno.test("the html names the provider, the credential kind and the reason", () => {
   const html = buildAlertHtml([
-    { provider_code: "openrouter", auth_method: "api_key", status: "failed", reason: "Invalid API key" },
+    {
+      provider_code: "openrouter",
+      display_name: "OpenRouter",
+      auth_method: "api_key",
+      status: "failed",
+      reason: "Invalid API key",
+    },
   ]);
-  assert(html.includes("openrouter"));
+  assert(html.includes("OpenRouter"));
   assert(html.includes("API key"));
   assert(html.includes("Invalid API key"));
   assert(html.includes("Failed"));
+});
+
+// The reason comes from a provider. It is not trusted to be plain text, so
+// everything that reaches the markup goes through the escaper first.
+Deno.test("a reason that carries markup is escaped", () => {
+  const html = buildAlertHtml([
+    {
+      provider_code: "openrouter",
+      display_name: "OpenRouter",
+      auth_method: "api_key",
+      status: "failed",
+      reason: "<script>alert('x')</script>",
+    },
+  ]);
+  assert(!html.includes("<script>"));
+  assert(html.includes("&lt;script&gt;"));
+});
+
+Deno.test("a provider name that carries markup is escaped", () => {
+  const html = buildAlertHtml([
+    {
+      provider_code: "openrouter",
+      display_name: "<b>OpenRouter</b>",
+      auth_method: "api_key",
+      status: "failed",
+      reason: "Invalid API key",
+    },
+  ]);
+  assert(!html.includes("<b>OpenRouter</b>"));
+  assert(html.includes("&lt;b&gt;OpenRouter&lt;/b&gt;"));
 });

@@ -211,6 +211,8 @@ END $aph_claim$;
 -- ===========================================================================
 -- 5. Marking the claim notified closes it for good: the row is not claimed
 --    again, so a provider that stays broken does not alert every day.
+--    The mark names one row: a send that failed for one provider must not
+--    close the alert of the others, so the claim token alone is not enough.
 -- ===========================================================================
 \echo '--- mark notified: the claim is closed ---'
 DO $aph_mark$
@@ -218,11 +220,13 @@ DECLARE
   v_notified timestamptz;
   v_token uuid;
   v_rows integer;
+  v_pending boolean;
 BEGIN
   PERFORM public.mark_ai_provider_health_notified(
-    '22222222-2222-2222-2222-222222222222'::uuid);
+    '22222222-2222-2222-2222-222222222222'::uuid, 'claude', 'api_key');
 
-  SELECT notified_at, claim_token INTO v_notified, v_token
+  SELECT notified_at, claim_token, alert_pending
+    INTO v_notified, v_token, v_pending
     FROM public.ai_provider_health
    WHERE provider_code = 'claude' AND auth_method = 'api_key';
 
@@ -231,6 +235,9 @@ BEGIN
   END IF;
   IF v_token IS NOT NULL THEN
     RAISE EXCEPTION 'FAIL: claim_token is % after mark_ai_provider_health_notified, expected NULL', v_token;
+  END IF;
+  IF v_pending THEN
+    RAISE EXCEPTION 'FAIL: alert_pending is still true after the alert was sent';
   END IF;
 
   SELECT count(*) INTO v_rows
@@ -389,12 +396,177 @@ BEGIN
   END IF;
 END $aph_cron$;
 
+-- ===========================================================================
+-- 11. A provider that is re-checked while it is STILL broken keeps its
+--     pending alert. The claim used to look at previous_status, and the
+--     re-check overwrote previous_status with 'failed', so the pending
+--     alert was lost before anyone was told. The pending flag is durable.
+-- ===========================================================================
+\echo '--- claim: a re-check of a still-broken provider keeps the alert ---'
+DO $aph_pending_survives$
+DECLARE
+  v_rows integer;
+  v_pending boolean;
+BEGIN
+  -- claude is 'connected' at this point.
+  PERFORM public.record_ai_provider_health(
+    'claude', 'api_key', 'failed', 'Rate limit exceeded', 0, 0, 0, 10,
+    '11111111-1111-1111-1111-111111111111'::uuid);
+
+  SELECT alert_pending INTO v_pending
+    FROM public.ai_provider_health
+   WHERE provider_code = 'claude' AND auth_method = 'api_key';
+  IF v_pending IS DISTINCT FROM true THEN
+    RAISE EXCEPTION 'FAIL: alert_pending is % after the transition, expected true', v_pending;
+  END IF;
+
+  -- The manual "Test and sync" click records the same broken provider again
+  -- before the alert was claimed.
+  PERFORM public.record_ai_provider_health(
+    'claude', 'api_key', 'failed', 'Rate limit exceeded', 0, 0, 0, 10,
+    '11111111-1111-1111-1111-111111111111'::uuid);
+
+  SELECT alert_pending INTO v_pending
+    FROM public.ai_provider_health
+   WHERE provider_code = 'claude' AND auth_method = 'api_key';
+  IF v_pending IS DISTINCT FROM true THEN
+    RAISE EXCEPTION 'FAIL: alert_pending is % after the re-check, expected true', v_pending;
+  END IF;
+
+  SELECT count(*) INTO v_rows
+    FROM public.claim_ai_provider_health_notifications(
+      '88888888-8888-8888-8888-888888888888'::uuid)
+   WHERE provider_code = 'claude';
+  IF v_rows <> 1 THEN
+    RAISE EXCEPTION 'FAIL: the claim returned % rows after the re-check, expected 1', v_rows;
+  END IF;
+
+  PERFORM public.mark_ai_provider_health_notified(
+    '88888888-8888-8888-8888-888888888888'::uuid, 'claude', 'api_key');
+END $aph_pending_survives$;
+
+-- ===========================================================================
+-- 12. Break, alert, recover, break again: the second break alerts again.
+--     The claim required notified_at IS NULL and nothing ever cleared
+--     notified_at, so a provider alerted once and then never again.
+-- ===========================================================================
+\echo '--- claim: a provider that breaks again after a recovery alerts again ---'
+DO $aph_alerts_again$
+DECLARE
+  v_rows integer;
+  v_notified timestamptz;
+BEGIN
+  -- openai is 'failed' and has never been connected.
+  PERFORM public.record_ai_provider_health(
+    'openai', 'api_key', 'connected', NULL, 0, 0, 0, 10,
+    '55555555-5555-5555-5555-555555555555'::uuid);
+  PERFORM public.record_ai_provider_health(
+    'openai', 'api_key', 'failed', 'Rate limit exceeded', 0, 0, 0, 10,
+    '55555555-5555-5555-5555-555555555555'::uuid);
+
+  SELECT count(*) INTO v_rows
+    FROM public.claim_ai_provider_health_notifications(
+      '99999999-9999-9999-9999-999999999999'::uuid)
+   WHERE provider_code = 'openai';
+  IF v_rows <> 1 THEN
+    RAISE EXCEPTION 'FAIL: the first break claimed % rows, expected 1', v_rows;
+  END IF;
+
+  PERFORM public.mark_ai_provider_health_notified(
+    '99999999-9999-9999-9999-999999999999'::uuid, 'openai', 'api_key');
+
+  SELECT notified_at INTO v_notified
+    FROM public.ai_provider_health
+   WHERE provider_code = 'openai' AND auth_method = 'api_key';
+  IF v_notified IS NULL THEN
+    RAISE EXCEPTION 'FAIL: notified_at is NULL after the first alert';
+  END IF;
+
+  -- The provider recovers.
+  PERFORM public.record_ai_provider_health(
+    'openai', 'api_key', 'connected', NULL, 0, 0, 0, 10,
+    '55555555-5555-5555-5555-555555555555'::uuid);
+
+  -- ... and breaks again.
+  PERFORM public.record_ai_provider_health(
+    'openai', 'api_key', 'failed', 'Rate limit exceeded', 0, 0, 0, 10,
+    '55555555-5555-5555-5555-555555555555'::uuid);
+
+  SELECT count(*) INTO v_rows
+    FROM public.claim_ai_provider_health_notifications(
+      'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'::uuid)
+   WHERE provider_code = 'openai';
+  IF v_rows <> 1 THEN
+    RAISE EXCEPTION 'FAIL: the second break claimed % rows, expected 1', v_rows;
+  END IF;
+
+  PERFORM public.mark_ai_provider_health_notified(
+    'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'::uuid, 'openai', 'api_key');
+END $aph_alerts_again$;
+
+-- ===========================================================================
+-- 13. An authenticated admin may READ the health rows and may not WRITE
+--     them. The rows are written by the edge function through the service
+--     role; an admin who could UPDATE notified_at could silence an alert by
+--     hand, so the table is read only for authenticated.
+-- ===========================================================================
+\echo '--- grants: an authenticated admin reads but cannot write ---'
+DO $aph_admin_fixture$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM auth.users WHERE id = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb') THEN
+    INSERT INTO auth.users (id, email)
+    VALUES ('bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', 'health-admin@example.invalid');
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM public.user_roles
+     WHERE user_id = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb' AND role = 'admin'
+  ) THEN
+    INSERT INTO public.user_roles (user_id, role)
+    VALUES ('bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', 'admin');
+  END IF;
+END $aph_admin_fixture$;
+
+SET ROLE authenticated;
+SELECT set_config('request.jwt.claim.sub', 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', false);
+
+DO $aph_admin_grants$
+DECLARE
+  v_count integer;
+BEGIN
+  -- Positive control: the admin sees the rows.
+  SELECT count(*) INTO v_count FROM public.ai_provider_health;
+  IF v_count < 1 THEN
+    RAISE EXCEPTION 'FAIL: an authenticated admin sees % health rows, expected at least 1', v_count;
+  END IF;
+
+  -- The write is refused: no UPDATE grant for authenticated.
+  BEGIN
+    UPDATE public.ai_provider_health SET notified_at = now();
+    RAISE EXCEPTION 'FAIL: an authenticated admin UPDATE of notified_at was ACCEPTED';
+  EXCEPTION WHEN insufficient_privilege THEN
+    NULL; -- expected: the table is read only for authenticated
+  END;
+
+  BEGIN
+    DELETE FROM public.ai_provider_health;
+    RAISE EXCEPTION 'FAIL: an authenticated admin DELETE of ai_provider_health was ACCEPTED';
+  EXCEPTION WHEN insufficient_privilege THEN
+    NULL; -- expected
+  END;
+END $aph_admin_grants$;
+
+RESET ROLE;
+SELECT set_config('request.jwt.claim.sub', '', false);
+
 -- ---------------------------------------------------------------------------
 -- Trailing cleanup: everything this suite created, EXCEPT the provider rows
 -- that already existed before it ran.
 -- ---------------------------------------------------------------------------
 DELETE FROM public.ai_provider_health WHERE provider_code IN ('claude', 'openai');
 DELETE FROM public.ai_models WHERE model_id = 'health-fixture-model';
+
+DELETE FROM public.user_roles WHERE user_id = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+DELETE FROM auth.users WHERE id = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
 
 DELETE FROM public.ai_providers
  WHERE provider_code IN (SELECT provider_code FROM aph_created_providers);

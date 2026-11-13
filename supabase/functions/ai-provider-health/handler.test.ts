@@ -1,12 +1,12 @@
 // deno-lint-ignore-file no-import-prefix
-import { assert, assertEquals, assertRejects } from "https://deno.land/std@0.208.0/assert/mod.ts";
+import { assert, assertEquals } from "https://deno.land/std@0.208.0/assert/mod.ts";
 import { handleHealthRequest, parseHealthRequest, type HealthHandlerPorts } from "./handler.ts";
 
 function fakePorts(overrides: Partial<HealthHandlerPorts> = {}) {
   const leases: Array<{ job: string; holder: string }> = [];
   const ports: HealthHandlerPorts = {
     runChunk: async (chunk) => ({
-      run_id: "run-1", chunk, done: true, next_chunk: null, results: [],
+      run_id: "run-1", chunk, done: true, next_chunk: null, results: [], skipped: [],
       summary: { total: 0, connected: 0, failed: 0, needs_relogin: 0 },
     }),
     readResults: async () => [],
@@ -22,9 +22,19 @@ Deno.test("the action defaults to status and the chunk to one", () => {
   assertEquals(parseHealthRequest({}), { action: "status", chunk: 1, scope: "manual", runToken: null });
 });
 
-Deno.test("a run without a token is rejected", () => {
+Deno.test("a run body without a token parses to a run with no token", () => {
   assertEquals(parseHealthRequest({ action: "run" }).action, "run");
   assertEquals(parseHealthRequest({ action: "run", scope: "manual" }).runToken, null);
+});
+
+Deno.test("a body that says something else falls back to the defaults", () => {
+  assertEquals(parseHealthRequest({ action: "delete", chunk: "x", scope: "other", run_token: 7 }), {
+    action: "status",
+    chunk: 1,
+    scope: "manual",
+    runToken: null,
+  });
+  assertEquals(parseHealthRequest("not an object").action, "status");
 });
 
 Deno.test("an unauthorized caller gets 401 and no run", async () => {
@@ -93,15 +103,29 @@ Deno.test("a manual run without a run token is refused before anything runs", as
   assertEquals(leases.length, 0);
 });
 
-Deno.test("the lease is released even when the run fails", async () => {
+Deno.test("a failing run answers 500 without leaking the reason, and the lease is released", async () => {
   const { ports, leases } = fakePorts({
-    runChunk: async () => { throw new Error("boom"); },
+    runChunk: async () => { throw new Error("the database password is wrong"); },
   });
-  await assertRejects(() =>
-    handleHealthRequest(
-      new Request("https://x.test", { method: "POST", body: JSON.stringify({ action: "run", scope: "daily" }) }),
-      ports,
-    )
+  const res = await handleHealthRequest(
+    new Request("https://x.test", { method: "POST", body: JSON.stringify({ action: "run", scope: "daily" }) }),
+    ports,
   );
+  // The failure does not escape: the caller gets a status, not a stack trace.
+  assertEquals(res.status, 500);
+  const body = await res.text();
+  assert(!body.includes("the database password is wrong"));
+  // The lease is released even though the run failed.
   assertEquals(leases.filter((l) => l.job === "ai-provider-health").length, 2);
+});
+
+Deno.test("a release that fails does not replace the answer", async () => {
+  const { ports } = fakePorts({
+    releaseLease: async () => { throw new Error("the lease table is gone"); },
+  });
+  const res = await handleHealthRequest(
+    new Request("https://x.test", { method: "POST", body: JSON.stringify({ action: "run", scope: "daily" }) }),
+    ports,
+  );
+  assertEquals(res.status, 200);
 });

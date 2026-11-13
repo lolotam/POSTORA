@@ -19,7 +19,14 @@ import { OAUTH_PROVIDER_CODE, type OAuthProviderId } from "../_shared/aiOAuth/cl
 import { callPiOAuth, defaultPiCallDeps } from "../_shared/aiOAuth/piCall.ts";
 import { alertRowsToDegraded, sendDegradedProviderAlert, type AdminMailer } from "../_shared/aiProviderAlert.ts";
 import { verifyCronOrAdmin } from "../_shared/cron-auth.ts";
-import type { HealthResult, HealthTarget } from "../_shared/aiProviderHealth.ts";
+import {
+  HEALTH_TARGET_TIMEOUT_MS,
+  boundedFetch,
+  withSignal,
+  type DegradedProvider,
+  type HealthResult,
+  type HealthTarget,
+} from "../_shared/aiProviderHealth.ts";
 import { runHealthChunk, type HealthRunPorts } from "./run.ts";
 import type { HealthHandlerPorts } from "./handler.ts";
 
@@ -28,8 +35,32 @@ type Admin = SupabaseClient;
 /** The OAuth providers Postora can sign in to, as pi-ai knows them. */
 const OAUTH_PROVIDERS: readonly OAuthProviderId[] = ["anthropic", "openai-codex"];
 
+/** A mail provider that has not answered in five seconds is not going to. */
+const RESEND_TIMEOUT_MS = 5_000;
+
 function isOAuthProviderId(value: string): value is OAuthProviderId {
   return (OAUTH_PROVIDERS as readonly string[]).includes(value);
+}
+
+/**
+ * The providers' display names, in one query. A run touches a handful of
+ * providers, and one query per provider is one round trip per provider.
+ */
+async function providerNames(admin: Admin, codes: string[]): Promise<Map<string, string>> {
+  const unique = [...new Set(codes.filter(Boolean))];
+  const names = new Map<string, string>();
+  if (!unique.length) return names;
+  const { data, error } = await admin
+    .from("ai_providers")
+    .select("provider_code, name")
+    .in("provider_code", unique);
+  if (error) throw new Error("AI provider read failed");
+  for (const row of (data ?? []) as Array<Record<string, unknown>>) {
+    const code = String(row.provider_code ?? "");
+    if (!code) continue;
+    names.set(code, String(row.name ?? code));
+  }
+  return names;
 }
 
 /** The admin mailer: the admins from user_roles/profiles, delivered by Resend. */
@@ -52,7 +83,7 @@ function createAdminMailer(admin: Admin): AdminMailer {
         .map((p) => (p as { email?: unknown }).email)
         .filter((email): email is string => typeof email === "string" && email.length > 0);
     },
-    async send(to: string[], subject: string, html: string): Promise<void> {
+    async send(to: string[], subject: string, html: string, text?: string): Promise<void> {
       const resendKey = Deno.env.get("RESEND_API_KEY");
       if (!resendKey) {
         // No mail provider configured: the alert cannot be delivered. Throwing keeps
@@ -67,7 +98,10 @@ function createAdminMailer(admin: Admin): AdminMailer {
           to,
           subject,
           html,
+          ...(text ? { text } : {}),
         }),
+        // A mail provider that hangs must not eat the whole time budget.
+        signal: AbortSignal.timeout(RESEND_TIMEOUT_MS),
       });
       if (!response.ok) {
         // The body can quote the request, so only the status is reported.
@@ -107,17 +141,10 @@ export function createHealthRunPorts(admin: Admin): HealthRunPorts {
         .select("oauth_provider, provider_code, status");
       if (error) throw new Error("OAuth connection read failed");
       const rows = (data ?? []) as Array<{ oauth_provider?: unknown; provider_code?: unknown; status?: unknown }>;
-      const names = new Map<string, string>();
-      for (const row of rows) {
-        const code = String(row.provider_code ?? "");
-        if (!code || names.has(code)) continue;
-        const { data: provider } = await admin
-          .from("ai_providers")
-          .select("name")
-          .eq("provider_code", code)
-          .maybeSingle();
-        names.set(code, String((provider as { name?: unknown } | null)?.name ?? code));
-      }
+      const names = await providerNames(
+        admin,
+        rows.map((row) => String(row.provider_code ?? "")),
+      );
       return rows
         .filter((row) => isOAuthProviderId(String(row.oauth_provider ?? "")))
         .map((row) => ({
@@ -132,41 +159,54 @@ export function createHealthRunPorts(admin: Admin): HealthRunPorts {
       return resolveProviderKey(db, providerCode);
     },
 
-    async probeApiKey(target: HealthTarget, key: string): Promise<void> {
+    async probeApiKey(target: HealthTarget, key: string, signal: AbortSignal): Promise<void> {
       const provider = await loadProbeTarget(db, target.provider_code);
       if (!provider) throw new Error(`Provider ${target.provider_code} is missing`);
-      await probeProvider(db, provider, key);
+      // The probe's own fetch is bounded by the target's signal, so a target that
+      // runs out of time stops working instead of being abandoned.
+      await probeProvider(db, provider, key, HEALTH_TARGET_TIMEOUT_MS, boundedFetch(signal));
     },
 
-    async probeOAuth(target: HealthTarget): Promise<void> {
+    async probeOAuth(target: HealthTarget, signal: AbortSignal): Promise<void> {
       const oauthProvider = target.oauth_provider;
       if (!oauthProvider || !isOAuthProviderId(oauthProvider)) {
         throw new Error(`Provider ${target.provider_code} has no subscription sign-in`);
       }
       const credentials = defaultCredentialDeps(admin as never);
-      const { apiKey } = await getFreshOAuthCredential(credentials, oauthProvider);
+      // The token refresh lives inside pi-ai and cannot be cancelled, so the wait
+      // for it ends with the target's budget.
+      const { apiKey } = await withSignal(
+        getFreshOAuthCredential(credentials, oauthProvider),
+        signal,
+      );
       const modelId = firstOAuthModel(oauthProvider);
-      const response = await callPiOAuth(
-        defaultPiCallDeps(),
-        oauthProvider,
-        modelId,
-        { messages: [{ role: "user", content: "Reply with OK" }] },
-        apiKey,
-        20_000,
+      const response = await withSignal(
+        callPiOAuth(
+          defaultPiCallDeps(),
+          oauthProvider,
+          modelId,
+          { messages: [{ role: "user", content: "Reply with OK" }] },
+          apiKey,
+          20_000,
+          signal,
+        ),
+        signal,
       );
       if (!response.ok) {
-        // callPiOAuth already redacted the message against the credential.
-        const body = await response.text();
-        throw new Error(`The subscription sign-in was refused (HTTP ${response.status}): ${body.slice(0, 200)}`);
+        // The upstream body can quote the request, so it is never stored: the
+        // reason is a fixed sentence with the status code and nothing else.
+        throw new Error(`The subscription sign-in was refused (HTTP ${response.status}).`);
       }
     },
 
-    async syncApiKeyCatalogue(providerCode: string) {
-      const report = await runCatalogSync(admin as never, providerCode, fetch, { authMethod: "api_key" });
+    async syncApiKeyCatalogue(providerCode: string, signal: AbortSignal) {
+      const report = await runCatalogSync(admin as never, providerCode, boundedFetch(signal), {
+        authMethod: "api_key",
+      });
       return { added: report.added, updated: report.updated, deactivated: report.deactivated };
     },
 
-    async syncOAuthCatalogue(target: HealthTarget) {
+    async syncOAuthCatalogue(target: HealthTarget, signal: AbortSignal) {
       const oauthProvider = target.oauth_provider;
       if (!oauthProvider || !isOAuthProviderId(oauthProvider)) {
         throw new Error(`Provider ${target.provider_code} has no subscription sign-in`);
@@ -176,7 +216,7 @@ export function createHealthRunPorts(admin: Admin): HealthRunPorts {
         ...mapIdOnlyChatCatalog(piModels(oauthProvider)),
         managedCapabilities: ["chat"],
       };
-      const report = await runCatalogSync(admin as never, target.provider_code, fetch, {
+      const report = await runCatalogSync(admin as never, target.provider_code, boundedFetch(signal), {
         authMethod: "oauth",
         catalogue,
       });
@@ -203,15 +243,26 @@ export function createHealthRunPorts(admin: Admin): HealthRunPorts {
         p_claim_token: claimToken,
       });
       if (error) throw new Error("provider health claim failed");
-      return alertRowsToDegraded((data ?? []) as Array<Record<string, unknown>>);
+      const degraded = alertRowsToDegraded((data ?? []) as Array<Record<string, unknown>>);
+      // The alert names the provider, not its code: the names are resolved in one
+      // query for the whole claim.
+      const names = await providerNames(admin, degraded.map((p) => p.provider_code));
+      return degraded.map((provider) => ({
+        ...provider,
+        display_name: names.get(provider.provider_code) ?? provider.provider_code,
+      }));
     },
 
     async sendAlert(provider) {
       await sendDegradedProviderAlert(mailer, provider);
     },
 
-    async markAlertsNotified(claimToken: string) {
-      const { error } = await admin.rpc("mark_ai_provider_health_notified", { p_claim_token: claimToken });
+    async markAlertNotified(claimToken: string, provider: DegradedProvider) {
+      const { error } = await admin.rpc("mark_ai_provider_health_notified", {
+        p_claim_token: claimToken,
+        p_provider_code: provider.provider_code,
+        p_auth_method: provider.auth_method,
+      });
       if (error) throw new Error("provider health notification close failed");
     },
 
@@ -249,7 +300,7 @@ export async function createHealthHandlerPorts(): Promise<HealthHandlerPorts> {
   const runPorts = createHealthRunPorts(admin);
 
   return {
-    async runChunk(chunk: number, runId: string, scope: "daily" | "manual") {
+    async runChunk(chunk: number, runId: string) {
       return runHealthChunk(runPorts, { runId, chunk });
     },
 
@@ -260,17 +311,11 @@ export async function createHealthHandlerPorts(): Promise<HealthHandlerPorts> {
         .order("provider_code");
       if (error) throw new Error("provider health read failed");
       const rows = (data ?? []) as Array<Record<string, unknown>>;
-      const names = new Map<string, string>();
-      for (const row of rows) {
-        const code = String(row.provider_code ?? "");
-        if (!code || names.has(code)) continue;
-        const { data: provider } = await admin
-          .from("ai_providers")
-          .select("name")
-          .eq("provider_code", code)
-          .maybeSingle();
-        names.set(code, String((provider as { name?: unknown } | null)?.name ?? code));
-      }
+      // One query for the names of every row, not one query per row.
+      const names = await providerNames(
+        admin,
+        rows.map((row) => String(row.provider_code ?? "")),
+      );
       return rows.map((row) => {
         const code = String(row.provider_code ?? "");
         return {

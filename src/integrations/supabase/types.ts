@@ -2776,6 +2776,7 @@ export type Database = {
       }
       ai_provider_health: {
         Row: {
+          alert_pending: boolean
           auth_method: string
           checked_at: string
           claim_token: string | null
@@ -2792,6 +2793,7 @@ export type Database = {
           status: string
         }
         Insert: {
+          alert_pending?: boolean
           auth_method?: string
           checked_at?: string
           claim_token?: string | null
@@ -2808,6 +2810,7 @@ export type Database = {
           status: string
         }
         Update: {
+          alert_pending?: boolean
           auth_method?: string
           checked_at?: string
           claim_token?: string | null
@@ -13091,7 +13094,11 @@ export type Database = {
         }[]
       }
       mark_ai_provider_health_notified: {
-        Args: { p_claim_token: string }
+        Args: {
+          p_claim_token: string
+          p_provider_code: string
+          p_auth_method: string
+        }
         Returns: undefined
       }
     }

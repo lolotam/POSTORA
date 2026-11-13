@@ -6,8 +6,11 @@
 // lives here and both callers reach it through the edge function's single door.
 
 import {
+  HEALTH_ALERT_BUDGET_MS,
   HEALTH_RUN_CONCURRENCY,
   HEALTH_RUN_DEADLINE_MS,
+  HEALTH_SKIPPED_REASON,
+  HEALTH_TARGET_BUDGET_MS,
   classifyApiKeyFailure,
   classifyOAuthFailure,
   planHealthTargets,
@@ -28,17 +31,24 @@ export interface HealthRunPorts {
     Array<{ oauth_provider: string; provider_code: string; name: string; status: string }>
   >;
   resolveApiKey(providerCode: string): Promise<string | null>;
-  probeApiKey(target: HealthTarget, key: string): Promise<void>;
-  probeOAuth(target: HealthTarget): Promise<void>;
-  syncApiKeyCatalogue(providerCode: string): Promise<{ added: number; updated: number; deactivated: number }>;
-  syncOAuthCatalogue(target: HealthTarget): Promise<{ added: number; updated: number; deactivated: number }>;
+  /** The probe, the token refresh and the sync of one target share ONE signal. */
+  probeApiKey(target: HealthTarget, key: string, signal: AbortSignal): Promise<void>;
+  probeOAuth(target: HealthTarget, signal: AbortSignal): Promise<void>;
+  syncApiKeyCatalogue(
+    providerCode: string,
+    signal: AbortSignal,
+  ): Promise<{ added: number; updated: number; deactivated: number }>;
+  syncOAuthCatalogue(
+    target: HealthTarget,
+    signal: AbortSignal,
+  ): Promise<{ added: number; updated: number; deactivated: number }>;
   recordResult(result: HealthResult, runId: string): Promise<void>;
-  /** Claims the providers that just degraded; the token is the claim's identity. */
+  /** Claims the providers whose alert is still pending; the token is the claim's identity. */
   claimAlerts(claimToken: string): Promise<DegradedProvider[]>;
   /** Sends one admin alert. A failure here must not fail the run. */
   sendAlert(provider: DegradedProvider): Promise<void>;
-  /** Closes the claim once every claimed alert was sent. */
-  markAlertsNotified(claimToken: string): Promise<void>;
+  /** Closes the claim of ONE row, so a failed send leaves only that row open. */
+  markAlertNotified(claimToken: string, provider: DegradedProvider): Promise<void>;
   now(): Date;
 }
 
@@ -47,6 +57,14 @@ export interface HealthRunOptions {
   chunk: number;
   deadlineMs?: number;
   concurrency?: number;
+  alertBudgetMs?: number;
+}
+
+/** A target the time budget never reached. It was not tested, so it has no result. */
+export interface HealthSkippedTarget {
+  provider_code: string;
+  auth_method: "api_key" | "oauth";
+  reason: string;
 }
 
 export interface HealthChunkResponse {
@@ -55,6 +73,7 @@ export interface HealthChunkResponse {
   done: boolean;
   next_chunk: number | null;
   results: HealthResult[];
+  skipped: HealthSkippedTarget[];
   summary: { total: number; connected: number; failed: number; needs_relogin: number };
 }
 
@@ -69,6 +88,115 @@ function classifyTargetFailure(
   return { status: "failed", reason: sanitizeReason(message, apiKey) };
 }
 
+/** What one target's test found. */
+interface TargetProbe {
+  status: HealthStatus;
+  reason: string | null;
+  /** Kept so a later failure can be redacted against it. It is never stored or logged. */
+  apiKey: string | null;
+}
+
+/** What one target's test and catalogue sync found. */
+interface TargetOutcome {
+  status: HealthStatus;
+  reason: string | null;
+  models_added: number | null;
+  models_updated: number | null;
+  models_deactivated: number | null;
+}
+
+/**
+ * Tests one target. A failure never leaves this function: the failure becomes the
+ * status. The signal is the target's whole budget: the probe, the token refresh
+ * and the catalogue sync share it, so a target that runs out of time stops
+ * working instead of only being abandoned.
+ */
+async function probeTarget(
+  ports: HealthRunPorts,
+  target: HealthTarget,
+  signal: AbortSignal,
+): Promise<TargetProbe> {
+  let apiKey: string | null = null;
+  try {
+    if (target.needs_relogin) {
+      // The stored sign-in is already revoked: report it without a probe, so no
+      // network call is made and its models are never touched.
+      return { status: "needs_relogin", reason: classifyOAuthFailure("reauth_required").reason, apiKey: null };
+    }
+    if (target.auth_method === "oauth") {
+      await ports.probeOAuth(target, signal);
+      return { status: "connected", reason: null, apiKey: null };
+    }
+    apiKey = await ports.resolveApiKey(target.provider_code);
+    if (!apiKey) {
+      // The planner already dropped the providers without a key, so reaching here
+      // means the key vanished between the plan and the probe.
+      throw new Error("The API key is no longer configured");
+    }
+    await ports.probeApiKey(target, apiKey, signal);
+    return { status: "connected", reason: null, apiKey };
+  } catch (error) {
+    const classified = classifyTargetFailure(error, apiKey);
+    return { status: classified.status, reason: classified.reason, apiKey };
+  }
+}
+
+/**
+ * Syncs the catalogue of a target that answered. A provider whose test failed is
+ * never synced, so its models are never deactivated and never deleted.
+ */
+async function syncTarget(
+  ports: HealthRunPorts,
+  target: HealthTarget,
+  signal: AbortSignal,
+  probe: TargetProbe,
+): Promise<TargetOutcome> {
+  const noCounts = { models_added: null, models_updated: null, models_deactivated: null };
+  if (probe.status !== "connected") {
+    return { status: probe.status, reason: probe.reason, ...noCounts };
+  }
+  try {
+    const report = target.auth_method === "oauth"
+      ? await ports.syncOAuthCatalogue(target, signal)
+      : await ports.syncApiKeyCatalogue(target.provider_code, signal);
+    return {
+      status: "connected",
+      reason: probe.reason,
+      models_added: report.added,
+      models_updated: report.updated,
+      models_deactivated: report.deactivated,
+    };
+  } catch (error) {
+    return {
+      status: "failed",
+      reason: sanitizeReason(error instanceof Error ? error.message : String(error), probe.apiKey),
+      ...noCounts,
+    };
+  }
+}
+
+/** Writes the result. A write that fails must not take the whole chunk down. */
+async function recordTargetResult(
+  ports: HealthRunPorts,
+  result: HealthResult,
+  runId: string,
+): Promise<HealthResult> {
+  try {
+    await ports.recordResult(result, runId);
+    return result;
+  } catch (error) {
+    console.error("event: 'ai_provider_health_write_failed'", error instanceof Error ? error.name : "error");
+    return {
+      ...result,
+      status: "failed",
+      reason: "The result could not be recorded.",
+      models_added: null,
+      models_updated: null,
+      models_deactivated: null,
+    };
+  }
+}
+
 /**
  * Tests one target and, when it answered, syncs its catalogue. A failure never
  * leaves this function: the failure becomes the result.
@@ -77,81 +205,62 @@ async function runOneTarget(
   ports: HealthRunPorts,
   target: HealthTarget,
   runId: string,
+  signal: AbortSignal,
 ): Promise<HealthResult> {
   const started = Date.now();
   const checkedAt = ports.now().toISOString();
-  let status: HealthStatus = "connected";
-  let reason: string | null = null;
-  let added: number | null = null;
-  let updated: number | null = null;
-  let deactivated: number | null = null;
-  // Kept in scope so a reason can be redacted against it. It is never stored or logged.
-  let apiKey: string | null = null;
-
-  try {
-    if (target.needs_relogin) {
-      // The stored sign-in is already revoked: report it without a probe, so no
-      // network call is made and its models are never touched.
-      status = "needs_relogin";
-      reason = classifyOAuthFailure("reauth_required").reason;
-    } else if (target.auth_method === "oauth") {
-      await ports.probeOAuth(target);
-    } else {
-      apiKey = await ports.resolveApiKey(target.provider_code);
-      if (!apiKey) {
-        // The planner already dropped the providers without a key, so reaching here
-        // means the key vanished between the plan and the probe.
-        throw new Error("The API key is no longer configured");
-      }
-      await ports.probeApiKey(target, apiKey);
-    }
-  } catch (error) {
-    const classified = classifyTargetFailure(error, apiKey);
-    status = classified.status;
-    reason = classified.reason;
-  }
-
-  // Only a provider whose test passed is synced. A failed OAuth target is never
-  // synced, so its models are never deactivated and never deleted.
-  if (status === "connected") {
-    try {
-      const report = target.auth_method === "oauth"
-        ? await ports.syncOAuthCatalogue(target)
-        : await ports.syncApiKeyCatalogue(target.provider_code);
-      added = report.added;
-      updated = report.updated;
-      deactivated = report.deactivated;
-    } catch (error) {
-      status = "failed";
-      reason = sanitizeReason(error instanceof Error ? error.message : String(error), apiKey);
-      added = null;
-      updated = null;
-      deactivated = null;
-    }
-  }
-
+  const outcome = await syncTarget(ports, target, signal, await probeTarget(ports, target, signal));
   const result: HealthResult = {
     provider_code: target.provider_code,
     auth_method: target.auth_method,
     display_name: target.display_name,
-    status,
-    reason,
-    models_added: added,
-    models_updated: updated,
-    models_deactivated: deactivated,
+    status: outcome.status,
+    reason: outcome.reason,
+    models_added: outcome.models_added,
+    models_updated: outcome.models_updated,
+    models_deactivated: outcome.models_deactivated,
     latency_ms: Date.now() - started,
     checked_at: checkedAt,
   };
-  await ports.recordResult(result, runId);
-  return result;
+  return recordTargetResult(ports, result, runId);
 }
 
 /**
- * Claims the providers that just degraded, sends one alert each and closes the
- * claim. A send that fails leaves the claim open, so the next run re-claims the row
- * instead of losing the alert.
+ * Sends one alert and closes that row's claim. The row stays open when the send
+ * fails, so the next run re-claims it.
  */
-async function sendClaimedAlerts(ports: HealthRunPorts, claimToken: string): Promise<void> {
+async function sendOneAlert(
+  ports: HealthRunPorts,
+  claimToken: string,
+  provider: DegradedProvider,
+): Promise<void> {
+  try {
+    await ports.sendAlert(provider);
+  } catch (error) {
+    // The claim stays open on purpose: the row is re-claimed after ten minutes.
+    console.error("event: 'ai_provider_alert_failed'", error instanceof Error ? error.name : "error");
+    return;
+  }
+  try {
+    // One row at a time: a send that failed for another provider must not close
+    // this row's alert.
+    await ports.markAlertNotified(claimToken, provider);
+  } catch (error) {
+    console.error("event: 'ai_provider_alert_mark_failed'", error instanceof Error ? error.name : "error");
+  }
+}
+
+/**
+ * Claims the providers whose alert is still pending, sends one alert each and
+ * closes each claim on its own. A send that fails leaves only that row open, so
+ * the next run re-claims it instead of losing the alert -- and the rows that were
+ * sent are not sent again.
+ */
+async function sendClaimedAlerts(
+  ports: HealthRunPorts,
+  claimToken: string,
+  budgetMs: number,
+): Promise<void> {
   let claimed: DegradedProvider[];
   try {
     claimed = await ports.claimAlerts(claimToken);
@@ -161,21 +270,16 @@ async function sendClaimedAlerts(ports: HealthRunPorts, claimToken: string): Pro
   }
   if (!claimed.length) return;
 
-  let sent = 0;
+  const deadline = Date.now() + budgetMs;
   for (const provider of claimed) {
-    try {
-      await ports.sendAlert(provider);
-      sent++;
-    } catch (error) {
-      // The claim stays open on purpose: the row is re-claimed after ten minutes.
-      console.error("event: 'ai_provider_alert_failed'", error instanceof Error ? error.name : "error");
+    if (Date.now() >= deadline) {
+      // The alert phase runs after the target phase, so it gets what is left of
+      // the budget. The rows that were not reached stay claimed and are re-claimed
+      // after ten minutes.
+      console.error("event: 'ai_provider_alert_budget_exhausted'");
+      return;
     }
-  }
-  if (sent !== claimed.length) return;
-  try {
-    await ports.markAlertsNotified(claimToken);
-  } catch (error) {
-    console.error("event: 'ai_provider_alert_mark_failed'", error instanceof Error ? error.name : "error");
+    await sendOneAlert(ports, claimToken, provider);
   }
 }
 
@@ -225,7 +329,13 @@ export async function runHealthChunk(
     while (index < slice.length && Date.now() < deadline) {
       const position = index++;
       const target = slice[position];
-      collected.push({ position, result: await runOneTarget(ports, target, options.runId) });
+      // One signal per target: the probe, the token refresh and the catalogue sync
+      // of this target all run inside the same budget.
+      const signal = AbortSignal.timeout(HEALTH_TARGET_BUDGET_MS);
+      collected.push({
+        position,
+        result: await runOneTarget(ports, target, options.runId, signal),
+      });
     }
   }
 
@@ -235,16 +345,28 @@ export async function runHealthChunk(
   // the same chunk always answer in the same order.
   const results = collected.sort((a, b) => a.position - b.position).map((c) => c.result);
 
-  // The alert phase runs after the results are written: the claim compares the new
-  // status with the previous one, so the rows must already be recorded.
-  await sendClaimedAlerts(ports, crypto.randomUUID());
+  // A target the deadline never reached was not tested. It is reported as skipped
+  // and the chunk is not done: the caller knows the run is incomplete.
+  const skipped: HealthSkippedTarget[] = slice
+    .filter((_, position) => !collected.some((c) => c.position === position))
+    .map((target) => ({
+      provider_code: target.provider_code,
+      auth_method: target.auth_method,
+      reason: HEALTH_SKIPPED_REASON,
+    }));
+
+  // The alert phase runs after the results are written: the rows must already be
+  // recorded before the claim can see the transition.
+  await sendClaimedAlerts(ports, crypto.randomUUID(), options.alertBudgetMs ?? HEALTH_ALERT_BUDGET_MS);
 
   return {
     run_id: options.runId,
     chunk: options.chunk,
-    done,
+    // A skipped target means the run did not cover everything it was asked to.
+    done: done && skipped.length === 0,
     next_chunk: nextChunk,
     results,
+    skipped,
     summary: summarizeHealthResults(results),
   };
 }

@@ -43,8 +43,29 @@ describe("aiProviderHealthGateway", () => {
   });
 
   it("surfaces the server's refusal instead of a contract error", async () => {
-    invoke.mockResolvedValue({ data: { error: "busy" }, error: null });
+    // This is the shape supabase-js really returns for a non-2xx answer: no data,
+    // and the original response on the error's context.
+    invoke.mockResolvedValue({
+      data: null,
+      error: Object.assign(
+        new Error("Edge Function returned a non-2xx status code"),
+        { context: new Response(JSON.stringify({ error: "busy" }), { status: 409 }) },
+      ),
+    });
     await expect(runProviderHealthChunk(1, "token-a")).rejects.toThrow("busy");
+  });
+
+  it("falls back to the transport message when the body carries no code", async () => {
+    invoke.mockResolvedValue({
+      data: null,
+      error: Object.assign(
+        new Error("Edge Function returned a non-2xx status code"),
+        { context: new Response("not json", { status: 500 }) },
+      ),
+    });
+    await expect(runProviderHealthChunk(1, "token-a")).rejects.toThrow(
+      "Edge Function returned a non-2xx status code",
+    );
   });
 
   it("rejects a response that is not the agreed shape", async () => {

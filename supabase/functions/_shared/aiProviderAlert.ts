@@ -23,19 +23,41 @@ const CREDENTIAL_LABEL: Record<DegradedProvider["auth_method"], string> = {
   oauth: "subscription",
 };
 
+/**
+ * The reason and the provider name end up inside an HTML email. The reason comes
+ * from a provider, so it is not trusted to be plain text: everything that reaches
+ * the markup goes through here first.
+ */
+function escapeHtml(value: string): string {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+/** The provider's display name, with the code as the fallback. */
+function providerLabel(p: DegradedProvider): string {
+  return p.display_name || p.provider_code;
+}
+
 export function buildAlertTitle(p: DegradedProvider): string {
-  return `AI provider needs attention: ${p.provider_code}`;
+  return `AI provider needs attention: ${providerLabel(p)}`;
 }
 
 export function buildAlertMessage(p: DegradedProvider): string {
   const state = p.status === "needs_relogin" ? "needs re-login" : "failed";
   const reason = p.reason ? `: ${p.reason}` : ".";
-  return `${p.provider_code} (${CREDENTIAL_LABEL[p.auth_method]}) ${state}${reason}`;
+  return `${providerLabel(p)} (${CREDENTIAL_LABEL[p.auth_method]}) is ${state}${reason}`;
 }
 
 export function alertRowsToDegraded(rows: Array<Record<string, unknown>>): DegradedProvider[] {
   return rows.map((row) => ({
     provider_code: String(row.provider_code ?? ""),
+    // The claim does not carry the display name: the caller resolves it from
+    // ai_providers, so the name is never read from a claimed row.
+    display_name: "",
     auth_method: row.auth_method === "oauth" ? "oauth" : "api_key",
     status: row.status === "needs_relogin" ? "needs_relogin" : "failed",
     reason: typeof row.reason === "string" ? row.reason : null,
@@ -47,14 +69,14 @@ export function buildAlertHtml(degraded: DegradedProvider[]): string {
   const rows = degraded.map((p) => `
     <tr style="border-bottom: 1px solid #e5e7eb;">
       <td style="padding: 12px; font-size: 14px;">
-        <strong>${p.provider_code}</strong>
+        <strong>${escapeHtml(providerLabel(p))}</strong>
         <br><span style="color: #6b7280; font-size: 12px;">${CREDENTIAL_LABEL[p.auth_method]}</span>
       </td>
       <td style="padding: 12px; font-size: 14px; color: #dc2626;">
         ${p.status === "needs_relogin" ? "Needs re-login" : "Failed"}
       </td>
       <td style="padding: 12px; font-size: 12px; color: #6b7280;">
-        ${p.reason ?? "-"}
+        ${escapeHtml(p.reason ?? "-")}
       </td>
     </tr>
   `).join("");
@@ -112,7 +134,7 @@ export interface AdminMailer {
   /** The admins' addresses. An empty list means there is nobody to tell. */
   adminRecipients(): Promise<string[]>;
   /** Sends one email. Throws when the provider refused it, so the claim stays open. */
-  send(to: string[], subject: string, html: string): Promise<void>;
+  send(to: string[], subject: string, html: string, text?: string): Promise<void>;
 }
 
 /**
@@ -125,5 +147,5 @@ export async function sendDegradedProviderAlert(
 ): Promise<void> {
   const to = await mailer.adminRecipients();
   if (!to.length) return;
-  await mailer.send(to, buildAlertTitle(degraded), buildAlertHtml([degraded]));
+  await mailer.send(to, buildAlertTitle(degraded), buildAlertHtml([degraded]), buildAlertMessage(degraded));
 }

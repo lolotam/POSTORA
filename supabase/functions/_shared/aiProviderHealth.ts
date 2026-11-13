@@ -42,6 +42,8 @@ export interface HealthResult {
 /** A provider that just degraded — the shape the admin alert is built from. */
 export interface DegradedProvider {
   provider_code: string;
+  /** The provider's display name: the alert names the provider, not its code. */
+  display_name: string;
   auth_method: HealthAuthMethod;
   status: "failed" | "needs_relogin";
   reason: string | null;
@@ -51,10 +53,59 @@ export interface DegradedProvider {
 export const HEALTH_RUN_CONCURRENCY = 3;
 /** One probe. The probes in ai-config have no timeout today; this bounds them. */
 export const HEALTH_TARGET_TIMEOUT_MS = 12_000;
+/**
+ * One target's whole budget: the probe, the token refresh and the catalogue sync
+ * share ONE signal. The probe alone may take 12 seconds, so the budget leaves the
+ * sync a few seconds of its own. Six targets at 15 seconds over three workers is
+ * 30 seconds, and the platform kills the function at 50.
+ */
+export const HEALTH_TARGET_BUDGET_MS = 15_000;
 /** Server-side hard stop, 10 seconds of headroom under the 50 second platform limit. */
 export const HEALTH_RUN_DEADLINE_MS = 40_000;
-/** Targets per HTTP call. 6 x 12s / 3 concurrent = 24s even when every probe times out. */
+/**
+ * The alert phase runs after the target phase, so it gets what is left. A row that
+ * is not alerted inside this budget stays claimed and is re-claimed ten minutes later.
+ */
+export const HEALTH_ALERT_BUDGET_MS = 8_000;
+/** Targets per HTTP call. 6 x 15s / 3 concurrent = 30s even when every target times out. */
 export const HEALTH_CHUNK_SIZE = 6;
+
+/** The reason a target the time budget never reached is reported with. */
+export const HEALTH_SKIPPED_REASON = "The run ran out of time before this provider was tested.";
+
+/**
+ * A fetch that cannot outlive the target's budget. The request's own signal and
+ * the target's signal are both honoured: the tighter of the two wins.
+ */
+export function boundedFetch(signal: AbortSignal): typeof fetch {
+  return ((input: RequestInfo | URL, init?: RequestInit) =>
+    fetch(input, {
+      ...init,
+      signal: init?.signal ? AbortSignal.any([init.signal, signal]) : signal,
+    })) as typeof fetch;
+}
+
+/**
+ * Ends a phase that cannot be cancelled (a token refresh inside pi-ai) as soon as
+ * the target's budget is over, instead of waiting for it.
+ */
+export function withSignal<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
+  if (signal.aborted) return Promise.reject(signal.reason);
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = () => reject(signal.reason);
+    signal.addEventListener("abort", onAbort, { once: true });
+    promise.then(
+      (value) => {
+        signal.removeEventListener("abort", onAbort);
+        resolve(value);
+      },
+      (error) => {
+        signal.removeEventListener("abort", onAbort);
+        reject(error);
+      },
+    );
+  });
+}
 
 const REASON_LIMIT = 500;
 
