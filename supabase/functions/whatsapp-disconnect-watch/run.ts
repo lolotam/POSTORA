@@ -39,7 +39,8 @@ export interface Episode {
    * Start of the current continuous TERMINAL streak, or null when there is no terminal
    * streak: a transient observation clears it, and a terminal observation that follows a
    * transient starts a new one. A null `since` means the ten minute grace window has not
-   * started yet -- only the backstop can fire.
+   * started yet -- only the backstop can first flag it. Already flagged episodes retry
+   * unfinished deliveries regardless of the current streak.
    */
   since: string | null;
   first_seen: string;
@@ -246,9 +247,8 @@ async function applyAccountState(
     if (!episode) return outcome;
 
     if (terminal) outcome.episodes = 1;
-    if (!isAlertDue(episode, deps.now())) return outcome;
-
     if (!episode.flagged_at) {
+      if (!isAlertDue(episode, deps.now())) return outcome;
       const flagged = await deps.markFlagged(candidate.id, episode.episode_id, DISCONNECT_REASON);
       if (!flagged) return outcome;
       outcome.flagged = 1;

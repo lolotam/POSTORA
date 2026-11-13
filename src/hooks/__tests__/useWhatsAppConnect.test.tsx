@@ -2,7 +2,7 @@ import type { ReactNode } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, renderHook } from "@testing-library/react";
 import { beforeEach, expect, it, vi } from "vitest";
-import { useWhatsAppConnect, useWhatsAppDisconnect } from "../useWhatsAppConnect";
+import { useWhatsAppConnect, useWhatsAppDisconnect, useWhatsAppReconnect } from "../useWhatsAppConnect";
 
 const mocks = vi.hoisted(() => ({ signup: vi.fn(), invoke: vi.fn(), toast: vi.fn() }));
 vi.mock("@/lib/whatsappEmbeddedSignup", () => ({ launchWhatsAppSignup: mocks.signup }));
@@ -35,4 +35,19 @@ it("a partial remote disconnect tells the owner how to finish logout", async () 
     title: "WhatsApp disconnected locally",
     description: expect.stringContaining("Remove the linked device"),
   }));
+});
+
+it.each([
+  ["disconnect", useWhatsAppDisconnect],
+  ["reconnect", useWhatsAppReconnect],
+] as const)("successful %s invalidates the reconnect banner immediately", async (_action, useMutation) => {
+  const client = new QueryClient();
+  const bannerKey = ["accounts-needing-reauth", "user-1"];
+  client.setQueryData(bannerKey, ["flagged-account"]);
+  mocks.invoke.mockResolvedValue({ data: { success: true }, error: null });
+  const { result } = renderHook(() => useMutation(), { wrapper: wrapperFor(client) });
+
+  await act(() => result.current.mutateAsync("acc-1"));
+
+  expect(client.getQueryState(bannerKey)?.isInvalidated).toBe(true);
 });

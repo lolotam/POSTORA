@@ -481,6 +481,7 @@ export function WhatsAppSetup({ connectedAccounts }: WhatsAppSetupProps) {
                 setQrAccountId(null);
                 queryClient.invalidateQueries({ queryKey: ["social_accounts"] });
                 queryClient.invalidateQueries({ queryKey: ["messaging_accounts"] });
+                queryClient.invalidateQueries({ queryKey: ["accounts-needing-reauth"] });
                 queryClient.invalidateQueries({ queryKey: ["whatsapp-reconnectable-qr"] });
               }}
               onConnectAsNew={() => {

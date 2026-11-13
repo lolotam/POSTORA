@@ -105,6 +105,7 @@ export function useWhatsAppReconnect() {
       });
       queryClient.invalidateQueries({ queryKey: ["social_accounts"] });
       queryClient.invalidateQueries({ queryKey: ["messaging_accounts"] });
+      queryClient.invalidateQueries({ queryKey: ["accounts-needing-reauth"] });
     },
     onError: (err: Error) => {
       toast({ title: "Reconnect failed", description: err.message, variant: "destructive" });
@@ -159,6 +160,7 @@ export function useWhatsAppDisconnect() {
       });
       queryClient.invalidateQueries({ queryKey: ["social_accounts"] });
       queryClient.invalidateQueries({ queryKey: ["messaging_accounts"] });
+      queryClient.invalidateQueries({ queryKey: ["accounts-needing-reauth"] });
     },
     onError: (err: Error) => {
       toast({ title: "Disconnect failed", description: err.message, variant: "destructive" });

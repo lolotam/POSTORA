@@ -674,3 +674,42 @@ Deno.test("watcher logs distinguish operational codes without exposing error tex
   assertEquals(logged.some((line) => line.includes("error_code=unknown_error")), true);
   assertEquals(logged.some((line) => /@|private|96512345678/.test(line)), false);
 });
+
+Deno.test("a failed alert retries on connecting before the backstop without reflagging", async () => {
+  for (const completed of ["user_email_at", "admin_email_at"] as const) {
+    const observed = episode(minutesAgo(11), minutesAgo(11));
+    const { deps, rec } = fakeDeps([candidate("acc-1", false)], { "acc-1": "close" }, observed);
+    deps.markFlagged = () => {
+      observed.flagged_at = NOW_DATE.toISOString();
+      return Promise.resolve(true);
+    };
+    deps.dispatchAlert = () => {
+      observed[completed] = NOW_DATE.toISOString();
+      return Promise.resolve({
+        ownerSent: completed === "user_email_at",
+        adminSent: completed === "admin_email_at",
+        failed: [completed === "user_email_at" ? "admin" : "owner"],
+        skipped: null,
+      });
+    };
+    const first = await runWatch(deps);
+    assertEquals(first.flagged, 1);
+    assertEquals(first.failed, ["acc-1"]);
+
+    // SQL observe preserves the flag and email markers, but clears the terminal streak.
+    observed.since = null;
+    observed.state = "connecting";
+    deps.readState = () => Promise.resolve("connecting");
+    deps.now = () => new Date(NOW + 5 * 60_000);
+    deps.dispatchAlert = () => {
+      rec.calls.push("retryAlert");
+      return Promise.resolve({ ownerSent: true, adminSent: true, failed: [], skipped: null });
+    };
+
+    const retry = await runWatch(deps);
+    assertEquals(retry.flagged, 0);
+    assertEquals(retry.alerted, 1);
+    assertEquals(retry.failed, []);
+    assertEquals(rec.calls.filter((call) => call === "retryAlert").length, 1);
+  }
+});
