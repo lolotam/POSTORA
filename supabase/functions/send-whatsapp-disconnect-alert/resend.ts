@@ -40,6 +40,20 @@ export class ResendSendError extends Error {
   }
 }
 
+/** The only provider conflict name this code is allowed to keep. */
+const KNOWN_PERMANENT_CONFLICT = "invalid_idempotent_request";
+
+/**
+ * A stable code for a 409 that will not be retried.
+ *
+ * The known Resend name is kept so the caller can tell a payload mismatch from any
+ * other conflict. Every other name, including an empty one, becomes a local code:
+ * the provider's name is not a contract and must not reach a log line.
+ */
+function permanentConflictCode(name: string | null): string {
+  return name === KNOWN_PERMANENT_CONFLICT ? name : "idempotency_conflict";
+}
+
 /** "timeout" for an aborted request, "network_error" for anything else the fetch threw. */
 function failureCode(error: unknown): string {
   if (typeof error === "object" && error !== null) {
@@ -134,8 +148,9 @@ export async function sendResendEmail(email: ResendEmail, options: ResendOptions
       }
       // `invalid_idempotent_request` means the key was already used with a different
       // payload, so the provider will never accept this body and a retry cannot help.
-      // An unreadable body and every other conflict are equally permanent.
-      throw new ResendSendError(name ?? "idempotency_conflict", 409);
+      // Any other name is free text from the provider. It must not become the error
+      // code: errorCode logs a string code as-is, and the body can carry an address.
+      throw new ResendSendError(permanentConflictCode(name), 409);
     }
 
     // A rate limit and a server error are worth one more attempt; a client error is

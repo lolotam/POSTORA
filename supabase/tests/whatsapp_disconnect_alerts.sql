@@ -2,7 +2,9 @@
 -- claims, the deliberate-disconnect marker, the poll freshness column and the
 -- least-privilege grants.
 --
--- Migration under test: supabase/migrations/20261113200000_whatsapp_disconnect_alerts.sql
+-- Migrations under test:
+--   supabase/migrations/20261113200000_whatsapp_disconnect_alerts.sql
+--   supabase/migrations/20261113203000_whatsapp_disconnect_watch_cron.sql
 --
 -- One transaction, synthetic fixtures only, labelled ASSERTs, ROLLBACK, sentinel last.
 -- Nothing here touches a real database: the harness applies this to a disposable
@@ -328,6 +330,7 @@ BEGIN
   -- ------------------ E12: a deliberate disconnect is never an outage
   ASSERT public.mark_whatsapp_user_disconnected(acc_delib) = true,
     'E12 the deliberate marker is written';
+  UPDATE public.social_accounts SET is_active = false WHERE id = acc_delib;
   ASSERT (SELECT account_metadata->>'whatsapp_user_disconnected_at' IS NOT NULL
             FROM public.social_accounts WHERE id = acc_delib),
     'E12 the deliberate marker is stored on the row';
@@ -347,6 +350,55 @@ BEGIN
   ASSERT (SELECT account_metadata->>'whatsapp_user_disconnected_at' IS NOT NULL
             FROM public.social_accounts WHERE id = acc_delib),
     'E12 the deliberate marker survives a clear';
+
+  -- E12b: a failed teardown can leave the marker on an ACTIVE row when its rollback
+  -- also fails. That marker is stale, not proof of a completed disconnect. A healthy
+  -- clear removes it, and a terminal observation opens an episode instead of hiding it.
+  UPDATE public.social_accounts
+     SET account_metadata = jsonb_build_object(
+           'whatsapp_user_disconnected_at', to_jsonb((clock_timestamp() - interval '31 minutes')::text))
+   WHERE id = acc_two;
+  ASSERT public.clear_whatsapp_disconnect_episode(acc_two) = true,
+    'E12b a healthy active row sheds a stale deliberate marker';
+  ASSERT (SELECT is_active
+            AND NOT (account_metadata ? 'whatsapp_user_disconnected_at')
+            FROM public.social_accounts WHERE id = acc_two),
+    'E12b the clear leaves the account active and unmarked';
+
+  UPDATE public.social_accounts
+     SET account_metadata = jsonb_build_object(
+           'whatsapp_user_disconnected_at', to_jsonb((clock_timestamp() - interval '31 minutes')::text))
+   WHERE id = acc_two;
+  ep_two := public.observe_whatsapp_disconnect_state(acc_two, 'close', true);
+  ASSERT ep_two IS NOT NULL,
+    'E12b an active row with a stale deliberate marker is observed';
+  ASSERT (SELECT NOT (account_metadata ? 'whatsapp_user_disconnected_at')
+            AND account_metadata->'whatsapp_disconnect' = ep_two
+            FROM public.social_accounts WHERE id = acc_two),
+    'E12b the observation opens the episode and removes the stale marker';
+  ASSERT public.clear_whatsapp_disconnect_episode(acc_two) = true,
+    'E12b the active-row fixture is clean again';
+
+  -- E12c: recovery must not race a deliberate teardown that is happening now.
+  UPDATE public.social_accounts
+     SET account_metadata = jsonb_build_object(
+           'whatsapp_user_disconnected_at', to_jsonb(clock_timestamp()::text))
+   WHERE id = acc_two;
+  ASSERT public.observe_whatsapp_disconnect_state(acc_two, 'close', true) IS NULL,
+    'E12c a fresh in-progress marker still suppresses observation';
+  ASSERT public.clear_whatsapp_disconnect_episode(acc_two) = false,
+    'E12c a fresh in-progress marker is not cleared';
+  ASSERT public.unmark_whatsapp_user_disconnected(acc_two) = true,
+    'E12c the active-row fixture is clean again';
+
+  -- A corrupt active marker must not suppress recovery indefinitely either.
+  UPDATE public.social_accounts
+     SET account_metadata = '{"whatsapp_user_disconnected_at":"not-a-timestamp"}'::jsonb
+   WHERE id = acc_two;
+  ASSERT public.observe_whatsapp_disconnect_state(acc_two, 'close', true) IS NOT NULL,
+    'E12d an unreadable active marker cannot hide a new outage';
+  ASSERT public.clear_whatsapp_disconnect_episode(acc_two) = true,
+    'E12d the recovered episode can be cleared normally';
 
   -- ------------------------------------------- E13: clearing removes everything
   UPDATE public.social_accounts
@@ -574,6 +626,7 @@ BEGIN
   -- The teardown marks first and deactivates second. When the deactivation fails, the row
   -- stays active with the marker on it, and the watcher skips every account carrying the
   -- marker: a live account whose session is gone would never be polled again.
+  UPDATE public.social_accounts SET is_active = true WHERE id = acc_delib;
   ASSERT public.mark_whatsapp_user_disconnected(acc_delib) = true,
     'E20 the deliberate marker is written';
   ASSERT public.unmark_whatsapp_user_disconnected(acc_delib) = true,
@@ -687,6 +740,84 @@ BEGIN
   ASSERT (SELECT NOT is_active FROM public.social_accounts WHERE id = acc_two),
     'E24b the account stays inactive';
 
+  -- E24d: a healthy poll on an unflagged inactive episode drops the episode only.
+  -- needs_reauth stays, because on an inactive row that marker is the banner.
+  -- is_active stays false: this is not a restore.
+  UPDATE public.social_accounts
+     SET needs_reauth = true,
+         last_refresh_error = 'banner stays',
+         account_metadata = jsonb_set(
+           COALESCE(account_metadata, '{}'::jsonb),
+           '{whatsapp_disconnect}',
+           jsonb_build_object(
+             'episode_id', 'a7a7a7a7-00e1-4111-8111-a7a7a7a7a7a7',
+             'since', clock_timestamp()::text,
+             'first_seen', clock_timestamp()::text,
+             'state', 'close',
+             'observed_at', clock_timestamp()::text))
+   WHERE id = acc_two;
+  INSERT INTO public.whatsapp_disconnect_email_payloads
+    (social_account_id, kind, episode_id, payload)
+  VALUES
+    (acc_two, 'user', 'a7a7a7a7-00e1-4111-8111-a7a7a7a7a7a7', payload);
+  ASSERT public.clear_whatsapp_disconnect_episode(acc_two) = false,
+    'E24d the ordinary clear cannot remove an inactive row reconnect banner';
+  ASSERT public.clear_unflagged_whatsapp_disconnect_episode(acc_two) = true,
+    'E24d an unflagged inactive episode is cleared';
+  ASSERT (SELECT NOT is_active
+            AND needs_reauth
+            AND last_refresh_error = 'banner stays'
+            AND NOT (account_metadata ? 'whatsapp_disconnect')
+            AND NOT (account_metadata ? 'whatsapp_disconnect_user_email_at')
+            AND NOT (account_metadata ? 'whatsapp_disconnect_admin_email_at')
+            AND NOT (account_metadata ? 'whatsapp_disconnect_claimed_at')
+            FROM public.social_accounts WHERE id = acc_two),
+    'E24d the row stays inactive and the reauth marker stays';
+  ASSERT NOT EXISTS (SELECT 1 FROM public.whatsapp_disconnect_email_payloads
+                       WHERE social_account_id = acc_two),
+    'E24d the stored payload goes with the episode';
+  ep_two := public.observe_whatsapp_disconnect_state(acc_two, 'close', true);
+  ASSERT ep_two->>'episode_id' <> 'a7a7a7a7-00e1-4111-8111-a7a7a7a7a7a7'
+    AND (ep_two->>'since')::timestamptz >= clock_timestamp() - interval '1 minute'
+    AND (ep_two->>'first_seen')::timestamptz >= clock_timestamp() - interval '1 minute',
+    'E24d the next outage starts a fresh grace window rather than reusing old anchors';
+
+  -- A flagged episode is the restore's business. This function must not touch it,
+  -- and must not delete the payload of an episode it refused.
+  UPDATE public.social_accounts
+     SET account_metadata = jsonb_set(
+           COALESCE(account_metadata, '{}'::jsonb),
+           '{whatsapp_disconnect}',
+           jsonb_build_object(
+             'episode_id', 'a7a7a7a7-00e2-4111-8111-a7a7a7a7a7a7',
+             'since', clock_timestamp()::text,
+             'first_seen', clock_timestamp()::text,
+             'state', 'close',
+             'observed_at', clock_timestamp()::text,
+             'flagged_at', clock_timestamp()::text))
+   WHERE id = acc_two;
+  INSERT INTO public.whatsapp_disconnect_email_payloads
+    (social_account_id, kind, episode_id, payload)
+  VALUES
+    (acc_two, 'user', 'a7a7a7a7-00e2-4111-8111-a7a7a7a7a7a7', payload);
+  ASSERT public.clear_unflagged_whatsapp_disconnect_episode(acc_two) = false,
+    'E24d a flagged episode is not cleared';
+  ASSERT (SELECT NOT is_active
+            AND needs_reauth
+            AND last_refresh_error = 'banner stays'
+            AND account_metadata->'whatsapp_disconnect'->>'flagged_at' IS NOT NULL
+            FROM public.social_accounts WHERE id = acc_two),
+    'E24d the flagged episode and the banner stay';
+  ASSERT EXISTS (SELECT 1 FROM public.whatsapp_disconnect_email_payloads
+                   WHERE social_account_id = acc_two),
+    'E24d a refused clear leaves the payload';
+  DELETE FROM public.whatsapp_disconnect_email_payloads WHERE social_account_id = acc_two;
+
+  ASSERT public.clear_unflagged_whatsapp_disconnect_episode(acc) = false,
+    'E24d an active row is not cleared here';
+  ASSERT public.clear_unflagged_whatsapp_disconnect_episode(acc_delib) = false,
+    'E24d a deliberately disconnected account is not cleared here';
+
   -- E24c: an account the owner disconnected on purpose is never restored
   UPDATE public.social_accounts
      SET account_metadata = jsonb_set(
@@ -768,6 +899,19 @@ BEGIN
   ASSERT has_function_privilege('service_role',
         'public.backfill_whatsapp_legacy_disconnects(timestamptz)', 'EXECUTE'),
     'E26 the service role may run the backfill';
+  ASSERT NOT has_function_privilege('authenticated',
+        'public.clear_unflagged_whatsapp_disconnect_episode(uuid)', 'EXECUTE'),
+    'E26 the unflagged clear is not browser-callable';
+  ASSERT NOT has_function_privilege('anon',
+        'public.clear_unflagged_whatsapp_disconnect_episode(uuid)', 'EXECUTE'),
+    'E26 the unflagged clear is not anon-callable';
+  ASSERT has_function_privilege('service_role',
+        'public.clear_unflagged_whatsapp_disconnect_episode(uuid)', 'EXECUTE'),
+    'E26 the service role may clear an unflagged episode';
+
+  ASSERT EXISTS (SELECT 1 FROM cron.job
+                 WHERE jobname = 'whatsapp-disconnect-watch' AND NOT active),
+    'E27 migration leaves the watcher paused until deployment and final backfill';
 END $$;
 
 ROLLBACK;

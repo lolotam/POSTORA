@@ -180,6 +180,24 @@ Deno.test("an invalid idempotent request fails the send and is not retried", asy
   assertEquals(calls.length, 1);
 });
 
+Deno.test("a conflict whose name is provider text does not keep that text", async () => {
+  // The body name is not a contract. An address or a sentence in it must not become
+  // the error code: errorCode copies a string code into the log.
+  const leaked = "retry refused for owner@example.invalid because the payload changed";
+  const { calls, fetcher } = recorder([() => conflict(leaked)]);
+
+  const error = await assertRejects(
+    () => sendResendEmail(EMAIL, { ...OPTIONS, fetcher }),
+    ResendSendError,
+  );
+
+  assertEquals(error.code, "idempotency_conflict");
+  assertEquals(error.status, 409);
+  assertEquals(error.message.includes(leaked), false);
+  assertEquals(error.message.includes("owner@example.invalid"), false);
+  assertEquals(calls.length, 1);
+});
+
 Deno.test("a conflict with an unreadable body fails the send", async () => {
   // The body carries no name, so the conflict cannot be classified. An unclassified
   // conflict is a failure: it is never evidence that the mail went out.

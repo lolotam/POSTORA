@@ -95,6 +95,10 @@ function fakeDeps(
       rec.calls.push(`restore:${accountId}`);
       return Promise.resolve(options.restored === true);
     },
+    clearUnflagged: (accountId) => {
+      rec.calls.push(`clearUnflagged:${accountId}`);
+      return Promise.resolve();
+    },
     markFlagged: (accountId, episodeId) => {
       rec.calls.push(`markFlagged:${accountId}`);
       rec.flaggedEpisodes.push(episodeId);
@@ -204,6 +208,7 @@ Deno.test("a candidate polled five minutes ago is polled again", async () => {
     observe: () => Promise.resolve(null),
     clear: () => Promise.resolve(),
     restore: () => Promise.resolve(false),
+    clearUnflagged: () => Promise.resolve(),
     markFlagged: () => Promise.resolve(false),
     dispatchAlert: () =>
       Promise.resolve({ ownerSent: false, adminSent: false, failed: [], skipped: null }),
@@ -244,6 +249,7 @@ Deno.test("a candidate polled inside the freshness window is skipped", async () 
     observe: () => Promise.resolve(null),
     clear: () => Promise.resolve(),
     restore: () => Promise.resolve(false),
+    clearUnflagged: () => Promise.resolve(),
     markFlagged: () => Promise.resolve(false),
     dispatchAlert: () =>
       Promise.resolve({ ownerSent: false, adminSent: false, failed: [], skipped: null }),
@@ -279,18 +285,21 @@ Deno.test("a healthy account is cleared and nothing else happens", async () => {
   });
 });
 
-Deno.test("a healthy but inactive account asks to be restored, and never to be cleared", async () => {
-  // A `close` webhook set is_active = false, and the owner still has to scan a new QR
-  // code. Evolution reporting "open" again must not clear the episode: the clear removes
-  // needs_reauth without reactivating the row, so the banner would stop asking for the
-  // QR code the owner still needs. The watcher asks the conditional restore instead, and
-  // the SQL decides whether the account is really its own to restore.
+Deno.test("a healthy inactive account with nothing to restore drops the unflagged episode", async () => {
+  // Restore is only for an episode this watcher flagged. When it refuses, the episode
+  // was never flagged: leaving it would keep a stale episode on an inactive row, and the
+  // ordinary clear would also wipe needs_reauth, which is the banner on that row.
   const { deps, rec } = fakeDeps([candidate("acc-1", false)], { "acc-1": "open" });
 
   const summary = await runWatch(deps);
 
+  assertEquals(rec.calls, [
+    "listCandidates",
+    "readState:postora_acc-1",
+    "restore:acc-1",
+    "clearUnflagged:acc-1",
+  ]);
   assertEquals(rec.calls.includes("clear:acc-1"), false);
-  assertEquals(rec.calls.includes("restore:acc-1"), true);
   assertEquals(summary.polled, 1);
   assertEquals(summary.failed, []);
 });
@@ -311,6 +320,7 @@ Deno.test("a healthy poll restores an account the watcher deactivated", async ()
   const summary = await runWatch(deps);
 
   assertEquals(rec.calls, ["listCandidates", "readState:postora_acc-1", "restore:acc-1"]);
+  assertEquals(rec.calls.includes("clearUnflagged:acc-1"), false);
   assertEquals(summary.polled, 1);
   assertEquals(summary.failed, []);
 });
@@ -476,10 +486,11 @@ Deno.test("one failing account does not stop the others", async () => {
   assertEquals(summary.alerted, 1);
 });
 
-Deno.test("a state read that fails is an account failure, not a poll", async () => {
-  // An unreachable Evolution is not evidence about the account. Recording it as polled
-  // would skip the account for the whole freshness window, and the outage behind it
-  // would go unnoticed.
+Deno.test("a state read that fails is an account failure and is still marked polled", async () => {
+  // Candidates are ordered by last_polled_at, nulls first. A read that throws and is
+  // left unmarked stays at the head of every run and the other accounts are never
+  // reached. The poll time rotates the queue. The failure stays in the summary, and
+  // nothing is observed, cleared, or alerted: an unreachable Evolution is not evidence.
   const { deps, rec } = fakeDeps(
     [candidate("acc-1")],
     { "acc-1": "open" },
@@ -491,8 +502,27 @@ Deno.test("a state read that fails is an account failure, not a poll", async () 
 
   assertEquals(summary.polled, 0);
   assertEquals(summary.failed, ["acc-1"]);
-  assertEquals(rec.polled, []);
+  assertEquals(rec.polled, [{ instanceName: "postora_acc-1", at: NOW_DATE }]);
   assertEquals(rec.calls.includes("clear:acc-1"), false);
+  assertEquals(rec.calls.includes("clearUnflagged:acc-1"), false);
+  assertEquals(rec.calls.includes("observe:acc-1"), false);
+  assertEquals(rec.calls.includes("dispatchAlert:acc-1"), false);
+});
+
+Deno.test("a failed read stays a failure when recording the poll time throws", async () => {
+  const { deps } = fakeDeps(
+    [candidate("acc-1")],
+    { "acc-1": "open" },
+    episode(minutesAgo(30), minutesAgo(30)),
+    new Set(["postora_acc-1"]),
+  );
+  const summary = await runWatch({
+    ...deps,
+    markPolled: () => Promise.reject(new Error("poll mark failed")),
+  });
+
+  assertEquals(summary.polled, 0);
+  assertEquals(summary.failed, ["acc-1"]);
 });
 
 Deno.test("one run polls at most MAX_ACCOUNTS_PER_RUN accounts", async () => {
@@ -507,6 +537,52 @@ Deno.test("one run polls at most MAX_ACCOUNTS_PER_RUN accounts", async () => {
 
   assertEquals(summary.polled, MAX_ACCOUNTS_PER_RUN);
   assertEquals(rec.calls.filter((call) => call.startsWith("readState:")).length, MAX_ACCOUNTS_PER_RUN);
+});
+
+Deno.test("fifty persistent read failures rotate out so the next account is polled", async () => {
+  // PR #411: unmarked failures monopolized the oldest-first limit on every cron tick.
+  const candidates = Array.from({ length: 51 }, (_, index) => candidate(`acc-${index}`));
+  const failures = new Set(candidates.slice(0, 50).map((row) => row.instance_name));
+  const { deps, rec } = fakeDeps(candidates, { "acc-50": "open" }, null, failures);
+  const lastAttempt = new Map<string, number>();
+  let now = NOW_DATE;
+  const rotating: WatchDeps = {
+    ...deps,
+    listCandidates: (limit) => Promise.resolve(
+      [...candidates].sort((a, b) =>
+        (lastAttempt.get(a.instance_name) ?? 0) - (lastAttempt.get(b.instance_name) ?? 0)
+      ).slice(0, limit),
+    ),
+    markPolled: (name, at) => {
+      lastAttempt.set(name, at.getTime());
+      return Promise.resolve();
+    },
+    now: () => now,
+  };
+  const first = await runWatch(rotating);
+  now = new Date(NOW + POLL_CRON_INTERVAL_MINUTES * 60_000);
+  const second = await runWatch(rotating);
+
+  assertEquals(first.failed.length, 50);
+  assertEquals(second.polled, 1);
+  assertEquals(rec.calls.includes("clear:acc-50"), true);
+});
+
+Deno.test("a failed poll timestamp write never applies state and does not stop the next account", async () => {
+  const { deps, rec } = fakeDeps(
+    [candidate("acc-1"), candidate("acc-2")],
+    { "acc-1": "close", "acc-2": "open" },
+  );
+  const summary = await runWatch({
+    ...deps,
+    markPolled: (name, at) => name === "postora_acc-1"
+      ? Promise.reject(new Error("timestamp unavailable"))
+      : deps.markPolled(name, at),
+  });
+  assertEquals(summary.failed, ["acc-1"]);
+  assertEquals(summary.polled, 1);
+  assertEquals(rec.calls.includes("observe:acc-1"), false);
+  assertEquals(rec.calls.includes("clear:acc-2"), true);
 });
 
 Deno.test("a run that overruns its budget leaves the remaining candidates for the next run", async () => {

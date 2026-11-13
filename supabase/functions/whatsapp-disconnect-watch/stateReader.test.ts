@@ -11,8 +11,8 @@ Deno.test("the state is read out of the Evolution payload", async () => {
 });
 
 Deno.test("a read that cannot be answered is a failure, not a state", async () => {
-  // Answering null here would record the account as polled and skip it, and an outage
-  // behind an unreachable Evolution would go unnoticed.
+  // Answering null here would classify the state as unknown. The caller counts a throw
+  // as a failed account and still records the poll time so the queue rotates.
   await assertRejects(() =>
     readConnectionState(
       { connectionState: () => Promise.reject(new Error("evolution is down")) },

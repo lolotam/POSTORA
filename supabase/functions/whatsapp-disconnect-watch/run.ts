@@ -117,6 +117,14 @@ export interface WatchDeps {
    */
   restore(accountId: string): Promise<boolean>;
   /**
+   * Drops an unflagged episode on an inactive row.
+   *
+   * Restore already refused, so this episode is not one the watcher flagged. The ordinary
+   * clear would also wipe needs_reauth, and on an inactive row that marker is the banner.
+   * This call must not change is_active, needs_reauth, or last_refresh_error.
+   */
+  clearUnflagged(accountId: string): Promise<void>;
+  /**
    * Flags the account for reconnect, but only while `episodeId` is still its open episode.
    * False means the owner reconnected or disconnected on purpose since the observation, and
    * the watcher then sends no alert.
@@ -152,19 +160,29 @@ interface AccountOutcome {
 type StateRead = { kind: "read"; state: string | null } | { kind: "failed" };
 
 /**
- * The live state of one account, and the poll time that proves we looked. A read that throws
- * is a failed account, never a state: an unreachable Evolution is not evidence.
+ * The live state of one account, and the poll time that proves we looked.
+ *
+ * A read that throws is a failed account, never a state: an unreachable Evolution is not
+ * evidence, so nothing is observed, cleared, or alerted. The poll time is still written.
+ * Candidates are ordered by that time, nulls first, so a row that stays unmarked is the
+ * first row of every run and the other accounts are never reached.
  */
 async function readStateFor(deps: WatchDeps, candidate: WatchCandidate): Promise<StateRead> {
+  let read: StateRead = { kind: "failed" };
   try {
-    const state = await deps.readState(candidate.instance_name);
-    await deps.markPolled(candidate.instance_name, deps.now());
-    return { kind: "read", state };
+    read = { kind: "read", state: await deps.readState(candidate.instance_name) };
   } catch {
     // One broken account must never stop the others. The account id identifies the row.
+    // The thrown value is not logged: an Evolution error can carry a provider body.
     console.error(`[whatsapp-disconnect-watch] account ${candidate.id}: state read failed`);
+  }
+  try {
+    await deps.markPolled(candidate.instance_name, deps.now());
+  } catch {
+    console.error(`[whatsapp-disconnect-watch] account ${candidate.id}: poll mark failed`);
     return { kind: "failed" };
   }
+  return read;
 }
 
 /** Applies one observed state to one account. */
@@ -196,8 +214,14 @@ async function applyAccountState(
       // flagged, and the account must carry no deliberate-disconnect marker -- so an
       // account the owner disconnected on purpose, or one that was inactive for another
       // reason, is never resurrected. The RPC decides; the watcher only asks.
-      if (candidate.is_active) await deps.clear(candidate.id);
-      else await deps.restore(candidate.id);
+      if (candidate.is_active) {
+        await deps.clear(candidate.id);
+      } else {
+        const restored = await deps.restore(candidate.id);
+        // False means the open episode was not one this watcher flagged. Drop that
+        // episode without reactivating the row and without touching the banner.
+        if (!restored) await deps.clearUnflagged(candidate.id);
+      }
       return outcome;
     }
 

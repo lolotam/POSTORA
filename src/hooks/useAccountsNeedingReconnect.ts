@@ -27,6 +27,18 @@ export interface AccountsNeedingReconnectResult {
   partialError: { scope: ReconnectCheckScope } | null;
 }
 
+/**
+ * An active Evolution QR row is connected. needs_reauth on it is not a disconnect banner:
+ * that marker is honoured only while the row is inactive, which is the second query.
+ */
+function honourReauthOnActiveRow(account: AccountNeedingReconnect): boolean {
+  return !(
+    account.is_active &&
+    account.platform === "whatsapp" &&
+    account.connection_mode === "evolution_qr"
+  );
+}
+
 const COLUMNS =
   "id, platform, platform_username, needs_reauth, last_refresh_error, social_profile_id, connection_mode, is_active";
 
@@ -71,7 +83,8 @@ export function useAccountsNeedingReconnect() {
       // Rethrowing keeps react-query's failed state, its backoff and its retry.
       if (active.error && whatsappQr.error) throw active.error;
 
-      const activeRows = (active.error ? [] : (active.data ?? [])) as AccountNeedingReconnect[];
+      const activeRows = ((active.error ? [] : (active.data ?? [])) as AccountNeedingReconnect[])
+        .filter(honourReauthOnActiveRow);
       const qrRows = (whatsappQr.error ? [] : (whatsappQr.data ?? [])) as AccountNeedingReconnect[];
 
       const merged = [...activeRows, ...qrRows];

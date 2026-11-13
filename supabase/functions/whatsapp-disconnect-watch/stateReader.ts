@@ -11,10 +11,9 @@ export interface ConnectionStateApi {
  * The live state of one instance.
  *
  * A read that cannot be answered is NOT a state and must not become one: it raises, so
- * the caller treats the account as a failure. Answering null instead would record the
- * account as polled and skip it, and an account the watcher could not reach would then
- * go unpolled until the next freshness window, with its outage neither alerted nor
- * recorded.
+ * the caller counts the account as a failure. The caller still records the poll time,
+ * which is what rotates a permanently failing row off the head of the queue. Answering
+ * null here would classify the state as unknown instead of failed.
  */
 export async function readConnectionState(
   api: ConnectionStateApi,

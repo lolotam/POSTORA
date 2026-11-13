@@ -2,6 +2,8 @@
 // alert. The Deno.serve entrypoint builds the deps; everything here is I/O free so the
 // behaviour is testable without Supabase or Resend.
 
+import { sanitizedError } from "../_shared/errorContext.ts";
+
 export const OWNER_SUBJECT = "Your WhatsApp account needs to be reconnected";
 export const ADMIN_SUBJECT = "A Postora user's WhatsApp account needs to be reconnected";
 export const RECONNECT_URL = "https://postora.cloud/messaging/whatsapp/setup";
@@ -91,18 +93,40 @@ function escapeHtml(s: string): string {
 }
 
 /**
+ * Removes a phone number written inside a display name.
+ *
+ * The run is 7 to 15 digits. Shorter runs are shop numbers and years. Separators are the
+ * ones a person puts in a number, and a plus may lead the run. The words around it stay.
+ * The pattern is built per call: a shared global expression keeps lastIndex.
+ */
+function redactPhoneNumbers(text: string): string {
+  return text
+    .replace(/(?:\+?\(?\d[\s().-]*){7,15}/g, " ")
+    .replace(/[ \t]{2,}/g, " ")
+    .trim();
+}
+
+/**
  * The account name is the only identity this email may carry: the row also holds the owner's
  * phone number, and a notification email is forwarded, quoted and searched — never a place
  * for it.
  */
 function accountLabel(account: AlertAccount): string {
   const username = account.platform_username;
-  // The username may BE the phone number. A WhatsApp row whose display name was never
-  // set stores the number in platform_username, and platform_user_id holds the same
-  // digits. Naming it would put the owner's number in both emails, so the generic
-  // label is used instead.
-  if (!username || username === account.platform_user_id) return "WhatsApp";
-  return escapeHtml(username);
+  // The username may BE the phone number, or it may contain the number beside a shop name.
+  // Either one would put the owner's number in both emails.
+  return displayLabel(username, account.platform_user_id, "WhatsApp");
+}
+
+/** A person's display name, with any phone number removed before it is escaped. */
+function displayLabel(name: string | null, phone: string, fallback: string): string {
+  const digits = (name ?? "").replace(/\D/g, "");
+  const phoneDigits = phone.replace(/\D/g, "");
+  if (phoneDigits && digits === phoneDigits && /^[+\d\s().-]+$/.test(name ?? "")) {
+    return escapeHtml(fallback);
+  }
+  const redacted = redactPhoneNumbers(name ?? "");
+  return escapeHtml(redacted || fallback);
 }
 
 function emailShell(
@@ -154,7 +178,7 @@ function emailShell(
 export function buildOwnerEmail(account: AlertAccount, fullName: string | null): string {
   const body = `
             <p style="margin: 0 0 16px 0; color: #374151; font-size: 16px; line-height: 1.6;">
-              Hi ${escapeHtml(fullName || "there")},
+              Hi ${displayLabel(fullName, account.platform_user_id, "there")},
             </p>
             <p style="margin: 0 0 16px 0; color: #374151; font-size: 16px; line-height: 1.6;">
               Your WhatsApp account <strong>${accountLabel(account)}</strong> is no longer connected.
@@ -169,7 +193,7 @@ export function buildOwnerEmail(account: AlertAccount, fullName: string | null):
 }
 
 export function buildAdminEmail(account: AlertAccount, ownerName: string | null): string {
-  const owner = escapeHtml(ownerName || "a Postora user");
+  const owner = displayLabel(ownerName, account.platform_user_id, "a Postora user");
   // No button here: the WhatsApp setup page lists the accounts of the person who opens it,
   // so an admin would land on their own accounts and never on the affected one. The admin
   // cannot reconnect this account either way — only its owner can scan a new QR code.
@@ -257,6 +281,18 @@ interface RecipientOutcome {
   failed: boolean;
 }
 
+function logRecipientError(accountId: string, operation: string, error: unknown): void {
+  const code = sanitizedError(error).error_code;
+  // Database SQLSTATEs and our adapter's codes are stable. Arbitrary provider codes or
+  // error names can contain an address or phone, even when the message is sanitized.
+  const errorCode = /^(?:[A-Z0-9]{5}|PGRST\d{3}|timeout|network_error|provider_error|idempotency_in_flight|invalid_idempotent_request|idempotency_conflict|error|unknown_error)$/.test(code)
+    ? code
+    : "unknown_error";
+  console.error(
+    `[send-whatsapp-disconnect-alert] account ${accountId}: ${operation}; error_code=${errorCode}`,
+  );
+}
+
 async function deliverToOwner(
   deps: SendAlertsDeps,
   account: AlertAccount,
@@ -275,9 +311,9 @@ async function deliverToOwner(
       return { sent: false, failed: true };
     }
     return { sent: outcome === "sent", failed: false };
-  } catch {
-    // Logged with the account id only: never the recipient address or a phone number.
-    console.error(`[send-whatsapp-disconnect-alert] account ${account.id}: owner email failed`);
+  } catch (error) {
+    // Logged with the account id and a stable code only: never recipient or provider text.
+    logRecipientError(account.id, "owner email failed", error);
     return { sent: false, failed: true };
   }
 }
@@ -303,8 +339,8 @@ async function deliverToAdmins(
       return { sent: false, failed: true };
     }
     return { sent: outcome === "sent", failed: false };
-  } catch {
-    console.error(`[send-whatsapp-disconnect-alert] account ${account.id}: admin email failed`);
+  } catch (error) {
+    logRecipientError(account.id, "admin email failed", error);
     return { sent: false, failed: true };
   }
 }
@@ -331,10 +367,8 @@ export async function sendDisconnectAlerts(
   let owner: OwnerProfile | null = null;
   try {
     owner = await deps.loadOwnerProfile(account.user_id);
-  } catch {
-    console.error(
-      `[send-whatsapp-disconnect-alert] account ${account.id}: owner profile lookup failed`,
-    );
+  } catch (error) {
+    logRecipientError(account.id, "owner profile lookup failed", error);
     summary.failed.push(account.id);
   }
 

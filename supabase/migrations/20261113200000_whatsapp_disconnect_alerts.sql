@@ -68,8 +68,9 @@ CREATE INDEX IF NOT EXISTS whatsapp_evolution_instances_last_polled_at_idx
 --    `first_seen` is the start of the episode and is never reset while the episode is open.
 --
 --    A deliberate disconnect (whatsapp_user_disconnected_at) is never an outage: the marker is
---    checked under the row lock, so a disconnect that lands while this observation is in flight
---    wins and no episode is opened.
+--    checked under the row lock. An inactive marker always wins; an active marker
+--    blocks observation for 30 minutes while teardown completes. Older active markers
+--    are recovered after a failed teardown and rollback, so outages cannot stay hidden.
 CREATE OR REPLACE FUNCTION public.observe_whatsapp_disconnect_state(
   p_account_id uuid,
   p_state text,
@@ -81,10 +82,13 @@ SET search_path = public, pg_temp
 AS $fn$
 DECLARE
   v_meta jsonb;
+  v_is_active boolean;
+  v_marker_at timestamptz;
   v_episode jsonb;
   v_now timestamptz := clock_timestamp();
 BEGIN
-  SELECT COALESCE(account_metadata, '{}'::jsonb) INTO v_meta
+  SELECT COALESCE(account_metadata, '{}'::jsonb), is_active
+    INTO v_meta, v_is_active
     FROM public.social_accounts
    WHERE id = p_account_id
      AND platform = 'whatsapp'
@@ -96,7 +100,22 @@ BEGIN
   END IF;
 
   IF (v_meta ? 'whatsapp_user_disconnected_at') THEN
-    RETURN NULL;
+    IF NOT v_is_active THEN
+      RETURN NULL;
+    END IF;
+
+    BEGIN
+      v_marker_at := (v_meta->>'whatsapp_user_disconnected_at')::timestamptz;
+    EXCEPTION WHEN others THEN
+      -- A marker written by this feature always has a timestamp. An unreadable value
+      -- on an active row cannot prove a fresh teardown, so it is recoverable.
+      v_marker_at := NULL;
+    END;
+    IF v_marker_at IS NOT NULL
+       AND v_marker_at >= v_now - interval '30 minutes' THEN
+      RETURN NULL;
+    END IF;
+    v_meta := v_meta - 'whatsapp_user_disconnected_at';
   END IF;
 
   IF p_terminal THEN
@@ -136,8 +155,7 @@ BEGIN
   END IF;
 
   UPDATE public.social_accounts
-     SET account_metadata = jsonb_set(
-           COALESCE(account_metadata, '{}'::jsonb), '{whatsapp_disconnect}', v_episode)
+     SET account_metadata = jsonb_set(v_meta, '{whatsapp_disconnect}', v_episode)
    WHERE id = p_account_id
      AND platform = 'whatsapp'
      AND connection_mode = 'evolution_qr';
@@ -389,7 +407,8 @@ GRANT EXECUTE ON FUNCTION public.mark_whatsapp_disconnect_emailed(uuid, text, uu
 --    A deliberately disconnected account is left completely alone: the owner asked for that
 --    disconnect, so nothing here may resurrect it into an alertable state. Its marker is
 --    cleared by the reactivation trigger instead, which is the one thing that means "the
---    owner came back".
+--    owner came back". Active markers older than 30 minutes (or unreadable) belong
+--    to a failed teardown/rollback and can be recovered by a healthy poll.
 CREATE OR REPLACE FUNCTION public.clear_whatsapp_disconnect_episode(p_account_id uuid)
 RETURNS boolean
 LANGUAGE plpgsql
@@ -397,10 +416,37 @@ SECURITY DEFINER
 SET search_path = public, pg_temp
 AS $fn$
 DECLARE
+  v_meta jsonb;
+  v_marker_at timestamptz;
   v_cleared boolean;
 BEGIN
+  SELECT COALESCE(account_metadata, '{}'::jsonb)
+    INTO v_meta
+    FROM public.social_accounts
+   WHERE id = p_account_id
+     AND platform = 'whatsapp'
+     AND connection_mode = 'evolution_qr'
+     AND is_active
+   FOR UPDATE;
+
+  IF NOT FOUND THEN
+    RETURN FALSE;
+  END IF;
+
+  IF (v_meta ? 'whatsapp_user_disconnected_at') THEN
+    BEGIN
+      v_marker_at := (v_meta->>'whatsapp_user_disconnected_at')::timestamptz;
+    EXCEPTION WHEN others THEN
+      v_marker_at := NULL;
+    END;
+    IF v_marker_at IS NOT NULL
+       AND v_marker_at >= clock_timestamp() - interval '30 minutes' THEN
+      RETURN FALSE;
+    END IF;
+  END IF;
+
   UPDATE public.social_accounts
-     SET account_metadata = COALESCE(account_metadata, '{}'::jsonb)
+     SET account_metadata = v_meta
                              - 'whatsapp_disconnect'
                              - 'whatsapp_disconnect_claimed_at'
                              - 'whatsapp_disconnect_user_email_at'
@@ -411,11 +457,11 @@ BEGIN
    WHERE id = p_account_id
      AND platform = 'whatsapp'
      AND connection_mode = 'evolution_qr'
-     AND NOT (COALESCE(account_metadata, '{}'::jsonb) ? 'whatsapp_user_disconnected_at')
-     AND (COALESCE(account_metadata, '{}'::jsonb) ? 'whatsapp_disconnect'
-          OR COALESCE(account_metadata, '{}'::jsonb) ? 'whatsapp_disconnect_user_email_at'
-          OR COALESCE(account_metadata, '{}'::jsonb) ? 'whatsapp_disconnect_admin_email_at'
-          OR COALESCE(account_metadata, '{}'::jsonb) ? 'whatsapp_user_disconnected_at'
+     AND (v_meta ? 'whatsapp_disconnect'
+          OR v_meta ? 'whatsapp_disconnect_user_email_at'
+          OR v_meta ? 'whatsapp_disconnect_admin_email_at'
+          OR v_meta ? 'whatsapp_disconnect_claimed_at'
+          OR v_meta ? 'whatsapp_user_disconnected_at'
           OR needs_reauth = true
           OR last_refresh_error IS NOT NULL);
   v_cleared := FOUND;
@@ -434,6 +480,48 @@ END;
 $fn$;
 REVOKE ALL ON FUNCTION public.clear_whatsapp_disconnect_episode(uuid) FROM PUBLIC, anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.clear_whatsapp_disconnect_episode(uuid) TO service_role;
+
+-- 5a. A healthy inactive unflagged episode closes without clearing the reconnect banner.
+CREATE OR REPLACE FUNCTION public.clear_unflagged_whatsapp_disconnect_episode(p_account_id uuid)
+RETURNS boolean
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $fn$
+DECLARE
+  v_cleared boolean;
+BEGIN
+  UPDATE public.social_accounts
+     SET account_metadata = COALESCE(account_metadata, '{}'::jsonb)
+                              - 'whatsapp_disconnect'
+                              - 'whatsapp_disconnect_claimed_at'
+                              - 'whatsapp_disconnect_user_email_at'
+                              - 'whatsapp_disconnect_admin_email_at'
+   WHERE id = p_account_id
+     AND platform = 'whatsapp'
+     AND connection_mode = 'evolution_qr'
+     AND NOT is_active
+     AND NOT (COALESCE(account_metadata, '{}'::jsonb) ? 'whatsapp_user_disconnected_at')
+     AND (COALESCE(account_metadata, '{}'::jsonb)->'whatsapp_disconnect'->>'flagged_at') IS NULL
+     AND (COALESCE(account_metadata, '{}'::jsonb) ? 'whatsapp_disconnect'
+          OR COALESCE(account_metadata, '{}'::jsonb) ? 'whatsapp_disconnect_claimed_at'
+          OR COALESCE(account_metadata, '{}'::jsonb) ? 'whatsapp_disconnect_user_email_at'
+          OR COALESCE(account_metadata, '{}'::jsonb) ? 'whatsapp_disconnect_admin_email_at');
+  v_cleared := FOUND;
+
+  -- The episode is over, so its stored payloads go with it. A refused clear leaves
+  -- the episode open, and its payload must survive for the retake of a stale claim.
+  IF v_cleared THEN
+    DELETE FROM public.whatsapp_disconnect_email_payloads
+     WHERE social_account_id = p_account_id;
+  END IF;
+
+  RETURN v_cleared;
+END;
+$fn$;
+
+REVOKE ALL ON FUNCTION public.clear_unflagged_whatsapp_disconnect_episode(uuid) FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.clear_unflagged_whatsapp_disconnect_episode(uuid) TO service_role;
 
 -- 6. The owner disconnected this account on purpose. The watch function skips any account
 --    carrying this marker: a deliberate disconnect is not an outage.
@@ -789,4 +877,9 @@ BEGIN
       $$
     );
   END IF;
+  -- Migrations alone must never start alerts. Deploy the shared teardown and both
+  -- functions, rerun backfill_whatsapp_legacy_disconnects(clock_timestamp()), then
+  -- explicitly enable this job with cron.alter_job(jobid, active := true).
+  PERFORM cron.alter_job(jobid, active := false)
+    FROM cron.job WHERE jobname = 'whatsapp-disconnect-watch';
 END $do_cron_whatsapp_disconnect_watch$;

@@ -116,6 +116,44 @@ describe("useAccountsNeedingReconnect", () => {
     expect(result.current.data?.partialError).toBeNull();
   });
 
+  it("drops an active Evolution QR row and keeps an inactive one", async () => {
+    // needs_reauth on a live QR account is not a banner. The inactive query is the
+    // only place that marker is shown.
+    const stray = {
+      id: "acc-qr-live",
+      platform: "whatsapp",
+      connection_mode: "evolution_qr",
+      is_active: true,
+      needs_reauth: true,
+    };
+    const oauth = {
+      id: "acc-ig",
+      platform: "instagram",
+      connection_mode: null,
+      is_active: true,
+      needs_reauth: true,
+    };
+    const inactiveQr = {
+      id: "acc-qr-down",
+      platform: "whatsapp",
+      connection_mode: "evolution_qr",
+      is_active: false,
+      needs_reauth: true,
+    };
+    results = [
+      { data: [stray, oauth], error: null },
+      { data: [inactiveQr], error: null },
+    ];
+
+    const { result } = renderHook(() => useAccountsNeedingReconnect(), {
+      wrapper: createWrapper(),
+    });
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+
+    expect(result.current.data?.accounts).toEqual([oauth, inactiveQr]);
+  });
+
   it("returns an account once when both queries returned it", async () => {
     const account = { id: "acc-1", platform: "whatsapp", is_active: false };
     results = [

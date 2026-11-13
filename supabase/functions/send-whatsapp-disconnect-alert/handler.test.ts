@@ -159,6 +159,47 @@ Deno.test("the admin email carries no phone number", () => {
   assertFalse(buildAdminEmail(ACCOUNT, OWNER.full_name).includes("96566600001"));
 });
 
+Deno.test("a phone number inside a longer display name is removed and the shop name stays", () => {
+  const account: AlertAccount = {
+    ...ACCOUNT,
+    platform_username: "Postora Store 96566600001",
+  };
+
+  const ownerHtml = buildOwnerEmail(account, OWNER.full_name);
+  const adminHtml = buildAdminEmail(account, "Waleed +965 6660-0001");
+
+  assertStringIncludes(ownerHtml, "Postora Store");
+  assertStringIncludes(adminHtml, "Postora Store");
+  assertStringIncludes(adminHtml, "Waleed");
+  assertFalse(ownerHtml.includes("96566600001"));
+  assertFalse(adminHtml.includes("96566600001"));
+  assertFalse(adminHtml.includes("6660-0001"));
+  assertFalse(adminHtml.includes("+965"));
+});
+
+Deno.test("a display name that is only a formatted phone becomes the generic label", () => {
+  const account: AlertAccount = { ...ACCOUNT, platform_username: "+965 6660-0001" };
+
+  const html = buildOwnerEmail(account, OWNER.full_name);
+
+  assertFalse(html.includes("6660"));
+  assertFalse(html.includes("965"));
+  assertStringIncludes(html, "WhatsApp");
+});
+
+Deno.test("phone-only profile fields use generic labels in both emails", () => {
+  for (const phone of ["96566600001", "+965 6660-0001", "(965) 6660.0001"]) {
+    const account = { ...ACCOUNT, platform_username: phone };
+    const ownerHtml = buildOwnerEmail(account, phone);
+    const adminHtml = buildAdminEmail(account, phone);
+    assertStringIncludes(ownerHtml, "Hi there,");
+    assertStringIncludes(adminHtml, "of a Postora user");
+    assertStringIncludes(ownerHtml, "<strong>WhatsApp</strong>");
+    assertFalse(ownerHtml.includes(phone));
+    assertFalse(adminHtml.includes(phone));
+  }
+});
+
 Deno.test("neither email carries the phone number when the account name IS the phone number", () => {
   // A WhatsApp row whose display name was never set stores the number in
   // platform_username, and platform_user_id holds the same digits. Naming the account
@@ -388,6 +429,60 @@ Deno.test("a failing owner profile lookup does not cost the admin its alert", as
   assertEquals(summary.ownerSent, false);
   assertEquals(summary.adminSent, true);
   assertEquals(summary.failed, ["acc-1"]);
+});
+
+Deno.test("recipient failures log sanitized codes without provider text", async () => {
+  const providerText = "owner@example.invalid: provider request details";
+  const scenarios = [
+    {
+      code: "timeout",
+      deps: fakeDeps({
+        send: (payload) => payload.subject === OWNER_SUBJECT
+          ? Promise.reject(Object.assign(new Error(providerText), { code: "timeout" }))
+          : Promise.resolve(),
+      }).deps,
+    },
+    {
+      code: "network_error",
+      deps: fakeDeps({
+        loadOwnerProfile: () =>
+          Promise.resolve({ ...OWNER, email_notifications_enabled: false }),
+        loadAdmins: () =>
+          Promise.reject(Object.assign(new Error(providerText), { code: "network_error" })),
+      }).deps,
+    },
+    {
+      code: "PGRST116",
+      deps: fakeDeps({
+        loadOwnerProfile: () =>
+          Promise.reject(Object.assign(new Error(providerText), { code: "PGRST116" })),
+      }).deps,
+    },
+    {
+      code: "unknown_error",
+      deps: fakeDeps({
+        send: () => Promise.reject({ code: "recipient=owner@example.invalid; phone=96566600001" }),
+        isAdminAlertEnabled: () => Promise.resolve(false),
+      }).deps,
+    },
+  ];
+
+  for (const scenario of scenarios) {
+    const logs: string[] = [];
+    const originalError = console.error;
+    console.error = (...args: unknown[]) => {
+      logs.push(args.map(String).join(" "));
+    };
+    try {
+      await sendDisconnectAlerts(scenario.deps, "acc-1");
+    } finally {
+      console.error = originalError;
+    }
+
+    assertEquals(logs.length, 1);
+    assertStringIncludes(logs[0], `error_code=${scenario.code}`);
+    assertFalse(logs[0].includes(providerText));
+  }
 });
 
 Deno.test("nothing is sent when the global email flag is off", async () => {

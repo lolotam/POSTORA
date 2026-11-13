@@ -304,7 +304,7 @@ jobs:
           set -euo pipefail
           fn="supabase/functions"
           deno check --node-modules-dir=none "${fn}/whatsapp-disconnect-watch/index.ts" "${fn}/send-whatsapp-disconnect-alert/index.ts"
-          deno test --node-modules-dir=none "${fn}/whatsapp-disconnect-watch/run.test.ts" "${fn}/whatsapp-disconnect-watch/dispatch.test.ts" "${fn}/send-whatsapp-disconnect-alert/handler.test.ts" "${fn}/send-whatsapp-disconnect-alert/resend.test.ts"
+          deno test --node-modules-dir=none "${fn}/whatsapp-disconnect-watch/" "${fn}/send-whatsapp-disconnect-alert/"
           # The shared modules the alerts depend on: the disconnect episode is
           # cleared on reconnect and a deliberate disconnect is marked.
           deno check --node-modules-dir=none "${fn}/_shared/evolutionQrAccount.ts" "${fn}/_shared/whatsappDisconnect.ts"

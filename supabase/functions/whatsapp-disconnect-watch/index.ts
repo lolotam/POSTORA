@@ -75,12 +75,16 @@ Deno.serve(async (req) => {
           .eq("social_accounts.connection_mode", "evolution_qr")
           // is_active is deliberately NOT a filter: a disconnected Evolution account is
           // inactive by design (the webhook deactivates it), so filtering on is_active
-          // would skip exactly the accounts this watcher exists to alert on. The
-          // deliberate-disconnect marker below is what excludes an account the owner
-          // disconnected on purpose.
+          // would skip exactly the accounts this watcher exists to alert on.
+          // A deliberate marker excludes an inactive row. Active marked rows stay eligible:
+          // SQL protects a teardown still in progress for 30 minutes, then recovers a marker
+          // whose deactivation and rollback both failed so a real outage cannot stay hidden.
           .not("social_accounts.platform_user_id", "like", "pending_%")
           .not("social_accounts.platform_user_id", "like", "retired_%")
-          .is("social_accounts.account_metadata->whatsapp_user_disconnected_at", null)
+          .or(
+            "account_metadata->whatsapp_user_disconnected_at.is.null,is_active.eq.true",
+            { foreignTable: "social_accounts" },
+          )
           .order("last_polled_at", { ascending: true, nullsFirst: true })
           .limit(limit);
         if (error) throw error;
@@ -102,9 +106,9 @@ Deno.serve(async (req) => {
         return candidates;
       },
       async readState(instanceName: string): Promise<string | null> {
-        // A read that cannot be answered raises: an unreachable Evolution is a failed
-        // account, not a state. Answering null here would record the account as polled
-        // and skip it, and the outage would then go unnoticed.
+        // A read that cannot be answered raises. The caller still records the poll time,
+        // so the row leaves the head of the queue, and counts the account as failed.
+        // Answering null here would classify the state as unknown instead of failed.
         return await readConnectionState(api, instanceName);
       },
       async observe(accountId: string, state: string, terminal: boolean): Promise<Episode | null> {
@@ -132,6 +136,14 @@ Deno.serve(async (req) => {
         });
         if (error) throw error;
         return data === true;
+      },
+      async clearUnflagged(accountId: string): Promise<void> {
+        // Inactive, evolution_qr, no deliberate marker, and no flagged_at. The RPC does
+        // not change is_active, needs_reauth, or last_refresh_error.
+        const { error } = await admin.rpc("clear_unflagged_whatsapp_disconnect_episode", {
+          p_account_id: accountId,
+        });
+        if (error) throw error;
       },
       async markFlagged(accountId: string, episodeId: string, reason: string): Promise<boolean> {
         // Conditional on the observed episode still being open (and the account not marked as
