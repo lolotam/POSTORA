@@ -208,9 +208,70 @@ BEGIN
     'E6c a second claim does not overwrite the stored payload';
   ASSERT claim_json->'payload'->'to' = '["first@example.invalid"]'::jsonb,
     'E6c the stored recipients are the ones of the first claim';
-  ASSERT (SELECT account_metadata->'whatsapp_disconnect_payload'->'user'->>'subject'
-            FROM public.social_accounts WHERE id = acc_pay) = 'first subject',
-    'E6c the payload on the row is the one the first claim brought';
+  ASSERT (SELECT public.whatsapp_disconnect_email_payloads.payload->>'subject'
+            FROM public.whatsapp_disconnect_email_payloads
+           WHERE social_account_id = acc_pay AND kind = 'user'
+             AND episode_id = (ep_two->>'episode_id')::uuid) = 'first subject',
+    'E6c the stored payload is the one the first claim brought';
+
+  -- ------------- E6d: the payload is not readable by the account owner or the public
+  -- The payload carries the admin email addresses and the rendered admin email. It must
+  -- therefore never live in social_accounts.account_metadata: that column is readable by
+  -- the account owner and by anyone who can see a public profile.
+  ASSERT NOT EXISTS (SELECT 1 FROM public.social_accounts
+                       WHERE account_metadata ? 'whatsapp_disconnect_payload'),
+    'E6d no account row carries the payload in account_metadata';
+  ASSERT (SELECT relrowsecurity
+            FROM pg_class
+           WHERE oid = 'public.whatsapp_disconnect_email_payloads'::regclass),
+    'E6d row level security is enabled on the payload table';
+  ASSERT NOT EXISTS (SELECT 1 FROM pg_policies
+                       WHERE schemaname = 'public'
+                         AND tablename = 'whatsapp_disconnect_email_payloads'),
+    'E6d the payload table has no policy at all';
+  ASSERT NOT has_table_privilege('authenticated',
+        'public.whatsapp_disconnect_email_payloads', 'SELECT'),
+    'E6d authenticated cannot read the payload table';
+  ASSERT NOT has_table_privilege('anon',
+        'public.whatsapp_disconnect_email_payloads', 'SELECT'),
+    'E6d anon cannot read the payload table';
+  ASSERT NOT has_table_privilege('authenticated',
+        'public.whatsapp_disconnect_email_payloads', 'INSERT'),
+    'E6d authenticated cannot write the payload table';
+  ASSERT NOT has_table_privilege('anon',
+        'public.whatsapp_disconnect_email_payloads', 'DELETE'),
+    'E6d anon cannot delete from the payload table';
+  ASSERT has_table_privilege('service_role',
+        'public.whatsapp_disconnect_email_payloads', 'SELECT'),
+    'E6d the service role may read the payload table';
+
+  -- ------------- E6e: clearing the episode removes the stored payload
+  -- A later episode must build its own payload: a stale row must never be reused under
+  -- a new idempotency key.
+  ASSERT public.clear_whatsapp_disconnect_episode(acc_pay) = true,
+    'E6e the episode is cleared';
+  ASSERT NOT EXISTS (SELECT 1 FROM public.whatsapp_disconnect_email_payloads
+                       WHERE social_account_id = acc_pay),
+    'E6e clearing the episode removed the stored payload';
+  ep_two := public.observe_whatsapp_disconnect_state(acc_pay, 'close', true);
+  ASSERT ep_two IS NOT NULL, 'E6e a later episode opens';
+  ASSERT ep_two->>'episode_id' <> (claim_json->>'episode_id'),
+    'E6e the later episode has its own id';
+  claim_json := public.claim_whatsapp_disconnect_email(
+    acc_pay, 'user',
+    '{"to":["third@example.invalid"],"subject":"third subject","html":"<p>third</p>"}'::jsonb);
+  ASSERT claim_json IS NOT NULL, 'E6e the later episode is claimed';
+  ASSERT claim_json->'payload'->>'subject' = 'third subject',
+    'E6e a different episode gets its own payload';
+  ASSERT (SELECT count(*) FROM public.whatsapp_disconnect_email_payloads
+           WHERE social_account_id = acc_pay) = 1,
+    'E6e only the payload of the open episode is kept';
+  ASSERT EXISTS (
+    SELECT 1 FROM pg_constraint
+     WHERE conrelid = 'public.whatsapp_disconnect_email_payloads'::regclass
+       AND contype = 'p'
+       AND pg_get_constraintdef(oid) LIKE '%episode_id%'),
+    'E6e the payload rows are keyed per episode';
 
   -- --------------------------------------- E7: a claim needs an open episode
   ASSERT public.claim_whatsapp_disconnect_email(acc_two, 'user', payload) IS NULL,
@@ -272,9 +333,11 @@ BEGIN
     'E12 the deliberate marker is stored on the row';
   ASSERT (SELECT account_metadata->'whatsapp_disconnect' IS NULL
             AND account_metadata->'whatsapp_disconnect_claimed_at' IS NULL
-            AND account_metadata->'whatsapp_disconnect_payload' IS NULL
             FROM public.social_accounts WHERE id = acc_delib),
-    'E12 the deliberate disconnect closes the open episode, its claims and its payload';
+    'E12 the deliberate disconnect closes the open episode and its claims';
+  ASSERT NOT EXISTS (SELECT 1 FROM public.whatsapp_disconnect_email_payloads
+                       WHERE social_account_id = acc_delib),
+    'E12 the deliberate disconnect removes the stored payloads';
   ASSERT public.observe_whatsapp_disconnect_state(acc_delib, 'close', true) IS NULL,
     'E12 a deliberately disconnected account opens no episode';
   ASSERT public.claim_whatsapp_disconnect_email(acc_delib, 'user', payload) IS NULL,
@@ -295,12 +358,14 @@ BEGIN
             AND NOT (account_metadata ? 'whatsapp_disconnect_user_email_at')
             AND NOT (account_metadata ? 'whatsapp_disconnect_admin_email_at')
             AND NOT (account_metadata ? 'whatsapp_disconnect_claimed_at')
-            AND NOT (account_metadata ? 'whatsapp_disconnect_payload')
             AND NOT (account_metadata ? 'whatsapp_user_disconnected_at')
             AND NOT needs_reauth
             AND last_refresh_error IS NULL
             FROM public.social_accounts WHERE id = acc),
-    'E13 every marker, the stored payload and the reauth state are gone';
+    'E13 every marker and the reauth state are gone';
+  ASSERT NOT EXISTS (SELECT 1 FROM public.whatsapp_disconnect_email_payloads
+                       WHERE social_account_id = acc),
+    'E13 clearing the episode removed the stored payloads';
   ASSERT public.clear_whatsapp_disconnect_episode(acc) = false,
     'E13 clearing twice is a no-op';
 
@@ -429,6 +494,28 @@ BEGIN
   ASSERT ep_two IS NOT NULL, 'E17 the episode opens';
   claim_ep := (public.claim_whatsapp_disconnect_email(acc_two, 'user', payload)->>'episode_id')::uuid;
   ASSERT claim_ep IS NOT NULL, 'E17 the episode is claimed';
+  ASSERT EXISTS (SELECT 1 FROM public.whatsapp_disconnect_email_payloads
+                  WHERE social_account_id = acc_two),
+    'E17 the claim stored the payload of the episode';
+  -- The reactivation fires the trigger, which clears the episode AND the stored payload in
+  -- the same statement.
+  UPDATE public.social_accounts SET is_active = false WHERE id = acc_two;
+  UPDATE public.social_accounts SET is_active = true WHERE id = acc_two;
+  ASSERT NOT EXISTS (SELECT 1 FROM public.whatsapp_disconnect_email_payloads
+                       WHERE social_account_id = acc_two),
+    'E17 the reactivation removed the stored payloads';
+  ASSERT (SELECT NOT (account_metadata ? 'whatsapp_disconnect')
+            AND NOT (account_metadata ? 'whatsapp_disconnect_claimed_at')
+            AND NOT needs_reauth
+            AND last_refresh_error IS NULL
+            FROM public.social_accounts WHERE id = acc_two),
+    'E17 the reactivation cleared the episode and its claims';
+  ASSERT public.claim_whatsapp_disconnect_email(acc_two, 'user', payload) IS NULL,
+    'E17 the cleared episode can no longer be claimed';
+
+  -- The deliberate marker is cleared by the same trigger.
+  ep_two := public.observe_whatsapp_disconnect_state(acc_two, 'close', true);
+  ASSERT ep_two IS NOT NULL, 'E17 a second episode opens';
   ASSERT public.mark_whatsapp_user_disconnected(acc_two) = true,
     'E17 the deliberate marker is written';
   UPDATE public.social_accounts
@@ -442,16 +529,12 @@ BEGIN
   UPDATE public.social_accounts SET is_active = false WHERE id = acc_two;
   UPDATE public.social_accounts SET is_active = true WHERE id = acc_two;
   ASSERT (SELECT NOT (account_metadata ? 'whatsapp_disconnect')
-            AND NOT (account_metadata ? 'whatsapp_disconnect_claimed_at')
             AND NOT (account_metadata ? 'whatsapp_disconnect_user_email_at')
-            AND NOT (account_metadata ? 'whatsapp_disconnect_payload')
             AND NOT (account_metadata ? 'whatsapp_user_disconnected_at')
             AND NOT needs_reauth
             AND last_refresh_error IS NULL
             FROM public.social_accounts WHERE id = acc_two),
-    'E17 the reactivation cleared the episode, the claims, the payload, the marker and the deliberate flag';
-  ASSERT public.claim_whatsapp_disconnect_email(acc_two, 'user', payload) IS NULL,
-    'E17 the cleared episode can no longer be claimed';
+    'E17 the reactivation cleared the episode, the marker and the deliberate flag';
 
   -- --------------------- E18: the cron entry carries no literal domain or secret
   IF EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'pg_cron') THEN

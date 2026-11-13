@@ -1,8 +1,13 @@
 -- WhatsApp disconnect alerts (spec 2026-11-13-whatsapp-disconnect-alerts-design.md).
 --
 -- One disconnection episode per Evolution QR account. The episode lives in
--- social_accounts.account_metadata, so there is no new table, no new RLS surface and no
+-- social_accounts.account_metadata, so there is no new RLS surface on that table and no
 -- regenerated database types: account_metadata is already Json in types.ts.
+--
+-- The rendered email of a recipient does NOT live there: account_metadata is readable by
+-- the account owner and by anyone who can see a public profile, and the admin payload
+-- carries every admin's email address. It lives in its own table,
+-- public.whatsapp_disconnect_email_payloads, which has RLS enabled and no policy at all.
 --
 -- Keys on social_accounts.account_metadata:
 --   whatsapp_disconnect                = {episode_id, since, first_seen, state, observed_at}
@@ -24,14 +29,6 @@
 --   whatsapp_disconnect_claimed_at      = the in-flight claims, one per recipient
 --                                          ({user: <timestamp>, admin: <timestamp>}), each with a
 --                                          30 minute stale window
---   whatsapp_disconnect_payload         = the rendered email of each recipient, one per recipient
---                                          kind ({user: {to, subject, html}, admin: {...}}), stored
---                                          with the first claim of the episode. The provider's
---                                          idempotency key belongs to the episode and the
---                                          recipient, so the body under that key must never
---                                          change: a retake after a stale claim sends what was
---                                          stored, not a rebuilt body. It is cleared together
---                                          with the episode
 --   whatsapp_user_disconnected_at       = the owner disconnected this account on purpose
 --
 -- needs_reauth on an evolution_qr row belongs to this feature: the token-refresh sweep never
@@ -151,6 +148,30 @@ $fn$;
 REVOKE ALL ON FUNCTION public.observe_whatsapp_disconnect_state(uuid, text, boolean) FROM PUBLIC, anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.observe_whatsapp_disconnect_state(uuid, text, boolean) TO service_role;
 
+-- 2a. The rendered email of a recipient, stored for the episode it belongs to.
+--     The payload is NOT kept in social_accounts.account_metadata: that column is readable
+--     by the account owner ("Users can view own social accounts") and by anyone who can
+--     see a public profile, and the admin payload carries every admin's email address and
+--     the rendered admin email. This table has RLS enabled and NO policy at all, so only
+--     the service role -- the edge functions -- can read it.
+--     The primary key carries the episode: a later episode gets its own payload row, and
+--     the claim of one episode can never overwrite the payload of another.
+CREATE TABLE IF NOT EXISTS public.whatsapp_disconnect_email_payloads (
+  social_account_id uuid NOT NULL REFERENCES public.social_accounts(id) ON DELETE CASCADE,
+  kind text NOT NULL CHECK (kind IN ('user', 'admin')),
+  episode_id uuid NOT NULL,
+  payload jsonb NOT NULL,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (social_account_id, kind, episode_id)
+);
+
+CREATE INDEX IF NOT EXISTS whatsapp_disconnect_email_payloads_account_idx
+  ON public.whatsapp_disconnect_email_payloads (social_account_id);
+
+ALTER TABLE public.whatsapp_disconnect_email_payloads ENABLE ROW LEVEL SECURITY;
+REVOKE ALL ON TABLE public.whatsapp_disconnect_email_payloads FROM PUBLIC, anon, authenticated;
+GRANT SELECT, INSERT, DELETE ON TABLE public.whatsapp_disconnect_email_payloads TO service_role;
+
 -- 3. Reserve the alert for one recipient before sending it, so two overlapping runs cannot
 --    both send. A claim older than 30 minutes is treated as a failed send and may be retaken.
 --    The owner and the admins hold SEPARATE claims: the owner email and the admin email are
@@ -183,7 +204,6 @@ DECLARE
   v_episode jsonb;
   v_episode_id uuid;
   v_claimed_at timestamptz;
-  v_payloads jsonb;
   v_stored jsonb;
 BEGIN
   v_marker := CASE p_kind
@@ -253,24 +273,27 @@ BEGIN
     RETURN NULL;
   END IF;
 
-  -- The payload of this recipient, keyed by recipient kind. It is stored only when the
-  -- recipient has none yet: the payload that goes out with the idempotency key must never
-  -- change, so a retake reads back what the first claim stored.
-  v_payloads := COALESCE(v_meta->'whatsapp_disconnect_payload', '{}'::jsonb);
-  v_stored := v_payloads -> p_kind;
-  IF v_stored IS NULL AND p_payload IS NOT NULL THEN
-    v_payloads := jsonb_set(v_payloads, ARRAY[p_kind], p_payload);
-    v_stored := p_payload;
+  -- The payload of this recipient for THIS episode. It is stored only once: the
+  -- idempotency key belongs to the episode and the recipient, so the body under that key
+  -- must never change. The conflict clause keeps the payload the FIRST claim brought.
+  IF p_payload IS NOT NULL THEN
+    INSERT INTO public.whatsapp_disconnect_email_payloads
+      (social_account_id, kind, episode_id, payload)
+    VALUES (p_account_id, p_kind, v_episode_id, p_payload)
+    ON CONFLICT (social_account_id, kind, episode_id) DO NOTHING;
   END IF;
+
+  SELECT payload INTO v_stored
+    FROM public.whatsapp_disconnect_email_payloads
+   WHERE social_account_id = p_account_id
+     AND kind = p_kind
+     AND episode_id = v_episode_id;
 
   UPDATE public.social_accounts
      SET account_metadata = jsonb_set(
-           jsonb_set(
-             COALESCE(account_metadata, '{}'::jsonb),
-             '{whatsapp_disconnect_claimed_at}',
-             jsonb_set(v_claimed, ARRAY[p_kind], to_jsonb(clock_timestamp()::text))),
-           '{whatsapp_disconnect_payload}',
-           v_payloads)
+           COALESCE(account_metadata, '{}'::jsonb),
+           '{whatsapp_disconnect_claimed_at}',
+           jsonb_set(v_claimed, ARRAY[p_kind], to_jsonb(clock_timestamp()::text)))
    WHERE id = p_account_id
      AND platform = 'whatsapp'
      AND connection_mode = 'evolution_qr';
@@ -373,12 +396,13 @@ LANGUAGE plpgsql
 SECURITY DEFINER
 SET search_path = public, pg_temp
 AS $fn$
+DECLARE
+  v_cleared boolean;
 BEGIN
   UPDATE public.social_accounts
      SET account_metadata = COALESCE(account_metadata, '{}'::jsonb)
                              - 'whatsapp_disconnect'
                              - 'whatsapp_disconnect_claimed_at'
-                             - 'whatsapp_disconnect_payload'
                              - 'whatsapp_disconnect_user_email_at'
                              - 'whatsapp_disconnect_admin_email_at'
                              - 'whatsapp_user_disconnected_at',
@@ -394,8 +418,18 @@ BEGIN
           OR COALESCE(account_metadata, '{}'::jsonb) ? 'whatsapp_user_disconnected_at'
           OR needs_reauth = true
           OR last_refresh_error IS NOT NULL);
+  v_cleared := FOUND;
 
-  RETURN FOUND;
+  -- The episode is over, so its stored payloads go with it: a later episode must build
+  -- its own payload, and a stale row must never be reused under a new idempotency key.
+  -- Only when the episode really closed -- a refused clear leaves the episode open, and
+  -- its payload must survive for the retake of a stale claim.
+  IF v_cleared THEN
+    DELETE FROM public.whatsapp_disconnect_email_payloads
+     WHERE social_account_id = p_account_id;
+  END IF;
+
+  RETURN v_cleared;
 END;
 $fn$;
 REVOKE ALL ON FUNCTION public.clear_whatsapp_disconnect_episode(uuid) FROM PUBLIC, anon, authenticated;
@@ -412,12 +446,13 @@ LANGUAGE plpgsql
 SECURITY DEFINER
 SET search_path = public, pg_temp
 AS $fn$
+DECLARE
+  v_marked boolean;
 BEGIN
   UPDATE public.social_accounts
      SET account_metadata = (COALESCE(account_metadata, '{}'::jsonb)
                                - 'whatsapp_disconnect'
                                - 'whatsapp_disconnect_claimed_at'
-                               - 'whatsapp_disconnect_payload'
                                - 'whatsapp_disconnect_user_email_at'
                                - 'whatsapp_disconnect_admin_email_at')
                              || jsonb_build_object(
@@ -427,8 +462,15 @@ BEGIN
    WHERE id = p_account_id
      AND platform = 'whatsapp'
      AND connection_mode = 'evolution_qr';
+  v_marked := FOUND;
 
-  RETURN FOUND;
+  -- The deliberate disconnect closes the episode, so its stored payloads go with it.
+  IF v_marked THEN
+    DELETE FROM public.whatsapp_disconnect_email_payloads
+     WHERE social_account_id = p_account_id;
+  END IF;
+
+  RETURN v_marked;
 END;
 $fn$;
 REVOKE ALL ON FUNCTION public.mark_whatsapp_user_disconnected(uuid) FROM PUBLIC, anon, authenticated;
@@ -534,6 +576,8 @@ LANGUAGE plpgsql
 SECURITY DEFINER
 SET search_path = public, pg_temp
 AS $fn$
+DECLARE
+  v_restored boolean;
 BEGIN
   UPDATE public.social_accounts
      SET is_active = true,
@@ -542,7 +586,6 @@ BEGIN
          account_metadata = COALESCE(account_metadata, '{}'::jsonb)
                               - 'whatsapp_disconnect'
                               - 'whatsapp_disconnect_claimed_at'
-                              - 'whatsapp_disconnect_payload'
                               - 'whatsapp_disconnect_user_email_at'
                               - 'whatsapp_disconnect_admin_email_at'
    WHERE id = p_account_id
@@ -551,8 +594,15 @@ BEGIN
      AND NOT is_active
      AND NOT (COALESCE(account_metadata, '{}'::jsonb) ? 'whatsapp_user_disconnected_at')
      AND (COALESCE(account_metadata, '{}'::jsonb)->'whatsapp_disconnect'->>'flagged_at') IS NOT NULL;
+  v_restored := FOUND;
 
-  RETURN FOUND;
+  -- A restored account starts a new episode, so the payloads of the closed one go with it.
+  IF v_restored THEN
+    DELETE FROM public.whatsapp_disconnect_email_payloads
+     WHERE social_account_id = p_account_id;
+  END IF;
+
+  RETURN v_restored;
 END;
 $fn$;
 REVOKE ALL ON FUNCTION public.restore_whatsapp_disconnect_account(uuid) FROM PUBLIC, anon, authenticated;
@@ -579,12 +629,18 @@ BEGIN
   NEW.account_metadata := COALESCE(NEW.account_metadata, '{}'::jsonb)
     - 'whatsapp_disconnect'
     - 'whatsapp_disconnect_claimed_at'
-    - 'whatsapp_disconnect_payload'
     - 'whatsapp_disconnect_user_email_at'
     - 'whatsapp_disconnect_admin_email_at'
     - 'whatsapp_user_disconnected_at';
   NEW.needs_reauth := false;
   NEW.last_refresh_error := NULL;
+
+  -- The reactivation closes the episode, so its stored payloads go with it. The trigger
+  -- function is SECURITY DEFINER, so the delete runs as the table owner and is not
+  -- stopped by the table's RLS.
+  DELETE FROM public.whatsapp_disconnect_email_payloads
+   WHERE social_account_id = NEW.id;
+
   RETURN NEW;
 END;
 $fn$;
