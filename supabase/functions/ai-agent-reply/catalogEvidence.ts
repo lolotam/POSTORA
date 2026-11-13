@@ -46,7 +46,8 @@ function catalogUrlInReply(reply: string, productUrl: string | undefined): boole
     if (expected.protocol !== "https:" && expected.protocol !== "http:") return false;
     const tokens = reply.match(/https?:\/\/[^\s<>"'`]+/giu) ?? [];
     return tokens.some((token) => {
-      const spellings = [token, token.replace(/[.,;!?)}\]]+$/u, "")];
+      // Arabic replies end a URL with ، ؛ ؟ ۔ as often as with ASCII punctuation.
+      const spellings = [token, token.replace(/[.,;!?)}\]،؛؟۔]+$/u, "")];
       return spellings.some((spelling) => {
         try { return new URL(spelling).href === expected.href; } catch { return false; }
       });

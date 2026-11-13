@@ -37,5 +37,8 @@ Deno.test("catalog URLs must match the full normalized origin and path", () => {
     ["https://brand.example/Product", "https://brand.example/product", false],
     ["See [product](https://BRAND.example/).", "https://brand.example", true],
     ["https://brand.example/product?other=1", "https://brand.example/product", false],
+    ["المنتج: https://brand.example/product، متوفر", "https://brand.example/product", true],
+    ["https://brand.example/product؛ وأيضاً", "https://brand.example/product", true],
+    ["هل تريد https://brand.example/product؟", "https://brand.example/product", true],
   ] as const) assertEquals(catalogGrounded(reply, [{ product_url }]), expected);
 });
