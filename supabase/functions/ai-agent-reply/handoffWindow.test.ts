@@ -39,11 +39,18 @@ const THREAD_ID = "00000000-0000-0000-0000-000000000002";
 const CLAIM_TOKEN = "2026-11-13T08:00:00.000Z";
 
 interface StaffRow {
+  /** The id of the message the row came from. */
+  id?: string | null;
   direction: string;
   from_name: string | null;
   message_text: string | null;
   created_at: string;
+  message_type?: string | null;
+  media_url?: string | null;
 }
+
+/** The id of a staff send, so a test can watch it written once. */
+const STAFF_MESSAGE_ID = "11111111-1111-1111-1111-111111111111";
 
 /**
  * An admin stub that answers the reads the handoff window makes and records
@@ -122,6 +129,10 @@ function adminStub(options: {
         select: () => query,
         insert: (payload?: Record<string, unknown>) => {
           calls.push({ kind: `insert:${table}`, args: payload });
+          return Promise.resolve({ error: options.insertError ?? null });
+        },
+        upsert: (payload?: unknown, onConflict?: Record<string, unknown>) => {
+          calls.push({ kind: `upsert:${table}`, args: { payload, onConflict } });
           return Promise.resolve({ error: options.insertError ?? null });
         },
       };
@@ -320,6 +331,120 @@ Deno.test("a staff reply that lands while the model answers suppresses the apolo
   assertEquals(settlement.staffReadFailed, false);
 });
 
+// The answer that was drafted knows nothing about a staff reply that landed while the
+// model was answering, so it is reported: the caller writes it again with the reply in
+// mind, because an answer that contradicts the staff is worse than a late one.
+Deno.test("a staff reply that lands while the model answers is reported as late", async () => {
+  const since = "2026-11-12T08:00:00.000Z";
+  const { admin } = adminStub({
+    marker: since,
+    staff: [],
+    claim: { marker: since, token: CLAIM_TOKEN },
+  });
+  const aftermath = await readEscalationAftermath(admin, SCOPE, THREAD_ID);
+  assertEquals(aftermath.staffTurns.length, 0);
+
+  const late = adminStub({
+    marker: since,
+    staff: [{
+      id: STAFF_MESSAGE_ID,
+      direction: "outbound",
+      from_name: "You",
+      message_text: "نعم متوفر عندنا",
+      created_at: "2026-11-12T08:05:00.000Z",
+    }],
+    claim: { marker: since, token: CLAIM_TOKEN },
+  });
+  const settlement = await settleEscalationAftermath(
+    late.admin,
+    { scope: SCOPE, threadId: THREAD_ID, language: "ar" },
+    aftermath,
+    "كريم الكعب غير متوفر",
+  );
+
+  assertEquals(settlement.lateStaffTurns.length, 1);
+  assertEquals(settlement.lateStaffTurns[0].content, "(staff) نعم متوفر عندنا");
+  // The drafted answer is reported as it is: what to do with it is the caller's.
+  assertEquals(settlement.replyText, "كريم الكعب غير متوفر");
+});
+
+// The other side: a staff reply the answer WAS written against is not late.
+Deno.test("a staff reply the answer was written against is not late", async () => {
+  const since = "2026-11-12T08:00:00.000Z";
+  const staff: StaffRow[] = [{
+    id: STAFF_MESSAGE_ID,
+    direction: "outbound",
+    from_name: "You",
+    message_text: "نعم متوفر عندنا",
+    created_at: "2026-11-12T08:05:00.000Z",
+  }];
+  const { admin } = adminStub({
+    marker: since,
+    staff,
+    claim: { marker: since, token: CLAIM_TOKEN },
+  });
+  const aftermath = await readEscalationAftermath(admin, SCOPE, THREAD_ID);
+  assertEquals(aftermath.staffTurns.length, 1);
+
+  const settlement = await settleEscalationAftermath(
+    admin,
+    { scope: SCOPE, threadId: THREAD_ID, language: "ar" },
+    aftermath,
+    "كريم الكعب متوفر",
+  );
+
+  assertEquals(settlement.lateStaffTurns.length, 0);
+});
+
+// The staff turns are written BEFORE the reply they belong to, so a reply that never
+// became durable leaves them behind and the next attempt writes them again. The turn
+// carries the id of the message it replays, so the second write is refused as a
+// duplicate: the thread keeps ONE copy of the staff send instead of a pile of them
+// that pushes the customer's own messages out of the bounded history.
+Deno.test("a retried turn stores the same staff send once, not twice", async () => {
+  const since = "2026-11-12T08:00:00.000Z";
+  const staff: StaffRow[] = [{
+    id: STAFF_MESSAGE_ID,
+    direction: "outbound",
+    from_name: "You",
+    message_text: "نعم متوفر عندنا",
+    created_at: "2026-11-12T08:05:00.000Z",
+  }];
+  const { admin, calls } = adminStub({
+    marker: since,
+    staff,
+    claim: { marker: since, token: CLAIM_TOKEN },
+  });
+  const aftermath = await readEscalationAftermath(admin, SCOPE, THREAD_ID);
+
+  const first = await settleEscalationAftermath(
+    admin,
+    { scope: SCOPE, threadId: THREAD_ID, language: "ar" },
+    aftermath,
+    "كريم الكعب متوفر",
+  );
+  // The reply never became durable, so the marker goes back and the turn is retried.
+  assertEquals(first.staffWriteFailed, false);
+
+  const second = await settleEscalationAftermath(
+    admin,
+    { scope: SCOPE, threadId: THREAD_ID, language: "ar" },
+    aftermath,
+    "كريم الكعب متوفر",
+  );
+  assertEquals(second.staffWriteFailed, false);
+
+  const writes = calls.filter((call) => call.kind === "upsert:ai_thread_messages");
+  assertEquals(writes.length, 2, "both attempts write the staff turn");
+  const ids = writes.map((call) => {
+    const rows = call.args?.payload as Array<Record<string, unknown>>;
+    return rows[0].id;
+  });
+  assertEquals(ids, [STAFF_MESSAGE_ID, STAFF_MESSAGE_ID], "the same staff send, the same id");
+  // And the write refuses the duplicate instead of adding a second copy.
+  assertEquals(writes[0].args?.onConflict, { onConflict: "id", ignoreDuplicates: true });
+});
+
 Deno.test("a window nobody answered still gets the apology", async () => {
   const since = "2026-11-12T08:00:00.000Z";
   const { admin } = adminStub({
@@ -503,6 +628,7 @@ Deno.test("a closed gate never delivers an answer the row stored under an open g
     language: "ar",
     threadId: THREAD_ID,
     turn: { userId: SCOPE.userId, content: "عندكم كريم الكعب؟" },
+    serviceWindowOpen: true,
   });
 
   // The stored answer is not what goes out: the notice takes its place in the row.
@@ -534,6 +660,7 @@ Deno.test("a closed gate delivers the notice the row already holds", async () =>
     language: "ar",
     threadId: THREAD_ID,
     turn: { userId: SCOPE.userId, content: "عندكم كريم الكعب؟" },
+    serviceWindowOpen: true,
   });
 
   assertEquals(decision.kind, "notice");
@@ -565,6 +692,7 @@ Deno.test("a notice that was completed but never sent is delivered from the row"
     language: "ar",
     threadId: THREAD_ID,
     turn: { userId: SCOPE.userId, content: "عندكم كريم الكعب؟" },
+    serviceWindowOpen: true,
   });
 
   // The notice the customer was promised goes out, and it is the STORED one.
@@ -602,6 +730,7 @@ Deno.test("a notice the bounded window outlived is delivered from the row", asyn
     language: "ar",
     threadId: THREAD_ID,
     turn: { userId: SCOPE.userId, content: "عندكم كريم الكعب؟" },
+    serviceWindowOpen: true,
   });
 
   // The promise is kept: the notice the customer was given goes out.
@@ -637,6 +766,7 @@ Deno.test("a row past the point of no send never has the notice sent again", asy
       language: "ar",
       threadId: THREAD_ID,
       turn: { userId: SCOPE.userId, content: "عندكم كريم الكعب؟" },
+      serviceWindowOpen: true,
     });
 
     // No notice: the row may already carry it to the customer.
@@ -668,6 +798,7 @@ Deno.test("a row that could not be read settles nothing and spends no claim", as
     language: "ar",
     threadId: THREAD_ID,
     turn: { userId: SCOPE.userId, content: "عندكم كريم الكعب؟" },
+    serviceWindowOpen: true,
   });
 
   // The work item stays unsettled: the outbox retries, and the row is read again.
@@ -701,6 +832,7 @@ Deno.test("a failed read followed by a successful one decides the gate", async (
     language: "ar" as const,
     threadId: THREAD_ID,
     turn: { userId: SCOPE.userId, content: "عندكم كريم الكعب؟" },
+    serviceWindowOpen: true,
   };
 
   const failed = await settleClosedGateNotice(gate);
@@ -735,6 +867,7 @@ Deno.test("a notice another worker is delivering is left to that worker", async 
     language: "ar",
     threadId: THREAD_ID,
     turn: { userId: SCOPE.userId, content: "عندكم كريم الكعب؟" },
+    serviceWindowOpen: true,
   });
 
   // Cancelling the row here would take the notice away from the worker delivering it.
@@ -764,6 +897,7 @@ Deno.test("the turn that lost the claim cannot cancel the row the winner holds",
     language: "ar",
     threadId: THREAD_ID,
     turn: { userId: SCOPE.userId, content: "عندكم كريم الكعب؟" },
+    serviceWindowOpen: true,
   });
 
   // The row another worker is holding is left alone, and the work item stays unsettled.
@@ -790,9 +924,79 @@ Deno.test("a closed gate that cannot read the claim keeps the work item retryabl
     language: "ar",
     threadId: THREAD_ID,
     turn: { userId: SCOPE.userId, content: "عندكم كريم الكعب؟" },
+    serviceWindowOpen: true,
   });
 
   assertEquals(decision.kind, "retryable");
+});
+
+// The human_first gate takes precedence over the service window, so a closed window is
+// turned into the one-time notice. A notice is a free-form message, and outside the
+// service window the provider refuses one: the notice may not be attempted there, and
+// the acknowledgement may not be completed for a notice that was never sent.
+Deno.test("a closed service window never attempts the notice", async () => {
+  const { admin, calls } = adminStub({
+    outboxStatus: "running",
+    storedReply: null,
+    ackClaim: { result: "claimed", claimToken: CLAIM_TOKEN },
+  });
+
+  const decision = await settleClosedGateNotice({
+    admin,
+    scope: SCOPE,
+    outboxId: "outbox-1",
+    gateReason: "mode_human_first",
+    isComment: false,
+    language: "ar",
+    threadId: THREAD_ID,
+    turn: { userId: SCOPE.userId, content: "عندكم كريم الكعب؟" },
+    serviceWindowOpen: false,
+  });
+
+  // No notice goes out.
+  assertEquals(decision.kind, "skipped");
+  assertEquals(
+    calls.find((call) => call.kind === "rpc:advance_agent_reply_kind_for_owner"),
+    undefined,
+    "the row may not be given the notice",
+  );
+  // And the acknowledgement is not completed for a notice that was never attempted.
+  assertEquals(
+    calls.find((call) => call.kind === "rpc:complete_human_mode_ack"),
+    undefined,
+    "an unsent notice may not have its acknowledgement completed",
+  );
+  // The claim comes back, so a later turn whose window is open can still deliver it.
+  assert(
+    calls.find((call) => call.kind === "rpc:release_human_mode_ack_claim"),
+    "the claim must be released",
+  );
+});
+
+// The same gate with the window open still sends the notice: the service window is a
+// delivery rule, not a reason to stop promising.
+Deno.test("an open service window still sends the notice", async () => {
+  const { admin } = adminStub({
+    outboxStatus: "running",
+    storedReply: null,
+    ackClaim: { result: "claimed", claimToken: CLAIM_TOKEN },
+  });
+
+  const decision = await settleClosedGateNotice({
+    admin,
+    scope: SCOPE,
+    outboxId: "outbox-1",
+    gateReason: "mode_human_first",
+    isComment: false,
+    language: "ar",
+    threadId: THREAD_ID,
+    turn: { userId: SCOPE.userId, content: "عندكم كريم الكعب؟" },
+    serviceWindowOpen: true,
+  });
+
+  assertEquals(decision.kind, "notice");
+  if (decision.kind !== "notice") return;
+  assert(decision.text.includes("تم تحويل محادثتك"), "the notice is the one the customer is promised");
 });
 
 Deno.test("the acknowledgement is only completed for the claim the caller holds", async () => {
@@ -878,6 +1082,7 @@ Deno.test("the reply resolves the escalation window it was owed", () => {
         staffReadFailed: false,
         staffWriteFailed: false,
         windowReadFailed: false,
+        lateStaffTurns: [],
       },
       { threadId: THREAD_ID, userId: SCOPE.userId },
     ),
@@ -894,6 +1099,7 @@ Deno.test("the reply resolves the escalation window it was owed", () => {
         staffReadFailed: false,
         staffWriteFailed: false,
         windowReadFailed: false,
+        lateStaffTurns: [],
       },
       { threadId: THREAD_ID, userId: SCOPE.userId },
     ),
@@ -911,6 +1117,7 @@ Deno.test("the reply resolves the escalation window it was owed", () => {
         staffReadFailed: false,
         staffWriteFailed: false,
         windowReadFailed: false,
+        lateStaffTurns: [],
       },
       { threadId: THREAD_ID, userId: SCOPE.userId },
     ),
@@ -933,6 +1140,7 @@ Deno.test("a staff context that failed leaves the escalation window owed", () =>
         staffReadFailed: true,
         staffWriteFailed: false,
         windowReadFailed: false,
+        lateStaffTurns: [],
       },
       { threadId: THREAD_ID, userId: SCOPE.userId },
     ),
@@ -948,6 +1156,7 @@ Deno.test("a staff context that failed leaves the escalation window owed", () =>
         staffReadFailed: false,
         staffWriteFailed: true,
         windowReadFailed: false,
+        lateStaffTurns: [],
       },
       { threadId: THREAD_ID, userId: SCOPE.userId },
     ),

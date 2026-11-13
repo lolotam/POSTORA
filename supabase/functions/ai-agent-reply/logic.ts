@@ -563,6 +563,48 @@ export interface MessageRow {
   from_name: string | null;
   message_text: string | null;
   created_at: string;
+  /** The id of the message the row came from. */
+  id?: string | null;
+  /** The kind of message ("text", "image", "audio", ...). */
+  message_type?: string | null;
+  /** The media the message carried, when it carried one. */
+  media_url?: string | null;
+}
+
+/**
+ * The message types that carry something the customer can read instead of words,
+ * and what each of them is called in the thread.
+ *
+ * One map, not a set beside a label table: a type added to one and not the other
+ * would answer as an attachment and be named "[Attachment]" instead of what it was.
+ */
+const ATTACHMENT_LABELS = new Map<string, string>([
+  ["image", "[Image]"],
+  ["audio", "[Audio message]"],
+  ["video", "[Video]"],
+  ["document", "[Document]"],
+  ["sticker", "[Sticker]"],
+]);
+
+/**
+ * Whether the send is a staff answer: words, or an attachment the customer read.
+ *
+ * A voice note or an image counts. The send paths give a media send a preview text
+ * ("[Image]"), but a row may carry the attachment and no text at all, and such a
+ * send is the customer being answered just as much as a written one is.
+ */
+export function isStaffAnswer(row: MessageRow): boolean {
+  if (row.message_text?.trim()) return true;
+  if (row.media_url?.trim()) return true;
+  return ATTACHMENT_LABELS.has((row.message_type ?? "").trim().toLowerCase());
+}
+
+/** The turn a staff send becomes: their words, or what the attachment was. */
+function staffTurnContent(row: MessageRow): string {
+  const text = row.message_text?.trim();
+  if (text) return `(staff) ${text}`;
+  const kind = (row.message_type ?? "").trim().toLowerCase();
+  return `(staff) ${ATTACHMENT_LABELS.get(kind) ?? "[Attachment]"}`;
 }
 
 /**
@@ -571,16 +613,54 @@ export interface MessageRow {
  * A positive match on from_name "You", the marker every staff send path writes. Every other
  * outbound row (the agent, auto-reply rules, store openers, broadcasts) is not a staff answer.
  * The "(staff)" prefix keeps the model from taking those words for its own.
+ *
+ * Every turn keeps the id of the message it came from. That id is what makes the
+ * same staff send stored ONCE: a retry writes the same id, and the second write is
+ * refused as a duplicate instead of piling another copy of the same turn onto the
+ * thread and pushing the customer's own messages out of the bounded history.
  */
 export function staffTurnsSince(rows: MessageRow[], sinceIso: string): StoredTurn[] {
   const since = Date.parse(sinceIso);
   return rows
     .filter((row) =>
-      row.direction === "outbound" && row.from_name === "You" && Boolean(row.message_text?.trim()) &&
+      row.direction === "outbound" && row.from_name === "You" && isStaffAnswer(row) &&
       Date.parse(row.created_at) > since
     )
     .sort((a, b) => Date.parse(a.created_at) - Date.parse(b.created_at))
-    .map((row) => ({ role: "assistant", content: `(staff) ${row.message_text!.trim()}`, created_at: row.created_at }));
+    .map((row) => ({
+      role: "assistant",
+      content: staffTurnContent(row),
+      created_at: row.created_at,
+      ...(row.id ? { source_id: row.id } : {}),
+    }));
+}
+
+/**
+ * The staff turns that arrived after the context an answer was written against.
+ *
+ * An answer is written against the history the model was given. A staff reply that
+ * lands while the model is answering is not in that history, so the answer may
+ * repeat or contradict what the customer has just read from the staff.
+ */
+export function lateStaffTurns(rows: MessageRow[], known: StoredTurn[], sinceIso: string): StoredTurn[] {
+  const seen = new Set(known.map((turn) => `${turn.created_at}|${turn.content}`));
+  return staffTurnsSince(rows, sinceIso).filter((turn) => !seen.has(`${turn.created_at}|${turn.content}`));
+}
+
+/**
+ * The note that tells the model a staff member answered while it was answering.
+ *
+ * The answer has to be written again with that reply in mind: it is the only way
+ * the reply the customer receives can agree with what the customer has read.
+ */
+export function staffAnsweredNote(turns: StoredTurn[]): string {
+  return [
+    "A staff member replied to the customer while you were answering.",
+    "That reply is not in the answer you drafted, so answer the customer's last message again, with that reply in mind.",
+    "Do not repeat what the staff already said, and do not contradict it.",
+    "The staff replied:",
+    turns.map((turn) => turn.content).join("\n"),
+  ].join("\n");
 }
 
 /**
@@ -635,6 +715,14 @@ export interface StoredTurn {
   role: string;
   content: string | null;
   created_at: string;
+  /**
+   * The id of the message the turn came from, when it came from one.
+   *
+   * A turn built from a stored message carries the thread row's own id, which is
+   * not the id of any message; a turn built from a staff send carries the id of
+   * the whatsapp message it replays.
+   */
+  source_id?: string | null;
 }
 
 export interface HistoryWindow {

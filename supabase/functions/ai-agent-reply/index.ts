@@ -40,6 +40,7 @@ import {
   type ReplyLanguage,
   SIMILARITY_FLOOR,
   shouldAiReply,
+  staffAnsweredNote,
   type StoredTurn,
   threadReplyLanguage,
   triageSystemHint,
@@ -88,6 +89,7 @@ import {
   replyIsDurable,
   settleClosedGateNotice,
   settleEscalationAftermath,
+  storeHeldCustomerTurn,
   type HandoffScope,
 } from "./handoffWindow.ts";
 import { getSendCredentials } from "../_shared/messengerCredentials.ts";
@@ -204,6 +206,57 @@ const PROVIDER_ENDPOINTS: Record<string, { url: string; keyEnv: string; kind?: "
   google: GOOGLE_ENDPOINT,
   gemini: GOOGLE_ENDPOINT,
 };
+
+/** One turn of the conversation the model is given. */
+interface ChatTurn {
+  role: string;
+  content: string | null;
+  tool_calls?: unknown[];
+  tool_call_id?: string;
+}
+
+/**
+ * The answer written again, with the staff reply that arrived while the model was
+ * answering in front of it.
+ *
+ * The answer that was drafted is written against a context that did not have the staff
+ * reply, so it may repeat or contradict what the customer has just read from the
+ * staff. The answer is asked for again -- once, and with no tools, because the tools
+ * have already run -- and only the second answer reaches the customer.
+ *
+ * Null when no second answer could be produced: the caller may not send the stale
+ * one, because it may contradict the staff.
+ */
+async function answerAgainAfterStaffReply(input: {
+  messages: ChatTurn[];
+  modelChain: AiTier[];
+  temperature: number;
+  routingAdmin: AiRoutingAdmin;
+  startedAt: number;
+  turns: StoredTurn[];
+}): Promise<string | null> {
+  const budgetMs = modelBudgetRemaining(input.startedAt, Date.now());
+  if (budgetMs <= 0) return null;
+  const messages = [...input.messages];
+  // The note goes in where the other system notes go: at the head of the
+  // conversation, so every provider reads it the same way.
+  messages.splice(1, 0, { role: "system", content: staffAnsweredNote(input.turns) });
+  for (const tier of input.modelChain) {
+    try {
+      const completion = await chatCompletion(tier, {
+        model: tier.model,
+        temperature: input.temperature,
+        messages,
+      }, Math.min(CHAT_TIMEOUT_MS, budgetMs), input.routingAdmin);
+      const answer = repairChatReply(String(completion?.choices?.[0]?.message?.content || "").trim());
+      if (answer) return answer;
+    } catch {
+      // The next tier in the chain gets its turn. No answer at all is the
+      // caller's to handle.
+    }
+  }
+  return null;
+}
 
 export async function chatCompletion(
   tier: AiTier,
@@ -873,6 +926,11 @@ Deno.serve(async (req) => {
             // The work item's id, so a retry stores this question once.
             id: outboxId ?? undefined,
           },
+          // The human_first gate takes precedence over the service window, so the
+          // notice path has to be told whether WhatsApp delivery is still allowed:
+          // outside the window the provider refuses a free-form message, and a notice
+          // that is never sent may not have its acknowledgement completed.
+          serviceWindowOpen: gateChecks.withinServiceWindow,
         });
         if (decision.kind === "retryable") {
           // The claim's state could not be read, so nothing is settled on the strength of
@@ -1899,6 +1957,60 @@ Deno.serve(async (req) => {
       // customer had never waited, so the turn fails here and the outbox retries it.
       // Nothing was sent and nothing was claimed, so there is no lease to give back.
       throw new Error("the unanswered-escalation window could not be read");
+    }
+
+    // A staff member answered while the model was answering. The answer that was
+    // drafted is written without that reply, so it may repeat or contradict what the
+    // customer has just read from the staff: it is written again with the reply in
+    // mind, and an answer that cannot be written again is not sent at all.
+    if (settlement.lateStaffTurns.length > 0) {
+      const refreshed = await answerAgainAfterStaffReply({
+        messages,
+        modelChain,
+        temperature: config.temperature ?? 0.4,
+        routingAdmin,
+        startedAt,
+        turns: settlement.lateStaffTurns,
+      });
+      if (refreshed) {
+        replyText = withGreeting(refreshed, openingGreeting);
+      } else {
+        // The drafted answer is stale and no second one could be produced. It may
+        // not go out: a reply that contradicts the staff is worse than no reply.
+        // The staff reply is already in the thread, so the agent's next answer
+        // carries it, and the window's lease goes back so a later turn can take it
+        // over -- unless the staff context itself is still owed to the thread, in
+        // which case the lease stays and the next turn stores it.
+        if (
+          settlement.marker && settlement.claimToken &&
+          !settlement.staffWriteFailed && !settlement.staffReadFailed
+        ) {
+          await releaseUnansweredEscalationClaim(
+            admin,
+            handoffScope(request),
+            thread.id,
+            settlement.marker,
+            settlement.claimToken,
+          );
+        }
+        // Nobody answered the question, so it is kept on the record: the thread
+        // carries it, and the agent's next answer is written against it.
+        await storeHeldCustomerTurn(admin, thread.id, {
+          userId: request.user_id,
+          content: request.inbound_text,
+          // The work item's own id, so a retry stores this question once.
+          id: outboxId ?? undefined,
+        });
+        await logOutcome(admin, {
+          ...baseLog,
+          status: "skipped",
+          error: "staff_answered_during_generation",
+        });
+        if (outboxId) {
+          await cancelOutboxRow(admin, outboxId, "staff_answered_during_generation", request.user_id);
+        }
+        return jsonResponse({ ok: true, skipped: "staff_answered_during_generation" });
+      }
     }
 
     let outboundMessageId: string | null = null;

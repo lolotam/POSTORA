@@ -22,6 +22,7 @@ import type { SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2";
 import {
   escalationApologyText,
   HUMAN_MODE_ACK,
+  lateStaffTurns,
   staffTurnsSince,
   type MessageRow,
   type ReplyLanguage,
@@ -139,6 +140,14 @@ export interface AftermathSettlement {
    * retries it, so the apology and the staff context are still owed.
    */
   windowReadFailed: boolean;
+  /**
+   * The staff sends that arrived while the model was answering.
+   *
+   * The answer was written against a context that did not have them, so it may
+   * repeat or contradict what the customer has just read from the staff. The caller
+   * writes the answer again with them in mind, or sends nothing at all.
+   */
+  lateStaffTurns: StoredTurn[];
 }
 
 /**
@@ -378,6 +387,10 @@ export type ClosedGateDecision =
  * The claim is taken AFTER the row is classified, so the claim is only ever spent on a
  * notice this turn is going to deliver, and it is a LEASE: a turn that dies before the
  * notice is durable hands it back after the lease lapses.
+ *
+ * A CLOSED service window stops all of it: the notice is a free-form message, and the
+ * provider refuses one outside the window. No notice is attempted there, and the
+ * acknowledgement is not completed for a notice that was never sent.
  */
 export async function settleClosedGateNotice(input: {
   admin: SupabaseClient;
@@ -388,6 +401,15 @@ export async function settleClosedGateNotice(input: {
   language: ReplyLanguage;
   threadId: string;
   turn: { userId: string; content: string; id?: string };
+  /**
+   * Whether WhatsApp delivery is still allowed for this conversation.
+   *
+   * The human_first gate takes precedence over the service window, so a closed
+   * window is turned into the one-time notice. A notice is a free-form message,
+   * and outside the service window the provider refuses one: the notice may
+   * therefore not be attempted there.
+   */
+  serviceWindowOpen: boolean;
 }): Promise<ClosedGateDecision> {
   const peeked = input.outboxId
     ? await peekStoredReply(input.admin, input.outboxId)
@@ -408,6 +430,25 @@ export async function settleClosedGateNotice(input: {
     // The claim's state is unknown, so nothing may be settled on the strength of it: the
     // work item stays unsettled, and the customer's question is not lost over a hiccup.
     return { kind: "retryable", error: "the human-mode acknowledgement claim could not be read" };
+  }
+
+  if (!input.serviceWindowOpen) {
+    // The service window is closed, so the provider refuses a free-form message: no
+    // notice is attempted. The acknowledgement is therefore not completed for a notice
+    // that was never sent, and the claim this turn took goes back so that a later turn
+    // -- one whose window is open again -- can still deliver the notice the customer
+    // is owed. The row is settled like any other closed gate.
+    if (claim.result === "claimed" && claim.claimToken) {
+      const released = await releaseHumanModeAck(input.admin, input.scope, claim.claimToken);
+      if (!released) {
+        // The claim was not this turn's to release. The lease still stands, so a later
+        // turn takes it over once it lapses -- the notice is not lost, but it waits.
+        console.warn("[ai-agent-reply] the human-mode acknowledgement claim was not released");
+      }
+    }
+    // The window the claim reports is the one this turn belongs to, so the customer's
+    // question is kept on the record: nobody answered it.
+    return await settleUnderClosedGate(input, claim.result === "claimed" ? "window" : claim.result);
   }
 
   if (claim.result === "claimed") {
@@ -668,7 +709,9 @@ async function readStaffReplies(
 ): Promise<{ rows: MessageRow[]; failed: boolean }> {
   const { data: rows, error } = await admin
     .from("whatsapp_messages")
-    .select("direction, from_name, message_text, created_at")
+    // The id is what makes the same staff send stored once, and the media
+    // columns are what an attachment-only send is recognised by.
+    .select("id, direction, from_name, message_text, message_type, media_url, created_at")
     .eq("user_id", scope.userId)
     .eq("conversation_id", scope.conversationId)
     .eq("direction", "outbound")
@@ -756,6 +799,7 @@ export async function settleEscalationAftermath(
       staffReadFailed: false,
       staffWriteFailed: false,
       windowReadFailed: true,
+      lateStaffTurns: [],
     };
   }
   if (aftermath.since === null) {
@@ -766,6 +810,7 @@ export async function settleEscalationAftermath(
       staffReadFailed: false,
       staffWriteFailed: false,
       windowReadFailed: false,
+      lateStaffTurns: [],
     };
   }
   const claim = await claimUnansweredEscalation(admin, context.scope, context.threadId);
@@ -779,6 +824,7 @@ export async function settleEscalationAftermath(
       staffReadFailed: false,
       staffWriteFailed: false,
       windowReadFailed: true,
+      lateStaffTurns: [],
     };
   }
   if (!claim.claimed || claim.marker === null || claim.token === null) {
@@ -791,6 +837,7 @@ export async function settleEscalationAftermath(
       staffReadFailed: false,
       staffWriteFailed: false,
       windowReadFailed: false,
+      lateStaffTurns: [],
     };
   }
   const taken = claim.marker;
@@ -808,6 +855,7 @@ export async function settleEscalationAftermath(
       staffReadFailed: true,
       staffWriteFailed: false,
       windowReadFailed: false,
+      lateStaffTurns: [],
     };
   }
   const apology = escalationApologyText(taken, staff.rows.length, context.language);
@@ -819,6 +867,7 @@ export async function settleEscalationAftermath(
       staffReadFailed: false,
       staffWriteFailed: false,
       windowReadFailed: false,
+      lateStaffTurns: [],
     };
   }
   if (!staff.rows.length) {
@@ -829,17 +878,31 @@ export async function settleEscalationAftermath(
       staffReadFailed: false,
       staffWriteFailed: false,
       windowReadFailed: false,
+      lateStaffTurns: [],
     };
   }
 
-  const { error: staffWriteError } = await admin.from("ai_thread_messages").insert(
+  // The staff sends that arrived while the model was answering. The answer was
+  // written without them, so it may repeat or contradict what the customer has
+  // just read from the staff.
+  const late = lateStaffTurns(staff.rows, aftermath.staffTurns, taken);
+
+  const { error: staffWriteError } = await admin.from("ai_thread_messages").upsert(
     staffTurnsSince(staff.rows, taken).map((turn) => ({
+      // The id of the message the turn replays. The staff turns are written
+      // BEFORE the reply they belong to, so a reply that never became durable
+      // leaves them behind and the next attempt writes them again: with the
+      // message's own id the second write is refused as a duplicate, and the
+      // thread keeps ONE copy of each staff send instead of a pile of them
+      // that pushes the customer's own messages out of the bounded history.
+      ...(turn.source_id ? { id: turn.source_id } : {}),
       thread_id: context.threadId,
       user_id: context.scope.userId,
       role: turn.role,
       content: turn.content,
       created_at: turn.created_at,
     })),
+    { onConflict: "id", ignoreDuplicates: true },
   );
   if (staffWriteError) {
     console.error("[ai-agent-reply] staff turn write failed:", staffWriteError.message);
@@ -852,6 +915,7 @@ export async function settleEscalationAftermath(
       staffReadFailed: false,
       staffWriteFailed: true,
       windowReadFailed: false,
+      lateStaffTurns: late,
     };
   }
   return {
@@ -861,6 +925,7 @@ export async function settleEscalationAftermath(
     staffReadFailed: false,
     staffWriteFailed: false,
     windowReadFailed: false,
+    lateStaffTurns: late,
   };
 }
 
