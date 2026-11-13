@@ -299,6 +299,17 @@ jobs:
           deno check --node-modules-dir=none "${fn}/_shared/pendingQrCleanup.ts" "${fn}/sweep-pending-whatsapp-qr/run.ts"
           deno test --node-modules-dir=none "${fn}/_shared/pendingQrCleanup.test.ts" "${fn}/sweep-pending-whatsapp-qr/run.test.ts"
 
+      - name: Typecheck and test the WhatsApp disconnect alerts
+        run: |
+          set -euo pipefail
+          fn="supabase/functions"
+          deno check --node-modules-dir=none "${fn}/whatsapp-disconnect-watch/index.ts" "${fn}/send-whatsapp-disconnect-alert/index.ts"
+          deno test --node-modules-dir=none "${fn}/whatsapp-disconnect-watch/" "${fn}/send-whatsapp-disconnect-alert/"
+          # The shared modules the alerts depend on: the disconnect episode is
+          # cleared on reconnect and a deliberate disconnect is marked.
+          deno check --node-modules-dir=none "${fn}/_shared/evolutionQrAccount.ts" "${fn}/_shared/whatsappDisconnect.ts"
+          deno test --node-modules-dir=none "${fn}/_shared/evolutionQrAccount.test.ts" "${fn}/_shared/whatsappDisconnect.test.ts"
+
       - name: Typecheck and test the AI image jobs and the staging sweep
         run: |
           set -euo pipefail

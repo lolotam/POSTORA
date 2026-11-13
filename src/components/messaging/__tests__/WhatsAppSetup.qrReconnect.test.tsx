@@ -3,6 +3,7 @@ import { fireEvent, render, screen, waitFor, within } from "@testing-library/rea
 import { MemoryRouter } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { WhatsAppSetup } from "../WhatsAppSetup";
+import type { ReconnectableWhatsAppAccount } from "@/hooks/useReconnectableWhatsApp";
 
 const translate = vi.hoisted(() => (
   key: string,
@@ -41,7 +42,7 @@ vi.mock("@/integrations/supabase/client", () => ({
 }));
 
 const mockQrAccounts = vi.hoisted(() => ({
-  current: [] as any[],
+  current: [] as ReconnectableWhatsAppAccount[],
   isError: false,
   refetch: vi.fn(),
 }));
@@ -105,7 +106,7 @@ vi.mock("../WhatsAppQrScanner", async () => {
     }) => {
       React.useEffect(() => {
         scannerMounts.counts[socialAccountId] = (scannerMounts.counts[socialAccountId] ?? 0) + 1;
-      }, []);
+      }, [socialAccountId]);
       return (
         <div data-testid="qr-scanner" data-account-id={socialAccountId}>
           QR Scanner Mock
@@ -203,6 +204,8 @@ describe("WhatsAppSetup QR reconnect", () => {
 
     const dialog = await screen.findByRole("dialog");
     expect(within(dialog).getByTestId("qr-scanner")).toHaveAttribute("data-account-id", "qr-acc-1");
+    const bannerKey = ["accounts-needing-reauth", "user-1"];
+    currentQueryClient.setQueryData(bannerKey, ["qr-acc-1"]);
 
     fireEvent.click(within(dialog).getByTestId("mock-complete"));
 
@@ -211,6 +214,7 @@ describe("WhatsAppSetup QR reconnect", () => {
       expect(screen.queryByTestId("qr-scanner")).not.toBeInTheDocument();
     });
     expect(discardPendingQr).not.toHaveBeenCalled();
+    expect(currentQueryClient.getQueryState(bannerKey)?.isInvalidated).toBe(true);
   });
 
   it("asks the server to discard the attempt when the owner closes the popup unscanned", async () => {
@@ -338,7 +342,7 @@ describe("WhatsAppSetup QR reconnect", () => {
     };
     mockQrAccounts.current = [sampleQrAccount1, sampleQrAccount2];
 
-    invoke.mockImplementation(async (_fn: string, options?: any) => {
+    invoke.mockImplementation(async (_fn: string, options?: { body?: { social_account_id?: string } }) => {
       const accountId = options?.body?.social_account_id;
       return {
         data: {

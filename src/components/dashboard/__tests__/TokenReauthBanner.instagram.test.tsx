@@ -1,6 +1,7 @@
 import { render, screen, fireEvent } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { expect, it, vi, beforeEach } from "vitest";
+import { expect, it, vi, beforeEach, type Mock } from "vitest";
+import { supabase } from "@/integrations/supabase/client";
 import { TokenReauthBanner } from "../TokenReauthBanner";
 
 // The banner is the dashboard entry point for reconnecting. Instagram is the only
@@ -23,17 +24,28 @@ vi.mock("@/hooks/useAuth", () => ({
 
 vi.mock("@/integrations/supabase/client", () => ({
   supabase: {
-    from: () => ({
-      select: () => ({
-        eq: () => ({
-          eq: () => ({
-            eq: () => Promise.resolve({ data: [account], error: null }),
-          }),
-        }),
-      }),
-    }),
+    from: vi.fn(),
   },
 }));
+
+/**
+ * The banner's hook runs two queries: the active accounts that need a reauth and the
+ * inactive WhatsApp QR accounts that need one. The builder answers any number of
+ * filters, so the chain length does not matter, and each call answers with its own
+ * result.
+ */
+function answerWith(results: Array<{ data: unknown[]; error: null }>) {
+  let call = 0;
+  (supabase.from as Mock).mockImplementation(() => {
+    const result = results[call] ?? { data: [], error: null };
+    call += 1;
+    const builder: Record<string, unknown> = {};
+    builder.select = () => builder;
+    builder.eq = () => builder;
+    builder.then = (resolve: (value: unknown) => unknown) => Promise.resolve(result).then(resolve);
+    return builder;
+  });
+}
 
 const handleInstagramConnect = vi.fn();
 
@@ -62,6 +74,11 @@ vi.mock("@/hooks/useProfileOAuth", async () => {
   };
 });
 
+vi.mock("@/hooks/useWhatsAppConnect", () => ({
+  useWhatsAppReconnect: () => ({ mutate: vi.fn(), isPending: false }),
+  useWhatsAppConnect: () => ({ mutate: vi.fn(), isPending: false }),
+}));
+
 const renderBanner = () =>
   render(
     <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
@@ -71,7 +88,13 @@ const renderBanner = () =>
 
 // fireEvent, not userEvent: userEvent.setup() tries to redefine navigator.clipboard,
 // which throws in this project's jsdom environment.
-beforeEach(() => vi.clearAllMocks());
+beforeEach(() => {
+  vi.clearAllMocks();
+  answerWith([
+    { data: [account], error: null },
+    { data: [], error: null },
+  ]);
+});
 
 it("clicking Reconnect on an Instagram account opens the login-method dialog", async () => {
   renderBanner();

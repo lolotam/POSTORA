@@ -18,6 +18,7 @@ const ADMIN_EMAIL_TOGGLES: EmailToggle[] = [
   { key: "admin_email_token_failure_alerts", label: "Token Refresh Failure Alerts", description: "Individual token refresh failures summary", defaultValue: true },
   { key: "admin_email_ai_override_expiry", label: "AI Override Expiry Alerts", description: "AI model overrides expiring in 3 days", defaultValue: true },
   { key: "admin_email_scheduled_flags", label: "Scheduled Flag Notifications", description: "Scheduled feature flag changes executed", defaultValue: true },
+  { key: "admin_email_whatsapp_disconnect_alerts", label: "WhatsApp Disconnect Alerts", description: "A user's WhatsApp account lost its connection and needs a new QR code", defaultValue: true },
 ];
 
 const USER_EMAIL_TOGGLES: EmailToggle[] = [

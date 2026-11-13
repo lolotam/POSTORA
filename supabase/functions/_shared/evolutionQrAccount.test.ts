@@ -1,5 +1,6 @@
 import { assertEquals, assertRejects } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import {
+  type EvolutionAccountAdmin,
   findOwnedEvolutionAccount,
   mergeDisplayName,
   normalizeConnectionName,
@@ -30,6 +31,8 @@ function recordingAdmin(
     active?: boolean; workspaceId?: string | null; updatedAt?: string;
     emissionFailure?: "lookup" | "insert";
     clearError?: unknown;
+    episodeClearError?: unknown;
+    episodeClearReject?: boolean;
     flagMismatchError?: unknown;
   } = {},
 ) {
@@ -39,7 +42,7 @@ function recordingAdmin(
   let active = overrides.active ?? false;
   // Stands in for Postgres advancing updated_at on every write.
   let writeTick = 0;
-  return {
+  const admin = {
     updates,
     rpcs,
     deliveries,
@@ -58,6 +61,13 @@ function recordingAdmin(
         return Promise.resolve({
           data: null,
           error: overrides.clearError ?? null,
+        });
+      }
+      if (name === "clear_whatsapp_disconnect_episode") {
+        if (overrides.episodeClearReject) return Promise.reject(new Error("transport failed"));
+        return Promise.resolve({
+          data: null,
+          error: overrides.episodeClearError ?? null,
         });
       }
       if (name === "flag_whatsapp_number_mismatch") {
@@ -129,6 +139,7 @@ function recordingAdmin(
       };
     },
   };
+  return admin as typeof admin & EvolutionAccountAdmin;
 }
 
 const PENDING = { id: "acc-1", platform_user_id: "pending_acc-1" };
@@ -231,6 +242,7 @@ Deno.test("a linked session names the account from whichever identity source rep
       assertEquals(admin.rpcs.map((r) => r.name), [
         "activate_evolution_qr_account",
         "clear_undelivered_store_events",
+        "clear_whatsapp_disconnect_episode",
       ]);
     });
   }
@@ -270,7 +282,7 @@ Deno.test("established row receiving open with mismatched number calls flag_what
   const admin = recordingAdmin(null, { active: false });
   const connected = { id: "acc-2", platform_user_id: "96597950350" };
   await assertRejects(
-    () => (syncEvolutionAccountConnection as any)(admin, connected, "open", { ownerJid: "99999999@s.whatsapp.net" }, { userId: "user-1" }),
+    () => syncEvolutionAccountConnection(admin, connected, "open", { ownerJid: "99999999@s.whatsapp.net" }, { userId: "user-1" }),
     NumberMismatchError,
   );
   const flagCalls = admin.rpcs.filter((r) => r.name === "flag_whatsapp_number_mismatch");
@@ -295,7 +307,7 @@ Deno.test("syncEvolutionAccountConnection mismatch with userId scope calls flag_
   const admin = recordingAdmin(null, { active: false });
   const connected = { id: "acc-2", platform_user_id: "96597950350" };
   await assertRejects(
-    () => (syncEvolutionAccountConnection as any)(admin, connected, "open", { ownerJid: "99999999@s.whatsapp.net" }, { userId: "usr-42" }),
+    () => syncEvolutionAccountConnection(admin, connected, "open", { ownerJid: "99999999@s.whatsapp.net" }, { userId: "usr-42" }),
     NumberMismatchError,
   );
   const flagCalls = admin.rpcs.filter((r) => r.name === "flag_whatsapp_number_mismatch");
@@ -312,7 +324,7 @@ Deno.test("syncEvolutionAccountConnection mismatch with workspaceId scope calls 
   const admin = recordingAdmin(null, { active: false });
   const connected = { id: "acc-2", platform_user_id: "96597950350" };
   await assertRejects(
-    () => (syncEvolutionAccountConnection as any)(admin, connected, "open", { ownerJid: "99999999@s.whatsapp.net" }, { workspaceId: "ws-99" }),
+    () => syncEvolutionAccountConnection(admin, connected, "open", { ownerJid: "99999999@s.whatsapp.net" }, { workspaceId: "ws-99" }),
     NumberMismatchError,
   );
   const flagCalls = admin.rpcs.filter((r) => r.name === "flag_whatsapp_number_mismatch");
@@ -329,7 +341,7 @@ Deno.test("syncEvolutionAccountConnection mismatch with instanceName scope calls
   const admin = recordingAdmin(null, { active: false });
   const connected = { id: "acc-2", platform_user_id: "96597950350" };
   await assertRejects(
-    () => (syncEvolutionAccountConnection as any)(admin, connected, "open", { ownerJid: "99999999@s.whatsapp.net" }, { instanceName: "postora_inst_1" }),
+    () => syncEvolutionAccountConnection(admin, connected, "open", { ownerJid: "99999999@s.whatsapp.net" }, { instanceName: "postora_inst_1" }),
     NumberMismatchError,
   );
   const flagCalls = admin.rpcs.filter((r) => r.name === "flag_whatsapp_number_mismatch");
@@ -359,7 +371,7 @@ Deno.test("syncEvolutionAccountConnection mismatch with empty scope throws plain
   const admin = recordingAdmin(null, { active: false });
   const connected = { id: "acc-2", platform_user_id: "96597950350" };
   const err = await assertRejects(
-    () => (syncEvolutionAccountConnection as any)(admin, connected, "open", { ownerJid: "99999999@s.whatsapp.net" }, {}),
+    () => syncEvolutionAccountConnection(admin, connected, "open", { ownerJid: "99999999@s.whatsapp.net" }, {}),
     Error,
     "scope",
   );
@@ -373,7 +385,7 @@ Deno.test("mismatched number when flag_whatsapp_number_mismatch RPC fails reject
   const admin = recordingAdmin(null, { active: false, flagMismatchError: flagErr });
   const connected = { id: "acc-2", platform_user_id: "96597950350" };
   const caught = await assertRejects(
-    () => (syncEvolutionAccountConnection as any)(admin, connected, "open", { ownerJid: "99999999@s.whatsapp.net" }, { userId: "user-1" }),
+    () => syncEvolutionAccountConnection(admin, connected, "open", { ownerJid: "99999999@s.whatsapp.net" }, { userId: "user-1" }),
   );
   assertEquals(caught, flagErr);
 });
@@ -392,7 +404,7 @@ Deno.test("established row that was active receiving open with mismatched number
   // fan-out never delivers one account's event to another account's subscription.
   const connected = { id: "acc-1", platform_user_id: "96597950350" };
   await assertRejects(
-    () => (syncEvolutionAccountConnection as any)(admin, connected, "open", { ownerJid: "99999999@s.whatsapp.net" }, { workspaceId: "ws-1" }),
+    () => syncEvolutionAccountConnection(admin, connected, "open", { ownerJid: "99999999@s.whatsapp.net" }, { workspaceId: "ws-1" }),
     NumberMismatchError,
   );
   assertEquals(admin.active, false);
@@ -512,9 +524,26 @@ Deno.test("claim path calls clear once after the claim RPC", async () => {
   assertEquals(admin.rpcs.map((r) => r.name), [
     "activate_evolution_qr_account",
     "clear_undelivered_store_events",
+    "clear_whatsapp_disconnect_episode",
   ]);
   const clearCall = admin.rpcs.find((r) => r.name === "clear_undelivered_store_events");
   assertEquals(clearCall?.args, { p_account_id: "acc-1" });
+});
+
+Deno.test("the open branch clears the disconnect episode", async () => {
+  const admin = recordingAdmin();
+  const connected = { id: "acc-2", platform_user_id: "96597950350" };
+  await syncEvolutionAccountConnection(admin, connected, "open", { ownerJid: "96597950350@s.whatsapp.net" });
+  const episodeClear = admin.rpcs.find((r) => r.name === "clear_whatsapp_disconnect_episode");
+  assertEquals(episodeClear?.args, { p_account_id: "acc-2" });
+});
+
+Deno.test("a failed disconnect episode clear does not reject", async () => {
+  const admin = recordingAdmin(null, { episodeClearError: { message: "clear failed" } });
+  const connected = { id: "acc-2", platform_user_id: "96597950350" };
+  const result = await syncEvolutionAccountConnection(admin, connected, "open", { ownerJid: "96597950350@s.whatsapp.net" });
+  assertEquals(result, "96597950350");
+  assertEquals(admin.active, true);
 });
 
 Deno.test("clear error does not reject", async () => {
@@ -531,5 +560,17 @@ Deno.test("open->close does not call clear", async () => {
   await syncEvolutionAccountConnection(admin, connected, "close", null);
   const clearCalls = admin.rpcs.filter((r) => r.name === "clear_undelivered_store_events");
   assertEquals(clearCalls, []);
+  // The close branch is the outage itself: it must not clear the episode it is opening.
+  const episodeClears = admin.rpcs.filter((r) => r.name === "clear_whatsapp_disconnect_episode");
+  assertEquals(episodeClears, []);
 });
 
+
+Deno.test("a rejected cleanup transport preserves activation and emits the connection transition", async () => {
+  const admin = recordingAdmin(null, { episodeClearReject: true, workspaceId: "ws-1" });
+  const connected = { id: "acc-1", platform_user_id: "96597950350" };
+  const number = await syncEvolutionAccountConnection(admin, connected, "open", { ownerJid: "96597950350@s.whatsapp.net" });
+  assertEquals(number, "96597950350");
+  assertEquals(admin.active, true);
+  assertEquals(admin.deliveries.length > 0, true);
+});
