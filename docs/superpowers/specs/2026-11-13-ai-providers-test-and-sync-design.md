@@ -152,6 +152,20 @@ Both the OAuth sync and the API-key sync write into `ai_models`; **the OAuth mod
 shown by the login dialog and the model list shown outside it are then the same rows.**
 This is the dependency on the concurrent branch (§8).
 
+**Every reader of the API-key catalogue pins the credential kind.** A reader that
+does not says which kind it wants sees two rows for one model:
+
+- `.maybeSingle()` throws *"multiple rows returned"* — `_shared/ai-fallback.ts`,
+  `generate-image/runImageGeneration.ts`;
+- a plain pick takes an arbitrary row — `generate-image/runImageGeneration.ts`;
+- a list shows the same model twice — `useAIConfiguration.ts`, `ai-config/index.ts`.
+
+So the readers of the API-key catalogue filter on `auth_method = 'api_key'`, and a
+writer upserts on `(provider_id, model_id, auth_method)` — a two-column conflict
+target answers `42P10` ("no unique or exclusion constraint matching the ON CONFLICT
+specification") and writes nothing. A row addressed by its primary key needs no
+kind filter: the key is unique across kinds.
+
 `AiAuthMethod` already exists in the frontend (`src/hooks/ai-config/types.ts:39`:
 `export type AiAuthMethod = 'api_key' | 'oauth'`), and the saved tier shape already
 carries `auth_method?`. The database is the only thing missing it.
@@ -353,11 +367,14 @@ release_cron_run_lease(p_job, p_holder)          -- true = released
     click's chunks, so chunk 2 *extends* the lease instead of failing);
   - daily job → a holder derived from the UTC date (stable across the four cron
     entries).
-- `p_ttl` is `15 minutes`. The daily window is therefore 03:05 → ~03:41 UTC.
-- Because the holder is the run id, the daily entries extend one lease across the four
-  of them, and a manual click inside that window gets `false` → the API answers
-  `409 { error: 'busy' }` and the UI says *"the daily check is running — try again in a
-  few minutes"*. A manual click outside the window takes the lease normally.
+- `p_ttl` is `2 minutes`. The lease is released when the chunk ends, so the TTL only
+  has to outlive one chunk (the worst case is 30 s of targets plus 8 s of alerts).
+  It is short on purpose: a platform kill skips the release, and a lease that then
+  lasted fifteen minutes would lock the daily run out of its own window.
+- Because the holder is the run id, a click that overlaps a running chunk gets `false`
+  → the API answers `409 { error: 'busy' }` and the UI says *"the daily check is
+  running — try again in a few minutes"*. A click outside that window takes the lease
+  normally.
 
 **Why not `EdgeRuntime.waitUntil`:** `ARCHITECTURE.md` §27 — "Do not treat Edge
 Functions as durable queues." The continuation is four cron entries, not a background
@@ -383,15 +400,23 @@ CREATE TABLE public.ai_provider_health (
   notified_at       timestamptz,
   claim_token       uuid,
   claimed_at        timestamptz,
+  alert_pending     boolean NOT NULL DEFAULT false,
   PRIMARY KEY (provider_code, auth_method)
 );
 ```
 
 - **`status` values:** `connected`, `failed`, `needs_relogin`. There is no `skipped`
-  row — a provider without a credential is not a target, so it has no row.
-- **`previous_status`** is what makes the transition detectable: the writer copies the
-  old `status` into it. A row is "newly degraded" when
-  `previous_status = 'connected'` and `status ∈ ('failed','needs_relogin')`.
+  row — a provider without a credential is not a target, so it has no row. A target
+  the run's time budget never reached is reported in the chunk answer as `skipped`,
+  not as a row: it was not tested, so it has no status.
+- **`previous_status`** records what the row said before this write.
+- **`alert_pending`** is what makes the transition durable. `previous_status` alone
+  is not enough: it is overwritten by the next write, so re-checking a provider that
+  is still broken turns it into `'failed'` and the pending alert is lost before
+  anyone was told. `alert_pending` is set on the transition into a broken state and
+  stays set until the alert is sent, so a provider that breaks, is re-checked while
+  still broken, and breaks again after a recovery raises an alert every time it
+  breaks — and exactly once per break.
 - **`claim_token` / `claimed_at` / `notified_at`** implement a two-phase notification
   claim, so a crash between "decided to notify" and "notified" does not lose the alert
   and does not send it twice.
@@ -399,11 +424,16 @@ CREATE TABLE public.ai_provider_health (
 **RLS and grants** (`ARCHITECTURE.md` §23, §39):
 
 - `ALTER TABLE public.ai_provider_health ENABLE ROW LEVEL SECURITY;`
-- `CREATE POLICY ai_provider_health_admin_all ON public.ai_provider_health FOR ALL TO
+- `CREATE POLICY ai_provider_health_admin_select ON public.ai_provider_health FOR SELECT TO
   authenticated USING (public.has_role(auth.uid(), 'admin'));`
-  — **admin only**. A normal authenticated user gets zero rows; the policy denies by
-  default because no `USING (true)` policy exists for them.
-- `REVOKE ALL ON TABLE public.ai_provider_health FROM PUBLIC, anon;`
+  — **admin only, read only**. A normal authenticated user gets zero rows; the policy
+  denies by default because no `USING (true)` policy exists for them. The policy is
+  `FOR SELECT`, not `FOR ALL`: an admin who could `UPDATE notified_at` could silence
+  an alert by hand, and the rows are written by the edge function through the service
+  role.
+- `REVOKE ALL ON TABLE public.ai_provider_health FROM PUBLIC, anon, authenticated;`
+- `GRANT SELECT ON TABLE public.ai_provider_health TO authenticated;`
+  — the only privilege a signed-in admin has: read the rows, write none of them.
 - `GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.ai_provider_health TO service_role;`
   — the edge function is the only writer.
 - No grant to `authenticated` for writes: the browser never writes this table, it only
@@ -427,13 +457,16 @@ needed and no read path changes.
 
 | RPC | Returns | Purpose |
 |---|---|---|
-| `record_ai_provider_health(p_provider_code, p_auth_method, p_status, p_reason, p_models_added, p_models_updated, p_models_deactivated, p_latency_ms, p_run_id)` | `void` | upsert the row, copying the old `status` into `previous_status` |
-| `claim_ai_provider_health_notifications(p_claim_token uuid)` | `TABLE(provider_code text, auth_method text, status text, reason text, previous_status text)` | atomically claim the newly-degraded rows; a claim older than 10 minutes is re-claimable |
-| `mark_ai_provider_health_notified(p_claim_token uuid)` | `void` | close the claim after the notification was sent |
+| `record_ai_provider_health(p_provider_code, p_auth_method, p_status, p_reason, p_models_added, p_models_updated, p_models_deactivated, p_latency_ms, p_run_id)` | `void` | upsert the row, copying the old `status` into `previous_status`, and setting or clearing `alert_pending` |
+| `claim_ai_provider_health_notifications(p_claim_token uuid)` | `TABLE(provider_code text, auth_method text, status text, reason text, previous_status text)` | atomically claim the rows whose alert is still pending; a claim older than 10 minutes is re-claimable |
+| `mark_ai_provider_health_notified(p_claim_token uuid, p_provider_code text, p_auth_method text)` | `void` | close the claim of **one** row after its notification was sent |
 
 `record_ai_provider_health` does the read-old/write-new under a row lock
 (`SELECT … FOR UPDATE`), so two concurrent runs cannot both see `connected` and both
 fire an alert.
+
+The mark names one row, not the whole claim: the alert is sent provider by provider,
+and a send that failed for one of them must not close the alert of the others.
 
 ### 6.7 Sanitized errors
 
@@ -473,12 +506,20 @@ it is a sentence for a human, not a log line.
 | Targets per run | ≤ 16 | 9 API-key + 7 OAuth |
 | Concurrent probes | 3 | one per provider, no provider sees two at once |
 | Probe timeout | 12 s | a hung provider cannot eat the budget |
+| Target budget | 15 s, **one** signal for the probe, the token refresh and the catalogue sync of that target | the target stops working when it is over, instead of only being abandoned |
+| Chunk budget | 30 s of targets (6 targets × 15 s over 3 workers) + 8 s of alerts, inside the 40 s deadline | the platform kills the function at 50 s |
 | Provider-facing requests | one probe + one catalogue fetch per target per run | no retries inside a run; the next run retries |
 | OAuth refresh | the existing single-flight lease in `_shared/aiOAuth/credentials.ts` | two runs never refresh the same credential twice |
+| Mail provider timeout | 5 s | a mail provider that has not answered is not going to |
 
 There is **no retry inside a run**. A failed probe is recorded as `failed` and the next
 run retries. Retrying a probe inside the run would multiply the provider load exactly
 when a provider is already struggling.
+
+**A target the budget never reached** is reported in the chunk answer as `skipped`,
+and the chunk answers `done: false`: the caller knows the run did not cover
+everything it was asked to. A skipped target has no row — it was not tested, so it has
+no status.
 
 ### 6.9 The notification path
 
@@ -498,25 +539,35 @@ credential kind, so it belongs in the admin-only channel. This is the owner's de
 
 **How it is exactly once:**
 
-1. `record_ai_provider_health` stores `previous_status = 'connected'` and
-   `status = 'failed'`.
-2. `claim_ai_provider_health_notifications` claims that row (sets `claim_token`,
-   `claimed_at`) and returns it. Rows claimed more than 10 minutes ago with no
-   `notified_at` are re-claimable, so a crash does not lose the alert.
+1. `record_ai_provider_health` stores `previous_status = 'connected'`,
+   `status = 'failed'` and `alert_pending = true`. A status change resets
+   `notified_at`, `claim_token` and `claimed_at`, so a provider that recovers and
+   breaks again is claimable again.
+2. `claim_ai_provider_health_notifications` claims the rows whose `alert_pending` is
+   still true (sets `claim_token`, `claimed_at`) and returns them. Rows claimed more
+   than 10 minutes ago with no `notified_at` are re-claimable, so a crash does not
+   lose the alert.
 3. The runner sends one email per claimed row.
-4. `mark_ai_provider_health_notified` sets `notified_at` and clears the claim.
+4. `mark_ai_provider_health_notified(p_claim_token, p_provider_code, p_auth_method)`
+   closes **that one row**: it sets `notified_at`, clears the claim and clears
+   `alert_pending`.
 
-A mail that fails is caught: the run still succeeds and the claim stays open, so the
-row is re-claimed after ten minutes instead of the alert being lost.
+A mail that fails is caught: the run still succeeds and **only that row's** claim
+stays open, so the row is re-claimed after ten minutes instead of the alert being
+lost — and the rows whose mail did go out are not sent again.
 
 **Content:** the provider name, the credential kind, and the sanitized reason. No key,
 no token, no user data. The subject is
 `"AI provider needs attention: <Provider>"` and the message is
 `"<Provider> (<api key|subscription>) is <failed|needs re-login>: <sanitized reason>."`
+Everything that reaches the HTML body is escaped: the reason comes from a provider
+and is not trusted to be plain text.
 
 **No duplicate spam:** the transition is detected in SQL, so a second run on the same
-day that also finds the provider broken does **not** notify again — `previous_status`
-is no longer `connected`.
+day that also finds the provider broken does **not** notify again — `alert_pending`
+is only set on a transition, and an unchanged status keeps the row's alert state
+untouched. A provider that is re-checked while it is still broken keeps its pending
+alert, so the alert is not lost either.
 
 ### 6.10 OAuth specifics
 
@@ -656,15 +707,17 @@ frontend grouping is unchanged by this design either way.
 |---|---|
 | One provider's probe fails | that row is `failed` with a sanitized reason; the run continues |
 | One provider's catalogue fetch fails after a passed test | the row is `failed` with the reason; its models are untouched (the planner never applied) |
-| The whole run exceeds the 40 s deadline | the server returns what it has, `done: false`; the browser asks for the next chunk; the daily entries pick it up on the next slot |
+| The whole run exceeds the 40 s deadline | the server returns what it has, the targets it never reached are listed as `skipped`, and `done: false`; the browser asks for the next chunk; the daily entries pick it up on the next slot |
 | A chunk is requested beyond the last slice | `done: true`, no targets, no writes |
-| The lease is held (daily run or another click) | `409 { error: 'busy' }`; the UI keeps the stored table |
+| The lease is held (a running chunk or another click) | `409 { error: 'busy' }`; the UI keeps the stored table |
+| The platform kills the function | the lease is not released, so its 2 minute TTL expires on its own and the next attempt takes it |
 | The OAuth refresh fails | `needs_relogin`; **no sync**; the OAuth models are untouched |
 | The OAuth connection is already `reauth_required` | `needs_relogin`; no network call for the probe |
-| `record_ai_provider_health` fails (DB down) | the target is reported as `failed` with reason *"could not record the result"*; the run continues |
-| The notification insert fails | the claim is left open; the next run re-claims it after 10 minutes and notifies. The run itself is unaffected |
+| `record_ai_provider_health` fails (DB down) | the target is reported as `failed` with reason *"The result could not be recorded."*; the other targets of the chunk are unaffected |
+| One notification fails | the run still succeeds; **only that row's** claim stays open, so it is re-claimed after 10 minutes; the rows whose mail did go out are not sent again |
+| The lease release fails | the chunk's answer is still returned; the lease expires with its TTL |
 | A provider returns a huge body | the body is never stored; only the mapped sentence is, truncated to 500 chars |
-| The service role is missing | the function answers `500` with a generic message and logs `ai_provider_health misconfigured` |
+| The service role is missing | the function answers `500` with a generic message and logs the failure's name only |
 
 ---
 
@@ -678,6 +731,7 @@ frontend grouping is unchanged by this design either way.
 | A key leaks into the admin email | the subject and the body are built from the provider name and the sanitized reason only, and only the admins receive it. |
 | A non-admin triggers a run | `verifyCronOrAdmin` resolves the bearer token to a signed-in admin (`user_roles.role = 'admin'`). Anything else is `401`. A route guard alone is never the control (`ARCHITECTURE.md` §39). |
 | A non-admin reads the results | `ai_provider_health` has an admin-only policy; the `status` action goes through the same authorizer; the table is not granted to `anon`. |
+| An admin silences an alert by hand | the table is read only for `authenticated`: the policy is `FOR SELECT`, `authenticated` has no `UPDATE` grant, and only the service role writes. An admin who could write `notified_at` could silence a degradation. |
 | A caller forges the cron secret | `verifyCronOrAdmin` compares with a constant-time check against `CRON_SECRET`; a mismatch is `401`. The secret never appears in a migration. |
 | The cron overlaps a manual click | the `ai-provider-health` lease in `cron_run_leases`; the second caller gets `false` → `409 busy`. |
 | A run overlaps itself | the run id skips already-recorded targets; the lease serialises different run ids. |

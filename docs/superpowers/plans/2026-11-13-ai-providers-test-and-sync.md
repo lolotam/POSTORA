@@ -144,7 +144,7 @@ fully before Task 1; §6 holds the design decisions and §11 the open questions.
 - Table `public.ai_provider_health`, primary key `(provider_code, auth_method)`, columns
   `status`, `previous_status`, `reason`, `models_added`, `models_updated`,
   `models_deactivated`, `latency_ms`, `run_id`, `checked_at`, `notified_at`, `claim_token`,
-  `claimed_at`.
+  `claimed_at`, `alert_pending`.
 - Column `public.ai_models.auth_method text NOT NULL DEFAULT 'api_key'` and the unique index
   `ai_models_provider_model_auth_method_key` on `(provider_id, model_id, auth_method)`.
 - RPC `record_ai_provider_health(p_provider_code text, p_auth_method text, p_status text,
@@ -152,11 +152,17 @@ fully before Task 1; §6 holds the design decisions and §11 the open questions.
   p_latency_ms int, p_run_id uuid) → void`.
 - RPC `claim_ai_provider_health_notifications(p_claim_token uuid) →
   TABLE(provider_code text, auth_method text, status text, reason text, previous_status text)`.
-- RPC `mark_ai_provider_health_notified(p_claim_token uuid) → void`.
+- RPC `mark_ai_provider_health_notified(p_claim_token uuid, p_provider_code text,
+  p_auth_method text) → void` — **one row**, not the whole claim.
 - Four `pg_cron` jobs `ai-provider-health-1..4` at `5 3 * * *`, `12 3 * * *`, `19 3 * * *`,
   `26 3 * * *`, each `net.http_post`-ing
   `https://api.postora.cloud/functions/v1/ai-provider-health` with
   `'Authorization', 'Bearer ' || get_cron_secret()` and a body carrying the chunk number.
+
+**Grants:** the table is read only for `authenticated` —
+`REVOKE ALL … FROM PUBLIC, anon, authenticated`, then `GRANT SELECT … TO authenticated`,
+and the policy is `FOR SELECT` (admin only). Only the service role writes, so an admin
+cannot silence an alert by editing `notified_at`.
 
 - [ ] **Step 1: Write the SQL proof first** (`supabase/tests/ai_provider_health.sql`). Copy
   the header, the `BEGIN;`/`ROLLBACK;` shape and the assertion style from
@@ -174,22 +180,29 @@ fully before Task 1; §6 holds the design decisions and §11 the open questions.
   4. `claim_ai_provider_health_notifications('22222222-2222-2222-2222-222222222222')` returns
      exactly one row: `('claude','api_key','failed','Rate limit exceeded','connected')`.
      A second call with a different token returns **zero** rows (the row is already claimed).
-  5. `mark_ai_provider_health_notified('22222222-2222-2222-2222-222222222222')` →
-     `notified_at IS NOT NULL` and `claim_token IS NULL`. A later
+  5. `mark_ai_provider_health_notified('22222222-2222-2222-2222-222222222222','claude','api_key')` →
+     `notified_at IS NOT NULL`, `claim_token IS NULL` and `alert_pending` is false. A later
      `claim_ai_provider_health_notifications('33333333-3333-3333-3333-333333333333')` returns
      **zero** rows.
-  6. A row whose `previous_status` is **not** `connected` is never claimed: record
+  6. A provider that was never connected is never claimed: record
      `('openai','api_key','failed','Rate limit exceeded',0,0,0,10,'44444444-4444-4444-4444-444444444444')`
      twice and the claim returns zero rows for it.
-  7. `ai_models.auth_method` exists and defaults to `'api_key'`:
+  7. A provider that is re-checked while it is **still broken** keeps its pending alert:
+     record `('claude','api_key','failed',…)` twice and the claim still returns the row.
+  8. Break → notify → recover → break alerts **again**: after the alert was sent, a
+     `connected` write resets `notified_at`/`claim_token`/`claimed_at`, and the next
+     `failed` write is claimable a second time.
+  9. An authenticated admin may `SELECT` the rows and may **not** `UPDATE` or `DELETE`
+     them (`insufficient_privilege`).
+  10. `ai_models.auth_method` exists and defaults to `'api_key'`:
      `SELECT auth_method FROM ai_models LIMIT 1` is `'api_key'` for an existing row, and two
      rows with the same `(provider_id, model_id)` but different `auth_method` can both exist
      (insert one `auth_method='oauth'` row and assert both rows are present).
-  8. `INSERT INTO ai_provider_health (provider_code, auth_method, status) VALUES
+  11. `INSERT INTO ai_provider_health (provider_code, auth_method, status) VALUES
      ('claude','api_key','bogus')` violates the `status` CHECK.
-  9. `INSERT INTO ai_provider_health (provider_code, auth_method, status) VALUES
+  12. `INSERT INTO ai_provider_health (provider_code, auth_method, status) VALUES
      ('claude','saml','connected')` violates the `auth_method` CHECK.
-  10. `SELECT cron.jobname FROM cron.job WHERE jobname LIKE 'ai-provider-health%'` returns the
+  13. `SELECT cron.jobname FROM cron.job WHERE jobname LIKE 'ai-provider-health%'` returns the
       four names — **only when `pg_cron` is installed**; guard that assertion with
       `to_regclass('cron.job') IS NOT NULL` so the suite passes on a DB without `pg_cron`.
 
@@ -236,6 +249,7 @@ fully before Task 1; §6 holds the design decisions and §11 the open questions.
     notified_at        timestamptz,
     claim_token        uuid,
     claimed_at         timestamptz,
+    alert_pending      boolean NOT NULL DEFAULT false,
     PRIMARY KEY (provider_code, auth_method)
   );
 
@@ -243,12 +257,16 @@ fully before Task 1; §6 holds the design decisions and §11 the open questions.
     ON public.ai_provider_health (checked_at DESC);
 
   ALTER TABLE public.ai_provider_health ENABLE ROW LEVEL SECURITY;
-  REVOKE ALL ON TABLE public.ai_provider_health FROM PUBLIC, anon;
+  REVOKE ALL ON TABLE public.ai_provider_health FROM PUBLIC, anon, authenticated;
 
-  -- Admin only: a normal authenticated user reads no row and writes none.
-  CREATE POLICY ai_provider_health_admin_all ON public.ai_provider_health
-    FOR ALL TO authenticated USING (public.has_role(auth.uid(), 'admin'));
+  -- Admin only, and read only: a normal authenticated user reads no row, and an
+  -- authenticated admin cannot write one either.
+  DROP POLICY IF EXISTS ai_provider_health_admin_all ON public.ai_provider_health;
+  DROP POLICY IF EXISTS ai_provider_health_admin_select ON public.ai_provider_health;
+  CREATE POLICY ai_provider_health_admin_select ON public.ai_provider_health
+    FOR SELECT TO authenticated USING (public.has_role(auth.uid(), 'admin'));
 
+  GRANT SELECT ON TABLE public.ai_provider_health TO authenticated;
   GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.ai_provider_health TO service_role;
 
   -- Models are keyed by credential kind: one provider can serve an API key and a
@@ -282,6 +300,9 @@ fully before Task 1; §6 holds the design decisions and §11 the open questions.
   AS $$
   DECLARE
     v_old text;
+    v_old_pending boolean := false;
+    v_pending boolean := false;
+    v_changed boolean;
   BEGIN
     IF coalesce(p_provider_code, '') = '' OR coalesce(p_auth_method, '') = '' THEN
       RAISE EXCEPTION 'record_ai_provider_health: provider_code and auth_method are required'
@@ -292,19 +313,36 @@ fully before Task 1; §6 holds the design decisions and §11 the open questions.
         USING ERRCODE = 'invalid_parameter_value';
     END IF;
 
-    SELECT status INTO v_old FROM public.ai_provider_health
+    SELECT status, alert_pending INTO v_old, v_old_pending FROM public.ai_provider_health
       WHERE provider_code = p_provider_code AND auth_method = p_auth_method
       FOR UPDATE;
 
+    -- A status change is a new state, so the notification state of the old one is
+    -- dropped and the row becomes claimable again. An unchanged status keeps it.
+    v_changed := (v_old IS DISTINCT FROM p_status);
+    IF v_changed THEN
+      IF p_status IN ('failed','needs_relogin')
+         AND (v_old = 'connected'
+              OR (v_old IN ('failed','needs_relogin') AND coalesce(v_old_pending, false))) THEN
+        v_pending := true;
+      ELSE
+        v_pending := false;
+      END IF;
+    ELSE
+      v_pending := coalesce(v_old_pending, false);
+    END IF;
+
     INSERT INTO public.ai_provider_health AS h (
       provider_code, auth_method, status, previous_status, reason,
-      models_added, models_updated, models_deactivated, latency_ms, run_id, checked_at
+      models_added, models_updated, models_deactivated, latency_ms, run_id, checked_at,
+      alert_pending
     )
     VALUES (
       p_provider_code, p_auth_method, p_status, v_old,
       left(coalesce(p_reason, ''), 500),
       coalesce(p_models_added, 0), coalesce(p_models_updated, 0), coalesce(p_models_deactivated, 0),
-      p_latency_ms, p_run_id, now()
+      p_latency_ms, p_run_id, now(),
+      v_pending
     )
     ON CONFLICT (provider_code, auth_method) DO UPDATE SET
       status = EXCLUDED.status,
@@ -315,7 +353,11 @@ fully before Task 1; §6 holds the design decisions and §11 the open questions.
       models_deactivated = EXCLUDED.models_deactivated,
       latency_ms = EXCLUDED.latency_ms,
       run_id = EXCLUDED.run_id,
-      checked_at = EXCLUDED.checked_at;
+      checked_at = EXCLUDED.checked_at,
+      alert_pending = EXCLUDED.alert_pending,
+      notified_at = CASE WHEN v_changed THEN NULL ELSE h.notified_at END,
+      claim_token = CASE WHEN v_changed THEN NULL ELSE h.claim_token END,
+      claimed_at = CASE WHEN v_changed THEN NULL ELSE h.claimed_at END;
   END;
   $$;
 
@@ -323,7 +365,9 @@ fully before Task 1; §6 holds the design decisions and §11 the open questions.
   GRANT EXECUTE ON FUNCTION public.record_ai_provider_health(text, text, text, text, int, int, int, int, uuid) TO service_role;
   ```
 
-  `claim_ai_provider_health_notifications` returns the newly-degraded rows and claims them.
+  `claim_ai_provider_health_notifications` returns the rows whose alert is still
+  pending and claims them. The pending flag, not `previous_status`, decides: a
+  provider that is re-checked while still broken keeps its pending alert.
   A claim older than 10 minutes with no `notified_at` is re-claimable, so a run that died
   mid-notification does not lose the alert:
 
@@ -345,7 +389,7 @@ fully before Task 1; §6 holds the design decisions and §11 the open questions.
     RETURN QUERY
     UPDATE public.ai_provider_health h
        SET claim_token = p_claim_token, claimed_at = now()
-     WHERE h.previous_status = 'connected'
+     WHERE h.alert_pending
        AND h.status IN ('failed','needs_relogin')
        AND h.notified_at IS NULL
        AND (h.claim_token IS NULL OR h.claimed_at IS NULL OR h.claimed_at < now() - interval '10 minutes')
@@ -356,21 +400,36 @@ fully before Task 1; §6 holds the design decisions and §11 the open questions.
   REVOKE ALL ON FUNCTION public.claim_ai_provider_health_notifications(uuid) FROM PUBLIC, anon, authenticated;
   GRANT EXECUTE ON FUNCTION public.claim_ai_provider_health_notifications(uuid) TO service_role;
 
-  CREATE OR REPLACE FUNCTION public.mark_ai_provider_health_notified(p_claim_token uuid)
+  -- One row per call: a send that failed for one provider must not close the
+  -- alert of the others.
+  DROP FUNCTION IF EXISTS public.mark_ai_provider_health_notified(uuid);
+
+  CREATE OR REPLACE FUNCTION public.mark_ai_provider_health_notified(
+    p_claim_token uuid,
+    p_provider_code text,
+    p_auth_method text
+  )
   RETURNS void
   LANGUAGE plpgsql
   SECURITY DEFINER
   SET search_path = public
   AS $$
   BEGIN
+    IF p_claim_token IS NULL OR coalesce(p_provider_code, '') = '' OR coalesce(p_auth_method, '') = '' THEN
+      RAISE EXCEPTION 'mark_ai_provider_health_notified: claim token, provider_code and auth_method are required'
+        USING ERRCODE = 'invalid_parameter_value';
+    END IF;
+
     UPDATE public.ai_provider_health
-       SET notified_at = now(), claim_token = NULL, claimed_at = NULL
-     WHERE claim_token = p_claim_token;
+       SET notified_at = now(), claim_token = NULL, claimed_at = NULL, alert_pending = false
+     WHERE claim_token = p_claim_token
+       AND provider_code = p_provider_code
+       AND auth_method = p_auth_method;
   END;
   $$;
 
-  REVOKE ALL ON FUNCTION public.mark_ai_provider_health_notified(uuid) FROM PUBLIC, anon, authenticated;
-  GRANT EXECUTE ON FUNCTION public.mark_ai_provider_health_notified(uuid) TO service_role;
+  REVOKE ALL ON FUNCTION public.mark_ai_provider_health_notified(uuid, text, text) FROM PUBLIC, anon, authenticated;
+  GRANT EXECUTE ON FUNCTION public.mark_ai_provider_health_notified(uuid, text, text) TO service_role;
   ```
 
   Then the four cron entries. Each is guarded exactly like
@@ -927,18 +986,22 @@ Task 3, `runCatalogSync` from `_shared/modelCatalogSyncRun.ts`.
   `  listApiKeyProviders(): Promise<Array<{ provider_code: string; name: string }>>;`
   `  listOAuthConnections(): Promise<Array<{ oauth_provider: string; provider_code: string; name: string; status: string }>>;`
   `  resolveApiKey(providerCode: string): Promise<string | null>;`
-  `  probeApiKey(target: HealthTarget, key: string): Promise<void>;`
-  `  probeOAuth(target: HealthTarget): Promise<void>;`
-  `  syncApiKeyCatalogue(providerCode: string): Promise<{ added: number; updated: number; deactivated: number }>;`
-  `  syncOAuthCatalogue(target: HealthTarget): Promise<{ added: number; updated: number; deactivated: number }>;`
+  `  probeApiKey(target: HealthTarget, key: string, signal: AbortSignal): Promise<void>;`
+  `  probeOAuth(target: HealthTarget, signal: AbortSignal): Promise<void>;`
+  `  syncApiKeyCatalogue(providerCode: string, signal: AbortSignal): Promise<{ added: number; updated: number; deactivated: number }>;`
+  `  syncOAuthCatalogue(target: HealthTarget, signal: AbortSignal): Promise<{ added: number; updated: number; deactivated: number }>;`
   `  recordResult(result: HealthResult, runId: string): Promise<void>;`
   `  claimAlerts(claimToken: string): Promise<DegradedProvider[]>;`
   `  sendAlert(provider: DegradedProvider): Promise<void>;`
-  `  markAlertsNotified(claimToken: string): Promise<void>;`
+  `  markAlertNotified(claimToken: string, provider: DegradedProvider): Promise<void>;`
   `  now(): Date;`
   `}`
-- `export interface HealthRunOptions { runId: string; chunk: number; deadlineMs?: number; concurrency?: number }`
-- `export async function runHealthChunk(ports: HealthRunPorts, options: HealthRunOptions): Promise<{ run_id: string; chunk: number; done: boolean; next_chunk: number | null; results: HealthResult[]; summary: { total: number; connected: number; failed: number; needs_relogin: number } }>`
+  — the probe, the token refresh and the sync of one target share **one** signal, and the
+  claim is closed **one row** at a time.
+- `export interface HealthRunOptions { runId: string; chunk: number; deadlineMs?: number; concurrency?: number; alertBudgetMs?: number }`
+- `export async function runHealthChunk(ports: HealthRunPorts, options: HealthRunOptions): Promise<{ run_id: string; chunk: number; done: boolean; next_chunk: number | null; results: HealthResult[]; skipped: Array<{ provider_code: string; auth_method: "api_key" | "oauth"; reason: string }>; summary: { total: number; connected: number; failed: number; needs_relogin: number } }>`
+  — `skipped` lists the targets the time budget never reached, and a chunk with a
+  skipped target answers `done: false`.
 
 - [ ] **Step 1: Write the failing tests** (`supabase/functions/ai-provider-health/run.test.ts`):
 
@@ -1065,14 +1128,14 @@ Task 3, `runCatalogSync` from `_shared/modelCatalogSyncRun.ts`.
     listApiKeyProviders(): Promise<Array<{ provider_code: string; name: string }>>;
     listOAuthConnections(): Promise<Array<{ oauth_provider: string; provider_code: string; name: string; status: string }>>;
     resolveApiKey(providerCode: string): Promise<string | null>;
-    probeApiKey(target: HealthTarget, key: string): Promise<void>;
-    probeOAuth(target: HealthTarget): Promise<void>;
-    syncApiKeyCatalogue(providerCode: string): Promise<{ added: number; updated: number; deactivated: number }>;
-    syncOAuthCatalogue(target: HealthTarget): Promise<{ added: number; updated: number; deactivated: number }>;
+    probeApiKey(target: HealthTarget, key: string, signal: AbortSignal): Promise<void>;
+    probeOAuth(target: HealthTarget, signal: AbortSignal): Promise<void>;
+    syncApiKeyCatalogue(providerCode: string, signal: AbortSignal): Promise<{ added: number; updated: number; deactivated: number }>;
+    syncOAuthCatalogue(target: HealthTarget, signal: AbortSignal): Promise<{ added: number; updated: number; deactivated: number }>;
     recordResult(result: HealthResult, runId: string): Promise<void>;
     claimAlerts(claimToken: string): Promise<DegradedProvider[]>;
     sendAlert(provider: DegradedProvider): Promise<void>;
-    markAlertsNotified(claimToken: string): Promise<void>;
+    markAlertNotified(claimToken: string, provider: DegradedProvider): Promise<void>;
     now(): Date;
   }
 
@@ -1081,12 +1144,14 @@ Task 3, `runCatalogSync` from `_shared/modelCatalogSyncRun.ts`.
     chunk: number;
     deadlineMs?: number;
     concurrency?: number;
+    alertBudgetMs?: number;
   }
 
   async function runOneTarget(
     ports: HealthRunPorts,
     target: HealthTarget,
     runId: string,
+    signal: AbortSignal,
   ): Promise<HealthResult> {
     const started = Date.now();
     const checkedAt = ports.now().toISOString();
@@ -1147,7 +1212,13 @@ Task 3, `runCatalogSync` from `_shared/modelCatalogSyncRun.ts`.
       latency_ms: Date.now() - started,
       checked_at: checkedAt,
     };
-    await ports.recordResult(result, runId);
+    try {
+      await ports.recordResult(result, runId);
+    } catch (error) {
+      // A failed write must not take the whole chunk down.
+      console.error("event: 'ai_provider_health_write_failed'", error instanceof Error ? error.name : "error");
+      return { ...result, status: "failed", reason: "The result could not be recorded." };
+    }
     return result;
   }
   ```
@@ -1198,18 +1269,32 @@ Task 3, `runCatalogSync` from `_shared/modelCatalogSyncRun.ts`.
     async function worker() {
       while (index < slice.length && Date.now() < deadline) {
         const target = slice[index++];
-        results.push(await runOneTarget(ports, target, options.runId));
+        // One signal per target: the probe, the token refresh and the catalogue
+        // sync of this target all run inside the same budget.
+        const signal = AbortSignal.timeout(HEALTH_TARGET_BUDGET_MS);
+        results.push(await runOneTarget(ports, target, options.runId, signal));
       }
     }
 
     await Promise.all(Array.from({ length: Math.min(concurrency, slice.length) }, () => worker()));
 
+    // A target the deadline never reached was not tested: it is reported as skipped
+    // and the chunk is not done.
+    const skipped = slice
+      .filter((_, position) => !collected.some((c) => c.position === position))
+      .map((target) => ({
+        provider_code: target.provider_code,
+        auth_method: target.auth_method,
+        reason: HEALTH_SKIPPED_REASON,
+      }));
+
     return {
       run_id: options.runId,
       chunk: options.chunk,
-      done,
+      done: done && skipped.length === 0,
       next_chunk: nextChunk,
       results,
+      skipped,
       summary: summarizeHealthResults(results),
     };
   }
@@ -1376,6 +1461,15 @@ catalogue of `claude`, and the OAuth rows could never be stored at all.
   2. `runCatalogSync` gains `options.authMethod` (default `"api_key"`), passes it to
      `defaultModelsInUse`, filters the `ai_models` read by it, adds it to every written row and
      changes the conflict target:
+
+     **Every other writer and reader of `ai_models` follows.** A writer that upserts on
+     `provider_id,model_id` gets `42P10` from PostgREST ("no unique or exclusion constraint
+     matching the ON CONFLICT specification") and writes nothing — and if it never reads the
+     error, the sync looks like it worked. A reader that does not filter by `auth_method`
+     sees two rows for one model: `.maybeSingle()` throws, a plain pick takes an arbitrary
+     row, and a list shows the model twice. So the conflict target is
+     `provider_id,model_id,auth_method` everywhere, and the API-key readers filter on
+     `auth_method = 'api_key'`. A row addressed by its primary key needs no filter.
 
      ```ts
      const authMethod = options.authMethod ?? "api_key";
@@ -1555,21 +1649,43 @@ database.
 - [ ] **Step 3: Implement** `supabase/functions/ai-provider-health/handler.ts`.
 
   ```ts
+  import { z } from "npm:zod@3.23.8";
   import { deriveRunId } from "../_shared/aiProviderHealth.ts";
 
   const LEASE_JOB = "ai-provider-health";
-  const LEASE_TTL_SECONDS = 15 * 60;
+  // The lease is released when the chunk ends, so the TTL only has to outlive a
+  // chunk. It is short on purpose: a platform kill skips the release.
+  const LEASE_TTL_SECONDS = 120;
+
+  const healthRequestSchema = z.object({
+    action: z.enum(["run", "status"]).catch("status").optional(),
+    chunk: z.union([z.number(), z.string()]).catch(1).optional(),
+    scope: z.enum(["daily", "manual"]).catch("manual").optional(),
+    run_token: z.string().catch("").optional(),
+  });
 
   export function parseHealthRequest(body: unknown) {
-    const raw = (body ?? {}) as { action?: unknown; chunk?: unknown; scope?: unknown; run_token?: unknown };
+    const parsed = healthRequestSchema.safeParse(body ?? {});
+    const raw = parsed.success ? parsed.data : {};
     const action = raw.action === "run" ? "run" : "status";
-    const chunk = Number.isFinite(raw.chunk) ? Math.max(1, Math.floor(Number(raw.chunk))) : 1;
+    const chunkValue = typeof raw.chunk === "string" ? Number(raw.chunk) : raw.chunk;
+    const chunk = Number.isFinite(chunkValue) ? Math.max(1, Math.floor(Number(chunkValue))) : 1;
     const scope = raw.scope === "daily" ? "daily" : "manual";
     const runToken = typeof raw.run_token === "string" && raw.run_token ? raw.run_token : null;
     return { action, chunk, scope, runToken };
   }
 
   export async function handleHealthRequest(req: Request, ports: HealthHandlerPorts): Promise<Response> {
+    try {
+      return await routeHealthRequest(req, ports);
+    } catch (error) {
+      // The edge function must answer with a status, not with a stack trace.
+      console.error("event: 'ai_provider_health_request_failed'", error instanceof Error ? error.name : "error");
+      return json(500, { error: "The provider health check failed" });
+    }
+  }
+
+  async function routeHealthRequest(req: Request, ports: HealthHandlerPorts): Promise<Response> {
     const auth = await ports.isAuthorized(req);
     if (!auth.ok) return auth.response;
 
@@ -1594,10 +1710,16 @@ database.
       return json(409, { error: "busy" });
     }
     try {
-      const result = await ports.runChunk(parsed.chunk, runId, parsed.scope);
+      const result = await ports.runChunk(parsed.chunk, runId);
       return json(200, result);
     } finally {
-      await ports.releaseLease(LEASE_JOB, holder);
+      try {
+        await ports.releaseLease(LEASE_JOB, holder);
+      } catch (error) {
+        // The lease has a short TTL: a release that fails must not replace the
+        // chunk's answer.
+        console.error("event: 'ai_provider_health_lease_release_failed'", error instanceof Error ? error.name : "error");
+      }
     }
   }
   ```
@@ -1659,9 +1781,15 @@ database.
 `_shared/aiProviderHealth.ts` (Task 2).
 
 **Interfaces — Produces:**
-- `export function buildAlertTitle(p: DegradedProvider): string`
-- `export function buildAlertMessage(p: DegradedProvider): string`
+- `export function buildAlertTitle(p: DegradedProvider): string` — the subject names the
+  provider's **display name**, not its code.
+- `export function buildAlertMessage(p: DegradedProvider): string` — the plain-text body.
 - `export function alertRowsToDegraded(rows: Array<Record<string, unknown>>): DegradedProvider[]`
+- `export interface AdminMailer { adminRecipients(): Promise<string[]>; send(to: string[], subject: string, html: string, text?: string): Promise<void> }`
+  — the plain-text body travels with the HTML one.
+
+Everything that reaches the HTML body is escaped: the reason comes from a provider and
+is not trusted to be plain text.
 
 - [ ] **Step 1: Write the failing tests** (`supabase/functions/_shared/aiProviderAlert.test.ts`):
 
@@ -1669,24 +1797,25 @@ database.
   import { assert, assertEquals } from "https://deno.land/std@0.208.0/assert/mod.ts";
   import { alertRowsToDegraded, buildAlertMessage, buildAlertTitle } from "./aiProviderAlert.ts";
 
-  Deno.test("the title names the provider", () => {
+  Deno.test("the title names the provider, not its code", () => {
     assertEquals(
-      buildAlertTitle({ provider_code: "claude", auth_method: "oauth", status: "needs_relogin", reason: null }),
-      "AI provider needs attention: claude",
+      buildAlertTitle({ provider_code: "claude", display_name: "Anthropic", auth_method: "oauth", status: "needs_relogin", reason: null }),
+      "AI provider needs attention: Anthropic",
     );
   });
 
   Deno.test("the message names the credential kind and the sanitized reason", () => {
     assertEquals(
-      buildAlertMessage({ provider_code: "claude", auth_method: "oauth", status: "needs_relogin", reason: "The subscription sign-in expired. Sign in again." }),
-      "claude (subscription) needs re-login: The subscription sign-in expired. Sign in again.",
+      buildAlertMessage({ provider_code: "claude", display_name: "Anthropic", auth_method: "oauth", status: "needs_relogin", reason: "The subscription sign-in expired. Sign in again." }),
+      "Anthropic (subscription) is needs re-login: The subscription sign-in expired. Sign in again.",
     );
   });
 
-  Deno.test("a null reason still produces a readable message", () => {
-    const message = buildAlertMessage({ provider_code: "openrouter", auth_method: "api_key", status: "failed", reason: null });
-    assert(message.includes("openrouter"));
-    assert(message.includes("API key"));
+  Deno.test("a reason that carries markup is escaped", () => {
+    const html = buildAlertHtml([
+      { provider_code: "openrouter", display_name: "OpenRouter", auth_method: "api_key", status: "failed", reason: "<script>alert('x')</script>" },
+    ]);
+    assert(!html.includes("<script>"));
   });
 
   Deno.test("the claim rows become degraded providers", () => {
@@ -1749,45 +1878,46 @@ database.
   ```
 
 - [ ] **Step 4: Wire the alert into the runner.** The ports already exist on
-  `HealthRunPorts` from Task 4 (`claimAlerts`, `sendAlert`, `markAlertsNotified`);
+  `HealthRunPorts` from Task 4 (`claimAlerts`, `sendAlert`, `markAlertNotified`);
   implement them in `deps.ts`:
 
   1. `claimAlerts` calls `claim_ai_provider_health_notifications` with a fresh claim token
-     and maps the rows with `alertRowsToDegraded`;
+     and maps the rows with `alertRowsToDegraded`, then resolves the providers' **display
+     names** in one query;
   2. `sendAlert` sends the **admin-only email** with `buildAlertTitle` /
      `buildAlertMessage` / `buildAlertHtml` — the recipients are the admins
      (`user_roles` role `admin` joined to `profiles`) and the transport is Resend, exactly
-     the pattern of `notify-expiring-ai-overrides`;
-  3. after the alerts are sent, the runner calls `mark_ai_provider_health_notified` with the
-     same claim token.
+     the pattern of `notify-expiring-ai-overrides`. The Resend fetch has a 5 s timeout;
+  3. after **each** alert was sent, the runner calls `mark_ai_provider_health_notified` with
+     the same claim token **and that row's** `provider_code` / `auth_method`.
 
   The runner calls `ports.claimAlerts(claimToken)` after the chunk's results are written,
-  sends each claimed row with `ports.sendAlert(row)`, and then closes the claim.
+  sends each claimed row with `ports.sendAlert(row)`, and then closes **that row's**
+  claim.
 
   A failed send must not fail the run: catch it, log
-  `event: 'ai_provider_alert_failed'`, and leave the claim open so the next run re-claims
-  the row after 10 minutes.
+  `event: 'ai_provider_alert_failed'`, and leave **only that row's** claim open so the next
+  run re-claims it after 10 minutes. The rows whose mail did go out are closed, so they
+  are not sent again.
 
   Add the alert case to `run.test.ts` (the port receives a `DegradedProvider`, so the title is
-  built inside `sendAlert`):
+  built inside `sendAlert`). The claim must come from the **recorded transition**, not
+  from a fixed row:
 
   ```ts
   Deno.test("a provider that just degraded produces one admin alert", async () => {
     const alerts: string[] = [];
     const { ports } = fakePorts({
       probeApiKey: async (t) => { if (t.provider_code === "openai") throw new Error("boom"); },
-      claimAlerts: async () => ([
-        { provider_code: "openai", auth_method: "api_key", status: "failed", reason: "Invalid API key" },
-      ]),
       sendAlert: async (row) => { alerts.push(buildAlertTitle(row)); },
     });
     await runHealthChunk(ports, { runId: "run-1", chunk: 1 });
     assertEquals(alerts.length, 1);
-    assert(alerts[0].includes("openai"));
+    assert(alerts[0].includes("OpenAI"));
   });
   ```
 
-  Add `claimAlerts`, `sendAlert` and `markAlertsNotified` to `HealthRunPorts` (the fake
+  Add `claimAlerts`, `sendAlert` and `markAlertNotified` to `HealthRunPorts` (the fake
   gives them defaults that return `[]` and do nothing, so the earlier tests keep working).
 
 - [ ] **Step 5: Run and see it pass**
@@ -1866,7 +1996,15 @@ database.
     });
 
     it('reports a busy server without throwing', async () => {
-      invoke.mockResolvedValue({ data: { error: 'busy' }, error: null });
+      // supabase-js answers a non-2xx with data: null and a FunctionsHttpError
+      // whose context is the original response -- the code is in that body.
+      invoke.mockResolvedValue({
+        data: null,
+        error: Object.assign(
+          new Error('Edge Function returned a non-2xx status code'),
+          { context: new Response(JSON.stringify({ error: 'busy' }), { status: 409 }) },
+        ),
+      });
       const { result } = renderHook(() => useRunProviderHealth(), { wrapper });
       await result.current.run();
       await waitFor(() => expect(result.current.error).toBe('busy'));
