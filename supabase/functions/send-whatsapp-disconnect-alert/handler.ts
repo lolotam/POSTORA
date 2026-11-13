@@ -33,9 +33,17 @@ export interface SendAlertsDeps {
   loadAdmins(): Promise<AdminProfile[]>;
   isGlobalEmailEnabled(): Promise<boolean>;
   isAdminAlertEnabled(): Promise<boolean>;
-  claim(accountId: string, kind: AlertKind): Promise<boolean>;
-  send(payload: { to: string[]; subject: string; html: string }): Promise<void>;
-  mark(accountId: string, kind: AlertKind): Promise<boolean>;
+  /** The episode id of the claimed episode, or null when the claim was refused. */
+  claim(accountId: string, kind: AlertKind): Promise<string | null>;
+  send(payload: {
+    to: string[];
+    subject: string;
+    html: string;
+    /** Stable per episode and recipient: the provider dedupes a retry on it. */
+    idempotencyKey: string;
+  }): Promise<void>;
+  /** The episode id the mark must match: a mark for another episode is refused. */
+  mark(accountId: string, kind: AlertKind, episodeId: string): Promise<boolean>;
 }
 
 export interface SendSummary {
@@ -65,7 +73,12 @@ function accountLabel(account: AlertAccount): string {
   return escapeHtml(account.platform_username || "WhatsApp");
 }
 
-function emailShell(headerGradient: string, headline: string, body: string, cta: string): string {
+function emailShell(
+  headerGradient: string,
+  headline: string,
+  body: string,
+  cta: string | null,
+): string {
   return `
     <!DOCTYPE html>
     <html>
@@ -82,11 +95,15 @@ function emailShell(headerGradient: string, headline: string, body: string, cta:
         <tr>
           <td style="padding: 24px;">
             ${body}
-            <div style="margin: 24px 0; text-align: center;">
+            ${
+              cta
+                ? `<div style="margin: 24px 0; text-align: center;">
               <a href="${RECONNECT_URL}" style="display: inline-block; padding: 14px 32px; background-color: #ef4444; color: #ffffff; text-decoration: none; border-radius: 8px; font-weight: 600; font-size: 16px;">
                 ${cta}
               </a>
-            </div>
+            </div>`
+                : ""
+            }
           </td>
         </tr>
         <tr>
@@ -121,16 +138,24 @@ export function buildOwnerEmail(account: AlertAccount, fullName: string | null):
 
 export function buildAdminEmail(account: AlertAccount, ownerName: string | null): string {
   const owner = escapeHtml(ownerName || "a Postora user");
+  // No button here: the WhatsApp setup page lists the accounts of the person who opens it,
+  // so an admin would land on their own accounts and never on the affected one. The admin
+  // cannot reconnect this account either way — only its owner can scan a new QR code.
   const body = `
             <p style="margin: 0 0 16px 0; color: #374151; font-size: 16px; line-height: 1.6;">
               The WhatsApp account <strong>${accountLabel(account)}</strong> of ${owner} is no longer
               connected and needs a new QR code before it can receive messages again.
+            </p>
+            <p style="margin: 0 0 16px 0; color: #374151; font-size: 16px; line-height: 1.6;">
+              Only the account owner can restore it: they have to open
+              <strong>Messaging &rarr; WhatsApp</strong> and scan a new QR code with the paired phone.
+              The dashboard shows the affected account with a red reconnect banner until they do.
             </p>`;
   return emailShell(
     "linear-gradient(135deg, #334155 0%, #0f172a 100%)",
     "WhatsApp account needs reconnecting",
     body,
-    "Reconnect WhatsApp",
+    null,
   );
 }
 
@@ -147,16 +172,33 @@ interface Delivery {
 type DeliveryOutcome = "sent" | "not-claimed" | "mark-refused";
 
 /**
+ * The provider's idempotency key for one email: one episode, one recipient.
+ *
+ * A crash between the send and the mark leaves the claim unclosed, and the next run retries
+ * the send. The key is what makes that retry the SAME email: the provider returns the first
+ * result instead of delivering a second copy, so the owner is never told twice about one
+ * outage. A later outage is a different episode and therefore a different key.
+ */
+export function idempotencyKeyFor(accountId: string, episodeId: string, kind: AlertKind): string {
+  return `whatsapp-disconnect:${accountId}:${episodeId}:${kind}`;
+}
+
+/**
  * Claim before send, mark after send. The owner and the admins are claimed independently, so
  * a failure on one side never blocks the other: each records its own outcome.
  */
 async function deliverEmail(deps: SendAlertsDeps, delivery: Delivery): Promise<DeliveryOutcome> {
-  const claimed = await deps.claim(delivery.accountId, delivery.kind);
-  if (!claimed) return "not-claimed";
+  const episodeId = await deps.claim(delivery.accountId, delivery.kind);
+  if (!episodeId) return "not-claimed";
 
-  await deps.send({ to: delivery.to, subject: delivery.subject, html: delivery.html });
+  await deps.send({
+    to: delivery.to,
+    subject: delivery.subject,
+    html: delivery.html,
+    idempotencyKey: idempotencyKeyFor(delivery.accountId, episodeId, delivery.kind),
+  });
 
-  const marked = await deps.mark(delivery.accountId, delivery.kind);
+  const marked = await deps.mark(delivery.accountId, delivery.kind, episodeId);
   if (!marked) return "mark-refused";
   return "sent";
 }
@@ -235,7 +277,18 @@ export async function sendDisconnectAlerts(
     return summary;
   }
 
-  const owner = await deps.loadOwnerProfile(account.user_id);
+  // The owner email and the admin email are independent: a profile lookup that fails must
+  // cost the owner their email, not the admins theirs. The failure is recorded and the run
+  // continues without an owner name.
+  let owner: OwnerProfile | null = null;
+  try {
+    owner = await deps.loadOwnerProfile(account.user_id);
+  } catch {
+    console.error(
+      `[send-whatsapp-disconnect-alert] account ${account.id}: owner profile lookup failed`,
+    );
+    summary.failed.push(account.id);
+  }
 
   if (owner && owner.email_notifications_enabled === true) {
     const outcome = await deliverToOwner(deps, account, owner);
@@ -249,5 +302,6 @@ export async function sendDisconnectAlerts(
     if (outcome.failed) summary.failed.push(account.id);
   }
 
+  summary.failed = [...new Set(summary.failed)];
   return summary;
 }

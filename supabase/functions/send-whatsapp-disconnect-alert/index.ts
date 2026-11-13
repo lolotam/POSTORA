@@ -4,7 +4,6 @@
 // deps, and every PostgREST result is checked explicitly.
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
-import { Resend } from "https://esm.sh/resend@2.0.0";
 import { z } from "https://esm.sh/zod@3.23.8";
 import { restrictedCorsHeaders } from "../_shared/cors.ts";
 import {
@@ -48,9 +47,20 @@ function bearerToken(req: Request): string {
  * The app_settings value is jsonb, but a row written by an older admin screen may hold the
  * JSON as a string. Both shapes mean the same thing: only an explicit false turns a toggle
  * off, and a missing row means enabled.
+ *
+ * A value that cannot be read at all is treated as enabled: one malformed row must not stop
+ * every disconnect alert in the product.
  */
 function settingEnabled(value: unknown): boolean {
-  const parsed = typeof value === "string" ? JSON.parse(value) : value;
+  let parsed: unknown = value;
+  if (typeof value === "string") {
+    try {
+      parsed = JSON.parse(value);
+    } catch (error) {
+      if (!(error instanceof SyntaxError)) throw error;
+      return true;
+    }
+  }
   return parsed !== false;
 }
 
@@ -97,7 +107,6 @@ Deno.serve(async (req) => {
       );
     }
 
-    const resend = new Resend(resendApiKey);
     const admin = createClient(supabaseUrl, serviceRoleKey);
 
     const deps: SendAlertsDeps = {
@@ -163,21 +172,36 @@ Deno.serve(async (req) => {
           p_kind: kind,
         });
         if (error) throw error;
-        return data === true;
+        // The RPC returns the episode id of the claimed episode, or NULL when it refused.
+        return typeof data === "string" ? data : null;
       },
       async send(payload) {
-        const { error } = await resend.emails.send({
-          from: FROM_SENDER,
-          to: payload.to,
-          subject: payload.subject,
-          html: payload.html,
+        // Raw fetch instead of the SDK: the SDK version this function pins cannot set the
+        // Idempotency-Key header, and that header is what makes a retry the same email.
+        const response = await fetch("https://api.resend.com/emails", {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${resendApiKey}`,
+            "Content-Type": "application/json",
+            "Idempotency-Key": payload.idempotencyKey,
+          },
+          body: JSON.stringify({
+            from: FROM_SENDER,
+            to: payload.to,
+            subject: payload.subject,
+            html: payload.html,
+          }),
         });
-        if (error) throw new Error(error.message);
+        if (!response.ok) {
+          const body = await response.text();
+          throw new Error(`Resend returned ${response.status}: ${body.slice(0, 200)}`);
+        }
       },
-      async mark(accountId, kind) {
+      async mark(accountId, kind, episodeId) {
         const { data, error } = await admin.rpc("mark_whatsapp_disconnect_emailed", {
           p_account_id: accountId,
           p_kind: kind,
+          p_episode_id: episodeId,
         });
         if (error) throw error;
         return data === true;

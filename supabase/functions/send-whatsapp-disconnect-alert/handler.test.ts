@@ -1,6 +1,7 @@
 import {
   assertEquals,
   assertFalse,
+  assertNotEquals,
   assertStringIncludes,
 } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import {
@@ -9,6 +10,7 @@ import {
   RECONNECT_URL,
   buildAdminEmail,
   buildOwnerEmail,
+  idempotencyKeyFor,
   sendDisconnectAlerts,
   type AdminProfile,
   type AlertAccount,
@@ -34,9 +36,13 @@ const ADMINS: AdminProfile[] = [
   { email: "admin-two@example.invalid", full_name: "Admin Two" },
 ];
 
+/** The episode the fake claim hands out. */
+const EPISODE = "ep-1111-2222";
+
 interface Recorder {
   calls: string[];
-  sent: Array<{ to: string[]; subject: string; html: string }>;
+  sent: Array<{ to: string[]; subject: string; html: string; idempotencyKey: string }>;
+  marks: Array<{ kind: string; episodeId: string }>;
 }
 
 /**
@@ -44,7 +50,7 @@ interface Recorder {
  * order, so the tests assert behaviour rather than implementation.
  */
 function fakeDeps(overrides: Partial<SendAlertsDeps> = {}): { deps: SendAlertsDeps; rec: Recorder } {
-  const rec: Recorder = { calls: [], sent: [] };
+  const rec: Recorder = { calls: [], sent: [], marks: [] };
   const deps: SendAlertsDeps = {
     loadAccount: () => Promise.resolve(ACCOUNT),
     loadOwnerProfile: () => Promise.resolve(OWNER),
@@ -53,15 +59,16 @@ function fakeDeps(overrides: Partial<SendAlertsDeps> = {}): { deps: SendAlertsDe
     isAdminAlertEnabled: () => Promise.resolve(true),
     claim: (_accountId, kind) => {
       rec.calls.push(`claim:${kind}`);
-      return Promise.resolve(true);
+      return Promise.resolve(EPISODE);
     },
     send: (payload) => {
       rec.calls.push("send");
       rec.sent.push(payload);
       return Promise.resolve();
     },
-    mark: (_accountId, kind) => {
+    mark: (_accountId, kind, episodeId) => {
       rec.calls.push(`mark:${kind}`);
+      rec.marks.push({ kind, episodeId });
       return Promise.resolve(true);
     },
     ...overrides,
@@ -89,11 +96,18 @@ Deno.test("the owner email escapes the account name", () => {
   assertStringIncludes(html, "&lt;script&gt;");
 });
 
-Deno.test("the admin email names the account, the owner and the reconnect page", () => {
+Deno.test("the admin email names the account and the owner", () => {
   const html = buildAdminEmail(ACCOUNT, OWNER.full_name);
   assertStringIncludes(html, "Postora Store");
   assertStringIncludes(html, "Dr. Waleed");
-  assertStringIncludes(html, RECONNECT_URL);
+});
+
+Deno.test("the admin email has no reconnect button: the page lists the reader's own accounts", () => {
+  // An admin is not the account owner, so the WhatsApp setup page can never show the
+  // affected account. A button there would promise an action it cannot perform.
+  const html = buildAdminEmail(ACCOUNT, OWNER.full_name);
+  assertFalse(html.includes(RECONNECT_URL));
+  assertStringIncludes(html, "owner");
 });
 
 Deno.test("the admin email carries no phone number", () => {
@@ -132,8 +146,43 @@ Deno.test("the owner email is claimed before it is sent and marked after it", as
   assertEquals(rec.calls.slice(0, 3), ["claim:user", "send", "mark:user"]);
 });
 
+Deno.test("the mark carries the episode the claim returned", async () => {
+  const { deps, rec } = fakeDeps();
+
+  await sendDisconnectAlerts(deps, "acc-1");
+
+  assertEquals(rec.marks.map((m) => m.episodeId), [EPISODE, EPISODE]);
+});
+
+Deno.test("every send carries an idempotency key bound to the account, the episode and the recipient", async () => {
+  const { deps, rec } = fakeDeps();
+
+  await sendDisconnectAlerts(deps, "acc-1");
+
+  assertEquals(rec.sent.length, 2);
+  for (const payload of rec.sent) {
+    assertStringIncludes(payload.idempotencyKey, "acc-1");
+    assertStringIncludes(payload.idempotencyKey, EPISODE);
+  }
+  assertNotEquals(rec.sent[0].idempotencyKey, rec.sent[1].idempotencyKey);
+  assertEquals(
+    idempotencyKeyFor("acc-1", EPISODE, "user"),
+    `whatsapp-disconnect:acc-1:${EPISODE}:user`,
+  );
+});
+
+Deno.test("a retry of the same episode reuses the same idempotency key", async () => {
+  const { deps, rec } = fakeDeps();
+
+  await sendDisconnectAlerts(deps, "acc-1");
+  const first = rec.sent[0].idempotencyKey;
+  await sendDisconnectAlerts(deps, "acc-1");
+
+  assertEquals(rec.sent[2].idempotencyKey, first);
+});
+
 Deno.test("nothing is sent when the claim is refused", async () => {
-  const { deps, rec } = fakeDeps({ claim: () => Promise.resolve(false) });
+  const { deps, rec } = fakeDeps({ claim: () => Promise.resolve(null) });
 
   const summary = await sendDisconnectAlerts(deps, "acc-1");
 
@@ -173,6 +222,20 @@ Deno.test("a failing owner send does not cost the admin its alert", async () => 
 
   const summary = await sendDisconnectAlerts(deps, "acc-1");
 
+  assertEquals(rec.sent.filter((payload) => payload.subject === ADMIN_SUBJECT).length, 1);
+  assertEquals(summary.ownerSent, false);
+  assertEquals(summary.adminSent, true);
+  assertEquals(summary.failed, ["acc-1"]);
+});
+
+Deno.test("a failing owner profile lookup does not cost the admin its alert", async () => {
+  const { deps, rec } = fakeDeps({
+    loadOwnerProfile: () => Promise.reject(new Error("profiles unreachable")),
+  });
+
+  const summary = await sendDisconnectAlerts(deps, "acc-1");
+
+  assertEquals(rec.sent.filter((payload) => payload.subject === OWNER_SUBJECT).length, 0);
   assertEquals(rec.sent.filter((payload) => payload.subject === ADMIN_SUBJECT).length, 1);
   assertEquals(summary.ownerSent, false);
   assertEquals(summary.adminSent, true);
