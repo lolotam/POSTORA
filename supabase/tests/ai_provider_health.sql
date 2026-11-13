@@ -425,6 +425,9 @@ BEGIN
        OR v_command LIKE '%api.postora.cloud%' THEN
       RAISE EXCEPTION 'FAIL: cron sends credentials to a literal host';
     END IF;
+    IF v_command !~ 'timeout_milliseconds[[:space:]]*:=[[:space:]]*50000' THEN
+      RAISE EXCEPTION 'FAIL: cron HTTP timeout does not cover handler deadline';
+    END IF;
     PERFORM set_config('postora.test_functions_url', '', true);
     v_test := regexp_replace(v_command, 'PERFORM net.http_post\([^;]+;',
       'RAISE EXCEPTION ''FAIL: missing URL did not skip HTTP'';');
@@ -758,6 +761,17 @@ BEGIN
   IF public.admit_ai_provider_health_run('daily', v_daily, NULL) IS DISTINCT FROM 'complete' THEN RAISE EXCEPTION 'FAIL: completed daily replay'; END IF;
   IF public.admit_ai_provider_health_run('manual', v_manual, v_admin) IS DISTINCT FROM 'ready' THEN RAISE EXCEPTION 'FAIL: manual admission after daily'; END IF;
   IF public.admit_ai_provider_health_run('manual', v_manual, v_admin) IS DISTINCT FROM 'ready' THEN RAISE EXCEPTION 'FAIL: manual chunk continuation'; END IF;
+  IF public.admit_ai_provider_health_run('daily', gen_random_uuid(), NULL) IS DISTINCT FROM 'busy' THEN
+    RAISE EXCEPTION 'FAIL: daily entered between manual chunks';
+  END IF;
+  UPDATE public.ai_provider_health_runs SET expires_at = now() - interval '1 second' WHERE run_id = v_manual;
+  IF public.admit_ai_provider_health_run('daily', gen_random_uuid(), NULL) IS DISTINCT FROM 'ready' THEN
+    RAISE EXCEPTION 'FAIL: daily could not replace expired manual';
+  END IF;
+  IF public.admit_ai_provider_health_run('manual', v_manual, v_admin) IS DISTINCT FROM 'busy' THEN
+    RAISE EXCEPTION 'FAIL: expired manual resumed over active daily';
+  END IF;
+  UPDATE public.ai_provider_health_runs SET completed_at = now() WHERE scope = 'daily';
   PERFORM public.complete_ai_provider_health_run(v_manual);
   IF public.admit_ai_provider_health_run('manual', v_next, v_admin) IS DISTINCT FROM 'cooldown' THEN RAISE EXCEPTION 'FAIL: missing per-admin cooldown'; END IF;
   UPDATE public.ai_provider_health_runs SET completed_at = now() - interval '61 seconds' WHERE run_id = v_manual;
@@ -780,7 +794,11 @@ BEGIN
   PERFORM public.record_ai_provider_health('openai','api_key','failed','Original failure',NULL,NULL,NULL,1,NULL);
   SELECT alert_id INTO v_first FROM public.ai_provider_health WHERE provider_code = 'openai' AND auth_method = 'api_key';
   PERFORM public.record_ai_provider_health('openai','api_key','connected',NULL,0,0,0,1,NULL);
-  SELECT count(*) INTO v_count FROM public.claim_ai_provider_health_notifications(v_token) WHERE alert_id = v_first;
+  SELECT * INTO v_claim FROM public.claim_ai_provider_health_notifications(v_token) WHERE alert_id = v_first;
+  IF v_claim.previous_status IS DISTINCT FROM 'connected' THEN
+    RAISE EXCEPTION 'FAIL: recovery changed original previous status';
+  END IF;
+  SELECT count(*) INTO v_count FROM public.ai_provider_health_alerts WHERE alert_id = v_first AND claim_token = v_token;
   IF v_count <> 1 THEN RAISE EXCEPTION 'FAIL: recovery erased unsent degradation'; END IF;
   PERFORM public.record_ai_provider_health('openai','api_key','failed','Second failure',NULL,NULL,NULL,1,NULL);
   -- First send closes only its event; the second break remains pending.
@@ -814,6 +832,36 @@ BEGIN
     IF SQLERRM NOT LIKE 'Health catalogue lease expired%' THEN RAISE; END IF;
   END;
 END $aph_fencing$;
+ROLLBACK;
+
+-- The transaction cannot leave the first valid model visible when a later row
+-- fails, and the timestamp must not advance for the rolled-back catalogue.
+BEGIN;
+DELETE FROM public.cron_run_leases WHERE job = 'ai-provider-health';
+DO $aph_atomic_catalogue$
+DECLARE v_holder uuid := gen_random_uuid(); v_provider uuid; v_rows jsonb;
+BEGIN
+  SELECT id INTO STRICT v_provider FROM public.ai_providers WHERE provider_code = 'openai';
+  PERFORM public.acquire_cron_run_lease('ai-provider-health', v_holder, interval '2 minutes');
+  v_rows := jsonb_build_array(
+    jsonb_build_object('provider_id',v_provider,'model_id','r4-atomic-first','name','First',
+      'auth_method','api_key','capabilities',jsonb_build_array('chat'),'is_active',true,'updated_at',now()),
+    jsonb_build_object('provider_id',v_provider,'model_id','r4-atomic-invalid','name',NULL,
+      'auth_method','api_key','capabilities',jsonb_build_array('chat'),'is_active',true,'updated_at',now()));
+  BEGIN
+    PERFORM public.write_ai_health_catalog(v_holder,v_rows,'r4-atomic-stamp',clock_timestamp());
+    RAISE EXCEPTION 'FAIL: invalid catalogue transaction succeeded';
+  EXCEPTION WHEN not_null_violation THEN NULL;
+  END;
+  IF EXISTS (SELECT 1 FROM public.ai_models WHERE model_id = 'r4-atomic-first') OR
+     EXISTS (SELECT 1 FROM public.system_settings WHERE key = 'r4-atomic-stamp') THEN
+    RAISE EXCEPTION 'FAIL: a partial catalogue transaction became visible';
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM public.ai_providers WHERE provider_code = 'firecrawl') OR
+     NOT EXISTS (SELECT 1 FROM public.ai_providers WHERE provider_code = 'apify') THEN
+    RAISE EXCEPTION 'FAIL: standalone service FK identities missing';
+  END IF;
+END $aph_atomic_catalogue$;
 ROLLBACK;
 
 -- Trailing cleanup: everything this suite created, EXCEPT the provider rows

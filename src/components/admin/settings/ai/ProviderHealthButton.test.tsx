@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import type { ReactNode } from 'react';
 import { ProviderHealthButton } from './ProviderHealthButton';
@@ -23,7 +23,10 @@ vi.mock('react-i18next', () => ({
 // A fresh cache per test: the stored-results query must not leak between them.
 let queryClient: QueryClient;
 const wrap = (ui: ReactNode) => <QueryClientProvider client={queryClient}>{ui}</QueryClientProvider>;
-const chunk = (results: unknown[], done = true) => ({
+let storedResults: unknown[] = [];
+const chunk = (results: unknown[], done = true) => {
+  storedResults = results;
+  return ({
   data: {
     run_id: 'r',
     chunk: 1,
@@ -35,10 +38,32 @@ const chunk = (results: unknown[], done = true) => ({
   },
   error: null,
 });
+};
+
+const providerRows = () => within(screen.getByRole('table')).getAllByRole('row').slice(1);
 
 describe('ProviderHealthButton', () => {
+  it('retains unchecked last-known failures after a later chunk fails', async () => {
+    const old = { provider_code: 'unchecked', auth_method: 'api_key', display_name: 'Unchecked provider',
+      status: 'failed', reason: 'Previous failure', models_added: null, models_updated: null,
+      models_deactivated: null, checked_at: '' };
+    const checked = { ...old, provider_code: 'checked', display_name: 'Checked provider', status: 'connected', reason: null };
+    let calls = 0;
+    invoke.mockImplementation((_fn: string, { body }: { body: { action: string } }) => {
+      if (body.action === 'status') return Promise.resolve({ data: { results: [old, checked] }, error: null });
+      if (calls++ === 0) return Promise.resolve(chunk([checked], false));
+      return Promise.resolve({ data: null, error: new Error('chunk unavailable') });
+    });
+    render(wrap(<ProviderHealthButton />));
+    await screen.findByText('Previous failure');
+    fireEvent.click(screen.getByRole('button', { name: /Check & sync all providers/i }));
+    await waitFor(() => expect(toast.error).toHaveBeenCalled());
+    expect(screen.getByText('Previous failure')).toBeTruthy();
+    expect(within(screen.getByRole('table')).getAllByRole('row')).toHaveLength(3);
+  });
   beforeEach(() => {
     invoke.mockReset();
+    storedResults = [];
     toast.error.mockReset();
     // A fresh cache per test: the stored-results query must not leak between them.
     queryClient = new QueryClient();
@@ -56,24 +81,24 @@ describe('ProviderHealthButton', () => {
       display_name: 'Claude', status: 'connected', models_added: 0, models_updated: 0,
       models_deactivated: 0, checked_at: '' }] }, error: null });
     render(wrap(<ProviderHealthButton />));
-    await waitFor(() => expect(screen.getAllByTestId('provider-health-row').length).toBe(1));
+    await waitFor(() => expect(providerRows().length).toBe(1));
     invoke.mockResolvedValue({ data: { results: [] }, error: null });
     await queryClient.invalidateQueries({ queryKey: ['ai-provider-health'] });
-    await waitFor(() => expect(screen.queryAllByTestId('provider-health-row').length).toBe(0));
+    await waitFor(() => expect((screen.queryByRole('table') ? providerRows().length : 0)).toBe(0));
     expect(screen.getByText('No provider has been checked yet.')).toBeTruthy();
   });
 
   it('shows one row per provider with the status and the model counts', async () => {
     invoke.mockImplementation((_fn: string, { body }: { body: { action: string } }) =>
       body.action === 'status'
-        ? Promise.resolve({ data: { results: [] }, error: null })
+        ? Promise.resolve({ data: { results: storedResults }, error: null })
         : Promise.resolve(chunk([
           { provider_code: 'claude', auth_method: 'api_key', display_name: 'Claude', status: 'connected', reason: null, models_added: 2, models_updated: 1, models_deactivated: 0, latency_ms: 10, checked_at: '2026-11-13T00:00:00Z' },
           { provider_code: 'openrouter', auth_method: 'api_key', display_name: 'OpenRouter', status: 'failed', reason: 'Rate limit exceeded', models_added: null, models_updated: null, models_deactivated: null, latency_ms: 20, checked_at: '2026-11-13T00:00:00Z' },
         ])));
     render(wrap(<ProviderHealthButton />));
     fireEvent.click(screen.getByRole('button', { name: /Check & sync all providers/i }));
-    await waitFor(() => expect(screen.getAllByTestId('provider-health-row').length).toBe(2));
+    await waitFor(() => expect(providerRows().length).toBe(2));
     expect(screen.getByText('Rate limit exceeded')).toBeTruthy();
     expect(screen.getByText('2')).toBeTruthy();
   });
@@ -81,13 +106,13 @@ describe('ProviderHealthButton', () => {
   it('shows needs re-login for an expired subscription and never a count for it', async () => {
     invoke.mockImplementation((_fn: string, { body }: { body: { action: string } }) =>
       body.action === 'status'
-        ? Promise.resolve({ data: { results: [] }, error: null })
+        ? Promise.resolve({ data: { results: storedResults }, error: null })
         : Promise.resolve(chunk([
           { provider_code: 'claude', auth_method: 'oauth', display_name: 'Claude', status: 'needs_relogin', reason: 'The subscription sign-in expired. Sign in again.', models_added: null, models_updated: null, models_deactivated: null, latency_ms: 5, checked_at: '2026-11-13T00:00:00Z' },
         ])));
     render(wrap(<ProviderHealthButton />));
     fireEvent.click(screen.getByRole('button', { name: /Check & sync all providers/i }));
-    await waitFor(() => expect(screen.getAllByTestId('provider-health-row').length).toBe(1));
+    await waitFor(() => expect(providerRows().length).toBe(1));
     expect(screen.getByText(/needs re-login/i)).toBeTruthy();
     // A provider that was not synced has no count — a dash, never a zero.
     expect(screen.queryByText('0')).toBeNull();
@@ -97,7 +122,7 @@ describe('ProviderHealthButton', () => {
   it('says the run was incomplete when a provider was not checked', async () => {
     invoke.mockImplementation((_fn: string, { body }: { body: { action: string } }) =>
       body.action === 'status'
-        ? Promise.resolve({ data: { results: [] }, error: null })
+        ? Promise.resolve({ data: { results: storedResults }, error: null })
         : Promise.resolve({
           data: {
             run_id: 'r',
@@ -118,27 +143,27 @@ describe('ProviderHealthButton', () => {
     fireEvent.click(screen.getByRole('button', { name: /Check & sync all providers/i }));
     // The run did not cover every provider, and the button says so: a summary
     // that reads like a finished check would hide the provider nobody looked at.
-    await waitFor(() => expect(screen.getByTestId('provider-health-incomplete')).toBeTruthy());
+    await waitFor(() => expect(screen.getByText('Some providers were not checked. Run the check again to cover them.')).toBeTruthy());
     expect(screen.getByText('claude (API key): ran out of time')).toBeTruthy();
   });
 
   it('keeps going after one provider fails', async () => {
     invoke.mockImplementation((_fn: string, { body }: { body: { action: string } }) =>
       body.action === 'status'
-        ? Promise.resolve({ data: { results: [] }, error: null })
+        ? Promise.resolve({ data: { results: storedResults }, error: null })
         : Promise.resolve(chunk([
           { provider_code: 'openai', auth_method: 'api_key', display_name: 'OpenAI', status: 'failed', reason: 'Invalid API key', models_added: null, models_updated: null, models_deactivated: null, latency_ms: 5, checked_at: 't' },
           { provider_code: 'xai', auth_method: 'api_key', display_name: 'xAI', status: 'connected', reason: null, models_added: 3, models_updated: 0, models_deactivated: 1, latency_ms: 5, checked_at: 't' },
         ])));
     render(wrap(<ProviderHealthButton />));
     fireEvent.click(screen.getByRole('button', { name: /Check & sync all providers/i }));
-    await waitFor(() => expect(screen.getAllByTestId('provider-health-row').length).toBe(2));
+    await waitFor(() => expect(providerRows().length).toBe(2));
   });
 
   it('says the daily check is running when the server is busy', async () => {
     invoke.mockImplementation((_fn: string, { body }: { body: { action: string } }) =>
       body.action === 'status'
-        ? Promise.resolve({ data: { results: [] }, error: null })
+        ? Promise.resolve({ data: { results: storedResults }, error: null })
         : Promise.resolve({ data: { error: 'busy' }, error: null }));
     render(wrap(<ProviderHealthButton />));
     fireEvent.click(screen.getByRole('button', { name: /Check & sync all providers/i }));
@@ -158,7 +183,7 @@ describe('ProviderHealthButton', () => {
       error: null,
     });
     render(wrap(<ProviderHealthButton />));
-    await waitFor(() => expect(screen.getAllByTestId('provider-health-row').length).toBe(1));
+    await waitFor(() => expect(providerRows().length).toBe(1));
   });
 
   it('says so when no provider has been checked yet', async () => {

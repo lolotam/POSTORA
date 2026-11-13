@@ -130,3 +130,10 @@ Deno.test("already-aborted waits observe the input promise rejection", async () 
   await assertRejects(() => withSignal(late, controller.signal), Error, "cancelled");
   await new Promise((resolve) => setTimeout(resolve, 0));
 });
+
+Deno.test("known billing errors take precedence over generic HTTP 403 permission failures", () => {
+  for (const body of ["customer_verification_required", "used all available credits", "insufficient_balance"]) {
+    assertEquals(classifyApiKeyFailure(403, body).reason, "The provider account needs billing or additional credits.");
+  }
+  assertEquals(classifyApiKeyFailure(403, "permission_denied").reason, "API key lacks required permissions");
+});

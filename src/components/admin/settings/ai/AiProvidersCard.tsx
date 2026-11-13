@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { useQueryClient } from '@tanstack/react-query';
 import {
   Card, CardContent, CardDescription, CardHeader, CardTitle,
@@ -75,6 +76,7 @@ function lastCatalogSyncedAt(settings: SystemSettingRow[], providerCode: string)
  * badge on every tile comes from a single `useCheckServiceKey` call over all codes.
  */
 export function AiProvidersCard() {
+  const { t } = useTranslation(['adminai']);
   const queryClient = useQueryClient();
   const { data: aiConfig, isLoading } = useAIConfiguration();
   const toggleProvider = useToggleProvider();
@@ -93,10 +95,10 @@ export function AiProvidersCard() {
       .map(p => p.provider_code),
   );
 
-  const allProviderCodes = [
+  const allProviderCodes = [...new Set([
     'firecrawl', 'apify',
     ...(aiConfig?.providers?.map(p => p.provider_code) || []),
-  ];
+  ])];
   const { data: serviceKeyStatus } = useCheckServiceKey(allProviderCodes);
   // Providers whose only credential is the subscription, so the tile's API key
   // test has nothing to use. The capability's own `has_api_key` decides; `null`
@@ -191,7 +193,9 @@ export function AiProvidersCard() {
     );
   }
 
-  const providers = aiConfig?.providers || [];
+  // Standalone services have dedicated cards below; their health FK identities
+  // must not create a second tile in the model-provider grid.
+  const providers = (aiConfig?.providers || []).filter(p => p.provider_code !== 'firecrawl' && p.provider_code !== 'apify');
   const models = aiConfig?.models || [];
   const oauthModels = aiConfig?.oauthModels || [];
 
@@ -412,7 +416,7 @@ export function AiProvidersCard() {
                     <h4 className="font-medium text-sm">{model.name}</h4>
                     <Badge variant="outline" className="text-[10px]">{model.model_id}</Badge>
                     <Badge variant="outline" className="text-[10px]">
-                      {model.auth_method === 'oauth' ? 'Subscription' : 'API key'}
+                      {model.auth_method === 'oauth' ? t('adminai:credentialOauth', 'Subscription') : t('adminai:credentialApiKey', 'API key')}
                     </Badge>
                     {defaultModel?.provider_code === selectedProvider.provider_code
                       && defaultModel?.model_id === model.model_id

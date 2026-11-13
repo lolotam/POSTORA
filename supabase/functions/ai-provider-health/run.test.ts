@@ -5,6 +5,7 @@ import { AiOAuthError } from "../_shared/aiOAuth/errors.ts";
 import { OAuthProbeError } from "../_shared/providerErrors.ts";
 import { buildAlertTitle } from "../_shared/aiProviderAlert.ts";
 import { ProviderReadError } from "../_shared/aiProviderTest.ts";
+import { CatalogStorageError } from "../_shared/modelCatalogSyncRun.ts";
 import type { DegradedProvider, HealthResult } from "../_shared/aiProviderHealth.ts";
 
 Deno.test("credential kinds of one provider serialize while other providers proceed", async () => {
@@ -216,6 +217,30 @@ Deno.test("changing target membership between calls never skips unfinished provi
   assertEquals(second.done, true);
   assertEquals(new Set(recorded.map((row) => row.provider_code)).size, 9);
   assertEquals(synced.length, 9);
+});
+
+Deno.test("advancing chunks drain all unfinished targets without offsets or duplicate probes", async () => {
+  const codes = Array.from({ length: 15 }, (_, i) => `provider-${String(i).padStart(2, "0")}`);
+  const probed: string[] = [];
+  const { ports, recorded } = fakePorts({
+    listApiKeyProviders: async () => codes.map((provider_code) => ({ provider_code, name: provider_code })),
+    listOAuthConnections: async () => [],
+    resolveApiKey: async () => "test-key-not-secret",
+    probeApiKey: async (target) => { probed.push(target.provider_code); },
+  });
+  const first = await runHealthChunk(ports, { runId: "run-1", chunk: 1 });
+  assertEquals(first.results.map((r) => r.provider_code), codes.slice(0, 6));
+  assertEquals(first.next_chunk, 2);
+  const second = await runHealthChunk(ports, { runId: "run-1", chunk: 2 });
+  assertEquals(second.results.map((r) => r.provider_code), codes.slice(6, 12));
+  assertEquals(second.done, false);
+  // A retry drains remaining work too; chunk numbers identify requests, not offsets.
+  const retry = await runHealthChunk(ports, { runId: "run-1", chunk: 2 });
+  assertEquals(retry.results.map((r) => r.provider_code), codes.slice(12));
+  assertEquals(retry.done, true);
+  assertEquals((await runHealthChunk(ports, { runId: "run-1", chunk: 4 })).results, []);
+  assertEquals(recorded.map((r) => r.provider_code), codes);
+  assertEquals(probed, codes);
 });
 
 Deno.test("a connection already in reauth_required is reported without a network call", async () => {
@@ -549,5 +574,41 @@ for (const status of [401, 429, 502]) {
       probeOAuth: async () => { throw new OAuthProbeError(status); } });
     const out = await runHealthChunk(ports, { runId: 'r', chunk: 1 });
     assertEquals(out.results[0].reason, `The subscription sign-in was refused (HTTP ${status}).`);
+  });
+}
+
+Deno.test("credential discovery isolates unreadable providers and does not reread completed credentials", async () => {
+  const lookups: string[] = [];
+  const { ports, recorded } = fakePorts({
+    listApiKeyProviders: async () => ["broken", "done", "healthy"].map((provider_code) => ({ provider_code, name: provider_code })),
+    listOAuthConnections: async () => [],
+    listRecordedTargets: async () => [{ provider_code: "done", auth_method: "api_key" }],
+    resolveApiKey: async (code) => {
+      lookups.push(code);
+      if (code !== "healthy") throw new ProviderReadError("storage unavailable");
+      return "test-key-not-secret";
+    },
+  });
+  const out = await runHealthChunk(ports, { runId: "r", chunk: 1 });
+  assertEquals(recorded.map((r) => r.provider_code), ["healthy"]);
+  assertEquals(out.skipped.map((r) => r.provider_code), ["broken"]);
+  assertEquals(out.done, false);
+  assertEquals(lookups.includes("done"), false);
+});
+
+for (const authMethod of ["api_key", "oauth"] as const) {
+  Deno.test(`${authMethod} catalogue storage failure stays retryable without false degradation`, async () => {
+    const alerts: string[] = [];
+    const fail = async () => { throw new CatalogStorageError("Model sync failed; see server logs"); };
+    const { ports, recorded } = fakePorts({
+      ...(authMethod === "api_key" ? { syncApiKeyCatalogue: fail } : { syncOAuthCatalogue: fail }),
+      sendAlert: async (row) => { alerts.push(row.provider_code); },
+    });
+    const out = await runHealthChunk(ports, { runId: "r", chunk: 1 });
+    assertEquals(recorded.length, 1);
+    assertEquals(recorded[0].status, "connected");
+    assertEquals(out.skipped.map((r) => r.auth_method), [authMethod]);
+    assertEquals(out.done, false);
+    assertEquals(alerts, []);
   });
 }

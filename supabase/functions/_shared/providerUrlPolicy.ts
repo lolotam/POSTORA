@@ -6,7 +6,7 @@ const PROVIDER_HOSTS = new Set([
   'generativelanguage.googleapis.com', 'ai-gateway.vercel.sh', 'api.deepseek.com',
   'api.z.ai', 'open.bigmodel.cn', 'api.minimax.io', 'api.minimaxi.com',
   'api.elevenlabs.io', 'api.perplexity.ai', 'api.jina.ai', 'api.exa.ai',
-  'api.search.brave.com', 'api.firecrawl.dev', 'api.apify.com',
+  'api.search.brave.com', 'api.firecrawl.dev', 'api.apify.com', 'api.moonshot.ai',
 ]);
 
 export function assertProviderUrl(value: string): URL {

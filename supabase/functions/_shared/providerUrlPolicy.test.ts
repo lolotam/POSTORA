@@ -2,6 +2,11 @@ import { assertEquals, assertRejects, assertThrows } from "https://deno.land/std
 import { assertProviderUrl, providerFetch } from './providerUrlPolicy.ts';
 import { redactProviderError } from './ai-routing-errors.ts';
 
+Deno.test('the seeded Moonshot endpoint passes the exact-host policy', () => {
+  assertEquals(assertProviderUrl('https://api.moonshot.ai/v1').hostname, 'api.moonshot.ai');
+  assertThrows(() => assertProviderUrl('https://api.moonshot.ai.evil.test/v1'));
+});
+
 Deno.test('provider URLs reject private, metadata, disguised and arbitrary hosts', () => {
   for (const url of ['http://api.openai.com/v1', 'https://127.0.0.1', 'https://10.0.0.1',
     'https://172.16.0.1', 'https://192.168.1.1', 'https://169.254.169.254/latest/meta-data',

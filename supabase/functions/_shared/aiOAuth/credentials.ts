@@ -1,6 +1,6 @@
 import type { SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { getOAuthProvider, refreshAnthropicToken, refreshOpenAICodexToken } from "npm:@mariozechner/pi-ai@0.73.1/oauth";
-import { AiOAuthError, type AiOAuthErrorCode } from "./errors.ts";
+import { AiOAuthError, AiOAuthStorageError, type AiOAuthErrorCode } from "./errors.ts";
 import type { OAuthProviderId } from "./clients.ts";
 
 export interface CredentialDeps {
@@ -118,7 +118,7 @@ async function readCredentials(
   provider: OAuthProviderId,
 ): Promise<StoredCredentials | null> {
   const { data, error } = await deps.admin.rpc("get_ai_oauth_credentials", { p_oauth_provider: provider });
-  if (error) throw new AiOAuthError("refresh_failed", `could not read the stored credential: ${error.message}`);
+  if (error) throw new AiOAuthStorageError();
   if (!data || typeof data !== "object") return null;
   return data as StoredCredentials;
 }

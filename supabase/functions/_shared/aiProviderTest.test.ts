@@ -267,3 +267,22 @@ for (const status of [401, 429]) {
     assertEquals((error as ProviderTestError).status, status);
   });
 }
+
+for (const status of [401, 429, 500, 503]) {
+  Deno.test(`ElevenLabs HTTP ${status} cannot pass because its body mentions restricted scopes`, async () => {
+    const err = await assertRejects(() => probeProvider({}, {
+      id: "p", provider_code: "elevenlabs", api_type: "elevenlabs", api_endpoint: "https://api.elevenlabs.io/v1",
+    }, "test-key-not-secret", 1000, (async () => new Response(JSON.stringify({ detail: { status: "missing_permissions", message: "restricted" } }), { status })) as typeof fetch), ProviderTestError);
+    assertEquals((err as ProviderTestError).status, status);
+  });
+}
+Deno.test("ElevenLabs only accepts an exact structured 403 scope code", async () => {
+  for (const body of ["restricted", JSON.stringify({ detail: { status: "unrestricted_outage" } })]) {
+    await assertRejects(() => probeProvider({}, {
+      id: "p", provider_code: "elevenlabs", api_type: "elevenlabs", api_endpoint: "https://api.elevenlabs.io/v1",
+    }, "test-key-not-secret", 1000, (async () => new Response(body, { status: 403 })) as typeof fetch), ProviderTestError);
+  }
+  await probeProvider({}, {
+    id: "p", provider_code: "elevenlabs", api_type: "elevenlabs", api_endpoint: "https://api.elevenlabs.io/v1",
+  }, "test-key-not-secret", 1000, (async () => new Response(JSON.stringify({ detail: { status: "missing_permissions" } }), { status: 403 })) as typeof fetch);
+});

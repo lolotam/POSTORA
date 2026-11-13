@@ -273,8 +273,8 @@ async function testExa(key: string, timeoutMs: number, fetchImpl: typeof fetch) 
 async function testElevenLabs(key: string, ep: string, timeoutMs: number, fetchImpl: typeof fetch) {
   const baseUrl = (ep || 'https://api.elevenlabs.io/v1').replace(/\/$/, '');
   // A valid key may be scope-limited (missing models_read / voices_read /
-  // user_read). "missing_permissions" / "restricted" prove the key
-  // authenticates, so they count as a PASS, not a failure.
+  // user_read). An exact structured 403 "missing_permissions" / "restricted"
+  // code proves authentication; a substring in another error does not.
   const probePaths = ['/user', '/models', '/voices'];
   // A pass needs PROOF: a probe that answered 2xx, or a probe that proved the key
   // authenticates but lacks a read scope. Three probes that all failed say
@@ -288,7 +288,12 @@ async function testElevenLabs(key: string, ep: string, timeoutMs: number, fetchI
       return;
     }
     const t = await res.text();
-    if (t.includes('missing_permissions') || t.includes('restricted')) {
+    let scopeCode: unknown;
+    try {
+      const detail = (JSON.parse(t) as { detail?: unknown })?.detail;
+      scopeCode = typeof detail === 'string' ? detail : (detail as { status?: unknown } | null)?.status;
+    } catch { /* Not a structured scope error. */ }
+    if (res.status === 403 && (scopeCode === 'missing_permissions' || scopeCode === 'restricted')) {
       // Key authenticates but lacks this read scope - try the next probe.
       sawScopeLimited = true;
       continue;
@@ -304,7 +309,7 @@ async function testElevenLabs(key: string, ep: string, timeoutMs: number, fetchI
       t,
     );
   }
-  if (sawScopeLimited) {
+  if (sawScopeLimited && !lastFailure) {
     // Every probe that answered proved the key authenticates.
     console.log('ElevenLabs test passed (key authenticates; read scope limited).');
     return;

@@ -1,6 +1,6 @@
 // deno-lint-ignore-file no-import-prefix
 import { assertEquals, assertRejects } from "https://deno.land/std@0.208.0/assert/mod.ts";
-import { CatalogSyncError, type CatalogDb, defaultModelsInUse, runCatalogSync, syncFailureMessage } from "./modelCatalogSyncRun.ts";
+import { CatalogStorageError, CatalogSyncError, type CatalogDb, defaultModelsInUse, runCatalogSync, syncFailureMessage } from "./modelCatalogSyncRun.ts";
 
 type Write = { table: string; op: string; payload: unknown; options?: unknown };
 type Result = { data: unknown; error: { message: string } | null };
@@ -176,7 +176,7 @@ Deno.test("malformed default-model settings are skipped and a failed timestamp w
   const ok = fakeDb({ models: [syncedRow({ id: "9", model_id: "openai/old" })], settings });
   assertEquals((await runCatalogSync(ok.db, "vercel", vercelFetch)).kept_in_use, ["openai/old"]);
   const failing = fakeDb({ models: [], settings: [], settingsUpsertError: "denied" });
-  await assertRejects(() => runCatalogSync(failing.db, "vercel", vercelFetch), Error, "system_settings write failed");
+  await assertRejects(() => runCatalogSync(failing.db, "vercel", vercelFetch), CatalogStorageError, "Model sync failed; see server logs");
 });
 
 Deno.test("a failed ai_providers read is reported as a read failure, not a missing provider", async () => {
@@ -210,6 +210,25 @@ Deno.test("a failed settings write is not a user-facing CatalogSyncError", async
   const { db } = fakeDb({ models: [], settings: [], settingsUpsertError: "permission denied for table system_settings" });
   const err = await assertRejects(() => runCatalogSync(db, "vercel", vercelFetch), Error);
   assertEquals(err instanceof CatalogSyncError, false);
+  assertEquals(err instanceof CatalogStorageError, true);
+  assertEquals(syncFailureMessage(err), "Model sync failed; see server logs");
+});
+
+Deno.test("catalogue database writes and lease refusals retain their infrastructure error type", async () => {
+  for (const state of [{ modelsUpsertError: { message: "private database diagnostics" } },
+    { settingsUpsertError: "private database diagnostics" }]) {
+    const { db } = fakeDb({ models: [], settings: [], ...state });
+    const error = await assertRejects(() => runCatalogSync(db, "vercel", vercelFetch), CatalogStorageError);
+    assertEquals(error.message.includes("private"), false);
+  }
+  const { db } = fakeDb({ models: [], settings: [] });
+  db.rpc = () => {
+    const query = Object.assign(Promise.resolve({ data: null, error: { message: "Health catalogue lease expired" } }), {
+      abortSignal: () => query, eq: () => query, like: () => query, maybeSingle: () => query,
+    });
+    return query;
+  };
+  await assertRejects(() => runCatalogSync(db, "vercel", vercelFetch, { leaseHolder: "expired" }), CatalogStorageError);
 });
 
 // --- Task 3: per-provider request specs, new syncable providers, dry run ---
@@ -362,8 +381,8 @@ Deno.test("the legacy catalogue constraint surfaces as a sync error, not a silen
     const fetch = catalogue([{ id: "claude-sonnet-4", display_name: "Claude Sonnet 4" }]);
     const err = await assertRejects(
       () => runCatalogSync(db, "claude", fetch, { authMethod: "oauth" }),
-      CatalogSyncError,
-    ) as unknown as CatalogSyncError;
+      CatalogStorageError,
+    ) as unknown as CatalogStorageError;
     // The admin has to know that the contract migration is the thing that is missing.
     assertEquals(err.message.includes("contract migration"), true);
     // The message the admin sees is the one that says so.

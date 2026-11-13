@@ -1,6 +1,9 @@
 import type { SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { getValidAccessToken, HIGGSFIELD_PROVIDER_CODE } from "../_shared/higgsfield-oauth.ts";
 import { HiggsfieldMcpClient } from "../_shared/higgsfield-mcp.ts";
+import { type CatalogModel, type MappedCatalog } from "../_shared/modelCatalogSync.ts";
+import { runCatalogSync, CatalogSyncError, CatalogStorageError, type CatalogDb } from "../_shared/modelCatalogSyncRun.ts";
+import { withSignal } from "../_shared/aiProviderHealth.ts";
 
 const METADATA_KEYS = ["parameters", "aspect_ratios", "durations", "duration_range", "medias", "tags", "supports_unlim", "output_type", "provider_name"];
 
@@ -20,37 +23,46 @@ type Explore = (capability: "video" | "image") => Promise<unknown>;
 
 /** Discovery and cleanup affect only the api_key partition that media generation reads. */
 export async function syncHiggsfieldCatalog(db: SupabaseClient, explore?: Explore) {
-  const { data: provider, error: providerError } = await db.from("ai_providers").select("id")
-    .eq("provider_code", HIGGSFIELD_PROVIDER_CODE).maybeSingle();
-  if (providerError) throw new Error("Higgsfield provider could not be read");
-  if (!provider) throw new Error("Higgsfield provider row is missing");
-  if (!explore) {
-    await getValidAccessToken(db);
-    const mcp = await HiggsfieldMcpClient.create(db);
-    explore = (capability) => mcp.callTool("models_explore", { action: "list", type: capability, limit: 100 });
-  }
-  const found = new Map<string, { model: ReturnType<typeof catalog>[number]; capability: string }>();
-  for (const capability of ["video", "image"] as const) {
-    for (const model of catalog(await explore(capability))) found.set(model.id, { model, capability });
-  }
-  if (!found.size) throw new Error("Higgsfield returned an empty model catalog");
-  for (const [model_id, { model, capability }] of found) {
+  // The same lease excludes health and legacy admin syncs before any catalogue
+  // read. One fenced transaction writes the complete diff and timestamp together.
+  const holder = crypto.randomUUID();
+  const job = "ai-provider-health";
+  const { data: acquired, error } = await db.rpc("acquire_cron_run_lease", {
+    p_job: job, p_holder: holder, p_ttl: "120 seconds",
+  }).abortSignal(AbortSignal.timeout(5_000));
+  if (error) throw new CatalogStorageError("Higgsfield catalogue lease could not be acquired");
+  if (acquired !== true) throw new CatalogSyncError("A provider check or model sync is already running. Try again later.");
+  try {
+    const signal = AbortSignal.timeout(30_000);
+    if (!explore) {
+      await withSignal(getValidAccessToken(db), signal);
+      const mcp = await withSignal(HiggsfieldMcpClient.create(db), signal);
+      explore = (capability) => mcp.callTool("models_explore", { action: "list", type: capability, limit: 100 });
+    }
+    const found = new Map<string, CatalogModel>();
+    for (const capability of ["video", "image"] as const) {
+      for (const model of catalog(await withSignal(explore(capability), signal))) {
+        const existing = found.get(model.id);
+        found.set(model.id, { model_id: model.id, name: model.name, description: model.description,
+          capabilities: [...new Set([...(existing?.capabilities ?? []), capability])],
+          metadata: { ...existing?.metadata, ...model.metadata }, context_limit: null,
+          cost_per_1m_input_tokens: null, cost_per_1m_output_tokens: null });
+      }
+    }
+    if (!found.size) throw new CatalogSyncError("Higgsfield returned an empty model catalog");
+    const catalogue: MappedCatalog = { models: [...found.values()], managedCapabilities: ["video", "image"],
+      additiveCapabilities: true, skippedByType: {} };
     // Higgsfield media models stay in the api_key partition: generate-video and
     // generate-image read only that partition. The oauth partition belongs to the
     // AI-provider login adapters (ai_provider_oauth), which this sync must not touch.
-    const { error } = await db.from("ai_models").upsert({
-      provider_id: provider.id, model_id, name: model.name, description: model.description,
-      capabilities: [capability], metadata: model.metadata, is_active: true, auth_method: "api_key",
-    }, { onConflict: "provider_id,model_id,auth_method" });
-    if (error) throw new Error("Higgsfield catalogue write failed");
+    // CatalogDb is the structural SDK seam; avoid instantiating Supabase's recursive query types.
+    const report = await runCatalogSync(db as unknown as CatalogDb, HIGGSFIELD_PROVIDER_CODE, fetch, {
+      authMethod: "api_key", catalogue, leaseHolder: holder, signal,
+    });
+    return { discovered: found.size, activated: report.activated, deactivated: report.deactivated };
+  } finally {
+    const { error: releaseError } = await db.rpc("release_cron_run_lease", { p_job: job, p_holder: holder })
+      .abortSignal(AbortSignal.timeout(3_000));
+    if (releaseError) console.error("event: 'higgsfield_catalogue_lease_release_failed'");
   }
-  const { data: stale, error: staleError } = await db.from("ai_models").select("id, model_id")
-    .eq("provider_id", provider.id).eq("auth_method", "api_key").eq("is_active", true);
-  if (staleError) throw new Error("Higgsfield catalogue cleanup read failed");
-  const ids = (stale ?? []).filter((row) => !found.has(row.model_id)).map((row) => row.id);
-  if (ids.length) {
-    const { error } = await db.from("ai_models").update({ is_active: false }).in("id", ids).eq("auth_method", "api_key");
-    if (error) throw new Error("Higgsfield catalogue cleanup write failed");
-  }
-  return { discovered: found.size, activated: found.size, deactivated: ids.length };
 }

@@ -27,6 +27,7 @@ import {
 import { AiOAuthError } from "../_shared/aiOAuth/errors.ts";
 import { OAuthProbeError, ProviderTestError } from "../_shared/providerErrors.ts";
 import { ProviderReadError } from "../_shared/aiProviderTest.ts";
+import { CatalogStorageError } from "../_shared/modelCatalogSyncRun.ts";
 
 export interface HealthRunPorts {
   listApiKeyProviders(signal: AbortSignal): Promise<Array<{ provider_code: string; name: string }>>;
@@ -51,7 +52,7 @@ export interface HealthRunPorts {
   syncApiKeyCatalogue(
     providerCode: string,
     signal: AbortSignal,
-  ): Promise<{ added: number; updated: number; deactivated: number }>;
+  ): Promise<{ added: number | null; updated: number | null; deactivated: number | null }>;
   syncOAuthCatalogue(
     target: HealthTarget,
     signal: AbortSignal,
@@ -189,7 +190,7 @@ async function syncTarget(
       models_deactivated: report.deactivated,
     };
   } catch (error) {
-    if (error instanceof ProviderReadError) throw error;
+    if (error instanceof ProviderReadError || error instanceof CatalogStorageError) throw error;
     return {
       status: "failed",
       reason: "The provider model catalogue could not be synchronized.",
@@ -237,11 +238,11 @@ async function runOneTarget(
     probe = await probeTarget(ports, target, signal);
     outcome = await syncTarget(ports, target, signal, probe);
   } catch (error) {
-    if (error instanceof ProviderReadError) {
+    if (error instanceof ProviderReadError || error instanceof CatalogStorageError) {
       // A run error, not a degradation. The reason is a fixed sentence: the
       // failure itself may name a table or a column, never a credential.
-      console.error("event: 'ai_provider_health_read_failed'");
-      return { skipReason: HEALTH_READ_FAILED_REASON };
+      console.error("event: 'ai_provider_health_infrastructure_failed'", error.name);
+      return { skipReason: error instanceof ProviderReadError ? HEALTH_READ_FAILED_REASON : "The provider catalogue could not be stored." };
     }
     throw error;
   }
@@ -345,13 +346,26 @@ export async function runHealthChunk(
   const oauthConnections = connections.filter((c) => c.status !== "reauth_required");
   const reauthConnections = connections.filter((c) => c.status === "reauth_required");
 
+  // Read completion before resolving credentials: a completed provider must not
+  // abort a later chunk just because its configuration is temporarily unavailable.
+  const recorded = await withSignal(ports.listRecordedTargets(options.runId, runSignal), runSignal);
+  const alreadyDone = new Set(recorded.map((r) => `${r.provider_code}:${r.auth_method}`));
+  const discoverySkipped: HealthSkippedTarget[] = [];
+
   // A provider with no configured credential is not a target: there is nothing to
   // test and nothing to sync. The key is resolved again before the probe, so a key
   // that vanishes mid-run fails that target instead of the whole run.
   const configured: Array<{ provider_code: string; name: string }> = [];
   for (const provider of apiKeyProviders) {
-    const key = await withSignal(ports.resolveApiKey(provider.provider_code, runSignal), runSignal);
-    if (key) configured.push(provider);
+    if (alreadyDone.has(`${provider.provider_code}:api_key`)) continue;
+    try {
+      const key = await withSignal(ports.resolveApiKey(provider.provider_code, runSignal), runSignal);
+      if (key) configured.push(provider);
+    } catch (error) {
+      if (!(error instanceof ProviderReadError)) throw error;
+      console.error("event: 'ai_provider_health_discovery_read_failed'");
+      discoverySkipped.push({ provider_code: provider.provider_code, auth_method: "api_key", reason: HEALTH_READ_FAILED_REASON });
+    }
   }
 
   const targets = planHealthTargets(configured, oauthConnections);
@@ -373,8 +387,6 @@ export async function runHealthChunk(
   //
   // A failed read fails the chunk. A read that failed must never look like "no
   // target was recorded", because that would probe every provider a second time.
-  const recorded = await withSignal(ports.listRecordedTargets(options.runId, runSignal), runSignal);
-  const alreadyDone = new Set(recorded.map((r) => `${r.provider_code}:${r.auth_method}`));
   const remaining = targets.filter((t) => !alreadyDone.has(`${t.provider_code}:${t.auth_method}`));
 
   const { slice, done: covered, nextChunk } = sliceHealthChunk(remaining, options.chunk);
@@ -417,7 +429,7 @@ export async function runHealthChunk(
   // A target the deadline never reached was not tested. A target whose row could
   // not be read was not tested either. Both are reported as skipped, and the chunk
   // is not done: the caller knows the run is incomplete.
-  const skipped: HealthSkippedTarget[] = [];
+  const skipped: HealthSkippedTarget[] = [...discoverySkipped];
   for (let position = 0; position < slice.length; position++) {
     const outcome = collected.find((c) => c.position === position);
     if (outcome?.result) continue;

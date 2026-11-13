@@ -37,6 +37,13 @@
 -- which is a different and wrong claim after a failed sync. The columns are nullable
 -- and the RPC stores NULL for a count nobody measured.
 
+-- Standalone service keys predate provider rows. Seed their FK identities so
+-- durable health/completion/alert writes work; never overwrite explicit disablement.
+INSERT INTO public.ai_providers(provider_code, name, api_endpoint, api_key_env_var, api_type, supports_streaming)
+VALUES ('firecrawl', 'Firecrawl', 'https://api.firecrawl.dev', 'FIRECRAWL_API_KEY', 'rest', false),
+       ('apify', 'Apify', 'https://api.apify.com', 'APIFY_API_KEY', 'rest', false)
+ON CONFLICT (provider_code) DO NOTHING;
+
 CREATE TABLE IF NOT EXISTS public.ai_provider_health (
   provider_code       text NOT NULL REFERENCES public.ai_providers(provider_code) ON DELETE CASCADE,
   auth_method        text NOT NULL DEFAULT 'api_key' CHECK (auth_method IN ('api_key','oauth')),
@@ -84,6 +91,7 @@ CREATE TABLE IF NOT EXISTS public.ai_provider_health_alerts (
   provider_code text NOT NULL REFERENCES public.ai_providers(provider_code) ON DELETE CASCADE,
   auth_method text NOT NULL CHECK (auth_method IN ('api_key','oauth')),
   status text NOT NULL CHECK (status IN ('failed','needs_relogin')),
+  previous_status text NOT NULL DEFAULT 'connected' CHECK (previous_status = 'connected'),
   reason text,
   created_at timestamptz NOT NULL DEFAULT now(),
   claim_token uuid,
@@ -168,8 +176,10 @@ BEGIN
   -- Retain a week of immutable completion markers, independent of latest status.
   DELETE FROM public.ai_provider_health_completions WHERE recorded_at < now() - interval '7 days';
   DELETE FROM public.ai_provider_health_runs WHERE expires_at < now() - interval '7 days';
-  IF p_scope = 'manual' AND EXISTS (SELECT 1 FROM public.ai_provider_health_runs
-    WHERE scope = 'daily' AND completed_at IS NULL AND expires_at > clock_timestamp()) THEN RETURN 'busy'; END IF;
+  -- Admission covers a logical run across chunks, in either direction. Expired
+  -- runs cannot resume over a newer active run merely because their id exists.
+  IF EXISTS (SELECT 1 FROM public.ai_provider_health_runs
+    WHERE run_id <> p_run_id AND completed_at IS NULL AND expires_at > clock_timestamp()) THEN RETURN 'busy'; END IF;
   SELECT * INTO v_run FROM public.ai_provider_health_runs WHERE run_id = p_run_id;
   IF FOUND THEN
     IF v_run.scope <> p_scope OR v_run.admin_id IS DISTINCT FROM p_admin_id THEN RETURN 'busy'; END IF;
@@ -178,8 +188,6 @@ BEGIN
     RETURN 'ready';
   END IF;
   IF p_scope = 'manual' THEN
-    IF EXISTS (SELECT 1 FROM public.ai_provider_health_runs WHERE scope = 'manual'
-      AND completed_at IS NULL AND expires_at > clock_timestamp()) THEN RETURN 'busy'; END IF;
     SELECT value INTO v_value FROM public.app_settings WHERE key = 'admin_ai_provider_health_cooldown_seconds';
     IF (v_value #>> '{}') ~ '^[0-9]{1,5}$' THEN v_cooldown := least(86400, (v_value #>> '{}')::int); END IF;
     IF EXISTS (SELECT 1 FROM public.ai_provider_health_runs WHERE admin_id IS NOT DISTINCT FROM p_admin_id
@@ -275,8 +283,8 @@ BEGIN
   v_changed := (v_old IS DISTINCT FROM p_status);
   IF v_old = 'connected' AND p_status IN ('failed','needs_relogin') THEN
     v_alert_id := gen_random_uuid();
-    INSERT INTO public.ai_provider_health_alerts(alert_id, provider_code, auth_method, status, reason)
-      VALUES(v_alert_id, p_provider_code, p_auth_method, p_status, left(p_reason, 500));
+    INSERT INTO public.ai_provider_health_alerts(alert_id, provider_code, auth_method, status, reason, previous_status)
+      VALUES(v_alert_id, p_provider_code, p_auth_method, p_status, left(p_reason, 500), v_old);
   END IF;
   IF coalesce(v_old_pending, false) THEN
     v_pending := true;
@@ -367,9 +375,8 @@ BEGIN
     UPDATE public.ai_provider_health h SET claim_token = p_claim_token, claimed_at = now()
       FROM claimed a WHERE h.alert_id = a.alert_id RETURNING h.provider_code
   )
-  SELECT a.provider_code, a.auth_method, a.status, a.reason, h.previous_status, a.alert_id
-    FROM claimed a JOIN public.ai_provider_health h
-      ON h.provider_code = a.provider_code AND h.auth_method = a.auth_method;
+  SELECT a.provider_code, a.auth_method, a.status, a.reason, a.previous_status, a.alert_id
+    FROM claimed a;
 
 END;
 $$;
@@ -449,7 +456,7 @@ BEGIN
           RAISE NOTICE 'ai-provider-health: no functions base URL configured, skipping this run';
           RETURN;
         END IF;
-        PERFORM net.http_post(url := v_url, headers := jsonb_build_object('Content-Type','application/json','Authorization','Bearer ' || get_cron_secret()), body := '{"action":"run","scope":"daily","chunk":1}'::jsonb);
+        PERFORM net.http_post(url := v_url, headers := jsonb_build_object('Content-Type','application/json','Authorization','Bearer ' || get_cron_secret()), body := '{"action":"run","scope":"daily","chunk":1}'::jsonb, timeout_milliseconds := 50000);
       END $do_call$;
       $$
     );
@@ -468,7 +475,7 @@ BEGIN
           RAISE NOTICE 'ai-provider-health: no functions base URL configured, skipping this run';
           RETURN;
         END IF;
-        PERFORM net.http_post(url := v_url, headers := jsonb_build_object('Content-Type','application/json','Authorization','Bearer ' || get_cron_secret()), body := '{"action":"run","scope":"daily","chunk":2}'::jsonb);
+        PERFORM net.http_post(url := v_url, headers := jsonb_build_object('Content-Type','application/json','Authorization','Bearer ' || get_cron_secret()), body := '{"action":"run","scope":"daily","chunk":2}'::jsonb, timeout_milliseconds := 50000);
       END $do_call$;
       $$
     );
@@ -487,7 +494,7 @@ BEGIN
           RAISE NOTICE 'ai-provider-health: no functions base URL configured, skipping this run';
           RETURN;
         END IF;
-        PERFORM net.http_post(url := v_url, headers := jsonb_build_object('Content-Type','application/json','Authorization','Bearer ' || get_cron_secret()), body := '{"action":"run","scope":"daily","chunk":3}'::jsonb);
+        PERFORM net.http_post(url := v_url, headers := jsonb_build_object('Content-Type','application/json','Authorization','Bearer ' || get_cron_secret()), body := '{"action":"run","scope":"daily","chunk":3}'::jsonb, timeout_milliseconds := 50000);
       END $do_call$;
       $$
     );
@@ -506,7 +513,7 @@ BEGIN
           RAISE NOTICE 'ai-provider-health: no functions base URL configured, skipping this run';
           RETURN;
         END IF;
-        PERFORM net.http_post(url := v_url, headers := jsonb_build_object('Content-Type','application/json','Authorization','Bearer ' || get_cron_secret()), body := '{"action":"run","scope":"daily","chunk":4}'::jsonb);
+        PERFORM net.http_post(url := v_url, headers := jsonb_build_object('Content-Type','application/json','Authorization','Bearer ' || get_cron_secret()), body := '{"action":"run","scope":"daily","chunk":4}'::jsonb, timeout_milliseconds := 50000);
       END $do_call$;
       $$
     );

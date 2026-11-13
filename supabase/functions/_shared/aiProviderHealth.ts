@@ -191,9 +191,9 @@ export function classifyApiKeyFailure(
   return {
     status: "failed",
     reason: status === 401 ? "Invalid API key"
-      : status === 403 ? "API key lacks required permissions"
       : status === 402 || /insufficient_balance|spending limit|used all available credits|customer_verification_required|1008/i.test(bodyText)
       ? "The provider account needs billing or additional credits."
+      : status === 403 ? "API key lacks required permissions"
       : status === 429 ? "Rate limit exceeded"
       : `The provider request failed (HTTP ${Number.isInteger(status) && status >= 100 && status <= 599 ? status : 502}).`,
   };

@@ -85,6 +85,33 @@ Deno.test('active custom and service providers are probed without attempting uns
   assert(targets.some((target) => target.provider_code === 'custom-api'));
   assert(targets.some((target) => target.provider_code === 'firecrawl'));
   const before = requests.length;
-  assertEquals(await ports.syncApiKeyCatalogue('custom-api', AbortSignal.timeout(1000)), { added: 0, updated: 0, deactivated: 0 });
+  assertEquals(await ports.syncApiKeyCatalogue('custom-api', AbortSignal.timeout(1000)), { added: null, updated: null, deactivated: null });
   assertEquals(requests.length, before);
+});
+
+Deno.test('OAuth credential storage failure is a run read error at the production adapter', async () => {
+  const { admin } = fixtureAdmin('get_ai_oauth_credentials');
+  await assertRejects(() => createHealthRunPorts(admin).probeOAuth({
+    provider_code: 'openrouter', auth_method: 'oauth', oauth_provider: 'openrouter', display_name: 'OpenRouter',
+  }, AbortSignal.timeout(1000)), ProviderReadError);
+});
+
+Deno.test('standalone service discovery includes absent rows and respects explicit disablement', async () => {
+  const { admin, tables } = fixtureAdmin();
+  tables.ai_providers.push({ provider_code: 'apify', name: 'Apify', is_active: false });
+  const previous = Deno.env.get('FIRECRAWL_API_KEY');
+  Deno.env.set('FIRECRAWL_API_KEY', 'test-key-not-secret');
+  try {
+    const ports = createHealthRunPorts(admin);
+    const targets = await ports.listApiKeyProviders(AbortSignal.timeout(1000));
+    assert(targets.some((r) => r.provider_code === 'firecrawl'));
+    assert(!targets.some((r) => r.provider_code === 'apify'));
+    assertEquals(await ports.resolveApiKey('firecrawl', AbortSignal.timeout(1000)), 'test-key-not-secret');
+    tables.ai_providers.push({ provider_code: 'firecrawl', name: 'Firecrawl', is_active: true,
+      api_key_env_var: 'POSTORA_TEST_UNCONFIGURED_SERVICE_ENV' });
+    assertEquals(await ports.resolveApiKey('firecrawl', AbortSignal.timeout(1000)), 'test-key-not-secret');
+  } finally {
+    if (previous === undefined) Deno.env.delete('FIRECRAWL_API_KEY');
+    else Deno.env.set('FIRECRAWL_API_KEY', previous);
+  }
 });

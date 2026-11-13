@@ -2860,6 +2860,7 @@ export type Database = {
           provider_code: string
           auth_method: string
           status: string
+          previous_status: string
           reason: string | null
           created_at: string
           claim_token: string | null
@@ -2871,6 +2872,7 @@ export type Database = {
           provider_code: string
           auth_method: string
           status: string
+          previous_status?: string
           reason?: string | null
           created_at?: string
           claim_token?: string | null
@@ -2882,6 +2884,7 @@ export type Database = {
           provider_code?: string
           auth_method?: string
           status?: string
+          previous_status?: string
           reason?: string | null
           created_at?: string
           claim_token?: string | null

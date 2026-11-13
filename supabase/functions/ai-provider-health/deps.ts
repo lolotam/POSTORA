@@ -11,8 +11,9 @@ import { type SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { getModels } from "npm:@mariozechner/pi-ai@0.73.1";
 import { loadProbeTarget, probeProvider } from "../_shared/aiProviderTest.ts";
 import { OAuthProbeError } from "../_shared/providerErrors.ts";
-import { resolveProviderKey } from "../_shared/providerKeys.ts";
-import type { RowReader } from "../_shared/providerEndpoint.ts";
+import { resolveProviderKey, STANDALONE_SERVICE_ENV } from "../_shared/providerKeys.ts";
+import { ProviderReadError, type RowReader } from "../_shared/providerEndpoint.ts";
+import { AiOAuthStorageError } from "../_shared/aiOAuth/errors.ts";
 import { mapIdOnlyChatCatalog, type MappedCatalog } from "../_shared/modelCatalogSync.ts";
 import { runCatalogSync, SYNCABLE_PROVIDERS } from "../_shared/modelCatalogSyncRun.ts";
 import { defaultCredentialDeps, getFreshOAuthCredential } from "../_shared/aiOAuth/credentials.ts";
@@ -83,13 +84,21 @@ export function createHealthRunPorts(admin: Admin, leaseHolder?: string): Health
     async listApiKeyProviders(signal) {
       const { data, error } = await admin
         .from("ai_providers")
-        .select("provider_code, name")
-        .eq("is_active", true).abortSignal(signal);
+        .select("provider_code, name, is_active").abortSignal(signal);
       if (error) throw new Error("AI provider read failed");
-      return (data ?? []).map((row) => ({
+      const rows = data ?? [];
+      const providers = rows.filter((row) => row.is_active === true).map((row) => ({
         provider_code: String((row as { provider_code?: unknown }).provider_code ?? ""),
         name: String((row as { name?: unknown }).name ?? ""),
       }));
+      // Preserve an explicit disabled row. Missing standalone services are supported
+      // by the same saved-key/environment fallback as the individual Test action.
+      for (const code of Object.keys(STANDALONE_SERVICE_ENV)) {
+        if (!rows.some((row) => row.provider_code === code)) {
+          providers.push({ provider_code: code, name: code === "firecrawl" ? "Firecrawl" : "Apify" });
+        }
+      }
+      return providers;
     },
 
     async listOAuthConnections(signal) {
@@ -147,7 +156,10 @@ export function createHealthRunPorts(admin: Admin, leaseHolder?: string): Health
       // The token refresh lives inside pi-ai and cannot be cancelled, so the wait
       // for it ends with the target's budget.
       const { apiKey } = await withSignal(
-        getFreshOAuthCredential(credentials, oauthProvider),
+        getFreshOAuthCredential(credentials, oauthProvider).catch((error: unknown) => {
+          if (error instanceof AiOAuthStorageError) throw new ProviderReadError("OAuth credential read failed");
+          throw error;
+        }),
         signal,
       );
       const modelId = firstOAuthModel(oauthProvider);
@@ -173,7 +185,7 @@ export function createHealthRunPorts(admin: Admin, leaseHolder?: string): Health
     async syncApiKeyCatalogue(providerCode: string, signal: AbortSignal) {
       // Every configured provider is probed, even when it has no catalogue API.
       if (!(SYNCABLE_PROVIDERS as readonly string[]).includes(providerCode)) {
-        return { added: 0, updated: 0, deactivated: 0 };
+        return { added: null, updated: null, deactivated: null };
       }
       const report = await runCatalogSync(admin as never, providerCode, boundedFetch(signal), {
         authMethod: "api_key", signal, leaseHolder,

@@ -71,7 +71,13 @@ export function useRunProviderHealth(): {
         rows.push(...result.results);
         for (const row of result.results) skipped.delete(`${row.provider_code}:${row.auth_method}`);
         for (const target of result.skipped) skipped.set(`${target.provider_code}:${target.auth_method}`, target);
-        if (result.done) break;
+        if (result.done) {
+          // Membership can change between chunks. The server's completion covers
+          // current targets, including the removal of a previously skipped target.
+          skipped.clear();
+          for (const target of result.skipped) skipped.set(`${target.provider_code}:${target.auth_method}`, target);
+          break;
+        }
         if (result.skipped.length > 0) {
           // The chunk could not cover everything it was asked to. The server
           // re-plans on every call and puts the targets it has not recorded yet

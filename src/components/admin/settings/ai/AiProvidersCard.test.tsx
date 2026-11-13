@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { AiProvidersCard } from './AiProvidersCard';
+import i18n from '@/i18n';
 
 // The card reads the provider catalogue and the key status from the network,
 // so the boundary is the supabase client.
@@ -104,6 +105,24 @@ async function openClaudeDialog() {
 }
 
 describe('AiProvidersCard', () => {
+  it('renders standalone services once when health identities exist in the provider table', async () => {
+    tables.ai_providers.push({ ...openaiProvider, id: 'service-firecrawl', provider_code: 'firecrawl', name: 'Firecrawl' },
+      { ...openaiProvider, id: 'service-apify', provider_code: 'apify', name: 'Apify' });
+    renderCard();
+    await screen.findByRole('heading', { name: 'Anthropic API' });
+    expect(screen.getAllByText('Firecrawl')).toHaveLength(1);
+    expect(screen.getAllByText('Apify')).toHaveLength(1);
+  });
+  it('translates both catalogue credential badges when Arabic is selected', async () => {
+    await i18n.changeLanguage('ar');
+    try {
+      renderCard();
+      await screen.findByRole('heading', { name: 'Anthropic API' });
+      const dialog = await openClaudeDialog();
+      expect(within(dialog).getByText(i18n.t('adminai:credentialOauth'))).toBeInTheDocument();
+      expect(within(dialog).getByText(i18n.t('adminai:credentialApiKey'))).toBeInTheDocument();
+    } finally { await i18n.changeLanguage('en'); }
+  });
   beforeEach(() => {
     invoke.mockReset();
     tables.ai_providers = [claudeProvider, openaiProvider];

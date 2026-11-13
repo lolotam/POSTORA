@@ -2,13 +2,21 @@
 import { assert, assertEquals } from "https://deno.land/std@0.208.0/assert/mod.ts";
 import { handleHealthRequest, parseHealthRequest, type HealthHandlerPorts } from "./handler.ts";
 
+Deno.test("an admin cannot claim daily scope or acquire its lease", async () => {
+  const { ports, leases } = fakePorts({ isAuthorized: async () => ({ ok: true, adminId: crypto.randomUUID() }) });
+  const res = await handleHealthRequest(new Request("https://x.test", { method: "POST",
+    body: JSON.stringify({ action: "run", scope: "daily" }) }), ports);
+  assertEquals(res.status, 403);
+  assertEquals(leases, []);
+});
+
 for (const admission of ['busy', 'cooldown', 'complete'] as const) {
   Deno.test(`logical run admission ${admission} never probes providers`, async () => {
     let ran = false;
     const { ports, leases } = fakePorts({ admitRun: async () => admission,
       runChunk: async () => { ran = true; throw new Error('must not run'); } });
     const res = await handleHealthRequest(new Request('https://x.test', { method: 'POST',
-      body: JSON.stringify({ action: 'run', run_token: '12000000-0000-4000-8000-000000000001' }) }), ports);
+      body: JSON.stringify({ action: 'run', run_token: crypto.randomUUID() }) }), ports);
     assertEquals(res.status, admission === 'busy' ? 409 : admission === 'cooldown' ? 429 : 200);
     assertEquals(ran, false);
     assertEquals(leases.length, 2);
@@ -27,7 +35,7 @@ function fakePorts(overrides: Partial<HealthHandlerPorts> = {}) {
     completeRun: async () => {},
     acquireLease: async (job, holder) => { leases.push({ job, holder }); return true; },
     releaseLease: async (job, holder) => { leases.push({ job, holder }); return true; },
-    isAuthorized: async () => ({ ok: true }),
+    isAuthorized: async () => ({ ok: true, adminId: null }),
     ...overrides,
   };
   return { ports, leases };
@@ -65,7 +73,7 @@ Deno.test("a busy lease answers 409 and runs nothing", async () => {
     runChunk: async () => { ran = true; throw new Error("must not run"); },
   });
   const res = await handleHealthRequest(
-    new Request("https://x.test", { method: "POST", body: JSON.stringify({ action: "run", scope: "manual", run_token: "12000000-0000-4000-8000-000000000001" }) }),
+    new Request("https://x.test", { method: "POST", body: JSON.stringify({ action: "run", scope: "manual", run_token: crypto.randomUUID() }) }),
     ports,
   );
   assertEquals(res.status, 409);
@@ -75,7 +83,7 @@ Deno.test("a busy lease answers 409 and runs nothing", async () => {
 Deno.test("a manual run takes and releases the shared lease", async () => {
   const { ports, leases } = fakePorts();
   const res = await handleHealthRequest(
-    new Request("https://x.test", { method: "POST", body: JSON.stringify({ action: "run", scope: "manual", run_token: "12000000-0000-4000-8000-000000000001" }) }),
+    new Request("https://x.test", { method: "POST", body: JSON.stringify({ action: "run", scope: "manual", run_token: crypto.randomUUID() }) }),
     ports,
   );
   assertEquals(res.status, 200);
@@ -179,7 +187,7 @@ Deno.test("a release that fails does not replace the answer", async () => {
 Deno.test("manual run rejects a non-UUID token before taking a lease", async () => {
   const { ports, leases } = fakePorts();
   const res = await handleHealthRequest(new Request("https://x.test", { method: "POST",
-    body: JSON.stringify({ action: "run", run_token: "token-a" }) }), ports);
+    body: JSON.stringify({ action: "run", run_token: "test-key-not-secret" }) }), ports);
   assertEquals(res.status, 400);
   assertEquals(leases.length, 0);
 });

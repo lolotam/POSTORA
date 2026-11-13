@@ -24,15 +24,10 @@ export function ProviderHealthButton() {
   const { t } = useTranslation(['adminai']);
   const { data: storedRows, error: readError, isLoading } = useProviderHealthStatus();
   const { run, isRunning, error } = useRunProviderHealth();
-  const [rows, setRows] = useState<ProviderHealthRow[]>([]);
+  const rows = storedRows ?? [];
   const [summary, setSummary] = useState<string | null>(null);
   const [incomplete, setIncomplete] = useState(false);
   const [skipped, setSkipped] = useState<ProviderHealthSkipped[]>([]);
-
-  // The stored rows are the last known state; a run replaces them.
-  useEffect(() => {
-    if (storedRows !== undefined) setRows(storedRows);
-  }, [storedRows]);
 
   useEffect(() => {
     if (!error) return;
@@ -55,7 +50,6 @@ export function ProviderHealthButton() {
     const result = await run();
     setSkipped(result.skipped);
     if (result.rows.length === 0 && result.skipped.length === 0) return;
-    if (result.rows.length > 0) setRows(result.rows);
     const connected = result.rows.filter((r) => r.status === 'connected').length;
     const failed = result.rows.filter((r) => r.status === 'failed').length;
     const needsRelogin = result.rows.filter((r) => r.status === 'needs_relogin').length;

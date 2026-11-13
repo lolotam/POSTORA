@@ -19,3 +19,11 @@ export class AiOAuthError extends Error {
     this.name = 'AiOAuthError';
   }
 }
+
+/** Local storage was unavailable; this says nothing about the provider credential. */
+export class AiOAuthStorageError extends AiOAuthError {
+  constructor() {
+    super('refresh_failed', 'The stored subscription credential could not be read.');
+    this.name = 'AiOAuthStorageError';
+  }
+}

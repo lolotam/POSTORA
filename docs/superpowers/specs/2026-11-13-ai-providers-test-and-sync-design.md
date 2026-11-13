@@ -46,8 +46,12 @@ A provider is an `ai_providers` row; a target/connection is that provider plus
 is constrained to the two supported values. The triple unique index is additive in
 EXPAND. The legacy pair constraint remains until guarded post-deployment CONTRACT.
 
-API-key targets are active providers in `SYNCABLE_PROVIDERS` whose saved key or
-configured environment key resolves. OAuth targets are supported connection rows
+API-key targets are every active provider whose saved key or configured environment
+key resolves (round 3 scope correction). `SYNCABLE_PROVIDERS` controls catalogue
+support only. Firecrawl and Apify also support standalone saved/environment keys;
+EXPAND seeds missing provider identities without overriding disabled rows. Providers
+without a catalogue API are probed with NULL model counts. OAuth targets are supported
+connection rows
 whose corresponding provider is active. A stored `reauth_required` connection is
 reported without a network call or sync. Providers without a configured credential
 are not targets and not failures. Status reads apply the same current-configuration
@@ -116,9 +120,13 @@ writes, causing rollback. PostgREST reads also carry the target abort signal.
 
 A successful result write atomically updates latest status and inserts the immutable
 completion marker. Failed persistence becomes skipped retryable work and forces
-`done: false`. It never becomes an ordinary in-memory result. A failed configuration
-or probe-model read is a run error, not provider degradation, and never falls back to
-a guessed model or emits a false degradation alert. Unmeasured model counts remain
+`done: false`. It never becomes an ordinary in-memory result. A failed configuration,
+OAuth credential or probe-model read, or a local catalogue write/lease refusal, is a
+run error, not provider degradation. It never falls back to a guessed model or emits
+a false degradation alert. Daily scope is reserved for authenticated cron callers;
+logical admission excludes every other active run, including an expired run resuming
+over a newer one. Cron HTTP timeouts are 50 seconds to cover the handler deadline.
+Unmeasured model counts remain
 NULL; zero means a measured no-change sync.
 
 ## 6. Safe failure reasons and endpoint policy

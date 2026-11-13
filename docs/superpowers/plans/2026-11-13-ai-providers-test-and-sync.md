@@ -85,9 +85,10 @@ Regression suites: `run.test.ts`, `handler.test.ts`, `deps.test.ts` and SQL heal
   the handler boundary so every chunk and retry keeps the same identity.
 - Generate a fresh lease-holder UUID for EVERY HTTP request. Do not derive the
   holder from the stable logical run ID; same-holder renewals permit overlap.
-- `admit_ai_provider_health_run` serializes logical admission. An unfinished daily
-  run rejects manual requests between cron chunks until completion or its 30-minute
-  crash-recovery expiry. A completed logical run is a no-op on replay. Manual chunks
+- `admit_ai_provider_health_run` serializes logical admission. Every unexpired
+  unfinished run rejects another run, regardless of scope, including an expired run
+  trying to resume over a newer active one. Daily scope is accepted only from cron.
+  A completed logical run is a no-op on replay when no other run is active. Manual chunks
   may continue with their existing run ID; new manual runs observe the per-admin
   cooldown from `app_settings.admin_ai_provider_health_cooldown_seconds` (default 60).
 - Persist completion under `(run_id, provider_code, auth_method)` independently of

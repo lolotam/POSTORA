@@ -1,5 +1,10 @@
 import { type RowReader, serviceClient, ProviderReadError } from "./providerEndpoint.ts";
 
+/** Services can have credentials before they have an ai_providers row. */
+export const STANDALONE_SERVICE_ENV: Readonly<Record<string, string>> = {
+  firecrawl: "FIRECRAWL_API_KEY", apify: "APIFY_API_KEY",
+};
+
 /**
  * The platform key for a provider: the admin-saved provider_api_keys row first,
  * then the env var its ai_providers row names, else null. The one resolver for
@@ -21,6 +26,7 @@ export async function resolveProviderKey(db: RowReader | undefined, providerCode
   const provider = await read("ai_providers", "api_key_env_var");
   if (provider.error) throw new ProviderReadError("AI provider read failed");
   const envVar = (provider.data as { api_key_env_var?: unknown } | null)?.api_key_env_var;
-  if (typeof envVar !== "string" || !envVar.trim()) return null;
-  return Deno.env.get(envVar) || null;
+  const configuredKey = typeof envVar === "string" && envVar.trim() ? Deno.env.get(envVar) : null;
+  const serviceEnv = STANDALONE_SERVICE_ENV[providerCode];
+  return configuredKey || (serviceEnv ? Deno.env.get(serviceEnv) : null) || null;
 }

@@ -18,6 +18,8 @@ export type CatalogAuthMethod = "api_key" | "oauth";
 
 export interface SyncReport {
   added: number;
+  /** New rows plus rows reactivated after a previous catalogue deactivation. */
+  activated: number;
   updated: number;
   deactivated: number;
   kept_in_use: string[];
@@ -34,6 +36,11 @@ export class CatalogSyncError extends Error {
   override name = "CatalogSyncError";
 }
 
+/** Local persistence/lease failure; a healthy provider must never degrade for it. */
+export class CatalogStorageError extends Error {
+  override name = "CatalogStorageError";
+}
+
 const GENERIC_SYNC_FAILURE = "Model sync failed; see server logs";
 
 /** The old two-column unique constraint the EXPAND migration keeps until the CONTRACT one runs. */
@@ -43,7 +50,7 @@ const LEGACY_CATALOGUE_CONSTRAINT = "ai_models_provider_id_model_id_key";
  * The message the sync-models action returns for a failed sync.
  */
 export function syncFailureMessage(err: unknown): string {
-  return err instanceof CatalogSyncError ? err.message : GENERIC_SYNC_FAILURE;
+  return err instanceof CatalogSyncError || err instanceof CatalogStorageError ? err.message : GENERIC_SYNC_FAILURE;
 }
 
 /**
@@ -57,11 +64,11 @@ export function syncFailureMessage(err: unknown): string {
  */
 function catalogueWriteError(error: { message: string; code?: string }): Error {
   if (error.code === "23505" && (error.message ?? "").includes(LEGACY_CATALOGUE_CONSTRAINT)) {
-    return new CatalogSyncError(
+    return new CatalogStorageError(
       "The model catalogue still carries the legacy unique constraint. Apply the contract migration before syncing subscription models.",
     );
   }
-  return new Error(`ai_models upsert failed: ${error.message}`);
+  return new CatalogStorageError(GENERIC_SYNC_FAILURE);
 }
 
 interface CatalogueSource {
@@ -246,7 +253,7 @@ export async function runCatalogSync(
     if (options.leaseHolder) {
       // The transaction locks and validates the request lease before writing.
       // An aborted HTTP request cannot leave unfenced writes after lease takeover.
-      if (!db.rpc) throw new Error('Catalogue lease fencing is unavailable');
+      if (!db.rpc) throw new CatalogStorageError(GENERIC_SYNC_FAILURE);
       const { error } = await bounded(db.rpc('write_ai_health_catalog', {
         p_holder: options.leaseHolder, p_rows: rows, p_stamp_key: stampKey, p_at: now,
       }));
@@ -263,10 +270,11 @@ export async function runCatalogSync(
       const { error: stampError } = await db.from("system_settings").upsert(
         { key: stampKey, value: { at: now } }, { onConflict: "key" },
       );
-      if (stampError) throw new Error(`system_settings write failed: ${stampError.message}`);
+      if (stampError) throw new CatalogStorageError(GENERIC_SYNC_FAILURE);
     }
   }
   return {
+    activated: plan.inserts.length + plan.updates.filter((row) => row.reactivate).length,
     added: plan.inserts.length, updated: plan.updates.length, deactivated: plan.deactivateIds.length,
     kept_in_use: plan.keptInUse, skipped_by_type: mapped.skippedByType, synced_at: now, dry_run: dryRun,
   };

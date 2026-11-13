@@ -98,6 +98,13 @@ async function routeHealthRequest(req: Request, ports: HealthHandlerPorts, deadl
     return restrictedJsonResponse(req, { results }, 200);
   }
 
+  // Only the cron path returns an explicit null identity. An admin UUID (or an
+  // absent identity) must never claim the deterministic daily run or bypass cooldown.
+  if (parsed.scope === "daily" && auth.adminId !== null) {
+    console.info("event: 'ai_provider_health_daily_scope_refused'");
+    return restrictedJsonResponse(req, { error: "Daily scope is reserved for cron" }, 403);
+  }
+
   // A manual run needs the browser's token: it is the run id, and without it two clicks
   // would share one lease and one run id.
   if (parsed.scope === "manual" && !parsed.runToken) {

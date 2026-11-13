@@ -19,6 +19,17 @@ const wrapper = ({ children }: { children: ReactNode }) => (
 );
 
 describe("useAiProviderHealth", () => {
+  it("clears a removed skipped target when the server completes current membership", async () => {
+    invoke.mockResolvedValueOnce({ data: { run_id: "r", chunk: 1, done: false, next_chunk: 2,
+      results: [], skipped: [{ provider_code: "removed", auth_method: "api_key", reason: "read failed" }],
+      summary: { total: 0, connected: 0, failed: 0, needs_relogin: 0 } }, error: null })
+      .mockResolvedValueOnce({ data: { run_id: "r", chunk: 1, done: true, next_chunk: null,
+        results: [], skipped: [], summary: { total: 0, connected: 0, failed: 0, needs_relogin: 0 } }, error: null });
+    const { result } = renderHook(() => useRunProviderHealth(), { wrapper });
+    const run = await result.current.run();
+    expect(run.complete).toBe(true);
+    expect(run.skipped).toEqual([]);
+  });
   beforeEach(() => {
     invoke.mockReset();
     // A fresh cache per test: the stored-results query must not leak between them.
