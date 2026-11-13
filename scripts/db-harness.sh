@@ -185,6 +185,7 @@ SUITES=(
   background_jobs.sql
   instagram_story_jobs.sql
   agent_handoff_messages.sql
+  agent_handoff_claim_lease.sql
   ai_provider_oauth.sql
 )
 # These fixtures build their own focused schema and apply the migration under
