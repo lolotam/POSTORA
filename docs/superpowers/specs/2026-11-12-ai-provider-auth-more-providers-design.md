@@ -91,7 +91,9 @@ Unchanged actions keep their shape. New and widened:
 |---|---|---|
 | `start` | `{ oauth_provider, acknowledged_risk? }` | paste PKCE: `{ flow: "pkce_paste", authorize_url }` (as today); callback PKCE: `{ flow: "pkce_callback", authorize_url }`; device: `{ flow: "device", attempt_id, verification_url, user_code, interval_sec, expires_at }` |
 | `poll` (new) | `{ oauth_provider, attempt_id }` | `{ status: "pending" \| "connected" \| "denied" \| "expired", account_label? }` |
-| `finish` | `{ oauth_provider, pasted }` for paste PKCE; `{ oauth_provider, code, state }` for callback PKCE | `{ status: "connected", account_label }` |
+| `finish` | `{ oauth_provider, pasted }` for both PKCE flows: the paste box sends what the admin pasted, the callback route sends the address the provider redirected to | `{ status: "connected", account_label }` |
+
+One `finish` shape keeps one parser (`parseAuthorizationInput`) for the code and the state. The callback route reads both from the same address the edge function parses, so they can never come from different places. (Amended 2026-11-13 from separate `code` and `state` fields.)
 
 Rules:
 - The device code, poll handle, PKCE verifier and Z.ai poll token stay server-side in the login-attempt row; the browser only ever holds `attempt_id`. Same storage and 10-minute TTL as the PKCE verifier today (`loginFlow.ts`, `LOGIN_TTL_MS`); device attempts use the provider's own `expires_in`, capped at 15 minutes.

@@ -76,6 +76,13 @@ describe('SubscriptionLoginSection', () => {
     expect(container).toBeEmptyDOMElement();
   });
 
+  it('renders nothing for a provider the edge function does not offer yet', () => {
+    // An older edge deploy knows Claude and ChatGPT only.
+    h.caps = { enabled: true, providers: [claudeNotConnected] };
+    const { container } = render(<SubscriptionLoginSection providerCode="openrouter" />);
+    expect(container).toBeEmptyDOMElement();
+  });
+
   it('keeps a stored login and its disconnect control visible while the feature is disabled', async () => {
     h.caps = { enabled: false, providers: [claudeConnected] };
     h.disconnect.mockResolvedValue(undefined);

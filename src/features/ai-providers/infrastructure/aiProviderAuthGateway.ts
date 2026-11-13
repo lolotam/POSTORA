@@ -31,15 +31,23 @@ const capabilitySchema = z.object({
   // provider it knew then was a paste flow.
   flow: z.enum(["pkce_paste", "pkce_callback"]).default("pkce_paste"),
 });
+const KNOWN_PROVIDER_CODES: readonly unknown[] = capabilitySchema.shape.provider_code.options;
+
 const capabilitiesSchema = z.object({
   enabled: z.boolean(),
   // The edge function and this bundle deploy separately. A provider this
   // bundle does not know yet is dropped on its own instead of failing the
-  // whole list and hiding every other subscription.
-  providers: z.array(z.unknown()).transform((rows) =>
+  // whole list and hiding every other subscription. A known provider that
+  // breaks the contract still fails the read: that is drift, not an absence.
+  providers: z.array(z.unknown()).transform((rows, ctx) =>
     rows.flatMap((row) => {
       const parsed = capabilitySchema.safeParse(row);
-      return parsed.success ? [parsed.data] : [];
+      if (parsed.success) return [parsed.data];
+      const code = (row as { provider_code?: unknown } | null)?.provider_code;
+      if (KNOWN_PROVIDER_CODES.includes(code)) {
+        ctx.addIssue({ code: z.ZodIssueCode.custom, message: "malformed capability" });
+      }
+      return [];
     }),
   ),
 });

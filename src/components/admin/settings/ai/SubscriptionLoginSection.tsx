@@ -74,8 +74,9 @@ export function SubscriptionLoginSection({ providerCode }: { providerCode: 'clau
   const enabled = capabilities?.enabled === true;
   const usesCallbackFlow = capability?.flow === 'pkce_callback';
   // With the flag off the subscription pathway is closed, but a stored login
-  // must stay visible so the admin can still delete it.
-  if (!capabilities || (!enabled && !hasStoredLogin)) return null;
+  // must stay visible so the admin can still delete it. A provider the edge
+  // function does not offer yet (an older deploy) has no sign-in to show.
+  if (!capabilities || !capability || (!enabled && !hasStoredLogin)) return null;
 
   const effectiveTestModel = testModel || capability?.models?.[0] || '';
 
