@@ -958,15 +958,22 @@ Deno.test("the apology after an escalation is owed only when no staff member rep
   }
 });
 
-Deno.test("a handoff notice follows the account setting, then the customer, then the thread, then Arabic", async () => {
+Deno.test("a handoff notice follows the customer, then the thread, then the account setting, then Arabic", async () => {
   const { handoffNoticeLanguage } = await import("./logic.ts");
   const cases: Array<[string, "auto" | "ar" | "en", string | null, "ar" | "en" | null, "ar" | "en"]> = [
-    ["Hello, is the heel cream in stock?", "ar", null, null, "ar"],
-    ["عندكم كريم الكعب؟", "en", null, null, "en"],
-    ["Hello, is the heel cream in stock?", "auto", null, "ar", "en"],
+    // The customer's own words come first: the notice is written for the customer who
+    // is waiting, so a fixed account setting may not answer an Arabic customer in
+    // English.
+    ["Hello, is the heel cream in stock?", "ar", null, null, "en"],
+    ["عندكم كريم الكعب؟", "en", null, null, "ar"],
+    // No language in the message: the thread's language, then the account setting.
     ["🙏", "auto", null, "en", "en"],
+    // The customer's latest words beat the thread's older language: the thread may
+    // have started in Arabic and the customer may have switched.
+    ["Hello, is the heel cream in stock?", "auto", null, "ar", "en"],
     ["12345", "auto", null, null, "ar"],
     ["[voice note]", "auto", "en-US", null, "en"],
+    ["12345", "en", null, null, "en"],
   ];
   for (const [text, mode, hint, stored, expected] of cases) {
     assertEquals(handoffNoticeLanguage(text, mode, hint, stored), expected, `${text} / ${mode} / ${stored}`);

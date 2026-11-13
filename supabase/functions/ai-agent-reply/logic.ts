@@ -436,7 +436,7 @@ function catalogSearchRules(
   if (!catalogSearch) return [];
   return [
     "- To find a product, call the catalog search with `query` set to the product words from the customer's message, exactly as they wrote them.",
-    "- If the search finds nothing (the tool has already retried with a shorter word by itself), ask the customer for the product name as printed on the pack, or for a photo. Do not say the store does not sell it.",
+    "- If the search finds nothing (the tool has already retried with a shorter word by itself), search the knowledge base for the product before you ask the customer for anything: the catalog can be stale or incomplete, and the re-ingested product sheet still knows the product. Only when the knowledge base has nothing either, ask the customer for the product name as printed on the pack, or for a photo. Do not say the store does not sell it.",
     catalogHandoffRule(handoffOnRequest, handoffOnLowConfidence),
     "- When you mention a product, give its product_url exactly as the tool returned it. Never build or guess a link.",
     "- If price_hidden is true, say the price is available on request instead of quoting one. If shopping_enabled is false, say the product can be viewed but not ordered online.",
@@ -539,6 +539,12 @@ export function escalationApologyText(since: string | null, staffReplies: number
  * The language of a handoff notice. Unlike a reply it has no thread to read and no model to
  * defer to, so a message without letters (an emoji, an order number) falls back to the
  * thread's stored language and then to Arabic, the language of the accounts it was made for.
+ *
+ * The customer's own words come FIRST: a notice is written for the customer who is
+ * waiting, and the customer's latest message is the strongest evidence of the language
+ * they are waiting in. The account's configured mode is only the last resort before
+ * Arabic, because a fixed setting that outranks the customer turns every Arabic
+ * customer of an English account into an English notice.
  */
 export function handoffNoticeLanguage(
   inboundText: string,
@@ -546,8 +552,10 @@ export function handoffNoticeLanguage(
   hint: string | null | undefined,
   storedLanguage: ReplyLanguage | null,
 ): ReplyLanguage {
-  if (languageMode === "ar" || languageMode === "en") return languageMode;
-  return customerLanguageSignal(inboundText, hint) ?? storedLanguage ?? "ar";
+  const fromCustomer = customerLanguageSignal(inboundText, hint);
+  if (fromCustomer) return fromCustomer;
+  if (storedLanguage) return storedLanguage;
+  return languageMode === "ar" || languageMode === "en" ? languageMode : "ar";
 }
 
 export interface MessageRow {
