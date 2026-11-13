@@ -42,7 +42,12 @@ Date: 2026-11-12 · Owner: Waleed · Status: decisions locked, catalog details p
 - **Greeting / language / human-mode acknowledgement.** Deterministic steps in
   `ai-agent-reply` before and after the model call, each with a unit test.
 - **Model chain.** A dry-run script replays a recorded conversation against candidate models and
-  writes a comparison table (latency, language correctness, catalog-grounded answer). No sends.
+  writes a comparison table (latency, language correctness, whether the catalog was searched). No sends.
+  The table carries no customer data: the conversation id is redacted and the reply text is never
+  written, only its length; the unredacted detail goes to an ignored `.local` copy. Catalog GROUNDING
+  is not one of the columns: the sandbox hands the probe the tool calls it made and never the rows
+  the catalog returned, so a model that searches and then answers something unrelated cannot be told
+  apart from one that answers from the rows. The report says so instead of pretending to measure it.
 
 - **Answer instead of escalating.** Escalation mostly happens when retrieval misses, so the
   fix is retrieval, not the timeout: the catalog RPC above, the UTF-8 re-ingest, and the

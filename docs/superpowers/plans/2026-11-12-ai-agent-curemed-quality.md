@@ -1,6 +1,6 @@
 # AI agent quality for curemedkw — Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **Tracking:** the steps use checkbox (`- [ ]`) syntax. How the work is carried out is the implementer's own choice; this document states what has to be true at the end of each step, not which tool to reach for.
 
 **Goal:** Make the curemedkw WhatsApp agent answer Arabic product questions correctly. That means:
 
@@ -70,6 +70,7 @@
 | `supabase/migrations/20261113220000_agent_handoff_legacy_claim_lease.sql` | the claim of a build that predates the lease is lease-shaped too, so no claim can be stranded |
 | `supabase/migrations/20261113230000_agent_conversation_mode_expiry_marker.sql` | the escalation marker of an expired window is written the way the thread is (an upsert) |
 | `supabase/migrations/20261113240000_agent_handoff_claim_token.sql` | a claim token of its own for every handoff claim, the one-time notice written with the claim it spends, and a delivery claim that carries the payload it read |
+| `supabase/migrations/20261113253000_agent_handoff_tenant_binding.sql` | every statement that moves a reply row is bound to the tenant the caller names, so a row of another tenant is refused |
 | `supabase/functions/ai-agent-adapters/supabase.ts` (+ test) | Allow-listed RPC mode |
 | `supabase/functions/_shared/connectorRegistry.ts` | `rpc_allow_list` setting, `query`/`max_results` parameters |
 | `supabase/functions/ai-agent-reply/logic.ts` `buildSystemPrompt` | Not-found / escalation rule |
@@ -144,7 +145,7 @@ The review on 2026-11-12 found four assumptions that need live evidence first.
 - For media, `inbound_text` is the `composeAgentText` envelope. Its description/OCR body is English.
 - `withoutAgentTextEnvelope` strips only the header and fence lines, not that body.
 
-**Step 0 (proof):** Before writing code, read the `ai_agent_logs.inbound_text` of the English image reply in conversation `wa_96560003759_96555683677`. Confirm it carries the envelope. If it does not, stop and re-diagnose.
+**Step 0 (proof):** Before writing code, read the `ai_agent_logs.inbound_text` of the English image reply in the curemedkw conversation whose id is `wa_<owner-number>_<customer-number>`. Confirm it carries the envelope. If it does not, stop and re-diagnose.
 
 **Interfaces — Produces:**
 ```ts
@@ -250,7 +251,7 @@ The function bodies are written in full in the migration. Each one is proved in 
 - **Step 0 (proof):**
   - Confirm the staff marker on prod:
     ```sql
-    select from_name, count(*) from whatsapp_messages where conversation_id like 'wa_96560003759%' and direction='outbound' group by 1;
+    select from_name, count(*) from whatsapp_messages where conversation_id like 'wa_<owner-number>%' and direction='outbound' group by 1;
     ```
   - Confirm customer messages skipped at the gate are stored in `ai_thread_messages`. If not, also load the inbound `whatsapp_messages` after `since`, so staff answers keep their questions.
 
@@ -307,7 +308,7 @@ export function escalationApologyText(
   - `max_results: 99` → `25`.
   - No allow list → today's table GET (regression).
   - The fixture `fixtures/curemed_search.json` (Task 0) passes through the output mapping with `product_url`, `price_hidden` and `shopping_enabled` intact.
-  - Zero rows for a multi-word query → exactly one retry with the query's longest word, and the result says `retried_with`. Spec §3 puts the loosened retry in the tool, not in the prompt, because the model already ignored a prompt rule.
+  - Zero rows for a multi-word query → exactly one retry with the query's longest word, and the result says `retried_with`. Spec §3 puts the loosened retry in the tool, not in the prompt, because the model already ignored a prompt rule. The prompt asks for NO second catalog search, so the retry count is one and it is the tool's.
 - [ ] **Step 2:** Run them. They are expected to FAIL.
 - [ ] **Step 3:** Implement in `supabase.ts` and the registry. Update `connectorUsageGuide("supabase")` so the model knows `query` is the product words in the customer's language.
 - [ ] **Step 4:** Run both suites (`ai-agent-adapters`, `ai-agent-reply` `connectorRouting`/`tools`). Expected: PASS.
@@ -315,11 +316,10 @@ export function escalationApologyText(
 
 ### Task 6: curemedkw catalog tool and the not-found rule
 
-- [ ] **Step 1: Prompt rule.** The tool already retries once (Task 5). In `buildSystemPrompt` (`logic.ts:529`), when a catalog tool is present, add one fixed paragraph:
-  - Search with the product words.
-  - On no result, search once more with a looser query (brand only, or the English/Arabic name).
-  - Then ask the customer for the product name or a photo.
-  - Escalate only when the customer asks for a person or after two searches found nothing.
+- [ ] **Step 1: Prompt rule.** The tool makes the ONE loosened search itself (Task 5), so the prompt asks for no second catalog search. In `buildSystemPrompt` (`logic.ts:529`), when a catalog tool is present, add one fixed paragraph:
+  - Search with the product words, exactly as the customer wrote them.
+  - If the search finds nothing -- the tool has already retried with a shorter word by itself when the query had more than one word -- search the knowledge base for the product before you ask the customer for anything: the catalog can be stale or incomplete, and the re-ingested product sheet still knows the product. Only when the knowledge base has nothing either, ask the customer for the product name as printed on the pack, or for a photo. Do not say the store does not sell it.
+  - Escalate only when the customer asks for a person or after the searches found nothing.
   - Always give the `product_url` from the result, as is.
   - `price_hidden` → say the price is on request.
   - `shopping_enabled=false` → browse only.
@@ -357,12 +357,14 @@ export function escalationApologyText(
   - Accept `model_override: string` only when `dryRun` is true. It must be a model id present in `ai_agent_allowed_models`.
   - When it is set, the chain is that one model with no fallback.
   - Test: an override outside a dry run is ignored; an override not in the allowed list → 400.
-- [ ] **Step 2: Probe script.** Arguments: `--conversation wa_96560003759_96555683677 --models a,b,c,...`.
+- [ ] **Step 2: Probe script.** Arguments: `--conversation wa_<owner-number>_<customer-number> --models a,b,c,...`.
   - Reads the conversation's customer turns from `ai_thread_messages` with the service role.
   - Replays under a synthetic conversation id `dryrun_<model>_<timestamp>`, never the real one. The sandbox still upserts `ai_threads` (`index.ts:713`) and resolves (and may expire) the conversation's override.
   - Asserts `dryRun` skips the Task 4 claims and `take_unanswered_escalation`.
   - For each model, replays each turn through the sandbox with `dryRun`, carrying the same history.
-  - Writes `docs/superpowers/reports/2026-11-12-curemed-model-dryrun.md` with columns: model, turn, latency ms, reply language correct (`dominantReplyLanguage` vs expected), catalog tool called with non-empty query, any URL present, reply excerpt (120 chars). The URL column says "any URL present" and not "product link present": the sandbox hands the probe the tool CALLS it made and never the rows the catalog returned, so the probe cannot tell the catalog's `product_url` from a homepage or a tracking link.
+  - Writes `docs/superpowers/reports/2026-11-12-curemed-model-dryrun.md` with columns: model, turn, latency ms, reply language correct (`dominantReplyLanguage` vs expected), catalog tool called with non-empty query, any URL present, reply excerpt (120 chars), status. The URL column says "any URL present" and not "product link present": the sandbox hands the probe the tool CALLS it made and never the rows the catalog returned, so the probe cannot tell the catalog's `product_url` from a homepage or a tracking link.
+  - The tracked report carries no customer data: the conversation id is redacted and the reply text is never written, only its length. The unredacted detail goes to the same path with a `.local` suffix, which `.gitignore` already ignores -- it must never be committed.
+  - The report says what it does not measure: catalog grounding is NOT one of its measurements, because the sandbox never exposes the rows the catalog returned. A model that searches and then answers something unrelated scores the same as one that answers from the rows, so the owner reads the answers in the owner copy before choosing a model. The design's "catalog-grounded answer" column is therefore not produced, and the plan does not pretend otherwise.
   - Nothing is sent: the sandbox path never calls a sender.
 - [ ] **Step 3:** Run against 5–6 models from `ai_agent_allowed_models`, after Tasks 1–6 are live. Commit the report.
 - [ ] **Step 4:** Owner card: pick the primary and the fallback. Then set `system_settings` `default_ai_model_agent*`, or the account's own tier, as chosen.
@@ -380,16 +382,17 @@ export function escalationApologyText(
   4. `20261113220000` — the claim of a build that predates the lease is lease-shaped too, so no claim can be stranded: a claim that cannot lapse is a notice nobody will ever send.
   5. `20261113230000` — the escalation marker of an expired window is written the way the thread is (an upsert), so it survives a thread that is created at the same moment.
   6. `20261113240000` — every handoff claim carries a token of its own, the one-time notice is written together with the claim it spends, and the delivery claim carries the payload it read. It must land BEFORE the edge deployment for the same reason as step 3: the new build calls `claim_unanswered_escalation` for a token, completes and releases the escalation with that token, persists the one-time notice with `persist_human_mode_ack_and_complete_claim`, and claims a row for delivery with `claim_agent_reply_for_delivery` — none of which exist before it. It is safe to apply while the build that is live now keeps running: that build calls none of them.
+  7. `20261113253000` — every statement that moves a row of `pending_agent_replies` is bound to the tenant the caller names, so a row of another tenant is refused. It must land BEFORE the edge deployment, for the same reason as steps 3 and 6: the new build calls `advance_agent_reply_for_owner`, `advance_agent_reply_kind_for_owner` and `claim_agent_reply_for_delivery_for_owner`, and passes the tenant with every transition — none of which exist before it. It is safe to apply while the build that is live now keeps running: that build calls `advance_agent_reply`, which this migration deliberately leaves untouched, because a second arity of that name would make the live call ambiguous. A LATER follow-up migration may retire `advance_agent_reply` and the two tenant-less arities, once the new build is the only caller.
   - The order is a strict order, and every step before the edge deployment is backward compatible with the edge code that is live now:
     - The edge build that is live now calls exactly one of these functions, `advance_agent_reply` (`_shared/pendingReplies.ts:239`), and every migration above leaves it exactly as it is.
     - The edge build that is live now calls NONE of `claim_human_mode_ack`, `release_human_mode_ack`, `take_unanswered_escalation`, `restore_unanswered_escalation` — they are new in this branch, and the build that ships with it calls the LEASED variants instead. So no claim can exist in the shape the old functions write, and the rollout gap cannot strand one.
-    - The new edge build calls the lease RPCs and `advance_agent_reply_kind`, so it may only be deployed AFTER steps 3 to 6 are applied. Nothing in the new build works against a database without them.
+    - The new edge build calls the lease RPCs, `advance_agent_reply_kind` and the `*_for_owner` transitions, so it may only be deployed AFTER steps 3 to 7 are applied. Nothing in the new build works against a database without them.
     - Every step redefines functions only: no table is changed, so a step that is applied twice, or a step that is applied while an old edge build is still running, leaves the old build working.
 - [ ] Merge only after the owner card.
 - [ ] After the sync:
   - Verify hashes.
   - Run Task 1 Step 6 and Task 6 Step 3.
-  - Ping T3-Curemedkw-Manager to re-test from +96555683677: greeting, Arabic product with link, image in Arabic, escalation ack.
+  - Ping T3-Curemedkw-Manager to re-test from the customer's number: greeting, Arabic product with link, image in Arabic, escalation ack.
   - Prove the handoff wiring live. A sandbox run bypasses the gate, so only a real WhatsApp message exercises it:
     1. Escalate, then send two messages. Expect exactly one ack, `ai_agent_logs.status = 'human_mode_ack'` once, and one held `user` row in `ai_thread_messages` for the second message.
     2. Move `ai_conversation_modes.expires_at` into the past with psql and send a message. Expect a reply opening with the apology, and `ai_threads.unanswered_escalation_since` NULL afterwards.
