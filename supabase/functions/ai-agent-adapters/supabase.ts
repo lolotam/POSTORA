@@ -208,6 +208,18 @@ function splitColumns(raw: unknown): string[] {
 }
 
 /**
+ * A wildcard is not a named allow-list.
+ *
+ * "*" means "every column the row has", so the rows must survive a projection
+ * built from it -- a projection that kept only a field literally named "*"
+ * would empty every ordinary row -- and nobody named a column, so nobody
+ * vouched for one: the structural redaction pass still applies.
+ */
+function isWildcardSelection(columns: string[]): boolean {
+  return columns.includes("*");
+}
+
+/**
  * Per-table columns beat the flat list, which beats the model, which beats star.
  *
  * The flat select_columns is one string applied to whichever table the model
@@ -273,7 +285,7 @@ export function resolveColumns(
           `No columns are allowed on "${table}" for this connector.`,
         );
       }
-      return { select: columns.join(","), explicit: true };
+      return { select: columns.join(","), explicit: !isWildcardSelection(columns) };
     }
     // An ACTIVE map that does not name this table is refused, not widened.
     // Deleting or mistyping a table's entry would otherwise take the agent
@@ -287,7 +299,7 @@ export function resolveColumns(
     }
   }
   const flat = splitColumns(settings.select_columns);
-  if (flat.length) return { select: flat.join(","), explicit: true };
+  if (flat.length) return { select: flat.join(","), explicit: !isWildcardSelection(flat) };
   const fromModel = splitColumns(modelSelect);
   if (fromModel.length) return { select: fromModel.join(","), explicit: false };
   return { select: "*", explicit: false };
@@ -321,7 +333,20 @@ function rpcColumns(invocation: ConnectorInvocation): ResolvedColumns {
     : allowList.length === 1
     ? allowList[0]
     : null;
-  if (catalogTable) return resolveColumns(settings, catalogTable, null);
+  if (catalogTable) {
+    // The allow-list and the map must AGREE about the table the function
+    // returns. A map that names a table the allow-list excludes must not grant
+    // it columns: the operator's table-scoped restriction has to hold, so a
+    // map naming an excluded table is refused instead of widening the result
+    // to every column.
+    if (allowList.length > 0 && !allowList.includes(catalogTable)) {
+      throw new SupabaseValidationError(
+        "supabase_resource_refused",
+        `Table "${catalogTable}" is not allowed for this connector. Allowed tables: ${allowList.join(", ")}.`,
+      );
+    }
+    return resolveColumns(settings, catalogTable, null);
+  }
   if (mapTables.length > 1 || allowList.length > 1) {
     throw new SupabaseValidationError(
       "supabase_columns_unmapped",
@@ -329,17 +354,30 @@ function rpcColumns(invocation: ConnectorInvocation): ResolvedColumns {
     );
   }
   const flat = splitColumns(settings.select_columns);
-  if (flat.length) return { select: flat.join(","), explicit: true };
+  if (flat.length) return { select: flat.join(","), explicit: !isWildcardSelection(flat) };
   return { select: "*", explicit: false };
 }
 
 /**
  * The projection PostgREST applies for a table read, applied here to an RPC
  * result: a column the operator did not allow never leaves the adapter.
+ *
+ * A row that is not a plain object cannot be projected onto a named column
+ * list -- a JSON array or a scalar has no field to keep -- so it is refused
+ * rather than passed through. Passing it through would hand the model whatever
+ * the function returned, outside the operator's projection, and the structural
+ * redaction pass does not run either, because the operator's list IS the
+ * approval. A configuration that allows every column has no projection to
+ * break, so those rows pass.
  */
 function projectColumns(row: unknown, columns: ResolvedColumns): unknown {
   if (!columns.explicit) return row;
-  if (typeof row !== "object" || row === null || Array.isArray(row)) return row;
+  if (typeof row !== "object" || row === null || Array.isArray(row)) {
+    throw new SupabaseValidationError(
+      "supabase_response_invalid",
+      "Supabase returned a row that is not an object, so the connector's column list cannot be applied to it.",
+    );
+  }
   const allowed = new Set(columns.select.split(",").map((column) => column.trim()));
   return Object.fromEntries(
     Object.entries(row as Record<string, unknown>).filter(([key]) => allowed.has(key)),
@@ -878,11 +916,10 @@ async function probeRpc(
   dependencies: AdapterDependencies,
   fn: string,
   anonKey: string,
+  deadline: number,
 ): Promise<void> {
   rpcColumns(invocation);
   const search: RpcSearch = { ...rpcSearchFor(invocation, fn, anonKey), limit: 1 };
-  const callerBudget = dependencies.callBudgetMs ?? SUPABASE_CALL_TIMEOUT_MS;
-  const deadline = Date.now() + Math.min(SUPABASE_LOOP_BUDGET_MS, callerBudget - SUPABASE_MIN_HOP_MS);
   await getRpc(search, CONNECTION_PROBE_QUERY, dependencies, deadline);
 }
 
@@ -890,11 +927,17 @@ async function probeRpc(
  * The probe for a connector that may read a table: one row of one allowed table.
  *
  * Returns the failure to report, or null when the table answered.
+ *
+ * The deadline is the WHOLE probe's, shared with the function probe, so the
+ * table probe gets only the time the function probe left. safeVendorFetch
+ * restarts its timer per redirect hop, so the hop's own timeout is capped at
+ * the remaining time and the outer race bounds the request AND its body read.
  */
 async function probeTable(
   invocation: ConnectorInvocation,
   dependencies: AdapterDependencies,
   anonKey: string,
+  deadline: number,
 ): Promise<ConnectorFailure | null> {
   const { url: baseUrl, schema } = buildUrl(invocation);
   const headers = {
@@ -907,7 +950,21 @@ async function probeTable(
   // operator never configured.
   const url = new URL(baseUrl.toString());
   url.searchParams.set("limit", "1");
-  const response = await safeVendorFetch(url.toString(), { method: "GET", headers }, dependencies);
+  const remaining = deadline - Date.now();
+  if (remaining <= 0) {
+    // Nothing is left for a request: starting one would overrun the caller.
+    throw new SupabaseDeadlineError();
+  }
+  const abort = new AbortController();
+  const response = await withDeadline(
+    safeVendorFetch(
+      url.toString(),
+      { method: "GET", headers, signal: abort.signal },
+      { ...dependencies, timeoutMs: Math.max(0, Math.min(dependencies.timeoutMs, remaining)) },
+    ),
+    remaining,
+    abort,
+  );
   if (!response.ok) {
     // A 400 here is almost always a column the model invented in `select`
     // or `filters`; saying so lets it retry without them. The vendor's own
@@ -920,7 +977,7 @@ async function probeTable(
       response.status,
     );
   }
-  const payload = await readJson(response);
+  const payload = await withDeadline(readJson(response), deadline - Date.now(), abort);
   if (isPostgrestErrorBody(payload)) {
     return supabaseFailure("supabase_postgrest_error", "Supabase returned a PostgREST error.", response.status);
   }
@@ -1170,17 +1227,23 @@ async function callSupabase(
     const fn = capability === "search_products" ? rpcFunction(settings) : null;
 
     if (invocation.request.action === "test_connection") {
+      // ONE deadline for the WHOLE probe. The caller's budget covers the whole
+      // adapter call, so the function probe and the table probe share it: the
+      // second probe gets only the time the first left, and a slow or
+      // redirecting endpoint cannot restart the clock.
+      const callerBudget = dependencies.callBudgetMs ?? SUPABASE_CALL_TIMEOUT_MS;
+      const probeDeadline = Date.now() + Math.min(SUPABASE_LOOP_BUDGET_MS, callerBudget - SUPABASE_MIN_HOP_MS);
       // The probe asks the FUNCTION whenever the connector has one, because the
       // catalog search uses it: a probe that only reads the table reports success
       // for a connector whose function is missing, misnamed or unreachable, and
       // every search afterwards fails.
       const probeFunction = rpcFunction(settings);
       if (probeFunction) {
-        await probeRpc(invocation, dependencies, probeFunction, anonKey);
+        await probeRpc(invocation, dependencies, probeFunction, anonKey, probeDeadline);
         // A connector that may also read a table needs the table probe too: the
         // capabilities that read rows go there.
         if (tableAllowList(settings).length > 0) {
-          const tableFailure = await probeTable(invocation, dependencies, anonKey);
+          const tableFailure = await probeTable(invocation, dependencies, anonKey, probeDeadline);
           if (tableFailure) return tableFailure;
         }
         return {
@@ -1191,7 +1254,7 @@ async function callSupabase(
           read_only: true,
         };
       }
-      const tableFailure = await probeTable(invocation, dependencies, anonKey);
+      const tableFailure = await probeTable(invocation, dependencies, anonKey, probeDeadline);
       if (tableFailure) return tableFailure;
       return {
         ok: true,

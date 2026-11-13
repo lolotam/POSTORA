@@ -455,3 +455,121 @@ Deno.test("count mode is refused for a function-backed search rather than answer
   assertEquals(errorCodeOf(result), "supabase_count_unsupported");
   assertEquals(calls.length, 0);
 });
+
+// ---------------------------------------------------------------------------
+// The review findings of 2026-11-13. Each test fails on the code it fixes:
+// the restriction that was widened, the rows the wildcard emptied, the row
+// that skipped the projection and the probe that outlived its budget.
+// ---------------------------------------------------------------------------
+
+Deno.test("a column map that names a table the allow-list excludes is refused, not widened", async () => {
+  // The map says the function returns the rows of "orders" and allows every
+  // column there, but the allow-list does not include that table. The
+  // operator's table-scoped restriction has to hold: the map must not grant
+  // the excluded table its columns.
+  const { deps, calls } = recordingDeps([FIXTURE]);
+
+  const result = await search(
+    catalogTool({
+      rpc_allow_list: "agent_search_products",
+      column_map: JSON.stringify({ orders: "*" }),
+    }),
+    { query: "heel" },
+    deps,
+  );
+
+  assertEquals(errorCodeOf(result), "supabase_resource_refused");
+  assertEquals(calls.length, 0, "a configuration that cannot work is refused before any request");
+});
+
+Deno.test("a wildcard column list keeps every column the function returned", async () => {
+  // "*" means "every column the row has". It is not a named allow-list, so it
+  // must not be projected like one: a projection that kept only a field
+  // literally named "*" emptied every ordinary row and answered "the catalog
+  // has nothing".
+  const { deps } = recordingDeps([FIXTURE]);
+
+  const data = dataOf(await search(rpcOnlyTool({ select_columns: "*" }), { query: "heel" }, deps));
+
+  assertEquals(data.row_count, 2);
+  const rows = data.rows as Record<string, unknown>[];
+  assertEquals(rows[0].name_ar, "كريم الكعب التجريبي");
+  assertEquals(rows[0].product_url, "https://example.com/product/test-heel-cream");
+});
+
+Deno.test("a row that is not an object is refused when the operator named the columns", async () => {
+  // A JSON array or a scalar has no field to keep, so it cannot be projected
+  // onto the operator's column list. Passing it through would hand the model
+  // whatever the function returned, outside the projection -- and the
+  // structural redaction pass does not run for an operator-approved list.
+  for (const row of [["a", "b"], "just a string", 42]) {
+    const { deps } = recordingDeps([[row]]);
+
+    const result = await search(rpcOnlyTool({ select_columns: "name_ar" }), { query: "heel" }, deps);
+
+    assertEquals(errorCodeOf(result), "supabase_response_invalid");
+  }
+});
+
+Deno.test("a row that is not an object passes when every column is allowed", async () => {
+  // There is no projection to break, so the row is the data.
+  const { deps } = recordingDeps([["just a string"]]);
+
+  const result = await search(rpcOnlyTool({ select_columns: "*" }), { query: "heel" }, deps);
+
+  assertEquals(errorCodeOf(result), undefined);
+  assertEquals((dataOf(result).rows as unknown[])[0], "just a string");
+});
+
+Deno.test("the connection probe shares one deadline, so a hanging table probe cannot outlive the caller's budget", async () => {
+  // The caller's budget covers the WHOLE adapter call, so the function probe
+  // and the table probe share one deadline. The table probe's body never
+  // ends: without the shared deadline the probe would never answer.
+  const calls: Call[] = [];
+  const deps: AdapterDependencies = {
+    fetch: (url, init) => {
+      calls.push({
+        url: String(url),
+        method: init?.method ?? "GET",
+        body: null,
+        headers: (init?.headers ?? {}) as Record<string, string>,
+      });
+      if (calls.length === 1) {
+        // The function probe answers at once.
+        return Promise.resolve(
+          new Response("[]", { status: 200, headers: { "Content-Type": "application/json" } }),
+        );
+      }
+      // The table probe answers with headers and a body that never ends.
+      return Promise.resolve(
+        new Response(
+          new ReadableStream({ start() { /* never enqueues */ } }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        ),
+      );
+    },
+    timeoutMs: 1_000,
+    maxRedirects: 3,
+    callBudgetMs: 3_200,
+    assertPublicHttpsUrl: (rawUrl) => Promise.resolve(new URL(rawUrl)),
+    log: () => {},
+  };
+
+  const outcome = await Promise.race([
+    executeConnector(
+      {
+        tool: catalogTool(),
+        credentials: { anon_key: ANON_KEY },
+        request: { action: "test_connection", parameters: {} },
+      },
+      deps,
+    ).then((result) => ({ kind: "result" as const, result })),
+    new Promise<{ kind: "timeout" }>((resolve) => setTimeout(() => resolve({ kind: "timeout" }), 3_000)),
+  ]);
+
+  assertEquals(outcome.kind, "result", "the probe must answer inside the caller's budget");
+  if (outcome.kind !== "result") return;
+  assertEquals(outcome.result.ok, false);
+  assertEquals(errorCodeOf(outcome.result), "supabase_timeout");
+  assertEquals(calls.length, 2, "the function probe and the table probe both ran");
+});

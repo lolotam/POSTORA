@@ -1349,6 +1349,17 @@ Deno.test("column_map accepts a comma string per table as well as an array", () 
   assertEquals(resolveColumns({ column_map: '{"products":"id, price"}' }, "products", null).select, "id,price");
 });
 
+Deno.test("a wildcard column list is not a named allow-list", () => {
+  // "*" means "every column the row has". Treating it as a named list made the
+  // RPC projection keep only a field literally named "*", which emptied every
+  // row, and it skipped the structural redaction pass nobody approved.
+  assertEquals(resolveColumns({ select_columns: "*" }, "products", null).select, "*");
+  assertEquals(resolveColumns({ select_columns: "*" }, "products", null).explicit, false);
+  assertEquals(resolveColumns({ column_map: '{"products":["*"]}' }, "products", null).explicit, false);
+  // A named list is still the operator's approval.
+  assertEquals(resolveColumns({ select_columns: "id,name" }, "products", null).explicit, true);
+});
+
 // ---------------------------------------------------------------------------
 // Filters are restricted to the resolved column list. `select` limits what
 // comes back; without this the model could still filter on an excluded column
