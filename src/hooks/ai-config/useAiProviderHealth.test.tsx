@@ -25,6 +25,23 @@ describe("useAiProviderHealth", () => {
     queryClient.clear();
   });
 
+  it('refreshes both catalogue and health after a completed sync', async () => {
+    queryClient.setQueryData(['ai-config'], { models: ['old'] });
+    queryClient.setQueryData(['ai-provider-health'], []);
+    invoke.mockResolvedValue({ data: { done: true, results: [], skipped: [], summary: {} }, error: null });
+    const { result } = renderHook(() => useRunProviderHealth(), { wrapper });
+    await result.current.run();
+    expect(queryClient.getQueryState(['ai-config'])?.isInvalidated).toBe(true);
+    expect(queryClient.getQueryState(['ai-provider-health'])?.isInvalidated).toBe(true);
+  });
+
+  it('exposes an initial stored-health read failure', async () => {
+    invoke.mockResolvedValue({ data: null, error: new Error('unavailable') });
+    const { result } = renderHook(() => useProviderHealthStatus(), { wrapper });
+    await waitFor(() => expect(result.current.error).toBeTruthy());
+    expect(result.current.data).toBeUndefined();
+  });
+
   it("reads the stored results without running anything", async () => {
     invoke.mockResolvedValue({
       data: { results: [{ provider_code: "claude", auth_method: "api_key", status: "connected" }] },

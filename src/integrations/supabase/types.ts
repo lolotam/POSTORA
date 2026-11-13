@@ -2777,6 +2777,90 @@ export type Database = {
           },
         ]
       }
+      ai_provider_health_runs: {
+        Row: {
+          run_id: string
+          scope: string
+          admin_id: string | null
+          started_at: string
+          completed_at: string | null
+          expires_at: string
+        }
+        Insert: {
+          run_id: string
+          scope: string
+          admin_id?: string | null
+          started_at?: string
+          completed_at?: string | null
+          expires_at?: string
+        }
+        Update: {
+          run_id?: string
+          scope?: string
+          admin_id?: string | null
+          started_at?: string
+          completed_at?: string | null
+          expires_at?: string
+        }
+        Relationships: []
+      }
+      ai_provider_health_completions: {
+        Row: {
+          run_id: string
+          provider_code: string
+          auth_method: string
+          recorded_at: string
+        }
+        Insert: {
+          run_id: string
+          provider_code: string
+          auth_method: string
+          recorded_at?: string
+        }
+        Update: {
+          run_id?: string
+          provider_code?: string
+          auth_method?: string
+          recorded_at?: string
+        }
+        Relationships: [{ foreignKeyName: "ai_provider_health_completions_provider_code_fkey"; columns: ["provider_code"]; referencedRelation: "ai_providers"; referencedColumns: ["provider_code"] }]
+      }
+      ai_provider_health_alerts: {
+        Row: {
+          alert_id: string
+          provider_code: string
+          auth_method: string
+          status: string
+          reason: string | null
+          created_at: string
+          claim_token: string | null
+          claimed_at: string | null
+          notified_at: string | null
+        }
+        Insert: {
+          alert_id: string
+          provider_code: string
+          auth_method: string
+          status: string
+          reason?: string | null
+          created_at?: string
+          claim_token?: string | null
+          claimed_at?: string | null
+          notified_at?: string | null
+        }
+        Update: {
+          alert_id?: string
+          provider_code?: string
+          auth_method?: string
+          status?: string
+          reason?: string | null
+          created_at?: string
+          claim_token?: string | null
+          claimed_at?: string | null
+          notified_at?: string | null
+        }
+        Relationships: [{ foreignKeyName: "ai_provider_health_alerts_provider_code_fkey"; columns: ["provider_code"]; referencedRelation: "ai_providers"; referencedColumns: ["provider_code"] }]
+      }
       ai_provider_health: {
         Row: {
           alert_id: string | null
@@ -13103,8 +13187,21 @@ export type Database = {
           alert_id: string | null
         }[]
       }
+      admit_ai_provider_health_run: {
+        Args: { p_scope: string; p_run_id: string; p_admin_id: string | null }
+        Returns: string
+      }
+      complete_ai_provider_health_run: {
+        Args: { p_run_id: string }
+        Returns: undefined
+      }
+      write_ai_health_catalog: {
+        Args: { p_holder: string; p_rows: Json; p_stamp_key: string; p_at: string }
+        Returns: undefined
+      }
       mark_ai_provider_health_notified: {
         Args: {
+          p_alert_id?: string | null
           p_claim_token: string
           p_provider_code: string
           p_auth_method: string

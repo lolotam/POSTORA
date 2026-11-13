@@ -11,6 +11,7 @@ import { resolveProviderKey } from '../_shared/providerKeys.ts';
 import type { RowReader } from '../_shared/providerEndpoint.ts';
 import { loadProbeTarget, probeProvider } from '../_shared/aiProviderTest.ts';
 import { groupCatalogueRows } from '../_shared/aiModelCatalogue.ts';
+import { assertProviderUrl } from '../_shared/providerUrlPolicy.ts';
 
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!;
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
@@ -68,18 +69,18 @@ serve(async (req) => {
           // The catalogue is keyed by credential kind. Both kinds are read here
           // and split below, so the subscription rows are visible without the
           // API-key list changing.
-          supabase.from('ai_models').select('*, ai_providers(provider_code, name)').in('auth_method', ['api_key', 'oauth']).order('name'),
+          supabase.from('ai_models').select('*, ai_providers(provider_code, name)').order('name')
+            .then(({ data, error }) => ({ ...groupCatalogueRows(data ?? []), error })),
           // Widened beyond the default_ai_model* tier rows so the admin UI can also
           // read the model_catalog_synced_at_<code> rows sync-models writes, and the
           // agent_triage_enabled on/off switch.
           supabase.from('system_settings').select('*').or('key.like.default_ai_model%,key.like.model_catalog_synced_at_%,key.eq.agent_triage_enabled'),
         ]);
         if (pRes.error || mRes.error || sRes.error) throw new Error('The AI configuration could not be read');
-        const catalogue = groupCatalogueRows((mRes.data || []) as Array<{ auth_method?: string | null }>);
         return new Response(JSON.stringify({
           providers: pRes.data || [],
-          models: catalogue.models,
-          oauthModels: catalogue.oauthModels,
+          models: mRes.models,
+          oauthModels: mRes.oauthModels,
           settings: sRes.data || [],
         }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
       }
@@ -284,6 +285,7 @@ serve(async (req) => {
       }
 
       if (action === 'add-provider') {
+        assertProviderUrl(body.api_endpoint);
         const { data, error } = await supabase.from('ai_providers').insert({
           provider_code: body.provider_code, name: body.name, api_endpoint: body.api_endpoint,
           api_key_env_var: body.api_key_env_var, api_type: body.api_type || 'openai',

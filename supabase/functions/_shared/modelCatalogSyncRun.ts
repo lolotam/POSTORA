@@ -3,6 +3,7 @@ import {
   mapIdOnlyChatCatalog, mapOpenAICatalog, mapOpenRouterCatalog, mapVercelCatalog, mapXaiCatalog, planCatalogSync,
 } from "./modelCatalogSync.ts";
 import { resolveProviderKey } from "./providerKeys.ts";
+import { providerFetch } from './providerUrlPolicy.ts';
 
 export const SYNCABLE_PROVIDERS = [
   "vercel", "openrouter", "deepseek", "claude", "gemini", "openai", "zai", "minimax", "xai",
@@ -114,12 +115,14 @@ const CATALOGUE: Record<string, CatalogueSource> = {
 type DbError = { message: string; code?: string } | null;
 type DbResult = { data: unknown; error: DbError };
 interface CatalogQuery extends PromiseLike<DbResult> {
+  abortSignal(signal: AbortSignal): CatalogQuery;
   eq(column: string, value: string): CatalogQuery;
   like(column: string, pattern: string): CatalogQuery;
   maybeSingle(): PromiseLike<DbResult>;
 }
 /** The slice of a service-role Supabase client the sync uses. */
 export interface CatalogDb {
+  rpc?(name: string, args: Record<string, unknown>): CatalogQuery;
   from(table: string): {
     select(columns: string): CatalogQuery;
     upsert(values: unknown, options: { onConflict: string }): PromiseLike<{ error: DbError }>;
@@ -164,13 +167,16 @@ export async function runCatalogSync(
   db: CatalogDb,
   providerCode: string,
   fetchImpl: typeof fetch = fetch,
-  options: { dryRun?: boolean; authMethod?: CatalogAuthMethod; catalogue?: MappedCatalog } = {},
+  options: { dryRun?: boolean; authMethod?: CatalogAuthMethod; catalogue?: MappedCatalog; signal?: AbortSignal; leaseHolder?: string } = {},
 ): Promise<SyncReport> {
   const authMethod = options.authMethod ?? "api_key";
   const source = CATALOGUE[providerCode];
-  if (!source) throw new CatalogSyncError(`Provider ${providerCode} is not syncable`);
-  const { data: providerRow, error: providerError } = await db.from("ai_providers")
-    .select("id, provider_code, api_key_env_var").eq("provider_code", providerCode).maybeSingle();
+  if (!options.catalogue && !source) throw new CatalogSyncError(`Provider ${providerCode} is not syncable`);
+  const bounded = <T extends { abortSignal(signal: AbortSignal): T }>(query: T): T =>
+    options.signal ? query.abortSignal(options.signal) : query;
+  options.signal?.throwIfAborted();
+  const { data: providerRow, error: providerError } = await bounded(db.from("ai_providers")
+    .select("id, provider_code, api_key_env_var").eq("provider_code", providerCode)).maybeSingle();
   // A failed read must not read as "provider missing".
   if (providerError) throw new Error("ai_providers read failed");
   const provider = providerRow as { id: string; api_key_env_var: string } | null;
@@ -184,13 +190,13 @@ export async function runCatalogSync(
   } else {
     let key: string | null = null;
     if (source.needsKey) {
-      key = await resolveProviderKey(db, providerCode);
+      key = await resolveProviderKey(db, providerCode, options.signal);
       if (!key) throw new CatalogSyncError(`API key ${provider.api_key_env_var} not configured`);
     }
     const { url, headers } = source.request(key);
     let res: Response;
     try {
-      res = await fetchImpl(url, { headers, signal: AbortSignal.timeout(20_000) });
+      res = await providerFetch(fetchImpl)(url, { headers, signal: options.signal ?? AbortSignal.timeout(20_000) });
     } catch (e) {
       // A rejected fetch (DNS, connection refused, TLS, abort) throws a TypeError whose message embeds the
       // request URL, and some provider request could carry a secret in that URL. Never surface that message
@@ -207,12 +213,12 @@ export async function runCatalogSync(
   }
   if (!mapped.models.length) throw new CatalogSyncError(`${providerCode} returned an empty model catalogue`);
 
-  const { data: existingData, error: existingError } = await db.from("ai_models")
-    .select(MODEL_COLUMNS).eq("provider_id", provider.id).eq("auth_method", authMethod);
+  const { data: existingData, error: existingError } = await bounded(db.from("ai_models")
+    .select(MODEL_COLUMNS).eq("provider_id", provider.id).eq("auth_method", authMethod));
   if (existingError) throw new Error("ai_models read failed");
   const existing = (existingData ?? []) as ExistingModelRow[];
-  const { data: settings, error: settingsError } = await db.from("system_settings")
-    .select("key, value").like("key", "default_ai_model%");
+  const { data: settings, error: settingsError } = await bounded(db.from("system_settings")
+    .select("key, value").like("key", "default_ai_model%"));
   if (settingsError) throw new Error("system_settings read failed");
   const inUse = defaultModelsInUse((settings ?? []) as Array<{ value: unknown }>, providerCode, authMethod);
 
@@ -234,19 +240,30 @@ export async function runCatalogSync(
   ];
   const dryRun = options.dryRun === true;
   if (!dryRun) {
-    if (rows.length) {
-      const { error } = await db.from("ai_models").upsert(rows, { onConflict: "provider_id,model_id,auth_method" });
-      if (error) throw catalogueWriteError(error);
-    }
-    // The stamp key carries the credential kind, so an API-key sync and an OAuth
-    // sync of the same provider do not overwrite each other's stamp. The admin card
-    // reads the API-key key and falls back to the unsuffixed one for the rows that
-    // were written before the suffix existed.
+    options.signal?.throwIfAborted();
     const stampKey = `model_catalog_synced_at_${providerCode}_${authMethod}`;
-    const { error: stampError } = await db.from("system_settings").upsert(
-      { key: stampKey, value: { at: now } }, { onConflict: "key" },
-    );
-    if (stampError) throw new Error(`system_settings write failed: ${stampError.message}`);
+    if (options.leaseHolder) {
+      // The transaction locks and validates the request lease before writing.
+      // An aborted HTTP request cannot leave unfenced writes after lease takeover.
+      if (!db.rpc) throw new Error('Catalogue lease fencing is unavailable');
+      const { error } = await bounded(db.rpc('write_ai_health_catalog', {
+        p_holder: options.leaseHolder, p_rows: rows, p_stamp_key: stampKey, p_at: now,
+      }));
+      if (error) throw catalogueWriteError(error);
+    } else {
+      if (rows.length) {
+        const { error } = await db.from("ai_models").upsert(rows, { onConflict: "provider_id,model_id,auth_method" });
+        if (error) throw catalogueWriteError(error);
+      }
+      // The stamp key carries the credential kind, so an API-key sync and an OAuth
+      // sync of the same provider do not overwrite each other's stamp. The admin card
+      // reads the API-key key and falls back to the unsuffixed one for the rows that
+      // were written before the suffix existed.
+      const { error: stampError } = await db.from("system_settings").upsert(
+        { key: stampKey, value: { at: now } }, { onConflict: "key" },
+      );
+      if (stampError) throw new Error(`system_settings write failed: ${stampError.message}`);
+    }
   }
   return {
     added: plan.inserts.length, updated: plan.updates.length, deactivated: plan.deactivateIds.length,

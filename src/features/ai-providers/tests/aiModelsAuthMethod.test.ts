@@ -57,7 +57,11 @@ function unscopedReaders(source: string): string[] {
     // A row addressed by its primary key is unambiguous: the key is unique
     // across the credential kinds.
     const pinnedByPrimaryKey = /\.(?:eq|in)\(\s*["']id["']/.test(chain);
-    if (!pinnedByKind && !pinnedByPrimaryKey) violations.push(chain.split("\n")[0]);
+    // The admin list intentionally reads every kind, including unknown legacy
+    // values. Accept only a query whose own continuation groups those returned
+    // rows; an unrelated grouping call elsewhere cannot exempt an unscoped read.
+    const groupedByKind = /\.then\(\(\{\s*data\s*,\s*error\s*\}\)\s*=>\s*\(\{\s*\.\.\.groupCatalogueRows\(data\s*\?\?\s*\[\]\)/.test(chain);
+    if (!pinnedByKind && !pinnedByPrimaryKey && !groupedByKind) violations.push(chain.split("\n")[0]);
   }
   return violations;
 }
@@ -130,6 +134,8 @@ describe("the ai_models reader scanner", () => {
     ["a reader addressed by one id", READER_BY_ID, 0],
     ["a reader addressed by a list of ids", READER_BY_ID_LIST, 0],
     ["a reader whose filter follows a comment", READER_AFTER_A_COMMENT, 0],
+    ["an admin list grouping its own rows", `db.from('ai_models').select('*').then(({ data, error }) => ({ ...groupCatalogueRows(data ?? []), error }));`, 0],
+    ["an unscoped read with unrelated grouping", `${UNSCOPED_READER}\ngroupCatalogueRows(otherRows);`, 1],
   ];
 
   it.each(cases)("flags %s", (_label, source, expected) => {

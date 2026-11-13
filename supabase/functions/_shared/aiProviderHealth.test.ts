@@ -11,6 +11,13 @@ import {
   type HealthResult,
 } from "./aiProviderHealth.ts";
 
+Deno.test("health reasons never echo unrelated credentials or customer diagnostics", () => {
+  for (const status of [400, 402, 403, 408, 422, 429, 500, 503]) {
+    const out = classifyApiKeyFailure(status, '{"message":"Bearer other-token customer-private api_key=encoded%2Bkey"}', "known-key");
+    assert(!/other-token|customer-private|encoded|Bearer/.test(out.reason));
+  }
+});
+
 Deno.test("the target list holds one row per credential kind and never a provider without one", () => {
   const targets = planHealthTargets(
     [{ provider_code: "claude", name: "Claude" }, { provider_code: "openai", name: "OpenAI" }],
@@ -64,7 +71,7 @@ Deno.test("an invalid api key is a failure with a fixed sentence and no key", ()
 Deno.test("a provider that echoes the key back has it redacted", () => {
   const out = classifyApiKeyFailure(500, '{"error":{"message":"upstream rejected sk-live-ABCDEF"}}', "sk-live-ABCDEF");
   assert(!out.reason.includes("sk-live-ABCDEF"));
-  assert(out.reason.includes("[REDACTED]"));
+  assertEquals(out.reason, "The provider request failed (HTTP 500).");
 });
 
 Deno.test("a rate limit is a failure, not a re-login", () => {

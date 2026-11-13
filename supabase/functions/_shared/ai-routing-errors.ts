@@ -37,7 +37,7 @@ export function redactProviderUrl(message: string): string {
     .replace(/(https?:\/\/[^\s"'<>?]+)\?[^\s"'<>]*/g, "$1?[REDACTED]")
     // A credential-named parameter on its own, with or without a URL around it.
     .replace(
-      /([?&](?:key|api[_-]?key|token|access[_-]?token|secret|password|auth)=)[^&\s"'<>]*/gi,
+      /((?:^|[?&\s])(?:key|api[_-]?key|token|access[_-]?token|secret|password|auth)=)[^&\s"'<>]*/gi,
       "$1[REDACTED]",
     );
 }

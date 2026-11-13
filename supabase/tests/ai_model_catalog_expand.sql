@@ -41,6 +41,14 @@ BEGIN
   END IF;
 END $ame_constraints$;
 
+DO $ame_cron_paused$
+BEGIN
+  IF to_regclass('cron.job') IS NOT NULL AND EXISTS
+    (SELECT 1 FROM cron.job WHERE jobname LIKE 'ai-provider-health-%' AND active) THEN
+    RAISE EXCEPTION 'FAIL: EXPAND activated cron before endpoint deployment';
+  END IF;
+END $ame_cron_paused$;
+
 DO $ame_old_writer$
 DECLARE
   v_provider_id uuid;

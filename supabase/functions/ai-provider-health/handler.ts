@@ -11,7 +11,7 @@
 
 import { z } from "npm:zod@3.23.8";
 import { restrictedJsonResponse } from "../_shared/cors.ts";
-import { deriveRunId, type HealthResult } from "../_shared/aiProviderHealth.ts";
+import { deriveRunId, withSignal, type HealthResult } from "../_shared/aiProviderHealth.ts";
 import type { HealthChunkResponse } from "./run.ts";
 
 const LEASE_JOB = "ai-provider-health";
@@ -24,11 +24,13 @@ const LEASE_JOB = "ai-provider-health";
 const LEASE_TTL_SECONDS = 120;
 
 export interface HealthHandlerPorts {
-  runChunk(chunk: number, runId: string): Promise<HealthChunkResponse>;
+  runChunk(chunk: number, runId: string, holder: string, deadlineMs: number): Promise<HealthChunkResponse>;
   readResults(): Promise<HealthResult[]>;
   acquireLease(job: string, holder: string, ttlSeconds: number): Promise<boolean>;
   releaseLease(job: string, holder: string): Promise<boolean>;
-  isAuthorized(req: Request): Promise<{ ok: true } | { ok: false; response: Response }>;
+  admitRun(scope: "daily" | "manual", runId: string, adminId: string | null): Promise<"ready" | "complete" | "busy" | "cooldown">;
+  completeRun(runId: string): Promise<void>;
+  isAuthorized(req: Request): Promise<{ ok: true; adminId?: string | null } | { ok: false; response: Response }>;
 }
 
 /**
@@ -73,7 +75,8 @@ async function safeJson(req: Request): Promise<unknown> {
 
 export async function handleHealthRequest(req: Request, ports: HealthHandlerPorts): Promise<Response> {
   try {
-    return await routeHealthRequest(req, ports);
+    const deadline = Date.now() + 45_000;
+    return await withSignal(routeHealthRequest(req, ports, deadline), AbortSignal.timeout(45_000));
   } catch (error) {
     // The edge function must answer with a status, not with a stack trace. The
     // reason never leaves the server: only the name of the failure is logged.
@@ -82,9 +85,10 @@ export async function handleHealthRequest(req: Request, ports: HealthHandlerPort
   }
 }
 
-async function routeHealthRequest(req: Request, ports: HealthHandlerPorts): Promise<Response> {
+async function routeHealthRequest(req: Request, ports: HealthHandlerPorts, deadline: number): Promise<Response> {
   const auth = await ports.isAuthorized(req);
   if (!auth.ok) return auth.response;
+  if (Date.now() >= deadline) throw new Error('Health request deadline exceeded');
 
   const body = req.method === "POST" ? await safeJson(req) : null;
   const parsed = parseHealthRequest(body ?? (req.method === "GET" ? { action: "status" } : {}));
@@ -109,7 +113,17 @@ async function routeHealthRequest(req: Request, ports: HealthHandlerPorts): Prom
     return restrictedJsonResponse(req, { error: "busy" }, 409);
   }
   try {
-    const result = await ports.runChunk(parsed.chunk, runId);
+    const admission = await ports.admitRun(parsed.scope, runId, auth.adminId ?? null);
+    if (admission === 'busy' || admission === 'cooldown') {
+      console.info("event: 'ai_provider_health_run_refused'", admission);
+      return restrictedJsonResponse(req, { error: admission }, admission === 'busy' ? 409 : 429);
+    }
+    if (admission === 'complete') {
+      return restrictedJsonResponse(req, { run_id: runId, chunk: parsed.chunk, done: true,
+        next_chunk: null, results: [], skipped: [], summary: { total: 0, connected: 0, failed: 0, needs_relogin: 0 } }, 200);
+    }
+    const result = await ports.runChunk(parsed.chunk, runId, holder, Math.max(0, Math.min(40_000, deadline - Date.now() - 3_000)));
+    if (result.done) await ports.completeRun(runId);
     return restrictedJsonResponse(req, result, 200);
   } finally {
     try {

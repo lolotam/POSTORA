@@ -103,7 +103,7 @@ export async function fetchProviderHealth(): Promise<ProviderHealthRow[]> {
 /**
  * Runs one chunk of the check. The caller walks the chunks until the answer says it
  * is done; the run token is the same for every chunk of one run, so the server keeps
- * one run id and one lease for the whole click.
+ * one logical run id for the whole click. Each HTTP request has its own lease.
  */
 export async function runProviderHealthChunk(chunk: number, runToken: string): Promise<ProviderHealthChunk> {
   const { data, error } = await supabase.functions.invoke("ai-provider-health", {

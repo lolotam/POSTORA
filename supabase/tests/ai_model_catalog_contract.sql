@@ -183,6 +183,18 @@ BEGIN
   END IF;
 END $amc_auth_method$;
 
+DO $amc_invalid_kind$
+DECLARE v_provider uuid;
+BEGIN
+  SELECT id INTO v_provider FROM public.ai_providers WHERE provider_code = 'claude';
+  BEGIN
+    INSERT INTO public.ai_models(provider_id,model_id,name,auth_method)
+      VALUES(v_provider,'invalid-auth-fixture','Invalid','OAuth');
+    RAISE EXCEPTION 'FAIL: invalid catalogue credential kind accepted';
+  EXCEPTION WHEN check_violation THEN NULL;
+  END;
+END $amc_invalid_kind$;
+
 -- ---------------------------------------------------------------------------
 -- Cleanup (after)
 -- ---------------------------------------------------------------------------

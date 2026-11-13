@@ -16,7 +16,6 @@ import {
   classifyApiKeyFailure,
   classifyOAuthFailure,
   planHealthTargets,
-  sanitizeReason,
   sliceHealthChunk,
   summarizeHealthResults,
   withSignal,
@@ -30,11 +29,11 @@ import { ProviderTestError } from "../_shared/providerErrors.ts";
 import { ProviderReadError } from "../_shared/aiProviderTest.ts";
 
 export interface HealthRunPorts {
-  listApiKeyProviders(): Promise<Array<{ provider_code: string; name: string }>>;
-  listOAuthConnections(): Promise<
+  listApiKeyProviders(signal: AbortSignal): Promise<Array<{ provider_code: string; name: string }>>;
+  listOAuthConnections(signal: AbortSignal): Promise<
     Array<{ oauth_provider: string; provider_code: string; name: string; status: string }>
   >;
-  resolveApiKey(providerCode: string): Promise<string | null>;
+  resolveApiKey(providerCode: string, signal: AbortSignal): Promise<string | null>;
   /**
    * The targets this run has already recorded.
    *
@@ -44,6 +43,7 @@ export interface HealthRunPorts {
    */
   listRecordedTargets(
     runId: string,
+    signal: AbortSignal,
   ): Promise<Array<{ provider_code: string; auth_method: string }>>;
   /** The probe, the token refresh and the sync of one target share ONE signal. */
   probeApiKey(target: HealthTarget, key: string, signal: AbortSignal): Promise<void>;
@@ -56,13 +56,13 @@ export interface HealthRunPorts {
     target: HealthTarget,
     signal: AbortSignal,
   ): Promise<{ added: number; updated: number; deactivated: number }>;
-  recordResult(result: HealthResult, runId: string): Promise<void>;
+  recordResult(result: HealthResult, runId: string, signal: AbortSignal): Promise<void>;
   /** Claims the providers whose alert is still pending; the token is the claim's identity. */
-  claimAlerts(claimToken: string): Promise<DegradedProvider[]>;
+  claimAlerts(claimToken: string, signal: AbortSignal): Promise<DegradedProvider[]>;
   /** Sends one admin alert. A failure here must not fail the run. */
   sendAlert(provider: DegradedProvider, signal?: AbortSignal): Promise<void>;
   /** Closes the claim of ONE row, so a failed send leaves only that row open. */
-  markAlertNotified(claimToken: string, provider: DegradedProvider): Promise<void>;
+  markAlertNotified(claimToken: string, provider: DegradedProvider, signal: AbortSignal): Promise<void>;
   now(): Date;
 }
 
@@ -98,8 +98,7 @@ function classifyTargetFailure(
 ): { status: HealthStatus; reason: string } {
   if (error instanceof AiOAuthError) return classifyOAuthFailure(error.code);
   if (error instanceof ProviderTestError) return classifyApiKeyFailure(error.status, error.body, apiKey);
-  const message = error instanceof Error ? error.message : String(error);
-  return { status: "failed", reason: sanitizeReason(message, apiKey) };
+  return { status: "failed", reason: "The provider could not be checked." };
 }
 
 /** What one target's test found. */
@@ -142,16 +141,16 @@ async function probeTarget(
       return { status: "needs_relogin", reason: classifyOAuthFailure("reauth_required").reason, apiKey: null };
     }
     if (target.auth_method === "oauth") {
-      await ports.probeOAuth(target, signal);
+      await withSignal(ports.probeOAuth(target, signal), signal);
       return { status: "connected", reason: null, apiKey: null };
     }
-    apiKey = await ports.resolveApiKey(target.provider_code);
+    apiKey = await withSignal(ports.resolveApiKey(target.provider_code, signal), signal);
     if (!apiKey) {
       // The planner already dropped the providers without a key, so reaching here
       // means the key vanished between the plan and the probe.
       throw new Error("The API key is no longer configured");
     }
-    await ports.probeApiKey(target, apiKey, signal);
+    await withSignal(ports.probeApiKey(target, apiKey, signal), signal);
     return { status: "connected", reason: null, apiKey };
   } catch (error) {
     // The provider's row could not be read. This is not a broken provider, so it
@@ -178,8 +177,8 @@ async function syncTarget(
   }
   try {
     const report = target.auth_method === "oauth"
-      ? await ports.syncOAuthCatalogue(target, signal)
-      : await ports.syncApiKeyCatalogue(target.provider_code, signal);
+      ? await withSignal(ports.syncOAuthCatalogue(target, signal), signal)
+      : await withSignal(ports.syncApiKeyCatalogue(target.provider_code, signal), signal);
     return {
       status: "connected",
       reason: probe.reason,
@@ -190,7 +189,7 @@ async function syncTarget(
   } catch (error) {
     return {
       status: "failed",
-      reason: sanitizeReason(error instanceof Error ? error.message : String(error), probe.apiKey),
+      reason: "The provider model catalogue could not be synchronized.",
       ...noCounts,
     };
   }
@@ -201,20 +200,14 @@ async function recordTargetResult(
   ports: HealthRunPorts,
   result: HealthResult,
   runId: string,
-): Promise<HealthResult> {
+  signal: AbortSignal,
+): Promise<HealthResult | null> {
   try {
-    await ports.recordResult(result, runId);
+    await withSignal(ports.recordResult(result, runId, signal), signal);
     return result;
   } catch (error) {
     console.error("event: 'ai_provider_health_write_failed'", error instanceof Error ? error.name : "error");
-    return {
-      ...result,
-      status: "failed",
-      reason: "The result could not be recorded.",
-      models_added: null,
-      models_updated: null,
-      models_deactivated: null,
-    };
+    return null;
   }
 }
 
@@ -259,7 +252,8 @@ async function runOneTarget(
     latency_ms: Date.now() - started,
     checked_at: checkedAt,
   };
-  return { result: await recordTargetResult(ports, result, runId) };
+  const recorded = await recordTargetResult(ports, result, runId, signal);
+  return recorded ? { result: recorded } : { skipReason: "The result could not be recorded." };
 }
 
 /**
@@ -284,7 +278,7 @@ async function sendOneAlert(
   try {
     // One row at a time: a send that failed for another provider must not close
     // this row's alert.
-    await ports.markAlertNotified(claimToken, provider);
+    await withSignal(ports.markAlertNotified(claimToken, provider, signal), signal);
   } catch (error) {
     console.error("event: 'ai_provider_alert_mark_failed'", error instanceof Error ? error.name : "error");
   }
@@ -304,16 +298,18 @@ async function sendClaimedAlerts(
   claimToken: string,
   budgetMs: number,
 ): Promise<void> {
+  if (budgetMs <= 0) return;
+  const deadline = Date.now() + budgetMs;
+  const phaseSignal = AbortSignal.timeout(Math.max(1, Math.floor(budgetMs)));
   let claimed: DegradedProvider[];
   try {
-    claimed = await ports.claimAlerts(claimToken);
+    claimed = await withSignal(ports.claimAlerts(claimToken, phaseSignal), phaseSignal);
   } catch (error) {
     console.error("event: 'ai_provider_alert_claim_failed'", error instanceof Error ? error.name : "error");
     return;
   }
   if (!claimed.length) return;
 
-  const deadline = Date.now() + budgetMs;
   for (const provider of claimed) {
     const remaining = deadline - Date.now();
     if (remaining <= 0) {
@@ -337,8 +333,10 @@ export async function runHealthChunk(
   ports: HealthRunPorts,
   options: HealthRunOptions,
 ): Promise<HealthChunkResponse> {
-  const apiKeyProviders = await ports.listApiKeyProviders();
-  const connections = await ports.listOAuthConnections();
+  const deadline = Date.now() + (options.deadlineMs ?? HEALTH_RUN_DEADLINE_MS);
+  const runSignal = AbortSignal.timeout(Math.max(1, Math.floor(deadline - Date.now())));
+  const apiKeyProviders = await withSignal(ports.listApiKeyProviders(runSignal), runSignal);
+  const connections = await withSignal(ports.listOAuthConnections(runSignal), runSignal);
   const oauthConnections = connections.filter((c) => c.status !== "reauth_required");
   const reauthConnections = connections.filter((c) => c.status === "reauth_required");
 
@@ -347,7 +345,7 @@ export async function runHealthChunk(
   // that vanishes mid-run fails that target instead of the whole run.
   const configured: Array<{ provider_code: string; name: string }> = [];
   for (const provider of apiKeyProviders) {
-    const key = await ports.resolveApiKey(provider.provider_code);
+    const key = await withSignal(ports.resolveApiKey(provider.provider_code, runSignal), runSignal);
     if (key) configured.push(provider);
   }
 
@@ -370,25 +368,31 @@ export async function runHealthChunk(
   //
   // A failed read fails the chunk. A read that failed must never look like "no
   // target was recorded", because that would probe every provider a second time.
-  const recorded = await ports.listRecordedTargets(options.runId);
+  const recorded = await withSignal(ports.listRecordedTargets(options.runId, runSignal), runSignal);
   const alreadyDone = new Set(recorded.map((r) => `${r.provider_code}:${r.auth_method}`));
   const remaining = targets.filter((t) => !alreadyDone.has(`${t.provider_code}:${t.auth_method}`));
 
   const { slice, done: covered, nextChunk } = sliceHealthChunk(remaining, options.chunk);
-  const deadline = Date.now() + (options.deadlineMs ?? HEALTH_RUN_DEADLINE_MS);
   const concurrency = options.concurrency ?? HEALTH_RUN_CONCURRENCY;
   const collected: Array<{ position: number; result?: HealthResult; skipReason?: string }> = [];
-  let index = 0;
+  const pending = new Set(slice.map((_target, position) => position));
+  const activeProviders = new Set<string>();
 
   async function worker() {
-    while (index < slice.length && Date.now() < deadline) {
-      const position = index++;
+    while (Date.now() < deadline) {
+      const position = [...pending].find((p) => !activeProviders.has(slice[p].provider_code));
+      if (position === undefined) return;
+      pending.delete(position);
       const target = slice[position];
-      // One signal per target: the probe, the token refresh and the catalogue sync
-      // of this target all run inside the same budget.
-      const signal = AbortSignal.timeout(HEALTH_TARGET_BUDGET_MS);
-      const outcome = await runOneTarget(ports, target, options.runId, signal);
-      collected.push({ position, ...outcome });
+      activeProviders.add(target.provider_code);
+      const signal = AbortSignal.any([runSignal, AbortSignal.timeout(Math.max(1,
+        Math.min(HEALTH_TARGET_BUDGET_MS, Math.floor(deadline - Date.now()))))]);
+      try {
+        const outcome = await runOneTarget(ports, target, options.runId, signal);
+        collected.push({ position, ...outcome });
+      } finally {
+        activeProviders.delete(target.provider_code);
+      }
     }
   }
 
@@ -418,7 +422,7 @@ export async function runHealthChunk(
 
   // The alert phase runs after the results are written: the rows must already be
   // recorded before the claim can see the transition.
-  await sendClaimedAlerts(ports, crypto.randomUUID(), options.alertBudgetMs ?? HEALTH_ALERT_BUDGET_MS);
+  await sendClaimedAlerts(ports, crypto.randomUUID(), Math.min(options.alertBudgetMs ?? HEALTH_ALERT_BUDGET_MS, Math.max(0, deadline - Date.now())));
 
   // A skipped target means the chunk did not cover everything it was asked to, so
   // the caller has to come back for it.

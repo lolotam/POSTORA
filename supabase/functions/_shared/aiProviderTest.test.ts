@@ -38,6 +38,18 @@ Deno.test("the probe kind still follows the provider code first", () => {
 
 const XAI_TARGET = { id: "1", provider_code: "xai", api_type: "openai", api_endpoint: "https://api.x.ai/v1" };
 
+Deno.test("a failed catalogue read never probes a fallback model or degrades the credential", async () => {
+  let called = false;
+  const query = {
+    eq: () => query, contains: () => query, order: () => query, limit: () => query,
+    maybeSingle: async () => ({ data: null, error: { message: 'database timeout' } }),
+  };
+  await assertRejects(() => probeProvider({ from: () => ({ select: () => query }) }, {
+    id: 'p', provider_code: 'deepseek', api_type: 'openai', api_endpoint: 'https://api.deepseek.com',
+  }, 'fixture-key', 100, (async () => { called = true; return new Response('{}'); }) as typeof fetch), ProviderReadError);
+  assertEquals(called, false);
+});
+
 Deno.test("a provider that never answers fails with a timeout, not a hang", async () => {
   const slowFetch = (_url: string, _init?: RequestInit) =>
     new Promise<Response>((_resolve) => { /* never settles */ });

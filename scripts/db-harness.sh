@@ -188,6 +188,7 @@ SUITES=(
   ai_provider_health.sql
   ai_model_catalog_contract.sql
   ai_oauth_openrouter.sql
+  ai_model_catalog_refresh.sql
 )
 # These fixtures build their own focused schema and apply the migration under
 # test. They must never run against the restored production-shaped database.
@@ -667,7 +668,20 @@ for f in "${NEW_MIGRATIONS[@]}"; do
   n=$((n + 1))
   STEP="migration $f"
   printf 'db-harness: [%3d/%d] %s\n' "$n" "${#NEW_MIGRATIONS[@]}" "$f"
-  if ! psql "${PSQL_COMMON[@]}" "$HARNESS_URL" -q -f "$MIGRATIONS_DIR/$f" 2>"$ERR"; then
+  migration_options=()
+  if [ "$f" = "20261113180100_ai_model_catalog_drop_legacy_unique.sql" ]; then
+    # First prove an ordinary migration runner cannot contract a live old writer.
+    if psql "${PSQL_COMMON[@]}" "$HARNESS_URL" -q -f "$MIGRATIONS_DIR/$f" >"$OUT" 2>"$ERR"; then
+      echo 'db-harness: CONTRACT accepted without deployment attestation' >&2
+      exit 1
+    fi
+    if ! grep -q 'CONTRACT requires deployment attestation' "$ERR"; then
+      cat "$ERR" >&2
+      exit 1
+    fi
+    migration_options=(-c 'SET postora.ai_catalog_writer_ready = true')
+  fi
+  if ! psql "${PSQL_COMMON[@]}" "$HARNESS_URL" -q "${migration_options[@]}" -f "$MIGRATIONS_DIR/$f" 2>"$ERR"; then
     echo "" >&2
     echo "db-harness: MIGRATION FAILED: $f" >&2
     echo "db-harness: error:" >&2

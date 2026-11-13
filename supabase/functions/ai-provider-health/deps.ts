@@ -34,8 +34,8 @@ import { createAdminMailer } from "./mailer.ts";
 
 type Admin = SupabaseClient;
 
-/** The OAuth providers Postora can sign in to, as pi-ai knows them. */
-const OAUTH_PROVIDERS: readonly OAuthProviderId[] = ["anthropic", "openai-codex"];
+/** Postora sign-ins; OpenRouter reuses pi-ai's ordinary provider with its Vault key. */
+const OAUTH_PROVIDERS: readonly OAuthProviderId[] = ["anthropic", "openai-codex", "openrouter"];
 
 function isOAuthProviderId(value: string): value is OAuthProviderId {
   return (OAUTH_PROVIDERS as readonly string[]).includes(value);
@@ -45,21 +45,28 @@ function isOAuthProviderId(value: string): value is OAuthProviderId {
  * The providers' display names, in one query. A run touches a handful of
  * providers, and one query per provider is one round trip per provider.
  */
-async function providerNames(admin: Admin, codes: string[]): Promise<Map<string, string>> {
+async function providerNames(admin: Admin, codes: string[], options: { signal?: AbortSignal; activeOnly?: boolean } = {}): Promise<Map<string, string>> {
   const unique = [...new Set(codes.filter(Boolean))];
   const names = new Map<string, string>();
   if (!unique.length) return names;
   const { data, error } = await admin
     .from("ai_providers")
-    .select("provider_code, name")
-    .in("provider_code", unique);
+    .select("provider_code, name, is_active")
+    .in("provider_code", unique).abortSignal(options.signal ?? AbortSignal.timeout(5_000));
   if (error) throw new Error("AI provider read failed");
   for (const row of (data ?? []) as Array<Record<string, unknown>>) {
     const code = String(row.provider_code ?? "");
-    if (!code) continue;
+    if (!code || options.activeOnly && row.is_active !== true) continue;
     names.set(code, String(row.name ?? code));
   }
   return names;
+}
+
+/** Cancels the credential/configuration reads through PostgREST, not only the wait. */
+function signalReader(admin: Admin, signal: AbortSignal): RowReader {
+  return { from: (table) => ({ select: (columns) => ({ eq: (column, value) => ({
+    maybeSingle: () => admin.from(table).select(columns).eq(column, value).abortSignal(signal).maybeSingle(),
+  }) }) }) };
 }
 
 /**
@@ -68,17 +75,16 @@ async function providerNames(admin: Admin, codes: string[]): Promise<Map<string,
  * The service role is the only writer of ai_models, ai_provider_health and the alert
  * claim: the browser never writes them.
  */
-export function createHealthRunPorts(admin: Admin): HealthRunPorts {
-  const db = admin as unknown as RowReader;
+export function createHealthRunPorts(admin: Admin, leaseHolder?: string): HealthRunPorts {
   const mailer = createAdminMailer(admin);
 
   return {
-    async listApiKeyProviders() {
+    async listApiKeyProviders(signal) {
       const { data, error } = await admin
         .from("ai_providers")
         .select("provider_code, name")
         .in("provider_code", [...SYNCABLE_PROVIDERS])
-        .eq("is_active", true);
+        .eq("is_active", true).abortSignal(signal);
       if (error) throw new Error("AI provider read failed");
       return (data ?? []).map((row) => ({
         provider_code: String((row as { provider_code?: unknown }).provider_code ?? ""),
@@ -86,18 +92,18 @@ export function createHealthRunPorts(admin: Admin): HealthRunPorts {
       }));
     },
 
-    async listOAuthConnections() {
+    async listOAuthConnections(signal) {
       const { data, error } = await admin
         .from("ai_provider_oauth_connections")
-        .select("oauth_provider, provider_code, status");
+        .select("oauth_provider, provider_code, status").abortSignal(signal);
       if (error) throw new Error("OAuth connection read failed");
       const rows = (data ?? []) as Array<{ oauth_provider?: unknown; provider_code?: unknown; status?: unknown }>;
       const names = await providerNames(
         admin,
-        rows.map((row) => String(row.provider_code ?? "")),
+        rows.map((row) => String(row.provider_code ?? "")), { signal, activeOnly: true },
       );
       return rows
-        .filter((row) => isOAuthProviderId(String(row.oauth_provider ?? "")))
+        .filter((row) => isOAuthProviderId(String(row.oauth_provider ?? "")) && names.has(String(row.provider_code ?? "")))
         .map((row) => ({
           oauth_provider: String(row.oauth_provider),
           provider_code: String(row.provider_code ?? ""),
@@ -106,15 +112,15 @@ export function createHealthRunPorts(admin: Admin): HealthRunPorts {
         }));
     },
 
-    async resolveApiKey(providerCode: string): Promise<string | null> {
-      return resolveProviderKey(db, providerCode);
+    async resolveApiKey(providerCode: string, signal: AbortSignal): Promise<string | null> {
+      return resolveProviderKey(signalReader(admin, signal), providerCode);
     },
 
-    async listRecordedTargets(runId: string) {
+    async listRecordedTargets(runId: string, signal: AbortSignal) {
       const { data, error } = await admin
-        .from("ai_provider_health")
+        .from("ai_provider_health_completions")
         .select("provider_code, auth_method")
-        .eq("run_id", runId);
+        .eq("run_id", runId).abortSignal(signal);
       // A failed read throws: it must not look like "no target was recorded",
       // because that would probe and sync every provider a second time.
       if (error) throw new Error("provider health read failed");
@@ -125,11 +131,11 @@ export function createHealthRunPorts(admin: Admin): HealthRunPorts {
     },
 
     async probeApiKey(target: HealthTarget, key: string, signal: AbortSignal): Promise<void> {
-      const provider = await loadProbeTarget(db, target.provider_code);
+      const provider = await loadProbeTarget(signalReader(admin, signal), target.provider_code);
       if (!provider) throw new Error(`Provider ${target.provider_code} is missing`);
       // The probe's own fetch is bounded by the target's signal, so a target that
       // runs out of time stops working instead of being abandoned.
-      await probeProvider(db, provider, key, HEALTH_TARGET_TIMEOUT_MS, boundedFetch(signal));
+      await probeProvider(admin, provider, key, HEALTH_TARGET_TIMEOUT_MS, boundedFetch(signal), signal);
     },
 
     async probeOAuth(target: HealthTarget, signal: AbortSignal): Promise<void> {
@@ -166,7 +172,7 @@ export function createHealthRunPorts(admin: Admin): HealthRunPorts {
 
     async syncApiKeyCatalogue(providerCode: string, signal: AbortSignal) {
       const report = await runCatalogSync(admin as never, providerCode, boundedFetch(signal), {
-        authMethod: "api_key",
+        authMethod: "api_key", signal, leaseHolder,
       });
       return { added: report.added, updated: report.updated, deactivated: report.deactivated };
     },
@@ -182,13 +188,13 @@ export function createHealthRunPorts(admin: Admin): HealthRunPorts {
         managedCapabilities: ["chat"],
       };
       const report = await runCatalogSync(admin as never, target.provider_code, boundedFetch(signal), {
-        authMethod: "oauth",
+        authMethod: "oauth", signal, leaseHolder,
         catalogue,
       });
       return { added: report.added, updated: report.updated, deactivated: report.deactivated };
     },
 
-    async recordResult(result, runId) {
+    async recordResult(result, runId, signal) {
       const { error } = await admin.rpc("record_ai_provider_health", {
         p_provider_code: result.provider_code,
         p_auth_method: result.auth_method,
@@ -201,19 +207,19 @@ export function createHealthRunPorts(admin: Admin): HealthRunPorts {
         p_models_deactivated: result.models_deactivated,
         p_latency_ms: result.latency_ms ?? 0,
         p_run_id: runId,
-      });
+      }).abortSignal(signal);
       if (error) throw new Error("provider health write failed");
     },
 
-    async claimAlerts(claimToken: string) {
+    async claimAlerts(claimToken: string, signal: AbortSignal) {
       const { data, error } = await admin.rpc("claim_ai_provider_health_notifications", {
         p_claim_token: claimToken,
-      });
+      }).abortSignal(signal);
       if (error) throw new Error("provider health claim failed");
       const degraded = alertRowsToDegraded((data ?? []) as Array<Record<string, unknown>>);
       // The alert names the provider, not its code: the names are resolved in one
       // query for the whole claim.
-      const names = await providerNames(admin, degraded.map((p) => p.provider_code));
+      const names = await providerNames(admin, degraded.map((p) => p.provider_code), { signal });
       return degraded.map((provider) => ({
         ...provider,
         display_name: names.get(provider.provider_code) ?? provider.provider_code,
@@ -224,12 +230,13 @@ export function createHealthRunPorts(admin: Admin): HealthRunPorts {
       await sendDegradedProviderAlert(mailer, provider, signal);
     },
 
-    async markAlertNotified(claimToken: string, provider: DegradedProvider) {
+    async markAlertNotified(claimToken: string, provider: DegradedProvider, signal: AbortSignal) {
       const { error } = await admin.rpc("mark_ai_provider_health_notified", {
         p_claim_token: claimToken,
         p_provider_code: provider.provider_code,
         p_auth_method: provider.auth_method,
-      });
+        p_alert_id: provider.alert_id,
+      }).abortSignal(signal);
       if (error) throw new Error("provider health notification close failed");
     },
 
@@ -258,30 +265,37 @@ function firstOAuthModel(oauthProvider: OAuthProviderId): string {
  * The ports the request handler uses: the runner, the stored results, the shared
  * lease and the authorization.
  */
-export async function createHealthHandlerPorts(): Promise<HealthHandlerPorts> {
+export async function createHealthHandlerPorts(adminOverride?: Admin): Promise<HealthHandlerPorts> {
   const { createClient } = await import("https://esm.sh/@supabase/supabase-js@2");
-  const admin = createClient(
+  const admin = adminOverride ?? createClient(
     Deno.env.get("SUPABASE_URL") ?? "",
     Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "",
   ) as unknown as SupabaseClient;
   const runPorts = createHealthRunPorts(admin);
 
   return {
-    async runChunk(chunk: number, runId: string) {
-      return runHealthChunk(runPorts, { runId, chunk });
+    async runChunk(chunk: number, runId: string, holder: string, deadlineMs: number) {
+      return runHealthChunk(createHealthRunPorts(admin, holder), { runId, chunk, deadlineMs });
     },
 
     async readResults(): Promise<HealthResult[]> {
+      const signal = AbortSignal.timeout(8_000);
+      const providers = await runPorts.listApiKeyProviders(signal);
+      const connections = await runPorts.listOAuthConnections(signal);
+      const targets = new Set(connections.map((c) => `${c.provider_code}:oauth`));
+      for (const provider of providers) {
+        if (await runPorts.resolveApiKey(provider.provider_code, signal)) targets.add(`${provider.provider_code}:api_key`);
+      }
       const { data, error } = await admin
         .from("ai_provider_health")
         .select("provider_code, auth_method, status, reason, models_added, models_updated, models_deactivated, latency_ms, checked_at")
-        .order("provider_code");
+        .order("provider_code").abortSignal(signal);
       if (error) throw new Error("provider health read failed");
-      const rows = (data ?? []) as Array<Record<string, unknown>>;
+      const rows = ((data ?? []) as Array<Record<string, unknown>>).filter((row) => targets.has(`${row.provider_code}:${row.auth_method}`));
       // One query for the names of every row, not one query per row.
       const names = await providerNames(
         admin,
-        rows.map((row) => String(row.provider_code ?? "")),
+        rows.map((row) => String(row.provider_code ?? "")), { signal },
       );
       return rows.map((row) => {
         const code = String(row.provider_code ?? "");
@@ -305,7 +319,7 @@ export async function createHealthHandlerPorts(): Promise<HealthHandlerPorts> {
         p_job: job,
         p_holder: holder,
         p_ttl: `${ttlSeconds} seconds`,
-      });
+      }).abortSignal(AbortSignal.timeout(5_000));
       if (error) throw new Error("lease rpc failed");
       return data === true;
     },
@@ -314,13 +328,26 @@ export async function createHealthHandlerPorts(): Promise<HealthHandlerPorts> {
       const { data, error } = await admin.rpc("release_cron_run_lease", {
         p_job: job,
         p_holder: holder,
-      });
+      }).abortSignal(AbortSignal.timeout(3_000));
       if (error) throw new Error("lease release rpc failed");
       return data === true;
     },
 
+    async admitRun(scope, runId, adminId) {
+      const { data, error } = await admin.rpc('admit_ai_provider_health_run', {
+        p_scope: scope, p_run_id: runId, p_admin_id: adminId,
+      }).abortSignal(AbortSignal.timeout(5_000));
+      if (error) throw new Error('Health run admission failed');
+      if (!['ready', 'complete', 'busy', 'cooldown'].includes(String(data))) throw new Error('Invalid run admission');
+      return data as 'ready' | 'complete' | 'busy' | 'cooldown';
+    },
+    async completeRun(runId) {
+      const { error } = await admin.rpc('complete_ai_provider_health_run', { p_run_id: runId })
+        .abortSignal(AbortSignal.timeout(3_000));
+      if (error) throw new Error('Health run completion failed');
+    },
     async isAuthorized(req: Request) {
-      return verifyCronOrAdmin(req);
+      return verifyCronOrAdmin(req, true);
     },
   };
 }

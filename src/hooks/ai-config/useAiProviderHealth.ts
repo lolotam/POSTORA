@@ -32,13 +32,13 @@ export interface ProviderHealthRunResult {
 }
 
 /** The stored results of the last run. It never runs anything by itself. */
-export function useProviderHealthStatus(): { data: ProviderHealthRow[] | undefined; isLoading: boolean } {
+export function useProviderHealthStatus(): { data: ProviderHealthRow[] | undefined; isLoading: boolean; error: Error | null } {
   const query = useQuery({
     queryKey: AI_PROVIDER_HEALTH_QUERY_KEY,
     queryFn: () => fetchProviderHealth(),
     retry: false,
   });
-  return { data: query.data, isLoading: query.isLoading };
+  return { data: query.data, isLoading: query.isLoading, error: query.error };
 }
 
 /**
@@ -83,7 +83,6 @@ export function useRunProviderHealth(): {
         attempts = 0;
         chunk = result.next_chunk ?? chunk + 1;
       }
-      await queryClient.invalidateQueries({ queryKey: AI_PROVIDER_HEALTH_QUERY_KEY });
       // A target that was skipped was not tested, so the run is not complete.
       return { rows, skipped: [...skipped.values()], complete: skipped.size === 0 };
     } catch (cause) {
@@ -91,6 +90,11 @@ export function useRunProviderHealth(): {
       setError(cause instanceof Error ? cause.message : "unknown");
       return { rows, skipped: [...skipped.values()], complete: false };
     } finally {
+      // A partial run can already have changed catalogues and health rows.
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: AI_PROVIDER_HEALTH_QUERY_KEY }),
+        queryClient.invalidateQueries({ queryKey: ['ai-config'] }),
+      ]);
       setIsRunning(false);
     }
   }, [queryClient]);

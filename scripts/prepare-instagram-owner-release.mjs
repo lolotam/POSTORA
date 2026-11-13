@@ -82,7 +82,7 @@ async function prepare() {
   labels.push("--label", `postora.owner-candidate=${candidate}`);
   const evidenceDirectory = mkdtempSync(join(tmpdir(), "postora-owner-release-prepare-"));
   const archive = join(evidenceDirectory, "database-inputs.tar");
-  execFileSync("git", ["-c", "core.autocrlf=false", "archive", "--format=tar", `--output=${archive}`, candidate, "scripts/db-harness.sh", "supabase/tests", "supabase/migrations"], { cwd: root });
+  execFileSync("git", ["-c", "core.autocrlf=false", "archive", "--format=tar", `--output=${archive}`, candidate, "scripts/db-harness.sh", "supabase/tests", "supabase/migrations", "supabase/manual-sql"], { cwd: root });
   docker(["network", "create", "--internal", ...labels, internalNetwork]);
   docker(["network", "create", ...labels, gatewayNetwork]);
   docker(["run", "-d", "--name", names[0], ...labels, "--network", internalNetwork, "-e", `POSTGRES_PASSWORD=${databasePassword}`, "supabase/postgres:17.6.1.158", "-c", "listen_addresses=*", "-c", `cron.database_name=${OWNER_RELEASE.database}`, "-c", "cron.launch_active_jobs=off", "-c", "shared_preload_libraries=pg_cron,pg_net,pgsodium,supabase_vault"]);

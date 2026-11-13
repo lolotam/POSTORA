@@ -2,6 +2,19 @@
 import { assert, assertEquals } from "https://deno.land/std@0.208.0/assert/mod.ts";
 import { handleHealthRequest, parseHealthRequest, type HealthHandlerPorts } from "./handler.ts";
 
+for (const admission of ['busy', 'cooldown', 'complete'] as const) {
+  Deno.test(`logical run admission ${admission} never probes providers`, async () => {
+    let ran = false;
+    const { ports, leases } = fakePorts({ admitRun: async () => admission,
+      runChunk: async () => { ran = true; throw new Error('must not run'); } });
+    const res = await handleHealthRequest(new Request('https://x.test', { method: 'POST',
+      body: JSON.stringify({ action: 'run', run_token: 't' }) }), ports);
+    assertEquals(res.status, admission === 'busy' ? 409 : admission === 'cooldown' ? 429 : 200);
+    assertEquals(ran, false);
+    assertEquals(leases.length, 2);
+  });
+}
+
 function fakePorts(overrides: Partial<HealthHandlerPorts> = {}) {
   const leases: Array<{ job: string; holder: string }> = [];
   const ports: HealthHandlerPorts = {
@@ -10,6 +23,8 @@ function fakePorts(overrides: Partial<HealthHandlerPorts> = {}) {
       summary: { total: 0, connected: 0, failed: 0, needs_relogin: 0 },
     }),
     readResults: async () => [],
+    admitRun: async () => "ready",
+    completeRun: async () => {},
     acquireLease: async (job, holder) => { leases.push({ job, holder }); return true; },
     releaseLease: async (job, holder) => { leases.push({ job, holder }); return true; },
     isAuthorized: async () => ({ ok: true }),

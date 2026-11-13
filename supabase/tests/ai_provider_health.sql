@@ -36,6 +36,8 @@
 -- ---------------------------------------------------------------------------
 -- Cleanup (before AND after, so a crashed earlier run cannot wedge this one)
 -- ---------------------------------------------------------------------------
+DELETE FROM public.ai_provider_health_alerts WHERE provider_code IN ('claude', 'openai');
+DELETE FROM public.ai_provider_health_completions WHERE provider_code IN ('claude', 'openai');
 DELETE FROM public.ai_provider_health WHERE provider_code IN ('claude', 'openai');
 DELETE FROM public.ai_models WHERE model_id = 'health-fixture-model';
 
@@ -78,7 +80,16 @@ END $aph_seed_providers$;
 --    REVOKEd from authenticated, so the call is refused outright.
 -- ===========================================================================
 \echo '--- as authenticated: table is empty and the RPC is refused ---'
+-- Positive control first: denial must hide an existing row for a real user JWT.
+INSERT INTO auth.users(id, email) VALUES ('a4140000-0000-4000-8000-000000000001', 'health-reader@example.invalid') ON CONFLICT DO NOTHING;
+INSERT INTO public.ai_provider_health(provider_code, auth_method, status) VALUES ('claude','api_key','connected');
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM public.ai_provider_health WHERE provider_code = 'claude') THEN
+    RAISE EXCEPTION 'FAIL: missing health RLS positive control';
+  END IF;
+END $$;
 SET ROLE authenticated;
+SELECT set_config('request.jwt.claim.sub', 'a4140000-0000-4000-8000-000000000001', false);
 DO $aph_auth_table$
 DECLARE
   v_count integer;
@@ -99,6 +110,9 @@ BEGIN
   END;
 END $aph_auth_rpc$;
 RESET ROLE;
+SELECT set_config('request.jwt.claim.sub', '', false);
+DELETE FROM public.ai_provider_health WHERE provider_code = 'claude';
+DELETE FROM auth.users WHERE id = 'a4140000-0000-4000-8000-000000000001';
 
 -- ===========================================================================
 -- 2. The first result of a provider has no previous status.
@@ -597,12 +611,14 @@ DECLARE
   v_first_id uuid;
   v_claim record;
 BEGIN
+  PERFORM public.claim_ai_provider_health_notifications('cccccccc-cccc-4ccc-8ccc-cccccccccccc');
+  PERFORM public.mark_ai_provider_health_notified('cccccccc-cccc-4ccc-8ccc-cccccccccccc', 'openai', 'api_key');
   PERFORM public.record_ai_provider_health('openai', 'api_key', 'connected', NULL, 0, 0, 0, 1, NULL);
   PERFORM public.record_ai_provider_health('openai', 'api_key', 'failed', 'Original reason', NULL, NULL, NULL, 1, NULL);
   SELECT alert_id INTO v_first_id FROM public.ai_provider_health
    WHERE provider_code = 'openai' AND auth_method = 'api_key';
   PERFORM public.claim_ai_provider_health_notifications('dddddddd-dddd-4ddd-8ddd-dddddddddddd');
-  UPDATE public.ai_provider_health SET claimed_at = now() - interval '11 minutes'
+  UPDATE public.ai_provider_health_alerts SET claimed_at = now() - interval '11 minutes'
    WHERE provider_code = 'openai' AND auth_method = 'api_key';
   PERFORM public.record_ai_provider_health('openai', 'api_key', 'needs_relogin', 'Changed reason', NULL, NULL, NULL, 1, NULL);
   SELECT * INTO v_claim FROM public.claim_ai_provider_health_notifications('eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee')
@@ -700,9 +716,84 @@ RESET ROLE;
 SELECT set_config('request.jwt.claim.sub', '', false);
 
 -- ---------------------------------------------------------------------------
+-- Run identity, logical admission, pending recovery and write fencing regressions.
+-- Each block rolls its fixtures back independently of the earlier transition cases.
+BEGIN;
+DELETE FROM public.ai_provider_health_runs;
+DO $aph_run_guards$
+DECLARE
+  v_daily uuid := gen_random_uuid(); v_manual uuid := gen_random_uuid();
+  v_admin uuid := gen_random_uuid(); v_next uuid := gen_random_uuid();
+BEGIN
+  IF public.admit_ai_provider_health_run('daily', v_daily, NULL) <> 'ready' THEN RAISE EXCEPTION 'FAIL: daily admission'; END IF;
+  IF public.admit_ai_provider_health_run('manual', v_manual, v_admin) <> 'busy' THEN RAISE EXCEPTION 'FAIL: manual entered between daily chunks'; END IF;
+  PERFORM public.complete_ai_provider_health_run(v_daily);
+  IF public.admit_ai_provider_health_run('daily', v_daily, NULL) <> 'complete' THEN RAISE EXCEPTION 'FAIL: completed daily replay'; END IF;
+  IF public.admit_ai_provider_health_run('manual', v_manual, v_admin) <> 'ready' THEN RAISE EXCEPTION 'FAIL: manual admission after daily'; END IF;
+  IF public.admit_ai_provider_health_run('manual', v_manual, v_admin) <> 'ready' THEN RAISE EXCEPTION 'FAIL: manual chunk continuation'; END IF;
+  PERFORM public.complete_ai_provider_health_run(v_manual);
+  IF public.admit_ai_provider_health_run('manual', v_next, v_admin) <> 'cooldown' THEN RAISE EXCEPTION 'FAIL: missing per-admin cooldown'; END IF;
+  UPDATE public.ai_provider_health_runs SET completed_at = now() - interval '61 seconds' WHERE run_id = v_manual;
+  IF public.admit_ai_provider_health_run('manual', v_next, v_admin) <> 'ready' THEN RAISE EXCEPTION 'FAIL: cooldown never expired'; END IF;
+  PERFORM public.record_ai_provider_health('claude','api_key','connected',NULL,0,0,0,1,v_daily);
+  PERFORM public.record_ai_provider_health('claude','api_key','connected',NULL,0,0,0,1,v_manual);
+  IF NOT EXISTS (SELECT 1 FROM public.ai_provider_health_completions WHERE run_id = v_daily AND provider_code = 'claude') THEN
+    RAISE EXCEPTION 'FAIL: manual overwrote daily completion';
+  END IF;
+END $aph_run_guards$;
+ROLLBACK;
+
+BEGIN;
+DELETE FROM public.ai_provider_health_alerts WHERE provider_code = 'openai';
+UPDATE public.ai_provider_health SET alert_pending = false WHERE provider_code = 'openai';
+DO $aph_recovery_outbox$
+DECLARE v_first uuid; v_count int; v_claim record; v_token uuid := gen_random_uuid();
+BEGIN
+  PERFORM public.record_ai_provider_health('openai','api_key','connected',NULL,0,0,0,1,NULL);
+  PERFORM public.record_ai_provider_health('openai','api_key','failed','Original failure',NULL,NULL,NULL,1,NULL);
+  SELECT alert_id INTO v_first FROM public.ai_provider_health WHERE provider_code = 'openai' AND auth_method = 'api_key';
+  PERFORM public.record_ai_provider_health('openai','api_key','connected',NULL,0,0,0,1,NULL);
+  SELECT count(*) INTO v_count FROM public.claim_ai_provider_health_notifications(v_token) WHERE alert_id = v_first;
+  IF v_count <> 1 THEN RAISE EXCEPTION 'FAIL: recovery erased unsent degradation'; END IF;
+  PERFORM public.record_ai_provider_health('openai','api_key','failed','Second failure',NULL,NULL,NULL,1,NULL);
+  -- First send closes only its event; the second break remains pending.
+  PERFORM public.mark_ai_provider_health_notified(v_token,'openai','api_key',v_first);
+  SELECT * INTO v_claim FROM public.claim_ai_provider_health_notifications(gen_random_uuid()) WHERE provider_code = 'openai';
+  IF v_claim.alert_id IS NULL OR v_claim.alert_id = v_first OR v_claim.reason <> 'Second failure' THEN
+    RAISE EXCEPTION 'FAIL: a later break was lost or an event payload changed';
+  END IF;
+END $aph_recovery_outbox$;
+ROLLBACK;
+
+BEGIN;
+DELETE FROM public.cron_run_leases WHERE job = 'ai-provider-health';
+DO $aph_fencing$
+DECLARE v_holder uuid := gen_random_uuid(); v_stamp text := 'health-fence-fixture';
+BEGIN
+  BEGIN
+    PERFORM public.write_ai_health_catalog(v_holder,'[]'::jsonb,v_stamp,now());
+    RAISE EXCEPTION 'FAIL: unowned catalogue write accepted';
+  EXCEPTION WHEN raise_exception THEN
+    IF SQLERRM NOT LIKE 'Health catalogue lease expired%' THEN RAISE; END IF;
+  END;
+  PERFORM public.acquire_cron_run_lease('ai-provider-health',v_holder,interval '2 minutes');
+  PERFORM public.write_ai_health_catalog(v_holder,'[]'::jsonb,v_stamp,now());
+  IF NOT EXISTS (SELECT 1 FROM public.system_settings WHERE key = v_stamp) THEN RAISE EXCEPTION 'FAIL: owned catalogue write refused'; END IF;
+  UPDATE public.cron_run_leases SET expires_at = now() - interval '1 second' WHERE job = 'ai-provider-health';
+  BEGIN
+    PERFORM public.write_ai_health_catalog(v_holder,'[]'::jsonb,v_stamp,now());
+    RAISE EXCEPTION 'FAIL: stale catalogue holder accepted';
+  EXCEPTION WHEN raise_exception THEN
+    IF SQLERRM NOT LIKE 'Health catalogue lease expired%' THEN RAISE; END IF;
+  END;
+END $aph_fencing$;
+ROLLBACK;
+
 -- Trailing cleanup: everything this suite created, EXCEPT the provider rows
 -- that already existed before it ran.
 -- ---------------------------------------------------------------------------
+DELETE FROM public.ai_provider_health_alerts WHERE provider_code IN ('claude', 'openai');
+DELETE FROM public.ai_provider_health_completions WHERE provider_code IN ('claude', 'openai');
 DELETE FROM public.ai_provider_health WHERE provider_code IN ('claude', 'openai');
 DELETE FROM public.ai_models WHERE model_id = 'health-fixture-model';
 

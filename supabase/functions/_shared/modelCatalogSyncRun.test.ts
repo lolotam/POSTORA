@@ -19,6 +19,7 @@ function fakeDb(state: { models: unknown[]; settings: unknown[]; settingsUpsertE
         return { data: null, error: null };
       };
       const query = Object.assign(Promise.resolve(list()), {
+        abortSignal: () => query,
         eq: (column: string, value: string) => { filters[column] = value; return query; },
         like: () => query,
         maybeSingle: () => Promise.resolve(single()),
@@ -46,6 +47,41 @@ const vercelFetch = catalogue([
   { id: "openai/gpt-5.5", name: "GPT-5.5", type: "language" },
   { id: "typesafe-ai/jev", name: "JEV", type: "evaluation" },
 ]);
+
+Deno.test("an OAuth catalogue needs no unrelated API catalogue source", async () => {
+  const { db, writes } = fakeDb({ models: [], settings: [] });
+  const report = await runCatalogSync(db, 'kimi', (async () => { throw new Error('must not fetch'); }) as typeof fetch, {
+    authMethod: 'oauth', catalogue: { models: [{ model_id: 'kimi-oauth', name: 'Kimi', description: null,
+      capabilities: ['chat'], context_limit: null, cost_per_1m_input_tokens: null,
+      cost_per_1m_output_tokens: null, metadata: {} }], managedCapabilities: ['chat'], skippedByType: {} },
+  });
+  assertEquals(report.added, 1);
+  assertEquals(upsertedRows(writes)[0].auth_method, 'oauth');
+});
+
+Deno.test("cancelled catalogue reads cannot reach any model writes", async () => {
+  const { db, writes } = fakeDb({ models: [], settings: [] });
+  await assertRejects(() => runCatalogSync(db, 'vercel', vercelFetch, { signal: AbortSignal.abort() }));
+  assertEquals(writes.length, 0);
+});
+
+Deno.test("health catalogues use the fenced transaction for both models and stamp", async () => {
+  const { db, writes } = fakeDb({ models: [], settings: [] });
+  let fenced = false;
+  db.rpc = (name, args) => {
+    assertEquals(name, 'write_ai_health_catalog');
+    assertEquals(args.p_holder, 'request-holder');
+    assertEquals((args.p_rows as unknown[]).length, 2);
+    fenced = true;
+    const query = Object.assign(Promise.resolve({ data: null, error: null }), {
+      abortSignal: () => query, eq: () => query, like: () => query, maybeSingle: () => query,
+    });
+    return query;
+  };
+  await runCatalogSync(db, 'vercel', vercelFetch, { leaseHolder: 'request-holder', signal: AbortSignal.timeout(1000) });
+  assertEquals(fenced, true);
+  assertEquals(writes.length, 0);
+});
 
 /** An ai_models row exactly as the sync would have written openai/gpt-5.5. */
 const syncedRow = (overrides: Record<string, unknown> = {}) => ({

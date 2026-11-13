@@ -134,7 +134,7 @@ export function buildAlertHtml(degraded: DegradedProvider[]): string {
 /** How one alert is sent. */
 export interface AdminMailer {
   /** The admins' addresses. An empty list means there is nobody to tell. */
-  adminRecipients(): Promise<string[]>;
+  adminRecipients(signal?: AbortSignal): Promise<string[]>;
   /**
    * Sends one email. Throws when the provider refused it, so the claim stays open.
    *
@@ -164,7 +164,7 @@ export async function sendDegradedProviderAlert(
   degraded: DegradedProvider,
   signal?: AbortSignal,
 ): Promise<void> {
-  const to = await mailer.adminRecipients();
+  const to = await mailer.adminRecipients(signal);
   if (!to.length) return;
   await mailer.send({
     to,

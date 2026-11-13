@@ -43,6 +43,25 @@ describe('ProviderHealthButton', () => {
     queryClient = new QueryClient();
   });
 
+  it('shows a read warning instead of empty history when status is unavailable', async () => {
+    invoke.mockResolvedValue({ data: null, error: new Error('unavailable') });
+    render(wrap(<ProviderHealthButton />));
+    await waitFor(() => expect(screen.getByRole('alert').textContent).toContain('could not be read'));
+    expect(screen.queryByText('No provider has been checked yet.')).toBeNull();
+  });
+
+  it('clears removed connections after an empty successful status refresh', async () => {
+    invoke.mockResolvedValue({ data: { results: [{ provider_code: 'claude', auth_method: 'api_key',
+      display_name: 'Claude', status: 'connected', models_added: 0, models_updated: 0,
+      models_deactivated: 0, checked_at: '' }] }, error: null });
+    render(wrap(<ProviderHealthButton />));
+    await waitFor(() => expect(screen.getAllByTestId('provider-health-row').length).toBe(1));
+    invoke.mockResolvedValue({ data: { results: [] }, error: null });
+    await queryClient.invalidateQueries({ queryKey: ['ai-provider-health'] });
+    await waitFor(() => expect(screen.queryAllByTestId('provider-health-row').length).toBe(0));
+    expect(screen.getByText('No provider has been checked yet.')).toBeTruthy();
+  });
+
   it('shows one row per provider with the status and the model counts', async () => {
     invoke.mockImplementation((_fn: string, { body }: { body: { action: string } }) =>
       body.action === 'status'

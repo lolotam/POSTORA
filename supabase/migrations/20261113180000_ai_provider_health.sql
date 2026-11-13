@@ -15,7 +15,7 @@
 -- WHY claim_token / claimed_at / notified_at
 -- The notification is sent in two phases: claim the row, send, then mark it notified. A
 -- run that dies between the send and the mark re-claims the row after 10 minutes instead of
--- losing the alert or sending it twice.
+-- losing the alert; transport idempotency deduplicates retries within 24 hours.
 --
 -- WHY alert_pending
 -- previous_status answers "did it just break?", but it is overwritten by the next write:
@@ -78,6 +78,24 @@ CREATE POLICY ai_provider_health_admin_select ON public.ai_provider_health
 GRANT SELECT ON TABLE public.ai_provider_health TO authenticated;
 GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.ai_provider_health TO service_role;
 
+-- Immutable degradation events survive recovery and multiple breaks before delivery.
+CREATE TABLE IF NOT EXISTS public.ai_provider_health_alerts (
+  alert_id uuid PRIMARY KEY,
+  provider_code text NOT NULL REFERENCES public.ai_providers(provider_code) ON DELETE CASCADE,
+  auth_method text NOT NULL CHECK (auth_method IN ('api_key','oauth')),
+  status text NOT NULL CHECK (status IN ('failed','needs_relogin')),
+  reason text,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  claim_token uuid,
+  claimed_at timestamptz,
+  notified_at timestamptz
+);
+CREATE INDEX IF NOT EXISTS ai_provider_health_alerts_pending_idx
+  ON public.ai_provider_health_alerts(created_at) WHERE notified_at IS NULL;
+ALTER TABLE public.ai_provider_health_alerts ENABLE ROW LEVEL SECURITY;
+REVOKE ALL ON public.ai_provider_health_alerts FROM PUBLIC, anon, authenticated;
+GRANT SELECT, INSERT, UPDATE, DELETE ON public.ai_provider_health_alerts TO service_role;
+
 -- Models are keyed by credential kind: one provider can serve an API key and a
 -- subscription login with the same model_id. The statements are idempotent so this
 -- migration is safe next to the concurrent auth-grouping branch.
@@ -102,6 +120,112 @@ GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.ai_provider_health TO servi
 -- yet. The OAuth sync reports that as a sync error rather than pretending the
 -- catalogue is in sync.
 ALTER TABLE public.ai_models ADD COLUMN IF NOT EXISTS auth_method text NOT NULL DEFAULT 'api_key';
+-- Repair a column introduced by a concurrent branch before enforcing its contract.
+UPDATE public.ai_models SET auth_method = 'api_key'
+ WHERE auth_method IS NULL OR auth_method NOT IN ('api_key', 'oauth');
+ALTER TABLE public.ai_models ALTER COLUMN auth_method SET DEFAULT 'api_key';
+ALTER TABLE public.ai_models ALTER COLUMN auth_method SET NOT NULL;
+DO $auth_check$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid = 'public.ai_models'::regclass
+    AND conname = 'ai_models_auth_method_check') THEN
+    ALTER TABLE public.ai_models ADD CONSTRAINT ai_models_auth_method_check
+      CHECK (auth_method IN ('api_key', 'oauth'));
+  END IF;
+END $auth_check$;
+
+CREATE TABLE IF NOT EXISTS public.ai_provider_health_completions (
+  run_id uuid NOT NULL,
+  provider_code text NOT NULL REFERENCES public.ai_providers(provider_code) ON DELETE CASCADE,
+  auth_method text NOT NULL CHECK (auth_method IN ('api_key','oauth')),
+  recorded_at timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (run_id, provider_code, auth_method)
+);
+CREATE TABLE IF NOT EXISTS public.ai_provider_health_runs (
+  run_id uuid PRIMARY KEY,
+  scope text NOT NULL CHECK (scope IN ('daily','manual')),
+  admin_id uuid,
+  started_at timestamptz NOT NULL DEFAULT now(),
+  completed_at timestamptz,
+  expires_at timestamptz NOT NULL DEFAULT (now() + interval '30 minutes')
+);
+CREATE INDEX IF NOT EXISTS ai_provider_health_runs_admin_idx
+ ON public.ai_provider_health_runs(admin_id, completed_at DESC);
+ALTER TABLE public.ai_provider_health_completions ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.ai_provider_health_runs ENABLE ROW LEVEL SECURITY;
+REVOKE ALL ON public.ai_provider_health_completions, public.ai_provider_health_runs FROM PUBLIC, anon, authenticated;
+GRANT SELECT, INSERT, UPDATE, DELETE ON public.ai_provider_health_completions, public.ai_provider_health_runs TO service_role;
+
+-- Admission spans HTTP chunks; the generic request lease still excludes overlap.
+CREATE OR REPLACE FUNCTION public.admit_ai_provider_health_run(p_scope text, p_run_id uuid, p_admin_id uuid)
+RETURNS text LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+DECLARE v_run public.ai_provider_health_runs; v_cooldown int := 60; v_value jsonb;
+BEGIN
+  IF p_scope IS NULL OR p_scope NOT IN ('daily','manual') OR p_run_id IS NULL THEN
+    RAISE EXCEPTION 'Invalid health run';
+  END IF;
+  PERFORM pg_advisory_xact_lock(hashtextextended('ai-provider-health-admission', 0));
+  -- Retain a week of immutable completion markers, independent of latest status.
+  DELETE FROM public.ai_provider_health_completions WHERE recorded_at < now() - interval '7 days';
+  DELETE FROM public.ai_provider_health_runs WHERE expires_at < now() - interval '7 days';
+  IF p_scope = 'manual' AND EXISTS (SELECT 1 FROM public.ai_provider_health_runs
+    WHERE scope = 'daily' AND completed_at IS NULL AND expires_at > clock_timestamp()) THEN RETURN 'busy'; END IF;
+  SELECT * INTO v_run FROM public.ai_provider_health_runs WHERE run_id = p_run_id;
+  IF FOUND THEN
+    IF v_run.scope <> p_scope OR v_run.admin_id IS DISTINCT FROM p_admin_id THEN RETURN 'busy'; END IF;
+    IF v_run.completed_at IS NOT NULL THEN RETURN 'complete'; END IF;
+    UPDATE public.ai_provider_health_runs SET expires_at = now() + interval '30 minutes' WHERE run_id = p_run_id;
+    RETURN 'ready';
+  END IF;
+  IF p_scope = 'manual' THEN
+    IF EXISTS (SELECT 1 FROM public.ai_provider_health_runs WHERE scope = 'manual'
+      AND completed_at IS NULL AND expires_at > clock_timestamp()) THEN RETURN 'busy'; END IF;
+    SELECT value INTO v_value FROM public.app_settings WHERE key = 'admin_ai_provider_health_cooldown_seconds';
+    IF (v_value #>> '{}') ~ '^[0-9]{1,5}$' THEN v_cooldown := least(86400, (v_value #>> '{}')::int); END IF;
+    IF EXISTS (SELECT 1 FROM public.ai_provider_health_runs WHERE admin_id IS NOT DISTINCT FROM p_admin_id
+      AND scope = 'manual' AND completed_at > clock_timestamp() - make_interval(secs => v_cooldown)) THEN RETURN 'cooldown'; END IF;
+  END IF;
+  INSERT INTO public.ai_provider_health_runs(run_id, scope, admin_id) VALUES (p_run_id, p_scope, p_admin_id);
+  RETURN 'ready';
+END $$;
+CREATE OR REPLACE FUNCTION public.complete_ai_provider_health_run(p_run_id uuid)
+RETURNS void LANGUAGE sql SECURITY DEFINER SET search_path = public AS $$
+  UPDATE public.ai_provider_health_runs SET completed_at = now() WHERE run_id = p_run_id;
+$$;
+REVOKE ALL ON FUNCTION public.admit_ai_provider_health_run(text, uuid, uuid), public.complete_ai_provider_health_run(uuid) FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.admit_ai_provider_health_run(text, uuid, uuid), public.complete_ai_provider_health_run(uuid) TO service_role;
+
+-- Fencing is transactional: lease takeover/release waits for this row lock.
+-- Even a server statement left running after an HTTP abort cannot overlap the
+-- next holder's catalogue writes. The deadline is checked again after writes.
+CREATE OR REPLACE FUNCTION public.write_ai_health_catalog(p_holder uuid, p_rows jsonb, p_stamp_key text, p_at timestamptz)
+RETURNS void LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+DECLARE v_expires timestamptz;
+BEGIN
+  SELECT expires_at INTO v_expires FROM public.cron_run_leases
+    WHERE job = 'ai-provider-health' AND holder = p_holder FOR UPDATE;
+  IF v_expires IS NULL OR v_expires <= clock_timestamp() OR p_at < clock_timestamp() - interval '15 seconds' THEN
+    RAISE EXCEPTION 'Health catalogue lease expired';
+  END IF;
+  INSERT INTO public.ai_models(provider_id, model_id, name, description, capabilities, context_limit,
+    cost_per_1m_input_tokens, cost_per_1m_output_tokens, metadata, is_active, updated_at, auth_method)
+  SELECT provider_id, model_id, name, description, capabilities, context_limit,
+    cost_per_1m_input_tokens, cost_per_1m_output_tokens, metadata, is_active, updated_at, auth_method
+  FROM jsonb_populate_recordset(NULL::public.ai_models, p_rows)
+  ON CONFLICT (provider_id, model_id, auth_method) DO UPDATE SET
+    name = EXCLUDED.name, description = EXCLUDED.description, capabilities = EXCLUDED.capabilities,
+    context_limit = EXCLUDED.context_limit, cost_per_1m_input_tokens = EXCLUDED.cost_per_1m_input_tokens,
+    cost_per_1m_output_tokens = EXCLUDED.cost_per_1m_output_tokens, metadata = EXCLUDED.metadata,
+    is_active = EXCLUDED.is_active, updated_at = EXCLUDED.updated_at;
+  INSERT INTO public.system_settings(key, value) VALUES (p_stamp_key, jsonb_build_object('at', p_at))
+    ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value;
+  IF v_expires <= clock_timestamp() OR p_at < clock_timestamp() - interval '15 seconds' THEN
+    RAISE EXCEPTION 'Health catalogue lease expired';
+  END IF;
+END $$;
+REVOKE ALL ON FUNCTION public.write_ai_health_catalog(uuid, jsonb, text, timestamptz) FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.write_ai_health_catalog(uuid, jsonb, text, timestamptz) TO service_role;
+
 CREATE UNIQUE INDEX IF NOT EXISTS ai_models_provider_model_auth_method_key
   ON public.ai_models (provider_id, model_id, auth_method);
 
@@ -146,35 +270,27 @@ BEGIN
     WHERE provider_code = p_provider_code AND auth_method = p_auth_method
     FOR UPDATE;
 
-  -- A status change is a new state, so the notification state of the old one is
-  -- dropped and the row becomes claimable again. An unchanged status keeps it:
-  -- a provider that is still broken raises no second alert, and an alert that was
-  -- never sent survives a re-check.
+  -- Each break has its own durable event. Latest status may recover while an
+  -- older event is pending; recovery never deletes or replaces that event.
   v_changed := (v_old IS DISTINCT FROM p_status);
-  IF v_changed THEN
-    IF p_status IN ('failed','needs_relogin')
-       AND (v_old = 'connected'
-            OR (v_old IN ('failed','needs_relogin') AND coalesce(v_old_pending, false))) THEN
-      -- It just broke, or it is still broken with an alert nobody sent yet.
-      v_pending := true;
-      IF v_old = 'connected' THEN
-        -- It just broke: this is a new break, so it gets a new id. The id is the
-        -- mail provider's idempotency key, so it has to name ONE break.
-        v_alert_id := gen_random_uuid();
-        v_alert_payload := jsonb_build_object('status', p_status, 'reason', left(p_reason, 500));
-      ELSE
-        -- It is still the same break: the id stays, so a re-claimed alert is the
-        -- same alert and cannot be mailed twice.
-        v_alert_id := v_old_alert_id;
-      END IF;
-    ELSE
-      -- It recovered, or it was never connected: there is nothing to alert about.
-      v_pending := false;
-      v_alert_id := NULL;
-      v_alert_payload := NULL;
-    END IF;
+  IF v_old = 'connected' AND p_status IN ('failed','needs_relogin') THEN
+    v_alert_id := gen_random_uuid();
+    INSERT INTO public.ai_provider_health_alerts(alert_id, provider_code, auth_method, status, reason)
+      VALUES(v_alert_id, p_provider_code, p_auth_method, p_status, left(p_reason, 500));
+  END IF;
+  IF coalesce(v_old_pending, false) THEN
+    v_pending := true;
+    v_alert_id := v_old_alert_id;
+  ELSIF v_old = 'connected' AND p_status IN ('failed','needs_relogin') THEN
+    v_pending := true;
+    v_alert_payload := jsonb_build_object('status', p_status, 'reason', left(p_reason, 500));
+  ELSIF v_changed THEN
+    -- A recovery after successful notification clears the latest-row mirror.
+    v_pending := false;
+    v_alert_id := NULL;
+    v_alert_payload := NULL;
   ELSE
-    v_pending := coalesce(v_old_pending, false);
+    v_pending := false;
     v_alert_id := v_old_alert_id;
   END IF;
 
@@ -203,18 +319,22 @@ BEGIN
     alert_pending = EXCLUDED.alert_pending,
     alert_id = EXCLUDED.alert_id,
     alert_payload = EXCLUDED.alert_payload,
-    notified_at = CASE WHEN v_changed THEN NULL ELSE h.notified_at END,
-    claim_token = CASE WHEN v_changed THEN NULL ELSE h.claim_token END,
-    claimed_at = CASE WHEN v_changed THEN NULL ELSE h.claimed_at END;
+    notified_at = CASE WHEN v_changed AND NOT coalesce(v_old_pending, false) THEN NULL ELSE h.notified_at END,
+    claim_token = CASE WHEN v_changed AND NOT coalesce(v_old_pending, false) THEN NULL ELSE h.claim_token END,
+    claimed_at = CASE WHEN v_changed AND NOT coalesce(v_old_pending, false) THEN NULL ELSE h.claimed_at END;
+  IF p_run_id IS NOT NULL THEN
+    INSERT INTO public.ai_provider_health_completions(run_id, provider_code, auth_method)
+      VALUES (p_run_id, p_provider_code, p_auth_method) ON CONFLICT DO NOTHING;
+  END IF;
 END;
 $$;
 
 REVOKE ALL ON FUNCTION public.record_ai_provider_health(text, text, text, text, int, int, int, int, uuid) FROM PUBLIC, anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.record_ai_provider_health(text, text, text, text, int, int, int, int, uuid) TO service_role;
 
--- claim_ai_provider_health_notifications returns the rows whose alert is still
--- pending and claims them. The pending flag, not previous_status, decides: a
--- provider that is re-checked while still broken keeps its pending alert.
+-- claim_ai_provider_health_notifications claims immutable unsent outbox events.
+-- Latest status and previous_status cannot erase a pending event: a re-check,
+-- recovery or later break preserves each independent notification.
 -- A claim older than 10 minutes with no notified_at is re-claimable, so a run that died
 -- mid-notification does not lose the alert.
 --
@@ -237,18 +357,20 @@ BEGIN
   END IF;
 
   RETURN QUERY
-  UPDATE public.ai_provider_health h
-     SET claim_token = p_claim_token, claimed_at = now()
-   WHERE h.alert_pending
-     AND h.status IN ('failed','needs_relogin')
-     AND h.notified_at IS NULL
-     AND (h.claim_token IS NULL OR h.claimed_at IS NULL OR h.claimed_at < now() - interval '10 minutes')
-  -- Retrying an idempotency key requires the same payload. A later health check
-  -- may change the live reason or failed status without creating a new break.
-  RETURNING h.provider_code, h.auth_method,
-    coalesce(h.alert_payload->>'status', h.status),
-    CASE WHEN h.alert_payload IS NOT NULL THEN h.alert_payload->>'reason' ELSE h.reason END,
-    h.previous_status, h.alert_id;
+  WITH claimed AS (
+    UPDATE public.ai_provider_health_alerts a
+       SET claim_token = p_claim_token, claimed_at = now()
+     WHERE a.notified_at IS NULL
+       AND (a.claim_token IS NULL OR a.claimed_at < now() - interval '10 minutes')
+    RETURNING a.*
+  ), mirrored AS (
+    UPDATE public.ai_provider_health h SET claim_token = p_claim_token, claimed_at = now()
+      FROM claimed a WHERE h.alert_id = a.alert_id RETURNING h.provider_code
+  )
+  SELECT a.provider_code, a.auth_method, a.status, a.reason, h.previous_status, a.alert_id
+    FROM claimed a JOIN public.ai_provider_health h
+      ON h.provider_code = a.provider_code AND h.auth_method = a.auth_method;
+
 END;
 $$;
 
@@ -260,10 +382,12 @@ GRANT EXECUTE ON FUNCTION public.claim_ai_provider_health_notifications(uuid) TO
 -- argument form closed the whole claim and is gone.
 DROP FUNCTION IF EXISTS public.mark_ai_provider_health_notified(uuid);
 
+DROP FUNCTION IF EXISTS public.mark_ai_provider_health_notified(uuid, text, text);
 CREATE OR REPLACE FUNCTION public.mark_ai_provider_health_notified(
   p_claim_token uuid,
   p_provider_code text,
-  p_auth_method text
+  p_auth_method text,
+  p_alert_id uuid DEFAULT NULL
 )
 RETURNS void
 LANGUAGE plpgsql
@@ -276,16 +400,25 @@ BEGIN
       USING ERRCODE = 'invalid_parameter_value';
   END IF;
 
-  UPDATE public.ai_provider_health
-     SET notified_at = now(), claim_token = NULL, claimed_at = NULL, alert_pending = false
-   WHERE claim_token = p_claim_token
-     AND provider_code = p_provider_code
-     AND auth_method = p_auth_method;
+  UPDATE public.ai_provider_health_alerts
+     SET notified_at = now(), claim_token = NULL, claimed_at = NULL
+   WHERE claim_token = p_claim_token AND provider_code = p_provider_code
+     AND auth_method = p_auth_method AND (p_alert_id IS NULL OR alert_id = p_alert_id);
+  IF NOT FOUND THEN RETURN; END IF;
+  UPDATE public.ai_provider_health h
+     SET notified_at = CASE WHEN EXISTS (SELECT 1 FROM public.ai_provider_health_alerts a
+           WHERE a.provider_code = p_provider_code AND a.auth_method = p_auth_method AND a.notified_at IS NULL)
+         THEN NULL ELSE now() END,
+         claim_token = NULL, claimed_at = NULL,
+         alert_pending = EXISTS (SELECT 1 FROM public.ai_provider_health_alerts a
+           WHERE a.provider_code = p_provider_code AND a.auth_method = p_auth_method AND a.notified_at IS NULL)
+   WHERE h.provider_code = p_provider_code AND h.auth_method = p_auth_method;
+
 END;
 $$;
 
-REVOKE ALL ON FUNCTION public.mark_ai_provider_health_notified(uuid, text, text) FROM PUBLIC, anon, authenticated;
-GRANT EXECUTE ON FUNCTION public.mark_ai_provider_health_notified(uuid, text, text) TO service_role;
+REVOKE ALL ON FUNCTION public.mark_ai_provider_health_notified(uuid, text, text, uuid) FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.mark_ai_provider_health_notified(uuid, text, text, uuid) TO service_role;
 
 -- Once a day: test every configured AI provider and sync the catalogue of the ones that
 -- pass. The run is split over four entries seven minutes apart because a single edge
@@ -341,4 +474,8 @@ BEGIN
       $$
     );
   END IF;
+  -- EXPAND may precede deployment by days. CONTRACT activates these jobs only
+  -- after the owner attests that every old writer has drained.
+  UPDATE cron.job SET active = false WHERE jobname IN
+    ('ai-provider-health-1','ai-provider-health-2','ai-provider-health-3','ai-provider-health-4');
 END $do_ai_provider_health_cron$;

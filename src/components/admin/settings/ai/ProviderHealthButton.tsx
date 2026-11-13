@@ -22,7 +22,7 @@ import type { ProviderHealthRow } from '@/hooks/ai-config/types';
  */
 export function ProviderHealthButton() {
   const { t } = useTranslation(['adminai']);
-  const { data: storedRows } = useProviderHealthStatus();
+  const { data: storedRows, error: readError, isLoading } = useProviderHealthStatus();
   const { run, isRunning, error } = useRunProviderHealth();
   const [rows, setRows] = useState<ProviderHealthRow[]>([]);
   const [summary, setSummary] = useState<string | null>(null);
@@ -31,13 +31,17 @@ export function ProviderHealthButton() {
 
   // The stored rows are the last known state; a run replaces them.
   useEffect(() => {
-    if (storedRows && storedRows.length > 0) setRows(storedRows);
+    if (storedRows !== undefined) setRows(storedRows);
   }, [storedRows]);
 
   useEffect(() => {
     if (!error) return;
     if (error === 'busy') {
       toast.error(t('adminai:busy', 'The daily check is running. Try again in a few minutes.'));
+      return;
+    }
+    if (error === 'cooldown') {
+      toast.error(t('adminai:cooldown', 'Please wait a minute before starting another check.'));
       return;
     }
     toast.error(t('adminai:runFailed', 'The check could not be completed: {{message}}', { message: error }));
@@ -96,8 +100,9 @@ export function ProviderHealthButton() {
         </ul>
       )}
 
+      {readError && <p role="alert" className="text-xs text-destructive">{t('adminai:readFailed', 'Stored provider health could not be read. Displayed results may be stale.')}</p>}
       {rows.length === 0 ? (
-        <p className="text-xs text-muted-foreground">{t('adminai:empty', 'No provider has been checked yet.')}</p>
+        !readError && !isLoading && <p className="text-xs text-muted-foreground">{t('adminai:empty', 'No provider has been checked yet.')}</p>
       ) : (
         <div className="rounded-lg border border-border overflow-x-auto">
           <Table>

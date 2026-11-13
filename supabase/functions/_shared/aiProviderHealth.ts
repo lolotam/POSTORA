@@ -7,7 +7,6 @@
 // second budget. Keeping those rules here, with no I/O, is what makes them testable and
 // what stops the two callers from drifting apart.
 
-import { describeProviderFailure } from "./providerErrors.ts";
 import { redactProviderError } from "./ai-routing-errors.ts";
 
 export type HealthAuthMethod = "api_key" | "oauth";
@@ -187,7 +186,12 @@ export function classifyApiKeyFailure(
   }
   return {
     status: "failed",
-    reason: sanitizeReason(describeProviderFailure("Provider", status, bodyText), apiKey ?? null),
+    reason: status === 401 ? "Invalid API key"
+      : status === 403 ? "API key lacks required permissions"
+      : status === 402 || /insufficient_balance|spending limit|used all available credits|customer_verification_required|1008/i.test(bodyText)
+      ? "The provider account needs billing or additional credits."
+      : status === 429 ? "Rate limit exceeded"
+      : `The provider request failed (HTTP ${Number.isInteger(status) && status >= 100 && status <= 599 ? status : 502}).`,
   };
 }
 

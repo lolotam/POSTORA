@@ -6,6 +6,60 @@ import { buildAlertTitle } from "../_shared/aiProviderAlert.ts";
 import { ProviderReadError } from "../_shared/aiProviderTest.ts";
 import type { DegradedProvider, HealthResult } from "../_shared/aiProviderHealth.ts";
 
+Deno.test("credential kinds of one provider serialize while other providers proceed", async () => {
+  const active = new Set<string>();
+  let concurrentProviders = false;
+  const probe = async (target: { provider_code: string }) => {
+    assert(!active.has(target.provider_code), "credential kinds overlapped");
+    active.add(target.provider_code);
+    if (active.size > 1) concurrentProviders = true;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  };
+  const sync = async (code: string) => {
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    active.delete(code);
+    return { added: 0, updated: 0, deactivated: 0 };
+  };
+  const { ports } = fakePorts({
+    listApiKeyProviders: async () => [{ provider_code: 'claude', name: 'Claude' }, { provider_code: 'openai', name: 'OpenAI' }],
+    resolveApiKey: async () => 'fixture', probeApiKey: probe, probeOAuth: probe,
+    syncApiKeyCatalogue: sync, syncOAuthCatalogue: (target) => sync(target.provider_code),
+  });
+  const out = await runHealthChunk(ports, { runId: 'r', chunk: 1 });
+  assertEquals(out.results.length, 3);
+  assert(concurrentProviders);
+});
+
+Deno.test("slow discovery consumes the run budget and never reaches a provider", async () => {
+  let probed = false;
+  let aborted = false;
+  const { ports } = fakePorts({
+    listApiKeyProviders: (signal) => new Promise((_resolve, reject) => {
+      signal.addEventListener('abort', () => { aborted = true; reject(signal.reason); }, { once: true });
+    }),
+    probeApiKey: async () => { probed = true; },
+  });
+  await assertRejects(() => runHealthChunk(ports, { runId: 'r', chunk: 1, deadlineMs: 15 }));
+  assert(aborted);
+  assertEquals(probed, false);
+});
+
+Deno.test("a hung target receives only the remaining global budget", async () => {
+  let claimed = false;
+  const { ports } = fakePorts({
+    probeApiKey: (_target, _key, signal) => new Promise((_resolve, reject) => {
+      signal.addEventListener('abort', () => reject(signal.reason), { once: true });
+    }),
+    claimAlerts: async () => { claimed = true; return []; },
+  });
+  const start = Date.now();
+  const out = await runHealthChunk(ports, { runId: 'r', chunk: 1, deadlineMs: 20 });
+  assertEquals(out.done, false);
+  assert(out.skipped.length > 0);
+  assert(Date.now() - start < 500);
+  assertEquals(claimed, false);
+});
+
 /** The rows the database would claim: a provider that was connected and is now failing. */
 function transitionClaim(
   transitions: Array<{ result: HealthResult; previous_status: string | null }>,
@@ -237,9 +291,10 @@ Deno.test("a failed write does not take the chunk down", async () => {
   });
   const out = await runHealthChunk(ports, { runId: "run-1", chunk: 1 });
   assertEquals(recorded.length, 0);
-  assertEquals(out.results.length, 2);
-  assert(out.results.every((r) => r.status === "failed"));
-  assert(out.results.every((r) => r.reason === "The result could not be recorded."));
+  assertEquals(out.results.length, 0);
+  assertEquals(out.done, false);
+  assertEquals(out.skipped.length, 2);
+  assert(out.skipped.every((r) => r.reason === "The result could not be recorded."));
 });
 
 // --- the admin alert ---

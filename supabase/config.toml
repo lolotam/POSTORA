@@ -57,6 +57,10 @@ verify_jwt = false
 [functions.process-store-events]
 verify_jwt = false
 
+# Cron-secret and admin JWT authentication is enforced inside the handler.
+[functions.ai-provider-health]
+verify_jwt = false
+
 [functions.higgsfield-oauth]
 verify_jwt = true
 

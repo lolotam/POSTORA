@@ -20,18 +20,18 @@ const RESEND_TIMEOUT_MS = MAX_ALERT_SEND_TIMEOUT_MS;
 /** The admin mailer: the admins from user_roles/profiles, delivered by Resend. */
 export function createAdminMailer(admin: Admin): AdminMailer {
   return {
-    async adminRecipients(): Promise<string[]> {
+    async adminRecipients(signal = AbortSignal.timeout(5_000)): Promise<string[]> {
       const { data: roles, error: rolesError } = await admin
         .from("user_roles")
         .select("user_id")
-        .eq("role", "admin");
+        .eq("role", "admin").abortSignal(signal);
       if (rolesError) throw new Error("admin role read failed");
       const ids = (roles ?? []).map((r) => (r as { user_id: string }).user_id).filter(Boolean);
       if (!ids.length) return [];
       const { data: profiles, error: profilesError } = await admin
         .from("profiles")
         .select("id, email")
-        .in("id", ids);
+        .in("id", ids).abortSignal(signal);
       if (profilesError) throw new Error("admin profile read failed");
       return (profiles ?? [])
         .map((p) => (p as { email?: unknown }).email)

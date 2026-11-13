@@ -16,6 +16,7 @@ import { HEALTH_TARGET_TIMEOUT_MS } from "./aiProviderHealth.ts";
 import { describeProviderFailure, ProviderTestError } from "./providerErrors.ts";
 import { redactProviderError } from "./ai-routing-errors.ts";
 import type { RowReader } from "./providerEndpoint.ts";
+import { providerFetch } from './providerUrlPolicy.ts';
 
 // Which probe proves a provider's key works. test-connection, set-service-key and
 // test-service each used to carry their own copy of this chain; they drifted, and
@@ -79,7 +80,7 @@ async function fetchWithTimeout(
   });
   try {
     return await Promise.race([
-      fetchImpl(url, { ...init, signal: AbortSignal.timeout(timeoutMs) }),
+      providerFetch(fetchImpl)(url, { ...init, signal: AbortSignal.timeout(timeoutMs) }),
       expiry,
     ]);
   } finally {
@@ -123,6 +124,7 @@ export async function probeProvider(
   key: string,
   timeoutMs = HEALTH_TARGET_TIMEOUT_MS,
   fetchImpl: typeof fetch = fetch,
+  signal?: AbortSignal,
 ): Promise<void> {
   const ep = provider.api_endpoint;
   try {
@@ -139,9 +141,10 @@ export async function probeProvider(
       case 'perplexity': return await testPerplexity(key, ep, timeoutMs, fetchImpl);
       case 'google': return await testGemini(key, ep, timeoutMs, fetchImpl);
       case 'anthropic': return await testAnthropic(key, ep, timeoutMs, fetchImpl);
-      case 'openai': return await testOpenAI(key, ep, await defaultTestModel(db, provider), timeoutMs, fetchImpl);
+      case 'openai': return await testOpenAI(key, ep, await defaultTestModel(db, provider, signal), timeoutMs, fetchImpl);
     }
   } catch (error) {
+    if (error instanceof ProviderReadError) throw error;
     if (error instanceof ProviderTestError) {
       throw new ProviderTestError(redactProviderError(error.message, key), error.status, redactProviderError(error.body, key));
     }
@@ -171,7 +174,7 @@ async function handleRes(res: Response, name: string, key: string) {
   if (res.ok) return;
   const t = await res.text();
   // The body can echo the key back, so it is redacted before it reaches the log.
-  console.error(`${name} test failed: ${res.status} - ${redactProviderError(t, key).slice(0, 300)}`);
+  console.error(`${name} test failed: HTTP ${res.status}`);
   throw new ProviderTestError(redactProviderError(describeProviderFailure(name, res.status, t), key), res.status, t);
 }
 
@@ -203,18 +206,21 @@ const TEST_MODEL_OVERRIDE: Record<string, string> = { vercel: 'openai/gpt-4o-min
 // Used only when a provider has no active chat model yet (e.g. DeepSeek before its first sync).
 const TEST_MODEL_FALLBACK: Record<string, string> = { deepseek: 'deepseek-chat' };
 interface ChatModelQuery {
+  abortSignal(signal: AbortSignal): ChatModelQuery;
   eq(column: string, value: unknown): ChatModelQuery;
   contains(column: string, value: string[]): ChatModelQuery;
   order(column: string): ChatModelQuery;
   limit(count: number): ChatModelQuery;
-  maybeSingle(): PromiseLike<{ data: { model_id?: string } | null }>;
+  maybeSingle(): PromiseLike<{ data: { model_id?: string } | null; error?: unknown }>;
 }
 interface ChatModelDb { from(table: string): { select(columns: string): ChatModelQuery } }
 // Takes the client as unknown: checking the generated client type against ChatModelDb hits TS2589.
-async function defaultTestModel(client: unknown, provider: { id: string; provider_code: string }): Promise<string> {
+async function defaultTestModel(client: unknown, provider: { id: string; provider_code: string }, signal?: AbortSignal): Promise<string> {
   if (TEST_MODEL_OVERRIDE[provider.provider_code]) return TEST_MODEL_OVERRIDE[provider.provider_code];
-  const { data } = await (client as ChatModelDb).from('ai_models').select('model_id').eq('provider_id', provider.id)
-    .eq('auth_method', 'api_key').eq('is_active', true).contains('capabilities', ['chat']).order('name').limit(1).maybeSingle();
+  const query = (client as ChatModelDb).from('ai_models').select('model_id').eq('provider_id', provider.id)
+    .eq('auth_method', 'api_key').eq('is_active', true).contains('capabilities', ['chat']).order('name').limit(1);
+  const { data, error } = await (signal ? query.abortSignal(signal) : query).maybeSingle();
+  if (error) throw new ProviderReadError('The probe model could not be read');
   return data?.model_id ?? TEST_MODEL_FALLBACK[provider.provider_code] ?? 'gpt-4o-mini';
 }
 
@@ -289,7 +295,7 @@ async function testElevenLabs(key: string, ep: string, timeoutMs: number, fetchI
     if (res.status === 401) throw new Error('Invalid API key');
     if (res.status === 429) throw new Error('Rate limit exceeded');
     // Another failure: keep the last one, so the reason names what really happened.
-    console.error(`ElevenLabs test failed: ${res.status} - ${redactProviderError(t, key).slice(0, 300)}`);
+    console.error(`ElevenLabs test failed: HTTP ${res.status}`);
     lastFailure = new ProviderTestError(
       redactProviderError(describeProviderFailure('ElevenLabs', res.status, t), key),
       res.status,

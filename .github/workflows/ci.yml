@@ -342,7 +342,7 @@ jobs:
           set -euo pipefail
           fn="supabase/functions"
           deno check --node-modules-dir=none "${fn}/ai-provider-health/index.ts" "${fn}/ai-config/index.ts"
-          deno test --allow-env --node-modules-dir=none "${fn}/_shared/aiProviderHealth.test.ts" "${fn}/_shared/aiProviderTest.test.ts" "${fn}/_shared/aiProviderAlert.test.ts" "${fn}/_shared/aiModelCatalogue.test.ts" "${fn}/_shared/modelCatalogSync.test.ts" "${fn}/_shared/modelCatalogSyncRun.test.ts" "${fn}/ai-provider-health/" "${fn}/ai-config/"
+          deno test --allow-read --allow-env --node-modules-dir=none "${fn}/_shared/providerUrlPolicy.test.ts" "${fn}/_shared/cron-auth.test.ts" "${fn}/_shared/providerKeys.test.ts" "${fn}/_shared/aiModelsAuthMethod.test.ts" "${fn}/_shared/aiProviderHealth.test.ts" "${fn}/_shared/aiProviderTest.test.ts" "${fn}/_shared/aiProviderAlert.test.ts" "${fn}/_shared/aiModelCatalogue.test.ts" "${fn}/_shared/modelCatalogSync.test.ts" "${fn}/_shared/modelCatalogSyncRun.test.ts" "${fn}/ai-provider-health/" "${fn}/ai-config/"
 
       - name: Typecheck and test the owner-report contract
         run: |

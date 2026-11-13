@@ -1,6 +1,7 @@
 {
   "busy": "الفحص اليومي شغال دلوقتي. جرّب تاني بعد شوية.",
   "checkAndSyncAll": "افحص و sync كل الـ providers",
+  "cooldown": "انتظر دقيقة قبل بدء فحص جديد.",
   "columnAdded": "مضاف",
   "columnChecked": "آخر فحص",
   "columnCredential": "طريقة الاتصال",
@@ -14,6 +15,7 @@
   "empty": "لسه مفيش أي provider اتفحص.",
   "lastChecked": "آخر فحص {{time}}",
   "runFailed": "الفحص ما مكملش: {{message}}",
+  "readFailed": "تعذرت قراءة حالة المزوّدات المحفوظة. النتائج المعروضة قد تكون قديمة.",
   "runIncomplete": "ما كل المزوّدات اتفحصت. شغّل الفحص تاني عشان يغطّي الباقي.",
   "running": "بنفحص الـ providers…",
   "statusConnected": "شغال",

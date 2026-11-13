@@ -9,6 +9,7 @@ export interface RowReader {
   from(table: string): {
     select(columns: string): {
       eq(column: string, value: string): {
+        abortSignal?(signal: AbortSignal): { maybeSingle(): PromiseLike<{ data: unknown; error: unknown }> };
         maybeSingle(): PromiseLike<{ data: unknown; error: unknown }>;
       };
     };

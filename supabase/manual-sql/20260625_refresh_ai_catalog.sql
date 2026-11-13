@@ -6,7 +6,7 @@
 --                 UPDATE is idempotent.
 -- Rollback: see "ROLLBACK NOTES" at the bottom.
 --
--- Requires: supabase/migrations/20261113180000_ai_provider_health.sql
+-- Requires: EXPAND 20261113180000 AND CONTRACT 20261113180100 (after edge deployment/drain).
 --   The catalogue is keyed by credential kind: UNIQUE (provider_id, model_id,
 --   auth_method). The old UNIQUE (provider_id, model_id) constraint is gone, so
 --   every conflict target here names auth_method too — a two-column target
@@ -141,7 +141,7 @@ WHERE p.provider_code = 'xai'
 ON CONFLICT (provider_id, model_id, auth_method) DO NOTHING;
 
 INSERT INTO public.ai_models (provider_id, model_id, name, description, capabilities, is_active, cost_per_1m_input_tokens, cost_per_1m_output_tokens, auth_method)
-SELECT p.id, v.model_id, v.name, v.description, ARRAY['image']::text[], true, NULL, NULL
+SELECT p.id, v.model_id, v.name, v.description, ARRAY['image']::text[], true, NULL, NULL, 'api_key'::text
 FROM public.ai_providers p,
   (VALUES
     ('grok-image-3',   'Grok Image 3',  'Latest xAI image generation'),
@@ -254,7 +254,7 @@ BEGIN
     EXECUTE $sql$
       UPDATE public.ai_models
       SET is_active = false
-      WHERE model_id = ANY($1)
+      WHERE auth_method = 'api_key' AND model_id = ANY($1)
         AND NOT EXISTS (
           SELECT 1 FROM public.default_models dm
           WHERE dm.model_id = public.ai_models.model_id
@@ -263,7 +263,7 @@ BEGIN
   ELSE
     UPDATE public.ai_models
     SET is_active = false
-    WHERE model_id = ANY(retired_ids);
+    WHERE auth_method = 'api_key' AND model_id = ANY(retired_ids);
   END IF;
 END $$;
 
@@ -274,7 +274,7 @@ COMMIT;
 -- ============================================================================
 -- 1) To remove all rows added by this script (only the ones with the IDs
 --    listed above):
---      DELETE FROM public.ai_models WHERE model_id IN (
+--      DELETE FROM public.ai_models WHERE auth_method = 'api_key' AND model_id IN (
 --        'gpt-5-nano','gpt-5.4-nano','gpt-5.4-pro','gpt-5.5','gpt-5.5-pro','o4',
 --        'gpt-image-2','gpt-image-1-mini','gpt-4o-mini-tts',
 --        'gpt-4o-mini-transcribe','gpt-4o-transcribe',
@@ -295,5 +295,5 @@ COMMIT;
 --        'sonar','sonar-pro','sonar-reasoning','sonar-reasoning-pro','sonar-deep-research'
 --      );
 -- 2) To re-activate the legacy rows deactivated in Section K, set
---    is_active = true on those model_ids.
+--    is_active = true only WHERE auth_method = 'api_key' AND model_id = ANY(the_retired_ids).
 -- ============================================================================
