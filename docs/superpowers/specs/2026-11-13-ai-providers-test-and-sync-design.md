@@ -16,6 +16,9 @@ Scope: `/admin/settings?tab=ai&sub=Providers` and one daily logical server run.
    their OAuth catalogue without inventing an API-key catalogue source. New login
    adapters and their registration remain necessary; the runner/schema need no rewrite.
    OAuth models are stored with `auth_method = 'oauth'`, separate from API-key rows.
+   Higgsfield is the exception: its platform login is OAuth, but its media catalogue
+   stays in the `api_key` partition because `generate-video` and `generate-image`
+   read only that partition.
    Refresh failure requires re-login and must never erase existing models.
 3. Run the same server implementation automatically each day. Store the latest
    connection status and last checked time. Notify **admins only** on a

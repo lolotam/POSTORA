@@ -20,7 +20,7 @@ function fixture(failure?: "read" | "write") {
       assertEquals(url.searchParams.get("on_conflict"), "provider_id,model_id,auth_method");
       const existing = rows.find((r) => r.model_id === row.model_id && r.auth_method === row.auth_method);
       if (existing) Object.assign(existing, row);
-      else rows.push({ ...row, id: "oauth-current" });
+      else rows.push({ ...row, id: "api-new" });
       return new Response(null, { status: 201 });
     }
     if (failure === "read" && method === "GET" || failure === "write" && method === "PATCH") {
@@ -39,16 +39,16 @@ function fixture(failure?: "read" | "write") {
   return { rows, db: createClient("https://database.example.test", "fixture-key", { global: { fetch: transport } }) };
 }
 
-const explore = async () => [{ id: "current", name: "Current model" }];
+const explore = async () => [{ id: "current", name: "Current model" }, { id: "fresh", name: "Fresh model" }];
 
-Deno.test("Higgsfield subscription sync preserves API-key copies and deactivates only stale OAuth rows", async () => {
+Deno.test("Higgsfield sync refreshes the api_key rows media generation reads and leaves oauth rows alone", async () => {
   const { db, rows } = fixture();
   const report = await syncHiggsfieldCatalog(db, explore);
   assertEquals(report.deactivated, 1);
-  assertEquals(rows.find((r) => r.id === "api-current")?.is_active, false);
-  assertEquals(rows.find((r) => r.id === "api-old")?.is_active, true);
-  assertEquals(rows.find((r) => r.id === "oauth-old")?.is_active, false);
-  assertEquals(rows.find((r) => r.id === "oauth-current")?.is_active, true);
+  assertEquals(rows.find((r) => r.id === "api-current")?.is_active, true);
+  assertEquals(rows.find((r) => r.id === "api-new")?.auth_method, "api_key");
+  assertEquals(rows.find((r) => r.id === "api-old")?.is_active, false);
+  assertEquals(rows.find((r) => r.id === "oauth-old")?.is_active, true);
 });
 
 for (const failure of ["read", "write"] as const) {
