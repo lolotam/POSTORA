@@ -814,7 +814,7 @@ Deno.test("WooCommerce product, stock, order and category URLs ask only for the 
   assertEquals(seen.length, 1);
   assertStringIncludes(seen[0], "_fields=id,status,payment_method,date_created,billing");
   assertEquals(procedureRead.ok, true);
-  if (procedureRead.ok) {
+  if (procedureRead.ok && "data" in procedureRead) {
     assertEquals(procedureRead.data, {
       status: "processing",
       payment_method: "cod",
@@ -2293,7 +2293,10 @@ for (const liveId of [88, 77, 99]) {
     }) as typeof fetch;
     const deps = { ...dependencies(fetchImpl), cache: mem.cache };
     const result = await executeConnector(invocation, deps);
-    assertEquals(result.ok && result.data, liveId === 88 ? [{ id: 2, name: "Recovered product" }] : []);
+    assertEquals(
+      result.ok && "data" in result && result.data,
+      liveId === 88 ? [{ id: 2, name: "Recovered product" }] : [],
+    );
     assertEquals(urls.length, liveId === 77 ? 2 : 3);
     assertStringIncludes(urls[0], "category=77");
     assertStringIncludes(urls[1], "/products/categories?");

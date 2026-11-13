@@ -24,10 +24,12 @@ Deno.test("a turn that read no state only writes over no state", async () => {
   assertEquals(filters[1], "procedure_state=is.null");
 });
 
-for (const [label, result] of [
+const failures: Array<[string, { data: unknown[] | null; error: { message: string } | null }]> = [
   ["a concurrent turn changed the state first (no row matched)", { data: [], error: null }],
   ["the database rejected the write", { data: null, error: { message: "boom" } }],
-] as const) {
+];
+
+for (const [label, result] of failures) {
   Deno.test(`persistProcedureState reports failure when ${label}`, async () => {
     const { db } = fakeDb(result);
     assertEquals(await persistProcedureState(db, "t1", null, { run_id: "r" }), false);

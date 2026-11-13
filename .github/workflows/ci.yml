@@ -324,9 +324,24 @@ jobs:
       # call real providers. Deno's directory discovery runs those too, and
       # `deno test` has no --exclude for test files, so this step enumerates the
       # hermetic test files instead of passing the two directories.
-      - name: Test the AI agent reply and adapter suites
+      #
+      # The suites are typechecked, not just run: `deno test` checks every test
+      # file and everything it imports, and the step below checks the modules no
+      # test imports -- the entrypoints the platform actually deploys. `--no-check`
+      # used to hide a dozen type errors in exactly these files.
+      - name: Typecheck and test the AI agent reply and adapter suites
         run: |
           set -euo pipefail
+          fn="supabase/functions"
+          entrypoints=()
+          for file in "${fn}/ai-agent-reply/index.ts" "${fn}/ai-agent-adapters/index.ts"; do
+            if [ ! -f "${file}" ]; then
+              echo "AI agent entrypoint is required: ${file}"
+              exit 1
+            fi
+            entrypoints+=("${file}")
+          done
+          deno check --node-modules-dir=none "${entrypoints[@]}"
           tests=()
           for dir in supabase/functions/ai-agent-reply supabase/functions/ai-agent-adapters; do
             if [ ! -d "${dir}" ]; then
@@ -341,7 +356,7 @@ jobs:
             echo "No AI agent test file was found. These suites are required."
             exit 1
           fi
-          deno test --no-config --allow-env --allow-read --allow-write --allow-net --no-check --node-modules-dir=none "${tests[@]}"
+          deno test --no-config --allow-env --allow-read --allow-write --allow-net --node-modules-dir=none "${tests[@]}"
 
       # The background worker claims jobs and the broadcast sends in chunks; both are pure and
       # need no network and no file system, so the permissions stay at --allow-env.

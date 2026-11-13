@@ -1,6 +1,6 @@
-import { assertRejects, assertEquals } from "https://deno.land/std@0.208.0/assert/mod.ts";
+import { assertRejects, assertEquals, assert } from "https://deno.land/std@0.208.0/assert/mod.ts";
 import type { TriageAnswers } from "../_shared/agentTriage.ts";
-import { applyIntentLabel, intentLabelFor, INTENT_LABELS, shouldLabel } from "./intentLabels.ts";
+import { applyIntentLabel, intentLabelFor, INTENT_LABELS, shouldLabel, type LabelDb } from "./intentLabels.ts";
 
 const answers = (intent: TriageAnswers["intent"]): TriageAnswers => ({
   needsKnowledge: null,
@@ -101,7 +101,7 @@ function labelDatabase(labels: LabelRow[] = []) {
         calls.push(record);
         return Promise.resolve({ error: null });
       };
-      return query;
+      return query as unknown as ReturnType<LabelDb["from"]>;
     },
   };
   return { db, calls, labels };
@@ -113,9 +113,9 @@ Deno.test("a stalled label write rejects with TimeoutError within two seconds", 
   const { db } = labelDatabase();
   const from = db.from;
   db.from = (table: string) => {
-    const query = from(table);
+    const query = from(table) as unknown as Record<string, unknown>;
     query.maybeSingle = () => new Promise(() => {});
-    return query;
+    return query as unknown as ReturnType<LabelDb["from"]>;
   };
   let guard: ReturnType<typeof setTimeout> | undefined;
   try {
@@ -125,6 +125,7 @@ Deno.test("a stalled label write rejects with TimeoutError within two seconds", 
         guard = setTimeout(() => reject(new Error("Test deadline exceeded")), 2_500);
       }),
     ]));
+    assert(error instanceof Error, "the rejection must be an error");
     assertEquals(error.name, "TimeoutError");
   } finally {
     clearTimeout(guard);
@@ -183,12 +184,13 @@ Deno.test("a database failure rejects with no row data in the message", async ()
       query.order = () => query;
       query.limit = () => query;
       query.maybeSingle = () => Promise.resolve({ data: null, error: { message: "db down" } });
-      return query;
+      return query as unknown as ReturnType<LabelDb["from"]>;
     },
   };
   const error = await assertRejects(
     () => applyIntentLabel(db, "user-1", "wa_5_customer", PRICING),
   );
+  assert(error instanceof Error, "the rejection must be an error");
   assertEquals(error.message.includes("wa_5_customer"), false);
   assertEquals(error.message.includes("Pricing"), false);
 });
