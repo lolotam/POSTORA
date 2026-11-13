@@ -277,3 +277,107 @@ Deno.test("the catalog's product link is copied verbatim, never shortened", asyn
   assertEquals(rows[0].product_url, longUrl);
   assertEquals(String(rows[0].product_url).includes("truncated"), false);
 });
+
+// ---------------------------------------------------------------------------
+// The probe has to describe the search the connector actually runs.
+// ---------------------------------------------------------------------------
+
+Deno.test("the probe asks the function even when the connector may also read a table", async () => {
+  // The catalog search uses the function, so a probe that only reads the table
+  // reports success for a connector whose function is missing or misnamed, and
+  // every search afterwards fails.
+  const { deps, calls } = recordingDeps([[]]);
+
+  const result = await executeConnector(
+    {
+      tool: catalogTool(),
+      credentials: { anon_key: ANON_KEY },
+      request: { action: "test_connection", parameters: {} },
+    },
+    deps,
+  );
+
+  assertEquals(result.ok, true, JSON.stringify(result));
+  assertEquals(calls.map(({ url, method }) => [new URL(url).pathname, method]), [
+    ["/rest/v1/rpc/agent_search_products", "POST"],
+    ["/rest/v1/agent_catalog_products", "GET"],
+  ]);
+});
+
+Deno.test("a connector with only the function advertises only the capability it can run", async () => {
+  // check_stock and lookup_orders read a table: an RPC-only connector has none, so
+  // advertising them would promise calls that fail on their first use.
+  const { deps } = recordingDeps([[]]);
+
+  const result = await executeConnector(
+    {
+      tool: rpcOnlyTool(),
+      credentials: { anon_key: ANON_KEY },
+      request: { action: "test_connection", parameters: {} },
+    },
+    deps,
+  );
+
+  assertEquals(result.ok, true, JSON.stringify(result));
+  assertEquals(result.ok && "capabilities" in result && result.capabilities, ["search_products"]);
+});
+
+Deno.test("a column list that will not parse fails the probe, not every search", async () => {
+  const { deps, calls } = recordingDeps([[]]);
+
+  const result = await executeConnector(
+    {
+      tool: rpcOnlyTool({ column_map: "{not json" }),
+      credentials: { anon_key: ANON_KEY },
+      request: { action: "test_connection", parameters: {} },
+    },
+    deps,
+  );
+
+  assertEquals(result.ok, false);
+  assertEquals(result.ok === false && result.error.code, "supabase_column_map_invalid");
+  assertEquals(calls.length, 0, "a configuration that cannot work is refused before any request");
+});
+
+Deno.test("a table list of several tables cannot say which one the function returns", async () => {
+  // The first entry is not the catalog table by any rule the operator wrote, so the
+  // restriction is refused rather than guessed.
+  const { deps, calls } = recordingDeps([FIXTURE]);
+
+  const result = await search(
+    catalogTool({
+      rpc_allow_list: "agent_search_products",
+      table_allow_list: "agent_catalog_products,agent_catalog_orders",
+    }),
+    { query: "heel" },
+    deps,
+  );
+
+  assertEquals(errorCodeOf(result), "supabase_columns_unmapped");
+  assertEquals(calls.length, 0);
+});
+
+Deno.test("a row the column list covers none of is not counted as a match", async () => {
+  const { deps } = recordingDeps([FIXTURE]);
+
+  const result = await search(
+    rpcOnlyTool({ select_columns: "not_a_column" }),
+    { query: "heel" },
+    deps,
+  );
+
+  // Every row was projected away: the operator's list names no column the function
+  // returns, and an empty result would read as "the catalog has nothing".
+  assertEquals(errorCodeOf(result), "supabase_columns_unmapped");
+});
+
+Deno.test("count mode is refused for a function-backed search rather than answered with the row cap", async () => {
+  // The function's result is capped at the operator's ceiling, so a count taken
+  // from it would be that cap, not the number of matches.
+  const { deps, calls } = recordingDeps([FIXTURE]);
+
+  const result = await search(rpcOnlyTool(), { query: "heel", mode: "count" }, deps);
+
+  assertEquals(errorCodeOf(result), "supabase_count_unsupported");
+  assertEquals(calls.length, 0);
+});

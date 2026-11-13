@@ -125,10 +125,10 @@ function tableAllowList(settings: Record<string, unknown>): string[] {
   const raw = settings.table_allow_list;
   if (Array.isArray(raw)) {
     return raw.filter((value): value is string => typeof value === "string")
-      .map((value) => value.trim()).filter(Boolean);
+      .map((value) => value.trim()).filter((value) => value !== "" && value !== "-");
   }
   if (typeof raw === "string") {
-    return raw.split(/[,\n]/).map((value) => value.trim()).filter(Boolean);
+    return raw.split(/[,\n]/).map((value) => value.trim()).filter((value) => value !== "" && value !== "-");
   }
   return [];
 }
@@ -302,21 +302,31 @@ export function resolveColumns(
  * a connector that has only the function takes the table its map names, and a
  * map naming several tables cannot say which one the function returns, so it
  * is refused rather than guessed.
+ *
+ * The same rule applies to the table allow-list: it may name several tables,
+ * and the function returns the rows of ONE of them. The first entry is not the
+ * catalog table by any rule the operator wrote, so a list of several is
+ * refused the same way a map of several is -- a guess filters away the product
+ * fields the agent needs, and the operator is told which table to name.
  */
 function rpcColumns(invocation: ConnectorInvocation): ResolvedColumns {
   const settings = invocation.tool.settings;
-  const allowList = tableAllowList(settings);
-  if (allowList.length > 0) return resolveColumns(settings, allowList[0], null);
   const map = columnMap(settings);
-  if (map) {
-    const keys = Object.keys(map);
-    if (keys.length === 1) return resolveColumns(settings, keys[0], null);
-    if (keys.length > 1) {
-      throw new SupabaseValidationError(
-        "supabase_columns_unmapped",
-        "This connector's per-table column list does not name the catalog table the search function returns.",
-      );
-    }
+  const mapTables = map ? Object.keys(map) : [];
+  const allowList = tableAllowList(settings);
+  // Exactly one named table names the catalog table: the per-table map first,
+  // because it is the operator's explicit per-table restriction.
+  const catalogTable = mapTables.length === 1
+    ? mapTables[0]
+    : allowList.length === 1
+    ? allowList[0]
+    : null;
+  if (catalogTable) return resolveColumns(settings, catalogTable, null);
+  if (mapTables.length > 1 || allowList.length > 1) {
+    throw new SupabaseValidationError(
+      "supabase_columns_unmapped",
+      "This connector's per-table column list does not name the catalog table the search function returns.",
+    );
   }
   const flat = splitColumns(settings.select_columns);
   if (flat.length) return { select: flat.join(","), explicit: true };
@@ -334,6 +344,17 @@ function projectColumns(row: unknown, columns: ResolvedColumns): unknown {
   return Object.fromEntries(
     Object.entries(row as Record<string, unknown>).filter(([key]) => allowed.has(key)),
   );
+}
+
+/**
+ * Whether a projection left the row with no field at all.
+ *
+ * A row the operator's restriction covers none of is not a match, and saying so
+ * keeps it out of the row count.
+ */
+function isEmptyProjection(projected: unknown): boolean {
+  return typeof projected === "object" && projected !== null && !Array.isArray(projected) &&
+    Object.keys(projected as Record<string, unknown>).length === 0;
 }
 
 function validateResource(table: string, select: string, allowList: string[]): void {
@@ -814,6 +835,11 @@ const CONNECTION_PROBE_QUERY = "postora-connection-probe";
 /**
  * The probe for a connector that has only the function. The table probe reads
  * one row of a table; this asks the function for one row instead.
+ *
+ * The probe proves the SEARCH configuration, not only the transport: the column
+ * restriction is resolved here too, so a column map that will not parse, or a
+ * list of tables that does not name the catalog table, fails the probe instead
+ * of failing every search afterwards.
  */
 async function probeRpc(
   invocation: ConnectorInvocation,
@@ -821,10 +847,67 @@ async function probeRpc(
   fn: string,
   anonKey: string,
 ): Promise<void> {
+  rpcColumns(invocation);
   const search: RpcSearch = { ...rpcSearchFor(invocation, fn, anonKey), limit: 1 };
   const callerBudget = dependencies.callBudgetMs ?? SUPABASE_CALL_TIMEOUT_MS;
   const deadline = Date.now() + Math.min(SUPABASE_LOOP_BUDGET_MS, callerBudget - SUPABASE_MIN_HOP_MS);
   await postRpc(search, CONNECTION_PROBE_QUERY, dependencies, deadline);
+}
+
+/**
+ * The probe for a connector that may read a table: one row of one allowed table.
+ *
+ * Returns the failure to report, or null when the table answered.
+ */
+async function probeTable(
+  invocation: ConnectorInvocation,
+  dependencies: AdapterDependencies,
+  anonKey: string,
+): Promise<ConnectorFailure | null> {
+  const { url: baseUrl, schema } = buildUrl(invocation);
+  const headers = {
+    Accept: "application/json",
+    apikey: anonKey,
+    Authorization: `Bearer ${anonKey}`,
+    "Accept-Profile": schema,
+  };
+  // The probe stays a single one-row read; paging would test N requests the
+  // operator never configured.
+  const url = new URL(baseUrl.toString());
+  url.searchParams.set("limit", "1");
+  const response = await safeVendorFetch(url.toString(), { method: "GET", headers }, dependencies);
+  if (!response.ok) {
+    // A 400 here is almost always a column the model invented in `select`
+    // or `filters`; saying so lets it retry without them. The vendor's own
+    // message is NOT echoed: it names columns of the operator's database.
+    return supabaseFailure(
+      "supabase_http_error",
+      response.status === 400
+        ? "Supabase rejected the query. Retry the same capability with no `select` and no `filters`."
+        : "Supabase rejected the request.",
+      response.status,
+    );
+  }
+  const payload = await readJson(response);
+  if (isPostgrestErrorBody(payload)) {
+    return supabaseFailure("supabase_postgrest_error", "Supabase returned a PostgREST error.", response.status);
+  }
+  if (!Array.isArray(payload)) {
+    return supabaseFailure("supabase_response_invalid", "Supabase returned an invalid response.", response.status);
+  }
+  return null;
+}
+
+/**
+ * The capabilities this connector can actually run.
+ *
+ * A connector that names only a function has no table to read, so every
+ * capability but the catalog search would fail on its first call. The probe
+ * advertises what the connector can do, not what the adapter could do with a
+ * table it was not given.
+ */
+function usableCapabilities(settings: Record<string, unknown>): Capability[] {
+  return rpcOnlyConnector(settings) ? ["search_products"] : SUPABASE_CAPABILITIES;
 }
 
 /** The longest word of a multi-word query, or null when there is only one word. */
@@ -932,6 +1015,10 @@ async function searchViaRpc(
       "Pass `query`: the product words from the customer's message, in their language.",
     );
   }
+  // The column restriction is resolved BEFORE the call: a configuration that cannot
+  // work is refused without spending a request on the vendor.
+  const columns = rpcColumns(invocation);
+  const secrets = credentialSecrets(invocation.credentials);
   const search = rpcSearchFor(invocation, fn, anonKey);
   const callerBudget = dependencies.callBudgetMs ?? SUPABASE_CALL_TIMEOUT_MS;
   const deadline = Date.now() + Math.min(SUPABASE_LOOP_BUDGET_MS, callerBudget - SUPABASE_MIN_HOP_MS);
@@ -944,17 +1031,33 @@ async function searchViaRpc(
     retriedWith = looser;
   }
 
-  const secrets = credentialSecrets(invocation.credentials);
-  const columns = rpcColumns(invocation);
   const collected: unknown[] = [];
   let chars = 2; // the enclosing [] of the serialized array
   let truncated: SupabaseReadEnvelope["truncated_by"] = null;
+  let projectedAway = 0;
   for (const row of rows.slice(0, search.limit)) {
-    const vetted = vetRow(projectColumns(row, columns), columns.explicit, secrets);
+    const projected = projectColumns(row, columns);
+    // A row the restriction projects to nothing is not a match: it carries no field
+    // the agent may show. Counting it would tell the agent the catalog has rows it
+    // cannot read, so it is dropped before it reaches the count.
+    if (columns.explicit && isEmptyProjection(projected)) {
+      projectedAway++;
+      continue;
+    }
+    const vetted = vetRow(projected, columns.explicit, secrets);
     const cost = JSON.stringify(vetted).length + (collected.length ? 1 : 0);
     if (chars + cost > SUPABASE_CHAR_BUDGET) { truncated = "char_budget"; break; }
     collected.push(vetted);
     chars += cost;
+  }
+  if (projectedAway > 0 && collected.length === 0) {
+    // Every row the function returned was projected away: the operator's restriction
+    // names none of the columns it returns. Saying so is better than an empty result
+    // that reads as "the catalog has nothing".
+    throw new SupabaseValidationError(
+      "supabase_columns_unmapped",
+      "This connector's per-table column list does not cover any column the search function returns.",
+    );
   }
   return {
     rows: collected,
@@ -984,50 +1087,29 @@ async function callSupabase(
     const fn = capability === "search_products" ? rpcFunction(settings) : null;
 
     if (invocation.request.action === "test_connection") {
-      // A connector that has only the function has no table to read, so the
-      // probe asks the function itself.
-      const probeFunction = rpcOnlyConnector(settings) ? rpcFunction(settings) : null;
+      // The probe asks the FUNCTION whenever the connector has one, because the
+      // catalog search uses it: a probe that only reads the table reports success
+      // for a connector whose function is missing, misnamed or unreachable, and
+      // every search afterwards fails.
+      const probeFunction = rpcFunction(settings);
       if (probeFunction) {
         await probeRpc(invocation, dependencies, probeFunction, anonKey);
+        // A connector that may also read a table needs the table probe too: the
+        // capabilities that read rows go there.
+        if (tableAllowList(settings).length > 0) {
+          const tableFailure = await probeTable(invocation, dependencies, anonKey);
+          if (tableFailure) return tableFailure;
+        }
         return {
           ok: true,
           vendor: "supabase",
           action: "test_connection",
-          capabilities: SUPABASE_CAPABILITIES,
+          capabilities: usableCapabilities(settings),
           read_only: true,
         };
       }
-      const { url: baseUrl, schema } = buildUrl(invocation);
-      const headers = {
-        Accept: "application/json",
-        apikey: anonKey,
-        Authorization: `Bearer ${anonKey}`,
-        "Accept-Profile": schema,
-      };
-      // The probe stays a single one-row read; paging would test N requests the
-      // operator never configured.
-      const url = new URL(baseUrl.toString());
-      url.searchParams.set("limit", "1");
-      const response = await safeVendorFetch(url.toString(), { method: "GET", headers }, dependencies);
-      if (!response.ok) {
-        // A 400 here is almost always a column the model invented in `select`
-        // or `filters`; saying so lets it retry without them. The vendor's own
-        // message is NOT echoed: it names columns of the operator's database.
-        return supabaseFailure(
-          "supabase_http_error",
-          response.status === 400
-            ? "Supabase rejected the query. Retry the same capability with no `select` and no `filters`."
-            : "Supabase rejected the request.",
-          response.status,
-        );
-      }
-      const payload = await readJson(response);
-      if (isPostgrestErrorBody(payload)) {
-        return supabaseFailure("supabase_postgrest_error", "Supabase returned a PostgREST error.", response.status);
-      }
-      if (!Array.isArray(payload)) {
-        return supabaseFailure("supabase_response_invalid", "Supabase returned an invalid response.", response.status);
-      }
+      const tableFailure = await probeTable(invocation, dependencies, anonKey);
+      if (tableFailure) return tableFailure;
       return {
         ok: true,
         vendor: "supabase",
@@ -1044,6 +1126,16 @@ async function callSupabase(
     }
 
     if (fn) {
+      // The function's result is capped at the operator's row ceiling, so a count
+      // taken from it would be that cap, not the number of matches: the model would
+      // tell the customer a false total. Count mode is refused rather than answered
+      // with a number that is wrong.
+      if (invocation.request.parameters.mode === "count") {
+        throw new SupabaseValidationError(
+          "supabase_count_unsupported",
+          "This connector searches through a function, which cannot count the matches. Ask for the rows instead.",
+        );
+      }
       const data = await searchViaRpc(invocation, dependencies, fn, anonKey);
       return { ok: true, vendor: "supabase", action: "execute", capability, data };
     }

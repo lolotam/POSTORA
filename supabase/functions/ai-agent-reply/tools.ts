@@ -361,6 +361,8 @@ export async function escalateConversation(
           handoff_summary_at: summaryAt,
           escalated_at: escalatedAt,
           customer_ack_sent_at: null,
+          customer_ack_claimed_at: null,
+          customer_ack_delivered_at: null,
         });
       if (insertError && insertError.code !== "23505") throw insertError;
       written = !insertError;
@@ -375,6 +377,10 @@ export async function escalateConversation(
           // A new window: staff replies count from here, and the customer is told once again.
           escalated_at: escalatedAt,
           customer_ack_sent_at: null,
+          // The claim is a lease now: a new window starts with no claim, no lease and no
+          // delivery, so the notice for this window is owed exactly once.
+          customer_ack_claimed_at: null,
+          customer_ack_delivered_at: null,
         })
         .eq("id", existing.id)
         .eq("user_id", target.userId)
@@ -718,15 +724,19 @@ export interface CustomTool {
  * a comma- or newline-separated string, exactly as the adapter's tableAllowList
  * parses it -- both sides must agree or the model is told one thing and refused
  * another.
+ *
+ * "-" is the clear marker the connector card saves for an emptied table list: a
+ * connector that searches the catalog through a function reads no table, and the
+ * marker has to read as "no tables" everywhere, not as a table named "-".
  */
 function allowedTables(settings: Record<string, unknown> | null | undefined): string[] {
   const raw = settings?.table_allow_list;
   if (Array.isArray(raw)) {
     return raw.filter((value): value is string => typeof value === "string")
-      .map((value) => value.trim()).filter(Boolean);
+      .map((value) => value.trim()).filter((value) => value !== "" && value !== "-");
   }
   if (typeof raw !== "string") return [];
-  return raw.split(/[,\n]/).map((value) => value.trim()).filter(Boolean);
+  return raw.split(/[,\n]/).map((value) => value.trim()).filter((value) => value !== "" && value !== "-");
 }
 
 /**
@@ -737,8 +747,15 @@ function allowedTables(settings: Record<string, unknown> | null | undefined): st
 export function offersCatalogSearch(tools: Pick<CustomTool, "connector_type" | "settings">[]): boolean {
   return tools.some((tool) => {
     const raw = tool.settings?.rpc_allow_list;
-    if (tool.connector_type !== "supabase" || typeof raw !== "string") return false;
-    return raw.split(/[,\n]/).map((name) => name.trim()).some((name) => name !== "" && name !== "-");
+    if (tool.connector_type !== "supabase") return false;
+    // The setting is stored as a string, and a connector may name more than one
+    // function: the adapter reads the same list the same way.
+    const names = Array.isArray(raw)
+      ? raw.filter((value): value is string => typeof value === "string")
+      : typeof raw === "string"
+      ? raw.split(/[,\n]/)
+      : [];
+    return names.map((name) => name.trim()).some((name) => name !== "" && name !== "-");
   });
 }
 
