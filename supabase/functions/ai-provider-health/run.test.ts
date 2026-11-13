@@ -1,6 +1,6 @@
 // deno-lint-ignore-file no-import-prefix
 import { assert, assertEquals, assertRejects } from "https://deno.land/std@0.208.0/assert/mod.ts";
-import { runHealthChunk, type HealthRunPorts } from "./run.ts";
+import { runHealthChunk, sendClaimedAlerts, type HealthRunPorts } from "./run.ts";
 import { AiOAuthError, AiOAuthStorageError } from "../_shared/aiOAuth/errors.ts";
 import { OAuthProbeError } from "../_shared/providerErrors.ts";
 import { buildAlertTitle } from "../_shared/aiProviderAlert.ts";
@@ -626,7 +626,7 @@ for (const authMethod of ["api_key", "oauth"] as const) {
 
 
 for (const phase of ['probe', 'sync'] as const) {
-  for (const failure of [new AiOAuthStorageError(), new AiOAuthError('not_connected')]) {
+  for (const failure of [new AiOAuthStorageError(), new AiOAuthError('not_connected'), new AiOAuthError('lease_lost')]) {
     Deno.test(`round5 ${phase} ${failure.name}/${failure.message} leaves health untouched and retryable`, async () => {
       const { ports, recorded } = fakePorts({ listApiKeyProviders: async () => [],
         ...(phase === 'probe' ? { probeOAuth: async () => { throw failure; } }
@@ -646,4 +646,58 @@ Deno.test('round5 catalogue source and lease refusals never overwrite a successf
   assertEquals(recorded, []);
   assertEquals(out.skipped.length, 1);
   assertEquals(out.done, false);
+});
+
+Deno.test('alert phase claims the next event only after settling the current event', async () => {
+  const pending = ['first', 'second'];
+  const sent: string[] = [];
+  const closed: string[] = [];
+  const { ports } = fakePorts({
+    claimAlerts: async () => {
+      assertEquals(sent.length, closed.length, 'next claim must wait for acknowledgement');
+      const code = pending.shift();
+      return code ? [{ provider_code: code, display_name: code, auth_method: 'api_key', status: 'failed', reason: null, alert_id: code }] : [];
+    },
+    sendAlert: async row => { sent.push(row.provider_code); },
+    markAlertNotified: async (_token, row) => { closed.push(row.provider_code); },
+  });
+  await sendClaimedAlerts(ports, 'claim', 1000);
+  assertEquals(sent, ['first', 'second']);
+  assertEquals(closed, sent);
+});
+
+Deno.test('successful alert send has a separate live acknowledgement deadline', async () => {
+  let sendSignal: AbortSignal | undefined;
+  let marked = false;
+  let claimed = false;
+  const { ports } = fakePorts({
+    claimAlerts: async () => {
+      if (claimed) return [];
+      claimed = true;
+      return [{ provider_code: 'openai', display_name: 'OpenAI', auth_method: 'api_key', status: 'failed', reason: null, alert_id: 'break' }];
+    },
+    sendAlert: async (_row, signal) => { sendSignal = signal; },
+    markAlertNotified: async (_token, _row, signal) => {
+      assert(signal !== sendSignal, 'acknowledgement must not reuse the send timeout');
+      assert(!signal.aborted);
+      marked = true;
+    },
+  });
+  await sendClaimedAlerts(ports, 'claim', 1000);
+  assert(marked);
+});
+
+Deno.test('scheduled recovery drains more than four chunks after a failed call and timeout', async () => {
+  const codes = Array.from({ length: 31 }, (_, i) => `provider-${String(i).padStart(2, '0')}`);
+  let failRead = true;
+  const { ports, recorded } = fakePorts({
+    listApiKeyProviders: async () => { if (failRead) { failRead = false; throw new Error('temporary outage'); } return codes.map(provider_code => ({ provider_code, name: provider_code })); },
+    listOAuthConnections: async () => [], resolveApiKey: async () => 'fixture',
+  });
+  await assertRejects(() => runHealthChunk(ports, { runId: 'daily', chunk: 1 }));
+  const timeout = await runHealthChunk(ports, { runId: 'daily', chunk: 2, deadlineMs: 0 });
+  assertEquals(timeout.done, false);
+  for (let call = 3; call <= 8; call++) await runHealthChunk(ports, { runId: 'daily', chunk: call });
+  assertEquals(recorded.map(r => r.provider_code), codes);
+  assertEquals(new Set(recorded.map(r => r.provider_code)).size, 31);
 });

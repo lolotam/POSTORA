@@ -1,3 +1,5 @@
+import { ProviderConfigurationError } from "./providerEndpoint.ts";
+
 // Provider credentials may only leave the edge network for these vendor hosts.
 // Exact hosts also exclude arbitrary DNS names (including rebinding endpoints),
 // IP literals, internal names and metadata aliases. New vendors require review.
@@ -11,10 +13,10 @@ const PROVIDER_HOSTS = new Set([
 
 export function assertProviderUrl(value: string): URL {
   let url: URL;
-  try { url = new URL(value); } catch { throw new Error('Invalid provider endpoint'); }
+  try { url = new URL(value); } catch { throw new ProviderConfigurationError('Invalid provider endpoint'); }
   if (url.protocol !== 'https:' || url.username || url.password || url.port ||
     !PROVIDER_HOSTS.has(url.hostname) || url.hash) {
-    throw new Error('Provider endpoint must use an approved HTTPS vendor host');
+    throw new ProviderConfigurationError('Provider endpoint must use an approved HTTPS vendor host');
   }
   return url;
 }

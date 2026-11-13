@@ -1,4 +1,5 @@
 export type AiOAuthErrorCode =
+  | 'lease_lost'
   | 'not_connected'
   | 'reauth_required'
   | 'refresh_failed'

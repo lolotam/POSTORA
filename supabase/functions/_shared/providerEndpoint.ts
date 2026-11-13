@@ -10,11 +10,15 @@ export const BUILTIN_CHAT_PROVIDERS: ReadonlySet<string> = new Set([
  * WHY a distinct error
  * A failed read and a missing provider look the same to a caller that only sees
  * "no row": one is a server that is unwell, the other is a configuration the admin
- * can fix. Only the second one is a provider degradation, so they must not share
- * an error type.
+ * can fix. Neither establishes provider availability; both remain retryable run errors.
  */
 export class ProviderReadError extends Error {
   override name = "ProviderReadError";
+}
+
+/** Local policy/registry configuration cannot establish a provider outage. */
+export class ProviderConfigurationError extends ProviderReadError {
+  override name = "ProviderConfigurationError";
 }
 
 /** The one read shape this module and providerKeys.ts need from a Supabase client. */

@@ -33,6 +33,7 @@ function fixtureAdmin(failingTable?: string, failureStatus = 503) {
   const transport = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = new URL(input instanceof Request ? input.url : String(input));
     requests.push(url.pathname);
+    if (url.pathname.endsWith('/get_ai_oauth_credentials') && !failingTable) return Response.json({ access: 'fixture', refresh: '', expires: Date.now() + 3600000, status: 'connected' });
     if (url.pathname.endsWith('/' + failingTable)) return new Response(JSON.stringify({ message: 'storage failed' }), { status: failureStatus, headers: { 'content-type': 'application/json' } });
     assert(init?.signal, 'database transport must carry cancellation');
     let rows = tables[url.pathname.split('/').pop() ?? ''] ?? [];
@@ -160,4 +161,70 @@ Deno.test('round5 Higgsfield credential storage outage is never a re-login resul
   const { admin } = fixtureAdmin('provider_api_keys', 400);
   await assertRejects(() => createHealthRunPorts(admin).probeOAuth({ provider_code: 'higgsfield', oauth_provider: 'higgsfield',
     auth_method: 'oauth', display_name: 'Higgsfield' }, AbortSignal.timeout(1000)), ProviderReadError);
+});
+
+Deno.test('missing provider is a local run error at the production probe adapter', async () => {
+  const { admin } = fixtureAdmin();
+  await assertRejects(() => createHealthRunPorts(admin).probeApiKey({ provider_code: 'removed',
+    auth_method: 'api_key', display_name: 'Removed' }, 'fixture', AbortSignal.timeout(1000)), ProviderReadError);
+});
+
+Deno.test('Higgsfield rotated tokens persist after the probe target aborts', async () => {
+  const controller = new AbortController();
+  let stored = false;
+  let finishSave!: () => void;
+  const saved = new Promise<void>(resolve => { finishSave = resolve; });
+  const admin = createClient('https://database.example.test', 'fixture', { global: { fetch: (async (input, init) => {
+    const table = new URL(String(input)).pathname.split('/').pop();
+    if (init?.method === 'POST') {
+      assertEquals(table, 'provider_api_keys');
+      assertEquals(init.signal?.aborted, false, 'rotated-token save needs a live independent deadline');
+      stored = true;
+      finishSave();
+      return new Response(null, { status: 201 });
+    }
+    return Response.json(table === 'provider_api_keys'
+      ? { access_token: 'old', refresh_token: 'unused', expires_at: new Date(0).toISOString(), meta: { redirect_uri: 'https://callback.example.test' } }
+      : { client_id: 'fixture-client', client_secret: null, issuer: 'https://mcp.higgsfield.ai', redirect_uri: 'https://callback.example.test' });
+  }) as typeof fetch } });
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async (input) => {
+    if (String(input).includes('/token')) {
+      controller.abort();
+      return Response.json({ access_token: 'rotated-access', refresh_token: 'rotated-refresh', expires_in: 3600 });
+    }
+    if (String(input).includes('oauth-protected-resource')) return Response.json({ authorization_servers: ['https://mcp.higgsfield.ai'] });
+    return Response.json({ issuer: 'https://mcp.higgsfield.ai', token_endpoint: 'https://mcp.higgsfield.ai/token', authorization_endpoint: 'https://mcp.higgsfield.ai/authorize' });
+  }) as typeof fetch;
+  try {
+    await assertRejects(() => createHealthRunPorts(admin).probeOAuth({ provider_code: 'higgsfield', oauth_provider: 'higgsfield',
+      auth_method: 'oauth', display_name: 'Higgsfield' }, controller.signal));
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try { await Promise.race([saved, new Promise<void>((_, reject) => { timer = setTimeout(() => reject(new Error('rotated tokens were discarded')), 100); })]); }
+    finally { if (timer) clearTimeout(timer); }
+    assert(stored);
+  } finally { globalThis.fetch = originalFetch; }
+});
+
+for (const scenario of ['unreadable', 'empty', 'unknown-model'] as const) {
+  Deno.test(`OAuth ${scenario} registry is local incomplete work, never an upstream outage`, async () => {
+    const { admin } = fixtureAdmin();
+    const registry = () => {
+      if (scenario === 'unreadable') throw new Error('registry unavailable');
+      return scenario === 'empty' ? [] : [{ id: 'nonexistent-fixture-model' }];
+    };
+    await assertRejects(() => createHealthRunPorts(admin, undefined, registry).probeOAuth({
+      provider_code: 'openrouter', oauth_provider: 'openrouter', auth_method: 'oauth', display_name: 'OpenRouter',
+    }, AbortSignal.timeout(1000)), ProviderReadError);
+  });
+}
+
+Deno.test('the production alert adapter claims only one event for the current send', async () => {
+  let limit: unknown;
+  const admin = createClient('https://database.example.test', 'fixture', { global: { fetch: (async (_input, init) => {
+    limit = JSON.parse(String(init?.body)).p_limit;
+    return Response.json([]);
+  }) as typeof fetch } });
+  await createHealthRunPorts(admin).claimAlerts(crypto.randomUUID(), AbortSignal.timeout(1000));
+  assertEquals(limit, 1);
 });

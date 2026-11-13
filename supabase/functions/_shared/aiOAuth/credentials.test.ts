@@ -96,7 +96,10 @@ function testDeps(
   overrides: Partial<Pick<CredentialDeps, "refresh" | "getApiKey" | "sleep">> = {},
 ): CredentialDeps {
   return {
-    admin: fake.admin as never,
+    admin: { ...fake.admin, rpc: (name: string, args: Record<string, unknown>) => {
+      const promise = fake.admin.rpc(name, args);
+      return Object.assign(promise, { abortSignal: () => promise });
+    } } as never,
     refresh:
       overrides.refresh ??
       (async (_provider, refreshToken) => ({
@@ -312,7 +315,7 @@ Deno.test("a revoked refresh whose lease was replaced meanwhile is not reported 
   });
 
   const error = await assertRejects(() => getFreshOAuthCredential(deps, "anthropic"), AiOAuthError);
-  assertEquals(error.code, "refresh_failed");
+  assertEquals(error.code, "lease_lost");
   assertEquals(fake.row.status, "connected");
 });
 
@@ -352,7 +355,7 @@ Deno.test("a disconnect during the refresh is not undone by the refresh completi
 
   const error = await assertRejects(() => getFreshOAuthCredential(deps, "anthropic"), AiOAuthError);
 
-  assertEquals(error.code, "refresh_failed");
+  assertEquals(error.code, "lease_lost");
   assertEquals(fake.row.credentials, null, "the deleted connection must stay deleted");
 });
 
@@ -492,3 +495,25 @@ Deno.test('round5 target abort cancels credential read before refresh can start'
   assertEquals(aborted, true);
   assertEquals(refreshed, false);
 });
+
+for (const abortAt of ["claim_ai_oauth_refresh", "post-claim-read"]) {
+  Deno.test(`pre-rotation cancellation at ${abortAt} releases the known lease`, async () => {
+    const controller = new AbortController();
+    const fake = fakeAdmin({ credentials: { access: "old", refresh: "unused", expires: 0 } });
+    const rpc = fake.admin.rpc.bind(fake.admin);
+    let reads = 0;
+    fake.admin.rpc = async (name, args) => {
+      const response = await rpc(name, args);
+      if (name === "get_ai_oauth_credentials") reads++;
+      if (name === abortAt || abortAt === "post-claim-read" && reads === 2) controller.abort();
+      return response;
+    };
+    let rotations = 0;
+    const deps = testDeps(fake, { refresh: async () => { rotations++; return { access: "new", refresh: "next", expires: 900000 }; } });
+    await assertRejects(() => getFreshOAuthCredential(deps, "anthropic", controller.signal));
+    assertEquals(rotations, 0);
+    assertEquals(fake.row.leaseToken, null);
+    assertEquals(fake.row.lockUntil, null);
+    assertEquals(fake.calls.filter(c => c.name === "fail_ai_oauth_refresh").length, 1);
+  });
+}

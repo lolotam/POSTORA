@@ -16,12 +16,12 @@ import { getModels } from "npm:@mariozechner/pi-ai@0.73.1";
 import { loadProbeTarget, probeProvider } from "../_shared/aiProviderTest.ts";
 import { OAuthProbeError } from "../_shared/providerErrors.ts";
 import { resolveProviderKey, STANDALONE_SERVICE_ENV } from "../_shared/providerKeys.ts";
-import { ProviderReadError, type RowReader } from "../_shared/providerEndpoint.ts";
+import { ProviderReadError, ProviderConfigurationError, type RowReader } from "../_shared/providerEndpoint.ts";
 import { AiOAuthStorageError } from "../_shared/aiOAuth/errors.ts";
 import { mapIdOnlyChatCatalog, type MappedCatalog } from "../_shared/modelCatalogSync.ts";
 import { runCatalogSync, SYNCABLE_PROVIDERS } from "../_shared/modelCatalogSyncRun.ts";
 import { defaultCredentialDeps, getFreshOAuthCredential } from "../_shared/aiOAuth/credentials.ts";
-import { OAUTH_PROVIDER_CODE, type OAuthProviderId } from "../_shared/aiOAuth/clients.ts";
+import type { OAuthProviderId } from "../_shared/aiOAuth/clients.ts";
 import { callPiOAuth, defaultPiCallDeps } from "../_shared/aiOAuth/piCall.ts";
 import { alertRowsToDegraded, sendDegradedProviderAlert } from "../_shared/aiProviderAlert.ts";
 import { verifyCronOrAdmin } from "../_shared/cron-auth.ts";
@@ -81,7 +81,10 @@ function signalReader(admin: Admin, signal: AbortSignal): RowReader {
  * The service role is the only writer of ai_models, ai_provider_health and the alert
  * claim: the browser never writes them.
  */
-export function createHealthRunPorts(admin: Admin, leaseHolder?: string): HealthRunPorts {
+type OAuthModelRegistry = (provider: OAuthProviderId) => unknown[];
+const oauthModelRegistry: OAuthModelRegistry = provider => getModels(provider as never) as unknown[];
+
+export function createHealthRunPorts(admin: Admin, leaseHolder?: string, registry: OAuthModelRegistry = oauthModelRegistry): HealthRunPorts {
   let higgsfieldClient: HiggsfieldMcpClient | undefined;
 
   const mailer = createAdminMailer(admin);
@@ -153,7 +156,7 @@ export function createHealthRunPorts(admin: Admin, leaseHolder?: string): Health
 
     async probeApiKey(target: HealthTarget, key: string, signal: AbortSignal): Promise<void> {
       const provider = await loadProbeTarget(admin as unknown as RowReader, target.provider_code, signal);
-      if (!provider) throw new Error(`Provider ${target.provider_code} is missing`);
+      if (!provider) throw new ProviderConfigurationError("The provider is no longer configured");
       // The probe's own fetch is bounded by the target's signal, so a target that
       // runs out of time stops working instead of being abandoned.
       await probeProvider(admin, provider, key, HEALTH_TARGET_TIMEOUT_MS, boundedFetch(signal), signal);
@@ -175,7 +178,7 @@ export function createHealthRunPorts(admin: Admin, leaseHolder?: string): Health
         };
         try {
           // The existing platform OAuth helper owns refresh semantics. Bind its
-          // database reads/writes to this target instead of merely bounding the wait.
+          // reads to this target. A rotated-token save has its own bounded deadline.
           const platformDb = { from: (table: string) => ({
             select: (columns: string) => {
               let query = admin.from(table).select(columns).abortSignal(signal);
@@ -187,7 +190,7 @@ export function createHealthRunPorts(admin: Admin, leaseHolder?: string): Health
             },
             insert: (row: Record<string, unknown>) => storedResult(admin.from(table).insert(row).abortSignal(signal)),
             upsert: (row: Record<string, unknown>, options?: { onConflict: string }) =>
-              storedResult(admin.from(table).upsert(row, options).abortSignal(signal)),
+              storedResult(admin.from(table).upsert(row, options).abortSignal(AbortSignal.timeout(5_000))),
           }) };
           const token = await withSignal(getValidAccessToken(platformDb), signal);
           const client = HiggsfieldMcpClient.fromCredential({ accessToken: token, source: "platform",
@@ -207,7 +210,7 @@ export function createHealthRunPorts(admin: Admin, leaseHolder?: string): Health
         return;
       }
       if (!oauthProvider || !isOAuthProviderId(oauthProvider)) {
-        throw new Error(`Provider ${target.provider_code} has no subscription sign-in`);
+        throw new ProviderConfigurationError("The subscription provider is not configured");
       }
       const credentials = defaultCredentialDeps(admin as never);
       // The token refresh lives inside pi-ai and cannot be cancelled, so the wait
@@ -219,7 +222,7 @@ export function createHealthRunPorts(admin: Admin, leaseHolder?: string): Health
         }),
         signal,
       );
-      const modelId = firstOAuthModel(oauthProvider);
+      const modelId = firstOAuthModel(oauthProvider, registry);
       const response = await withSignal(
         callPiOAuth(
           defaultPiCallDeps(),
@@ -232,6 +235,7 @@ export function createHealthRunPorts(admin: Admin, leaseHolder?: string): Health
         ),
         signal,
       );
+      if (response.status === 424) throw new ProviderConfigurationError("The subscription probe model is unavailable");
       if (!response.ok) {
         // The upstream body can quote the request, so it is never stored: the
         // reason is a fixed sentence with the status code and nothing else.
@@ -261,11 +265,11 @@ export function createHealthRunPorts(admin: Admin, leaseHolder?: string): Health
         return { added: report.added, updated: report.updated, deactivated: report.deactivated };
       }
       if (!oauthProvider || !isOAuthProviderId(oauthProvider)) {
-        throw new Error(`Provider ${target.provider_code} has no subscription sign-in`);
+        throw new ProviderConfigurationError("The subscription provider is not configured");
       }
       // The OAuth catalogue is pi-ai's registry, not the provider's own /models.
       const catalogue: MappedCatalog = {
-        ...mapIdOnlyChatCatalog(piModels(oauthProvider)),
+        ...mapIdOnlyChatCatalog(piModels(oauthProvider, registry)),
         managedCapabilities: ["chat"],
       };
       const report = await runCatalogSync(admin as never, target.provider_code, boundedFetch(signal), {
@@ -294,7 +298,7 @@ export function createHealthRunPorts(admin: Admin, leaseHolder?: string): Health
 
     async claimAlerts(claimToken: string, signal: AbortSignal) {
       const { data, error } = await admin.rpc("claim_ai_provider_health_notifications", {
-        p_claim_token: claimToken,
+        p_claim_token: claimToken, p_limit: 1,
       }).abortSignal(signal);
       if (error) throw new Error("provider health claim failed");
       const degraded = alertRowsToDegraded((data ?? []) as Array<Record<string, unknown>>);
@@ -326,19 +330,19 @@ export function createHealthRunPorts(admin: Admin, leaseHolder?: string): Health
 }
 
 /** pi-ai's model list for one OAuth provider. */
-function piModels(oauthProvider: OAuthProviderId): unknown[] {
+function piModels(oauthProvider: OAuthProviderId, registry: OAuthModelRegistry): unknown[] {
   try {
-    return getModels(oauthProvider as never) as unknown[];
+    return registry(oauthProvider);
   } catch {
-    return [];
+    throw new ProviderConfigurationError("The subscription model registry could not be read");
   }
 }
 
 /** The model the OAuth probe calls. pi-ai's list is the authority on what a subscription can run. */
-function firstOAuthModel(oauthProvider: OAuthProviderId): string {
-  const models = piModels(oauthProvider) as Array<{ id?: unknown }>;
+function firstOAuthModel(oauthProvider: OAuthProviderId, registry: OAuthModelRegistry): string {
+  const models = piModels(oauthProvider, registry) as Array<{ id?: unknown }>;
   const id = models.map((m) => String(m.id ?? "")).find((value) => value.length > 0);
-  if (!id) throw new Error(`No model is available for the ${OAUTH_PROVIDER_CODE[oauthProvider]} sign-in`);
+  if (!id) throw new ProviderConfigurationError("No subscription probe model is available");
   return id;
 }
 

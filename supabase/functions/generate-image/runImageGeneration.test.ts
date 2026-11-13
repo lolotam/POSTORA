@@ -1,5 +1,6 @@
 // deno-lint-ignore-file no-import-prefix
-import { assert, assertEquals } from "https://deno.land/std@0.208.0/assert/mod.ts";
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2.7.1";
+import { assert, assertEquals, assertRejects } from "https://deno.land/std@0.208.0/assert/mod.ts";
 import { McpError } from "../_shared/higgsfield-mcp.ts";
 import { HiggsfieldAuthError } from "../_shared/higgsfield-oauth.ts";
 import {
@@ -197,5 +198,25 @@ for (const worker of [false, true]) {
       assertEquals(result.kind, "succeeded");
       assertEquals(seen, [["initialize", 30_000], ["notifications/initialized", 30_000], ["tools/call", worker ? 138_000 : 30_000]]);
     } finally { globalThis.fetch = realFetch; Date.now = realNow; AbortSignal.timeout = realTimeout; }
+  });
+}
+
+for (const scenario of ['provider-metadata', 'storage-error'] as const) {
+  Deno.test(`Higgsfield image ${scenario} never uses a colliding provider's metadata`, async () => {
+    let queried = false;
+    const admin = createClient('https://database.example.test', 'fixture', { global: { fetch: (async (input) => {
+      const url = new URL(String(input));
+      queried = true;
+      assertEquals(url.searchParams.get('ai_providers.provider_code'), 'eq.higgsfield');
+      assertEquals(url.searchParams.get('auth_method'), 'eq.api_key');
+      assertEquals(url.searchParams.get('model_id'), 'eq.shared-image-model');
+      if (scenario === 'storage-error') return Response.json({ message: 'fixture storage failure' }, { status: 503 });
+      return Response.json({ metadata: { parameters: [{ name: 'vendor_required', type: 'string', required: true }] } });
+    }) as typeof fetch } });
+    const deps = defaultImageRunDeps(admin, { onDispatch: async () => true, recordHiggsfieldSuccess: async () => {} });
+    await assertRejects(() => deps.generateWithHiggsfield({ m: { ...higgs, model_id: 'shared-image-model' },
+      cred: {}, prompt: 'p', rawPrompt: 'p', references: [], userId: 'fixture', budget: budget(Infinity) }), Error,
+      scenario === 'storage-error' ? 'Image model configuration could not be read' : 'needs vendor_required');
+    assert(queried);
   });
 }

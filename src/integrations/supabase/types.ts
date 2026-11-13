@@ -13441,7 +13441,7 @@ export type Database = {
         Returns: undefined
       }
       claim_ai_provider_health_notifications: {
-        Args: { p_claim_token: string }
+        Args: { p_claim_token: string; p_limit?: number }
         Returns: {
           provider_code: string
           auth_method: string

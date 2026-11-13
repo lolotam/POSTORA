@@ -160,7 +160,12 @@ export function DefaultModelSelector({
     return providers.filter(p => p.is_active && providerIds.has(p.id));
   }, [providers, filteredModels]);
 
-  const hasModels = filteredModels.length > 0;
+  const oauthCategory = isOAuthCategory(category);
+  const { data: authCapabilities } = useAiProviderAuthCapabilities({ enabled: oauthCategory });
+  const hasOAuthModels = oauthCategory && authCapabilities?.enabled && authCapabilities.providers.some(
+    p => p.active && (p.status === 'connected' || p.status === 'reauth_required') && p.models.length > 0,
+  );
+  const hasModels = filteredModels.length > 0 || hasOAuthModels;
   const lastResort = CATEGORY_LAST_RESORT[category];
 
   return (

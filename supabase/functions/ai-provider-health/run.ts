@@ -26,7 +26,7 @@ import {
 } from "../_shared/aiProviderHealth.ts";
 import { AiOAuthError, AiOAuthStorageError } from "../_shared/aiOAuth/errors.ts";
 import { OAuthProbeError, ProviderTestError } from "../_shared/providerErrors.ts";
-import { ProviderReadError } from "../_shared/aiProviderTest.ts";
+import { ProviderReadError } from "../_shared/providerEndpoint.ts";
 import { CatalogStorageError, CatalogSyncError } from "../_shared/modelCatalogSyncRun.ts";
 
 export interface HealthRunPorts {
@@ -97,7 +97,7 @@ export interface HealthChunkResponse {
 function isRunError(error: unknown): boolean {
   return error instanceof ProviderReadError || error instanceof AiOAuthStorageError
     || error instanceof CatalogStorageError || error instanceof CatalogSyncError
-    || error instanceof AiOAuthError && error.code === "not_connected";
+    || error instanceof AiOAuthError && (error.code === "not_connected" || error.code === "lease_lost");
 }
 
 /** Routes the two failure families to a status and a sanitized sentence. */
@@ -275,8 +275,9 @@ async function sendOneAlert(
   ports: HealthRunPorts,
   claimToken: string,
   provider: DegradedProvider,
-  signal: AbortSignal,
+  timing: { signal: AbortSignal; deadline: number },
 ): Promise<void> {
+  const { signal, deadline } = timing;
   try {
     await withSignal(ports.sendAlert(provider, signal), signal);
   } catch (error) {
@@ -289,7 +290,10 @@ async function sendOneAlert(
   try {
     // One row at a time: a send that failed for another provider must not close
     // this row's alert.
-    await withSignal(ports.markAlertNotified(claimToken, provider, signal), signal);
+    const remaining = Math.floor(deadline - Date.now());
+    if (remaining <= 0) throw new Error("Alert acknowledgement budget exhausted");
+    const markSignal = AbortSignal.timeout(Math.min(1_000, remaining));
+    await withSignal(ports.markAlertNotified(claimToken, provider, markSignal), markSignal);
   } catch (error) {
     console.error("event: 'ai_provider_alert_mark_failed'", error instanceof Error ? error.name : "error");
   }
@@ -312,26 +316,33 @@ export async function sendClaimedAlerts(
   if (budgetMs <= 0) return;
   const deadline = Date.now() + budgetMs;
   const phaseSignal = AbortSignal.timeout(Math.max(1, Math.floor(budgetMs)));
-  let claimed: DegradedProvider[];
-  try {
-    claimed = await withSignal(ports.claimAlerts(claimToken, phaseSignal), phaseSignal);
-  } catch (error) {
-    console.error("event: 'ai_provider_alert_claim_failed'", error instanceof Error ? error.name : "error");
-    return;
-  }
-  if (!claimed.length) return;
-
-  for (const provider of claimed) {
-    const remaining = deadline - Date.now();
-    if (remaining <= 0) {
-      // The alert phase runs after the target phase, so it gets what is left of
-      // the budget. The rows that were not reached stay claimed and are re-claimed
-      // after ten minutes.
-      console.error("event: 'ai_provider_alert_budget_exhausted'");
+  const seen = new Set<string>();
+  while (Date.now() < deadline) {
+    // The production port claims one event. Unreached events stay available to
+    // the next chunk; only an attempted send needs the ten-minute crash fence.
+    let claimed: DegradedProvider[];
+    try {
+      claimed = await withSignal(ports.claimAlerts(claimToken, phaseSignal), phaseSignal);
+    } catch (error) {
+      console.error("event: 'ai_provider_alert_claim_failed'", error instanceof Error ? error.name : "error");
       return;
     }
-    const timeoutMs = Math.min(remaining, MAX_ALERT_SEND_TIMEOUT_MS);
-    await sendOneAlert(ports, claimToken, provider, AbortSignal.timeout(timeoutMs));
+    if (!claimed.length) return;
+    for (const provider of claimed) {
+      const identity = provider.alert_id ?? `${provider.provider_code}:${provider.auth_method}`;
+      if (seen.has(identity)) return;
+      seen.add(identity);
+      const remaining = Math.floor(deadline - Date.now());
+      if (remaining <= 1) {
+        console.error("event: 'ai_provider_alert_budget_exhausted'");
+        return;
+      }
+      // Reserve acknowledgement time inside the same phase budget, then give
+      // the write a fresh signal after a successful send.
+      const reserveMs = Math.min(1_000, Math.max(1, Math.floor(remaining / 4)));
+      const timeoutMs = Math.min(remaining - reserveMs, MAX_ALERT_SEND_TIMEOUT_MS);
+      await sendOneAlert(ports, claimToken, provider, { signal: AbortSignal.timeout(timeoutMs), deadline });
+    }
   }
 }
 

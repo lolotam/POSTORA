@@ -103,6 +103,17 @@ BEGIN
     'G6 both functions are SECURITY DEFINER with search_path pinned';
 END $$;
 
+-- Match PostgREST's named JSON argument decoding, including its interval input.
+DO $rpc_json$
+DECLARE payload jsonb := jsonb_build_object('p_job', 'higgsfield-rpc-json', 'p_holder', gen_random_uuid(), 'p_ttl', '120 seconds'); ok boolean;
+BEGIN
+  SELECT public.acquire_cron_run_lease(p_job := args.p_job, p_holder := args.p_holder, p_ttl := args.p_ttl)
+    INTO ok FROM jsonb_to_record(payload) AS args(p_job text, p_holder uuid, p_ttl interval);
+  ASSERT ok, 'PostgREST-shaped interval JSON acquires the Higgsfield lease';
+  ASSERT (SELECT expires_at = now() + interval '120 seconds' FROM public.cron_run_leases WHERE job = 'higgsfield-rpc-json'),
+    'JSON string TTL is exactly 120 seconds';
+END $rpc_json$;
+
 ROLLBACK;
 
 \echo '=== cron_run_lease: ALL CHECKS PASSED ==='

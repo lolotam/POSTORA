@@ -69,7 +69,8 @@ export const HEALTH_TARGET_BUDGET_MS = 15_000;
 export const HEALTH_RUN_DEADLINE_MS = 40_000;
 /**
  * The alert phase runs after the target phase, so it gets what is left. A row that
- * is not alerted inside this budget stays claimed and is re-claimed ten minutes later.
+ * is not attempted inside this budget remains unclaimed; an attempted send that fails
+ * is re-claimed ten minutes later.
  */
 export const HEALTH_ALERT_BUDGET_MS = 8_000;
 /**

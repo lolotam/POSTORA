@@ -159,7 +159,7 @@ async function throwAfterFail(
   // status transition did not happen: report that instead of claiming it.
   // false: a disconnect or reconnect replaced this lease, so the row never
   // took the requested status and must not be reported as if it had.
-  if (recorded !== true) throw new AiOAuthError("refresh_failed", "the connection changed while refreshing");
+  if (recorded !== true) throw new AiOAuthError("lease_lost", "the connection changed while refreshing");
   throw new AiOAuthError(code, message);
 }
 
@@ -185,12 +185,12 @@ async function refreshUnderLease(
       p_credentials: rotated,
       p_expires_at: new Date(rotated.expires).toISOString(),
     });
-    if (saved !== true) throw new AiOAuthError("refresh_failed", "the connection changed while refreshing");
+    if (saved !== true) throw new AiOAuthError("lease_lost", "the connection changed while refreshing");
     return { apiKey: deps.getApiKey(lease.provider, rotated) };
   } catch (cause) {
     // Never clear the lease after an ambiguous save: the rotated token may have
     // committed. Keep the fence until expiry instead of rotating again.
-    if (cause instanceof AiOAuthStorageError) throw cause;
+    if (cause instanceof AiOAuthStorageError || cause instanceof AiOAuthError && cause.code === "lease_lost") throw cause;
     if (cause instanceof AiOAuthError) await throwAfterFail(deps, lease, cause.code, cause.message, false);
     // pi-ai's message can quote the token endpoint's response body, so only
     // a fixed sentence is stored and returned.
@@ -200,6 +200,14 @@ async function refreshUnderLease(
     }
     return await throwAfterFail(deps, lease, "refresh_failed", "the provider token endpoint refused the refresh", false);
   }
+}
+
+/** Before rotation no provider token has been spent, so cancellation can free the fence. */
+async function releaseUnstartedRefresh(deps: CredentialDeps, provider: OAuthProviderId, token: string): Promise<void> {
+  await credentialRpc(deps, "fail_ai_oauth_refresh", {
+    p_oauth_provider: provider, p_lease_token: token,
+    p_error: "refresh stopped before rotation", p_reauth: false,
+  }, AbortSignal.timeout(5_000));
 }
 
 /**
@@ -221,19 +229,31 @@ export async function getFreshOAuthCredential(
     return { apiKey: deps.getApiKey(provider, credentials) };
   }
 
+  signal?.throwIfAborted();
+  // A committed claim must return its token even if the caller cancels.
   const { data: leaseToken } = await credentialRpc(deps, "claim_ai_oauth_refresh", {
     p_oauth_provider: provider,
     p_lease_seconds: LEASE_SECONDS,
-  }, signal);
+  }, AbortSignal.timeout(5_000));
 
   if (typeof leaseToken === "string") {
     // Refresh tokens rotate: a worker that held the previous lease may already
     // have spent the token read above, so the refresh must use the stored one.
-    const current = await readCredentials(deps, provider, signal);
-    if (!current) throw new AiOAuthError("not_connected", provider);
-    if (current.status === "reauth_required") throw new AiOAuthError("reauth_required", provider);
-    if (isFresh(current, deps.now())) return { apiKey: deps.getApiKey(provider, current) };
-    signal?.throwIfAborted();
+    let current: StoredCredentials;
+    try {
+      const stored = await readCredentials(deps, provider, AbortSignal.timeout(5_000));
+      if (!stored) throw new AiOAuthError("not_connected", provider);
+      if (stored.status === "reauth_required") throw new AiOAuthError("reauth_required", provider);
+      signal?.throwIfAborted();
+      current = stored;
+    } catch (error) {
+      await releaseUnstartedRefresh(deps, provider, leaseToken);
+      throw error;
+    }
+    if (isFresh(current, deps.now())) {
+      await releaseUnstartedRefresh(deps, provider, leaseToken);
+      return { apiKey: deps.getApiKey(provider, current) };
+    }
     // Once rotation starts it must settle under its lease, even if the health
     // caller stops waiting. Cancelling the save would discard a rotated token.
     return await refreshUnderLease(deps, { provider, token: leaseToken }, current);

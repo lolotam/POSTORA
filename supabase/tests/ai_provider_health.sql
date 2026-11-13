@@ -864,6 +864,46 @@ BEGIN
 END $aph_atomic_catalogue$;
 ROLLBACK;
 
+-- Recovery must recur after four initial HTTP calls, including a missed initial call.
+DO $recovery_schedule$
+BEGIN
+  ASSERT (SELECT schedule = '*/7 3-23 * * *' FROM cron.job WHERE jobname = 'ai-provider-health-4'),
+    'daily recovery must recur until the UTC day ends, not stop at chunk four';
+END $recovery_schedule$;
+
+BEGIN;
+DELETE FROM public.ai_provider_health_alerts;
+DO $incremental_claim$
+DECLARE token uuid := gen_random_uuid(); claimed int;
+BEGIN
+  INSERT INTO public.ai_provider_health_alerts(alert_id, provider_code, auth_method, status)
+    VALUES (gen_random_uuid(), 'openai', 'api_key', 'failed'), (gen_random_uuid(), 'openai', 'oauth', 'failed');
+  SELECT count(*) INTO claimed FROM public.claim_ai_provider_health_notifications(token, 1);
+  ASSERT claimed = 1, 'claim only the next send, never reserve the whole backlog';
+  ASSERT (SELECT count(*) = 1 FROM public.ai_provider_health_alerts WHERE claim_token IS NULL),
+    'unsent events stay immediately available for a later chunk';
+END $incremental_claim$;
+ROLLBACK;
+
+-- A shared API-key model ID is ambiguous until the selected provider is joined.
+BEGIN;
+INSERT INTO public.ai_models(provider_id, model_id, name, capabilities, metadata, auth_method)
+  SELECT id, 'health-image-shared', 'Image fixture', ARRAY['image'],
+    jsonb_build_object('vendor', provider_code), 'api_key'
+  FROM public.ai_providers WHERE provider_code IN ('openai', 'claude');
+DO $image_provider_scope$
+DECLARE metadata jsonb;
+BEGIN
+  ASSERT (SELECT count(*) = 2 FROM public.ai_models
+    WHERE model_id = 'health-image-shared' AND auth_method = 'api_key'),
+    'the credential partition allows the same model ID from two providers';
+  SELECT m.metadata INTO STRICT metadata FROM public.ai_models m
+    INNER JOIN public.ai_providers p ON p.id = m.provider_id
+    WHERE p.provider_code = 'openai' AND m.model_id = 'health-image-shared' AND m.auth_method = 'api_key';
+  ASSERT metadata->>'vendor' = 'openai', 'the selected provider supplies exactly its own metadata';
+END $image_provider_scope$;
+ROLLBACK;
+
 -- Trailing cleanup: everything this suite created, EXCEPT the provider rows
 -- that already existed before it ran.
 -- ---------------------------------------------------------------------------

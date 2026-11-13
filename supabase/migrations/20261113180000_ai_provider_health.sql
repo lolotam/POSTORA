@@ -354,7 +354,8 @@ GRANT EXECUTE ON FUNCTION public.record_ai_provider_health(text, text, text, tex
 -- The function is dropped first because its result gained a column: Postgres cannot
 -- change the result of an existing function with CREATE OR REPLACE.
 DROP FUNCTION IF EXISTS public.claim_ai_provider_health_notifications(uuid);
-CREATE OR REPLACE FUNCTION public.claim_ai_provider_health_notifications(p_claim_token uuid)
+DROP FUNCTION IF EXISTS public.claim_ai_provider_health_notifications(uuid, integer);
+CREATE OR REPLACE FUNCTION public.claim_ai_provider_health_notifications(p_claim_token uuid, p_limit integer DEFAULT 100)
 RETURNS TABLE (
   provider_code text, auth_method text, status text, reason text, previous_status text,
   alert_id uuid
@@ -364,8 +365,8 @@ SECURITY DEFINER
 SET search_path = public
 AS $$
 BEGIN
-  IF p_claim_token IS NULL THEN
-    RAISE EXCEPTION 'claim_ai_provider_health_notifications: claim token is required'
+  IF p_claim_token IS NULL OR p_limit IS NULL OR p_limit < 1 OR p_limit > 100 THEN
+    RAISE EXCEPTION 'claim_ai_provider_health_notifications: claim token and limit from 1 to 100 are required'
       USING ERRCODE = 'invalid_parameter_value';
   END IF;
 
@@ -373,8 +374,13 @@ BEGIN
   WITH claimed AS (
     UPDATE public.ai_provider_health_alerts a
        SET claim_token = p_claim_token, claimed_at = now()
-     WHERE a.notified_at IS NULL
-       AND (a.claim_token IS NULL OR a.claimed_at < now() - interval '10 minutes')
+     WHERE a.alert_id IN (
+       SELECT pending.alert_id FROM public.ai_provider_health_alerts pending
+       WHERE pending.notified_at IS NULL
+         AND (pending.claim_token IS NULL OR pending.claimed_at < now() - interval '10 minutes')
+       ORDER BY pending.created_at, pending.alert_id
+       LIMIT p_limit FOR UPDATE SKIP LOCKED
+     )
     RETURNING a.*
   ), mirrored AS (
     UPDATE public.ai_provider_health h SET claim_token = p_claim_token, claimed_at = now()
@@ -386,8 +392,8 @@ BEGIN
 END;
 $$;
 
-REVOKE ALL ON FUNCTION public.claim_ai_provider_health_notifications(uuid) FROM PUBLIC, anon, authenticated;
-GRANT EXECUTE ON FUNCTION public.claim_ai_provider_health_notifications(uuid) TO service_role;
+REVOKE ALL ON FUNCTION public.claim_ai_provider_health_notifications(uuid, integer) FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.claim_ai_provider_health_notifications(uuid, integer) TO service_role;
 
 -- One row per call: the alert is sent provider by provider, and a send that
 -- failed for one of them must not close the alert of the others. The single
@@ -467,9 +473,11 @@ REVOKE ALL ON FUNCTION public.get_cron_functions_base_url() FROM PUBLIC, anon, a
 GRANT EXECUTE ON FUNCTION public.get_cron_functions_base_url() TO service_role;
 
 -- Once a day: test every configured AI provider and sync the catalogue of the ones that
--- pass. The run is split over four entries seven minutes apart because a single edge
+-- pass. Initial calls and recurring recovery share the same daily run because one edge
 -- invocation has a hard 50 second budget and pg_cron cannot wait for a follow-up call.
--- The body carries the chunk number; chunk 1..4 cover today's maximum of sixteen targets.
+-- Chunk labels never offset the unfinished targets. The fourth job recurs every
+-- seven minutes from 03:00 through 23:59 UTC, so failures or larger catalogues
+-- cannot exhaust a fixed four-request recovery window. Completed runs only retry alerts.
 --
 -- The four bodies are written out one by one on purpose: cron.schedule runs the third
 -- argument as one statement. Each DO block resolves the environment URL at runtime
@@ -544,7 +552,7 @@ BEGIN
   IF NOT EXISTS (SELECT 1 FROM cron.job WHERE jobname = 'ai-provider-health-4') THEN
     PERFORM cron.schedule(
       'ai-provider-health-4',
-      '26 3 * * *',
+      '*/7 3-23 * * *',
       $$
       DO $do_call$
       DECLARE v_url text;

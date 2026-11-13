@@ -106,9 +106,13 @@ marker reads. Discovery and database calls carry cancellation. Each target recei
 a total budget capped by 15 seconds and the remaining global deadline. Refresh,
 probe and catalogue reads/writes share an earlier signal; up to two seconds of
 the same total budget are reserved for result recording with a later write signal.
-Credential reads and refresh claims receive that signal. Once token rotation starts,
+Initial credential reads receive that signal. Refresh claims and post-claim reads
+use independent five-second deadlines so cancellation cannot hide an acquired lease
+token. Cancellation or any other pre-rotation exit releases the token-fenced lease.
+Once token rotation starts,
 its save/failure settlement retains the existing 180-second refresh lease even if
 the health caller stops waiting; cancelling that save could discard a rotated token.
+Higgsfield rotated-token persistence likewise has an independent five-second deadline.
 The probe itself has a 12-second
 HTTP timeout. Alerts receive at most eight seconds of remaining global time and each
 send at most five seconds. The handler caps a request at 45 seconds, reduces runner
@@ -153,8 +157,10 @@ require an explicit policy change; an admin session alone cannot allow arbitrary
 
 Each connected-to-broken transition persists an immutable alert outbox event, with
 `alert_id`, original status/reason and retry claim state. Pending events survive recovery,
-changed health reasons and later independent breaks. Claim for ten minutes, send, then
-acknowledge precisely that event. A failed send or acknowledgement leaves retryable work.
+changed health reasons and later independent breaks. Claim only the next event for
+ten minutes, send, then acknowledge precisely that event. Unattempted events remain
+immediately claimable. Reserve up to one second of the alert phase for acknowledgement
+and use a fresh write deadline after a successful send. A failed send or acknowledgement leaves retryable work.
 Completed daily admissions still execute the bounded alert phase without repeating
 provider probes; later scheduled chunks can reclaim a failed delivery after ten minutes.
 Latest health retains its pending indicator; it is not the event delivery ledger.
@@ -202,7 +208,11 @@ returns busy until CONTRACT removes legacy pair uniqueness, preventing overlappi
 OAuth/API-key model IDs from reaching a writer during the rollout window. Neither migration has been applied to
 production by this implementation task.
 
-The four daily jobs run at 03:05, 03:12, 03:19 and 03:26 UTC. SQL regressions exercise
+Three initial jobs run at 03:05, 03:12 and 03:19 UTC. The fourth job recurs
+every seven minutes during 03:00-23:59 UTC to drain unfinished targets after
+failed/missed calls or when more than four chunks are needed. Chunk numbers are
+request labels, never offsets; completed runs retry pending alerts without probes.
+SQL regressions exercise
 EXPAND alone, guarded CONTRACT, coexistence/invalid kinds, real RLS controls, logical run
 admission/cooldown, immutable completion, alert recovery and lease fencing. Deno tests
 cover cancellation, ordering, OpenRouter, error privacy and catalogue behavior; frontend

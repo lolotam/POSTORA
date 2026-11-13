@@ -426,3 +426,20 @@ describe('DefaultModelSelector — provider dropdown groups', () => {
     expect(modelTrigger).toBeDisabled();
   });
 });
+
+it('subscription-only chat catalogue still permits choosing and saving an OAuth tier', async () => {
+  caps.current = { enabled: true, providers: [claudeCapability] };
+  invoke.mockImplementation(async () => ({ data: caps.current, error: null }));
+  const onSelect = vi.fn();
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  render(<QueryClientProvider client={queryClient}><DefaultModelSelector category="chat" capability="chat" title="Chat" description="" icon={Bot}
+    providers={providers} models={[]} currentDefault={null} currentFallback={null} currentFallback2={null}
+    onSetDefault={onSelect} onSetFallback={vi.fn()} onSetFallback2={vi.fn()} /></QueryClientProvider>);
+  const primarySection = (await screen.findByText('Primary')).closest('div.space-y-2') as HTMLElement;
+  await openProviderDropdown(primarySection);
+  await pickOption(/Anthropic.*subscription/);
+  const triggers = within(primarySection).getAllByRole('combobox');
+  openSelect(triggers[1]);
+  await pickOption(/claude-sonnet-4-5/);
+  expect(onSelect).toHaveBeenCalledWith('claude', 'claude-sonnet-4-5', 'oauth');
+});

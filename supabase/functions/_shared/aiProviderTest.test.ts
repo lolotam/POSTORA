@@ -321,3 +321,10 @@ Deno.test('round5 empty Moonshot catalogue validates credentials without guessin
     (async (url, init) => { requests.push({ url: String(url), method: init?.method ?? 'GET' }); return new Response('{}'); }) as typeof fetch);
   assertEquals(requests, [{ url: 'https://api.moonshot.ai/v1/models', method: 'GET' }]);
 });
+
+Deno.test('rejected endpoint remains a local configuration error without network', async () => {
+  let requests = 0;
+  await assertRejects(() => probeProvider({}, { ...XAI_TARGET, api_endpoint: 'https://private.example.test/v1' },
+    'fixture', 100, (async () => { requests++; return Response.json({}); }) as typeof fetch), ProviderReadError);
+  assertEquals(requests, 0);
+});
