@@ -826,6 +826,16 @@ function rpcParamName(settings: Record<string, unknown>, key: string, fallback: 
 }
 
 /**
+ * The query parameter names PostgREST reads for itself on a GET.
+ *
+ * The catalog call is a GET, so its arguments ride in the query string beside
+ * the filters PostgREST understands (`?select=`, `?order=`). An argument named
+ * after one of those would never reach the function -- PostgREST would take it
+ * as a filter -- so the configuration is refused rather than guessed at.
+ */
+const RESERVED_GET_PARAMS = ["select", "order", "limit", "offset"];
+
+/**
  * The two argument names the function call carries.
  *
  * The body is one object, so two arguments with the same name are one argument:
@@ -837,6 +847,12 @@ function rpcParamNames(settings: Record<string, unknown>): { queryParam: string;
   const limitParam = rpcParamName(settings, "rpc_limit_param", "max_results");
   if (queryParam === limitParam) {
     throw new SupabaseValidationError("supabase_configuration_invalid", "Supabase is not fully configured.");
+  }
+  if (RESERVED_GET_PARAMS.includes(queryParam) || RESERVED_GET_PARAMS.includes(limitParam)) {
+    throw new SupabaseValidationError(
+      "supabase_configuration_invalid",
+      `Supabase is not fully configured: the catalog function's argument names must not be ${RESERVED_GET_PARAMS.join(", ")}, which PostgREST reads for itself.`,
+    );
   }
   return { queryParam, limitParam };
 }
@@ -867,7 +883,7 @@ async function probeRpc(
   const search: RpcSearch = { ...rpcSearchFor(invocation, fn, anonKey), limit: 1 };
   const callerBudget = dependencies.callBudgetMs ?? SUPABASE_CALL_TIMEOUT_MS;
   const deadline = Date.now() + Math.min(SUPABASE_LOOP_BUDGET_MS, callerBudget - SUPABASE_MIN_HOP_MS);
-  await postRpc(search, CONNECTION_PROBE_QUERY, dependencies, deadline);
+  await getRpc(search, CONNECTION_PROBE_QUERY, dependencies, deadline);
 }
 
 /**
@@ -949,32 +965,47 @@ interface RpcSearch {
 }
 
 /**
- * The preference that makes a function call unable to commit anything.
+ * The call's URL, with the arguments in the query string.
+ *
+ * The arguments ride in the query string, where PostgREST matches them to the
+ * function's parameter names -- the same names the POST body used.
+ */
+function rpcCallUrl(search: RpcSearch, query: string): string {
+  const url = new URL(search.url);
+  url.searchParams.set(search.queryParam, query);
+  url.searchParams.set(search.limitParam, String(search.limit));
+  return url.toString();
+}
+
+/** The rows the target answered with, or the error its answer carries. */
+function rpcRows(payload: unknown, status: number): unknown[] {
+  if (isPostgrestErrorBody(payload)) {
+    throw new SupabaseValidationError("supabase_postgrest_error", "Supabase returned a PostgREST error.", status);
+  }
+  if (!Array.isArray(payload)) {
+    throw new SupabaseValidationError("supabase_response_invalid", "Supabase returned an invalid response.", status);
+  }
+  return payload;
+}
+
+/**
+ * How the catalog function is called, and why the call cannot write.
  *
  * A function runs with the rights of its owner, so an allow-listed function can
  * write even when the anon role cannot: the connector's read-only promise is
  * only true if the CALL cannot leave a write behind, whatever the function does.
- * PostgREST's `tx=rollback` runs the request in a transaction it rolls back
- * afterwards, which makes the call read-only whatever the function's body is.
  *
- * The preference is honoured only where the target allows the client to choose
- * how the transaction ends (`db-tx-end = "commit-allow-override"`); a target
- * whose PostgREST commits by default ignores it. PostgREST says which of the
- * two happened in the `Preference-Applied` header, so the connector can tell a
- * read-only call from one that was only asked to be read-only.
+ * The call is a GET. PostgREST gives a GET a READ ONLY transaction for every
+ * volatility class -- VOLATILE, STABLE and IMMUTABLE alike -- so Postgres
+ * refuses a write inside it (SQLSTATE 25006) and nothing is committed. The
+ * boundary is the server's own, not a preference the target may ignore, and it
+ * does not depend on how the project ends its transactions.
+ *
+ * The price is that a function that writes now fails instead of answering.
+ * That is the price of a reader: the connector promised a read, and a write it
+ * cannot make is better than a write it made by accident.
  */
-const READ_ONLY_PREFER = "tx=rollback";
-
-/** Whether the target's PostgREST applied the read-only transaction. */
-function readOnlyApplied(response: Response): boolean {
-  const applied = response.headers.get("Preference-Applied") ?? "";
-  return applied
-    .split(",")
-    .map((token) => token.trim().toLowerCase())
-    .includes(READ_ONLY_PREFER);
-}
-
-async function postRpc(
+async function getRpc(
   search: RpcSearch,
   query: string,
   dependencies: AdapterDependencies,
@@ -987,38 +1018,29 @@ async function postRpc(
   };
   const response = await withDeadline(
     safeVendorFetch(
-      search.url,
-      {
-        method: "POST",
-        headers: search.headers,
-        body: JSON.stringify({ [search.queryParam]: query, [search.limitParam]: search.limit }),
-        signal: abort.signal,
-      },
+      rpcCallUrl(search, query),
+      { method: "GET", headers: search.headers, signal: abort.signal },
       hopDependencies,
     ),
     deadline - Date.now(),
     abort,
   );
   if (!response.ok) {
+    // PostgREST maps Postgres' 25006 -- cannot execute in a read-only
+    // transaction -- onto 405. The GET's read-only transaction refused the
+    // write, so nothing was committed: the call failed closed, which is the
+    // promise the connector makes.
+    if (response.status === 405) {
+      throw new SupabaseValidationError(
+        "supabase_search_function_writes",
+        "The search function tried to write. PostgREST calls a function with GET in a read-only transaction, so the write was refused and nothing was committed. Use a search function that only reads.",
+        response.status,
+      );
+    }
     throw new SupabaseValidationError("supabase_http_error", "Supabase rejected the request.", response.status);
   }
-  if (!readOnlyApplied(response)) {
-    // The call was answered, but the target committed it: a function that writes
-    // would have written. The connector promised a reader, so it refuses the
-    // result rather than pass off an unproven call as a read.
-    throw new SupabaseValidationError(
-      "supabase_read_only_unenforced",
-      "The search function was not called: this project's PostgREST does not apply `tx=rollback`, so the call cannot be proven read-only. Set `db-tx-end = \"commit-allow-override\"` on the project's PostgREST and try again.",
-    );
-  }
   const payload = await withDeadline(readJson(response), deadline - Date.now(), abort);
-  if (isPostgrestErrorBody(payload)) {
-    throw new SupabaseValidationError("supabase_postgrest_error", "Supabase returned a PostgREST error.", response.status);
-  }
-  if (!Array.isArray(payload)) {
-    throw new SupabaseValidationError("supabase_response_invalid", "Supabase returned an invalid response.", response.status);
-  }
-  return payload;
+  return rpcRows(payload, response.status);
 }
 
 function rpcSearchFor(invocation: ConnectorInvocation, fn: string, anonKey: string): RpcSearch {
@@ -1033,13 +1055,13 @@ function rpcSearchFor(invocation: ConnectorInvocation, fn: string, anonKey: stri
     url: `${projectUrl.replace(/\/+$/, "")}/rest/v1/rpc/${fn}`,
     headers: {
       Accept: "application/json",
-      "Content-Type": "application/json",
       apikey: anonKey,
       Authorization: `Bearer ${anonKey}`,
-      "Content-Profile": schema,
+      // A GET has no body, so the schema of the call is the schema of the
+      // answer: Accept-Profile. The content headers have nothing to apply to.
       "Accept-Profile": schema,
-      // The call runs in a transaction the target rolls back: see READ_ONLY_PREFER.
-      Prefer: READ_ONLY_PREFER,
+      // A GET is cacheable by intermediaries, and a catalog row is not.
+      "Cache-Control": "no-store",
     },
     queryParam,
     limitParam,
@@ -1084,11 +1106,11 @@ async function searchViaRpc(
   const callerBudget = dependencies.callBudgetMs ?? SUPABASE_CALL_TIMEOUT_MS;
   const deadline = Date.now() + Math.min(SUPABASE_LOOP_BUDGET_MS, callerBudget - SUPABASE_MIN_HOP_MS);
 
-  let rows = await postRpc(search, query, dependencies, deadline);
+  let rows = await getRpc(search, query, dependencies, deadline);
   let retriedWith: string | undefined;
   const looser = rows.length === 0 ? looserQuery(query) : null;
   if (looser && deadline - Date.now() >= SUPABASE_MIN_HOP_MS) {
-    rows = await postRpc(search, looser, dependencies, deadline);
+    rows = await getRpc(search, looser, dependencies, deadline);
     retriedWith = looser;
   }
 

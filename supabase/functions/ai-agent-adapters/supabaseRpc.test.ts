@@ -33,14 +33,15 @@ function catalogTool(extra: Record<string, unknown> = { rpc_allow_list: "agent_s
 interface Call { url: string; method: string; body: unknown; headers: Record<string, string> }
 
 /**
- * The answers a target gives. `applied` is what PostgREST says it applied:
- * `null` models a target whose PostgREST ignores the read-only preference.
+ * The answers a target gives. `status` models a target that answers with an
+ * error instead of rows -- PostgREST answers 405 when a GET function tries to
+ * write, because the read-only transaction refused it.
  */
 function recordingDeps(
   answers: unknown[][],
-  options: { applied?: string | null } = {},
+  options: { status?: number } = {},
 ): { deps: AdapterDependencies; calls: Call[] } {
-  const applied = options.applied === undefined ? "tx=rollback" : options.applied;
+  const status = options.status ?? 200;
   const calls: Call[] = [];
   const deps: AdapterDependencies = {
     fetch: (url, init) => {
@@ -53,11 +54,8 @@ function recordingDeps(
       const rows = answers[Math.min(calls.length - 1, answers.length - 1)];
       return Promise.resolve(
         new Response(JSON.stringify(rows), {
-          status: 200,
-          headers: {
-            "Content-Type": "application/json",
-            ...(applied === null ? {} : { "Preference-Applied": applied }),
-          },
+          status,
+          headers: { "Content-Type": "application/json" },
         }),
       );
     },
@@ -67,6 +65,16 @@ function recordingDeps(
     log: () => {},
   };
   return { deps, calls };
+}
+
+/**
+ * The arguments the call carried, read back from its query string.
+ *
+ * The catalog function is called with GET, so the arguments ride in the query
+ * string where PostgREST matches them to the function's parameter names.
+ */
+function argsOf(call: Call): Record<string, string> {
+  return Object.fromEntries(new URL(call.url).searchParams.entries());
 }
 
 function search(tool: ConnectorTool, parameters: Record<string, unknown>, deps: AdapterDependencies) {
@@ -95,9 +103,9 @@ Deno.test("an allow-listed catalog function is called with the customer's words 
   const result = await search(catalogTool(), { query: "  كريم الكعب " }, deps);
 
   assertEquals(calls.map(({ url, method }) => [new URL(url).pathname, method]), [
-    ["/rest/v1/rpc/agent_search_products", "POST"],
+    ["/rest/v1/rpc/agent_search_products", "GET"],
   ]);
-  assertEquals(calls[0].body, { q: "كريم الكعب", max_results: 8 });
+  assertEquals(argsOf(calls[0]), { q: "كريم الكعب", max_results: "8" });
   assertEquals(dataOf(result).row_count, 2);
 });
 
@@ -124,7 +132,7 @@ Deno.test("result count is clamped to 1..25 and the parameter names follow the s
       { query: "heel", max_results: asked },
       deps,
     );
-    assertEquals(calls[0].body, { term: "heel", lim: sent }, `max_results ${String(asked)}`);
+    assertEquals(argsOf(calls[0]), { term: "heel", lim: String(sent) }, `max_results ${String(asked)}`);
   }
 });
 
@@ -142,9 +150,9 @@ Deno.test("no rows for several words retries once with the longest word and says
 
   const data = dataOf(await search(catalogTool(), { query: "كريم للكعب المتشقق" }, deps));
 
-  assertEquals(calls.map((call) => call.body), [
-    { q: "كريم للكعب المتشقق", max_results: 8 },
-    { q: "المتشقق", max_results: 8 },
+  assertEquals(calls.map((call) => argsOf(call)), [
+    { q: "كريم للكعب المتشقق", max_results: "8" },
+    { q: "المتشقق", max_results: "8" },
   ]);
   assertEquals([data.row_count, data.retried_with], [2, "المتشقق"]);
 });
@@ -189,23 +197,46 @@ Deno.test("a cleared argument name falls back to its default", async () => {
 
   await search(catalogTool({ rpc_allow_list: "agent_search_products", rpc_query_param: "-" }), { query: "heel" }, deps);
 
-  assertEquals(calls[0].body, { q: "heel", max_results: 8 });
+  assertEquals(argsOf(calls[0]), { q: "heel", max_results: "8" });
 });
 
-Deno.test("the function call runs in a transaction the target rolls back", async () => {
+Deno.test("the catalog function is called with GET, so PostgREST reads it in a read-only transaction", async () => {
   const { deps, calls } = recordingDeps([FIXTURE]);
 
   await search(catalogTool(), { query: "heel" }, deps);
 
-  assertEquals(calls[0].headers.Prefer, "tx=rollback");
+  // The read-only boundary is the server's, not a preference the target may
+  // ignore: a GET runs in a READ ONLY transaction for every volatility class, so
+  // Postgres refuses a write inside it and nothing can be committed.
+  assertEquals(calls[0].method, "GET");
+  assertEquals(calls[0].body, null, "the arguments ride in the query string, not a body");
+  assertEquals(calls[0].headers.Prefer, undefined, "the call does not ask for a rollback");
+  assertEquals(calls[0].headers["Cache-Control"], "no-store");
 });
 
-Deno.test("a target that does not apply the read-only transaction is refused", async () => {
-  const { deps } = recordingDeps([FIXTURE], { applied: null });
+Deno.test("a function that tries to write is refused and nothing was committed", async () => {
+  // PostgREST answers 405 when a GET function tries to write: the read-only
+  // transaction refused the write, so the call failed closed.
+  const { deps, calls } = recordingDeps([FIXTURE], { status: 405 });
 
   const result = await search(catalogTool(), { query: "heel" }, deps);
 
-  assertEquals(errorCodeOf(result), "supabase_read_only_unenforced");
+  assertEquals(errorCodeOf(result), "supabase_search_function_writes");
+  assertEquals(calls.length, 1);
+});
+
+Deno.test("an argument name PostgREST reads for itself is refused before any request", async () => {
+  for (const extra of [{ rpc_query_param: "select" }, { rpc_limit_param: "limit" }]) {
+    const { deps, calls } = recordingDeps([FIXTURE]);
+
+    const result = await search(
+      catalogTool({ rpc_allow_list: "agent_search_products", ...extra }),
+      { query: "heel" },
+      deps,
+    );
+
+    assertEquals([errorCodeOf(result), calls.length], ["supabase_configuration_invalid", 0]);
+  }
 });
 
 Deno.test("two argument names that are the same are refused before any request", async () => {
@@ -248,9 +279,9 @@ Deno.test("a connector with only the catalog function is not refused for having 
 
   assertEquals(errorCodeOf(result), undefined);
   assertEquals(calls.map(({ url, method }) => [new URL(url).pathname, method]), [
-    ["/rest/v1/rpc/agent_search_products", "POST"],
+    ["/rest/v1/rpc/agent_search_products", "GET"],
   ]);
-  assertEquals(calls[0].body, { q: "كريم الكعب", max_results: 8 });
+  assertEquals(argsOf(calls[0]), { q: "كريم الكعب", max_results: "8" });
   assertEquals(dataOf(result).row_count, 2);
 });
 
@@ -268,10 +299,10 @@ Deno.test("the connection probe asks the function when the connector has no tabl
 
   assertEquals(result.ok, true, JSON.stringify(result));
   assertEquals(calls.map(({ url, method }) => [new URL(url).pathname, method]), [
-    ["/rest/v1/rpc/agent_search_products", "POST"],
+    ["/rest/v1/rpc/agent_search_products", "GET"],
   ]);
   // One row, and a query no catalog holds: the probe reads nothing.
-  assertEquals(calls[0].body, { q: "postora-connection-probe", max_results: 1 });
+  assertEquals(argsOf(calls[0]), { q: "postora-connection-probe", max_results: "1" });
 });
 
 Deno.test("the operator's row ceiling caps the function's result count", async () => {
@@ -279,7 +310,7 @@ Deno.test("the operator's row ceiling caps the function's result count", async (
 
   const data = dataOf(await search(rpcOnlyTool({ max_rows: "2" }), { query: "heel" }, deps));
 
-  assertEquals(calls[0].body, { q: "heel", max_results: 2 });
+  assertEquals(argsOf(calls[0]), { q: "heel", max_results: "2" });
   assertEquals(data.row_count, 2);
 });
 
@@ -342,7 +373,7 @@ Deno.test("the probe asks the function even when the connector may also read a t
 
   assertEquals(result.ok, true, JSON.stringify(result));
   assertEquals(calls.map(({ url, method }) => [new URL(url).pathname, method]), [
-    ["/rest/v1/rpc/agent_search_products", "POST"],
+    ["/rest/v1/rpc/agent_search_products", "GET"],
     ["/rest/v1/agent_catalog_products", "GET"],
   ]);
 });

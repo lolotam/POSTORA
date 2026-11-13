@@ -245,21 +245,21 @@ const CONNECTOR_DEFINITIONS: Record<ConnectorType, ConnectorDefinition> = {
         kind: "text",
         required: false,
         help:
-          "The name of a read-only database function that searches your catalog, e.g. agent_search_products. When set, product searches call it with the customer's words instead of reading a table. Only the name you enter here can be called. The call runs in a transaction the project's PostgREST rolls back, so it cannot write; the project needs db-tx-end = 'commit-allow-override' for that.",
+          "The name of a read-only database function that searches your catalog, e.g. agent_search_products. When set, product searches call it with the customer's words instead of reading a table. Only the name you enter here can be called. The function is called with GET, which PostgREST runs in a read-only transaction, so it cannot write anything: a function that tries to write is refused and nothing is committed.",
       },
       {
         key: "rpc_query_param",
         label: "Search function: query argument (optional)",
         kind: "text",
         required: false,
-        help: "The function's argument that takes the search words. Defaults to q.",
+        help: "The function's argument that takes the search words. Defaults to q. It must not be named select, order, limit or offset, which PostgREST reads for itself.",
       },
       {
         key: "rpc_limit_param",
         label: "Search function: result-count argument (optional)",
         kind: "text",
         required: false,
-        help: "The function's argument that takes how many matches to return. Defaults to max_results.",
+        help: "The function's argument that takes how many matches to return. Defaults to max_results. It must not be named select, order, limit or offset, which PostgREST reads for itself.",
       },
     ],
     usageGuide: {
