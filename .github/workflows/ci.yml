@@ -356,7 +356,11 @@ jobs:
             echo "No AI agent test file was found. These suites are required."
             exit 1
           fi
-          deno test --no-config --allow-env --allow-read --allow-write --allow-net --node-modules-dir=none "${tests[@]}"
+          # The network is restricted to loopback: these suites are hermetic, and the
+          # suites that talk to real providers are the .live.test.ts files this step
+          # deliberately leaves out. An accidental outbound call therefore cannot
+          # reach a provider -- and cannot cost anything -- from a test run.
+          deno test --no-config --allow-env --allow-read --allow-write --allow-net=127.0.0.1 --node-modules-dir=none "${tests[@]}"
 
       # The background worker claims jobs and the broadcast sends in chunks; both are pure and
       # need no network and no file system, so the permissions stay at --allow-env.

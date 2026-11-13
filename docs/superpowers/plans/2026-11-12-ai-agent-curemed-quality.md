@@ -387,7 +387,7 @@ export function escalationApologyText(
     - The edge build that is live now calls exactly one of these functions, `advance_agent_reply` (`_shared/pendingReplies.ts:239`), and every migration above leaves it exactly as it is.
     - The edge build that is live now calls NONE of `claim_human_mode_ack`, `release_human_mode_ack`, `take_unanswered_escalation`, `restore_unanswered_escalation` — they are new in this branch, and the build that ships with it calls the LEASED variants instead. So no claim can exist in the shape the old functions write, and the rollout gap cannot strand one.
     - The new edge build calls the lease RPCs, `advance_agent_reply_kind` and the `*_for_owner` transitions, so it may only be deployed AFTER steps 3 to 7 are applied. Nothing in the new build works against a database without them.
-    - Every step redefines functions only: no table is changed, so a step that is applied twice, or a step that is applied while an old edge build is still running, leaves the old build working.
+    - Every step is `IF NOT EXISTS` / `CREATE OR REPLACE` safe to apply twice. Some of them DO alter tables — `20261112170000` adds `ai_conversation_modes.escalated_at`, `ai_threads.unanswered_escalation_since` and the outbox `generated_kind`, and the later ones add further columns — so the claim that "no table is changed" is wrong: the new columns are ADDED, and an old edge build ignores a column it does not know, which is what keeps it working. What every step does NOT do is remove or narrow anything the old build reads. A step applied twice, or applied while an old edge build is still running, leaves the old build working.
 - [ ] Merge only after the owner card.
 - [ ] After the sync:
   - Verify hashes.
