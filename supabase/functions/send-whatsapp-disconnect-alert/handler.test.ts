@@ -346,7 +346,7 @@ Deno.test("a retake after a stale claim sends the payload the first claim stored
 
   // The account is renamed and the admin list changes while the claims are live.
   account = { ...ACCOUNT, platform_username: "Renamed Store" };
-  admins = [{ email: "admin-three@example.invalid", full_name: "Admin Three" }];
+  admins = [...ADMINS, { email: "admin-three@example.invalid", full_name: "Admin Three" }];
 
   advance(CLAIM_STALE_MS + 1);
   sendsFail = false;
@@ -501,4 +501,47 @@ Deno.test("a missing account is skipped", async () => {
 
   assertEquals(rec.sent.length, 0);
   assertEquals(summary.skipped, "account not found");
+});
+
+Deno.test("email display names redact short, Unicode and overlength phone runs", () => {
+  for (const phone of ["12345", "١٢٣٤٥٦٧٨٩", "۱۲۳۴۵۶۷۸۹", "123456789012345678901", "+١٢٣ (٤٥٦) ٧٨٩٠"]) {
+    const account = { ...ACCOUNT, platform_username: `Store ${phone}` };
+    for (const html of [buildOwnerEmail(account, `Owner ${phone}`), buildAdminEmail(account, `Owner ${phone}`)]) {
+      assertFalse(html.includes(phone), phone);
+      assertFalse(/[\p{Nd}]{5,}/u.test(html.replace(/style="[^"]*"/g, "")), phone);
+      assertStringIncludes(html, "Store");
+      assertStringIncludes(html, "Owner");
+    }
+  }
+});
+
+Deno.test("stale claims never replay to a removed admin or old owner address", async () => {
+  for (const kind of ["user", "admin"]) {
+    let changed = false;
+    const { deps, rec, advance } = fakeDeps({
+      loadOwnerProfile: () => Promise.resolve(changed && kind === "user" ? { ...OWNER, email: "new@example.invalid" } : OWNER),
+      loadAdmins: () => Promise.resolve(changed && kind === "admin" ? [ADMINS[1]] : ADMINS),
+      send: (payload) => { rec.sent.push(payload); return Promise.reject(new Error("send failed")); },
+    });
+    await sendDisconnectAlerts(deps, "acc-1");
+    changed = true;
+    advance(CLAIM_STALE_MS + 1);
+    const summary = await sendDisconnectAlerts(deps, "acc-1");
+    const subject = kind === "user" ? OWNER_SUBJECT : ADMIN_SUBJECT;
+    assertEquals(rec.sent.filter((mail) => mail.subject === subject).length, 1);
+    assertEquals(summary.failed, ["acc-1"]);
+  }
+});
+
+Deno.test("persistent completion failures remain visible when a retry crosses the provider window", async () => {
+  const { deps, rec, advance } = fakeDeps({
+    isAdminAlertEnabled: () => Promise.resolve(false),
+    mark: () => Promise.reject({ code: "PGRST202", message: "marker unavailable" }),
+  });
+  assertEquals((await sendDisconnectAlerts(deps, "acc-1")).failed, ["acc-1"]);
+  advance(25 * 60 * 60 * 1000);
+  assertEquals((await sendDisconnectAlerts(deps, "acc-1")).failed, ["acc-1"]);
+  assertEquals(rec.sent.length, 2);
+  assertEquals(rec.sent[0].idempotencyKey, rec.sent[1].idempotencyKey);
+  assertEquals(rec.sent[0].html, rec.sent[1].html);
 });

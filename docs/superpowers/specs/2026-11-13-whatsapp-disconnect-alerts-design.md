@@ -97,12 +97,12 @@ and `evolutionApi.connectionState` hits `GET /instance/connectionState/{instance
 |---|---|---|
 | **Healthy** | `open` | The session is live. |
 | **Transient** | `connecting` | Baileys is (re)connecting. Baileys emits `close` then `connecting` during a *normal* reconnect — this is the flap we must not alert on. |
-| **Terminal** | everything else, including `close`, `timeout`, `unpaired`, `logged_out`, `qr`, and any state this codebase has never seen | The session is gone. The phone must scan a new QR code for the account to work again. |
+| **Terminal** | `close`, `timeout`, `unpaired`, `logged_out`, `qr` | The session is gone. The phone must scan a new QR code for the account to work again. |
 
-The classification is **fail-safe**: an unknown future state is treated as terminal, and only a state that
-is *still* terminal after the grace window (and confirmed by a second, independent poll) produces an alert.
-A state we have never seen therefore causes at worst one extra email after ten minutes, never a missed
-outage.
+Undocumented states are unverifiable: they do not open, clear, flag, or restore an episode.
+Only the confirmed terminal allowlist starts the ten-minute streak. A future provider state
+requires semantic verification before adding it; missing or malformed successful responses
+are operational failures. This avoids deactivating a healthy account on a changed provider enum.
 
 Two states are deliberately excluded from the candidate set entirely:
 
@@ -228,7 +228,7 @@ For each candidate account, in one run:
    which reactivates the row and clears the episode **in one statement**. The restore is conditional
    in SQL: the row must be inactive, its open episode must carry `flagged_at` (so it is the episode
    the watcher flagged and not one the owner or the webhook opened), and it must carry no
-   deliberate-disconnect marker. An account the owner disconnected on purpose, or one that was
+   deliberate-disconnect marker or `number_mismatch`. An account the owner disconnected on purpose, or one that was
    inactive for another reason, is never resurrected. When restore returns false, the watcher calls
    `clear_unflagged_whatsapp_disconnect_episode(account_id)`. That strips the episode, the claim,
    and both email markers, and it deletes the stored payloads. It does **not** change `is_active`,
@@ -277,7 +277,10 @@ bounded; there is no fan-out and no unbounded `waitUntil` work.
 Evolution call, so on the next five-minute tick the row's age is a little under five minutes. A
 cutoff of exactly five minutes would therefore skip that account and halve the polling cadence to
 ten minutes. The window is `POLL_FRESHNESS_MINUTES = POLL_CRON_INTERVAL_MINUTES - 1` (four minutes),
-so every account is polled on every tick.
+so freshness alone does not skip the next tick. With more than 50 eligible accounts, or
+when the 50-second run budget is exhausted, accounts rotate oldest-first across ticks.
+The ideal full-rotation interval is `ceil(account_count / 50) * 5` minutes; slow accounts
+can extend it further. Detection thresholds count elapsed time, not guaranteed poll cadence.
 
 ---
 
@@ -431,7 +434,7 @@ scanning a new QR code on the WhatsApp setup page. It uses the same layout with 
 gradient so an admin can tell the two apart at a glance.
 
 **Privacy.** The email carries the account's display name and the owner's display name. It never carries a
-phone number. A name that is exactly the phone number becomes "WhatsApp". A run of 7 to 15 digits
+phone number. A name that is exactly the phone number becomes "WhatsApp". A run of at least five Unicode decimal digits, without an upper bound,
 inside a longer name, including a number written with spaces, dashes, dots, parentheses, or a leading
 plus, is removed before the name is HTML-escaped. The shop words stay. The same removal is applied
 to the owner's display name. The rule is explicit in the existing template:
@@ -453,7 +456,7 @@ Every interpolated value goes through the same `escapeHtml` helper
 - From address: `Postora <notifications@postora.cloud>` — the same sender as
   `send-token-expiry-notifications` and `send-undelivered-store-alerts`
   (`supabase/functions/send-undelivered-store-alerts/index.ts:12`).
-- The admin email is sent to all admins in one `to` array, as `send-token-failure-alert` does
+- The admin email is sent to all eligible admins in one `to` array, as `send-token-failure-alert` does. These admins can see each other's addresses in the To header. Backend-only payload storage prevents disclosure to ordinary browser users; it does not hide addresses among eligible admins.
   (`supabase/functions/send-token-failure-alert/index.ts:462-467`).
 - Delivery status: the only live delivery-tracking mechanism in this repo is `admin_inbox_messages`
   (direction `outbound`, `resend_id`, `status`), which `process-scheduled-emails` writes
@@ -538,8 +541,9 @@ One RPC per write, each `SECURITY DEFINER`, `SET search_path = public, pg_temp`,
 | `mark_whatsapp_disconnect_emailed(p_account_id uuid, p_kind text, p_episode_id uuid)` | Writes the recipient marker only when the same episode remains open and the recipient holds a claim. |
 | `clear_whatsapp_disconnect_episode(p_account_id uuid)` | Clears an active row's episode, payloads, and reconnect state. Refuses inactive rows and fresh active deliberate markers; older or unreadable active markers can recover. |
 | `clear_unflagged_whatsapp_disconnect_episode(p_account_id uuid)` | Clears an inactive, unflagged episode and its payloads without changing activity or reconnect state. Refuses flagged episodes and deliberate markers. |
-| `flag_whatsapp_disconnect_episode(p_account_id uuid, p_episode_id text, p_reason text)` | Matches the current episode and rejects deliberate markers before deactivating, raising reauth, and stamping `flagged_at`. |
+| `flag_whatsapp_disconnect_episode(p_account_id uuid, p_episode_id text, p_reason text)` | First flag only: matches the current unflagged episode and rejects deliberate markers before deactivating, raising reauth, and stamping `flagged_at`. |
 | `restore_whatsapp_disconnect_account(p_account_id uuid)` | Reactivates only an inactive flagged episode with no deliberate marker, clearing the episode and payloads atomically. |
+| `deactivate_whatsapp_deliberately(p_account_id uuid, p_workspace_id uuid)` | Atomically commits workspace-scoped local deactivation and deliberate intent before remote teardown. |
 | `mark_whatsapp_user_disconnected(p_account_id uuid)` | Writes deliberate intent and closes the episode, claims, markers, and stored payloads. |
 | `unmark_whatsapp_user_disconnected(p_account_id uuid)` | Rolls back deliberate intent only on an active Evolution QR WhatsApp row; never removes an inactive row's legitimate marker. |
 | `backfill_whatsapp_legacy_disconnects(p_rollout_at timestamptz)` | Conservatively stamps inactive unmarked QR accounts. Rerun after shared teardown deployment and before enabling cron. |
@@ -578,8 +582,9 @@ For one disconnection episode, per recipient:
 - a **new** outage after a successful reconnect gets its own episode and its own email — the episode is
   cleared on reconnect, which resets the markers.
 
-**The delivery contract, stated honestly.** The guarantee is *at-most-once delivery per episode
-and per recipient*, and it rests on two things working together:
+**The delivery contract.** Delivery is deduplicated per episode and recipient within the
+provider's 24-hour idempotency window. Completed groups never resend; incomplete groups
+remain retryable and may duplicate beyond that window. Two mechanisms cooperate:
 
 1. The provider's idempotency key. Every send carries `Idempotency-Key: whatsapp-disconnect:<account>:<episode>:<recipient>`.
    The key is stable for one episode and one recipient, so a retry after a crash is **the same
@@ -596,14 +601,17 @@ What this is **not**: it is not exactly-once *processing*. A crash between "clai
 loses that one email for that episode — the retry happens 30 minutes later, and the provider
 dedupes it against the first attempt, so if the first attempt never reached the provider the
 retry delivers it. The provider's idempotency key is honoured for 24 hours, so a retry that
-happens more than a day after the first attempt (only possible when the watcher itself has been
-down for a day) could deliver a second copy. Within that window the owner is told once.
+happens more than a day after the first attempt could deliver a second copy. This includes
+a persistent completion-marker failure while the watcher remains operational. Within the
+provider window, the stable payload and key deduplicate delivery. Beyond it, delivery is
+at-least-once: duplicate email is a known limitation requiring an operator to repair the
+marker failure. No unconditional at-most-once guarantee is made across that window.
 
 ### 7.4 Clearing on reconnect
 
 The reset is **atomic with the activation**. A `BEFORE UPDATE` trigger on `social_accounts`
-(`clear_whatsapp_disconnect_on_reactivate`) fires when a WhatsApp Evolution row goes from
-`is_active = false` to `is_active = true` and strips the episode, both email markers, the claims,
+(`clear_whatsapp_disconnect_on_reactivate`) fires on every explicit `UPDATE OF is_active`
+that leaves a WhatsApp Evolution row active, including `true` to `true`, and strips the episode, both email markers, the claims,
 the deliberate-disconnect marker, `needs_reauth` and `last_refresh_error` in the same statement.
 
 The reason is failure, not elegance. The reset used to be a separate best-effort call from the
@@ -629,23 +637,17 @@ Evolution instance**, records `last_connection_state = 'close'` and sets `is_act
 Without a marker, the watch function would poll Evolution, find no instance (or a closed one), and email
 the owner "please reconnect" about a disconnect they performed on purpose.
 
-The teardown therefore stamps `account_metadata.whatsapp_user_disconnected_at` through
-`mark_whatsapp_user_disconnected`, **before** it touches the remote session, and the stamp is
-mandatory: if it fails, the teardown raises before logging out or deactivating anything and the
-owner retries. Once the session is gone the watcher sees a terminal state, so a teardown that
-continued without the marker would produce exactly the false alert this section forbids.
+The teardown calls `deactivate_whatsapp_deliberately(account_id, workspace_id)` before
+remote lookup, logout, or deletion. The RPC locks the workspace-scoped row and commits the
+deliberate marker, episode cleanup, and local deactivation in one transaction. If it refuses
+or fails, no remote work begins and the previous state survives, including on inactive rows.
+After commit, remote cleanup failures return partial cleanup with instructions to remove the
+linked device on the phone; the owner's intent is not rolled back.
 
-A marker whose later deactivation failed must not hide an outage permanently. The teardown
-attempts `unmark_whatsapp_user_disconnected` after a remote lookup exception or local
-deactivation failure, then rethrows the original error. Rollback is **best-effort**; its
-failure is logged. An inactive row keeps its marker because the disconnect completed there.
-
-Candidate selection excludes inactive marked rows but includes active marked rows. Under
-the row lock, observation and healthy clear protect a fresh active marker for 30 minutes
-so they cannot erase intent while teardown is still in flight. An older or unreadable
-marker on an active row is removed, allowing normal outage observation or healthy cleanup.
-Thus rollback failure delays detection but does not suppress it indefinitely. A newly
-observed outage still gets its own ten-minute terminal grace window.
+The earlier mark/unmark RPCs remain compatibility operations. Candidate selection excludes
+inactive marked rows but includes active marked rows left by an older runtime. Observation
+and healthy clear protect a fresh active marker for 30 minutes; an older or unreadable active
+marker recovers under the row lock. A completed inactive marker remains protected indefinitely.
 
 `claim_whatsapp_disconnect_email` and `flag_whatsapp_disconnect_episode` reject any deliberate
 marker under their row lock/update predicate. If a user disconnects between observation and
@@ -886,7 +888,7 @@ log only (ARCHITECTURE.md §16, and the pattern at
 | The webhook never fires | Irrelevant. The cron polls Evolution directly and opens the episode itself. |
 | The watch function dies after claiming but before sending | The claim goes stale after 30 minutes and the next run reclaims it. The retry carries the same provider idempotency key, so it resolves to the same email and the owner is not told twice. |
 | The watch function dies after sending but before marking | Same as above: the retry is the same email at the provider, and the mark then closes the episode. |
-| The sender dies after sending but before marking, and the retry comes more than 24 hours later | The provider honours an idempotency key for 24 hours. Beyond that window a second copy could be delivered. Only reachable when the watcher itself has been down for a day. |
+| The sender dies after sending but before marking, and the retry comes more than 24 hours later | The provider honours an idempotency key for 24 hours. Beyond that window a second copy could be delivered. Also reachable while the watcher remains operational if completion-marker writes keep failing. |
 | The owner email fails but the admin email succeeds | The two are claimed independently. The owner's marker stays absent; the owner is retried once its 30-minute claim becomes stale, with the original payload and idempotency key. The admins are not emailed twice. |
 | The owner profile cannot be loaded | The owner email is skipped and the failure is recorded, but the admin email still goes out: the two sides are independent. |
 | The account reconnects between the poll and the email | The episode is cleared on reconnect; the next run sees a healthy state and sends nothing. The email may still arrive — acceptable, and it is why the email says what happened rather than claiming the account is still down. A mark that lands after the clear writes nothing, so it cannot silence the next outage. |
@@ -907,8 +909,8 @@ These could not be confirmed from the repository alone. Each is stated with what
    (`timeout`, `unpaired`, `logged_out`, `conflict`, …) is **not** enumerated anywhere in this repo, and
    Evolution is a self-hosted third-party service, so its exact values are unverified. *Needed:* a live
    `GET /instance/connectionState/{instance}` against the deployed Evolution instance, or the Evolution API
-   version's own state enum. **Mitigation:** the classification is fail-safe — every state that is not
-   `open` and not `connecting` is terminal, so an unknown state is handled without needing the enum.
+   version's own state enum. **Mitigation:** undocumented states remain unverifiable; only the
+   explicit terminal allowlist may open an outage or deactivate an account.
 2. **Whether Evolution reports `qr` for a previously paired instance, and what it reports for an instance
    that was deleted.** The code does not record these. *Needed:* a live probe of a disconnected instance.
    **Mitigation:** `qr` is terminal in the classification, which is correct for a dead paired session, and
@@ -959,3 +961,33 @@ These could not be confirmed from the repository alone. Each is stated with what
 
 **Not changed:** the Evolution webhook, the Evolution bridge, `social_accounts`'s column set, the generated
 database types.
+
+
+## Round 2 operational clarifications
+
+The watcher retains completed inactive episodes as recovery candidates, but preserves the
+original `flagged_at` and reconnect reason. Observation returns the episode's independent
+owner/admin completion markers. When both are present, there is no sender invocation; a
+missing group still retries through the existing stale-claim protocol. Disabled or absent
+recipient groups have no completion marker, so they remain eligible for later configuration
+changes. `flagged` counts first flag transitions only, and `alerted` counts actual sends.
+
+The existing SQL cron lease serializes complete watcher invocations, including manual calls.
+Its ten-minute TTL exceeds the 150-second database request deadline, the 50-second run budget,
+and one in-flight Evolution/sender operation. Failed or completed runs release their holder;
+a killed worker waits for expiry. Restoration refuses `number_mismatch` until the identity-
+validated pairing flow clears it. Explicit same-value activation also clears the episode.
+
+Intentional disconnect uses `deactivate_whatsapp_deliberately` to commit the workspace-scoped
+marker and local deactivation atomically before remote cleanup. A rejected transaction keeps
+the old episode/banner. Failed remote cleanup is returned as partial success; the UI directs
+the owner to remove the linked device on their phone. Inactive accounts are excluded by the
+incoming webhook account lookup. Remote cleanup retry scheduling remains outside this feature.
+
+Stored payloads remain immutable for provider idempotency. Before replay, every stored address
+must still be in the currently eligible group; an old owner address or removed/opted-out admin
+causes a sanitized `recipient_changed` failure and no send. A newly added admin does not change
+the original group's payload. Operator intervention is required when recipients change.
+
+Rollout order and cron reapplication behavior are in the
+[rollout runbook](../../runbooks/whatsapp-disconnect-alerts-rollout.md).

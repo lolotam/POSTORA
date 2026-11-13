@@ -160,7 +160,11 @@ BEGIN
      AND platform = 'whatsapp'
      AND connection_mode = 'evolution_qr';
 
-  RETURN v_episode;
+  -- Markers belong to this episode and are cleared with it. Return only completed groups,
+  -- so the watcher can retain recovery polling without redispatching completed alerts.
+  RETURN v_episode || jsonb_strip_nulls(jsonb_build_object(
+    'user_email_at', v_meta->>'whatsapp_disconnect_user_email_at',
+    'admin_email_at', v_meta->>'whatsapp_disconnect_admin_email_at'));
 END;
 $fn$;
 REVOKE ALL ON FUNCTION public.observe_whatsapp_disconnect_state(uuid, text, boolean) FROM PUBLIC, anon, authenticated;
@@ -564,6 +568,32 @@ $fn$;
 REVOKE ALL ON FUNCTION public.mark_whatsapp_user_disconnected(uuid) FROM PUBLIC, anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.mark_whatsapp_user_disconnected(uuid) TO service_role;
 
+-- Local intent and deactivation are one transaction. In particular, a failed lookup or
+-- write cannot clear an already-inactive account's outage while leaving it connected remotely.
+CREATE OR REPLACE FUNCTION public.deactivate_whatsapp_deliberately(
+  p_account_id uuid,
+  p_workspace_id uuid
+) RETURNS boolean
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $fn$
+BEGIN
+  PERFORM 1 FROM public.social_accounts
+   WHERE id = p_account_id
+     AND platform = 'whatsapp' AND connection_mode = 'evolution_qr'
+     AND (p_workspace_id IS NULL OR workspace_id = p_workspace_id)
+   FOR UPDATE;
+  IF NOT FOUND THEN RETURN FALSE; END IF;
+
+  PERFORM public.mark_whatsapp_user_disconnected(p_account_id);
+  UPDATE public.social_accounts SET is_active = false WHERE id = p_account_id;
+  RETURN TRUE;
+END;
+$fn$;
+REVOKE ALL ON FUNCTION public.deactivate_whatsapp_deliberately(uuid, uuid) FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.deactivate_whatsapp_deliberately(uuid, uuid) TO service_role;
+
 -- 6a. Undoes a deliberate-disconnect marker that was written for a teardown which then
 --     failed. The teardown marks FIRST (so a completed disconnect is never alerted on) and
 --     deactivates second; when the deactivation fails, the account stays active with the
@@ -601,8 +631,9 @@ GRANT EXECUTE ON FUNCTION public.unmark_whatsapp_user_disconnected(uuid) TO serv
 --     reactivation trigger clears the episode) or disconnect on purpose (the marker). An
 --     unconditional update would then re-raise the banner on an account that is healthy or
 --     deliberately closed. Checking the episode_id under the row lock makes the reconnect and
---     the deliberate disconnect win. Returns false when the episode is no longer current, and
---     the watcher then sends no alert.
+--     the deliberate disconnect win. Returns true only for the first flag; repeated calls
+--     preserve flagged_at and the reconnect reason. Already-flagged episodes retry incomplete
+--     email groups without counting a new flag.
 CREATE OR REPLACE FUNCTION public.flag_whatsapp_disconnect_episode(
   p_account_id uuid,
   p_episode_id text,
@@ -634,7 +665,8 @@ BEGIN
      AND platform = 'whatsapp'
      AND connection_mode = 'evolution_qr'
      AND NOT (COALESCE(account_metadata, '{}'::jsonb) ? 'whatsapp_user_disconnected_at')
-     AND account_metadata->'whatsapp_disconnect'->>'episode_id' = p_episode_id;
+     AND account_metadata->'whatsapp_disconnect'->>'episode_id' = p_episode_id
+     AND account_metadata->'whatsapp_disconnect'->>'flagged_at' IS NULL;
 
   RETURN FOUND;
 END;
@@ -680,6 +712,7 @@ BEGIN
      AND platform = 'whatsapp'
      AND connection_mode = 'evolution_qr'
      AND NOT is_active
+     AND NOT (COALESCE(account_metadata, '{}'::jsonb) ? 'number_mismatch')
      AND NOT (COALESCE(account_metadata, '{}'::jsonb) ? 'whatsapp_user_disconnected_at')
      AND (COALESCE(account_metadata, '{}'::jsonb)->'whatsapp_disconnect'->>'flagged_at') IS NOT NULL;
   v_restored := FOUND;
@@ -737,9 +770,9 @@ REVOKE ALL ON FUNCTION public.clear_whatsapp_disconnect_on_reactivate() FROM PUB
 DROP TRIGGER IF EXISTS social_accounts_clear_whatsapp_disconnect_on_reactivate
   ON public.social_accounts;
 CREATE TRIGGER social_accounts_clear_whatsapp_disconnect_on_reactivate
-  BEFORE UPDATE ON public.social_accounts
+  BEFORE UPDATE OF is_active ON public.social_accounts
   FOR EACH ROW
-  WHEN (OLD.is_active IS NOT TRUE AND NEW.is_active IS TRUE)
+  WHEN (NEW.is_active IS TRUE)
   EXECUTE FUNCTION public.clear_whatsapp_disconnect_on_reactivate();
 
 -- 7a. One-time backfill of the deliberate-disconnect marker.

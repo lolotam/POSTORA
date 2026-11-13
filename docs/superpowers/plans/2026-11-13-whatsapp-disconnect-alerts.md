@@ -38,7 +38,10 @@ migration is required.
   `first_seen`. An inactive deliberate marker refuses observation. An active marker protects
   teardown for 30 minutes; an older or unreadable active marker is removed under the lock.
 - `flag_whatsapp_disconnect_episode(uuid,text,text)` conditionally matches the episode,
-  rejects deliberate markers, sets `is_active=false`, `needs_reauth=true`, and `flagged_at`.
+  rejects deliberate markers and already-flagged episodes, and first sets `is_active=false`,
+  `needs_reauth=true`, and `flagged_at`. Repeated polls preserve the first flag and reason.
+  Observation returns completion timestamps for owner/admin groups; completed groups never
+  cause another sender invocation once both markers exist. An incomplete group remains retryable.
 - `claim_whatsapp_disconnect_email(uuid,text,jsonb) RETURNS jsonb` independently claims each
   recipient group, storing and returning `{ episode_id, payload }`. A live claim blocks a
   duplicate; a claim older than 30 minutes is retaken with the original payload.
@@ -48,12 +51,13 @@ migration is required.
   payloads, and reconnect state. It refuses inactive rows and fresh deliberate markers;
   stale active markers can recover here too.
 - On a healthy inactive row, `restore_whatsapp_disconnect_account(uuid)` reactivates only
-  an episode carrying `flagged_at` and no deliberate marker. If refused, the watcher calls
+  an episode carrying `flagged_at`, no deliberate marker, and no `number_mismatch`. If refused, the watcher calls
   `clear_unflagged_whatsapp_disconnect_episode(uuid)`: clear only an unflagged episode and
   its payloads, retaining `is_active`, `needs_reauth`, and `last_refresh_error`.
-- `mark_whatsapp_user_disconnected` closes the episode before remote teardown.
-  `unmark_whatsapp_user_disconnected` rolls back only active QR rows. Reactivation clears
-  all episode and deliberate-disconnect keys atomically through the BEFORE UPDATE trigger.
+- `deactivate_whatsapp_deliberately(uuid,uuid)` locks the workspace-scoped account and
+  commits the deliberate marker, episode cleanup, and local deactivation in one transaction
+  before remote teardown. The earlier mark/unmark RPCs remain for compatibility. Explicit
+  activation, including an already-active row, clears episode state in the same statement.
 - `backfill_whatsapp_legacy_disconnects(timestamptz)` conservatively marks inactive,
   unmarked QR accounts. Run it again after deploying every shared teardown consumer.
 - New RPCs use SECURITY DEFINER and `search_path = public, pg_temp`; execution is revoked
@@ -66,7 +70,10 @@ reactivation, stale/fresh markers, unflagged inactive cleanup, and paused cron c
 ## 2. Watcher and teardown
 
 `whatsapp-disconnect-watch/index.ts` verifies cron auth, composes the Supabase and Evolution
-adapters, and invokes `runWatch`. Candidate selection starts at the instance table, includes
+adapters, and invokes `runWatch` under the existing `acquire_cron_run_lease` /
+`release_cron_run_lease` protocol. One ten-minute lease serializes cron and manual invocations;
+database requests share a 150-second deadline, inside that lease. A crashed holder blocks
+until expiry; a successful or failed run releases its own holder in `finally`. Candidate selection starts at the instance table, includes
 inactive outage rows, excludes inactive deliberately disconnected rows, and includes active
 marked rows so SQL can recover a stale teardown marker. Pending and retired identities are
 excluded. The freshness window is four minutes; cron runs every five minutes.
@@ -78,16 +85,20 @@ oldest-first limit. A failed timestamp write also records failure and leaves sta
 Unreached accounts keep their timestamps for the next run.
 
 Alert after 10 continuous terminal minutes or 60 minutes of an unhealthy episode, including
-flapping or persistent `connecting`. Unknown states are skipped. The conditional SQL flag
-must succeed before dispatch. `dispatch.ts` validates the sender's complete summary; HTTP
+flapping or persistent `connecting`. Undocumented states are skipped without changing the account; malformed successful responses
+are failures. A first flag must succeed before dispatch; a flagged episode dispatches only while
+an owner/admin completion marker is missing. The dispatch deadline is 50 seconds, covering
+both groups' Resend retry budgets plus overhead. `dispatch.ts` validates the sender's complete summary; HTTP
 200 alone is not evidence of delivery. `stateReader.ts` raises failed provider reads.
 
-The shared `_shared/whatsappDisconnect.ts` stamps deliberate intent before teardown. An
-instance lookup exception or a failed local deactivation attempts marker rollback and
-rethrows the original error. Rollback is best-effort and logs failure. If it also fails,
-active-marker recovery above restores observation after 30 minutes. Inactive marked rows
-remain protected indefinitely. `_shared/evolutionQrAccount.ts` clears disconnect state on
-successful active pairing; the database reactivation trigger makes episode cleanup atomic.
+The shared `_shared/whatsappDisconnect.ts` commits deliberate intent and local deactivation
+atomically before attempting remote cleanup. A failure before this commit preserves the
+previous episode and banner, including on an inactive account. Remote lookup/logout/delete
+failures leave the local account disconnected and report partial cleanup. The owner is told
+to remove the linked device on their phone. Inactive accounts cannot ingest incoming webhooks
+because the webhook account lookup requires `is_active=true`. Remote cleanup retry scheduling
+is outside this alert feature. `_shared/evolutionQrAccount.ts` treats both returned RPC errors
+and rejected cleanup transports as best effort after a successful pairing.
 
 ## 3. Sender and privacy
 
@@ -97,7 +108,9 @@ successful active pairing; the database reactivation trigger makes episode clean
 Owner and admin failures are independent and include sanitized operational codes.
 
 Claim before send, mark after confirmed provider success. Stable payloads survive a stale
-claim retry even if account names or the admin recipient list change. `resend.ts` uses the
+claim retry even if account names change. Every stored recipient must still be currently
+eligible before replay; removed admins and old owner addresses cause `recipient_changed`
+without a send. Newly added admins do not alter an existing idempotent payload. `resend.ts` uses the
 same idempotency key and body on both bounded attempts, each with a 10-second timeout.
 `concurrent_idempotent_requests` 409 is retried; exhaustion leaves the recipient unmarked.
 `invalid_idempotent_request` fails permanently. Unknown/malformed 409 responses fail with
@@ -172,12 +185,13 @@ bash scripts/db-harness.sh
 The database harness needs a disposable Supabase Postgres container configured as in CI;
 never point it at production. `.github/workflows/ci.yml` runs the whole watcher and sender
 test directories, including dispatch, state-reader, and Resend tests, plus shared module tests.
-Apply `clean-code-guard`, `test-guard`, and `docs-guard`, and update graphify without committing
-its outputs. Commit scoped task files, push the explicit feature-branch refspec, then reply
-and resolve verified findings. Leave owner-decision threads open and unreplied. Wait for CI
-on the pushed head. Do not merge or deploy as part of this review-finishing task.
+Review evidence includes `clean-code-guard`, `test-guard`, and `docs-guard` checks.
+Graphify outputs are local navigation artifacts and are excluded from the PR. Review-thread
+resolution and CI status are recorded in the PR; the Meta renewal decision remains open.
 
 ## 6. Safe production rollout
+
+Operational checklist: [WhatsApp disconnect alerts rollout](../../runbooks/whatsapp-disconnect-alerts-rollout.md).
 
 No migrations from this PR have been applied by this task. The following is a deployment
 runbook, not a record of execution. Follow `docs/runbooks/deploy-edge-function.md` after owner

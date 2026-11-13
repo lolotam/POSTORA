@@ -3,7 +3,9 @@
 // explicit timeout).
 
 /** How long the watcher waits for the sender before it gives up on the account. */
-export const ALERT_DISPATCH_TIMEOUT_MS = 10_000;
+// Two recipient groups, each with two 10s Resend attempts and a 500ms retry delay,
+// plus database/HTTP overhead. The 50s run budget is checked between accounts.
+export const ALERT_DISPATCH_TIMEOUT_MS = 50_000;
 
 /**
  * What the sender reports back.

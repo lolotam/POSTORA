@@ -2,6 +2,7 @@
 // lives here so it can be tested without Evolution, without Postgres and without a network.
 
 import type { AlertDispatchResult } from "./dispatch.ts";
+import { sanitizedError } from "../_shared/errorContext.ts";
 
 export type ConnectionClass = "healthy" | "transient" | "terminal" | "unknown";
 
@@ -44,6 +45,10 @@ export interface Episode {
   first_seen: string;
   state: string;
   observed_at: string;
+  flagged_at?: string | null;
+  /** Completion markers are returned by observe from the same locked account row. */
+  user_email_at?: string | null;
+  admin_email_at?: string | null;
 }
 
 export interface WatchCandidate {
@@ -58,7 +63,7 @@ export interface WatchCandidate {
 
 /**
  * open is healthy, connecting is the transient flap Baileys emits during a normal reconnect,
- * and everything else is terminal: the session is gone and the phone must scan a new QR code.
+ * and confirmed terminal states mean the phone must scan a new QR code.
  * An unknown (empty) state is neither: an unverifiable state is not evidence, so the caller
  * skips the account entirely rather than alerting or clearing on it.
  */
@@ -67,7 +72,8 @@ export function classifyState(state: string | null): ConnectionClass {
   if (!normalized) return "unknown";
   if (normalized === "open") return "healthy";
   if (normalized === "connecting") return "transient";
-  return "terminal";
+  if (["close", "timeout", "unpaired", "logged_out", "qr"].includes(normalized)) return "terminal";
+  return "unknown";
 }
 
 /**
@@ -126,8 +132,8 @@ export interface WatchDeps {
   clearUnflagged(accountId: string): Promise<void>;
   /**
    * Flags the account for reconnect, but only while `episodeId` is still its open episode.
-   * False means the owner reconnected or disconnected on purpose since the observation, and
-   * the watcher then sends no alert.
+   * True means this call first flagged the episode. False means it was already flagged,
+   * or the owner reconnected or disconnected on purpose since the observation.
    */
   markFlagged(accountId: string, episodeId: string, reason: string): Promise<boolean>;
   dispatchAlert(accountId: string): Promise<AlertDispatchResult>;
@@ -159,6 +165,15 @@ interface AccountOutcome {
 
 type StateRead = { kind: "read"; state: string | null } | { kind: "failed" };
 
+function logAccountError(accountId: string, operation: string, error: unknown): void {
+  const code = sanitizedError(error).error_code;
+  // Only known adapter codes and database codes: arbitrary error names may contain secrets.
+  const errorCode = /^(?:[A-Z0-9]{5}|PGRST\d{3}|timeout|network_error|provider_error|invalid_provider_response|error|unknown_error)$/.test(code)
+    ? code
+    : "unknown_error";
+  console.error(`[whatsapp-disconnect-watch] account ${accountId}: ${operation}; error_code=${errorCode}`);
+}
+
 /**
  * The live state of one account, and the poll time that proves we looked.
  *
@@ -171,15 +186,15 @@ async function readStateFor(deps: WatchDeps, candidate: WatchCandidate): Promise
   let read: StateRead = { kind: "failed" };
   try {
     read = { kind: "read", state: await deps.readState(candidate.instance_name) };
-  } catch {
+  } catch (error) {
     // One broken account must never stop the others. The account id identifies the row.
     // The thrown value is not logged: an Evolution error can carry a provider body.
-    console.error(`[whatsapp-disconnect-watch] account ${candidate.id}: state read failed`);
+    logAccountError(candidate.id, "state read failed", error);
   }
   try {
     await deps.markPolled(candidate.instance_name, deps.now());
-  } catch {
-    console.error(`[whatsapp-disconnect-watch] account ${candidate.id}: poll mark failed`);
+  } catch (error) {
+    logAccountError(candidate.id, "poll mark failed", error);
     return { kind: "failed" };
   }
   return read;
@@ -197,6 +212,7 @@ async function applyAccountState(
   if (classification === "unknown") {
     // Evolution could not tell us. Never open an episode and never clear one on an
     // unverifiable state.
+    console.warn(`[whatsapp-disconnect-watch] account ${candidate.id}: state unverifiable; error_code=unknown_connection_state`);
     outcome.skipped = 1;
     return outcome;
   }
@@ -232,9 +248,14 @@ async function applyAccountState(
     if (terminal) outcome.episodes = 1;
     if (!isAlertDue(episode, deps.now())) return outcome;
 
-    const flagged = await deps.markFlagged(candidate.id, episode.episode_id, DISCONNECT_REASON);
-    if (!flagged) return outcome;
-    outcome.flagged = 1;
+    if (!episode.flagged_at) {
+      const flagged = await deps.markFlagged(candidate.id, episode.episode_id, DISCONNECT_REASON);
+      if (!flagged) return outcome;
+      outcome.flagged = 1;
+    }
+    // Keep polling completed episodes for recovery, without invoking the sender forever.
+    // An incomplete group still retries; its atomic claim enforces the stale-claim window.
+    if (episode.user_email_at && episode.admin_email_at) return outcome;
 
     // The sender answers 200 even when it could not reach a recipient, so the alert is
     // counted only for a mail that really went out, and a recipient the sender could not
@@ -244,8 +265,8 @@ async function applyAccountState(
     if (dispatch.failed.length > 0) {
       outcome.failed = true;
     }
-  } catch {
-    console.error(`[whatsapp-disconnect-watch] account ${candidate.id}: handling failed`);
+  } catch (error) {
+    logAccountError(candidate.id, "handling failed", error);
     outcome.failed = true;
   }
   return outcome;

@@ -140,3 +140,10 @@ Deno.test("a dispatch that times out is a dispatch failure", async () => {
 
   await assertRejects(() => dispatchDisconnectAlert({ ...OPTIONS, fetcher, timeoutMs: 10 }));
 });
+
+Deno.test("the watcher dispatch deadline covers both recipient retry budgets", async () => {
+  const { ALERT_DISPATCH_TIMEOUT_MS } = await import("./dispatch.ts");
+  const { RESEND_TIMEOUT_MS, RESEND_MAX_ATTEMPTS, RESEND_RETRY_DELAY_MS } = await import("../send-whatsapp-disconnect-alert/resend.ts");
+  const sendBudget = 2 * (RESEND_TIMEOUT_MS * RESEND_MAX_ATTEMPTS + RESEND_RETRY_DELAY_MS * (RESEND_MAX_ATTEMPTS - 1));
+  assertEquals(ALERT_DISPATCH_TIMEOUT_MS > sendBudget, true);
+});

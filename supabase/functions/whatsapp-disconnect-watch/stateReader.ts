@@ -2,6 +2,7 @@
 // answered is a failure, not a state" is testable without an Evolution server.
 
 import { extractState } from "../whatsapp-evolution-bridge/qr.ts";
+import { EvolutionApiError } from "../_shared/evolutionApi.ts";
 
 export interface ConnectionStateApi {
   connectionState(instanceName: string): Promise<unknown>;
@@ -19,5 +20,20 @@ export async function readConnectionState(
   api: ConnectionStateApi,
   instanceName: string,
 ): Promise<string | null> {
-  return extractState(await api.connectionState(instanceName));
+  let payload: unknown;
+  try {
+    payload = await api.connectionState(instanceName);
+  } catch (error) {
+    const code = error instanceof EvolutionApiError ? "provider_error"
+      : error instanceof Error && /timed out|aborted/i.test(error.message) ? "timeout"
+      : "network_error";
+    throw Object.assign(new Error("Evolution connection state unavailable"), { code });
+  }
+  const state = extractState(payload);
+  if (!state?.trim()) {
+    throw Object.assign(new Error("Invalid Evolution connection state response"), {
+      code: "invalid_provider_response",
+    });
+  }
+  return state;
 }

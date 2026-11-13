@@ -3,7 +3,10 @@
 // drift and store different platform_user_id values for the same linked session --
 // conversation ids are built from that value, so a mismatch would split a chat in two.
 
+import type { SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { enqueuePartnerWebhookEvent } from "./partnerWebhookEvents.ts";
+
+export type EvolutionAccountAdmin = Pick<SupabaseClient, "from" | "rpc">;
 
 export interface EvolutionQrAccount {
   id: string;
@@ -35,14 +38,18 @@ export class NumberMismatchError extends Error {
 // Evolution names the linked account differently per source: `wuid` on a
 // connection.update webhook, `ownerJid` on fetchInstances. Both carry the same
 // "<number>@s.whatsapp.net" form.
-function extractOwnerJid(source: any): string | null {
-  const jid = source?.wuid ?? source?.ownerJid ?? source?.wid ?? source?.user?.id ?? source?.jid;
+function extractOwnerJid(source: unknown): string | null {
+  if (!source || typeof source !== "object") return null;
+  const record = source as Record<string, unknown>;
+  const user = record.user && typeof record.user === "object" ? record.user as Record<string, unknown> : null;
+  const jid = record.wuid ?? record.ownerJid ?? record.wid ?? user?.id ?? record.jid;
   return typeof jid === "string" && jid.length > 0 ? jid : null;
 }
 
 // Without this the UI falls back to rendering the raw JID as the account name.
-function extractProfileName(source: any): string | null {
-  const name = source?.profileName;
+function extractProfileName(source: unknown): string | null {
+  if (!source || typeof source !== "object") return null;
+  const name = (source as Record<string, unknown>).profileName;
   return typeof name === "string" && name.length > 0 ? name : null;
 }
 
@@ -90,7 +97,7 @@ export interface OwnedEvolutionAccount extends EvolutionQrAccount {
 }
 
 export async function findOwnedEvolutionAccount(
-  admin: any,
+  admin: EvolutionAccountAdmin,
   userId: string,
   socialAccountId: string,
 ): Promise<OwnedEvolutionAccount | null> {
@@ -117,7 +124,7 @@ interface ConnectionSnapshot {
 }
 
 async function loadAccountConnection(
-  admin: any,
+  admin: EvolutionAccountAdmin,
   accountId: string,
 ): Promise<ConnectionSnapshot> {
   const { data, error } = await admin
@@ -139,7 +146,7 @@ async function loadAccountConnection(
 // Observation is best effort: a failed subscription lookup or outbox insert must
 // never undo the successful activation/identity claim that callers depend on.
 async function emitConnectionTransition(
-  admin: Parameters<typeof enqueuePartnerWebhookEvent>[0],
+  admin: EvolutionAccountAdmin,
   accountId: string,
   previous: ConnectionSnapshot,
   active: boolean,
@@ -194,7 +201,11 @@ async function emitConnectionTransition(
 // account cannot send. A successful activation means it can send again, so the flag
 // goes with it. Best effort on purpose: a failed clear must never undo the
 // activation/identity claim callers depend on.
-export async function clearUndeliveredSafely(admin: any, accountId: string): Promise<void> {
+export async function clearUndeliveredSafely(
+  admin: { rpc?: (fn: string, args: Record<string, unknown>) => PromiseLike<{ error: unknown }> },
+  accountId: string,
+): Promise<void> {
+  if (!admin.rpc) throw new Error("Undelivered flag clear requires an RPC client");
   const { error } = await admin.rpc("clear_undelivered_store_events", { p_account_id: accountId });
   if (error) {
     console.error(`[evolution-qr] account ${accountId}: undelivered flag clear failed`);
@@ -212,10 +223,12 @@ async function clearDisconnectEpisodeSafely(
   admin: RpcCapableClient,
   accountId: string,
 ): Promise<void> {
-  const { error } = await admin.rpc("clear_whatsapp_disconnect_episode", {
-    p_account_id: accountId,
-  });
-  if (error) {
+  try {
+    const { error } = await admin.rpc("clear_whatsapp_disconnect_episode", {
+      p_account_id: accountId,
+    });
+    if (error) throw error;
+  } catch {
     console.error(`[evolution-qr] account ${accountId}: disconnect episode clear failed`);
   }
 }
@@ -225,7 +238,7 @@ async function clearDisconnectEpisodeSafely(
 // ids straight afterwards would otherwise use the stale value it passed in -- writing a whole
 // history import under ids no reply path can parse.
 export async function syncEvolutionAccountConnection(
-  admin: any,
+  admin: EvolutionAccountAdmin,
   account: EvolutionQrAccount,
   state: string,
   identity: unknown,

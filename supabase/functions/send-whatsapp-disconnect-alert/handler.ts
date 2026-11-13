@@ -95,13 +95,14 @@ function escapeHtml(s: string): string {
 /**
  * Removes a phone number written inside a display name.
  *
- * The run is 7 to 15 digits. Shorter runs are shop numbers and years. Separators are the
+ * The run is at least five Unicode decimal digits, matching the account parser's minimum.
+ * There is no upper bound: a longer run must never leave a partial number. Separators are the
  * ones a person puts in a number, and a plus may lead the run. The words around it stay.
  * The pattern is built per call: a shared global expression keeps lastIndex.
  */
 function redactPhoneNumbers(text: string): string {
   return text
-    .replace(/(?:\+?\(?\d[\s().-]*){7,15}/g, " ")
+    .replace(/(?:\+?\(?\p{Nd}[\s().-]*){5,}/gu, " ")
     .replace(/[ \t]{2,}/g, " ")
     .trim();
 }
@@ -263,6 +264,13 @@ async function deliverEmail(deps: SendAlertsDeps, delivery: Delivery): Promise<D
     html: delivery.html,
   };
 
+  // An idempotent retry must keep its original payload, but that cannot authorize delivery
+  // to an address that is no longer eligible. Refuse rather than mutate a known key's body.
+  const eligible = new Set(delivery.to);
+  if (payload.to.some((recipient) => !eligible.has(recipient))) {
+    throw Object.assign(new Error("Stored recipients no longer eligible"), { code: "recipient_changed" });
+  }
+
   await deps.send({
     to: payload.to,
     subject: payload.subject,
@@ -285,7 +293,7 @@ function logRecipientError(accountId: string, operation: string, error: unknown)
   const code = sanitizedError(error).error_code;
   // Database SQLSTATEs and our adapter's codes are stable. Arbitrary provider codes or
   // error names can contain an address or phone, even when the message is sanitized.
-  const errorCode = /^(?:[A-Z0-9]{5}|PGRST\d{3}|timeout|network_error|provider_error|idempotency_in_flight|invalid_idempotent_request|idempotency_conflict|error|unknown_error)$/.test(code)
+  const errorCode = /^(?:[A-Z0-9]{5}|PGRST\d{3}|timeout|network_error|provider_error|idempotency_in_flight|invalid_idempotent_request|idempotency_conflict|recipient_changed|error|unknown_error)$/.test(code)
     ? code
     : "unknown_error";
   console.error(

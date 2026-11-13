@@ -129,8 +129,8 @@ Deno.test("classifyState reads the Evolution connection states", () => {
   assertEquals(classifyState("qr"), "terminal");
 });
 
-Deno.test("classifyState treats an unknown future state as terminal, fail-safe", () => {
-  assertEquals(classifyState("some-future-state"), "terminal");
+Deno.test("classifyState does not infer a disconnect from an undocumented state", () => {
+  assertEquals(classifyState("some-future-state"), "unknown");
 });
 
 Deno.test("classifyState treats an empty state as unknown", () => {
@@ -618,4 +618,59 @@ Deno.test("the poll time is recorded for every account that was read, skipped on
     { instanceName: "postora_acc-1", at: NOW_DATE },
     { instanceName: "postora_acc-2", at: NOW_DATE },
   ]);
+});
+
+Deno.test("an inactive emailed episode is polled again without reflagging or dispatching", async () => {
+  const observed = {
+    ...episode(minutesAgo(30), minutesAgo(30)),
+    flagged_at: minutesAgo(20),
+    user_email_at: minutesAgo(19),
+    admin_email_at: minutesAgo(19),
+  };
+  const { deps, rec } = fakeDeps([candidate("acc-1", false)], { "acc-1": "close" }, observed);
+  const first = await runWatch(deps);
+  const second = await runWatch(deps);
+  assertEquals(first.flagged + second.flagged, 0);
+  assertEquals(first.alerted + second.alerted, 0);
+  assertEquals(rec.flaggedEpisodes, []);
+  assertEquals(rec.calls.filter((call) => call.startsWith("dispatchAlert:")), []);
+  assertEquals(observed.flagged_at, minutesAgo(20));
+});
+
+Deno.test("a flagged episode retries either unfinished recipient group without reflagging", async () => {
+  for (const completed of ["user_email_at", "admin_email_at"]) {
+    const observed = {
+      ...episode(minutesAgo(30), minutesAgo(30)),
+      flagged_at: minutesAgo(20),
+      [completed]: minutesAgo(19),
+    };
+    const { deps, rec } = fakeDeps([candidate("acc-1", false)], { "acc-1": "close" }, observed);
+    await runWatch(deps);
+    const second = await runWatch(deps);
+    assertEquals(second.flagged, 0);
+    assertEquals(rec.flaggedEpisodes, []);
+    assertEquals(rec.calls.filter((call) => call.startsWith("dispatchAlert:" )).length, 2);
+  }
+});
+
+Deno.test("watcher logs distinguish operational codes without exposing error text or arbitrary codes", async () => {
+  const logged: string[] = [];
+  const original = console.error;
+  console.error = (...args: unknown[]) => { logged.push(args.join(" ")); };
+  try {
+    for (const operation of ["read", "poll", "observe"]) {
+      for (const code of ["PGRST202", "network_error", "owner@example.invalid +96512345678"]) {
+        const { deps } = fakeDeps([candidate("acc-1")], { "acc-1": "close" });
+        const failure = () => Promise.reject({ code, message: "secret@example.invalid token=private" });
+        const summary = await runWatch({ ...deps,
+          ...(operation === "read" ? { readState: failure } : operation === "poll" ? { markPolled: failure } : { observe: failure }),
+        });
+        assertEquals(summary.failed, ["acc-1"]);
+      }
+    }
+  } finally { console.error = original; }
+  assertEquals(logged.some((line) => line.includes("error_code=PGRST202")), true);
+  assertEquals(logged.some((line) => line.includes("error_code=network_error")), true);
+  assertEquals(logged.some((line) => line.includes("error_code=unknown_error")), true);
+  assertEquals(logged.some((line) => /@|private|96512345678/.test(line)), false);
 });

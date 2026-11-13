@@ -44,6 +44,14 @@ function recordingAdmin(
   const admin = {
     rpc(name: string, args: Record<string, unknown>) {
       rpcs.push({ name, args });
+      if (name === "deactivate_whatsapp_deliberately") {
+        const error = options.rpcError ?? (options.updateError?.table === "social_accounts" ? options.updateError.error : null);
+        if (!error && options.rpcData !== false) updates.push({
+          table: "social_accounts", values: { is_active: false },
+          filters: args.p_workspace_id ? [["id", args.p_account_id], ["workspace_id", args.p_workspace_id]] : [["id", args.p_account_id]],
+        });
+        return Promise.resolve({ data: options.rpcData === undefined ? true : options.rpcData, error });
+      }
       return Promise.resolve({
         data: options.rpcData === undefined ? true : options.rpcData,
         error: options.rpcError ?? null,
@@ -176,7 +184,7 @@ Deno.test("a deliberate evolution_qr disconnect is marked as deliberate", async 
   );
 
   assertEquals(rpcs, [
-    { name: "mark_whatsapp_user_disconnected", args: { p_account_id: "acc-1" } },
+    { name: "deactivate_whatsapp_deliberately", args: { p_account_id: "acc-1", p_workspace_id: "ws-1" } },
   ]);
 });
 
@@ -233,55 +241,31 @@ Deno.test("a deliberate mark that wrote nothing stops the disconnect before anyt
   assertEquals(updates, []);
 });
 
-Deno.test("a failed deactivation rolls the deliberate marker back and rethrows", async () => {
-  // The marker is written before the deactivation. When the deactivation fails, the row
-  // stays active WITH the marker, and the watcher skips every account that carries it:
-  // a live account whose session is gone would never be polled again. The marker goes
-  // back, and the caller still sees the deactivation failure.
+Deno.test("a failed atomic deactivation preserves local state and never destroys the remote session", async () => {
   const { rpcs, admin, updates } = recordingAdmin({
-    instanceRow: { instance_name: "postora_acc-7" },
     updateError: { table: "social_accounts", error: { message: "row is locked" } },
   });
-
-  const rejection = await assertRejects(
-    () =>
-      disconnectWhatsAppAccount(
-        { accountId: "acc-7", workspaceId: "ws-7", connectionMode: "evolution_qr" },
-        { admin, evolution: evolutionRecorder([]) },
-      ),
-  );
-
-  assertEquals(rejection, { message: "row is locked" });
-  assertEquals(rpcs, [
-    { name: "mark_whatsapp_user_disconnected", args: { p_account_id: "acc-7" } },
-    { name: "unmark_whatsapp_user_disconnected", args: { p_account_id: "acc-7" } },
-  ]);
-  assertEquals(deactivationOf(updates)?.values, { is_active: false });
+  const remoteCalls: Array<{ url: string; method?: string }> = [];
+  await assertRejects(() => disconnectWhatsAppAccount(
+    { accountId: "acc-7", workspaceId: "ws-7", connectionMode: "evolution_qr" },
+    { admin, evolution: evolutionRecorder(remoteCalls) },
+  ));
+  assertEquals(rpcs, [{ name: "deactivate_whatsapp_deliberately", args: { p_account_id: "acc-7", p_workspace_id: "ws-7" } }]);
+  assertEquals(updates, []);
+  assertEquals(remoteCalls, []);
 });
 
-Deno.test("an instance lookup that fails after marking rolls the marker back and rethrows", async () => {
-  // The marker is written before the remote teardown, and the instance lookup is part of
-  // that teardown. A failed lookup must not leave the marker on an account that is still
-  // active: the watcher skips every account carrying it, so the account would never be
-  // polled again. The rollback goes through the same path as a failed deactivation.
-  const { rpcs, admin, updates } = recordingAdmin({
-    instanceError: { message: "instances unreachable" },
-  });
-
-  const rejection = await assertRejects(
-    () =>
-      disconnectWhatsAppAccount(
-        { accountId: "acc-9", workspaceId: "ws-9", connectionMode: "evolution_qr" },
-        { admin, evolution: evolutionRecorder([]) },
-      ),
+Deno.test("a remote lookup failure after atomic deactivation reports partial cleanup without undoing intent", async () => {
+  const { rpcs, admin, updates } = recordingAdmin({ instanceError: { message: "instances unreachable" } });
+  const result = await disconnectWhatsAppAccount(
+    { accountId: "acc-9", workspaceId: "ws-9", connectionMode: "evolution_qr" },
+    { admin, evolution: evolutionRecorder([]) },
   );
-
-  assertEquals(rejection, { message: "instances unreachable" });
-  assertEquals(rpcs, [
-    { name: "mark_whatsapp_user_disconnected", args: { p_account_id: "acc-9" } },
-    { name: "unmark_whatsapp_user_disconnected", args: { p_account_id: "acc-9" } },
-  ]);
-  assertEquals(deactivationOf(updates), undefined);
+  assertEquals(result.deactivated, true);
+  assertEquals(result.evolution, "failed");
+  assertEquals(result.warnings.length, 1);
+  assertEquals(rpcs.length, 1);
+  assertEquals(deactivationOf(updates)?.values, { is_active: false });
 });
 
 Deno.test("a failed deactivation of a Meta account rolls no marker back", async () => {
@@ -459,7 +443,7 @@ Deno.test("a failed local deactivation is raised, not swallowed", async () => {
       ),
   );
   assertEquals(rejection, { message: "row is locked" });
-  assertEquals(deactivationOf(updates)?.values, { is_active: false });
+  assertEquals(deactivationOf(updates), undefined);
 });
 
 Deno.test("an account with no workspace scoping deactivates by id alone", async () => {

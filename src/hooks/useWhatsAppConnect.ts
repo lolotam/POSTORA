@@ -33,6 +33,7 @@ export function useWhatsAppConnect() {
       });
       queryClient.invalidateQueries({ queryKey: ["social_accounts"] });
       queryClient.invalidateQueries({ queryKey: ["messaging_accounts"] });
+      queryClient.invalidateQueries({ queryKey: ["accounts-needing-reauth"] });
     },
     onError: (err: Error) => {
       toast({
@@ -147,8 +148,15 @@ export function useWhatsAppDisconnect() {
       if (data?.error) throw new Error(data.error);
       return data;
     },
-    onSuccess: () => {
-      toast({ title: "WhatsApp disconnected" });
+    onSuccess: (data) => {
+      const cleanupFailed = data?.teardown?.evolution === "failed";
+      toast({
+        title: cleanupFailed ? "WhatsApp disconnected locally" : "WhatsApp disconnected",
+        ...(cleanupFailed ? {
+          description: "Remote logout could not be confirmed. Remove the linked device from WhatsApp on your phone.",
+          variant: "destructive" as const,
+        } : {}),
+      });
       queryClient.invalidateQueries({ queryKey: ["social_accounts"] });
       queryClient.invalidateQueries({ queryKey: ["messaging_accounts"] });
     },

@@ -229,20 +229,20 @@ export async function reconnectWhatsAppAccount(
  * Stamps the deliberate-disconnect marker. Raised, never downgraded to a warning: a teardown
  * without it would let the watcher alert the owner about the session they closed on purpose.
  */
-async function markDeliberateDisconnect(
-  accountId: string,
+async function deactivateEvolutionAccount(
+  input: WhatsAppDisconnectInput,
   deps: WhatsAppDisconnectDeps,
 ): Promise<void> {
   if (!deps.admin.rpc) {
     throw new Error("Deliberate disconnect marker cannot be recorded: the admin client has no rpc");
   }
-  const { data, error } = await deps.admin.rpc("mark_whatsapp_user_disconnected", {
-    p_account_id: accountId,
+  const { data, error } = await deps.admin.rpc("deactivate_whatsapp_deliberately", {
+    p_account_id: input.accountId,
+    p_workspace_id: input.workspaceId,
   });
   if (error) throw error;
   // `false` means the row did not match the predicate the marker is written under: the
-  // row is gone, it is not an evolution_qr WhatsApp row, or it carries the marker
-  // already. Nothing was written, so the watcher would still read the session as an
+  // row is gone, it is not an evolution_qr WhatsApp row, or its workspace does not match. Nothing was written, so the watcher would still read the session as an
   // outage and alert the owner about a disconnect they asked for. A teardown without a
   // marker is the exact false alert the rule exists to prevent.
   if (data !== true) {
@@ -252,65 +252,26 @@ async function markDeliberateDisconnect(
   }
 }
 
-/**
- * Undoes a marker that was written for a teardown which then failed.
- *
- * The teardown marks first and deactivates second. When the deactivation fails, the
- * row stays active while carrying the marker -- and the watcher skips every account
- * that carries it, so a live account whose session is gone would never be polled and
- * the owner would never hear about it. Rolling the marker back puts the account back
- * under the watcher's eye. The RPC refuses to touch a row that is no longer active or
- * no longer an evolution_qr WhatsApp row.
- *
- * Best effort: the error the caller has to see is the deactivation failure, not this.
- */
-async function unmarkDeliberateDisconnect(
-  accountId: string,
-  deps: WhatsAppDisconnectDeps,
-): Promise<void> {
-  if (!deps.admin.rpc) return;
-  try {
-    const { error } = await deps.admin.rpc("unmark_whatsapp_user_disconnected", {
-      p_account_id: accountId,
-    });
-    if (error) {
-      console.error(
-        `[whatsapp-disconnect] account ${accountId}: deliberate disconnect marker could not be rolled back`,
-      );
-    }
-  } catch {
-    console.error(
-      `[whatsapp-disconnect] account ${accountId}: deliberate disconnect marker could not be rolled back`,
-    );
-  }
-}
-
 export async function disconnectWhatsAppAccount(
   input: WhatsAppDisconnectInput,
   deps: WhatsAppDisconnectDeps,
 ): Promise<WhatsAppDisconnectResult> {
-  const isEvolution = input.connectionMode === "evolution_qr";
-  // A disconnect the owner asked for is not an outage, so the watcher must never alert them
-  // about it (spec 2026-11-13-whatsapp-disconnect-alerts-design.md). The marker is recorded
-  // FIRST and is mandatory: once the remote session is gone the watcher sees a terminal state,
-  // so an unmarked teardown is exactly the false alert the rule forbids. If it fails, nothing
-  // has been torn down yet and the owner retries. Only an Evolution QR account needs it: the
-  // watcher never polls a Meta-mode account.
-  if (isEvolution) await markDeliberateDisconnect(input.accountId, deps);
-
-  let remote: StepOutcome;
-  try {
-    remote = isEvolution
-      ? await logoutEvolutionSession(input, deps)
-      : await unsubscribeWabaWebhook(input, deps);
-  } catch (e) {
-    // The marker is on the row but the row is still active: the watcher skips every
-    // account carrying the marker, so leaving it there would exclude this account
-    // from polling forever. The rollback goes through the same path as a failed
-    // deactivation, and the caller still sees the failure that stopped the teardown.
-    if (isEvolution) await unmarkDeliberateDisconnect(input.accountId, deps);
-    throw e;
+  if (input.connectionMode === "evolution_qr") {
+    // Intent and local deactivation commit together before any remote side effect. A failed
+    // local write leaves the old episode/banner intact, even on an already-inactive row.
+    await deactivateEvolutionAccount(input, deps);
+    let remote: StepOutcome;
+    try {
+      remote = await logoutEvolutionSession(input, deps);
+    } catch {
+      // Local disconnection already committed. A lookup/transport failure is partial remote
+      // cleanup, never a reason to undo the owner's intent or resurrect their outage alert.
+      remote = { step: "failed", warnings: ["Evolution cleanup failed; local account is disconnected"] };
+    }
+    return { deactivated: true, evolution: remote.step, graph: "skipped", warnings: remote.warnings };
   }
+
+  const remote = await unsubscribeWabaWebhook(input, deps);
 
   // The one mandatory step. Everything above can fail without blocking it, and its
   // own failure is the only one raised: a silent no-op here is exactly the
@@ -330,18 +291,13 @@ export async function disconnectWhatsAppAccount(
     deactivateError = e;
   }
   if (deactivateError) {
-    // The marker is on the row but the row is still active. The watcher skips every
-    // account carrying the marker, so leaving it there would exclude this account
-    // from polling forever. The marker goes back, and the caller still sees the
-    // deactivation failure that stopped the teardown.
-    if (isEvolution) await unmarkDeliberateDisconnect(input.accountId, deps);
     throw deactivateError;
   }
 
   return {
     deactivated: true,
-    evolution: isEvolution ? remote.step : "skipped",
-    graph: isEvolution ? "skipped" : remote.step,
+    evolution: "skipped",
+    graph: remote.step,
     warnings: remote.warnings,
   };
 }

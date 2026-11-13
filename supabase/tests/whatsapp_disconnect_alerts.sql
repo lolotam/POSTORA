@@ -4,7 +4,6 @@
 --
 -- Migrations under test:
 --   supabase/migrations/20261113200000_whatsapp_disconnect_alerts.sql
---   supabase/migrations/20261113203000_whatsapp_disconnect_watch_cron.sql
 --
 -- One transaction, synthetic fixtures only, labelled ASSERTs, ROLLBACK, sentinel last.
 -- Nothing here touches a real database: the harness applies this to a disposable
@@ -722,6 +721,34 @@ BEGIN
   ASSERT (SELECT account_metadata->'whatsapp_disconnect'->>'flagged_at' IS NOT NULL
             FROM public.social_accounts WHERE id = acc_flag),
     'E24 the episode is stamped as the one the watcher flagged';
+  -- E24a: repeated terminal runs preserve the first flag and expose completion markers.
+  first0 := (SELECT (account_metadata->'whatsapp_disconnect'->>'flagged_at')::timestamptz
+               FROM public.social_accounts WHERE id = acc_flag);
+  claim_json := public.claim_whatsapp_disconnect_email(acc_flag, 'user', payload);
+  ASSERT public.mark_whatsapp_disconnect_emailed(acc_flag, 'user', (claim_json->>'episode_id')::uuid),
+    'E24a owner completion recorded';
+  ep_two := public.observe_whatsapp_disconnect_state(acc_flag, 'close', true);
+  ASSERT ep_two->>'user_email_at' IS NOT NULL AND ep_two->>'admin_email_at' IS NULL,
+    'E24a unfinished admin group remains retryable';
+  claim_json := public.claim_whatsapp_disconnect_email(acc_flag, 'admin', payload);
+  ASSERT public.mark_whatsapp_disconnect_emailed(acc_flag, 'admin', (claim_json->>'episode_id')::uuid),
+    'E24a admin completion recorded';
+  PERFORM pg_sleep(0.01);
+  ep_two := public.observe_whatsapp_disconnect_state(acc_flag, 'close', true);
+  ASSERT ep_two->>'user_email_at' IS NOT NULL AND ep_two->>'admin_email_at' IS NOT NULL,
+    'E24a both completed groups are returned to suppress redispatch';
+  ASSERT NOT public.flag_whatsapp_disconnect_episode(acc_flag, ep_two->>'episode_id', 'must not replace reason'),
+    'E24a repeated flag is not counted as a new flag';
+  ASSERT (SELECT (account_metadata->'whatsapp_disconnect'->>'flagged_at')::timestamptz = first0
+                 AND last_refresh_error = 'wda reason' AND NOT is_active AND needs_reauth
+            FROM public.social_accounts WHERE id = acc_flag),
+    'E24a a second run preserves flagged_at and last_refresh_error';
+
+  UPDATE public.social_accounts SET account_metadata = account_metadata || '{"number_mismatch":true}'::jsonb
+   WHERE id = acc_flag;
+  ASSERT NOT public.restore_whatsapp_disconnect_account(acc_flag),
+    'E24a healthy state alone cannot bypass the phone identity mismatch';
+  UPDATE public.social_accounts SET account_metadata = account_metadata - 'number_mismatch' WHERE id = acc_flag;
   ASSERT public.restore_whatsapp_disconnect_account(acc_flag) = true,
     'E24 the healthy poll restores the account';
   ASSERT (SELECT is_active AND NOT needs_reauth AND last_refresh_error IS NULL
@@ -732,6 +759,12 @@ BEGIN
     'E24 the episode is cleared';
   ASSERT public.restore_whatsapp_disconnect_account(acc_flag) = false,
     'E24 restoring an active account is refused';
+
+  -- Same-value activation must close the episode before a watcher can flag it.
+  ep_two := public.observe_whatsapp_disconnect_state(acc_flag, 'close', true);
+  UPDATE public.social_accounts SET is_active = true WHERE id = acc_flag;
+  ASSERT NOT public.flag_whatsapp_disconnect_episode(acc_flag, ep_two->>'episode_id', 'stale flag'),
+    'E24a explicit same-value activation atomically closes the observed episode';
 
   -- E24b: an account that was inactive for another reason is never restored
   UPDATE public.social_accounts SET is_active = false WHERE id = acc_two;
@@ -908,6 +941,35 @@ BEGIN
   ASSERT has_function_privilege('service_role',
         'public.clear_unflagged_whatsapp_disconnect_episode(uuid)', 'EXECUTE'),
     'E26 the service role may clear an unflagged episode';
+
+  -- E28: intentional local deactivation is atomic and workspace scoped, including inactive rows.
+  ep_two := public.observe_whatsapp_disconnect_state(acc_flag, 'close', true);
+  ASSERT NOT public.deactivate_whatsapp_deliberately(acc_flag, ws_b), 'E28 wrong workspace refused';
+  ASSERT (SELECT is_active AND account_metadata->'whatsapp_disconnect' IS NOT NULL
+            FROM public.social_accounts WHERE id = acc_flag), 'E28 refused deactivation preserves the outage';
+  ASSERT public.deactivate_whatsapp_deliberately(acc_flag, ws_a), 'E28 atomic disconnect succeeds';
+  ASSERT (SELECT NOT is_active AND NOT needs_reauth
+            AND account_metadata->>'whatsapp_user_disconnected_at' IS NOT NULL
+            AND account_metadata->'whatsapp_disconnect' IS NULL
+            FROM public.social_accounts WHERE id = acc_flag), 'E28 marker and deactivation commit together';
+  ASSERT public.deactivate_whatsapp_deliberately(acc_flag, ws_a), 'E28 already inactive rows disconnect safely';
+  ASSERT NOT has_function_privilege('authenticated', 'public.deactivate_whatsapp_deliberately(uuid,uuid)', 'EXECUTE')
+     AND NOT has_function_privilege('anon', 'public.deactivate_whatsapp_deliberately(uuid,uuid)', 'EXECUTE')
+     AND has_function_privilege('service_role', 'public.deactivate_whatsapp_deliberately(uuid,uuid)', 'EXECUTE'),
+    'E28 atomic disconnect stays service-only';
+
+  -- E29: the existing scheduler lease serializes watcher invocations, including manual runs.
+  claim_ep := gen_random_uuid();
+  other_ep := gen_random_uuid();
+  ASSERT public.acquire_cron_run_lease('whatsapp-disconnect-watch', claim_ep, interval '10 minutes'),
+    'E29 first watcher acquires the lease';
+  ASSERT NOT public.acquire_cron_run_lease('whatsapp-disconnect-watch', other_ep, interval '10 minutes'),
+    'E29 overlapping watcher cannot poll';
+  ASSERT NOT public.release_cron_run_lease('whatsapp-disconnect-watch', other_ep), 'E29 another holder cannot release';
+  ASSERT public.release_cron_run_lease('whatsapp-disconnect-watch', claim_ep), 'E29 holder releases';
+  ASSERT public.acquire_cron_run_lease('whatsapp-disconnect-watch', other_ep, interval '10 minutes'),
+    'E29 next watcher can run';
+  PERFORM public.release_cron_run_lease('whatsapp-disconnect-watch', other_ep);
 
   ASSERT EXISTS (SELECT 1 FROM cron.job
                  WHERE jobname = 'whatsapp-disconnect-watch' AND NOT active),

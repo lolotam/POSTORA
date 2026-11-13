@@ -12,6 +12,7 @@ import { redactSensitive } from "../_shared/logging.ts";
 import { dispatchDisconnectAlert } from "./dispatch.ts";
 import { runWatch, isPollFresh, type Episode, type WatchCandidate } from "./run.ts";
 import { readConnectionState } from "./stateReader.ts";
+import { withWatchLease, WATCH_LEASE_JOB, WATCH_LEASE_TTL, WATCH_REQUEST_TIMEOUT_MS } from "./lease.ts";
 
 /** The instance row the candidate query returns. */
 interface CandidateRow {
@@ -57,10 +58,34 @@ Deno.serve(async (req) => {
       );
     }
 
-    const admin = createClient(supabaseUrl, serviceRoleKey);
+    // Bound all database requests by one run deadline, well inside the ten-minute lease.
+    // The normal 50s budget plus one in-flight account can consume another 70s.
+    const deadline = AbortSignal.timeout(WATCH_REQUEST_TIMEOUT_MS);
+    const admin = createClient(supabaseUrl, serviceRoleKey, {
+      global: { fetch: (input, init) => fetch(input, { ...init, signal: deadline }) },
+    });
     const api = createEvolutionApi();
+    const holder = crypto.randomUUID();
 
-    const summary = await runWatch({
+    const summary = await withWatchLease({
+      async acquire() {
+        const { data, error } = await admin.rpc("acquire_cron_run_lease", {
+          p_job: WATCH_LEASE_JOB, p_holder: holder, p_ttl: WATCH_LEASE_TTL,
+        });
+        if (error) throw error;
+        return data === true;
+      },
+      async release() {
+        // Release has its own short deadline in case the run used its whole budget.
+        const cleanup = createClient(supabaseUrl, serviceRoleKey, {
+          global: { fetch: (input, init) => fetch(input, { ...init, signal: AbortSignal.timeout(5_000) }) },
+        });
+        const { error } = await cleanup.rpc("release_cron_run_lease", {
+          p_job: WATCH_LEASE_JOB, p_holder: holder,
+        });
+        if (error) throw error;
+      },
+    }, () => runWatch({
       /**
        * The poll time lives on the instance row, so the query starts there. PostgREST can
        * order by the top level table's column but not by an embedded resource's column, and
@@ -176,7 +201,12 @@ Deno.serve(async (req) => {
       },
       monotonicNow: () => performance.now(),
       now: () => new Date(),
-    });
+    }));
+
+    if (!summary) {
+      console.log("[whatsapp-disconnect-watch] skipped: another run holds the lease");
+      return Response.json({ ok: true, skipped: "run already active" }, { headers: corsHeaders });
+    }
 
     console.log(`[whatsapp-disconnect-watch] ${JSON.stringify(summary)}`);
     return new Response(

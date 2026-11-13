@@ -20,3 +20,9 @@ Deno.test("a read that cannot be answered is a failure, not a state", async () =
     )
   );
 });
+
+Deno.test("malformed successful Evolution responses are operational failures", async () => {
+  for (const payload of [{}, null, { instance: { state: "   " } }]) {
+    await assertRejects(() => readConnectionState({ connectionState: () => Promise.resolve(payload) }, "acc-1"));
+  }
+});
