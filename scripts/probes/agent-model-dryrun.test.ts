@@ -134,6 +134,24 @@ Deno.test("an English reply is still English", () => {
   assertEquals(scoreLanguage(reply, "ar"), "incorrect");
 });
 
+// The Arabic block holds its digits and its punctuation as well as its letters.
+// An English answer that quotes a price in Arabic-Indic digits is still English.
+Deno.test("an English reply with Arabic-Indic digits is still English", () => {
+  const reply = "Price: ١٢٣ KWD";
+  assertEquals(dominantReplyLanguage(reply), "en");
+  assertEquals(scoreLanguage(reply, "en"), "correct");
+  assertEquals(scoreLanguage(reply, "ar"), "incorrect");
+});
+
+// A product name carries English function words of its own ("for", "with"), so a
+// quoted name is data the answer quotes, not prose it is written in.
+Deno.test("an Arabic reply that quotes an English product name is still Arabic", () => {
+  const reply = "المنتج \"Vitamins for Men Advanced Multivitamin\" متوفر في المخزن.";
+  assertEquals(dominantReplyLanguage(reply), "ar");
+  assertEquals(scoreLanguage(reply, "ar"), "correct");
+  assertEquals(scoreLanguage(reply, "en"), "incorrect");
+});
+
 Deno.test("a reply with no prose in it is decided by its letters", () => {
   // A bare product name says nothing about the language it is written in, and the
   // letters are all the probe has -- as they were before.

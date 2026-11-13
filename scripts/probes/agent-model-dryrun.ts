@@ -438,8 +438,26 @@ const URL_RE = /https?:\/\/\S+/gi;
 const WWW_URL_RE = /\bwww\.\S+/gi;
 const LATIN_WORD_RE = /[A-Za-z]+/g;
 const LATIN_LETTER_RE = /[A-Za-z]/g;
-const ARABIC_LETTER_RE = /[\u0600-\u06FF]/g;
+/**
+ * The Arabic LETTERS, and nothing else.
+ *
+ * The Arabic block also holds its digits (Arabic-Indic 0-9), its punctuation
+ * (comma, semicolon, question mark) and its tashkeel. A reply such as
+ * "Price: ١٢٣ KWD" is English, but its Arabic-Indic digits read as Arabic
+ * letters, so the English answer was counted as Arabic prose. The letter class
+ * is what the language of the answer is made of.
+ */
+const ARABIC_LETTER_RE = /(?=\p{Script=Arabic})\p{L}/gu;
 const SENTENCE_BREAK_RE = /[\n.!?؟]+/;
+
+/**
+ * A quoted span: a name the answer quotes, not prose it is written in.
+ *
+ * A product name carries words that are English function words ("Vitamins for
+ * Men"), so a quoted name read as English prose made an Arabic answer read as
+ * English. The double quotes and the guillemets are the quotes a reply uses.
+ */
+const QUOTED_SPAN_RE = /"[^"]*"|“[^”]*”|«[^»]*»/g;
 
 /**
  * Whether a fragment carries an English function word.
@@ -471,18 +489,24 @@ function carriesEnglishFunctionWord(fragment: string): boolean {
  * name, a brand or a label is data the answer quotes, not the language the
  * answer is written in. A reply with no prose in it at all (only names, digits
  * and punctuation) is decided by its letters, as it was before.
+ *
+ * Two things are data rather than prose, and both are read out before the prose
+ * is counted: a link, and a quoted name. A quoted product name carries English
+ * function words of its own ("Vitamins for Men"), and an Arabic answer quoting
+ * one is not an English answer. The letters of the data still count, so a reply
+ * that is nothing but a name is decided by its letters, as it was before.
  */
 export function dominantReplyLanguage(reply: string): ReplyLanguage {
   const text = reply.replace(URL_RE, " ").replace(WWW_URL_RE, " ");
+  // A quoted name is data the answer quotes, not prose it is written in.
+  const prose = text.replace(QUOTED_SPAN_RE, " ");
+  const arabicLetters = (text.match(ARABIC_LETTER_RE) ?? []).length;
+  const latinLetters = (text.match(LATIN_LETTER_RE) ?? []).length;
   let arabicProse = 0;
   let latinProse = 0;
-  let arabicLetters = 0;
-  let latinLetters = 0;
-  for (const segment of text.split(SENTENCE_BREAK_RE)) {
+  for (const segment of prose.split(SENTENCE_BREAK_RE)) {
     const arabic = (segment.match(ARABIC_LETTER_RE) ?? []).length;
     const latin = (segment.match(LATIN_LETTER_RE) ?? []).length;
-    arabicLetters += arabic;
-    latinLetters += latin;
     arabicProse += arabic;
     if (carriesEnglishFunctionWord(segment)) latinProse += latin;
   }
