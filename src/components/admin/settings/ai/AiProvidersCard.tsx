@@ -24,7 +24,7 @@ import { SyncAllButton } from './SyncAllButton';
 import { SubscriptionLoginSection } from './SubscriptionLoginSection';
 import { SubscriptionLoginsStrip } from './SubscriptionLoginsStrip';
 import { SYNCABLE_PROVIDER_CODES } from '@/hooks/ai-config/useSyncModels';
-import { useAiProviderAuthCapabilities } from '@/hooks/ai-config/useAiProviderAuth';
+import { AI_PROVIDER_AUTH_QUERY_KEY, useAiProviderAuthCapabilities } from '@/hooks/ai-config/useAiProviderAuth';
 
 function isOAuthProvider(provider: AIProvider | null) {
   return !!provider && (provider.auth_type === 'oauth' || provider.provider_code === 'higgsfield' || provider.api_type === 'higgsfield');
@@ -146,6 +146,9 @@ export function AiProvidersCard() {
           (old: Record<string, boolean> | undefined) => ({ ...old, [providerCode]: true })
         );
         queryClient.refetchQueries({ queryKey: ['service-keys'] });
+        // The model selector reads each provider's key status from the
+        // subscription capabilities, so they are read again too.
+        queryClient.invalidateQueries({ queryKey: AI_PROVIDER_AUTH_QUERY_KEY });
       } else {
         toast.error(r.error || 'Invalid API key');
       }
@@ -244,7 +247,15 @@ export function AiProvidersCard() {
                     </div>
                     <div className="flex items-center justify-between">
                       <Button size="sm" variant="outline"
-                        onClick={(e) => { e.stopPropagation(); handleTestConnection(provider.id); }}
+                        // A provider that only has a subscription has no API key
+                        // for this test to use; the click opens the dialog, where
+                        // the subscription has its own test.
+                        onClick={(e) => {
+                          if (authState === 'auth') return;
+                          e.stopPropagation();
+                          handleTestConnection(provider.id);
+                        }}
+                        title={authState === 'auth' ? 'Test the subscription in the provider dialog' : undefined}
                         disabled={testConnection.isPending}
                         className="h-5 px-1.5 text-[10px] gap-0.5">
                         {testConnection.isPending && !testResult?.success && !testResult?.error ? (

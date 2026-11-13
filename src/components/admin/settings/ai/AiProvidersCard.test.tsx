@@ -128,7 +128,7 @@ describe('AiProvidersCard', () => {
     await waitFor(() => expect(screen.getAllByText('auth')).toHaveLength(1));
   });
 
-  it('offers the same models in the picker as the list next to it', async () => {
+  it('offers only the listed models the subscription can call', async () => {
     renderCard();
     await waitFor(() => expect(screen.getByText('Anthropic API')).toBeInTheDocument());
 
@@ -141,12 +141,21 @@ describe('AiProvidersCard', () => {
     fireEvent.pointerDown(modelTrigger, { button: 0, buttons: 1, pointerType: 'mouse' });
     fireEvent.click(modelTrigger);
 
-    // The picker offers exactly those rows, including the one the
-    // subscription's own model list does not name.
+    // The subscription's registry names only Sonnet, so Haiku is not offered.
     const options = await screen.findAllByRole('option');
-    expect(options.map(option => option.textContent).sort()).toEqual([
-      'claude-haiku-4-5',
-      'claude-sonnet-4-5',
-    ]);
+    expect(options.map(option => option.textContent)).toEqual(['claude-sonnet-4-5']);
+  });
+
+  it('opens the dialog instead of running the API key test for a subscription-only provider', async () => {
+    renderCard();
+    await waitFor(() => expect(screen.getAllByText('auth')).toHaveLength(1));
+
+    const claudeTile = screen.getByRole('heading', { name: 'Anthropic API' }).closest('[class*="space-y-1.5"]') as HTMLElement;
+    fireEvent.click(within(claudeTile).getByRole('button', { name: /Test/ }));
+
+    expect(await screen.findByRole('dialog')).toBeInTheDocument();
+    expect(invoke).not.toHaveBeenCalledWith('ai-config', expect.objectContaining({
+      body: expect.objectContaining({ action: 'test-connection' }),
+    }));
   });
 });
