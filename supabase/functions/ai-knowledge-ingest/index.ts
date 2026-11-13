@@ -606,13 +606,17 @@ async function handleRequest(req: Request): Promise<Response> {
     // set_ai_knowledge_source_visibility RPC, so a failure can never leave
     // them disagreeing. Validation and ownership refusals live in
     // ./sourceVisibility.ts, which is where they are testable.
+    // The port matches select/filter/maybeSingle and rpc at runtime; comparing the
+    // SDK's recursive generic select types exceeds TypeScript's instantiation limit.
+    // Narrow only this infrastructure seam; ownership checks stay in the use cases.
+    const visibilityAdmin = admin as unknown as Parameters<typeof setSourceVisibility>[0];
     if (action === "list_source_accounts") {
       const sourceId = body.source_id;
       if (typeof sourceId !== "string" || !sourceId) {
         return errorResponse("source_id is required", 400);
       }
       try {
-        const view = await listSourceAccounts(admin, { userId: user.id, sourceId });
+        const view = await listSourceAccounts(visibilityAdmin, { userId: user.id, sourceId });
         if (!view) return errorResponse("Knowledge source not found", 404);
         return jsonResponse({
           ok: true,
@@ -632,7 +636,7 @@ async function handleRequest(req: Request): Promise<Response> {
         return errorResponse(message(error), status);
       }
       try {
-        await setSourceVisibility(admin, { userId: user.id, input });
+        await setSourceVisibility(visibilityAdmin, { userId: user.id, input });
         await logKnowledgeEvent(admin, user.id, "set_source_visibility", true, {
           source_id: input.sourceId,
           visibility: input.visibility,

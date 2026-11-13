@@ -7,6 +7,8 @@ import {
   type ReplyLanguage,
 } from "../../supabase/functions/ai-agent-reply/logic.ts";
 
+import { CatalogEvidenceSchema, catalogGrounded, type CatalogEvidence } from "../../supabase/functions/ai-agent-reply/catalogEvidence.ts";
+
 const REPORT_PATH = "docs/superpowers/reports/2026-11-12-curemed-model-dryrun.md";
 const REPORT_URL = new URL(`../../${REPORT_PATH}`, import.meta.url);
 /**
@@ -26,6 +28,7 @@ const SandboxResponseSchema = z.object({
   // failed. A schema that accepts those records a MISS for a model that never
   // answered, and lets the turn join the sandbox's window as if it had.
   reply: z.string(),
+  catalog_evidence: z.array(CatalogEvidenceSchema).max(100).optional(),
   tool_calls: z.array(z.object({
     name: z.string(),
     arguments: z.record(z.unknown()).optional(),
@@ -51,7 +54,7 @@ export interface SandboxToolCall {
  * trust what it says.
  */
 export type SandboxReply =
-  | { kind: "answered"; reply: string; toolCalls: SandboxToolCall[] }
+  | { kind: "answered"; reply: string; toolCalls: SandboxToolCall[]; catalogEvidence: CatalogEvidence[] | null }
   | { kind: "failed"; reason: "no_reply" | "malformed" };
 
 function createAdminClient(supabaseUrl: string, serviceRoleKey: string) {
@@ -77,9 +80,19 @@ export interface ResultRow {
   latencyMs: number;
   languageScore: LanguageScore;
   catalogQuery: boolean;
+  catalogGrounded: boolean | null;
   /** Whether the reply carried a URL at all. Not a product-link measurement; see hasUrl. */
   urlPresent: boolean;
   excerpt: string;
+  /**
+   * How long the reply was.
+   *
+   * The excerpt column is the first 120 characters, so its length is the length of the
+   * EXCERPT and not of the reply: a reply of any length over 120 reported as 120. The
+   * report quotes this number instead, so the comparison says what the reply actually
+   * was.
+   */
+  replyLength: number;
   /** Set when the turn failed. The probe records it and carries on with the next turn. */
   failure?: string;
 }
@@ -234,6 +247,7 @@ export function parseSandboxReply(body: unknown): SandboxReply {
       kind: "answered",
       reply: parsed.data.reply,
       toolCalls: parsed.data.tool_calls ?? [],
+      catalogEvidence: parsed.data.catalog_evidence ?? null,
     };
   }
   // No reply at all: the skip and error envelopes.
@@ -252,18 +266,7 @@ function catalogCalledWithQuery(toolCalls: readonly SandboxToolCall[]): boolean 
   });
 }
 
-/**
- * Whether the reply carried a URL at all.
- *
- * This is NOT a product-link measurement, and the report column says so. The
- * sandbox hands the probe the tool calls it made -- name and arguments -- and
- * never the catalog rows the tool returned, so the probe cannot tell the
- * catalog's product_url from a homepage, a support link or a tracking URL. A
- * column labelled "product link present" called a model product-link capable
- * when it had omitted the product page; "any URL present" is what the probe can
- * actually see, and the catalog column next to it says whether the catalog was
- * searched at all.
- */
+/** Whether the reply carried any URL; the separate grounding column matches product identity. */
 export function hasUrl(reply: string): boolean {
   return /https?:\/\/[^\s)]+/i.test(reply);
 }
@@ -281,8 +284,7 @@ function markdownCell(text: string): string {
  * The table, the limitation and the selection card.
  *
  * The columns are the ones the plan settled on and they measure what they say:
- * the URL column says "any URL present" because the probe never sees the catalog
- * rows the model read.
+ * the URL column says "any URL present" and the grounding column uses catalog identity evidence.
  */
 function renderReportBody(
   resultRows: readonly ResultRow[],
@@ -291,22 +293,19 @@ function renderReportBody(
   return [
     "## Results",
     "",
-    "| Model | Turn | Latency ms | Reply language correct | Catalog tool called with non-empty query | Any URL present | Reply excerpt (120 chars) | Status |",
-    "|---|---:|---:|---|---|---|---|---|",
+    "| Model | Turn | Latency ms | Reply language correct | Catalog tool called with non-empty query | Any URL present | Catalog grounded (identity match) | Reply excerpt (120 chars) | Status |",
+    "|---|---:|---:|---|---|---|---|---|---|",
     ...resultRows.map((row) =>
-      `| ${markdownCell(row.model)} | ${row.turn} | ${row.latencyMs} | ${languageCell(row.languageScore)} | ${row.catalogQuery ? "yes" : "no"} | ${row.urlPresent ? "yes" : "no"} | ${excerptCell(row)} | ${row.failure ? `failed: ${markdownCell(row.failure)}` : "ok"} |`
+      `| ${markdownCell(row.model)} | ${row.turn} | ${row.latencyMs} | ${languageCell(row.languageScore)} | ${row.catalogQuery ? "yes" : "no"} | ${row.urlPresent ? "yes" : "no"} | ${row.catalogGrounded === null ? "not measured" : row.catalogGrounded ? "yes" : "no"} | ${excerptCell(row)} | ${row.failure ? `failed: ${markdownCell(row.failure)}` : "ok"} |`
     ),
     "",
-    "## What this report does not measure",
+    "## Grounding score",
     "",
-    "- Catalog grounding. The sandbox hands the probe the tool CALLS it made -- the",
-    "  name and the arguments -- and never the rows the catalog returned, so",
-    "  \"Catalog tool called with non-empty query\" says the catalog was SEARCHED, not",
-    "  that the answer came from it. A model that searches and then answers something",
-    "  unrelated scores exactly like one that answers from the rows. The probe cannot",
-    "  measure grounding without the rows and the sandbox does not expose them, so no",
-    "  grounding score is reported here. Read the answers in the owner copy beside this",
-    "  report before choosing a model.",
+    "Catalog grounded compares the answer with product identifiers, names and URLs",
+    "returned by the catalog during this sandbox turn. A yes means at least one exact",
+    "identity match, not verification of every price or medical claim. A no means no",
+    "returned product was identified. Older sandbox builds that expose no evidence",
+    "are reported as not measured. Review the owner copy before selecting a model.",
     "",
     "## Model selection",
     "",
@@ -337,7 +336,7 @@ export function renderReport(resultRows: readonly ResultRow[]): string {
     "be committed. The unredacted detail is written beside it in the `.local` file, which",
     "git ignores -- keep that file out of every commit.",
     "",
-    ...renderReportBody(resultRows, (row) => (row.excerpt ? `(redacted, ${row.excerpt.length} chars)` : "(no reply)")),
+    ...renderReportBody(resultRows, (row) => (row.excerpt ? `(redacted, ${row.replyLength} chars)` : "(no reply)")),
   ];
   return lines.join("\n");
 }
@@ -566,8 +565,10 @@ export async function replayTurn(
     latencyMs,
     languageScore: scoreLanguage(parsedReply.reply, input.expectedLanguage),
     catalogQuery: catalogCalledWithQuery(parsedReply.toolCalls),
+    catalogGrounded: parsedReply.catalogEvidence === null ? null : catalogGrounded(parsedReply.reply, parsedReply.catalogEvidence),
     urlPresent: hasUrl(parsedReply.reply),
     excerpt: excerpt(parsedReply.reply),
+    replyLength: parsedReply.reply.length,
   };
 }
 
@@ -639,8 +640,10 @@ export async function replayModelTurns(options: ReplayModelOptions): Promise<{ r
         latencyMs: Date.now() - startedAt,
         languageScore: "indeterminate",
         catalogQuery: false,
+        catalogGrounded: null,
         urlPresent: false,
         excerpt: "",
+        replyLength: 0,
         failure: error instanceof Error ? error.message : String(error),
       };
     }

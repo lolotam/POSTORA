@@ -6,6 +6,7 @@ import {
   deliverGeneratedReply,
   deliverStoredReply,
   releaseAfterError,
+  replaceStoredReply,
   takeOutboxRow,
 } from "./outbox.ts";
 
@@ -68,6 +69,7 @@ function stubOutbox(
         name !== "advance_agent_reply_kind_for_owner" &&
         name !== "claim_agent_reply_for_delivery_for_owner" &&
         name !== "persist_human_mode_ack_and_complete_claim" &&
+        name !== "replace_agent_reply_and_complete_claim" &&
         name !== "persist_agent_reply_and_complete_escalation"
       ) {
         throw new Error(`unexpected rpc ${name}`);
@@ -99,6 +101,25 @@ function stubOutbox(
         // The notice and the claim it spends are ONE statement, and the claim has to be
         // the live one: a notice persisted with its claim still owed is a notice the
         // next turn sends again.
+        if (!row || row.status !== args.p_from || options.ackClaimLive === false) {
+          transitions.push(`REFUSED ${args.p_from}->${args.p_to}`);
+          return Promise.resolve({ data: false, error: null });
+        }
+        row.status = String(args.p_to);
+        if (typeof args.p_generated_reply === "string") row.generated_reply = args.p_generated_reply;
+        if (typeof args.p_generated_kind === "string") row.generated_kind = args.p_generated_kind;
+        acks.push({
+          conversationId: String(args.p_conversation_id),
+          claimToken: String(args.p_claim_token),
+        });
+        transitions.push(`${args.p_from}->${args.p_to}+ack`);
+        return Promise.resolve({ data: true, error: null });
+      }
+      if (name === "replace_agent_reply_and_complete_claim") {
+        // The notice that takes the row's place and the claim it spends are ONE
+        // statement, and the claim has to be the live one: a notice that is durable
+        // with its claim still owed is a notice the next turn takes the expired lease
+        // over and sends again.
         if (!row || row.status !== args.p_from || options.ackClaimLive === false) {
           transitions.push(`REFUSED ${args.p_from}->${args.p_to}`);
           return Promise.resolve({ data: false, error: null });
@@ -382,6 +403,73 @@ Deno.test("a notice with no claim at all is never persisted", async () => {
 
   assertEquals(row?.status, "running");
   assertEquals(row?.generated_reply, undefined);
+});
+
+Deno.test("the replacement and the claim it spends are written by ONE statement", async () => {
+  // The notice takes the row's place, and the claim it spends is spent by the same
+  // statement. A notice that is durable with its claim still owed is a notice the next
+  // turn takes the expired lease over and sends again: the customer is told twice that
+  // a human has their conversation.
+  const { admin, row, transitions, acks } = stubOutbox({
+    status: "ready_to_send",
+    generated_reply: "كريم الكعب متوفر",
+  });
+
+  const replaced = await replaceStoredReply(
+    admin,
+    "row-1",
+    { text: NOTICE, kind: "human_mode_ack" },
+    ACK_CLAIM,
+  );
+
+  assert(replaced);
+  assertEquals(row?.generated_reply, NOTICE);
+  assertEquals(row?.generated_kind, "human_mode_ack");
+  assertEquals(acks, [{ conversationId: ACK_CLAIM.conversationId, claimToken: ACK_CLAIM.claimToken }]);
+  assertEquals(transitions, ["ready_to_send->ready_to_send+ack"]);
+});
+
+Deno.test("a replacement whose claim is not this caller's writes nothing", async () => {
+  // The claim this caller holds is not the live one, so it cannot spend it. The notice is
+  // not written either: a durable notice with an owed claim is the second notice the
+  // customer gets.
+  const { admin, row, transitions, acks } = stubOutbox(
+    { status: "ready_to_send", generated_reply: "كريم الكعب متوفر" },
+    { ackClaimLive: false },
+  );
+
+  const replaced = await replaceStoredReply(
+    admin,
+    "row-1",
+    { text: NOTICE, kind: "human_mode_ack" },
+    ACK_CLAIM,
+  );
+
+  assert(!replaced);
+  assertEquals(row?.generated_reply, "كريم الكعب متوفر");
+  assertEquals(acks, []);
+  assertEquals(transitions, ["REFUSED ready_to_send->ready_to_send"]);
+});
+
+Deno.test("a row that is no longer ready_to_send is not replaced", async () => {
+  // The row is somebody else's now: a worker is already delivering it. The replacement
+  // is fail-closed, so the notice is not written into a row that cannot carry it.
+  const { admin, row, transitions, acks } = stubOutbox({
+    status: "sending",
+    generated_reply: "كريم الكعب متوفر",
+  });
+
+  const replaced = await replaceStoredReply(
+    admin,
+    "row-1",
+    { text: NOTICE, kind: "human_mode_ack" },
+    ACK_CLAIM,
+  );
+
+  assert(!replaced);
+  assertEquals(row?.generated_reply, "كريم الكعب متوفر");
+  assertEquals(acks, []);
+  assertEquals(transitions, ["REFUSED ready_to_send->ready_to_send"]);
 });
 
 Deno.test("a provider that throws leaves the row delivery_unknown, never ready_to_send", async () => {

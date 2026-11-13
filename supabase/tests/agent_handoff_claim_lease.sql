@@ -179,13 +179,15 @@ BEGIN
   -- L11: the kind-aware transition really runs. A function that names a column the table
   -- does not have fails at the FIRST call -- long after the migration was applied, and
   -- on the reply path that matters most.
-  INSERT INTO public.social_accounts (id, user_id, platform, platform_user_id, access_token)
-  VALUES (s_account, u_a, 'facebook', 'page-lease', 'token-lease');
+  INSERT INTO public.workspaces (id, name, owner_id) VALUES (u_a, 'Handoff fixture', u_a);
+
+  INSERT INTO public.social_accounts (id, user_id, workspace_id, platform, platform_user_id, access_token)
+  VALUES (s_account, u_a, u_a, 'whatsapp', 'page-lease', 'token-lease');
   INSERT INTO public.pending_agent_replies (
     id, social_account_id, user_id, platform, message_id, conversation_id, recipient_id,
     inbound_text, inbound_at, status
   ) VALUES (
-    r_kind, s_account, u_a, 'facebook', 'm-kind', 'c_kind', 'r-kind',
+    r_kind, s_account, u_a, 'whatsapp', 'm-kind', 'c_kind', 'r-kind',
     'عندكم كريم الكعب؟', now(), 'running'
   );
   ASSERT public.advance_agent_reply_kind(r_kind, 'running', 'ready_to_send', 'كريم الكعب متوفر', NULL, NULL, 'human_mode_ack'),
@@ -201,7 +203,7 @@ BEGIN
     id, social_account_id, user_id, platform, message_id, conversation_id, recipient_id,
     inbound_text, inbound_at, status
   ) VALUES (
-    r_reply, s_account, u_a, 'facebook', 'm-lease', 'c_reply', 'r-lease',
+    r_reply, s_account, u_a, 'whatsapp', 'm-lease', 'c_marker', 'r-lease',
     'عندكم كريم الكعب؟', now(), 'running'
   );
   UPDATE public.ai_threads
@@ -249,7 +251,7 @@ BEGIN
     id, social_account_id, user_id, platform, message_id, conversation_id, recipient_id,
     inbound_text, inbound_at, status
   ) VALUES (
-    r_reply2, s_account, u_a, 'facebook', 'm-lease-2', 'c_reply', 'r-lease',
+    r_reply2, s_account, u_a, 'whatsapp', 'm-lease-2', 'c_reply', 'r-lease',
     'عندكم كريم الكعب؟', now(), 'running'
   );
   ASSERT NOT public.persist_agent_reply_and_complete_escalation(

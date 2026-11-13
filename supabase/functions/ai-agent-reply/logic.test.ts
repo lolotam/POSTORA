@@ -126,3 +126,13 @@ Deno.test("the note that tells the model a staff member answered names the reply
   assert(note.includes("(staff) نعم متوفر عندنا"), "the note must carry the staff reply");
   assert(note.includes("again"), "the note must ask for the answer again");
 });
+
+Deno.test("identical simultaneous staff sends remain distinct by source ID", () => {
+  const row: MessageRow = { id: "first-send", direction: "outbound", from_name: "You",
+    message_text: "Available", created_at: "2026-11-12T09:00:00Z" };
+  const known = staffTurnsSince([row], SINCE);
+  const second = { ...row, id: "second-send" };
+  assertEquals(lateStaffTurns([row, second], known, SINCE).map((turn) => turn.source_id), ["second-send"]);
+  const legacy = known.map(({ source_id: _sourceId, ...turn }) => turn);
+  assertEquals(lateStaffTurns([row], legacy, SINCE), []);
+});

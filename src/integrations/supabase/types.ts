@@ -2311,6 +2311,10 @@ export type Database = {
       }
       ai_conversation_modes: {
         Row: {
+          customer_ack_sent_at: string | null
+          customer_ack_claimed_at: string | null
+          customer_ack_delivered_at: string | null
+          escalated_at: string | null
           conversation_id: string
           created_at: string | null
           expires_at: string | null
@@ -2323,6 +2327,10 @@ export type Database = {
           user_id: string
         }
         Insert: {
+          customer_ack_sent_at?: string | null
+          customer_ack_claimed_at?: string | null
+          customer_ack_delivered_at?: string | null
+          escalated_at?: string | null
           conversation_id: string
           created_at?: string | null
           expires_at?: string | null
@@ -2335,6 +2343,10 @@ export type Database = {
           user_id: string
         }
         Update: {
+          customer_ack_sent_at?: string | null
+          customer_ack_claimed_at?: string | null
+          customer_ack_delivered_at?: string | null
+          escalated_at?: string | null
           conversation_id?: string
           created_at?: string | null
           expires_at?: string | null
@@ -2850,8 +2862,37 @@ export type Database = {
           },
         ]
       }
+      ai_handoff_ack_receipts: {
+        Row: {
+          user_id: string
+          platform: string
+          conversation_id: string
+          claim_token: string
+          delivered_at: string | null
+          created_at: string
+        }
+        Insert: {
+          user_id: string
+          platform: string
+          conversation_id: string
+          claim_token: string
+          delivered_at?: string | null
+          created_at?: string
+        }
+        Update: {
+          user_id?: string
+          platform?: string
+          conversation_id?: string
+          claim_token?: string
+          delivered_at?: string | null
+          created_at?: string
+        }
+        Relationships: []
+      }
       ai_threads: {
         Row: {
+          unanswered_escalation_since: string | null
+          unanswered_escalation_claimed_at: string | null
           conversation_id: string
           created_at: string | null
           id: string
@@ -2861,6 +2902,8 @@ export type Database = {
           user_id: string
         }
         Insert: {
+          unanswered_escalation_since?: string | null
+          unanswered_escalation_claimed_at?: string | null
           conversation_id: string
           created_at?: string | null
           id?: string
@@ -2870,6 +2913,8 @@ export type Database = {
           user_id: string
         }
         Update: {
+          unanswered_escalation_since?: string | null
+          unanswered_escalation_claimed_at?: string | null
           conversation_id?: string
           created_at?: string | null
           id?: string
@@ -6579,6 +6624,7 @@ export type Database = {
       }
       pending_agent_replies: {
         Row: {
+          generated_kind: string | null
           attempts: number
           claimed_at: string | null
           comment_id: string | null
@@ -6607,6 +6653,7 @@ export type Database = {
           user_id: string
         }
         Insert: {
+          generated_kind?: string | null
           attempts?: number
           claimed_at?: string | null
           comment_id?: string | null
@@ -6635,6 +6682,7 @@ export type Database = {
           user_id: string
         }
         Update: {
+          generated_kind?: string | null
           attempts?: number
           claimed_at?: string | null
           comment_id?: string | null
@@ -10976,6 +11024,196 @@ export type Database = {
       }
     }
     Functions: {
+      advance_agent_reply_kind: {
+        Args: {
+          p_id: string
+          p_from: string
+          p_to: string
+          p_generated_reply?: string
+          p_error?: string
+          p_tool_calls?: Json
+          p_generated_kind?: string
+        }
+        Returns: boolean
+      }
+      persist_agent_reply_and_complete_escalation: {
+        Args: {
+          p_id: string
+          p_from: string
+          p_to: string
+          p_generated_reply?: string
+          p_error?: string
+          p_tool_calls?: Json
+          p_generated_kind?: string
+          p_thread_id?: string
+          p_user_id?: string
+          p_since?: string
+          p_claim_token?: string
+        }
+        Returns: boolean
+      }
+      claim_human_mode_ack_leased: {
+        Args: {
+          p_user_id: string
+          p_platform: string
+          p_conversation_id: string
+          p_lease_seconds?: number
+        }
+        Returns: Json
+      }
+      complete_human_mode_ack: {
+        Args: {
+          p_user_id: string
+          p_platform: string
+          p_conversation_id: string
+          p_claim_token: string
+        }
+        Returns: boolean
+      }
+      release_human_mode_ack_claim: {
+        Args: {
+          p_user_id: string
+          p_platform: string
+          p_conversation_id: string
+          p_claim_token: string
+        }
+        Returns: boolean
+      }
+      claim_unanswered_escalation: {
+        Args: {
+          p_thread_id: string
+          p_user_id: string
+          p_lease_seconds?: number
+        }
+        Returns: Json
+      }
+      complete_unanswered_escalation: {
+        Args: {
+          p_thread_id: string
+          p_user_id: string
+          p_since: string
+          p_claim_token: string
+        }
+        Returns: boolean
+      }
+      release_unanswered_escalation_claim: {
+        Args: {
+          p_thread_id: string
+          p_user_id: string
+          p_since: string
+          p_claim_token: string
+        }
+        Returns: boolean
+      }
+      claim_human_mode_ack: {
+        Args: {
+          p_user_id: string
+          p_platform: string
+          p_conversation_id: string
+        }
+        Returns: string
+      }
+      release_human_mode_ack: {
+        Args: {
+          p_user_id: string
+          p_platform: string
+          p_conversation_id: string
+        }
+        Returns: boolean
+      }
+      expire_conversation_mode: {
+        Args: {
+          p_mode_id: string
+          p_user_id: string
+          p_expires_at: string
+        }
+        Returns: boolean
+      }
+      persist_human_mode_ack_and_complete_claim: {
+        Args: {
+          p_id: string
+          p_from: string
+          p_to: string
+          p_generated_reply?: string
+          p_error?: string
+          p_tool_calls?: Json
+          p_generated_kind?: string
+          p_user_id?: string
+          p_platform?: string
+          p_conversation_id?: string
+          p_claim_token?: string
+        }
+        Returns: boolean
+      }
+      claim_agent_reply_for_delivery: {
+        Args: {
+          p_id: string
+          p_from: string
+          p_to: string
+          p_expected_reply: string
+          p_expected_kind: string
+        }
+        Returns: boolean
+      }
+      advance_agent_reply_for_owner: {
+        Args: {
+          p_user_id: string
+          p_id: string
+          p_from: string
+          p_to: string
+          p_generated_reply?: string
+          p_error?: string
+          p_tool_calls?: Json
+        }
+        Returns: boolean
+      }
+      advance_agent_reply_kind_for_owner: {
+        Args: {
+          p_user_id: string
+          p_id: string
+          p_from: string
+          p_to: string
+          p_generated_reply?: string
+          p_error?: string
+          p_tool_calls?: Json
+          p_generated_kind?: string
+        }
+        Returns: boolean
+      }
+      claim_agent_reply_for_delivery_for_owner: {
+        Args: {
+          p_user_id: string
+          p_id: string
+          p_from: string
+          p_to: string
+          p_expected_reply: string
+          p_expected_kind: string
+        }
+        Returns: boolean
+      }
+      take_unanswered_escalation: {
+        Args: {
+          p_thread_id: string
+          p_user_id: string
+        }
+        Returns: string
+      }
+      replace_agent_reply_and_complete_claim: {
+        Args: {
+          p_user_id: string
+          p_id: string
+          p_from: string
+          p_to: string
+          p_generated_reply?: string
+          p_error?: string
+          p_tool_calls?: Json
+          p_generated_kind?: string
+          p_platform?: string
+          p_conversation_id?: string
+          p_claim_token?: string
+        }
+        Returns: boolean
+      }
       save_ai_oauth_credentials: {
         Args: {
           p_oauth_provider: string

@@ -38,24 +38,26 @@ BEGIN
     (gen_random_uuid(), u_a, 'whatsapp', 'c_atomic', 'human_first', now() + interval '1 hour', now()),
     (gen_random_uuid(), u_a, 'whatsapp', 'c_takeover', 'human_first', now() + interval '1 hour', now());
 
-  INSERT INTO public.social_accounts (id, user_id, platform, platform_user_id, access_token)
-  VALUES (s_account, u_a, 'facebook', 'page-atomic', 'token-atomic');
+  INSERT INTO public.workspaces (id, name, owner_id) VALUES (u_a, 'Handoff fixture', u_a);
+
+  INSERT INTO public.social_accounts (id, user_id, workspace_id, platform, platform_user_id, access_token)
+  VALUES (s_account, u_a, u_a, 'whatsapp', 'page-atomic', 'token-atomic');
 
   INSERT INTO public.pending_agent_replies (
     id, social_account_id, user_id, platform, message_id, conversation_id, recipient_id,
     inbound_text, inbound_at, status
   ) VALUES
-    (r_notice, s_account, u_a, 'facebook', 'm-atomic-1', 'c_atomic', 'r-atomic-1',
+    (r_notice, s_account, u_a, 'whatsapp', 'm-atomic-1', 'c_atomic', 'r-atomic-1',
      'عندكم كريم الكعب؟', now(), 'running'),
-    (r_notice2, s_account, u_a, 'facebook', 'm-atomic-2', 'c_takeover', 'r-atomic-2',
+    (r_notice2, s_account, u_a, 'whatsapp', 'm-atomic-2', 'c_takeover', 'r-atomic-2',
      'عندكم كريم الكعب؟', now(), 'running'),
-    (r_notice3, s_account, u_a, 'facebook', 'm-atomic-3', 'c_takeover', 'r-atomic-3',
+    (r_notice3, s_account, u_a, 'whatsapp', 'm-atomic-3', 'c_takeover', 'r-atomic-3',
      'عندكم كريم الكعب؟', now(), 'running'),
-    (r_notice4, s_account, u_a, 'facebook', 'm-atomic-4', 'c_takeover', 'r-atomic-4',
+    (r_notice4, s_account, u_a, 'whatsapp', 'm-atomic-4', 'c_takeover', 'r-atomic-4',
      'عندكم كريم الكعب؟', now(), 'running'),
-    (r_deliver, s_account, u_a, 'facebook', 'm-atomic-5', 'c_atomic', 'r-atomic-5',
+    (r_deliver, s_account, u_a, 'whatsapp', 'm-atomic-5', 'c_atomic', 'r-atomic-5',
      'عندكم كريم الكعب؟', now(), 'ready_to_send'),
-    (r_deliver2, s_account, u_a, 'facebook', 'm-atomic-6', 'c_atomic', 'r-atomic-6',
+    (r_deliver2, s_account, u_a, 'whatsapp', 'm-atomic-6', 'c_atomic', 'r-atomic-6',
      'عندكم كريم الكعب؟', now(), 'ready_to_send');
 
   -- A1: the notice and the claim it spends are ONE statement: the row holds the notice and
@@ -131,7 +133,7 @@ BEGIN
 
   -- A4: a DELIVERED claim is never released. The notice reached the customer, and putting
   -- the claim back would let a later turn send it again.
-  ASSERT NOT public.release_human_mode_ack_claim(u_a, 'whatsapp', 'c_atomic', v_token2),
+  ASSERT NOT public.release_human_mode_ack_claim(u_a, 'whatsapp', 'c_atomic', v_token),
     'A4 a delivered claim is not released';
   ASSERT (SELECT customer_ack_sent_at FROM public.ai_conversation_modes
           WHERE user_id = u_a AND conversation_id = 'c_atomic') IS NOT NULL,
@@ -143,7 +145,7 @@ BEGIN
   UPDATE public.pending_agent_replies
      SET generated_reply = 'كريم الكعب متوفر'
    WHERE id = r_deliver;
-  ASSERT public.claim_agent_reply_for_delivery(r_deliver, 'ready_to_send', 'sending', 'كريم الكعب متوفر', NULL),
+  ASSERT public.claim_agent_reply_for_delivery_for_owner(u_a, r_deliver, 'ready_to_send', 'sending', 'كريم الكعب متوفر', NULL),
     'A5 a row that holds the payload is moved';
   ASSERT (SELECT status FROM public.pending_agent_replies WHERE id = r_deliver) = 'sending',
     'A5 the row is sending';
@@ -154,7 +156,7 @@ BEGIN
      SET generated_reply = 'تم تحويل محادثتك لفريقنا',
          generated_kind = 'human_mode_ack'
    WHERE id = r_deliver2;
-  ASSERT NOT public.claim_agent_reply_for_delivery(r_deliver2, 'ready_to_send', 'sending', 'كريم الكعب متوفر', NULL),
+  ASSERT NOT public.claim_agent_reply_for_delivery_for_owner(u_a, r_deliver2, 'ready_to_send', 'sending', 'كريم الكعب متوفر', NULL),
     'A5 a row whose text was replaced is not moved';
   ASSERT (SELECT status FROM public.pending_agent_replies WHERE id = r_deliver2) = 'ready_to_send',
     'A5 the replaced row stays where it is';
@@ -163,9 +165,9 @@ BEGIN
 
   -- A5: the kind is part of the payload: the row that holds the notice is never sent as an
   -- answer, and the row that holds an answer is never sent as the notice.
-  ASSERT NOT public.claim_agent_reply_for_delivery(r_deliver2, 'ready_to_send', 'sending', 'تم تحويل محادثتك لفريقنا', NULL),
+  ASSERT NOT public.claim_agent_reply_for_delivery_for_owner(u_a, r_deliver2, 'ready_to_send', 'sending', 'تم تحويل محادثتك لفريقنا', NULL),
     'A5 a row whose kind was replaced is not moved';
-  ASSERT public.claim_agent_reply_for_delivery(r_deliver2, 'ready_to_send', 'sending', 'تم تحويل محادثتك لفريقنا', 'human_mode_ack'),
+  ASSERT public.claim_agent_reply_for_delivery_for_owner(u_a, r_deliver2, 'ready_to_send', 'sending', 'تم تحويل محادثتك لفريقنا', 'human_mode_ack'),
     'A5 the row is moved when the whole payload matches';
 
   -- A6: only service_role reaches the new functions.
@@ -175,11 +177,11 @@ BEGIN
     'A6 authenticated cannot persist a notice';
   ASSERT has_function_privilege('service_role', 'public.persist_human_mode_ack_and_complete_claim(uuid, text, text, text, text, jsonb, text, uuid, text, text, timestamptz)', 'EXECUTE'),
     'A6 service_role can persist a notice';
-  ASSERT NOT has_function_privilege('anon', 'public.claim_agent_reply_for_delivery(uuid, text, text, text, text)', 'EXECUTE'),
+  ASSERT NOT has_function_privilege('anon', 'public.claim_agent_reply_for_delivery_for_owner(uuid, uuid, text, text, text, text)', 'EXECUTE'),
     'A6 anon cannot claim a delivery';
-  ASSERT NOT has_function_privilege('authenticated', 'public.claim_agent_reply_for_delivery(uuid, text, text, text, text)', 'EXECUTE'),
+  ASSERT NOT has_function_privilege('authenticated', 'public.claim_agent_reply_for_delivery_for_owner(uuid, uuid, text, text, text, text)', 'EXECUTE'),
     'A6 authenticated cannot claim a delivery';
-  ASSERT has_function_privilege('service_role', 'public.claim_agent_reply_for_delivery(uuid, text, text, text, text)', 'EXECUTE'),
+  ASSERT has_function_privilege('service_role', 'public.claim_agent_reply_for_delivery_for_owner(uuid, uuid, text, text, text, text)', 'EXECUTE'),
     'A6 service_role can claim a delivery';
 END $$;
 

@@ -318,7 +318,7 @@ export async function settleClosedGate(input: {
     // cancelled, not marked done -- so the outbox can try again, and the caller is
     // told the turn failed.
     return {
-      body: { ok: false, error: heldTurn.error ?? "the customer's turn could not be stored" },
+      body: { ok: false, error: "the customer's turn could not be stored" },
       cancelWorkItem: false,
     };
   }
@@ -421,6 +421,12 @@ export async function settleClosedGateNotice(input: {
     return { kind: "retryable", error: "the stored reply could not be read" };
   }
 
+  // A durable notice must survive a closed provider window. No new claim is needed
+  // until delivery reopens, and cancellation would erase the only remaining promise.
+  if (!input.serviceWindowOpen && peeked.kind === "human_mode_ack" && peeked.text !== null) {
+    return { kind: "retryable", error: "the persisted notice is waiting for the service window" };
+  }
+
   const claim = await claimHumanModeAck(input.admin, input.scope, {
     gateReason: input.gateReason,
     isComment: input.isComment,
@@ -491,6 +497,7 @@ export async function settleClosedGateNotice(input: {
 async function noticeUnderClaim(
   input: {
     admin: SupabaseClient;
+    scope: HandoffScope;
     outboxId: string | null;
     gateReason: string;
     language: ReplyLanguage;
@@ -509,12 +516,29 @@ async function noticeUnderClaim(
   if (row.text !== null && input.outboxId) {
     // The row holds an answer written while the gate was open. The notice takes its
     // place in the row: the row stays the durable record of what the customer is owed.
+    //
+    // The claim it spends is spent by the SAME statement. A notice that is durable
+    // with its claim still owed is a notice a later turn takes the expired lease over
+    // and sends again -- the customer is told twice that a human has their
+    // conversation.
+    if (!claimToken) {
+      // The claim was taken but carries no token, so this caller cannot spend it. The
+      // notice is not written: a notice without the claim it spends is a notice that
+      // may be sent twice. The work item stays unsettled, and a later turn retries it.
+      return { kind: "retryable", error: "the acknowledgement claim carries no token" };
+    }
     const replaced = await replaceStoredReply(
       input.admin,
       input.outboxId,
       {
         text: notice,
         kind: "human_mode_ack",
+      },
+      {
+        userId: input.scope.userId,
+        platform: input.scope.platform,
+        conversationId: input.scope.conversationId,
+        claimToken,
       },
       input.turn.userId,
     );
@@ -784,7 +808,10 @@ export async function readEscalationAftermath(
  */
 export async function settleEscalationAftermath(
   admin: SupabaseClient,
-  context: { scope: HandoffScope; threadId: string; language: ReplyLanguage },
+  context: {
+    scope: HandoffScope; threadId: string; language: ReplyLanguage;
+    claim?: Awaited<ReturnType<typeof claimUnansweredEscalation>>;
+  },
   aftermath: EscalationAftermath,
   replyText: string,
 ): Promise<AftermathSettlement> {
@@ -813,7 +840,7 @@ export async function settleEscalationAftermath(
       lateStaffTurns: [],
     };
   }
-  const claim = await claimUnansweredEscalation(admin, context.scope, context.threadId);
+  const claim = context.claim ?? await claimUnansweredEscalation(admin, context.scope, context.threadId);
   if (claim.failed) {
     // The claim could not be read: the marker may still be set, so the window is still
     // owed. It is not read as an absent window.

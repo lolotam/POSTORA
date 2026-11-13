@@ -247,6 +247,24 @@ Deno.test("every transition carries the tenant the row belongs to", async () => 
       rpc: "persist_human_mode_ack_and_complete_claim",
     },
     {
+      name: "the replacement and the claim it spends",
+      transition: {
+        id: "row-1",
+        from: "ready_to_send",
+        to: "ready_to_send",
+        generatedReply: "تم تحويل محادثتك لفريقنا",
+        generatedKind: "human_mode_ack",
+        replaceAndCompleteClaim: {
+          userId: "user-1",
+          platform: "whatsapp",
+          conversationId: "conversation-1",
+          claimToken: "2026-11-13T08:00:00.000Z",
+        },
+        userId: "user-1",
+      },
+      rpc: "replace_agent_reply_and_complete_claim",
+    },
+    {
       name: "the escalation and the window it resolves",
       transition: {
         id: "row-1",
@@ -329,6 +347,45 @@ Deno.test("the notice is persisted together with the claim it spends", async () 
     p_tool_calls: null,
     p_generated_kind: "human_mode_ack",
     p_user_id: "user-1",
+    p_platform: "whatsapp",
+    p_conversation_id: "conversation-1",
+    p_claim_token: "2026-11-13T08:00:00.000Z",
+  });
+});
+
+// The notice that takes a stored row's place and the claim it spends are ONE statement. A
+// notice that is durable with its claim still owed is a notice a later turn takes the
+// expired lease over and sends again, and the customer is told twice that a human has the
+// conversation.
+Deno.test("the replacement is written together with the claim it spends", async () => {
+  const { admin, calls } = stubRpc({ data: true });
+
+  const accepted = await advanceReply(admin, {
+    id: "row-1",
+    from: "ready_to_send",
+    to: "ready_to_send",
+    generatedReply: "تم تحويل محادثتك لفريقنا",
+    generatedKind: "human_mode_ack",
+    replaceAndCompleteClaim: {
+      userId: "user-1",
+      platform: "whatsapp",
+      conversationId: "conversation-1",
+      claimToken: "2026-11-13T08:00:00.000Z",
+    },
+    userId: "user-1",
+  });
+
+  assert(accepted);
+  assertEquals(calls[0].name, "replace_agent_reply_and_complete_claim");
+  assertEquals(calls[0].args, {
+    p_user_id: "user-1",
+    p_id: "row-1",
+    p_from: "ready_to_send",
+    p_to: "ready_to_send",
+    p_generated_reply: "تم تحويل محادثتك لفريقنا",
+    p_error: null,
+    p_tool_calls: null,
+    p_generated_kind: "human_mode_ack",
     p_platform: "whatsapp",
     p_conversation_id: "conversation-1",
     p_claim_token: "2026-11-13T08:00:00.000Z",

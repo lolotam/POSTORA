@@ -436,7 +436,7 @@ function catalogSearchRules(
   if (!catalogSearch) return [];
   return [
     "- To find a product, call the catalog search with `query` set to the product words from the customer's message, exactly as they wrote them.",
-    "- If the search finds nothing (the tool has already retried with a shorter word by itself when the query had more than one word), search the knowledge base for the product before you ask the customer for anything: the catalog can be stale or incomplete, and the re-ingested product sheet still knows the product. Only when the knowledge base has nothing either, ask the customer for the product name as printed on the pack, or for a photo. Do not say the store does not sell it.",
+    "- If the search finds nothing, make a second catalog call with a looser Arabic/English synonym, transliteration, or brand variant, even for a one-word query. The tool may also shorten multi-word queries automatically. After that second catalog search, search the knowledge base for the product before you ask the customer for anything: the catalog can be stale or incomplete, and the re-ingested product sheet still knows the product. Only when the knowledge base has nothing either, ask the customer for the product name as printed on the pack, or for a photo. Do not say the store does not sell it.",
     catalogHandoffRule(handoffOnRequest, handoffOnLowConfidence),
     "- When you mention a product, give its product_url exactly as the tool returned it. Never build or guess a link.",
     "- If price_hidden is true, say the price is available on request instead of quoting one. If shopping_enabled is false, say the product can be viewed but not ordered online.",
@@ -643,8 +643,16 @@ export function staffTurnsSince(rows: MessageRow[], sinceIso: string): StoredTur
  * repeat or contradict what the customer has just read from the staff.
  */
 export function lateStaffTurns(rows: MessageRow[], known: StoredTurn[], sinceIso: string): StoredTurn[] {
-  const seen = new Set(known.map((turn) => `${turn.created_at}|${turn.content}`));
-  return staffTurnsSince(rows, sinceIso).filter((turn) => !seen.has(`${turn.created_at}|${turn.content}`));
+  return unseenStaffTurns(staffTurnsSince(rows, sinceIso), known);
+}
+
+/** Source IDs distinguish identical sends; legacy history can only match timestamp and content. */
+export function unseenStaffTurns(turns: StoredTurn[], known: StoredTurn[]): StoredTurn[] {
+  const seenIds = new Set(known.flatMap((turn) => turn.source_id ? [turn.source_id] : []));
+  const legacy = new Set(known.filter((turn) => !turn.source_id).map((turn) => `${turn.created_at}|${turn.content}`));
+  return turns.filter((turn) =>
+    !(turn.source_id && seenIds.has(turn.source_id)) && !legacy.has(`${turn.created_at}|${turn.content}`)
+  );
 }
 
 /**

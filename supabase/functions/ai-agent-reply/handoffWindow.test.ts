@@ -637,9 +637,44 @@ Deno.test("a closed gate never delivers an answer the row stored under an open g
   assertEquals(decision.text.includes("كريم"), false, "the stored answer may never be delivered");
   assertEquals(decision.text.includes("تم تحويل محادثتك"), true);
   assertEquals(decision.fromRow, true);
-  const replace = calls.find((call) => call.kind === "rpc:advance_agent_reply_kind_for_owner");
+  const replace = calls.find((call) => call.kind === "rpc:replace_agent_reply_and_complete_claim");
   assert(replace, "the notice has to take the row's place");
   assertEquals(replace.args?.p_generated_kind, "human_mode_ack");
+  // The claim the notice spends is spent by the SAME statement, so a worker that dies
+  // between the write and the send cannot leave a durable notice whose claim is owed.
+  assertEquals(replace.args?.p_claim_token, CLAIM_TOKEN);
+  assertEquals(replace.args?.p_platform, SCOPE.platform);
+  assertEquals(replace.args?.p_conversation_id, SCOPE.conversationId);
+});
+
+// The claim is the authority for the notice, and the token identifies it. A claim that
+// carries no token cannot be spent by this caller, so the notice is not written: a notice
+// that is durable with its claim still owed is the second notice the customer gets.
+Deno.test("a closed gate writes no notice when the claim carries no token", async () => {
+  const { admin, calls } = adminStub({
+    outboxStatus: "ready_to_send",
+    storedReply: { text: "كريم الكعب متوفر", kind: "reply" },
+    ackClaim: { result: "claimed", claimToken: null },
+  });
+
+  const decision = await settleClosedGateNotice({
+    admin,
+    scope: SCOPE,
+    outboxId: "outbox-1",
+    gateReason: "mode_human_first",
+    isComment: false,
+    language: "ar",
+    threadId: THREAD_ID,
+    turn: { userId: SCOPE.userId, content: "عندكم كريم الكعب؟" },
+    serviceWindowOpen: true,
+  });
+
+  assertEquals(decision.kind, "retryable");
+  assertEquals(
+    calls.find((call) => call.kind === "rpc:replace_agent_reply_and_complete_claim"),
+    undefined,
+    "the notice may not be written without the claim it spends",
+  );
 });
 
 // The notice was persisted by an earlier attempt that died before the send. The row holds
@@ -956,7 +991,7 @@ Deno.test("a closed service window never attempts the notice", async () => {
   // No notice goes out.
   assertEquals(decision.kind, "skipped");
   assertEquals(
-    calls.find((call) => call.kind === "rpc:advance_agent_reply_kind_for_owner"),
+    calls.find((call) => call.kind === "rpc:replace_agent_reply_and_complete_claim"),
     undefined,
     "the row may not be given the notice",
   );
@@ -1163,4 +1198,38 @@ Deno.test("a staff context that failed leaves the escalation window owed", () =>
     null,
     "staff replies that could not be stored must not be dropped",
   );
+});
+
+Deno.test("a durable acknowledgement survives a closed service window without cancellation", async () => {
+  const { admin, calls } = adminStub({ outboxStatus: "ready_to_send",
+    storedReply: { text: "A human has your conversation", kind: "human_mode_ack" },
+    ackClaim: { result: "delivered" } });
+  const result = await settleClosedGateNotice({ admin, scope: SCOPE, outboxId: "outbox-1",
+    gateReason: "mode_human_first", isComment: false, language: "en", threadId: THREAD_ID,
+    turn: { userId: SCOPE.userId, content: "My question" }, serviceWindowOpen: false });
+  assertEquals(result.kind, "retryable");
+  assertEquals(calls.length, 0, "no claim, release or cancellation may erase the durable notice");
+});
+
+Deno.test("a failed staff-interruption hold leaves the customer's work retryable", async () => {
+  const { admin, calls } = adminStub({ insertError: { message: "temporary write failure" }, outboxStatus: "running" });
+  const result = await settleClosedGate({ admin, outboxId: "outbox-1",
+    gateReason: "staff_answered_during_generation", humanWindow: "window", threadId: THREAD_ID,
+    turn: { userId: SCOPE.userId, content: "My question", id: "outbox-1" } });
+  assertEquals(result.body, { ok: false, error: "the customer's turn could not be stored" });
+  assertEquals(result.cancelWorkItem, false);
+  assertEquals(calls.some((call) => call.kind.startsWith("rpc:")), false);
+});
+
+Deno.test("a preclaimed escalation settles without a second fallible claim read", async () => {
+  const marker = "2026-11-12T08:00:00Z";
+  const { admin, calls } = adminStub({ escalationClaimError: { message: "late read unavailable" } });
+  const result = await settleEscalationAftermath(admin, {
+    scope: SCOPE, threadId: THREAD_ID, language: "en",
+    claim: { marker, token: CLAIM_TOKEN, claimed: true, failed: false },
+  }, { since: marker, staffReplies: 0, staffTurns: [], readFailed: false }, "Answer");
+  assertEquals(result.windowReadFailed, false);
+  assertEquals(result.marker, marker);
+  assertEquals(result.claimToken, CLAIM_TOKEN);
+  assertEquals(calls.some((call) => call.kind === "rpc:claim_unanswered_escalation"), false);
 });

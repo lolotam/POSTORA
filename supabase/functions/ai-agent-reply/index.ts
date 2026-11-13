@@ -48,6 +48,8 @@ import {
   withGreeting,
   withOpening,
 } from "./logic.ts";
+import { catalogEvidenceFromOutput, type CatalogEvidence } from "./catalogEvidence.ts";
+import { answerWithinBudget, refreshStaffDraft } from "./staffRefresh.ts";
 import { repairChatReply } from "./chatLinks.ts";
 import {
   customToolDefinitions,
@@ -79,6 +81,7 @@ import {
 } from "./outbox.ts";
 import { adminToolDefinitions, executeAdminTool } from "./admin-tools.ts";
 import {
+  claimUnansweredEscalation,
   completeHumanModeAck,
   completeUnansweredEscalation,
   escalationForReply,
@@ -87,9 +90,9 @@ import {
   releaseHumanModeAck,
   releaseUnansweredEscalationClaim,
   replyIsDurable,
+  settleClosedGate,
   settleClosedGateNotice,
   settleEscalationAftermath,
-  storeHeldCustomerTurn,
   type HandoffScope,
 } from "./handoffWindow.ts";
 import { getSendCredentials } from "../_shared/messengerCredentials.ts";
@@ -235,27 +238,20 @@ async function answerAgainAfterStaffReply(input: {
   startedAt: number;
   turns: StoredTurn[];
 }): Promise<string | null> {
-  const budgetMs = modelBudgetRemaining(input.startedAt, Date.now());
-  if (budgetMs <= 0) return null;
   const messages = [...input.messages];
-  // The note goes in where the other system notes go: at the head of the
-  // conversation, so every provider reads it the same way.
+  // Every provider receives the same staff context; no tools run a second time.
   messages.splice(1, 0, { role: "system", content: staffAnsweredNote(input.turns) });
-  for (const tier of input.modelChain) {
-    try {
+  return await answerWithinBudget({
+    tiers: input.modelChain,
+    startedAt: input.startedAt,
+    ceilingMs: CHAT_TIMEOUT_MS,
+    complete: async (tier, timeoutMs) => {
       const completion = await chatCompletion(tier, {
-        model: tier.model,
-        temperature: input.temperature,
-        messages,
-      }, Math.min(CHAT_TIMEOUT_MS, budgetMs), input.routingAdmin);
-      const answer = repairChatReply(String(completion?.choices?.[0]?.message?.content || "").trim());
-      if (answer) return answer;
-    } catch {
-      // The next tier in the chain gets its turn. No answer at all is the
-      // caller's to handle.
-    }
-  }
-  return null;
+        model: tier.model, temperature: input.temperature, messages,
+      }, timeoutMs, input.routingAdmin);
+      return repairChatReply(String(completion?.choices?.[0]?.message?.content || "").trim()) || null;
+    },
+  });
 }
 
 export async function chatCompletion(
@@ -977,6 +973,7 @@ Deno.serve(async (req) => {
     // Declared here rather than beside the tool loop because persistDelivery reads it, and a
     // redelivery persists before the loop has run at all. Empty is the truthful value there:
     // a redelivered reply executed no tools on this invocation.
+    const catalogEvidence: CatalogEvidence[] = [];
     const executedToolCalls: Array<{ name: string; arguments: unknown }> = [];
 
     /**
@@ -1207,6 +1204,29 @@ Deno.serve(async (req) => {
         ? readEscalationAftermath(admin, handoffScope(request), thread.id)
         : Promise.resolve(NO_AFTERMATH),
     ]);
+
+    // The window's state is unknown: the marker may be set, and the apology and the
+    // staff context that go with it are still owed. The reply may not go out as if the
+    // customer had never waited.
+    //
+    // This is refused HERE, before the model runs, before a tool is called and before
+    // the procedure state is written. A turn that had already run a tool -- even a
+    // read-only one -- is not retryable: the work item is left running and recovery
+    // hands it to a human, so a TRANSIENT read failure would cost the customer their
+    // answer and the turn's work. Refused here, nothing has happened yet, so the catch
+    // releases the work item and the outbox retries it.
+    if (aftermath.readFailed) {
+      throw new Error("the unanswered-escalation window could not be read");
+    }
+
+    // Claim failures must occur before tools or durable procedure transitions. The
+    // token travels to settlement so there is no second claim read after those effects.
+    const preclaimedEscalation = aftermath.since
+      ? await claimUnansweredEscalation(admin, handoffScope(request), thread.id)
+      : undefined;
+    if (preclaimedEscalation?.failed) {
+      throw new Error("the unanswered-escalation claim could not be read");
+    }
 
     const { data: historyRows, error: historyError } = historyResult;
     if (historyError) {
@@ -1845,6 +1865,9 @@ Deno.serve(async (req) => {
             )
             : (isAdmin ? await executeAdminTool(toolContext, toolCall.function.name, args) : null) ??
               (await executeTool(toolContext, toolCall.function.name, args)));
+        if (dryRun && customTool && args.capability === "search_products") {
+          catalogEvidence.push(...catalogEvidenceFromOutput(result.output).slice(0, Math.max(0, 100 - catalogEvidence.length)));
+        }
         if (customTool && args.capability === "check_stock") {
           stockSightings.push(...stockSightingsFromToolOutput(customTool.id, result.output));
         }
@@ -1945,18 +1968,16 @@ Deno.serve(async (req) => {
     // failed above leaves the marker for the next one.
     const settlement = await settleEscalationAftermath(
       admin,
-      { scope: handoffScope(request), threadId: thread.id, language },
+      { scope: handoffScope(request), threadId: thread.id, language, claim: preclaimedEscalation },
       aftermath,
       replyText,
     );
     replyText = settlement.replyText;
 
     if (settlement.windowReadFailed) {
-      // The window's state is unknown: the marker may be set, and the apology and the
-      // staff context that go with it are still owed. The reply may not go out as if the
-      // customer had never waited, so the turn fails here and the outbox retries it.
-      // Nothing was sent and nothing was claimed, so there is no lease to give back.
-      throw new Error("the unanswered-escalation window could not be read");
+      // No reply may claim to resolve a window whose state is unknown. Production
+      // acquires the claim before tools; this also protects callers using direct settlement.
+      throw new Error("the unanswered-escalation claim could not be read");
     }
 
     // A staff member answered while the model was answering. The answer that was
@@ -1964,13 +1985,13 @@ Deno.serve(async (req) => {
     // customer has just read from the staff: it is written again with the reply in
     // mind, and an answer that cannot be written again is not sent at all.
     if (settlement.lateStaffTurns.length > 0) {
-      const refreshed = await answerAgainAfterStaffReply({
-        messages,
-        modelChain,
-        temperature: config.temperature ?? 0.4,
-        routingAdmin,
-        startedAt,
-        turns: settlement.lateStaffTurns,
+      const refreshed = await refreshStaffDraft({
+        regenerate: () => answerAgainAfterStaffReply({
+          messages, modelChain, temperature: config.temperature ?? 0.4,
+          routingAdmin, startedAt, turns: settlement.lateStaffTurns,
+        }),
+        known: [...aftermath.staffTurns, ...settlement.lateStaffTurns],
+        readLatest: () => readEscalationAftermath(admin, handoffScope(request), thread.id),
       });
       if (refreshed) {
         replyText = withGreeting(refreshed, openingGreeting);
@@ -1995,21 +2016,17 @@ Deno.serve(async (req) => {
         }
         // Nobody answered the question, so it is kept on the record: the thread
         // carries it, and the agent's next answer is written against it.
-        await storeHeldCustomerTurn(admin, thread.id, {
-          userId: request.user_id,
-          content: request.inbound_text,
-          // The work item's own id, so a retry stores this question once.
-          id: outboxId ?? undefined,
+        const held = await settleClosedGate({
+          admin, outboxId, gateReason: "staff_answered_during_generation", humanWindow: "window",
+          threadId: thread.id,
+          turn: { userId: request.user_id, content: request.inbound_text, id: outboxId ?? undefined },
         });
         await logOutcome(admin, {
           ...baseLog,
-          status: "skipped",
-          error: "staff_answered_during_generation",
+          status: held.cancelWorkItem ? "skipped" : "failed",
+          error: held.cancelWorkItem ? "staff_answered_during_generation" : "held_customer_turn_not_durable",
         });
-        if (outboxId) {
-          await cancelOutboxRow(admin, outboxId, "staff_answered_during_generation", request.user_id);
-        }
-        return jsonResponse({ ok: true, skipped: "staff_answered_during_generation" });
+        return jsonResponse(held.body);
       }
     }
 
@@ -2174,6 +2191,7 @@ Deno.serve(async (req) => {
       reply: replyText,
       escalated,
       tool_calls: executedToolCalls,
+      ...(dryRun ? { catalog_evidence: catalogEvidence } : {}),
       is_admin: isAdmin,
       used_model: usedModel,
       ...replyIntentFields(triage),

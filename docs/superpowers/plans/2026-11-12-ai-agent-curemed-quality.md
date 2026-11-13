@@ -46,7 +46,7 @@
 - **RPC:** only named functions in `settings.rpc_allow_list`, called with GET so PostgREST runs them in a read-only transaction, and always with the tool's anon key. `read_only_mode` stays true, and the CALL enforces it: a GET is READ ONLY for every volatility class, so Postgres refuses a write inside it and nothing can be committed.
 - No customer-visible string is produced by the model where the spec fixes the wording.
 - **Test command:**
-  `deno test --allow-env --allow-read --allow-write --allow-net --no-check --node-modules-dir=none supabase/functions/<dir>`
+  `deno test --allow-env --allow-read --allow-write --allow-net=127.0.0.1 --node-modules-dir=none supabase/functions/<dir>`
 - **Commits:** scoped with `git commit -- <paths>`. Never commit graphify-out, logs, `.env*` or secrets.
 - **Commit trailer:** `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`.
 - **Prod changes:**
@@ -66,13 +66,7 @@
 | `supabase/functions/_shared/conversationModeOverride.ts` | Expiry through `expire_conversation_mode` |
 | `supabase/migrations/20261112170000_agent_handoff_messages.sql` | escalation/ack columns, thread marker, 3 RPCs |
 | `supabase/migrations/20261113120000_agent_handoff_messages_followup.sql` | the claim-release RPCs (`release_human_mode_ack`, `restore_unanswered_escalation`) |
-| `supabase/migrations/20261113210000_agent_handoff_claim_lease.sql` | the claim LEASES: `claim_human_mode_ack_leased`, `complete_human_mode_ack`, `release_human_mode_ack_claim`, `claim_unanswered_escalation`, `complete_unanswered_escalation`, `release_unanswered_escalation_claim`, the outbox's `generated_kind` |
-| `supabase/migrations/20261113220000_agent_handoff_legacy_claim_lease.sql` | the claim of a build that predates the lease is lease-shaped too, so no claim can be stranded |
-| `supabase/migrations/20261113230000_agent_conversation_mode_expiry_marker.sql` | the escalation marker of an expired window is written the way the thread is (an upsert) |
-| `supabase/migrations/20261113240000_agent_handoff_claim_token.sql` | a claim token of its own for every handoff claim, the one-time notice written with the claim it spends, and a delivery claim that carries the payload it read |
-| `supabase/migrations/20261113253000_agent_handoff_tenant_binding.sql` | every statement that moves a reply row is bound to the tenant the caller names, so a row of another tenant is refused |
-| `supabase/migrations/20261113260000_agent_handoff_ack_terminal_claim.sql` | the one-time notice survives the expiry that deleted the window's row: an absent row is a terminal claim, and the notice is still written |
-| `supabase/migrations/20261113270000_agent_handoff_legacy_claim_ownership.sql` | the legacy handoff functions get the ownership guards the leased ones have: the release clears only the claim it owns, the claim refuses a delivered notice, the escalation taker refuses a leased marker |
+| `supabase/migrations/20261113210000_agent_handoff_claim_lease.sql` | consolidated handoff leases, tenant/conversation binding, atomic persistence/replacement and expired-window claim receipts |
 | `supabase/functions/ai-agent-adapters/supabase.ts` (+ test) | Allow-listed RPC mode |
 | `supabase/functions/_shared/connectorRegistry.ts` | `rpc_allow_list` setting, `query`/`max_results` parameters |
 | `supabase/functions/ai-agent-reply/logic.ts` `buildSystemPrompt` | Not-found / escalation rule |
@@ -129,7 +123,7 @@ The review on 2026-11-12 found four assumptions that need live evidence first.
   1. Find the two curemedkw sources:
      ```sql
      select id,file_name,status from ai_knowledge_sources
-     where user_id='146a9939-e54e-4077-932b-03806d30b6d6'
+     where user_id='00000000-0000-4000-8000-000000000001'
        and file_name in ('products_rows.csv','categories_rows.csv');
      ```
   2. Re-run ingest for each one through the existing re-ingest path (Admin knowledge page "re-process", or the `ai-knowledge-ingest` invoke the page uses).
@@ -320,7 +314,7 @@ export function escalationApologyText(
 
 - [ ] **Step 1: Prompt rule.** The tool makes the ONE loosened search itself (Task 5), so the prompt asks for no second catalog search. In `buildSystemPrompt` (`logic.ts:529`), when a catalog tool is present, add one fixed paragraph:
   - Search with the product words, exactly as the customer wrote them.
-  - If the search finds nothing -- the tool has already retried with a shorter word by itself when the query had more than one word -- search the knowledge base for the product before you ask the customer for anything: the catalog can be stale or incomplete, and the re-ingested product sheet still knows the product. Only when the knowledge base has nothing either, ask the customer for the product name as printed on the pack, or for a photo. Do not say the store does not sell it.
+  - If the search finds nothing, call the catalog again with an Arabic/English synonym, transliteration or brand variant, including for one-word queries. Then search the knowledge base for the product before you ask the customer for anything: the catalog can be stale or incomplete, and the re-ingested product sheet still knows the product. Only when the knowledge base has nothing either, ask the customer for the product name as printed on the pack, or for a photo. Do not say the store does not sell it.
   - Escalate only when the customer asks for a person or after the searches found nothing.
   - Always give the `product_url` from the result, as is.
   - `price_hidden` → say the price is on request.
@@ -342,14 +336,14 @@ export function escalationApologyText(
      ```sql
      insert into ai_agent_tools (user_id, name, description, connector_type, tool_type, url,
        is_enabled, read_only_mode, auth_strategy, permissions, settings)
-     values ('146a9939-e54e-4077-932b-03806d30b6d6', 'curemedkw_product_catalog',
+     values ('00000000-0000-4000-8000-000000000001', 'curemedkw_product_catalog',
        'CureMed product catalog: names (Arabic and English), price, stock and the product page link.',
        'supabase', 'n8n_webhook', 'https://supabase.curemedkw.com', true, true, 'manual_credentials',
        '{"search_products": true, "check_stock": false, "lookup_orders": false}',
        jsonb_build_object('project_url','https://supabase.curemedkw.com','schema','public',
          'rpc_allow_list','agent_search_products','max_rows',8));
      ```
-  6. Link the account in `ai_agent_tool_accounts` (social account `7cf1b120-5172-4377-aca2-1abe85ab1c7f`).
+  6. Link the account in `ai_agent_tool_accounts` (social account `00000000-0000-4000-8000-000000000001`).
 
 ### Task 7: Model dry-run table
 
@@ -364,35 +358,29 @@ export function escalationApologyText(
   - Replays under a synthetic conversation id `dryrun_<model>_<timestamp>`, never the real one. The sandbox still upserts `ai_threads` (`index.ts:713`) and resolves (and may expire) the conversation's override.
   - Asserts `dryRun` skips the Task 4 claims and `take_unanswered_escalation`.
   - For each model, replays each turn through the sandbox with `dryRun`, carrying the same history.
-  - Writes `docs/superpowers/reports/2026-11-12-curemed-model-dryrun.md` with columns: model, turn, latency ms, reply language correct (`dominantReplyLanguage` vs expected), catalog tool called with non-empty query, any URL present, reply excerpt (120 chars), status. The URL column says "any URL present" and not "product link present": the sandbox hands the probe the tool CALLS it made and never the rows the catalog returned, so the probe cannot tell the catalog's `product_url` from a homepage or a tracking link.
+  - Writes `docs/superpowers/reports/2026-11-12-curemed-model-dryrun.md` with columns: model, turn, latency ms, reply language correct (`dominantReplyLanguage` vs expected), catalog tool called with non-empty query, any URL present, catalog grounded (identity match), reply excerpt (120 chars), status. Sandbox-only `catalog_evidence` includes bounded product identifiers, names and URLs from the actual tool result. The probe records yes/no identity matches and not measured for an older sandbox response. This is not a check of every price or medical claim.
   - The tracked report carries no customer data: the conversation id is redacted and the reply text is never written, only its length. The unredacted detail goes to the same path with a `.local` suffix, which `.gitignore` already ignores -- it must never be committed.
-  - The report says what it does not measure: catalog grounding is NOT one of its measurements, because the sandbox never exposes the rows the catalog returned. A model that searches and then answers something unrelated scores the same as one that answers from the rows, so the owner reads the answers in the owner copy before choosing a model. The design's "catalog-grounded answer" column is therefore not produced, and the plan does not pretend otherwise.
   - Nothing is sent: the sandbox path never calls a sender.
 - [ ] **Step 3:** Run against 5–6 models from `ai_agent_allowed_models`, after Tasks 1–6 are live. Commit the report.
 - [ ] **Step 4:** Owner card: pick the primary and the fallback. Then set `system_settings` `default_ai_model_agent*`, or the account's own tier, as chosen.
 
 ### Task 8: CI, guard, PR, rollout
 
-- [ ] Add `ai-agent-reply` and `ai-agent-adapters` to the Deno test step in `.github/workflows/ci.yml` with the flags above. Check first that the suites pass on `main` unchanged; if one is already red there, record it and add only the green ones.
+- [ ] Run all hermetic `ai-agent-reply`, `ai-agent-adapters`, shared handoff and dry-run probe suites in CI with type checking enabled. Keep live provider tests excluded from this credential-free gate.
 - [ ] Run `clean-code-guard` on production changes and `test-guard` on the tests. Run `graphify update .`.
 - [ ] Push the branch with `--no-track` semantics already set and open the PR.
-- [ ] Babysit the bot rounds.
+- [ ] Resolve review findings and verify CI on the final head.
 - [ ] Apply the handoff migrations on prod before merge, in this order:
-  1. `20261112170000` — the handoff columns, the thread marker and the first RPCs.
-  2. `20261113120000` — the follow-up RPCs (`release_human_mode_ack`, `restore_unanswered_escalation`).
-  3. `20261113210000` — the claim LEASES (`claim_human_mode_ack_leased`, `complete_human_mode_ack`, `release_human_mode_ack_claim`, `claim_unanswered_escalation`, `complete_unanswered_escalation`, `release_unanswered_escalation_claim`) and the outbox's `generated_kind`. It must land BEFORE the edge functions: the edge build calls the lease RPCs and the kind-aware transition, and it is backward compatible with the edge code that is live now, so the two orders never meet a half-migrated database.
-  4. `20261113220000` — the claim of a build that predates the lease is lease-shaped too, so no claim can be stranded: a claim that cannot lapse is a notice nobody will ever send.
-  5. `20261113230000` — the escalation marker of an expired window is written the way the thread is (an upsert), so it survives a thread that is created at the same moment.
-  6. `20261113240000` — every handoff claim carries a token of its own, the one-time notice is written together with the claim it spends, and the delivery claim carries the payload it read. It must land BEFORE the edge deployment for the same reason as step 3: the new build calls `claim_unanswered_escalation` for a token, completes and releases the escalation with that token, persists the one-time notice with `persist_human_mode_ack_and_complete_claim`, and claims a row for delivery with `claim_agent_reply_for_delivery` — none of which exist before it. It is safe to apply while the build that is live now keeps running: that build calls none of them.
-  7. `20261113253000` — every statement that moves a row of `pending_agent_replies` is bound to the tenant the caller names, so a row of another tenant is refused. It must land BEFORE the edge deployment, for the same reason as steps 3 and 6: the new build calls `advance_agent_reply_for_owner`, `advance_agent_reply_kind_for_owner` and `claim_agent_reply_for_delivery_for_owner`, and passes the tenant with every transition — none of which exist before it. It is safe to apply while the build that is live now keeps running: that build calls `advance_agent_reply`, which this migration deliberately leaves untouched, because a second arity of that name would make the live call ambiguous. A LATER follow-up migration may retire `advance_agent_reply` and the two tenant-less arities, once the new build is the only caller.
-  8. `20261113260000` — the one-time notice survives the expiry that deleted the window's row. `persist_human_mode_ack_and_complete_claim` looks the claim up on the row, and the expiry deletes that row as soon as the window ends, so a claim taken just before the end could find no row, write no notice, and die with the row. The persistence now treats an ABSENT row as a claim that is already terminal and writes the notice anyway; a row that IS there must still carry this caller's token. It must land BEFORE the edge deployment, for the same reason as steps 3 and 6: the new build calls `persist_human_mode_ack_and_complete_claim`, and the semantics it expects are this one. It is safe to apply while the build that is live now keeps running: that build calls none of these functions.
-  9. `20261113270000` — the legacy handoff functions get the ownership guards the leased ones have. `release_human_mode_ack` cleared whatever claim the row carried, so an old worker could erase the lease its successor was working under; `claim_human_mode_ack` ignored the delivered marker, so a notice the database knew was delivered could be handed out again; `take_unanswered_escalation` took a marker the new build had leased. The release now clears only the claim the legacy path owns and never a delivered one, the claim refuses a delivered notice, and the escalation taker refuses a leased marker. It must land BEFORE the edge deployment AND before the new build starts taking claims over, because that is the window in which a legacy release could erase a successor's claim. It is safe to apply while the build that is live now keeps running: it only tightens three functions that build calls none of.
-  - The order is a strict order, and every step before the edge deployment is backward compatible with the edge code that is live now:
-    - The edge build that is live now calls exactly one of these functions, `advance_agent_reply` (`_shared/pendingReplies.ts:239`), and every migration above leaves it exactly as it is.
-    - The edge build that is live now calls NONE of `claim_human_mode_ack`, `release_human_mode_ack`, `take_unanswered_escalation`, `restore_unanswered_escalation` — they are new in this branch, and the build that ships with it calls the LEASED variants instead. So no claim can exist in the shape the old functions write, and the rollout gap cannot strand one.
-    - The new edge build calls the lease RPCs, `advance_agent_reply_kind` and the `*_for_owner` transitions, so it may only be deployed AFTER steps 3 to 9 are applied. Nothing in the new build works against a database without them.
-    - Every step is `IF NOT EXISTS` / `CREATE OR REPLACE` safe to apply twice. Some of them DO alter tables — `20261112170000` adds `ai_conversation_modes.escalated_at`, `ai_threads.unanswered_escalation_since` and the outbox `generated_kind`, and the later ones add further columns — so the claim that "no table is changed" is wrong: the new columns are ADDED, and an old edge build ignores a column it does not know, which is what keeps it working. What every step does NOT do is remove or narrow anything the old build reads. A step applied twice, or applied while an old edge build is still running, leaves the old build working.
-- [ ] Merge only after the owner card.
+  - Already applied: `20261112170000_agent_handoff_messages.sql` and `20261113120000_agent_handoff_messages_followup.sql`. Do not edit or reapply them.
+  - Before merge, apply only `20261113210000_agent_handoff_claim_lease.sql`. It consolidates all ten previously unapplied handoff deltas: leases, tenant/conversation binding, atomic notice persistence/replacement, payload-checked delivery and durable receipts for expired windows. Arbitrary, superseded and consumed tokens are refused even after the mode row is deleted.
+  - The migration preserves current main's `advance_agent_reply` signature and grants. The two newer tenant-less helpers are inaccessible to service_role. The new edge build uses only `*_for_owner` transitions. The existing legacy function is a temporary compatibility surface, not a tenant boundary.
+  - Before deployment, run `bash scripts/db-harness.sh` against a disposable Supabase Postgres instance. The suites prove current main's legacy transition remains callable before retirement, the new owner-bound transitions reject cross-tenant/cross-conversation writes, and the guarded retirement script removes legacy access.
+- [ ] Owner approves merge only after CI and rollout review. No deployment is performed by this implementation task.
+- [ ] After the Edge Functions Sync deploys the new build, verify the deployed head and SHA256 hashes, then wait for every old edge worker to drain. Run the mandatory contract step:
+  ```sh
+  psql "$DB_URL" --single-transaction -v ON_ERROR_STOP=1 -v old_edge_workers_drained=true -f scripts/sql/retire-agent-reply-legacy.sql
+  ```
+  This revokes service_role/PUBLIC/browser execution on `advance_agent_reply`, `advance_agent_reply_kind` and `claim_agent_reply_for_delivery`. It is deliberately outside `supabase/migrations/` so a migration-first rollout cannot break current main. Do not run it before the deployment/drain verification. After retirement, an old edge build cannot be rolled back into service without an explicit compatibility decision.
 - [ ] After the sync:
   - Verify hashes.
   - Run Task 1 Step 6 and Task 6 Step 3.

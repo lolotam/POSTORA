@@ -12,6 +12,23 @@
 //
 // Design: docs/superpowers/plans/2026-08-27-durable-reply-outbox.md
 
+interface ReplyRpcClient {
+  rpc(name: string, args: Record<string, unknown>): PromiseLike<{
+    data: unknown; error: { message: string } | null;
+  }>;
+}
+interface EnqueueClient extends ReplyRpcClient {
+  from?: (table: string) => {
+    select(columns: string): {
+      eq(column: string, value: string): {
+        eq(column: string, value: string): {
+          maybeSingle(): PromiseLike<{ data: { id: string } | null; error: { message: string } | null }>;
+        };
+      };
+    };
+  };
+}
+
 export interface PendingReplyItem {
   socialAccountId: string;
   platform: string;
@@ -86,8 +103,7 @@ export function toEnqueueArgs(item: PendingReplyItem): Record<string, unknown> {
  * webhook redelivery reply twice.
  */
 export async function enqueueAgentReply(
-  // deno-lint-ignore no-explicit-any
-  admin: any,
+  admin: EnqueueClient,
   item: PendingReplyItem,
 ): Promise<EnqueueOutcome | null> {
   const label = `${item.platform}/${item.messageId}`;
@@ -118,8 +134,7 @@ export async function enqueueAgentReply(
 }
 
 async function attemptEnqueue(
-  // deno-lint-ignore no-explicit-any
-  admin: any,
+  admin: EnqueueClient,
   item: PendingReplyItem,
   label: string,
 ): Promise<EnqueueOutcome | null | "unknown"> {
@@ -130,7 +145,8 @@ async function attemptEnqueue(
       return "unknown";
     }
     const row = Array.isArray(data) ? data[0] : data;
-    if (!row || typeof row.id !== "string" || typeof row.newly_enqueued !== "boolean") {
+    if (!row || typeof row !== "object" || !("id" in row) || !("newly_enqueued" in row) ||
+      typeof row.id !== "string" || typeof row.newly_enqueued !== "boolean") {
       // Unknown, NOT null. A response this code cannot read says nothing about whether the
       // insert committed, and answering row-less on a committed row is what produces a
       // recovery duplicate. The RPC is idempotent and the unique constraint stops a second
@@ -148,12 +164,12 @@ async function attemptEnqueue(
 
 /** Did an earlier attempt commit after all? Never reports ownership -- only that a row exists. */
 async function findExistingRow(
-  // deno-lint-ignore no-explicit-any
-  admin: any,
+  admin: EnqueueClient,
   item: PendingReplyItem,
   label: string,
 ): Promise<EnqueueOutcome | null> {
   try {
+    if (!admin.from) return null;
     const { data, error } = await admin
       .from("pending_agent_replies")
       .select("id")
@@ -285,6 +301,14 @@ export interface ReplyTransition {
    */
   humanModeAck?: HumanModeAckClaim | null;
   /**
+   * The claim a notice spends when the notice takes a stored row's place.
+   *
+   * The notice replaces an answer that may never be delivered, and the claim it spends
+   * has to be spent by the SAME statement: a notice that is durable with its claim still
+   * owed is a notice a later turn takes the expired lease over and sends again.
+   */
+  replaceAndCompleteClaim?: HumanModeAckClaim | null;
+  /**
    * The payload the row is expected to hold when this transition runs.
    *
    * Set on the delivery claim. The row's text is read without a lock, so a closed gate
@@ -303,8 +327,7 @@ export interface ReplyTransition {
 }
 
 export async function advanceReply(
-  // deno-lint-ignore no-explicit-any
-  admin: any,
+  admin: ReplyRpcClient,
   transition: ReplyTransition,
 ): Promise<boolean> {
   // Named fields rather than positional: `from` and `to` are adjacent same-typed strings, and
@@ -318,17 +341,19 @@ export async function advanceReply(
   // statement that spends them binds the row to the tenant this transition claims. Two
   // different tenants mean the row and the claim are not one fact, so the transition is
   // refused here rather than half-written by the database.
-  const claimTenant = transition.escalation?.userId ?? transition.humanModeAck?.userId;
+  const claimTenant = transition.escalation?.userId
+    ?? transition.humanModeAck?.userId
+    ?? transition.replaceAndCompleteClaim?.userId;
   if (claimTenant !== undefined && claimTenant !== userId) {
     console.error(`[outbox] ${from} -> ${to} refused for ${id}: the claim names another tenant`);
     return false;
   }
 
   // One RPC per KIND of transition, because each of them carries something the others do
-  // not: the escalation window, the acknowledgement claim, or the payload the row is
-  // expected to hold. The arguments are named exactly as the function declares them --
-  // PostgREST matches a call by its argument names, and an argument the function does
-  // not have is an error, not a default.
+  // not: the escalation window, the acknowledgement claim, the claim a replacement
+  // spends, or the payload the row is expected to hold. The arguments are named exactly
+  // as the function declares them -- PostgREST matches a call by its argument names, and
+  // an argument the function does not have is an error, not a default.
   //
   // Every one of them takes the tenant the row belongs to. That is the point of the
   // change: a statement that moves a row binds it to the tenant the caller names, so a
@@ -350,6 +375,24 @@ export async function advanceReply(
       p_user_id: userId,
       p_since: transition.escalation.since,
       p_claim_token: transition.escalation.claimToken,
+    };
+  } else if (transition.replaceAndCompleteClaim) {
+    // The notice that takes the row's place and the claim it spends are ONE statement:
+    // a notice that is durable with its claim still owed is a notice the next turn takes
+    // the expired lease over and sends again.
+    rpc = "replace_agent_reply_and_complete_claim";
+    args = {
+      p_user_id: userId,
+      p_id: id,
+      p_from: from,
+      p_to: to,
+      p_generated_reply: generatedReply,
+      p_error: error,
+      p_tool_calls: toolCalls,
+      p_generated_kind: transition.generatedKind ?? null,
+      p_platform: transition.replaceAndCompleteClaim.platform,
+      p_conversation_id: transition.replaceAndCompleteClaim.conversationId,
+      p_claim_token: transition.replaceAndCompleteClaim.claimToken,
     };
   } else if (transition.humanModeAck) {
     // The notice and the claim it spends are ONE statement, so a notice is never

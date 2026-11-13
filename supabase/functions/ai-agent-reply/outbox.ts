@@ -224,6 +224,12 @@ export async function peekStoredReply(
  * recovery can still deliver it. The answer it replaces was written under an open
  * gate and was never sent, so nothing that reached the customer is overwritten.
  *
+ * The notice and the claim it spends are written by ONE statement. A notice that is
+ * durable with its claim still owed is a notice a later turn takes the expired lease
+ * over and sends again, and the customer is told twice that a human has their
+ * conversation -- so the claim is required here, and a replacement without one is
+ * refused rather than written.
+ *
  * The transition is fail-closed: a row that is no longer in `ready_to_send` is
  * somebody else's now, and the caller has to know that rather than assume it.
  */
@@ -231,6 +237,7 @@ export async function replaceStoredReply(
   admin: SupabaseClient,
   outboxId: string,
   replacement: { text: string; kind: StoredReplyKind },
+  claim: HumanModeAckClaim,
   userId?: string,
 ): Promise<boolean> {
   return await advanceOwnedReply(admin, outboxId, userId, {
@@ -240,6 +247,7 @@ export async function replaceStoredReply(
     // The COLUMN's value, not the kind's name: the column is NULL for an answer and
     // 'human_mode_ack' for the notice, and the delivery claim compares against it.
     generatedKind: storedKindValue(replacement.kind),
+    replaceAndCompleteClaim: claim,
   });
 }
 

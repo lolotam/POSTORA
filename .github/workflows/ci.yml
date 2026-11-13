@@ -352,6 +352,11 @@ jobs:
               tests+=("${file}")
             done < <(find "${dir}" -type f -name '*.test.ts' ! -name '*.live.test.ts' | sort)
           done
+          tests+=(
+            supabase/functions/_shared/pendingReplies.test.ts
+            supabase/functions/_shared/conversationModeOverride.test.ts
+            scripts/probes/agent-model-dryrun.test.ts
+          )
           if [ "${#tests[@]}" -eq 0 ]; then
             echo "No AI agent test file was found. These suites are required."
             exit 1

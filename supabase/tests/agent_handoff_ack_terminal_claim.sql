@@ -16,9 +16,8 @@
 --   the claim died with the row -- so no turn could ever retry it, and the customer was
 --   never told.
 --
---   The persistence now treats an ABSENT row as a claim that is already terminal and writes
---   the notice anyway. A row that IS there is still checked against the token: a present
---   row carrying another claim is refused, and nothing is written for it.
+--   Expiry retains only the final claim token. Its durable receipt is checked and
+--   consumed atomically; arbitrary or superseded tokens cannot recreate a notice.
 BEGIN;
 DO $$
 DECLARE
@@ -38,8 +37,10 @@ BEGIN
   INSERT INTO auth.users (id, email)
   VALUES (u_a, 'terminal-ack-' || u_a::text || '@example.invalid');
 
-  INSERT INTO public.social_accounts (id, user_id, platform, platform_user_id, access_token)
-  VALUES (s_account, u_a, 'facebook', 'page-terminal', 'token-terminal');
+  INSERT INTO public.workspaces (id, name, owner_id) VALUES (u_a, 'Handoff fixture', u_a);
+
+  INSERT INTO public.social_accounts (id, user_id, workspace_id, platform, platform_user_id, access_token)
+  VALUES (s_account, u_a, u_a, 'whatsapp', 'page-terminal', 'token-terminal');
 
   INSERT INTO public.ai_conversation_modes (
     id, user_id, platform, conversation_id, mode, expires_at, escalated_at
@@ -51,13 +52,13 @@ BEGIN
     id, social_account_id, user_id, platform, message_id, conversation_id, recipient_id,
     inbound_text, inbound_at, status
   ) VALUES
-    (r_notice, s_account, u_a, 'facebook', 'm-terminal-1', 'c_terminal', 'r-terminal-1',
+    (r_notice, s_account, u_a, 'whatsapp', 'm-terminal-1', 'c_terminal', 'r-terminal-1',
      'عندكم كريم الكعب؟', now(), 'running'),
-    (r_again, s_account, u_a, 'facebook', 'm-terminal-2', 'c_terminal', 'r-terminal-2',
+    (r_again, s_account, u_a, 'whatsapp', 'm-terminal-2', 'c_terminal', 'r-terminal-2',
      'عندكم كريم الكعب؟', now(), 'running'),
-    (r_other, s_account, u_a, 'facebook', 'm-terminal-3', 'c_rearmed', 'r-terminal-3',
+    (r_other, s_account, u_a, 'whatsapp', 'm-terminal-3', 'c_rearmed', 'r-terminal-3',
      'عندكم كريم الكعب؟', now(), 'running'),
-    (r_notoken, s_account, u_a, 'facebook', 'm-terminal-4', 'c_absent', 'r-terminal-4',
+    (r_notoken, s_account, u_a, 'whatsapp', 'm-terminal-4', 'c_absent', 'r-terminal-4',
      'عندكم كريم الكعب؟', now(), 'running');
 
   -- T1: the customer writes into the window and the claim is taken while it is still live.
@@ -143,7 +144,59 @@ BEGIN
   ASSERT (SELECT generated_reply FROM public.pending_agent_replies WHERE id = r_notoken) IS NULL,
     'T3 no text is written';
 
-  -- T4: only service_role reaches the function.
+  -- T4: a consumed receipt cannot spend the same claim on a different outbox row.
+  UPDATE public.pending_agent_replies SET status = 'running' WHERE id = r_again;
+  ASSERT NOT public.persist_human_mode_ack_and_complete_claim(
+    r_again, 'running', 'ready_to_send', v_notice, NULL, NULL, 'human_mode_ack',
+    u_a, 'whatsapp', 'c_terminal', v_token), 'T4 the receipt cannot be spent twice';
+  ASSERT NOT public.replace_agent_reply_and_complete_claim(
+    u_a, r_again, 'running', 'ready_to_send', v_notice, NULL, NULL, 'human_mode_ack',
+    'whatsapp', 'c_terminal', v_token), 'T4 replacement cannot spend a consumed receipt';
+  ASSERT NOT public.persist_human_mode_ack_and_complete_claim(
+    r_notoken, 'running', 'ready_to_send', v_notice, NULL, NULL, 'human_mode_ack',
+    u_a, 'whatsapp', 'c_absent', clock_timestamp()), 'T4 an invented token is refused';
+
+  -- T5: worker B supersedes A, persists, then the mode row expires. A never becomes valid again.
+  v_claim := public.claim_human_mode_ack_leased(u_a, 'whatsapp', 'c_rearmed', 120);
+  v_token := (v_claim->>'claim_token')::timestamptz;
+  ASSERT public.persist_human_mode_ack_and_complete_claim(
+    r_other, 'running', 'ready_to_send', v_notice, NULL, NULL, 'human_mode_ack',
+    u_a, 'whatsapp', 'c_rearmed', v_token), 'T5 successor persists the notice';
+  UPDATE public.ai_conversation_modes SET expires_at = now() - interval '1 minute' WHERE id = v_mode2;
+  ASSERT public.expire_conversation_mode(v_mode2, u_a,
+    (SELECT expires_at FROM public.ai_conversation_modes WHERE id = v_mode2)), 'T5 mode expires';
+  UPDATE public.pending_agent_replies SET conversation_id = 'c_rearmed' WHERE id = r_again;
+  ASSERT NOT public.persist_human_mode_ack_and_complete_claim(
+    r_again, 'running', 'ready_to_send', v_notice, NULL, NULL, 'human_mode_ack',
+    u_a, 'whatsapp', 'c_rearmed', v_other_claim), 'T5 superseded worker is refused after expiry';
+  ASSERT NOT public.persist_human_mode_ack_and_complete_claim(
+    r_again, 'running', 'ready_to_send', v_notice, NULL, NULL, 'human_mode_ack',
+    u_a, 'whatsapp', 'c_rearmed', v_token), 'T5 completed worker is refused after expiry';
+  ASSERT (SELECT status FROM public.pending_agent_replies WHERE id = r_again) = 'running',
+    'T5 no duplicate notice was persisted';
+
+  -- T6: receipt storage is inaccessible to browser roles, including another tenant.
+  ASSERT NOT has_table_privilege('anon', 'public.ai_handoff_ack_receipts', 'SELECT'), 'T6 anon cannot read receipts';
+  ASSERT NOT has_table_privilege('authenticated', 'public.ai_handoff_ack_receipts', 'SELECT'), 'T6 users cannot read receipts';
+  ASSERT NOT has_table_privilege('authenticated', 'public.ai_handoff_ack_receipts', 'INSERT'), 'T6 users cannot forge receipts';
+  ASSERT has_table_privilege('service_role', 'public.ai_handoff_ack_receipts', 'SELECT'), 'T6 service can read receipts';
+
+  -- T7: a non-outbox completion also consumes the surviving receipt after expiry.
+  INSERT INTO public.ai_conversation_modes (user_id, platform, conversation_id, mode, expires_at)
+    VALUES (u_a, 'whatsapp', 'c_complete', 'human_first', now() + interval '1 hour') RETURNING id INTO v_mode;
+  v_claim := public.claim_human_mode_ack_leased(u_a, 'whatsapp', 'c_complete', 120);
+  v_token := (v_claim->>'claim_token')::timestamptz;
+  UPDATE public.ai_conversation_modes SET expires_at = now() - interval '1 minute' WHERE id = v_mode;
+  ASSERT public.expire_conversation_mode(v_mode, u_a,
+    (SELECT expires_at FROM public.ai_conversation_modes WHERE id = v_mode)), 'T7 mode expires';
+  ASSERT public.complete_human_mode_ack(u_a, 'whatsapp', 'c_complete', v_token), 'T7 late completion consumes receipt';
+  ASSERT NOT public.complete_human_mode_ack(u_a, 'whatsapp', 'c_complete', v_token), 'T7 completion is single use';
+  UPDATE public.pending_agent_replies SET conversation_id = 'c_complete' WHERE id = r_again;
+  ASSERT NOT public.persist_human_mode_ack_and_complete_claim(
+    r_again, 'running', 'ready_to_send', v_notice, NULL, NULL, 'human_mode_ack',
+    u_a, 'whatsapp', 'c_complete', v_token), 'T7 completed receipt cannot persist another notice';
+
+  -- T8: only service_role reaches the function.
   ASSERT NOT has_function_privilege('anon', 'public.persist_human_mode_ack_and_complete_claim(uuid, text, text, text, text, jsonb, text, uuid, text, text, timestamptz)', 'EXECUTE'),
     'T4 anon cannot persist a notice';
   ASSERT NOT has_function_privilege('authenticated', 'public.persist_human_mode_ack_and_complete_claim(uuid, text, text, text, text, jsonb, text, uuid, text, text, timestamptz)', 'EXECUTE'),

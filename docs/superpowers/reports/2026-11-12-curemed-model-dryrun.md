@@ -8,23 +8,13 @@ The reply text is not recorded here: the excerpt column reports how long the rep
 
 ## Results
 
-| Model | Turn | Latency ms | Reply language correct | Catalog tool called with non-empty query | Any URL present | Reply excerpt (120 chars) | Status |
-|---|---:|---:|---|---|---|---|---|
+| Model | Turn | Latency ms | Reply language correct | Catalog tool called with non-empty query | Any URL present | Catalog grounded (identity match) | Reply excerpt (120 chars) | Status |
+|---|---:|---:|---|---|---|---|---|---|
 | Results pending | — | — | — | — | — | — | — |
 
-## What this report does not measure
+## Grounding score
 
-- Catalog grounding. The sandbox hands the probe the tool CALLS it made -- the
-  name and the arguments -- and never the rows the catalog returned, so
-  "Catalog tool called with non-empty query" says the catalog was SEARCHED, not
-  that the answer came from it. A model that searches and then answers something
-  unrelated scores exactly like one that answers from the rows. The probe cannot
-  measure grounding without the rows and the sandbox does not expose them, so no
-  grounding score is reported here. Read the answers in the owner copy beside this
-  report before choosing a model.
-- The URL column says "Any URL present" and not "Product link present", for the
-  same reason: the probe never sees the catalog's rows, so it cannot tell the
-  catalog's `product_url` from a homepage or a tracking link.
+Catalog grounded compares the reply with bounded product identifiers, names and URLs returned by the catalog in that sandbox turn. Yes means an exact product identity match; it does not verify every price or medical claim. No means no returned product identity matched. An older sandbox response without `catalog_evidence` is not measured. The separate URL column counts any URL.
 
 ## Model selection
 

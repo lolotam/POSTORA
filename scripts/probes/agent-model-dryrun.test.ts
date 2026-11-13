@@ -311,6 +311,8 @@ Deno.test("the report's URL column says it measures a URL, not a product link", 
     latencyMs: 12,
     languageScore: "correct",
     catalogQuery: true,
+    catalogGrounded: true,
+    replyLength: 240,
     urlPresent: true,
     excerpt: "reply",
   };
@@ -324,7 +326,7 @@ Deno.test("the report's columns are the ones the plan settled on", () => {
   const report = renderReport([]);
   assertEquals(
     report.includes(
-      "| Model | Turn | Latency ms | Reply language correct | Catalog tool called with non-empty query | Any URL present | Reply excerpt (120 chars) | Status |",
+      "| Model | Turn | Latency ms | Reply language correct | Catalog tool called with non-empty query | Any URL present | Catalog grounded (identity match) | Reply excerpt (120 chars) | Status |",
     ),
     true,
   );
@@ -347,6 +349,8 @@ Deno.test("the tracked report carries no customer data", () => {
     latencyMs: 12,
     languageScore: "correct",
     catalogQuery: true,
+    catalogGrounded: true,
+    replyLength: 240,
     urlPresent: true,
     excerpt: "كريم الكعب متوفر, 12 KWD, https://curemedkw.com/dentek",
   };
@@ -356,6 +360,7 @@ Deno.test("the tracked report carries no customer data", () => {
   assertEquals(report.includes("curemedkw.com"), false);
   assertEquals(report.includes(CONVERSATION), false);
   assertEquals(report.includes("Source conversation: `"), false);
+  assertEquals(report.includes("(redacted, 240 chars)"), true);
 });
 
 // The owner's copy is the one with the material in it. It is written beside the
@@ -367,6 +372,8 @@ Deno.test("the owner copy carries what the tracked report redacts", () => {
     latencyMs: 12,
     languageScore: "correct",
     catalogQuery: true,
+    catalogGrounded: true,
+    replyLength: 240,
     urlPresent: true,
     excerpt: "كريم الكعب متوفر, 12 KWD",
   };
@@ -376,16 +383,10 @@ Deno.test("the owner copy carries what the tracked report redacts", () => {
   assertEquals(detailed.includes("KWD"), true);
 });
 
-// The design asks the comparison to measure a catalog-GROUNDED answer. The sandbox
-// hands the probe the tool calls it made and never the rows the catalog returned, so
-// the report says that instead of inventing a score the data cannot support.
-Deno.test("the report records that the catalog grounding is not measured", () => {
+Deno.test("the report separates product identity matching from full factual verification", () => {
   const report = renderReport([]);
-  assertEquals(report.includes("does not measure"), true);
-  assertEquals(report.includes("never the rows the catalog returned"), true);
-  // No column claims a grounding score.
-  assertEquals(report.includes("Catalog grounded"), false);
-  assertEquals(report.includes("| Grounded"), false);
+  assertEquals(report.includes("| Catalog grounded (identity match) |"), true);
+  assertEquals(report.includes("not verification of every price or medical claim"), true);
 });
 
 // A 200 body without a reply is not a model run. The sandbox answers a turn it could
@@ -487,7 +488,7 @@ Deno.test("an answered turn keeps the replay going", async () => {
     request: TURN_REQUEST,
     runTurn: async (input) => {
       attempted.push(input.inboundText);
-      return { latencyMs: 12, languageScore: "correct", catalogQuery: false, urlPresent: false, excerpt: "ok" };
+      return { latencyMs: 12, languageScore: "correct", catalogQuery: false, catalogGrounded: null, replyLength: 5, urlPresent: false, excerpt: "ok" };
     },
     readThreadLanguage: async () => null,
     onRow: () => {},
@@ -497,4 +498,19 @@ Deno.test("an answered turn keeps the replay going", async () => {
   assertEquals(rows.length, 2);
   assertEquals(stopped, false);
   assertEquals(rows[1].turn, 2);
+});
+
+Deno.test("the sandbox probe scores the answer against returned catalog identities", async () => {
+  for (const [reply, expected] of [
+    ["See https://example.invalid/products/heel-cream", true],
+    ["An unrelated invented answer", false],
+  ] as const) {
+    const measurement = await replayTurn(TURN_INPUT, () => Promise.resolve(new Response(JSON.stringify({
+      reply,
+      tool_calls: [{ name: "catalog", arguments: { capability: "search_products", parameters: { query: "heel" } } }],
+      catalog_evidence: [{ id: "fixture-product", product_url: "https://example.invalid/products/heel-cream" }],
+    }))));
+    assertEquals(measurement.catalogGrounded, expected);
+    assertEquals(measurement.replyLength, reply.length);
+  }
 });

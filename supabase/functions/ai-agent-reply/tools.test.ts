@@ -1437,8 +1437,12 @@ Deno.test("a manual override created during the retry window also wins", async (
 import { webSearchToolDefinition } from "./tools.ts";
 
 function searchContext(searchRows: Array<{ key: string; value: unknown }>): ToolContext {
-  // deno-lint-ignore no-explicit-any
-  const chain: any = { select: () => chain, eq: () => chain, maybeSingle: () => Promise.resolve({ data: { api_key: "bk" }, error: null }) };
+  interface SearchChain {
+    select(): SearchChain;
+    eq(): SearchChain;
+    maybeSingle(): Promise<{ data: { api_key: string }; error: null }>;
+  }
+  const chain: SearchChain = { select: () => chain, eq: () => chain, maybeSingle: () => Promise.resolve({ data: { api_key: "bk" }, error: null }) };
   return {
     admin: {
       from: (table: string) =>
@@ -1494,6 +1498,9 @@ Deno.test("catalog search rules appear only when a connector searches the catalo
   const withoutCatalog = buildSystemPrompt({ ...base, catalogSearch: false });
 
   assertStringIncludes(withCatalog, "give its product_url exactly as the tool returned it");
+  assertStringIncludes(withCatalog, "make a second catalog call");
+  assertStringIncludes(withCatalog, "Arabic/English synonym, transliteration, or brand variant");
+  assertStringIncludes(withCatalog, "even for a one-word query");
   assertStringIncludes(withCatalog, "after two searches for the same request have found nothing");
   assertEquals(withoutCatalog.includes("product_url"), false);
 });

@@ -45,10 +45,13 @@ BEGIN
     (u_a, 'tenant-a-' || u_a::text || '@example.invalid'),
     (u_b, 'tenant-b-' || u_b::text || '@example.invalid');
 
-  INSERT INTO public.social_accounts (id, user_id, platform, platform_user_id, access_token)
+  INSERT INTO public.workspaces (id, name, owner_id) VALUES (u_a, 'Handoff fixture', u_a);
+  INSERT INTO public.workspaces (id, name, owner_id) VALUES (u_b, 'Handoff fixture', u_b);
+
+  INSERT INTO public.social_accounts (id, user_id, workspace_id, platform, platform_user_id, access_token)
   VALUES
-    (s_a, u_a, 'facebook', 'page-tenant-a', 'token-tenant-a'),
-    (s_b, u_b, 'facebook', 'page-tenant-b', 'token-tenant-b');
+    (s_a, u_a, u_a, 'whatsapp', 'page-tenant-a', 'token-tenant-a'),
+    (s_b, u_b, u_b, 'whatsapp', 'page-tenant-b', 'token-tenant-b');
 
   INSERT INTO public.ai_threads (id, user_id, platform, conversation_id, unanswered_escalation_since)
   VALUES (t_marker, u_a, 'whatsapp', 'c_marker', v_escalated);
@@ -60,23 +63,23 @@ BEGIN
     id, social_account_id, user_id, platform, message_id, conversation_id, recipient_id,
     inbound_text, inbound_at, status
   ) VALUES
-    (r_plain, s_a, u_a, 'facebook', 'm-tenant-1', 'c_tenant', 'r-tenant',
+    (r_plain, s_a, u_a, 'whatsapp', 'm-tenant-1', 'c_tenant', 'r-tenant',
      'عندكم كريم الكعب؟', now(), 'running'),
-    (r_kind, s_a, u_a, 'facebook', 'm-tenant-2', 'c_tenant', 'r-tenant',
+    (r_kind, s_a, u_a, 'whatsapp', 'm-tenant-2', 'c_tenant', 'r-tenant',
      'عندكم كريم الكعب؟', now(), 'running'),
-    (r_deliver, s_a, u_a, 'facebook', 'm-tenant-3', 'c_tenant', 'r-tenant',
+    (r_deliver, s_a, u_a, 'whatsapp', 'm-tenant-3', 'c_tenant', 'r-tenant',
      'عندكم كريم الكعب؟', now(), 'ready_to_send'),
-    (r_escalate, s_a, u_a, 'facebook', 'm-tenant-4', 'c_tenant', 'r-tenant',
+    (r_escalate, s_a, u_a, 'whatsapp', 'm-tenant-4', 'c_marker', 'r-tenant',
      'عندكم كريم الكعب؟', now(), 'running'),
-    (r_escalate_other, s_b, u_b, 'facebook', 'm-tenant-5', 'c_tenant', 'r-tenant',
+    (r_escalate_other, s_b, u_b, 'whatsapp', 'm-tenant-5', 'c_tenant', 'r-tenant',
      'عندكم كريم الكعب؟', now(), 'running'),
-    (r_ack, s_a, u_a, 'facebook', 'm-tenant-6', 'c_tenant', 'r-tenant',
+    (r_ack, s_a, u_a, 'whatsapp', 'm-tenant-6', 'c_ack', 'r-tenant',
      'عندكم كريم الكعب؟', now(), 'running'),
-    (r_ack_other, s_b, u_b, 'facebook', 'm-tenant-7', 'c_tenant', 'r-tenant',
+    (r_ack_other, s_b, u_b, 'whatsapp', 'm-tenant-7', 'c_tenant', 'r-tenant',
      'عندكم كريم الكعب؟', now(), 'running'),
-    (r_legacy, s_a, u_a, 'facebook', 'm-tenant-8', 'c_tenant', 'r-tenant',
+    (r_legacy, s_a, u_a, 'whatsapp', 'm-tenant-8', 'c_tenant', 'r-tenant',
      'عندكم كريم الكعب؟', now(), 'running'),
-    (r_live, s_a, u_a, 'facebook', 'm-tenant-9', 'c_tenant', 'r-tenant',
+    (r_live, s_a, u_a, 'whatsapp', 'm-tenant-9', 'c_tenant', 'r-tenant',
      'عندكم كريم الكعب؟', now(), 'pending');
   UPDATE public.pending_agent_replies
      SET generated_reply = 'كريم الكعب متوفر'
