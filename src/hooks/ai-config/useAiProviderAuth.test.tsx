@@ -125,4 +125,22 @@ describe("useAiProviderAuth", () => {
     expect(invalidate).toHaveBeenCalledWith({ queryKey: ["ai-provider-auth"] });
     expect(invalidate).toHaveBeenCalledWith({ queryKey: ["ai-config"] });
   });
+
+  it("marks the subscription disconnected in the cache even if the refetch then fails", async () => {
+    const { client, wrapper } = queryWrapper();
+    const claude = {
+      provider_code: "claude", oauth_provider: "anthropic", name: "Anthropic", active: true,
+      status: "connected", account_label: "me@example.com", expires_at: null, models: [], flow: "pkce_paste",
+    };
+    client.setQueryData(["ai-provider-auth"], { enabled: true, providers: [claude] });
+    invoke
+      .mockResolvedValueOnce({ data: { status: "not_connected" }, error: null })
+      .mockRejectedValue(new Error("network down"));
+
+    const { result } = renderHook(() => useDisconnectAiOAuth(), { wrapper });
+    await result.current.mutateAsync("anthropic");
+
+    expect(client.getQueryData<{ providers: Array<{ status: string }> }>(["ai-provider-auth"])?.providers[0].status)
+      .toBe("not_connected");
+  });
 });

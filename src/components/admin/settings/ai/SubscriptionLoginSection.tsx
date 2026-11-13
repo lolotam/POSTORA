@@ -152,6 +152,11 @@ export function SubscriptionLoginSection({ providerCode }: { providerCode: 'clau
 
   return (
     <div className="space-y-2 p-3 rounded-lg border border-border bg-muted/30">
+      {capabilitiesError && (
+        <p className="text-xs text-destructive">
+          The latest status could not be loaded, so what is shown may be out of date. Reload the page to check.
+        </p>
+      )}
       <div className="flex items-center gap-2 text-xs text-muted-foreground">
         <span className="font-medium">Subscription login (Auth)</span>
         {connected ? (

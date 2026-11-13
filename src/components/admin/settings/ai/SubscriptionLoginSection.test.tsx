@@ -85,11 +85,12 @@ describe('SubscriptionLoginSection', () => {
     expect(screen.getByRole('alert')).toHaveTextContent('AI_PROVIDER_AUTH_INVALID_RESPONSE');
   });
 
-  it('keeps a stored login usable when only a background refetch failed', () => {
+  it('keeps a stored login usable and flags it as possibly stale when only a background refetch failed', () => {
     h.caps = { enabled: true, providers: [claudeConnected] };
     h.capsError = new Error('AI_PROVIDER_AUTH_INVALID_RESPONSE');
     render(<SubscriptionLoginSection providerCode="claude" />);
     expect(screen.queryByText(/AI_PROVIDER_AUTH_INVALID_RESPONSE/)).not.toBeInTheDocument();
+    expect(screen.getByText(/may be out of date/i)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /disconnect/i })).toBeInTheDocument();
   });
 
