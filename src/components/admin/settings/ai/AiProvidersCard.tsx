@@ -24,15 +24,17 @@ import { ProviderHealthButton } from './ProviderHealthButton';
 import { SubscriptionLoginSection } from './SubscriptionLoginSection';
 import { SubscriptionLoginsStrip } from './SubscriptionLoginsStrip';
 import { SYNCABLE_PROVIDER_CODES } from '@/hooks/ai-config/useSyncModels';
+import { useAiProviderAuthCapabilities } from '@/hooks/ai-config/useAiProviderAuth';
 
 function isOAuthProvider(provider: AIProvider | null) {
   return !!provider && (provider.auth_type === 'oauth' || provider.provider_code === 'higgsfield' || provider.api_type === 'higgsfield');
 }
 
-// The providers that have a subscription login through pi-ai. The API key
-// section above stays exactly as it was for them; the subscription is a second
-// way in, not a replacement.
-const SUBSCRIPTION_PROVIDER_CODES = ['claude', 'openai'] as const;
+// The providers that have a subscription login. The API key section above
+// stays exactly as it was for them; the subscription is a second way in, not a
+// replacement. OpenRouter signs in through its own OAuth flow, pi-ai has only
+// the API-key provider for it.
+const SUBSCRIPTION_PROVIDER_CODES = ['claude', 'openai', 'openrouter'] as const;
 type SubscriptionProviderCode = (typeof SUBSCRIPTION_PROVIDER_CODES)[number];
 
 function subscriptionProviderCode(provider: AIProvider | null): SubscriptionProviderCode | null {
@@ -40,6 +42,16 @@ function subscriptionProviderCode(provider: AIProvider | null): SubscriptionProv
   return (SUBSCRIPTION_PROVIDER_CODES as readonly string[]).includes(provider.provider_code)
     ? (provider.provider_code as SubscriptionProviderCode)
     : null;
+}
+
+/**
+ * How a provider is reached: with an API key, through the admin's own
+ * subscription, or not at all. A provider connected by subscription needs no
+ * API key, so a missing key is not a broken setup for it.
+ */
+function providerAuthState(hasKey: boolean, viaSubscription: boolean): 'api_key' | 'auth' | 'none' {
+  if (hasKey) return 'api_key';
+  return viaSubscription ? 'auth' : 'none';
 }
 
 /**
@@ -58,6 +70,16 @@ export function AiProvidersCard() {
   const setServiceKey = useSetServiceKey();
   const testService = useTestService();
 
+  // The subscription logins the admin already connected. A provider reached
+  // through one of them is an Auth provider, so the card says so instead of
+  // reporting a missing API key as a broken setup.
+  const { data: oauthCapabilities } = useAiProviderAuthCapabilities();
+  const subscriptionProviders = new Set<string>(
+    (oauthCapabilities?.providers ?? [])
+      .filter(p => p.status === 'connected' || p.status === 'reauth_required')
+      .map(p => p.provider_code),
+  );
+
   const allProviderCodes = [
     'firecrawl', 'apify',
     ...(aiConfig?.providers?.map(p => p.provider_code) || []),
@@ -65,6 +87,12 @@ export function AiProvidersCard() {
   const { data: serviceKeyStatus } = useCheckServiceKey(allProviderCodes);
 
   const [selectedProvider, setSelectedProvider] = useState<AIProvider | null>(null);
+  const selectedAuthState = selectedProvider
+    ? providerAuthState(
+      serviceKeyStatus?.[selectedProvider.provider_code] ?? false,
+      subscriptionProviders.has(selectedProvider.provider_code),
+    )
+    : 'none';
   const [testResults, setTestResults] = useState<Record<string, TestConnectionResult>>({});
   const [serviceTestResults, setServiceTestResults] = useState<Record<string, { success: boolean; latency?: number; error?: string } | null>>({});
 
@@ -184,7 +212,10 @@ export function AiProvidersCard() {
               const providerModels = modelsByProvider[provider.id] || [];
               const activeModels = providerModels.filter(m => m.is_active).length;
               const testResult = testResults[provider.id];
-              const hasKey = serviceKeyStatus?.[provider.provider_code] ?? false;
+              const authState = providerAuthState(
+                serviceKeyStatus?.[provider.provider_code] ?? false,
+                subscriptionProviders.has(provider.provider_code),
+              );
 
               return (
                 <Card key={provider.id}
@@ -194,7 +225,10 @@ export function AiProvidersCard() {
                     <div className="flex items-center justify-between gap-1">
                       <h3 className="font-semibold text-xs truncate">{provider.name}</h3>
                       <div className="flex items-center gap-1 shrink-0">
-                        {hasKey ? <CheckCircle2 className="w-3 h-3 text-primary" /> : <XCircle className="w-3 h-3 text-destructive" />}
+                        {authState === 'api_key' ? <CheckCircle2 className="w-3 h-3 text-primary" />
+                          : authState === 'auth'
+                            ? <Badge variant="outline" className="text-[9px] px-1 py-0 text-primary border-primary/30">auth</Badge>
+                            : <XCircle className="w-3 h-3 text-destructive" />}
                         <Badge variant={provider.is_active ? 'default' : 'secondary'} className="text-[9px] px-1 py-0">
                           {provider.provider_code}
                         </Badge>
@@ -245,9 +279,11 @@ export function AiProvidersCard() {
             <DialogTitle className="flex items-center gap-2">
               {selectedProvider?.name}
               <Badge variant="outline" className="text-xs">{selectedProvider?.provider_code}</Badge>
-              {selectedProvider && (serviceKeyStatus?.[selectedProvider.provider_code]
+              {selectedProvider && (selectedAuthState === 'api_key'
                 ? <CheckCircle2 className="w-4 h-4 text-primary" />
-                : <XCircle className="w-4 h-4 text-destructive" />
+                : selectedAuthState === 'auth'
+                  ? <Badge variant="outline" className="text-[10px] text-primary border-primary/30">subscription</Badge>
+                  : <XCircle className="w-4 h-4 text-destructive" />
               )}
             </DialogTitle>
             <DialogDescription>{selectedProvider?.api_type} • {selectedProvider?.api_endpoint}</DialogDescription>
@@ -267,9 +303,11 @@ export function AiProvidersCard() {
               <div className="flex items-center gap-2 text-xs text-muted-foreground">
                 <KeyRound className="w-3.5 h-3.5" />
                 <span>API Key ({selectedProvider.api_key_env_var})</span>
-                {serviceKeyStatus?.[selectedProvider.provider_code]
+                {selectedAuthState === 'api_key'
                   ? <Badge variant="outline" className="text-[10px] text-primary border-primary/30">Configured</Badge>
-                  : <Badge variant="outline" className="text-[10px] text-destructive border-destructive/30">Missing</Badge>
+                  : selectedAuthState === 'auth'
+                    ? <Badge variant="outline" className="text-[10px] text-primary border-primary/30">Optional — subscription</Badge>
+                    : <Badge variant="outline" className="text-[10px] text-destructive border-destructive/30">Missing</Badge>
                 }
               </div>
               <div className="flex gap-2">
@@ -294,7 +332,12 @@ export function AiProvidersCard() {
           )}
 
           {subscriptionProvider && (
-            <SubscriptionLoginSection providerCode={subscriptionProvider} />
+            <SubscriptionLoginSection
+              providerCode={subscriptionProvider}
+              // The same catalogue rows the model list below shows, so the two
+              // lists never drift apart.
+              models={(modelsByProvider[selectedProvider?.id ?? ''] || []).map(m => m.model_id)}
+            />
           )}
 
           {selectedProvider && (SYNCABLE_PROVIDER_CODES as readonly string[]).includes(selectedProvider.provider_code) && (

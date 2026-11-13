@@ -127,6 +127,35 @@ Deno.test("fresh credential returns api key without refresh", async () => {
   assertEquals(fake.calls.filter((c) => c.name === "claim_ai_oauth_refresh").length, 0);
 });
 
+Deno.test("an openrouter credential is returned as is, with no refresh call", async () => {
+  const fake = fakeAdmin({
+    // OpenRouter's key is permanent: no refresh token, no expiry in sight.
+    credentials: { access: "sk-or-v1-secret", refresh: "", expires: 8_640_000_000_000_000 },
+  });
+  let refreshCalls = 0;
+  const deps: CredentialDeps = {
+    ...defaultCredentialDeps(fake.admin as never),
+    now: () => 5_000,
+    sleep: async () => {},
+    refresh: async () => {
+      refreshCalls++;
+      throw new Error("must not refresh");
+    },
+  };
+
+  const { apiKey } = await getFreshOAuthCredential(deps, "openrouter");
+
+  assertEquals(apiKey, "sk-or-v1-secret", "the stored key is the api key");
+  assertEquals(refreshCalls, 0);
+  assertEquals(fake.calls.filter((c) => c.name === "claim_ai_oauth_refresh").length, 0);
+});
+
+Deno.test("openrouter has no refresh path, so a refresh is refused instead of guessed", async () => {
+  const deps = defaultCredentialDeps(fakeAdmin().admin as never);
+  const error = await assertRejects(() => deps.refresh("openrouter", "any-token"), AiOAuthError);
+  assertEquals(error.code, "oauth_unsupported_provider");
+});
+
 Deno.test("expired credential with lease won refreshes once and saves rotated refresh token", async () => {
   const fake = fakeAdmin({
     credentials: { access: "a", refresh: "old-refresh", expires: 5_000 }, // not fresh

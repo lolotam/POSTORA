@@ -1,6 +1,5 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { getModels } from "npm:@mariozechner/pi-ai@0.73.1";
-import { getOAuthProviders as listOAuthProviderIds } from "npm:@mariozechner/pi-ai@0.73.1/oauth";
 import { authenticateCaller } from "../_shared/auth-helper.ts";
 import {
   handleRestrictedCorsOptions,
@@ -15,6 +14,8 @@ import { isAiProviderOAuthEnabled } from "../_shared/aiOAuth/flag.ts";
 import { AiOAuthError } from "../_shared/aiOAuth/errors.ts";
 import { type OAuthProviderId } from "../_shared/aiOAuth/clients.ts";
 import { handle, type HandlerDeps, type OAuthStatusRow } from "./handler.ts";
+import { resolveProviderKey } from "../_shared/providerKeys.ts";
+import type { RowReader } from "../_shared/providerEndpoint.ts";
 
 // This function authenticates in-handler via authenticateCaller and keeps the
 // gateway's JWT verification, exactly like higgsfield-oauth
@@ -48,7 +49,6 @@ Deno.serve(async (req) => {
       return !error && !!data;
     },
     oauthEnabled: async () => isAiProviderOAuthEnabled(admin as never),
-    listOAuthProviders: () => listOAuthProviderIds().map((provider) => provider.id),
     listModels: (oauthProvider) => {
       try {
         // Infrastructure seam (ARCHITECTURE §31): pi-ai types the provider key
@@ -66,6 +66,12 @@ Deno.serve(async (req) => {
         name: (data?.name as string | undefined) ?? null,
         active: data?.is_active === true,
       };
+    },
+    providerHasApiKey: async (providerCode) => {
+      // The same resolver the inference path uses: the saved provider_api_keys
+      // row first, then the env var the ai_providers row names.
+      const key = await resolveProviderKey(admin as unknown as RowReader, providerCode);
+      return Boolean(key);
     },
     statuses: async () => {
       // A failed read must not look like "nothing connected": the admin would

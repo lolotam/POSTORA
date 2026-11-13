@@ -21,9 +21,10 @@ import {
   type OAuthProviderId,
 } from '@/hooks/ai-config/useAiProviderAuth';
 
-const OAUTH_PROVIDER_FOR_CODE: Record<'claude' | 'openai', OAuthProviderId> = {
+const OAUTH_PROVIDER_FOR_CODE: Record<'claude' | 'openai' | 'openrouter', OAuthProviderId> = {
   claude: 'anthropic',
   openai: 'openai-codex',
+  openrouter: 'openrouter',
 };
 
 // The edge function answers with stable codes; the admin reads sentences.
@@ -35,6 +36,7 @@ const ERROR_MESSAGES: Record<string, string> = {
   not_connected: 'This subscription is not connected.',
   reauth_required: 'The subscription needs a new login.',
   refresh_failed: 'The provider did not renew the login. Try again in a minute.',
+  AI_PROVIDER_AUTH_INVALID_RESPONSE: 'The server answered in a shape this page does not understand (AI_PROVIDER_AUTH_INVALID_RESPONSE). Reload the page; if it stays, the web app and the edge function are out of step.',
 };
 
 function describeError(error: unknown, fallback: string): string {
@@ -49,9 +51,23 @@ function describeError(error: unknown, fallback: string): string {
  * Vault and answers with a status, an account label and a model list. The
  * admin approves the provider's consent page in a new tab and pastes the
  * address it lands on back here.
+ *
+ * A provider whose flow is `pkce_callback` redirects to our own route
+ * instead: the browser goes there directly and there is nothing to paste.
+ *
+ * `models` is the provider's catalogue (the ai_models rows the provider dialog
+ * lists right next to this section), so the picker here and the list there are
+ * one list. Without it the picker falls back to the subscription's own model
+ * list, which only matters while the provider has no catalogue rows at all.
  */
-export function SubscriptionLoginSection({ providerCode }: { providerCode: 'claude' | 'openai' }) {
-  const { data: capabilities } = useAiProviderAuthCapabilities();
+export function SubscriptionLoginSection({
+  providerCode,
+  models,
+}: {
+  providerCode: 'claude' | 'openai' | 'openrouter';
+  models?: string[];
+}) {
+  const { data: capabilities, error: capabilitiesError } = useAiProviderAuthCapabilities();
   const startLogin = useStartAiOAuth();
   const finishLogin = useFinishAiOAuth();
   const disconnect = useDisconnectAiOAuth();
@@ -68,11 +84,28 @@ export function SubscriptionLoginSection({ providerCode }: { providerCode: 'clau
   const needsReconnect = capability?.status === 'reauth_required';
   const hasStoredLogin = connected || needsReconnect;
   const enabled = capabilities?.enabled === true;
+  const usesCallbackFlow = capability?.flow === 'pkce_callback';
   // With the flag off the subscription pathway is closed, but a stored login
-  // must stay visible so the admin can still delete it.
-  if (!capabilities || (!enabled && !hasStoredLogin)) return null;
+  // must stay visible so the admin can still delete it. A provider the edge
+  // function does not offer yet (an older deploy) has no sign-in to show.
+  // A failed first read is shown, not hidden: an empty section would look like
+  // the login is simply unavailable. A failed background refetch keeps the
+  // cached capabilities, so a stored login stays visible and removable.
+  if (capabilitiesError && !capabilities) {
+    return (
+      <Alert variant="destructive">
+        <AlertTriangle className="h-4 w-4" />
+        <AlertDescription>{describeError(capabilitiesError, 'Could not load the subscription logins.')}</AlertDescription>
+      </Alert>
+    );
+  }
+  if (!capabilities || !capability || (!enabled && !hasStoredLogin)) return null;
 
-  const effectiveTestModel = testModel || capability?.models?.[0] || '';
+  // The catalogue is the one list of models this provider has; the
+  // subscription's own list is only a fallback for a provider whose catalogue
+  // is still empty.
+  const testModels = models && models.length > 0 ? models : capability?.models ?? [];
+  const effectiveTestModel = testModel || testModels[0] || '';
 
   // The URL is shown as a link the admin clicks: a window.open after an await
   // runs outside the click gesture and popup blockers drop it silently.
@@ -80,6 +113,17 @@ export function SubscriptionLoginSection({ providerCode }: { providerCode: 'clau
     try {
       const { authorize_url } = await startLogin.mutateAsync(oauthProvider);
       setAuthorizeUrl(authorize_url);
+    } catch (error) {
+      toast.error(describeError(error, 'Could not start the login'));
+    }
+  };
+
+  // A callback flow leaves this page: the provider sends the browser to our
+  // own route, which finishes the login on its own.
+  const handleStartCallbackLogin = async () => {
+    try {
+      const { authorize_url } = await startLogin.mutateAsync(oauthProvider);
+      window.location.assign(authorize_url);
     } catch (error) {
       toast.error(describeError(error, 'Could not start the login'));
     }
@@ -123,6 +167,11 @@ export function SubscriptionLoginSection({ providerCode }: { providerCode: 'clau
 
   return (
     <div className="space-y-2 p-3 rounded-lg border border-border bg-muted/30">
+      {capabilitiesError && (
+        <p className="text-xs text-destructive">
+          The latest status could not be loaded, so what is shown may be out of date. Reload the page to check.
+        </p>
+      )}
       <div className="flex items-center gap-2 text-xs text-muted-foreground">
         <span className="font-medium">Subscription login (Auth)</span>
         {connected ? (
@@ -141,7 +190,9 @@ export function SubscriptionLoginSection({ providerCode }: { providerCode: 'clau
             ? `Connected${capability?.expires_at ? `, expires ${capability.expires_at}` : ''}`
             : needsReconnect
               ? 'The stored subscription was rejected. Connect it again.'
-              : 'Use a Claude Pro/Max or ChatGPT subscription instead of an API key.'}
+              : providerCode === 'openrouter'
+                ? 'Sign in with your OpenRouter account instead of an API key.'
+                : 'Use a Claude Pro/Max or ChatGPT subscription instead of an API key.'}
       </p>
 
       {!enabled && (
@@ -160,38 +211,51 @@ export function SubscriptionLoginSection({ providerCode }: { providerCode: 'clau
       )}
 
       {enabled && !connected && (
-        <>
-          {authorizeUrl ? (
-            <Button asChild size="sm" variant="outline" className="w-full h-7 text-xs">
-              <a href={authorizeUrl} target="_blank" rel="noopener noreferrer">
-                <ExternalLink className="w-3 h-3 me-1" />
-                Open the provider&apos;s login page
-              </a>
-            </Button>
-          ) : (
-            <Button size="sm" variant="outline" className="w-full h-7 text-xs" onClick={handleStartLogin}
+        usesCallbackFlow ? (
+          <>
+            <Button size="sm" variant="outline" className="w-full h-7 text-xs" onClick={handleStartCallbackLogin}
               disabled={startLogin.isPending}>
               {startLogin.isPending ? <Loader2 className="w-3 h-3 animate-spin me-1" /> : null}
-              Open login
+              Sign in with {capability?.name ?? 'the provider'}
             </Button>
-          )}
-          <p className="text-xs text-muted-foreground">
-            After approving, your browser opens a localhost page that does not load. Copy the full address
-            from the address bar and paste it here.
-          </p>
-          <Textarea
-            value={pasted}
-            onChange={(e) => setPasted(e.target.value)}
-            placeholder="Paste the address you were redirected to..."
-            className="text-xs min-h-[60px]"
-            maxLength={4096}
-          />
-          <Button size="sm" className="w-full h-7 text-xs" onClick={handleFinishLogin}
-            disabled={!pasted.trim() || finishLogin.isPending}>
-            {finishLogin.isPending ? <Loader2 className="w-3 h-3 animate-spin me-1" /> : null}
-            Finish
-          </Button>
-        </>
+            <p className="text-xs text-muted-foreground">
+              Your browser opens the provider&apos;s consent page and comes back here when it is done.
+            </p>
+          </>
+        ) : (
+          <>
+            {authorizeUrl ? (
+              <Button asChild size="sm" variant="outline" className="w-full h-7 text-xs">
+                <a href={authorizeUrl} target="_blank" rel="noopener noreferrer">
+                  <ExternalLink className="w-3 h-3 me-1" />
+                  Open the provider&apos;s login page
+                </a>
+              </Button>
+            ) : (
+              <Button size="sm" variant="outline" className="w-full h-7 text-xs" onClick={handleStartLogin}
+                disabled={startLogin.isPending}>
+                {startLogin.isPending ? <Loader2 className="w-3 h-3 animate-spin me-1" /> : null}
+                Open login
+              </Button>
+            )}
+            <p className="text-xs text-muted-foreground">
+              After approving, your browser opens a localhost page that does not load. Copy the full address
+              from the address bar and paste it here.
+            </p>
+            <Textarea
+              value={pasted}
+              onChange={(e) => setPasted(e.target.value)}
+              placeholder="Paste the address you were redirected to..."
+              className="text-xs min-h-[60px]"
+              maxLength={4096}
+            />
+            <Button size="sm" className="w-full h-7 text-xs" onClick={handleFinishLogin}
+              disabled={!pasted.trim() || finishLogin.isPending}>
+              {finishLogin.isPending ? <Loader2 className="w-3 h-3 animate-spin me-1" /> : null}
+              Finish
+            </Button>
+          </>
+        )
       )}
 
       {enabled && connected && (
@@ -201,7 +265,7 @@ export function SubscriptionLoginSection({ providerCode }: { providerCode: 'clau
                 <SelectValue placeholder="Model..." />
               </SelectTrigger>
               <SelectContent>
-                {(capability?.models ?? []).map(id => (
+                {testModels.map(id => (
                   <SelectItem key={id} value={id}>
                     <span className="text-xs">{id}</span>
                   </SelectItem>

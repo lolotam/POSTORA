@@ -36,6 +36,11 @@ export function useFinishAiOAuth() {
       aiProviderAuthGateway.finish(provider, pasted),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: AI_PROVIDER_AUTH_QUERY_KEY });
+      // A finished login changes what the provider can answer, so the model
+      // catalogue behind the provider's model list is read again too. Without
+      // this the list stays on what it was before the login, and closing and
+      // reopening the dialog shows the same stale rows.
+      queryClient.invalidateQueries({ queryKey: ["ai-config"] });
     },
   });
 }
@@ -44,7 +49,19 @@ export function useDisconnectAiOAuth() {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: (provider: OAuthProviderId) => aiProviderAuthGateway.disconnect(provider),
-    onSuccess: () => {
+    onSuccess: (_result, provider) => {
+      // The server confirmed the delete, so the cache says so at once: a
+      // refetch that fails afterwards must not leave the login shown as connected.
+      queryClient.setQueryData<AiOAuthCapabilities>(AI_PROVIDER_AUTH_QUERY_KEY, (current) =>
+        current && {
+          ...current,
+          providers: current.providers.map((p) =>
+            p.oauth_provider === provider
+              ? { ...p, status: "not_connected", account_label: null, expires_at: null }
+              : p,
+          ),
+        },
+      );
       queryClient.invalidateQueries({ queryKey: AI_PROVIDER_AUTH_QUERY_KEY });
       // A disconnected subscription can leave a tier pointing at a provider that
       // can no longer answer, so the tier list is refreshed too.

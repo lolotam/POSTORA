@@ -13,6 +13,7 @@ import { aiProviderAuthGateway, INVALID_RESPONSE } from "@/features/ai-providers
 import {
   useAiProviderAuthCapabilities,
   useDisconnectAiOAuth,
+  useFinishAiOAuth,
   useStartAiOAuth,
 } from "./useAiProviderAuth";
 
@@ -40,7 +41,9 @@ describe("aiProviderAuthGateway", () => {
     expect(invoke).toHaveBeenCalledWith("ai-provider-auth", {
       body: { action: "start", oauth_provider: "anthropic" },
     });
-    expect(result).toEqual({ authorize_url: "https://claude.ai/oauth/authorize?code=1" });
+    // An answer without flow comes from an edge function older than the
+    // callback flow, so it is the paste flow.
+    expect(result).toEqual({ authorize_url: "https://claude.ai/oauth/authorize?code=1", flow: "pkce_paste" });
   });
 
   it("sends the pasted address on finish", async () => {
@@ -121,6 +124,38 @@ describe("useAiProviderAuth", () => {
     await result.current.mutateAsync("anthropic");
 
     expect(invalidate).toHaveBeenCalledWith({ queryKey: ["ai-provider-auth"] });
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: ["ai-config"] });
+  });
+
+  it("marks the subscription disconnected in the cache even if the refetch then fails", async () => {
+    const { client, wrapper } = queryWrapper();
+    const claude = {
+      provider_code: "claude", oauth_provider: "anthropic", name: "Anthropic", active: true,
+      status: "connected", account_label: "me@example.com", expires_at: null, models: [], flow: "pkce_paste",
+    };
+    client.setQueryData(["ai-provider-auth"], { enabled: true, providers: [claude] });
+    invoke
+      .mockResolvedValueOnce({ data: { status: "not_connected" }, error: null })
+      .mockRejectedValue(new Error("network down"));
+
+    const { result } = renderHook(() => useDisconnectAiOAuth(), { wrapper });
+    await result.current.mutateAsync("anthropic");
+
+    expect(client.getQueryData<{ providers: Array<{ status: string }> }>(["ai-provider-auth"])?.providers[0].status)
+      .toBe("not_connected");
+  });
+
+  it("invalidates the model catalogue after a finished login", async () => {
+    invoke.mockResolvedValue({ data: { status: "connected", account_label: null }, error: null });
+    const { client, wrapper } = queryWrapper();
+    const invalidate = vi.spyOn(client, "invalidateQueries");
+
+    const { result } = renderHook(() => useFinishAiOAuth(), { wrapper });
+    await result.current.mutateAsync({ provider: "anthropic", pasted: "code#state" });
+
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: ["ai-provider-auth"] });
+    // The model list the provider dialog shows comes from the catalogue, so a
+    // finished login has to read it again.
     expect(invalidate).toHaveBeenCalledWith({ queryKey: ["ai-config"] });
   });
 });

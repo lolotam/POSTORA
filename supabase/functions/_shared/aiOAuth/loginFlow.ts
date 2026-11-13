@@ -16,8 +16,6 @@ export interface LoginDeps {
 }
 
 const LOGIN_TTL_MS = 10 * 60 * 1000;
-// pi-ai's own expiry margin: refresh five minutes before the provider says so.
-const EXPIRY_SAFETY_MS = 5 * 60 * 1000;
 // Bounds the whole exchange, response body included. The authorization code is
 // single use, so a timed-out exchange is reported, never retried.
 const EXCHANGE_TIMEOUT_MS = 15_000;
@@ -26,7 +24,7 @@ const EXCHANGE_TIMEOUT_MS = 15_000;
 async function exchangeCode(
   deps: LoginDeps,
   request: { url: string; init: RequestInit },
-): Promise<OAuthTokenResponse> {
+): Promise<unknown> {
   try {
     const response = await deps.fetch(request.url, {
       ...request.init,
@@ -39,7 +37,7 @@ async function exchangeCode(
         redactProviderError(`token exchange failed with status ${response.status}: ${body}`, ""),
       );
     }
-    return (await response.json()) as OAuthTokenResponse;
+    return (await response.json()) as unknown;
   } catch (cause) {
     if (cause instanceof AiOAuthError) throw cause;
     const timedOut = cause instanceof DOMException && cause.name === "TimeoutError";
@@ -100,7 +98,7 @@ export async function startLogin(
     state,
     provider_code: provider,
     code_verifier: verifier,
-    redirect_uri: client.redirectUri,
+    redirect_uri: client.redirectUri(),
     scope_kind: "platform",
     user_id: userId,
     expires_at: new Date(deps.now() + LOGIN_TTL_MS).toISOString(),
@@ -110,12 +108,6 @@ export async function startLogin(
   }
 
   return { authorizeUrl: client.authorizeUrl(challenge, state) };
-}
-
-interface OAuthTokenResponse {
-  access_token?: string;
-  refresh_token?: string;
-  expires_in?: number;
 }
 
 export async function finishLogin(
@@ -134,13 +126,16 @@ export async function finishLogin(
     throw new AiOAuthError("invalid_state", "the pasted text contains no state parameter");
   }
 
-  // Consume the row atomically: single use, scope bound, expiry checked in SQL.
+  // Consume the row atomically: single use, scope and admin bound, expiry
+  // checked in SQL. Binding the admin stops a state minted by one admin from
+  // being completed by another, e.g. through a forwarded callback link.
   const consumed = await deps.admin
     .from("oauth_states")
     .delete()
     .eq("state", parsed.state)
     .eq("provider_code", provider)
     .eq("scope_kind", "platform")
+    .eq("user_id", userId)
     .gt("expires_at", new Date(deps.now()).toISOString())
     .select("*")
     .maybeSingle();
@@ -150,27 +145,15 @@ export async function finishLogin(
   const stored = consumed.data as { code_verifier: string };
 
   const token = await exchangeCode(deps, client.exchangeRequest(parsed.code, parsed.state, stored.code_verifier));
-  const { access_token: access, refresh_token: refresh, expires_in: expiresIn } = token;
-  if (!access || !refresh || typeof expiresIn !== "number") {
-    throw new AiOAuthError("exchange_failed", "token response is missing required fields");
-  }
-
-  const accountId = client.accountId(access);
-  if (provider === "openai-codex" && !accountId) {
-    throw new AiOAuthError("exchange_failed", "token response carries no ChatGPT account id");
-  }
-
-  const expires = deps.now() + expiresIn * 1000 - EXPIRY_SAFETY_MS;
-  const credentials: Record<string, unknown> = { access, refresh, expires };
-  if (accountId) credentials.accountId = accountId;
-  const accountLabel = client.accountLabel(access);
+  // Every provider answers with its own token shape, so the client reads it.
+  const { credentials, expiresAt, accountLabel } = client.credentialsFromToken(token, deps.now());
 
   const { error } = await deps.admin.rpc("save_ai_oauth_credentials", {
     p_oauth_provider: provider,
     p_provider_code: OAUTH_PROVIDER_CODE[provider],
     p_credentials: credentials,
     p_account_label: accountLabel,
-    p_expires_at: new Date(expires).toISOString(),
+    p_expires_at: expiresAt,
     p_user: userId,
   });
   if (error) {

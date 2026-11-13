@@ -1,10 +1,11 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import { toast } from 'sonner';
 import { SubscriptionLoginSection } from './SubscriptionLoginSection';
 
 const h = vi.hoisted(() => ({
-  caps: { enabled: true, providers: [] as Array<Record<string, unknown>> },
+  caps: { enabled: true, providers: [] as Array<Record<string, unknown>> } as unknown,
+  capsError: null as Error | null,
   start: vi.fn(),
   finish: vi.fn(),
   disconnect: vi.fn(),
@@ -12,7 +13,7 @@ const h = vi.hoisted(() => ({
 }));
 
 vi.mock('@/hooks/ai-config/useAiProviderAuth', () => ({
-  useAiProviderAuthCapabilities: () => ({ data: h.caps }),
+  useAiProviderAuthCapabilities: () => ({ data: h.caps, error: h.capsError }),
   useStartAiOAuth: () => ({ mutateAsync: h.start, isPending: false }),
   useFinishAiOAuth: () => ({ mutateAsync: h.finish, isPending: false }),
   useDisconnectAiOAuth: () => ({ mutateAsync: h.disconnect, isPending: false }),
@@ -30,6 +31,7 @@ const claudeNotConnected = {
   account_label: null,
   expires_at: null,
   models: ['claude-sonnet-4-5', 'claude-opus-5'],
+  flow: 'pkce_paste',
 };
 
 const claudeConnected = {
@@ -39,19 +41,64 @@ const claudeConnected = {
   expires_at: '2026-12-01T00:00:00.000Z',
 };
 
+const openrouterNotConnected = {
+  provider_code: 'openrouter',
+  oauth_provider: 'openrouter',
+  name: 'OpenRouter',
+  active: true,
+  status: 'not_connected',
+  account_label: null,
+  expires_at: null,
+  models: ['anthropic/claude-sonnet-4.5'],
+  flow: 'pkce_callback',
+};
+
 describe('SubscriptionLoginSection', () => {
+  // The callback flow navigates the tab, so the location is replaced for that
+  // one test and put back afterwards.
+  const originalLocation = Object.getOwnPropertyDescriptor(window, 'location');
+
   beforeEach(() => {
     h.caps = { enabled: true, providers: [claudeNotConnected] };
+    h.capsError = null;
     h.start.mockReset();
     h.finish.mockReset();
     h.disconnect.mockReset();
     h.test.mockReset();
     vi.mocked(toast.error).mockClear();
+    vi.mocked(toast.success).mockClear();
+  });
+
+  afterEach(() => {
+    if (originalLocation) Object.defineProperty(window, 'location', originalLocation);
   });
 
   it('renders nothing while the feature is disabled and nothing is stored', () => {
     h.caps = { enabled: false, providers: [claudeNotConnected] };
     const { container } = render(<SubscriptionLoginSection providerCode="claude" />);
+    expect(container).toBeEmptyDOMElement();
+  });
+
+  it('shows a capabilities read that failed instead of an empty section', () => {
+    h.caps = undefined;
+    h.capsError = new Error('AI_PROVIDER_AUTH_INVALID_RESPONSE');
+    render(<SubscriptionLoginSection providerCode="claude" />);
+    expect(screen.getByRole('alert')).toHaveTextContent('AI_PROVIDER_AUTH_INVALID_RESPONSE');
+  });
+
+  it('keeps a stored login usable and flags it as possibly stale when only a background refetch failed', () => {
+    h.caps = { enabled: true, providers: [claudeConnected] };
+    h.capsError = new Error('AI_PROVIDER_AUTH_INVALID_RESPONSE');
+    render(<SubscriptionLoginSection providerCode="claude" />);
+    expect(screen.queryByText(/AI_PROVIDER_AUTH_INVALID_RESPONSE/)).not.toBeInTheDocument();
+    expect(screen.getByText(/may be out of date/i)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /disconnect/i })).toBeInTheDocument();
+  });
+
+  it('renders nothing for a provider the edge function does not offer yet', () => {
+    // An older edge deploy knows Claude and ChatGPT only.
+    h.caps = { enabled: true, providers: [claudeNotConnected] };
+    const { container } = render(<SubscriptionLoginSection providerCode="openrouter" />);
     expect(container).toBeEmptyDOMElement();
   });
 
@@ -129,7 +176,8 @@ describe('SubscriptionLoginSection', () => {
     expect(screen.getByText(/me@example\.com/)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Disconnect/i })).toBeInTheDocument();
 
-    // The test picker lists the models the provider offers, not the api-key catalogue.
+    // Without catalogue rows the picker falls back to the subscription's own
+    // model list.
     const modelTrigger = screen.getByRole('combobox');
     fireEvent.pointerDown(modelTrigger, { button: 0, buttons: 1, pointerType: 'mouse' });
     fireEvent.click(modelTrigger);
@@ -143,6 +191,48 @@ describe('SubscriptionLoginSection', () => {
     expect(h.disconnect).not.toHaveBeenCalled();
     fireEvent.click(within(dialog).getByRole('button', { name: /Disconnect/i }));
     await waitFor(() => expect(h.disconnect).toHaveBeenCalledWith('anthropic'));
+  });
+
+  it('offers the provider catalogue the dialog lists next to it', async () => {
+    h.caps = { enabled: true, providers: [claudeConnected] };
+
+    render(
+      <SubscriptionLoginSection
+        providerCode="claude"
+        models={['claude-sonnet-4-5', 'claude-opus-5', 'claude-haiku-4-5']}
+      />,
+    );
+
+    const modelTrigger = screen.getByRole('combobox');
+    fireEvent.pointerDown(modelTrigger, { button: 0, buttons: 1, pointerType: 'mouse' });
+    fireEvent.click(modelTrigger);
+
+    // Every catalogue row is offered, including the ones the subscription's own
+    // model list does not name, so both lists show the same models.
+    expect(await screen.findByRole('option', { name: 'claude-haiku-4-5' })).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: 'claude-sonnet-4-5' })).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: 'claude-opus-5' })).toBeInTheDocument();
+  });
+
+  it('tests the first catalogue model by default', async () => {
+    // The subscription's own list starts with another model, so the default
+    // proves the catalogue is what the picker works from.
+    h.caps = { enabled: true, providers: [{ ...claudeConnected, models: ['claude-opus-5'] }] };
+    h.test.mockResolvedValue({ ok: true, latency_ms: 42 });
+
+    render(
+      <SubscriptionLoginSection
+        providerCode="claude"
+        models={['claude-sonnet-4-5', 'claude-haiku-4-5']}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: /^Test$/i }));
+
+    await waitFor(() =>
+      expect(h.test).toHaveBeenCalledWith({ provider: 'anthropic', modelId: 'claude-sonnet-4-5' }),
+    );
+    expect(toast.success).toHaveBeenCalledWith(expect.stringContaining('42ms'));
   });
 
   it('warns about the Claude Code identity prompt for Anthropic only', () => {
@@ -173,5 +263,36 @@ describe('SubscriptionLoginSection', () => {
     h.caps = { enabled: true, providers: [{ ...claudeConnected, status: 'reauth_required' }] };
     render(<SubscriptionLoginSection providerCode="claude" />);
     expect(screen.getByText('Reconnect required')).toBeInTheDocument();
+  });
+
+  it('sends the browser to the provider instead of asking for a paste when the flow is a callback', async () => {
+    const assign = vi.fn();
+    Object.defineProperty(window, 'location', {
+      value: { ...window.location, assign },
+      writable: true,
+    });
+    h.caps = { enabled: true, providers: [openrouterNotConnected] };
+    h.start.mockResolvedValue({
+      authorize_url: 'https://openrouter.ai/auth?code_challenge=x',
+      flow: 'pkce_callback',
+    });
+
+    render(<SubscriptionLoginSection providerCode="openrouter" />);
+
+    // A callback flow has nothing to paste: the provider comes back to us.
+    expect(screen.queryByRole('textbox')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /Sign in with OpenRouter/i }));
+
+    await waitFor(() => expect(h.start).toHaveBeenCalledWith('openrouter'));
+    await waitFor(() =>
+      expect(assign).toHaveBeenCalledWith('https://openrouter.ai/auth?code_challenge=x'),
+    );
+  });
+
+  it('keeps the paste box for a provider whose flow is a paste', () => {
+    h.caps = { enabled: true, providers: [claudeNotConnected] };
+    render(<SubscriptionLoginSection providerCode="claude" />);
+    expect(screen.getByRole('textbox')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Sign in with OpenRouter/i })).not.toBeInTheDocument();
   });
 });

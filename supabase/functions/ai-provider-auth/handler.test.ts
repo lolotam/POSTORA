@@ -8,15 +8,17 @@ function baseDeps(overrides: Partial<HandlerDeps> = {}): HandlerDeps {
   return {
     isAdmin: async () => true,
     oauthEnabled: async () => true,
-    listOAuthProviders: () => ["anthropic", "github-copilot", "openai-codex"],
     listModels: (oauthProvider: string) =>
       oauthProvider === "anthropic"
         ? ["claude-sonnet-4-5", "claude-opus-5"]
-        : ["gpt-5.2-codex"],
+        : oauthProvider === "openrouter"
+          ? ["anthropic/claude-sonnet-4.5"]
+          : ["gpt-5.2-codex"],
     providerInfo: async (providerCode) => ({
-      name: providerCode === "claude" ? "Anthropic API" : "OpenAI API",
+      name: providerCode === "claude" ? "Anthropic API" : providerCode === "openrouter" ? "OpenRouter" : "OpenAI API",
       active: providerCode === "claude",
     }),
+    providerHasApiKey: async () => true,
     statuses: async () => [
       {
         oauth_provider: "anthropic",
@@ -85,28 +87,52 @@ Deno.test("start with flag off returns 409 oauth_disabled", async () => {
   assertEquals(refusals[0]?.reason, "oauth_disabled");
 });
 
-Deno.test("capabilities lists only anthropic and openai-codex and never includes token fields", async () => {
+Deno.test("start answers the authorize URL and the flow the browser needs", async () => {
+  const cases: Array<[string, string]> = [
+    ["openrouter", "pkce_callback"],
+    ["anthropic", "pkce_paste"],
+  ];
+  for (const [oauthProvider, flow] of cases) {
+    const response = await callHandler(
+      { action: "start", oauth_provider: oauthProvider },
+      baseDeps({ start: async () => ({ authorizeUrl: "https://provider.test/auth?x=1" }) }),
+    );
+    assertEquals(response.status, 200);
+    const body = await response.json();
+    assertEquals(body.authorize_url, "https://provider.test/auth?x=1");
+    assertEquals(body.flow, flow);
+  }
+});
+
+Deno.test("capabilities lists every provider with a client and never includes token fields", async () => {
   const response = await callHandler({ action: "capabilities" }, baseDeps());
   assertEquals(response.status, 200);
   const body = await response.json();
   assertEquals(body.enabled, true);
   const ids = body.providers.map((p: { oauth_provider: string }) => p.oauth_provider);
-  assertEquals(ids, ["anthropic", "openai-codex"]);
-  assert(!ids.includes("github-copilot"));
+  assertEquals(ids, ["anthropic", "openai-codex", "openrouter"]);
+  assert(!ids.includes("github-copilot"), "a provider without a client has no sign-in we could drive");
   const text = JSON.stringify(body);
   assert(!/refresh|access|sk-ant/.test(text), "no token-shaped field may appear");
   const anthropic = body.providers[0];
   assertEquals(anthropic.provider_code, "claude");
   assertEquals(anthropic.name, "Anthropic API");
   assertEquals(anthropic.active, true);
+  assertEquals(anthropic.flow, "pkce_paste");
   const codex = body.providers.find((p: { oauth_provider: string }) => p.oauth_provider === "openai-codex");
   assertEquals(codex.active, false, "a provider the admin switched off is reported inactive");
+  assertEquals(codex.flow, "pkce_paste");
   assertEquals(anthropic.status, "connected");
   assertEquals(anthropic.account_label, "me@example.com");
   assertEquals(anthropic.models, ["claude-sonnet-4-5", "claude-opus-5"]);
   const openai = body.providers[1];
   assertEquals(openai.provider_code, "openai");
   assertEquals(openai.status, "not_connected");
+  const openrouter = body.providers[2];
+  assertEquals(openrouter.provider_code, "openrouter");
+  assertEquals(openrouter.name, "OpenRouter");
+  assertEquals(openrouter.flow, "pkce_callback");
+  assertEquals(openrouter.models, ["anthropic/claude-sonnet-4.5"]);
 });
 
 Deno.test("capabilities works while the flag is off", async () => {
@@ -117,21 +143,51 @@ Deno.test("capabilities works while the flag is off", async () => {
   assertEquals(response.status, 200);
   const body = await response.json();
   assertEquals(body.enabled, false);
-  assertEquals(body.providers.length, 2);
+  assertEquals(body.providers.length, 3);
 });
 
-Deno.test("finish maps AiOAuthError invalid_state to 400 with code", async () => {
+Deno.test("capabilities report whether the provider also carries an API key", async () => {
+  const response = await callHandler({ action: "capabilities" }, baseDeps({
+    providerHasApiKey: async (providerCode) => providerCode === "claude",
+  }));
+  assertEquals(response.status, 200);
+  const body = await response.json();
+  const anthropic = body.providers.find((p: { provider_code: string }) => p.provider_code === "claude");
+  const openai = body.providers.find((p: { provider_code: string }) => p.provider_code === "openai");
+  assertEquals(anthropic.has_api_key, true);
+  assertEquals(openai.has_api_key, false);
+});
+
+Deno.test("a failed key read leaves the key status unknown", async () => {
+  const response = await callHandler({ action: "capabilities" }, baseDeps({
+    providerHasApiKey: async () => {
+      throw new Error("provider_api_keys unreadable");
+    },
+  }));
+  assertEquals(response.status, 200);
+  const body = await response.json();
+  for (const provider of body.providers) {
+    assertEquals(provider.has_api_key, null, "an unreadable key table is not a missing key");
+  }
+});
+
+Deno.test("a refused finish answers 400 with its code and logs only the code", async () => {
+  const refusals: Array<{ action: string; reason: string; userId: string | null }> = [];
   const response = await callHandler(
     { action: "finish", oauth_provider: "anthropic", pasted: "http://localhost:53692/callback?code=x&state=y" },
     baseDeps({
       finish: async () => {
         throw new AiOAuthError("invalid_state", "login state is unknown, expired or already used");
       },
+      logRefusal: async (details) => {
+        refusals.push(details);
+      },
     }),
   );
   assertEquals(response.status, 400);
   const body = await response.json();
   assertEquals(body.error, "invalid_state");
+  assertEquals(refusals, [{ action: "finish", reason: "invalid_state", userId: USER_ID }]);
 });
 
 Deno.test("finish returns the connected account label", async () => {
