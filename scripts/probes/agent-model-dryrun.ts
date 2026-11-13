@@ -9,18 +9,50 @@ import {
 
 const REPORT_PATH = "docs/superpowers/reports/2026-11-12-curemed-model-dryrun.md";
 const REPORT_URL = new URL(`../../${REPORT_PATH}`, import.meta.url);
+/**
+ * The owner's copy: the same comparison with the conversation id and the reply
+ * excerpts in it. The repository's .gitignore ignores every `*.local` path, so it
+ * never reaches a commit -- and it must not.
+ */
+const DETAILED_REPORT_PATH = `${REPORT_PATH}.local`;
+const DETAILED_REPORT_URL = new URL(`../../${DETAILED_REPORT_PATH}`, import.meta.url);
 const REQUEST_TIMEOUT_MS = 120_000;
 
 const SandboxResponseSchema = z.object({
   ok: z.boolean().optional(),
-  reply: z.string().optional(),
+  // REQUIRED, and that is the whole point of it. The sandbox answers a turn it
+  // could not serve with an HTTP 200 body that carries NO reply: `{ ok: true,
+  // skipped: ... }` when a gate closed, `{ ok: false, error: ... }` when the turn
+  // failed. A schema that accepts those records a MISS for a model that never
+  // answered, and lets the turn join the sandbox's window as if it had.
+  reply: z.string(),
   tool_calls: z.array(z.object({
     name: z.string(),
     arguments: z.record(z.unknown()).optional(),
   })).optional(),
 });
 
-type SandboxResponse = z.infer<typeof SandboxResponseSchema>;
+/**
+ * One tool call as the sandbox reports it: the name and the arguments the model
+ * passed. The rows the tool RETURNED are not in it -- the sandbox keeps those in
+ * its own tool loop and never hands them to a caller.
+ */
+export interface SandboxToolCall {
+  name: string;
+  arguments?: Record<string, unknown>;
+}
+
+/**
+ * What the sandbox answered for one turn.
+ *
+ * "answered": the sandbox replied, so a model ran and the turn is in the thread.
+ * "no_reply": the body carries no reply at all -- a skip or an error envelope.
+ * "malformed": the body is not the shape the sandbox writes, so the probe cannot
+ * trust what it says.
+ */
+export type SandboxReply =
+  | { kind: "answered"; reply: string; toolCalls: SandboxToolCall[] }
+  | { kind: "failed"; reason: "no_reply" | "malformed" };
 
 function createAdminClient(supabaseUrl: string, serviceRoleKey: string) {
   return createClient(supabaseUrl, serviceRoleKey, {
@@ -58,19 +90,6 @@ interface ReplaySource {
   customerTurns: string[];
 }
 
-interface ReplayTurnInput {
-  supabaseUrl: string;
-  anonKey: string;
-  userJwt: string;
-  model: string;
-  testCaseKey: string;
-  platform: string;
-  socialAccountId: string;
-  inboundText: string;
-  /** The language the sandbox would answer in, or null when it cannot be established. */
-  expectedLanguage: ReplyLanguage | null;
-}
-
 /**
  * The state the sandbox's own thread carries at a turn.
  *
@@ -78,10 +97,12 @@ interface ReplayTurnInput {
  * rather than guessed from the replayed turns: the sandbox writes it after every reply,
  * so it holds exactly the language the sandbox itself would use at the next turn.
  *
- * `processedTurns` are the customer turns the sandbox actually processed. A turn whose
- * request FAILED never reached the thread, so it is in neither the window nor the
- * language -- and a later letterless turn scored against it would be judged against
- * language the sandbox never stored.
+ * `processedTurns` are the customer turns the sandbox actually processed, and only
+ * the ones it ANSWERED: a turn whose request failed might still be written by a
+ * sandbox that outlived the request, so the replay stops there rather than count it
+ * as processed. A turn in neither the window nor the language is a turn the sandbox
+ * never stored, and a later letterless turn scored against it would be judged
+ * against language the sandbox never wrote.
  */
 export interface SandboxState {
   /** The language the sandbox's thread carries, or null when it carries none. */
@@ -151,16 +172,30 @@ export function expectedSandboxLanguage(
 }
 
 /**
+ * What the probe knows about a turn's outcome in the sandbox.
+ *
+ * "answered": the sandbox replied. The turn is in the thread, and the thread's
+ * state is the one the probe measured against.
+ *
+ * "unknown": the request failed. The sandbox may still be running -- a client
+ * timeout does not stop the function -- and the turn it writes when it finishes
+ * lands in the thread. The probe cannot tell which turns the sandbox wrote, so a
+ * thread whose last turn is unknown is not replayed into again.
+ */
+export type TurnOutcome = "answered" | "unknown";
+
+/**
  * The state the sandbox carries after a turn.
  *
- * A turn that never reached the sandbox changed nothing: its text is in neither the
- * window nor the thread's language. A turn that did reach it joins the window.
+ * Only a turn the sandbox ANSWERED is known to be in the window. An unknown
+ * outcome might be in it, and the replay stops there rather than score a later
+ * turn against a window the probe cannot vouch for.
  */
 export function sandboxStateAfterTurn(
   state: SandboxState,
-  turn: { text: string; reachedTheSandbox: boolean },
+  turn: { text: string; outcome: TurnOutcome },
 ): SandboxState {
-  if (!turn.reachedTheSandbox) return state;
+  if (turn.outcome !== "answered") return state;
   return { ...state, processedTurns: [...state.processedTurns, turn.text] };
 }
 
@@ -181,8 +216,35 @@ function isRecord(candidate: unknown): candidate is Record<string, unknown> {
   return typeof candidate === "object" && candidate !== null && !Array.isArray(candidate);
 }
 
-function catalogCalledWithQuery(sandboxResponse: SandboxResponse): boolean {
-  return (sandboxResponse.tool_calls ?? []).some((call) => {
+/**
+ * The sandbox's answer to one turn.
+ *
+ * A body without a reply is NOT a model run. The sandbox answers a turn it could
+ * not serve with an HTTP 200 body that carries no reply, so a reply-less body is
+ * a turn that produced no answer -- not an answer that happens to be empty. The
+ * probe records it as a failure, so no model is scored on a turn it never ran.
+ */
+export function parseSandboxReply(body: unknown): SandboxReply {
+  const parsed = SandboxResponseSchema.safeParse(body);
+  if (parsed.success) {
+    // An empty reply is not an answer either: the sandbox routes an empty model
+    // reply to its no-reply path, so it never answers with one.
+    if (parsed.data.reply.trim().length === 0) return { kind: "failed", reason: "no_reply" };
+    return {
+      kind: "answered",
+      reply: parsed.data.reply,
+      toolCalls: parsed.data.tool_calls ?? [],
+    };
+  }
+  // No reply at all: the skip and error envelopes.
+  if (isRecord(body) && typeof body.reply !== "string") return { kind: "failed", reason: "no_reply" };
+  // A reply is there, but the body around it is not the shape the sandbox
+  // writes, so the probe cannot trust what it says.
+  return { kind: "failed", reason: "malformed" };
+}
+
+function catalogCalledWithQuery(toolCalls: readonly SandboxToolCall[]): boolean {
+  return toolCalls.some((call) => {
     const callArguments = call.arguments ?? {};
     if (callArguments.capability !== "search_products") return false;
     const parameters = isRecord(callArguments.parameters) ? callArguments.parameters : callArguments;
@@ -215,26 +277,89 @@ function markdownCell(text: string): string {
   return text.replaceAll("\n", " ").trim();
 }
 
-export function renderReport(resultRows: readonly ResultRow[], conversation: string): string {
-  const lines = [
-    "# CureMed model dry-run comparison",
-    "",
-    `Source conversation: \`${markdownCell(conversation)}\``,
-    "Generated by the owner-run sandbox probe. No reply was sent to the customer.",
-    "",
+/**
+ * The table, the limitation and the selection card.
+ *
+ * The columns are the ones the plan settled on and they measure what they say:
+ * the URL column says "any URL present" because the probe never sees the catalog
+ * rows the model read.
+ */
+function renderReportBody(
+  resultRows: readonly ResultRow[],
+  excerptCell: (row: ResultRow) => string,
+): string[] {
+  return [
     "## Results",
     "",
     "| Model | Turn | Latency ms | Reply language correct | Catalog tool called with non-empty query | Any URL present | Reply excerpt (120 chars) | Status |",
     "|---|---:|---:|---|---|---|---|---|",
     ...resultRows.map((row) =>
-      `| ${markdownCell(row.model)} | ${row.turn} | ${row.latencyMs} | ${languageCell(row.languageScore)} | ${row.catalogQuery ? "yes" : "no"} | ${row.urlPresent ? "yes" : "no"} | ${row.excerpt || "(no reply)"} | ${row.failure ? `failed: ${markdownCell(row.failure)}` : "ok"} |`
+      `| ${markdownCell(row.model)} | ${row.turn} | ${row.latencyMs} | ${languageCell(row.languageScore)} | ${row.catalogQuery ? "yes" : "no"} | ${row.urlPresent ? "yes" : "no"} | ${excerptCell(row)} | ${row.failure ? `failed: ${markdownCell(row.failure)}` : "ok"} |`
     ),
+    "",
+    "## What this report does not measure",
+    "",
+    "- Catalog grounding. The sandbox hands the probe the tool CALLS it made -- the",
+    "  name and the arguments -- and never the rows the catalog returned, so",
+    "  \"Catalog tool called with non-empty query\" says the catalog was SEARCHED, not",
+    "  that the answer came from it. A model that searches and then answers something",
+    "  unrelated scores exactly like one that answers from the rows. The probe cannot",
+    "  measure grounding without the rows and the sandbox does not expose them, so no",
+    "  grounding score is reported here. Read the answers in the owner copy beside this",
+    "  report before choosing a model.",
     "",
     "## Model selection",
     "",
     "- Primary: results pending owner review.",
     "- Fallback: results pending owner review.",
     "",
+  ];
+}
+
+/**
+ * The report the repository tracks.
+ *
+ * It carries NO customer data: the conversation id is redacted and the reply text
+ * is not written at all -- the excerpt column reports how long the reply was and
+ * nothing else. A conversation id can be phone-like and a reply can repeat the
+ * customer's own details, so a committed report that carried either would put
+ * customer data into the repository's history for good.
+ */
+export function renderReport(resultRows: readonly ResultRow[]): string {
+  const lines = [
+    "# CureMed model dry-run comparison",
+    "",
+    "Source conversation: (redacted -- this file carries no customer data)",
+    "Generated by the owner-run sandbox probe. No reply was sent to the customer.",
+    "",
+    "The reply text is not recorded here: the excerpt column reports how long the",
+    "reply was and nothing else, and the conversation id is redacted, so this file can",
+    "be committed. The unredacted detail is written beside it in the `.local` file, which",
+    "git ignores -- keep that file out of every commit.",
+    "",
+    ...renderReportBody(resultRows, (row) => (row.excerpt ? `(redacted, ${row.excerpt.length} chars)` : "(no reply)")),
+  ];
+  return lines.join("\n");
+}
+
+/**
+ * The same comparison WITH the material that must not be committed.
+ *
+ * It carries the conversation id and the reply excerpts, so it is written beside
+ * the tracked report under a `.local` name the repository's .gitignore ignores. It
+ * is the owner's copy to read, and it never goes into a commit.
+ */
+export function renderDetailedReport(resultRows: readonly ResultRow[], conversation: string): string {
+  const lines = [
+    "# CureMed model dry-run comparison -- owner copy, not for the repository",
+    "",
+    `Source conversation: \`${markdownCell(conversation)}\``,
+    "Generated by the owner-run sandbox probe. No reply was sent to the customer.",
+    "",
+    "This file carries the conversation id and the reply excerpts. The tracked report",
+    "beside it is redacted; keep this one out of every commit.",
+    "",
+    ...renderReportBody(resultRows, (row) => row.excerpt || "(no reply)"),
   ];
   return lines.join("\n");
 }
@@ -383,9 +508,34 @@ async function loadReplaySource(
   return { platform: owner.platform, socialAccountId: owner.socialAccountId, customerTurns };
 }
 
-async function replayTurn(input: ReplayTurnInput): Promise<Omit<ResultRow, "model" | "turn">> {
+/**
+ * One turn's request to the sandbox.
+ */
+export interface ReplayTurnInput {
+  supabaseUrl: string;
+  anonKey: string;
+  userJwt: string;
+  model: string;
+  testCaseKey: string;
+  platform: string;
+  socialAccountId: string;
+  inboundText: string;
+  /** The language the sandbox would answer in, or null when it cannot be established. */
+  expectedLanguage: ReplyLanguage | null;
+}
+
+/**
+ * The one call the probe makes to the sandbox. A seam, so the probe's own
+ * handling of a sandbox answer can be exercised without a network.
+ */
+export type SandboxFetch = (url: string, init: RequestInit) => Promise<Response>;
+
+export async function replayTurn(
+  input: ReplayTurnInput,
+  fetchImpl: SandboxFetch = fetch,
+): Promise<Omit<ResultRow, "model" | "turn">> {
   const startedAt = Date.now();
-  const response = await fetch(`${input.supabaseUrl}/functions/v1/ai-agent-reply`, {
+  const response = await fetchImpl(`${input.supabaseUrl}/functions/v1/ai-agent-reply`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -403,18 +553,107 @@ async function replayTurn(input: ReplayTurnInput): Promise<Omit<ResultRow, "mode
   });
   const latencyMs = Date.now() - startedAt;
   if (!response.ok) throw new Error(`Sandbox refused ${input.model} with HTTP ${response.status}`);
-  const parsedResponse = SandboxResponseSchema.safeParse(await response.json());
-  if (!parsedResponse.success) throw new Error(`Sandbox returned an unexpected response for ${input.model}`);
-  const sandboxResponse = parsedResponse.data;
-  const reply = sandboxResponse.reply ?? "";
+  const parsedReply = parseSandboxReply(await response.json());
+  if (parsedReply.kind === "failed") {
+    throw new Error(
+      parsedReply.reason === "no_reply"
+        ? `The sandbox returned no reply for ${input.model}`
+        : `The sandbox returned an unexpected response for ${input.model}`,
+    );
+  }
 
   return {
     latencyMs,
-    languageScore: scoreLanguage(reply, input.expectedLanguage),
-    catalogQuery: catalogCalledWithQuery(sandboxResponse),
-    urlPresent: hasUrl(reply),
-    excerpt: excerpt(reply),
+    languageScore: scoreLanguage(parsedReply.reply, input.expectedLanguage),
+    catalogQuery: catalogCalledWithQuery(parsedReply.toolCalls),
+    urlPresent: hasUrl(parsedReply.reply),
+    excerpt: excerpt(parsedReply.reply),
   };
+}
+
+/**
+ * Runs one turn and measures the answer.
+ */
+export type ReplayTurnRunner = (input: ReplayTurnInput) => Promise<Omit<ResultRow, "model" | "turn">>;
+
+/**
+ * Reads the language the sandbox's own thread carries.
+ */
+export type ThreadLanguageReader = (
+  scope: { userId: string; platform: string; conversationId: string },
+) => Promise<ReplyLanguage | null | undefined>;
+
+export interface ReplayModelOptions {
+  model: string;
+  turns: readonly string[];
+  languageMode: LanguageMode | null;
+  scope: { userId: string; platform: string; conversationId: string };
+  /** The request fields every turn of this model shares. */
+  request: Omit<ReplayTurnInput, "model" | "inboundText" | "expectedLanguage">;
+  runTurn: ReplayTurnRunner;
+  readThreadLanguage: ThreadLanguageReader;
+  onRow: (row: ResultRow) => void | Promise<void>;
+}
+
+/**
+ * Replays one model's turns into ONE sandbox thread.
+ *
+ * The replay STOPS at the first turn whose outcome the probe cannot establish. A
+ * failed request may still be running in the sandbox -- a client timeout does not
+ * stop the function -- and the turn it writes when it finishes changes the thread
+ * the next turn would be measured against: the window it reads and the language it
+ * carries are then not the ones the probe measured. The probe cannot tell which
+ * turns the sandbox wrote, so it stops instead of guessing.
+ *
+ * A fresh thread is no escape either: the thread carries the conversation's
+ * language, and a thread that starts empty expects the default language for the
+ * turns the real conversation answered in Arabic.
+ */
+export async function replayModelTurns(options: ReplayModelOptions): Promise<{ rows: ResultRow[]; stopped: boolean }> {
+  const rows: ResultRow[] = [];
+  let state: SandboxState = { customerLanguage: null, processedTurns: [], known: true };
+  for (const [index, inboundText] of options.turns.entries()) {
+    // The state the sandbox's OWN thread carries at this turn: the language it
+    // persisted, and the turns it processed. Read from the sandbox rather than
+    // guessed from the replayed words -- a turn the sandbox never saw changed
+    // nothing, and scoring against it would judge a later turn against language the
+    // sandbox never stored.
+    const persisted = await options.readThreadLanguage(options.scope);
+    state = { ...state, customerLanguage: persisted ?? null, known: persisted !== undefined };
+    const expectedLanguage = expectedSandboxLanguage(state, inboundText, options.languageMode);
+    const startedAt = Date.now();
+    let measurement: Omit<ResultRow, "model" | "turn">;
+    let outcome: TurnOutcome;
+    try {
+      measurement = await options.runTurn({
+        ...options.request,
+        model: options.model,
+        inboundText,
+        expectedLanguage,
+      });
+      outcome = "answered";
+    } catch (error) {
+      // The turn failed, and the probe cannot tell whether the sandbox wrote it.
+      outcome = "unknown";
+      measurement = {
+        latencyMs: Date.now() - startedAt,
+        languageScore: "indeterminate",
+        catalogQuery: false,
+        urlPresent: false,
+        excerpt: "",
+        failure: error instanceof Error ? error.message : String(error),
+      };
+    }
+    const row: ResultRow = { model: options.model, turn: index + 1, ...measurement };
+    rows.push(row);
+    // Only a turn the sandbox ANSWERED joins its window and its language.
+    state = sandboxStateAfterTurn(state, { text: inboundText, outcome });
+    await options.onRow(row);
+    // The thread's state is no longer the probe's to trust, so it is not replayed
+    // into again: the next model replays into its own thread.
+    if (outcome === "unknown") return { rows, stopped: true };
+  }
+  return { rows, stopped: false };
 }
 
 /**
@@ -606,6 +845,12 @@ async function main(): Promise<void> {
 
   const resultRows: ResultRow[] = [];
   let failures = 0;
+  // The tracked report carries no customer data; the owner's copy beside it does.
+  // Both are written after every turn, so an interrupted run still leaves a report.
+  const writeReports = async (rows: readonly ResultRow[]) => {
+    await Deno.writeTextFile(REPORT_URL, renderReport(rows));
+    await Deno.writeTextFile(DETAILED_REPORT_URL, renderDetailedReport(rows, conversation));
+  };
   // The account's CONFIGURED language mode, which the sandbox obeys. Read once: a mode
   // forced to Arabic or English decides the answer before the customer's words are read.
   const languageMode = await readConfiguredLanguageMode(admin, user.id, replaySource.socialAccountId);
@@ -623,57 +868,40 @@ async function main(): Promise<void> {
       testCaseKey,
     );
     if (!sandboxThread.ok) throw new Error(`The sandbox thread id is unusable: ${sandboxThread.error}`);
-    let state: SandboxState = { customerLanguage: null, processedTurns: [], known: true };
-    for (const [index, inboundText] of replaySource.customerTurns.entries()) {
-      // The state the sandbox's OWN thread carries at this turn: the language it
-      // persisted, and the turns it processed. Read from the sandbox rather than
-      // guessed from the replayed words -- a turn the sandbox never saw changed
-      // nothing, and scoring against it would judge a later turn against language the
-      // sandbox never stored.
-      const persisted = await readSandboxThreadLanguage(admin, {
+    const { stopped } = await replayModelTurns({
+      model,
+      turns: replaySource.customerTurns,
+      languageMode,
+      scope: {
         userId: user.id,
         platform: replaySource.platform,
         conversationId: sandboxThread.conversationId,
-      });
-      state = { ...state, customerLanguage: persisted ?? null, known: persisted !== undefined };
-      const expectedLanguage = expectedSandboxLanguage(state, inboundText, languageMode);
-      const startedAt = Date.now();
-      let measurement: Omit<ResultRow, "model" | "turn">;
-      let reachedTheSandbox = false;
-      try {
-        measurement = await replayTurn({
-          supabaseUrl,
-          anonKey,
-          userJwt,
-          model,
-          testCaseKey,
-          platform: replaySource.platform,
-          socialAccountId: replaySource.socialAccountId,
-          inboundText,
-          expectedLanguage,
-        });
-        reachedTheSandbox = true;
-      } catch (error) {
-        // One model or turn failing must not end the comparison: the report says
-        // which one failed, and the remaining models and turns still run.
-        failures += 1;
-        measurement = {
-          latencyMs: Date.now() - startedAt,
-          languageScore: "indeterminate",
-          catalogQuery: false,
-          urlPresent: false,
-          excerpt: "",
-          failure: error instanceof Error ? error.message : String(error),
-        };
-      }
-      resultRows.push({ model, turn: index + 1, ...measurement });
-      // Only a turn the sandbox processed joins its window and its language.
-      state = sandboxStateAfterTurn(state, { text: inboundText, reachedTheSandbox });
-      await Deno.writeTextFile(REPORT_URL, renderReport(resultRows, conversation));
-      console.log(`Completed ${model} turn ${index + 1}/${replaySource.customerTurns.length}`);
+      },
+      request: {
+        supabaseUrl,
+        anonKey,
+        userJwt,
+        testCaseKey,
+        platform: replaySource.platform,
+        socialAccountId: replaySource.socialAccountId,
+      },
+      runTurn: (input) => replayTurn(input),
+      readThreadLanguage: (scope) => readSandboxThreadLanguage(admin, scope),
+      onRow: async (row) => {
+        resultRows.push(row);
+        if (row.failure) failures += 1;
+        await writeReports(resultRows);
+        console.log(`Completed ${model} turn ${row.turn}/${replaySource.customerTurns.length}`);
+      },
+    });
+    if (stopped) {
+      console.warn(
+        `[probe] ${model}: the replay stopped at the turn whose outcome could not be established; that thread is not replayed into again, and the other models still run`,
+      );
     }
   }
   console.log(`Report written: ${REPORT_PATH}`);
+  console.log(`Owner copy (not for the repository): ${DETAILED_REPORT_PATH}`);
   if (failures > 0) console.log(`${failures} turn(s) failed; see the Status column in the report`);
 }
 

@@ -17,6 +17,17 @@
 // the authenticated account, because conversation ids are not unique across tenants,
 // and the URL column says "any URL present" because the probe never sees the catalog
 // rows the model read.
+//
+// Two more rules keep the numbers honest. A turn the sandbox did not ANSWER is a
+// failure, not a miss: the sandbox answers a turn it could not serve with an HTTP 200
+// body that carries no reply, and a probe that read that as an answer scored a model
+// on a turn it never ran. And a turn whose outcome the probe cannot establish ends
+// that model's replay: the sandbox may still be writing it, and the thread it writes
+// to is the one the next turn would be measured against.
+//
+// The report the repository tracks carries no customer data at all -- no conversation
+// id, no reply text -- so it can be committed. The owner's copy beside it has both,
+// under a name git ignores.
 import { assertEquals, assertRejects } from "https://deno.land/std@0.208.0/assert/mod.ts";
 import {
   dominantReplyLanguage,
@@ -24,11 +35,15 @@ import {
   expectedSandboxLanguage,
   findConversationOwner,
   hasUrl,
+  renderDetailedReport,
   renderReport,
+  replayModelTurns,
+  replayTurn,
   sandboxStateAfterTurn,
   scoreLanguage,
   type ConversationOwnerQuery,
   type ConversationOwnerRow,
+  type ReplayTurnInput,
   type ResultRow,
   type SandboxState,
 } from "./agent-model-dryrun.ts";
@@ -74,25 +89,24 @@ Deno.test("the account's configured language mode decides, as the sandbox does",
   assertEquals(expectedReplayLanguage(IMAGE_TURN, "ar", [], "en"), "en");
 });
 
-// A turn whose request FAILED never reached the sandbox, so its words are in neither
-// the window nor the thread's language. Scoring a later letterless turn against them
-// judged the reply against language the sandbox never stored.
-Deno.test("a turn the sandbox never saw is in neither the window nor the language", () => {
+// A turn the sandbox did not ANSWER is in neither the window nor the language: its
+// outcome is unknown, so the probe cannot claim the sandbox stored it.
+Deno.test("a turn the sandbox did not answer is in neither the window nor the language", () => {
   const empty: SandboxState = { customerLanguage: null, processedTurns: [], known: true };
 
-  // The turn failed: the request never reached the sandbox's thread.
+  // The turn failed: the probe cannot tell whether the sandbox stored it.
   const afterFailure = sandboxStateAfterTurn(empty, {
     text: "كريم الكعب متوفر؟",
-    reachedTheSandbox: false,
+    outcome: "unknown",
   });
   assertEquals(afterFailure.processedTurns, []);
   // So the next letterless turn is NOT expected in Arabic.
   assertEquals(expectedSandboxLanguage(afterFailure, IMAGE_TURN, "auto"), "en");
 
-  // A turn the sandbox did see joins its window.
+  // A turn the sandbox answered joins its window.
   const afterSuccess = sandboxStateAfterTurn(empty, {
     text: "كريم الكعب متوفر؟",
-    reachedTheSandbox: true,
+    outcome: "answered",
   });
   assertEquals(afterSuccess.processedTurns, ["كريم الكعب متوفر؟"]);
   assertEquals(expectedSandboxLanguage(afterSuccess, IMAGE_TURN, "auto"), "ar");
@@ -163,6 +177,23 @@ Deno.test("a reply with no prose in it is decided by its letters", () => {
 const OWNER = "user-owner";
 const OTHER_TENANT = "user-other";
 const CONVERSATION = "wa_96560003759_96555683677";
+
+/** The request fields every turn of a replay shares. */
+const TURN_REQUEST = {
+  supabaseUrl: "https://example.test",
+  anonKey: "anon-key",
+  userJwt: "user-jwt",
+  testCaseKey: "dryrun_model_a",
+  platform: "whatsapp",
+  socialAccountId: "acc-owner",
+};
+
+const TURN_INPUT: ReplayTurnInput = {
+  ...TURN_REQUEST,
+  model: "model-a",
+  inboundText: "كريم الكعب متوفر؟",
+  expectedLanguage: "ar",
+};
 
 interface FakeLogRow extends ConversationOwnerRow {
   /** The fake filters rows by column name, so the row reads like the table does. */
@@ -283,9 +314,20 @@ Deno.test("the report's URL column says it measures a URL, not a product link", 
     urlPresent: true,
     excerpt: "reply",
   };
-  const report = renderReport([row], CONVERSATION);
+  const report = renderReport([row]);
   assertEquals(report.includes("| Any URL present |"), true);
   assertEquals(report.includes("Product link"), false);
+});
+
+// The columns are the ones the plan settled on, and they measure what they say.
+Deno.test("the report's columns are the ones the plan settled on", () => {
+  const report = renderReport([]);
+  assertEquals(
+    report.includes(
+      "| Model | Turn | Latency ms | Reply language correct | Catalog tool called with non-empty query | Any URL present | Reply excerpt (120 chars) | Status |",
+    ),
+    true,
+  );
 });
 
 Deno.test("the URL metric counts any URL, which is why the column says so", () => {
@@ -294,4 +336,165 @@ Deno.test("the URL metric counts any URL, which is why the column says so", () =
   // so it cannot tell the product page from the shop's front door.
   assertEquals(hasUrl("See https://curemedkw.com/ for more"), true);
   assertEquals(hasUrl("كريم الكعب متوفر لدينا"), false);
+});
+
+// The tracked report is committed, so it carries no customer data: a conversation id
+// can be phone-like, and a reply can repeat the customer's own details.
+Deno.test("the tracked report carries no customer data", () => {
+  const row: ResultRow = {
+    model: "model-a",
+    turn: 1,
+    latencyMs: 12,
+    languageScore: "correct",
+    catalogQuery: true,
+    urlPresent: true,
+    excerpt: "كريم الكعب متوفر, 12 KWD, https://curemedkw.com/dentek",
+  };
+  const report = renderReport([row]);
+  assertEquals(report.includes("كريم"), false);
+  assertEquals(report.includes("KWD"), false);
+  assertEquals(report.includes("curemedkw.com"), false);
+  assertEquals(report.includes(CONVERSATION), false);
+  assertEquals(report.includes("Source conversation: `"), false);
+});
+
+// The owner's copy is the one with the material in it. It is written beside the
+// tracked report under a name git ignores, and it never goes into a commit.
+Deno.test("the owner copy carries what the tracked report redacts", () => {
+  const row: ResultRow = {
+    model: "model-a",
+    turn: 1,
+    latencyMs: 12,
+    languageScore: "correct",
+    catalogQuery: true,
+    urlPresent: true,
+    excerpt: "كريم الكعب متوفر, 12 KWD",
+  };
+  const detailed = renderDetailedReport([row], CONVERSATION);
+  assertEquals(detailed.includes(CONVERSATION), true);
+  assertEquals(detailed.includes("كريم"), true);
+  assertEquals(detailed.includes("KWD"), true);
+});
+
+// The design asks the comparison to measure a catalog-GROUNDED answer. The sandbox
+// hands the probe the tool calls it made and never the rows the catalog returned, so
+// the report says that instead of inventing a score the data cannot support.
+Deno.test("the report records that the catalog grounding is not measured", () => {
+  const report = renderReport([]);
+  assertEquals(report.includes("does not measure"), true);
+  assertEquals(report.includes("never the rows the catalog returned"), true);
+  // No column claims a grounding score.
+  assertEquals(report.includes("Catalog grounded"), false);
+  assertEquals(report.includes("| Grounded"), false);
+});
+
+// A 200 body without a reply is not a model run. The sandbox answers a turn it could
+// not serve with `{ ok: true, skipped: ... }` or `{ ok: false, error: ... }`: both are
+// HTTP 200 and neither carries a reply. Reading one as an answer scored a miss for a
+// model that never ran.
+Deno.test("a 200 response without a reply is a failure, not a miss", async () => {
+  const skipEnvelope = new Response(
+    JSON.stringify({ ok: true, skipped: "no_reply_generated" }),
+    { status: 200 },
+  );
+  await assertRejects(
+    () => replayTurn({ ...TURN_INPUT, expectedLanguage: "ar" }, async () => skipEnvelope),
+    Error,
+    "no reply",
+  );
+
+  const emptyBody = new Response("{}", { status: 200 });
+  await assertRejects(
+    () => replayTurn({ ...TURN_INPUT, expectedLanguage: "ar" }, async () => emptyBody),
+    Error,
+    "no reply",
+  );
+});
+
+Deno.test("a reply the sandbox wrote is measured", async () => {
+  const body = new Response(
+    JSON.stringify({
+      ok: true,
+      reply: "كريم الكعب متوفر",
+      tool_calls: [{
+        name: "search_products",
+        arguments: { capability: "search_products", parameters: { query: "كريم الكعب" } },
+      }],
+    }),
+    { status: 200 },
+  );
+  const measurement = await replayTurn({ ...TURN_INPUT, expectedLanguage: "ar" }, async () => body);
+  assertEquals(measurement.languageScore, "correct");
+  assertEquals(measurement.catalogQuery, true);
+  assertEquals(measurement.urlPresent, false);
+});
+
+// A turn the sandbox did not answer is a failure row, not a scored miss.
+Deno.test("a turn the sandbox did not answer is recorded as a failure, not a miss", async () => {
+  const { rows } = await replayModelTurns({
+    model: "model-a",
+    turns: ["كريم الكعب متوفر؟"],
+    languageMode: "auto",
+    scope: { userId: OWNER, platform: "whatsapp", conversationId: "wa_dryrun_model_a" },
+    request: TURN_REQUEST,
+    runTurn: async () => {
+      throw new Error("The sandbox returned no reply for model-a");
+    },
+    readThreadLanguage: async () => null,
+    onRow: () => {},
+  });
+
+  assertEquals(rows[0].languageScore, "indeterminate");
+  assertEquals(rows[0].failure, "The sandbox returned no reply for model-a");
+  const report = renderReport(rows);
+  assertEquals(report.includes("failed: The sandbox returned no reply for model-a"), true);
+  assertEquals(report.includes("| indeterminate |"), true);
+});
+
+// A failed request may still be running in the sandbox: a client timeout does not
+// stop the function, and the turn it writes when it finishes changes the thread the
+// next turn would be measured against. So the replay stops instead of reusing it.
+Deno.test("the replay stops at a turn whose outcome is unknown, so the thread is not reused", async () => {
+  const attempted: string[] = [];
+  const { rows, stopped } = await replayModelTurns({
+    model: "model-a",
+    turns: ["first turn", "second turn"],
+    languageMode: "auto",
+    scope: { userId: OWNER, platform: "whatsapp", conversationId: "wa_dryrun_model_a" },
+    request: TURN_REQUEST,
+    runTurn: async (input) => {
+      attempted.push(input.inboundText);
+      throw new Error("The request timed out");
+    },
+    readThreadLanguage: async () => null,
+    onRow: () => {},
+  });
+
+  assertEquals(attempted, ["first turn"]);
+  assertEquals(rows.length, 1);
+  assertEquals(stopped, true);
+  assertEquals(rows[0].languageScore, "indeterminate");
+  assertEquals(rows[0].failure, "The request timed out");
+});
+
+Deno.test("an answered turn keeps the replay going", async () => {
+  const attempted: string[] = [];
+  const { rows, stopped } = await replayModelTurns({
+    model: "model-a",
+    turns: ["first turn", "second turn"],
+    languageMode: "auto",
+    scope: { userId: OWNER, platform: "whatsapp", conversationId: "wa_dryrun_model_a" },
+    request: TURN_REQUEST,
+    runTurn: async (input) => {
+      attempted.push(input.inboundText);
+      return { latencyMs: 12, languageScore: "correct", catalogQuery: false, urlPresent: false, excerpt: "ok" };
+    },
+    readThreadLanguage: async () => null,
+    onRow: () => {},
+  });
+
+  assertEquals(attempted, ["first turn", "second turn"]);
+  assertEquals(rows.length, 2);
+  assertEquals(stopped, false);
+  assertEquals(rows[1].turn, 2);
 });
