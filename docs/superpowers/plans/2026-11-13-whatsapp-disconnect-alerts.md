@@ -36,9 +36,10 @@ and §9 (the in-app notification decision) are the parts that are easy to get su
 - **Do not** add a raw Supabase query to a visual component (§11). The banner's query moves into a hook.
 - **Do not** add a new table. Everything new is `account_metadata` JSONB plus five RPCs. `types.ts`
   does not change.
-- **Do not** flip `social_accounts.is_active` for a disconnected account. It must stay `false`: the
-  reconnectable list (`src/hooks/useReconnectableQrAccounts.ts:27`) and the webhook's account lookup
-  (`supabase/functions/whatsapp-evolution-webhook/index.ts`, `findAccount`) both depend on it.
+- **Do not** flip `social_accounts.is_active` **to true** for a disconnected account. It must stay `false`:
+  the reconnectable list (`src/hooks/useWhatsAppConnect.ts` / `useReconnectableQrAccounts.ts:27`) and the
+  webhook's account lookup (`supabase/functions/whatsapp-evolution-webhook/index.ts`, `findAccount`) both
+  depend on it. The watcher therefore sets it to **false** when it flags a dead session.
 - The debounce constants live in exactly one place: `supabase/functions/whatsapp-disconnect-watch/run.ts`.
   `DISCONNECT_GRACE_MINUTES = 10`, `DISCONNECT_BACKSTOP_MINUTES = 60`.
 - Never put a phone number in an email, a log line or an error message. The display name is the only
@@ -57,6 +58,30 @@ and §9 (the in-app notification decision) are the parts that are easy to get su
   `EVOLUTION_API_URL` / `EVOLUTION_API_KEY`). Do not add a 25th. The new code must only read env vars
   that are already in `infra/edge-runtime.required-env.json`: `RESEND_API_KEY`, `CRON_SECRET`,
   `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `SITE_URL`.
+
+## Review round corrections
+
+The plan below is the plan as it was written. The shipped implementation differs in five places,
+all of them corrections found in review on 2026-11-13. **The shipped migration is the source of
+truth**; the snippets in this document that show the old shape are marked.
+
+| # | The plan said | The implementation does | Why |
+|---|---|---|---|
+| 1 | `observe_whatsapp_disconnect_state` opens an episode whenever the state is terminal | It refuses to open one when `whatsapp_user_disconnected_at` is present, under the row lock | A disconnect the owner performed is not an outage, and the marker can land between the watcher listing the account and the observation |
+| 2 | One `whatsapp_disconnect_claimed_at` timestamp for the whole account | A **map keyed by recipient** (`{user: <ts>, admin: <ts>}`), and each claim is conditioned on that recipient's own claim | A failing owner send must never cost the admins their alert, and the admin claim must never block the owner's |
+| 3 | `mark_whatsapp_disconnect_emailed(account_id, kind)` writes the marker unconditionally | It takes the `episode_id` the claim returned and writes only when the open episode still carries it | A marker that outlives its episode silences the next outage |
+| 4 | The watcher's candidate query filters `.eq("is_active", true)` | `is_active` is **not** a filter | A disconnected Evolution account is inactive by design, so the filter skipped exactly the accounts the watcher exists to alert on |
+| 5 | The cron entry hardcodes `https://api.postora.cloud/functions/v1/...` | The endpoint is resolved at run time by `public.get_cron_functions_base_url()` | A staging or self-hosted database would have called production's watcher |
+
+Two further changes follow from the same review round and are not in the table above because they
+add behaviour rather than correct a stated one:
+
+- The episode carries an `episode_id`, and the sender's Resend call carries an
+  `Idempotency-Key` of `whatsapp-disconnect:<account>:<episode>:<recipient>`. A retry after a crash
+  is therefore the *same* email, which is what turns "at most one" from a hope into a guarantee.
+- The reactivation of an account and the reset of its episode happen in **one statement**, through
+  a `BEFORE UPDATE` trigger on `social_accounts`. A separate best-effort clear could fail, and the
+  surviving episode and marker then silenced the next real outage.
 
 ## File map
 
@@ -100,10 +125,14 @@ and §9 (the in-app notification decision) are the parts that are easy to get su
 **Interfaces — Produces:**
 - Column `whatsapp_evolution_instances.last_polled_at timestamptz`
 - RPC `public.observe_whatsapp_disconnect_state(p_account_id uuid, p_state text, p_terminal boolean) → jsonb`
-- RPC `public.claim_whatsapp_disconnect_email(p_account_id uuid, p_kind text) → boolean`
-- RPC `public.mark_whatsapp_disconnect_emailed(p_account_id uuid, p_kind text) → boolean`
+- RPC `public.claim_whatsapp_disconnect_email(p_account_id uuid, p_kind text) → uuid` (the episode id, or
+  NULL when the claim is refused — SUPERSEDED, the plan first said `→ boolean`)
+- RPC `public.mark_whatsapp_disconnect_emailed(p_account_id uuid, p_kind text, p_episode_id uuid) → boolean`
+  (SUPERSEDED, the plan first had no episode id)
 - RPC `public.clear_whatsapp_disconnect_episode(p_account_id uuid) → boolean`
 - RPC `public.mark_whatsapp_user_disconnected(p_account_id uuid) → boolean`
+- Trigger `social_accounts_clear_whatsapp_disconnect_on_reactivate` on `social_accounts`
+- Function `public.get_cron_functions_base_url() → text`
 - pg_cron job `whatsapp-disconnect-watch`
 
 - [ ] **Step 1: Write the SQL proof first** (`supabase/tests/whatsapp_disconnect_alerts.sql`). Copy the
@@ -123,17 +152,18 @@ and §9 (the in-app notification decision) are the parts that are easy to get su
      `observe_whatsapp_disconnect_state(acc2, 'connecting', false)` returns `NULL` and writes nothing.
   5. **E4 — other metadata keys survive.** Write `automation_handler` into `account_metadata` before
      E0 and assert it is still there afterwards.
-  6. **E5 — the claim is once-only per recipient.** `claim_whatsapp_disconnect_email(acc, 'user')` is
-     `true`; a second call with the same kind is `false`; `claim_whatsapp_disconnect_email(acc, 'admin')`
-     is `true` (the two recipients are independent).
+  6. **E5 — the claim is once-only per recipient.** `claim_whatsapp_disconnect_email(acc, 'user')` returns
+     the episode id; a second call with the same kind returns NULL; `claim_whatsapp_disconnect_email(acc,
+     'admin')` returns the same episode id (the two recipients are independent).
   7. **E6 — a stale claim is retaken.** Push `whatsapp_disconnect_claimed_at` back 31 minutes and assert
-     the claim succeeds again.
+     the claim succeeds again. A **malformed** timestamp is stale too, and never aborts the claim.
   8. **E7 — a claim needs an open episode.** On an account with no episode,
-     `claim_whatsapp_disconnect_email(acc2, 'user')` is `false`.
+     `claim_whatsapp_disconnect_email(acc2, 'user')` returns NULL.
   9. **E8 — an unknown kind is refused.** `claim_whatsapp_disconnect_email(acc, 'nobody')` raises.
-  10. **E9 — marking records the recipient.** `mark_whatsapp_disconnect_emailed(acc, 'user')` is `true`;
-      `account_metadata->>'whatsapp_disconnect_user_email_at'` is not null and
-      `account_metadata->>'whatsapp_disconnect_admin_email_at'` is null.
+  10. **E9 — marking records the recipient.** `mark_whatsapp_disconnect_emailed(acc, 'user', episode_id)`
+      is `true`; `account_metadata->>'whatsapp_disconnect_user_email_at'` is not null and
+      `account_metadata->>'whatsapp_disconnect_admin_email_at'` is null. A mark carrying a **different**
+      episode id writes nothing.
   11. **E10 — the deliberate-disconnect marker.** `mark_whatsapp_user_disconnected(acc)` is `true` and
       sets `whatsapp_user_disconnected_at`.
   12. **E11 — clearing removes everything.** Set `needs_reauth = true` and `last_refresh_error = 'x'` on
@@ -210,6 +240,13 @@ BEGIN
     RETURN NULL;
   END IF;
 
+  -- SUPERSEDED (review round): the shipped version also refuses to open an
+  -- episode for a deliberately disconnected account, and gives the episode an
+  -- episode_id. See "Review round corrections" above.
+  IF (v_meta ? 'whatsapp_user_disconnected_at') THEN
+    RETURN NULL;
+  END IF;
+
   IF NOT p_terminal THEN
     -- A transient observation only restarts an episode that is already open. It never opens
     -- one: an account that is merely reconnecting is not an outage.
@@ -220,12 +257,16 @@ BEGIN
       || jsonb_build_object('since', v_now, 'state', p_state, 'observed_at', v_now);
   ELSIF NOT (v_meta ? 'whatsapp_disconnect') THEN
     v_episode := jsonb_build_object(
+      'episode_id', gen_random_uuid()::text,
       'since', v_now, 'first_seen', v_now, 'state', p_state, 'observed_at', v_now);
   ELSE
     -- A terminal observation keeps since and first_seen: the streak anchor and the episode
-    -- anchor must not move once they are set.
+    -- anchor must not move once they are set. The episode_id stays too.
     v_episode := COALESCE(v_meta->'whatsapp_disconnect', '{}'::jsonb)
       || jsonb_build_object('state', p_state, 'observed_at', v_now);
+    IF NOT (v_episode ? 'episode_id') THEN
+      v_episode := v_episode || jsonb_build_object('episode_id', gen_random_uuid()::text);
+    END IF;
   END IF;
 
   UPDATE public.social_accounts
@@ -243,16 +284,24 @@ GRANT EXECUTE ON FUNCTION public.observe_whatsapp_disconnect_state(uuid, text, b
 
 -- 3. Reserve the alert for one recipient before sending it, so two overlapping runs cannot
 --    both send. A claim older than 30 minutes is treated as a failed send and may be retaken.
+--    SUPERSEDED (review round): the shipped version keeps the claims in a MAP keyed by
+--    recipient, refuses a deliberately disconnected account, returns the episode id and
+--    parses the claim timestamp in an exception-safe block. See "Review round corrections".
 CREATE OR REPLACE FUNCTION public.claim_whatsapp_disconnect_email(
   p_account_id uuid,
   p_kind text
-) RETURNS boolean
+) RETURNS uuid
 LANGUAGE plpgsql
 SECURITY DEFINER
 SET search_path = public, pg_temp
 AS $fn$
 DECLARE
+  v_meta jsonb;
+  v_claimed jsonb;
   v_marker text;
+  v_episode jsonb;
+  v_episode_id uuid;
+  v_claimed_at timestamptz;
 BEGIN
   v_marker := CASE p_kind
     WHEN 'user'  THEN 'whatsapp_disconnect_user_email_at'
@@ -264,34 +313,75 @@ BEGIN
       USING ERRCODE = 'invalid_parameter_value';
   END IF;
 
+  -- The row lock makes the claim atomic: the check below and the write that follows see
+  -- one state of the row, so two overlapping runs cannot both win the same recipient.
+  SELECT COALESCE(account_metadata, '{}'::jsonb) INTO v_meta
+    FROM public.social_accounts
+   WHERE id = p_account_id
+     AND platform = 'whatsapp'
+     AND connection_mode = 'evolution_qr'
+   FOR UPDATE;
+
+  IF NOT FOUND THEN
+    RETURN NULL;
+  END IF;
+
+  IF (v_meta ? 'whatsapp_user_disconnected_at') THEN
+    RETURN NULL;
+  END IF;
+
+  IF NOT (v_meta ? 'whatsapp_disconnect') THEN
+    RETURN NULL;
+  END IF;
+  IF (v_meta ? v_marker) THEN
+    RETURN NULL;
+  END IF;
+
+  v_episode := COALESCE(v_meta->'whatsapp_disconnect', '{}'::jsonb);
+  BEGIN
+    v_episode_id := (v_episode->>'episode_id')::uuid;
+  EXCEPTION WHEN others THEN
+    v_episode_id := NULL;
+  END;
+  IF v_episode_id IS NULL THEN
+    RETURN NULL;
+  END IF;
+
+  v_claimed := COALESCE(v_meta->'whatsapp_disconnect_claimed_at', '{}'::jsonb);
+  v_claimed_at := NULL;
+  BEGIN
+    v_claimed_at := (v_claimed->>p_kind)::timestamptz;
+  EXCEPTION WHEN others THEN
+    v_claimed_at := NULL;
+  END;
+  IF v_claimed_at IS NOT NULL
+     AND v_claimed_at >= clock_timestamp() - interval '30 minutes' THEN
+    RETURN NULL;
+  END IF;
+
   UPDATE public.social_accounts
      SET account_metadata = jsonb_set(
            COALESCE(account_metadata, '{}'::jsonb),
            '{whatsapp_disconnect_claimed_at}',
-           to_jsonb(clock_timestamp()::text))
+           jsonb_set(v_claimed, ARRAY[p_kind], to_jsonb(clock_timestamp()::text)))
    WHERE id = p_account_id
      AND platform = 'whatsapp'
-     AND connection_mode = 'evolution_qr'
-     AND COALESCE(account_metadata, '{}'::jsonb) ? 'whatsapp_disconnect'
-     AND NOT (COALESCE(account_metadata, '{}'::jsonb) ? v_marker)
-     AND (CASE
-             WHEN NOT (COALESCE(account_metadata, '{}'::jsonb) ? 'whatsapp_disconnect_claimed_at') THEN true
-             WHEN (account_metadata->>'whatsapp_disconnect_claimed_at') ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2} '
-               THEN (account_metadata->>'whatsapp_disconnect_claimed_at')::timestamptz
-                      < clock_timestamp() - interval '30 minutes'
-             ELSE true
-           END);
+     AND connection_mode = 'evolution_qr';
 
-  RETURN FOUND;
+  RETURN v_episode_id;
 END;
 $fn$;
 REVOKE ALL ON FUNCTION public.claim_whatsapp_disconnect_email(uuid, text) FROM PUBLIC, anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.claim_whatsapp_disconnect_email(uuid, text) TO service_role;
 
 -- 4. Record that a recipient's email went out for this episode.
+--    SUPERSEDED (review round): the shipped version takes the episode id the claim returned
+--    and writes the marker only when the open episode still carries it. See "Review round
+--    corrections" above.
 CREATE OR REPLACE FUNCTION public.mark_whatsapp_disconnect_emailed(
   p_account_id uuid,
-  p_kind text
+  p_kind text,
+  p_episode_id uuid
 ) RETURNS boolean
 LANGUAGE plpgsql
 SECURITY DEFINER
@@ -299,6 +389,10 @@ SET search_path = public, pg_temp
 AS $fn$
 DECLARE
   v_marker text;
+  v_meta jsonb;
+  v_episode jsonb;
+  v_episode_id uuid;
+  v_claimed jsonb;
 BEGIN
   v_marker := CASE p_kind
     WHEN 'user'  THEN 'whatsapp_disconnect_user_email_at'
@@ -308,6 +402,36 @@ BEGIN
   IF v_marker IS NULL THEN
     RAISE EXCEPTION 'unknown whatsapp disconnect alert kind: %', p_kind
       USING ERRCODE = 'invalid_parameter_value';
+  END IF;
+
+  IF p_episode_id IS NULL THEN
+    RETURN FALSE;
+  END IF;
+
+  SELECT COALESCE(account_metadata, '{}'::jsonb) INTO v_meta
+    FROM public.social_accounts
+   WHERE id = p_account_id
+     AND platform = 'whatsapp'
+     AND connection_mode = 'evolution_qr'
+   FOR UPDATE;
+
+  IF NOT FOUND THEN
+    RETURN FALSE;
+  END IF;
+
+  v_episode := COALESCE(v_meta->'whatsapp_disconnect', '{}'::jsonb);
+  BEGIN
+    v_episode_id := (v_episode->>'episode_id')::uuid;
+  EXCEPTION WHEN others THEN
+    v_episode_id := NULL;
+  END;
+  IF v_episode_id IS DISTINCT FROM p_episode_id THEN
+    RETURN FALSE;
+  END IF;
+
+  v_claimed := COALESCE(v_meta->'whatsapp_disconnect_claimed_at', '{}'::jsonb);
+  IF NOT (v_claimed ? p_kind) THEN
+    RETURN FALSE;
   END IF;
 
   UPDATE public.social_accounts
@@ -322,8 +446,8 @@ BEGIN
   RETURN FOUND;
 END;
 $fn$;
-REVOKE ALL ON FUNCTION public.mark_whatsapp_disconnect_emailed(uuid, text) FROM PUBLIC, anon, authenticated;
-GRANT EXECUTE ON FUNCTION public.mark_whatsapp_disconnect_emailed(uuid, text) TO service_role;
+REVOKE ALL ON FUNCTION public.mark_whatsapp_disconnect_emailed(uuid, text, uuid) FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.mark_whatsapp_disconnect_emailed(uuid, text, uuid) TO service_role;
 
 -- 5. Close the episode: the account is healthy again, or it has been reconnected. The red
 --    flag goes with it. Only evolution_qr rows are touched: on every other platform
@@ -401,7 +525,9 @@ BEGIN
       'whatsapp-disconnect-watch',
       '2,7,12,17,22,27,32,37,42,47,52,57 * * * *',
       $$
-      SELECT net.http_post(url := 'https://api.postora.cloud/functions/v1/whatsapp-disconnect-watch', headers := jsonb_build_object('Content-Type','application/json','Authorization','Bearer ' || get_cron_secret()), body := '{}'::jsonb);
+      -- SUPERSEDED (review round): the shipped version resolves the endpoint from
+      -- public.get_cron_functions_base_url() instead of baking in the production domain.
+      SELECT net.http_post(url := public.get_cron_functions_base_url() || '/functions/v1/whatsapp-disconnect-watch', headers := jsonb_build_object('Content-Type','application/json','Authorization','Bearer ' || get_cron_secret()), body := '{}'::jsonb);
       $$
     );
   END IF;
@@ -663,7 +789,9 @@ Deno.serve(async (req) => {
           .select("id, whatsapp_evolution_instances!inner(instance_name, last_polled_at)")
           .eq("platform", "whatsapp")
           .eq("connection_mode", "evolution_qr")
-          .eq("is_active", true)
+          // SUPERSEDED (review round): is_active is NOT a filter. A disconnected
+          // Evolution account is inactive by design, so this filter skipped exactly
+          // the accounts the watcher exists to alert on.
           .not("platform_user_id", "like", "pending_%")
           .not("platform_user_id", "like", "retired_%")
           .is("account_metadata->whatsapp_user_disconnected_at", null)
@@ -1170,21 +1298,35 @@ Deno.serve(async (req) => {
           p_kind: kind,
         });
         if (error) throw error;
-        return data === true;
+        // SUPERSEDED (review round): the RPC returns the episode id, not a boolean.
+        return typeof data === "string" ? data : null;
       },
       async send(payload) {
-        const { error } = await resend.emails.send({
-          from: FROM_SENDER,
-          to: payload.to,
-          subject: payload.subject,
-          html: payload.html,
+        // SUPERSEDED (review round): a raw fetch, because the pinned SDK cannot set the
+        // Idempotency-Key header that makes a retry the same email.
+        const response = await fetch("https://api.resend.com/emails", {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${resendApiKey}`,
+            "Content-Type": "application/json",
+            "Idempotency-Key": payload.idempotencyKey,
+          },
+          body: JSON.stringify({
+            from: FROM_SENDER,
+            to: payload.to,
+            subject: payload.subject,
+            html: payload.html,
+          }),
         });
-        if (error) throw new Error(error.message);
+        if (!response.ok) {
+          throw new Error(`Resend returned ${response.status}`);
+        }
       },
-      async mark(accountId, kind) {
+      async mark(accountId, kind, episodeId) {
         const { data, error } = await admin.rpc("mark_whatsapp_disconnect_emailed", {
           p_account_id: accountId,
           p_kind: kind,
+          p_episode_id: episodeId,
         });
         if (error) throw error;
         return data === true;
@@ -1238,6 +1380,14 @@ git commit -- supabase/functions/send-whatsapp-disconnect-alert/index.ts
 
   The call must be added to the `"open"` branch only. The `"close"` branch (line 206) must not clear
   anything: it is the disconnection itself.
+
+  **SUPERSEDED (review round):** the best-effort call is not enough on its own. When it failed, the
+  old episode and its "already emailed" marker survived the reconnect, and the next real outage
+  reused that episode — so the marker silenced the new alert. The shipped migration therefore also
+  installs a `BEFORE UPDATE` trigger on `social_accounts`
+  (`clear_whatsapp_disconnect_on_reactivate`) that performs the reset **in the same statement** as
+  the activation, for every path that flips `is_active` back to true. The explicit call stays for
+  the case where the account was already active and the trigger therefore does not fire.
 
 - [ ] **Step 2: Mark the deliberate disconnect.**
   In `supabase/functions/_shared/whatsappDisconnect.ts`, inside `disconnectWhatsAppAccount`, after the
