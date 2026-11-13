@@ -133,12 +133,19 @@ Formally, the episode record holds two timestamps:
 
 | Field | Meaning | Reset by |
 |---|---|---|
-| `since` | Start of the current **continuous terminal streak**. | Any transient (`connecting`) observation. |
+| `since` | Start of the current **continuous terminal streak**. It is **null** while no terminal streak runs. | Any transient (`connecting`) observation clears it; the terminal observation that follows starts a new streak. |
 | `first_seen` | Start of the **episode**. Never reset while the episode is open. | Only by `clear` (healthy / reconnected). |
 
-- `now - since >= 10 min` → **continuous outage**. Alert. This is the primary rule.
+- `now - since >= 10 min` → **continuous outage**. Alert. This is the primary rule. It only
+  applies while a terminal streak is running, so a transient observation can never age into it.
 - `now - first_seen >= 60 min` → **persistently unhealthy** (flapping or stuck). Alert. This is the
   backstop for an account that drops every few minutes; without it a pathological flap would never alert.
+
+A transient observation may **open** the episode — it sets `first_seen` — but it never starts a
+terminal streak. An account that never leaves `connecting` is broken, and the backstop needs a
+`first_seen` to count from; without one, an account stuck in `connecting` would never be alerted
+at all. A transient-only episode therefore has `since = null`: the ten minute rule is out of
+reach for it and only the sixty minute backstop can fire.
 
 Both the dashboard red flag and the email use this one rule, evaluated in one place. There is no second
 debounce, no "flag immediately, email later" split, and no timer in the browser.
@@ -212,11 +219,20 @@ For each candidate account, in one run:
    setup page as reconnectable.
 3. Classify the state as healthy / transient / terminal.
 4. **Healthy** → `clear_whatsapp_disconnect_episode(account_id)`: removes the episode, both email
-   markers and the red flag.
-5. **Transient** → `observe_whatsapp_disconnect_state(..., terminal = false)`: restarts the streak
-   (`since = now`), keeps `first_seen`.
+   markers and the red flag. The exception is an account **this watcher deactivated**: the watcher
+   sets `is_active = false` when it flags a dead session, and the session can come back on its own.
+   For such an account the healthy poll calls `restore_whatsapp_disconnect_account(account_id)`,
+   which reactivates the row and clears the episode **in one statement**. The restore is conditional
+   in SQL: the row must be inactive, its open episode must carry `flagged_at` (so it is the episode
+   the watcher flagged and not one the owner or the webhook opened), and it must carry no
+   deliberate-disconnect marker. An account the owner disconnected on purpose, or one that was
+   inactive for another reason, is never resurrected.
+5. **Transient** → `observe_whatsapp_disconnect_state(..., terminal = false)`: clears the terminal
+   streak (`since = null`), keeps `first_seen`, and opens the episode when there is none — an account
+   stuck in `connecting` needs a `first_seen` for the sixty minute backstop.
 6. **Terminal** → `observe_whatsapp_disconnect_state(..., terminal = true)`: opens the episode if there is
-   none, keeps `since` / `first_seen` otherwise.
+   none, keeps `first_seen` otherwise, and starts a new terminal streak when the previous observation
+   was not terminal (`since = now`).
 7. Evaluate the debounce against the returned episode. If due:
    - call `flag_whatsapp_disconnect_episode(account_id, episode_id, <sanitized message>)`, which sets
      `is_active = false`, `needs_reauth = true` and `last_refresh_error` **only while that episode is
@@ -234,7 +250,10 @@ an account the owner disconnected on purpose.
 **Flagging deactivates the account.** `is_active = false` is what makes the account appear in
 the reconnectable list (`useReconnectableQrAccounts`) and in the banner's inactive query, so the
 watcher sets it in the same statement that sets `needs_reauth`. Without it the red banner would
-appear for an account the owner cannot resume.
+appear for an account the owner cannot resume. The account is set back to `is_active = true` in
+exactly one case: a healthy poll on an account whose open episode is the one the watcher flagged
+(see step 4 above). That restore is the only path that flips the flag back, and it never touches
+an account the owner disconnected on purpose.
 
 ### 4.2 Bounded work
 
@@ -243,6 +262,12 @@ recently polled. Poll freshness lives in `whatsapp_evolution_instances.last_poll
 generated types do not carry (that table is not in `src/integrations/supabase/types.ts`), so no type
 regeneration is needed. The Evolution API call is the only outbound request and it is sequential and
 bounded; there is no fan-out and no unbounded `waitUntil` work.
+
+**The freshness window is shorter than the cron interval.** `last_polled_at` is written *after* the
+Evolution call, so on the next five-minute tick the row's age is a little under five minutes. A
+cutoff of exactly five minutes would therefore skip that account and halve the polling cadence to
+ten minutes. The window is `POLL_FRESHNESS_MINUTES = POLL_CRON_INTERVAL_MINUTES - 1` (four minutes),
+so every account is polled on every tick.
 
 ---
 
@@ -438,10 +463,11 @@ undelivered-store-orders incident (`account_metadata.undelivered_store_events`):
 ```jsonc
 "whatsapp_disconnect": {
   "episode_id":  "3f1c…",                      // identity of THIS episode
-  "since":       "2026-11-13T10:00:00.000Z",  // start of the current continuous terminal streak
+  "since":       "2026-11-13T10:00:00.000Z",  // start of the current continuous terminal streak (null while none runs)
   "first_seen":  "2026-11-13T09:55:00.000Z",  // start of the episode
   "state":       "close",                      // the last observed Evolution state
-  "observed_at": "2026-11-13T10:05:00.000Z"
+  "observed_at": "2026-11-13T10:05:00.000Z",
+  "flagged_at":  "2026-11-13T10:15:00.000Z"   // the watcher flagged this episode (and deactivated the account)
 }
 ```
 
@@ -452,6 +478,11 @@ plus two sibling markers and one deliberate-disconnect marker:
 | `account_metadata.whatsapp_disconnect_user_email_at` | the owner email for this episode has been sent |
 | `account_metadata.whatsapp_disconnect_admin_email_at` | the admin email for this episode has been sent |
 | `account_metadata.whatsapp_user_disconnected_at` | the owner disconnected this account deliberately — never alert |
+
+**`flagged_at` is what makes the episode "the watcher's".** The flag writes it in the same
+statement that sets `is_active = false`, and the conditional restore refuses any account whose
+open episode does not carry it. Without that stamp, a healthy poll could reactivate an account
+that was inactive for a reason that has nothing to do with this watcher.
 
 **`episode_id` is what binds a claim to its episode.** It is generated when the episode opens
 and never moves while the episode is open. The claim returns it and the mark requires it, so a
@@ -594,6 +625,30 @@ disconnect an Evolution account: the `whatsapp-oauth` `"disconnect"` action
 `src/hooks/useWhatsAppConnect.ts:138-148`) and the bridge's `logoutInstance` action
 (`supabase/functions/whatsapp-evolution-bridge/index.ts:375-382`).
 
+### 8.1 Accounts that were disconnected before this feature existed
+
+The marker is written by the teardown, and the teardown only ran **after** this feature existed.
+An account the owner disconnected *before* the rollout therefore carries no marker, and the watcher
+would poll it, find a still-closed remote session, and email the owner about a disconnect they
+performed on purpose — the exact false alert this section forbids.
+
+The migration therefore runs a **one-time backfill** over every `evolution_qr` WhatsApp account
+that was already `is_active = false` when it ran, and stamps each one with
+`whatsapp_user_disconnected_at` set to the rollout instant (`2026-11-13 00:00:00+00`, the value the
+migration passes to `public.backfill_whatsapp_legacy_disconnects`). The choice is deliberately
+conservative: a missed alert is recoverable, a false "please reconnect" email about a deliberate
+disconnect is not.
+
+Consequences:
+
+- A pre-rollout inactive account is **never alerted** and is not polled at all — the watcher skips
+  every account carrying the marker.
+- It re-enters the watching when it is **reactivated**: the reactivation trigger (§7.4) clears
+  `whatsapp_user_disconnected_at` in the same statement as the activation, so a reactivated account
+  is polled again and can alert on a future outage.
+- The backfill never touches an active account, a Cloud API WhatsApp row, a Meta row, or a row that
+  already carries the marker.
+
 ---
 
 ## 9. In-app notification — decision
@@ -638,12 +693,14 @@ ALTER TABLE public.whatsapp_evolution_instances
 ```
 
 That is the **only** schema change. Everything else is `account_metadata` JSONB keys, `needs_reauth`,
-`last_refresh_error` — all already typed — plus seven service-role-only SECURITY DEFINER RPCs
+`last_refresh_error` — all already typed — plus nine service-role-only SECURITY DEFINER RPCs
 (`observe_whatsapp_disconnect_state`, `claim_whatsapp_disconnect_email`,
 `mark_whatsapp_disconnect_emailed`, `clear_whatsapp_disconnect_episode`,
 `mark_whatsapp_user_disconnected`, `unmark_whatsapp_user_disconnected`,
-`flag_whatsapp_disconnect_episode`), the cron base-URL resolver
-`get_cron_functions_base_url()` and the reactivation trigger function.
+`flag_whatsapp_disconnect_episode`, `restore_whatsapp_disconnect_account`,
+`backfill_whatsapp_legacy_disconnects`), the cron base-URL resolver
+`get_cron_functions_base_url()` and the reactivation trigger function
+`clear_whatsapp_disconnect_on_reactivate()`.
 
 Index (ARCHITECTURE.md §23, "index foreign keys and frequent filters where appropriate"):
 

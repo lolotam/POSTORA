@@ -21,10 +21,16 @@ DECLARE
   acc_cloud uuid := 'a7a7a7a7-0004-4111-8111-a7a7a7a7a7a7';
   acc_meta  uuid := 'a7a7a7a7-0005-4111-8111-a7a7a7a7a7a7';
   acc_delib uuid := 'a7a7a7a7-0006-4111-8111-a7a7a7a7a7a7';
+  acc_trans uuid := 'a7a7a7a7-0007-4111-8111-a7a7a7a7a7a7';
+  acc_flag  uuid := 'a7a7a7a7-0008-4111-8111-a7a7a7a7a7a7';
+  acc_legacy uuid := 'a7a7a7a7-0009-4111-8111-a7a7a7a7a7a7';
+  acc_stuck uuid := 'a7a7a7a7-0010-4111-8111-a7a7a7a7a7a7';
   ep        jsonb;
   ep_two    jsonb;
   since0    timestamptz;
+  since1    timestamptz;
   first0    timestamptz;
+  trans_ep  text;
   claim_ep  uuid;
   other_ep  uuid;
 BEGIN
@@ -42,6 +48,9 @@ BEGIN
   -- acc_cloud: a WhatsApp row connected through the Cloud API, not Evolution QR.
   -- acc_meta : a Meta row. Neither may ever be touched by this feature.
   -- acc_delib: a QR row used for the deliberate-disconnect and late-mark cases.
+  -- acc_trans: a QR row used for the transient (connecting) episode cases.
+  -- acc_flag : a QR row used for the healthy-poll restore case.
+  -- acc_legacy: a QR row that was already inactive before this feature existed.
   INSERT INTO public.social_accounts
     (id, user_id, platform, platform_user_id, access_token, workspace_id,
      is_active, connection_mode, account_metadata)
@@ -51,7 +60,11 @@ BEGIN
     (acc_two, u_a, 'whatsapp', '96566600002', '', ws_a, true, 'evolution_qr', '{}'),
     (acc_cloud, u_a, 'whatsapp', '96566600003', '', ws_a, true, 'cloud_api', '{}'),
     (acc_meta, u_a, 'facebook', 'fb-wda-0001', '', ws_a, true, 'cloud_api', '{}'),
-    (acc_delib, u_a, 'whatsapp', '96566600004', '', ws_a, true, 'evolution_qr', '{}');
+    (acc_delib, u_a, 'whatsapp', '96566600004', '', ws_a, true, 'evolution_qr', '{}'),
+    (acc_trans, u_a, 'whatsapp', '96566600007', '', ws_a, true, 'evolution_qr', '{}'),
+    (acc_flag, u_a, 'whatsapp', '96566600008', '', ws_a, true, 'evolution_qr', '{}'),
+    (acc_legacy, u_a, 'whatsapp', '96566600009', '', ws_a, false, 'evolution_qr', '{}'),
+    (acc_stuck, u_a, 'whatsapp', '96566600010', '', ws_a, true, 'evolution_qr', '{}');
 
   -- ------------------------------------------------- E0: the episode opens once
   ep := public.observe_whatsapp_disconnect_state(acc, 'close', true);
@@ -77,21 +90,33 @@ BEGIN
   ASSERT (ep_two->>'first_seen')::timestamptz = first0, 'E1 first_seen is kept';
   ASSERT ep_two->>'episode_id' = ep->>'episode_id', 'E1 the episode id is kept';
 
-  -- -------------------------- E2: a transient observation re-stamps but keeps it
+  -- -------------------------- E2: a transient observation breaks the terminal streak
+  -- `since` is the start of the CURRENT CONTINUOUS TERMINAL STREAK. A transient observation
+  -- breaks that streak, so `since` is cleared: the ten minute grace window must never count
+  -- pre-terminal time. The episode and its anchors stay.
   ep_two := public.observe_whatsapp_disconnect_state(acc, 'connecting', false);
   ASSERT ep_two IS NOT NULL, 'E2 the episode survives a transient observation';
   ASSERT ep_two->>'state' = 'connecting', 'E2 the transient state is recorded';
-  ASSERT (ep_two->>'since')::timestamptz >= since0, 'E2 since does not move backwards';
-  ASSERT (ep_two->>'since')::timestamptz > since0, 'E2 since moved forward';
+  ASSERT ep_two->>'since' IS NULL, 'E2 a transient observation clears the terminal streak';
+  ASSERT ep_two->>'first_seen' IS NOT NULL, 'E2 the episode keeps its anchor';
   ASSERT (ep_two->>'first_seen')::timestamptz = first0, 'E2 first_seen is kept';
   ASSERT ep_two->>'episode_id' = ep->>'episode_id', 'E2 the episode id is kept';
 
-  -- ------------------------------- E3: a transient observation opens no episode
-  ASSERT public.observe_whatsapp_disconnect_state(acc_two, 'connecting', false) IS NULL,
-    'E3 a transient observation opens nothing';
+  -- ------------------- E3: a transient observation may open an episode, without a streak
+  -- An account stuck in `connecting` is broken, and the sixty minute backstop needs a
+  -- first_seen to count from. A transient observation therefore opens the episode -- but it
+  -- never starts a terminal streak, so the ten minute rule stays out of reach.
+  ep_two := public.observe_whatsapp_disconnect_state(acc_trans, 'connecting', false);
+  ASSERT ep_two IS NOT NULL, 'E3 a transient observation opens the episode';
+  ASSERT ep_two->>'first_seen' IS NOT NULL, 'E3 the episode carries first_seen';
+  ASSERT ep_two->>'since' IS NULL, 'E3 the episode carries no terminal streak';
+  ASSERT ep_two->>'episode_id' IS NOT NULL, 'E3 the episode carries an episode id';
+  ASSERT (SELECT account_metadata->'whatsapp_disconnect' = ep_two
+            FROM public.social_accounts WHERE id = acc_trans),
+    'E3 the transient episode is stored on the row';
   ASSERT (SELECT account_metadata->'whatsapp_disconnect' IS NULL
             FROM public.social_accounts WHERE id = acc_two),
-    'E3 nothing was written for the transient observation';
+    'E3 nothing was written for a row that was not observed';
 
   -- ----------------------------------------- E4: unrelated metadata is preserved
   ASSERT (SELECT account_metadata->>'automation_handler' = 'internal'
@@ -447,6 +472,168 @@ BEGIN
   ASSERT has_function_privilege('service_role',
         'public.unmark_whatsapp_user_disconnected(uuid)', 'EXECUTE'),
     'E21 the service role may roll the marker back';
+
+  -- ------------- E22: a terminal observation after a transient starts a new streak
+  -- `since` is the start of the CURRENT CONTINUOUS TERMINAL STREAK, so the terminal
+  -- observation that follows a transient must NOT inherit the transient's time: the ten
+  -- minute grace window may only count time the account actually spent in a terminal state.
+  first0 := (SELECT account_metadata->'whatsapp_disconnect'->>'first_seen'
+               FROM public.social_accounts WHERE id = acc_trans)::timestamptz;
+  trans_ep := (SELECT account_metadata->'whatsapp_disconnect'->>'episode_id'
+                 FROM public.social_accounts WHERE id = acc_trans);
+  ASSERT (SELECT account_metadata->'whatsapp_disconnect'->>'since' IS NULL
+            FROM public.social_accounts WHERE id = acc_trans),
+    'E22 the transient observation left no terminal streak';
+  PERFORM pg_sleep(0.05);
+  ep_two := public.observe_whatsapp_disconnect_state(acc_trans, 'close', true);
+  ASSERT ep_two IS NOT NULL, 'E22 the terminal observation is recorded';
+  ASSERT ep_two->>'since' IS NOT NULL, 'E22 the terminal observation starts a streak';
+  ASSERT (ep_two->>'since')::timestamptz > first0,
+    'E22 the streak starts now, not at the transient observation';
+  ASSERT (ep_two->>'first_seen')::timestamptz = first0, 'E22 the episode anchor is kept';
+  ASSERT ep_two->>'episode_id' = trans_ep, 'E22 the episode id is kept';
+  since1 := (ep_two->>'since')::timestamptz;
+
+  -- --------------- E22b: consecutive terminals keep the streak anchor
+  PERFORM pg_sleep(0.05);
+  ep_two := public.observe_whatsapp_disconnect_state(acc_trans, 'timeout', true);
+  ASSERT ep_two IS NOT NULL, 'E22b the second terminal observation is recorded';
+  ASSERT (ep_two->>'since')::timestamptz = since1,
+    'E22b consecutive terminals keep the streak anchor';
+  ASSERT (ep_two->>'first_seen')::timestamptz = first0, 'E22b the episode anchor is kept';
+  ASSERT ep_two->>'episode_id' = trans_ep, 'E22b the episode id is kept';
+
+  -- -------- E23: an account stuck in `connecting` has the anchor the backstop needs
+  -- The sixty minute backstop counts from first_seen. An account that never leaves
+  -- `connecting` therefore needs a first_seen, and it must NOT have a terminal streak:
+  -- the ten minute grace window is unreachable for an account that was never terminal.
+  ep_two := public.observe_whatsapp_disconnect_state(acc_stuck, 'connecting', false);
+  ASSERT ep_two IS NOT NULL, 'E23 the stuck account has an episode';
+  ASSERT ep_two->>'first_seen' IS NOT NULL, 'E23 the stuck account has a backstop anchor';
+  ASSERT ep_two->>'since' IS NULL, 'E23 the stuck account has no terminal streak';
+  UPDATE public.social_accounts
+     SET account_metadata = jsonb_set(
+           COALESCE(account_metadata, '{}'::jsonb),
+           '{whatsapp_disconnect,first_seen}',
+           to_jsonb((clock_timestamp() - interval '61 minutes')::text))
+   WHERE id = acc_stuck;
+  ep_two := (SELECT account_metadata->'whatsapp_disconnect'
+               FROM public.social_accounts WHERE id = acc_stuck);
+  ASSERT (ep_two->>'first_seen')::timestamptz < clock_timestamp() - interval '60 minutes',
+    'E23 the backstop window has elapsed';
+  ASSERT ep_two->>'since' IS NULL,
+    'E23 the grace window never applies to a transient-only episode';
+
+  -- ------------- E24: a healthy poll restores an account the watcher deactivated
+  ep_two := public.observe_whatsapp_disconnect_state(acc_flag, 'close', true);
+  ASSERT ep_two IS NOT NULL, 'E24 the episode opens';
+  ASSERT public.flag_whatsapp_disconnect_episode(acc_flag, ep_two->>'episode_id', 'wda reason') = true,
+    'E24 the watcher flags the account';
+  ASSERT (SELECT NOT is_active AND needs_reauth
+            FROM public.social_accounts WHERE id = acc_flag),
+    'E24 the flag deactivated the account';
+  ASSERT (SELECT account_metadata->'whatsapp_disconnect'->>'flagged_at' IS NOT NULL
+            FROM public.social_accounts WHERE id = acc_flag),
+    'E24 the episode is stamped as the one the watcher flagged';
+  ASSERT public.restore_whatsapp_disconnect_account(acc_flag) = true,
+    'E24 the healthy poll restores the account';
+  ASSERT (SELECT is_active AND NOT needs_reauth AND last_refresh_error IS NULL
+            FROM public.social_accounts WHERE id = acc_flag),
+    'E24 the account is active again and the red flag is gone';
+  ASSERT (SELECT NOT (account_metadata ? 'whatsapp_disconnect')
+            FROM public.social_accounts WHERE id = acc_flag),
+    'E24 the episode is cleared';
+  ASSERT public.restore_whatsapp_disconnect_account(acc_flag) = false,
+    'E24 restoring an active account is refused';
+
+  -- E24b: an account that was inactive for another reason is never restored
+  UPDATE public.social_accounts SET is_active = false WHERE id = acc_two;
+  ASSERT public.restore_whatsapp_disconnect_account(acc_two) = false,
+    'E24b an account without a flagged episode is never restored';
+  ASSERT (SELECT NOT is_active FROM public.social_accounts WHERE id = acc_two),
+    'E24b the account stays inactive';
+
+  -- E24c: an account the owner disconnected on purpose is never restored
+  UPDATE public.social_accounts
+     SET account_metadata = jsonb_set(
+           COALESCE(account_metadata, '{}'::jsonb), '{whatsapp_user_disconnected_at}',
+           to_jsonb(clock_timestamp()::text))
+   WHERE id = acc_two;
+  UPDATE public.social_accounts
+     SET account_metadata = jsonb_set(
+           COALESCE(account_metadata, '{}'::jsonb), '{whatsapp_disconnect}',
+           jsonb_build_object('episode_id', gen_random_uuid()::text,
+                              'since', clock_timestamp(), 'first_seen', clock_timestamp(),
+                              'state', 'close', 'observed_at', clock_timestamp(),
+                              'flagged_at', clock_timestamp()::text))
+   WHERE id = acc_two;
+  ASSERT public.restore_whatsapp_disconnect_account(acc_two) = false,
+    'E24c a deliberately disconnected account is never restored';
+  ASSERT (SELECT NOT is_active FROM public.social_accounts WHERE id = acc_two),
+    'E24c the account stays inactive';
+  ASSERT public.restore_whatsapp_disconnect_account(acc_cloud) = false,
+    'E24c a Cloud API WhatsApp row is never restored';
+  ASSERT public.restore_whatsapp_disconnect_account(acc_meta) = false,
+    'E24c a Meta row is never restored';
+
+  -- ------- E25: pre-rollout inactive accounts are treated as deliberate disconnects
+  -- The marker is written by the teardown, and the teardown only existed after this feature.
+  -- An account that was already inactive when the migration ran would otherwise be alerted
+  -- about a disconnect the owner performed on purpose.
+  ASSERT (SELECT account_metadata->'whatsapp_user_disconnected_at' IS NULL
+            FROM public.social_accounts WHERE id = acc_legacy),
+    'E25 the legacy account carries no marker yet';
+  PERFORM public.backfill_whatsapp_legacy_disconnects('2026-11-13 00:00:00+00'::timestamptz);
+  ASSERT (SELECT (account_metadata->>'whatsapp_user_disconnected_at')::timestamptz
+                 = '2026-11-13 00:00:00+00'::timestamptz
+            FROM public.social_accounts WHERE id = acc_legacy),
+    'E25 the legacy account is marked as deliberately disconnected';
+  ASSERT public.observe_whatsapp_disconnect_state(acc_legacy, 'close', true) IS NULL,
+    'E25 a legacy account is never alerted';
+  ASSERT (SELECT account_metadata->'whatsapp_user_disconnected_at' IS NULL
+            FROM public.social_accounts WHERE id = acc_flag),
+    'E25 an active account is never stamped';
+  ASSERT (SELECT account_metadata->'whatsapp_user_disconnected_at' IS NULL
+            FROM public.social_accounts WHERE id = acc_cloud),
+    'E25 a Cloud API WhatsApp row is never stamped';
+  -- A marker that is already there is never overwritten.
+  UPDATE public.social_accounts
+     SET account_metadata = jsonb_set(
+           COALESCE(account_metadata, '{}'::jsonb), '{whatsapp_user_disconnected_at}',
+           to_jsonb('2020-01-01 00:00:00+00'::timestamptz::text))
+   WHERE id = acc_stuck;
+  UPDATE public.social_accounts SET is_active = false WHERE id = acc_stuck;
+  PERFORM public.backfill_whatsapp_legacy_disconnects('2026-11-13 00:00:00+00'::timestamptz);
+  ASSERT (SELECT (account_metadata->>'whatsapp_user_disconnected_at')::timestamptz
+                 = '2020-01-01 00:00:00+00'::timestamptz
+            FROM public.social_accounts WHERE id = acc_stuck),
+    'E25 an existing marker keeps its own value';
+  -- The account comes back into the watching when it is reactivated: the reactivation
+  -- trigger clears the marker in the same statement as the activation.
+  UPDATE public.social_accounts SET is_active = true WHERE id = acc_legacy;
+  ASSERT (SELECT account_metadata->'whatsapp_user_disconnected_at' IS NULL
+            FROM public.social_accounts WHERE id = acc_legacy),
+    'E25 the reactivation clears the marker, so the account is watched again';
+
+  -- --------------------- E26: the new RPCs stay service-role only
+  ASSERT NOT has_function_privilege('authenticated',
+        'public.restore_whatsapp_disconnect_account(uuid)', 'EXECUTE'),
+    'E26 the restore is not browser-callable';
+  ASSERT NOT has_function_privilege('anon',
+        'public.restore_whatsapp_disconnect_account(uuid)', 'EXECUTE'),
+    'E26 the restore is not anon-callable';
+  ASSERT has_function_privilege('service_role',
+        'public.restore_whatsapp_disconnect_account(uuid)', 'EXECUTE'),
+    'E26 the service role may restore';
+  ASSERT NOT has_function_privilege('authenticated',
+        'public.backfill_whatsapp_legacy_disconnects(timestamptz)', 'EXECUTE'),
+    'E26 the backfill is not browser-callable';
+  ASSERT NOT has_function_privilege('anon',
+        'public.backfill_whatsapp_legacy_disconnects(timestamptz)', 'EXECUTE'),
+    'E26 the backfill is not anon-callable';
+  ASSERT has_function_privilege('service_role',
+        'public.backfill_whatsapp_legacy_disconnects(timestamptz)', 'EXECUTE'),
+    'E26 the service role may run the backfill';
 END $$;
 
 ROLLBACK;

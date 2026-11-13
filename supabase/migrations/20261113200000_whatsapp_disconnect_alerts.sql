@@ -9,6 +9,16 @@
 --                                          episode_id identifies THIS episode: the claim returns it
 --                                          and the mark only writes when the open episode still
 --                                          carries it, so a marker can never outlive its episode
+--                                          since is the start of the CURRENT CONTINUOUS TERMINAL
+--                                          STREAK: it is null while no terminal streak runs, so a
+--                                          transient observation can never age into the ten
+--                                          minute grace window
+--                                          first_seen is the start of the EPISODE and is never
+--                                          reset while the episode is open
+--   whatsapp_disconnect.flagged_at     = the watcher flagged this episode (and deactivated the
+--                                          account). Only a flagged episode may be restored by a
+--                                          healthy poll, so an account that was inactive for any
+--                                          other reason is never resurrected
 --   whatsapp_disconnect_user_email_at  = the owner email for this episode has been sent
 --   whatsapp_disconnect_admin_email_at = the admin email for this episode has been sent
 --   whatsapp_disconnect_claimed_at      = the in-flight claims, one per recipient
@@ -39,10 +49,18 @@ CREATE INDEX IF NOT EXISTS whatsapp_evolution_instances_last_polled_at_idx
   WHERE last_polled_at IS NOT NULL;
 
 -- 2. Observe one Evolution connection state.
---    terminal = true  : the session is gone. Opens the episode, or keeps since/first_seen.
---    terminal = false : the session is reconnecting. Restarts the streak (since), keeps the
---                       episode and first_seen, and never opens an episode.
+--    terminal = true  : the session is gone. Opens the episode if there is none, or keeps
+--                       the anchors of an open one.
+--    terminal = false : the session is reconnecting. It may OPEN the episode (an account
+--                       stuck in `connecting` for an hour is broken, and the backstop needs
+--                       a first_seen to count from), but it never starts a terminal streak:
+--                       `since` is cleared, so the ten minute rule stays out of reach.
 --    Returns the resulting episode, or NULL when there is nothing to record.
+--
+--    `since` is the start of the CURRENT CONTINUOUS TERMINAL STREAK. It is kept only across
+--    consecutive terminal observations: a terminal observation that follows a transient (or
+--    that opens the episode) starts a new streak at that moment, and a transient clears it.
+--    `first_seen` is the start of the episode and is never reset while the episode is open.
 --
 --    A deliberate disconnect (whatsapp_user_disconnected_at) is never an outage: the marker is
 --    checked under the row lock, so a disconnect that lands while this observation is in flight
@@ -76,26 +94,39 @@ BEGIN
     RETURN NULL;
   END IF;
 
-  IF NOT p_terminal THEN
-    -- A transient observation only restarts an episode that is already open. It never opens
-    -- one: an account that is merely reconnecting is not an outage.
+  IF p_terminal THEN
     IF NOT (v_meta ? 'whatsapp_disconnect') THEN
-      RETURN NULL;
+      v_episode := jsonb_build_object(
+        'episode_id', gen_random_uuid()::text,
+        'since', v_now, 'first_seen', v_now, 'state', p_state, 'observed_at', v_now);
+    ELSE
+      -- A terminal observation keeps the episode id and first_seen: the episode id is the
+      -- identity the claim returns and the mark checks, and first_seen is the episode
+      -- anchor that the backstop counts from.
+      v_episode := COALESCE(v_meta->'whatsapp_disconnect', '{}'::jsonb)
+        || jsonb_build_object('state', p_state, 'observed_at', v_now);
+      -- `since` is kept only across CONSECUTIVE terminal observations. A terminal
+      -- observation that follows a transient -- whose `since` is null -- starts the streak
+      -- now, so the ten minute grace window can never count pre-terminal time.
+      IF v_episode->>'since' IS NULL THEN
+        v_episode := v_episode || jsonb_build_object('since', v_now);
+      END IF;
+      IF NOT (v_episode ? 'episode_id') THEN
+        v_episode := v_episode || jsonb_build_object('episode_id', gen_random_uuid()::text);
+      END IF;
     END IF;
-    v_episode := COALESCE(v_meta->'whatsapp_disconnect', '{}'::jsonb)
-      || jsonb_build_object('since', v_now, 'state', p_state, 'observed_at', v_now);
-  ELSIF NOT (v_meta ? 'whatsapp_disconnect') THEN
-    v_episode := jsonb_build_object(
-      'episode_id', gen_random_uuid()::text,
-      'since', v_now, 'first_seen', v_now, 'state', p_state, 'observed_at', v_now);
   ELSE
-    -- A terminal observation keeps since and first_seen: the streak anchor and the episode
-    -- anchor must not move once they are set. The episode_id stays too: it is the identity the
-    -- claim returns and the mark checks.
-    v_episode := COALESCE(v_meta->'whatsapp_disconnect', '{}'::jsonb)
-      || jsonb_build_object('state', p_state, 'observed_at', v_now);
-    IF NOT (v_episode ? 'episode_id') THEN
-      v_episode := v_episode || jsonb_build_object('episode_id', gen_random_uuid()::text);
+    -- A transient observation may open the episode: an account that never leaves
+    -- `connecting` is broken, and without a first_seen the sixty minute backstop could
+    -- never fire for it. It never starts a terminal streak, so the ten minute rule stays
+    -- out of reach and only the backstop can alert on a transient-only episode.
+    IF NOT (v_meta ? 'whatsapp_disconnect') THEN
+      v_episode := jsonb_build_object(
+        'episode_id', gen_random_uuid()::text,
+        'since', NULL, 'first_seen', v_now, 'state', p_state, 'observed_at', v_now);
+    ELSE
+      v_episode := COALESCE(v_meta->'whatsapp_disconnect', '{}'::jsonb)
+        || jsonb_build_object('since', NULL, 'state', p_state, 'observed_at', v_now);
     END IF;
   END IF;
 
@@ -418,10 +449,20 @@ BEGIN
   -- is_active goes with needs_reauth: a dead Evolution session is inactive by design (the
   -- webhook deactivates the row the same way), and the QR setup page only offers an inactive
   -- account for a rescan.
+  --
+  -- The episode is stamped with flagged_at in the SAME statement. That stamp is what makes
+  -- the episode "the one the watcher flagged", and it is the only thing that allows a later
+  -- healthy poll to restore the account (see restore_whatsapp_disconnect_account). Without it
+  -- an account that was inactive for any other reason could be resurrected by a poll.
   UPDATE public.social_accounts
      SET is_active = false,
          needs_reauth = true,
-         last_refresh_error = p_reason
+         last_refresh_error = p_reason,
+         account_metadata = jsonb_set(
+           COALESCE(account_metadata, '{}'::jsonb),
+           '{whatsapp_disconnect,flagged_at}',
+           to_jsonb(clock_timestamp()::text),
+           true)
    WHERE id = p_account_id
      AND platform = 'whatsapp'
      AND connection_mode = 'evolution_qr'
@@ -433,6 +474,51 @@ END;
 $fn$;
 REVOKE ALL ON FUNCTION public.flag_whatsapp_disconnect_episode(uuid, text, text) FROM PUBLIC, anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.flag_whatsapp_disconnect_episode(uuid, text, text) TO service_role;
+
+-- 6c. A healthy poll restores an account that THIS WATCHER deactivated.
+--     The watcher sets is_active = false when it flags an account, and the account stays
+--     inactive until the owner scans a new QR code. But the session can come back on its
+--     own: Evolution reports "open" again while the row is still flagged, and then the
+--     account is a healthy account that nobody can use, because the red flag and the
+--     inactive row only go away through a reconnect.
+--
+--     The restore is conditional, and the conditions are the whole safety of it:
+--       * the row is inactive -- an active row is the clear's business, not this one's;
+--       * the OPEN episode carries flagged_at, so it is the episode the watcher flagged and
+--         not one the owner or the webhook opened;
+--       * the row carries no deliberate-disconnect marker, so an account the owner
+--         disconnected on purpose is never resurrected.
+--     The activation and the episode reset happen in ONE statement, and the reactivation
+--     trigger (section 7) clears the same keys in the same statement.
+--     Returns false when the conditions do not hold: "not ours to restore" is not an error.
+CREATE OR REPLACE FUNCTION public.restore_whatsapp_disconnect_account(p_account_id uuid)
+RETURNS boolean
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $fn$
+BEGIN
+  UPDATE public.social_accounts
+     SET is_active = true,
+         needs_reauth = false,
+         last_refresh_error = NULL,
+         account_metadata = COALESCE(account_metadata, '{}'::jsonb)
+                              - 'whatsapp_disconnect'
+                              - 'whatsapp_disconnect_claimed_at'
+                              - 'whatsapp_disconnect_user_email_at'
+                              - 'whatsapp_disconnect_admin_email_at'
+   WHERE id = p_account_id
+     AND platform = 'whatsapp'
+     AND connection_mode = 'evolution_qr'
+     AND NOT is_active
+     AND NOT (COALESCE(account_metadata, '{}'::jsonb) ? 'whatsapp_user_disconnected_at')
+     AND (COALESCE(account_metadata, '{}'::jsonb)->'whatsapp_disconnect'->>'flagged_at') IS NOT NULL;
+
+  RETURN FOUND;
+END;
+$fn$;
+REVOKE ALL ON FUNCTION public.restore_whatsapp_disconnect_account(uuid) FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.restore_whatsapp_disconnect_account(uuid) TO service_role;
 
 -- 7. Reactivating a WhatsApp QR account closes its disconnect episode in the SAME statement.
 --    The reset used to be a separate best-effort call, and when it failed the old episode and
@@ -472,6 +558,63 @@ CREATE TRIGGER social_accounts_clear_whatsapp_disconnect_on_reactivate
   FOR EACH ROW
   WHEN (OLD.is_active IS NOT TRUE AND NEW.is_active IS TRUE)
   EXECUTE FUNCTION public.clear_whatsapp_disconnect_on_reactivate();
+
+-- 7a. One-time backfill of the deliberate-disconnect marker.
+--     The watcher skips every account carrying whatsapp_user_disconnected_at, and the marker
+--     is written by the teardown -- but the teardown only ran AFTER this feature existed.
+--     An account that the owner disconnected BEFORE the rollout therefore carries no marker,
+--     and the watcher would treat its still-closed remote session as a fresh outage and
+--     email the owner about a disconnect they performed on purpose.
+--
+--     So every evolution_qr WhatsApp account that was ALREADY INACTIVE when this migration
+--     ran is treated as deliberately disconnected: it gets the marker with the rollout
+--     instant, and the watcher never polls it. The choice is deliberately conservative --
+--     a missed alert is recoverable, a false "please reconnect" email on an account the
+--     owner closed on purpose is not.
+--
+--     These accounts come back into the watching when they are reactivated: the
+--     reactivation trigger (section 7) clears the marker in the same statement as the
+--     activation, and only the owner coming back takes it away.
+--
+--     The backfill is a function so that the SQL proof can run it again against synthetic
+--     rows: the one-time call below is the rollout, the function is the rule.
+CREATE OR REPLACE FUNCTION public.backfill_whatsapp_legacy_disconnects(p_rollout_at timestamptz)
+RETURNS integer
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $fn$
+DECLARE
+  v_stamped integer;
+BEGIN
+  UPDATE public.social_accounts
+     SET account_metadata = jsonb_set(
+           COALESCE(account_metadata, '{}'::jsonb),
+           '{whatsapp_user_disconnected_at}',
+           to_jsonb(p_rollout_at::text))
+   WHERE platform = 'whatsapp'
+     AND connection_mode = 'evolution_qr'
+     AND NOT is_active
+     AND NOT (COALESCE(account_metadata, '{}'::jsonb) ? 'whatsapp_user_disconnected_at');
+
+  GET DIAGNOSTICS v_stamped = ROW_COUNT;
+  RETURN v_stamped;
+END;
+$fn$;
+REVOKE ALL ON FUNCTION public.backfill_whatsapp_legacy_disconnects(timestamptz) FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.backfill_whatsapp_legacy_disconnects(timestamptz) TO service_role;
+
+DO $do_backfill_whatsapp_legacy_disconnects$
+DECLARE
+  -- The rollout instant of this feature. Every evolution_qr WhatsApp account that was
+  -- already inactive at this instant is treated as deliberately disconnected from now on.
+  v_rollout_at CONSTANT timestamptz := '2026-11-13 00:00:00+00';
+  v_stamped integer;
+BEGIN
+  v_stamped := public.backfill_whatsapp_legacy_disconnects(v_rollout_at);
+  RAISE NOTICE 'whatsapp disconnect backfill: % pre-rollout inactive account(s) marked as deliberately disconnected',
+    v_stamped;
+END $do_backfill_whatsapp_legacy_disconnects$;
 
 -- 8. The base URL the cron job calls. It is never a literal domain in this file: the
 --    deployment supplies it, the same way the cron secret is supplied through the vault.

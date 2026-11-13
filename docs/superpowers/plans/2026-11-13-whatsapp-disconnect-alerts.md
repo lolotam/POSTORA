@@ -34,12 +34,16 @@ and §9 (the in-app notification decision) are the parts that are easy to get su
   §27 (background work), §28 (scheduling) before writing code.
 - **Do not** add a second banner component. `TokenReauthBanner` is the banner system; extend it.
 - **Do not** add a raw Supabase query to a visual component (§11). The banner's query moves into a hook.
-- **Do not** add a new table. Everything new is `account_metadata` JSONB plus five RPCs. `types.ts`
+- **Do not** add a new table. Everything new is `account_metadata` JSONB plus nine RPCs. `types.ts`
   does not change.
 - **Do not** flip `social_accounts.is_active` **to true** for a disconnected account. It must stay `false`:
   the reconnectable list (`src/hooks/useWhatsAppConnect.ts` / `useReconnectableQrAccounts.ts:27`) and the
   webhook's account lookup (`supabase/functions/whatsapp-evolution-webhook/index.ts`, `findAccount`) both
   depend on it. The watcher therefore sets it to **false** when it flags a dead session.
+  **SUPERSEDED (second review round):** there is exactly one path that flips it back — the conditional
+  `restore_whatsapp_disconnect_account`, which a healthy poll calls on an account the watcher itself
+  deactivated (inactive, open episode flagged by this watcher, no deliberate-disconnect marker). A
+  disconnected account is never flipped to true by the watcher; a *recovered* one is (spec §4.1).
 - The debounce constants live in exactly one place: `supabase/functions/whatsapp-disconnect-watch/run.ts`.
   `DISCONNECT_GRACE_MINUTES = 10`, `DISCONNECT_BACKSTOP_MINUTES = 60`.
 - Never put a phone number in an email, a log line or an error message. The display name is the only
@@ -83,11 +87,27 @@ add behaviour rather than correct a stated one:
   a `BEFORE UPDATE` trigger on `social_accounts`. A separate best-effort clear could fail, and the
   surviving episode and marker then silenced the next real outage.
 
+### Second review round
+
+A second review round (2026-11-13) found four more defects. The shipped implementation differs
+from the plan in four more places, all of them corrections:
+
+| # | The plan / first implementation said | The implementation does | Why |
+|---|---|---|---|
+| 6 | The freshness cutoff is the cron interval (five minutes) | The cutoff is `POLL_FRESHNESS_MINUTES = POLL_CRON_INTERVAL_MINUTES - 1` (four minutes) | `last_polled_at` is written *after* the Evolution call, so on the next tick the row's age is a little under five minutes. A five-minute cutoff skipped that account and halved the polling cadence to ten minutes. |
+| 7 | A transient observation never opens an episode, and a transient restarts the streak (`since = now`) | A transient observation MAY open the episode (it sets `first_seen`), and it CLEARS the streak (`since = null`). A terminal observation that follows a transient starts a new streak at that moment | An account stuck in `connecting` never got a `first_seen` and could not reach the sixty minute backstop; and the ten minute grace window counted pre-terminal time. `since` is now the start of the current *continuous* terminal streak. |
+| 8 | A healthy poll clears the episode, and never reactivates | A healthy poll on an account **this watcher** deactivated calls `restore_whatsapp_disconnect_account`, which reactivates the row and clears the episode in one statement — conditional on the open episode being the flagged one (`flagged_at`) and on there being no deliberate-disconnect marker | The watcher deactivates an account when it flags a dead session. If the session came back on its own, the account stayed inactive with a red flag and nobody could use it. |
+| 9 | Nothing treats the disconnects that happened before this feature existed | The migration runs a one-time backfill that stamps `whatsapp_user_disconnected_at` on every `evolution_qr` WhatsApp account that was already inactive at the rollout | The marker is written by the teardown, and the teardown only existed after this feature. An account the owner disconnected before the rollout would otherwise be alerted about its still-closed session. |
+
+The four corrections are proved by `supabase/tests/whatsapp_disconnect_alerts.sql` (E2, E3, E22,
+E22b, E23, E24, E24b, E24c, E25) and by the Deno tests in
+`supabase/functions/whatsapp-disconnect-watch/run.test.ts`.
+
 ## File map
 
 | File | Status | Responsibility |
 |---|---|---|
-| `supabase/migrations/20261113200000_whatsapp_disconnect_alerts.sql` | create | `last_polled_at` column + index, five RPCs, the cron job |
+| `supabase/migrations/20261113200000_whatsapp_disconnect_alerts.sql` | create | `last_polled_at` column + index, nine RPCs, the reactivation trigger function, the cron base-URL resolver, the cron job |
 | `supabase/tests/whatsapp_disconnect_alerts.sql` | create | SQL proof of the episode state machine and the claims |
 | `scripts/db-harness.sh` | modify | register `whatsapp_disconnect_alerts.sql` in `SUITES` |
 | `supabase/functions/whatsapp-disconnect-watch/run.ts` | create | the pure state machine and the per-account orchestration |
@@ -134,7 +154,24 @@ add behaviour rather than correct a stated one:
 -- and email markers, and clears needs_reauth / last_refresh_error, so a deliberate disconnect
 -- leaves no alert behind. The teardown calls it FIRST and treats a failure as fatal (spec §8).
 - RPC `public.mark_whatsapp_user_disconnected(p_account_id uuid) → boolean`
+- RPC `public.unmark_whatsapp_user_disconnected(p_account_id uuid) → boolean`
+-- SUPERSEDED (review round): the plan first had no rollback RPC. The shipped teardown marks
+-- FIRST and rolls the marker back when the deactivation fails (spec §8).
+- RPC `public.flag_whatsapp_disconnect_episode(p_account_id uuid, p_episode_id text, p_reason text) → boolean`
+-- SUPERSEDED (review round): the plan first had an unconditional flag. The shipped one is
+-- conditional on the observed episode still being the open one, and it stamps `flagged_at`
+-- into the episode.
+- RPC `public.restore_whatsapp_disconnect_account(p_account_id uuid) → boolean`
+-- SUPERSEDED (review round): the plan first had no restore. The shipped one reactivates an
+-- account the watcher itself deactivated when a poll finds it healthy again, and only while the
+-- open episode is the flagged one and no deliberate-disconnect marker is present (spec §4.1).
+- RPC `public.backfill_whatsapp_legacy_disconnects(p_rollout_at timestamptz) → integer`
+-- SUPERSEDED (review round): the plan first had no backfill. The shipped one stamps the
+-- deliberate-disconnect marker on every `evolution_qr` WhatsApp account that was already
+-- inactive at the rollout, so a disconnect performed before this feature existed is never
+-- alerted on (spec §8.1).
 - Trigger `social_accounts_clear_whatsapp_disconnect_on_reactivate` on `social_accounts`
+- Trigger function `public.clear_whatsapp_disconnect_on_reactivate() → trigger`
 - Function `public.get_cron_functions_base_url() → text`
 - pg_cron job `whatsapp-disconnect-watch`
 
@@ -148,11 +185,16 @@ add behaviour rather than correct a stated one:
   2. **E1 — a second terminal observation keeps the anchors.** Capture `since` and `first_seen` from E0,
      call `observe_whatsapp_disconnect_state(acc, 'timeout', true)` again, and assert `since` and
      `first_seen` are unchanged while `state` became `'timeout'`.
-  3. **E2 — a transient observation restarts the streak but keeps the episode.** After E1, call
-     `observe_whatsapp_disconnect_state(acc, 'connecting', false)`; assert `since` moved forward,
-     `first_seen` did **not** change, and the episode still exists.
-  4. **E3 — a transient observation never opens an episode.** On a second account with no episode,
-     `observe_whatsapp_disconnect_state(acc2, 'connecting', false)` returns `NULL` and writes nothing.
+  3. **E2 — a transient observation breaks the streak but keeps the episode.** After E1, call
+     `observe_whatsapp_disconnect_state(acc, 'connecting', false)`; assert `since` is null (the
+     terminal streak is broken), `first_seen` did **not** change, and the episode still exists.
+     **SUPERSEDED (second review round):** the plan first asserted that `since` moved forward.
+  4. **E3 — a transient observation may open an episode, but without a terminal streak.** On a second
+     account with no episode, `observe_whatsapp_disconnect_state(acc2, 'connecting', false)` returns an
+     episode with a `first_seen` and a null `since`.
+     **SUPERSEDED (second review round):** the plan first asserted that it returns `NULL` and writes
+     nothing — an account stuck in `connecting` then never got a `first_seen` and could not reach the
+     sixty minute backstop.
   5. **E4 — other metadata keys survive.** Write `automation_handler` into `account_metadata` before
      E0 and assert it is still there afterwards.
   6. **E5 — the claim is once-only per recipient.** `claim_whatsapp_disconnect_email(acc, 'user')` returns
@@ -561,9 +603,18 @@ git commit -- supabase/migrations/20261113200000_whatsapp_disconnect_alerts.sql 
 **Interfaces — Produces:**
 - `classifyState(state: string | null): ConnectionClass` — `"healthy" | "transient" | "terminal" | "unknown"`
 - `isAlertDue(episode: Episode, now: Date): boolean`
+- `isPollFresh(lastPolledAt: string | null, now: Date): boolean`
+-- SUPERSEDED (second review round): the plan first had the freshness cut inline in `index.ts`.
+  It is a pure rule, so it lives in `run.ts` where it can be tested.
 - `runWatch(deps: WatchDeps): Promise<WatchSummary>`
 - Constants `DISCONNECT_GRACE_MINUTES = 10`, `DISCONNECT_BACKSTOP_MINUTES = 60`,
-  `DISCONNECT_REASON`, `MAX_ACCOUNTS_PER_RUN = 50`
+  `DISCONNECT_REASON`, `MAX_ACCOUNTS_PER_RUN = 50`, `POLL_CRON_INTERVAL_MINUTES = 5`,
+  `POLL_FRESHNESS_MINUTES = 4`
+-- SUPERSEDED (second review round): the plan first had the freshness window as the cron interval.
+- `WatchDeps.restore(accountId): Promise<boolean>`
+-- SUPERSEDED (second review round): the plan first had no restore. A healthy poll on an account the
+  watcher itself deactivated calls it; the SQL decides whether the account is really its own to
+  restore (spec §4.1).
 
 - [ ] **Step 1: Write the Deno tests first** (`supabase/functions/whatsapp-disconnect-watch/run.test.ts`).
   Model the file on `supabase/functions/sweep-pending-whatsapp-qr/run.test.ts`. The tests must cover:
@@ -590,6 +641,12 @@ git commit -- supabase/migrations/20261113200000_whatsapp_disconnect_alerts.sql 
       the others, and the run still returns a summary.
   11. `runWatch` never exceeds `MAX_ACCOUNTS_PER_RUN` — `listCandidates` is called with the limit.
   12. `runWatch` records the poll time for every account it read, including the skipped ones.
+  13. **SUPERSEDED (second review round) — added:** `isPollFresh` keeps the freshness window below
+      the cron interval, and two runs exactly five minutes apart both poll the account.
+  14. **SUPERSEDED (second review round) — added:** `isAlertDue` counts only the backstop for an
+      episode without a terminal streak (`since` is null).
+  15. **SUPERSEDED (second review round) — added:** a healthy poll on an inactive account calls
+      `restore` and never `clear`.
 
 - [ ] **Step 2: Run the tests and confirm they fail.**
   `deno test --node-modules-dir=none supabase/functions/whatsapp-disconnect-watch/run.test.ts`.
@@ -642,6 +699,11 @@ export function classifyState(state: string | null): ConnectionClass {
  * The alert fires when the terminal state has persisted for the grace window, or when the
  * episode has lasted the backstop window however much it flapped.
  */
+// SUPERSEDED (second review round): the shipped code treats a MISSING terminal streak as a
+// valid state, not as a broken anchor. `since` is null while no terminal streak runs, and
+// then only the backstop can fire -- otherwise an episode without a streak could never
+// alert, and an account stuck in `connecting` would never reach the sixty minute backstop.
+// The shipped Episode type is `since: string | null`.
 export function isAlertDue(episode: Episode, now: Date): boolean {
   const since = Date.parse(episode.since);
   const firstSeen = Date.parse(episode.first_seen);
@@ -766,6 +828,11 @@ import { createEvolutionApi } from "../_shared/evolutionApi.ts";
 import { extractState } from "../whatsapp-evolution-bridge/qr.ts";
 import { runWatch, type Episode, type WatchCandidate } from "./run.ts";
 
+// SUPERSEDED (second review round): the freshness window is not the cron interval, and the
+// constant does not live here. It lives in run.ts, next to the debounce constants:
+//   POLL_CRON_INTERVAL_MINUTES = 5
+//   POLL_FRESHNESS_MINUTES = POLL_CRON_INTERVAL_MINUTES - 1
+// and it is applied through the testable isPollFresh(lastPolledAt, now).
 const POLL_FRESHNESS_MINUTES = 5;
 
 Deno.serve(async (req) => {
@@ -891,8 +958,15 @@ Deno.serve(async (req) => {
     apply the freshness cut in TypeScript: skip a candidate whose `last_polled_at` is newer than
     `POLL_FRESHNESS_MINUTES`. The constant must be used — an unused constant is a lint failure.
 
-  `POLL_FRESHNESS_MINUTES` must actually filter candidates. A candidate polled less than five minutes
-  ago is skipped (it was already checked) rather than polled again.
+  `POLL_FRESHNESS_MINUTES` must actually filter candidates. A candidate polled less than the freshness
+  window ago is skipped (it was already checked) rather than polled again.
+  **SUPERSEDED (second review round):** the plan first made the window the cron interval (five
+  minutes). `last_polled_at` is written *after* the Evolution call, so on the next tick the row's age
+  is a little under five minutes, and a five-minute cutoff skipped that account — halving the
+  polling cadence to ten minutes. The shipped constant lives in `run.ts` next to the debounce
+  constants: `POLL_CRON_INTERVAL_MINUTES = 5` and
+  `POLL_FRESHNESS_MINUTES = POLL_CRON_INTERVAL_MINUTES - 1`, applied through the testable
+  `isPollFresh(lastPolledAt, now)`.
 
 - [ ] **Step 2: Typecheck.**
   `deno check --node-modules-dir=none supabase/functions/whatsapp-disconnect-watch/index.ts`.
@@ -1221,6 +1295,15 @@ Deno.serve(async (req) => {
   try {
     const authorization = req.headers.get("Authorization") ?? "";
     const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
+    // SUPERSEDED (review round): the shipped code does NOT use
+    // `authorization.endsWith(serviceRoleKey)`. That compares the tail of the header, so any
+    // header ending in the service-role key authenticates, and it leaks the key length through
+    // the timing of the comparison. The shipped code parses the bearer token and compares it
+    // with a constant-time comparison:
+    // `if (!serviceRoleKey || !timingSafeEqual(bearerToken(req), serviceRoleKey))` —
+    // both local functions in `supabase/functions/send-whatsapp-disconnect-alert/index.ts`
+    // (`timingSafeEqual` at line 35, `bearerToken` at line 44, the check at line 78).
+    // The check below is the shape the plan first wrote.
     if (!serviceRoleKey || !authorization.endsWith(serviceRoleKey)) {
       return new Response(
         JSON.stringify({ error: "unauthorized" }),
@@ -1406,11 +1489,11 @@ git commit -- supabase/functions/send-whatsapp-disconnect-alert/index.ts
   the case where the account was already active and the trigger therefore does not fire.
 
 - [ ] **Step 2: Mark the deliberate disconnect.**
-  In `supabase/functions/_shared/whatsappDisconnect.ts`, inside `disconnectWhatsAppAccount`, after the
+  ~~In `supabase/functions/_shared/whatsappDisconnect.ts`, inside `disconnectWhatsAppAccount`, after the
   deactivation succeeds, stamp `whatsapp_user_disconnected_at` through the RPC — but **only** for
   `connection_mode === 'evolution_qr'`. A Meta-mode disconnect has no QR to rescan and must not be
   marked. The mark is best effort: a failure must not turn a completed disconnect into an error for the
-  user (same rule as the warnings above it).
+  user (same rule as the warnings above it).~~
 
   **SUPERSEDED (review round):** the shipped code does NOT mark after the deactivation, and the mark
   is NOT best effort. It marks **FIRST**, before the local deactivation, and **aborts the whole
@@ -1420,7 +1503,8 @@ git commit -- supabase/functions/send-whatsapp-disconnect-alert/index.ts
   deactivation fails, the marker is rolled back through
   `public.unmark_whatsapp_user_disconnected(p_account_id uuid)` — a SECURITY DEFINER RPC that clears
   the marker only while the row is still `is_active = true` and is an `evolution_qr` WhatsApp row —
-  and the original deactivation error is rethrown.
+  and the original deactivation error is rethrown. The `connection_mode === 'evolution_qr'` condition
+  still holds: a Meta-mode disconnect has no QR to rescan and is never marked.
 
 - [ ] **Step 3: Typecheck both modules.**
   `deno check --node-modules-dir=none supabase/functions/_shared/evolutionQrAccount.ts supabase/functions/_shared/whatsappDisconnect.ts`.

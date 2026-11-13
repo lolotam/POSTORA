@@ -3,9 +3,12 @@ import {
   DISCONNECT_BACKSTOP_MINUTES,
   DISCONNECT_GRACE_MINUTES,
   MAX_ACCOUNTS_PER_RUN,
+  POLL_CRON_INTERVAL_MINUTES,
+  POLL_FRESHNESS_MINUTES,
   RUN_BUDGET_MS,
   classifyState,
   isAlertDue,
+  isPollFresh,
   runWatch,
   type Episode,
   type WatchCandidate,
@@ -16,8 +19,8 @@ import type { AlertDispatchResult } from "./dispatch.ts";
 const NOW = Date.parse("2026-11-13T12:00:00Z");
 const NOW_DATE = new Date(NOW);
 
-function episode(since: string, firstSeen: string, state = "close"): Episode {
-  return { episode_id: "ep-1", since, first_seen: firstSeen, state, observed_at: since };
+function episode(since: string | null, firstSeen: string, state = "close"): Episode {
+  return { episode_id: "ep-1", since, first_seen: firstSeen, state, observed_at: since ?? firstSeen };
 }
 
 function minutesAgo(minutes: number): string {
@@ -40,6 +43,8 @@ interface FakeOptions {
   dispatch?: AlertDispatchResult;
   /** How much the monotonic clock advances per account read. */
   clockStepMs?: number;
+  /** What the conditional restore answers: true means "the account was restored". */
+  restored?: boolean;
 }
 
 /**
@@ -85,6 +90,10 @@ function fakeDeps(
     clear: (accountId) => {
       rec.calls.push(`clear:${accountId}`);
       return Promise.resolve();
+    },
+    restore: (accountId) => {
+      rec.calls.push(`restore:${accountId}`);
+      return Promise.resolve(options.restored === true);
     },
     markFlagged: (accountId, episodeId) => {
       rec.calls.push(`markFlagged:${accountId}`);
@@ -147,6 +156,112 @@ Deno.test("isAlertDue refuses an episode with an unreadable anchor", () => {
   assertEquals(isAlertDue(episode(minutesAgo(30), "not-a-date"), NOW_DATE), false);
 });
 
+Deno.test("isAlertDue only counts the backstop for an episode without a terminal streak", () => {
+  // A transient observation clears `since`: the episode has no continuous terminal streak,
+  // so the ten minute grace window never applies to it. The sixty minute backstop still
+  // does -- that is what catches an account stuck in `connecting`.
+  const young = episode(null, minutesAgo(30));
+  assertEquals(isAlertDue(young, NOW_DATE), false);
+
+  const old = episode(null, minutesAgo(DISCONNECT_BACKSTOP_MINUTES));
+  assertEquals(isAlertDue(old, NOW_DATE), true);
+});
+
+Deno.test("isPollFresh keeps the freshness window below the cron interval", () => {
+  // The cutoff must be shorter than the cron interval: `last_polled_at` is written after
+  // the Evolution call, so on the next tick the row's age is a little under five minutes.
+  assertEquals(POLL_FRESHNESS_MINUTES < POLL_CRON_INTERVAL_MINUTES, true);
+
+  assertEquals(isPollFresh(null, NOW_DATE), false);
+  assertEquals(isPollFresh("not-a-date", NOW_DATE), false);
+  assertEquals(isPollFresh(minutesAgo(1), NOW_DATE), true);
+  assertEquals(isPollFresh(minutesAgo(POLL_FRESHNESS_MINUTES - 1), NOW_DATE), true);
+  assertEquals(isPollFresh(minutesAgo(POLL_FRESHNESS_MINUTES), NOW_DATE), false);
+  assertEquals(isPollFresh(minutesAgo(POLL_CRON_INTERVAL_MINUTES), NOW_DATE), false);
+});
+
+Deno.test("a candidate polled five minutes ago is polled again", async () => {
+  // The cron runs every five minutes and `last_polled_at` is written AFTER the Evolution
+  // call, so on the next tick the row's age is a little under five minutes. A freshness
+  // window of exactly five minutes would skip that account and halve the polling cadence
+  // to ten minutes.
+  const start = Date.parse("2026-11-13T12:00:00Z");
+  let now = new Date(start);
+  let lastPolledAt: string | null = null;
+  const polled: string[] = [];
+
+  const deps: WatchDeps = {
+    listCandidates: () =>
+      Promise.resolve(
+        isPollFresh(lastPolledAt, now)
+          ? []
+          : [{ id: "acc-1", instance_name: "postora_acc-1", is_active: true }],
+      ),
+    readState: () => {
+      polled.push(now.toISOString());
+      return Promise.resolve("open");
+    },
+    observe: () => Promise.resolve(null),
+    clear: () => Promise.resolve(),
+    restore: () => Promise.resolve(false),
+    markFlagged: () => Promise.resolve(false),
+    dispatchAlert: () =>
+      Promise.resolve({ ownerSent: false, adminSent: false, failed: [], skipped: null }),
+    markPolled: (_instanceName, at) => {
+      lastPolledAt = at.toISOString();
+      return Promise.resolve();
+    },
+    monotonicNow: () => 0,
+    now: () => now,
+  };
+
+  await runWatch(deps);
+  now = new Date(start + POLL_CRON_INTERVAL_MINUTES * 60_000);
+  await runWatch(deps);
+
+  assertEquals(polled.length, 2);
+});
+
+Deno.test("a candidate polled inside the freshness window is skipped", async () => {
+  // The freshness window still does its job: an account that was just checked is not
+  // polled again in the same window.
+  const start = Date.parse("2026-11-13T12:00:00Z");
+  let now = new Date(start);
+  let lastPolledAt: string | null = null;
+  const polled: string[] = [];
+
+  const deps: WatchDeps = {
+    listCandidates: () =>
+      Promise.resolve(
+        isPollFresh(lastPolledAt, now)
+          ? []
+          : [{ id: "acc-1", instance_name: "postora_acc-1", is_active: true }],
+      ),
+    readState: () => {
+      polled.push(now.toISOString());
+      return Promise.resolve("open");
+    },
+    observe: () => Promise.resolve(null),
+    clear: () => Promise.resolve(),
+    restore: () => Promise.resolve(false),
+    markFlagged: () => Promise.resolve(false),
+    dispatchAlert: () =>
+      Promise.resolve({ ownerSent: false, adminSent: false, failed: [], skipped: null }),
+    markPolled: (_instanceName, at) => {
+      lastPolledAt = at.toISOString();
+      return Promise.resolve();
+    },
+    monotonicNow: () => 0,
+    now: () => now,
+  };
+
+  await runWatch(deps);
+  now = new Date(start + (POLL_FRESHNESS_MINUTES - 1) * 60_000);
+  await runWatch(deps);
+
+  assertEquals(polled.length, 1);
+});
+
 Deno.test("a healthy account is cleared and nothing else happens", async () => {
   const { deps, rec } = fakeDeps([candidate("acc-1")], { "acc-1": "open" });
 
@@ -164,27 +279,49 @@ Deno.test("a healthy account is cleared and nothing else happens", async () => {
   });
 });
 
-Deno.test("a healthy but inactive account keeps its episode and its reconnect flag", async () => {
+Deno.test("a healthy but inactive account asks to be restored, and never to be cleared", async () => {
   // A `close` webhook set is_active = false, and the owner still has to scan a new QR
   // code. Evolution reporting "open" again must not clear the episode: the clear removes
   // needs_reauth without reactivating the row, so the banner would stop asking for the
-  // QR code the owner still needs.
+  // QR code the owner still needs. The watcher asks the conditional restore instead, and
+  // the SQL decides whether the account is really its own to restore.
   const { deps, rec } = fakeDeps([candidate("acc-1", false)], { "acc-1": "open" });
 
   const summary = await runWatch(deps);
 
   assertEquals(rec.calls.includes("clear:acc-1"), false);
+  assertEquals(rec.calls.includes("restore:acc-1"), true);
+  assertEquals(summary.polled, 1);
+  assertEquals(summary.failed, []);
+});
+
+Deno.test("a healthy poll restores an account the watcher deactivated", async () => {
+  // The watcher sets is_active = false when it flags an account, and the account stays
+  // inactive until the owner scans a new QR code. The session can come back on its own,
+  // and then the restore reactivates the account and clears the episode in one statement.
+  const { deps, rec } = fakeDeps(
+    [candidate("acc-1", false)],
+    { "acc-1": "open" },
+    episode(minutesAgo(30), minutesAgo(30)),
+    new Set(),
+    true,
+    { restored: true },
+  );
+
+  const summary = await runWatch(deps);
+
+  assertEquals(rec.calls, ["listCandidates", "readState:postora_acc-1", "restore:acc-1"]);
   assertEquals(summary.polled, 1);
   assertEquals(summary.failed, []);
 });
 
 Deno.test("a transient account is observed but never flagged or dispatched", async () => {
-  // A transient observation restarts the streak, so `since` is now. The episode is still
-  // young, so neither window is due and nothing is alerted.
+  // A transient observation clears the terminal streak, so `since` is null: the episode is
+  // still young, so neither window is due and nothing is alerted.
   const { deps, rec } = fakeDeps(
     [candidate("acc-1")],
     { "acc-1": "connecting" },
-    episode(minutesAgo(0), minutesAgo(30)),
+    episode(null, minutesAgo(30)),
   );
 
   const summary = await runWatch(deps);
@@ -197,12 +334,13 @@ Deno.test("a transient account is observed but never flagged or dispatched", asy
 });
 
 Deno.test("an episode that keeps flapping still alerts at the backstop", async () => {
-  // The streak restarted a moment ago, but the episode itself is an hour old: the backstop
-  // is what stops a pathological flap from never alerting.
+  // The episode itself is an hour old and there is no terminal streak at all: an account
+  // stuck in `connecting` never reaches the grace window, and the backstop is what stops
+  // it from never alerting.
   const { deps, rec } = fakeDeps(
     [candidate("acc-1")],
     { "acc-1": "connecting" },
-    episode(minutesAgo(0), minutesAgo(DISCONNECT_BACKSTOP_MINUTES)),
+    episode(null, minutesAgo(DISCONNECT_BACKSTOP_MINUTES)),
   );
 
   const summary = await runWatch(deps);

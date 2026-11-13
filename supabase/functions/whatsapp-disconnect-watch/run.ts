@@ -11,6 +11,17 @@ export const DISCONNECT_GRACE_MINUTES = 10;
 export const DISCONNECT_BACKSTOP_MINUTES = 60;
 /** How many accounts one run polls. */
 export const MAX_ACCOUNTS_PER_RUN = 50;
+/** How often the cron polls. */
+export const POLL_CRON_INTERVAL_MINUTES = 5;
+/**
+ * A candidate polled less than this many minutes ago is skipped: it was just checked.
+ *
+ * The window is deliberately SHORTER than the cron interval. `last_polled_at` is written
+ * after the Evolution call, so on the next tick the row's age is a little under five
+ * minutes -- a cutoff of exactly five minutes would skip that account and halve the
+ * polling cadence to ten minutes. The margin keeps every account polled on every tick.
+ */
+export const POLL_FRESHNESS_MINUTES = POLL_CRON_INTERVAL_MINUTES - 1;
 /**
  * How long one run may take. The candidates that are left over are not polled, so the next
  * run picks them up: a run that overruns its budget must not be cut off mid-account, and it
@@ -23,7 +34,13 @@ export const DISCONNECT_REASON = "WhatsApp session disconnected. Scan a new QR c
 export interface Episode {
   /** Identifies this episode: the claim returns it and the email's idempotency key uses it. */
   episode_id: string;
-  since: string;
+  /**
+   * Start of the current continuous TERMINAL streak, or null when there is no terminal
+   * streak: a transient observation clears it, and a terminal observation that follows a
+   * transient starts a new one. A null `since` means the ten minute grace window has not
+   * started yet -- only the backstop can fire.
+   */
+  since: string | null;
   first_seen: string;
   state: string;
   observed_at: string;
@@ -54,15 +71,34 @@ export function classifyState(state: string | null): ConnectionClass {
 }
 
 /**
+ * Whether the row was polled inside the freshness window, and must therefore not be polled
+ * again in this run.
+ *
+ * An unreadable poll time is treated as never polled: the account is checked. A row that was
+ * never polled has no timestamp at all.
+ */
+export function isPollFresh(lastPolledAt: string | null, now: Date): boolean {
+  if (lastPolledAt === null) return false;
+  const polledAt = Date.parse(lastPolledAt);
+  if (!Number.isFinite(polledAt)) return false;
+  return now.getTime() - polledAt < POLL_FRESHNESS_MINUTES * 60_000;
+}
+
+/**
  * The alert fires when the terminal state has persisted for the grace window, or when the
  * episode has lasted the backstop window however much it flapped.
+ *
+ * An episode without a terminal streak (`since` is null) has no grace window to count: only
+ * the backstop can fire for it. That is what keeps a transient-only episode -- an account
+ * stuck in `connecting` -- from alerting on the ten minute rule.
  */
 export function isAlertDue(episode: Episode, now: Date): boolean {
-  const since = Date.parse(episode.since);
   const firstSeen = Date.parse(episode.first_seen);
-  if (!Number.isFinite(since) || !Number.isFinite(firstSeen)) return false;
+  if (!Number.isFinite(firstSeen)) return false;
+  const since = episode.since === null ? Number.NaN : Date.parse(episode.since);
   const nowMs = now.getTime();
-  const continuous = nowMs - since >= DISCONNECT_GRACE_MINUTES * 60_000;
+  const continuous = Number.isFinite(since) &&
+    nowMs - since >= DISCONNECT_GRACE_MINUTES * 60_000;
   const backstop = nowMs - firstSeen >= DISCONNECT_BACKSTOP_MINUTES * 60_000;
   return continuous || backstop;
 }
@@ -73,6 +109,13 @@ export interface WatchDeps {
   readState(instanceName: string): Promise<string | null>;
   observe(accountId: string, state: string, terminal: boolean): Promise<Episode | null>;
   clear(accountId: string): Promise<void>;
+  /**
+   * Reactivates an account the watcher itself deactivated, when the poll found it healthy
+   * again. False means "not ours to restore": the account was not deactivated by this
+   * watcher, or the owner disconnected it on purpose. The decision is made in SQL, under
+   * the row lock, so the watcher only asks.
+   */
+  restore(accountId: string): Promise<boolean>;
   /**
    * Flags the account for reconnect, but only while `episodeId` is still its open episode.
    * False means the owner reconnected or disconnected on purpose since the observation, and
@@ -146,7 +189,15 @@ async function applyAccountState(
       // active. A `close` webhook deactivates the row, and clearing the flag then would
       // remove `needs_reauth` from an account that is still disconnected: the banner would
       // stop asking for the QR code the owner still needs.
+      //
+      // An account THIS WATCHER deactivated is the exception: the watcher set the flag
+      // because Evolution reported a dead session, and Evolution now reports a live one.
+      // The restore is conditional in SQL -- the open episode must be the one the watcher
+      // flagged, and the account must carry no deliberate-disconnect marker -- so an
+      // account the owner disconnected on purpose, or one that was inactive for another
+      // reason, is never resurrected. The RPC decides; the watcher only asks.
       if (candidate.is_active) await deps.clear(candidate.id);
+      else await deps.restore(candidate.id);
       return outcome;
     }
 

@@ -10,14 +10,8 @@ import { sanitizedError } from "../_shared/errorContext.ts";
 import { createEvolutionApi } from "../_shared/evolutionApi.ts";
 import { redactSensitive } from "../_shared/logging.ts";
 import { dispatchDisconnectAlert } from "./dispatch.ts";
-import { runWatch, type Episode, type WatchCandidate } from "./run.ts";
+import { runWatch, isPollFresh, type Episode, type WatchCandidate } from "./run.ts";
 import { readConnectionState } from "./stateReader.ts";
-
-/**
- * A candidate polled less than this many minutes ago is skipped: the cron runs every five
- * minutes, so a candidate that was just checked must not be polled again.
- */
-const POLL_FRESHNESS_MINUTES = 5;
 
 /** The instance row the candidate query returns. */
 interface CandidateRow {
@@ -91,14 +85,14 @@ Deno.serve(async (req) => {
           .limit(limit);
         if (error) throw error;
 
-        const cutoff = Date.now() - POLL_FRESHNESS_MINUTES * 60_000;
+        const now = new Date();
         const candidates: WatchCandidate[] = [];
         for (const row of (data ?? []) as unknown as CandidateRow[]) {
-          if (row.last_polled_at !== null) {
-            const polledAt = Date.parse(row.last_polled_at);
-            // An unreadable poll time is treated as never polled: the account is checked.
-            if (Number.isFinite(polledAt) && polledAt > cutoff) continue;
-          }
+          // A candidate polled inside the freshness window was just checked. The window is
+          // shorter than the cron interval on purpose: `last_polled_at` is written after the
+          // Evolution call, so on the next tick the row's age is a little under five minutes
+          // and a five minute cutoff would skip it.
+          if (isPollFresh(row.last_polled_at, now)) continue;
           candidates.push({
             id: row.social_account_id,
             instance_name: row.instance_name,
@@ -127,6 +121,17 @@ Deno.serve(async (req) => {
           p_account_id: accountId,
         });
         if (error) throw error;
+      },
+      async restore(accountId: string): Promise<boolean> {
+        // A healthy poll on an account the watcher itself deactivated. The RPC is
+        // conditional under the row lock: it only fires while the open episode is the one
+        // the watcher flagged and the account carries no deliberate-disconnect marker.
+        // A false answer means "not ours to restore", not a failure.
+        const { data, error } = await admin.rpc("restore_whatsapp_disconnect_account", {
+          p_account_id: accountId,
+        });
+        if (error) throw error;
+        return data === true;
       },
       async markFlagged(accountId: string, episodeId: string, reason: string): Promise<boolean> {
         // Conditional on the observed episode still being open (and the account not marked as
