@@ -1,7 +1,6 @@
 -- supabase/tests/agent_handoff_legacy_claim_lease.sql
--- The acknowledgement claim under a build that predates the lease (migrations
--- 20261113220000_agent_handoff_legacy_claim_lease.sql and
--- 20261113230000_agent_conversation_mode_expiry_marker.sql). One transaction, synthetic
+-- The acknowledgement claim under a build that predates the consolidated lease
+-- migration 20261113210000_agent_handoff_claim_lease.sql. One transaction, synthetic
 -- fixtures, labelled M1..Mn ASSERTs, ROLLBACK, sentinel last. Assumes the migrations are
 -- applied. No secrets and no real accounts.
 --
@@ -26,14 +25,14 @@ BEGIN
     (u_a, 'legacy-ack-a-' || u_a::text || '@example.invalid'),
     (u_b, 'legacy-ack-b-' || u_b::text || '@example.invalid');
 
-  INSERT INTO public.ai_conversation_modes (id, user_id, platform, conversation_id, mode, expires_at, escalated_at, customer_ack_sent_at, customer_ack_claimed_at)
+  INSERT INTO public.ai_conversation_modes (id, user_id, platform, conversation_id, mode, expires_at, escalated_at, customer_ack_sent_at, customer_ack_claimed_at, customer_ack_legacy_claim)
   VALUES
     -- A claim taken before the lease existed: sent, never leased.
-    (gen_random_uuid(), u_a, 'whatsapp', 'c_old', 'human_first', now() + interval '1 hour', now(), now() - interval '10 minutes', NULL),
+    (gen_random_uuid(), u_a, 'whatsapp', 'c_old', 'human_first', now() + interval '1 hour', now(), now() - interval '10 minutes', NULL, true),
     -- A claim of the older build that is still live.
-    (gen_random_uuid(), u_a, 'whatsapp', 'c_live', 'human_first', now() + interval '1 hour', now(), now(), NULL),
+    (gen_random_uuid(), u_a, 'whatsapp', 'c_live', 'human_first', now() + interval '1 hour', now(), now(), NULL, true),
     -- No claim yet.
-    (gen_random_uuid(), u_a, 'whatsapp', 'c_fresh', 'human_first', now() + interval '1 hour', now(), NULL, NULL);
+    (gen_random_uuid(), u_a, 'whatsapp', 'c_fresh', 'human_first', now() + interval '1 hour', now(), NULL, NULL, false);
 
   -- M1: the claim of the older build is LEASE-shaped. It keeps the result the old edge code
   -- reads, and it stamps the lease, so it can be taken over when it is not delivered.

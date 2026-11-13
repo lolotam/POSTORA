@@ -2311,6 +2311,7 @@ export type Database = {
       }
       ai_conversation_modes: {
         Row: {
+          customer_ack_legacy_claim: boolean
           customer_ack_reply_id: string | null
           customer_ack_text: string | null
           customer_ack_sent_at: string | null
@@ -2329,6 +2330,7 @@ export type Database = {
           user_id: string
         }
         Insert: {
+          customer_ack_legacy_claim?: boolean
           customer_ack_reply_id?: string | null
           customer_ack_text?: string | null
           customer_ack_sent_at?: string | null
@@ -2347,6 +2349,7 @@ export type Database = {
           user_id: string
         }
         Update: {
+          customer_ack_legacy_claim?: boolean
           customer_ack_reply_id?: string | null
           customer_ack_text?: string | null
           customer_ack_sent_at?: string | null

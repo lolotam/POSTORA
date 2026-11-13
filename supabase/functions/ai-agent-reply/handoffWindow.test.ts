@@ -21,6 +21,7 @@ import {
   releaseUnpersistedEscalation,
   replyIsDurable,
   settleClosedGate,
+  settleStaffInterruptedTurn,
   settleClosedGateNotice,
   settleEscalationAftermath,
   storeHeldCustomerTurn,
@@ -1253,4 +1254,17 @@ Deno.test("a notice claim records its recoverable text and outbox scope together
   const claim = calls.find((call) => call.kind === "rpc:claim_human_mode_ack_leased");
   assertEquals(claim?.args?.p_reply_id, "outbox-1");
   assertEquals(claim?.args?.p_notice_text, "One fixed notice");
+});
+
+Deno.test("a failed held-turn write requeues safe work and retains work with side effects", async () => {
+  for (const sideEffectsHappened of [false, true]) {
+    const { admin, calls } = adminStub({ insertError: { message: "temporary failure" }, outboxStatus: "running" });
+    const held = await settleStaffInterruptedTurn({ admin, outboxId: "outbox-1", threadId: THREAD_ID,
+      turn: { userId: SCOPE.userId, content: "Question", id: "outbox-1" }, sideEffectsHappened });
+    assertEquals(held.cancelWorkItem, false);
+    assertEquals(parseAgentReplyResult(200, held.body).kind, "retryable");
+    const requeue = calls.find((call) => call.kind === "rpc:advance_agent_reply_for_owner");
+    assertEquals(Boolean(requeue), !sideEffectsHappened);
+    if (requeue) assertEquals(requeue.args?.p_to, "pending");
+  }
 });

@@ -17,6 +17,11 @@ ALTER TABLE public.ai_conversation_modes
   ADD COLUMN IF NOT EXISTS customer_ack_text text;
 CREATE INDEX IF NOT EXISTS ai_conversation_modes_ack_reply_idx
   ON public.ai_conversation_modes(customer_ack_reply_id) WHERE customer_ack_reply_id IS NOT NULL;
+ALTER TABLE public.ai_conversation_modes
+  ADD COLUMN IF NOT EXISTS customer_ack_legacy_claim boolean NOT NULL DEFAULT false;
+-- Pre-lease claims have no lease stamp. New token-bearing claims always write their origin explicitly.
+UPDATE public.ai_conversation_modes SET customer_ack_legacy_claim = true
+ WHERE customer_ack_sent_at IS NOT NULL AND customer_ack_claimed_at IS NULL;
 ALTER TABLE public.ai_threads
   ADD COLUMN IF NOT EXISTS unanswered_escalation_claimed_at timestamptz;
 ALTER TABLE public.pending_agent_replies
@@ -262,6 +267,7 @@ BEGIN
        SET customer_ack_sent_at = clock_timestamp(),
            customer_ack_claimed_at = clock_timestamp(),
            customer_ack_delivered_at = NULL,
+           customer_ack_legacy_claim = false,
            customer_ack_reply_id = p_reply_id,
            customer_ack_text = p_notice_text
      WHERE id = v_row.id
@@ -281,6 +287,7 @@ BEGIN
   IF coalesce(v_row.customer_ack_claimed_at, v_row.customer_ack_sent_at) < clock_timestamp() - v_lease THEN
     UPDATE public.ai_conversation_modes
        SET customer_ack_claimed_at = clock_timestamp(),
+           customer_ack_legacy_claim = false,
            customer_ack_reply_id = coalesce(p_reply_id, customer_ack_reply_id),
            customer_ack_text = coalesce(p_notice_text, customer_ack_text)
      WHERE id = v_row.id
@@ -488,7 +495,8 @@ DECLARE
 BEGIN
   UPDATE public.ai_conversation_modes
   SET customer_ack_sent_at = v_claim,
-      customer_ack_claimed_at = v_claim
+      customer_ack_claimed_at = v_claim,
+      customer_ack_legacy_claim = true
   WHERE user_id = p_user_id
     AND platform = p_platform
     AND conversation_id = p_conversation_id
@@ -530,14 +538,15 @@ AS $$
 BEGIN
   UPDATE public.ai_conversation_modes
   SET customer_ack_sent_at = NULL,
-      customer_ack_claimed_at = NULL
+      customer_ack_claimed_at = NULL,
+      customer_ack_legacy_claim = false
   WHERE user_id = p_user_id
     AND platform = p_platform
     AND conversation_id = p_conversation_id
     AND mode = 'human_first'
     AND customer_ack_sent_at IS NOT NULL
     AND customer_ack_delivered_at IS NULL
-    AND (customer_ack_claimed_at IS NULL OR customer_ack_claimed_at = customer_ack_sent_at);
+    AND customer_ack_legacy_claim;
   RETURN FOUND;
 END;
 $$;

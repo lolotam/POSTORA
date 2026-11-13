@@ -31,6 +31,7 @@ import {
 } from "./logic.ts";
 import {
   ReplyNotPersistedError,
+  releaseAfterError,
   peekStoredReply,
   replaceStoredReply,
   settleOutboxRow,
@@ -1006,4 +1007,17 @@ export async function releaseUnpersistedEscalation(
 ): Promise<void> {
   if (!lease || lease.replyDurable) return;
   await releaseUnansweredEscalationClaim(admin, scope, lease.threadId, lease.marker, lease.claimToken);
+}
+
+/** A failed hold is retryable only while this invocation made no external side effect. */
+export async function settleStaffInterruptedTurn(
+  input: Omit<Parameters<typeof settleClosedGate>[0], "gateReason" | "humanWindow"> & { sideEffectsHappened: boolean },
+): Promise<ClosedGateSettlement> {
+  const held = await settleClosedGate({ ...input, gateReason: "staff_answered_during_generation", humanWindow: "window" });
+  if (!held.cancelWorkItem && input.outboxId) {
+    await releaseAfterError(input.admin, input.outboxId, {
+      sideEffectsHappened: input.sideEffectsHappened, error: "held_customer_turn_not_durable",
+    }, input.turn.userId);
+  }
+  return held;
 }

@@ -148,6 +148,20 @@ BEGIN
     'G8 authenticated cannot take a marker';
   ASSERT has_function_privilege('service_role', 'public.take_unanswered_escalation(uuid, uuid)', 'EXECUTE'),
     'G8 service_role can take a marker';
+  -- G8: equal microsecond timestamps do not identify a legacy claim. A delayed
+  -- tokenless release must not erase the leased claim of a recreated window.
+  DELETE FROM public.ai_conversation_modes WHERE user_id = u_a AND conversation_id = 'c_own2';
+  INSERT INTO public.ai_conversation_modes (user_id, platform, conversation_id, mode, expires_at)
+    VALUES (u_a, 'whatsapp', 'c_own2', 'human_first', now() + interval '1 hour');
+  v_claim := public.claim_human_mode_ack_leased(u_a, 'whatsapp', 'c_own2', 120);
+  ASSERT v_claim->>'result' = 'claimed', 'G8 a new leased worker owns the recreated window';
+  UPDATE public.ai_conversation_modes SET customer_ack_claimed_at = customer_ack_sent_at
+    WHERE user_id = u_a AND conversation_id = 'c_own2';
+  ASSERT NOT public.release_human_mode_ack(u_a, 'whatsapp', 'c_own2'),
+    'G8 legacy release cannot erase an equal-stamp leased claim';
+  ASSERT (SELECT customer_ack_claimed_at FROM public.ai_conversation_modes
+    WHERE user_id = u_a AND conversation_id = 'c_own2') IS NOT NULL, 'G8 the new lease survives';
+
 END $$;
 
 ROLLBACK;

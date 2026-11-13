@@ -92,7 +92,7 @@ import {
   releaseUnpersistedEscalation,
   type EscalationLeaseState,
   replyIsDurable,
-  settleClosedGate,
+  settleStaffInterruptedTurn,
   settleClosedGateNotice,
   settleEscalationAftermath,
   type HandoffScope,
@@ -2023,8 +2023,8 @@ Deno.serve(async (req) => {
         }
         // Nobody answered the question, so it is kept on the record: the thread
         // carries it, and the agent's next answer is written against it.
-        const held = await settleClosedGate({
-          admin, outboxId, gateReason: "staff_answered_during_generation", humanWindow: "window",
+        const held = await settleStaffInterruptedTurn({
+          admin, outboxId, sideEffectsHappened,
           threadId: thread.id,
           turn: { userId: request.user_id, content: request.inbound_text, id: outboxId ?? undefined },
         });

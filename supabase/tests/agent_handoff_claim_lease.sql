@@ -251,7 +251,7 @@ BEGIN
     id, social_account_id, user_id, platform, message_id, conversation_id, recipient_id,
     inbound_text, inbound_at, status
   ) VALUES (
-    r_reply2, s_account, u_a, 'whatsapp', 'm-lease-2', 'c_reply', 'r-lease',
+    r_reply2, s_account, u_a, 'whatsapp', 'm-lease-2', 'c_marker', 'r-lease',
     'عندكم كريم الكعب؟', now(), 'running'
   );
   ASSERT NOT public.persist_agent_reply_and_complete_escalation(
