@@ -1,6 +1,6 @@
 import { assertEquals, assertRejects } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import { sendDisconnectAlerts, type SendAlertsDeps } from "./handler.ts";
-import { RESEND_ENDPOINT, sendResendEmail } from "./resend.ts";
+import { RESEND_ENDPOINT, ResendSendError, sendResendEmail } from "./resend.ts";
 
 const EMAIL = {
   to: ["owner@example.invalid"],
@@ -45,6 +45,13 @@ function recorder(
 }
 
 const ok = () => new Response(JSON.stringify({ id: "res-1" }), { status: 200 });
+
+/** A conflict that names itself the way the provider does. */
+const conflict = (name: string) =>
+  new Response(JSON.stringify({ name, message: "conflict" }), {
+    status: 409,
+    headers: { "Content-Type": "application/json" },
+  });
 
 function timeoutError(): never {
   const error = new Error("The operation was aborted due to timeout");
@@ -130,34 +137,66 @@ Deno.test("a persistent failure gives up after the bounded number of attempts", 
   assertEquals(calls.length, 2);
 });
 
-Deno.test("a 409 on our own idempotency key counts as accepted", async () => {
-  // Resend accepted the first request and the mark then failed. The retry carries the
-  // same key and a body that changed in the meantime, and Resend answers 409. The mail
-  // is out, so this is a success: failing here would send a second copy on the next
-  // run, and reporting "not sent" would tell the owner about the same outage twice.
+Deno.test("a conflict that says the first request is still in flight is retried and then sent", async () => {
+  // `concurrent_idempotent_requests` means the first request with this key is still
+  // being processed. The retry carries the same key and the same body, so it is the
+  // very same email and not a second copy.
   const { calls, fetcher } = recorder([
-    () =>
-      new Response(
-        JSON.stringify({ name: "invalid_idempotent_request", message: "Key already used" }),
-        { status: 409 },
-      ),
+    () => conflict("concurrent_idempotent_requests"),
+    ok,
   ]);
 
   await sendResendEmail(EMAIL, { ...OPTIONS, fetcher });
 
+  assertEquals(calls.length, 2);
+  assertEquals(calls[0].headers["Idempotency-Key"], EMAIL.idempotencyKey);
+  assertEquals(calls[1].headers["Idempotency-Key"], EMAIL.idempotencyKey);
+  assertEquals(calls[1].body, calls[0].body);
+});
+
+Deno.test("an in-flight conflict on every attempt fails the send", async () => {
+  // The first request never settles. Retrying within the attempt budget is not enough,
+  // so the send fails instead of pretending the mail went out.
+  const { calls, fetcher } = recorder([() => conflict("concurrent_idempotent_requests")]);
+
+  const error = await assertRejects(() => sendResendEmail(EMAIL, { ...OPTIONS, fetcher }));
+
+  assertEquals(error instanceof ResendSendError, true);
+  assertEquals((error as ResendSendError).code, "idempotency_in_flight");
+  assertEquals((error as ResendSendError).status, 409);
+  assertEquals(calls.length, 2);
+});
+
+Deno.test("an invalid idempotent request fails the send and is not retried", async () => {
+  // `invalid_idempotent_request` means the key was already used with a different
+  // payload: the provider will never accept this body, so a retry cannot help.
+  const { calls, fetcher } = recorder([() => conflict("invalid_idempotent_request")]);
+
+  const error = await assertRejects(() => sendResendEmail(EMAIL, { ...OPTIONS, fetcher }));
+
+  assertEquals(error instanceof ResendSendError, true);
+  assertEquals((error as ResendSendError).code, "invalid_idempotent_request");
+  assertEquals((error as ResendSendError).status, 409);
   assertEquals(calls.length, 1);
 });
 
-Deno.test("a 409 marks the recipient as sent", async () => {
-  // The whole chain: the provider conflict must reach the mark, because that mark is
-  // what stops the next run from emailing the owner about the same outage again.
-  const { fetcher } = recorder([
-    () =>
-      new Response(
-        JSON.stringify({ name: "concurrent_idempotent_requests", message: "in flight" }),
-        { status: 409 },
-      ),
-  ]);
+Deno.test("a conflict with an unreadable body fails the send", async () => {
+  // The body carries no name, so the conflict cannot be classified. An unclassified
+  // conflict is a failure: it is never evidence that the mail went out.
+  const { calls, fetcher } = recorder([() => new Response("conflict", { status: 409 })]);
+
+  const error = await assertRejects(() => sendResendEmail(EMAIL, { ...OPTIONS, fetcher }));
+
+  assertEquals(error instanceof ResendSendError, true);
+  assertEquals((error as ResendSendError).code, "idempotency_conflict");
+  assertEquals(calls.length, 1);
+});
+
+Deno.test("an in-flight conflict that clears on the retry marks the recipient as sent", async () => {
+  // The whole chain: the conflict is retried inside the send, and the mail that goes
+  // out reaches the mark. That mark is what stops the next run from emailing the owner
+  // about the same outage again.
+  const { fetcher } = recorder([() => conflict("concurrent_idempotent_requests"), ok]);
 
   const marks: Array<{ accountId: string; kind: string; episodeId: string }> = [];
   const deps: SendAlertsDeps = {
@@ -182,7 +221,7 @@ Deno.test("a 409 marks the recipient as sent", async () => {
       return false;
     },
     async claim() {
-      return "episode-1";
+      return { episodeId: "episode-1", payload: null };
     },
     async send(payload) {
       await sendResendEmail(payload, { ...OPTIONS, fetcher });
@@ -198,4 +237,50 @@ Deno.test("a 409 marks the recipient as sent", async () => {
   assertEquals(summary.ownerSent, true);
   assertEquals(summary.failed, []);
   assertEquals(marks, [{ accountId: "acc-1", kind: "user", episodeId: "episode-1" }]);
+});
+
+Deno.test("a conflict that never clears leaves the recipient unmarked", async () => {
+  // The conflict is permanent for this run, so the mail is not out: the owner is not
+  // marked as told, and the failure is reported instead.
+  const { fetcher } = recorder([() => conflict("invalid_idempotent_request")]);
+
+  const marks: Array<{ accountId: string; kind: string; episodeId: string }> = [];
+  const deps: SendAlertsDeps = {
+    async loadAccount() {
+      return {
+        id: "acc-1",
+        user_id: "user-1",
+        platform_username: "Postora Store",
+        platform_user_id: "96566600001",
+      };
+    },
+    async loadOwnerProfile() {
+      return { email: "owner@example.invalid", full_name: "Owner", email_notifications_enabled: true };
+    },
+    async loadAdmins() {
+      return [];
+    },
+    async isGlobalEmailEnabled() {
+      return true;
+    },
+    async isAdminAlertEnabled() {
+      return false;
+    },
+    async claim() {
+      return { episodeId: "episode-1", payload: null };
+    },
+    async send(payload) {
+      await sendResendEmail(payload, { ...OPTIONS, fetcher });
+    },
+    async mark(accountId, kind, episodeId) {
+      marks.push({ accountId, kind, episodeId });
+      return true;
+    },
+  };
+
+  const summary = await sendDisconnectAlerts(deps, "acc-1");
+
+  assertEquals(summary.ownerSent, false);
+  assertEquals(summary.failed, ["acc-1"]);
+  assertEquals(marks, []);
 });

@@ -50,6 +50,27 @@ function failureCode(error: unknown): string {
 }
 
 /**
+ * The provider's error name out of a conflict body.
+ *
+ * Resend names the conflict in the body: `concurrent_idempotent_requests` when the first
+ * request with the key is still in flight, `invalid_idempotent_request` when the key was
+ * used with a different payload. A body that cannot be read carries no name.
+ */
+async function readConflictName(response: Response): Promise<string | null> {
+  try {
+    const body = await response.json();
+    if (typeof body === "object" && body !== null && !Array.isArray(body)) {
+      const name = (body as Record<string, unknown>).name;
+      if (typeof name === "string" && name.length > 0) return name;
+    }
+  } catch {
+    // An unreadable body carries no name: the conflict cannot be classified, and an
+    // unclassified conflict is never treated as a send that went out.
+  }
+  return null;
+}
+
+/**
  * Sends one alert email.
  *
  * The idempotency key is the same on every attempt, so a retry is the SAME email to
@@ -97,17 +118,24 @@ export async function sendResendEmail(email: ResendEmail, options: ResendOptions
 
     if (response.ok) return;
 
-    // 409 on OUR OWN idempotency key means the key was already used: the first
-    // request with it was accepted, so the email went out (invalid_idempotent_request
-    // -- the body changed since -- or concurrent_idempotent_requests -- the first
-    // request is still in flight). Treating that as a failure would send a second
-    // copy on the next run; treating it as "not sent" would leave the recipient to be
-    // told again about the same outage. Either way the mail is out.
+    // A conflict is never a send that went out: only the provider knows which conflict
+    // it is, so the body decides what happens next.
     if (response.status === 409) {
-      console.warn(
-        "[send-whatsapp-disconnect-alert] the provider already accepted this idempotency key; treating the conflict as sent",
-      );
-      return;
+      const name = await readConflictName(response);
+      if (name === "concurrent_idempotent_requests") {
+        // The first request with this key is still in flight. The key and the body are
+        // unchanged, so the retry is the very same email: sending it again within the
+        // attempt budget is safe, and it is the only conflict worth retrying.
+        if (attempt >= maxAttempts) {
+          throw new ResendSendError("idempotency_in_flight", 409);
+        }
+        await sleep(retryDelayMs);
+        continue;
+      }
+      // `invalid_idempotent_request` means the key was already used with a different
+      // payload, so the provider will never accept this body and a retry cannot help.
+      // An unreadable body and every other conflict are equally permanent.
+      throw new ResendSendError(name ?? "idempotency_conflict", 409);
     }
 
     // A rate limit and a server error are worth one more attempt; a client error is

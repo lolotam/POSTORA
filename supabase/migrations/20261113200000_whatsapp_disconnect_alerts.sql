@@ -24,6 +24,14 @@
 --   whatsapp_disconnect_claimed_at      = the in-flight claims, one per recipient
 --                                          ({user: <timestamp>, admin: <timestamp>}), each with a
 --                                          30 minute stale window
+--   whatsapp_disconnect_payload         = the rendered email of each recipient, one per recipient
+--                                          kind ({user: {to, subject, html}, admin: {...}}), stored
+--                                          with the first claim of the episode. The provider's
+--                                          idempotency key belongs to the episode and the
+--                                          recipient, so the body under that key must never
+--                                          change: a retake after a stale claim sends what was
+--                                          stored, not a rebuilt body. It is cleared together
+--                                          with the episode
 --   whatsapp_user_disconnected_at       = the owner disconnected this account on purpose
 --
 -- needs_reauth on an evolution_qr row belongs to this feature: the token-refresh sweep never
@@ -148,13 +156,22 @@ GRANT EXECUTE ON FUNCTION public.observe_whatsapp_disconnect_state(uuid, text, b
 --    The owner and the admins hold SEPARATE claims: the owner email and the admin email are
 --    independent, so a failing owner send never costs the admin its alert and the admin
 --    claim never blocks the owner's. The claim marker is therefore a map keyed by recipient.
---    Returns the episode_id of the claimed episode, or NULL when the claim was refused. The
---    caller carries that id into mark_whatsapp_disconnect_emailed and into the email
---    provider's idempotency key, so a retry of the same episode resolves to the same send.
+--    The claim also stores the rendered payload (to, subject, html) of the recipient, and
+--    only the first time that recipient is claimed: the provider's idempotency key belongs
+--    to the episode and the recipient, so it must ALWAYS carry the same body. A retake
+--    after a stale claim would otherwise rebuild the body -- the account name and the
+--    recipient list may have changed in the meantime -- and the provider would answer the
+--    changed body with a conflict forever.
+--    Returns the episode_id of the claimed episode and the stored payload, or NULL when the
+--    claim was refused. The caller carries the episode id into mark_whatsapp_disconnect_emailed
+--    and into the email provider's idempotency key, so a retry of the same episode resolves
+--    to the same send.
+DROP FUNCTION IF EXISTS public.claim_whatsapp_disconnect_email(uuid, text);
 CREATE OR REPLACE FUNCTION public.claim_whatsapp_disconnect_email(
   p_account_id uuid,
-  p_kind text
-) RETURNS uuid
+  p_kind text,
+  p_payload jsonb
+) RETURNS jsonb
 LANGUAGE plpgsql
 SECURITY DEFINER
 SET search_path = public, pg_temp
@@ -166,6 +183,8 @@ DECLARE
   v_episode jsonb;
   v_episode_id uuid;
   v_claimed_at timestamptz;
+  v_payloads jsonb;
+  v_stored jsonb;
 BEGIN
   v_marker := CASE p_kind
     WHEN 'user'  THEN 'whatsapp_disconnect_user_email_at'
@@ -234,20 +253,36 @@ BEGIN
     RETURN NULL;
   END IF;
 
+  -- The payload of this recipient, keyed by recipient kind. It is stored only when the
+  -- recipient has none yet: the payload that goes out with the idempotency key must never
+  -- change, so a retake reads back what the first claim stored.
+  v_payloads := COALESCE(v_meta->'whatsapp_disconnect_payload', '{}'::jsonb);
+  v_stored := v_payloads -> p_kind;
+  IF v_stored IS NULL AND p_payload IS NOT NULL THEN
+    v_payloads := jsonb_set(v_payloads, ARRAY[p_kind], p_payload);
+    v_stored := p_payload;
+  END IF;
+
   UPDATE public.social_accounts
      SET account_metadata = jsonb_set(
-           COALESCE(account_metadata, '{}'::jsonb),
-           '{whatsapp_disconnect_claimed_at}',
-           jsonb_set(v_claimed, ARRAY[p_kind], to_jsonb(clock_timestamp()::text)))
+           jsonb_set(
+             COALESCE(account_metadata, '{}'::jsonb),
+             '{whatsapp_disconnect_claimed_at}',
+             jsonb_set(v_claimed, ARRAY[p_kind], to_jsonb(clock_timestamp()::text))),
+           '{whatsapp_disconnect_payload}',
+           v_payloads)
    WHERE id = p_account_id
      AND platform = 'whatsapp'
      AND connection_mode = 'evolution_qr';
 
-  RETURN v_episode_id;
+  IF v_stored IS NULL THEN
+    RETURN jsonb_build_object('episode_id', v_episode_id);
+  END IF;
+  RETURN jsonb_build_object('episode_id', v_episode_id, 'payload', v_stored);
 END;
 $fn$;
-REVOKE ALL ON FUNCTION public.claim_whatsapp_disconnect_email(uuid, text) FROM PUBLIC, anon, authenticated;
-GRANT EXECUTE ON FUNCTION public.claim_whatsapp_disconnect_email(uuid, text) TO service_role;
+REVOKE ALL ON FUNCTION public.claim_whatsapp_disconnect_email(uuid, text, jsonb) FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.claim_whatsapp_disconnect_email(uuid, text, jsonb) TO service_role;
 
 -- 4. Record that a recipient's email went out for this episode.
 --    The mark is bound to the episode the claim returned. A mark that arrives after the
@@ -343,6 +378,7 @@ BEGIN
      SET account_metadata = COALESCE(account_metadata, '{}'::jsonb)
                              - 'whatsapp_disconnect'
                              - 'whatsapp_disconnect_claimed_at'
+                             - 'whatsapp_disconnect_payload'
                              - 'whatsapp_disconnect_user_email_at'
                              - 'whatsapp_disconnect_admin_email_at'
                              - 'whatsapp_user_disconnected_at',
@@ -381,6 +417,7 @@ BEGIN
      SET account_metadata = (COALESCE(account_metadata, '{}'::jsonb)
                                - 'whatsapp_disconnect'
                                - 'whatsapp_disconnect_claimed_at'
+                               - 'whatsapp_disconnect_payload'
                                - 'whatsapp_disconnect_user_email_at'
                                - 'whatsapp_disconnect_admin_email_at')
                              || jsonb_build_object(
@@ -505,6 +542,7 @@ BEGIN
          account_metadata = COALESCE(account_metadata, '{}'::jsonb)
                               - 'whatsapp_disconnect'
                               - 'whatsapp_disconnect_claimed_at'
+                              - 'whatsapp_disconnect_payload'
                               - 'whatsapp_disconnect_user_email_at'
                               - 'whatsapp_disconnect_admin_email_at'
    WHERE id = p_account_id
@@ -541,6 +579,7 @@ BEGIN
   NEW.account_metadata := COALESCE(NEW.account_metadata, '{}'::jsonb)
     - 'whatsapp_disconnect'
     - 'whatsapp_disconnect_claimed_at'
+    - 'whatsapp_disconnect_payload'
     - 'whatsapp_disconnect_user_email_at'
     - 'whatsapp_disconnect_admin_email_at'
     - 'whatsapp_user_disconnected_at';

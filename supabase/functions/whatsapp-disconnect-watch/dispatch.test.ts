@@ -87,6 +87,50 @@ Deno.test("a sender that answers 200 without a summary is a dispatch failure", a
   await assertRejects(() => dispatchDisconnectAlert({ ...OPTIONS, fetcher }));
 });
 
+Deno.test("a sender that answers 200 with an empty body is a dispatch failure", async () => {
+  // `{}` is not a summary: it says nothing about what the sender did. Reading it as an
+  // empty summary would report a clean run for an alert that never went out.
+  const { fetcher } = recorder(() =>
+    new Response(JSON.stringify({}), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    })
+  );
+
+  await assertRejects(() => dispatchDisconnectAlert({ ...OPTIONS, fetcher }));
+});
+
+Deno.test("a summary that is missing a field is a dispatch failure", async () => {
+  // The sender always answers with all four fields. A body without them is not a
+  // summary, and the watcher must not read the missing ones as "nothing went out".
+  const { fetcher } = recorder(() =>
+    new Response(JSON.stringify({ ownerSent: true, adminSent: false }), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    })
+  );
+
+  await assertRejects(() => dispatchDisconnectAlert({ ...OPTIONS, fetcher }));
+});
+
+Deno.test("a summary whose fields have the wrong type is a dispatch failure", async () => {
+  // `ownerSent: "true"` is not a boolean. A summary that cannot be read is not evidence
+  // that an alert went out.
+  const { fetcher } = recorder(() =>
+    summary({ ownerSent: "true", adminSent: false, skipped: null, failed: [] })
+  );
+
+  await assertRejects(() => dispatchDisconnectAlert({ ...OPTIONS, fetcher }));
+});
+
+Deno.test("a summary whose failed list holds a non-string is a dispatch failure", async () => {
+  const { fetcher } = recorder(() =>
+    summary({ ownerSent: false, adminSent: false, skipped: null, failed: ["acc-1", 7] })
+  );
+
+  await assertRejects(() => dispatchDisconnectAlert({ ...OPTIONS, fetcher }));
+});
+
 Deno.test("a dispatch that times out is a dispatch failure", async () => {
   const { fetcher } = recorder(() => {
     const error = new Error("The operation was aborted due to timeout");

@@ -25,6 +25,7 @@ DECLARE
   acc_flag  uuid := 'a7a7a7a7-0008-4111-8111-a7a7a7a7a7a7';
   acc_legacy uuid := 'a7a7a7a7-0009-4111-8111-a7a7a7a7a7a7';
   acc_stuck uuid := 'a7a7a7a7-0010-4111-8111-a7a7a7a7a7a7';
+  acc_pay   uuid := 'a7a7a7a7-0011-4111-8111-a7a7a7a7a7a7';
   ep        jsonb;
   ep_two    jsonb;
   since0    timestamptz;
@@ -33,6 +34,9 @@ DECLARE
   trans_ep  text;
   claim_ep  uuid;
   other_ep  uuid;
+  -- The payload the claim stores with the first claim of a recipient.
+  payload   jsonb := '{"to":["owner@example.invalid"],"subject":"wda subject","html":"<p>wda</p>"}'::jsonb;
+  claim_json jsonb;
 BEGIN
   -- ---------------------------------------------------------------- fixtures
   INSERT INTO auth.users (id, email) VALUES
@@ -51,6 +55,7 @@ BEGIN
   -- acc_trans: a QR row used for the transient (connecting) episode cases.
   -- acc_flag : a QR row used for the healthy-poll restore case.
   -- acc_legacy: a QR row that was already inactive before this feature existed.
+  -- acc_pay   : a QR row used for the claim payload cases, away from the other claims.
   INSERT INTO public.social_accounts
     (id, user_id, platform, platform_user_id, access_token, workspace_id,
      is_active, connection_mode, account_metadata)
@@ -64,7 +69,8 @@ BEGIN
     (acc_trans, u_a, 'whatsapp', '96566600007', '', ws_a, true, 'evolution_qr', '{}'),
     (acc_flag, u_a, 'whatsapp', '96566600008', '', ws_a, true, 'evolution_qr', '{}'),
     (acc_legacy, u_a, 'whatsapp', '96566600009', '', ws_a, false, 'evolution_qr', '{}'),
-    (acc_stuck, u_a, 'whatsapp', '96566600010', '', ws_a, true, 'evolution_qr', '{}');
+    (acc_stuck, u_a, 'whatsapp', '96566600010', '', ws_a, true, 'evolution_qr', '{}'),
+    (acc_pay, u_a, 'whatsapp', '96566600011', '', ws_a, true, 'evolution_qr', '{}');
 
   -- ------------------------------------------------- E0: the episode opens once
   ep := public.observe_whatsapp_disconnect_state(acc, 'close', true);
@@ -124,12 +130,12 @@ BEGIN
     'E4 the unrelated metadata key survives';
 
   -- ------------------------------- E5: the owner and the admin claim independently
-  claim_ep := public.claim_whatsapp_disconnect_email(acc, 'user');
+  claim_ep := (public.claim_whatsapp_disconnect_email(acc, 'user', payload)->>'episode_id')::uuid;
   ASSERT claim_ep IS NOT NULL, 'E5 the owner claim is won';
   ASSERT claim_ep = (ep->>'episode_id')::uuid, 'E5 the claim returns the episode id';
-  ASSERT public.claim_whatsapp_disconnect_email(acc, 'user') IS NULL,
+  ASSERT public.claim_whatsapp_disconnect_email(acc, 'user', payload) IS NULL,
     'E5 the owner claim is once-only';
-  ASSERT public.claim_whatsapp_disconnect_email(acc, 'admin') IS NOT NULL,
+  ASSERT public.claim_whatsapp_disconnect_email(acc, 'admin', payload) IS NOT NULL,
     'E5 the admin claim is independent of the owner claim';
   ASSERT (SELECT account_metadata->'whatsapp_disconnect_claimed_at' ? 'user'
             AND account_metadata->'whatsapp_disconnect_claimed_at' ? 'admin'
@@ -146,11 +152,11 @@ BEGIN
              ARRAY['user'],
              to_jsonb((clock_timestamp() - interval '31 minutes')::text)))
    WHERE id = acc;
-  ASSERT public.claim_whatsapp_disconnect_email(acc, 'user') IS NOT NULL,
+  ASSERT public.claim_whatsapp_disconnect_email(acc, 'user', payload) IS NOT NULL,
     'E6 a stale claim is retaken';
-  ASSERT public.claim_whatsapp_disconnect_email(acc, 'user') IS NULL,
+  ASSERT public.claim_whatsapp_disconnect_email(acc, 'user', payload) IS NULL,
     'E6 a live claim is not retaken';
-  ASSERT public.claim_whatsapp_disconnect_email(acc, 'admin') IS NULL,
+  ASSERT public.claim_whatsapp_disconnect_email(acc, 'admin', payload) IS NULL,
     'E6 a live admin claim is not retaken either';
 
   -- ---------------------------- E6b: a malformed claim timestamp is stale, not fatal
@@ -164,16 +170,55 @@ BEGIN
              to_jsonb('2026-99-99 99:99:99+00'::text))
            )
    WHERE id = acc;
-  ASSERT public.claim_whatsapp_disconnect_email(acc, 'user') IS NOT NULL,
+  ASSERT public.claim_whatsapp_disconnect_email(acc, 'user', payload) IS NOT NULL,
     'E6b a malformed claim timestamp is treated as stale, not as a blocker';
 
+  -- ------------- E6c: the claim stores the payload once and never overwrites it
+  -- The provider's idempotency key belongs to the episode and the recipient, so the body
+  -- under that key must never change. The payload is therefore stored with the first claim
+  -- of a recipient, and a retake answers with the stored one.
+  ep_two := public.observe_whatsapp_disconnect_state(acc_pay, 'close', true);
+  ASSERT ep_two IS NOT NULL, 'E6c the episode opens';
+  claim_json := public.claim_whatsapp_disconnect_email(
+    acc_pay, 'user',
+    '{"to":["first@example.invalid"],"subject":"first subject","html":"<p>first</p>"}'::jsonb);
+  ASSERT claim_json IS NOT NULL, 'E6c the claim is won';
+  ASSERT claim_json->>'episode_id' = ep_two->>'episode_id',
+    'E6c the claim returns the episode id';
+  ASSERT claim_json->'payload'->>'subject' = 'first subject',
+    'E6c the claim returns the payload it stored';
+  -- The claim goes stale and is retaken with a DIFFERENT payload: the account was renamed
+  -- and the recipient list changed in the meantime.
+  UPDATE public.social_accounts
+     SET account_metadata = jsonb_set(
+           COALESCE(account_metadata, '{}'::jsonb),
+           '{whatsapp_disconnect_claimed_at}',
+           jsonb_set(
+             COALESCE(account_metadata->'whatsapp_disconnect_claimed_at', '{}'::jsonb),
+             ARRAY['user'],
+             to_jsonb((clock_timestamp() - interval '31 minutes')::text)))
+   WHERE id = acc_pay;
+  claim_json := public.claim_whatsapp_disconnect_email(
+    acc_pay, 'user',
+    '{"to":["second@example.invalid"],"subject":"second subject","html":"<p>second</p>"}'::jsonb);
+  ASSERT claim_json IS NOT NULL, 'E6c the stale claim is retaken';
+  ASSERT claim_json->>'episode_id' = ep_two->>'episode_id',
+    'E6c the retake is the same episode';
+  ASSERT claim_json->'payload'->>'subject' = 'first subject',
+    'E6c a second claim does not overwrite the stored payload';
+  ASSERT claim_json->'payload'->'to' = '["first@example.invalid"]'::jsonb,
+    'E6c the stored recipients are the ones of the first claim';
+  ASSERT (SELECT account_metadata->'whatsapp_disconnect_payload'->'user'->>'subject'
+            FROM public.social_accounts WHERE id = acc_pay) = 'first subject',
+    'E6c the payload on the row is the one the first claim brought';
+
   -- --------------------------------------- E7: a claim needs an open episode
-  ASSERT public.claim_whatsapp_disconnect_email(acc_two, 'user') IS NULL,
+  ASSERT public.claim_whatsapp_disconnect_email(acc_two, 'user', payload) IS NULL,
     'E7 a claim without an episode is refused';
 
   -- ------------------------------------------- E8: an unknown kind is refused
   BEGIN
-    PERFORM public.claim_whatsapp_disconnect_email(acc, 'nobody');
+    PERFORM public.claim_whatsapp_disconnect_email(acc, 'nobody', payload);
     RAISE EXCEPTION 'E8 failed: an unknown claim kind was accepted'
       USING ERRCODE = 'assert_failure';
   EXCEPTION WHEN invalid_parameter_value THEN
@@ -204,7 +249,7 @@ BEGIN
   -- for the closed episode must not write a marker, or the new outage would be silenced.
   ep_two := public.observe_whatsapp_disconnect_state(acc_delib, 'close', true);
   ASSERT ep_two IS NOT NULL, 'E11 the first episode opens';
-  claim_ep := public.claim_whatsapp_disconnect_email(acc_delib, 'user');
+  claim_ep := (public.claim_whatsapp_disconnect_email(acc_delib, 'user', payload)->>'episode_id')::uuid;
   ASSERT claim_ep IS NOT NULL, 'E11 the first episode is claimed';
   ASSERT public.clear_whatsapp_disconnect_episode(acc_delib) = true,
     'E11 the first episode is closed';
@@ -216,7 +261,7 @@ BEGIN
   ASSERT (SELECT account_metadata->>'whatsapp_disconnect_user_email_at' IS NULL
             FROM public.social_accounts WHERE id = acc_delib),
     'E11 the late mark wrote no marker';
-  ASSERT public.claim_whatsapp_disconnect_email(acc_delib, 'user') IS NOT NULL,
+  ASSERT public.claim_whatsapp_disconnect_email(acc_delib, 'user', payload) IS NOT NULL,
     'E11 the new episode can still be claimed';
 
   -- ------------------ E12: a deliberate disconnect is never an outage
@@ -227,11 +272,12 @@ BEGIN
     'E12 the deliberate marker is stored on the row';
   ASSERT (SELECT account_metadata->'whatsapp_disconnect' IS NULL
             AND account_metadata->'whatsapp_disconnect_claimed_at' IS NULL
+            AND account_metadata->'whatsapp_disconnect_payload' IS NULL
             FROM public.social_accounts WHERE id = acc_delib),
-    'E12 the deliberate disconnect closes the open episode and its claims';
+    'E12 the deliberate disconnect closes the open episode, its claims and its payload';
   ASSERT public.observe_whatsapp_disconnect_state(acc_delib, 'close', true) IS NULL,
     'E12 a deliberately disconnected account opens no episode';
-  ASSERT public.claim_whatsapp_disconnect_email(acc_delib, 'user') IS NULL,
+  ASSERT public.claim_whatsapp_disconnect_email(acc_delib, 'user', payload) IS NULL,
     'E12 a deliberately disconnected account is never claimed';
   ASSERT public.clear_whatsapp_disconnect_episode(acc_delib) = false,
     'E12 a deliberately disconnected account is never cleared';
@@ -249,11 +295,12 @@ BEGIN
             AND NOT (account_metadata ? 'whatsapp_disconnect_user_email_at')
             AND NOT (account_metadata ? 'whatsapp_disconnect_admin_email_at')
             AND NOT (account_metadata ? 'whatsapp_disconnect_claimed_at')
+            AND NOT (account_metadata ? 'whatsapp_disconnect_payload')
             AND NOT (account_metadata ? 'whatsapp_user_disconnected_at')
             AND NOT needs_reauth
             AND last_refresh_error IS NULL
             FROM public.social_accounts WHERE id = acc),
-    'E13 every marker and the reauth state are gone';
+    'E13 every marker, the stored payload and the reauth state are gone';
   ASSERT public.clear_whatsapp_disconnect_episode(acc) = false,
     'E13 clearing twice is a no-op';
 
@@ -289,13 +336,13 @@ BEGIN
   -- --------------------------------- E14: a foreign account is never touched
   ASSERT public.observe_whatsapp_disconnect_state(acc_cloud, 'close', true) IS NULL,
     'E14 a Cloud API WhatsApp row opens no episode';
-  ASSERT public.claim_whatsapp_disconnect_email(acc_cloud, 'user') IS NULL,
+  ASSERT public.claim_whatsapp_disconnect_email(acc_cloud, 'user', payload) IS NULL,
     'E14 a Cloud API WhatsApp row is never claimed';
   ASSERT public.clear_whatsapp_disconnect_episode(acc_cloud) = false,
     'E14 a Cloud API WhatsApp row is never cleared';
   ASSERT public.observe_whatsapp_disconnect_state(acc_meta, 'close', true) IS NULL,
     'E14 a Meta row opens no episode';
-  ASSERT public.claim_whatsapp_disconnect_email(acc_meta, 'user') IS NULL,
+  ASSERT public.claim_whatsapp_disconnect_email(acc_meta, 'user', payload) IS NULL,
     'E14 a Meta row is never claimed';
   ASSERT public.clear_whatsapp_disconnect_episode(acc_meta) = false,
     'E14 a Meta row is never cleared';
@@ -312,7 +359,7 @@ BEGIN
         'public.observe_whatsapp_disconnect_state(uuid,text,boolean)', 'EXECUTE'),
     'E15 observe is not browser-callable';
   ASSERT NOT has_function_privilege('authenticated',
-        'public.claim_whatsapp_disconnect_email(uuid,text)', 'EXECUTE'),
+        'public.claim_whatsapp_disconnect_email(uuid,text,jsonb)', 'EXECUTE'),
     'E15 claim is not browser-callable';
   ASSERT NOT has_function_privilege('authenticated',
         'public.mark_whatsapp_disconnect_emailed(uuid,text,uuid)', 'EXECUTE'),
@@ -327,7 +374,7 @@ BEGIN
         'public.observe_whatsapp_disconnect_state(uuid,text,boolean)', 'EXECUTE'),
     'E15 observe is not anon-callable';
   ASSERT NOT has_function_privilege('anon',
-        'public.claim_whatsapp_disconnect_email(uuid,text)', 'EXECUTE'),
+        'public.claim_whatsapp_disconnect_email(uuid,text,jsonb)', 'EXECUTE'),
     'E15 claim is not anon-callable';
   ASSERT NOT has_function_privilege('anon',
         'public.mark_whatsapp_disconnect_emailed(uuid,text,uuid)', 'EXECUTE'),
@@ -354,7 +401,7 @@ BEGIN
         'public.observe_whatsapp_disconnect_state(uuid,text,boolean)', 'EXECUTE'),
     'E15 the service role may observe';
   ASSERT has_function_privilege('service_role',
-        'public.claim_whatsapp_disconnect_email(uuid,text)', 'EXECUTE'),
+        'public.claim_whatsapp_disconnect_email(uuid,text,jsonb)', 'EXECUTE'),
     'E15 the service role may claim';
   ASSERT has_function_privilege('service_role',
         'public.mark_whatsapp_disconnect_emailed(uuid,text,uuid)', 'EXECUTE'),
@@ -380,7 +427,7 @@ BEGIN
   -- outage. The reset now happens in the same statement as the activation.
   ep_two := public.observe_whatsapp_disconnect_state(acc_two, 'close', true);
   ASSERT ep_two IS NOT NULL, 'E17 the episode opens';
-  claim_ep := public.claim_whatsapp_disconnect_email(acc_two, 'user');
+  claim_ep := (public.claim_whatsapp_disconnect_email(acc_two, 'user', payload)->>'episode_id')::uuid;
   ASSERT claim_ep IS NOT NULL, 'E17 the episode is claimed';
   ASSERT public.mark_whatsapp_user_disconnected(acc_two) = true,
     'E17 the deliberate marker is written';
@@ -397,12 +444,13 @@ BEGIN
   ASSERT (SELECT NOT (account_metadata ? 'whatsapp_disconnect')
             AND NOT (account_metadata ? 'whatsapp_disconnect_claimed_at')
             AND NOT (account_metadata ? 'whatsapp_disconnect_user_email_at')
+            AND NOT (account_metadata ? 'whatsapp_disconnect_payload')
             AND NOT (account_metadata ? 'whatsapp_user_disconnected_at')
             AND NOT needs_reauth
             AND last_refresh_error IS NULL
             FROM public.social_accounts WHERE id = acc_two),
-    'E17 the reactivation cleared the episode, the claims, the marker and the deliberate flag';
-  ASSERT public.claim_whatsapp_disconnect_email(acc_two, 'user') IS NULL,
+    'E17 the reactivation cleared the episode, the claims, the payload, the marker and the deliberate flag';
+  ASSERT public.claim_whatsapp_disconnect_email(acc_two, 'user', payload) IS NULL,
     'E17 the cleared episode can no longer be claimed';
 
   -- --------------------- E18: the cron entry carries no literal domain or secret
@@ -425,6 +473,9 @@ BEGIN
   -- and the resolved value is the host the cron secret is sent to in an Authorization
   -- header: an editable row would let an admin redirect the secret to a host of their
   -- choosing. The row below must therefore be ignored outright.
+  -- The database setting is cleared first, so this proves the row is ignored even when
+  -- the setting IS configured: otherwise the assertion would pass for the wrong reason.
+  PERFORM set_config('app.settings.supabase_url', '', true);
   INSERT INTO public.app_settings (key, value, description)
   VALUES ('functions_base_url', '"https://wda.example.invalid"'::jsonb, 'wda synthetic');
   ASSERT public.get_cron_functions_base_url() IS DISTINCT FROM 'https://wda.example.invalid',

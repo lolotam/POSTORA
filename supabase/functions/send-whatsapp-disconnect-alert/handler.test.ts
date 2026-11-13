@@ -14,6 +14,7 @@ import {
   sendDisconnectAlerts,
   type AdminProfile,
   type AlertAccount,
+  type AlertPayload,
   type OwnerProfile,
   type SendAlertsDeps,
 } from "./handler.ts";
@@ -53,6 +54,8 @@ interface RecipientState {
   episodeId: string;
   claimedAt: number;
   marked: boolean;
+  /** The payload the first claim stored. The RPC keeps it for the whole episode. */
+  payload: AlertPayload | null;
 }
 
 /**
@@ -79,20 +82,23 @@ function fakeDeps(overrides: Partial<SendAlertsDeps> = {}): {
     loadAdmins: () => Promise.resolve(ADMINS),
     isGlobalEmailEnabled: () => Promise.resolve(true),
     isAdminAlertEnabled: () => Promise.resolve(true),
-    claim: (accountId, kind) => {
+    claim: (accountId, kind, payload) => {
       rec.calls.push(`claim:${kind}`);
       const key = `${accountId}:${kind}`;
       const current = state.get(key);
       if (!current) {
-        state.set(key, { episodeId: EPISODE, claimedAt: clock, marked: false });
-        return Promise.resolve(EPISODE);
+        // The first claim of the episode stores the payload: the RPC keeps it for the
+        // whole episode, so the body under the idempotency key never changes.
+        state.set(key, { episodeId: EPISODE, claimedAt: clock, marked: false, payload });
+        return Promise.resolve({ episodeId: EPISODE, payload });
       }
       // Already emailed for this episode: the RPC refuses.
       if (current.marked) return Promise.resolve(null);
       // A live claim blocks another one; only a stale claim is retaken.
       if (clock - current.claimedAt < CLAIM_STALE_MS) return Promise.resolve(null);
       current.claimedAt = clock;
-      return Promise.resolve(EPISODE);
+      // A retake answers with the stored payload, never with a rebuilt one.
+      return Promise.resolve({ episodeId: current.episodeId, payload: current.payload });
     },
     send: (payload) => {
       rec.calls.push("send");
@@ -270,6 +276,57 @@ Deno.test("a stale claim that was never marked is retaken with the same idempote
   const ownerSends = rec.sent.filter((payload) => payload.subject === OWNER_SUBJECT);
   assertEquals(ownerSends.length, 2);
   assertEquals(ownerSends[1].idempotencyKey, first);
+});
+
+Deno.test("a retake after a stale claim sends the payload the first claim stored", async () => {
+  // The provider's idempotency key belongs to the episode and the recipient, so the body
+  // under that key must never change. The account name and the admin list may well have
+  // changed while the claim was live: the retake sends the ORIGINAL body, and the
+  // rebuilt one is the body that must not go out.
+  let sendsFail = true;
+  let account: AlertAccount = ACCOUNT;
+  let admins: AdminProfile[] = ADMINS;
+  const { deps, rec, advance } = fakeDeps({
+    loadAccount: () => Promise.resolve(account),
+    loadAdmins: () => Promise.resolve(admins),
+    send: (payload) => {
+      rec.calls.push("send");
+      rec.sent.push(payload);
+      if (sendsFail) return Promise.reject(new Error("resend down"));
+      return Promise.resolve();
+    },
+  });
+
+  await sendDisconnectAlerts(deps, "acc-1");
+  const firstOwner = rec.sent[0];
+  const firstAdmin = rec.sent.find((payload) => payload.subject === ADMIN_SUBJECT);
+  assertEquals(firstOwner.subject, OWNER_SUBJECT);
+  assertEquals(firstAdmin?.subject, ADMIN_SUBJECT);
+
+  // The account is renamed and the admin list changes while the claims are live.
+  account = { ...ACCOUNT, platform_username: "Renamed Store" };
+  admins = [{ email: "admin-three@example.invalid", full_name: "Admin Three" }];
+
+  advance(CLAIM_STALE_MS + 1);
+  sendsFail = false;
+  await sendDisconnectAlerts(deps, "acc-1");
+
+  const ownerSends = rec.sent.filter((payload) => payload.subject === OWNER_SUBJECT);
+  const adminSends = rec.sent.filter((payload) => payload.subject === ADMIN_SUBJECT);
+  assertEquals(ownerSends.length, 2);
+  assertEquals(adminSends.length, 2);
+
+  // The same key and the same body under it.
+  assertEquals(ownerSends[1].idempotencyKey, firstOwner.idempotencyKey);
+  assertEquals(ownerSends[1].html, firstOwner.html);
+  assertEquals(ownerSends[1].to, firstOwner.to);
+  assertEquals(adminSends[1].idempotencyKey, firstAdmin?.idempotencyKey);
+  assertEquals(adminSends[1].html, firstAdmin?.html);
+  assertEquals(adminSends[1].to, firstAdmin?.to);
+
+  // The rebuilt body is the one that must not go out.
+  assertFalse(ownerSends[1].html.includes("Renamed Store"));
+  assertFalse(adminSends[1].to.includes("admin-three@example.invalid"));
 });
 
 Deno.test("nothing is sent when the claim is refused", async () => {

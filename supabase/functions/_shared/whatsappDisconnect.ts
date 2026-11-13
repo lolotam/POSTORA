@@ -298,9 +298,19 @@ export async function disconnectWhatsAppAccount(
   // watcher never polls a Meta-mode account.
   if (isEvolution) await markDeliberateDisconnect(input.accountId, deps);
 
-  const remote = isEvolution
-    ? await logoutEvolutionSession(input, deps)
-    : await unsubscribeWabaWebhook(input, deps);
+  let remote: StepOutcome;
+  try {
+    remote = isEvolution
+      ? await logoutEvolutionSession(input, deps)
+      : await unsubscribeWabaWebhook(input, deps);
+  } catch (e) {
+    // The marker is on the row but the row is still active: the watcher skips every
+    // account carrying the marker, so leaving it there would exclude this account
+    // from polling forever. The rollback goes through the same path as a failed
+    // deactivation, and the caller still sees the failure that stopped the teardown.
+    if (isEvolution) await unmarkDeliberateDisconnect(input.accountId, deps);
+    throw e;
+  }
 
   // The one mandatory step. Everything above can fail without blocking it, and its
   // own failure is the only one raised: a silent no-op here is exactly the

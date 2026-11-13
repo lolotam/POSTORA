@@ -12,6 +12,7 @@ import {
   sendDisconnectAlerts,
   type AdminProfile,
   type AlertAccount,
+  type AlertClaim,
   type OwnerProfile,
   type SendAlertsDeps,
 } from "./handler.ts";
@@ -65,6 +66,37 @@ function settingEnabled(value: unknown): boolean {
     }
   }
   return parsed !== false;
+}
+
+/**
+ * Reads what the claim RPC answered: the episode id and the payload it stored.
+ *
+ * A payload that cannot be read is a failure and not an empty payload: sending a rebuilt
+ * body under a key the provider already knows would be answered with a conflict forever.
+ */
+function readClaim(data: unknown): AlertClaim | null {
+  // PostgREST answers a function that returns a base type with the value itself. A
+  // one-element array carries the same value in the set shape, so it is accepted too.
+  const value = Array.isArray(data) ? (data.length === 1 ? data[0] : null) : data;
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
+  const record = value as Record<string, unknown>;
+  const episodeId = record.episode_id;
+  if (typeof episodeId !== "string" || episodeId.length === 0) return null;
+
+  const stored = record.payload;
+  if (stored === undefined || stored === null) return { episodeId, payload: null };
+  if (typeof stored !== "object" || Array.isArray(stored)) {
+    throw new Error("the claim answered with an unreadable payload");
+  }
+  const payload = stored as Record<string, unknown>;
+  const to = payload.to;
+  if (
+    !Array.isArray(to) || !to.every((entry) => typeof entry === "string") ||
+    typeof payload.subject !== "string" || typeof payload.html !== "string"
+  ) {
+    throw new Error("the claim answered with an unreadable payload");
+  }
+  return { episodeId, payload: { to: [...to], subject: payload.subject, html: payload.html } };
 }
 
 Deno.serve(async (req) => {
@@ -169,14 +201,16 @@ Deno.serve(async (req) => {
         if (!data) return true;
         return settingEnabled(data.value);
       },
-      async claim(accountId, kind) {
+      async claim(accountId, kind, payload) {
         const { data, error } = await admin.rpc("claim_whatsapp_disconnect_email", {
           p_account_id: accountId,
           p_kind: kind,
+          p_payload: payload,
         });
         if (error) throw error;
-        // The RPC returns the episode id of the claimed episode, or NULL when it refused.
-        return typeof data === "string" ? data : null;
+        // The RPC returns the episode id and the payload it stored, or NULL when it
+        // refused the claim.
+        return readClaim(data);
       },
       async send(payload) {
         // Raw fetch instead of the SDK: the SDK version this function pins cannot set the

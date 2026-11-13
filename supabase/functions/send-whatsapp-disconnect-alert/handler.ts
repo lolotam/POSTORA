@@ -27,14 +27,40 @@ export interface AdminProfile {
   full_name: string | null;
 }
 
+/**
+ * The rendered email of one recipient group.
+ *
+ * It is persisted with the claim: a provider idempotency key must always carry the same
+ * payload, so the body that goes out with a key can never be rebuilt later.
+ */
+export interface AlertPayload {
+  to: string[];
+  subject: string;
+  html: string;
+}
+
+/**
+ * What the claim returns: the episode, and the payload that was stored with it.
+ *
+ * The payload is null only when the claim was made without one. A retake after a stale
+ * claim answers with the payload the first claim stored.
+ */
+export interface AlertClaim {
+  episodeId: string;
+  payload: AlertPayload | null;
+}
+
 export interface SendAlertsDeps {
   loadAccount(accountId: string): Promise<AlertAccount | null>;
   loadOwnerProfile(userId: string): Promise<OwnerProfile | null>;
   loadAdmins(): Promise<AdminProfile[]>;
   isGlobalEmailEnabled(): Promise<boolean>;
   isAdminAlertEnabled(): Promise<boolean>;
-  /** The episode id of the claimed episode, or null when the claim was refused. */
-  claim(accountId: string, kind: AlertKind): Promise<string | null>;
+  /**
+   * Claims the episode for one recipient group, storing the payload when the group has
+   * none yet. Returns null when the claim was refused.
+   */
+  claim(accountId: string, kind: AlertKind, payload: AlertPayload): Promise<AlertClaim | null>;
   send(payload: {
     to: string[];
     subject: string;
@@ -194,17 +220,33 @@ export function idempotencyKeyFor(accountId: string, episodeId: string, kind: Al
  * a failure on one side never blocks the other: each records its own outcome.
  */
 async function deliverEmail(deps: SendAlertsDeps, delivery: Delivery): Promise<DeliveryOutcome> {
-  const episodeId = await deps.claim(delivery.accountId, delivery.kind);
-  if (!episodeId) return "not-claimed";
-
-  await deps.send({
+  // The claim stores the payload the first time this recipient is claimed for the episode,
+  // and answers with the stored one afterwards.
+  const claim = await deps.claim(delivery.accountId, delivery.kind, {
     to: delivery.to,
     subject: delivery.subject,
     html: delivery.html,
-    idempotencyKey: idempotencyKeyFor(delivery.accountId, episodeId, delivery.kind),
+  });
+  if (!claim) return "not-claimed";
+
+  // The payload the claim answers with is the one the key was used with the first time. A
+  // retake after a stale claim therefore sends the ORIGINAL body: rebuilding it here would
+  // put a different body under a key the provider already knows, and the provider would
+  // answer 409 forever.
+  const payload = claim.payload ?? {
+    to: delivery.to,
+    subject: delivery.subject,
+    html: delivery.html,
+  };
+
+  await deps.send({
+    to: payload.to,
+    subject: payload.subject,
+    html: payload.html,
+    idempotencyKey: idempotencyKeyFor(delivery.accountId, claim.episodeId, delivery.kind),
   });
 
-  const marked = await deps.mark(delivery.accountId, delivery.kind, episodeId);
+  const marked = await deps.mark(delivery.accountId, delivery.kind, claim.episodeId);
   if (!marked) return "mark-refused";
   return "sent";
 }

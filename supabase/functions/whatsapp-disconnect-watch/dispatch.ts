@@ -31,29 +31,52 @@ export interface AlertDispatchOptions {
   fetcher?: typeof fetch;
 }
 
-function asStringArray(value: unknown): string[] {
-  if (!Array.isArray(value)) return [];
-  return value.filter((entry): entry is string => typeof entry === "string");
+/** The message every invalid summary fails with. */
+const INVALID_SUMMARY = "alert dispatch returned an invalid summary";
+
+function isStringArray(value: unknown): value is string[] {
+  return Array.isArray(value) && value.every((entry) => typeof entry === "string");
 }
 
-/** Reads the sender's summary. Anything unexpected is read as "nothing went out". */
+/**
+ * Reads the sender's summary, strictly.
+ *
+ * The summary is the only evidence that an alert went out, so a body that does not carry
+ * it -- an empty object, a field that is missing, a field of the wrong type -- says
+ * NOTHING about what the sender did. Reading that as "nothing went out" would report a
+ * clean run for a sender that never ran, so an unreadable summary is a dispatch failure.
+ *
+ * @throws when the body is not a summary.
+ */
 export function readAlertSummary(payload: unknown): AlertDispatchResult {
-  const record = typeof payload === "object" && payload !== null && !Array.isArray(payload)
-    ? payload as Record<string, unknown>
-    : {};
+  if (typeof payload !== "object" || payload === null || Array.isArray(payload)) {
+    throw new Error(INVALID_SUMMARY);
+  }
+  const record = payload as Record<string, unknown>;
+  if (typeof record.ownerSent !== "boolean" || typeof record.adminSent !== "boolean") {
+    throw new Error(INVALID_SUMMARY);
+  }
+  if (!isStringArray(record.failed)) {
+    throw new Error(INVALID_SUMMARY);
+  }
+  if (record.skipped !== null && typeof record.skipped !== "string") {
+    throw new Error(INVALID_SUMMARY);
+  }
   return {
-    ownerSent: record.ownerSent === true,
-    adminSent: record.adminSent === true,
-    failed: asStringArray(record.failed),
-    skipped: typeof record.skipped === "string" ? record.skipped : null,
+    ownerSent: record.ownerSent,
+    adminSent: record.adminSent,
+    failed: [...record.failed],
+    skipped: record.skipped,
   };
 }
 
 /**
  * Asks the sender to email the owner and the admins about one account.
  *
- * Raises when the sender cannot be reached, answers with a failure, or answers without a
- * readable summary: all three leave the watcher without evidence that an alert went out.
+ * Raises when the sender cannot be reached, answers with a failure, answers without a
+ * summary, or answers with a body that is not a summary: all of those leave the watcher
+ * without evidence that an alert went out, and a watcher that reported "nothing to
+ * report" for a sender that never ran would hide the outage.
  */
 export async function dispatchDisconnectAlert(
   options: AlertDispatchOptions,

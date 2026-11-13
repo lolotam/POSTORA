@@ -1500,11 +1500,14 @@ git commit -- supabase/functions/send-whatsapp-disconnect-alert/index.ts
   disconnect** when the mark fails (a failed or non-`true` RPC result raises, so the account is left
   active rather than deactivated without a marker — a deactivated account with no marker is polled
   again and would raise a second, spurious disconnect alert). If the mark succeeds but the later
-  deactivation fails, the marker is rolled back through
+  deactivation fails, the rollback of the marker is attempted (best effort) through
   `public.unmark_whatsapp_user_disconnected(p_account_id uuid)` — a SECURITY DEFINER RPC that clears
   the marker only while the row is still `is_active = true` and is an `evolution_qr` WhatsApp row —
-  and the original deactivation error is rethrown. The `connection_mode === 'evolution_qr'` condition
-  still holds: a Meta-mode disconnect has no QR to rescan and is never marked.
+  and the original deactivation error is rethrown. The same rollback is attempted (best effort) when
+  the remote teardown itself fails before the deactivation — the Evolution instance lookup, for
+  instance — because the marker is already on a row that is still active. The
+  `connection_mode === 'evolution_qr'` condition still holds: a Meta-mode disconnect has no QR to
+  rescan and is never marked.
 
 - [ ] **Step 3: Typecheck both modules.**
   `deno check --node-modules-dir=none supabase/functions/_shared/evolutionQrAccount.ts supabase/functions/_shared/whatsappDisconnect.ts`.

@@ -33,6 +33,7 @@ interface RecordedRpc {
 function recordingAdmin(
   options: {
     instanceRow?: { instance_name: string } | null;
+    instanceError?: unknown;
     updateError?: { table: string; error: unknown };
     rpcError?: unknown;
     rpcData?: unknown;
@@ -56,7 +57,10 @@ function recordingAdmin(
               return this;
             },
             maybeSingle: () =>
-              Promise.resolve({ data: options.instanceRow ?? null, error: null }),
+              Promise.resolve({
+                data: options.instanceRow ?? null,
+                error: options.instanceError ?? null,
+              }),
           };
         },
         update(values: Record<string, unknown>) {
@@ -253,6 +257,31 @@ Deno.test("a failed deactivation rolls the deliberate marker back and rethrows",
     { name: "unmark_whatsapp_user_disconnected", args: { p_account_id: "acc-7" } },
   ]);
   assertEquals(deactivationOf(updates)?.values, { is_active: false });
+});
+
+Deno.test("an instance lookup that fails after marking rolls the marker back and rethrows", async () => {
+  // The marker is written before the remote teardown, and the instance lookup is part of
+  // that teardown. A failed lookup must not leave the marker on an account that is still
+  // active: the watcher skips every account carrying it, so the account would never be
+  // polled again. The rollback goes through the same path as a failed deactivation.
+  const { rpcs, admin, updates } = recordingAdmin({
+    instanceError: { message: "instances unreachable" },
+  });
+
+  const rejection = await assertRejects(
+    () =>
+      disconnectWhatsAppAccount(
+        { accountId: "acc-9", workspaceId: "ws-9", connectionMode: "evolution_qr" },
+        { admin, evolution: evolutionRecorder([]) },
+      ),
+  );
+
+  assertEquals(rejection, { message: "instances unreachable" });
+  assertEquals(rpcs, [
+    { name: "mark_whatsapp_user_disconnected", args: { p_account_id: "acc-9" } },
+    { name: "unmark_whatsapp_user_disconnected", args: { p_account_id: "acc-9" } },
+  ]);
+  assertEquals(deactivationOf(updates), undefined);
 });
 
 Deno.test("a failed deactivation of a Meta account rolls no marker back", async () => {
