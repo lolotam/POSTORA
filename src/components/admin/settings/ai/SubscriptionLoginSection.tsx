@@ -77,9 +77,10 @@ export function SubscriptionLoginSection({ providerCode }: { providerCode: 'clau
   // With the flag off the subscription pathway is closed, but a stored login
   // must stay visible so the admin can still delete it. A provider the edge
   // function does not offer yet (an older deploy) has no sign-in to show.
-  // A failed read is shown, not hidden: an empty section would look like the
-  // login is simply unavailable.
-  if (capabilitiesError) {
+  // A failed first read is shown, not hidden: an empty section would look like
+  // the login is simply unavailable. A failed background refetch keeps the
+  // cached capabilities, so a stored login stays visible and removable.
+  if (capabilitiesError && !capabilities) {
     return (
       <Alert variant="destructive">
         <AlertTriangle className="h-4 w-4" />
