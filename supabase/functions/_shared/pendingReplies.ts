@@ -189,6 +189,12 @@ export interface ReplyTransition {
   generatedReply?: string | null;
   /** The tools that produced `generatedReply`, so a redelivery can record them truthfully. */
   generatedToolCalls?: unknown[] | null;
+  /**
+   * What `generatedReply` is: null for an answer the model produced, "human_mode_ack" for
+   * the one-time notice a human takeover owes the customer. A gate that is closed for the
+   * answer is not closed for the notice, so a later turn has to be able to tell them apart.
+   */
+  generatedKind?: string | null;
   error?: string | null;
 }
 
@@ -200,15 +206,20 @@ export async function advanceReply(
   // Named fields rather than positional: `from` and `to` are adjacent same-typed strings, and
   // a transposition would silently move the row backwards through the state machine.
   const { id, from, to } = transition;
+  // The kind is written by the RPC that carries it, so a transition that does not need one
+  // keeps working against a database that does not have the column yet.
+  const rpc = transition.generatedKind ? "advance_agent_reply_kind" : "advance_agent_reply";
+  const args: Record<string, unknown> = {
+    p_id: id,
+    p_from: from,
+    p_to: to,
+    p_generated_reply: transition.generatedReply ?? null,
+    p_error: transition.error?.slice(0, 500) ?? null,
+    p_tool_calls: transition.generatedToolCalls?.length ? transition.generatedToolCalls : null,
+  };
+  if (transition.generatedKind) args.p_generated_kind = transition.generatedKind;
   try {
-    const { data, error } = await admin.rpc("advance_agent_reply", {
-      p_id: id,
-      p_from: from,
-      p_to: to,
-      p_generated_reply: transition.generatedReply ?? null,
-      p_error: transition.error?.slice(0, 500) ?? null,
-      p_tool_calls: transition.generatedToolCalls?.length ? transition.generatedToolCalls : null,
-    });
+    const { data, error } = await admin.rpc(rpc, args);
     if (error) {
       console.error(`[outbox] ${from} -> ${to} failed for ${id}: ${error.message}`);
       return false;

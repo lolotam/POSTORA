@@ -17,7 +17,12 @@ const REPLY = { text: "hello", toolCalls: [] };
  */
 function stubOutbox(
   initial:
-    | { status: string; generated_reply?: string | null; generated_tool_calls?: unknown[] | null }
+    | {
+      status: string;
+      generated_reply?: string | null;
+      generated_tool_calls?: unknown[] | null;
+      generated_kind?: string | null;
+    }
     | null,
 ) {
   const row = initial ? { ...initial } : null;
@@ -25,10 +30,13 @@ function stubOutbox(
   type RpcResult = Promise<{ data: unknown; error: { message: string } | null }>;
   const admin = {
     rpc: (name: string, args: Record<string, unknown>): RpcResult => {
-      if (name !== "advance_agent_reply") throw new Error(`unexpected rpc ${name}`);
+      if (name !== "advance_agent_reply" && name !== "advance_agent_reply_kind") {
+        throw new Error(`unexpected rpc ${name}`);
+      }
       if (row && row.status === args.p_from) {
         row.status = String(args.p_to);
         if (typeof args.p_generated_reply === "string") row.generated_reply = args.p_generated_reply;
+        if (typeof args.p_generated_kind === "string") row.generated_kind = args.p_generated_kind;
         transitions.push(`${args.p_from}->${args.p_to}`);
         return Promise.resolve({ data: true, error: null });
       }
@@ -121,7 +129,12 @@ Deno.test("a failed sending->sent bookkeeping update does not undo a delivery", 
 
 Deno.test("takeOutboxRow: a ready_to_send row is redelivered without the agent", async () => {
   const { admin, transitions, row } = stubOutbox({ status: "ready_to_send", generated_reply: "stored text" });
-  assertEquals(await takeOutboxRow(admin, "row-1"), { mode: "redeliver", text: "stored text", toolCalls: null });
+  assertEquals(await takeOutboxRow(admin, "row-1"), {
+    mode: "redeliver",
+    text: "stored text",
+    toolCalls: null,
+    kind: "reply",
+  });
   // No transition at all, and the row is still ready_to_send. Claiming it into `running`
   // here would let the caller fall through to generation -- repeating the tool calls and
   // escalations the first attempt already performed, which is the whole failure the
@@ -136,7 +149,28 @@ Deno.test("a redelivery carries the tools the ORIGINAL generation ran", async ()
   // wrong for exactly the replies that needed recovering.
   const calls = [{ name: "escalate_to_human", arguments: {} }];
   const { admin } = stubOutbox({ status: "ready_to_send", generated_reply: "hi", generated_tool_calls: calls });
-  assertEquals(await takeOutboxRow(admin, "row-1"), { mode: "redeliver", text: "hi", toolCalls: calls });
+  assertEquals(await takeOutboxRow(admin, "row-1"), {
+    mode: "redeliver",
+    text: "hi",
+    toolCalls: calls,
+    kind: "reply",
+  });
+});
+
+Deno.test("a redelivery says whether the stored text is the handoff notice", async () => {
+  // A gate that is closed for an answer the model produced is not closed for the notice a
+  // human takeover owes the customer, so the row has to say which one it holds.
+  const { admin } = stubOutbox({
+    status: "ready_to_send",
+    generated_reply: "تم تحويل محادثتك لفريقنا",
+    generated_kind: "human_mode_ack",
+  });
+  assertEquals(await takeOutboxRow(admin, "row-1"), {
+    mode: "redeliver",
+    text: "تم تحويل محادثتك لفريقنا",
+    toolCalls: null,
+    kind: "human_mode_ack",
+  });
 });
 
 Deno.test("the reply and the tools that produced it are persisted in one statement", async () => {

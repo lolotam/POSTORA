@@ -20,7 +20,6 @@ import {
   formatModelRef,
   type GraphRelationFact,
   historyWindow,
-  HUMAN_MODE_ACK,
   ModelChainExhaustedError,
   iterationBudget,
   jevStartKey,
@@ -79,13 +78,14 @@ import {
 } from "./outbox.ts";
 import { adminToolDefinitions, executeAdminTool } from "./admin-tools.ts";
 import {
-  claimHumanModeAck,
+  completeHumanModeAck,
+  completeUnansweredEscalation,
   NO_AFTERMATH,
   readEscalationAftermath,
   releaseHumanModeAck,
+  releaseUnansweredEscalationClaim,
   replyIsDurable,
-  restoreUnansweredEscalation,
-  settleClosedGate,
+  settleClosedGateNotice,
   settleEscalationAftermath,
   type HandoffScope,
 } from "./handoffWindow.ts";
@@ -825,6 +825,9 @@ Deno.serve(async (req) => {
     // notice is then the whole reply: it goes out below, after the sender and the outbox row
     // are in hand, and no model is called.
     let humanModeAck: string | null = null;
+    // The lease token of the acknowledgement claim this turn holds. It identifies the claim,
+    // so a release or a completion only ever touches the claim this turn took.
+    let humanModeAckToken: string | null = null;
 
     // Sandbox runs bypass the delivery gates — they test the agent's brain,
     // not the conversation's delivery state. The sender is built only after
@@ -846,34 +849,51 @@ Deno.serve(async (req) => {
         ...gateChecks,
       });
       if (!gate.reply) {
-        const humanWindow = await claimHumanModeAck(admin, handoffScope(request), {
+        // What the outbox row holds decides what happens next, and the claim is only
+        // taken after that: a row that already holds an answer was written while the
+        // gate was open and may never be delivered under a closed one, and a row that
+        // holds the notice has to be delivered exactly as it was persisted.
+        const decision = await settleClosedGateNotice({
+          admin,
+          scope: handoffScope(request),
+          outboxId,
           gateReason: gate.reason,
           isComment: Boolean(request.comment_id),
+          language: handoffNoticeLanguage(
+            request.inbound_text,
+            config.language_mode,
+            request.language_hint,
+            storedCustomerLanguage,
+          ),
+          threadId: thread.id,
+          turn: {
+            userId: request.user_id,
+            content: request.inbound_text,
+            // The work item's id, so a retry stores this question once.
+            id: outboxId ?? undefined,
+          },
         });
-        if (humanWindow === "claimed") {
-          humanModeAck = HUMAN_MODE_ACK[
-            handoffNoticeLanguage(request.inbound_text, config.language_mode, request.language_hint, storedCustomerLanguage)
-          ];
-        } else {
-          const settlement = await settleClosedGate({
-            admin,
-            outboxId,
-            gateReason: gate.reason,
-            humanWindow,
-            threadId: thread.id,
-            turn: { userId: request.user_id, content: request.inbound_text },
-          });
-          if (settlement.body.ok) {
+        if (decision.kind === "retryable") {
+          // The claim's state could not be read, so nothing is settled on the strength of
+          // it: the work item stays unsettled and the customer's question is not lost
+          // over a hiccup.
+          await logOutcome(admin, { ...baseLog, status: "error", error: decision.error });
+          return jsonResponse({ ok: false, error: decision.error });
+        }
+        if (decision.kind === "skipped") {
+          if (decision.settlement.body.ok) {
             await logOutcome(admin, { ...baseLog, status: "skipped", error: gate.reason });
-            return jsonResponse(settlement.body);
+            return jsonResponse(decision.settlement.body);
           }
           // The customer's question is not durable anywhere. The work item was left
           // unsettled -- not cancelled, not marked done -- so the outbox can try again,
           // and the caller is told the turn failed. "Skipped" would be a lie: it would
           // say the question was handled.
-          await logOutcome(admin, { ...baseLog, status: "error", error: settlement.body.error });
-          return jsonResponse(settlement.body);
+          await logOutcome(admin, { ...baseLog, status: "error", error: decision.settlement.body.error });
+          return jsonResponse(decision.settlement.body);
         }
+        humanModeAck = decision.text;
+        humanModeAckToken = decision.claimToken;
       }
     }
 
@@ -884,7 +904,14 @@ Deno.serve(async (req) => {
     } catch (senderError) {
       // The acknowledgement claim was spent before the sender existed. Nothing reached
       // the customer, so the claim goes back and the notice is still owed.
-      if (humanModeAck) await releaseHumanModeAck(admin, handoffScope(request));
+      if (humanModeAck) {
+        const released = await releaseHumanModeAck(admin, handoffScope(request), humanModeAckToken);
+        if (!released) {
+          // The claim was not this turn's to release. The lease still stands, so a later
+          // turn takes it over once it lapses -- the notice is not lost, but it waits.
+          console.warn("[ai-agent-reply] the human-mode acknowledgement claim was not released");
+        }
+      }
       throw senderError;
     }
 
@@ -970,22 +997,27 @@ Deno.serve(async (req) => {
         // The tool calls come from the ROW, not from this invocation -- which ran none. An
         // empty list here would record a reply that had used tools as having used none.
         await persistDelivery(entry.text, outboundMessageId, entry.toolCalls ?? []);
+        // A redelivered NOTICE is the one-time handoff acknowledgement, and it is now
+        // delivered: the claim that owed it is consumed, so no later turn sends it again.
+        if (entry.kind === "human_mode_ack") {
+          await completeHumanModeAck(admin, handoffScope(request), humanModeAckToken);
+        }
         await logOutcome(admin, {
           ...baseLog,
           reply_text: entry.text.slice(0, 4000),
           tool_calls: entry.toolCalls?.length ? entry.toolCalls : null,
           latency_ms: Date.now() - startedAt,
-          status: "sent",
+          status: entry.kind === "human_mode_ack" ? "human_mode_ack" : "sent",
         }, { redelivered: true, outbound_message_id: outboundMessageId });
         return jsonResponse({ ok: true, redelivered: true, reply: entry.text });
       }
     }
 
     // The human_first notice travels the same send path as a generated reply and leaves the
-    // same thread trail. It is at most once: the claim is spent before the send, so a row
-    // recovery re-drives meets the closed gate as "window" and is cancelled, not re-sent.
-    // The one exception is a send that never became durable: nothing reached the customer
-    // and nothing was stored, so the claim goes back and the notice is still owed.
+    // same thread trail. It is at most once: the claim is spent before the send, and it is
+    // a LEASE, so a turn that dies before the notice is durable hands it back and a later
+    // turn delivers it instead. The row carries the notice's kind, so a turn that finds the
+    // row already holding it delivers it from the row rather than writing it again.
     if (humanModeAck && replySender) {
       const sender = replySender;
       let outboundMessageId: string | null;
@@ -994,15 +1026,30 @@ Deno.serve(async (req) => {
           ? await deliverGeneratedReply(
             admin,
             outboxId,
-            { text: humanModeAck, toolCalls: [] },
+            { text: humanModeAck, toolCalls: [], kind: "human_mode_ack" },
             (text) => sender(request.recipient_phone, text),
+            // The notice is durable from here, so the claim that owed it is consumed: no
+            // later turn sends it a second time.
+            async () => {
+              await completeHumanModeAck(admin, handoffScope(request), humanModeAckToken);
+            },
           )
           : await sender(request.recipient_phone, humanModeAck);
       } catch (ackError) {
         if (!replyIsDurable(outboxId, ackError)) {
-          await releaseHumanModeAck(admin, handoffScope(request));
+          const released = await releaseHumanModeAck(admin, handoffScope(request), humanModeAckToken);
+          if (!released) {
+            // The lease still stands, so a later turn takes the notice over once it
+            // lapses. It waits, but it is not lost.
+            console.warn("[ai-agent-reply] the human-mode acknowledgement claim was not released");
+          }
         }
         throw ackError;
+      }
+      // Without an outbox row there is no persist to hang the completion on, so the notice
+      // is complete once it has been sent.
+      if (!outboxId) {
+        await completeHumanModeAck(admin, handoffScope(request), humanModeAckToken);
       }
       await persistDelivery(humanModeAck, outboundMessageId, []);
       await logOutcome(admin, {
@@ -1824,6 +1871,19 @@ Deno.serve(async (req) => {
 
     let outboundMessageId: string | null = null;
     let replyWithoutDurableCopy = false;
+    let escalationCompleted = false;
+    /**
+     * Consumes the escalation window. The marker is LEASED, not taken: it stays set
+     * until the reply it belongs to is durable, so a turn that dies here leaves the
+     * apology owed instead of lost. A staff context that could not be stored or read
+     * keeps the lease, so the next turn tries again.
+     */
+    const completeEscalation = async () => {
+      if (!settlement.marker || escalationCompleted) return;
+      if (settlement.staffWriteFailed || settlement.staffReadFailed) return;
+      escalationCompleted = true;
+      await completeUnansweredEscalation(admin, handoffScope(request), thread.id, settlement.marker);
+    };
     try {
       if (!dryRun && replySender) {
         const sender = replySender;
@@ -1837,18 +1897,37 @@ Deno.serve(async (req) => {
             outboxId,
             { text: replyText, toolCalls: executedToolCalls },
             (text) => sender(request.recipient_phone, text),
+            // The reply is durable from here, so the window it belongs to is resolved.
+            completeEscalation,
           )
           : await sender(request.recipient_phone, replyText);
+        // Without an outbox row there is no persist to hang the completion on, so the
+        // window is resolved once the reply has been sent.
+        if (!outboxId) await completeEscalation();
       }
     } catch (deliveryError) {
       replyWithoutDurableCopy = !replyIsDurable(outboxId, deliveryError);
       throw deliveryError;
     } finally {
-      // The marker is a claim, not a receipt. It is spent before the reply is durable,
-      // so a reply that never became durable leaves the apology owed to nobody --
-      // and a staff context that could not be stored is lost with it.
-      if (settlement.marker && (replyWithoutDurableCopy || settlement.staffWriteFailed)) {
-        await restoreUnansweredEscalation(admin, handoffScope(request), thread.id, settlement.marker);
+      // The marker is a lease, not a receipt. A reply that never became durable, a staff
+      // context that could not be stored and a window that could not be read all give
+      // the lease back, so the apology is still owed to the customer.
+      if (
+        settlement.marker &&
+        !escalationCompleted &&
+        (replyWithoutDurableCopy || settlement.staffWriteFailed || settlement.staffReadFailed)
+      ) {
+        const released = await releaseUnansweredEscalationClaim(
+          admin,
+          handoffScope(request),
+          thread.id,
+          settlement.marker,
+        );
+        if (!released) {
+          // The lease still stands: a later turn takes the apology over once it lapses,
+          // so the apology is owed rather than lost.
+          console.warn("[ai-agent-reply] the unanswered-escalation lease was not released");
+        }
       }
     }
     timings.mark("sent");
