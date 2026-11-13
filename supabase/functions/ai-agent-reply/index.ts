@@ -76,7 +76,6 @@ import {
   cancelOutboxRow,
   deliverGeneratedReply,
   deliverStoredReply,
-  releaseAfterError,
   takeOutboxRow,
 } from "./outbox.ts";
 import { adminToolDefinitions, executeAdminTool } from "./admin-tools.ts";
@@ -90,6 +89,7 @@ import {
   releaseHumanModeAck,
   releaseUnansweredEscalationClaim,
   releaseUnpersistedEscalation,
+  releaseFailedEscalationTurn,
   type EscalationLeaseState,
   replyIsDurable,
   settleStaffInterruptedTurn,
@@ -1225,7 +1225,7 @@ Deno.serve(async (req) => {
     // Claim failures must occur before tools or durable procedure transitions. The
     // token travels to settlement so there is no second claim read after those effects.
     const preclaimedEscalation = aftermath.since
-      ? await claimUnansweredEscalation(admin, handoffScope(request), thread.id)
+      ? await claimUnansweredEscalation(admin, handoffScope(request), thread.id, true)
       : undefined;
     if (preclaimedEscalation?.failed) {
       throw new Error("the unanswered-escalation claim could not be read");
@@ -2024,7 +2024,7 @@ Deno.serve(async (req) => {
         // Nobody answered the question, so it is kept on the record: the thread
         // carries it, and the agent's next answer is written against it.
         const held = await settleStaffInterruptedTurn({
-          admin, outboxId, sideEffectsHappened,
+          admin, outboxId, sideEffectsHappened, scope: handoffScope(request), lease: earlyEscalationLease,
           threadId: thread.id,
           turn: { userId: request.user_id, content: request.inbound_text, id: outboxId ?? undefined },
         });
@@ -2240,7 +2240,8 @@ Deno.serve(async (req) => {
         if (floor.escalated) {
           await cancelOutboxRow(admin, outboxId, "model outage handled by escalation", request.user_id);
         } else {
-          await releaseAfterError(admin, outboxId, { sideEffectsHappened, error: errorMessage(error) }, request.user_id);
+          await releaseFailedEscalationTurn(admin, handoffScope(request), earlyEscalationLease, outboxId,
+            { sideEffectsHappened, error: errorMessage(error) });
         }
       }
       // apology_sent and human_notified travel in the body so a caller can tell this apart
@@ -2267,7 +2268,8 @@ Deno.serve(async (req) => {
       triage: triage ? { outcome: triage.outcome, errors: triage.errors.length ? triage.errors : null } : null,
     });
     if (outboxId) {
-      await releaseAfterError(admin, outboxId, { sideEffectsHappened, error: errorMessage(error) }, request.user_id);
+      await releaseFailedEscalationTurn(admin, handoffScope(request), earlyEscalationLease, outboxId,
+        { sideEffectsHappened, error: errorMessage(error) });
     }
     return jsonResponse({ ok: false, error: errorMessage(error) });
   } finally {

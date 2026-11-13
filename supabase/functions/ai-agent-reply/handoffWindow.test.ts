@@ -19,6 +19,7 @@ import {
   releaseHumanModeAck,
   releaseUnansweredEscalationClaim,
   releaseUnpersistedEscalation,
+  releaseFailedEscalationTurn,
   replyIsDurable,
   settleClosedGate,
   settleStaffInterruptedTurn,
@@ -1260,11 +1261,42 @@ Deno.test("a failed held-turn write requeues safe work and retains work with sid
   for (const sideEffectsHappened of [false, true]) {
     const { admin, calls } = adminStub({ insertError: { message: "temporary failure" }, outboxStatus: "running" });
     const held = await settleStaffInterruptedTurn({ admin, outboxId: "outbox-1", threadId: THREAD_ID,
-      turn: { userId: SCOPE.userId, content: "Question", id: "outbox-1" }, sideEffectsHappened });
+      turn: { userId: SCOPE.userId, content: "Question", id: "outbox-1" }, sideEffectsHappened, scope: SCOPE, lease: null });
     assertEquals(held.cancelWorkItem, false);
     assertEquals(parseAgentReplyResult(200, held.body).kind, "retryable");
     const requeue = calls.find((call) => call.kind === "rpc:advance_agent_reply_for_owner");
     assertEquals(Boolean(requeue), !sideEffectsHappened);
     if (requeue) assertEquals(requeue.args?.p_to, "pending");
   }
+});
+
+Deno.test("failed work releases its escalation lease before making the row retryable", async () => {
+  for (const failure of ["none", "refused", "thrown"]) {
+    const { admin, calls } = adminStub();
+    const rpc = admin.rpc.bind(admin);
+    admin.rpc = ((fn: string, args: Record<string, unknown>) => {
+      if (fn === "release_unanswered_escalation_claim") {
+        calls.push({ kind: `rpc:${fn}`, args });
+        if (failure === "thrown") return Promise.reject(new Error("connection reset"));
+        return Promise.resolve({ data: failure === "none", error: null });
+      }
+      return rpc(fn, args);
+    }) as typeof admin.rpc;
+    const lease = { threadId: THREAD_ID, marker: CLAIM_TOKEN, claimToken: CLAIM_TOKEN, replyDurable: false };
+    await releaseFailedEscalationTurn(admin, SCOPE, lease, "outbox-1", { sideEffectsHappened: false, error: "setup failed" });
+    assertEquals(calls.map((call) => call.kind), failure === "none"
+      ? ["rpc:release_unanswered_escalation_claim", "rpc:advance_agent_reply_for_owner"]
+      : ["rpc:release_unanswered_escalation_claim"]);
+    if (failure === "none") {
+      await releaseUnpersistedEscalation(admin, SCOPE, lease);
+      assertEquals(calls.length, 2); // Finally does not release a successfully returned token twice.
+    }
+  }
+});
+
+Deno.test("a turn that read an owed marker refuses a competing live escalation lease", async () => {
+  const { admin } = adminStub({ claim: { marker: null, token: null } });
+  assertEquals(await claimUnansweredEscalation(admin, SCOPE, THREAD_ID, true), {
+    marker: null, token: null, claimed: false, failed: true,
+  });
 });

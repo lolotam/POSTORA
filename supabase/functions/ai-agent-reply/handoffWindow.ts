@@ -621,6 +621,7 @@ export async function claimUnansweredEscalation(
   admin: SupabaseClient,
   scope: HandoffScope,
   threadId: string,
+  required = false,
 ): Promise<{ marker: string | null; token: string | null; claimed: boolean; failed: boolean }> {
   const { data, error } = await admin.rpc("claim_unanswered_escalation", {
     p_thread_id: threadId,
@@ -637,9 +638,9 @@ export async function claimUnansweredEscalation(
   const marker = typeof claim.marker === "string" ? claim.marker : null;
   const token = typeof claim.token === "string" ? claim.token : null;
   if (marker === null && token === null) {
-    // No marker, or the marker is leased by a live claim: there is nothing to act on,
-    // and that much is known.
-    return { marker: null, token: null, claimed: false, failed: false };
+    // A turn that already read an owed marker cannot proceed without owning it.
+    // A competing lease or just-completed marker must be re-read on a later attempt.
+    return { marker: null, token: null, claimed: false, failed: required };
   }
   if (marker === null || token === null) {
     // A lease nobody can name: the marker alone would let a stale worker release the
@@ -997,6 +998,7 @@ export interface EscalationLeaseState {
   marker: string;
   claimToken: string;
   replyDurable: boolean;
+  released?: boolean;
 }
 
 /** Every exit before durable persistence gives an early lease back, including setup failures. */
@@ -1004,20 +1006,41 @@ export async function releaseUnpersistedEscalation(
   admin: SupabaseClient,
   scope: HandoffScope,
   lease: EscalationLeaseState | null,
+): Promise<boolean> {
+  if (!lease || lease.replyDurable || lease.released) return true;
+  const released = await releaseUnansweredEscalationClaim(admin, scope, lease.threadId, lease.marker, lease.claimToken);
+  if (released) lease.released = true;
+  return released;
+}
+
+/** The marker must be available before another worker can take the retryable row. */
+export async function releaseFailedEscalationTurn(
+  admin: SupabaseClient,
+  scope: HandoffScope,
+  lease: EscalationLeaseState | null,
+  outboxId: string,
+  outcome: { sideEffectsHappened: boolean; error: string },
 ): Promise<void> {
-  if (!lease || lease.replyDurable) return;
-  await releaseUnansweredEscalationClaim(admin, scope, lease.threadId, lease.marker, lease.claimToken);
+  let released = false;
+  try {
+    released = await releaseUnpersistedEscalation(admin, scope, lease);
+  } catch {
+    console.error("[ai-agent-reply] escalation lease cleanup failed before retry");
+  }
+  await releaseAfterError(admin, outboxId, {
+    ...outcome, sideEffectsHappened: outcome.sideEffectsHappened || !released,
+  }, scope.userId);
 }
 
 /** A failed hold is retryable only while this invocation made no external side effect. */
 export async function settleStaffInterruptedTurn(
-  input: Omit<Parameters<typeof settleClosedGate>[0], "gateReason" | "humanWindow"> & { sideEffectsHappened: boolean },
+  input: Omit<Parameters<typeof settleClosedGate>[0], "gateReason" | "humanWindow"> & { sideEffectsHappened: boolean; scope: HandoffScope; lease: EscalationLeaseState | null },
 ): Promise<ClosedGateSettlement> {
   const held = await settleClosedGate({ ...input, gateReason: "staff_answered_during_generation", humanWindow: "window" });
   if (!held.cancelWorkItem && input.outboxId) {
-    await releaseAfterError(input.admin, input.outboxId, {
+    await releaseFailedEscalationTurn(input.admin, input.scope, input.lease, input.outboxId, {
       sideEffectsHappened: input.sideEffectsHappened, error: "held_customer_turn_not_durable",
-    }, input.turn.userId);
+    });
   }
   return held;
 }

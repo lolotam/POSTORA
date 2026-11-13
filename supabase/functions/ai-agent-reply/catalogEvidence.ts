@@ -34,10 +34,14 @@ function specificIdentities(row: CatalogEvidence): string[] {
     Boolean(value && value.trim().length >= 6 && /\p{L}/u.test(value))
   );
   const names = [row.name_ar, row.name_en].filter((value): value is string =>
-    Boolean(value && (value.match(/\p{L}/gu)?.length ?? 0) >= 8 && value.trim().split(/\s+/u).length >= 2)
+    Boolean(value && (value.match(/\p{L}/gu)?.length ?? 0) >= 8)
   );
-  const url = row.product_url;
-  return [...identifiers, ...names, ...(url && /^https?:\/\/[^/\s]+\/\S+/i.test(url) ? [url] : [])];
+  let productUrl: string | undefined;
+  try {
+    const url = new URL(row.product_url ?? "");
+    if (url.protocol === "https:" || url.protocol === "http:") productUrl = row.product_url;
+  } catch { /* An invalid catalog URL supplies no evidence. */ }
+  return [...identifiers, ...names, ...(productUrl ? [productUrl] : [])];
 }
 
 /** Identity-match score, not a verification of every factual claim in the reply. */
