@@ -1,6 +1,6 @@
 import { serve } from 'https://deno.land/std@0.168.0/http/server.ts';
 import { restrictedCorsHeaders } from '../_shared/cors.ts';
-import { HiggsfieldAuthError, getValidAccessToken } from '../_shared/higgsfield-oauth.ts';
+import { getValidAccessToken } from '../_shared/higgsfield-oauth.ts';
 import { HiggsfieldMcpClient } from '../_shared/higgsfield-mcp.ts';
 import { createLogger } from '../_shared/logging.ts';
 import {
@@ -10,6 +10,7 @@ import { isBillingBlocked, ProviderTestError } from '../_shared/providerErrors.t
 import { resolveProviderKey } from '../_shared/providerKeys.ts';
 import type { RowReader } from '../_shared/providerEndpoint.ts';
 import { loadProbeTarget, probeProvider } from '../_shared/aiProviderTest.ts';
+import { groupCatalogueRows } from '../_shared/aiModelCatalogue.ts';
 
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!;
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
@@ -64,17 +65,21 @@ serve(async (req) => {
       if (action === 'list') {
         const [pRes, mRes, sRes] = await Promise.all([
           supabase.from('ai_providers').select('*').order('name'),
-          // The catalogue is keyed by credential kind. This list is the API-key
-          // catalogue: an OAuth row of the same model_id would show up twice.
-          supabase.from('ai_models').select('*, ai_providers(provider_code, name)').eq('auth_method', 'api_key').order('name'),
+          // The catalogue is keyed by credential kind. Both kinds are read here
+          // and split below, so the subscription rows are visible without the
+          // API-key list changing.
+          supabase.from('ai_models').select('*, ai_providers(provider_code, name)').in('auth_method', ['api_key', 'oauth']).order('name'),
           // Widened beyond the default_ai_model* tier rows so the admin UI can also
           // read the model_catalog_synced_at_<code> rows sync-models writes, and the
           // agent_triage_enabled on/off switch.
           supabase.from('system_settings').select('*').or('key.like.default_ai_model%,key.like.model_catalog_synced_at_%,key.eq.agent_triage_enabled'),
         ]);
+        if (pRes.error || mRes.error || sRes.error) throw new Error('The AI configuration could not be read');
+        const catalogue = groupCatalogueRows((mRes.data || []) as Array<{ auth_method?: string | null }>);
         return new Response(JSON.stringify({
           providers: pRes.data || [],
-          models: mRes.data || [],
+          models: catalogue.models,
+          oauthModels: catalogue.oauthModels,
           settings: sRes.data || [],
         }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
       }
@@ -131,8 +136,8 @@ serve(async (req) => {
           await probeProvider(supabase, provider, apiKey);
           latency = Date.now() - startTime;
           success = true;
-        } catch (e: any) {
-          errorMessage = e instanceof HiggsfieldAuthError ? e.message : e.message;
+        } catch (e: unknown) {
+          errorMessage = e instanceof Error ? e.message : 'Connection test failed';
           latency = Date.now() - startTime;
         }
 
@@ -177,12 +182,12 @@ serve(async (req) => {
           const latency = Date.now() - startTime;
           await saveKey();
           return new Response(JSON.stringify({ success: true, latency }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
-        } catch (e: any) {
+        } catch (e: unknown) {
           if (e instanceof ProviderTestError && isBillingBlocked(e.status, e.body)) {
             await saveKey();
             return new Response(JSON.stringify({ success: true, latency: Date.now() - startTime, warning: e.message }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
           }
-          return new Response(JSON.stringify({ success: false, error: e.message, latency: Date.now() - startTime }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+          return new Response(JSON.stringify({ success: false, error: e instanceof Error ? e.message : 'Provider test failed', latency: Date.now() - startTime }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
         }
       }
 
@@ -204,8 +209,8 @@ serve(async (req) => {
           if (!provider) return new Response(JSON.stringify({ error: 'Unknown provider' }), { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
           await probeProvider(supabase, provider, apiKey);
           return new Response(JSON.stringify({ success: true, latency: Date.now() - startTime }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
-        } catch (e: any) {
-          return new Response(JSON.stringify({ success: false, error: e.message, latency: Date.now() - startTime }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+        } catch (e: unknown) {
+          return new Response(JSON.stringify({ success: false, error: e instanceof Error ? e.message : 'Provider test failed', latency: Date.now() - startTime }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
         }
       }
 
@@ -305,8 +310,9 @@ serve(async (req) => {
     }
 
     return new Response(JSON.stringify({ error: 'Method not allowed' }), { status: 405, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
-  } catch (error: any) {
-    console.error('AI Config Error:', error.message);
-    return new Response(JSON.stringify({ error: error.message }), { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+  } catch (error: unknown) {
+    const message = 'AI configuration failed. Please try again.';
+    console.error('AI Config Error:', error instanceof Error ? error.name : 'error');
+    return new Response(JSON.stringify({ error: message }), { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
   }
 });

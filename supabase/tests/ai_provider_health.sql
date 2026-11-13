@@ -505,7 +505,148 @@ BEGIN
 END $aph_alerts_again$;
 
 -- ===========================================================================
--- 13. An authenticated admin may READ the health rows and may not WRITE
+-- 13. One break, one alert id. The id is minted when the provider ENTERS a
+--     broken state and stays the same while the provider is still broken, so a
+--     claim that is re-claimed after a run that died mid-send carries the same
+--     id and the mail provider refuses the second send. A recovery clears it and
+--     the next break gets a new id: a new break is a new alert.
+-- ===========================================================================
+\echo '--- alert id: one id per break ---'
+DO $aph_alert_id$
+DECLARE
+  v_first uuid;
+  v_again uuid;
+  v_second uuid;
+  v_claimed uuid;
+BEGIN
+  -- Start from a known state: openai recovers.
+  PERFORM public.record_ai_provider_health(
+    'openai', 'api_key', 'connected', NULL, 0, 0, 0, 10,
+    '55555555-5555-5555-5555-555555555555'::uuid);
+
+  -- It breaks: the break gets an id.
+  PERFORM public.record_ai_provider_health(
+    'openai', 'api_key', 'failed', 'Rate limit exceeded', 0, 0, 0, 10,
+    '55555555-5555-5555-5555-555555555555'::uuid);
+
+  SELECT alert_id INTO v_first
+    FROM public.ai_provider_health
+   WHERE provider_code = 'openai' AND auth_method = 'api_key';
+  IF v_first IS NULL THEN
+    RAISE EXCEPTION 'FAIL: the first break has no alert_id';
+  END IF;
+
+  -- The claim carries the id of that break.
+  SELECT alert_id INTO v_claimed
+    FROM public.claim_ai_provider_health_notifications(
+      'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'::uuid)
+   WHERE provider_code = 'openai';
+  IF v_claimed IS DISTINCT FROM v_first THEN
+    RAISE EXCEPTION 'FAIL: the claim carries the alert id %, expected %', v_claimed, v_first;
+  END IF;
+  PERFORM public.mark_ai_provider_health_notified(
+    'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'::uuid, 'openai', 'api_key');
+
+  -- A re-check while it is STILL broken is the same break: the id stays.
+  PERFORM public.record_ai_provider_health(
+    'openai', 'api_key', 'failed', 'Rate limit exceeded', 0, 0, 0, 10,
+    '55555555-5555-5555-5555-555555555555'::uuid);
+
+  SELECT alert_id INTO v_again
+    FROM public.ai_provider_health
+   WHERE provider_code = 'openai' AND auth_method = 'api_key';
+  IF v_again IS DISTINCT FROM v_first THEN
+    RAISE EXCEPTION 'FAIL: the re-check changed the alert id from % to %, expected the same break', v_first, v_again;
+  END IF;
+
+  -- It recovers: there is no break any more, so there is no id.
+  PERFORM public.record_ai_provider_health(
+    'openai', 'api_key', 'connected', NULL, 0, 0, 0, 10,
+    '55555555-5555-5555-5555-555555555555'::uuid);
+
+  SELECT alert_id INTO v_again
+    FROM public.ai_provider_health
+   WHERE provider_code = 'openai' AND auth_method = 'api_key';
+  IF v_again IS NOT NULL THEN
+    RAISE EXCEPTION 'FAIL: the recovery left the alert id % behind', v_again;
+  END IF;
+
+  -- It breaks again: a NEW break gets a NEW id, so the alert is a new alert.
+  PERFORM public.record_ai_provider_health(
+    'openai', 'api_key', 'failed', 'Rate limit exceeded', 0, 0, 0, 10,
+    '55555555-5555-5555-5555-555555555555'::uuid);
+
+  SELECT alert_id INTO v_second
+    FROM public.ai_provider_health
+   WHERE provider_code = 'openai' AND auth_method = 'api_key';
+  IF v_second IS NULL THEN
+    RAISE EXCEPTION 'FAIL: the second break has no alert_id';
+  END IF;
+  IF v_second = v_first THEN
+    RAISE EXCEPTION 'FAIL: the second break reuses the alert id %, expected a new one', v_first;
+  END IF;
+
+  PERFORM public.mark_ai_provider_health_notified(
+    'cccccccc-cccc-4ccc-8ccc-cccccccccccc'::uuid, 'openai', 'api_key');
+END $aph_alert_id$;
+
+-- A retried claim must return the original event content even when a re-check
+-- changes the live failure reason. Resend rejects a reused key with a new body.
+DO $aph_retry_payload$
+DECLARE
+  v_first_id uuid;
+  v_claim record;
+BEGIN
+  PERFORM public.record_ai_provider_health('openai', 'api_key', 'connected', NULL, 0, 0, 0, 1, NULL);
+  PERFORM public.record_ai_provider_health('openai', 'api_key', 'failed', 'Original reason', NULL, NULL, NULL, 1, NULL);
+  SELECT alert_id INTO v_first_id FROM public.ai_provider_health
+   WHERE provider_code = 'openai' AND auth_method = 'api_key';
+  PERFORM public.claim_ai_provider_health_notifications('dddddddd-dddd-4ddd-8ddd-dddddddddddd');
+  UPDATE public.ai_provider_health SET claimed_at = now() - interval '11 minutes'
+   WHERE provider_code = 'openai' AND auth_method = 'api_key';
+  PERFORM public.record_ai_provider_health('openai', 'api_key', 'needs_relogin', 'Changed reason', NULL, NULL, NULL, 1, NULL);
+  SELECT * INTO v_claim FROM public.claim_ai_provider_health_notifications('eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee')
+   WHERE provider_code = 'openai' AND auth_method = 'api_key';
+  IF v_claim.alert_id IS DISTINCT FROM v_first_id OR v_claim.reason IS DISTINCT FROM 'Original reason'
+     OR v_claim.status IS DISTINCT FROM 'failed' THEN
+    RAISE EXCEPTION 'FAIL: the retry changed the original alert event';
+  END IF;
+END $aph_retry_payload$;
+
+-- ===========================================================================
+-- 14. A provider that was not synced has NO count. The recording RPC used to
+--     coalesce a null count to zero, so a failed sync read back as "0 added,
+--     0 updated" after a reload: a wrong claim about work that never happened.
+-- ===========================================================================
+\echo '--- counts: a provider that was not synced has no count ---'
+DO $aph_counts_null$
+DECLARE
+  v_added integer;
+  v_updated integer;
+  v_deactivated integer;
+BEGIN
+  PERFORM public.record_ai_provider_health(
+    'claude', 'api_key', 'failed', 'Rate limit exceeded', NULL, NULL, NULL, 10,
+    '11111111-1111-1111-1111-111111111111'::uuid);
+
+  SELECT models_added, models_updated, models_deactivated
+    INTO v_added, v_updated, v_deactivated
+    FROM public.ai_provider_health
+   WHERE provider_code = 'claude' AND auth_method = 'api_key';
+
+  IF v_added IS NOT NULL THEN
+    RAISE EXCEPTION 'FAIL: models_added is %, expected NULL', v_added;
+  END IF;
+  IF v_updated IS NOT NULL THEN
+    RAISE EXCEPTION 'FAIL: models_updated is %, expected NULL', v_updated;
+  END IF;
+  IF v_deactivated IS NOT NULL THEN
+    RAISE EXCEPTION 'FAIL: models_deactivated is %, expected NULL', v_deactivated;
+  END IF;
+END $aph_counts_null$;
+
+-- ===========================================================================
+-- 15. An authenticated admin may READ the health rows and may not WRITE
 --     them. The rows are written by the edge function through the service
 --     role; an admin who could UPDATE notified_at could silence an alert by
 --     hand, so the table is read only for authenticated.

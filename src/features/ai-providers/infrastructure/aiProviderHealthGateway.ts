@@ -50,6 +50,7 @@ const chunkSchema = z.object({
 });
 
 export type ProviderHealthRow = z.infer<typeof healthRowSchema>;
+export type ProviderHealthSkipped = z.infer<typeof skippedSchema>;
 export type ProviderHealthChunk = z.infer<typeof chunkSchema>;
 
 export const INVALID_RESPONSE = "AI_PROVIDER_HEALTH_INVALID_RESPONSE";

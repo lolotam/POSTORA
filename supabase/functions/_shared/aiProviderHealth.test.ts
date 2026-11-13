@@ -23,17 +23,36 @@ Deno.test("the target list holds one row per credential kind and never a provide
   assertEquals(targets[2].oauth_provider, "anthropic");
 });
 
-Deno.test("the chunk slice is empty and done past the last chunk", () => {
+Deno.test("the chunk takes the first targets that are still missing, not an offset", () => {
   const targets = planHealthTargets(
     Array.from({ length: 7 }, (_, i) => ({ provider_code: `p${i}`, name: `P${i}` })), []);
+  // The first chunk takes the first six of what is left.
   const first = sliceHealthChunk(targets, 1);
   assertEquals(first.slice.length, 6);
   assertEquals(first.done, false);
   assertEquals(first.nextChunk, 2);
-  const second = sliceHealthChunk(targets, 2);
+  // The next call re-plans: the six that are done are not in the list any more,
+  // so the chunk takes the one that is left.
+  const remaining = targets.slice(6);
+  const second = sliceHealthChunk(remaining, 2);
   assertEquals(second.slice.length, 1);
   assertEquals(second.done, true);
   assertEquals(second.nextChunk, null);
+});
+
+Deno.test("a chunk never walks past a target when the list changed under it", () => {
+  // A provider was added before the second call.
+  const afterAddition = planHealthTargets(
+    [...Array.from({ length: 3 }, (_, i) => ({ provider_code: `p${i}`, name: `P${i}` })),
+     { provider_code: "p3", name: "P3" }], []);
+  const first = sliceHealthChunk(afterAddition, 1);
+  assertEquals(first.slice.map((t) => t.provider_code), ["p0", "p1", "p2", "p3"]);
+  assertEquals(first.done, true);
+  // The three that are done are not in the list any more, so the next chunk starts
+  // at the target that was added: nothing is skipped and nothing is done twice.
+  const second = sliceHealthChunk(afterAddition.slice(3), 2);
+  assertEquals(second.slice.map((t) => t.provider_code), ["p3"]);
+  assertEquals(second.done, true);
 });
 
 Deno.test("an invalid api key is a failure with a fixed sentence and no key", () => {

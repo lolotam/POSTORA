@@ -186,6 +186,7 @@ SUITES=(
   instagram_story_jobs.sql
   ai_provider_oauth.sql
   ai_provider_health.sql
+  ai_model_catalog_contract.sql
   ai_oauth_openrouter.sql
 )
 # These fixtures build their own focused schema and apply the migration under
@@ -678,6 +679,18 @@ for f in "${NEW_MIGRATIONS[@]}"; do
     echo "db-harness: production (see README)." >&2
     exit 1
   fi
+  if [ "$f" = "20261113180000_ai_provider_health.sql" ]; then
+    STEP="expand-only catalogue compatibility proof"
+    echo "db-harness: proving the deployed two-column writer against EXPAND alone"
+    if ! psql "${PSQL_COMMON[@]}" "$HARNESS_URL" -q -f "$TESTS_DIR/ai_model_catalog_expand.sql" >"$OUT" 2>"$ERR"; then
+      sed 's/^/  /' "$ERR" >&2
+      exit 1
+    fi
+    if ! grep -q '^=== ai_model_catalog_expand: ALL CHECKS PASSED ===$' "$OUT"; then
+      echo "db-harness: expand-only catalogue proof did not reach its completion marker" >&2
+      exit 1
+    fi
+  fi
 done
 if [ "${#NEW_MIGRATIONS[@]}" -eq 0 ]; then
   echo "db-harness: nothing newer than the baseline — running suites against the baseline as-is"
@@ -716,7 +729,9 @@ psql "${PSQL_COMMON[@]}" "$HARNESS_URL" -q -c \
 # moved. So: every *.sql in the tests dir must be listed, or named here as
 # deliberately excluded, or the harness fails before running anything.
 STEP="suite inventory"
-EXCLUDED_FROM_SUITES=(baseline_schema.sql partner_api_race_fixture.sql instagram_tracking_schema_race_fixture.sql facebook_user_credential_bindings_race_fixture.sql instagram_durable_collection_jobs_race_fixture.sql meta_oauth_attempt_lifecycle_race_fixture.sql meta_account_refresh_lifecycle_race_fixture.sql meta_oauth_identity_alias_race_fixture.sql meta_page_token_reconciliation_race_fixture.sql competitor_retention_race_fixture.sql instagram_collection_rollout_race_fixture.sql instagram_collection_daily_dispatch_race_fixture.sql)
+# ai_model_catalog_expand.sql runs between the expand and contract migrations,
+# before the legacy constraint is dropped; it is not a post-migration suite.
+EXCLUDED_FROM_SUITES=(baseline_schema.sql ai_model_catalog_expand.sql partner_api_race_fixture.sql instagram_tracking_schema_race_fixture.sql facebook_user_credential_bindings_race_fixture.sql instagram_durable_collection_jobs_race_fixture.sql meta_oauth_attempt_lifecycle_race_fixture.sql meta_account_refresh_lifecycle_race_fixture.sql meta_oauth_identity_alias_race_fixture.sql meta_page_token_reconciliation_race_fixture.sql competitor_retention_race_fixture.sql instagram_collection_rollout_race_fixture.sql instagram_collection_daily_dispatch_race_fixture.sql)
 for f in "$TESTS_DIR"/*.sql; do
   name="$(basename "$f")"
   listed=0

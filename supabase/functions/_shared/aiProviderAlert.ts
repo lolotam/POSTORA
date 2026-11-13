@@ -14,7 +14,7 @@
 // WHY the claim is two phases
 // The row is claimed, the mail is sent, then the claim is closed. A run that dies
 // between the send and the close re-claims the row after ten minutes instead of
-// losing the alert or sending it twice.
+// losing the alert. The transport deduplicates retries within its 24-hour window.
 
 import type { DegradedProvider } from "./aiProviderHealth.ts";
 
@@ -61,6 +61,8 @@ export function alertRowsToDegraded(rows: Array<Record<string, unknown>>): Degra
     auth_method: row.auth_method === "oauth" ? "oauth" : "api_key",
     status: row.status === "needs_relogin" ? "needs_relogin" : "failed",
     reason: typeof row.reason === "string" ? row.reason : null,
+    // The break's id. It is what makes a re-claimed alert the SAME alert.
+    alert_id: typeof row.alert_id === "string" && row.alert_id ? row.alert_id : null,
   }));
 }
 
@@ -129,12 +131,28 @@ export function buildAlertHtml(degraded: DegradedProvider[]): string {
   `;
 }
 
-/** The channel the alert travels on. */
+/** How one alert is sent. */
 export interface AdminMailer {
   /** The admins' addresses. An empty list means there is nobody to tell. */
   adminRecipients(): Promise<string[]>;
-  /** Sends one email. Throws when the provider refused it, so the claim stays open. */
-  send(to: string[], subject: string, html: string, text?: string): Promise<void>;
+  /**
+   * Sends one email. Throws when the provider refused it, so the claim stays open.
+   *
+   * `input.idempotencyKey` is the id of the break the alert is about. The mail
+   * provider refuses a second send with the same key, so a claim that is re-claimed
+   * after a run that died between the send and the close cannot send twice.
+   *
+   * `input.signal` bounds the send. A send that runs out of time throws, and a
+   * throw leaves the claim open.
+   */
+  send(input: {
+    to: string[];
+    subject: string;
+    html: string;
+    text?: string;
+    idempotencyKey: string | null;
+    signal?: AbortSignal;
+  }): Promise<void>;
 }
 
 /**
@@ -144,8 +162,16 @@ export interface AdminMailer {
 export async function sendDegradedProviderAlert(
   mailer: AdminMailer,
   degraded: DegradedProvider,
+  signal?: AbortSignal,
 ): Promise<void> {
   const to = await mailer.adminRecipients();
   if (!to.length) return;
-  await mailer.send(to, buildAlertTitle(degraded), buildAlertHtml([degraded]), buildAlertMessage(degraded));
+  await mailer.send({
+    to,
+    subject: buildAlertTitle(degraded),
+    html: buildAlertHtml([degraded]),
+    text: buildAlertMessage(degraded),
+    idempotencyKey: degraded.alert_id,
+    signal,
+  });
 }

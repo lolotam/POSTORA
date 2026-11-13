@@ -1,7 +1,7 @@
 // deno-lint-ignore-file no-import-prefix
 import { assert, assertEquals, assertRejects } from "https://deno.land/std@0.208.0/assert/mod.ts";
 import { ProviderTestError } from "./providerErrors.ts";
-import { probeProvider, providerTestKind } from "./aiProviderTest.ts";
+import { loadProbeTarget, probeProvider, ProviderReadError, providerTestKind } from "./aiProviderTest.ts";
 
 const kind = (provider_code: string, api_type = "openai") => providerTestKind({ provider_code, api_type });
 
@@ -59,6 +59,7 @@ Deno.test("a provider error carries the status and never the key", async () => {
   ) as unknown as ProviderTestError;
   assertEquals(err.status, 401);
   assert(!err.message.includes("sk-secret"));
+  assert(!err.body.includes("sk-secret"));
 });
 
 Deno.test("a probe that answers resolves without throwing", async () => {
@@ -68,4 +69,140 @@ Deno.test("a probe that answers resolves without throwing", async () => {
       headers: { "content-type": "application/json" },
     })) as unknown as typeof fetch;
   await probeProvider({}, XAI_TARGET, "sk-test", 1000, okFetch);
+});
+
+// --- the credential never travels in a URL ---
+
+/** Captures what a probe asked for, and what it logged while asking. */
+function captureFetch(): {
+  fetchImpl: typeof fetch;
+  seen: Array<{ url: string; headers: Record<string, string> }>;
+  logs: string[];
+  restore: () => void;
+} {
+  const seen: Array<{ url: string; headers: Record<string, string> }> = [];
+  const logs: string[] = [];
+  const originalError = console.error;
+  console.error = (...args: unknown[]) => { logs.push(args.map(String).join(" ")); };
+  const fetchImpl = (async (url: string, init?: RequestInit) => {
+    seen.push({ url: String(url), headers: (init?.headers ?? {}) as Record<string, string> });
+    return new Response("{}", { status: 200 });
+  }) as unknown as typeof fetch;
+  return {
+    fetchImpl,
+    seen,
+    logs,
+    restore: () => { console.error = originalError; },
+  };
+}
+
+Deno.test("the Gemini key travels in a header and never in the URL", async () => {
+  const capture = captureFetch();
+  try {
+    const target = {
+      id: "1",
+      provider_code: "gemini",
+      api_type: "google",
+      api_endpoint: "https://generativelanguage.googleapis.com/v1beta",
+    };
+    await probeProvider({}, target, "sk-secret-gemini", 1000, capture.fetchImpl);
+    assertEquals(capture.seen.length, 1);
+    assert(!capture.seen[0].url.includes("sk-secret-gemini"));
+    assert(!capture.seen[0].url.includes("key="));
+    assertEquals(capture.seen[0].headers["x-goog-api-key"], "sk-secret-gemini");
+  } finally {
+    capture.restore();
+  }
+});
+
+Deno.test("the Apify token travels in a header and never in the URL", async () => {
+  const capture = captureFetch();
+  try {
+    const target = { id: "", provider_code: "apify", api_type: "rest", api_endpoint: "" };
+    await probeProvider({}, target, "apify-secret-token", 1000, capture.fetchImpl);
+    assertEquals(capture.seen.length, 1);
+    assert(!capture.seen[0].url.includes("apify-secret-token"));
+    assert(!capture.seen[0].url.includes("token="));
+    assertEquals(capture.seen[0].headers["Authorization"], "Bearer apify-secret-token");
+  } finally {
+    capture.restore();
+  }
+});
+
+Deno.test("a fetch rejection that quotes the URL never returns or logs the key", async () => {
+  const capture = captureFetch();
+  try {
+    const rejectingFetch = (async () => {
+      throw new TypeError(
+        "error sending request for url (https://generativelanguage.googleapis.com/v1beta/models?key=sk-secret-gemini): dns error",
+      );
+    }) as unknown as typeof fetch;
+    const target = {
+      id: "1",
+      provider_code: "gemini",
+      api_type: "google",
+      api_endpoint: "https://generativelanguage.googleapis.com/v1beta",
+    };
+    const err = await assertRejects(
+      () => probeProvider({}, target, "sk-secret-gemini", 1000, rejectingFetch),
+      Error,
+    ) as unknown as Error;
+    assert(!err.message.includes("sk-secret-gemini"));
+    assert(!capture.logs.join(" ").includes("sk-secret-gemini"));
+  } finally {
+    capture.restore();
+  }
+});
+
+// --- ElevenLabs: a pass needs proof ---
+
+const ELEVENLABS_TARGET = {
+  id: "1",
+  provider_code: "elevenlabs",
+  api_type: "elevenlabs",
+  api_endpoint: "https://api.elevenlabs.io/v1",
+};
+
+Deno.test("an ElevenLabs outage is a failure, not a pass", async () => {
+  const failingFetch = (async () => new Response("upstream boom", { status: 500 })) as unknown as typeof fetch;
+  const err = await assertRejects(
+    () => probeProvider({}, ELEVENLABS_TARGET, "sk-secret-elevenlabs", 1000, failingFetch),
+    ProviderTestError,
+  ) as unknown as ProviderTestError;
+  assertEquals(err.status, 500);
+});
+
+Deno.test("an ElevenLabs key that only lacks a read scope still passes", async () => {
+  const scopeLimitedFetch = (async () =>
+    new Response('{"detail":"missing_permissions"}', { status: 403 })) as unknown as typeof fetch;
+  await probeProvider({}, ELEVENLABS_TARGET, "sk-secret-elevenlabs", 1000, scopeLimitedFetch);
+});
+
+// --- a failed read is not a missing provider ---
+
+Deno.test("a provider read that fails is a read error, not a missing provider", async () => {
+  const failingDb = {
+    from: () => ({
+      select: () => ({
+        eq: () => ({
+          maybeSingle: async () => ({ data: null, error: { message: "connection reset" } }),
+        }),
+      }),
+    }),
+  };
+  await assertRejects(
+    () => loadProbeTarget(failingDb as never, "claude"),
+    ProviderReadError,
+  );
+});
+
+Deno.test("a provider that does not exist is still a missing provider", async () => {
+  const emptyDb = {
+    from: () => ({
+      select: () => ({
+        eq: () => ({ maybeSingle: async () => ({ data: null, error: null }) }),
+      }),
+    }),
+  };
+  assertEquals(await loadProbeTarget(emptyDb as never, "claude"), null);
 });

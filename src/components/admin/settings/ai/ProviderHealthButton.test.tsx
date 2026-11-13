@@ -71,6 +71,35 @@ describe('ProviderHealthButton', () => {
     expect(screen.getByText(/needs re-login/i)).toBeTruthy();
     // A provider that was not synced has no count — a dash, never a zero.
     expect(screen.queryByText('0')).toBeNull();
+    expect(screen.getAllByText('—').length).toBe(3);
+  });
+
+  it('says the run was incomplete when a provider was not checked', async () => {
+    invoke.mockImplementation((_fn: string, { body }: { body: { action: string } }) =>
+      body.action === 'status'
+        ? Promise.resolve({ data: { results: [] }, error: null })
+        : Promise.resolve({
+          data: {
+            run_id: 'r',
+            chunk: 1,
+            done: false,
+            next_chunk: 2,
+            results: [{
+              provider_code: 'openai', auth_method: 'api_key', display_name: 'OpenAI', status: 'connected',
+              reason: null, models_added: 1, models_updated: 0, models_deactivated: 0, latency_ms: 5,
+              checked_at: '2026-11-13T00:00:00Z',
+            }],
+            skipped: [{ provider_code: 'claude', auth_method: 'api_key', reason: 'ran out of time' }],
+            summary: { total: 1, connected: 1, failed: 0, needs_relogin: 0 },
+          },
+          error: null,
+        }));
+    render(wrap(<ProviderHealthButton />));
+    fireEvent.click(screen.getByRole('button', { name: /Check & sync all providers/i }));
+    // The run did not cover every provider, and the button says so: a summary
+    // that reads like a finished check would hide the provider nobody looked at.
+    await waitFor(() => expect(screen.getByTestId('provider-health-incomplete')).toBeTruthy());
+    expect(screen.getByText('claude (API key): ran out of time')).toBeTruthy();
   });
 
   it('keeps going after one provider fails', async () => {

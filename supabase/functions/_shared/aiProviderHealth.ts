@@ -47,6 +47,12 @@ export interface DegradedProvider {
   auth_method: HealthAuthMethod;
   status: "failed" | "needs_relogin";
   reason: string | null;
+  /**
+   * The id of this break. It changes only when the provider ENTERS a broken state
+   * and stays the same while the provider is still broken, so a re-claimed alert
+   * carries the same id and the mail provider can refuse the second send.
+   */
+  alert_id: string | null;
 }
 
 /** Probes in flight at once. Three keeps 16 targets inside the 40 second budget. */
@@ -67,11 +73,23 @@ export const HEALTH_RUN_DEADLINE_MS = 40_000;
  * is not alerted inside this budget stays claimed and is re-claimed ten minutes later.
  */
 export const HEALTH_ALERT_BUDGET_MS = 8_000;
+/**
+ * The ceiling for one alert send. A mail provider that hangs must not eat the whole
+ * time budget, so every send is bounded by the smaller of this ceiling and what is
+ * left of the alert budget.
+ */
+export const MAX_ALERT_SEND_TIMEOUT_MS = 5_000;
 /** Targets per HTTP call. 6 x 15s / 3 concurrent = 30s even when every target times out. */
 export const HEALTH_CHUNK_SIZE = 6;
 
 /** The reason a target the time budget never reached is reported with. */
 export const HEALTH_SKIPPED_REASON = "The run ran out of time before this provider was tested.";
+
+/**
+ * The reason a target whose own row could not be read is reported with. The target
+ * was not tested, so it is not broken: the run could not find out.
+ */
+export const HEALTH_READ_FAILED_REASON = "The provider's configuration could not be read.";
 
 /**
  * A fetch that cannot outlive the target's budget. The request's own signal and
@@ -114,7 +132,7 @@ export function planHealthTargets(
   oauthConnections: Array<{ oauth_provider: string; provider_code: string; name: string }>,
 ): HealthTarget[] {
   const targets: HealthTarget[] = [];
-  // Sorted so the chunk boundaries do not move when a provider is added or removed.
+  // Stable ordering makes the results readable; completed targets are removed before slicing.
   for (const p of [...apiKeyProviders].sort((a, b) => a.provider_code.localeCompare(b.provider_code))) {
     targets.push({ provider_code: p.provider_code, auth_method: "api_key", display_name: p.name });
   }
@@ -129,14 +147,25 @@ export function planHealthTargets(
   return targets;
 }
 
+/**
+ * The chunk is the FIRST N targets that are not recorded for this run yet.
+ *
+ * WHY a cursor and not an offset
+ * The target list is re-planned on every call, so a provider that is added or
+ * removed between two calls moves every boundary. An offset would then walk the
+ * wrong targets and skip some of them. A cursor over what is left cannot walk past
+ * a target: the ones that are already done are simply not in the list.
+ *
+ * `remaining` holds the targets of this run that have not been recorded yet.
+ */
 export function sliceHealthChunk(
-  targets: HealthTarget[],
+  remaining: HealthTarget[],
   chunk: number,
 ): { slice: HealthTarget[]; done: boolean; nextChunk: number | null } {
-  const index = Math.max(1, Math.floor(chunk)) - 1;
-  const slice = targets.slice(index * HEALTH_CHUNK_SIZE, (index + 1) * HEALTH_CHUNK_SIZE);
-  const done = slice.length === 0 || (index + 1) * HEALTH_CHUNK_SIZE >= targets.length;
-  return { slice, done, nextChunk: done ? null : index + 2 };
+  const slice = remaining.slice(0, HEALTH_CHUNK_SIZE);
+  // Everything that is left fits in this one chunk, so this chunk covers the run.
+  const done = remaining.length <= HEALTH_CHUNK_SIZE;
+  return { slice, done, nextChunk: done ? null : chunk + 1 };
 }
 
 export function sanitizeReason(text: string, apiKey: string | null): string {

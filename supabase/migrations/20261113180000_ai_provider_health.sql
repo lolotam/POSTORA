@@ -24,6 +24,18 @@
 -- It is set on the transition into a broken state and stays set until the alert is sent,
 -- so a provider that breaks, is re-checked while still broken, and then breaks again
 -- after a recovery raises an alert every time it breaks -- and exactly once per break.
+--
+-- WHY alert_id
+-- The alert is sent in two phases and a run can die between them, so the same alert can
+-- be claimed again. alert_id is the id of ONE break: it is minted when the provider
+-- enters a broken state and stays the same while the provider is still broken. It is
+-- sent to the mail provider as the idempotency key, so the second attempt of the same
+-- alert is refused instead of mailing the admin twice.
+--
+-- WHY the counts are nullable
+-- A provider that was not synced has NO count. A zero would say "nothing changed",
+-- which is a different and wrong claim after a failed sync. The columns are nullable
+-- and the RPC stores NULL for a count nobody measured.
 
 CREATE TABLE IF NOT EXISTS public.ai_provider_health (
   provider_code       text NOT NULL REFERENCES public.ai_providers(provider_code) ON DELETE CASCADE,
@@ -31,9 +43,9 @@ CREATE TABLE IF NOT EXISTS public.ai_provider_health (
   status             text NOT NULL CHECK (status IN ('connected','failed','needs_relogin')),
   previous_status    text CHECK (previous_status IN ('connected','failed','needs_relogin')),
   reason             text,
-  models_added       integer NOT NULL DEFAULT 0,
-  models_updated     integer NOT NULL DEFAULT 0,
-  models_deactivated integer NOT NULL DEFAULT 0,
+  models_added       integer,
+  models_updated     integer,
+  models_deactivated integer,
   latency_ms         integer,
   run_id             uuid,
   checked_at         timestamptz NOT NULL DEFAULT now(),
@@ -41,6 +53,8 @@ CREATE TABLE IF NOT EXISTS public.ai_provider_health (
   claim_token        uuid,
   claimed_at         timestamptz,
   alert_pending      boolean NOT NULL DEFAULT false,
+  alert_id           uuid,
+  alert_payload      jsonb,
   PRIMARY KEY (provider_code, auth_method)
 );
 
@@ -67,8 +81,27 @@ GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.ai_provider_health TO servi
 -- Models are keyed by credential kind: one provider can serve an API key and a
 -- subscription login with the same model_id. The statements are idempotent so this
 -- migration is safe next to the concurrent auth-grouping branch.
+--
+-- WHY THIS MIGRATION IS THE EXPAND HALF
+-- The three-column unique index is ADDED here and the old two-column unique
+-- CONSTRAINT (ai_models_provider_id_model_id_key) is still in place. The edge
+-- function that writes the catalogue upserts on (provider_id, model_id,
+-- auth_method); the code that is deployed today upserts on (provider_id, model_id).
+-- Dropping the old constraint before the new code is deployed would leave that
+-- code with no unique index to upsert on, and Postgres answers 42P10.
+--
+-- The rollout is therefore:
+--   1. apply THIS migration (EXPAND) -- both unique indexes exist
+--   2. merge and deploy the edge functions
+--   3. apply 20261113180100_ai_model_catalog_drop_legacy_unique.sql (CONTRACT)
+--
+-- WHAT THE EXPAND WINDOW COSTS
+-- Until the CONTRACT migration is applied, the old two-column constraint still
+-- forbids a second row for the same (provider_id, model_id). An OAuth catalogue
+-- row for a model that already has an API-key row therefore cannot be written
+-- yet. The OAuth sync reports that as a sync error rather than pretending the
+-- catalogue is in sync.
 ALTER TABLE public.ai_models ADD COLUMN IF NOT EXISTS auth_method text NOT NULL DEFAULT 'api_key';
-ALTER TABLE public.ai_models DROP CONSTRAINT IF EXISTS ai_models_provider_id_model_id_key;
 CREATE UNIQUE INDEX IF NOT EXISTS ai_models_provider_model_auth_method_key
   ON public.ai_models (provider_id, model_id, auth_method);
 
@@ -93,6 +126,9 @@ AS $$
 DECLARE
   v_old text;
   v_old_pending boolean := false;
+  v_old_alert_id uuid;
+  v_alert_id uuid;
+  v_alert_payload jsonb;
   v_pending boolean := false;
   v_changed boolean;
 BEGIN
@@ -105,7 +141,8 @@ BEGIN
       USING ERRCODE = 'invalid_parameter_value';
   END IF;
 
-  SELECT status, alert_pending INTO v_old, v_old_pending FROM public.ai_provider_health
+  SELECT status, alert_pending, alert_id, alert_payload INTO v_old, v_old_pending, v_old_alert_id, v_alert_payload
+    FROM public.ai_provider_health
     WHERE provider_code = p_provider_code AND auth_method = p_auth_method
     FOR UPDATE;
 
@@ -120,25 +157,38 @@ BEGIN
             OR (v_old IN ('failed','needs_relogin') AND coalesce(v_old_pending, false))) THEN
       -- It just broke, or it is still broken with an alert nobody sent yet.
       v_pending := true;
+      IF v_old = 'connected' THEN
+        -- It just broke: this is a new break, so it gets a new id. The id is the
+        -- mail provider's idempotency key, so it has to name ONE break.
+        v_alert_id := gen_random_uuid();
+        v_alert_payload := jsonb_build_object('status', p_status, 'reason', left(p_reason, 500));
+      ELSE
+        -- It is still the same break: the id stays, so a re-claimed alert is the
+        -- same alert and cannot be mailed twice.
+        v_alert_id := v_old_alert_id;
+      END IF;
     ELSE
       -- It recovered, or it was never connected: there is nothing to alert about.
       v_pending := false;
+      v_alert_id := NULL;
+      v_alert_payload := NULL;
     END IF;
   ELSE
     v_pending := coalesce(v_old_pending, false);
+    v_alert_id := v_old_alert_id;
   END IF;
 
   INSERT INTO public.ai_provider_health AS h (
     provider_code, auth_method, status, previous_status, reason,
     models_added, models_updated, models_deactivated, latency_ms, run_id, checked_at,
-    alert_pending
+    alert_pending, alert_id, alert_payload
   )
   VALUES (
     p_provider_code, p_auth_method, p_status, v_old,
     left(coalesce(p_reason, ''), 500),
-    coalesce(p_models_added, 0), coalesce(p_models_updated, 0), coalesce(p_models_deactivated, 0),
+    p_models_added, p_models_updated, p_models_deactivated,
     p_latency_ms, p_run_id, now(),
-    v_pending
+    v_pending, v_alert_id, v_alert_payload
   )
   ON CONFLICT (provider_code, auth_method) DO UPDATE SET
     status = EXCLUDED.status,
@@ -151,6 +201,8 @@ BEGIN
     run_id = EXCLUDED.run_id,
     checked_at = EXCLUDED.checked_at,
     alert_pending = EXCLUDED.alert_pending,
+    alert_id = EXCLUDED.alert_id,
+    alert_payload = EXCLUDED.alert_payload,
     notified_at = CASE WHEN v_changed THEN NULL ELSE h.notified_at END,
     claim_token = CASE WHEN v_changed THEN NULL ELSE h.claim_token END,
     claimed_at = CASE WHEN v_changed THEN NULL ELSE h.claimed_at END;
@@ -165,9 +217,14 @@ GRANT EXECUTE ON FUNCTION public.record_ai_provider_health(text, text, text, tex
 -- provider that is re-checked while still broken keeps its pending alert.
 -- A claim older than 10 minutes with no notified_at is re-claimable, so a run that died
 -- mid-notification does not lose the alert.
+--
+-- The function is dropped first because its result gained a column: Postgres cannot
+-- change the result of an existing function with CREATE OR REPLACE.
+DROP FUNCTION IF EXISTS public.claim_ai_provider_health_notifications(uuid);
 CREATE OR REPLACE FUNCTION public.claim_ai_provider_health_notifications(p_claim_token uuid)
 RETURNS TABLE (
-  provider_code text, auth_method text, status text, reason text, previous_status text
+  provider_code text, auth_method text, status text, reason text, previous_status text,
+  alert_id uuid
 )
 LANGUAGE plpgsql
 SECURITY DEFINER
@@ -186,7 +243,12 @@ BEGIN
      AND h.status IN ('failed','needs_relogin')
      AND h.notified_at IS NULL
      AND (h.claim_token IS NULL OR h.claimed_at IS NULL OR h.claimed_at < now() - interval '10 minutes')
-  RETURNING h.provider_code, h.auth_method, h.status, h.reason, h.previous_status;
+  -- Retrying an idempotency key requires the same payload. A later health check
+  -- may change the live reason or failed status without creating a new break.
+  RETURNING h.provider_code, h.auth_method,
+    coalesce(h.alert_payload->>'status', h.status),
+    CASE WHEN h.alert_payload IS NOT NULL THEN h.alert_payload->>'reason' ELSE h.reason END,
+    h.previous_status, h.alert_id;
 END;
 $$;
 

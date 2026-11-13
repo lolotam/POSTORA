@@ -34,9 +34,32 @@ export class CatalogSyncError extends Error {
 
 const GENERIC_SYNC_FAILURE = "Model sync failed; see server logs";
 
-/** The message the sync-models action returns for a failed sync. */
+/** The old two-column unique constraint the EXPAND migration keeps until the CONTRACT one runs. */
+const LEGACY_CATALOGUE_CONSTRAINT = "ai_models_provider_id_model_id_key";
+
+/**
+ * The message the sync-models action returns for a failed sync.
+ */
 export function syncFailureMessage(err: unknown): string {
   return err instanceof CatalogSyncError ? err.message : GENERIC_SYNC_FAILURE;
+}
+
+/**
+ * The write refused a row because the legacy two-column unique constraint is still
+ * in place. That is the EXPAND window: an OAuth catalogue row for a model that
+ * already has an API-key row cannot be written yet.
+ *
+ * The error says exactly that, because the admin has to know that the contract
+ * migration is the thing that is missing. A generic "sync failed" would send the
+ * admin looking in the wrong place.
+ */
+function catalogueWriteError(error: { message: string; code?: string }): Error {
+  if (error.code === "23505" && (error.message ?? "").includes(LEGACY_CATALOGUE_CONSTRAINT)) {
+    return new CatalogSyncError(
+      "The model catalogue still carries the legacy unique constraint. Apply the contract migration before syncing subscription models.",
+    );
+  }
+  return new Error(`ai_models upsert failed: ${error.message}`);
 }
 
 interface CatalogueSource {
@@ -88,7 +111,7 @@ const CATALOGUE: Record<string, CatalogueSource> = {
   xai: { request: bearer("https://api.x.ai/v1/models"), needsKey: true, list: dataList, map: mapXaiCatalog },
 };
 
-type DbError = { message: string } | null;
+type DbError = { message: string; code?: string } | null;
 type DbResult = { data: unknown; error: DbError };
 interface CatalogQuery extends PromiseLike<DbResult> {
   eq(column: string, value: string): CatalogQuery;
@@ -213,14 +236,13 @@ export async function runCatalogSync(
   if (!dryRun) {
     if (rows.length) {
       const { error } = await db.from("ai_models").upsert(rows, { onConflict: "provider_id,model_id,auth_method" });
-      if (error) throw new Error(`ai_models upsert failed: ${error.message}`);
+      if (error) throw catalogueWriteError(error);
     }
     // The stamp key carries the credential kind, so an API-key sync and an OAuth
-    // sync of the same provider do not overwrite each other's stamp. The API-key
-    // key keeps its historical name: the admin card reads that exact key.
-    const stampKey = authMethod === "api_key"
-      ? `model_catalog_synced_at_${providerCode}`
-      : `model_catalog_synced_at_${providerCode}_${authMethod}`;
+    // sync of the same provider do not overwrite each other's stamp. The admin card
+    // reads the API-key key and falls back to the unsuffixed one for the rows that
+    // were written before the suffix existed.
+    const stampKey = `model_catalog_synced_at_${providerCode}_${authMethod}`;
     const { error: stampError } = await db.from("system_settings").upsert(
       { key: stampKey, value: { at: now } }, { onConflict: "key" },
     );

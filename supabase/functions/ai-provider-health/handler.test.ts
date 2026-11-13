@@ -57,7 +57,7 @@ Deno.test("a busy lease answers 409 and runs nothing", async () => {
   assertEquals(ran, false);
 });
 
-Deno.test("a manual run takes the lease with a holder derived from the token", async () => {
+Deno.test("a manual run takes and releases the shared lease", async () => {
   const { ports, leases } = fakePorts();
   const res = await handleHealthRequest(
     new Request("https://x.test", { method: "POST", body: JSON.stringify({ action: "run", scope: "manual", run_token: "token-a" }) }),
@@ -66,6 +66,37 @@ Deno.test("a manual run takes the lease with a holder derived from the token", a
   assertEquals(res.status, 200);
   assertEquals(leases[0].job, "ai-provider-health");
   assert(leases[0].holder.length > 0);
+  assertEquals(leases[0].holder, leases[1].holder);
+});
+
+Deno.test("overlapping requests for the same run cannot renew each other's lease", async () => {
+  let holder: string | null = null;
+  let releaseRun!: () => void;
+  let started!: () => void;
+  const running = new Promise<void>((resolve) => { started = resolve; });
+  const blocked = new Promise<void>((resolve) => { releaseRun = resolve; });
+  const { ports } = fakePorts({
+    acquireLease: async (_job, requested) => {
+      if (holder && holder !== requested) return false;
+      holder = requested;
+      return true;
+    },
+    runChunk: async (chunk, runId) => {
+      started();
+      await blocked;
+      return { run_id: runId, chunk, done: true, next_chunk: null, results: [], skipped: [],
+        summary: { total: 0, connected: 0, failed: 0, needs_relogin: 0 } };
+    },
+  });
+  const request = () => new Request("https://x.test", {
+    method: "POST", body: JSON.stringify({ action: "run", scope: "daily" }),
+  });
+  const first = handleHealthRequest(request(), ports);
+  await running;
+  const retry = await handleHealthRequest(request(), ports);
+  releaseRun();
+  assertEquals((await first).status, 200);
+  assertEquals(retry.status, 409);
 });
 
 Deno.test("the daily scope does not need a token", async () => {

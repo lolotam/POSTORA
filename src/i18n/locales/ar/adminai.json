@@ -14,6 +14,7 @@
   "empty": "لسه مفيش أي provider اتفحص.",
   "lastChecked": "آخر فحص {{time}}",
   "runFailed": "الفحص ما مكملش: {{message}}",
+  "runIncomplete": "ما كل المزوّدات اتفحصت. شغّل الفحص تاني عشان يغطّي الباقي.",
   "running": "بنفحص الـ providers…",
   "statusConnected": "شغال",
   "statusFailed": "فشل",

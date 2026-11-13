@@ -87,9 +87,25 @@ async function fetchWithTimeout(
   }
 }
 
+/**
+ * The provider's own row could not be read.
+ *
+ * WHY a distinct error
+ * A failed read and a missing provider look the same to a caller that only sees
+ * "no row": one is a server that is unwell, the other is a configuration the admin
+ * can fix. Only the second one is a provider degradation, so they must not share
+ * an error type.
+ */
+export class ProviderReadError extends Error {
+  override name = "ProviderReadError";
+}
+
 // Firecrawl and Apify keys can be saved without an ai_providers row; they need no endpoint.
 export async function loadProbeTarget(db: RowReader, providerCode: string): Promise<ProviderProbeTarget | null> {
-  const { data } = await db.from('ai_providers').select('*').eq('provider_code', providerCode).maybeSingle();
+  const { data, error } = await db.from('ai_providers').select('*').eq('provider_code', providerCode).maybeSingle();
+  // A failed read must never look like a missing row: the first is the server's
+  // problem, the second is the admin's.
+  if (error) throw new ProviderReadError('The provider configuration could not be read');
   if (data) return data as ProviderProbeTarget;
   if (providerCode === 'firecrawl' || providerCode === 'apify') {
     return { id: '', provider_code: providerCode, api_type: 'rest', api_endpoint: '' };
@@ -126,11 +142,18 @@ export async function probeProvider(
       case 'openai': return await testOpenAI(key, ep, await defaultTestModel(db, provider), timeoutMs, fetchImpl);
     }
   } catch (error) {
-    if (error instanceof ProviderTestError) throw error;
+    if (error instanceof ProviderTestError) {
+      throw new ProviderTestError(redactProviderError(error.message, key), error.status, redactProviderError(error.body, key));
+    }
     if (isTimeoutError(error)) {
       throw new ProviderTestError('The provider did not answer in time', 504, '');
     }
-    throw error;
+    // A rejected fetch (DNS, connection refused, TLS) carries the request URL in its
+    // message, and a URL can carry the credential. The message is redacted before it
+    // leaves this function, and the raw error is never chained as a cause: a logger
+    // serialises a cause just as readily as a top-level message.
+    const message = error instanceof Error ? error.message : 'The provider request failed';
+    throw new Error(redactProviderError(message, key));
   }
 }
 
@@ -157,7 +180,9 @@ function modelsUrl(ep: string, path = '/v1/models'): string {
 }
 
 async function testGemini(key: string, ep: string, timeoutMs: number, fetchImpl: typeof fetch) {
-  const res = await fetchWithTimeout(fetchImpl, `${ep}/models?key=${key}`, { headers: { 'x-goog-api-key': key } }, timeoutMs);
+  // The key travels in the x-goog-api-key header, never in the query string: a URL
+  // ends up in proxy logs, in access logs and in the message of a rejected fetch.
+  const res = await fetchWithTimeout(fetchImpl, `${ep}/models`, { headers: { 'x-goog-api-key': key } }, timeoutMs);
   await handleRes(res, 'Gemini', key);
 }
 
@@ -244,6 +269,11 @@ async function testElevenLabs(key: string, ep: string, timeoutMs: number, fetchI
   // user_read). "missing_permissions" / "restricted" prove the key
   // authenticates, so they count as a PASS, not a failure.
   const probePaths = ['/user', '/models', '/voices'];
+  // A pass needs PROOF: a probe that answered 2xx, or a probe that proved the key
+  // authenticates but lacks a read scope. Three probes that all failed say
+  // nothing about the key, so the last failure is reported instead.
+  let sawScopeLimited = false;
+  let lastFailure: ProviderTestError | null = null;
   for (const path of probePaths) {
     const res = await fetchWithTimeout(fetchImpl, `${baseUrl}${path}`, { headers: { 'xi-api-key': key } }, timeoutMs);
     if (res.ok) {
@@ -252,15 +282,27 @@ async function testElevenLabs(key: string, ep: string, timeoutMs: number, fetchI
     }
     const t = await res.text();
     if (t.includes('missing_permissions') || t.includes('restricted')) {
-      // Key authenticates but lacks this read scope — try the next probe.
+      // Key authenticates but lacks this read scope - try the next probe.
+      sawScopeLimited = true;
       continue;
     }
     if (res.status === 401) throw new Error('Invalid API key');
     if (res.status === 429) throw new Error('Rate limit exceeded');
-    // Other transient errors: keep trying the remaining probes.
+    // Another failure: keep the last one, so the reason names what really happened.
+    console.error(`ElevenLabs test failed: ${res.status} - ${redactProviderError(t, key).slice(0, 300)}`);
+    lastFailure = new ProviderTestError(
+      redactProviderError(describeProviderFailure('ElevenLabs', res.status, t), key),
+      res.status,
+      t,
+    );
   }
-  // Reached the end having seen only scope-limited responses → key is valid.
-  console.log('ElevenLabs test passed (key authenticates; read scope limited).');
+  if (sawScopeLimited) {
+    // Every probe that answered proved the key authenticates.
+    console.log('ElevenLabs test passed (key authenticates; read scope limited).');
+    return;
+  }
+  // No probe proved the key works: the outage is a failure, not a pass.
+  throw lastFailure ?? new ProviderTestError('The provider did not answer in time', 504, '');
 }
 
 async function testXAI(key: string, ep: string, timeoutMs: number, fetchImpl: typeof fetch) {
@@ -301,6 +343,10 @@ async function testFirecrawl(key: string, timeoutMs: number, fetchImpl: typeof f
 }
 
 async function testApify(key: string, timeoutMs: number, fetchImpl: typeof fetch) {
-  const res = await fetchWithTimeout(fetchImpl, `https://api.apify.com/v2/users/me?token=${key}`, {}, timeoutMs);
+  // The token travels in the Authorization header, never in the query string: a URL
+  // ends up in proxy logs, in access logs and in the message of a rejected fetch.
+  const res = await fetchWithTimeout(fetchImpl, 'https://api.apify.com/v2/users/me', {
+    headers: { Authorization: `Bearer ${key}` },
+  }, timeoutMs);
   await handleRes(res, 'Apify', key);
 }

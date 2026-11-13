@@ -18,7 +18,7 @@ import {
   useAIConfiguration, useToggleProvider, useToggleModel, useTestConnection,
   useSetServiceKey, useTestService, useCheckServiceKey,
 } from '@/hooks/useAIConfiguration';
-import type { AIProvider, TestConnectionResult } from '@/hooks/useAIConfiguration';
+import type { AIProvider, SystemSettingRow, TestConnectionResult } from '@/hooks/useAIConfiguration';
 import { SyncModelsButton } from './SyncModelsButton';
 import { ProviderHealthButton } from './ProviderHealthButton';
 import { SubscriptionLoginSection } from './SubscriptionLoginSection';
@@ -52,6 +52,19 @@ function subscriptionProviderCode(provider: AIProvider | null): SubscriptionProv
 function providerAuthState(hasKey: boolean, viaSubscription: boolean): 'api_key' | 'auth' | 'none' {
   if (hasKey) return 'api_key';
   return viaSubscription ? 'auth' : 'none';
+}
+
+/**
+ * When the API-key catalogue of one provider was last synced.
+ *
+ * The stamp key carries the credential kind, so an API-key sync writes
+ * `model_catalog_synced_at_<code>_api_key`. The rows that were written before the
+ * suffix existed live under the unsuffixed key, so that key is still read.
+ */
+function lastCatalogSyncedAt(settings: SystemSettingRow[], providerCode: string): string | null {
+  const current = settings.find((s) => s.key === `model_catalog_synced_at_${providerCode}_api_key`)?.value?.at;
+  if (current) return current;
+  return settings.find((s) => s.key === `model_catalog_synced_at_${providerCode}`)?.value?.at ?? null;
 }
 
 /**
@@ -166,6 +179,7 @@ export function AiProvidersCard() {
 
   const providers = aiConfig?.providers || [];
   const models = aiConfig?.models || [];
+  const oauthModels = aiConfig?.oauthModels || [];
 
   if (providers.length === 0) {
     return (
@@ -185,7 +199,21 @@ export function AiProvidersCard() {
     modelsByProvider[model.provider_id].push(model);
   });
 
+  // The subscription catalogue: the same model_id exists once per credential kind,
+  // so the OAuth rows live in their own list.
+  const oauthModelsByProvider: Record<string, typeof oauthModels> = {};
+  oauthModels.forEach(model => {
+    if (!oauthModelsByProvider[model.provider_id]) oauthModelsByProvider[model.provider_id] = [];
+    oauthModelsByProvider[model.provider_id].push(model);
+  });
+
   const defaultModel = aiConfig?.defaultModel;
+  const selectedProviderModels = selectedProvider
+    ? [
+        ...(modelsByProvider[selectedProvider.id] || []),
+        ...(oauthModelsByProvider[selectedProvider.id] || []),
+      ]
+    : [];
   const subscriptionProvider = subscriptionProviderCode(selectedProvider);
   const openProviderByCode = (code: string) => {
     const provider = providers.find((p) => p.provider_code === code);
@@ -209,7 +237,10 @@ export function AiProvidersCard() {
           <SubscriptionLoginsStrip onOpen={openProviderByCode} />
           <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-2">
             {providers.map(provider => {
-              const providerModels = modelsByProvider[provider.id] || [];
+              const providerModels = [
+                ...(modelsByProvider[provider.id] || []),
+                ...(oauthModelsByProvider[provider.id] || []),
+              ];
               const activeModels = providerModels.filter(m => m.is_active).length;
               const testResult = testResults[provider.id];
               const authState = providerAuthState(
@@ -334,9 +365,9 @@ export function AiProvidersCard() {
           {subscriptionProvider && (
             <SubscriptionLoginSection
               providerCode={subscriptionProvider}
-              // The same catalogue rows the model list below shows, so the two
-              // lists never drift apart.
-              models={(modelsByProvider[selectedProvider?.id ?? ''] || []).map(m => m.model_id)}
+              // The subscription's own catalogue rows: the picker lists what the
+              // subscription can run, not what the API key can run.
+              models={(oauthModelsByProvider[selectedProvider?.id ?? ''] || []).map(m => m.model_id)}
             />
           )}
 
@@ -344,20 +375,25 @@ export function AiProvidersCard() {
             <div className="flex items-center justify-between pt-2">
               <span className="text-xs text-muted-foreground">Pull the provider's current model list</span>
               <SyncModelsButton providerCode={selectedProvider.provider_code}
-                lastSyncedAt={(aiConfig?.settings ?? []).find((s) => s.key === `model_catalog_synced_at_${selectedProvider.provider_code}`)?.value?.at ?? null} />
+                lastSyncedAt={lastCatalogSyncedAt(aiConfig?.settings ?? [], selectedProvider.provider_code)} />
             </div>
           )}
 
           {/* Models List */}
           <div className="space-y-3 pt-2">
-            {selectedProvider && (modelsByProvider[selectedProvider.id] || []).map(model => (
+            {selectedProvider && selectedProviderModels.map(model => (
               <div key={model.id}
                 className={`flex items-center justify-between p-3 rounded-lg border ${model.is_active ? 'bg-background' : 'bg-muted/50 opacity-60'}`}>
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2 flex-wrap">
                     <h4 className="font-medium text-sm">{model.name}</h4>
                     <Badge variant="outline" className="text-[10px]">{model.model_id}</Badge>
-                    {defaultModel?.provider_code === selectedProvider.provider_code && defaultModel?.model_id === model.model_id && (
+                    <Badge variant="outline" className="text-[10px]">
+                      {model.auth_method === 'oauth' ? 'Subscription' : 'API key'}
+                    </Badge>
+                    {defaultModel?.provider_code === selectedProvider.provider_code
+                      && defaultModel?.model_id === model.model_id
+                      && (defaultModel.auth_method ?? 'api_key') === (model.auth_method ?? 'api_key') && (
                       <Badge className="text-[10px] bg-primary">Default</Badge>
                     )}
                   </div>
@@ -378,7 +414,7 @@ export function AiProvidersCard() {
                 </div>
               </div>
             ))}
-            {selectedProvider && (modelsByProvider[selectedProvider.id] || []).length === 0 && (
+            {selectedProvider && selectedProviderModels.length === 0 && (
               <p className="text-sm text-muted-foreground text-center py-4">No models configured</p>
             )}
           </div>

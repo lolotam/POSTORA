@@ -6,6 +6,7 @@ import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { useProviderHealthStatus, useRunProviderHealth } from '@/hooks/ai-config/useAiProviderHealth';
+import type { ProviderHealthSkipped } from '@/hooks/ai-config/useAiProviderHealth';
 import type { ProviderHealthRow } from '@/hooks/ai-config/types';
 
 /**
@@ -15,6 +16,9 @@ import type { ProviderHealthRow } from '@/hooks/ai-config/types';
  *
  * The table shows the stored result of the last run, so the admin sees the last known
  * state before clicking anything.
+ *
+ * A run that could not cover every provider says so. The summary of a partial run
+ * would otherwise read like a finished check and hide the providers nobody looked at.
  */
 export function ProviderHealthButton() {
   const { t } = useTranslation(['adminai']);
@@ -22,6 +26,8 @@ export function ProviderHealthButton() {
   const { run, isRunning, error } = useRunProviderHealth();
   const [rows, setRows] = useState<ProviderHealthRow[]>([]);
   const [summary, setSummary] = useState<string | null>(null);
+  const [incomplete, setIncomplete] = useState(false);
+  const [skipped, setSkipped] = useState<ProviderHealthSkipped[]>([]);
 
   // The stored rows are the last known state; a run replaces them.
   useEffect(() => {
@@ -40,19 +46,27 @@ export function ProviderHealthButton() {
   const onRun = async () => {
     if (isRunning) return;
     setSummary(null);
+    setIncomplete(false);
+    setSkipped([]);
     const result = await run();
-    if (result.length === 0) return;
-    setRows(result);
-    const connected = result.filter((r) => r.status === 'connected').length;
-    const failed = result.filter((r) => r.status === 'failed').length;
-    const needsRelogin = result.filter((r) => r.status === 'needs_relogin').length;
+    setSkipped(result.skipped);
+    if (result.rows.length === 0 && result.skipped.length === 0) return;
+    if (result.rows.length > 0) setRows(result.rows);
+    const connected = result.rows.filter((r) => r.status === 'connected').length;
+    const failed = result.rows.filter((r) => r.status === 'failed').length;
+    const needsRelogin = result.rows.filter((r) => r.status === 'needs_relogin').length;
     setSummary(
       t('adminai:summary', '{{total}} providers checked · {{connected}} connected · {{failed}} failed', {
-        total: result.length,
+        total: result.rows.length,
         connected,
         failed: failed + needsRelogin,
       }),
     );
+    if (!result.complete) {
+      // The run did not cover every provider. A target that was skipped was not
+      // tested, so the run is not a finished check.
+      setIncomplete(true);
+    }
   };
 
   return (
@@ -64,6 +78,23 @@ export function ProviderHealthButton() {
         </Button>
         {summary && <span className="text-[10px] text-muted-foreground">{summary}</span>}
       </div>
+
+      {incomplete && (
+        <p className="text-[10px] text-destructive" data-testid="provider-health-incomplete">
+          {t('adminai:runIncomplete', 'Some providers were not checked. Run the check again to cover them.')}
+        </p>
+      )}
+      {skipped.length > 0 && (
+        <ul className="text-xs text-destructive">
+          {skipped.map((target) => (
+            <li key={`${target.provider_code}:${target.auth_method}`}>
+              {target.provider_code} ({target.auth_method === 'oauth'
+                ? t('adminai:credentialOauth', 'Subscription')
+                : t('adminai:credentialApiKey', 'API key')}): {target.reason}
+            </li>
+          ))}
+        </ul>
+      )}
 
       {rows.length === 0 ? (
         <p className="text-xs text-muted-foreground">{t('adminai:empty', 'No provider has been checked yet.')}</p>

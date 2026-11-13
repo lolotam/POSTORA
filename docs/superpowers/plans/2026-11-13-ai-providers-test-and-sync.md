@@ -69,8 +69,9 @@ fully before Task 1; §6 holds the design decisions and §11 the open questions.
 - The cron secret is never a literal in a migration: the job body calls `get_cron_secret()`.
 - The migration timestamp is `20261113180000` or later. Never edit an already-applied
   migration.
-- The migration must be **idempotent** against the concurrent branch
-  (`ADD COLUMN IF NOT EXISTS`, `DROP CONSTRAINT IF EXISTS`, `CREATE UNIQUE INDEX IF NOT EXISTS`).
+- The rollout is expand/contract. `20261113180000` adds the column and triple unique
+  index while retaining the legacy pair constraint. Only after merge and edge deployment
+  does `20261113180100` drop it. Never apply both before the new edge code is live.
 - Do not redesign the API/Auth grouping in the model selectors, do not touch
   `isOAuthProvider` in `AiProvidersCard.tsx`, and do not set `ai_providers.auth_type` on
   `claude` or `openai`. That is the concurrent branch's work (spec §8).
@@ -101,7 +102,10 @@ fully before Task 1; §6 holds the design decisions and §11 the open questions.
 |---|---|---|
 | `supabase/migrations/20261113180000_ai_provider_health.sql` | create | `ai_provider_health` table, `ai_models.auth_method`, 3 RPCs, RLS/grants, 4 guarded cron entries |
 | `supabase/tests/ai_provider_health.sql` | create | SQL proof |
-| `scripts/db-harness.sh` | modify | register `ai_provider_health.sql` in `SUITES=(` |
+| `supabase/migrations/20261113180100_ai_model_catalog_drop_legacy_unique.sql` | create | CONTRACT after merge and edge deploy; drop legacy pair constraint |
+| `supabase/tests/ai_model_catalog_expand.sql` | create | Old two-column upsert proof immediately after EXPAND |
+| `supabase/tests/ai_model_catalog_contract.sql` | create | Both credential kinds coexist after CONTRACT |
+| `scripts/db-harness.sh` | modify | Register post-migration suites and run EXPAND proof before CONTRACT |
 | `src/integrations/supabase/types.ts` | modify | the new table + the 3 RPC signatures |
 | `supabase/functions/_shared/aiProviderHealth.ts` | create | **pure**: target planning, classification, sanitisation, chunk slicing |
 | `supabase/functions/_shared/aiProviderHealth.test.ts` | create | Deno tests |
@@ -273,7 +277,6 @@ cannot silence an alert by editing `notified_at`.
   -- subscription login with the same model_id. The statements are idempotent so this
   -- migration is safe next to the concurrent auth-grouping branch.
   ALTER TABLE public.ai_models ADD COLUMN IF NOT EXISTS auth_method text NOT NULL DEFAULT 'api_key';
-  ALTER TABLE public.ai_models DROP CONSTRAINT IF EXISTS ai_models_provider_id_model_id_key;
   CREATE UNIQUE INDEX IF NOT EXISTS ai_models_provider_model_auth_method_key
     ON public.ai_models (provider_id, model_id, auth_method);
   ```
@@ -568,14 +571,14 @@ cannot silence an alert by editing `notified_at`.
     assertEquals(targets[2].oauth_provider, "anthropic");
   });
 
-  Deno.test("the chunk slice is empty and done past the last chunk", () => {
+  Deno.test("the next chunk takes only the remaining unrecorded targets", () => {
     const targets = planHealthTargets(
       Array.from({ length: 7 }, (_, i) => ({ provider_code: `p${i}`, name: `P${i}` })), []);
     const first = sliceHealthChunk(targets, 1);
     assertEquals(first.slice.length, 6);
     assertEquals(first.done, false);
     assertEquals(first.nextChunk, 2);
-    const second = sliceHealthChunk(targets, 2);
+    const second = sliceHealthChunk(targets.slice(first.slice.length), 2);
     assertEquals(second.slice.length, 1);
     assertEquals(second.done, true);
     assertEquals(second.nextChunk, null);
@@ -720,13 +723,13 @@ cannot silence an alert by editing `notified_at`.
   }
 
   export function sliceHealthChunk(
-    targets: HealthTarget[],
+    remaining: HealthTarget[],
     chunk: number,
   ): { slice: HealthTarget[]; done: boolean; nextChunk: number | null } {
-    const index = Math.max(1, Math.floor(chunk)) - 1;
-    const slice = targets.slice(index * HEALTH_CHUNK_SIZE, (index + 1) * HEALTH_CHUNK_SIZE);
-    const done = slice.length === 0 || (index + 1) * HEALTH_CHUNK_SIZE >= targets.length;
-    return { slice, done, nextChunk: done ? null : index + 2 };
+    const slice = remaining.slice(0, HEALTH_CHUNK_SIZE);
+    // Everything that is left fits in this one chunk, so this chunk covers the run.
+    const done = remaining.length <= HEALTH_CHUNK_SIZE;
+    return { slice, done, nextChunk: done ? null : chunk + 1 };
   }
   ```
 
@@ -985,7 +988,8 @@ Task 3, `runCatalogSync` from `_shared/modelCatalogSyncRun.ts`.
 - `export interface HealthRunPorts {`
   `  listApiKeyProviders(): Promise<Array<{ provider_code: string; name: string }>>;`
   `  listOAuthConnections(): Promise<Array<{ oauth_provider: string; provider_code: string; name: string; status: string }>>;`
-  `  resolveApiKey(providerCode: string): Promise<string | null>;`
+  `  resolveApiKey(providerCode: string): Promise<string | null>;
+    listRecordedTargets(runId: string): Promise<Array<{ provider_code: string; auth_method: string }>>;`
   `  probeApiKey(target: HealthTarget, key: string, signal: AbortSignal): Promise<void>;`
   `  probeOAuth(target: HealthTarget, signal: AbortSignal): Promise<void>;`
   `  syncApiKeyCatalogue(providerCode: string, signal: AbortSignal): Promise<{ added: number; updated: number; deactivated: number }>;`
@@ -1128,6 +1132,7 @@ Task 3, `runCatalogSync` from `_shared/modelCatalogSyncRun.ts`.
     listApiKeyProviders(): Promise<Array<{ provider_code: string; name: string }>>;
     listOAuthConnections(): Promise<Array<{ oauth_provider: string; provider_code: string; name: string; status: string }>>;
     resolveApiKey(providerCode: string): Promise<string | null>;
+    listRecordedTargets(runId: string): Promise<Array<{ provider_code: string; auth_method: string }>>;
     probeApiKey(target: HealthTarget, key: string, signal: AbortSignal): Promise<void>;
     probeOAuth(target: HealthTarget, signal: AbortSignal): Promise<void>;
     syncApiKeyCatalogue(providerCode: string, signal: AbortSignal): Promise<{ added: number; updated: number; deactivated: number }>;
@@ -1243,56 +1248,102 @@ Task 3, `runCatalogSync` from `_shared/modelCatalogSyncRun.ts`.
   and returns the summary:
 
   ```ts
-  export async function runHealthChunk(ports: HealthRunPorts, options: HealthRunOptions) {
+  export async function runHealthChunk(
+    ports: HealthRunPorts,
+    options: HealthRunOptions,
+  ): Promise<HealthChunkResponse> {
     const apiKeyProviders = await ports.listApiKeyProviders();
-    const oauthConnections = (await ports.listOAuthConnections()).filter((c) => c.status !== "reauth_required");
-    const reauthConnections = (await ports.listOAuthConnections()).filter((c) => c.status === "reauth_required");
+    const connections = await ports.listOAuthConnections();
+    const oauthConnections = connections.filter((c) => c.status !== "reauth_required");
+    const reauthConnections = connections.filter((c) => c.status === "reauth_required");
 
-    const targets = planHealthTargets(apiKeyProviders, oauthConnections);
+    // A provider with no configured credential is not a target: there is nothing to
+    // test and nothing to sync. The key is resolved again before the probe, so a key
+    // that vanishes mid-run fails that target instead of the whole run.
+    const configured: Array<{ provider_code: string; name: string }> = [];
+    for (const provider of apiKeyProviders) {
+      const key = await ports.resolveApiKey(provider.provider_code);
+      if (key) configured.push(provider);
+    }
+
+    const targets = planHealthTargets(configured, oauthConnections);
     // A connection already in reauth_required is a target that must be reported as
     // "needs re-login" without any network call.
-    for (const c of reauthConnections) {
+    for (const c of [...reauthConnections].sort((a, b) => a.oauth_provider.localeCompare(b.oauth_provider))) {
       targets.push({
         provider_code: c.provider_code,
         auth_method: "oauth",
         display_name: c.name,
         oauth_provider: c.oauth_provider,
+        needs_relogin: true,
       });
     }
 
-    const { slice, done, nextChunk } = sliceHealthChunk(targets, options.chunk);
+    // The targets this run already did. A chunk that is retried must not probe and
+    // sync the same provider twice, so the ones that are already recorded are taken
+    // out of the list BEFORE the chunk is cut.
+    //
+    // A failed read fails the chunk. A read that failed must never look like "no
+    // target was recorded", because that would probe every provider a second time.
+    const recorded = await ports.listRecordedTargets(options.runId);
+    const alreadyDone = new Set(recorded.map((r) => `${r.provider_code}:${r.auth_method}`));
+    const remaining = targets.filter((t) => !alreadyDone.has(`${t.provider_code}:${t.auth_method}`));
+
+    const { slice, done: covered, nextChunk } = sliceHealthChunk(remaining, options.chunk);
     const deadline = Date.now() + (options.deadlineMs ?? HEALTH_RUN_DEADLINE_MS);
     const concurrency = options.concurrency ?? HEALTH_RUN_CONCURRENCY;
-    const results: HealthResult[] = [];
+    const collected: Array<{ position: number; result?: HealthResult; skipReason?: string }> = [];
     let index = 0;
 
     async function worker() {
       while (index < slice.length && Date.now() < deadline) {
-        const target = slice[index++];
-        // One signal per target: the probe, the token refresh and the catalogue
-        // sync of this target all run inside the same budget.
+        const position = index++;
+        const target = slice[position];
+        // One signal per target: the probe, the token refresh and the catalogue sync
+        // of this target all run inside the same budget.
         const signal = AbortSignal.timeout(HEALTH_TARGET_BUDGET_MS);
-        results.push(await runOneTarget(ports, target, options.runId, signal));
+        const outcome = await runOneTarget(ports, target, options.runId, signal);
+        collected.push({ position, ...outcome });
       }
     }
 
     await Promise.all(Array.from({ length: Math.min(concurrency, slice.length) }, () => worker()));
 
-    // A target the deadline never reached was not tested: it is reported as skipped
-    // and the chunk is not done.
-    const skipped = slice
-      .filter((_, position) => !collected.some((c) => c.position === position))
-      .map((target) => ({
+    // The results follow the target order, not the completion order, so two runs of
+    // the same chunk always answer in the same order.
+    const results = collected
+      .filter((c): c is { position: number; result: HealthResult } => !!c.result)
+      .sort((a, b) => a.position - b.position)
+      .map((c) => c.result);
+
+    // A target the deadline never reached was not tested. A target whose row could
+    // not be read was not tested either. Both are reported as skipped, and the chunk
+    // is not done: the caller knows the run is incomplete.
+    const skipped: HealthSkippedTarget[] = [];
+    for (let position = 0; position < slice.length; position++) {
+      const outcome = collected.find((c) => c.position === position);
+      if (outcome?.result) continue;
+      const target = slice[position];
+      skipped.push({
         provider_code: target.provider_code,
         auth_method: target.auth_method,
-        reason: HEALTH_SKIPPED_REASON,
-      }));
+        reason: outcome?.skipReason ?? HEALTH_SKIPPED_REASON,
+      });
+    }
 
+    // The alert phase runs after the results are written: the rows must already be
+    // recorded before the claim can see the transition.
+    await sendClaimedAlerts(ports, crypto.randomUUID(), options.alertBudgetMs ?? HEALTH_ALERT_BUDGET_MS);
+
+    // A skipped target means the chunk did not cover everything it was asked to, so
+    // the caller has to come back for it.
+    const chunkDone = covered && skipped.length === 0;
     return {
       run_id: options.runId,
       chunk: options.chunk,
-      done: done && skipped.length === 0,
-      next_chunk: nextChunk,
+      done: chunkDone,
+      // The chunk is not done, so there is always a next one to ask for.
+      next_chunk: chunkDone ? null : (nextChunk ?? options.chunk + 1),
       results,
       skipped,
       summary: summarizeHealthResults(results),
@@ -1462,14 +1513,13 @@ catalogue of `claude`, and the OAuth rows could never be stored at all.
      `defaultModelsInUse`, filters the `ai_models` read by it, adds it to every written row and
      changes the conflict target:
 
-     **Every other writer and reader of `ai_models` follows.** A writer that upserts on
-     `provider_id,model_id` gets `42P10` from PostgREST ("no unique or exclusion constraint
-     matching the ON CONFLICT specification") and writes nothing — and if it never reads the
-     error, the sync looks like it worked. A reader that does not filter by `auth_method`
-     sees two rows for one model: `.maybeSingle()` throws, a plain pick takes an arbitrary
-     row, and a list shows the model twice. So the conflict target is
-     `provider_id,model_id,auth_method` everywhere, and the API-key readers filter on
-     `auth_method = 'api_key'`. A row addressed by its primary key needs no filter.
+     **Every other writer and reader of `ai_models` follows.** EXPAND retains the old
+     `(provider_id, model_id)` unique constraint so deployed two-column upserts keep
+     working. After merge and edge deployment, CONTRACT removes that constraint;
+     OAuth/API-key rows sharing a model ID can then coexist. Only after CONTRACT
+     would an old two-column writer receive `42P10`. New writers use the triple target;
+     API-key readers filter their kind. Admin configuration reads both credential kinds,
+     returns separate lists, and gives the subscription picker only OAuth rows.
 
      ```ts
      const authMethod = options.authMethod ?? "api_key";
@@ -2334,21 +2384,56 @@ same keys):
   that it was not run.
 - [ ] **Step 7:** `git status --short`. Only the files in the file map may be modified, plus
   `graphify-out/`, which is never committed.
-- [ ] **Step 8:** **Deploy** — the migration and the new edge function must be live before the
-  cron fires. Per `CLAUDE.md`:
-  - apply `supabase/migrations/20261113180000_ai_provider_health.sql` to the self-hosted
-    stack;
-  - redeploy `ai-provider-health` **and** `ai-config` (Task 3 changed it) through
-    `ssh-contabo-mcp`: copy the changed files into
-    `/etc/dokploy/compose/postorasupabase-supabase-j8axyh/files/volumes/functions/`, verify
-    the SHA256 hashes, then `docker compose up -d --no-deps functions` from the stack dir
-    (see `docs/runbooks/deploy-edge-function.md`);
+- [ ] **Step 8:** **Roll out in this exact order** — the new edge functions must be live
+  before the legacy constraint is removed, and the cron jobs must exist before they fire:
+  1. Apply `supabase/migrations/20261113180000_ai_provider_health.sql` (EXPAND) to the
+     self-hosted stack. It adds `auth_method` and the three-column unique index but keeps
+     `ai_models_provider_id_model_id_key`, so the deployed two-column writer still works.
+  2. Confirm `RESEND_API_KEY` and the verified production alert sender are configured.
+     The default is `Postora Alerts <admin@postora.cloud>`; `RESEND_FROM_EMAIL` overrides
+     it and must not use `resend.dev`. Alert retries use one event key; the transport's
+     24-hour deduplication limit is documented in spec ?6.9.
+     Merge this PR, then redeploy `ai-provider-health` **and** `ai-config` through
+     `ssh-contabo-mcp`: copy the changed files into
+     `/etc/dokploy/compose/postorasupabase-supabase-j8axyh/files/volumes/functions/`, verify
+     the SHA256 hashes, then run `docker compose up -d --no-deps functions` from the stack
+     dir (see `docs/runbooks/deploy-edge-function.md`). The frontend deploys from `main`.
+  3. Only after that deployment, apply
+     `supabase/migrations/20261113180100_ai_model_catalog_drop_legacy_unique.sql` (CONTRACT)
+     to drop the old two-column constraint.
   - **do not** run `npx supabase functions deploy` — that targets Supabase Cloud;
+  - deploy all changed shared modules and API-key catalogue readers together; confirm
+    old function instances have drained before CONTRACT. Do not run a bulk migration
+    command that applies EXPAND and CONTRACT back-to-back before the edge deployment;
   - confirm the four cron jobs exist: `SELECT jobname, schedule FROM cron.job WHERE
     jobname LIKE 'ai-provider-health%';`
-  - the frontend deploys automatically when `main` is pushed.
 
 ---
+
+## Review completion contracts (2026-11-13)
+
+These decisions supersede earlier illustrative snippets in this implementation plan.
+The executable source and tests linked here are authoritative for the final signatures.
+
+- `HealthRunPorts.listRecordedTargets(runId)` reads recorded target identities and throws
+  on database failure. `runHealthChunk` removes them before `sliceHealthChunk` takes the
+  first six unfinished targets; `chunk` is a request counter, never a numeric offset.
+  See `supabase/functions/ai-provider-health/run.ts` and `run.test.ts`.
+- Each HTTP request takes the shared lease with a fresh holder UUID. The stable run ID
+  is separate from lease ownership, so concurrent retries cannot renew each other's lease.
+- `record_ai_provider_health` preserves null model counts. It persists `alert_id` and
+  frozen `alert_payload` per degradation. The claim returns the event's original status
+  and reason even when subsequent checks change the latest result.
+- `mailer.ts` sends the event ID in `Idempotency-Key` and applies the smaller of the
+  remaining alert budget and five seconds. A refused or timed-out send leaves its claim
+  pending. The transport limits and configured sender are specified in spec ?6.9.
+- Admin configuration returns API-key `models` and `oauthModels`. The dialog displays
+  both, labels their credential kinds, and passes only OAuth IDs to the subscription picker.
+- `useRunProviderHealth.run()` returns `{ rows, skipped, complete }`, retries skipped
+  work up to three attempts and removes skipped targets once a retry completes them.
+  The UI names unresolved targets and preserves an explicit incomplete state.
+- CI typechecks the real entrypoints and runs all changed Deno suites, including the
+  actual mail adapter test; SQL proofs run against the disposable database harness.
 
 ## Out of scope (do not implement)
 
@@ -2358,7 +2443,7 @@ same keys):
 - Migrating API-key calls to pi-ai.
 - User BYOK providers and `UserAiModelOverrides`.
 - Turning the `feature_ai_provider_oauth` flag on.
-- An admin-only email channel for the alert (open question 1 in the spec).
+- Changing the admin-only email channel selected by owner decision ?11.1.
 - A provider row for a provider that has no configured credential.
 - GitHub Copilot.
-- Pushing the branch or opening a PR.
+- Merging the PR (this handoff authorizes pushing and thread replies).

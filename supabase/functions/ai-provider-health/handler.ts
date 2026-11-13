@@ -101,11 +101,9 @@ async function routeHealthRequest(req: Request, ports: HealthHandlerPorts): Prom
   }
 
   const runId = deriveRunId(parsed.scope, parsed.runToken ?? "cron", new Date());
-  // WHY the holder is the run id: the four daily cron entries of one day share the daily
-  // run id, so each of them extends the same lease instead of failing to take it. A
-  // manual click has its own run id, so it either takes the lease (when free) or is
-  // told the check is running.
-  const holder = runId;
+  // A lease permits its holder to renew it. Each request needs a distinct holder,
+  // otherwise two concurrent retries of the same run could both acquire it.
+  const holder = crypto.randomUUID();
   const acquired = await ports.acquireLease(LEASE_JOB, holder, LEASE_TTL_SECONDS);
   if (!acquired) {
     return restrictedJsonResponse(req, { error: "busy" }, 409);

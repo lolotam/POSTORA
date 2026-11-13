@@ -1,8 +1,9 @@
 // deno-lint-ignore-file no-import-prefix
-import { assert, assertEquals } from "https://deno.land/std@0.208.0/assert/mod.ts";
+import { assert, assertEquals, assertRejects } from "https://deno.land/std@0.208.0/assert/mod.ts";
 import { runHealthChunk, type HealthRunPorts } from "./run.ts";
 import { AiOAuthError } from "../_shared/aiOAuth/errors.ts";
 import { buildAlertTitle } from "../_shared/aiProviderAlert.ts";
+import { ProviderReadError } from "../_shared/aiProviderTest.ts";
 import type { DegradedProvider, HealthResult } from "../_shared/aiProviderHealth.ts";
 
 /** The rows the database would claim: a provider that was connected and is now failing. */
@@ -17,6 +18,8 @@ function transitionClaim(
       auth_method: t.result.auth_method,
       status: "failed" as const,
       reason: t.result.reason,
+      // The id of the break. It is the same for every claim of the same break.
+      alert_id: `break-${t.result.provider_code}`,
     }));
 }
 
@@ -38,6 +41,10 @@ function fakePorts(overrides: Partial<HealthRunPorts> = {}) {
       { oauth_provider: "anthropic", provider_code: "claude", name: "Claude", status: "connected" },
     ],
     resolveApiKey: async (code) => (code === "xai" ? null : "sk-test"),
+    // The database remembers what this run did, so a chunk that is asked for a
+    // second time sees the rows the first time recorded.
+    listRecordedTargets: async () =>
+      recorded.map((r) => ({ provider_code: r.provider_code, auth_method: r.auth_method })),
     probeApiKey: async () => {},
     probeOAuth: async () => {},
     syncApiKeyCatalogue: async (code) => {
@@ -117,12 +124,17 @@ Deno.test("an expired oauth refresh needs a re-login and syncs nothing", async (
   assertEquals(recorded.find((r) => r.auth_method === "oauth")?.status, "needs_relogin");
 });
 
-Deno.test("a chunk past the end is done and writes nothing", async () => {
+Deno.test("a chunk asked for a second time does nothing: the run already did it", async () => {
   const { ports, recorded } = fakePorts();
-  const out = await runHealthChunk(ports, { runId: "run-1", chunk: 9 });
-  assertEquals(out.done, true);
-  assertEquals(out.results.length, 0);
-  assertEquals(recorded.length, 0);
+  const first = await runHealthChunk(ports, { runId: "run-1", chunk: 1 });
+  assertEquals(first.results.length, 2);
+  assertEquals(recorded.length, 2);
+  // The same run asked for again: every target is already recorded, so nothing is
+  // probed and nothing is written a second time.
+  const second = await runHealthChunk(ports, { runId: "run-1", chunk: 1 });
+  assertEquals(second.results.length, 0);
+  assertEquals(second.done, true);
+  assertEquals(recorded.length, 2);
 });
 
 Deno.test("the counts are empty for a provider that failed", async () => {
@@ -132,6 +144,23 @@ Deno.test("the counts are empty for a provider that failed", async () => {
   assertEquals(failed?.models_added, null);
   assertEquals(failed?.models_updated, null);
   assertEquals(failed?.models_deactivated, null);
+});
+
+Deno.test("changing target membership between calls never skips unfinished providers", async () => {
+  let codes = ["a", "b", "c", "d", "e", "f", "g", "h"];
+  const { ports, recorded, synced } = fakePorts({
+    listApiKeyProviders: async () => codes.map((provider_code) => ({ provider_code, name: provider_code })),
+    listOAuthConnections: async () => [],
+    resolveApiKey: async () => "fixture-key",
+  });
+  const first = await runHealthChunk(ports, { runId: "run-1", chunk: 1 });
+  assertEquals(first.done, false);
+  codes = ["aa", "b", "c", "d", "e", "f", "g", "h"];
+  const second = await runHealthChunk(ports, { runId: "run-1", chunk: 2 });
+  assertEquals(second.results.map((row) => row.provider_code), ["aa", "g", "h"]);
+  assertEquals(second.done, true);
+  assertEquals(new Set(recorded.map((row) => row.provider_code)).size, 9);
+  assertEquals(synced.length, 9);
 });
 
 Deno.test("a connection already in reauth_required is reported without a network call", async () => {
@@ -246,6 +275,7 @@ Deno.test("the claim is closed row by row after the alert was sent", async () =>
         auth_method: "api_key",
         status: "failed",
         reason: "Invalid API key",
+        alert_id: null,
       },
     ]),
     sendAlert: async () => {},
@@ -265,6 +295,7 @@ Deno.test("a failed alert leaves only that row's claim open, and the run still s
         auth_method: "api_key",
         status: "failed",
         reason: "Invalid API key",
+        alert_id: null,
       },
       {
         provider_code: "claude",
@@ -272,6 +303,7 @@ Deno.test("a failed alert leaves only that row's claim open, and the run still s
         auth_method: "oauth",
         status: "failed",
         reason: "Invalid API key",
+        alert_id: null,
       },
     ]),
     sendAlert: async (provider) => {
@@ -293,4 +325,122 @@ Deno.test("the claim is asked once per run, not once per target", async () => {
   });
   await runHealthChunk(ports, { runId: "run-1", chunk: 1 });
   assertEquals(claimed, 1);
+});
+
+// --- the run's own idempotency: a target this run already did ---
+
+Deno.test("a target this run already recorded is not probed again", async () => {
+  const probed: string[] = [];
+  const { ports, recorded, synced } = fakePorts({
+    listRecordedTargets: async () => [{ provider_code: "openai", auth_method: "api_key" }],
+    probeApiKey: async (target) => { probed.push(target.provider_code); },
+  });
+  const out = await runHealthChunk(ports, { runId: "run-1", chunk: 1 });
+  // The provider that was already recorded is not probed and not synced again.
+  assertEquals(probed, []);
+  assertEquals(synced, ["claude:oauth"]);
+  assertEquals(out.results.map((r) => r.provider_code), ["claude"]);
+  assertEquals(recorded.length, 1);
+});
+
+Deno.test("a failed read of the recorded list fails the chunk", async () => {
+  const { ports, recorded } = fakePorts({
+    listRecordedTargets: async () => { throw new Error("the database is down"); },
+  });
+  // A read that failed must not look like "nothing was recorded", because that
+  // would probe and sync every provider a second time.
+  await assertRejects(() => runHealthChunk(ports, { runId: "run-1", chunk: 1 }), Error);
+  assertEquals(recorded.length, 0);
+});
+
+Deno.test("a provider whose row cannot be read is a run error, not a degradation", async () => {
+  const alerts: string[] = [];
+  const { ports, recorded } = fakePorts({
+    probeApiKey: async () => { throw new ProviderReadError("The provider configuration could not be read"); },
+    probeOAuth: async () => { throw new ProviderReadError("The provider configuration could not be read"); },
+    sendAlert: async (row) => { alerts.push(buildAlertTitle(row)); },
+  });
+  const out = await runHealthChunk(ports, { runId: "run-1", chunk: 1 });
+  // Nothing was recorded, so no provider is called broken and no alert is raised.
+  assertEquals(recorded.length, 0);
+  assertEquals(out.results.length, 0);
+  assertEquals(alerts.length, 0);
+  // The target is reported as skipped, so the caller knows the run is incomplete.
+  assertEquals(out.skipped.map((s) => s.provider_code), ["openai", "claude"]);
+  assertEquals(out.done, false);
+});
+
+// --- the alert: one break, one id, one send ---
+
+Deno.test("the alert carries the id of the break", async () => {
+  const ids: string[] = [];
+  const { ports } = fakePorts({
+    probeApiKey: async (t) => { if (t.provider_code === "openai") throw new Error("boom"); },
+    sendAlert: async (provider) => { ids.push(String(provider.alert_id)); },
+  });
+  await runHealthChunk(ports, { runId: "run-1", chunk: 1 });
+  // The id of the break is what the mail provider refuses the second time.
+  assertEquals(ids, ["break-openai"]);
+});
+
+Deno.test("an alert send that ignores cancellation still times out and leaves the claim open", async () => {
+  const closed: string[] = [];
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const { ports } = fakePorts({
+    claimAlerts: async () => ([
+      {
+        provider_code: "openai",
+        display_name: "OpenAI",
+        auth_method: "api_key",
+        status: "failed",
+        reason: "Invalid API key",
+        alert_id: "break-openai",
+      },
+    ]),
+    sendAlert: async () => {
+      await new Promise<void>((resolve) => {
+        timer = setTimeout(resolve, 100);
+      });
+    },
+    markAlertNotified: async (_token, provider) => { closed.push(provider.provider_code); },
+  });
+  try {
+    await runHealthChunk(ports, { runId: "run-1", chunk: 1, alertBudgetMs: 20 });
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
+  assertEquals(closed, []);
+});
+
+Deno.test("an alert send is bounded and a timeout leaves the claim open", async () => {
+  const closed: string[] = [];
+  const signals: AbortSignal[] = [];
+  const { ports } = fakePorts({
+    claimAlerts: async () => ([
+      {
+        provider_code: "openai",
+        display_name: "OpenAI",
+        auth_method: "api_key",
+        status: "failed",
+        reason: "Invalid API key",
+        alert_id: "break-openai",
+      },
+    ]),
+    sendAlert: async (_provider, signal) => {
+      if (signal) signals.push(signal);
+      // A mail provider that hangs: only the signal ends it.
+      await new Promise((resolve, reject) => {
+        signal?.addEventListener("abort", () => reject(signal.reason));
+        setTimeout(resolve, 200);
+      });
+    },
+    markAlertNotified: async (_token, provider) => { closed.push(provider.provider_code); },
+  });
+  await runHealthChunk(ports, { runId: "run-1", chunk: 1, alertBudgetMs: 20 });
+  // The send was bounded by what was left of the budget.
+  assertEquals(signals.length, 1);
+  assertEquals(signals[0].aborted, true);
+  // A send that ran out of time never marks the row as notified: the claim stays
+  // open, so the next run re-claims it.
+  assertEquals(closed, []);
 });

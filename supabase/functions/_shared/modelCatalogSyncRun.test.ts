@@ -5,7 +5,7 @@ import { CatalogSyncError, type CatalogDb, defaultModelsInUse, runCatalogSync, s
 type Write = { table: string; op: string; payload: unknown; options?: unknown };
 type Result = { data: unknown; error: { message: string } | null };
 
-function fakeDb(state: { models: unknown[]; settings: unknown[]; settingsUpsertError?: string; providerReadError?: string }) {
+function fakeDb(state: { models: unknown[]; settings: unknown[]; settingsUpsertError?: string; providerReadError?: string; modelsUpsertError?: { message: string; code?: string } }) {
   const writes: Write[] = [];
   const db: CatalogDb = {
     from: (table: string) => {
@@ -28,6 +28,9 @@ function fakeDb(state: { models: unknown[]; settings: unknown[]; settingsUpsertE
         upsert: (payload: unknown, options: { onConflict: string }) => {
           writes.push({ table, op: "upsert", payload, options });
           const failed = table === "system_settings" && state.settingsUpsertError;
+          if (table === "ai_models" && state.modelsUpsertError) {
+            return Promise.resolve({ error: state.modelsUpsertError });
+          }
           return Promise.resolve({ error: failed ? { message: state.settingsUpsertError! } : null });
         },
       };
@@ -308,6 +311,30 @@ Deno.test("the upsert targets the credential kind and never another one", () =>
     assertEquals((rows[0] as { auth_method: string }).auth_method, "oauth");
   }));
 
+Deno.test("the legacy catalogue constraint surfaces as a sync error, not a silent failure", async () => {
+  await withEnv(KEY_ENV, "test-anthropic-key", async () => {
+    const { db } = fakeDb({
+      models: [],
+      settings: [],
+      // The EXPAND window: the old two-column constraint is still in place, so the
+      // OAuth row of a model that already has an API-key row cannot be written.
+      modelsUpsertError: {
+        code: "23505",
+        message: 'duplicate key value violates unique constraint "ai_models_provider_id_model_id_key"',
+      },
+    });
+    const fetch = catalogue([{ id: "claude-sonnet-4", display_name: "Claude Sonnet 4" }]);
+    const err = await assertRejects(
+      () => runCatalogSync(db, "claude", fetch, { authMethod: "oauth" }),
+      CatalogSyncError,
+    ) as unknown as CatalogSyncError;
+    // The admin has to know that the contract migration is the thing that is missing.
+    assertEquals(err.message.includes("contract migration"), true);
+    // The message the admin sees is the one that says so.
+    assertEquals(syncFailureMessage(err), err.message);
+  });
+});
+
 Deno.test("an api-key default does not protect an oauth model from being switched off", () => {
   const inUse = defaultModelsInUse(
     [{ value: { provider_code: "claude", model_id: "claude-sonnet-4" } }],
@@ -330,7 +357,7 @@ Deno.test("an oauth default protects the oauth model", () => {
   assertEquals(inUse.size, 1);
 });
 
-Deno.test("an api-key sync keeps the historical stamp key and an oauth sync gets its own", () =>
+Deno.test("the sync timestamp is separate for each credential kind", () =>
   withEnv(KEY_ENV, "test-anthropic-key", async () => {
     const { db, writes } = fakeDb({ models: [], settings: [] });
     const fetch = catalogue([{ id: "claude-sonnet-4", display_name: "Claude Sonnet 4" }]);
@@ -339,7 +366,7 @@ Deno.test("an api-key sync keeps the historical stamp key and an oauth sync gets
     const keys = writes
       .filter((w) => w.table === "system_settings")
       .map((w) => (w.payload as { key: string }).key);
-    assertEquals(keys.includes("model_catalog_synced_at_claude"), true);
+    assertEquals(keys.includes("model_catalog_synced_at_claude_api_key"), true);
     assertEquals(keys.includes("model_catalog_synced_at_claude_oauth"), true);
   }));
 

@@ -90,15 +90,15 @@ export function useAIConfiguration() {
     queryFn: async (): Promise<AIConfigData> => {
       const { data: { session } } = await supabase.auth.getSession();
       if (!session) {
-        return { providers: [], models: [], settings: [], defaultModel: null, categoryDefaults: { ...emptyCategoryDefaults }, categoryFallbacks: { ...emptyCategoryFallbacks }, categoryFallbacks2: { ...emptyCategoryFallbacks } };
+        return { providers: [], models: [], oauthModels: [], settings: [], defaultModel: null, categoryDefaults: { ...emptyCategoryDefaults }, categoryFallbacks: { ...emptyCategoryFallbacks }, categoryFallbacks2: { ...emptyCategoryFallbacks } };
       }
 
       const [providersResult, modelsResult, settingsResult] = await Promise.all([
         supabase.from('ai_providers').select('*').order('name'),
         // The catalogue is keyed by credential kind: the same model_id exists once
-        // per auth_method. This list is the API-key catalogue, so an OAuth row of
-        // the same model would show up as a second, identical model.
-        supabase.from('ai_models').select('*, ai_providers(provider_code, name)').eq('auth_method', 'api_key').order('name'),
+        // per auth_method. The rows are fetched once and split below, so the
+        // subscription catalogue is visible without the API-key list changing.
+        supabase.from('ai_models').select('*, ai_providers(provider_code, name)').in('auth_method', ['api_key', 'oauth']).order('name'),
         // Widened beyond the default_ai_model* tier rows so the admin UI can also
         // read the model_catalog_synced_at_<code> rows the sync-models action writes,
         // and the agent_triage_enabled on/off switch. Deviation from the task-5 brief:
@@ -109,12 +109,20 @@ export function useAIConfiguration() {
         supabase.from('system_settings').select('*').or('key.like.default_ai_model%,key.like.model_catalog_synced_at_%,key.eq.agent_triage_enabled'),
       ]);
 
+      if (providersResult.error) throw new Error('The provider configuration could not be read.');
+      if (modelsResult.error) throw new Error('The model catalogue could not be read.');
+      if (settingsResult.error) throw new Error('The AI settings could not be read.');
+
       const providers = (providersResult.data || []) as unknown as AIProvider[];
-      const models = (modelsResult.data || []) as unknown as AIModel[];
+      const catalogue = (modelsResult.data || []) as unknown as AIModel[];
+      // A row with no auth_method is an API-key row: the column did not exist
+      // before the catalogue was keyed by credential kind.
+      const models = catalogue.filter((m) => m.auth_method !== 'oauth');
+      const oauthModels = catalogue.filter((m) => m.auth_method === 'oauth');
       const settings = (settingsResult.data || []) as unknown as SystemSettingRow[];
 
       const parsed = parseSettingsRows(settings as { key: string; value: unknown }[]);
-      return { providers, models, settings, ...parsed };
+      return { providers, models, oauthModels, settings, ...parsed };
     },
     retry: false,
   });
@@ -171,7 +179,7 @@ export function useSetModelAdminParams() {
     mutationFn: async ({ model_row_id, admin_params }: { model_row_id: string; admin_params: Record<string, string | number | boolean> }) => {
       const { error } = await supabase
         .from('ai_models')
-        .update({ admin_params } as any)
+        .update({ admin_params })
         .eq('id', model_row_id);
       if (error) throw new Error(error.message);
       return { success: true };

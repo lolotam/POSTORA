@@ -147,10 +147,12 @@ credential kinds for one provider: `claude` as an API key and `claude` as a Clau
 subscription would collide on the same `model_id`.
 
 The design therefore adds `ai_models.auth_method text NOT NULL DEFAULT 'api_key'` and
-replaces the unique constraint with `UNIQUE (provider_id, model_id, auth_method)`.
-Both the OAuth sync and the API-key sync write into `ai_models`; **the OAuth model list
-shown by the login dialog and the model list shown outside it are then the same rows.**
-This is the dependency on the concurrent branch (§8).
+introduces `UNIQUE (provider_id, model_id, auth_method)` in two migrations. The expand
+migration keeps the legacy `(provider_id, model_id)` constraint so the deployed two-column
+writer keeps working. Only after merge and edge-function deployment does the contract
+migration drop that legacy constraint. Both the OAuth sync and the API-key sync write into
+`ai_models`; **the OAuth model list shown by the login dialog and the model list shown
+outside it are then the same rows.** This is the dependency on the concurrent branch (§8).
 
 **Every reader of the API-key catalogue pins the credential kind.** A reader that
 does not says which kind it wants sees two rows for one model:
@@ -160,11 +162,10 @@ does not says which kind it wants sees two rows for one model:
 - a plain pick takes an arbitrary row — `generate-image/runImageGeneration.ts`;
 - a list shows the same model twice — `useAIConfiguration.ts`, `ai-config/index.ts`.
 
-So the readers of the API-key catalogue filter on `auth_method = 'api_key'`, and a
-writer upserts on `(provider_id, model_id, auth_method)` — a two-column conflict
-target answers `42P10` ("no unique or exclusion constraint matching the ON CONFLICT
-specification") and writes nothing. A row addressed by its primary key needs no
-kind filter: the key is unique across kinds.
+So the readers of the API-key catalogue filter on `auth_method = 'api_key'`, and the new
+writer upserts on `(provider_id, model_id, auth_method)`. The old two-column conflict target
+keeps working during the expand window; after the post-deploy contract step it would answer
+`42P10`. A row addressed by its primary key needs no kind filter: the key is unique across kinds.
 
 `AiAuthMethod` already exists in the frontend (`src/hooks/ai-config/types.ts:39`:
 `export type AiAuthMethod = 'api_key' | 'oauth'`), and the saved tier shape already
@@ -310,10 +311,13 @@ stays far inside 50 s even when every probe times out (6 × 12 s ÷ 3 = 24 s).
 
 **The chunk contract**
 
-- `POST { action: 'run', chunk: n, run_token }` → processes the *n*-th slice of the
-  target list and returns
-  `{ run_id, chunk, done, next_chunk, results: ProviderHealthResult[], summary }`.
-- `done` is `true` when `chunk` is past the last slice. The browser stops.
+- `POST { action: 'run', chunk: n, run_token }` → processes the first six targets not
+  yet recorded for this run and returns
+  `{ run_id, chunk, done, next_chunk, results: ProviderHealthResult[], skipped, summary }`.
+  This cursor over unrecorded targets does not skip or repeat a target when configuration
+  changes between calls; `chunk` identifies the request rather than a numeric offset.
+- `done` is `true` only when no unrecorded target remains and nothing was skipped. The
+  browser retries the same chunk for skipped work, with a bounded attempt count.
 - A manual click therefore makes **⌈targets / 6⌉** calls — for the realistic 9 API-key
   plus 2 OAuth targets, **2 calls**.
 
@@ -362,16 +366,14 @@ release_cron_run_lease(p_job, p_holder)          -- true = released
 ```
 
 - `p_job` is always `'ai-provider-health'`.
-- `p_holder` is derived from the **run id**, not from the HTTP request:
-  - manual click → a holder derived from the browser's `run_token` (stable across that
-    click's chunks, so chunk 2 *extends* the lease instead of failing);
-  - daily job → a holder derived from the UTC date (stable across the four cron
-    entries).
+- `p_holder` is a fresh UUID for each HTTP request. The lease permits its holder to
+  renew it, so sharing a holder across retries would allow concurrent requests for
+  the same run to overlap. Run identity remains stable across chunks independently.
 - `p_ttl` is `2 minutes`. The lease is released when the chunk ends, so the TTL only
   has to outlive one chunk (the worst case is 30 s of targets plus 8 s of alerts).
   It is short on purpose: a platform kill skips the release, and a lease that then
   lasted fifteen minutes would lock the daily run out of its own window.
-- Because the holder is the run id, a click that overlaps a running chunk gets `false`
+- Because each request has its own holder, a click or retry overlapping a running chunk gets `false`
   → the API answers `409 { error: 'busy' }` and the UI says *"the daily check is
   running — try again in a few minutes"*. A click outside that window takes the lease
   normally.
@@ -391,9 +393,9 @@ CREATE TABLE public.ai_provider_health (
   status            text   NOT NULL CHECK (status IN ('connected','failed','needs_relogin')),
   previous_status   text   CHECK (previous_status IN ('connected','failed','needs_relogin')),
   reason            text,                       -- sanitized, <= 500 chars, never a key
-  models_added      integer NOT NULL DEFAULT 0,
-  models_updated    integer NOT NULL DEFAULT 0,
-  models_deactivated integer NOT NULL DEFAULT 0,
+  models_added      integer,
+  models_updated    integer,
+  models_deactivated integer,
   latency_ms        integer,
   run_id            uuid,
   checked_at        timestamptz NOT NULL DEFAULT now(),
@@ -401,6 +403,8 @@ CREATE TABLE public.ai_provider_health (
   claim_token       uuid,
   claimed_at        timestamptz,
   alert_pending     boolean NOT NULL DEFAULT false,
+  alert_id          uuid,
+  alert_payload     jsonb,
   PRIMARY KEY (provider_code, auth_method)
 );
 ```
@@ -418,8 +422,9 @@ CREATE TABLE public.ai_provider_health (
   still broken, and breaks again after a recovery raises an alert every time it
   breaks — and exactly once per break.
 - **`claim_token` / `claimed_at` / `notified_at`** implement a two-phase notification
-  claim, so a crash between "decided to notify" and "notified" does not lose the alert
-  and does not send it twice.
+  claim. **`alert_id`** is minted on entry to a degraded state and is sent as Resend's
+  `Idempotency-Key`, so reclaiming the same break after a crash cannot send it twice.
+  Null model counts mean that no sync ran; they are not coerced to zero.
 
 **RLS and grants** (`ARCHITECTURE.md` §23, §39):
 
@@ -441,16 +446,19 @@ CREATE TABLE public.ai_provider_health (
 
 **The change to `ai_models`**
 
-- `ALTER TABLE public.ai_models ADD COLUMN IF NOT EXISTS auth_method text NOT NULL DEFAULT 'api_key';`
-- `ALTER TABLE public.ai_models DROP CONSTRAINT IF EXISTS ai_models_provider_id_model_id_key;`
-- `CREATE UNIQUE INDEX IF NOT EXISTS ai_models_provider_model_auth_method_key
-  ON public.ai_models (provider_id, model_id, auth_method);`
+- Expand (`20261113180000`): add `auth_method text NOT NULL DEFAULT 'api_key'` and the
+  unique index on `(provider_id, model_id, auth_method)`, while keeping
+  `ai_models_provider_id_model_id_key`.
+- Merge and deploy the new readers and writers.
+- Contract (`20261113180100`): verify the three-column unique index exists, then drop
+  `ai_models_provider_id_model_id_key`.
 
 Every statement is idempotent so the migration is safe next to the concurrent branch
 (§8). `ai_models` keeps its existing RLS: `ai_models_select` for `authenticated`
 (`USING (true)`) and `ai_models_admin_all` for admins. The new column defaults to
-`'api_key'`, so **every existing row keeps working untouched** — no data migration is
-needed and no read path changes.
+`'api_key'`, so **every existing row keeps working untouched**. Until the contract step,
+an OAuth row cannot duplicate an existing API-key `(provider_id, model_id)`; that sync
+fails explicitly rather than claiming success.
 
 **New RPCs** (service-role only, `SECURITY DEFINER`, `SET search_path = public`,
 `REVOKE … FROM PUBLIC, anon, authenticated`):
@@ -458,7 +466,7 @@ needed and no read path changes.
 | RPC | Returns | Purpose |
 |---|---|---|
 | `record_ai_provider_health(p_provider_code, p_auth_method, p_status, p_reason, p_models_added, p_models_updated, p_models_deactivated, p_latency_ms, p_run_id)` | `void` | upsert the row, copying the old `status` into `previous_status`, and setting or clearing `alert_pending` |
-| `claim_ai_provider_health_notifications(p_claim_token uuid)` | `TABLE(provider_code text, auth_method text, status text, reason text, previous_status text)` | atomically claim the rows whose alert is still pending; a claim older than 10 minutes is re-claimable |
+| `claim_ai_provider_health_notifications(p_claim_token uuid)` | `TABLE(provider_code text, auth_method text, status text, reason text, previous_status text, alert_id uuid)` | atomically claim the rows whose alert is still pending; a claim older than 10 minutes is re-claimable |
 | `mark_ai_provider_health_notified(p_claim_token uuid, p_provider_code text, p_auth_method text)` | `void` | close the claim of **one** row after its notification was sent |
 
 `record_ai_provider_health` does the read-old/write-new under a row lock
@@ -537,7 +545,7 @@ credential kind, so it belongs in the admin-only channel. This is the owner's de
 **When:** exactly when a row transitions `connected → failed` or
 `connected → needs_relogin`.
 
-**How it is exactly once:**
+**How alert retries are deduplicated:**
 
 1. `record_ai_provider_health` stores `previous_status = 'connected'`,
    `status = 'failed'` and `alert_pending = true`. A status change resets
@@ -547,10 +555,23 @@ credential kind, so it belongs in the admin-only channel. This is the owner's de
    still true (sets `claim_token`, `claimed_at`) and returns them. Rows claimed more
    than 10 minutes ago with no `notified_at` are re-claimable, so a crash does not
    lose the alert.
-3. The runner sends one email per claimed row.
+3. The runner sends one email per claimed row, using the claimed `alert_id` as Resend's
+   `Idempotency-Key` and bounding the send by the remaining alert budget.
 4. `mark_ai_provider_health_notified(p_claim_token, p_provider_code, p_auth_method)`
    closes **that one row**: it sets `notified_at`, clears the claim and clears
    `alert_pending`.
+
+The original degraded status and sanitized reason are frozen in `alert_payload`, so a
+later health result cannot change the body of a retry for the same `alert_id`.
+The sender defaults to the existing production alert sender
+`Postora Alerts <admin@postora.cloud>`; `RESEND_FROM_EMAIL` can override it with a
+verified sender. Shared `resend.dev` senders are rejected before any request is sent.
+
+Resend retains idempotency keys for **24 hours** ([transport contract](https://resend.com/docs/dashboard/emails/idempotency-keys)).
+Identical retries within that window are deduplicated. A retry after that window, or
+an operator changing recipients/sender/provider name between attempts, cannot promise
+exactly-once transport delivery; changed payloads within the window are refused and
+remain pending. This is a transport limit, not a permanent exactly-once guarantee.
 
 A mail that fails is caught: the run still succeeds and **only that row's** claim
 stays open, so the row is re-claimed after ten minutes instead of the alert being
@@ -685,9 +706,9 @@ list differs from the outside list**.
    login dialog read the same rows. The concurrent branch's fix — making the login
    dialog and the outside list agree — is only correct **after** the OAuth rows exist
    in `ai_models`.
-2. **`ai_models.auth_method`** must exist. This migration adds it idempotently
-   (`ADD COLUMN IF NOT EXISTS`, `DROP CONSTRAINT IF EXISTS`, `CREATE UNIQUE INDEX IF
-   NOT EXISTS`), so whichever branch lands first, the second is a no-op on the schema.
+2. **`ai_models.auth_method`** must exist. The expand migration adds it idempotently
+   (`ADD COLUMN IF NOT EXISTS`, `CREATE UNIQUE INDEX IF NOT EXISTS`) without dropping the
+   legacy constraint. The later contract migration owns that removal after deployment.
 
 **Merge order:** this branch's migration first (`20261113180000`), then the concurrent
 branch's migration on top. If the concurrent branch adds the same column with a
@@ -707,7 +728,7 @@ frontend grouping is unchanged by this design either way.
 |---|---|
 | One provider's probe fails | that row is `failed` with a sanitized reason; the run continues |
 | One provider's catalogue fetch fails after a passed test | the row is `failed` with the reason; its models are untouched (the planner never applied) |
-| The whole run exceeds the 40 s deadline | the server returns what it has, the targets it never reached are listed as `skipped`, and `done: false`; the browser asks for the next chunk; the daily entries pick it up on the next slot |
+| The whole run exceeds the 40 s deadline | the server returns what it has, the targets it never reached are listed as `skipped`, and `done: false`; the browser retries the same chunk a bounded number of times; the daily entries pick it up on the next slot |
 | A chunk is requested beyond the last slice | `done: true`, no targets, no writes |
 | The lease is held (a running chunk or another click) | `409 { error: 'busy' }`; the UI keeps the stored table |
 | The platform kills the function | the lease is not released, so its 2 minute TTL expires on its own and the next attempt takes it |
@@ -734,10 +755,10 @@ frontend grouping is unchanged by this design either way.
 | An admin silences an alert by hand | the table is read only for `authenticated`: the policy is `FOR SELECT`, `authenticated` has no `UPDATE` grant, and only the service role writes. An admin who could write `notified_at` could silence a degradation. |
 | A caller forges the cron secret | `verifyCronOrAdmin` compares with a constant-time check against `CRON_SECRET`; a mismatch is `401`. The secret never appears in a migration. |
 | The cron overlaps a manual click | the `ai-provider-health` lease in `cron_run_leases`; the second caller gets `false` → `409 busy`. |
-| A run overlaps itself | the run id skips already-recorded targets; the lease serialises different run ids. |
+| A run overlaps itself | the run id skips already-recorded targets; the lease serialises all requests, including retries sharing a run id. |
 | The service-role key reaches the browser | never. The browser sends only the user's JWT. |
 | SSRF via a provider endpoint | the endpoints come from `ai_providers.api_endpoint`, written by an admin. This feature does not add a user-supplied URL. |
-| Denial of service by spamming the button | the lease + the 60 s cooldown + the admin-only authorisation. |
+| Denial of service by spamming the button | the shared lease and the admin-only authorisation. |
 
 ---
 

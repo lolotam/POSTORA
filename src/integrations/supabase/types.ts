@@ -2718,6 +2718,7 @@ export type Database = {
       }
       ai_models: {
         Row: {
+          admin_params: Json
           auth_method: string
           capabilities: string[]
           context_limit: number | null
@@ -2734,6 +2735,7 @@ export type Database = {
           updated_at: string
         }
         Insert: {
+          admin_params?: Json
           auth_method?: string
           capabilities?: string[]
           context_limit?: number | null
@@ -2750,6 +2752,7 @@ export type Database = {
           updated_at?: string
         }
         Update: {
+          admin_params?: Json
           auth_method?: string
           capabilities?: string[]
           context_limit?: number | null
@@ -2776,15 +2779,17 @@ export type Database = {
       }
       ai_provider_health: {
         Row: {
+          alert_id: string | null
+          alert_payload: Json | null
           alert_pending: boolean
           auth_method: string
           checked_at: string
           claim_token: string | null
           claimed_at: string | null
           latency_ms: number | null
-          models_added: number
-          models_deactivated: number
-          models_updated: number
+          models_added: number | null
+          models_deactivated: number | null
+          models_updated: number | null
           notified_at: string | null
           previous_status: string | null
           provider_code: string
@@ -2793,15 +2798,17 @@ export type Database = {
           status: string
         }
         Insert: {
+          alert_id?: string | null
+          alert_payload?: Json | null
           alert_pending?: boolean
           auth_method?: string
           checked_at?: string
           claim_token?: string | null
           claimed_at?: string | null
           latency_ms?: number | null
-          models_added?: number
-          models_deactivated?: number
-          models_updated?: number
+          models_added?: number | null
+          models_deactivated?: number | null
+          models_updated?: number | null
           notified_at?: string | null
           previous_status?: string | null
           provider_code: string
@@ -2810,15 +2817,17 @@ export type Database = {
           status: string
         }
         Update: {
+          alert_id?: string | null
+          alert_payload?: Json | null
           alert_pending?: boolean
           auth_method?: string
           checked_at?: string
           claim_token?: string | null
           claimed_at?: string | null
           latency_ms?: number | null
-          models_added?: number
-          models_deactivated?: number
-          models_updated?: number
+          models_added?: number | null
+          models_deactivated?: number | null
+          models_updated?: number | null
           notified_at?: string | null
           previous_status?: string | null
           provider_code?: string
@@ -13075,9 +13084,9 @@ export type Database = {
           p_auth_method: string
           p_status: string
           p_reason: string | null
-          p_models_added: number
-          p_models_updated: number
-          p_models_deactivated: number
+          p_models_added: number | null
+          p_models_updated: number | null
+          p_models_deactivated: number | null
           p_latency_ms: number
           p_run_id: string | null
         }
@@ -13091,6 +13100,7 @@ export type Database = {
           status: string
           reason: string | null
           previous_status: string | null
+          alert_id: string | null
         }[]
       }
       mark_ai_provider_health_notified: {

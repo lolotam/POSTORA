@@ -21,6 +21,7 @@ vi.mock('@/integrations/supabase/client', () => {
     const chain = {
       select: () => chain,
       eq: () => chain,
+      in: () => chain,
       or: () => Promise.resolve(value),
       order: () => Promise.resolve(value),
     };
@@ -60,7 +61,7 @@ const openaiProvider = {
   is_active: true,
 };
 
-const claudeModel = (id: string, modelId: string, name: string) => ({
+const claudeModel = (id: string, modelId: string, name: string, authMethod: 'api_key' | 'oauth' = 'api_key') => ({
   id,
   provider_id: 'prov-claude',
   model_id: modelId,
@@ -71,6 +72,7 @@ const claudeModel = (id: string, modelId: string, name: string) => ({
   is_active: true,
   cost_per_1m_input_tokens: null,
   cost_per_1m_output_tokens: null,
+  auth_method: authMethod,
   ai_providers: { provider_code: 'claude', name: 'Anthropic API' },
 });
 
@@ -106,7 +108,7 @@ describe('AiProvidersCard', () => {
     invoke.mockReset();
     tables.ai_providers = [claudeProvider, openaiProvider];
     tables.ai_models = [
-      claudeModel('m-1', 'claude-sonnet-4-5', 'Claude Sonnet 4.5'),
+      claudeModel('m-1', 'claude-sonnet-4-5', 'Claude Sonnet 4.5', 'oauth'),
       claudeModel('m-2', 'claude-haiku-4-5', 'Claude Haiku 4.5'),
     ];
     tables.system_settings = [];
@@ -128,6 +130,7 @@ describe('AiProvidersCard', () => {
 
     // Only the provider with a connected subscription carries the auth badge.
     await waitFor(() => expect(screen.getAllByText('auth')).toHaveLength(1));
+    expect(screen.getByText('2/2')).toBeInTheDocument();
   });
 
   it('offers the same models in the picker as the list next to it', async () => {
@@ -143,12 +146,21 @@ describe('AiProvidersCard', () => {
     fireEvent.pointerDown(modelTrigger, { button: 0, buttons: 1, pointerType: 'mouse' });
     fireEvent.click(modelTrigger);
 
-    // The picker offers exactly those rows, including the one the
-    // subscription's own model list does not name.
+    // The picker offers only the OAuth rows; the API-key row stays visible in
+    // the shared catalogue list without becoming a subscription choice.
     const options = await screen.findAllByRole('option');
-    expect(options.map(option => option.textContent).sort()).toEqual([
-      'claude-haiku-4-5',
-      'claude-sonnet-4-5',
-    ]);
+    expect(options.map(option => option.textContent)).toEqual(['claude-sonnet-4-5']);
+  });
+
+  it.each(['current', 'legacy'] as const)('reads the %s API-key sync timestamp', async (kind) => {
+    const at = '2026-11-13T11:42:00Z';
+    tables.system_settings = [{
+      key: kind === 'current' ? 'model_catalog_synced_at_claude_api_key' : 'model_catalog_synced_at_claude',
+      value: { at },
+    }, { key: 'model_catalog_synced_at_claude_oauth', value: { at: '2026-10-01T00:00:00Z' } }];
+    renderCard();
+    await screen.findByText('Anthropic API');
+    const dialog = await openClaudeDialog();
+    expect(within(dialog).getByText(`Last synced ${new Date(at).toLocaleString()}`)).toBeInTheDocument();
   });
 });
