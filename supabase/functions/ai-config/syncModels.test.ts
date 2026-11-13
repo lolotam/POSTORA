@@ -3,7 +3,7 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { type CatalogDb, CatalogSyncError } from "../_shared/modelCatalogSyncRun.ts";
 import { syncModels } from "./syncModels.ts";
 
-function fixture(busy = false, fail = false) {
+function fixture(busy = false, fail = false, releaseRejects = false) {
   const calls: Array<{ name: string; body: Record<string, unknown> }> = [];
   const transport = (async (input, init) => {
     const url = new URL(String(input));
@@ -12,6 +12,7 @@ function fixture(busy = false, fail = false) {
     let status = 200;
     if (url.pathname.includes("/rpc/")) {
       calls.push({ name, body: JSON.parse(String(init?.body)) });
+      if (releaseRejects && name === "release_cron_run_lease") throw new Error("offline");
       data = name === "acquire_cron_run_lease" ? !busy : true;
     } else if (name === "ai_providers") {
       data = fail ? { message: "storage unavailable" } : { id: "provider", api_key_env_var: "NONE" };
@@ -45,4 +46,11 @@ Deno.test("failed manual catalogue read releases the health lease", async () => 
   const { db, calls } = fixture(false, true);
   await assertRejects(() => syncModels(db, "openrouter", false), Error, "read failed");
   assertEquals(calls.map((c) => c.name), ["acquire_cron_run_lease", "release_cron_run_lease"]);
+});
+
+Deno.test('round5 release transport rejection preserves committed sync result', async () => {
+  const { db } = fixture(false, false, true);
+  const upstream = (async () => new Response(JSON.stringify({ data: [{ id: 'openai/gpt-4o', name: 'GPT', architecture: { output_modalities: ['text'] } }] }))) as typeof fetch;
+  const result = await syncModels(db, 'openrouter', false, upstream);
+  assertEquals(result.added, 1);
 });

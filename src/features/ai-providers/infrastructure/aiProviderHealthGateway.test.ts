@@ -88,3 +88,9 @@ describe("aiProviderHealthGateway", () => {
     await expect(fetchProviderHealth()).rejects.toThrow("offline");
   });
 });
+
+
+it.each(['t', '2026-99-99T00:00:00Z'])('round5 rejects malformed health timestamp %s', async (checked_at) => {
+  invoke.mockResolvedValue({ data: { results: [{ provider_code: 'claude', auth_method: 'api_key', status: 'connected', checked_at }] }, error: null });
+  await expect(fetchProviderHealth()).rejects.toThrow(INVALID_RESPONSE);
+});

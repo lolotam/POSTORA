@@ -11,7 +11,7 @@
 
 import { z } from "npm:zod@3.23.8";
 import { restrictedJsonResponse } from "../_shared/cors.ts";
-import { deriveRunId, withSignal, type HealthResult } from "../_shared/aiProviderHealth.ts";
+import { HEALTH_ALERT_BUDGET_MS, deriveRunId, withSignal, type HealthResult } from "../_shared/aiProviderHealth.ts";
 import type { HealthChunkResponse } from "./run.ts";
 
 const LEASE_JOB = "ai-provider-health";
@@ -25,6 +25,7 @@ const LEASE_TTL_SECONDS = 120;
 
 export interface HealthHandlerPorts {
   runChunk(chunk: number, runId: string, holder: string, deadlineMs: number): Promise<HealthChunkResponse>;
+  deliverAlerts(budgetMs: number): Promise<void>;
   readResults(): Promise<HealthResult[]>;
   acquireLease(job: string, holder: string, ttlSeconds: number): Promise<boolean>;
   releaseLease(job: string, holder: string): Promise<boolean>;
@@ -129,6 +130,7 @@ async function routeHealthRequest(req: Request, ports: HealthHandlerPorts, deadl
       return restrictedJsonResponse(req, { error: admission }, admission === 'busy' ? 409 : 429);
     }
     if (admission === 'complete') {
+      await ports.deliverAlerts(Math.max(0, Math.min(HEALTH_ALERT_BUDGET_MS, deadline - Date.now() - 3_000)));
       return restrictedJsonResponse(req, { run_id: runId, chunk: parsed.chunk, done: true,
         next_chunk: null, results: [], skipped: [], summary: { total: 0, connected: 0, failed: 0, needs_relogin: 0 } }, 200);
     }

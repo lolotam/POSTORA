@@ -106,6 +106,9 @@ marker reads. Discovery and database calls carry cancellation. Each target recei
 a total budget capped by 15 seconds and the remaining global deadline. Refresh,
 probe and catalogue reads/writes share an earlier signal; up to two seconds of
 the same total budget are reserved for result recording with a later write signal.
+Credential reads and refresh claims receive that signal. Once token rotation starts,
+its save/failure settlement retains the existing 180-second refresh lease even if
+the health caller stops waiting; cancelling that save could discard a rotated token.
 The probe itself has a 12-second
 HTTP timeout. Alerts receive at most eight seconds of remaining global time and each
 send at most five seconds. The handler caps a request at 45 seconds, reduces runner
@@ -121,7 +124,7 @@ writes, causing rollback. PostgREST reads also carry the target abort signal.
 A successful result write atomically updates latest status and inserts the immutable
 completion marker. Failed persistence becomes skipped retryable work and forces
 `done: false`. It never becomes an ordinary in-memory result. A failed configuration,
-OAuth credential or probe-model read, or a local catalogue write/lease refusal, is a
+OAuth credential or probe-model read, or any catalogue source/transport/write/lease failure, is a
 run error, not provider degradation. It never falls back to a guessed model or emits
 a false degradation alert. Daily scope is reserved for authenticated cron callers;
 logical admission excludes every other active run, including an expired run resuming
@@ -152,6 +155,8 @@ Each connected-to-broken transition persists an immutable alert outbox event, wi
 `alert_id`, original status/reason and retry claim state. Pending events survive recovery,
 changed health reasons and later independent breaks. Claim for ten minutes, send, then
 acknowledge precisely that event. A failed send or acknowledgement leaves retryable work.
+Completed daily admissions still execute the bounded alert phase without repeating
+provider probes; later scheduled chunks can reclaim a failed delivery after ten minutes.
 Latest health retains its pending indicator; it is not the event delivery ledger.
 
 The event ID is Resend's Idempotency-Key. Retried event content remains frozen.
@@ -167,9 +172,10 @@ One mounted Check & sync all providers control shows Checking providers while ru
 The unused `SyncAllButton` and its tests are removed: no production caller remains,
 as required by `ARCHITECTURE.md` §1 (zero dead modules). The table
 shows one row per connection, credential kind, status, safe reason, nullable counts and
-last checked time. NULL counts display a dash. A successful empty status read clears
+last checked time. Malformed nonempty timestamps are rejected at the response boundary. NULL counts display a dash. A successful empty status read clears
 stale rows; a failed status read shows a warning, even over cached results, and never
-claims empty history. Removed credentials do not remain visible as connected.
+claims empty history. Configuration read errors render an actionable retry before
+the missing-configuration branch, including when cached data exists. Removed credentials do not remain visible as connected.
 
 The browser retains one token across chunks, retries skipped work at most three times,
 and reports incomplete runs. Both health and `['ai-config']` caches are invalidated
@@ -189,7 +195,11 @@ The [companion plan](../plans/2026-11-13-ai-providers-test-and-sync.md#7-exact-o
 owns the exact operational sequence: apply `20261113180000` before merge with cron
 paused; merge and deploy edge/shared code; drain old writer instances; explicitly attest
 and apply `20261113180100`, which removes legacy uniqueness and activates cron. CONTRACT
-fails closed without that session attestation. Neither migration has been applied to
+fails closed without that session attestation, pg_cron, pg_net, both cron helpers
+and all four installed schedules. If EXPAND skipped scheduling because prerequisites
+were missing, install them and reapply EXPAND before CONTRACT. Manual health admission
+returns busy until CONTRACT removes legacy pair uniqueness, preventing overlapping
+OAuth/API-key model IDs from reaching a writer during the rollout window. Neither migration has been applied to
 production by this implementation task.
 
 The four daily jobs run at 03:05, 03:12, 03:19 and 03:26 UTC. SQL regressions exercise
@@ -201,3 +211,8 @@ includes the auth-method reader guard. The plan lists the required local gates.
 
 Architectural/workflow authority remains `ARCHITECTURE.md` and `CLAUDE.md`; this document
 does not override their layering, migration, review or self-hosted deployment rules.
+
+Higgsfield health discovery reads the dedicated platform access/refresh token row in
+`provider_api_keys`, requires an active provider, and probes its MCP `models_explore`
+path. Its health credential kind is OAuth; catalogue writes still use `api_key` and
+reuse the health request's lease. This does not create a pi-ai Higgsfield adapter.

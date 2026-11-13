@@ -22,21 +22,24 @@ function catalog(payload: unknown) {
 type Explore = (capability: "video" | "image") => Promise<unknown>;
 
 /** Discovery and cleanup affect only the api_key partition that media generation reads. */
-export async function syncHiggsfieldCatalog(db: SupabaseClient, explore?: Explore) {
+export async function syncHiggsfieldCatalog(db: SupabaseClient, explore?: Explore, options: { leaseHolder?: string; signal?: AbortSignal } = {}) {
   // The same lease excludes health and legacy admin syncs before any catalogue
   // read. One fenced transaction writes the complete diff and timestamp together.
-  const holder = crypto.randomUUID();
+  const holder = options.leaseHolder ?? crypto.randomUUID();
   const job = "ai-provider-health";
-  const { data: acquired, error } = await db.rpc("acquire_cron_run_lease", {
-    p_job: job, p_holder: holder, p_ttl: "120 seconds",
-  }).abortSignal(AbortSignal.timeout(5_000));
-  if (error) throw new CatalogStorageError("Higgsfield catalogue lease could not be acquired");
-  if (acquired !== true) throw new CatalogSyncError("A provider check or model sync is already running. Try again later.");
+  if (!options.leaseHolder) {
+    const { data: acquired, error } = await db.rpc("acquire_cron_run_lease", {
+      p_job: job, p_holder: holder, p_ttl: "120 seconds",
+    }).abortSignal(AbortSignal.timeout(5_000));
+    if (error) throw new CatalogStorageError("Higgsfield catalogue lease could not be acquired");
+    if (acquired !== true) throw new CatalogSyncError("A provider check or model sync is already running. Try again later.");
+  }
   try {
-    const signal = AbortSignal.timeout(30_000);
+    const signal = options.signal ?? AbortSignal.timeout(30_000);
     if (!explore) {
       await withSignal(getValidAccessToken(db), signal);
       const mcp = await withSignal(HiggsfieldMcpClient.create(db), signal);
+      mcp.withDeadline(Date.now() + 15_000);
       explore = (capability) => mcp.callTool("models_explore", { action: "list", type: capability, limit: 100 });
     }
     const found = new Map<string, CatalogModel>();
@@ -59,10 +62,16 @@ export async function syncHiggsfieldCatalog(db: SupabaseClient, explore?: Explor
     const report = await runCatalogSync(db as unknown as CatalogDb, HIGGSFIELD_PROVIDER_CODE, fetch, {
       authMethod: "api_key", catalogue, leaseHolder: holder, signal,
     });
-    return { discovered: found.size, activated: report.activated, deactivated: report.deactivated };
+    return { discovered: found.size, activated: report.activated, added: report.added, updated: report.updated, deactivated: report.deactivated };
   } finally {
-    const { error: releaseError } = await db.rpc("release_cron_run_lease", { p_job: job, p_holder: holder })
-      .abortSignal(AbortSignal.timeout(3_000));
-    if (releaseError) console.error("event: 'higgsfield_catalogue_lease_release_failed'");
+    if (!options.leaseHolder) {
+      try {
+        const { error: releaseError } = await db.rpc("release_cron_run_lease", { p_job: job, p_holder: holder })
+          .abortSignal(AbortSignal.timeout(3_000));
+        if (releaseError) console.error("event: 'higgsfield_catalogue_lease_release_failed'");
+      } catch {
+        console.error("event: 'higgsfield_catalogue_lease_release_failed'");
+      }
+    }
   }
 }

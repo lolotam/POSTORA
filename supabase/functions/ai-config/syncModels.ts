@@ -15,9 +15,13 @@ export async function syncModels(db: CatalogDb, providerCode: string, dryRun: bo
       dryRun, leaseHolder: holder, signal: AbortSignal.timeout(30_000),
     });
   } finally {
-    const { error: releaseError } = await db.rpc("release_cron_run_lease", {
-      p_job: job, p_holder: holder,
-    }).abortSignal(AbortSignal.timeout(3_000));
-    if (releaseError) console.error("event: 'ai_catalogue_lease_release_failed'");
+    try {
+      const { error: releaseError } = await db.rpc("release_cron_run_lease", {
+        p_job: job, p_holder: holder,
+      }).abortSignal(AbortSignal.timeout(3_000));
+      if (releaseError) console.error("event: 'ai_catalogue_lease_release_failed'");
+    } catch {
+      console.error("event: 'ai_catalogue_lease_release_failed'");
+    }
   }
 }

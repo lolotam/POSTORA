@@ -78,7 +78,7 @@ function lastCatalogSyncedAt(settings: SystemSettingRow[], providerCode: string)
 export function AiProvidersCard() {
   const { t } = useTranslation(['adminai']);
   const queryClient = useQueryClient();
-  const { data: aiConfig, isLoading } = useAIConfiguration();
+  const { data: aiConfig, isLoading, isError, refetch } = useAIConfiguration();
   const toggleProvider = useToggleProvider();
   const toggleModel = useToggleModel();
   const testConnection = useTestConnection();
@@ -184,6 +184,13 @@ export function AiProvidersCard() {
       setSavingProviderKey(false);
     }
   };
+
+  if (isError) {
+    return <Card><CardContent className="pt-6" role="alert">
+      <p>{t('configurationReadFailed', 'AI configuration could not be read. Try again.')}</p>
+      <Button variant="outline" onClick={() => void refetch()}>{t('retryConfiguration', 'Retry')}</Button>
+    </CardContent></Card>;
+  }
 
   if (isLoading) {
     return (

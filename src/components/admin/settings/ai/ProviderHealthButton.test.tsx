@@ -152,8 +152,8 @@ describe('ProviderHealthButton', () => {
       body.action === 'status'
         ? Promise.resolve({ data: { results: storedResults }, error: null })
         : Promise.resolve(chunk([
-          { provider_code: 'openai', auth_method: 'api_key', display_name: 'OpenAI', status: 'failed', reason: 'Invalid API key', models_added: null, models_updated: null, models_deactivated: null, latency_ms: 5, checked_at: 't' },
-          { provider_code: 'xai', auth_method: 'api_key', display_name: 'xAI', status: 'connected', reason: null, models_added: 3, models_updated: 0, models_deactivated: 1, latency_ms: 5, checked_at: 't' },
+          { provider_code: 'openai', auth_method: 'api_key', display_name: 'OpenAI', status: 'failed', reason: 'Invalid API key', models_added: null, models_updated: null, models_deactivated: null, latency_ms: 5, checked_at: '2026-11-13T00:00:00Z' },
+          { provider_code: 'xai', auth_method: 'api_key', display_name: 'xAI', status: 'connected', reason: null, models_added: 3, models_updated: 0, models_deactivated: 1, latency_ms: 5, checked_at: '2026-11-13T00:00:00Z' },
         ])));
     render(wrap(<ProviderHealthButton />));
     fireEvent.click(screen.getByRole('button', { name: /Check & sync all providers/i }));

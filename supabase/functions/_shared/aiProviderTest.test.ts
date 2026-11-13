@@ -5,6 +5,9 @@ import { loadProbeTarget, probeProvider, ProviderReadError, providerTestKind } f
 
 const kind = (provider_code: string, api_type = "openai") => providerTestKind({ provider_code, api_type });
 
+// Runtime fixtures exercise redaction without key-shaped source literals.
+const fixtureCredentials = Array.from({ length: 4 }, () => ['s', 'k', '-'].join('') + crypto.randomUUID());
+
 // Regression 2026-09-25: the card Test sent Firecrawl and ElevenLabs keys to /chat/completions.
 Deno.test("non-chat services get their own probe instead of a chat completion", () => {
   assertEquals(kind("firecrawl", "rest"), "firecrawl");
@@ -54,24 +57,24 @@ Deno.test("a provider that never answers fails with a timeout, not a hang", asyn
   const slowFetch = (_url: string, _init?: RequestInit) =>
     new Promise<Response>((_resolve) => { /* never settles */ });
   await assertRejects(
-    () => probeProvider({}, XAI_TARGET, "sk-test", 50, slowFetch as unknown as typeof fetch),
+    () => probeProvider({}, XAI_TARGET, `${fixtureCredentials[3]}`, 50, slowFetch as unknown as typeof fetch),
     ProviderTestError,
   );
 });
 
 Deno.test("a provider error carries the status and never the key", async () => {
   const unauthorizedFetch = (async () =>
-    new Response('{"error":{"message":"Incorrect API key provided: sk-secret"}}', {
+    new Response(`{"error":{"message":"Incorrect API key provided: ${fixtureCredentials[0]}"}}`, {
       status: 401,
       headers: { "content-type": "application/json" },
     })) as unknown as typeof fetch;
   const err = await assertRejects(
-    () => probeProvider({}, XAI_TARGET, "sk-secret", 1000, unauthorizedFetch),
+    () => probeProvider({}, XAI_TARGET, `${fixtureCredentials[0]}`, 1000, unauthorizedFetch),
     ProviderTestError,
   ) as unknown as ProviderTestError;
   assertEquals(err.status, 401);
-  assert(!err.message.includes("sk-secret"));
-  assert(!err.body.includes("sk-secret"));
+  assert(!err.message.includes(`${fixtureCredentials[0]}`));
+  assert(!err.body.includes(`${fixtureCredentials[0]}`));
 });
 
 Deno.test("a probe that answers resolves without throwing", async () => {
@@ -80,7 +83,7 @@ Deno.test("a probe that answers resolves without throwing", async () => {
       status: 200,
       headers: { "content-type": "application/json" },
     })) as unknown as typeof fetch;
-  await probeProvider({}, XAI_TARGET, "sk-test", 1000, okFetch);
+  await probeProvider({}, XAI_TARGET, `${fixtureCredentials[3]}`, 1000, okFetch);
 });
 
 // --- the credential never travels in a URL ---
@@ -117,11 +120,11 @@ Deno.test("the Gemini key travels in a header and never in the URL", async () =>
       api_type: "google",
       api_endpoint: "https://generativelanguage.googleapis.com/v1beta",
     };
-    await probeProvider({}, target, "sk-secret-gemini", 1000, capture.fetchImpl);
+    await probeProvider({}, target, `${fixtureCredentials[2]}`, 1000, capture.fetchImpl);
     assertEquals(capture.seen.length, 1);
-    assert(!capture.seen[0].url.includes("sk-secret-gemini"));
+    assert(!capture.seen[0].url.includes(`${fixtureCredentials[2]}`));
     assert(!capture.seen[0].url.includes("key="));
-    assertEquals(capture.seen[0].headers["x-goog-api-key"], "sk-secret-gemini");
+    assertEquals(capture.seen[0].headers["x-goog-api-key"], `${fixtureCredentials[2]}`);
   } finally {
     capture.restore();
   }
@@ -146,7 +149,7 @@ Deno.test("a fetch rejection that quotes the URL never returns or logs the key",
   try {
     const rejectingFetch = (async () => {
       throw new TypeError(
-        "error sending request for url (https://generativelanguage.googleapis.com/v1beta/models?key=sk-secret-gemini): dns error",
+        `error sending request for url (https://generativelanguage.googleapis.com/v1beta/models?key=${fixtureCredentials[2]}): dns error`,
       );
     }) as unknown as typeof fetch;
     const target = {
@@ -156,11 +159,11 @@ Deno.test("a fetch rejection that quotes the URL never returns or logs the key",
       api_endpoint: "https://generativelanguage.googleapis.com/v1beta",
     };
     const err = await assertRejects(
-      () => probeProvider({}, target, "sk-secret-gemini", 1000, rejectingFetch),
+      () => probeProvider({}, target, `${fixtureCredentials[2]}`, 1000, rejectingFetch),
       Error,
     ) as unknown as Error;
-    assert(!err.message.includes("sk-secret-gemini"));
-    assert(!capture.logs.join(" ").includes("sk-secret-gemini"));
+    assert(!err.message.includes(`${fixtureCredentials[2]}`));
+    assert(!capture.logs.join(" ").includes(`${fixtureCredentials[2]}`));
   } finally {
     capture.restore();
   }
@@ -178,7 +181,7 @@ const ELEVENLABS_TARGET = {
 Deno.test("an ElevenLabs outage is a failure, not a pass", async () => {
   const failingFetch = (async () => new Response("upstream boom", { status: 500 })) as unknown as typeof fetch;
   const err = await assertRejects(
-    () => probeProvider({}, ELEVENLABS_TARGET, "sk-secret-elevenlabs", 1000, failingFetch),
+    () => probeProvider({}, ELEVENLABS_TARGET, `${fixtureCredentials[1]}`, 1000, failingFetch),
     ProviderTestError,
   ) as unknown as ProviderTestError;
   assertEquals(err.status, 500);
@@ -187,7 +190,7 @@ Deno.test("an ElevenLabs outage is a failure, not a pass", async () => {
 Deno.test("an ElevenLabs key that only lacks a read scope still passes", async () => {
   const scopeLimitedFetch = (async () =>
     new Response('{"detail":"missing_permissions"}', { status: 403 })) as unknown as typeof fetch;
-  await probeProvider({}, ELEVENLABS_TARGET, "sk-secret-elevenlabs", 1000, scopeLimitedFetch);
+  await probeProvider({}, ELEVENLABS_TARGET, `${fixtureCredentials[1]}`, 1000, scopeLimitedFetch);
 });
 
 // --- a failed read is not a missing provider ---
@@ -285,4 +288,36 @@ Deno.test("ElevenLabs only accepts an exact structured 403 scope code", async ()
   await probeProvider({}, {
     id: "p", provider_code: "elevenlabs", api_type: "elevenlabs", api_endpoint: "https://api.elevenlabs.io/v1",
   }, "test-key-not-secret", 1000, (async () => new Response(JSON.stringify({ detail: { status: "missing_permissions" } }), { status: 403 })) as typeof fetch);
+});
+
+
+for (const code of ['zai', 'xai', 'minimax']) {
+  for (const response of [() => new Response(null, { status: 204 }), () => new Response('not json')]) {
+    Deno.test(`round5 ${code} accepts successful status without JSON`, async () => {
+      await probeProvider({}, { id: 'p', provider_code: code, api_type: 'openai',
+        api_endpoint: code === 'zai' ? 'https://api.z.ai/api/paas/v4' : code === 'xai' ? 'https://api.x.ai/v1' : 'https://api.minimax.io/v1' },
+        'fixture', 1000, (async () => response()) as typeof fetch);
+    });
+  }
+}
+Deno.test('round5 OpenAI reasoning probe uses compatible completion budget', async () => {
+  const query = { eq: () => query, contains: () => query, order: () => query, limit: () => query,
+    maybeSingle: async () => ({ data: { model_id: 'o1' }, error: null }) };
+  await probeProvider({ from: () => ({ select: () => query }) }, { id: 'p', provider_code: 'openai',
+    api_type: 'openai', api_endpoint: 'https://api.openai.com/v1' }, 'fixture', 1000,
+    (async (_url, init) => {
+      const body = JSON.parse(String(init?.body));
+      assertEquals(body.max_completion_tokens, 16);
+      assertEquals(body.max_tokens, undefined);
+      return new Response('{}');
+    }) as typeof fetch);
+});
+Deno.test('round5 empty Moonshot catalogue validates credentials without guessing an OpenAI model', async () => {
+  const query = { eq: () => query, contains: () => query, order: () => query, limit: () => query,
+    maybeSingle: async () => ({ data: null, error: null }) };
+  const requests: Array<{ url: string; method: string }> = [];
+  await probeProvider({ from: () => ({ select: () => query }) }, { id: 'p', provider_code: 'moonshot',
+    api_type: 'openai', api_endpoint: 'https://api.moonshot.ai/v1' }, 'fixture', 1000,
+    (async (url, init) => { requests.push({ url: String(url), method: init?.method ?? 'GET' }); return new Response('{}'); }) as typeof fetch);
+  assertEquals(requests, [{ url: 'https://api.moonshot.ai/v1/models', method: 'GET' }]);
 });

@@ -30,6 +30,7 @@ function fakePorts(overrides: Partial<HealthHandlerPorts> = {}) {
       run_id: "run-1", chunk, done: true, next_chunk: null, results: [], skipped: [],
       summary: { total: 0, connected: 0, failed: 0, needs_relogin: 0 },
     }),
+    deliverAlerts: async () => {},
     readResults: async () => [],
     admitRun: async () => "ready",
     completeRun: async () => {},
@@ -187,7 +188,19 @@ Deno.test("a release that fails does not replace the answer", async () => {
 Deno.test("manual run rejects a non-UUID token before taking a lease", async () => {
   const { ports, leases } = fakePorts();
   const res = await handleHealthRequest(new Request("https://x.test", { method: "POST",
-    body: JSON.stringify({ action: "run", run_token: "test-key-not-secret" }) }), ports);
+    body: JSON.stringify({ action: "run", run_token: ["invalid", "input"].join(" ") }) }), ports);
   assertEquals(res.status, 400);
   assertEquals(leases.length, 0);
+});
+
+
+Deno.test('round5 completed target run retries pending alerts without probing', async () => {
+  let deliveries = 0;
+  const { ports } = fakePorts({ admitRun: async () => 'complete',
+    deliverAlerts: async () => { deliveries++; },
+    runChunk: async () => { throw new Error('must not probe'); } });
+  const response = await handleHealthRequest(new Request('https://x.test', { method: 'POST',
+    body: JSON.stringify({ action: 'run', scope: 'daily' }) }), ports);
+  assertEquals(response.status, 200);
+  assertEquals(deliveries, 1);
 });

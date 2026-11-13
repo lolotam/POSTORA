@@ -168,7 +168,10 @@ commit. Keep graph output, logs and credentials out of the commit.
 
 1. Apply **only** `20261113180000_ai_provider_health.sql` to self-hosted production
    BEFORE merge. Verify old two-column upserts work and all four health jobs are paused.
-   Do not submit both files as an unattended migration batch.
+   Verify pg_cron, pg_net, get_cron_secret() and get_cron_functions_base_url() exist.
+   If prerequisites were missing at EXPAND, install them and reapply EXPAND first.
+   Do not submit both files as an unattended migration batch. Manual health admission
+   stays busy until CONTRACT, so the new OAuth writer cannot race legacy uniqueness.
 2. Merge after checks/review gates, then deploy `ai-provider-health`, `ai-config` and
    all changed shared modules/consumers through the self-hosted deployment runbook.
    Verify deployed SHA256 hashes and gateway configuration. Do not use Supabase Cloud
@@ -189,3 +192,15 @@ commit. Keep graph output, logs and credentials out of the commit.
 
 No merge, deployment, production SQL or server mutation is authorized in this delegate
 phase. Final receipt must list findings, evidence, pushed head and actual gate results.
+
+## 8. Round 5 implementation sequence
+
+- [x] Reproduce findings with backend, frontend, and migration-boundary regressions.
+- [x] Preserve typed OAuth storage failures and target cancellation at the RPC boundary;
+      centralize runner classification for absent credentials and catalogue refusals.
+- [x] Add Higgsfield platform discovery and MCP probe; reuse the health lease while
+      keeping media models in the api_key partition.
+- [x] Retry alerts on completed admissions; preserve sync results if lease release fails.
+- [x] Handle configuration read failures and reject malformed health timestamps.
+- [x] Gate health admission on CONTRACT and validate cron prerequisites/schedules.
+- Final delivery gate: guard passes, local checks, scoped commit/push, and signed thread receipts.

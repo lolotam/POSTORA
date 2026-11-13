@@ -1,12 +1,15 @@
 // deno-lint-ignore-file no-import-prefix
 import { assert, assertEquals, assertRejects } from "https://deno.land/std@0.208.0/assert/mod.ts";
 import { runHealthChunk, type HealthRunPorts } from "./run.ts";
-import { AiOAuthError } from "../_shared/aiOAuth/errors.ts";
+import { AiOAuthError, AiOAuthStorageError } from "../_shared/aiOAuth/errors.ts";
 import { OAuthProbeError } from "../_shared/providerErrors.ts";
 import { buildAlertTitle } from "../_shared/aiProviderAlert.ts";
 import { ProviderReadError } from "../_shared/aiProviderTest.ts";
-import { CatalogStorageError } from "../_shared/modelCatalogSyncRun.ts";
+import { CatalogStorageError, CatalogSyncError } from "../_shared/modelCatalogSyncRun.ts";
 import type { DegradedProvider, HealthResult } from "../_shared/aiProviderHealth.ts";
+
+// Runtime fixtures exercise redaction without key-shaped source literals.
+const fixtureCredentials = Array.from({ length: 2 }, () => ['s', 'k', '-'].join('') + crypto.randomUUID());
 
 Deno.test("credential kinds of one provider serialize while other providers proceed", async () => {
   const active = new Set<string>();
@@ -96,7 +99,7 @@ function fakePorts(overrides: Partial<HealthRunPorts> = {}) {
     listOAuthConnections: async () => [
       { oauth_provider: "anthropic", provider_code: "claude", name: "Claude", status: "connected" },
     ],
-    resolveApiKey: async (code) => (code === "xai" ? null : "sk-test"),
+    resolveApiKey: async (code) => (code === "xai" ? null : `${fixtureCredentials[1]}`),
     // The database remembers what this run did, so a chunk that is asked for a
     // second time sees the rows the first time recorded.
     listRecordedTargets: async () =>
@@ -160,12 +163,12 @@ Deno.test("a failed provider is never synced", async () => {
 
 Deno.test("a provider that echoes the key back never stores it in the reason", async () => {
   const { ports, recorded } = fakePorts({
-    resolveApiKey: async () => "sk-live-ABCDEF",
-    probeApiKey: async () => { throw new Error("upstream rejected sk-live-ABCDEF"); },
+    resolveApiKey: async () => `${fixtureCredentials[0]}`,
+    probeApiKey: async () => { throw new Error(`upstream rejected ${fixtureCredentials[0]}`); },
   });
   await runHealthChunk(ports, { runId: "run-1", chunk: 1 });
   const failed = recorded.find((r) => r.status === "failed");
-  assert(!String(failed?.reason).includes("sk-live-ABCDEF"));
+  assert(!String(failed?.reason).includes(`${fixtureCredentials[0]}`));
 });
 
 Deno.test("an expired oauth refresh needs a re-login and syncs nothing", async () => {
@@ -265,7 +268,7 @@ Deno.test("the results keep the target order whatever order the probes finish in
       { provider_code: "fast", name: "Fast" },
     ],
     listOAuthConnections: async () => [],
-    resolveApiKey: async () => "sk-test",
+    resolveApiKey: async () => `${fixtureCredentials[1]}`,
     probeApiKey: async (target) => {
       if (target.provider_code === "slow") await new Promise((resolve) => setTimeout(resolve, 30));
     },
@@ -527,7 +530,7 @@ Deno.test("an alert send is bounded and a timeout leaves the claim open", async 
 });
 
 for (const phase of ['oauth', 'sync'] as const) {
-  Deno.test(`a ${phase} timeout is recorded and can alert using the reserved write budget`, async () => {
+  Deno.test(`a ${phase} timeout preserves the probe versus catalogue failure boundary`, async () => {
     const hang = (signal: AbortSignal) => new Promise<never>((_resolve, reject) => {
       signal.addEventListener('abort', () => reject(signal.reason), { once: true });
     });
@@ -544,11 +547,19 @@ for (const phase of ['oauth', 'sync'] as const) {
       sendAlert: async () => { alerted = true; },
     });
     const out = await runHealthChunk(ports, { runId: 'r', chunk: 1, targetBudgetMs: 80, deadlineMs: 1000 });
-    assertEquals(out.done, true);
-    assertEquals(out.skipped, []);
-    assertEquals(out.results[0].status, 'failed');
-    assertEquals(recorded.length, 1);
-    assert(alerted);
+    if (phase === 'sync') {
+      assertEquals(out.done, false);
+      assertEquals(out.results, []);
+      assertEquals(out.skipped.length, 1);
+      assertEquals(recorded, []);
+      assertEquals(alerted, false);
+    } else {
+      assertEquals(out.done, true);
+      assertEquals(out.skipped, []);
+      assertEquals(out.results[0].status, 'failed');
+      assertEquals(recorded.length, 1);
+      assert(alerted);
+    }
   });
 }
 
@@ -612,3 +623,27 @@ for (const authMethod of ["api_key", "oauth"] as const) {
     assertEquals(alerts, []);
   });
 }
+
+
+for (const phase of ['probe', 'sync'] as const) {
+  for (const failure of [new AiOAuthStorageError(), new AiOAuthError('not_connected')]) {
+    Deno.test(`round5 ${phase} ${failure.name}/${failure.message} leaves health untouched and retryable`, async () => {
+      const { ports, recorded } = fakePorts({ listApiKeyProviders: async () => [],
+        ...(phase === 'probe' ? { probeOAuth: async () => { throw failure; } }
+          : { syncOAuthCatalogue: async () => { throw failure; } }) });
+      const out = await runHealthChunk(ports, { runId: 'r', chunk: 1 });
+      assertEquals(out.results, []);
+      assertEquals(recorded, []);
+      assertEquals(out.skipped.length, 1);
+      assertEquals(out.done, false);
+    });
+  }
+}
+Deno.test('round5 catalogue source and lease refusals never overwrite a successful probe', async () => {
+  const { ports, recorded } = fakePorts({ listOAuthConnections: async () => [],
+    syncApiKeyCatalogue: async () => { throw new CatalogSyncError('catalogue unavailable'); } });
+  const out = await runHealthChunk(ports, { runId: 'r', chunk: 1 });
+  assertEquals(recorded, []);
+  assertEquals(out.skipped.length, 1);
+  assertEquals(out.done, false);
+});

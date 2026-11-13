@@ -12346,6 +12346,10 @@ export type Database = {
           command: string
         }[]
       }
+      get_cron_functions_base_url: {
+        Args: Record<PropertyKey, never>
+        Returns: string | null
+      }
       get_cron_secret: {
         Args: Record<PropertyKey, never>
         Returns: string

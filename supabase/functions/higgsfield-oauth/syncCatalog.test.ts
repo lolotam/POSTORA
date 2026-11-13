@@ -100,3 +100,14 @@ Deno.test("overlapping Higgsfield refresh refuses before discovery and releases 
   } finally { finish(); await first; }
   await syncHiggsfieldCatalog(db, explore);
 });
+
+Deno.test('round5 health holder reuses its lease and syncs only api_key catalogue', async () => {
+  const { db, rows, requests } = fixture();
+  const holder = crypto.randomUUID();
+  await db.rpc('acquire_cron_run_lease', { p_job: 'ai-provider-health', p_holder: holder, p_ttl: '120 seconds' });
+  const report = await syncHiggsfieldCatalog(db, explore, { leaseHolder: holder, signal: AbortSignal.timeout(1000) });
+  assertEquals(report.activated, 1);
+  assertEquals(requests.filter((r) => r === 'POST acquire_cron_run_lease').length, 1);
+  assertEquals(requests.includes('POST release_cron_run_lease'), false);
+  assertEquals(rows.find((r) => r.id === 'oauth-old')?.is_active, true);
+});

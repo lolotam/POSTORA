@@ -6,8 +6,9 @@ import i18n from '@/i18n';
 
 // The card reads the provider catalogue and the key status from the network,
 // so the boundary is the supabase client.
-const { invoke, tables } = vi.hoisted(() => ({
+const { invoke, tables, failures } = vi.hoisted(() => ({
   invoke: vi.fn(),
+  failures: new Set<string>(),
   tables: {
     ai_providers: [] as unknown[],
     ai_models: [] as unknown[],
@@ -17,7 +18,7 @@ const { invoke, tables } = vi.hoisted(() => ({
 
 vi.mock('@/integrations/supabase/client', () => {
   const builder = (table: string) => {
-    const value = { data: tables[table as keyof typeof tables] ?? [], error: null };
+    const value = { data: tables[table as keyof typeof tables] ?? [], error: failures.has(table) ? { message: "temporary read failure" } : null };
     // The catalogue readers filter by credential kind, so `eq` keeps the chain.
     const chain = {
       select: () => chain,
@@ -125,6 +126,7 @@ describe('AiProvidersCard', () => {
   });
   beforeEach(() => {
     invoke.mockReset();
+    failures.clear();
     tables.ai_providers = [claudeProvider, openaiProvider];
     tables.ai_models = [
       claudeModel('m-1', 'claude-sonnet-4-5', 'Claude Sonnet 4.5', 'oauth'),
@@ -240,4 +242,15 @@ describe('AiProvidersCard', () => {
     })));
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
   });
+});
+
+it('round5 configuration read failure offers retry without migration advice', async () => {
+  tables.ai_providers = [claudeProvider];
+  failures.add('ai_models');
+  renderCard();
+  await screen.findByRole('alert');
+  expect(screen.queryByText(/Apply the database migration/)).not.toBeInTheDocument();
+  failures.clear();
+  fireEvent.click(screen.getByRole('button', { name: /retry/i }));
+  await screen.findByRole('heading', { name: 'Anthropic API' });
 });

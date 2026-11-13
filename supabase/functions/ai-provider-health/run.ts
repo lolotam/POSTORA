@@ -24,10 +24,10 @@ import {
   type HealthStatus,
   type HealthTarget,
 } from "../_shared/aiProviderHealth.ts";
-import { AiOAuthError } from "../_shared/aiOAuth/errors.ts";
+import { AiOAuthError, AiOAuthStorageError } from "../_shared/aiOAuth/errors.ts";
 import { OAuthProbeError, ProviderTestError } from "../_shared/providerErrors.ts";
 import { ProviderReadError } from "../_shared/aiProviderTest.ts";
-import { CatalogStorageError } from "../_shared/modelCatalogSyncRun.ts";
+import { CatalogStorageError, CatalogSyncError } from "../_shared/modelCatalogSyncRun.ts";
 
 export interface HealthRunPorts {
   listApiKeyProviders(signal: AbortSignal): Promise<Array<{ provider_code: string; name: string }>>;
@@ -93,6 +93,13 @@ export interface HealthChunkResponse {
   summary: { total: number; connected: number; failed: number; needs_relogin: number };
 }
 
+/** Local failures and absent credentials say nothing about provider availability. */
+function isRunError(error: unknown): boolean {
+  return error instanceof ProviderReadError || error instanceof AiOAuthStorageError
+    || error instanceof CatalogStorageError || error instanceof CatalogSyncError
+    || error instanceof AiOAuthError && error.code === "not_connected";
+}
+
 /** Routes the two failure families to a status and a sanitized sentence. */
 function classifyTargetFailure(
   error: unknown,
@@ -151,14 +158,14 @@ async function probeTarget(
     if (!apiKey) {
       // The planner already dropped the providers without a key, so reaching here
       // means the key vanished between the plan and the probe.
-      throw new Error("The API key is no longer configured");
+      throw new ProviderReadError("The API key is no longer configured");
     }
     await withSignal(ports.probeApiKey(target, apiKey, signal), signal);
     return { status: "connected", reason: null, apiKey };
   } catch (error) {
     // The provider's row could not be read. This is not a broken provider, so it
     // must not become a degradation and must not raise an alert.
-    if (error instanceof ProviderReadError) throw error;
+    if (isRunError(error)) throw error;
     const classified = classifyTargetFailure(error, apiKey);
     return { status: classified.status, reason: classified.reason, apiKey };
   }
@@ -190,12 +197,10 @@ async function syncTarget(
       models_deactivated: report.deactivated,
     };
   } catch (error) {
-    if (error instanceof ProviderReadError || error instanceof CatalogStorageError) throw error;
-    return {
-      status: "failed",
-      reason: "The provider model catalogue could not be synchronized.",
-      ...noCounts,
-    };
+    // The probe already proved availability. Catalogue acquisition or persistence
+    // failures remain run errors, including untyped transport/schema failures.
+    if (isRunError(error)) throw error;
+    throw new CatalogSyncError("The provider model catalogue could not be synchronized.");
   }
 }
 
@@ -238,11 +243,11 @@ async function runOneTarget(
     probe = await probeTarget(ports, target, signal);
     outcome = await syncTarget(ports, target, signal, probe);
   } catch (error) {
-    if (error instanceof ProviderReadError || error instanceof CatalogStorageError) {
+    if (isRunError(error)) {
       // A run error, not a degradation. The reason is a fixed sentence: the
       // failure itself may name a table or a column, never a credential.
-      console.error("event: 'ai_provider_health_infrastructure_failed'", error.name);
-      return { skipReason: error instanceof ProviderReadError ? HEALTH_READ_FAILED_REASON : "The provider catalogue could not be stored." };
+      console.error("event: 'ai_provider_health_infrastructure_failed'", error instanceof Error ? error.name : "error");
+      return { skipReason: error instanceof ProviderReadError ? HEALTH_READ_FAILED_REASON : "The provider check could not be completed. Try again later." };
     }
     throw error;
   }
@@ -299,7 +304,7 @@ async function sendOneAlert(
  * Every send is bounded: by what is left of the alert budget and by the send
  * ceiling. A mail provider that hangs must not eat the run.
  */
-async function sendClaimedAlerts(
+export async function sendClaimedAlerts(
   ports: HealthRunPorts,
   claimToken: string,
   budgetMs: number,

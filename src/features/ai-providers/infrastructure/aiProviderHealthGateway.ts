@@ -20,7 +20,7 @@ const healthRowSchema = z.object({
   models_updated: z.number().nullable().default(null),
   models_deactivated: z.number().nullable().default(null),
   latency_ms: z.number().nullable().default(null),
-  checked_at: z.string().default(""),
+  checked_at: z.union([z.literal(""), z.string().datetime({ offset: true })]).default(""),
 });
 
 const summarySchema = z.object({

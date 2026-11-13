@@ -44,6 +44,17 @@ BEGIN
   IF current_setting('postora.ai_catalog_writer_ready', true) IS DISTINCT FROM 'true' THEN
     RAISE EXCEPTION 'CONTRACT requires deployment attestation: SET postora.ai_catalog_writer_ready = true after new edge deployment and old writer drain';
   END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'pg_cron')
+    OR NOT EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'pg_net')
+    OR to_regprocedure('public.get_cron_secret()') IS NULL
+    OR to_regprocedure('public.get_cron_functions_base_url()') IS NULL
+    OR to_regclass('cron.job') IS NULL THEN
+    RAISE EXCEPTION 'CONTRACT requires pg_cron, pg_net and cron configuration helpers; install prerequisites and reapply EXPAND';
+  END IF;
+  IF (SELECT count(*) FROM cron.job WHERE jobname IN
+    ('ai-provider-health-1','ai-provider-health-2','ai-provider-health-3','ai-provider-health-4')) <> 4 THEN
+    RAISE EXCEPTION 'CONTRACT requires all four paused health cron jobs; reapply EXPAND';
+  END IF;
   IF to_regclass('public.ai_models') IS NULL THEN
     RAISE EXCEPTION 'ai_model_catalog_drop_legacy_unique: public.ai_models does not exist';
   END IF;

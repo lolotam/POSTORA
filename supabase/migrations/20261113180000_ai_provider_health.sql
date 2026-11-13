@@ -172,6 +172,11 @@ BEGIN
   IF p_scope IS NULL OR p_scope NOT IN ('daily','manual') OR p_run_id IS NULL THEN
     RAISE EXCEPTION 'Invalid health run';
   END IF;
+  IF EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid = 'public.ai_models'::regclass
+    AND conname = 'ai_models_provider_id_model_id_key') THEN
+    RAISE LOG 'ai_provider_health_rollout_pending: CONTRACT migration required';
+    RETURN 'busy';
+  END IF;
   PERFORM pg_advisory_xact_lock(hashtextextended('ai-provider-health-admission', 0));
   -- Retain a week of immutable completion markers, independent of latest status.
   DELETE FROM public.ai_provider_health_completions WHERE recorded_at < now() - interval '7 days';
@@ -427,6 +432,40 @@ $$;
 REVOKE ALL ON FUNCTION public.mark_ai_provider_health_notified(uuid, text, text, uuid) FROM PUBLIC, anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.mark_ai_provider_health_notified(uuid, text, text, uuid) TO service_role;
 
+-- Bootstrap the environment URL resolver before these jobs and CONTRACT use it.
+-- The later WhatsApp migration repeats this idempotent definition; fresh replay
+-- must not depend on that later timestamp.
+CREATE OR REPLACE FUNCTION public.get_cron_functions_base_url()
+RETURNS text
+LANGUAGE plpgsql
+STABLE
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $fn$
+DECLARE
+  v_base text;
+BEGIN
+  v_base := nullif(btrim(coalesce(current_setting('app.settings.supabase_url', true), '')), '');
+  IF v_base IS NOT NULL THEN
+    RETURN v_base;
+  END IF;
+
+  -- The vault is optional: a database without it still resolves the setting above.
+  BEGIN
+    SELECT nullif(btrim(coalesce(decrypted_secret, '')), '') INTO v_base
+      FROM vault.decrypted_secrets
+     WHERE name = 'functions_base_url'
+     LIMIT 1;
+  EXCEPTION WHEN others THEN
+    v_base := NULL;
+  END;
+
+  RETURN nullif(v_base, '');
+END;
+$fn$;
+REVOKE ALL ON FUNCTION public.get_cron_functions_base_url() FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.get_cron_functions_base_url() TO service_role;
+
 -- Once a day: test every configured AI provider and sync the catalogue of the ones that
 -- pass. The run is split over four entries seven minutes apart because a single edge
 -- invocation has a hard 50 second budget and pg_cron cannot wait for a follow-up call.
@@ -438,8 +477,10 @@ GRANT EXECUTE ON FUNCTION public.mark_ai_provider_health_notified(uuid, text, te
 DO $do_ai_provider_health_cron$
 BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'pg_cron')
+     OR NOT EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'pg_net')
+     OR to_regprocedure('public.get_cron_functions_base_url()') IS NULL
      OR to_regprocedure('public.get_cron_secret()') IS NULL THEN
-    RAISE NOTICE 'ai-provider-health cron not scheduled: pg_cron or get_cron_secret() is missing';
+    RAISE NOTICE 'ai-provider-health cron not scheduled: pg_cron, pg_net or cron configuration helpers are missing; install prerequisites and reapply EXPAND before CONTRACT';
     RETURN;
   END IF;
 

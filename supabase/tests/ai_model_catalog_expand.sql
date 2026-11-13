@@ -83,4 +83,11 @@ DELETE FROM public.ai_models WHERE model_id = 'expand-fixture-model';
 DELETE FROM public.ai_providers
  WHERE provider_code IN (SELECT provider_code FROM ame_created_providers);
 
+DO $ame_manual_rollout$
+BEGIN
+  IF public.admit_ai_provider_health_run('manual', gen_random_uuid(), gen_random_uuid()) IS DISTINCT FROM 'busy' THEN
+    RAISE EXCEPTION 'FAIL: manual health writer admitted before CONTRACT';
+  END IF;
+END $ame_manual_rollout$;
+
 \echo '=== ai_model_catalog_expand: ALL CHECKS PASSED ==='

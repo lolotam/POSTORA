@@ -19,11 +19,11 @@ Deno.test("401 and generic 403 keep their existing messages", () => {
   assertEquals(describeProviderFailure("X", 403, "{}"), "API key lacks required permissions");
 });
 
-Deno.test("429 balance errors and JSON messages are surfaced", () => {
+Deno.test("429 billing errors stay actionable while generic upstream messages stay private", () => {
   assertEquals(describeProviderFailure("X", 429, "insufficient_balance"),
     "API key is valid, but the account has insufficient balance. Please top up your account.");
   assertEquals(describeProviderFailure("X", 429, "{}"), "Rate limit exceeded");
-  assertEquals(describeProviderFailure("X", 400, JSON.stringify({ error: { message: "bad model" } })), "X: bad model");
+  assertEquals(describeProviderFailure("X", 400, JSON.stringify({ error: { message: "bad model" } })), "X API error: 400");
   assertEquals(describeProviderFailure("X", 500, "<html>"), "X API error: 500");
 });
 

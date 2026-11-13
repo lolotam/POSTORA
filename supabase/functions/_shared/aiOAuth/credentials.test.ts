@@ -1,5 +1,6 @@
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { assert, assertEquals, assertRejects } from "https://deno.land/std@0.208.0/assert/mod.ts";
-import { AiOAuthError } from "./errors.ts";
+import { AiOAuthError, AiOAuthStorageError } from "./errors.ts";
 import {
   defaultCredentialDeps,
   getFreshOAuthCredential,
@@ -456,4 +457,38 @@ Deno.test("defaultCredentialDeps wires pi-ai and exposes the full dep surface", 
   assertEquals(typeof deps.refresh, "function");
   assertEquals(typeof deps.getApiKey, "function");
   await deps.sleep(0);
+});
+
+for (const failedRpc of ['get_ai_oauth_credentials', 'claim_ai_oauth_refresh', 'complete_ai_oauth_refresh', 'fail_ai_oauth_refresh']) {
+  Deno.test(`round5 ${failedRpc} outage preserves local storage error`, async () => {
+    const calls: string[] = [];
+    const admin = createClient('https://database.example.test', 'fixture', { global: { fetch: (async (url) => {
+      const name = String(url).split('/').pop()!;
+      calls.push(name);
+      const data = name === failedRpc ? { message: 'storage unavailable' }
+        : name === 'get_ai_oauth_credentials' ? { access: 'a', refresh: 'r', expires: 0, status: 'connected' }
+        : name === 'claim_ai_oauth_refresh' ? crypto.randomUUID() : true;
+      return new Response(JSON.stringify(data), { status: name === failedRpc ? 503 : 200, headers: { 'content-type': 'application/json' } });
+    }) as typeof fetch } });
+    const deps = { ...defaultCredentialDeps(admin), refresh: async () => {
+      if (failedRpc === 'fail_ai_oauth_refresh') throw new Error('provider offline');
+      return { access: 'new', refresh: 'rotated', expires: Date.now() + 3600000 };
+    } };
+    await assertRejects(() => getFreshOAuthCredential(deps, 'anthropic'), AiOAuthStorageError);
+    if (failedRpc === 'complete_ai_oauth_refresh') assertEquals(calls.includes('fail_ai_oauth_refresh'), false);
+  });
+}
+Deno.test('round5 target abort cancels credential read before refresh can start', async () => {
+  const controller = new AbortController();
+  let aborted = false;
+  let refreshed = false;
+  const admin = createClient('https://database.example.test', 'fixture', { global: { fetch: ((_url, init) => {
+    controller.abort();
+    aborted = init?.signal?.aborted === true;
+    return Promise.reject(new DOMException('cancelled', 'AbortError'));
+  }) as typeof fetch } });
+  const deps = { ...defaultCredentialDeps(admin), refresh: async () => { refreshed = true; return { access: 'new', refresh: 'rotated', expires: 0 }; } };
+  await assertRejects(() => getFreshOAuthCredential(deps, 'anthropic', controller.signal));
+  assertEquals(aborted, true);
+  assertEquals(refreshed, false);
 });

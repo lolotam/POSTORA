@@ -10,7 +10,7 @@ Deno.test('cron-secret requests reach the in-handler authorizer through the gate
 });
 
 // HTTP is the seam: the real Supabase query builder and production adapters run.
-function fixtureAdmin(failingTable?: string) {
+function fixtureAdmin(failingTable?: string, failureStatus = 503) {
   const tables: Record<string, Array<Record<string, unknown>>> = {
     ai_providers: [
       { provider_code: 'openrouter', name: 'OpenRouter', is_active: true },
@@ -33,7 +33,7 @@ function fixtureAdmin(failingTable?: string) {
   const transport = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = new URL(input instanceof Request ? input.url : String(input));
     requests.push(url.pathname);
-    if (url.pathname.endsWith('/' + failingTable)) return new Response(JSON.stringify({ message: 'storage failed' }), { status: 503, headers: { 'content-type': 'application/json' } });
+    if (url.pathname.endsWith('/' + failingTable)) return new Response(JSON.stringify({ message: 'storage failed' }), { status: failureStatus, headers: { 'content-type': 'application/json' } });
     assert(init?.signal, 'database transport must carry cancellation');
     let rows = tables[url.pathname.split('/').pop() ?? ''] ?? [];
     for (const [column, filter] of url.searchParams) {
@@ -114,4 +114,50 @@ Deno.test('standalone service discovery includes absent rows and respects explic
     if (previous === undefined) Deno.env.delete('FIRECRAWL_API_KEY');
     else Deno.env.set('FIRECRAWL_API_KEY', previous);
   }
+});
+
+Deno.test('round5 dedicated Higgsfield platform login is discovered without an API key', async () => {
+  const { admin, tables } = fixtureAdmin();
+  tables.ai_providers.push({ provider_code: 'higgsfield', name: 'Higgsfield', is_active: true });
+  tables.provider_api_keys.push({ provider_code: 'higgsfield', access_token: ['fixture', 'access'].join(' '), refresh_token: null });
+  const ports = createHealthRunPorts(admin);
+  const targets = await ports.listOAuthConnections(AbortSignal.timeout(1000));
+  assert(targets.some((r) => r.oauth_provider === 'higgsfield' && r.provider_code === 'higgsfield'));
+  assertEquals(await ports.resolveApiKey('higgsfield', AbortSignal.timeout(1000)), null);
+  tables.ai_providers.find((r) => r.provider_code === 'higgsfield')!.is_active = false;
+  assert(!(await ports.listOAuthConnections(AbortSignal.timeout(1000))).some((r) => r.oauth_provider === 'higgsfield'));
+});
+
+Deno.test('round5 Higgsfield platform target probes the MCP models endpoint', async () => {
+  const { admin, tables } = fixtureAdmin();
+  const credential = ['fixture', 'access'].join(' ');
+  tables.provider_api_keys.push({ provider_code: 'higgsfield', access_token: credential,
+    refresh_token: null, expires_at: new Date(Date.now() + 3600000).toISOString() });
+  const originalFetch = globalThis.fetch;
+  const methods: string[] = [];
+  globalThis.fetch = (async (input, init) => {
+    assertEquals(String(input), 'https://mcp.higgsfield.ai/mcp');
+    assertEquals(new Headers(init?.headers).get('Authorization'), `Bearer ${credential}`);
+    const body = JSON.parse(String(init?.body));
+    methods.push(body.method);
+    if (body.method === 'notifications/initialized') return new Response(null, { status: 202 });
+    if (body.method === 'tools/call') {
+      assertEquals(body.params.name, 'models_explore');
+      assertEquals(body.params.arguments, { action: 'list', type: 'image', limit: 1 });
+    }
+    return new Response(JSON.stringify({ jsonrpc: '2.0', id: body.id,
+      result: body.method === 'initialize' ? { protocolVersion: '2025-03-26' } : { content: [{ type: 'text', text: '[]' }] } }),
+      { headers: { 'content-type': 'application/json' } });
+  }) as typeof fetch;
+  try {
+    await createHealthRunPorts(admin).probeOAuth({ provider_code: 'higgsfield', oauth_provider: 'higgsfield',
+      auth_method: 'oauth', display_name: 'Higgsfield' }, AbortSignal.timeout(1000));
+    assertEquals(methods, ['initialize', 'notifications/initialized', 'tools/call']);
+  } finally { globalThis.fetch = originalFetch; }
+});
+
+Deno.test('round5 Higgsfield credential storage outage is never a re-login result', async () => {
+  const { admin } = fixtureAdmin('provider_api_keys', 400);
+  await assertRejects(() => createHealthRunPorts(admin).probeOAuth({ provider_code: 'higgsfield', oauth_provider: 'higgsfield',
+    auth_method: 'oauth', display_name: 'Higgsfield' }, AbortSignal.timeout(1000)), ProviderReadError);
 });

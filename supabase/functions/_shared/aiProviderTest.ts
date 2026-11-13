@@ -190,13 +190,21 @@ async function testGemini(key: string, ep: string, timeoutMs: number, fetchImpl:
   await handleRes(res, 'Gemini', key);
 }
 
-async function testOpenAI(key: string, ep: string, model: string, timeoutMs: number, fetchImpl: typeof fetch) {
+async function testOpenAI(key: string, ep: string, model: string | null, timeoutMs: number, fetchImpl: typeof fetch) {
+  if (!model) {
+    const res = await fetchWithTimeout(fetchImpl, ep.replace(/\/$/, '') + '/models', {
+      headers: { Authorization: `Bearer ${key}` },
+    }, timeoutMs);
+    await handleRes(res, 'Provider', key);
+    return;
+  }
   const url = ep.replace(/\/$/, '') + '/chat/completions';
   const res = await fetchWithTimeout(fetchImpl, url, {
     method: 'POST',
     headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
     // 16, not 1: Vercel routes openai/* through the Responses API, which rejects max_output_tokens < 16.
-    body: JSON.stringify({ model, messages: [{ role: 'user', content: 'hi' }], max_tokens: 16 }),
+    body: JSON.stringify({ model, messages: [{ role: 'user', content: 'hi' }],
+      ...(/^(?:o[1-9](?:-|$)|gpt-5(?:-|$))/.test(model) ? { max_completion_tokens: 16 } : { max_tokens: 16 }) }),
   }, timeoutMs);
   await handleRes(res, 'OpenAI', key);
 }
@@ -205,7 +213,7 @@ async function testOpenAI(key: string, ep: string, model: string, timeoutMs: num
 // rejected there, so test with a chat model the provider actually lists.
 const TEST_MODEL_OVERRIDE: Record<string, string> = { vercel: 'openai/gpt-4o-mini', openrouter: 'openai/gpt-4o-mini' };
 // Used only when a provider has no active chat model yet (e.g. DeepSeek before its first sync).
-const TEST_MODEL_FALLBACK: Record<string, string> = { deepseek: 'deepseek-chat' };
+const TEST_MODEL_FALLBACK: Record<string, string> = { deepseek: 'deepseek-chat', openai: 'gpt-4o-mini' };
 interface ChatModelQuery {
   abortSignal(signal: AbortSignal): ChatModelQuery;
   eq(column: string, value: unknown): ChatModelQuery;
@@ -216,13 +224,13 @@ interface ChatModelQuery {
 }
 interface ChatModelDb { from(table: string): { select(columns: string): ChatModelQuery } }
 // Takes the client as unknown: checking the generated client type against ChatModelDb hits TS2589.
-async function defaultTestModel(client: unknown, provider: { id: string; provider_code: string }, signal?: AbortSignal): Promise<string> {
+async function defaultTestModel(client: unknown, provider: { id: string; provider_code: string }, signal?: AbortSignal): Promise<string | null> {
   if (TEST_MODEL_OVERRIDE[provider.provider_code]) return TEST_MODEL_OVERRIDE[provider.provider_code];
   const query = (client as ChatModelDb).from('ai_models').select('model_id').eq('provider_id', provider.id)
     .eq('auth_method', 'api_key').eq('is_active', true).contains('capabilities', ['chat']).order('name').limit(1);
   const { data, error } = await (signal ? query.abortSignal(signal) : query).maybeSingle();
   if (error) throw new ProviderReadError('The probe model could not be read');
-  return data?.model_id ?? TEST_MODEL_FALLBACK[provider.provider_code] ?? 'gpt-4o-mini';
+  return data?.model_id ?? TEST_MODEL_FALLBACK[provider.provider_code] ?? null;
 }
 
 async function testAnthropic(key: string, ep: string, timeoutMs: number, fetchImpl: typeof fetch) {
@@ -246,11 +254,7 @@ async function testZAI(key: string, ep: string, timeoutMs: number, fetchImpl: ty
   // validity. The model list is the cheapest authoritative check.
   const url = ep.replace(/\/$/, '') + '/models';
   const res = await fetchWithTimeout(fetchImpl, url, { headers: { Authorization: `Bearer ${key}` } }, timeoutMs);
-  if (res.ok) {
-    const data = await res.json() as { data?: Array<{ id?: string }> };
-    console.log(`Z.AI test passed. Available models: ${(data.data || []).map((m) => m.id).join(', ')}`);
-    return;
-  }
+  if (res.ok) return;
   await handleRes(res, 'Z.AI', key);
 }
 
@@ -322,11 +326,7 @@ async function testXAI(key: string, ep: string, timeoutMs: number, fetchImpl: ty
   // Use lightweight GET /v1/models to validate API key without needing a specific model
   const modelsEndpoint = ep.replace(/\/$/, '').replace(/\/v1\/?$/, '') + '/v1/models';
   const res = await fetchWithTimeout(fetchImpl, modelsEndpoint, { headers: { Authorization: `Bearer ${key}` } }, timeoutMs);
-  if (res.ok) {
-    const data = await res.json() as { data?: Array<{ id?: string }> };
-    console.log(`xAI test passed. Available models: ${(data.data || []).map((m) => m.id).join(', ')}`);
-    return;
-  }
+  if (res.ok) return;
   await handleRes(res, 'xAI', key);
 }
 
@@ -336,11 +336,7 @@ async function testMinimax(key: string, ep: string, timeoutMs: number, fetchImpl
   // (HTTP 402 / code 1008), which says nothing about key validity.
   const modelsEndpoint = ep.replace(/\/$/, '').replace(/\/v1\/?$/, '') + '/v1/models';
   const res = await fetchWithTimeout(fetchImpl, modelsEndpoint, { headers: { Authorization: `Bearer ${key}` } }, timeoutMs);
-  if (res.ok) {
-    const data = await res.json() as { data?: Array<{ id?: string }> };
-    console.log(`MiniMax test passed. Available models: ${(data.data || []).map((m) => m.id).join(', ')}`);
-    return;
-  }
+  if (res.ok) return;
   await handleRes(res, 'MiniMax', key);
 }
 

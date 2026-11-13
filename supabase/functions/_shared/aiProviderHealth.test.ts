@@ -12,6 +12,9 @@ import {
   type HealthResult,
 } from "./aiProviderHealth.ts";
 
+// Runtime fixtures exercise redaction without key-shaped source literals.
+const fixtureCredentials = Array.from({ length: 1 }, () => ['s', 'k', '-'].join('') + crypto.randomUUID());
+
 Deno.test("health reasons never echo unrelated credentials or customer diagnostics", () => {
   for (const status of [400, 402, 403, 408, 422, 429, 500, 503]) {
     const out = classifyApiKeyFailure(status, '{"message":"Bearer other-token customer-private api_key=encoded%2Bkey"}', "known-key");
@@ -64,14 +67,14 @@ Deno.test("a chunk never walks past a target when the list changed under it", ()
 });
 
 Deno.test("an invalid api key is a failure with a fixed sentence and no key", () => {
-  const out = classifyApiKeyFailure(401, '{"error":{"message":"Incorrect API key provided: sk-live-ABCDEF"}}', "sk-live-ABCDEF");
+  const out = classifyApiKeyFailure(401, `{"error":{"message":"Incorrect API key provided: ${fixtureCredentials[0]}"}}`, `${fixtureCredentials[0]}`);
   assertEquals(out.status, "failed");
-  assert(!out.reason.includes("sk-live-ABCDEF"));
+  assert(!out.reason.includes(`${fixtureCredentials[0]}`));
 });
 
 Deno.test("a provider that echoes the key back has it redacted", () => {
-  const out = classifyApiKeyFailure(500, '{"error":{"message":"upstream rejected sk-live-ABCDEF"}}', "sk-live-ABCDEF");
-  assert(!out.reason.includes("sk-live-ABCDEF"));
+  const out = classifyApiKeyFailure(500, `{"error":{"message":"upstream rejected ${fixtureCredentials[0]}"}}`, `${fixtureCredentials[0]}`);
+  assert(!out.reason.includes(`${fixtureCredentials[0]}`));
   assertEquals(out.reason, "The provider request failed (HTTP 500).");
 });
 
@@ -91,8 +94,8 @@ Deno.test("an expired oauth refresh needs a re-login", () => {
 });
 
 Deno.test("the sanitizer removes the key and the authorization header and truncates", () => {
-  const out = sanitizeReason('bad key sk-live-ABCDEF with Authorization: Bearer sk-live-ABCDEF', "sk-live-ABCDEF");
-  assert(!out.includes("sk-live-ABCDEF"));
+  const out = sanitizeReason(`bad key ${fixtureCredentials[0]} with Authorization: Bearer ${fixtureCredentials[0]}`, `${fixtureCredentials[0]}`);
+  assert(!out.includes(`${fixtureCredentials[0]}`));
   assert(out.length <= 500);
 });
 

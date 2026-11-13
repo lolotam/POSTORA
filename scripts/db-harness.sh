@@ -691,6 +691,30 @@ for f in "${NEW_MIGRATIONS[@]}"; do
       cat "$ERR" >&2
       exit 1
     fi
+    # The helper must exist at CONTRACT, even when all four jobs were scheduled.
+    if psql "${PSQL_COMMON[@]}" "$HARNESS_URL" -q -c 'BEGIN' \
+      -c 'SET postora.ai_catalog_writer_ready = true' \
+      -c 'ALTER FUNCTION public.get_cron_functions_base_url() RENAME TO harness_missing_cron_url' \
+      -f "$MIGRATIONS_DIR/$f" >"$OUT" 2>"$ERR"; then
+      echo 'db-harness: CONTRACT accepted without cron URL helper' >&2
+      exit 1
+    fi
+    if ! grep -q 'CONTRACT requires pg_cron, pg_net and cron configuration helpers' "$ERR"; then
+      cat "$ERR" >&2
+      exit 1
+    fi
+    # Missing schedules must fail before dropping legacy uniqueness or enabling cron.
+    if psql "${PSQL_COMMON[@]}" "$HARNESS_URL" -q -c 'BEGIN' \
+      -c 'SET postora.ai_catalog_writer_ready = true' \
+      -c "DELETE FROM cron.job WHERE jobname = 'ai-provider-health-4'" \
+      -f "$MIGRATIONS_DIR/$f" >"$OUT" 2>"$ERR"; then
+      echo 'db-harness: CONTRACT accepted with a missing health schedule' >&2
+      exit 1
+    fi
+    if ! grep -q 'CONTRACT requires all four paused health cron jobs' "$ERR"; then
+      cat "$ERR" >&2
+      exit 1
+    fi
     migration_options=(-c 'SET postora.ai_catalog_writer_ready = true')
   fi
   if ! psql "${PSQL_COMMON[@]}" "$HARNESS_URL" -q "${migration_options[@]}" -f "$MIGRATIONS_DIR/$f" 2>"$ERR"; then

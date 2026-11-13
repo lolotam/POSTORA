@@ -1,3 +1,7 @@
+import { getValidAccessToken, HiggsfieldAuthError } from "../_shared/higgsfield-oauth.ts";
+import { HiggsfieldMcpClient } from "../_shared/higgsfield-mcp.ts";
+import { syncHiggsfieldCatalog } from "../higgsfield-oauth/syncCatalog.ts";
+import { AiOAuthError } from "../_shared/aiOAuth/errors.ts";
 // The real ports of the provider health run: the database, the providers, the
 // catalogue sync and the admin alert channel.
 //
@@ -29,7 +33,7 @@ import {
   type HealthResult,
   type HealthTarget,
 } from "../_shared/aiProviderHealth.ts";
-import { runHealthChunk, type HealthRunPorts } from "./run.ts";
+import { sendClaimedAlerts, runHealthChunk, type HealthRunPorts } from "./run.ts";
 import type { HealthHandlerPorts } from "./handler.ts";
 
 import { createAdminMailer } from "./mailer.ts";
@@ -78,6 +82,8 @@ function signalReader(admin: Admin, signal: AbortSignal): RowReader {
  * claim: the browser never writes them.
  */
 export function createHealthRunPorts(admin: Admin, leaseHolder?: string): HealthRunPorts {
+  let higgsfieldClient: HiggsfieldMcpClient | undefined;
+
   const mailer = createAdminMailer(admin);
 
   return {
@@ -107,12 +113,18 @@ export function createHealthRunPorts(admin: Admin, leaseHolder?: string): Health
         .select("oauth_provider, provider_code, status").abortSignal(signal);
       if (error) throw new Error("OAuth connection read failed");
       const rows = (data ?? []) as Array<{ oauth_provider?: unknown; provider_code?: unknown; status?: unknown }>;
+      const { data: platform, error: platformError } = await admin.from("provider_api_keys")
+        .select("access_token, refresh_token").eq("provider_code", "higgsfield").abortSignal(signal);
+      if (platformError) throw new ProviderReadError("Higgsfield connection read failed");
+      if (platform?.some((row) => row.access_token || row.refresh_token)) {
+        rows.push({ oauth_provider: "higgsfield", provider_code: "higgsfield", status: "connected" });
+      }
       const names = await providerNames(
         admin,
         rows.map((row) => String(row.provider_code ?? "")), { signal, activeOnly: true },
       );
       return rows
-        .filter((row) => isOAuthProviderId(String(row.oauth_provider ?? "")) && names.has(String(row.provider_code ?? "")))
+        .filter((row) => (row.oauth_provider === "higgsfield" || isOAuthProviderId(String(row.oauth_provider ?? ""))) && names.has(String(row.provider_code ?? "")))
         .map((row) => ({
           oauth_provider: String(row.oauth_provider),
           provider_code: String(row.provider_code ?? ""),
@@ -149,6 +161,51 @@ export function createHealthRunPorts(admin: Admin, leaseHolder?: string): Health
 
     async probeOAuth(target: HealthTarget, signal: AbortSignal): Promise<void> {
       const oauthProvider = target.oauth_provider;
+      if (oauthProvider === "higgsfield") {
+        let storageFailed = false;
+        const storedResult = async <T extends { error: unknown }>(query: PromiseLike<T>): Promise<T> => {
+          try {
+            const result = await query;
+            if (result.error) throw new Error("Storage operation failed");
+            return result;
+          } catch {
+            storageFailed = true;
+            throw new ProviderReadError("Higgsfield credential storage failed");
+          }
+        };
+        try {
+          // The existing platform OAuth helper owns refresh semantics. Bind its
+          // database reads/writes to this target instead of merely bounding the wait.
+          const platformDb = { from: (table: string) => ({
+            select: (columns: string) => {
+              let query = admin.from(table).select(columns).abortSignal(signal);
+              const reader = {
+                eq: (column: string, value: string) => { query = query.eq(column, value); return reader; },
+                maybeSingle: () => storedResult(query.maybeSingle()),
+              };
+              return reader;
+            },
+            insert: (row: Record<string, unknown>) => storedResult(admin.from(table).insert(row).abortSignal(signal)),
+            upsert: (row: Record<string, unknown>, options?: { onConflict: string }) =>
+              storedResult(admin.from(table).upsert(row, options).abortSignal(signal)),
+          }) };
+          const token = await withSignal(getValidAccessToken(platformDb), signal);
+          const client = HiggsfieldMcpClient.fromCredential({ accessToken: token, source: "platform",
+            refresh: () => getValidAccessToken(platformDb) }, platformDb)
+            .withDeadline(Date.now() + HEALTH_TARGET_TIMEOUT_MS);
+          await withSignal(client.callTool("models_explore", { action: "list", type: "image", limit: 1 }), signal);
+          higgsfieldClient = client;
+        } catch (error) {
+          // The legacy refresh helper wraps persistence failures as auth errors;
+          // retain local storage identity at this adapter boundary.
+          if (storageFailed) throw new ProviderReadError("Higgsfield credential storage failed");
+          if (error instanceof HiggsfieldAuthError) {
+            throw new AiOAuthError(error.code === "HIGGSFIELD_NOT_CONNECTED" ? "not_connected" : "reauth_required");
+          }
+          throw error;
+        }
+        return;
+      }
       if (!oauthProvider || !isOAuthProviderId(oauthProvider)) {
         throw new Error(`Provider ${target.provider_code} has no subscription sign-in`);
       }
@@ -156,8 +213,8 @@ export function createHealthRunPorts(admin: Admin, leaseHolder?: string): Health
       // The token refresh lives inside pi-ai and cannot be cancelled, so the wait
       // for it ends with the target's budget.
       const { apiKey } = await withSignal(
-        getFreshOAuthCredential(credentials, oauthProvider).catch((error: unknown) => {
-          if (error instanceof AiOAuthStorageError) throw new ProviderReadError("OAuth credential read failed");
+        getFreshOAuthCredential(credentials, oauthProvider, signal).catch((error: unknown) => {
+          if (error instanceof AiOAuthStorageError) throw new ProviderReadError("OAuth credential storage failed");
           throw error;
         }),
         signal,
@@ -195,6 +252,14 @@ export function createHealthRunPorts(admin: Admin, leaseHolder?: string): Health
 
     async syncOAuthCatalogue(target: HealthTarget, signal: AbortSignal) {
       const oauthProvider = target.oauth_provider;
+      if (oauthProvider === "higgsfield") {
+        if (!higgsfieldClient) throw new ProviderReadError("Higgsfield probe session is unavailable");
+        const client = higgsfieldClient;
+        const report = await syncHiggsfieldCatalog(admin,
+          (capability) => client.callTool("models_explore", { action: "list", type: capability, limit: 100 }),
+          { leaseHolder, signal });
+        return { added: report.added, updated: report.updated, deactivated: report.deactivated };
+      }
       if (!oauthProvider || !isOAuthProviderId(oauthProvider)) {
         throw new Error(`Provider ${target.provider_code} has no subscription sign-in`);
       }
@@ -292,6 +357,10 @@ export async function createHealthHandlerPorts(adminOverride?: Admin): Promise<H
   return {
     async runChunk(chunk: number, runId: string, holder: string, deadlineMs: number) {
       return runHealthChunk(createHealthRunPorts(admin, holder), { runId, chunk, deadlineMs });
+    },
+
+    async deliverAlerts(budgetMs: number) {
+      await sendClaimedAlerts(runPorts, crypto.randomUUID(), budgetMs);
     },
 
     async readResults(): Promise<HealthResult[]> {

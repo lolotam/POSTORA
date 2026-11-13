@@ -21,5 +21,7 @@
   "statusConnected": "شغال",
   "statusFailed": "فشل",
   "statusNeedsRelogin": "محتاج تسجيل دخول تاني",
-  "summary": "اتفحص {{total}} provider · {{connected}} شغالين · {{failed}} فشلوا"
+  "summary": "اتفحص {{total}} provider · {{connected}} شغالين · {{failed}} فشلوا",
+  "configurationReadFailed": "تعذر قراءة إعدادات الذكاء الاصطناعي. حاول مرة أخرى.",
+  "retryConfiguration": "إعادة المحاولة"
 }
