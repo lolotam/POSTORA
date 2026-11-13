@@ -35,6 +35,9 @@ The API-key pathway, the provider additions and the Kimi provider ship enabled.
 - `getOAuthProviders()` returns exactly `anthropic`, `github-copilot` and `openai-codex`. No other
   provider named by the owner has a subscription login: xAI/Grok, MiniMax, Kimi and OpenRouter are
   API key only.
+  - Changed later: OpenRouter gained a sign-in through our own `pkce_callback` flow (no pi-ai
+    login), and the admin UI groups it with the other subscriptions. xAI/Grok, MiniMax and Kimi stay
+    API key only.
 - The OAuth `login*` functions are whole CLI flows. They bind a Node `http.createServer` callback
   on localhost and await the user in the same process, so an edge function cannot run them across
   two HTTP requests. The authorize and token-exchange helpers are not exported. Only the
@@ -253,8 +256,12 @@ Old rows keep working unchanged.
   - `capabilities` →
     `{ enabled: boolean, providers: [{ provider_code, oauth_provider, name, status: 'not_connected'|'connected'|'reauth_required', account_label, expires_at, models: string[] }] }`.
     - `providers` is derived from pi-ai `getOAuthProviders()` intersected with the map
-      `{anthropic:'claude','openai-codex':'openai'}`.
+      `{anthropic:'claude','openai-codex':'openai'}`, plus `openrouter` (added with #410), whose
+      sign-in is our own `pkce_callback` flow rather than a pi-ai login. Each provider carries
+      `flow: 'pkce_paste' | 'pkce_callback'`.
     - `models` is the pi-ai `getModels(oauthProvider).map(m => m.id)`.
+    - Added 2026-11-13: each provider also carries `has_api_key: boolean | null`, whether the
+      provider has an API key of its own. `null` means the key status could not be read.
     - It never returns a token.
   - `start` `{ oauth_provider }` → `{ authorize_url }`.
   - `finish` `{ oauth_provider, pasted: string (1..4096) }` → `{ status: 'connected', account_label }`.
@@ -286,7 +293,10 @@ Old rows keep working unchanged.
 ### 7.2 `TierSelector` dropdown (the requested UI)
 
 - The provider `<Select>` becomes grouped with `SelectGroup` / `SelectLabel`:
-  - **"API key"**: the current `providers` list, unchanged. Item value: `api:<provider.id>`.
+  - **"API key"**: the current `providers` list, minus any provider whose subscription is
+    `connected` or `reauth_required` and whose `has_api_key` is `false` (changed 2026-11-13: such a
+    provider has no key to call with, so it is listed only under "Auth"). A provider with
+    `has_api_key: null` stays in this group. Item value: `api:<provider.id>`.
   - **"Auth (subscription)"**: rendered only when `capabilities.enabled` and the category is in the
     OAuth text set (§4). One item per capability provider whose `status === 'connected'`.
     - Item value: `oauth:<provider_code>`.
@@ -301,20 +311,31 @@ Old rows keep working unchanged.
 
 ### 7.3 `AiProvidersCard` connect UI
 
-- In the dialog for `claude` and `openai`, add a **"Subscription login (Auth)"** section **below**
+- In the dialog for `claude`, `openai` and `openrouter`, add a **"Subscription login (Auth)"** section **below**
   the existing API key section. Keep the API key UI exactly as it is. Show the section only when
   `capabilities.enabled`.
+- **Provider tile (changed 2026-11-13):** a provider with a subscription but no API key shows an
+  `auth` badge instead of the missing-key mark. When the capability says `has_api_key: false`, the
+  tile Test button opens the dialog instead of running the API key test, which has no key to use;
+  the dialog's subscription test is the test. `has_api_key: null` is not treated as
+  subscription-only; the separate key-status read decides only when the field is absent.
+  Saving an API key reloads the capabilities, so the provider returns to the "API key" group.
 - **Status line:** Not connected / Connected as `<account_label>`, expires `<expires_at>` /
   Reconnect required.
-- **Connect flow:**
+- **Connect flow** (`pkce_paste`; for `pkce_callback`, as OpenRouter uses, "Open login" sends the
+  browser to the provider, which redirects back to our own route and finishes the login there,
+  with nothing to paste):
   1. "Open login" calls `start` and opens `authorize_url` in a new tab.
   2. A textarea reads: "After approving, your browser lands on a localhost page that will not load.
      Copy the full address from the address bar and paste it here."
   3. "Finish" calls `finish`.
 - **Test:** a model `<Select>` filled from the provider's catalogue rows (`ai_models`), the same list the
   provider dialog shows next to it, plus a button that runs `test`. Changed on 2026-11-13: the owner
-  asked for one model list in the admin UI, and `capabilities.models` is now only the fallback for a
-  provider whose catalogue is still empty. The tier picker above keeps `capabilities.models`.
+  asked for one model list in the admin UI. The picker offers only the catalogue rows that
+  `capabilities.models` also names, in catalogue order, because `test` refuses a model the
+  subscription's registry does not know (424). When no catalogue row qualifies, the picker offers
+  `capabilities.models`. A picked model that drops out of the list falls back to the first one.
+  The tier picker above keeps `capabilities.models`.
 - **Disconnect** calls `disconnect`, with a confirm dialog.
 - For Anthropic, a warning note reads: "Calls through a Claude subscription are sent with Claude
   Code's identity prompt prepended."

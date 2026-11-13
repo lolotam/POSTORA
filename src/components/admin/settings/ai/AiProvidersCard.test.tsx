@@ -133,7 +133,7 @@ describe('AiProvidersCard', () => {
     expect(screen.getByText('2/2')).toBeInTheDocument();
   });
 
-  it('offers the same models in the picker as the list next to it', async () => {
+  it('offers only the listed models the subscription can call', async () => {
     renderCard();
     await waitFor(() => expect(screen.getByText('Anthropic API')).toBeInTheDocument());
 
@@ -162,5 +162,63 @@ describe('AiProvidersCard', () => {
     await screen.findByText('Anthropic API');
     const dialog = await openClaudeDialog();
     expect(within(dialog).getByText(`Last synced ${new Date(at).toLocaleString()}`)).toBeInTheDocument();
+
+  });
+
+  it('opens the dialog instead of running the API key test for a subscription-only provider', async () => {
+    renderCard();
+    await waitFor(() => expect(screen.getAllByText('auth')).toHaveLength(1));
+
+    const claudeTile = screen.getByRole('heading', { name: 'Anthropic API' }).closest('[class*="space-y-1.5"]') as HTMLElement;
+    fireEvent.click(within(claudeTile).getByRole('button', { name: /Test/ }));
+
+    expect(await screen.findByRole('dialog')).toBeInTheDocument();
+    expect(invoke).not.toHaveBeenCalledWith('ai-config', expect.objectContaining({
+      body: expect.objectContaining({ action: 'test-connection' }),
+    }));
+  });
+
+  it('runs the API key test when the subscription says the provider also has a key', async () => {
+    // The capability knows about the key even though the separate key-status
+    // read reports none, so the tile's own test still runs.
+    invoke.mockImplementation(async (fn: string, args: { body: Record<string, unknown> }) => {
+      if (fn === 'ai-provider-auth') {
+        return { data: { enabled: true, providers: [{ ...claudeCapability, has_api_key: true }] }, error: null };
+      }
+      if (args?.body?.action === 'check-service-key') return { data: { has_key: false }, error: null };
+      return { data: { success: true, latency: 5 }, error: null };
+    });
+    renderCard();
+    await waitFor(() => expect(screen.getAllByText('auth')).toHaveLength(1));
+
+    const claudeTile = screen.getByRole('heading', { name: 'Anthropic API' }).closest('[class*="space-y-1.5"]') as HTMLElement;
+    fireEvent.click(within(claudeTile).getByRole('button', { name: /Test/ }));
+
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('ai-config', expect.objectContaining({
+      body: expect.objectContaining({ action: 'test-connection', provider_id: 'prov-claude' }),
+    })));
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+  });
+
+  it('runs the API key test when the key-status read failed and the subscription does not say', async () => {
+    // An older ai-provider-auth sends no has_api_key, so only the failed read is left.
+    const { has_api_key: _omitted, ...capabilityWithoutKeyField } = claudeCapability;
+    invoke.mockImplementation(async (fn: string, args: { body: Record<string, unknown> }) => {
+      if (fn === 'ai-provider-auth') {
+        return { data: { enabled: true, providers: [capabilityWithoutKeyField] }, error: null };
+      }
+      if (args?.body?.action === 'check-service-key') return { data: null, error: { message: 'boom' } };
+      return { data: { success: true, latency: 5 }, error: null };
+    });
+    renderCard();
+    await waitFor(() => expect(screen.getAllByText('auth')).toHaveLength(1));
+
+    const claudeTile = screen.getByRole('heading', { name: 'Anthropic API' }).closest('[class*="space-y-1.5"]') as HTMLElement;
+    fireEvent.click(within(claudeTile).getByRole('button', { name: /Test/ }));
+
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('ai-config', expect.objectContaining({
+      body: expect.objectContaining({ action: 'test-connection', provider_id: 'prov-claude' }),
+    })));
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
   });
 });

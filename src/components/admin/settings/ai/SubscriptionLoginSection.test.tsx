@@ -193,13 +193,13 @@ describe('SubscriptionLoginSection', () => {
     await waitFor(() => expect(h.disconnect).toHaveBeenCalledWith('anthropic'));
   });
 
-  it('offers the provider catalogue the dialog lists next to it', async () => {
+  it('offers only the catalogue models the subscription can call', async () => {
     h.caps = { enabled: true, providers: [claudeConnected] };
 
     render(
       <SubscriptionLoginSection
         providerCode="claude"
-        models={['claude-sonnet-4-5', 'claude-opus-5', 'claude-haiku-4-5']}
+        models={['claude-opus-5', 'claude-haiku-4-5', 'claude-sonnet-4-5']}
       />,
     );
 
@@ -207,32 +207,62 @@ describe('SubscriptionLoginSection', () => {
     fireEvent.pointerDown(modelTrigger, { button: 0, buttons: 1, pointerType: 'mouse' });
     fireEvent.click(modelTrigger);
 
-    // Every catalogue row is offered, including the ones the subscription's own
-    // model list does not name, so both lists show the same models.
-    expect(await screen.findByRole('option', { name: 'claude-haiku-4-5' })).toBeInTheDocument();
-    expect(screen.getByRole('option', { name: 'claude-sonnet-4-5' })).toBeInTheDocument();
-    expect(screen.getByRole('option', { name: 'claude-opus-5' })).toBeInTheDocument();
+    // The subscription refuses a model its registry does not name, so the
+    // catalogue row it cannot call is left out; the rest keep catalogue order.
+    const options = await screen.findAllByRole('option');
+    expect(options.map(option => option.textContent)).toEqual(['claude-opus-5', 'claude-sonnet-4-5']);
   });
 
-  it('tests the first catalogue model by default', async () => {
-    // The subscription's own list starts with another model, so the default
-    // proves the catalogue is what the picker works from.
-    h.caps = { enabled: true, providers: [{ ...claudeConnected, models: ['claude-opus-5'] }] };
+  it('tests the first callable catalogue model by default', async () => {
     h.test.mockResolvedValue({ ok: true, latency_ms: 42 });
+    h.caps = { enabled: true, providers: [claudeConnected] };
 
     render(
       <SubscriptionLoginSection
         providerCode="claude"
-        models={['claude-sonnet-4-5', 'claude-haiku-4-5']}
+        models={['claude-haiku-4-5', 'claude-opus-5', 'claude-sonnet-4-5']}
       />,
     );
 
     fireEvent.click(screen.getByRole('button', { name: /^Test$/i }));
 
     await waitFor(() =>
-      expect(h.test).toHaveBeenCalledWith({ provider: 'anthropic', modelId: 'claude-sonnet-4-5' }),
+      expect(h.test).toHaveBeenCalledWith({ provider: 'anthropic', modelId: 'claude-opus-5' }),
     );
     expect(toast.success).toHaveBeenCalledWith(expect.stringContaining('42ms'));
+  });
+
+  it('falls back to the subscription list when no catalogue model is callable', async () => {
+    h.test.mockResolvedValue({ ok: true, latency_ms: 7 });
+    h.caps = { enabled: true, providers: [claudeConnected] };
+
+    render(<SubscriptionLoginSection providerCode="claude" models={['claude-haiku-4-5']} />);
+
+    fireEvent.click(screen.getByRole('button', { name: /^Test$/i }));
+
+    await waitFor(() =>
+      expect(h.test).toHaveBeenCalledWith({ provider: 'anthropic', modelId: 'claude-sonnet-4-5' }),
+    );
+  });
+
+  it('drops a picked model the catalogue no longer offers', async () => {
+    h.test.mockResolvedValue({ ok: true, latency_ms: 7 });
+    h.caps = { enabled: true, providers: [claudeConnected] };
+
+    const { rerender } = render(
+      <SubscriptionLoginSection providerCode="claude" models={['claude-sonnet-4-5', 'claude-opus-5']} />,
+    );
+    const modelTrigger = screen.getByRole('combobox');
+    fireEvent.pointerDown(modelTrigger, { button: 0, buttons: 1, pointerType: 'mouse' });
+    fireEvent.click(modelTrigger);
+    fireEvent.click(await screen.findByRole('option', { name: 'claude-opus-5' }));
+
+    rerender(<SubscriptionLoginSection providerCode="claude" models={['claude-sonnet-4-5']} />);
+    fireEvent.click(screen.getByRole('button', { name: /^Test$/i }));
+
+    await waitFor(() =>
+      expect(h.test).toHaveBeenCalledWith({ provider: 'anthropic', modelId: 'claude-sonnet-4-5' }),
+    );
   });
 
   it('warns about the Claude Code identity prompt for Anthropic only', () => {

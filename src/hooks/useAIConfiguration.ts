@@ -297,12 +297,13 @@ export function useCheckServiceKey(providerCodes: string[] = ['firecrawl', 'apif
   return useQuery({
     queryKey: ['service-keys', ...providerCodes],
     queryFn: async () => {
+      // A code missing from the result means the read failed: unknown, not "no key".
       const results: Record<string, boolean> = {};
       for (const code of providerCodes) {
         const { data, error } = await supabase.functions.invoke('ai-config', {
           body: { action: 'check-service-key', provider_code: code },
         });
-        results[code] = !error && data?.has_key === true;
+        if (!error && typeof data?.has_key === 'boolean') results[code] = data.has_key;
       }
       return results;
     },

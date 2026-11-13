@@ -56,9 +56,9 @@ function describeError(error: unknown, fallback: string): string {
  * instead: the browser goes there directly and there is nothing to paste.
  *
  * `models` is the provider's catalogue (the ai_models rows the provider dialog
- * lists right next to this section), so the picker here and the list there are
- * one list. Without it the picker falls back to the subscription's own model
- * list, which only matters while the provider has no catalogue rows at all.
+ * lists right next to this section). The picker offers the catalogue rows the
+ * subscription can call, in catalogue order, and falls back to the
+ * subscription's own model list when none of them is callable.
  */
 export function SubscriptionLoginSection({
   providerCode,
@@ -101,11 +101,15 @@ export function SubscriptionLoginSection({
   }
   if (!capabilities || !capability || (!enabled && !hasStoredLogin)) return null;
 
-  // The catalogue is the one list of models this provider has; the
-  // subscription's own list is only a fallback for a provider whose catalogue
-  // is still empty.
-  const testModels = models && models.length > 0 ? models : capability?.models ?? [];
-  const effectiveTestModel = testModel || testModels[0] || '';
+  // The subscription can only call the models its own registry names; any
+  // other id is refused before the provider is asked. The catalogue keeps its
+  // order, but a row the subscription cannot call is left out, and the
+  // subscription's list stands in when no catalogue row is callable.
+  const subscriptionModels = capability?.models ?? [];
+  const callableCatalogue = (models ?? []).filter(id => subscriptionModels.includes(id));
+  const testModels = callableCatalogue.length > 0 ? callableCatalogue : subscriptionModels;
+  // A remembered pick that the list no longer offers falls back to the first.
+  const effectiveTestModel = testModels.includes(testModel) ? testModel : testModels[0] ?? '';
 
   // The URL is shown as a link the admin clicks: a window.open after an await
   // runs outside the click gesture and popup blockers drop it silently.
