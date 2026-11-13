@@ -24,7 +24,7 @@ import { SyncAllButton } from './SyncAllButton';
 import { SubscriptionLoginSection } from './SubscriptionLoginSection';
 import { SubscriptionLoginsStrip } from './SubscriptionLoginsStrip';
 import { SYNCABLE_PROVIDER_CODES } from '@/hooks/ai-config/useSyncModels';
-import { useAiProviderAuthCapabilities } from '@/hooks/ai-config/useAiProviderAuth';
+import { AI_PROVIDER_AUTH_QUERY_KEY, useAiProviderAuthCapabilities } from '@/hooks/ai-config/useAiProviderAuth';
 
 function isOAuthProvider(provider: AIProvider | null) {
   return !!provider && (provider.auth_type === 'oauth' || provider.provider_code === 'higgsfield' || provider.api_type === 'higgsfield');
@@ -85,6 +85,17 @@ export function AiProvidersCard() {
     ...(aiConfig?.providers?.map(p => p.provider_code) || []),
   ];
   const { data: serviceKeyStatus } = useCheckServiceKey(allProviderCodes);
+  // Providers whose only credential is the subscription, so the tile's API key
+  // test has nothing to use. The capability's own `has_api_key` decides; `null`
+  // (unreadable) is not proof of subscription-only. The separate key-status read
+  // stands in only for an older edge function that does not send the field.
+  const subscriptionOnlyProviders = new Set<string>(
+    (oauthCapabilities?.providers ?? [])
+      .filter(p => p.status === 'connected' || p.status === 'reauth_required')
+      .filter(p => p.has_api_key === false
+        || (p.has_api_key === undefined && serviceKeyStatus?.[p.provider_code] === false))
+      .map(p => p.provider_code),
+  );
 
   const [selectedProvider, setSelectedProvider] = useState<AIProvider | null>(null);
   const selectedAuthState = selectedProvider
@@ -146,6 +157,9 @@ export function AiProvidersCard() {
           (old: Record<string, boolean> | undefined) => ({ ...old, [providerCode]: true })
         );
         queryClient.refetchQueries({ queryKey: ['service-keys'] });
+        // The model selector reads each provider's key status from the
+        // subscription capabilities, so they are read again too.
+        queryClient.invalidateQueries({ queryKey: AI_PROVIDER_AUTH_QUERY_KEY });
       } else {
         toast.error(r.error || 'Invalid API key');
       }
@@ -214,6 +228,7 @@ export function AiProvidersCard() {
               const providerModels = modelsByProvider[provider.id] || [];
               const activeModels = providerModels.filter(m => m.is_active).length;
               const testResult = testResults[provider.id];
+              const subscriptionOnly = subscriptionOnlyProviders.has(provider.provider_code);
               const authState = providerAuthState(
                 serviceKeyStatus?.[provider.provider_code] ?? false,
                 subscriptionProviders.has(provider.provider_code),
@@ -244,7 +259,15 @@ export function AiProvidersCard() {
                     </div>
                     <div className="flex items-center justify-between">
                       <Button size="sm" variant="outline"
-                        onClick={(e) => { e.stopPropagation(); handleTestConnection(provider.id); }}
+                        // A provider that only has a subscription has no API key
+                        // for this test to use; the click opens the dialog, where
+                        // the subscription has its own test.
+                        onClick={(e) => {
+                          if (subscriptionOnly) return;
+                          e.stopPropagation();
+                          handleTestConnection(provider.id);
+                        }}
+                        title={subscriptionOnly ? 'Test the subscription in the provider dialog' : undefined}
                         disabled={testConnection.isPending}
                         className="h-5 px-1.5 text-[10px] gap-0.5">
                         {testConnection.isPending && !testResult?.success && !testResult?.error ? (
