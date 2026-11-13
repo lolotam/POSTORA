@@ -208,6 +208,11 @@ BEGIN
     'E12 a deliberately disconnected account opens no episode';
   ASSERT public.claim_whatsapp_disconnect_email(acc_delib, 'user') IS NULL,
     'E12 a deliberately disconnected account is never claimed';
+  ASSERT public.clear_whatsapp_disconnect_episode(acc_delib) = false,
+    'E12 a deliberately disconnected account is never cleared';
+  ASSERT (SELECT account_metadata->>'whatsapp_user_disconnected_at' IS NOT NULL
+            FROM public.social_accounts WHERE id = acc_delib),
+    'E12 the deliberate marker survives a clear';
 
   -- ------------------------------------------- E13: clearing removes everything
   UPDATE public.social_accounts
@@ -314,6 +319,8 @@ BEGIN
   ASSERT ep_two IS NOT NULL, 'E17 the episode opens';
   claim_ep := public.claim_whatsapp_disconnect_email(acc_two, 'user');
   ASSERT claim_ep IS NOT NULL, 'E17 the episode is claimed';
+  ASSERT public.mark_whatsapp_user_disconnected(acc_two) = true,
+    'E17 the deliberate marker is written';
   UPDATE public.social_accounts
      SET account_metadata = jsonb_set(
            COALESCE(account_metadata, '{}'::jsonb),
@@ -327,10 +334,11 @@ BEGIN
   ASSERT (SELECT NOT (account_metadata ? 'whatsapp_disconnect')
             AND NOT (account_metadata ? 'whatsapp_disconnect_claimed_at')
             AND NOT (account_metadata ? 'whatsapp_disconnect_user_email_at')
+            AND NOT (account_metadata ? 'whatsapp_user_disconnected_at')
             AND NOT needs_reauth
             AND last_refresh_error IS NULL
             FROM public.social_accounts WHERE id = acc_two),
-    'E17 the reactivation cleared the episode, the claims and the marker';
+    'E17 the reactivation cleared the episode, the claims, the marker and the deliberate flag';
   ASSERT public.claim_whatsapp_disconnect_email(acc_two, 'user') IS NULL,
     'E17 the cleared episode can no longer be claimed';
 

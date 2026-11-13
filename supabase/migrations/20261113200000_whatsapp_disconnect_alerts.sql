@@ -296,6 +296,10 @@ GRANT EXECUTE ON FUNCTION public.mark_whatsapp_disconnect_emailed(uuid, text, uu
 -- 5. Close the episode: the account is healthy again, or it has been reconnected. The red
 --    flag goes with it. Only evolution_qr rows are touched: on every other platform
 --    needs_reauth and last_refresh_error belong to the token-refresh path.
+--    A deliberately disconnected account is left completely alone: the owner asked for that
+--    disconnect, so nothing here may resurrect it into an alertable state. Its marker is
+--    cleared by the reactivation trigger instead, which is the one thing that means "the
+--    owner came back".
 CREATE OR REPLACE FUNCTION public.clear_whatsapp_disconnect_episode(p_account_id uuid)
 RETURNS boolean
 LANGUAGE plpgsql
@@ -315,6 +319,7 @@ BEGIN
    WHERE id = p_account_id
      AND platform = 'whatsapp'
      AND connection_mode = 'evolution_qr'
+     AND NOT (COALESCE(account_metadata, '{}'::jsonb) ? 'whatsapp_user_disconnected_at')
      AND (COALESCE(account_metadata, '{}'::jsonb) ? 'whatsapp_disconnect'
           OR COALESCE(account_metadata, '{}'::jsonb) ? 'whatsapp_disconnect_user_email_at'
           OR COALESCE(account_metadata, '{}'::jsonb) ? 'whatsapp_disconnect_admin_email_at'

@@ -471,7 +471,7 @@ One RPC per write, each `SECURITY DEFINER`, `SET search_path = public`, executab
 | `observe_whatsapp_disconnect_state(p_account_id uuid, p_state text, p_terminal boolean)` | A single `UPDATE ... SET account_metadata = jsonb_set(...)` with the whole episode computed inside the statement. The row lock serialises two concurrent pollers; the loser sees the winner's `since` and preserves it. `since` and `first_seen` are never rewritten by a terminal observation. It refuses to open an episode when the deliberate-disconnect marker is present. |
 | `claim_whatsapp_disconnect_email(p_account_id uuid, p_kind text)` | A conditional `UPDATE` that sets `whatsapp_disconnect_claimed_at` **only** when the recipient's marker is absent, and only when no live claim exists. `RETURN FOUND` is the claim: exactly one caller can win. It returns the episode's `episode_id` (or NULL when it refuses), and refuses when the deliberate-disconnect marker is present. |
 | `mark_whatsapp_disconnect_emailed(p_account_id uuid, p_kind text, p_episode_id uuid)` | Sets the recipient's marker after a successful send, **only** when the open episode still carries `p_episode_id` and the recipient holds a claim. |
-| `clear_whatsapp_disconnect_episode(p_account_id uuid)` | Removes the episode, both markers and the red flag. |
+| `clear_whatsapp_disconnect_episode(p_account_id uuid)` | Removes the episode, both markers and the red flag. Refuses to touch a deliberately disconnected account. |
 | `mark_whatsapp_user_disconnected(p_account_id uuid)` | Sets the deliberate-disconnect marker **and** closes the open episode with its claims and markers: a disconnect the owner asked for must not leave an alert behind, and the next outage has to start from a clean episode. |
 
 The claim shape is copied from the existing incident claim, including its stale-claim window:
@@ -565,8 +565,10 @@ owner asked for.
 
 `mark_whatsapp_user_disconnected` also closes the open episode with its claims and markers, so a
 deliberate disconnect leaves no alert behind and the next outage starts from a clean episode. The
-marker is cleared by the reactivation trigger (§7.4) and by `clear_whatsapp_disconnect_episode`, so
-a deliberate disconnect followed by a fresh QR pairing behaves normally from then on.
+marker itself is cleared by the reactivation trigger (§7.4) and by nothing else: it means "the
+owner disconnected this account on purpose", and only the owner coming back takes it away. A
+`clear_whatsapp_disconnect_episode` call refuses to touch a deliberately disconnected account, so
+a watcher run that started before the disconnect cannot resurrect it into an alertable state.
 
 The marker is written by the shared teardown module, so it applies to both entry points that can
 disconnect an Evolution account: the `whatsapp-oauth` `"disconnect"` action
