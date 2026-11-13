@@ -4,7 +4,8 @@ import { toast } from 'sonner';
 import { SubscriptionLoginSection } from './SubscriptionLoginSection';
 
 const h = vi.hoisted(() => ({
-  caps: { enabled: true, providers: [] as Array<Record<string, unknown>> },
+  caps: { enabled: true, providers: [] as Array<Record<string, unknown>> } as unknown,
+  capsError: null as Error | null,
   start: vi.fn(),
   finish: vi.fn(),
   disconnect: vi.fn(),
@@ -12,7 +13,7 @@ const h = vi.hoisted(() => ({
 }));
 
 vi.mock('@/hooks/ai-config/useAiProviderAuth', () => ({
-  useAiProviderAuthCapabilities: () => ({ data: h.caps }),
+  useAiProviderAuthCapabilities: () => ({ data: h.caps, error: h.capsError }),
   useStartAiOAuth: () => ({ mutateAsync: h.start, isPending: false }),
   useFinishAiOAuth: () => ({ mutateAsync: h.finish, isPending: false }),
   useDisconnectAiOAuth: () => ({ mutateAsync: h.disconnect, isPending: false }),
@@ -59,6 +60,7 @@ describe('SubscriptionLoginSection', () => {
 
   beforeEach(() => {
     h.caps = { enabled: true, providers: [claudeNotConnected] };
+    h.capsError = null;
     h.start.mockReset();
     h.finish.mockReset();
     h.disconnect.mockReset();
@@ -74,6 +76,13 @@ describe('SubscriptionLoginSection', () => {
     h.caps = { enabled: false, providers: [claudeNotConnected] };
     const { container } = render(<SubscriptionLoginSection providerCode="claude" />);
     expect(container).toBeEmptyDOMElement();
+  });
+
+  it('shows a capabilities read that failed instead of an empty section', () => {
+    h.caps = undefined;
+    h.capsError = new Error('AI_PROVIDER_AUTH_INVALID_RESPONSE');
+    render(<SubscriptionLoginSection providerCode="claude" />);
+    expect(screen.getByRole('alert')).toHaveTextContent('AI_PROVIDER_AUTH_INVALID_RESPONSE');
   });
 
   it('renders nothing for a provider the edge function does not offer yet', () => {

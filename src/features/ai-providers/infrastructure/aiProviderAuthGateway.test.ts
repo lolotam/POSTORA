@@ -28,8 +28,10 @@ describe("aiProviderAuthGateway.capabilities across a rolling deploy", () => {
     expect(result.providers.map((p) => p.provider_code)).toEqual(["claude"]);
   });
 
-  it("fails the read when a provider it knows breaks the contract", async () => {
-    const broken = { ...claude, models: "not a list" };
+  it.each([
+    ["a field has the wrong type", { ...claude, models: "not a list" }],
+    ["it names another provider's login", { ...claude, oauth_provider: "openrouter" }],
+  ])("fails the read when a provider it knows breaks the contract: %s", async (_case, broken) => {
     invoke.mockResolvedValueOnce({ data: { enabled: true, providers: [broken] }, error: null });
 
     await expect(aiProviderAuthGateway.capabilities()).rejects.toThrow("AI_PROVIDER_AUTH_INVALID_RESPONSE");

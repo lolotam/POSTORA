@@ -36,6 +36,7 @@ const ERROR_MESSAGES: Record<string, string> = {
   not_connected: 'This subscription is not connected.',
   reauth_required: 'The subscription needs a new login.',
   refresh_failed: 'The provider did not renew the login. Try again in a minute.',
+  AI_PROVIDER_AUTH_INVALID_RESPONSE: 'The server answered in a shape this page does not understand (AI_PROVIDER_AUTH_INVALID_RESPONSE). Reload the page; if it stays, the web app and the edge function are out of step.',
 };
 
 function describeError(error: unknown, fallback: string): string {
@@ -55,7 +56,7 @@ function describeError(error: unknown, fallback: string): string {
  * instead: the browser goes there directly and there is nothing to paste.
  */
 export function SubscriptionLoginSection({ providerCode }: { providerCode: 'claude' | 'openai' | 'openrouter' }) {
-  const { data: capabilities } = useAiProviderAuthCapabilities();
+  const { data: capabilities, error: capabilitiesError } = useAiProviderAuthCapabilities();
   const startLogin = useStartAiOAuth();
   const finishLogin = useFinishAiOAuth();
   const disconnect = useDisconnectAiOAuth();
@@ -76,6 +77,16 @@ export function SubscriptionLoginSection({ providerCode }: { providerCode: 'clau
   // With the flag off the subscription pathway is closed, but a stored login
   // must stay visible so the admin can still delete it. A provider the edge
   // function does not offer yet (an older deploy) has no sign-in to show.
+  // A failed read is shown, not hidden: an empty section would look like the
+  // login is simply unavailable.
+  if (capabilitiesError) {
+    return (
+      <Alert variant="destructive">
+        <AlertTriangle className="h-4 w-4" />
+        <AlertDescription>{describeError(capabilitiesError, 'Could not load the subscription logins.')}</AlertDescription>
+      </Alert>
+    );
+  }
   if (!capabilities || !capability || (!enabled && !hasStoredLogin)) return null;
 
   const effectiveTestModel = testModel || capability?.models?.[0] || '';

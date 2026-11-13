@@ -161,7 +161,7 @@ New migration (never edit the applied ones):
 - Deno, per client: start/poll/exchange request shapes; each provider's pending / slow_down / denied / expired envelope mapped correctly (Kimi's HTTP-200 pending, MiniMax's `{status}` envelope, xAI's HTTP-400 errors); Z.ai finalize reads an existing `zcode-api-key` before creating one.
 - Deno, handler: `start` without acknowledgement refused for the four risky providers; `poll` before `next_poll_at` makes no provider call; a disabled provider's `start` is refused and logged; device secrets never appear in any response.
 - Deno, credentials: rotating refresh keeps single-flight under two concurrent callers; missing refresh token keeps the old one; `api_key` kind never refreshes.
-- Vitest: device panel countdown and terminal states; acknowledgement gate; callback route calls `finish` with `code` and `state` and handles a missing `code`.
+- Vitest: device panel countdown and terminal states; acknowledgement gate; callback route calls `finish` with the full redirect address as `pasted` and handles a missing `code`.
 - Live probes (`*.live.test.ts`, not in CI) per provider, run by the owner after connecting.
 
 ## 12. Open items

@@ -16,7 +16,7 @@ export type OAuthFlow = "pkce_paste" | "pkce_callback";
 
 // The edge function's responses are validated at this boundary, so a contract
 // drift fails here with one stable code instead of deep inside a component.
-const capabilitySchema = z.object({
+const capabilityFields = z.object({
   provider_code: z.enum(["claude", "openai", "openrouter"]),
   oauth_provider: z.enum(["anthropic", "openai-codex", "openrouter"]),
   /** Null when the ai_providers row has no name. */
@@ -31,7 +31,18 @@ const capabilitySchema = z.object({
   // provider it knew then was a paste flow.
   flow: z.enum(["pkce_paste", "pkce_callback"]).default("pkce_paste"),
 });
-const KNOWN_PROVIDER_CODES: readonly unknown[] = capabilitySchema.shape.provider_code.options;
+// The pairs are fixed: the UI finds a capability by oauth_provider, so a row
+// that names the wrong one would show one provider's login under another.
+const OAUTH_PROVIDER_OF: Record<z.infer<typeof capabilityFields>["provider_code"], OAuthProviderId> = {
+  claude: "anthropic",
+  openai: "openai-codex",
+  openrouter: "openrouter",
+};
+const capabilitySchema = capabilityFields.refine(
+  (row) => OAUTH_PROVIDER_OF[row.provider_code] === row.oauth_provider,
+  { message: "provider_code and oauth_provider do not belong together" },
+);
+const KNOWN_PROVIDER_CODES: readonly unknown[] = capabilityFields.shape.provider_code.options;
 
 const capabilitiesSchema = z.object({
   enabled: z.boolean(),
