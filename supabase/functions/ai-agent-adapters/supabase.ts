@@ -867,11 +867,12 @@ function rpcParamName(settings: Record<string, unknown>, key: string, fallback: 
  * The query parameter names PostgREST reads for itself on a GET.
  *
  * The catalog call is a GET, so its arguments ride in the query string beside
- * the filters PostgREST understands (`?select=`, `?order=`). An argument named
- * after one of those would never reach the function -- PostgREST would take it
- * as a filter -- so the configuration is refused rather than guessed at.
+ * the filters PostgREST understands: `?select=`, `?order=`, `?limit=`, `?offset=`
+ * and the logical operators `?or=`, `?and=`, `?not=`. An argument named after one
+ * of those would never reach the function -- PostgREST would take it as a filter
+ * -- so the configuration is refused rather than guessed at.
  */
-const RESERVED_GET_PARAMS = ["select", "order", "limit", "offset"];
+const RESERVED_GET_PARAMS = ["select", "order", "limit", "offset", "and", "or", "not"];
 
 /**
  * The two argument names the function call carries.

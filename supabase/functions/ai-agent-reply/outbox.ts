@@ -260,37 +260,6 @@ export class ReplyNotDeliverableError extends Error {
 }
 
 /**
- * The payload the row holds, read after the delivery claim.
- *
- * The claim proved the row still holds what the caller read. Reading it again is what
- * makes the send use the STORED text rather than the caller's snapshot: the row is the
- * record of what the customer is owed.
- *
- * A read that fails is a failure, not an empty row. The row's state is unknown, so
- * nothing may be sent on it.
- */
-async function readStoredPayload(
-  admin: SupabaseClient,
-  outboxId: string,
-): Promise<{ text: string; kind: StoredReplyKind } | null> {
-  const { data: row, error } = await admin
-    .from("pending_agent_replies")
-    .select("status, generated_reply, generated_kind")
-    .eq("id", outboxId)
-    .maybeSingle();
-  if (error || !row || typeof row.generated_reply !== "string") {
-    console.error(
-      `[outbox] could not read the stored reply of ${outboxId}: ${error?.message ?? "missing"}`,
-    );
-    return null;
-  }
-  return {
-    text: row.generated_reply,
-    kind: row.generated_kind === "human_mode_ack" ? "human_mode_ack" : "reply",
-  };
-}
-
-/**
  * The delivery half, shared by both entry points below:
  *
  *   ready_to_send -> sending   a delivery attempt is about to begin
@@ -304,7 +273,9 @@ async function readStoredPayload(
  * `ready_to_send`, so the replacement is not refused. A delivery that sent the OLD text
  * would hand the customer an answer the closed gate was meant to block, and the notice
  * would never go out. The claim therefore carries the payload the caller read, and the
- * row is only moved while it holds exactly that payload.
+ * row is only moved while it holds exactly that payload. A successful claim IS the
+ * proof that the row holds this payload, so the send uses it directly: a second read
+ * would add a way to fail on a reply the provider had never been called for.
  *
  * The second is deliberately unchecked. By then the customer has the message; a failed
  * bookkeeping update must not turn a delivered reply into an error. The row stays in
@@ -324,18 +295,14 @@ async function sendAndSettle(
   });
   if (!claimed) throw new ReplyNotDeliverableError();
 
-  // The row holds the payload it was claimed with, and it is in `sending` now, so
-  // nothing may replace it: this read is the text that goes out.
-  const stored = await readStoredPayload(admin, outboxId);
-  if (!stored) {
-    // The row's state is unknown, so nothing may be sent on it. It stays in `sending`,
-    // its lease lapses, and recovery classifies it delivery_unknown.
-    throw new ReplyNotDeliverableError("the stored reply could not be read after the delivery claim");
-  }
-
+  // The claim compared the row against the payload the caller read and moved it only
+  // while the two matched, so the row HOLDS this payload -- and it is in `sending` now,
+  // so nothing may replace it. There is no second read here: a read that failed would
+  // strand a reply the provider had never been called for, and recovery would then
+  // classify a definitely unsent reply as delivery_unknown instead of retrying it.
   let outboundMessageId: string;
   try {
-    outboundMessageId = await send(stored.text);
+    outboundMessageId = await send(expected.text);
   } catch (error) {
     // Only reached when this process survives the throw. A killed isolate runs no catch --
     // which is why `sending` is durable and this is a courtesy, not the guarantee.
@@ -348,7 +315,7 @@ async function sendAndSettle(
   }
 
   await advanceOwnedReply(admin, outboxId, userId, { from: "sending", to: "sent" });
-  return { messageId: outboundMessageId, text: stored.text, kind: stored.kind };
+  return { messageId: outboundMessageId, text: expected.text, kind: expected.kind };
 }
 
 /**

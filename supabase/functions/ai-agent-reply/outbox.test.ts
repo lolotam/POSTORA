@@ -42,6 +42,11 @@ function stubOutbox(
      * completion that fails: the notice must not become durable either.
      */
     ackClaimLive?: boolean;
+    /**
+     * Whether reading the row fails. A read that fails after the delivery claim used to
+     * strand a reply the provider had never been called for.
+     */
+    readFails?: boolean;
   } = {},
 ) {
   const row = initial ? { user_id: "user-1", ...initial } : null;
@@ -135,7 +140,12 @@ function stubOutbox(
       if (table !== "pending_agent_replies") throw new Error(`unexpected table ${table}`);
       return {
         select: () => ({
-          eq: () => ({ maybeSingle: () => Promise.resolve({ data: row, error: null }) }),
+          eq: () => ({
+            maybeSingle: () =>
+              options.readFails
+                ? Promise.resolve({ data: null, error: { message: "db down" } })
+                : Promise.resolve({ data: row, error: null }),
+          }),
         }),
       };
     },
@@ -277,6 +287,33 @@ Deno.test("the delivery reports the text and the kind the ROW holds", async () =
   assertEquals(delivered.messageId, "wamid.3");
   assertEquals(delivered.text, NOTICE);
   assertEquals(delivered.kind, "human_mode_ack");
+});
+
+Deno.test("a read that fails after the claim does not strand the reply", async () => {
+  // The claim compared the row against the payload and moved it only while the two
+  // matched, so the row HOLDS that payload. A second read could only fail on a reply the
+  // provider had never been called for, and it left the row in `sending` -- which recovery
+  // reads as delivery_unknown, for a reply that was definitely never sent.
+  const { admin, row } = stubOutbox(
+    { status: "ready_to_send", generated_reply: REPLY.text },
+    { readFails: true },
+  );
+
+  let sent = "";
+  const delivered = await deliverStoredReply(
+    admin,
+    "row-1",
+    { text: REPLY.text, kind: "reply" },
+    (text) => {
+      sent = text;
+      return Promise.resolve("wamid.4");
+    },
+    "user-1",
+  );
+
+  assertEquals(sent, REPLY.text);
+  assertEquals(delivered.text, REPLY.text);
+  assertEquals(row?.status, "sent");
 });
 
 Deno.test("the notice and the claim it spends are written by ONE statement", async () => {

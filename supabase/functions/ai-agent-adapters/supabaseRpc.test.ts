@@ -226,7 +226,13 @@ Deno.test("a function that tries to write is refused and nothing was committed",
 });
 
 Deno.test("an argument name PostgREST reads for itself is refused before any request", async () => {
-  for (const extra of [{ rpc_query_param: "select" }, { rpc_limit_param: "limit" }]) {
+  for (const extra of [
+    { rpc_query_param: "select" },
+    { rpc_limit_param: "limit" },
+    // The logical operators are filters too: `?or=`, `?and=`, `?not=`.
+    { rpc_query_param: "or" },
+    { rpc_limit_param: "not" },
+  ]) {
     const { deps, calls } = recordingDeps([FIXTURE]);
 
     const result = await search(
