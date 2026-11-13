@@ -85,6 +85,17 @@ export function AiProvidersCard() {
     ...(aiConfig?.providers?.map(p => p.provider_code) || []),
   ];
   const { data: serviceKeyStatus } = useCheckServiceKey(allProviderCodes);
+  // Providers whose only credential is the subscription, so the tile's API key
+  // test has nothing to use. The capability's own `has_api_key` decides; `null`
+  // (unreadable) is not proof of subscription-only. The separate key-status read
+  // stands in only for an older edge function that does not send the field.
+  const subscriptionOnlyProviders = new Set<string>(
+    (oauthCapabilities?.providers ?? [])
+      .filter(p => p.status === 'connected' || p.status === 'reauth_required')
+      .filter(p => p.has_api_key === false
+        || (p.has_api_key === undefined && serviceKeyStatus?.[p.provider_code] === false))
+      .map(p => p.provider_code),
+  );
 
   const [selectedProvider, setSelectedProvider] = useState<AIProvider | null>(null);
   const selectedAuthState = selectedProvider
@@ -217,6 +228,7 @@ export function AiProvidersCard() {
               const providerModels = modelsByProvider[provider.id] || [];
               const activeModels = providerModels.filter(m => m.is_active).length;
               const testResult = testResults[provider.id];
+              const subscriptionOnly = subscriptionOnlyProviders.has(provider.provider_code);
               const authState = providerAuthState(
                 serviceKeyStatus?.[provider.provider_code] ?? false,
                 subscriptionProviders.has(provider.provider_code),
@@ -251,11 +263,11 @@ export function AiProvidersCard() {
                         // for this test to use; the click opens the dialog, where
                         // the subscription has its own test.
                         onClick={(e) => {
-                          if (authState === 'auth') return;
+                          if (subscriptionOnly) return;
                           e.stopPropagation();
                           handleTestConnection(provider.id);
                         }}
-                        title={authState === 'auth' ? 'Test the subscription in the provider dialog' : undefined}
+                        title={subscriptionOnly ? 'Test the subscription in the provider dialog' : undefined}
                         disabled={testConnection.isPending}
                         className="h-5 px-1.5 text-[10px] gap-0.5">
                         {testConnection.isPending && !testResult?.success && !testResult?.error ? (

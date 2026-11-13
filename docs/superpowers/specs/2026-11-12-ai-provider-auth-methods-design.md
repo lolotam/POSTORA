@@ -256,7 +256,9 @@ Old rows keep working unchanged.
   - `capabilities` →
     `{ enabled: boolean, providers: [{ provider_code, oauth_provider, name, status: 'not_connected'|'connected'|'reauth_required', account_label, expires_at, models: string[] }] }`.
     - `providers` is derived from pi-ai `getOAuthProviders()` intersected with the map
-      `{anthropic:'claude','openai-codex':'openai'}`.
+      `{anthropic:'claude','openai-codex':'openai'}`, plus `openrouter` (added with #410), whose
+      sign-in is our own `pkce_callback` flow rather than a pi-ai login. Each provider carries
+      `flow: 'pkce_paste' | 'pkce_callback'`.
     - `models` is the pi-ai `getModels(oauthProvider).map(m => m.id)`.
     - Added 2026-11-13: each provider also carries `has_api_key: boolean | null`, whether the
       provider has an API key of its own. `null` means the key status could not be read.
@@ -309,16 +311,20 @@ Old rows keep working unchanged.
 
 ### 7.3 `AiProvidersCard` connect UI
 
-- In the dialog for `claude` and `openai`, add a **"Subscription login (Auth)"** section **below**
+- In the dialog for `claude`, `openai` and `openrouter`, add a **"Subscription login (Auth)"** section **below**
   the existing API key section. Keep the API key UI exactly as it is. Show the section only when
   `capabilities.enabled`.
 - **Provider tile (changed 2026-11-13):** a provider with a subscription but no API key shows an
-  `auth` badge instead of the missing-key mark. Its tile Test button opens the dialog instead of
-  running the API key test, which has no key to use; the dialog's subscription test is the test.
+  `auth` badge instead of the missing-key mark. When the capability says `has_api_key: false`, the
+  tile Test button opens the dialog instead of running the API key test, which has no key to use;
+  the dialog's subscription test is the test. `has_api_key: null` is not treated as
+  subscription-only; the separate key-status read decides only when the field is absent.
   Saving an API key reloads the capabilities, so the provider returns to the "API key" group.
 - **Status line:** Not connected / Connected as `<account_label>`, expires `<expires_at>` /
   Reconnect required.
-- **Connect flow:**
+- **Connect flow** (`pkce_paste`; for `pkce_callback`, as OpenRouter uses, "Open login" sends the
+  browser to the provider, which redirects back to our own route and finishes the login there,
+  with nothing to paste):
   1. "Open login" calls `start` and opens `authorize_url` in a new tab.
   2. A textarea reads: "After approving, your browser lands on a localhost page that will not load.
      Copy the full address from the address bar and paste it here."
