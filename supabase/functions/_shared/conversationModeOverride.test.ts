@@ -48,7 +48,7 @@ Deno.test("escalation timeout defaults to 240 minutes and is clamped to the allo
 type StoredRow = Record<string, unknown> | null;
 function readerClient(
   initial: StoredRow,
-  options: { afterFirstRead?: () => StoredRow; failExpire?: boolean } = {},
+  options: { afterFirstRead?: () => StoredRow; failExpire?: boolean; expireRefused?: boolean } = {},
 ) {
   const calls: string[] = [];
   let current = initial;
@@ -74,6 +74,9 @@ function readerClient(
     rpc(name: string, args: Record<string, unknown>) {
       calls.push(name);
       if (options.failExpire) return Promise.resolve({ data: null, error: { message: "timeout" } });
+      // The database's clock does not consider the row expired: the expiry matches
+      // nothing, so the row is still there and no marker was stamped.
+      if (options.expireRefused) return Promise.resolve({ data: false, error: null });
       const hit = matches([["id", args.p_mode_id], ["user_id", args.p_user_id], ["expires_at", args.p_expires_at]]);
       if (hit) current = null;
       return Promise.resolve({ data: hit, error: null });
@@ -161,4 +164,31 @@ Deno.test("reader: a failed expiry that did land reads as no override", async ()
   } finally {
     console.error = originalError;
   }
+});
+
+Deno.test("reader: an expiry the database refused is not read as no override", async () => {
+  // The edge clock says the window is over, the database's clock does not: the expiry
+  // matched nothing, so the row is still there and no marker was stamped. Reading that
+  // as "no override" lets the assistant answer a customer nobody answered, and the
+  // apology the marker stands for is lost. The state the database holds decides: the
+  // row is still expired, so the turn fails and is retried once the expiry lands.
+  const c = readerClient(
+    { ...ROW, mode: "human_first", expires_at: "2026-09-13T09:00:00Z" },
+    { expireRefused: true },
+  );
+  const originalError = console.error;
+  console.error = () => {};
+  try {
+    await assertRejects(
+      () => resolveConversationOverride(c.admin, SCOPE, NOW),
+      Error,
+      "marker is not durable",
+    );
+  } finally {
+    console.error = originalError;
+  }
+  // The row is read again: what the database holds is what decides.
+  assertEquals(c.calls, ["read", "expire_conversation_mode", "read"]);
+  // And it is still there: the database never expired it.
+  assertEquals(c.stored()?.expires_at, "2026-09-13T09:00:00Z");
 });

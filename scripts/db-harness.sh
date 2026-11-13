@@ -187,6 +187,7 @@ SUITES=(
   agent_handoff_messages.sql
   agent_handoff_claim_lease.sql
   agent_handoff_claim_atomicity.sql
+  agent_handoff_tenant_binding.sql
   agent_handoff_legacy_claim_lease.sql
   agent_conversation_mode_expiry_marker.sql
   ai_provider_oauth.sql

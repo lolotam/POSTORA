@@ -773,14 +773,14 @@ Deno.serve(async (req) => {
     // every other refusal in this function writes a row saying which gate closed.
     if (!config) {
       await logOutcome(admin, { ...baseLog, status: "skipped", error: "agent_not_configured" });
-      if (outboxId) await cancelOutboxRow(admin, outboxId, "agent_not_configured");
+      if (outboxId) await cancelOutboxRow(admin, outboxId, "agent_not_configured", request.user_id);
       return jsonResponse({ ok: true, skipped: "agent_not_configured" });
     }
     // The Test sandbox works while the agent is still disabled, so users can
     // tune it before switching it on for real customers.
     if (!config.is_enabled && !dryRun) {
       await logOutcome(admin, { ...baseLog, status: "skipped", error: "agent_disabled" });
-      if (outboxId) await cancelOutboxRow(admin, outboxId, "agent_disabled");
+      if (outboxId) await cancelOutboxRow(admin, outboxId, "agent_disabled", request.user_id);
       return jsonResponse({ ok: true, skipped: "agent_disabled" });
     }
 
@@ -978,7 +978,7 @@ Deno.serve(async (req) => {
     // fire, so a later kill leaves a state recovery can classify rather than one that
     // wrongly reads as "nothing external happened".
     if (outboxId && replySender) {
-      const entry = await takeOutboxRow(admin, outboxId);
+      const entry = await takeOutboxRow(admin, outboxId, request.user_id);
       if (entry.mode === "refuse") {
         console.warn(`[ai-agent-reply] outbox row ${outboxId} not runnable: ${entry.status}`);
         return jsonResponse({ ok: false, error: `outbox row not runnable: ${entry.status}` }, 409);
@@ -993,6 +993,7 @@ Deno.serve(async (req) => {
           outboxId,
           { text: entry.text, kind: entry.kind },
           (text) => sender(request.recipient_phone, text),
+          request.user_id,
         );
         // The same trail a fresh delivery leaves. Without it the customer has a reply that
         // is missing from the inbox UI and from the thread the next turn reads -- so the
@@ -1051,6 +1052,7 @@ Deno.serve(async (req) => {
               humanModeAck: ackClaim,
             },
             (text) => sender(request.recipient_phone, text),
+            request.user_id,
           );
           outboundMessageId = delivered.messageId;
           noticeText = delivered.text;
@@ -1572,7 +1574,7 @@ Deno.serve(async (req) => {
     if (!modelOverride.model && route.mode === 'user_only' && !route.userTier) {
       await logOutcome(admin, { ...baseLog, status: 'skipped', error: AI_CONNECTION_REQUIRED,
         latency_ms: Date.now() - startedAt }, { error_code: AI_CONNECTION_REQUIRED, dry_run: dryRun });
-      if (outboxId) await cancelOutboxRow(admin, outboxId, AI_CONNECTION_REQUIRED);
+      if (outboxId) await cancelOutboxRow(admin, outboxId, AI_CONNECTION_REQUIRED, request.user_id);
       return jsonResponse({ ok: true, skipped: 'no_reply_generated', error: AI_CONNECTION_REQUIRED });
     }
     const rawChain = modelOverride.model || route.mode === 'user_only' ? [] : await loadGlobalModelChain(admin);
@@ -1717,7 +1719,7 @@ Deno.serve(async (req) => {
           await logOutcome(admin, { ...baseLog, status: 'skipped', error: AI_USER_KEY_INVALID,
             latency_ms: Date.now() - startedAt }, { error_code: AI_USER_KEY_INVALID, dry_run: dryRun,
             model_errors: modelErrors });
-          if (outboxId) await cancelOutboxRow(admin, outboxId, AI_USER_KEY_INVALID);
+          if (outboxId) await cancelOutboxRow(admin, outboxId, AI_USER_KEY_INVALID, request.user_id);
           return jsonResponse({ ok: true, skipped: 'no_reply_generated', error: AI_USER_KEY_INVALID });
         }
         // Typed so the catch can tell a total model outage apart from the
@@ -1859,7 +1861,7 @@ Deno.serve(async (req) => {
         timings: timings.toJSON(),
         triage: triage ? { outcome: triage.outcome, errors: triage.errors.length ? triage.errors : null } : null,
       });
-      if (outboxId) await cancelOutboxRow(admin, outboxId, "no_reply_generated");
+      if (outboxId) await cancelOutboxRow(admin, outboxId, "no_reply_generated", request.user_id);
       return jsonResponse({ ok: true, skipped: "no_reply_generated" });
     }
 
@@ -1877,7 +1879,7 @@ Deno.serve(async (req) => {
       // or the write failed). Sending it would re-ask answered questions next turn.
       await logOutcome(admin, { ...baseLog, status: "skipped", error: PROCEDURE_STATE_CONFLICT,
         latency_ms: Date.now() - startedAt }, { error_code: PROCEDURE_STATE_CONFLICT, dry_run: dryRun });
-      if (outboxId) await cancelOutboxRow(admin, outboxId, PROCEDURE_STATE_CONFLICT);
+      if (outboxId) await cancelOutboxRow(admin, outboxId, PROCEDURE_STATE_CONFLICT, request.user_id);
       return jsonResponse({ ok: true, skipped: "no_reply_generated", error: PROCEDURE_STATE_CONFLICT });
     }
 
@@ -1890,6 +1892,14 @@ Deno.serve(async (req) => {
       replyText,
     );
     replyText = settlement.replyText;
+
+    if (settlement.windowReadFailed) {
+      // The window's state is unknown: the marker may be set, and the apology and the
+      // staff context that go with it are still owed. The reply may not go out as if the
+      // customer had never waited, so the turn fails here and the outbox retries it.
+      // Nothing was sent and nothing was claimed, so there is no lease to give back.
+      throw new Error("the unanswered-escalation window could not be read");
+    }
 
     let outboundMessageId: string | null = null;
     let replyWithoutDurableCopy = false;
@@ -1943,6 +1953,7 @@ Deno.serve(async (req) => {
               }),
             },
             (text) => sender(request.recipient_phone, text),
+            request.user_id,
           )
           : null;
         outboundMessageId = delivered
@@ -2087,8 +2098,11 @@ Deno.serve(async (req) => {
         // Escalated means the floor did something external -- assigned a human, notified
         // admins, sent an apology. Terminal: recovery re-running this would do it all twice.
         // Unhandled means nothing happened, and the row may be retried once models recover.
-        if (floor.escalated) await cancelOutboxRow(admin, outboxId, "model outage handled by escalation");
-        else await releaseAfterError(admin, outboxId, { sideEffectsHappened, error: errorMessage(error) });
+        if (floor.escalated) {
+          await cancelOutboxRow(admin, outboxId, "model outage handled by escalation", request.user_id);
+        } else {
+          await releaseAfterError(admin, outboxId, { sideEffectsHappened, error: errorMessage(error) }, request.user_id);
+        }
       }
       // apology_sent and human_notified travel in the body so a caller can tell this apart
       // from an ordinary failure: parseAgentReplyResult reads `escalated` as terminal.
@@ -2113,7 +2127,9 @@ Deno.serve(async (req) => {
       model_errors: modelErrors.length ? modelErrors : null,
       triage: triage ? { outcome: triage.outcome, errors: triage.errors.length ? triage.errors : null } : null,
     });
-    if (outboxId) await releaseAfterError(admin, outboxId, { sideEffectsHappened, error: errorMessage(error) });
+    if (outboxId) {
+      await releaseAfterError(admin, outboxId, { sideEffectsHappened, error: errorMessage(error) }, request.user_id);
+    }
     return jsonResponse({ ok: false, error: errorMessage(error) });
   }
 });

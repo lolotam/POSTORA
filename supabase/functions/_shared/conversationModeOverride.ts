@@ -109,6 +109,13 @@ function scoped(query: any, scope: ConversationScope) {
  *     fails and is retried once the expiry lands;
  *   * no row at all means the expiry did land, and the window is simply over.
  *
+ * An expiry that did NOT happen is read the same way. The RPC returns false when the
+ * database's clock does not consider the row expired -- the edge's clock did -- and
+ * then nothing was removed and no marker was stamped. That is not an absent window, so
+ * the row is read again and judged the same way: a takeover wins, the same expired row
+ * means the marker is not durable yet and the turn fails, and no row at all means the
+ * window is over.
+ *
  * Expiry is the expire_conversation_mode RPC, not a plain delete: whichever
  * function happens to observe a silent (human_first) window ending must leave
  * the thread marked, in the same statement, so the assistant's first reply
@@ -159,10 +166,26 @@ export async function resolveConversationOverride(
   }
   if (expired === true) return null;
 
+  // The expiry did NOT happen: the database neither removed the row nor stamped the
+  // marker. That is not an absent window -- the edge's clock said the window was over,
+  // the database's clock did not -- so the state the database holds decides, and the row
+  // is read again to see it:
+  //
+  //   * an override an operator installed meanwhile is a real takeover and wins, so
+  //     that mode is returned and the assistant stays silent;
+  //   * the same expired row means the marker is still unstamped, so the turn fails and
+  //     is retried once the expiry lands;
+  //   * no row at all means the row is gone, and the window is simply over.
   const { data: replaced, error: replacedError } = await scoped(
     admin.from("ai_conversation_modes").select("id, mode, expires_at"),
     scope,
   ).maybeSingle();
   if (replacedError) throw replacedError;
-  return activeOverrideMode((replaced ?? null) as StoredOverride | null, nowMs);
+  const current = (replaced ?? null) as StoredOverride | null;
+  const currentActive = activeOverrideMode(current, nowMs);
+  if (currentActive !== null) return currentActive;
+  if (current) {
+    throw new Error("conversation mode expiry did not happen; the escalation marker is not durable yet");
+  }
+  return null;
 }

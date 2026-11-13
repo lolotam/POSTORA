@@ -11,6 +11,7 @@ import {
   advanceReply,
   type HumanModeAckClaim,
   type ReplyEscalation,
+  type ReplyTransition,
 } from "../_shared/pendingReplies.ts";
 
 export type { HumanModeAckClaim, ReplyEscalation };
@@ -66,6 +67,51 @@ export type OutboxEntry =
   | { mode: "refuse"; status: string };
 
 /**
+ * The tenant that owns the row, for a caller that does not name one.
+ *
+ * Every transition binds the row to a tenant, so the caller has to say whose reply it is
+ * moving: the database refuses a row of another tenant exactly as it refuses a row that is
+ * not in the from-state. A caller that knows its tenant says so. A caller that does not
+ * gets the row's own tenant, and the move is bound to that -- the move is still a
+ * tenant-bound move, it simply cannot catch a row id this caller mixed up.
+ */
+async function rowOwner(admin: SupabaseClient, outboxId: string): Promise<string | null> {
+  const { data, error } = await admin
+    .from("pending_agent_replies")
+    .select("user_id")
+    .eq("id", outboxId)
+    .maybeSingle();
+  if (error || !data) {
+    console.error(`[outbox] could not read the owner of ${outboxId}: ${error?.message ?? "missing"}`);
+    return null;
+  }
+  return typeof data.user_id === "string" ? data.user_id : null;
+}
+
+/**
+ * Moves the row, bound to the tenant it belongs to.
+ *
+ * The tenant the caller names wins; a caller that names none gets the row's own. A row
+ * whose tenant cannot be read is not moved at all: the move is bound to a tenant, and a
+ * move without one is not a move this build is allowed to make.
+ */
+async function advanceOwnedReply(
+  admin: SupabaseClient,
+  outboxId: string,
+  userId: string | null | undefined,
+  transition: Omit<ReplyTransition, "id" | "userId">,
+): Promise<boolean> {
+  const owner = userId ?? await rowOwner(admin, outboxId);
+  if (!owner) {
+    console.error(
+      `[outbox] ${transition.from} -> ${transition.to} refused for ${outboxId}: the row's tenant is unknown`,
+    );
+    return false;
+  }
+  return await advanceReply(admin, { ...transition, id: outboxId, userId: owner });
+}
+
+/**
  * Decides what this invocation may do with the row, and takes ownership if it may generate.
  *
  * `pending -> running` is a confirmed transition, made BEFORE the model chain and the tool
@@ -79,10 +125,11 @@ export type OutboxEntry =
 export async function takeOutboxRow(
   admin: SupabaseClient,
   outboxId: string,
+  userId?: string,
 ): Promise<OutboxEntry> {
   const { data: row, error } = await admin
     .from("pending_agent_replies")
-    .select("status, generated_reply, generated_tool_calls, generated_kind")
+    .select("status, generated_reply, generated_tool_calls, generated_kind, user_id")
     .eq("id", outboxId)
     .maybeSingle();
   if (error || !row) return { mode: "refuse", status: error ? `lookup failed: ${error.message}` : "missing" };
@@ -95,7 +142,13 @@ export async function takeOutboxRow(
       kind: row.generated_kind === "human_mode_ack" ? "human_mode_ack" : "reply",
     };
   }
-  if (row.status === "pending" && await advanceReply(admin, { id: outboxId, from: "pending", to: "running" })) {
+  // The tenant that owns the row, so the move is bound to it. The caller's own tenant
+  // wins: a row of another tenant is then refused rather than moved.
+  const owner = typeof row.user_id === "string" ? row.user_id : null;
+  if (
+    row.status === "pending" &&
+    await advanceOwnedReply(admin, outboxId, userId ?? owner, { from: "pending", to: "running" })
+  ) {
     return { mode: "generate" };
   }
   return { mode: "refuse", status: row.status };
@@ -178,9 +231,9 @@ export async function replaceStoredReply(
   admin: SupabaseClient,
   outboxId: string,
   replacement: { text: string; kind: StoredReplyKind },
+  userId?: string,
 ): Promise<boolean> {
-  return await advanceReply(admin, {
-    id: outboxId,
+  return await advanceOwnedReply(admin, outboxId, userId, {
     from: "ready_to_send",
     to: "ready_to_send",
     generatedReply: replacement.text,
@@ -262,9 +315,9 @@ async function sendAndSettle(
   outboxId: string,
   expected: { text: string; kind: StoredReplyKind },
   send: (text: string) => Promise<string>,
+  userId?: string,
 ): Promise<DeliveredReply> {
-  const claimed = await advanceReply(admin, {
-    id: outboxId,
+  const claimed = await advanceOwnedReply(admin, outboxId, userId, {
     from: "ready_to_send",
     to: "sending",
     expectedPayload: { text: expected.text, kind: storedKindValue(expected.kind) },
@@ -286,8 +339,7 @@ async function sendAndSettle(
   } catch (error) {
     // Only reached when this process survives the throw. A killed isolate runs no catch --
     // which is why `sending` is durable and this is a courtesy, not the guarantee.
-    await advanceReply(admin, {
-      id: outboxId,
+    await advanceOwnedReply(admin, outboxId, userId, {
       from: "sending",
       to: "delivery_unknown",
       error: (error as Error)?.message ?? String(error),
@@ -295,7 +347,7 @@ async function sendAndSettle(
     throw error;
   }
 
-  await advanceReply(admin, { id: outboxId, from: "sending", to: "sent" });
+  await advanceOwnedReply(admin, outboxId, userId, { from: "sending", to: "sent" });
   return { messageId: outboundMessageId, text: stored.text, kind: stored.kind };
 }
 
@@ -361,6 +413,7 @@ export async function deliverGeneratedReply(
     humanModeAck?: HumanModeAckClaim | null;
   },
   send: (text: string) => Promise<string>,
+  userId?: string,
 ): Promise<DeliveredReply> {
   const { text } = reply;
   if (reply.kind === "human_mode_ack" && !reply.humanModeAck) {
@@ -371,8 +424,7 @@ export async function deliverGeneratedReply(
     // tries again and the claim is taken with a token.
     throw new ReplyNotPersistedError("the notice has no acknowledgement claim to spend");
   }
-  const persisted = await advanceReply(admin, {
-    id: outboxId,
+  const persisted = await advanceOwnedReply(admin, outboxId, userId, {
     from: "running",
     to: "ready_to_send",
     generatedReply: text,
@@ -387,7 +439,7 @@ export async function deliverGeneratedReply(
     humanModeAck: reply.humanModeAck ?? null,
   });
   if (!persisted) throw new ReplyNotPersistedError();
-  return await sendAndSettle(admin, outboxId, { text, kind: reply.kind ?? "reply" }, send);
+  return await sendAndSettle(admin, outboxId, { text, kind: reply.kind ?? "reply" }, send, userId);
 }
 
 /**
@@ -402,8 +454,9 @@ export async function deliverStoredReply(
   outboxId: string,
   stored: { text: string; kind: StoredReplyKind },
   send: (text: string) => Promise<string>,
+  userId?: string,
 ): Promise<DeliveredReply> {
-  return await sendAndSettle(admin, outboxId, stored, send);
+  return await sendAndSettle(admin, outboxId, stored, send, userId);
 }
 
 /**
@@ -418,9 +471,10 @@ export async function releaseAfterError(
   admin: SupabaseClient,
   outboxId: string,
   outcome: { sideEffectsHappened: boolean; error: string },
+  userId?: string,
 ): Promise<void> {
   if (outcome.sideEffectsHappened) return;
-  await advanceReply(admin, { id: outboxId, from: "running", to: "pending", error: outcome.error });
+  await advanceOwnedReply(admin, outboxId, userId, { from: "running", to: "pending", error: outcome.error });
 }
 
 /**
@@ -441,10 +495,11 @@ export async function cancelOutboxRow(
   admin: SupabaseClient,
   outboxId: string,
   reason: string,
+  userId?: string,
 ): Promise<boolean> {
   const { data: row, error } = await admin
     .from("pending_agent_replies")
-    .select("status")
+    .select("status, user_id")
     .eq("id", outboxId)
     .maybeSingle();
   if (error || !row) {
@@ -460,7 +515,14 @@ export async function cancelOutboxRow(
     console.warn(`[outbox] refusing to cancel ${outboxId}: ${row.status} is past the point of no send`);
     return false;
   }
-  return await advanceReply(admin, { id: outboxId, from: row.status, to: "cancelled", error: reason });
+  // The caller's tenant wins; a caller that names none gets the row's own, so the move
+  // is bound to a tenant either way.
+  const owner = typeof row.user_id === "string" ? row.user_id : null;
+  return await advanceOwnedReply(admin, outboxId, userId ?? owner, {
+    from: row.status,
+    to: "cancelled",
+    error: reason,
+  });
 }
 
 const CANCELLABLE: readonly string[] = ["pending", "running", "ready_to_send"];
@@ -486,10 +548,11 @@ export async function settleOutboxRow(
   admin: SupabaseClient,
   outboxId: string,
   reason: string,
+  userId?: string,
 ): Promise<OutboxSettlement> {
   const { data: row, error } = await admin
     .from("pending_agent_replies")
-    .select("status")
+    .select("status, user_id")
     .eq("id", outboxId)
     .maybeSingle();
   if (error || !row) {
@@ -498,6 +561,13 @@ export async function settleOutboxRow(
   }
   // A row that is already terminal settles the work item whoever gets there.
   if (!CANCELLABLE.includes(row.status)) return "settled";
-  const cancelled = await advanceReply(admin, { id: outboxId, from: row.status, to: "cancelled", error: reason });
+  // The caller's tenant wins; a caller that names none gets the row's own, so the move
+  // is bound to a tenant either way.
+  const owner = typeof row.user_id === "string" ? row.user_id : null;
+  const cancelled = await advanceOwnedReply(admin, outboxId, userId ?? owner, {
+    from: row.status,
+    to: "cancelled",
+    error: reason,
+  });
   return cancelled ? "cancelled" : "unsettled";
 }

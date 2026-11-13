@@ -92,9 +92,22 @@ export interface EscalationAftermath {
   staffReplies: number;
   /** The text of those sends, as history turns. */
   staffTurns: StoredTurn[];
+  /**
+   * The window could not be read, so its state is unknown.
+   *
+   * A failed read is NOT an absent window: the marker may well be set, and the apology
+   * and the staff context that go with it are still owed. A turn that read it may not
+   * answer as if the customer had never waited.
+   */
+  readFailed: boolean;
 }
 
-export const NO_AFTERMATH: EscalationAftermath = { since: null, staffReplies: 0, staffTurns: [] };
+export const NO_AFTERMATH: EscalationAftermath = {
+  since: null,
+  staffReplies: 0,
+  staffTurns: [],
+  readFailed: false,
+};
 
 /**
  * What the aftermath settlement did, so the caller can put the marker back when the
@@ -117,6 +130,15 @@ export interface AftermathSettlement {
   staffReadFailed: boolean;
   /** The staff context could not be stored, so the marker has to come back. */
   staffWriteFailed: boolean;
+  /**
+   * The window's state could not be read at all.
+   *
+   * Unlike a staff read that failed -- where the marker is known and only its context is
+   * missing -- nothing here says whether a window is owed. The reply may therefore not go
+   * out as if the customer had never waited: the caller fails the turn and the outbox
+   * retries it, so the apology and the staff context are still owed.
+   */
+  windowReadFailed: boolean;
 }
 
 /**
@@ -295,7 +317,7 @@ export async function settleClosedGate(input: {
   // Terminal for the work item: a closed gate is a decision, and recovery re-driving
   // the row would only reach the same gate.
   if (input.outboxId) {
-    const settled = await settleOutboxRow(input.admin, input.outboxId, input.gateReason);
+    const settled = await settleOutboxRow(input.admin, input.outboxId, input.gateReason, input.turn.userId);
     if (settled === "unsettled") {
       // The row is still open, so the work item is NOT done. Reporting it as skipped
       // would tell the outbox the question was handled while the row is still there
@@ -343,6 +365,16 @@ export type ClosedGateDecision =
  * claim is not taken and nothing is settled. The outbox retries, and the row is read
  * again.
  *
+ * The claim decides what may be settled with the row:
+ *
+ *   * "claimed" is this turn's notice to deliver;
+ *   * "window" is another worker's notice, in whatever state it is in. The row is left
+ *     alone: it may be the row that worker is about to persist the notice into, and
+ *     cancelling it would take the notice away from it;
+ *   * "delivered" and "none" with a row that holds the notice mean the notice never
+ *     went out. It is delivered from the row, because a durable notice that is
+ *     cancelled is a promise the customer never hears.
+ *
  * The claim is taken AFTER the row is classified, so the claim is only ever spent on a
  * notice this turn is going to deliver, and it is a LEASE: a turn that dies before the
  * notice is durable hands it back after the lease lapses.
@@ -382,19 +414,25 @@ export async function settleClosedGateNotice(input: {
     return await noticeUnderClaim(input, claim.claimToken, peeked);
   }
 
+  if (claim.result === "window") {
+    // Another worker holds the notice's claim, and it is taking, persisting or sending
+    // the notice. The row is left alone whatever it holds: cancelling it would take the
+    // notice away from that worker, and the notice would be owed to nobody. The work
+    // item stays unsettled, so the outbox tries again once the lease has lapsed or the
+    // notice has gone out.
+    return { kind: "retryable", error: "the human-mode notice is being delivered by another turn" };
+  }
+
   if (peeked.kind === "human_mode_ack" && peeked.text !== null) {
-    if (claim.result === "window") {
-      // Another worker holds the notice's claim and is delivering it. The row is left
-      // alone: cancelling it would take the notice away from that worker.
-      return { kind: "retryable", error: "the human-mode notice is being delivered by another turn" };
-    }
-    if (claim.result === "delivered") {
-      // The notice became durable, and the row says it never went out: the worker that
-      // completed the claim was killed between the completion and the send. The stored
-      // notice is delivered from the row -- settling the row here would swallow it, and
-      // the customer would never learn that a human has their conversation.
-      return { kind: "notice", text: peeked.text, fromRow: true, claimToken: null };
-    }
+    // The row holds the notice the customer was promised, and the notice never went
+    // out. It is delivered from the row, exactly as it was persisted: settling the row
+    // here would swallow it for good and the customer would never learn that a human
+    // has their conversation.
+    //
+    // "delivered" is the worker that persisted the notice dying between the completion
+    // and the send. "none" is the bounded window expiring before the notice could be
+    // recovered -- the promise outlives the window, so the notice is still owed.
+    return { kind: "notice", text: peeked.text, fromRow: true, claimToken: null };
   }
 
   // Nothing is owed here: the window was notified already, the notice was delivered, or
@@ -430,10 +468,15 @@ async function noticeUnderClaim(
   if (row.text !== null && input.outboxId) {
     // The row holds an answer written while the gate was open. The notice takes its
     // place in the row: the row stays the durable record of what the customer is owed.
-    const replaced = await replaceStoredReply(input.admin, input.outboxId, {
-      text: notice,
-      kind: "human_mode_ack",
-    });
+    const replaced = await replaceStoredReply(
+      input.admin,
+      input.outboxId,
+      {
+        text: notice,
+        kind: "human_mode_ack",
+      },
+      input.turn.userId,
+    );
     if (!replaced) {
       return { kind: "retryable", error: "the stored answer could not be replaced by the notice" };
     }
@@ -496,6 +539,9 @@ async function settleUnderClosedGate(
  *
  * A marker that is already leased by a live claim is not handed out twice.
  *
+ * A claim that could not be read is "failed", never "absent": the marker may still be
+ * set, and the window it belongs to is still owed.
+ *
  * The claim comes with a TOKEN: the lease stamp it was taken with. Two workers that
  * leased the same marker hold the same marker, so the marker alone cannot say which
  * lease a release or a completion is about. The token can, and every takeover writes a
@@ -506,7 +552,7 @@ export async function claimUnansweredEscalation(
   admin: SupabaseClient,
   scope: HandoffScope,
   threadId: string,
-): Promise<{ marker: string | null; token: string | null; claimed: boolean }> {
+): Promise<{ marker: string | null; token: string | null; claimed: boolean; failed: boolean }> {
   const { data, error } = await admin.rpc("claim_unanswered_escalation", {
     p_thread_id: threadId,
     p_user_id: scope.userId,
@@ -514,15 +560,26 @@ export async function claimUnansweredEscalation(
   });
   if (error) {
     console.error("[ai-agent-reply] unanswered-escalation claim failed:", error.message);
-    return { marker: null, token: null, claimed: false };
+    // The claim could not be read, so the window's state is unknown: the marker may
+    // still be set. This is NOT an absent window, and the caller is told so.
+    return { marker: null, token: null, claimed: false, failed: true };
   }
   const claim = (data ?? {}) as { marker?: unknown; token?: unknown };
   const marker = typeof claim.marker === "string" ? claim.marker : null;
   const token = typeof claim.token === "string" ? claim.token : null;
-  // A lease without a token is a lease nobody can act on: the marker alone would let a
-  // stale worker release the claim that replaced it.
-  if (marker === null || token === null) return { marker: null, token: null, claimed: false };
-  return { marker, token, claimed: true };
+  if (marker === null && token === null) {
+    // No marker, or the marker is leased by a live claim: there is nothing to act on,
+    // and that much is known.
+    return { marker: null, token: null, claimed: false, failed: false };
+  }
+  if (marker === null || token === null) {
+    // A lease nobody can name: the marker alone would let a stale worker release the
+    // claim that replaced it. The state cannot be read, so it is not read as "no
+    // marker" either.
+    console.error("[ai-agent-reply] unanswered-escalation claim returned an unreadable lease");
+    return { marker: null, token: null, claimed: false, failed: true };
+  }
+  return { marker, token, claimed: true, failed: false };
 }
 
 /**
@@ -632,8 +689,11 @@ async function readStaffReplies(
  * before sending leaves it for the next one.
  *
  * Read fresh rather than from the thread upsert: the override read that runs beside the
- * upsert is what writes the marker. A failed staff read reports no marker: claiming a delay
- * staff may in fact have answered is worse than omitting the apology.
+ * upsert is what writes the marker.
+ *
+ * A failed read is NOT an absent window. The marker may well be set, and the apology and
+ * the staff context that go with it are still owed, so the failure is reported as one:
+ * the caller may not answer as if the customer had never waited.
  */
 export async function readEscalationAftermath(
   admin: SupabaseClient,
@@ -648,14 +708,19 @@ export async function readEscalationAftermath(
     .maybeSingle();
   if (error) {
     console.error("[ai-agent-reply] unanswered-escalation read failed:", error.message);
-    return NO_AFTERMATH;
+    return { since: null, staffReplies: 0, staffTurns: [], readFailed: true };
   }
   const since = marked?.unanswered_escalation_since;
   if (typeof since !== "string") return NO_AFTERMATH;
   const staff = await readStaffReplies(admin, scope, since);
-  if (staff.failed) return NO_AFTERMATH;
+  if (staff.failed) {
+    // The window is known, its staff context is not. Claiming a delay staff may in fact
+    // have answered is worse than omitting the apology -- but the window is still owed,
+    // so the failure is reported instead of being read as "no window".
+    return { since, staffReplies: 0, staffTurns: [], readFailed: true };
+  }
 
-  return { since, staffReplies: staff.rows.length, staffTurns: staffTurnsSince(staff.rows, since) };
+  return { since, staffReplies: staff.rows.length, staffTurns: staffTurnsSince(staff.rows, since), readFailed: false };
 }
 
 /**
@@ -670,6 +735,9 @@ export async function readEscalationAftermath(
  * The marker is LEASED, not taken: it stays set until the reply it belongs to is durable,
  * so a turn that dies here leaves the apology owed rather than lost. A window that could
  * not be read hands the lease straight back for the same reason.
+ *
+ * A window whose state could not be read at all is reported as such: the caller may not
+ * answer as if the customer had never waited, so the turn fails and is retried instead.
  */
 export async function settleEscalationAftermath(
   admin: SupabaseClient,
@@ -677,12 +745,53 @@ export async function settleEscalationAftermath(
   aftermath: EscalationAftermath,
   replyText: string,
 ): Promise<AftermathSettlement> {
+  if (aftermath.readFailed) {
+    // The window's state is unknown: the marker may be set, and the apology and the
+    // staff context that go with it are still owed. Nothing is claimed about it, and the
+    // reply is not allowed to go out as if the customer had never waited.
+    return {
+      replyText,
+      marker: null,
+      claimToken: null,
+      staffReadFailed: false,
+      staffWriteFailed: false,
+      windowReadFailed: true,
+    };
+  }
   if (aftermath.since === null) {
-    return { replyText, marker: null, claimToken: null, staffReadFailed: false, staffWriteFailed: false };
+    return {
+      replyText,
+      marker: null,
+      claimToken: null,
+      staffReadFailed: false,
+      staffWriteFailed: false,
+      windowReadFailed: false,
+    };
   }
   const claim = await claimUnansweredEscalation(admin, context.scope, context.threadId);
+  if (claim.failed) {
+    // The claim could not be read: the marker may still be set, so the window is still
+    // owed. It is not read as an absent window.
+    return {
+      replyText,
+      marker: null,
+      claimToken: null,
+      staffReadFailed: false,
+      staffWriteFailed: false,
+      windowReadFailed: true,
+    };
+  }
   if (!claim.claimed || claim.marker === null || claim.token === null) {
-    return { replyText, marker: null, claimToken: null, staffReadFailed: false, staffWriteFailed: false };
+    // No marker, or another worker holds the lease on it: that worker is making the
+    // apology, and this turn's reply says nothing about the window.
+    return {
+      replyText,
+      marker: null,
+      claimToken: null,
+      staffReadFailed: false,
+      staffWriteFailed: false,
+      windowReadFailed: false,
+    };
   }
   const taken = claim.marker;
   const token = claim.token;
@@ -692,14 +801,35 @@ export async function settleEscalationAftermath(
     // The window could not be read, so nothing is claimed about it: no apology
     // (staff may have answered) and no staff turns to store. The lease goes back,
     // so the next turn reads the window again instead of finding it consumed.
-    return { replyText, marker: taken, claimToken: token, staffReadFailed: true, staffWriteFailed: false };
+    return {
+      replyText,
+      marker: taken,
+      claimToken: token,
+      staffReadFailed: true,
+      staffWriteFailed: false,
+      windowReadFailed: false,
+    };
   }
   const apology = escalationApologyText(taken, staff.rows.length, context.language);
   if (apology) {
-    return { replyText: withOpening(replyText, apology), marker: taken, claimToken: token, staffReadFailed: false, staffWriteFailed: false };
+    return {
+      replyText: withOpening(replyText, apology),
+      marker: taken,
+      claimToken: token,
+      staffReadFailed: false,
+      staffWriteFailed: false,
+      windowReadFailed: false,
+    };
   }
   if (!staff.rows.length) {
-    return { replyText, marker: taken, claimToken: token, staffReadFailed: false, staffWriteFailed: false };
+    return {
+      replyText,
+      marker: taken,
+      claimToken: token,
+      staffReadFailed: false,
+      staffWriteFailed: false,
+      windowReadFailed: false,
+    };
   }
 
   const { error: staffWriteError } = await admin.from("ai_thread_messages").insert(
@@ -715,9 +845,23 @@ export async function settleEscalationAftermath(
     console.error("[ai-agent-reply] staff turn write failed:", staffWriteError.message);
     // The staff context is still owed to the thread. The marker carries it, so the
     // lease goes back and the next turn can store the staff replies that this one lost.
-    return { replyText, marker: taken, claimToken: token, staffReadFailed: false, staffWriteFailed: true };
+    return {
+      replyText,
+      marker: taken,
+      claimToken: token,
+      staffReadFailed: false,
+      staffWriteFailed: true,
+      windowReadFailed: false,
+    };
   }
-  return { replyText, marker: taken, claimToken: token, staffReadFailed: false, staffWriteFailed: false };
+  return {
+    replyText,
+    marker: taken,
+    claimToken: token,
+    staffReadFailed: false,
+    staffWriteFailed: false,
+    windowReadFailed: false,
+  };
 }
 
 /**
@@ -726,6 +870,9 @@ export async function settleEscalationAftermath(
  * A staff context that could not be read or stored resolves NOTHING: the marker is what
  * carries that context, so the lease goes back and a later turn stores the staff replies
  * this one lost. Consuming the marker here would drop them for good.
+ *
+ * A window whose state could not be read resolves nothing either: there is no marker to
+ * name, and the window may still be owed.
  *
  * Set, the marker is consumed by the SAME statement that writes the reply, so a worker
  * killed between the two cannot leave the apology owed a second time. The lease token
@@ -739,6 +886,7 @@ export function escalationForReply(
 ): ReplyEscalation | null {
   if (!settlement.marker) return null;
   if (settlement.staffWriteFailed || settlement.staffReadFailed) return null;
+  if (settlement.windowReadFailed) return null;
   if (!settlement.claimToken) return null;
   return {
     threadId: scope.threadId,

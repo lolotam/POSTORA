@@ -32,6 +32,8 @@ function stubOutbox(
       generated_reply?: string | null;
       generated_tool_calls?: unknown[] | null;
       generated_kind?: string | null;
+      /** The tenant that owns the row. Every transition is bound to it. */
+      user_id?: string;
     }
     | null,
   options: {
@@ -42,7 +44,7 @@ function stubOutbox(
     ackClaimLive?: boolean;
   } = {},
 ) {
-  const row = initial ? { ...initial } : null;
+  const row = initial ? { user_id: "user-1", ...initial } : null;
   const transitions: string[] = [];
   /** The escalation windows a reply resolved, in the order they were written. */
   const escalations: Array<{
@@ -57,15 +59,21 @@ function stubOutbox(
   const admin = {
     rpc: (name: string, args: Record<string, unknown>): RpcResult => {
       if (
-        name !== "advance_agent_reply" &&
-        name !== "advance_agent_reply_kind" &&
-        name !== "claim_agent_reply_for_delivery" &&
+        name !== "advance_agent_reply_for_owner" &&
+        name !== "advance_agent_reply_kind_for_owner" &&
+        name !== "claim_agent_reply_for_delivery_for_owner" &&
         name !== "persist_human_mode_ack_and_complete_claim" &&
         name !== "persist_agent_reply_and_complete_escalation"
       ) {
         throw new Error(`unexpected rpc ${name}`);
       }
-      if (name === "claim_agent_reply_for_delivery") {
+      // Every transition is bound to a tenant: the row has to belong to it. A row of
+      // another tenant is not moved, whatever state it is in.
+      if (String(args.p_user_id ?? "") !== String(row?.user_id ?? "")) {
+        transitions.push(`REFUSED ${args.p_from}->${args.p_to}`);
+        return Promise.resolve({ data: false, error: null });
+      }
+      if (name === "claim_agent_reply_for_delivery_for_owner") {
         // The claim carries the payload the caller read: the row is only moved while it
         // still holds exactly that text and that kind. A row whose payload was replaced
         // is not moved, and nothing is sent.
@@ -200,7 +208,7 @@ Deno.test("a delivery whose text was replaced in the meantime is NOT sent", asyn
   let calls = 0;
   stub.rpc = (name: string, args: Record<string, unknown>) => {
     calls += 1;
-    if (calls === 1 && name === "claim_agent_reply_for_delivery") {
+    if (calls === 1 && name === "claim_agent_reply_for_delivery_for_owner") {
       // The closed gate takes the row's place with the notice it owes.
       row!.generated_reply = NOTICE;
       row!.generated_kind = "human_mode_ack";
@@ -543,4 +551,35 @@ Deno.test("releaseAfterError: a tool fired -> stays running, for a human", async
   const { admin, row } = stubOutbox({ status: "running" });
   await releaseAfterError(admin, "row-1", { sideEffectsHappened: true, error: "provider 503" });
   assertEquals(row?.status, "running");
+});
+
+Deno.test("a move for another tenant is refused, and the row is untouched", async () => {
+  // Every transition is bound to a tenant: the row has to belong to the one the caller
+  // names. A row of another tenant is not moved, whatever state it is in -- and nothing
+  // is sent on it either.
+  const { admin, row, transitions } = stubOutbox({ status: "running" });
+  let sent = 0;
+  await assertRejects(
+    () => deliverGeneratedReply(
+      admin,
+      "row-1",
+      REPLY,
+      () => { sent++; return Promise.resolve("x"); },
+      "user-2",
+    ),
+    Error,
+    "persist",
+  );
+  assertEquals(sent, 0);
+  assertEquals(row?.status, "running");
+  assertEquals(transitions, ["REFUSED running->ready_to_send"]);
+});
+
+Deno.test("a move that names no tenant takes the row's own", async () => {
+  // A caller that does not know whose reply it is moving gets the row's own tenant, so
+  // the move is bound to a tenant either way.
+  const { admin, row, transitions } = stubOutbox({ status: "running" });
+  await deliverGeneratedReply(admin, "row-1", REPLY, () => Promise.resolve("wamid.6"));
+  assertEquals(row?.status, "sent");
+  assertEquals(transitions, ["running->ready_to_send", "ready_to_send->sending", "sending->sent"]);
 });

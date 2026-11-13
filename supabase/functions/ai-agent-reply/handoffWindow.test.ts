@@ -70,6 +70,12 @@ function adminStub(options: {
   ackClaim?: { result: string; claimToken?: string | null };
   /** The RPC fails: the state is unknown. */
   claimError?: { message: string } | null;
+  /** The thread marker cannot be read, so the window's state is unknown. */
+  markerReadError?: { message: string } | null;
+  /** The staff window cannot be read, so its context is unknown. */
+  staffReadError?: { message: string } | null;
+  /** The escalation claim RPC fails, so the window's state is unknown. */
+  escalationClaimError?: { message: string } | null;
 } = {}) {
   const calls: Array<{ kind: string; args?: Record<string, unknown> }> = [];
   const staff = options.staff ?? [];
@@ -87,7 +93,7 @@ function adminStub(options: {
         if (table !== "pending_agent_replies") {
           return Promise.resolve({
             data: table === "ai_threads" ? { unanswered_escalation_since: options.marker ?? null } : null,
-            error: null,
+            error: table === "ai_threads" ? options.markerReadError ?? null : null,
           });
         }
         outboxReads += 1;
@@ -108,7 +114,10 @@ function adminStub(options: {
         });
       };
       query.then = (resolve: (value: unknown) => void) =>
-        resolve({ data: table === "whatsapp_messages" ? staff : [], error: null });
+        resolve({
+          data: table === "whatsapp_messages" ? staff : [],
+          error: table === "whatsapp_messages" ? options.staffReadError ?? null : null,
+        });
       return {
         select: () => query,
         insert: (payload?: Record<string, unknown>) => {
@@ -127,6 +136,9 @@ function adminStub(options: {
         });
       }
       if (fn === "claim_unanswered_escalation") {
+        if (options.escalationClaimError) {
+          return Promise.resolve({ data: null, error: options.escalationClaimError });
+        }
         // The claim comes with the marker AND the token of the lease it took: the marker
         // alone cannot say which lease a release or a completion is about.
         return Promise.resolve({
@@ -360,6 +372,78 @@ Deno.test("a staff context that could not be stored sends the marker back", asyn
   assertEquals(settlement.claimToken, CLAIM_TOKEN);
 });
 
+// A database error is not an absent window. The marker may well be set, and the apology
+// and the staff context that go with it are still owed -- so a turn that cannot read the
+// window may not answer as if the customer had never waited.
+Deno.test("a claim that could not be read is not an absent window", async () => {
+  const since = "2026-11-12T08:00:00.000Z";
+  const { admin } = adminStub({
+    marker: since,
+    // The lease could not be taken: the window's state is unknown.
+    escalationClaimError: { message: "connection reset" },
+  });
+  const aftermath = await readEscalationAftermath(admin, SCOPE, THREAD_ID);
+  assertEquals(aftermath.since, since);
+
+  const settlement = await settleEscalationAftermath(
+    admin,
+    { scope: SCOPE, threadId: THREAD_ID, language: "ar" },
+    aftermath,
+    "كريم الكعب متوفر",
+  );
+
+  // The window is still owed, and the caller is told so.
+  assertEquals(settlement.windowReadFailed, true);
+  assertEquals(settlement.marker, null);
+  assertEquals(settlement.claimToken, null);
+  // The reply resolves no window: it may not consume a marker nobody could name.
+  assertEquals(
+    escalationForReply(settlement, { threadId: THREAD_ID, userId: SCOPE.userId }),
+    null,
+  );
+});
+
+Deno.test("a marker that could not be read is not an absent window", async () => {
+  const { admin } = adminStub({ markerReadError: { message: "db down" } });
+
+  const aftermath = await readEscalationAftermath(admin, SCOPE, THREAD_ID);
+
+  assertEquals(aftermath.readFailed, true);
+  assertEquals(aftermath.since, null);
+
+  const settlement = await settleEscalationAftermath(
+    admin,
+    { scope: SCOPE, threadId: THREAD_ID, language: "ar" },
+    aftermath,
+    "كريم الكعب متوفر",
+  );
+
+  // The turn may not answer as if the customer had never waited.
+  assertEquals(settlement.windowReadFailed, true);
+  assertEquals(settlement.marker, null);
+});
+
+Deno.test("a staff window that could not be read is not an absent window", async () => {
+  const since = "2026-11-12T08:00:00.000Z";
+  const { admin } = adminStub({ marker: since, staffReadError: { message: "db down" } });
+
+  const aftermath = await readEscalationAftermath(admin, SCOPE, THREAD_ID);
+
+  // The marker is known; only the staff context is missing.
+  assertEquals(aftermath.readFailed, true);
+  assertEquals(aftermath.since, since);
+
+  const settlement = await settleEscalationAftermath(
+    admin,
+    { scope: SCOPE, threadId: THREAD_ID, language: "ar" },
+    aftermath,
+    "كريم الكعب متوفر",
+  );
+
+  assertEquals(settlement.windowReadFailed, true);
+  assertEquals(settlement.marker, null);
+});
+
 // A customer wrote during a window that was already notified. The assistant is silent
 // for the whole window, so that turn is the only durable record of a question nobody
 // answered. When the write fails the question is lost for good, so the work item must
@@ -381,7 +465,7 @@ Deno.test("a customer turn that could not be stored keeps the work item retryabl
   // outbox's own retry path may try again.
   assertEquals(settlement.cancelWorkItem, false);
   assertEquals(
-    calls.find((call) => call.kind === "rpc:advance_agent_reply"),
+    calls.find((call) => call.kind === "rpc:advance_agent_reply_for_owner"),
     undefined,
     "the work item must not be cancelled",
   );
@@ -427,7 +511,7 @@ Deno.test("a closed gate never delivers an answer the row stored under an open g
   assertEquals(decision.text.includes("كريم"), false, "the stored answer may never be delivered");
   assertEquals(decision.text.includes("تم تحويل محادثتك"), true);
   assertEquals(decision.fromRow, true);
-  const replace = calls.find((call) => call.kind === "rpc:advance_agent_reply_kind");
+  const replace = calls.find((call) => call.kind === "rpc:advance_agent_reply_kind_for_owner");
   assert(replace, "the notice has to take the row's place");
   assertEquals(replace.args?.p_generated_kind, "human_mode_ack");
 });
@@ -489,6 +573,43 @@ Deno.test("a notice that was completed but never sent is delivered from the row"
   assertEquals(decision.text, "تم تحويل محادثتك لفريقنا");
   assertEquals(decision.fromRow, true);
   // The row is not cancelled: the notice it holds is still owed.
+  assertEquals(
+    calls.find((call) => call.args?.p_to === "cancelled"),
+    undefined,
+    "the row holding the notice must not be cancelled",
+  );
+});
+
+// The bounded window can end before the notice is recovered: the worker that persisted
+// the notice died, the window expired, and a later turn finds the promise in the row
+// with no window left to claim. Cancelling the row there swallows the promise for good
+// -- the customer never learns that a human has their conversation -- so the stored
+// notice is delivered from the row instead.
+Deno.test("a notice the bounded window outlived is delivered from the row", async () => {
+  const { admin, calls } = adminStub({
+    outboxStatus: "ready_to_send",
+    storedReply: { text: "تم تحويل محادثتك لفريقنا", kind: "human_mode_ack" },
+    // The window is gone: there is nothing left to claim.
+    ackClaim: { result: "none" },
+  });
+
+  const decision = await settleClosedGateNotice({
+    admin,
+    scope: SCOPE,
+    outboxId: "outbox-1",
+    gateReason: "mode_human_first",
+    isComment: false,
+    language: "ar",
+    threadId: THREAD_ID,
+    turn: { userId: SCOPE.userId, content: "عندكم كريم الكعب؟" },
+  });
+
+  // The promise is kept: the notice the customer was given goes out.
+  assertEquals(decision.kind, "notice");
+  if (decision.kind !== "notice") return;
+  assertEquals(decision.text, "تم تحويل محادثتك لفريقنا");
+  assertEquals(decision.fromRow, true);
+  // And the row that holds it is not cancelled.
   assertEquals(
     calls.find((call) => call.args?.p_to === "cancelled"),
     undefined,
@@ -620,6 +741,40 @@ Deno.test("a notice another worker is delivering is left to that worker", async 
   assertEquals(decision.kind, "retryable");
 });
 
+// Two turns for the same work item. The winner holds the claim and is about to persist
+// the notice into the row it took into `running`; the loser arrives, sees the claim
+// already taken and the notice not yet persisted. The loser may not cancel that row:
+// the winner's own persist would then be refused, and the notice would be owed to
+// nobody.
+Deno.test("the turn that lost the claim cannot cancel the row the winner holds", async () => {
+  const { admin, calls } = adminStub({
+    // The row is taken into `running` by the winner, and it holds no notice yet.
+    outboxStatus: "running",
+    storedReply: null,
+    // Another worker holds the claim.
+    ackClaim: { result: "window" },
+  });
+
+  const decision = await settleClosedGateNotice({
+    admin,
+    scope: SCOPE,
+    outboxId: "outbox-1",
+    gateReason: "mode_human_first",
+    isComment: false,
+    language: "ar",
+    threadId: THREAD_ID,
+    turn: { userId: SCOPE.userId, content: "عندكم كريم الكعب؟" },
+  });
+
+  // The row another worker is holding is left alone, and the work item stays unsettled.
+  assertEquals(decision.kind, "retryable");
+  assertEquals(
+    calls.find((call) => call.args?.p_to === "cancelled"),
+    undefined,
+    "the row another worker holds must not be cancelled",
+  );
+});
+
 // A claim that could not be read leaves the state unknown, so nothing may be settled on
 // the strength of it: the work item stays unsettled and the customer's question is not
 // lost over a hiccup.
@@ -722,6 +877,7 @@ Deno.test("the reply resolves the escalation window it was owed", () => {
         claimToken: CLAIM_TOKEN,
         staffReadFailed: false,
         staffWriteFailed: false,
+        windowReadFailed: false,
       },
       { threadId: THREAD_ID, userId: SCOPE.userId },
     ),
@@ -737,6 +893,7 @@ Deno.test("the reply resolves the escalation window it was owed", () => {
         claimToken: null,
         staffReadFailed: false,
         staffWriteFailed: false,
+        windowReadFailed: false,
       },
       { threadId: THREAD_ID, userId: SCOPE.userId },
     ),
@@ -753,6 +910,7 @@ Deno.test("the reply resolves the escalation window it was owed", () => {
         claimToken: null,
         staffReadFailed: false,
         staffWriteFailed: false,
+        windowReadFailed: false,
       },
       { threadId: THREAD_ID, userId: SCOPE.userId },
     ),
@@ -774,6 +932,7 @@ Deno.test("a staff context that failed leaves the escalation window owed", () =>
         claimToken: CLAIM_TOKEN,
         staffReadFailed: true,
         staffWriteFailed: false,
+        windowReadFailed: false,
       },
       { threadId: THREAD_ID, userId: SCOPE.userId },
     ),
@@ -788,6 +947,7 @@ Deno.test("a staff context that failed leaves the escalation window owed", () =>
         claimToken: CLAIM_TOKEN,
         staffReadFailed: false,
         staffWriteFailed: true,
+        windowReadFailed: false,
       },
       { threadId: THREAD_ID, userId: SCOPE.userId },
     ),

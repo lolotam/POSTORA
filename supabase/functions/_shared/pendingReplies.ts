@@ -179,7 +179,13 @@ async function findExistingRow(
 export interface ReplyEscalation {
   /** The thread whose marker this reply resolves. */
   threadId: string;
-  /** The thread's owner. Tenancy is structural: the marker is only cleared for this user. */
+  /**
+   * The thread's owner. Tenancy is structural: the marker is only cleared for this user.
+   *
+   * It is the SAME tenant as the transition's `userId`: the reply and the window it
+   * resolves are one tenant's, and a transition whose claim names another tenant is
+   * refused before the database is asked.
+   */
   userId: string;
   /** The marker this turn leased. A newer window's marker is left alone. */
   since: string;
@@ -248,6 +254,16 @@ export interface ReplyTransition {
   id: string;
   from: PendingReplyStatus;
   to: PendingReplyStatus;
+  /**
+   * The tenant that owns the row this transition moves.
+   *
+   * Required, and not decoration: every statement that moves a row binds it to this
+   * tenant, so a row of another tenant is refused the way a row that is not in the
+   * from-state is refused. The edge functions run as the service role, which bypasses
+   * RLS, so the database has nothing else to go by: the caller has to say whose reply
+   * it is moving.
+   */
+  userId: string;
   generatedReply?: string | null;
   /** The tools that produced `generatedReply`, so a redelivery can record them truthfully. */
   generatedToolCalls?: unknown[] | null;
@@ -293,16 +309,30 @@ export async function advanceReply(
 ): Promise<boolean> {
   // Named fields rather than positional: `from` and `to` are adjacent same-typed strings, and
   // a transposition would silently move the row backwards through the state machine.
-  const { id, from, to } = transition;
+  const { id, from, to, userId } = transition;
   const generatedReply = transition.generatedReply ?? null;
   const error = transition.error?.slice(0, 500) ?? null;
   const toolCalls = transition.generatedToolCalls?.length ? transition.generatedToolCalls : null;
+
+  // The escalation and the acknowledgement claim name a tenant of their own, and the
+  // statement that spends them binds the row to the tenant this transition claims. Two
+  // different tenants mean the row and the claim are not one fact, so the transition is
+  // refused here rather than half-written by the database.
+  const claimTenant = transition.escalation?.userId ?? transition.humanModeAck?.userId;
+  if (claimTenant !== undefined && claimTenant !== userId) {
+    console.error(`[outbox] ${from} -> ${to} refused for ${id}: the claim names another tenant`);
+    return false;
+  }
 
   // One RPC per KIND of transition, because each of them carries something the others do
   // not: the escalation window, the acknowledgement claim, or the payload the row is
   // expected to hold. The arguments are named exactly as the function declares them --
   // PostgREST matches a call by its argument names, and an argument the function does
   // not have is an error, not a default.
+  //
+  // Every one of them takes the tenant the row belongs to. That is the point of the
+  // change: a statement that moves a row binds it to the tenant the caller names, so a
+  // row id of another tenant is refused instead of moved.
   let rpc: string;
   let args: Record<string, unknown>;
   if (transition.escalation) {
@@ -317,7 +347,7 @@ export async function advanceReply(
       p_error: error,
       p_tool_calls: toolCalls,
       p_thread_id: transition.escalation.threadId,
-      p_user_id: transition.escalation.userId,
+      p_user_id: userId,
       p_since: transition.escalation.since,
       p_claim_token: transition.escalation.claimToken,
     };
@@ -333,7 +363,7 @@ export async function advanceReply(
       p_error: error,
       p_tool_calls: toolCalls,
       p_generated_kind: transition.generatedKind ?? null,
-      p_user_id: transition.humanModeAck.userId,
+      p_user_id: userId,
       p_platform: transition.humanModeAck.platform,
       p_conversation_id: transition.humanModeAck.conversationId,
       p_claim_token: transition.humanModeAck.claimToken,
@@ -341,18 +371,19 @@ export async function advanceReply(
   } else if (transition.expectedPayload) {
     // The delivery claim carries the payload the caller read, so a row whose text was
     // replaced in the meantime is not moved and nothing is sent.
-    rpc = "claim_agent_reply_for_delivery";
+    rpc = "claim_agent_reply_for_delivery_for_owner";
     args = {
       p_id: id,
       p_from: from,
       p_to: to,
       p_expected_reply: transition.expectedPayload.text,
       p_expected_kind: transition.expectedPayload.kind,
+      p_user_id: userId,
     };
   } else if (transition.generatedKind) {
     // The kind is written by the RPC that carries it, so a transition that does not need
     // one keeps working against a database that does not have the column yet.
-    rpc = "advance_agent_reply_kind";
+    rpc = "advance_agent_reply_kind_for_owner";
     args = {
       p_id: id,
       p_from: from,
@@ -361,9 +392,12 @@ export async function advanceReply(
       p_error: error,
       p_tool_calls: toolCalls,
       p_generated_kind: transition.generatedKind,
+      p_user_id: userId,
     };
   } else {
-    rpc = "advance_agent_reply";
+    // The plain transition. Not advance_agent_reply: the build that is live today calls
+    // that one, and a second arity of the same name would make its call ambiguous.
+    rpc = "advance_agent_reply_for_owner";
     args = {
       p_id: id,
       p_from: from,
@@ -371,6 +405,7 @@ export async function advanceReply(
       p_generated_reply: generatedReply,
       p_error: error,
       p_tool_calls: toolCalls,
+      p_user_id: userId,
     };
   }
   try {
@@ -379,7 +414,12 @@ export async function advanceReply(
       console.error(`[outbox] ${from} -> ${to} failed for ${id}: ${rpcError.message}`);
       return false;
     }
-    if (data !== true) console.warn(`[outbox] ${from} -> ${to} refused for ${id}: not in ${from}`);
+    // The database refuses a row that is not in the from-state AND a row that belongs to
+    // another tenant, and it says which one it is not: it says neither. The message says
+    // both, because a refusal is a refusal and the caller may not act on it either way.
+    if (data !== true) {
+      console.warn(`[outbox] ${from} -> ${to} refused for ${id}: not in ${from}, or not this tenant's row`);
+    }
     return data === true;
   } catch (error) {
     console.error(`[outbox] ${from} -> ${to} threw for ${id}:`, (error as Error)?.message ?? error);
