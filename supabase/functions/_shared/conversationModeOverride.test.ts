@@ -1,6 +1,6 @@
 // deno-lint-ignore-file no-import-prefix
 // supabase/functions/_shared/conversationModeOverride.test.ts
-import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
+import { assertEquals, assertRejects } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import {
   activeOverrideMode,
   escalationOverride,
@@ -111,15 +111,54 @@ Deno.test("reader: a manual row written after the read is not expired and wins",
   assertEquals(c.stored()?.expires_at, null);
 });
 
-Deno.test("reader: a failed expiry is logged, not fatal, and the expired row is ignored", async () => {
+Deno.test("reader: a failed expiry fails closed while the expired row is still there", async () => {
+  // The expiry RPC is the only thing that leaves the thread marked. When it fails, the
+  // marker is not durable, and a turn that goes on as if the window had ended cleanly
+  // loses the apology the customer is owed. The turn fails and is retried instead.
   const c = readerClient({ ...ROW, mode: "human_first", expires_at: "2026-09-13T09:00:00Z" }, { failExpire: true });
   const originalError = console.error;
   const logged: unknown[][] = [];
   console.error = (...args: unknown[]) => { logged.push(args); };
   try {
-    assertEquals(await resolveConversationOverride(c.admin, SCOPE, NOW), null);
+    await assertRejects(() => resolveConversationOverride(c.admin, SCOPE, NOW), Error, "marker is not durable");
   } finally {
     console.error = originalError;
   }
   assertEquals(logged.length, 1);
+  // The row is read again to tell the failures apart.
+  assertEquals(c.calls, ["read", "expire_conversation_mode", "read"]);
+});
+
+Deno.test("reader: a failed expiry still honours a takeover installed meanwhile", async () => {
+  // The expiry failed, but an operator installed a fresh human_first row after the first
+  // read. That takeover is real, so the assistant stays silent: reading it as "no
+  // override" would let it answer a chat a human has taken.
+  const c = readerClient(
+    { ...ROW, mode: "human_first", expires_at: "2026-09-13T09:00:00Z" },
+    { failExpire: true, afterFirstRead: () => ({ ...ROW, mode: "human_first", expires_at: null }) },
+  );
+  const originalError = console.error;
+  console.error = () => {};
+  try {
+    assertEquals(await resolveConversationOverride(c.admin, SCOPE, NOW), "human_first");
+  } finally {
+    console.error = originalError;
+  }
+  assertEquals(c.calls, ["read", "expire_conversation_mode", "read"]);
+});
+
+Deno.test("reader: a failed expiry that did land reads as no override", async () => {
+  // The RPC reported an error, but the write had already happened: the row is gone, so
+  // the window really is over and the turn may continue.
+  const c = readerClient(
+    { ...ROW, mode: "human_first", expires_at: "2026-09-13T09:00:00Z" },
+    { failExpire: true, afterFirstRead: () => null },
+  );
+  const originalError = console.error;
+  console.error = () => {};
+  try {
+    assertEquals(await resolveConversationOverride(c.admin, SCOPE, NOW), null);
+  } finally {
+    console.error = originalError;
+  }
 });

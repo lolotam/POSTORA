@@ -96,8 +96,18 @@ function scoped(query: any, scope: ConversationScope) {
  * have replaced it meanwhile, and that newer decision wins, so when nothing
  * was expired the row is read again and judged afresh. A failed read is
  * thrown, never turned into "no override": that would let the assistant
- * answer a chat a human has taken (AGENTS.md reviewer rule 3). A failed
- * expiry is logged and ignored; the row is merely ignored until next time.
+ * answer a chat a human has taken (AGENTS.md reviewer rule 3).
+ *
+ * A failed EXPIRY is not a cleanup that may be skipped either. The expiry RPC
+ * is the only thing that leaves the thread marked, so when it fails the marker
+ * is not durable yet and the turn must not go on as if the window had ended
+ * cleanly. The scoped row is read again to tell the two failures apart:
+ *
+ *   * an override an operator installed meanwhile is a real takeover and wins,
+ *     so that mode is returned and the assistant stays silent;
+ *   * the same expired row means the marker is still unstamped, so the turn
+ *     fails and is retried once the expiry lands;
+ *   * no row at all means the expiry did land, and the window is simply over.
  *
  * Expiry is the expire_conversation_mode RPC, not a plain delete: whichever
  * function happens to observe a silent (human_first) window ending must leave
@@ -128,6 +138,23 @@ export async function resolveConversationOverride(
   });
   if (expireError) {
     console.error("[conversation-mode] expired override cleanup failed:", String(expireError.message ?? expireError));
+    // The write that stamps the escalation marker failed, so its state is unknown.
+    // Read the scoped row again rather than guessing.
+    const { data: reread, error: rereadError } = await scoped(
+      admin.from("ai_conversation_modes").select("id, mode, expires_at"),
+      scope,
+    ).maybeSingle();
+    if (rereadError) throw rereadError;
+    const current = (reread ?? null) as StoredOverride | null;
+    const currentActive = activeOverrideMode(current, nowMs);
+    // A takeover installed meanwhile is a real human decision: it wins.
+    if (currentActive !== null) return currentActive;
+    if (current) {
+      // The window is still there and still expired: the marker was never stamped, so
+      // this turn fails and is retried once the expiry lands.
+      throw new Error("conversation mode expiry failed; the escalation marker is not durable yet");
+    }
+    // The row is gone: the expiry landed after all.
     return null;
   }
   if (expired === true) return null;
