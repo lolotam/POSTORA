@@ -43,7 +43,7 @@
 - **Human mode:** exactly one fixed acknowledgement per escalation. After it, silence until staff replies or the escalation expires.
 - **Product links:** copied verbatim from the catalog's `product_url`. Never invented.
 - **Not found:** retry with a looser query. Then ask for the product name or a photo. Escalate only on an explicit request or after two failed searches.
-- **RPC:** only named functions in `settings.rpc_allow_list`, only POST with a JSON object body, and always with the tool's anon key. `read_only_mode` stays true.
+- **RPC:** only named functions in `settings.rpc_allow_list`, only POST with a JSON object body, and always with the tool's anon key. `read_only_mode` stays true, and the CALL enforces it: the request asks PostgREST for a transaction it rolls back, and a target that does not apply that preference is refused rather than called.
 - No customer-visible string is produced by the model where the spec fixes the wording.
 - **Test command:**
   `deno test --allow-env --allow-read --allow-write --allow-net --no-check --node-modules-dir=none supabase/functions/<dir>`
@@ -67,6 +67,8 @@
 | `supabase/migrations/20261112170000_agent_handoff_messages.sql` | escalation/ack columns, thread marker, 3 RPCs |
 | `supabase/migrations/20261113120000_agent_handoff_messages_followup.sql` | the claim-release RPCs (`release_human_mode_ack`, `restore_unanswered_escalation`) |
 | `supabase/migrations/20261113210000_agent_handoff_claim_lease.sql` | the claim LEASES: `claim_human_mode_ack_leased`, `complete_human_mode_ack`, `release_human_mode_ack_claim`, `claim_unanswered_escalation`, `complete_unanswered_escalation`, `release_unanswered_escalation_claim`, the outbox's `generated_kind` |
+| `supabase/migrations/20261113220000_agent_handoff_legacy_claim_lease.sql` | the claim of a build that predates the lease is lease-shaped too, so no claim can be stranded |
+| `supabase/migrations/20261113230000_agent_conversation_mode_expiry_marker.sql` | the escalation marker of an expired window is written the way the thread is (an upsert) |
 | `supabase/functions/ai-agent-adapters/supabase.ts` (+ test) | Allow-listed RPC mode |
 | `supabase/functions/_shared/connectorRegistry.ts` | `rpc_allow_list` setting, `query`/`max_results` parameters |
 | `supabase/functions/ai-agent-reply/logic.ts` `buildSystemPrompt` | Not-found / escalation rule |
@@ -292,6 +294,8 @@ export function escalationApologyText(
   - `fn` is the first allow-listed name.
   - Empty `query` → validation error `supabase_query_required`. Never call with an empty query; this is the 2026-11-10 failure.
   - The response is the same row array the table path returns, so `column_map` and `max_rows` handling are reused.
+  - The call carries `Prefer: tx=rollback`, so the function runs in a transaction the target rolls back. A function runs with the rights of its owner, so a SECURITY DEFINER one can write even when the anon role cannot: the only thing that makes the read-only promise true is the call being unable to leave a write behind. PostgREST says in `Preference-Applied` whether it applied the preference; a target whose PostgREST commits by default ignores it, and that target is refused with `supabase_read_only_unenforced` rather than called -- an unverifiable read-only promise is not one. The project needs `db-tx-end = "commit-allow-override"` for the override to be honoured, and the connector card's help text says so.
+  - `rpc_query_param` and `rpc_limit_param` may not be the same name: the body is one object, so two arguments with one name are one argument, and the query would be dropped.
 - Model-supplied `table` containing `rpc/` stays refused. Only settings can name a function.
 
 - [ ] **Step 1: Failing tests** in `ai-agent-adapters/supabase.test.ts`, with a fetch stub at the HTTP boundary asserting the request the adapter makes:
