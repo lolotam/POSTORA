@@ -997,6 +997,7 @@ export interface EscalationLeaseState {
   threadId: string;
   marker: string;
   claimToken: string;
+  /** The reply is durable together with the escalation context that consumes this lease. */
   replyDurable: boolean;
   released?: boolean;
 }

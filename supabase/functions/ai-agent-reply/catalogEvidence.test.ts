@@ -29,3 +29,13 @@ Deno.test("specific single-token names and root product URLs can score grounding
   assertEquals(catalogGrounded("See https://other.example/", [{ product_url: "https://brand.example/" }]), false);
   assertEquals(catalogGrounded("javascript:alert(1)", [{ product_url: "javascript:alert(1)" }]), false);
 });
+
+Deno.test("catalog URLs must match the full normalized origin and path", () => {
+  for (const [reply, product_url, expected] of [
+    ["https://brand.example.evil/", "https://brand.example", false],
+    ["https://brand.example/other", "https://brand.example/", false],
+    ["https://brand.example/Product", "https://brand.example/product", false],
+    ["See [product](https://BRAND.example/).", "https://brand.example", true],
+    ["https://brand.example/product?other=1", "https://brand.example/product", false],
+  ] as const) assertEquals(catalogGrounded(reply, [{ product_url }]), expected);
+});

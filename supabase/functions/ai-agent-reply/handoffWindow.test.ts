@@ -1300,3 +1300,19 @@ Deno.test("a turn that read an owed marker refuses a competing live escalation l
     marker: null, token: null, claimed: false, failed: true,
   });
 });
+
+Deno.test("an earlier successful cleanup still permits retry after persistence or held-turn failure", async () => {
+  for (const heldTurn of [false, true]) {
+    const { admin, calls } = adminStub({ insertError: { message: "temporary failure" }, outboxStatus: "running" });
+    const lease = { threadId: THREAD_ID, marker: CLAIM_TOKEN, claimToken: CLAIM_TOKEN, replyDurable: false };
+    assertEquals(await releaseUnpersistedEscalation(admin, SCOPE, lease), true);
+    if (heldTurn) {
+      await settleStaffInterruptedTurn({ admin, scope: SCOPE, lease, outboxId: "outbox-1", threadId: THREAD_ID,
+        sideEffectsHappened: false, turn: { userId: SCOPE.userId, content: "Question", id: "outbox-1" } });
+    } else {
+      await releaseFailedEscalationTurn(admin, SCOPE, lease, "outbox-1", { sideEffectsHappened: false, error: "persist failed" });
+    }
+    assertEquals(calls.filter((call) => call.kind === "rpc:release_unanswered_escalation_claim").length, 1);
+    assertEquals(calls.find((call) => call.kind === "rpc:advance_agent_reply_for_owner")?.args?.p_to, "pending");
+  }
+});

@@ -36,18 +36,30 @@ function specificIdentities(row: CatalogEvidence): string[] {
   const names = [row.name_ar, row.name_en].filter((value): value is string =>
     Boolean(value && (value.match(/\p{L}/gu)?.length ?? 0) >= 8)
   );
-  let productUrl: string | undefined;
+  return [...identifiers, ...names];
+}
+
+/** URL objects preserve path case and reject another origin sharing a host prefix. */
+function catalogUrlInReply(reply: string, productUrl: string | undefined): boolean {
   try {
-    const url = new URL(row.product_url ?? "");
-    if (url.protocol === "https:" || url.protocol === "http:") productUrl = row.product_url;
-  } catch { /* An invalid catalog URL supplies no evidence. */ }
-  return [...identifiers, ...names, ...(productUrl ? [productUrl] : [])];
+    const expected = new URL(productUrl ?? "");
+    if (expected.protocol !== "https:" && expected.protocol !== "http:") return false;
+    const tokens = reply.match(/https?:\/\/[^\s<>"'`]+/giu) ?? [];
+    return tokens.some((token) => {
+      const spellings = [token, token.replace(/[.,;!?)}\]]+$/u, "")];
+      return spellings.some((spelling) => {
+        try { return new URL(spelling).href === expected.href; } catch { return false; }
+      });
+    });
+  } catch {
+    return false;
+  }
 }
 
 /** Identity-match score, not a verification of every factual claim in the reply. */
 export function catalogGrounded(reply: string, rows: readonly CatalogEvidence[]): boolean {
   const text = reply.normalize("NFKC").toLowerCase();
-  return rows.some((row) => specificIdentities(row).some((value) => {
+  return rows.some((row) => catalogUrlInReply(reply, row.product_url) || specificIdentities(row).some((value) => {
     const identity = value.normalize("NFKC").toLowerCase();
     const escaped = identity.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
     return new RegExp(`(?<![\\p{L}\\p{N}])${escaped}(?![\\p{L}\\p{N}])`, "u").test(text);

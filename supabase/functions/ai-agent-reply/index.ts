@@ -87,7 +87,6 @@ import {
   NO_AFTERMATH,
   readEscalationAftermath,
   releaseHumanModeAck,
-  releaseUnansweredEscalationClaim,
   releaseUnpersistedEscalation,
   releaseFailedEscalationTurn,
   type EscalationLeaseState,
@@ -2013,13 +2012,7 @@ Deno.serve(async (req) => {
           settlement.marker && settlement.claimToken &&
           !settlement.staffWriteFailed && !settlement.staffReadFailed
         ) {
-          await releaseUnansweredEscalationClaim(
-            admin,
-            handoffScope(request),
-            thread.id,
-            settlement.marker,
-            settlement.claimToken,
-          );
+          await releaseUnpersistedEscalation(admin, handoffScope(request), earlyEscalationLease);
         }
         // Nobody answered the question, so it is kept on the record: the thread
         // carries it, and the agent's next answer is written against it.
@@ -2100,14 +2093,18 @@ Deno.serve(async (req) => {
           // the customer received, not what this invocation meant to send.
           replyText = delivered.text;
         }
-        if (earlyEscalationLease) earlyEscalationLease.replyDurable = true;
+        if (earlyEscalationLease && !settlement.staffWriteFailed && !settlement.staffReadFailed) {
+          earlyEscalationLease.replyDurable = true;
+        }
         // Without an outbox row there is no persist to hang the completion on, so the
         // window is resolved once the reply has been sent.
         if (!outboxId) await completeEscalation();
       }
     } catch (deliveryError) {
       replyWithoutDurableCopy = !replyIsDurable(outboxId, deliveryError);
-      if (earlyEscalationLease && !replyWithoutDurableCopy) earlyEscalationLease.replyDurable = true;
+      if (earlyEscalationLease && !replyWithoutDurableCopy && !settlement.staffWriteFailed && !settlement.staffReadFailed) {
+        earlyEscalationLease.replyDurable = true;
+      }
       throw deliveryError;
     } finally {
       // The marker is a lease, not a receipt. A reply that never became durable, a staff
@@ -2118,13 +2115,7 @@ Deno.serve(async (req) => {
         !escalationCompleted &&
         (replyWithoutDurableCopy || settlement.staffWriteFailed || settlement.staffReadFailed)
       ) {
-        const released = await releaseUnansweredEscalationClaim(
-          admin,
-          handoffScope(request),
-          thread.id,
-          settlement.marker,
-          settlement.claimToken,
-        );
+        const released = await releaseUnpersistedEscalation(admin, handoffScope(request), earlyEscalationLease);
         if (!released) {
           // The lease still stands: a later turn takes the apology over once it lapses,
           // so the apology is owed rather than lost.
