@@ -9,6 +9,11 @@ export interface StoredTextTier extends Record<string, unknown> {
   auth_method?: 'api_key' | 'oauth';
 }
 
+/** Codex's pinned subscription transport cannot serialize a mandatory cap. */
+export function supportsOutputCap(tier: { provider: string; authMethod?: string; credentialSource?: string }): boolean {
+  return tier.credentialSource === "user" || tier.authMethod !== "oauth" || tier.provider !== "openai";
+}
+
 export function normalizeStoredTextTier(stored: unknown): StoredTextTier | null {
   const decoded: unknown = typeof stored === 'string' ? JSON.parse(stored) : stored;
   if (decoded == null) return null;

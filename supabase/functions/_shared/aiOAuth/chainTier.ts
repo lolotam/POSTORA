@@ -31,10 +31,10 @@ export function isOAuthTierModel(providerCode: string, modelId: string): boolean
 }
 
 /** The same switch that gates API-key tiers (loadOpenAiCompatibleBase). */
-async function isProviderActive(admin: SupabaseClient | undefined, providerCode: string): Promise<boolean> {
+async function isProviderActive(admin: SupabaseClient | undefined, providerCode: string, signal?: AbortSignal): Promise<boolean> {
   const db = (admin ?? await serviceClient()) as unknown as SupabaseClient;
-  const { data, error } = await db.from("ai_providers")
-    .select("is_active").eq("provider_code", providerCode).maybeSingle();
+  const query = db.from("ai_providers").select("is_active").eq("provider_code", providerCode);
+  const { data, error } = await (signal ? query.abortSignal(signal) : query).maybeSingle();
   if (error) throw new Error("AI provider read failed");
   return (data as { is_active?: unknown } | null)?.is_active === true;
 }
@@ -73,14 +73,18 @@ async function resolveTierCredential(
   providerCode: string,
   oauthProvider: NonNullable<ReturnType<typeof oauthProviderForCode>>,
   injected: OAuthChainDeps | undefined,
+  signal?: AbortSignal,
 ): Promise<CredentialOutcome> {
-  const enabled = injected?.enabled ?? (() => isAiProviderOAuthEnabled(admin as unknown as SupabaseClient));
+  signal?.throwIfAborted();
+  const enabled = injected?.enabled ?? (() => isAiProviderOAuthEnabled(admin as unknown as SupabaseClient, signal));
   if (!(await enabled())) return { error: "oauth_disabled" };
-  const providerActive = injected?.providerActive ?? ((code: string) => isProviderActive(admin, code));
+  signal?.throwIfAborted();
+  const providerActive = injected?.providerActive ?? ((code: string) => isProviderActive(admin, code, signal));
   if (!(await providerActive(providerCode))) return { error: "oauth_provider_disabled" };
+  signal?.throwIfAborted();
   const credentials = injected?.credentials ?? defaultCredentialDeps(admin as unknown as SupabaseClient);
   try {
-    return await getFreshOAuthCredential(credentials, oauthProvider);
+    return await getFreshOAuthCredential(credentials, oauthProvider, signal);
   } catch (cause) {
     // Only the settings and catalogue reads above may throw out of the tier.
     return { error: cause instanceof AiOAuthError ? cause.code : "refresh_failed" };
@@ -101,6 +105,7 @@ export async function callOAuthTier(
   requestBody: Record<string, unknown>,
   timeoutMs: number,
   injected?: OAuthChainDeps,
+  signal?: AbortSignal,
 ): Promise<OAuthTierOutcome> {
   const oauthProvider = oauthProviderForCode(tier.provider);
   if (!oauthProvider) return { error: "oauth_unsupported_provider" };
@@ -108,7 +113,7 @@ export async function callOAuthTier(
 
   let resolved: CredentialOutcome;
   try {
-    resolved = await withinDeadline(resolveTierCredential(admin, tier.provider, oauthProvider, injected), timeoutMs);
+    resolved = await withinDeadline(resolveTierCredential(admin, tier.provider, oauthProvider, injected, signal), timeoutMs);
   } catch (cause) {
     if (cause instanceof AiOAuthError) return { error: cause.code };
     throw cause; // settings or catalogue read failure
@@ -119,7 +124,8 @@ export async function callOAuthTier(
     const remainingMs = timeoutMs - (Date.now() - startedAt);
     if (remainingMs <= 0) return { error: "refresh_timeout" };
     const pi = injected?.pi ?? defaultPiCallDeps();
-    const response = await callPiOAuth(pi, oauthProvider, tier.model, requestBody, resolved.apiKey, remainingMs);
+    signal?.throwIfAborted();
+    const response = await callPiOAuth(pi, oauthProvider, tier.model, requestBody, resolved.apiKey, remainingMs, signal);
     if (response.status === 422) return { error: await unsupportedCode(response) };
     return { response };
   } catch (cause) {

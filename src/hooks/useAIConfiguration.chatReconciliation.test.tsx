@@ -58,21 +58,25 @@ it('a hashtag conflict restarts a caption success refresh after publishing its p
 });
 
 // PR #419 r5: a sibling change invalidates the expectation for the whole chain.
-it.each([
+it.each(([
   ['primary', useSetDefaultModel, 'default_ai_model_chat', 'default_ai_model_chat_fallback', 'changed'],
   ['fallback', useSetFallbackModel, 'default_ai_model_chat_fallback', 'default_ai_model_chat_fallback_2', 'missing'],
   ['fallback_2', useSetFallback2Model, 'default_ai_model_chat_fallback_2', 'default_ai_model_chat', 'changed'],
   ['primary', useSetDefaultModel, 'default_ai_model_chat', 'default_ai_model_chat_fallback_2', 'null'],
-] as const)('a %s conflict publishes every tier before rejection and permits a fresh retry', async (_slot, useSetter, editedKey, siblingKey, change) => {
-  const previous = {
+  ['fallback', useSetFallbackModel, 'default_ai_model_chat_fallback', 'default_ai_model_chat', 'raw string'],
+] as const).flatMap(variant => (['chat', 'agent_triage'] as const).filter(category => category === 'agent_triage' || variant[4] !== 'raw string').map(category => [category, ...variant] as const)))('%s: a %s conflict publishes every tier before rejection and permits a fresh retry', async (category, _slot, useSetter, originalEditedKey, originalSiblingKey, change) => {
+  const editedKey = originalEditedKey.replace('chat', category);
+  const siblingKey = originalSiblingKey.replace('chat', category);
+  const previous = Object.fromEntries(Object.entries({
     default_ai_model_chat: { provider_code: 'openai', model_id: 'primary' },
     default_ai_model_chat_fallback: { provider_code: 'openai', model_id: 'fallback' },
     default_ai_model_chat_fallback_2: { provider_code: 'openai', model_id: 'fallback-2' },
-  };
+  }).map(([key, value]) => [key.replace('chat', category), value]));
   const desired = { provider_code: 'claude', model_id: 'requested', auth_method: 'oauth' as const };
   const fresh: Record<string, unknown> = { ...previous };
   if (change === 'missing') delete fresh[siblingKey];
   else if (change === 'null') fresh[siblingKey] = null;
+  else if (change === 'raw string') fresh[siblingKey] = JSON.stringify({ provider_code: 'claude', model_id: 'concurrently-saved', auth_method: 'oauth', extension: { retain: true } });
   else fresh[siblingKey] = { provider_code: 'claude', model_id: 'concurrently-saved', auth_method: 'oauth', provider_option: 'retained' };
   let stored = { ...fresh };
   const unrelated = { key: 'default_ai_model_image', value: { provider_code: 'openai', model_id: 'image' } };
@@ -103,7 +107,7 @@ it.each([
   try {
     let atFailure: unknown;
     await act(async () => {
-      const failure = await result.current.mutation.mutateAsync({ category: 'chat', ...desired }).catch(error => {
+      const failure = await result.current.mutation.mutateAsync({ category, ...desired }).catch(error => {
         atFailure = client.getQueryData(['ai-config']);
         return error;
       });
@@ -114,7 +118,7 @@ it.each([
     await waitFor(() => expect(result.current.config.data).toMatchObject(parseSettingsRows(freshSettings)));
     expect(result.current.config.data?.settings).toEqual(expect.arrayContaining(freshSettings));
     if (change === 'missing') expect(result.current.config.data?.settings.some(row => row.key === siblingKey)).toBe(false);
-    await act(async () => { await result.current.mutation.mutateAsync({ category: 'chat', ...desired }); });
+    await act(async () => { await result.current.mutation.mutateAsync({ category, ...desired }); });
     expect(writes.map(write => write.expected)).toEqual([previous, fresh]);
     expect(stored).toEqual({ ...fresh, [editedKey]: desired });
   } finally { unmount(); client.clear(); }

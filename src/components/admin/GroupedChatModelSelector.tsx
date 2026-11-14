@@ -9,7 +9,10 @@ const REASONS = {
   not_connected: 'Connect a subscription in AI Providers.', reauth_required: 'Reauthentication required.',
   disconnected: 'Subscription disconnected.', api_key_absent: 'API key required.',
   no_compatible_models: 'No compatible Chat models. Sync the catalogue in AI Providers.',
+  no_compatible_triage_models: 'No compatible Triage models. Sync the catalogue in AI Providers.',
   unsupported_model: 'Model not supported by subscription transport.',
+  oauth_max_tokens_unsupported: 'Triage requires max_tokens: 200; OpenAI Codex Auth cannot honor this output cap.',
+  triage_api_unsupported: 'Claude API transport is not supported for triage. Choose Claude Auth or a compatible API model.',
 };
 const identity = (provider_code: string, auth_method?: AiAuthMethod) => JSON.stringify([provider_code, auth_method ?? 'api_key']);
 const groupName = (auth_method: AiAuthMethod) => auth_method === 'oauth' ? 'Auth' : 'API';
@@ -70,10 +73,10 @@ function GroupedChatTier({ label, groups, current, onSelect, isSaving }: {
 }
 
 export function GroupedChatModelSelector({ title, description, icon: Icon, policy, currentDefault, currentFallback, currentFallback2,
-  onSetDefault, onSetFallback, onSetFallback2, isSaving, saveError, readOnly, children }: {
+  onSetDefault, onSetFallback, onSetFallback2, isSaving, saveError, readOnly, children, category }: {
   title: string; description: string; icon: LucideIcon; policy: Extract<ChatListPolicy, { enabled?: true }>;
   currentDefault: DefaultModel | null; currentFallback: DefaultModel | null; currentFallback2: DefaultModel | null;
-  onSetDefault: TierSave; onSetFallback: TierSave; onSetFallback2: TierSave; isSaving?: boolean; saveError?: string; readOnly?: boolean; children?: ReactNode;
+  onSetDefault: TierSave; onSetFallback: TierSave; onSetFallback2: TierSave; isSaving?: boolean; saveError?: string; readOnly?: boolean; children?: ReactNode; category?: string;
 }) {
   return <Card><CardHeader><CardTitle className="flex items-center gap-2 text-base"><Icon className="h-5 w-5" />{title}</CardTitle><CardDescription>{description}</CardDescription></CardHeader>
     <CardContent className="space-y-3">
@@ -83,7 +86,9 @@ export function GroupedChatModelSelector({ title, description, icon: Icon, polic
       <GroupedChatTier label="Fallback" groups={policy.groups} current={currentFallback} onSelect={onSetFallback} isSaving={isSaving || readOnly || !currentDefault} />
       <GroupedChatTier label="Fallback 2" groups={policy.groups} current={currentFallback2} onSelect={onSetFallback2} isSaving={isSaving || readOnly || !currentDefault || !currentFallback} />
       {children}
-      <p className="text-xs text-muted-foreground">Last Resort (Hardcoded): google/gemini-3-flash-preview. Capped requests require a compatible tier. Claude Auth supports caps; OpenAI Codex Auth skips to a configured compatible tier.</p>
+      {category === 'agent_triage'
+        ? <p className="text-xs text-muted-foreground">Claude Auth uses prompt-requested JSON, validated by the strict parser; provider-enforced JSON mode is unavailable. Triage never executes tools. Uncertain or unavailable triage preserves normal Agent behavior. No hardcoded fallback.</p>
+        : <p className="text-xs text-muted-foreground">Last Resort (Hardcoded): google/gemini-3-flash-preview. Capped requests require a compatible tier. Claude Auth supports caps; OpenAI Codex Auth skips to a configured compatible tier.</p>}
     </CardContent>
   </Card>;
 }

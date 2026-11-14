@@ -26,7 +26,7 @@ Deno.test("each provider gets its own endpoint and yes/no question type", () => 
 
 Deno.test("the connector question lists each connector plus a no-tool option, and is omitted without connectors", () => {
   const withTools = triageRequestBody({ provider: "vercel", model: "m", kind: "decision" }, input);
-  const criteria = (withTools.questions as any).connector.criteria;
+  const criteria = (withTools.questions as Record<string, { criteria: Record<string, string> }>).connector.criteria;
   assertEquals(Object.keys(criteria).sort(), [NO_TOOL, "store_catalog"]);
   const bare = triageRequestBody({ provider: "vercel", model: "m", kind: "decision" }, { ...input, connectors: [], askHandoff: false });
   assertEquals(Object.keys(bare.questions as object).sort(), ["intent", "needs_knowledge", "smalltalk"]);
@@ -139,8 +139,8 @@ Deno.test("the chain is empty unless the switch is on, and keeps only triage pro
   assertEquals(triageChainFromSettings(slots), []);
   assertEquals(triageChainFromSettings([...slots, { key: "agent_triage_enabled", value: { enabled: false } }]), []);
   assertEquals(triageChainFromSettings([...slots, { key: "agent_triage_enabled", value: { enabled: true } }]), [
-    { provider: "openrouter", model: "typesafe/jev-1.13", kind: "decision" },
-    { provider: "vercel", model: "typesafe-ai/jev", kind: "decision" },
+    { provider: "openrouter", model: "typesafe/jev-1.13", kind: "decision", slot: "primary" },
+    { provider: "vercel", model: "typesafe-ai/jev", kind: "decision", slot: "fallback_2" },
   ]);
   assertEquals(TRIAGE_SETTING_KEYS.includes("agent_triage_enabled"), true);
 });
@@ -246,9 +246,9 @@ Deno.test("a slot is a decision tier only when the catalogue says its model is a
     { key: "default_ai_model_agent_triage_fallback_2", value: slot("deepseek", "deepseek-flash") },
   ];
   assertEquals(triageChainFromSettings(rows, new Set(["vercel/typesafe-ai/jev"])), [
-    { provider: "vercel", model: "typesafe-ai/jev", kind: "decision" },
-    { provider: "openrouter", model: "mistralai/ministral-8b-2512", kind: "chat" },
-    { provider: "deepseek", model: "deepseek-flash", kind: "chat" },
+    { provider: "vercel", model: "typesafe-ai/jev", kind: "decision", slot: "primary" },
+    { provider: "openrouter", model: "mistralai/ministral-8b-2512", kind: "chat", slot: "fallback" },
+    { provider: "deepseek", model: "deepseek-flash", kind: "chat", slot: "fallback_2" },
   ]);
 });
 
@@ -260,14 +260,14 @@ Deno.test("a subscription slot is a chat tier carrying its auth method, even for
     { key: "default_ai_model_agent_triage_fallback_2", value: slot("claude", "claude-sonnet-4-5") },
   ];
   assertEquals(triageChainFromSettings(rows, null), [
-    { provider: "claude", model: "claude-sonnet-4-5", kind: "chat", authMethod: "oauth" },
-    { provider: "openrouter", model: "typesafe/jev-1.13", kind: "chat", authMethod: "oauth" },
+    { provider: "claude", model: "claude-sonnet-4-5", kind: "chat", authMethod: "oauth", slot: "primary" },
+    { provider: "openrouter", model: "typesafe/jev-1.13", kind: "chat", authMethod: "oauth", slot: "fallback" },
   ]);
 });
 
 Deno.test("when the catalogue read fails, decision providers keep the decision API (Jev still works)", () => {
   const rows = [enabled, { key: "default_ai_model_agent_triage", value: slot("openrouter", "typesafe/jev-1.13") }];
-  assertEquals(triageChainFromSettings(rows, null), [{ provider: "openrouter", model: "typesafe/jev-1.13", kind: "decision" }]);
+  assertEquals(triageChainFromSettings(rows, null), [{ provider: "openrouter", model: "typesafe/jev-1.13", kind: "decision", slot: "primary" }]);
 });
 
 Deno.test("a chat tier widens the budget; a decision-only chain keeps 1.5 s", () => {
@@ -346,3 +346,145 @@ Deno.test("without a chat call a chat tier is recorded, not thrown", async () =>
   assertEquals(run.outcome, null);
   assertEquals(run.errors, [{ model: "deepseek/deepseek-flash", error: "chat triage unavailable" }]);
 });
+
+const claudeTier = [{ provider: "claude", model: "claude-sonnet-4-5", kind: "chat" as const, authMethod: "oauth" as const }];
+
+// PR #421 round 2: skipped slots must leave time for the next usable fallback.
+for (const first of [claudeTier[0], tiers[0]]) {
+  Deno.test(`skipped Codex primary leaves the first ${first.kind} attempt capped so Jev can recover`, async () => {
+    const codex = { ...claudeTier[0], provider: "openai", model: "codex" };
+    const stalled = (): Promise<Response> => new Promise(() => {});
+    const run = await runTriage([codex, first, tiers[1]], input, async () => crypto.randomUUID(), 3000,
+      async (_url, init) => JSON.parse(String(init?.body)).model === first.model ? stalled() : Response.json(okJson), Date.now,
+      async () => stalled(), true);
+    assertEquals(run.outcome?.model, tiers[1].model);
+    assertEquals(run.errors, [
+      { model: "openai/codex", error: "oauth_max_tokens_unsupported" },
+      { model: `${first.provider}/${first.model}`, error: "triage_deadline_exceeded" },
+    ]);
+  });
+}
+
+for (const skipped of ["before", "after", "both"] as const) {
+  Deno.test(`the only runnable tier keeps the remaining budget with skipped tiers ${skipped}`, async () => {
+    const codex = { ...claudeTier[0], provider: "openai", model: "codex" };
+    const chain = [...(skipped !== "after" ? [codex] : []), ...claudeTier, ...(skipped !== "before" ? [codex] : [])];
+    let allotted = 0;
+    const run = await runTriage(chain, input, key, 2400, fetch, () => 0,
+      async (_tier, _body, timeoutMs) => {
+        allotted = timeoutMs;
+        return Response.json({ choices: [{ message: { content: '{"needs_knowledge":0.99}' } }] });
+      }, true);
+    assertEquals(run.outcome?.provider, "claude");
+    assertEquals(allotted, 2400);
+  });
+}
+
+Deno.test("enabled triage skips capped Codex before credentials or inference and retains Claude parsed JSON", async () => {
+  const calls: string[] = [];
+  const run = await runTriage([{ ...claudeTier[0], provider: "openai", model: "codex" }, ...claudeTier], input, key, 1500, fetch, Date.now,
+    async (tier, body) => {
+      calls.push(tier.provider);
+      assertEquals(body.max_tokens, 200);
+      assertEquals(body.tools, undefined);
+      assertEquals(body.response_format, undefined); // Prompt-requested JSON, not provider-enforced mode.
+      return Response.json({ choices: [{ message: { content: '{"needs_knowledge":0.99,"smalltalk":0.01}' } }] });
+    }, true);
+  assertEquals(calls, ["claude"]);
+  assertEquals(run.errors, [{ model: "openai/codex", error: "oauth_max_tokens_unsupported" }]);
+  assertEquals(run.outcome?.plan, { skipKnowledge: false, smalltalk: false, handoff: false, connectors: "all" });
+});
+
+for (const reason of ["oauth_disabled", "reauth_required", "not_connected"] as const) {
+  Deno.test(`enabled triage records sanitized ${reason} and falls back to the decision API`, async () => {
+    const run = await runTriage([...claudeTier, tiers[1]], input, key, 1500,
+      (() => Promise.resolve(Response.json(okJson))) as typeof fetch, Date.now,
+      () => Promise.resolve(Response.json({ error: reason, private_detail: "never log response bodies" }, { status: 502 })), true);
+    assertEquals(run.errors, [{ model: "claude/claude-sonnet-4-5", error: reason }]);
+    assertEquals(run.outcome?.provider, "vercel");
+  });
+}
+
+for (const boundary of ["key", "inference", "body"] as const) {
+  Deno.test(`enabled triage includes stalled ${boundary} in one overall budget and preserves normal Agent access`, async () => {
+    const delay = <T>(value: T) => new Promise<T>(resolve => setTimeout(() => resolve(value), 120));
+    const active = boundary === "key" ? [tiers[1]] : claudeTier;
+    const started = Date.now();
+    let cancelled = false;
+    const stream = new ReadableStream<Uint8Array>({ start(controller) { setTimeout(() => { if (!cancelled) { controller.enqueue(new TextEncoder().encode("{}")); controller.close(); } }, 120); }, cancel() { cancelled = true; } });
+    const run = await runTriage(active, input, boundary === "key" ? () => delay("key") : key, 25,
+      (() => Promise.resolve(Response.json(okJson))) as typeof fetch, Date.now,
+      () => boundary === "inference" ? delay(Response.json({})) : Promise.resolve(new Response(stream)), true);
+    assertEquals(run.outcome, null);
+    assertEquals(Date.now() - started < 100, true, `${boundary} exceeded the overall budget`);
+    assertEquals(run.errors[0]?.error, "triage_deadline_exceeded");
+    assertEquals(selectConnectorTools(input.connectors, run.outcome?.plan ?? null), input.connectors);
+    // Let our bounded fake transport finish so Deno sees no dangling timer/stream.
+    await delay(null);
+  });
+}
+
+Deno.test("enabled triage normalizes legacy stored strings without changing the disabled policy path", () => {
+  const rows = [enabled, { key: "feature_ai_text_auth_lists", value: true },
+    { key: "default_ai_model_agent_triage", value: JSON.stringify({ provider_code: "claude", model_id: "claude-sonnet-4-5", auth_method: "oauth", extension: true }) }];
+  assertEquals(triageChainFromSettings(rows), [{ ...claudeTier[0], slot: "primary" }]);
+  assertEquals(triageChainFromSettings(rows.map(row => row.key === "feature_ai_text_auth_lists" ? { ...row, value: false } : row)), []);
+});
+
+for (const slotKey of TRIAGE_SETTING_KEYS.filter(key => key !== "agent_triage_enabled")) {
+  Deno.test(`malformed enabled ${slotKey} reports a sanitized refusal and discards the whole chain`, () => {
+    const errors: Array<{ model: string; error: string }> = [];
+    const rows = [enabled, { key: "feature_ai_text_auth_lists", value: true },
+      { key: "default_ai_model_agent_triage", value: slot("vercel", "valid") },
+      { key: slotKey, value: '{"private_detail":' }];
+    assertEquals(triageChainFromSettings(rows, null, failure => errors.push(failure)), []);
+    assertEquals(errors, [{ model: slotKey, error: "triage_configuration_invalid" }]);
+    assertEquals(selectConnectorTools(input.connectors, null), input.connectors);
+    errors.length = 0;
+    triageChainFromSettings(rows.map(row => row.key === "agent_triage_enabled" ? { ...row, value: { enabled: false } } : row), null, failure => errors.push(failure));
+    assertEquals(errors, []);
+  });
+}
+
+for (const authMethod of [undefined, "oauth"] as const) {
+  for (const [status, body] of [[401, null], [424, "not JSON"], [502, '{"error":"private provider detail"}']] as const) {
+    Deno.test(`enabled ${authMethod ?? "API"} triage retains HTTP ${status} with an unusable error body`, async () => {
+      const run = await runTriage([{ ...claudeTier[0], authMethod }], input, key, 1000, fetch, Date.now,
+        async () => new Response(body, { status }), true);
+      assertEquals(run.outcome, null);
+      assertEquals(run.errors, [{ model: "claude/claude-sonnet-4-5", error: `HTTP ${status}` }]);
+    });
+  }
+}
+
+for (const failure of ["rejected", "aborted", "late success"] as const) {
+  Deno.test(`same-provider fallback recovers from a ${failure} credential read without reusing cancelled work`, async () => {
+    const usableKey = crypto.randomUUID();
+    const expiredKey = crypto.randomUUID();
+    let keyReads = 0;
+    let finishLateRead = () => {};
+    const requests: string[] = [];
+    const run = await runTriage([{ ...tiers[0] }, { ...tiers[0], model: "fallback" }, { ...tiers[0], model: "last" }], input,
+      async (_provider, signal) => {
+        keyReads++;
+        if (keyReads > 1) return usableKey;
+        if (failure === "rejected") throw new Error("private read failure");
+        return await new Promise<string>((resolve, reject) => {
+          finishLateRead = () => resolve(expiredKey);
+          if (failure === "aborted") signal!.addEventListener("abort", () => reject(signal!.reason), { once: true });
+        });
+      }, 1500, (async (_url, init) => {
+        const model = JSON.parse(String(init?.body)).model;
+        requests.push(model);
+        assertEquals(init?.headers && new Headers(init.headers).get("Authorization"), `Bearer ${usableKey}`);
+        finishLateRead();
+        return model === "fallback" ? new Response(null, { status: 503 }) : Response.json(okJson);
+      }) as typeof fetch, Date.now, null, true);
+    finishLateRead();
+    await Promise.resolve();
+    assertEquals(run.outcome?.model, "last");
+    assertEquals(run.errors.map(error => error.error), [failure === "rejected" ? "triage_request_failed" : "triage_deadline_exceeded", "HTTP 503"]);
+    assertEquals(keyReads, 2);
+    assertEquals(requests, ["fallback", "last"]);
+  });
+}

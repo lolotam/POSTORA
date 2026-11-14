@@ -8,12 +8,12 @@ const FLAG_KEY = "feature_ai_provider_oauth";
  * false and production must stay off unless the owner accepts the account and
  * terms risk (spec §1).
  */
-export async function isAiProviderOAuthEnabled(admin: SupabaseClient): Promise<boolean> {
-  const { data, error } = await admin
+export async function isAiProviderOAuthEnabled(admin: SupabaseClient, signal?: AbortSignal): Promise<boolean> {
+  const query = admin
     .from("system_settings")
     .select("value")
-    .eq("key", FLAG_KEY)
-    .maybeSingle();
+    .eq("key", FLAG_KEY);
+  const { data, error } = await (signal ? query.abortSignal(signal) : query).maybeSingle();
   if (error || !data) return false;
   return data.value === true;
 }

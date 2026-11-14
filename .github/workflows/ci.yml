@@ -364,6 +364,8 @@ jobs:
             done < <(find "${dir}" -type f -name '*.test.ts' ! -name '*.live.test.ts' | sort)
           done
           tests+=(
+            supabase/functions/_shared/agentTriage.test.ts
+            supabase/functions/_shared/agentTriageOAuth.test.ts
             supabase/functions/_shared/pendingReplies.test.ts
             supabase/functions/_shared/conversationModeOverride.test.ts
             scripts/probes/agent-model-dryrun.test.ts

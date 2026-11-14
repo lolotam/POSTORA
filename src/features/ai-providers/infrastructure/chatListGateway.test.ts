@@ -18,6 +18,19 @@ afterEach(() => {
 });
 
 describe('Chat action deadlines (PR #419)', () => {
+  it.each(['configuration_changed_retry', 'configuration_read_or_write_failed'])('Triage %s refreshes the complete raw ladder and never retries the write', async reason => {
+    const key = 'default_ai_model_agent_triage';
+    const value = JSON.stringify({ provider_code: 'claude', model_id: 'saved', auth_method: 'oauth', extension: { retain: true } });
+    fetchMock.mockImplementation(url => Promise.resolve(String(url).includes('/functions/v1/ai-config')
+      ? Response.json({ error: reason }, { status: reason === 'configuration_changed_retry' ? 409 : 503 })
+      : Response.json([{ key, value }, { key: `${key}_fallback`, value: null }])));
+    const reconciled = vi.fn();
+    await expect(saveChatTier({ category: 'agent_triage', slot: 'primary', provider_code: 'claude', model_id: 'requested', expected: {} }, reconciled)).rejects.toThrow('Retry');
+    expect(reconciled).toHaveBeenCalledWith({ [key]: value, [`${key}_fallback`]: null, [`${key}_fallback_2`]: undefined });
+    const requests = fetchMock.mock.calls.filter(([url]) => String(url).includes('/functions/v1/ai-config'));
+    expect(requests).toHaveLength(1);
+    expect(JSON.parse(String(requests[0][1]?.body)).action).toBe('set-triage-tier');
+  });
   it.each(['caption', 'hashtags'] as const)('%s conflict preserves raw JSON-string siblings and extensions', async category => {
     const key = `default_ai_model_${category}`;
     const value = JSON.stringify({ provider_code: 'claude', model_id: 'saved', auth_method: 'oauth', extension: { retain: true } });
