@@ -40,6 +40,15 @@ describe("shouldForwardSocialOAuthToProfiles", () => {
     ).toBe(true);
   });
 
+  it("does not steal the OpenRouter subscription sign-in return (regression: it landed on /profiles)", () => {
+    expect(
+      shouldForwardSocialOAuthToProfiles(
+        "/admin/settings/ai/oauth/openrouter/callback",
+        search("code=or-code&state=or-state"),
+      ),
+    ).toBe(false);
+  });
+
   it("does not forward dedicated social callback routes", () => {
     expect(
       shouldForwardSocialOAuthToProfiles("/tiktok-callback", search("code=tt&state=st")),
