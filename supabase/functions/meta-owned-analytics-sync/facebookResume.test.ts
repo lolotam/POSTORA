@@ -123,3 +123,48 @@ Deno.test("an unacknowledged resume database timeout ends the invocation before 
     assertEquals(calls, 1, "No retry, cursor write or measurement after an unknown read outcome");
   } finally { release?.(); }
 });
+
+Deno.test("an exhausted admission slice before an observation starts still leaves measurement work reachable", async () => {
+  const realNow = Date.now;
+  let now = realNow();
+  Date.now = () => now;
+  let claims = 0;
+  let nextReads = 0;
+  let observationWrites = 0;
+  const authority = { platform_user_id: "869001", connection_version: 1, credential_id: crypto.randomUUID(),
+    credential_revision: 1, provider_user_id: "868001", token_expires_at: null };
+  const credential = { account_id: account(51), user_id: owner, authority,
+    access_token: `phase6-page-${crypto.randomUUID()}`, permission_token: `phase6-user-${crypto.randomUUID()}` };
+  const ticket = { platform: "facebook", owner_id: owner, due_on: "2026-11-15", policy_digest: "a".repeat(64),
+    round: 1, after_account_id: null, account_id: account(51) };
+  try {
+    const handler = createOwnedAnalyticsSyncHandler({ authorize: () => ({ ok: true }), audit: async () => true,
+      app: () => ({ id: "867001", secret: `phase6-${crypto.randomUUID()}` }),
+      rpc: async (name, args) => {
+        if (name === "next_meta_analytics_dispatch_target") {
+          if (nextReads++ === 0) now += 700;
+          return { data: args.p_platform === "threads" ? { state: "not_started" } : { state: "target", ticket, served_at: stamp }, error: null };
+        }
+        if (name === "commit_meta_analytics_dispatch_target") { now += 700; return { data: { state: "needs_admission" }, error: null }; }
+        if (name === "read_fb_analytics_admission_credential") { now += 700; return { data: credential, error: null }; }
+        if (name === "observe_fb_analytics_permissions") { observationWrites++; throw new Error("An expired slice must not start this write"); }
+        assertEquals(name, "claim_meta_analytics_collection_job");
+        assertEquals(args.p_platform, "all");
+        claims++;
+        return { data: null, error: null };
+      }, fetch: async (input) => {
+        now += 3_800; // Each provider response remains inside the existing four-second request bound.
+        const url = new URL(input instanceof Request ? input.url : String(input));
+        return Response.json(url.pathname.endsWith("debug_token")
+          ? { data: { is_valid: true, app_id: "867001", user_id: "868001", scopes: ["read_insights", "pages_read_engagement"] } }
+          : { id: "869001" }, { headers: { "facebook-api-version": "v25.0" } });
+      } });
+    const response = await handler(request());
+    const receipt = await response.json();
+    assertEquals(response.status, 200, JSON.stringify(receipt));
+    assertEquals(receipt.resume.reason, "deadline");
+    assertEquals(receipt.resume.storageUncertain, undefined, "No unacknowledged database operation exists");
+    assertEquals(observationWrites, 0);
+    assertEquals(claims, 1);
+  } finally { Date.now = realNow; }
+});

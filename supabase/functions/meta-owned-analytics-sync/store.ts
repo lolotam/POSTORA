@@ -59,9 +59,13 @@ export class OwnedAnalyticsStore {
 
   private async call(name: string, args: Record<string, unknown>, onRefusal?: (code: string) => Error | null): Promise<unknown> {
     let envelope: unknown;
-    try { envelope = await this.deadline.run((signal) => this.rpc(name, args, signal)); }
+    let rpcStarted = false;
+    try { envelope = await this.deadline.run((signal) => {
+      rpcStarted = true;
+      return this.rpc(name, args, signal);
+    }); }
     catch (error) {
-      if (error instanceof AnalyticsWorkerStopped) throw error.reason === "deadline"
+      if (error instanceof AnalyticsWorkerStopped) throw error.reason === "deadline" && rpcStarted
         ? new AnalyticsWorkerStopped("deadline", error.sqlstate, "storage") : error;
       throw new AnalyticsWorkerStopped("storage_unavailable");
     }
