@@ -1,3 +1,4 @@
+import { parseTextLadder, textTierKeys, TEXT_LAST_RESORT, supportsOutputCap, type TextCategory } from "./textLadders.ts";
 import { callAnthropic } from "./anthropic-adapter.ts";
 import { AI_USER_KEY_INVALID, redactProviderError } from "./ai-routing-errors.ts";
 import type { SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2";
@@ -40,12 +41,14 @@ export interface AiCallResult {
   credentialSource?: 'user' | 'platform';
   fallbackReason?: string;
   /** Set when every attempted tier was the user's own key and the provider rejected it. */
-  errorCode?: 'AI_USER_KEY_INVALID';
+  errorCode?: 'AI_USER_KEY_INVALID' | 'ai_output_cap_unsupported';
 }
 
 /** Category-aware hardcoded last resort models */
 const CATEGORY_LAST_RESORT: Record<string, { provider: string; model: string } | null> = {
-  chat: { provider: 'google', model: 'gemini-3-flash-preview' },
+  chat: TEXT_LAST_RESORT,
+  caption: TEXT_LAST_RESORT,
+  hashtags: TEXT_LAST_RESORT,
   image: { provider: 'google', model: 'gemini-2.5-flash-image' },
   tts: { provider: 'google', model: 'gemini-3.8-flash-tts' },
   video: null,
@@ -151,7 +154,7 @@ function chatRequestForTier(request: Record<string, unknown>, tier: AiTier): Rec
 /**
  * Fetch AI settings (primary + fallback) from app_settings table.
  */
-export async function fetchAiSettings(supabaseAdmin: any): Promise<{
+export async function fetchAiSettings(supabaseAdmin: SupabaseClient): Promise<{
   primaryProvider: string;
   primaryModel: string;
   fallbackProvider: string;
@@ -193,7 +196,7 @@ function authMethodFrom(val: { auth_method?: unknown } | null | undefined): 'oau
 /**
  * Fetch per-category AI settings from system_settings table.
  */
-export async function fetchCategoryAiSettings(supabaseAdmin: any, category: string): Promise<{
+export async function fetchCategoryAiSettings(supabaseAdmin: SupabaseClient, category: string, storedRows?: Array<{ key: string; value: unknown }>, signal?: AbortSignal): Promise<{
   primaryProvider: string;
   primaryModel: string;
   primaryAuthMethod: 'oauth' | undefined;
@@ -211,10 +214,9 @@ export async function fetchCategoryAiSettings(supabaseAdmin: any, category: stri
   // hardcoded CATEGORY_LAST_RESORT instead -- for every category, not just stt.
   const fallback2Key = `default_ai_model_${category}_fallback_2`;
 
-  const { data: settings, error: settingsError } = await supabaseAdmin
-    .from('system_settings')
-    .select('key, value')
-    .in('key', [primaryKey, fallbackKey, fallback2Key]);
+  const settingsQuery = storedRows ? null : supabaseAdmin.from('system_settings').select('key, value').in('key', [primaryKey, fallbackKey, fallback2Key]);
+  const { data: settings, error: settingsError } = storedRows ? { data: storedRows, error: null }
+    : await (signal ? settingsQuery!.abortSignal(signal) : settingsQuery!);
 
   if (settingsError) throw new Error('AI settings read failed');
 
@@ -269,14 +271,14 @@ export async function fetchCategoryAiSettings(supabaseAdmin: any, category: stri
       );
     }
   } else if (configuredLastResortProvider && configuredLastResortModel) {
-    const { data: known, error: modelError } = await supabaseAdmin
+    const modelQuery = supabaseAdmin
       .from('ai_models')
       .select('id, ai_providers!inner(provider_code)')
       .eq('auth_method', 'api_key')
       .eq('model_id', configuredLastResortModel)
       .eq('is_active', true)
-      .eq('ai_providers.provider_code', configuredLastResortProvider)
-      .maybeSingle();
+      .eq('ai_providers.provider_code', configuredLastResortProvider);
+    const { data: known, error: modelError } = await (signal ? modelQuery.abortSignal(signal) : modelQuery).maybeSingle();
     if (modelError) throw new Error('AI model catalog read failed');
     useConfiguredLastResort = Boolean(known);
     if (!useConfiguredLastResort) {
@@ -312,9 +314,11 @@ export async function fetchCategoryAiSettings(supabaseAdmin: any, category: stri
  * If a user override is active, it becomes the primary tier and admin settings
  * become fallback + last-resort, so the override never leaves the user without recovery.
  */
-export async function resolveChatModelConfig(
-  supabaseAdmin: any,
+export async function resolveTextModelConfig(
+  supabaseAdmin: SupabaseClient,
   userId: string | null,
+  category: 'chat' | TextCategory = 'chat',
+  signal?: AbortSignal,
 ): Promise<{
   primaryProvider: string;
   primaryModel: string;
@@ -325,17 +329,31 @@ export async function resolveChatModelConfig(
   lastResortProvider: string;
   lastResortModel: string;
   lastResortAuthMethod: 'oauth' | undefined;
-  source: 'user_override' | 'admin_chat' | 'hardcoded';
+  source: 'user_override' | 'admin_chat' | 'admin_caption' | 'admin_hashtags' | 'hardcoded';
+  categoryEnabled?: true;
 }> {
-  const adminConfig = await fetchCategoryAiSettings(supabaseAdmin, 'chat');
+  let selectedCategory: 'chat' | TextCategory = 'chat';
+  let categoryEnabled: true | undefined;
+  let storedRows: Array<{ key: string; value: unknown }> | undefined;
+  const requestSignal = category === 'chat' ? signal : signal ?? AbortSignal.timeout(50_000);
+  if (category !== 'chat') {
+    const { data: flag, error } = await supabaseAdmin.from('system_settings').select('value')
+      .eq('key', 'feature_ai_category_text_ladders').abortSignal(requestSignal!).maybeSingle();
+    if (error) throw new Error('AI text configuration read failed');
+    if (flag?.value === true) {
+      categoryEnabled = true;
+      const { data: rows, error: readError } = await supabaseAdmin.from('system_settings').select('key,value').in('key', textTierKeys(category)).abortSignal(requestSignal!);
+      if (readError || !Array.isArray(rows)) throw new Error('AI text configuration read failed');
+      if (parseTextLadder(rows, category)) { selectedCategory = category; storedRows = rows; }
+    }
+  }
+  const adminConfig = await fetchCategoryAiSettings(supabaseAdmin, selectedCategory, storedRows, requestSignal);
+  const categoryState = categoryEnabled ? { categoryEnabled } : {};
 
   // Check user-specific override (non-expired)
   if (userId) {
-    const { data: userOverride, error: overrideError } = await supabaseAdmin
-      .from('user_ai_model_overrides')
-      .select('provider, model, expires_at')
-      .eq('user_id', userId)
-      .maybeSingle();
+    const overrideQuery = supabaseAdmin.from('user_ai_model_overrides').select('provider, model, expires_at').eq('user_id', userId);
+    const { data: userOverride, error: overrideError } = await (requestSignal ? overrideQuery.abortSignal(requestSignal) : overrideQuery).maybeSingle();
 
     if (overrideError) throw new Error('AI model override read failed');
     if (userOverride && (!userOverride.expires_at || new Date(userOverride.expires_at) > new Date())) {
@@ -352,6 +370,7 @@ export async function resolveChatModelConfig(
           ? adminConfig.fallbackAuthMethod
           : adminConfig.lastResortAuthMethod,
         source: 'user_override',
+        ...categoryState,
       };
     }
   }
@@ -366,8 +385,14 @@ export async function resolveChatModelConfig(
     lastResortProvider: adminConfig.lastResortProvider,
     lastResortModel: adminConfig.lastResortModel,
     lastResortAuthMethod: adminConfig.lastResortAuthMethod,
-    source: 'admin_chat',
+    source: selectedCategory === 'chat' ? 'admin_chat' : selectedCategory === 'caption' ? 'admin_caption' : 'admin_hashtags',
+    ...categoryState,
   };
+}
+
+/** Compatibility entry point for every existing Chat consumer. */
+export function resolveChatModelConfig(admin: SupabaseClient, userId: string | null) {
+  return resolveTextModelConfig(admin, userId, 'chat');
 }
 
 /**
@@ -442,7 +467,7 @@ export async function callChatCompletion(
   return await fetchWithTimeout(endpoint.apiUrl, { method: 'POST', headers: endpoint.headers, body: JSON.stringify(body) }, timeoutMs);
 }
 
-export async function callAiChain(admin: AiRoutingAdmin | undefined, requestBody: Record<string, unknown>, candidates: AiTier[], oauth?: OAuthChainDeps): Promise<AiCallResult> {
+export async function callAiChain(admin: AiRoutingAdmin | undefined, requestBody: Record<string, unknown>, candidates: AiTier[], oauth?: OAuthChainDeps & { deadlineAt?: number; enforceOutputCap?: boolean }): Promise<AiCallResult> {
   if (candidates.some((tier) => tier.credentialSource === 'user' && !tier.apiKey?.trim())) throw new Error('User AI tier requires an API key');
   const labels = ['primary', 'fallback', 'last_resort'] as const;
   const skipped: AiTierResult[] = candidates.slice(3).map((tier) => ({
@@ -450,16 +475,21 @@ export async function callAiChain(admin: AiRoutingAdmin | undefined, requestBody
   }));
   const tiers: AiTierResult[] = [];
   const platformKeys = new Map<string, string>();
+  const capped = oauth?.enforceOutputCap && (requestBody.max_tokens !== undefined || requestBody.max_completion_tokens !== undefined);
+  const capUnsupported = capped && !candidates.slice(0, 3).some(supportsOutputCap);
   let fallbackReason: string | undefined;
   for (const [index, tier] of candidates.slice(0, 3).entries()) {
     const attempt: AiTierResult = { tier: labels[index], provider: tier.provider, model: tier.model, status: 0, credentialSource: tier.credentialSource };
     if (tier.credentialSource === 'platform') attempt.authMethod = tier.authMethod;
     tiers.push(attempt);
+    const timeoutMs = Math.min(AI_TIER_TIMEOUT_MS, (oauth?.deadlineAt ?? Infinity) - Date.now());
+    if (timeoutMs <= 0) { attempt.error = 'request_deadline_exceeded'; break; }
+    if (capped && !supportsOutputCap(tier)) { attempt.error = 'oauth_max_tokens_unsupported'; continue; }
     // The subscription pathway never resolves a platform API key: its
     // credential comes from the Vault through callOAuthTier.
     if (attempt.authMethod === 'oauth') {
       const body = chatRequestForTier(requestBody, tier);
-      const outcome = await callOAuthTier(admin as unknown as SupabaseClient | undefined, tier, body, AI_TIER_TIMEOUT_MS, oauth);
+      const outcome = await callOAuthTier(admin as unknown as SupabaseClient | undefined, tier, body, timeoutMs, oauth);
       if ('response' in outcome) {
         attempt.status = outcome.response.status;
         if (outcome.response.ok) return { response: outcome.response, tierUsed: attempt.tier, modelUsed: tier.model, providerUsed: tier.provider,
@@ -486,9 +516,11 @@ export async function callAiChain(admin: AiRoutingAdmin | undefined, requestBody
       }
       const endpoint = getAiEndpoint(tier.provider, apiKey, baseUrl);
       const body = chatRequestForTier(requestBody, tier);
+      const remainingMs = Math.min(timeoutMs, (oauth?.deadlineAt ?? Infinity) - Date.now());
+      if (remainingMs <= 0) { attempt.error = 'request_deadline_exceeded'; break; }
       const response = endpoint.kind === 'anthropic'
-        ? await callAnthropic(body, apiKey, AI_TIER_TIMEOUT_MS)
-        : await fetchWithTimeout(endpoint.apiUrl, { method: 'POST', headers: endpoint.headers, body: JSON.stringify(body) }, AI_TIER_TIMEOUT_MS);
+        ? await callAnthropic(body, apiKey, remainingMs)
+        : await fetchWithTimeout(endpoint.apiUrl, { method: 'POST', headers: endpoint.headers, body: JSON.stringify(body) }, remainingMs);
       attempt.status = response.status;
       if (response.ok) return { response, tierUsed: attempt.tier, modelUsed: tier.model, providerUsed: tier.provider,
         credentialSource: tier.credentialSource, fallbackReason, tiers: [...tiers, ...skipped] };
@@ -504,14 +536,14 @@ export async function callAiChain(admin: AiRoutingAdmin | undefined, requestBody
   // the actionable code so callers can tell the user to fix the saved key.
   const userKeyRejected = tiers.length > 0 &&
     tiers.every((t) => t.credentialSource === 'user' && t.error === AI_USER_KEY_INVALID);
-  const errorCode = userKeyRejected ? AI_USER_KEY_INVALID : undefined;
+  const errorCode = capUnsupported ? 'ai_output_cap_unsupported' : userKeyRejected ? AI_USER_KEY_INVALID : undefined;
   return { response: new Response(JSON.stringify({ error: errorCode ?? 'All AI tiers failed' }), { status: 502 }),
     tierUsed: last?.tier ?? 'last_resort', modelUsed: last?.model ?? '', providerUsed: last?.provider ?? '',
     credentialSource: last?.credentialSource, fallbackReason, errorCode, tiers: [...tiers, ...skipped] };
 }
 
 export async function callAiWithFallback(
-  requestBody: any,
+  requestBody: Record<string, unknown>,
   primaryProvider: string,
   primaryModel: string,
   fallbackProvider: string,
@@ -539,17 +571,17 @@ export async function callAiWithFallback(
  * passes neither keeps the previous behaviour exactly.
  */
 export async function logAiCall(
-  supabaseAdmin: any,
+  supabaseAdmin: SupabaseClient,
   feature: string,
   source: string,
   userId: string | null,
   success: boolean,
   result: AiCallResult,
-  extraMeta?: Record<string, any>,
+  extraMeta?: Record<string, unknown>,
   options?: { failureMessage?: string; failureLevel?: 'warn' | 'error' },
 ): Promise<void> {
   try {
-    const tierDetails: Record<string, any> = {};
+    const tierDetails: Record<string, unknown> = {};
     for (const t of result.tiers) {
       tierDetails[t.reason === 'tier_cap' ? `skipped_${Object.keys(tierDetails).length}` : t.tier] = {
         provider: t.provider,

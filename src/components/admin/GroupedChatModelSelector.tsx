@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import type { DefaultModel, AiAuthMethod } from '@/hooks/ai-config/types';
 import type { ChatListGroup, ChatListPolicy } from '@/features/ai-providers/infrastructure/chatListGateway';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -70,19 +70,20 @@ function GroupedChatTier({ label, groups, current, onSelect, isSaving }: {
 }
 
 export function GroupedChatModelSelector({ title, description, icon: Icon, policy, currentDefault, currentFallback, currentFallback2,
-  onSetDefault, onSetFallback, onSetFallback2, isSaving, saveError }: {
+  onSetDefault, onSetFallback, onSetFallback2, isSaving, saveError, readOnly, children }: {
   title: string; description: string; icon: LucideIcon; policy: Extract<ChatListPolicy, { enabled?: true }>;
   currentDefault: DefaultModel | null; currentFallback: DefaultModel | null; currentFallback2: DefaultModel | null;
-  onSetDefault: TierSave; onSetFallback: TierSave; onSetFallback2: TierSave; isSaving?: boolean; saveError?: string;
+  onSetDefault: TierSave; onSetFallback: TierSave; onSetFallback2: TierSave; isSaving?: boolean; saveError?: string; readOnly?: boolean; children?: ReactNode;
 }) {
   return <Card><CardHeader><CardTitle className="flex items-center gap-2 text-base"><Icon className="h-5 w-5" />{title}</CardTitle><CardDescription>{description}</CardDescription></CardHeader>
     <CardContent className="space-y-3">
       {saveError && <p role="alert" className="text-sm text-destructive">{saveError} Choose the model again to retry.</p>}
       {isSaving && <p role="status">Saving...</p>}
-      <GroupedChatTier label="Primary" groups={policy.groups} current={currentDefault} onSelect={onSetDefault} isSaving={isSaving} />
-      <GroupedChatTier label="Fallback" groups={policy.groups} current={currentFallback} onSelect={onSetFallback} isSaving={isSaving} />
-      <GroupedChatTier label="Fallback 2" groups={policy.groups} current={currentFallback2} onSelect={onSetFallback2} isSaving={isSaving} />
-      <p className="text-xs text-muted-foreground">Last Resort (Hardcoded): google/gemini-3-flash-preview. Capped requests require API fallback when Codex cannot honor the output cap.</p>
+      <GroupedChatTier label="Primary" groups={policy.groups} current={currentDefault} onSelect={onSetDefault} isSaving={isSaving || readOnly} />
+      <GroupedChatTier label="Fallback" groups={policy.groups} current={currentFallback} onSelect={onSetFallback} isSaving={isSaving || readOnly || !currentDefault} />
+      <GroupedChatTier label="Fallback 2" groups={policy.groups} current={currentFallback2} onSelect={onSetFallback2} isSaving={isSaving || readOnly || !currentDefault || !currentFallback} />
+      {children}
+      <p className="text-xs text-muted-foreground">Last Resort (Hardcoded): google/gemini-3-flash-preview. Capped requests require a compatible tier. Claude Auth supports caps; OpenAI Codex Auth skips to a configured compatible tier.</p>
     </CardContent>
   </Card>;
 }

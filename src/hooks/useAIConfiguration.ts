@@ -2,7 +2,7 @@ import { useQuery, useMutation, useQueryClient, type QueryClient } from '@tansta
 import { supabase } from '@/integrations/supabase/client';
 import { fetchModelCatalogue } from '@/features/ai-providers/infrastructure/aiModelCatalogueGateway';
 import { AI_PROVIDER_HEALTH_QUERY_KEY } from './ai-config/queryKeys';
-import { CHAT_LIST_POLICY_QUERY_KEY, CHAT_TIER_KEYS, saveChatTier, type ChatListPolicy, type ChatTierInput } from '@/features/ai-providers/infrastructure/chatListGateway';
+import { CHAT_LIST_POLICY_QUERY_KEY, CHAT_TIER_KEYS, saveChatTier, saveTextLadder, textTierKeys, type ChatListPolicy, type ChatTierInput } from '@/features/ai-providers/infrastructure/chatListGateway';
 import type {
   AIProvider,
   AIModel,
@@ -42,13 +42,13 @@ function settingValue(provider_code: string, model_id: string, auth_method?: AiA
     : { provider_code, model_id };
 }
 
-const emptyCategoryDefaults: CategoryDefaults = { chat: null, image: null, tts: null, video: null, search: null, stt: null, vision: null, agent: null, agent_triage: null, embedding: null };
-const emptyCategoryFallbacks: CategoryFallbacks = { chat: null, image: null, tts: null, video: null, search: null, stt: null, vision: null, agent: null, agent_triage: null, embedding: null };
+const emptyCategoryDefaults: CategoryDefaults = { caption: null, hashtags: null, chat: null, image: null, tts: null, video: null, search: null, stt: null, vision: null, agent: null, agent_triage: null, embedding: null };
+const emptyCategoryFallbacks: CategoryFallbacks = { caption: null, hashtags: null, chat: null, image: null, tts: null, video: null, search: null, stt: null, vision: null, agent: null, agent_triage: null, embedding: null };
 
 // "agent_triage" must precede "agent": the loop below breaks on the first exact
 // match, and exact matching makes the order safe either way, but keeping the
 // longer key first mirrors this file's suffix-order rule (see parseSettingsRows).
-const MODEL_CATEGORIES: ModelCategory[] = ['chat', 'image', 'tts', 'video', 'search', 'stt', 'vision', 'agent_triage', 'agent', 'embedding'];
+const MODEL_CATEGORIES: ModelCategory[] = ['caption', 'hashtags', 'chat', 'image', 'tts', 'video', 'search', 'stt', 'vision', 'agent_triage', 'agent', 'embedding'];
 
 export interface ParsedModelSettings {
   defaultModel: DefaultModel | null;
@@ -72,7 +72,11 @@ export function parseSettingsRows(rows: { key: string; value: unknown }[]): Pars
   };
 
   for (const row of rows) {
-    const parsed = parseDefault(row.value);
+    let storedValue = row.value;
+    if (/^default_ai_model_(caption|hashtags)(?:_fallback(?:_2)?)?$/.test(row.key) && typeof storedValue === 'string') {
+      try { storedValue = JSON.parse(storedValue); } catch { storedValue = null; }
+    }
+    const parsed = parseDefault(storedValue);
     if (row.key === 'default_ai_model') {
       out.defaultModel = parsed;
       continue;
@@ -129,11 +133,13 @@ export function useAIConfiguration() {
   });
 }
 
-function saveChatTierAndReconcile(queryClient: QueryClient, input: Omit<ChatTierInput, 'expected'>) {
+function saveChatTierAndReconcile(queryClient: QueryClient, input: Omit<ChatTierInput, 'expected'> | { category: 'caption' | 'hashtags'; slot?: 'primary' | 'fallback' | 'fallback_2'; provider_code?: string; model_id?: string; auth_method?: AiAuthMethod }) {
   const current = queryClient.getQueryData<AIConfigData>(['ai-config']);
   if (!current) throw new Error('AI configuration must be loaded before saving. Reload and retry.');
-  const expected = Object.fromEntries(current.settings.filter(row => CHAT_TIER_KEYS.some(key => key === row.key)).map(row => [row.key, row.value]));
-  return saveChatTier({ ...input, expected }, async snapshot => {
+  const keys = textTierKeys(input.category);
+  const expected = Object.fromEntries(current.settings.filter(row => keys.includes(row.key)).map(row => [row.key, row.value]));
+  const expected_chat = Object.fromEntries(current.settings.filter(row => CHAT_TIER_KEYS.some(key => key === row.key)).map(row => [row.key, row.value]));
+  const reconcile = async (snapshot: Record<string, Record<string, unknown> | null>) => {
     // Publish every observed tier before a failed mutation can show its error.
     // Invalidation alone can leave stale saved tiers and CAS expectations visible.
     await queryClient.cancelQueries({ queryKey: ['ai-config'] });
@@ -145,6 +151,15 @@ function saveChatTierAndReconcile(queryClient: QueryClient, input: Omit<ChatTier
       }
       return { ...current, settings, ...parseSettingsRows(settings) };
     });
+  };
+  return input.category === 'chat' ? saveChatTier({ ...input, expected }, reconcile)
+    : saveTextLadder({ ...input, expected, expected_chat }, reconcile);
+}
+
+export function useResetTextCategory() {
+  const queryClient = useQueryClient();
+  return useMutation({ mutationFn: (category: 'caption' | 'hashtags') => saveChatTierAndReconcile(queryClient, { category }),
+    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ['ai-config'] }); },
   });
 }
 
@@ -152,6 +167,7 @@ export function useSetDefaultModel() {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: async ({ provider_code, model_id, category, auth_method }: { provider_code: string; model_id: string; category?: ModelCategory; auth_method?: AiAuthMethod }) => {
+      if (category === 'caption' || category === 'hashtags') return saveChatTierAndReconcile(queryClient, { category, slot: 'primary', provider_code, model_id, auth_method });
       if (category === 'chat' && queryClient.getQueryData<ChatListPolicy>(CHAT_LIST_POLICY_QUERY_KEY)?.enabled) {
         return saveChatTierAndReconcile(queryClient, { category, slot: 'primary', provider_code, model_id, auth_method });
       }
@@ -170,6 +186,7 @@ export function useSetFallbackModel() {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: async ({ provider_code, model_id, category, auth_method }: { provider_code: string; model_id: string; category: ModelCategory; auth_method?: AiAuthMethod }) => {
+      if (category === 'caption' || category === 'hashtags') return saveChatTierAndReconcile(queryClient, { category, slot: 'fallback', provider_code, model_id, auth_method });
       if (category === 'chat' && queryClient.getQueryData<ChatListPolicy>(CHAT_LIST_POLICY_QUERY_KEY)?.enabled) {
         return saveChatTierAndReconcile(queryClient, { category, slot: 'fallback', provider_code, model_id, auth_method });
       }
@@ -188,6 +205,7 @@ export function useSetFallback2Model() {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: async ({ provider_code, model_id, category, auth_method }: { provider_code: string; model_id: string; category: ModelCategory; auth_method?: AiAuthMethod }) => {
+      if (category === 'caption' || category === 'hashtags') return saveChatTierAndReconcile(queryClient, { category, slot: 'fallback_2', provider_code, model_id, auth_method });
       if (category === 'chat' && queryClient.getQueryData<ChatListPolicy>(CHAT_LIST_POLICY_QUERY_KEY)?.enabled) {
         return saveChatTierAndReconcile(queryClient, { category, slot: 'fallback_2', provider_code, model_id, auth_method });
       }

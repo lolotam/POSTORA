@@ -1,3 +1,4 @@
+import { runTextListAction, textActionDeps } from "./textListActions.ts";
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 import { restrictedCorsHeaders } from '../_shared/cors.ts';
 import { getValidAccessToken } from '../_shared/higgsfield-oauth.ts';
@@ -81,6 +82,12 @@ async function respondToAiConfigRequest(req: Request, signal: AbortSignal): Prom
 
     // Chat owns its authorization and refusal logging; do not perform a second
     // role lookup before entering the application boundary.
+    if (req.method === 'POST' && (resolvedAction === 'set-text-tier' || resolvedAction === 'inherit-text-category')) {
+      const { action: _action, ...input } = body;
+      const response = await runTextListAction(resolvedAction, input, textActionDeps(supabase, user.id, signal));
+      return new Response(response.body, { status: response.status, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+    }
+
     if (req.method === 'POST' && (resolvedAction === 'chat-list-policy' || resolvedAction === 'set-chat-tier')) {
       const input = { ...body };
       delete input.action;

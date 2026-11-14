@@ -44,7 +44,7 @@ export async function runChatListAction(action: "chat-list-policy" | "set-chat-t
       throw new ChatTierError("text_lists_disabled");
     }
     const snapshot = await deps.snapshot(flags);
-    if (action === "chat-list-policy") return Response.json(buildChatListPolicy(snapshot));
+    if (action === "chat-list-policy") return Response.json({ ...buildChatListPolicy(snapshot), categoryLaddersEnabled: flags.feature_ai_category_text_ladders });
     await deps.persist(validateChatTier(body, snapshot));
     return Response.json({ success: true });
   } catch (cause) {

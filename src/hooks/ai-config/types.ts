@@ -50,9 +50,11 @@ export interface DefaultModel {
   auth_method?: AiAuthMethod;
 }
 
-export type ModelCategory = 'chat' | 'image' | 'tts' | 'video' | 'search' | 'stt' | 'vision' | 'agent' | 'agent_triage' | 'embedding';
+export type ModelCategory = 'caption' | 'hashtags' | 'chat' | 'image' | 'tts' | 'video' | 'search' | 'stt' | 'vision' | 'agent' | 'agent_triage' | 'embedding';
 
 export interface CategoryDefaults {
+  caption: DefaultModel | null;
+  hashtags: DefaultModel | null;
   chat: DefaultModel | null;
   image: DefaultModel | null;
   tts: DefaultModel | null;
@@ -66,6 +68,8 @@ export interface CategoryDefaults {
 }
 
 export interface CategoryFallbacks {
+  caption: DefaultModel | null;
+  hashtags: DefaultModel | null;
   chat: DefaultModel | null;
   image: DefaultModel | null;
   tts: DefaultModel | null;
@@ -86,6 +90,8 @@ export interface CategoryFallbacks {
  * written by the admin UI and read by nothing, pending a resolver that wants them.
  */
 export interface CategoryFallbacks2 {
+  caption: DefaultModel | null;
+  hashtags: DefaultModel | null;
   chat: DefaultModel | null;
   image: DefaultModel | null;
   tts: DefaultModel | null;
