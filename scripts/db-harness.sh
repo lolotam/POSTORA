@@ -154,6 +154,8 @@ SUITES=(
   instagram_capabilities.sql
   analytics_legacy_bootstrap.sql
   analytics_legacy_bootstrap_races.sql
+  analytics_direct_identity_recovery.sql
+  analytics_direct_identity_races.sql
   facebook_user_credential_bindings.sql
   social_account_disconnect_credentials.sql
   instagram_tracking_schema.sql

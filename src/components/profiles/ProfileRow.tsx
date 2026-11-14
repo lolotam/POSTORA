@@ -136,6 +136,27 @@ interface ProfileRowProps {
   connectingPlatform: Platform | null;
 }
 
+type AccountReconnectButtonProps = {
+  profileId: string;
+  account: Pick<SocialAccountWithProfile, "id" | "platform">;
+  expired: boolean;
+  needsReauth: boolean;
+  isReconnecting: boolean;
+  onReconnect: ProfileRowProps["onReconnectAccount"];
+};
+
+/** Valid legacy Instagram tokens can still need one captured analytics reconnect. */
+export function AccountReconnectButton({ profileId, account, expired, needsReauth, isReconnecting, onReconnect }: AccountReconnectButtonProps) {
+  if (!expired && !needsReauth && account.platform !== "instagram") return null;
+  return <Button variant={needsReauth ? "default" : "outline"} size="sm"
+    className={`h-7 text-xs gap-1 ${needsReauth ? "bg-destructive hover:bg-destructive/90 text-destructive-foreground" : ""}`}
+    onClick={(event) => { event.stopPropagation(); onReconnect(profileId, account.platform, account.id); }}
+    disabled={isReconnecting}>
+    {isReconnecting ? <Loader2 className="w-3 h-3 animate-spin" /> : <RefreshCw className="w-3 h-3" />}
+    Reconnect
+  </Button>;
+}
+
 export function ProfileRow({
   profile,
   allPlatforms,
@@ -720,25 +741,9 @@ export function ProfileRow({
                           </TableCell>
                           <TableCell>
                             <div className="flex items-center gap-1">
-                              {(expired || needsReauth) && (
-                                <Button
-                                  variant={needsReauth ? "default" : "outline"}
-                                  size="sm"
-                                  className={`h-7 text-xs gap-1 ${needsReauth ? "bg-destructive hover:bg-destructive/90 text-destructive-foreground" : ""}`}
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    onReconnectAccount(profile.id, account.platform, account.id);
-                                  }}
-                                  disabled={isReconnecting}
-                                >
-                                  {isReconnecting ? (
-                                    <Loader2 className="w-3 h-3 animate-spin" />
-                                  ) : (
-                                    <RefreshCw className="w-3 h-3" />
-                                  )}
-                                  Reconnect
-                                </Button>
-                              )}
+                              <AccountReconnectButton profileId={profile.id} account={account}
+                                expired={expired} needsReauth={needsReauth} isReconnecting={isReconnecting}
+                                onReconnect={onReconnectAccount} />
                               <Button
                                 variant="ghost"
                                 size="icon"

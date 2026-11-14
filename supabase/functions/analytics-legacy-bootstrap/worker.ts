@@ -10,7 +10,7 @@ export type BootstrapWorkerInput = { rpc: BootstrapRpc; apps: BootstrapApps; fet
 const projectionSchema = z.object({ job_id: z.string().uuid().optional(), account_id: z.string().uuid().optional(),
   state: z.enum(["pending", "verifying", "permission_pending", "ready", "needs_reconnect", "permissions_missing", "retry", "blocked"]),
   reason_code: z.enum(["settings_unavailable", "not_authorized", "account_not_found", "verification_pending", "token_invalid",
-    "account_identity_invalid", "stored_user_credential_missing", "stale_capture", "reconcile_required", "permission_verification_pending",
+    "account_identity_invalid", "linked_page_missing", "linked_page_unavailable", "stored_user_credential_missing", "stale_capture", "reconcile_required", "permission_verification_pending",
     "permission_read_failed", "verified", "permission_missing", "app_mismatch", "identity_mismatch", "provider_error",
     "provider_malformed", "rate_limited", "budget_exhausted", "direct_verification_unsupported", "not_found"]).nullable().optional(), correlation_id: z.string().uuid().optional(),
   next_action: z.enum(["supported_reconnect", "grant_permissions", "support", "none", "wait"]).optional(),

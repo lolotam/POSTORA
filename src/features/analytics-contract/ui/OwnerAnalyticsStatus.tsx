@@ -5,6 +5,11 @@ export function OwnerAnalyticsStatus({ report }: { report: Partial<OwnerAnalytic
   const { t } = useTranslation("analytics");
   const collection = report.collection;
   if (!collection) return null;
+  const directNeedsReconnect = report.connection?.reason_code === "direct_verification_unsupported"
+    || collection.reason_code === "direct_verification_unsupported";
+  const directMessage = report.connection?.reconnect_path === "/profiles"
+    ? t("readiness.directVerificationUnsupported", "This older Instagram Login connection cannot be verified for analytics. Reconnect the existing account once through Instagram Login in Profiles.")
+    : t("readiness.directReconnectUnavailable", "This older Instagram Login connection cannot be verified for analytics. Contact support to enable the supported reconnect flow.");
   const messages = {
     not_enabled: t("readiness.notEnabled", "Analytics collection is not enabled for this account yet."),
     preparing: t("readiness.preparing", "We are verifying this connection for analytics."),
@@ -26,7 +31,13 @@ export function OwnerAnalyticsStatus({ report }: { report: Partial<OwnerAnalytic
     stale: t("readiness.stale", "Saved measurements are out of date."),
   };
   return <div role="status" aria-live="polite" className="rounded-lg border p-3 space-y-1 text-sm">
-    <p>{messages[collection.state]}</p>
+    <p>{collection.reason_code === "direct_verification_unsupported" ? directMessage : messages[collection.state]}</p>
+    {directNeedsReconnect && collection.reason_code !== "direct_verification_unsupported" && <p>{directMessage}</p>}
+    {report.connection?.reconnect_path === "/profiles" && <a className="block underline" href="/profiles">
+      {t("readiness.openProfiles", "Open Profiles to reconnect the existing account")}
+    </a>}
+    {report.connection?.reason_code === "linked_page_missing" && <p>{t("readiness.linkedPageMissing", "This connection has no verified linked Facebook Page. Contact support to review this account.")}</p>}
+    {report.connection?.reason_code === "linked_page_unavailable" && <p>{t("readiness.linkedPageUnavailable", "The linked Facebook Page connection is unavailable. Contact support to review this account.")}</p>}
     {report.permission?.state === "missing" && <p>{report.permission.missing_scopes.join(", ")}</p>}
     {collection.next_action === "contact_support" && <p>{t("readiness.support", "Contact support for the next step.")}</p>}
     {collection.next_action === "grant_permissions" && <p>{t("readiness.grant", "Grant the listed permissions through the supported connection flow.")}</p>}

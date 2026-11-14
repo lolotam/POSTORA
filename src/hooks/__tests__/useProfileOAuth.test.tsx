@@ -59,8 +59,9 @@ function createWrapper() {
 function installLocation() {
     const assigned: string[] = [];
     delete (window as unknown as { location?: unknown }).location;
-    (window as unknown as { location: { href: string; assign: (url: string) => void } }).location = {
+    (window as unknown as { location: { href: string; origin: string; assign: (url: string) => void } }).location = {
         href: "",
+        origin: "https://example.invalid",
         assign: (url: string) => {
             assigned.push(url);
         },
@@ -174,5 +175,20 @@ describe("useProfileOAuth Hook", () => {
                 variant: "destructive",
             })
         );
+    });
+
+    it("keeps the existing account target through the Instagram direct method dialog", async () => {
+        installLocation();
+        const profileId = crypto.randomUUID();
+        const accountId = crypto.randomUUID();
+        invokeMock.mockResolvedValue({ data: { url: "https://www.instagram.com/oauth/authorize" }, error: null });
+        const { result } = renderHook(() => useProfileOAuth(), { wrapper: createWrapper() });
+        await act(async () => { await result.current.handleReconnectPlatform(profileId, "instagram", accountId); });
+        expect(invokeMock).not.toHaveBeenCalled();
+        await act(async () => { await result.current.selectInstagramFlow("direct"); });
+        expect(invokeMock).toHaveBeenCalledWith("instagram-oauth", { body: expect.objectContaining({
+            action: "authorize", social_profile_id: profileId, intent: "reconnect", target_social_account_id: accountId,
+        }) });
+        expect(window.location.href).toBe("https://www.instagram.com/oauth/authorize");
     });
 });
