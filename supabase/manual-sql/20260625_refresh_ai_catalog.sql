@@ -6,6 +6,15 @@
 --                 UPDATE is idempotent.
 -- Rollback: see "ROLLBACK NOTES" at the bottom.
 --
+-- Requires: EXPAND 20261113180000 AND CONTRACT 20261113180100 (after edge deployment/drain).
+--   The catalogue is keyed by credential kind: UNIQUE (provider_id, model_id,
+--   auth_method). The old UNIQUE (provider_id, model_id) constraint is gone, so
+--   every conflict target here names auth_method too — a two-column target
+--   answers 42P10 ("no unique or exclusion constraint matching the ON CONFLICT
+--   specification") and the script inserts nothing. Every row written here is an
+--   API-key model (auth_method = 'api_key'), which is what the column default
+--   already says; it is written explicitly so the script does not depend on it.
+--
 -- Scope:
 --   * Adds the newest publicly available chat/image/video/tts/stt/embedding
 --     model IDs for every provider already in ai_providers.
@@ -36,8 +45,8 @@ BEGIN;
 -- ---------------------------------------------------------------------------
 -- SECTION B: OpenAI — chat / reasoning
 -- ---------------------------------------------------------------------------
-INSERT INTO public.ai_models (provider_id, model_id, name, description, capabilities, context_limit, cost_per_1m_input_tokens, cost_per_1m_output_tokens, is_active)
-SELECT p.id, v.model_id, v.name, v.description, ARRAY['chat']::text[], v.ctx, v.cin, v.cout, true
+INSERT INTO public.ai_models (provider_id, model_id, name, description, capabilities, context_limit, cost_per_1m_input_tokens, cost_per_1m_output_tokens, is_active, auth_method)
+SELECT p.id, v.model_id, v.name, v.description, ARRAY['chat']::text[], v.ctx, v.cin, v.cout, true, 'api_key'::text
 FROM public.ai_providers p,
   (VALUES
     ('gpt-5-nano',     'GPT-5 Nano',     'Fast, low-cost GPT-5 variant for high-volume tasks',           400000,  0.05,  0.40),
@@ -48,13 +57,13 @@ FROM public.ai_providers p,
     ('o4',             'o4',             'OpenAI flagship reasoning model',                               200000, 15.00, 60.00)
   ) AS v(model_id, name, description, ctx, cin, cout)
 WHERE p.provider_code = 'openai'
-ON CONFLICT (provider_id, model_id) DO NOTHING;
+ON CONFLICT (provider_id, model_id, auth_method) DO NOTHING;
 
 -- ---------------------------------------------------------------------------
 -- SECTION C: OpenAI — image / TTS / STT / embeddings
 -- ---------------------------------------------------------------------------
-INSERT INTO public.ai_models (provider_id, model_id, name, description, capabilities, is_active, cost_per_1m_input_tokens, cost_per_1m_output_tokens)
-SELECT p.id, v.model_id, v.name, v.description, v.caps::text[], true, NULL, NULL
+INSERT INTO public.ai_models (provider_id, model_id, name, description, capabilities, is_active, cost_per_1m_input_tokens, cost_per_1m_output_tokens, auth_method)
+SELECT p.id, v.model_id, v.name, v.description, v.caps::text[], true, NULL, NULL, 'api_key'::text
 FROM public.ai_providers p,
   (VALUES
     ('gpt-image-2',                'GPT Image 2',                  'State-of-the-art image generation via /v1/images/generations', ARRAY['image']),
@@ -67,13 +76,13 @@ FROM public.ai_providers p,
     ('sora-2',                     'Sora 2',                       'OpenAI text-to-video generation',                              ARRAY['video'])
   ) AS v(model_id, name, description, caps)
 WHERE p.provider_code = 'openai'
-ON CONFLICT (provider_id, model_id) DO NOTHING;
+ON CONFLICT (provider_id, model_id, auth_method) DO NOTHING;
 
 -- ---------------------------------------------------------------------------
 -- SECTION D: Anthropic / Claude — chat
 -- ---------------------------------------------------------------------------
-INSERT INTO public.ai_models (provider_id, model_id, name, description, capabilities, context_limit, cost_per_1m_input_tokens, cost_per_1m_output_tokens, is_active)
-SELECT p.id, v.model_id, v.name, v.description, ARRAY['chat']::text[], v.ctx, v.cin, v.cout, true
+INSERT INTO public.ai_models (provider_id, model_id, name, description, capabilities, context_limit, cost_per_1m_input_tokens, cost_per_1m_output_tokens, is_active, auth_method)
+SELECT p.id, v.model_id, v.name, v.description, ARRAY['chat']::text[], v.ctx, v.cin, v.cout, true, 'api_key'::text
 FROM public.ai_providers p,
   (VALUES
     ('claude-haiku-4.6',  'Claude Haiku 4.6',  'Fast, affordable Claude for high-volume tasks',         200000,  0.80,  4.00),
@@ -83,13 +92,13 @@ FROM public.ai_providers p,
     ('claude-6.8-opus',   'Claude 6.8 Opus',   'Next-generation Opus (preview)',                       1000000, 18.00, 90.00)
   ) AS v(model_id, name, description, ctx, cin, cout)
 WHERE p.provider_code = 'claude'
-ON CONFLICT (provider_id, model_id) DO NOTHING;
+ON CONFLICT (provider_id, model_id, auth_method) DO NOTHING;
 
 -- ---------------------------------------------------------------------------
 -- SECTION E: Google / Gemini — chat + image + video + embeddings
 -- ---------------------------------------------------------------------------
-INSERT INTO public.ai_models (provider_id, model_id, name, description, capabilities, context_limit, cost_per_1m_input_tokens, cost_per_1m_output_tokens, is_active)
-SELECT p.id, v.model_id, v.name, v.description, ARRAY['chat']::text[], v.ctx, v.cin, v.cout, true
+INSERT INTO public.ai_models (provider_id, model_id, name, description, capabilities, context_limit, cost_per_1m_input_tokens, cost_per_1m_output_tokens, is_active, auth_method)
+SELECT p.id, v.model_id, v.name, v.description, ARRAY['chat']::text[], v.ctx, v.cin, v.cout, true, 'api_key'::text
 FROM public.ai_providers p,
   (VALUES
     ('gemini-3-flash-preview',  'Gemini 3 Flash Preview',  'Default fast Gemini 3 preview',                     1000000, 0.10, 0.40),
@@ -99,10 +108,10 @@ FROM public.ai_providers p,
     ('gemini-3.5-flash',        'Gemini 3.5 Flash',        'High-efficiency Gemini 3.5 for coding & reasoning', 2000000, 0.20, 0.80)
   ) AS v(model_id, name, description, ctx, cin, cout)
 WHERE p.provider_code IN ('gemini','google')
-ON CONFLICT (provider_id, model_id) DO NOTHING;
+ON CONFLICT (provider_id, model_id, auth_method) DO NOTHING;
 
-INSERT INTO public.ai_models (provider_id, model_id, name, description, capabilities, is_active, cost_per_1m_input_tokens, cost_per_1m_output_tokens)
-SELECT p.id, v.model_id, v.name, v.description, v.caps::text[], true, NULL, NULL
+INSERT INTO public.ai_models (provider_id, model_id, name, description, capabilities, is_active, cost_per_1m_input_tokens, cost_per_1m_output_tokens, auth_method)
+SELECT p.id, v.model_id, v.name, v.description, v.caps::text[], true, NULL, NULL, 'api_key'::text
 FROM public.ai_providers p,
   (VALUES
     ('gemini-3.1-flash-image', 'Gemini 3.1 Flash Image (Nano Banana 2)', 'Fast high-quality image generation/editing', ARRAY['image']),
@@ -114,13 +123,13 @@ FROM public.ai_providers p,
     ('gemini-embedding-2',     'Gemini Embedding 2',                      'Multimodal Google embeddings',               ARRAY['embedding'])
   ) AS v(model_id, name, description, caps)
 WHERE p.provider_code IN ('gemini','google')
-ON CONFLICT (provider_id, model_id) DO NOTHING;
+ON CONFLICT (provider_id, model_id, auth_method) DO NOTHING;
 
 -- ---------------------------------------------------------------------------
 -- SECTION F: xAI / Grok — chat + image
 -- ---------------------------------------------------------------------------
-INSERT INTO public.ai_models (provider_id, model_id, name, description, capabilities, context_limit, cost_per_1m_input_tokens, cost_per_1m_output_tokens, is_active)
-SELECT p.id, v.model_id, v.name, v.description, ARRAY['chat']::text[], v.ctx, v.cin, v.cout, true
+INSERT INTO public.ai_models (provider_id, model_id, name, description, capabilities, context_limit, cost_per_1m_input_tokens, cost_per_1m_output_tokens, is_active, auth_method)
+SELECT p.id, v.model_id, v.name, v.description, ARRAY['chat']::text[], v.ctx, v.cin, v.cout, true, 'api_key'::text
 FROM public.ai_providers p,
   (VALUES
     ('grok-4.3',         'Grok 4.3',         'xAI flagship with extended reasoning',     256000, 3.00, 15.00),
@@ -129,23 +138,23 @@ FROM public.ai_providers p,
     ('grok-code-fast-1', 'Grok Code Fast 1', 'Optimized for coding and tool use',        256000, 0.50, 2.50)
   ) AS v(model_id, name, description, ctx, cin, cout)
 WHERE p.provider_code = 'xai'
-ON CONFLICT (provider_id, model_id) DO NOTHING;
+ON CONFLICT (provider_id, model_id, auth_method) DO NOTHING;
 
-INSERT INTO public.ai_models (provider_id, model_id, name, description, capabilities, is_active, cost_per_1m_input_tokens, cost_per_1m_output_tokens)
-SELECT p.id, v.model_id, v.name, v.description, ARRAY['image']::text[], true, NULL, NULL
+INSERT INTO public.ai_models (provider_id, model_id, name, description, capabilities, is_active, cost_per_1m_input_tokens, cost_per_1m_output_tokens, auth_method)
+SELECT p.id, v.model_id, v.name, v.description, ARRAY['image']::text[], true, NULL, NULL, 'api_key'::text
 FROM public.ai_providers p,
   (VALUES
     ('grok-image-3',   'Grok Image 3',  'Latest xAI image generation'),
     ('grok-image-2',   'Grok Image 2',  'Previous xAI image generation')
   ) AS v(model_id, name, description)
 WHERE p.provider_code = 'xai'
-ON CONFLICT (provider_id, model_id) DO NOTHING;
+ON CONFLICT (provider_id, model_id, auth_method) DO NOTHING;
 
 -- ---------------------------------------------------------------------------
 -- SECTION G: MiniMax — chat + image + video + TTS
 -- ---------------------------------------------------------------------------
-INSERT INTO public.ai_models (provider_id, model_id, name, description, capabilities, context_limit, cost_per_1m_input_tokens, cost_per_1m_output_tokens, is_active)
-SELECT p.id, v.model_id, v.name, v.description, ARRAY['chat']::text[], v.ctx, v.cin, v.cout, true
+INSERT INTO public.ai_models (provider_id, model_id, name, description, capabilities, context_limit, cost_per_1m_input_tokens, cost_per_1m_output_tokens, is_active, auth_method)
+SELECT p.id, v.model_id, v.name, v.description, ARRAY['chat']::text[], v.ctx, v.cin, v.cout, true, 'api_key'::text
 FROM public.ai_providers p,
   (VALUES
     ('MiniMax-M3',    'MiniMax M3',    'Latest MiniMax flagship chat model',         256000, 1.20, 6.00),
@@ -153,10 +162,10 @@ FROM public.ai_providers p,
     ('abab7-chat',    'abab7 Chat',    'MiniMax conversational model',              245000, 1.00, 5.00)
   ) AS v(model_id, name, description, ctx, cin, cout)
 WHERE p.provider_code = 'minimax'
-ON CONFLICT (provider_id, model_id) DO NOTHING;
+ON CONFLICT (provider_id, model_id, auth_method) DO NOTHING;
 
-INSERT INTO public.ai_models (provider_id, model_id, name, description, capabilities, is_active, cost_per_1m_input_tokens, cost_per_1m_output_tokens)
-SELECT p.id, v.model_id, v.name, v.description, v.caps::text[], true, NULL, NULL
+INSERT INTO public.ai_models (provider_id, model_id, name, description, capabilities, is_active, cost_per_1m_input_tokens, cost_per_1m_output_tokens, auth_method)
+SELECT p.id, v.model_id, v.name, v.description, v.caps::text[], true, NULL, NULL, 'api_key'::text
 FROM public.ai_providers p,
   (VALUES
     ('image-01',         'MiniMax Image 01',     'MiniMax text-to-image',                ARRAY['image']),
@@ -167,13 +176,13 @@ FROM public.ai_providers p,
     ('voice-clone-2',    'Voice Clone 2',        'MiniMax voice cloning',                ARRAY['tts'])
   ) AS v(model_id, name, description, caps)
 WHERE p.provider_code = 'minimax'
-ON CONFLICT (provider_id, model_id) DO NOTHING;
+ON CONFLICT (provider_id, model_id, auth_method) DO NOTHING;
 
 -- ---------------------------------------------------------------------------
 -- SECTION H: Z.AI / GLM — chat + video
 -- ---------------------------------------------------------------------------
-INSERT INTO public.ai_models (provider_id, model_id, name, description, capabilities, context_limit, cost_per_1m_input_tokens, cost_per_1m_output_tokens, is_active)
-SELECT p.id, v.model_id, v.name, v.description, ARRAY['chat']::text[], v.ctx, v.cin, v.cout, true
+INSERT INTO public.ai_models (provider_id, model_id, name, description, capabilities, context_limit, cost_per_1m_input_tokens, cost_per_1m_output_tokens, is_active, auth_method)
+SELECT p.id, v.model_id, v.name, v.description, ARRAY['chat']::text[], v.ctx, v.cin, v.cout, true, 'api_key'::text
 FROM public.ai_providers p,
   (VALUES
     ('glm-5.2',        'GLM 5.2',        'Z.AI latest flagship chat model',         200000, 0.60, 2.20),
@@ -183,23 +192,23 @@ FROM public.ai_providers p,
     ('glm-z1-32b',     'GLM Z1 32B',     'Z.AI reasoning model',                    128000, 1.00, 4.00)
   ) AS v(model_id, name, description, ctx, cin, cout)
 WHERE p.provider_code = 'zai'
-ON CONFLICT (provider_id, model_id) DO NOTHING;
+ON CONFLICT (provider_id, model_id, auth_method) DO NOTHING;
 
-INSERT INTO public.ai_models (provider_id, model_id, name, description, capabilities, is_active, cost_per_1m_input_tokens, cost_per_1m_output_tokens)
-SELECT p.id, v.model_id, v.name, v.description, v.caps::text[], true, NULL, NULL
+INSERT INTO public.ai_models (provider_id, model_id, name, description, capabilities, is_active, cost_per_1m_input_tokens, cost_per_1m_output_tokens, auth_method)
+SELECT p.id, v.model_id, v.name, v.description, v.caps::text[], true, NULL, NULL, 'api_key'::text
 FROM public.ai_providers p,
   (VALUES
     ('cogview-4',  'CogView 4',  'Z.AI text-to-image',           ARRAY['image']),
     ('cogvideox-2','CogVideoX 2','Z.AI text-to-video generation',ARRAY['video'])
   ) AS v(model_id, name, description, caps)
 WHERE p.provider_code = 'zai'
-ON CONFLICT (provider_id, model_id) DO NOTHING;
+ON CONFLICT (provider_id, model_id, auth_method) DO NOTHING;
 
 -- ---------------------------------------------------------------------------
 -- SECTION I: ElevenLabs — TTS / STT
 -- ---------------------------------------------------------------------------
-INSERT INTO public.ai_models (provider_id, model_id, name, description, capabilities, is_active, cost_per_1m_input_tokens, cost_per_1m_output_tokens)
-SELECT p.id, v.model_id, v.name, v.description, v.caps::text[], true, NULL, NULL
+INSERT INTO public.ai_models (provider_id, model_id, name, description, capabilities, is_active, cost_per_1m_input_tokens, cost_per_1m_output_tokens, auth_method)
+SELECT p.id, v.model_id, v.name, v.description, v.caps::text[], true, NULL, NULL, 'api_key'::text
 FROM public.ai_providers p,
   (VALUES
     ('eleven_v3',                 'ElevenLabs v3',                 'Latest expressive TTS model',                 ARRAY['tts']),
@@ -209,13 +218,13 @@ FROM public.ai_providers p,
     ('scribe_v1',                 'ElevenLabs Scribe v1',          'Speech-to-text with diarization',             ARRAY['stt'])
   ) AS v(model_id, name, description, caps)
 WHERE p.provider_code = 'elevenlabs'
-ON CONFLICT (provider_id, model_id) DO NOTHING;
+ON CONFLICT (provider_id, model_id, auth_method) DO NOTHING;
 
 -- ---------------------------------------------------------------------------
 -- SECTION J: Perplexity — search/chat
 -- ---------------------------------------------------------------------------
-INSERT INTO public.ai_models (provider_id, model_id, name, description, capabilities, context_limit, cost_per_1m_input_tokens, cost_per_1m_output_tokens, is_active)
-SELECT p.id, v.model_id, v.name, v.description, ARRAY['search','chat']::text[], v.ctx, v.cin, v.cout, true
+INSERT INTO public.ai_models (provider_id, model_id, name, description, capabilities, context_limit, cost_per_1m_input_tokens, cost_per_1m_output_tokens, is_active, auth_method)
+SELECT p.id, v.model_id, v.name, v.description, ARRAY['search','chat']::text[], v.ctx, v.cin, v.cout, true, 'api_key'::text
 FROM public.ai_providers p,
   (VALUES
     ('sonar',                'Sonar',                'Fast everyday grounded-search Q&A',     128000, 1.00, 1.00),
@@ -225,7 +234,7 @@ FROM public.ai_providers p,
     ('sonar-deep-research',  'Sonar Deep Research',  'Multi-query expert research pipeline',  200000, 2.00, 8.00)
   ) AS v(model_id, name, description, ctx, cin, cout)
 WHERE p.provider_code = 'perplexity'
-ON CONFLICT (provider_id, model_id) DO NOTHING;
+ON CONFLICT (provider_id, model_id, auth_method) DO NOTHING;
 
 -- ---------------------------------------------------------------------------
 -- SECTION K: deactivate clearly-retired model IDs
@@ -245,7 +254,7 @@ BEGIN
     EXECUTE $sql$
       UPDATE public.ai_models
       SET is_active = false
-      WHERE model_id = ANY($1)
+      WHERE auth_method = 'api_key' AND model_id = ANY($1)
         AND NOT EXISTS (
           SELECT 1 FROM public.default_models dm
           WHERE dm.model_id = public.ai_models.model_id
@@ -254,7 +263,7 @@ BEGIN
   ELSE
     UPDATE public.ai_models
     SET is_active = false
-    WHERE model_id = ANY(retired_ids);
+    WHERE auth_method = 'api_key' AND model_id = ANY(retired_ids);
   END IF;
 END $$;
 
@@ -265,7 +274,7 @@ COMMIT;
 -- ============================================================================
 -- 1) To remove all rows added by this script (only the ones with the IDs
 --    listed above):
---      DELETE FROM public.ai_models WHERE model_id IN (
+--      DELETE FROM public.ai_models WHERE auth_method = 'api_key' AND model_id IN (
 --        'gpt-5-nano','gpt-5.4-nano','gpt-5.4-pro','gpt-5.5','gpt-5.5-pro','o4',
 --        'gpt-image-2','gpt-image-1-mini','gpt-4o-mini-tts',
 --        'gpt-4o-mini-transcribe','gpt-4o-transcribe',
@@ -286,5 +295,5 @@ COMMIT;
 --        'sonar','sonar-pro','sonar-reasoning','sonar-reasoning-pro','sonar-deep-research'
 --      );
 -- 2) To re-activate the legacy rows deactivated in Section K, set
---    is_active = true on those model_ids.
+--    is_active = true only WHERE auth_method = 'api_key' AND model_id = ANY(the_retired_ids).
 -- ============================================================================

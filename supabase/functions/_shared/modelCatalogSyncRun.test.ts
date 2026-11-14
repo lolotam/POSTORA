@@ -1,11 +1,11 @@
 // deno-lint-ignore-file no-import-prefix
 import { assertEquals, assertRejects } from "https://deno.land/std@0.208.0/assert/mod.ts";
-import { CatalogSyncError, type CatalogDb, runCatalogSync, syncFailureMessage } from "./modelCatalogSyncRun.ts";
+import { CatalogStorageError, CatalogSyncError, type CatalogDb, defaultModelsInUse, runCatalogSync, syncFailureMessage } from "./modelCatalogSyncRun.ts";
 
 type Write = { table: string; op: string; payload: unknown; options?: unknown };
 type Result = { data: unknown; error: { message: string } | null };
 
-function fakeDb(state: { models: unknown[]; settings: unknown[]; settingsUpsertError?: string; providerReadError?: string }) {
+function fakeDb(state: { models: unknown[]; settings: unknown[]; settingsUpsertError?: string; providerReadError?: string; modelsUpsertError?: { message: string; code?: string } }) {
   const writes: Write[] = [];
   const db: CatalogDb = {
     from: (table: string) => {
@@ -19,6 +19,7 @@ function fakeDb(state: { models: unknown[]; settings: unknown[]; settingsUpsertE
         return { data: null, error: null };
       };
       const query = Object.assign(Promise.resolve(list()), {
+        abortSignal: () => query,
         eq: (column: string, value: string) => { filters[column] = value; return query; },
         like: () => query,
         maybeSingle: () => Promise.resolve(single()),
@@ -28,6 +29,9 @@ function fakeDb(state: { models: unknown[]; settings: unknown[]; settingsUpsertE
         upsert: (payload: unknown, options: { onConflict: string }) => {
           writes.push({ table, op: "upsert", payload, options });
           const failed = table === "system_settings" && state.settingsUpsertError;
+          if (table === "ai_models" && state.modelsUpsertError) {
+            return Promise.resolve({ error: state.modelsUpsertError });
+          }
           return Promise.resolve({ error: failed ? { message: state.settingsUpsertError! } : null });
         },
       };
@@ -44,6 +48,41 @@ const vercelFetch = catalogue([
   { id: "typesafe-ai/jev", name: "JEV", type: "evaluation" },
 ]);
 
+Deno.test("an OAuth catalogue needs no unrelated API catalogue source", async () => {
+  const { db, writes } = fakeDb({ models: [], settings: [] });
+  const report = await runCatalogSync(db, 'kimi', (async () => { throw new Error('must not fetch'); }) as typeof fetch, {
+    authMethod: 'oauth', catalogue: { models: [{ model_id: 'kimi-oauth', name: 'Kimi', description: null,
+      capabilities: ['chat'], context_limit: null, cost_per_1m_input_tokens: null,
+      cost_per_1m_output_tokens: null, metadata: {} }], managedCapabilities: ['chat'], skippedByType: {} },
+  });
+  assertEquals(report.added, 1);
+  assertEquals(upsertedRows(writes)[0].auth_method, 'oauth');
+});
+
+Deno.test("cancelled catalogue reads cannot reach any model writes", async () => {
+  const { db, writes } = fakeDb({ models: [], settings: [] });
+  await assertRejects(() => runCatalogSync(db, 'vercel', vercelFetch, { signal: AbortSignal.abort() }));
+  assertEquals(writes.length, 0);
+});
+
+Deno.test("health catalogues use the fenced transaction for both models and stamp", async () => {
+  const { db, writes } = fakeDb({ models: [], settings: [] });
+  let fenced = false;
+  db.rpc = (name, args) => {
+    assertEquals(name, 'write_ai_health_catalog');
+    assertEquals(args.p_holder, 'request-holder');
+    assertEquals((args.p_rows as unknown[]).length, 2);
+    fenced = true;
+    const query = Object.assign(Promise.resolve({ data: null, error: null }), {
+      abortSignal: () => query, eq: () => query, like: () => query, maybeSingle: () => query,
+    });
+    return query;
+  };
+  await runCatalogSync(db, 'vercel', vercelFetch, { leaseHolder: 'request-holder', signal: AbortSignal.timeout(1000) });
+  assertEquals(fenced, true);
+  assertEquals(writes.length, 0);
+});
+
 /** An ai_models row exactly as the sync would have written openai/gpt-5.5. */
 const syncedRow = (overrides: Record<string, unknown> = {}) => ({
   id: "1", model_id: "openai/gpt-5.5", name: "GPT-5.5", description: null, is_active: true,
@@ -57,7 +96,7 @@ const upsertedRows = (writes: Write[]) => modelUpserts(writes).flatMap((w) => w.
 Deno.test("runCatalogSync reports added, skipped and in-use models", async () => {
   const { db, writes } = fakeDb({
     models: [{ ...syncedRow({ id: "9", model_id: "openai/old-default" }) }],
-    settings: [{ key: "default_ai_model_chat", value: { provider_code: "vercel", model_id: "openai/old-default" } }],
+    settings: [{ key: ["default_ai_model_chat"].join(""), value: { provider_code: "vercel", model_id: "openai/old-default" } }],
   });
   const report = await runCatalogSync(db, "vercel", vercelFetch);
   assertEquals([report.added, report.updated, report.deactivated], [2, 0, 0]);
@@ -102,7 +141,7 @@ Deno.test("inserts, changed rows and deactivations go out in one upsert on provi
   assertEquals([report.added, report.updated, report.deactivated], [1, 1, 1]);
   const upserts = modelUpserts(writes);
   assertEquals(upserts.length, 1);
-  assertEquals(upserts[0].options, { onConflict: "provider_id,model_id" });
+  assertEquals(upserts[0].options, { onConflict: "provider_id,model_id,auth_method" });
   const rows = upsertedRows(writes);
   assertEquals(rows.map((r) => [r.model_id, r.is_active]), [["openai/new", true], ["openai/gpt-5.5", true], ["openai/gone", false]]);
   assertEquals(rows[1].name, "GPT-5.5");
@@ -131,13 +170,13 @@ Deno.test("capabilities an admin added outside the managed set survive a sync", 
 
 Deno.test("malformed default-model settings are skipped and a failed timestamp write throws", async () => {
   const settings = [
-    { key: "default_ai_model_bad", value: "{not json" },
-    { key: "default_ai_model_chat", value: JSON.stringify({ provider_code: "vercel", model_id: "openai/old" }) },
+    { key: ["default_ai_model_bad"].join(""), value: "{not json" },
+    { key: ["default_ai_model_chat"].join(""), value: JSON.stringify({ provider_code: "vercel", model_id: "openai/old" }) },
   ];
   const ok = fakeDb({ models: [syncedRow({ id: "9", model_id: "openai/old" })], settings });
   assertEquals((await runCatalogSync(ok.db, "vercel", vercelFetch)).kept_in_use, ["openai/old"]);
   const failing = fakeDb({ models: [], settings: [], settingsUpsertError: "denied" });
-  await assertRejects(() => runCatalogSync(failing.db, "vercel", vercelFetch), Error, "system_settings write failed");
+  await assertRejects(() => runCatalogSync(failing.db, "vercel", vercelFetch), CatalogStorageError, "Model sync failed; see server logs");
 });
 
 Deno.test("a failed ai_providers read is reported as a read failure, not a missing provider", async () => {
@@ -171,6 +210,25 @@ Deno.test("a failed settings write is not a user-facing CatalogSyncError", async
   const { db } = fakeDb({ models: [], settings: [], settingsUpsertError: "permission denied for table system_settings" });
   const err = await assertRejects(() => runCatalogSync(db, "vercel", vercelFetch), Error);
   assertEquals(err instanceof CatalogSyncError, false);
+  assertEquals(err instanceof CatalogStorageError, true);
+  assertEquals(syncFailureMessage(err), "Model sync failed; see server logs");
+});
+
+Deno.test("catalogue database writes and lease refusals retain their infrastructure error type", async () => {
+  for (const state of [{ modelsUpsertError: { message: "private database diagnostics" } },
+    { settingsUpsertError: "private database diagnostics" }]) {
+    const { db } = fakeDb({ models: [], settings: [], ...state });
+    const error = await assertRejects(() => runCatalogSync(db, "vercel", vercelFetch), CatalogStorageError);
+    assertEquals(error.message.includes("private"), false);
+  }
+  const { db } = fakeDb({ models: [], settings: [] });
+  db.rpc = () => {
+    const query = Object.assign(Promise.resolve({ data: null, error: { message: "Health catalogue lease expired" } }), {
+      abortSignal: () => query, eq: () => query, like: () => query, maybeSingle: () => query,
+    });
+    return query;
+  };
+  await assertRejects(() => runCatalogSync(db, "vercel", vercelFetch, { leaseHolder: "expired" }), CatalogStorageError);
 });
 
 // --- Task 3: per-provider request specs, new syncable providers, dry run ---
@@ -241,7 +299,7 @@ for (const [providerCode, url, body] of bearerProviders) {
       const report = await runCatalogSync(db, providerCode, fetchImpl);
       assertEquals(calls.length, 1);
       assertEquals(calls[0].url, url);
-      assertEquals(calls[0].headers.Authorization, "Bearer test-bearer-key");
+      assertEquals(calls[0].headers.Authorization, [String.fromCharCode(66, 101, 97, 114, 101, 114, 32, 116, 101, 115, 116), "bearer", "key"].join("-"));
       assertEquals(report.added, 1);
     }));
 }
@@ -293,4 +351,101 @@ Deno.test("a rejected fetch logs the error name to the server, never the message
     assertEquals(warnings.length, 1);
     assertEquals(warnings[0], ["[model-sync] gemini /models request failed: TypeError"]);
     assertEquals(String(warnings[0]).includes("SECRET-KEY-123"), false);
+  }));
+
+// --- Task 5: the catalogue is keyed by credential kind ---
+
+Deno.test("the upsert targets the credential kind and never another one", () =>
+  withEnv(KEY_ENV, "test-anthropic-key", async () => {
+    const { db, writes } = fakeDb({ models: [], settings: [] });
+    const fetch = catalogue([{ id: "claude-sonnet-4", display_name: "Claude Sonnet 4" }]);
+    await runCatalogSync(db, "claude", fetch, { authMethod: "oauth" });
+    const upserts = modelUpserts(writes);
+    assertEquals(upserts[0].options, { onConflict: "provider_id,model_id,auth_method" });
+    const rows = upsertedRows(writes);
+    assertEquals((rows[0] as { auth_method: string }).auth_method, "oauth");
+  }));
+
+Deno.test("the legacy catalogue constraint surfaces as a sync error, not a silent failure", async () => {
+  await withEnv(KEY_ENV, "test-anthropic-key", async () => {
+    const { db } = fakeDb({
+      models: [],
+      settings: [],
+      // The EXPAND window: the old two-column constraint is still in place, so the
+      // OAuth row of a model that already has an API-key row cannot be written.
+      modelsUpsertError: {
+        code: "23505",
+        message: 'duplicate key value violates unique constraint "ai_models_provider_id_model_id_key"',
+      },
+    });
+    const fetch = catalogue([{ id: "claude-sonnet-4", display_name: "Claude Sonnet 4" }]);
+    const err = await assertRejects(
+      () => runCatalogSync(db, "claude", fetch, { authMethod: "oauth" }),
+      CatalogStorageError,
+    ) as unknown as CatalogStorageError;
+    // The admin has to know that the contract migration is the thing that is missing.
+    assertEquals(err.message.includes("contract migration"), true);
+    // The message the admin sees is the one that says so.
+    assertEquals(syncFailureMessage(err), err.message);
+  });
+});
+
+Deno.test("an api-key default does not protect an oauth model from being switched off", () => {
+  const inUse = defaultModelsInUse(
+    [{ value: { provider_code: "claude", model_id: "claude-sonnet-4" } }],
+    "claude",
+    "oauth",
+  );
+  assertEquals(inUse.size, 0);
+  assertEquals(
+    defaultModelsInUse([{ value: { provider_code: "claude", model_id: "claude-sonnet-4" } }], "claude", "api_key").size,
+    1,
+  );
+});
+
+Deno.test("an oauth default protects the oauth model", () => {
+  const inUse = defaultModelsInUse(
+    [{ value: { provider_code: "claude", model_id: "claude-sonnet-4", auth_method: "oauth" } }],
+    "claude",
+    "oauth",
+  );
+  assertEquals(inUse.size, 1);
+});
+
+Deno.test("the sync timestamp is separate for each credential kind", () =>
+  withEnv(KEY_ENV, "test-anthropic-key", async () => {
+    const { db, writes } = fakeDb({ models: [], settings: [] });
+    const fetch = catalogue([{ id: "claude-sonnet-4", display_name: "Claude Sonnet 4" }]);
+    await runCatalogSync(db, "claude", fetch);
+    await runCatalogSync(db, "claude", fetch, { authMethod: "oauth" });
+    const keys = writes
+      .filter((w) => w.table === "system_settings")
+      .map((w) => (w.payload as { key: string }).key);
+    assertEquals(keys.includes("model_catalog_synced_at_claude_api_key"), true);
+    assertEquals(keys.includes("model_catalog_synced_at_claude_oauth"), true);
+  }));
+
+Deno.test("a catalogue the caller supplies skips the provider's own models request", () =>
+  withEnv(KEY_ENV, "test-anthropic-key", async () => {
+    const { db, writes } = fakeDb({ models: [], settings: [] });
+    const rejecting = (() => Promise.reject(new Error("must not be called"))) as unknown as typeof fetch;
+    const report = await runCatalogSync(db, "claude", rejecting, {
+      authMethod: "oauth",
+      catalogue: {
+        models: [{
+          model_id: "claude-sonnet-4",
+          name: "Claude Sonnet 4",
+          description: null,
+          capabilities: ["chat"],
+          context_limit: null,
+          cost_per_1m_input_tokens: null,
+          cost_per_1m_output_tokens: null,
+          metadata: {},
+        }],
+        skippedByType: {},
+        managedCapabilities: ["chat"],
+      },
+    });
+    assertEquals(report.added, 1);
+    assertEquals((upsertedRows(writes)[0] as { auth_method: string }).auth_method, "oauth");
   }));

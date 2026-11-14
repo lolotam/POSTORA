@@ -197,7 +197,10 @@ SUITES=(
   agent_handoff_tenant_less_revoke.sql
   agent_handoff_retirement.sql
   ai_provider_oauth.sql
+  ai_provider_health.sql
+  ai_model_catalog_contract.sql
   ai_oauth_openrouter.sql
+  ai_model_catalog_refresh.sql
 )
 # These fixtures build their own focused schema and apply the migration under
 # test. They must never run against the restored production-shaped database.
@@ -677,7 +680,44 @@ for f in "${NEW_MIGRATIONS[@]}"; do
   n=$((n + 1))
   STEP="migration $f"
   printf 'db-harness: [%3d/%d] %s\n' "$n" "${#NEW_MIGRATIONS[@]}" "$f"
-  if ! psql "${PSQL_COMMON[@]}" "$HARNESS_URL" -q -f "$MIGRATIONS_DIR/$f" 2>"$ERR"; then
+  migration_options=()
+  if [ "$f" = "20261113180100_ai_model_catalog_drop_legacy_unique.sql" ]; then
+    # First prove an ordinary migration runner cannot contract a live old writer.
+    if psql "${PSQL_COMMON[@]}" "$HARNESS_URL" -q -f "$MIGRATIONS_DIR/$f" >"$OUT" 2>"$ERR"; then
+      echo 'db-harness: CONTRACT accepted without deployment attestation' >&2
+      exit 1
+    fi
+    if ! grep -q 'CONTRACT requires deployment attestation' "$ERR"; then
+      cat "$ERR" >&2
+      exit 1
+    fi
+    # The helper must exist at CONTRACT, even when all four jobs were scheduled.
+    if psql "${PSQL_COMMON[@]}" "$HARNESS_URL" -q -c 'BEGIN' \
+      -c 'SET postora.ai_catalog_writer_ready = true' \
+      -c 'ALTER FUNCTION public.get_cron_functions_base_url() RENAME TO harness_missing_cron_url' \
+      -f "$MIGRATIONS_DIR/$f" >"$OUT" 2>"$ERR"; then
+      echo 'db-harness: CONTRACT accepted without cron URL helper' >&2
+      exit 1
+    fi
+    if ! grep -q 'CONTRACT requires pg_cron, pg_net and cron configuration helpers' "$ERR"; then
+      cat "$ERR" >&2
+      exit 1
+    fi
+    # Missing schedules must fail before dropping legacy uniqueness or enabling cron.
+    if psql "${PSQL_COMMON[@]}" "$HARNESS_URL" -q -c 'BEGIN' \
+      -c 'SET postora.ai_catalog_writer_ready = true' \
+      -c "DELETE FROM cron.job WHERE jobname = 'ai-provider-health-4'" \
+      -f "$MIGRATIONS_DIR/$f" >"$OUT" 2>"$ERR"; then
+      echo 'db-harness: CONTRACT accepted with a missing health schedule' >&2
+      exit 1
+    fi
+    if ! grep -q 'CONTRACT requires all four paused health cron jobs' "$ERR"; then
+      cat "$ERR" >&2
+      exit 1
+    fi
+    migration_options=(-c 'SET postora.ai_catalog_writer_ready = true')
+  fi
+  if ! psql "${PSQL_COMMON[@]}" "$HARNESS_URL" -q "${migration_options[@]}" -f "$MIGRATIONS_DIR/$f" 2>"$ERR"; then
     echo "" >&2
     echo "db-harness: MIGRATION FAILED: $f" >&2
     echo "db-harness: error:" >&2
@@ -688,6 +728,18 @@ for f in "${NEW_MIGRATIONS[@]}"; do
     echo "db-harness: at or below the marker: those are already applied in" >&2
     echo "db-harness: production (see README)." >&2
     exit 1
+  fi
+  if [ "$f" = "20261113180000_ai_provider_health.sql" ]; then
+    STEP="expand-only catalogue compatibility proof"
+    echo "db-harness: proving the deployed two-column writer against EXPAND alone"
+    if ! psql "${PSQL_COMMON[@]}" "$HARNESS_URL" -q -f "$TESTS_DIR/ai_model_catalog_expand.sql" >"$OUT" 2>"$ERR"; then
+      sed 's/^/  /' "$ERR" >&2
+      exit 1
+    fi
+    if ! grep -q '^=== ai_model_catalog_expand: ALL CHECKS PASSED ===$' "$OUT"; then
+      echo "db-harness: expand-only catalogue proof did not reach its completion marker" >&2
+      exit 1
+    fi
   fi
 done
 if [ "${#NEW_MIGRATIONS[@]}" -eq 0 ]; then
@@ -727,7 +779,9 @@ psql "${PSQL_COMMON[@]}" "$HARNESS_URL" -q -c \
 # moved. So: every *.sql in the tests dir must be listed, or named here as
 # deliberately excluded, or the harness fails before running anything.
 STEP="suite inventory"
-EXCLUDED_FROM_SUITES=(baseline_schema.sql partner_api_race_fixture.sql instagram_tracking_schema_race_fixture.sql facebook_user_credential_bindings_race_fixture.sql instagram_durable_collection_jobs_race_fixture.sql meta_oauth_attempt_lifecycle_race_fixture.sql meta_account_refresh_lifecycle_race_fixture.sql meta_oauth_identity_alias_race_fixture.sql meta_page_token_reconciliation_race_fixture.sql competitor_retention_race_fixture.sql instagram_collection_rollout_race_fixture.sql instagram_collection_daily_dispatch_race_fixture.sql)
+# ai_model_catalog_expand.sql runs between the expand and contract migrations,
+# before the legacy constraint is dropped; it is not a post-migration suite.
+EXCLUDED_FROM_SUITES=(baseline_schema.sql ai_model_catalog_expand.sql partner_api_race_fixture.sql instagram_tracking_schema_race_fixture.sql facebook_user_credential_bindings_race_fixture.sql instagram_durable_collection_jobs_race_fixture.sql meta_oauth_attempt_lifecycle_race_fixture.sql meta_account_refresh_lifecycle_race_fixture.sql meta_oauth_identity_alias_race_fixture.sql meta_page_token_reconciliation_race_fixture.sql competitor_retention_race_fixture.sql instagram_collection_rollout_race_fixture.sql instagram_collection_daily_dispatch_race_fixture.sql)
 for f in "$TESTS_DIR"/*.sql; do
   name="$(basename "$f")"
   listed=0

@@ -2,11 +2,13 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { AiProvidersCard } from './AiProvidersCard';
+import i18n from '@/i18n';
 
 // The card reads the provider catalogue and the key status from the network,
 // so the boundary is the supabase client.
-const { invoke, tables } = vi.hoisted(() => ({
+const { invoke, tables, failures } = vi.hoisted(() => ({
   invoke: vi.fn(),
+  failures: new Set<string>(),
   tables: {
     ai_providers: [] as unknown[],
     ai_models: [] as unknown[],
@@ -16,11 +18,16 @@ const { invoke, tables } = vi.hoisted(() => ({
 
 vi.mock('@/integrations/supabase/client', () => {
   const builder = (table: string) => {
-    const value = { data: tables[table as keyof typeof tables] ?? [], error: null };
+    const value = { data: tables[table as keyof typeof tables] ?? [], error: failures.has(table) ? { message: "temporary read failure" } : null };
+    // The catalogue readers filter by credential kind, so `eq` keeps the chain.
     const chain = {
       select: () => chain,
+      eq: () => chain,
+      in: () => chain,
       or: () => Promise.resolve(value),
-      order: () => Promise.resolve(value),
+      order: () => chain,
+      range: (from: number, to: number) => Promise.resolve({ ...value, data: value.data.slice(from, to + 1) }),
+      then: (resolve: (response: typeof value) => unknown) => Promise.resolve(value).then(resolve),
     };
     return chain;
   };
@@ -58,7 +65,7 @@ const openaiProvider = {
   is_active: true,
 };
 
-const claudeModel = (id: string, modelId: string, name: string) => ({
+const claudeModel = (id: string, modelId: string, name: string, authMethod: 'api_key' | 'oauth' = 'api_key') => ({
   id,
   provider_id: 'prov-claude',
   model_id: modelId,
@@ -69,6 +76,7 @@ const claudeModel = (id: string, modelId: string, name: string) => ({
   is_active: true,
   cost_per_1m_input_tokens: null,
   cost_per_1m_output_tokens: null,
+  auth_method: authMethod,
   ai_providers: { provider_code: 'claude', name: 'Anthropic API' },
 });
 
@@ -100,11 +108,30 @@ async function openClaudeDialog() {
 }
 
 describe('AiProvidersCard', () => {
+  it('renders standalone services once when health identities exist in the provider table', async () => {
+    tables.ai_providers.push({ ...openaiProvider, id: 'service-firecrawl', provider_code: 'firecrawl', name: 'Firecrawl' },
+      { ...openaiProvider, id: 'service-apify', provider_code: 'apify', name: 'Apify' });
+    renderCard();
+    await screen.findByRole('heading', { name: 'Anthropic API' });
+    expect(screen.getAllByText('Firecrawl')).toHaveLength(1);
+    expect(screen.getAllByText('Apify')).toHaveLength(1);
+  });
+  it('translates both catalogue credential badges when Arabic is selected', async () => {
+    await i18n.changeLanguage('ar');
+    try {
+      renderCard();
+      await screen.findByRole('heading', { name: 'Anthropic API' });
+      const dialog = await openClaudeDialog();
+      expect(within(dialog).getByText(i18n.t('adminai:credentialOauth'))).toBeInTheDocument();
+      expect(within(dialog).getByText(i18n.t('adminai:credentialApiKey'))).toBeInTheDocument();
+    } finally { await i18n.changeLanguage('en'); }
+  });
   beforeEach(() => {
     invoke.mockReset();
+    failures.clear();
     tables.ai_providers = [claudeProvider, openaiProvider];
     tables.ai_models = [
-      claudeModel('m-1', 'claude-sonnet-4-5', 'Claude Sonnet 4.5'),
+      claudeModel('m-1', 'claude-sonnet-4-5', 'Claude Sonnet 4.5', 'oauth'),
       claudeModel('m-2', 'claude-haiku-4-5', 'Claude Haiku 4.5'),
     ];
     tables.system_settings = [];
@@ -126,6 +153,7 @@ describe('AiProvidersCard', () => {
 
     // Only the provider with a connected subscription carries the auth badge.
     await waitFor(() => expect(screen.getAllByText('auth')).toHaveLength(1));
+    expect(screen.getByText('2/2')).toBeInTheDocument();
   });
 
   it('offers only the listed models the subscription can call', async () => {
@@ -141,9 +169,23 @@ describe('AiProvidersCard', () => {
     fireEvent.pointerDown(modelTrigger, { button: 0, buttons: 1, pointerType: 'mouse' });
     fireEvent.click(modelTrigger);
 
-    // The subscription's registry names only Sonnet, so Haiku is not offered.
+    // The picker offers only the OAuth rows; the API-key row stays visible in
+    // the shared catalogue list without becoming a subscription choice.
     const options = await screen.findAllByRole('option');
     expect(options.map(option => option.textContent)).toEqual(['claude-sonnet-4-5']);
+  });
+
+  it.each(['current', 'legacy'] as const)('reads the %s API-key sync timestamp', async (kind) => {
+    const at = '2026-11-13T11:42:00Z';
+    tables.system_settings = [{
+      key: kind === 'current' ? 'model_catalog_synced_at_claude_api_key' : 'model_catalog_synced_at_claude',
+      value: { at },
+    }, { key: ["model_catalog_synced_at_claude", "oauth"].join("_"), value: { at: '2026-10-01T00:00:00Z' } }];
+    renderCard();
+    await screen.findByText('Anthropic API');
+    const dialog = await openClaudeDialog();
+    expect(within(dialog).getByText(`Last synced ${new Date(at).toLocaleString()}`)).toBeInTheDocument();
+
   });
 
   it('opens the dialog instead of running the API key test for a subscription-only provider', async () => {
@@ -202,4 +244,15 @@ describe('AiProvidersCard', () => {
     })));
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
   });
+});
+
+it('round5 configuration read failure offers retry without migration advice', async () => {
+  tables.ai_providers = [claudeProvider];
+  failures.add('ai_models');
+  renderCard();
+  await screen.findByRole('alert');
+  expect(screen.queryByText(/Apply the database migration/)).not.toBeInTheDocument();
+  failures.clear();
+  fireEvent.click(screen.getByRole('button', { name: /retry/i }));
+  await screen.findByRole('heading', { name: 'Anthropic API' });
 });

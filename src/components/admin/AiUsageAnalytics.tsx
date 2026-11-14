@@ -49,6 +49,7 @@ export function AiUsageAnalytics() {
       const { data, error } = await supabase
         .from("ai_models")
         .select("model_id, name, cost_per_1m_input_tokens, cost_per_1m_output_tokens, ai_providers:provider_id (provider_code, name)")
+        .eq("auth_method", "api_key")
         .eq("is_active", true)
         .order("name");
       if (error) throw error;

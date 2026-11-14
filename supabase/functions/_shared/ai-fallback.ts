@@ -272,6 +272,7 @@ export async function fetchCategoryAiSettings(supabaseAdmin: any, category: stri
     const { data: known, error: modelError } = await supabaseAdmin
       .from('ai_models')
       .select('id, ai_providers!inner(provider_code)')
+      .eq('auth_method', 'api_key')
       .eq('model_id', configuredLastResortModel)
       .eq('is_active', true)
       .eq('ai_providers.provider_code', configuredLastResortProvider)

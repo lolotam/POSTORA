@@ -454,6 +454,7 @@ async function readModelCatalog(
   try {
     const { data } = await admin.from("ai_models")
       .select("model_id, is_active, capabilities, metadata, ai_providers!inner(provider_code, is_active)")
+      .eq("auth_method", "api_key")
       .in("model_id", modelIds);
     return (data || [])
       .filter((row: any) => row.ai_providers?.is_active)

@@ -118,17 +118,19 @@ BEGIN
   SELECT id INTO v_claude_id FROM public.ai_providers WHERE provider_code = 'claude';
   INSERT INTO public.ai_models
     (provider_id, model_id, name, description, capabilities, context_limit,
-     cost_per_1m_input_tokens, cost_per_1m_output_tokens, is_active)
+     cost_per_1m_input_tokens, cost_per_1m_output_tokens, is_active, auth_method)
   VALUES
     (v_claude_id, 'claude-3-5-sonnet-20241022', 'Claude 3.5 Sonnet',
-     'Previous flagship', ARRAY['chat'], 200000, 3.0, 15.0, true),
+     'Previous flagship', ARRAY['chat'], 200000, 3.0, 15.0, true, 'api_key'),
     (v_claude_id, 'claude-3-5-haiku-20241022', 'Claude 3.5 Haiku',
-     'Fast & affordable', ARRAY['chat'], 200000, 0.8, 4.0, true),
+     'Fast & affordable', ARRAY['chat'], 200000, 0.8, 4.0, true, 'api_key'),
     (v_claude_id, 'claude-3-opus-20240229', 'Claude 3 Opus',
-     'Most capable legacy', ARRAY['chat'], 200000, 15.0, 75.0, true),
+     'Most capable legacy', ARRAY['chat'], 200000, 15.0, 75.0, true, 'api_key'),
     (v_claude_id, 'claude-sonnet-4-20250514', 'Claude Sonnet 4',
-     'Latest balanced', ARRAY['chat'], 200000, 3.0, 15.0, true)
-  ON CONFLICT (provider_id, model_id) DO NOTHING;
+     'Latest balanced', ARRAY['chat'], 200000, 3.0, 15.0, true, 'api_key')
+  -- The catalogue is keyed by credential kind since 20261113180000_ai_provider_health.sql:
+  -- the same model_id may exist once per auth_method.
+  ON CONFLICT (provider_id, model_id, auth_method) DO NOTHING;
 END $byok_seed_catalog$;
 
 -- Re-apply the migration's catalog section (§F) onto the fixture. The file
@@ -145,9 +147,9 @@ UPDATE public.ai_providers SET name = 'Anthropic API' WHERE provider_code = 'cla
 
 INSERT INTO public.ai_models
   (provider_id, model_id, name, description, capabilities, context_limit,
-   cost_per_1m_input_tokens, cost_per_1m_output_tokens, is_active)
+   cost_per_1m_input_tokens, cost_per_1m_output_tokens, is_active, auth_method)
 SELECT p.id, v.model_id, v.name, v.description, v.capabilities, v.context_limit,
-       v.cost_in, v.cost_out, true
+       v.cost_in, v.cost_out, true, 'api_key'
 FROM public.ai_providers AS p CROSS JOIN (VALUES
   ('claude-sonnet-5', 'Claude Sonnet 5', 'Best balance of speed and intelligence',
    ARRAY['chat','agent'], 1000000, 2.0, 10.0),
@@ -157,7 +159,7 @@ FROM public.ai_providers AS p CROSS JOIN (VALUES
    ARRAY['chat','agent'], 1000000, 5.0, 25.0)
 ) AS v(model_id, name, description, capabilities, context_limit, cost_in, cost_out)
 WHERE p.provider_code = 'claude'
-ON CONFLICT (provider_id, model_id) DO UPDATE SET
+ON CONFLICT (provider_id, model_id, auth_method) DO UPDATE SET
   name = EXCLUDED.name,
   description = EXCLUDED.description,
   capabilities = EXCLUDED.capabilities,

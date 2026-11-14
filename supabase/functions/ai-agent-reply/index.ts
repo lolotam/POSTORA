@@ -1361,6 +1361,7 @@ Deno.serve(async (req) => {
         const { data: rows, error } = await admin
           .from("ai_models")
           .select("model_id, ai_providers!inner(provider_code)")
+          .eq("auth_method", "api_key")
           .contains("capabilities", ["triage"])
           .in("model_id", slots.map((slot) => slot.model));
         if (error) return null;

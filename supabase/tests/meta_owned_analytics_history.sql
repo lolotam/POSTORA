@@ -317,11 +317,16 @@ $exact_period_identity$;
 
 DO $instagram_compatibility$
 DECLARE v_claim jsonb;v_capture jsonb;v_old jsonb;v_payload jsonb;v_metric jsonb;v_received timestamptz;v_observed timestamptz;v_receipt jsonb;v_replay jsonb;
-  v_date date:=(clock_timestamp() AT TIME ZONE 'Asia/Kuwait')::date-1;v_row record;
+  v_date date;v_row record;
 BEGIN
   SELECT c INTO v_claim FROM public.claim_instagram_collection_jobs('owner',25) c
     WHERE c->>'social_account_id'='64000000-0000-4000-8000-000000000001';
   ASSERT v_claim IS NOT NULL,'existing IG owner queue supplies real fenced claim';
+  -- The job captures a UTC day. Kuwait's date advances three hours earlier;
+  -- using its yesterday after midnight can request the job's current day.
+  SELECT captured_on - 1 INTO v_date FROM public.instagram_collection_jobs
+    WHERE id = (v_claim->>'job_id')::uuid;
+  ASSERT v_date IS NOT NULL,'compatibility fixture uses the claimed job capture date';
   v_capture:=public.reserve_ig_analytics_capture((v_claim->>'job_id')::uuid,(v_claim->>'claim_token')::uuid,(v_claim->>'job_generation')::bigint,
     jsonb_build_object('kind','owner_account_day','metric_date',v_date,'metrics',jsonb_build_array('views','reach')));
   v_received:=clock_timestamp();

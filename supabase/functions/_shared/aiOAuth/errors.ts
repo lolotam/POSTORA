@@ -1,4 +1,5 @@
 export type AiOAuthErrorCode =
+  | 'lease_lost'
   | 'not_connected'
   | 'reauth_required'
   | 'refresh_failed'
@@ -17,5 +18,13 @@ export class AiOAuthError extends Error {
   constructor(readonly code: AiOAuthErrorCode, message?: string) {
     super(message ?? code);
     this.name = 'AiOAuthError';
+  }
+}
+
+/** Local storage was unavailable; this says nothing about the provider credential. */
+export class AiOAuthStorageError extends AiOAuthError {
+  constructor() {
+    super('refresh_failed', 'The subscription credential storage operation failed.');
+    this.name = 'AiOAuthStorageError';
   }
 }

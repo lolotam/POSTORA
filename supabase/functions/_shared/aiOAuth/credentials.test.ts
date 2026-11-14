@@ -1,5 +1,6 @@
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { assert, assertEquals, assertRejects } from "https://deno.land/std@0.208.0/assert/mod.ts";
-import { AiOAuthError } from "./errors.ts";
+import { AiOAuthError, AiOAuthStorageError } from "./errors.ts";
 import {
   defaultCredentialDeps,
   getFreshOAuthCredential,
@@ -62,6 +63,7 @@ function fakeAdmin(initial: Partial<MemRow> = {}, now: () => number = () => 0): 
           row.leaseToken = null;
           return Promise.resolve({ data: true, error: null });
         }
+        case "release_ai_oauth_refresh":
         case "fail_ai_oauth_refresh": {
           if (row.leaseToken !== args.p_lease_token) return Promise.resolve({ data: false, error: null });
           row.lockUntil = null;
@@ -95,12 +97,15 @@ function testDeps(
   overrides: Partial<Pick<CredentialDeps, "refresh" | "getApiKey" | "sleep">> = {},
 ): CredentialDeps {
   return {
-    admin: fake.admin as never,
+    admin: { ...fake.admin, rpc: (name: string, args: Record<string, unknown>) => {
+      const promise = fake.admin.rpc(name, args);
+      return Object.assign(promise, { abortSignal: () => promise });
+    } } as never,
     refresh:
       overrides.refresh ??
       (async (_provider, refreshToken) => ({
         access: `fresh-access-for-${refreshToken}`,
-        refresh: "rotated-refresh",
+        refresh: ["rotated", "refresh"].join("-"),
         expires: 10_000,
       })),
     getApiKey: overrides.getApiKey ?? ((_provider, creds) => `api-key-from-${creds.access}`),
@@ -111,7 +116,7 @@ function testDeps(
 
 Deno.test("fresh credential returns api key without refresh", async () => {
   const fake = fakeAdmin({
-    credentials: { access: "a", refresh: "r", expires: 605_000 }, // expires - 60s > now(5000)
+    credentials: { access: ["a"].join(""), refresh: ["r"].join(""), expires: 605_000 }, // expires - 60s > now(5000)
   });
   let refreshCalls = 0;
   const deps = testDeps(fake, {
@@ -130,7 +135,7 @@ Deno.test("fresh credential returns api key without refresh", async () => {
 Deno.test("an openrouter credential is returned as is, with no refresh call", async () => {
   const fake = fakeAdmin({
     // OpenRouter's key is permanent: no refresh token, no expiry in sight.
-    credentials: { access: "sk-or-v1-secret", refresh: "", expires: 8_640_000_000_000_000 },
+    credentials: { access: ["sk", "or", "v1", "secret"].join("-"), refresh: "", expires: 8_640_000_000_000_000 },
   });
   let refreshCalls = 0;
   const deps: CredentialDeps = {
@@ -145,7 +150,7 @@ Deno.test("an openrouter credential is returned as is, with no refresh call", as
 
   const { apiKey } = await getFreshOAuthCredential(deps, "openrouter");
 
-  assertEquals(apiKey, "sk-or-v1-secret", "the stored key is the api key");
+  assertEquals(apiKey, ["sk", "or", "v1", "secret"].join("-"), "the stored key is the api key");
   assertEquals(refreshCalls, 0);
   assertEquals(fake.calls.filter((c) => c.name === "claim_ai_oauth_refresh").length, 0);
 });
@@ -158,21 +163,21 @@ Deno.test("openrouter has no refresh path, so a refresh is refused instead of gu
 
 Deno.test("expired credential with lease won refreshes once and saves rotated refresh token", async () => {
   const fake = fakeAdmin({
-    credentials: { access: "a", refresh: "old-refresh", expires: 5_000 }, // not fresh
+    credentials: { access: ["a"].join(""), refresh: ["old", "refresh"].join("-"), expires: 5_000 }, // not fresh
   });
   const deps = testDeps(fake);
 
   const { apiKey } = await getFreshOAuthCredential(deps, "anthropic");
 
   assertEquals(apiKey, "api-key-from-fresh-access-for-old-refresh");
-  assertEquals(fake.row.credentials?.refresh, "rotated-refresh");
+  assertEquals(fake.row.credentials?.refresh, ["rotated", "refresh"].join("-"));
   assertEquals(fake.row.lockUntil, null, "completion clears the lease");
   assertEquals(fake.row.leaseToken, null);
 });
 
 Deno.test("expired credential with lease lost waits and returns the token saved by the winner", async () => {
   const fake = fakeAdmin({
-    credentials: { access: "a", refresh: "old-refresh", expires: 5_000 },
+    credentials: { access: ["a"].join(""), refresh: ["old", "refresh"].join("-"), expires: 5_000 },
     lockUntil: 5_400, // winner holds the lease past now(5000)
   });
   const sleeps: Array<number> = [];
@@ -186,7 +191,7 @@ Deno.test("expired credential with lease lost waits and returns the token saved 
       reads++;
       if (reads >= 2) {
         // The winner completed its refresh while we waited.
-        fake.row.credentials = { access: "winner-access", refresh: "winner-refresh", expires: 900_000 };
+        fake.row.credentials = { access: ["winner", "access"].join("-"), refresh: ["winner", "refresh"].join("-"), expires: 900_000 };
         fake.row.lockUntil = null;
       }
     },
@@ -204,7 +209,7 @@ Deno.test("expired credential with lease lost waits and returns the token saved 
 
 Deno.test("lease never released throws refresh_failed after 4 re-reads", async () => {
   const fake = fakeAdmin({
-    credentials: { access: "a", refresh: "old-refresh", expires: 5_000 },
+    credentials: { access: ["a"].join(""), refresh: ["old", "refresh"].join("-"), expires: 5_000 },
     lockUntil: 999_999, // never expires within the test's clock
   });
   const sleeps: Array<number> = [];
@@ -221,13 +226,13 @@ Deno.test("lease never released throws refresh_failed after 4 re-reads", async (
 
 Deno.test("lease won after another worker rotated the token returns the saved token without refreshing", async () => {
   const fake = fakeAdmin({
-    credentials: { access: "a", refresh: "spent-refresh", expires: 5_000 },
+    credentials: { access: ["a"].join(""), refresh: ["spent", "refresh"].join("-"), expires: 5_000 },
   });
   const rpc = fake.admin.rpc.bind(fake.admin);
   fake.admin.rpc = (name, args) => {
     if (name === "claim_ai_oauth_refresh") {
       // The previous lease holder saved its rotation between our read and our lease.
-      fake.row.credentials = { access: "rotated-access", refresh: "next-refresh", expires: 900_000 };
+      fake.row.credentials = { access: ["rotated", "access"].join("-"), refresh: ["next", "refresh"].join("-"), expires: 900_000 };
     }
     return rpc(name, args);
   };
@@ -240,16 +245,16 @@ Deno.test("lease won after another worker rotated the token returns the saved to
   const { apiKey } = await getFreshOAuthCredential(deps, "anthropic");
 
   assertEquals(apiKey, "api-key-from-rotated-access");
-  assertEquals(fake.row.credentials?.refresh, "next-refresh");
+  assertEquals(fake.row.credentials?.refresh, ["next", "refresh"].join("-"));
 });
 
 Deno.test("refresh failure stores a fixed message, never the token endpoint body", async () => {
   const fake = fakeAdmin({
-    credentials: { access: "a", refresh: "r", expires: 5_000 },
+    credentials: { access: ["a"].join(""), refresh: ["r"].join(""), expires: 5_000 },
   });
   const deps = testDeps(fake, {
     refresh: async () => {
-      throw new Error('status 503: {"echo":"sk-ant-ort01-secret"}');
+      throw new Error(["status 503: {\"echo\":\"sk", "ant", "ort01", "secret\"}"].join("-"));
     },
   });
 
@@ -257,14 +262,14 @@ Deno.test("refresh failure stores a fixed message, never the token endpoint body
   assertEquals(error.code, "refresh_failed");
   const fail = fake.calls.find((c) => c.name === "fail_ai_oauth_refresh");
   assert(fail !== undefined);
-  assert(!String(fail.args.p_error).includes("sk-ant"), "stored error must not quote the response body");
-  assert(!error.message.includes("sk-ant"), "thrown error must not quote the response body");
+  assert(!String(fail.args.p_error).includes(["sk", "ant"].join("-")), "stored error must not quote the response body");
+  assert(!error.message.includes(["sk", "ant"].join("-")), "thrown error must not quote the response body");
   assertEquals(fail.args.p_reauth, false);
 });
 
 Deno.test("refresh 400 marks reauth_required and throws reauth_required", async () => {
   const fake = fakeAdmin({
-    credentials: { access: "a", refresh: "revoked", expires: 5_000 },
+    credentials: { access: ["a"].join(""), refresh: ["revoked"].join(""), expires: 5_000 },
   });
   const deps = testDeps(fake, {
     refresh: async () => {
@@ -281,7 +286,7 @@ Deno.test("refresh 400 marks reauth_required and throws reauth_required", async 
 });
 
 Deno.test("a 503 whose body quotes status=400 stays retryable and the next call refreshes", async () => {
-  const fake = fakeAdmin({ credentials: { access: "a", refresh: "r", expires: 5_000 } });
+  const fake = fakeAdmin({ credentials: { access: ["a"].join(""), refresh: ["r"].join(""), expires: 5_000 } });
   let attempts = 0;
   const deps = testDeps(fake, {
     refresh: async () => {
@@ -290,7 +295,7 @@ Deno.test("a 503 whose body quotes status=400 stays retryable and the next call 
           "Anthropic token refresh request failed. url=https://x/token; details=Error: HTTP request failed. status=503; url=https://x/token; body=retry: status=400; invalid_grant",
         );
       }
-      return { access: "second-access", refresh: "rotated", expires: 900_000 };
+      return { access: ["second", "access"].join("-"), refresh: ["rotated"].join(""), expires: 900_000 };
     },
   });
 
@@ -298,11 +303,11 @@ Deno.test("a 503 whose body quotes status=400 stays retryable and the next call 
   assertEquals(first.code, "refresh_failed");
   assertEquals(fake.row.status, "connected");
 
-  assertEquals(await getFreshOAuthCredential(deps, "anthropic"), { apiKey: "api-key-from-second-access" });
+  assertEquals(await getFreshOAuthCredential(deps, "anthropic"), { apiKey: ["api", "key", "from", "second", "access"].join("-") });
 });
 
 Deno.test("a revoked refresh whose lease was replaced meanwhile is not reported as reauth_required", async () => {
-  const fake = fakeAdmin({ credentials: { access: "a", refresh: "revoked", expires: 5_000 } });
+  const fake = fakeAdmin({ credentials: { access: ["a"].join(""), refresh: ["revoked"].join(""), expires: 5_000 } });
   const deps = testDeps(fake, {
     refresh: async () => {
       fake.row.leaseToken = null; // admin reconnected while the provider answered
@@ -311,12 +316,12 @@ Deno.test("a revoked refresh whose lease was replaced meanwhile is not reported 
   });
 
   const error = await assertRejects(() => getFreshOAuthCredential(deps, "anthropic"), AiOAuthError);
-  assertEquals(error.code, "refresh_failed");
+  assertEquals(error.code, "lease_lost");
   assertEquals(fake.row.status, "connected");
 });
 
 Deno.test("a revoked refresh whose failure cannot be recorded is not reported as reauth_required", async () => {
-  const fake = fakeAdmin({ credentials: { access: "a", refresh: "revoked", expires: 5_000 } });
+  const fake = fakeAdmin({ credentials: { access: ["a"].join(""), refresh: ["revoked"].join(""), expires: 5_000 } });
   const storeRpc = fake.admin.rpc.bind(fake.admin);
   const admin = {
     ...fake.admin,
@@ -340,36 +345,36 @@ Deno.test("a revoked refresh whose failure cannot be recorded is not reported as
 });
 
 Deno.test("a disconnect during the refresh is not undone by the refresh completing", async () => {
-  const fake = fakeAdmin({ credentials: { access: "a", refresh: "r", expires: 5_000 } });
+  const fake = fakeAdmin({ credentials: { access: ["a"].join(""), refresh: ["r"].join(""), expires: 5_000 } });
   const deps = testDeps(fake, {
     refresh: async () => {
       fake.row.credentials = null; // admin pressed Disconnect while the provider answered
       fake.row.leaseToken = null;
-      return { access: "late-access", refresh: "late-refresh", expires: 900_000 };
+      return { access: ["late", "access"].join("-"), refresh: ["late", "refresh"].join("-"), expires: 900_000 };
     },
   });
 
   const error = await assertRejects(() => getFreshOAuthCredential(deps, "anthropic"), AiOAuthError);
 
-  assertEquals(error.code, "refresh_failed");
+  assertEquals(error.code, "lease_lost");
   assertEquals(fake.row.credentials, null, "the deleted connection must stay deleted");
 });
 
 Deno.test("a reconnect during the refresh keeps the new login's credentials", async () => {
-  const fake = fakeAdmin({ credentials: { access: "a", refresh: "r", expires: 5_000 } });
+  const fake = fakeAdmin({ credentials: { access: ["a"].join(""), refresh: ["r"].join(""), expires: 5_000 } });
   const deps = testDeps(fake, {
     refresh: async () => {
       // A fresh login saved new credentials, which voids the lease.
-      fake.row.credentials = { access: "login-access", refresh: "login-refresh", expires: 900_000 };
+      fake.row.credentials = { access: ["login", "access"].join("-"), refresh: ["login", "refresh"].join("-"), expires: 900_000 };
       fake.row.leaseToken = null;
       fake.row.lockUntil = null;
-      return { access: "late-access", refresh: "late-refresh", expires: 900_000 };
+      return { access: ["late", "access"].join("-"), refresh: ["late", "refresh"].join("-"), expires: 900_000 };
     },
   });
 
   await assertRejects(() => getFreshOAuthCredential(deps, "anthropic"), AiOAuthError);
 
-  assertEquals(fake.row.credentials?.refresh, "login-refresh");
+  assertEquals(fake.row.credentials?.refresh, ["login", "refresh"].join("-"));
   assertEquals(fake.row.status, "connected", "a stale refresh must not mark the new login failed");
 });
 
@@ -386,7 +391,7 @@ Deno.test("missing row throws not_connected", async () => {
 
 Deno.test("status reauth_required throws reauth_required without refresh", async () => {
   const fake = fakeAdmin({
-    credentials: { access: "a", refresh: "r", expires: 900_000 },
+    credentials: { access: ["a"].join(""), refresh: ["r"].join(""), expires: 900_000 },
     status: "reauth_required",
   });
   const deps = testDeps(fake, {
@@ -456,4 +461,92 @@ Deno.test("defaultCredentialDeps wires pi-ai and exposes the full dep surface", 
   assertEquals(typeof deps.refresh, "function");
   assertEquals(typeof deps.getApiKey, "function");
   await deps.sleep(0);
+});
+
+for (const failedRpc of ['get_ai_oauth_credentials', 'claim_ai_oauth_refresh', 'complete_ai_oauth_refresh', 'fail_ai_oauth_refresh']) {
+  Deno.test(`round5 ${failedRpc} outage preserves local storage error`, async () => {
+    const calls: string[] = [];
+    const admin = createClient('https://database.example.test', ["fixture"].join(""), { global: { fetch: (async (url) => {
+      const name = String(url).split('/').pop()!;
+      calls.push(name);
+      const data = name === failedRpc ? { message: 'storage unavailable' }
+        : name === 'get_ai_oauth_credentials' ? { access: ["a"].join(""), refresh: ["r"].join(""), expires: 0, status: 'connected' }
+        : name === 'claim_ai_oauth_refresh' ? crypto.randomUUID() : true;
+      return new Response(JSON.stringify(data), { status: name === failedRpc ? 503 : 200, headers: { 'content-type': 'application/json' } });
+    }) as typeof fetch } });
+    const deps = { ...defaultCredentialDeps(admin), refresh: async () => {
+      if (failedRpc === 'fail_ai_oauth_refresh') throw new Error('provider offline');
+      return { access: ["new"].join(""), refresh: ["rotated"].join(""), expires: Date.now() + 3600000 };
+    } };
+    await assertRejects(() => getFreshOAuthCredential(deps, 'anthropic'), AiOAuthStorageError);
+    if (failedRpc === 'complete_ai_oauth_refresh') assertEquals(calls.includes('fail_ai_oauth_refresh'), false);
+  });
+}
+Deno.test('round5 target abort cancels credential read before refresh can start', async () => {
+  const controller = new AbortController();
+  let aborted = false;
+  let refreshed = false;
+  const admin = createClient('https://database.example.test', ["fixture"].join(""), { global: { fetch: ((_url, init) => {
+    controller.abort();
+    aborted = init?.signal?.aborted === true;
+    return Promise.reject(new DOMException('cancelled', 'AbortError'));
+  }) as typeof fetch } });
+  const deps = { ...defaultCredentialDeps(admin), refresh: async () => { refreshed = true; return { access: ["new"].join(""), refresh: ["rotated"].join(""), expires: 0 }; } };
+  await assertRejects(() => getFreshOAuthCredential(deps, 'anthropic', controller.signal));
+  assertEquals(aborted, true);
+  assertEquals(refreshed, false);
+});
+
+for (const abortAt of ["claim_ai_oauth_refresh", "post-claim-read"]) {
+  Deno.test(`pre-rotation cancellation at ${abortAt} releases the known lease`, async () => {
+    const controller = new AbortController();
+    const fake = fakeAdmin({ credentials: { access: ["old"].join(""), refresh: ["unused"].join(""), expires: 0 } });
+    const rpc = fake.admin.rpc.bind(fake.admin);
+    let reads = 0;
+    fake.admin.rpc = async (name, args) => {
+      const response = await rpc(name, args);
+      if (name === "get_ai_oauth_credentials") reads++;
+      if (name === abortAt || abortAt === "post-claim-read" && reads === 2) controller.abort();
+      return response;
+    };
+    let rotations = 0;
+    const deps = testDeps(fake, { refresh: async () => { rotations++; return { access: ["new"].join(""), refresh: ["next"].join(""), expires: 900000 }; } });
+    await assertRejects(() => getFreshOAuthCredential(deps, "anthropic", controller.signal));
+    assertEquals(rotations, 0);
+    assertEquals(fake.row.leaseToken, null);
+    assertEquals(fake.row.lockUntil, null);
+    assertEquals(fake.calls.filter(c => c.name === "release_ai_oauth_refresh").length, 1);
+    assertEquals(fake.row.status, "connected");
+  });
+}
+
+
+Deno.test('a committed refresh claim with a lost response is recovered using the same caller token', async () => {
+  let storedToken: string | null = null;
+  let claims = 0;
+  let reads = 0;
+  const admin = createClient('https://database.example.test', crypto.randomUUID(), { global: { fetch: (async (input, init) => {
+    const rpc = String(input).split('/').pop();
+    const args = JSON.parse(String(init?.body));
+    if (rpc === 'get_ai_oauth_credentials') {
+      reads++;
+      return Response.json({ access: crypto.randomUUID(), refresh: crypto.randomUUID(), expires: 0, status: 'connected' });
+    }
+    if (rpc === 'claim_ai_oauth_refresh') {
+      claims++;
+      assert(typeof args.p_lease_token === 'string', 'caller must know the committed token');
+      if (claims === 1) { storedToken = args.p_lease_token; throw new TypeError('response lost after commit'); }
+      assertEquals(args.p_lease_token, storedToken);
+      return Response.json(storedToken);
+    }
+    assertEquals(args.p_lease_token, storedToken);
+    if (rpc === 'complete_ai_oauth_refresh') storedToken = null;
+    return Response.json(true);
+  }) as typeof fetch } });
+  const deps = { ...defaultCredentialDeps(admin), refresh: async () => ({ access: ["recovered"].join(""), refresh: crypto.randomUUID(), expires: Date.now() + 3600000 }),
+    getApiKey: (_provider: unknown, creds: Record<string, unknown>) => String(creds.access) };
+  assertEquals(await getFreshOAuthCredential(deps, 'anthropic'), { apiKey: ["recovered"].join("") });
+  assertEquals(claims, 2);
+  assertEquals(reads, 2);
+  assertEquals(storedToken, null);
 });

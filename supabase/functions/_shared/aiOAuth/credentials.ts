@@ -1,6 +1,6 @@
 import type { SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { getOAuthProvider, refreshAnthropicToken, refreshOpenAICodexToken } from "npm:@mariozechner/pi-ai@0.73.1/oauth";
-import { AiOAuthError, type AiOAuthErrorCode } from "./errors.ts";
+import { AiOAuthError, AiOAuthStorageError, type AiOAuthErrorCode } from "./errors.ts";
 import type { OAuthProviderId } from "./clients.ts";
 
 export interface CredentialDeps {
@@ -113,12 +113,25 @@ function isFresh(credentials: StoredCredentials, nowMs: number): boolean {
   return credentials.expires - FRESH_MARGIN_MS > nowMs;
 }
 
+async function credentialRpc(deps: CredentialDeps, name: string, args: Record<string, unknown>, signal?: AbortSignal) {
+  try {
+    signal?.throwIfAborted();
+    const query = deps.admin.rpc(name, args);
+    const result = await (signal ? query.abortSignal(signal) : query);
+    if (result.error) throw new AiOAuthStorageError();
+    signal?.throwIfAborted();
+    return { data: result.data };
+  } catch {
+    throw new AiOAuthStorageError();
+  }
+}
+
 async function readCredentials(
   deps: CredentialDeps,
   provider: OAuthProviderId,
+  signal?: AbortSignal,
 ): Promise<StoredCredentials | null> {
-  const { data, error } = await deps.admin.rpc("get_ai_oauth_credentials", { p_oauth_provider: provider });
-  if (error) throw new AiOAuthError("refresh_failed", `could not read the stored credential: ${error.message}`);
+  const { data } = await credentialRpc(deps, "get_ai_oauth_credentials", { p_oauth_provider: provider }, signal);
   if (!data || typeof data !== "object") return null;
   return data as StoredCredentials;
 }
@@ -136,7 +149,7 @@ async function throwAfterFail(
   message: string,
   reauth: boolean,
 ): Promise<never> {
-  const { data: recorded, error } = await deps.admin.rpc("fail_ai_oauth_refresh", {
+  const { data: recorded } = await credentialRpc(deps, "fail_ai_oauth_refresh", {
     p_oauth_provider: lease.provider,
     p_lease_token: lease.token,
     p_error: message,
@@ -144,10 +157,9 @@ async function throwAfterFail(
   });
   // The row still says connected and holds the lease, so the requested
   // status transition did not happen: report that instead of claiming it.
-  if (error) throw new AiOAuthError("refresh_failed", `could not record the refresh failure: ${error.message}`);
   // false: a disconnect or reconnect replaced this lease, so the row never
   // took the requested status and must not be reported as if it had.
-  if (recorded !== true) throw new AiOAuthError("refresh_failed", "the connection changed while refreshing");
+  if (recorded !== true) throw new AiOAuthError("lease_lost", "the connection changed while refreshing");
   throw new AiOAuthError(code, message);
 }
 
@@ -167,16 +179,18 @@ async function refreshUnderLease(
   }
   try {
     const rotated = await deps.refresh(lease.provider, current.refresh);
-    const { data: saved, error } = await deps.admin.rpc("complete_ai_oauth_refresh", {
+    const { data: saved } = await credentialRpc(deps, "complete_ai_oauth_refresh", {
       p_oauth_provider: lease.provider,
       p_lease_token: lease.token,
       p_credentials: rotated,
       p_expires_at: new Date(rotated.expires).toISOString(),
     });
-    if (error) throw new AiOAuthError("refresh_failed", `could not save rotated credentials: ${error.message}`);
-    if (saved !== true) throw new AiOAuthError("refresh_failed", "the connection changed while refreshing");
+    if (saved !== true) throw new AiOAuthError("lease_lost", "the connection changed while refreshing");
     return { apiKey: deps.getApiKey(lease.provider, rotated) };
   } catch (cause) {
+    // Never clear the lease after an ambiguous save: the rotated token may have
+    // committed. Keep the fence until expiry instead of rotating again.
+    if (cause instanceof AiOAuthStorageError || cause instanceof AiOAuthError && cause.code === "lease_lost") throw cause;
     if (cause instanceof AiOAuthError) await throwAfterFail(deps, lease, cause.code, cause.message, false);
     // pi-ai's message can quote the token endpoint's response body, so only
     // a fixed sentence is stored and returned.
@@ -188,6 +202,31 @@ async function refreshUnderLease(
   }
 }
 
+/** Before rotation no provider token has been spent, so cancellation can free the fence. */
+async function releaseUnstartedRefresh(deps: CredentialDeps, provider: OAuthProviderId, token: string): Promise<void> {
+  await credentialRpc(deps, "release_ai_oauth_refresh", {
+    p_oauth_provider: provider, p_lease_token: token,
+  }, AbortSignal.timeout(5_000));
+}
+
+/** A lost response can be retried with the same known token without taking a second lease. */
+async function claimRefreshLease(deps: CredentialDeps, provider: OAuthProviderId): Promise<unknown> {
+  const token = crypto.randomUUID();
+  const claim = () => credentialRpc(deps, "claim_ai_oauth_refresh", {
+    p_oauth_provider: provider, p_lease_seconds: LEASE_SECONDS, p_lease_token: token,
+  }, AbortSignal.timeout(5_000));
+  try {
+    try { return (await claim()).data; }
+    catch (error) {
+      if (!(error instanceof AiOAuthStorageError)) throw error;
+      return (await claim()).data;
+    }
+  } catch (error) {
+    await releaseUnstartedRefresh(deps, provider, token);
+    throw error;
+  }
+}
+
 /**
  * Returns an apiKey derived from the admin's stored subscription credential,
  * refreshing (single-flight, via the RPC lease) when it is within a minute of
@@ -196,8 +235,9 @@ async function refreshUnderLease(
 export async function getFreshOAuthCredential(
   deps: CredentialDeps,
   provider: OAuthProviderId,
+  signal?: AbortSignal,
 ): Promise<{ apiKey: string }> {
-  const credentials = await readCredentials(deps, provider);
+  const credentials = await readCredentials(deps, provider, signal);
   if (!credentials) throw new AiOAuthError("not_connected", provider);
   if (credentials.status === "reauth_required") {
     throw new AiOAuthError("reauth_required", provider);
@@ -206,26 +246,36 @@ export async function getFreshOAuthCredential(
     return { apiKey: deps.getApiKey(provider, credentials) };
   }
 
-  const { data: leaseToken, error: leaseError } = await deps.admin.rpc("claim_ai_oauth_refresh", {
-    p_oauth_provider: provider,
-    p_lease_seconds: LEASE_SECONDS,
-  });
-  if (leaseError) throw new AiOAuthError("refresh_failed", `lease rpc failed: ${leaseError.message}`);
+  signal?.throwIfAborted();
+  const leaseToken = await claimRefreshLease(deps, provider);
 
   if (typeof leaseToken === "string") {
     // Refresh tokens rotate: a worker that held the previous lease may already
     // have spent the token read above, so the refresh must use the stored one.
-    const current = await readCredentials(deps, provider);
-    if (!current) throw new AiOAuthError("not_connected", provider);
-    if (current.status === "reauth_required") throw new AiOAuthError("reauth_required", provider);
-    if (isFresh(current, deps.now())) return { apiKey: deps.getApiKey(provider, current) };
+    let current: StoredCredentials;
+    try {
+      const stored = await readCredentials(deps, provider, AbortSignal.timeout(5_000));
+      if (!stored) throw new AiOAuthError("not_connected", provider);
+      if (stored.status === "reauth_required") throw new AiOAuthError("reauth_required", provider);
+      signal?.throwIfAborted();
+      current = stored;
+    } catch (error) {
+      await releaseUnstartedRefresh(deps, provider, leaseToken);
+      throw error;
+    }
+    if (isFresh(current, deps.now())) {
+      await releaseUnstartedRefresh(deps, provider, leaseToken);
+      return { apiKey: deps.getApiKey(provider, current) };
+    }
+    // Once rotation starts it must settle under its lease, even if the health
+    // caller stops waiting. Cancelling the save would discard a rotated token.
     return await refreshUnderLease(deps, { provider, token: leaseToken }, current);
   }
 
   // Lost the lease: a concurrent caller is refreshing. Wait, re-read, repeat.
   for (let round = 0; round < MAX_WAIT_ROUNDS; round++) {
     await deps.sleep(WAIT_MS);
-    const reRead = await readCredentials(deps, provider);
+    const reRead = await readCredentials(deps, provider, signal);
     if (!reRead) throw new AiOAuthError("not_connected", provider);
     if (reRead.status === "reauth_required") throw new AiOAuthError("reauth_required", provider);
     if (isFresh(reRead, deps.now())) return { apiKey: deps.getApiKey(provider, reRead) };

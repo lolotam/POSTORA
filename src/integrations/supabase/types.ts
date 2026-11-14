@@ -2747,6 +2747,8 @@ export type Database = {
       }
       ai_models: {
         Row: {
+          admin_params: Json
+          auth_method: string
           capabilities: string[]
           context_limit: number | null
           cost_per_1m_input_tokens: number | null
@@ -2762,6 +2764,8 @@ export type Database = {
           updated_at: string
         }
         Insert: {
+          admin_params?: Json
+          auth_method?: string
           capabilities?: string[]
           context_limit?: number | null
           cost_per_1m_input_tokens?: number | null
@@ -2777,6 +2781,8 @@ export type Database = {
           updated_at?: string
         }
         Update: {
+          admin_params?: Json
+          auth_method?: string
           capabilities?: string[]
           context_limit?: number | null
           cost_per_1m_input_tokens?: number | null
@@ -2797,6 +2803,163 @@ export type Database = {
             columns: ["provider_id"]
             referencedRelation: "ai_providers"
             referencedColumns: ["id"]
+          },
+        ]
+      }
+      ai_provider_health_runs: {
+        Row: {
+          run_id: string
+          scope: string
+          admin_id: string | null
+          started_at: string
+          completed_at: string | null
+          expires_at: string
+        }
+        Insert: {
+          run_id: string
+          scope: string
+          admin_id?: string | null
+          started_at?: string
+          completed_at?: string | null
+          expires_at?: string
+        }
+        Update: {
+          run_id?: string
+          scope?: string
+          admin_id?: string | null
+          started_at?: string
+          completed_at?: string | null
+          expires_at?: string
+        }
+        Relationships: []
+      }
+      ai_provider_health_completions: {
+        Row: {
+          run_id: string
+          provider_code: string
+          auth_method: string
+          recorded_at: string
+        }
+        Insert: {
+          run_id: string
+          provider_code: string
+          auth_method: string
+          recorded_at?: string
+        }
+        Update: {
+          run_id?: string
+          provider_code?: string
+          auth_method?: string
+          recorded_at?: string
+        }
+        Relationships: [{ foreignKeyName: "ai_provider_health_completions_provider_code_fkey"; columns: ["provider_code"]; referencedRelation: "ai_providers"; referencedColumns: ["provider_code"] }]
+      }
+      ai_provider_health_alerts: {
+        Row: {
+          alert_id: string
+          provider_code: string
+          auth_method: string
+          status: string
+          previous_status: string
+          display_name: string
+          reason: string | null
+          created_at: string
+          claim_token: string | null
+          claimed_at: string | null
+          notified_at: string | null
+        }
+        Insert: {
+          alert_id: string
+          provider_code: string
+          auth_method: string
+          status: string
+          previous_status?: string
+          display_name?: string
+          reason?: string | null
+          created_at?: string
+          claim_token?: string | null
+          claimed_at?: string | null
+          notified_at?: string | null
+        }
+        Update: {
+          alert_id?: string
+          provider_code?: string
+          auth_method?: string
+          status?: string
+          previous_status?: string
+          display_name?: string
+          reason?: string | null
+          created_at?: string
+          claim_token?: string | null
+          claimed_at?: string | null
+          notified_at?: string | null
+        }
+        Relationships: [{ foreignKeyName: "ai_provider_health_alerts_provider_code_fkey"; columns: ["provider_code"]; referencedRelation: "ai_providers"; referencedColumns: ["provider_code"] }]
+      }
+      ai_provider_health: {
+        Row: {
+          alert_id: string | null
+          alert_payload: Json | null
+          alert_pending: boolean
+          auth_method: string
+          checked_at: string
+          claim_token: string | null
+          claimed_at: string | null
+          latency_ms: number | null
+          models_added: number | null
+          models_deactivated: number | null
+          models_updated: number | null
+          notified_at: string | null
+          previous_status: string | null
+          provider_code: string
+          reason: string | null
+          run_id: string | null
+          status: string
+        }
+        Insert: {
+          alert_id?: string | null
+          alert_payload?: Json | null
+          alert_pending?: boolean
+          auth_method?: string
+          checked_at?: string
+          claim_token?: string | null
+          claimed_at?: string | null
+          latency_ms?: number | null
+          models_added?: number | null
+          models_deactivated?: number | null
+          models_updated?: number | null
+          notified_at?: string | null
+          previous_status?: string | null
+          provider_code: string
+          reason?: string | null
+          run_id?: string | null
+          status: string
+        }
+        Update: {
+          alert_id?: string | null
+          alert_payload?: Json | null
+          alert_pending?: boolean
+          auth_method?: string
+          checked_at?: string
+          claim_token?: string | null
+          claimed_at?: string | null
+          latency_ms?: number | null
+          models_added?: number | null
+          models_deactivated?: number | null
+          models_updated?: number | null
+          notified_at?: string | null
+          previous_status?: string | null
+          provider_code?: string
+          reason?: string | null
+          run_id?: string | null
+          status?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "ai_provider_health_provider_code_fkey"
+            columns: ["provider_code"]
+            referencedRelation: "ai_providers"
+            referencedColumns: ["provider_code"]
           },
         ]
       }
@@ -11249,7 +11412,7 @@ export type Database = {
         Returns: Json
       }
       claim_ai_oauth_refresh: {
-        Args: { p_oauth_provider: string; p_lease_seconds: number }
+        Args: { p_oauth_provider: string; p_lease_seconds: number; p_lease_token?: string }
         Returns: string | null
       }
       complete_ai_oauth_refresh: {
@@ -12185,6 +12348,10 @@ export type Database = {
           username: string
           command: string
         }[]
+      }
+      get_cron_functions_base_url: {
+        Args: Record<PropertyKey, never>
+        Returns: string | null
       }
       get_cron_secret: {
         Args: Record<PropertyKey, never>
@@ -13261,6 +13428,58 @@ export type Database = {
       sweep_background_jobs: {
         Args: Record<PropertyKey, never>
         Returns: number
+      }
+      release_ai_oauth_refresh: {
+        Args: { p_oauth_provider: string; p_lease_token: string }
+        Returns: boolean
+      }
+      record_ai_provider_health: {
+        Args: {
+          p_provider_code: string
+          p_auth_method: string
+          p_status: string
+          p_reason: string | null
+          p_models_added: number | null
+          p_models_updated: number | null
+          p_models_deactivated: number | null
+          p_latency_ms: number
+          p_run_id: string | null
+          p_holder: string
+        }
+        Returns: undefined
+      }
+      claim_ai_provider_health_notifications: {
+        Args: { p_claim_token: string; p_limit?: number }
+        Returns: {
+          provider_code: string
+          auth_method: string
+          status: string
+          reason: string | null
+          previous_status: string | null
+          alert_id: string | null
+          display_name: string
+        }[]
+      }
+      admit_ai_provider_health_run: {
+        Args: { p_scope: string; p_run_id: string; p_admin_id: string | null }
+        Returns: string
+      }
+      complete_ai_provider_health_run: {
+        Args: { p_run_id: string }
+        Returns: undefined
+      }
+      write_ai_health_catalog: {
+        Args: { p_holder: string; p_rows: Json; p_stamp_key: string; p_at: string }
+        Returns: undefined
+      }
+      mark_ai_provider_health_notified: {
+        Args: {
+          p_alert_id?: string | null
+          p_claim_token: string
+          p_provider_code: string
+          p_auth_method: string
+        }
+        Returns: undefined
       }
     }
     Enums: {

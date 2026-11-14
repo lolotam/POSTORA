@@ -81,38 +81,43 @@ export function verifyCronAuth(req: Request): { ok: true } | { ok: false; respon
  * Resolves whether a bearer token belongs to a signed-in admin.
  *
  * Any failure to answer that question — an expired token, an unreachable auth
- * service, a failed role lookup — resolves to `false`, so an authorizer built on
+ * service, a failed role lookup — resolves to `null`, so an authorizer built on
  * this can only ever fail closed.
  */
-async function isAdminToken(token: string): Promise<boolean> {
+async function isAdminToken(token: string, signal?: AbortSignal): Promise<string | null> {
   const supabaseUrl = Deno.env.get("SUPABASE_URL");
   const anonKey = Deno.env.get("SUPABASE_ANON_KEY");
   const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
-  if (!supabaseUrl || !anonKey || !serviceRoleKey) return false;
+  if (!supabaseUrl || !anonKey || !serviceRoleKey) return null;
 
   try {
+    const authFetch: typeof fetch = signal ? (input, init) => fetch(input, {
+      ...init, signal: init?.signal ? AbortSignal.any([signal, init.signal]) : signal,
+    }) : fetch;
     const authClient = createClient(supabaseUrl, anonKey, {
-      global: { headers: { Authorization: `Bearer ${token}` } },
+      global: { headers: { Authorization: `Bearer ${token}` }, fetch: authFetch },
     });
     const { data, error: userError } = await authClient.auth.getUser(token);
-    if (userError || !data.user) return false;
+    if (userError || !data.user) return null;
 
     const adminClient = createClient(supabaseUrl, serviceRoleKey);
-    const { data: role, error: roleError } = await adminClient
+    const roleQuery = adminClient
       .from("user_roles")
       .select("role")
       .eq("user_id", data.user.id)
-      .eq("role", "admin")
-      .maybeSingle();
+      .eq("role", "admin");
+    // Health requests opt into bounded identity reads. Existing cron consumers
+    // keep their original SDK contract, including their registered-route seams.
+    const { data: role, error: roleError } = await (signal ? roleQuery.abortSignal(signal) : roleQuery).maybeSingle();
 
     if (roleError) {
-      console.error("Admin role lookup failed:", roleError.message);
-      return false;
+      console.error("Admin role lookup failed");
+      return null;
     }
-    return !!role;
+    return role ? data.user.id : null;
   } catch (error) {
-    console.error("Admin token verification failed:", error instanceof Error ? error.message : String(error));
-    return false;
+    console.error("Admin token verification failed:", error instanceof Error ? error.name : "error");
+    return null;
   }
 }
 
@@ -127,12 +132,14 @@ async function isAdminToken(token: string): Promise<boolean> {
  */
 export async function verifyCronOrAdmin(
   req: Request,
-): Promise<{ ok: true } | { ok: false; response: Response }> {
+  includeIdentity = false,
+): Promise<{ ok: true; adminId?: string | null } | { ok: false; response: Response }> {
   const cronCheck = checkCronCredentials(req);
-  if (cronCheck === "match") return { ok: true };
+  if (cronCheck === "match") return includeIdentity ? { ok: true, adminId: null } : { ok: true };
 
   const token = bearerToken(req);
-  if (token && await isAdminToken(token)) return { ok: true };
+  const adminId = token ? await isAdminToken(token, includeIdentity ? AbortSignal.timeout(5_000) : undefined) : null;
+  if (adminId) return includeIdentity ? { ok: true, adminId } : { ok: true };
 
   if (cronCheck === "unconfigured") {
     return { ok: false, response: jsonError("CRON_SECRET not configured", 503) };

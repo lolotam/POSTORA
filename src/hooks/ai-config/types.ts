@@ -21,6 +21,11 @@ export interface AIModel {
   is_active: boolean;
   cost_per_1m_input_tokens: string | number | null;
   cost_per_1m_output_tokens: string | number | null;
+  /**
+   * Which credential the row belongs to. The same model_id exists once per
+   * credential kind, so a row with no value is an API-key row.
+   */
+  auth_method?: 'api_key' | 'oauth';
   /** Administrator-set generation knobs for this model. Empty object when unset. */
   admin_params?: Record<string, string | number | boolean>;
   /** Provider-reported capabilities from the last sync. Read by mergeModelSpec. */
@@ -110,7 +115,13 @@ export interface SystemSettingRow {
 
 export interface AIConfigData {
   providers: AIProvider[];
+  /** The API-key catalogue. Every API-key consumer reads this list and only this list. */
   models: AIModel[];
+  /**
+   * The OAuth catalogue. The same model_id exists once per credential kind, so
+   * the subscription login section reads this list and not the API-key one.
+   */
+  oauthModels: AIModel[];
   /** Raw system_settings rows matched by the list query, before tier-parsing. */
   settings: SystemSettingRow[];
   defaultModel: DefaultModel | null;
@@ -118,3 +129,10 @@ export interface AIConfigData {
   categoryFallbacks: CategoryFallbacks;
   categoryFallbacks2: CategoryFallbacks2;
 }
+
+/** The provider health types, re-exported so the admin UI has one import place. */
+export type {
+  ProviderHealthChunk,
+  ProviderHealthRow,
+  ProviderHealthStatus,
+} from "@/features/ai-providers/infrastructure/aiProviderHealthGateway";

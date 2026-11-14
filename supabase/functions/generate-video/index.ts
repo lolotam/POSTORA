@@ -54,6 +54,7 @@ serve(async (req) => {
     const { data: modelRows, error: modelError } = await supabase
       .from("ai_models")
       .select("model_id, metadata, is_active, capabilities, ai_providers!inner(provider_code, is_active)")
+      .eq("auth_method", "api_key")
       .eq("model_id", modelId)
       .in("ai_providers.provider_code", ["higgsfield", "vercel"]);
     if (modelError) throw new Error("Video model lookup failed");

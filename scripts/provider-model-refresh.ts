@@ -29,9 +29,9 @@ if (import.meta.main) {
     const ids: string[] = ((await res.json()).data ?? []).map((m: { id: string }) => m.id);
     const existing = new Set<string>(input.existing?.[code] ?? []);
     for (const id of ids.filter((i) => !existing.has(i)).sort()) {
-      console.log(`INSERT INTO public.ai_models (provider_id, model_id, name, capabilities, is_active)
-SELECT id, '${sql(id)}', '${sql(id)}', ARRAY['${guessCapability(id)}'], true FROM public.ai_providers WHERE provider_code = '${code}'
-ON CONFLICT (provider_id, model_id) DO NOTHING;`);
+      console.log(`INSERT INTO public.ai_models (provider_id, model_id, name, capabilities, is_active, auth_method)
+SELECT id, '${sql(id)}', '${sql(id)}', ARRAY['${guessCapability(id)}'], true, 'api_key' FROM public.ai_providers WHERE provider_code = '${code}'
+ON CONFLICT (provider_id, model_id, auth_method) DO NOTHING;`);
     }
     for (const gone of [...existing].filter((i) => !ids.includes(i)).sort()) {
       console.log(`-- ${code}: '${gone}' no longer listed; deactivate only if no default_ai_model_* uses it`);

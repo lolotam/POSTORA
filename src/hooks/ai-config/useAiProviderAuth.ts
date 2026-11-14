@@ -1,4 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { AI_PROVIDER_HEALTH_QUERY_KEY } from "./queryKeys";
 import {
   aiProviderAuthGateway,
   type AiOAuthCapabilities,
@@ -41,6 +42,7 @@ export function useFinishAiOAuth() {
       // this the list stays on what it was before the login, and closing and
       // reopening the dialog shows the same stale rows.
       queryClient.invalidateQueries({ queryKey: ["ai-config"] });
+      queryClient.invalidateQueries({ queryKey: AI_PROVIDER_HEALTH_QUERY_KEY });
     },
   });
 }
@@ -66,6 +68,7 @@ export function useDisconnectAiOAuth() {
       // A disconnected subscription can leave a tier pointing at a provider that
       // can no longer answer, so the tier list is refreshed too.
       queryClient.invalidateQueries({ queryKey: ["ai-config"] });
+      queryClient.invalidateQueries({ queryKey: AI_PROVIDER_HEALTH_QUERY_KEY });
     },
   });
 }

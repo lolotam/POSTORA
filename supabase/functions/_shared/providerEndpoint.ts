@@ -4,11 +4,29 @@ export const BUILTIN_CHAT_PROVIDERS: ReadonlySet<string> = new Set([
   "claude", "openai", "openrouter", "xai", "google", "gemini", "lovable",
 ]);
 
+/**
+ * The provider's own row could not be read.
+ *
+ * WHY a distinct error
+ * A failed read and a missing provider look the same to a caller that only sees
+ * "no row": one is a server that is unwell, the other is a configuration the admin
+ * can fix. Neither establishes provider availability; both remain retryable run errors.
+ */
+export class ProviderReadError extends Error {
+  override name = "ProviderReadError";
+}
+
+/** Local policy/registry configuration cannot establish a provider outage. */
+export class ProviderConfigurationError extends ProviderReadError {
+  override name = "ProviderConfigurationError";
+}
+
 /** The one read shape this module and providerKeys.ts need from a Supabase client. */
 export interface RowReader {
   from(table: string): {
     select(columns: string): {
       eq(column: string, value: string): {
+        abortSignal?(signal: AbortSignal): { maybeSingle(): PromiseLike<{ data: unknown; error: unknown }> };
         maybeSingle(): PromiseLike<{ data: unknown; error: unknown }>;
       };
     };
