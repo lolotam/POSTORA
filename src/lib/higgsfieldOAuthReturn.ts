@@ -1,7 +1,10 @@
 export const HIGGSFIELD_CALLBACK_PATH = "/admin/oauth/higgsfield/callback";
+// Must match the route in AnimatedRoutes and OPENROUTER_CALLBACK_PATH in the ai-provider-auth edge client.
+export const OPENROUTER_CALLBACK_PATH = "/admin/settings/ai/oauth/openrouter/callback";
 
 const DEDICATED_OAUTH_CALLBACK_PATHS = new Set([
   HIGGSFIELD_CALLBACK_PATH,
+  OPENROUTER_CALLBACK_PATH,
   "/auth/oauth/callback",
   "/tiktok-callback",
   "/oauth/pinterest/callback",
