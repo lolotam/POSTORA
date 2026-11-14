@@ -8,6 +8,7 @@ import { resolvePlatformApiKey } from "../_shared/ai-fallback.ts";
 import type { AiRoutingAdmin } from "../_shared/ai-user-routing.ts";
 import { readCatalogue } from "./readCatalogue.ts";
 import { buildChatListPolicy, buildTriageListPolicy, ChatTierError, validateChatTier, validateTriageTier, type ChatPolicySnapshot } from "./chatListPolicy.ts";
+import { buildAgentListPolicy, validateAgentTier } from "./agentListPolicy.ts";
 
 export async function loadChatPolicySnapshot(admin: SupabaseClient, flags: ChatPolicySnapshot["flags"], signal: AbortSignal): Promise<ChatPolicySnapshot> {
   const [providers, catalogue, settings, statuses] = await Promise.all([
@@ -26,7 +27,8 @@ export async function loadChatPolicySnapshot(admin: SupabaseClient, flags: ChatP
   // The shared catalogue reader preserves provider-specific columns. This seam
   // projects only non-secret fields needed by eligibility and the admin UI.
   const textFloorAvailable = flags.feature_ai_category_text_ladders && Boolean((await resolvePlatformApiKey(admin as unknown as AiRoutingAdmin, "google", signal)).trim());
-  return { flags, providers: providers.data ?? [], settings: settings.data ?? [], statuses: statuses.data ?? [], apiKeys, registry, textFloorAvailable,
+  const toolRegistry = { claude: getModels("anthropic").filter(model => model.api === "anthropic-messages").map(model => model.id) };
+  return { flags, providers: providers.data ?? [], settings: settings.data ?? [], statuses: statuses.data ?? [], apiKeys, registry, toolRegistry, textFloorAvailable,
     models: [...catalogue.models, ...catalogue.oauthModels] as unknown as ChatPolicySnapshot["models"] };
 }
 
@@ -34,11 +36,11 @@ export interface ChatActionDeps {
   isAdmin(): Promise<boolean>;
   flags(): Promise<ChatPolicySnapshot["flags"]>;
   snapshot(flags: ChatPolicySnapshot["flags"]): Promise<ChatPolicySnapshot>;
-  persist(tier: ReturnType<typeof validateChatTier> | ReturnType<typeof validateTriageTier>): Promise<void>;
+  persist(tier: ReturnType<typeof validateChatTier> | ReturnType<typeof validateTriageTier> | ReturnType<typeof validateAgentTier>): Promise<void>;
   logRefusal(reason: string): Promise<void>;
 }
 
-export async function runChatListAction(action: "chat-list-policy" | "set-chat-tier" | "set-triage-tier", body: unknown, deps: ChatActionDeps): Promise<Response> {
+export async function runChatListAction(action: "chat-list-policy" | "set-chat-tier" | "set-triage-tier" | "set-agent-tier", body: unknown, deps: ChatActionDeps): Promise<Response> {
   try {
     if (!(await deps.isAdmin())) throw new ChatTierError("not_admin", 403);
     const flags = await deps.flags();
@@ -47,8 +49,8 @@ export async function runChatListAction(action: "chat-list-policy" | "set-chat-t
       throw new ChatTierError("text_lists_disabled");
     }
     const snapshot = await deps.snapshot(flags);
-    if (action === "chat-list-policy") return Response.json({ ...buildChatListPolicy(snapshot), triageGroups: buildTriageListPolicy(snapshot).groups, categoryLaddersEnabled: flags.feature_ai_category_text_ladders });
-    await deps.persist(action === "set-triage-tier" ? validateTriageTier(body, snapshot) : validateChatTier(body, snapshot));
+    if (action === "chat-list-policy") return Response.json({ ...buildChatListPolicy(snapshot), agentGroups: buildAgentListPolicy(snapshot).groups, triageGroups: buildTriageListPolicy(snapshot).groups, categoryLaddersEnabled: flags.feature_ai_category_text_ladders });
+    await deps.persist(action === "set-agent-tier" ? validateAgentTier(body, snapshot) : action === "set-triage-tier" ? validateTriageTier(body, snapshot) : validateChatTier(body, snapshot));
     return Response.json({ success: true });
   } catch (cause) {
     const reason = cause instanceof ChatTierError ? cause.code : "configuration_read_or_write_failed";
@@ -70,7 +72,7 @@ export function chatActionDeps(admin: SupabaseClient, userId: string, signal: Ab
     snapshot: flags => loadChatPolicySnapshot(admin, flags, signal),
     persist: async tier => {
       signal.throwIfAborted();
-      const rpc = tier.key.startsWith("default_ai_model_agent_triage") ? "write_ai_triage_tier" : "write_ai_chat_tier";
+      const rpc = tier.key.startsWith("default_ai_model_agent_triage") ? "write_ai_triage_tier" : tier.key.startsWith("default_ai_model_agent") ? "write_ai_agent_tier" : "write_ai_chat_tier";
       const { data, error } = await admin.rpc(rpc, { p_key: tier.key, p_value: tier.value, p_expected: tier.expected }).abortSignal(signal);
       if (error) throw new Error("Chat tier write failed");
       if (data !== true) throw new ChatTierError("configuration_changed_retry");

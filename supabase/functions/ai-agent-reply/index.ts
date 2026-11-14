@@ -48,6 +48,16 @@ import {
   withGreeting,
   withOpening,
 } from "./logic.ts";
+import { logAgentAuthEvent } from "./authAttemptLog.ts";
+import { selectAgentCompletion } from "./modelRound.ts";
+import { agentOAuthCompletion, AgentOAuthRefusal } from "./oauthCompletion.ts";
+import { canonicalAssistant, containsInferenceSecret, OAuthContinuation, toolDefinitions as validateToolDefinitions, validatedTranscript } from "../_shared/aiOAuth/toolTranscript.ts";
+import { AuthActionLedger, authActionSafety } from "./authToolSafety.ts";
+import { agentRecoveryReady } from "./agentRecoveryReadiness.ts";
+import { raceSignal } from "../_shared/aiOAuth/piCall.ts";
+import { withDeadline } from "../_shared/deadline.ts";
+import { boundAgentSender, createAgentClients } from "./requestBudget.ts";
+import type { OAuthChainDeps } from "../_shared/aiOAuth/chainTier.ts";
 import { catalogEvidenceFromOutput, type CatalogEvidence } from "./catalogEvidence.ts";
 import { answerWithinBudget, refreshStaffDraft } from "./staffRefresh.ts";
 import { repairChatReply } from "./chatLinks.ts";
@@ -239,6 +249,7 @@ async function answerAgainAfterStaffReply(input: {
   routingAdmin: AiRoutingAdmin;
   startedAt: number;
   turns: StoredTurn[];
+  signal: AbortSignal;
 }): Promise<string | null> {
   const messages = [...input.messages];
   // Every provider receives the same staff context; no tools run a second time.
@@ -250,34 +261,52 @@ async function answerAgainAfterStaffReply(input: {
     complete: async (tier, timeoutMs) => {
       const completion = await chatCompletion(tier, {
         model: tier.model, temperature: input.temperature, messages,
-      }, timeoutMs, input.routingAdmin);
+      }, timeoutMs, input.routingAdmin, undefined, input.signal);
       return repairChatReply(String(completion?.choices?.[0]?.message?.content || "").trim()) || null;
     },
   });
 }
 
+interface AgentCompletion {
+  choices: Array<{ message: { role: string; content: string | null; tool_calls?: Array<{ id: string; type: "function"; function: { name: string; arguments: string } }> } }>;
+  usage?: { prompt_tokens?: number; completion_tokens?: number };
+}
 export async function chatCompletion(
   tier: AiTier,
   payload: Record<string, unknown>,
   timeoutMs = CHAT_TIMEOUT_MS,
   admin?: AiRoutingAdmin,
-): Promise<any> {
+  oauthDeps?: OAuthChainDeps,
+  signal?: AbortSignal,
+): Promise<AgentCompletion> {
+  return await withDeadline(timeoutMs, signal, async callSignal => {
+    return await dispatchChatCompletion(tier, payload, timeoutMs, admin, oauthDeps, callSignal);
+  });
+}
+
+async function dispatchChatCompletion(tier: AiTier, payload: Record<string, unknown>, timeoutMs: number,
+  admin: AiRoutingAdmin | undefined, oauthDeps: OAuthChainDeps | undefined, signal: AbortSignal): Promise<AgentCompletion> {
+  signal.throwIfAborted();
+  if (tier.credentialSource === "platform" && tier.authMethod === "oauth") {
+    return await agentOAuthCompletion(admin as unknown as SupabaseClient, tier, payload, timeoutMs, oauthDeps, signal) as AgentCompletion;
+  }
   const provider = tier.provider;
   let endpoint = PROVIDER_ENDPOINTS[provider];
   if (!endpoint) {
-    const base = await loadOpenAiCompatibleBase(admin, provider);
+    const base = await raceSignal(loadOpenAiCompatibleBase(admin, provider, signal), signal);
     // Only the legacy bare-id case ("gpt-4o" parsed as openai) may fall back to OpenAI;
     // a named provider without a usable row must fail, not send its key to OpenAI.
     if (!base) throw new Error(`${provider}: provider endpoint not configured`);
     endpoint = { url: `${base}/chat/completions`, keyEnv: "" };
   }
-  const key = tier.credentialSource === "user" ? tier.apiKey : await resolvePlatformApiKey(admin, provider);
+  const key = tier.credentialSource === "user" ? tier.apiKey : await raceSignal(resolvePlatformApiKey(admin, provider, signal), signal);
+  signal.throwIfAborted();
   if (!key?.trim()) throw new Error("AI tier requires an API key");
   let data;
   let status: number;
   try {
     if (endpoint.kind === "anthropic") {
-      const response = await callAnthropicJson(payload, key, timeoutMs);
+      const response = await callAnthropicJson(payload, key, timeoutMs, signal);
       data = response.json;
       status = response.status;
     } else {
@@ -285,6 +314,7 @@ export async function chatCompletion(
         method: "POST",
         headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
         body: JSON.stringify(payload),
+        signal,
       }, timeoutMs);
       status = response.status;
       const text = await response.text();
@@ -620,12 +650,13 @@ Deno.serve(async (req) => {
   const bearer = (req.headers.get("Authorization") || "").replace("Bearer ", "");
   if (!bearer) return unauthorizedResponse();
 
-  const admin = createClient(supabaseUrl, serviceKey);
   const startedAt = Date.now();
+  const { signal: requestSignal, work: admin, settlement: settlementAdmin, cleanup: cleanupAdmin } =
+    createAgentClients(supabaseUrl, serviceKey, req.signal);
   const timings = phaseTimings();
   let body: Record<string, unknown>;
   try {
-    body = await req.json();
+    body = await new Response(req.body?.pipeThrough(new TransformStream(), { signal: requestSignal })).json();
   } catch {
     return badRequestResponse("Invalid JSON body");
   }
@@ -650,7 +681,8 @@ Deno.serve(async (req) => {
   } else {
     const anonKey = Deno.env.get("SUPABASE_ANON_KEY") || Deno.env.get("SUPABASE_PUBLISHABLE_KEY")!;
     const anon = createClient(supabaseUrl, anonKey, {
-      global: { headers: { Authorization: `Bearer ${bearer}` } },
+      global: { headers: { Authorization: `Bearer ${bearer}` }, fetch: (url, init) =>
+        fetchWithTimeout(String(url), { ...init, signal: init?.signal ? AbortSignal.any([requestSignal, init.signal]) : requestSignal }, 50_000) },
     });
     const { data: { user } } = await anon.auth.getUser(bearer);
     if (!user) return unauthorizedResponse();
@@ -824,15 +856,15 @@ Deno.serve(async (req) => {
     // an agent that had stopped replying for hours showed no evidence at all --
     // every other refusal in this function writes a row saying which gate closed.
     if (!config) {
-      await logOutcome(admin, { ...baseLog, status: "skipped", error: "agent_not_configured" });
-      if (outboxId) await cancelOutboxRow(admin, outboxId, "agent_not_configured", request.user_id);
+      await logOutcome(settlementAdmin, { ...baseLog, status: "skipped", error: "agent_not_configured" });
+      if (outboxId) await cancelOutboxRow(settlementAdmin, outboxId, "agent_not_configured", request.user_id);
       return jsonResponse({ ok: true, skipped: "agent_not_configured" });
     }
     // The Test sandbox works while the agent is still disabled, so users can
     // tune it before switching it on for real customers.
     if (!config.is_enabled && !dryRun) {
-      await logOutcome(admin, { ...baseLog, status: "skipped", error: "agent_disabled" });
-      if (outboxId) await cancelOutboxRow(admin, outboxId, "agent_disabled", request.user_id);
+      await logOutcome(settlementAdmin, { ...baseLog, status: "skipped", error: "agent_disabled" });
+      if (outboxId) await cancelOutboxRow(settlementAdmin, outboxId, "agent_disabled", request.user_id);
       return jsonResponse({ ok: true, skipped: "agent_disabled" });
     }
 
@@ -935,19 +967,19 @@ Deno.serve(async (req) => {
           // The claim's state could not be read, so nothing is settled on the strength of
           // it: the work item stays unsettled and the customer's question is not lost
           // over a hiccup.
-          await logOutcome(admin, { ...baseLog, status: "error", error: decision.error });
+          await logOutcome(settlementAdmin, { ...baseLog, status: "error", error: decision.error });
           return jsonResponse({ ok: false, error: decision.error });
         }
         if (decision.kind === "skipped") {
           if (decision.settlement.body.ok) {
-            await logOutcome(admin, { ...baseLog, status: "skipped", error: gate.reason });
+            await logOutcome(settlementAdmin, { ...baseLog, status: "skipped", error: gate.reason });
             return jsonResponse(decision.settlement.body);
           }
           // The customer's question is not durable anywhere. The work item was left
           // unsettled -- not cancelled, not marked done -- so the outbox can try again,
           // and the caller is told the turn failed. "Skipped" would be a lie: it would
           // say the question was handled.
-          await logOutcome(admin, { ...baseLog, status: "error", error: decision.settlement.body.error });
+          await logOutcome(settlementAdmin, { ...baseLog, status: "error", error: decision.settlement.body.error });
           return jsonResponse(decision.settlement.body);
         }
         humanModeAck = decision.text;
@@ -958,12 +990,12 @@ Deno.serve(async (req) => {
     // Everything the reply is delivered through, resolved before any billable work so the
     // redelivery branch below can send without paying for retrieval it will not use.
     try {
-      replySender = dryRun ? null : await buildReplySender(admin, request);
+      replySender = dryRun ? null : boundAgentSender(await buildReplySender(admin, request), requestSignal);
     } catch (senderError) {
       // The acknowledgement claim was spent before the sender existed. Nothing reached
       // the customer, so the claim goes back and the notice is still owed.
       if (humanModeAck) {
-        const released = await releaseHumanModeAck(admin, handoffScope(request), humanModeAckToken);
+        const released = await releaseHumanModeAck(settlementAdmin, handoffScope(request), humanModeAckToken);
         if (!released) {
           // The claim was not this turn's to release. The lease still stands, so a later
           // turn takes it over once it lapses -- the notice is not lost, but it waits.
@@ -993,7 +1025,7 @@ Deno.serve(async (req) => {
       // Local message storage exists only for WhatsApp; FB/IG conversations are read live
       // from the Graph API.
       if (request.platform === "whatsapp" && outboundMessageId) {
-        await admin.from("whatsapp_messages").insert({
+        await settlementAdmin.from("whatsapp_messages").insert({
           user_id: request.user_id,
           social_account_id: request.social_account_id,
           conversation_id: request.conversation_id,
@@ -1008,7 +1040,7 @@ Deno.serve(async (req) => {
           timestamp: new Date().toISOString(),
         });
       }
-      const { error: threadWriteError } = await admin.from("ai_thread_messages").insert([
+      const { error: threadWriteError } = await settlementAdmin.from("ai_thread_messages").insert([
         { thread_id: thread.id, user_id: request.user_id, role: "user", content: request.inbound_text },
         {
           thread_id: thread.id,
@@ -1021,7 +1053,7 @@ Deno.serve(async (req) => {
       if (threadWriteError) console.error("[ai-agent-reply] Thread write failed:", threadWriteError.message);
       const shown = customerLanguageSignal(request.inbound_text, request.language_hint);
       if (shown && shown !== thread.customer_language) {
-        const { error: languageError } = await admin.from("ai_threads")
+        const { error: languageError } = await settlementAdmin.from("ai_threads")
           .update({ customer_language: shown })
           .eq("id", thread.id);
         if (languageError) console.error("[ai-agent-reply] Thread language write failed:", languageError.message);
@@ -1052,6 +1084,7 @@ Deno.serve(async (req) => {
           { text: entry.text, kind: entry.kind },
           (text) => sender(request.recipient_phone, text),
           request.user_id,
+          settlementAdmin,
         );
         // The same trail a fresh delivery leaves. Without it the customer has a reply that
         // is missing from the inbox UI and from the thread the next turn reads -- so the
@@ -1067,9 +1100,9 @@ Deno.serve(async (req) => {
         // normally spent already -- the notice and the claim it spends are written by ONE
         // statement -- so this is the net under a notice that was persisted without it.
         if (entry.kind === "human_mode_ack") {
-          await completeHumanModeAck(admin, handoffScope(request), humanModeAckToken);
+          await completeHumanModeAck(settlementAdmin, handoffScope(request), humanModeAckToken);
         }
-        await logOutcome(admin, {
+        await logOutcome(settlementAdmin, {
           ...baseLog,
           reply_text: delivered.text.slice(0, 4000),
           tool_calls: entry.toolCalls?.length ? entry.toolCalls : null,
@@ -1111,6 +1144,7 @@ Deno.serve(async (req) => {
             },
             (text) => sender(request.recipient_phone, text),
             request.user_id,
+            settlementAdmin,
           );
           outboundMessageId = delivered.messageId;
           noticeText = delivered.text;
@@ -1119,7 +1153,7 @@ Deno.serve(async (req) => {
         }
       } catch (ackError) {
         if (!replyIsDurable(outboxId, ackError)) {
-          const released = await releaseHumanModeAck(admin, handoffScope(request), humanModeAckToken);
+          const released = await releaseHumanModeAck(settlementAdmin, handoffScope(request), humanModeAckToken);
           if (!released) {
             // The lease still stands, so a later turn takes the notice over once it
             // lapses. It waits, but it is not lost.
@@ -1131,10 +1165,10 @@ Deno.serve(async (req) => {
       // Without an outbox row there is no persist to hang the completion on, so the notice
       // is complete once it has been sent.
       if (!outboxId) {
-        await completeHumanModeAck(admin, handoffScope(request), humanModeAckToken);
+        await completeHumanModeAck(settlementAdmin, handoffScope(request), humanModeAckToken);
       }
       await persistDelivery(noticeText, outboundMessageId, []);
-      await logOutcome(admin, {
+      await logOutcome(settlementAdmin, {
         ...baseLog,
         reply_text: noticeText,
         latency_ms: Date.now() - startedAt,
@@ -1418,7 +1452,7 @@ Deno.serve(async (req) => {
     let adminNotifier: Promise<TextSender> | null = null;
     const notifyAdmin: TextSender = async (recipientPhone, text) => {
       adminNotifier ??= buildAdminNotifier(admin, request);
-      return await (await adminNotifier)(recipientPhone, text);
+      return await boundAgentSender(await adminNotifier, requestSignal)(recipientPhone, text);
     };
 
     const toolContext: ToolContext = {
@@ -1562,7 +1596,8 @@ Deno.serve(async (req) => {
         askHandoff: handoff.onRequest,
       }, (code, signal) => resolveProviderKey(admin as unknown as RowReader, code, signal),
       triagePolicyEnabled ? Math.max(0, Math.min(triageBudgetFor(triageChain), triageDeadlineAt - Date.now() - 100)) : undefined, fetch, Date.now,
-      (tier, body, timeoutMs, signal) => callChatCompletion(admin as unknown as AiRoutingAdmin, tier, body, timeoutMs, signal), triagePolicyEnabled);
+      (tier, body, timeoutMs, signal) => callChatCompletion(admin as unknown as AiRoutingAdmin, tier, body, timeoutMs,
+        signal ? AbortSignal.any([requestSignal, signal]) : requestSignal), triagePolicyEnabled);
     }
     if (triagePolicyEnabled && triage?.errors.length) await persistTriageRefusals(admin, triage, triageChain, triageDeadlineAt);
     timings.mark("triage");
@@ -1667,9 +1702,9 @@ Deno.serve(async (req) => {
     const routingAdmin = admin as unknown as AiRoutingAdmin;
     const route = await resolveUserAiRoute(routingAdmin, request.user_id, 'agent');
     if (!modelOverride.model && route.mode === 'user_only' && !route.userTier) {
-      await logOutcome(admin, { ...baseLog, status: 'skipped', error: AI_CONNECTION_REQUIRED,
+      await logOutcome(settlementAdmin, { ...baseLog, status: 'skipped', error: AI_CONNECTION_REQUIRED,
         latency_ms: Date.now() - startedAt }, { error_code: AI_CONNECTION_REQUIRED, dry_run: dryRun });
-      if (outboxId) await cancelOutboxRow(admin, outboxId, AI_CONNECTION_REQUIRED, request.user_id);
+      if (outboxId) await cancelOutboxRow(settlementAdmin, outboxId, AI_CONNECTION_REQUIRED, request.user_id);
       return jsonResponse({ ok: true, skipped: 'no_reply_generated', error: AI_CONNECTION_REQUIRED });
     }
     const rawChain = modelOverride.model || route.mode === 'user_only' ? [] : await loadGlobalModelChain(admin);
@@ -1749,8 +1784,13 @@ Deno.serve(async (req) => {
           },
         },
       });
-      return { output };
+      return { output, ...(plan.action !== "upsert" ? { mutationEffect: "none" as const } : {}) };
     };
+    const authConfigured = modelChain.some(tier => tier.credentialSource === "platform" && tier.authMethod === "oauth");
+    const oauthContinuation = new OAuthContinuation();
+    let authToolsActive = false;
+    const authLedger = new AuthActionLedger(crypto.randomUUID(), code =>
+      logAgentAuthEvent(admin, request.user_id, { code }, modelBudgetRemaining(startedAt, Date.now())));
     let toldWaitlistGap = false;
     let procedureToolRanThisRound = false;
     for (let iteration = 0; ; iteration++) {
@@ -1771,36 +1811,71 @@ Deno.serve(async (req) => {
       ];
       let completion: any = null;
       let lastError: unknown = null;
-      for (let mi = 0; mi < modelChain.length; mi++) {
-        // The worker is killed at 60s. Three models at CHAT_TIMEOUT_MS need 75s, so
-        // without this the isolate dies mid-chain and takes the outage floor with it
-        // -- the failure mode index.ts:72 describes. Stop early and let the floor run.
-        const budgetMs = modelBudgetRemaining(startedAt, Date.now());
-        if (budgetMs <= 0) {
-          modelErrors.push({
-            model: formatModelRef(modelChain[mi]),
-            error: "request budget exhausted before this model was tried",
-          });
-          break;
-        }
-        try {
-          completion = await timings.span("model_round", () => chatCompletion(modelChain[mi], {
+      let attemptStartedAt = Date.now();
+      const selected = await selectAgentCompletion({
+        tiers: modelChain.length,
+        budget: () => modelBudgetRemaining(startedAt, Date.now()),
+        attempt: async (mi, budgetMs) => {
+          attemptStartedAt = Date.now();
+          const tier = modelChain[mi];
+          if (authToolsActive && messages.some(message => message.role === "tool" && containsInferenceSecret(message.content))) throw new ModelChainExhaustedError("oauth_tool_result_unsafe");
+          const signal = AbortSignal.any([requestSignal, AbortSignal.timeout(Math.max(1, Math.min(CHAT_TIMEOUT_MS, budgetMs)))]);
+          if (tier.credentialSource === "platform" && tier.authMethod === "oauth") {
+            if (roundToolDefinitions.some(tool => !authActionSafety(tool.function.name, customToolByName)) || messages.some(message => message.tool_calls?.some((call: { function: { name: string } }) => !authActionSafety(call.function.name, customToolByName)))) throw new AgentOAuthRefusal("oauth_tool_safety_unsupported");
+            if (!await raceSignal(agentRecoveryReady(admin, modelChain, mi, signal), signal)) throw new AgentOAuthRefusal("oauth_api_fallback_required");
+          }
+          const candidate = await timings.span("model_round", () => raceSignal(chatCompletion(modelChain[mi], {
             model: modelChain[mi].model,
             temperature: config.temperature ?? 0.4,
             messages,
             ...(roundToolDefinitions.length ? { tools: roundToolDefinitions, tool_choice: "auto" } : {}),
-          }, Math.min(CHAT_TIMEOUT_MS, budgetMs), routingAdmin));
-          usedModel = formatModelRef(modelChain[mi]);
-          usedFallbackLevel = mi;
-          usedCredentialSource = modelChain[mi].credentialSource;
-          break;
-        } catch (err) {
+          }, Math.min(CHAT_TIMEOUT_MS, modelBudgetRemaining(startedAt, Date.now())), routingAdmin, { continuation: oauthContinuation }, signal), signal));
+          if (authConfigured) {
+            try { candidate.choices[0].message = canonicalAssistant(candidate.choices[0].message); }
+            catch { throw new AgentOAuthRefusal("oauth_response_invalid"); }
+          }
+          const selectedAuth = tier.credentialSource === "platform" && tier.authMethod === "oauth";
+          if (authToolsActive || selectedAuth) {
+            // Check the ENTIRE proposed round before executing even its first call.
+            // This also applies to an API recovery response after Auth execution.
+            const message = candidate.choices[0].message;
+            const definitions = validateToolDefinitions({ tools: roundToolDefinitions });
+            const allowed = new Set(definitions.map(tool => tool.function.name));
+            const proposed = message.tool_calls ?? [];
+            if (proposed.some((call: { function: { name: string } }) => !allowed.has(call.function.name) || !authActionSafety(call.function.name, customToolByName))) throw new AgentOAuthRefusal("oauth_response_invalid");
+            try { validatedTranscript({ messages: [...messages, message, ...proposed.map((call: { id: string }) => ({ role: "tool", tool_call_id: call.id, content: "validation only" }))] }); }
+            catch { throw new AgentOAuthRefusal("oauth_response_invalid"); }
+          }
+          if (selectedAuth) {
+            authToolsActive = true;
+            await logAgentAuthEvent(admin, request.user_id, { code: "oauth_completion_selected", provider: tier.provider, model: tier.model,
+              level: mi, attempt: iteration, duration_ms: Date.now() - attemptStartedAt,
+              prompt_tokens: candidate.usage?.prompt_tokens, completion_tokens: candidate.usage?.completion_tokens,
+            }, modelBudgetRemaining(startedAt, Date.now()));
+          }
+          return candidate;
+        },
+        failed: async (mi, err) => {
+          const failedTier = modelChain[mi];
+          if (failedTier.credentialSource === "platform" && failedTier.authMethod === "oauth" && !(err instanceof AgentOAuthRefusal)) {
+            err = new AgentOAuthRefusal(err instanceof DOMException && ["AbortError", "TimeoutError"].includes(err.name) ? "oauth_request_timeout" : "oauth_configuration_read_failed");
+          }
+          if (err instanceof AgentOAuthRefusal) await logAgentAuthEvent(admin, request.user_id, {
+            provider: modelChain[mi].provider, model: modelChain[mi].model, level: mi, attempt: iteration,
+            duration_ms: Date.now() - attemptStartedAt, code: err.code,
+            auth_method: failedTier.credentialSource === "platform" && failedTier.authMethod === "oauth" ? "oauth" : "api_key",
+          }, modelBudgetRemaining(startedAt, Date.now()));
           await invalidateRejectedUserTier(routingAdmin, request.user_id, route, err);
           if (modelChain[mi].credentialSource === 'user') fallbackReason = `user_tier_failed:${err instanceof ProviderHttpError ? err.status : 0}`;
-          lastError = err;
           modelErrors.push({ model: formatModelRef(modelChain[mi]), error: errorMessage(err) });
-        }
-      }
+        },
+      });
+      if ("completion" in selected) {
+        completion = selected.completion;
+        usedModel = formatModelRef(modelChain[selected.index]);
+        usedFallbackLevel = selected.index;
+        usedCredentialSource = modelChain[selected.index].credentialSource;
+      } else lastError = selected.error;
       if (!completion) {
         // A user_only chain rejected by its own provider is a credential error,
         // not a model outage: the key has just been invalidated, the next
@@ -1811,10 +1886,10 @@ Deno.serve(async (req) => {
           route.mode === 'user_only' && lastError instanceof ProviderHttpError &&
           lastError.credentialSource === 'user' && [401, 403].includes(lastError.status)
         ) {
-          await logOutcome(admin, { ...baseLog, status: 'skipped', error: AI_USER_KEY_INVALID,
+          await logOutcome(settlementAdmin, { ...baseLog, status: 'skipped', error: AI_USER_KEY_INVALID,
             latency_ms: Date.now() - startedAt }, { error_code: AI_USER_KEY_INVALID, dry_run: dryRun,
             model_errors: modelErrors });
-          if (outboxId) await cancelOutboxRow(admin, outboxId, AI_USER_KEY_INVALID, request.user_id);
+          if (outboxId) await cancelOutboxRow(settlementAdmin, outboxId, AI_USER_KEY_INVALID, request.user_id);
           return jsonResponse({ ok: true, skipped: 'no_reply_generated', error: AI_USER_KEY_INVALID });
         }
         // Typed so the catch can tell a total model outage apart from the
@@ -1862,7 +1937,7 @@ Deno.serve(async (req) => {
         const customTool = customToolByName.get(toolCall.function.name);
         const isProcedureTool = procedureTurn !== null && PROCEDURE_TOOL_NAMES.has(toolCall.function.name);
         if (isProcedureTool) procedureToolRanThisRound = true;
-        const result: ToolResult = await timings.span(`tool:${toolCall.function.name}`, async () =>
+        const execute = () => timings.span(`tool:${toolCall.function.name}`, async () =>
           toolCall.function.name === "stock_waitlist_join"
             ? await executeOfferedWaitlistJoin(
               stockWaitlistJoinOffered(waitlistOn, roundToolDefinitions),
@@ -1882,6 +1957,9 @@ Deno.serve(async (req) => {
             )
             : (isAdmin ? await executeAdminTool(toolContext, toolCall.function.name, args) : null) ??
               (await executeTool(toolContext, toolCall.function.name, args)));
+        const result: ToolResult = authToolsActive
+          ? await authLedger.execute(toolCall.function.name, args, authActionSafety(toolCall.function.name, customToolByName), execute)
+          : await execute();
         if (dryRun && customTool && args.capability === "search_products") {
           catalogEvidence.push(...catalogEvidenceFromOutput(result.output).slice(0, Math.max(0, 100 - catalogEvidence.length)));
         }
@@ -1939,7 +2017,7 @@ Deno.serve(async (req) => {
     }
 
     if (!replyText) {
-      await logOutcome(admin, {
+      await logOutcome(settlementAdmin, {
         ...baseLog,
         status: "skipped",
         error: "no_reply_generated",
@@ -1959,7 +2037,7 @@ Deno.serve(async (req) => {
         timings: timings.toJSON(),
         triage: triage ? { outcome: triage.outcome, errors: triage.errors.length ? triage.errors : null } : null,
       });
-      if (outboxId) await cancelOutboxRow(admin, outboxId, "no_reply_generated", request.user_id);
+      if (outboxId) await cancelOutboxRow(settlementAdmin, outboxId, "no_reply_generated", request.user_id);
       return jsonResponse({ ok: true, skipped: "no_reply_generated" });
     }
 
@@ -1975,9 +2053,9 @@ Deno.serve(async (req) => {
     ) {
       // The reply claims a transition durable state does not hold (a concurrent turn won,
       // or the write failed). Sending it would re-ask answered questions next turn.
-      await logOutcome(admin, { ...baseLog, status: "skipped", error: PROCEDURE_STATE_CONFLICT,
+      await logOutcome(settlementAdmin, { ...baseLog, status: "skipped", error: PROCEDURE_STATE_CONFLICT,
         latency_ms: Date.now() - startedAt }, { error_code: PROCEDURE_STATE_CONFLICT, dry_run: dryRun });
-      if (outboxId) await cancelOutboxRow(admin, outboxId, PROCEDURE_STATE_CONFLICT, request.user_id);
+      if (outboxId) await cancelOutboxRow(settlementAdmin, outboxId, PROCEDURE_STATE_CONFLICT, request.user_id);
       return jsonResponse({ ok: true, skipped: "no_reply_generated", error: PROCEDURE_STATE_CONFLICT });
     }
 
@@ -2006,6 +2084,7 @@ Deno.serve(async (req) => {
         regenerate: () => answerAgainAfterStaffReply({
           messages, modelChain, temperature: config.temperature ?? 0.4,
           routingAdmin, startedAt, turns: settlement.lateStaffTurns,
+          signal: requestSignal,
         }),
         known: [...aftermath.staffTurns, ...settlement.lateStaffTurns],
         readLatest: () => readEscalationAftermath(admin, handoffScope(request), thread.id),
@@ -2023,16 +2102,16 @@ Deno.serve(async (req) => {
           settlement.marker && settlement.claimToken &&
           !settlement.staffWriteFailed && !settlement.staffReadFailed
         ) {
-          await releaseUnpersistedEscalation(admin, handoffScope(request), earlyEscalationLease);
+          await releaseUnpersistedEscalation(settlementAdmin, handoffScope(request), earlyEscalationLease);
         }
         // Nobody answered the question, so it is kept on the record: the thread
         // carries it, and the agent's next answer is written against it.
         const held = await settleStaffInterruptedTurn({
-          admin, outboxId, sideEffectsHappened, scope: handoffScope(request), lease: earlyEscalationLease,
+          admin: settlementAdmin, outboxId, sideEffectsHappened, scope: handoffScope(request), lease: earlyEscalationLease,
           threadId: thread.id,
           turn: { userId: request.user_id, content: request.inbound_text, id: outboxId ?? undefined },
         });
-        await logOutcome(admin, {
+        await logOutcome(settlementAdmin, {
           ...baseLog,
           status: held.cancelWorkItem ? "skipped" : "failed",
           error: held.cancelWorkItem ? "staff_answered_during_generation" : "held_customer_turn_not_durable",
@@ -2063,7 +2142,7 @@ Deno.serve(async (req) => {
       if (settlement.staffWriteFailed || settlement.staffReadFailed) return;
       escalationCompleted = true;
       await completeUnansweredEscalation(
-        admin,
+        settlementAdmin,
         handoffScope(request),
         thread.id,
         settlement.marker,
@@ -2072,6 +2151,7 @@ Deno.serve(async (req) => {
     };
     try {
       if (!dryRun && replySender) {
+        requestSignal.throwIfAborted();
         const sender = replySender;
         // With an outbox row, the send is wrapped in three durable steps (persist the text,
         // mark sending, mark sent) so a kill at any point leaves a state recovery can act on
@@ -2094,6 +2174,7 @@ Deno.serve(async (req) => {
             },
             (text) => sender(request.recipient_phone, text),
             request.user_id,
+            settlementAdmin,
           )
           : null;
         outboundMessageId = delivered
@@ -2126,7 +2207,9 @@ Deno.serve(async (req) => {
         !escalationCompleted &&
         (replyWithoutDurableCopy || settlement.staffWriteFailed || settlement.staffReadFailed)
       ) {
-        const released = await releaseUnpersistedEscalation(admin, handoffScope(request), earlyEscalationLease);
+        // Opportunistic release shares settlement; the reserved cleanup deadline
+        // must start only when the failed turn can be released alongside its lease.
+        const released = await releaseUnpersistedEscalation(settlementAdmin, handoffScope(request), earlyEscalationLease);
         if (!released) {
           // The lease still stands: a later turn takes the apology over once it lapses,
           // so the apology is owed rather than lost.
@@ -2142,7 +2225,7 @@ Deno.serve(async (req) => {
     // without sending anything.
     await persistDelivery(replyText, outboundMessageId);
 
-    await logOutcome(admin, {
+    await logOutcome(settlementAdmin, {
       ...baseLog,
       reply_text: replyText.slice(0, 4000),
       retrieved_chunk_ids: retrievedChunkIds.length ? [...new Set(retrievedChunkIds)] : null,
@@ -2217,7 +2300,7 @@ Deno.serve(async (req) => {
         request, replySender, language, escalationTarget,
         { escalated, humanNotified: escalationNotifiedHuman },
       );
-      await logOutcome(admin, {
+      await logOutcome(settlementAdmin, {
         ...baseLog,
         // Two statuses, so the log never claims more than happened: the second
         // means every model failed AND the handoff failed, so nothing was sent
@@ -2240,9 +2323,9 @@ Deno.serve(async (req) => {
         // admins, sent an apology. Terminal: recovery re-running this would do it all twice.
         // Unhandled means nothing happened, and the row may be retried once models recover.
         if (floor.escalated) {
-          await cancelOutboxRow(admin, outboxId, "model outage handled by escalation", request.user_id);
+          await cancelOutboxRow(settlementAdmin, outboxId, "model outage handled by escalation", request.user_id);
         } else {
-          await releaseFailedEscalationTurn(admin, handoffScope(request), earlyEscalationLease, outboxId,
+          await releaseFailedEscalationTurn(cleanupAdmin, handoffScope(request), earlyEscalationLease, outboxId,
             { sideEffectsHappened, error: errorMessage(error) });
         }
       }
@@ -2256,7 +2339,11 @@ Deno.serve(async (req) => {
         human_notified: floor.human_notified,
       });
     }
-    await logOutcome(admin, {
+    if (outboxId) {
+      await releaseFailedEscalationTurn(cleanupAdmin, handoffScope(request), earlyEscalationLease, outboxId,
+        { sideEffectsHappened, error: errorMessage(error) });
+    }
+    await logOutcome(settlementAdmin, {
       ...baseLog,
       status: "error",
       error: errorMessage(error).slice(0, 500),
@@ -2269,14 +2356,11 @@ Deno.serve(async (req) => {
       model_errors: modelErrors.length ? modelErrors : null,
       triage: triage ? { outcome: triage.outcome, errors: triage.errors.length ? triage.errors : null } : null,
     });
-    if (outboxId) {
-      await releaseFailedEscalationTurn(admin, handoffScope(request), earlyEscalationLease, outboxId,
-        { sideEffectsHappened, error: errorMessage(error) });
-    }
     return jsonResponse({ ok: false, error: errorMessage(error) });
   } finally {
     try {
-      await releaseUnpersistedEscalation(admin, handoffScope(request), earlyEscalationLease);
+      const released = await releaseUnpersistedEscalation(cleanupAdmin, handoffScope(request), earlyEscalationLease);
+      if (!released) console.warn("[ai-agent-reply] escalation lease remains recoverable on expiry");
     } catch (cleanupError) {
       // Preserve the original outcome; the token-bound lease remains recoverable on expiry.
       console.error("[ai-agent-reply] escalation lease cleanup failed:", errorMessage(cleanupError));

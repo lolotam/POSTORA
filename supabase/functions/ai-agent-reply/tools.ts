@@ -55,6 +55,8 @@ export interface ToolContext {
 
 export interface ToolResult {
   output: string;
+  /** Server-owned proof that a refused/dry-run action made no mutation attempt. */
+  mutationEffect?: "none";
   escalated?: boolean;
   retrievedChunkIds?: string[];
   humanNotified?: boolean;

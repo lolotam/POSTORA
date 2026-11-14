@@ -7,6 +7,11 @@ import { AiOAuthError } from "./errors.ts";
 
 export type OAuthProviderId = 'anthropic' | 'openai-codex' | 'openrouter';
 
+/** Phase 4 proves only Claude's function-tool transport. No flag widens this. */
+export function supportsOAuthToolTransport(provider: OAuthProviderId): boolean {
+  return provider === 'anthropic';
+}
+
 /**
  * How the admin hands the authorization result back to us.
  * - `pkce_paste`: the provider lands on a page that cannot load, so the admin
