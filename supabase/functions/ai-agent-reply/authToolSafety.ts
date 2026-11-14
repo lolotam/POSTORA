@@ -38,6 +38,9 @@ export class AuthActionLedger {
     try {
       const result = await run();
       if (name === "stock_waitlist_join" && result.output === WAITLIST_FOLLOW_UP) throw new Error();
+      // Only a server-proven non-attempt may be reconsidered when stock context
+      // changes. Unknown or completed effects retain the same fail-closed identity.
+      if (result.mutationEffect === "none") { this.#receipts.delete(identity); return result; }
       this.#receipts.set(identity, { state: "complete", result: structuredClone(result) });
       return result;
     } catch {

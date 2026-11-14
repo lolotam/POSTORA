@@ -9,8 +9,14 @@ DELETE FROM public.system_settings WHERE key IN ('default_ai_model_agent','defau
 UPDATE public.system_settings SET value='true'::jsonb WHERE key IN ('feature_ai_text_auth_lists','feature_ai_provider_oauth','feature_ai_oauth_tools_claude');
 INSERT INTO public.ai_providers(id,provider_code,name,api_endpoint,api_key_env_var,api_type,is_active)
 VALUES('44444444-4444-4444-8444-444444444444','phase4_fixture','Phase 4','https://example.invalid','TEST_FIXTURE','openai',true);
-INSERT INTO public.ai_models(provider_id,model_id,name,capabilities,is_active,auth_method)
-VALUES('44444444-4444-4444-8444-444444444444','tool-model','Tool model',ARRAY['chat','tools'],true,'api_key');
+INSERT INTO public.ai_models(provider_id,model_id,name,capabilities,is_active,auth_method,metadata)
+VALUES('44444444-4444-4444-8444-444444444444','tool-model','Tool model',ARRAY['chat'],true,'api_key','{"supported_parameters":["tools"]}'),
+('44444444-4444-4444-8444-444444444444','unknown-chat','Unknown',ARRAY['chat'],true,'api_key','{}'),
+('44444444-4444-4444-8444-444444444444','explicit-no-tools','No tools',ARRAY['chat'],true,'api_key','{"tool_calling":false,"supported_parameters":["tools"]}');
+\ir ../migrations/20261114160300_ai_agent_tool_capability_backfill.sql
+SELECT pg_temp.agent_assert((SELECT metadata->'tool_calling' = 'true'::jsonb FROM public.ai_models WHERE provider_id='44444444-4444-4444-8444-444444444444' AND model_id='tool-model'),'persisted capability backfilled before gating');
+SELECT pg_temp.agent_assert((SELECT NOT metadata ? 'tool_calling' FROM public.ai_models WHERE provider_id='44444444-4444-4444-8444-444444444444' AND model_id='unknown-chat'),'unknown chat not promoted');
+SELECT pg_temp.agent_assert((SELECT metadata->'tool_calling' = 'false'::jsonb FROM public.ai_models WHERE provider_id='44444444-4444-4444-8444-444444444444' AND model_id='explicit-no-tools'),'explicit refusal preserved');
 INSERT INTO auth.users(id,email) VALUES('44444444-4444-4444-8444-444444444445','agent-policy@example.invalid');
 INSERT INTO public.user_roles(user_id,role) VALUES('44444444-4444-4444-8444-444444444445','admin') ON CONFLICT DO NOTHING;
 SELECT set_config('request.jwt.claim.sub','44444444-4444-4444-8444-444444444445',true);

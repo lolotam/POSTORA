@@ -1,4 +1,4 @@
-import { assert, assertEquals } from "https://deno.land/std@0.208.0/assert/mod.ts";
+import { assert, assertEquals, assertThrows } from "https://deno.land/std@0.208.0/assert/mod.ts";
 import { callPiOAuth, defaultPiCallDeps, type PiCallDeps } from "./piCall.ts";
 import { canonicalAssistant, OAuthContinuation, toToolContext } from "./toolTranscript.ts";
 import { callOAuthTier } from "./chainTier.ts";
@@ -36,6 +36,7 @@ for (const [label, change, expected] of [
   ["root additionalProperties", { tools: [{ ...lookupTool, function: { ...lookupTool.function, parameters: { ...lookupTool.function.parameters, additionalProperties: false } } }] }, "schema_unsupported"],
   ["forced choice", { tool_choice: "required" }, "tools_unsupported"],
   ["named choice", { tool_choice: { type: "function", function: { name: "search_knowledge" } } }, "tools_unsupported"],
+  ["case-folded tool names", { tools: [lookupTool, { ...lookupTool, function: { ...lookupTool.function, name: "SEARCH_KNOWLEDGE" } }] }, "schema_unsupported"],
   ["required option", { response_format: { type: "json_object" } }, "schema_unsupported"],
   ["missing result", { messages: history.slice(0, -1) }, "tool_history_unsupported"],
   ["mismatched result", { messages: [...history.slice(0, -1), { role: "tool", tool_call_id: "wrong", content: "x" }] }, "tool_history_unsupported"],
@@ -54,14 +55,14 @@ for (const [label, change, expected] of [
   });
 }
 
-function sse(calls: Array<{ id: string; raw: string; name?: string }> = [], options: { text?: string; stop?: string; incomplete?: boolean; empty?: boolean } = {}): Response {
+function sse(calls: Array<{ id: string; raw: string; name?: string }> = [], options: { text?: string; stop?: string; incomplete?: boolean; empty?: boolean; unclosedTool?: boolean } = {}): Response {
   const events: Record<string, unknown>[] = options.empty ? [] : [
     { type: "message_start", message: { id: "msg_fixture", type: "message", role: "assistant", model: "claude-sonnet-4-5", content: [], usage: { input_tokens: 8, output_tokens: 0 } } },
   ];
   calls.forEach((tool, index) => events.push(
     { type: "content_block_start", index, content_block: { type: "tool_use", id: tool.id, name: tool.name ?? "search_knowledge", input: {} } },
     { type: "content_block_delta", index, delta: { type: "input_json_delta", partial_json: tool.raw } },
-    { type: "content_block_stop", index },
+    ...(options.unclosedTool ? [] : [{ type: "content_block_stop", index }]),
   ));
   if (options.text) events.push({ type: "content_block_start", index: 0, content_block: { type: "text", text: "" } },
     { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: options.text } }, { type: "content_block_stop", index: 0 });
@@ -106,6 +107,7 @@ Deno.test("pinned Claude wire preserves OAuth identity, nested schemas, paired r
 
 for (const [label, fixture] of [
   ["malformed JSON repair", () => sse([{ id: "call_a", raw: '{"query":' }])],
+  ["unclosed tool block with message stop", () => sse([{ id: "call_a", raw: '{"query":' }], { unclosedTool: true })],
   ["truncated stream", () => sse([{ id: "call_a", raw: '{"query":"hours"}' }], { incomplete: true })],
   ["truncated arguments", () => sse([{ id: "call_a", raw: '{"query":"hours"}' }], { stop: "max_tokens" })],
   ["empty stream", () => sse([], { empty: true })],
@@ -152,6 +154,17 @@ Deno.test("API recovery annotations do not poison a canonical tool transcript", 
   const context = toToolContext({ messages: [...initial.messages, canonical, { role: "tool", tool_call_id: "call_a", content: "Open" }] }, "anthropic", "a");
   assertEquals(context.messages.at(-1)?.role, "toolResult");
   assertEquals(JSON.stringify(context).includes(signature), false);
+});
+
+Deno.test("API tool-only assistant responses accept omitted or null content and keep pairing strict", () => {
+  for (const raw of [{ role: "assistant", tool_calls: [call] }, { role: "assistant", content: null, tool_calls: [call] }]) {
+    const canonical = canonicalAssistant(raw);
+    assertEquals(canonical.content, null);
+    const context = toToolContext({ messages: [...initial.messages, canonical, { role: "tool", tool_call_id: call.id, content: "Open" }] }, "anthropic", "a");
+    assertEquals(context.messages.at(-1)?.role, "toolResult");
+  }
+  for (const raw of [{ role: "assistant" }, { role: "assistant", content: null }, { role: "assistant", tool_calls: [] }]) assertThrows(() => canonicalAssistant(raw));
+  assertThrows(() => toToolContext({ messages: [...initial.messages, canonicalAssistant({ role: "assistant", tool_calls: [call] })] }, "anthropic", "a"));
 });
 
 Deno.test("credential-shaped tool definitions/results are refused before inference", async () => {

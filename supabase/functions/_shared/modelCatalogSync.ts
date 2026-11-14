@@ -130,6 +130,11 @@ export function mapVercelCatalog(data: unknown[]): MappedCatalog {
     model.cost_per_1m_input_tokens = perMillion(pricing.input);
     model.cost_per_1m_output_tokens = perMillion(pricing.output);
     if (Array.isArray(row.tags) && row.tags.length) model.metadata.tags = row.tags;
+    if (capability === "chat") {
+      if (Array.isArray(row.supported_parameters)) model.metadata.supported_parameters = row.supported_parameters.filter(p => typeof p === "string");
+      if (Array.isArray(row.supported_parameters)) model.metadata.tool_calling = row.supported_parameters.includes("tools");
+      else if (Array.isArray(row.tags)) model.metadata.tool_calling = row.tags.includes("tool-use");
+    }
     const width = EMBEDDING_WIDTHS[model.model_id];
     if (capability === "embedding" && width) model.metadata.embedding_dimensions = width;
     models.push(model);
@@ -194,6 +199,10 @@ export function mapOpenRouterCatalog(data: unknown[]): MappedCatalog {
     const pricing = (row.pricing ?? {}) as Row;
     model.cost_per_1m_input_tokens = perMillion(pricing.prompt);
     model.cost_per_1m_output_tokens = perMillion(pricing.completion);
+    if (capabilities.includes("chat") && Array.isArray(row.supported_parameters)) {
+      model.metadata.supported_parameters = row.supported_parameters.filter(p => typeof p === "string");
+      model.metadata.tool_calling = row.supported_parameters.includes("tools");
+    }
     const width = OPENROUTER_EMBEDDING_WIDTHS[model.model_id];
     if (capabilities.includes("embedding") && width) model.metadata.embedding_dimensions = width;
     models.push(model);
@@ -205,7 +214,13 @@ export function mapDeepSeekCatalog(data: unknown[]): MappedCatalog {
   const models = data
     .map((raw) => raw as Row)
     .filter((row) => str(row.id))
-    .map((row) => baseModel(row, ["chat"]));
+    .map((row) => {
+      const model = baseModel(row, ["chat"]);
+      // Explicit non-thinking aliases with the neutral tool-result contract.
+      // Never infer capability from an unknown id merely being a chat model.
+      if (["deepseek-chat", "deepseek-flash"].includes(model.model_id)) model.metadata.tool_calling = true;
+      return model;
+    });
   return { models, skippedByType: {}, managedCapabilities: ["chat"] };
 }
 

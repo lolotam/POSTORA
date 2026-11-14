@@ -25,10 +25,10 @@ export type TranscriptMessage = z.infer<typeof messageSchema>;
  * Only canonical assistant facts enter a cross-provider transcript. */
 export function canonicalAssistant(raw: unknown): TranscriptMessage & { role: "assistant"; content: string | null } {
   const parsed = messageSchema.pick({ role: true, content: true, tool_calls: true }).extend({
-    role: z.literal("assistant"), content: z.string().max(262_144).nullable(),
-  }).strip().safeParse(raw);
+    role: z.literal("assistant"), content: z.string().max(262_144).nullable().optional(),
+  }).strip().refine(message => typeof message.content === "string" || Boolean(message.tool_calls?.length)).safeParse(raw);
   if (!parsed.success) throw new ToolContractError("response_invalid");
-  return parsed.data;
+  return { ...parsed.data, content: parsed.data.content ?? null };
 }
 
 export function hasToolHistory(body: Record<string, unknown>): boolean {
@@ -46,7 +46,7 @@ export function toolDefinitions(body: Record<string, unknown>): FunctionTool[] {
   if (JSON.stringify(body.tools ?? []).length > 262_144 || containsInferenceSecret(body.tools)) throw new ToolContractError("schema_unsupported");
   const result = z.array(definitionSchema).max(64).safeParse(body.tools ?? []);
   if (!result.success) throw new ToolContractError("schema_unsupported");
-  const names = result.data.map(t => t.function.name);
+  const names = result.data.map(t => t.function.name.toLowerCase());
   if (new Set(names).size !== names.length) throw new ToolContractError("schema_unsupported");
   for (const tool of result.data) {
     const schema = tool.function.parameters;

@@ -60,6 +60,7 @@ BEGIN
         WHERE p.provider_code=tier->>'provider_code' AND p.is_active AND m.is_active
           AND m.model_id=tier->>'model_id' AND m.auth_method='api_key'
           AND 'chat'=ANY(m.capabilities)
+          AND COALESCE(m.metadata->'tool_calling','null'::jsonb) <> 'false'::jsonb
           AND ('tools'=ANY(m.capabilities) OR m.metadata->'tool_calling' = 'true'::jsonb
             OR m.metadata->'supported_parameters' @> '["tools"]'::jsonb)
       ) INTO recovery;

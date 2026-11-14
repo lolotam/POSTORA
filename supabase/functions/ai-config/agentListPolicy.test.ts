@@ -3,6 +3,20 @@ import { buildAgentListPolicy, validateAgentTier } from "./agentListPolicy.ts";
 import type { ChatPolicySnapshot } from "./chatListPolicy.ts";
 import { composeAiTiers } from "../_shared/ai-user-routing.ts";
 import { hasLaterAgentApiTier } from "../_shared/agentRecovery.ts";
+import { mapOpenRouterCatalog } from "../_shared/modelCatalogSync.ts";
+
+Deno.test("synced capability keeps an existing API selection usable and qualifies the only recovery tier", () => {
+  const snapshot = source();
+  snapshot.providers.push({ id: "openrouter", provider_code: "openrouter", name: "Router", is_active: true });
+  snapshot.apiKeys.openrouter = true;
+  const mapped = mapOpenRouterCatalog([{ id: "chosen", supported_parameters: ["tools"], architecture: { output_modalities: ["text"] } }]);
+  snapshot.models = [...snapshot.models.filter(m => m.model_id === "chat-only"), ...mapped.models.map(m => ({ ...m, provider_id: "openrouter", auth_method: "api_key", is_active: true }))];
+  const chosen = { provider_code: "openrouter", model_id: "chosen" };
+  snapshot.flags.feature_ai_oauth_tools_claude = false;
+  assertEquals(validateAgentTier({ category: "agent", slot: "primary", ...chosen, expected: { default_ai_model_agent: chosen } }, snapshot).value, chosen);
+  snapshot.flags.feature_ai_oauth_tools_claude = true;
+  assertEquals(validateAgentTier({ ...request, expected: { default_ai_model_agent: auth, default_ai_model_agent_fallback: chosen } }, snapshot).value, auth);
+});
 
 const auth = { provider_code: "claude", model_id: "same", auth_method: "oauth" };
 const api = { provider_code: "openai", model_id: "tool-model" };

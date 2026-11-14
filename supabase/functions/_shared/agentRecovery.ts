@@ -5,6 +5,7 @@ export function hasLaterAgentApiTier<T extends { credentialSource: string; authM
 }
 
 export function supportsAgentApiTools(model: { capabilities: string[]; metadata?: Record<string, unknown> | null }): boolean {
+  if (model.metadata?.tool_calling === false) return false;
   const parameters = model.metadata?.supported_parameters;
   return model.capabilities.includes("chat") && (model.capabilities.includes("tools") || model.metadata?.tool_calling === true ||
     (Array.isArray(parameters) && parameters.includes("tools")));

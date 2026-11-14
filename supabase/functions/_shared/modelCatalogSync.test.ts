@@ -4,6 +4,23 @@ import {
   type ExistingModelRow, mapAnthropicCatalog, mapDeepSeekCatalog, mapGeminiCatalog, mapIdOnlyChatCatalog,
   mapOpenAICatalog, mapOpenRouterCatalog, mapVercelCatalog, mapXaiCatalog, planCatalogSync,
 } from "./modelCatalogSync.ts";
+import { supportsAgentApiTools } from "./agentRecovery.ts";
+
+Deno.test("catalogue sync retains verified API tool capability without promoting chat-only models", () => {
+  const mapped = [
+    mapOpenRouterCatalog([{ id: "router/tools", architecture: { output_modalities: ["text"] }, supported_parameters: ["tools", "tool_choice"] },
+      { id: "router/text", architecture: { output_modalities: ["text"] }, supported_parameters: ["temperature"] }]),
+    mapVercelCatalog([{ id: "gateway/tools", type: "language", tags: ["tool-use"] }, { id: "gateway/text", type: "language", tags: [] }]),
+    mapDeepSeekCatalog([{ id: "deepseek-chat" }, { id: "unknown-chat" }]),
+  ];
+  for (const catalogue of mapped) {
+    assertEquals(catalogue.models.map(supportsAgentApiTools), [true, false]);
+    const existing = catalogue.models.map((model, i) => ({ ...model, id: String(i), is_active: true, metadata: {} }));
+    const synced = planCatalogSync(existing, catalogue, new Set());
+    const updates = new Map(synced.updates.map(row => [row.model_id, row]));
+    assertEquals(catalogue.models.map(row => supportsAgentApiTools(updates.get(row.model_id) ?? existing.find(m => m.model_id === row.model_id)!)), [true, false]);
+  }
+});
 
 const vercel = [
   { id: "openai/gpt-5.5", name: "GPT-5.5", description: "d", type: "language", context_window: 400000,

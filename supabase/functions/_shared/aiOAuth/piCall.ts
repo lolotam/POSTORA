@@ -2,6 +2,8 @@ import { complete, stream, getModel } from "npm:@mariozechner/pi-ai@0.73.1";
 import { redactProviderError } from "../ai-routing-errors.ts";
 import { supportsOAuthToolTransport, type OAuthProviderId } from "./clients.ts";
 import { needsToolTransport, OAuthContinuation, parseArguments, ToolContractError, toolDefinitions, toToolContext, validatedTranscript, type TranscriptMessage } from "./toolTranscript.ts";
+import { raceSignal } from "../deadline.ts";
+export { raceSignal } from "../deadline.ts";
 
 /**
  * The slice of pi-ai's AssistantMessage callPiOAuth depends on. The full type
@@ -40,6 +42,7 @@ export function defaultPiCallDeps(): PiCallDeps {
       const events = stream(model as never, context as never, { ...options, signal, maxRetries: 0 });
       try {
       const argumentsByIndex = new Map<number, string>();
+      const pendingTools = new Set<number>();
       let bytes = 0;
       let started = false;
       let final: PiAssistant | undefined;
@@ -50,8 +53,13 @@ export function defaultPiCallDeps(): PiCallDeps {
           bytes += new TextEncoder().encode(event.delta).length;
           if (bytes > 1_048_576) throw new ToolContractError("response_invalid");
         }
-        if (event.type === "toolcall_delta") argumentsByIndex.set(event.contentIndex, (argumentsByIndex.get(event.contentIndex) ?? "") + event.delta);
+        if (event.type === "toolcall_start") pendingTools.add(event.contentIndex);
+        if (event.type === "toolcall_delta") {
+          pendingTools.add(event.contentIndex);
+          argumentsByIndex.set(event.contentIndex, (argumentsByIndex.get(event.contentIndex) ?? "") + event.delta);
+        }
         if (event.type === "toolcall_end") {
+          if (!pendingTools.delete(event.contentIndex)) throw new ToolContractError("response_invalid");
           const raw = argumentsByIndex.get(event.contentIndex);
           if (raw !== undefined) {
             let parsed: unknown;
@@ -62,7 +70,7 @@ export function defaultPiCallDeps(): PiCallDeps {
         if (event.type === "error") throw new ToolContractError("response_invalid");
         if (event.type === "done") final = event.message as unknown as PiAssistant;
       }
-      if (!started || !final) throw new ToolContractError("response_invalid");
+      if (!started || !final || pendingTools.size) throw new ToolContractError("response_invalid");
       return final;
       } finally { controller.abort(); }
     },
@@ -267,13 +275,4 @@ function validatedAssistant(assistant: PiAssistant, body: Record<string, unknown
   }
   if (calls.length > 16 || (assistant.stopReason === "toolUse") !== (calls.length > 0) || (!calls.length && !text.trim()) || text.length > 262_144) throw new ToolContractError("response_invalid");
   return { role: "assistant", content: text || null, ...(calls.length ? { tool_calls: calls } : {}) };
-}
-
-export function raceSignal<T>(work: PromiseLike<T>, signal: AbortSignal): Promise<T> {
-  return new Promise<T>((resolve, reject) => {
-    const abort = () => reject(signal.reason);
-    if (signal.aborted) { Promise.resolve(work).catch(() => {}); reject(signal.reason); return; }
-    signal.addEventListener("abort", abort, { once: true });
-    Promise.resolve(work).then(resolve, reject).finally(() => signal.removeEventListener("abort", abort));
-  });
 }

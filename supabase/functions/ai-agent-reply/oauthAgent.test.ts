@@ -10,6 +10,7 @@ import { WAITLIST_FOLLOW_UP } from "./procedureRuntime.ts";
 import type { AiTier } from "../_shared/ai-fallback.ts";
 import type { AiRoutingAdmin } from "../_shared/ai-user-routing.ts";
 import { agentRecoveryReady } from "./agentRecoveryReadiness.ts";
+import { mapOpenRouterCatalog } from "../_shared/modelCatalogSync.ts";
 
 const serve = Deno.serve;
 let chatCompletion: typeof import("./index.ts").chatCompletion;
@@ -140,6 +141,18 @@ Deno.test("unsafe mutation blocks execution; ambiguous waitlist outcome blocks c
   await assertRejects(() => ledger.execute("stock_waitlist_join", { product_id: "25" }, authActionSafety("stock_waitlist_join", new Map()), async () => ({ output: WAITLIST_FOLLOW_UP })), ModelChainExhaustedError, "oauth_action_outcome_unknown");
 });
 
+Deno.test("a server-proven waitlist non-attempt does not hide a later confirmed enrollment", async () => {
+  const ledger = new AuthActionLedger(crypto.randomUUID(), () => {});
+  const safety = authActionSafety("stock_waitlist_join", new Map());
+  const args = { product_id: "25" };
+  await ledger.execute("stock_waitlist_join", args, safety, async () => ({ output: "No stock sighting", mutationEffect: "none" }));
+  let writes = 0;
+  const enroll = () => ledger.execute("stock_waitlist_join", args, safety, async () => { writes++; return { output: "Saved" }; });
+  assertEquals((await enroll()).output, "Saved");
+  assertEquals((await enroll()).output, "Saved");
+  assertEquals(writes, 1);
+});
+
 Deno.test("effective recovery preflight reads only later platform model readiness, never API keys", async () => {
   const original = globalThis.fetch;
   const tables: string[] = [];
@@ -159,5 +172,24 @@ Deno.test("effective recovery preflight reads only later platform model readines
     assertEquals(await agentRecoveryReady(admin, chain, 0, AbortSignal.timeout(1000)), false);
     assertEquals(await agentRecoveryReady(admin, [chain[1], auth], 1, AbortSignal.timeout(1000)), false);
     assert(tables.every(table => ["ai_providers", "ai_models"].includes(table)));
+  } finally { globalThis.fetch = original; }
+});
+
+Deno.test("the only tool-capable recovery tier qualifies using real catalogue sync metadata", async () => {
+  const original = globalThis.fetch;
+  const [model] = mapOpenRouterCatalog([{ id: "chosen-recovery", architecture: { output_modalities: ["text"] }, supported_parameters: ["tools"] }]).models;
+  globalThis.fetch = async url => {
+    const path = new URL(String(url));
+    if (path.pathname.endsWith("ai_providers")) return Response.json({ id: "provider", is_active: true });
+    if (path.pathname.endsWith("ai_models")) return Response.json(path.searchParams.get("model_id") === "eq.chosen-recovery"
+      ? { ...model, is_active: true } : { capabilities: ["chat"], is_active: true });
+    throw new Error("capability preflight must not read credentials");
+  };
+  try {
+    const admin = createClient("https://database.example.test", crypto.randomUUID());
+    const chain: AiTier[] = [auth, { provider: "openai", model: "chat-only", credentialSource: "platform" },
+      { provider: "openrouter", model: model.model_id, credentialSource: "platform" }];
+    assertEquals(await agentRecoveryReady(admin, chain, 0, AbortSignal.timeout(1000)), true);
+    assertEquals(await agentRecoveryReady(admin, chain.slice(0, 2), 0, AbortSignal.timeout(1000)), false);
   } finally { globalThis.fetch = original; }
 });
