@@ -19,6 +19,8 @@ import { Separator } from '@/components/ui/separator';
 import { ModelParamControls } from '@/components/admin/shared/ModelParamControls';
 import { defaultParamsFor, mergeModelSpec } from '@/lib/higgsfieldModelSpecs';
 import { SearchableModelPicker, LARGE_PROVIDER_THRESHOLD } from '@/components/admin/SearchableModelPicker';
+import { GroupedChatModelSelector } from './GroupedChatModelSelector';
+import type { ChatListPolicy } from '@/features/ai-providers/infrastructure/chatListGateway';
 
 function primarySpecFor(row: AIModel | null, capability: string) {
   return mergeModelSpec(row?.model_id ?? '', row?.metadata ?? null, capability === 'video' ? 'video' : 'image');
@@ -90,6 +92,8 @@ function isOAuthCategory(category: string): boolean {
 }
 
 interface DefaultModelSelectorProps {
+  textListPolicy?: ChatListPolicy;
+  saveError?: string;
   category: ModelCategory;
   capability: string;
   title: string;
@@ -118,7 +122,14 @@ interface DefaultModelSelectorProps {
   isSaving?: boolean;
 }
 
-export function DefaultModelSelector({
+export function DefaultModelSelector(props: DefaultModelSelectorProps) {
+  if (props.category === 'chat' && props.textListPolicy?.enabled) {
+    return <GroupedChatModelSelector {...props} policy={props.textListPolicy} />;
+  }
+  return <LegacyDefaultModelSelector {...props} />;
+}
+
+function LegacyDefaultModelSelector({
   category, capability, title, description, icon: Icon,
   providers, models, currentDefault, currentFallback, currentFallback2,
   onSetDefault, onSetFallback, onSetFallback2, onSetAdminParams, modelNote, isSaving,

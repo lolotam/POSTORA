@@ -1,3 +1,4 @@
+import { CHAT_LIST_POLICY_QUERY_KEY } from '@/features/ai-providers/infrastructure/chatListGateway';
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AI_PROVIDER_HEALTH_QUERY_KEY } from "./queryKeys";
 import {
@@ -36,6 +37,7 @@ export function useFinishAiOAuth() {
     mutationFn: ({ provider, pasted }: { provider: OAuthProviderId; pasted: string }) =>
       aiProviderAuthGateway.finish(provider, pasted),
     onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: CHAT_LIST_POLICY_QUERY_KEY });
       queryClient.invalidateQueries({ queryKey: AI_PROVIDER_AUTH_QUERY_KEY });
       // A finished login changes what the provider can answer, so the model
       // catalogue behind the provider's model list is read again too. Without
@@ -64,6 +66,7 @@ export function useDisconnectAiOAuth() {
           ),
         },
       );
+      queryClient.invalidateQueries({ queryKey: CHAT_LIST_POLICY_QUERY_KEY });
       queryClient.invalidateQueries({ queryKey: AI_PROVIDER_AUTH_QUERY_KEY });
       // A disconnected subscription can leave a tier pointing at a provider that
       // can no longer answer, so the tier list is refreshed too.
@@ -79,6 +82,7 @@ export function useTestAiOAuth() {
     mutationFn: ({ provider, modelId }: { provider: OAuthProviderId; modelId: string }) =>
       aiProviderAuthGateway.test(provider, modelId),
     onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: CHAT_LIST_POLICY_QUERY_KEY });
       queryClient.invalidateQueries({ queryKey: AI_PROVIDER_AUTH_QUERY_KEY });
     },
   });

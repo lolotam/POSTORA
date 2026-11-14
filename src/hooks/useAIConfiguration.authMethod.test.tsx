@@ -3,13 +3,14 @@ import { renderHook } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { upsert } = vi.hoisted(() => ({ upsert: vi.fn() }));
+const { upsert, invoke } = vi.hoisted(() => ({ upsert: vi.fn(), invoke: vi.fn() }));
 
 vi.mock("@/integrations/supabase/client", () => ({
-  supabase: { from: vi.fn(() => ({ upsert })) },
+  supabase: { from: vi.fn(() => ({ upsert })), functions: { invoke } },
 }));
 
 import { useSetDefaultModel, useSetFallback2Model, useSetFallbackModel } from "@/hooks/useAIConfiguration";
+import { CHAT_LIST_POLICY_QUERY_KEY } from '@/features/ai-providers/infrastructure/chatListGateway';
 
 function queryWrapper() {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
@@ -23,6 +24,40 @@ describe("tier setters and auth_method", () => {
   beforeEach(() => {
     upsert.mockReset();
     upsert.mockResolvedValue({ error: null });
+    invoke.mockReset();
+    invoke.mockResolvedValue({ data: { success: true }, error: null });
+  });
+
+  it.each([
+    ['primary', useSetDefaultModel], ['fallback', useSetFallbackModel], ['fallback_2', useSetFallback2Model],
+  ] as const)('flagged %s saves use the authoritative boundary instead of direct writes', async (slot, useSetter) => {
+    const { client, wrapper } = queryWrapper();
+    client.setQueryData(['ai-config'], { settings: [] });
+    client.setQueryData(CHAT_LIST_POLICY_QUERY_KEY, { enabled: true, groups: [] });
+    const { result } = renderHook(() => useSetter(), { wrapper });
+    await result.current.mutateAsync({ category: 'chat', provider_code: 'claude', model_id: 'same', auth_method: 'oauth' });
+    expect(invoke).toHaveBeenCalledWith('ai-config', { body: { action: 'set-chat-tier', category: 'chat', slot, provider_code: 'claude', model_id: 'same', auth_method: 'oauth', expected: {} }, timeout: 30_000 });
+    expect(upsert).not.toHaveBeenCalled();
+  });
+
+  it('retains cached saved tiers when the server refuses a save', async () => {
+    const { client, wrapper } = queryWrapper();
+    const saved = { settings: [], categoryDefaults: { chat: { provider_code: 'claude', model_id: 'previous', auth_method: 'oauth' } } };
+    client.setQueryData(['ai-config'], saved);
+    client.setQueryData(CHAT_LIST_POLICY_QUERY_KEY, { enabled: true, groups: [] });
+    invoke.mockResolvedValue({ data: { error: 'model_unavailable' }, error: null });
+    const { result } = renderHook(() => useSetDefaultModel(), { wrapper });
+    await expect(result.current.mutateAsync({ category: 'chat', provider_code: 'claude', model_id: 'draft' })).rejects.toThrow(/Retry/);
+    expect(client.getQueryData(['ai-config'])).toEqual(saved);
+    expect(upsert).not.toHaveBeenCalled();
+  });
+
+  it('never coerces an unknown explicit authentication value to API', async () => {
+    const { wrapper } = queryWrapper();
+    const { result } = renderHook(() => useSetDefaultModel(), { wrapper });
+    const untrusted = JSON.parse('{"category":"chat","provider_code":"claude","model_id":"same","auth_method":"unknown"}');
+    await expect(result.current.mutateAsync(untrusted)).rejects.toThrow('Unknown authentication method');
+    expect(upsert).not.toHaveBeenCalled();
   });
 
   it("writes auth_method when the tier is served by a subscription", async () => {

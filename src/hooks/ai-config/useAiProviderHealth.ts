@@ -1,3 +1,4 @@
+import { CHAT_LIST_POLICY_QUERY_KEY } from '@/features/ai-providers/infrastructure/chatListGateway';
 import { useCallback, useState } from "react";
 import { AI_PROVIDER_AUTH_QUERY_KEY } from "./useAiProviderAuth";
 import { AI_PROVIDER_HEALTH_QUERY_KEY } from "./queryKeys";
@@ -99,6 +100,7 @@ export function useRunProviderHealth(): {
     } finally {
       // A partial run can already have changed catalogues and health rows.
       await Promise.all([
+        queryClient.invalidateQueries({ queryKey: CHAT_LIST_POLICY_QUERY_KEY }),
         queryClient.invalidateQueries({ queryKey: AI_PROVIDER_HEALTH_QUERY_KEY }),
         queryClient.invalidateQueries({ queryKey: ['ai-config'] }),
         queryClient.invalidateQueries({ queryKey: AI_PROVIDER_AUTH_QUERY_KEY }),

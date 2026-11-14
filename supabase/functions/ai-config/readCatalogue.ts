@@ -1,9 +1,8 @@
 import type { SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { groupCatalogueRows, type CatalogueRow } from "../_shared/aiModelCatalogue.ts";
 
-export async function readCatalogue(admin: SupabaseClient) {
+export async function readCatalogue(admin: SupabaseClient, signal = AbortSignal.timeout(10_000)) {
   const catalogue: Array<CatalogueRow & Record<string, unknown>> = [];
-  const signal = AbortSignal.timeout(10_000);
   for (;;) {
     const page = await admin.from('ai_models')
       .select('*, ai_providers(provider_code, name)').order('name').order('id')
