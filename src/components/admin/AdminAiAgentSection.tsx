@@ -38,7 +38,9 @@ export function AdminAiAgentSection() {
   const setFallbackModel = useSetFallbackModel();
   const setFallback2Model = useSetFallback2Model();
   const triage = useAgentTriageEnabled();
-  const saveTriage = (mutation: typeof setDefaultModel) => async (provider_code: string, model_id: string, auth_method?: AiAuthMethod) => {
+  const saveTriage = (mutation: { mutateAsync: (variables: {
+    provider_code: string; model_id: string; category: "agent_triage"; auth_method?: AiAuthMethod;
+  }) => Promise<unknown> }) => async (provider_code: string, model_id: string, auth_method?: AiAuthMethod) => {
     setSaveError(undefined);
     try { await mutation.mutateAsync({ provider_code, model_id, auth_method, category: "agent_triage" }); }
     catch (error) { setSaveError(error instanceof Error ? error.message : "Could not save triage model. Retry."); }

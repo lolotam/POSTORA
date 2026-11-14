@@ -399,3 +399,61 @@ Deno.test("enabled triage normalizes legacy stored strings without changing the 
   assertEquals(triageChainFromSettings(rows), claudeTier);
   assertEquals(triageChainFromSettings(rows.map(row => row.key === "feature_ai_text_auth_lists" ? { ...row, value: false } : row)), []);
 });
+
+for (const slotKey of TRIAGE_SETTING_KEYS.filter(key => key !== "agent_triage_enabled")) {
+  Deno.test(`malformed enabled ${slotKey} reports a sanitized refusal and discards the whole chain`, () => {
+    const errors: Array<{ model: string; error: string }> = [];
+    const rows = [enabled, { key: "feature_ai_text_auth_lists", value: true },
+      { key: "default_ai_model_agent_triage", value: slot("vercel", "valid") },
+      { key: slotKey, value: '{"private_detail":' }];
+    assertEquals(triageChainFromSettings(rows, null, failure => errors.push(failure)), []);
+    assertEquals(errors, [{ model: slotKey, error: "triage_configuration_invalid" }]);
+    assertEquals(selectConnectorTools(input.connectors, null), input.connectors);
+    errors.length = 0;
+    triageChainFromSettings(rows.map(row => row.key === "agent_triage_enabled" ? { ...row, value: { enabled: false } } : row), null, failure => errors.push(failure));
+    assertEquals(errors, []);
+  });
+}
+
+for (const authMethod of [undefined, "oauth"] as const) {
+  for (const [status, body] of [[401, null], [424, "not JSON"], [502, '{"error":"private provider detail"}']] as const) {
+    Deno.test(`enabled ${authMethod ?? "API"} triage retains HTTP ${status} with an unusable error body`, async () => {
+      const run = await runTriage([{ ...claudeTier[0], authMethod }], input, key, 1000, fetch, Date.now,
+        async () => new Response(body, { status }), true);
+      assertEquals(run.outcome, null);
+      assertEquals(run.errors, [{ model: "claude/claude-sonnet-4-5", error: `HTTP ${status}` }]);
+    });
+  }
+}
+
+for (const failure of ["rejected", "aborted", "late success"] as const) {
+  Deno.test(`same-provider fallback recovers from a ${failure} credential read without reusing cancelled work`, async () => {
+    const usableKey = crypto.randomUUID();
+    const expiredKey = crypto.randomUUID();
+    let keyReads = 0;
+    let finishLateRead = () => {};
+    const requests: string[] = [];
+    const run = await runTriage([{ ...tiers[0] }, { ...tiers[0], model: "fallback" }, { ...tiers[0], model: "last" }], input,
+      async (_provider, signal) => {
+        keyReads++;
+        if (keyReads > 1) return usableKey;
+        if (failure === "rejected") throw new Error("private read failure");
+        return await new Promise<string>((resolve, reject) => {
+          finishLateRead = () => resolve(expiredKey);
+          if (failure === "aborted") signal!.addEventListener("abort", () => reject(signal!.reason), { once: true });
+        });
+      }, 1500, (async (_url, init) => {
+        const model = JSON.parse(String(init?.body)).model;
+        requests.push(model);
+        assertEquals(init?.headers && new Headers(init.headers).get("Authorization"), `Bearer ${usableKey}`);
+        finishLateRead();
+        return model === "fallback" ? new Response(null, { status: 503 }) : Response.json(okJson);
+      }) as typeof fetch, Date.now, null, true);
+    finishLateRead();
+    await Promise.resolve();
+    assertEquals(run.outcome?.model, "last");
+    assertEquals(run.errors.map(error => error.error), [failure === "rejected" ? "triage_request_failed" : "triage_deadline_exceeded", "HTTP 503"]);
+    assertEquals(keyReads, 2);
+    assertEquals(requests, ["fallback", "last"]);
+  });
+}

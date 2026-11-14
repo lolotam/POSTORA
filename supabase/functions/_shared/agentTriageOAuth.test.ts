@@ -8,6 +8,21 @@ import { runTriage, selectConnectorTools, type TriageTier } from "./agentTriage.
 const tier: TriageTier = { provider: "claude", model: "claude-sonnet-4-5", authMethod: "oauth", kind: "chat" };
 const input = { message: "price please", history: [], connectors: [{ name: "catalogue", description: "Prices" }], askHandoff: true };
 
+for (const status of [401, 424]) {
+  Deno.test(`real API dispatcher empty-body HTTP ${status} remains visible in triage errors`, async () => {
+    const selected: TriageTier = { provider: `unconfigured-${status}`, model: "triage-chat", kind: "chat" };
+    const apiKey = crypto.randomUUID();
+    const admin = createClient("https://database.example.test", crypto.randomUUID(), { global: { fetch: async (url) => {
+      const table = new URL(String(url)).pathname.split("/").at(-1);
+      return Response.json(table === "provider_api_keys" && status === 424 ? { api_key: apiKey } : null);
+    } } });
+    const run = await runTriage([selected], input, () => { throw new Error("chat keys belong to dispatcher"); }, 1000, fetch, Date.now,
+      (active, body, timeoutMs, signal) => callChatCompletion(admin as unknown as AiRoutingAdmin, active, body, timeoutMs, signal), true);
+    assertEquals(run.outcome, null);
+    assertEquals(run.errors, [{ model: `${selected.provider}/${selected.model}`, error: `HTTP ${status}` }]);
+  });
+}
+
 for (const scenario of ["valid JSON", "invalid JSON", "master off", "reauth", "stalled credential"] as const) {
   Deno.test(`Triage through real subscription dispatcher: ${scenario}`, async () => {
     const reads: string[] = [];

@@ -111,6 +111,7 @@ import { composeAiTiers, invalidateRejectedUserTier, resolveUserAiRoute, type Ai
 import { AI_CONNECTION_REQUIRED, AI_USER_KEY_INVALID, ProviderHttpError, redactProviderError } from "../_shared/ai-routing-errors.ts";
 import { loadOpenAiCompatibleBase, type RowReader } from "../_shared/providerEndpoint.ts";
 import { runTriage, selectConnectorTools, triageBudgetFor, TRIAGE_CHAT_BUDGET_MS, TRIAGE_SETTING_KEYS, triageChainFromSettings, triageSlotsFromSettings, type TriageRun } from "../_shared/agentTriage.ts";
+import { persistTriageRefusals } from "./triageRefusal.ts";
 import { resolveProviderKey } from "../_shared/providerKeys.ts";
 import { enabledProcedures, readProcedureConfig } from "../_shared/procedures/config.ts";
 import { expireIfStale, isLivePendingOpener } from "../_shared/procedures/engine.ts";
@@ -1547,7 +1548,8 @@ Deno.serve(async (req) => {
     const { data: triageRows, error: triageReadError } = await triageRowsPromise;
     const triagePolicyEnabled = triageRows?.some(row => row.key === "feature_ai_text_auth_lists" && row.value === true) === true;
     if (triageReadError) console.warn({ event: "agent_triage_refused", reason: "triage_configuration_read_failed" });
-    const triageChain = triageChainFromSettings(triageRows ?? [], await triageDecisionModelsPromise);
+    const triageChain = triageChainFromSettings(triageRows ?? [], await triageDecisionModelsPromise,
+      failure => { triage = { outcome: null, errors: [failure] }; });
     if (triageChain.length) {
       triage = await runTriage(triageChain, {
         message: request.inbound_text.slice(0, MAX_INBOUND_CHARS),
@@ -1561,18 +1563,8 @@ Deno.serve(async (req) => {
       }, (code, signal) => resolveProviderKey(admin as unknown as RowReader, code, signal),
       triagePolicyEnabled ? Math.max(0, Math.min(triageBudgetFor(triageChain), triageDeadlineAt - Date.now() - 100)) : undefined, fetch, Date.now,
       (tier, body, timeoutMs, signal) => callChatCompletion(admin as unknown as AiRoutingAdmin, tier, body, timeoutMs, signal), triagePolicyEnabled);
-      if (triagePolicyEnabled && triage.errors.length) {
-        console.warn({ event: "agent_triage_refused", attempts: triage.errors });
-        const remaining = triageDeadlineAt - Date.now();
-        if (remaining > 0) try {
-          const { error } = await admin.from("system_logs").insert({ level: "warn", category: "ai", source: "ai-agent-reply",
-            message: "Triage inference refused; normal Agent fallback retained", metadata: { attempts: triage.errors.map((failure, index) => ({ ...failure,
-              provider: triageChain[index]?.provider, auth_method: triageChain[index]?.authMethod ?? "api_key", slot: ["primary", "fallback", "fallback_2"][index] })) } })
-            .abortSignal(AbortSignal.timeout(Math.max(1, Math.min(100, remaining))));
-          if (error) console.warn({ event: "agent_triage_refusal_log_failed" });
-        } catch { console.warn({ event: "agent_triage_refusal_log_failed" }); }
-      }
     }
+    if (triagePolicyEnabled && triage?.errors.length) await persistTriageRefusals(admin, triage, triageChain, triageDeadlineAt);
     timings.mark("triage");
     const triagePlan = triage?.outcome?.plan ?? null;
     if (procedureTurn && triagePlan?.handoff) procedureTurn.endForHandoff();

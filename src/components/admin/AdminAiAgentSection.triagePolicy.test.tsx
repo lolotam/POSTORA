@@ -13,20 +13,27 @@ afterEach(() => vi.restoreAllMocks());
 const policy = { enabled: true, groups: [], triageGroups: [{ provider_code: 'claude', auth_method: 'oauth', name: 'Claude subscription', reason: null, synced_at: null,
   models: ['saved', 'requested'].map(model_id => ({ model_id, name: model_id, provisional: true, reason: null })) }] };
 
-function setup() {
+function setup(options: { acceptWrites?: boolean; fullChain?: boolean } = {}) {
   let failed = false;
   const writes: unknown[] = [];
   let pending: Promise<Response> | null = null;
+  const settings = (options.fullChain ? ['', '_fallback', '_fallback_2'] : ['']).map(suffix => ({ key: `default_ai_model_agent_triage${suffix}`,
+    value: { provider_code: 'claude', model_id: 'saved', auth_method: 'oauth' } }));
   const client = createClient('https://database.example.test', crypto.randomUUID(), { auth: { persistSession: false }, global: { fetch: async (input, init) => {
     const url = new URL(String(input));
     if (url.pathname.endsWith('/ai-config')) {
       const body = JSON.parse(String(init?.body));
-      if (body.action === 'set-triage-tier') { writes.push(body); return Response.json({ error: 'model_unavailable' }, { status: 409 }); }
+      if (body.action === 'set-triage-tier') {
+        writes.push(body);
+        if (!options.acceptWrites) return Response.json({ error: 'model_unavailable' }, { status: 409 });
+        const key = `default_ai_model_agent_triage${body.slot === 'primary' ? '' : `_${body.slot}`}`;
+        settings.find(row => row.key === key)!.value = { provider_code: body.provider_code, model_id: body.model_id, auth_method: body.auth_method };
+        return Response.json({ success: true });
+      }
       if (pending) return pending;
       return failed ? Response.json({ error: 'private failure' }, { status: 400 }) : Response.json(policy);
     }
-    if (url.pathname.endsWith('/system_settings')) return Response.json([{ key: 'default_ai_model_agent_triage',
-      value: { provider_code: 'claude', model_id: 'saved', auth_method: 'oauth' } }]);
+    if (url.pathname.endsWith('/system_settings')) return Response.json(settings);
     return Response.json([]);
   } } });
   vi.spyOn(client.auth, 'getSession').mockResolvedValue({ data: { session: { access_token: crypto.randomUUID(), user: { id: 'admin' } } }, error: null } as never);
@@ -51,6 +58,22 @@ it('Triage keeps saved Auth visible during initial readiness failure and Retry r
     expect(context.writes).toEqual([]);
   } finally { view.unmount(); context.queries.clear(); }
 });
+
+it.each([['Primary', 'primary'], ['Fallback', 'fallback'], ['Fallback 2', 'fallback_2']] as const)(
+  '%s saves through the real section, mutation hook and authoritative Triage gateway', async (label, slot) => {
+    const context = setup({ acceptWrites: true, fullChain: true });
+    const view = context.mount();
+    try {
+      const picker = await screen.findByRole('combobox', { name: `${label} model` });
+      fireEvent.change(picker, { target: { value: 'requested' } });
+      await waitFor(() => expect(picker).toHaveValue('requested'));
+      expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+      expect(context.writes).toEqual([{ action: 'set-triage-tier', category: 'agent_triage', slot, provider_code: 'claude',
+        model_id: 'requested', auth_method: 'oauth', expected: Object.fromEntries(['', '_fallback', '_fallback_2'].map(suffix =>
+          [`default_ai_model_agent_triage${suffix}`, { provider_code: 'claude', model_id: 'saved', auth_method: 'oauth' }])) }]);
+    } finally { view.unmount(); context.queries.clear(); }
+  },
+);
 
 it('Triage loading never selects automatically; a rejected save retains the stored tier and exposes Retry', async () => {
   const context = setup();
