@@ -176,6 +176,8 @@ SUITES=(
   instagram_collection_daily_dispatch.sql
   instagram_collection_cron.sql
   instagram_collection_http_fences.sql
+  analytics_policy_operator_controls.sql
+  analytics_policy_operator_races.sql
   meta_owned_analytics_history.sql
   meta_owned_analytics_claim_fairness.sql
   meta_owned_analytics_worker_admission.sql
