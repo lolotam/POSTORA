@@ -63,9 +63,13 @@ function providerAuthState(hasKey: boolean, viaSubscription: boolean): 'api_key'
  * suffix existed live under the unsuffixed key, so that key is still read.
  */
 function lastCatalogSyncedAt(settings: SystemSettingRow[], providerCode: string): string | null {
-  const current = settings.find((s) => s.key === `model_catalog_synced_at_${providerCode}_api_key`)?.value?.at;
+  const stamp = (key: string) => {
+    const stored = settings.find(s => s.key === key)?.value;
+    return stored && typeof stored === 'object' && typeof stored.at === 'string' ? stored.at : null;
+  };
+  const current = stamp(`model_catalog_synced_at_${providerCode}_api_key`);
   if (current) return current;
-  return settings.find((s) => s.key === `model_catalog_synced_at_${providerCode}`)?.value?.at ?? null;
+  return stamp(`model_catalog_synced_at_${providerCode}`);
 }
 
 /**

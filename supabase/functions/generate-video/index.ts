@@ -1,5 +1,5 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2.7.1";
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { corsHeaders } from "../_shared/cors.ts";
 import { HiggsfieldAuthError, resolveHiggsfieldCredential } from "../_shared/higgsfield-oauth.ts";
 import { HiggsfieldMcpClient, findJobId } from "../_shared/higgsfield-mcp.ts";
@@ -56,9 +56,10 @@ serve(async (req) => {
       .select("model_id, metadata, is_active, capabilities, ai_providers!inner(provider_code, is_active)")
       .eq("auth_method", "api_key")
       .eq("model_id", modelId)
-      .in("ai_providers.provider_code", ["higgsfield", "vercel"]);
+      .in("ai_providers.provider_code", ["higgsfield", "vercel"])
+      .returns<VideoModelRow[]>();
     if (modelError) throw new Error("Video model lookup failed");
-    const picked = pickVideoProvider((modelRows ?? []) as VideoModelRow[]);
+    const picked = pickVideoProvider(modelRows ?? []);
     if (!picked) return json({ error: "Unsupported video provider" }, 400);
     if (picked.provider === "vercel") {
       // Validate before reserving quota: a 400 return does not reach the catch that releases it.

@@ -6,6 +6,7 @@ interface DbResult {
   error: unknown;
 }
 interface Query extends PromiseLike<DbResult> {
+  abortSignal?(signal: AbortSignal): Query;
   eq(column: string, value: unknown): Query;
   in(column: string, values: readonly string[]): Query;
   maybeSingle(): PromiseLike<DbResult>;

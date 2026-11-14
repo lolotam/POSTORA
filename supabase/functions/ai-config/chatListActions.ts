@@ -4,6 +4,8 @@ import { OAUTH_PROVIDER_CODE } from "../_shared/aiOAuth/clients.ts";
 import { readAiTextFlags } from "../_shared/aiOAuth/textFlags.ts";
 import { resolveProviderKey } from "../_shared/providerKeys.ts";
 import type { RowReader } from "../_shared/providerEndpoint.ts";
+import { resolvePlatformApiKey } from "../_shared/ai-fallback.ts";
+import type { AiRoutingAdmin } from "../_shared/ai-user-routing.ts";
 import { readCatalogue } from "./readCatalogue.ts";
 import { buildChatListPolicy, ChatTierError, validateChatTier, type ChatPolicySnapshot } from "./chatListPolicy.ts";
 
@@ -23,7 +25,8 @@ export async function loadChatPolicySnapshot(admin: SupabaseClient, flags: ChatP
   ]));
   // The shared catalogue reader preserves provider-specific columns. This seam
   // projects only non-secret fields needed by eligibility and the admin UI.
-  return { flags, providers: providers.data ?? [], settings: settings.data ?? [], statuses: statuses.data ?? [], apiKeys, registry,
+  const textFloorAvailable = flags.feature_ai_category_text_ladders && Boolean((await resolvePlatformApiKey(admin as unknown as AiRoutingAdmin, "google", signal)).trim());
+  return { flags, providers: providers.data ?? [], settings: settings.data ?? [], statuses: statuses.data ?? [], apiKeys, registry, textFloorAvailable,
     models: [...catalogue.models, ...catalogue.oauthModels] as unknown as ChatPolicySnapshot["models"] };
 }
 
@@ -44,7 +47,7 @@ export async function runChatListAction(action: "chat-list-policy" | "set-chat-t
       throw new ChatTierError("text_lists_disabled");
     }
     const snapshot = await deps.snapshot(flags);
-    if (action === "chat-list-policy") return Response.json(buildChatListPolicy(snapshot));
+    if (action === "chat-list-policy") return Response.json({ ...buildChatListPolicy(snapshot), categoryLaddersEnabled: flags.feature_ai_category_text_ladders });
     await deps.persist(validateChatTier(body, snapshot));
     return Response.json({ success: true });
   } catch (cause) {

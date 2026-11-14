@@ -1,3 +1,4 @@
+import { TextCategoryCards } from './TextCategoryCards';
 import { useState } from 'react';
 import { AudioLines, ImageIcon, Layers, Loader2, MessageSquare, Mic, ScanEye, Search, Video } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
@@ -261,13 +262,13 @@ export function VideoGenerationCard() {
 
 export function ChatModelsCard() {
   return (
-    <AiCategoryCard
+    <><AiCategoryCard
       category="chat"
       capability="chat"
       title="Chat Models"
       description="Default model for AI chat conversations"
       icon={MessageSquare}
-    />
+    /><TextCategoryCards /></>
   );
 }
 

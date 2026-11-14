@@ -11447,6 +11447,14 @@ export type Database = {
           expires_at: string | null
         }[]
       }
+      write_ai_text_ladder: {
+        Args: { p_category: string; p_chain: Json; p_expected: Json; p_expected_chat: Json }
+        Returns: boolean
+      }
+      normalize_ai_text_tier: {
+        Args: { tier: Json }
+        Returns: Json
+      }
       write_ai_chat_tier: {
         Args: { p_key: string; p_value: Json; p_expected: Json }
         Returns: boolean

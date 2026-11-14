@@ -25,7 +25,7 @@ export function useAgentTriageEnabled() {
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['ai-config'] }),
   });
   return {
-    enabled: row?.value?.enabled === true,
+    enabled: typeof row?.value === 'object' && row.value?.enabled === true,
     setEnabled: (on: boolean) => mutation.mutateAsync(on),
     isSaving: mutation.isPending,
   };
