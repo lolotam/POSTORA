@@ -8,11 +8,11 @@ const jobId = crypto.randomUUID();
 const leaseId = crypto.randomUUID();
 const secret = () => ["synthetic", crypto.randomUUID()].join("-");
 const apps = { facebook: { id: "200001", secret: secret() }, instagram: { id: "200002", secret: secret() } };
-function fixture(options: { lost?: "install" | "permission"; permissions?: unknown; disabled?: boolean; denied?: boolean } = {}) {
+function fixture(options: { lost?: "install" | "permission"; permissions?: unknown; disabled?: boolean; denied?: boolean; direct?: boolean; installed?: boolean } = {}) {
   const credential = secret();
-  let state = "verifying";
+  let state = options.installed ? "permission_pending" : "verifying";
   let revision = 1;
-  let installed = false;
+  let installed = options.installed ?? false;
   let installs = 0;
   let calls = 0;
   let reasonCode: string | null = null;
@@ -22,8 +22,8 @@ function fixture(options: { lost?: "install" | "permission"; permissions?: unkno
     if (name === "dispatch_analytics_legacy_bootstrap") return { error: null, data: {
       status: options.disabled ? "disabled" : "dispatched", account_ids: options.disabled ? [] : [accountId] } };
     if (name === "begin_analytics_legacy_bootstrap") return { error: null, data: { ...projection(), lease_id: leaseId,
-      user_id: crypto.randomUUID(), capture: { token: credential, login_kind: "page_linked", platform: "instagram",
-        platform_user_id: "178001", page_id: "100001", provider_user_id: null } } };
+      user_id: crypto.randomUUID(), capture: { token: credential, login_kind: options.direct ? "direct" : "page_linked", platform: "instagram",
+        platform_user_id: "178001", page_id: options.direct ? null : "100001", provider_user_id: null } } };
     if (name === "permit_analytics_legacy_bootstrap") return { error: null, data: options.denied !== true };
     if (name === "record_analytics_legacy_bootstrap_usage") return { error: null, data: null };
     if (name === "commit_analytics_legacy_bootstrap") {
@@ -33,18 +33,21 @@ function fixture(options: { lost?: "install" | "permission"; permissions?: unkno
     }
     if (name === "complete_analytics_legacy_bootstrap") {
       const permissions = args.p_permissions as { state: string; scopes: string[] };
-      state = permissions.state === "failed" ? "permission_pending" : permissions.scopes.includes("instagram_manage_insights") ? "ready" : "permissions_missing";
+      state = permissions.state === "failed" ? "permission_pending" : permissions.scopes.includes(options.direct ? "instagram_business_manage_insights" : "instagram_manage_insights") ? "ready" : "permissions_missing";
       revision++;
       if (options.lost === "permission") throw new Error(credential);
     }
     if (name === "settle_analytics_legacy_bootstrap") {
       reasonCode = String(args.p_reason);
-      state = reasonCode === "permission_missing" ? "permissions_missing" : reasonCode === "token_invalid" ? "needs_reconnect" : "retry";
+      state = reasonCode === "permission_missing" ? "permissions_missing" : ["token_invalid", "direct_verification_unsupported"].includes(reasonCode) ? "needs_reconnect" : "retry";
     }
     return { error: null, data: projection() };
   };
-  const fetcher: typeof fetch = async () => {
+  const fetcher: typeof fetch = async (request) => {
     calls++;
+    if (options.direct) return Response.json(String(request).includes("/permissions")
+      ? options.permissions ?? { data: [{ permission: "instagram_business_manage_insights", status: "granted" }] }
+      : { id: "178001", user_id: "900001" });
     const payloads = [
       { data: { is_valid: true, type: "USER", app_id: "200001", user_id: "300001", expires_at: 0, data_access_expires_at: 0 } },
       { id: "300001" }, { data: [{ id: "100001" }] }, { id: "100001", instagram_business_account: { id: "178001" } },
@@ -286,4 +289,28 @@ Deno.test("job retries respect SQL's seven-day ceiling while app pauses retain t
       assertEquals(settledUntil, new Date(now + Math.min(seconds, 7 * 86_400) * 1000).toISOString());
     }
   } finally { Date.now = originalNow; }
+});
+
+Deno.test("legacy direct needs one supported reconnect; trusted lifecycle direct authority only refreshes permissions", async () => {
+  for (const installed of [false, true]) {
+    const test = fixture({ direct: true, installed });
+    const outcome = await runLegacyBootstrap(test.input);
+    assertEquals(outcome.accounts[0].state, installed ? "ready" : "needs_reconnect");
+    assertEquals(outcome.accounts[0].reason_code, installed ? null : "direct_verification_unsupported");
+    assertEquals(test.counters(), { calls: 1, installs: 0 });
+    assertEquals(JSON.stringify(outcome).includes(test.credential), false);
+  }
+});
+
+Deno.test("precise linked-Page refusals survive worker validation without provider calls", async () => {
+  for (const reason_code of ["linked_page_missing", "linked_page_unavailable"]) {
+    const outcome = await runLegacyBootstrap({ apps,
+      rpc: async (name) => ({ error: null, data: name === "dispatch_analytics_legacy_bootstrap"
+        ? { status: "dispatched", account_ids: [accountId] }
+        : { job_id: jobId, state: "blocked", reason_code, next_action: "support", reconnect_path: null } }),
+      fetcher: async () => { throw new Error("An identity prerequisite refusal must not contact Meta"); },
+    });
+    assertEquals(outcome.accounts[0].reason_code, reason_code);
+    assertEquals(outcome.accounts[0].next_action, "support");
+  }
 });

@@ -93,19 +93,27 @@ async function verifyPage(input: VerificationInput, request: ReturnType<typeof v
     && linked.data.instagram_business_account?.id !== input.capture.platform_user_id) throw new BootstrapFailure("identity_mismatch");
 }
 
+/** Deliberately refuses installation until a supported app-bound legacy proof exists.
+ * The direct OAuth exchange owns the durable app receipt for NEW lifecycle logins.
+ * Do not replace this seam with identity-only evidence or Facebook token inspection.
+ */
+async function verifyLegacyDirectAuthority(input: VerificationInput, request: ReturnType<typeof verificationClient>): Promise<never> {
+  // Meta documents app-authenticated debug_token for graph.facebook.com only.
+  // A legacy direct token has no durable exchange/app receipt. Identity alone
+  // cannot replace that proof: require the supported captured direct reconnect.
+  const identity = z.object({ id: identifier, user_id: identifier.optional() })
+    .safeParse(await request("me", { fields: "id,user_id" }));
+  if (!identity.success) throw new BootstrapFailure("direct_verification_unsupported");
+  // OAuth stores the app-scoped id as platform_user_id. user_id is a messaging
+  // alias from the same response, not a fallback or a stronger canonical id.
+  if (identity.data.id !== input.capture.platform_user_id) throw new BootstrapFailure("identity_mismatch");
+  throw new BootstrapFailure("direct_verification_unsupported");
+}
+
 export async function verifyLegacyAuthority(input: VerificationInput): Promise<VerificationEvidence> {
   if (!/^\d{1,128}$/.test(input.app.id) || !input.app.secret) throw new BootstrapFailure("provider_error");
   const request = verificationClient(input);
-  if (input.capture.login_kind === "direct") {
-    // Meta documents app-authenticated debug_token for graph.facebook.com only.
-    // A legacy direct token has no durable exchange/app receipt. Identity alone
-    // cannot replace that proof: require the supported captured direct reconnect.
-    const identity = z.object({ id: identifier, user_id: identifier.optional() })
-      .safeParse(await request("me", { fields: "id,user_id" }));
-    if (!identity.success) throw new BootstrapFailure("direct_verification_unsupported");
-    if ((identity.data.user_id ?? identity.data.id) !== input.capture.platform_user_id) throw new BootstrapFailure("identity_mismatch");
-    throw new BootstrapFailure("direct_verification_unsupported");
-  }
+  if (input.capture.login_kind === "direct") return await verifyLegacyDirectAuthority(input, request);
   const inspected = await request("debug_token", { input_token: input.capture.token }, `${input.app.id}|${input.app.secret}`);
   if (z.object({ data: z.object({ is_valid: z.literal(false) }) }).safeParse(inspected).success) throw new BootstrapFailure("token_invalid");
   const debug = debuggerSchema.safeParse(inspected);

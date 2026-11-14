@@ -11457,6 +11457,28 @@ export type Database = {
       }
     }
     Functions: {
+      analytics_bootstrap_direct_reconnect_available: {
+        Args: { p_owner: string }
+        Returns: boolean
+      }
+      analytics_bootstrap_direct_identity_incident_candidate: {
+        Args: { p_job: string }
+        Returns: boolean
+      }
+      analytics_bootstrap_reset_direct_identity_incident: {
+        Args: Record<PropertyKey, never>
+        Returns: number
+      }
+      analytics_bootstrap_previous_readiness_snapshot: {
+        Args: {
+          p_account: string
+          p_attempt: Json
+          p_observed_at: string
+          p_owner: string
+          p_platform: string
+        }
+        Returns: Json
+      }
       dispatch_analytics_legacy_bootstrap: {
         Args: {
           p_run_id: string

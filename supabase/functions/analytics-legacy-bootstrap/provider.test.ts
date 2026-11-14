@@ -58,10 +58,25 @@ Deno.test("legacy direct identity uses the Instagram host and requires supported
     beforeRequest: async () => {}, fetcher: async (request) => {
       calls++;
       assertEquals(new URL(String(request)).hostname, "graph.instagram.com");
-      return Response.json({ id: "178001", user_id: "178001" });
+      return Response.json({ id: "178001", user_id: "900001" });
     } }), BootstrapFailure);
   assertEquals((error as BootstrapFailure).reason, "direct_verification_unsupported");
   assertEquals(calls, 1);
+});
+
+Deno.test("direct canonical identity never substitutes the messaging alias or mints app authority", async () => {
+  for (const [body, reason] of [
+    [{ id: "178001", user_id: "900001" }, "direct_verification_unsupported"],
+    [{ id: "178001" }, "direct_verification_unsupported"],
+    [{ id: "178002", user_id: "178001" }, "identity_mismatch"],
+    [{ user_id: "178001" }, "direct_verification_unsupported"],
+  ] as const) {
+    const error = await assertRejects(() => verifyLegacyAuthority({
+      capture: { ...capture(), login_kind: "direct", page_id: null }, app,
+      deadline: Date.now() + 1000, beforeRequest: async () => {}, fetcher: async () => Response.json(body),
+    }), BootstrapFailure);
+    assertEquals((error as BootstrapFailure).reason, reason);
+  }
 });
 
 Deno.test("invalid token, permission denial, foreign app and throttling keep distinct sanitized reasons", async () => {

@@ -980,3 +980,17 @@ Deno.test("both analytics routes map dependency deadline aborts to the public re
     }
   }
 });
+
+Deno.test("API and MCP account report proxy preserves the precise direct reconnect diagnosis and path", async () => {
+  const report = { collection: { state: "needs_reconnect", reason_code: "direct_verification_unsupported",
+    next_action: "reconnect", reconnect_can_help: true }, connection: { state: "unverified",
+    reason_code: "direct_verification_unsupported", reconnect_path: "/profiles" }, media: [] };
+  const { deps, calls } = fakeDeps({ account: { ...DEFAULT_ACCOUNT, platform: "instagram" },
+    upstream: { status: 200, data: report } });
+  const result = await handleGetAccountAnalytics(deps, OWNER, new URLSearchParams({ social_account_id: ACCOUNT_ID }));
+  assertEquals(result.status, 200);
+  const body = result.body as Record<string, unknown>;
+  assertEquals(body.collection, report.collection);
+  assertEquals(body.connection, report.connection);
+  assertEquals(calls.invokes.map((call) => call.functionName), ["instagram-insights-report"]);
+});
