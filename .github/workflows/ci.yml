@@ -217,7 +217,7 @@ jobs:
         run: |
           set -euo pipefail
           deno check --no-config --import-map=scripts/ci/deno-analytics.import-map.json --lock=scripts/ci/deno-analytics.lock --frozen --node-modules-dir=none supabase/functions/meta-owned-analytics-sync/*.ts
-          deno test --no-config --import-map=scripts/ci/deno-analytics.import-map.json --lock=scripts/ci/deno-analytics.lock --frozen --node-modules-dir=none --allow-env supabase/functions/meta-owned-analytics-sync/enqueue.test.ts supabase/functions/meta-owned-analytics-sync/composition.test.ts supabase/functions/meta-owned-analytics-sync/dispatch.test.ts supabase/functions/meta-owned-analytics-sync/collection.test.ts supabase/functions/meta-owned-analytics-sync/retention.test.ts supabase/functions/meta-owned-analytics-sync/truncation.test.ts
+          deno test --no-config --import-map=scripts/ci/deno-analytics.import-map.json --lock=scripts/ci/deno-analytics.lock --frozen --node-modules-dir=none --allow-env supabase/functions/meta-owned-analytics-sync/enqueue.test.ts supabase/functions/meta-owned-analytics-sync/composition.test.ts supabase/functions/meta-owned-analytics-sync/dispatch.test.ts supabase/functions/meta-owned-analytics-sync/collection.test.ts supabase/functions/meta-owned-analytics-sync/retention.test.ts supabase/functions/meta-owned-analytics-sync/truncation.test.ts supabase/functions/meta-owned-analytics-sync/facebookResume.test.ts
 
       - name: Prove owned analytics dependency termination with real timeout ceilings
         run: deno test --no-config --import-map=scripts/ci/deno-analytics.import-map.json --lock=scripts/ci/deno-analytics.lock --frozen --node-modules-dir=none --allow-env supabase/functions/meta-owned-analytics-sync/termination.test.ts
@@ -814,6 +814,14 @@ jobs:
         run: >-
           deno test --no-config --import-map=scripts/ci/deno-analytics.import-map.json --lock=scripts/ci/deno-analytics.lock --frozen --node-modules-dir=none
           --allow-env --allow-run supabase/functions/analytics-legacy-bootstrap/integration.test.ts
+
+      - name: Verify Facebook all dispatch and drain against real SQL
+        env:
+          ROLLOUT_IT_CONTAINER: pg-harness
+          ROLLOUT_IT_DB: partner_api_harness
+        run: >-
+          deno test --no-config --import-map=scripts/ci/deno-analytics.import-map.json --lock=scripts/ci/deno-analytics.lock --frozen --node-modules-dir=none
+          --allow-env --allow-run supabase/functions/meta-owned-analytics-sync/facebookAllIntegration.test.ts
 
       - name: Verify analytics probe ownership against the migrated SQL harness
         run: >-

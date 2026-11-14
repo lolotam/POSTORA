@@ -1,5 +1,5 @@
 export class AnalyticsWorkerStopped extends Error {
-  constructor(readonly reason: "deadline" | "storage_unavailable" | "provider_unavailable" | "invalid_contract" | "admission_refused" | "configuration_unavailable", readonly sqlstate: string | null = null) {
+  constructor(readonly reason: "deadline" | "storage_unavailable" | "provider_unavailable" | "invalid_contract" | "admission_refused" | "configuration_unavailable", readonly sqlstate: string | null = null, readonly boundary: "storage" | null = null) {
     super(`Owned analytics operation stopped: ${reason}`);
     this.name = "AnalyticsWorkerStopped";
   }
@@ -12,9 +12,16 @@ export class CompletionRefused extends Error {
 
 /** Caller deadlines stop waiting; they never prove that a database write rolled back. */
 export class AnalyticsWorkerDeadline {
-  constructor(readonly startedAt: number, readonly signal: AbortSignal) {}
+  constructor(readonly startedAt: number, readonly signal: AbortSignal, private readonly endsAt = startedAt + 40_000) {}
 
-  get remainingMs(): number { return this.startedAt + 40_000 - Date.now(); }
+  get remainingMs(): number { return this.endsAt - Date.now(); }
+
+  /** Resume cannot consume the measurement reserve, including provider body reads. */
+  facebookResume(): AnalyticsWorkerDeadline {
+    const endsAt = Math.min(Date.now() + 15_000, this.endsAt - 25_000);
+    const signal = AbortSignal.any([this.signal, AbortSignal.timeout(Math.max(0, endsAt - Date.now()))]);
+    return new AnalyticsWorkerDeadline(this.startedAt, signal, endsAt);
+  }
 
   async run<T>(work: (signal: AbortSignal) => PromiseLike<T>, reserveMs = 5_000): Promise<T> {
     const remaining = this.remainingMs - reserveMs;

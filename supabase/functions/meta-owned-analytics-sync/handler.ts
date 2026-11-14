@@ -2,7 +2,7 @@ import { z } from "https://esm.sh/zod@3.25.76";
 import { handleRestrictedCorsOptions, restrictedJsonResponse } from "../_shared/cors.ts";
 import { awaitWithAbort } from "../_shared/abort.ts";
 import { admitOwnedAnalyticsAccount } from "./admission.ts";
-import { dispatchOwnedAnalyticsDaily, type DispatchCounts } from "./dispatch.ts";
+import { dispatchOwnedAnalyticsDaily, type DispatchCounts, type DispatchResult } from "./dispatch.ts";
 import { drainOwnedAnalytics, type DrainCounts } from "./worker.ts";
 import { retainOwnedAnalytics, retentionContinuation, type RetentionContinuation, type RetentionCounts } from "./retention.ts";
 import { AnalyticsWorkerDeadline, AnalyticsWorkerStopped } from "./deadline.ts";
@@ -19,7 +19,7 @@ const syncRequest = z.discriminatedUnion("action", [
   { message: "Continuation is only valid for retention dry runs" });
 type WorkCounts = DispatchCounts | DrainCounts | RetentionCounts;
 export type OwnedAnalyticsAudit = { event: "owned_analytics_enqueue" | "owned_analytics_admission" | "owned_analytics_dispatch" | "owned_analytics_drain" | "owned_analytics_retention"; status: string; reason: string | null;
-  platform: OwnedAnalyticsPlatform | "all" | null; accountId: string | null; dryRun?: boolean; retentionFloor?: string; counts?: WorkCounts };
+  platform: OwnedAnalyticsPlatform | "all" | null; accountId: string | null; dryRun?: boolean; retentionFloor?: string; counts?: WorkCounts; resume?: DispatchResult };
 export type OwnedAnalyticsSyncDeps = {
   authorizeEnqueue?: (req: Request, userId: string) => Promise<boolean>;
   authorize: (req: Request) => { ok: true } | { ok: false; status: 401 | 503 };
@@ -74,19 +74,19 @@ export function createOwnedAnalyticsSyncHandler(deps: OwnedAnalyticsSyncDeps): (
     let accountId: string | null = null;
     let enqueueReceipt: Record<string, unknown> | null = null;
     const finish = async (statusCode: number, status: string, reason: string | null = null,
-      details?: { counts: WorkCounts; continuation?: RetentionContinuation | null }) => {
-      const { counts, continuation } = details ?? {};
+      details?: { counts: WorkCounts; continuation?: RetentionContinuation | null; resume?: DispatchResult }) => {
+      const { counts, continuation, resume } = details ?? {};
       let auditStored = false;
       const event = { enqueue: "owned_analytics_enqueue", admit: "owned_analytics_admission", "enqueue-daily": "owned_analytics_dispatch", drain: "owned_analytics_drain", retention: "owned_analytics_retention" } as const;
       // A disconnected caller must not erase the terminal refusal receipt.
       // Work stops within 40 seconds; this independent audit has a 5-second cap.
       const auditSignal = AbortSignal.timeout(5_000);
       try { auditStored = await awaitWithAbort(() => deps.audit({ event: event[action],
-        status, reason, platform, accountId, ...(dryRun === null ? {} : { dryRun }), ...(retentionFloor ? { retentionFloor } : {}), ...(counts ? { counts } : {}) }, auditSignal), auditSignal); }
+        status, reason, platform, accountId, ...(dryRun === null ? {} : { dryRun }), ...(retentionFloor ? { retentionFloor } : {}), ...(counts ? { counts } : {}), ...(resume ? { resume } : {}) }, auditSignal), auditSignal); }
       catch { auditStored = false; }
       return restrictedJsonResponse(req, { ok: (action === "enqueue" ? statusCode >= 200 && statusCode < 300 && !["collection_disabled", "not_eligible"].includes(status) : statusCode === 200) && auditStored, action, platform, status,
         reason: auditStored ? reason : "audit_unavailable", auditStored, ...(enqueueReceipt ?? {}), ...(dryRun === null ? {} : { dryRun }), ...(counts ? { counts } : {}),
-        ...(auditStored && continuation !== undefined ? { continuation } : {}) }, auditStored ? statusCode : 503);
+        ...(resume ? { resume } : {}), ...(auditStored && continuation !== undefined ? { continuation } : {}) }, auditStored ? statusCode : 503);
     };
     try {
       if (req.method !== "POST") return await finish(405, "refused", "method_not_allowed");
@@ -107,7 +107,7 @@ export function createOwnedAnalyticsSyncHandler(deps: OwnedAnalyticsSyncDeps): (
         if (scope.status !== "eligible") return await finish(200, scope.status);
         const app = deps.app(input.platform);
         if (!app) return await finish(503, "unavailable", "app_configuration_unavailable");
-        const admitted = await admitOwnedAnalyticsAccount({ platform: input.platform, accountId, app, deadline, fetch: deps.fetch, store });
+        const admitted = await admitOwnedAnalyticsAccount({ platform: input.platform, accountId, app, deadline, fetch: deps.fetch, store, ownerId: input.user_id });
         if (admitted.status !== "complete") return await finish(admitted.reason === "rate_limited" ? 429 : 409, "not_eligible", admitted.reason);
         enqueueReceipt = await store.enqueueAccount(input.user_id, input.platform, accountId);
         const status = String(enqueueReceipt.status);
@@ -124,8 +124,19 @@ export function createOwnedAnalyticsSyncHandler(deps: OwnedAnalyticsSyncDeps): (
         return await finish(result.status === "unavailable" ? 503 : 200, result.status, result.reason, { counts: result.counts });
       }
       if (parsed.data.action === "drain") {
+        let resume: DispatchResult | undefined;
+        if (parsed.data.platform !== "threads") {
+          const resumeDeadline = deadline.facebookResume();
+          resume = await dispatchOwnedAnalyticsDaily({ platform: "facebook", resume: true,
+            store: new OwnedAnalyticsStore(deps.rpc, resumeDeadline), deadline: resumeDeadline, app: deps.app, fetch: deps.fetch });
+          // An unknown database outcome ends this invocation. A bounded provider
+          // slice expiring leaves its ticket durable and the collection reserve intact.
+          if (resume.status === "unavailable" && (resume.storageUncertain || resume.reason !== "deadline" && resume.reason !== "provider_unavailable")) {
+            return await finish(503, resume.status, resume.reason, { counts: { visited: 0, collected: 0, partial: 0, refused: 0 }, resume });
+          }
+        }
         const result = await drainOwnedAnalytics({ platform: parsed.data.platform, store, deadline, app: deps.app, fetch: deps.fetch });
-        return await finish(result.status === "unavailable" ? 503 : 200, result.status, result.reason, { counts: result.counts });
+        return await finish(result.status === "unavailable" ? 503 : 200, result.status, result.reason, { counts: result.counts, resume });
       }
       accountId = parsed.data.accountId.toLowerCase();
       const app = deps.app(parsed.data.platform);

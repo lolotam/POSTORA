@@ -44,7 +44,7 @@ function fixture(platform: OwnedAnalyticsPlatform, action: Action, stop: Stop) {
   const rpc: AnalyticsRpc = (name, args, signal) => {
     let data: unknown;
     if (name === "next_meta_analytics_dispatch_target") data = args.p_platform !== platform ? { state: "disabled" } : action !== "enqueue-daily" || !args.p_start ? { state: "not_started" }
-      : { state: "target", served_at: STAMP, ticket: { platform, due_on: "2026-11-01", policy_digest: "d".repeat(64), round: 1, after_account_id: null, account_id: ACCOUNT } };
+      : { state: "target", served_at: STAMP, ticket: { platform, ...(platform === "facebook" ? { owner_id: OWNER } : {}), due_on: "2026-11-01", policy_digest: "d".repeat(64), round: 1, after_account_id: null, account_id: ACCOUNT } };
     else if (name === "commit_meta_analytics_dispatch_target") {
       data = dispatchCommitted ? { state: "advanced", outcome: "queued", complete: true, refused_count: 0 } : { state: "needs_admission" };
       dispatchCommitted = true;

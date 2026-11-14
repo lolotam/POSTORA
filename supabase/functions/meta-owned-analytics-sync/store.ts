@@ -14,17 +14,21 @@ const facebookCredential = credentialBase.extend({ authority: facebookAuthority 
 const threadsCredential = credentialBase.extend({ authority: threadsAuthority }).strict();
 export type AdmissionCredential = z.infer<typeof facebookCredential> | z.infer<typeof threadsCredential>;
 export type AnalyticsRpc = (name: string, args: Record<string, unknown>, signal: AbortSignal) => PromiseLike<unknown>;
-const dispatchTicket = z.object({ platform: z.enum(["facebook", "threads"]), due_on: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+const dispatchTicketBase = z.object({ due_on: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
   policy_digest: z.string().regex(/^[a-f0-9]{64}$/), round: z.number().int().positive().safe(),
   after_account_id: z.string().uuid().nullable(), account_id: z.string().uuid() }).strict();
+const dispatchTicket = z.discriminatedUnion("platform", [
+  dispatchTicketBase.extend({ platform: z.literal("facebook"), owner_id: z.string().uuid() }),
+  dispatchTicketBase.extend({ platform: z.literal("threads") }),
+]);
 const dispatchNext = z.discriminatedUnion("state", [z.object({ state: z.literal("disabled") }).strict(),
   z.object({ state: z.literal("not_started") }).strict(),
-  z.object({ state: z.literal("complete"), refused_count: z.number().int().min(0).max(100), round: z.number().int().positive().safe(),
+  z.object({ state: z.literal("complete"), refused_count: z.number().int().nonnegative().safe(), round: z.number().int().positive().safe(),
     served_at: z.string().datetime({ offset: true }) }).strict(),
   z.object({ state: z.literal("target"), served_at: z.string().datetime({ offset: true }), ticket: dispatchTicket }).strict()]);
 const dispatchCommit = z.discriminatedUnion("state", [z.object({ state: z.literal("needs_admission") }).strict(),
   z.object({ state: z.literal("advanced"), outcome: z.enum(["queued", "refused"]), complete: z.boolean(),
-    refused_count: z.number().int().min(0).max(100) }).strict()]);
+    refused_count: z.number().int().nonnegative().safe() }).strict()]);
 export type AnalyticsDispatchTicket = z.infer<typeof dispatchTicket>;
 export type AnalyticsDispatchNext = z.infer<typeof dispatchNext>;
 
@@ -57,7 +61,8 @@ export class OwnedAnalyticsStore {
     let envelope: unknown;
     try { envelope = await this.deadline.run((signal) => this.rpc(name, args, signal)); }
     catch (error) {
-      if (error instanceof AnalyticsWorkerStopped) throw error;
+      if (error instanceof AnalyticsWorkerStopped) throw error.reason === "deadline"
+        ? new AnalyticsWorkerStopped("deadline", error.sqlstate, "storage") : error;
       throw new AnalyticsWorkerStopped("storage_unavailable");
     }
     const decoded = z.object({ data: z.unknown(), error: z.unknown() }).passthrough().safeParse(envelope);
@@ -92,11 +97,13 @@ export class OwnedAnalyticsStore {
     return parsed.data;
   }
 
-  async read(platform: OwnedAnalyticsPlatform, accountId: string, expected: AdmissionCredential["authority"] | null): Promise<AdmissionCredential> {
+  async read(platform: OwnedAnalyticsPlatform, accountId: string, expected: AdmissionCredential["authority"] | null, ownerId?: string): Promise<AdmissionCredential> {
     const name = platform === "facebook" ? "read_fb_analytics_admission_credential" : "read_threads_analytics_admission_credential";
-    const raw = await this.call(name, { p_account_id: accountId, p_expected_authority: expected });
+    const raw = await this.call(name, { p_account_id: accountId, p_expected_authority: expected,
+      ...(platform === "facebook" && ownerId ? { p_expected_owner: ownerId } : {}) });
     const decoded = (platform === "facebook" ? facebookCredential : threadsCredential).safeParse(raw);
-    if (!decoded.success || decoded.data.account_id !== accountId.toLowerCase()) throw new AnalyticsWorkerStopped("invalid_contract");
+    if (!decoded.success || decoded.data.account_id !== accountId.toLowerCase()
+      || ownerId !== undefined && decoded.data.user_id !== ownerId.toLowerCase()) throw new AnalyticsWorkerStopped("invalid_contract");
     return decoded.data;
   }
 

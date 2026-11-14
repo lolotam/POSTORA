@@ -48,7 +48,7 @@ Deno.test("the shared 50-target cap yields to an unstarted platform on the next 
         if (args.p_start && (rounds[platform] === 0 || positions[platform] === 50)) { rounds[platform]++; positions[platform] = 0; }
         if (!rounds[platform]) return Promise.resolve({ data: { state: "not_started" }, error: null });
         if (positions[platform] === 50) return Promise.resolve({ data: { state: "complete", refused_count: 0, round: rounds[platform], served_at: STAMP }, error: null });
-        return Promise.resolve({ data: { state: "target", served_at: STAMP, ticket: { ...ticket, platform, round: rounds[platform],
+        return Promise.resolve({ data: { state: "target", served_at: STAMP, ticket: { ...ticket, platform, ...(platform === "facebook" ? { owner_id: OWNER } : {}), round: rounds[platform],
           after_account_id: positions[platform] ? id(platform, positions[platform] - 1) : null, account_id: id(platform, positions[platform]) } }, error: null });
       }
       assertEquals(name, "commit_meta_analytics_dispatch_target");

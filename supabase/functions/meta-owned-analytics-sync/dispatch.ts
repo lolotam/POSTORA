@@ -4,9 +4,9 @@ import { AdmissionProviderUnavailable, type AdmissionApp } from "./permissionPro
 import { OwnedAnalyticsStore, type OwnedAnalyticsPlatform } from "./store.ts";
 
 export type DispatchCounts = { visited: number; queued: number; refused: number };
-export type DispatchResult = { status: "complete" | "partial" | "disabled" | "unavailable"; counts: DispatchCounts; reason: string | null };
+export type DispatchResult = { status: "complete" | "partial" | "disabled" | "unavailable"; counts: DispatchCounts; reason: string | null; storageUncertain?: true };
 type DispatchInput = { platform: OwnedAnalyticsPlatform | "all"; store: OwnedAnalyticsStore; deadline: AnalyticsWorkerDeadline;
-  app: (platform: OwnedAnalyticsPlatform) => AdmissionApp | null; fetch?: typeof fetch };
+  app: (platform: OwnedAnalyticsPlatform) => AdmissionApp | null; fetch?: typeof fetch; resume?: boolean };
 
 function isTargetRefusal(error: unknown): error is AnalyticsWorkerStopped {
   return error instanceof AnalyticsWorkerStopped && error.reason === "admission_refused"
@@ -42,13 +42,18 @@ export async function dispatchOwnedAnalyticsDaily(input: DispatchInput): Promise
     let disabled = ordered.disabled;
     let refusedEarlier = ordered.refused;
     for (const platform of ordered.platforms) {
-      let start = true;
-      while (counts.visited < 50 && input.deadline.remainingMs >= 15_000) {
+      let start = !input.resume;
+      const limit = input.resume ? 5 : 50;
+      const reserve = input.resume ? 5_000 : 15_000;
+      while (counts.visited < limit && input.deadline.remainingMs > reserve) {
         const next = await input.store.nextDispatch(platform, start);
         start = false;
         if (next.state === "disabled") { completed++; disabled++; break; }
         if (next.state === "complete") { completed++; refusedEarlier ||= next.refused_count > 0; break; }
-        if (next.state === "not_started") return { status: "partial", counts, reason: "dispatch_changed" };
+        if (next.state === "not_started") {
+          if (input.resume) { completed++; break; }
+          return { status: "partial", counts, reason: "dispatch_changed" };
+        }
         counts.visited++;
         let receipt = await input.store.commitDispatch(next.ticket, "enqueue");
         if (receipt.state === "needs_admission") {
@@ -57,14 +62,15 @@ export async function dispatchOwnedAnalyticsDaily(input: DispatchInput): Promise
           let admitted: AdmissionResult;
           try {
             admitted = await admitOwnedAnalyticsAccount({ platform, accountId: next.ticket.account_id, app,
-              store: input.store, deadline: input.deadline, fetch: input.fetch });
+              store: input.store, deadline: input.deadline, fetch: input.fetch,
+              ...(next.ticket.platform === "facebook" ? { ownerId: next.ticket.owner_id } : {}) });
           } catch (error) {
             if (error instanceof AdmissionProviderUnavailable) {
               const failed = await input.store.recordAdmissionFailure(next.ticket, error.reason, crypto.randomUUID());
               if (failed.state === "advanced") {
                 counts[failed.outcome]++;
                 refusedEarlier ||= failed.refused_count > 0;
-                if (failed.outcome === "refused") return { status: "partial", counts, reason: "admission_unavailable" };
+                if (failed.outcome === "refused" && platform !== "facebook") return { status: "partial", counts, reason: "admission_unavailable" };
                 if (failed.complete) { completed++; break; }
                 continue;
               }
@@ -84,13 +90,14 @@ export async function dispatchOwnedAnalyticsDaily(input: DispatchInput): Promise
         refusedEarlier ||= receipt.refused_count > 0;
         if (receipt.complete) { completed++; break; }
       }
-      if (counts.visited >= 50 || input.deadline.remainingMs < 15_000) break;
+      if (counts.visited >= limit || input.deadline.remainingMs <= reserve) break;
     }
     const total = input.platform === "all" ? 2 : 1;
     return { status: disabled === total ? "disabled" : completed === total && !refusedEarlier ? "complete" : "partial", counts, reason: null };
   } catch (error) {
     if (isTargetRefusal(error)) return { status: "partial", counts, reason: "dispatch_changed" };
     return { status: "unavailable", counts, reason: error instanceof AnalyticsWorkerStopped
-      ? error.reason === "admission_refused" ? "invalid_contract" : error.reason : "storage_unavailable" };
+      ? error.reason === "admission_refused" ? "invalid_contract" : error.reason : "storage_unavailable",
+      ...(input.resume && error instanceof AnalyticsWorkerStopped && error.boundary === "storage" ? { storageUncertain: true as const } : {}) };
   }
 }
