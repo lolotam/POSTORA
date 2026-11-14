@@ -2,7 +2,7 @@ import { useQuery, useMutation, useQueryClient, type QueryClient } from '@tansta
 import { supabase } from '@/integrations/supabase/client';
 import { fetchModelCatalogue } from '@/features/ai-providers/infrastructure/aiModelCatalogueGateway';
 import { AI_PROVIDER_HEALTH_QUERY_KEY } from './ai-config/queryKeys';
-import { CHAT_LIST_POLICY_QUERY_KEY, saveChatTier, type ChatListPolicy, type ChatTierInput } from '@/features/ai-providers/infrastructure/chatListGateway';
+import { CHAT_LIST_POLICY_QUERY_KEY, CHAT_TIER_KEYS, saveChatTier, type ChatListPolicy, type ChatTierInput } from '@/features/ai-providers/infrastructure/chatListGateway';
 import type {
   AIProvider,
   AIModel,
@@ -132,17 +132,17 @@ export function useAIConfiguration() {
 function saveChatTierAndReconcile(queryClient: QueryClient, input: Omit<ChatTierInput, 'expected'>) {
   const current = queryClient.getQueryData<AIConfigData>(['ai-config']);
   if (!current) throw new Error('AI configuration must be loaded before saving. Reload and retry.');
-  const keys = ['default_ai_model_chat', 'default_ai_model_chat_fallback', 'default_ai_model_chat_fallback_2'];
-  const expected = Object.fromEntries(current.settings.filter(row => keys.includes(row.key)).map(row => [row.key, row.value]));
-  return saveChatTier({ ...input, expected }, async saved => {
-    // Publish the observed saved tier before a failed mutation can show its
-    // error. Invalidation alone can leave the previously saved tier visible.
+  const expected = Object.fromEntries(current.settings.filter(row => CHAT_TIER_KEYS.some(key => key === row.key)).map(row => [row.key, row.value]));
+  return saveChatTier({ ...input, expected }, async snapshot => {
+    // Publish every observed tier before a failed mutation can show its error.
+    // Invalidation alone can leave stale saved tiers and CAS expectations visible.
     await queryClient.cancelQueries({ queryKey: ['ai-config'] });
-    const key = `default_ai_model_chat${input.slot === 'primary' ? '' : `_${input.slot}`}`;
     queryClient.setQueryData<AIConfigData>(['ai-config'], current => {
       if (!current) return current;
-      const settings = current.settings.filter(row => row.key !== key);
-      if (saved) settings.push({ key, value: saved });
+      const settings = current.settings.filter(row => !Object.keys(snapshot).includes(row.key));
+      for (const [key, value] of Object.entries(snapshot)) {
+        if (value !== undefined) settings.push({ key, value });
+      }
       return { ...current, settings, ...parseSettingsRows(settings) };
     });
   });

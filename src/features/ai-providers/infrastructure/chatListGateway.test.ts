@@ -18,6 +18,19 @@ afterEach(() => {
 });
 
 describe('Chat action deadlines (PR #419)', () => {
+  it.each(['unreadable', 'malformed sibling'] as const)('a conflict with an %s snapshot rejects without publishing partial tiers', async outcome => {
+    const previous = { provider_code: 'openai', model_id: 'previous' };
+    fetchMock.mockImplementation(url => Promise.resolve(String(url).includes('/functions/v1/ai-config')
+      ? Response.json({ error: 'configuration_changed_retry' }, { status: 409 })
+      : outcome === 'unreadable' ? Response.json({ message: 'private SQL detail' }, { status: 400 })
+        : Response.json([{ key: 'default_ai_model_chat', value: previous }, { key: 'default_ai_model_chat_fallback', value: { model_id: 'invalid' } }])));
+    const reconciled = vi.fn();
+    await expect(saveChatTier({ category: 'chat', slot: 'primary', provider_code: 'claude', model_id: 'requested', expected: { default_ai_model_chat: previous } }, reconciled))
+      .rejects.toThrow('AI configuration save outcome could not be confirmed. Retry or reload to refresh.');
+    expect(reconciled).not.toHaveBeenCalled();
+    expect(fetchMock.mock.calls.filter(([url]) => String(url).includes('/functions/v1/ai-config'))).toHaveLength(1);
+  });
+
   it('a stalled read aborts at 30s and reaches the sanitized retry state', async () => {
     vi.useFakeTimers();
     let requestSignal: AbortSignal | undefined;
@@ -66,7 +79,7 @@ describe('Chat action deadlines (PR #419)', () => {
       expect(reconciled).not.toHaveBeenCalled();
       expect(outcomes[0]).toEqual(new Error('AI configuration save outcome could not be confirmed. Retry or reload to refresh.'));
     } else {
-      expect(reconciled).toHaveBeenCalledWith(saved?.value ?? null);
+      expect(reconciled).toHaveBeenCalledWith({ default_ai_model_chat: saved?.value });
       if (outcome === 'committed') expect(outcomes[0]).toBe('success');
       else expect(outcomes[0]).toMatchObject({ message: 'AI configuration could not be saved or read. Retry; check AI Providers if it remains unavailable.' });
     }
@@ -78,7 +91,7 @@ describe('Chat action deadlines (PR #419)', () => {
       ? Response.json({ error: 'configuration_read_or_write_failed' }, { status: 503 }) : Response.json({ value: saved })));
     const reconciled = vi.fn();
     await expect(saveChatTier({ category: 'chat', slot: 'fallback', provider_code: 'openai', model_id: 'same', auth_method, expected: {} }, reconciled)).resolves.toBeUndefined();
-    expect(reconciled).toHaveBeenCalledWith(saved);
+    expect(reconciled).toHaveBeenCalledWith({ default_ai_model_chat_fallback: saved });
     expect(fetchMock.mock.calls.filter(([url]) => String(url).includes('/functions/v1/ai-config'))).toHaveLength(1);
     expect(new URL(String(fetchMock.mock.calls[1][0])).searchParams.get('key')).toBe('eq.default_ai_model_chat_fallback');
   });

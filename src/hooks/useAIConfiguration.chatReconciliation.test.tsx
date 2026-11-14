@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { act, renderHook } from '@testing-library/react';
+import { act, renderHook, waitFor } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import { afterEach, expect, it, vi } from 'vitest';
 
@@ -15,6 +15,68 @@ import { parseSettingsRows, useAIConfiguration, useSetDefaultModel, useSetFallba
 import { CHAT_LIST_POLICY_QUERY_KEY } from '@/features/ai-providers/infrastructure/chatListGateway';
 
 afterEach(() => { vi.useRealTimers(); fetchMock.mockReset(); });
+
+// PR #419 r5: a sibling change invalidates the expectation for the whole chain.
+it.each([
+  ['primary', useSetDefaultModel, 'default_ai_model_chat', 'default_ai_model_chat_fallback', 'changed'],
+  ['fallback', useSetFallbackModel, 'default_ai_model_chat_fallback', 'default_ai_model_chat_fallback_2', 'missing'],
+  ['fallback_2', useSetFallback2Model, 'default_ai_model_chat_fallback_2', 'default_ai_model_chat', 'changed'],
+  ['primary', useSetDefaultModel, 'default_ai_model_chat', 'default_ai_model_chat_fallback_2', 'null'],
+] as const)('a %s conflict publishes every tier before rejection and permits a fresh retry', async (_slot, useSetter, editedKey, siblingKey, change) => {
+  const previous = {
+    default_ai_model_chat: { provider_code: 'openai', model_id: 'primary' },
+    default_ai_model_chat_fallback: { provider_code: 'openai', model_id: 'fallback' },
+    default_ai_model_chat_fallback_2: { provider_code: 'openai', model_id: 'fallback-2' },
+  };
+  const desired = { provider_code: 'claude', model_id: 'requested', auth_method: 'oauth' as const };
+  const fresh: Record<string, unknown> = { ...previous };
+  if (change === 'missing') delete fresh[siblingKey];
+  else if (change === 'null') fresh[siblingKey] = null;
+  else fresh[siblingKey] = { provider_code: 'claude', model_id: 'concurrently-saved', auth_method: 'oauth', provider_option: 'retained' };
+  let stored = { ...fresh };
+  const writes: Array<{ expected: Record<string, unknown> }> = [];
+  fetchMock.mockImplementation((url, init) => {
+    const requestUrl = new URL(String(url));
+    if (requestUrl.pathname.includes('/rest/v1/system_settings')) {
+      const rows = Object.entries(stored).map(([key, value]) => ({ key, value }));
+      // Support the old single-tier request too, so the regression fails on
+      // stale cache contents rather than on a different HTTP response shape.
+      return Promise.resolve(Response.json(requestUrl.searchParams.get('key')?.startsWith('eq.')
+        ? rows.find(row => row.key === requestUrl.searchParams.get('key')?.slice(3)) ?? null : rows));
+    }
+    const input = JSON.parse(String(init?.body));
+    writes.push(input);
+    const matches = Object.keys({ ...stored, ...input.expected }).every(key => JSON.stringify(input.expected[key]) === JSON.stringify(stored[key]));
+    if (!matches) return Promise.resolve(Response.json({ error: 'configuration_changed_retry' }, { status: 409 }));
+    stored = { ...stored, [editedKey]: desired };
+    return Promise.resolve(Response.json({ success: true }));
+  });
+  const client = new QueryClient({ defaultOptions: { queries: { staleTime: Infinity, retry: false }, mutations: { retry: false } } });
+  const unrelated = { key: 'default_ai_model_image', value: { provider_code: 'openai', model_id: 'image' } };
+  const settings = [...Object.entries(previous).map(([key, value]) => ({ key, value })), unrelated];
+  client.setQueryData(['ai-config'], { providers: [], models: [], oauthModels: [], settings, ...parseSettingsRows(settings) });
+  client.setQueryData(CHAT_LIST_POLICY_QUERY_KEY, { enabled: true, groups: [] });
+  const wrapper = ({ children }: { children: ReactNode }) => <QueryClientProvider client={client}>{children}</QueryClientProvider>;
+  const { result, unmount } = renderHook(() => ({ mutation: useSetter(), config: useAIConfiguration() }), { wrapper });
+  try {
+    let atFailure: unknown;
+    await act(async () => {
+      const failure = await result.current.mutation.mutateAsync({ category: 'chat', ...desired }).catch(error => {
+        atFailure = client.getQueryData(['ai-config']);
+        return error;
+      });
+      expect(failure).toMatchObject({ message: expect.stringContaining('Retry') });
+    });
+    const freshSettings = [...Object.entries(fresh).map(([key, value]) => ({ key, value })), unrelated];
+    expect(atFailure).toMatchObject(parseSettingsRows(freshSettings));
+    await waitFor(() => expect(result.current.config.data).toMatchObject(parseSettingsRows(freshSettings)));
+    expect(result.current.config.data?.settings).toEqual(expect.arrayContaining(freshSettings));
+    if (change === 'missing') expect(result.current.config.data?.settings.some(row => row.key === siblingKey)).toBe(false);
+    await act(async () => { await result.current.mutation.mutateAsync({ category: 'chat', ...desired }); });
+    expect(writes.map(write => write.expected)).toEqual([previous, fresh]);
+    expect(stored).toEqual({ ...fresh, [editedKey]: desired });
+  } finally { unmount(); client.clear(); }
+});
 
 // PR #419 r4: the browser's old snapshot, not a fresh server read, fences retries.
 it.each([
@@ -40,7 +102,7 @@ it.each([
         if (firstWrite === 'committed') { stored = desired; committedWrites++; }
         return Promise.resolve(response);
       }
-      return Promise.resolve(Response.json({ value: stored }));
+      return Promise.resolve(Response.json([{ key, value: stored }]));
     }
     const input = JSON.parse(String(init?.body));
     writes.push(input);
@@ -70,14 +132,18 @@ it.each([
       expect(await first).toMatchObject({ message: expect.stringContaining(observation === 'unreadable' ? 'could not be confirmed' : 'Retry') });
     });
     expect(client.getQueryData(['ai-config'])).toMatchObject({ categoryDefaults: { chat: previous } });
-    await act(async () => { await result.current.mutateAsync({ category: 'chat', ...desired, auth_method: 'oauth' }); });
+    await act(async () => {
+      const retry = result.current.mutateAsync({ category: 'chat', ...desired, auth_method: 'oauth' });
+      if (firstWrite === 'committed') await expect(retry).rejects.toThrow('Retry');
+      else await retry;
+    });
     expect(writes).toHaveLength(2);
     expect(writes.map(write => write.expected)).toEqual([{ [key]: previous }, { [key]: previous }]);
     expect(stored).toEqual(desired);
     expect(committedWrites).toBe(1);
     expect(reads).toBe(firstWrite === 'committed' ? 2 : 1);
-    // A successful retry invalidates configuration; the committed/conflict path
-    // publishes the reread value before the mutation settles.
+    // A successful retry invalidates configuration; an explicit CAS conflict
+    // publishes the full chain before surfacing the retry error.
     if (firstWrite === 'committed') expect(client.getQueryData(['ai-config'])).toMatchObject({ categoryDefaults: { chat: desired } });
   } finally { unmount(); client.clear(); }
 });
