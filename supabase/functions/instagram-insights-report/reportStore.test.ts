@@ -157,6 +157,12 @@ Deno.test("parseCompleteness determines coverage from inventory flags", () => {
   assertEquals(covered.coverage, "complete");
   assertEquals(covered.baselineHistoryComplete, true);
   assertEquals(covered.inventoryTruncated, false);
+  const pending = toMediaSnapshotRow({ id: "pending", ig_media_id: "pending-media", media_product_type: "FEED", status: "pending",
+    published_at: "2026-10-25T10:00:00Z", captured_at: "2026-10-25T11:00:00Z", captured_on: "2026-10-25" });
+  assertEquals(parseCompleteness({ inventory: { window_covered: true } }, [pending]).coverage, "partial");
+  const completed = { ...pending, id: "complete", status: "ok" as const };
+  assertEquals(parseCompleteness({ inventory: { window_covered: true } }, [pending, completed]).coverage, "complete");
+  assertEquals(parseCompleteness({ inventory: { window_covered: true } }, [pending], []).coverage, "complete", "outside the requested window");
 });
 
 Deno.test("ReportStore refuses cross-owner account with ACCOUNT_MISMATCH", async () => {

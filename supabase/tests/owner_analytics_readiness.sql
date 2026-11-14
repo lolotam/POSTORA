@@ -180,6 +180,83 @@ DO $proof$ BEGIN
  ASSERT pg_temp.readiness('facebook')#>>'{collection,reason_code}'='permission_verification_pending';
 END;$proof$;
 
+-- One precedence table drives SQL assertions AND the TypeScript projection in
+-- admissionIntegration.test.ts. Every snapshot below comes from the real SQL.
+CREATE TEMP TABLE readiness_precedence_cases(
+ name text, platform text, policy text, connection text, proof text, proof_age interval,
+ attempt_state text, attempt_reason text, context_current boolean, expected text,
+ expected_permission text, snapshot jsonb
+);
+INSERT INTO readiness_precedence_cases(name,platform,policy,connection,proof,proof_age,attempt_state,attempt_reason,context_current,expected,expected_permission)
+SELECT platform||':'||name,platform,policy,connection,proof,proof_age::interval,
+ CASE WHEN attempt_state='terminal' THEN CASE platform WHEN 'instagram' THEN 'unavailable' ELSE 'failed' END ELSE attempt_state END,
+ CASE attempt_reason WHEN 'scope' THEN CASE platform WHEN 'instagram' THEN 'scope_missing' ELSE 'permission_missing' END
+ WHEN 'token' THEN CASE platform WHEN 'instagram' THEN 'token_invalid' ELSE 'reauth_required' END ELSE attempt_reason END,
+ context_current,expected,expected_permission
+FROM (VALUES
+ ('disabled denial','disabled','valid','verified','2 hours','terminal','scope',true,'collection_disabled','missing'),
+ ('excluded denial','excluded','valid','verified','2 hours','terminal','scope',true,'collection_not_eligible','missing'),
+ ('invalid settings denial','invalid','valid','verified','2 hours','terminal','scope',true,'settings_unavailable','missing'),
+ ('disabled token','disabled','valid','verified','2 hours','terminal','token',true,'collection_disabled','verified'),
+ ('live connection','all','invalid','verified','2 hours','retry','provider_error',true,'token_invalid','verified'),
+ ('current scope refusal','all','valid','verified','2 hours','terminal','scope',true,'permission_missing','missing'),
+ ('current token refusal','all','valid','verified','2 hours','terminal','token',true,'token_invalid','verified'),
+ ('failed read cannot clear scope','all','valid','unavailable','30 minutes','terminal','scope',true,'permission_missing','missing'),
+ ('failed read cannot clear token','all','valid','unavailable','30 minutes','terminal','token',true,'token_invalid','unavailable'),
+ ('new verification clears scope','all','valid','verified','30 minutes','terminal','scope',true,'awaiting_first_capture','verified'),
+ ('new verification clears token','all','valid','verified','30 minutes','terminal','token',true,'awaiting_first_capture','verified'),
+ ('rotated scope is historical','all','valid','verified','2 hours','terminal','scope',false,'awaiting_first_capture','verified'),
+ ('rotated token is historical','all','valid','verified','2 hours','terminal','token',false,'awaiting_first_capture','verified'),
+ ('missing named scope','all','valid','missing','30 minutes','retry','provider_error',true,'permission_missing','missing'),
+ ('failed permission read','all','valid','unavailable','30 minutes','retry','provider_error',true,'permission_verification_pending','unavailable'),
+ ('scheduled rate limit','all','valid','verified','30 minutes','retry','rate_limited',true,'rate_limited','verified'),
+ ('scheduled provider retry','all','valid','verified','30 minutes','retry','provider_error',true,'provider_error','verified'),
+ ('obsolete retry','all','valid','verified','30 minutes','retry','provider_error',false,'awaiting_first_capture','verified'),
+ ('queued work','all','valid','verified','30 minutes','queued',NULL,false,'queued','verified'),
+ ('running work','all','valid','verified','30 minutes','running',NULL,true,'running','verified')
+) AS scenario(name,policy,connection,proof,proof_age,attempt_state,attempt_reason,context_current,expected,expected_permission)
+CROSS JOIN (VALUES ('instagram'),('facebook')) AS platforms(platform);
+-- At 12:00 UTC the LA day started at 08:00. A 10-hour-old verification
+-- supersedes an 11-hour-old refusal even though neither is fresh today.
+INSERT INTO readiness_precedence_cases(name,platform,policy,connection,proof,proof_age,attempt_state,attempt_reason,context_current,expected,expected_permission)
+VALUES ('facebook:next provider day scope','facebook','all','valid','verified','10 hours','failed','permission_missing',true,'permission_verification_pending','unknown'),
+ ('facebook:next provider day token','facebook','all','valid','verified','10 hours','failed','reauth_required',true,'permission_verification_pending','unknown');
+DO $matrix$
+DECLARE t record; r jsonb; v_owner uuid:='e8110000-0000-4000-8000-000000000001'; v_account uuid;
+ v_now timestamptz:='2026-11-15T12:00:00Z'; v_attempt_at timestamptz;
+BEGIN
+ FOR t IN SELECT * FROM readiness_precedence_cases LOOP
+  v_account:=CASE t.platform WHEN 'instagram' THEN 'e8120000-0000-4000-8000-000000000001'::uuid ELSE 'e8120000-0000-4000-8000-000000000002'::uuid END;
+  v_attempt_at:=v_now-CASE WHEN t.name LIKE '%next provider day%' THEN interval '11 hours' ELSE interval '1 hour' END;
+  UPDATE public.social_accounts SET needs_reauth=false WHERE id=v_account;
+  UPDATE public.app_settings SET value=CASE t.policy WHEN 'disabled' THEN 'false'::jsonb WHEN 'invalid' THEN '{}'::jsonb ELSE 'true'::jsonb END
+   WHERE key=CASE t.platform WHEN 'instagram' THEN 'collection_instagram_insights_enabled' ELSE 'collection_facebook_analytics_enabled' END;
+  UPDATE public.app_settings SET value=CASE WHEN t.policy='excluded' THEN
+   CASE t.platform WHEN 'instagram' THEN '{"version":1,"owners":{"mode":"off","account_ids":[]},"competitors":{"mode":"off","targets":[]}}'::jsonb ELSE '{"account_ids":[]}'::jsonb END
+   ELSE CASE t.platform WHEN 'instagram' THEN '{"version":1,"owners":{"mode":"all","account_ids":[]},"competitors":{"mode":"off","targets":[]}}'::jsonb
+   ELSE jsonb_build_object('account_ids',jsonb_build_array(v_account::text)) END END
+   WHERE key=CASE t.platform WHEN 'instagram' THEN 'collection_instagram_rollout_policy' ELSE 'collection_facebook_analytics_policy' END;
+  IF t.platform='instagram' THEN
+   UPDATE public.instagram_account_capabilities SET permission_read_state=CASE WHEN t.proof='unavailable' THEN 'failed' ELSE 'ok' END,
+    scopes_read_at=v_now-t.proof_age,granted_scopes=CASE WHEN t.proof='missing' THEN '{}'::text[] ELSE ARRAY['instagram_manage_insights'] END
+    WHERE social_account_id=v_account;
+  ELSE
+   UPDATE public.fb_analytics_permission_observations SET authority=public.meta_analytics_current_authority('facebook',v_account,v_owner),
+    state=CASE WHEN t.proof='unavailable' THEN 'unavailable' ELSE 'verified' END,observed_at=v_now-t.proof_age,
+    granted_scopes=CASE WHEN t.proof='missing' THEN ARRAY['read_insights'] ELSE ARRAY['read_insights','pages_read_engagement'] END
+    WHERE social_account_id=v_account;
+  END IF;
+  UPDATE public.social_accounts SET needs_reauth=(t.connection='invalid') WHERE id=v_account;
+  r:=public.owner_analytics_readiness_snapshot(t.platform,v_owner,v_account,v_now,jsonb_build_object('state',t.attempt_state,
+   'reason_code',t.attempt_reason,'observed_at',v_attempt_at,'context_current',t.context_current,'retry_at',v_now+interval '1 minute'));
+  ASSERT r#>>'{collection,reason_code}'=t.expected,t.name||': expected '||t.expected||', got '||(r#>>'{collection,reason_code}');
+  ASSERT r#>>'{permission,state}'=t.expected_permission,t.name||': independent permission proof';
+  ASSERT r#>>'{last_attempt,reason_code}' IS NOT DISTINCT FROM t.attempt_reason,t.name||': history retained';
+  UPDATE readiness_precedence_cases SET snapshot=r WHERE name=t.name;
+ END LOOP;
+END;$matrix$;
+SELECT 'readiness_case:'||jsonb_build_object('name',name,'expected',expected,'snapshot',snapshot)::text FROM readiness_precedence_cases ORDER BY name;
+
 -- Real grants and authenticated identity, including a forged body owner.
 SELECT set_config('request.jwt.claim.role','authenticated',true);
 SELECT set_config('request.jwt.claim.sub','e8110000-0000-4000-8000-000000000002',true);

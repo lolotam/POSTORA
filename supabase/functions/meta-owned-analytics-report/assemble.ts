@@ -1,4 +1,4 @@
-import { parseOwnerAnalyticsReadiness, ownerAnalyticsData } from "../_shared/ownerAnalyticsReadiness.ts";
+import { projectOwnerAnalyticsReadiness, ownerAnalyticsData } from "../_shared/ownerAnalyticsReadiness.ts";
 import { analyticsDefinitions, ANALYTICS_PLATFORM_CONFIGURATION } from "../_shared/analyticsRegistry.ts";
 import { analyticsSyncState, isAnalyticsMetricMeasurable, metricDelta, summarizeDailyMetricValues,
   unavailableMetric, type AnalyticsMetricResult, type AnalyticsReport, type MetricDefinition, type MetricValue, type UnavailableReason } from "../_shared/analyticsContract.ts";
@@ -114,8 +114,13 @@ export function assembleStoredAnalytics(input: { stored: StoredAnalyticsSnapshot
   // cursor. Run every cell through the same compatibility checks as rendering.
   const numerical: StoredAnalyticsCell[] = [...accountEvidence];
   const periodPosts = stored.period_posts ?? shownPosts;
-  const periodMetrics = periodPosts.map(({ metrics: cells }) => analyticsDefinitions(stored.platform, "post")
-    .map((definition) => postMetric(definition, cells, (cell) => numerical.push(cell))));
+  let incompletePeriod = false;
+  for (const { metrics: cells } of periodPosts) {
+    for (const definition of analyticsDefinitions(stored.platform, "post")) {
+      const metric = postMetric(definition, cells, (cell) => numerical.push(cell));
+      if (isAnalyticsMetricMeasurable(definition) && metric.current.status !== "available") incompletePeriod = true;
+    }
+  }
   const collectedAt = latestInstant(shownEvidence.map((cell) => cell.collected_at));
   const dataCollectedAt = latestInstant(numerical.map((cell) => cell.collected_at));
   const asOf = collectedAt ? new Date(Math.min(Date.parse(windows.current.period.until), Date.parse(collectedAt))).toISOString() : null;
@@ -125,13 +130,10 @@ export function assembleStoredAnalytics(input: { stored: StoredAnalyticsSnapshot
   const partial = (collectedAt !== null) && (incompleteInventory || incompleteCells
     || metrics.some((metric) => isAnalyticsMetricMeasurable(metric.definition) && metric.current.status !== "available"));
   let readiness;
-  try { readiness = stored.readiness === undefined ? undefined : parseOwnerAnalyticsReadiness(stored.readiness); }
+  try { readiness = stored.readiness === undefined ? undefined : projectOwnerAnalyticsReadiness(stored.readiness, stored.account_has_measurements ?? numerical.length > 0); }
   catch { throw new PersistedReportRefused("invalid_contract", 503); }
-  if (readiness?.collection.reason_code === "awaiting_first_capture" && (stored.account_has_measurements ?? numerical.length > 0)) {
-    readiness.collection = { ...readiness.collection, state: "ready", reason_code: "ready", next_action: "none" };
-  }
   const dataPartial = incompleteInventory || metrics.some((metric) => isAnalyticsMetricMeasurable(metric.definition) && metric.current.status !== "available")
-    || periodMetrics.some((post) => post.some((metric) => isAnalyticsMetricMeasurable(metric.definition) && metric.current.status !== "available"));
+    || incompletePeriod;
   const data = ownerAnalyticsData({ count: numerical.length, complete: !dataPartial, lastCapture: dataCollectedAt, now: input.generatedAt,
     staleAfterMs: ANALYTICS_PLATFORM_CONFIGURATION[stored.platform].staleAfterSeconds * 1000 });
   return parseAnalyticsReport({ ...readiness, data, analyticsContractVersion: 1, platform: stored.platform, accountId: stored.account_id, generatedAt: input.generatedAt,

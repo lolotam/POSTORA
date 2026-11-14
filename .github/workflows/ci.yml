@@ -796,7 +796,7 @@ jobs:
           ROLLOUT_IT_DB: partner_api_harness
         run: >-
           deno test --no-config --import-map=scripts/ci/deno-analytics.import-map.json --lock=scripts/ci/deno-analytics.lock --frozen --node-modules-dir=none
-          --allow-env --allow-run
+          --allow-env --allow-run --allow-read=supabase/tests/owner_analytics_readiness.sql
           supabase/functions/meta-owned-analytics-sync/admissionIntegration.test.ts
 
       - name: Verify analytics probe ownership against the migrated SQL harness

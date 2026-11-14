@@ -39,9 +39,18 @@ Deno.test("provider permission refusal without named scopes requires its dated j
   assertEquals(report.permission?.state, "missing");
   assertEquals(report.permission?.missing_scopes, []);
   for (const patch of [{ last_attempt: null }, { permission: { ...report.permission!, observed_at: NOW } },
-    { collection: { ...report.collection!, reason_source: "permission" } }]) {
+    { last_attempt: { ...readiness.last_attempt, state: "retry" } }]) {
     const invalid = { ...stored, readiness: { ...readiness, ...patch } };
     assertThrows(() => assembleStoredAnalytics({ stored: invalid, windows, generatedAt: NOW, nextCursor: null, hasMore: false }), PersistedReportRefused);
+  }
+  for (const [reason_code, reason_source] of [["collection_disabled", "rollout_policy"],
+    ["collection_not_eligible", "rollout_policy"], ["settings_unavailable", "configuration"]]) {
+    const policy = { ...stored, readiness: { ...readiness, collection: { ...readiness.collection,
+      reason_code, reason_source, state: reason_code === "settings_unavailable" ? "unavailable" : "not_enabled" } } };
+    const saved = assembleStoredAnalytics({ stored: policy, windows, generatedAt: NOW, nextCursor: null, hasMore: false });
+    assertEquals(saved.collection?.reason_code, reason_code);
+    assertEquals(saved.permission?.state, "missing");
+    assertEquals(saved.data?.observation_count, report.data?.observation_count);
   }
 });
 

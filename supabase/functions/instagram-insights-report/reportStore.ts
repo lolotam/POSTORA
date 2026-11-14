@@ -27,7 +27,7 @@ import {
   type OwnerReport,
   OwnerReportContractError,
 } from "./contracts.ts";
-import { assembleOwnerReport } from "./assemble.ts";
+import { assembleOwnerReport, classifyOwnerMedia } from "./assemble.ts";
 import { readReportQuery, ReportHistoryUnavailableError, type HistoryClient } from "./readHistory.ts";
 
 export type ReportStoreClient = HistoryClient & {
@@ -217,11 +217,14 @@ export function parseFreshness(jobStatus: Record<string, unknown> | null): Owner
 
 export function parseCompleteness(
   jobStatus: Record<string, unknown> | null,
-  mediaItems: MediaSnapshotRow[]
+  mediaItems: MediaSnapshotRow[],
+  windowMedia: MediaSnapshotRow[] = mediaItems
 ): OwnerReportCompletenessInput {
   const inventory = (jobStatus?.inventory as Record<string, unknown>) ?? {};
   const isTruncated = Boolean(inventory.truncated ?? false);
-  const isCovered = Boolean(inventory.window_covered ?? false);
+  const completedIds = new Set(mediaItems.filter((row) => row.status == null || row.status === "ok" || row.status === "unavailable").map((row) => row.mediaId));
+  const missingCaptures = windowMedia.some((row) => classifyOwnerMedia(row).kind === "supported" && !completedIds.has(row.mediaId));
+  const isCovered = Boolean(inventory.window_covered ?? false) && !isTruncated && !missingCaptures;
 
   let coverage: OwnerReportCoverage = "unknown";
   if (isCovered) coverage = "complete";
@@ -327,7 +330,7 @@ export class ReportStore {
     );
 
     const freshness = parseFreshness(jobStatus);
-    const completeness = parseCompleteness(jobStatus, mappedMedia);
+    const completeness = parseCompleteness(jobStatus, mappedMedia, displayMedia.filter((row) => Date.parse(row.publishedAt) <= now.getTime()));
 
     let readiness;
     if (snapshot.readiness !== undefined) {

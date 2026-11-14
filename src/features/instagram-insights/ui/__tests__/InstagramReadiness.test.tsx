@@ -10,6 +10,7 @@ import { reportFixture } from "../../tests/reportFixture";
 import type { OwnerAnalyticsReadiness } from "../../../../../supabase/functions/_shared/ownerAnalyticsReadiness";
 import { SyncStatusBanner } from "../SyncStatusBanner";
 import { useInstagramInsightsReport } from "../../application/useInstagramInsightsReport";
+import { useTriggerInstagramSync } from "../../application/useTriggerInstagramSync";
 
 vi.mock("@/hooks/useAuth", () => ({ useAuth: () => ({ user: { id: "readiness-owner" } }) }));
 vi.mock("@/hooks/useSocialAccounts", () => ({ useSocialAccounts: () => ({ isLoading: false, data: [
@@ -60,6 +61,39 @@ describe("Instagram readiness consumers", () => {
       expect(gateway.getReport).toHaveBeenCalledTimes(boundedCalls);
     } finally { unmount(); client.clear(); vi.useRealTimers(); }
   });
+  it.each([["rate_limited", true], ["provider_error", true], ["rate_limited", false], ["provider_error", false]] as const)(
+    "observes scheduled %s retries (dated=%s) and gives a newly accepted job a fresh budget", async (reason, dated) => {
+    vi.useFakeTimers();
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false, refetchOnWindowFocus: false } } });
+    const gateway = { triggerSync: vi.fn(async () => ({ jobId: "new-job", status: "queued" as const })),
+      getReport: vi.fn(async () => ({ ...reportFixture(), ...readiness("queued"), collection: {
+        ...readiness("queued").collection, reason_code: reason, reason_source: "job" as const, state: "unavailable" as const,
+        retry_at: dated ? new Date(Date.now() + 20_000).toISOString() : null, next_action: "retry_after" as const,
+      } })) };
+    const wrapper = ({ children }: { children: React.ReactNode }) => <QueryClientProvider client={client}>{children}</QueryClientProvider>;
+    const { result, unmount } = renderHook(() => ({
+      report: useInstagramInsightsReport({ gateway, socialAccountId: "acc-123", periodDays: 7 }),
+      sync: useTriggerInstagramSync({ gateway }),
+    }), { wrapper });
+    try {
+      await act(async () => { await vi.advanceTimersByTimeAsync(20); });
+      await act(async () => { await vi.advanceTimersByTimeAsync(30_000); });
+      expect(gateway.getReport.mock.calls.length).toBeGreaterThan(1);
+      await act(async () => { await vi.advanceTimersByTimeAsync(330_000); });
+      const exhausted = gateway.getReport.mock.calls.length;
+      await act(async () => { await vi.advanceTimersByTimeAsync(60_000); });
+      expect(gateway.getReport).toHaveBeenCalledTimes(exhausted);
+      await act(async () => { await result.current.sync.mutateAsync({ socialAccountId: "acc-123" }); });
+      await act(async () => { await vi.advanceTimersByTimeAsync(20); });
+      await act(async () => { await vi.advanceTimersByTimeAsync(30_000); });
+      expect(gateway.getReport.mock.calls.length).toBeGreaterThan(exhausted + 1);
+      await act(async () => { await vi.advanceTimersByTimeAsync(330_000); });
+      const secondBudget = gateway.getReport.mock.calls.length;
+      await act(async () => { await vi.advanceTimersByTimeAsync(60_000); });
+      expect(gateway.getReport).toHaveBeenCalledTimes(secondBudget);
+    } finally { unmount(); client.clear(); vi.useRealTimers(); }
+  });
+
   it("switches account readiness and restores only that account's cached report", async () => {
     const gateway = { triggerSync: vi.fn(), getReport: vi.fn(async ({ socialAccountId }: { socialAccountId: string }) => ({
       ...reportFixture(), scope: { ownerId: "readiness-owner", socialAccountId, platform: "instagram" as const }, ...readiness(socialAccountId === "acc-second" ? "queued" : "collection_not_eligible"),

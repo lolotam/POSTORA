@@ -10,7 +10,7 @@ DECLARE
   v_enabled jsonb; v_policy jsonb; v_normal jsonb; v_ids jsonb; v_authority jsonb;
   v_reason text; v_source text; v_state text; v_action text:='wait'; v_reconnect boolean:=false;
   v_connection text:='verified'; v_connection_reason text; v_permission text:='unknown';
-  v_permission_at timestamptz; v_missing text[]:='{}'; v_required text[];
+  v_permission_at timestamptz; v_verified_at timestamptz; v_missing text[]:='{}'; v_required text[];
   v_credential record; v_route boolean:=false; v_retry timestamptz;
 BEGIN
   -- Internal-only helper; callable snapshots establish their owner first.
@@ -66,6 +66,7 @@ BEGIN
       v_required:=CASE WHEN c.login_kind='direct' THEN ARRAY['instagram_business_manage_insights'] ELSE ARRAY['instagram_manage_insights'] END;
       v_permission_at:=c.scopes_read_at;
       IF c.permission_read_state='ok' AND c.scopes_read_at IS NOT NULL AND c.scopes_read_at<=p_observed_at THEN
+        v_verified_at:=c.scopes_read_at;
         SELECT COALESCE(array_agg(s),'{}') INTO v_missing FROM unnest(v_required) s WHERE NOT (s=ANY(c.granted_scopes));
         v_permission:=CASE WHEN cardinality(v_missing)>0 THEN 'missing' ELSE 'verified' END;
       ELSIF c.permission_read_state='failed' THEN v_permission:='unavailable'; END IF;
@@ -107,25 +108,32 @@ BEGIN
       END IF;
       SELECT * INTO o FROM public.fb_analytics_permission_observations
         WHERE social_account_id=p_account AND user_id=p_owner AND authority=v_authority
-          AND (observed_at AT TIME ZONE 'America/Los_Angeles')::date=(p_observed_at AT TIME ZONE 'America/Los_Angeles')::date;
-      IF FOUND THEN
+          AND observed_at<=p_observed_at;
+      -- Freshness governs admission today; supersession is monotonic across days.
+      IF FOUND AND o.state='verified' THEN v_verified_at:=o.observed_at; END IF;
+      IF FOUND AND (o.observed_at AT TIME ZONE 'America/Los_Angeles')::date=(p_observed_at AT TIME ZONE 'America/Los_Angeles')::date THEN
         v_permission_at:=o.observed_at;
         IF o.state='verified' THEN
           SELECT COALESCE(array_agg(s),'{}') INTO v_missing FROM unnest(ARRAY['read_insights','pages_read_engagement']) s WHERE NOT (s=ANY(o.granted_scopes));
           v_permission:=CASE WHEN cardinality(v_missing)>0 THEN 'missing' ELSE 'verified' END;
         ELSE v_permission:='unavailable'; END IF;
       END IF;
-      -- Provider refusals remain current only for this authority, and until a
-      -- newer successful permission observation supersedes the failed attempt.
-      IF v_connection_reason IS NULL AND COALESCE((p_attempt->>'context_current')::boolean,false)
-        AND p_attempt->>'state'='failed' AND (p_attempt->>'observed_at')::timestamptz<=p_observed_at
-        AND (v_permission IN ('unknown','unavailable') OR (p_attempt->>'observed_at')::timestamptz>=COALESCE(v_permission_at,'-infinity'::timestamptz)) THEN
-        IF p_attempt->>'reason_code'='reauth_required' THEN
-          v_connection:='invalid'; v_connection_reason:='token_invalid';
-        ELSIF p_attempt->>'reason_code'='permission_missing' THEN
-          v_permission:='missing'; v_permission_at:=(p_attempt->>'observed_at')::timestamptz;
-        END IF;
-      END IF;
+    END IF;
+  END IF;
+
+  -- Current authority is established independently of the winning policy reason.
+  -- A newer successful permission read retires a refusal, even on a later day.
+  -- Instagram settles these provider errors as unavailable, Facebook as failed.
+  IF v_connection_reason IS NULL AND COALESCE((p_attempt->>'context_current')::boolean,false)
+    AND ((p_platform='facebook' AND p_attempt->>'state'='failed')
+      OR (p_platform='instagram' AND p_attempt->>'state'='unavailable'))
+    AND (p_attempt->>'observed_at')::timestamptz<=p_observed_at
+    AND (p_attempt->>'observed_at')::timestamptz>=COALESCE(v_verified_at,'-infinity'::timestamptz) THEN
+    IF p_attempt->>'reason_code' IN ('reauth_required','token_invalid') THEN
+      v_connection:='invalid'; v_connection_reason:='token_invalid';
+    ELSIF p_attempt->>'reason_code' IN ('permission_missing','scope_missing') THEN
+      v_permission:='missing'; v_permission_at:=(p_attempt->>'observed_at')::timestamptz;
+      v_missing:='{}';
     END IF;
   END IF;
 

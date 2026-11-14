@@ -3,6 +3,31 @@ import { z } from "https://esm.sh/zod@3.25.76";
 import { resolveRolloutRuntime, RolloutSqlError, SERVICE_ROLE, acquireRolloutLease, releaseRolloutLease } from "../_shared/rolloutIntegrationTestSupport.ts";
 import { parseAnalyticsReport } from "../_shared/analyticsSchema.ts";
 import { handleGetPostAnalytics } from "../n8n-api/serviceProxy.ts";
+import { projectOwnerAnalyticsReadiness } from "../_shared/ownerAnalyticsReadiness.ts";
+
+Deno.test("one precedence table proves real SQL snapshots and the shared TypeScript projection", async () => {
+  const runtime = resolveRolloutRuntime();
+  const inspected = await new Deno.Command("docker", { args: ["inspect", runtime.container], stdout: "piped", stderr: "piped" }).output();
+  assert(inspected.success, "Disposable container inspection failed");
+  const container = JSON.parse(new TextDecoder().decode(inspected.stdout))[0];
+  assertEquals(container.Config.Labels["postora.task"], "postora-db-harness-ci");
+  assert(runtime.database.endsWith("_harness"));
+  assertEquals(await runtime.queryJson("SELECT to_jsonb(current_setting('cron.launch_active_jobs'));"), "off");
+  const source = await Deno.readTextFile(new URL("../../tests/owner_analytics_readiness.sql", import.meta.url));
+  const output = await runtime.exec(source);
+  const cases = output.split(/\r?\n/).filter((line) => line.startsWith("readiness_case:"));
+  assertEquals(cases.length, 42, "Every SQL precedence row must reach the TypeScript consumer");
+  for (const line of cases) {
+    const row = JSON.parse(line.slice("readiness_case:".length));
+    for (const hasData of [false, true]) {
+      const projected = projectOwnerAnalyticsReadiness(row.snapshot, hasData);
+      const expected = row.expected === "awaiting_first_capture" && hasData ? "ready" : row.expected;
+      assertEquals(projected.collection.reason_code, expected, `${row.name}: saved=${hasData}`);
+      assertEquals(projected.permission, row.snapshot.permission, row.name);
+      assertEquals(projected.last_attempt, row.snapshot.last_attempt, row.name);
+    }
+  }
+});
 
 const OWNER = "a1000000-0000-4000-8000-000000000001";
 const PAGE = "a2000000-0000-4000-8000-000000000001";

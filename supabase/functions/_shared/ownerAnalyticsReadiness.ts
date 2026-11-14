@@ -48,7 +48,8 @@ export function parseOwnerAnalyticsReadiness(value: unknown): OwnerAnalyticsRead
   }
   // A positive provider denial may not identify an individual required scope.
   // Accept no scope names only with the matching dated job evidence.
-  const providerDenial = c.reason_source === "job" && record(a) && a.state === "failed" && a.reason_code === "permission_missing"
+  const providerDenial = record(a) && ["failed", "unavailable"].includes(String(a.state))
+    && ["permission_missing", "scope_missing"].includes(String(a.reason_code))
     && instant(a.observed_at) && instant(p.observed_at) && Date.parse(a.observed_at) === Date.parse(p.observed_at);
   if (p.state === "missing" && (p.observed_at === null || p.missing_scopes.length === 0 && !providerDenial)
     || c.reason_code === "permission_missing" && p.state !== "missing"
@@ -62,6 +63,15 @@ export function parseOwnerAnalyticsReadiness(value: unknown): OwnerAnalyticsRead
     retry_at: c.retry_at, support_correlation_id: c.support_correlation_id },
     connection: { state: n.state, reason_code: n.reason_code }, permission: { state: p.state, observed_at: p.observed_at, missing_scopes: p.missing_scopes },
     last_attempt: record(a) ? { state: a.state, reason_code: a.reason_code, observed_at: a.observed_at } : null } as OwnerAnalyticsReadiness;
+}
+
+/** SQL owns eligibility precedence. Saved data can promote only its final fallback. */
+export function projectOwnerAnalyticsReadiness(value: unknown, hasMeasurements: boolean): OwnerAnalyticsReadiness {
+  const readiness = parseOwnerAnalyticsReadiness(value);
+  if (readiness.collection.reason_code === "awaiting_first_capture" && hasMeasurements) {
+    readiness.collection = { ...readiness.collection, state: "ready", reason_code: "ready", next_action: "none" };
+  }
+  return readiness;
 }
 
 export function ownerAnalyticsData(input: { count: number; complete: boolean; lastCapture: string | null; now: string; staleAfterMs: number }): OwnerAnalyticsData {
