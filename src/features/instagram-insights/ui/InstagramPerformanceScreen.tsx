@@ -23,7 +23,7 @@ export function InstagramPerformanceScreen({
   const errorMessages = new Map([
     ["collection_disabled", t("instagram.collectionDisabled", "Instagram insights collection is currently disabled. Contact support to check availability.")],
     ["collection_not_eligible", t("instagram.collectionNotEligible", "This account is not enabled for Instagram insights collection yet.")],
-    ["reconnect_required", t("instagram.reconnectRequired", "Reconnect this Instagram account from Profiles to start collecting its insights.")],
+    ["reconnect_required", t("instagram.reconnectRequired", "This connection needs analytics verification. Contact support for the next step.")],
     ["throttled", t("instagram.syncThrottled", "Too many sync requests. Please wait before trying again.")],
     ["settings_unavailable", t("instagram.insightsUnavailable", "Instagram insights are temporarily unavailable. Please try again later.")],
     ["not_found", t("instagram.accountNotFound", "Instagram account not found or no longer connected.")],

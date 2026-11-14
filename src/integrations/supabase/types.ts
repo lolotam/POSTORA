@@ -11940,6 +11940,16 @@ export type Database = {
         }
         Returns: Json
       }
+      owner_analytics_readiness_snapshot: {
+        Args: {
+          p_account: string
+          p_attempt: Json
+          p_observed_at: string
+          p_owner: string
+          p_platform: string
+        }
+        Returns: Json
+      }
       read_instagram_owner_report_snapshot: {
         Args: {
           p_user_id: string

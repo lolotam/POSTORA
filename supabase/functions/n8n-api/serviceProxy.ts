@@ -1,3 +1,5 @@
+import { analyticsSyncReceipt } from "../_shared/analyticsSyncResult.ts";
+import { awaitWithAbort } from "../_shared/abort.ts";
 // Service-role proxy routes behind the MCP tools list_comments, list_messages,
 // get_post_analytics, generate_caption, generate_hashtags and generate_image.
 // The target functions accept a user JWT or a service-role call carrying
@@ -38,7 +40,7 @@ export interface StoredImage {
 
 export interface ServiceProxyDeps {
   /** `failed` is true when the lookup itself errored, so a failed read never looks like a missing account. */
-  loadAccount(accountId: string): Promise<{ account: ProxyAccount | null; failed: boolean }>;
+  loadAccount(accountId: string, signal?: AbortSignal): Promise<{ account: ProxyAccount | null; failed: boolean }>;
   invoke(functionName: string, body: Record<string, unknown>, timeoutMs: number): Promise<InvokeResult>;
   /** Service-only explicit-owner RPCs; PostgreSQL applies ownership and the shared UI rules. */
   rpc?(name: string, args: Record<string, unknown>): Promise<{ data: unknown; error: { code?: string; message?: string } | null }>;
@@ -440,7 +442,7 @@ export interface AccountQueryClient {
   from(table: string): {
     select(columns: string): {
       eq(column: string, value: string): {
-        maybeSingle(): PromiseLike<{ data: unknown; error: unknown }>;
+        abortSignal(signal: AbortSignal): { maybeSingle(): PromiseLike<{ data: unknown; error: unknown }> };
       };
     };
   };
@@ -448,12 +450,13 @@ export interface AccountQueryClient {
 
 /** Production `loadAccount` over the service-role client. */
 export function supabaseAccountLoader(supabase: AccountQueryClient): ServiceProxyDeps["loadAccount"] {
-  return async (accountId) => {
-    const { data, error } = await supabase
+  return async (accountId, signal = AbortSignal.timeout(READ_TIMEOUT_MS)) => {
+    const { data, error } = await awaitWithAbort(() => supabase
       .from("social_accounts")
       .select("id, user_id, platform, platform_user_id, is_active")
       .eq("id", accountId)
-      .maybeSingle();
+      .abortSignal(signal)
+      .maybeSingle(), signal);
     if (error) {
       console.error("[n8n-api] service proxy: social account lookup failed");
       return { account: null, failed: true };
@@ -468,8 +471,35 @@ function invalidAnalyticsInput(message: string): ProxyResult {
   return proxyError(400, "INVALID_REQUEST", message);
 }
 
+/** Bound all analytics dependencies under one request deadline, including clients that ignore abort. */
+function analyticsDeadlineDeps(deps: ServiceProxyDeps): ServiceProxyDeps {
+  const deadline = Date.now() + READ_TIMEOUT_MS;
+  const signal = AbortSignal.timeout(READ_TIMEOUT_MS);
+  return { ...deps,
+    loadAccount: (id) => awaitWithAbort(() => deps.loadAccount(id, signal), signal),
+    invoke: (name, body, timeout) => awaitWithAbort(() => deps.invoke(name, body, Math.max(1, Math.min(timeout, deadline - Date.now()))), signal),
+  };
+}
+
+/** Both analytics routes use one timeout projection, including aborted DB reads. */
+async function analyticsResult(work: () => Promise<ProxyResult>): Promise<ProxyResult> {
+  try { return await work(); }
+  catch (error) {
+    if (!(error instanceof Error) || !["AbortError", "TimeoutError"].includes(error.name)) throw error;
+    console.warn("[n8n-api] analytics request deadline expired");
+    return fromUpstream("analytics", { status: 504, data: null });
+  }
+}
+export function handleGetAccountAnalytics(deps: ServiceProxyDeps, userId: string, params: URLSearchParams): Promise<ProxyResult> {
+  return analyticsResult(() => getAccountAnalytics(deps, userId, params));
+}
+export function handleTriggerAnalyticsSync(deps: ServiceProxyDeps, userId: string, body: unknown): Promise<ProxyResult> {
+  return analyticsResult(() => triggerAnalyticsSync(deps, userId, body));
+}
+
 /** Dedicated report route selects each platform's supported contract without changing legacy analytics. */
-export async function handleGetAccountAnalytics(deps: ServiceProxyDeps, userId: string, params: URLSearchParams): Promise<ProxyResult> {
+async function getAccountAnalytics(deps: ServiceProxyDeps, userId: string, params: URLSearchParams): Promise<ProxyResult> {
+  deps = analyticsDeadlineDeps(deps);
   const input = Object.fromEntries(params);
   const rawPeriod = params.get("period_days");
   const parsed = accountAnalyticsSchema.safeParse({ ...input,
@@ -498,7 +528,8 @@ export async function handleGetAccountAnalytics(deps: ServiceProxyDeps, userId: 
   return await handleGetPostAnalytics(deps, userId, reportParams);
 }
 
-export async function handleTriggerAnalyticsSync(deps: ServiceProxyDeps, userId: string, rawBody: unknown): Promise<ProxyResult> {
+async function triggerAnalyticsSync(deps: ServiceProxyDeps, userId: string, rawBody: unknown): Promise<ProxyResult> {
+  deps = analyticsDeadlineDeps(deps);
   const parsed = analyticsSyncSchema.safeParse(rawBody);
   if (!parsed.success) return invalidAnalyticsInput("social_account_id must be a Postora account UUID.");
   const owned = await loadOwnedAccount(deps, userId, parsed.data.social_account_id);
@@ -510,15 +541,18 @@ export async function handleTriggerAnalyticsSync(deps: ServiceProxyDeps, userId:
     ? { action: "enqueue", user_id: userId, social_account_id: account.id }
     : { action: "enqueue", user_id: userId, platform: account.platform, accountId: account.id };
   const upstream = await deps.invoke(name, body, READ_TIMEOUT_MS);
-  // Collection refusals such as collection_disabled are meaningful even when the service uses 503.
-  if (upstream.status === 503 && upstream.data && typeof upstream.data === "object") {
-    const payload = asRecord(upstream.data);
-    if (["collection_disabled", "settings_unavailable"].includes(String(payload.error)) ||
-        ["collection_disabled", "not_eligible", "configuration_unavailable"].includes(String(payload.status))) {
-      return { status: upstream.status, body: redactErrorText(stripCredentialUrls(payload)) };
-    }
-  }
-  return fromUpstream(name, upstream);
+  const receipt = analyticsSyncReceipt(upstream.status, upstream.data);
+  const result = fromUpstream(name, upstream);
+  // Preserve old successful job fields. Refusals expose a bounded public receipt;
+  // old free-form messages could contain incorrect reconnect advice.
+  const upstreamBody = asRecord(upstream.data);
+  const payload = receipt.accepted ? asRecord(result.body) : {
+    ...(["collection_disabled", "collection_not_eligible", "settings_unavailable"].includes(String(upstreamBody.error)) ? { error: upstreamBody.error } : {}),
+    ...(Number.isSafeInteger(upstreamBody.retry_after_seconds) && Number(upstreamBody.retry_after_seconds) >= 0 ? { retry_after_seconds: upstreamBody.retry_after_seconds } : {}),
+    ...(typeof upstreamBody.job_id === "string" && isValidUuid(upstreamBody.job_id) ? { job_id: upstreamBody.job_id } : {}),
+  };
+  return { status: upstream.status >= 500 && !["collection_disabled", "settings_unavailable", "audit_unavailable"].includes(receipt.reason_code)
+    ? result.status : upstream.status, body: { ...payload, ...receipt } };
 }
 
 async function competitorRpc(deps: ServiceProxyDeps, name: string, args: Record<string, unknown>): Promise<ProxyResult> {

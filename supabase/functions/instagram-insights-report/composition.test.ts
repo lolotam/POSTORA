@@ -179,7 +179,7 @@ Deno.test("report audit failure keeps canonical refusal reasons and legacy error
   } finally { globalThis.fetch = originalFetch; }
 });
 
-Deno.test("service-role report reads narrow owner status and retains previous-day success", async () => {
+Deno.test("service-role report keeps attempt history without treating job success as a saved measurement", async () => {
   const originalFetch = globalThis.fetch;
   const previousSuccess = "2026-10-28T12:00:00Z";
   globalThis.fetch = async (input, init) => {
@@ -198,7 +198,9 @@ Deno.test("service-role report reads narrow owner status and retains previous-da
     const response = await handler(reportRequest(SERVICE_KEY, { user_id: OWNER_ID }));
     assertEquals(response.status, 200);
     const report = await response.json();
-    assertEquals(Date.parse(report.freshness.lastSuccessAt), Date.parse(previousSuccess));
+    assertEquals(report.freshness.lastSuccessAt, null);
+    assertEquals(report.freshness.status, "never");
+    assertEquals(report.data.state, "empty");
     assertEquals(report.freshness.lastAttemptAt, "2026-10-29T12:00:00.000Z");
     assertEquals(JSON.stringify(report).includes("lease_token"), false);
   } finally {

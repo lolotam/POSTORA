@@ -145,8 +145,8 @@ describe("formatters domain logic", () => {
 
     it("returns human explanation for error/status codes", () => {
       expect(formatReasonExplanation("never_synced")).toBe("Initial collection has not started yet.");
-      expect(formatReasonExplanation("scope_missing")).toContain("permissions are missing");
-      expect(formatReasonExplanation("reauth_required")).toContain("reconnect this Instagram account");
+      expect(formatReasonExplanation("scope_missing")).toContain("Current permissions need verification");
+      expect(formatReasonExplanation("reauth_required")).toContain("Current connection status needs verification");
       expect(formatReasonExplanation("throttled")).toContain("rate limit reached");
       expect(formatReasonExplanation("provider_unavailable")).toContain("temporary service issue");
     });

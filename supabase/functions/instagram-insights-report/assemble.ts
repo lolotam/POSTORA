@@ -1,3 +1,4 @@
+import { projectOwnerAnalyticsReadiness, ownerAnalyticsData } from "../_shared/ownerAnalyticsReadiness.ts";
 /**
  * Pure assembler for the owner Instagram insights report.
  *
@@ -521,7 +522,7 @@ type MediaClassification =
  * video. When the product type is missing the media is unclassified, and
  * an unclassified media is never guessed into a cohort.
  */
-function classify(row: NormalizedMediaRow): MediaClassification {
+export function classifyOwnerMedia(row: { mediaProductType?: string | null }): MediaClassification {
   const productType = row.mediaProductType;
   if (productType === "REELS") return { kind: "supported", format: "reel" };
   if (productType === "FEED") return { kind: "supported", format: "non_reel" };
@@ -974,7 +975,7 @@ export function assembleOwnerReport(input: OwnerReportAssemblyInput): OwnerRepor
   for (const group of groups) {
     const row = group.latest;
     if (row === null) continue;
-    const classification = classify(row);
+    const classification = classifyOwnerMedia(row);
     classified.set(group.mediaId, classification);
     if (classification.kind !== "supported") continue;
     if (row.publishedMs > nowMs) continue;
@@ -1036,7 +1037,11 @@ export function assembleOwnerReport(input: OwnerReportAssemblyInput): OwnerRepor
         group.latestAny.publishedMs <= windowEndMs
       ) {
         coverage.inWindow += 1;
-        coverage.excludedNoCapture += 1;
+        const classification = classifyOwnerMedia(group.latestAny);
+        if (classification.kind === "supported") coverage.excludedNoCapture += 1;
+        else if (classification.kind === "story") coverage.excludedStory += 1;
+        else if (classification.kind === "unsupported") coverage.excludedUnsupported += 1;
+        else coverage.excludedUnknown += 1;
       }
       continue;
     }
@@ -1236,9 +1241,38 @@ export function assembleOwnerReport(input: OwnerReportAssemblyInput): OwnerRepor
       coverage,
     },
     freshness: normalizeFreshness(input.freshness),
-    completeness: normalizeCompleteness(input.completeness),
+    completeness: normalizeCompleteness(coverage.excludedNoCapture > 0 ? {
+      ...input.completeness, coverage: "partial",
+    } : input.completeness),
     lagNote: OWNER_REPORT_LAG_NOTE,
   };
+
+  // Use the exact normalized, resolved report rows before paging. Failed,
+  // superseded, unsupported and future captures cannot manufacture evidence.
+  const numerical = (row: object, fields: readonly string[]) => fields.some((key) => typeof (row as Record<string, unknown>)[key] === "number");
+  const mediaFields = ["views", "reach", "likes", "comments", "saved", "shares", "totalInteractions", "follows", "profileVisits", "replies", "igReelsAvgWatchTimeMs"];
+  const dailyFields = ["reach", "views", "accountsEngaged", "totalInteractions", "likes", "comments", "saves", "shares", "follows", "unfollows"];
+  const measuredMedia = (row: NormalizedMediaRow) => row.status === "ok" && numerical(row, mediaFields);
+  const measuredDay = (row: NormalizedDailyRow | OwnerReportDailyRow) => row.status === "ok" && numerical(row, dailyFields);
+  const measuredProfile = (row: OwnerReportProfileObservation) => row.status === "ok" && (row.followersCount !== null || row.mediaCount !== null);
+  const measuredDays = daily.filter(measuredDay);
+  const observed = [...windowRows.filter(measuredMedia).map((row) => row.capturedAt), ...measuredDays.map((row) => row.capturedAt),
+    ...profiles.filter((row) => measuredProfile(row) && Date.parse(row.observedAt) >= windowStartMs && Date.parse(row.observedAt) <= nowMs).map((row) => row.observedAt),
+    ...(periodReach.status === "available" && periodDays !== 1 ? [periodReach.capturedAt] : [])];
+  const lastCapture = observed.reduce<string | null>((last, at) => last === null || Date.parse(at) > Date.parse(last) ? at : last, null);
+  const expectedDays = (Date.parse(metricDateEnd) - Date.parse(metricDateStart)) / MILLISECONDS_PER_DAY + 1;
+  report.data = ownerAnalyticsData({ count: observed.length, complete: report.completeness.coverage === "complete"
+    && !report.completeness.inventoryTruncated && measuredDays.length === expectedDays,
+    lastCapture, now: report.generatedAt, staleAfterMs: 2 * MILLISECONDS_PER_DAY });
+  if (input.readiness) {
+    // Collection is account-wide; a narrow period or later page cannot reset it.
+    const hasAccountData = groups.some(({ latest: row }) => row !== null && row.publishedMs <= nowMs && classifyOwnerMedia(row).kind === "supported" && measuredMedia(row))
+      || [...dailyByDate.values()].some((row) => row.metricDate <= metricDateEnd && measuredDay(row))
+      || profiles.some((row) => Date.parse(row.observedAt) <= nowMs && measuredProfile(row))
+      || periodTotals.some((row) => row.status === "ok" && row.value !== null && row.untilDate <= metricDateEnd);
+    Object.assign(report, projectOwnerAnalyticsReadiness(input.readiness, hasAccountData));
+    report.freshness.reason = null;
+  }
 
   assertNoNonFiniteNumbers(report, "report");
   return report;

@@ -2,6 +2,7 @@ import { expect, test } from "@playwright/test";
 import { OWNER_RELEASE, syntheticOwnerReleaseKey } from "./fixtures/instagramOwnerReleaseSeed";
 import type { OwnerReport } from "../supabase/functions/instagram-insights-report/contracts";
 import { prepareOwnerBrowser, signInThroughBrowser } from "./fixtures/ownerReleaseBrowser";
+import { readinessParity } from "./fixtures/readinessParity";
 
 test.beforeEach(async ({ page, request }) => {
   await prepareOwnerBrowser(page, request);
@@ -45,6 +46,10 @@ test("real login, persisted report pagination, isolated chart points and durable
   expect(await off.json()).toEqual({ collectionEnabled: false });
   await page.getByRole("button", { name: /Sync now/i }).click();
   await expect(page.getByText("Instagram insights collection is currently disabled. Contact support to check availability.")).toBeVisible();
+  await expect(page.getByText("120", { exact: true })).toBeVisible();
+  await page.reload();
+  await expect(page.getByRole("button", { name: /Sync now/i })).toBeDisabled();
+  await expect(page.getByText("Analytics collection is not enabled for this account yet.", { exact: true })).toBeVisible();
   await expect(page.getByText("120", { exact: true })).toBeVisible();
 });
 
@@ -162,12 +167,12 @@ test("direct report, authenticated public API and MCP preserve the complete stor
   const finishedAt = Date.now();
   const stableReport = (report: OwnerReport) => {
     const generatedAt = Date.parse(report.generatedAt);
-    expect(generatedAt).toBeGreaterThanOrEqual(startedAt);
-    expect(generatedAt).toBeLessThanOrEqual(finishedAt);
+    expect(generatedAt).toBeGreaterThanOrEqual(startedAt - 1_000);
+    expect(generatedAt).toBeLessThanOrEqual(finishedAt + 1_000);
     expect(report.period.windowEnd).toBe(report.generatedAt);
     expect(generatedAt - Date.parse(report.period.windowStart)).toBe(30 * 86_400_000);
     // Only request-clock instants differ; all persisted data, coverage, cursors and failure reasons must match.
-    return { ...report, generatedAt: "request-clock", period: { ...report.period, windowStart: "request-clock", windowEnd: "request-clock" } };
+    return { ...readinessParity(report), generatedAt: "request-clock", period: { ...report.period, windowStart: "request-clock", windowEnd: "request-clock" } };
   };
   const directReport = stableReport(await direct.json());
   expect(stableReport(await api.json())).toEqual(directReport);

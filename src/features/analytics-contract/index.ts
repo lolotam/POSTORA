@@ -6,3 +6,5 @@ export {
 export { ANALYTICS_PERIOD_DAYS, closedAnalyticsPeriods, analyticsWindowForPeriod, analyticsDayBucket } from "../../../supabase/functions/_shared/analyticsCalendar.ts";
 export { ANALYTICS_METRIC_REGISTRY, ANALYTICS_PLATFORM_CONFIGURATION, analyticsDefinitions } from "../../../supabase/functions/_shared/analyticsRegistry.ts";
 export { ANALYTICS_REPORT_SCHEMA, parseAnalyticsReport, normalizeAnalyticsPermalink } from "../../../supabase/functions/_shared/analyticsSchema.ts";
+
+export { OwnerAnalyticsStatus } from "./ui/OwnerAnalyticsStatus";

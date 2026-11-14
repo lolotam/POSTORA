@@ -18,6 +18,7 @@ export function useTriggerInstagramSync({
   const userId = user?.id ?? "anonymous";
 
   return useMutation<TriggerSyncResult, Error, { socialAccountId: string }>({
+    mutationKey: ["instagram-insights-sync", userId],
     mutationFn: async ({ socialAccountId }) => {
       return gateway.triggerSync({ socialAccountId });
     },

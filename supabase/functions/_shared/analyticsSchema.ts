@@ -1,3 +1,4 @@
+import { COLLECTION_REASONS, COLLECTION_STATES, NEXT_ACTIONS, parseOwnerAnalyticsReadiness } from "./ownerAnalyticsReadiness.ts";
 import {
   ANALYTICS_CONTRACT_VERSION, ANALYTICS_METRIC_KEYS, ANALYTICS_PLATFORMS, UNAVAILABLE_REASONS,
   metricDelta, summarizeDailyMetricValues,
@@ -104,7 +105,16 @@ export const ANALYTICS_REPORT_SCHEMA = objectSchema<AnalyticsReport>({
   accountId: { type: "string", pattern: "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$" }, generatedAt: instant, period, previousPeriod: period,
   source: { enum: ["live", "persisted"] }, metrics: array(metricResult), posts, sync,
   truncated: { type: "boolean" }, lastPartialAt: nullable(instant), retryAt: nullable(instant),
+  collection: objectSchema<NonNullable<AnalyticsReport["collection"]>>({ contract_version: literal(2), state: { enum: COLLECTION_STATES }, reason_code: { enum: COLLECTION_REASONS },
+    reason_source: { enum: ["configuration", "rollout_policy", "connection", "capability", "permission", "job", "data"] }, observed_at: instant,
+    next_action: { enum: NEXT_ACTIONS }, reconnect_can_help: { type: "boolean" }, retry_at: nullable(instant), support_correlation_id: { type: "string", pattern: "^[a-zA-Z0-9-]{1,80}$" } }),
+  connection: objectSchema<NonNullable<AnalyticsReport["connection"]>>({ state: { enum: ["verified", "unverified", "invalid"] }, reason_code: nullable({ enum: COLLECTION_REASONS }) }),
+  permission: objectSchema<NonNullable<AnalyticsReport["permission"]>>({ state: { enum: ["verified", "missing", "unknown", "unavailable"] }, observed_at: nullable(instant), missing_scopes: { ...array(text), maxItems: 8 } }),
+  last_attempt: nullable(objectSchema<NonNullable<AnalyticsReport["last_attempt"]>>({ state: text, reason_code: nullable(text), observed_at: nullable(instant) })),
+  data: objectSchema<NonNullable<AnalyticsReport["data"]>>({ state: { enum: ["empty", "partial", "complete", "stale"] }, observation_count: count, coverage: { enum: ["unknown", "partial", "complete"] }, last_successful_capture: nullable(instant) }),
 });
+// Older/live reports remain readable while the additive snapshot rollout completes.
+ANALYTICS_REPORT_SCHEMA.required = ANALYTICS_REPORT_SCHEMA.required!.filter((key) => !["collection", "connection", "permission", "last_attempt", "data"].includes(key));
 
 /** Optional provider metadata must not discard otherwise usable measurements or expose credential-bearing URLs. */
 export function normalizeAnalyticsPermalink(value: string | null | undefined): string | null {
@@ -229,6 +239,7 @@ function syncSemantics(report: AnalyticsReport): boolean {
 export function parseAnalyticsReport(value: unknown): AnalyticsReport {
   if (!matches(value, ANALYTICS_REPORT_SCHEMA)) throw new TypeError("Invalid analytics contract response");
   const report = value as AnalyticsReport;
+  if (report.collection !== undefined || report.connection !== undefined || report.permission !== undefined || report.last_attempt !== undefined) parseOwnerAnalyticsReadiness(report);
   const window = analyticsWindowForPeriod(report.period);
   analyticsWindowForPeriod(report.previousPeriod);
   const pinned = ANALYTICS_PLATFORM_CONFIGURATION[report.platform].providerBucketTimezone;

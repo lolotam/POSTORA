@@ -299,6 +299,22 @@ const COMPLETENESS: OwnerReportCompletenessInput = {
   newestMediaPublishedAt: at(0, 1),
 };
 
+Deno.test("covered inventory with an in-window supported media awaiting capture stays partial", () => {
+  const pending = mediaRow({ mediaId: "pending-in-window", publishedAt: at(0, 12), status: "pending" });
+  const input = buildInput({ request: { periodDays: 1, limit: 20, cursor: null }, mediaSnapshots: [], baselineHistory: [] });
+  assertEquals(assembleOwnerReport(input).data?.state, "complete");
+  const report = assembleOwnerReport({ ...input, mediaSnapshots: [pending] });
+  assertEquals(report.media.coverage.excludedNoCapture, 1);
+  assertEquals(report.completeness.coverage, "partial");
+  assertEquals(report.data?.state, "partial");
+  for (const productType of ["STORY", "AD", null]) {
+    const excluded = { ...pending, mediaProductType: productType };
+    const saved = assembleOwnerReport({ ...input, mediaSnapshots: [excluded] });
+    assertEquals(saved.media.coverage.excludedNoCapture, 0);
+    assertEquals(saved.data?.state, "complete", "unsupported inventory cannot require an owner media capture");
+  }
+});
+
 function buildInput(
   overrides: Partial<OwnerReportAssemblyInput> = {},
 ): OwnerReportAssemblyInput {

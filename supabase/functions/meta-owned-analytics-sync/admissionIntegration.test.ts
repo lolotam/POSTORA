@@ -3,6 +3,33 @@ import { z } from "https://esm.sh/zod@3.25.76";
 import { resolveRolloutRuntime, RolloutSqlError, SERVICE_ROLE, acquireRolloutLease, releaseRolloutLease } from "../_shared/rolloutIntegrationTestSupport.ts";
 import { parseAnalyticsReport } from "../_shared/analyticsSchema.ts";
 import { handleGetPostAnalytics } from "../n8n-api/serviceProxy.ts";
+import { projectOwnerAnalyticsReadiness } from "../_shared/ownerAnalyticsReadiness.ts";
+
+Deno.test("one precedence table proves real SQL snapshots and the shared TypeScript projection", async () => {
+  const runtime = resolveRolloutRuntime();
+  const inspected = await new Deno.Command("docker", { args: ["inspect", runtime.container], stdout: "piped", stderr: "piped" }).output();
+  assert(inspected.success, "Disposable container inspection failed");
+  const container = JSON.parse(new TextDecoder().decode(inspected.stdout))[0];
+  assertEquals(container.Config.Labels["postora.task"], "postora-db-harness-ci");
+  assert(runtime.database.endsWith("_harness"));
+  assertEquals(await runtime.queryJson("SELECT to_jsonb(current_setting('cron.launch_active_jobs'));"), "off");
+  const source = await Deno.readTextFile(new URL("../../tests/owner_analytics_readiness.sql", import.meta.url));
+  const output = await runtime.exec(source);
+  const cases = output.split(/\r?\n/).filter((line) => line.startsWith("readiness_case:"));
+  assertEquals(cases.length, 66, "Every SQL precedence row must reach the TypeScript consumer");
+  for (const line of cases) {
+    const row = JSON.parse(line.slice("readiness_case:".length));
+    for (const hasData of [false, true]) {
+      const projected = projectOwnerAnalyticsReadiness(row.snapshot, hasData);
+      const expected = row.expected === "awaiting_first_capture" && hasData ? "ready" : row.expected;
+      assertEquals(projected.collection.reason_code, expected, `${row.name}: saved=${hasData}`);
+      assertEquals(projected.permission, row.snapshot.permission, row.name);
+      assertEquals(projected.connection, row.snapshot.connection, row.name);
+      assertEquals(projected.collection.reason_source, row.snapshot.collection.reason_source, row.name);
+      assertEquals(projected.last_attempt, row.snapshot.last_attempt, row.name);
+    }
+  }
+});
 
 const OWNER = "a1000000-0000-4000-8000-000000000001";
 const PAGE = "a2000000-0000-4000-8000-000000000001";
@@ -243,6 +270,18 @@ Deno.test("registered admission and dispatch preserve real SQL fences and durabl
           daily: z.array(z.object({ metrics: z.array(z.object({ status: z.string(), value: z.number().nullable() })) })) }).parse(report);
         assertEquals(persisted.daily.length, 2);
         assertEquals(persisted.daily.every((day) => day.metrics.every((cell) => cell.status === "available" && cell.value === 0)), true);
+        const evidence = z.object({ account_has_measurements: z.literal(true), revision: z.number(),
+          posts: z.array(z.object({ post: z.object({ published_at: z.string(), platform_post_id: z.string() }) })),
+          period_posts: z.array(z.unknown()) });
+        const savedSnapshot = (after: string = "") => runtime.queryJson(`SELECT public.read_meta_owned_analytics_history('${platform}','${OWNER}','${accountId}',jsonb_build_object(
+          'since',((clock_timestamp() AT TIME ZONE 'America/Los_Angeles')::date-7)::timestamp AT TIME ZONE 'America/Los_Angeles',
+          'until',(clock_timestamp() AT TIME ZONE 'America/Los_Angeles')::date::timestamp AT TIME ZONE 'America/Los_Angeles' ${after}));`, SERVICE_ROLE);
+        const firstSnapshot = evidence.parse(await savedSnapshot());
+        assertEquals(firstSnapshot.period_posts.length, 1);
+        const firstPost = firstSnapshot.posts[0].post;
+        const afterSnapshot = evidence.parse(await savedSnapshot(`,'after_published_at','${firstPost.published_at}','after_id','${firstPost.platform_post_id}','expected_revision',${firstSnapshot.revision}`));
+        assertEquals(afterSnapshot.posts.length, 0);
+        assertEquals(afterSnapshot.period_posts, firstSnapshot.period_posts, "Real SQL period evidence survives an empty continuation page");
         const beforeReportRequests = capturedRequests.length;
         const canonicalResponse = await reportRequest(platform, accountId);
         const canonical = await canonicalResponse.json();

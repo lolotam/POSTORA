@@ -9,9 +9,48 @@ import {
   parseCompleteness,
 } from "./reportStore.ts";
 import { OwnerReportContractError } from "./contracts.ts";
+import { ReportHistoryUnavailableError } from "./readHistory.ts";
 
 const OWNER_ID = "8f14e45f-ceea-4e7a-9b1c-2d3e4f5a6b7c";
 const ACCOUNT_ID = "a1b2c3d4-e5f6-4a1b-8c2d-3e4f5a6b7c8d";
+
+const readiness: import("../_shared/ownerAnalyticsReadiness.ts").OwnerAnalyticsReadiness = {
+  collection: { contract_version: 2, state: "not_enabled", reason_code: "collection_not_eligible", reason_source: "rollout_policy",
+    observed_at: "2026-11-14T09:00:00Z", next_action: "contact_support", reconnect_can_help: false, retry_at: null, support_correlation_id: "fixture-correlation" },
+  connection: { state: "unverified", reason_code: "bootstrap_required" }, permission: { state: "unknown", observed_at: null, missing_scopes: [] },
+  last_attempt: { state: "partial", reason_code: "scope_missing", observed_at: "2026-11-05T09:00:00Z" },
+};
+
+Deno.test("excluded account retains live readiness independently of history, zero measurements and genuine partial data", async () => {
+  for (const [value, count, state] of [[null, 0, "empty"], [0, 1, "partial"], [3, 1, "partial"]] as const) {
+    const client = createMockClient({ readiness, job: { status: "partial", reason_code: "scope_missing", last_attempt_at: "2026-11-05T09:00:00Z", inventory: { partial: true } },
+      daily: [{ id: "day", user_id: OWNER_ID, social_account_id: ACCOUNT_ID, metric_date: "2026-11-12", provider_date: "2026-11-12",
+        captured_at: "2026-11-13T09:00:00Z", status: "ok", views: value }] });
+    const report = await new ReportStore(client as unknown as ReportStoreClient).loadReportData(ACCOUNT_ID, OWNER_ID,
+      { periodDays: 7, limit: 20, cursor: null }, new Date("2026-11-14T09:00:00Z"));
+    assertEquals(report.collection, readiness.collection);
+    assertEquals(report.permission?.state, "unknown");
+    assertEquals(report.last_attempt?.reason_code, "scope_missing");
+    assertEquals(report.freshness.reason, null);
+    assertEquals(report.data?.state, state);
+    assertEquals(report.data?.observation_count, count);
+    assertEquals(report.freshness.status, count === 0 ? "never" : "partial");
+  }
+});
+
+Deno.test("attempt-only history is never partial and missing capability never means denied scopes", () => {
+  const freshness = parseFreshness({ status: "retry", last_attempt_at: "2026-11-05T12:00:00Z", reason_code: "capability_missing" });
+  assertEquals(freshness.status, "never");
+  assertEquals(freshness.reason, "unknown");
+});
+
+Deno.test("failed snapshot reads and malformed readiness never turn into empty successful reports", async () => {
+  for (const options of [{ accountError: new Error("synthetic database timeout") }, { readiness: null },
+    { readiness: { ...readiness, collection: { ...readiness.collection, reason_code: "permission_missing" } } }]) {
+    const store = new ReportStore(createMockClient(options) as unknown as ReportStoreClient);
+    await assertRejects(() => store.loadReportData(ACCOUNT_ID, OWNER_ID, { periodDays: 7, limit: 20, cursor: null }), ReportHistoryUnavailableError);
+  }
+});
 
 function createMockClient(options: {
   account?: Record<string, unknown> | null;
@@ -20,10 +59,12 @@ function createMockClient(options: {
   daily?: Record<string, unknown>[];
   profiles?: Record<string, unknown>[];
   periodTotals?: Record<string, unknown>[];
+  readiness?: unknown;
+  job?: Record<string, unknown>;
 }) {
   return {
     rpc: () => {
-      const result = { data: { account_id: ACCOUNT_ID, owner_id: OWNER_ID, media: options.media ?? [], daily: options.daily ?? [], profiles: options.profiles ?? [], period_totals: options.periodTotals ?? [], collection: null },
+      const result = { data: { account_id: ACCOUNT_ID, owner_id: OWNER_ID, media: options.media ?? [], daily: options.daily ?? [], profiles: options.profiles ?? [], period_totals: options.periodTotals ?? [], collection: options.job ?? null, ...(options.readiness === undefined ? {} : { readiness: options.readiness }) },
         error: options.account === null ? { code: "MAH02", message: "Not found" } : options.accountError ?? null };
       return { abortSignal: () => Promise.resolve(result) };
     },
@@ -116,6 +157,12 @@ Deno.test("parseCompleteness determines coverage from inventory flags", () => {
   assertEquals(covered.coverage, "complete");
   assertEquals(covered.baselineHistoryComplete, true);
   assertEquals(covered.inventoryTruncated, false);
+  const pending = toMediaSnapshotRow({ id: "pending", ig_media_id: "pending-media", media_product_type: "FEED", status: "pending",
+    published_at: "2026-10-25T10:00:00Z", captured_at: "2026-10-25T11:00:00Z", captured_on: "2026-10-25" });
+  assertEquals(parseCompleteness({ inventory: { window_covered: true } }, [pending]).coverage, "partial");
+  const completed = { ...pending, id: "complete", status: "ok" as const };
+  assertEquals(parseCompleteness({ inventory: { window_covered: true } }, [pending, completed]).coverage, "complete");
+  assertEquals(parseCompleteness({ inventory: { window_covered: true } }, [pending], []).coverage, "complete", "outside the requested window");
 });
 
 Deno.test("ReportStore refuses cross-owner account with ACCOUNT_MISMATCH", async () => {
@@ -261,4 +308,28 @@ Deno.test("all time displays media older than any day-count period", async () =>
 
   assertEquals((await load(365)).media.page.items.length, 0);
   assertEquals((await load("all")).media.page.items.map((item) => item.mediaId), ["m-old"]);
+});
+
+Deno.test("readiness evidence uses resolved supported captures before pagination and independent of period", async () => {
+  const live = { ...readiness, collection: { ...readiness.collection, state: "syncing", reason_code: "awaiting_first_capture", reason_source: "data", next_action: "wait" },
+    connection: { state: "verified", reason_code: null },
+    permission: { state: "verified", observed_at: "2026-11-14T08:00:00Z", missing_scopes: [] } };
+  const row = { id: "old", user_id: OWNER_ID, social_account_id: ACCOUNT_ID, ig_media_id: "media", published_at: "2026-11-10T09:00:00Z",
+    captured_at: "2026-11-12T09:00:00Z", captured_on: "2026-11-12", capture_timezone: "UTC", media_product_type: "REELS", media_type: "VIDEO", status: "ok", views: 0 };
+  const load = (media: Record<string, unknown>[], periodDays: 1 | 7 = 7, cursor: { publishedAt: string; mediaId: string } | null = null) =>
+    new ReportStore(createMockClient({ media, readiness: live }) as unknown as ReportStoreClient).loadReportData(ACCOUNT_ID, OWNER_ID,
+      { periodDays, limit: 1, cursor }, new Date("2026-11-14T09:00:00Z"));
+  for (const extra of [
+    { ...row, id: "new", captured_at: "2026-11-13T09:00:00Z", status: "unavailable", views: null },
+  ]) assertEquals((await load([row, extra])).data?.observation_count, 0, "superseded numbers are not displayed evidence");
+  for (const extra of [ { media_product_type: "STORY" }, { media_type: "AD", media_product_type: "AD" }, { published_at: "2026-11-15T09:00:00Z" } ]) {
+    const report = await load([{ ...row, ...extra }]);
+    assertEquals(report.data?.state, "empty");
+    assertEquals(report.collection?.reason_code, "awaiting_first_capture");
+  }
+  const first = await load([row, { ...row, id: "second", ig_media_id: "second", published_at: "2026-11-09T09:00:00Z", views: null }]);
+  const next = await load([row, { ...row, id: "second", ig_media_id: "second", published_at: "2026-11-09T09:00:00Z", views: null }], 7, first.media.page.nextCursor);
+  assertEquals(next.data, first.data, "period evidence does not change on an empty-valued page");
+  assertEquals((await load([row], 1)).collection?.reason_code, "ready", "account has captured outside the selected window");
+  assertEquals((await load([row], 1)).data?.state, "empty");
 });

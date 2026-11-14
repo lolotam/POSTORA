@@ -30,10 +30,13 @@ Reproduction limitation recorded on 2026-11-03: `npm exec --yes --package=deno@2
 
 ```powershell
 deno --version
+# Optional on desktops where 65435 is already reserved:
+# $env:POSTORA_OWNER_RELEASE_AUTH_PORT = "65437"
+$ownerAuthEndpoint = node --input-type=module -e "import { OWNER_RELEASE } from './e2e/fixtures/instagramOwnerReleaseSettings.mjs'; console.log(new URL(OWNER_RELEASE.authUrl).host)"
 node scripts/prepare-instagram-owner-release.mjs
 node scripts/prepare-instagram-owner-release.mjs --verify-existing
-deno run --no-config --import-map=scripts/ci/deno-analytics.import-map.json --lock=scripts/ci/deno-analytics.lock --frozen --node-modules-dir=none --allow-env=DOCKER_HOST --allow-run=docker --allow-net=127.0.0.1:65435 e2e/fixtures/instagramOwnerReleaseSeed.ts
-deno run --no-config --import-map=scripts/ci/deno-analytics.import-map.json --lock=scripts/ci/deno-analytics.lock --frozen --node-modules-dir=none --allow-env --allow-run=docker,git --allow-net=127.0.0.1:65431,127.0.0.1:65435,127.0.0.1:65436 e2e/fixtures/instagramOwnerReleaseServer.ts
+deno run --no-config --import-map=scripts/ci/deno-analytics.import-map.json --lock=scripts/ci/deno-analytics.lock --frozen --node-modules-dir=none --allow-env=DOCKER_HOST,POSTORA_OWNER_RELEASE_AUTH_PORT --allow-run=docker "--allow-net=$ownerAuthEndpoint" e2e/fixtures/instagramOwnerReleaseSeed.ts
+deno run --no-config --import-map=scripts/ci/deno-analytics.import-map.json --lock=scripts/ci/deno-analytics.lock --frozen --node-modules-dir=none --allow-env --allow-run=docker,git "--allow-net=127.0.0.1:65431,$ownerAuthEndpoint,127.0.0.1:65436" e2e/fixtures/instagramOwnerReleaseServer.ts
 ```
 
 Leave the fixture server running, then in another terminal:
