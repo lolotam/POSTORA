@@ -1,5 +1,6 @@
 import { useCallback, useState } from "react";
 import { AI_PROVIDER_AUTH_QUERY_KEY } from "./useAiProviderAuth";
+import { AI_PROVIDER_HEALTH_QUERY_KEY } from "./queryKeys";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   fetchProviderHealth,
@@ -10,8 +11,7 @@ import {
 
 export type { ProviderHealthChunk, ProviderHealthRow, ProviderHealthSkipped, ProviderHealthStatus } from "@/features/ai-providers/infrastructure/aiProviderHealthGateway";
 
-/** One cache identity for every provider health read. */
-export const AI_PROVIDER_HEALTH_QUERY_KEY = ["ai-provider-health"] as const;
+export { AI_PROVIDER_HEALTH_QUERY_KEY } from "./queryKeys";
 
 /**
  * How many times the same chunk is asked for again when the server could not

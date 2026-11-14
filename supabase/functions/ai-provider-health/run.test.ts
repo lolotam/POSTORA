@@ -579,6 +579,35 @@ Deno.test('second credential lookup failure neither degrades nor alerts the prov
   assertEquals(sent, false);
 });
 
+for (const lookupFailure of ['abort rejection', 'unsettled lookup', 'transport rejection'] as const) {
+  Deno.test(`second credential ${lookupFailure} stays retryable without degradation or alert`, async () => {
+    let reads = 0;
+    let probed = false;
+    let alerted = false;
+    const { ports, recorded, synced } = fakePorts({
+      listApiKeyProviders: async () => [{ provider_code: 'openai', name: 'OpenAI' }],
+      listOAuthConnections: async () => [],
+      resolveApiKey: async (_code, signal) => {
+        if (++reads === 1) return 'key-fixture';
+        if (lookupFailure === 'transport rejection') throw new TypeError('fetch failed');
+        return await new Promise<string>((_resolve, reject) => {
+          if (lookupFailure === 'abort rejection') signal.addEventListener('abort', () => reject(signal.reason), { once: true });
+        });
+      },
+      probeApiKey: async () => { probed = true; },
+      sendAlert: async () => { alerted = true; },
+    });
+    const out = await runHealthChunk(ports, { runId: 'r', chunk: 1, targetBudgetMs: 80, deadlineMs: 1000 });
+    assertEquals(out.done, false);
+    assertEquals(out.results, []);
+    assertEquals(out.skipped.map((row) => row.provider_code), ['openai']);
+    assertEquals(recorded, []);
+    assertEquals(synced, []);
+    assertEquals(probed, false);
+    assertEquals(alerted, false);
+  });
+}
+
 for (const status of [401, 429, 502]) {
   Deno.test(`OAuth refusal preserves safe HTTP ${status} in results and alerts`, async () => {
     const { ports } = fakePorts({ listApiKeyProviders: async () => [],

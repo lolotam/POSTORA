@@ -1,6 +1,7 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { supabase } from '@/integrations/supabase/client';
 import { fetchModelCatalogue } from '@/features/ai-providers/infrastructure/aiModelCatalogueGateway';
+import { AI_PROVIDER_HEALTH_QUERY_KEY } from './ai-config/queryKeys';
 import type {
   AIProvider,
   AIModel,
@@ -209,7 +210,10 @@ export function useToggleProvider() {
       }
       return res.json();
     },
-    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ['ai-config'] }); },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['ai-config'] });
+      queryClient.invalidateQueries({ queryKey: AI_PROVIDER_HEALTH_QUERY_KEY });
+    },
   });
 }
 
@@ -271,6 +275,7 @@ export function useSetServiceKey() {
     },
     onSuccess: () => {
       queryClient.refetchQueries({ queryKey: ['service-keys'] });
+      queryClient.invalidateQueries({ queryKey: AI_PROVIDER_HEALTH_QUERY_KEY });
     },
   });
 }

@@ -154,7 +154,13 @@ async function probeTarget(
       await withSignal(ports.probeOAuth(target, signal), signal);
       return { status: "connected", reason: null, apiKey: null };
     }
-    apiKey = await withSignal(ports.resolveApiKey(target.provider_code, signal), signal);
+    try {
+      apiKey = await withSignal(ports.resolveApiKey(target.provider_code, signal), signal);
+    } catch {
+      // The outer abort can win before the adapter maps its rejection. No
+      // provider was contacted, so every lookup failure remains a read error.
+      throw new ProviderReadError("The API key could not be read");
+    }
     if (!apiKey) {
       // The planner already dropped the providers without a key, so reaching here
       // means the key vanished between the plan and the probe.

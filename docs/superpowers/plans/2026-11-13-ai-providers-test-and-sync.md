@@ -109,7 +109,10 @@ Regression suites: `run.test.ts`, `handler.test.ts`, `deps.test.ts` and SQL heal
 
 `supabase/config.toml` sets `[functions.ai-provider-health] verify_jwt = false`,
 following `process-store-events`. In-handler cron-secret/admin authentication remains
-mandatory. Jobs run at 03:05, 03:12, 03:19 and 03:26 UTC with a shared daily run ID.
+mandatory. Three initial jobs run at 03:05, 03:12 and 03:19 UTC. The fourth recurs
+every seven minutes during 03:00-23:59 UTC to drain unfinished targets and retry
+pending alerts. All calls share the daily run ID; chunk numbers are request labels,
+never offsets.
 
 ## 4. Durable admin alerts
 

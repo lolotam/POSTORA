@@ -105,8 +105,14 @@ END $aph_auth_table$;
 
 DO $aph_auth_rpc$
 BEGIN
+  IF has_function_privilege('authenticated',
+    'public.record_ai_provider_health(text,text,text,text,integer,integer,integer,integer,uuid,uuid)', 'EXECUTE') THEN
+    RAISE EXCEPTION 'FAIL: authenticated has EXECUTE on record_ai_provider_health';
+  END IF;
   BEGIN
-    PERFORM public.record_ai_provider_health('claude','api_key','connected',NULL,0,0,0,10,NULL, (SELECT holder FROM public.cron_run_leases WHERE job = 'ai-provider-health'));
+    -- Literal arguments ensure a protected-table read cannot impersonate RPC denial.
+    PERFORM public.record_ai_provider_health('claude','api_key','connected',NULL,0,0,0,10,NULL,
+      'a4140000-0000-4000-8000-000000000002'::uuid);
     RAISE EXCEPTION 'FAIL: authenticated EXECUTE of record_ai_provider_health was ACCEPTED';
   EXCEPTION WHEN insufficient_privilege THEN
     NULL; -- expected: no EXECUTE grant for authenticated
