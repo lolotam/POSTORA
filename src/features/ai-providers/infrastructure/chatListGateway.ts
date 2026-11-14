@@ -17,7 +17,7 @@ export type ChatTierInput = { category: 'chat'; slot: 'primary' | 'fallback' | '
 export const CHAT_LIST_POLICY_QUERY_KEY = ['ai-chat-list-policy'] as const;
 
 async function invokeChatAction(body: Record<string, unknown>): Promise<unknown> {
-  const { data, error } = await supabase.functions.invoke('ai-config', { body });
+  const { data, error } = await supabase.functions.invoke('ai-config', { body, timeout: 30_000 });
   if (error || data?.error) throw new Error('AI configuration could not be saved or read. Retry; check AI Providers if it remains unavailable.');
   return data;
 }

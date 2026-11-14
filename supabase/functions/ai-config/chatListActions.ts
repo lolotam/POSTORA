@@ -50,7 +50,9 @@ export async function runChatListAction(action: "chat-list-policy" | "set-chat-t
     return Response.json({ success: true });
   } catch (cause) {
     const reason = cause instanceof ChatTierError ? cause.code : "configuration_read_or_write_failed";
-    await deps.logRefusal(reason);
+    // A failed operational log must preserve the original sanitized refusal.
+    try { await deps.logRefusal(reason); }
+    catch { console.warn({ event: "ai_chat_refusal_log_failed", reason }); }
     return Response.json({ error: reason }, { status: cause instanceof ChatTierError ? cause.status : 503 });
   }
 }
@@ -58,19 +60,20 @@ export async function runChatListAction(action: "chat-list-policy" | "set-chat-t
 export function chatActionDeps(admin: SupabaseClient, userId: string): ChatActionDeps {
   return {
     isAdmin: async () => {
-      const { data, error } = await admin.from("user_roles").select("role").eq("user_id", userId).eq("role", "admin").maybeSingle();
+      const { data, error } = await admin.from("user_roles").select("role").eq("user_id", userId).eq("role", "admin").abortSignal(AbortSignal.timeout(10_000)).maybeSingle();
       if (error) throw new Error("Admin check failed");
       return Boolean(data);
     },
     flags: () => readAiTextFlags(admin),
     snapshot: flags => loadChatPolicySnapshot(admin, flags),
     persist: async tier => {
-      const { data, error } = await admin.rpc("write_ai_chat_tier", { p_key: tier.key, p_value: tier.value, p_expected: tier.expected });
+      const { data, error } = await admin.rpc("write_ai_chat_tier", { p_key: tier.key, p_value: tier.value, p_expected: tier.expected }).abortSignal(AbortSignal.timeout(10_000));
       if (error) throw new Error("Chat tier write failed");
       if (data !== true) throw new ChatTierError("configuration_changed_retry");
     },
     logRefusal: async reason => {
-      const { error } = await admin.from("system_logs").insert({ level: "warn", category: "ai", source: "ai-config", message: "Chat configuration refused", user_id: userId, metadata: { reason } });
+      // Readiness may have exhausted its budget; logging gets only 250ms more.
+      const { error } = await admin.from("system_logs").insert({ level: "warn", category: "ai", source: "ai-config", message: "Chat configuration refused", user_id: userId, metadata: { reason } }).abortSignal(AbortSignal.timeout(250));
       if (error) console.warn({ event: "ai_chat_refusal_log_failed", reason });
     },
   };

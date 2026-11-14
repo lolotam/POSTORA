@@ -35,7 +35,7 @@ describe("tier setters and auth_method", () => {
     client.setQueryData(CHAT_LIST_POLICY_QUERY_KEY, { enabled: true, groups: [] });
     const { result } = renderHook(() => useSetter(), { wrapper });
     await result.current.mutateAsync({ category: 'chat', provider_code: 'claude', model_id: 'same', auth_method: 'oauth' });
-    expect(invoke).toHaveBeenCalledWith('ai-config', { body: { action: 'set-chat-tier', category: 'chat', slot, provider_code: 'claude', model_id: 'same', auth_method: 'oauth' } });
+    expect(invoke).toHaveBeenCalledWith('ai-config', { body: { action: 'set-chat-tier', category: 'chat', slot, provider_code: 'claude', model_id: 'same', auth_method: 'oauth' }, timeout: 30_000 });
     expect(upsert).not.toHaveBeenCalled();
   });
 
