@@ -65,6 +65,49 @@ Deno.test("lost install or permission replies reconcile durable receipt without 
     assertEquals(JSON.stringify(outcome).includes("capture"), false);
   }
 });
+
+Deno.test("successful verification and permission bodies may use the existing eight-second request budget", async () => {
+  for (const slowRequest of ["/debug_token", "/me/permissions"]) {
+    const test = fixture();
+    const fetcher = test.input.fetcher;
+    test.input.fetcher = async (request, init) => {
+      const response = await fetcher(request, init);
+      if (!new URL(String(request)).pathname.endsWith(slowRequest)) return response;
+      const bytes = new Uint8Array(await response.arrayBuffer());
+      return new Response(new ReadableStream({ async start(controller) {
+        await new Promise((resolve) => setTimeout(resolve, 4_200));
+        controller.enqueue(bytes);
+        controller.close();
+      } }));
+    };
+    const outcome = await runLegacyBootstrap(test.input);
+    assertEquals(outcome.accounts[0].state, "ready", slowRequest);
+    assertEquals(test.counters(), { installs: 1, calls: 5 });
+  }
+});
+
+Deno.test("inspection and usage persistence cannot outlive the provider's remaining request budget", async () => {
+  for (const stalled of ["body", "usage_write"]) {
+    const test = fixture();
+    const rpc = test.input.rpc;
+    let stopped: AbortSignal | undefined;
+    test.input.rpc = (name, args, signal) => {
+      if (name !== "record_analytics_legacy_bootstrap_usage") return rpc(name, args, signal);
+      stopped = signal;
+      return new Promise(() => {});
+    };
+    test.input.fetcher = async () => {
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      return stalled === "body" ? new Response(new ReadableStream({ start() {} }))
+        : Response.json({ data: {} }, { headers: { "x-app-usage": '{"call_count":20}' } });
+    };
+    const started = Date.now();
+    const outcome = await runLegacyBootstrap({ ...test.input, deadline: started + 5_250 });
+    assertEquals(outcome.accounts[0].reason_code, "provider_error");
+    assertEquals(Date.now() - started < 750, true);
+    if (stalled === "usage_write") assertEquals(stopped?.aborted, true);
+  }
+});
 Deno.test("malformed and empty permission reads have distinct durable outcomes", async () => {
   for (const [permissions, expected] of [[{}, "permission_pending"], [{ data: [] }, "permissions_missing"]] as const) {
     const test = fixture({ permissions });

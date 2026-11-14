@@ -31,13 +31,15 @@ Deno.test({ name: "registered worker reaches real capture/install/permission SQL
   let oldSettings = "";
   let installs = 0;
   let providerCalls = 0;
+  const userToken = crypto.randomUUID();
+  const pageToken = crypto.randomUUID();
   try {
     oldSettings = await sql("SELECT jsonb_object_agg(key,value) FROM public.app_settings WHERE key LIKE 'analytics_legacy_bootstrap_%'");
     await sql(`BEGIN;
       INSERT INTO auth.users(id,email) VALUES('${owner}','${owner}@example.invalid');
       INSERT INTO public.social_accounts(id,user_id,platform,platform_user_id,platform_username,access_token,account_metadata,ig_auth_type)
-      VALUES('${page}','${owner}','facebook','100701','fixture_page',gen_random_uuid()::text,jsonb_build_object('user_token',gen_random_uuid()::text),NULL),
-        ('${instagram}','${owner}','instagram','178701','fixture_ig',gen_random_uuid()::text,'{"facebook_page_id":"100701"}','facebook_page');
+      VALUES('${page}','${owner}','facebook','100701','fixture_page','${pageToken}',jsonb_build_object('user_token','${userToken}'::text),NULL),
+        ('${instagram}','${owner}','instagram','178701','fixture_ig','${pageToken}','{"facebook_page_id":"100701"}','facebook_page');
       UPDATE public.app_settings SET value='true' WHERE key='analytics_legacy_bootstrap_enabled';
       UPDATE public.app_settings SET value=jsonb_build_object('version',1,'account_ids',jsonb_build_array('${instagram}'),
         'max_accounts_per_run',5,'max_attempts_per_account_per_day',3) WHERE key='analytics_legacy_bootstrap_policy';
@@ -52,8 +54,20 @@ Deno.test({ name: "registered worker reaches real capture/install/permission SQL
       { id: "300701" }, { data: [{ id: "100701" }] }, { id: "100701", instagram_business_account: { id: "178701" } },
       { data: [{ permission: "instagram_manage_insights", status: "granted" }] },
     ];
-    const outcome = await runLegacyBootstrap({ rpc, apps: { facebook: { id: "200701", secret: crypto.randomUUID() }, instagram: { id: "200702", secret: crypto.randomUUID() } },
-      fetcher: async () => { providerCalls++; return Response.json(replies.shift()); } });
+    const facebookApp = { id: "200701", secret: crypto.randomUUID() };
+    const outcome = await runLegacyBootstrap({ rpc, apps: { facebook: facebookApp, instagram: { id: "200702", secret: crypto.randomUUID() } },
+      fetcher: async (request, init) => {
+        providerCalls++;
+        const url = new URL(String(request));
+        const authorization = new Headers(init?.headers).get("Authorization");
+        if (url.pathname.endsWith("/debug_token")) {
+          assertEquals(url.searchParams.get("input_token") === userToken, true);
+          assertEquals(authorization === `Bearer ${facebookApp.id}|${facebookApp.secret}`, true);
+        } else if (url.pathname.endsWith("/me/permissions")) {
+          assertEquals(url.searchParams.get("access_token") === userToken, true);
+        } else assertEquals(authorization === `Bearer ${userToken}`, true);
+        return Response.json(replies.shift());
+      } });
     assertEquals(outcome.accounts[0].state, "ready");
     assertEquals(installs, 1);
     assertEquals(providerCalls, 5);
@@ -62,7 +76,13 @@ Deno.test({ name: "registered worker reaches real capture/install/permission SQL
     // Exercise the real post-bootstrap SQL payload through the runtime validators,
     // including the provenance label those readers deliberately do not project.
     const credential = JSON.parse(await sql(`SELECT public.read_facebook_user_account_credential('${owner}','${instagram}')`));
-    assertEquals(parseFacebookUserAccountCredential("read_facebook_user_account_credential", credential).found, true);
+    const parsedCredential = parseFacebookUserAccountCredential("read_facebook_user_account_credential", credential);
+    assertEquals(parsedCredential.found, true);
+    assertEquals(parsedCredential.token === userToken, true);
+    assertEquals(parsedCredential.credentialKind, "facebook_user");
+    // The account reader intentionally omits provider identity; verify it at the installed grant.
+    assertEquals(await sql(`SELECT provider_user_id FROM public.facebook_user_credentials WHERE id='${parsedCredential.credentialId}'`), "300701");
+    assertEquals(await sql(`SELECT access_token='${pageToken}' FROM public.social_accounts WHERE id='${instagram}'`), "t");
     const capability = JSON.parse(await sql(`SELECT public.read_instagram_account_capability('${instagram}','${owner}')`));
     assertEquals(parseInstagramAccountCapability("read_instagram_account_capability", capability).scopesAuthoritative, true);
     assertEquals(await sql(`SELECT evidence_source FROM public.facebook_user_credential_bindings WHERE social_account_id='${instagram}'`), "verified_legacy_bootstrap");

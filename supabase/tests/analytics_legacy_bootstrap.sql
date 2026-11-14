@@ -373,6 +373,89 @@ BEGIN
 END;
 $compatibility_grant_with_facebook_source$;
 
+DO $eligible_protected_source$
+DECLARE owner_id uuid:='ab030000-0000-4000-8000-000000000001';target uuid;page_account uuid;
+ target_credential uuid;source_credential uuid;capture jsonb;outcome jsonb;scenario text;source_token text;
+BEGIN
+ -- A trusted but unusable target must take verification of the usable source,
+ -- not permission-only repair of its old binding. No legacy metadata fallback exists.
+ FOREACH scenario IN ARRAY ARRAY['expired','both_usable','wrong_provider'] LOOP
+  target:=gen_random_uuid();page_account:=gen_random_uuid();target_credential:=gen_random_uuid();source_credential:=gen_random_uuid();source_token:=gen_random_uuid()::text;
+  INSERT INTO public.social_accounts(id,user_id,platform,platform_user_id,platform_username,access_token,account_metadata,ig_auth_type)
+  VALUES(page_account,owner_id,'facebook','100901','source',gen_random_uuid()::text,'{}',NULL),
+   (target,owner_id,'instagram','178901','target',gen_random_uuid()::text,'{"facebook_page_id":"100901"}','facebook_page');
+  INSERT INTO public.facebook_user_credentials(id,user_id,token,provider_user_id,provenance_source,provenance_captured_at,token_expires_at,lifecycle)
+  VALUES(target_credential,owner_id,gen_random_uuid()::text,'300001','oauth_exchange',clock_timestamp(),
+    CASE WHEN scenario IN ('expired','wrong_provider') THEN clock_timestamp()-interval '1 second' ELSE clock_timestamp()+interval '1 hour' END,
+    'active'),
+   (source_credential,owner_id,source_token,CASE WHEN scenario='wrong_provider' THEN '300999' ELSE '300001' END,'oauth_exchange',clock_timestamp(),clock_timestamp()+interval '1 hour','active');
+  INSERT INTO public.facebook_user_credential_bindings(social_account_id,user_id,platform,credential_id,evidence_source,
+   verified_facebook_user_id,verified_facebook_page_id,verified_instagram_user_id,connection_version)
+  VALUES(target,owner_id,'instagram',target_credential,'oauth_exchange','300001','100901','178901',
+    public.facebook_user_credential_allocate_connection_version(target,owner_id,'instagram')),
+   (page_account,owner_id,'facebook',source_credential,'oauth_exchange',CASE WHEN scenario='wrong_provider' THEN '300999' ELSE '300001' END,NULL,NULL,
+    public.facebook_user_credential_allocate_connection_version(page_account,owner_id,'facebook'));
+  INSERT INTO public.instagram_account_capabilities(social_account_id,user_id,login_kind,credential_generation,credential_updated_at)
+  VALUES(target,owner_id,'page_linked',1,clock_timestamp());
+  capture:=pg_temp.bootstrap_begin(target);
+  IF scenario='both_usable' THEN
+   ASSERT capture->>'state'='permission_pending','prefer eligible target authority';
+   ASSERT (SELECT source_credential_id=target_credential FROM public.analytics_legacy_bootstrap_jobs WHERE social_account_id=target);
+  ELSE
+   ASSERT capture->>'state'='verifying',scenario||': usable source requires verification before permission repair';
+   ASSERT NOT (capture->>'installed')::boolean;
+   ASSERT capture->'capture'->>'token'=source_token,'capture must select the protected User token';
+   ASSERT (SELECT source_credential_id=source_credential AND source_kind='protected' FROM public.analytics_legacy_bootstrap_jobs WHERE social_account_id=target);
+   outcome:=pg_temp.bootstrap_commit(capture);
+   IF scenario='wrong_provider' THEN
+    ASSERT outcome->>'reason_code'='identity_mismatch','source fallback cannot replace a different verified identity';
+    ASSERT (SELECT credential_id=target_credential FROM public.facebook_user_credential_bindings WHERE social_account_id=target);
+   ELSE
+    ASSERT outcome->>'state'='permission_pending';
+    ASSERT (SELECT credential_id=source_credential FROM public.facebook_user_credential_bindings WHERE social_account_id=target),'install must attach selected source';
+    ASSERT (SELECT credential_generation=2 FROM public.instagram_account_capabilities WHERE social_account_id=target),'replacement must fence the old generation';
+    ASSERT public.analytics_bootstrap_binding_verified(target);
+    ASSERT NOT EXISTS(SELECT 1 FROM public.facebook_user_credentials WHERE id=target_credential),'remove only the now-unbound expired grant';
+   END IF;
+  END IF;
+  ASSERT (SELECT token=source_token AND revision=1 FROM public.facebook_user_credentials WHERE id=source_credential),'source grant must remain unchanged';
+  DELETE FROM public.social_accounts WHERE id IN(target,page_account);
+ END LOOP;
+END;
+$eligible_protected_source$;
+
+DO $usage_cooldown$
+DECLARE capture jsonb;run_id uuid;bucket text:=encode(extensions.digest('owned_analytics:app:facebook:200001','sha256'),'hex');
+ original_pause timestamptz;reported timestamptz;writer text;
+BEGIN
+ DELETE FROM public.analytics_legacy_bootstrap_jobs WHERE social_account_id='ab030000-0000-4000-8000-000000000014';
+ capture:=pg_temp.bootstrap_begin('ab030000-0000-4000-8000-000000000014');
+ run_id:=(capture->>'run_id')::uuid;
+ ASSERT public.permit_analytics_legacy_bootstrap(run_id,(capture->>'job_id')::uuid,(capture->>'lease_id')::uuid,(capture->>'revision')::bigint,'200001');
+ FOREACH writer IN ARRAY ARRAY['bootstrap','collection'] LOOP
+  PERFORM public.record_analytics_legacy_bootstrap_usage(run_id,(capture->>'job_id')::uuid,85,NULL,'200001');
+  SELECT throttled_until,last_reported_at INTO original_pause,reported FROM public.instagram_provider_throttle_buckets WHERE bucket_key=bucket;
+  ASSERT original_pause>clock_timestamp()+interval '4 minutes';
+  IF writer='bootstrap' THEN
+   PERFORM public.record_analytics_legacy_bootstrap_usage(run_id,(capture->>'job_id')::uuid,20,NULL,'200001');
+  ELSE
+   PERFORM public.record_instagram_provider_throttle_http(bucket,20,NULL,NULL,NULL,NULL);
+  END IF;
+  ASSERT (SELECT usage_percent=20 AND CASE WHEN writer='collection' THEN last_reported_at=transaction_timestamp() ELSE last_reported_at>=reported END
+   AND throttled_until=original_pause
+   FROM public.instagram_provider_throttle_buckets WHERE bucket_key=bucket),writer||': latest low usage must preserve, but never renew, the prior pause';
+  ASSERT NOT public.permit_analytics_legacy_bootstrap(run_id,(capture->>'job_id')::uuid,(capture->>'lease_id')::uuid,(capture->>'revision')::bigint,'200001'),'low usage cannot cancel an active pause';
+  -- Model passage beyond the original cooldown without sleeping or changing production clocks.
+  UPDATE public.analytics_legacy_bootstrap_run SET pause_until=clock_timestamp()-interval '1 second';
+  UPDATE public.instagram_provider_throttle_buckets SET throttled_until=clock_timestamp()-interval '1 second',last_reported_at=clock_timestamp()-interval '6 minutes' WHERE bucket_key=bucket;
+  ASSERT public.permit_analytics_legacy_bootstrap(run_id,(capture->>'job_id')::uuid,(capture->>'lease_id')::uuid,(capture->>'revision')::bigint,'200001');
+  PERFORM public.record_analytics_legacy_bootstrap_usage(run_id,(capture->>'job_id')::uuid,20,NULL,'200001');
+  ASSERT public.permit_analytics_legacy_bootstrap(run_id,(capture->>'job_id')::uuid,(capture->>'lease_id')::uuid,(capture->>'revision')::bigint,'200001'),'low report after cooldown cannot resurrect high usage';
+ END LOOP;
+ DELETE FROM public.instagram_provider_throttle_buckets WHERE bucket_key=bucket;
+END;
+$usage_cooldown$;
+
 DO $all_authority_readers$
 DECLARE owner_id uuid:='ab030000-0000-4000-8000-000000000001';target uuid;credential uuid;capture jsonb;projection jsonb;
 BEGIN

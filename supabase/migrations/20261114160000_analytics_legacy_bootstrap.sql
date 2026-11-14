@@ -253,8 +253,13 @@ BEGIN
   SELECT * INTO source FROM public.social_accounts WHERE user_id=a.user_id AND platform='facebook' AND platform_user_id=page
    ORDER BY id LIMIT 1;
  END IF;
+ -- Prefer the target only among usable grants, before discovering the lock set
+ -- and capturing its fence. A source fallback still requires provider verification.
  SELECT b.credential_id INTO credential FROM public.facebook_user_credential_bindings b
-  WHERE b.user_id=a.user_id AND b.social_account_id IN(a.id,source.id) ORDER BY (b.social_account_id=a.id) DESC LIMIT 1;
+  JOIN public.facebook_user_credentials c ON c.id=b.credential_id AND c.user_id=b.user_id
+  WHERE b.user_id=a.user_id AND b.social_account_id IN(a.id,source.id) AND c.lifecycle='active'
+   AND (c.token_expires_at IS NULL OR c.token_expires_at>clock_timestamp()) AND NULLIF(btrim(c.token),'') IS NOT NULL
+  ORDER BY (b.social_account_id=a.id) DESC LIMIT 1;
  SELECT array_agg(DISTINCT id ORDER BY id) INTO bound_ids FROM (
   SELECT a.id UNION SELECT source.id UNION SELECT b.social_account_id FROM public.facebook_user_credential_bindings b
    WHERE b.credential_id=credential AND b.user_id=a.user_id) all_accounts WHERE id IS NOT NULL;
@@ -277,7 +282,7 @@ BEGIN
  existing_authority:=EXISTS(SELECT 1 FROM public.instagram_account_capabilities cap WHERE cap.social_account_id=a.id
   AND cap.credential_generation>0 AND cap.credential_updated_at IS NOT NULL AND candidate_source IN ('direct','protected') AND
    (cap.login_kind='direct' OR EXISTS(SELECT 1 FROM public.facebook_user_credential_bindings b JOIN public.facebook_user_credentials c ON c.id=b.credential_id AND c.user_id=b.user_id
-    WHERE b.social_account_id=a.id AND b.user_id=a.user_id AND b.verified_facebook_user_id=c.provider_user_id AND
+    WHERE b.social_account_id=a.id AND b.user_id=a.user_id AND c.id=credential AND b.verified_facebook_user_id=c.provider_user_id AND
      b.verified_instagram_user_id=a.platform_user_id AND b.verified_facebook_page_id=page AND
      (b.evidence_source IN ('oauth_exchange','token_refresh') OR public.analytics_bootstrap_binding_verified(a.id)))));
  INSERT INTO public.analytics_legacy_bootstrap_jobs(social_account_id,user_id,platform,login_kind,idempotency_key)
@@ -286,7 +291,7 @@ BEGIN
  current_installed:=existing_authority OR (a.platform='facebook' AND candidate_source='protected' AND EXISTS(
   SELECT 1 FROM public.facebook_user_credential_bindings b JOIN public.facebook_user_credentials c ON c.id=b.credential_id AND c.user_id=b.user_id
    JOIN public.facebook_user_credential_connection_fences f ON f.social_account_id=b.social_account_id AND f.user_id=b.user_id AND f.platform=b.platform
-   WHERE b.social_account_id=a.id AND b.user_id=a.user_id AND b.connection_version=f.connection_version
+   WHERE b.social_account_id=a.id AND b.user_id=a.user_id AND c.id=credential AND b.connection_version=f.connection_version
     AND b.verified_facebook_user_id=c.provider_user_id AND c.provider_user_id IS NOT NULL AND
      (b.evidence_source IN ('oauth_exchange','token_refresh') OR public.analytics_bootstrap_binding_verified(a.id))));
  IF current_installed IS DISTINCT FROM j.installed THEN
@@ -457,11 +462,12 @@ BEGIN
  candidate:=CASE WHEN j.source_kind='protected' THEN c.token WHEN j.source_kind='direct' THEN a.access_token ELSE source.account_metadata->>'user_token' END;
  IF NULLIF(candidate,'') IS NULL THEN RAISE EXCEPTION 'BOOTSTRAP_CREDENTIAL_MISSING'; END IF;
  binding_trusted:=COALESCE(b.evidence_source IN ('oauth_exchange','token_refresh','verified_legacy_bootstrap')
-   AND j.source_kind='protected' AND c.provider_user_id IS NOT NULL AND c.provider_user_id=b.verified_facebook_user_id,false);
+   AND j.source_kind='protected' AND b.credential_id=c.id AND c.provider_user_id IS NOT NULL AND c.provider_user_id=b.verified_facebook_user_id,false);
  IF j.login_kind='page_linked' THEN
+  previous_credential:=b.credential_id;
   -- Upgrade an unverified compatibility member onto an isolated verified grant;
   -- never mutate the old shared secret or its remaining siblings.
-  IF c.id IS NULL OR c.provider_user_id IS NULL OR j.source_kind='legacy_page' THEN previous_credential:=c.id;c.id:=gen_random_uuid();c.revision:=1; END IF;
+  IF c.id IS NULL OR c.provider_user_id IS NULL OR j.source_kind='legacy_page' THEN c.id:=gen_random_uuid();c.revision:=1; END IF;
   IF NOT binding_trusted THEN
    connection:=public.facebook_user_credential_allocate_connection_version(a.id,a.user_id,a.platform);
   ELSE connection:=b.connection_version; END IF;
@@ -655,8 +661,11 @@ BEGIN
   'instagram_discovery:'||p_app_id||':'||credential::text]) prefix WHERE prefix IS NOT NULL LOOP
   INSERT INTO public.instagram_provider_throttle_buckets(bucket_key,usage_percent,throttled_until,last_reported_at)
    VALUES(bucket,p_usage,until_time,clock_timestamp())
-  ON CONFLICT(bucket_key) DO UPDATE SET usage_percent=GREATEST(public.instagram_provider_throttle_buckets.usage_percent,EXCLUDED.usage_percent),
-   throttled_until=GREATEST(public.instagram_provider_throttle_buckets.throttled_until,EXCLUDED.throttled_until),last_reported_at=EXCLUDED.last_reported_at;
+  -- Match record_instagram_provider_throttle: usage and its timestamp are one
+  -- latest sample; only the explicit pause is monotonic across concurrent writers.
+  ON CONFLICT(bucket_key) DO UPDATE SET usage_percent=EXCLUDED.usage_percent,
+   throttled_until=GREATEST(public.instagram_provider_throttle_buckets.throttled_until,EXCLUDED.throttled_until),
+   last_reported_at=EXCLUDED.last_reported_at,updated_at=EXCLUDED.last_reported_at;
  END LOOP;
 END;
 $fn$;

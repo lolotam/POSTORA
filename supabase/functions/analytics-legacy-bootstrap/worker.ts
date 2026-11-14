@@ -23,10 +23,10 @@ export type BootstrapProjection = z.infer<typeof projectionSchema>;
 
 /** Unknown mutation outcomes are reconciled; they are never transport-retried. */
 export function bootstrapRpc(input: BootstrapWorkerInput, deadline: number) {
-  return async (name: string, args: Record<string, unknown>): Promise<unknown> => {
+  return async (name: string, args: Record<string, unknown>, parent?: AbortSignal): Promise<unknown> => {
     const remaining = deadline - Date.now();
     if (remaining <= 0) throw new BootstrapFailure("budget_exhausted");
-    const signal = AbortSignal.timeout(Math.min(4_000, remaining));
+    const signal = AbortSignal.any([AbortSignal.timeout(Math.min(4_000, remaining)), ...(parent ? [parent] : [])]);
     let envelope: unknown;
     try { envelope = await awaitWithAbort(() => input.rpc(name, args, signal), signal); }
     catch { throw new BootstrapFailure("provider_error"); }
@@ -44,11 +44,13 @@ function usageFetcher(context: { input: BootstrapWorkerInput; rpc: Rpc; runId: s
   return async (request, init) => {
     const response = await (input.fetcher ?? fetch)(request, init);
     const parent = init?.signal ?? (request instanceof Request ? request.signal : undefined);
-    const signal = AbortSignal.any([AbortSignal.timeout(Math.max(1, Math.min(4_000, deadline - Date.now()))), ...(parent ? [parent] : [])]);
+    // The adapter's signal already covers headers and body. Inspection and its
+    // durable usage write must share that remaining budget, without a new ceiling.
+    const signal = AbortSignal.any([AbortSignal.timeout(Math.max(1, deadline - Date.now())), ...(parent ? [parent] : [])]);
     const { usage, pause, retryAt: retry } = await metaResponseThrottle(response, signal);
     if (usage || pause) {
       const recorded = await rpc("record_analytics_legacy_bootstrap_usage", { p_run_id: runId, p_job_id: job.job_id,
-        p_usage: usage, p_retry_at: retry, p_app_id: input.apps[job.capture.login_kind === "direct" ? "instagram" : "facebook"].id });
+        p_usage: usage, p_retry_at: retry, p_app_id: input.apps[job.capture.login_kind === "direct" ? "instagram" : "facebook"].id }, signal);
       if (recorded !== null) throw new BootstrapFailure("provider_error");
       if (pause) {
         if (retry) recordRetry(retry);

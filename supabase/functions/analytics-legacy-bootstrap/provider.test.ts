@@ -31,12 +31,23 @@ Deno.test("complete same-owner Page and linked IG proof returns identifiers only
   assertEquals(Object.hasOwn(verified, "token"), false);
 });
 Deno.test("partial or foreign-host Page pagination cannot establish authority", async () => {
-  for (const next of ["https://evil.invalid/me/accounts", "https://graph.facebook.com/v22.0/me/accounts?after=x"]) {
+  for (const next of ["https://evil.invalid/me/accounts", "https://graph.facebook.com/v22.0/me/accounts?after=x",
+    "https://graph.facebook.com/v22.0/me/feed?after=x&fields=access_token"]) {
     const replies = validResponses();
+    const requested: URL[] = [];
     replies[2] = { data: [{ id: "100001" }], paging: { next, cursors: { after: "x" } } };
     replies.splice(3, 0, { data: [], paging: { next, cursors: { after: "x" } } });
-    await assertRejects(() => verifyLegacyAuthority({ capture: capture(), app, fetcher: provider(replies),
+    await assertRejects(() => verifyLegacyAuthority({ capture: capture(), app, fetcher: async (request) => {
+      requested.push(new URL(String(request)));
+      return Response.json(replies.shift());
+    },
       deadline: Date.now() + 10_000, beforeRequest: async () => {} }), BootstrapFailure);
+    assertEquals(requested.length >= 3, true);
+    for (const url of requested) {
+      assertEquals(url.origin, "https://graph.facebook.com");
+      assertEquals(["/v22.0/debug_token", "/v22.0/me", "/v22.0/me/accounts"].includes(url.pathname), true);
+      if (url.pathname.endsWith("/accounts")) assertEquals(url.searchParams.get("fields"), "id");
+    }
   }
 });
 
