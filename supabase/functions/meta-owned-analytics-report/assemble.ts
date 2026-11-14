@@ -6,6 +6,7 @@ import { normalizeAnalyticsPermalink, parseAnalyticsReport } from "../_shared/an
 import type { AnalyticsCalendarWindow } from "../_shared/analyticsCalendar.ts";
 import { PersistedReportRefused, type StoredAnalyticsCell, type StoredAnalyticsSnapshot } from "./store.ts";
 
+type Evidence = (cell: StoredAnalyticsCell) => void;
 type CompleteMetric = Exclude<MetricValue, { status: "partial" }>;
 type Measurement = { metric: MetricValue; observedAt: string | null; series: CompleteMetric[] };
 
@@ -17,7 +18,7 @@ function exactCell(cells: readonly StoredAnalyticsCell[], key: string): StoredAn
   if (matching.length > 1) throw new PersistedReportRefused("invalid_contract", 503);
   return matching[0] ?? null;
 }
-function cellMetric(cell: StoredAnalyticsCell | null, definition: MetricDefinition): CompleteMetric {
+function cellMetric(cell: StoredAnalyticsCell | null, definition: MetricDefinition, evidence?: Evidence): CompleteMetric {
   if (!cell) return unavailableMetric("not_collected");
   if (cell.status === "unavailable") {
     if (cell.value !== null || cell.reason === null) throw new PersistedReportRefused("invalid_contract", 503);
@@ -27,10 +28,11 @@ function cellMetric(cell: StoredAnalyticsCell | null, definition: MetricDefiniti
   if (cell.api_version !== definition.apiVersion || cell.provider_metric !== definition.providerMetric
     || cell.source_ref !== (definition.platform === "facebook" ? "meta_graph_v25" : "threads_graph_v1")) return unavailableMetric("capability_unverified");
   if (cell.window_kind !== definition.windowKind) return unavailableMetric("window_mismatch");
+  evidence?.(cell);
   return { status: "available", value: cell.value };
 }
 
-function dailyMeasurement(definition: MetricDefinition, stored: StoredAnalyticsSnapshot, window: AnalyticsCalendarWindow): Measurement {
+function dailyMeasurement(definition: MetricDefinition, stored: StoredAnalyticsSnapshot, window: AnalyticsCalendarWindow, evidence?: Evidence): Measurement {
   const observations: string[] = [];
   const series = window.buckets.map((expected) => {
     const rows = stored.daily.filter((row) => row.bucket.metric_date === expected.date);
@@ -41,7 +43,7 @@ function dailyMeasurement(definition: MetricDefinition, stored: StoredAnalyticsS
     if (row.bucket.provider_timezone !== window.period.timezone || Date.parse(row.bucket.period_start) !== Date.parse(expected.since)
       || Date.parse(row.bucket.period_end) !== Date.parse(expected.until) || cell && (cell.provider_timezone !== window.period.timezone
         || Date.parse(cell.window_since ?? "") !== Date.parse(expected.since) || Date.parse(cell.window_until ?? "") !== Date.parse(expected.until))) return unavailableMetric("window_mismatch");
-    const metric = cellMetric(cell, definition);
+    const metric = cellMetric(cell, definition, evidence);
     if (cell) observations.push(cell.observed_at);
     return metric;
   });
@@ -52,38 +54,38 @@ function dailyMeasurement(definition: MetricDefinition, stored: StoredAnalyticsS
   return { metric, series, observedAt: definition.aggregation === "last" ? final?.observed_at ?? null : latestInstant(observations) };
 }
 
-function boundaryMeasurement(definition: MetricDefinition, stored: StoredAnalyticsSnapshot, window: AnalyticsCalendarWindow, position: "current" | "previous"): Measurement {
+function boundaryMeasurement(definition: MetricDefinition, stored: StoredAnalyticsSnapshot, window: AnalyticsCalendarWindow, position: "current" | "previous", evidence?: Evidence): Measurement {
   if (position === "current") {
     const cell = exactCell(stored.profile_current, definition.key);
-    return { metric: cellMetric(cell, definition), observedAt: cell?.observed_at ?? null, series: [] };
+    return { metric: cellMetric(cell, definition, evidence), observedAt: cell?.observed_at ?? null, series: [] };
   }
   const cell = exactCell(stored.profile_boundaries.filter((sample) => Date.parse(sample.boundary) === Date.parse(window.period.until)), definition.key);
   // Sample freshness is 24 elapsed hours (design §8.1), independent of provider-day length.
   const age = cell ? Date.parse(window.period.until) - Date.parse(cell.observed_at) : NaN;
-  const metric = !cell || age > 86_400_000 ? unavailableMetric("not_collected") : age < 0 ? unavailableMetric("window_mismatch") : cellMetric(cell, definition);
+  const metric = !cell || age > 86_400_000 ? unavailableMetric("not_collected") : age < 0 ? unavailableMetric("window_mismatch") : cellMetric(cell, definition, evidence);
   return { metric, observedAt: cell?.observed_at ?? null, series: [] };
 }
 
-function accountMeasurement(definition: MetricDefinition, stored: StoredAnalyticsSnapshot, window: AnalyticsCalendarWindow, position: "current" | "previous"): Measurement {
+function accountMeasurement(definition: MetricDefinition, stored: StoredAnalyticsSnapshot, window: AnalyticsCalendarWindow, position: "current" | "previous", evidence?: Evidence): Measurement {
   if (definition.capability !== "available") return { metric: unavailableMetric(definition.capability === "unverified" ? "capability_unverified" : "not_offered"), observedAt: null, series: [] };
-  if (definition.windowKind === "day") return dailyMeasurement(definition, stored, window);
-  if (definition.windowKind === "point_in_time") return boundaryMeasurement(definition, stored, window, position);
+  if (definition.windowKind === "day") return dailyMeasurement(definition, stored, window, evidence);
+  if (definition.windowKind === "point_in_time") return boundaryMeasurement(definition, stored, window, position, evidence);
   if (!definition.exactPeriodVerified) return { metric: unavailableMetric("window_mismatch"), observedAt: null, series: [] };
   const cell = exactCell(stored.period_totals.filter((total) => total.level === "account" && Date.parse(total.window_since ?? "") === Date.parse(window.period.since)
     && Date.parse(total.window_until ?? "") === Date.parse(window.period.until)), definition.key);
-  return { metric: cellMetric(cell, definition), observedAt: cell?.observed_at ?? null, series: [] };
+  return { metric: cellMetric(cell, definition, evidence), observedAt: cell?.observed_at ?? null, series: [] };
 }
 
-function accountMetric(definition: MetricDefinition, stored: StoredAnalyticsSnapshot, windows: { current: AnalyticsCalendarWindow; previous: AnalyticsCalendarWindow }): AnalyticsMetricResult {
-  const current = accountMeasurement(definition, stored, windows.current, "current");
+function accountMetric(definition: MetricDefinition, stored: StoredAnalyticsSnapshot, windows: { current: AnalyticsCalendarWindow; previous: AnalyticsCalendarWindow }, evidence?: Evidence): AnalyticsMetricResult {
+  const current = accountMeasurement(definition, stored, windows.current, "current", evidence);
   const previous = accountMeasurement(definition, stored, windows.previous, "previous");
   return { definition, current: current.metric, previous: previous.metric, delta: metricDelta(current.metric, previous.metric),
     observedAt: current.observedAt, previousObservedAt: previous.observedAt, boundaryObservations: { current: null, previous: null },
     trend: current.series.map((metric, index) => ({ ...windows.current.buckets[index], metric })) };
 }
-function postMetric(definition: MetricDefinition, cells: readonly StoredAnalyticsCell[]): AnalyticsMetricResult {
+function postMetric(definition: MetricDefinition, cells: readonly StoredAnalyticsCell[], evidence?: Evidence): AnalyticsMetricResult {
   const cell = definition.capability === "available" ? exactCell(cells, definition.key) : null;
-  const current = definition.capability === "available" ? cellMetric(cell, definition)
+  const current = definition.capability === "available" ? cellMetric(cell, definition, evidence)
     : unavailableMetric(definition.capability === "unverified" ? "capability_unverified" : "not_offered");
   const previous = unavailableMetric(definition.capability === "available" ? "not_collected" : definition.capability === "unverified" ? "capability_unverified" : "not_offered");
   return { definition, current, previous, delta: metricDelta(current, previous), observedAt: cell?.observed_at ?? null,
@@ -92,25 +94,30 @@ function postMetric(definition: MetricDefinition, cells: readonly StoredAnalytic
 function connectionFailure(stored: StoredAnalyticsSnapshot): UnavailableReason | null {
   if (!stored.health.active || stored.health.needs_reauth || stored.health.token_expired) return "reauth_required";
   const job = stored.collection.latest;
-  if (stored.readiness === undefined && ["reauth_required", "permission_missing"].includes(job?.reason_code ?? "")) return job!.reason_code as UnavailableReason;
+  // sync describes the dated collection attempt; live collection readiness is separate.
+  if (["reauth_required", "permission_missing"].includes(job?.reason_code ?? "")) return job!.reason_code as UnavailableReason;
   return job?.state === "failed" && job.reason_code !== "inventory_truncated" ? "provider_error" : null;
 }
 
 export function assembleStoredAnalytics(input: { stored: StoredAnalyticsSnapshot; windows: { current: AnalyticsCalendarWindow; previous: AnalyticsCalendarWindow };
   generatedAt: string; nextCursor: string | null; hasMore: boolean }): AnalyticsReport {
   const { stored, windows } = input;
-  const metrics = analyticsDefinitions(stored.platform, "account").map((definition) => accountMetric(definition, stored, windows));
+  const accountEvidence: StoredAnalyticsCell[] = [];
+  const metrics = analyticsDefinitions(stored.platform, "account").map((definition) => accountMetric(definition, stored, windows, (cell) => accountEvidence.push(cell)));
   // The 26th row only tells the caller that another page exists: it is not part of this response, so it cannot date it.
   const shownPosts = stored.posts.slice(0, 25);
+  const shownEvidence: StoredAnalyticsCell[] = [...accountEvidence];
   const posts = shownPosts.map(({ post, metrics: cells }) => ({ id: post.platform_post_id, publishedAt: post.published_at,
-    text: post.post_text, permalink: normalizeAnalyticsPermalink(post.permalink), metrics: analyticsDefinitions(stored.platform, "post").map((definition) => postMetric(definition, cells)) }));
+    text: post.post_text, permalink: normalizeAnalyticsPermalink(post.permalink), metrics: analyticsDefinitions(stored.platform, "post").map((definition) => postMetric(definition, cells, (cell) => shownEvidence.push(cell))) }));
   const incompleteCells = posts.some((post) => post.metrics.some((metric) => isAnalyticsMetricMeasurable(metric.definition) && metric.current.status !== "available"));
-  const currentCells = [...stored.daily.filter((day) => Date.parse(day.bucket.period_start) >= Date.parse(windows.current.period.since)).flatMap((day) => day.metrics),
-    ...shownPosts.flatMap((post) => post.metrics), ...stored.profile_current,
-    ...stored.profile_boundaries.filter((cell) => Date.parse(cell.boundary) > Date.parse(windows.current.period.since)),
-    ...stored.period_totals.filter((cell) => cell.window_since === windows.current.period.since && cell.window_until === windows.current.period.until)];
-  const numerical = currentCells.filter((cell) => cell.status === "available" && cell.value !== null);
-  const collectedAt = latestInstant(numerical.map((cell) => cell.collected_at));
+  // The database bounds the complete period inventory independently of its
+  // cursor. Run every cell through the same compatibility checks as rendering.
+  const numerical: StoredAnalyticsCell[] = [...accountEvidence];
+  const periodPosts = stored.period_posts ?? shownPosts;
+  const periodMetrics = periodPosts.map(({ metrics: cells }) => analyticsDefinitions(stored.platform, "post")
+    .map((definition) => postMetric(definition, cells, (cell) => numerical.push(cell))));
+  const collectedAt = latestInstant(shownEvidence.map((cell) => cell.collected_at));
+  const dataCollectedAt = latestInstant(numerical.map((cell) => cell.collected_at));
   const asOf = collectedAt ? new Date(Math.min(Date.parse(windows.current.period.until), Date.parse(collectedAt))).toISOString() : null;
   const incompleteInventory = "state" in stored.inventory ? stored.inventory.state !== "complete" : !stored.inventory.complete || stored.inventory.truncated;
   const truncated = input.hasMore || incompleteInventory;
@@ -120,10 +127,12 @@ export function assembleStoredAnalytics(input: { stored: StoredAnalyticsSnapshot
   let readiness;
   try { readiness = stored.readiness === undefined ? undefined : parseOwnerAnalyticsReadiness(stored.readiness); }
   catch { throw new PersistedReportRefused("invalid_contract", 503); }
-  if (readiness?.collection.reason_code === "awaiting_first_capture" && numerical.length > 0) {
+  if (readiness?.collection.reason_code === "awaiting_first_capture" && (stored.account_has_measurements ?? numerical.length > 0)) {
     readiness.collection = { ...readiness.collection, state: "ready", reason_code: "ready", next_action: "none" };
   }
-  const data = ownerAnalyticsData({ count: numerical.length, complete: !partial, lastCapture: collectedAt, now: input.generatedAt,
+  const dataPartial = incompleteInventory || metrics.some((metric) => isAnalyticsMetricMeasurable(metric.definition) && metric.current.status !== "available")
+    || periodMetrics.some((post) => post.some((metric) => isAnalyticsMetricMeasurable(metric.definition) && metric.current.status !== "available"));
+  const data = ownerAnalyticsData({ count: numerical.length, complete: !dataPartial, lastCapture: dataCollectedAt, now: input.generatedAt,
     staleAfterMs: ANALYTICS_PLATFORM_CONFIGURATION[stored.platform].staleAfterSeconds * 1000 });
   return parseAnalyticsReport({ ...readiness, data, analyticsContractVersion: 1, platform: stored.platform, accountId: stored.account_id, generatedAt: input.generatedAt,
     period: windows.current.period, previousPeriod: windows.previous.period, source: "persisted", metrics,

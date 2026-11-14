@@ -125,7 +125,7 @@ INSERT INTO auth.schema_migrations(version) SELECT jsonb_array_elements_text('${
   };
   docker(["run", "-d", "--name", names[1], ...labels, "--network", internalNetwork, ...Object.entries(authEnvironment).flatMap(([key, value]) => ["-e", `${key}=${value}`]), baseline.authImage]);
   docker(["run", "-d", "--name", names[2], ...labels, "--network", internalNetwork, "-e", `PGRST_DB_URI=postgres://authenticator:${databasePassword}@${names[0]}:5432/${OWNER_RELEASE.database}`, "-e", "PGRST_DB_SCHEMAS=public", "-e", "PGRST_DB_ANON_ROLE=anon", "-e", `PGRST_JWT_SECRET=${OWNER_RELEASE.signingSecret}`, "-e", "PGRST_DB_MAX_ROWS=1000", "postgrest/postgrest:v12.2.11"]);
-  docker(["run", "-d", "--name", names[3], ...labels, "--network", gatewayNetwork, "-p", "127.0.0.1:65435:9999", "-p", "127.0.0.1:65436:3000", "-e", "OWNER_RELEASE_GATEWAY=1", "-v", `${join(fixture, "instagramOwnerReleaseGateway.mjs")}:/fixture/gateway.mjs:ro`, "node:22-alpine", "node", "/fixture/gateway.mjs"]);
+  docker(["run", "-d", "--name", names[3], ...labels, "--network", gatewayNetwork, "-p", `127.0.0.1:${new URL(OWNER_RELEASE.authUrl).port}:9999`, "-p", "127.0.0.1:65436:3000", "-e", "OWNER_RELEASE_GATEWAY=1", "-v", `${join(fixture, "instagramOwnerReleaseGateway.mjs")}:/fixture/gateway.mjs:ro`, "node:22-alpine", "node", "/fixture/gateway.mjs"]);
   docker(["network", "connect", internalNetwork, names[3]]);
   await waitForReady(async () => {
     try { return (await fetch(`${OWNER_RELEASE.authUrl}/health`, { signal: AbortSignal.timeout(2000) })).ok; } catch { return false; }

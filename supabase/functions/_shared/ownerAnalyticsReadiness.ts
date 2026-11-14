@@ -46,7 +46,11 @@ export function parseOwnerAnalyticsReadiness(value: unknown): OwnerAnalyticsRead
     || (a !== null && (!record(a) || typeof a.state !== "string" || a.state.length > 80 || !(a.reason_code === null || typeof a.reason_code === "string" && a.reason_code.length <= 120) || !nullableInstant(a.observed_at)))) {
     throw new TypeError("Invalid owner analytics readiness");
   }
-  if (p.state === "missing" && (p.missing_scopes.length === 0 || p.observed_at === null)
+  // A positive provider denial may not identify an individual required scope.
+  // Accept no scope names only with the matching dated job evidence.
+  const providerDenial = c.reason_source === "job" && record(a) && a.state === "failed" && a.reason_code === "permission_missing"
+    && instant(a.observed_at) && instant(p.observed_at) && Date.parse(a.observed_at) === Date.parse(p.observed_at);
+  if (p.state === "missing" && (p.observed_at === null || p.missing_scopes.length === 0 && !providerDenial)
     || c.reason_code === "permission_missing" && p.state !== "missing"
     || c.reconnect_can_help !== ["reconnect", "grant_permissions"].includes(String(c.next_action))
     || ["collection_disabled", "collection_not_eligible", "bootstrap_required"].includes(String(c.reason_code)) && c.reconnect_can_help) {

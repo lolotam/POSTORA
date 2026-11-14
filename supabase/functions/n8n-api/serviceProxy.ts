@@ -481,8 +481,24 @@ function analyticsDeadlineDeps(deps: ServiceProxyDeps): ServiceProxyDeps {
   };
 }
 
+/** Both analytics routes use one timeout projection, including aborted DB reads. */
+async function analyticsResult(work: () => Promise<ProxyResult>): Promise<ProxyResult> {
+  try { return await work(); }
+  catch (error) {
+    if (!(error instanceof Error) || !["AbortError", "TimeoutError"].includes(error.name)) throw error;
+    console.warn("[n8n-api] analytics request deadline expired");
+    return fromUpstream("analytics", { status: 504, data: null });
+  }
+}
+export function handleGetAccountAnalytics(deps: ServiceProxyDeps, userId: string, params: URLSearchParams): Promise<ProxyResult> {
+  return analyticsResult(() => getAccountAnalytics(deps, userId, params));
+}
+export function handleTriggerAnalyticsSync(deps: ServiceProxyDeps, userId: string, body: unknown): Promise<ProxyResult> {
+  return analyticsResult(() => triggerAnalyticsSync(deps, userId, body));
+}
+
 /** Dedicated report route selects each platform's supported contract without changing legacy analytics. */
-export async function handleGetAccountAnalytics(deps: ServiceProxyDeps, userId: string, params: URLSearchParams): Promise<ProxyResult> {
+async function getAccountAnalytics(deps: ServiceProxyDeps, userId: string, params: URLSearchParams): Promise<ProxyResult> {
   deps = analyticsDeadlineDeps(deps);
   const input = Object.fromEntries(params);
   const rawPeriod = params.get("period_days");
@@ -512,7 +528,7 @@ export async function handleGetAccountAnalytics(deps: ServiceProxyDeps, userId: 
   return await handleGetPostAnalytics(deps, userId, reportParams);
 }
 
-export async function handleTriggerAnalyticsSync(deps: ServiceProxyDeps, userId: string, rawBody: unknown): Promise<ProxyResult> {
+async function triggerAnalyticsSync(deps: ServiceProxyDeps, userId: string, rawBody: unknown): Promise<ProxyResult> {
   deps = analyticsDeadlineDeps(deps);
   const parsed = analyticsSyncSchema.safeParse(rawBody);
   if (!parsed.success) return invalidAnalyticsInput("social_account_id must be a Postora account UUID.");

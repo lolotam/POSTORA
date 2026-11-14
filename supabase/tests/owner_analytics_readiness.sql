@@ -44,7 +44,10 @@ DECLARE r jsonb; p text; BEGIN
 END;$proof$;
 UPDATE public.app_settings SET value='{"version":1,"owners":{"mode":"all","account_ids":[]},"competitors":{"mode":"off","targets":[]}}'
  WHERE key='collection_instagram_rollout_policy';
-DO $proof$ BEGIN ASSERT pg_temp.readiness('instagram')#>>'{collection,reason_code}'='bootstrap_required'; END;$proof$;
+DO $proof$ BEGIN
+ ASSERT pg_temp.readiness('instagram')#>>'{collection,reason_code}'='bootstrap_required';
+ ASSERT pg_temp.readiness('instagram')#>>'{collection,next_action}'='contact_support','bootstrap has no automatic completion path';
+END;$proof$;
 INSERT INTO public.instagram_account_capabilities(social_account_id,user_id,login_kind,credential_generation)
 VALUES ('e8120000-0000-4000-8000-000000000001','e8110000-0000-4000-8000-000000000001','direct',1);
 DO $proof$ BEGIN
@@ -71,8 +74,48 @@ DO $proof$ BEGIN
  ASSERT pg_temp.readiness('instagram')#>>'{collection,reason_code}'='queued';
  ASSERT pg_temp.readiness('instagram')#>>'{permission,state}'='verified';
 END;$proof$;
+-- A retried old generation remains historical evidence, never a current blocker.
+UPDATE public.instagram_collection_jobs SET status='retry',last_reason_code='provider_error',
+ context_viewer_social_account_id='e8120000-0000-4000-8000-000000000001',context_login_kind='direct',context_credential_generation=1
+ WHERE social_account_id='e8120000-0000-4000-8000-000000000001';
+DO $proof$ BEGIN ASSERT pg_temp.readiness('instagram')#>>'{collection,reason_code}'='provider_error'; END;$proof$;
+UPDATE public.instagram_account_capabilities SET credential_generation=2
+ WHERE social_account_id='e8120000-0000-4000-8000-000000000001';
+DO $proof$ BEGIN
+ ASSERT pg_temp.readiness('instagram')#>>'{collection,reason_code}'='awaiting_first_capture';
+ ASSERT pg_temp.readiness('instagram')#>>'{last_attempt,reason_code}'='provider_error';
+END;$proof$;
+DO $proof$
+DECLARE setting jsonb; BEGIN
+ FOREACH setting IN ARRAY ARRAY['"true"'::jsonb,'" TRUE "'::jsonb] LOOP
+  UPDATE public.app_settings SET value=setting WHERE key='collection_instagram_insights_enabled';
+  ASSERT pg_temp.readiness('instagram')#>>'{collection,reason_code}'='awaiting_first_capture','legacy enabled string is accepted by intake';
+ END LOOP;
+ FOREACH setting IN ARRAY ARRAY['"false"'::jsonb,'""'::jsonb,'null'::jsonb] LOOP
+  UPDATE public.app_settings SET value=setting WHERE key='collection_instagram_insights_enabled';
+  ASSERT pg_temp.readiness('instagram')#>>'{collection,reason_code}'='collection_disabled';
+ END LOOP;
+ DELETE FROM public.app_settings WHERE key='collection_instagram_insights_enabled';
+ ASSERT pg_temp.readiness('instagram')#>>'{collection,reason_code}'='collection_disabled';
+ INSERT INTO public.app_settings(key,value) VALUES ('collection_instagram_insights_enabled','true');
+END;$proof$;
 UPDATE public.app_settings SET value='{}' WHERE key='collection_instagram_rollout_policy';
 DO $proof$ BEGIN ASSERT pg_temp.readiness('instagram')#>>'{collection,reason_code}'='settings_unavailable'; END;$proof$;
+
+-- The legacy owner collector accepts migrated protected User bindings without
+-- OAuth identity/fence evidence. Readiness must project that same authority.
+UPDATE public.app_settings SET value='{"version":1,"owners":{"mode":"all","account_ids":[]},"competitors":{"mode":"off","targets":[]}}'
+ WHERE key='collection_instagram_rollout_policy';
+UPDATE public.instagram_account_capabilities SET login_kind='page_linked',granted_scopes=ARRAY['instagram_manage_insights']
+ WHERE social_account_id='e8120000-0000-4000-8000-000000000001';
+INSERT INTO public.facebook_user_credentials(id,user_id,token,provenance_source)
+VALUES ('e8130000-0000-4000-8000-000000000003','e8110000-0000-4000-8000-000000000001',repeat('synthetic',3),'migrated_instagram_account_credential');
+INSERT INTO public.facebook_user_credential_bindings(social_account_id,user_id,platform,credential_id,evidence_source)
+VALUES ('e8120000-0000-4000-8000-000000000001','e8110000-0000-4000-8000-000000000001','instagram',
+ 'e8130000-0000-4000-8000-000000000003','migrated_instagram_account_credential');
+DO $proof$ BEGIN
+ ASSERT pg_temp.readiness('instagram')#>>'{connection,state}'='verified','supported migrated binding remains collectable';
+END;$proof$;
 
 UPDATE public.app_settings SET value='{"account_ids":["e8120000-0000-4000-8000-000000000002"]}' WHERE key='collection_facebook_analytics_policy';
 INSERT INTO public.facebook_user_credentials(id,user_id,token,provider_user_id,provenance_source,provenance_captured_at)
@@ -103,6 +146,33 @@ UPDATE public.fb_analytics_permission_observations SET state='verified',granted_
 DO $proof$ BEGIN
  ASSERT pg_temp.readiness('facebook')#>>'{permission,state}'='verified';
  ASSERT pg_temp.readiness('facebook')#>>'{collection,reason_code}'='awaiting_first_capture';
+END;$proof$;
+-- A terminal provider refusal is current only while its captured authority matches.
+INSERT INTO public.fb_analytics_collection_jobs(user_id,social_account_id,due_on,due_at,next_due_at,state,attempts,reason_code,credential_authority)
+VALUES ('e8110000-0000-4000-8000-000000000001','e8120000-0000-4000-8000-000000000002',current_date,current_date::timestamp AT TIME ZONE 'America/Los_Angeles',(current_date+1)::timestamp AT TIME ZONE 'America/Los_Angeles',
+ 'failed',1,'permission_missing',public.meta_analytics_current_authority('facebook','e8120000-0000-4000-8000-000000000002','e8110000-0000-4000-8000-000000000001'));
+DO $proof$ BEGIN
+ ASSERT pg_temp.readiness('facebook')#>>'{collection,reason_code}'='permission_missing','current provider denial must not appear ready';
+ ASSERT pg_temp.readiness('facebook')#>>'{permission,state}'='missing';
+ ASSERT pg_temp.readiness('facebook')#>>'{collection,reason_source}'='job';
+ ASSERT pg_temp.readiness('facebook')#>'{permission,missing_scopes}'='[]'::jsonb,'never invent the denied scope names';
+END;$proof$;
+UPDATE public.fb_analytics_collection_jobs SET reason_code='reauth_required'
+ WHERE social_account_id='e8120000-0000-4000-8000-000000000002';
+DO $proof$ BEGIN
+ ASSERT pg_temp.readiness('facebook')#>>'{collection,reason_code}'='token_invalid','current provider token refusal is actionable';
+ ASSERT pg_temp.readiness('facebook')#>>'{connection,state}'='invalid';
+END;$proof$;
+UPDATE public.fb_analytics_permission_observations SET state='unavailable',observed_at=clock_timestamp()
+ WHERE social_account_id='e8120000-0000-4000-8000-000000000002';
+DO $proof$ BEGIN
+ ASSERT pg_temp.readiness('facebook')#>>'{collection,reason_code}'='token_invalid','a failed verification cannot clear proven token refusal';
+END;$proof$;
+UPDATE public.fb_analytics_permission_observations SET state='verified',observed_at=clock_timestamp()
+ WHERE social_account_id='e8120000-0000-4000-8000-000000000002';
+DO $proof$ BEGIN
+ ASSERT pg_temp.readiness('facebook')#>>'{collection,reason_code}'='awaiting_first_capture','newer verification supersedes the refusal';
+ ASSERT pg_temp.readiness('facebook')#>>'{last_attempt,reason_code}'='reauth_required','dated failure remains visible';
 END;$proof$;
 UPDATE public.facebook_user_credentials SET revision=revision+1 WHERE id='e8130000-0000-4000-8000-000000000001';
 DO $proof$ BEGIN

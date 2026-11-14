@@ -1,4 +1,4 @@
-import { assertEquals, assertRejects } from "https://deno.land/std@0.224.0/assert/mod.ts";
+import { assertEquals, assertRejects, assertThrows } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import { closedAnalyticsPeriods } from "../_shared/analyticsCalendar.ts";
 import { analyticsDefinitions } from "../_shared/analyticsRegistry.ts";
 import { assembleStoredAnalytics } from "./assemble.ts";
@@ -13,6 +13,37 @@ const NOW = "2026-11-01T12:00:00.000Z";
 const COLLECTED = "2026-11-01T10:00:00.000Z";
 const scope: StoredReportScope = { platform: "facebook", ownerId: OWNER, accountId: ACCOUNT, days: 7 };
 const windows = closedAnalyticsPeriods({ now: NOW, days: 7, timezone: "America/Los_Angeles" });
+
+Deno.test("live readiness does not erase a real provider permission failure from dated sync history", () => {
+  const stored = fixture();
+  stored.collection.latest = { ...stored.collection.latest!, state: "failed", reason_code: "permission_missing" };
+  stored.readiness = {
+    collection: { contract_version: 2, state: "syncing", reason_code: "awaiting_first_capture", reason_source: "data",
+      observed_at: NOW, next_action: "wait", reconnect_can_help: false, retry_at: null, support_correlation_id: "fixture-correlation" },
+    connection: { state: "verified", reason_code: null }, permission: { state: "verified", observed_at: COLLECTED, missing_scopes: [] }, last_attempt: null,
+  };
+  const report = assembleStoredAnalytics({ stored, windows, generatedAt: NOW, nextCursor: null, hasMore: false });
+  assertEquals(report.sync.reason, "permission_missing");
+});
+
+Deno.test("provider permission refusal without named scopes requires its dated job proof", () => {
+  const stored = fixture();
+  const readiness = {
+    collection: { contract_version: 2, state: "permissions_missing", reason_code: "permission_missing", reason_source: "job",
+      observed_at: NOW, next_action: "contact_support", reconnect_can_help: false, retry_at: null, support_correlation_id: "fixture-correlation" },
+    connection: { state: "verified", reason_code: null }, permission: { state: "missing", observed_at: COLLECTED, missing_scopes: [] },
+    last_attempt: { state: "failed", reason_code: "permission_missing", observed_at: COLLECTED },
+  };
+  stored.readiness = readiness;
+  const report = assembleStoredAnalytics({ stored, windows, generatedAt: NOW, nextCursor: null, hasMore: false });
+  assertEquals(report.permission?.state, "missing");
+  assertEquals(report.permission?.missing_scopes, []);
+  for (const patch of [{ last_attempt: null }, { permission: { ...report.permission!, observed_at: NOW } },
+    { collection: { ...report.collection!, reason_source: "permission" } }]) {
+    const invalid = { ...stored, readiness: { ...readiness, ...patch } };
+    assertThrows(() => assembleStoredAnalytics({ stored: invalid, windows, generatedAt: NOW, nextCursor: null, hasMore: false }), PersistedReportRefused);
+  }
+});
 
 Deno.test("a partial job without received numerical observations is never partially synced", () => {
   const stored = fixture();
@@ -231,4 +262,37 @@ Deno.test("inventory DTO refuses contradictory flags, states and provenance", as
       PersistedReportRefused, "invalid_contract");
     });
   }
+});
+
+Deno.test("incompatible available cells cannot manufacture numerical report evidence", () => {
+  for (const change of [{ api_version: "v0.0" }, { source_ref: "unverified" }, { window_kind: "lifetime" as const },
+    { window_since: "2020-01-01T00:00:00Z" }]) {
+    const stored = fixture();
+    stored.daily = stored.daily.map((day) => ({ ...day, metrics: day.metrics.map((cell) => ({ ...cell, ...change })) }));
+    const report = assembleStoredAnalytics({ stored, windows, generatedAt: NOW, nextCursor: null, hasMore: false });
+    assertEquals(report.data?.observation_count, 0);
+    assertEquals(report.data?.state, "empty");
+    assertEquals(report.sync.collectedAt, null);
+  }
+});
+
+Deno.test("data evidence covers all period posts and account readiness survives an empty period", () => {
+  const stored = fixture();
+  stored.daily = [];
+  const definition = analyticsDefinitions("facebook", "post").find((entry) => entry.key === "views")!;
+  const post = { post: { platform_post_id: "saved-post", published_at: windows.current.buckets[0].since, post_text: "", permalink: null, captured_on: "2026-11-01" },
+    metrics: [{ metric_key: definition.key, status: "available" as const, value: 0, reason: null, provider_metric: definition.providerMetric,
+      api_version: definition.apiVersion, window_kind: definition.windowKind, provider_timezone: null,
+      window_since: null, window_until: null, source_ref: "meta_graph_v25", observed_at: COLLECTED, collected_at: COLLECTED }] };
+  const first = assembleStoredAnalytics({ stored: { ...stored, posts: [post], period_posts: [post], account_has_measurements: true }, windows, generatedAt: NOW, nextCursor: "next", hasMore: true });
+  const next = assembleStoredAnalytics({ stored: { ...stored, posts: [], period_posts: [post], account_has_measurements: true }, windows, generatedAt: NOW, nextCursor: null, hasMore: false });
+  assertEquals(next.data, first.data);
+  assertEquals(next.data?.observation_count, 1);
+  const empty = assembleStoredAnalytics({ stored: { ...stored, period_posts: [], account_has_measurements: true, readiness: {
+    collection: { contract_version: 2, state: "syncing", reason_code: "awaiting_first_capture", reason_source: "data", observed_at: NOW,
+      next_action: "wait", reconnect_can_help: false, retry_at: null, support_correlation_id: "fixture" },
+    connection: { state: "verified", reason_code: null }, permission: { state: "verified", observed_at: NOW, missing_scopes: [] }, last_attempt: null,
+  } }, windows, generatedAt: NOW, nextCursor: null, hasMore: false });
+  assertEquals(empty.collection?.reason_code, "ready");
+  assertEquals(empty.data?.state, "empty");
 });

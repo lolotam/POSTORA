@@ -1,7 +1,18 @@
 // Public synthetic credentials and fixed loopback endpoints for a disposable fixture only.
+import process from "node:process";
+
+// Some desktop IDEs reserve the default forwarded Auth port. The override
+// changes only a local port; it can never select another host or production.
+const canReadPort = typeof Deno === "undefined"
+  || Deno.permissions.querySync({ name: "env", variable: "POSTORA_OWNER_RELEASE_AUTH_PORT" }).state === "granted";
+const authPort = canReadPort ? process.env.POSTORA_OWNER_RELEASE_AUTH_PORT ?? "65435" : "65435";
+if (!/^\d{4,5}$/.test(authPort) || Number(authPort) < 1024 || Number(authPort) > 65535
+  || [8080, 65431, 65436].includes(Number(authPort))) {
+  throw new Error("Owner-release Auth port must be a distinct local unprivileged port");
+}
 export const OWNER_RELEASE = Object.freeze({
   apiUrl: "http://127.0.0.1:65431",
-  authUrl: "http://127.0.0.1:65435",
+  authUrl: `http://127.0.0.1:${authPort}`,
   restUrl: "http://127.0.0.1:65436",
   container: "postora-owner-release-pg",
   database: "postora_owner_release_harness",

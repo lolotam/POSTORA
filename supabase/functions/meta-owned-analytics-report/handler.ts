@@ -16,7 +16,9 @@ export type StoredReportHandlerDeps = { authenticate: (req: Request, actingUserI
 export function createStoredReportHandler(deps: StoredReportHandlerDeps): (req: Request) => Promise<Response> {
   return async (req) => {
     if (req.method === "OPTIONS") return handleRestrictedCorsOptions(req);
-    const signal = AbortSignal.any([req.signal, AbortSignal.timeout(20_000)]);
+    // Reserve audit time inside the same overall request deadline.
+    const deadline = AbortSignal.any([req.signal, AbortSignal.timeout(25_000)]);
+    const signal = AbortSignal.any([deadline, AbortSignal.timeout(20_000)]);
     let ownerId: string | null = null;
     let platform: "facebook" | "threads" | null = null;
     let accountId: string | null = null;
@@ -25,8 +27,9 @@ export function createStoredReportHandler(deps: StoredReportHandlerDeps): (req: 
       const collection = body && typeof body === "object" && "collection" in body ? body.collection : null;
       const correlationId = collection && typeof collection === "object" && "support_correlation_id" in collection
         && typeof collection.support_correlation_id === "string" ? collection.support_correlation_id : null;
+      const auditSignal = AbortSignal.any([deadline, AbortSignal.timeout(5_000)]);
       try { stored = await awaitWithAbort(() => deps.audit({ event: status === 200 ? "persisted_report_read" : "persisted_report_refused",
-        status, reason, ownerId, platform, accountId, correlationId }, AbortSignal.timeout(5_000)), AbortSignal.timeout(5_000)); } catch { stored = false; }
+        status, reason, ownerId, platform, accountId, correlationId }, auditSignal), auditSignal); } catch { stored = false; }
       return restrictedJsonResponse(req, stored ? body : { ok: false, reason: "audit_unavailable", message: "The analytics read could not be recorded. Please retry." }, stored ? status : 503);
     };
     try {

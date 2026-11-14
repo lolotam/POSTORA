@@ -545,6 +545,7 @@ export type OwnerReportCompletenessInput = {
  * a bounded media page does not bound the independent observation series.
  */
 export type OwnerReportAssemblyInput = {
+  readiness?: OwnerAnalyticsReadiness;
   scope: OwnerReportScope;
   now: Date;
   request: OwnerReportRequest;

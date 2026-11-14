@@ -303,3 +303,25 @@ Deno.test("all time displays media older than any day-count period", async () =>
   assertEquals((await load(365)).media.page.items.length, 0);
   assertEquals((await load("all")).media.page.items.map((item) => item.mediaId), ["m-old"]);
 });
+
+Deno.test("readiness evidence uses resolved supported captures before pagination and independent of period", async () => {
+  const live = { ...readiness, collection: { ...readiness.collection, state: "syncing", reason_code: "awaiting_first_capture", next_action: "wait" } };
+  const row = { id: "old", user_id: OWNER_ID, social_account_id: ACCOUNT_ID, ig_media_id: "media", published_at: "2026-11-10T09:00:00Z",
+    captured_at: "2026-11-12T09:00:00Z", captured_on: "2026-11-12", capture_timezone: "UTC", media_product_type: "REELS", media_type: "VIDEO", status: "ok", views: 0 };
+  const load = (media: Record<string, unknown>[], periodDays: 1 | 7 = 7, cursor: { publishedAt: string; mediaId: string } | null = null) =>
+    new ReportStore(createMockClient({ media, readiness: live }) as unknown as ReportStoreClient).loadReportData(ACCOUNT_ID, OWNER_ID,
+      { periodDays, limit: 1, cursor }, new Date("2026-11-14T09:00:00Z"));
+  for (const extra of [
+    { ...row, id: "new", captured_at: "2026-11-13T09:00:00Z", status: "unavailable", views: null },
+  ]) assertEquals((await load([row, extra])).data?.observation_count, 0, "superseded numbers are not displayed evidence");
+  for (const extra of [ { media_product_type: "STORY" }, { media_type: "AD", media_product_type: "AD" }, { published_at: "2026-11-15T09:00:00Z" } ]) {
+    const report = await load([{ ...row, ...extra }]);
+    assertEquals(report.data?.state, "empty");
+    assertEquals(report.collection?.reason_code, "awaiting_first_capture");
+  }
+  const first = await load([row, { ...row, id: "second", ig_media_id: "second", published_at: "2026-11-09T09:00:00Z", views: null }]);
+  const next = await load([row, { ...row, id: "second", ig_media_id: "second", published_at: "2026-11-09T09:00:00Z", views: null }], 7, first.media.page.nextCursor);
+  assertEquals(next.data, first.data, "period evidence does not change on an empty-valued page");
+  assertEquals((await load([row], 1)).collection?.reason_code, "ready", "account has captured outside the selected window");
+  assertEquals((await load([row], 1)).data?.state, "empty");
+});

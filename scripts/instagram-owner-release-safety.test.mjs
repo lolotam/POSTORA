@@ -8,6 +8,18 @@ import { archiveOwnerDatabaseInputs } from "./instagram-owner-execution-source.m
 import { test } from "node:test";
 import { assertLocalDockerSocket } from "../e2e/fixtures/instagramOwnerReleaseSafety.mjs";
 
+test("Auth port override retains loopback isolation and refuses unsafe or colliding ports", () => {
+  const settings = new URL("../e2e/fixtures/instagramOwnerReleaseSettings.mjs", import.meta.url).href;
+  const script = `import { OWNER_RELEASE } from ${JSON.stringify(settings)}; console.log(OWNER_RELEASE.authUrl);`;
+  const read = (port) => execFileSync(process.execPath, ["--input-type=module", "-e", script], {
+    env: { ...process.env, POSTORA_OWNER_RELEASE_AUTH_PORT: port }, encoding: "utf8", stdio: "pipe",
+  });
+  assert.equal(read("65437").trim(), "http://127.0.0.1:65437");
+  for (const port of ["80", "8080", "65431", "65436", "65536", "https://example.test", "65435/path"]) {
+    assert.throws(() => read(port));
+  }
+});
+
 test("fixture socket guard accepts local pipes and refuses remote or ambiguous Docker endpoints", () => {
   for (const endpoint of ["unix:///var/run/docker.sock", "npipe:////./pipe/dockerDesktopLinuxEngine"]) {
     assert.doesNotThrow(() => assertLocalDockerSocket(endpoint));

@@ -134,6 +134,7 @@ async function callN8n(
   path: string,
   body?: unknown,
   query?: Record<string, string | number | undefined>,
+  timeoutMs = 50_000,
 ): Promise<{ status: number; data: unknown }> {
   const url = new URL(N8N_API_BASE + path);
   if (query) {
@@ -141,7 +142,7 @@ async function callN8n(
       if (v !== undefined && v !== null && v !== "") url.searchParams.set(k, String(v));
     }
   }
-  const signal = AbortSignal.timeout(50_000);
+  const signal = AbortSignal.timeout(timeoutMs);
   const res = await fetch(url.toString(), {
     signal,
     method,
@@ -581,7 +582,7 @@ function buildServer(
     handler: async (args) => {
       const scopeRefusal = await refuseUngranted({ admin }, { userId: ownerId, tool: "generate_caption", grant });
       if (scopeRefusal) return fail(403, scopeRefusal);
-      const r = await callN8n(apiKey, "POST", "/api/v1/ai/caption", args);
+      const r = await callN8n(apiKey, "POST", "/api/v1/ai/caption", args, undefined, 70_000);
       return r.status >= 400 ? fail(r.status, r.data) : ok(r.data);
     },
   });
@@ -596,7 +597,7 @@ function buildServer(
     handler: async (args) => {
       const scopeRefusal = await refuseUngranted({ admin }, { userId: ownerId, tool: "generate_hashtags", grant });
       if (scopeRefusal) return fail(403, scopeRefusal);
-      const r = await callN8n(apiKey, "POST", "/api/v1/ai/hashtags", args);
+      const r = await callN8n(apiKey, "POST", "/api/v1/ai/hashtags", args, undefined, 70_000);
       return r.status >= 400 ? fail(r.status, r.data) : ok(r.data);
     },
   });
@@ -614,7 +615,7 @@ function buildServer(
     handler: async (args) => {
       const scopeRefusal = await refuseUngranted({ admin }, { userId: ownerId, tool: "generate_image", grant });
       if (scopeRefusal) return fail(403, scopeRefusal);
-      const r = await callN8n(apiKey, "POST", "/api/v1/ai/image", args);
+      const r = await callN8n(apiKey, "POST", "/api/v1/ai/image", args, undefined, 100_000);
       return r.status >= 400 ? fail(r.status, r.data) : ok(r.data);
     },
   });
@@ -820,7 +821,7 @@ function buildServer(
     description:
       "Retry a post that failed to publish on some of its platforms. Only the failed platforms are published again: a platform that already published is never posted a second time. " +
       "For a managed Instagram Story, pass story_result_id from get_post to retry only that failed Story; pending or uncertain Stories cannot be retried. " +
-      "The answer may say 'results_pending', which means the publish was started and the results are not in yet — read them with get_post. " +
+      "The answer may say 'results_pending', which means the publish was started and the results are not in yet â€” read them with get_post. " +
       "Do not retry a post that is being retried from the Postora dashboard at the same time: the two retries are not coordinated yet and could publish the same account twice. Requires confirm: true.",
     inputSchema: z.object({
       post_id: z.string().describe("Postora post UUID"),

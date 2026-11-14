@@ -8,6 +8,13 @@ type Handler = (request: Request) => Response | Promise<Response>;
 Deno.test("registered MCP and API preserve policy refusal and HTTP-200 semantic refusal without collecting on reads", async () => {
   const previousFetch = globalThis.fetch;
   const previousServe = Deno.serve;
+  const previousTimeout = AbortSignal.timeout;
+  const budgets = new WeakMap<AbortSignal, number>();
+  AbortSignal.timeout = (ms) => {
+    const signal = previousTimeout(ms);
+    budgets.set(signal, ms);
+    return signal;
+  };
   const environment = new Map(["SUPABASE_URL", "SUPABASE_SERVICE_ROLE_KEY", "PUBLIC_API_ORIGIN"].map((key) => [key, Deno.env.get(key)]));
   const fixtureKey = ["postora", crypto.randomUUID()].join("-");
   Deno.env.set("SUPABASE_URL", ORIGIN);
@@ -17,10 +24,15 @@ Deno.test("registered MCP and API preserve policy refusal and HTTP-200 semantic 
   let mcp: Handler | undefined;
   let platform = "instagram";
   let targetCalls = 0;
+  let generationBudget: number | undefined;
   globalThis.fetch = async (input, init) => {
     const request = new Request(input, init);
     const url = new URL(request.url);
     assertEquals(url.origin, ORIGIN, "No Meta or production traffic is permitted");
+    if (url.pathname.endsWith("/api/v1/ai/image")) {
+      generationBudget = init?.signal ? budgets.get(init.signal) : undefined;
+      return Response.json({ media_file_id: ACCOUNT });
+    }
     if (url.pathname.startsWith("/functions/v1/n8n-api")) {
       url.pathname = url.pathname.replace("/functions/v1", "");
       return await api(new Request(url, request));
@@ -68,9 +80,17 @@ Deno.test("registered MCP and API preserve policy refusal and HTTP-200 semantic 
       platform = platform === "instagram" ? "facebook" : "instagram";
     }
     assertEquals(targetCalls, 3, "Read invokes only the persisted report, never collection");
+    const generation = await mcp(new Request(`${ORIGIN}/functions/v1/mcp`, { method: "POST",
+      headers: { Authorization: `Bearer ${fixtureKey}`, Accept: "application/json", "Content-Type": "application/json" },
+      body: JSON.stringify({ jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "generate_image", arguments: { prompt: "fixture image" } } }) }));
+    const generated = (await generation.json()).result;
+    assertEquals(generated.isError, undefined);
+    assertEquals(JSON.parse(generated.content[0].text).media_file_id, ACCOUNT);
+    assertEquals(generationBudget, 100_000, "MCP must outlive the proxy's 90-second image budget");
   } finally {
     globalThis.fetch = previousFetch;
     Deno.serve = previousServe;
+    AbortSignal.timeout = previousTimeout;
     for (const [key, value] of environment) { if (value === undefined) Deno.env.delete(key); else Deno.env.set(key, value); }
   }
 });

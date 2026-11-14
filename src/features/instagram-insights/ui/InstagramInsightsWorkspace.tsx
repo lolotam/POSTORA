@@ -119,6 +119,7 @@ export function InstagramInsightsWorkspace({
       <SyncStatusBanner
         freshness={report?.freshness}
         collection={report?.collection}
+        data={report?.data}
         isSyncing={isSyncing}
         onSync={onTriggerSync}
         disabled={isLoading || !selectedAccountId}

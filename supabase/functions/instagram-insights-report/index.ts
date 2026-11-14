@@ -34,6 +34,8 @@ function getStore(): ReportStore {
 }
 
 export async function handler(req: Request): Promise<Response> {
+  const deadline = AbortSignal.any([req.signal, AbortSignal.timeout(25_000)]);
+  req = new Request(req, { signal: deadline });
   let authenticated = false;
   const reportHandler = createInstagramInsightsReportHandler({
     authenticate: async (req: Request) => {
@@ -55,7 +57,7 @@ export async function handler(req: Request): Promise<Response> {
   });
   const response = await reportHandler(req);
   if (req.method === "OPTIONS") return response;
-  const signal = AbortSignal.timeout(5_000);
+  const signal = AbortSignal.any([deadline, AbortSignal.timeout(5_000)]);
   try {
     const projection: unknown = response.status === 200 ? await awaitWithAbort(() => response.clone().json(), signal) : null;
     const collection = projection && typeof projection === "object" && "collection" in projection ? projection.collection : null;

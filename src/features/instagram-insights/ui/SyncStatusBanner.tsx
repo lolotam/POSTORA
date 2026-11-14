@@ -1,4 +1,4 @@
-import type { OwnerAnalyticsReadiness } from "../../../../supabase/functions/_shared/ownerAnalyticsReadiness";
+import type { OwnerAnalyticsReadiness, OwnerAnalyticsData } from "../../../../supabase/functions/_shared/ownerAnalyticsReadiness";
 import { useTranslation } from "react-i18next";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -20,6 +20,7 @@ import type { OwnerReportFreshness } from "../domain/types";
 export type SyncStatusBannerProps = {
   freshness: OwnerReportFreshness | undefined;
   collection?: OwnerAnalyticsReadiness["collection"];
+  data?: OwnerAnalyticsData;
   isSyncing: boolean;
   onSync: () => void;
   disabled?: boolean;
@@ -28,13 +29,21 @@ export type SyncStatusBannerProps = {
 export function SyncStatusBanner({
   freshness,
   collection,
+  data,
   isSyncing,
   onSync,
   disabled = false,
 }: SyncStatusBannerProps) {
   const { t } = useTranslation("analytics");
-  const status = freshness?.status ?? "never";
-  const { label, variant } = formatSyncStatus(status);
+  const status = data?.state === "stale" ? "stale" : freshness?.status ?? "never";
+  const variant = status === "stale" ? "outline" : formatSyncStatus(status).variant;
+  const statusLabel = {
+    ok: t("instagram.syncStatus.ok", "Up to date"),
+    partial: t("instagram.syncStatus.partial", "Partially synced"),
+    error: t("instagram.syncStatus.error", "Sync error"),
+    never: t("instagram.syncStatus.never", "Never synced"),
+    stale: t("instagram.syncStatus.stale", "Saved measurements are out of date"),
+  }[status];
   const explanation = collection ? null : formatReasonExplanation(freshness?.reason);
 
   const formattedLastSync = freshness?.lastSuccessAt
@@ -55,8 +64,8 @@ export function SyncStatusBanner({
             {status === "ok" && <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500" />}
             {status === "partial" && <AlertTriangle className="h-3.5 w-3.5 text-amber-500" />}
             {status === "error" && <AlertCircle className="h-3.5 w-3.5 text-rose-500" />}
-            {status === "never" && <Clock className="h-3.5 w-3.5 text-muted-foreground" />}
-            <span>{t(`instagram.syncStatus.${status}`, label)}</span>
+            {["never", "stale"].includes(status) && <Clock className="h-3.5 w-3.5 text-muted-foreground" />}
+            <span>{statusLabel}</span>
           </Badge>
 
           {formattedLastSync && (

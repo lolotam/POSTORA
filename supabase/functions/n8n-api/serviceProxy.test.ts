@@ -952,3 +952,31 @@ Deno.test("new read handlers retain upstream business refusals and sanitize inte
     assertEquals((await handleAnalyzeBrand(deps, OWNER, { platform: "facebook", handle: "brand" })).status, expected);
   }
 });
+
+Deno.test("leased owner jobs remain accepted running work and app configuration refusals retain their cause", async () => {
+  const leased = fakeDeps({ account: { ...DEFAULT_ACCOUNT, platform: "instagram" }, upstream: { status: 202,
+    data: { accepted: true, reason: "already_enqueued", status: "leased" } } });
+  const result = await handleTriggerAnalyticsSync(leased.deps, OWNER, { social_account_id: ACCOUNT_ID });
+  assertEquals(bodyOf(result).accepted, true);
+  assertEquals(bodyOf(result).reason_code, "running");
+  assertEquals(bodyOf(result).queued, false);
+  const config = fakeDeps({ upstream: { status: 503, data: { ok: false, reason: "app_configuration_unavailable" } } });
+  const refused = bodyOf(await handleTriggerAnalyticsSync(config.deps, OWNER, { social_account_id: ACCOUNT_ID }));
+  assertEquals(refused.reason_code, "settings_unavailable");
+  assertEquals(refused.reason_source, "configuration");
+});
+
+Deno.test("both analytics routes map dependency deadline aborts to the public retryable timeout", async () => {
+  for (const phase of ["account", "upstream"] as const) {
+    for (const sync of [false, true]) {
+      const { deps } = fakeDeps();
+      if (phase === "account") deps.loadAccount = async () => { throw new DOMException("private deadline details", "AbortError"); };
+      else deps.invoke = async () => { throw new DOMException("private deadline details", "TimeoutError"); };
+      const result = sync ? await handleTriggerAnalyticsSync(deps, OWNER, { social_account_id: ACCOUNT_ID })
+        : await handleGetAccountAnalytics(deps, OWNER, params({ social_account_id: ACCOUNT_ID }));
+      assertEquals(result.status, 504);
+      assertEquals((bodyOf(result).error as { code: string }).code, "UPSTREAM_TIMEOUT");
+      assertEquals(JSON.stringify(result.body).includes("private"), false);
+    }
+  }
+});

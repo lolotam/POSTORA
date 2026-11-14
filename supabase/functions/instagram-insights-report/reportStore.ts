@@ -1,4 +1,4 @@
-import { parseOwnerAnalyticsReadiness, ownerAnalyticsData } from "../_shared/ownerAnalyticsReadiness.ts";
+import { parseOwnerAnalyticsReadiness } from "../_shared/ownerAnalyticsReadiness.ts";
 /**
  * Database Reader & Store for Instagram Insights Report (Slice O3).
  *
@@ -329,7 +329,13 @@ export class ReportStore {
     const freshness = parseFreshness(jobStatus);
     const completeness = parseCompleteness(jobStatus, mappedMedia);
 
+    let readiness;
+    if (snapshot.readiness !== undefined) {
+      try { readiness = parseOwnerAnalyticsReadiness(snapshot.readiness); }
+      catch { throw new ReportHistoryUnavailableError("Invalid owner readiness snapshot"); }
+    }
     const report = assembleOwnerReport({
+      readiness,
       scope: {
         ownerId: userId,
         socialAccountId,
@@ -345,38 +351,11 @@ export class ReportStore {
       freshness,
       completeness,
     });
-    // Count numerical observations in the requested report, not jobs or null placeholders.
-    const measured = (row: Record<string, unknown>, fields: string[]) => fields.some((key) => typeof row[key] === "number");
-    const measuredDaily = report.account.daily.filter((row) => row.status !== "pending" && measured(row,
-      ["reach", "views", "accountsEngaged", "totalInteractions", "likes", "comments", "saves", "shares", "follows", "unfollows"]));
-    const observed = [
-      ...measuredDaily.map((row) => row.capturedAt),
-      ...report.account.profiles.filter((row) => Date.parse(row.observedAt) >= Date.parse(report.period.windowStart)
-        && Date.parse(row.observedAt) <= Date.parse(report.period.windowEnd) && row.status !== "pending" && (row.followersCount !== null || row.mediaCount !== null)).map((row) => row.observedAt),
-      ...displayMedia.filter((row) => row.status !== "pending" && measured(row, ["reach", "views", "likes", "comments", "saved", "shares", "totalInteractions", "follows", "profileVisits", "replies", "igReelsAvgWatchTimeMs"])).map((row) => row.capturedAt),
-      ...mappedPeriodTotals.filter((row) => row.status === "ok" && row.value !== null && row.sinceDate === report.period.metricDateStart && row.untilDate === report.period.metricDateEnd).map((row) => row.capturedAt),
-    ];
-    const lastCapture = observed.sort((a, b) => Date.parse(b) - Date.parse(a))[0] ?? null;
-    const expectedDays = (Date.parse(report.period.metricDateEnd) - Date.parse(report.period.metricDateStart)) / 86_400_000 + 1;
-    const dataState = ownerAnalyticsData({ count: observed.length,
-      complete: completeness.coverage === "complete" && new Set(measuredDaily.map((row) => row.metricDate)).size === expectedDays, lastCapture, now: now.toISOString(), staleAfterMs: 2 * 86_400_000 });
-    report.data = dataState;
-    if (observed.length === 0) {
-      report.freshness = { ...report.freshness, status: "never", partial: false, lastSuccessAt: null, lastPartialAt: null, reason: "never_synced" };
-    } else {
-      report.freshness = { ...report.freshness, status: dataState.state === "partial" ? "partial" : "ok", partial: dataState.state === "partial", lastSuccessAt: lastCapture };
-    }
-    if (snapshot.readiness !== undefined) {
-      let readiness;
-      try { readiness = parseOwnerAnalyticsReadiness(snapshot.readiness); }
-      catch { throw new ReportHistoryUnavailableError("Invalid owner readiness snapshot"); }
-      Object.assign(report, readiness);
-      if (readiness.collection.reason_code === "awaiting_first_capture" && observed.length > 0) {
-        report.collection = { ...readiness.collection, state: "ready", reason_code: "ready", next_action: "none" };
-      }
-      // Historical attempt causes never override current connection/permission evidence.
-      report.freshness.reason = null;
-    }
+    const dataState = report.data!;
+    report.freshness = { ...report.freshness, status: dataState.observation_count === 0 ? "never" : dataState.state === "partial" ? "partial" : "ok",
+      partial: dataState.state === "partial", lastSuccessAt: dataState.last_successful_capture,
+      ...(dataState.observation_count === 0 ? { lastPartialAt: null, reason: "never_synced" as const } : {}) };
+    if (readiness) report.freshness.reason = null;
     return report;
   }
 }

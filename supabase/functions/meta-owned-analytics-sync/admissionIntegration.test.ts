@@ -243,6 +243,18 @@ Deno.test("registered admission and dispatch preserve real SQL fences and durabl
           daily: z.array(z.object({ metrics: z.array(z.object({ status: z.string(), value: z.number().nullable() })) })) }).parse(report);
         assertEquals(persisted.daily.length, 2);
         assertEquals(persisted.daily.every((day) => day.metrics.every((cell) => cell.status === "available" && cell.value === 0)), true);
+        const evidence = z.object({ account_has_measurements: z.literal(true), revision: z.number(),
+          posts: z.array(z.object({ post: z.object({ published_at: z.string(), platform_post_id: z.string() }) })),
+          period_posts: z.array(z.unknown()) });
+        const savedSnapshot = (after: string = "") => runtime.queryJson(`SELECT public.read_meta_owned_analytics_history('${platform}','${OWNER}','${accountId}',jsonb_build_object(
+          'since',((clock_timestamp() AT TIME ZONE 'America/Los_Angeles')::date-7)::timestamp AT TIME ZONE 'America/Los_Angeles',
+          'until',(clock_timestamp() AT TIME ZONE 'America/Los_Angeles')::date::timestamp AT TIME ZONE 'America/Los_Angeles' ${after}));`, SERVICE_ROLE);
+        const firstSnapshot = evidence.parse(await savedSnapshot());
+        assertEquals(firstSnapshot.period_posts.length, 1);
+        const firstPost = firstSnapshot.posts[0].post;
+        const afterSnapshot = evidence.parse(await savedSnapshot(`,'after_published_at','${firstPost.published_at}','after_id','${firstPost.platform_post_id}','expected_revision',${firstSnapshot.revision}`));
+        assertEquals(afterSnapshot.posts.length, 0);
+        assertEquals(afterSnapshot.period_posts, firstSnapshot.period_posts, "Real SQL period evidence survives an empty continuation page");
         const beforeReportRequests = capturedRequests.length;
         const canonicalResponse = await reportRequest(platform, accountId);
         const canonical = await canonicalResponse.json();

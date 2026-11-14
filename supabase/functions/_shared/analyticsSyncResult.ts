@@ -17,14 +17,14 @@ export function analyticsSyncReceipt(statusCode: number, value: unknown): Analyt
   const status = typeof body.status === "string" ? body.status : "unavailable";
   const raw = body.reason_code ?? body.reason ?? error ?? status;
   const aliases: Readonly<Record<string, CollectionReason>> = {
-    not_eligible: "collection_not_eligible", configuration_unavailable: "settings_unavailable", capability_missing: "bootstrap_required",
+    not_eligible: "collection_not_eligible", configuration_unavailable: "settings_unavailable", app_configuration_unavailable: "settings_unavailable", capability_missing: "bootstrap_required",
     reconnect_required: "bootstrap_required", credential_unavailable: "bootstrap_required", context_missing: "bootstrap_required",
     scope_missing: "permission_missing", reauth_required: "token_invalid", throttled: "rate_limited",
   };
   const reason = typeof raw === "string" ? aliases[raw] ?? (COLLECTION_REASONS.includes(raw as CollectionReason) ? raw as CollectionReason : null) : null;
-  const accepted = statusCode >= 200 && statusCode < 300 && body.ok !== false && ["queued", "running", "pending", "partial", "retry", "success", "completed"].includes(status)
+  const accepted = statusCode >= 200 && statusCode < 300 && body.ok !== false && ["queued", "running", "leased", "pending", "partial", "retry", "success", "completed"].includes(status)
     && (!reason || ["queued", "running", "ready"].includes(reason));
-  const code: CollectionReason = accepted ? status === "success" || status === "completed" ? "ready" : status === "running" ? "running" : "queued" : reason && !["queued", "running", "ready"].includes(reason) ? reason : "provider_error";
+  const code: CollectionReason = accepted ? status === "success" || status === "completed" ? "ready" : ["running", "leased"].includes(status) ? "running" : "queued" : reason && !["queued", "running", "ready"].includes(reason) ? reason : "provider_error";
   const policy = ["collection_disabled", "collection_not_eligible"].includes(code);
   // A raw legacy reconnect refusal only proves absent trusted state. It does
   // not prove the available OAuth route can repair it.

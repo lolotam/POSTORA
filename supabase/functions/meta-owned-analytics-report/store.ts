@@ -29,6 +29,8 @@ const snapshot = z.object({ ok: z.literal(true), account_id: z.string().uuid(), 
   profile_current: z.array(cell).max(15),
   period_totals: z.array(cell.extend({ window_kind: z.literal("period_total").default("period_total"), level: z.enum(["account", "post"]), subject_id: z.string() })).max(30),
   readiness: z.unknown().optional(),
+  period_posts: z.array(z.object({ post, metrics: z.array(cell).max(15) })).max(20000).optional(),
+  account_has_measurements: z.boolean().optional(),
   collection: z.object({ last_success_at: instant.nullable(), last_partial_at: instant.nullable(), latest: latest.nullable(), syncing: z.boolean() }) }).strict();
 const refusal = z.object({ ok: z.literal(false), reason: z.enum(["history_revision_changed", "history_expired"]) }).strict();
 export type StoredAnalyticsCell = z.infer<typeof cell>;

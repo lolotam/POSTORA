@@ -1,3 +1,4 @@
+import { ownerAnalyticsData } from "../_shared/ownerAnalyticsReadiness.ts";
 /**
  * Pure assembler for the owner Instagram insights report.
  *
@@ -1239,6 +1240,35 @@ export function assembleOwnerReport(input: OwnerReportAssemblyInput): OwnerRepor
     completeness: normalizeCompleteness(input.completeness),
     lagNote: OWNER_REPORT_LAG_NOTE,
   };
+
+  // Use the exact normalized, resolved report rows before paging. Failed,
+  // superseded, unsupported and future captures cannot manufacture evidence.
+  const numerical = (row: object, fields: readonly string[]) => fields.some((key) => typeof (row as Record<string, unknown>)[key] === "number");
+  const mediaFields = ["views", "reach", "likes", "comments", "saved", "shares", "totalInteractions", "follows", "profileVisits", "replies", "igReelsAvgWatchTimeMs"];
+  const dailyFields = ["reach", "views", "accountsEngaged", "totalInteractions", "likes", "comments", "saves", "shares", "follows", "unfollows"];
+  const measuredMedia = (row: NormalizedMediaRow) => row.status === "ok" && numerical(row, mediaFields);
+  const measuredDay = (row: NormalizedDailyRow | OwnerReportDailyRow) => row.status === "ok" && numerical(row, dailyFields);
+  const measuredProfile = (row: OwnerReportProfileObservation) => row.status === "ok" && (row.followersCount !== null || row.mediaCount !== null);
+  const measuredDays = daily.filter(measuredDay);
+  const observed = [...windowRows.filter(measuredMedia).map((row) => row.capturedAt), ...measuredDays.map((row) => row.capturedAt),
+    ...profiles.filter((row) => measuredProfile(row) && Date.parse(row.observedAt) >= windowStartMs && Date.parse(row.observedAt) <= nowMs).map((row) => row.observedAt),
+    ...(periodReach.status === "available" && periodDays !== 1 ? [periodReach.capturedAt] : [])];
+  const lastCapture = observed.reduce<string | null>((last, at) => last === null || Date.parse(at) > Date.parse(last) ? at : last, null);
+  const expectedDays = (Date.parse(metricDateEnd) - Date.parse(metricDateStart)) / MILLISECONDS_PER_DAY + 1;
+  report.data = ownerAnalyticsData({ count: observed.length, complete: input.completeness.coverage === "complete" && measuredDays.length === expectedDays,
+    lastCapture, now: report.generatedAt, staleAfterMs: 2 * MILLISECONDS_PER_DAY });
+  if (input.readiness) {
+    Object.assign(report, input.readiness);
+    // Collection is account-wide; a narrow period or later page cannot reset it.
+    const hasAccountData = groups.some(({ latest: row }) => row !== null && row.publishedMs <= nowMs && classify(row).kind === "supported" && measuredMedia(row))
+      || [...dailyByDate.values()].some((row) => row.metricDate <= metricDateEnd && measuredDay(row))
+      || profiles.some((row) => Date.parse(row.observedAt) <= nowMs && measuredProfile(row))
+      || periodTotals.some((row) => row.status === "ok" && row.value !== null && row.untilDate <= metricDateEnd);
+    if (report.collection?.reason_code === "awaiting_first_capture" && hasAccountData) {
+      report.collection = { ...report.collection, state: "ready", reason_code: "ready", next_action: "none" };
+    }
+    report.freshness.reason = null;
+  }
 
   assertNoNonFiniteNumbers(report, "report");
   return report;
