@@ -1,4 +1,5 @@
 import { redactProviderError } from "./ai-routing-errors.ts";
+import { bufferedResponse, withDeadline } from "./deadline.ts";
 
 type JsonRecord = Record<string, unknown>;
 export const DEFAULT_MAX_TOKENS = 8192;
@@ -164,52 +165,42 @@ export async function callAnthropicJson(
   openAiBody: JsonRecord,
   apiKey: string,
   timeoutMs: number,
+  signal?: AbortSignal,
 ) {
-  const controller = new AbortController();
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const deadline = new Promise<never>((_, reject) => {
-    timer = setTimeout(() => {
-      controller.abort();
-      reject(new Error("Anthropic request timed out"));
-    }, timeoutMs);
-  });
   try {
-    return await Promise.race([
-      deadline,
-      (async () => {
-        const response = await fetch("https://api.anthropic.com/v1/messages", {
-          method: "POST",
-          signal: controller.signal,
-          headers: {
-            "x-api-key": apiKey,
-            "anthropic-version": "2023-06-01",
-            "content-type": "application/json",
+    return await withDeadline(timeoutMs, signal, async callSignal => {
+      const response = await bufferedResponse(await fetch("https://api.anthropic.com/v1/messages", {
+        method: "POST",
+        signal: callSignal,
+        headers: {
+          "x-api-key": apiKey,
+          "anthropic-version": "2023-06-01",
+          "content-type": "application/json",
+        },
+        body: JSON.stringify(toAnthropicRequest(openAiBody)),
+      }), callSignal);
+      const body = await response.text();
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(body);
+      } catch {
+        if (response.ok) throw new Error("Invalid Anthropic response");
+      }
+      const message = record(record(parsed).error).message;
+      return {
+        status: response.status,
+        json: response.ok ? fromAnthropicResponse(parsed) : {
+          error: {
+            message: redactProviderError(
+              typeof message === "string"
+                ? message
+                : "Anthropic request failed",
+              apiKey,
+            ),
           },
-          body: JSON.stringify(toAnthropicRequest(openAiBody)),
-        });
-        const body = await response.text();
-        let parsed: unknown;
-        try {
-          parsed = JSON.parse(body);
-        } catch {
-          if (response.ok) throw new Error("Invalid Anthropic response");
-        }
-        const message = record(record(parsed).error).message;
-        return {
-          status: response.status,
-          json: response.ok ? fromAnthropicResponse(parsed) : {
-            error: {
-              message: redactProviderError(
-                typeof message === "string"
-                  ? message
-                  : "Anthropic request failed",
-                apiKey,
-              ),
-            },
-          },
-        };
-      })(),
-    ]);
+        },
+      };
+    });
   } catch (error) {
     throw new Error(
       redactProviderError(
@@ -217,8 +208,6 @@ export async function callAnthropicJson(
         apiKey,
       ),
     );
-  } finally {
-    clearTimeout(timer);
   }
 }
 

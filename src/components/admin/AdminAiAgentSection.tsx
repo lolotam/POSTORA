@@ -34,10 +34,18 @@ export function AdminAiAgentSection() {
   const { data: aiConfig, isLoading, isError, refetch } = useAIConfiguration();
   const policy = useChatListPolicy(true);
   const [saveError, setSaveError] = useState<string>();
+  const [agentSaveError, setAgentSaveError] = useState<string>();
   const setDefaultModel = useSetDefaultModel();
   const setFallbackModel = useSetFallbackModel();
   const setFallback2Model = useSetFallback2Model();
   const triage = useAgentTriageEnabled();
+  const saveAgent = (mutation: { mutateAsync: (variables: {
+    provider_code: string; model_id: string; category: "agent"; auth_method?: AiAuthMethod;
+  }) => Promise<unknown> }) => async (provider_code: string, model_id: string, auth_method?: AiAuthMethod) => {
+    setAgentSaveError(undefined);
+    try { await mutation.mutateAsync({ provider_code, model_id, auth_method, category: "agent" }); }
+    catch (error) { setAgentSaveError(error instanceof Error ? error.message : "Could not save Agent model. Retry."); }
+  };
   const saveTriage = (mutation: { mutateAsync: (variables: {
     provider_code: string; model_id: string; category: "agent_triage"; auth_method?: AiAuthMethod;
   }) => Promise<unknown> }) => async (provider_code: string, model_id: string, auth_method?: AiAuthMethod) => {
@@ -73,7 +81,18 @@ export function AdminAiAgentSection() {
         </CardDescription>
       </CardHeader>
       <CardContent>
-        <DefaultModelSelector
+        <section aria-label="Messaging Agent model configuration">
+        {(isLoading || policy.isLoading) && <p>Loading messaging Agent model configuration...</p>}
+        {(isError || policy.isError) && <p className="text-destructive">Messaging Agent configuration could not be read. Saved selections are retained. Use Retry below.</p>}
+        {aiConfig && !policy.data && <dl aria-label="Saved messaging Agent selections">
+          {([['Primary', aiConfig.categoryDefaults.agent], ['Fallback', aiConfig.categoryFallbacks.agent], ['Fallback 2', aiConfig.categoryFallbacks2.agent]] as const).map(([label, saved]) => <div key={label}>
+            <dt>{label}</dt><dd>{saved ? `${saved.auth_method === 'oauth' ? 'Auth' : 'API'} · ${saved.provider_code} · ${saved.model_id}` : 'Not configured'}</dd>
+          </div>)}
+        </dl>}
+        {policy.data?.enabled && !policy.data.agentGroups && <p>Messaging Agent readiness is unavailable. <button type="button" onClick={() => { void policy.refetch(); }}>Retry Agent readiness</button></p>}
+        {aiConfig && policy.data && (!policy.data.enabled || policy.data.agentGroups) && <DefaultModelSelector
+          textListPolicy={policy.data}
+          saveError={agentSaveError}
           category="agent"
           capability="chat"
           title="Messaging agent"
@@ -84,12 +103,13 @@ export function AdminAiAgentSection() {
           currentDefault={aiConfig?.categoryDefaults.agent ?? null}
           currentFallback={aiConfig?.categoryFallbacks.agent ?? null}
           currentFallback2={aiConfig?.categoryFallbacks2.agent ?? null}
-          onSetDefault={(pc, mid, am) => setDefaultModel.mutate({ provider_code: pc, model_id: mid, category: "agent", auth_method: am })}
-          onSetFallback={(pc, mid, am) => setFallbackModel.mutate({ provider_code: pc, model_id: mid, category: "agent", auth_method: am })}
-          onSetFallback2={(pc, mid, am) => setFallback2Model.mutate({ provider_code: pc, model_id: mid, category: "agent", auth_method: am })}
-          isSaving={setDefaultModel.isPending || setFallbackModel.isPending || setFallback2Model.isPending}
-        />
+          onSetDefault={saveAgent(setDefaultModel)}
+          onSetFallback={saveAgent(setFallbackModel)}
+          onSetFallback2={saveAgent(setFallback2Model)}
+          isSaving={isError || policy.isError || setDefaultModel.isPending || setFallbackModel.isPending || setFallback2Model.isPending}
+        />}
 
+        </section>
         <Separator className="my-4" />
 
         <div className="flex items-start justify-between gap-4">

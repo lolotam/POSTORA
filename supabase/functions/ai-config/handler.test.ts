@@ -9,6 +9,48 @@ const { handleAiConfigRequest } = await import("./handler.ts");
 const input = { action: "set-chat-tier", category: "chat", slot: "primary", provider_code: "openai", model_id: "test-model", expected: {} };
 const encode = (body: unknown) => btoa(JSON.stringify(body)).replaceAll("=", "").replaceAll("+", "-").replaceAll("/", "_");
 const token = [encode({ alg: ["HS", 256].join(""), typ: ["J", "WT"].join("") }), encode({ sub: userId, exp: 4_000_000_000 }), encode(crypto.randomUUID())].join(".");
+
+for (const scenario of ["primary", "fallback", "fallback_2", "all Auth", "flag off", "non-admin", "conflict"] as const) {
+  Deno.test(`HTTP Agent policy ${scenario}`, async () => {
+    const original = globalThis.fetch;
+    const writes: Array<{ p_key: string; p_expected: unknown }> = [];
+    const logged: string[] = [];
+    const api = { provider_code: "openai", model_id: "tool-api" };
+    const auth = { provider_code: "claude", model_id: "claude-sonnet-4-5", auth_method: "oauth" };
+    const expected = { default_ai_model_agent: api, default_ai_model_agent_fallback: api, default_ai_model_agent_fallback_2: api };
+    const slot = scenario === "fallback" || scenario === "fallback_2" ? scenario : "primary";
+    globalThis.fetch = async (url, init) => {
+      const target = new URL(String(url));
+      const path = target.pathname.split("/").at(-1);
+      if (path === "user") return Response.json({ id: userId });
+      if (path === "system_logs") { logged.push(JSON.parse(String(init?.body)).metadata.reason); return Response.json(null); }
+      if (path === "write_ai_agent_tier") { writes.push(JSON.parse(String(init?.body))); return Response.json(scenario !== "conflict"); }
+      return Response.json(path === "user_roles" ? (scenario === "non-admin" ? [] : [{ role: "admin" }]) :
+        path === "system_settings" ? ["feature_ai_text_auth_lists", "feature_ai_provider_oauth", "feature_ai_oauth_tools_claude"].map(key => ({ key, value: key !== "feature_ai_oauth_tools_claude" || scenario !== "flag off" })) :
+        path === "ai_providers" ? ["claude", "openai"].map(provider_code => ({ id: provider_code, provider_code, name: provider_code, is_active: true })) :
+        path === "ai_models" && target.searchParams.get("offset") === "0" ? [{ provider_id: "openai", model_id: "tool-api", name: "API", capabilities: ["chat", "tools"], is_active: true }] :
+        path === "get_ai_oauth_statuses" ? [{ provider_code: "claude", status: "connected" }] :
+        path === "provider_api_keys" ? { api_key: crypto.randomUUID() } : []);
+    };
+    try {
+      const response = await handleAiConfigRequest(new Request("https://edge.example.test/ai-config", { method: "POST",
+        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" }, body: JSON.stringify({
+          action: "set-agent-tier", category: "agent", slot, ...auth,
+          expected: scenario === "all Auth" ? { default_ai_model_agent: auth } : expected,
+        }) }));
+      const reason = scenario === "non-admin" ? "not_admin" : scenario === "all Auth" || scenario === "fallback_2" ? "oauth_api_fallback_required" :
+        scenario === "flag off" ? "agent_model_tools_unavailable" : scenario === "conflict" ? "configuration_changed_retry" : null;
+      assertEquals(response.status, reason ? scenario === "non-admin" ? 403 : 409 : 200);
+      assertEquals(await response.json(), reason ? { error: reason } : { success: true });
+      assertEquals(writes.length, !reason || scenario === "conflict" ? 1 : 0);
+      if (writes.length) {
+        assertEquals(writes[0].p_key, `default_ai_model_agent${slot === "primary" ? "" : `_${slot}`}`);
+        assertEquals(writes[0].p_expected, expected);
+      }
+      assertEquals(logged, reason ? [reason] : []);
+    } finally { globalThis.fetch = original; }
+  });
+}
 async function flush() { for (let index = 0; index < 200; index++) await Promise.resolve(); }
 
 // PR #419 r3: run the actual HTTP adapter with real SDKs, replacing only network and clock.

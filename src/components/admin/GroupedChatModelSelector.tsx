@@ -5,6 +5,11 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import type { LucideIcon } from 'lucide-react';
 
 const REASONS = {
+  oauth_tools_disabled: 'Claude subscription tools disabled.',
+  oauth_tools_unsupported: 'Subscription tool transport unavailable for this provider.',
+  no_compatible_agent_models: 'No verified tool-capable Agent models. Sync or configure tool capability in AI Providers.',
+  tools_unsupported: 'Model has no verified tool capability.',
+
   flag_off: 'Subscription calls disabled.', inactive: 'Provider inactive.',
   not_connected: 'Connect a subscription in AI Providers.', reauth_required: 'Reauthentication required.',
   disconnected: 'Subscription disconnected.', api_key_absent: 'API key required.',
@@ -86,7 +91,7 @@ export function GroupedChatModelSelector({ title, description, icon: Icon, polic
       <GroupedChatTier label="Fallback" groups={policy.groups} current={currentFallback} onSelect={onSetFallback} isSaving={isSaving || readOnly || !currentDefault} />
       <GroupedChatTier label="Fallback 2" groups={policy.groups} current={currentFallback2} onSelect={onSetFallback2} isSaving={isSaving || readOnly || !currentDefault || !currentFallback} />
       {children}
-      {category === 'agent_triage'
+      {category === 'agent' ? <p className="text-xs text-muted-foreground">Every Auth tier requires a later active tool-capable API fallback. Configure API recovery first. Unsafe mutating tools block Auth; tools are never silently removed. No hardcoded fallback.</p> : category === 'agent_triage'
         ? <p className="text-xs text-muted-foreground">Claude Auth uses prompt-requested JSON, validated by the strict parser; provider-enforced JSON mode is unavailable. Triage never executes tools. Uncertain or unavailable triage preserves normal Agent behavior. No hardcoded fallback.</p>
         : <p className="text-xs text-muted-foreground">Last Resort (Hardcoded): google/gemini-3-flash-preview. Capped requests require a compatible tier. Claude Auth supports caps; OpenAI Codex Auth skips to a configured compatible tier.</p>}
     </CardContent>

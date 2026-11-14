@@ -25,6 +25,22 @@ function renderPolicy(policy: ChatListPolicy, extra: Record<string, unknown> = {
 }
 
 describe('flagged Chat selector', () => {
+  it('shows Agent Auth groups and tool/fallback requirements for every slot', () => {
+    renderPolicy({ enabled: true, groups: [], agentGroups: [group('api_key'), group('oauth'),
+      { ...group('oauth', 'oauth_tools_unsupported'), provider_code: 'openai', name: 'OpenAI Codex subscription' }] }, { category: 'agent' });
+    expect(screen.getAllByRole('group', { name: 'API' })).toHaveLength(3);
+    expect(screen.getAllByRole('group', { name: 'Auth' })).toHaveLength(3);
+    expect(screen.getByRole('combobox', { name: 'Primary model' })).toBeEnabled();
+    expect(screen.getByText(/Every Auth tier requires a later active tool-capable API fallback/)).toBeInTheDocument();
+    expect(screen.getAllByText(/Subscription tool transport unavailable/).length).toBeGreaterThan(0);
+    expect(screen.queryByText(/Last Resort \(Hardcoded\)/)).not.toBeInTheDocument();
+  });
+  it('keeps a saved Agent Auth choice disabled with its exact tool flag reason', () => {
+    renderPolicy({ enabled: true, groups: [], agentGroups: [group('oauth', 'oauth_tools_disabled')] }, { category: 'agent' });
+    expect(screen.getByText('Auth · claude · same')).toBeInTheDocument();
+    expect(screen.getByRole('combobox', { name: 'Primary model' })).toBeDisabled();
+    expect(screen.getAllByText('Claude subscription tools disabled.').length).toBeGreaterThan(0);
+  });
   it('uses Triage readiness in all slots, explains parsed JSON and the Codex 200-token refusal without claiming a hardcoded floor', () => {
     renderPolicy({ enabled: true, groups: [], triageGroups: [group('oauth'), { ...group('oauth', 'oauth_max_tokens_unsupported'), provider_code: 'openai', name: 'OpenAI Codex subscription' }] },
       { category: 'agent_triage', capability: 'triage' });

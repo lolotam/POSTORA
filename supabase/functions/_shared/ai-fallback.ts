@@ -8,6 +8,7 @@ import type { OAuthChainDeps } from "./aiOAuth/chainTier.ts";
 import { callOAuthTier, isOAuthTierModel } from "./aiOAuth/chainTier.ts";
 import { BUILTIN_CHAT_PROVIDERS, loadOpenAiCompatibleBase } from "./providerEndpoint.ts";
 import { resolveProviderKey } from "./providerKeys.ts";
+import { bufferedResponse, withDeadline } from "./deadline.ts";
 
 export type AiAuthMethod = 'api_key' | 'oauth';
 
@@ -412,20 +413,8 @@ export function resolveChatModelConfig(admin: SupabaseClient, userId: string | n
 const AI_TIER_TIMEOUT_MS = 15_000;
 
 export async function fetchWithTimeout(url: string, init: RequestInit, timeoutMs: number): Promise<Response> {
-  const ctrl = new AbortController();
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const deadline = new Promise<never>((_, reject) => {
-    timer = setTimeout(() => { ctrl.abort(); reject(new Error(`timeout after ${timeoutMs}ms`)); }, timeoutMs);
-  });
-  try {
-    return await Promise.race([deadline, (async () => {
-      const response = await fetch(url, { ...init, signal: ctrl.signal });
-      const body = await response.arrayBuffer();
-      return new Response(body.byteLength ? body : null, { status: response.status, headers: response.headers });
-    })()]);
-  } finally {
-    clearTimeout(timer);
-  }
+  return await withDeadline(timeoutMs, init.signal ?? undefined, async signal =>
+    await bufferedResponse(await fetch(url, { ...init, signal }), signal));
 }
 
 export function platformChatTiers(config: {
@@ -477,7 +466,7 @@ export async function callChatCompletion(
   }
   const endpoint = getAiEndpoint(tier.provider, apiKey, baseUrl);
   signal?.throwIfAborted();
-  return await fetchWithTimeout(endpoint.apiUrl, { method: 'POST', headers: endpoint.headers, body: JSON.stringify(body) }, signal ? Math.max(1, timeoutMs - (Date.now() - startedAt)) : timeoutMs);
+  return await fetchWithTimeout(endpoint.apiUrl, { method: 'POST', headers: endpoint.headers, body: JSON.stringify(body), signal }, signal ? Math.max(1, timeoutMs - (Date.now() - startedAt)) : timeoutMs);
 }
 
 export async function callAiChain(admin: AiRoutingAdmin | undefined, requestBody: Record<string, unknown>, candidates: AiTier[], oauth?: OAuthChainDeps & { deadlineAt?: number; enforceOutputCap?: boolean }): Promise<AiCallResult> {

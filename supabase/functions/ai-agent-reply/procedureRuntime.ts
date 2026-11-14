@@ -477,7 +477,7 @@ export function waitlistRound(sightings: StockSighting[], offered: StockSighting
   return { tool, gap };
 }
 
-const WAITLIST_FOLLOW_UP = "The waitlist could not be saved. Tell the customer the team will follow up.";
+export const WAITLIST_FOLLOW_UP = "The waitlist could not be saved. Tell the customer the team will follow up.";
 
 /** Out-of-stock sightings whose connector can actually deliver a later WhatsApp. */
 export async function boundWaitlistSightings(

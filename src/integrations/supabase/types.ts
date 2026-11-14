@@ -11785,6 +11785,10 @@ export type Database = {
         Args: { p_key: string; p_value: Json; p_expected: Json }
         Returns: boolean
       }
+      write_ai_agent_tier: {
+        Args: { p_key: string; p_value: Json; p_expected: Json }
+        Returns: boolean
+      }
       write_ai_triage_tier: {
         Args: { p_key: string; p_value: Json; p_expected: Json }
         Returns: boolean

@@ -3,8 +3,8 @@ import type { AiTextFlags } from "../_shared/aiOAuth/textFlags.ts";
 import { normalizeStoredTextTier } from "../_shared/textTierValue.ts";
 import { supportsOutputCap } from "../_shared/textLadders.ts";
 
-export type ChatListReason = "flag_off" | "inactive" | "not_connected" | "reauth_required" | "disconnected" | "api_key_absent" | "no_compatible_models" | "no_compatible_triage_models" | "oauth_max_tokens_unsupported" | "triage_api_unsupported";
-export interface ChatListModel { model_id: string; name: string; provisional: boolean; reason: "inactive" | "unsupported_model" | null }
+export type ChatListReason = "flag_off" | "inactive" | "not_connected" | "reauth_required" | "disconnected" | "api_key_absent" | "no_compatible_models" | "no_compatible_triage_models" | "oauth_max_tokens_unsupported" | "triage_api_unsupported" | "oauth_tools_unsupported" | "oauth_tools_disabled" | "no_compatible_agent_models";
+export interface ChatListModel { model_id: string; name: string; provisional: boolean; reason: "inactive" | "unsupported_model" | "tools_unsupported" | null }
 export interface ChatListGroup {
   provider_code: string; auth_method: "api_key" | "oauth"; name: string;
   reason: ChatListReason | null; synced_at: string | null; models: ChatListModel[];
@@ -12,13 +12,14 @@ export interface ChatListGroup {
 export interface ChatPolicySnapshot {
   flags: AiTextFlags;
   providers: Array<{ id: string; provider_code: string; name: string; is_active: boolean }>;
-  models: Array<{ provider_id: string; model_id: string; name: string; auth_method?: string; is_active: boolean; capabilities: string[] }>;
+  models: Array<{ provider_id: string; model_id: string; name: string; auth_method?: string; is_active: boolean; capabilities: string[]; metadata?: Record<string, unknown> | null }>;
   settings: Array<{ key: string; value: unknown }>;
   statuses: Array<{ provider_code: string; status: string }>;
   apiKeys: Record<string, boolean>;
   /** Read through the runtime credential resolver; never inferred from another provider's key. */
   textFloorAvailable?: boolean;
   registry: Record<string, string[]>;
+  toolRegistry?: Record<string, string[]>;
 }
 
 const AUTH_NAMES: Record<string, string> = { claude: "Claude subscription", openai: "OpenAI Codex subscription", openrouter: "OpenRouter Auth" };

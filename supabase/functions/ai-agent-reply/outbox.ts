@@ -267,6 +267,15 @@ export class ReplyNotDeliverableError extends Error {
   }
 }
 
+/** Only the sender boundary can prove transport was never invoked. Other
+ * failures, including cancellation after invocation, remain delivery_unknown. */
+export class ReplyNotSentError extends Error {
+  constructor(cause: unknown) {
+    super("reply cancelled before transport invocation", { cause });
+    this.name = "ReplyNotSentError";
+  }
+}
+
 /**
  * The delivery half, shared by both entry points below:
  *
@@ -295,6 +304,7 @@ async function sendAndSettle(
   expected: { text: string; kind: StoredReplyKind },
   send: (text: string) => Promise<string>,
   userId?: string,
+  settlementAdmin: SupabaseClient = admin,
 ): Promise<DeliveredReply> {
   const claimed = await advanceOwnedReply(admin, outboxId, userId, {
     from: "ready_to_send",
@@ -314,15 +324,15 @@ async function sendAndSettle(
   } catch (error) {
     // Only reached when this process survives the throw. A killed isolate runs no catch --
     // which is why `sending` is durable and this is a courtesy, not the guarantee.
-    await advanceOwnedReply(admin, outboxId, userId, {
+    await advanceOwnedReply(settlementAdmin, outboxId, userId, {
       from: "sending",
-      to: "delivery_unknown",
+      to: error instanceof ReplyNotSentError ? "ready_to_send" : "delivery_unknown",
       error: (error as Error)?.message ?? String(error),
     });
     throw error;
   }
 
-  await advanceOwnedReply(admin, outboxId, userId, { from: "sending", to: "sent" });
+  await advanceOwnedReply(settlementAdmin, outboxId, userId, { from: "sending", to: "sent" });
   return { messageId: outboundMessageId, text: expected.text, kind: expected.kind };
 }
 
@@ -389,6 +399,7 @@ export async function deliverGeneratedReply(
   },
   send: (text: string) => Promise<string>,
   userId?: string,
+  settlementAdmin: SupabaseClient = admin,
 ): Promise<DeliveredReply> {
   const { text } = reply;
   if (reply.kind === "human_mode_ack" && !reply.humanModeAck) {
@@ -414,7 +425,7 @@ export async function deliverGeneratedReply(
     humanModeAck: reply.humanModeAck ?? null,
   });
   if (!persisted) throw new ReplyNotPersistedError();
-  return await sendAndSettle(admin, outboxId, { text, kind: reply.kind ?? "reply" }, send, userId);
+  return await sendAndSettle(admin, outboxId, { text, kind: reply.kind ?? "reply" }, send, userId, settlementAdmin);
 }
 
 /**
@@ -430,8 +441,9 @@ export async function deliverStoredReply(
   stored: { text: string; kind: StoredReplyKind },
   send: (text: string) => Promise<string>,
   userId?: string,
+  settlementAdmin: SupabaseClient = admin,
 ): Promise<DeliveredReply> {
-  return await sendAndSettle(admin, outboxId, stored, send, userId);
+  return await sendAndSettle(admin, outboxId, stored, send, userId, settlementAdmin);
 }
 
 /**
