@@ -8,6 +8,8 @@
 // Spec: docs/superpowers/specs/2026-09-25-jev-agent-triage-design.md,
 //       docs/superpowers/specs/2026-10-05-vision-ladder-and-model-cleanup.md (Phase C)
 
+import { normalizeStoredTextTier, supportsOutputCap } from "./textTierValue.ts";
+
 /** Providers that serve the decision API. */
 export type TriageProvider = "openrouter" | "vercel";
 export type TriageKind = "decision" | "chat";
@@ -290,7 +292,12 @@ export function triageSlotsFromSettings(
   if ((byKey.get(ENABLED_KEY) as { enabled?: unknown } | undefined)?.enabled !== true) return [];
   const slots: Array<{ provider: string; model: string; authMethod?: "oauth" }> = [];
   for (const key of SLOT_KEYS) {
-    const slotValue = byKey.get(key) as { provider_code?: unknown; model_id?: unknown; auth_method?: unknown } | undefined;
+    let stored = byKey.get(key);
+    if (byKey.get("feature_ai_text_auth_lists") === true) {
+      try { stored = normalizeStoredTextTier(stored); }
+      catch { return []; } // Malformed enabled configuration must not narrow Agent access.
+    }
+    const slotValue = stored as { provider_code?: unknown; model_id?: unknown; auth_method?: unknown } | undefined;
     if (typeof slotValue?.provider_code === "string" && slotValue.provider_code &&
       typeof slotValue.model_id === "string" && slotValue.model_id) {
       slots.push({
@@ -328,18 +335,90 @@ export function triageChainFromSettings(
 }
 
 /** Sends a chat-completions body to one chat tier. Supplied by the caller (it owns keys and endpoints). */
-export type TriageChatCall = (tier: TriageTier, body: Record<string, unknown>, timeoutMs: number) => Promise<Response>;
+export type TriageChatCall = (tier: TriageTier, body: Record<string, unknown>, timeoutMs: number, signal?: AbortSignal) => Promise<Response>;
+
+/** A race also bounds transports that do not cooperate with cancellation. */
+async function withinTriageSignal<T>(work: () => Promise<T>, signal: AbortSignal): Promise<T> {
+  signal.throwIfAborted();
+  let abort: () => void = () => {};
+  const deadline = new Promise<never>((_, reject) => { abort = () => reject(signal.reason); signal.addEventListener("abort", abort, { once: true }); });
+  try { return await Promise.race([work(), deadline]); }
+  finally { signal.removeEventListener("abort", abort); }
+}
+
+const OAUTH_REFUSALS = new Set(["oauth_disabled", "oauth_provider_disabled", "oauth_unsupported_provider", "oauth_max_tokens_unsupported",
+  "not_connected", "reauth_required", "refresh_failed", "refresh_timeout", "oauth_request_unsupported"]);
+
+async function boundedTriageAnswers(tier: TriageTier, input: TriageInput, signal: AbortSignal,
+  deps: { resolveKey: (provider: TriageProvider, signal?: AbortSignal) => Promise<string | null>; callChat: TriageChatCall | null; fetchImpl: typeof fetch; timeoutMs: number }): Promise<TriageAnswers> {
+  let response: Response;
+  if (tier.kind === "chat") {
+    if (!deps.callChat) throw new Error("chat triage unavailable");
+    const body = chatTriageRequestBody(input);
+    // Claude subscription JSON is requested by the prompt and checked locally.
+    if (tier.authMethod === "oauth") delete body.response_format;
+    response = await deps.callChat(tier, body, deps.timeoutMs, signal);
+  } else {
+    const provider = tier.provider as TriageProvider;
+    const key = await deps.resolveKey(provider, signal);
+    signal.throwIfAborted();
+    if (!key) throw new Error("no API key");
+    response = await deps.fetchImpl(triageEndpoint(provider), { method: "POST", headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
+      body: JSON.stringify(triageRequestBody({ ...tier, provider }, input)), signal });
+  }
+  const json = await new Response(response.body?.pipeThrough(new TransformStream(), { signal })).json();
+  if (!response.ok) {
+    const code = json?.error;
+    throw new Error(tier.authMethod === "oauth" && typeof code === "string" && OAUTH_REFUSALS.has(code) ? code : `HTTP ${response.status}`);
+  }
+  const answers = tier.kind === "chat" ? parseChatTriageAnswers(chatContent(json)) : parseTriageAnswers(tier.provider as TriageProvider, json);
+  if (!answers) throw new Error("unparseable answer");
+  return answers;
+}
+
+async function runBoundedTriage(tiers: TriageTier[], input: TriageInput,
+  deps: { resolveKey: (provider: TriageProvider, signal?: AbortSignal) => Promise<string | null>; callChat: TriageChatCall | null; fetchImpl: typeof fetch; budgetMs: number; now: () => number }): Promise<TriageRun> {
+  const startedAt = deps.now();
+  const errors: TriageRun["errors"] = [];
+  if (deps.budgetMs <= 0) return { outcome: null, errors: tiers.slice(0, 1).map(tier => ({ model: `${tier.provider}/${tier.model}`, error: "triage_deadline_exceeded" })) };
+  const deadline = AbortSignal.timeout(Math.max(0, Math.ceil(deps.budgetMs)));
+  const keys = new Map<TriageProvider, Promise<string | null>>();
+  for (const [index, tier] of tiers.entries()) {
+    const remaining = deps.budgetMs - (deps.now() - startedAt);
+    if (remaining <= 0 || deadline.aborted) break;
+    const label = `${tier.provider}/${tier.model}`;
+    if (!supportsOutputCap(tier)) { errors.push({ model: label, error: "oauth_max_tokens_unsupported" }); continue; }
+    const timeoutMs = index === 0 && tiers.length > 1 ? Math.min(remaining, FIRST_TIER_CAP_MS[tier.kind]) : remaining;
+    const signal = AbortSignal.any([deadline, AbortSignal.timeout(Math.max(0, Math.ceil(timeoutMs)))]);
+    try {
+      const answers = await withinTriageSignal(() => boundedTriageAnswers(tier, input, signal, { ...deps, timeoutMs,
+        resolveKey: (provider, readSignal) => {
+          if (!keys.has(provider)) keys.set(provider, deps.resolveKey(provider, readSignal));
+          return keys.get(provider)!;
+        } }), signal);
+      return { outcome: { provider: tier.provider, model: tier.model, latencyMs: deps.now() - startedAt, answers,
+        plan: planFromAnswers(answers, input.connectors.map(c => c.name)) }, errors };
+    } catch (cause) {
+      const known = cause instanceof Error && (OAUTH_REFUSALS.has(cause.message) || ["unparseable answer", "no API key", "chat triage unavailable"].includes(cause.message) || /^HTTP \d{3}$/.test(cause.message));
+      const error = signal.aborted ? "triage_deadline_exceeded" : known ? (cause as Error).message : "triage_request_failed";
+      errors.push({ model: label, error });
+    }
+  }
+  return { outcome: null, errors };
+}
 
 // Never throws: every failure is recorded and the caller runs today's pipeline.
 export async function runTriage(
   tiers: TriageTier[],
   input: TriageInput,
-  resolveKey: (providerCode: TriageProvider) => Promise<string | null>,
+  resolveKey: (providerCode: TriageProvider, signal?: AbortSignal) => Promise<string | null>,
   budgetMs = triageBudgetFor(tiers),
   fetchImpl: typeof fetch = fetch,
   now: () => number = Date.now,
   callChat: TriageChatCall | null = null,
+  policyEnabled = false,
 ): Promise<TriageRun> {
+  if (policyEnabled) return runBoundedTriage(tiers, input, { resolveKey, budgetMs, fetchImpl, now, callChat });
   const startedAt = now();
   const errors: TriageRun["errors"] = [];
   // Memoized per provider: two tiers on the same provider (primary + fallback)

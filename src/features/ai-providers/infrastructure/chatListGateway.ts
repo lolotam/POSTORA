@@ -5,23 +5,21 @@ import { normalizeStoredTextTier } from '../../../../supabase/functions/_shared/
 
 const groupSchema = z.object({
   provider_code: z.string(), auth_method: z.enum(['api_key', 'oauth']), name: z.string(),
-  reason: z.enum(['flag_off', 'inactive', 'not_connected', 'reauth_required', 'disconnected', 'api_key_absent', 'no_compatible_models']).nullable(),
+  reason: z.enum(['flag_off', 'inactive', 'not_connected', 'reauth_required', 'disconnected', 'api_key_absent', 'no_compatible_models', 'no_compatible_triage_models', 'oauth_max_tokens_unsupported', 'triage_api_unsupported']).nullable(),
   synced_at: z.string().nullable(),
   models: z.array(z.object({ model_id: z.string(), name: z.string(), provisional: z.boolean(), reason: z.enum(['inactive', 'unsupported_model']).nullable() })),
 });
 const policySchema = z.discriminatedUnion('enabled', [
   z.object({ enabled: z.literal(false) }),
-  z.object({ enabled: z.literal(true), groups: z.array(groupSchema), categoryLaddersEnabled: z.boolean().optional() }),
+  z.object({ enabled: z.literal(true), groups: z.array(groupSchema), triageGroups: z.array(groupSchema).optional(), categoryLaddersEnabled: z.boolean().optional() }),
 ]);
 export type ChatListPolicy = z.infer<typeof policySchema>;
 export type ChatListGroup = z.infer<typeof groupSchema>;
-export type ChatTierInput = { category: 'chat'; slot: 'primary' | 'fallback' | 'fallback_2'; provider_code: string; model_id: string; auth_method?: 'api_key' | 'oauth'; expected: Record<string, unknown> };
+export type ChatTierInput = { category: 'chat' | 'agent_triage'; slot: 'primary' | 'fallback' | 'fallback_2'; provider_code: string; model_id: string; auth_method?: 'api_key' | 'oauth'; expected: Record<string, unknown> };
 export const CHAT_LIST_POLICY_QUERY_KEY = ['ai-chat-list-policy'] as const;
 export const CHAT_TIER_KEYS = ['default_ai_model_chat', 'default_ai_model_chat_fallback', 'default_ai_model_chat_fallback_2'] as const;
 const RETRY_MESSAGE = 'AI configuration could not be saved or read. Retry; check AI Providers if it remains unavailable.';
 const savedTierSchema = z.object({ provider_code: z.string(), model_id: z.string(), auth_method: z.enum(['api_key', 'oauth']).optional() });
-type SavedChatTier = z.infer<typeof savedTierSchema>;
-type ChatTierSnapshot = Partial<Record<typeof CHAT_TIER_KEYS[number], SavedChatTier | null>>;
 export type TextTierSnapshot = Record<string, Record<string, unknown> | string | null>;
 const rawTextTierSchema = z.union([savedTierSchema.passthrough(), z.string(), z.null()]).superRefine((stored, context) => {
   try { normalizeStoredTextTier(stored); }
@@ -48,12 +46,20 @@ export async function fetchChatListPolicy(): Promise<ChatListPolicy> {
   return parsed.data;
 }
 
-export async function saveChatTier(input: ChatTierInput, onReconciled?: (snapshot: ChatTierSnapshot) => void | Promise<void>): Promise<void> {
+export async function saveChatTier(input: ChatTierInput, onReconciled?: (snapshot: TextTierSnapshot) => void | Promise<void>): Promise<void> {
   let response: unknown;
   try {
-    response = await invokeChatAction({ action: 'set-chat-tier', ...input });
+    response = await invokeChatAction({ action: input.category === 'agent_triage' ? 'set-triage-tier' : 'set-chat-tier', ...input });
   } catch (cause) {
     if (!(cause instanceof ChatActionError) || cause.outcome === 'refused') throw cause;
+    if (input.category === 'agent_triage') {
+      const keys = textTierKeys(input.category);
+      const { data, error } = await supabase.from('system_settings').select('key,value').in('key', keys).abortSignal(AbortSignal.timeout(30_000));
+      const observed = z.array(z.object({ key: z.string(), value: rawTextTierSchema })).safeParse(data);
+      if (error || !observed.success || observed.data.some(row => !keys.includes(row.key))) throw new Error('AI configuration save outcome could not be confirmed. Retry or reload to refresh.');
+      await onReconciled?.(Object.fromEntries(keys.map(key => [key, observed.data.find(row => row.key === key)?.value])));
+      throw cause;
+    }
     if (cause.outcome === 'conflict') {
       // CAS compares the whole chain. Refresh siblings in one read too, including
       // absent rows, or the next manual retry would carry the stale expectation.

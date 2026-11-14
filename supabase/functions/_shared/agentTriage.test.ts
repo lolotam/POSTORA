@@ -26,7 +26,7 @@ Deno.test("each provider gets its own endpoint and yes/no question type", () => 
 
 Deno.test("the connector question lists each connector plus a no-tool option, and is omitted without connectors", () => {
   const withTools = triageRequestBody({ provider: "vercel", model: "m", kind: "decision" }, input);
-  const criteria = (withTools.questions as any).connector.criteria;
+  const criteria = (withTools.questions as Record<string, { criteria: Record<string, string> }>).connector.criteria;
   assertEquals(Object.keys(criteria).sort(), [NO_TOOL, "store_catalog"]);
   const bare = triageRequestBody({ provider: "vercel", model: "m", kind: "decision" }, { ...input, connectors: [], askHandoff: false });
   assertEquals(Object.keys(bare.questions as object).sort(), ["intent", "needs_knowledge", "smalltalk"]);
@@ -345,4 +345,57 @@ Deno.test("without a chat call a chat tier is recorded, not thrown", async () =>
   const run = await runTriage([{ provider: "deepseek", model: "deepseek-flash", kind: "chat" }], input, key);
   assertEquals(run.outcome, null);
   assertEquals(run.errors, [{ model: "deepseek/deepseek-flash", error: "chat triage unavailable" }]);
+});
+
+const claudeTier = [{ provider: "claude", model: "claude-sonnet-4-5", kind: "chat" as const, authMethod: "oauth" as const }];
+
+Deno.test("enabled triage skips capped Codex before credentials or inference and retains Claude parsed JSON", async () => {
+  const calls: string[] = [];
+  const run = await runTriage([{ ...claudeTier[0], provider: "openai", model: "codex" }, ...claudeTier], input, key, 1500, fetch, Date.now,
+    async (tier, body) => {
+      calls.push(tier.provider);
+      assertEquals(body.max_tokens, 200);
+      assertEquals(body.tools, undefined);
+      assertEquals(body.response_format, undefined); // Prompt-requested JSON, not provider-enforced mode.
+      return Response.json({ choices: [{ message: { content: '{"needs_knowledge":0.99,"smalltalk":0.01}' } }] });
+    }, true);
+  assertEquals(calls, ["claude"]);
+  assertEquals(run.errors, [{ model: "openai/codex", error: "oauth_max_tokens_unsupported" }]);
+  assertEquals(run.outcome?.plan, { skipKnowledge: false, smalltalk: false, handoff: false, connectors: "all" });
+});
+
+for (const reason of ["oauth_disabled", "reauth_required", "not_connected"] as const) {
+  Deno.test(`enabled triage records sanitized ${reason} and falls back to the decision API`, async () => {
+    const run = await runTriage([...claudeTier, tiers[1]], input, key, 1500,
+      (() => Promise.resolve(Response.json(okJson))) as typeof fetch, Date.now,
+      () => Promise.resolve(Response.json({ error: reason, private_detail: "never log response bodies" }, { status: 502 })), true);
+    assertEquals(run.errors, [{ model: "claude/claude-sonnet-4-5", error: reason }]);
+    assertEquals(run.outcome?.provider, "vercel");
+  });
+}
+
+for (const boundary of ["key", "inference", "body"] as const) {
+  Deno.test(`enabled triage includes stalled ${boundary} in one overall budget and preserves normal Agent access`, async () => {
+    const delay = <T>(value: T) => new Promise<T>(resolve => setTimeout(() => resolve(value), 120));
+    const active = boundary === "key" ? [tiers[1]] : claudeTier;
+    const started = Date.now();
+    let cancelled = false;
+    const stream = new ReadableStream<Uint8Array>({ start(controller) { setTimeout(() => { if (!cancelled) { controller.enqueue(new TextEncoder().encode("{}")); controller.close(); } }, 120); }, cancel() { cancelled = true; } });
+    const run = await runTriage(active, input, boundary === "key" ? () => delay("key") : key, 25,
+      (() => Promise.resolve(Response.json(okJson))) as typeof fetch, Date.now,
+      () => boundary === "inference" ? delay(Response.json({})) : Promise.resolve(new Response(stream)), true);
+    assertEquals(run.outcome, null);
+    assertEquals(Date.now() - started < 100, true, `${boundary} exceeded the overall budget`);
+    assertEquals(run.errors[0]?.error, "triage_deadline_exceeded");
+    assertEquals(selectConnectorTools(input.connectors, run.outcome?.plan ?? null), input.connectors);
+    // Let our bounded fake transport finish so Deno sees no dangling timer/stream.
+    await delay(null);
+  });
+}
+
+Deno.test("enabled triage normalizes legacy stored strings without changing the disabled policy path", () => {
+  const rows = [enabled, { key: "feature_ai_text_auth_lists", value: true },
+    { key: "default_ai_model_agent_triage", value: JSON.stringify({ provider_code: "claude", model_id: "claude-sonnet-4-5", auth_method: "oauth", extension: true }) }];
+  assertEquals(triageChainFromSettings(rows), claudeTier);
+  assertEquals(triageChainFromSettings(rows.map(row => row.key === "feature_ai_text_auth_lists" ? { ...row, value: false } : row)), []);
 });

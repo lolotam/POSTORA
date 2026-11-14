@@ -30,9 +30,7 @@ export function parseTextLadder(rows: Array<{ key: string; value: unknown }>, ca
   return tiers;
 }
 
-export function supportsOutputCap(tier: { provider: string; authMethod?: string; credentialSource?: string }): boolean {
-  return tier.credentialSource === "user" || tier.authMethod !== "oauth" || tier.provider !== "openai";
-}
+export { supportsOutputCap } from "./textTierValue.ts";
 
 /** Same Chat floor policy, explicitly shared by both new text categories. */
 export const TEXT_LAST_RESORT = { provider: "google", model: "gemini-3-flash-preview" };

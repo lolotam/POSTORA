@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { toast } from "sonner";
 import { Bot } from "lucide-react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -13,6 +13,8 @@ import {
   useSetFallback2Model,
 } from "@/hooks/useAIConfiguration";
 import { useAgentTriageEnabled } from "@/hooks/ai-config/useAgentTriageEnabled";
+import { useChatListPolicy } from "@/hooks/ai-config/useChatListPolicy";
+import type { AiAuthMethod } from "@/hooks/useAIConfiguration";
 
 // Any provider can hold a triage slot: decision models (Jev) on OpenRouter/Vercel, and
 // fast chat models tagged triage_chat on any OpenAI-compatible provider. The selector
@@ -29,11 +31,18 @@ const TRIAGE_EXCLUDED_PROVIDERS = ["claude"];
 const AGENT_PROVIDER_CODES = ["openai", "openrouter", "gemini", "claude", "vercel", "deepseek", "moonshot"];
 
 export function AdminAiAgentSection() {
-  const { data: aiConfig } = useAIConfiguration();
+  const { data: aiConfig, isLoading, isError, refetch } = useAIConfiguration();
+  const policy = useChatListPolicy(true);
+  const [saveError, setSaveError] = useState<string>();
   const setDefaultModel = useSetDefaultModel();
   const setFallbackModel = useSetFallbackModel();
   const setFallback2Model = useSetFallback2Model();
   const triage = useAgentTriageEnabled();
+  const saveTriage = (mutation: typeof setDefaultModel) => async (provider_code: string, model_id: string, auth_method?: AiAuthMethod) => {
+    setSaveError(undefined);
+    try { await mutation.mutateAsync({ provider_code, model_id, auth_method, category: "agent_triage" }); }
+    catch (error) { setSaveError(error instanceof Error ? error.message : "Could not save triage model. Retry."); }
+  };
 
   const agentProviders = useMemo(
     () => (aiConfig?.providers || []).filter((p) => AGENT_PROVIDER_CODES.includes(p.provider_code)),
@@ -103,7 +112,20 @@ export function AdminAiAgentSection() {
         </div>
 
         <div className="mt-4">
+          {(isLoading || policy.isLoading) && <p role="status">Loading triage model configuration...</p>}
+          {(isError || policy.isError || (policy.data?.enabled && !policy.data.triageGroups)) && <p role="alert">
+            Triage model configuration could not be read. Saved selections are retained.
+            <button type="button" className="ml-2 underline" onClick={() => { void refetch(); void policy.refetch(); }}>Retry</button>
+          </p>}
+          {aiConfig && (!policy.data || (policy.data.enabled && !policy.data.triageGroups)) && <dl className="space-y-2 text-xs" aria-label="Saved triage selections">
+            {([['Primary', aiConfig.categoryDefaults.agent_triage], ['Fallback', aiConfig.categoryFallbacks.agent_triage], ['Fallback 2', aiConfig.categoryFallbacks2.agent_triage]] as const).map(([label, saved]) => <div key={label}>
+              <dt>{label}</dt><dd>{saved ? `${saved.auth_method === 'oauth' ? 'Auth' : 'API'} · ${saved.provider_code} · ${saved.model_id}` : 'Not configured'}</dd>
+            </div>)}
+          </dl>}
+          {aiConfig && policy.data && (!policy.data.enabled || policy.data.triageGroups) && <>
           <DefaultModelSelector
+            textListPolicy={policy.data}
+            saveError={saveError}
             category="agent_triage"
             capability="triage"
             title="Triage model"
@@ -114,11 +136,12 @@ export function AdminAiAgentSection() {
             currentDefault={aiConfig?.categoryDefaults.agent_triage ?? null}
             currentFallback={aiConfig?.categoryFallbacks.agent_triage ?? null}
             currentFallback2={aiConfig?.categoryFallbacks2.agent_triage ?? null}
-            onSetDefault={(pc, mid, am) => setDefaultModel.mutate({ provider_code: pc, model_id: mid, category: "agent_triage", auth_method: am })}
-            onSetFallback={(pc, mid, am) => setFallbackModel.mutate({ provider_code: pc, model_id: mid, category: "agent_triage", auth_method: am })}
-            onSetFallback2={(pc, mid, am) => setFallback2Model.mutate({ provider_code: pc, model_id: mid, category: "agent_triage", auth_method: am })}
-            isSaving={setDefaultModel.isPending || setFallbackModel.isPending || setFallback2Model.isPending}
+            onSetDefault={saveTriage(setDefaultModel)}
+            onSetFallback={saveTriage(setFallbackModel)}
+            onSetFallback2={saveTriage(setFallback2Model)}
+            isSaving={isError || policy.isError || (policy.data.enabled && !policy.data.triageGroups) || setDefaultModel.isPending || setFallbackModel.isPending || setFallback2Model.isPending}
           />
+          </>}
         </div>
       </CardContent>
     </Card>

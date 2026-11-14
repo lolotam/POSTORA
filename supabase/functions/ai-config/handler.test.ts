@@ -115,3 +115,45 @@ for (const termination of ["deadline", "client abort"] as const) {
     }
   });
 }
+
+for (const scenario of ["primary", "fallback", "fallback_2", "Codex cap", "master off", "reauth", "non-admin", "conflict"] as const) {
+  Deno.test(`HTTP Triage save: ${scenario}`, async () => {
+    const original = globalThis.fetch;
+    const writes: Array<Record<string, unknown>> = [];
+    const logged: string[] = [];
+    const expected: Record<string, unknown> = {};
+    const sibling = JSON.stringify({ provider_code: "claude", model_id: "claude-sonnet-4-5", auth_method: "oauth", extension: { retain: true } });
+    if (scenario === "fallback" || scenario === "fallback_2") expected.default_ai_model_agent_triage = sibling;
+    if (scenario === "fallback_2") expected.default_ai_model_agent_triage_fallback = { provider_code: "claude", model_id: "claude-sonnet-4-5", auth_method: "oauth" };
+    globalThis.fetch = (url, init) => {
+      const path = new URL(String(url)).pathname.split("/").at(-1);
+      if (path === "user") return Promise.resolve(Response.json({ id: userId }));
+      if (path === "system_logs") { logged.push(JSON.parse(String(init?.body)).metadata.reason); return Promise.resolve(Response.json(null)); }
+      if (path === "write_ai_triage_tier") { writes.push(JSON.parse(String(init?.body))); return Promise.resolve(Response.json(scenario !== "conflict")); }
+      const data = path === "user_roles" ? (scenario === "non-admin" ? [] : [{ role: "admin" }]) :
+        path === "system_settings" ? [{ key: "feature_ai_text_auth_lists", value: true }, { key: "feature_ai_provider_oauth", value: scenario !== "master off" }] :
+        path === "ai_providers" ? [{ id: "claude", provider_code: "claude", name: "Claude", is_active: true }] :
+        path === "get_ai_oauth_statuses" ? [{ provider_code: "claude", status: scenario === "reauth" ? "reauth_required" : "connected" }] :
+        path === "provider_api_keys" ? null : [];
+      return Promise.resolve(Response.json(data));
+    };
+    try {
+      const response = await handleAiConfigRequest(new Request("https://edge.example.test/ai-config", {
+        method: "POST", headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" }, body: JSON.stringify({
+          action: "set-triage-tier", category: "agent_triage", slot: scenario === "fallback" || scenario === "fallback_2" ? scenario : "primary",
+          provider_code: scenario === "Codex cap" ? "openai" : "claude", model_id: scenario === "Codex cap" ? "gpt-5.4" : "claude-sonnet-4-5", auth_method: "oauth", expected,
+        }),
+      }));
+      const refusal = scenario === "Codex cap" ? "oauth_max_tokens_unsupported" : scenario === "master off" ? "flag_off" :
+        scenario === "reauth" ? "reauth_required" : scenario === "non-admin" ? "not_admin" : scenario === "conflict" ? "configuration_changed_retry" : null;
+      assertEquals(response.status, refusal ? scenario === "non-admin" ? 403 : 409 : 200);
+      assertEquals(await response.json(), refusal ? { error: refusal } : { success: true });
+      if (!refusal || scenario === "conflict") {
+        assertEquals(writes.length, 1);
+        assertEquals(writes[0].p_expected, expected);
+        assertEquals(writes[0].p_key, `default_ai_model_agent_triage${scenario === "fallback" || scenario === "fallback_2" ? `_${scenario}` : ""}`);
+      } else assertEquals(writes.length, 0);
+      assertEquals(logged, refusal ? [refusal] : []);
+    } finally { globalThis.fetch = original; }
+  });
+}

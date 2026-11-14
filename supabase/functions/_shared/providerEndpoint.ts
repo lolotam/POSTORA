@@ -49,12 +49,13 @@ export async function serviceClient(): Promise<RowReader> {
   return createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!) as unknown as RowReader;
 }
 
-export async function loadOpenAiCompatibleBase(admin: RowReader | undefined, providerCode: string): Promise<string | null> {
+export async function loadOpenAiCompatibleBase(admin: RowReader | undefined, providerCode: string, signal?: AbortSignal): Promise<string | null> {
   const hit = cache.get(providerCode);
   if (hit && Date.now() - hit.at < CACHE_TTL_MS) return hit.value;
   const db = admin ?? await serviceClient();
-  const { data, error } = await db.from("ai_providers")
-    .select("api_endpoint, api_type, is_active").eq("provider_code", providerCode).maybeSingle();
+  const query = db.from("ai_providers").select("api_endpoint, api_type, is_active").eq("provider_code", providerCode);
+  if (signal && !query.abortSignal) throw new Error("Provider read cancellation is unavailable");
+  const { data, error } = await (signal ? query.abortSignal!(signal) : query).maybeSingle();
   if (error) throw new Error("AI provider read failed");
   const row = data as { api_endpoint?: unknown; api_type?: unknown; is_active?: unknown } | null;
   const base = row && row.is_active && row.api_type === "openai" && typeof row.api_endpoint === "string"
