@@ -16,6 +16,44 @@ function database(rows: Array<{ key: string; value: unknown }>, override: unknow
     return Response.json(rows.filter(row => keys.includes(row.key)));
   } } });
 }
+for (const category of ['chat', 'caption', 'hashtags'] as const) {
+  for (const inherited of [true, false]) {
+    Deno.test(`${category} ${inherited ? 'inherited' : 'custom'} OAuth override survives routing and expiry`, async () => {
+      const { composeAiTiers } = await import('./ai-user-routing.ts');
+      const rows = [{ key: 'feature_ai_category_text_ladders', value: true },
+        { key: 'default_ai_model_chat', value: api('chat') },
+        { key: 'default_ai_model_chat_fallback', value: api('chat-fallback') }];
+      if (!inherited && category !== 'chat') rows.push({ key: `default_ai_model_${category}`, value: api('custom') });
+      const override = { provider: 'claude', model: 'override', auth_method: 'oauth', expires_at: null };
+      const config = await fallback.resolveTextModelConfig(database(rows, override), 'owner', category);
+      const platform = fallback.platformChatTiers(config);
+      assertEquals(platform[0], { provider: 'claude', model: 'override', credentialSource: 'platform', authMethod: 'oauth' });
+      assertEquals(platform[1].model, inherited || category === 'chat' ? 'chat' : 'custom');
+      const ownTier = { provider: 'openai', model: 'own', credentialSource: 'user' as const, apiKey: crypto.randomUUID() };
+      for (const mode of ['postora_only', 'user_first', 'user_only'] as const) {
+        const chain = composeAiTiers({ mode, allowPlatformFallback: mode === 'user_first', ...(mode === 'postora_only' ? {} : { userTier: ownTier }) }, platform);
+        assertEquals(chain.length, mode === 'user_only' ? 1 : 3);
+        assertEquals(chain.some(t => 'authMethod' in t && t.authMethod === 'oauth'), mode !== 'user_only');
+        if (mode === 'user_first') assertEquals(chain[1], platform[0]);
+      }
+      const expired = await fallback.resolveTextModelConfig(database(rows, { ...override, expires_at: '2000-01-01' }), 'owner', category);
+      assertEquals(expired.source === 'user_override', false);
+    });
+  }
+}
+Deno.test('override auth discriminator refuses unknown explicit values', async () => {
+  await assertRejects(() => fallback.resolveChatModelConfig(database([], { provider: 'claude', model: 'same', auth_method: 'typo', expires_at: null }), 'owner'));
+});
+Deno.test('legacy Chat configuration and override reads share one bounded signal', async () => {
+  const signals: Array<AbortSignal | null | undefined> = [];
+  const db = createClient('https://fixture.invalid', crypto.randomUUID(), { global: { fetch: async (input, init) => {
+    signals.push(init?.signal);
+    return Response.json(String(input).includes('user_ai_model_overrides') ? null : []);
+  } } });
+  await fallback.resolveChatModelConfig(db, 'owner');
+  assertEquals(signals.length, 2);
+  assertEquals(signals.every(signal => signal instanceof AbortSignal && signal === signals[0]), true);
+});
 for (const category of ["caption", "hashtags"] as const) {
   Deno.test(`${category} resolves its complete ladder instead of Chat`, async () => {
     const db = database([{ key: "feature_ai_category_text_ladders", value: true },

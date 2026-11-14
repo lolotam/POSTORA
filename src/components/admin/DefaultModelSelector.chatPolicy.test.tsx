@@ -25,6 +25,15 @@ function renderPolicy(policy: ChatListPolicy, extra: Record<string, unknown> = {
 }
 
 describe('flagged Chat selector', () => {
+  it('keeps Search API capability and disables Auth in every slot', () => {
+    renderPolicy({ enabled: true, groups: [], searchGroups: [group('api_key'), group('oauth', 'search_transport_unsupported')] }, { category: 'search', capability: 'search' });
+    expect(screen.getAllByRole('group', { name: 'API' })).toHaveLength(3);
+    expect(screen.getAllByRole('group', { name: 'Auth' })).toHaveLength(3);
+    const primary = screen.getByRole('combobox', { name: 'Primary provider' });
+    expect(within(primary).getByRole('option', { name: /Auth · Claude subscription/ })).toBeDisabled();
+    expect(screen.getAllByText('Search transport not supported').length).toBeGreaterThan(0);
+    expect(screen.queryByText(/Last Resort \(Hardcoded\)/)).not.toBeInTheDocument();
+  });
   it('shows Agent Auth groups and tool/fallback requirements for every slot', () => {
     renderPolicy({ enabled: true, groups: [], agentGroups: [group('api_key'), group('oauth'),
       { ...group('oauth', 'oauth_tools_unsupported'), provider_code: 'openai', name: 'OpenAI Codex subscription' }] }, { category: 'agent' });

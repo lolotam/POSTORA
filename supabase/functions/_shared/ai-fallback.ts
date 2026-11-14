@@ -345,7 +345,7 @@ export async function resolveTextModelConfig(
   let selectedCategory: 'chat' | TextCategory = 'chat';
   let categoryEnabled: true | undefined;
   let storedRows: Array<{ key: string; value: unknown }> | undefined;
-  const requestSignal = category === 'chat' ? signal : signal ?? AbortSignal.timeout(50_000);
+  const requestSignal = signal ?? AbortSignal.timeout(50_000);
   if (category !== 'chat') {
     const { data: flag, error } = await supabaseAdmin.from('system_settings').select('value')
       .eq('key', 'feature_ai_category_text_ladders').abortSignal(requestSignal!).maybeSingle();
@@ -362,15 +362,17 @@ export async function resolveTextModelConfig(
 
   // Check user-specific override (non-expired)
   if (userId) {
-    const overrideQuery = supabaseAdmin.from('user_ai_model_overrides').select('provider, model, expires_at').eq('user_id', userId);
+    const overrideQuery = supabaseAdmin.from('user_ai_model_overrides').select('provider, model, auth_method, expires_at').eq('user_id', userId);
     const { data: userOverride, error: overrideError } = await (requestSignal ? overrideQuery.abortSignal(requestSignal) : overrideQuery).maybeSingle();
 
     if (overrideError) throw new Error('AI model override read failed');
     if (userOverride && (!userOverride.expires_at || new Date(userOverride.expires_at) > new Date())) {
+      const overrideTier = normalizeStoredTextTier({ provider_code: userOverride.provider, model_id: userOverride.model,
+        ...(userOverride.auth_method === undefined ? {} : { auth_method: userOverride.auth_method }) });
       return {
         primaryProvider: userOverride.provider,
         primaryModel: userOverride.model,
-        primaryAuthMethod: undefined,
+        primaryAuthMethod: overrideTier?.auth_method === 'oauth' ? 'oauth' : undefined,
         fallbackProvider: adminConfig.primaryProvider,
         fallbackModel: adminConfig.primaryModel,
         fallbackAuthMethod: adminConfig.primaryAuthMethod,

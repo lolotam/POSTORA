@@ -12,6 +12,14 @@ function snapshot(): ChatPolicySnapshot {
   };
 }
 
+Deno.test('Search preserves API search capability and always explains the Auth transport refusal', () => {
+  const source = snapshot();
+  source.models.push({ provider_id: 'p', model_id: 'search', name: 'Search', auth_method: 'api_key', is_active: true, capabilities: ['search'] });
+  const policy = buildChatListPolicy(source, 'search');
+  assertEquals(policy.groups.find(g => g.auth_method === 'api_key')?.models.map(m => m.model_id), ['search']);
+  assertEquals(policy.groups.filter(g => g.auth_method === 'oauth').every(g => g.reason === 'search_transport_unsupported'), true);
+});
+
 Deno.test("a retry retains the browser expectation even after the server snapshot changes", async () => {
   const source = snapshot();
   source.settings = [{ key: "default_ai_model_chat", value: { provider_code: "claude", model_id: "registry-only", auth_method: "oauth" } }];

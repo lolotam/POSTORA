@@ -65,6 +65,7 @@ const SAFE_COLUMNS =
 const ACTIONS = [
   "list",
   "list_models",
+  "routing_list_policy",
   "save_key",
   "test_key",
   "delete_key",
@@ -290,6 +291,12 @@ async function dispatch(
 ): Promise<Result> {
   if (action === "list") return await listKeys(deps, userId);
   if (action === "list_models") return await listModels(deps);
+  if (action === 'routing_list_policy') {
+    const { data, error } = await deps.admin.from('system_settings').select('value').eq('key', 'feature_ai_text_auth_lists').maybeSingle();
+    if (error) throw new Error(STORE_FAILED);
+    // This public policy contains no platform connection/account information.
+    return success({ enabled: data !== null && record(data).value === true });
+  }
   if (action === "join_waitlist") {
     if (body.provider_code !== "codex") return failure(400, "INVALID_REQUEST");
     return await joinWaitlist(deps, userId);

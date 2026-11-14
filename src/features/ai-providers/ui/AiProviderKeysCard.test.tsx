@@ -17,21 +17,22 @@ describe("Your AI keys", () => {
   }
   it("saves through the endpoint, clears the password, and keeps secrets out of both caches", async () => {
     let saved = false;
+    const secret = `${crypto.randomUUID()}1234`;
     invoke.mockImplementation(async (_name, { body }) => {
-      if (body.action === "save_key") { saved = true; return { data: { ok: true, data: { ...connectedKey, api_key: "test-secret-1234" } }, error: null }; }
+      if (body.action === "save_key") { saved = true; return { data: { ok: true, data: { ...connectedKey, api_key: secret } }, error: null }; }
       return { data: { ok: true, data: { keys: saved ? [connectedKey] : [] } }, error: null };
     });
     const { client } = mount();
     const row = within(await screen.findByRole("region", { name: "OpenAI" }));
     const input = row.getByLabelText("OpenAI API key");
     expect(row.getByRole("button", { name: "Save" })).toBeDisabled();
-    fireEvent.change(input, { target: { value: "test-secret-1234" } });
+    fireEvent.change(input, { target: { value: secret } });
     fireEvent.click(row.getByRole("button", { name: "Save" }));
     await waitFor(() => expect(input).toHaveValue(""));
-    expect(invoke).toHaveBeenCalledWith("user-ai-providers", { body: { action: "save_key", provider_code: "openai", api_key: "test-secret-1234" } });
+    expect(invoke).toHaveBeenCalledWith("user-ai-providers", { body: { action: "save_key", provider_code: "openai", api_key: secret }, timeout: 30_000 });
     expect(await row.findByText("Connected · ends in ••••1234")).toBeInTheDocument();
-    expect(screen.queryByText("test-secret-1234")).not.toBeInTheDocument();
-    expect(JSON.stringify(client.getQueryCache().getAll().map(query => query.state))).not.toContain("test-secret-1234");
+    expect(screen.queryByText(secret)).not.toBeInTheDocument();
+    expect(JSON.stringify(client.getQueryCache().getAll().map(query => query.state))).not.toContain(secret);
     expect(client.getMutationCache().getAll()).toHaveLength(0);
   });
   it("shows an invalid-key toast without turning an unconnected row into a connection", async () => {
@@ -50,8 +51,8 @@ describe("Your AI keys", () => {
     mount();
     const row = within(await screen.findByRole("region", { name: "OpenAI" }));
     fireEvent.click(row.getByRole("button", { name: "Remove" }));
-    expect(invoke).not.toHaveBeenCalledWith("user-ai-providers", { body: { action: "delete_key", provider_code: "openai" } });
+    expect(invoke).not.toHaveBeenCalledWith("user-ai-providers", { body: { action: "delete_key", provider_code: "openai" }, timeout: 30_000 });
     fireEvent.click(within(screen.getByRole("alertdialog")).getByRole("button", { name: "Remove key" }));
-    await waitFor(() => expect(invoke).toHaveBeenCalledWith("user-ai-providers", { body: { action: "delete_key", provider_code: "openai" } }));
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith("user-ai-providers", { body: { action: "delete_key", provider_code: "openai" }, timeout: 30_000 }));
   });
 });

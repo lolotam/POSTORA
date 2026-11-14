@@ -43,7 +43,8 @@ function AiCategoryCard({
   modelNote?: (model: AIModel) => string | null;
 }) {
   const { data: aiConfig, isLoading, isError, refetch } = useAIConfiguration();
-  const policy = useChatListPolicy(category === 'chat');
+  const usesTextPolicy = category === 'chat' || category === 'search';
+  const policy = useChatListPolicy(usesTextPolicy);
   const setDefaultModel = useSetDefaultModel();
   const setFallbackModel = useSetFallbackModel();
   const setFallback2Model = useSetFallback2Model();
@@ -103,7 +104,7 @@ function AiCategoryCard({
   // The monolith this was split out of guarded the whole AI tab on `isLoading`. Without
   // the same guard here, DefaultModelSelector sees an empty model list on first render
   // and states "No models available for this category yet" — an answer, not a wait.
-  if (isLoading || (category === 'chat' && policy.isPending)) {
+  if (isLoading || (usesTextPolicy && policy.isPending)) {
     return (
       <Card>
         <CardContent className="flex items-center justify-center h-40">
@@ -114,19 +115,19 @@ function AiCategoryCard({
     );
   }
 
-  if (isError || (category === 'chat' && policy.isError)) {
+  if (isError || (usesTextPolicy && policy.isError)) {
     return <Card><CardContent className="space-y-2 p-4">
       <p role="alert">AI configuration could not be read. Saved selections have not changed.</p>
       {aiConfig && <ul className="text-xs">{[aiConfig.categoryDefaults[category], aiConfig.categoryFallbacks[category], aiConfig.categoryFallbacks2[category]].map((tier, index) => tier &&
         <li key={index}>{['Primary', 'Fallback', 'Fallback 2'][index]}: {tier.auth_method === 'oauth' ? 'Auth' : 'API'} · {tier.provider_code} · {tier.model_id}</li>)}</ul>}
-      <Button onClick={() => { void refetch(); if (category === 'chat') void policy.refetch(); }}>Retry</Button>
+      <Button onClick={() => { void refetch(); if (usesTextPolicy) void policy.refetch(); }}>Retry</Button>
     </CardContent></Card>;
   }
 
   return (
     <DefaultModelSelector
       category={category}
-      textListPolicy={category === 'chat' ? policy.data : undefined}
+      textListPolicy={usesTextPolicy ? policy.data : undefined}
       saveError={(setDefaultModel.error ?? setFallbackModel.error ?? setFallback2Model.error)?.message}
       capability={capability}
       title={title}

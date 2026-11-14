@@ -147,6 +147,7 @@ import {
   INVALID_MODEL_OVERRIDE,
   invalidModelOverrideRefusalLog,
   resolveSandboxModelOverride,
+  loadSandboxModelPolicy,
 } from "./modelOverride.ts";
 
 const OPENAI_API = "https://api.openai.com/v1";
@@ -686,6 +687,24 @@ Deno.serve(async (req) => {
     });
     const { data: { user } } = await anon.auth.getUser(bearer);
     if (!user) return unauthorizedResponse();
+    if (body.action === 'sandbox-model-policy') {
+      try {
+        const { data: role, error } = await admin.from('user_roles').select('role').eq('user_id', user.id).eq('role', 'admin').maybeSingle();
+        if (error) throw new Error('Admin read failed');
+        if (!role) {
+          await admin.from('system_logs').insert(invalidModelOverrideRefusalLog({ userId: user.id, platform: 'sandbox', requestedOverride: undefined }));
+          return jsonResponse({ error: 'not_admin' }, 403);
+        }
+        return jsonResponse(await loadSandboxModelPolicy(admin, requestSignal));
+      } catch {
+        console.warn({ event: 'sandbox_policy_read_failed' });
+        try {
+          await settlementAdmin.from('system_logs').insert({ source: 'ai-agent-reply', category: 'ai', level: 'warn', user_id: user.id,
+            message: 'Sandbox model policy refused', metadata: { reason: 'configuration_read_or_write_failed' } }).abortSignal(AbortSignal.timeout(250));
+        } catch { console.warn({ event: 'sandbox_policy_refusal_log_failed' }); }
+        return jsonResponse({ error: 'configuration_read_or_write_failed' }, 503);
+      }
+    }
     const sandboxLimit = await checkUserRateLimit(admin, "ai-agent-reply-sandbox", user.id, 60, 900);
     if (!sandboxLimit.allowed) {
       // Before baseLog exists, like the invalid-key refusal: one row so support can see it.
@@ -808,6 +827,12 @@ Deno.serve(async (req) => {
     const modelOverride = await resolveSandboxModelOverride({
       dryRun,
       requestedOverride: body.model_override,
+      readAuthAwareModels: async () => {
+        const policy = await loadSandboxModelPolicy(admin, requestSignal);
+        return policy.enabled ? policy.groups.filter(g => !g.reason).flatMap(g => g.models.filter(m => !m.reason).map(m => ({
+          provider_code: g.provider_code, model_id: m.model_id, auth_method: g.auth_method,
+        }))) : [];
+      },
       isPlatformAdmin: async () => {
         const { data: adminRole, error } = await admin
           .from("user_roles")
@@ -1822,7 +1847,7 @@ Deno.serve(async (req) => {
           const signal = AbortSignal.any([requestSignal, AbortSignal.timeout(Math.max(1, Math.min(CHAT_TIMEOUT_MS, budgetMs)))]);
           if (tier.credentialSource === "platform" && tier.authMethod === "oauth") {
             if (roundToolDefinitions.some(tool => !authActionSafety(tool.function.name, customToolByName)) || messages.some(message => message.tool_calls?.some((call: { function: { name: string } }) => !authActionSafety(call.function.name, customToolByName)))) throw new AgentOAuthRefusal("oauth_tool_safety_unsupported");
-            if (!await raceSignal(agentRecoveryReady(admin, modelChain, mi, signal), signal)) throw new AgentOAuthRefusal("oauth_api_fallback_required");
+            if (!modelOverride.model && !await raceSignal(agentRecoveryReady(admin, modelChain, mi, signal), signal)) throw new AgentOAuthRefusal("oauth_api_fallback_required");
           }
           const candidate = await timings.span("model_round", () => raceSignal(chatCompletion(modelChain[mi], {
             model: modelChain[mi].model,

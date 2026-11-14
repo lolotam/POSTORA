@@ -14,10 +14,21 @@ import { PROVIDERS } from "./validation.ts";
 
 type Row = Record<string, unknown>;
 type Call = { name: string; args: unknown[] };
-const key = "user-private-key-1234";
+const key = `${crypto.randomUUID()}1234`;
 // Fakes stop at the auth, fetch, and database boundaries. SQL grants and actual
 // Vault transactions are covered by the separately owned migration harness.
 const timestamp = Date.UTC(2026, 8, 6);
+
+Deno.test('routing list policy returns only the rollout bit, never platform status', async () => {
+  for (const value of [true, false, 'true', undefined]) {
+    const f = fixture([ok(value === undefined ? null : { value })]);
+    const result = await f.run({ action: 'routing_list_policy' });
+    assertEquals(result, { status: 200, body: { ok: true, data: { enabled: value === true } } });
+    assertEquals(f.remaining(), 0);
+  }
+  const f = fixture([failed()]);
+  assertEquals((await f.run({ action: 'routing_list_policy' })).status, 500);
+});
 
 Deno.test("database failures never masquerade as missing keys or successful writes", async () => {
   const cases: { action: string; results: DbResult[] }[] = [
@@ -460,7 +471,7 @@ Deno.test("list_models returns the active catalog for the four providers through
     f.calls.find((c) => c.name === "in")?.args,
     ["ai_providers.provider_code", PROVIDERS],
   );
-  assertEquals(f.calls.find((c) => c.name === "eq")?.args, ["is_active", true]);
+  assertEquals(f.calls.filter((c) => c.name === 'eq').map(c => c.args), [['auth_method', 'api_key'], ['is_active', true]]);
   // Image, TTS and video rows must never reach the routing picker.
   assertEquals(f.calls.find((c) => c.name === "contains")?.args, ["capabilities", ["chat"]]);
   assertEquals(f.fetchCount(), 0);

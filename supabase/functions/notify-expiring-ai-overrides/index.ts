@@ -10,6 +10,7 @@ interface ExpiringOverride {
   id: string;
   user_id: string;
   provider: string;
+  auth_method: string;
   model: string;
   expires_at: string;
   reason: string | null;
@@ -159,7 +160,7 @@ serve(async (req) => {
               <span style="background: #f3f4f6; padding: 2px 8px; border-radius: 4px; font-family: monospace; font-size: 12px;">
                 ${o.model}
               </span>
-              <br><span style="color: #6b7280; font-size: 12px;">${o.provider}</span>
+              <br><span style="color: #6b7280; font-size: 12px;">${o.auth_method === 'oauth' ? 'Auth' : 'API'} · ${o.provider}</span>
             </td>
             <td style="padding: 12px; font-size: 14px;">
               ${formatDate(o.expires_at)}
@@ -265,10 +266,10 @@ serve(async (req) => {
       }),
       { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
-  } catch (error: any) {
-    console.error("Error in notify-expiring-ai-overrides:", error);
+  } catch (error: unknown) {
+    console.error("Error in notify-expiring-ai-overrides:", error instanceof Error ? error.name : 'error');
     return new Response(
-      JSON.stringify({ error: error.message }),
+      JSON.stringify({ error: 'Override notifications could not be sent. Retry.' }),
       { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
   }

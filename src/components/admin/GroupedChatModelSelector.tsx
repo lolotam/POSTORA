@@ -5,6 +5,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import type { LucideIcon } from 'lucide-react';
 
 const REASONS = {
+  search_transport_unsupported: 'Search transport not supported',
   oauth_tools_disabled: 'Claude subscription tools disabled.',
   oauth_tools_unsupported: 'Subscription tool transport unavailable for this provider.',
   no_compatible_agent_models: 'No verified tool-capable Agent models. Sync or configure tool capability in AI Providers.',
@@ -23,7 +24,7 @@ const identity = (provider_code: string, auth_method?: AiAuthMethod) => JSON.str
 const groupName = (auth_method: AiAuthMethod) => auth_method === 'oauth' ? 'Auth' : 'API';
 type TierSave = (providerCode: string, modelId: string, authMethod?: AiAuthMethod) => void;
 
-function GroupedChatTier({ label, groups, current, onSelect, isSaving }: {
+export function GroupedChatTier({ label, groups, current, onSelect, isSaving }: {
   label: string; groups: ChatListGroup[]; current: DefaultModel | null; onSelect: TierSave; isSaving?: boolean;
 }) {
   const savedIdentity = current ? identity(current.provider_code, current.auth_method) : '';
@@ -93,6 +94,7 @@ export function GroupedChatModelSelector({ title, description, icon: Icon, polic
       {children}
       {category === 'agent' ? <p className="text-xs text-muted-foreground">Every Auth tier requires a later active tool-capable API fallback. Configure API recovery first. Unsafe mutating tools block Auth; tools are never silently removed. No hardcoded fallback.</p> : category === 'agent_triage'
         ? <p className="text-xs text-muted-foreground">Claude Auth uses prompt-requested JSON, validated by the strict parser; provider-enforced JSON mode is unavailable. Triage never executes tools. Uncertain or unavailable triage preserves normal Agent behavior. No hardcoded fallback.</p>
+        : category === 'search' ? <p className="text-xs text-muted-foreground">Auth: Search transport not supported. Choose a search-capable API model.</p>
         : <p className="text-xs text-muted-foreground">Last Resort (Hardcoded): google/gemini-3-flash-preview. Capped requests require a compatible tier. Claude Auth supports caps; OpenAI Codex Auth skips to a configured compatible tier.</p>}
     </CardContent>
   </Card>;
