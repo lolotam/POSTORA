@@ -66,6 +66,86 @@ BEGIN
 END;
 $duplicate_rows_are_not_identity_proof$;
 
+DO $page_prerequisite_retries_require_changed_inputs$
+DECLARE target uuid;run uuid;capture jsonb;before_job public.analytics_legacy_bootstrap_jobs;
+ after_job public.analytics_legacy_bootstrap_jobs;before_audits bigint;
+BEGIN
+ -- PR #427: neither a new idempotency key nor an unrelated failure permits
+ -- retry. Only a repaired Page prerequisite can retire its captured diagnosis.
+ INSERT INTO public.social_accounts(id,user_id,platform,platform_user_id,platform_username,access_token,account_metadata,ig_auth_type)
+ VALUES('ad140000-0000-4000-8000-000000000021','ad140000-0000-4000-8000-000000000001','instagram','178921','page_retry_fixture',gen_random_uuid()::text,
+  '{"facebook_page_id":"299999"}','facebook_page'),
+ ('ad140000-0000-4000-8000-000000000022','ad140000-0000-4000-8000-000000000001','instagram','178922','page_retry_fixture',gen_random_uuid()::text,
+  '{"facebook_page_id":""}','facebook_page');
+ FOREACH target IN ARRAY ARRAY['ad140000-0000-4000-8000-000000000021'::uuid,'ad140000-0000-4000-8000-000000000022'::uuid] LOOP
+  run:=pg_temp.direct_policy(ARRAY[target]);
+  capture:=public.begin_analytics_legacy_bootstrap(target,gen_random_uuid(),run);
+  ASSERT capture->>'state'='blocked' AND capture->>'reason_code'=CASE WHEN target='ad140000-0000-4000-8000-000000000021'
+   THEN 'linked_page_unavailable' ELSE 'linked_page_missing' END,'fixture must capture a real Page prerequisite failure';
+  SELECT * INTO STRICT before_job FROM public.analytics_legacy_bootstrap_jobs WHERE social_account_id=target;
+  capture:=public.begin_analytics_legacy_bootstrap(target,gen_random_uuid(),run);
+  SELECT * INTO STRICT after_job FROM public.analytics_legacy_bootstrap_jobs WHERE social_account_id=target;
+  ASSERT after_job IS NOT DISTINCT FROM before_job,'unchanged Page prerequisite must leave the job untouched';
+  ASSERT capture->>'reason_code'=before_job.reason_code;
+  ASSERT EXISTS(SELECT 1 FROM public.analytics_legacy_bootstrap_audit WHERE correlation_id=before_job.correlation_id
+   AND event='begin' AND reason_code='settled_or_busy'),'settled Page refusal must be audited';
+  run:=pg_temp.direct_policy(ARRAY[target]);
+  ASSERT (SELECT NOT target=ANY(account_ids) FROM public.analytics_legacy_bootstrap_run WHERE holder=run),
+   'dispatcher must leave an unchanged Page prerequisite out of the bounded batch';
+
+  IF before_job.reason_code='linked_page_missing' THEN
+   UPDATE public.social_accounts SET account_metadata=account_metadata||'{"facebook_page_id":"299998"}'::jsonb WHERE id=target;
+  END IF;
+  INSERT INTO public.social_accounts(user_id,platform,platform_user_id,platform_username,access_token,account_metadata)
+  SELECT user_id,'facebook',account_metadata->>'facebook_page_id','repaired_page_fixture',gen_random_uuid()::text,
+   jsonb_build_object('user_token',gen_random_uuid()::text) FROM public.social_accounts WHERE id=target;
+  SELECT count(*) INTO before_audits FROM public.analytics_legacy_bootstrap_audit
+   WHERE correlation_id=before_job.correlation_id AND event='begin' AND reason_code='verification_pending';
+  run:=pg_temp.direct_policy(ARRAY[target]);
+  ASSERT (SELECT target=ANY(account_ids) FROM public.analytics_legacy_bootstrap_run WHERE holder=run),
+   'dispatcher must admit the repaired Page prerequisite, including an absent-to-present Page source';
+  capture:=public.begin_analytics_legacy_bootstrap(target,gen_random_uuid(),run);
+  SELECT * INTO STRICT after_job FROM public.analytics_legacy_bootstrap_jobs WHERE social_account_id=target;
+  ASSERT capture->>'state'='verifying','repaired Page prerequisite must retry without a target generation/version advance';
+  ASSERT after_job.input_fence IS DISTINCT FROM before_job.input_fence;
+  ASSERT after_job.captured_generation=before_job.captured_generation AND after_job.captured_connection=before_job.captured_connection;
+  ASSERT after_job.attempts=before_job.attempts+1 AND cardinality(after_job.attempt_times)=cardinality(before_job.attempt_times)+1
+   AND after_job.attempt_times[1:cardinality(before_job.attempt_times)]=before_job.attempt_times,
+   'Page retry must preserve daily attempt history and consume one attempt';
+  ASSERT (SELECT count(*) FROM public.analytics_legacy_bootstrap_audit
+   WHERE correlation_id=before_job.correlation_id AND event='begin' AND reason_code='verification_pending')=before_audits+1,
+   'Page retry must emit its normal begin audit';
+
+  -- Even another changed fence cannot bypass a live lease or the daily cap.
+  UPDATE public.social_accounts SET account_metadata=account_metadata||jsonb_build_object('page_repair_revision',gen_random_uuid()) WHERE id=target;
+  before_job:=after_job;
+  PERFORM public.begin_analytics_legacy_bootstrap(target,gen_random_uuid(),run);
+  SELECT * INTO STRICT after_job FROM public.analytics_legacy_bootstrap_jobs WHERE social_account_id=target;
+  ASSERT after_job IS NOT DISTINCT FROM before_job,'changed Page inputs cannot steal a live lease';
+  UPDATE public.analytics_legacy_bootstrap_jobs SET state='blocked',
+   reason_code=CASE WHEN target='ad140000-0000-4000-8000-000000000021' THEN 'linked_page_unavailable' ELSE 'linked_page_missing' END,
+   lease_id=NULL,lease_until=NULL,attempts=3,attempt_times=ARRAY[clock_timestamp(),clock_timestamp(),clock_timestamp()]
+   WHERE social_account_id=target;
+  SELECT * INTO STRICT before_job FROM public.analytics_legacy_bootstrap_jobs WHERE social_account_id=target;
+  PERFORM public.begin_analytics_legacy_bootstrap(target,gen_random_uuid(),run);
+  SELECT * INTO STRICT after_job FROM public.analytics_legacy_bootstrap_jobs WHERE social_account_id=target;
+  ASSERT after_job IS NOT DISTINCT FROM before_job,'changed Page inputs cannot reset or bypass the daily attempt cap';
+  ASSERT EXISTS(SELECT 1 FROM public.analytics_legacy_bootstrap_audit WHERE correlation_id=before_job.correlation_id
+   AND event='begin' AND reason_code='attempt_budget'),'daily cap refusal must be audited';
+
+  UPDATE public.analytics_legacy_bootstrap_jobs SET reason_code='app_mismatch',attempts=1,attempt_times=ARRAY[clock_timestamp()]
+   WHERE social_account_id=target;
+  SELECT * INTO STRICT before_job FROM public.analytics_legacy_bootstrap_jobs WHERE social_account_id=target;
+  PERFORM public.begin_analytics_legacy_bootstrap(target,gen_random_uuid(),run);
+  SELECT * INTO STRICT after_job FROM public.analytics_legacy_bootstrap_jobs WHERE social_account_id=target;
+  ASSERT after_job IS NOT DISTINCT FROM before_job,'changed Page inputs must not reopen an unrelated blocked job';
+  run:=pg_temp.direct_policy(ARRAY[target]);
+  ASSERT (SELECT NOT target=ANY(account_ids) FROM public.analytics_legacy_bootstrap_run WHERE holder=run),
+   'dispatcher must leave an unrelated blocked job out of the bounded batch';
+ END LOOP;
+END;
+$page_prerequisite_retries_require_changed_inputs$;
+
 CREATE FUNCTION pg_temp.incident_job(username text,number integer) RETURNS uuid LANGUAGE plpgsql AS $fn$
 DECLARE account uuid:=gen_random_uuid();job uuid;provider text:=(1789900+number)::text;
 BEGIN

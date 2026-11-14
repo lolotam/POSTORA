@@ -4,6 +4,50 @@ BEGIN;
 SET LOCAL lock_timeout='2s';
 SET LOCAL statement_timeout='10s';
 
+CREATE OR REPLACE FUNCTION public.dispatch_analytics_legacy_bootstrap(p_run_id uuid) RETURNS jsonb
+LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path=public,pg_temp SET lock_timeout='2s' SET statement_timeout='4s' AS $fn$
+DECLARE policy jsonb;ids uuid[];correlation uuid:=gen_random_uuid();
+BEGIN
+ PERFORM public.analytics_bootstrap_assert_service();
+ BEGIN policy:=public.analytics_bootstrap_policy(); EXCEPTION WHEN OTHERS THEN
+  PERFORM public.analytics_bootstrap_audit(correlation,NULL,'dispatch','settings_unavailable');
+  RETURN jsonb_build_object('status','settings_unavailable','account_ids','[]'::jsonb); END;
+ IF policy IS NULL THEN
+  PERFORM public.analytics_bootstrap_audit(correlation,NULL,'dispatch','disabled');
+  RETURN jsonb_build_object('status','disabled','account_ids','[]'::jsonb); END IF;
+ UPDATE public.analytics_legacy_bootstrap_run SET holder=p_run_id,lease_until=clock_timestamp()+interval '45 seconds',calls=0,account_ids='{}'
+ WHERE singleton AND (lease_until IS NULL OR lease_until<clock_timestamp()) AND (pause_until IS NULL OR pause_until<=clock_timestamp());
+ IF NOT FOUND THEN
+  PERFORM public.analytics_bootstrap_audit(correlation,NULL,'dispatch','busy_or_paused');
+  RETURN jsonb_build_object('status','busy_or_paused','account_ids','[]'::jsonb); END IF;
+ SELECT array_agg(id ORDER BY priority,changed,id) INTO ids FROM (
+  SELECT a.id,CASE WHEN j.state='permission_pending' THEN 0 ELSE 1 END priority,COALESCE(j.updated_at,'epoch'::timestamptz) changed
+  FROM public.social_accounts a LEFT JOIN public.analytics_legacy_bootstrap_jobs j ON j.social_account_id=a.id
+  WHERE policy->'account_ids' @> jsonb_build_array(a.id::text) AND a.platform IN ('instagram','facebook')
+   AND (j.id IS NULL OR (SELECT count(*) FROM unnest(j.attempt_times) t WHERE t>clock_timestamp()-interval '24 hours')
+    <(policy->>'max_attempts_per_account_per_day')::integer)
+   AND (j.id IS NULL OR (j.state IN ('pending','verifying','permission_pending','retry') OR
+     j.reason_code IN ('stored_user_credential_missing','linked_page_missing','linked_page_unavailable')
+      AND j.input_fence IS DISTINCT FROM public.analytics_bootstrap_fence(j.social_account_id,j.source_account_id,j.source_credential_id) OR
+     -- A restored Page can have a new row ID while the target is unchanged.
+     -- Begin rediscovers and locks its complete fence before claiming work.
+     j.reason_code IN ('linked_page_missing','linked_page_unavailable') AND j.source_account_id IS DISTINCT FROM (
+      SELECT page_source.id FROM public.social_accounts page_source
+      WHERE page_source.user_id=a.user_id AND page_source.platform='facebook'
+       AND page_source.platform_user_id=CASE WHEN a.platform='facebook' THEN a.platform_user_id ELSE COALESCE(
+        (SELECT b.verified_facebook_page_id FROM public.facebook_user_credential_bindings b WHERE b.social_account_id=a.id AND b.user_id=a.user_id),
+        a.account_metadata->>'facebook_page_id') END
+      ORDER BY page_source.id LIMIT 1) OR
+     EXISTS(SELECT 1 FROM public.instagram_account_capabilities c WHERE c.social_account_id=a.id AND c.credential_generation>j.captured_generation) OR
+     EXISTS(SELECT 1 FROM public.facebook_user_credential_connection_fences f WHERE f.social_account_id=a.id AND f.connection_version>j.captured_connection)) AND
+    (j.retry_at IS NULL OR j.retry_at<=clock_timestamp()) AND (j.lease_until IS NULL OR j.lease_until<clock_timestamp()))
+  ORDER BY priority,changed,a.id LIMIT (policy->>'max_accounts_per_run')::integer) targets;
+ UPDATE public.analytics_legacy_bootstrap_run SET account_ids=COALESCE(ids,'{}') WHERE singleton AND holder=p_run_id;
+ PERFORM public.analytics_bootstrap_audit(correlation,NULL,'dispatch','dispatched');
+ RETURN jsonb_build_object('status','dispatched','account_ids',COALESCE(to_jsonb(ids),'[]'::jsonb));
+END;
+$fn$;
+
 CREATE OR REPLACE FUNCTION public.begin_analytics_legacy_bootstrap(p_account_id uuid,p_idempotency_key uuid,p_run_id uuid) RETURNS jsonb
 LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path=public,pg_temp SET lock_timeout='2s' SET statement_timeout='4s' AS $fn$
 DECLARE a public.social_accounts;source public.social_accounts;j public.analytics_legacy_bootstrap_jobs;
@@ -87,7 +131,7 @@ BEGIN
    installed_at=CASE WHEN current_installed THEN clock_timestamp() ELSE NULL END WHERE id=j.id RETURNING * INTO j;
  END IF;
  IF j.lease_until>clock_timestamp() OR j.state IN ('ready','needs_reconnect','permissions_missing','blocked') AND NOT (
-   j.reason_code='stored_user_credential_missing' AND j.input_fence IS DISTINCT FROM discovered_fence OR
+   j.reason_code IN ('stored_user_credential_missing','linked_page_missing','linked_page_unavailable') AND j.input_fence IS DISTINCT FROM discovered_fence OR
    EXISTS(SELECT 1 FROM public.instagram_account_capabilities c WHERE c.social_account_id=a.id AND c.credential_generation>j.captured_generation) OR
    EXISTS(SELECT 1 FROM public.facebook_user_credential_connection_fences f WHERE f.social_account_id=a.id AND f.connection_version>j.captured_connection)) THEN
   PERFORM public.analytics_bootstrap_audit(j.correlation_id,a.id,'begin','settled_or_busy'); RETURN public.analytics_bootstrap_projection(j.id); END IF;
