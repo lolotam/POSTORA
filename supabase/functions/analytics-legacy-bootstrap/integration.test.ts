@@ -16,6 +16,14 @@ const quote = (argument: unknown) => argument === null ? "NULL" : typeof argumen
   : typeof argument === "object" ? `'${JSON.stringify(argument).replaceAll("'", "''")}'::jsonb`
   : `'${String(argument).replaceAll("'", "''")}'`;
 
+const sqlRpc: BootstrapRpc = async (name, args) => {
+  if (!/^[a-z_]+$/.test(name) || Object.keys(args).some((key) => !/^p_[a-z_]+$/.test(key))) throw new Error("Invalid fixture RPC");
+  const result = await sql(`BEGIN; SET LOCAL request.jwt.claim.role='service_role';
+    SET LOCAL request.jwt.claims='{"role":"service_role"}'; SELECT to_json(public.${name}(${Object.entries(args).map(([key, argument]) => `${key}=>${quote(argument)}`).join(",")})); COMMIT;`);
+  const payload = JSON.parse(result.split("\n").find((line) => line.startsWith("{") || line === "true" || line === "null") ?? "null");
+  return { data: payload, error: null };
+};
+
 Deno.test({ name: "registered worker reaches real capture/install/permission SQL and reconciles a lost install response", ignore: !container, fn: async () => {
   const owner = crypto.randomUUID();
   const page = crypto.randomUUID();
@@ -35,12 +43,9 @@ Deno.test({ name: "registered worker reaches real capture/install/permission SQL
         'max_accounts_per_run',5,'max_attempts_per_account_per_day',3) WHERE key='analytics_legacy_bootstrap_policy';
       UPDATE public.analytics_legacy_bootstrap_run SET lease_until=NULL,pause_until=NULL; COMMIT;`);
     const rpc: BootstrapRpc = async (name, args) => {
-      if (!/^[a-z_]+$/.test(name) || Object.keys(args).some((key) => !/^p_[a-z_]+$/.test(key))) throw new Error("Invalid fixture RPC");
-      const result = await sql(`BEGIN; SET LOCAL request.jwt.claim.role='service_role';
-        SET LOCAL request.jwt.claims='{"role":"service_role"}'; SELECT to_json(public.${name}(${Object.entries(args).map(([key, argument]) => `${key}=>${quote(argument)}`).join(",")})); COMMIT;`);
-      const payload = JSON.parse(result.split("\n").find((line) => line.startsWith("{") || line === "true" || line === "null") ?? "null");
+      const result = await sqlRpc(name, args, AbortSignal.timeout(4_000));
       if (name === "commit_analytics_legacy_bootstrap" && ++installs === 1) throw new Error("Synthetic response lost after durable install");
-      return { data: payload, error: null };
+      return result;
     };
     const replies = [
       { data: { is_valid: true, type: "USER", app_id: "200701", user_id: "300701", expires_at: 0, data_access_expires_at: 0 } },
@@ -63,6 +68,45 @@ Deno.test({ name: "registered worker reaches real capture/install/permission SQL
     assertEquals(await sql(`SELECT evidence_source FROM public.facebook_user_credential_bindings WHERE social_account_id='${instagram}'`), "verified_legacy_bootstrap");
   } finally {
     await sql(`BEGIN; DELETE FROM auth.users WHERE id='${owner}';
+      UPDATE public.analytics_legacy_bootstrap_run SET holder=NULL,lease_until=NULL,pause_until=NULL,calls=0;
+      ${oldSettings ? `UPDATE public.app_settings a SET value=e.value FROM jsonb_each(${quote(JSON.parse(oldSettings))}) e WHERE a.key=e.key;` : ""} COMMIT;`);
+  }
+} });
+
+Deno.test({ name: "fourteen-day provider pause settles a seven-day job retry and releases the real SQL lease", ignore: !container, fn: async () => {
+  const owner = crypto.randomUUID();
+  const page = crypto.randomUUID();
+  const instagram = crypto.randomUUID();
+  const appId = String(crypto.getRandomValues(new Uint32Array(1))[0]);
+  let oldSettings = "";
+  try {
+    oldSettings = await sql("SELECT jsonb_object_agg(key,value) FROM public.app_settings WHERE key LIKE 'analytics_legacy_bootstrap_%'");
+    await sql(`BEGIN;
+      INSERT INTO auth.users(id,email) VALUES('${owner}','${owner}@example.invalid');
+      INSERT INTO public.social_accounts(id,user_id,platform,platform_user_id,platform_username,access_token,account_metadata,ig_auth_type)
+      VALUES('${page}','${owner}','facebook','100801','fixture_page',gen_random_uuid()::text,jsonb_build_object('user_token',gen_random_uuid()::text),NULL),
+        ('${instagram}','${owner}','instagram','178801','fixture_ig',gen_random_uuid()::text,'{"facebook_page_id":"100801"}','facebook_page');
+      UPDATE public.app_settings SET value='true' WHERE key='analytics_legacy_bootstrap_enabled';
+      UPDATE public.app_settings SET value=jsonb_build_object('version',1,'account_ids',jsonb_build_array('${instagram}'),
+        'max_accounts_per_run',5,'max_attempts_per_account_per_day',3) WHERE key='analytics_legacy_bootstrap_policy';
+      UPDATE public.analytics_legacy_bootstrap_run SET lease_until=NULL,pause_until=NULL; COMMIT;`);
+    const started = Date.now();
+    const outcome = await runLegacyBootstrap({ rpc: sqlRpc,
+      apps: { facebook: { id: appId, secret: crypto.randomUUID() }, instagram: { id: appId, secret: crypto.randomUUID() } },
+      fetcher: () => Promise.resolve(Response.json({ error: { code: 4 } }, { status: 429, headers: { "retry-after": "1209600" } })) });
+    assertEquals(outcome.accounts[0].state, "retry");
+    assertEquals(outcome.accounts[0].reason_code, "rate_limited");
+    const job = JSON.parse(await sql(`SELECT jsonb_build_object('released',lease_id IS NULL AND lease_until IS NULL,'retry_at',retry_at)
+      FROM public.analytics_legacy_bootstrap_jobs WHERE social_account_id='${instagram}'`));
+    assertEquals(job.released, true);
+    assertEquals(Date.parse(job.retry_at) >= started + 7 * 86_400_000, true);
+    assertEquals(Date.parse(job.retry_at) <= Date.now() + 7 * 86_400_000, true);
+    assertEquals(await sql(`SELECT throttled_until>clock_timestamp()+interval '13 days' FROM public.instagram_provider_throttle_buckets
+      WHERE bucket_key=encode(extensions.digest('owned_analytics:app:facebook:${appId}','sha256'),'hex')`), "t");
+  } finally {
+    await sql(`BEGIN; DELETE FROM auth.users WHERE id='${owner}';
+      DELETE FROM public.instagram_provider_throttle_buckets
+        WHERE bucket_key=encode(extensions.digest('owned_analytics:app:facebook:${appId}','sha256'),'hex');
       UPDATE public.analytics_legacy_bootstrap_run SET holder=NULL,lease_until=NULL,pause_until=NULL,calls=0;
       ${oldSettings ? `UPDATE public.app_settings a SET value=e.value FROM jsonb_each(${quote(JSON.parse(oldSettings))}) e WHERE a.key=e.key;` : ""} COMMIT;`);
   }

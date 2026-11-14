@@ -27,7 +27,7 @@ export async function bootstrapHandler(request: Request, deps: BootstrapWorkerIn
   const headers = { ...restrictedCorsHeaders(request), "Content-Type": "application/json", "Cache-Control": "no-store" };
   const reply = (body: unknown, status: number) => new Response(JSON.stringify(body), { status, headers });
   const deadline = Math.min(deps.deadline ?? Infinity, Date.now() + 40_000);
-  const refuse = async (reason: "unauthorized" | "invalid_method" | "invalid_request", status: number) => {
+  const refuse = async (reason: "invalid_method" | "invalid_request", status: number) => {
     try {
       const saved = await bootstrapRpc(deps, deadline)("record_analytics_legacy_bootstrap_refusal", { p_reason: reason });
       if (saved !== null) throw new Error("Bootstrap audit unavailable");
@@ -39,7 +39,8 @@ export async function bootstrapHandler(request: Request, deps: BootstrapWorkerIn
   };
   const auth = verifyCronAuth(request);
   if (!auth.ok) {
-    return await refuse("unauthorized", auth.response.status);
+    // Untrusted traffic must not amplify into service-role durable writes.
+    return reply({ error: "unauthorized" }, auth.response.status);
   }
   if (request.method !== "POST") {
     return await refuse("invalid_method", 405);

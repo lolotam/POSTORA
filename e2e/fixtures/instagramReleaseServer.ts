@@ -126,6 +126,17 @@ async function fixtureControl(request: Request, path: string): Promise<Response>
     return denyReconnectPermissions();
   }
   if (path === "provider-scenario") return setProviderScenario(input);
+  if (path === "expire-provider-pause") {
+    if (Object.keys(input).length !== 0) return new Response(null, { status: 400 });
+    // Model expiry only for this synthetic app. Production backoff must survive scenario changes.
+    const expired = await ownerReleaseSql(`WITH expired AS (
+      UPDATE public.instagram_provider_throttle_buckets SET throttled_until=clock_timestamp()-interval '1 second',
+        usage_percent=0,updated_at=clock_timestamp()
+      WHERE bucket_key=encode(extensions.digest('owned_analytics:app:facebook:${INSTAGRAM_RELEASE.appId}','sha256'),'hex')
+      RETURNING bucket_key
+    ) SELECT count(*) FROM expired;`);
+    return Response.json({ expired: Number(expired) });
+  }
   if (path === "admit-tracked-competitor") {
     if (Object.keys(input).join(",") !== "username" || input.username !== INSTAGRAM_RELEASE.newTarget) return new Response(null, { status: 400 });
     const viewer = seed.manifest.accounts.find((account) => account.key === "pageGranted")!;

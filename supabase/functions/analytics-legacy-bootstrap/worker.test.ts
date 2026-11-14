@@ -161,7 +161,29 @@ Deno.test("transient permission denials remain pending instead of requiring cons
   }
 });
 
-Deno.test("every HTTP refusal persists only a closed reason; audit failure is explicit and bounded", async () => {
+Deno.test("untrusted callers cannot cause durable refusal writes even while bootstrap is disabled", async () => {
+  const oldCron = Deno.env.get("CRON_SECRET");
+  Deno.env.set("CRON_SECRET", secret());
+  try {
+    const test = fixture({ disabled: true });
+    let writes = 0;
+    const rpc: BootstrapRpc = () => { writes++; throw new Error("Untrusted request reached database"); };
+    const forged = [btoa(JSON.stringify({ alg: "HS256" })), btoa(JSON.stringify({ role: "service_role" })), secret()].join(".");
+    for (const authorization of [undefined, `Bearer ${secret()}`, `Bearer ${forged}`]) {
+      for (let attempt = 0; attempt < 10; attempt++) {
+        const response = await bootstrapHandler(new Request("https://example.invalid", { method: "POST",
+          headers: authorization ? { Authorization: authorization } : {}, body: '{"action":"drain"}' }), { ...test.input, rpc });
+        assertEquals(response.status, 401);
+        assertEquals(await response.json(), { error: "unauthorized" });
+      }
+    }
+    assertEquals(writes, 0);
+  } finally {
+    if (oldCron === undefined) Deno.env.delete("CRON_SECRET"); else Deno.env.set("CRON_SECRET", oldCron);
+  }
+});
+
+Deno.test("authenticated HTTP refusals persist only a closed reason; audit failure is explicit and bounded", async () => {
   const oldCron = Deno.env.get("CRON_SECRET");
   const cron = secret();
   Deno.env.set("CRON_SECRET", cron);
@@ -173,9 +195,9 @@ Deno.test("every HTTP refusal persists only a closed reason; audit failure is ex
       rows.push(args);
       return { data: null, error: null };
     };
-    for (const [method, authorized, expected] of [["POST", false, "unauthorized"], ["GET", true, "invalid_method"], ["POST", true, "invalid_request"]] as const) {
+    for (const [method, expected] of [["GET", "invalid_method"], ["POST", "invalid_request"]] as const) {
       const request = () => new Request("https://example.invalid", { method,
-        headers: authorized ? { Authorization: `Bearer ${cron}` } : {}, ...(method === "POST" ? { body: secret() } : {}) });
+        headers: { Authorization: `Bearer ${cron}` }, ...(method === "POST" ? { body: secret() } : {}) });
       const response = await bootstrapHandler(request(), { ...test.input, rpc });
       assertEquals((await response.json()).error, expected);
       assertEquals(rows.at(-1), { p_reason: expected });
@@ -184,11 +206,41 @@ Deno.test("every HTTP refusal persists only a closed reason; audit failure is ex
       assertEquals(await failure.json(), { error: "audit_or_store_unavailable" });
     }
     const started = Date.now();
-    const timeout = await bootstrapHandler(new Request("https://example.invalid"), { ...test.input,
+    const timeout = await bootstrapHandler(new Request("https://example.invalid", { headers: { Authorization: `Bearer ${cron}` } }), { ...test.input,
       deadline: started + 40, rpc: () => new Promise(() => {}) });
     assertEquals(timeout.status, 503);
     assertEquals(Date.now() - started < 500, true);
   } finally {
     if (oldCron === undefined) Deno.env.delete("CRON_SECRET"); else Deno.env.set("CRON_SECRET", oldCron);
   }
+});
+
+Deno.test("job retries respect SQL's seven-day ceiling while app pauses retain the full provider deadline", async () => {
+  const originalNow = Date.now;
+  const now = originalNow();
+  Date.now = () => now;
+  try {
+    // Below, immediately below, exactly at, and above the SQL settlement ceiling.
+    for (const seconds of [3 * 86_400, 7 * 86_400 - 1, 7 * 86_400, 14 * 86_400]) {
+      const test = fixture();
+      const originalRpc = test.input.rpc;
+      let pausedUntil: unknown;
+      let settledUntil: unknown;
+      test.input.rpc = async (name, args, signal) => {
+        if (name === "record_analytics_legacy_bootstrap_usage") pausedUntil = args.p_retry_at;
+        if (name === "settle_analytics_legacy_bootstrap") {
+          settledUntil = args.p_retry_at;
+          if (Date.parse(String(settledUntil)) > now + 7 * 86_400_000) throw new Error("BOOTSTRAP_INVALID_REASON");
+        }
+        return await originalRpc(name, args, signal);
+      };
+      test.input.fetcher = () => Promise.resolve(Response.json({ error: { code: 4 } }, { status: 429,
+        headers: { "retry-after": String(seconds) } }));
+      const outcome = await runLegacyBootstrap(test.input);
+      assertEquals(outcome.accounts[0].state, "retry");
+      assertEquals(outcome.accounts[0].reason_code, "rate_limited");
+      assertEquals(pausedUntil, new Date(now + seconds * 1000).toISOString());
+      assertEquals(settledUntil, new Date(now + Math.min(seconds, 7 * 86_400) * 1000).toISOString());
+    }
+  } finally { Date.now = originalNow; }
 });

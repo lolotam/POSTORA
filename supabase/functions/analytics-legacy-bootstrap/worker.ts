@@ -61,8 +61,10 @@ function usageFetcher(context: { input: BootstrapWorkerInput; rpc: Rpc; runId: s
 }
 
 async function settleFailure(rpc: Rpc, job: Executor, reason: BootstrapReason, retryAt?: string): Promise<BootstrapProjection> {
+  // SQL accepts at most seven days per job; the separate app pause retains the full provider deadline.
+  const jobRetryAt = retryAt ? new Date(Math.min(Date.parse(retryAt), Date.now() + 7 * 86_400_000)).toISOString() : undefined;
   return projectionSchema.parse(await rpc("settle_analytics_legacy_bootstrap", { ...jobArgs(job), p_reason: reason,
-    ...(retryAt ? { p_retry_at: retryAt } : {}) }));
+    ...(jobRetryAt ? { p_retry_at: jobRetryAt } : {}) }));
 }
 
 async function repairAccount(context: { input: BootstrapWorkerInput; rpc: Rpc; runId: string; accountId: string; deadline: number }): Promise<BootstrapProjection> {
