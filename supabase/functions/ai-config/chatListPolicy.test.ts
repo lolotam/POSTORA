@@ -76,3 +76,12 @@ Deno.test("persisted Auth rows must also be supported by the runtime registry", 
   assertEquals(auth.models[0].reason, "unsupported_model");
   await assertRejects(async () => validateChatTier({ expected: {}, category: "chat", slot: "primary", provider_code: "claude", model_id: "not-in-registry", auth_method: "oauth" }, source));
 });
+
+Deno.test("stored sibling tiers with extension fields stay valid while the requested tier stays strict", () => {
+  const source = snapshot();
+  const sibling = { provider_code: "claude", model_id: "same", provider_option: "kept-by-other-writer" };
+  const expected = { default_ai_model_chat: sibling };
+  const result = validateChatTier({ expected, category: "chat", slot: "fallback", provider_code: "claude", model_id: "same" }, source);
+  assertEquals(result.expected, expected);
+  assertEquals(result.key, "default_ai_model_chat_fallback");
+});

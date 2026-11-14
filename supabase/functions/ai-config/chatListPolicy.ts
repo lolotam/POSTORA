@@ -93,7 +93,9 @@ export function validateChatTier(body: unknown, source: ChatPolicySnapshot) {
   let gap = false;
   for (const tierKey of CHAT_TIER_KEYS) {
     if (next[tierKey] == null) { gap = true; continue; }
-    if (gap || !tierValue.safeParse(next[tierKey]).success) throw new ChatTierError("invalid_chat_chain");
+    // The requested tier is validated strictly above; stored siblings only need the
+    // fields this policy reads, so an extension field written by another writer stays valid.
+    if (gap || !tierValue.passthrough().safeParse(next[tierKey]).success) throw new ChatTierError("invalid_chat_chain");
   }
   return { key, value, expected };
 }
