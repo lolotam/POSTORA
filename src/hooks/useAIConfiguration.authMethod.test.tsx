@@ -28,15 +28,15 @@ describe("tier setters and auth_method", () => {
     invoke.mockResolvedValue({ data: { success: true }, error: null });
   });
 
-  it.each([
+  it.each(([
     ['primary', useSetDefaultModel], ['fallback', useSetFallbackModel], ['fallback_2', useSetFallback2Model],
-  ] as const)('flagged %s saves use the authoritative boundary instead of direct writes', async (slot, useSetter) => {
+  ] as const).flatMap(([slot, useSetter]) => (['chat', 'agent_triage'] as const).map(category => [slot, useSetter, category] as const)))('flagged %s saves use the authoritative boundary instead of direct writes (%s)', async (slot, useSetter, category) => {
     const { client, wrapper } = queryWrapper();
     client.setQueryData(['ai-config'], { settings: [] });
     client.setQueryData(CHAT_LIST_POLICY_QUERY_KEY, { enabled: true, groups: [] });
     const { result } = renderHook(() => useSetter(), { wrapper });
-    await result.current.mutateAsync({ category: 'chat', provider_code: 'claude', model_id: 'same', auth_method: 'oauth' });
-    expect(invoke).toHaveBeenCalledWith('ai-config', { body: { action: 'set-chat-tier', category: 'chat', slot, provider_code: 'claude', model_id: 'same', auth_method: 'oauth', expected: {} }, timeout: 30_000 });
+    await result.current.mutateAsync({ category, provider_code: 'claude', model_id: 'same', auth_method: 'oauth' });
+    expect(invoke).toHaveBeenCalledWith('ai-config', { body: { action: category === 'chat' ? 'set-chat-tier' : 'set-triage-tier', category, slot, provider_code: 'claude', model_id: 'same', auth_method: 'oauth', expected: {} }, timeout: 30_000 });
     expect(upsert).not.toHaveBeenCalled();
   });
 

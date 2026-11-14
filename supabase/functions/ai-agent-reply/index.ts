@@ -110,7 +110,8 @@ import { callAnthropicJson } from "../_shared/anthropic-adapter.ts";
 import { composeAiTiers, invalidateRejectedUserTier, resolveUserAiRoute, type AiRoutingAdmin } from "../_shared/ai-user-routing.ts";
 import { AI_CONNECTION_REQUIRED, AI_USER_KEY_INVALID, ProviderHttpError, redactProviderError } from "../_shared/ai-routing-errors.ts";
 import { loadOpenAiCompatibleBase, type RowReader } from "../_shared/providerEndpoint.ts";
-import { runTriage, selectConnectorTools, TRIAGE_SETTING_KEYS, triageChainFromSettings, triageSlotsFromSettings, type TriageRun } from "../_shared/agentTriage.ts";
+import { runTriage, selectConnectorTools, triageBudgetFor, TRIAGE_CHAT_BUDGET_MS, TRIAGE_SETTING_KEYS, triageChainFromSettings, triageSlotsFromSettings, type TriageRun } from "../_shared/agentTriage.ts";
+import { persistTriageRefusals } from "./triageRefusal.ts";
 import { resolveProviderKey } from "../_shared/providerKeys.ts";
 import { enabledProcedures, readProcedureConfig } from "../_shared/procedures/config.ts";
 import { expireIfStale, isLivePendingOpener } from "../_shared/procedures/engine.ts";
@@ -1345,11 +1346,14 @@ Deno.serve(async (req) => {
     // immediately by chaining .then() rather than left as an un-awaited query builder,
     // which would not send its request until awaited.
     const knowledgePromise = retrieveKnowledgeContext();
+    const triageDeadlineAt = Date.now() + TRIAGE_CHAT_BUDGET_MS;
+    const triageReadSignal = AbortSignal.timeout(TRIAGE_CHAT_BUDGET_MS);
     const triageRowsPromise = admin
       .from("system_settings")
       .select("key, value")
-      .in("key", TRIAGE_SETTING_KEYS)
-      .then((res) => res);
+      .in("key", [...TRIAGE_SETTING_KEYS, "feature_ai_text_auth_lists"])
+      .abortSignal(triageReadSignal)
+      .then((res) => res, () => ({ data: null, error: { message: "triage_configuration_read_failed" } }));
     // Which configured triage models are decision models (catalogue capability
     // `triage`); every other slot is a chat-model tier. Chained on the settings read so
     // it overlaps with the setup below. null on a failed read: the chain then keeps the
@@ -1363,7 +1367,8 @@ Deno.serve(async (req) => {
           .select("model_id, ai_providers!inner(provider_code)")
           .eq("auth_method", "api_key")
           .contains("capabilities", ["triage"])
-          .in("model_id", slots.map((slot) => slot.model));
+          .in("model_id", slots.map((slot) => slot.model))
+          .abortSignal(triageReadSignal);
         if (error) return null;
         // A to-one embed arrives as an object at runtime but is typed as an array.
         return new Set((rows ?? []).flatMap((row) => {
@@ -1540,8 +1545,11 @@ Deno.serve(async (req) => {
     };
 
     timings.mark("setup");
-    const { data: triageRows } = await triageRowsPromise;
-    const triageChain = triageChainFromSettings(triageRows ?? [], await triageDecisionModelsPromise);
+    const { data: triageRows, error: triageReadError } = await triageRowsPromise;
+    const triagePolicyEnabled = triageRows?.some(row => row.key === "feature_ai_text_auth_lists" && row.value === true) === true;
+    if (triageReadError) console.warn({ event: "agent_triage_refused", reason: "triage_configuration_read_failed" });
+    const triageChain = triageChainFromSettings(triageRows ?? [], await triageDecisionModelsPromise,
+      failure => { triage = { outcome: null, errors: [failure] }; });
     if (triageChain.length) {
       triage = await runTriage(triageChain, {
         message: request.inbound_text.slice(0, MAX_INBOUND_CHARS),
@@ -1552,9 +1560,11 @@ Deno.serve(async (req) => {
         // answer" is not something a fast, separate decision call can see -- only the
         // chat model can know that once it has tried to answer.
         askHandoff: handoff.onRequest,
-      }, (code) => resolveProviderKey(admin as unknown as RowReader, code), undefined, fetch, Date.now,
-      (tier, body, timeoutMs) => callChatCompletion(admin as unknown as AiRoutingAdmin, tier, body, timeoutMs));
+      }, (code, signal) => resolveProviderKey(admin as unknown as RowReader, code, signal),
+      triagePolicyEnabled ? Math.max(0, Math.min(triageBudgetFor(triageChain), triageDeadlineAt - Date.now() - 100)) : undefined, fetch, Date.now,
+      (tier, body, timeoutMs, signal) => callChatCompletion(admin as unknown as AiRoutingAdmin, tier, body, timeoutMs, signal), triagePolicyEnabled);
     }
+    if (triagePolicyEnabled && triage?.errors.length) await persistTriageRefusals(admin, triage, triageChain, triageDeadlineAt);
     timings.mark("triage");
     const triagePlan = triage?.outcome?.plan ?? null;
     if (procedureTurn && triagePlan?.handoff) procedureTurn.endForHandoff();

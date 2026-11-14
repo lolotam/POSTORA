@@ -25,6 +25,17 @@ function renderPolicy(policy: ChatListPolicy, extra: Record<string, unknown> = {
 }
 
 describe('flagged Chat selector', () => {
+  it('uses Triage readiness in all slots, explains parsed JSON and the Codex 200-token refusal without claiming a hardcoded floor', () => {
+    renderPolicy({ enabled: true, groups: [], triageGroups: [group('oauth'), { ...group('oauth', 'oauth_max_tokens_unsupported'), provider_code: 'openai', name: 'OpenAI Codex subscription' }] },
+      { category: 'agent_triage', capability: 'triage' });
+    expect(screen.getAllByRole('group', { name: 'API' })).toHaveLength(3);
+    expect(screen.getAllByRole('group', { name: 'Auth' })).toHaveLength(3);
+    expect(screen.getByRole('combobox', { name: 'Primary model' })).toBeEnabled();
+    expect(screen.getAllByText(/Triage requires max_tokens: 200; OpenAI Codex Auth cannot honor this output cap/).length).toBeGreaterThan(0);
+    expect(screen.getByText(/Claude Auth uses prompt-requested JSON, validated by the strict parser/)).toBeInTheDocument();
+    expect(screen.queryByText(/Last Resort \(Hardcoded\)/)).not.toBeInTheDocument();
+  });
+
   it('links every slot to the admin Providers recovery controls', () => {
     renderPolicy({ enabled: true, groups: [group('oauth', 'not_connected')] });
     const links = screen.getAllByRole('link', { name: 'Manage connections and catalogue sync in AI Providers' });

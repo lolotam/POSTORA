@@ -153,8 +153,8 @@ function saveChatTierAndReconcile(queryClient: QueryClient, input: Omit<ChatTier
     // Restart it even though this mutation will reject after reconciliation.
     void queryClient.invalidateQueries({ queryKey: ['ai-config'] });
   };
-  return input.category === 'chat' ? saveChatTier({ ...input, expected }, reconcile)
-    : saveTextLadder({ ...input, expected, expected_chat }, reconcile);
+  if (input.category === 'chat' || input.category === 'agent_triage') return saveChatTier({ ...input, category: input.category, expected }, reconcile);
+  return saveTextLadder({ ...input, category: input.category, expected, expected_chat }, reconcile);
 }
 
 export function useResetTextCategory() {
@@ -169,7 +169,7 @@ export function useSetDefaultModel() {
   return useMutation({
     mutationFn: async ({ provider_code, model_id, category, auth_method }: { provider_code: string; model_id: string; category?: ModelCategory; auth_method?: AiAuthMethod }) => {
       if (category === 'caption' || category === 'hashtags') return saveChatTierAndReconcile(queryClient, { category, slot: 'primary', provider_code, model_id, auth_method });
-      if (category === 'chat' && queryClient.getQueryData<ChatListPolicy>(CHAT_LIST_POLICY_QUERY_KEY)?.enabled) {
+      if ((category === 'chat' || category === 'agent_triage') && queryClient.getQueryData<ChatListPolicy>(CHAT_LIST_POLICY_QUERY_KEY)?.enabled) {
         return saveChatTierAndReconcile(queryClient, { category, slot: 'primary', provider_code, model_id, auth_method });
       }
       const key = category ? `default_ai_model_${category}` : 'default_ai_model';
@@ -188,7 +188,7 @@ export function useSetFallbackModel() {
   return useMutation({
     mutationFn: async ({ provider_code, model_id, category, auth_method }: { provider_code: string; model_id: string; category: ModelCategory; auth_method?: AiAuthMethod }) => {
       if (category === 'caption' || category === 'hashtags') return saveChatTierAndReconcile(queryClient, { category, slot: 'fallback', provider_code, model_id, auth_method });
-      if (category === 'chat' && queryClient.getQueryData<ChatListPolicy>(CHAT_LIST_POLICY_QUERY_KEY)?.enabled) {
+      if ((category === 'chat' || category === 'agent_triage') && queryClient.getQueryData<ChatListPolicy>(CHAT_LIST_POLICY_QUERY_KEY)?.enabled) {
         return saveChatTierAndReconcile(queryClient, { category, slot: 'fallback', provider_code, model_id, auth_method });
       }
       const key = `default_ai_model_${category}_fallback`;
@@ -207,7 +207,7 @@ export function useSetFallback2Model() {
   return useMutation({
     mutationFn: async ({ provider_code, model_id, category, auth_method }: { provider_code: string; model_id: string; category: ModelCategory; auth_method?: AiAuthMethod }) => {
       if (category === 'caption' || category === 'hashtags') return saveChatTierAndReconcile(queryClient, { category, slot: 'fallback_2', provider_code, model_id, auth_method });
-      if (category === 'chat' && queryClient.getQueryData<ChatListPolicy>(CHAT_LIST_POLICY_QUERY_KEY)?.enabled) {
+      if ((category === 'chat' || category === 'agent_triage') && queryClient.getQueryData<ChatListPolicy>(CHAT_LIST_POLICY_QUERY_KEY)?.enabled) {
         return saveChatTierAndReconcile(queryClient, { category, slot: 'fallback_2', provider_code, model_id, auth_method });
       }
       const key = `default_ai_model_${category}_fallback_2`;
