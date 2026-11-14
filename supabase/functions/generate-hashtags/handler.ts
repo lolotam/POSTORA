@@ -6,6 +6,14 @@ import { AI_CONNECTION_REQUIRED, AI_USER_KEY_INVALID } from "../_shared/ai-routi
 import { createLogger } from "../_shared/logging.ts";
 import { callAiChain, logAiCall, resolveTextModelConfig, platformChatTiers } from "../_shared/ai-fallback.ts";
 import { serviceRoleCallerUserId } from "../_shared/auth-helper.ts";
+import { z } from "npm:zod@3.23.8";
+import { validateRequestBody, validationErrorResponse } from "../_shared/validate.ts";
+
+const GenerateHashtagsSchema = z.object({
+  caption: z.string().trim().min(1).max(10000),
+  platform: z.string().max(50).optional(),
+  model: z.string().max(100).optional(),
+});
 
 interface SubscriptionCheck {
   allowed: boolean;
@@ -157,7 +165,13 @@ async function respond(req: Request, signal: AbortSignal, deadlineAt: number): P
       return errorResponse(accessCheck.reason || 'AI features require a paid subscription', 403);
     }
 
-    const { caption, platform, model } = await new Response(req.body?.pipeThrough(new TransformStream(), { signal })).json();
+    const validation = validateRequestBody(GenerateHashtagsSchema,
+      await new Response(req.body?.pipeThrough(new TransformStream(), { signal })).json().catch(() => null));
+    if (!validation.success) {
+      await createLogger(supabaseAdmin, 'generate-hashtags', 'edge').warn('Hashtag request validation refused', { event: 'invalid_hashtag_input' }, user.id);
+      return validationErrorResponse(validation, corsHeaders);
+    }
+    const { caption, platform, model } = validation.data;
 
     // Resolve chat-model config: user override → admin /admin/settings Chat → hardcoded last-resort
     const route = await resolveUserAiRoute(routingAdmin, user.id, 'chat');

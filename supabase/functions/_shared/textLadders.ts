@@ -1,4 +1,5 @@
 import { z } from "npm:zod@3.23.8";
+import { normalizeStoredTextTier, type StoredTextTier } from "./textTierValue.ts";
 
 export const textCategorySchema = z.enum(["caption", "hashtags"]);
 export type TextCategory = z.infer<typeof textCategorySchema>;
@@ -17,10 +18,9 @@ export function parseTextLadder(rows: Array<{ key: string; value: unknown }>, ca
   const tiers: TextTier[] = [];
   let gap = false;
   for (const key of keys) {
-    let stored = rows.find(row => row.key === key)?.value;
-    if (typeof stored === "string") {
-      try { stored = JSON.parse(stored); } catch { throw new TextLadderError("invalid_text_chain"); }
-    }
+    let stored: StoredTextTier | null;
+    try { stored = normalizeStoredTextTier(rows.find(row => row.key === key)?.value); }
+    catch { throw new TextLadderError("invalid_text_chain"); }
     if (stored == null) { gap = true; continue; }
     const parsed = textTierSchema.safeParse(stored);
     if (gap || !parsed.success) throw new TextLadderError("invalid_text_chain");
@@ -36,3 +36,15 @@ export function supportsOutputCap(tier: { provider: string; authMethod?: string;
 
 /** Same Chat floor policy, explicitly shared by both new text categories. */
 export const TEXT_LAST_RESORT = { provider: "google", model: "gemini-3-flash-preview" };
+
+/** Chat historically resolves slots independently, with a default Primary and
+ * a validated third choice or floor. Customized categories remain contiguous.
+ */
+export function legacyTextSlots(rows: Array<{ key: string; value: unknown }>, category: string, knownThird: boolean) {
+  const slots = textTierKeys(category).map(key => {
+    try { return normalizeStoredTextTier(rows.find(row => row.key === key)?.value); }
+    catch { return null; } // Preserve legacy Chat's invalid-row default behavior.
+  });
+  return [slots[0] ?? { provider_code: 'google', model_id: 'google/gemini-3.1-flash-lite' }, slots[1],
+    knownThird && slots[2] ? slots[2] : { provider_code: TEXT_LAST_RESORT.provider, model_id: TEXT_LAST_RESORT.model }] as const;
+}

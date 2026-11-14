@@ -1,6 +1,6 @@
 import { createClient } from '@supabase/supabase-js';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 
 const { clientRef } = vi.hoisted(() => ({ clientRef: { current: undefined as unknown } }));
@@ -56,12 +56,14 @@ describe('generic Chat category card policy integration', () => {
     await screen.findByRole('combobox', { name: 'Primary provider' });
     context.fail(target);
     await context.queryClient.invalidateQueries({ queryKey: target === 'policy' ? ['ai-chat-list-policy'] : ['ai-config'] });
-    expect(await screen.findByRole('alert')).toHaveTextContent('Saved selections have not changed');
+    const readError = await screen.findByText('AI configuration could not be read. Saved selections have not changed.');
+    const chatCard = within(readError.parentElement!);
+    expect(chatCard.getByRole('alert')).toHaveTextContent('Saved selections have not changed');
     expect(screen.getByText(/Auth · claude · saved/)).toBeInTheDocument();
     expect(screen.queryByText(/private/)).not.toBeInTheDocument();
     context.fail('');
-    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
-    await waitFor(() => expect(screen.queryByRole('alert')).not.toBeInTheDocument());
+    fireEvent.click(chatCard.getByRole('button', { name: 'Retry' }));
+    await waitFor(() => expect(screen.queryAllByRole('alert')).toHaveLength(0));
     expect(screen.getByRole('combobox', { name: 'Primary provider' })).toBeInTheDocument();
     expect(context.writes()).toBe(0);
   });

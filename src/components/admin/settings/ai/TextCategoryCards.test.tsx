@@ -6,10 +6,11 @@ const { clientRef } = vi.hoisted(() => ({ clientRef: { current: undefined as unk
 vi.mock('@/integrations/supabase/client', () => ({ supabase: new Proxy({}, { get: (_target, property) => Reflect.get(clientRef.current as object, property) }) }));
 import { ChatModelsCard } from './AiCategoryCards';
 import { parseSettingsRows } from '@/hooks/useAIConfiguration';
+import { TextCategoryCards } from './TextCategoryCards';
 const clients: QueryClient[] = [];
 afterEach(() => { cleanup(); clients.splice(0).forEach(client => client.clear()); vi.restoreAllMocks(); });
 const tier = { provider_code: 'claude', model_id: 'same', auth_method: 'oauth' };
-function setup(enabled = true) {
+function setup(enabled = true, policyFailure = false) {
   let rows: Array<{ key: string; value: unknown }> = [{ key: 'default_ai_model_chat', value: tier }];
   const requests: Array<Record<string, unknown>> = [];
   let conflict = false;
@@ -19,7 +20,9 @@ function setup(enabled = true) {
     const url = new URL(String(input));
     if (url.pathname.endsWith('/ai-config')) {
       const request = JSON.parse(String(init?.body));
-      if (request.action === 'chat-list-policy') return Response.json({ enabled: true, groups, categoryLaddersEnabled: enabled });
+      if (request.action === 'chat-list-policy') return policyFailure
+        ? Response.json({ error: 'configuration_read_or_write_failed' }, { status: 500 })
+        : Response.json({ enabled: true, groups, categoryLaddersEnabled: enabled });
       requests.push(request);
       const prefix = `default_ai_model_${request.category}`;
       if (conflict) {
@@ -38,12 +41,20 @@ function setup(enabled = true) {
   vi.spyOn(client.auth, 'getSession').mockResolvedValue({ data: { session: { access_token: crypto.randomUUID(), user: { id: 'admin' } } }, error: null } as never);
   clientRef.current = client;
   const cache = new QueryClient({ defaultOptions: { queries: { retry: false } } }); clients.push(cache);
-  render(<QueryClientProvider client={cache}><ChatModelsCard /></QueryClientProvider>);
-  return { requests, rows: () => rows, conflict: () => { conflict = true; } };
+  render(<QueryClientProvider client={cache}>{policyFailure ? <TextCategoryCards /> : <ChatModelsCard />}</QueryClientProvider>);
+  return { requests, rows: () => rows, conflict: () => { conflict = true; }, recoverPolicy: () => { policyFailure = false; } };
 }
 function card(title: string) { return screen.getByText(title).closest('[data-slot="card"]') ?? screen.getByText(title).closest('.rounded-lg')!; }
 
 describe('independent text categories', () => {
+  it('shows policy read failure and Retry before flags have loaded', async () => {
+    const context = setup(true, true);
+    expect(await screen.findByRole('alert')).toHaveTextContent('Text model readiness could not be read');
+    context.recoverPolicy();
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    await screen.findByText('Caption Models');
+    await screen.findByText('Hashtag Models');
+  });
   it('parses every new slot and preserves API/Auth identity', () => {
     for (const category of ['caption', 'hashtags'] as const) {
       const parsed = parseSettingsRows(['', '_fallback', '_fallback_2'].map(suffix => ({ key: `default_ai_model_${category}${suffix}`, value: suffix === '_fallback' ? JSON.stringify(tier) : tier })));

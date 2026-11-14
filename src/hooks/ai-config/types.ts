@@ -116,7 +116,7 @@ export interface CategoryFallbacks2 {
  */
 export interface SystemSettingRow {
   key: string;
-  value: { at?: string } & Record<string, unknown>;
+  value: ({ at?: string } & Record<string, unknown>) | string | null;
 }
 
 export interface AIConfigData {

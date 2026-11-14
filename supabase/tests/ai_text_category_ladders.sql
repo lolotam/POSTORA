@@ -11,6 +11,22 @@ UPDATE public.system_settings SET value = 'true' WHERE key IN ('feature_ai_text_
 DELETE FROM public.system_settings WHERE key LIKE 'default_ai_model_caption%' OR key LIKE 'default_ai_model_hashtags%';
 SELECT pg_temp.text_assert(public.write_ai_text_ladder('hashtags','{"default_ai_model_hashtags":{"provider_code":"claude","model_id":"same","auth_method":"oauth","extension":true}}','{}','{}'),'create primary');
 SELECT pg_temp.text_assert(NOT public.write_ai_text_ladder('hashtags','{}','{}','{}'),'stale snapshot refused');
+DO $$
+DECLARE category text; primary_key text; sibling jsonb; observed jsonb; replacement jsonb;
+BEGIN
+  FOREACH category IN ARRAY ARRAY['caption','hashtags'] LOOP
+    primary_key := 'default_ai_model_' || category;
+    sibling := '{"provider_code":"claude","model_id":"same","auth_method":"oauth","extension":{"retain":true}}';
+    DELETE FROM public.system_settings WHERE key LIKE primary_key || '%';
+    INSERT INTO public.system_settings(key,value) VALUES (primary_key,to_jsonb(sibling::text));
+    observed := jsonb_build_object(primary_key,to_jsonb(sibling::text));
+    replacement := observed || jsonb_build_object(primary_key || '_fallback','{"provider_code":"claude","model_id":"fallback"}'::jsonb);
+    PERFORM pg_temp.text_assert(public.write_ai_text_ladder(category,replacement,observed,'{}'),'string sibling update accepted');
+    PERFORM pg_temp.text_assert((SELECT value = sibling FROM public.system_settings WHERE key = primary_key),'decoded sibling extensions preserved');
+    PERFORM pg_temp.text_assert(NOT public.write_ai_text_ladder(category,replacement,observed,'{}'),'raw string expectation becomes stale after normalization');
+    DELETE FROM public.system_settings WHERE key LIKE primary_key || '%';
+  END LOOP;
+END $$;
 DO $$ BEGIN
  BEGIN
   PERFORM public.write_ai_text_ladder('caption','{"default_ai_model_caption_fallback":{"provider_code":"claude","model_id":"orphan"}}','{}','{}');

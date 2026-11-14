@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { FunctionsFetchError, FunctionsHttpError } from '@supabase/supabase-js';
 import { supabase } from '@/integrations/supabase/client';
+import { normalizeStoredTextTier } from '../../../../supabase/functions/_shared/textTierValue';
 
 const groupSchema = z.object({
   provider_code: z.string(), auth_method: z.enum(['api_key', 'oauth']), name: z.string(),
@@ -21,6 +22,11 @@ const RETRY_MESSAGE = 'AI configuration could not be saved or read. Retry; check
 const savedTierSchema = z.object({ provider_code: z.string(), model_id: z.string(), auth_method: z.enum(['api_key', 'oauth']).optional() });
 type SavedChatTier = z.infer<typeof savedTierSchema>;
 type ChatTierSnapshot = Partial<Record<typeof CHAT_TIER_KEYS[number], SavedChatTier | null>>;
+export type TextTierSnapshot = Record<string, Record<string, unknown> | string | null>;
+const rawTextTierSchema = z.union([savedTierSchema.passthrough(), z.string(), z.null()]).superRefine((stored, context) => {
+  try { normalizeStoredTextTier(stored); }
+  catch { context.addIssue({ code: z.ZodIssueCode.custom, message: 'Invalid saved text tier' }); }
+});
 
 class ChatActionError extends Error {
   constructor(readonly outcome: 'refused' | 'conflict' | 'unconfirmed', reason?: string) { super(reason === 'ai_output_cap_unsupported'
@@ -80,7 +86,7 @@ export const textTierKeys = (category: string) => [`default_ai_model_${category}
 export type TextLadderInput = { category: 'caption' | 'hashtags'; expected: Record<string, unknown>; expected_chat: Record<string, unknown>;
   slot?: 'primary' | 'fallback' | 'fallback_2'; provider_code?: string; model_id?: string; auth_method?: 'api_key' | 'oauth' };
 
-export async function saveTextLadder(input: TextLadderInput, onReconciled: (snapshot: Record<string, SavedChatTier | null>) => void | Promise<void>): Promise<void> {
+export async function saveTextLadder(input: TextLadderInput, onReconciled: (snapshot: TextTierSnapshot) => void | Promise<void>): Promise<void> {
   let response: unknown;
   try {
     response = await invokeChatAction({ action: input.slot ? 'set-text-tier' : 'inherit-text-category', ...input });
@@ -90,7 +96,7 @@ export async function saveTextLadder(input: TextLadderInput, onReconciled: (snap
     // Keep exact raw sibling values for the next whole-chain CAS expectation.
     const keys = [...textTierKeys(input.category), ...CHAT_TIER_KEYS];
     const { data, error } = await supabase.from('system_settings').select('key,value').in('key', keys).abortSignal(AbortSignal.timeout(30_000));
-    const observed = z.array(z.object({ key: z.string(), value: savedTierSchema.passthrough().nullable() })).safeParse(data);
+    const observed = z.array(z.object({ key: z.string(), value: rawTextTierSchema })).safeParse(data);
     if (error || !observed.success || observed.data.some(row => !keys.includes(row.key))) throw new Error('AI configuration save outcome could not be confirmed. Retry or reload to refresh.');
     await onReconciled(Object.fromEntries(keys.map(key => [key, observed.data.find(row => row.key === key)?.value])));
     // An observation is never proof that an earlier timed-out reset completed.

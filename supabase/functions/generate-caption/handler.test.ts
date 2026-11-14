@@ -82,3 +82,24 @@ Deno.test("caption HTTP authentication consumes the same bounded request deadlin
     assertEquals(response.status, 401);
   } finally { globalThis.fetch = previousFetch; time.restore(); }
 });
+
+for (const invalid of [{ caption: {} }, { caption: 'x'.repeat(10001) }, { caption: 'valid', platform: {} },
+  { caption: 'valid', model: 'x'.repeat(101) }, {}]) {
+  Deno.test(`hashtags validates before routing: ${Object.keys(invalid).join(',') || 'missing caption'}`, async () => {
+    const previousFetch = globalThis.fetch;
+    const paths: string[] = [];
+    globalThis.fetch = async input => {
+      const path = new URL(String(input)).pathname; paths.push(path);
+      if (path.endsWith('/user')) return Response.json({ id: userId });
+      if (path.endsWith('/user_roles')) return Response.json({ role: 'admin' });
+      return Response.json(null);
+    };
+    try {
+      const response = await handleGenerateHashtagsRequest(new Request('https://edge.invalid/generate', { method: 'POST',
+        headers: { Authorization: `Bearer ${crypto.randomUUID()}` }, body: JSON.stringify(invalid) }));
+      assertEquals(response.status, 400);
+      assertEquals((await response.json()).error, 'Invalid request body');
+      assertEquals(paths.some(path => path.endsWith('/app_settings') || path.endsWith('/system_settings') || path.includes('completions')), false);
+    } finally { globalThis.fetch = previousFetch; }
+  });
+}

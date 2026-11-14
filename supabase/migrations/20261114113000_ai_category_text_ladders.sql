@@ -21,6 +21,25 @@ REVOKE ALL ON FUNCTION public.guard_ai_text_ladder_write() FROM PUBLIC, anon, au
 CREATE TRIGGER guard_ai_text_ladder_write BEFORE INSERT OR UPDATE OR DELETE ON public.system_settings
 FOR EACH ROW EXECUTE FUNCTION public.guard_ai_text_ladder_write();
 
+-- Same storage contract as _shared/textTierValue.ts, enforced for direct RPC
+-- callers too. Normalize replacements only; CAS must compare raw stored values.
+CREATE FUNCTION public.normalize_ai_text_tier(tier jsonb) RETURNS jsonb
+LANGUAGE plpgsql IMMUTABLE SET search_path = public, pg_temp AS $$
+BEGIN
+  IF jsonb_typeof(tier) = 'string' THEN tier := (tier #>> '{}')::jsonb; END IF;
+  IF tier IS NULL OR tier = 'null'::jsonb THEN RETURN tier; END IF;
+  IF jsonb_typeof(tier) <> 'object'
+    OR jsonb_typeof(tier->'provider_code') IS DISTINCT FROM 'string'
+    OR jsonb_typeof(tier->'model_id') IS DISTINCT FROM 'string'
+    OR btrim(tier->>'provider_code') = '' OR btrim(tier->>'model_id') = ''
+    OR ((tier ? 'auth_method') AND (tier->>'auth_method' IS NULL OR tier->>'auth_method' NOT IN ('api_key','oauth'))) THEN
+    RAISE EXCEPTION 'Invalid text chain';
+  END IF;
+  RETURN tier || jsonb_build_object('provider_code', btrim(tier->>'provider_code'), 'model_id', btrim(tier->>'model_id'));
+END;
+$$;
+REVOKE ALL ON FUNCTION public.normalize_ai_text_tier(jsonb) FROM PUBLIC, anon, authenticated;
+
 CREATE FUNCTION public.write_ai_text_ladder(p_category text, p_chain jsonb, p_expected jsonb, p_expected_chat jsonb) RETURNS boolean
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $$
 DECLARE
@@ -47,15 +66,12 @@ BEGIN
     SELECT COALESCE(jsonb_object_agg(key,value),'{}'::jsonb) INTO chat_chain FROM public.system_settings WHERE key = ANY(chat_keys);
     IF chat_chain IS DISTINCT FROM p_expected_chat THEN RETURN false; END IF;
   ELSE
-    IF p_chain->keys[1] IS NULL OR p_chain->keys[1] = 'null'::jsonb THEN RAISE EXCEPTION 'Text Primary required'; END IF;
     FOREACH tier_key IN ARRAY keys LOOP
-      tier := p_chain->tier_key;
+      tier := public.normalize_ai_text_tier(p_chain->tier_key);
+      IF tier IS NOT NULL THEN p_chain := jsonb_set(p_chain, ARRAY[tier_key], tier); END IF;
+      IF tier_key = keys[1] AND (tier IS NULL OR tier = 'null'::jsonb) THEN RAISE EXCEPTION 'Text Primary required'; END IF;
       IF tier IS NULL OR tier = 'null'::jsonb THEN gap := true; CONTINUE; END IF;
-      IF gap OR jsonb_typeof(tier) <> 'object'
-        OR jsonb_typeof(tier->'provider_code') IS DISTINCT FROM 'string'
-        OR jsonb_typeof(tier->'model_id') IS DISTINCT FROM 'string'
-        OR btrim(tier->>'provider_code') = '' OR btrim(tier->>'model_id') = ''
-        OR ((tier ? 'auth_method') AND (tier->>'auth_method' IS NULL OR tier->>'auth_method' NOT IN ('api_key','oauth'))) THEN RAISE EXCEPTION 'Invalid text chain'; END IF;
+      IF gap THEN RAISE EXCEPTION 'Invalid text chain'; END IF;
     END LOOP;
   END IF;
   DELETE FROM public.system_settings WHERE key = ANY(keys);

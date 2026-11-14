@@ -1,20 +1,61 @@
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { QueryClient, QueryClientProvider, useQuery } from '@tanstack/react-query';
 import { act, renderHook, waitFor } from '@testing-library/react';
 import type { ReactNode } from 'react';
-import { afterEach, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 
 const { fetchMock } = vi.hoisted(() => ({ fetchMock: vi.fn<typeof fetch>() }));
 vi.mock('@/integrations/supabase/client', async () => {
   const { createClient } = await import('@supabase/supabase-js');
   return { supabase: createClient('http://127.0.0.1:54321', crypto.randomUUID(), {
-    auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false }, global: { fetch: fetchMock },
+    auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false }, global: { fetch: (url, init) => {
+      const path = new URL(String(url)).pathname;
+      if (path.endsWith('/ai_providers') || path.endsWith('/ai_models')) return Promise.resolve(Response.json([]));
+      return fetchMock(url, init);
+    } },
   }) };
 });
 
 import { parseSettingsRows, useAIConfiguration, useSetDefaultModel, useSetFallbackModel, useSetFallback2Model } from './useAIConfiguration';
 import { CHAT_LIST_POLICY_QUERY_KEY } from '@/features/ai-providers/infrastructure/chatListGateway';
+import { supabase } from '@/integrations/supabase/client';
 
-afterEach(() => { vi.useRealTimers(); fetchMock.mockReset(); });
+beforeEach(() => { vi.spyOn(supabase.auth, 'getSession').mockResolvedValue({ data: { session: { access_token: crypto.randomUUID(), user: { id: 'admin' } } }, error: null } as never); });
+afterEach(() => { vi.useRealTimers(); fetchMock.mockReset(); vi.restoreAllMocks(); });
+
+it('a hashtag conflict restarts a caption success refresh after publishing its partial snapshot', async () => {
+  const old = { provider_code: 'claude', model_id: 'old' };
+  const fresh = { provider_code: 'claude', model_id: 'fresh' };
+  const settings = [{ key: 'default_ai_model_caption', value: old }, { key: 'default_ai_model_hashtags', value: old }];
+  const freshSettings = settings.map(row => ({ ...row, value: fresh }));
+  const config = { providers: [], models: [], oauthModels: [], settings, ...parseSettingsRows(settings) };
+  const client = new QueryClient({ defaultOptions: { queries: { staleTime: Infinity, retry: false } } });
+  client.setQueryData(['ai-config'], config);
+  let reads = 0;
+  let cancelled = false;
+  fetchMock.mockImplementation(url => Promise.resolve(String(url).includes('/rest/v1/system_settings')
+    ? Response.json([freshSettings[1]]) : Response.json({ success: true })));
+  const wrapper = ({ children }: { children: ReactNode }) => <QueryClientProvider client={client}>{children}</QueryClientProvider>;
+  const { result, unmount } = renderHook(() => ({
+    caption: useSetDefaultModel(), hashtags: useSetFallbackModel(),
+    configuration: useQuery({ queryKey: ['ai-config'], queryFn: ({ signal }) => {
+      reads++;
+      if (reads > 1) return Promise.resolve({ ...config, settings: freshSettings, ...parseSettingsRows(freshSettings) });
+      return new Promise<typeof config>((_resolve, reject) => signal.addEventListener('abort', () => {
+        cancelled = true; reject(new DOMException('cancelled', 'AbortError'));
+      }, { once: true }));
+    } }),
+  }), { wrapper });
+  try {
+    await act(async () => { await result.current.caption.mutateAsync({ category: 'caption', ...fresh }); });
+    await waitFor(() => expect(reads).toBe(1));
+    fetchMock.mockImplementation(url => Promise.resolve(String(url).includes('/rest/v1/system_settings')
+      ? Response.json([freshSettings[1]]) : Response.json({ error: 'configuration_changed_retry' }, { status: 409 })));
+    await act(async () => { await expect(result.current.hashtags.mutateAsync({ category: 'hashtags', ...fresh })).rejects.toThrow('Retry'); });
+    expect(cancelled).toBe(true);
+    await waitFor(() => expect(result.current.configuration.data?.categoryDefaults.caption).toEqual(fresh));
+    expect(reads).toBe(2);
+  } finally { unmount(); client.clear(); }
+});
 
 // PR #419 r5: a sibling change invalidates the expectation for the whole chain.
 it.each([
@@ -34,11 +75,13 @@ it.each([
   else if (change === 'null') fresh[siblingKey] = null;
   else fresh[siblingKey] = { provider_code: 'claude', model_id: 'concurrently-saved', auth_method: 'oauth', provider_option: 'retained' };
   let stored = { ...fresh };
+  const unrelated = { key: 'default_ai_model_image', value: { provider_code: 'openai', model_id: 'image' } };
   const writes: Array<{ expected: Record<string, unknown> }> = [];
   fetchMock.mockImplementation((url, init) => {
     const requestUrl = new URL(String(url));
     if (requestUrl.pathname.includes('/rest/v1/system_settings')) {
       const rows = Object.entries(stored).map(([key, value]) => ({ key, value }));
+      if (requestUrl.searchParams.has('or')) rows.push(unrelated);
       // Support the old single-tier request too, so the regression fails on
       // stale cache contents rather than on a different HTTP response shape.
       return Promise.resolve(Response.json(requestUrl.searchParams.get('key')?.startsWith('eq.')
@@ -52,7 +95,6 @@ it.each([
     return Promise.resolve(Response.json({ success: true }));
   });
   const client = new QueryClient({ defaultOptions: { queries: { staleTime: Infinity, retry: false }, mutations: { retry: false } } });
-  const unrelated = { key: 'default_ai_model_image', value: { provider_code: 'openai', model_id: 'image' } };
   const settings = [...Object.entries(previous).map(([key, value]) => ({ key, value })), unrelated];
   client.setQueryData(['ai-config'], { providers: [], models: [], oauthModels: [], settings, ...parseSettingsRows(settings) });
   client.setQueryData(CHAT_LIST_POLICY_QUERY_KEY, { enabled: true, groups: [] });

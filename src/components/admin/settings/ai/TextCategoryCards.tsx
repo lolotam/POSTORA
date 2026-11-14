@@ -46,7 +46,7 @@ function TextCategoryCard({ category, policy }: { category: 'caption' | 'hashtag
 /** Mounted with Chat, hidden until both server-authoritative rollout flags allow it. */
 export function TextCategoryCards() {
   const policy = useChatListPolicy(true);
-  if (!policy.data?.enabled || !policy.data.categoryLaddersEnabled) return null;
   if (policy.isError) return <p role="alert">Text model readiness could not be read. <Button onClick={() => void policy.refetch()}>Retry</Button></p>;
+  if (!policy.data?.enabled || !policy.data.categoryLaddersEnabled) return null;
   return <><TextCategoryCard category="caption" policy={policy.data} /><TextCategoryCard category="hashtags" policy={policy.data} /></>;
 }

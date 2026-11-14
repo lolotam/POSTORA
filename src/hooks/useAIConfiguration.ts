@@ -2,6 +2,7 @@ import { useQuery, useMutation, useQueryClient, type QueryClient } from '@tansta
 import { supabase } from '@/integrations/supabase/client';
 import { fetchModelCatalogue } from '@/features/ai-providers/infrastructure/aiModelCatalogueGateway';
 import { AI_PROVIDER_HEALTH_QUERY_KEY } from './ai-config/queryKeys';
+import { normalizeStoredTextTier, type StoredTextTier } from '../../supabase/functions/_shared/textTierValue';
 import { CHAT_LIST_POLICY_QUERY_KEY, CHAT_TIER_KEYS, saveChatTier, saveTextLadder, textTierKeys, type ChatListPolicy, type ChatTierInput } from '@/features/ai-providers/infrastructure/chatListGateway';
 import type {
   AIProvider,
@@ -19,8 +20,9 @@ import type {
 export type { AIProvider, AIModel, DefaultModel, CategoryDefaults, CategoryFallbacks, CategoryFallbacks2, AIConfigData, AiAuthMethod, ModelCategory, SystemSettingRow };
 
 function parseDefault(val: unknown): DefaultModel | null {
-  if (!val || typeof val !== 'object') return null;
-  const obj = val as Record<string, string>;
+  let obj: StoredTextTier | null;
+  try { obj = normalizeStoredTextTier(val); } catch { return null; }
+  if (!obj) return null;
   if (obj.provider_code && obj.model_id) {
     const parsed: DefaultModel = { provider_code: obj.provider_code, model_id: obj.model_id };
     // `auth_method` only ever carries 'oauth' on disk; api-key tiers keep the
@@ -72,11 +74,7 @@ export function parseSettingsRows(rows: { key: string; value: unknown }[]): Pars
   };
 
   for (const row of rows) {
-    let storedValue = row.value;
-    if (/^default_ai_model_(caption|hashtags)(?:_fallback(?:_2)?)?$/.test(row.key) && typeof storedValue === 'string') {
-      try { storedValue = JSON.parse(storedValue); } catch { storedValue = null; }
-    }
-    const parsed = parseDefault(storedValue);
+    const parsed = parseDefault(row.value);
     if (row.key === 'default_ai_model') {
       out.defaultModel = parsed;
       continue;
@@ -139,7 +137,7 @@ function saveChatTierAndReconcile(queryClient: QueryClient, input: Omit<ChatTier
   const keys = textTierKeys(input.category);
   const expected = Object.fromEntries(current.settings.filter(row => keys.includes(row.key)).map(row => [row.key, row.value]));
   const expected_chat = Object.fromEntries(current.settings.filter(row => CHAT_TIER_KEYS.some(key => key === row.key)).map(row => [row.key, row.value]));
-  const reconcile = async (snapshot: Record<string, Record<string, unknown> | null>) => {
+  const reconcile = async (snapshot: Record<string, Record<string, unknown> | string | null>) => {
     // Publish every observed tier before a failed mutation can show its error.
     // Invalidation alone can leave stale saved tiers and CAS expectations visible.
     await queryClient.cancelQueries({ queryKey: ['ai-config'] });
@@ -151,6 +149,9 @@ function saveChatTierAndReconcile(queryClient: QueryClient, input: Omit<ChatTier
       }
       return { ...current, settings, ...parseSettingsRows(settings) };
     });
+    // Another category's successful write may have started the cancelled read.
+    // Restart it even though this mutation will reject after reconciliation.
+    void queryClient.invalidateQueries({ queryKey: ['ai-config'] });
   };
   return input.category === 'chat' ? saveChatTier({ ...input, expected }, reconcile)
     : saveTextLadder({ ...input, expected, expected_chat }, reconcile);

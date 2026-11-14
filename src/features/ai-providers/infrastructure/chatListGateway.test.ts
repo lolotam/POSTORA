@@ -10,7 +10,7 @@ vi.mock('@/integrations/supabase/client', async () => {
   }) };
 });
 
-import { fetchChatListPolicy, saveChatTier } from './chatListGateway';
+import { fetchChatListPolicy, saveChatTier, saveTextLadder } from './chatListGateway';
 
 afterEach(() => {
   vi.useRealTimers();
@@ -18,6 +18,17 @@ afterEach(() => {
 });
 
 describe('Chat action deadlines (PR #419)', () => {
+  it.each(['caption', 'hashtags'] as const)('%s conflict preserves raw JSON-string siblings and extensions', async category => {
+    const key = `default_ai_model_${category}`;
+    const value = JSON.stringify({ provider_code: 'claude', model_id: 'saved', auth_method: 'oauth', extension: { retain: true } });
+    fetchMock.mockImplementation(url => Promise.resolve(String(url).includes('/functions/v1/ai-config')
+      ? Response.json({ error: 'configuration_changed_retry' }, { status: 409 })
+      : Response.json([{ key, value }])));
+    const reconciled = vi.fn();
+    await expect(saveTextLadder({ category, slot: 'fallback', provider_code: 'claude', model_id: 'requested', expected: {}, expected_chat: {} }, reconciled)).rejects.toThrow('Retry');
+    expect(reconciled).toHaveBeenCalledWith(expect.objectContaining({ [key]: value }));
+    expect(fetchMock.mock.calls.filter(([url]) => String(url).includes('/functions/v1/ai-config'))).toHaveLength(1);
+  });
   it.each(['unreadable', 'malformed sibling'] as const)('a conflict with an %s snapshot rejects without publishing partial tiers', async outcome => {
     const previous = { provider_code: 'openai', model_id: 'previous' };
     fetchMock.mockImplementation(url => Promise.resolve(String(url).includes('/functions/v1/ai-config')

@@ -14,6 +14,8 @@ export interface ChatPolicySnapshot {
   settings: Array<{ key: string; value: unknown }>;
   statuses: Array<{ provider_code: string; status: string }>;
   apiKeys: Record<string, boolean>;
+  /** Read through the runtime credential resolver; never inferred from another provider's key. */
+  textFloorAvailable?: boolean;
   registry: Record<string, string[]>;
 }
 

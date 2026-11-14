@@ -1,4 +1,5 @@
-import { parseTextLadder, textTierKeys, TEXT_LAST_RESORT, supportsOutputCap, type TextCategory } from "./textLadders.ts";
+import { parseTextLadder, legacyTextSlots, textTierKeys, TEXT_LAST_RESORT, supportsOutputCap, type TextCategory } from "./textLadders.ts";
+import { normalizeStoredTextTier } from "./textTierValue.ts";
 import { callAnthropic } from "./anthropic-adapter.ts";
 import { AI_USER_KEY_INVALID, redactProviderError } from "./ai-routing-errors.ts";
 import type { SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2";
@@ -108,12 +109,14 @@ export function getAiEndpoint(provider: string, suppliedKey?: string, baseUrl?: 
   };
 }
 
-export async function resolvePlatformApiKey(admin: AiRoutingAdmin | undefined, provider: string): Promise<string> {
+export async function resolvePlatformApiKey(admin: AiRoutingAdmin | undefined, provider: string, signal?: AbortSignal): Promise<string> {
   // A data-driven provider must never fall through to the Google default key below.
-  if (!BUILTIN_CHAT_PROVIDERS.has(provider)) return (await resolveProviderKey(admin, provider)) ?? '';
+  if (!BUILTIN_CHAT_PROVIDERS.has(provider)) return (await resolveProviderKey(admin, provider, signal)) ?? '';
   if (admin) {
-    const { data, error } = await admin.from('provider_api_keys').select('api_key')
-      .eq('provider_code', provider === 'google' ? 'gemini' : provider).maybeSingle();
+    const query = admin.from('provider_api_keys').select('api_key')
+      .eq('provider_code', provider === 'google' ? 'gemini' : provider);
+    if (signal && !query.abortSignal) throw new Error('Platform AI key cancellation is unavailable');
+    const { data, error } = await (signal ? query.abortSignal!(signal) : query).maybeSingle();
     if (error) throw new Error('Platform AI key read failed');
     if (data !== null) {
       if (typeof data !== 'object' || !('api_key' in data) || typeof data.api_key !== 'string') throw new Error('Invalid platform AI key response');
@@ -232,7 +235,7 @@ export async function fetchCategoryAiSettings(supabaseAdmin: SupabaseClient, cat
 
   for (const s of settings || []) {
     try {
-      const val = typeof s.value === 'string' ? JSON.parse(s.value) : s.value;
+      const val = normalizeStoredTextTier(s.value);
       if (s.key === primaryKey && val?.provider_code && val?.model_id) {
         primaryProvider = val.provider_code;
         primaryModel = val.model_id;
@@ -302,6 +305,12 @@ export async function fetchCategoryAiSettings(supabaseAdmin: SupabaseClient, cat
     : (lastResort ? lastResort.model : '');
   const lastResortAuthMethod = useConfiguredLastResort ? configuredLastResortAuthMethod : undefined;
 
+  if (category === 'chat' || category === 'caption' || category === 'hashtags') {
+    const [primary, fallback, last] = legacyTextSlots(settings || [], category, useConfiguredLastResort);
+    return { primaryProvider: primary.provider_code, primaryModel: primary.model_id, primaryAuthMethod: authMethodFrom(primary),
+      fallbackProvider: fallback?.provider_code ?? '', fallbackModel: fallback?.model_id ?? '', fallbackAuthMethod: authMethodFrom(fallback),
+      lastResortProvider: last.provider_code, lastResortModel: last.model_id, lastResortAuthMethod: authMethodFrom(last) };
+  }
   return { primaryProvider, primaryModel, primaryAuthMethod, fallbackProvider, fallbackModel, fallbackAuthMethod, lastResortProvider, lastResortModel, lastResortAuthMethod };
 }
 
