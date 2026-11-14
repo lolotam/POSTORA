@@ -234,6 +234,11 @@ jobs:
           deno check --no-config --import-map=scripts/ci/deno-analytics.import-map.json --lock=scripts/ci/deno-analytics.lock --frozen --node-modules-dir=none supabase/functions/brand-scrape/index.ts supabase/functions/brand-scrape/releaseContract.test.ts supabase/functions/brand-scrape/facebookPublicPage.test.ts
           deno test --no-config --import-map=scripts/ci/deno-analytics.import-map.json --lock=scripts/ci/deno-analytics.lock --frozen --node-modules-dir=none --allow-env --allow-read=supabase/functions/brand-scrape/index.ts supabase/functions/brand-scrape/releaseContract.test.ts supabase/functions/brand-scrape/facebookPublicPage.test.ts
 
+      - name: Typecheck and test legacy analytics bootstrap
+        run: |
+          deno check --no-config --import-map=scripts/ci/deno-analytics.import-map.json --lock=scripts/ci/deno-analytics.lock --frozen --node-modules-dir=none supabase/functions/analytics-legacy-bootstrap/index.ts
+          deno test --no-config --import-map=scripts/ci/deno-analytics.import-map.json --lock=scripts/ci/deno-analytics.lock --frozen --node-modules-dir=none --allow-env supabase/functions/analytics-legacy-bootstrap/provider.test.ts supabase/functions/analytics-legacy-bootstrap/worker.test.ts supabase/functions/_shared/metaSharedBudget.test.ts
+
       - name: Test service proxy and MCP
         run: >
           deno test
@@ -797,6 +802,14 @@ jobs:
           deno test --no-config --import-map=scripts/ci/deno-analytics.import-map.json --lock=scripts/ci/deno-analytics.lock --frozen --node-modules-dir=none
           --allow-env --allow-run
           supabase/functions/meta-owned-analytics-sync/admissionIntegration.test.ts
+
+      - name: Verify legacy bootstrap worker against migrated SQL
+        env:
+          ROLLOUT_IT_CONTAINER: pg-harness
+          ROLLOUT_IT_DB: partner_api_harness
+        run: >-
+          deno test --no-config --import-map=scripts/ci/deno-analytics.import-map.json --lock=scripts/ci/deno-analytics.lock --frozen --node-modules-dir=none
+          --allow-env --allow-run supabase/functions/analytics-legacy-bootstrap/integration.test.ts
 
       - name: Verify analytics probe ownership against the migrated SQL harness
         run: >-

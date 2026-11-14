@@ -1,3 +1,4 @@
+import { sharedMetaBudgetFetch } from "../_shared/metaSharedBudget.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { authenticateCaller } from "../_shared/auth-helper.ts";
 import { verifyCronAuth } from "../_shared/cron-auth.ts";
@@ -29,6 +30,13 @@ export function handler(req: Request): Promise<Response> {
       if (!client) throw new AnalyticsWorkerStopped("storage_unavailable");
       return client.rpc(name, args).abortSignal(signal);
     },
+    fetch: sharedMetaBudgetFetch({
+      apps: { facebook: Deno.env.get("FACEBOOK_APP_ID"), threads: Deno.env.get("THREADS_APP_ID") },
+      rpc: (name, args, signal) => {
+        if (!client) throw new AnalyticsWorkerStopped("storage_unavailable");
+        return client.rpc(name, args).abortSignal(signal);
+      },
+    }),
     audit: async (event, signal) => {
       if (!client) return false;
       const result = await client.from("system_logs").insert({ level: "info", category: "edge", source: "meta-owned-analytics-sync",

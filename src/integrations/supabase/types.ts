@@ -34,6 +34,238 @@ export type Database = {
   }
   public: {
     Tables: {
+      analytics_legacy_bootstrap_jobs: {
+        Row: {
+          source_kind: string
+          expected_app_id: string | null
+          id: string
+          social_account_id: string
+          user_id: string
+          platform: string
+          login_kind: string
+          state: string
+          idempotency_key: string
+          lease_id: string | null
+          lease_until: string | null
+          revision: number
+          source_account_id: string | null
+          captured_generation: number
+          captured_connection: number
+          source_credential_id: string | null
+          input_fence: string | null
+          installed: boolean
+          attempts: number
+          attempt_times: string[]
+          retry_at: string | null
+          reason_code: string | null
+          correlation_id: string
+          installed_at: string | null
+          created_at: string
+          updated_at: string
+        }
+        Insert: {
+          source_kind?: string
+          expected_app_id?: string | null
+          id?: string
+          social_account_id: string
+          user_id: string
+          platform: string
+          login_kind: string
+          state?: string
+          idempotency_key: string
+          lease_id?: string | null
+          lease_until?: string | null
+          revision?: number
+          source_account_id?: string | null
+          captured_generation?: number
+          captured_connection?: number
+          source_credential_id?: string | null
+          input_fence?: string | null
+          installed?: boolean
+          attempts?: number
+          attempt_times?: string[]
+          retry_at?: string | null
+          reason_code?: string | null
+          correlation_id?: string
+          installed_at?: string | null
+          created_at?: string
+          updated_at?: string
+        }
+        Update: {
+          source_kind?: string
+          expected_app_id?: string | null
+          id?: string
+          social_account_id?: string
+          user_id?: string
+          platform?: string
+          login_kind?: string
+          state?: string
+          idempotency_key?: string
+          lease_id?: string | null
+          lease_until?: string | null
+          revision?: number
+          source_account_id?: string | null
+          captured_generation?: number
+          captured_connection?: number
+          source_credential_id?: string | null
+          input_fence?: string | null
+          installed?: boolean
+          attempts?: number
+          attempt_times?: string[]
+          retry_at?: string | null
+          reason_code?: string | null
+          correlation_id?: string
+          installed_at?: string | null
+          created_at?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "analytics_legacy_bootstrap_jo_social_account_id_user_id_pl_fkey"
+            columns: ["social_account_id", "user_id", "platform"]
+            isOneToOne: false
+            referencedRelation: "social_accounts"
+            referencedColumns: ["id", "user_id", "platform"]
+          },
+        ]
+      }
+      analytics_legacy_bootstrap_epochs: {
+        Row: {
+          kind: string
+          subject_id: string
+          revision: number
+        }
+        Insert: {
+          kind: string
+          subject_id: string
+          revision?: number
+        }
+        Update: {
+          kind?: string
+          subject_id?: string
+          revision?: number
+        }
+        Relationships: []
+      }
+      analytics_legacy_bootstrap_receipts: {
+        Row: {
+          id: string
+          job_id: string
+          user_id: string
+          social_account_id: string
+          platform: string
+          credential_id: string | null
+          credential_revision: number | null
+          connection_version: number | null
+          capability_generation: number | null
+          app_id: string
+          provider_user_id: string
+          page_id: string | null
+          instagram_user_id: string | null
+          verified_at: string
+          installed_at: string
+        }
+        Insert: {
+          id?: string
+          job_id: string
+          user_id: string
+          social_account_id: string
+          platform: string
+          credential_id?: string | null
+          credential_revision?: number | null
+          connection_version?: number | null
+          capability_generation?: number | null
+          app_id: string
+          provider_user_id: string
+          page_id?: string | null
+          instagram_user_id?: string | null
+          verified_at: string
+          installed_at?: string
+        }
+        Update: {
+          id?: string
+          job_id?: string
+          user_id?: string
+          social_account_id?: string
+          platform?: string
+          credential_id?: string | null
+          credential_revision?: number | null
+          connection_version?: number | null
+          capability_generation?: number | null
+          app_id?: string
+          provider_user_id?: string
+          page_id?: string | null
+          instagram_user_id?: string | null
+          verified_at?: string
+          installed_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "analytics_legacy_bootstrap_receipts_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
+            referencedRelation: "users"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      analytics_legacy_bootstrap_audit: {
+        Row: {
+          id: number
+          correlation_id: string
+          social_account_id: string | null
+          event: string
+          reason_code: string
+          created_at: string
+        }
+        Insert: {
+          id?: number
+          correlation_id: string
+          social_account_id?: string | null
+          event: string
+          reason_code: string
+          created_at?: string
+        }
+        Update: {
+          id?: number
+          correlation_id?: string
+          social_account_id?: string | null
+          event?: string
+          reason_code?: string
+          created_at?: string
+        }
+        Relationships: []
+      }
+      analytics_legacy_bootstrap_run: {
+        Row: {
+          account_ids: string[]
+          singleton: boolean
+          holder: string | null
+          lease_until: string | null
+          calls: number
+          pause_until: string | null
+          app_mismatches: number
+        }
+        Insert: {
+          account_ids?: string[]
+          singleton?: boolean
+          holder?: string | null
+          lease_until?: string | null
+          calls?: number
+          pause_until?: string | null
+          app_mismatches?: number
+        }
+        Update: {
+          account_ids?: string[]
+          singleton?: boolean
+          holder?: string | null
+          lease_until?: string | null
+          calls?: number
+          pause_until?: string | null
+          app_mismatches?: number
+        }
+        Relationships: []
+      }
       meta_analytics_retention_visits: {
         Row: {
           last_visited_at: string
@@ -7510,6 +7742,7 @@ export type Database = {
       }
       facebook_user_credentials: {
         Row: {
+          bootstrap_receipt_id: string | null
           created_at: string
           id: string
           lifecycle: string
@@ -7523,6 +7756,7 @@ export type Database = {
           user_id: string
         }
         Insert: {
+          bootstrap_receipt_id?: string | null
           created_at?: string
           id?: string
           lifecycle?: string
@@ -7536,6 +7770,7 @@ export type Database = {
           user_id: string
         }
         Update: {
+          bootstrap_receipt_id?: string | null
           created_at?: string
           id?: string
           lifecycle?: string
@@ -7548,10 +7783,19 @@ export type Database = {
           updated_at?: string
           user_id?: string
         }
-        Relationships: []
+        Relationships: [
+          {
+            foreignKeyName: "facebook_user_credentials_bootstrap_receipt_id_fkey"
+            columns: ["bootstrap_receipt_id"]
+            isOneToOne: false
+            referencedRelation: "analytics_legacy_bootstrap_receipts"
+            referencedColumns: ["id"]
+          },
+        ]
       }
       facebook_user_credential_bindings: {
         Row: {
+          bootstrap_receipt_id: string | null
           connection_version: number
           created_at: string
           credential_id: string
@@ -7565,6 +7809,7 @@ export type Database = {
           verified_instagram_user_id: string | null
         }
         Insert: {
+          bootstrap_receipt_id?: string | null
           connection_version?: number
           created_at?: string
           credential_id: string
@@ -7578,6 +7823,7 @@ export type Database = {
           verified_instagram_user_id?: string | null
         }
         Update: {
+          bootstrap_receipt_id?: string | null
           connection_version?: number
           created_at?: string
           credential_id?: string
@@ -7591,6 +7837,13 @@ export type Database = {
           verified_instagram_user_id?: string | null
         }
         Relationships: [
+          {
+            foreignKeyName: "facebook_user_credential_bindings_bootstrap_receipt_id_fkey"
+            columns: ["bootstrap_receipt_id"]
+            isOneToOne: false
+            referencedRelation: "analytics_legacy_bootstrap_receipts"
+            referencedColumns: ["id"]
+          },
           {
             foreignKeyName: "facebook_user_credential_bindings_account_fkey"
             columns: ["social_account_id", "user_id", "platform"]
@@ -11204,6 +11457,75 @@ export type Database = {
       }
     }
     Functions: {
+      dispatch_analytics_legacy_bootstrap: {
+        Args: {
+          p_run_id: string
+        }
+        Returns: Json
+      }
+      begin_analytics_legacy_bootstrap: {
+        Args: {
+          p_account_id: string
+          p_idempotency_key: string
+          p_run_id: string
+        }
+        Returns: Json
+      }
+      commit_analytics_legacy_bootstrap: {
+        Args: {
+          p_job_id: string
+          p_lease_id: string
+          p_revision: number
+          p_evidence: Json
+        }
+        Returns: Json
+      }
+      complete_analytics_legacy_bootstrap: {
+        Args: {
+          p_job_id: string
+          p_lease_id: string
+          p_revision: number
+          p_permissions: Json
+        }
+        Returns: Json
+      }
+      reconcile_analytics_legacy_bootstrap: {
+        Args: {
+          p_account_id: string
+          p_idempotency_key: string
+        }
+        Returns: Json
+      }
+      settle_analytics_legacy_bootstrap: {
+        Args: {
+          p_job_id: string
+          p_lease_id: string
+          p_revision: number
+          p_reason: string
+          p_retry_at?: string
+        }
+        Returns: Json
+      }
+      permit_analytics_legacy_bootstrap: {
+        Args: {
+          p_run_id: string
+          p_job_id: string
+          p_lease_id: string
+          p_revision: number
+          p_app_id: string
+        }
+        Returns: boolean
+      }
+      record_analytics_legacy_bootstrap_usage: {
+        Args: {
+          p_run_id: string
+          p_job_id: string
+          p_usage: number
+          p_retry_at: string | null
+          p_app_id: string
+        }
+        Returns: undefined
+      }
       advance_agent_reply_kind: {
         Args: {
           p_id: string

@@ -260,6 +260,7 @@ Deno.test("registered discovery handler retains source and null cells through ca
       assertEquals(url.origin, "http://127.0.0.1:61999");
       if (url.pathname === "/auth/v1/user") return json({ id: OWNER });
       const table = url.pathname.split("/").at(-1);
+      if (table === "read_meta_analytics_provider_throttle") return json(null);
       if (table === "read_instagram_account_capability") {
         authorityReads++;
         return json(capability(denied ? { granted_scopes: [], updated_at: "2026-11-02T00:00:00Z" } : {}));

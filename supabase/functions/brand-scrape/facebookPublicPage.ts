@@ -1,3 +1,4 @@
+import { configuredMetaBudgetFetch } from "../_shared/metaSharedBudget.ts";
 // Public Facebook Page analysis with the app access token.
 //
 // Graph answers a heavy /posts page (summary edges plus nested attachments)
@@ -317,7 +318,7 @@ export async function scrapeFacebookPublicPage(input: {
 }) {
   const accessToken = `${input.appId}|${input.appSecret}`;
   const session: GraphSession = {
-    fetchFn: input.fetchFn ?? fetch,
+    fetchFn: input.fetchFn ?? configuredMetaBudgetFetch(),
     accessToken,
     redactions: credentialForms(accessToken, input.appSecret),
     deadlineMs: Date.now() + GRAPH_BUDGET_MS,

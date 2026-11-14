@@ -319,7 +319,7 @@ async function copyWithMutation(
 }
 
 function replaceInFile(path: string, from: string, to: string): void {
-  const text = Deno.readTextFileSync(path);
+  const text = Deno.readTextFileSync(path).replaceAll("\r\n", "\n");
   if (!text.includes(from)) {
     throw new Error(`the mutation anchor is missing in ${path}`);
   }
