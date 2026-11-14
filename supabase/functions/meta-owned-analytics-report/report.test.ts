@@ -14,6 +14,23 @@ const COLLECTED = "2026-11-01T10:00:00.000Z";
 const scope: StoredReportScope = { platform: "facebook", ownerId: OWNER, accountId: ACCOUNT, days: 7 };
 const windows = closedAnalyticsPeriods({ now: NOW, days: 7, timezone: "America/Los_Angeles" });
 
+Deno.test("a partial job without received numerical observations is never partially synced", () => {
+  const stored = fixture();
+  stored.daily = [];
+  stored.collection.latest = { ...stored.collection.latest!, state: "partial" };
+  stored.inventory = { complete: false, truncated: false };
+  const report = assembleStoredAnalytics({ stored, windows, generatedAt: NOW, nextCursor: null, hasMore: false });
+  assertEquals(report.sync.status, "never_synced");
+});
+
+Deno.test("historical partial jobs cannot make complete requested measurements partially synced", () => {
+  const stored = fixture();
+  stored.collection.latest = { ...stored.collection.latest!, state: "partial" };
+  const report = assembleStoredAnalytics({ stored, windows, generatedAt: NOW, nextCursor: null, hasMore: false });
+  assertEquals(report.data?.state, "complete");
+  assertEquals(report.sync.status, "fresh");
+});
+
 function fixture(): StoredAnalyticsSnapshot {
   const definitions = analyticsDefinitions("facebook", "account").filter((entry) => entry.capability === "available" && entry.windowKind === "day");
   const daily = [...windows.previous.buckets, ...windows.current.buckets].map((day, index) => ({

@@ -1,3 +1,5 @@
+import { analyticsToolResult } from "../_shared/analyticsSyncResult.ts";
+import { awaitWithAbort } from "../_shared/abort.ts";
 // Postora MCP Server (Streamable HTTP)
 // Exposes the public n8n-api endpoints as MCP tools so any MCP-compatible
 // LLM client (Claude Desktop, ChatGPT, Antigravity, Cursor, Cline, OpenAI
@@ -139,7 +141,9 @@ async function callN8n(
       if (v !== undefined && v !== null && v !== "") url.searchParams.set(k, String(v));
     }
   }
+  const signal = AbortSignal.timeout(50_000);
   const res = await fetch(url.toString(), {
+    signal,
     method,
     headers: {
       "x-api-key": apiKey,
@@ -147,12 +151,9 @@ async function callN8n(
     },
     body: body ? JSON.stringify(body) : undefined,
   });
+  const responseText = await awaitWithAbort(() => res.text(), signal);
   let data: unknown = null;
-  try {
-    data = await res.json();
-  } catch {
-    data = { raw: await res.text() };
-  }
+  try { data = JSON.parse(responseText); } catch { data = null; }
   return { status: res.status, data };
 }
 
@@ -496,18 +497,18 @@ function buildServer(
       const scopeRefusal = await refuseUngranted({ admin }, { userId: ownerId, tool: "get_account_analytics", grant });
       if (scopeRefusal) return fail(403, scopeRefusal);
       const r = await callN8n(apiKey, "GET", "/api/v1/analytics/account", undefined, args);
-      return r.status >= 400 ? fail(r.status, stripCredentialUrls(r.data)) : ok(stripCredentialUrls(r.data));
+      return analyticsToolResult(r.status, stripCredentialUrls(r.data), false);
     },
   });
 
   register("trigger_analytics_sync", {
-    description: "Request fresh collection for one owned Instagram, Facebook or Threads account. Respects collection policy and throttles. Instagram returns queued, throttled with retry_after_seconds, collection_disabled or not_eligible. Facebook and Threads return collection_disabled, not_eligible, throttled with retry_after_seconds while a provider retry is scheduled, or the state of the account's current daily job: queued, running, partial or retry while it is still collecting, success once that day is already collected, failed when it stopped. Does not wait for collection or force a refresh.",
+    description: "Request fresh collection for one owned Instagram, Facebook or Threads account. Respects collection policy and throttles. Responses include reason_code, reason_source, next_action and reconnect_can_help. A policy refusal cannot be repaired by reconnecting. Instagram returns queued, throttled with retry_after_seconds, collection_disabled or not_eligible. Facebook and Threads return collection_disabled, not_eligible, throttled with retry_after_seconds while a provider retry is scheduled, or the state of the account's current daily job: queued, running, partial or retry while it is still collecting, success once that day is already collected, failed when it stopped. Does not wait for collection or force a refresh.",
     inputSchema: analyticsSyncSchema,
     handler: async (args) => {
       const scopeRefusal = await refuseUngranted({ admin }, { userId: ownerId, tool: "trigger_analytics_sync", grant });
       if (scopeRefusal) return fail(403, scopeRefusal);
       const r = await callN8n(apiKey, "POST", "/api/v1/analytics/sync", args);
-      return r.status >= 400 ? fail(r.status, stripCredentialUrls(r.data)) : ok(stripCredentialUrls(r.data));
+      return analyticsToolResult(r.status, stripCredentialUrls(r.data), true);
     },
   });
 

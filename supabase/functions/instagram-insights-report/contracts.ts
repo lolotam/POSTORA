@@ -1,3 +1,4 @@
+import type { OwnerAnalyticsReadiness, OwnerAnalyticsData } from "../_shared/ownerAnalyticsReadiness.ts";
 /**
  * Frozen owner-report contract for the Instagram insights report.
  *
@@ -327,7 +328,8 @@ export type OwnerReportCompleteness = {
   newestMediaPublishedAt: string | null;
 };
 
-export type OwnerReport = {
+export type OwnerReport = Partial<OwnerAnalyticsReadiness> & {
+  data?: OwnerAnalyticsData;
   schemaVersion: typeof OWNER_REPORT_SCHEMA_VERSION;
   source: OwnerReportSource;
   scope: OwnerReportScope;

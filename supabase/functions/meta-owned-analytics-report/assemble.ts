@@ -1,5 +1,6 @@
+import { parseOwnerAnalyticsReadiness, ownerAnalyticsData } from "../_shared/ownerAnalyticsReadiness.ts";
 import { analyticsDefinitions, ANALYTICS_PLATFORM_CONFIGURATION } from "../_shared/analyticsRegistry.ts";
-import { analyticsSyncState, isAnalyticsAccountMetricIncomplete, isAnalyticsMetricMeasurable, metricDelta, summarizeDailyMetricValues,
+import { analyticsSyncState, isAnalyticsMetricMeasurable, metricDelta, summarizeDailyMetricValues,
   unavailableMetric, type AnalyticsMetricResult, type AnalyticsReport, type MetricDefinition, type MetricValue, type UnavailableReason } from "../_shared/analyticsContract.ts";
 import { normalizeAnalyticsPermalink, parseAnalyticsReport } from "../_shared/analyticsSchema.ts";
 import type { AnalyticsCalendarWindow } from "../_shared/analyticsCalendar.ts";
@@ -91,7 +92,7 @@ function postMetric(definition: MetricDefinition, cells: readonly StoredAnalytic
 function connectionFailure(stored: StoredAnalyticsSnapshot): UnavailableReason | null {
   if (!stored.health.active || stored.health.needs_reauth || stored.health.token_expired) return "reauth_required";
   const job = stored.collection.latest;
-  if (["reauth_required", "permission_missing"].includes(job?.reason_code ?? "")) return job!.reason_code as UnavailableReason;
+  if (stored.readiness === undefined && ["reauth_required", "permission_missing"].includes(job?.reason_code ?? "")) return job!.reason_code as UnavailableReason;
   return job?.state === "failed" && job.reason_code !== "inventory_truncated" ? "provider_error" : null;
 }
 
@@ -104,15 +105,27 @@ export function assembleStoredAnalytics(input: { stored: StoredAnalyticsSnapshot
   const posts = shownPosts.map(({ post, metrics: cells }) => ({ id: post.platform_post_id, publishedAt: post.published_at,
     text: post.post_text, permalink: normalizeAnalyticsPermalink(post.permalink), metrics: analyticsDefinitions(stored.platform, "post").map((definition) => postMetric(definition, cells)) }));
   const incompleteCells = posts.some((post) => post.metrics.some((metric) => isAnalyticsMetricMeasurable(metric.definition) && metric.current.status !== "available"));
-  const cells = [...stored.daily.flatMap((day) => day.metrics), ...shownPosts.flatMap((post) => post.metrics), ...stored.profile_boundaries, ...stored.profile_current, ...stored.period_totals];
-  const collectedAt = latestInstant(cells.map((cell) => cell.collected_at));
+  const currentCells = [...stored.daily.filter((day) => Date.parse(day.bucket.period_start) >= Date.parse(windows.current.period.since)).flatMap((day) => day.metrics),
+    ...shownPosts.flatMap((post) => post.metrics), ...stored.profile_current,
+    ...stored.profile_boundaries.filter((cell) => Date.parse(cell.boundary) > Date.parse(windows.current.period.since)),
+    ...stored.period_totals.filter((cell) => cell.window_since === windows.current.period.since && cell.window_until === windows.current.period.until)];
+  const numerical = currentCells.filter((cell) => cell.status === "available" && cell.value !== null);
+  const collectedAt = latestInstant(numerical.map((cell) => cell.collected_at));
   const asOf = collectedAt ? new Date(Math.min(Date.parse(windows.current.period.until), Date.parse(collectedAt))).toISOString() : null;
   const incompleteInventory = "state" in stored.inventory ? stored.inventory.state !== "complete" : !stored.inventory.complete || stored.inventory.truncated;
   const truncated = input.hasMore || incompleteInventory;
   const reason = incompleteInventory ? "not_collected" as const : null;
-  const partial = (collectedAt !== null || stored.collection.latest !== null) && (incompleteInventory || incompleteCells
-    || metrics.some(isAnalyticsAccountMetricIncomplete) || ["partial", "retry"].includes(stored.collection.latest?.state ?? ""));
-  return parseAnalyticsReport({ analyticsContractVersion: 1, platform: stored.platform, accountId: stored.account_id, generatedAt: input.generatedAt,
+  const partial = (collectedAt !== null) && (incompleteInventory || incompleteCells
+    || metrics.some((metric) => isAnalyticsMetricMeasurable(metric.definition) && metric.current.status !== "available"));
+  let readiness;
+  try { readiness = stored.readiness === undefined ? undefined : parseOwnerAnalyticsReadiness(stored.readiness); }
+  catch { throw new PersistedReportRefused("invalid_contract", 503); }
+  if (readiness?.collection.reason_code === "awaiting_first_capture" && numerical.length > 0) {
+    readiness.collection = { ...readiness.collection, state: "ready", reason_code: "ready", next_action: "none" };
+  }
+  const data = ownerAnalyticsData({ count: numerical.length, complete: !partial, lastCapture: collectedAt, now: input.generatedAt,
+    staleAfterMs: ANALYTICS_PLATFORM_CONFIGURATION[stored.platform].staleAfterSeconds * 1000 });
+  return parseAnalyticsReport({ ...readiness, data, analyticsContractVersion: 1, platform: stored.platform, accountId: stored.account_id, generatedAt: input.generatedAt,
     period: windows.current.period, previousPeriod: windows.previous.period, source: "persisted", metrics,
     posts: { items: posts, nextCursor: input.nextCursor, truncated, status: truncated || incompleteCells ? "partial" : "available", reason },
     sync: analyticsSyncState({ now: input.generatedAt, staleAfterSeconds: ANALYTICS_PLATFORM_CONFIGURATION[stored.platform].staleAfterSeconds,

@@ -180,6 +180,7 @@ SUITES=(
   meta_owned_analytics_cron.sql
   meta_owned_analytics_capture_failures.sql
   meta_owned_analytics_reports.sql
+  owner_analytics_readiness.sql
   instagram_report_snapshot.sql
   meta_owned_analytics_truncation.sql
   meta_owned_inventory_checkpoint_coverage.sql

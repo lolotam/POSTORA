@@ -9,9 +9,48 @@ import {
   parseCompleteness,
 } from "./reportStore.ts";
 import { OwnerReportContractError } from "./contracts.ts";
+import { ReportHistoryUnavailableError } from "./readHistory.ts";
 
 const OWNER_ID = "8f14e45f-ceea-4e7a-9b1c-2d3e4f5a6b7c";
 const ACCOUNT_ID = "a1b2c3d4-e5f6-4a1b-8c2d-3e4f5a6b7c8d";
+
+const readiness: import("../_shared/ownerAnalyticsReadiness.ts").OwnerAnalyticsReadiness = {
+  collection: { contract_version: 2, state: "not_enabled", reason_code: "collection_not_eligible", reason_source: "rollout_policy",
+    observed_at: "2026-11-14T09:00:00Z", next_action: "contact_support", reconnect_can_help: false, retry_at: null, support_correlation_id: "fixture-correlation" },
+  connection: { state: "unverified", reason_code: "bootstrap_required" }, permission: { state: "unknown", observed_at: null, missing_scopes: [] },
+  last_attempt: { state: "partial", reason_code: "scope_missing", observed_at: "2026-11-05T09:00:00Z" },
+};
+
+Deno.test("excluded account retains live readiness independently of history, zero measurements and genuine partial data", async () => {
+  for (const [value, count, state] of [[null, 0, "empty"], [0, 1, "partial"], [3, 1, "partial"]] as const) {
+    const client = createMockClient({ readiness, job: { status: "partial", reason_code: "scope_missing", last_attempt_at: "2026-11-05T09:00:00Z", inventory: { partial: true } },
+      daily: [{ id: "day", user_id: OWNER_ID, social_account_id: ACCOUNT_ID, metric_date: "2026-11-12", provider_date: "2026-11-12",
+        captured_at: "2026-11-13T09:00:00Z", status: "ok", views: value }] });
+    const report = await new ReportStore(client as unknown as ReportStoreClient).loadReportData(ACCOUNT_ID, OWNER_ID,
+      { periodDays: 7, limit: 20, cursor: null }, new Date("2026-11-14T09:00:00Z"));
+    assertEquals(report.collection, readiness.collection);
+    assertEquals(report.permission?.state, "unknown");
+    assertEquals(report.last_attempt?.reason_code, "scope_missing");
+    assertEquals(report.freshness.reason, null);
+    assertEquals(report.data?.state, state);
+    assertEquals(report.data?.observation_count, count);
+    assertEquals(report.freshness.status, count === 0 ? "never" : "partial");
+  }
+});
+
+Deno.test("attempt-only history is never partial and missing capability never means denied scopes", () => {
+  const freshness = parseFreshness({ status: "retry", last_attempt_at: "2026-11-05T12:00:00Z", reason_code: "capability_missing" });
+  assertEquals(freshness.status, "never");
+  assertEquals(freshness.reason, "unknown");
+});
+
+Deno.test("failed snapshot reads and malformed readiness never turn into empty successful reports", async () => {
+  for (const options of [{ accountError: new Error("synthetic database timeout") }, { readiness: null },
+    { readiness: { ...readiness, collection: { ...readiness.collection, reason_code: "permission_missing" } } }]) {
+    const store = new ReportStore(createMockClient(options) as unknown as ReportStoreClient);
+    await assertRejects(() => store.loadReportData(ACCOUNT_ID, OWNER_ID, { periodDays: 7, limit: 20, cursor: null }), ReportHistoryUnavailableError);
+  }
+});
 
 function createMockClient(options: {
   account?: Record<string, unknown> | null;
@@ -20,10 +59,12 @@ function createMockClient(options: {
   daily?: Record<string, unknown>[];
   profiles?: Record<string, unknown>[];
   periodTotals?: Record<string, unknown>[];
+  readiness?: unknown;
+  job?: Record<string, unknown>;
 }) {
   return {
     rpc: () => {
-      const result = { data: { account_id: ACCOUNT_ID, owner_id: OWNER_ID, media: options.media ?? [], daily: options.daily ?? [], profiles: options.profiles ?? [], period_totals: options.periodTotals ?? [], collection: null },
+      const result = { data: { account_id: ACCOUNT_ID, owner_id: OWNER_ID, media: options.media ?? [], daily: options.daily ?? [], profiles: options.profiles ?? [], period_totals: options.periodTotals ?? [], collection: options.job ?? null, ...(options.readiness === undefined ? {} : { readiness: options.readiness }) },
         error: options.account === null ? { code: "MAH02", message: "Not found" } : options.accountError ?? null };
       return { abortSignal: () => Promise.resolve(result) };
     },

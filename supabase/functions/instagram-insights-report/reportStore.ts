@@ -1,3 +1,4 @@
+import { parseOwnerAnalyticsReadiness, ownerAnalyticsData } from "../_shared/ownerAnalyticsReadiness.ts";
 /**
  * Database Reader & Store for Instagram Insights Report (Slice O3).
  *
@@ -147,11 +148,11 @@ export function toProfileObservationRow(row: Record<string, unknown>): ProfileOb
  */
 const WORKER_REASON_TO_REPORT_REASON: Readonly<Record<string, OwnerReportReasonCode>> = {
   scope_missing: "scope_missing",
-  capability_missing: "scope_missing",
+  capability_missing: "unknown",
   token_invalid: "reauth_required",
-  credential_unavailable: "reauth_required",
-  context_missing: "reauth_required",
-  direct_login_unsupported: "reauth_required",
+  credential_unavailable: "unknown",
+  context_missing: "unknown",
+  direct_login_unsupported: "unknown",
   rate_limited: "throttled",
   provider_error: "provider_error",
   collection_unavailable: "provider_unavailable",
@@ -195,7 +196,7 @@ export function parseFreshness(jobStatus: Record<string, unknown> | null): Owner
   else if (rawStatus === "partial") syncStatus = "partial";
   else if (rawStatus === "failed") syncStatus = "error";
   else if (jobStatus.last_success_at) syncStatus = "ok";
-  else if (jobStatus.last_attempt_at) syncStatus = "partial";
+
 
   const inventory = (jobStatus.inventory as Record<string, unknown>) ?? {};
   const isPartial = Boolean(inventory.partial ?? rawStatus === "partial");
@@ -279,9 +280,9 @@ export class ReportStore {
     socialAccountId: string,
     userId: string,
     request: OwnerReportRequest,
-    now: Date = new Date()
+    now: Date = new Date(),
+    signal = AbortSignal.timeout(20_000),
   ): Promise<OwnerReport> {
-    const signal = AbortSignal.timeout(20_000);
     const { data, error } = await readReportQuery(this.client.rpc("read_instagram_owner_report_snapshot", {
       p_user_id: userId, p_account_id: socialAccountId, p_as_of: now.toISOString(),
     }).abortSignal(signal), signal);
@@ -328,7 +329,7 @@ export class ReportStore {
     const freshness = parseFreshness(jobStatus);
     const completeness = parseCompleteness(jobStatus, mappedMedia);
 
-    return assembleOwnerReport({
+    const report = assembleOwnerReport({
       scope: {
         ownerId: userId,
         socialAccountId,
@@ -344,5 +345,38 @@ export class ReportStore {
       freshness,
       completeness,
     });
+    // Count numerical observations in the requested report, not jobs or null placeholders.
+    const measured = (row: Record<string, unknown>, fields: string[]) => fields.some((key) => typeof row[key] === "number");
+    const measuredDaily = report.account.daily.filter((row) => row.status !== "pending" && measured(row,
+      ["reach", "views", "accountsEngaged", "totalInteractions", "likes", "comments", "saves", "shares", "follows", "unfollows"]));
+    const observed = [
+      ...measuredDaily.map((row) => row.capturedAt),
+      ...report.account.profiles.filter((row) => Date.parse(row.observedAt) >= Date.parse(report.period.windowStart)
+        && Date.parse(row.observedAt) <= Date.parse(report.period.windowEnd) && row.status !== "pending" && (row.followersCount !== null || row.mediaCount !== null)).map((row) => row.observedAt),
+      ...displayMedia.filter((row) => row.status !== "pending" && measured(row, ["reach", "views", "likes", "comments", "saved", "shares", "totalInteractions", "follows", "profileVisits", "replies", "igReelsAvgWatchTimeMs"])).map((row) => row.capturedAt),
+      ...mappedPeriodTotals.filter((row) => row.status === "ok" && row.value !== null && row.sinceDate === report.period.metricDateStart && row.untilDate === report.period.metricDateEnd).map((row) => row.capturedAt),
+    ];
+    const lastCapture = observed.sort((a, b) => Date.parse(b) - Date.parse(a))[0] ?? null;
+    const expectedDays = (Date.parse(report.period.metricDateEnd) - Date.parse(report.period.metricDateStart)) / 86_400_000 + 1;
+    const dataState = ownerAnalyticsData({ count: observed.length,
+      complete: completeness.coverage === "complete" && new Set(measuredDaily.map((row) => row.metricDate)).size === expectedDays, lastCapture, now: now.toISOString(), staleAfterMs: 2 * 86_400_000 });
+    report.data = dataState;
+    if (observed.length === 0) {
+      report.freshness = { ...report.freshness, status: "never", partial: false, lastSuccessAt: null, lastPartialAt: null, reason: "never_synced" };
+    } else {
+      report.freshness = { ...report.freshness, status: dataState.state === "partial" ? "partial" : "ok", partial: dataState.state === "partial", lastSuccessAt: lastCapture };
+    }
+    if (snapshot.readiness !== undefined) {
+      let readiness;
+      try { readiness = parseOwnerAnalyticsReadiness(snapshot.readiness); }
+      catch { throw new ReportHistoryUnavailableError("Invalid owner readiness snapshot"); }
+      Object.assign(report, readiness);
+      if (readiness.collection.reason_code === "awaiting_first_capture" && observed.length > 0) {
+        report.collection = { ...readiness.collection, state: "ready", reason_code: "ready", next_action: "none" };
+      }
+      // Historical attempt causes never override current connection/permission evidence.
+      report.freshness.reason = null;
+    }
+    return report;
   }
 }

@@ -260,6 +260,7 @@ jobs:
         # The automation test imports the registered MCP/API routes with fixture-only env.
         run: >-
           deno test --no-config --no-lock --node-modules-dir=none --allow-env
+          supabase/functions/n8n-api/ownerAnalyticsRoute.test.ts
           supabase/functions/n8n-api/instagramAutomation.test.ts
           supabase/functions/n8n-api/parseFormArray.test.ts
 

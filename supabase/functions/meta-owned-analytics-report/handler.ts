@@ -9,7 +9,7 @@ const requestSchema = z.object({ platform: z.enum(["facebook", "threads"]), acco
   periodDays: z.union([z.literal(7), z.literal(14), z.literal(30), z.literal(90)]).default(7),
   cursor: z.string().min(1).max(16384).nullable().optional(), user_id: z.string().uuid().optional() }).strict();
 export type StoredReportAudit = { event: "persisted_report_read" | "persisted_report_refused"; reason: string | null; status: number;
-  ownerId: string | null; platform: "facebook" | "threads" | null; accountId: string | null };
+  ownerId: string | null; platform: "facebook" | "threads" | null; accountId: string | null; correlationId?: string | null };
 export type StoredReportHandlerDeps = { authenticate: (req: Request, actingUserId: string | undefined) => Promise<{ userId: string }>;
   rpc: StoredAnalyticsRpc; secret: string; audit: (event: StoredReportAudit, signal: AbortSignal) => PromiseLike<boolean> };
 
@@ -22,8 +22,11 @@ export function createStoredReportHandler(deps: StoredReportHandlerDeps): (req: 
     let accountId: string | null = null;
     const finish = async (status: number, body: unknown, reason: string | null) => {
       let stored = false;
+      const collection = body && typeof body === "object" && "collection" in body ? body.collection : null;
+      const correlationId = collection && typeof collection === "object" && "support_correlation_id" in collection
+        && typeof collection.support_correlation_id === "string" ? collection.support_correlation_id : null;
       try { stored = await awaitWithAbort(() => deps.audit({ event: status === 200 ? "persisted_report_read" : "persisted_report_refused",
-        status, reason, ownerId, platform, accountId }, AbortSignal.timeout(5_000)), AbortSignal.timeout(5_000)); } catch { stored = false; }
+        status, reason, ownerId, platform, accountId, correlationId }, AbortSignal.timeout(5_000)), AbortSignal.timeout(5_000)); } catch { stored = false; }
       return restrictedJsonResponse(req, stored ? body : { ok: false, reason: "audit_unavailable", message: "The analytics read could not be recorded. Please retry." }, stored ? status : 503);
     };
     try {
