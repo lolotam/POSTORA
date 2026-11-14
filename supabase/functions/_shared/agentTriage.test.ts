@@ -139,8 +139,8 @@ Deno.test("the chain is empty unless the switch is on, and keeps only triage pro
   assertEquals(triageChainFromSettings(slots), []);
   assertEquals(triageChainFromSettings([...slots, { key: "agent_triage_enabled", value: { enabled: false } }]), []);
   assertEquals(triageChainFromSettings([...slots, { key: "agent_triage_enabled", value: { enabled: true } }]), [
-    { provider: "openrouter", model: "typesafe/jev-1.13", kind: "decision" },
-    { provider: "vercel", model: "typesafe-ai/jev", kind: "decision" },
+    { provider: "openrouter", model: "typesafe/jev-1.13", kind: "decision", slot: "primary" },
+    { provider: "vercel", model: "typesafe-ai/jev", kind: "decision", slot: "fallback_2" },
   ]);
   assertEquals(TRIAGE_SETTING_KEYS.includes("agent_triage_enabled"), true);
 });
@@ -246,9 +246,9 @@ Deno.test("a slot is a decision tier only when the catalogue says its model is a
     { key: "default_ai_model_agent_triage_fallback_2", value: slot("deepseek", "deepseek-flash") },
   ];
   assertEquals(triageChainFromSettings(rows, new Set(["vercel/typesafe-ai/jev"])), [
-    { provider: "vercel", model: "typesafe-ai/jev", kind: "decision" },
-    { provider: "openrouter", model: "mistralai/ministral-8b-2512", kind: "chat" },
-    { provider: "deepseek", model: "deepseek-flash", kind: "chat" },
+    { provider: "vercel", model: "typesafe-ai/jev", kind: "decision", slot: "primary" },
+    { provider: "openrouter", model: "mistralai/ministral-8b-2512", kind: "chat", slot: "fallback" },
+    { provider: "deepseek", model: "deepseek-flash", kind: "chat", slot: "fallback_2" },
   ]);
 });
 
@@ -260,14 +260,14 @@ Deno.test("a subscription slot is a chat tier carrying its auth method, even for
     { key: "default_ai_model_agent_triage_fallback_2", value: slot("claude", "claude-sonnet-4-5") },
   ];
   assertEquals(triageChainFromSettings(rows, null), [
-    { provider: "claude", model: "claude-sonnet-4-5", kind: "chat", authMethod: "oauth" },
-    { provider: "openrouter", model: "typesafe/jev-1.13", kind: "chat", authMethod: "oauth" },
+    { provider: "claude", model: "claude-sonnet-4-5", kind: "chat", authMethod: "oauth", slot: "primary" },
+    { provider: "openrouter", model: "typesafe/jev-1.13", kind: "chat", authMethod: "oauth", slot: "fallback" },
   ]);
 });
 
 Deno.test("when the catalogue read fails, decision providers keep the decision API (Jev still works)", () => {
   const rows = [enabled, { key: "default_ai_model_agent_triage", value: slot("openrouter", "typesafe/jev-1.13") }];
-  assertEquals(triageChainFromSettings(rows, null), [{ provider: "openrouter", model: "typesafe/jev-1.13", kind: "decision" }]);
+  assertEquals(triageChainFromSettings(rows, null), [{ provider: "openrouter", model: "typesafe/jev-1.13", kind: "decision", slot: "primary" }]);
 });
 
 Deno.test("a chat tier widens the budget; a decision-only chain keeps 1.5 s", () => {
@@ -349,6 +349,37 @@ Deno.test("without a chat call a chat tier is recorded, not thrown", async () =>
 
 const claudeTier = [{ provider: "claude", model: "claude-sonnet-4-5", kind: "chat" as const, authMethod: "oauth" as const }];
 
+// PR #421 round 2: skipped slots must leave time for the next usable fallback.
+for (const first of [claudeTier[0], tiers[0]]) {
+  Deno.test(`skipped Codex primary leaves the first ${first.kind} attempt capped so Jev can recover`, async () => {
+    const codex = { ...claudeTier[0], provider: "openai", model: "codex" };
+    const stalled = (): Promise<Response> => new Promise(() => {});
+    const run = await runTriage([codex, first, tiers[1]], input, async () => crypto.randomUUID(), 3000,
+      async (_url, init) => JSON.parse(String(init?.body)).model === first.model ? stalled() : Response.json(okJson), Date.now,
+      async () => stalled(), true);
+    assertEquals(run.outcome?.model, tiers[1].model);
+    assertEquals(run.errors, [
+      { model: "openai/codex", error: "oauth_max_tokens_unsupported" },
+      { model: `${first.provider}/${first.model}`, error: "triage_deadline_exceeded" },
+    ]);
+  });
+}
+
+for (const skipped of ["before", "after", "both"] as const) {
+  Deno.test(`the only runnable tier keeps the remaining budget with skipped tiers ${skipped}`, async () => {
+    const codex = { ...claudeTier[0], provider: "openai", model: "codex" };
+    const chain = [...(skipped !== "after" ? [codex] : []), ...claudeTier, ...(skipped !== "before" ? [codex] : [])];
+    let allotted = 0;
+    const run = await runTriage(chain, input, key, 2400, fetch, () => 0,
+      async (_tier, _body, timeoutMs) => {
+        allotted = timeoutMs;
+        return Response.json({ choices: [{ message: { content: '{"needs_knowledge":0.99}' } }] });
+      }, true);
+    assertEquals(run.outcome?.provider, "claude");
+    assertEquals(allotted, 2400);
+  });
+}
+
 Deno.test("enabled triage skips capped Codex before credentials or inference and retains Claude parsed JSON", async () => {
   const calls: string[] = [];
   const run = await runTriage([{ ...claudeTier[0], provider: "openai", model: "codex" }, ...claudeTier], input, key, 1500, fetch, Date.now,
@@ -396,7 +427,7 @@ for (const boundary of ["key", "inference", "body"] as const) {
 Deno.test("enabled triage normalizes legacy stored strings without changing the disabled policy path", () => {
   const rows = [enabled, { key: "feature_ai_text_auth_lists", value: true },
     { key: "default_ai_model_agent_triage", value: JSON.stringify({ provider_code: "claude", model_id: "claude-sonnet-4-5", auth_method: "oauth", extension: true }) }];
-  assertEquals(triageChainFromSettings(rows), claudeTier);
+  assertEquals(triageChainFromSettings(rows), [{ ...claudeTier[0], slot: "primary" }]);
   assertEquals(triageChainFromSettings(rows.map(row => row.key === "feature_ai_text_auth_lists" ? { ...row, value: false } : row)), []);
 });
 

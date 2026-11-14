@@ -1,5 +1,5 @@
 import type { SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2";
-import { TRIAGE_SETTING_KEYS, type TriageRun, type TriageTier } from "../_shared/agentTriage.ts";
+import { TRIAGE_SETTING_KEYS, TRIAGE_SLOTS, type TriageRun, type TriageTier } from "../_shared/agentTriage.ts";
 
 /** Best effort within the shared deadline: logging must not fail the normal Agent reply. */
 export async function persistTriageRefusals(admin: Pick<SupabaseClient, "from">, triage: TriageRun, chain: TriageTier[], deadlineAt: number): Promise<void> {
@@ -10,7 +10,7 @@ export async function persistTriageRefusals(admin: Pick<SupabaseClient, "from">,
   const attempts = triage.errors.map((failure, index) => {
     const configurationSlot = TRIAGE_SETTING_KEYS.indexOf(failure.model) - 1;
     return { ...failure, provider: chain[index]?.provider, auth_method: chain[index]?.authMethod ?? "api_key",
-      slot: ["primary", "fallback", "fallback_2"][configurationSlot >= 0 ? configurationSlot : index] };
+      slot: configurationSlot >= 0 ? TRIAGE_SLOTS[configurationSlot] : chain[index]?.slot };
   });
   try {
     const { error } = await admin.from("system_logs").insert({ level: "warn", category: "ai", source: "ai-agent-reply",

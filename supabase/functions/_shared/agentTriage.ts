@@ -13,7 +13,9 @@ import { normalizeStoredTextTier, supportsOutputCap } from "./textTierValue.ts";
 /** Providers that serve the decision API. */
 export type TriageProvider = "openrouter" | "vercel";
 export type TriageKind = "decision" | "chat";
-export interface TriageTier { provider: string; model: string; kind: TriageKind; authMethod?: "oauth" }
+export const TRIAGE_SLOTS = ["primary", "fallback", "fallback_2"] as const;
+type TriageSlot = typeof TRIAGE_SLOTS[number];
+export interface TriageTier { provider: string; model: string; kind: TriageKind; authMethod?: "oauth"; slot?: TriageSlot }
 export interface TriageConnector { name: string; description: string }
 export interface TriageInput {
   message: string;
@@ -288,11 +290,11 @@ export const isTriageProvider = (code: unknown): code is TriageProvider => code 
 export function triageSlotsFromSettings(
   rows: Array<{ key: string; value: unknown }>,
   onRefusal?: (failure: TriageRun["errors"][number]) => void,
-): Array<{ provider: string; model: string; authMethod?: "oauth" }> {
+): Array<{ provider: string; model: string; authMethod?: "oauth"; slot: TriageSlot }> {
   const byKey = new Map(rows.map((row) => [row.key, row.value]));
   if ((byKey.get(ENABLED_KEY) as { enabled?: unknown } | undefined)?.enabled !== true) return [];
-  const slots: Array<{ provider: string; model: string; authMethod?: "oauth" }> = [];
-  for (const key of SLOT_KEYS) {
+  const slots: Array<{ provider: string; model: string; authMethod?: "oauth"; slot: TriageSlot }> = [];
+  for (const [index, key] of SLOT_KEYS.entries()) {
     let stored = byKey.get(key);
     if (byKey.get("feature_ai_text_auth_lists") === true) {
       try { stored = normalizeStoredTextTier(stored); }
@@ -307,6 +309,7 @@ export function triageSlotsFromSettings(
       slots.push({
         provider: slotValue.provider_code,
         model: slotValue.model_id,
+        slot: TRIAGE_SLOTS[index],
         ...(slotValue.auth_method === "oauth" ? { authMethod: "oauth" as const } : {}),
       });
     }
@@ -331,11 +334,11 @@ export function triageChainFromSettings(
     // mode, so a key slot naming it stays ignored. A subscription slot goes through
     // pi-ai, which accepts the chat-completions body, so it stays.
     .filter(({ provider, authMethod }) => provider !== "claude" || authMethod === "oauth")
-    .map(({ provider, model, authMethod }): TriageTier => {
-      if (authMethod === "oauth") return { provider, model, kind: "chat", authMethod };
+    .map(({ provider, model, authMethod, slot }): TriageTier => {
+      if (authMethod === "oauth") return { provider, model, kind: "chat", authMethod, slot };
       const decision = isTriageProvider(provider) &&
         (decisionModels === null || decisionModels.has(`${provider}/${model}`));
-      return { provider, model, kind: decision ? "decision" : "chat" };
+      return { provider, model, kind: decision ? "decision" : "chat", slot };
     });
 }
 
@@ -408,12 +411,16 @@ async function runBoundedTriage(tiers: TriageTier[], input: TriageInput,
     if (key) keys.set(provider, key);
     return key;
   };
+  let attempted = false;
   for (const [index, tier] of tiers.entries()) {
     const remaining = deps.budgetMs - (deps.now() - startedAt);
     if (remaining <= 0 || deadline.aborted) break;
     const label = `${tier.provider}/${tier.model}`;
     if (!supportsOutputCap(tier)) { errors.push({ model: label, error: "oauth_max_tokens_unsupported" }); continue; }
-    const timeoutMs = index === 0 && tiers.length > 1 ? Math.min(remaining, FIRST_TIER_CAP_MS[tier.kind]) : remaining;
+    // Unsupported slots cannot spend inference time or justify reserving it.
+    const firstWithFallbacks = !attempted && tiers.slice(index + 1).some(supportsOutputCap);
+    const timeoutMs = firstWithFallbacks ? Math.min(remaining, FIRST_TIER_CAP_MS[tier.kind]) : remaining;
+    attempted = true;
     const signal = AbortSignal.any([deadline, AbortSignal.timeout(Math.max(0, Math.ceil(timeoutMs)))]);
     try {
       const answers = await withinTriageSignal(() => boundedTriageAnswers(tier, input, signal, { ...deps, timeoutMs,
