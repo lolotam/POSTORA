@@ -199,6 +199,18 @@ FROM (VALUES
  ('invalid settings denial','invalid','valid','verified','2 hours','terminal','scope',true,'settings_unavailable','missing'),
  ('disabled token','disabled','valid','verified','2 hours','terminal','token',true,'collection_disabled','verified'),
  ('live connection','all','invalid','verified','2 hours','retry','provider_error',true,'token_invalid','verified'),
+ ('reconnect with scope refusal','all','invalid','verified','2 hours','terminal','scope',true,'token_invalid','missing'),
+ ('disabled reconnect with scope refusal','disabled','invalid','verified','2 hours','terminal','scope',true,'collection_disabled','missing'),
+ ('excluded reconnect with scope refusal','excluded','invalid','verified','2 hours','terminal','scope',true,'collection_not_eligible','missing'),
+ ('invalid settings reconnect with scope refusal','invalid','invalid','verified','2 hours','terminal','scope',true,'settings_unavailable','missing'),
+ ('reconnect with failed read and scope refusal','all','invalid','unavailable','30 minutes','terminal','scope',true,'token_invalid','missing'),
+ ('reconnect with newer verification','all','invalid','verified','30 minutes','terminal','scope',true,'token_invalid','verified'),
+ ('reconnect with rotated scope refusal','all','invalid','verified','2 hours','terminal','scope',false,'token_invalid','verified'),
+ ('reconnect with future scope refusal','all','invalid','verified','2 hours','terminal','scope',true,'token_invalid','verified'),
+ ('reconnect with nonterminal scope refusal','all','invalid','verified','2 hours','retry','scope',true,'token_invalid','verified'),
+ ('reconnect with named missing scope','all','invalid','missing','30 minutes','terminal','token',true,'token_invalid','missing'),
+ ('disabled with granted scopes','disabled','valid','verified','30 minutes','retry','provider_error',true,'collection_disabled','verified'),
+ ('excluded with named missing scope','excluded','valid','missing','30 minutes','retry','provider_error',true,'collection_not_eligible','missing'),
  ('current scope refusal','all','valid','verified','2 hours','terminal','scope',true,'permission_missing','missing'),
  ('current token refusal','all','valid','verified','2 hours','terminal','token',true,'token_invalid','verified'),
  ('failed read cannot clear scope','all','valid','unavailable','30 minutes','terminal','scope',true,'permission_missing','missing'),
@@ -227,7 +239,8 @@ DECLARE t record; r jsonb; v_owner uuid:='e8110000-0000-4000-8000-000000000001';
 BEGIN
  FOR t IN SELECT * FROM readiness_precedence_cases LOOP
   v_account:=CASE t.platform WHEN 'instagram' THEN 'e8120000-0000-4000-8000-000000000001'::uuid ELSE 'e8120000-0000-4000-8000-000000000002'::uuid END;
-  v_attempt_at:=v_now-CASE WHEN t.name LIKE '%next provider day%' THEN interval '11 hours' ELSE interval '1 hour' END;
+  v_attempt_at:=v_now-CASE WHEN t.name LIKE '%next provider day%' THEN interval '11 hours'
+   WHEN t.name LIKE '%future scope refusal%' THEN interval '-1 hour' ELSE interval '1 hour' END;
   UPDATE public.social_accounts SET needs_reauth=false WHERE id=v_account;
   UPDATE public.app_settings SET value=CASE t.policy WHEN 'disabled' THEN 'false'::jsonb WHEN 'invalid' THEN '{}'::jsonb ELSE 'true'::jsonb END
    WHERE key=CASE t.platform WHEN 'instagram' THEN 'collection_instagram_insights_enabled' ELSE 'collection_facebook_analytics_enabled' END;

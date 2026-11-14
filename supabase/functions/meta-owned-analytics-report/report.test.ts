@@ -39,18 +39,37 @@ Deno.test("provider permission refusal without named scopes requires its dated j
   assertEquals(report.permission?.state, "missing");
   assertEquals(report.permission?.missing_scopes, []);
   for (const patch of [{ last_attempt: null }, { permission: { ...report.permission!, observed_at: NOW } },
+    { collection: { ...readiness.collection, observed_at: "2026-11-01T09:00:00Z" } },
     { last_attempt: { ...readiness.last_attempt, state: "retry" } }]) {
     const invalid = { ...stored, readiness: { ...readiness, ...patch } };
     assertThrows(() => assembleStoredAnalytics({ stored: invalid, windows, generatedAt: NOW, nextCursor: null, hasMore: false }), PersistedReportRefused);
   }
   for (const [reason_code, reason_source] of [["collection_disabled", "rollout_policy"],
-    ["collection_not_eligible", "rollout_policy"], ["settings_unavailable", "configuration"]]) {
+    ["collection_not_eligible", "rollout_policy"], ["settings_unavailable", "configuration"], ["token_invalid", "connection"]]) {
     const policy = { ...stored, readiness: { ...readiness, collection: { ...readiness.collection,
-      reason_code, reason_source, state: reason_code === "settings_unavailable" ? "unavailable" : "not_enabled" } } };
+      reason_code, reason_source, state: reason_code === "token_invalid" ? "needs_reconnect" : reason_code === "settings_unavailable" ? "unavailable" : "not_enabled" },
+      connection: { state: "invalid", reason_code: "token_invalid" } as const } };
     const saved = assembleStoredAnalytics({ stored: policy, windows, generatedAt: NOW, nextCursor: null, hasMore: false });
     assertEquals(saved.collection?.reason_code, reason_code);
     assertEquals(saved.permission?.state, "missing");
+    assertEquals(saved.connection, policy.readiness.connection);
     assertEquals(saved.data?.observation_count, report.data?.observation_count);
+  }
+});
+
+Deno.test("saved measurements cannot promote fallback readiness over a live refusal", () => {
+  for (const reason_code of ["awaiting_first_capture", "ready"]) {
+    for (const [connection, permission] of [["invalid", "verified"], ["verified", "missing"]]) {
+      const stored = fixture();
+      stored.readiness = {
+        collection: { contract_version: 2, state: "syncing", reason_code, reason_source: "data", observed_at: NOW,
+          next_action: "wait", reconnect_can_help: false, retry_at: null, support_correlation_id: "fixture-correlation" },
+        connection: { state: connection, reason_code: connection === "invalid" ? "token_invalid" : null },
+        permission: { state: permission, observed_at: COLLECTED, missing_scopes: permission === "missing" ? ["read_insights"] : [] },
+        last_attempt: null,
+      };
+      assertThrows(() => assembleStoredAnalytics({ stored, windows, generatedAt: NOW, nextCursor: null, hasMore: false }), PersistedReportRefused);
+    }
   }
 });
 

@@ -47,12 +47,15 @@ export function parseOwnerAnalyticsReadiness(value: unknown): OwnerAnalyticsRead
     throw new TypeError("Invalid owner analytics readiness");
   }
   // A positive provider denial may not identify an individual required scope.
-  // Accept no scope names only with the matching dated job evidence.
+  // Accept no scope names only with the matching dated job evidence, even when
+  // a live connection or policy refusal wins collection precedence.
   const providerDenial = record(a) && ["failed", "unavailable"].includes(String(a.state))
     && ["permission_missing", "scope_missing"].includes(String(a.reason_code))
-    && instant(a.observed_at) && instant(p.observed_at) && Date.parse(a.observed_at) === Date.parse(p.observed_at);
+    && instant(a.observed_at) && instant(p.observed_at) && Date.parse(a.observed_at) === Date.parse(p.observed_at)
+    && Date.parse(a.observed_at) <= Date.parse(c.observed_at);
   if (p.state === "missing" && (p.observed_at === null || p.missing_scopes.length === 0 && !providerDenial)
     || c.reason_code === "permission_missing" && p.state !== "missing"
+    || ["awaiting_first_capture", "ready"].includes(String(c.reason_code)) && (n.state !== "verified" || p.state !== "verified")
     || c.reconnect_can_help !== ["reconnect", "grant_permissions"].includes(String(c.next_action))
     || ["collection_disabled", "collection_not_eligible", "bootstrap_required"].includes(String(c.reason_code)) && c.reconnect_can_help) {
     throw new TypeError("Contradictory owner analytics readiness");

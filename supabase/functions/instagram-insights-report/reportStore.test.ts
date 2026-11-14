@@ -311,7 +311,9 @@ Deno.test("all time displays media older than any day-count period", async () =>
 });
 
 Deno.test("readiness evidence uses resolved supported captures before pagination and independent of period", async () => {
-  const live = { ...readiness, collection: { ...readiness.collection, state: "syncing", reason_code: "awaiting_first_capture", next_action: "wait" } };
+  const live = { ...readiness, collection: { ...readiness.collection, state: "syncing", reason_code: "awaiting_first_capture", reason_source: "data", next_action: "wait" },
+    connection: { state: "verified", reason_code: null },
+    permission: { state: "verified", observed_at: "2026-11-14T08:00:00Z", missing_scopes: [] } };
   const row = { id: "old", user_id: OWNER_ID, social_account_id: ACCOUNT_ID, ig_media_id: "media", published_at: "2026-11-10T09:00:00Z",
     captured_at: "2026-11-12T09:00:00Z", captured_on: "2026-11-12", capture_timezone: "UTC", media_product_type: "REELS", media_type: "VIDEO", status: "ok", views: 0 };
   const load = (media: Record<string, unknown>[], periodDays: 1 | 7 = 7, cursor: { publishedAt: string; mediaId: string } | null = null) =>

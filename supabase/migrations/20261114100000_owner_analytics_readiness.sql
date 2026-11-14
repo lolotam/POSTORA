@@ -124,12 +124,14 @@ BEGIN
   -- Current authority is established independently of the winning policy reason.
   -- A newer successful permission read retires a refusal, even on a later day.
   -- Instagram settles these provider errors as unavailable, Facebook as failed.
-  IF v_connection_reason IS NULL AND COALESCE((p_attempt->>'context_current')::boolean,false)
+  -- A diagnosed connection refusal wins collection precedence, but must not
+  -- hide independent permission evidence from the same current authority.
+  IF COALESCE((p_attempt->>'context_current')::boolean,false)
     AND ((p_platform='facebook' AND p_attempt->>'state'='failed')
       OR (p_platform='instagram' AND p_attempt->>'state'='unavailable'))
     AND (p_attempt->>'observed_at')::timestamptz<=p_observed_at
     AND (p_attempt->>'observed_at')::timestamptz>=COALESCE(v_verified_at,'-infinity'::timestamptz) THEN
-    IF p_attempt->>'reason_code' IN ('reauth_required','token_invalid') THEN
+    IF v_connection_reason IS NULL AND p_attempt->>'reason_code' IN ('reauth_required','token_invalid') THEN
       v_connection:='invalid'; v_connection_reason:='token_invalid';
     ELSIF p_attempt->>'reason_code' IN ('permission_missing','scope_missing') THEN
       v_permission:='missing'; v_permission_at:=(p_attempt->>'observed_at')::timestamptz;

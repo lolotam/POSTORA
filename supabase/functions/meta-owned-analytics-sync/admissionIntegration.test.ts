@@ -16,7 +16,7 @@ Deno.test("one precedence table proves real SQL snapshots and the shared TypeScr
   const source = await Deno.readTextFile(new URL("../../tests/owner_analytics_readiness.sql", import.meta.url));
   const output = await runtime.exec(source);
   const cases = output.split(/\r?\n/).filter((line) => line.startsWith("readiness_case:"));
-  assertEquals(cases.length, 42, "Every SQL precedence row must reach the TypeScript consumer");
+  assertEquals(cases.length, 66, "Every SQL precedence row must reach the TypeScript consumer");
   for (const line of cases) {
     const row = JSON.parse(line.slice("readiness_case:".length));
     for (const hasData of [false, true]) {
@@ -24,6 +24,8 @@ Deno.test("one precedence table proves real SQL snapshots and the shared TypeScr
       const expected = row.expected === "awaiting_first_capture" && hasData ? "ready" : row.expected;
       assertEquals(projected.collection.reason_code, expected, `${row.name}: saved=${hasData}`);
       assertEquals(projected.permission, row.snapshot.permission, row.name);
+      assertEquals(projected.connection, row.snapshot.connection, row.name);
+      assertEquals(projected.collection.reason_source, row.snapshot.collection.reason_source, row.name);
       assertEquals(projected.last_attempt, row.snapshot.last_attempt, row.name);
     }
   }

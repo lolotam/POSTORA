@@ -160,7 +160,7 @@ Phase 1 uses the following ordered decision table. SQL owns eligibility; both re
 
 Connection and permission evidence are evaluated independently of the winning collection reason. An unnamed permission denial requires a matching terminal provider refusal and timestamp, regardless of policy/configuration precedence. Today's Facebook permission freshness remains required; a newer successful verification still supersedes an older refusal across Los Angeles midnight, leaving verification pending rather than resurrecting the refusal. A failed verification does not supersede a proven refusal.
 
-The 42-row table in `supabase/tests/owner_analytics_readiness.sql` asserts real SQL snapshots. The admission integration suite executes that same table and passes every snapshot through the shared TypeScript projection with and without saved measurements. Inventory discovery alone cannot complete period data: supported in-window media require completed saved captures, in addition to the expected measured days.
+The 66-row table in `supabase/tests/owner_analytics_readiness.sql` asserts real SQL snapshots. The admission integration suite executes that same table and passes every snapshot through the shared TypeScript projection with and without saved measurements. Inventory discovery alone cannot complete period data: supported in-window media require completed saved captures, in addition to the expected measured days.
 
 ### 5.3 Agent tools
 
