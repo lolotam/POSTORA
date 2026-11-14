@@ -130,6 +130,7 @@ SUITES=(
   ai_chat_list_policy.sql
   ai_text_category_ladders.sql
   ai_triage_list_policy.sql
+  ai_agent_auth_tools.sql
   ai_agent_dashboard.sql
   agent_procedures.sql
   agent_test_limits.sql

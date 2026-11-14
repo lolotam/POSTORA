@@ -549,10 +549,11 @@ function oauthCredentialDeps(
     admin: {
       rpc(name: string, _args: Record<string, unknown>) {
         if (name === "get_ai_oauth_credentials") {
-          return Promise.resolve({
+          const response = Promise.resolve({
             data: credentials === null ? null : { ...credentials, status: row.status },
             error: null,
           });
+          return Object.assign(response, { abortSignal: () => response });
         }
         return Promise.resolve({ data: null, error: null });
       },
@@ -627,9 +628,11 @@ Deno.test("oauth tier with flag on answers through pi and records authMethod oau
 Deno.test("oauth tier with tools records oauth_tools_unsupported", async () => {
   const result = await callAiChain(platformAdmin().admin, {
     max_tokens: 10,
-    tools: [{ type: "function", function: { name: "x" } }],
+    messages: [{ role: "user", content: "Test tool gate" }],
+    tools: [{ type: "function", function: { name: "x", description: "Read fixture", parameters: { type: "object", properties: {} } } }],
   }, [claudeOauthTier], {
     enabled: async () => true,
+    toolsEnabled: async () => false,
     providerActive: async () => true,
     credentials: oauthCredentialDeps({ access: "a", refresh: "r", expires: 1_000_000 }),
     pi: piAnswering("unused"),
@@ -694,7 +697,10 @@ Deno.test("an oauth refresh that outlasts the tier deadline records refresh_time
   const credentials: CredentialDeps = {
     ...oauthCredentialDeps({ access: "a", refresh: "r", expires: 1_000_000 }),
     admin: {
-      rpc: () => new Promise(() => {}), // the credential read never answers
+      rpc: () => {
+        const stalled = new Promise(() => {});
+        return Object.assign(stalled, { abortSignal: () => stalled });
+      }, // the credential read never answers
     } as never,
   };
   const outcome = await callOAuthTier(undefined, claudeOauthTier, { max_tokens: 10 }, 20, {

@@ -5,7 +5,9 @@ import { oauthProviderForCode } from "./clients.ts";
 import { AiOAuthError } from "./errors.ts";
 import { defaultCredentialDeps, getFreshOAuthCredential, type CredentialDeps } from "./credentials.ts";
 import { isAiProviderOAuthEnabled } from "./flag.ts";
-import { callPiOAuth, defaultPiCallDeps, type PiCallDeps } from "./piCall.ts";
+import { callPiOAuth, defaultPiCallDeps, preflightPiRequest, raceSignal, type PiCallDeps } from "./piCall.ts";
+import { needsToolTransport, type OAuthContinuation } from "./toolTranscript.ts";
+import { readAiTextFlags } from "./textFlags.ts";
 
 /** Test seam for the chain: everything below is defaulted to the real deps. */
 export interface OAuthChainDeps {
@@ -13,6 +15,9 @@ export interface OAuthChainDeps {
   pi?: PiCallDeps;
   enabled?: () => Promise<boolean>;
   providerActive?: (providerCode: string) => Promise<boolean>;
+  toolsEnabled?: () => Promise<boolean>;
+  continuation?: OAuthContinuation;
+  requireTools?: boolean;
 }
 
 /** Either the OpenAI-shaped Response, or the stable error code to record. */
@@ -42,6 +47,9 @@ async function isProviderActive(admin: SupabaseClient | undefined, providerCode:
 const UNSUPPORTED_CODES: Record<string, string> = {
   tools_unsupported: "oauth_tools_unsupported",
   max_tokens_unsupported: "oauth_max_tokens_unsupported",
+  tool_history_unsupported: "oauth_tool_history_unsupported",
+  schema_unsupported: "oauth_schema_unsupported",
+  response_invalid: "oauth_response_invalid",
 };
 
 async function unsupportedCode(response: Response): Promise<string> {
@@ -110,11 +118,31 @@ export async function callOAuthTier(
   const oauthProvider = oauthProviderForCode(tier.provider);
   if (!oauthProvider) return { error: "oauth_unsupported_provider" };
   const startedAt = Date.now();
+  const deadline = AbortSignal.timeout(Math.max(1, timeoutMs));
+  signal = signal ? AbortSignal.any([signal, deadline]) : deadline;
+  // Cap/schema/history checks require no credentials or refresh. Codex tools
+  // remain refused even if its future-phase flag has been configured.
+  const preflight = preflightPiRequest(oauthProvider, requestBody, true);
+  if (preflight) return { error: UNSUPPORTED_CODES[preflight] ?? "oauth_request_unsupported" };
+  const pi = injected?.pi ?? defaultPiCallDeps();
+  if (!pi.getModel(oauthProvider, tier.model)) return { error: "oauth_model_unsupported" };
+  let toolsEnabled = false;
+  if (needsToolTransport(requestBody) || injected?.requireTools) {
+    if (oauthProvider !== "anthropic") return { error: "oauth_tools_unsupported" };
+    try {
+      toolsEnabled = await raceSignal(injected?.toolsEnabled ? injected.toolsEnabled() : (async () => {
+        const flags = await readAiTextFlags((admin ?? await serviceClient()) as unknown as SupabaseClient, signal);
+        return flags.feature_ai_provider_oauth && flags.feature_ai_text_auth_lists && flags.feature_ai_oauth_tools_claude;
+      })(), signal);
+    } catch { return { error: "oauth_configuration_read_failed" }; }
+    if (!toolsEnabled) return { error: "oauth_tools_unsupported" };
+  }
 
   let resolved: CredentialOutcome;
   try {
-    resolved = await withinDeadline(resolveTierCredential(admin, tier.provider, oauthProvider, injected, signal), timeoutMs);
+    resolved = await raceSignal(withinDeadline(resolveTierCredential(admin, tier.provider, oauthProvider, injected, signal), timeoutMs), signal);
   } catch (cause) {
+    if (signal.aborted) return { error: "refresh_timeout" };
     if (cause instanceof AiOAuthError) return { error: cause.code };
     throw cause; // settings or catalogue read failure
   }
@@ -123,9 +151,8 @@ export async function callOAuthTier(
   try {
     const remainingMs = timeoutMs - (Date.now() - startedAt);
     if (remainingMs <= 0) return { error: "refresh_timeout" };
-    const pi = injected?.pi ?? defaultPiCallDeps();
     signal?.throwIfAborted();
-    const response = await callPiOAuth(pi, oauthProvider, tier.model, requestBody, resolved.apiKey, remainingMs, signal);
+    const response = await callPiOAuth(pi, oauthProvider, tier.model, requestBody, resolved.apiKey, remainingMs, signal, { toolsEnabled, continuation: injected?.continuation });
     if (response.status === 422) return { error: await unsupportedCode(response) };
     return { response };
   } catch (cause) {

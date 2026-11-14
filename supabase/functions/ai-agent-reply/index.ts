@@ -48,6 +48,14 @@ import {
   withGreeting,
   withOpening,
 } from "./logic.ts";
+import { logAgentAuthEvent } from "./authAttemptLog.ts";
+import { selectAgentCompletion } from "./modelRound.ts";
+import { agentOAuthCompletion, AgentOAuthRefusal } from "./oauthCompletion.ts";
+import { canonicalAssistant, containsInferenceSecret, OAuthContinuation, toolDefinitions as validateToolDefinitions, validatedTranscript } from "../_shared/aiOAuth/toolTranscript.ts";
+import { AuthActionLedger, authActionSafety } from "./authToolSafety.ts";
+import { agentRecoveryReady } from "./agentRecoveryReadiness.ts";
+import { raceSignal } from "../_shared/aiOAuth/piCall.ts";
+import type { OAuthChainDeps } from "../_shared/aiOAuth/chainTier.ts";
 import { catalogEvidenceFromOutput, type CatalogEvidence } from "./catalogEvidence.ts";
 import { answerWithinBudget, refreshStaffDraft } from "./staffRefresh.ts";
 import { repairChatReply } from "./chatLinks.ts";
@@ -256,12 +264,21 @@ async function answerAgainAfterStaffReply(input: {
   });
 }
 
+interface AgentCompletion {
+  choices: Array<{ message: { role: string; content: string | null; tool_calls?: Array<{ id: string; type: "function"; function: { name: string; arguments: string } }> } }>;
+  usage?: { prompt_tokens?: number; completion_tokens?: number };
+}
 export async function chatCompletion(
   tier: AiTier,
   payload: Record<string, unknown>,
   timeoutMs = CHAT_TIMEOUT_MS,
   admin?: AiRoutingAdmin,
-): Promise<any> {
+  oauthDeps?: OAuthChainDeps,
+  signal?: AbortSignal,
+): Promise<AgentCompletion> {
+  if (tier.credentialSource === "platform" && tier.authMethod === "oauth") {
+    return await agentOAuthCompletion(admin as unknown as SupabaseClient, tier, payload, timeoutMs, oauthDeps, signal) as AgentCompletion;
+  }
   const provider = tier.provider;
   let endpoint = PROVIDER_ENDPOINTS[provider];
   if (!endpoint) {
@@ -620,12 +637,17 @@ Deno.serve(async (req) => {
   const bearer = (req.headers.get("Authorization") || "").replace("Bearer ", "");
   if (!bearer) return unauthorizedResponse();
 
-  const admin = createClient(supabaseUrl, serviceKey);
   const startedAt = Date.now();
+  // Keep a delivery/escalation reserve after the existing 45s model budget.
+  // One request deadline also bounds SDK reads, body consumption and tool writes.
+  const requestSignal = AbortSignal.any([req.signal, AbortSignal.timeout(50_000)]);
+  const admin = createClient(supabaseUrl, serviceKey, { global: { fetch: (url, init) => fetch(url, {
+    ...init, signal: init?.signal ? AbortSignal.any([requestSignal, init.signal]) : requestSignal,
+  }) } });
   const timings = phaseTimings();
   let body: Record<string, unknown>;
   try {
-    body = await req.json();
+    body = await new Response(req.body?.pipeThrough(new TransformStream(), { signal: requestSignal })).json();
   } catch {
     return badRequestResponse("Invalid JSON body");
   }
@@ -1751,6 +1773,11 @@ Deno.serve(async (req) => {
       });
       return { output };
     };
+    const authConfigured = modelChain.some(tier => tier.credentialSource === "platform" && tier.authMethod === "oauth");
+    const oauthContinuation = new OAuthContinuation();
+    let authToolsActive = false;
+    const authLedger = new AuthActionLedger(crypto.randomUUID(), code =>
+      logAgentAuthEvent(admin, request.user_id, { code }, modelBudgetRemaining(startedAt, Date.now())));
     let toldWaitlistGap = false;
     let procedureToolRanThisRound = false;
     for (let iteration = 0; ; iteration++) {
@@ -1771,36 +1798,71 @@ Deno.serve(async (req) => {
       ];
       let completion: any = null;
       let lastError: unknown = null;
-      for (let mi = 0; mi < modelChain.length; mi++) {
-        // The worker is killed at 60s. Three models at CHAT_TIMEOUT_MS need 75s, so
-        // without this the isolate dies mid-chain and takes the outage floor with it
-        // -- the failure mode index.ts:72 describes. Stop early and let the floor run.
-        const budgetMs = modelBudgetRemaining(startedAt, Date.now());
-        if (budgetMs <= 0) {
-          modelErrors.push({
-            model: formatModelRef(modelChain[mi]),
-            error: "request budget exhausted before this model was tried",
-          });
-          break;
-        }
-        try {
-          completion = await timings.span("model_round", () => chatCompletion(modelChain[mi], {
+      let attemptStartedAt = Date.now();
+      const selected = await selectAgentCompletion({
+        tiers: modelChain.length,
+        budget: () => modelBudgetRemaining(startedAt, Date.now()),
+        attempt: async (mi, budgetMs) => {
+          attemptStartedAt = Date.now();
+          const tier = modelChain[mi];
+          if (authToolsActive && messages.some(message => message.role === "tool" && containsInferenceSecret(message.content))) throw new ModelChainExhaustedError("oauth_tool_result_unsafe");
+          const signal = AbortSignal.any([requestSignal, AbortSignal.timeout(Math.max(1, Math.min(CHAT_TIMEOUT_MS, budgetMs)))]);
+          if (tier.credentialSource === "platform" && tier.authMethod === "oauth") {
+            if (roundToolDefinitions.some(tool => !authActionSafety(tool.function.name, customToolByName)) || messages.some(message => message.tool_calls?.some((call: { function: { name: string } }) => !authActionSafety(call.function.name, customToolByName)))) throw new AgentOAuthRefusal("oauth_tool_safety_unsupported");
+            if (!await raceSignal(agentRecoveryReady(admin, modelChain, mi, signal), signal)) throw new AgentOAuthRefusal("oauth_api_fallback_required");
+          }
+          const candidate = await timings.span("model_round", () => raceSignal(chatCompletion(modelChain[mi], {
             model: modelChain[mi].model,
             temperature: config.temperature ?? 0.4,
             messages,
             ...(roundToolDefinitions.length ? { tools: roundToolDefinitions, tool_choice: "auto" } : {}),
-          }, Math.min(CHAT_TIMEOUT_MS, budgetMs), routingAdmin));
-          usedModel = formatModelRef(modelChain[mi]);
-          usedFallbackLevel = mi;
-          usedCredentialSource = modelChain[mi].credentialSource;
-          break;
-        } catch (err) {
+          }, Math.min(CHAT_TIMEOUT_MS, modelBudgetRemaining(startedAt, Date.now())), routingAdmin, { continuation: oauthContinuation }, signal), signal));
+          if (authConfigured) {
+            try { candidate.choices[0].message = canonicalAssistant(candidate.choices[0].message); }
+            catch { throw new AgentOAuthRefusal("oauth_response_invalid"); }
+          }
+          const selectedAuth = tier.credentialSource === "platform" && tier.authMethod === "oauth";
+          if (authToolsActive || selectedAuth) {
+            // Check the ENTIRE proposed round before executing even its first call.
+            // This also applies to an API recovery response after Auth execution.
+            const message = candidate.choices[0].message;
+            const definitions = validateToolDefinitions({ tools: roundToolDefinitions });
+            const allowed = new Set(definitions.map(tool => tool.function.name));
+            const proposed = message.tool_calls ?? [];
+            if (proposed.some((call: { function: { name: string } }) => !allowed.has(call.function.name) || !authActionSafety(call.function.name, customToolByName))) throw new AgentOAuthRefusal("oauth_response_invalid");
+            try { validatedTranscript({ messages: [...messages, message, ...proposed.map((call: { id: string }) => ({ role: "tool", tool_call_id: call.id, content: "validation only" }))] }); }
+            catch { throw new AgentOAuthRefusal("oauth_response_invalid"); }
+          }
+          if (selectedAuth) {
+            authToolsActive = true;
+            await logAgentAuthEvent(admin, request.user_id, { code: "oauth_completion_selected", provider: tier.provider, model: tier.model,
+              level: mi, attempt: iteration, duration_ms: Date.now() - attemptStartedAt,
+              prompt_tokens: candidate.usage?.prompt_tokens, completion_tokens: candidate.usage?.completion_tokens,
+            }, modelBudgetRemaining(startedAt, Date.now()));
+          }
+          return candidate;
+        },
+        failed: async (mi, err) => {
+          const failedTier = modelChain[mi];
+          if (failedTier.credentialSource === "platform" && failedTier.authMethod === "oauth" && !(err instanceof AgentOAuthRefusal)) {
+            err = new AgentOAuthRefusal(err instanceof DOMException && ["AbortError", "TimeoutError"].includes(err.name) ? "oauth_request_timeout" : "oauth_configuration_read_failed");
+          }
+          if (err instanceof AgentOAuthRefusal) await logAgentAuthEvent(admin, request.user_id, {
+            provider: modelChain[mi].provider, model: modelChain[mi].model, level: mi, attempt: iteration,
+            duration_ms: Date.now() - attemptStartedAt, code: err.code,
+            auth_method: failedTier.credentialSource === "platform" && failedTier.authMethod === "oauth" ? "oauth" : "api_key",
+          }, modelBudgetRemaining(startedAt, Date.now()));
           await invalidateRejectedUserTier(routingAdmin, request.user_id, route, err);
           if (modelChain[mi].credentialSource === 'user') fallbackReason = `user_tier_failed:${err instanceof ProviderHttpError ? err.status : 0}`;
-          lastError = err;
           modelErrors.push({ model: formatModelRef(modelChain[mi]), error: errorMessage(err) });
-        }
-      }
+        },
+      });
+      if ("completion" in selected) {
+        completion = selected.completion;
+        usedModel = formatModelRef(modelChain[selected.index]);
+        usedFallbackLevel = selected.index;
+        usedCredentialSource = modelChain[selected.index].credentialSource;
+      } else lastError = selected.error;
       if (!completion) {
         // A user_only chain rejected by its own provider is a credential error,
         // not a model outage: the key has just been invalidated, the next
@@ -1862,7 +1924,7 @@ Deno.serve(async (req) => {
         const customTool = customToolByName.get(toolCall.function.name);
         const isProcedureTool = procedureTurn !== null && PROCEDURE_TOOL_NAMES.has(toolCall.function.name);
         if (isProcedureTool) procedureToolRanThisRound = true;
-        const result: ToolResult = await timings.span(`tool:${toolCall.function.name}`, async () =>
+        const execute = () => timings.span(`tool:${toolCall.function.name}`, async () =>
           toolCall.function.name === "stock_waitlist_join"
             ? await executeOfferedWaitlistJoin(
               stockWaitlistJoinOffered(waitlistOn, roundToolDefinitions),
@@ -1882,6 +1944,9 @@ Deno.serve(async (req) => {
             )
             : (isAdmin ? await executeAdminTool(toolContext, toolCall.function.name, args) : null) ??
               (await executeTool(toolContext, toolCall.function.name, args)));
+        const result: ToolResult = authToolsActive
+          ? await authLedger.execute(toolCall.function.name, args, authActionSafety(toolCall.function.name, customToolByName), execute)
+          : await execute();
         if (dryRun && customTool && args.capability === "search_products") {
           catalogEvidence.push(...catalogEvidenceFromOutput(result.output).slice(0, Math.max(0, 100 - catalogEvidence.length)));
         }

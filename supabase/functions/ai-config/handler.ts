@@ -88,7 +88,7 @@ async function respondToAiConfigRequest(req: Request, signal: AbortSignal): Prom
       return new Response(response.body, { status: response.status, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
     }
 
-    if (req.method === 'POST' && (resolvedAction === 'chat-list-policy' || resolvedAction === 'set-chat-tier' || resolvedAction === 'set-triage-tier')) {
+    if (req.method === 'POST' && (resolvedAction === 'chat-list-policy' || resolvedAction === 'set-chat-tier' || resolvedAction === 'set-triage-tier' || resolvedAction === 'set-agent-tier')) {
       const input = { ...body };
       delete input.action;
       const response = await runChatListAction(resolvedAction, input, chatActionDeps(supabase, user.id, signal));

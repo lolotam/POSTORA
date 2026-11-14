@@ -1,6 +1,7 @@
-import { complete, getModel } from "npm:@mariozechner/pi-ai@0.73.1";
+import { complete, stream, getModel } from "npm:@mariozechner/pi-ai@0.73.1";
 import { redactProviderError } from "../ai-routing-errors.ts";
-import type { OAuthProviderId } from "./clients.ts";
+import { supportsOAuthToolTransport, type OAuthProviderId } from "./clients.ts";
+import { needsToolTransport, OAuthContinuation, parseArguments, ToolContractError, toolDefinitions, toToolContext, validatedTranscript, type TranscriptMessage } from "./toolTranscript.ts";
 
 /**
  * The slice of pi-ai's AssistantMessage callPiOAuth depends on. The full type
@@ -8,7 +9,7 @@ import type { OAuthProviderId } from "./clients.ts";
  * never reads.
  */
 export interface PiAssistant {
-  content: Array<{ type: string; text?: string }>;
+  content: Array<{ type: string; text?: string; id?: string; name?: string; arguments?: unknown }>;
   stopReason: string;
   errorMessage?: string;
   /** pi-ai reports cached prompt tokens apart from `input`. */
@@ -20,7 +21,7 @@ export interface PiCallDeps {
   complete: (
     model: unknown,
     context: unknown,
-    options: { apiKey: string; signal: AbortSignal; temperature?: number; maxTokens?: number },
+    options: { apiKey: string; signal: AbortSignal; temperature?: number; maxTokens?: number; maxRetries?: number },
   ) => Promise<PiAssistant>;
 }
 
@@ -30,8 +31,41 @@ export function defaultPiCallDeps(): PiCallDeps {
     // narrow KnownProvider union; the deps seam keeps it a string so tests can
     // inject any registry. The mapped shapes are pinned by piCall.test.ts.
     getModel: (provider, modelId) => getModel(provider as never, modelId),
-    complete: async (model, context, options) =>
-      (await complete(model as never, context as never, options)) as unknown as PiAssistant,
+    complete: async (model, context, options) => {
+      if ((model as { provider?: string }).provider !== "anthropic") return await complete(model as never, context as never, options) as unknown as PiAssistant;
+      // Read native events, not repaired final arguments. pi-ai deliberately
+      // repairs partial JSON; an executor must never act on that repair.
+      const controller = new AbortController();
+      const signal = AbortSignal.any([options.signal, controller.signal]);
+      const events = stream(model as never, context as never, { ...options, signal, maxRetries: 0 });
+      try {
+      const argumentsByIndex = new Map<number, string>();
+      let bytes = 0;
+      let started = false;
+      let final: PiAssistant | undefined;
+      for await (const event of events) {
+        options.signal.throwIfAborted();
+        if (event.type === "start") started = true;
+        if ("delta" in event) {
+          bytes += new TextEncoder().encode(event.delta).length;
+          if (bytes > 1_048_576) throw new ToolContractError("response_invalid");
+        }
+        if (event.type === "toolcall_delta") argumentsByIndex.set(event.contentIndex, (argumentsByIndex.get(event.contentIndex) ?? "") + event.delta);
+        if (event.type === "toolcall_end") {
+          const raw = argumentsByIndex.get(event.contentIndex);
+          if (raw !== undefined) {
+            let parsed: unknown;
+            try { parsed = JSON.parse(raw); } catch { throw new ToolContractError("response_invalid"); }
+            if (JSON.stringify(parsed) !== JSON.stringify(event.toolCall.arguments)) throw new ToolContractError("response_invalid");
+          }
+        }
+        if (event.type === "error") throw new ToolContractError("response_invalid");
+        if (event.type === "done") final = event.message as unknown as PiAssistant;
+      }
+      if (!started || !final) throw new ToolContractError("response_invalid");
+      return final;
+      } finally { controller.abort(); }
+    },
   };
 }
 
@@ -102,7 +136,7 @@ function openAiShape(text: string, usage: PiAssistant["usage"]): string {
 }
 
 /** The request needs something this subscription tier cannot honour; the chain skips the tier. */
-type UnsupportedReason = "tools_unsupported" | "max_tokens_unsupported";
+type UnsupportedReason = "tools_unsupported" | "max_tokens_unsupported" | "tool_history_unsupported" | "schema_unsupported" | "response_invalid";
 
 function unsupported(reason: UnsupportedReason): Response {
   return new Response(JSON.stringify({ error: { code: reason } }), {
@@ -138,10 +172,13 @@ export async function callPiOAuth(
   apiKey: string,
   timeoutMs: number,
   outerSignal?: AbortSignal,
+  options: { toolsEnabled?: boolean; continuation?: OAuthContinuation } = {},
 ): Promise<Response> {
-  // Tool calling is out of scope for subscription tiers (spec §4): refuse
-  // without a network call so the chain falls over to the next tier.
-  if (openAiBody.tools !== undefined) return unsupported("tools_unsupported");
+  // Only the server-authorized Claude transport may carry tool work. Preflight
+  // runs before model/provider I/O; callers cannot enable it through the body.
+  const toolMode = needsToolTransport(openAiBody) || options.toolsEnabled === true;
+  const refusal = preflightPiRequest(provider, openAiBody, options.toolsEnabled === true);
+  if (refusal) return unsupported(refusal);
   // pi-ai 0.73.1's Codex request builder never serializes maxTokens, so a cap
   // the caller relies on would be silently ignored. Refuse instead.
   const maxTokens = outputTokenLimit(openAiBody);
@@ -151,15 +188,26 @@ export async function callPiOAuth(
   if (!model) return errorShape(`unknown model ${modelId} for ${provider}`, 424);
 
   try {
-    const assistant = await deps.complete(model, toPiContext(openAiBody), {
+    const signal = outerSignal ? AbortSignal.any([outerSignal, AbortSignal.timeout(timeoutMs)]) : AbortSignal.timeout(timeoutMs);
+    signal.throwIfAborted();
+    const work = deps.complete(model, toolMode ? toToolContext(openAiBody, provider, modelId, options.continuation) : toPiContext(openAiBody), {
       apiKey,
       // The caller's budget and the request's own timeout: the tighter one wins.
-      signal: outerSignal
-        ? AbortSignal.any([outerSignal, AbortSignal.timeout(timeoutMs)])
-        : AbortSignal.timeout(timeoutMs),
+      signal,
       temperature: typeof openAiBody.temperature === "number" ? openAiBody.temperature : undefined,
       maxTokens,
+      maxRetries: 0,
     });
+    const assistant = await raceSignal(work, signal);
+    signal.throwIfAborted();
+
+    if (toolMode) {
+      const message = validatedAssistant(assistant, openAiBody);
+      options.continuation?.remember(provider, modelId, message, assistant as unknown as Record<string, unknown>);
+      const shaped = JSON.parse(openAiShape("", assistant.usage));
+      shaped.choices = [{ message, finish_reason: assistant.stopReason === "toolUse" ? "tool_calls" : "stop" }];
+      return Response.json(shaped);
+    }
 
     if (assistant.stopReason === "error" || assistant.errorMessage) {
       const message = assistant.errorMessage ?? `pi-ai completed with stopReason ${assistant.stopReason}`;
@@ -175,9 +223,57 @@ export async function callPiOAuth(
       headers: { "content-type": "application/json" },
     });
   } catch (cause) {
+    if (cause instanceof ToolContractError) return unsupported(cause.code);
     const name = cause instanceof Error ? cause.name : "";
     const status = name === "TimeoutError" ? 504 : 502;
     const message = cause instanceof Error ? cause.message : "pi-ai request failed";
     return errorShape(redactProviderError(`${message} (status ${status})`, apiKey), status);
   }
+}
+
+export function preflightPiRequest(provider: OAuthProviderId, body: Record<string, unknown>, enabled: boolean): UnsupportedReason | null {
+  if (provider === "openai-codex" && outputTokenLimit(body) !== undefined) return "max_tokens_unsupported";
+  if (!needsToolTransport(body)) return null;
+  if (!supportsOAuthToolTransport(provider) || !enabled) return "tools_unsupported";
+  if (body.tool_choice !== undefined && body.tool_choice !== "auto") return "tools_unsupported";
+  const supported = new Set(["model", "messages", "tools", "tool_choice", "temperature", "max_tokens", "max_completion_tokens"]);
+  if (Object.keys(body).some(key => !supported.has(key))) return "schema_unsupported";
+  try { toolDefinitions(body); validatedTranscript(body); }
+  catch (cause) { return cause instanceof ToolContractError ? cause.code : "schema_unsupported"; }
+  return null;
+}
+
+function validatedAssistant(assistant: PiAssistant, body: Record<string, unknown>): TranscriptMessage {
+  if (!["stop", "toolUse"].includes(assistant.stopReason) || assistant.errorMessage || !Array.isArray(assistant.content)) throw new ToolContractError("response_invalid");
+  if (assistant.usage && [assistant.usage.input, assistant.usage.output, assistant.usage.cacheRead, assistant.usage.cacheWrite, assistant.usage.totalTokens].filter(value => value !== undefined).some(value => typeof value !== "number" || !Number.isFinite(value) || value < 0)) throw new ToolContractError("response_invalid");
+  const ids = new Set<string>();
+  const history = validatedTranscript(body);
+  const oldIds = new Set(history.flatMap(m => m.tool_calls?.map(c => c.id) ?? []));
+  const allowed = new Set(toolDefinitions(body).map(t => t.function.name));
+  const calls = [];
+  let text = "";
+  for (const part of assistant.content) {
+    if (part.type === "text" && typeof part.text === "string") text += part.text;
+    else if (part.type === "thinking") continue; // Native only, kept in the sidecar.
+    else if (part.type === "toolCall" && typeof part.id === "string" && /^[a-zA-Z0-9_-]{1,200}$/.test(part.id) && typeof part.name === "string" && allowed.has(part.name) && !ids.has(part.id) && !oldIds.has(part.id)) {
+      try {
+        const args = JSON.stringify(part.arguments);
+        if (!args || args.length > 32_768) throw new Error();
+        parseArguments(args);
+        calls.push({ id: part.id, type: "function" as const, function: { name: part.name, arguments: args } });
+        ids.add(part.id);
+      } catch { throw new ToolContractError("response_invalid"); }
+    } else throw new ToolContractError("response_invalid");
+  }
+  if (calls.length > 16 || (assistant.stopReason === "toolUse") !== (calls.length > 0) || (!calls.length && !text.trim()) || text.length > 262_144) throw new ToolContractError("response_invalid");
+  return { role: "assistant", content: text || null, ...(calls.length ? { tool_calls: calls } : {}) };
+}
+
+export function raceSignal<T>(work: PromiseLike<T>, signal: AbortSignal): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const abort = () => reject(signal.reason);
+    if (signal.aborted) { Promise.resolve(work).catch(() => {}); reject(signal.reason); return; }
+    signal.addEventListener("abort", abort, { once: true });
+    Promise.resolve(work).then(resolve, reject).finally(() => signal.removeEventListener("abort", abort));
+  });
 }

@@ -10,7 +10,8 @@ function fakeAdmin(credentials: Record<string, unknown>) {
   return {
     rpc(name: string) {
       if (name === "get_ai_oauth_credentials") {
-        return Promise.resolve({ data: { ...credentials, status: "connected" }, error: null });
+        const response = Promise.resolve({ data: { ...credentials, status: "connected" }, error: null });
+        return Object.assign(response, { abortSignal: () => response });
       }
       return Promise.resolve({ data: null, error: null });
     },
