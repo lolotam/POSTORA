@@ -1,4 +1,5 @@
 import { serve } from 'https://deno.land/std@0.168.0/http/server.ts';
+import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 import { restrictedCorsHeaders } from '../_shared/cors.ts';
 import { getValidAccessToken } from '../_shared/higgsfield-oauth.ts';
 import { HiggsfieldMcpClient } from '../_shared/higgsfield-mcp.ts';
@@ -19,7 +20,23 @@ const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!;
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
 const SUPABASE_ANON_KEY = Deno.env.get('SUPABASE_ANON_KEY') || Deno.env.get('SUPABASE_PUBLISHABLE_KEY') || '';
 
-serve(async (req) => {
+export async function handleAiConfigRequest(req: Request): Promise<Response> {
+  // One budget covers authentication and every Chat read/write. The browser
+  // waits 30s, leaving room for a response and the bounded refusal-log attempt.
+  const deadline = new AbortController();
+  const timer = setTimeout(() => deadline.abort(new DOMException('Request deadline exceeded', 'TimeoutError')), 25_000);
+  const signal = AbortSignal.any([req.signal, deadline.signal]);
+  try {
+    return await respondToAiConfigRequest(req, signal);
+  } catch {
+    console.warn({ event: 'ai_config_request_failed', reason: 'configuration_read_or_write_failed' });
+    return Response.json({ error: 'configuration_read_or_write_failed' }, { status: 503, headers: restrictedCorsHeaders(req) });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function respondToAiConfigRequest(req: Request, signal: AbortSignal): Promise<Response> {
   const corsHeaders = restrictedCorsHeaders(req);
   if (req.method === 'OPTIONS') {
     return new Response('ok', { headers: corsHeaders });
@@ -33,14 +50,16 @@ serve(async (req) => {
     });
   }
 
-  const { createClient } = await import('https://esm.sh/@supabase/supabase-js@2');
-  
   // Verify user via JWT claims (avoids session lookup failures)
   const userClient = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
-    global: { headers: { Authorization: authHeader } },
+    global: {
+      headers: { Authorization: authHeader },
+      fetch: (url, init) => fetch(url, { ...init, signal }),
+    },
   });
   const token = authHeader.replace('Bearer ', '');
   const { data: claimsData, error: claimsError } = await userClient.auth.getClaims(token);
+  signal.throwIfAborted();
   if (claimsError || !claimsData?.claims) {
     return new Response(JSON.stringify({ error: 'Unauthorized' }), {
       status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
@@ -50,18 +69,27 @@ serve(async (req) => {
 
   const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
 
-  // Check admin
-  const { data: roleData } = await supabase
-    .from('user_roles')
-    .select('role')
-    .eq('user_id', user.id)
-    .eq('role', 'admin')
-    .maybeSingle();
-  const isAdmin = !!roleData;
-
   try {
     const url = new URL(req.url);
     const action = url.searchParams.get('action') || 'list';
+    const body = req.method === 'POST' ? await req.json() : undefined;
+    const resolvedAction = url.searchParams.get('action') || body?.action || action;
+    signal.throwIfAborted();
+
+    // Chat owns its authorization and refusal logging; do not perform a second
+    // role lookup before entering the application boundary.
+    if (req.method === 'POST' && (resolvedAction === 'chat-list-policy' || resolvedAction === 'set-chat-tier')) {
+      const input = { ...body };
+      delete input.action;
+      const response = await runChatListAction(resolvedAction, input, chatActionDeps(supabase, user.id, signal));
+      return new Response(response.body, { status: response.status, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+    }
+
+    const { data: roleData, error: roleError } = await supabase
+      .from('user_roles').select('role').eq('user_id', user.id).eq('role', 'admin')
+      .abortSignal(signal).maybeSingle();
+    if (roleError) throw new Error('Admin check failed');
+    const isAdmin = !!roleData;
 
     // ── GET ──
     if (req.method === 'GET') {
@@ -101,16 +129,6 @@ serve(async (req) => {
 
     // ── POST ──
     if (req.method === 'POST') {
-      const body = await req.json();
-      const resolvedAction = url.searchParams.get('action') || body?.action || action;
-
-      if (resolvedAction === 'chat-list-policy' || resolvedAction === 'set-chat-tier') {
-        const input = { ...body };
-        delete input.action;
-        const response = await runChatListAction(resolvedAction, input, chatActionDeps(supabase, user.id));
-        return new Response(response.body, { status: response.status, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
-      }
-
       if (resolvedAction === 'test-connection') {
         if (!isAdmin) return new Response(JSON.stringify({ error: 'Admin required' }), { status: 403, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
 
@@ -322,4 +340,6 @@ serve(async (req) => {
     console.error('AI Config Error:', error instanceof Error ? error.name : 'error');
     return new Response(JSON.stringify({ error: message }), { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
   }
-});
+}
+
+if (import.meta.main) serve(handleAiConfigRequest);

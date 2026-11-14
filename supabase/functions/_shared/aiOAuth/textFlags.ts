@@ -5,9 +5,9 @@ export type AiTextFlags = Record<typeof AI_TEXT_FLAG_KEYS[number], boolean>;
 
 /** New readiness reads distinguish a configuration outage from a disabled flag.
  * The existing runtime master reader remains independent of list rollout. */
-export async function readAiTextFlags(admin: SupabaseClient): Promise<AiTextFlags> {
+export async function readAiTextFlags(admin: SupabaseClient, signal = AbortSignal.timeout(10_000)): Promise<AiTextFlags> {
   const { data: rows, error } = await admin.from("system_settings").select("key,value")
-    .in("key", [...AI_TEXT_FLAG_KEYS]).abortSignal(AbortSignal.timeout(10_000));
+    .in("key", [...AI_TEXT_FLAG_KEYS]).abortSignal(signal);
   if (error) {
     console.warn({ event: "ai_text_flags_read_failed", reason: "configuration_read_failed" });
     throw new Error("AI text configuration read failed");

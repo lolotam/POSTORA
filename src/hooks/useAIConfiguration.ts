@@ -1,8 +1,8 @@
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useQuery, useMutation, useQueryClient, type QueryClient } from '@tanstack/react-query';
 import { supabase } from '@/integrations/supabase/client';
 import { fetchModelCatalogue } from '@/features/ai-providers/infrastructure/aiModelCatalogueGateway';
 import { AI_PROVIDER_HEALTH_QUERY_KEY } from './ai-config/queryKeys';
-import { CHAT_LIST_POLICY_QUERY_KEY, saveChatTier, type ChatListPolicy } from '@/features/ai-providers/infrastructure/chatListGateway';
+import { CHAT_LIST_POLICY_QUERY_KEY, saveChatTier, type ChatListPolicy, type ChatTierInput } from '@/features/ai-providers/infrastructure/chatListGateway';
 import type {
   AIProvider,
   AIModel,
@@ -129,12 +129,27 @@ export function useAIConfiguration() {
   });
 }
 
+function saveChatTierAndReconcile(queryClient: QueryClient, input: ChatTierInput) {
+  return saveChatTier(input, async saved => {
+    // Publish the authoritative read before a failed mutation can show its
+    // error. Invalidation alone can leave the previously saved tier visible.
+    await queryClient.cancelQueries({ queryKey: ['ai-config'] });
+    const key = `default_ai_model_chat${input.slot === 'primary' ? '' : `_${input.slot}`}`;
+    queryClient.setQueryData<AIConfigData>(['ai-config'], current => {
+      if (!current) return current;
+      const settings = current.settings.filter(row => row.key !== key);
+      if (saved) settings.push({ key, value: saved });
+      return { ...current, settings, ...parseSettingsRows(settings) };
+    });
+  });
+}
+
 export function useSetDefaultModel() {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: async ({ provider_code, model_id, category, auth_method }: { provider_code: string; model_id: string; category?: ModelCategory; auth_method?: AiAuthMethod }) => {
       if (category === 'chat' && queryClient.getQueryData<ChatListPolicy>(CHAT_LIST_POLICY_QUERY_KEY)?.enabled) {
-        return saveChatTier({ category, slot: 'primary', provider_code, model_id, auth_method });
+        return saveChatTierAndReconcile(queryClient, { category, slot: 'primary', provider_code, model_id, auth_method });
       }
       const key = category ? `default_ai_model_${category}` : 'default_ai_model';
       const { error } = await supabase
@@ -152,7 +167,7 @@ export function useSetFallbackModel() {
   return useMutation({
     mutationFn: async ({ provider_code, model_id, category, auth_method }: { provider_code: string; model_id: string; category: ModelCategory; auth_method?: AiAuthMethod }) => {
       if (category === 'chat' && queryClient.getQueryData<ChatListPolicy>(CHAT_LIST_POLICY_QUERY_KEY)?.enabled) {
-        return saveChatTier({ category, slot: 'fallback', provider_code, model_id, auth_method });
+        return saveChatTierAndReconcile(queryClient, { category, slot: 'fallback', provider_code, model_id, auth_method });
       }
       const key = `default_ai_model_${category}_fallback`;
       const { error } = await supabase
@@ -170,7 +185,7 @@ export function useSetFallback2Model() {
   return useMutation({
     mutationFn: async ({ provider_code, model_id, category, auth_method }: { provider_code: string; model_id: string; category: ModelCategory; auth_method?: AiAuthMethod }) => {
       if (category === 'chat' && queryClient.getQueryData<ChatListPolicy>(CHAT_LIST_POLICY_QUERY_KEY)?.enabled) {
-        return saveChatTier({ category, slot: 'fallback_2', provider_code, model_id, auth_method });
+        return saveChatTierAndReconcile(queryClient, { category, slot: 'fallback_2', provider_code, model_id, auth_method });
       }
       const key = `default_ai_model_${category}_fallback_2`;
       const { error } = await supabase

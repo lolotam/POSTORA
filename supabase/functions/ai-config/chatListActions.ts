@@ -7,11 +7,10 @@ import type { RowReader } from "../_shared/providerEndpoint.ts";
 import { readCatalogue } from "./readCatalogue.ts";
 import { buildChatListPolicy, ChatTierError, validateChatTier, type ChatPolicySnapshot } from "./chatListPolicy.ts";
 
-export async function loadChatPolicySnapshot(admin: SupabaseClient, flags: ChatPolicySnapshot["flags"]): Promise<ChatPolicySnapshot> {
-  const signal = AbortSignal.timeout(10_000);
+export async function loadChatPolicySnapshot(admin: SupabaseClient, flags: ChatPolicySnapshot["flags"], signal: AbortSignal): Promise<ChatPolicySnapshot> {
   const [providers, catalogue, settings, statuses] = await Promise.all([
     admin.from("ai_providers").select("id,provider_code,name,is_active").order("name").abortSignal(signal),
-    readCatalogue(admin),
+    readCatalogue(admin, signal),
     admin.from("system_settings").select("key,value").or("key.like.default_ai_model_chat%,key.like.model_catalog_synced_at_%").abortSignal(signal),
     admin.rpc("get_ai_oauth_statuses").abortSignal(signal),
   ]);
@@ -57,22 +56,23 @@ export async function runChatListAction(action: "chat-list-policy" | "set-chat-t
   }
 }
 
-export function chatActionDeps(admin: SupabaseClient, userId: string): ChatActionDeps {
+export function chatActionDeps(admin: SupabaseClient, userId: string, signal: AbortSignal): ChatActionDeps {
   return {
     isAdmin: async () => {
-      const { data, error } = await admin.from("user_roles").select("role").eq("user_id", userId).eq("role", "admin").abortSignal(AbortSignal.timeout(10_000)).maybeSingle();
+      const { data, error } = await admin.from("user_roles").select("role").eq("user_id", userId).eq("role", "admin").abortSignal(signal).maybeSingle();
       if (error) throw new Error("Admin check failed");
       return Boolean(data);
     },
-    flags: () => readAiTextFlags(admin),
-    snapshot: flags => loadChatPolicySnapshot(admin, flags),
+    flags: () => readAiTextFlags(admin, signal),
+    snapshot: flags => loadChatPolicySnapshot(admin, flags, signal),
     persist: async tier => {
-      const { data, error } = await admin.rpc("write_ai_chat_tier", { p_key: tier.key, p_value: tier.value, p_expected: tier.expected }).abortSignal(AbortSignal.timeout(10_000));
+      signal.throwIfAborted();
+      const { data, error } = await admin.rpc("write_ai_chat_tier", { p_key: tier.key, p_value: tier.value, p_expected: tier.expected }).abortSignal(signal);
       if (error) throw new Error("Chat tier write failed");
       if (data !== true) throw new ChatTierError("configuration_changed_retry");
     },
     logRefusal: async reason => {
-      // Readiness may have exhausted its budget; logging gets only 250ms more.
+      // The request may have exhausted its budget; logging gets only 250ms more.
       const { error } = await admin.from("system_logs").insert({ level: "warn", category: "ai", source: "ai-config", message: "Chat configuration refused", user_id: userId, metadata: { reason } }).abortSignal(AbortSignal.timeout(250));
       if (error) console.warn({ event: "ai_chat_refusal_log_failed", reason });
     },

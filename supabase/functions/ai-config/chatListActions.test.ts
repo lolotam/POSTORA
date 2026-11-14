@@ -96,7 +96,7 @@ for (const stalled of ["role", "tier", "readiness", "refusal"] as const) {
           (stalled === "refusal" ? [] : [{ role: "admin" }]) : []));
       } },
     });
-    const deps = chatActionDeps(admin, crypto.randomUUID());
+    const deps = chatActionDeps(admin, crypto.randomUUID(), AbortSignal.timeout(10_000));
     deps.flags = async () => flags;
     if (stalled !== "readiness") deps.snapshot = async () => ({ flags,
       providers: [{ id: "p", provider_code: "claude", name: "Claude", is_active: true }], models: [], settings: [],
