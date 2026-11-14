@@ -3403,6 +3403,30 @@ export type Database = {
         }
         Relationships: []
       }
+      analytics_collection_policy_revisions: {
+        Row: {
+          key: string
+          pending_actor: string | null
+          pending_approval_ref: string | null
+          revision: number
+          updated_at: string
+        }
+        Insert: {
+          key: string
+          pending_actor?: string | null
+          pending_approval_ref?: string | null
+          revision?: number
+          updated_at?: string
+        }
+        Update: {
+          key?: string
+          pending_actor?: string | null
+          pending_approval_ref?: string | null
+          revision?: number
+          updated_at?: string
+        }
+        Relationships: []
+      }
       app_settings: {
         Row: {
           created_at: string | null
@@ -12598,6 +12622,47 @@ export type Database = {
       consume_partner_rate: {
         Args: { p_key_id: string; p_limit: number }
         Returns: boolean
+      }
+      analytics_collection_canonical_policy: {
+        Args: { p_key: string; p_policy: Json }
+        Returns: Json
+      }
+      analytics_collection_policy_snapshot: {
+        Args: { p_key: string }
+        Returns: Json
+      }
+      analytics_collection_set_policy: {
+        Args: {
+          p_actor: string
+          p_approval_ref: string
+          p_expected_fingerprint: string
+          p_expected_revision: number
+          p_key: string
+          p_policy: Json
+        }
+        Returns: Json
+      }
+      get_facebook_analytics_collection_policy: { Args: never; Returns: Json }
+      get_instagram_collection_rollout_policy: { Args: never; Returns: Json }
+      set_facebook_analytics_collection_policy: {
+        Args: {
+          p_actor: string
+          p_approval_ref: string
+          p_expected_fingerprint: string
+          p_expected_revision: number
+          p_policy: Json
+        }
+        Returns: Json
+      }
+      set_instagram_collection_rollout_policy: {
+        Args: {
+          p_actor: string
+          p_approval_ref: string
+          p_expected_fingerprint: string
+          p_expected_revision: number
+          p_policy: Json
+        }
+        Returns: Json
       }
       count_openinary_backfill_remaining: {
         Args: Record<PropertyKey, never>

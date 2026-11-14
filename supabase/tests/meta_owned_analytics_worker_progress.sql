@@ -124,7 +124,7 @@ UPDATE public.fb_analytics_permission_observations SET observed_at=((clock_times
   WHERE social_account_id='b4000000-0000-4000-8000-000000000001';
 SET LOCAL ROLE service_role;
 DO $freshness$
-DECLARE v_ticket jsonb;v_prepared jsonb;
+DECLARE v_ticket jsonb;v_prepared jsonb;v_policy jsonb;v_edit jsonb;
 BEGIN
   v_ticket:=public.next_meta_analytics_dispatch_target('facebook',true)->'ticket';
   ASSERT public.commit_meta_analytics_dispatch_target(v_ticket,'enqueue',NULL)->>'state'='needs_admission','a matching older-day grant must be renewed';
@@ -132,7 +132,11 @@ BEGIN
   PERFORM public.observe_fb_analytics_permissions('b1000000-0000-4000-8000-000000000001','b4000000-0000-4000-8000-000000000001',v_prepared->'authority',
     ARRAY['read_insights','pages_read_engagement'],'784001',clock_timestamp(),'verified');
   ASSERT public.commit_meta_analytics_dispatch_target(v_ticket,'enqueue',NULL)->>'outcome'='queued','renewal permits idempotent enqueue';
-  UPDATE public.app_settings SET value='{"account_ids":["B4000000-0000-4000-8000-000000000001"]}'::jsonb WHERE key='collection_facebook_analytics_policy';
+  -- Service operators use the audited CAS boundary; raw policy DML is denied.
+  v_policy:=public.get_facebook_analytics_collection_policy();
+  v_edit:=public.set_facebook_analytics_collection_policy(v_policy->>'fingerprint',(v_policy->>'revision')::bigint,
+    '{"account_ids":["B4000000-0000-4000-8000-000000000001"]}'::jsonb,'worker progress fixture','RC-17 compatibility');
+  ASSERT (v_edit->>'ok')::boolean,'uppercase policy edit is accepted through CAS';
   v_ticket:=public.next_meta_analytics_dispatch_target('facebook',true)->'ticket';
   ASSERT public.commit_meta_analytics_dispatch_target(v_ticket,'enqueue',NULL)->>'outcome'='queued','valid uppercase UUID policy identifies the same account';
 END;

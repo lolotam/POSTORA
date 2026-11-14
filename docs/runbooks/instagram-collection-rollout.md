@@ -460,7 +460,7 @@ pilot safe.
 
 The rollback procedure is:
 
-1. Disable the four schedules (`cron.alter_job(... active := false)`).
+1. Pause the affected schedules using the executable SQL in §10.1.
 2. Disable the master switch, or narrow only the affected population.
 3. Record the policy document and the time.
 4. Check the pending and in-flight work.
@@ -509,3 +509,210 @@ the direct lifecycle/visibility evidence, the metric/retry reconciliation
 (Task 6), and the Task 8 report/retention dependencies. A passing controls
 suite does not make a whole product journey, and it does not make live Meta
 support, accepted.
+
+## 10. Phase-2 operator controls (2026-11-14)
+
+This section supersedes the historical raw settings-write procedure. It is
+executable only after `20261114210000_analytics_policy_operator_controls.sql`
+has been applied and its catalog verified. Source availability does not prove
+production installation. Phase 2 changes no flags, policy values or schedules.
+Facebook has its [own procedure](facebook-analytics-collection-rollout.md).
+The [owner design §§7–9](../superpowers/specs/2026-11-14-owner-analytics-for-all-customers-design.md#7-controlled-rollout-and-real-operator-procedure)
+owns population preparation, immediate Noor/cohort/all promotion on concrete
+proofs, stops and the post-all 72-hour/three-provider-day observation period.
+This runbook supplies no live-action authorization or missing evidence.
+
+### 10.1 Pause first; install and verify
+
+Before applying the direct-write restriction, record current master/policy
+values and schedule activity in the private release receipt. Pause affected
+workers/schedules **or** disable the affected master under that release's
+authorization; prevent manual worker invocations and let bounded requests and
+120-second leases settle. The IG master also stops competitors; record that
+impact. Apply as the existing `app_settings` owner, `supabase_admin`. Do not
+apply this from an unreviewed or dirty runtime checkout.
+
+The following pause covers both policy keys changed by this migration; inspect
+and retain the returned schedule identities before applying it. `DB_URL` is
+the authorized operator connection, never a value to paste into a receipt.
+
+```bash
+set -euo pipefail   # any failed pause aborts the whole block before the migration runs
+psql "$DB_URL" -X -v ON_ERROR_STOP=1 <<'SQL'
+SET statement_timeout='10s';
+SELECT jobid,jobname,schedule,active FROM cron.job WHERE jobname IN (
+ 'instagram-insights-enqueue-daily','instagram-insights-drain',
+ 'competitor-snapshot-enqueue-daily','competitor-snapshot-drain',
+ 'facebook-analytics-enqueue-daily','facebook-analytics-drain') ORDER BY jobname;
+SELECT cron.alter_job(jobid,active:=false) FROM cron.job WHERE jobname IN (
+ 'instagram-insights-enqueue-daily','instagram-insights-drain',
+ 'competitor-snapshot-enqueue-daily','competitor-snapshot-drain',
+ 'facebook-analytics-enqueue-daily','facebook-analytics-drain');
+SQL
+# Do not continue unless every affected schedule now reports active=false.
+test "$(psql "$DB_URL" -X -At -c "SELECT count(*) FROM cron.job WHERE active AND jobname IN ('instagram-insights-enqueue-daily','instagram-insights-drain','competitor-snapshot-enqueue-daily','competitor-snapshot-drain','facebook-analytics-enqueue-daily','facebook-analytics-drain')")" = 0
+psql "$DB_URL" -X -v ON_ERROR_STOP=1 \
+ -f supabase/migrations/20261114210000_analytics_policy_operator_controls.sql
+psql "$DB_URL" -X -v ON_ERROR_STOP=1 <<'SQL'
+SELECT p.oid::regprocedure,p.prosecdef,p.proconfig,
+ has_function_privilege('service_role',p.oid,'EXECUTE') AS service_execute,
+ has_function_privilege('anon',p.oid,'EXECUTE') AS anon_execute,
+ has_function_privilege('authenticated',p.oid,'EXECUTE') AS authenticated_execute
+FROM pg_proc p WHERE p.oid IN (
+ 'public.get_instagram_collection_rollout_policy()'::regprocedure,
+ 'public.set_instagram_collection_rollout_policy(text,bigint,jsonb,text,text)'::regprocedure,
+ 'public.get_facebook_analytics_collection_policy()'::regprocedure,
+ 'public.set_facebook_analytics_collection_policy(text,bigint,jsonb,text,text)'::regprocedure);
+SELECT key,revision,pending_actor IS NULL AND pending_approval_ref IS NULL AS context_cleared
+FROM public.analytics_collection_policy_revisions ORDER BY key;
+SELECT tgname,tgenabled FROM pg_trigger WHERE tgrelid='public.app_settings'::regclass
+ AND tgname IN ('analytics_collection_policy_write_guard','analytics_collection_policy_audit','analytics_collection_policy_truncate_guard');
+SQL
+```
+
+Require all four signatures, service-only execution, security-definer wrappers,
+controlled search paths/timeouts, all three enabled triggers, two revision rows
+and cleared context. TRUNCATE is denied, including to the database owner.
+Compare saved policy/master values with fresh readback;
+the migration must not alter them. Verify PostgREST's reloaded schema before
+using its RPC transport. This phase requires no Edge Function deployment.
+Restore only the previously authorized activity after those checks; pause
+does not authorize enrollment or new schedules.
+
+Raw `service_role` INSERT/UPDATE/UPSERT/DELETE and key renames are denied.
+The existing authenticated admin settings UPDATE remains trusted for
+compatibility, with full validation, canonicalization and revision/audit;
+admin DELETE/rename and malformed updates are denied. Database-owner
+maintenance/migrations can still insert, update and delete (including malformed
+recovery fixtures), always advancing the durable revision and audit. Renames
+are denied even there. These exceptions preserve existing owner migrations
+and admin consumers; use CAS for normal rollout work. Never bypass a denial
+with a different role or trigger disabling. A concurrent maintenance write can
+fail `55P03`; stop and reread after the competing transaction finishes.
+
+### 10.2 Read, review, write, read back
+
+Start this interactive session with the authorized operator connection. The
+commands below use real functions and five setter arguments. Actor and approval
+reference are asserted strings, nonblank and at most 200 characters each;
+they record the concrete authorization, they do not verify that it exists.
+Keep the old policy and both fingerprints/revision in the private receipt.
+
+```bash
+psql "$DB_URL" -X -v ON_ERROR_STOP=1
+```
+
+```sql
+SET statement_timeout='10s';
+SET lock_timeout='3s';
+SET ROLE service_role;
+\prompt 'Operator identity: ' actor
+\prompt 'Concrete approval reference: ' approval_ref
+SELECT s->>'state' AS state,s->>'fingerprint' AS fingerprint,
+ s->>'raw_fingerprint' AS raw_fingerprint,s->>'revision' AS revision,
+ (s->'policy')::text AS policy
+FROM (SELECT public.get_instagram_collection_rollout_policy() AS s) q \gset before_
+SELECT :'before_state'='valid' AS valid \gset
+\if :valid
+\else
+ \echo 'Stop: use closed recovery in section 10.4.'
+ \quit
+\endif
+-- Supply the reviewed complete owners object, including account_ids.
+-- All requires {"mode":"all","account_ids":[]}; allowlist uses internal UUIDs.
+\prompt 'Reviewed owners JSON: ' owners_json
+SELECT jsonb_set(:'before_policy'::jsonb,'{owners}',:'owners_json'::jsonb)::text AS policy \gset candidate_
+SELECT public.set_instagram_collection_rollout_policy(
+ :'before_fingerprint',:'before_revision'::bigint,:'candidate_policy'::jsonb,
+ :'actor',:'approval_ref') AS result \gset applied_
+SELECT (:'applied_result'::jsonb->>'ok')::boolean AS ok \gset
+\if :ok
+\else
+ \echo :applied_result
+ \quit
+\endif
+SELECT public.get_instagram_collection_rollout_policy() AS snapshot \gset after_
+SELECT :'after_snapshot'::jsonb->>'fingerprint' AS fingerprint,
+ :'after_snapshot'::jsonb->>'revision' AS revision;
+RESET ROLE;
+SELECT created_at,metadata FROM public.system_logs
+WHERE source='instagram-collection-rollout' AND metadata->>'event'='rollout_policy_changed'
+ AND metadata->>'new_revision'=(:'after_snapshot'::jsonb->>'revision')
+ORDER BY created_at DESC LIMIT 1;
+```
+
+Require exactly one committed audit with old/new fingerprints and revisions,
+the asserted actor/reference and `path=cas`. Check fresh canonical policy
+against the reviewed candidate. Empty allowlist admits nobody; all requires
+empty IDs. Duplicate UUIDs/pins, unknown keys or an invalid competitor member
+invalidate the whole document. No owner change may overwrite competitors.
+On `policy_conflict`, reread and review the new complete state; never retry a
+cached full-policy write. A lost setter response requires readback plus audit
+reconciliation; do not blindly submit another write. Every successful write,
+including identical content and rollback, increments revision.
+
+### 10.3 Rollback and stale edit after rollback
+
+Pause affected work first (§10.1). In the same private psql session, retain
+`before_policy`, `before_fingerprint` and `before_revision` from the original
+read. Restore only old owners while preserving the current competitors:
+
+```sql
+SET ROLE service_role;
+\prompt 'Concrete rollback authorization reference: ' rollback_ref
+SELECT public.get_instagram_collection_rollout_policy() AS snapshot \gset live_
+SELECT public.set_instagram_collection_rollout_policy(
+ :'live_snapshot'::jsonb->>'fingerprint',(:'live_snapshot'::jsonb->>'revision')::bigint,
+ jsonb_set(:'live_snapshot'::jsonb->'policy','{owners}',:'before_policy'::jsonb->'owners'),
+ :'actor',:'rollback_ref') AS result \gset rollback_
+SELECT (:'rollback_result'::jsonb->>'ok')::boolean AS ok \gset
+\if :ok
+\else
+ \echo :rollback_result
+ \quit
+\endif
+SELECT public.get_instagram_collection_rollout_policy();
+-- Original A content can repeat, but the original A revision stays stale.
+SELECT public.set_instagram_collection_rollout_policy(
+ :'before_fingerprint',:'before_revision'::bigint,:'candidate_policy'::jsonb,
+ :'actor',:'rollback_ref');
+```
+
+The final statement must return `ok=false, reason_code=policy_conflict`, with
+no policy/revision change and a committed refusal audit. A rollback may restore
+the original fingerprint, never its revision. Verify rollback audit/readback
+as in §10.2. Retain the additive controls, protected-compatible runtime and
+saved data. Do not delete policy rows, decrement revisions or reverse schema.
+
+### 10.4 Missing/malformed recovery
+
+Getter returns `missing` or `malformed`, `policy=null` and an exact raw
+fingerprint (which distinguishes absence from JSON null). Collection remains
+closed by the existing evaluators. Use that fingerprint **and** current
+revision to restore only a closed document, then reread/review before any
+separately authorized enrollment. This intentionally clears unusable policy;
+preserve its private owner-maintenance receipt first. No guessed empty read.
+Open a new private psql session as in §10.2, then:
+
+```sql
+SET statement_timeout='10s';
+SET lock_timeout='3s';
+SET ROLE service_role;
+\prompt 'Operator identity: ' actor
+\prompt 'Concrete closed-recovery approval reference: ' approval_ref
+SELECT public.get_instagram_collection_rollout_policy() AS snapshot \gset recovery_
+SELECT public.set_instagram_collection_rollout_policy(
+ :'recovery_snapshot'::jsonb->>'fingerprint',(:'recovery_snapshot'::jsonb->>'revision')::bigint,
+ '{"version":1,"owners":{"mode":"off","account_ids":[]},"competitors":{"mode":"off","targets":[]}}'::jsonb,
+ :'actor',:'approval_ref');
+SELECT public.get_instagram_collection_rollout_policy();
+```
+
+An enabling recovery returns `recovery_requires_closed_policy`. Audit failure
+raises and rolls back policy, revision and context together; never report a
+write/refusal as confirmed when its transaction failed. The revision tombstone
+survives owner-maintenance deletion. RC-17 behavior, ACLs and audit failure are
+tested in `supabase/tests/analytics_policy_operator_controls.sql`; real
+two-backend removal/edit, missing-row recovery and stale ABA edits are in
+`supabase/tests/analytics_policy_operator_races.sql`. Both run in
+`scripts/db-harness.sh` alongside the unchanged rollout suites.
