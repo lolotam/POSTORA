@@ -1293,7 +1293,7 @@ Deno.test("the copied source without the permit call makes the detector fail", a
   await copyTree(join(FUNCTIONS_ROOT, "_shared"), join(copyRoot, "_shared"));
 
   const transportPath = join(copyRoot, "competitor-snapshot-sync", "graphProvider.ts");
-  const transport = await Deno.readTextFile(transportPath);
+  const transport = (await Deno.readTextFile(transportPath)).replaceAll("\r\n", "\n");
   const anchor =
     "      if (request.permit !== undefined) {\n        await askPermit(request.permit, request.signal);\n      }";
   assert(

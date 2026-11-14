@@ -1,0 +1,513 @@
+-- Real migrated SQL; synthetic secrets are generated, never printed. No provider/network calls.
+BEGIN;
+SET LOCAL request.jwt.claim.role='service_role';
+SELECT set_config('request.jwt.claims','{"role":"service_role"}',true);
+
+DO $grants$
+DECLARE relation text;signature regprocedure;
+BEGIN
+ FOREACH relation IN ARRAY ARRAY['analytics_legacy_bootstrap_jobs','analytics_legacy_bootstrap_epochs',
+  'analytics_legacy_bootstrap_receipts','analytics_legacy_bootstrap_audit','analytics_legacy_bootstrap_run'] LOOP
+  ASSERT (SELECT relrowsecurity FROM pg_class WHERE oid=('public.'||relation)::regclass);
+  ASSERT NOT has_table_privilege('anon','public.'||relation,'SELECT');
+  ASSERT NOT has_table_privilege('authenticated','public.'||relation,'SELECT');
+  ASSERT NOT has_table_privilege('service_role','public.'||relation,'INSERT');
+ END LOOP;
+ FOR signature IN SELECT oid::regprocedure FROM pg_proc WHERE pronamespace='public'::regnamespace AND proname LIKE '%analytics_legacy_bootstrap%' LOOP
+  ASSERT NOT has_function_privilege('authenticated',signature,'EXECUTE');
+  ASSERT NOT has_function_privilege('anon',signature,'EXECUTE');
+ END LOOP;
+ ASSERT (SELECT value='false'::jsonb FROM public.app_settings WHERE key='analytics_legacy_bootstrap_enabled');
+ ASSERT NOT EXISTS(SELECT 1 FROM cron.job WHERE jobname='analytics-legacy-bootstrap-drain' AND active);
+END;
+$grants$;
+
+DO $http_refusal_audit$
+DECLARE reason text;before_count bigint;
+BEGIN
+ SELECT count(*) INTO before_count FROM public.analytics_legacy_bootstrap_audit;
+ FOREACH reason IN ARRAY ARRAY['unauthorized','invalid_method','invalid_request'] LOOP
+  PERFORM public.record_analytics_legacy_bootstrap_refusal(reason);
+  ASSERT EXISTS(SELECT 1 FROM public.analytics_legacy_bootstrap_audit WHERE event='http_refused' AND reason_code=reason
+   AND social_account_id IS NULL AND correlation_id IS NOT NULL);
+ END LOOP;
+ BEGIN
+  PERFORM public.record_analytics_legacy_bootstrap_refusal(gen_random_uuid()::text);
+  RAISE EXCEPTION 'arbitrary audit payload accepted';
+ EXCEPTION WHEN raise_exception THEN IF SQLERRM<>'BOOTSTRAP_INVALID_REFUSAL' THEN RAISE; END IF; END;
+ ASSERT (SELECT count(*)=before_count+3 FROM public.analytics_legacy_bootstrap_audit);
+END;
+$http_refusal_audit$;
+
+INSERT INTO auth.users(id,email) VALUES('ab030000-0000-4000-8000-000000000001','bootstrap-a@example.invalid'),
+ ('ab030000-0000-4000-8000-000000000002','bootstrap-b@example.invalid');
+INSERT INTO public.social_accounts(id,user_id,platform,platform_user_id,platform_username,access_token,account_metadata,ig_auth_type) VALUES
+ ('ab030000-0000-4000-8000-000000000011','ab030000-0000-4000-8000-000000000001','facebook','100001','page',gen_random_uuid()::text,
+  jsonb_build_object('user_token',gen_random_uuid()::text),NULL),
+ ('ab030000-0000-4000-8000-000000000012','ab030000-0000-4000-8000-000000000001','instagram','178001','instagram',gen_random_uuid()::text,
+  '{"facebook_page_id":"100001"}','facebook_page'),
+ ('ab030000-0000-4000-8000-000000000013','ab030000-0000-4000-8000-000000000001','instagram','178002','direct',gen_random_uuid()::text,
+  '{}','business_login'),
+ ('ab030000-0000-4000-8000-000000000014','ab030000-0000-4000-8000-000000000002','facebook','100003','foreign',gen_random_uuid()::text,
+  jsonb_build_object('user_token',gen_random_uuid()::text),NULL);
+
+CREATE FUNCTION pg_temp.bootstrap_policy(ids uuid[]) RETURNS void LANGUAGE plpgsql AS $fn$
+BEGIN
+ UPDATE public.app_settings SET value='true' WHERE key='analytics_legacy_bootstrap_enabled';
+ UPDATE public.app_settings SET value=jsonb_build_object('version',1,'account_ids',ids,'max_accounts_per_run',5,'max_attempts_per_account_per_day',3)
+  WHERE key='analytics_legacy_bootstrap_policy';
+ UPDATE public.analytics_legacy_bootstrap_run SET lease_until=NULL,pause_until=NULL;
+END;
+$fn$;
+CREATE FUNCTION pg_temp.bootstrap_begin(account_id uuid) RETURNS jsonb LANGUAGE plpgsql AS $fn$
+DECLARE run_id uuid:=gen_random_uuid();
+BEGIN
+ PERFORM pg_temp.bootstrap_policy(ARRAY[account_id]);
+ PERFORM public.dispatch_analytics_legacy_bootstrap(run_id);
+ RETURN public.begin_analytics_legacy_bootstrap(account_id,gen_random_uuid(),run_id);
+END;
+$fn$;
+CREATE FUNCTION pg_temp.bootstrap_evidence(capture jsonb) RETURNS jsonb LANGUAGE sql AS $fn$
+ SELECT jsonb_build_object('app_id','200001','provider_user_id',CASE WHEN capture->'capture'->>'login_kind'='direct' THEN '178002' ELSE '300001' END,
+  'page_id',capture->'capture'->>'page_id','instagram_user_id',CASE WHEN capture->'capture'->>'platform'='instagram' THEN capture->'capture'->>'platform_user_id' END,
+  'token_type','USER','verified_at',clock_timestamp(),'expires_at',clock_timestamp()+interval '1 hour');
+$fn$;
+CREATE FUNCTION pg_temp.bootstrap_commit(capture jsonb) RETURNS jsonb LANGUAGE plpgsql AS $fn$
+BEGIN
+ PERFORM public.permit_analytics_legacy_bootstrap((capture->>'run_id')::uuid,(capture->>'job_id')::uuid,(capture->>'lease_id')::uuid,(capture->>'revision')::bigint,'200001');
+ RETURN public.commit_analytics_legacy_bootstrap((capture->>'job_id')::uuid,(capture->>'lease_id')::uuid,(capture->>'revision')::bigint,pg_temp.bootstrap_evidence(capture));
+END;
+$fn$;
+
+DO $policy$
+DECLARE policy jsonb;result jsonb;run_id uuid:=gen_random_uuid();
+BEGIN
+ ASSERT public.dispatch_analytics_legacy_bootstrap(run_id)->>'status'='disabled';
+ PERFORM pg_temp.bootstrap_policy('{}');
+ ASSERT public.dispatch_analytics_legacy_bootstrap(run_id)->'account_ids'='[]'::jsonb;
+ FOREACH policy IN ARRAY ARRAY[
+  '{"version":1,"account_ids":[],"max_accounts_per_run":6,"max_attempts_per_account_per_day":3}'::jsonb,
+  '{"version":1,"account_ids":[],"max_accounts_per_run":5,"max_attempts_per_account_per_day":4}'::jsonb,
+  '{"version":1,"account_ids":[],"max_accounts_per_run":5,"max_attempts_per_account_per_day":3,"extra":1}'::jsonb,
+  '{"version":1,"account_ids":["ab030000-0000-4000-8000-000000000012","ab030000-0000-4000-8000-000000000012"],"max_accounts_per_run":5,"max_attempts_per_account_per_day":3}'::jsonb] LOOP
+  UPDATE public.app_settings SET value=policy WHERE key='analytics_legacy_bootstrap_policy';
+  result:=public.dispatch_analytics_legacy_bootstrap(run_id);
+  ASSERT result->>'status'='settings_unavailable';
+ END LOOP;
+END;
+$policy$;
+
+DO $stale$
+DECLARE capture jsonb;result jsonb;scenario text;account_id uuid:='ab030000-0000-4000-8000-000000000012';
+BEGIN
+ -- These commits occur between capture and install, exactly as during network verification.
+ FOREACH scenario IN ARRAY ARRAY['token_without_timestamp','disconnect','identity','capability_aba','fence_aba','expired_lease'] LOOP
+  capture:=pg_temp.bootstrap_begin(account_id);
+  ASSERT capture->>'state'='verifying','capture must precede network';
+  CASE scenario
+   WHEN 'token_without_timestamp' THEN UPDATE public.social_accounts SET account_metadata=jsonb_set(account_metadata,'{user_token}',to_jsonb(gen_random_uuid()::text))
+    WHERE id='ab030000-0000-4000-8000-000000000011';
+   WHEN 'disconnect' THEN UPDATE public.social_accounts SET is_active=false WHERE id=account_id;
+   WHEN 'identity' THEN UPDATE public.social_accounts SET platform_user_id='178099' WHERE id=account_id;
+   WHEN 'capability_aba' THEN
+    INSERT INTO public.instagram_account_capabilities(social_account_id,user_id,login_kind) VALUES(account_id,'ab030000-0000-4000-8000-000000000001','page_linked');
+    DELETE FROM public.instagram_account_capabilities WHERE social_account_id=account_id;
+   WHEN 'fence_aba' THEN
+    PERFORM public.facebook_user_credential_allocate_connection_version(account_id,'ab030000-0000-4000-8000-000000000001','instagram');
+    DELETE FROM public.facebook_user_credential_connection_fences WHERE social_account_id=account_id;
+   WHEN 'expired_lease' THEN UPDATE public.analytics_legacy_bootstrap_jobs SET lease_until=clock_timestamp()-interval '1 second' WHERE social_account_id=account_id;
+  END CASE;
+  result:=pg_temp.bootstrap_commit(capture);
+  ASSERT result->>'reason_code'='stale_capture',scenario||' must refuse';
+  ASSERT NOT EXISTS(SELECT 1 FROM public.facebook_user_credential_bindings WHERE social_account_id=account_id);
+  DELETE FROM public.analytics_legacy_bootstrap_jobs WHERE social_account_id=account_id;
+  UPDATE public.social_accounts SET is_active=true,platform_user_id='178001' WHERE id=account_id;
+ END LOOP;
+END;
+$stale$;
+
+DO $install$
+DECLARE capture jsonb;installed jsonb;reconciled jsonb;permissions jsonb;credential uuid;page_token text;
+BEGIN
+ SELECT access_token INTO page_token FROM public.social_accounts WHERE id='ab030000-0000-4000-8000-000000000012';
+ -- Generation zero must become positive without a fabricated OAuth attempt.
+ INSERT INTO public.instagram_account_capabilities(social_account_id,user_id,login_kind)
+  VALUES('ab030000-0000-4000-8000-000000000012','ab030000-0000-4000-8000-000000000001','page_linked');
+ capture:=pg_temp.bootstrap_begin('ab030000-0000-4000-8000-000000000012');
+ installed:=pg_temp.bootstrap_commit(capture);
+ ASSERT installed->>'state'='permission_pending';
+ ASSERT (SELECT credential_generation=1 AND permission_read_state='unknown' FROM public.instagram_account_capabilities WHERE social_account_id='ab030000-0000-4000-8000-000000000012');
+ ASSERT (SELECT access_token=page_token FROM public.social_accounts WHERE id='ab030000-0000-4000-8000-000000000012');
+ ASSERT public.analytics_bootstrap_binding_verified('ab030000-0000-4000-8000-000000000012');
+ SELECT credential_id INTO credential FROM public.facebook_user_credential_bindings WHERE social_account_id='ab030000-0000-4000-8000-000000000012';
+ ASSERT (SELECT provenance_source='verified_legacy_bootstrap' FROM public.facebook_user_credentials WHERE id=credential);
+ -- Lost response: reconcile by the durable idempotency key, never create/install again.
+ SELECT public.reconcile_analytics_legacy_bootstrap('ab030000-0000-4000-8000-000000000012',idempotency_key) INTO reconciled
+  FROM public.analytics_legacy_bootstrap_jobs WHERE social_account_id='ab030000-0000-4000-8000-000000000012';
+ ASSERT reconciled=installed;
+ ASSERT NOT reconciled ? 'capture' AND NOT reconciled ? 'input_fence';
+ ASSERT (SELECT count(*)=1 FROM public.analytics_legacy_bootstrap_receipts WHERE job_id=(capture->>'job_id')::uuid);
+ permissions:=jsonb_build_object('state','failed','scopes','[]'::jsonb,'observed_at',clock_timestamp());
+ installed:=public.complete_analytics_legacy_bootstrap((capture->>'job_id')::uuid,(capture->>'lease_id')::uuid,(installed->>'revision')::bigint,permissions);
+ ASSERT installed->>'state'='permission_pending';
+ ASSERT (SELECT permission_read_state='failed' AND scopes_read_at IS NULL FROM public.instagram_account_capabilities WHERE social_account_id='ab030000-0000-4000-8000-000000000012');
+ UPDATE public.analytics_legacy_bootstrap_jobs SET retry_at=NULL WHERE social_account_id='ab030000-0000-4000-8000-000000000012';
+ capture:=pg_temp.bootstrap_begin('ab030000-0000-4000-8000-000000000012');
+ permissions:=jsonb_build_object('state','ok','scopes','[]'::jsonb,'observed_at',clock_timestamp());
+ installed:=public.complete_analytics_legacy_bootstrap((capture->>'job_id')::uuid,(capture->>'lease_id')::uuid,(capture->>'revision')::bigint,permissions);
+ ASSERT installed->>'state'='permissions_missing','a complete empty read is authoritative missing permission';
+ ASSERT NOT EXISTS(SELECT 1 FROM public.instagram_collection_jobs WHERE social_account_id='ab030000-0000-4000-8000-000000000012');
+END;
+$install$;
+
+DO $live_authority_fence$
+BEGIN
+ BEGIN
+  UPDATE public.facebook_user_credential_connection_fences SET connection_version=connection_version+1
+   WHERE social_account_id='ab030000-0000-4000-8000-000000000012';
+  ASSERT NOT public.analytics_bootstrap_binding_verified('ab030000-0000-4000-8000-000000000012');
+  BEGIN
+   PERFORM public.read_facebook_user_account_credential('ab030000-0000-4000-8000-000000000001','ab030000-0000-4000-8000-000000000012');
+   RAISE EXCEPTION 'a receipt alone must not expose a credential after the live connection fence moved';
+  EXCEPTION WHEN SQLSTATE 'FUC03' THEN NULL; END;
+  RAISE EXCEPTION 'roll back only this deliberate fence corruption' USING ERRCODE='TST01';
+ EXCEPTION WHEN SQLSTATE 'TST01' THEN NULL; END;
+ ASSERT public.analytics_bootstrap_binding_verified('ab030000-0000-4000-8000-000000000012');
+END;
+$live_authority_fence$;
+
+DO $direct_and_facebook$
+DECLARE capture jsonb;installed jsonb;result jsonb;target uuid;
+BEGIN
+ FOREACH target IN ARRAY ARRAY['ab030000-0000-4000-8000-000000000013'::uuid,'ab030000-0000-4000-8000-000000000011'::uuid] LOOP
+  capture:=pg_temp.bootstrap_begin(target);
+  installed:=pg_temp.bootstrap_commit(capture);
+  ASSERT installed->>'state'='permission_pending';
+  result:=public.complete_analytics_legacy_bootstrap((capture->>'job_id')::uuid,(capture->>'lease_id')::uuid,(installed->>'revision')::bigint,
+   jsonb_build_object('state','ok','scopes',CASE WHEN target='ab030000-0000-4000-8000-000000000013' THEN
+    '["instagram_business_manage_insights"]'::jsonb ELSE '["pages_read_engagement","read_insights"]'::jsonb END,'observed_at',clock_timestamp()));
+  ASSERT result->>'state'='ready';
+ END LOOP;
+ ASSERT NOT EXISTS(SELECT 1 FROM public.facebook_user_credential_bindings WHERE social_account_id='ab030000-0000-4000-8000-000000000013');
+ ASSERT public.meta_analytics_current_authority('facebook','ab030000-0000-4000-8000-000000000011','ab030000-0000-4000-8000-000000000001') IS NOT NULL;
+ ASSERT NOT public.meta_analytics_collection_allowed('facebook','ab030000-0000-4000-8000-000000000011');
+ ASSERT NOT EXISTS(SELECT 1 FROM public.fb_analytics_report_state WHERE social_account_id='ab030000-0000-4000-8000-000000000011');
+ ASSERT (SELECT state='verified' FROM public.fb_analytics_permission_observations WHERE social_account_id='ab030000-0000-4000-8000-000000000011');
+END;
+$direct_and_facebook$;
+
+DO $ownership_and_budget$
+DECLARE result jsonb;run_id uuid:=gen_random_uuid();capture jsonb;counter integer;
+BEGIN
+ PERFORM pg_temp.bootstrap_policy(ARRAY['ab030000-0000-4000-8000-000000000014'::uuid]);
+ PERFORM public.dispatch_analytics_legacy_bootstrap(run_id);
+ capture:=public.begin_analytics_legacy_bootstrap('ab030000-0000-4000-8000-000000000014',gen_random_uuid(),run_id);
+ ASSERT capture->>'user_id'='ab030000-0000-4000-8000-000000000002';
+ FOR counter IN 1..50 LOOP
+  ASSERT public.permit_analytics_legacy_bootstrap(run_id,(capture->>'job_id')::uuid,(capture->>'lease_id')::uuid,(capture->>'revision')::bigint,'200001');
+ END LOOP;
+ ASSERT NOT public.permit_analytics_legacy_bootstrap(run_id,(capture->>'job_id')::uuid,(capture->>'lease_id')::uuid,(capture->>'revision')::bigint,'200001');
+ PERFORM public.record_analytics_legacy_bootstrap_usage(run_id,(capture->>'job_id')::uuid,85,clock_timestamp()+interval '3 days','200001');
+ ASSERT (SELECT throttled_until>clock_timestamp()+interval '2 days' FROM public.instagram_provider_throttle_buckets
+  WHERE bucket_key=encode(extensions.digest('owned_analytics:app:facebook:200001','sha256'),'hex'));
+ DELETE FROM public.instagram_provider_throttle_buckets WHERE bucket_key=encode(extensions.digest('owned_analytics:app:facebook:200001','sha256'),'hex');
+ ASSERT NOT (SELECT row_to_json(a)::text ~ '(access_token|user_token|input_fence)' FROM public.analytics_legacy_bootstrap_audit a LIMIT 1);
+END;
+$ownership_and_budget$;
+
+DO $permission_monotonic_and_policy$
+DECLARE capture jsonb;installed jsonb;target uuid:='ab030000-0000-4000-8000-000000000012';generation bigint;credential uuid;
+BEGIN
+ -- A current protected capability takes permission refresh, never a generation reset or a new grant.
+ SELECT credential_generation INTO generation FROM public.instagram_account_capabilities WHERE social_account_id=target;
+ SELECT credential_id INTO credential FROM public.facebook_user_credential_bindings WHERE social_account_id=target;
+ PERFORM public.write_instagram_account_capability(target,'ab030000-0000-4000-8000-000000000001',
+  jsonb_build_object('login_kind','page_linked','expected_credential_generation',generation,'permission_read_state','ok',
+   'granted_scopes',ARRAY['instagram_manage_insights'],'scopes_read_at',clock_timestamp()));
+ UPDATE public.analytics_legacy_bootstrap_jobs SET state='permission_pending',retry_at=NULL,
+  attempt_times=ARRAY(SELECT t-interval '25 hours' FROM unnest(attempt_times) t) WHERE social_account_id=target;
+ capture:=pg_temp.bootstrap_begin(target);
+ ASSERT capture->>'state'='permission_pending' AND (capture->>'installed')::boolean;
+ ASSERT (SELECT credential_generation=generation FROM public.instagram_account_capabilities WHERE social_account_id=target);
+ ASSERT (SELECT credential_id=credential FROM public.facebook_user_credential_bindings WHERE social_account_id=target);
+ UPDATE public.app_settings SET value='false' WHERE key='analytics_legacy_bootstrap_enabled';
+ installed:=public.complete_analytics_legacy_bootstrap((capture->>'job_id')::uuid,(capture->>'lease_id')::uuid,(capture->>'revision')::bigint,
+  jsonb_build_object('state','ok','scopes',ARRAY['instagram_manage_insights'],'observed_at',clock_timestamp()));
+ ASSERT installed->>'reason_code'='stale_capture','revocation must stop permission completion after install';
+ UPDATE public.app_settings SET value='true' WHERE key='analytics_legacy_bootstrap_enabled';
+ installed:=public.complete_analytics_legacy_bootstrap((capture->>'job_id')::uuid,(capture->>'lease_id')::uuid,(capture->>'revision')::bigint,
+  jsonb_build_object('state','failed','scopes','[]'::jsonb,'observed_at',clock_timestamp()));
+ ASSERT installed->>'state'='permission_pending';
+ ASSERT (SELECT permission_read_state='ok' AND granted_scopes @> ARRAY['instagram_manage_insights'] AND last_read_failed_at IS NOT NULL
+  FROM public.instagram_account_capabilities WHERE social_account_id=target),'transient failure must preserve monotonic successful evidence';
+END;
+$permission_monotonic_and_policy$;
+
+DO $untrusted_evidence$
+DECLARE capture jsonb;evidence jsonb;outcome jsonb;scenario text;target uuid:='ab030000-0000-4000-8000-000000000015';
+BEGIN
+ INSERT INTO public.social_accounts(id,user_id,platform,platform_user_id,platform_username,access_token,account_metadata,ig_auth_type)
+ VALUES(target,'ab030000-0000-4000-8000-000000000001','instagram','178009','proof_fixture',gen_random_uuid()::text,'{"facebook_page_id":"100001"}','facebook_page');
+ FOREACH scenario IN ARRAY ARRAY['app','type','page','instagram'] LOOP
+  capture:=pg_temp.bootstrap_begin(target);
+  ASSERT capture->>'state'='verifying';
+  ASSERT public.permit_analytics_legacy_bootstrap((capture->>'run_id')::uuid,(capture->>'job_id')::uuid,(capture->>'lease_id')::uuid,(capture->>'revision')::bigint,'200001');
+  evidence:=pg_temp.bootstrap_evidence(capture)||CASE scenario WHEN 'app' THEN '{"app_id":"200002"}'::jsonb
+   WHEN 'type' THEN '{"token_type":"PAGE"}'::jsonb WHEN 'page' THEN '{"page_id":"100099"}'::jsonb ELSE '{"instagram_user_id":"178099"}'::jsonb END;
+  outcome:=public.commit_analytics_legacy_bootstrap((capture->>'job_id')::uuid,(capture->>'lease_id')::uuid,(capture->>'revision')::bigint,evidence);
+  ASSERT outcome->>'reason_code'=CASE scenario WHEN 'app' THEN 'app_mismatch' WHEN 'type' THEN 'token_invalid' ELSE 'identity_mismatch' END;
+  ASSERT NOT EXISTS(SELECT 1 FROM public.instagram_account_capabilities WHERE social_account_id=target);
+  ASSERT NOT EXISTS(SELECT 1 FROM public.facebook_user_credential_bindings WHERE social_account_id=target);
+  DELETE FROM public.analytics_legacy_bootstrap_jobs WHERE social_account_id=target;
+ END LOOP;
+END;
+$untrusted_evidence$;
+
+DO $expired_protected_fallback$
+DECLARE source_credential uuid;original_secret text;original_revision bigint;capture jsonb;outcome jsonb;
+ target uuid:='ab030000-0000-4000-8000-000000000016';
+BEGIN
+ SELECT c.id,c.token,c.revision INTO source_credential,original_secret,original_revision FROM public.facebook_user_credentials c
+  JOIN public.facebook_user_credential_bindings b ON b.credential_id=c.id WHERE b.social_account_id='ab030000-0000-4000-8000-000000000011';
+ UPDATE public.facebook_user_credentials SET token_expires_at=clock_timestamp()-interval '1 day' WHERE id=source_credential;
+ INSERT INTO public.social_accounts(id,user_id,platform,platform_user_id,platform_username,access_token,account_metadata,ig_auth_type)
+ VALUES(target,'ab030000-0000-4000-8000-000000000001','instagram','178016','fallback_fixture',gen_random_uuid()::text,'{"facebook_page_id":"100001"}','facebook_page');
+ capture:=pg_temp.bootstrap_begin(target);
+ ASSERT capture->>'state'='verifying','a stored same-owner Page candidate must not force reconnect merely because another stored grant expired';
+ outcome:=pg_temp.bootstrap_commit(capture);
+ ASSERT outcome->>'state'='permission_pending';
+ ASSERT (SELECT credential_id<>source_credential FROM public.facebook_user_credential_bindings WHERE social_account_id=target);
+ ASSERT (SELECT credential_id=source_credential FROM public.facebook_user_credential_bindings WHERE social_account_id='ab030000-0000-4000-8000-000000000011');
+ ASSERT (SELECT token=original_secret AND revision=original_revision FROM public.facebook_user_credentials WHERE id=source_credential),
+  'installing an isolated grant must not replace the old shared grant';
+END;
+$expired_protected_fallback$;
+
+DO $reopened_login_kind$
+DECLARE target uuid:='ab030000-0000-4000-8000-000000000013';capture jsonb;outcome jsonb;kind text;
+BEGIN
+ FOREACH kind IN ARRAY ARRAY['page_linked','direct'] LOOP
+  UPDATE public.instagram_account_capabilities SET login_kind=kind,credential_generation=credential_generation+1,
+   credential_updated_at=clock_timestamp(),permission_read_state='unknown',granted_scopes='{}',scopes_read_at=NULL
+   WHERE social_account_id=target;
+  UPDATE public.social_accounts SET account_metadata='{"facebook_page_id":"100001"}',
+   ig_auth_type=CASE WHEN kind='direct' THEN 'business_login' ELSE 'facebook_page' END WHERE id=target;
+  IF kind='direct' THEN DELETE FROM public.facebook_user_credential_bindings WHERE social_account_id=target; END IF;
+  capture:=pg_temp.bootstrap_begin(target);
+  ASSERT capture->'capture'->>'login_kind'=kind;
+  ASSERT (SELECT login_kind=kind FROM public.analytics_legacy_bootstrap_jobs WHERE social_account_id=target),
+   'reopened job must persist the current login family';
+  outcome:=CASE WHEN (capture->>'installed')::boolean THEN capture ELSE pg_temp.bootstrap_commit(capture) END;
+  outcome:=public.complete_analytics_legacy_bootstrap((capture->>'job_id')::uuid,(capture->>'lease_id')::uuid,(outcome->>'revision')::bigint,
+   jsonb_build_object('state','ok','scopes',CASE WHEN kind='direct' THEN '["instagram_business_manage_insights"]'::jsonb
+    ELSE '["instagram_manage_insights"]'::jsonb END,'observed_at',clock_timestamp()));
+  ASSERT outcome->>'state'='ready','completion must use the reconnected family scope';
+ END LOOP;
+END;
+$reopened_login_kind$;
+
+DO $protected_without_facebook_row$
+DECLARE target uuid:='ab030000-0000-4000-8000-000000000017';owner_id uuid:='ab030000-0000-4000-8000-000000000001';
+ credential uuid:=gen_random_uuid();capture jsonb;outcome jsonb;
+BEGIN
+ INSERT INTO public.social_accounts(id,user_id,platform,platform_user_id,platform_username,access_token,account_metadata,ig_auth_type)
+ VALUES(target,owner_id,'instagram','178017','protected_only',gen_random_uuid()::text,'{}','facebook_page');
+ INSERT INTO public.facebook_user_credentials(id,user_id,token,provider_user_id,provenance_source,provenance_captured_at)
+ VALUES(credential,owner_id,gen_random_uuid()::text,'300001','oauth_exchange',clock_timestamp());
+ INSERT INTO public.facebook_user_credential_bindings(social_account_id,user_id,platform,credential_id,verified_facebook_user_id,
+  verified_facebook_page_id,verified_instagram_user_id,evidence_source,connection_version)
+ VALUES(target,owner_id,'instagram',credential,'300001','100017','178017','oauth_exchange',
+  public.facebook_user_credential_allocate_connection_version(target,owner_id,'instagram'));
+ capture:=pg_temp.bootstrap_begin(target);
+ ASSERT capture->>'state'='verifying','an account-bound protected grant needs no Facebook account row';
+ ASSERT capture->'capture'->>'page_id'='100017';
+ -- A protected token still cannot install evidence for a different Page.
+ PERFORM public.permit_analytics_legacy_bootstrap((capture->>'run_id')::uuid,(capture->>'job_id')::uuid,(capture->>'lease_id')::uuid,(capture->>'revision')::bigint,'200001');
+ outcome:=public.commit_analytics_legacy_bootstrap((capture->>'job_id')::uuid,(capture->>'lease_id')::uuid,(capture->>'revision')::bigint,
+  pg_temp.bootstrap_evidence(capture)||'{"page_id":"100099"}'::jsonb);
+ ASSERT outcome->>'reason_code'='identity_mismatch';
+ outcome:=pg_temp.bootstrap_commit(capture);
+ ASSERT outcome->>'state'='permission_pending';
+ ASSERT (SELECT credential_id=credential FROM public.facebook_user_credential_bindings WHERE social_account_id=target);
+END;
+$protected_without_facebook_row$;
+
+DO $permission_timestamp_precision$
+DECLARE target uuid:='ab030000-0000-4000-8000-000000000018';capture jsonb;outcome jsonb;installed timestamptz;observed timestamptz;
+BEGIN
+ INSERT INTO public.social_accounts(id,user_id,platform,platform_user_id,platform_username,access_token,account_metadata,ig_auth_type)
+ VALUES(target,'ab030000-0000-4000-8000-000000000001','instagram','178018','precision',gen_random_uuid()::text,
+  '{"facebook_page_id":"100001"}','facebook_page');
+ capture:=pg_temp.bootstrap_begin(target);
+ outcome:=pg_temp.bootstrap_commit(capture);
+ SELECT installed_at INTO installed FROM public.analytics_legacy_bootstrap_jobs WHERE social_account_id=target;
+ observed:=date_trunc('milliseconds',installed);
+ BEGIN
+  PERFORM public.complete_analytics_legacy_bootstrap((capture->>'job_id')::uuid,(capture->>'lease_id')::uuid,(outcome->>'revision')::bigint,
+   jsonb_build_object('state','ok','scopes','["instagram_manage_insights"]'::jsonb,'observed_at',observed-interval '1 millisecond'));
+  RAISE EXCEPTION 'a prior millisecond must remain stale';
+ EXCEPTION WHEN raise_exception THEN IF SQLERRM<>'BOOTSTRAP_PERMISSION_STALE' THEN RAISE; END IF; END;
+ outcome:=public.complete_analytics_legacy_bootstrap((capture->>'job_id')::uuid,(capture->>'lease_id')::uuid,(outcome->>'revision')::bigint,
+  jsonb_build_object('state','ok','scopes','["instagram_manage_insights"]'::jsonb,'observed_at',observed));
+ ASSERT outcome->>'state'='ready','post-install millisecond observation must not fail microsecond comparison';
+ ASSERT (SELECT scopes_read_at>installed AND scopes_read_at>credential_updated_at FROM public.instagram_account_capabilities WHERE social_account_id=target);
+END;
+$permission_timestamp_precision$;
+
+DO $compatibility_grant_with_facebook_source$
+DECLARE target uuid:='ab030000-0000-4000-8000-000000000019';owner_id uuid:='ab030000-0000-4000-8000-000000000001';
+ credential uuid:=gen_random_uuid();capture jsonb;outcome jsonb;
+BEGIN
+ INSERT INTO public.social_accounts(id,user_id,platform,platform_user_id,platform_username,access_token,account_metadata,ig_auth_type)
+ VALUES(target,owner_id,'instagram','178019','compatibility',gen_random_uuid()::text,'{"facebook_page_id":"100001"}','facebook_page');
+ INSERT INTO public.facebook_user_credentials(id,user_id,token,provider_user_id,provenance_source,provenance_captured_at)
+ VALUES(credential,owner_id,gen_random_uuid()::text,'300001','oauth_exchange',clock_timestamp());
+ INSERT INTO public.facebook_user_credential_bindings(social_account_id,user_id,platform,credential_id,evidence_source,connection_version)
+ VALUES(target,owner_id,'instagram',credential,'compatibility_task3a',
+  public.facebook_user_credential_allocate_connection_version(target,owner_id,'instagram'));
+ capture:=pg_temp.bootstrap_begin(target);
+ ASSERT capture->>'state'='verifying';
+ outcome:=pg_temp.bootstrap_commit(capture);
+ ASSERT outcome->>'state'='permission_pending','compatibility grants must retain the captured Facebook Page source check';
+ ASSERT public.analytics_bootstrap_binding_verified(target);
+END;
+$compatibility_grant_with_facebook_source$;
+
+DO $eligible_protected_source$
+DECLARE owner_id uuid:='ab030000-0000-4000-8000-000000000001';target uuid;page_account uuid;
+ target_credential uuid;source_credential uuid;capture jsonb;outcome jsonb;scenario text;source_token text;
+BEGIN
+ -- A trusted but unusable target must take verification of the usable source,
+ -- not permission-only repair of its old binding. No legacy metadata fallback exists.
+ FOREACH scenario IN ARRAY ARRAY['expired','both_usable','wrong_provider'] LOOP
+  target:=gen_random_uuid();page_account:=gen_random_uuid();target_credential:=gen_random_uuid();source_credential:=gen_random_uuid();source_token:=gen_random_uuid()::text;
+  INSERT INTO public.social_accounts(id,user_id,platform,platform_user_id,platform_username,access_token,account_metadata,ig_auth_type)
+  VALUES(page_account,owner_id,'facebook','100901','source',gen_random_uuid()::text,'{}',NULL),
+   (target,owner_id,'instagram','178901','target',gen_random_uuid()::text,'{"facebook_page_id":"100901"}','facebook_page');
+  INSERT INTO public.facebook_user_credentials(id,user_id,token,provider_user_id,provenance_source,provenance_captured_at,token_expires_at,lifecycle)
+  VALUES(target_credential,owner_id,gen_random_uuid()::text,'300001','oauth_exchange',clock_timestamp(),
+    CASE WHEN scenario IN ('expired','wrong_provider') THEN clock_timestamp()-interval '1 second' ELSE clock_timestamp()+interval '1 hour' END,
+    'active'),
+   (source_credential,owner_id,source_token,CASE WHEN scenario='wrong_provider' THEN '300999' ELSE '300001' END,'oauth_exchange',clock_timestamp(),clock_timestamp()+interval '1 hour','active');
+  INSERT INTO public.facebook_user_credential_bindings(social_account_id,user_id,platform,credential_id,evidence_source,
+   verified_facebook_user_id,verified_facebook_page_id,verified_instagram_user_id,connection_version)
+  VALUES(target,owner_id,'instagram',target_credential,'oauth_exchange','300001','100901','178901',
+    public.facebook_user_credential_allocate_connection_version(target,owner_id,'instagram')),
+   (page_account,owner_id,'facebook',source_credential,'oauth_exchange',CASE WHEN scenario='wrong_provider' THEN '300999' ELSE '300001' END,NULL,NULL,
+    public.facebook_user_credential_allocate_connection_version(page_account,owner_id,'facebook'));
+  INSERT INTO public.instagram_account_capabilities(social_account_id,user_id,login_kind,credential_generation,credential_updated_at)
+  VALUES(target,owner_id,'page_linked',1,clock_timestamp());
+  capture:=pg_temp.bootstrap_begin(target);
+  IF scenario='both_usable' THEN
+   ASSERT capture->>'state'='permission_pending','prefer eligible target authority';
+   ASSERT (SELECT source_credential_id=target_credential FROM public.analytics_legacy_bootstrap_jobs WHERE social_account_id=target);
+  ELSE
+   ASSERT capture->>'state'='verifying',scenario||': usable source requires verification before permission repair';
+   ASSERT NOT (capture->>'installed')::boolean;
+   ASSERT capture->'capture'->>'token'=source_token,'capture must select the protected User token';
+   ASSERT (SELECT source_credential_id=source_credential AND source_kind='protected' FROM public.analytics_legacy_bootstrap_jobs WHERE social_account_id=target);
+   outcome:=pg_temp.bootstrap_commit(capture);
+   IF scenario='wrong_provider' THEN
+    ASSERT outcome->>'reason_code'='identity_mismatch','source fallback cannot replace a different verified identity';
+    ASSERT (SELECT credential_id=target_credential FROM public.facebook_user_credential_bindings WHERE social_account_id=target);
+   ELSE
+    ASSERT outcome->>'state'='permission_pending';
+    ASSERT (SELECT credential_id=source_credential FROM public.facebook_user_credential_bindings WHERE social_account_id=target),'install must attach selected source';
+    ASSERT (SELECT credential_generation=2 FROM public.instagram_account_capabilities WHERE social_account_id=target),'replacement must fence the old generation';
+    ASSERT public.analytics_bootstrap_binding_verified(target);
+    ASSERT NOT EXISTS(SELECT 1 FROM public.facebook_user_credentials WHERE id=target_credential),'remove only the now-unbound expired grant';
+   END IF;
+  END IF;
+  ASSERT (SELECT token=source_token AND revision=1 FROM public.facebook_user_credentials WHERE id=source_credential),'source grant must remain unchanged';
+  DELETE FROM public.social_accounts WHERE id IN(target,page_account);
+ END LOOP;
+END;
+$eligible_protected_source$;
+
+DO $usage_cooldown$
+DECLARE capture jsonb;run_id uuid;bucket text:=encode(extensions.digest('owned_analytics:app:facebook:200001','sha256'),'hex');
+ original_pause timestamptz;reported timestamptz;writer text;
+BEGIN
+ DELETE FROM public.analytics_legacy_bootstrap_jobs WHERE social_account_id='ab030000-0000-4000-8000-000000000014';
+ capture:=pg_temp.bootstrap_begin('ab030000-0000-4000-8000-000000000014');
+ run_id:=(capture->>'run_id')::uuid;
+ ASSERT public.permit_analytics_legacy_bootstrap(run_id,(capture->>'job_id')::uuid,(capture->>'lease_id')::uuid,(capture->>'revision')::bigint,'200001');
+ FOREACH writer IN ARRAY ARRAY['bootstrap','collection'] LOOP
+  PERFORM public.record_analytics_legacy_bootstrap_usage(run_id,(capture->>'job_id')::uuid,85,NULL,'200001');
+  SELECT throttled_until,last_reported_at INTO original_pause,reported FROM public.instagram_provider_throttle_buckets WHERE bucket_key=bucket;
+  ASSERT original_pause>clock_timestamp()+interval '4 minutes';
+  IF writer='bootstrap' THEN
+   PERFORM public.record_analytics_legacy_bootstrap_usage(run_id,(capture->>'job_id')::uuid,20,NULL,'200001');
+  ELSE
+   PERFORM public.record_instagram_provider_throttle_http(bucket,20,NULL,NULL,NULL,NULL);
+  END IF;
+  ASSERT (SELECT usage_percent=20 AND CASE WHEN writer='collection' THEN last_reported_at=transaction_timestamp() ELSE last_reported_at>=reported END
+   AND throttled_until=original_pause
+   FROM public.instagram_provider_throttle_buckets WHERE bucket_key=bucket),writer||': latest low usage must preserve, but never renew, the prior pause';
+  ASSERT NOT public.permit_analytics_legacy_bootstrap(run_id,(capture->>'job_id')::uuid,(capture->>'lease_id')::uuid,(capture->>'revision')::bigint,'200001'),'low usage cannot cancel an active pause';
+  -- Model passage beyond the original cooldown without sleeping or changing production clocks.
+  UPDATE public.analytics_legacy_bootstrap_run SET pause_until=clock_timestamp()-interval '1 second';
+  UPDATE public.instagram_provider_throttle_buckets SET throttled_until=clock_timestamp()-interval '1 second',last_reported_at=clock_timestamp()-interval '6 minutes' WHERE bucket_key=bucket;
+  ASSERT public.permit_analytics_legacy_bootstrap(run_id,(capture->>'job_id')::uuid,(capture->>'lease_id')::uuid,(capture->>'revision')::bigint,'200001');
+  PERFORM public.record_analytics_legacy_bootstrap_usage(run_id,(capture->>'job_id')::uuid,20,NULL,'200001');
+  ASSERT public.permit_analytics_legacy_bootstrap(run_id,(capture->>'job_id')::uuid,(capture->>'lease_id')::uuid,(capture->>'revision')::bigint,'200001'),'low report after cooldown cannot resurrect high usage';
+ END LOOP;
+ DELETE FROM public.instagram_provider_throttle_buckets WHERE bucket_key=bucket;
+END;
+$usage_cooldown$;
+
+DO $all_authority_readers$
+DECLARE owner_id uuid:='ab030000-0000-4000-8000-000000000001';target uuid;credential uuid;capture jsonb;projection jsonb;
+BEGIN
+ FOREACH target IN ARRAY ARRAY['ab030000-0000-4000-8000-000000000011'::uuid,'ab030000-0000-4000-8000-000000000012'::uuid] LOOP
+  SELECT credential_id INTO STRICT credential FROM public.facebook_user_credential_bindings WHERE social_account_id=target;
+  ASSERT (SELECT evidence_source='verified_legacy_bootstrap' FROM public.facebook_user_credential_bindings WHERE social_account_id=target);
+  ASSERT public.analytics_bootstrap_binding_verified(target);
+  ASSERT (public.read_facebook_user_account_credential(owner_id,target)->>'found')::boolean;
+  ASSERT (public.read_facebook_user_credential(owner_id,credential)->>'found')::boolean;
+  projection:=public.describe_facebook_user_credential(owner_id,credential);
+  ASSERT projection->>'provenance_source'='verified_legacy_bootstrap';
+  ASSERT public.facebook_user_credential_status(owner_id,credential)=projection;
+  capture:=public.meta_oauth_attempt_capture_account(owner_id,target);
+  PERFORM public.meta_oauth_attempt_require_captured_account(owner_id,capture);
+  ASSERT public.meta_oauth_attempt_capture_grant(owner_id,credential) IS NOT NULL;
+  capture:=public.meta_account_refresh_capture_account(owner_id,target);
+  PERFORM public.meta_account_refresh_require_captured_account(owner_id,capture);
+  ASSERT public.meta_account_refresh_capture_members(owner_id,credential) IS NOT NULL;
+  IF target='ab030000-0000-4000-8000-000000000011' THEN
+   ASSERT public.meta_analytics_current_authority('facebook',target,owner_id)->>'credential_id'=credential::text;
+  ELSE
+   ASSERT public.read_instagram_account_capability(target,owner_id)->>'login_kind'='page_linked';
+  END IF;
+  -- Every delegated reader/validator must also reject the same invalidated receipt.
+  BEGIN
+   UPDATE public.facebook_user_credential_connection_fences SET connection_version=connection_version+1 WHERE social_account_id=target;
+   BEGIN PERFORM public.read_facebook_user_account_credential(owner_id,target); RAISE EXCEPTION 'reader accepted stale receipt';
+    EXCEPTION WHEN SQLSTATE 'FUC03' THEN NULL; END;
+   BEGIN PERFORM public.meta_oauth_attempt_capture_account(owner_id,target); RAISE EXCEPTION 'capture accepted stale receipt';
+    EXCEPTION WHEN SQLSTATE 'FUC03' THEN NULL; END;
+   BEGIN PERFORM public.meta_oauth_attempt_require_captured_account(owner_id,capture); RAISE EXCEPTION 'OAuth accepted stale receipt';
+    EXCEPTION WHEN SQLSTATE 'FUC03' THEN NULL; END;
+   BEGIN PERFORM public.meta_account_refresh_require_captured_account(owner_id,capture); RAISE EXCEPTION 'refresh accepted stale receipt';
+    EXCEPTION WHEN SQLSTATE 'FUC03' THEN NULL; END;
+   BEGIN PERFORM public.facebook_user_credential_status(owner_id,credential); RAISE EXCEPTION 'status accepted stale receipt';
+    EXCEPTION WHEN SQLSTATE 'FUC03' THEN NULL; END;
+   RAISE EXCEPTION 'restore receipt fence' USING ERRCODE='TST01';
+  EXCEPTION WHEN SQLSTATE 'TST01' THEN NULL; END;
+ END LOOP;
+END;
+$all_authority_readers$;
+
+SET LOCAL ROLE authenticated;
+SET LOCAL request.jwt.claim.role='service_role';
+DO $impersonation$
+BEGIN
+ BEGIN
+  PERFORM public.dispatch_analytics_legacy_bootstrap(gen_random_uuid());
+  RAISE EXCEPTION 'browser impersonation unexpectedly accepted';
+ EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+END;
+$impersonation$;
+RESET ROLE;
+ROLLBACK;
+\echo === analytics_legacy_bootstrap: ALL CHECKS PASSED ===

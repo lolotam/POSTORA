@@ -1,3 +1,4 @@
+import { sharedMetaBudgetFetch } from "../_shared/metaSharedBudget.ts";
 /**
  * The composition root of `competitor-snapshot-sync`.
  *
@@ -310,10 +311,11 @@ function createAuditSink(environment: ServerEnvironment) {
  * only used to build the shared throttle bucket key, which is a digest of
  * two non-secret values.
  */
-function createGraphProvider(): GraphCompetitorProvider {
+function createGraphProvider(environment: ServerEnvironment): GraphCompetitorProvider {
   return new GraphCompetitorProvider({
     apiVersion: Deno.env.get("FACEBOOK_GRAPH_API_VERSION") ?? undefined,
     appId: Deno.env.get("FACEBOOK_APP_ID") ?? null,
+    fetchFn: sharedMetaBudgetFetch({ rpc: createServiceRpcCaller(environment), apps: { facebook: Deno.env.get("FACEBOOK_APP_ID") } }),
   });
 }
 
@@ -385,7 +387,7 @@ const deps: CompetitorSyncDeps = {
     const environment = currentEnvironment();
     if (!environment) throw new Error("the server configuration is not usable");
 
-    const provider = createGraphProvider();
+    const provider = createGraphProvider(environment);
     const store = createCompetitorServiceStore({
       rpc: createServiceRpcCaller(environment),
       reads: createServiceReadPort(environment),

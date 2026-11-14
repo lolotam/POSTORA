@@ -113,3 +113,7 @@ verify_jwt = false
 # Cron uses the shared secret; verifyCronAuth remains the authentication gate.
 [functions.background-jobs-worker]
 verify_jwt = false
+
+# Server-only repair dispatch; the handler authenticates the cron/service credential.
+[functions.analytics-legacy-bootstrap]
+verify_jwt = false

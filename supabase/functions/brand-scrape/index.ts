@@ -1,4 +1,5 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { sharedMetaBudgetFetch } from "../_shared/metaSharedBudget.ts";
 import { serviceRoleCallerUserId } from "../_shared/auth-helper.ts";
 import { createLogger } from "../_shared/logging.ts";
 import type { ViewerCandidate } from "../_shared/instagramDiscoveryViewer.ts";
@@ -10,6 +11,22 @@ import { discoveryCacheKey, discoveryMedia, discoveryProfile, InstagramDiscovery
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
+};
+
+type ScrapeSnapshot = {
+  profile: Record<string, unknown>;
+  posts: { id: string; engagementScore: number | null }[];
+  source?: string;
+  warning?: { code: string; message: string };
+};
+type TikTokScrapeItem = {
+  id: string; views?: number; playCount?: number; likes?: number; diggCount?: number;
+  comments?: number; commentCount?: number; shares?: number; shareCount?: number;
+  bookmarks?: number; collectCount?: number; title?: string; text?: string;
+  video?: { cover?: string; playAddr?: string; duration?: number };
+  covers?: { default?: string }; thumbnail?: string; webVideoUrl?: string;
+  hashtags?: (string | { name?: string })[]; music?: { title?: string }; musicMeta?: { musicName?: string };
+  videoMeta?: { duration?: number }; createTime?: number; uploadedAt?: string;
 };
 
 // ─── Instagram: Official Business Discovery API ───
@@ -75,7 +92,7 @@ async function scrapeTikTok(username: string, apifyToken: string, actorId = "clo
   const firstItem = items[0];
   const channel = firstItem.channel || firstItem.authorMeta || {};
 
-  const posts = items.map((item: any) => {
+  const posts = items.map((item: TikTokScrapeItem) => {
     const views = item.views || item.playCount || 0;
     const likes = item.likes || item.diggCount || 0;
     const comments = item.comments || item.commentCount || 0;
@@ -94,7 +111,7 @@ async function scrapeTikTok(username: string, apifyToken: string, actorId = "clo
       sharesCount: shares,
       savesCount: bookmarks,
       bookmarksCount: bookmarks,
-      hashtags: (item.hashtags || []).map((h: any) => h.name || h),
+      hashtags: (item.hashtags || []).map((h) => typeof h === "string" ? h : h.name || h),
       songTitle: item.music?.title || item.musicMeta?.musicName || "",
       duration: item.video?.duration || item.videoMeta?.duration || 0,
       engagementScore: calculateEngagementScore(likes, comments, shares, views),
@@ -148,6 +165,11 @@ Deno.serve(async (req) => {
   );
 
   const logger = createLogger(supabaseAdmin, "brand-scrape", "edge");
+  // Runtime composition stays here so discovery policy is portable to Node's safety harness.
+  const metaFetch = sharedMetaBudgetFetch({
+    rpc: (name, args, signal) => supabaseAdmin.rpc(name, args).abortSignal(signal),
+    apps: { facebook: Deno.env.get("FACEBOOK_APP_ID"), instagram: Deno.env.get("INSTAGRAM_APP_ID") },
+  });
 
   let userId: string | undefined;
   let platform = "instagram";
@@ -225,7 +247,7 @@ Deno.serve(async (req) => {
       .in("key", ["apify_actor_instagram", "apify_actor_tiktok", "apify_actor_facebook", "apify_actor_threads", "brand_scrape_max_posts", "apify_enabled"]);
 
     const getActorId = (key: string, fallback: string): string => {
-      const setting = (actorSettings || []).find((s: any) => s.key === key);
+      const setting = (actorSettings || []).find((s: { key: string; value: unknown }) => s.key === key);
       if (!setting) return fallback;
       try {
         const parsed = typeof setting.value === "string" ? JSON.parse(setting.value) : setting.value;
@@ -239,7 +261,7 @@ Deno.serve(async (req) => {
     // Read apify_enabled toggle
     let isApifyEnabled = platform !== "instagram"; // Preserve other platforms' legacy default.
     try {
-      const apifyEnabledSetting = (actorSettings || []).find((s: any) => s.key === "apify_enabled");
+      const apifyEnabledSetting = (actorSettings || []).find((s: { key: string; value: unknown }) => s.key === "apify_enabled");
       if (apifyEnabledSetting && apifyEnabledSetting.value !== undefined) {
         const parsed = typeof apifyEnabledSetting.value === "string" ? JSON.parse(apifyEnabledSetting.value) : apifyEnabledSetting.value;
         isApifyEnabled = parsed === true || (platform !== "instagram" && parsed === "true");
@@ -275,7 +297,7 @@ Deno.serve(async (req) => {
     if (platform === "instagram" && cacheError) throw new InstagramDiscoveryError("DISCOVERY_UNAVAILABLE", "Instagram discovery cache is unavailable.", 503);
 
     if (cached && new Date(cached.expires_at) > new Date()) {
-      const cachedData = cached.response_data as any;
+      const cachedData = cached.response_data as ScrapeSnapshot;
       // Trim cached posts to current maxPosts setting
       const allPosts = (cachedData.posts || []).slice(0, maxPosts);
 
@@ -317,7 +339,7 @@ Deno.serve(async (req) => {
       });
     }
 
-    let result: any;
+    let result: ScrapeSnapshot | undefined;
     let strategyUsed = "unknown";
     let apiEndpoint = "";
     let readingStoppedBy: string | null = null;
@@ -360,10 +382,10 @@ Deno.serve(async (req) => {
         if (!authority) throw new InstagramDiscoveryError(discoveryContext?.refusalCode ?? "IG_RECONNECT_REQUIRED", "Reconnect Instagram to enable official competitor data.");
         if (authority.source === "official") {
           result = await scrapeInstagramOfficial({ username: cleanUsername, viewerIgUserId: authority.account.platform_user_id,
-            accessToken: authority.token, maxPosts, apiVersion: Deno.env.get("FACEBOOK_GRAPH_API_VERSION") });
+            accessToken: authority.token, maxPosts, apiVersion: Deno.env.get("FACEBOOK_GRAPH_API_VERSION"), fetchFn: metaFetch });
           apiEndpoint = "graph.facebook.com/business_discovery";
         } else {
-          result = await scrapeInstagramOwn({ username: cleanUsername, igUserId: authority.account.platform_user_id, accessToken: authority.token, maxPosts });
+          result = await scrapeInstagramOwn({ username: cleanUsername, igUserId: authority.account.platform_user_id, accessToken: authority.token, maxPosts, fetchFn: metaFetch });
           apiEndpoint = "graph.instagram.com/media";
         }
         strategyUsed = authority.source;
@@ -389,7 +411,7 @@ Deno.serve(async (req) => {
       if (!fbAppId || !fbAppSecret) {
         throw new Error("Facebook app credentials not configured. Contact support.");
       }
-      const facebook = await scrapeFacebookPublicPage({ pageIdentifier: cleanUsername, appId: fbAppId, appSecret: fbAppSecret, maxPosts });
+      const facebook = await scrapeFacebookPublicPage({ pageIdentifier: cleanUsername, appId: fbAppId, appSecret: fbAppSecret, maxPosts, fetchFn: metaFetch });
       result = { profile: facebook.profile, posts: facebook.posts };
       readingStoppedBy = facebook.readingStoppedBy;
       strategyUsed = "official";
@@ -497,7 +519,7 @@ Deno.serve(async (req) => {
       .from("app_settings").select("key, value")
       .in("key", ["apify_actor_instagram", "apify_actor_tiktok"]);
     const relevantActorKey = platform === "tiktok" ? "apify_actor_tiktok" : "apify_actor_instagram";
-    const actorSetting = (actorSettings2?.data || []).find((s: any) => s.key === relevantActorKey);
+    const actorSetting = (actorSettings2?.data || []).find((s: { key: string; value: unknown }) => s.key === relevantActorKey);
     let failedActorId: string | undefined;
     try {
       if (actorSetting?.value) {

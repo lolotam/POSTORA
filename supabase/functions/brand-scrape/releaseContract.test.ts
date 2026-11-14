@@ -229,6 +229,7 @@ Deno.test("registered discovery handler retains source and null cells through ca
   let maxPostsSetting = 1;
   let providerFailure: "malformed" | "rate" | null = null;
   let facebookSecondPageTimesOut = true;
+  const throttleWrites: Record<string, unknown>[] = [];
   try {
     Deno.env.set("SUPABASE_URL", "http://127.0.0.1:61999");
     Deno.env.set("SUPABASE_SERVICE_ROLE_KEY", "synthetic-discovery-service-key");
@@ -260,6 +261,12 @@ Deno.test("registered discovery handler retains source and null cells through ca
       assertEquals(url.origin, "http://127.0.0.1:61999");
       if (url.pathname === "/auth/v1/user") return json({ id: OWNER });
       const table = url.pathname.split("/").at(-1);
+      if (table === "read_meta_analytics_provider_throttle") return json(null);
+      if (table === "record_instagram_provider_throttle_http") {
+        const write = await request.json();
+        throttleWrites.push(write);
+        return json({ bucket_key: write.p_bucket_key, throttled_until: write.p_throttled_until });
+      }
       if (table === "read_instagram_account_capability") {
         authorityReads++;
         return json(capability(denied ? { granted_scopes: [], updated_at: "2026-11-02T00:00:00Z" } : {}));
@@ -312,6 +319,8 @@ Deno.test("registered discovery handler retains source and null cells through ca
     const throttled = await handler!(request());
     assertEquals(throttled.status, 429);
     assertEquals((await throttled.json()).error_code, "DISCOVERY_RATE_LIMITED");
+    assertEquals(throttleWrites.length, 1);
+    assertEquals(Date.parse(String(throttleWrites[0].p_throttled_until)) > Date.now(), true);
     assertEquals(apifyCalls, 1);
     providerFailure = null;
     denied = true;

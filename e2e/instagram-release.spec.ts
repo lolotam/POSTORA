@@ -172,6 +172,10 @@ test("canonical discovery keeps ambiguous viewer failures out of target eligibil
   expect((await request.post(fallbackControlUrl, { data: { enabled: true } })).status()).toBe(401);
   expect((await request.post(fallbackControlUrl, { headers: { ...headers, "X-Instagram-Release-Namespace": "foreign" }, data: { enabled: true } })).status()).toBe(409);
   expect((await request.post(fallbackControlUrl, { headers, data: { enabled: "true" } })).status()).toBe(400);
+  const pauseControlUrl = `${INSTAGRAM_RELEASE.apiUrl}/__instagram-release/expire-provider-pause`;
+  expect((await request.post(pauseControlUrl, { data: {} })).status()).toBe(401);
+  expect((await request.post(pauseControlUrl, { headers: { ...headers, "X-Instagram-Release-Namespace": "foreign" }, data: {} })).status()).toBe(409);
+  expect((await request.post(pauseControlUrl, { headers, data: { bucket_key: "foreign" } })).status()).toBe(400);
   await signInInstagramRelease(page, manifest, "ownerA");
   await page.goto("/analytics/instagram?tab=analyze");
   try {
@@ -220,9 +224,17 @@ test("canonical discovery keeps ambiguous viewer failures out of target eligibil
     expect(afterThrottle.apifyCalls).toEqual(afterFallback.apifyCalls);
     expect(afterThrottle.networkRefusals).toBe(0);
     expect(await stored("competitor_watchlist")).toEqual(watchlistsBefore);
+
+    // A healthy provider cannot bypass the app pause persisted by the real transport.
+    await control("provider-scenario", { account: "pageGranted", scenario: "normal" });
+    const stillPaused = await searchInstagramRelease(page, "release_negative");
+    expect(stillPaused.status()).toBe(429);
+    expect(await stillPaused.json()).toEqual({ error: "Instagram discovery is temporarily unavailable.", error_code: "DISCOVERY_RATE_LIMITED" });
+    expect(await receipts()).toEqual(afterThrottle);
   } finally {
     await control("interactive-fallback", { enabled: false });
     await control("provider-scenario", { account: "pageGranted", scenario: "normal" });
+    await control("expire-provider-pause", {});
   }
 });
 

@@ -1,3 +1,4 @@
+import { sharedMetaBudgetFetch } from "../_shared/metaSharedBudget.ts";
 /**
  * The composition root of `instagram-insights-sync`.
  *
@@ -331,10 +332,11 @@ function createAdminChecker(environment: ServerEnvironment) {
  * only used to build the shared throttle bucket key, which is a digest of
  * two non-secret values.
  */
-function createGraphProvider(): InstagramGraphProvider {
+function createGraphProvider(environment: ServerEnvironment): InstagramGraphProvider {
   return new InstagramGraphProvider({
     apiVersion: Deno.env.get("FACEBOOK_GRAPH_API_VERSION") ?? undefined,
     appId: Deno.env.get("FACEBOOK_APP_ID") ?? null,
+    fetchFn: sharedMetaBudgetFetch({ rpc: createServiceRpcCaller(environment), apps: { facebook: Deno.env.get("FACEBOOK_APP_ID") } }),
   });
 }
 
@@ -352,10 +354,11 @@ function createGraphProvider(): InstagramGraphProvider {
  * Facebook-login app, which meters a different grant. When it is not
  * configured, the adapter keeps a stable unconfigured namespace.
  */
-function createDirectGraphProvider(): InstagramDirectGraphProvider {
+function createDirectGraphProvider(environment: ServerEnvironment): InstagramDirectGraphProvider {
   return new InstagramDirectGraphProvider({
     apiVersion: Deno.env.get("INSTAGRAM_GRAPH_API_VERSION") ?? undefined,
     appId: resolveDirectAppId((name) => Deno.env.get(name)),
+    fetchFn: sharedMetaBudgetFetch({ rpc: createServiceRpcCaller(environment), apps: { instagram: Deno.env.get("INSTAGRAM_APP_ID") } }),
   });
 }
 
@@ -382,8 +385,8 @@ function createDailyEnqueuePorts(environment: ServerEnvironment): OwnerDailyEnqu
  * service-only and they re-derive the owner from the target row.
  */
 function createOwnerWorkerPorts(environment: ServerEnvironment): OwnerWorkerPorts {
-  const provider = createGraphProvider();
-  const directProvider = createDirectGraphProvider();
+  const provider = createGraphProvider(environment);
+  const directProvider = createDirectGraphProvider(environment);
   const store = createOwnerCollectionServiceStore({
     rpc: createServiceRpcCaller(environment),
     reads: createServiceReadPort(environment),

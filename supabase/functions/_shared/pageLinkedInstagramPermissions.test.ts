@@ -80,7 +80,7 @@ Deno.test("an empty or explicitly denied successful permission read is authorita
 Deno.test("permission pagination reconstructs the trusted URL and never follows a supplied next URL", async () => {
   const test = fixture({ response: (url, index) => index === 0 ? Response.json({
     data: [{ permission: "instagram_basic", status: "granted" }],
-    paging: { next: "https://never-follow.invalid/private", cursors: { after: "page_2" } },
+    paging: { next: "https://graph.facebook.com/v22.0/me/permissions?after=do_not_follow", cursors: { after: "page_2" } },
   }) : Response.json({ data: [{ permission: "instagram_manage_insights", status: "granted" }] }) });
   assertEquals(await test.run(), { status: "ok", insights_granted: true });
   assertEquals(test.requests.map((url) => url.searchParams.get("after")), [null, "page_2"]);
@@ -135,7 +135,7 @@ Deno.test("duplicate and over-budget permission pages never publish a partial gr
   for (const duplicate of [true, false]) {
     const test = fixture({ response: (_url, index) => Response.json({
       data: [{ permission: duplicate ? "instagram_basic" : `scope_${index}`, status: "granted" }],
-      paging: { next: "https://untrusted.invalid", cursors: { after: `page_${index + 1}` } },
+      paging: { next: "https://graph.facebook.com/v22.0/me/permissions", cursors: { after: `page_${index + 1}` } },
     }) });
     assertEquals(await test.run(), { status: "failed" });
     assertEquals(test.requests.length, duplicate ? 2 : 4);

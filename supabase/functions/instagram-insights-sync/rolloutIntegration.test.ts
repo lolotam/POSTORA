@@ -1295,7 +1295,7 @@ Deno.test("the copied source without the permit call makes the detector fail", a
   await copyTree(join(FUNCTIONS_ROOT, "_shared"), join(copyRoot, "_shared"));
 
   const transportPath = join(copyRoot, "instagram-insights-sync", "providerTransport.ts");
-  const transport = await Deno.readTextFile(transportPath);
+  const transport = (await Deno.readTextFile(transportPath)).replaceAll("\r\n", "\n");
   const anchor = `      if (options.permit !== undefined) {\n        await askPermit(options.permit, signal);\n      }`;
   assert(
     transport.includes(anchor),

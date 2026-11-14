@@ -151,6 +151,8 @@ SUITES=(
   whatsapp_account_setup_move.sql
   whatsapp_disconnect_alerts.sql
   instagram_capabilities.sql
+  analytics_legacy_bootstrap.sql
+  analytics_legacy_bootstrap_races.sql
   facebook_user_credential_bindings.sql
   social_account_disconnect_credentials.sql
   instagram_tracking_schema.sql

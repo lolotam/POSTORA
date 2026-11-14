@@ -68,6 +68,7 @@ Deno.test("registered admission keeps real token roles and refuses stale or inva
               assertEquals(outgoing.headers.get("authorization"), `Bearer ${SERVICE}`);
               const body = await outgoing.json();
               if (url.pathname === "/rest/v1/system_logs") { audits.push(body); return new Response(null, { status: 201 }); }
+              if (url.pathname.endsWith("/read_meta_analytics_provider_throttle")) return Response.json(null);
               if (url.pathname.includes("/rest/v1/rpc/read_")) {
                 reads++;
                 assertEquals(body.p_account_id, ACCOUNT);
