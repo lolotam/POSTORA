@@ -1,5 +1,6 @@
 // deno-lint-ignore-file no-import-prefix
 import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
+import type { SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { fetchCategoryAiSettings } from "./ai-fallback.ts";
 
 // The catalogue is keyed by credential kind: UNIQUE (provider_id, model_id,
@@ -88,7 +89,7 @@ const SETTINGS = [
 Deno.test("the last-resort reader pins the credential kind", async () => {
   const { client, filters } = fakeAdmin([API_KEY_MODEL, OAUTH_MODEL], SETTINGS);
 
-  const settings = await fetchCategoryAiSettings(client, "chat");
+  const settings = await fetchCategoryAiSettings(client as unknown as SupabaseClient, "chat");
 
   assertEquals(
     filters.some(([column, value]) => column === "auth_method" && value === "api_key"),
@@ -105,7 +106,7 @@ Deno.test("the last-resort reader ignores the OAuth row of the same model", asyn
 
   // Only the OAuth row exists: the API-key reader must not accept it, so the
   // hardcoded floor answers instead.
-  const settings = await fetchCategoryAiSettings(client, "chat");
+  const settings = await fetchCategoryAiSettings(client as unknown as SupabaseClient, "chat");
 
   assertEquals(settings.lastResortProvider, "google");
   assertEquals(settings.lastResortModel, "gemini-3-flash-preview");
