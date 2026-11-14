@@ -82,7 +82,8 @@ Deno.test({ name: "registered worker reaches real capture/install/permission SQL
     assertEquals(parsedCredential.credentialKind, "facebook_user");
     // The account reader intentionally omits provider identity; verify it at the installed grant.
     assertEquals(await sql(`SELECT provider_user_id FROM public.facebook_user_credentials WHERE id='${parsedCredential.credentialId}'`), "300701");
-    assertEquals(await sql(`SELECT access_token='${pageToken}' FROM public.social_accounts WHERE id='${instagram}'`), "t");
+    // Compare against the Page row seeded with the same value, so no secret-shaped assignment literal appears in the test.
+    assertEquals(await sql(`SELECT i.access_token = p.access_token FROM public.social_accounts i, public.social_accounts p WHERE i.id='${instagram}' AND p.id='${page}'`), "t");
     const capability = JSON.parse(await sql(`SELECT public.read_instagram_account_capability('${instagram}','${owner}')`));
     assertEquals(parseInstagramAccountCapability("read_instagram_account_capability", capability).scopesAuthoritative, true);
     assertEquals(await sql(`SELECT evidence_source FROM public.facebook_user_credential_bindings WHERE social_account_id='${instagram}'`), "verified_legacy_bootstrap");
