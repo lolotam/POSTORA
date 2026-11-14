@@ -12,6 +12,14 @@ function snapshot(): ChatPolicySnapshot {
   };
 }
 
+Deno.test("a retry retains the browser expectation even after the server snapshot changes", async () => {
+  const source = snapshot();
+  source.settings = [{ key: "default_ai_model_chat", value: { provider_code: "claude", model_id: "registry-only", auth_method: "oauth" } }];
+  const request = { category: "chat", slot: "primary", provider_code: "claude", model_id: "same" };
+  assertEquals(validateChatTier({ ...request, expected: {} }, source).expected, {});
+  await assertRejects(async () => validateChatTier(request, source), "Missing browser expectation must not become a fresh server expectation");
+});
+
 Deno.test("Chat keeps API/Auth identity and provisional entries before first OAuth sync", () => {
   const policy = buildChatListPolicy(snapshot());
   const api = policy.groups.find(g => g.provider_code === "claude" && g.auth_method === "api_key")!;
@@ -49,16 +57,16 @@ Deno.test("successful OAuth sync and inactive rows prevent registry resurrection
 
 Deno.test("Chat mutation validates auth, selected eligibility and contiguous chain without changing API shape", async () => {
   const source = snapshot();
-  assertEquals(validateChatTier({ category: "chat", slot: "primary", provider_code: "claude", model_id: "same" }, source).value,
+  assertEquals(validateChatTier({ expected: {}, category: "chat", slot: "primary", provider_code: "claude", model_id: "same" }, source).value,
     { provider_code: "claude", model_id: "same" });
-  assertEquals(validateChatTier({ category: "chat", slot: "primary", provider_code: "claude", model_id: "same", auth_method: "oauth" }, source).value,
+  assertEquals(validateChatTier({ expected: {}, category: "chat", slot: "primary", provider_code: "claude", model_id: "same", auth_method: "oauth" }, source).value,
     { provider_code: "claude", model_id: "same", auth_method: "oauth" });
   for (const invalid of [
     { auth_method: "unknown" }, { model_id: "" }, { model_id: "unlisted" },
     { slot: "fallback" }, { slot: "fallback_2" }, { category: "agent" },
-  ]) await assertRejects(async () => validateChatTier({ category: "chat", slot: "primary", provider_code: "claude", model_id: "same", ...invalid }, source));
+  ]) await assertRejects(async () => validateChatTier({ expected: {}, category: "chat", slot: "primary", provider_code: "claude", model_id: "same", ...invalid }, source));
   source.apiKeys.claude = false;
-  await assertRejects(async () => validateChatTier({ category: "chat", slot: "primary", provider_code: "claude", model_id: "same" }, source));
+  await assertRejects(async () => validateChatTier({ expected: {}, category: "chat", slot: "primary", provider_code: "claude", model_id: "same" }, source));
 });
 
 Deno.test("persisted Auth rows must also be supported by the runtime registry", async () => {
@@ -66,5 +74,5 @@ Deno.test("persisted Auth rows must also be supported by the runtime registry", 
   source.models.push({ provider_id: "p", model_id: "not-in-registry", name: "Unverified", auth_method: "oauth", is_active: true, capabilities: ["chat"] });
   const auth = buildChatListPolicy(source).groups.find(g => g.auth_method === "oauth" && g.provider_code === "claude")!;
   assertEquals(auth.models[0].reason, "unsupported_model");
-  await assertRejects(async () => validateChatTier({ category: "chat", slot: "primary", provider_code: "claude", model_id: "not-in-registry", auth_method: "oauth" }, source));
+  await assertRejects(async () => validateChatTier({ expected: {}, category: "chat", slot: "primary", provider_code: "claude", model_id: "not-in-registry", auth_method: "oauth" }, source));
 });

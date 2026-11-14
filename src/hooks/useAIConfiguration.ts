@@ -129,9 +129,13 @@ export function useAIConfiguration() {
   });
 }
 
-function saveChatTierAndReconcile(queryClient: QueryClient, input: ChatTierInput) {
-  return saveChatTier(input, async saved => {
-    // Publish the authoritative read before a failed mutation can show its
+function saveChatTierAndReconcile(queryClient: QueryClient, input: Omit<ChatTierInput, 'expected'>) {
+  const current = queryClient.getQueryData<AIConfigData>(['ai-config']);
+  if (!current) throw new Error('AI configuration must be loaded before saving. Reload and retry.');
+  const keys = ['default_ai_model_chat', 'default_ai_model_chat_fallback', 'default_ai_model_chat_fallback_2'];
+  const expected = Object.fromEntries(current.settings.filter(row => keys.includes(row.key)).map(row => [row.key, row.value]));
+  return saveChatTier({ ...input, expected }, async saved => {
+    // Publish the observed saved tier before a failed mutation can show its
     // error. Invalidation alone can leave the previously saved tier visible.
     await queryClient.cancelQueries({ queryKey: ['ai-config'] });
     const key = `default_ai_model_chat${input.slot === 'primary' ? '' : `_${input.slot}`}`;

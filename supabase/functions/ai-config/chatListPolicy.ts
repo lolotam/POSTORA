@@ -71,15 +71,8 @@ export class ChatTierError extends Error {
   constructor(public readonly code: string, public readonly status = 409) { super(code); }
 }
 const tierValue = z.object({ provider_code: z.string().trim().min(1).max(120), model_id: z.string().trim().min(1).max(300), auth_method: z.enum(["api_key", "oauth"]).optional() }).strict();
-const tierRequest = tierValue.extend({ category: z.literal("chat"), slot: z.enum(["primary", "fallback", "fallback_2"]) }).strict();
+const tierRequest = tierValue.extend({ category: z.literal("chat"), slot: z.enum(["primary", "fallback", "fallback_2"]), expected: z.record(z.unknown()) }).strict();
 export const CHAT_TIER_KEYS = ["default_ai_model_chat", "default_ai_model_chat_fallback", "default_ai_model_chat_fallback_2"] as const;
-
-export function chatTierSnapshot(settings: ChatPolicySnapshot["settings"]) {
-  return Object.fromEntries(CHAT_TIER_KEYS.flatMap(key => {
-    const row = settings.find(s => s.key === key);
-    return row ? [[key, row.value]] : [];
-  }));
-}
 
 export function validateChatTier(body: unknown, source: ChatPolicySnapshot) {
   const parsed = tierRequest.safeParse(body);
@@ -93,7 +86,9 @@ export function validateChatTier(body: unknown, source: ChatPolicySnapshot) {
     ? { provider_code: request.provider_code, model_id: request.model_id, auth_method: "oauth" }
     : { provider_code: request.provider_code, model_id: request.model_id };
   const key = CHAT_TIER_KEYS[["primary", "fallback", "fallback_2"].indexOf(request.slot)];
-  const expected = chatTierSnapshot(source.settings);
+  // Preserve the administrator's observed chain across ambiguous retries. A
+  // fresh server snapshot would silently authorize replacing an unseen commit.
+  const expected = request.expected;
   const next = { ...expected, [key]: value };
   let gap = false;
   for (const tierKey of CHAT_TIER_KEYS) {

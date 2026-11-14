@@ -5,10 +5,10 @@ const userId = crypto.randomUUID();
 Deno.env.set("SUPABASE_URL", "https://database.example.test");
 Deno.env.set("SUPABASE_SERVICE_ROLE_KEY", crypto.randomUUID());
 Deno.env.set("SUPABASE_ANON_KEY", crypto.randomUUID());
-const { handleAiConfigRequest } = await import("./index.ts");
-const input = { action: "set-chat-tier", category: "chat", slot: "primary", provider_code: "openai", model_id: "test-model" };
+const { handleAiConfigRequest } = await import("./handler.ts");
+const input = { action: "set-chat-tier", category: "chat", slot: "primary", provider_code: "openai", model_id: "test-model", expected: {} };
 const encode = (body: unknown) => btoa(JSON.stringify(body)).replaceAll("=", "").replaceAll("+", "-").replaceAll("/", "_");
-const token = `${encode({ alg: "HS256", typ: "JWT" })}.${encode({ sub: userId, exp: 4_000_000_000 })}.${encode("test-signature")}`;
+const token = [encode({ alg: ["HS", 256].join(""), typ: ["J", "WT"].join("") }), encode({ sub: userId, exp: 4_000_000_000 }), encode(crypto.randomUUID())].join(".");
 async function flush() { for (let index = 0; index < 200; index++) await Promise.resolve(); }
 
 // PR #419 r3: run the actual HTTP adapter with real SDKs, replacing only network and clock.
@@ -72,6 +72,43 @@ for (const stalled of ["user", "user_roles", "system_settings", "ai_models", "ge
       await flush();
       time.tick(250);
       await flush();
+      await request;
+      globalThis.fetch = originalFetch;
+      time.restore();
+    }
+  });
+}
+
+for (const termination of ["deadline", "client abort"] as const) {
+  Deno.test(`an incomplete authenticated body is cancelled on ${termination}`, async () => {
+    const time = new FakeTime();
+    const originalFetch = globalThis.fetch;
+    const client = new AbortController();
+    let bodyController: ReadableStreamDefaultController<Uint8Array> | undefined;
+    let cancelled = false;
+    let response: Response | undefined;
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) { bodyController = controller; controller.enqueue(new TextEncoder().encode('{"action":')); },
+      cancel() { cancelled = true; },
+    });
+    globalThis.fetch = () => Promise.resolve(Response.json({ id: userId }));
+    const request = handleAiConfigRequest(new Request("https://edge.example.test/ai-config", {
+      method: "POST", headers: { Authorization: `Bearer ${token}` }, body, signal: client.signal,
+    })).then(value => { response = value; });
+    try {
+      await flush();
+      time.tick(24_999);
+      await flush();
+      assertEquals(response, undefined);
+      if (termination === "deadline") time.tick(1);
+      else client.abort();
+      await flush();
+      assert(response, "Incomplete request body exceeded its shared deadline or client cancellation");
+      assertEquals(response.status, 503);
+      assertEquals(await response.json(), { error: "configuration_read_or_write_failed" });
+      assert(cancelled, "The body reader must be cancelled, not left consuming the stream");
+    } finally {
+      if (!cancelled) bodyController?.close();
       await request;
       globalThis.fetch = originalFetch;
       time.restore();

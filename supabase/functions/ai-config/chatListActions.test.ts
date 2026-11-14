@@ -4,7 +4,7 @@ import { chatActionDeps, runChatListAction, type ChatActionDeps } from "./chatLi
 import type { ChatPolicySnapshot } from "./chatListPolicy.ts";
 
 const flags = { feature_ai_provider_oauth: true, feature_ai_text_auth_lists: true, feature_ai_category_text_ladders: false, feature_ai_oauth_tools_claude: false, feature_ai_oauth_tools_codex: false };
-const input = { category: "chat", slot: "primary", provider_code: "claude", model_id: "same", auth_method: "oauth" };
+const input = { category: "chat", slot: "primary", provider_code: "claude", model_id: "same", auth_method: "oauth", expected: {} };
 
 for (const scenario of ["success", "not_admin", "flag_read_failed", "catalogue_read_failed", "status_read_failed", "save_failed", "unknown_auth", "draft", "flag_off"] as const) {
   Deno.test(`Chat boundary: ${scenario}, no unsafe overwrite or credential disclosure`, async () => {

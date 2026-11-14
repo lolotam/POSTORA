@@ -32,19 +32,20 @@ describe("tier setters and auth_method", () => {
     ['primary', useSetDefaultModel], ['fallback', useSetFallbackModel], ['fallback_2', useSetFallback2Model],
   ] as const)('flagged %s saves use the authoritative boundary instead of direct writes', async (slot, useSetter) => {
     const { client, wrapper } = queryWrapper();
+    client.setQueryData(['ai-config'], { settings: [] });
     client.setQueryData(CHAT_LIST_POLICY_QUERY_KEY, { enabled: true, groups: [] });
     const { result } = renderHook(() => useSetter(), { wrapper });
     await result.current.mutateAsync({ category: 'chat', provider_code: 'claude', model_id: 'same', auth_method: 'oauth' });
-    expect(invoke).toHaveBeenCalledWith('ai-config', { body: { action: 'set-chat-tier', category: 'chat', slot, provider_code: 'claude', model_id: 'same', auth_method: 'oauth' }, timeout: 30_000 });
+    expect(invoke).toHaveBeenCalledWith('ai-config', { body: { action: 'set-chat-tier', category: 'chat', slot, provider_code: 'claude', model_id: 'same', auth_method: 'oauth', expected: {} }, timeout: 30_000 });
     expect(upsert).not.toHaveBeenCalled();
   });
 
   it('retains cached saved tiers when the server refuses a save', async () => {
     const { client, wrapper } = queryWrapper();
-    const saved = { categoryDefaults: { chat: { provider_code: 'claude', model_id: 'previous', auth_method: 'oauth' } } };
+    const saved = { settings: [], categoryDefaults: { chat: { provider_code: 'claude', model_id: 'previous', auth_method: 'oauth' } } };
     client.setQueryData(['ai-config'], saved);
     client.setQueryData(CHAT_LIST_POLICY_QUERY_KEY, { enabled: true, groups: [] });
-    invoke.mockResolvedValue({ data: { error: 'configuration_changed_retry' }, error: null });
+    invoke.mockResolvedValue({ data: { error: 'model_unavailable' }, error: null });
     const { result } = renderHook(() => useSetDefaultModel(), { wrapper });
     await expect(result.current.mutateAsync({ category: 'chat', provider_code: 'claude', model_id: 'draft' })).rejects.toThrow(/Retry/);
     expect(client.getQueryData(['ai-config'])).toEqual(saved);

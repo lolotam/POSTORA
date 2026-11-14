@@ -14,19 +14,21 @@ const policySchema = z.discriminatedUnion('enabled', [
 ]);
 export type ChatListPolicy = z.infer<typeof policySchema>;
 export type ChatListGroup = z.infer<typeof groupSchema>;
-export type ChatTierInput = { category: 'chat'; slot: 'primary' | 'fallback' | 'fallback_2'; provider_code: string; model_id: string; auth_method?: 'api_key' | 'oauth' };
+export type ChatTierInput = { category: 'chat'; slot: 'primary' | 'fallback' | 'fallback_2'; provider_code: string; model_id: string; auth_method?: 'api_key' | 'oauth'; expected: Record<string, unknown> };
 export const CHAT_LIST_POLICY_QUERY_KEY = ['ai-chat-list-policy'] as const;
 const RETRY_MESSAGE = 'AI configuration could not be saved or read. Retry; check AI Providers if it remains unavailable.';
 const savedTierSchema = z.object({ provider_code: z.string(), model_id: z.string(), auth_method: z.enum(['api_key', 'oauth']).optional() });
 type SavedChatTier = z.infer<typeof savedTierSchema>;
 
 class ChatActionError extends Error {
-  constructor(readonly ambiguous: boolean) { super(RETRY_MESSAGE); }
+  constructor(readonly reconcile: boolean) { super(RETRY_MESSAGE); }
 }
 
 async function invokeChatAction(body: Record<string, unknown>): Promise<unknown> {
   const { data, error } = await supabase.functions.invoke('ai-config', { body, timeout: 30_000 });
-  if (error || data?.error) throw new ChatActionError(error instanceof FunctionsFetchError ||
+  const stale = data?.error === 'configuration_changed_retry' || (error instanceof FunctionsHttpError && error.context.status === 409 &&
+    (await error.context.clone().json().catch(() => null))?.error === 'configuration_changed_retry');
+  if (error || data?.error) throw new ChatActionError(stale || error instanceof FunctionsFetchError ||
     (error instanceof FunctionsHttpError && error.context.status >= 500));
   return data;
 }
@@ -42,14 +44,17 @@ export async function saveChatTier(input: ChatTierInput, onReconciled?: (saved: 
   try {
     response = await invokeChatAction({ action: 'set-chat-tier', ...input });
   } catch (cause) {
-    if (!(cause instanceof ChatActionError) || !cause.ambiguous) throw cause;
+    if (!(cause instanceof ChatActionError) || !cause.reconcile) throw cause;
     // An aborted response cannot tell us whether the atomic write committed.
     // Read the exact tier under admin RLS; never retry the write automatically.
+    // This is an observation, not proof that a timed-out transaction finished.
+    // A manual retry carries the same cached expectation; CAS refuses it if a
+    // delayed write committed, and the conflict returns here to refresh the UI.
     const key = `default_ai_model_chat${input.slot === 'primary' ? '' : `_${input.slot}`}`;
     const { data, error } = await supabase.from('system_settings').select('value').eq('key', key)
       .abortSignal(AbortSignal.timeout(30_000)).maybeSingle();
     const saved = savedTierSchema.nullable().safeParse(data === null ? null : data?.value);
-    if (error || !saved.success) throw new Error('AI configuration save outcome could not be confirmed. Reload before retrying.');
+    if (error || !saved.success) throw new Error('AI configuration save outcome could not be confirmed. Retry or reload to refresh.');
     await onReconciled?.(saved.data);
     if (saved.data?.provider_code === input.provider_code && saved.data.model_id === input.model_id &&
       (saved.data.auth_method ?? 'api_key') === (input.auth_method ?? 'api_key')) return;
