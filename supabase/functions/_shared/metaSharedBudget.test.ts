@@ -30,21 +30,61 @@ Deno.test("unreadable shared usage fails closed before network and uses caller c
   assertEquals(calls, 0);
 });
 
-Deno.test("Graph code throttles persist shared pauses without consuming the caller body", async () => {
-  for (const code of [4, 17, 32, 613]) {
-    const writes: Record<string, unknown>[] = [];
+for (const status of [200, 400]) for (const code of [4, 17, 32, 613]) {
+  Deno.test(`HTTP ${status} Graph code ${code} persists a shared pause without consuming the caller body`, async () => {
+    let pause: unknown = null;
+    let calls = 0;
     const rpc: MetaBudgetRpc = async (name, args) => {
-      if (name === "read_meta_analytics_provider_throttle") return { error: null, data: null };
-      writes.push(args);
+      if (name === "read_meta_analytics_provider_throttle") return { error: null, data: pause };
+      pause = { throttled_until: args.p_throttled_until };
       return { error: null, data: { bucket_key: args.p_bucket_key, throttled_until: args.p_throttled_until } };
     };
-    const transport = sharedMetaBudgetFetch({ rpc, apps: { facebook: "200001" },
-      fetcher: () => Promise.resolve(Response.json({ error: { code } }, { status: 400, headers: { "retry-after": "259200" } })) });
+    const options = { rpc, apps: { facebook: "200001" }, fetcher: () => {
+      calls++;
+      return Promise.resolve(Response.json({ error: { code } }, { status, headers: { "retry-after": "259200" } }));
+    } };
+    const transport = sharedMetaBudgetFetch(options);
     const response = await transport("https://graph.facebook.com/v22.0/me");
+    assertEquals(response.bodyUsed, false);
     assertEquals(await response.json(), { error: { code } });
-    assertEquals(writes.length, 1);
-    assertEquals(Date.parse(String(writes[0].p_throttled_until)) > Date.now() + 2 * 86_400_000, true);
-  }
+    const otherWorker = sharedMetaBudgetFetch(options);
+    const refused = await otherWorker("https://graph.facebook.com/v25.0/me", {
+      headers: { Authorization: `Bearer ${crypto.randomUUID()}` },
+    });
+    await refused.json();
+    assertEquals(refused.status, 429);
+    assertEquals(Number(refused.headers.get("retry-after")) >= 259199, true);
+    assertEquals(calls, 1);
+  });
+}
+
+Deno.test("large successful collections remain readable without waiting for the uninspected stream tail", async () => {
+  const prefix = '{"data":[{"caption":"' + "x".repeat(65_536);
+  const tail = '"}]}';
+  let finish: () => void = () => undefined;
+  const tailReady = new Promise<void>((resolve) => { finish = resolve; });
+  let writes = 0;
+  const rpc: MetaBudgetRpc = async (name) => {
+    if (name !== "read_meta_analytics_provider_throttle") writes++;
+    return { error: null, data: null };
+  };
+  const source = new ReadableStream<Uint8Array>({
+    async start(controller) {
+      controller.enqueue(new TextEncoder().encode(prefix));
+      await tailReady;
+      controller.enqueue(new TextEncoder().encode(tail));
+      controller.close();
+    },
+  });
+  try {
+    const response = await sharedMetaBudgetFetch({ rpc, apps: { facebook: "200001" },
+      fetcher: () => Promise.resolve(new Response(source)),
+    })("https://graph.facebook.com/v25.0/me", { signal: AbortSignal.timeout(1_000) });
+    assertEquals(response.bodyUsed, false);
+    finish();
+    assertEquals(await response.text(), prefix + tail);
+    assertEquals(writes, 0);
+  } finally { finish(); }
 });
 
 Deno.test("Graph throttle inspection refuses oversized or stalled bodies within the caller deadline", async () => {

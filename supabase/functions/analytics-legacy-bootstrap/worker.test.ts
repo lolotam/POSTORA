@@ -133,7 +133,7 @@ Deno.test("actual handler refuses raw token input, signed-in users and malformed
   }
 });
 
-Deno.test("Graph throttles persist the app pause and the identical provider deadline on settlement", async () => {
+for (const status of [200, 400]) Deno.test(`HTTP ${status} Graph throttles persist the app pause and the identical provider deadline on settlement`, async () => {
   for (const code of [4, 17, 32, 613]) {
     const test = fixture();
     const original = test.input.rpc;
@@ -144,7 +144,7 @@ Deno.test("Graph throttles persist the app pause and the identical provider dead
       if (name === "settle_analytics_legacy_bootstrap") settled = args.p_retry_at;
       return await original(name, args, signal);
     };
-    test.input.fetcher = () => Promise.resolve(Response.json({ error: { code } }, { status: 400,
+    test.input.fetcher = () => Promise.resolve(Response.json({ error: { code } }, { status,
       headers: { "retry-after": "259200", "x-app-usage": '{"call_count":20}' } }));
     const outcome = await runLegacyBootstrap(test.input);
     assertEquals(outcome.accounts[0].reason_code, "rate_limited");

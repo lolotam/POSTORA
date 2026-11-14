@@ -3,7 +3,7 @@ import { parseMetaUsagePercent } from "./metaUsage.ts";
 
 /** Inspect only a bounded copy; the provider adapter still owns the original body. */
 async function graphRateLimited(response: Response, signal: AbortSignal): Promise<boolean> {
-  if (response.ok || response.status === 429) return false;
+  if (response.status === 429) return false;
   const reader = response.clone().body?.getReader();
   if (!reader) return false;
   try {
@@ -13,7 +13,11 @@ async function graphRateLimited(response: Response, signal: AbortSignal): Promis
       const chunk = await awaitWithAbort(() => reader.read(), signal);
       if (chunk.done) break;
       size += chunk.value.length;
-      if (size > 65_536) throw new Error("Meta response unavailable");
+      if (size > 65_536) {
+        // Collection payloads may exceed the envelope bound; their adapter owns the body limit.
+        if (response.ok) return false;
+        throw new Error("Meta response unavailable");
+      }
       chunks.push(chunk.value);
     }
     const bytes = new Uint8Array(size);
