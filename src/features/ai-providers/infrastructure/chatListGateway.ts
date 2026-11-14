@@ -5,17 +5,17 @@ import { normalizeStoredTextTier } from '../../../../supabase/functions/_shared/
 
 const groupSchema = z.object({
   provider_code: z.string(), auth_method: z.enum(['api_key', 'oauth']), name: z.string(),
-  reason: z.enum(['flag_off', 'inactive', 'not_connected', 'reauth_required', 'disconnected', 'api_key_absent', 'no_compatible_models', 'no_compatible_triage_models', 'oauth_max_tokens_unsupported', 'triage_api_unsupported']).nullable(),
+  reason: z.enum(['flag_off', 'inactive', 'not_connected', 'reauth_required', 'disconnected', 'api_key_absent', 'no_compatible_models', 'no_compatible_triage_models', 'oauth_max_tokens_unsupported', 'triage_api_unsupported', 'oauth_tools_unsupported', 'oauth_tools_disabled', 'no_compatible_agent_models']).nullable(),
   synced_at: z.string().nullable(),
-  models: z.array(z.object({ model_id: z.string(), name: z.string(), provisional: z.boolean(), reason: z.enum(['inactive', 'unsupported_model']).nullable() })),
+  models: z.array(z.object({ model_id: z.string(), name: z.string(), provisional: z.boolean(), reason: z.enum(['inactive', 'unsupported_model', 'tools_unsupported']).nullable() })),
 });
 const policySchema = z.discriminatedUnion('enabled', [
   z.object({ enabled: z.literal(false) }),
-  z.object({ enabled: z.literal(true), groups: z.array(groupSchema), triageGroups: z.array(groupSchema).optional(), categoryLaddersEnabled: z.boolean().optional() }),
+  z.object({ enabled: z.literal(true), groups: z.array(groupSchema), triageGroups: z.array(groupSchema).optional(), agentGroups: z.array(groupSchema).optional(), categoryLaddersEnabled: z.boolean().optional() }),
 ]);
 export type ChatListPolicy = z.infer<typeof policySchema>;
 export type ChatListGroup = z.infer<typeof groupSchema>;
-export type ChatTierInput = { category: 'chat' | 'agent_triage'; slot: 'primary' | 'fallback' | 'fallback_2'; provider_code: string; model_id: string; auth_method?: 'api_key' | 'oauth'; expected: Record<string, unknown> };
+export type ChatTierInput = { category: 'chat' | 'agent_triage' | 'agent'; slot: 'primary' | 'fallback' | 'fallback_2'; provider_code: string; model_id: string; auth_method?: 'api_key' | 'oauth'; expected: Record<string, unknown> };
 export const CHAT_LIST_POLICY_QUERY_KEY = ['ai-chat-list-policy'] as const;
 export const CHAT_TIER_KEYS = ['default_ai_model_chat', 'default_ai_model_chat_fallback', 'default_ai_model_chat_fallback_2'] as const;
 const RETRY_MESSAGE = 'AI configuration could not be saved or read. Retry; check AI Providers if it remains unavailable.';
@@ -28,7 +28,7 @@ const rawTextTierSchema = z.union([savedTierSchema.passthrough(), z.string(), z.
 
 class ChatActionError extends Error {
   constructor(readonly outcome: 'refused' | 'conflict' | 'unconfirmed', reason?: string) { super(reason === 'ai_output_cap_unsupported'
-    ? 'Capped text requests need a compatible tier. Choose Claude Auth or an API tier before saving or inheriting Chat.' : RETRY_MESSAGE); }
+    ? 'Capped text requests need a compatible tier. Choose Claude Auth or an API tier before saving or inheriting Chat.' : reason === 'oauth_api_fallback_required' ? 'Every Auth Agent tier requires a later active tool-capable API fallback. Configure the API fallback first.' : RETRY_MESSAGE); }
 }
 
 async function invokeChatAction(body: Record<string, unknown>): Promise<unknown> {
@@ -49,10 +49,10 @@ export async function fetchChatListPolicy(): Promise<ChatListPolicy> {
 export async function saveChatTier(input: ChatTierInput, onReconciled?: (snapshot: TextTierSnapshot) => void | Promise<void>): Promise<void> {
   let response: unknown;
   try {
-    response = await invokeChatAction({ action: input.category === 'agent_triage' ? 'set-triage-tier' : 'set-chat-tier', ...input });
+    response = await invokeChatAction({ action: input.category === 'agent' ? 'set-agent-tier' : input.category === 'agent_triage' ? 'set-triage-tier' : 'set-chat-tier', ...input });
   } catch (cause) {
     if (!(cause instanceof ChatActionError) || cause.outcome === 'refused') throw cause;
-    if (input.category === 'agent_triage') {
+    if (input.category === 'agent_triage' || input.category === 'agent') {
       const keys = textTierKeys(input.category);
       const { data, error } = await supabase.from('system_settings').select('key,value').in('key', keys).abortSignal(AbortSignal.timeout(30_000));
       const observed = z.array(z.object({ key: z.string(), value: rawTextTierSchema })).safeParse(data);
