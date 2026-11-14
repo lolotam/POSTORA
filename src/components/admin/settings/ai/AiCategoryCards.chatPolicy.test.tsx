@@ -16,7 +16,7 @@ function setup() {
   let failure = '';
   let writes = 0;
   let pending: Promise<Response> | null = null;
-  const client = createClient('https://database.example.test', 'test-key', { auth: { persistSession: false }, global: { fetch: (async (input, init) => {
+  const client = createClient('https://database.example.test', crypto.randomUUID(), { auth: { persistSession: false }, global: { fetch: (async (input, init) => {
     const url = new URL(String(input));
     if (url.pathname.endsWith('/ai-config')) {
       const body = JSON.parse(String(init?.body));
@@ -30,7 +30,7 @@ function setup() {
     ]);
     return Response.json([]);
   }) as typeof fetch } });
-  vi.spyOn(client.auth, 'getSession').mockResolvedValue({ data: { session: { access_token: 'test-token', user: { id: 'admin' } } }, error: null } as never);
+  vi.spyOn(client.auth, 'getSession').mockResolvedValue({ data: { session: { access_token: crypto.randomUUID(), user: { id: 'admin' } } }, error: null } as never);
   clientRef.current = client;
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   const mount = () => render(<QueryClientProvider client={queryClient}><ChatModelsCard /></QueryClientProvider>);

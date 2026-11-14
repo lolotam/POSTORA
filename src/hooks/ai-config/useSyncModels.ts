@@ -1,3 +1,4 @@
+import { CHAT_LIST_POLICY_QUERY_KEY } from '@/features/ai-providers/infrastructure/chatListGateway';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { supabase } from '@/integrations/supabase/client';
 
@@ -41,6 +42,9 @@ export function useSyncModels() {
       if (data?.error) throw new Error(data.error);
       return data as SyncReport;
     },
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['ai-config'] }),
+    onSuccess: () => Promise.all([
+      queryClient.invalidateQueries({ queryKey: ['ai-config'] }),
+      queryClient.invalidateQueries({ queryKey: CHAT_LIST_POLICY_QUERY_KEY }),
+    ]),
   });
 }

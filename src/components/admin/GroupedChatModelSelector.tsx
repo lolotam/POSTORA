@@ -65,7 +65,7 @@ function GroupedChatTier({ label, groups, current, onSelect, isSaving }: {
     <ul className="space-y-1 text-xs text-muted-foreground" aria-label={`${label} availability`}>
       {groups.filter(g => g.reason).map(g => <li key={identity(g.provider_code, g.auth_method)}>{groupName(g.auth_method)} · {g.name}: <span>{REASONS[g.reason]}</span></li>)}
     </ul>
-    <a className="text-xs underline" href="/settings?tab=ai&sub=Providers">Manage connections and catalogue sync in AI Providers</a>
+    <a className="text-xs underline" href="/admin/settings?tab=ai&sub=Providers">Manage connections and catalogue sync in AI Providers</a>
   </fieldset>;
 }
 

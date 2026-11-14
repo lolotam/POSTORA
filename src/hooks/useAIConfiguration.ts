@@ -222,6 +222,7 @@ export function useToggleProvider() {
       return res.json();
     },
     onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: CHAT_LIST_POLICY_QUERY_KEY });
       queryClient.invalidateQueries({ queryKey: ['ai-config'] });
       queryClient.invalidateQueries({ queryKey: AI_PROVIDER_HEALTH_QUERY_KEY });
     },
@@ -242,7 +243,10 @@ export function useToggleModel() {
       if (!res.ok) { const e = await res.json(); throw new Error(e.error || 'Failed'); }
       return res.json();
     },
-    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ['ai-config'] }); },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: CHAT_LIST_POLICY_QUERY_KEY });
+      queryClient.invalidateQueries({ queryKey: ['ai-config'] });
+    },
   });
 }
 
@@ -286,6 +290,7 @@ export function useSetServiceKey() {
     },
     onSuccess: () => {
       queryClient.refetchQueries({ queryKey: ['service-keys'] });
+      queryClient.invalidateQueries({ queryKey: CHAT_LIST_POLICY_QUERY_KEY });
       queryClient.invalidateQueries({ queryKey: AI_PROVIDER_HEALTH_QUERY_KEY });
     },
   });

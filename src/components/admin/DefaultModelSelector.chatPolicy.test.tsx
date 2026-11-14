@@ -25,6 +25,13 @@ function renderPolicy(policy: ChatListPolicy, extra: Record<string, unknown> = {
 }
 
 describe('flagged Chat selector', () => {
+  it('links every slot to the admin Providers recovery controls', () => {
+    renderPolicy({ enabled: true, groups: [group('oauth', 'not_connected')] });
+    const links = screen.getAllByRole('link', { name: 'Manage connections and catalogue sync in AI Providers' });
+    expect(links).toHaveLength(3);
+    for (const link of links) expect(link).toHaveAttribute('href', '/admin/settings?tab=ai&sub=Providers');
+  });
+
   it('shows explicit API/Auth groups in all three slots and saves only an eligible model, with group identity', () => {
     const save = renderPolicy({ enabled: true, groups: [group('api_key'), group('oauth')] });
     expect(screen.getAllByRole('group', { name: 'API' })).toHaveLength(3);
