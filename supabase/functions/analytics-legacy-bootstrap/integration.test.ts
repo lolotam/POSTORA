@@ -1,5 +1,6 @@
 import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import { runLegacyBootstrap, type BootstrapRpc } from "./worker.ts";
+import { parseFacebookUserAccountCredential, parseInstagramAccountCapability } from "../_shared/facebookUserCredentialStore.ts";
 
 const container = Deno.env.get("ROLLOUT_IT_CONTAINER");
 const database = Deno.env.get("ROLLOUT_IT_DB") ?? "partner_api_harness";
@@ -53,6 +54,13 @@ Deno.test({ name: "registered worker reaches real capture/install/permission SQL
     assertEquals(providerCalls, 5);
     assertEquals(await sql(`SELECT count(*) FROM public.instagram_collection_jobs WHERE social_account_id='${instagram}'`), "0");
     assertEquals(await sql(`SELECT credential_generation>=1 AND permission_read_state='ok' FROM public.instagram_account_capabilities WHERE social_account_id='${instagram}'`), "t");
+    // Exercise the real post-bootstrap SQL payload through the runtime validators,
+    // including the provenance label those readers deliberately do not project.
+    const credential = JSON.parse(await sql(`SELECT public.read_facebook_user_account_credential('${owner}','${instagram}')`));
+    assertEquals(parseFacebookUserAccountCredential("read_facebook_user_account_credential", credential).found, true);
+    const capability = JSON.parse(await sql(`SELECT public.read_instagram_account_capability('${instagram}','${owner}')`));
+    assertEquals(parseInstagramAccountCapability("read_instagram_account_capability", capability).scopesAuthoritative, true);
+    assertEquals(await sql(`SELECT evidence_source FROM public.facebook_user_credential_bindings WHERE social_account_id='${instagram}'`), "verified_legacy_bootstrap");
   } finally {
     await sql(`BEGIN; DELETE FROM auth.users WHERE id='${owner}';
       UPDATE public.analytics_legacy_bootstrap_run SET holder=NULL,lease_until=NULL,pause_until=NULL,calls=0;

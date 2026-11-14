@@ -237,7 +237,7 @@ jobs:
       - name: Typecheck and test legacy analytics bootstrap
         run: |
           deno check --no-config --import-map=scripts/ci/deno-analytics.import-map.json --lock=scripts/ci/deno-analytics.lock --frozen --node-modules-dir=none supabase/functions/analytics-legacy-bootstrap/index.ts
-          deno test --no-config --import-map=scripts/ci/deno-analytics.import-map.json --lock=scripts/ci/deno-analytics.lock --frozen --node-modules-dir=none --allow-env supabase/functions/analytics-legacy-bootstrap/provider.test.ts supabase/functions/analytics-legacy-bootstrap/worker.test.ts supabase/functions/_shared/metaSharedBudget.test.ts
+          deno test --no-config --import-map=scripts/ci/deno-analytics.import-map.json --lock=scripts/ci/deno-analytics.lock --frozen --node-modules-dir=none --allow-env supabase/functions/analytics-legacy-bootstrap/provider.test.ts supabase/functions/analytics-legacy-bootstrap/worker.test.ts supabase/functions/_shared/metaSharedBudget.test.ts supabase/functions/_shared/metaPagination.test.ts
 
       - name: Test service proxy and MCP
         run: >

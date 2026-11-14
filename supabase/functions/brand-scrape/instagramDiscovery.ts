@@ -1,4 +1,3 @@
-import { configuredMetaBudgetFetch } from "../_shared/metaSharedBudget.ts";
 import {
   createFacebookUserCredentialStore, createInstagramAccountCapabilityStore,
   CredentialStoreError, type FacebookUserAccountCredential, type ServiceRpcCaller,
@@ -173,7 +172,7 @@ export async function scrapeInstagramOfficial(input: {
   let hasNext = false;
   for (let page = 0; page < Math.ceil(input.maxPosts / 25); page++) {
     const payload = await discoveryJson(buildBusinessDiscoveryUrl({ apiVersion: resolveGraphApiVersion(input.apiVersion),
-      viewerIgUserId: input.viewerIgUserId, handle, token: input.accessToken, cursor }), input.fetchFn ?? configuredMetaBudgetFetch());
+      viewerIgUserId: input.viewerIgUserId, handle, token: input.accessToken, cursor }), input.fetchFn ?? fetch);
     target = discoveryParse(() => readBusinessDiscoveryTarget(payload));
     const connection = target.media as Record<string, unknown> | undefined;
     const rows = connection?.data ?? (target.media_count === 0 ? [] : null);
@@ -199,7 +198,7 @@ export async function scrapeInstagramOfficial(input: {
 export async function scrapeInstagramOwn(input: {
   username: string; igUserId: string; accessToken: string; maxPosts: number; fetchFn?: typeof fetch;
 }) {
-  const transport = input.fetchFn ?? configuredMetaBudgetFetch();
+  const transport = input.fetchFn ?? fetch;
   const endpoint = `https://graph.instagram.com/v22.0/${encodeURIComponent(input.igUserId)}`;
   const profileUrl = new URL(endpoint);
   profileUrl.search = new URLSearchParams({ fields: "id,username,name,biography,followers_count,follows_count,media_count,profile_picture_url,website", access_token: input.accessToken }).toString();

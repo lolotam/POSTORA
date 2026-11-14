@@ -2,7 +2,7 @@ import { z } from "https://esm.sh/zod@3.25.76";
 import { handleRestrictedCorsOptions, restrictedCorsHeaders } from "../_shared/cors.ts";
 import { verifyCronAuth } from "../_shared/cron-auth.ts";
 import { awaitWithAbort } from "../_shared/abort.ts";
-import { runLegacyBootstrap, type BootstrapWorkerInput } from "./worker.ts";
+import { bootstrapRpc, runLegacyBootstrap, type BootstrapWorkerInput } from "./worker.ts";
 
 async function readDrainBody(request: Request): Promise<boolean> {
   if (!request.body) return false;
@@ -26,20 +26,27 @@ export async function bootstrapHandler(request: Request, deps: BootstrapWorkerIn
   if (request.method === "OPTIONS") return handleRestrictedCorsOptions(request);
   const headers = { ...restrictedCorsHeaders(request), "Content-Type": "application/json", "Cache-Control": "no-store" };
   const reply = (body: unknown, status: number) => new Response(JSON.stringify(body), { status, headers });
+  const deadline = Math.min(deps.deadline ?? Infinity, Date.now() + 40_000);
+  const refuse = async (reason: "unauthorized" | "invalid_method" | "invalid_request", status: number) => {
+    try {
+      const saved = await bootstrapRpc(deps, deadline)("record_analytics_legacy_bootstrap_refusal", { p_reason: reason });
+      if (saved !== null) throw new Error("Bootstrap audit unavailable");
+      return reply({ error: reason }, status);
+    } catch {
+      console.error("[analytics-legacy-bootstrap]", { event: "bootstrap_audit_unavailable", reason_code: reason });
+      return reply({ error: "audit_or_store_unavailable" }, 503);
+    }
+  };
   const auth = verifyCronAuth(request);
   if (!auth.ok) {
-    console.warn("[analytics-legacy-bootstrap]", { event: "bootstrap_refused", reason_code: "unauthorized" });
-    return reply({ error: "unauthorized" }, auth.response.status);
+    return await refuse("unauthorized", auth.response.status);
   }
   if (request.method !== "POST") {
-    console.warn("[analytics-legacy-bootstrap]", { event: "bootstrap_refused", reason_code: "invalid_method" });
-    return reply({ error: "invalid_method" }, 405);
+    return await refuse("invalid_method", 405);
   }
-  const deadline = Date.now() + 40_000;
   try {
     if (!await readDrainBody(request)) {
-      console.warn("[analytics-legacy-bootstrap]", { event: "bootstrap_refused", reason_code: "invalid_request" });
-      return reply({ error: "invalid_request" }, 400);
+      return await refuse("invalid_request", 400);
     }
     return reply(await runLegacyBootstrap({ ...deps, deadline }), 200);
   } catch {

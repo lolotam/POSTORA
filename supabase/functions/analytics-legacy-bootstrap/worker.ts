@@ -1,6 +1,6 @@
 import { z } from "https://esm.sh/zod@3.25.76";
 import { awaitWithAbort } from "../_shared/abort.ts";
-import { parseMetaUsagePercent } from "../_shared/metaUsage.ts";
+import { metaResponseThrottle } from "../_shared/metaResponseThrottle.ts";
 import { MetaPermissionReadFailure, readPageLinkedPermissions } from "../_shared/pageLinkedInstagramPermissions.ts";
 import { BootstrapFailure, captureSchema, type BootstrapReason, verifyLegacyAuthority } from "./provider.ts";
 
@@ -38,20 +38,20 @@ export function bootstrapRpc(input: BootstrapWorkerInput, deadline: number) {
 type Rpc = ReturnType<typeof bootstrapRpc>;
 const jobArgs = (job: Executor) => ({ p_job_id: job.job_id, p_lease_id: job.lease_id, p_revision: job.revision });
 
-function usageFetcher(input: BootstrapWorkerInput, rpc: Rpc, runId: string, job: Executor): typeof fetch {
+function usageFetcher(context: { input: BootstrapWorkerInput; rpc: Rpc; runId: string; job: Executor; deadline: number;
+  recordRetry: (retryAt: string) => void }): typeof fetch {
+  const { input, rpc, runId, job, deadline, recordRetry } = context;
   return async (request, init) => {
     const response = await (input.fetcher ?? fetch)(request, init);
-    const usage = Math.ceil(parseMetaUsagePercent(response.headers));
-    const rawRetry = response.headers.get("retry-after");
-    const parsedRetry = rawRetry && /^\d{1,7}$/.test(rawRetry) ? Date.now() + Number(rawRetry) * 1000 : Date.parse(rawRetry ?? "");
-    const pause = response.status === 429 || usage >= 80;
+    const parent = init?.signal ?? (request instanceof Request ? request.signal : undefined);
+    const signal = AbortSignal.any([AbortSignal.timeout(Math.max(1, Math.min(4_000, deadline - Date.now()))), ...(parent ? [parent] : [])]);
+    const { usage, pause, retryAt: retry } = await metaResponseThrottle(response, signal);
     if (usage || pause) {
-      const retry = pause ? new Date(Number.isFinite(parsedRetry) && parsedRetry > Date.now()
-        ? parsedRetry : Date.now() + 15 * 60_000).toISOString() : null;
       const recorded = await rpc("record_analytics_legacy_bootstrap_usage", { p_run_id: runId, p_job_id: job.job_id,
         p_usage: usage, p_retry_at: retry, p_app_id: input.apps[job.capture.login_kind === "direct" ? "instagram" : "facebook"].id });
       if (recorded !== null) throw new BootstrapFailure("provider_error");
       if (pause) {
+        if (retry) recordRetry(retry);
         void response.body?.cancel().catch(() => undefined);
         return Response.json({ error: { code: 4, is_transient: true } }, { status: 429 });
       }
@@ -60,8 +60,9 @@ function usageFetcher(input: BootstrapWorkerInput, rpc: Rpc, runId: string, job:
   };
 }
 
-async function settleFailure(rpc: Rpc, job: Executor, reason: BootstrapReason): Promise<BootstrapProjection> {
-  return projectionSchema.parse(await rpc("settle_analytics_legacy_bootstrap", { ...jobArgs(job), p_reason: reason }));
+async function settleFailure(rpc: Rpc, job: Executor, reason: BootstrapReason, retryAt?: string): Promise<BootstrapProjection> {
+  return projectionSchema.parse(await rpc("settle_analytics_legacy_bootstrap", { ...jobArgs(job), p_reason: reason,
+    ...(retryAt ? { p_retry_at: retryAt } : {}) }));
 }
 
 async function repairAccount(context: { input: BootstrapWorkerInput; rpc: Rpc; runId: string; accountId: string; deadline: number }): Promise<BootstrapProjection> {
@@ -79,7 +80,8 @@ async function repairAccount(context: { input: BootstrapWorkerInput; rpc: Rpc; r
     if (await rpc("permit_analytics_legacy_bootstrap", { ...jobArgs(job), p_run_id: runId,
       p_app_id: input.apps[job.capture.login_kind === "direct" ? "instagram" : "facebook"].id }) !== true) throw new BootstrapFailure("budget_exhausted");
   };
-  const fetcher = usageFetcher(input, rpc, runId, job);
+  let retryAt: string | undefined;
+  const fetcher = usageFetcher({ input, rpc, runId, job, deadline, recordRetry: (retry) => { retryAt = retry; } });
   try {
     if (!job.installed) {
       const evidence = await verifyLegacyAuthority({ capture: job.capture,
@@ -119,7 +121,7 @@ async function repairAccount(context: { input: BootstrapWorkerInput; rpc: Rpc; r
     try { return projectionSchema.parse(await rpc("complete_analytics_legacy_bootstrap", { ...jobArgs(job), p_permissions: permissions })); }
     catch { return projectionSchema.parse(await rpc("reconcile_analytics_legacy_bootstrap", { p_account_id: accountId, p_idempotency_key: key })); }
   } catch (error) {
-    return await settleFailure(rpc, job, error instanceof BootstrapFailure ? error.reason : "provider_malformed");
+    return await settleFailure(rpc, job, error instanceof BootstrapFailure ? error.reason : "provider_malformed", retryAt);
   }
 }
 

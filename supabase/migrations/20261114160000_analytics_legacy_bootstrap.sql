@@ -160,6 +160,18 @@ LANGUAGE sql STABLE SECURITY INVOKER SET search_path=public,pg_temp AS $fn$
  )::text,'sha256'),'hex');
 $fn$;
 
+-- HTTP refusals have no trusted account identity. Accept only closed reason codes,
+-- never headers, bodies, URLs, caller identifiers or provider/driver text.
+CREATE FUNCTION public.record_analytics_legacy_bootstrap_refusal(p_reason text) RETURNS void
+LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path=public,pg_temp SET lock_timeout='2s' SET statement_timeout='4s' AS $fn$
+BEGIN
+ PERFORM public.analytics_bootstrap_assert_service();
+ IF p_reason IS NULL OR p_reason NOT IN ('unauthorized','invalid_method','invalid_request') THEN
+  RAISE EXCEPTION 'BOOTSTRAP_INVALID_REFUSAL'; END IF;
+ PERFORM public.analytics_bootstrap_audit(gen_random_uuid(),NULL,'http_refused',p_reason);
+END;
+$fn$;
+
 CREATE FUNCTION public.analytics_bootstrap_projection(p_job uuid) RETURNS jsonb
 LANGUAGE sql STABLE SECURITY INVOKER SET search_path=public,pg_temp AS $fn$
  SELECT jsonb_build_object('job_id',id,'account_id',social_account_id,'state',state,'reason_code',reason_code,
@@ -291,11 +303,12 @@ BEGIN
   PERFORM public.analytics_bootstrap_audit(j.correlation_id,a.id,'begin','attempt_budget'); RETURN public.analytics_bootstrap_projection(j.id); END IF;
  IF NOT a.is_active OR COALESCE(a.needs_reauth,false) OR a.token_expires_at<=clock_timestamp() THEN
   j.state:='needs_reconnect';j.reason_code:='token_invalid';
- ELSIF NULLIF(a.platform_user_id,'') IS NULL OR kind='page_linked' AND (source.id IS NULL OR NOT source.is_active OR COALESCE(source.needs_reauth,false)) THEN
+ ELSIF NULLIF(a.platform_user_id,'') IS NULL OR kind='page_linked' AND (NULLIF(page,'') IS NULL OR
+   candidate_source='legacy_page' AND (source.id IS NULL OR NOT source.is_active OR COALESCE(source.needs_reauth,false))) THEN
   j.state:='blocked';j.reason_code:='account_identity_invalid';
  ELSIF NULLIF(candidate,'') IS NULL THEN j.state:='needs_reconnect';j.reason_code:='stored_user_credential_missing';
  ELSE j.state:=CASE WHEN j.installed THEN 'permission_pending' ELSE 'verifying' END;j.reason_code:='verification_pending'; END IF;
- UPDATE public.analytics_legacy_bootstrap_jobs SET state=j.state,reason_code=j.reason_code,
+ UPDATE public.analytics_legacy_bootstrap_jobs SET state=j.state,reason_code=j.reason_code,login_kind=kind,
   source_account_id=source.id,source_credential_id=credential,idempotency_key=p_idempotency_key,
   source_kind=candidate_source,
   lease_id=CASE WHEN j.state IN ('verifying','permission_pending') THEN gen_random_uuid() ELSE NULL END,
@@ -430,7 +443,9 @@ BEGIN
  expiry:=CASE WHEN p_evidence->>'expires_at' IS NULL THEN NULL ELSE public.facebook_user_credential_parse_zoned_timestamp(p_evidence->>'expires_at','expires_at') END;
  IF verified<j.updated_at OR verified>clock_timestamp()+interval '1 second' OR expiry<=clock_timestamp() OR
   c.provider_user_id IS NOT NULL AND c.provider_user_id IS DISTINCT FROM p_evidence->>'provider_user_id' OR
-  (j.login_kind='page_linked' AND (source.platform<>'facebook' OR source.platform_user_id IS DISTINCT FROM p_evidence->>'page_id')) OR
+  (j.login_kind='page_linked' AND p_evidence->>'page_id' IS DISTINCT FROM
+   CASE WHEN a.platform='instagram' AND j.source_kind='protected' AND b.social_account_id=a.id
+    THEN COALESCE(b.verified_facebook_page_id,source.platform_user_id) ELSE source.platform_user_id END) OR
   (a.platform='instagram' AND a.platform_user_id IS DISTINCT FROM p_evidence->>'instagram_user_id') OR
   (b.social_account_id IS NOT NULL AND b.evidence_source IN ('oauth_exchange','token_refresh','verified_legacy_bootstrap') AND
    (b.verified_facebook_user_id IS DISTINCT FROM p_evidence->>'provider_user_id' OR
@@ -524,7 +539,11 @@ BEGIN
   (SELECT array_agg(k ORDER BY k) FROM jsonb_object_keys(p_permissions) k) IS DISTINCT FROM ARRAY['observed_at','scopes','state']::text[] THEN
   RAISE EXCEPTION 'BOOTSTRAP_PERMISSION_INVALID'; END IF;
  observed:=public.facebook_user_credential_parse_zoned_timestamp(p_permissions->>'observed_at','observed_at');
- IF observed<=j.installed_at OR observed>clock_timestamp()+interval '1 second' THEN RAISE EXCEPTION 'BOOTSTRAP_PERMISSION_STALE'; END IF;
+ -- JavaScript observations have millisecond precision; installation has microseconds.
+ -- The lease/revision/input fence already ties this result to the installed attempt.
+ -- Reject older milliseconds, then retain strict ordering for the capability writer.
+ IF observed<date_trunc('milliseconds',j.installed_at) OR observed>clock_timestamp()+interval '1 second' THEN RAISE EXCEPTION 'BOOTSTRAP_PERMISSION_STALE'; END IF;
+ observed:=GREATEST(observed,j.installed_at+interval '1 microsecond');
  permission_state:=p_permissions->>'state';
  IF jsonb_typeof(p_permissions->'scopes')<>'array' OR jsonb_array_length(p_permissions->'scopes')>400 OR EXISTS
   (SELECT 1 FROM jsonb_array_elements(p_permissions->'scopes') s WHERE jsonb_typeof(s)<>'string' OR s#>>'{}' !~ '^[a-z][a-z0-9_]{0,127}$') THEN
@@ -678,7 +697,7 @@ BEGIN
  FOR signature,function_name IN SELECT oid::regprocedure,proname FROM pg_proc WHERE pronamespace='public'::regnamespace AND
   (proname LIKE 'analytics_bootstrap_%' OR proname IN ('dispatch_analytics_legacy_bootstrap','begin_analytics_legacy_bootstrap',
    'commit_analytics_legacy_bootstrap','complete_analytics_legacy_bootstrap','settle_analytics_legacy_bootstrap',
-   'permit_analytics_legacy_bootstrap','record_analytics_legacy_bootstrap_usage','reconcile_analytics_legacy_bootstrap')) LOOP
+   'permit_analytics_legacy_bootstrap','record_analytics_legacy_bootstrap_usage','record_analytics_legacy_bootstrap_refusal','reconcile_analytics_legacy_bootstrap')) LOOP
   EXECUTE format('REVOKE ALL ON FUNCTION %s FROM PUBLIC,anon,authenticated,service_role',signature);
   IF function_name NOT LIKE 'analytics_bootstrap_%' THEN EXECUTE format('GRANT EXECUTE ON FUNCTION %s TO service_role',signature); END IF;
  END LOOP;

@@ -18,6 +18,7 @@ function fixture(options: { lost?: "install" | "permission"; permissions?: unkno
   let reasonCode: string | null = null;
   const projection = () => ({ job_id: jobId, account_id: accountId, state, revision, installed, reason_code: reasonCode });
   const rpc: BootstrapRpc = async (name, args) => {
+    if (name === "record_analytics_legacy_bootstrap_refusal") return { error: null, data: null };
     if (name === "dispatch_analytics_legacy_bootstrap") return { error: null, data: {
       status: options.disabled ? "disabled" : "dispatched", account_ids: options.disabled ? [] : [accountId] } };
     if (name === "begin_analytics_legacy_bootstrap") return { error: null, data: { ...projection(), lease_id: leaseId,
@@ -36,7 +37,10 @@ function fixture(options: { lost?: "install" | "permission"; permissions?: unkno
       revision++;
       if (options.lost === "permission") throw new Error(credential);
     }
-    if (name === "settle_analytics_legacy_bootstrap") { state = "retry"; reasonCode = String(args.p_reason); }
+    if (name === "settle_analytics_legacy_bootstrap") {
+      reasonCode = String(args.p_reason);
+      state = reasonCode === "permission_missing" ? "permissions_missing" : reasonCode === "token_invalid" ? "needs_reconnect" : "retry";
+    }
     return { error: null, data: projection() };
   };
   const fetcher: typeof fetch = async () => {
@@ -124,6 +128,66 @@ Deno.test("actual handler refuses raw token input, signed-in users and malformed
     const body = await good.text();
     assertEquals(body.includes(test.credential), false);
     assertEquals(JSON.parse(body).accounts[0].state, "ready");
+  } finally {
+    if (oldCron === undefined) Deno.env.delete("CRON_SECRET"); else Deno.env.set("CRON_SECRET", oldCron);
+  }
+});
+
+Deno.test("Graph throttles persist the app pause and the identical provider deadline on settlement", async () => {
+  for (const code of [4, 17, 32, 613]) {
+    const test = fixture();
+    const original = test.input.rpc;
+    let recorded: unknown;
+    let settled: unknown;
+    test.input.rpc = async (name, args, signal) => {
+      if (name === "record_analytics_legacy_bootstrap_usage") recorded = args.p_retry_at;
+      if (name === "settle_analytics_legacy_bootstrap") settled = args.p_retry_at;
+      return await original(name, args, signal);
+    };
+    test.input.fetcher = () => Promise.resolve(Response.json({ error: { code } }, { status: 400,
+      headers: { "retry-after": "259200", "x-app-usage": '{"call_count":20}' } }));
+    const outcome = await runLegacyBootstrap(test.input);
+    assertEquals(outcome.accounts[0].reason_code, "rate_limited");
+    assertEquals(Date.parse(String(recorded)) > Date.now() + 2 * 86_400_000, true);
+    assertEquals(settled, recorded);
+  }
+});
+
+Deno.test("transient permission denials remain pending instead of requiring consent", async () => {
+  for (const code of [10, 200]) {
+    const test = fixture({ permissions: { error: { code, is_transient: true } } });
+    const outcome = await runLegacyBootstrap(test.input);
+    assertEquals(outcome.accounts[0].state, "permission_pending");
+  }
+});
+
+Deno.test("every HTTP refusal persists only a closed reason; audit failure is explicit and bounded", async () => {
+  const oldCron = Deno.env.get("CRON_SECRET");
+  const cron = secret();
+  Deno.env.set("CRON_SECRET", cron);
+  try {
+    const test = fixture();
+    const rows: Record<string, unknown>[] = [];
+    const rpc: BootstrapRpc = async (name, args) => {
+      assertEquals(name, "record_analytics_legacy_bootstrap_refusal");
+      rows.push(args);
+      return { data: null, error: null };
+    };
+    for (const [method, authorized, expected] of [["POST", false, "unauthorized"], ["GET", true, "invalid_method"], ["POST", true, "invalid_request"]] as const) {
+      const request = () => new Request("https://example.invalid", { method,
+        headers: authorized ? { Authorization: `Bearer ${cron}` } : {}, ...(method === "POST" ? { body: secret() } : {}) });
+      const response = await bootstrapHandler(request(), { ...test.input, rpc });
+      assertEquals((await response.json()).error, expected);
+      assertEquals(rows.at(-1), { p_reason: expected });
+      const failure = await bootstrapHandler(request(), { ...test.input, rpc: () => Promise.resolve({ data: null, error: { message: secret() } }) });
+      assertEquals(failure.status, 503);
+      assertEquals(await failure.json(), { error: "audit_or_store_unavailable" });
+    }
+    const started = Date.now();
+    const timeout = await bootstrapHandler(new Request("https://example.invalid"), { ...test.input,
+      deadline: started + 40, rpc: () => new Promise(() => {}) });
+    assertEquals(timeout.status, 503);
+    assertEquals(Date.now() - started < 500, true);
   } finally {
     if (oldCron === undefined) Deno.env.delete("CRON_SECRET"); else Deno.env.set("CRON_SECRET", oldCron);
   }

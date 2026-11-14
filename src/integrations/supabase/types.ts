@@ -11516,6 +11516,10 @@ export type Database = {
         }
         Returns: boolean
       }
+      record_analytics_legacy_bootstrap_refusal: {
+        Args: { p_reason: string }
+        Returns: undefined
+      }
       record_analytics_legacy_bootstrap_usage: {
         Args: {
           p_run_id: string

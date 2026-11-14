@@ -10,7 +10,11 @@ export function metaNextCursor(body: Record<string, unknown>, origin: string, pa
   const cursors = continuation.cursors;
   const after = cursors !== null && typeof cursors === "object" && !Array.isArray(cursors)
     ? (cursors as Record<string, unknown>).after : null;
-  if (next.origin !== origin || next.pathname !== path || next.username || next.password || next.hash
+  // Graph may resolve /me to its numeric subject. Requests still use the original
+  // trusted /me edge; neither that subject nor any continuation URL is followed.
+  const alias = /^\/(v\d+\.\d+)\/me\/(accounts|permissions)$/.exec(path);
+  const resolved = alias ? new RegExp(`^/${alias[1].replace(".", "\\.")}/[0-9]{1,128}/${alias[2]}$`) : null;
+  if (next.origin !== origin || (next.pathname !== path && !resolved?.test(next.pathname)) || next.username || next.password || next.hash
     || typeof after !== "string" || !/^[A-Za-z0-9_=-]{1,2048}$/.test(after) || seen.has(after)) {
     throw new Error("Invalid Meta pagination");
   }

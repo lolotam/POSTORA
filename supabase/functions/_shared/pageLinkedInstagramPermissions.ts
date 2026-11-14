@@ -175,7 +175,7 @@ export async function readPageLinkedPermissions(token: string, fetcher?: typeof 
     const body = response.body;
     if (isRecord(body) && isRecord(body.error)) {
       const code = body.error.code;
-      throw new MetaPermissionReadFailure(response.status === 429 || [4, 17, 32, 613].includes(Number(code)) ? "rate_limited" : code === 190 ? "token_invalid" : [10, 200].includes(Number(code))
+      throw new MetaPermissionReadFailure(response.status === 429 || [4, 17, 32, 613].includes(Number(code)) ? "rate_limited" : code === 190 ? "token_invalid" : [10, 200].includes(Number(code)) && body.error.is_transient !== true
         ? "permission_missing" : code === 100 ? "unsupported" : "provider_error");
     }
     if (!response.ok || !isRecord(body) || body.error || body.error_message

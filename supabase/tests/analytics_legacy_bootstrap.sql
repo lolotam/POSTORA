@@ -22,6 +22,23 @@ BEGIN
 END;
 $grants$;
 
+DO $http_refusal_audit$
+DECLARE reason text;before_count bigint;
+BEGIN
+ SELECT count(*) INTO before_count FROM public.analytics_legacy_bootstrap_audit;
+ FOREACH reason IN ARRAY ARRAY['unauthorized','invalid_method','invalid_request'] LOOP
+  PERFORM public.record_analytics_legacy_bootstrap_refusal(reason);
+  ASSERT EXISTS(SELECT 1 FROM public.analytics_legacy_bootstrap_audit WHERE event='http_refused' AND reason_code=reason
+   AND social_account_id IS NULL AND correlation_id IS NOT NULL);
+ END LOOP;
+ BEGIN
+  PERFORM public.record_analytics_legacy_bootstrap_refusal(gen_random_uuid()::text);
+  RAISE EXCEPTION 'arbitrary audit payload accepted';
+ EXCEPTION WHEN raise_exception THEN IF SQLERRM<>'BOOTSTRAP_INVALID_REFUSAL' THEN RAISE; END IF; END;
+ ASSERT (SELECT count(*)=before_count+3 FROM public.analytics_legacy_bootstrap_audit);
+END;
+$http_refusal_audit$;
+
 INSERT INTO auth.users(id,email) VALUES('ab030000-0000-4000-8000-000000000001','bootstrap-a@example.invalid'),
  ('ab030000-0000-4000-8000-000000000002','bootstrap-b@example.invalid');
 INSERT INTO public.social_accounts(id,user_id,platform,platform_user_id,platform_username,access_token,account_metadata,ig_auth_type) VALUES
@@ -265,6 +282,138 @@ BEGIN
   'installing an isolated grant must not replace the old shared grant';
 END;
 $expired_protected_fallback$;
+
+DO $reopened_login_kind$
+DECLARE target uuid:='ab030000-0000-4000-8000-000000000013';capture jsonb;outcome jsonb;kind text;
+BEGIN
+ FOREACH kind IN ARRAY ARRAY['page_linked','direct'] LOOP
+  UPDATE public.instagram_account_capabilities SET login_kind=kind,credential_generation=credential_generation+1,
+   credential_updated_at=clock_timestamp(),permission_read_state='unknown',granted_scopes='{}',scopes_read_at=NULL
+   WHERE social_account_id=target;
+  UPDATE public.social_accounts SET account_metadata='{"facebook_page_id":"100001"}',
+   ig_auth_type=CASE WHEN kind='direct' THEN 'business_login' ELSE 'facebook_page' END WHERE id=target;
+  IF kind='direct' THEN DELETE FROM public.facebook_user_credential_bindings WHERE social_account_id=target; END IF;
+  capture:=pg_temp.bootstrap_begin(target);
+  ASSERT capture->'capture'->>'login_kind'=kind;
+  ASSERT (SELECT login_kind=kind FROM public.analytics_legacy_bootstrap_jobs WHERE social_account_id=target),
+   'reopened job must persist the current login family';
+  outcome:=CASE WHEN (capture->>'installed')::boolean THEN capture ELSE pg_temp.bootstrap_commit(capture) END;
+  outcome:=public.complete_analytics_legacy_bootstrap((capture->>'job_id')::uuid,(capture->>'lease_id')::uuid,(outcome->>'revision')::bigint,
+   jsonb_build_object('state','ok','scopes',CASE WHEN kind='direct' THEN '["instagram_business_manage_insights"]'::jsonb
+    ELSE '["instagram_manage_insights"]'::jsonb END,'observed_at',clock_timestamp()));
+  ASSERT outcome->>'state'='ready','completion must use the reconnected family scope';
+ END LOOP;
+END;
+$reopened_login_kind$;
+
+DO $protected_without_facebook_row$
+DECLARE target uuid:='ab030000-0000-4000-8000-000000000017';owner_id uuid:='ab030000-0000-4000-8000-000000000001';
+ credential uuid:=gen_random_uuid();capture jsonb;outcome jsonb;
+BEGIN
+ INSERT INTO public.social_accounts(id,user_id,platform,platform_user_id,platform_username,access_token,account_metadata,ig_auth_type)
+ VALUES(target,owner_id,'instagram','178017','protected_only',gen_random_uuid()::text,'{}','facebook_page');
+ INSERT INTO public.facebook_user_credentials(id,user_id,token,provider_user_id,provenance_source,provenance_captured_at)
+ VALUES(credential,owner_id,gen_random_uuid()::text,'300001','oauth_exchange',clock_timestamp());
+ INSERT INTO public.facebook_user_credential_bindings(social_account_id,user_id,platform,credential_id,verified_facebook_user_id,
+  verified_facebook_page_id,verified_instagram_user_id,evidence_source,connection_version)
+ VALUES(target,owner_id,'instagram',credential,'300001','100017','178017','oauth_exchange',
+  public.facebook_user_credential_allocate_connection_version(target,owner_id,'instagram'));
+ capture:=pg_temp.bootstrap_begin(target);
+ ASSERT capture->>'state'='verifying','an account-bound protected grant needs no Facebook account row';
+ ASSERT capture->'capture'->>'page_id'='100017';
+ -- A protected token still cannot install evidence for a different Page.
+ PERFORM public.permit_analytics_legacy_bootstrap((capture->>'run_id')::uuid,(capture->>'job_id')::uuid,(capture->>'lease_id')::uuid,(capture->>'revision')::bigint,'200001');
+ outcome:=public.commit_analytics_legacy_bootstrap((capture->>'job_id')::uuid,(capture->>'lease_id')::uuid,(capture->>'revision')::bigint,
+  pg_temp.bootstrap_evidence(capture)||'{"page_id":"100099"}'::jsonb);
+ ASSERT outcome->>'reason_code'='identity_mismatch';
+ outcome:=pg_temp.bootstrap_commit(capture);
+ ASSERT outcome->>'state'='permission_pending';
+ ASSERT (SELECT credential_id=credential FROM public.facebook_user_credential_bindings WHERE social_account_id=target);
+END;
+$protected_without_facebook_row$;
+
+DO $permission_timestamp_precision$
+DECLARE target uuid:='ab030000-0000-4000-8000-000000000018';capture jsonb;outcome jsonb;installed timestamptz;observed timestamptz;
+BEGIN
+ INSERT INTO public.social_accounts(id,user_id,platform,platform_user_id,platform_username,access_token,account_metadata,ig_auth_type)
+ VALUES(target,'ab030000-0000-4000-8000-000000000001','instagram','178018','precision',gen_random_uuid()::text,
+  '{"facebook_page_id":"100001"}','facebook_page');
+ capture:=pg_temp.bootstrap_begin(target);
+ outcome:=pg_temp.bootstrap_commit(capture);
+ SELECT installed_at INTO installed FROM public.analytics_legacy_bootstrap_jobs WHERE social_account_id=target;
+ observed:=date_trunc('milliseconds',installed);
+ BEGIN
+  PERFORM public.complete_analytics_legacy_bootstrap((capture->>'job_id')::uuid,(capture->>'lease_id')::uuid,(outcome->>'revision')::bigint,
+   jsonb_build_object('state','ok','scopes','["instagram_manage_insights"]'::jsonb,'observed_at',observed-interval '1 millisecond'));
+  RAISE EXCEPTION 'a prior millisecond must remain stale';
+ EXCEPTION WHEN raise_exception THEN IF SQLERRM<>'BOOTSTRAP_PERMISSION_STALE' THEN RAISE; END IF; END;
+ outcome:=public.complete_analytics_legacy_bootstrap((capture->>'job_id')::uuid,(capture->>'lease_id')::uuid,(outcome->>'revision')::bigint,
+  jsonb_build_object('state','ok','scopes','["instagram_manage_insights"]'::jsonb,'observed_at',observed));
+ ASSERT outcome->>'state'='ready','post-install millisecond observation must not fail microsecond comparison';
+ ASSERT (SELECT scopes_read_at>installed AND scopes_read_at>credential_updated_at FROM public.instagram_account_capabilities WHERE social_account_id=target);
+END;
+$permission_timestamp_precision$;
+
+DO $compatibility_grant_with_facebook_source$
+DECLARE target uuid:='ab030000-0000-4000-8000-000000000019';owner_id uuid:='ab030000-0000-4000-8000-000000000001';
+ credential uuid:=gen_random_uuid();capture jsonb;outcome jsonb;
+BEGIN
+ INSERT INTO public.social_accounts(id,user_id,platform,platform_user_id,platform_username,access_token,account_metadata,ig_auth_type)
+ VALUES(target,owner_id,'instagram','178019','compatibility',gen_random_uuid()::text,'{"facebook_page_id":"100001"}','facebook_page');
+ INSERT INTO public.facebook_user_credentials(id,user_id,token,provider_user_id,provenance_source,provenance_captured_at)
+ VALUES(credential,owner_id,gen_random_uuid()::text,'300001','oauth_exchange',clock_timestamp());
+ INSERT INTO public.facebook_user_credential_bindings(social_account_id,user_id,platform,credential_id,evidence_source,connection_version)
+ VALUES(target,owner_id,'instagram',credential,'compatibility_task3a',
+  public.facebook_user_credential_allocate_connection_version(target,owner_id,'instagram'));
+ capture:=pg_temp.bootstrap_begin(target);
+ ASSERT capture->>'state'='verifying';
+ outcome:=pg_temp.bootstrap_commit(capture);
+ ASSERT outcome->>'state'='permission_pending','compatibility grants must retain the captured Facebook Page source check';
+ ASSERT public.analytics_bootstrap_binding_verified(target);
+END;
+$compatibility_grant_with_facebook_source$;
+
+DO $all_authority_readers$
+DECLARE owner_id uuid:='ab030000-0000-4000-8000-000000000001';target uuid;credential uuid;capture jsonb;projection jsonb;
+BEGIN
+ FOREACH target IN ARRAY ARRAY['ab030000-0000-4000-8000-000000000011'::uuid,'ab030000-0000-4000-8000-000000000012'::uuid] LOOP
+  SELECT credential_id INTO STRICT credential FROM public.facebook_user_credential_bindings WHERE social_account_id=target;
+  ASSERT (SELECT evidence_source='verified_legacy_bootstrap' FROM public.facebook_user_credential_bindings WHERE social_account_id=target);
+  ASSERT public.analytics_bootstrap_binding_verified(target);
+  ASSERT (public.read_facebook_user_account_credential(owner_id,target)->>'found')::boolean;
+  ASSERT (public.read_facebook_user_credential(owner_id,credential)->>'found')::boolean;
+  projection:=public.describe_facebook_user_credential(owner_id,credential);
+  ASSERT projection->>'provenance_source'='verified_legacy_bootstrap';
+  ASSERT public.facebook_user_credential_status(owner_id,credential)=projection;
+  capture:=public.meta_oauth_attempt_capture_account(owner_id,target);
+  PERFORM public.meta_oauth_attempt_require_captured_account(owner_id,capture);
+  ASSERT public.meta_oauth_attempt_capture_grant(owner_id,credential) IS NOT NULL;
+  capture:=public.meta_account_refresh_capture_account(owner_id,target);
+  PERFORM public.meta_account_refresh_require_captured_account(owner_id,capture);
+  ASSERT public.meta_account_refresh_capture_members(owner_id,credential) IS NOT NULL;
+  IF target='ab030000-0000-4000-8000-000000000011' THEN
+   ASSERT public.meta_analytics_current_authority('facebook',target,owner_id)->>'credential_id'=credential::text;
+  ELSE
+   ASSERT public.read_instagram_account_capability(target,owner_id)->>'login_kind'='page_linked';
+  END IF;
+  -- Every delegated reader/validator must also reject the same invalidated receipt.
+  BEGIN
+   UPDATE public.facebook_user_credential_connection_fences SET connection_version=connection_version+1 WHERE social_account_id=target;
+   BEGIN PERFORM public.read_facebook_user_account_credential(owner_id,target); RAISE EXCEPTION 'reader accepted stale receipt';
+    EXCEPTION WHEN SQLSTATE 'FUC03' THEN NULL; END;
+   BEGIN PERFORM public.meta_oauth_attempt_capture_account(owner_id,target); RAISE EXCEPTION 'capture accepted stale receipt';
+    EXCEPTION WHEN SQLSTATE 'FUC03' THEN NULL; END;
+   BEGIN PERFORM public.meta_oauth_attempt_require_captured_account(owner_id,capture); RAISE EXCEPTION 'OAuth accepted stale receipt';
+    EXCEPTION WHEN SQLSTATE 'FUC03' THEN NULL; END;
+   BEGIN PERFORM public.meta_account_refresh_require_captured_account(owner_id,capture); RAISE EXCEPTION 'refresh accepted stale receipt';
+    EXCEPTION WHEN SQLSTATE 'FUC03' THEN NULL; END;
+   BEGIN PERFORM public.facebook_user_credential_status(owner_id,credential); RAISE EXCEPTION 'status accepted stale receipt';
+    EXCEPTION WHEN SQLSTATE 'FUC03' THEN NULL; END;
+   RAISE EXCEPTION 'restore receipt fence' USING ERRCODE='TST01';
+  EXCEPTION WHEN SQLSTATE 'TST01' THEN NULL; END;
+ END LOOP;
+END;
+$all_authority_readers$;
 
 SET LOCAL ROLE authenticated;
 SET LOCAL request.jwt.claim.role='service_role';
