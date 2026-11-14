@@ -99,9 +99,9 @@ export function formatReasonExplanation(reason: OwnerReportReasonCode | null | u
     case "never_synced":
       return "Initial collection has not started yet.";
     case "scope_missing":
-      return "Required Instagram Insights permissions are missing. Reconnecting your account may resolve this.";
+      return "The last collection attempt reported a permission issue. Current permissions need verification.";
     case "reauth_required":
-      return "Account session expired. Please reconnect this Instagram account.";
+      return "The last collection attempt reported an access issue. Current connection status needs verification.";
     case "throttled":
     case "usage_limit_reached":
       return "Instagram API rate limit reached. The system will retry automatically.";

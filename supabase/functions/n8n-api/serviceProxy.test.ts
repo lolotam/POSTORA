@@ -26,6 +26,24 @@ const OWNER = "8f14e45f-ceea-4e7a-9b1c-2d3e4f5a6b7c";
 const OTHER = "1b4e28ba-2fa1-4d3b-a3f5-ef19b5a7633b";
 const ACCOUNT_ID = "6ec0bd7f-11c0-43da-975e-2a8ad9ebae0b";
 
+Deno.test("owner sync refusals keep exact machine reasons and never advise reconnect for policy or missing trusted state", async () => {
+  for (const [upstream, expected] of [
+    [{ status: 403, data: { error: "collection_not_eligible" } }, "collection_not_eligible"],
+    [{ status: 409, data: { error: "reconnect_required" } }, "bootstrap_required"],
+    [{ status: 200, data: { ok: false, status: "collection_disabled" } }, "collection_disabled"],
+    [{ status: 200, data: { ok: false, status: "not_eligible" } }, "collection_not_eligible"],
+    [{ status: 200, data: {} }, "provider_error"],
+  ] as const) {
+    const { deps } = fakeDeps({ upstream });
+    const result = await handleTriggerAnalyticsSync(deps, OWNER, { social_account_id: ACCOUNT_ID });
+    const body = result.body as Record<string, unknown>;
+    assertEquals(body.reason_code, expected);
+    assertEquals(body.accepted, false);
+    assertEquals(body.queued, false);
+    assertEquals(body.reconnect_can_help, false);
+  }
+});
+
 interface InvokeCall {
   functionName: string;
   body: Record<string, unknown>;
@@ -702,7 +720,7 @@ Deno.test("the account loader reads one account and tells a failed read from a m
           return {
             eq(column: string, value: string) {
               seen.push({ table, column, value });
-              return { maybeSingle: () => Promise.resolve(result) };
+              return { abortSignal: (_signal: AbortSignal) => ({ maybeSingle: () => Promise.resolve(result) }) };
             },
           };
         },
@@ -812,7 +830,11 @@ Deno.test("sync forwards only normal account enqueue and preserves collection re
       const { deps, calls } = fakeDeps({ account: { ...DEFAULT_ACCOUNT, platform }, upstream: { status, data } });
       const result = await handleTriggerAnalyticsSync(deps, OWNER, { social_account_id: ACCOUNT_ID });
       assertEquals(result.status, status);
-      assertEquals(result.body, data);
+      const receipt = bodyOf(result);
+      assertEquals(receipt.accepted, status === 202);
+      assertEquals(receipt.queued, status === 202);
+      assertEquals(receipt.reconnect_can_help, false);
+      if (status === 202) assertEquals(receipt.status, data.status);
       assertEquals(calls.invokes[0].functionName, platform === "instagram" ? "instagram-insights-sync" : "meta-owned-analytics-sync");
       assertEquals(calls.invokes[0].body.user_id, OWNER);
       assertEquals(calls.invokes[0].body.action, "enqueue");
@@ -928,5 +950,33 @@ Deno.test("new read handlers retain upstream business refusals and sanitize inte
     const expected = status === 500 ? 502 : status;
     assertEquals((await handleGetAccountAnalytics(deps, OWNER, params({ social_account_id: ACCOUNT_ID }))).status, expected);
     assertEquals((await handleAnalyzeBrand(deps, OWNER, { platform: "facebook", handle: "brand" })).status, expected);
+  }
+});
+
+Deno.test("leased owner jobs remain accepted running work and app configuration refusals retain their cause", async () => {
+  const leased = fakeDeps({ account: { ...DEFAULT_ACCOUNT, platform: "instagram" }, upstream: { status: 202,
+    data: { accepted: true, reason: "already_enqueued", status: "leased" } } });
+  const result = await handleTriggerAnalyticsSync(leased.deps, OWNER, { social_account_id: ACCOUNT_ID });
+  assertEquals(bodyOf(result).accepted, true);
+  assertEquals(bodyOf(result).reason_code, "running");
+  assertEquals(bodyOf(result).queued, false);
+  const config = fakeDeps({ upstream: { status: 503, data: { ok: false, reason: "app_configuration_unavailable" } } });
+  const refused = bodyOf(await handleTriggerAnalyticsSync(config.deps, OWNER, { social_account_id: ACCOUNT_ID }));
+  assertEquals(refused.reason_code, "settings_unavailable");
+  assertEquals(refused.reason_source, "configuration");
+});
+
+Deno.test("both analytics routes map dependency deadline aborts to the public retryable timeout", async () => {
+  for (const phase of ["account", "upstream"] as const) {
+    for (const sync of [false, true]) {
+      const { deps } = fakeDeps();
+      if (phase === "account") deps.loadAccount = async () => { throw new DOMException("private deadline details", "AbortError"); };
+      else deps.invoke = async () => { throw new DOMException("private deadline details", "TimeoutError"); };
+      const result = sync ? await handleTriggerAnalyticsSync(deps, OWNER, { social_account_id: ACCOUNT_ID })
+        : await handleGetAccountAnalytics(deps, OWNER, params({ social_account_id: ACCOUNT_ID }));
+      assertEquals(result.status, 504);
+      assertEquals((bodyOf(result).error as { code: string }).code, "UPSTREAM_TIMEOUT");
+      assertEquals(JSON.stringify(result.body).includes("private"), false);
+    }
   }
 });

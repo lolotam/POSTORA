@@ -38,7 +38,7 @@ globalThis.fetch = async (input, init) => {
     if (reply) return reply;
   }
   if (["graph.facebook.com", "graph.instagram.com"].includes(url.hostname)) return syntheticMetaFetch(input, init);
-  if (url.protocol !== "http:" || url.hostname !== "127.0.0.1" || !["65431", "65435", "65436"].includes(url.port)) {
+  if (url.protocol !== "http:" || url.hostname !== "127.0.0.1" || ![OWNER_RELEASE.apiUrl, OWNER_RELEASE.authUrl, OWNER_RELEASE.restUrl].map((endpoint) => new URL(endpoint).port).includes(url.port)) {
     throw new Error("Owner-release runtime refused non-fixture network access");
   }
   let response: Response;

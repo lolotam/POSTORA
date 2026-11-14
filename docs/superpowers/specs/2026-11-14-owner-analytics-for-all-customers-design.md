@@ -142,6 +142,26 @@ Keep raw worker `scope_missing` only in dated historical/raw evidence or positiv
 
 `data.state` is `empty`, `partial`, `complete`, or `stale`, with counts of real persisted observations, requested-period coverage and last successful capture. “Partially synced” requires saved relevant observations AND incomplete coverage; attempt-only history is empty with current collection status. Zero is a measurement, null is unavailable. No blanket 48-hour provider-lag banner before the first successful measurement; show provider windows only for metrics whose capture evidence supports it. Preserve saved reports when collection is disabled and show last data timestamp independently. Update English/Arabic translations and report export consumers without changing architecture direction (`ui → application → domain`, database gateway in infrastructure).
 
+### 5.2.1 Readiness precedence and independent evidence
+
+Phase 1 uses the following ordered decision table. SQL owns eligibility; both report assemblers call `projectOwnerAnalyticsReadiness` for the final saved-data projection. A lower row never replaces a higher row, even when saved data exists.
+
+| Priority | Current evidence | Collection reason/source |
+|---|---|---|
+| 1 | Invalid configuration, disabled collection, excluded target | `settings_unavailable`/configuration, or `collection_disabled`/`collection_not_eligible`/rollout_policy |
+| 2 | Invalid identity, inactive account, unusable credential, absent trusted bootstrap | Diagnosed connection reason/connection |
+| 3 | Terminal provider token or permission refusal for the current authority, not superseded by a newer successful permission read | `token_invalid`/connection or `permission_missing`/job |
+| 4 | Unknown/failed permission verification or positively missing named scopes | `permission_verification_pending` or `permission_missing`/permission |
+| 5 | Current scheduled retry | `rate_limited` or `provider_error`/job, with `retry_at` |
+| 6 | Queued/pending work, or current running/leased work | `queued` or `running`/job |
+| 7 | All prerequisites satisfied | `awaiting_first_capture`/data; only this fallback becomes `ready` when accepted account-wide numerical observations exist |
+
+`last_attempt` is dated history, not an additional precedence row. An obsolete generation/login/viewer or Facebook authority can retain history but cannot block current readiness. Instagram's actual terminal outcomes are `unavailable/token_invalid` and `unavailable/scope_missing`; Facebook uses `failed/reauth_required` and `failed/permission_missing`.
+
+Connection and permission evidence are evaluated independently of the winning collection reason. An unnamed permission denial requires a matching terminal provider refusal and timestamp, regardless of policy/configuration precedence. Today's Facebook permission freshness remains required; a newer successful verification still supersedes an older refusal across Los Angeles midnight, leaving verification pending rather than resurrecting the refusal. A failed verification does not supersede a proven refusal.
+
+The 66-row table in `supabase/tests/owner_analytics_readiness.sql` asserts real SQL snapshots. The admission integration suite executes that same table and passes every snapshot through the shared TypeScript projection with and without saved measurements. Inventory discovery alone cannot complete period data: supported in-window media require completed saved captures, in addition to the expected measured days.
+
 ### 5.3 Agent tools
 
 Actual chain: `mcp/index.ts:492-567` → `n8n-api` analytics routes → `serviceProxy.ts:472-580` → owner report/sync or Meta-owned report/sync; `analyze_brand` invokes the separate public discovery path. Keep MCP `posts:read`/`posts:write` authorization distinct from provider grants. Current MCP success is based only on HTTP status, so Facebook HTTP-200 `ok:false` can be misclassified ([owned sync handler:87-113](../../../supabase/functions/meta-owned-analytics-sync/handler.ts)).

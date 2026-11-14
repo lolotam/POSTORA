@@ -1,3 +1,4 @@
+import { parseOwnerAnalyticsReadiness } from "../_shared/ownerAnalyticsReadiness.ts";
 /**
  * Database Reader & Store for Instagram Insights Report (Slice O3).
  *
@@ -26,7 +27,7 @@ import {
   type OwnerReport,
   OwnerReportContractError,
 } from "./contracts.ts";
-import { assembleOwnerReport } from "./assemble.ts";
+import { assembleOwnerReport, classifyOwnerMedia } from "./assemble.ts";
 import { readReportQuery, ReportHistoryUnavailableError, type HistoryClient } from "./readHistory.ts";
 
 export type ReportStoreClient = HistoryClient & {
@@ -147,11 +148,11 @@ export function toProfileObservationRow(row: Record<string, unknown>): ProfileOb
  */
 const WORKER_REASON_TO_REPORT_REASON: Readonly<Record<string, OwnerReportReasonCode>> = {
   scope_missing: "scope_missing",
-  capability_missing: "scope_missing",
+  capability_missing: "unknown",
   token_invalid: "reauth_required",
-  credential_unavailable: "reauth_required",
-  context_missing: "reauth_required",
-  direct_login_unsupported: "reauth_required",
+  credential_unavailable: "unknown",
+  context_missing: "unknown",
+  direct_login_unsupported: "unknown",
   rate_limited: "throttled",
   provider_error: "provider_error",
   collection_unavailable: "provider_unavailable",
@@ -195,7 +196,7 @@ export function parseFreshness(jobStatus: Record<string, unknown> | null): Owner
   else if (rawStatus === "partial") syncStatus = "partial";
   else if (rawStatus === "failed") syncStatus = "error";
   else if (jobStatus.last_success_at) syncStatus = "ok";
-  else if (jobStatus.last_attempt_at) syncStatus = "partial";
+
 
   const inventory = (jobStatus.inventory as Record<string, unknown>) ?? {};
   const isPartial = Boolean(inventory.partial ?? rawStatus === "partial");
@@ -216,11 +217,14 @@ export function parseFreshness(jobStatus: Record<string, unknown> | null): Owner
 
 export function parseCompleteness(
   jobStatus: Record<string, unknown> | null,
-  mediaItems: MediaSnapshotRow[]
+  mediaItems: MediaSnapshotRow[],
+  windowMedia: MediaSnapshotRow[] = mediaItems
 ): OwnerReportCompletenessInput {
   const inventory = (jobStatus?.inventory as Record<string, unknown>) ?? {};
   const isTruncated = Boolean(inventory.truncated ?? false);
-  const isCovered = Boolean(inventory.window_covered ?? false);
+  const completedIds = new Set(mediaItems.filter((row) => row.status == null || row.status === "ok" || row.status === "unavailable").map((row) => row.mediaId));
+  const missingCaptures = windowMedia.some((row) => classifyOwnerMedia(row).kind === "supported" && !completedIds.has(row.mediaId));
+  const isCovered = Boolean(inventory.window_covered ?? false) && !isTruncated && !missingCaptures;
 
   let coverage: OwnerReportCoverage = "unknown";
   if (isCovered) coverage = "complete";
@@ -279,9 +283,9 @@ export class ReportStore {
     socialAccountId: string,
     userId: string,
     request: OwnerReportRequest,
-    now: Date = new Date()
+    now: Date = new Date(),
+    signal = AbortSignal.timeout(20_000),
   ): Promise<OwnerReport> {
-    const signal = AbortSignal.timeout(20_000);
     const { data, error } = await readReportQuery(this.client.rpc("read_instagram_owner_report_snapshot", {
       p_user_id: userId, p_account_id: socialAccountId, p_as_of: now.toISOString(),
     }).abortSignal(signal), signal);
@@ -326,9 +330,15 @@ export class ReportStore {
     );
 
     const freshness = parseFreshness(jobStatus);
-    const completeness = parseCompleteness(jobStatus, mappedMedia);
+    const completeness = parseCompleteness(jobStatus, mappedMedia, displayMedia.filter((row) => Date.parse(row.publishedAt) <= now.getTime()));
 
-    return assembleOwnerReport({
+    let readiness;
+    if (snapshot.readiness !== undefined) {
+      try { readiness = parseOwnerAnalyticsReadiness(snapshot.readiness); }
+      catch { throw new ReportHistoryUnavailableError("Invalid owner readiness snapshot"); }
+    }
+    const report = assembleOwnerReport({
+      readiness,
       scope: {
         ownerId: userId,
         socialAccountId,
@@ -344,5 +354,11 @@ export class ReportStore {
       freshness,
       completeness,
     });
+    const dataState = report.data!;
+    report.freshness = { ...report.freshness, status: dataState.observation_count === 0 ? "never" : dataState.state === "partial" ? "partial" : "ok",
+      partial: dataState.state === "partial", lastSuccessAt: dataState.last_successful_capture,
+      ...(dataState.observation_count === 0 ? { lastPartialAt: null, reason: "never_synced" as const } : {}) };
+    if (readiness) report.freshness.reason = null;
+    return report;
   }
 }

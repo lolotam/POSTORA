@@ -1,3 +1,4 @@
+import { OwnerAnalyticsStatus } from "./OwnerAnalyticsStatus";
 import { useAnalyticsLabels } from "./useAnalyticsLabels";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
@@ -42,9 +43,10 @@ export function SavedAnalyticsReport({ report }: { report: AnalyticsReport }) {
   const orderedPosts = sortByViews ? [...posts].sort((left, right) => viewCount(right) - viewCount(left)) : posts;
   const time = (instant: string | null) => instant ?? t("owned.unavailable", "Not available");
   return <div className="space-y-5">
+    <OwnerAnalyticsStatus report={report} />
     <div role="status" className="rounded-lg border p-4 space-y-1 text-sm" aria-live="polite">
-      <p className="font-medium">{labels.sync[report.sync.status]}</p>
-      {report.sync.reason && <p>{labels.reasons[report.sync.reason]}</p>}
+      {!report.collection && <p className="font-medium">{labels.sync[report.sync.status]}</p>}
+      {!report.collection && report.sync.reason && <p>{labels.reasons[report.sync.reason]}</p>}
       <p>{t("owned.updatedAt", "Last collection")}: {time(report.sync.collectedAt)}</p>
       <p>{t("owned.dataAsOf", "Data as of")}: {time(report.sync.asOf)}</p>
       {report.retryAt && <p>{t("owned.retryAt", "Retry after")}: {report.retryAt}</p>}

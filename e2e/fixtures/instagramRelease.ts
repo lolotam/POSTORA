@@ -135,7 +135,7 @@ export function assertInstagramReleaseEnvironment(environment: Record<string, st
 
 export function assertInstagramReleaseNetworkUrl(endpoint: string, lane: "browser" | "server"): void {
   const url = new URL(endpoint);
-  const ports = lane === "browser" ? ["8080", "65431"] : ["65431", "65435", "65436"];
+  const ports = lane === "browser" ? ["8080", "65431"] : [INSTAGRAM_RELEASE.apiUrl, INSTAGRAM_RELEASE.authUrl, INSTAGRAM_RELEASE.restUrl].map((endpoint) => new URL(endpoint).port);
   if (url.protocol !== "http:" || url.hostname !== "127.0.0.1" || !ports.includes(url.port) || url.username || url.password) throw new Error("Instagram release fixture refused unexpected network access");
 }
 

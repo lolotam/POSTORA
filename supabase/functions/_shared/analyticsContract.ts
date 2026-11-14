@@ -1,3 +1,4 @@
+import type { OwnerAnalyticsReadiness, OwnerAnalyticsData } from "./ownerAnalyticsReadiness.ts";
 /** One runtime-neutral contract is imported by the browser and Edge Functions. */
 import type { AnalyticsDayBucket, AnalyticsPeriod } from "./analyticsCalendar.ts";
 
@@ -75,7 +76,8 @@ export type AnalyticsPost = {
   permalink: string | null;
   metrics: AnalyticsMetricResult[];
 };
-export type AnalyticsReport = {
+export type AnalyticsReport = Partial<OwnerAnalyticsReadiness> & {
+  data?: OwnerAnalyticsData;
   analyticsContractVersion: typeof ANALYTICS_CONTRACT_VERSION;
   platform: AnalyticsPlatform;
   accountId: string;

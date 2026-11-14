@@ -148,7 +148,7 @@ export function createInstagramInsightsReportHandler(deps: ReportHandlerDeps) {
     if (rawContractVersion !== undefined) {
       if (rawContractVersion !== 1) return jsonResponse({ ok: false, reason: "unsupported_contract_version", message: "Unsupported analytics contract version." }, 400);
       try {
-        const account = await awaitWithAbort(() => deps.store.loadAccount(socialAccountId, targetUserId), signal);
+        const account = await awaitWithAbort(() => deps.store.loadAccount(socialAccountId, targetUserId, signal), signal);
         if (!account) return jsonResponse({ ok: false, reason: "account_not_found", message: "Instagram account not found." }, 404);
         // No Instagram calendar/metric cell has accepted capability evidence yet.
         // Do not relabel the legacy DTO or invent a canonical provider timezone.
@@ -219,7 +219,8 @@ export function createInstagramInsightsReportHandler(deps: ReportHandlerDeps) {
           limit,
           cursor,
         },
-        now
+        now,
+        signal
       ), signal);
 
       return jsonResponse(report, 200);

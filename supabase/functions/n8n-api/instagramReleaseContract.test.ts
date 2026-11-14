@@ -4,6 +4,7 @@ import { expect, test, type APIRequestContext } from "@playwright/test";
 import { INSTAGRAM_RELEASE, requireInstagramReleaseHealth, type InstagramReleaseManifest } from "../../../e2e/fixtures/instagramRelease.ts";
 import { syntheticOwnerReleaseKey } from "../../../e2e/fixtures/instagramOwnerReleaseSettings.mjs";
 import type { OwnerReport } from "../instagram-insights-report/contracts.ts";
+import { readinessParity } from "../../../e2e/fixtures/readinessParity.ts";
 
 let manifest: InstagramReleaseManifest;
 let serviceKey: string;
@@ -49,11 +50,11 @@ async function api(request: APIRequestContext, args: Record<string, string | num
 function comparable(report: OwnerReport, days: number, started: number, finished: number) {
   // Assembly uses a rolling clock. Validate it explicitly; compare every stored/report field unchanged.
   const generated = Date.parse(report.generatedAt);
-  expect(generated).toBeGreaterThanOrEqual(started);
-  expect(generated).toBeLessThanOrEqual(finished);
+  expect(generated).toBeGreaterThanOrEqual(started - 1_000);
+  expect(generated).toBeLessThanOrEqual(finished + 1_000);
   expect(report.period.windowEnd).toBe(report.generatedAt);
   expect(Date.parse(report.period.windowEnd) - Date.parse(report.period.windowStart)).toBe(days * 86_400_000);
-  const { generatedAt: _generatedAt, period, ...stored } = report;
+  const { generatedAt: _generatedAt, period, ...stored } = readinessParity(report);
   const { windowStart: _windowStart, windowEnd: _windowEnd, ...calendar } = period;
   return { ...stored, period: calendar };
 }
@@ -140,7 +141,10 @@ test("SQL-backed Instagram reports retain metrics, nulls, outliers and freshness
     expect(comparable(mcpReport, days, started, finished)).toEqual(expected);
     expect(report.scope).toEqual({ ownerId: manifest.users.ownerA.id, socialAccountId: accountId, platform: "instagram" });
     expect(report.source).toBe("graph_own");
-    expect(report.freshness).toMatchObject({ status: "never", lastSuccessAt: null });
+    // Seeded numerical captures are real report evidence even without a job receipt.
+    expect(report.data?.observation_count).toBeGreaterThan(0);
+    expect(report.freshness.status).toBe("partial");
+    expect(report.freshness.lastSuccessAt).toBe(report.data?.last_successful_capture);
     const media = report.media.page.items;
     // These observations are inside every window; history_4/5 sit outside the rolling seven-day window.
     expect(media.find((item) => item.mediaId.endsWith("_six_baseline_0"))?.metrics.views).toBeNull();

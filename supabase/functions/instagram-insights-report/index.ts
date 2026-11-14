@@ -34,6 +34,8 @@ function getStore(): ReportStore {
 }
 
 export async function handler(req: Request): Promise<Response> {
+  const deadline = AbortSignal.any([req.signal, AbortSignal.timeout(25_000)]);
+  req = new Request(req, { signal: deadline });
   let authenticated = false;
   const reportHandler = createInstagramInsightsReportHandler({
     authenticate: async (req: Request) => {
@@ -42,24 +44,29 @@ export async function handler(req: Request): Promise<Response> {
       return caller;
     },
     store: {
-      loadAccount: (socialAccountId: string, userId: string) =>
-        getStore().loadAccount(socialAccountId, userId),
+      loadAccount: (socialAccountId: string, userId: string, signal: AbortSignal) =>
+        getStore().loadAccount(socialAccountId, userId, signal),
       loadReportData: (
         socialAccountId: string,
         userId: string,
         request: Parameters<ReportStore["loadReportData"]>[2],
-        now: Date
-      ) => getStore().loadReportData(socialAccountId, userId, request, now),
+        now: Date,
+        signal: AbortSignal
+      ) => getStore().loadReportData(socialAccountId, userId, request, now, signal),
     } as unknown as ReportStore,
   });
   const response = await reportHandler(req);
   if (req.method === "OPTIONS") return response;
-  const signal = AbortSignal.timeout(5_000);
+  const signal = AbortSignal.any([deadline, AbortSignal.timeout(5_000)]);
   try {
+    const projection: unknown = response.status === 200 ? await awaitWithAbort(() => response.clone().json(), signal) : null;
+    const collection = projection && typeof projection === "object" && "collection" in projection ? projection.collection : null;
+    const correlationId = collection && typeof collection === "object" && "support_correlation_id" in collection
+      && typeof collection.support_correlation_id === "string" ? collection.support_correlation_id : null;
     const stored = await awaitWithAbort(() => recordSystemAudit({ client: getClient(), signal,
       refusalKey: authenticated ? undefined : `instagram-insights-report:${response.status}`, entry: {
         level: response.ok ? "info" : "warn", category: "edge", source: "instagram-insights-report",
-        message: "Instagram saved report finished", metadata: { status: response.status },
+        message: "Instagram saved report finished", metadata: { status: response.status, correlationId },
       } }), signal);
     if (!stored) throw new Error("Report audit unavailable");
     return response;

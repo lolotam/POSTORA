@@ -265,6 +265,7 @@ jobs:
         # The automation test imports the registered MCP/API routes with fixture-only env.
         run: >-
           deno test --no-config --no-lock --node-modules-dir=none --allow-env
+          supabase/functions/n8n-api/ownerAnalyticsRoute.test.ts
           supabase/functions/n8n-api/instagramAutomation.test.ts
           supabase/functions/n8n-api/parseFormArray.test.ts
 
@@ -800,7 +801,7 @@ jobs:
           ROLLOUT_IT_DB: partner_api_harness
         run: >-
           deno test --no-config --import-map=scripts/ci/deno-analytics.import-map.json --lock=scripts/ci/deno-analytics.lock --frozen --node-modules-dir=none
-          --allow-env --allow-run
+          --allow-env --allow-run --allow-read=supabase/tests/owner_analytics_readiness.sql
           supabase/functions/meta-owned-analytics-sync/admissionIntegration.test.ts
 
       - name: Verify legacy bootstrap worker against migrated SQL

@@ -3,6 +3,7 @@ import { OWNER_RELEASE, syntheticOwnerReleaseKey } from "./fixtures/instagramOwn
 import { META_ACCOUNTS, META_PLATFORMS, type MetaFixturePlatform } from "./fixtures/metaOwnedRelease";
 import { prepareOwnerBrowser, signInThroughBrowser } from "./fixtures/ownerReleaseBrowser";
 import type { AnalyticsReport } from "../supabase/functions/_shared/analyticsContract.ts";
+import { readinessParity } from "./fixtures/readinessParity";
 
 test.beforeEach(async ({ page, request }) => { await prepareOwnerBrowser(page, request); });
 const account = (platform: MetaFixturePlatform, kind: string) => META_ACCOUNTS.find((entry) => entry.platform === platform && entry.kind === kind)!;
@@ -33,7 +34,7 @@ async function mcpAnalytics(request: APIRequestContext, args: Record<string, str
 
 function storedReport(report: AnalyticsReport) {
   expect(Number.isFinite(Date.parse(report.generatedAt))).toBe(true);
-  const { generatedAt: _generatedAt, ...stored } = report;
+  const { generatedAt: _generatedAt, ...stored } = readinessParity(report);
   return stored;
 }
 
@@ -73,6 +74,8 @@ for (const platform of META_PLATFORMS) {
     const continued = reportReply(page, platform);
     await region.getByRole("button", { name: "Load more posts" }).click();
     const continuation = await (await continued).json();
+    expect(continuation.data).toEqual(first.data);
+    expect(continuation.collection?.reason_code).toBe(first.collection?.reason_code);
     await verifySavedReportParity(request, continuation, first.posts.nextCursor);
     await expect(savedPosts).toHaveCount(26);
     expect(new Set(await savedPosts.allTextContents()).size).toBe(26);
@@ -83,9 +86,14 @@ for (const platform of META_PLATFORMS) {
     await expect(savedPosts).toHaveCount(25);
     const archived = reportReply(page, platform);
     await region.getByLabel("Account").selectOption(account(platform, "archived").id);
-    expect((await (await archived).json()).accountId).toBe(account(platform, "archived").id);
+    const archivedReport = await (await archived).json();
+    expect(archivedReport.accountId).toBe(account(platform, "archived").id);
+    if (platform === "facebook") {
+      expect(archivedReport.collection.reason_code).toBe("collection_not_eligible");
+      expect(archivedReport.connection.reason_code).toBe("account_inactive");
+    }
     await expect(region.getByText(`Saved ${platform} archived post 00`, { exact: true })).toBeVisible();
-    await expect(region.getByText("Reconnect the account to resume collection.", { exact: true })).toBeVisible();
+    await expect(region.getByText(platform === "facebook" ? "Analytics collection is not enabled for this account yet." : "Reconnect the account to resume collection.", { exact: true })).toBeVisible();
     await region.getByLabel("Account").selectOption(account(platform, "active").id);
     await expect(region.getByRole("button", { name: "Load more posts" })).toBeVisible();
     await control(request, platform, "revision");
@@ -125,13 +133,26 @@ for (const platform of META_PLATFORMS) {
       const report = await (await reply).json();
       expect(report.sync.status).toBe("failed");
       expect(report.sync.reason).toBe(kind === "permission" ? "permission_missing" : "reauth_required");
-      await expect(region.getByText(reason, { exact: true }).first()).toBeVisible();
+      if (platform === "facebook") {
+        // Only provider refusals fenced to the current authority affect readiness.
+        expect(report.collection.reconnect_can_help).toBe(false);
+        if (kind === "permission") {
+          expect(report.permission.state).toBe("missing");
+          expect(report.last_attempt.reason_code).toBe("permission_missing");
+          expect(report.collection.reason_code).toBe("permission_missing");
+          await expect(region.getByText("Analytics permissions were verified missing for this connection.", { exact: true })).toBeVisible();
+        } else {
+          expect(report.collection.reason_code).toBe("token_invalid");
+          expect(report.collection.next_action).toBe("contact_support");
+          await expect(region.getByText("We could not verify this connection. Contact support.", { exact: true })).toBeVisible();
+        }
+      } else await expect(region.getByText(reason, { exact: true }).first()).toBeVisible();
       await expect(region.getByText(`Saved ${platform} ${kind} post 24`, { exact: true })).toBeVisible();
     }
     await control(request, platform, "disconnect");
     await page.reload();
     await region.getByLabel("Account").selectOption(account(platform, "active").id);
-    await expect(region.getByText("Reconnect the account to resume collection.", { exact: true }).first()).toBeVisible();
+    await expect(region.getByText(platform === "facebook" ? "We could not verify this connection. Contact support." : "Reconnect the account to resume collection.", { exact: true }).first()).toBeVisible();
     await expect(region.getByText(`Collected ${platform} active post 00`, { exact: true })).toBeVisible();
     const after = await control(request);
     expect(after.fingerprints).toEqual(before.fingerprints);

@@ -1,3 +1,4 @@
+import { OwnerAnalyticsStatus } from "@/features/analytics-contract";
 import { useTranslation } from "react-i18next";
 import { AlertCircle, Instagram, Loader2 } from "lucide-react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
@@ -114,8 +115,11 @@ export function InstagramInsightsWorkspace({
       </div>
 
       {/* Sync Status Banner */}
+      {report?.collection && <OwnerAnalyticsStatus report={report} />}
       <SyncStatusBanner
         freshness={report?.freshness}
+        collection={report?.collection}
+        data={report?.data}
         isSyncing={isSyncing}
         onSync={onTriggerSync}
         disabled={isLoading || !selectedAccountId}

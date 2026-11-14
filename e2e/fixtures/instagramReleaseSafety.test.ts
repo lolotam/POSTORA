@@ -24,7 +24,7 @@ test("canonical fixture refuses public, credential-bearing and unexpected local 
   for (const endpoint of ["https://api.postora.cloud", "https://example.test", "http://127.0.0.1:54321", "http://localhost:8080", "http://user:pass@127.0.0.1:65431", "http://127.0.0.1:65435/health"]) {
     assert.throws(() => assertInstagramReleaseNetworkUrl(endpoint, "browser"), /refused/);
   }
-  assert.doesNotThrow(() => assertInstagramReleaseNetworkUrl("http://127.0.0.1:65435/health", "server"));
+  assert.doesNotThrow(() => assertInstagramReleaseNetworkUrl(`${INSTAGRAM_RELEASE.authUrl}/health`, "server"));
   assert.throws(() => assertInstagramReleaseNetworkUrl("https://graph.facebook.com/v22.0/me", "server"), /refused/);
 });
 

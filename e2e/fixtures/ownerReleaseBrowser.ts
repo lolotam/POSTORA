@@ -1,10 +1,15 @@
 import { expect, type APIRequestContext, type Page } from "@playwright/test";
-import { OWNER_RELEASE } from "./instagramOwnerReleaseSettings.mjs";
+import { OWNER_RELEASE, syntheticOwnerReleaseKey } from "./instagramOwnerReleaseSettings.mjs";
 
 export async function prepareOwnerBrowser(page: Page, request: APIRequestContext) {
   const health = await request.get(`${OWNER_RELEASE.apiUrl}/__owner-release/health`);
   expect(health.status()).toBe(200);
   expect(await health.json()).toEqual({ fixture: "isolated-owner-release", authReachable: true, sqlReachable: true });
+  // The disabled-collection journey must not change later cases' eligibility.
+  const enabled = await request.patch(`${OWNER_RELEASE.apiUrl}/rest/v1/app_settings?key=eq.collection_instagram_insights_enabled`, {
+    headers: { Authorization: `Bearer ${await syntheticOwnerReleaseKey("service_role")}` }, data: { value: true },
+  });
+  expect(enabled.status()).toBe(204);
   await page.addInitScript(() => localStorage.setItem("postora.language", "en"));
   await page.route("**/*", (route) => {
     const url = new URL(route.request().url());
