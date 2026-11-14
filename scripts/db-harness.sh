@@ -127,6 +127,7 @@ SUITES=(
   social_contacts.sql
   byok_provider_keys.sql
   log_system_event.sql
+  ai_chat_list_policy.sql
   ai_agent_dashboard.sql
   agent_procedures.sql
   agent_test_limits.sql

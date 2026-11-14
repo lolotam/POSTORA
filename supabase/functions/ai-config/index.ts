@@ -13,6 +13,7 @@ import { loadProbeTarget, probeProvider } from '../_shared/aiProviderTest.ts';
 import { readCatalogue } from './readCatalogue.ts';
 import { assertProviderUrl } from '../_shared/providerUrlPolicy.ts';
 import { syncModels } from './syncModels.ts';
+import { chatActionDeps, runChatListAction } from './chatListActions.ts';
 
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!;
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
@@ -102,6 +103,13 @@ serve(async (req) => {
     if (req.method === 'POST') {
       const body = await req.json();
       const resolvedAction = url.searchParams.get('action') || body?.action || action;
+
+      if (resolvedAction === 'chat-list-policy' || resolvedAction === 'set-chat-tier') {
+        const input = { ...body };
+        delete input.action;
+        const response = await runChatListAction(resolvedAction, input, chatActionDeps(supabase, user.id));
+        return new Response(response.body, { status: response.status, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+      }
 
       if (resolvedAction === 'test-connection') {
         if (!isAdmin) return new Response(JSON.stringify({ error: 'Admin required' }), { status: 403, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });

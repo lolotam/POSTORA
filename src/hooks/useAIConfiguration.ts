@@ -2,6 +2,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { supabase } from '@/integrations/supabase/client';
 import { fetchModelCatalogue } from '@/features/ai-providers/infrastructure/aiModelCatalogueGateway';
 import { AI_PROVIDER_HEALTH_QUERY_KEY } from './ai-config/queryKeys';
+import { CHAT_LIST_POLICY_QUERY_KEY, saveChatTier, type ChatListPolicy } from '@/features/ai-providers/infrastructure/chatListGateway';
 import type {
   AIProvider,
   AIModel,
@@ -35,6 +36,7 @@ function parseDefault(val: unknown): DefaultModel | null {
  * tiers, so an api-key tier saves exactly the shape it always did.
  */
 function settingValue(provider_code: string, model_id: string, auth_method?: AiAuthMethod) {
+  if (auth_method !== undefined && auth_method !== 'api_key' && auth_method !== 'oauth') throw new Error('Unknown authentication method');
   return auth_method === 'oauth'
     ? { provider_code, model_id, auth_method }
     : { provider_code, model_id };
@@ -131,6 +133,9 @@ export function useSetDefaultModel() {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: async ({ provider_code, model_id, category, auth_method }: { provider_code: string; model_id: string; category?: ModelCategory; auth_method?: AiAuthMethod }) => {
+      if (category === 'chat' && queryClient.getQueryData<ChatListPolicy>(CHAT_LIST_POLICY_QUERY_KEY)?.enabled) {
+        return saveChatTier({ category, slot: 'primary', provider_code, model_id, auth_method });
+      }
       const key = category ? `default_ai_model_${category}` : 'default_ai_model';
       const { error } = await supabase
         .from('system_settings')
@@ -146,6 +151,9 @@ export function useSetFallbackModel() {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: async ({ provider_code, model_id, category, auth_method }: { provider_code: string; model_id: string; category: ModelCategory; auth_method?: AiAuthMethod }) => {
+      if (category === 'chat' && queryClient.getQueryData<ChatListPolicy>(CHAT_LIST_POLICY_QUERY_KEY)?.enabled) {
+        return saveChatTier({ category, slot: 'fallback', provider_code, model_id, auth_method });
+      }
       const key = `default_ai_model_${category}_fallback`;
       const { error } = await supabase
         .from('system_settings')
@@ -161,6 +169,9 @@ export function useSetFallback2Model() {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: async ({ provider_code, model_id, category, auth_method }: { provider_code: string; model_id: string; category: ModelCategory; auth_method?: AiAuthMethod }) => {
+      if (category === 'chat' && queryClient.getQueryData<ChatListPolicy>(CHAT_LIST_POLICY_QUERY_KEY)?.enabled) {
+        return saveChatTier({ category, slot: 'fallback_2', provider_code, model_id, auth_method });
+      }
       const key = `default_ai_model_${category}_fallback_2`;
       const { error } = await supabase
         .from('system_settings')
