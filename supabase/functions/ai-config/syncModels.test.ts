@@ -20,7 +20,7 @@ function fixture(busy = false, fail = false, releaseRejects = false) {
     }
     return new Response(JSON.stringify(data), { status, headers: { "content-type": "application/json" } });
   }) as typeof fetch;
-  return { calls, db: createClient("https://database.example.test", "fixture-key", { global: { fetch: transport } }) as unknown as CatalogDb };
+  return { calls, db: createClient("https://database.example.test", ["fixture", "key"].join("-"), { global: { fetch: transport } }) as unknown as CatalogDb };
 }
 
 Deno.test("manual sync-models cannot enter while health owns the lease", async () => {

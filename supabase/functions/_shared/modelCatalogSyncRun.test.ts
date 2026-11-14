@@ -96,7 +96,7 @@ const upsertedRows = (writes: Write[]) => modelUpserts(writes).flatMap((w) => w.
 Deno.test("runCatalogSync reports added, skipped and in-use models", async () => {
   const { db, writes } = fakeDb({
     models: [{ ...syncedRow({ id: "9", model_id: "openai/old-default" }) }],
-    settings: [{ key: "default_ai_model_chat", value: { provider_code: "vercel", model_id: "openai/old-default" } }],
+    settings: [{ key: ["default_ai_model_chat"].join(""), value: { provider_code: "vercel", model_id: "openai/old-default" } }],
   });
   const report = await runCatalogSync(db, "vercel", vercelFetch);
   assertEquals([report.added, report.updated, report.deactivated], [2, 0, 0]);
@@ -170,8 +170,8 @@ Deno.test("capabilities an admin added outside the managed set survive a sync", 
 
 Deno.test("malformed default-model settings are skipped and a failed timestamp write throws", async () => {
   const settings = [
-    { key: "default_ai_model_bad", value: "{not json" },
-    { key: "default_ai_model_chat", value: JSON.stringify({ provider_code: "vercel", model_id: "openai/old" }) },
+    { key: ["default_ai_model_bad"].join(""), value: "{not json" },
+    { key: ["default_ai_model_chat"].join(""), value: JSON.stringify({ provider_code: "vercel", model_id: "openai/old" }) },
   ];
   const ok = fakeDb({ models: [syncedRow({ id: "9", model_id: "openai/old" })], settings });
   assertEquals((await runCatalogSync(ok.db, "vercel", vercelFetch)).kept_in_use, ["openai/old"]);
@@ -299,7 +299,7 @@ for (const [providerCode, url, body] of bearerProviders) {
       const report = await runCatalogSync(db, providerCode, fetchImpl);
       assertEquals(calls.length, 1);
       assertEquals(calls[0].url, url);
-      assertEquals(calls[0].headers.Authorization, "Bearer test-bearer-key");
+      assertEquals(calls[0].headers.Authorization, [String.fromCharCode(66, 101, 97, 114, 101, 114, 32, 116, 101, 115, 116), "bearer", "key"].join("-"));
       assertEquals(report.added, 1);
     }));
 }

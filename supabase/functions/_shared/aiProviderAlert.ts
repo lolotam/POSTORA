@@ -55,9 +55,8 @@ export function buildAlertMessage(p: DegradedProvider): string {
 export function alertRowsToDegraded(rows: Array<Record<string, unknown>>): DegradedProvider[] {
   return rows.map((row) => ({
     provider_code: String(row.provider_code ?? ""),
-    // The claim does not carry the display name: the caller resolves it from
-    // ai_providers, so the name is never read from a claimed row.
-    display_name: "",
+    // The event snapshot keeps retries byte-stable after a provider rename.
+    display_name: typeof row.display_name === "string" ? row.display_name : String(row.provider_code ?? ""),
     auth_method: row.auth_method === "oauth" ? "oauth" : "api_key",
     status: row.status === "needs_relogin" ? "needs_relogin" : "failed",
     reason: typeof row.reason === "string" ? row.reason : null,

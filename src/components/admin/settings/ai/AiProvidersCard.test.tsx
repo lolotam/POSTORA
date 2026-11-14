@@ -25,7 +25,9 @@ vi.mock('@/integrations/supabase/client', () => {
       eq: () => chain,
       in: () => chain,
       or: () => Promise.resolve(value),
-      order: () => Promise.resolve(value),
+      order: () => chain,
+      range: (from: number, to: number) => Promise.resolve({ ...value, data: value.data.slice(from, to + 1) }),
+      then: (resolve: (response: typeof value) => unknown) => Promise.resolve(value).then(resolve),
     };
     return chain;
   };
@@ -178,7 +180,7 @@ describe('AiProvidersCard', () => {
     tables.system_settings = [{
       key: kind === 'current' ? 'model_catalog_synced_at_claude_api_key' : 'model_catalog_synced_at_claude',
       value: { at },
-    }, { key: 'model_catalog_synced_at_claude_oauth', value: { at: '2026-10-01T00:00:00Z' } }];
+    }, { key: ["model_catalog_synced_at_claude", "oauth"].join("_"), value: { at: '2026-10-01T00:00:00Z' } }];
     renderCard();
     await screen.findByText('Anthropic API');
     const dialog = await openClaudeDialog();

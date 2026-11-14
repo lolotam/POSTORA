@@ -38,11 +38,13 @@ describe("useAiProviderHealth", () => {
 
   it('refreshes both catalogue and health after a completed sync', async () => {
     queryClient.setQueryData(['ai-config'], { models: ['old'] });
+    queryClient.setQueryData(['ai-provider-auth'], { enabled: true });
     queryClient.setQueryData(['ai-provider-health'], []);
     invoke.mockResolvedValue({ data: { run_id: "r", chunk: 1, next_chunk: null, done: true, results: [], skipped: [], summary: { total: 0, connected: 0, failed: 0, needs_relogin: 0 } }, error: null });
     const { result } = renderHook(() => useRunProviderHealth(), { wrapper });
     await result.current.run();
     expect(queryClient.getQueryState(['ai-config'])?.isInvalidated).toBe(true);
+    expect(queryClient.getQueryState(['ai-provider-auth'])?.isInvalidated).toBe(true);
     expect(queryClient.getQueryState(['ai-provider-health'])?.isInvalidated).toBe(true);
   });
 

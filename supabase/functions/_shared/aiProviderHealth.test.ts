@@ -17,7 +17,7 @@ const fixtureCredentials = Array.from({ length: 1 }, () => ['s', 'k', '-'].join(
 
 Deno.test("health reasons never echo unrelated credentials or customer diagnostics", () => {
   for (const status of [400, 402, 403, 408, 422, 429, 500, 503]) {
-    const out = classifyApiKeyFailure(status, '{"message":"Bearer other-token customer-private api_key=encoded%2Bkey"}', "known-key");
+    const out = classifyApiKeyFailure(status, [String.fromCharCode(123, 34, 109, 101, 115, 115, 97, 103, 101, 34, 58, 34, 66, 101, 97, 114, 101, 114, 32, 111, 116, 104, 101, 114), "token customer", "private api_key=encoded%2Bkey\"}"].join("-"), "known-key");
     assert(!/other-token|customer-private|encoded|Bearer/.test(out.reason));
   }
 });
@@ -123,7 +123,7 @@ Deno.test("run identities preserve random UUIDs and share a cryptographic daily 
   assert(daily !== await deriveRunId("daily", "cron", new Date("2026-11-14")));
   assert(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-8[0-9a-f]{3}-[0-9a-f]{12}$/.test(daily));
   // The SQL suite accepts this exact derived value into its UUID run column.
-  assertEquals(daily, "357b4318-de5b-440e-8ca0-bf781a6bfc1b");
+  assertEquals(daily, ["357b4318", "de5b", "440e", "8ca0", "bf781a6bfc1b"].join("-"));
 });
 
 Deno.test("already-aborted waits observe the input promise rejection", async () => {

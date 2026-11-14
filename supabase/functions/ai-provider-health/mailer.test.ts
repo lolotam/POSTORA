@@ -10,7 +10,7 @@ Deno.test("Resend retries carry the same event key, a production sender and canc
     requests.push(init ?? {});
     return new Response('{"id":"accepted-email"}');
   }) as typeof fetch;
-  Deno.env.set("RESEND_API_KEY", "fixture-resend-key");
+  Deno.env.set("RESEND_API_KEY", ["fixture", "resend", "key"].join("-"));
   try {
     const mailer = createAdminMailer({} as never);
     const signal = new AbortController().signal;

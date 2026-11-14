@@ -37,6 +37,38 @@
 -- which is a different and wrong claim after a failed sync. The columns are nullable
 -- and the RPC stores NULL for a count nobody measured.
 
+-- Caller-chosen tokens make a committed claim recoverable after a lost response.
+CREATE OR REPLACE FUNCTION public.claim_ai_oauth_refresh(
+  p_oauth_provider text, p_lease_seconds int, p_lease_token uuid
+) RETURNS uuid LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $fn$
+DECLARE v_token uuid;
+BEGIN
+  IF p_lease_token IS NULL OR p_lease_seconds IS NULL OR p_lease_seconds NOT BETWEEN 1 AND 180 THEN
+    RAISE EXCEPTION 'Invalid OAuth refresh claim' USING ERRCODE = 'invalid_parameter_value';
+  END IF;
+  UPDATE public.ai_provider_oauth_connections
+     SET refresh_lock_until = CASE WHEN refresh_lease_token = p_lease_token THEN refresh_lock_until
+           ELSE clock_timestamp() + make_interval(secs => p_lease_seconds) END,
+         refresh_lease_token = p_lease_token, updated_at = now()
+   WHERE oauth_provider = p_oauth_provider
+     AND (refresh_lease_token = p_lease_token OR refresh_lock_until IS NULL OR refresh_lock_until < clock_timestamp())
+  RETURNING refresh_lease_token INTO v_token;
+  RETURN v_token;
+END $fn$;
+REVOKE ALL ON FUNCTION public.claim_ai_oauth_refresh(text, int, uuid) FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.claim_ai_oauth_refresh(text, int, uuid) TO service_role;
+
+-- Pre-rotation exits preserve status and last_refresh_error; no provider call failed.
+CREATE OR REPLACE FUNCTION public.release_ai_oauth_refresh(p_oauth_provider text, p_lease_token uuid)
+RETURNS boolean LANGUAGE sql SECURITY DEFINER SET search_path = public, pg_temp AS $fn$
+  WITH released AS (
+    UPDATE public.ai_provider_oauth_connections SET refresh_lock_until = NULL, refresh_lease_token = NULL
+      WHERE oauth_provider = p_oauth_provider AND refresh_lease_token = p_lease_token RETURNING 1
+  ) SELECT EXISTS (SELECT 1 FROM released)
+$fn$;
+REVOKE ALL ON FUNCTION public.release_ai_oauth_refresh(text, uuid) FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.release_ai_oauth_refresh(text, uuid) TO service_role;
+
 -- Standalone service keys predate provider rows. Seed their FK identities so
 -- durable health/completion/alert writes work; never overwrite explicit disablement.
 INSERT INTO public.ai_providers(provider_code, name, api_endpoint, api_key_env_var, api_type, supports_streaming)
@@ -93,6 +125,7 @@ CREATE TABLE IF NOT EXISTS public.ai_provider_health_alerts (
   status text NOT NULL CHECK (status IN ('failed','needs_relogin')),
   previous_status text NOT NULL DEFAULT 'connected' CHECK (previous_status = 'connected'),
   reason text,
+  display_name text NOT NULL DEFAULT '',
   created_at timestamptz NOT NULL DEFAULT now(),
   claim_token uuid,
   claimed_at timestamptz,
@@ -244,6 +277,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS ai_models_provider_model_auth_method_key
 
 -- record_ai_provider_health reads the old status under a row lock so two
 -- concurrent runs cannot both see 'connected'.
+DROP FUNCTION IF EXISTS public.record_ai_provider_health(text, text, text, text, int, int, int, int, uuid);
 CREATE OR REPLACE FUNCTION public.record_ai_provider_health(
   p_provider_code text,
   p_auth_method text,
@@ -253,7 +287,8 @@ CREATE OR REPLACE FUNCTION public.record_ai_provider_health(
   p_models_updated int,
   p_models_deactivated int,
   p_latency_ms int,
-  p_run_id uuid
+  p_run_id uuid,
+  p_holder uuid
 )
 RETURNS void
 LANGUAGE plpgsql
@@ -268,6 +303,7 @@ DECLARE
   v_alert_payload jsonb;
   v_pending boolean := false;
   v_changed boolean;
+  v_lease_expires timestamptz;
 BEGIN
   IF coalesce(p_provider_code, '') = '' OR coalesce(p_auth_method, '') = '' THEN
     RAISE EXCEPTION 'record_ai_provider_health: provider_code and auth_method are required'
@@ -276,6 +312,12 @@ BEGIN
   IF p_status IS NULL OR p_status NOT IN ('connected','failed','needs_relogin') THEN
     RAISE EXCEPTION 'record_ai_provider_health: unknown status %', p_status
       USING ERRCODE = 'invalid_parameter_value';
+  END IF;
+
+  SELECT expires_at INTO v_lease_expires FROM public.cron_run_leases
+    WHERE job = 'ai-provider-health' AND holder = p_holder FOR UPDATE;
+  IF NOT FOUND OR v_lease_expires <= clock_timestamp() THEN
+    RAISE EXCEPTION 'Health result lease lost';
   END IF;
 
   SELECT status, alert_pending, alert_id, alert_payload INTO v_old, v_old_pending, v_old_alert_id, v_alert_payload
@@ -288,8 +330,9 @@ BEGIN
   v_changed := (v_old IS DISTINCT FROM p_status);
   IF v_old = 'connected' AND p_status IN ('failed','needs_relogin') THEN
     v_alert_id := gen_random_uuid();
-    INSERT INTO public.ai_provider_health_alerts(alert_id, provider_code, auth_method, status, reason, previous_status)
-      VALUES(v_alert_id, p_provider_code, p_auth_method, p_status, left(p_reason, 500), v_old);
+    INSERT INTO public.ai_provider_health_alerts(alert_id, provider_code, auth_method, status, reason, previous_status, display_name)
+      SELECT v_alert_id, p_provider_code, p_auth_method, p_status, left(p_reason, 500), v_old, name
+      FROM public.ai_providers WHERE provider_code = p_provider_code;
   END IF;
   IF coalesce(v_old_pending, false) THEN
     v_pending := true;
@@ -339,11 +382,12 @@ BEGIN
     INSERT INTO public.ai_provider_health_completions(run_id, provider_code, auth_method)
       VALUES (p_run_id, p_provider_code, p_auth_method) ON CONFLICT DO NOTHING;
   END IF;
+  IF v_lease_expires <= clock_timestamp() THEN RAISE EXCEPTION 'Health result lease expired'; END IF;
 END;
 $$;
 
-REVOKE ALL ON FUNCTION public.record_ai_provider_health(text, text, text, text, int, int, int, int, uuid) FROM PUBLIC, anon, authenticated;
-GRANT EXECUTE ON FUNCTION public.record_ai_provider_health(text, text, text, text, int, int, int, int, uuid) TO service_role;
+REVOKE ALL ON FUNCTION public.record_ai_provider_health(text, text, text, text, int, int, int, int, uuid, uuid) FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.record_ai_provider_health(text, text, text, text, int, int, int, int, uuid, uuid) TO service_role;
 
 -- claim_ai_provider_health_notifications claims immutable unsent outbox events.
 -- Latest status and previous_status cannot erase a pending event: a re-check,
@@ -358,7 +402,7 @@ DROP FUNCTION IF EXISTS public.claim_ai_provider_health_notifications(uuid, inte
 CREATE OR REPLACE FUNCTION public.claim_ai_provider_health_notifications(p_claim_token uuid, p_limit integer DEFAULT 100)
 RETURNS TABLE (
   provider_code text, auth_method text, status text, reason text, previous_status text,
-  alert_id uuid
+  alert_id uuid, display_name text
 )
 LANGUAGE plpgsql
 SECURITY DEFINER
@@ -386,7 +430,7 @@ BEGIN
     UPDATE public.ai_provider_health h SET claim_token = p_claim_token, claimed_at = now()
       FROM claimed a WHERE h.alert_id = a.alert_id RETURNING h.provider_code
   )
-  SELECT a.provider_code, a.auth_method, a.status, a.reason, a.previous_status, a.alert_id
+  SELECT a.provider_code, a.auth_method, a.status, a.reason, a.previous_status, a.alert_id, a.display_name
     FROM claimed a;
 
 END;

@@ -204,10 +204,27 @@ async function refreshUnderLease(
 
 /** Before rotation no provider token has been spent, so cancellation can free the fence. */
 async function releaseUnstartedRefresh(deps: CredentialDeps, provider: OAuthProviderId, token: string): Promise<void> {
-  await credentialRpc(deps, "fail_ai_oauth_refresh", {
+  await credentialRpc(deps, "release_ai_oauth_refresh", {
     p_oauth_provider: provider, p_lease_token: token,
-    p_error: "refresh stopped before rotation", p_reauth: false,
   }, AbortSignal.timeout(5_000));
+}
+
+/** A lost response can be retried with the same known token without taking a second lease. */
+async function claimRefreshLease(deps: CredentialDeps, provider: OAuthProviderId): Promise<unknown> {
+  const token = crypto.randomUUID();
+  const claim = () => credentialRpc(deps, "claim_ai_oauth_refresh", {
+    p_oauth_provider: provider, p_lease_seconds: LEASE_SECONDS, p_lease_token: token,
+  }, AbortSignal.timeout(5_000));
+  try {
+    try { return (await claim()).data; }
+    catch (error) {
+      if (!(error instanceof AiOAuthStorageError)) throw error;
+      return (await claim()).data;
+    }
+  } catch (error) {
+    await releaseUnstartedRefresh(deps, provider, token);
+    throw error;
+  }
 }
 
 /**
@@ -230,11 +247,7 @@ export async function getFreshOAuthCredential(
   }
 
   signal?.throwIfAborted();
-  // A committed claim must return its token even if the caller cancels.
-  const { data: leaseToken } = await credentialRpc(deps, "claim_ai_oauth_refresh", {
-    p_oauth_provider: provider,
-    p_lease_seconds: LEASE_SECONDS,
-  }, AbortSignal.timeout(5_000));
+  const leaseToken = await claimRefreshLease(deps, provider);
 
   if (typeof leaseToken === "string") {
     // Refresh tokens rotate: a worker that held the previous lease may already

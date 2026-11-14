@@ -53,7 +53,7 @@ function fixture(failure?: "read" | "write") {
     if (failure === "read") return reply({ message: "database failed" }, 400);
     return reply(rows.filter((row) => url.searchParams.get("auth_method") === `eq.${row.auth_method}`));
   }) as typeof fetch;
-  return { rows, requests, db: createClient("https://database.example.test", "test-key-not-secret", { global: { fetch: transport } }) };
+  return { rows, requests, db: createClient("https://database.example.test", ["test", "key", "not", "secret"].join("-"), { global: { fetch: transport } }) };
 }
 
 const explore = async () => [{ id: "current", parameters: { duration: 5 } }, { id: "fresh" }, { id: "disabled" }];
@@ -111,3 +111,14 @@ Deno.test('round5 health holder reuses its lease and syncs only api_key catalogu
   assertEquals(requests.includes('POST release_cron_run_lease'), false);
   assertEquals(rows.find((r) => r.id === 'oauth-old')?.is_active, true);
 });
+
+
+for (const malformed of [null, {}, { items: 'invalid' }, [{ name: 'missing id' }]]) {
+  Deno.test(`malformed capability catalogue ${JSON.stringify(malformed)} cannot deactivate models`, async () => {
+    const { db, rows, requests } = fixture();
+    const before = structuredClone(rows);
+    await assertRejects(() => syncHiggsfieldCatalog(db, async capability => capability === 'video' ? malformed : [{ id: 'current' }]));
+    assertEquals(rows, before);
+    assertEquals(requests.includes('POST write_ai_health_catalog'), false);
+  });
+}

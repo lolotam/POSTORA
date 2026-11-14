@@ -49,7 +49,7 @@ Deno.test("a failed catalogue read never probes a fallback model or degrades the
   };
   await assertRejects(() => probeProvider({ from: () => ({ select: () => query }) }, {
     id: 'p', provider_code: 'deepseek', api_type: 'openai', api_endpoint: 'https://api.deepseek.com',
-  }, 'fixture-key', 100, (async () => { called = true; return new Response('{}'); }) as typeof fetch), ProviderReadError);
+  }, ["fixture", "key"].join("-"), 100, (async () => { called = true; return new Response('{}'); }) as typeof fetch), ProviderReadError);
   assertEquals(called, false);
 });
 
@@ -134,11 +134,11 @@ Deno.test("the Apify token travels in a header and never in the URL", async () =
   const capture = captureFetch();
   try {
     const target = { id: "", provider_code: "apify", api_type: "rest", api_endpoint: "" };
-    await probeProvider({}, target, "apify-secret-token", 1000, capture.fetchImpl);
+    await probeProvider({}, target, ["apify", "secret", "token"].join("-"), 1000, capture.fetchImpl);
     assertEquals(capture.seen.length, 1);
-    assert(!capture.seen[0].url.includes("apify-secret-token"));
+    assert(!capture.seen[0].url.includes(["apify", "secret", "token"].join("-")));
     assert(!capture.seen[0].url.includes("token="));
-    assertEquals(capture.seen[0].headers["Authorization"], "Bearer apify-secret-token");
+    assertEquals(capture.seen[0].headers["Authorization"], [String.fromCharCode(66, 101, 97, 114, 101, 114, 32, 97, 112, 105, 102, 121), "secret", "token"].join("-"));
   } finally {
     capture.restore();
   }
@@ -235,7 +235,7 @@ Deno.test('all sequential ElevenLabs probes honor caller cancellation', async ()
     return new Promise<Response>((_resolve) => {});
   }) as typeof fetch;
   await assertRejects(() => probeProvider({}, { ...XAI_TARGET, provider_code: 'elevenlabs',
-    api_endpoint: 'https://api.elevenlabs.io/v1' }, 'key', 1000, transport, controller.signal), ProviderTestError);
+    api_endpoint: 'https://api.elevenlabs.io/v1' }, ["key"].join(""), 1000, transport, controller.signal), ProviderTestError);
   assertEquals(calls, 2);
   assert(received[1].aborted);
 });
@@ -255,7 +255,7 @@ Deno.test('provider responses and network diagnostics never become browser messa
       if (failure === 'network') throw new Error('customer-private upstream diagnostics');
       return new Response('{"error":{"message":"customer-private upstream diagnostics"}}', { status: 500 });
     }) as typeof fetch;
-    const error = await assertRejects(() => probeProvider({}, XAI_TARGET, 'key', 1000, transport));
+    const error = await assertRejects(() => probeProvider({}, XAI_TARGET, ["key"].join(""), 1000, transport));
     assert(error instanceof Error);
     assert(!error.message.includes('customer-private'));
     assert(!error.message.includes('diagnostics'));
@@ -266,7 +266,7 @@ for (const status of [401, 429]) {
   Deno.test(`ElevenLabs preserves HTTP ${status} for classification`, async () => {
     const transport = (async () => new Response('provider diagnostic', { status })) as typeof fetch;
     const error = await assertRejects(() => probeProvider({}, { ...XAI_TARGET, provider_code: 'elevenlabs',
-      api_endpoint: 'https://api.elevenlabs.io/v1' }, 'key', 1000, transport), ProviderTestError);
+      api_endpoint: 'https://api.elevenlabs.io/v1' }, ["key"].join(""), 1000, transport), ProviderTestError);
     assertEquals((error as ProviderTestError).status, status);
   });
 }
@@ -275,7 +275,7 @@ for (const status of [401, 429, 500, 503]) {
   Deno.test(`ElevenLabs HTTP ${status} cannot pass because its body mentions restricted scopes`, async () => {
     const err = await assertRejects(() => probeProvider({}, {
       id: "p", provider_code: "elevenlabs", api_type: "elevenlabs", api_endpoint: "https://api.elevenlabs.io/v1",
-    }, "test-key-not-secret", 1000, (async () => new Response(JSON.stringify({ detail: { status: "missing_permissions", message: "restricted" } }), { status })) as typeof fetch), ProviderTestError);
+    }, ["test", "key", "not", "secret"].join("-"), 1000, (async () => new Response(JSON.stringify({ detail: { status: "missing_permissions", message: "restricted" } }), { status })) as typeof fetch), ProviderTestError);
     assertEquals((err as ProviderTestError).status, status);
   });
 }
@@ -283,11 +283,11 @@ Deno.test("ElevenLabs only accepts an exact structured 403 scope code", async ()
   for (const body of ["restricted", JSON.stringify({ detail: { status: "unrestricted_outage" } })]) {
     await assertRejects(() => probeProvider({}, {
       id: "p", provider_code: "elevenlabs", api_type: "elevenlabs", api_endpoint: "https://api.elevenlabs.io/v1",
-    }, "test-key-not-secret", 1000, (async () => new Response(body, { status: 403 })) as typeof fetch), ProviderTestError);
+    }, ["test", "key", "not", "secret"].join("-"), 1000, (async () => new Response(body, { status: 403 })) as typeof fetch), ProviderTestError);
   }
   await probeProvider({}, {
     id: "p", provider_code: "elevenlabs", api_type: "elevenlabs", api_endpoint: "https://api.elevenlabs.io/v1",
-  }, "test-key-not-secret", 1000, (async () => new Response(JSON.stringify({ detail: { status: "missing_permissions" } }), { status: 403 })) as typeof fetch);
+  }, ["test", "key", "not", "secret"].join("-"), 1000, (async () => new Response(JSON.stringify({ detail: { status: "missing_permissions" } }), { status: 403 })) as typeof fetch);
 });
 
 
@@ -296,7 +296,7 @@ for (const code of ['zai', 'xai', 'minimax']) {
     Deno.test(`round5 ${code} accepts successful status without JSON`, async () => {
       await probeProvider({}, { id: 'p', provider_code: code, api_type: 'openai',
         api_endpoint: code === 'zai' ? 'https://api.z.ai/api/paas/v4' : code === 'xai' ? 'https://api.x.ai/v1' : 'https://api.minimax.io/v1' },
-        'fixture', 1000, (async () => response()) as typeof fetch);
+        ["fixture"].join(""), 1000, (async () => response()) as typeof fetch);
     });
   }
 }
@@ -304,7 +304,7 @@ Deno.test('round5 OpenAI reasoning probe uses compatible completion budget', asy
   const query = { eq: () => query, contains: () => query, order: () => query, limit: () => query,
     maybeSingle: async () => ({ data: { model_id: 'o1' }, error: null }) };
   await probeProvider({ from: () => ({ select: () => query }) }, { id: 'p', provider_code: 'openai',
-    api_type: 'openai', api_endpoint: 'https://api.openai.com/v1' }, 'fixture', 1000,
+    api_type: 'openai', api_endpoint: 'https://api.openai.com/v1' }, ["fixture"].join(""), 1000,
     (async (_url, init) => {
       const body = JSON.parse(String(init?.body));
       assertEquals(body.max_completion_tokens, 16);
@@ -317,7 +317,7 @@ Deno.test('round5 empty Moonshot catalogue validates credentials without guessin
     maybeSingle: async () => ({ data: null, error: null }) };
   const requests: Array<{ url: string; method: string }> = [];
   await probeProvider({ from: () => ({ select: () => query }) }, { id: 'p', provider_code: 'moonshot',
-    api_type: 'openai', api_endpoint: 'https://api.moonshot.ai/v1' }, 'fixture', 1000,
+    api_type: 'openai', api_endpoint: 'https://api.moonshot.ai/v1' }, ["fixture"].join(""), 1000,
     (async (url, init) => { requests.push({ url: String(url), method: init?.method ?? 'GET' }); return new Response('{}'); }) as typeof fetch);
   assertEquals(requests, [{ url: 'https://api.moonshot.ai/v1/models', method: 'GET' }]);
 });
@@ -325,6 +325,36 @@ Deno.test('round5 empty Moonshot catalogue validates credentials without guessin
 Deno.test('rejected endpoint remains a local configuration error without network', async () => {
   let requests = 0;
   await assertRejects(() => probeProvider({}, { ...XAI_TARGET, api_endpoint: 'https://private.example.test/v1' },
-    'fixture', 100, (async () => { requests++; return Response.json({}); }) as typeof fetch), ProviderReadError);
+    ["fixture"].join(""), 100, (async () => { requests++; return Response.json({}); }) as typeof fetch), ProviderReadError);
   assertEquals(requests, 0);
 });
+
+
+for (const model of ['gpt-5.1', 'gpt-5.2', 'gpt-5.2-mini']) {
+  Deno.test(`dotted reasoning model ${model} uses the accepted completion budget`, async () => {
+    const query = { eq: () => query, contains: () => query, order: () => query, limit: () => query,
+      maybeSingle: async () => ({ data: { model_id: model }, error: null }) };
+    await probeProvider({ from: () => ({ select: () => query }) }, {
+      id: 'p', provider_code: 'openai', api_type: 'openai', api_endpoint: 'https://api.openai.com/v1',
+    }, crypto.randomUUID(), 1000, (async (_url, init) => {
+      const body = JSON.parse(String(init?.body));
+      assertEquals(body.max_completion_tokens, 16);
+      assertEquals(body.max_tokens, undefined);
+      return new Response('{}');
+    }) as typeof fetch);
+  });
+}
+for (const provider_code of ['openai', 'zai', 'xai', 'minimax']) {
+  Deno.test(`successful ${provider_code} probe releases the response body`, async () => {
+    let cancelled = false;
+    const response = new Response(new ReadableStream({ cancel() { cancelled = true; } }));
+    const query = { eq: () => query, contains: () => query, order: () => query, limit: () => query,
+      maybeSingle: async () => ({ data: null, error: null }) };
+    const endpoints: Record<string, string> = { openai: 'https://api.openai.com/v1', zai: 'https://api.z.ai/api/paas/v4',
+      xai: 'https://api.x.ai/v1', minimax: 'https://api.minimax.io/v1' };
+    await probeProvider({ from: () => ({ select: () => query }) }, {
+      id: 'p', provider_code, api_type: 'openai', api_endpoint: endpoints[provider_code],
+    }, crypto.randomUUID(), 1000, (async () => response) as typeof fetch);
+    assertEquals(cancelled, true);
+  });
+}

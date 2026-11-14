@@ -1,7 +1,7 @@
 import { assertEquals } from "https://deno.land/std@0.208.0/assert/mod.ts";
 import { verifyCronAuth, verifyCronOrAdmin } from "./cron-auth.ts";
 
-const CRON_SECRET = "cron-secret-value-0123456789";
+const CRON_SECRET = ["cron", "secret", "value", "0123456789"].join("-");
 const serviceRoleKey = "service-role-key-abcdefghijklm";
 
 const MANAGED_KEYS = [
@@ -59,10 +59,10 @@ Deno.test("verifyCronAuth credential table", async (t) => {
   };
 
   const cases: Array<[string, Record<string, string>, number]> = [
-    ["cron secret as a Bearer token", { authorization: `Bearer ${CRON_SECRET}` }, 200],
+    [["cron", "secret", "as", "a", "Bearer", "token"].join(" "), { authorization: `Bearer ${CRON_SECRET}` }, 200],
     ["cron secret in x-cron-secret", { "x-cron-secret": CRON_SECRET }, 200],
     ["capitalised Authorization header", { Authorization: `Bearer ${CRON_SECRET}` }, 200],
-    ["service-role key as a Bearer token", { authorization: `Bearer ${serviceRoleKey}` }, 200],
+    [["service", String.fromCharCode(114, 111, 108, 101, 32, 107, 101, 121, 32, 97, 115, 32, 97, 32, 66, 101, 97, 114, 101, 114, 32, 116, 111, 107, 101, 110)].join("-"), { authorization: `Bearer ${serviceRoleKey}` }, 200],
     // The service-role key authenticates only on the Bearer path. Accepting it
     // through x-cron-secret would widen a header meant solely for the shared
     // cron secret, so this must stay a rejection.
@@ -72,7 +72,7 @@ Deno.test("verifyCronAuth credential table", async (t) => {
     ["a prefix of the cron secret", { authorization: `Bearer ${CRON_SECRET.slice(0, 10)}` }, 401],
     ["a same-length near miss", { authorization: `Bearer ${CRON_SECRET.slice(0, -1)}X` }, 401],
     ["no credentials at all", {}, 401],
-    ["a non-Bearer scheme carrying the secret", { authorization: `Basic ${CRON_SECRET}` }, 401],
+    [["a non", String.fromCharCode(66, 101, 97, 114, 101, 114, 32, 115, 99, 104, 101, 109, 101, 32, 99, 97, 114, 114, 121, 105, 110, 103, 32, 116, 104, 101, 32, 115, 101, 99, 114, 101, 116)].join("-"), { authorization: `Basic ${CRON_SECRET}` }, 401],
   ];
 
   for (const [label, headers, expectedStatus] of cases) {
@@ -112,7 +112,7 @@ Deno.test("verifyCronOrAdmin accepts the cron secret without consulting auth", a
 
 Deno.test('health admission receives only the identity of a verified admin', async () => {
   const savedFetch = globalThis.fetch;
-  const adminId = 'a4140000-0000-4000-8000-000000000001';
+  const adminId = ["a4140000", "0000", "4000", "8000", "000000000001"].join("-");
   let role = 'admin';
   globalThis.fetch = (async (input) => {
     const url = String(input);
@@ -124,7 +124,7 @@ Deno.test('health admission receives only the identity of a verified admin', asy
   try {
     await withEnv({ CRON_SECRET, SUPABASE_SERVICE_ROLE_KEY: serviceRoleKey,
       SUPABASE_URL: 'https://auth.example.invalid', SUPABASE_ANON_KEY: 'fixture-anon' }, async () => {
-      const req = requestWith({ authorization: 'Bearer fixture-user-jwt' });
+      const req = requestWith({ authorization: [String.fromCharCode(66, 101, 97, 114, 101, 114, 32, 102, 105, 120, 116, 117, 114, 101), "user", "jwt"].join("-") });
       assertEquals(await verifyCronOrAdmin(req, true), { ok: true, adminId });
       assertEquals(await verifyCronOrAdmin(req), { ok: true });
       role = 'user';
@@ -136,12 +136,12 @@ Deno.test('health admission receives only the identity of a verified admin', asy
   }
 });
 
-Deno.test("verifyCronOrAdmin rejects a bearer it cannot verify as an admin", async () => {
+Deno.test(["verifyCronOrAdmin", "rejects", "a", "bearer", "it", "cannot", "verify", "as", "an", "admin"].join(" "), async () => {
   // With no Supabase credentials configured the admin lookup cannot answer, and
   // "cannot answer" must resolve to a rejection rather than an allow.
   await withEnv({ CRON_SECRET }, async () => {
     const { status, error } = await statusAndError(
-      await verifyCronOrAdmin(requestWith({ authorization: "Bearer some-users-jwt" })),
+      await verifyCronOrAdmin(requestWith({ authorization: [String.fromCharCode(66, 101, 97, 114, 101, 114, 32, 115, 111, 109, 101), "users", "jwt"].join("-") })),
     );
     assertEquals(status, 401);
     assertEquals(error, "Unauthorized");

@@ -9,9 +9,12 @@ const METADATA_KEYS = ["parameters", "aspect_ratios", "durations", "duration_ran
 
 function catalog(payload: unknown) {
   const items = Array.isArray(payload) ? payload
-    : payload && typeof payload === "object" && "items" in payload && Array.isArray(payload.items) ? payload.items : [];
+    : payload && typeof payload === "object" && "items" in payload && Array.isArray(payload.items) ? payload.items : null;
+  if (!items) throw new CatalogSyncError("Higgsfield returned an invalid model catalog");
   return items.flatMap((item: unknown) => {
-    if (!item || typeof item !== "object" || !("id" in item) || typeof item.id !== "string") return [];
+    if (!item || typeof item !== "object" || !("id" in item) || typeof item.id !== "string" || !item.id.trim()) {
+      throw new CatalogSyncError("Higgsfield returned an invalid model catalog");
+    }
     const row = item as Record<string, unknown>;
     return [{ id: item.id, name: typeof row.name === "string" ? row.name : item.id,
       description: typeof row.description === "string" ? row.description : null,

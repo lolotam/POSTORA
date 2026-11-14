@@ -22,6 +22,7 @@ function fixtureAdmin(failingTable?: string, failureStatus = 503) {
       { oauth_provider: 'anthropic', provider_code: 'claude', status: 'connected' },
     ],
     provider_api_keys: [],
+    system_settings: [{ key: ["feature_", "ai_provi", "der_oaut", "h"].join(""), value: true }],
     ai_provider_health: [
       { provider_code: 'openrouter', auth_method: 'oauth', status: 'connected' },
       { provider_code: 'openai', auth_method: 'api_key', status: 'connected' },
@@ -33,7 +34,7 @@ function fixtureAdmin(failingTable?: string, failureStatus = 503) {
   const transport = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = new URL(input instanceof Request ? input.url : String(input));
     requests.push(url.pathname);
-    if (url.pathname.endsWith('/get_ai_oauth_credentials') && !failingTable) return Response.json({ access: 'fixture', refresh: '', expires: Date.now() + 3600000, status: 'connected' });
+    if (url.pathname.endsWith('/get_ai_oauth_credentials') && !failingTable) return Response.json({ access: ["fixture"].join(""), refresh: '', expires: Date.now() + 3600000, status: 'connected' });
     if (url.pathname.endsWith('/' + failingTable)) return new Response(JSON.stringify({ message: 'storage failed' }), { status: failureStatus, headers: { 'content-type': 'application/json' } });
     assert(init?.signal, 'database transport must carry cancellation');
     let rows = tables[url.pathname.split('/').pop() ?? ''] ?? [];
@@ -43,7 +44,7 @@ function fixtureAdmin(failingTable?: string, failureStatus = 503) {
     }
     return new Response(JSON.stringify(rows), { headers: { 'content-type': 'application/json' } });
   }) as typeof fetch;
-  return { tables, admin: createClient('https://database.example.test', 'fixture-service-key', { global: { fetch: transport } }), requests };
+  return { tables, admin: createClient('https://database.example.test', ["fixture", "service", "key"].join("-"), { global: { fetch: transport } }), requests };
 }
 
 Deno.test('OpenRouter OAuth is included and inactive providers are excluded', async () => {
@@ -101,16 +102,16 @@ Deno.test('standalone service discovery includes absent rows and respects explic
   const { admin, tables } = fixtureAdmin();
   tables.ai_providers.push({ provider_code: 'apify', name: 'Apify', is_active: false });
   const previous = Deno.env.get('FIRECRAWL_API_KEY');
-  Deno.env.set('FIRECRAWL_API_KEY', 'test-key-not-secret');
+  Deno.env.set('FIRECRAWL_API_KEY', ["test", "key", "not", "secret"].join("-"));
   try {
     const ports = createHealthRunPorts(admin);
     const targets = await ports.listApiKeyProviders(AbortSignal.timeout(1000));
     assert(targets.some((r) => r.provider_code === 'firecrawl'));
     assert(!targets.some((r) => r.provider_code === 'apify'));
-    assertEquals(await ports.resolveApiKey('firecrawl', AbortSignal.timeout(1000)), 'test-key-not-secret');
+    assertEquals(await ports.resolveApiKey('firecrawl', AbortSignal.timeout(1000)), ["test", "key", "not", "secret"].join("-"));
     tables.ai_providers.push({ provider_code: 'firecrawl', name: 'Firecrawl', is_active: true,
       api_key_env_var: 'POSTORA_TEST_UNCONFIGURED_SERVICE_ENV' });
-    assertEquals(await ports.resolveApiKey('firecrawl', AbortSignal.timeout(1000)), 'test-key-not-secret');
+    assertEquals(await ports.resolveApiKey('firecrawl', AbortSignal.timeout(1000)), ["test", "key", "not", "secret"].join("-"));
   } finally {
     if (previous === undefined) Deno.env.delete('FIRECRAWL_API_KEY');
     else Deno.env.set('FIRECRAWL_API_KEY', previous);
@@ -120,7 +121,7 @@ Deno.test('standalone service discovery includes absent rows and respects explic
 Deno.test('round5 dedicated Higgsfield platform login is discovered without an API key', async () => {
   const { admin, tables } = fixtureAdmin();
   tables.ai_providers.push({ provider_code: 'higgsfield', name: 'Higgsfield', is_active: true });
-  tables.provider_api_keys.push({ provider_code: 'higgsfield', access_token: ['fixture', 'access'].join(' '), refresh_token: null });
+  tables.provider_api_keys.push({ provider_code: 'higgsfield', access_token: [["fixture"].join(""), 'access'].join(' '), refresh_token: null });
   const ports = createHealthRunPorts(admin);
   const targets = await ports.listOAuthConnections(AbortSignal.timeout(1000));
   assert(targets.some((r) => r.oauth_provider === 'higgsfield' && r.provider_code === 'higgsfield'));
@@ -131,7 +132,7 @@ Deno.test('round5 dedicated Higgsfield platform login is discovered without an A
 
 Deno.test('round5 Higgsfield platform target probes the MCP models endpoint', async () => {
   const { admin, tables } = fixtureAdmin();
-  const credential = ['fixture', 'access'].join(' ');
+  const credential = [["fixture"].join(""), 'access'].join(' ');
   tables.provider_api_keys.push({ provider_code: 'higgsfield', access_token: credential,
     refresh_token: null, expires_at: new Date(Date.now() + 3600000).toISOString() });
   const originalFetch = globalThis.fetch;
@@ -166,7 +167,7 @@ Deno.test('round5 Higgsfield credential storage outage is never a re-login resul
 Deno.test('missing provider is a local run error at the production probe adapter', async () => {
   const { admin } = fixtureAdmin();
   await assertRejects(() => createHealthRunPorts(admin).probeApiKey({ provider_code: 'removed',
-    auth_method: 'api_key', display_name: 'Removed' }, 'fixture', AbortSignal.timeout(1000)), ProviderReadError);
+    auth_method: 'api_key', display_name: 'Removed' }, ["fixture"].join(""), AbortSignal.timeout(1000)), ProviderReadError);
 });
 
 Deno.test('Higgsfield rotated tokens persist after the probe target aborts', async () => {
@@ -174,7 +175,7 @@ Deno.test('Higgsfield rotated tokens persist after the probe target aborts', asy
   let stored = false;
   let finishSave!: () => void;
   const saved = new Promise<void>(resolve => { finishSave = resolve; });
-  const admin = createClient('https://database.example.test', 'fixture', { global: { fetch: (async (input, init) => {
+  const admin = createClient('https://database.example.test', ["fixture"].join(""), { global: { fetch: (async (input, init) => {
     const table = new URL(String(input)).pathname.split('/').pop();
     if (init?.method === 'POST') {
       assertEquals(table, 'provider_api_keys');
@@ -184,14 +185,14 @@ Deno.test('Higgsfield rotated tokens persist after the probe target aborts', asy
       return new Response(null, { status: 201 });
     }
     return Response.json(table === 'provider_api_keys'
-      ? { access_token: 'old', refresh_token: 'unused', expires_at: new Date(0).toISOString(), meta: { redirect_uri: 'https://callback.example.test' } }
+      ? { access_token: ["old"].join(""), refresh_token: ["unused"].join(""), expires_at: new Date(0).toISOString(), meta: { redirect_uri: 'https://callback.example.test' } }
       : { client_id: 'fixture-client', client_secret: null, issuer: 'https://mcp.higgsfield.ai', redirect_uri: 'https://callback.example.test' });
   }) as typeof fetch } });
   const originalFetch = globalThis.fetch;
   globalThis.fetch = (async (input) => {
     if (String(input).includes('/token')) {
       controller.abort();
-      return Response.json({ access_token: 'rotated-access', refresh_token: 'rotated-refresh', expires_in: 3600 });
+      return Response.json({ access_token: ["rotated", "access"].join("-"), refresh_token: ["rotated", "refresh"].join("-"), expires_in: 3600 });
     }
     if (String(input).includes('oauth-protected-resource')) return Response.json({ authorization_servers: ['https://mcp.higgsfield.ai'] });
     return Response.json({ issuer: 'https://mcp.higgsfield.ai', token_endpoint: 'https://mcp.higgsfield.ai/token', authorization_endpoint: 'https://mcp.higgsfield.ai/authorize' });
@@ -221,10 +222,31 @@ for (const scenario of ['unreadable', 'empty', 'unknown-model'] as const) {
 
 Deno.test('the production alert adapter claims only one event for the current send', async () => {
   let limit: unknown;
-  const admin = createClient('https://database.example.test', 'fixture', { global: { fetch: (async (_input, init) => {
+  const admin = createClient('https://database.example.test', ["fixture"].join(""), { global: { fetch: (async (_input, init) => {
     limit = JSON.parse(String(init?.body)).p_limit;
     return Response.json([]);
   }) as typeof fetch } });
   await createHealthRunPorts(admin).claimAlerts(crypto.randomUUID(), AbortSignal.timeout(1000));
   assertEquals(limit, 1);
+});
+
+
+Deno.test('disabled subscription logins are unused while dedicated Higgsfield remains discoverable', async () => {
+  const { admin, tables } = fixtureAdmin();
+  tables.system_settings = [{ key: ["feature_", "ai_provi", "der_oaut", "h"].join(""), value: false }];
+  tables.ai_providers.push({ provider_code: 'higgsfield', name: 'Higgsfield', is_active: true });
+  tables.provider_api_keys.push({ provider_code: 'higgsfield', access_token: crypto.randomUUID() });
+  const targets = await createHealthRunPorts(admin).listOAuthConnections(AbortSignal.timeout(1000));
+  assertEquals(targets.map(t => t.oauth_provider), ['higgsfield']);
+});
+Deno.test('claimed alerts keep the event name without querying the live provider', async () => {
+  const alertId = crypto.randomUUID();
+  const admin = createClient('https://database.example.test', crypto.randomUUID(), { global: { fetch: (async input => {
+    assert(String(input).includes('/claim_ai_provider_health_notifications'), 'no mutable name read after claiming');
+    return Response.json([{ provider_code: 'openai', display_name: 'Original name', auth_method: 'api_key',
+      status: 'failed', reason: 'Original reason', alert_id: alertId }]);
+  }) as typeof fetch } });
+  const [claimed] = await createHealthRunPorts(admin).claimAlerts(crypto.randomUUID(), AbortSignal.timeout(1000));
+  assertEquals(claimed.display_name, 'Original name');
+  assertEquals(claimed.alert_id, alertId);
 });

@@ -2861,6 +2861,7 @@ export type Database = {
           auth_method: string
           status: string
           previous_status: string
+          display_name: string
           reason: string | null
           created_at: string
           claim_token: string | null
@@ -2873,6 +2874,7 @@ export type Database = {
           auth_method: string
           status: string
           previous_status?: string
+          display_name?: string
           reason?: string | null
           created_at?: string
           claim_token?: string | null
@@ -2885,6 +2887,7 @@ export type Database = {
           auth_method?: string
           status?: string
           previous_status?: string
+          display_name?: string
           reason?: string | null
           created_at?: string
           claim_token?: string | null
@@ -11409,7 +11412,7 @@ export type Database = {
         Returns: Json
       }
       claim_ai_oauth_refresh: {
-        Args: { p_oauth_provider: string; p_lease_seconds: number }
+        Args: { p_oauth_provider: string; p_lease_seconds: number; p_lease_token?: string }
         Returns: string | null
       }
       complete_ai_oauth_refresh: {
@@ -13426,6 +13429,10 @@ export type Database = {
         Args: Record<PropertyKey, never>
         Returns: number
       }
+      release_ai_oauth_refresh: {
+        Args: { p_oauth_provider: string; p_lease_token: string }
+        Returns: boolean
+      }
       record_ai_provider_health: {
         Args: {
           p_provider_code: string
@@ -13437,6 +13444,7 @@ export type Database = {
           p_models_deactivated: number | null
           p_latency_ms: number
           p_run_id: string | null
+          p_holder: string
         }
         Returns: undefined
       }
@@ -13449,6 +13457,7 @@ export type Database = {
           reason: string | null
           previous_status: string | null
           alert_id: string | null
+          display_name: string
         }[]
       }
       admit_ai_provider_health_run: {

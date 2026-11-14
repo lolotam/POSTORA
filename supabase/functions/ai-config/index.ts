@@ -10,7 +10,7 @@ import { isBillingBlocked, ProviderTestError } from '../_shared/providerErrors.t
 import { resolveProviderKey } from '../_shared/providerKeys.ts';
 import type { RowReader } from '../_shared/providerEndpoint.ts';
 import { loadProbeTarget, probeProvider } from '../_shared/aiProviderTest.ts';
-import { groupCatalogueRows } from '../_shared/aiModelCatalogue.ts';
+import { readCatalogue } from './readCatalogue.ts';
 import { assertProviderUrl } from '../_shared/providerUrlPolicy.ts';
 import { syncModels } from './syncModels.ts';
 
@@ -67,11 +67,7 @@ serve(async (req) => {
       if (action === 'list') {
         const [pRes, mRes, sRes] = await Promise.all([
           supabase.from('ai_providers').select('*').order('name'),
-          // The catalogue is keyed by credential kind. Both kinds are read here
-          // and split below, so the subscription rows are visible without the
-          // API-key list changing.
-          supabase.from('ai_models').select('*, ai_providers(provider_code, name)').order('name')
-            .then(({ data, error }) => ({ ...groupCatalogueRows(data ?? []), error })),
+          readCatalogue(supabase),
           // Widened beyond the default_ai_model* tier rows so the admin UI can also
           // read the model_catalog_synced_at_<code> rows sync-models writes, and the
           // agent_triage_enabled on/off switch.

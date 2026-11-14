@@ -44,6 +44,9 @@ DELETE FROM public.ai_models WHERE model_id = 'health-fixture-model';
 -- The provider rows are fixtures. Only the ones this suite creates are
 -- removed at the end; a provider that already existed (production shape) is
 -- left exactly as it was.
+DELETE FROM public.cron_run_leases WHERE job = 'ai-provider-health';
+SELECT public.acquire_cron_run_lease('ai-provider-health', gen_random_uuid(), interval '1 hour');
+
 CREATE TEMP TABLE aph_created_providers (provider_code text PRIMARY KEY);
 
 DO $aph_seed_providers$
@@ -103,7 +106,7 @@ END $aph_auth_table$;
 DO $aph_auth_rpc$
 BEGIN
   BEGIN
-    PERFORM public.record_ai_provider_health('claude','api_key','connected',NULL,0,0,0,10,NULL);
+    PERFORM public.record_ai_provider_health('claude','api_key','connected',NULL,0,0,0,10,NULL, (SELECT holder FROM public.cron_run_leases WHERE job = 'ai-provider-health'));
     RAISE EXCEPTION 'FAIL: authenticated EXECUTE of record_ai_provider_health was ACCEPTED';
   EXCEPTION WHEN insufficient_privilege THEN
     NULL; -- expected: no EXECUTE grant for authenticated
@@ -126,7 +129,7 @@ DECLARE
 BEGIN
   PERFORM public.record_ai_provider_health(
     'claude', 'api_key', 'connected', NULL, 3, 1, 0, 42,
-    '11111111-1111-1111-1111-111111111111'::uuid);
+    '11111111-1111-1111-1111-111111111111'::uuid, (SELECT holder FROM public.cron_run_leases WHERE job = 'ai-provider-health'));
 
   SELECT status, previous_status, models_added
     INTO v_status, v_previous, v_added
@@ -157,7 +160,7 @@ DECLARE
 BEGIN
   PERFORM public.record_ai_provider_health(
     'claude', 'api_key', 'failed', 'Rate limit exceeded', 0, 0, 0, 50,
-    '11111111-1111-1111-1111-111111111111'::uuid);
+    '11111111-1111-1111-1111-111111111111'::uuid, (SELECT holder FROM public.cron_run_leases WHERE job = 'ai-provider-health'));
 
   SELECT status, previous_status, reason
     INTO v_status, v_previous, v_reason
@@ -273,10 +276,10 @@ DECLARE
 BEGIN
   PERFORM public.record_ai_provider_health(
     'openai', 'api_key', 'failed', 'Rate limit exceeded', 0, 0, 0, 10,
-    '55555555-5555-5555-5555-555555555555'::uuid);
+    '55555555-5555-5555-5555-555555555555'::uuid, (SELECT holder FROM public.cron_run_leases WHERE job = 'ai-provider-health'));
   PERFORM public.record_ai_provider_health(
     'openai', 'api_key', 'failed', 'Rate limit exceeded', 0, 0, 0, 10,
-    '55555555-5555-5555-5555-555555555555'::uuid);
+    '55555555-5555-5555-5555-555555555555'::uuid, (SELECT holder FROM public.cron_run_leases WHERE job = 'ai-provider-health'));
 
   SELECT count(*) INTO v_rows
     FROM public.claim_ai_provider_health_notifications(
@@ -351,7 +354,7 @@ BEGIN
   v_run_id := '357b4318-de5b-440e-8ca0-bf781a6bfc1b'::uuid;
 
   PERFORM public.record_ai_provider_health(
-    'claude', 'api_key', 'connected', NULL, 0, 0, 0, 1, v_run_id);
+    'claude', 'api_key', 'connected', NULL, 0, 0, 0, 1, v_run_id, (SELECT holder FROM public.cron_run_leases WHERE job = 'ai-provider-health'));
 
   IF NOT EXISTS (
     SELECT 1 FROM public.ai_provider_health
@@ -455,7 +458,7 @@ BEGIN
   -- claude is 'connected' at this point.
   PERFORM public.record_ai_provider_health(
     'claude', 'api_key', 'failed', 'Rate limit exceeded', 0, 0, 0, 10,
-    '11111111-1111-1111-1111-111111111111'::uuid);
+    '11111111-1111-1111-1111-111111111111'::uuid, (SELECT holder FROM public.cron_run_leases WHERE job = 'ai-provider-health'));
 
   SELECT alert_pending INTO v_pending
     FROM public.ai_provider_health
@@ -468,7 +471,7 @@ BEGIN
   -- before the alert was claimed.
   PERFORM public.record_ai_provider_health(
     'claude', 'api_key', 'failed', 'Rate limit exceeded', 0, 0, 0, 10,
-    '11111111-1111-1111-1111-111111111111'::uuid);
+    '11111111-1111-1111-1111-111111111111'::uuid, (SELECT holder FROM public.cron_run_leases WHERE job = 'ai-provider-health'));
 
   SELECT alert_pending INTO v_pending
     FROM public.ai_provider_health
@@ -503,10 +506,10 @@ BEGIN
   -- openai is 'failed' and has never been connected.
   PERFORM public.record_ai_provider_health(
     'openai', 'api_key', 'connected', NULL, 0, 0, 0, 10,
-    '55555555-5555-5555-5555-555555555555'::uuid);
+    '55555555-5555-5555-5555-555555555555'::uuid, (SELECT holder FROM public.cron_run_leases WHERE job = 'ai-provider-health'));
   PERFORM public.record_ai_provider_health(
     'openai', 'api_key', 'failed', 'Rate limit exceeded', 0, 0, 0, 10,
-    '55555555-5555-5555-5555-555555555555'::uuid);
+    '55555555-5555-5555-5555-555555555555'::uuid, (SELECT holder FROM public.cron_run_leases WHERE job = 'ai-provider-health'));
 
   SELECT count(*) INTO v_rows
     FROM public.claim_ai_provider_health_notifications(
@@ -529,12 +532,12 @@ BEGIN
   -- The provider recovers.
   PERFORM public.record_ai_provider_health(
     'openai', 'api_key', 'connected', NULL, 0, 0, 0, 10,
-    '55555555-5555-5555-5555-555555555555'::uuid);
+    '55555555-5555-5555-5555-555555555555'::uuid, (SELECT holder FROM public.cron_run_leases WHERE job = 'ai-provider-health'));
 
   -- ... and breaks again.
   PERFORM public.record_ai_provider_health(
     'openai', 'api_key', 'failed', 'Rate limit exceeded', 0, 0, 0, 10,
-    '55555555-5555-5555-5555-555555555555'::uuid);
+    '55555555-5555-5555-5555-555555555555'::uuid, (SELECT holder FROM public.cron_run_leases WHERE job = 'ai-provider-health'));
 
   SELECT count(*) INTO v_rows
     FROM public.claim_ai_provider_health_notifications(
@@ -566,12 +569,12 @@ BEGIN
   -- Start from a known state: openai recovers.
   PERFORM public.record_ai_provider_health(
     'openai', 'api_key', 'connected', NULL, 0, 0, 0, 10,
-    '55555555-5555-5555-5555-555555555555'::uuid);
+    '55555555-5555-5555-5555-555555555555'::uuid, (SELECT holder FROM public.cron_run_leases WHERE job = 'ai-provider-health'));
 
   -- It breaks: the break gets an id.
   PERFORM public.record_ai_provider_health(
     'openai', 'api_key', 'failed', 'Rate limit exceeded', 0, 0, 0, 10,
-    '55555555-5555-5555-5555-555555555555'::uuid);
+    '55555555-5555-5555-5555-555555555555'::uuid, (SELECT holder FROM public.cron_run_leases WHERE job = 'ai-provider-health'));
 
   SELECT alert_id INTO v_first
     FROM public.ai_provider_health
@@ -594,7 +597,7 @@ BEGIN
   -- A re-check while it is STILL broken is the same break: the id stays.
   PERFORM public.record_ai_provider_health(
     'openai', 'api_key', 'failed', 'Rate limit exceeded', 0, 0, 0, 10,
-    '55555555-5555-5555-5555-555555555555'::uuid);
+    '55555555-5555-5555-5555-555555555555'::uuid, (SELECT holder FROM public.cron_run_leases WHERE job = 'ai-provider-health'));
 
   SELECT alert_id INTO v_again
     FROM public.ai_provider_health
@@ -606,7 +609,7 @@ BEGIN
   -- It recovers: there is no break any more, so there is no id.
   PERFORM public.record_ai_provider_health(
     'openai', 'api_key', 'connected', NULL, 0, 0, 0, 10,
-    '55555555-5555-5555-5555-555555555555'::uuid);
+    '55555555-5555-5555-5555-555555555555'::uuid, (SELECT holder FROM public.cron_run_leases WHERE job = 'ai-provider-health'));
 
   SELECT alert_id INTO v_again
     FROM public.ai_provider_health
@@ -618,7 +621,7 @@ BEGIN
   -- It breaks again: a NEW break gets a NEW id, so the alert is a new alert.
   PERFORM public.record_ai_provider_health(
     'openai', 'api_key', 'failed', 'Rate limit exceeded', 0, 0, 0, 10,
-    '55555555-5555-5555-5555-555555555555'::uuid);
+    '55555555-5555-5555-5555-555555555555'::uuid, (SELECT holder FROM public.cron_run_leases WHERE job = 'ai-provider-health'));
 
   SELECT alert_id INTO v_second
     FROM public.ai_provider_health
@@ -643,14 +646,14 @@ DECLARE
 BEGIN
   PERFORM public.claim_ai_provider_health_notifications('cccccccc-cccc-4ccc-8ccc-cccccccccccc');
   PERFORM public.mark_ai_provider_health_notified('cccccccc-cccc-4ccc-8ccc-cccccccccccc', 'openai', 'api_key');
-  PERFORM public.record_ai_provider_health('openai', 'api_key', 'connected', NULL, 0, 0, 0, 1, NULL);
-  PERFORM public.record_ai_provider_health('openai', 'api_key', 'failed', 'Original reason', NULL, NULL, NULL, 1, NULL);
+  PERFORM public.record_ai_provider_health('openai', 'api_key', 'connected', NULL, 0, 0, 0, 1, NULL, (SELECT holder FROM public.cron_run_leases WHERE job = 'ai-provider-health'));
+  PERFORM public.record_ai_provider_health('openai', 'api_key', 'failed', 'Original reason', NULL, NULL, NULL, 1, NULL, (SELECT holder FROM public.cron_run_leases WHERE job = 'ai-provider-health'));
   SELECT alert_id INTO v_first_id FROM public.ai_provider_health
    WHERE provider_code = 'openai' AND auth_method = 'api_key';
   PERFORM public.claim_ai_provider_health_notifications('dddddddd-dddd-4ddd-8ddd-dddddddddddd');
   UPDATE public.ai_provider_health_alerts SET claimed_at = now() - interval '11 minutes'
    WHERE provider_code = 'openai' AND auth_method = 'api_key';
-  PERFORM public.record_ai_provider_health('openai', 'api_key', 'needs_relogin', 'Changed reason', NULL, NULL, NULL, 1, NULL);
+  PERFORM public.record_ai_provider_health('openai', 'api_key', 'needs_relogin', 'Changed reason', NULL, NULL, NULL, 1, NULL, (SELECT holder FROM public.cron_run_leases WHERE job = 'ai-provider-health'));
   SELECT * INTO v_claim FROM public.claim_ai_provider_health_notifications('eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee')
    WHERE provider_code = 'openai' AND auth_method = 'api_key';
   IF v_claim.alert_id IS DISTINCT FROM v_first_id OR v_claim.reason IS DISTINCT FROM 'Original reason'
@@ -673,7 +676,7 @@ DECLARE
 BEGIN
   PERFORM public.record_ai_provider_health(
     'claude', 'api_key', 'failed', 'Rate limit exceeded', NULL, NULL, NULL, 10,
-    '11111111-1111-1111-1111-111111111111'::uuid);
+    '11111111-1111-1111-1111-111111111111'::uuid, (SELECT holder FROM public.cron_run_leases WHERE job = 'ai-provider-health'));
 
   SELECT models_added, models_updated, models_deactivated
     INTO v_added, v_updated, v_deactivated
@@ -776,8 +779,8 @@ BEGIN
   IF public.admit_ai_provider_health_run('manual', v_next, v_admin) IS DISTINCT FROM 'cooldown' THEN RAISE EXCEPTION 'FAIL: missing per-admin cooldown'; END IF;
   UPDATE public.ai_provider_health_runs SET completed_at = now() - interval '61 seconds' WHERE run_id = v_manual;
   IF public.admit_ai_provider_health_run('manual', v_next, v_admin) IS DISTINCT FROM 'ready' THEN RAISE EXCEPTION 'FAIL: cooldown never expired'; END IF;
-  PERFORM public.record_ai_provider_health('claude','api_key','connected',NULL,0,0,0,1,v_daily);
-  PERFORM public.record_ai_provider_health('claude','api_key','connected',NULL,0,0,0,1,v_manual);
+  PERFORM public.record_ai_provider_health('claude','api_key','connected',NULL,0,0,0,1,v_daily, (SELECT holder FROM public.cron_run_leases WHERE job = 'ai-provider-health'));
+  PERFORM public.record_ai_provider_health('claude','api_key','connected',NULL,0,0,0,1,v_manual, (SELECT holder FROM public.cron_run_leases WHERE job = 'ai-provider-health'));
   IF NOT EXISTS (SELECT 1 FROM public.ai_provider_health_completions WHERE run_id = v_daily AND provider_code = 'claude') THEN
     RAISE EXCEPTION 'FAIL: manual overwrote daily completion';
   END IF;
@@ -790,17 +793,17 @@ UPDATE public.ai_provider_health SET alert_pending = false WHERE provider_code =
 DO $aph_recovery_outbox$
 DECLARE v_first uuid; v_count int; v_claim record; v_token uuid := gen_random_uuid();
 BEGIN
-  PERFORM public.record_ai_provider_health('openai','api_key','connected',NULL,0,0,0,1,NULL);
-  PERFORM public.record_ai_provider_health('openai','api_key','failed','Original failure',NULL,NULL,NULL,1,NULL);
+  PERFORM public.record_ai_provider_health('openai','api_key','connected',NULL,0,0,0,1,NULL, (SELECT holder FROM public.cron_run_leases WHERE job = 'ai-provider-health'));
+  PERFORM public.record_ai_provider_health('openai','api_key','failed','Original failure',NULL,NULL,NULL,1,NULL, (SELECT holder FROM public.cron_run_leases WHERE job = 'ai-provider-health'));
   SELECT alert_id INTO v_first FROM public.ai_provider_health WHERE provider_code = 'openai' AND auth_method = 'api_key';
-  PERFORM public.record_ai_provider_health('openai','api_key','connected',NULL,0,0,0,1,NULL);
+  PERFORM public.record_ai_provider_health('openai','api_key','connected',NULL,0,0,0,1,NULL, (SELECT holder FROM public.cron_run_leases WHERE job = 'ai-provider-health'));
   SELECT * INTO v_claim FROM public.claim_ai_provider_health_notifications(v_token) WHERE alert_id = v_first;
   IF v_claim.previous_status IS DISTINCT FROM 'connected' THEN
     RAISE EXCEPTION 'FAIL: recovery changed original previous status';
   END IF;
   SELECT count(*) INTO v_count FROM public.ai_provider_health_alerts WHERE alert_id = v_first AND claim_token = v_token;
   IF v_count <> 1 THEN RAISE EXCEPTION 'FAIL: recovery erased unsent degradation'; END IF;
-  PERFORM public.record_ai_provider_health('openai','api_key','failed','Second failure',NULL,NULL,NULL,1,NULL);
+  PERFORM public.record_ai_provider_health('openai','api_key','failed','Second failure',NULL,NULL,NULL,1,NULL, (SELECT holder FROM public.cron_run_leases WHERE job = 'ai-provider-health'));
   -- First send closes only its event; the second break remains pending.
   PERFORM public.mark_ai_provider_health_notified(v_token,'openai','api_key',v_first);
   SELECT * INTO v_claim FROM public.claim_ai_provider_health_notifications(gen_random_uuid()) WHERE provider_code = 'openai';
@@ -919,5 +922,62 @@ DELETE FROM public.ai_providers
  WHERE provider_code IN (SELECT provider_code FROM aph_created_providers);
 
 DROP TABLE aph_created_providers;
+
+\echo '=== ai_provider_health: ALL CHECKS PASSED ==='
+
+BEGIN;
+DELETE FROM public.cron_run_leases WHERE job = 'ai-provider-health';
+DO $r7_fenced_results$
+DECLARE owner uuid := gen_random_uuid(); stale uuid := gen_random_uuid(); run uuid := gen_random_uuid(); event uuid; original_name text;
+BEGIN
+  INSERT INTO public.ai_providers(provider_code,name,api_endpoint,api_key_env_var,api_type,supports_streaming,is_active)
+    VALUES ('openai','OpenAI','https://api.openai.com/v1','OPENAI_API_KEY','openai',true,false)
+    ON CONFLICT(provider_code) DO NOTHING;
+  PERFORM public.acquire_cron_run_lease('ai-provider-health', owner, interval '2 minutes');
+  SELECT name INTO original_name FROM public.ai_providers WHERE provider_code = 'openai';
+  PERFORM public.record_ai_provider_health('openai','api_key','connected',NULL,0,0,0,1,run,owner);
+  BEGIN
+    PERFORM public.record_ai_provider_health('openai','api_key','failed','stale',NULL,NULL,NULL,1,run,stale);
+    RAISE EXCEPTION 'FAIL: stale holder wrote a health result';
+  EXCEPTION WHEN raise_exception THEN
+    IF SQLERRM NOT LIKE 'Health result lease%' THEN RAISE; END IF;
+  END;
+  ASSERT (SELECT status = 'connected' FROM public.ai_provider_health WHERE provider_code='openai' AND auth_method='api_key');
+  PERFORM public.record_ai_provider_health('openai','api_key','failed','original',NULL,NULL,NULL,1,run,owner);
+  SELECT alert_id INTO event FROM public.ai_provider_health WHERE provider_code='openai' AND auth_method='api_key';
+  UPDATE public.ai_providers SET name = 'Renamed after event' WHERE provider_code='openai';
+  ASSERT (SELECT display_name = original_name FROM public.ai_provider_health_alerts WHERE alert_id=event), 'event retains original provider name';
+  ASSERT (SELECT display_name = original_name FROM public.claim_ai_provider_health_notifications(gen_random_uuid()) WHERE alert_id=event), 'claim retains frozen provider name';
+  UPDATE public.cron_run_leases SET expires_at=clock_timestamp()-interval '1 second' WHERE job='ai-provider-health';
+  BEGIN
+    PERFORM public.record_ai_provider_health('openai','api_key','connected',NULL,0,0,0,1,run,owner);
+    RAISE EXCEPTION 'FAIL: expired holder wrote a health result';
+  EXCEPTION WHEN raise_exception THEN
+    IF SQLERRM NOT LIKE 'Health result lease%' THEN RAISE; END IF;
+  END;
+END $r7_fenced_results$;
+ROLLBACK;
+
+BEGIN;
+DO $r7_oauth_release$
+DECLARE token uuid := gen_random_uuid(); other uuid := gen_random_uuid(); stored_expiry timestamptz;
+BEGIN
+  INSERT INTO public.ai_providers(provider_code,name,api_endpoint,api_key_env_var,api_type,supports_streaming,is_active)
+    VALUES ('openrouter','OpenRouter','https://openrouter.ai/api/v1','OPENROUTER_API_KEY','openai',true,false)
+    ON CONFLICT(provider_code) DO NOTHING;
+  INSERT INTO public.ai_provider_oauth_connections(oauth_provider, provider_code, status, last_refresh_error)
+    VALUES ('openrouter','openrouter','connected','retained diagnostic') ON CONFLICT(oauth_provider)
+    DO UPDATE SET status='connected', refresh_lock_until=NULL, refresh_lease_token=NULL, last_refresh_error='retained diagnostic';
+  ASSERT public.claim_ai_oauth_refresh('openrouter',180,token)=token;
+  SELECT refresh_lock_until INTO stored_expiry FROM public.ai_provider_oauth_connections WHERE oauth_provider='openrouter';
+  ASSERT public.claim_ai_oauth_refresh('openrouter',180,token)=token, 'lost response retry recovers same lease';
+  ASSERT (SELECT refresh_lock_until=stored_expiry FROM public.ai_provider_oauth_connections WHERE oauth_provider='openrouter'), 'retry must not extend the lease';
+  ASSERT public.claim_ai_oauth_refresh('openrouter',180,other) IS NULL, 'another caller cannot claim it';
+  ASSERT NOT public.release_ai_oauth_refresh('openrouter',other), 'wrong token cannot release';
+  ASSERT public.release_ai_oauth_refresh('openrouter',token);
+  ASSERT (SELECT status='connected' AND last_refresh_error='retained diagnostic' AND refresh_lock_until IS NULL AND refresh_lease_token IS NULL
+    FROM public.ai_provider_oauth_connections WHERE oauth_provider='openrouter'), 'benign release preserves connection state';
+END $r7_oauth_release$;
+ROLLBACK;
 
 \echo '=== ai_provider_health: ALL CHECKS PASSED ==='

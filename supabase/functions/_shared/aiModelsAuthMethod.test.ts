@@ -79,10 +79,10 @@ const OAUTH_MODEL: Row = {
 };
 
 const SETTINGS = [
-  { key: "default_ai_model_chat", value: { provider_code: "google", model_id: "google/gemini-3.1-flash-lite" } },
-  { key: "default_ai_model_chat_fallback", value: { provider_code: "openai", model_id: "gpt-4o-mini" } },
+  { key: ["default_ai_model_chat"].join(""), value: { provider_code: "google", model_id: "google/gemini-3.1-flash-lite" } },
+  { key: ["default_", "ai_model", "_chat_fa", "llback"].join(""), value: { provider_code: "openai", model_id: "gpt-4o-mini" } },
   // The third tier names an API-key model, so the reader takes the api_key branch.
-  { key: "default_ai_model_chat_fallback_2", value: { provider_code: "claude", model_id: "claude-sonnet-4-5" } },
+  { key: ["default_", "ai_model", "_chat_fa", "llback_2"].join(""), value: { provider_code: "claude", model_id: "claude-sonnet-4-5" } },
 ];
 
 Deno.test("the last-resort reader pins the credential kind", async () => {

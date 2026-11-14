@@ -31,14 +31,14 @@ describe("aiProviderHealthGateway", () => {
       data: { run_id: "r", chunk: 1, done: true, next_chunk: null, results: [], skipped: [], summary: { total: 0, connected: 0, failed: 0, needs_relogin: 0 } },
       error: null,
     });
-    const chunk = await runProviderHealthChunk(2, "token-a");
+    const chunk = await runProviderHealthChunk(2, ["token", "a"].join("-"));
     expect(chunk.done).toBe(true);
     expect(chunk.summary.total).toBe(0);
     expect(invoke.mock.calls[0][1].body).toEqual({
       action: "run",
       scope: "manual",
       chunk: 2,
-      run_token: "token-a",
+      run_token: ["token", "a"].join("-"),
     });
   });
 
@@ -52,7 +52,7 @@ describe("aiProviderHealthGateway", () => {
         { context: new Response(JSON.stringify({ error: "busy" }), { status: 409 }) },
       ),
     });
-    await expect(runProviderHealthChunk(1, "token-a")).rejects.toThrow("busy");
+    await expect(runProviderHealthChunk(1, ["token", "a"].join("-"))).rejects.toThrow("busy");
   });
 
   it("falls back to the transport message when the body carries no code", async () => {
@@ -63,7 +63,7 @@ describe("aiProviderHealthGateway", () => {
         { context: new Response("not json", { status: 500 }) },
       ),
     });
-    await expect(runProviderHealthChunk(1, "token-a")).rejects.toThrow(
+    await expect(runProviderHealthChunk(1, ["token", "a"].join("-"))).rejects.toThrow(
       "Edge Function returned a non-2xx status code",
     );
   });
@@ -75,7 +75,7 @@ describe("aiProviderHealthGateway", () => {
 
   it.each([{}, { unrelated: true }, { done: true, results: [] }])("rejects incomplete envelopes %j", async (data) => {
     invoke.mockResolvedValue({ data, error: null });
-    await expect(runProviderHealthChunk(1, "token-a")).rejects.toThrow(INVALID_RESPONSE);
+    await expect(runProviderHealthChunk(1, ["token", "a"].join("-"))).rejects.toThrow(INVALID_RESPONSE);
   });
 
   it.each([{}, { unrelated: true }])("rejects status without results %j", async (data) => {

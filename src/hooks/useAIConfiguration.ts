@@ -1,5 +1,6 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { supabase } from '@/integrations/supabase/client';
+import { fetchModelCatalogue } from '@/features/ai-providers/infrastructure/aiModelCatalogueGateway';
 import type {
   AIProvider,
   AIModel,
@@ -95,10 +96,7 @@ export function useAIConfiguration() {
 
       const [providersResult, modelsResult, settingsResult] = await Promise.all([
         supabase.from('ai_providers').select('*').order('name'),
-        // The catalogue is keyed by credential kind: the same model_id exists once
-        // per auth_method. The rows are fetched once and split below, so the
-        // subscription catalogue is visible without the API-key list changing.
-        supabase.from('ai_models').select('*, ai_providers(provider_code, name)').in('auth_method', ['api_key', 'oauth']).order('name'),
+        fetchModelCatalogue(),
         // Widened beyond the default_ai_model* tier rows so the admin UI can also
         // read the model_catalog_synced_at_<code> rows the sync-models action writes,
         // and the agent_triage_enabled on/off switch. Deviation from the task-5 brief:

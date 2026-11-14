@@ -1,4 +1,5 @@
 import { useCallback, useState } from "react";
+import { AI_PROVIDER_AUTH_QUERY_KEY } from "./useAiProviderAuth";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   fetchProviderHealth,
@@ -100,6 +101,7 @@ export function useRunProviderHealth(): {
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: AI_PROVIDER_HEALTH_QUERY_KEY }),
         queryClient.invalidateQueries({ queryKey: ['ai-config'] }),
+        queryClient.invalidateQueries({ queryKey: AI_PROVIDER_AUTH_QUERY_KEY }),
       ]);
       setIsRunning(false);
     }

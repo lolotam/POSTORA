@@ -106,9 +106,12 @@ marker reads. Discovery and database calls carry cancellation. Each target recei
 a total budget capped by 15 seconds and the remaining global deadline. Refresh,
 probe and catalogue reads/writes share an earlier signal; up to two seconds of
 the same total budget are reserved for result recording with a later write signal.
-Initial credential reads receive that signal. Refresh claims and post-claim reads
-use independent five-second deadlines so cancellation cannot hide an acquired lease
-token. Cancellation or any other pre-rotation exit releases the token-fenced lease.
+Initial credential reads receive that signal. Refresh claims use a caller-generated
+lease token and independent five-second deadlines. A lost response is retried once
+with the same token, which recovers the committed claim without extending its lease.
+Post-claim reads also use an independent five-second deadline. Cancellation or any
+other pre-rotation exit releases the token-fenced lease without changing the OAuth
+status or its previous refresh diagnostic.
 Once token rotation starts,
 its save/failure settlement retains the existing 180-second refresh lease even if
 the health caller stops waiting; cancelling that save could discard a rotated token.
@@ -165,7 +168,8 @@ Completed daily admissions still execute the bounded alert phase without repeati
 provider probes; later scheduled chunks can reclaim a failed delivery after ten minutes.
 Latest health retains its pending indicator; it is not the event delivery ledger.
 
-The event ID is Resend's Idempotency-Key. Retried event content remains frozen.
+The event ID is Resend's Idempotency-Key. Retried event content remains frozen,
+including the provider display name captured when the event was created.
 Resend deduplication lasts 24 hours; the system does not claim indefinite exactly-once
 mail delivery across a send/mark crash beyond that transport retention. Alerts use
 admin recipients and a production sender (`admin@postora.cloud`, or verified

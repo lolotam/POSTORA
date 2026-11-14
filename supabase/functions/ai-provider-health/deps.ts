@@ -111,9 +111,12 @@ export function createHealthRunPorts(admin: Admin, leaseHolder?: string, registr
     },
 
     async listOAuthConnections(signal) {
-      const { data, error } = await admin
+      const { data: flag, error: flagError } = await admin.from("system_settings").select("value")
+        .eq("key", "feature_ai_provider_oauth").abortSignal(signal).maybeSingle();
+      if (flagError) throw new ProviderReadError("Subscription enable setting could not be read");
+      const { data, error } = flag?.value === true ? await admin
         .from("ai_provider_oauth_connections")
-        .select("oauth_provider, provider_code, status").abortSignal(signal);
+        .select("oauth_provider, provider_code, status").abortSignal(signal) : { data: [], error: null };
       if (error) throw new Error("OAuth connection read failed");
       const rows = (data ?? []) as Array<{ oauth_provider?: unknown; provider_code?: unknown; status?: unknown }>;
       const { data: platform, error: platformError } = await admin.from("provider_api_keys")
@@ -292,6 +295,7 @@ export function createHealthRunPorts(admin: Admin, leaseHolder?: string, registr
         p_models_deactivated: result.models_deactivated,
         p_latency_ms: result.latency_ms ?? 0,
         p_run_id: runId,
+        p_holder: leaseHolder,
       }).abortSignal(signal);
       if (error) throw new Error("provider health write failed");
     },
@@ -302,13 +306,7 @@ export function createHealthRunPorts(admin: Admin, leaseHolder?: string, registr
       }).abortSignal(signal);
       if (error) throw new Error("provider health claim failed");
       const degraded = alertRowsToDegraded((data ?? []) as Array<Record<string, unknown>>);
-      // The alert names the provider, not its code: the names are resolved in one
-      // query for the whole claim.
-      const names = await providerNames(admin, degraded.map((p) => p.provider_code), { signal });
-      return degraded.map((provider) => ({
-        ...provider,
-        display_name: names.get(provider.provider_code) ?? provider.provider_code,
-      }));
+      return degraded;
     },
 
     async sendAlert(provider, signal) {

@@ -172,7 +172,7 @@ async function testJina(key: string, timeoutMs: number, fetchImpl: typeof fetch)
 }
 
 async function handleRes(res: Response, name: string, key: string) {
-  if (res.ok) return;
+  if (res.ok) { await res.body?.cancel(); return; }
   const t = await res.text();
   // The body can echo the key back, so it is redacted before it reaches the log.
   console.error(`${name} test failed: HTTP ${res.status}`);
@@ -204,7 +204,7 @@ async function testOpenAI(key: string, ep: string, model: string | null, timeout
     headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
     // 16, not 1: Vercel routes openai/* through the Responses API, which rejects max_output_tokens < 16.
     body: JSON.stringify({ model, messages: [{ role: 'user', content: 'hi' }],
-      ...(/^(?:o[1-9](?:-|$)|gpt-5(?:-|$))/.test(model) ? { max_completion_tokens: 16 } : { max_tokens: 16 }) }),
+      ...(/^(?:o[1-9](?:-|$)|gpt-5(?:[.-]|$))/.test(model) ? { max_completion_tokens: 16 } : { max_tokens: 16 }) }),
   }, timeoutMs);
   await handleRes(res, 'OpenAI', key);
 }
@@ -254,7 +254,7 @@ async function testZAI(key: string, ep: string, timeoutMs: number, fetchImpl: ty
   // validity. The model list is the cheapest authoritative check.
   const url = ep.replace(/\/$/, '') + '/models';
   const res = await fetchWithTimeout(fetchImpl, url, { headers: { Authorization: `Bearer ${key}` } }, timeoutMs);
-  if (res.ok) return;
+  if (res.ok) { await res.body?.cancel(); return; }
   await handleRes(res, 'Z.AI', key);
 }
 
@@ -326,7 +326,7 @@ async function testXAI(key: string, ep: string, timeoutMs: number, fetchImpl: ty
   // Use lightweight GET /v1/models to validate API key without needing a specific model
   const modelsEndpoint = ep.replace(/\/$/, '').replace(/\/v1\/?$/, '') + '/v1/models';
   const res = await fetchWithTimeout(fetchImpl, modelsEndpoint, { headers: { Authorization: `Bearer ${key}` } }, timeoutMs);
-  if (res.ok) return;
+  if (res.ok) { await res.body?.cancel(); return; }
   await handleRes(res, 'xAI', key);
 }
 
@@ -336,7 +336,7 @@ async function testMinimax(key: string, ep: string, timeoutMs: number, fetchImpl
   // (HTTP 402 / code 1008), which says nothing about key validity.
   const modelsEndpoint = ep.replace(/\/$/, '').replace(/\/v1\/?$/, '') + '/v1/models';
   const res = await fetchWithTimeout(fetchImpl, modelsEndpoint, { headers: { Authorization: `Bearer ${key}` } }, timeoutMs);
-  if (res.ok) return;
+  if (res.ok) { await res.body?.cancel(); return; }
   await handleRes(res, 'MiniMax', key);
 }
 
