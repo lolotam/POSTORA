@@ -267,6 +267,15 @@ export class ReplyNotDeliverableError extends Error {
   }
 }
 
+/** Only the sender boundary can prove transport was never invoked. Other
+ * failures, including cancellation after invocation, remain delivery_unknown. */
+export class ReplyNotSentError extends Error {
+  constructor(cause: unknown) {
+    super("reply cancelled before transport invocation", { cause });
+    this.name = "ReplyNotSentError";
+  }
+}
+
 /**
  * The delivery half, shared by both entry points below:
  *
@@ -317,7 +326,7 @@ async function sendAndSettle(
     // which is why `sending` is durable and this is a courtesy, not the guarantee.
     await advanceOwnedReply(settlementAdmin, outboxId, userId, {
       from: "sending",
-      to: "delivery_unknown",
+      to: error instanceof ReplyNotSentError ? "ready_to_send" : "delivery_unknown",
       error: (error as Error)?.message ?? String(error),
     });
     throw error;

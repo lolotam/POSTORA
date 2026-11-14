@@ -6,6 +6,42 @@ import {
 } from "./modelCatalogSync.ts";
 import { supportsAgentApiTools } from "./agentRecovery.ts";
 
+// PR #426 round 2: every sync shares the same refusal/evidence precedence.
+const toolCatalogues = [
+  ["vercel tags", mapVercelCatalog([{ id: "tools", type: "language", tags: ["tool-use"] }]), true],
+  ["vercel empty tags", mapVercelCatalog([{ id: "tools", type: "language", tags: [] }]), undefined],
+  ["vercel unrelated tags", mapVercelCatalog([{ id: "tools", type: "language", tags: ["vision"] }]), undefined],
+  ["vercel parameters", mapVercelCatalog([{ id: "tools", type: "language", supported_parameters: ["tools"] }]), true],
+  ["vercel refusal", mapVercelCatalog([{ id: "tools", type: "language", tags: ["tool-use"], supported_parameters: [] }]), false],
+  ["openrouter", mapOpenRouterCatalog([{ id: "tools", architecture: { output_modalities: ["text"] }, supported_parameters: ["tools"] }]), true],
+  ["openrouter refusal", mapOpenRouterCatalog([{ id: "tools", architecture: { output_modalities: ["text"] }, supported_parameters: [] }]), false],
+  ["deepseek-chat", mapDeepSeekCatalog([{ id: "deepseek-chat" }]), true],
+  ["deepseek-flash", mapDeepSeekCatalog([{ id: "deepseek-flash" }]), true],
+  ["anthropic", mapAnthropicCatalog([{ id: "claude" }]), undefined],
+  ["gemini", mapGeminiCatalog([{ name: "models/gemini", supportedGenerationMethods: ["generateContent"] }]), undefined],
+  ["openai", mapOpenAICatalog([{ id: "gpt-5" }]), undefined],
+  ["zai", mapIdOnlyChatCatalog([{ id: "glm" }]), undefined],
+  ["minimax", mapIdOnlyChatCatalog([{ id: "MiniMax" }]), undefined],
+  ["xai", mapXaiCatalog([{ id: "grok" }]), undefined],
+] as const;
+
+for (const [provider, catalogue, evidence] of toolCatalogues) {
+  for (const stored of [false, true, undefined] as const) {
+    Deno.test(`${provider} sync preserves tool precedence over stored ${stored}`, () => {
+      const model = catalogue.models[0];
+      const row = existingRow({ id: "existing", is_active: true, model_id: model.model_id, capabilities: ["chat", "tools"],
+        metadata: { tool_calling: stored, curated: "preserve" } });
+      const plan = planCatalogSync([row], catalogue, new Set());
+      const next = plan.updates[0] ?? row;
+      const expected = stored === false ? false : evidence ?? stored;
+      assertEquals(next.metadata?.tool_calling, expected);
+      assertEquals(next.metadata?.curated, "preserve");
+      assertEquals(supportsAgentApiTools(next), expected !== false);
+      assertEquals(model.metadata.tool_calling, evidence);
+    });
+  }
+}
+
 Deno.test("catalogue sync retains verified API tool capability without promoting chat-only models", () => {
   const mapped = [
     mapOpenRouterCatalog([{ id: "router/tools", architecture: { output_modalities: ["text"] }, supported_parameters: ["tools", "tool_choice"] },

@@ -2207,7 +2207,9 @@ Deno.serve(async (req) => {
         !escalationCompleted &&
         (replyWithoutDurableCopy || settlement.staffWriteFailed || settlement.staffReadFailed)
       ) {
-        const released = await releaseUnpersistedEscalation(cleanupAdmin, handoffScope(request), earlyEscalationLease);
+        // Opportunistic release shares settlement; the reserved cleanup deadline
+        // must start only when the failed turn can be released alongside its lease.
+        const released = await releaseUnpersistedEscalation(settlementAdmin, handoffScope(request), earlyEscalationLease);
         if (!released) {
           // The lease still stands: a later turn takes the apology over once it lapses,
           // so the apology is owed rather than lost.
@@ -2337,6 +2339,10 @@ Deno.serve(async (req) => {
         human_notified: floor.human_notified,
       });
     }
+    if (outboxId) {
+      await releaseFailedEscalationTurn(cleanupAdmin, handoffScope(request), earlyEscalationLease, outboxId,
+        { sideEffectsHappened, error: errorMessage(error) });
+    }
     await logOutcome(settlementAdmin, {
       ...baseLog,
       status: "error",
@@ -2350,10 +2356,6 @@ Deno.serve(async (req) => {
       model_errors: modelErrors.length ? modelErrors : null,
       triage: triage ? { outcome: triage.outcome, errors: triage.errors.length ? triage.errors : null } : null,
     });
-    if (outboxId) {
-      await releaseFailedEscalationTurn(cleanupAdmin, handoffScope(request), earlyEscalationLease, outboxId,
-        { sideEffectsHappened, error: errorMessage(error) });
-    }
     return jsonResponse({ ok: false, error: errorMessage(error) });
   } finally {
     try {

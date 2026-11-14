@@ -133,7 +133,7 @@ export function mapVercelCatalog(data: unknown[]): MappedCatalog {
     if (capability === "chat") {
       if (Array.isArray(row.supported_parameters)) model.metadata.supported_parameters = row.supported_parameters.filter(p => typeof p === "string");
       if (Array.isArray(row.supported_parameters)) model.metadata.tool_calling = row.supported_parameters.includes("tools");
-      else if (Array.isArray(row.tags)) model.metadata.tool_calling = row.tags.includes("tool-use");
+      else if (Array.isArray(row.tags) && row.tags.includes("tool-use")) model.metadata.tool_calling = true;
     }
     const width = EMBEDDING_WIDTHS[model.model_id];
     if (capability === "embedding" && width) model.metadata.embedding_dimensions = width;
@@ -252,6 +252,15 @@ function isUnchanged(row: ExistingModelRow, next: ModelUpdate): boolean {
     stableJson(row.metadata ?? {}) === stableJson(next.metadata);
 }
 
+/** Shared by every provider: a stored admin/verified refusal wins over catalogue
+ * evidence. Explicit catalogue refusals beat positive evidence; absent evidence
+ * preserves the stored value. Missing optional tags are not a refusal. */
+function mergeCatalogMetadata(stored: Row | null, incoming: Row): Row {
+  const metadata = { ...(stored ?? {}), ...incoming };
+  if (stored?.tool_calling === false) metadata.tool_calling = false;
+  return metadata;
+}
+
 export function planCatalogSync(
   existing: ExistingModelRow[],
   mapped: MappedCatalog,
@@ -269,7 +278,7 @@ export function planCatalogSync(
       continue;
     }
     const reactivate = !row.is_active && row.metadata?.sync_deactivated === true;
-    const metadata = { ...(row.metadata ?? {}), ...model.metadata };
+    const metadata = mergeCatalogMetadata(row.metadata, model.metadata);
     if (reactivate) metadata.sync_deactivated = false;
     // Capabilities outside what this catalogue manages (search, agent, ...) were set by an admin.
     const adminCapabilities = row.capabilities.filter((c) => !managed.has(c));

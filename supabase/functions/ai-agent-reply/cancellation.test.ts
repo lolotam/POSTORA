@@ -9,11 +9,127 @@ import { releaseFailedEscalationTurn, releaseUnpersistedEscalation } from "./han
 
 const serve = Deno.serve;
 let chatCompletion: typeof import("./index.ts").chatCompletion;
+let handleReply: (request: Request) => Promise<Response>;
 try {
-  Deno.serve = (() => ({})) as unknown as typeof Deno.serve;
+  Deno.serve = ((handler: typeof handleReply) => { handleReply = handler; return {}; }) as unknown as typeof Deno.serve;
   ({ chatCompletion } = await import("./index.ts"));
 } finally { Deno.serve = serve; }
 const payload = { model: "configured-model", messages: [{ role: "user", content: "hours?" }] };
+
+Deno.test("delivery persistence failure releases its lease and retryable turn before slow error logging", async () => {
+  const original = globalThis.fetch;
+  const savedEnv = ["SUPABASE_URL", "SUPABASE_SERVICE_ROLE_KEY"].map(name => [name, Deno.env.get(name)] as const);
+  const key = crypto.randomUUID();
+  Deno.env.set("SUPABASE_URL", "https://database.example.test");
+  Deno.env.set("SUPABASE_SERVICE_ROLE_KEY", key);
+  let state = "pending";
+  let leaseHeld = false;
+  let persistenceRefused = false;
+  let errorLogged = false;
+  let stateBeforeLog: string | undefined;
+  const marker = new Date(Date.now() - 60_000).toISOString();
+  const account = { id: "account", platform_user_id: "phone", access_token: crypto.randomUUID(), connection_mode: "cloud_api", account_metadata: {} };
+  globalThis.fetch = async (input, init) => {
+    init?.signal?.throwIfAborted();
+    const url = new URL(String(input));
+    const table = url.pathname.split("/").at(-1)!;
+    const args = init?.body ? JSON.parse(String(init.body)) : {};
+    const select = url.searchParams.get("select") ?? "";
+    if (url.pathname.endsWith("/chat/completions")) return Response.json({ choices: [{ message: { role: "assistant", content: "Our hours are nine to five." } }] });
+    if (args.p_from) {
+      assertEquals(args.p_from, state);
+      if (args.p_to === "ready_to_send") { persistenceRefused = true; return Response.json(false); }
+      state = args.p_to;
+      return Response.json(true);
+    }
+    if (table === "claim_unanswered_escalation") { leaseHeld = true; return Response.json({ marker, token: "claim" }); }
+    if (table === "release_unanswered_escalation_claim") { leaseHeld = false; return Response.json(true); }
+    if (table === "ai_agent_logs" && args.status === "error") {
+      stateBeforeLog = state;
+      // Longer than the reserved two-second cleanup lane, shorter than settlement.
+      await new Promise(resolve => setTimeout(resolve, 2100));
+      errorLogged = true;
+      return Response.json(null);
+    }
+    if (init?.method === "POST" && table !== "ai_threads") return Response.json(null);
+    if (table === "ai_agent_configs") return Response.json({ is_enabled: true, default_mode: "ai_first", reply_cooldown_seconds: 0, daily_message_cap: 0, language_mode: "en" });
+    if (table === "social_accounts") return Response.json(account);
+    if (table === "ai_threads") return Response.json(select === "unanswered_escalation_since" ? { unanswered_escalation_since: marker } : { id: "thread" });
+    if (table === "pending_agent_replies") return Response.json({ user_id: "owner", status: state });
+    if (table === "whatsapp_messages" && select === "timestamp") return Response.json({ timestamp: new Date().toISOString() });
+    if (table === "system_settings") return Response.json([{ key: "default_ai_model_agent", value: { provider_code: "openai", model_id: "configured-model" } }]);
+    if (table === "ai_providers") return Response.json({ api_endpoint: "https://provider.example.test/v1", api_type: "openai", is_active: true });
+    if (table === "provider_api_keys") return Response.json({ api_key: key });
+    if (["app_settings", "user_feature_overrides", "user_ai_routing_preferences", "ai_conversation_modes", "conversation_assignments", "whatsapp_conversations"].includes(table)) return Response.json(null);
+    return Response.json([], { headers: { "content-range": "0-0/0" } });
+  };
+  try {
+    const response = await handleReply(new Request("https://function.example.test", { method: "POST",
+      headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ user_id: "owner", platform: "whatsapp", social_account_id: "account", conversation_id: "conversation",
+        phone_number_id: "phone", recipient_phone: "recipient", inbound_text: "What are your hours?", outbox_id: "outbox" }) }));
+    assertEquals((await response.json()).ok, false);
+    assertEquals(persistenceRefused, true);
+    assertEquals(errorLogged, true);
+    assertEquals(leaseHeld, false);
+    assertEquals(state, "pending");
+    assertEquals(stateBeforeLog, "pending");
+  } finally {
+    globalThis.fetch = original;
+    clearProviderEndpointCache();
+    for (const [name, value] of savedEnv) { if (value === undefined) Deno.env.delete(name); else Deno.env.set(name, value); }
+  }
+});
+
+for (const mode of ["fresh", "stored"] as const) Deno.test(`${mode} outbox retries a cancellation after claim but before transport exactly once`, async () => {
+  const original = globalThis.fetch;
+  const caller = new AbortController();
+  const clients = createAgentClients("https://database.example.test", crypto.randomUUID(), caller.signal);
+  let state = mode === "fresh" ? "running" : "ready_to_send";
+  let sends = 0;
+  globalThis.fetch = async (_url, init) => {
+    init?.signal?.throwIfAborted();
+    const args = JSON.parse(String(init?.body));
+    assertEquals(args.p_from, state);
+    state = args.p_to;
+    return Response.json(true);
+  };
+  const transport = async () => { sends++; return "external-message-id"; };
+  const bounded = boundAgentSender(transport, clients.signal);
+  const send = (text: string) => { caller.abort(); return bounded("recipient", text); };
+  try {
+    const pending = mode === "fresh"
+      ? deliverGeneratedReply(clients.work, "outbox", { text: "Saved", toolCalls: [] }, send, "owner", clients.settlement)
+      : deliverStoredReply(clients.work, "outbox", { text: "Saved", kind: "reply" }, send, "owner", clients.settlement);
+    await assertRejects(() => pending);
+    assertEquals(sends, 0);
+    assertEquals(state, "ready_to_send");
+    const retry = boundAgentSender(transport, new AbortController().signal);
+    await deliverStoredReply(clients.settlement, "outbox", { text: "Saved", kind: "reply" }, text => retry("recipient", text), "owner", clients.settlement);
+    assertEquals(sends, 1);
+    assertEquals(state, "sent");
+  } finally { globalThis.fetch = original; }
+});
+
+for (const failure of ["abort", "network"] as const) Deno.test(`an invoked transport's ${failure} rejection remains unknown delivery`, async () => {
+  const original = globalThis.fetch;
+  const clients = createAgentClients("https://database.example.test", crypto.randomUUID(), new AbortController().signal);
+  let state = "ready_to_send";
+  globalThis.fetch = async (_url, init) => {
+    const args = JSON.parse(String(init?.body));
+    assertEquals(args.p_from, state);
+    state = args.p_to;
+    return Response.json(true);
+  };
+  const send = boundAgentSender(async () => {
+    throw failure === "abort" ? new DOMException("transport aborted", "AbortError") : new Error("network failed");
+  }, clients.signal);
+  try {
+    await assertRejects(() => deliverStoredReply(clients.work, "outbox", { text: "Saved", kind: "reply" },
+      text => send("recipient", text), "owner", clients.settlement));
+    assertEquals(state, "delivery_unknown");
+  } finally { globalThis.fetch = original; }
+});
 
 for (const stalled of ["endpoint", "key"] as const) Deno.test(`cancelled Agent round never dispatches API inference after late ${stalled} resolution`, async () => {
   clearProviderEndpointCache();
