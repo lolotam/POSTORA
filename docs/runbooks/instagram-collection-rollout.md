@@ -537,6 +537,7 @@ and retain the returned schedule identities before applying it. `DB_URL` is
 the authorized operator connection, never a value to paste into a receipt.
 
 ```bash
+set -euo pipefail   # any failed pause aborts the whole block before the migration runs
 psql "$DB_URL" -X -v ON_ERROR_STOP=1 <<'SQL'
 SET statement_timeout='10s';
 SELECT jobid,jobname,schedule,active FROM cron.job WHERE jobname IN (
@@ -548,6 +549,8 @@ SELECT cron.alter_job(jobid,active:=false) FROM cron.job WHERE jobname IN (
  'competitor-snapshot-enqueue-daily','competitor-snapshot-drain',
  'facebook-analytics-enqueue-daily','facebook-analytics-drain');
 SQL
+# Do not continue unless every affected schedule now reports active=false.
+test "$(psql "$DB_URL" -X -At -c "SELECT count(*) FROM cron.job WHERE active AND jobname IN ('instagram-insights-enqueue-daily','instagram-insights-drain','competitor-snapshot-enqueue-daily','competitor-snapshot-drain','facebook-analytics-enqueue-daily','facebook-analytics-drain')")" = 0
 psql "$DB_URL" -X -v ON_ERROR_STOP=1 \
  -f supabase/migrations/20261114210000_analytics_policy_operator_controls.sql
 psql "$DB_URL" -X -v ON_ERROR_STOP=1 <<'SQL'
