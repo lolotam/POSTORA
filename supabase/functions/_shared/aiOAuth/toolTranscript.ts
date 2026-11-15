@@ -11,12 +11,15 @@ const messageSchema = z.object({ role: z.enum(["system", "user", "assistant", "t
   content: z.union([z.string().max(262_144), z.array(z.object({ type: z.literal("text"), text: z.string() }).strict()), z.null()]),
   tool_calls: z.array(callSchema).max(16).optional(), tool_call_id: z.string().optional(), is_error: z.boolean().optional(),
 }).strict();
+const parametersSchema = z.object({ type: z.literal("object"), properties: jsonObject, required: z.array(z.string()).optional() });
 const definitionSchema = z.object({ type: z.literal("function"), function: z.object({
   name: z.string().regex(/^[a-zA-Z0-9_-]{1,64}$/), description: z.string().max(16_384),
   // Anthropic 0.73.1 projects exactly these root fields. Other root constraints
   // must be refused, rather than silently narrowed by its converter.
-  parameters: z.object({ type: z.literal("object"), properties: jsonObject, required: z.array(z.string()).optional() }).strict(),
+  parameters: parametersSchema.strict(),
 }).strict() }).strict();
+// Responses forwards parameters intact, unlike Anthropic's root projection.
+const codexDefinitionSchema = definitionSchema.extend({ function: definitionSchema.shape.function.extend({ parameters: parametersSchema.passthrough() }) });
 export type FunctionTool = z.infer<typeof definitionSchema>;
 export type ToolCall = z.infer<typeof callSchema>;
 export type TranscriptMessage = z.infer<typeof messageSchema>;
@@ -42,9 +45,9 @@ export function parseArguments(text: string): Record<string, unknown> {
   try { return jsonObject.parse(JSON.parse(text)); }
   catch { throw new ToolContractError("tool_history_unsupported"); }
 }
-export function toolDefinitions(body: Record<string, unknown>): FunctionTool[] {
+export function toolDefinitions(body: Record<string, unknown>, provider = "anthropic"): FunctionTool[] {
   if (JSON.stringify(body.tools ?? []).length > 262_144 || containsInferenceSecret(body.tools)) throw new ToolContractError("schema_unsupported");
-  const result = z.array(definitionSchema).max(64).safeParse(body.tools ?? []);
+  const result = z.array(provider === "openai-codex" ? codexDefinitionSchema : definitionSchema).max(64).safeParse(body.tools ?? []);
   if (!result.success) throw new ToolContractError("schema_unsupported");
   const names = result.data.map(t => t.function.name.toLowerCase());
   if (new Set(names).size !== names.length) throw new ToolContractError("schema_unsupported");
@@ -98,6 +101,10 @@ export class OAuthContinuation {
     const turn = this.#turns.get(JSON.stringify(canonical));
     return turn?.provider === provider && turn.model === model ? structuredClone(turn.native) : undefined;
   }
+  hasCodexCall(model: string, callId: string): boolean {
+    return [...this.#turns.values()].some(turn => turn.provider === "openai-codex" && turn.model === model &&
+      (turn.native.content as Array<{ type: string; id?: string }>).some(part => part.type === "toolCall" && part.id?.split("|")[0] === callId));
+  }
 }
 const text = (content: TranscriptMessage["content"]) => typeof content === "string" ? content : (content ?? []).map(p => p.text).join("");
 const zeroUsage = () => ({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0,
@@ -106,23 +113,33 @@ const zeroUsage = () => ({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0, tot
 export function toToolContext(body: Record<string, unknown>, provider: string, model: string, continuation?: OAuthContinuation) {
   const transcript = validatedTranscript(body);
   const names = new Map<string, string>();
+  const nativeIds = new Map<string, string>();
   const messages: Array<Record<string, unknown>> = [];
   for (const message of transcript) {
     if (message.role === "system") continue;
     if (message.role === "tool") {
-      messages.push({ role: "toolResult", toolCallId: message.tool_call_id, toolName: names.get(message.tool_call_id!),
+      messages.push({ role: "toolResult", toolCallId: nativeIds.get(message.tool_call_id!) ?? message.tool_call_id, toolName: names.get(message.tool_call_id!),
         content: [{ type: "text", text: text(message.content) }], isError: message.is_error ?? false, timestamp: Date.now() });
     } else if (message.role === "assistant") {
-      for (const call of message.tool_calls ?? []) names.set(call.id, call.function.name);
-      messages.push(continuation?.lookup(provider, model, message) ?? {
-        role: "assistant", api: "anthropic-messages", provider, model, timestamp: Date.now(), usage: zeroUsage(),
+      const native = continuation?.lookup(provider, model, message);
+      const nativeCalls = native?.content as Array<{ type: string; id?: string; name?: string }> | undefined;
+      for (const [index, call] of (message.tool_calls ?? []).entries()) {
+        names.set(call.id, call.function.name);
+        const nativeCall = nativeCalls?.filter(part => part.type === "toolCall")[index];
+        // A synthetic turn carries facts, never a foreign provider's item IDs.
+        // Server-owned short IDs also avoid the target converter's truncation
+        // turning two distinct, long canonical IDs into one call.
+        nativeIds.set(call.id, nativeCall?.id ?? `history_${crypto.randomUUID()}`);
+      }
+      messages.push(native ?? {
+        role: "assistant", api: provider === "openai-codex" ? "openai-codex-responses" : "anthropic-messages", provider, model, timestamp: Date.now(), usage: zeroUsage(),
         content: [...(text(message.content) ? [{ type: "text", text: text(message.content) }] : []),
-          ...(message.tool_calls ?? []).map(call => ({ type: "toolCall", id: call.id, name: call.function.name, arguments: parseArguments(call.function.arguments) }))],
+          ...(message.tool_calls ?? []).map(call => ({ type: "toolCall", id: nativeIds.get(call.id), name: call.function.name, arguments: parseArguments(call.function.arguments) }))],
         stopReason: message.tool_calls?.length ? "toolUse" : "stop",
       });
     } else messages.push({ role: "user", content: text(message.content), timestamp: Date.now() });
   }
-  const tools = toolDefinitions(body).map(t => ({ ...t.function }));
+  const tools = toolDefinitions(body, provider).map(t => ({ ...t.function }));
   return { systemPrompt: transcript.filter(m => m.role === "system").map(m => text(m.content)).join("\n\n") || undefined,
     messages, ...(tools.length ? { tools } : {}) };
 }

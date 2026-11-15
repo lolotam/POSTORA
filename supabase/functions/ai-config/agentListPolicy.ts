@@ -10,13 +10,15 @@ export function buildAgentListPolicy(source: ChatPolicySnapshot): { groups: Chat
     const provider = source.providers.find(p => p.provider_code === group.provider_code);
     for (const model of group.models) {
       const row = source.models.find(m => m.provider_id === provider?.id && m.model_id === model.model_id && (m.auth_method ?? "api_key") === group.auth_method);
-      if (!model.reason && !(group.auth_method === "oauth" ? source.toolRegistry?.[group.provider_code]?.includes(model.model_id) : row && supportsAgentApiTools(row))) model.reason = "tools_unsupported";
+      const toolCapable = row?.metadata?.tool_calling !== false && (group.auth_method === "oauth" ? source.toolRegistry?.[group.provider_code]?.includes(model.model_id) : row && supportsAgentApiTools(row));
+      if (!model.reason && !toolCapable) model.reason = "tools_unsupported";
     }
     if (group.auth_method === "oauth") {
       // One precedence: inactive, master, transport/flag, connection, model.
       if (group.reason !== "inactive" && group.reason !== "flag_off") {
-        if (group.provider_code !== "claude") group.reason = "oauth_tools_unsupported";
-        else if (!source.flags.feature_ai_oauth_tools_claude) group.reason = "oauth_tools_disabled";
+        const toolFlag = { claude: source.flags.feature_ai_oauth_tools_claude, openai: source.flags.feature_ai_oauth_tools_codex }[group.provider_code];
+        if (toolFlag === undefined) group.reason = "oauth_tools_unsupported";
+        else if (!toolFlag) group.reason = "oauth_tools_disabled";
       }
     }
     if (group.reason === "no_compatible_models") group.reason = "no_compatible_agent_models";

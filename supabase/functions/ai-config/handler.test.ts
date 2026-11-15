@@ -10,13 +10,14 @@ const input = { action: "set-chat-tier", category: "chat", slot: "primary", prov
 const encode = (body: unknown) => btoa(JSON.stringify(body)).replaceAll("=", "").replaceAll("+", "-").replaceAll("/", "_");
 const token = [encode({ alg: ["HS", 256].join(""), typ: ["J", "WT"].join("") }), encode({ sub: userId, exp: 4_000_000_000 }), encode(crypto.randomUUID())].join(".");
 
-for (const scenario of ["primary", "fallback", "fallback_2", "all Auth", "flag off", "non-admin", "conflict"] as const) {
-  Deno.test(`HTTP Agent policy ${scenario}`, async () => {
+for (const provider of ["claude", "openai"] as const) for (const scenario of ["primary", "fallback", "fallback_2", "all Auth", "flag off", "non-admin", "conflict"] as const) {
+  Deno.test(`HTTP Agent ${provider} policy ${scenario}`, async () => {
     const original = globalThis.fetch;
     const writes: Array<{ p_key: string; p_expected: unknown }> = [];
     const logged: string[] = [];
     const api = { provider_code: "openai", model_id: "tool-api" };
-    const auth = { provider_code: "claude", model_id: "claude-sonnet-4-5", auth_method: "oauth" };
+    const auth = { provider_code: provider, model_id: provider === "claude" ? "claude-sonnet-4-5" : "gpt-5.1-codex-max", auth_method: "oauth" };
+    const providerFlag = provider === "claude" ? "feature_ai_oauth_tools_claude" : "feature_ai_oauth_tools_codex";
     const expected = { default_ai_model_agent: api, default_ai_model_agent_fallback: api, default_ai_model_agent_fallback_2: api };
     const slot = scenario === "fallback" || scenario === "fallback_2" ? scenario : "primary";
     globalThis.fetch = async (url, init) => {
@@ -26,10 +27,10 @@ for (const scenario of ["primary", "fallback", "fallback_2", "all Auth", "flag o
       if (path === "system_logs") { logged.push(JSON.parse(String(init?.body)).metadata.reason); return Response.json(null); }
       if (path === "write_ai_agent_tier") { writes.push(JSON.parse(String(init?.body))); return Response.json(scenario !== "conflict"); }
       return Response.json(path === "user_roles" ? (scenario === "non-admin" ? [] : [{ role: "admin" }]) :
-        path === "system_settings" ? ["feature_ai_text_auth_lists", "feature_ai_provider_oauth", "feature_ai_oauth_tools_claude"].map(key => ({ key, value: key !== "feature_ai_oauth_tools_claude" || scenario !== "flag off" })) :
+        path === "system_settings" ? ["feature_ai_text_auth_lists", "feature_ai_provider_oauth", providerFlag].map(key => ({ key, value: key !== providerFlag || scenario !== "flag off" })) :
         path === "ai_providers" ? ["claude", "openai"].map(provider_code => ({ id: provider_code, provider_code, name: provider_code, is_active: true })) :
         path === "ai_models" && target.searchParams.get("offset") === "0" ? [{ provider_id: "openai", model_id: "tool-api", name: "API", capabilities: ["chat", "tools"], is_active: true }] :
-        path === "get_ai_oauth_statuses" ? [{ provider_code: "claude", status: "connected" }] :
+        path === "get_ai_oauth_statuses" ? [{ provider_code: provider, status: "connected" }] :
         path === "provider_api_keys" ? { api_key: crypto.randomUUID() } : []);
     };
     try {

@@ -27,18 +27,21 @@ function source(): ChatPolicySnapshot {
     providers: ["claude", "openai"].map(provider_code => ({ id: provider_code, provider_code, name: provider_code, is_active: true })),
     models: [{ provider_id: "openai", model_id: "tool-model", name: "API tools", capabilities: ["chat", "tools"], is_active: true },
       { provider_id: "openai", model_id: "chat-only", name: "Chat only", capabilities: ["chat"], is_active: true }],
-    apiKeys: { openai: true }, settings: [], statuses: [{ provider_code: "claude", status: "connected" }], registry: { claude: ["same"], openai: ["codex"] }, toolRegistry: { claude: ["same"] },
+    apiKeys: { openai: true }, settings: [], statuses: ["claude", "openai"].map(provider_code => ({ provider_code, status: "connected" })), registry: { claude: ["same"], openai: ["codex"] }, toolRegistry: { claude: ["same"], openai: ["codex"] },
   };
 }
-Deno.test("Agent groups require Claude tool flag and verified tool capability; Codex stays refused", () => {
+Deno.test("Agent groups require independent provider tool flags and verified tool capability", () => {
   const snapshot = source();
   let groups = buildAgentListPolicy(snapshot).groups;
   assertEquals(groups.find(g => g.provider_code === "claude" && g.auth_method === "oauth")?.reason, null);
-  assertEquals(groups.find(g => g.provider_code === "openai" && g.auth_method === "oauth")?.reason, "oauth_tools_unsupported");
+  assertEquals(groups.find(g => g.provider_code === "openai" && g.auth_method === "oauth")?.reason, null);
   assertEquals(groups.find(g => g.provider_code === "openai" && g.auth_method === "api_key")?.models.find(m => m.model_id === "chat-only")?.reason, "tools_unsupported");
   snapshot.flags.feature_ai_oauth_tools_claude = false;
   groups = buildAgentListPolicy(snapshot).groups;
   assertEquals(groups.find(g => g.provider_code === "claude" && g.auth_method === "oauth")?.reason, "oauth_tools_disabled");
+  assertEquals(groups.find(g => g.provider_code === "openai" && g.auth_method === "oauth")?.reason, null);
+  snapshot.flags.feature_ai_oauth_tools_codex = false;
+  assertEquals(buildAgentListPolicy(snapshot).groups.find(g => g.provider_code === "openai" && g.auth_method === "oauth")?.reason, "oauth_tools_disabled");
 });
 
 for (const [active, master, tools, status, reason] of [
@@ -47,13 +50,29 @@ for (const [active, master, tools, status, reason] of [
   [true, true, false, "reauth_required", "oauth_tools_disabled"],
   [true, true, true, "reauth_required", "reauth_required"],
   [true, true, true, "connected", null],
-] as const) Deno.test(`Agent availability precedence ${reason ?? "ready"}`, () => {
+] as const) for (const provider of ["claude", "openai"] as const) Deno.test(`Agent ${provider} availability precedence ${reason ?? "ready"}`, () => {
   const snapshot = source();
-  snapshot.providers[0].is_active = active;
+  snapshot.providers.find(row => row.provider_code === provider)!.is_active = active;
   snapshot.flags.feature_ai_provider_oauth = master;
-  snapshot.flags.feature_ai_oauth_tools_claude = tools;
-  snapshot.statuses[0].status = status;
-  assertEquals(buildAgentListPolicy(snapshot).groups.find(g => g.provider_code === "claude" && g.auth_method === "oauth")?.reason, reason);
+  snapshot.flags[provider === "claude" ? "feature_ai_oauth_tools_claude" : "feature_ai_oauth_tools_codex"] = tools;
+  snapshot.statuses.find(row => row.provider_code === provider)!.status = status;
+  assertEquals(buildAgentListPolicy(snapshot).groups.find(g => g.provider_code === provider && g.auth_method === "oauth")?.reason, reason);
+});
+
+Deno.test("Codex Agent save still requires a later chosen tool-capable API tier", () => {
+  const codex = { provider_code: "openai", model_id: "codex", auth_method: "oauth" };
+  assertEquals(validateAgentTier({ ...request, ...codex }, source()).value, codex);
+  assertThrows(() => validateAgentTier({ ...request, ...codex, expected: { default_ai_model_agent: codex } }, source()));
+  const snapshot = source();
+  snapshot.toolRegistry!.openai = [];
+  assertEquals(buildAgentListPolicy(snapshot).groups.find(g => g.provider_code === "openai" && g.auth_method === "oauth")?.models[0].reason, "tools_unsupported");
+});
+
+for (const metadata of [null, { tool_calling: true }, { tool_calling: false }]) Deno.test(`Codex Agent catalogue capability precedence ${JSON.stringify(metadata)}`, () => {
+  const snapshot = source();
+  snapshot.models.push({ provider_id: "openai", model_id: "codex", name: "Codex", auth_method: "oauth", capabilities: ["chat"], is_active: true, metadata });
+  const group = buildAgentListPolicy(snapshot).groups.find(g => g.provider_code === "openai" && g.auth_method === "oauth")!;
+  assertEquals(group.models[0].reason, metadata?.tool_calling === false ? "tools_unsupported" : null);
 });
 
 for (const [name, change, accepted] of [
