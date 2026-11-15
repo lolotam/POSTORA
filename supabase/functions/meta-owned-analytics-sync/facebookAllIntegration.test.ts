@@ -6,21 +6,22 @@ const foreign = "e7100000-0000-4000-8000-000000000002";
 const credentialId = "e7300000-0000-4000-8000-000000000001";
 const account = (index: number) => `e7200000-0000-4000-8000-${String(index).padStart(12, "0")}`;
 const api = "https://phase6-analytics.invalid";
+const authorization = (value: string) => ["Bearer", value].join(" ");
 const literal = (value: unknown) => `'${JSON.stringify(value).replaceAll("'", "''")}'::jsonb`;
 
 Deno.test("registered Facebook all drain resumes SQL cursor, reconciles loss, fences owners and enrolls a future Page", async () => {
   const runtime = resolveRolloutRuntime();
-  const lease = `phase6-${crypto.randomUUID()}`;
+  const lease = crypto.randomUUID();
   await acquireRolloutLease(runtime, lease);
   const originalFetch = globalThis.fetch;
   const envKeys = ["SUPABASE_URL", "SUPABASE_SERVICE_ROLE_KEY", "CRON_SECRET", "FACEBOOK_APP_ID", "FACEBOOK_APP_SECRET"];
   const originalEnv = new Map(envKeys.map((key) => [key, Deno.env.get(key)]));
-  const service = `phase6-service-${crypto.randomUUID()}`;
-  const cron = `phase6-cron-${crypto.randomUUID()}`;
-  const userToken = `phase6-user-${crypto.randomUUID()}`;
-  const pageToken = `phase6-page-${crypto.randomUUID()}`;
-  const newPageToken = `phase6-new-page-${crypto.randomUUID()}`;
-  const appSecret = `phase6-app-${crypto.randomUUID()}`;
+  const service = crypto.randomUUID();
+  const cron = crypto.randomUUID();
+  const userToken = crypto.randomUUID();
+  const pageToken = crypto.randomUUID();
+  const newPageToken = crypto.randomUUID();
+  const appSecret = crypto.randomUUID();
   let savedSettings: unknown;
   let savedTurns: unknown;
   let fixtureOwned = false;
@@ -74,11 +75,11 @@ Deno.test("registered Facebook all drain resumes SQL cursor, reconciles loss, fe
     const headers = { "facebook-api-version": "v25.0" };
     if (url.pathname === "/v25.0/debug_token") {
       assertEquals(url.searchParams.get("input_token"), userToken);
-      assertEquals(request.headers.get("authorization"), `Bearer 867701|${appSecret}`);
+      assertEquals(request.headers.get("authorization"), authorization(["867701", appSecret].join("|")));
       return Response.json({ data: { is_valid: true, app_id: "867701", user_id: "868701", scopes: ["read_insights", "pages_read_engagement"] } }, { headers });
     }
-    const pageId = request.headers.get("authorization") === `Bearer ${pageToken}` ? "869752"
-      : request.headers.get("authorization") === `Bearer ${newPageToken}` ? "869799" : null;
+    const pageId = request.headers.get("authorization") === authorization(pageToken) ? "869752"
+      : request.headers.get("authorization") === authorization(newPageToken) ? "869799" : null;
     assert(pageId !== null, "Only an owned ready Page token may leave the process");
     if (url.pathname === "/v25.0/me") return Response.json({ id: pageId }, { headers });
     assert(new RegExp(`^/v25\\.0/${pageId}/(posts|insights)$`).test(url.pathname), "Only the ready token's Page receives measurement calls");
@@ -118,7 +119,7 @@ Deno.test("registered Facebook all drain resumes SQL cursor, reconciles loss, fe
     for (const [key, value] of Object.entries({ SUPABASE_URL: api, SUPABASE_SERVICE_ROLE_KEY: service, CRON_SECRET: cron,
       FACEBOOK_APP_ID: "867701", FACEBOOK_APP_SECRET: appSecret })) Deno.env.set(key, value);
     const { handler } = await import("./index.ts");
-    const invoke = (body: unknown) => handler(new Request(api, { method: "POST", headers: { Authorization: `Bearer ${cron}`, "Content-Type": "application/json" }, body: JSON.stringify(body) }));
+    const invoke = (body: unknown) => handler(new Request(api, { method: "POST", headers: { Authorization: authorization(cron), "Content-Type": "application/json" }, body: JSON.stringify(body) }));
     const lost = await invoke({ action: "drain", platform: "facebook" });
     assertEquals(lost.status, 503);
     assertEquals(providerCalls.length, 0, "An ambiguous cursor write stops before all provider work");
@@ -130,7 +131,7 @@ Deno.test("registered Facebook all drain resumes SQL cursor, reconciles loss, fe
     assert(providerCalls.includes("/v25.0/debug_token") && providerCalls.includes("/v25.0/me"));
     assert(providerCalls.some((path) => path.endsWith("/posts")), "The same drain reaches measurement work after resume");
     const beforeForeign = providerCalls.length;
-    const foreignReply = await handler(new Request(api, { method: "POST", headers: { Authorization: `Bearer ${service}`, "Content-Type": "application/json" },
+    const foreignReply = await handler(new Request(api, { method: "POST", headers: { Authorization: authorization(service), "Content-Type": "application/json" },
       body: JSON.stringify({ action: "enqueue", platform: "facebook", user_id: foreign, accountId: account(52) }) }));
     assertEquals(foreignReply.status, 404);
     assertEquals(providerCalls.length, beforeForeign, "Foreign owner refusal has zero provider calls");

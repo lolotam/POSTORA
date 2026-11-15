@@ -16,7 +16,7 @@ export class AnalyticsWorkerDeadline {
 
   get remainingMs(): number { return this.endsAt - Date.now(); }
 
-  /** Resume cannot consume the measurement reserve, including provider body reads. */
+  /** After drain preflight, resume cannot consume the claim/measurement reserve, including provider body reads. */
   facebookResume(): AnalyticsWorkerDeadline {
     const endsAt = Math.min(Date.now() + 15_000, this.endsAt - 25_000);
     const signal = AbortSignal.any([this.signal, AbortSignal.timeout(Math.max(0, endsAt - Date.now()))]);

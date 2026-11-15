@@ -35,11 +35,39 @@ INSERT INTO auth.users(id,email) VALUES
 INSERT INTO public.social_accounts(id,user_id,platform,platform_user_id,access_token,is_active,needs_reauth)
 SELECT ('e6200000-0000-4000-8000-'||lpad(i::text,12,'0'))::uuid,
  ('e6100000-0000-4000-8000-'||lpad((i%3+1)::text,12,'0'))::uuid,
- 'facebook',(860000+i)::text,'phase6-page-'||i,true,false FROM generate_series(1,1205) i;
+ 'facebook',(860000+i)::text,gen_random_uuid()::text,true,false FROM generate_series(1,1205) i;
 INSERT INTO public.social_accounts(id,user_id,platform,platform_user_id,access_token,is_active,needs_reauth) VALUES
  ('e6190000-0000-4000-8000-000000000001','e6100000-0000-4000-8000-000000000001','facebook','859001',gen_random_uuid()::text,false,false),
  ('e6190000-0000-4000-8000-000000000002','e6100000-0000-4000-8000-000000000001','threads','859002',gen_random_uuid()::text,true,false);
 UPDATE public.app_settings SET value='true'::jsonb WHERE key='collection_facebook_analytics_enabled';
+
+-- Exercise the actual selector statements under the generic-plan cache mode.
+-- Initial pages use an ordered index; later pages seek past the cursor.
+ANALYZE public.social_accounts;
+SET LOCAL plan_cache_mode=force_generic_plan;
+DO $plans$
+DECLARE statement text; statements integer:=0; plan jsonb; cursor_query boolean;
+BEGIN
+ FOR statement IN SELECT matched[1] FROM regexp_matches(
+  pg_get_functiondef('public.meta_analytics_dispatch_next_account(text,jsonb,uuid)'::regprocedure),
+  'RETURN \((SELECT.*?)\);','gs') matched LOOP
+  statements:=statements+1;
+  cursor_query:=position('p_after' in statement)>0;
+  statement:=replace(replace(statement,'p_after','$1'),'p_policy','$2');
+  EXECUTE 'PREPARE fb6_keyset_plan(uuid,jsonb) AS '||statement;
+  EXECUTE $explain$EXPLAIN (FORMAT JSON, COSTS OFF) EXECUTE fb6_keyset_plan(
+   'e6200000-0000-4000-8000-000000001200',
+   '{"mode":"allowlist","account_ids":["e6200000-0000-4000-8000-000000001201"]}')$explain$ INTO plan;
+  ASSERT (plan::text LIKE '%Index Scan%' OR plan::text LIKE '%Index Only Scan%')
+   AND plan::text NOT LIKE '%"Node Type": "Sort"%', 'selector must use an ordered index: '||plan::text;
+  IF cursor_query THEN
+   ASSERT plan::text LIKE '%"Index Cond":%id > $1%', 'generic plan must seek, not filter the visited prefix: '||plan::text;
+  END IF;
+  EXECUTE 'DEALLOCATE fb6_keyset_plan';
+ END LOOP;
+ ASSERT statements=4, 'both policy modes need separate initial/cursor statements';
+END;$plans$;
+SET LOCAL plan_cache_mode=auto;
 
 SET LOCAL ROLE service_role;
 DO $cas$
@@ -97,7 +125,7 @@ BEGIN
  ASSERT public.next_meta_analytics_dispatch_target('facebook',false)->>'state'='complete','drain cannot reopen completion';
  -- A future connection behind the completed cursor joins the next explicit round.
  INSERT INTO public.social_accounts(id,user_id,platform,platform_user_id,access_token,is_active,needs_reauth) VALUES
-  ('e6200000-0000-4000-8000-000000000000','e6100000-0000-4000-8000-000000000001','facebook','869999','phase6-new-page',true,false);
+  ('e6200000-0000-4000-8000-000000000000','e6100000-0000-4000-8000-000000000001','facebook','869999',gen_random_uuid()::text,true,false);
  ASSERT public.next_meta_analytics_dispatch_target('facebook',false)->>'state'='complete';
  t:=public.next_meta_analytics_dispatch_target('facebook',true)->'ticket';
  ASSERT t->>'account_id'='e6200000-0000-4000-8000-000000000000' AND t->>'round'='2';

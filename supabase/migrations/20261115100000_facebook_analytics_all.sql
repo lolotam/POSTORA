@@ -198,12 +198,19 @@ SET search_path=public,pg_temp AS $fn$
 BEGIN
  IF p_platform='facebook' THEN
   IF p_policy->>'mode'='all' THEN
+   IF p_after IS NULL THEN
+    RETURN (SELECT id FROM public.social_accounts WHERE platform='facebook' AND is_active ORDER BY id LIMIT 1);
+   END IF;
    RETURN (SELECT id FROM public.social_accounts WHERE platform='facebook' AND is_active
-    AND (p_after IS NULL OR id>p_after) ORDER BY id LIMIT 1);
+    AND id>p_after ORDER BY id LIMIT 1);
   ELSIF p_policy->>'mode'='allowlist' THEN
+   IF p_after IS NULL THEN
+    RETURN (SELECT id FROM public.social_accounts WHERE platform='facebook' AND is_active
+     AND id=ANY(ARRAY(SELECT e::uuid FROM jsonb_array_elements_text(p_policy->'account_ids') e)) ORDER BY id LIMIT 1);
+   END IF;
    RETURN (SELECT id FROM public.social_accounts WHERE platform='facebook' AND is_active
     AND id=ANY(ARRAY(SELECT e::uuid FROM jsonb_array_elements_text(p_policy->'account_ids') e))
-    AND (p_after IS NULL OR id>p_after) ORDER BY id LIMIT 1);
+    AND id>p_after ORDER BY id LIMIT 1);
   END IF;
   RETURN NULL;
  END IF;

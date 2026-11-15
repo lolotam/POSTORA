@@ -14,7 +14,7 @@ import { OwnedAnalyticsStore, type AnalyticsClaim, type AnalyticsWorkerState, ty
 export type DrainCounts = { visited: number; collected: number; partial: number; refused: number };
 export type DrainResult = { status: "complete" | "partial" | "disabled" | "unavailable"; counts: DrainCounts; reason: string | null };
 type DrainInput = { platform: OwnedAnalyticsPlatform | "all"; store: OwnedAnalyticsStore; deadline: AnalyticsWorkerDeadline;
-  app: (platform: OwnedAnalyticsPlatform) => AdmissionApp | null; fetch?: typeof fetch };
+  app: (platform: OwnedAnalyticsPlatform) => AdmissionApp | null; fetch?: typeof fetch; activePlatforms?: OwnedAnalyticsPlatform[] };
 type PlannedCapture = { key: string; request: CaptureRequest; definitions: MetricDefinition[] };
 
 function closedDays(job: AnalyticsClaim): AnalyticsDayBucket[] {
@@ -141,13 +141,19 @@ async function collectJob(input: DrainInput, job: AnalyticsClaim): Promise<"succ
   }
 }
 
+/** Run preflight before admission spends its slice, so claim time stays reserved. */
+export async function activeDrainPlatforms(store: OwnedAnalyticsStore, platform: OwnedAnalyticsPlatform | "all"): Promise<OwnedAnalyticsPlatform[]> {
+  const active: OwnedAnalyticsPlatform[] = [];
+  const platforms = platform === "all" ? ["facebook", "threads"] as const : [platform];
+  for (const candidate of platforms) if ((await store.nextDispatch(candidate, false)).state !== "disabled") active.push(candidate);
+  return active;
+}
+
 /** Receipts describe acknowledged job outcomes; failed reads never look like an empty queue. */
 export async function drainOwnedAnalytics(input: DrainInput): Promise<DrainResult> {
   const counts: DrainCounts = { visited: 0, collected: 0, partial: 0, refused: 0 };
   try {
-    const platforms = input.platform === "all" ? ["facebook", "threads"] as const : [input.platform];
-    const active: OwnedAnalyticsPlatform[] = [];
-    for (const platform of platforms) if ((await input.store.nextDispatch(platform, false)).state !== "disabled") active.push(platform);
+    const active = input.activePlatforms ?? await activeDrainPlatforms(input.store, input.platform);
     if (!active.length) return { status: "disabled", counts, reason: null };
     const exhausted = new Set<OwnedAnalyticsPlatform>();
     const paused = new Set<OwnedAnalyticsPlatform>();

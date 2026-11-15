@@ -3,7 +3,7 @@ import { handleRestrictedCorsOptions, restrictedJsonResponse } from "../_shared/
 import { awaitWithAbort } from "../_shared/abort.ts";
 import { admitOwnedAnalyticsAccount } from "./admission.ts";
 import { dispatchOwnedAnalyticsDaily, type DispatchCounts, type DispatchResult } from "./dispatch.ts";
-import { drainOwnedAnalytics, type DrainCounts } from "./worker.ts";
+import { activeDrainPlatforms, drainOwnedAnalytics, type DrainCounts } from "./worker.ts";
 import { retainOwnedAnalytics, retentionContinuation, type RetentionContinuation, type RetentionCounts } from "./retention.ts";
 import { AnalyticsWorkerDeadline, AnalyticsWorkerStopped } from "./deadline.ts";
 import type { AdmissionApp } from "./permissionProvider.ts";
@@ -125,6 +125,7 @@ export function createOwnedAnalyticsSyncHandler(deps: OwnedAnalyticsSyncDeps): (
       }
       if (parsed.data.action === "drain") {
         let resume: DispatchResult | undefined;
+        let activePlatforms = await activeDrainPlatforms(store, parsed.data.platform);
         if (parsed.data.platform !== "threads") {
           const resumeDeadline = deadline.facebookResume();
           resume = await dispatchOwnedAnalyticsDaily({ platform: "facebook", resume: true,
@@ -132,10 +133,16 @@ export function createOwnedAnalyticsSyncHandler(deps: OwnedAnalyticsSyncDeps): (
           // An unknown database outcome ends this invocation. A bounded provider
           // slice expiring leaves its ticket durable and the collection reserve intact.
           if (resume.status === "unavailable" && (resume.storageUncertain || resume.reason !== "deadline" && resume.reason !== "provider_unavailable")) {
-            return await finish(503, resume.status, resume.reason, { counts: { visited: 0, collected: 0, partial: 0, refused: 0 }, resume });
+            if (!resume.storageUncertain && resume.reason === "configuration_unavailable" && parsed.data.platform === "all") {
+              // Definitive Facebook configuration failures leave Threads independent.
+              activePlatforms = activePlatforms.filter((candidate) => candidate === "threads");
+            } else return await finish(503, resume.status, resume.reason, { counts: { visited: 0, collected: 0, partial: 0, refused: 0 }, resume });
           }
         }
-        const result = await drainOwnedAnalytics({ platform: parsed.data.platform, store, deadline, app: deps.app, fetch: deps.fetch });
+        const result = await drainOwnedAnalytics({ platform: parsed.data.platform, activePlatforms, store, deadline, app: deps.app, fetch: deps.fetch });
+        if (result.status !== "unavailable" && resume?.status === "unavailable" && resume.reason === "configuration_unavailable") {
+          return await finish(503, resume.status, resume.reason, { counts: result.counts, resume });
+        }
         return await finish(result.status === "unavailable" ? 503 : 200, result.status, result.reason, { counts: result.counts, resume });
       }
       accountId = parsed.data.accountId.toLowerCase();
