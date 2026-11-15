@@ -251,9 +251,11 @@ DECLARE owner_id uuid:='ab030000-0000-4000-8000-000000000001';
  report jsonb;scenario text;credential uuid;
 BEGIN
  BEGIN
-  UPDATE public.app_settings SET value='true' WHERE key='collection_instagram_insights_enabled';
-  UPDATE public.app_settings SET value='{"version":1,"owners":{"mode":"all","account_ids":[]},"competitors":{"mode":"off","targets":[]}}'
-   WHERE key='collection_instagram_rollout_policy';
+  -- Fresh migrated databases have no master row until an operator enables it.
+  INSERT INTO public.app_settings(key,value) VALUES
+   ('collection_instagram_insights_enabled','true'),
+   ('collection_instagram_rollout_policy','{"version":1,"owners":{"mode":"all","account_ids":[]},"competitors":{"mode":"off","targets":[]}}')
+  ON CONFLICT(key) DO UPDATE SET value=EXCLUDED.value;
   SELECT credential_id INTO STRICT credential FROM public.facebook_user_credential_bindings WHERE social_account_id=target;
   ASSERT public.analytics_bootstrap_binding_verified(target);
   report:=public.read_instagram_owner_report_snapshot(owner_id,target,clock_timestamp())->'readiness';
