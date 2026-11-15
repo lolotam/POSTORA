@@ -16,7 +16,8 @@ export function buildAgentListPolicy(source: ChatPolicySnapshot): { groups: Chat
     if (group.auth_method === "oauth") {
       // One precedence: inactive, master, transport/flag, connection, model.
       if (group.reason !== "inactive" && group.reason !== "flag_off") {
-        const toolFlag = { claude: source.flags.feature_ai_oauth_tools_claude, openai: source.flags.feature_ai_oauth_tools_codex }[group.provider_code];
+        const toolFlags: Record<string, boolean | undefined> = { claude: source.flags.feature_ai_oauth_tools_claude, openai: source.flags.feature_ai_oauth_tools_codex };
+        const toolFlag = toolFlags[group.provider_code];
         if (toolFlag === undefined) group.reason = "oauth_tools_unsupported";
         else if (!toolFlag) group.reason = "oauth_tools_disabled";
       }
