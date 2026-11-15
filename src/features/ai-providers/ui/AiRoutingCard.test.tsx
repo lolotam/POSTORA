@@ -2,18 +2,34 @@ import { fireEvent, render, screen, waitFor, within } from "@testing-library/rea
 import { describe, expect, it } from "vitest";
 import { connectedKey, fakeGateway, model, queryWrapper } from "../tests/fixtures";
 import { AiRoutingCard } from "./AiRoutingCard";
+import type { AiProvidersGateway } from '../application/ports';
 
 async function select(label: string, option: string) {
   fireEvent.keyDown(screen.getByRole("combobox", { name: label }), { key: "Enter" });
   fireEvent.click(await screen.findByRole("option", { name: option }));
 }
-async function mount(gateway = fakeGateway()) {
+async function mount(gateway: AiProvidersGateway = fakeGateway()) {
   render(<AiRoutingCard gateway={gateway} userId="user-1" />, queryWrapper());
   await screen.findByRole("region", { name: "Global routing" });
   return gateway;
 }
 
 describe("Routing", () => {
+  it('separates API/Auth without letting user_only select platform subscriptions', async () => {
+    const gateway = fakeGateway();
+    const routingListPolicy = async () => ({ enabled: true });
+    await mount({ ...gateway, routingListPolicy });
+    fireEvent.click(screen.getByRole('radio', { name: 'Use only my keys' }));
+    fireEvent.keyDown(screen.getByRole('combobox', { name: '* provider' }), { key: 'Enter' });
+    expect(await screen.findByRole('group', { name: 'API' })).toBeInTheDocument();
+    expect(screen.getByRole('group', { name: 'Auth' })).toBeInTheDocument();
+    const auth = screen.getAllByRole('option').filter(option => option.textContent?.includes('subscription'));
+    expect(auth).toHaveLength(2);
+    for (const option of auth) expect(option).toHaveAttribute('data-disabled');
+    fireEvent.keyDown(screen.getByRole('listbox'), { key: 'Escape' });
+    expect(screen.getByRole('button', { name: 'Save routing' })).toBeDisabled();
+    expect(gateway.upsertPreference).not.toHaveBeenCalled();
+  });
   it("requires fallback consent and saves true only for user_first", async () => {
     const gateway = await mount();
     fireEvent.click(screen.getByRole("radio", { name: "Use my keys first, then POSTORA" }));

@@ -46,4 +46,5 @@ export interface AiProvidersGateway {
   upsertPreference(preference: RoutingPreference): Promise<void>;
   deletePreference(capability: Capability): Promise<void>;
   listModels(): Promise<ProviderModel[]>;
+  routingListPolicy?(): Promise<{ enabled: boolean }>;
 }

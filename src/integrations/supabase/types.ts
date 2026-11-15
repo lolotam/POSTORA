@@ -9371,6 +9371,7 @@ export type Database = {
       }
       user_ai_model_overrides: {
         Row: {
+          auth_method: string
           created_at: string
           created_by: string | null
           expires_at: string | null
@@ -9382,6 +9383,7 @@ export type Database = {
           user_id: string
         }
         Insert: {
+          auth_method?: string
           created_at?: string
           created_by?: string | null
           expires_at?: string | null
@@ -9393,6 +9395,7 @@ export type Database = {
           user_id: string
         }
         Update: {
+          auth_method?: string
           created_at?: string
           created_by?: string | null
           expires_at?: string | null
@@ -11884,6 +11887,10 @@ export type Database = {
       }
       write_ai_chat_tier: {
         Args: { p_key: string; p_value: Json; p_expected: Json }
+        Returns: boolean
+      }
+      write_ai_model_override: {
+        Args: { p_user_id: string; p_value: Json; p_expected: Json; p_actor: string }
         Returns: boolean
       }
       write_ai_agent_tier: {

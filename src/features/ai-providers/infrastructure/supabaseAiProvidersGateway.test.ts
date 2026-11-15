@@ -35,7 +35,7 @@ describe("Supabase AI provider gateway", () => {
       { id: "m3", model_id: "other", name: "Other", provider_code: "xai" },
     ] } }, error: null });
     const models = await gateway.listModels();
-    expect(invoke).toHaveBeenCalledWith("user-ai-providers", { body: { action: "list_models" } });
+    expect(invoke).toHaveBeenCalledWith("user-ai-providers", { body: { action: "list_models" }, timeout: 30_000 });
     expect(operations).toEqual([]);
     expect(models.map(m => m.model_id)).toEqual(["gpt-x", "claude-sonnet-5"]);
   });

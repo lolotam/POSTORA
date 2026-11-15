@@ -11,13 +11,16 @@ import { buildChatListPolicy, buildTriageListPolicy, ChatTierError, validateChat
 import { buildAgentListPolicy, validateAgentTier } from "./agentListPolicy.ts";
 
 export async function loadChatPolicySnapshot(admin: SupabaseClient, flags: ChatPolicySnapshot["flags"], signal: AbortSignal): Promise<ChatPolicySnapshot> {
-  const [providers, catalogue, settings, statuses] = await Promise.all([
+  const [providers, catalogue, settings, statuses, overrideSchema] = await Promise.all([
     admin.from("ai_providers").select("id,provider_code,name,is_active").order("name").abortSignal(signal),
     readCatalogue(admin, signal),
     admin.from("system_settings").select("key,value").or("key.like.default_ai_model_chat%,key.like.model_catalog_synced_at_%").abortSignal(signal),
     admin.rpc("get_ai_oauth_statuses").abortSignal(signal),
+    // The additive migration commits the column, writer and guard together.
+    // A missing migration is a failed readiness read, never selectable Auth.
+    admin.from('user_ai_model_overrides').select('auth_method').limit(0).abortSignal(signal),
   ]);
-  if (providers.error || settings.error || statuses.error) throw new Error("Chat readiness read failed");
+  if (providers.error || settings.error || statuses.error || overrideSchema.error) throw new Error("Chat readiness read failed");
   const apiKeys = Object.fromEntries(await Promise.all((providers.data ?? []).map(async provider => [
     provider.provider_code, Boolean(await resolveProviderKey(admin as unknown as RowReader, provider.provider_code, signal)),
   ])));
@@ -26,7 +29,9 @@ export async function loadChatPolicySnapshot(admin: SupabaseClient, flags: ChatP
   ]));
   // The shared catalogue reader preserves provider-specific columns. This seam
   // projects only non-secret fields needed by eligibility and the admin UI.
-  const textFloorAvailable = flags.feature_ai_category_text_ladders && Boolean((await resolvePlatformApiKey(admin as unknown as AiRoutingAdmin, "google", signal)).trim());
+  // Chat's inherited floor also serves Caption/Hashtags when category ladders
+  // are disabled. Credential readiness must not depend on that picker flag.
+  const textFloorAvailable = Boolean((await resolvePlatformApiKey(admin as unknown as AiRoutingAdmin, "google", signal)).trim());
   const toolRegistry = { claude: getModels("anthropic").filter(model => model.api === "anthropic-messages").map(model => model.id) };
   return { flags, providers: providers.data ?? [], settings: settings.data ?? [], statuses: statuses.data ?? [], apiKeys, registry, toolRegistry, textFloorAvailable,
     models: [...catalogue.models, ...catalogue.oauthModels] as unknown as ChatPolicySnapshot["models"] };
@@ -49,7 +54,7 @@ export async function runChatListAction(action: "chat-list-policy" | "set-chat-t
       throw new ChatTierError("text_lists_disabled");
     }
     const snapshot = await deps.snapshot(flags);
-    if (action === "chat-list-policy") return Response.json({ ...buildChatListPolicy(snapshot), agentGroups: buildAgentListPolicy(snapshot).groups, triageGroups: buildTriageListPolicy(snapshot).groups, categoryLaddersEnabled: flags.feature_ai_category_text_ladders });
+    if (action === "chat-list-policy") return Response.json({ ...buildChatListPolicy(snapshot), overrideWriterReady: true, searchGroups: buildChatListPolicy(snapshot, 'search').groups, agentGroups: buildAgentListPolicy(snapshot).groups, triageGroups: buildTriageListPolicy(snapshot).groups, categoryLaddersEnabled: flags.feature_ai_category_text_ladders });
     await deps.persist(action === "set-agent-tier" ? validateAgentTier(body, snapshot) : action === "set-triage-tier" ? validateTriageTier(body, snapshot) : validateChatTier(body, snapshot));
     return Response.json({ success: true });
   } catch (cause) {

@@ -21,29 +21,15 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
-import { Loader2, Plus, Search, Trash2, Cpu, Calendar, AlertCircle, RefreshCw, Bell, Mail } from "lucide-react";
+import { Loader2, Plus, Search, Trash2, Cpu, Calendar, AlertCircle, RefreshCw, Mail } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
 import { format, isPast, parseISO, differenceInHours } from "date-fns";
 import { ScrollArea } from "@/components/ui/scroll-area";
 
-interface UserAiOverride {
-  id: string;
-  user_id: string;
-  provider: string;
-  model: string;
-  created_at: string;
-  expires_at: string | null;
-  reason: string | null;
-  user_email?: string;
-  user_name?: string;
-}
-
-interface UserProfile {
-  id: string;
-  email: string;
-  full_name: string | null;
-}
+import { useChatListPolicy } from "@/hooks/ai-config/useChatListPolicy";
+import { GroupedChatTier } from "./GroupedChatModelSelector";
+import { fetchUserOverrides, searchOverrideUsers, writeUserOverride, writeLegacyUserOverride, deleteLegacyUserOverride } from "@/features/ai-providers/infrastructure/userOverridesGateway";
 
 interface OpenRouterModel {
   id: string;
@@ -69,60 +55,26 @@ export function UserAiModelOverrides() {
   const [searchTerm, setSearchTerm] = useState("");
   const [dialogOpen, setDialogOpen] = useState(false);
   const [selectedUserId, setSelectedUserId] = useState("");
-  const [selectedProvider, setSelectedProvider] = useState<"google" | "openrouter">("google");
+  const [selectedProvider, setSelectedProvider] = useState("google");
   const [selectedModel, setSelectedModel] = useState("");
   const [expiresAt, setExpiresAt] = useState("");
   const [reason, setReason] = useState("");
   const [modelSearch, setModelSearch] = useState("");
 
+  const policy = useChatListPolicy(true);
+  const grouped = policy.data?.enabled && policy.data.overrideWriterReady === true;
+  const [selectedAuth, setSelectedAuth] = useState<'api_key' | 'oauth'>('api_key');
+
   // Fetch all user AI overrides
-  const { data: overrides = [], isLoading: loadingOverrides } = useQuery({
+  const { data: overrides = [], isLoading: loadingOverrides, isError: overridesError, refetch: refetchOverrides } = useQuery({
     queryKey: ["admin-user-ai-model-overrides"],
-    queryFn: async (): Promise<UserAiOverride[]> => {
-      const { data: overridesData, error } = await supabase
-        .from("user_ai_model_overrides")
-        .select("*")
-        .order("created_at", { ascending: false });
-
-      if (error) throw error;
-
-      // Fetch user info for each override
-      const userIds = [...new Set(overridesData?.map((o) => o.user_id) || [])];
-      if (userIds.length === 0) return [];
-
-      const { data: profiles } = await supabase
-        .from("profiles")
-        .select("id, email, full_name")
-        .in("id", userIds);
-
-      const profileMap = new Map(profiles?.map((p) => [p.id, p]));
-
-      return (overridesData || []).map((override) => ({
-        ...override,
-        user_email: profileMap.get(override.user_id)?.email,
-        user_name: profileMap.get(override.user_id)?.full_name || undefined,
-      }));
-    },
+    queryFn: fetchUserOverrides,
   });
 
   // Fetch users for dropdown
-  const { data: users = [], isLoading: loadingUsers } = useQuery({
+  const { data: users = [], isLoading: loadingUsers, isError: usersError, refetch: refetchUsers } = useQuery({
     queryKey: ["admin-users-for-ai-overrides", searchTerm],
-    queryFn: async (): Promise<UserProfile[]> => {
-      let query = supabase
-        .from("profiles")
-        .select("id, email, full_name")
-        .order("email")
-        .limit(20);
-
-      if (searchTerm) {
-        query = query.or(`email.ilike.%${searchTerm}%,full_name.ilike.%${searchTerm}%`);
-      }
-
-      const { data, error } = await query;
-      if (error) throw error;
-      return data || [];
-    },
+    queryFn: () => searchOverrideUsers(searchTerm),
     enabled: dialogOpen,
   });
 
@@ -134,7 +86,7 @@ export function UserAiModelOverrides() {
       if (error) throw error;
       return data as { models: OpenRouterModel[]; error?: string };
     },
-    enabled: dialogOpen && selectedProvider === "openrouter",
+    enabled: dialogOpen && !grouped && selectedProvider === "openrouter",
     staleTime: 5 * 60 * 1000,
   });
 
@@ -151,24 +103,23 @@ export function UserAiModelOverrides() {
         throw new Error("Please select a user and model");
       }
 
-      const { error } = await supabase.from("user_ai_model_overrides").upsert(
-        {
-          user_id: selectedUserId,
-          provider: selectedProvider,
-          model: selectedModel,
-          expires_at: expiresAt || null,
-          reason: reason || null,
-        },
-        { onConflict: "user_id" }
-      );
-
-      if (error) throw error;
+      if (policy.isPending || policy.isError || overridesError) throw new Error("AI model choices could not be read. Retry.");
+      const value = { provider_code: selectedProvider, model_id: selectedModel,
+        ...(selectedAuth === 'oauth' ? { auth_method: selectedAuth } : {}),
+        expires_at: expiresAt ? new Date(expiresAt).toISOString() : null, reason: reason || null };
+      if (grouped) await writeUserOverride(selectedUserId, value, overrides.find(row => row.user_id === selectedUserId)?.snapshot ?? null);
+      else await writeLegacyUserOverride(selectedUserId, value);
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["admin-user-ai-model-overrides"] });
       toast({ title: "AI model override added" });
       setDialogOpen(false);
       resetForm();
+    },
+    onSettled: async () => {
+      // Failed/ambiguous saves refresh the entire observed override list before retry.
+      await queryClient.invalidateQueries({ queryKey: ["admin-user-ai-model-overrides"] });
+      await queryClient.invalidateQueries({ queryKey: ["ai-config"] });
     },
     onError: (error) => {
       toast({
@@ -182,9 +133,12 @@ export function UserAiModelOverrides() {
   // Delete override mutation
   const deleteOverrideMutation = useMutation({
     mutationFn: async (id: string) => {
-      const { error } = await supabase.from("user_ai_model_overrides").delete().eq("id", id);
-      if (error) throw error;
+      const row = overrides.find(override => override.id === id);
+      if (!row || overridesError || policy.isPending || policy.isError) throw new Error("Refresh overrides before deleting.");
+      if (grouped) await writeUserOverride(row.user_id, null, row.snapshot);
+      else await deleteLegacyUserOverride(id);
     },
+    onSettled: async () => { await queryClient.invalidateQueries({ queryKey: ["admin-user-ai-model-overrides"] }); },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["admin-user-ai-model-overrides"] });
       toast({ title: "Override removed" });
@@ -238,6 +192,7 @@ export function UserAiModelOverrides() {
   const resetForm = () => {
     setSelectedUserId("");
     setSelectedProvider("google");
+    setSelectedAuth("api_key");
     setSelectedModel("");
     setExpiresAt("");
     setReason("");
@@ -328,6 +283,7 @@ export function UserAiModelOverrides() {
 
                 {/* User Selection */}
                 <div className="space-y-2">
+                  {usersError && <p role="alert">Users could not be read. <Button onClick={() => void refetchUsers()}>Retry</Button></p>}
                   <label className="text-sm font-medium">Select User</label>
                   <Select value={selectedUserId} onValueChange={setSelectedUserId}>
                     <SelectTrigger>
@@ -356,6 +312,12 @@ export function UserAiModelOverrides() {
                   </Select>
                 </div>
 
+                {policy.isError && <p role="alert">AI model choices could not be read. <Button onClick={() => void policy.refetch()}>Retry</Button></p>}
+                {grouped ? <GroupedChatTier label="User override" groups={policy.data?.enabled ? policy.data.groups : []}
+                  current={selectedModel ? { provider_code: selectedProvider, model_id: selectedModel, ...(selectedAuth === 'oauth' ? { auth_method: selectedAuth } : {}) } : null}
+                  isSaving={addOverrideMutation.isPending || loadingOverrides}
+                  onDraftChange={() => setSelectedModel('')}
+                  onSelect={(provider, model, auth) => { setSelectedProvider(provider); setSelectedModel(model); setSelectedAuth(auth ?? 'api_key'); }} /> : <>
                 {/* Provider Selection */}
                 <div className="space-y-2">
                   <label className="text-sm font-medium">AI Provider</label>
@@ -445,6 +407,7 @@ export function UserAiModelOverrides() {
                   )}
                 </div>
 
+                </>}
                 {/* Reason */}
                 <div className="space-y-2">
                   <label className="text-sm font-medium">Reason (Optional)</label>
@@ -473,7 +436,7 @@ export function UserAiModelOverrides() {
 
                 <Button
                   onClick={() => addOverrideMutation.mutate()}
-                  disabled={addOverrideMutation.isPending || !selectedUserId || !selectedModel}
+                  disabled={addOverrideMutation.isPending || loadingOverrides || overridesError || policy.isPending || policy.isError || !selectedUserId || !selectedModel}
                   className="w-full"
                 >
                   {addOverrideMutation.isPending ? (
@@ -490,7 +453,7 @@ export function UserAiModelOverrides() {
         </div>
       </CardHeader>
       <CardContent>
-        {loadingOverrides ? (
+        {overridesError ? <p role="alert">User overrides could not be read. <Button onClick={() => void refetchOverrides()}>Retry</Button></p> : loadingOverrides ? (
           <div className="flex items-center justify-center py-8">
             <Loader2 className="w-6 h-6 animate-spin text-muted-foreground" />
           </div>
@@ -514,7 +477,7 @@ export function UserAiModelOverrides() {
                         {override.user_email}
                       </span>
                       <Badge variant="secondary" className="text-xs">
-                        {getProviderLabel(override.provider)}
+                        {override.auth_method === 'oauth' ? 'Auth' : 'API'} · {getProviderLabel(override.provider)}
                       </Badge>
                       {isExpired(override.expires_at) && (
                         <Badge variant="destructive" className="text-xs">

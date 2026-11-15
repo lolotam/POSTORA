@@ -17,7 +17,7 @@ function check(error: { code?: string } | null) {
 }
 
 async function invoke<T>(body: Record<string, unknown>): Promise<T> {
-  const { data, error } = await supabase.functions.invoke("user-ai-providers", { body });
+  const { data, error } = await supabase.functions.invoke("user-ai-providers", { body, timeout: 30_000 });
   if (error) {
     // FunctionsHttpError carries the JSON envelope on its Response, including on 400/503.
     const response = error.context;
@@ -43,6 +43,11 @@ function safeStatus(row: KeyStatus): KeyStatus {
 
 export function createSupabaseAiProvidersGateway(userId: string): AiProvidersGateway {
   return {
+    async routingListPolicy() {
+      const data = await invoke<{ enabled: unknown }>({ action: 'routing_list_policy' });
+      if (typeof data?.enabled !== 'boolean') throw failure();
+      return { enabled: data.enabled };
+    },
     async listKeys() {
       const data = await invoke<{ keys: KeyStatus[] }>({ action: "list" });
       return data.keys.map(safeStatus);

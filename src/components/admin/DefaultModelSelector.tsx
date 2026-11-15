@@ -123,6 +123,9 @@ interface DefaultModelSelectorProps {
 }
 
 export function DefaultModelSelector(props: DefaultModelSelectorProps) {
+  if (props.category === 'search' && props.textListPolicy?.enabled && props.textListPolicy.searchGroups) {
+    return <GroupedChatModelSelector {...props} policy={{ ...props.textListPolicy, groups: props.textListPolicy.searchGroups }} />;
+  }
   if (props.category === 'agent' && props.textListPolicy?.enabled && props.textListPolicy.agentGroups) {
     return <GroupedChatModelSelector {...props} policy={{ ...props.textListPolicy, groups: props.textListPolicy.agentGroups }} />;
   }
