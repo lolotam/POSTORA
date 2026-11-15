@@ -754,7 +754,8 @@ Deno.test("an accepted enqueue is 202 and keeps the projection", async () => {
   const body = await json(response);
   assertEquals(body.accepted, true);
   assertEquals(body.reason, "enqueued");
-  assertEquals(Object.keys(body).length, 8);
+  assertEquals(Object.keys(body).length, 9);
+  assertEquals((body.agent_result as Record<string, unknown>).accepted, true);
 });
 
 Deno.test("an omitted mode is a normal enqueue and a force mode is a force", async () => {
@@ -778,7 +779,8 @@ Deno.test("a throttle is 429 with a validated Retry-After and no second write", 
   assertEquals(body.accepted, false);
   assertEquals(body.reason, "throttled");
   assertEquals(body.retry_after_seconds, 120);
-  assertEquals(Object.keys(body).length, 4);
+  assertEquals(Object.keys(body).length, 5);
+  assertEquals((body.agent_result as Record<string, unknown>).reason_code, "rate_limited");
   assertEquals(harness.storeCalls.length, 1);
 });
 

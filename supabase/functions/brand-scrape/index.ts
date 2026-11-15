@@ -1,3 +1,4 @@
+import { awaitWithAbort } from "../_shared/abort.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { sharedMetaBudgetFetch } from "../_shared/metaSharedBudget.ts";
 import { serviceRoleCallerUserId } from "../_shared/auth-helper.ts";
@@ -17,6 +18,7 @@ type ScrapeSnapshot = {
   profile: Record<string, unknown>;
   posts: { id: string; engagementScore: number | null }[];
   source?: string;
+  provenance?: { kind: string; source: string; captured_at: string; coverage: string; official_only: boolean };
   warning?: { code: string; message: string };
 };
 type TikTokScrapeItem = {
@@ -159,15 +161,22 @@ export function resolveMaxPosts(setting: unknown): number {
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
 
+  const requestDeadline = AbortSignal.any([req.signal, AbortSignal.timeout(40_000)]);
+  const requestFetch: typeof fetch = (input, init) => {
+    const signal = AbortSignal.any([requestDeadline, ...(init?.signal ? [init.signal] : [])]);
+    return awaitWithAbort(() => fetch(input, { ...init, signal }), signal);
+  };
   const supabaseAdmin = createClient(
     Deno.env.get("SUPABASE_URL")!,
-    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
+    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
+    { global: { fetch: requestFetch } }
   );
 
   const logger = createLogger(supabaseAdmin, "brand-scrape", "edge");
   // Runtime composition stays here so discovery policy is portable to Node's safety harness.
   const metaFetch = sharedMetaBudgetFetch({
     rpc: (name, args, signal) => supabaseAdmin.rpc(name, args).abortSignal(signal),
+    fetcher: requestFetch,
     apps: { facebook: Deno.env.get("FACEBOOK_APP_ID"), instagram: Deno.env.get("INSTAGRAM_APP_ID") },
   });
 
@@ -191,7 +200,7 @@ Deno.serve(async (req) => {
 
     const token = authHeader.replace("Bearer ", "");
     // A service-role call without a valid user_id is an authentication refusal, not a discovery outage.
-    const serviceUserId = await serviceRoleCallerUserId(req).catch(() => undefined);
+    const serviceUserId = await awaitWithAbort(() => serviceRoleCallerUserId(req), requestDeadline).catch(() => undefined);
     if (serviceUserId === undefined) {
       await logger.warn("Discovery request refused", { error_code: "UNAUTHORIZED" });
       return new Response(JSON.stringify({ error: "Unauthorized" }), {
@@ -211,7 +220,7 @@ Deno.serve(async (req) => {
     userId = user.id;
 
     let body;
-    try { body = await req.json(); } catch { throw new InstagramDiscoveryError("INVALID_DISCOVERY_REQUEST", "Invalid discovery request.", 400); }
+    try { body = await awaitWithAbort(() => req.json(), requestDeadline); } catch { throw new InstagramDiscoveryError("INVALID_DISCOVERY_REQUEST", "Invalid discovery request.", 400); }
     if (!body || typeof body !== "object" || Array.isArray(body)) throw new InstagramDiscoveryError("INVALID_DISCOVERY_REQUEST", "Invalid discovery request.", 400);
     const { username, offset = 0 } = body;
     platform = parseDiscoveryPlatform(body.platform);
@@ -450,6 +459,8 @@ Deno.serve(async (req) => {
     // Cache. A Facebook read that stopped early is a partial snapshot; the cache
     // key is shared by every caller of the Page, so it is not cached and the
     // next request reads Graph again.
+    result.provenance = { kind: "on_demand_discovery", source: strategyUsed, captured_at: new Date().toISOString(),
+      coverage: readingStoppedBy === null ? "bounded_inventory" : "partial_inventory", official_only: ["official", "graph_own"].includes(strategyUsed) };
     let ttlMinutes = 60;
     if (readingStoppedBy === null) {
       const { data: ttlSetting } = await supabaseAdmin

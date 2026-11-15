@@ -196,6 +196,7 @@ SUITES=(
   meta_owned_inventory_checkpoint_coverage.sql
   instagram_owner_period_reach.sql
   mcp_analytics_owner_boundaries.sql
+  analytics_agent_receipts.sql
   instagram_owner_enqueue_reconnect_required.sql
   background_jobs.sql
   instagram_story_jobs.sql

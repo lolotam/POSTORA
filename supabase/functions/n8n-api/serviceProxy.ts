@@ -1,3 +1,4 @@
+import { analyticsAgentReceipt, competitorSaveSchema, competitorCollectionSchema, competitorQuotaSchema } from "../_shared/analyticsAgentResult.ts";
 import { analyticsSyncReceipt } from "../_shared/analyticsSyncResult.ts";
 import { awaitWithAbort } from "../_shared/abort.ts";
 // Service-role proxy routes behind the MCP tools list_comments, list_messages,
@@ -43,7 +44,7 @@ export interface ServiceProxyDeps {
   loadAccount(accountId: string, signal?: AbortSignal): Promise<{ account: ProxyAccount | null; failed: boolean }>;
   invoke(functionName: string, body: Record<string, unknown>, timeoutMs: number): Promise<InvokeResult>;
   /** Service-only explicit-owner RPCs; PostgreSQL applies ownership and the shared UI rules. */
-  rpc?(name: string, args: Record<string, unknown>): Promise<{ data: unknown; error: { code?: string; message?: string } | null }>;
+  rpc?(name: string, args: Record<string, unknown>, signal?: AbortSignal): Promise<{ data: unknown; error: { code?: string; message?: string } | null }>;
   storeImage(userId: string, dataUrl: string): Promise<StoredImage>;
   /** Non-null when the user's daily media uploads are used up; checked before a billed image generation. */
   mediaQuotaBlocked(userId: string): Promise<{ limit: number } | null>;
@@ -477,6 +478,7 @@ function analyticsDeadlineDeps(deps: ServiceProxyDeps): ServiceProxyDeps {
   const signal = AbortSignal.timeout(READ_TIMEOUT_MS);
   return { ...deps,
     loadAccount: (id) => awaitWithAbort(() => deps.loadAccount(id, signal), signal),
+    rpc: deps.rpc ? (name, args) => awaitWithAbort(() => deps.rpc!(name, args, signal), signal) : undefined,
     invoke: (name, body, timeout) => awaitWithAbort(() => deps.invoke(name, body, Math.max(1, Math.min(timeout, deadline - Date.now()))), signal),
   };
 }
@@ -490,11 +492,32 @@ async function analyticsResult(work: () => Promise<ProxyResult>): Promise<ProxyR
     return fromUpstream("analytics", { status: 504, data: null });
   }
 }
-export function handleGetAccountAnalytics(deps: ServiceProxyDeps, userId: string, params: URLSearchParams): Promise<ProxyResult> {
-  return analyticsResult(() => getAccountAnalytics(deps, userId, params));
+export async function handleGetAccountAnalytics(deps: ServiceProxyDeps, userId: string, params: URLSearchParams): Promise<ProxyResult> {
+  const result = await analyticsResult(() => getAccountAnalytics(deps, userId, params));
+  const payload = asRecord(result.body);
+  const body = result.status === 200 ? { ...payload, provenance: payload.provenance ?? { kind: "stored_measurements", coverage: "report_period", captured_at: null, scheduled_paid_calls: false } } : result.body;
+  return { ...result, body: analyticsAgentReceipt(result.status, body, "read") };
 }
-export function handleTriggerAnalyticsSync(deps: ServiceProxyDeps, userId: string, body: unknown): Promise<ProxyResult> {
-  return analyticsResult(() => triggerAnalyticsSync(deps, userId, body));
+export async function handleTriggerAnalyticsSync(deps: ServiceProxyDeps, userId: string, body: unknown): Promise<ProxyResult> {
+  const result = await analyticsResult(() => triggerAnalyticsSync(deps, userId, body));
+  const payload = asRecord(result.body);
+  const transportStatus = typeof payload.transport_status === "number" ? payload.transport_status : result.status;
+  return { ...result, body: { ...payload, ...analyticsSyncReceipt(transportStatus, payload) } };
+}
+
+/** Validation and deadline failures use the same public contract as successful payloads. */
+async function agentProxyResult(work: () => Promise<ProxyResult>, kind: "read" | "save" | "discovery"): Promise<ProxyResult> {
+  const result = await analyticsResult(work);
+  return { ...result, body: analyticsAgentReceipt(result.status, result.body, kind) };
+}
+export function handleListCompetitors(deps: ServiceProxyDeps, userId: string, body: unknown): Promise<ProxyResult> {
+  return agentProxyResult(() => listCompetitors(deps, userId, body), "read");
+}
+export function handleTrackCompetitor(deps: ServiceProxyDeps, userId: string, body: unknown): Promise<ProxyResult> {
+  return agentProxyResult(() => trackCompetitor(deps, userId, body), "save");
+}
+export function handleAnalyzeBrand(deps: ServiceProxyDeps, userId: string, body: unknown): Promise<ProxyResult> {
+  return agentProxyResult(() => analyzeBrand(deps, userId, body), "discovery");
 }
 
 /** Dedicated report route selects each platform's supported contract without changing legacy analytics. */
@@ -525,7 +548,16 @@ async function getAccountAnalytics(deps: ServiceProxyDeps, userId: string, param
     return result.status === 200 ? { ...result, body: filterAccountMedia(result.body, mediaType) } : result;
   }
   // Keep the existing TikTok passthrough and its validation unchanged.
-  return await handleGetPostAnalytics(deps, userId, reportParams);
+  const result = await handleGetPostAnalytics(deps, userId, reportParams);
+  if (result.status !== 200 || account.platform !== "tiktok") return result;
+  const payload = asRecord(result.body);
+  // The legacy TikTok producer may serve its first-page cache; it does not
+  // return a capture timestamp or implement the requested report period.
+  return { ...result, body: { ...payload, provenance: {
+    kind: "on_demand_discovery", source: "tiktok_api", coverage: "recent_videos", captured_at: null,
+    from_cache: payload.cached === true, official_only: true, stored_watchlist_history: false, scheduled_paid_calls: false,
+    ...asRecord(payload.provenance),
+  } } };
 }
 
 async function triggerAnalyticsSync(deps: ServiceProxyDeps, userId: string, rawBody: unknown): Promise<ProxyResult> {
@@ -547,7 +579,7 @@ async function triggerAnalyticsSync(deps: ServiceProxyDeps, userId: string, rawB
   // old free-form messages could contain incorrect reconnect advice.
   const upstreamBody = asRecord(upstream.data);
   const payload = receipt.accepted ? asRecord(result.body) : {
-    ...(["collection_disabled", "collection_not_eligible", "settings_unavailable"].includes(String(upstreamBody.error)) ? { error: upstreamBody.error } : {}),
+    ...(["collection_disabled", "collection_not_eligible", "settings_unavailable", "reconnect_required"].includes(String(upstreamBody.error)) ? { error: upstreamBody.error } : {}),
     ...(Number.isSafeInteger(upstreamBody.retry_after_seconds) && Number(upstreamBody.retry_after_seconds) >= 0 ? { retry_after_seconds: upstreamBody.retry_after_seconds } : {}),
     ...(typeof upstreamBody.job_id === "string" && isValidUuid(upstreamBody.job_id) ? { job_id: upstreamBody.job_id } : {}),
   };
@@ -589,16 +621,77 @@ async function competitorReport(deps: ServiceProxyDeps, userId: string, request:
   }
 }
 
-export async function handleListCompetitors(deps: ServiceProxyDeps, userId: string, rawBody: unknown): Promise<ProxyResult> {
+async function listCompetitors(deps: ServiceProxyDeps, userId: string, rawBody: unknown): Promise<ProxyResult> {
+  deps = analyticsDeadlineDeps(deps);
   const parsed = listCompetitorsSchema.safeParse(rawBody);
   if (!parsed.success) return invalidAnalyticsInput("Use state active/removed, limit 1-50 and a bounded report cursor.");
-  return competitorReport(deps, userId, { action: "list", state: parsed.data.state ?? "active", limit: parsed.data.limit ?? 20, cursor: parsed.data.cursor ?? null });
+  return analyticsResult(async () => {
+    const result = await competitorReport(deps, userId, { action: "list", state: parsed.data.state ?? "active", limit: parsed.data.limit ?? 20, cursor: parsed.data.cursor ?? null });
+    if (result.status !== 200) return result;
+    const body = asRecord(result.body);
+    const entries = Array.isArray(body.entries) ? body.entries : [];
+    const receipts: unknown[] = [];
+    // At most five database reads in flight, all using the request's shared deadline.
+    // Preserve page ordering and never grant later batches a fresh timeout.
+    for (let offset = 0; offset < entries.length; offset += 5) {
+      const batch = await Promise.all(entries.slice(offset, offset + 5).map(async (entry) => {
+        const row = asRecord(entry);
+        let collection: Record<string, unknown> = unavailableCollection();
+        try {
+          const state = await competitorRpc(deps, "read_competitor_tool_collection_for_user", { p_user_id: userId, p_watchlist_id: row.watchlist_id });
+          const parsedState = competitorCollectionSchema.safeParse(state.body);
+          if (parsedState.success) collection = parsedState.data;
+        } catch { console.warn("[n8n-api] competitor collection status unavailable"); }
+        return { ...row, saved: true, collection };
+      }));
+      receipts.push(...batch);
+    }
+    return { status: 200, body: analyticsAgentReceipt(200, { ...body, entries: receipts,
+      provenance: { kind: "stored_measurements", captured_at: null, coverage: "per_entry", scheduled_paid_calls: false } }, "read") };
+  });
 }
 
-export async function handleTrackCompetitor(deps: ServiceProxyDeps, userId: string, rawBody: unknown): Promise<ProxyResult> {
+async function trackCompetitor(deps: ServiceProxyDeps, userId: string, rawBody: unknown): Promise<ProxyResult> {
+  deps = analyticsDeadlineDeps(deps);
   const parsed = trackCompetitorSchema.safeParse(rawBody);
   if (!parsed.success) return invalidAnalyticsInput("Use an Instagram handle of 1-30 letters, digits, underscores or periods (no consecutive periods), and a label of at most 120 characters.");
-  return competitorRpc(deps, "add_competitor_watchlist_for_user", { p_user_id: userId, p_username: normalizeTrackedHandle(parsed.data.username), p_label: parsed.data.label ?? null });
+  let saved: ProxyResult;
+  try {
+    saved = await competitorRpc(deps, "save_competitor_tool_receipt_for_user", { p_user_id: userId, p_username: normalizeTrackedHandle(parsed.data.username), p_label: parsed.data.label ?? null });
+  } catch {
+    console.warn("[n8n-api] competitor save outcome indeterminate");
+    return { status: 503, body: analyticsAgentReceipt(503, { reason_code: "response_unavailable", saved: null,
+      reconciliation: { username: normalizeTrackedHandle(parsed.data.username), action: "list_competitors" } }, "save") };
+  }
+  if (saved.status !== 200) return { ...saved, body: analyticsAgentReceipt(saved.status, { ...asRecord(saved.body), saved: saved.status < 500 ? false : null,
+    reconciliation: { username: normalizeTrackedHandle(parsed.data.username), action: "list_competitors" } }, "save") };
+  const refusedSave = asRecord(saved.body);
+  if (refusedSave.saved === false && refusedSave.reason_code === "quota_exceeded" && competitorQuotaSchema.safeParse(refusedSave.quota).success) {
+    return { status: 409, body: analyticsAgentReceipt(409, { ...refusedSave,
+      error: { code: "COMPETITOR_QUOTA_EXCEEDED", message: "The tracked competitor limit has been reached." } }, "save") };
+  }
+  const receipt = competitorSaveSchema.safeParse(saved.body);
+  if (!receipt.success) return { status: 503, body: analyticsAgentReceipt(503, { saved: null, reason_code: "response_unavailable",
+    reconciliation: { username: normalizeTrackedHandle(parsed.data.username), action: "list_competitors" } }, "save") };
+  let collection: Record<string, unknown>;
+  try {
+    // A separate committed statement: optional enqueue can never roll back the save.
+    const enqueue = await competitorRpc(deps, "enqueue_competitor_tool_initial_for_user", { p_user_id: userId, p_watchlist_id: receipt.data.watchlist_id });
+    const parsedCollection = competitorCollectionSchema.safeParse(enqueue.body);
+    collection = parsedCollection.success ? parsedCollection.data : indeterminateCollection();
+  } catch {
+    console.warn("[n8n-api] competitor initial enqueue outcome indeterminate");
+    collection = indeterminateCollection();
+  }
+  return { status: 200, body: analyticsAgentReceipt(200, { ...receipt.data, collection,
+    reconciliation: { watchlist_id: receipt.data.watchlist_id, username: receipt.data.username, action: "list_competitors" } }, "save") };
+}
+
+function unavailableCollection() {
+  return { accepted: false, queued: false, status: "unavailable", reason_code: "response_unavailable", next_action: "contact_support", reconnect_can_help: false, retry_at: null };
+}
+function indeterminateCollection() {
+  return { accepted: false, queued: false, status: "indeterminate", reason_code: "enqueue_indeterminate", next_action: "check_saved_status", reconnect_can_help: false, retry_at: null };
 }
 
 export async function handleUntrackCompetitor(deps: ServiceProxyDeps, userId: string, rawBody: unknown): Promise<ProxyResult> {
@@ -614,13 +707,24 @@ export async function handleGetCompetitorReport(deps: ServiceProxyDeps, userId: 
     periodDays: parsed.data.period_days ?? 30, limit: parsed.data.limit ?? 20, cursor: parsed.data.cursor ?? null });
 }
 
-export async function handleAnalyzeBrand(deps: ServiceProxyDeps, userId: string, rawBody: unknown): Promise<ProxyResult> {
+async function analyzeBrand(deps: ServiceProxyDeps, userId: string, rawBody: unknown): Promise<ProxyResult> {
+  deps = analyticsDeadlineDeps(deps);
   const parsed = analyzeBrandSchema.safeParse(rawBody);
   if (!parsed.success) return invalidAnalyticsInput("Invalid brand analysis filters; platform must be facebook or instagram.");
   if (parsed.data.platform === "instagram" && (parsed.data.offset ?? 0) > 100) return invalidAnalyticsInput("Instagram offset must be between 0 and 100.");
   const username = normalizeBrandHandle(parsed.data.handle, parsed.data.platform);
   if (!username) return invalidAnalyticsInput("Use a valid handle or a profile URL on the selected platform.");
-  const upstream = await deps.invoke("brand-scrape", { user_id: userId, platform: parsed.data.platform, username, offset: parsed.data.offset ?? 0 }, READ_TIMEOUT_MS);
-  const result = fromUpstream("brand-scrape", upstream);
-  return result.status === 200 ? { ...result, body: filterBrandPosts(result.body, parsed.data) } : result;
+  return analyticsResult(async () => {
+    const upstream = await deps.invoke("brand-scrape", { user_id: userId, platform: parsed.data.platform, username, offset: parsed.data.offset ?? 0 }, READ_TIMEOUT_MS);
+    const result = fromUpstream("brand-scrape", upstream);
+    const filtered = result.status === 200 ? asRecord(filterBrandPosts(result.body, parsed.data)) : asRecord(result.body);
+    const provenance = asRecord(filtered.provenance);
+    const source = provenance.source ?? filtered.source ?? asRecord(filtered.profile).source;
+    if (source === "apify" || source === "paid") return { status: 503, body: analyticsAgentReceipt(503, { reason_code: "discovery_unavailable" }, "discovery") };
+    return { ...result, body: analyticsAgentReceipt(result.status, { ...filtered, provenance: {
+      ...provenance, kind: "on_demand_discovery", official_only: source === "official" || source === "graph_own", stored_watchlist_history: false,
+      captured_at: typeof provenance.captured_at === "string" && Number.isFinite(Date.parse(provenance.captured_at)) ? provenance.captured_at : null,
+      from_cache: filtered.fromCache === true, coverage: typeof provenance.coverage === "string" ? provenance.coverage : "bounded_page", scheduled_paid_calls: false,
+    } }, "discovery") };
+  });
 }
