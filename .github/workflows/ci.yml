@@ -250,6 +250,7 @@ jobs:
           supabase/functions/mcp
           supabase/functions/n8n-api/serviceProxy.test.ts
           supabase/functions/n8n-api/analyticsFilters.test.ts
+          supabase/functions/n8n-api/agentActions.test.ts
 
       - name: Test deferred publishing and Threads carousel recovery
         run: >-
@@ -797,6 +798,15 @@ jobs:
           deno test --no-config --import-map=scripts/ci/deno-analytics.import-map.json --lock=scripts/ci/deno-analytics.lock --frozen --node-modules-dir=none \
             --allow-read --allow-write --allow-env --allow-run \
             supabase/functions/competitor-snapshot-sync/rolloutIntegration.test.ts
+
+      - name: Verify agent actions through MCP, API, function and SQL
+        env:
+          ROLLOUT_IT_CONTAINER: pg-harness
+          ROLLOUT_IT_DB: partner_api_harness
+        run: >-
+          deno test --no-config --import-map=scripts/ci/deno-analytics.import-map.json
+          --lock=scripts/ci/deno-analytics.lock --frozen --node-modules-dir=none
+          --allow-env --allow-run supabase/functions/n8n-api/agentActionsIntegration.test.ts
 
       - name: Verify owned analytics workers and stored schedules against real SQL
         env:

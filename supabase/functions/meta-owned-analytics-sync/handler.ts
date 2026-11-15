@@ -1,3 +1,4 @@
+import { analyticsSyncReceipt } from "../_shared/analyticsSyncResult.ts";
 import { z } from "https://esm.sh/zod@3.25.76";
 import { handleRestrictedCorsOptions, restrictedJsonResponse } from "../_shared/cors.ts";
 import { awaitWithAbort } from "../_shared/abort.ts";
@@ -85,7 +86,7 @@ export function createOwnedAnalyticsSyncHandler(deps: OwnedAnalyticsSyncDeps): (
         status, reason, platform, accountId, ...(dryRun === null ? {} : { dryRun }), ...(retentionFloor ? { retentionFloor } : {}), ...(counts ? { counts } : {}), ...(resume ? { resume } : {}) }, auditSignal), auditSignal); }
       catch { auditStored = false; }
       return restrictedJsonResponse(req, { ok: (action === "enqueue" ? statusCode >= 200 && statusCode < 300 && !["collection_disabled", "not_eligible"].includes(status) : statusCode === 200) && auditStored, action, platform, status,
-        reason: auditStored ? reason : "audit_unavailable", auditStored, ...(enqueueReceipt ?? {}), ...(dryRun === null ? {} : { dryRun }), ...(counts ? { counts } : {}),
+        reason: auditStored ? reason : "audit_unavailable", auditStored, ...(enqueueReceipt ?? {}), ...(action === "enqueue" ? { agent_result: analyticsSyncReceipt(auditStored ? statusCode : 503, { ...(enqueueReceipt ?? {}), ok: auditStored && statusCode < 400, status, reason: auditStored ? reason : "audit_unavailable" }) } : {}), ...(dryRun === null ? {} : { dryRun }), ...(counts ? { counts } : {}),
         ...(resume ? { resume } : {}), ...(auditStored && continuation !== undefined ? { continuation } : {}) }, auditStored ? statusCode : 503);
     };
     try {

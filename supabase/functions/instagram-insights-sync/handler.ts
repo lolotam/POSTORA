@@ -1,3 +1,4 @@
+import { analyticsSyncReceipt } from "../_shared/analyticsSyncResult.ts";
 /**
  * The owner intake and status use case for the Instagram insights collector.
  *
@@ -703,7 +704,7 @@ export function createInstagramInsightsSyncHandler(
       extraHeaders?: Record<string, string>,
     ): Promise<Response> => {
       await audit(activeDeadline, auditEvent(outcome, status));
-      return jsonResponse(request, body, status, extraHeaders);
+      return jsonResponse(request, context.action === "enqueue" ? { ...(body as Record<string, unknown>), agent_result: analyticsSyncReceipt(status, body) } : body, status, extraHeaders);
     };
 
     const refuse = async (
@@ -712,7 +713,9 @@ export function createInstagramInsightsSyncHandler(
       extraHeaders?: Record<string, string>,
     ): Promise<Response> => {
       await audit(activeDeadline, auditEvent(code, status));
-      return errorResponse(request, code, status, extraHeaders);
+      return context.action === "enqueue"
+        ? jsonResponse(request, { error: code, agent_result: analyticsSyncReceipt(status, { error: code }) }, status, extraHeaders)
+        : errorResponse(request, code, status, extraHeaders);
     };
 
     /**

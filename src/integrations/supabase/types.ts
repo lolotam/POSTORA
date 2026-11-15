@@ -11823,6 +11823,18 @@ export type Database = {
         }
         Returns: boolean
       }
+      save_competitor_tool_receipt_for_user: {
+        Args: { p_user_id: string; p_username: string; p_label?: string }
+        Returns: Json
+      }
+      read_competitor_tool_collection_for_user: {
+        Args: { p_user_id: string; p_watchlist_id: string }
+        Returns: Json
+      }
+      enqueue_competitor_tool_initial_for_user: {
+        Args: { p_user_id: string; p_watchlist_id: string }
+        Returns: Json
+      }
       save_ai_oauth_credentials: {
         Args: {
           p_oauth_provider: string

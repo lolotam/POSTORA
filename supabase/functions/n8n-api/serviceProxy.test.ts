@@ -855,12 +855,16 @@ Deno.test("new account routes reject invalid arguments and unsupported sync befo
 Deno.test("competitor mutations use explicit owners, normalize handles and retain soft-removal semantics", async () => {
   const { deps, calls } = fakeDeps();
   const rpcCalls: { name: string; args: Record<string, unknown> }[] = [];
-  deps.rpc = async (name, args) => { rpcCalls.push({ name, args }); return { data: { watchlist_id: ACCOUNT_ID, is_active: args.p_is_active !== false }, error: null }; };
+  deps.rpc = async (name, args) => { rpcCalls.push({ name, args }); return { data: name === "save_competitor_tool_receipt_for_user" ? {
+    saved: true, operation: "created", username: "some.brand", watchlist_id: ACCOUNT_ID,
+    quota: { max_tracked_competitors: 5, unlimited: false, tracked_active: 1, remaining: 4 },
+  } : name === "enqueue_competitor_tool_initial_for_user" ? { accepted: false, queued: false, status: "refused", reason_code: "page_linked_viewer_required", next_action: "connect_page_linked", reconnect_can_help: false }
+    : { watchlist_id: ACCOUNT_ID, is_active: args.p_is_active !== false }, error: null }; };
   assertEquals((await handleTrackCompetitor(deps, OWNER, { username: " @@Some.Brand ", label: "Brand" })).status, 200);
-  assertEquals(rpcCalls[0], { name: "add_competitor_watchlist_for_user", args: { p_user_id: OWNER, p_username: "some.brand", p_label: "Brand" } });
+  assertEquals(rpcCalls[0], { name: "save_competitor_tool_receipt_for_user", args: { p_user_id: OWNER, p_username: "some.brand", p_label: "Brand" } });
   const removed = await handleUntrackCompetitor(deps, OWNER, { watchlist_id: ACCOUNT_ID });
   assertEquals(bodyOf(removed).is_active, false);
-  assertEquals(rpcCalls[1], { name: "update_competitor_watchlist_for_user", args: { p_user_id: OWNER, p_watchlist_id: ACCOUNT_ID, p_label: null, p_is_active: false } });
+  assertEquals(rpcCalls[2], { name: "update_competitor_watchlist_for_user", args: { p_user_id: OWNER, p_watchlist_id: ACCOUNT_ID, p_label: null, p_is_active: false } });
   assertEquals(calls.invokes.length, 0);
 });
 
@@ -903,8 +907,9 @@ Deno.test("competitor list and detail reuse the validated UI report projection a
   };
   const { deps } = fakeDeps();
   const seen: Record<string, unknown>[] = [];
-  deps.rpc = async (_name, args) => {
+  deps.rpc = async (name, args) => {
     seen.push(args);
+    if (name === "read_competitor_tool_collection_for_user") return { data: { accepted: false, queued: false, status: "never_synced", reason_code: "awaiting_first_capture", next_action: "wait", reconnect_can_help: false }, error: null };
     const request = args.p_request as Record<string, unknown>;
     return { data: request.action === "detail" ? fixture : { ...fixture, action: "list", entries: [fixture.entry], entry: null, media: [] }, error: null };
   };
