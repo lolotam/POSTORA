@@ -34,12 +34,14 @@ export function defaultPiCallDeps(): PiCallDeps {
     // inject any registry. The mapped shapes are pinned by piCall.test.ts.
     getModel: (provider, modelId) => getModel(provider as never, modelId),
     complete: async (model, context, options) => {
-      if ((model as { provider?: string }).provider !== "anthropic") return await complete(model as never, context as never, options) as unknown as PiAssistant;
+      const provider = (model as { provider?: string }).provider;
+      const codex = provider === "openai-codex";
+      if (provider !== "anthropic" && !codex) return await complete(model as never, context as never, options) as unknown as PiAssistant;
       // Read native events, not repaired final arguments. pi-ai deliberately
       // repairs partial JSON; an executor must never act on that repair.
       const controller = new AbortController();
       const signal = AbortSignal.any([options.signal, controller.signal]);
-      const events = stream(model as never, context as never, { ...options, signal, maxRetries: 0 });
+      const events = stream(model as never, context as never, { ...options, signal, maxRetries: 0, ...(codex ? { transport: "sse" as const } : {}) });
       try {
       const argumentsByIndex = new Map<number, string>();
       const pendingTools = new Set<number>();
@@ -48,7 +50,13 @@ export function defaultPiCallDeps(): PiCallDeps {
       let final: PiAssistant | undefined;
       for await (const event of events) {
         options.signal.throwIfAborted();
-        if (event.type === "start") started = true;
+        if (event.type === "start") {
+          started = true;
+          // Pinned Codex emits `done` on EOF even without response.completed.
+          // Only its terminal Responses event overwrites this request-local
+          // sentinel. Never accept a default `stop` after a partial stream.
+          if (codex) event.partial.stopReason = "error";
+        }
         if ("delta" in event) {
           bytes += new TextEncoder().encode(event.delta).length;
           if (bytes > 1_048_576) throw new ToolContractError("response_invalid");
@@ -61,6 +69,7 @@ export function defaultPiCallDeps(): PiCallDeps {
         if (event.type === "toolcall_end") {
           if (!pendingTools.delete(event.contentIndex)) throw new ToolContractError("response_invalid");
           const raw = argumentsByIndex.get(event.contentIndex);
+          if (codex && raw === undefined) throw new ToolContractError("response_invalid");
           if (raw !== undefined) {
             let parsed: unknown;
             try { parsed = JSON.parse(raw); } catch { throw new ToolContractError("response_invalid"); }
@@ -70,7 +79,7 @@ export function defaultPiCallDeps(): PiCallDeps {
         if (event.type === "error") throw new ToolContractError("response_invalid");
         if (event.type === "done") final = event.message as unknown as PiAssistant;
       }
-      if (!started || !final || pendingTools.size) throw new ToolContractError("response_invalid");
+      if (!started || !final || pendingTools.size || new TextEncoder().encode(JSON.stringify(final)).byteLength > 1_048_576) throw new ToolContractError("response_invalid");
       return final;
       } finally { controller.abort(); }
     },
@@ -182,15 +191,12 @@ export async function callPiOAuth(
   outerSignal?: AbortSignal,
   options: { toolsEnabled?: boolean; continuation?: OAuthContinuation } = {},
 ): Promise<Response> {
-  // Only the server-authorized Claude transport may carry tool work. Preflight
+  // Only a server-authorized subscription transport may carry tool work. Preflight
   // runs before model/provider I/O; callers cannot enable it through the body.
   const toolMode = needsToolTransport(openAiBody) || options.toolsEnabled === true;
-  const refusal = preflightPiRequest(provider, openAiBody, options.toolsEnabled === true);
+  const refusal = preflightPiRequest(provider, openAiBody, options.toolsEnabled === true, toolMode);
   if (refusal) return unsupported(refusal);
-  // pi-ai 0.73.1's Codex request builder never serializes maxTokens, so a cap
-  // the caller relies on would be silently ignored. Refuse instead.
   const maxTokens = outputTokenLimit(openAiBody);
-  if (provider === "openai-codex" && maxTokens !== undefined) return unsupported("max_tokens_unsupported");
 
   const model = deps.getModel(provider, modelId);
   if (!model) return errorShape(`unknown model ${modelId} for ${provider}`, 424);
@@ -210,7 +216,7 @@ export async function callPiOAuth(
     signal.throwIfAborted();
 
     if (toolMode) {
-      const message = validatedAssistant(assistant, openAiBody);
+      const message = validatedAssistant(assistant, openAiBody, { provider, modelId, continuation: options.continuation });
       options.continuation?.remember(provider, modelId, message, assistant as unknown as Record<string, unknown>);
       const shaped = JSON.parse(openAiShape("", assistant.usage));
       shaped.choices = [{ message, finish_reason: assistant.stopReason === "toolUse" ? "tool_calls" : "stop" }];
@@ -239,37 +245,44 @@ export async function callPiOAuth(
   }
 }
 
-export function preflightPiRequest(provider: OAuthProviderId, body: Record<string, unknown>, enabled: boolean): UnsupportedReason | null {
-  if (provider === "openai-codex" && outputTokenLimit(body) !== undefined) return "max_tokens_unsupported";
-  if (!needsToolTransport(body)) return null;
+export function preflightPiRequest(provider: OAuthProviderId, body: Record<string, unknown>, enabled: boolean, requireTools = false): UnsupportedReason | null {
+  // Pinned Codex never serializes maxTokens. Even an invalid/conflicting cap
+  // spelling must not accidentally become an uncapped provider request.
+  if (provider === "openai-codex" && (body.max_tokens !== undefined || body.max_completion_tokens !== undefined)) return "max_tokens_unsupported";
+  if (!needsToolTransport(body) && !requireTools) return null;
   if (!supportsOAuthToolTransport(provider) || !enabled) return "tools_unsupported";
   if (body.tool_choice !== undefined && body.tool_choice !== "auto") return "tools_unsupported";
   const supported = new Set(["model", "messages", "tools", "tool_choice", "temperature", "max_tokens", "max_completion_tokens"]);
   if (Object.keys(body).some(key => !supported.has(key))) return "schema_unsupported";
-  try { toolDefinitions(body); validatedTranscript(body); }
+  try { toolDefinitions(body, provider); validatedTranscript(body); }
   catch (cause) { return cause instanceof ToolContractError ? cause.code : "schema_unsupported"; }
   return null;
 }
 
-function validatedAssistant(assistant: PiAssistant, body: Record<string, unknown>): TranscriptMessage {
+function validatedAssistant(assistant: PiAssistant, body: Record<string, unknown>, options: { provider: OAuthProviderId; modelId: string; continuation?: OAuthContinuation }): TranscriptMessage {
+  const { provider, modelId, continuation } = options;
   if (!["stop", "toolUse"].includes(assistant.stopReason) || assistant.errorMessage || !Array.isArray(assistant.content)) throw new ToolContractError("response_invalid");
   if (assistant.usage && [assistant.usage.input, assistant.usage.output, assistant.usage.cacheRead, assistant.usage.cacheWrite, assistant.usage.totalTokens].filter(value => value !== undefined).some(value => typeof value !== "number" || !Number.isFinite(value) || value < 0)) throw new ToolContractError("response_invalid");
   const ids = new Set<string>();
   const history = validatedTranscript(body);
   const oldIds = new Set(history.flatMap(m => m.tool_calls?.map(c => c.id) ?? []));
-  const allowed = new Set(toolDefinitions(body).map(t => t.function.name));
+  const allowed = new Set(toolDefinitions(body, provider).map(t => t.function.name));
   const calls = [];
   let text = "";
   for (const part of assistant.content) {
     if (part.type === "text" && typeof part.text === "string") text += part.text;
     else if (part.type === "thinking") continue; // Native only, kept in the sidecar.
-    else if (part.type === "toolCall" && typeof part.id === "string" && /^[a-zA-Z0-9_-]{1,200}$/.test(part.id) && typeof part.name === "string" && allowed.has(part.name) && !ids.has(part.id) && !oldIds.has(part.id)) {
+    else if (part.type === "toolCall" && typeof part.id === "string" && (provider === "openai-codex" ? /^[a-zA-Z0-9_-]{1,200}\|[a-zA-Z0-9_-]{1,200}$/ : /^[a-zA-Z0-9_-]{1,200}$/).test(part.id) && typeof part.name === "string" && allowed.has(part.name) && !oldIds.has(part.id)) {
       try {
+        const identity = provider === "openai-codex" ? part.id.split("|")[0] : part.id;
+        if (ids.has(identity) || (provider === "openai-codex" && continuation?.hasCodexCall(modelId, identity))) throw new Error();
         const args = JSON.stringify(part.arguments);
         if (!args || args.length > 32_768) throw new Error();
         parseArguments(args);
-        calls.push({ id: part.id, type: "function" as const, function: { name: part.name, arguments: args } });
-        ids.add(part.id);
+        // Responses' call|item identity is private continuation state. Only a
+        // neutral, invocation-local pairing ID reaches existing consumers.
+        calls.push({ id: provider === "openai-codex" ? `oauth_${crypto.randomUUID()}` : part.id, type: "function" as const, function: { name: part.name, arguments: args } });
+        ids.add(identity);
       } catch { throw new ToolContractError("response_invalid"); }
     } else throw new ToolContractError("response_invalid");
   }

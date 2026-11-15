@@ -120,19 +120,18 @@ export async function callOAuthTier(
   const startedAt = Date.now();
   const deadline = AbortSignal.timeout(Math.max(1, timeoutMs));
   signal = signal ? AbortSignal.any([signal, deadline]) : deadline;
-  // Cap/schema/history checks require no credentials or refresh. Codex tools
-  // remain refused even if its future-phase flag has been configured.
-  const preflight = preflightPiRequest(oauthProvider, requestBody, true);
+  // Cap/schema/history checks require no credentials or refresh.
+  const preflight = preflightPiRequest(oauthProvider, requestBody, true, injected?.requireTools);
   if (preflight) return { error: UNSUPPORTED_CODES[preflight] ?? "oauth_request_unsupported" };
   const pi = injected?.pi ?? defaultPiCallDeps();
   if (!pi.getModel(oauthProvider, tier.model)) return { error: "oauth_model_unsupported" };
   let toolsEnabled = false;
   if (needsToolTransport(requestBody) || injected?.requireTools) {
-    if (oauthProvider !== "anthropic") return { error: "oauth_tools_unsupported" };
     try {
       toolsEnabled = await raceSignal(injected?.toolsEnabled ? injected.toolsEnabled() : (async () => {
         const flags = await readAiTextFlags((admin ?? await serviceClient()) as unknown as SupabaseClient, signal);
-        return flags.feature_ai_provider_oauth && flags.feature_ai_text_auth_lists && flags.feature_ai_oauth_tools_claude;
+        const providerFlag = oauthProvider === "anthropic" ? flags.feature_ai_oauth_tools_claude : flags.feature_ai_oauth_tools_codex;
+        return flags.feature_ai_provider_oauth && flags.feature_ai_text_auth_lists && providerFlag;
       })(), signal);
     } catch { return { error: "oauth_configuration_read_failed" }; }
     if (!toolsEnabled) return { error: "oauth_tools_unsupported" };

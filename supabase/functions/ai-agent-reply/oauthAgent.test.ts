@@ -1,6 +1,7 @@
 import { assert, assertEquals, assertRejects } from "https://deno.land/std@0.208.0/assert/mod.ts";
 import { createClient, type SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { defaultCredentialDeps } from "../_shared/aiOAuth/credentials.ts";
+import { defaultPiCallDeps } from "../_shared/aiOAuth/piCall.ts";
 import type { OAuthChainDeps } from "../_shared/aiOAuth/chainTier.ts";
 import { OAuthContinuation } from "../_shared/aiOAuth/toolTranscript.ts";
 import { AuthActionLedger, authActionSafety } from "./authToolSafety.ts";
@@ -30,10 +31,11 @@ function oauthDeps(complete: NonNullable<OAuthChainDeps["pi"]>["complete"]): OAu
   } } as unknown as SupabaseClient;
   return { enabled: async () => true, providerActive: async () => true, toolsEnabled: async () => true,
     continuation: new OAuthContinuation(), credentials: { ...defaultCredentialDeps(admin), getApiKey: (_provider, credentials) => String(credentials.access) },
-    pi: { getModel: () => ({ provider: "anthropic", api: "anthropic-messages", id: auth.model }), complete } };
+    pi: { getModel: (provider, id) => ({ provider, api: provider === "openai-codex" ? "openai-codex-responses" : "anthropic-messages", id }), complete } };
 }
 
-async function recoverAction(messages: unknown[], args: Record<string, unknown>) {
+const authTiers: AiTier[] = [auth, { ...auth, provider: "openai", model: "gpt-5.1-codex-max" }];
+async function recoverAction(messages: unknown[], args: Record<string, unknown>, authTier: AiTier) {
   const original = globalThis.fetch;
   globalThis.fetch = async (url, init) => {
     if (String(url).includes("/rest/v1/")) return Response.json({ api_key: crypto.randomUUID() });
@@ -46,7 +48,7 @@ async function recoverAction(messages: unknown[], args: Record<string, unknown>)
   };
   try {
     const admin = createClient("https://database.example.test", crypto.randomUUID()) as unknown as AiRoutingAdmin;
-    const chain: AiTier[] = [auth, { provider: "openai", model: "chosen-api", credentialSource: "platform" }];
+    const chain: AiTier[] = [authTier, { provider: "openai", model: "chosen-api", credentialSource: "platform" }];
     const result = await selectAgentCompletion({ tiers: 2, budget: () => 1000,
       attempt: index => chatCompletion(chain[index], { messages, tools: [tool, mutationTool], tool_choice: "auto" }, 1000, admin,
         oauthDeps(async () => { throw new Error("Auth outage"); })), failed: async () => {} });
@@ -56,19 +58,19 @@ async function recoverAction(messages: unknown[], args: Record<string, unknown>)
   } finally { globalThis.fetch = original; }
 }
 
-Deno.test("real main Agent dispatch performs Claude tools and a final history round with no API lookup", async () => {
+for (const authTier of authTiers) Deno.test(`real main Agent dispatch performs ${authTier.provider} tools and a final history round with no API lookup`, async () => {
   const admin = { from: () => { throw new Error("API key/endpoint lookup forbidden"); } } as unknown as AiRoutingAdmin;
   let calls = 0;
   const deps = oauthDeps(async (_model, context) => {
     calls++;
-    if (calls === 1) return { content: [{ type: "toolCall", id: "a", name: tool.function.name, arguments: { query: "hours" } }], stopReason: "toolUse" };
+    if (calls === 1) return { content: [{ type: "toolCall", id: authTier.provider === "openai" ? "a|fc_a" : "a", name: tool.function.name, arguments: { query: "hours" } }], stopReason: "toolUse" };
     assertEquals((context as { messages: Array<{ role: string }> }).messages.at(-1)?.role, "toolResult");
     return { content: [{ type: "text", text: "Open until 5." }], stopReason: "stop" };
   });
-  const first = await chatCompletion(auth, request, 1000, admin, deps);
+  const first = await chatCompletion(authTier, request, 1000, admin, deps);
   assertEquals(first.choices[0].message.tool_calls?.[0].function.name, "search_knowledge");
-  const final = await chatCompletion(auth, { messages: [...request.messages, first.choices[0].message,
-    { role: "tool", tool_call_id: "a", content: "Open until 5" }] }, 1000, admin, deps);
+  const final = await chatCompletion(authTier, { messages: [...request.messages, first.choices[0].message,
+    { role: "tool", tool_call_id: first.choices[0].message.tool_calls![0].id, content: "Open until 5" }] }, 1000, admin, deps);
   assertEquals(final.choices[0].message.content, "Open until 5.");
   assertEquals(calls, 2);
 });
@@ -100,8 +102,8 @@ Deno.test("Agent selected-completion seam falls through an Auth outage preservin
   } finally { globalThis.fetch = original; }
 });
 
-for (const stage of ["before execution", "after read", "after completed mutation", "unknown mutation"] as const) {
-  Deno.test(`Auth fallback side effects: ${stage}`, async () => {
+for (const authTier of authTiers) for (const stage of ["before execution", "after read", "after completed mutation", "unknown mutation"] as const) {
+  Deno.test(`${authTier.provider} Auth fallback side effects: ${stage}`, async () => {
     let externalMutations = 0;
     let reads = 0;
     const logs: string[] = [];
@@ -120,7 +122,7 @@ for (const stage of ["before execution", "after read", "after completed mutation
       messages.push({ role: "assistant", content: null, tool_calls: [{ id: "previous_auth_call", type: "function", function: { name, arguments: JSON.stringify(stage === "after read" ? { query: "hours" } : firstArgs) } }] },
         { role: "tool", tool_call_id: "previous_auth_call", content: stage === "after read" ? "hours" : "saved" });
     }
-    const recoveredCall = stage === "unknown mutation" ? null : await recoverAction(messages, changedArgs);
+    const recoveredCall = stage === "unknown mutation" ? null : await recoverAction(messages, changedArgs, authTier);
     const replay = () => ledger.execute(recoveredCall?.function.name ?? "stock_waitlist_join",
       recoveredCall ? JSON.parse(recoveredCall.function.arguments) : changedArgs, safety, write);
     if (stage === "unknown mutation") await assertRejects(replay, ModelChainExhaustedError, "oauth_action_outcome_unknown");
@@ -139,6 +141,73 @@ Deno.test("unsafe mutation blocks execution; ambiguous waitlist outcome blocks c
   await assertRejects(() => ledger.execute("notify_admin", {}, authActionSafety("notify_admin", new Map()), async () => { mutations++; return { output: "sent" }; }), ModelChainExhaustedError, "oauth_tool_safety_unsupported");
   assertEquals(mutations, 0);
   await assertRejects(() => ledger.execute("stock_waitlist_join", { product_id: "25" }, authActionSafety("stock_waitlist_join", new Map()), async () => ({ output: WAITLIST_FOLLOW_UP })), ModelChainExhaustedError, "oauth_action_outcome_unknown");
+});
+
+for (const completed of [false, true]) Deno.test(`interrupted Codex SSE then API recovery ${completed ? "reuses completed mutation" : "executes only selected API call"}`, async () => {
+  const original = globalThis.fetch;
+  const ledger = new AuthActionLedger(crypto.randomUUID(), () => {});
+  const safety = authActionSafety("stock_waitlist_join", new Map());
+  const args = { product_id: "25" };
+  let externalMutations = 0;
+  let subscriptionCalls = 0;
+  let apiCalls = 0;
+  const write = async () => { externalMutations++; return { output: "saved" }; };
+  const messages: unknown[] = [...request.messages];
+  globalThis.fetch = async (url, init) => {
+    const target = String(url);
+    if (target.includes("/rest/v1/")) return Response.json({ api_key: crypto.randomUUID() });
+    if (target === "https://chatgpt.com/backend-api/codex/responses") {
+      subscriptionCalls++;
+      const call = { type: "function_call", call_id: `new_private_${subscriptionCalls}`, id: `fc_private_${subscriptionCalls}`, name: "stock_waitlist_join", arguments: JSON.stringify(args) };
+      const reasoning = { type: "reasoning", id: `rs_private_${subscriptionCalls}`, encrypted_content: "opaque_native_state", summary: [] };
+      // Recovery gets every tool byte but no terminal response.completed. A
+      // preceding complete round leaves real opaque state in the sidecar.
+      return new Response([
+        { type: "response.created", response: { id: "resp_private" } },
+        { type: "response.output_item.added", item: reasoning }, { type: "response.output_item.done", item: reasoning },
+        { type: "response.output_item.added", item: { ...call, arguments: "" } },
+        { type: "response.function_call_arguments.delta", delta: call.arguments },
+        { type: "response.output_item.done", item: call },
+        ...(completed && subscriptionCalls === 1 ? [{ type: "response.completed", response: { id: "resp_private", status: "completed", usage: { input_tokens: 8, output_tokens: 5, total_tokens: 13 } } }] : []),
+      ].map(event => `data: ${JSON.stringify(event)}\n\n`).join(""), { headers: { "content-type": "text/event-stream" } });
+    }
+    apiCalls++;
+    const payload = JSON.parse(String(init?.body));
+    assertEquals(payload.messages, messages);
+    assertEquals(payload.tools, [mutationTool]);
+    assertEquals(/fc_private|new_private|opaque_native_state/.test(JSON.stringify(payload)), false);
+    return Response.json({ choices: [{ message: { role: "assistant", content: null, tool_calls: [{ id: "api_recovery", type: "function", function: {
+      name: "stock_waitlist_join", arguments: JSON.stringify({ ...args, request_id: crypto.randomUUID() }),
+    } }] } }] });
+  };
+  try {
+    const admin = createClient("https://database.example.test", crypto.randomUUID()) as unknown as AiRoutingAdmin;
+    const deps = oauthDeps(defaultPiCallDeps().complete);
+    deps.pi = defaultPiCallDeps();
+    const account = crypto.randomUUID();
+    const token = [btoa("{}"), btoa(JSON.stringify({ "https://api.openai.com/auth": { chatgpt_account_id: account } })), btoa(crypto.randomUUID())].join(".");
+    deps.credentials!.getApiKey = () => token;
+    const tiers: AiTier[] = [authTiers[1], { provider: "openai", model: "chosen-api", credentialSource: "platform" }];
+    if (completed) {
+      const first = await chatCompletion(tiers[0], { messages, tools: [mutationTool], tool_choice: "auto" }, 1000, admin, deps);
+      const call = first.choices[0].message.tool_calls![0];
+      const outcome = await ledger.execute(call.function.name, JSON.parse(call.function.arguments), safety, write);
+      messages.push(first.choices[0].message, { role: "tool", tool_call_id: call.id, content: outcome.output });
+    }
+    const failures: string[] = [];
+    const result = await selectAgentCompletion({ tiers: 2, budget: () => 1000,
+      attempt: index => chatCompletion(tiers[index], { messages, tools: [mutationTool], tool_choice: "auto" }, 1000, admin, deps),
+      failed: async (_index, cause) => { failures.push(cause instanceof Error ? cause.message : "unknown"); },
+    });
+    assert("completion" in result);
+    assertEquals(result.index, 1);
+    const call = result.completion.choices[0].message.tool_calls![0];
+    assertEquals((await ledger.execute(call.function.name, JSON.parse(call.function.arguments), safety, write)).output, "saved");
+    assertEquals(externalMutations, 1);
+    assertEquals(subscriptionCalls, completed ? 2 : 1);
+    assertEquals(apiCalls, 1);
+    assertEquals(failures, ["oauth_response_invalid"]);
+  } finally { globalThis.fetch = original; }
 });
 
 Deno.test("a server-proven waitlist non-attempt does not hide a later confirmed enrollment", async () => {

@@ -50,6 +50,30 @@ describe('flagged Chat selector', () => {
     expect(screen.getByRole('combobox', { name: 'Primary model' })).toBeDisabled();
     expect(screen.getAllByText('Claude subscription tools disabled.').length).toBeGreaterThan(0);
   });
+  it('keeps a saved Codex Agent Auth choice disabled with its own provider flag reason', () => {
+    const codex = { ...group('oauth', 'oauth_tools_disabled'), provider_code: 'openai', name: 'OpenAI Codex subscription' };
+    const save = renderPolicy({ enabled: true, groups: [], agentGroups: [codex] }, {
+      category: 'agent', currentDefault: { provider_code: 'openai', model_id: 'same', auth_method: 'oauth' },
+    });
+    expect(screen.getByText('Auth · openai · same')).toBeInTheDocument();
+    expect(screen.getByRole('combobox', { name: 'Primary model' })).toBeDisabled();
+    expect(screen.getAllByText('OpenAI Codex subscription tools disabled.').length).toBeGreaterThan(0);
+    expect(screen.queryByText('Claude subscription tools disabled.')).not.toBeInTheDocument();
+    expect(save).not.toHaveBeenCalled();
+  });
+  it.each(['Primary', 'Fallback', 'Fallback 2'])('saves eligible Codex Agent Auth through the %s slot with distinct API/Auth identity', label => {
+    const codex = { ...group('oauth'), provider_code: 'openai', name: 'OpenAI Codex subscription' };
+    const api = { ...group('api_key'), provider_code: 'openai', name: 'OpenAI' };
+    const save = renderPolicy({ enabled: true, groups: [], agentGroups: [api, group('oauth'), codex] }, {
+      category: 'agent', currentFallback: { provider_code: 'openai', model_id: 'same' },
+    });
+    const provider = screen.getByRole('combobox', { name: `${label} provider` });
+    expect(within(provider).getByRole('option', { name: /Auth · OpenAI Codex subscription/ })).toBeEnabled();
+    fireEvent.change(provider, { target: { value: JSON.stringify(['openai', 'oauth']) } });
+    expect(save).not.toHaveBeenCalled();
+    fireEvent.change(screen.getByRole('combobox', { name: `${label} model` }), { target: { value: 'same' } });
+    expect(save).toHaveBeenCalledExactlyOnceWith('openai', 'same', 'oauth');
+  });
   it('uses Triage readiness in all slots, explains parsed JSON and the Codex 200-token refusal without claiming a hardcoded floor', () => {
     renderPolicy({ enabled: true, groups: [], triageGroups: [group('oauth'), { ...group('oauth', 'oauth_max_tokens_unsupported'), provider_code: 'openai', name: 'OpenAI Codex subscription' }] },
       { category: 'agent_triage', capability: 'triage' });

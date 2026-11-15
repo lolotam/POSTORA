@@ -20,6 +20,8 @@ const REASONS = {
   oauth_max_tokens_unsupported: 'Triage requires max_tokens: 200; OpenAI Codex Auth cannot honor this output cap.',
   triage_api_unsupported: 'Claude API transport is not supported for triage. Choose Claude Auth or a compatible API model.',
 };
+const reasonText = (reason: keyof typeof REASONS, providerCode?: string) =>
+  reason === 'oauth_tools_disabled' && providerCode === 'openai' ? 'OpenAI Codex subscription tools disabled.' : REASONS[reason];
 const identity = (provider_code: string, auth_method?: AiAuthMethod) => JSON.stringify([provider_code, auth_method ?? 'api_key']);
 const groupName = (auth_method: AiAuthMethod) => auth_method === 'oauth' ? 'Auth' : 'API';
 type TierSave = (providerCode: string, modelId: string, authMethod?: AiAuthMethod) => void;
@@ -53,7 +55,7 @@ export function GroupedChatTier({ label, groups, current, onSelect, onDraftChang
           <option value="">Choose provider...</option>
           {(['api_key', 'oauth'] as const).map(method => <optgroup key={method} label={groupName(method)}>
             {groups.filter(g => g.auth_method === method).map(g => <option key={identity(g.provider_code, method)} value={identity(g.provider_code, method)} disabled={Boolean(g.reason)}>
-              {groupName(method)} · {g.name} ({g.provider_code}){g.reason ? ` — ${REASONS[g.reason]}` : ''}
+              {groupName(method)} · {g.name} ({g.provider_code}){g.reason ? ` — ${reasonText(g.reason, g.provider_code)}` : ''}
             </option>)}
           </optgroup>)}
         </select>
@@ -70,10 +72,10 @@ export function GroupedChatTier({ label, groups, current, onSelect, onDraftChang
       </label>
     </div>
     {current && <p className="text-xs font-medium">{groupName(current.auth_method ?? 'api_key')} · {current.provider_code} · {current.model_id}</p>}
-    {current && <p className="text-xs text-muted-foreground">{savedReason ? REASONS[savedReason] : !savedModel ? 'Saved model unavailable.' : savedModel.provisional ? 'Provisional registry entry; catalogue sync pending.' : ''}</p>}
+    {current && <p className="text-xs text-muted-foreground">{savedReason ? reasonText(savedReason, current.provider_code) : !savedModel ? 'Saved model unavailable.' : savedModel.provisional ? 'Provisional registry entry; catalogue sync pending.' : ''}</p>}
     {selected?.synced_at && <p className="text-xs text-muted-foreground">Catalogue synced: {selected.synced_at}</p>}
     <ul className="space-y-1 text-xs text-muted-foreground" aria-label={`${label} availability`}>
-      {groups.filter(g => g.reason).map(g => <li key={identity(g.provider_code, g.auth_method)}>{groupName(g.auth_method)} · {g.name}: <span>{REASONS[g.reason]}</span></li>)}
+      {groups.filter(g => g.reason).map(g => <li key={identity(g.provider_code, g.auth_method)}>{groupName(g.auth_method)} · {g.name}: <span>{reasonText(g.reason, g.provider_code)}</span></li>)}
     </ul>
     <a className="text-xs underline" href="/admin/settings?tab=ai&sub=Providers">Manage connections and catalogue sync in AI Providers</a>
   </fieldset>;

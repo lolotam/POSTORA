@@ -7,9 +7,9 @@ import { AiOAuthError } from "./errors.ts";
 
 export type OAuthProviderId = 'anthropic' | 'openai-codex' | 'openrouter';
 
-/** Phase 4 proves only Claude's function-tool transport. No flag widens this. */
+/** Only transports covered by the pinned function-tool wire fixtures. */
 export function supportsOAuthToolTransport(provider: OAuthProviderId): boolean {
-  return provider === 'anthropic';
+  return provider === 'anthropic' || provider === 'openai-codex';
 }
 
 /**

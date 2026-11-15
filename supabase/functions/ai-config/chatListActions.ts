@@ -32,7 +32,10 @@ export async function loadChatPolicySnapshot(admin: SupabaseClient, flags: ChatP
   // Chat's inherited floor also serves Caption/Hashtags when category ladders
   // are disabled. Credential readiness must not depend on that picker flag.
   const textFloorAvailable = Boolean((await resolvePlatformApiKey(admin as unknown as AiRoutingAdmin, "google", signal)).trim());
-  const toolRegistry = { claude: getModels("anthropic").filter(model => model.api === "anthropic-messages").map(model => model.id) };
+  const toolRegistry = {
+    claude: getModels("anthropic").filter(model => model.api === "anthropic-messages").map(model => model.id),
+    openai: getModels("openai-codex").filter(model => model.api === "openai-codex-responses").map(model => model.id),
+  };
   return { flags, providers: providers.data ?? [], settings: settings.data ?? [], statuses: statuses.data ?? [], apiKeys, registry, toolRegistry, textFloorAvailable,
     models: [...catalogue.models, ...catalogue.oauthModels] as unknown as ChatPolicySnapshot["models"] };
 }

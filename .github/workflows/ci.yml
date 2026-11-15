@@ -388,7 +388,14 @@ jobs:
           # suites that talk to real providers are the .live.test.ts files this step
           # deliberately leaves out. An accidental outbound call therefore cannot
           # reach a provider -- and cannot cost anything -- from a test run.
-          deno test --no-config --allow-env --allow-read --allow-write --allow-net=127.0.0.1 --node-modules-dir=none "${tests[@]}"
+          deno test --no-config --allow-env --allow-sys=osRelease --allow-read --allow-write --allow-net=127.0.0.1 --node-modules-dir=none "${tests[@]}"
+
+      # pi-ai's Codex SSE headers read node:os.release(). Keep public egress
+      # denied; only that host-metadata permission is needed by wire fixtures.
+      - name: Test pinned Codex SSE tool transport
+        run: >-
+          deno test --no-config --node-modules-dir=none --allow-env --allow-sys=osRelease
+          supabase/functions/_shared/aiOAuth/codexTools.test.ts
 
       # The background worker claims jobs and the broadcast sends in chunks; both are pure and
       # need no network and no file system, so the permissions stay at --allow-env.
