@@ -243,6 +243,52 @@ BEGIN
 END;
 $permission_monotonic_and_policy$;
 
+-- Production regression, 2026-11-15: collection accepted verified bootstrap
+-- authority, but the report called the same live identity a mismatch.
+DO $bootstrap_instagram_report_readiness$
+DECLARE owner_id uuid:='ab030000-0000-4000-8000-000000000001';
+ target uuid:='ab030000-0000-4000-8000-000000000012';
+ report jsonb;scenario text;credential uuid;
+BEGIN
+ BEGIN
+  UPDATE public.app_settings SET value='true' WHERE key='collection_instagram_insights_enabled';
+  UPDATE public.app_settings SET value='{"version":1,"owners":{"mode":"all","account_ids":[]},"competitors":{"mode":"off","targets":[]}}'
+   WHERE key='collection_instagram_rollout_policy';
+  SELECT credential_id INTO STRICT credential FROM public.facebook_user_credential_bindings WHERE social_account_id=target;
+  ASSERT public.analytics_bootstrap_binding_verified(target);
+  report:=public.read_instagram_owner_report_snapshot(owner_id,target,clock_timestamp())->'readiness';
+  ASSERT report#>>'{connection,state}'='verified','a current bootstrap receipt must be recognized by the public report';
+  ASSERT report#>>'{permission,state}'='verified','connection repair must retain independent permission evidence';
+  ASSERT report#>>'{collection,reason_code}'='awaiting_first_capture','verified authority does not invent saved measurements';
+  ASSERT report#>>'{collection,reconnect_can_help}'='false';
+  -- Each mutation is rolled back independently: a valid provenance label
+  -- cannot rescue a moved fence, wrong target, absent binding, or expiry.
+  FOREACH scenario IN ARRAY ARRAY['fence','target_identity','missing_binding','expired_credential'] LOOP
+   BEGIN
+    CASE scenario
+     WHEN 'fence' THEN UPDATE public.facebook_user_credential_connection_fences SET connection_version=connection_version+1
+      WHERE social_account_id=target;
+     WHEN 'target_identity' THEN UPDATE public.social_accounts SET platform_user_id='178009999999' WHERE id=target;
+     WHEN 'missing_binding' THEN DELETE FROM public.facebook_user_credential_bindings WHERE social_account_id=target;
+     WHEN 'expired_credential' THEN UPDATE public.facebook_user_credentials SET token_expires_at=clock_timestamp()-interval '1 second'
+      WHERE id=credential;
+    END CASE;
+    report:=public.read_instagram_owner_report_snapshot(owner_id,target,clock_timestamp())->'readiness';
+    ASSERT report#>>'{connection,state}'<>'verified',scenario||' must remain refused';
+    ASSERT report#>>'{connection,reason_code}'=CASE scenario
+     WHEN 'missing_binding' THEN 'bootstrap_required' WHEN 'expired_credential' THEN 'token_invalid' ELSE 'identity_mismatch' END;
+    RAISE EXCEPTION 'restore only this negative case' USING ERRCODE='TST01';
+   EXCEPTION WHEN SQLSTATE 'TST01' THEN NULL; END;
+  END LOOP;
+  BEGIN
+   PERFORM public.read_instagram_owner_report_snapshot('ab030000-0000-4000-8000-000000000002',target,clock_timestamp());
+   RAISE EXCEPTION 'foreign owner read unexpectedly accepted';
+  EXCEPTION WHEN SQLSTATE 'MAH02' THEN NULL; END;
+  RAISE EXCEPTION 'restore the original suite policy and fixtures' USING ERRCODE='TST01';
+ EXCEPTION WHEN SQLSTATE 'TST01' THEN NULL; END;
+END;
+$bootstrap_instagram_report_readiness$;
+
 DO $untrusted_evidence$
 DECLARE capture jsonb;evidence jsonb;outcome jsonb;scenario text;target uuid:='ab030000-0000-4000-8000-000000000015';
 BEGIN
