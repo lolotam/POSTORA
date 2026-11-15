@@ -26,6 +26,7 @@ SET search_path=public,pg_temp SET statement_timeout='5s' AS $fn$
 DECLARE target public.competitor_watchlist; job public.instagram_collection_jobs;
  allowed jsonb; reason text; eligible boolean:=false; viewer uuid; candidate uuid; evidence jsonb; state text; action text;
  daily text; drain text; daily_active boolean; drain_active boolean;
+ last_capture_on date; last_capture_at timestamptz;
 BEGIN
  IF p_user_id IS NULL THEN RAISE EXCEPTION 'COMPETITOR_UNAUTHORIZED' USING ERRCODE='42501'; END IF;
  SELECT * INTO target FROM public.competitor_watchlist WHERE id=p_watchlist_id AND user_id=p_user_id AND platform='instagram';
@@ -49,7 +50,8 @@ BEGIN
     AND g.lifecycle='active' AND NULLIF(btrim(g.token),'') IS NOT NULL AND (g.token_expires_at IS NULL OR g.token_expires_at>now())
     AND (b.evidence_source='migrated_instagram_account_credential' OR
      (b.connection_version=f.connection_version AND b.verified_facebook_user_id=g.provider_user_id
-      AND b.verified_instagram_user_id=a.platform_user_id AND b.evidence_source IN ('oauth_exchange','token_refresh')))
+      AND b.verified_instagram_user_id=a.platform_user_id
+      AND (b.evidence_source IN ('oauth_exchange','token_refresh') OR public.analytics_bootstrap_binding_verified(a.id))))
     AND COALESCE((public.ig_collection_rollout_target_allowed(p_user_id,'competitor',p_watchlist_id,a.id)->>'allowed')::boolean,false)
    ORDER BY a.id LIMIT 1;
   IF viewer IS NULL THEN
@@ -72,10 +74,26 @@ BEGIN
  IF reason IS NOT NULL THEN state:='refused';
  ELSIF job.status IN ('queued','pending') THEN state:='queued';reason:='queued';
  ELSIF job.status='leased' THEN state:='running';reason:='running';
- ELSIF job.status='success' THEN state:='complete';reason:='ready';
+ ELSIF job.status='completed' THEN state:='complete';reason:='ready';
  ELSIF job.status IN ('retry','partial') THEN state:='retry';reason:=CASE WHEN job.last_reason_code='rate_limited' THEN 'rate_limited' ELSE 'provider_error' END;
  ELSIF job.status IS NOT NULL THEN state:='unavailable';reason:='provider_error';
- ELSE state:='never_synced';reason:='awaiting_first_capture'; END IF;
+ ELSE
+  -- No current-day job is not evidence of no history. Only retained numerical
+  -- observations promote this fallback; current refusals and work still win.
+  SELECT captured_on,captured_at INTO last_capture_on,last_capture_at FROM (
+   (SELECT s.captured_on,s.captured_at FROM public.competitor_profile_snapshots s
+    WHERE s.user_id=p_user_id AND s.watchlist_id=p_watchlist_id AND s.status='ok'
+     AND (s.followers_count IS NOT NULL OR s.media_count IS NOT NULL)
+    ORDER BY s.captured_on DESC,s.captured_at DESC LIMIT 1)
+   UNION ALL
+   (SELECT s.captured_on,s.captured_at FROM public.competitor_media_snapshots s
+    WHERE s.user_id=p_user_id AND s.watchlist_id=p_watchlist_id AND s.status='ok'
+     AND (s.like_count IS NOT NULL OR s.comments_count IS NOT NULL OR s.view_count IS NOT NULL)
+    ORDER BY s.captured_on DESC,s.captured_at DESC LIMIT 1)
+  ) captures ORDER BY captured_on DESC,captured_at DESC LIMIT 1;
+  IF last_capture_at IS NOT NULL THEN state:='complete';reason:='ready';
+  ELSE state:='never_synced';reason:='awaiting_first_capture'; END IF;
+ END IF;
  action:=CASE WHEN reason='page_linked_viewer_required' THEN 'connect_page_linked'
   WHEN state IN ('refused','unavailable') THEN 'contact_support' WHEN state='complete' THEN 'none'
   WHEN state='retry' THEN 'retry_after' ELSE 'wait' END;
@@ -84,7 +102,7 @@ BEGIN
  SELECT schedule,active INTO drain,drain_active FROM cron.job WHERE jobname='competitor-snapshot-drain';
  RETURN jsonb_build_object('accepted',false,'queued',state='queued','status',state,'reason_code',reason,
   'next_action',action,'reconnect_can_help',false,'retry_at',CASE WHEN state='retry' THEN job.retry_at END,'collection_eligible',eligible,
-  'job_id',job.id,'captured_on',job.captured_on,
+  'job_id',job.id,'captured_on',COALESCE(job.captured_on,last_capture_on),'last_capture_at',last_capture_at,
   'schedule',jsonb_build_object('timezone','UTC','daily_enqueue',daily,'drain',drain,
    'daily_enqueue_active',daily_active,'drain_active',drain_active,
    'first_capture','After a successful eligible run; no guaranteed completion time.'));
@@ -97,7 +115,13 @@ SET search_path=public,pg_temp SET statement_timeout='5s' AS $fn$
 DECLARE readiness jsonb; result jsonb; state text; reason text;
 BEGIN
  readiness:=public.read_competitor_tool_collection_for_user(p_user_id,p_watchlist_id);
- IF NOT COALESCE((readiness->>'collection_eligible')::boolean,false) THEN RETURN readiness; END IF;
+ IF NOT COALESCE((readiness->>'collection_eligible')::boolean,false) THEN
+  PERFORM public.ig_collection_rollout_audit(jsonb_build_object(
+   'event','collection_enqueue_refused','reason_code',readiness->>'reason_code',
+   'user_id',p_user_id,'target_kind','competitor','target_id',p_watchlist_id,
+   'details',jsonb_build_object('actor','agent','mode','normal')));
+  RETURN readiness;
+ END IF;
  -- Natural key (owner, competitor, target, Kuwait day), normal enqueue only.
  -- The existing SQL rechecks ownership/policy before spending the throttle.
  result:=public.enqueue_instagram_collection_job_for_user(p_user_id,'competitor',p_watchlist_id,'normal');
@@ -110,7 +134,7 @@ BEGIN
    'retry_at',now()+make_interval(secs=>(result->>'retry_after_seconds')::integer));
  END IF;
  state:=CASE result->>'status' WHEN 'queued' THEN 'queued' WHEN 'leased' THEN 'running'
-  WHEN 'success' THEN 'complete' WHEN 'retry' THEN 'retry' WHEN 'partial' THEN 'retry' ELSE 'unavailable' END;
+  WHEN 'completed' THEN 'complete' WHEN 'retry' THEN 'retry' WHEN 'partial' THEN 'retry' ELSE 'unavailable' END;
  reason:=CASE state WHEN 'queued' THEN 'queued' WHEN 'running' THEN 'running' WHEN 'complete' THEN 'ready' ELSE 'provider_error' END;
  RETURN readiness||result||jsonb_build_object('accepted',true,'queued',state='queued','status',state,'reason_code',reason,
   'next_action',CASE state WHEN 'complete' THEN 'none' WHEN 'retry' THEN 'retry_after' ELSE 'wait' END);

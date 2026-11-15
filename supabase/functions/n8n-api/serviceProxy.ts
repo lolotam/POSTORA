@@ -494,7 +494,8 @@ async function analyticsResult(work: () => Promise<ProxyResult>): Promise<ProxyR
 }
 export async function handleGetAccountAnalytics(deps: ServiceProxyDeps, userId: string, params: URLSearchParams): Promise<ProxyResult> {
   const result = await analyticsResult(() => getAccountAnalytics(deps, userId, params));
-  const body = result.status === 200 ? { ...asRecord(result.body), provenance: { kind: "stored_measurements", coverage: "report_period", captured_at: null, scheduled_paid_calls: false } } : result.body;
+  const payload = asRecord(result.body);
+  const body = result.status === 200 ? { ...payload, provenance: payload.provenance ?? { kind: "stored_measurements", coverage: "report_period", captured_at: null, scheduled_paid_calls: false } } : result.body;
   return { ...result, body: analyticsAgentReceipt(result.status, body, "read") };
 }
 export async function handleTriggerAnalyticsSync(deps: ServiceProxyDeps, userId: string, body: unknown): Promise<ProxyResult> {
@@ -547,7 +548,16 @@ async function getAccountAnalytics(deps: ServiceProxyDeps, userId: string, param
     return result.status === 200 ? { ...result, body: filterAccountMedia(result.body, mediaType) } : result;
   }
   // Keep the existing TikTok passthrough and its validation unchanged.
-  return await handleGetPostAnalytics(deps, userId, reportParams);
+  const result = await handleGetPostAnalytics(deps, userId, reportParams);
+  if (result.status !== 200 || account.platform !== "tiktok") return result;
+  const payload = asRecord(result.body);
+  // The legacy TikTok producer may serve its first-page cache; it does not
+  // return a capture timestamp or implement the requested report period.
+  return { ...result, body: { ...payload, provenance: {
+    kind: "on_demand_discovery", source: "tiktok_api", coverage: "recent_videos", captured_at: null,
+    from_cache: payload.cached === true, official_only: true, stored_watchlist_history: false, scheduled_paid_calls: false,
+    ...asRecord(payload.provenance),
+  } } };
 }
 
 async function triggerAnalyticsSync(deps: ServiceProxyDeps, userId: string, rawBody: unknown): Promise<ProxyResult> {
@@ -621,15 +631,20 @@ async function listCompetitors(deps: ServiceProxyDeps, userId: string, rawBody: 
     const body = asRecord(result.body);
     const entries = Array.isArray(body.entries) ? body.entries : [];
     const receipts: unknown[] = [];
-    for (const entry of entries) {
-      const row = asRecord(entry);
-      let collection: Record<string, unknown> = unavailableCollection();
-      try {
-        const state = await competitorRpc(deps, "read_competitor_tool_collection_for_user", { p_user_id: userId, p_watchlist_id: row.watchlist_id });
-        const parsedState = competitorCollectionSchema.safeParse(state.body);
-        if (parsedState.success) collection = parsedState.data;
-      } catch { console.warn("[n8n-api] competitor collection status unavailable"); }
-      receipts.push({ ...row, saved: true, collection });
+    // At most five database reads in flight, all using the request's shared deadline.
+    // Preserve page ordering and never grant later batches a fresh timeout.
+    for (let offset = 0; offset < entries.length; offset += 5) {
+      const batch = await Promise.all(entries.slice(offset, offset + 5).map(async (entry) => {
+        const row = asRecord(entry);
+        let collection: Record<string, unknown> = unavailableCollection();
+        try {
+          const state = await competitorRpc(deps, "read_competitor_tool_collection_for_user", { p_user_id: userId, p_watchlist_id: row.watchlist_id });
+          const parsedState = competitorCollectionSchema.safeParse(state.body);
+          if (parsedState.success) collection = parsedState.data;
+        } catch { console.warn("[n8n-api] competitor collection status unavailable"); }
+        return { ...row, saved: true, collection };
+      }));
+      receipts.push(...batch);
     }
     return { status: 200, body: analyticsAgentReceipt(200, { ...body, entries: receipts,
       provenance: { kind: "stored_measurements", captured_at: null, coverage: "per_entry", scheduled_paid_calls: false } }, "read") };

@@ -41,6 +41,11 @@ export const discoveryOutputSchema = analyticsAgentOutputSchema.extend({
 });
 
 const record = (value: unknown): Record<string, unknown> => value !== null && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
+const retryTimestampSchema = z.string().datetime({ offset: true });
+function retryTimestamp(value: unknown): string | null {
+  const parsed = retryTimestampSchema.safeParse(value);
+  return parsed.success ? parsed.data : null;
+}
 function reasonSource(reason: typeof reasons[number] | null, kind: "read" | "save" | "discovery") {
   if (reason === null || ["ready", "awaiting_first_capture"].includes(reason)) return "data";
   if (["collection_disabled", "collection_not_eligible"].includes(reason)) return "rollout_policy";
@@ -73,7 +78,8 @@ export function analyticsAgentReceipt(transportStatus: number, value: unknown, k
   return analyticsAgentOutputSchema.parse({ ...body, contract_version: 2, ok, transport_status: transportStatus,
     status: ok ? kind === "save" ? typeof body.status === "string" ? body.status : "saved" : "read" : "unavailable", reason_code: reason,
     reason_source: ownerReadiness?.collection.reason_source ?? reasonSource(reason, kind),
-    next_action: action, reconnect_can_help: ownerReadiness?.collection.reconnect_can_help ?? false, retry_at: ownerReadiness?.collection.retry_at ?? null,
+    next_action: action, reconnect_can_help: ownerReadiness?.collection.reconnect_can_help ?? false,
+    retry_at: ownerReadiness ? ownerReadiness.collection.retry_at : retryTimestamp(body.retry_at) ?? retryTimestamp(collection.retry_at),
     reconnect_path: ownerReadiness?.collection.reconnect_can_help ? ownerReadiness.connection.reconnect_path ?? "/profiles" : null,
     user_message: ["collection_disabled", "collection_not_eligible"].includes(String(reason)) ? "Analytics collection is not enabled for your account. Contact support; reconnecting cannot change eligibility."
       : kind === "save" && body.saved === null ? "The save outcome is unknown. Check list_competitors by normalized username before retrying."

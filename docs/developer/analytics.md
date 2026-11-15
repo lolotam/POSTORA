@@ -4,7 +4,7 @@ Analytics is available through the authenticated n8n API and MCP. MCP `posts:rea
 
 | Tool | API route | Behavior |
 | --- | --- | --- |
-| `get_account_analytics` | `GET /api/v1/analytics/account` | Stored Instagram/Facebook/Threads owner report; existing TikTok passthrough. No collection or provider calls. |
+| `get_account_analytics` | `GET /api/v1/analytics/account` | Stored Instagram/Facebook/Threads owner report with no collection or provider calls. The existing TikTok passthrough calls the TikTok API through `tiktok-analytics`, or serves its first-page cache. |
 | `trigger_analytics_sync` | `POST /api/v1/analytics/sync` | Normal guarded enqueue for one owned Instagram/Facebook/Threads account; never forces a completed day fresh. |
 | `list_competitors` | `GET /api/v1/analytics/competitors` | Owned active/removed Instagram entries, quota, capture history and separate current collection receipt. |
 | `track_competitor` | `POST /api/v1/analytics/competitors` | Durable save followed by separate bounded best-effort initial enqueue. No provider request. |
@@ -42,6 +42,10 @@ Owner report `collection`, `connection`, `permission`, `data` and dated `last_at
 
 `track_competitor` returns `saved:true`, `operation:created|already_tracked|reactivated`, owned `watchlist_id`, effective `quota`, and separate `collection` receipt. Collection can be queued, running, complete, retry, refused, unavailable or indeterminate. An uncertain save reports `saved:null`; reconcile by normalized username before retrying. Already-tracked saves include quota too.
 
+Competitor viewer admission accepts receipt-verified `verified_legacy_bootstrap` authority through the canonical binding verifier, with the same current identity and connection fence checks as lifecycle authority. Initial enqueue refusals detected before calling the collector write a sanitized durable refusal audit with owner, watchlist ID and reason. List receipt reads run in groups of at most five under the same request deadline as the report read.
+
+When no current Kuwait-day job exists, retained successful numerical profile or media observations establish capture history; the receipt returns `complete`/`ready` and the actual capture day instead of `never_synced`. Current eligibility refusals, retries and queued/running work retain precedence over this fallback. A job without saved observations or a null-only observation does not establish historical measurement coverage. Exact retry timestamps survive the shared API/MCP envelope for discovery and competitor receipts as well as owner readiness.
+
 Quota fields: `max_tracked_competitors`, `unlimited`, `tracked_active`, `remaining`. Existing SQL resolves override, active/past_due subscription, then free/default 5; admins and unlimited entitlements return `-1`, `unlimited:true`, `remaining:null`. Counts include all active entries independently of page size. There is no platform-wide quota of 20.
 
 Installed scheduler definitions enqueue competitors daily at **01:00 UTC** and drain every **2 minutes**. Collection receipts read configured expressions and active state from `cron.job`; paused or missing schedules are not promised work. First snapshot follows a successful eligible run. There is no 24–48-hour completion guarantee. Growth needs real baselines and coverage; no history is invented before collection. Scheduled paid scraping is not used.
@@ -49,6 +53,8 @@ Installed scheduler definitions enqueue competitors daily at **01:00 UTC** and d
 ## Discovery provenance
 
 Stored reports identify `provenance.kind:stored_measurements`; measurement/capture timestamps remain on actual report entries. Public discovery identifies `on_demand_discovery`, `official_only`, cache state, bounded/partial coverage and actual capture time when recorded. Older cached observations without provenance return `captured_at:null`; the proxy never substitutes response time. Cache hits retain original capture time.
+
+The TikTok account adapter identifies `on_demand_discovery` with `source:tiktok_api`, `coverage:recent_videos` and actual cache state. It does not claim requested-period coverage or a capture timestamp when the legacy producer supplies neither. Producer provenance, when present, is preserved.
 
 Instagram public competitor discovery requires a usable same-owner Page-linked viewer with verified permission/capability and protected Facebook User authority. Direct login can support owner measurements and own-profile discovery, but cannot supply a public Business Discovery viewer. Facebook public discovery requires configured official Page access. Neither tool promises private competitor reach, saves, audience demographics or paid fallback.
 

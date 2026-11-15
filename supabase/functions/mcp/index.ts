@@ -529,7 +529,7 @@ function buildServer(
   });
 
   register("track_competitor", {
-    description: "Track Instagram only, username only (optional @; 1-30 letters/digits/underscores/periods; no URLs or consecutive periods). Returns saved, operation, effective quota and separate best-effort initial enqueue receipt. Quota uses override, active/past_due plan, default 5; admin/unlimited may be -1. Page size is not quota. Daily enqueue is 01:00 UTC and drain every 2 minutes when active; first capture requires a successful eligible run, with no 24-48 hour SLA. Direct-only accounts need a supported Page-linked viewer. Never infer queued from saved.",
+    description: "Track Instagram only, username only (optional @; 1-30 letters/digits/underscores/periods; no URLs or consecutive periods). Returns saved, operation, effective quota and separate best-effort initial enqueue receipt. Quota uses override, active/past_due plan, default 5; admin/unlimited may be -1. Page size is not quota. Read current enqueue/drain schedules and active flags from collection.schedule; first capture requires a successful eligible run, with no 24-48 hour SLA. Direct-only accounts need a supported Page-linked viewer. Never infer queued from saved.",
     inputSchema: trackCompetitorSchema,
     outputSchema: competitorSaveOutputSchema,
     handler: async (args) => {
