@@ -11,6 +11,9 @@ import { Switch } from "@/components/ui/switch";
 import { callEdgeApi } from "@/lib/messagingApi";
 import { SavedTestsPanel } from "@/features/agent-tests";
 import { type AiAgentPlatform } from "@/hooks/useAiAgentConfig";
+import { useUserRole } from '@/hooks/useUserRole';
+import { SandboxModelPicker } from '@/components/admin/SandboxModelPicker';
+import type { DefaultModel } from '@/hooks/ai-config/types';
 
 interface TestTurn {
   role: "user" | "assistant";
@@ -36,6 +39,8 @@ export function AiAgentTestChat({
   const [turns, setTurns] = useState<TestTurn[]>([]);
   const [input, setInput] = useState("");
   const [actAsAdmin, setActAsAdmin] = useState(false);
+  const { isAdmin } = useUserRole();
+  const [modelOverride, setModelOverride] = useState<DefaultModel | null>(null);
   const [sending, setSending] = useState(false);
   const [prefillMessage, setPrefillMessage] = useState<string | null>(null);
   const endRef = useRef<HTMLDivElement>(null);
@@ -54,6 +59,7 @@ export function AiAgentTestChat({
     setInput("");
     setPrefillMessage(null);
     setSending(false);
+    setModelOverride(null);
   }, [accountId, platform]);
 
   const send = async () => {
@@ -71,6 +77,7 @@ export function AiAgentTestChat({
         social_account_id: accountId ?? undefined,
         inbound_text: text,
         act_as_admin: actAsAdmin,
+        ...(isAdmin && modelOverride ? { model_override: { ...modelOverride, auth_method: modelOverride.auth_method ?? 'api_key' } } : {}),
       }, { signal: controller.signal });
       if (invocationRef.current !== invocation) return;
       const turn: TestTurn = data.reply
@@ -116,6 +123,7 @@ export function AiAgentTestChat({
         </div>
       </CardHeader>
       <CardContent className="space-y-4">
+        {isAdmin && <SandboxModelPicker value={modelOverride} onChange={setModelOverride} busy={sending} />}
         <div className="max-h-96 min-h-40 space-y-3 overflow-y-auto rounded-md border p-3">
           {turns.length === 0 && (
             <p className="py-8 text-center text-sm text-muted-foreground">

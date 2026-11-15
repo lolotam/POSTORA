@@ -10,6 +10,31 @@ const allowedModels = [
   { provider: "openrouter", model_id: "anthropic/claude-sonnet-5" },
 ] as const;
 
+Deno.test('structured sandbox distinguishes API/Auth and refuses live or non-admin escalation', async () => {
+  const structured = { provider_code: 'openai', model_id: 'gpt-5.5', auth_method: 'oauth' } as const;
+  for (const dryRun of [true, false]) for (const isAdmin of [true, false]) {
+    const result = await resolveSandboxModelOverride({ dryRun, requestedOverride: structured,
+      isPlatformAdmin: () => Promise.resolve(isAdmin), readAllowedModels: () => Promise.resolve(allowedModels),
+      ...{ readAuthAwareModels: () => Promise.resolve([{ ...structured }]) },
+    });
+    assertEquals<unknown>(result, !dryRun ? { ok: true, model: null } : !isAdmin ? { ok: false, error: INVALID_MODEL_OVERRIDE }
+      : { ok: true, model: { provider: 'openai', model: 'gpt-5.5', authMethod: 'oauth' } });
+  }
+});
+
+Deno.test('structured sandbox rejects unknown auth, credential injection and unlisted identity', async () => {
+  for (const requestedOverride of [
+    { provider_code: 'openai', model_id: 'gpt-5.5', auth_method: 'invalid' },
+    { provider_code: 'openai', model_id: 'gpt-5.5', auth_method: 'oauth', apiKey: crypto.randomUUID() },
+    { provider_code: 'openai', model_id: 'gpt-5.5', auth_method: 'oauth' },
+  ]) {
+    assertEquals(await resolveSandboxModelOverride({ dryRun: true, requestedOverride,
+      isPlatformAdmin: () => Promise.resolve(true), readAllowedModels: () => Promise.resolve(allowedModels),
+      ...{ readAuthAwareModels: () => Promise.resolve([]) },
+    }), { ok: false, error: INVALID_MODEL_OVERRIDE });
+  }
+});
+
 Deno.test("a dry run uses only the canonical allow-listed model override", async () => {
   for (const [requestedOverride, model] of [
     ["gpt-5.5", { provider: "openai", model: "gpt-5.5" }],

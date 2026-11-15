@@ -3,15 +3,15 @@ import { FunctionsFetchError, FunctionsHttpError } from '@supabase/supabase-js';
 import { supabase } from '@/integrations/supabase/client';
 import { normalizeStoredTextTier } from '../../../../supabase/functions/_shared/textTierValue';
 
-const groupSchema = z.object({
+export const groupSchema = z.object({
   provider_code: z.string(), auth_method: z.enum(['api_key', 'oauth']), name: z.string(),
-  reason: z.enum(['flag_off', 'inactive', 'not_connected', 'reauth_required', 'disconnected', 'api_key_absent', 'no_compatible_models', 'no_compatible_triage_models', 'oauth_max_tokens_unsupported', 'triage_api_unsupported', 'oauth_tools_unsupported', 'oauth_tools_disabled', 'no_compatible_agent_models']).nullable(),
+  reason: z.enum(['flag_off', 'inactive', 'not_connected', 'reauth_required', 'disconnected', 'api_key_absent', 'no_compatible_models', 'no_compatible_triage_models', 'oauth_max_tokens_unsupported', 'triage_api_unsupported', 'oauth_tools_unsupported', 'oauth_tools_disabled', 'no_compatible_agent_models', 'search_transport_unsupported']).nullable(),
   synced_at: z.string().nullable(),
   models: z.array(z.object({ model_id: z.string(), name: z.string(), provisional: z.boolean(), reason: z.enum(['inactive', 'unsupported_model', 'tools_unsupported']).nullable() })),
 });
 const policySchema = z.discriminatedUnion('enabled', [
   z.object({ enabled: z.literal(false) }),
-  z.object({ enabled: z.literal(true), groups: z.array(groupSchema), triageGroups: z.array(groupSchema).optional(), agentGroups: z.array(groupSchema).optional(), categoryLaddersEnabled: z.boolean().optional() }),
+  z.object({ enabled: z.literal(true), groups: z.array(groupSchema), searchGroups: z.array(groupSchema).optional(), overrideWriterReady: z.boolean().optional(), triageGroups: z.array(groupSchema).optional(), agentGroups: z.array(groupSchema).optional(), categoryLaddersEnabled: z.boolean().optional() }),
 ]);
 export type ChatListPolicy = z.infer<typeof policySchema>;
 export type ChatListGroup = z.infer<typeof groupSchema>;

@@ -3,7 +3,7 @@ import type { AiTextFlags } from "../_shared/aiOAuth/textFlags.ts";
 import { normalizeStoredTextTier } from "../_shared/textTierValue.ts";
 import { supportsOutputCap } from "../_shared/textLadders.ts";
 
-export type ChatListReason = "flag_off" | "inactive" | "not_connected" | "reauth_required" | "disconnected" | "api_key_absent" | "no_compatible_models" | "no_compatible_triage_models" | "oauth_max_tokens_unsupported" | "triage_api_unsupported" | "oauth_tools_unsupported" | "oauth_tools_disabled" | "no_compatible_agent_models";
+export type ChatListReason = "flag_off" | "inactive" | "not_connected" | "reauth_required" | "disconnected" | "api_key_absent" | "no_compatible_models" | "no_compatible_triage_models" | "oauth_max_tokens_unsupported" | "triage_api_unsupported" | "oauth_tools_unsupported" | "oauth_tools_disabled" | "no_compatible_agent_models" | "search_transport_unsupported";
 export interface ChatListModel { model_id: string; name: string; provisional: boolean; reason: "inactive" | "unsupported_model" | "tools_unsupported" | null }
 export interface ChatListGroup {
   provider_code: string; auth_method: "api_key" | "oauth"; name: string;
@@ -24,14 +24,14 @@ export interface ChatPolicySnapshot {
 
 const AUTH_NAMES: Record<string, string> = { claude: "Claude subscription", openai: "OpenAI Codex subscription", openrouter: "OpenRouter Auth" };
 
-function catalogueFor(source: ChatPolicySnapshot, providerCode: string, authMethod: "api_key" | "oauth", category: "chat" | "agent_triage") {
+function catalogueFor(source: ChatPolicySnapshot, providerCode: string, authMethod: "api_key" | "oauth", category: "chat" | "agent_triage" | "search") {
   const provider = source.providers.find(p => p.provider_code === providerCode);
   const rows = source.models.filter(m => m.provider_id === provider?.id && (m.auth_method ?? "api_key") === authMethod);
   const stamp = source.settings.find(s => s.key === `model_catalog_synced_at_${providerCode}_${authMethod}`)?.value;
   const syncedAt = z.object({ at: z.string().datetime() }).safeParse(stamp);
   const models: ChatListModel[] = rows.filter(m => category === "agent_triage" && authMethod === "api_key"
     ? m.capabilities.includes("triage_chat") || (["openrouter", "vercel"].includes(providerCode) && m.capabilities.includes("triage"))
-    : m.capabilities.includes("chat")).map(m => ({
+    : m.capabilities.includes(category === 'search' ? 'search' : 'chat')).map(m => ({
     model_id: m.model_id, name: m.name, provisional: false,
     reason: !m.is_active ? "inactive" : authMethod === "oauth" && !source.registry[providerCode]?.includes(m.model_id) ? "unsupported_model" : null,
   }));
@@ -61,7 +61,7 @@ function availability(source: ChatPolicySnapshot, group: ChatListGroup): ChatLis
   return group.models.some(m => !m.reason) ? null : "no_compatible_models";
 }
 
-export function buildChatListPolicy(source: ChatPolicySnapshot, category: "chat" | "agent_triage" = "chat") {
+export function buildChatListPolicy(source: ChatPolicySnapshot, category: "chat" | "agent_triage" | "search" = "chat") {
   const apiGroups: ChatListGroup[] = source.providers.map(p => ({
     provider_code: p.provider_code, auth_method: "api_key", name: p.name, reason: null,
     ...catalogueFor(source, p.provider_code, "api_key", category),
@@ -72,6 +72,7 @@ export function buildChatListPolicy(source: ChatPolicySnapshot, category: "chat"
   const groups = [...apiGroups, ...authGroups];
   for (const group of groups) {
     group.reason = availability(source, group);
+    if (category === 'search' && group.auth_method === 'oauth') group.reason = 'search_transport_unsupported';
     if (category === "agent_triage") {
       if (group.reason === "no_compatible_models") group.reason = "no_compatible_triage_models";
       if (group.auth_method === "oauth" && !supportsOutputCap({ provider: group.provider_code, authMethod: "oauth" })) group.reason = "oauth_max_tokens_unsupported";

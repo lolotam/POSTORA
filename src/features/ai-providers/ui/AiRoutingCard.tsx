@@ -1,9 +1,10 @@
 import { useState } from "react";
+import { useQuery } from '@tanstack/react-query';
 import { ChevronDown, Route } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Select, SelectContent, SelectGroup, SelectLabel, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -18,9 +19,10 @@ const MODES: Record<RoutingMode, string> = {
   user_only: "Use only my keys",
 };
 
-function RoutingForm({ capability, preference, keys, models, routing }: {
+function RoutingForm({ capability, preference, keys, models, routing, grouped }: {
   capability: Capability; preference?: RoutingPreference; keys: KeyStatus[]; models: ProviderModel[];
   routing: ReturnType<typeof useAiRoutingPreferences>;
+  grouped: boolean;
 }) {
   const [mode, setMode] = useState<RoutingMode | "follow">(preference?.mode ?? (capability === "*" ? "postora_only" : "follow"));
   const [provider, setProvider] = useState<ProviderCode | "">(preference?.preferred_provider_code ?? "");
@@ -53,11 +55,17 @@ function RoutingForm({ capability, preference, keys, models, routing }: {
       <div className="grid gap-3 sm:grid-cols-2">
         <Select value={provider} disabled={busy} onValueChange={value => { setProvider(value as ProviderCode); setModel(""); }}>
           <SelectTrigger aria-label={`${capability} provider`}><SelectValue placeholder="Choose connected provider" /></SelectTrigger>
-          <SelectContent>{connected.map(key => <SelectItem key={key.provider_code} value={key.provider_code}>{PROVIDERS[key.provider_code]}</SelectItem>)}</SelectContent>
+          <SelectContent>{grouped ? <>
+            <SelectGroup><SelectLabel>API</SelectLabel>{connected.map(key => <SelectItem key={key.provider_code} value={key.provider_code}>{PROVIDERS[key.provider_code]}</SelectItem>)}</SelectGroup>
+            <SelectGroup><SelectLabel>Auth</SelectLabel>{['Claude subscription', 'OpenAI Codex subscription'].map(name => <SelectItem key={name} value={`disabled:${name}`} disabled>{name} — Managed by POSTORA administrator; use POSTORA providers</SelectItem>)}</SelectGroup>
+          </> : connected.map(key => <SelectItem key={key.provider_code} value={key.provider_code}>{PROVIDERS[key.provider_code]}</SelectItem>)}</SelectContent>
         </Select>
         <Select value={model} disabled={!provider || busy} onValueChange={setModel}>
           <SelectTrigger aria-label={`${capability} model`}><SelectValue placeholder="Choose model" /></SelectTrigger>
-          <SelectContent>{availableModels.map(row => <SelectItem key={row.id} value={row.model_id}>{row.name}</SelectItem>)}</SelectContent>
+          <SelectContent>{grouped ? <>
+            <SelectGroup><SelectLabel>API</SelectLabel>{availableModels.map(row => <SelectItem key={row.id} value={row.model_id}>{row.name}</SelectItem>)}</SelectGroup>
+            <SelectGroup><SelectLabel>Auth</SelectLabel><SelectItem value="disabled:auth" disabled>Managed by POSTORA administrator; use POSTORA providers</SelectItem></SelectGroup>
+          </> : availableModels.map(row => <SelectItem key={row.id} value={row.model_id}>{row.name}</SelectItem>)}</SelectContent>
         </Select>
       </div>
       {!connected.length && <p className="text-sm text-muted-foreground">Connect an AI key above to choose a provider.</p>}
@@ -72,18 +80,20 @@ export function AiRoutingCard({ gateway, userId }: { gateway: AiProvidersGateway
   const routing = useAiRoutingPreferences(gateway, userId);
   const keys = useAiProviderKeys(gateway, userId);
   const models = useAiProviderModels(gateway);
-  const loading = routing.isPending || keys.isPending || models.isPending;
-  const error = routing.isError || keys.isError || models.isError;
+  const policy = useQuery({ queryKey: ['ai-routing-list-policy'], queryFn: () => gateway.routingListPolicy?.() ?? Promise.resolve({ enabled: false }), retry: false });
+  const loading = routing.isPending || keys.isPending || models.isPending || policy.isPending;
+  const error = routing.isError || keys.isError || models.isError || policy.isError;
   const form = (capability: Capability) => {
     const preference = routing.data?.find(row => row.capability === capability);
     // Remount only this capability after its persisted value changes. Background
     // refetches with identical data must not erase unsaved edits in another form.
-    return <RoutingForm key={`${capability}:${JSON.stringify(preference)}`} capability={capability} preference={preference} keys={keys.data ?? []} models={models.data ?? []} routing={routing} />;
+    return <RoutingForm key={`${capability}:${JSON.stringify(preference)}`} capability={capability} preference={preference} keys={keys.data ?? []} models={models.data ?? []} routing={routing} grouped={policy.data?.enabled === true} />;
   };
   return <Card>
     <CardHeader><CardTitle className="flex items-center gap-2"><Route className="h-5 w-5" aria-hidden="true" />Routing</CardTitle></CardHeader>
     <CardContent className="space-y-6">
-      {loading ? <Skeleton className="h-40" aria-label="Loading routing" /> : error ? <div role="alert">Could not load routing settings. <Button variant="outline" onClick={() => { void routing.refetch(); void keys.refetch(); void models.refetch(); }}>Retry</Button></div> : <>
+      {loading ? <Skeleton className="h-40" aria-label="Loading routing" /> : error ? <div role="alert">Could not load routing settings. <Button variant="outline" onClick={() => { void routing.refetch(); void keys.refetch(); void models.refetch(); void policy.refetch(); }}>Retry</Button></div> : <>
+        {policy.data?.enabled && <p className="text-sm text-muted-foreground">API uses your own keys. Auth: Managed by POSTORA administrator; use POSTORA providers.</p>}
         <section aria-label="Global routing">{form("*")}</section>
         {([ ["chat", "Chat (captions & hashtags)"], ["agent", "Agent replies"] ] as const).map(([capability, label]) => <Collapsible key={capability} className="rounded-lg border p-4">
           <CollapsibleTrigger asChild><Button variant="ghost" className="w-full justify-between">{label}<ChevronDown className="h-4 w-4" aria-hidden="true" /></Button></CollapsibleTrigger>

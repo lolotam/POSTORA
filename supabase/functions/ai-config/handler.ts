@@ -15,6 +15,7 @@ import { readCatalogue } from './readCatalogue.ts';
 import { assertProviderUrl } from '../_shared/providerUrlPolicy.ts';
 import { syncModels } from './syncModels.ts';
 import { chatActionDeps, runChatListAction } from './chatListActions.ts';
+import { runUserOverrideAction } from './userOverrideActions.ts';
 
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!;
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
@@ -82,6 +83,11 @@ async function respondToAiConfigRequest(req: Request, signal: AbortSignal): Prom
 
     // Chat owns its authorization and refusal logging; do not perform a second
     // role lookup before entering the application boundary.
+    if (req.method === 'POST' && resolvedAction === 'set-user-override') {
+      const { action: _action, ...input } = body;
+      const response = await runUserOverrideAction(input, supabase, user.id, signal);
+      return new Response(response.body, { status: response.status, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+    }
     if (req.method === 'POST' && (resolvedAction === 'set-text-tier' || resolvedAction === 'inherit-text-category')) {
       const { action: _action, ...input } = body;
       const response = await runTextListAction(resolvedAction, input, textActionDeps(supabase, user.id, signal));

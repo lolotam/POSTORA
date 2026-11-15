@@ -27,7 +27,7 @@ describe("Codex waitlist", () => {
     fireEvent.click(button);
     expect(await screen.findByRole("button", { name: "You're on the list" })).toBeDisabled();
     fireEvent.click(button);
-    expect(invoke).toHaveBeenCalledExactlyOnceWith("user-ai-providers", { body: { action: "join_waitlist", provider_code: "codex" } });
+    expect(invoke).toHaveBeenCalledExactlyOnceWith("user-ai-providers", { body: { action: "join_waitlist", provider_code: "codex" }, timeout: 30_000 });
   });
   it("recognizes an existing row on load", async () => {
     maybeSingle.mockResolvedValue({ data: { user_id: "user-1" }, error: null });
