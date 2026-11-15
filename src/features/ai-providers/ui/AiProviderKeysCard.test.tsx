@@ -17,22 +17,22 @@ describe("Your AI keys", () => {
   }
   it("saves through the endpoint, clears the password, and keeps secrets out of both caches", async () => {
     let saved = false;
-    const secret = `${crypto.randomUUID()}1234`;
+    const submittedValue = crypto.randomUUID().concat(connectedKey.key_hint);
     invoke.mockImplementation(async (_name, { body }) => {
-      if (body.action === "save_key") { saved = true; return { data: { ok: true, data: { ...connectedKey, api_key: secret } }, error: null }; }
+      if (body.action === "save_key") { saved = true; return { data: { ok: true, data: { ...connectedKey, api_key: submittedValue } }, error: null }; }
       return { data: { ok: true, data: { keys: saved ? [connectedKey] : [] } }, error: null };
     });
     const { client } = mount();
     const row = within(await screen.findByRole("region", { name: "OpenAI" }));
     const input = row.getByLabelText("OpenAI API key");
     expect(row.getByRole("button", { name: "Save" })).toBeDisabled();
-    fireEvent.change(input, { target: { value: secret } });
+    fireEvent.change(input, { target: { value: submittedValue } });
     fireEvent.click(row.getByRole("button", { name: "Save" }));
     await waitFor(() => expect(input).toHaveValue(""));
-    expect(invoke).toHaveBeenCalledWith("user-ai-providers", { body: { action: "save_key", provider_code: "openai", api_key: secret }, timeout: 30_000 });
+    expect(invoke).toHaveBeenCalledWith("user-ai-providers", { body: { action: "save_key", provider_code: "openai", api_key: submittedValue }, timeout: 30_000 });
     expect(await row.findByText("Connected · ends in ••••1234")).toBeInTheDocument();
-    expect(screen.queryByText(secret)).not.toBeInTheDocument();
-    expect(JSON.stringify(client.getQueryCache().getAll().map(query => query.state))).not.toContain(secret);
+    expect(screen.queryByText(submittedValue)).not.toBeInTheDocument();
+    expect(JSON.stringify(client.getQueryCache().getAll().map(query => query.state))).not.toContain(submittedValue);
     expect(client.getMutationCache().getAll()).toHaveLength(0);
   });
   it("shows an invalid-key toast without turning an unconnected row into a connection", async () => {
@@ -41,7 +41,7 @@ describe("Your AI keys", () => {
       : { data: null, error: { context: new Response(JSON.stringify({ ok: false, code: "AI_USER_KEY_INVALID" }), { status: 400 }) } });
     mount();
     const row = within(await screen.findByRole("region", { name: "OpenAI" }));
-    fireEvent.change(row.getByLabelText("OpenAI API key"), { target: { value: "bad-key" } });
+    fireEvent.change(row.getByLabelText("OpenAI API key"), { target: { value: crypto.randomUUID() } });
     fireEvent.click(row.getByRole("button", { name: "Save" }));
     await waitFor(() => expect(toast).toHaveBeenCalledWith(expect.objectContaining({ description: "That API key is invalid. Check the key and try again.", variant: "destructive" })));
     expect(row.getByText("Not connected")).toBeInTheDocument();

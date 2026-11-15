@@ -687,6 +687,13 @@ Deno.serve(async (req) => {
     });
     const { data: { user } } = await anon.auth.getUser(bearer);
     if (!user) return unauthorizedResponse();
+    const sandboxLimit = await checkUserRateLimit(admin, "ai-agent-reply-sandbox", user.id, 60, 900);
+    if (!sandboxLimit.allowed) {
+      // Before baseLog exists, like the invalid-key refusal: one row so support can see it.
+      const { error: limitLogError } = await admin.from("system_logs").insert(sandboxRateLimitedLog(user.id));
+      if (limitLogError) console.error("[ai-agent-reply] Sandbox rate-limit log rejected:", limitLogError.message);
+      return rateLimitExceededResponse(sandboxLimit, corsHeaders);
+    }
     if (body.action === 'sandbox-model-policy') {
       try {
         const { data: role, error } = await admin.from('user_roles').select('role').eq('user_id', user.id).eq('role', 'admin').maybeSingle();
@@ -704,13 +711,6 @@ Deno.serve(async (req) => {
         } catch { console.warn({ event: 'sandbox_policy_refusal_log_failed' }); }
         return jsonResponse({ error: 'configuration_read_or_write_failed' }, 503);
       }
-    }
-    const sandboxLimit = await checkUserRateLimit(admin, "ai-agent-reply-sandbox", user.id, 60, 900);
-    if (!sandboxLimit.allowed) {
-      // Before baseLog exists, like the invalid-key refusal: one row so support can see it.
-      const { error: limitLogError } = await admin.from("system_logs").insert(sandboxRateLimitedLog(user.id));
-      if (limitLogError) console.error("[ai-agent-reply] Sandbox rate-limit log rejected:", limitLogError.message);
-      return rateLimitExceededResponse(sandboxLimit, corsHeaders);
     }
     if (!body.inbound_text || typeof body.inbound_text !== "string") {
       return badRequestResponse("Missing field: inbound_text");

@@ -8,7 +8,19 @@ ALTER TABLE public.user_ai_model_overrides
 
 CREATE FUNCTION public.guard_ai_model_override_auth() RETURNS trigger
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $$
+DECLARE affected_user uuid;
 BEGIN
+  -- Direct legacy writes must serialize with the CAS snapshot, including an
+  -- absent row. Lock both identities in stable order if a row changes owner.
+  FOR affected_user IN
+    SELECT DISTINCT id FROM (VALUES
+      (CASE WHEN TG_OP <> 'INSERT' THEN OLD.user_id END),
+      (CASE WHEN TG_OP <> 'DELETE' THEN NEW.user_id END)
+    ) affected(id) WHERE id IS NOT NULL ORDER BY id
+  LOOP
+    PERFORM pg_advisory_xact_lock(hashtextextended('ai-model-override:' || affected_user::text,0));
+  END LOOP;
+  IF TG_OP = 'DELETE' THEN RETURN OLD; END IF;
   -- Marker, NEVER provider/model differences: same-model legacy re-saves are API.
   IF COALESCE(current_setting('postora.auth_aware_override_writer',true),'') <> 'on'
     OR COALESCE(auth.role(),'') <> 'service_role' THEN
@@ -18,7 +30,7 @@ BEGIN
 END;
 $$;
 REVOKE ALL ON FUNCTION public.guard_ai_model_override_auth() FROM PUBLIC, anon, authenticated;
-CREATE TRIGGER guard_ai_model_override_auth BEFORE INSERT OR UPDATE ON public.user_ai_model_overrides
+CREATE TRIGGER guard_ai_model_override_auth BEFORE INSERT OR UPDATE OR DELETE ON public.user_ai_model_overrides
 FOR EACH ROW EXECUTE FUNCTION public.guard_ai_model_override_auth();
 
 -- The boundary calls this only after an authenticated platform-admin check.

@@ -24,13 +24,14 @@ const identity = (provider_code: string, auth_method?: AiAuthMethod) => JSON.str
 const groupName = (auth_method: AiAuthMethod) => auth_method === 'oauth' ? 'Auth' : 'API';
 type TierSave = (providerCode: string, modelId: string, authMethod?: AiAuthMethod) => void;
 
-export function GroupedChatTier({ label, groups, current, onSelect, isSaving }: {
-  label: string; groups: ChatListGroup[]; current: DefaultModel | null; onSelect: TierSave; isSaving?: boolean;
+export function GroupedChatTier({ label, groups, current, onSelect, onDraftChange, isSaving }: {
+  label: string; groups: ChatListGroup[]; current: DefaultModel | null; onSelect: TierSave; onDraftChange?: () => void; isSaving?: boolean;
 }) {
   const savedIdentity = current ? identity(current.provider_code, current.auth_method) : '';
   const [draftGroup, setDraftGroup] = useState(savedIdentity);
   const [choosingModel, setChoosingModel] = useState(false);
-  useEffect(() => { setDraftGroup(savedIdentity); setChoosingModel(false); }, [savedIdentity, current?.model_id]);
+  // Clearing a form's model draft keeps the newly chosen provider/group.
+  useEffect(() => { if (savedIdentity) setDraftGroup(savedIdentity); setChoosingModel(false); }, [savedIdentity, current?.model_id]);
   const selected = groups.find(g => identity(g.provider_code, g.auth_method) === draftGroup);
   const savedGroup = groups.find(g => identity(g.provider_code, g.auth_method) === savedIdentity);
   const savedModel = savedGroup?.models.find(m => m.model_id === current?.model_id);
@@ -48,7 +49,7 @@ export function GroupedChatTier({ label, groups, current, onSelect, isSaving }: 
     <div className="grid gap-2 sm:grid-cols-2">
       <label className="space-y-1 text-xs">Provider / authentication
         <select aria-label={`${label} provider`} className="h-9 w-full rounded-md border bg-background px-2"
-          value={draftGroup} disabled={isSaving} onChange={event => { setDraftGroup(event.target.value); setChoosingModel(true); }}>
+          value={draftGroup} disabled={isSaving} onChange={event => { setDraftGroup(event.target.value); setChoosingModel(true); onDraftChange?.(); }}>
           <option value="">Choose provider...</option>
           {(['api_key', 'oauth'] as const).map(method => <optgroup key={method} label={groupName(method)}>
             {groups.filter(g => g.auth_method === method).map(g => <option key={identity(g.provider_code, method)} value={identity(g.provider_code, method)} disabled={Boolean(g.reason)}>

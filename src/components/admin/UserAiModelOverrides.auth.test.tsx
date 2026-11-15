@@ -72,6 +72,27 @@ describe('admin override grouped contract', () => {
     expect(writes[1].expected).toMatchObject({ model: 'concurrent', auth_method: 'oauth', user_id: user.id });
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
   });
+  it.each(['api_key', 'oauth'] as const)('requires a new model after switching away from %s', async method => {
+    const writes = setup();
+    renderMinimal(<UserAiModelOverrides />);
+    await screen.findByText('No user AI model overrides configured.');
+    const save = await choose(method);
+    expect(save).toBeEnabled();
+    const next = method === 'api_key' ? 'oauth' : 'api_key';
+    fireEvent.change(screen.getByRole('combobox', { name: 'User override provider' }), { target: { value: JSON.stringify(['claude', next]) } });
+    expect(screen.getByRole('combobox', { name: 'User override model' })).toHaveValue('');
+    expect(save).toBeDisabled();
+    fireEvent.click(save);
+    expect(writes).toHaveLength(0);
+    expect(screen.getByRole('combobox', { name: 'User override provider' })).toHaveValue(JSON.stringify(['claude', next]));
+    fireEvent.change(screen.getByRole('combobox', { name: 'User override model' }), { target: { value: 'same' } });
+    fireEvent.click(save);
+    await waitFor(() => expect(writes).toHaveLength(1));
+    expect(writes[0].value).toMatchObject({ provider_code: 'claude', model_id: 'same' });
+    if (next === 'oauth') expect(writes[0].value).toHaveProperty('auth_method', 'oauth');
+    else expect(writes[0].value).not.toHaveProperty('auth_method');
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+  });
   it('does not turn a failed override read into an empty successful list', async () => {
     setup(false, true);
     renderMinimal(<UserAiModelOverrides />);

@@ -5,6 +5,9 @@ interface DbResult {
   data: unknown;
   error: unknown;
 }
+interface AbortableResult extends PromiseLike<DbResult> {
+  abortSignal?(signal: AbortSignal): PromiseLike<DbResult>;
+}
 interface Query extends PromiseLike<DbResult> {
   abortSignal?(signal: AbortSignal): Query;
   eq(column: string, value: unknown): Query;
@@ -16,7 +19,7 @@ export interface AiRoutingAdmin {
     select(columns: string): Query;
     update(values: Record<string, unknown>): Query;
   };
-  rpc(name: string, args: Record<string, unknown>): PromiseLike<DbResult>;
+  rpc(name: string, args: Record<string, unknown>): AbortableResult;
 }
 export interface UserAiRoute {
   mode: "postora_only" | "user_first" | "user_only";
@@ -38,16 +41,19 @@ export async function resolveUserAiRoute(
   admin: AiRoutingAdmin,
   userId: string,
   capability: "chat" | "agent",
+  signal?: AbortSignal,
 ): Promise<UserAiRoute> {
-  const global = await admin.from("app_settings").select("value").eq(
+  const bounded = (query: Query) => signal && query.abortSignal ? query.abortSignal(signal) : query;
+  signal?.throwIfAborted();
+  const global = await bounded(admin.from("app_settings").select("value").eq(
     "key",
     "feature_byok_providers",
-  ).maybeSingle();
+  )).maybeSingle();
   if (global.error) throw new Error("AI feature flag read failed");
-  const override = await admin.from("user_feature_overrides").select(
+  const override = await bounded(admin.from("user_feature_overrides").select(
     "enabled, expires_at",
   )
-    .eq("user_id", userId).eq("feature_key", "feature_byok_providers")
+    .eq("user_id", userId).eq("feature_key", "feature_byok_providers"))
     .maybeSingle();
   if (override.error) throw new Error("AI feature override read failed");
   const overrideRow = row(override.data);
@@ -68,11 +74,11 @@ export async function resolveUserAiRoute(
     };
   }
 
-  const preferences = await admin.from("user_ai_routing_preferences")
+  const preferences = await bounded(admin.from("user_ai_routing_preferences")
     .select(
       "capability, mode, preferred_provider_code, preferred_model_id, allow_platform_fallback",
     )
-    .eq("user_id", userId).in("capability", [capability, "*"]);
+    .eq("user_id", userId).in("capability", [capability, "*"]));
   if (preferences.error) throw new Error("AI routing preference read failed");
   if (!Array.isArray(preferences.data)) {
     throw new Error("Invalid AI routing preferences response");
@@ -109,10 +115,11 @@ export async function resolveUserAiRoute(
   // that updated_at; a replacement that commits later bumps it and can never
   // be invalidated by the old key's rejection. (Two statements, or a Deno
   // clock compared with <=, both race the replacement transaction.)
-  const snapshot = await admin.rpc("get_user_ai_provider_key_snapshot", {
+  const snapshotQuery = admin.rpc("get_user_ai_provider_key_snapshot", {
     p_user_id: userId,
     p_provider_code: provider,
   });
+  const snapshot = await (signal && snapshotQuery.abortSignal ? snapshotQuery.abortSignal(signal) : snapshotQuery);
   if (snapshot.error) throw new Error("AI provider key read failed");
   const snapshotRows = Array.isArray(snapshot.data)
     ? snapshot.data

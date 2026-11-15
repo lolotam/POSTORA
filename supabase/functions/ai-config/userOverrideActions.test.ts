@@ -18,7 +18,13 @@ for (const scenario of ['saved', 'api', 'not_admin', 'strict_auth', 'injected_ke
       if (table === 'user_roles') return Response.json(scenario === 'not_admin' ? null : { role: 'admin' });
       if (table === 'system_logs') { logs.push(JSON.parse(String(init?.body))); return Response.json([]); }
       if (table === 'write_ai_model_override') { writes.push(JSON.parse(String(init?.body))); return Response.json(scenario !== 'conflict'); }
-      if (table === 'system_settings') return Response.json(['feature_ai_text_auth_lists', 'feature_ai_provider_oauth'].map(key => ({ key, value: scenario !== 'flag_off' })));
+      if (table === 'system_settings') {
+        if (url.searchParams.get('select') === 'value') return Response.json({ value: false });
+        if (url.searchParams.get('key')?.includes('default_ai_model_')) return Response.json([{ key: 'default_ai_model_chat', value: { provider_code: 'claude', model_id: model } }]);
+        return Response.json(['feature_ai_text_auth_lists', 'feature_ai_provider_oauth'].map(key => ({ key, value: scenario !== 'flag_off' })));
+      }
+      if (table === 'app_settings') return Response.json({ value: false });
+      if (table === 'user_feature_overrides') return Response.json(null);
       if (table === 'ai_providers') return Response.json([{ id: 'p', provider_code: 'claude', name: 'Claude', is_active: scenario !== 'inactive' }]);
       if (table === 'provider_api_keys') return Response.json({ api_key: crypto.randomUUID() });
       if (table === 'user_ai_model_overrides') return scenario === 'schema_missing' ? Response.json({ message: 'missing migration' }, { status: 400 }) : Response.json([]);
@@ -42,4 +48,50 @@ for (const scenario of ['saved', 'api', 'not_admin', 'strict_auth', 'injected_ke
     assertEquals(logs.length, success ? 0 : 1);
     assertEquals(JSON.stringify(body).includes('private'), false);
   });
+}
+
+for (const category of ['caption', 'hashtags'] as const) {
+  for (const scenario of ['displaced', 'inherited', 'claude', 'api', 'user_first', 'user_only_missing', 'expired', 'delete', 'read_failed'] as const) {
+    Deno.test(`override cap validation ${category}/${scenario} checks the composed three tiers before writing`, async () => {
+      let writes = 0;
+      const capTier = (provider_code: string) => ({ provider_code, model_id: provider_code === 'openai' ? 'gpt-5.4' : model, auth_method: 'oauth' });
+      const rows = [
+        { key: 'feature_ai_category_text_ladders', value: true },
+        { key: `default_ai_model_${category === 'caption' ? 'hashtags' : 'caption'}`, value: capTier('claude') },
+        ...['', '_fallback', '_fallback_2'].map((suffix, i) => ({ key: `default_ai_model_${scenario === 'inherited' ? 'chat' : category}${suffix}`, value: capTier(i === 2 ? 'claude' : 'openai') })),
+      ];
+      const db = createClient('https://fixture.invalid', crypto.randomUUID(), { global: { fetch: async (input, init) => {
+        assert(init?.signal, 'all reads and writes share a bounded request');
+        const url = new URL(String(input));
+        const table = url.pathname.split('/').at(-1);
+        if (table === 'user_roles') return Response.json({ role: 'admin' });
+        if (table === 'system_logs') return Response.json(null);
+        if (table === 'write_ai_model_override') { writes++; return Response.json(true); }
+        if (table === 'system_settings') {
+          if (scenario === 'read_failed' && url.searchParams.get('key')?.includes(category)) return Response.json({ message: 'private SQL' }, { status: 500 });
+          if (url.searchParams.get('select') === 'value') return Response.json({ value: true });
+          if (url.searchParams.has('or')) return Response.json(rows.filter(row => row.key.includes('chat')));
+          if (url.searchParams.get('key')?.includes('default_ai_model_')) return Response.json(rows.filter(row => url.searchParams.get('key')!.includes(row.key)));
+          return Response.json(['feature_ai_text_auth_lists', 'feature_ai_provider_oauth', 'feature_ai_category_text_ladders'].map(key => ({ key, value: true })));
+        }
+        if (table === 'ai_providers') return Response.json(['openai', 'claude'].map(provider_code => ({ id: provider_code, provider_code, name: provider_code, is_active: true })));
+        if (table === 'provider_api_keys') return Response.json({ api_key: crypto.randomUUID() });
+        if (table === 'user_ai_model_overrides') return Response.json([]);
+        if (table === 'ai_models') return Response.json(Number(url.searchParams.get('offset')) === 0 ? [{ id: 'api', provider_id: 'openai', model_id: 'gpt-5.4', name: 'API', is_active: true, capabilities: ['chat'], auth_method: 'api_key' }] : []);
+        if (table === 'get_ai_oauth_statuses') return Response.json(['claude', 'openai'].map(provider_code => ({ provider_code, status: 'connected' })));
+        if (table === 'app_settings') return Response.json({ value: true });
+        if (table === 'user_feature_overrides') return Response.json(null);
+        if (table === 'user_ai_routing_preferences') return Response.json([{ capability: 'chat', mode: scenario === 'user_first' ? 'user_first' : scenario === 'user_only_missing' ? 'user_only' : 'postora_only', allow_platform_fallback: true, preferred_provider_code: 'openai', preferred_model_id: 'own' }]);
+        if (table === 'get_user_ai_provider_key_snapshot') return Response.json(scenario === 'user_only_missing' ? [] : [{ api_key: crypto.randomUUID(), updated_at: new Date().toISOString() }]);
+        throw new Error(`Unexpected cap validation read ${table}`);
+      } } });
+      const value = scenario === 'delete' ? null : { ...capTier(scenario === 'claude' ? 'claude' : 'openai'),
+        ...(scenario === 'api' ? { auth_method: 'api_key' } : {}), expires_at: scenario === 'expired' ? '2000-01-01T00:00:00Z' : null, reason: null };
+      const response = await runUserOverrideAction({ user_id, value, expected: null }, db, actor, AbortSignal.timeout(2000));
+      const success = ['claude', 'api', 'user_first', 'expired', 'delete'].includes(scenario);
+      assertEquals(await response.json(), success ? { success: true } : { error: scenario === 'read_failed' ? 'configuration_read_or_write_failed' : 'ai_output_cap_unsupported' });
+      assertEquals(response.status, success ? 200 : scenario === 'read_failed' ? 503 : 409);
+      assertEquals(writes, success ? 1 : 0);
+    });
+  }
 }

@@ -316,6 +316,7 @@ export function UserAiModelOverrides() {
                 {grouped ? <GroupedChatTier label="User override" groups={policy.data?.enabled ? policy.data.groups : []}
                   current={selectedModel ? { provider_code: selectedProvider, model_id: selectedModel, ...(selectedAuth === 'oauth' ? { auth_method: selectedAuth } : {}) } : null}
                   isSaving={addOverrideMutation.isPending || loadingOverrides}
+                  onDraftChange={() => setSelectedModel('')}
                   onSelect={(provider, model, auth) => { setSelectedProvider(provider); setSelectedModel(model); setSelectedAuth(auth ?? 'api_key'); }} /> : <>
                 {/* Provider Selection */}
                 <div className="space-y-2">
