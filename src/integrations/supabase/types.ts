@@ -320,7 +320,10 @@ export type Database = {
           outcomes: Json
           platform: string
           policy_digest: string
+          queued_count: number
+          refused_count: number
           updated_at: string
+          visited_count: number
         }
         Insert: {
           complete?: boolean
@@ -331,7 +334,10 @@ export type Database = {
           outcomes?: Json
           platform: string
           policy_digest: string
+          queued_count?: number
+          refused_count?: number
           updated_at?: string
+          visited_count?: number
         }
         Update: {
           complete?: boolean
@@ -342,9 +348,58 @@ export type Database = {
           outcomes?: Json
           platform?: string
           policy_digest?: string
+          queued_count?: number
+          refused_count?: number
           updated_at?: string
+          visited_count?: number
         }
         Relationships: []
+      }
+      fb_analytics_sweep_outcomes: {
+        Row: {
+          attempt_ids: string[]
+          dispatch_round: number
+          due_on: string
+          job_id: string | null
+          outcome: string
+          platform: string
+          policy_digest: string
+          reason: string | null
+          social_account_id: string
+          updated_at: string
+        }
+        Insert: {
+          attempt_ids?: string[]
+          dispatch_round: number
+          due_on: string
+          job_id?: string | null
+          outcome: string
+          platform?: string
+          policy_digest: string
+          reason?: string | null
+          social_account_id: string
+          updated_at?: string
+        }
+        Update: {
+          attempt_ids?: string[]
+          dispatch_round?: number
+          due_on?: string
+          job_id?: string | null
+          outcome?: string
+          platform?: string
+          policy_digest?: string
+          reason?: string | null
+          social_account_id?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "fb_analytics_sweep_outcomes_platform_due_on_policy_digest_fkey"
+            columns: ["platform", "due_on", "policy_digest"]
+            referencedRelation: "meta_analytics_enqueue_sweeps"
+            referencedColumns: ["platform", "due_on", "policy_digest"]
+          },
+        ]
       }
       fb_analytics_captures: {
         Row: {
@@ -12284,13 +12339,28 @@ export type Database = {
         }
         Returns: Json
       }
-      read_fb_analytics_admission_credential: {
-        Args: {
-          p_account_id: string
-          p_expected_authority?: Json | null
-        }
-        Returns: Json
+      fb_analytics_normalize_policy: { Args: { p_policy: Json }; Returns: Json }
+      meta_analytics_dispatch_next_account: {
+        Args: { p_after: string; p_platform: string; p_policy: Json }
+        Returns: string
       }
+      fb_analytics_require_usable_credential: {
+        Args: { p_authority: Json; p_owner: string }
+        Returns: undefined
+      }
+      read_fb_analytics_admission_credential:
+        | {
+            Args: { p_account_id: string; p_expected_authority?: Json }
+            Returns: Json
+          }
+        | {
+            Args: {
+              p_account_id: string
+              p_expected_authority: Json
+              p_expected_owner: string
+            }
+            Returns: Json
+          }
       read_fb_analytics_collection_credential: {
         Args: {
           p_job_id: string

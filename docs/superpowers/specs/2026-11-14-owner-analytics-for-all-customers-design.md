@@ -336,11 +336,11 @@ SELECT social_account_id,state,granted_scopes,observed_at,source_ref,
 FROM public.fb_analytics_permission_observations
 WHERE user_id='1870eed2-8353-4991-86d8-1d92c429dd3e';
 SELECT s.due_on,s.policy_digest,s.dispatch_round,s.complete,s.last_account_id,s.updated_at,
- e.key AS account_id,e.value->>'outcome' AS outcome,e.value->>'reason' AS reason,
- e.value->>'job_id' AS job_id
+ e.social_account_id AS account_id,e.outcome,e.reason,e.job_id
 FROM public.meta_analytics_enqueue_sweeps s
-LEFT JOIN LATERAL jsonb_each(s.outcomes) e ON e.key IN (
- '6f999090-58f5-42af-a58d-57700d3a4d3a','06168394-6e00-4c17-a17d-86d10e86335b')
+LEFT JOIN public.fb_analytics_sweep_outcomes e
+ ON (e.platform,e.due_on,e.policy_digest,e.dispatch_round)=(s.platform,s.due_on,s.policy_digest,s.dispatch_round)
+ AND e.social_account_id IN ('6f999090-58f5-42af-a58d-57700d3a4d3a','06168394-6e00-4c17-a17d-86d10e86335b')
 WHERE s.platform='facebook' AND s.due_on>=current_date-7
 ORDER BY s.due_on DESC,s.updated_at DESC LIMIT 50;
 ```

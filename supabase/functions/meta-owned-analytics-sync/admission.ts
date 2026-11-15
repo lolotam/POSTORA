@@ -6,12 +6,12 @@ export type AdmissionResult = { status: "complete" } | { status: "refused"; reas
 
 export async function admitOwnedAnalyticsAccount(input: {
   platform: OwnedAnalyticsPlatform; accountId: string; store: OwnedAnalyticsStore;
-  app: AdmissionApp; deadline: AnalyticsWorkerDeadline; fetch?: typeof fetch;
+  app: AdmissionApp; deadline: AnalyticsWorkerDeadline; fetch?: typeof fetch; ownerId?: string;
 }): Promise<AdmissionResult> {
-  const credential = await input.store.read(input.platform, input.accountId, null);
+  const credential = await input.store.read(input.platform, input.accountId, null, input.ownerId);
   const verified = await verifyAdmissionPermission({ platform: input.platform, credential, app: input.app,
     signal: input.deadline.signal, startedAt: input.deadline.startedAt, fetch: input.fetch,
-    beforeRequest: async () => { await input.store.read(input.platform, credential.account_id, credential.authority); } });
+    beforeRequest: async () => { await input.store.read(input.platform, credential.account_id, credential.authority, credential.user_id); } });
   if (!verified.ok) return { status: "refused", reason: verified.reason };
   await input.store.observe(input.platform, credential, verified.scopes, verified.observedAt);
   const required = OWNED_ANALYTICS_REQUIRED_SCOPES[input.platform];

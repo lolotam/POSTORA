@@ -148,8 +148,9 @@ BEGIN
   '{"version":2,"mode":"all","account_ids":[]}'::jsonb
  ] LOOP
   result:=pg_temp.operator_set('facebook',a,policy);
-  ASSERT result->>'reason_code'='facebook_v2_evaluator_not_installed';
-  ASSERT pg_temp.operator_get('facebook')=a,'no v2 stored before Phase 6';
+  ASSERT result->>'ok'='true','Phase 6 installs the complete v2 evaluator';
+  a:=pg_temp.operator_get('facebook');
+  ASSERT a->'policy'=policy,'v2 mode readback must match the accepted write';
  END LOOP;
  FOREACH policy IN ARRAY ARRAY[
   '{"version":2,"mode":"all","account_ids":["00000000-0000-4000-8000-000000000001"]}'::jsonb,
@@ -207,8 +208,10 @@ BEGIN
  END LOOP;
  BEGIN UPDATE public.app_settings SET value='{}' WHERE key='collection_instagram_rollout_policy'; RAISE EXCEPTION 'malformed admin write accepted';
  EXCEPTION WHEN raise_exception THEN ASSERT SQLERRM LIKE 'IG_ROLLOUT_POLICY_INVALID:%'; END;
- BEGIN UPDATE public.app_settings SET value='{"version":2,"mode":"all","account_ids":[]}' WHERE key='collection_facebook_analytics_policy'; RAISE EXCEPTION 'admin v2 write accepted';
- EXCEPTION WHEN feature_not_supported THEN ASSERT SQLERRM='facebook_v2_evaluator_not_installed'; END;
+ UPDATE public.app_settings SET value='{"version":2,"mode":"all","account_ids":[]}' WHERE key='collection_facebook_analytics_policy';
+ ASSERT FOUND,'the existing validated admin update path accepts installed v2';
+ BEGIN UPDATE public.app_settings SET value='{"version":2,"mode":"all","account_ids":["02170000-0000-4000-8000-000000000001"]}' WHERE key='collection_facebook_analytics_policy';
+  RAISE EXCEPTION 'malformed admin all accepted'; EXCEPTION WHEN invalid_parameter_value THEN NULL; END;
 END;$admin$;
 RESET ROLE;
 SET LOCAL request.jwt.claim.sub='';
