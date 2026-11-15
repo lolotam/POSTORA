@@ -29,7 +29,9 @@ export async function loadChatPolicySnapshot(admin: SupabaseClient, flags: ChatP
   ]));
   // The shared catalogue reader preserves provider-specific columns. This seam
   // projects only non-secret fields needed by eligibility and the admin UI.
-  const textFloorAvailable = flags.feature_ai_category_text_ladders && Boolean((await resolvePlatformApiKey(admin as unknown as AiRoutingAdmin, "google", signal)).trim());
+  // Chat's inherited floor also serves Caption/Hashtags when category ladders
+  // are disabled. Credential readiness must not depend on that picker flag.
+  const textFloorAvailable = Boolean((await resolvePlatformApiKey(admin as unknown as AiRoutingAdmin, "google", signal)).trim());
   const toolRegistry = { claude: getModels("anthropic").filter(model => model.api === "anthropic-messages").map(model => model.id) };
   return { flags, providers: providers.data ?? [], settings: settings.data ?? [], statuses: statuses.data ?? [], apiKeys, registry, toolRegistry, textFloorAvailable,
     models: [...catalogue.models, ...catalogue.oauthModels] as unknown as ChatPolicySnapshot["models"] };

@@ -6,21 +6,24 @@ ALTER TABLE public.user_ai_model_overrides
   ADD COLUMN auth_method text NOT NULL DEFAULT 'api_key'
   CONSTRAINT user_ai_model_overrides_auth_method_check CHECK (auth_method IN ('api_key','oauth'));
 
+-- One global order for every writer: statement advisory lock, then tuple locks.
+-- A per-user ROW trigger is too late for UPDATE/DELETE: PostgreSQL already
+-- owns the tuple before it runs. Serialize these infrequent admin writes at
+-- statement entry, including bulk writes and owner changes, before any tuple.
+CREATE FUNCTION public.lock_ai_model_overrides() RETURNS trigger
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $$
+BEGIN
+  PERFORM pg_advisory_xact_lock(hashtextextended('ai-model-overrides',0));
+  RETURN NULL;
+END;
+$$;
+REVOKE ALL ON FUNCTION public.lock_ai_model_overrides() FROM PUBLIC, anon, authenticated;
+CREATE TRIGGER lock_ai_model_overrides BEFORE INSERT OR UPDATE OR DELETE ON public.user_ai_model_overrides
+FOR EACH STATEMENT EXECUTE FUNCTION public.lock_ai_model_overrides();
+
 CREATE FUNCTION public.guard_ai_model_override_auth() RETURNS trigger
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $$
-DECLARE affected_user uuid;
 BEGIN
-  -- Direct legacy writes must serialize with the CAS snapshot, including an
-  -- absent row. Lock both identities in stable order if a row changes owner.
-  FOR affected_user IN
-    SELECT DISTINCT id FROM (VALUES
-      (CASE WHEN TG_OP <> 'INSERT' THEN OLD.user_id END),
-      (CASE WHEN TG_OP <> 'DELETE' THEN NEW.user_id END)
-    ) affected(id) WHERE id IS NOT NULL ORDER BY id
-  LOOP
-    PERFORM pg_advisory_xact_lock(hashtextextended('ai-model-override:' || affected_user::text,0));
-  END LOOP;
-  IF TG_OP = 'DELETE' THEN RETURN OLD; END IF;
   -- Marker, NEVER provider/model differences: same-model legacy re-saves are API.
   IF COALESCE(current_setting('postora.auth_aware_override_writer',true),'') <> 'on'
     OR COALESCE(auth.role(),'') <> 'service_role' THEN
@@ -30,7 +33,7 @@ BEGIN
 END;
 $$;
 REVOKE ALL ON FUNCTION public.guard_ai_model_override_auth() FROM PUBLIC, anon, authenticated;
-CREATE TRIGGER guard_ai_model_override_auth BEFORE INSERT OR UPDATE OR DELETE ON public.user_ai_model_overrides
+CREATE TRIGGER guard_ai_model_override_auth BEFORE INSERT OR UPDATE ON public.user_ai_model_overrides
 FOR EACH ROW EXECUTE FUNCTION public.guard_ai_model_override_auth();
 
 -- The boundary calls this only after an authenticated platform-admin check.
@@ -47,7 +50,8 @@ BEGIN
     RAISE EXCEPTION 'Admin required' USING ERRCODE='42501';
   END IF;
   IF p_user_id IS NULL OR NOT EXISTS(SELECT 1 FROM auth.users WHERE id=p_user_id) THEN RAISE EXCEPTION 'Invalid override user'; END IF;
-  PERFORM pg_advisory_xact_lock(hashtextextended('ai-model-override:' || p_user_id::text,0));
+  -- Same lock as the BEFORE STATEMENT trigger, acquired before snapshot/tuples.
+  PERFORM pg_advisory_xact_lock(hashtextextended('ai-model-overrides',0));
   SELECT to_jsonb(o) INTO observed FROM public.user_ai_model_overrides o WHERE user_id=p_user_id;
   IF observed IS DISTINCT FROM p_expected THEN RETURN false; END IF;
   IF p_value IS NULL OR p_value='null'::jsonb THEN

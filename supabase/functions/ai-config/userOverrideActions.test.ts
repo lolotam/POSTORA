@@ -50,6 +50,88 @@ for (const scenario of ['saved', 'api', 'not_admin', 'strict_auth', 'injected_ke
   });
 }
 
+// Round 2: the runtime floor serves inherited Chat and category ladders alike.
+for (const enabled of [false, true]) {
+  for (const customized of [false, true]) {
+    for (const available of [false, true]) {
+      for (const choice of ['oauth', 'floor', 'displaced'] as const) {
+        Deno.test(`override floor enabled=${enabled} customized=${customized} available=${available} choice=${choice}`, async () => {
+          const previous = Deno.env.get('GOOGLE_AI_STUDIO_KEY');
+          Deno.env.delete('GOOGLE_AI_STUDIO_KEY');
+          let writes = 0;
+          const signal = AbortSignal.timeout(2000);
+          const codex = { provider_code: 'openai', model_id: 'gpt-5.4', auth_method: 'oauth' };
+          const rows = ['chat', ...(customized ? ['caption', 'hashtags'] : [])].flatMap(category => [
+            { key: `default_ai_model_${category}`, value: codex },
+            ...(choice === 'displaced' ? [{ key: `default_ai_model_${category}_fallback`, value: codex }] : []),
+          ]);
+          const db = createClient('https://fixture.invalid', crypto.randomUUID(), { global: { fetch: async (input, init) => {
+            assertEquals(init?.signal, signal);
+            const url = new URL(String(input));
+            const table = url.pathname.split('/').at(-1);
+            if (table === 'user_roles') return Response.json({ role: 'admin' });
+            if (table === 'system_logs') return Response.json(null);
+            if (table === 'write_ai_model_override') { writes++; return Response.json(true); }
+            if (table === 'system_settings') {
+              if (url.searchParams.get('select') === 'value') return Response.json({ value: enabled });
+              if (url.searchParams.has('or')) return Response.json(rows.filter(row => row.key.includes('chat')));
+              const keys = url.searchParams.get('key');
+              if (keys?.includes('default_ai_model_')) return Response.json(rows.filter(row => keys.includes(row.key)));
+              return Response.json(['feature_ai_text_auth_lists', 'feature_ai_provider_oauth', 'feature_ai_category_text_ladders']
+                .map(key => ({ key, value: key === 'feature_ai_category_text_ladders' ? enabled : true })));
+            }
+            if (table === 'ai_providers') return Response.json(['openai', 'google'].map(provider_code => ({ id: provider_code, provider_code, name: provider_code, is_active: true })));
+            if (table === 'provider_api_keys') return Response.json(!available && url.searchParams.get('provider_code') === 'eq.gemini' ? null : { api_key: crypto.randomUUID() });
+            if (table === 'user_ai_model_overrides') return Response.json([]);
+            if (table === 'ai_models') return Response.json(Number(url.searchParams.get('offset')) === 0
+              ? [{ id: 'floor', provider_id: 'google', model_id: 'gemini-3-flash-preview', name: 'Floor', is_active: true, capabilities: ['chat'], auth_method: 'api_key' }] : []);
+            if (table === 'get_ai_oauth_statuses') return Response.json([{ provider_code: 'openai', status: 'connected' }]);
+            if (table === 'app_settings') return Response.json({ value: false });
+            if (table === 'user_feature_overrides') return Response.json(null);
+            throw new Error(`Unexpected floor read ${table}`);
+          } } });
+          try {
+            const value = { ...(choice === 'floor' ? { provider_code: 'google', model_id: 'gemini-3-flash-preview', auth_method: 'api_key' } : codex), expires_at: null, reason: null };
+            const response = await runUserOverrideAction({ user_id, expected: null, value }, db, actor, signal);
+            const usable = available && choice !== 'displaced';
+            assertEquals(await response.json(), usable ? { success: true } : { error: 'ai_output_cap_unsupported' });
+            assertEquals(response.status, usable ? 200 : 409);
+            assertEquals(writes, usable ? 1 : 0);
+          } finally {
+            if (previous !== undefined) Deno.env.set('GOOGLE_AI_STUDIO_KEY', previous);
+          }
+        });
+      }
+    }
+  }
+}
+
+for (const outcome of ['deleted', 'conflict', 'not_admin'] as const) {
+  Deno.test(`override removal ${outcome} never reads unavailable routing or readiness`, async () => {
+    const reads: string[] = [];
+    const writes: Array<Record<string, unknown>> = [];
+    const signal = AbortSignal.timeout(1000);
+    const expected = { id: crypto.randomUUID(), auth_method: 'oauth' };
+    const db = createClient('https://fixture.invalid', crypto.randomUUID(), { global: { fetch: async (input, init) => {
+      const table = new URL(String(input)).pathname.split('/').at(-1)!;
+      reads.push(table);
+      if (table === 'user_roles') return Response.json(outcome === 'not_admin' ? null : { role: 'admin' });
+      if (table === 'system_logs') return Response.json(null);
+      if (table === 'write_ai_model_override') {
+        assertEquals(init?.signal, signal);
+        writes.push(JSON.parse(String(init?.body)));
+        return Response.json(outcome !== 'conflict');
+      }
+      return Response.json({ message: 'routing and readiness unavailable' }, { status: 503 });
+    } } });
+    const response = await runUserOverrideAction({ user_id, expected, value: null }, db, actor, signal);
+    assertEquals(await response.json(), outcome === 'deleted' ? { success: true } : { error: outcome === 'conflict' ? 'configuration_changed_retry' : 'not_admin' });
+    assertEquals(response.status, outcome === 'deleted' ? 200 : outcome === 'conflict' ? 409 : 403);
+    assertEquals(reads, outcome === 'not_admin' ? ['user_roles', 'system_logs'] : outcome === 'deleted' ? ['user_roles', 'write_ai_model_override'] : ['user_roles', 'write_ai_model_override', 'system_logs']);
+    assertEquals(writes, outcome === 'not_admin' ? [] : [{ p_user_id: user_id, p_expected: expected, p_value: null, p_actor: actor }]);
+  });
+}
+
 for (const category of ['caption', 'hashtags'] as const) {
   for (const scenario of ['displaced', 'inherited', 'claude', 'api', 'user_first', 'user_only_missing', 'expired', 'delete', 'read_failed'] as const) {
     Deno.test(`override cap validation ${category}/${scenario} checks the composed three tiers before writing`, async () => {

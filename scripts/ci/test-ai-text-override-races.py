@@ -62,7 +62,7 @@ class Session:
         for pipe in (self.process.stdin, self.process.stdout):
             try:
                 pipe.close()
-            except BrokenPipeError:
+            except OSError:
                 pass
 
 
@@ -121,6 +121,32 @@ VALUES({literal(provider)},'Override race','https://fixture.invalid','TEST_FIXTU
 INSERT INTO public.ai_models(provider_id,model_id,name,capabilities,is_active,auth_method)
 SELECT id,'api-model','Race',ARRAY['chat'],true,'api_key' FROM public.ai_providers WHERE provider_code={literal(provider)};
 """)
+        # Pause at the real CAS writer's advisory-lock boundary, before it
+        # touches the existing tuple. A row trigger would take the reverse
+        # order: legacy tuple first, then advisory, deadlocking the next RPC.
+        advisory = observer.command("SELECT substring(pg_get_functiondef('public.write_ai_model_override(uuid,jsonb,jsonb,uuid)'::regprocedure), 'PERFORM (pg_advisory_xact_lock[^;]+);');")[-1]
+        assert advisory.startswith('pg_advisory_xact_lock('), 'CAS serialization boundary must exist'
+        advisory = advisory.replace('p_user_id', literal(user) + '::uuid')
+        for operation in ['update', 'delete']:
+            for delete in [False, True]:
+                observer.command(f'DELETE FROM public.user_ai_model_overrides WHERE {where};')
+                assert observer.command(rpc('null', False))[-1] == 't'
+                expected = snapshot()
+                cas, legacy = session(), session()
+                cas.command('BEGIN; SELECT ' + advisory + ';')
+                sql = (f"UPDATE public.user_ai_model_overrides SET reason='legacy' WHERE {where};" if operation == 'update'
+                       else f'DELETE FROM public.user_ai_model_overrides WHERE {where};')
+                pending = legacy.start(sql)
+                wait_for_lock(legacy, cas)
+                assert cas.command(rpc(expected, delete))[-1] == 't', 'CAS must complete without a tuple/advisory deadlock'
+                cas.command('COMMIT;')
+                legacy.finish(pending)
+                final = json.loads(snapshot())
+                assert final is None if delete or operation == 'delete' else final['reason'] == 'legacy'
+                cas.close()
+                legacy.close()
+                print(f'PASS CAS {"delete" if delete else "save"} locks first; legacy {operation} completes without deadlock')
+
         for operation in ['insert', 'update', 'delete']:
             for delete in [False, True]:
                 observer.command(f'DELETE FROM public.user_ai_model_overrides WHERE {where};')
