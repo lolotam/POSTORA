@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useRef, useCallback } from "react";
+import { useState, useEffect, useMemo, useRef, useCallback, useLayoutEffect } from "react";
 import { useSearchParams } from "react-router-dom";
 import { Platform } from "@/lib/types";
 import { useAuth } from "@/hooks/useAuth";
@@ -319,7 +319,9 @@ export function usePostForm() {
   const [editReloadNonce, setEditReloadNonce] = useState(0);
   const editRequestRef = useRef(0);
   const editContextRef = useRef({ preferredTimezone: profile?.preferred_timezone, toast });
-  editContextRef.current = { preferredTimezone: profile?.preferred_timezone, toast };
+  useLayoutEffect(() => {
+    editContextRef.current = { preferredTimezone: profile?.preferred_timezone, toast };
+  }, [profile?.preferred_timezone, toast]);
 
   useEffect(() => {
     if (!editPostId) {

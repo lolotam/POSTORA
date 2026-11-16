@@ -1,8 +1,8 @@
-import type { ReactNode } from "react";
+import { startTransition, Suspense, type ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { MemoryRouter, Route, Routes, useNavigate } from "react-router-dom";
+import { MemoryRouter, Route, Routes, useLocation, useNavigate } from "react-router-dom";
 import { createInstance } from "i18next";
 import { I18nextProvider } from "react-i18next";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -177,6 +177,50 @@ beforeEach(() => {
 });
 
 describe("CreatePost media ordering and saved completion", () => {
+  it("keeps completion on the committed route when another navigation render suspends", async () => {
+    let releaseEnqueue!: () => void;
+    let releaseNavigation!: () => void;
+    const enqueueWait = new Promise<void>((resolve) => { releaseEnqueue = resolve; });
+    const navigationWait = new Promise<void>((resolve) => { releaseNavigation = resolve; });
+    let navigationBlocked = true;
+    fixture.enqueue.mockImplementation(async () => { await enqueueWait; return { accepted: true }; });
+    const reachedSuspension = vi.fn();
+    function Navigation() {
+      const navigate = useNavigate();
+      return <button type="button" onClick={() => startTransition(() => navigate("/post?suspend=1"))}>Suspend navigation</button>;
+    }
+    function NavigationResource() {
+      const location = useLocation();
+      if (navigationBlocked && location.search.includes("suspend=1")) {
+        reachedSuspension();
+        throw navigationWait;
+      }
+      return null;
+    }
+    const RouterWrapper = wrapper("/post");
+    const user = userEvent.setup();
+    const { unmount } = render(<><Navigation /><CreatePost /><NavigationResource /></>, {
+      wrapper: ({ children }) => <Suspense fallback={<div>Suspended navigation</div>}><RouterWrapper>{children}</RouterWrapper></Suspense>,
+    });
+    try {
+      await user.type(screen.getByLabelText("Caption"), "Committed route post");
+      await chooseAccountAndReview(user);
+      await user.click(screen.getByRole("button", { name: "Post Now" }));
+      await waitFor(() => expect(fixture.enqueue).toHaveBeenCalledTimes(1));
+      await user.click(screen.getByRole("button", { name: "Suspend navigation" }));
+      await waitFor(() => expect(reachedSuspension).toHaveBeenCalled());
+      expect(screen.queryByText("Suspended navigation")).not.toBeInTheDocument();
+      await act(async () => { releaseEnqueue(); await enqueueWait; });
+      await screen.findByTestId("saved-post-id");
+      expect(screen.queryByRole("button", { name: "Post Now" })).not.toBeInTheDocument();
+      expect(fixture.inserts).toHaveLength(1);
+    } finally {
+      unmount();
+      navigationBlocked = false;
+      await act(async () => { releaseEnqueue(); releaseNavigation(); await enqueueWait; });
+    }
+  });
+
   it.each(["saving", "enqueueing"])("clears its submitted draft after leaving for History during %s", async (phase) => {
     let release!: () => void;
     const pending = new Promise<void>((resolve) => { release = resolve; });

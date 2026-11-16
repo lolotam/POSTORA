@@ -1,4 +1,4 @@
-import { useMemo, useState, useCallback, useEffect, useRef } from "react";
+import { useMemo, useState, useCallback, useEffect, useRef, useLayoutEffect } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { DashboardLayout } from "@/components/layout/DashboardLayout";
 import { Label } from "@/components/ui/label";
@@ -67,7 +67,9 @@ function CreatePostSession() {
   const navigate = useNavigate();
   const location = useLocation();
   const locationKeyRef = useRef(location.key);
-  locationKeyRef.current = location.key;
+  useLayoutEffect(() => {
+    locationKeyRef.current = location.key;
+  }, [location.key]);
 
   const startNewPost = useCallback(() => {
     sessionStorage.removeItem("postora_post_draft");
