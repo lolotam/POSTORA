@@ -51,6 +51,7 @@ interface MediaLibrarySelection {
 const POST_DRAFT_KEY = "postora_post_draft";
 
 interface PostDraftState {
+  draftVersion?: string;
   caption: string;
   selectedAccountIds: string[];
   scheduledAt: string | null;
@@ -104,6 +105,7 @@ export function usePostForm() {
   // Load draft synchronously during initial render to avoid hook ordering issues
   const initialDraft = useMemo(() => getInitialDraftState(), []);
   const draftNotifiedRef = useRef(false);
+  const lastDraftWriteRef = useRef<string | null>(null);
 
   // Core form state - initialize from draft if available
   const [caption, setCaptionState] = useState(() => initialDraft?.caption || "");
@@ -199,10 +201,12 @@ export function usePostForm() {
   useEffect(() => {
     if (!caption && files.length === 0 && selectedAccountIds.length === 0) {
       sessionStorage.removeItem(POST_DRAFT_KEY);
+      lastDraftWriteRef.current = null;
       return;
     }
 
     const draft: PostDraftState = {
+      draftVersion: crypto.randomUUID(),
       caption,
       selectedAccountIds,
       scheduledAt: scheduledAt?.toISOString() || null,
@@ -227,7 +231,9 @@ export function usePostForm() {
       savedAt: Date.now(),
     };
 
-    sessionStorage.setItem(POST_DRAFT_KEY, JSON.stringify(draft));
+    const serializedDraft = JSON.stringify(draft);
+    sessionStorage.setItem(POST_DRAFT_KEY, serializedDraft);
+    lastDraftWriteRef.current = serializedDraft;
   }, [caption, selectedAccountIds, scheduledAt, scheduleEnabled, scheduleTimezone, uploadMethod, files]);
 
   // Check for reuse post payload on mount
@@ -917,8 +923,14 @@ export function usePostForm() {
   };
 
   // Clear draft (e.g., after successful post)
-  const clearDraft = () => {
-    if (activeRef.current) sessionStorage.removeItem(POST_DRAFT_KEY);
+  // Capture the submitted version so later completion cannot delete a newer write.
+  const captureDraftCleanup = () => {
+    const submittedSnapshot = lastDraftWriteRef.current;
+    return () => {
+      if (submittedSnapshot !== null && sessionStorage.getItem(POST_DRAFT_KEY) === submittedSnapshot) {
+        sessionStorage.removeItem(POST_DRAFT_KEY);
+      }
+    };
   };
 
   // Validate post
@@ -1040,7 +1052,7 @@ export function usePostForm() {
     showSuccessToast,
     showErrorToast,
     showWarningToast,
-    clearDraft,
+    captureDraftCleanup,
     uploadUrlToStorage,
   };
 }

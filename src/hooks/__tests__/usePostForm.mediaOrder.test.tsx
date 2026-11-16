@@ -63,6 +63,33 @@ beforeEach(() => {
 });
 
 describe("saved post media", () => {
+  it.each(["new revision", "new composer"])("preserves an identical newer draft from a %s and clears only its captured version", (replacement) => {
+    const clock = vi.spyOn(Date, "now").mockReturnValue(Date.UTC(2026, 10, 16));
+    const plainWrapper = ({ children }: { children: ReactNode }) => <MemoryRouter initialEntries={["/post"]}>{children}</MemoryRouter>;
+    try {
+      const first = renderHook(() => usePostForm(), { wrapper: plainWrapper });
+      act(() => first.result.current.setCaption("Identical caption"));
+      const clearFirst = first.result.current.captureDraftCleanup();
+      let latest = first;
+      if (replacement === "new composer") {
+        first.unmount();
+        latest = renderHook(() => usePostForm(), { wrapper: plainWrapper });
+      } else {
+        act(() => first.result.current.setCaption("Temporary edit"));
+        act(() => first.result.current.setCaption("Identical caption"));
+      }
+      expect(latest.result.current.caption).toBe("Identical caption");
+      clearFirst();
+      expect(JSON.parse(sessionStorage.getItem("postora_post_draft")!).caption).toBe("Identical caption");
+      const clearLatest = latest.result.current.captureDraftCleanup();
+      latest.unmount();
+      clearLatest();
+      expect(sessionStorage.getItem("postora_post_draft")).toBeNull();
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
   it("restores publishing order from the canonical saved sequence", async () => {
     const { result } = renderHook(() => usePostForm(), { wrapper });
     await waitFor(() => expect(result.current.files).toHaveLength(2));

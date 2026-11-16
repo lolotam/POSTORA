@@ -2,7 +2,7 @@ import type { ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { MemoryRouter, useNavigate } from "react-router-dom";
+import { MemoryRouter, Route, Routes, useNavigate } from "react-router-dom";
 import { createInstance } from "i18next";
 import { I18nextProvider } from "react-i18next";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -177,6 +177,43 @@ beforeEach(() => {
 });
 
 describe("CreatePost media ordering and saved completion", () => {
+  it.each(["saving", "enqueueing"])("clears its submitted draft after leaving for History during %s", async (phase) => {
+    let release!: () => void;
+    const pending = new Promise<void>((resolve) => { release = resolve; });
+    if (phase === "saving") fixture.persistenceWait = pending;
+    else fixture.enqueue.mockImplementation(async () => { await pending; return { accepted: true }; });
+    function Navigation() {
+      const navigate = useNavigate();
+      return <>
+        <button type="button" onClick={() => navigate("/history")}>Go History</button>
+        <button type="button" onClick={() => navigate("/post")}>Return composer</button>
+      </>;
+    }
+    const user = userEvent.setup();
+    render(<><Navigation /><Routes>
+      <Route path="/post" element={<CreatePost />} />
+      <Route path="/history" element={<div>History route</div>} />
+    </Routes></>, { wrapper: wrapper("/post") });
+    try {
+      await user.type(screen.getByLabelText("Caption"), "Successfully submitted");
+      await chooseAccountAndReview(user);
+      await user.click(screen.getByRole("button", { name: "Post Now" }));
+      await waitFor(() => phase === "saving"
+        ? expect(fixture.persistenceAttempts).toBe(1)
+        : expect(fixture.enqueue).toHaveBeenCalledTimes(1));
+      await user.click(screen.getByRole("button", { name: "Go History" }));
+      await screen.findByText("History route");
+      await act(async () => { release(); await pending; });
+      expect(fixture.inserts).toHaveLength(1);
+      expect(sessionStorage.getItem("postora_post_draft")).toBeNull();
+      await user.click(screen.getByRole("button", { name: "Return composer" }));
+      expect(screen.getByLabelText("Caption")).toHaveValue("");
+      expect(fixture.updates).toHaveLength(0);
+    } finally {
+      await act(async () => { release(); await pending; });
+    }
+  });
+
   it.each([
     ["saving", false], ["enqueueing", false], ["saving", true], ["enqueueing", true],
   ])("preserves the new draft when %s finishes after another edit identity (return=%s)", async (phase, returnToOriginalRoute) => {

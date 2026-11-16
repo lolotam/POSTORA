@@ -164,7 +164,7 @@ function CreatePostComposer({ onSaved, onStartNewPost }: CreatePostComposerProps
     removeFile,
     updatePlatformSelection,
     handlePlatformFilterToggle,
-    clearDraft,
+    captureDraftCleanup,
     validatePost,
     uploadFileToStorage,
     showSuccessToast,
@@ -418,6 +418,7 @@ function CreatePostComposer({ onSaved, onStartNewPost }: CreatePostComposerProps
 
     try {
       if (!validatePost(unsplashValidationError)) return;
+      const clearSubmittedDraft = captureDraftCleanup();
 
     const hasComposioYouTubeTarget = connectedAccounts.some((account) =>
       selectedAccountIds.includes(account.id) && account.platform === "youtube" &&
@@ -600,7 +601,7 @@ function CreatePostComposer({ onSaved, onStartNewPost }: CreatePostComposerProps
         );
       }
 
-      clearDraft();
+      clearSubmittedDraft();
       onSaved({ postId: post.id, status: completionStatus });
 
     } catch (error) {
