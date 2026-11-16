@@ -62,16 +62,17 @@ BEGIN
     'user_id', v_post.user_id,
     'caption', v_post.caption,
     'media_file_ids', v_post.media_file_ids,
-    'metadata', v_post.metadata,
+    'metadata', coalesce(v_post.metadata, '{}'::jsonb) - 'pinterest_post_type',
     'platforms', v_post.platforms,
     'scheduled_at', v_post.scheduled_at,
     'publish_requested_at', v_post.publish_requested_at,
     'source', v_post.source
   );
-  v_same_attempt_rollup := v_post.status = 'completed'
+  v_same_attempt_rollup := v_post.status IN ('completed', 'failed')
     AND EXISTS (
       SELECT 1 FROM public.platform_posts pp
-       WHERE pp.post_id = p_post_id AND pp.status = 'success'
+       WHERE pp.post_id = p_post_id AND pp.status IN ('success', 'failed')
+         AND pp.created_at >= p_expected_processing_started_at
     );
 
   SELECT pp.id, pp.status INTO v_existing, v_existing_status
@@ -102,8 +103,8 @@ BEGIN
   END IF;
 
   IF v_existing IS NOT NULL THEN
-    IF v_post.status = 'completed' THEN
-      UPDATE public.posts SET status = 'processing' WHERE id = p_post_id AND status = 'completed';
+    IF v_same_attempt_rollup THEN
+      UPDATE public.posts SET status = 'processing' WHERE id = p_post_id AND status IN ('completed', 'failed');
     END IF;
     RETURN v_existing;
   END IF;
@@ -113,7 +114,7 @@ BEGIN
   RETURNING id INTO v_existing;
 
   UPDATE public.posts SET status = 'processing'
-   WHERE id = p_post_id AND status = 'completed';
+   WHERE id = p_post_id AND status IN ('completed', 'failed');
   RETURN v_existing;
 END;
 $$;
@@ -239,7 +240,7 @@ BEGIN
     'user_id', v_post.user_id,
     'caption', v_post.caption,
     'media_file_ids', v_post.media_file_ids,
-    'metadata', v_post.metadata,
+    'metadata', coalesce(v_post.metadata, '{}'::jsonb) - 'pinterest_post_type',
     'platforms', v_post.platforms,
     'scheduled_at', v_post.scheduled_at,
     'publish_requested_at', v_post.publish_requested_at,

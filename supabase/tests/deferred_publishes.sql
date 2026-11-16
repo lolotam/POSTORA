@@ -197,12 +197,12 @@ DECLARE
   refused boolean;
 BEGIN
   INSERT INTO public.posts (id, user_id, caption, platforms, status, processing_started_at, posted_at, source)
-  VALUES (post_t, u_a, 'synthetic image', ARRAY['instagram','threads'], 'completed', claim_at, now(), 'manual');
+  VALUES (post_t, u_a, 'synthetic image', ARRAY['instagram','threads'], 'failed', claim_at, now(), 'manual');
   INSERT INTO public.platform_posts (post_id, social_account_id, platform, status, platform_post_id)
-  VALUES (post_t, acct_ig, 'instagram', 'success', 'earlier-success');
+  VALUES (post_t, acct_ig, 'instagram', 'failed', NULL);
   expected := jsonb_build_object(
     'user_id', u_a, 'caption', 'synthetic image', 'media_file_ids', NULL,
-    'metadata', NULL, 'platforms', ARRAY['instagram','threads'], 'scheduled_at', NULL,
+    'metadata', '{}'::jsonb, 'platforms', ARRAY['instagram','threads'], 'scheduled_at', NULL,
     'publish_requested_at', NULL, 'source', 'manual'
   );
   payload := jsonb_build_object('deferred', jsonb_build_object(
@@ -213,17 +213,23 @@ BEGIN
   ), 'content_fence', expected, 'account_updated_at',
     (SELECT updated_at FROM public.social_accounts WHERE id = acct_th));
 
+  -- Pinterest may stamp derived History metadata without changing publishing inputs.
+  UPDATE public.posts SET metadata = '{"pinterest_post_type":"image"}'::jsonb WHERE id = post_t;
   row_t := public.record_threads_image_checkpoint(post_t, acct_th, payload, claim_at, expected);
   ASSERT row_t IS NOT NULL, 'T1 checkpoint admission returns a row UUID';
   ASSERT (SELECT status FROM public.posts WHERE id = post_t) = 'processing',
-    'T2 an earlier same-attempt success rollup is restored to processing';
+    'T2 an earlier same-attempt failure rollup admits the image and restores processing';
   ASSERT (SELECT status = 'pending' AND platform_post_id IS NULL
             AND response_data #>> '{deferred,media_type}' = 'IMAGE'
             FROM public.platform_posts WHERE id = row_t),
     'T3 the checkpoint is pending IMAGE and never uses the container as provider post ID';
 
+  UPDATE public.platform_posts SET status = 'success' WHERE post_id = post_t AND social_account_id = acct_ig;
+  UPDATE public.posts SET status = 'completed' WHERE id = post_t;
   row_again := public.record_threads_image_checkpoint(post_t, acct_th, payload, claim_at, expected);
   ASSERT row_again = row_t, 'T4 a repeated acknowledged or recovered checkpoint returns the same UUID';
+  ASSERT (SELECT status FROM public.posts WHERE id = post_t) = 'processing',
+    'T4b an earlier same-attempt success rollup also restores processing';
   ASSERT (SELECT count(*) FROM public.platform_posts
            WHERE post_id = post_t AND social_account_id = acct_th) = 1,
     'T5 checkpoint recovery never inserts a duplicate';

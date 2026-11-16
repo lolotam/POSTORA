@@ -37,11 +37,13 @@ type Account = {
 };
 
 function contentFence(post: Record<string, unknown>) {
+  const metadata = { ...((post.metadata as Record<string, unknown> | null) ?? {}) };
+  delete metadata.pinterest_post_type;
   return {
     user_id: post.user_id,
     caption: post.caption,
     media_file_ids: post.media_file_ids,
-    metadata: post.metadata ?? null,
+    metadata,
     platforms: post.platforms,
     scheduled_at: post.scheduled_at ?? null,
     publish_requested_at: post.publish_requested_at ?? null,
@@ -103,6 +105,7 @@ Deno.test("registered process-post durably completes single-image Threads contai
   let statusHook: (() => void) | null = null;
   let checkpointHook: (() => void) | null = null;
   let parentReadError = false;
+  let successSettlementFails = false;
   let creates = 0;
   let statusReads = 0;
   let publishes = 0;
@@ -156,6 +159,7 @@ Deno.test("registered process-post durably completes single-image Threads contai
     statusHook = null;
     checkpointHook = null;
     parentReadError = false;
+    successSettlementFails = false;
     creates = 0;
     statusReads = 0;
     publishes = 0;
@@ -186,6 +190,9 @@ Deno.test("registered process-post durably completes single-image Threads contai
 
   function settle(payload: Record<string, unknown>) {
     settlements++;
+    if (successSettlementFails && payload.p_platform_post_id === IMAGE_ROW && payload.p_status === "success") {
+      return Response.json({ message: "fixture success settlement unavailable" }, { status: 500 });
+    }
     const id = payload.p_platform_post_id as string | null;
     let row = id ? rows.find((candidate) => candidate.id === id) : undefined;
     if (row && deferred(row.response_data)?.media_type === "IMAGE") {
@@ -467,6 +474,45 @@ Deno.test("registered process-post durably completes single-image Threads contai
       assertEquals(rows[0].platform_post_id, null);
     });
 
+    await test.step("an acknowledged image stays pending when success settlement fails and reconciles without resend", async () => {
+      reset();
+      await invoke({ at: 1_000 });
+      leaseImageRow();
+      successSettlementFails = true;
+      const response = await invoke({ resume: IMAGE_ROW });
+      assertEquals(response.status, 503);
+      assertEquals(rows[0].status, "pending");
+      assertEquals(settlements, 1, "A failed success write must never fall through to a retryable failure write");
+      assertEquals(publishes, 1);
+      successSettlementFails = false;
+      leaseImageRow();
+      providerStatuses = [{ status: "PUBLISHED" }];
+      const reconciled = await invoke({ resume: IMAGE_ROW });
+      assertEquals(reconciled.status, 200);
+      assertEquals(rows[0].status, "success");
+      assertEquals(publishes, 1);
+    });
+
+    await test.step("a sibling Pinterest history stamp does not abandon the unchanged Threads image", async () => {
+      reset();
+      await invoke({ at: 1_000 });
+      post.metadata = { ...(post.metadata as Record<string, unknown>), pinterest_post_type: "image" };
+      leaseImageRow();
+      const response = await invoke({ resume: IMAGE_ROW });
+      assertEquals(response.status, 200);
+      assertEquals(rows[0].status, "success");
+      assertEquals(publishes, 1);
+    });
+
+    await test.step("a missing image lease persists a refusal log before returning", async () => {
+      reset();
+      await invoke({ at: 1_000 });
+      const response = await invoke({ resume: IMAGE_ROW });
+      assertEquals(response.status, 503);
+      assert(logs.some((entry) => (entry.metadata as Record<string, unknown> | undefined)?.event === "threads_image_lease_missing"));
+      assertEquals(publishes, 0);
+    });
+
     await test.step("an unanswered publish reconciles PUBLISHED without sending twice", async () => {
       reset();
       await invoke({ at: 1_000 });
@@ -518,6 +564,7 @@ Deno.test("registered process-post durably completes single-image Threads contai
       assertEquals(responses.map((response) => response.status), [200, 200]);
       assertEquals(publishes, 1);
       assertEquals(rows.filter((row) => row.status === "success").length, 1);
+      assert(logs.some((entry) => (entry.metadata as Record<string, unknown> | undefined)?.event === "threads_image_execution_refused"));
     });
 
     await test.step("waiting keeps the same image checkpoint and increments bounded attempts", async () => {

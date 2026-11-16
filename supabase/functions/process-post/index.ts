@@ -493,11 +493,14 @@ interface PostData {
  * Social account data from social_accounts table
  */
 function threadsImageContentFence(post: PostData): Record<string, unknown> {
+  // Sibling publishers may add History-only output metadata after admission.
+  const metadata: Record<string, unknown> = { ...(post.metadata ?? {}) };
+  delete metadata.pinterest_post_type;
   return {
     user_id: post.user_id,
     caption: post.caption,
     media_file_ids: post.media_file_ids,
-    metadata: post.metadata ?? null,
+    metadata,
     platforms: post.platforms,
     scheduled_at: post.scheduled_at ?? null,
     publish_requested_at: post.publish_requested_at ?? null,
@@ -1588,6 +1591,12 @@ Deno.serve(async (req) => {
       // normal resume; terminal settlement never bypasses lease ownership.
       if (deferral.media_type === "IMAGE") {
         if (!deferral.claimed_until) {
+          const logError = await writeLogRow(supabase, {
+            level: "warn", category: "post", source: "process-post", user_id: post.user_id,
+            message: "Threads image resume refused without a reconciliation lease",
+            metadata: { event: "threads_image_lease_missing", post_id, platform_post_id: row.id },
+          });
+          if (logError) console.error("Threads image lease refusal log failed:", logError);
           return createErrorResponse("Threads image checkpoint has no active reconciliation lease; retry shortly.", 503);
         }
         const executionId = crypto.randomUUID();
@@ -1606,6 +1615,12 @@ Deno.serve(async (req) => {
           return createErrorResponse("Threads image execution could not be claimed. Retry shortly.", 503);
         }
         if (executionClaimed !== true) {
+          const logError = await writeLogRow(supabase, {
+            level: "info", category: "post", source: "process-post", user_id: post.user_id,
+            message: "Threads image resume refused because the execution lease is already owned or stale",
+            metadata: { event: "threads_image_execution_refused", post_id, platform_post_id: row.id },
+          });
+          if (logError) console.error("Threads image execution refusal log failed:", logError);
           return createJsonResponse({ success: true, status: "processing", reason: "another execution owns this lease" });
         }
         deferral = { ...deferral, execution_id: executionId, execution_claimed_until: deferral.claimed_until };
@@ -2184,6 +2199,7 @@ Deno.serve(async (req) => {
       // (below); only the ones whose row was written may be dropped from a pending row's carry.
       const stories = newStoryLedger();
       const timingForAccount = accountTiming(timing, Date.now(), WORKER_STARTED_AT_MS);
+      let imageOutcomeAcknowledged = false;
 
       try {
         let result: PlatformPostResult;
@@ -2304,6 +2320,7 @@ Deno.serve(async (req) => {
             throw new Error(`Unsupported platform: ${account.platform}`);
         }
 
+        imageOutcomeAcknowledged = resume?.deferral.media_type === "IMAGE";
         if (result.deferredHandoff) {
           platformResults.push({ platform: account.platform, status: "pending" });
           hasDeferred = true;
@@ -2431,6 +2448,17 @@ Deno.serve(async (req) => {
         console.log(`Successfully posted to ${account.platform}${isTikTokProcessing ? " (processing in background)" : ""}`);
 
       } catch (caught) {
+        if (imageOutcomeAcknowledged && resume) {
+          // Meta acknowledged publication (or reported PUBLISHED). A failed
+          // success write cannot become a retryable publishing failure.
+          const logError = await writeLogRow(supabase, {
+            level: "error", category: "post", source: "process-post", user_id: post.user_id,
+            message: "Threads image publication acknowledged but result recording was not confirmed; checkpoint retained",
+            metadata: { event: "threads_image_success_unrecorded", post_id, platform_post_id: resume.platformPostId },
+          });
+          if (logError) console.error("Threads image success-recording refusal log failed:", logError);
+          return createErrorResponse("Threads image publication was acknowledged but recording could not be confirmed. The existing checkpoint will be reconciled; do not retry publication.", 503);
+        }
         if (caught instanceof ThreadsCheckpointUnavailable) {
           try {
             const { error: logError } = await supabase.from("system_logs").insert({
