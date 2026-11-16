@@ -55,6 +55,8 @@ export interface ToolContext {
 
 export interface ToolResult {
   output: string;
+  /** Set only by a server executor after a validated read outcome. */
+  readOutcome?: "success" | "error";
   /** Server-owned proof that a refused/dry-run action made no mutation attempt. */
   mutationEffect?: "none";
   escalated?: boolean;
@@ -179,6 +181,9 @@ export function agentToolDefinitions(
 }
 
 async function searchKnowledge(context: ToolContext, query: string): Promise<ToolResult> {
+  if (!query.trim()) {
+    return { output: "No knowledge search query was given.", retrievedChunkIds: [], readOutcome: "error" };
+  }
   // retrieveKnowledge already fails over to the fallback embedding provider; if
   // every provider is down, degrade to a "no results" tool answer instead of
   // throwing and killing the whole reply.
@@ -191,14 +196,17 @@ async function searchKnowledge(context: ToolContext, query: string): Promise<Too
       "[ai-agent-reply] search_knowledge retrieval failed:",
       error instanceof Error ? error.message : String(error),
     );
-    return { output: "Knowledge search is temporarily unavailable.", retrievedChunkIds: [] };
+    return { output: "Knowledge search is temporarily unavailable.", retrievedChunkIds: [], readOutcome: "error" };
   }
-  if (!chunks.length) return { output: "No matching business knowledge found.", retrievedChunkIds: [] };
+  if (!chunks.length) {
+    return { output: "No matching business knowledge found.", retrievedChunkIds: [], readOutcome: "success" };
+  }
   return {
     output: chunks
       .map((chunk, index) => `[${index + 1}] ${chunk.content}`)
       .join("\n\n"),
     retrievedChunkIds: chunks.map((chunk) => chunk.id),
+    readOutcome: "success",
   };
 }
 

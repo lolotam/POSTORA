@@ -1577,3 +1577,48 @@ Deno.test("only a Supabase connector with a named search function counts as cata
     assertEquals(offersCatalogSearch([{ connector_type, settings }]), expected, `${connector_type} ${JSON.stringify(settings)}`);
   }
 });
+
+Deno.test("search_knowledge marks a valid empty retrieval as successful, not as an error", async () => {
+  const result = await executeTool(
+    context({ retrieveKnowledge: () => Promise.resolve([]) }),
+    "search_knowledge",
+    { query: "no such policy" },
+  );
+  assertEquals(result, {
+    output: "No matching business knowledge found.",
+    retrievedChunkIds: [],
+    readOutcome: "success",
+  });
+});
+
+Deno.test("search_knowledge marks populated retrieval and retrieval failure with server-owned outcomes", async () => {
+  const matches: KnowledgeChunkMatch[] = [
+    { id: "chunk-1", content: "verified policy", similarity: 0.9 },
+  ];
+  const success = await executeTool(
+    context({ retrieveKnowledge: () => Promise.resolve(matches) }),
+    "search_knowledge",
+    { query: "policy" },
+  );
+  assertEquals(success.readOutcome, "success");
+  assertEquals(success.retrievedChunkIds, ["chunk-1"]);
+
+  const failure = await executeTool(
+    context({ retrieveKnowledge: () => Promise.reject(new Error("offline")) }),
+    "search_knowledge",
+    { query: "policy" },
+  );
+  assertEquals(failure.readOutcome, "error");
+  assertEquals(failure.output, "Knowledge search is temporarily unavailable.");
+});
+
+Deno.test("search_knowledge invalid input is not a successful empty lookup", async () => {
+  let reads = 0;
+  const result = await executeTool(
+    context({ retrieveKnowledge: () => { reads++; return Promise.resolve([]); } }),
+    "search_knowledge",
+    { query: " " },
+  );
+  assertEquals(result.readOutcome, "error");
+  assertEquals(reads, 0);
+});

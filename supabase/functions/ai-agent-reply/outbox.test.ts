@@ -50,7 +50,7 @@ function stubOutbox(
     readFails?: boolean;
   } = {},
 ) {
-  const row = initial ? { user_id: "user-1", ...initial } : null;
+  const row = initial ? { id: "row-1", user_id: "user-1", ...initial } : null;
   const transitions: string[] = [];
   /** The escalation windows a reply resolved, in the order they were written. */
   const escalations: Array<{
@@ -160,14 +160,21 @@ function stubOutbox(
     from: (table: string) => {
       if (table !== "pending_agent_replies") throw new Error(`unexpected table ${table}`);
       return {
-        select: () => ({
-          eq: () => ({
-            maybeSingle: () =>
-              options.readFails
+        select: () => {
+          const filters: Array<[string, unknown]> = [];
+          const query = {
+            eq(column: string, value: unknown) { filters.push([column, value]); return query; },
+            maybeSingle: () => {
+              const match = row && filters.every(([column, value]) => row[column as keyof typeof row] === value)
+                ? row
+                : null;
+              return options.readFails
                 ? Promise.resolve({ data: null, error: { message: "db down" } })
-                : Promise.resolve({ data: row, error: null }),
-          }),
-        }),
+                : Promise.resolve({ data: match, error: null });
+            },
+          };
+          return query;
+        },
       };
     },
   };
@@ -707,4 +714,12 @@ Deno.test("a move that names no tenant takes the row's own", async () => {
   await deliverGeneratedReply(admin, "row-1", REPLY, () => Promise.resolve("wamid.6"));
   assertEquals(row?.status, "sent");
   assertEquals(transitions, ["running->ready_to_send", "ready_to_send->sending", "sending->sent"]);
+});
+
+Deno.test("takeOutboxRow binds both generation and redelivery reads to the authenticated tenant", async () => {
+  for (const status of ["pending", "ready_to_send"] as const) {
+    const { admin, transitions } = stubOutbox({ status, generated_reply: "stored", user_id: "owner-1" });
+    assertEquals(await takeOutboxRow(admin, "row-1", "owner-2"), { mode: "refuse", status: "missing" });
+    assertEquals(transitions, []);
+  }
 });

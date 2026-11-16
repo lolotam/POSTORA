@@ -118,7 +118,7 @@ interface TrustedAdapterCall {
 }
 
 function adapterFailure(toolName: string, detail: string): ToolResult {
-  return { output: `Connector "${toolName}" failed via connector adapter: ${detail}` };
+  return { output: `Connector "${toolName}" failed via connector adapter: ${detail}`, readOutcome: "error" };
 }
 
 function isRecord(candidate: unknown): candidate is Record<string, unknown> {
@@ -193,6 +193,7 @@ function structuredAdapterResult(
         `Connector "${tool.name}" failed via ${vendor} adapter [${code}]${status}: ${message}`,
         [serviceRoleKey, tool.secret],
       ),
+      readOutcome: "error",
     };
   }
 
@@ -220,6 +221,7 @@ function structuredAdapterResult(
       `Connector "${tool.name}" returned: ${capped}`,
       [serviceRoleKey, tool.secret],
     ),
+    readOutcome: "success",
   };
 }
 
