@@ -1,4 +1,5 @@
-import { publishThreadsContainer, threadsParentContainer, ThreadsCheckpointUnavailable } from "./threadsPublish.ts";
+import { checkpointThreadsImage, publishThreadsContainer, threadsParentContainer, ThreadsCheckpointUnavailable, type ThreadsImageCheckpoint } from "./threadsPublish.ts";
+import { hashRequest } from "../_shared/partnerApiIdempotency.ts";
 /**
  * ============================================================================
  * PROCESS-POST EDGE FUNCTION
@@ -133,8 +134,13 @@ import {
   claimFollowUps,
   deferrableDeadline,
   type DeferredKind,
+  deferralGiveUpMessage,
   giveUpMessage,
+  hasUnresolvedThreadsPublish,
+  newDeferral,
+  threadsMediaType,
   withFollowUpsStarted,
+  withUnresolvedThreadsPublish,
   workerPublishDeadline,
   NO_DEFERRAL,
   followUpTimeoutMs,
@@ -475,6 +481,7 @@ interface PostData {
   platforms: string[];
   media_file_ids: string[] | null;
   scheduled_at?: string | null;
+  publish_requested_at?: string | null;
   metadata?: PlatformMetadata | null;
   source?: string | null;
   /** As read when this run began, before it claimed the post. */
@@ -485,6 +492,19 @@ interface PostData {
 /**
  * Social account data from social_accounts table
  */
+function threadsImageContentFence(post: PostData): Record<string, unknown> {
+  return {
+    user_id: post.user_id,
+    caption: post.caption,
+    media_file_ids: post.media_file_ids,
+    metadata: post.metadata ?? null,
+    platforms: post.platforms,
+    scheduled_at: post.scheduled_at ?? null,
+    publish_requested_at: post.publish_requested_at ?? null,
+    source: post.source ?? null,
+  };
+}
+
 interface SocialAccount {
   id: string;
   platform: string;
@@ -518,6 +538,8 @@ interface MediaFile {
 interface PlatformPostResult {
   id?: string;
   url?: string;
+  /** A newly created image already has its stable pending row; the outer loop must not settle or insert it. */
+  deferredHandoff?: { platformPostId: string; responseData: Record<string, unknown> };
   /** The platform's public post id when it differs from `id`. TikTok's `id` is the publish_id
    *  that webhooks are matched on, so the post id it reports on completion travels here. */
   providerPostId?: string;
@@ -1558,13 +1580,43 @@ Deno.serve(async (req) => {
         .maybeSingle();
       // A failed read is not "nothing deferred": answer retryable and touch nothing.
       if (rowError) return createErrorResponse(`Could not read the deferred row: ${rowError.message}`, 503);
-      const deferral = row?.status === "pending" ? readDeferral(row.response_data) : null;
+      let deferral = row?.status === "pending" ? readDeferral(row.response_data) : null;
       if (!row || !deferral || !row.social_account_id) {
         return createJsonResponse({ success: true, status: "skipped", reason: "nothing deferred on this row" });
       }
+      // Image expiry/edit/cancel abandonment needs the same execution owner as a
+      // normal resume; terminal settlement never bypasses lease ownership.
+      if (deferral.media_type === "IMAGE") {
+        if (!deferral.claimed_until) {
+          return createErrorResponse("Threads image checkpoint has no active reconciliation lease; retry shortly.", 503);
+        }
+        const executionId = crypto.randomUUID();
+        const { data: executionClaimed, error: executionError } = await supabase.rpc("claim_threads_image_execution", {
+          p_platform_post_id: row.id,
+          p_expected_claimed_until: deferral.claimed_until,
+          p_execution_id: executionId,
+        });
+        if (executionError) {
+          const logError = await writeLogRow(supabase, {
+            level: "error", category: "post", source: "process-post", user_id: post.user_id,
+            message: "Threads image execution claim unavailable; no provider call was made",
+            metadata: { post_id, platform_post_id: row.id },
+          });
+          if (logError) console.error("Threads image execution refusal log failed:", logError);
+          return createErrorResponse("Threads image execution could not be claimed. Retry shortly.", 503);
+        }
+        if (executionClaimed !== true) {
+          return createJsonResponse({ success: true, status: "processing", reason: "another execution owns this lease" });
+        }
+        deferral = { ...deferral, execution_id: executionId, execution_claimed_until: deferral.claimed_until };
+        resumeResponseData = { ...((row.response_data as Record<string, unknown> | null) ?? {}), deferred: deferral };
+      }
       // Bounded whatever happens later in this request: a row past its deadline, or on
       // a post someone has since changed, is settled now rather than checked forever.
-      const abandon = abandonReason(deferral, post.status, new Date());
+      const rowData = (row.response_data as Record<string, unknown> | null) ?? {};
+      const contentChanged = deferral.media_type === "IMAGE" && rowData.content_fence !== undefined &&
+        await hashRequest(rowData.content_fence) !== await hashRequest(threadsImageContentFence(post));
+      const abandon = abandonReason(deferral, contentChanged ? "changed" : post.status, new Date());
       if (abandon) {
         // A live story the first run could not record is recorded before the reel is given up,
         // so the post rolls up with it and it is not lost with the abandoned row. If it still
@@ -1610,6 +1662,9 @@ Deno.serve(async (req) => {
             platform: row.platform,
             status: "failed",
             errorMessage: abandon,
+            ...(deferral.media_type === "IMAGE"
+              ? { responseData: { ...((row.response_data as Record<string, unknown> | null) ?? {}), deferred: withUnresolvedThreadsPublish(deferral) } }
+              : {}),
           });
         if (settled.error) return createErrorResponse(`Could not settle the deferred row: ${settled.error}`, 503);
         if (storyOnReelRow && carried.error) {
@@ -1635,10 +1690,12 @@ Deno.serve(async (req) => {
           : { finalStatus: post.status as string, notified: false };
         return createJsonResponse({ success: true, status: "failed", reason: abandon, post_status: finished.finalStatus, notified: finished.notified });
       }
+      resumeResponseData = { ...((row.response_data as Record<string, unknown> | null) ?? {}), deferred: deferral };
       resume = {
         platformPostId: row.id,
         deferral,
         unrecordedStory: readUnrecordedStory(row.response_data),
+        accountUpdatedAt: typeof resumeResponseData?.account_updated_at === "string" ? resumeResponseData.account_updated_at : null,
         checkpointContainer: async (next) => {
           const previous = resume?.deferral.container_id;
           if (!previous) throw new Error("Missing deferred container checkpoint");
@@ -1665,8 +1722,26 @@ Deno.serve(async (req) => {
             .select("id");
           return markError ? { error: markError.message } : { claimed: (marked ?? []).length > 0 };
         },
+        markPublishStarted: async () => {
+          const current = resume;
+          if (!current?.deferral.execution_id || !current.deferral.execution_claimed_until) {
+            return { error: "missing Threads image execution owner" };
+          }
+          if (current.deferral.publish_attempt_id) return { claimed: false };
+          const { data: marked, error: markError } = await supabase.rpc("mark_threads_image_publish_started", {
+            p_platform_post_id: row.id,
+            p_expected_claimed_until: current.deferral.execution_claimed_until,
+            p_execution_id: current.deferral.execution_id,
+            p_expected_content: threadsImageContentFence(post),
+          });
+          if (markError) return { error: markError.message };
+          if (marked !== true) return { claimed: false };
+          const next = { ...current.deferral, publish_attempt_id: current.deferral.execution_id };
+          resumeResponseData = { ...resumeResponseData, deferred: next };
+          current.deferral = next;
+          return { claimed: true };
+        },
       };
-      resumeResponseData = (row.response_data as Record<string, unknown> | null) ?? null;
       overrideAccountIds = [row.social_account_id];
       overridePlatforms = [row.platform];
       console.log("Resuming deferred publish", { post_id, platform_post_id: row.id, kind: deferral.kind, attempts: deferral.attempts });
@@ -1686,7 +1761,7 @@ Deno.serve(async (req) => {
     // touched. Callers with no expectation keep the unconditional transition.
     // A resumed run continues the original run's claim; claiming again would also
     // restart the stale-post clock.
-    const claim = resume ? { claimed: true, error: null } : await claimPostForProcessing(supabase, post_id, expectedScheduledAt, expectedPublishRequestedAt);
+    const claim = resume ? { claimed: true, error: null, processingStartedAt: null } : await claimPostForProcessing(supabase, post_id, expectedScheduledAt, expectedPublishRequestedAt);
     if (claim.error) {
       return createErrorResponse(`Could not claim post for processing: ${claim.error}`, 500);
     }
@@ -1779,8 +1854,69 @@ Deno.serve(async (req) => {
         ? "No active social accounts found for the selected account IDs"
         : "No active social accounts found for the selected platforms";
       console.error(msg, { postId: post_id, platformsToPost, selectedAccountIds });
+      if (resume) {
+        const logError = await writeLogRow(supabase, {
+          level: "error", category: "post", source: "process-post", user_id: post.user_id,
+          message: "Deferred account scope was unavailable; pending state retained",
+          metadata: { event: "deferred_account_refused", post_id, platform_post_id: resume.platformPostId },
+        });
+        if (logError) console.error("Deferred account refusal log failed:", logError);
+        return createErrorResponse("The deferred account is no longer active or owned by this post owner. Retry reconciliation after restoring access.", 503);
+      }
       await supabase.from("posts").update({ status: "failed" }).eq("id", post_id);
       return createErrorResponse(msg, 400);
+    }
+
+    // A direct override must not bypass the uncertain-image retry exclusion used
+    // by SQL and n8n/MCP. Proven failures on other accounts remain eligible.
+    if (!resume && accounts.some((account) => account.platform === "threads")) {
+      const threadAccountIds = accounts.filter((account) => account.platform === "threads").map((account) => account.id);
+      const { data: failedThreads, error: failedThreadsError } = await supabase
+        .from("platform_posts")
+        .select("social_account_id, response_data")
+        .eq("post_id", post_id)
+        .eq("platform", "threads")
+        .eq("status", "failed")
+        .in("social_account_id", threadAccountIds);
+      const blocked = new Set<string>();
+      if (!failedThreadsError) {
+        for (const row of failedThreads ?? []) {
+          const deferred = (row.response_data as { deferred?: Record<string, unknown> } | null)?.deferred;
+          if (deferred?.media_type === "IMAGE" && deferred.publish_outcome === "uncertain" && row.social_account_id) {
+            blocked.add(row.social_account_id);
+          }
+        }
+      }
+      const refuseRetry = async (message: string, statusCode: number) => {
+        const logError = await writeLogRow(supabase, {
+          level: "error", category: "post", source: "process-post", user_id: post.user_id,
+          message: "Threads image retry refused without provider work or result deletion",
+          metadata: { event: "threads_uncertain_retry_refused", post_id, account_ids: [...blocked], detail: message },
+        });
+        if (logError) console.error("Threads uncertain-retry refusal log failed:", logError);
+        if (claim.processingStartedAt) {
+          const { data: restored, error: restoreError } = await supabase
+            .from("posts")
+            .update({ status: post.status })
+            .eq("id", post_id)
+            .eq("status", "processing")
+            .eq("processing_started_at", claim.processingStartedAt)
+            .select("id");
+          if (restoreError || (restored ?? []).length !== 1) {
+            return createErrorResponse("Threads image retry was refused and the prior parent state could not be restored. Current state was not replaced intentionally.", 503);
+          }
+        }
+        return createErrorResponse(message, statusCode);
+      };
+      if (failedThreadsError) {
+        return await refuseRetry("Could not verify whether this Threads result is safe to retry. No publish was started.", 503);
+      }
+      if (blocked.size > 0 && accounts.every((account) => blocked.has(account.id))) {
+        return await refuseRetry("Threads publish outcome is uncertain. Manual reconciliation is required before any retry.", 409);
+      }
+      if (blocked.size > 0) {
+        accounts.splice(0, accounts.length, ...accounts.filter((account) => !blocked.has(account.id)));
+      }
     }
 
     const failMediaPreparation = async (message: string, statusCode = 503) => {
@@ -2038,6 +2174,7 @@ Deno.serve(async (req) => {
     let hasFailed = false;
     // An account whose Meta container is left for reconcile-deferred-publishes.
     let hasDeferred = false;
+    let imageHandoff: { processingStartedAt: string; content: Record<string, unknown> } | null = null;
     const platformResults: PlatformResultSummary[] = [];
 
     for (const account of (accounts || [])) {
@@ -2109,9 +2246,32 @@ Deno.serve(async (req) => {
           case "reddit":
             result = await postToReddit(account, post, mediaUrls);
             break;
-          case "threads":
-            result = await postToThreads(account, post, mediaUrls, timingForAccount);
+          case "threads": {
+            const imageCheckpoint: ThreadsImageCheckpoint = async (deferral) => {
+              if (!claim.processingStartedAt) throw new ThreadsCheckpointUnavailable("Threads image claim fence unavailable");
+              const expectedContent = threadsImageContentFence(post);
+              const responseData = {
+                deferred: deferral,
+                account_username: account.platform_username,
+                account_metadata: account.account_metadata,
+                account_updated_at: (account as SocialAccount & { updated_at?: string | null }).updated_at ?? null,
+                content_fence: expectedContent,
+              };
+              const { data, error } = await supabase.rpc("record_threads_image_checkpoint", {
+                p_post_id: post_id,
+                p_social_account_id: account.id,
+                p_response_data: responseData,
+                p_expected_processing_started_at: claim.processingStartedAt,
+                p_expected_content: expectedContent,
+              });
+              if (error || typeof data !== "string" || !data) {
+                throw new ThreadsCheckpointUnavailable("Threads image checkpoint could not be confirmed");
+              }
+              return { platformPostId: data, responseData };
+            };
+            result = await postToThreads(account, post, mediaUrls, timingForAccount, imageCheckpoint, claim.processingStartedAt);
             break;
+          }
           case "tiktok": {
             const reviewSubmissionId = requiredReviewSubmissionId(post);
             result = reviewSubmissionId
@@ -2142,6 +2302,15 @@ Deno.serve(async (req) => {
             break;
           default:
             throw new Error(`Unsupported platform: ${account.platform}`);
+        }
+
+        if (result.deferredHandoff) {
+          platformResults.push({ platform: account.platform, status: "pending" });
+          hasDeferred = true;
+          if (!claim.processingStartedAt) throw new ThreadsCheckpointUnavailable("Threads image handoff claim fence unavailable");
+          imageHandoff = { processingStartedAt: claim.processingStartedAt, content: threadsImageContentFence(post) };
+          console.log(`[threads] image checkpoint ${result.deferredHandoff.platformPostId} left for the reconciler`);
+          continue;
         }
 
         // If the platform handler already wrote its own platform_posts rows
@@ -2177,6 +2346,7 @@ Deno.serve(async (req) => {
           if (logError) console.error("[process-post] could not log the unrecorded story either:", logError);
         }
         const responseData = {
+          ...(resume?.deferral.media_type === "IMAGE" ? { ...resumeResponseData, deferred: resume.deferral } : {}),
           ...(independentStory && result.publicationSubtype === "reel" ? { ig_post_subtype: "reel" } : {}),
           tiktok_publish_id: result.id,
           account_username: account.platform_username,
@@ -2265,14 +2435,14 @@ Deno.serve(async (req) => {
           try {
             const { error: logError } = await supabase.from("system_logs").insert({
               level: "error", category: "post", source: "process-post", user_id: post.user_id,
-              message: "Threads carousel checkpoint unavailable; pending state retained",
-              metadata: { post_id, platform_post_id: resume?.platformPostId ?? null },
+              message: "Threads container checkpoint unavailable; no new publish was started and pending state was retained",
+              metadata: { event: "threads_checkpoint_refused", post_id, platform_post_id: resume?.platformPostId ?? null },
             });
             if (logError) console.error("Threads checkpoint refusal log failed");
           } catch {
             console.error("Threads checkpoint refusal log unavailable");
           }
-          return createErrorResponse("Threads carousel checkpoint could not be confirmed. It will be checked again.", 503);
+          return createErrorResponse("Threads container checkpoint could not be confirmed. No new publish was started; retry reconciliation shortly.", 503);
         }
         let error = caught;
         if (error instanceof ContainerStillProcessing) {
@@ -2291,11 +2461,20 @@ Deno.serve(async (req) => {
             continue;
           }
           if (!recorded.error) {
-            platformResults.push({ platform: account.platform, status: "failed", error_message: giveUpMessage(error.kind) });
+            platformResults.push({ platform: account.platform, status: "failed", error_message: resume ? deferralGiveUpMessage(resume.deferral) : giveUpMessage(error.kind) });
             hasFailed = true;
             continue;
           }
           console.error(`[${account.platform}] could not record the deferred container:`, recorded.error);
+          if (resume?.deferral.media_type === "IMAGE") {
+            const logError = await writeLogRow(supabase, {
+              level: "error", category: "post", source: "process-post", user_id: post.user_id,
+              message: "Threads image execution update was not confirmed; pending state was not settled",
+              metadata: { event: "threads_image_stale_execution", post_id, platform_post_id: resume.platformPostId },
+            });
+            if (logError) console.error("Threads image stale-execution log failed:", logError);
+            return createErrorResponse("Threads image reconciliation ownership changed or could not be confirmed. Retry shortly.", 503);
+          }
           error = new Error(`${account.platform === "threads" ? "Threads" : "Instagram"} was still processing the media and it could not be finished later. Safe to retry.`);
         }
         console.error(`Error posting to ${account.platform}:`, error);
@@ -2311,6 +2490,9 @@ Deno.serve(async (req) => {
             platform: account.platform,
             status: "failed",
             errorMessage: error instanceof Error ? error.message : "Unknown error",
+            ...(resume?.deferral.media_type === "IMAGE"
+              ? { responseData: { ...resumeResponseData, deferred: resume.deferral } }
+              : {}),
           });
           if (settleError) {
             console.error(`Failed to settle the failure row for ${account.platform}:`, settleError);
@@ -2347,8 +2529,34 @@ Deno.serve(async (req) => {
       const finished = await finishDeferredPost(supabase, post, resume.platformPostId, { results: platformResults, hasSuccess, hasFailed });
       finalStatus = finished.finalStatus;
       notify = false;
+    } else if (imageHandoff) {
+      // The first request may finish after the reconciler, a retry, an edit or a
+      // cancellation. The checkpoint already persisted processing atomically;
+      // read the current state instead of introducing another parent writer.
+      notify = false;
+      const { data: current, error: currentError } = await supabase
+        .from("posts").select("*").eq("id", post_id).single();
+      if (currentError || !current) {
+        const logError = await writeLogRow(supabase, {
+          level: "error", category: "post", source: "process-post", user_id: post.user_id,
+          message: "Threads image handoff could not read the current parent state; checkpoint retained",
+          metadata: { event: "threads_image_handoff_state_unreadable", post_id },
+        });
+        if (logError) console.error("Threads image handoff state-read log failed:", logError);
+        return createErrorResponse("Threads image handoff could not read the current parent state. Checkpoint retained.", 503);
+      }
+      finalStatus = current.status;
+      if (current.status !== "processing" || current.processing_started_at !== imageHandoff.processingStartedAt ||
+        await hashRequest(threadsImageContentFence(current)) !== await hashRequest(imageHandoff.content)) {
+        const logError = await writeLogRow(supabase, {
+          level: "info", category: "post", source: "process-post", user_id: post.user_id,
+          message: "Threads image handoff preserved a newer parent state",
+          metadata: { event: "threads_image_handoff_stale", post_id, current_status: finalStatus },
+        });
+        if (logError) console.error("Threads image handoff stale-state log failed:", logError);
+      }
     } else if (hasDeferred) {
-      // Stays `processing` until the deferred rows settle; the RPC rolls it up then.
+      // Legacy video/carousel pending behavior is unchanged.
       finalStatus = "processing";
       notify = false;
       await supabase
@@ -2395,7 +2603,7 @@ Deno.serve(async (req) => {
           : hasFailed && !hasSuccess
             ? `Post failed on all platforms: ${failedPlatforms.join(', ')}`
             : `Post partially succeeded: ${successPlatforms.join(', ')} succeeded, ${failedPlatforms.join(', ')} failed`)
-          + (hasDeferred ? " (a video is still processing and will be finished in the background)" : ""),
+          + (hasDeferred ? " (media is still processing and will be finished in the background)" : ""),
         user_id: post.user_id,
         metadata: {
           post_id: post_id,
@@ -6464,7 +6672,13 @@ async function postToThreads(
   post: PostData,
   mediaUrls: string[],
   timing: PublishTiming = NO_DEFERRAL,
+  imageCheckpoint?: ThreadsImageCheckpoint,
+  attemptStartedAt?: string | null,
 ): Promise<PlatformPostResult> {
+  if (timing.resume?.deferral.media_type === "IMAGE" && timing.resume.accountUpdatedAt &&
+    (account as SocialAccount & { updated_at?: string | null }).updated_at !== timing.resume.accountUpdatedAt) {
+    throw new ThreadsCheckpointUnavailable("Threads image account credentials changed; pending state retained");
+  }
   const accessToken = account.access_token;
   const userId = account.platform_user_id;
   const username = account.platform_username;
@@ -6743,7 +6957,7 @@ async function postToThreads(
     const isVideo = firstMediaUrl ? isVideoUrl(firstMediaUrl) : false;
 
     if (timing.resume && !timing.resume.deferral.carousel_children) {
-      containerParams.media_type = timing.resume.deferral.kind === "threads_carousel" ? "CAROUSEL" : "VIDEO";
+      containerParams.media_type = timing.resume.deferral.kind === "threads_carousel" ? "CAROUSEL" : threadsMediaType(timing.resume.deferral);
     } else if (mediaUrls.length === 1 && !timing.resume?.deferral.carousel_children) {
       // Single media
       if (isVideo) {
@@ -6921,11 +7135,22 @@ async function postToThreads(
   // A resumed run already has the container; creating another would post twice.
   const containerId = await threadsParentContainer(timing.resume, createThreadsContainer);
 
+  // A new image is handed off immediately. No first-request poll or publish can strand it.
+  if (!timing.resume && containerParams.media_type === "IMAGE") {
+    if (typeof containerId !== "string" || !containerId || !attemptStartedAt) {
+      throw new ThreadsCheckpointUnavailable("Threads image container identity or claim fence is missing");
+    }
+    const deferral = newDeferral("threads", containerId, new Date(), { mediaType: "IMAGE", attemptStartedAt });
+    const checkpoint = await checkpointThreadsImage(imageCheckpoint, deferral);
+    return { deferredHandoff: checkpoint };
+  }
+
   // Poll container status until FINISHED (required by Threads API)
   const statusEndpoint = `https://graph.threads.net/v1.0/${containerId}?fields=${CONTAINER_STATUS_FIELDS.threads}&access_token=${accessToken}`;
   const pollInterval = 2000; // 2 seconds
   // Only a single video can be finished later; a resumed run checks once, now.
-  const deferrable = containerParams.media_type === "VIDEO" || containerParams.media_type === "CAROUSEL";
+  const deferrable = containerParams.media_type === "VIDEO" || containerParams.media_type === "CAROUSEL" ||
+    (timing.resume?.deferral.media_type === "IMAGE");
   // The deadline bounds the requests as well as the sleeps, for every container.
   const container = await pollContainer("threads", statusEndpoint, {
     maxAttempts: 15,
@@ -6936,8 +7161,13 @@ async function postToThreads(
       : deferrable ? deferrableDeadline(timing.deadlineMs, WORKER_STARTED_AT_MS) : timing.deadlineMs,
   });
 
-  // Meta's ERROR ends the wait, and a container that never finished is never published blindly.
-  if (container.state === "failed") throw new Error(containerFailureMessage("threads", container.reason));
+  // ERROR/EXPIRED after an unanswered send does not prove the provider rejected that send.
+  if (container.state === "failed") {
+    if (timing.resume && hasUnresolvedThreadsPublish(timing.resume.deferral)) {
+      throw new ContainerStillProcessing("threads", containerId);
+    }
+    throw new Error(containerFailureMessage("threads", container.reason));
+  }
   if (container.state === "waiting") {
     throw unfinishedError({ deadlineMs: timing.deadlineMs, deferKind: deferrable ? (containerParams.media_type === "CAROUSEL" ? "threads_carousel" : "threads") : undefined }, containerId, "Threads");
   }
@@ -6957,11 +7187,27 @@ async function postToThreads(
   publishUrl.searchParams.set("access_token", accessToken);
   publishUrl.searchParams.set("creation_id", containerId);
 
+  const resumedImage = timing.resume?.deferral.media_type === "IMAGE" ? timing.resume : null;
+  // FINISHED or a readable status failure after an unanswered send still cannot prove non-acceptance.
+  if (resumedImage && hasUnresolvedThreadsPublish(resumedImage.deferral)) {
+    throw new ContainerStillProcessing("threads", containerId);
+  }
+
   const publishData = await publishThreadsContainer(async (timeoutMs) => {
     const response = await fetchWithTimeout(publishUrl.toString(), { method: "POST" }, timeoutMs);
     return await response.json();
   }, containerId, containerParams.media_type === "CAROUSEL" ? "threads_carousel" : "threads",
-  workerPublishDeadline(WORKER_STARTED_AT_MS));
+  workerPublishDeadline(WORKER_STARTED_AT_MS), Date.now, {
+    beforeSend: resumedImage ? async () => {
+      const marked = await resumedImage.markPublishStarted?.();
+      if (!marked || "error" in marked || !marked.claimed) {
+        throw new ThreadsCheckpointUnavailable("Threads image publish attempt could not be persisted; nothing was sent");
+      }
+    } : undefined,
+    onUnknown: resumedImage ? () => {
+      resumedImage.deferral = withUnresolvedThreadsPublish(resumedImage.deferral);
+    } : undefined,
+  });
   tLocationDebug.publish_success = true;
 
   const postId = publishData.id;

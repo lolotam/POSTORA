@@ -1,6 +1,6 @@
 import { assertEquals, assertRejects } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import { ContainerStillProcessing, newDeferral, type ResumeContext } from "./deferredPublish.ts";
-import { publishThreadsContainer, threadsParentContainer, ThreadsCheckpointUnavailable } from "./threadsPublish.ts";
+import { checkpointThreadsImage, publishThreadsContainer, threadsParentContainer, ThreadsCheckpointUnavailable } from "./threadsPublish.ts";
 
 Deno.test("a resumed parent is reused without creating another container", async () => {
   const resume = { platformPostId: "row", deferral: newDeferral("threads_carousel", "parent-1", new Date(0)) };
@@ -46,4 +46,38 @@ Deno.test("no publish starts without room to finish, and confirmed results stay 
   assertEquals(await publishThreadsContainer(publish, "parent-1", "threads_carousel", 10_000, () => 0), { id: "published-1" });
   await assertRejects(() => publishThreadsContainer(async () => ({}), "parent-1", "threads_carousel", 10_000, () => 0), ContainerStillProcessing);
   await assertRejects(() => publishThreadsContainer(async () => ({ error: { message: "permission denied" } }), "parent-1", "threads_carousel", 10_000, () => 0), Error, "permission denied");
+});
+
+
+Deno.test("a new image checkpoint requires a stable row UUID and never publishes on uncertainty", async () => {
+  const deferral = newDeferral("threads", "image-1", new Date(0), { mediaType: "IMAGE", attemptStartedAt: new Date(0).toISOString() });
+  const responseData = { deferred: deferral };
+  assertEquals(await checkpointThreadsImage(() => Promise.resolve({ platformPostId: "44000000-0000-4000-8000-000000000001", responseData }), deferral), {
+    platformPostId: "44000000-0000-4000-8000-000000000001",
+    responseData,
+  });
+  await assertRejects(() => checkpointThreadsImage(() => Promise.resolve({ platformPostId: "", responseData }), deferral), ThreadsCheckpointUnavailable);
+  await assertRejects(() => checkpointThreadsImage(() => Promise.reject(new Error("lost acknowledgement")), deferral), ThreadsCheckpointUnavailable);
+  await assertRejects(() => checkpointThreadsImage(undefined, deferral), ThreadsCheckpointUnavailable);
+});
+
+Deno.test("the image publish guard runs before sending and marks every unknown outcome", async () => {
+  const events: string[] = [];
+  await assertRejects(() => publishThreadsContainer(async () => {
+    events.push("send");
+    throw new Error("lost");
+  }, "image-1", "threads", 20_000, () => 0, {
+    beforeSend: () => { events.push("mark"); return Promise.resolve(); },
+    onUnknown: () => events.push("uncertain"),
+  }), ContainerStillProcessing);
+  assertEquals(events, ["mark", "send", "uncertain"]);
+
+  let sends = 0;
+  await assertRejects(() => publishThreadsContainer(() => {
+    sends++;
+    return Promise.resolve({ id: "must-not-send" });
+  }, "image-1", "threads", 20_000, () => 0, {
+    beforeSend: () => Promise.reject(new ThreadsCheckpointUnavailable("mark lost")),
+  }), ThreadsCheckpointUnavailable);
+  assertEquals(sends, 0);
 });

@@ -11921,6 +11921,33 @@ export type Database = {
         Args: { p_post_id: string; p_user_id: string; p_account_ids?: string[] }
         Returns: Json
       }
+      claim_deferred_publishes: {
+        Args: { p_limit?: number; p_lease?: string }
+        Returns: { platform_post_id: string; post_id: string }[]
+      }
+      claim_threads_image_execution: {
+        Args: { p_platform_post_id: string; p_expected_claimed_until: string; p_execution_id: string }
+        Returns: boolean
+      }
+      mark_threads_image_publish_started: {
+        Args: {
+          p_platform_post_id: string
+          p_expected_claimed_until: string
+          p_execution_id: string
+          p_expected_content: Json
+        }
+        Returns: boolean
+      }
+      record_threads_image_checkpoint: {
+        Args: {
+          p_post_id: string
+          p_social_account_id: string
+          p_response_data: Json
+          p_expected_processing_started_at: string
+          p_expected_content: Json
+        }
+        Returns: string
+      }
       claim_meta_analytics_collection_job: {
         Args: {
           p_platform: string

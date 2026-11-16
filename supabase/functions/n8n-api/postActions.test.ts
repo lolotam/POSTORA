@@ -2718,6 +2718,56 @@ Deno.test("generic retry never dispatches or deletes an independently managed St
   assertEquals(callsFor(db, "platform_posts", "delete").length, 0);
 });
 
+Deno.test("uncertain Threads images never dispatch or delete through the n8n retry boundary", async () => {
+  const db = new FakeSupabase();
+  claimQueued(db);
+  db.queue("platform_posts", { data: [{ ...platformResult("threads-uncertain", "threads", ACCOUNT, "failed"),
+    response_data: { deferred: { media_type: "IMAGE", publish_outcome: "uncertain" } } }], error: null });
+  db.queueRpc(RELEASE_RPC, { data: true, error: null });
+  const { calls, fetcher } = fakeFetcher([]);
+  const result = await retryFailedPost(depsFor(db, fetcher), USER, { post_id: POST });
+  assertEquals(result.status, 409);
+  assertEquals(errorCode(result), "NO_FAILED_PLATFORMS");
+  assertEquals(calls.length, 0);
+  assertEquals(callsFor(db, "platform_posts", "delete").length, 0);
+});
+
+Deno.test("n8n retry keeps uncertain Threads evidence while a proven other-platform failure proceeds", async () => {
+  const db = new FakeSupabase();
+  claimQueued(db);
+  db.queue("platform_posts", {
+    data: [
+      { ...platformResult("threads-uncertain", "threads", ACCOUNT_TWO, "failed"),
+        response_data: { deferred: { media_type: "IMAGE", publish_outcome: "uncertain" } } },
+      platformResult("instagram-failed", "instagram", ACCOUNT, "failed"),
+    ],
+    error: null,
+  });
+  db.queue("platform_posts", {
+    data: [
+      { ...platformResult("threads-uncertain", "threads", ACCOUNT_TWO, "failed"),
+        response_data: { deferred: { media_type: "IMAGE", publish_outcome: "uncertain" } } },
+      platformResult("instagram-failed", "instagram", ACCOUNT, "failed"),
+      platformResult("instagram-new", "instagram", ACCOUNT, "success"),
+    ],
+    error: null,
+  });
+  db.queue("platform_posts", { data: null, error: null });
+  db.queueRpc(RELEASE_RPC, { data: true, error: null });
+  const { calls, fetcher } = fakeFetcher([{ status: 200, body: { success: true } }]);
+  const result = await retryFailedPost(depsFor(db, fetcher), USER, { post_id: POST });
+  assertEquals(result.status, 200);
+  const sent = JSON.parse(String(calls[0].body)) as Record<string, unknown>;
+  assertEquals(sent.platforms, ["instagram"]);
+  assertEquals(sent.account_ids, [ACCOUNT]);
+  const removals = callsFor(db, "platform_posts", "delete");
+  assertEquals(removals.length, 1);
+  assertEquals(hasInFilter(removals[0], "id", ["instagram-failed"]), true);
+  assertEquals(hasInFilter(removals[0], "id", ["threads-uncertain"]), false);
+  assertEquals(result.body.skipped, [{ account_id: ACCOUNT_TWO, platform: "threads",
+    reason: "Threads publish outcome is uncertain; reconcile it manually before any retry." }]);
+});
+
 Deno.test("a retry publishes only the failed accounts and clears the rows it replaced", async () => {
   const db = new FakeSupabase();
   claimQueued(db);

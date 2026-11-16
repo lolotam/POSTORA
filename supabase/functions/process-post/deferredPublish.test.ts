@@ -1,4 +1,4 @@
-import { assertEquals, assertInstanceOf } from "https://deno.land/std@0.224.0/assert/mod.ts";
+import { assert, assertEquals, assertInstanceOf } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import { CHECK_ONCE_DEADLINE, pollContainer } from "../_shared/metaContainerStatus.ts";
 import { CHECK_TIMEOUT_MS } from "./instagramPublish.ts";
 import {
@@ -12,6 +12,7 @@ import {
   ContainerStillProcessing,
   DEFERRAL_GIVE_UP_MS,
   deferrableDeadline,
+  deferralGiveUpMessage,
   PUBLISH_RESERVE_MS,
   refuseOnSpentWorker,
   FOLLOW_UP_RESERVE_MS,
@@ -26,10 +27,12 @@ import {
   ownContainerDeadline,
   STORY_RECOVERY_GRACE_MS,
   storyRecoveryExhausted,
+  threadsMediaType,
   pollDeadline,
   readDeferral,
   recordStillProcessing,
   unfinishedError,
+  withUnresolvedThreadsPublish,
 } from "./deferredPublish.ts";
 
 const NOW = new Date("2026-10-29T12:00:00.000Z");
@@ -126,12 +129,12 @@ Deno.test("only a well-formed deferral is read off a row", () => {
   assertEquals(readDeferral(null), null);
 });
 
-function fakeDb(error: string | null = null) {
+function fakeDb(error: string | null = null, returnedId?: string, conditional = false) {
   const writes: { op: string; values: unknown; filters: [string, unknown][] }[] = [];
   const db = {
     rpc: (fn: string, args: unknown) => {
       writes.push({ op: `rpc:${fn}`, values: args, filters: [] });
-      return Promise.resolve({ error: error ? { message: error } : null });
+      return Promise.resolve({ data: returnedId ?? null, error: error ? { message: error } : null });
     },
     from: () => ({
       update: (values: unknown) => {
@@ -140,8 +143,9 @@ function fakeDb(error: string | null = null) {
         const chain = {
           eq: (column: string, value: unknown) => {
             write.filters.push([column, value]);
-            return write.filters.length === 2 ? Promise.resolve({ error: error ? { message: error } : null }) : chain;
+            return !conditional && write.filters.length === 2 ? Promise.resolve({ error: error ? { message: error } : null }) : chain;
           },
+          select: () => Promise.resolve({ data: [{ id: "pp-1" }], error: error ? { message: error } : null }),
         };
         return chain;
       },
@@ -369,4 +373,63 @@ Deno.test("a deferred carousel is read off its row and given up by name", () => 
   const deferral = newDeferral("ig_carousel", "c-7", NOW);
   assertEquals(readDeferral({ deferred: deferral }), deferral);
   assertEquals(giveUpMessage("ig_carousel"), "Instagram did not finish processing the carousel within 30 minutes. Safe to retry.");
+});
+
+
+Deno.test("explicit Threads IMAGE identity round-trips while a legacy row stays VIDEO", () => {
+  const image = newDeferral("threads", "image-container", NOW, { mediaType: "IMAGE", attemptStartedAt: NOW.toISOString() });
+  assertEquals(readDeferral({ deferred: image }), image);
+  assertEquals(nextDeferral(image, NOW).media_type, "IMAGE");
+  assertEquals(nextDeferral(image, NOW).attempt_started_at, NOW.toISOString());
+  assertEquals(readDeferral({ deferred: { ...image, media_type: "CAROUSEL" } }), null);
+  assertEquals(threadsMediaType(newDeferral("threads", "legacy-video", NOW)), "VIDEO");
+});
+
+Deno.test("an unresolved image publish has a manual-review outcome, never a safe-retry message", () => {
+  const image = {
+    ...newDeferral("threads", "image-container", NOW, { mediaType: "IMAGE" }),
+    publish_attempt_id: "execution-1",
+  };
+  const uncertain = withUnresolvedThreadsPublish(image);
+  assertEquals(uncertain.publish_outcome, "uncertain");
+  assertEquals(nextDeferral(uncertain, NOW).publish_attempt_id, "execution-1");
+  assert(deferralGiveUpMessage(uncertain).includes("Manual reconciliation"));
+  assert(!deferralGiveUpMessage(uncertain).includes("Safe to retry"));
+  assert(abandonReason(uncertain, "failed", NOW)?.includes("Manual reconciliation"));
+});
+
+Deno.test("the deferred recorder retains the stable row UUID returned by SQL", async () => {
+  const { db } = fakeDb(null, "row-uuid-1");
+  const result = await recordStillProcessing(db, noSettle, {
+    postId: "post-1", account: ACCOUNT, signal: SIGNAL, resume: null, resumeResponseData: null,
+  }, NOW);
+  assertEquals(result.platformPostId, "row-uuid-1");
+});
+
+Deno.test("an image reschedule checks its execution, lease and container predicates", async () => {
+  const { db, writes } = fakeDb(null, undefined, true);
+  const deferral = {
+    ...newDeferral("threads", "image-container", NOW, { mediaType: "IMAGE" }),
+    claimed_until: "2026-10-29T12:03:00.000Z",
+    execution_id: "execution-1",
+    execution_claimed_until: "2026-10-29T12:03:00.000Z",
+  };
+  const result = await recordStillProcessing(db, noSettle, {
+    postId: "post-1",
+    account: { ...ACCOUNT, platform: "threads" },
+    signal: new ContainerStillProcessing("threads", "image-container"),
+    resume: { platformPostId: "pp-1", deferral },
+    resumeResponseData: { deferred: deferral },
+  }, NOW);
+  assertEquals(result.error, null);
+  assertEquals(writes[0].filters, [
+    ["id", "pp-1"],
+    ["status", "pending"],
+    ["response_data->deferred->>execution_id", "execution-1"],
+    ["response_data->deferred->>claimed_until", "2026-10-29T12:03:00.000Z"],
+    ["response_data->deferred->>container_id", "image-container"],
+  ]);
+  const next = (writes[0].values as { response_data: { deferred: { execution_id?: string; claimed_until?: string } } }).response_data.deferred;
+  assertEquals(next.execution_id, null);
+  assertEquals(next.claimed_until, null);
 });

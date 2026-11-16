@@ -81,3 +81,27 @@ Deno.test("no more than the limit is resumed per run", async () => {
   await runReconcile(fake, 2);
   assertEquals(resumed, ["a", "b"]);
 });
+
+
+Deno.test("claimed image rows finish before the stale sweep even when one resume is retryable", async () => {
+  const events: string[] = [];
+  const { fake } = ports({
+    claimed: [ROW("image-a"), ROW("image-b")],
+    outcomes: { "image-a": { ok: true, status: "completed" }, "image-b": { ok: false, error: "HTTP 503" } },
+    sweep: { posts: 0, rows_failed: 0 },
+  });
+  const resume = fake.resume;
+  const sweep = fake.sweep;
+  fake.resume = async (row) => {
+    events.push(`resume:${row.platform_post_id}`);
+    return await resume(row);
+  };
+  fake.sweep = async () => {
+    events.push("sweep");
+    return await sweep();
+  };
+  const summary = await runReconcile(fake);
+  assertEquals(events, ["resume:image-a", "resume:image-b", "sweep"]);
+  assertEquals(summary.resumed, { completed: 1 });
+  assertEquals(summary.resume_errors, 1);
+});

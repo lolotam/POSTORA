@@ -1591,7 +1591,10 @@ interface PlatformPostResult {
   social_account_id: string | null;
   status: string | null;
   error_message: string | null;
-  response_data?: { story_job_id?: unknown } | null;
+  response_data?: {
+    story_job_id?: unknown;
+    deferred?: { media_type?: unknown; publish_outcome?: unknown } | null;
+  } | null;
 }
 
 // A failed result that is published again.
@@ -1639,6 +1642,12 @@ function pickRetryTargets(
     if (row.response_data?.story_job_id) {
       skipped.push({ account_id: row.social_account_id, platform: row.platform,
         reason: "Use story_result_id to retry this managed Story independently." });
+      continue;
+    }
+    if (row.platform === "threads" && row.response_data?.deferred?.media_type === "IMAGE" &&
+      row.response_data.deferred.publish_outcome === "uncertain") {
+      skipped.push({ account_id: row.social_account_id, platform: row.platform,
+        reason: "Threads publish outcome is uncertain; reconcile it manually before any retry." });
       continue;
     }
     const accountId = row.social_account_id;

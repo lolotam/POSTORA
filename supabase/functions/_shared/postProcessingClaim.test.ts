@@ -19,7 +19,7 @@ function stub(rowsMatched: number, fail = false) {
       Promise.resolve(
         fail
           ? { data: null, error: { message: "connection reset" } }
-          : { data: Array.from({ length: rowsMatched }, (_, i) => ({ id: `row-${i}` })), error: null },
+          : { data: Array.from({ length: rowsMatched }, (_, i) => ({ id: `row-${i}`, processing_started_at: "2026-11-06T11:00:00.000Z" })), error: null },
       ),
   };
   return { client: { from: () => chain }, filters, payload: () => payload };
@@ -30,7 +30,7 @@ for (const scheduledAt of [undefined, null, "2026-11-06T10:00:00Z"]) {
     const { client, filters } = stub(1);
     const requestedAt = "2026-11-06T11:00:00+00:00";
     const outcome = await claimPostForProcessing(client, "post-1", scheduledAt, requestedAt);
-    assertEquals(outcome, { claimed: true, error: null });
+    assertEquals(outcome, { claimed: true, error: null, processingStartedAt: "2026-11-06T11:00:00.000Z" });
     assertEquals(filters, [
       ["eq", "id", "post-1"],
       ["eq", "publish_requested_at", requestedAt],
@@ -42,14 +42,14 @@ for (const scheduledAt of [undefined, null, "2026-11-06T10:00:00Z"]) {
 Deno.test("an already claimed publish request does not publish again", async () => {
   const { client } = stub(0);
   assertEquals(await claimPostForProcessing(client, "post-1", undefined, "2026-11-06T11:00:00Z"), {
-    claimed: false, error: null,
+    claimed: false, error: null, processingStartedAt: null,
   });
 });
 
 Deno.test("a scheduler-originated claim is conditioned on the scheduled_at it selected", async () => {
   const { client, filters } = stub(1);
   const outcome = await claimPostForProcessing(client, "post-1", "2026-09-03T14:00:00+00:00");
-  assertEquals(outcome, { claimed: true, error: null });
+  assertEquals(outcome, { claimed: true, error: null, processingStartedAt: "2026-11-06T11:00:00.000Z" });
   assertEquals(filters, [
     ["eq", "id", "post-1"],
     ["eq", "scheduled_at", "2026-09-03T14:00:00+00:00"],
@@ -63,7 +63,7 @@ Deno.test("an overlapping scheduler run finds the post already processing and do
   // post is published once instead of twice.
   const { client } = stub(0);
   const outcome = await claimPostForProcessing(client, "post-1", "2026-09-03T14:00:00+00:00");
-  assertEquals(outcome, { claimed: false, error: null });
+  assertEquals(outcome, { claimed: false, error: null, processingStartedAt: null });
 });
 
 Deno.test("a post unscheduled or rescheduled after selection matches no row and is NOT claimed", async () => {
@@ -71,7 +71,7 @@ Deno.test("a post unscheduled or rescheduled after selection matches no row and 
   // publish. This is the whole reason the claim exists.
   const { client } = stub(0);
   const outcome = await claimPostForProcessing(client, "post-1", "2026-09-03T14:00:00+00:00");
-  assertEquals(outcome, { claimed: false, error: null });
+  assertEquals(outcome, { claimed: false, error: null, processingStartedAt: null });
 });
 
 Deno.test("a caller with no expectation keeps the unconditional transition (retries, immediate publishes)", async () => {
@@ -96,5 +96,5 @@ Deno.test("a database error is reported as an error, never as 'not claimed'", as
   // is a different fact and the caller must be able to tell them apart.
   const { client } = stub(0, true);
   const outcome = await claimPostForProcessing(client, "post-1", "2026-09-03T14:00:00+00:00");
-  assertEquals(outcome, { claimed: false, error: "connection reset" });
+  assertEquals(outcome, { claimed: false, error: "connection reset", processingStartedAt: null });
 });
