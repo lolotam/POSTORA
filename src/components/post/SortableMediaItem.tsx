@@ -95,16 +95,15 @@ export function SortableMediaItem({
       >
         {position}
       </Badge>
-      {/* Keep the handle visible on touch screens and reachable by keyboard. */}
       {file.uploaded && (
         <button
           type="button"
           {...attributes}
           {...listeners}
           aria-label={t("sortable.reorderLabel", "Move media {{position}}", { position })}
-          className="absolute top-2 start-10 z-30 bg-black/70 rounded p-1.5 cursor-grab active:cursor-grabbing touch-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+          className="absolute top-2 start-12 z-30 flex h-11 w-11 items-center justify-center rounded-md bg-black/75 cursor-grab active:cursor-grabbing touch-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
         >
-          <GripVertical className="w-4 h-4 text-white" />
+          <GripVertical className="w-5 h-5 text-white" />
         </button>
       )}
 
@@ -217,9 +216,15 @@ export function SortableMediaItem({
           </div>
         </>
       ) : (
-        <div className="absolute inset-0 bg-black/60 flex flex-col items-center justify-center">
-          <Loader2 className="w-5 h-5 animate-spin text-white mb-1" />
-          <span className="text-xs text-white">{Math.round(file.uploadProgress)}%</span>
+        <div className="absolute inset-0 bg-black/60 flex flex-col items-center justify-center p-3 text-center">
+          {file.uploadError ? (
+            <span className="text-xs text-white">{file.uploadError}</span>
+          ) : (
+            <>
+              <Loader2 className="w-5 h-5 animate-spin text-white mb-1" />
+              <span className="text-xs text-white">{Math.round(file.uploadProgress)}%</span>
+            </>
+          )}
         </div>
       )}
     </div>

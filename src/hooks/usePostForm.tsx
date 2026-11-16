@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useRef } from "react";
+import { useState, useEffect, useMemo, useRef, useCallback } from "react";
 import { useSearchParams } from "react-router-dom";
 import { Platform } from "@/lib/types";
 import { useAuth } from "@/hooks/useAuth";
@@ -13,7 +13,7 @@ import { getAllPlatformEligibility, PlatformEligibility } from "@/lib/platformEl
 import { resolveMediaPublicUrl } from "@/lib/mediaUrl";
 import { formatUploadLimit, maxUploadBytesFor, mediaTypeForFileName, needsDirectUpload } from "@/lib/mediaTypes";
 import { uploadLargeMedia, useMediaUploadLimits } from "@/features/media-upload";
-import { orderPostMediaFiles } from "../../supabase/functions/_shared/post-media";
+import { getMissingMediaFileIds, orderPostMediaFiles } from "../../supabase/functions/_shared/post-media";
 
 export interface UploadedFile {
   id: string;
@@ -22,6 +22,7 @@ export interface UploadedFile {
   fileType: "image" | "video" | "gif";
   uploadProgress: number;
   uploaded: boolean;
+  uploadError?: string;
   storagePath?: string;
   cloudinaryUrl?: string;
   cloudinaryPublicId?: string;
@@ -104,27 +105,33 @@ export function usePostForm() {
   const draftNotifiedRef = useRef(false);
 
   // Core form state - initialize from draft if available
-  const [caption, setCaption] = useState(() => initialDraft?.caption || "");
+  const [caption, setCaptionState] = useState(() => initialDraft?.caption || "");
   const [selectedPlatforms, setSelectedPlatforms] = useState<Platform[]>([]);
   const [selectedAccountIds, setSelectedAccountIds] = useState<string[]>(() => initialDraft?.selectedAccountIds || []);
-  const [files, setFiles] = useState<UploadedFile[]>(() => {
+  const [files, setFilesState] = useState<UploadedFile[]>(() => {
     if (initialDraft?.fileMetadata && initialDraft.fileMetadata.length > 0) {
       return initialDraft.fileMetadata.map(meta => ({
         id: meta.id,
         file: new File([], "restored-file"),
         previewUrl: meta.cloudinaryUrl || meta.previewUrl,
         fileType: meta.fileType,
-        uploadProgress: 100,
-        uploaded: true,
+        uploadProgress: meta.storagePath ? 100 : 0,
+        uploaded: Boolean(meta.storagePath),
+        uploadError: meta.storagePath ? undefined : "This media needs to be selected again before publishing.",
         storagePath: meta.storagePath,
         cloudinaryUrl: meta.cloudinaryUrl,
         cloudinaryPublicId: meta.cloudinaryPublicId,
         fromMediaLibrary: meta.fromMediaLibrary,
+        altText: meta.altText,
+        mediaSource: meta.mediaSource,
+        photographerName: meta.photographerName,
+        photographerUrl: meta.photographerUrl,
+        unsplashUrl: meta.unsplashUrl,
       }));
     }
     return [];
   });
-  const [isPosting, setIsPosting] = useState(false);
+  const [isPosting, setIsPostingState] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
   const [scheduledAt, setScheduledAt] = useState<Date | null>(() =>
@@ -140,6 +147,38 @@ export function usePostForm() {
   const [accountOrder, setAccountOrder] = useState<string[]>([]);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const activeRef = useRef(true);
+  const isPostingRef = useRef(false);
+  const composerGenerationRef = useRef(0);
+  const filesRef = useRef(files);
+
+  const setIsPosting = useCallback((posting: boolean) => {
+    isPostingRef.current = posting;
+    if (activeRef.current) setIsPostingState(posting);
+  }, []);
+
+  const setFiles = useCallback<React.Dispatch<React.SetStateAction<UploadedFile[]>>>((update) => {
+    if (activeRef.current && !isPostingRef.current) setFilesState(update);
+  }, []);
+
+  const setCaption = useCallback<React.Dispatch<React.SetStateAction<string>>>((update) => {
+    if (activeRef.current && !isPostingRef.current) setCaptionState(update);
+  }, []);
+
+  useEffect(() => {
+    filesRef.current = files;
+  }, [files]);
+
+  useEffect(() => {
+    activeRef.current = true;
+    return () => {
+      activeRef.current = false;
+      composerGenerationRef.current += 1;
+      for (const file of filesRef.current) {
+        if (file.previewUrl.startsWith("blob:")) URL.revokeObjectURL(file.previewUrl);
+      }
+    };
+  }, []);
 
   // Show draft restored notification once after mount
   useEffect(() => {
@@ -166,7 +205,7 @@ export function usePostForm() {
       scheduleEnabled,
       scheduleTimezone,
       uploadMethod,
-      fileMetadata: files.filter(f => f.uploaded).map(f => ({
+      fileMetadata: files.map(f => ({
         id: f.id,
         previewUrl: f.cloudinaryUrl || f.previewUrl,
         fileType: f.fileType,
@@ -174,6 +213,11 @@ export function usePostForm() {
         cloudinaryUrl: f.cloudinaryUrl,
         cloudinaryPublicId: f.cloudinaryPublicId,
         fromMediaLibrary: f.fromMediaLibrary,
+        altText: f.altText,
+        mediaSource: f.mediaSource,
+        photographerName: f.photographerName,
+        photographerUrl: f.photographerUrl,
+        unsplashUrl: f.unsplashUrl,
       })),
       savedAt: Date.now(),
     };
@@ -190,7 +234,7 @@ export function usePostForm() {
         try {
           const payload = JSON.parse(storedData);
           if (payload.caption && (payload.mode === "caption" || payload.mode === "full")) {
-            setCaption(payload.caption);
+            setCaptionState(payload.caption);
           }
           if (payload.media && Array.isArray(payload.media) && (payload.mode === "media" || payload.mode === "full")) {
             const reuseFiles: UploadedFile[] = payload.media.map((m: { id: string; url: string; kind?: string }, i: number) => ({
@@ -204,7 +248,7 @@ export function usePostForm() {
               cloudinaryUrl: m.url,
               fromMediaLibrary: true,
             }));
-            setFiles(reuseFiles);
+            setFilesState(reuseFiles);
           }
           sessionStorage.removeItem("postora_reuse_payload");
           searchParams.delete("from");
@@ -239,7 +283,7 @@ export function usePostForm() {
             fromMediaLibrary: true,
           }));
 
-          setFiles(libraryFiles);
+          setFilesState(libraryFiles);
 
           toast({
             title: "Media loaded",
@@ -258,13 +302,26 @@ export function usePostForm() {
 
   // ---- Edit scheduled post mode ----
   const editPostId = searchParams.get("edit");
-  const [isLoadingEditPost, setIsLoadingEditPost] = useState(false);
+  const [isLoadingEditPost, setIsLoadingEditPost] = useState(Boolean(editPostId));
+  const [editStatus, setEditStatus] = useState<"idle" | "loading" | "ready" | "error">(editPostId ? "loading" : "idle");
+  const [editLoadError, setEditLoadError] = useState<string | null>(null);
+  const [editReloadNonce, setEditReloadNonce] = useState(0);
+  const editRequestRef = useRef(0);
 
   useEffect(() => {
-    if (!editPostId || connectedAccounts.length === 0) return;
+    if (!editPostId) {
+      setEditStatus("idle");
+      setEditLoadError(null);
+      setIsLoadingEditPost(false);
+      return;
+    }
+
+    const requestId = ++editRequestRef.current;
+    setEditStatus("loading");
+    setEditLoadError(null);
+    setIsLoadingEditPost(true);
 
     const loadEditPost = async () => {
-      setIsLoadingEditPost(true);
       try {
         const { data: post, error } = await supabase
           .from("posts")
@@ -272,77 +329,69 @@ export function usePostForm() {
           .eq("id", editPostId)
           .single();
 
-        if (error || !post) {
-          toast({ title: "Error", description: "Could not load the scheduled post.", variant: "destructive" });
-          setIsLoadingEditPost(false);
-          return;
-        }
+        if (error || !post) throw new Error("Could not load the scheduled post.");
 
-        // Set caption
-        if (post.caption) setCaption(post.caption);
-
-        // Set schedule
-        if (post.scheduled_at) {
-          setScheduledAt(new Date(post.scheduled_at));
-          setScheduleEnabled(true);
-        }
-
-        // Set timezone from metadata
-        const meta = post.metadata as { timezone?: string; selected_account_ids?: string[] } | null;
-        if (meta?.timezone) setScheduleTimezone(meta.timezone);
-
-        // Select accounts from metadata
-        const accountIds = meta?.selected_account_ids as string[] | undefined;
-        if (accountIds && accountIds.length > 0) {
-          setSelectedAccountIds(accountIds);
-        }
-
-        // Load media files
-        if (post.media_file_ids && post.media_file_ids.length > 0) {
+        const mediaIds = Array.isArray(post.media_file_ids) ? post.media_file_ids : [];
+        let editFiles: UploadedFile[] = [];
+        if (mediaIds.length > 0) {
           const { data: mediaFiles, error: mediaReadError } = await supabase
             .from("media_files")
             .select("*")
-            .in("id", post.media_file_ids);
-          if (mediaReadError) throw mediaReadError;
-
-          if (mediaFiles && mediaFiles.length > 0) {
-            const editFiles: UploadedFile[] = orderPostMediaFiles(post.media_file_ids, mediaFiles).map((mf) => {
-              // Resolve the public URL via the shared helper. For Cloudinary rows,
-              // file_path already stores the full secure_url (cloud name + version +
-              // extension); rebuilding it from storage_bucket/public_id produced
-              // broken links (see resolveMediaPublicUrl docs).
-              const url = resolveMediaPublicUrl(mf, (bucket, path) =>
-                supabase.storage.from(bucket).getPublicUrl(path).data?.publicUrl || path,
-              );
-
-              return {
-                id: mf.id,
-                file: new File([], mf.file_path?.split("/").pop() || "media-file"),
-                previewUrl: url,
-                fileType: (mf.file_type === "video" ? "video" : "image") as "image" | "video" | "gif",
-                uploadProgress: 100,
-                uploaded: true,
-                storagePath: mf.id,
-                cloudinaryUrl: url,
-                cloudinaryPublicId: mf.cloudinary_public_id || undefined,
-                fromMediaLibrary: true,
-              };
-            });
-            setFiles(editFiles);
+            .in("id", mediaIds);
+          if (mediaReadError) throw new Error("Could not read this post's media. No changes were loaded.");
+          const missingIds = getMissingMediaFileIds(mediaIds, mediaFiles ?? []);
+          if (missingIds.length > 0) {
+            throw new Error(`${missingIds.length} media item(s) are missing. Saving is blocked so they are not removed accidentally.`);
           }
+
+          editFiles = orderPostMediaFiles(mediaIds, mediaFiles ?? []).map((mf, index) => {
+            const url = resolveMediaPublicUrl(mf, (bucket, path) =>
+              supabase.storage.from(bucket).getPublicUrl(path).data?.publicUrl || path,
+            );
+            return {
+              id: `edit-${editPostId}-${index}-${mf.id}`,
+              file: new File([], mf.file_path?.split("/").pop() || "media-file"),
+              previewUrl: url,
+              fileType: (mf.file_type === "video" ? "video" : "image") as "image" | "video" | "gif",
+              uploadProgress: 100,
+              uploaded: true,
+              storagePath: mf.id,
+              cloudinaryUrl: url,
+              cloudinaryPublicId: mf.cloudinary_public_id || undefined,
+              fromMediaLibrary: true,
+            };
+          });
         }
 
+        if (!activeRef.current || editRequestRef.current !== requestId) return;
+        const meta = post.metadata as { schedule_timezone?: string; timezone?: string; selected_account_ids?: string[] } | null;
+        const accountIds = Array.isArray(meta?.selected_account_ids) ? meta.selected_account_ids : [];
+        setCaptionState(post.caption ?? "");
+        setScheduledAt(post.scheduled_at ? new Date(post.scheduled_at) : null);
+        setScheduleEnabled(Boolean(post.scheduled_at));
+        setScheduleTimezone(meta?.schedule_timezone || meta?.timezone || profile?.preferred_timezone || "");
+        setSelectedAccountIds(accountIds);
+        setFilesState(editFiles);
+        setMediaValidation(null);
+        setEditStatus("ready");
         toast({ title: "Post loaded", description: "Edit the scheduled post and save changes." });
       } catch (err) {
+        if (!activeRef.current || editRequestRef.current !== requestId) return;
+        const message = err instanceof Error ? err.message : "Failed to load post for editing.";
         console.error("Error loading edit post:", err);
-        toast({ title: "Error", description: "Failed to load post for editing.", variant: "destructive" });
+        setEditStatus("error");
+        setEditLoadError(message);
+        toast({ title: "Error", description: message, variant: "destructive" });
       } finally {
-        setIsLoadingEditPost(false);
+        if (activeRef.current && editRequestRef.current === requestId) setIsLoadingEditPost(false);
       }
     };
 
     loadEditPost();
-  }, [editPostId, connectedAccounts.length]);
+    return () => {
+      if (editRequestRef.current === requestId) editRequestRef.current += 1;
+    };
+  }, [editPostId, editReloadNonce]);
 
   // Load preferred timezone from profile on mount
   useEffect(() => {
@@ -398,6 +447,14 @@ export function usePostForm() {
       .filter(acc => selectedAccountIds.includes(acc.id))
       .map(acc => acc.platform)
   )], [connectedAccounts, selectedAccountIds]);
+
+  useEffect(() => {
+    setSelectedPlatforms((currentPlatforms) => {
+      const unchanged = currentPlatforms.length === selectedPlatformsFromAccounts.length
+        && currentPlatforms.every((platform, index) => platform === selectedPlatformsFromAccounts[index]);
+      return unchanged ? currentPlatforms : selectedPlatformsFromAccounts;
+    });
+  }, [selectedPlatformsFromAccounts]);
 
   // Media state checks
   const hasOnlyImages = useMemo(() => {
@@ -531,8 +588,9 @@ export function usePostForm() {
 
   const uploadLimits = useMediaUploadLimits();
 
-  const setUploadProgress = (fileId: string, uploadProgress: number) => {
-    setFiles((prev) => prev.map((f) => (f.id === fileId ? { ...f, uploadProgress } : f)));
+  const setUploadProgress = (fileId: string, uploadProgress: number, generation: number) => {
+    if (!activeRef.current || composerGenerationRef.current !== generation) return;
+    setFilesState((prev) => prev.map((f) => (f.id === fileId ? { ...f, uploadProgress } : f)));
   };
 
   // Update file with Cloudinary URL and database ID.
@@ -543,9 +601,10 @@ export function usePostForm() {
   // live preview keeps pointing at the dead blob: URL and only shows correctly
   // after a page refresh, when the draft-restore path sets previewUrl from
   // cloudinaryUrl.
-  const markUploaded = (uploadFile: UploadedFile, data: { url: string; mediaFileId?: string; publicId?: string }) => {
+  const markUploaded = (uploadFile: UploadedFile, data: { url: string; mediaFileId?: string; publicId?: string }, generation: number) => {
+    if (!activeRef.current || composerGenerationRef.current !== generation) return;
     const secureUrl: string = data.url;
-    setFiles((prev) =>
+    setFilesState((prev) =>
       prev.map((f) => {
         if (f.id !== uploadFile.id) return f;
         const prevPreview = f.previewUrl;
@@ -570,8 +629,9 @@ export function usePostForm() {
   };
 
   // File upload handler - uploads to Cloudinary
-  const uploadFileToStorage = async (uploadFile: UploadedFile) => {
-    if (!user) return;
+  const uploadFileToStorage = async (uploadFile: UploadedFile, expectedGeneration = composerGenerationRef.current) => {
+    const generation = expectedGeneration;
+    if (!user || !activeRef.current || isPostingRef.current) return;
 
     try {
       const kind = mediaTypeForFileName(uploadFile.file.name)?.kind
@@ -584,15 +644,15 @@ export function usePostForm() {
       // Over 10 MB the file goes straight to the storage provider; the edge
       // function only signs the upload and records it.
       if (needsDirectUpload(kind, uploadFile.file.size, uploadLimits)) {
-        setUploadProgress(uploadFile.id, 5);
+        setUploadProgress(uploadFile.id, 5, generation);
         const data = await uploadLargeMedia(uploadFile.file, (percent) =>
-          setUploadProgress(uploadFile.id, Math.max(5, Math.round(percent * 0.95))),
+          setUploadProgress(uploadFile.id, Math.max(5, Math.round(percent * 0.95)), generation),
         );
-        markUploaded(uploadFile, data);
+        markUploaded(uploadFile, data, generation);
         return;
       }
 
-      setUploadProgress(uploadFile.id, 10);
+      setUploadProgress(uploadFile.id, 10, generation);
 
       // Convert file to base64
       const base64 = await new Promise<string>((resolve, reject) => {
@@ -602,7 +662,7 @@ export function usePostForm() {
         reader.readAsDataURL(uploadFile.file);
       });
 
-      setUploadProgress(uploadFile.id, 30);
+      setUploadProgress(uploadFile.id, 30, generation);
 
       // Upload to Cloudinary via edge function
       const { data, error } = await supabase.functions.invoke("cloudinary-upload", {
@@ -630,52 +690,44 @@ export function usePostForm() {
       }
       if (!data?.success) throw new Error(data?.error || "Upload failed");
 
-      setUploadProgress(uploadFile.id, 90);
-      markUploaded(uploadFile, data);
+      setUploadProgress(uploadFile.id, 90, generation);
+      markUploaded(uploadFile, data, generation);
       console.log(`File uploaded to Cloudinary: ${data.url}, DB ID: ${data.mediaFileId}`);
 
     } catch (error) {
+      if (!activeRef.current || composerGenerationRef.current !== generation) return;
       console.error("Upload error:", error);
       showErrorToast("Upload failed", error);
-      setFiles((prev) => prev.filter((f) => f.id !== uploadFile.id));
+      setFilesState((prev) => prev.filter((f) => f.id !== uploadFile.id));
     }
   };
 
   // Upload external URL to Cloudinary and database
   const uploadUrlToStorage = async (url: string, fileType: "image" | "video" | "gif") => {
-    if (!user) return null;
+    if (!user) throw new Error("Please log in before uploading media.");
+    const { data, error } = await supabase.functions.invoke("cloudinary-upload", {
+      body: {
+        externalUrl: url,
+        fileName: url.split("/").pop() || `external-${Date.now()}`,
+        fileType,
+      },
+    });
 
-    try {
-      // Upload to Cloudinary via edge function (using externalUrl)
-      const { data, error } = await supabase.functions.invoke("cloudinary-upload", {
-        body: {
-          externalUrl: url,
-          fileName: url.split("/").pop() || `external-${Date.now()}`,
-          fileType: fileType,
-        },
-      });
+    if (error) throw error;
+    if (!data?.success) throw new Error(data?.error || "Upload failed");
+    if (!data.mediaFileId) throw new Error("The upload finished without a media ID. The post was not saved.");
 
-      if (error) throw error;
-      if (!data.success) throw new Error(data.error || "Upload failed");
-
-      console.log(`URL uploaded to Cloudinary/DB: ${data.url}, DB ID: ${data.mediaFileId}`);
-
-      return {
-        id: data.mediaFileId as string,
-        url: data.url as string,
-        publicId: data.publicId as string
-      };
-
-    } catch (error) {
-      console.error("URL upload error:", error);
-      // Don't show toast here to avoid spamming if processing multiple
-      return null;
-    }
+    return {
+      id: data.mediaFileId as string,
+      url: data.url as string,
+      publicId: data.publicId as string,
+    };
   };
 
   // Handle file selection - optimized with parallel uploads
   const handleFileSelect = async (fileList: FileList | null) => {
-    if (!fileList || !user) return;
+    if (!fileList || !user || isPostingRef.current) return;
+    const generation = composerGenerationRef.current;
 
     const filesToProcess = Array.from(fileList).slice(0, 10 - files.length);
     if (filesToProcess.length === 0) return;
@@ -760,8 +812,11 @@ export function usePostForm() {
       })
     );
 
-    // Filter out nulls (failed validations)
     const validFiles = processedFiles.filter((f): f is UploadedFile => f !== null);
+    if (!activeRef.current || composerGenerationRef.current !== generation) {
+      for (const file of validFiles) URL.revokeObjectURL(file.previewUrl);
+      return;
+    }
 
     if (validFiles.length === 0) {
       setIsUploading(false);
@@ -769,7 +824,7 @@ export function usePostForm() {
     }
 
     // Add files to state immediately for preview
-    setFiles((prev) => [...prev, ...validFiles].slice(0, 10));
+    setFilesState((prev) => [...prev, ...validFiles].slice(0, 10));
 
     // Upload all files in parallel (max 3 concurrent)
     const uploadQueue = [...validFiles];
@@ -779,7 +834,7 @@ export function usePostForm() {
     const uploadNext = async () => {
       while (uploadQueue.length > 0) {
         const file = uploadQueue.shift();
-        if (file) await uploadFileToStorage(file);
+        if (file) await uploadFileToStorage(file, generation);
       }
     };
 
@@ -788,7 +843,7 @@ export function usePostForm() {
     }
 
     await Promise.all(uploadPromises);
-    setIsUploading(false);
+    if (activeRef.current && composerGenerationRef.current === generation) setIsUploading(false);
   };
 
   // Handle drag events
@@ -809,11 +864,12 @@ export function usePostForm() {
 
   // Remove file
   const removeFile = async (id: string) => {
-    const file = files.find((f) => f.id === id);
-    if (file) {
-      URL.revokeObjectURL(file.previewUrl);
-    }
-    setFiles((prev) => prev.filter((f) => f.id !== id));
+    if (isPostingRef.current) return;
+    setFilesState((prev) => {
+      const file = prev.find((candidate) => candidate.id === id);
+      if (file?.previewUrl.startsWith("blob:")) URL.revokeObjectURL(file.previewUrl);
+      return prev.filter((candidate) => candidate.id !== id);
+    });
   };
 
   // Update platform selection based on account selection
@@ -849,29 +905,6 @@ export function usePostForm() {
     );
   };
 
-  // Reset form and clear draft
-  const resetPostForm = () => {
-    setCaption("");
-    setFiles([]);
-    setSelectedPlatforms([]);
-    setSelectedAccountIds([]);
-    setScheduledAt(null);
-    setScheduleEnabled(false);
-    sessionStorage.removeItem(POST_DRAFT_KEY);
-  };
-
-  const startNewPost = () => {
-    resetPostForm();
-    setUploadMethod("local");
-    if (fileInputRef.current) fileInputRef.current.value = "";
-    // Leaving an edit target would update the saved post on the next submit.
-    setSearchParams(previous => {
-      const next = new URLSearchParams(previous);
-      next.delete("edit");
-      return next;
-    }, { replace: true });
-  };
-
   // Clear draft (e.g., after successful post)
   const clearDraft = () => {
     sessionStorage.removeItem(POST_DRAFT_KEY);
@@ -879,6 +912,11 @@ export function usePostForm() {
 
   // Validate post
   const validatePost = (unsplashValidationError?: string | null): boolean => {
+    if (editPostId && editStatus !== "ready") {
+      showErrorToast("Post not ready", editLoadError || "Wait for the complete post to load before saving.");
+      return false;
+    }
+
     if (!user) {
       showErrorToast("Not authenticated", "Please log in to create posts.");
       return false;
@@ -901,7 +939,12 @@ export function usePostForm() {
 
     const pendingUploads = files.filter((f) => !f.uploaded);
     if (pendingUploads.length > 0) {
-      showErrorToast("Uploads in progress", "Please wait for all files to finish uploading.");
+      showErrorToast("Uploads in progress", "Please wait for all files to finish uploading or select incomplete media again.");
+      return false;
+    }
+
+    if (files.some((file) => !file.storagePath)) {
+      showErrorToast("Media not ready", "Every selected media item needs a saved media ID. Re-upload incomplete items; the post was not saved.");
       return false;
     }
 
@@ -969,6 +1012,9 @@ export function usePostForm() {
     // Edit mode
     editPostId,
     isLoadingEditPost,
+    editStatus,
+    editLoadError,
+    retryEditPost: () => setEditReloadNonce((nonce) => nonce + 1),
 
     // Handlers
     handleFileSelect,
@@ -978,8 +1024,6 @@ export function usePostForm() {
     removeFile,
     updatePlatformSelection,
     handlePlatformFilterToggle,
-    resetPostForm,
-    startNewPost,
     validatePost,
     uploadFileToStorage,
     showSuccessToast,

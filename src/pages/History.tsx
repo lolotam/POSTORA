@@ -33,6 +33,7 @@ import {
 import { PublishingStatusIndicator } from "@/components/history/PublishingStatusIndicator";
 import { useHistoryActions } from "@/hooks/useHistoryActions";
 import { resolveMediaPreviewUrl } from "@/lib/mediaUrl";
+import { orderPostMediaFiles } from "../../supabase/functions/_shared/post-media";
 
 interface PostWithResults extends Post {
   platformResults: PlatformPost[];
@@ -152,7 +153,7 @@ export default function History() {
 
       // CDN delivery URLs are direct; private storage object paths need signing.
       const previews: Array<{ id: string; url: string; kind: "image" | "video" }> = [];
-      for (const m of mediaRows || []) {
+      for (const m of orderPostMediaFiles(mediaIds, mediaRows || [])) {
         const url = await resolveMediaPreviewUrl(m, async (bucket, path) => {
           const { data: signedUrlData, error: signedUrlError } = await supabase.storage
             .from(bucket)

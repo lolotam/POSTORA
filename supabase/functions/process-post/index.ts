@@ -1822,10 +1822,11 @@ Deno.serve(async (req) => {
 
         if (signedUrlError) {
           console.error(`Failed to create signed URL for ${file.file_path}:`, signedUrlError);
-        } else if (signedUrlData?.signedUrl) {
-          console.log(`Generated signed URL for ${file.file_path}`);
-          mediaUrls.push(signedUrlData.signedUrl);
+          throw signedUrlError;
         }
+        if (!signedUrlData?.signedUrl) throw new Error(`Could not create a delivery URL for media ${file.id}`);
+        console.log(`Generated signed URL for ${file.file_path}`);
+        mediaUrls.push(signedUrlData.signedUrl);
       }
     }
 

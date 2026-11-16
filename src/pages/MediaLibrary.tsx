@@ -586,7 +586,10 @@ export default function MediaLibrary() {
       toast({ title: t("toast.noFilesSelected", "No files selected"), description: t("toast.noFilesSelectedDesc", "Please select at least one file to send to post"), variant: "destructive" });
       return;
     }
-    const filesToSend = mediaFiles.filter((f) => selectedFiles.has(f.id));
+    const filesToSend = Array.from(selectedFiles).flatMap((id) => {
+      const file = mediaFiles.find((candidate) => candidate.id === id);
+      return file ? [file] : [];
+    });
     const blocked = filesToSend.filter((file) => !isPostableLibraryFile(file));
     if (blocked.length > 0) {
       toast({
