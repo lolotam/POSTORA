@@ -100,7 +100,7 @@ Deno.test("registered process-post durably completes single-image Threads contai
   let logs: Record<string, unknown>[];
   let providerStatuses: Array<Record<string, unknown> | Error>;
   let checkpointMode: "ok" | "error" | "null" | "lost";
-  let publishMode: "success" | "timeout" | "rejected";
+  let publishMode: "success" | "timeout" | "rejected" | "null";
   let createDuration = 0;
   let statusHook: (() => void) | null = null;
   let checkpointHook: (() => void) | null = null;
@@ -242,6 +242,7 @@ Deno.test("registered process-post durably completes single-image Threads contai
       if (request.method === "POST" && url.pathname.endsWith("/threads_publish")) {
         publishes++;
         if (publishMode === "timeout") throw new DOMException("fixture timeout", "TimeoutError");
+        if (publishMode === "null") return Response.json(null);
         if (publishMode === "rejected") return Response.json({ error: { message: "fixture publish rejection" } });
         return Response.json({ id: "published-image-1" });
       }
@@ -271,7 +272,13 @@ Deno.test("registered process-post durably completes single-image Threads contai
     if (table === "posts") {
       if (request.method === "PATCH") {
         if (!matchesPostFilters(post, url)) return Response.json([]);
-        Object.assign(post, await request.json());
+        const update = await request.json() as Record<string, unknown>;
+        if (update.status === "processing" && update.processing_started_at &&
+          update.processing_started_at !== post.processing_started_at && rows.some((row) =>
+            row.status === "pending" && row.platform === "threads" && deferred(row.response_data)?.media_type === "IMAGE")) {
+          return Response.json({ message: "Resume the existing Threads image checkpoint" }, { status: 409 });
+        }
+        Object.assign(post, update);
         return Response.json([{ id: POST, processing_started_at: post.processing_started_at }]);
       }
       if (parentReadError && rows.some((row) => row.id === IMAGE_ROW)) {
@@ -530,6 +537,32 @@ Deno.test("registered process-post durably completes single-image Threads contai
       assertEquals(second.status, 200, await second.clone().text());
       assertEquals(publishes, 1);
       assertEquals(rows[0].status, "success");
+    });
+
+    await test.step("JSON null from publish is an unknown outcome and never permits a second send", async () => {
+      reset();
+      await invoke({ at: 1_000 });
+      leaseImageRow();
+      publishMode = "null";
+      const response = await invoke({ resume: IMAGE_ROW });
+      assertEquals(response.status, 200);
+      assertEquals(rows[0].status, "pending");
+      assertEquals(deferred(rows[0].response_data).publish_outcome, "uncertain");
+      leaseImageRow();
+      providerStatuses = [{ status: "FINISHED" }];
+      await invoke({ resume: IMAGE_ROW });
+      assertEquals(publishes, 1);
+    });
+
+    await test.step("a direct override cannot replace the attempt owning a pending image checkpoint", async () => {
+      reset();
+      await invoke({ at: 1_000 });
+      const firstClaim = post.processing_started_at;
+      const response = await invoke({ at: 2_000, accountIds: [THREADS_ACCOUNT] });
+      assertEquals(response.status, 500);
+      assertEquals(post.processing_started_at, firstClaim);
+      assertEquals(creates, 1);
+      assertEquals(rows[0].status, "pending");
     });
 
     await test.step("FINISHED after an unanswered publish never authorizes a blind resend and expires unresolved", async () => {

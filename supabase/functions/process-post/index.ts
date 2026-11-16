@@ -1778,6 +1778,12 @@ Deno.serve(async (req) => {
     // restart the stale-post clock.
     const claim = resume ? { claimed: true, error: null, processingStartedAt: null } : await claimPostForProcessing(supabase, post_id, expectedScheduledAt, expectedPublishRequestedAt);
     if (claim.error) {
+      const logError = await writeLogRow(supabase, {
+        level: "error", category: "post", source: "process-post", user_id: post.user_id,
+        message: "Post processing claim was refused or unavailable; no provider call was made",
+        metadata: { event: "post_processing_claim_refused", post_id },
+      });
+      if (logError) console.error("Post processing claim refusal log failed:", logError);
       return createErrorResponse(`Could not claim post for processing: ${claim.error}`, 500);
     }
     if (!claim.claimed) {

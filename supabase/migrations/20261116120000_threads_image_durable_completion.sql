@@ -13,6 +13,34 @@ CREATE UNIQUE INDEX IF NOT EXISTS platform_posts_threads_image_attempt_uq
     AND response_data #>> '{deferred,kind}' = 'threads'
     AND response_data #>> '{deferred,media_type}' = 'IMAGE';
 
+-- The post row lock serializes a fresh claim against checkpoint admission. A
+-- direct invocation must resume pending images, never replace their attempt.
+CREATE OR REPLACE FUNCTION public.preserve_pending_threads_image_attempt()
+RETURNS trigger
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM public.platform_posts pp
+     WHERE pp.post_id = OLD.id AND pp.platform = 'threads' AND pp.status = 'pending'
+       AND pp.response_data #>> '{deferred,kind}' = 'threads'
+       AND pp.response_data #>> '{deferred,media_type}' = 'IMAGE'
+  ) THEN
+    RAISE EXCEPTION 'Resume the existing Threads image checkpoint before starting another attempt'
+      USING ERRCODE = 'serialization_failure';
+  END IF;
+  RETURN NEW;
+END;
+$$;
+REVOKE ALL ON FUNCTION public.preserve_pending_threads_image_attempt() FROM PUBLIC, anon, authenticated;
+CREATE OR REPLACE TRIGGER preserve_pending_threads_image_attempt
+  BEFORE UPDATE OF processing_started_at ON public.posts
+  FOR EACH ROW WHEN (NEW.status = 'processing' AND NEW.processing_started_at IS NOT NULL
+    AND OLD.processing_started_at IS DISTINCT FROM NEW.processing_started_at)
+  EXECUTE FUNCTION public.preserve_pending_threads_image_attempt();
+
 -- Admit one image container to the active processing attempt. The post lock is
 -- shared with retry/cancel/edit writers. The content snapshot is captured before
 -- provider creation, so a changed post cannot admit the old container afterward.

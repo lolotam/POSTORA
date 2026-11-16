@@ -249,16 +249,24 @@ BEGIN
   END;
   ASSERT refused, 'T5c a missing durable media type is rejected';
 
-  -- Keep the durable attempt identity intact, but make the post's stored claim stale.
-  -- This reaches the claim guard instead of failing early on mismatched identity.
-  UPDATE public.posts SET processing_started_at = claim_at - interval '1 second' WHERE id = post_t;
+  -- Even a direct caller without scheduler expectations cannot overwrite the
+  -- active attempt while this durable row is pending.
   refused := false;
   BEGIN
-    PERFORM public.record_threads_image_checkpoint(post_t, acct_th, payload, claim_at, expected);
+    UPDATE public.posts SET status = 'processing', processing_started_at = claim_at + interval '1 second' WHERE id = post_t;
+  EXCEPTION WHEN serialization_failure THEN refused := true;
+  END;
+  ASSERT refused AND (SELECT processing_started_at FROM public.posts WHERE id = post_t) = claim_at,
+    'T5d a direct processing claim cannot replace a pending image attempt';
+  -- Supply an internally consistent old identity to reach the stale-claim guard.
+  refused := false;
+  BEGIN
+    PERFORM public.record_threads_image_checkpoint(post_t, acct_th,
+      jsonb_set(payload, '{deferred,attempt_started_at}', to_jsonb(claim_at - interval '1 second')),
+      claim_at - interval '1 second', expected);
   EXCEPTION WHEN serialization_failure THEN refused := true;
   END;
   ASSERT refused, 'T6 a stale processing claim is refused';
-  UPDATE public.posts SET processing_started_at = claim_at WHERE id = post_t;
 
   refused := false;
   BEGIN

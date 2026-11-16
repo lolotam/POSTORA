@@ -52,7 +52,7 @@ export interface ThreadsPublishGuards {
 
 /** Send once. An unanswered publish retains the same container for status reconciliation. */
 export async function publishThreadsContainer(
-  publish: (timeoutMs: number) => Promise<GraphResponse>,
+  publish: (timeoutMs: number) => Promise<unknown>,
   containerId: string,
   kind: DeferredKind,
   deadlineMs: number,
@@ -62,13 +62,18 @@ export async function publishThreadsContainer(
   const timeoutMs = Math.min(20_000, deadlineMs - now());
   if (timeoutMs < 3000) throw new ContainerStillProcessing(kind, containerId);
   await guards.beforeSend?.();
-  let response: GraphResponse;
+  let payload: unknown;
   try {
-    response = await publish(timeoutMs);
+    payload = await publish(timeoutMs);
   } catch {
     guards.onUnknown?.();
     throw new ContainerStillProcessing(kind, containerId);
   }
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    guards.onUnknown?.();
+    throw new ContainerStillProcessing(kind, containerId);
+  }
+  const response = payload as GraphResponse;
   if (typeof response.id === "string" && response.id) return { id: response.id };
   if (response.error) throw new Error(`Threads publish error: ${response.error.message ?? "Meta rejected the publish"}`);
   guards.onUnknown?.();
