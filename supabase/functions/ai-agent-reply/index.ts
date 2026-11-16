@@ -135,6 +135,7 @@ import {
   ensureInboundTurn,
   HISTORICAL_FACTS_REMINDER,
   InboundTurnStorageError,
+  restoreInboundTurn,
   supabaseTurnHistory,
 } from "./turnHistory.ts";
 import { enabledProcedures, readProcedureConfig } from "../_shared/procedures/config.ts";
@@ -806,7 +807,9 @@ Deno.serve(async (req) => {
     // error) pass no dry_run in meta, and the dashboard must exclude every sandbox outcome.
     dry_run: dryRun,
   };
-  const outboxId = dryRun ? null : request.outbox_id ?? null;
+  const rawOutboxId = dryRun ? null : request.outbox_id ?? null;
+  const outboxId = typeof rawOutboxId === "string" ? rawOutboxId.toLowerCase() : rawOutboxId;
+  baseLog.idempotency_key = outboxId;
   // Outbox work reuses its verified event identity. Direct and sandbox calls get one
   // invocation-local id; no cross-request deduplication is promised for those callers.
   const inboundTurnId = outboxId ?? crypto.randomUUID();
@@ -954,6 +957,33 @@ Deno.serve(async (req) => {
     const mode = resolveEngagementMode(overrideMode, config.default_mode);
     const { data: thread, error: threadError } = threadResult;
     if (threadError) throw threadError;
+    if (outboxId) {
+      // Recovery may re-extract media or pass its original placeholder. The first
+      // persisted enrichment is canonical for this scoped event, not a new message.
+      const stored = await restoreInboundTurn(supabaseTurnHistory(admin), {
+        id: inboundTurnId, threadId: thread.id, userId: request.user_id,
+      });
+      if (!stored.ok) {
+        inboundPersistStatus = "failed";
+        throw new InboundTurnStorageError(stored.error);
+      }
+      if (stored.content !== null) {
+        request.inbound_text = stored.content;
+        baseLog.inbound_text = stored.content.slice(0, 2000);
+        inboundPersistStatus = "verified";
+      }
+    }
+    const persistInbound = async () => {
+      if (inboundPersistStatus === "inserted" || inboundPersistStatus === "verified") return;
+      const inbound = await ensureInboundTurn(supabaseTurnHistory(admin), {
+        id: inboundTurnId, threadId: thread.id, userId: request.user_id, content: request.inbound_text,
+      });
+      if (!inbound.ok) {
+        inboundPersistStatus = "failed";
+        throw new InboundTurnStorageError(inbound.error);
+      }
+      inboundPersistStatus = inbound.status;
+    };
     const storedCustomerLanguage: ReplyLanguage | null =
       thread.customer_language === "ar" || thread.customer_language === "en" ? thread.customer_language : null;
 
@@ -1101,18 +1131,6 @@ Deno.serve(async (req) => {
           timestamp: new Date().toISOString(),
         });
       }
-      const inbound = await ensureInboundTurn(supabaseTurnHistory(settlementAdmin), {
-        id: inboundTurnId,
-        threadId: thread.id,
-        userId: request.user_id,
-        content: request.inbound_text,
-      });
-      if (!inbound.ok) {
-        inboundPersistStatus = "failed";
-        console.error("[ai-agent-reply] Inbound turn persistence failed during delivery:", inbound.error);
-        throw new InboundTurnStorageError(inbound.error);
-      }
-      if (inboundPersistStatus === "not_started") inboundPersistStatus = inbound.status;
       const { error: threadWriteError } = await settlementAdmin.from("ai_thread_messages").insert({
         thread_id: thread.id,
         user_id: request.user_id,
@@ -1144,6 +1162,7 @@ Deno.serve(async (req) => {
         return jsonResponse({ ok: false, error: `outbox row not runnable: ${entry.status}` }, 409);
       }
       if (entry.mode === "redeliver") {
+        await persistInbound();
         const sender = replySender;
         // The payload the caller read travels with the claim: a row whose text was
         // replaced between the read and the claim is not sent, and what goes out is what
@@ -1182,6 +1201,10 @@ Deno.serve(async (req) => {
         return jsonResponse({ ok: true, redelivered: true, reply: delivered.text });
       }
     }
+
+    // Local persistence precedes every send, including legacy stored redelivery.
+    // A failure here remains retryable and cannot strand an already-sent reply.
+    await persistInbound();
 
     // The human_first notice travels the same send path as a generated reply and leaves the
     // same thread trail. It is at most once: the claim is spent before the send, and it is
@@ -1246,21 +1269,6 @@ Deno.serve(async (req) => {
       }, { outbound_message_id: outboundMessageId, ...reliabilityMetadata() });
       return jsonResponse({ ok: true, human_mode_ack: true, reply: noticeText });
     }
-
-    // The admitted customer turn is durable before retrieval or model work. A local
-    // prewrite is not an external side effect; failure stays retryable through the catch.
-    const inbound = await ensureInboundTurn(supabaseTurnHistory(admin), {
-      id: inboundTurnId,
-      threadId: thread.id,
-      userId: request.user_id,
-      content: request.inbound_text,
-    });
-    if (!inbound.ok) {
-      inboundPersistStatus = "failed";
-      console.error("[ai-agent-reply] Inbound turn prewrite failed:", inbound.error);
-      throw new InboundTurnStorageError(inbound.error);
-    }
-    inboundPersistStatus = inbound.status;
 
     // The sandbox passes the literal "test" when a caller names no account, and
     // .eq() against a uuid column with a non-uuid raises 22P02 -- which would
@@ -2233,7 +2241,7 @@ Deno.serve(async (req) => {
         const held = await settleStaffInterruptedTurn({
           admin: settlementAdmin, outboxId, sideEffectsHappened, scope: handoffScope(request), lease: earlyEscalationLease,
           threadId: thread.id,
-          turn: { userId: request.user_id, content: request.inbound_text, id: outboxId ?? undefined },
+          turn: { userId: request.user_id, content: request.inbound_text, id: inboundTurnId },
         });
         await logOutcome(settlementAdmin, {
           ...baseLog,

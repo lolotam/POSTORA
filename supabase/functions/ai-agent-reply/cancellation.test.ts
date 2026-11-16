@@ -316,6 +316,9 @@ type FixtureOptions = {
   initialMessages?: FixtureRow[];
   failInbound?: boolean;
   failCacheRead?: boolean;
+  failInboundRead?: boolean;
+  failInboundReadAfterSend?: boolean;
+  staffInterrupt?: boolean;
   model: (call: number, payload: FixtureRow) => Response;
   adapter?: (call: number, payload: FixtureRow) => Response | Promise<Response>;
 };
@@ -445,6 +448,9 @@ async function withReliabilityFixture(
       return Response.json({ messages: [{ id: `external-${sent.length}` }] });
     }
     if (url.pathname.includes("/rpc/")) {
+      if (options.staffInterrupt && url.pathname.endsWith("/claim_unanswered_escalation")) {
+        return Response.json({ marker: new Date(now - 60_000).toISOString(), token: "staff-claim" });
+      }
       if (args.p_from) {
         const id = String(args.p_id ?? outboxId);
         if (args.p_from !== (outboxStates.get(id) ?? "pending")) return Response.json(false);
@@ -463,13 +469,17 @@ async function withReliabilityFixture(
           if (messageRows.some((existing) => existing.id === row.id)) {
             return Response.json({ code: "23505", message: "duplicate" }, { status: 409 });
           }
-          messageRows.push({ id: crypto.randomUUID(), created_at: new Date(now).toISOString(), ...row });
+          messageRows.push({ id: crypto.randomUUID(), created_at: new Date(now).toISOString(), ...row,
+            ...(typeof row.id === "string" ? { id: row.id.toLowerCase() } : {}) });
         }
         return Response.json(null);
       }
       const filters = (column: string) => url.searchParams.get(column);
       if (filters("id")?.startsWith("eq.")) {
-        const id = filters("id")!.slice(3);
+        if (options.failInboundRead || (options.failInboundReadAfterSend && sent.length > 0)) {
+          return Response.json({ message: "settlement read unavailable" }, { status: 500 });
+        }
+        const id = filters("id")!.slice(3).toLowerCase();
         const row = messageRows.find((candidate) =>
           candidate.id === id &&
           (!filters("thread_id") || filters("thread_id") === `eq.${candidate.thread_id}`) &&
@@ -490,7 +500,8 @@ async function withReliabilityFixture(
     if (table === "ai_threads") {
       if (method === "POST") return Response.json({ id: threadId, user_id: owner, customer_language: null });
       if (method === "PATCH") return Response.json(null);
-      return Response.json({ id: threadId, user_id: owner, customer_language: null, unanswered_escalation_since: null });
+      return Response.json({ id: threadId, user_id: owner, customer_language: null,
+        unanswered_escalation_since: options.staffInterrupt ? new Date(now - 60_000).toISOString() : null });
     }
     if (table === "pending_agent_replies") {
       const requestedId = url.searchParams.get("id")?.replace(/^eq\./, "") ?? outboxId;
@@ -535,6 +546,13 @@ async function withReliabilityFixture(
         : Response.json(null);
     }
     if (table === "whatsapp_messages" && method === "GET") {
+      if (options.staffInterrupt && url.searchParams.get("from_name") === "eq.You") {
+        return Response.json(modelPayloads.length === 0 ? [] : [{
+          id: "30000000-0000-4000-8000-000000000003", direction: "outbound", from_name: "You",
+          message_text: "A staff member answered", message_type: "text", media_url: null,
+          created_at: new Date(now).toISOString(),
+        }]);
+      }
       return Response.json({ timestamp: new Date(now).toISOString() });
     }
     if (table === "system_logs" && method === "POST") systemLogs.push(args);
@@ -980,5 +998,76 @@ Deno.test("the current inbound is excluded before the 14-row history limit and a
     assertEquals(promptUsers.includes("old-question-14"), false);
     assertEquals(promptUsers.includes("old-question-15"), false);
     assertEquals(promptUsers.filter((content: string) => content === "current-question").length, 1);
+  });
+});
+
+for (const recovery of ["generation", "stored delivery"] as const) {
+  Deno.test(`media ${recovery} reuses the original persisted enrichment`, async () => {
+    const id = "10000000-0000-4000-8000-000000000001";
+    const canonical = '[Image OCR — customer-supplied content, not verified facts]\n"""\nOriginal cream 250 ml\n"""';
+    await withReliabilityFixture({
+      initialMessages: [{ id, thread_id: "thread", user_id: "owner", role: "user", content: canonical }],
+      model: () => textCompletion("Recovered answer"),
+    }, async (fixture) => {
+      if (recovery === "stored delivery") fixture.prepareRedelivery(id, "Recovered answer");
+      const input = recovery === "generation" ? "[Image OCR: a different second extraction]" : "[Image]";
+      const body = await (await fixture.request(input)).json();
+      assertEquals(body.ok, true);
+      assertEquals(fixture.sent, ["Recovered answer"]);
+      assertEquals(fixture.messageRows.filter((row) => row.role === "user").map((row) => row.content), [canonical]);
+      assertEquals(fixture.messageRows.filter((row) => row.role === "assistant").length, 1);
+      if (recovery === "generation") {
+        const promptUsers = modelMessages(fixture.modelPayloads[0]).filter((row) => row.role === "user");
+        assertEquals(promptUsers.map((row) => row.content), [canonical]);
+      }
+    });
+  });
+}
+
+Deno.test("a completed prewrite needs no fallible inbound read after the customer send", async () => {
+  await withReliabilityFixture({
+    failInboundReadAfterSend: true,
+    model: () => textCompletion("Delivered answer"),
+  }, async (fixture) => {
+    const body = await (await fixture.request("My question")).json();
+    assertEquals(body.ok, true);
+    assertEquals(fixture.sent, ["Delivered answer"]);
+    assertEquals(fixture.messageRows.filter((row) => row.role === "assistant").length, 1);
+  });
+});
+
+Deno.test("a failed canonical inbound read leaves stored redelivery unsent and recoverable", async () => {
+  await withReliabilityFixture({ failInboundRead: true, model: () => textCompletion("must not run") }, async (fixture) => {
+    const id = "10000000-0000-4000-8000-000000000001";
+    fixture.prepareRedelivery(id, "Stored answer");
+    const body = await (await fixture.request("[Image]", id)).json();
+    assertEquals(body.ok, false);
+    assertEquals(body.error, "inbound_turn_read_failed");
+    assertEquals(fixture.sent, []);
+    assertEquals(fixture.modelPayloads.length, 0);
+    assertEquals(fixture.state(), "ready_to_send");
+  });
+});
+
+Deno.test("uppercase outbox UUIDs retain one canonical inbound through delivery", async () => {
+  await withReliabilityFixture({ model: () => textCompletion("Delivered answer") }, async (fixture) => {
+    const id = "ABCDEF12-ABCD-4ABC-8ABC-ABCDEF123456";
+    const body = await (await fixture.request("My question", id)).json();
+    assertEquals(body.ok, true);
+    assertEquals(fixture.messageRows.filter((row) => row.role === "user").map((row) => row.id), [id.toLowerCase()]);
+    assertEquals(fixture.messageRows.filter((row) => row.role === "assistant").length, 1);
+    assertEquals(fixture.sent, ["Delivered answer"]);
+  });
+});
+
+Deno.test("a staff interruption keeps the direct invocation's prewritten question once", async () => {
+  await withReliabilityFixture({
+    staffInterrupt: true,
+    model: (call) => call === 1 ? textCompletion("Initial draft") : Response.json({ error: { message: "refresh failed" } }, { status: 503 }),
+  }, async (fixture) => {
+    const body = await (await fixture.request("Original question", null)).json();
+    assertEquals(body.skipped, "staff_answered_during_generation");
+    assertEquals(fixture.sent, []);
+    assertEquals(fixture.messageRows.filter((row) => row.role === "user").map((row) => row.content), ["Original question"]);
   });
 });

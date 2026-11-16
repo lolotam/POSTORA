@@ -213,9 +213,12 @@ function structuredAdapterResult(
   // A blind slice hands the model invalid JSON with no signal anything was
   // dropped, and the model then fills the gap from stale indexed knowledge --
   // confidently, and wrong. Say it instead.
-  const capped = serializedPayload.length > outputLimit
-    ? `${serializedPayload.slice(0, outputLimit)} …[output truncated: ${serializedPayload.length} characters]`
-    : serializedPayload;
+  // Redaction must precede the cap: slicing an echoed credential first can leave
+  // an unmatched, usable secret fragment in the model-visible output.
+  const redactedPayload = redactKnownSecrets(serializedPayload, [serviceRoleKey, tool.secret]);
+  const capped = redactedPayload.length > outputLimit
+    ? `${redactedPayload.slice(0, outputLimit)} …[output truncated: ${redactedPayload.length} characters]`
+    : redactedPayload;
   return {
     output: redactKnownSecrets(
       `Connector "${tool.name}" returned: ${capped}`,

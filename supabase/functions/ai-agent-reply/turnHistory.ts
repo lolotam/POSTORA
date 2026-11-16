@@ -67,10 +67,10 @@ export function supabaseTurnHistory(admin: SupabaseClient): TurnHistoryStore {
   };
 }
 
-async function verifyInboundDuplicate(
+export async function restoreInboundTurn(
   store: TurnHistoryStore,
-  turn: InboundTurn,
-): Promise<InboundPersistResult> {
+  turn: Pick<InboundTurn, "id" | "threadId" | "userId">,
+): Promise<{ ok: true; content: string | null } | { ok: false; error: "inbound_turn_read_failed" | "inbound_turn_collision" }> {
   let existing: Awaited<ReturnType<TurnHistoryStore["read"]>>;
   try {
     existing = await store.read(turn);
@@ -78,13 +78,14 @@ async function verifyInboundDuplicate(
     return { ok: false, error: "inbound_turn_read_failed" };
   }
   if (existing.error) return { ok: false, error: "inbound_turn_read_failed" };
+  if (!existing.row) return { ok: true, content: null };
   if (
-    !existing.row || existing.row.id !== turn.id || existing.row.thread_id !== turn.threadId ||
-    existing.row.user_id !== turn.userId || existing.row.role !== "user" || existing.row.content !== turn.content
+    existing.row.id !== turn.id || existing.row.thread_id !== turn.threadId ||
+    existing.row.user_id !== turn.userId || existing.row.role !== "user" || typeof existing.row.content !== "string"
   ) {
     return { ok: false, error: "inbound_turn_collision" };
   }
-  return { ok: true, status: "verified" };
+  return { ok: true, content: existing.row.content };
 }
 
 export async function ensureInboundTurn(
@@ -99,7 +100,11 @@ export async function ensureInboundTurn(
   }
   if (!insertError) return { ok: true, status: "inserted" };
   if (insertError.code !== "23505") return { ok: false, error: "inbound_turn_insert_failed" };
-  return await verifyInboundDuplicate(store, turn);
+  const existing = await restoreInboundTurn(store, turn);
+  if (!existing.ok) return existing;
+  return existing.content === turn.content
+    ? { ok: true, status: "verified" }
+    : { ok: false, error: "inbound_turn_collision" };
 }
 
 export const HISTORICAL_FACTS_REMINDER =

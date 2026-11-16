@@ -851,3 +851,18 @@ Deno.test("legacy and Composio results carry no read proof and therefore cannot 
   });
   assertEquals(composio.readOutcome, undefined);
 });
+
+Deno.test("connector credentials are redacted before a response cap can expose a partial secret", async (test) => {
+  for (const secret of ["fake-service-credential-never-real", "fake-connector-credential-never-real"]) {
+    await test.step(secret.startsWith("fake-service") ? "service role" : "connector", async () => {
+      const noise = "x".repeat(ADAPTER_OUTPUT_LIMIT - (secret.length - 1) - '{"echo":"'.length);
+      const result = await executeAdapterTool(context(), { ...wooTool, secret }, typedArgs, {
+        fetch: () => Promise.resolve(Response.json({ ok: true, data: { echo: noise + secret } })),
+        getEnv: (name) => name === "SUPABASE_URL" ? "http://kong:8000" : secret,
+      });
+      assertEquals(result.output.includes(secret.slice(0, -1)), false);
+      assertEquals(result.output.includes(secret), false);
+      assertEquals(result.readOutcome, "success");
+    });
+  }
+});
