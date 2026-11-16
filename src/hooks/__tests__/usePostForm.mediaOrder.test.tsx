@@ -16,9 +16,10 @@ const fixture = vi.hoisted(() => ({
   postReads: 0,
   postMetadata: { selected_account_ids: ["account"] } as Record<string, unknown>,
   toast: vi.fn(),
+  profile: null as { preferred_timezone: string } | null,
   accounts: [{ id: "account", platform: "instagram", platform_username: "test" }],
 }));
-vi.mock("@/hooks/useAuth", () => ({ useAuth: () => ({ user: { id: "owner" }, profile: null }) }));
+vi.mock("@/hooks/useAuth", () => ({ useAuth: () => ({ user: { id: "owner" }, profile: fixture.profile }) }));
 vi.mock("@/hooks/useSocialAccounts", () => ({ useSocialAccounts: () => ({ data: fixture.accounts, isLoading: false }) }));
 vi.mock("@/hooks/use-toast", () => ({ useToast: () => ({ toast: fixture.toast }) }));
 vi.mock("@/features/media-upload", () => ({ useMediaUploadLimits: () => ({}), uploadLargeMedia: vi.fn() }));
@@ -52,6 +53,7 @@ beforeEach(() => {
   fixture.caption = "Saved caption";
   fixture.scheduledAt = null;
   fixture.postReads = 0;
+  fixture.profile = null;
   fixture.postMetadata = { selected_account_ids: ["account"] };
   fixture.accounts = [{ id: "account", platform: "instagram", platform_username: "test" }];
   fixture.toast.mockClear();
@@ -146,6 +148,20 @@ describe("saved post media", () => {
     rerender();
     expect(result.current.caption).toBe("User edit");
     expect(fixture.postReads).toBe(1);
+  });
+
+  it("retains user edits when profile preferences and notification callbacks refresh", async () => {
+    fixture.profile = { preferred_timezone: "Asia/Kuwait" };
+    const { result, rerender } = renderHook(() => usePostForm(), { wrapper });
+    await waitFor(() => expect(result.current.editStatus).toBe("ready"));
+    act(() => result.current.setCaption("Keep my edited caption"));
+    fixture.profile = { preferred_timezone: "Africa/Cairo" };
+    fixture.toast = vi.fn();
+    rerender();
+    expect(result.current.caption).toBe("Keep my edited caption");
+    expect(result.current.scheduleTimezone).toBe("Asia/Kuwait");
+    expect(fixture.postReads).toBe(1);
+    expect(fixture.toast).not.toHaveBeenCalled();
   });
 
   it("does not restore an asset without a persisted media ID as uploaded", async () => {

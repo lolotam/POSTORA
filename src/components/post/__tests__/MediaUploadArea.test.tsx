@@ -99,6 +99,22 @@ describe("media publishing order", () => {
     await waitFor(() => expect(screen.getAllByRole("img").map((img) => img.getAttribute("alt"))).toEqual(["second", "first", "third"]));
   });
 
+  it("moves media left in an RTL grid while preserving the moved handle focus", async () => {
+    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
+      const handle = this.querySelector('button[aria-label^="Move media"]') ?? this;
+      const position = Number(handle.getAttribute("aria-label")?.match(/Move media (\d+)/)?.[1] ?? 1) - 1;
+      const x = (2 - position) * 120;
+      return { x, y: 0, top: 0, left: x, right: x + 100, bottom: 100, width: 100, height: 100, toJSON: () => ({}) };
+    });
+    render(<I18nextProvider i18n={translations}><div dir="rtl"><Gallery /></div></I18nextProvider>);
+    const handle = screen.getByRole("button", { name: "Move media 1" });
+    handle.focus();
+    await userEvent.keyboard("[Space][ArrowLeft][Space]");
+    await waitFor(() => expect(screen.getAllByRole("img").map(img => img.getAttribute("alt"))).toEqual(["second", "first", "third"]));
+    expect(document.activeElement).toBe(handle);
+    expect(handle).toHaveAccessibleName("Move media 2");
+  });
+
   it("cancels with Escape without changing order and retains handle focus", async () => {
     render(<I18nextProvider i18n={translations}><div dir="rtl"><Gallery /></div></I18nextProvider>);
     const handle = screen.getByRole("button", { name: "Move media 1" });

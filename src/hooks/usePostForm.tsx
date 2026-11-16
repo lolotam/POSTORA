@@ -307,6 +307,8 @@ export function usePostForm() {
   const [editLoadError, setEditLoadError] = useState<string | null>(null);
   const [editReloadNonce, setEditReloadNonce] = useState(0);
   const editRequestRef = useRef(0);
+  const editContextRef = useRef({ preferredTimezone: profile?.preferred_timezone, toast });
+  editContextRef.current = { preferredTimezone: profile?.preferred_timezone, toast };
 
   useEffect(() => {
     if (!editPostId) {
@@ -369,19 +371,19 @@ export function usePostForm() {
         setCaptionState(post.caption ?? "");
         setScheduledAt(post.scheduled_at ? new Date(post.scheduled_at) : null);
         setScheduleEnabled(Boolean(post.scheduled_at));
-        setScheduleTimezone(meta?.schedule_timezone || meta?.timezone || profile?.preferred_timezone || "");
+        setScheduleTimezone(meta?.schedule_timezone || meta?.timezone || editContextRef.current.preferredTimezone || "");
         setSelectedAccountIds(accountIds);
         setFilesState(editFiles);
         setMediaValidation(null);
         setEditStatus("ready");
-        toast({ title: "Post loaded", description: "Edit the scheduled post and save changes." });
+        editContextRef.current.toast({ title: "Post loaded", description: "Edit the scheduled post and save changes." });
       } catch (err) {
         if (!activeRef.current || editRequestRef.current !== requestId) return;
         const message = err instanceof Error ? err.message : "Failed to load post for editing.";
         console.error("Error loading edit post:", err);
         setEditStatus("error");
         setEditLoadError(message);
-        toast({ title: "Error", description: message, variant: "destructive" });
+        editContextRef.current.toast({ title: "Error", description: message, variant: "destructive" });
       } finally {
         if (activeRef.current && editRequestRef.current === requestId) setIsLoadingEditPost(false);
       }
