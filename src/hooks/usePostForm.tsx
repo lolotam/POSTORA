@@ -918,7 +918,7 @@ export function usePostForm() {
 
   // Clear draft (e.g., after successful post)
   const clearDraft = () => {
-    sessionStorage.removeItem(POST_DRAFT_KEY);
+    if (activeRef.current) sessionStorage.removeItem(POST_DRAFT_KEY);
   };
 
   // Validate post

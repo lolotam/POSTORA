@@ -55,6 +55,12 @@ interface CreatePostComposerProps {
 }
 
 export default function CreatePost() {
+  const location = useLocation();
+  const editIdentity = new URLSearchParams(location.search).get("edit") || "";
+  return <CreatePostSession key={editIdentity} />;
+}
+
+function CreatePostSession() {
   const [completion, setCompletion] = useState<(SavedPostCompletion & { locationKey: string }) | null>(null);
   const [composerGeneration, setComposerGeneration] = useState(0);
   const composerGenerationRef = useRef(0);

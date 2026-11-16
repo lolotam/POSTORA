@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, useNavigate } from "react-router-dom";
 import { createInstance } from "i18next";
@@ -177,6 +177,47 @@ beforeEach(() => {
 });
 
 describe("CreatePost media ordering and saved completion", () => {
+  it.each([
+    ["saving", false], ["enqueueing", false], ["saving", true], ["enqueueing", true],
+  ])("preserves the new draft when %s finishes after another edit identity (return=%s)", async (phase, returnToOriginalRoute) => {
+    let release!: () => void;
+    const pending = new Promise<void>((resolve) => { release = resolve; });
+    if (phase === "saving") fixture.persistenceWait = pending;
+    else fixture.enqueue.mockImplementation(async () => { await pending; return { accepted: true }; });
+    fixture.post = { id: "other-post", caption: "Other saved post", media_file_ids: [], metadata: { selected_account_ids: ["account"] } };
+    function Navigation() {
+      const navigate = useNavigate();
+      return <>
+        <button type="button" onClick={() => navigate("/post?edit=other-post")}>Edit another</button>
+        <button type="button" onClick={() => navigate("/post")}>Return to composer</button>
+      </>;
+    }
+    const user = userEvent.setup();
+    render(<><Navigation /><CreatePost /></>, { wrapper: wrapper("/post") });
+    try {
+      await user.type(screen.getByLabelText("Caption"), "Original submission");
+      await chooseAccountAndReview(user);
+      await user.click(screen.getByRole("button", { name: "Post Now" }));
+      await waitFor(() => phase === "saving"
+        ? expect(fixture.persistenceAttempts).toBe(1)
+        : expect(fixture.enqueue).toHaveBeenCalledTimes(1));
+      await user.click(screen.getByRole("button", { name: "Edit another" }));
+      await screen.findByDisplayValue("Other saved post");
+      if (returnToOriginalRoute) await user.click(screen.getByRole("button", { name: "Return to composer" }));
+      await act(async () => { release(); await pending; });
+      expect(fixture.inserts).toHaveLength(1);
+      expect(screen.queryByTestId("saved-post-id")).not.toBeInTheDocument();
+      expect(screen.getByLabelText("Caption")).toHaveValue("Other saved post");
+      expect(JSON.parse(sessionStorage.getItem("postora_post_draft")!).caption).toBe("Other saved post");
+      await user.clear(screen.getByLabelText("Caption"));
+      await user.type(screen.getByLabelText("Caption"), "Keep the new draft");
+      expect(JSON.parse(sessionStorage.getItem("postora_post_draft")!).caption).toBe("Keep the new draft");
+      expect(fixture.updates).toHaveLength(0);
+    } finally {
+      await act(async () => { release(); await pending; });
+    }
+  });
+
   it.each(["saving", "enqueueing"])("shows completion after same-route navigation during %s without allowing another submission", async (phase) => {
     let release!: () => void;
     const pending = new Promise<void>((resolve) => { release = resolve; });
