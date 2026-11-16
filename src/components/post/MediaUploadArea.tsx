@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { DndContext, closestCenter, KeyboardSensor, PointerSensor, useSensor, useSensors, DragEndEvent } from "@dnd-kit/core";
-import { arrayMove, SortableContext, sortableKeyboardCoordinates, horizontalListSortingStrategy } from "@dnd-kit/sortable";
+import { arrayMove, SortableContext, sortableKeyboardCoordinates, rectSortingStrategy } from "@dnd-kit/sortable";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
@@ -104,6 +104,7 @@ export function MediaUploadArea({
     if (over && active.id !== over.id) {
       const oldIndex = files.findIndex((f) => f.id === active.id);
       const newIndex = files.findIndex((f) => f.id === over.id);
+      if (oldIndex < 0 || newIndex < 0) return;
       const newFiles = arrayMove(files, oldIndex, newIndex);
       onReorderFiles(newFiles);
     }
@@ -252,6 +253,11 @@ export function MediaUploadArea({
 
       {/* File previews with drag and drop reordering */}
       {files.length > 0 && (
+        <p className="text-xs text-muted-foreground">
+          {t("uploadArea.orderHint", "Numbers show publishing order. Drag a handle to reorder, or use Space and arrow keys.")}
+        </p>
+      )}
+      {files.length > 0 && (
         <DndContext
           sensors={sensors}
           collisionDetection={closestCenter}
@@ -259,7 +265,7 @@ export function MediaUploadArea({
         >
           <SortableContext
             items={files.map((f) => f.id)}
-            strategy={horizontalListSortingStrategy}
+            strategy={rectSortingStrategy}
           >
             <div className="flex flex-wrap gap-3 animate-fade-in">
               {files.map((file, index) => {
@@ -276,6 +282,7 @@ export function MediaUploadArea({
                   <SortableMediaItem
                     key={file.id}
                     file={file}
+                    position={index + 1}
                     selectedPlatforms={selectedPlatforms}
                     onRemove={onRemoveFile}
                     onOpenCropper={onOpenCropper}

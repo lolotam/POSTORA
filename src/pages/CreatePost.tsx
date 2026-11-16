@@ -35,6 +35,7 @@ import { CaptionSection } from "@/components/post/CaptionSection";
 import { SchedulingSection } from "@/components/post/SchedulingSection";
 import { AccountSelectionSidebar } from "@/components/post/AccountSelectionSidebar";
 import { PostActions } from "@/components/post/PostActions";
+import { PostSavedActions } from "@/components/post/PostSavedActions";
 import { PlatformSettingsSection } from "@/components/post/PlatformSettingsSection";
 import { MediaEditorDialogs } from "@/components/post/MediaEditorDialogs";
 import { MediaSummaryBanner } from "@/components/post/MediaSummaryBanner";
@@ -110,6 +111,7 @@ export default function CreatePost() {
     updatePlatformSelection,
     handlePlatformFilterToggle,
     resetPostForm,
+    startNewPost,
     validatePost,
     uploadFileToStorage,
     showSuccessToast,
@@ -169,6 +171,7 @@ export default function CreatePost() {
 
   // UI state
   const [currentStep, setCurrentStep] = useState<PostStep>(1);
+  const [hasSavedPost, setHasSavedPost] = useState(false);
   const [previewOpen, setPreviewOpen] = useState(false);
   const [urlMediaType, setUrlMediaType] = useState<"images" | "video">("images");
   const [imageUrls, setImageUrls] = useState("");
@@ -566,6 +569,7 @@ export default function CreatePost() {
       // Reset form immediately for optimistic UX
       resetPostForm();
       platformSettings.resetTiktokSettings();
+      setHasSavedPost(true);
 
     } catch (error) {
       console.error("Post error:", error);
@@ -591,6 +595,19 @@ export default function CreatePost() {
           currentStep={currentStep}
           onStepChange={setCurrentStep}
         />
+
+        {hasSavedPost && (
+          <PostSavedActions onCreateNewPost={() => {
+            startNewPost();
+            platformSettings.resetTiktokSettings();
+            setImageUrls("");
+            setVideoUrl("");
+            setUrlMediaType("images");
+            setPreviewOpen(false);
+            setCurrentStep(1);
+            setHasSavedPost(false);
+          }} />
+        )}
 
         {/* Step 1: Content */}
         {currentStep === 1 && (

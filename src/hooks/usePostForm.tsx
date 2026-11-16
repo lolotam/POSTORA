@@ -13,6 +13,7 @@ import { getAllPlatformEligibility, PlatformEligibility } from "@/lib/platformEl
 import { resolveMediaPublicUrl } from "@/lib/mediaUrl";
 import { formatUploadLimit, maxUploadBytesFor, mediaTypeForFileName, needsDirectUpload } from "@/lib/mediaTypes";
 import { uploadLargeMedia, useMediaUploadLimits } from "@/features/media-upload";
+import { orderPostMediaFiles } from "../../supabase/functions/_shared/post-media";
 
 export interface UploadedFile {
   id: string;
@@ -298,13 +299,14 @@ export function usePostForm() {
 
         // Load media files
         if (post.media_file_ids && post.media_file_ids.length > 0) {
-          const { data: mediaFiles } = await supabase
+          const { data: mediaFiles, error: mediaReadError } = await supabase
             .from("media_files")
             .select("*")
             .in("id", post.media_file_ids);
+          if (mediaReadError) throw mediaReadError;
 
           if (mediaFiles && mediaFiles.length > 0) {
-            const editFiles: UploadedFile[] = mediaFiles.map((mf, i: number) => {
+            const editFiles: UploadedFile[] = orderPostMediaFiles(post.media_file_ids, mediaFiles).map((mf) => {
               // Resolve the public URL via the shared helper. For Cloudinary rows,
               // file_path already stores the full secure_url (cloud name + version +
               // extension); rebuilding it from storage_bucket/public_id produced
@@ -858,6 +860,18 @@ export function usePostForm() {
     sessionStorage.removeItem(POST_DRAFT_KEY);
   };
 
+  const startNewPost = () => {
+    resetPostForm();
+    setUploadMethod("local");
+    if (fileInputRef.current) fileInputRef.current.value = "";
+    // Leaving an edit target would update the saved post on the next submit.
+    setSearchParams(previous => {
+      const next = new URLSearchParams(previous);
+      next.delete("edit");
+      return next;
+    }, { replace: true });
+  };
+
   // Clear draft (e.g., after successful post)
   const clearDraft = () => {
     sessionStorage.removeItem(POST_DRAFT_KEY);
@@ -965,6 +979,7 @@ export function usePostForm() {
     updatePlatformSelection,
     handlePlatformFilterToggle,
     resetPostForm,
+    startNewPost,
     validatePost,
     uploadFileToStorage,
     showSuccessToast,

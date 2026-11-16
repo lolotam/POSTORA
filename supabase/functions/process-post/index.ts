@@ -112,7 +112,7 @@ import {
 } from "./instagramPublish.ts";
 import { validateRequestBody, validationErrorResponse } from "../_shared/validate.ts";
 import { postWebhook, validateWebhookTarget } from "../_shared/webhookSecurity.ts";
-import { getMissingMediaFileIds } from "../_shared/post-media.ts";
+import { getMissingMediaFileIds, orderPostMediaFiles } from "../_shared/post-media.ts";
 import { claimPostForProcessing } from "../_shared/postProcessingClaim.ts";
 import { activeRetryRequest } from "../_shared/publishRequest.ts";
 import { mediaSendability } from "../_shared/partnerMediaStore.ts";
@@ -1723,12 +1723,13 @@ Deno.serve(async (req) => {
     // ─────────────────────────────────────────────────────────────────────
     let mediaFiles: MediaFile[] = [];
     if (post.media_file_ids && post.media_file_ids.length > 0) {
-      const { data: files } = await supabase
+      const { data: files, error: mediaReadError } = await supabase
         .from("media_files")
         .select("*")
         .in("id", post.media_file_ids);
+      if (mediaReadError) throw mediaReadError;
 
-      mediaFiles = files || [];
+      mediaFiles = orderPostMediaFiles(post.media_file_ids, files ?? []);
       console.log("Media files:", mediaFiles.length);
 
       const missingMediaFileIds = getMissingMediaFileIds(post.media_file_ids, mediaFiles);
