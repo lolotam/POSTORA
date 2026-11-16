@@ -63,6 +63,19 @@ beforeEach(() => {
 });
 
 describe("saved post media", () => {
+  it("defers a late profile timezone during submission and applies it when the form becomes editable again", () => {
+    const plainWrapper = ({ children }: { children: ReactNode }) => <MemoryRouter initialEntries={["/post"]}>{children}</MemoryRouter>;
+    const { result, rerender } = renderHook(() => usePostForm(), { wrapper: plainWrapper });
+    act(() => result.current.setCaption("Keep after failed submission"));
+    act(() => result.current.setIsPosting(true));
+    fixture.profile = { preferred_timezone: "Asia/Kuwait" };
+    rerender();
+    expect(result.current.scheduleTimezone).toBe("");
+    act(() => result.current.setIsPosting(false));
+    expect(result.current.scheduleTimezone).toBe("Asia/Kuwait");
+    expect(JSON.parse(sessionStorage.getItem("postora_post_draft")!).caption).toBe("Keep after failed submission");
+  });
+
   it.each(["new revision", "new composer"])("preserves an identical newer draft from a %s and clears only its captured version", (replacement) => {
     const clock = vi.spyOn(Date, "now").mockReturnValue(Date.UTC(2026, 10, 16));
     const plainWrapper = ({ children }: { children: ReactNode }) => <MemoryRouter initialEntries={["/post"]}>{children}</MemoryRouter>;

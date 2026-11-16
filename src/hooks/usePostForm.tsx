@@ -410,10 +410,11 @@ export function usePostForm() {
 
   // Load preferred timezone from profile on mount
   useEffect(() => {
-    if (profile?.preferred_timezone && !scheduleTimezone) {
+    // A late preference must not replace the draft version captured for submission.
+    if (!isPosting && profile?.preferred_timezone && !scheduleTimezone) {
       setScheduleTimezone(profile.preferred_timezone);
     }
-  }, [profile?.preferred_timezone]);
+  }, [profile?.preferred_timezone, scheduleTimezone, isPosting]);
 
   // Create account entries with full account info
   const availableAccounts = useMemo(() =>

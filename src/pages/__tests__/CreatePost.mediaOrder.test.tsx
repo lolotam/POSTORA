@@ -23,10 +23,11 @@ const fixture = vi.hoisted(() => ({
   mediaRows: [] as Array<Record<string, unknown>>,
   mediaError: null as { message: string } | null,
   postRead: null as Promise<void> | null,
+  profile: { preferred_timezone: "UTC", full_name: "Owner" } as { preferred_timezone: string; full_name: string } | null,
 }));
 
 vi.mock("@/hooks/useAuth", () => ({
-  useAuth: () => ({ user: { id: "owner" }, profile: { preferred_timezone: "UTC", full_name: "Owner" } }),
+  useAuth: () => ({ user: { id: "owner" }, profile: fixture.profile }),
 }));
 vi.mock("@/hooks/useSocialAccounts", () => ({
   useSocialAccounts: () => ({
@@ -170,6 +171,7 @@ beforeEach(() => {
   fixture.mediaRows = [];
   fixture.mediaError = null;
   fixture.postRead = null;
+  fixture.profile = { preferred_timezone: "UTC", full_name: "Owner" };
   fixture.enqueue.mockReset().mockResolvedValue({ accepted: true });
   fixture.invoke.mockReset();
   fixture.track.mockClear();
@@ -177,6 +179,34 @@ beforeEach(() => {
 });
 
 describe("CreatePost media ordering and saved completion", () => {
+  it.each(["saving", "enqueueing"])("does not restore a submitted draft when profile timezone arrives during %s", async (phase) => {
+    fixture.profile = null;
+    let release!: () => void;
+    const pending = new Promise<void>((resolve) => { release = resolve; });
+    if (phase === "saving") fixture.persistenceWait = pending;
+    else fixture.enqueue.mockImplementation(async () => { await pending; return { accepted: true }; });
+    const user = userEvent.setup();
+    const { rerender } = render(<CreatePost />, { wrapper: wrapper("/post") });
+    try {
+      await user.type(screen.getByLabelText("Caption"), "Successfully submitted");
+      await chooseAccountAndReview(user);
+      await user.click(screen.getByRole("button", { name: "Post Now" }));
+      await waitFor(() => phase === "saving"
+        ? expect(fixture.persistenceAttempts).toBe(1)
+        : expect(fixture.enqueue).toHaveBeenCalledTimes(1));
+      fixture.profile = { preferred_timezone: "Asia/Kuwait", full_name: "Owner" };
+      rerender(<CreatePost />);
+      await act(async () => { release(); await pending; });
+      await screen.findByTestId("saved-post-id");
+      expect(sessionStorage.getItem("postora_post_draft")).toBeNull();
+      await user.click(screen.getByRole("button", { name: "Create new post" }));
+      expect(screen.getByLabelText("Caption")).toHaveValue("");
+      expect(fixture.inserts).toHaveLength(1);
+    } finally {
+      await act(async () => { release(); await pending; });
+    }
+  });
+
   it("keeps completion on the committed route when another navigation render suspends", async () => {
     let releaseEnqueue!: () => void;
     let releaseNavigation!: () => void;
