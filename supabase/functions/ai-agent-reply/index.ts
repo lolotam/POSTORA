@@ -973,17 +973,6 @@ Deno.serve(async (req) => {
         inboundPersistStatus = "verified";
       }
     }
-    const persistInbound = async () => {
-      if (inboundPersistStatus === "inserted" || inboundPersistStatus === "verified") return;
-      const inbound = await ensureInboundTurn(supabaseTurnHistory(admin), {
-        id: inboundTurnId, threadId: thread.id, userId: request.user_id, content: request.inbound_text,
-      });
-      if (!inbound.ok) {
-        inboundPersistStatus = "failed";
-        throw new InboundTurnStorageError(inbound.error);
-      }
-      inboundPersistStatus = inbound.status;
-    };
     const storedCustomerLanguage: ReplyLanguage | null =
       thread.customer_language === "ar" || thread.customer_language === "en" ? thread.customer_language : null;
 
@@ -1004,6 +993,24 @@ Deno.serve(async (req) => {
     // The lease token of the acknowledgement claim this turn holds. It identifies the claim,
     // so a release or a completion only ever touches the claim this turn took.
     let humanModeAckToken: string | null = null;
+
+    const persistInbound = async () => {
+      if (inboundPersistStatus === "inserted" || inboundPersistStatus === "verified") return;
+      const inbound = await ensureInboundTurn(supabaseTurnHistory(admin), {
+        id: inboundTurnId, threadId: thread.id, userId: request.user_id, content: request.inbound_text,
+      });
+      if (!inbound.ok) {
+        inboundPersistStatus = "failed";
+        // No send has started. Return this turn's notice lease so a retry need
+        // not wait for expiry after a local storage failure.
+        if (humanModeAck) {
+          const released = await releaseHumanModeAck(settlementAdmin, handoffScope(request), humanModeAckToken);
+          if (!released) console.warn("[ai-agent-reply] the human-mode acknowledgement claim was not released");
+        }
+        throw new InboundTurnStorageError(inbound.error);
+      }
+      inboundPersistStatus = inbound.status;
+    };
 
     // Sandbox runs bypass the delivery gates — they test the agent's brain,
     // not the conversation's delivery state. The sender is built only after

@@ -319,6 +319,7 @@ type FixtureOptions = {
   failInboundRead?: boolean;
   failInboundReadAfterSend?: boolean;
   staffInterrupt?: boolean;
+  humanModeAck?: boolean;
   model: (call: number, payload: FixtureRow) => Response;
   adapter?: (call: number, payload: FixtureRow) => Response | Promise<Response>;
 };
@@ -361,6 +362,7 @@ async function withReliabilityFixture(
   run: (fixture: {
     request(inboundText: string, outboxId?: string | null): Promise<Response>;
     sandboxRequest(inboundText: string): Promise<Response>;
+    ackEvents: string[];
     advance(ms: number): void;
     modelPayloads: FixtureRow[];
     adapterPayloads: FixtureRow[];
@@ -390,6 +392,7 @@ async function withReliabilityFixture(
   const adapterPayloads: FixtureRow[] = [];
   const messageRows: FixtureRow[] = (options.initialMessages ?? []).map((row) => ({ ...row }));
   const sent: string[] = [];
+  const ackEvents: string[] = [];
   const systemLogs: FixtureLog[] = [];
   const historyQueries: URL[] = [];
   const account = {
@@ -448,6 +451,15 @@ async function withReliabilityFixture(
       return Response.json({ messages: [{ id: `external-${sent.length}` }] });
     }
     if (url.pathname.includes("/rpc/")) {
+      if (options.humanModeAck && url.pathname.endsWith("/claim_human_mode_ack_leased")) {
+        ackEvents.push("claimed");
+        return Response.json({ result: "claimed", claim_token: "ack-claim" });
+      }
+      if (options.humanModeAck && url.pathname.endsWith("/release_human_mode_ack_claim")) {
+        assertEquals(args.p_claim_token, "ack-claim");
+        ackEvents.push("released");
+        return Response.json(true);
+      }
       if (options.staffInterrupt && url.pathname.endsWith("/claim_unanswered_escalation")) {
         return Response.json({ marker: new Date(now - 60_000).toISOString(), token: "staff-claim" });
       }
@@ -521,7 +533,7 @@ async function withReliabilityFixture(
     if (table === "ai_agent_configs") {
       return Response.json({
         is_enabled: true,
-        default_mode: "ai_first",
+        default_mode: options.humanModeAck ? "human_first" : "ai_first",
         reply_cooldown_seconds: 0,
         daily_message_cap: 0,
         language_mode: options.language ?? "en",
@@ -588,6 +600,7 @@ async function withReliabilityFixture(
     await run({
       request,
       sandboxRequest,
+      ackEvents,
       advance: (ms) => { now += ms; },
       modelPayloads,
       adapterPayloads,
@@ -1071,3 +1084,21 @@ Deno.test("a staff interruption keeps the direct invocation's prewritten questio
     assertEquals(fixture.messageRows.filter((row) => row.role === "user").map((row) => row.content), ["Original question"]);
   });
 });
+
+for (const delivery of ["direct", "outbox"] as const) {
+  Deno.test(`${delivery} inbound prewrite failure releases the acquired human-mode notice claim`, async () => {
+    await withReliabilityFixture({
+      humanModeAck: true,
+      failInbound: true,
+      model: () => textCompletion("must not run"),
+    }, async (fixture) => {
+      const body = await (await fixture.request("My question", delivery === "direct" ? null : undefined)).json();
+      assertEquals(body.ok, false);
+      assertEquals(body.error, "inbound_turn_insert_failed");
+      assertEquals(fixture.ackEvents, ["claimed", "released"]);
+      assertEquals(fixture.sent, []);
+      assertEquals(fixture.modelPayloads.length, 0);
+      assertEquals(fixture.state(), "pending");
+    });
+  });
+}
