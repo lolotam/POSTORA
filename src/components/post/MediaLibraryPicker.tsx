@@ -347,7 +347,10 @@ export function MediaLibraryPicker({
   };
 
   const handleConfirm = async () => {
-    const selectedFiles = mediaFiles.filter((f) => selectedIds.has(f.id) && isPostableLibraryFile(f));
+    const selectedFiles = Array.from(selectedIds).flatMap((id) => {
+      const file = mediaFiles.find((candidate) => candidate.id === id);
+      return file && isPostableLibraryFile(file) ? [file] : [];
+    });
     if (selectedFiles.length === 0) return;
     
     const uploadedFiles: UploadedFile[] = selectedFiles.map((file) => {

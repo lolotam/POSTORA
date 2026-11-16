@@ -1,10 +1,11 @@
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { DndContext, closestCenter, KeyboardSensor, PointerSensor, useSensor, useSensors, DragEndEvent } from "@dnd-kit/core";
-import { arrayMove, SortableContext, sortableKeyboardCoordinates, horizontalListSortingStrategy } from "@dnd-kit/sortable";
+import { arrayMove, SortableContext, sortableKeyboardCoordinates, rectSortingStrategy } from "@dnd-kit/sortable";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Image, Video, Upload, Loader2, ImagePlus } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -42,7 +43,7 @@ interface MediaUploadAreaProps {
   onOpenCropper: (file: UploadedFile, targetRatio?: string) => void;
   onOpenCompressor: (file: UploadedFile) => void;
   onImageCropRequest: (suggestion: AspectRatioSuggestion) => void;
-  onReorderFiles: (files: UploadedFile[]) => void;
+  onReorderFiles: React.Dispatch<React.SetStateAction<UploadedFile[]>>;
   // NEW: Media analysis and eligibility
   mediaAnalysis?: MediaAnalysis;
   platformEligibility?: PlatformEligibility[];
@@ -102,10 +103,12 @@ export function MediaUploadArea({
     const { active, over } = event;
 
     if (over && active.id !== over.id) {
-      const oldIndex = files.findIndex((f) => f.id === active.id);
-      const newIndex = files.findIndex((f) => f.id === over.id);
-      const newFiles = arrayMove(files, oldIndex, newIndex);
-      onReorderFiles(newFiles);
+      onReorderFiles((currentFiles) => {
+        const oldIndex = currentFiles.findIndex((f) => f.id === active.id);
+        const newIndex = currentFiles.findIndex((f) => f.id === over.id);
+        if (oldIndex < 0 || newIndex < 0) return currentFiles;
+        return arrayMove(currentFiles, oldIndex, newIndex);
+      });
     }
   };
   if (uploadMethod === "text") return null;
@@ -129,7 +132,7 @@ export function MediaUploadArea({
               </TabsTrigger>
             </TabsList>
             <TabsContent value="images">
-              <Input
+              <Textarea
                 placeholder={t("uploadArea.imageUrlsPlaceholder", "Enter image URLs (one per line, max 10)")}
                 value={imageUrls}
                 onChange={(e) => setImageUrls(e.target.value)}
@@ -252,14 +255,42 @@ export function MediaUploadArea({
 
       {/* File previews with drag and drop reordering */}
       {files.length > 0 && (
+        <p className="text-xs text-muted-foreground">
+          {t("uploadArea.orderHint", "Numbers show publishing order. Drag a handle to reorder, or use Space and arrow keys.")}
+        </p>
+      )}
+      {files.length > 0 && (
         <DndContext
           sensors={sensors}
           collisionDetection={closestCenter}
           onDragEnd={handleDragEnd}
+          accessibility={{
+            screenReaderInstructions: {
+              draggable: t("uploadArea.keyboardInstructions", "Press Space or Enter to pick up media. Use arrow keys to move it, Space or Enter to drop, and Escape to cancel."),
+            },
+            announcements: {
+              onDragStart: ({ active }) => {
+                const index = files.findIndex((file) => file.id === active.id);
+                const file = files[index];
+                return t("uploadArea.dragStarted", "Picked up {{name}}, position {{position}} of {{count}}.", { name: file?.altText || file?.file?.name || active.id, position: index + 1, count: files.length });
+              },
+              onDragOver: ({ active, over }) => {
+                if (!over || active.id === over.id) return;
+                const index = files.findIndex((file) => file.id === over.id);
+                return t("uploadArea.dragPosition", "Move to position {{position}} of {{count}}.", { position: index + 1, count: files.length });
+              },
+              onDragEnd: ({ active, over }) => {
+                if (!over || active.id === over.id) return t("uploadArea.dragCancelled", "Media order unchanged.");
+                const index = files.findIndex((file) => file.id === over.id);
+                return t("uploadArea.dragCompleted", "Moved to position {{position}} of {{count}}.", { position: index + 1, count: files.length });
+              },
+              onDragCancel: () => t("uploadArea.dragCancelled", "Media order unchanged."),
+            },
+          }}
         >
           <SortableContext
             items={files.map((f) => f.id)}
-            strategy={horizontalListSortingStrategy}
+            strategy={rectSortingStrategy}
           >
             <div className="flex flex-wrap gap-3 animate-fade-in">
               {files.map((file, index) => {
@@ -276,6 +307,7 @@ export function MediaUploadArea({
                   <SortableMediaItem
                     key={file.id}
                     file={file}
+                    position={index + 1}
                     selectedPlatforms={selectedPlatforms}
                     onRemove={onRemoveFile}
                     onOpenCropper={onOpenCropper}

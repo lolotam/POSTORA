@@ -243,8 +243,8 @@ export function PostDetailsDialog({
                   )}
                 </div>
                 <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
-                  {media.map((m) => (
-                    <div key={m.id} className="relative rounded-lg overflow-hidden bg-black/5 dark:bg-white/5 group">
+                  {media.map((m, index) => (
+                    <div key={`${m.id}-${index}`} className="relative rounded-lg overflow-hidden bg-black/5 dark:bg-white/5 group">
                       {m.kind === "video" ? (
                         <video
                           src={m.url}

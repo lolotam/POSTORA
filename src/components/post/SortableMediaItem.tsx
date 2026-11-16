@@ -12,6 +12,7 @@ import { useFeatureFlags } from "@/hooks/useFeatureFlags";
 
 interface SortableMediaItemProps {
   file: UploadedFile;
+  position: number;
   selectedPlatforms: Platform[];
   onRemove: (id: string) => void;
   onOpenCropper: (file: UploadedFile) => void;
@@ -24,6 +25,7 @@ interface SortableMediaItemProps {
 
 export function SortableMediaItem({
   file,
+  position,
   selectedPlatforms,
   onRemove,
   onOpenCropper,
@@ -41,7 +43,7 @@ export function SortableMediaItem({
     transform,
     transition,
     isDragging,
-  } = useSortable({ id: file.id });
+  } = useSortable({ id: file.id, disabled: !file.uploaded });
 
   const style = {
     transform: CSS.Transform.toString(transform),
@@ -87,20 +89,27 @@ export function SortableMediaItem({
         isDragging && "opacity-50 z-50 scale-105"
       )}
     >
-      {/* Drag handle */}
+      <Badge
+        className="absolute top-2 start-2 z-30 min-w-7 justify-center bg-background text-foreground shadow-sm pointer-events-none"
+        aria-label={t("sortable.orderLabel", "Publishing position {{position}}", { position })}
+      >
+        {position}
+      </Badge>
       {file.uploaded && (
-        <div
+        <button
+          type="button"
           {...attributes}
           {...listeners}
-          className="absolute top-2 start-2 z-20 bg-black/60 rounded p-1 cursor-grab active:cursor-grabbing opacity-0 group-hover:opacity-100 transition-opacity"
+          aria-label={t("sortable.reorderLabel", "Move media {{position}}", { position })}
+          className="absolute top-2 start-12 z-30 flex h-11 w-11 items-center justify-center rounded-md bg-black/75 cursor-grab active:cursor-grabbing touch-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
         >
-          <GripVertical className="w-4 h-4 text-white" />
-        </div>
+          <GripVertical className="w-5 h-5 text-white" />
+        </button>
       )}
 
       {/* Alt text indicator */}
       {file.uploaded && isImageOrGif && file.altText && (
-        <div className="absolute top-2 start-10 z-20 bg-blue-500/90 rounded px-1.5 py-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
+        <div className="absolute top-12 start-2 z-20 bg-blue-500/90 rounded px-1.5 py-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
           <span className="text-[10px] text-white font-medium">ALT</span>
         </div>
       )}
@@ -115,6 +124,7 @@ export function SortableMediaItem({
       ) : (
         <img
           src={file.previewUrl}
+          draggable={false}
           alt={file.altText || t("sortable.previewAlt", "Preview")}
           className={cn(maxHeightClass, "w-full object-contain cursor-pointer transition-all duration-300")}
           onClick={onOpenLightbox}
@@ -196,9 +206,11 @@ export function SortableMediaItem({
               </Button>
             )}
             <Button
+              type="button"
               size="sm"
               variant="destructive"
               className="h-8"
+              aria-label={t("sortable.remove", "Remove media {{position}}", { position })}
               onClick={() => onRemove(file.id)}
             >
               <X className="w-4 h-4" />
@@ -206,9 +218,28 @@ export function SortableMediaItem({
           </div>
         </>
       ) : (
-        <div className="absolute inset-0 bg-black/60 flex flex-col items-center justify-center">
-          <Loader2 className="w-5 h-5 animate-spin text-white mb-1" />
-          <span className="text-xs text-white">{Math.round(file.uploadProgress)}%</span>
+        <div className="absolute inset-0 bg-black/60 flex flex-col items-center justify-center p-3 text-center">
+          {file.uploadError ? (
+            <>
+              <span className="text-xs text-white">{file.uploadError}</span>
+              <Button
+                type="button"
+                size="sm"
+                variant="destructive"
+                className="min-h-11 mt-2"
+                aria-label={t("sortable.remove", "Remove media {{position}}", { position })}
+                onClick={() => onRemove(file.id)}
+              >
+                <X className="w-4 h-4 me-1" />
+                {t("sortable.remove", "Remove media {{position}}", { position })}
+              </Button>
+            </>
+          ) : (
+            <>
+              <Loader2 className="w-5 h-5 animate-spin text-white mb-1" />
+              <span className="text-xs text-white">{Math.round(file.uploadProgress)}%</span>
+            </>
+          )}
         </div>
       )}
     </div>

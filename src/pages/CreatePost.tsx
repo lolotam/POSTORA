@@ -1,5 +1,5 @@
-import { useMemo, useState, useCallback, useEffect } from "react";
-import { useLocation } from "react-router-dom";
+import { useMemo, useState, useCallback, useEffect, useRef, useLayoutEffect } from "react";
+import { useLocation, useNavigate } from "react-router-dom";
 import { DashboardLayout } from "@/components/layout/DashboardLayout";
 import { Label } from "@/components/ui/label";
 import { Platform } from "@/lib/types";
@@ -35,6 +35,7 @@ import { CaptionSection } from "@/components/post/CaptionSection";
 import { SchedulingSection } from "@/components/post/SchedulingSection";
 import { AccountSelectionSidebar } from "@/components/post/AccountSelectionSidebar";
 import { PostActions } from "@/components/post/PostActions";
+import { PostSavedActions } from "@/components/post/PostSavedActions";
 import { PlatformSettingsSection } from "@/components/post/PlatformSettingsSection";
 import { MediaEditorDialogs } from "@/components/post/MediaEditorDialogs";
 import { MediaSummaryBanner } from "@/components/post/MediaSummaryBanner";
@@ -43,7 +44,63 @@ import { TikTokForYouPreview } from "@/components/post/TikTokForYouPreview";
 import { Icon3D, GradientDivider } from "@/components/fx";
 import { ImagePlus, Type } from "lucide-react";
 
+interface SavedPostCompletion {
+  postId: string;
+  status: "scheduled" | "submitted" | "unconfirmed";
+}
+
+interface CreatePostComposerProps {
+  onSaved: (completion: SavedPostCompletion) => void;
+  onStartNewPost: () => void;
+}
+
 export default function CreatePost() {
+  const location = useLocation();
+  const editIdentity = new URLSearchParams(location.search).get("edit") || "";
+  return <CreatePostSession key={editIdentity} />;
+}
+
+function CreatePostSession() {
+  const [completion, setCompletion] = useState<(SavedPostCompletion & { locationKey: string }) | null>(null);
+  const [composerGeneration, setComposerGeneration] = useState(0);
+  const composerGenerationRef = useRef(0);
+  const navigate = useNavigate();
+  const location = useLocation();
+  const locationKeyRef = useRef(location.key);
+  useLayoutEffect(() => {
+    locationKeyRef.current = location.key;
+  }, [location.key]);
+
+  const startNewPost = useCallback(() => {
+    sessionStorage.removeItem("postora_post_draft");
+    sessionStorage.removeItem("postora_reuse_payload");
+    sessionStorage.removeItem("mediaLibrarySelection");
+    const params = new URLSearchParams(location.search);
+    params.delete("edit");
+    params.delete("from");
+    navigate({ pathname: location.pathname, search: params.toString() }, { replace: true, state: null });
+    setCompletion(null);
+    composerGenerationRef.current += 1;
+    setComposerGeneration(composerGenerationRef.current);
+  }, [location.pathname, location.search, navigate]);
+
+  if (completion && completion.locationKey === location.key) {
+    return (
+      <DashboardLayout>
+        <div className="space-y-6 pb-8">
+          <PostSavedActions postId={completion.postId} status={completion.status} onCreateNewPost={startNewPost} />
+        </div>
+      </DashboardLayout>
+    );
+  }
+
+  return <CreatePostComposer key={composerGeneration} onSaved={(saved) => {
+    if (composerGeneration !== composerGenerationRef.current) return;
+    setCompletion({ ...saved, locationKey: locationKeyRef.current });
+  }} onStartNewPost={startNewPost} />;
+}
+
+function CreatePostComposer({ onSaved, onStartNewPost }: CreatePostComposerProps) {
   const { t } = useTranslation("post");
   const { toast } = useToast();
   const location = useLocation();
@@ -109,7 +166,7 @@ export default function CreatePost() {
     removeFile,
     updatePlatformSelection,
     handlePlatformFilterToggle,
-    resetPostForm,
+    captureDraftCleanup,
     validatePost,
     uploadFileToStorage,
     showSuccessToast,
@@ -117,6 +174,8 @@ export default function CreatePost() {
     uploadUrlToStorage,
     editPostId,
     isLoadingEditPost,
+    editLoadError,
+    retryEditPost,
   } = postForm;
 
   // Platform settings hook
@@ -169,6 +228,7 @@ export default function CreatePost() {
 
   // UI state
   const [currentStep, setCurrentStep] = useState<PostStep>(1);
+  const submittingRef = useRef(false);
   const [previewOpen, setPreviewOpen] = useState(false);
   const [urlMediaType, setUrlMediaType] = useState<"images" | "video">("images");
   const [imageUrls, setImageUrls] = useState("");
@@ -354,7 +414,13 @@ export default function CreatePost() {
 
   // Validate and post
   const handlePost = async () => {
-    if (!validatePost(unsplashValidationError)) return;
+    if (submittingRef.current) return;
+    submittingRef.current = true;
+    setIsPosting(true);
+
+    try {
+      if (!validatePost(unsplashValidationError)) return;
+      const clearSubmittedDraft = captureDraftCleanup();
 
     const hasComposioYouTubeTarget = connectedAccounts.some((account) =>
       selectedAccountIds.includes(account.id) && account.platform === "youtube" &&
@@ -399,49 +465,21 @@ export default function CreatePost() {
       }
     }
 
-    setIsPosting(true);
-
-    try {
-      // Debug: Log files state before extracting media IDs
-      console.log("[CreatePost] Files state:", files.map(f => ({
-        id: f.id,
-        uploaded: f.uploaded,
-        storagePath: f.storagePath,
-        fileType: f.fileType,
-        fromMediaLibrary: f.fromMediaLibrary,
-        cloudinaryUrl: f.cloudinaryUrl?.slice(0, 50),
-      })));
-
-      let mediaFileIds = files.filter((f) => f.uploaded && f.storagePath).map((f) => f.storagePath!);
-
-      // Defensive guard: warn if files exist but none have storagePath
-      const uploadedWithoutPath = files.filter((f) => f.uploaded && !f.storagePath);
-      if (uploadedWithoutPath.length > 0 && mediaFileIds.length === 0) {
-        console.warn("[CreatePost] WARNING: uploaded files missing storagePath — media will not attach:", 
-          uploadedWithoutPath.map(f => ({ id: f.id, fileType: f.fileType, fromMediaLibrary: f.fromMediaLibrary }))
-        );
+      if (files.some((file) => !file.uploaded || !file.storagePath)) {
+        throw new Error("Every selected media item must finish uploading and have a media ID. The post was not saved.");
       }
+      let mediaFileIds = files.map((file) => file.storagePath!);
 
-      // Handle URL upload method - persist URLs to storage
       if (uploadMethod === "url") {
         if (urlMediaType === "images" && imageUrls.trim()) {
-          const urls = imageUrls.split("\n").map(u => u.trim()).filter(u => u);
-          if (urls.length > 0) {
-            console.log("[CreatePost] Processing URL uploads for images:", urls.length);
-            const uploaded = await Promise.all(urls.map(url => uploadUrlToStorage(url, "image")));
-            const newIds = uploaded.filter(u => u !== null).map(u => u!.id);
-            mediaFileIds = [...mediaFileIds, ...newIds];
-          }
+          const urls = imageUrls.split("\n").map((url) => url.trim()).filter(Boolean);
+          const uploaded = await Promise.all(urls.map((url) => uploadUrlToStorage(url, "image")));
+          mediaFileIds = [...mediaFileIds, ...uploaded.map((upload) => upload.id)];
         } else if (urlMediaType === "video" && videoUrl.trim()) {
-          console.log("[CreatePost] Processing URL upload for video");
           const uploaded = await uploadUrlToStorage(videoUrl.trim(), "video");
-          if (uploaded) {
-            mediaFileIds = [...mediaFileIds, uploaded.id];
-          }
+          mediaFileIds = [...mediaFileIds, uploaded.id];
         }
       }
-
-      console.log("[CreatePost] Extracted media file IDs:", mediaFileIds);
 
       // Defensive: derive platforms from selected accounts (prevents empty platforms edge-cases)
       const platformsForInsert = Array.from(
@@ -532,12 +570,14 @@ export default function CreatePost() {
       };
       saveFieldSuggestions();
 
+      let completionStatus: SavedPostCompletion["status"] = scheduleEnabled && scheduledAt ? "scheduled" : "submitted";
       if (!scheduleEnabled || !scheduledAt) {
         // Track this post for realtime updates
         trackPublishingPost(post.id, platformsForInsert);
 
         const acceptance = await enqueuePostPublish({ postId: post.id, mode: "publish_now" });
         if (acceptance.accepted === false) {
+          completionStatus = "unconfirmed";
           if (acceptance.reason !== "error") clearPublishingPost(post.id);
           toast({
             title: t("toast.publishingIssueTitle", "Publishing issue"),
@@ -563,14 +603,14 @@ export default function CreatePost() {
         );
       }
 
-      // Reset form immediately for optimistic UX
-      resetPostForm();
-      platformSettings.resetTiktokSettings();
+      clearSubmittedDraft();
+      onSaved({ postId: post.id, status: completionStatus });
 
     } catch (error) {
       console.error("Post error:", error);
       showErrorToast(t("toast.postFailed", "Post failed"), error);
     } finally {
+      submittingRef.current = false;
       setIsPosting(false);
     }
   };
@@ -580,7 +620,7 @@ export default function CreatePost() {
       <div className="space-y-6 pb-8">
         <CreatePostHeader
           currentStep={currentStep}
-          onDiscardDraft={resetPostForm}
+          onDiscardDraft={isPosting ? undefined : onStartNewPost}
           hasDraft={!!(caption || files.length > 0 || selectedAccountIds.length > 0)}
           selectedPlatforms={selectedPlatforms}
           connectedAccounts={connectedAccounts}
@@ -589,9 +629,19 @@ export default function CreatePost() {
 
         <StepProgressBar
           currentStep={currentStep}
-          onStepChange={setCurrentStep}
+          onStepChange={(step) => { if (!isPosting) setCurrentStep(step); }}
         />
 
+        {editLoadError && (
+          <div role="alert" className="rounded-lg border border-destructive bg-destructive/10 p-4 flex flex-wrap items-center justify-between gap-3">
+            <p className="text-sm text-destructive">{editLoadError}</p>
+            <Button type="button" variant="outline" onClick={retryEditPost} disabled={isLoadingEditPost}>
+              {t("actions.retryLoad", "Retry loading")}
+            </Button>
+          </div>
+        )}
+
+        <fieldset disabled={isPosting} className="contents">
         {/* Step 1: Content */}
         {currentStep === 1 && (
           <div className="rounded-lg border border-border bg-card overflow-hidden animate-fade-in" style={{ boxShadow: "var(--shadow-card)" }}>
@@ -847,6 +897,8 @@ export default function CreatePost() {
             </div>
           </div>
         )}
+
+        </fieldset>
 
         {/* Media Editor Dialogs */}
         <MediaEditorDialogs
