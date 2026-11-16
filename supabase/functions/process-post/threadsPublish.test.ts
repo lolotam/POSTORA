@@ -81,3 +81,21 @@ Deno.test("the image publish guard runs before sending and marks every unknown o
   }), ThreadsCheckpointUnavailable);
   assertEquals(sends, 0);
 });
+
+for (const markDelay of [6000, 8000]) Deno.test(`publish uses the budget remaining after a ${markDelay}ms durable marker write`, async () => {
+  let clock = 0;
+  const observedTimeouts: number[] = [];
+  const operation = () => publishThreadsContainer((timeout) => {
+    observedTimeouts.push(timeout);
+    return Promise.resolve({ id: "published-image" });
+  }, "image-1", "threads", 10_000, () => clock, {
+    beforeSend: () => { clock += markDelay; return Promise.resolve(); },
+  });
+  if (markDelay === 8000) {
+    await assertRejects(operation, ContainerStillProcessing);
+    assertEquals(observedTimeouts, []);
+  } else {
+    assertEquals(await operation(), { id: "published-image" });
+    assertEquals(observedTimeouts, [4000]);
+  }
+});

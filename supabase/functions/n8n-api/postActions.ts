@@ -1626,10 +1626,16 @@ function pickRetryTargets(
 ): { targets: RetryTarget[]; skipped: RetrySkip[] } {
   // The accounts that already carry a live result for this post.
   const published = new Set<string>();
+  const uncertainAccounts = new Set<string>();
   for (const row of rows) {
     if (!row.social_account_id) continue;
     if (row.status === "success" || row.status === "pending") {
       published.add(row.social_account_id);
+    }
+    if (row.status === "failed" && row.platform === "threads" &&
+      row.response_data?.deferred?.media_type === "IMAGE" &&
+      row.response_data.deferred.publish_outcome === "uncertain") {
+      uncertainAccounts.add(row.social_account_id);
     }
   }
 
@@ -1644,8 +1650,7 @@ function pickRetryTargets(
         reason: "Use story_result_id to retry this managed Story independently." });
       continue;
     }
-    if (row.platform === "threads" && row.response_data?.deferred?.media_type === "IMAGE" &&
-      row.response_data.deferred.publish_outcome === "uncertain") {
+    if (row.social_account_id && uncertainAccounts.has(row.social_account_id)) {
       skipped.push({ account_id: row.social_account_id, platform: row.platform,
         reason: "Threads publish outcome is uncertain; reconcile it manually before any retry." });
       continue;

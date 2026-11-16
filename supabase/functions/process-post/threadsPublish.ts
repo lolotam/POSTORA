@@ -59,9 +59,11 @@ export async function publishThreadsContainer(
   now: () => number = Date.now,
   guards: ThreadsPublishGuards = {},
 ): Promise<{ id: string }> {
-  const timeoutMs = Math.min(20_000, deadlineMs - now());
+  let timeoutMs = Math.min(20_000, deadlineMs - now());
   if (timeoutMs < 3000) throw new ContainerStillProcessing(kind, containerId);
   await guards.beforeSend?.();
+  timeoutMs = Math.min(20_000, deadlineMs - now());
+  if (timeoutMs < 3000) throw new ContainerStillProcessing(kind, containerId);
   let payload: unknown;
   try {
     payload = await publish(timeoutMs);

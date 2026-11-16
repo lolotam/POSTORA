@@ -2718,11 +2718,13 @@ Deno.test("generic retry never dispatches or deletes an independently managed St
   assertEquals(callsFor(db, "platform_posts", "delete").length, 0);
 });
 
-Deno.test("uncertain Threads images never dispatch or delete through the n8n retry boundary", async () => {
+for (const uncertainFirst of [true, false]) Deno.test(`uncertain Threads account blocks every failed row regardless of ordering (${uncertainFirst})`, async () => {
   const db = new FakeSupabase();
   claimQueued(db);
-  db.queue("platform_posts", { data: [{ ...platformResult("threads-uncertain", "threads", ACCOUNT, "failed"),
-    response_data: { deferred: { media_type: "IMAGE", publish_outcome: "uncertain" } } }], error: null });
+  const results = [{ ...platformResult("threads-uncertain", "threads", ACCOUNT, "failed"),
+    response_data: { deferred: { media_type: "IMAGE", publish_outcome: "uncertain" } } },
+    platformResult("threads-proven-failure", "threads", ACCOUNT, "failed")];
+  db.queue("platform_posts", { data: uncertainFirst ? results : results.reverse(), error: null });
   db.queueRpc(RELEASE_RPC, { data: true, error: null });
   const { calls, fetcher } = fakeFetcher([]);
   const result = await retryFailedPost(depsFor(db, fetcher), USER, { post_id: POST });
