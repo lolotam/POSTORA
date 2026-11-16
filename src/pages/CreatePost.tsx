@@ -55,7 +55,7 @@ interface CreatePostComposerProps {
 }
 
 export default function CreatePost() {
-  const [completion, setCompletion] = useState<SavedPostCompletion | null>(null);
+  const [completion, setCompletion] = useState<(SavedPostCompletion & { locationKey: string }) | null>(null);
   const [composerGeneration, setComposerGeneration] = useState(0);
   const navigate = useNavigate();
   const location = useLocation();
@@ -72,7 +72,7 @@ export default function CreatePost() {
     setComposerGeneration((generation) => generation + 1);
   }, [location.pathname, location.search, navigate]);
 
-  if (completion) {
+  if (completion && completion.locationKey === location.key) {
     return (
       <DashboardLayout>
         <div className="space-y-6 pb-8">
@@ -82,7 +82,7 @@ export default function CreatePost() {
     );
   }
 
-  return <CreatePostComposer key={composerGeneration} onSaved={setCompletion} onStartNewPost={startNewPost} />;
+  return <CreatePostComposer key={composerGeneration} onSaved={(saved) => setCompletion({ ...saved, locationKey: location.key })} onStartNewPost={startNewPost} />;
 }
 
 function CreatePostComposer({ onSaved, onStartNewPost }: CreatePostComposerProps) {

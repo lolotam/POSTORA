@@ -177,6 +177,24 @@ beforeEach(() => {
 });
 
 describe("CreatePost media ordering and saved completion", () => {
+  it("keeps completion after saving but opens a fresh composer on a new same-route navigation", async () => {
+    function SidebarNavigation() {
+      const navigate = useNavigate();
+      return <button type="button" onClick={() => navigate("/post")}>Sidebar Create Post</button>;
+    }
+    const user = userEvent.setup();
+    render(<><SidebarNavigation /><CreatePost /></>, { wrapper: wrapper("/post") });
+    await user.type(screen.getByLabelText("Caption"), "First post");
+    await chooseAccountAndReview(user);
+    await user.click(screen.getByRole("button", { name: "Post Now" }));
+    await screen.findByTestId("saved-post-id");
+    expect(screen.queryByLabelText("Caption")).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Sidebar Create Post" }));
+    expect(screen.getByLabelText("Caption")).toHaveValue("");
+    expect(screen.queryByTestId("saved-post-id")).not.toBeInTheDocument();
+    expect(fixture.inserts).toHaveLength(1);
+  });
+
   it("removes an interrupted draft attachment without discarding the caption or other media", async () => {
     sessionStorage.setItem("postora_post_draft", JSON.stringify({
       caption: "Retain my caption", selectedAccountIds: [], savedAt: Date.now(),

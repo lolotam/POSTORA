@@ -20,6 +20,8 @@ Deno.test("shuffled media rows and reversed child completion preserve provider a
   let platform: Platform = "facebook";
   let mediaError = false;
   let missingMedia = false;
+  let signingFailure: "error" | "empty" | null = null;
+  const preparationLogs: Array<Record<string, unknown>> = [];
   let providerCalls = 0;
   let attachedOrder: string[] = [];
   const unexpected: string[] = [];
@@ -42,6 +44,8 @@ Deno.test("shuffled media rows and reversed child completion preserve provider a
     platform = nextPlatform;
     mediaError = false;
     missingMedia = false;
+    signingFailure = null;
+    preparationLogs.length = 0;
     providerCalls = 0;
     attachedOrder = [];
     post = makePost();
@@ -112,7 +116,16 @@ Deno.test("shuffled media rows and reversed child completion preserve provider a
     }
 
     assertEquals(url.origin, ORIGIN, "Only the fake persistence origin is allowed");
+    if (url.pathname.startsWith("/storage/v1/object/sign/")) {
+      return signingFailure === "error"
+        ? Response.json({ message: "fixture signing failure" }, { status: 503 })
+        : Response.json(null);
+    }
     const table = url.pathname.replace("/rest/v1/", "");
+    if (table === "system_logs" && request.method === "POST") {
+      preparationLogs.push(await request.json());
+      return Response.json({});
+    }
     if (table === "posts") {
       if (request.method === "PATCH") {
         Object.assign(post, await request.json());
@@ -130,9 +143,9 @@ Deno.test("shuffled media rows and reversed child completion preserve provider a
       ];
       return Response.json(rows.map(({ id }) => ({
         id,
-        file_path: `https://media-fixture.invalid/${id}.jpg`,
+        file_path: signingFailure ? `${id}.jpg` : `https://media-fixture.invalid/${id}.jpg`,
         file_type: "image",
-        storage_bucket: "openinary",
+        storage_bucket: signingFailure ? "media" : "openinary",
         mime_type: "image/jpeg",
       })));
     }
@@ -199,15 +212,29 @@ Deno.test("shuffled media rows and reversed child completion preserve provider a
       const response = await publish();
       assertEquals(response.status, 422);
       assertEquals(providerCalls, 0);
+      assertEquals(post.status, "failed");
     });
 
     await test.step("a media read failure refuses every provider call", async () => {
       reset("facebook");
       mediaError = true;
       const response = await publish();
-      assertEquals(response.status, 500);
+      assertEquals(response.status, 503);
       assertEquals(providerCalls, 0);
+      assertEquals(post.status, "failed");
+      assertEquals(preparationLogs.length, 1);
     });
+    for (const failure of ["error", "empty"] as const) {
+      await test.step(`a signing ${failure} fails the post without calling providers`, async () => {
+        reset("facebook");
+        signingFailure = failure;
+        const response = await publish();
+        assertEquals(response.status, 503);
+        assertEquals(post.status, "failed");
+        assertEquals(providerCalls, 0);
+        assertEquals(preparationLogs.length, 1);
+      });
+    }
     assertEquals(unexpected, []);
   } finally {
     globalThis.fetch = previousFetch;

@@ -1721,13 +1721,31 @@ Deno.serve(async (req) => {
     // ─────────────────────────────────────────────────────────────────────
     // Step 2: Get media files and generate URLs
     // ─────────────────────────────────────────────────────────────────────
+    const failMediaPreparation = async (message: string) => {
+      const { error: statusError } = await supabase.from("posts").update({ status: "failed" }).eq("id", post_id);
+      if (statusError) console.error("Could not mark media preparation failed:", statusError.message);
+      const { error: logError } = await supabase.from("system_logs").insert({
+        level: "error",
+        category: "post",
+        source: "process-post",
+        message,
+        user_id: post.user_id,
+        metadata: { event: "media_preparation_failed", post_id, status_update_failed: Boolean(statusError) },
+      });
+      if (logError) console.error("Could not log media preparation failure:", logError.message);
+      return createErrorResponse(message, statusError ? 500 : 503);
+    };
+
     let mediaFiles: MediaFile[] = [];
     if (post.media_file_ids && post.media_file_ids.length > 0) {
       const { data: files, error: mediaReadError } = await supabase
         .from("media_files")
         .select("*")
         .in("id", post.media_file_ids);
-      if (mediaReadError) throw mediaReadError;
+      if (mediaReadError) {
+        console.error("Could not read post media:", mediaReadError.message);
+        return await failMediaPreparation("Could not read post media. Retry the publish.");
+      }
 
       mediaFiles = orderPostMediaFiles(post.media_file_ids, files ?? []);
       console.log("Media files:", mediaFiles.length);
@@ -1816,17 +1834,18 @@ Deno.serve(async (req) => {
         mediaUrls.push(file.file_path);
       } else {
         // Supabase storage: create signed URL
-        const { data: signedUrlData, error: signedUrlError } = await supabase.storage
-          .from(file.storage_bucket)
-          .createSignedUrl(file.file_path, 3600); // 1 hour expiry
-
-        if (signedUrlError) {
-          console.error(`Failed to create signed URL for ${file.file_path}:`, signedUrlError);
-          throw signedUrlError;
+        try {
+          const { data: signedUrlData, error: signedUrlError } = await supabase.storage
+            .from(file.storage_bucket)
+            .createSignedUrl(file.file_path, 3600); // 1 hour expiry
+          if (signedUrlError) throw signedUrlError;
+          if (!signedUrlData?.signedUrl) throw new Error(`Missing signed URL for media ${file.id}`);
+          console.log(`Generated signed URL for ${file.file_path}`);
+          mediaUrls.push(signedUrlData.signedUrl);
+        } catch (signingError) {
+          console.error(`Failed to create signed URL for ${file.file_path}:`, signingError);
+          return await failMediaPreparation("Could not create a delivery URL for post media. Retry the publish.");
         }
-        if (!signedUrlData?.signedUrl) throw new Error(`Could not create a delivery URL for media ${file.id}`);
-        console.log(`Generated signed URL for ${file.file_path}`);
-        mediaUrls.push(signedUrlData.signedUrl);
       }
     }
 
