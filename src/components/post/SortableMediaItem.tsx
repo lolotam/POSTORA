@@ -206,9 +206,11 @@ export function SortableMediaItem({
               </Button>
             )}
             <Button
+              type="button"
               size="sm"
               variant="destructive"
               className="h-8"
+              aria-label={t("sortable.remove", "Remove media {{position}}", { position })}
               onClick={() => onRemove(file.id)}
             >
               <X className="w-4 h-4" />
@@ -218,7 +220,20 @@ export function SortableMediaItem({
       ) : (
         <div className="absolute inset-0 bg-black/60 flex flex-col items-center justify-center p-3 text-center">
           {file.uploadError ? (
-            <span className="text-xs text-white">{file.uploadError}</span>
+            <>
+              <span className="text-xs text-white">{file.uploadError}</span>
+              <Button
+                type="button"
+                size="sm"
+                variant="destructive"
+                className="min-h-11 mt-2"
+                aria-label={t("sortable.remove", "Remove media {{position}}", { position })}
+                onClick={() => onRemove(file.id)}
+              >
+                <X className="w-4 h-4 me-1" />
+                {t("sortable.remove", "Remove media {{position}}", { position })}
+              </Button>
+            </>
           ) : (
             <>
               <Loader2 className="w-5 h-5 animate-spin text-white mb-1" />

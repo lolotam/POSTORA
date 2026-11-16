@@ -177,6 +177,26 @@ beforeEach(() => {
 });
 
 describe("CreatePost media ordering and saved completion", () => {
+  it("removes an interrupted draft attachment without discarding the caption or other media", async () => {
+    sessionStorage.setItem("postora_post_draft", JSON.stringify({
+      caption: "Retain my caption", selectedAccountIds: [], savedAt: Date.now(),
+      uploadMethod: "local", fileMetadata: [
+        { id: "pending", fileType: "image", previewUrl: "https://images.example/pending.png", uploaded: false },
+        { id: "good", fileType: "image", previewUrl: "https://images.example/good.png", storagePath: "good" },
+      ],
+    }));
+    const user = userEvent.setup();
+    render(<CreatePost />, { wrapper: wrapper("/post") });
+    await user.click(screen.getByRole("button", { name: "Remove media 1" }));
+    expect(screen.getByRole("textbox", { name: "Caption" })).toHaveValue("Retain my caption");
+    expect(screen.getAllByRole("img")).toHaveLength(1);
+    await chooseAccountAndReview(user);
+    await user.click(screen.getByRole("button", { name: "Post Now" }));
+    await screen.findByText("Submitted for publishing. Check History for the final result.");
+    expect(fixture.inserts[0].media_file_ids).toEqual(["good"]);
+    expect(fixture.inserts[0].caption).toBe("Retain my caption");
+  });
+
   it("persists the reordered gallery and never treats submission as completed publishing", async () => {
     libraryPayload(["a", "b", "c"]);
     const user = userEvent.setup();

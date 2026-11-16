@@ -16,6 +16,7 @@ const fixture = vi.hoisted(() => ({
   postReads: 0,
   postMetadata: { selected_account_ids: ["account"] } as Record<string, unknown>,
   toast: vi.fn(),
+  invoke: vi.fn(),
   profile: null as { preferred_timezone: string } | null,
   accounts: [{ id: "account", platform: "instagram", platform_username: "test" }],
 }));
@@ -25,6 +26,7 @@ vi.mock("@/hooks/use-toast", () => ({ useToast: () => ({ toast: fixture.toast })
 vi.mock("@/features/media-upload", () => ({ useMediaUploadLimits: () => ({}), uploadLargeMedia: vi.fn() }));
 vi.mock("@/integrations/supabase/client", () => ({
   supabase: {
+    functions: { invoke: fixture.invoke },
     from: (table: string) => ({ select: () => table === "posts" ? {
       eq: () => ({ single: async () => {
         fixture.postReads++;
@@ -57,6 +59,7 @@ beforeEach(() => {
   fixture.postMetadata = { selected_account_ids: ["account"] };
   fixture.accounts = [{ id: "account", platform: "instagram", platform_username: "test" }];
   fixture.toast.mockClear();
+  fixture.invoke.mockReset();
 });
 
 describe("saved post media", () => {
@@ -177,5 +180,49 @@ describe("saved post media", () => {
     expect(result.current.files[0].uploaded).toBe(false);
     expect(result.current.files[0].storagePath).toBeUndefined();
     expect(result.current.validatePost()).toBe(false);
+  });
+
+  it("keeps an interrupted replacement incomplete across a draft reload despite its old saved ID", () => {
+    sessionStorage.setItem("postora_post_draft", JSON.stringify({
+      caption: "Keep caption", selectedAccountIds: ["account"], savedAt: Date.now(),
+      fileMetadata: [{ id: "replacement", previewUrl: "blob:replacement", fileType: "image",
+        storagePath: "old-original", cloudinaryUrl: "https://images.example/original.png", uploaded: false }],
+    }));
+    const { result, unmount } = renderHook(() => usePostForm(), {
+      wrapper: ({ children }) => <MemoryRouter initialEntries={["/post"]}>{children}</MemoryRouter>,
+    });
+    expect(result.current.files[0].uploaded).toBe(false);
+    expect(result.current.files[0].storagePath).toBeUndefined();
+    expect(result.current.validatePost()).toBe(false);
+    const persisted = JSON.parse(sessionStorage.getItem("postora_post_draft")!);
+    expect(persisted.fileMetadata[0].uploaded).toBe(false);
+    unmount();
+    const restored = renderHook(() => usePostForm(), {
+      wrapper: ({ children }) => <MemoryRouter initialEntries={["/post"]}>{children}</MemoryRouter>,
+    });
+    expect(restored.result.current.files[0].uploaded).toBe(false);
+    expect(restored.result.current.caption).toBe("Keep caption");
+  });
+
+  it("retains a failed local upload until the user explicitly removes it", async () => {
+    fixture.invoke.mockResolvedValue({ data: null, error: { message: "upload unavailable" } });
+    const { result } = renderHook(() => usePostForm(), {
+      wrapper: ({ children }) => <MemoryRouter initialEntries={["/post"]}>{children}</MemoryRouter>,
+    });
+    const failed = { id: "failed", file: new File(["image"], "failed.png", { type: "image/png" }),
+      previewUrl: "https://images.example/failed.png", fileType: "image" as const, uploaded: false, uploadProgress: 0 };
+    act(() => {
+      result.current.setSelectedAccountIds(["account"]);
+      result.current.setFiles([
+        { ...failed, id: "good", uploaded: true, storagePath: "saved-good" }, failed,
+      ]);
+    });
+    await act(async () => { await result.current.uploadFileToStorage(failed); });
+    expect(result.current.files.map(file => file.id)).toEqual(["good", "failed"]);
+    expect(result.current.files[1].uploadError).toBe("upload unavailable");
+    expect(result.current.validatePost()).toBe(false);
+    await act(async () => { await result.current.removeFile("failed"); });
+    expect(result.current.files.map(file => file.storagePath)).toEqual(["saved-good"]);
+    expect(result.current.validatePost()).toBe(true);
   });
 });

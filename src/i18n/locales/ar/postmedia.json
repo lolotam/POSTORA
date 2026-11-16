@@ -276,6 +276,7 @@
   "sortable": {
     "orderLabel": "ترتيب النشر {{position}}",
     "reorderLabel": "تحريك الوسائط رقم {{position}}",
+    "remove": "إزالة الوسائط رقم {{position}}",
     "alt": "بديل",
     "compress": "ضغط",
     "crop": "قص",

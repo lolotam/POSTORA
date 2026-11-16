@@ -63,6 +63,7 @@ interface PostDraftState {
     previewUrl: string;
     fileType: "image" | "video" | "gif";
     storagePath?: string;
+    uploaded?: boolean;
     cloudinaryUrl?: string;
     cloudinaryPublicId?: string;
     fromMediaLibrary?: boolean;
@@ -110,24 +111,27 @@ export function usePostForm() {
   const [selectedAccountIds, setSelectedAccountIds] = useState<string[]>(() => initialDraft?.selectedAccountIds || []);
   const [files, setFilesState] = useState<UploadedFile[]>(() => {
     if (initialDraft?.fileMetadata && initialDraft.fileMetadata.length > 0) {
-      return initialDraft.fileMetadata.map(meta => ({
-        id: meta.id,
-        file: new File([], "restored-file"),
-        previewUrl: meta.cloudinaryUrl || meta.previewUrl,
-        fileType: meta.fileType,
-        uploadProgress: meta.storagePath ? 100 : 0,
-        uploaded: Boolean(meta.storagePath),
-        uploadError: meta.storagePath ? undefined : "This media needs to be selected again before publishing.",
-        storagePath: meta.storagePath,
-        cloudinaryUrl: meta.cloudinaryUrl,
-        cloudinaryPublicId: meta.cloudinaryPublicId,
-        fromMediaLibrary: meta.fromMediaLibrary,
-        altText: meta.altText,
-        mediaSource: meta.mediaSource,
-        photographerName: meta.photographerName,
-        photographerUrl: meta.photographerUrl,
-        unsplashUrl: meta.unsplashUrl,
-      }));
+      return initialDraft.fileMetadata.map(meta => {
+        const uploaded = Boolean(meta.storagePath) && meta.uploaded !== false;
+        return {
+          id: meta.id,
+          file: new File([], "restored-file"),
+          previewUrl: meta.cloudinaryUrl || meta.previewUrl,
+          fileType: meta.fileType,
+          uploadProgress: uploaded ? 100 : 0,
+          uploaded,
+          uploadError: uploaded ? undefined : "Remove this incomplete media item and select the file again before publishing.",
+          storagePath: uploaded ? meta.storagePath : undefined,
+          cloudinaryUrl: uploaded ? meta.cloudinaryUrl : undefined,
+          cloudinaryPublicId: uploaded ? meta.cloudinaryPublicId : undefined,
+          fromMediaLibrary: meta.fromMediaLibrary,
+          altText: meta.altText,
+          mediaSource: meta.mediaSource,
+          photographerName: meta.photographerName,
+          photographerUrl: meta.photographerUrl,
+          unsplashUrl: meta.unsplashUrl,
+        };
+      });
     }
     return [];
   });
@@ -207,6 +211,7 @@ export function usePostForm() {
       uploadMethod,
       fileMetadata: files.map(f => ({
         id: f.id,
+        uploaded: f.uploaded,
         previewUrl: f.cloudinaryUrl || f.previewUrl,
         fileType: f.fileType,
         storagePath: f.storagePath,
@@ -700,7 +705,11 @@ export function usePostForm() {
       if (!activeRef.current || composerGenerationRef.current !== generation) return;
       console.error("Upload error:", error);
       showErrorToast("Upload failed", error);
-      setFilesState((prev) => prev.filter((f) => f.id !== uploadFile.id));
+      setFilesState((prev) => prev.map((file) => file.id === uploadFile.id ? {
+        ...file,
+        uploaded: false,
+        uploadError: error instanceof Error ? error.message : "Upload failed. Remove this item and select the file again.",
+      } : file));
     }
   };
 
