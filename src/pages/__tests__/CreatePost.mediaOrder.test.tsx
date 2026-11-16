@@ -187,7 +187,7 @@ describe("CreatePost media ordering and saved completion", () => {
     const reachedSuspension = vi.fn();
     function Navigation() {
       const navigate = useNavigate();
-      return <button type="button" onClick={() => startTransition(() => navigate("/post?suspend=1"))}>Suspend navigation</button>;
+      return <button type="button" onClick={() => startTransition(() => { navigate("/post?suspend=1"); })}>Suspend navigation</button>;
     }
     function NavigationResource() {
       const location = useLocation();
