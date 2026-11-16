@@ -177,6 +177,32 @@ beforeEach(() => {
 });
 
 describe("CreatePost media ordering and saved completion", () => {
+  it.each(["saving", "enqueueing"])("shows completion after same-route navigation during %s without allowing another submission", async (phase) => {
+    let release!: () => void;
+    const pending = new Promise<void>((resolve) => { release = resolve; });
+    if (phase === "saving") fixture.persistenceWait = pending;
+    else fixture.enqueue.mockImplementation(async () => { await pending; return { accepted: true }; });
+    function SidebarNavigation() {
+      const navigate = useNavigate();
+      return <button type="button" onClick={() => navigate("/post")}>Sidebar Create Post</button>;
+    }
+    const user = userEvent.setup();
+    render(<><SidebarNavigation /><CreatePost /></>, { wrapper: wrapper("/post") });
+    await user.type(screen.getByLabelText("Caption"), "Pending post");
+    await chooseAccountAndReview(user);
+    await user.click(screen.getByRole("button", { name: "Post Now" }));
+    await waitFor(() => phase === "saving"
+      ? expect(fixture.persistenceAttempts).toBe(1)
+      : expect(fixture.enqueue).toHaveBeenCalledTimes(1));
+    await user.click(screen.getByRole("button", { name: "Sidebar Create Post" }));
+    release();
+    await screen.findByTestId("saved-post-id");
+    expect(screen.queryByRole("button", { name: "Post Now" })).not.toBeInTheDocument();
+    expect(fixture.inserts).toHaveLength(1);
+    await user.click(screen.getByRole("button", { name: "Create new post" }));
+    expect(screen.getByLabelText("Caption")).toHaveValue("");
+  });
+
   it("keeps completion after saving but opens a fresh composer on a new same-route navigation", async () => {
     function SidebarNavigation() {
       const navigate = useNavigate();

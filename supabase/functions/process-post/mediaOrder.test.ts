@@ -4,6 +4,7 @@ const ORIGIN = "https://media-order-fixture.invalid";
 const OWNER = "e1000000-0000-4000-8000-000000000011";
 const ACCOUNT = "e2000000-0000-4000-8000-000000000011";
 const POST = "e3000000-0000-4000-8000-000000000011";
+const DEFERRED = "e4000000-0000-4000-8000-000000000011";
 const SERVICE = "fixture-service";
 const MEDIA_IDS = ["media-a", "media-b", "media-c"];
 type Handler = (request: Request) => Response | Promise<Response>;
@@ -21,6 +22,8 @@ Deno.test("shuffled media rows and reversed child completion preserve provider a
   let mediaError = false;
   let missingMedia = false;
   let signingFailure: "error" | "empty" | null = null;
+  let deferredRow: Record<string, unknown> | null = null;
+  let postWrites = 0;
   const preparationLogs: Array<Record<string, unknown>> = [];
   let providerCalls = 0;
   let attachedOrder: string[] = [];
@@ -45,6 +48,8 @@ Deno.test("shuffled media rows and reversed child completion preserve provider a
     mediaError = false;
     missingMedia = false;
     signingFailure = null;
+    deferredRow = null;
+    postWrites = 0;
     preparationLogs.length = 0;
     providerCalls = 0;
     attachedOrder = [];
@@ -128,6 +133,7 @@ Deno.test("shuffled media rows and reversed child completion preserve provider a
     }
     if (table === "posts") {
       if (request.method === "PATCH") {
+        postWrites++;
         Object.assign(post, await request.json());
         return Response.json([{ id: POST }]);
       }
@@ -167,7 +173,13 @@ Deno.test("shuffled media rows and reversed child completion preserve provider a
     if (table === "rpc/partner_settle_platform_post") {
       return Response.json({ platform_post_id: "result-row", recorded: true });
     }
-    if (table === "platform_posts") return request.method === "PATCH" ? Response.json([]) : Response.json([]);
+    if (table === "platform_posts") {
+      if (deferredRow) {
+        assertEquals(request.method, "GET", "Media preparation must not settle the deferred row");
+        return Response.json(deferredRow);
+      }
+      return Response.json([]);
+    }
     if (table === "system_logs") return new Response(null, { status: 201 });
     if (table === "profiles") return Response.json({ id: OWNER, preferred_timezone: "UTC" });
     if (["user_rate_limits", "user_subscriptions", "tier_rate_limits", "rate_limit_settings"].includes(table)) return Response.json([]);
@@ -184,10 +196,10 @@ Deno.test("shuffled media rows and reversed child completion preserve provider a
     await import("./index.ts?media-order-handler-test");
     Deno.serve = previousServe;
     assert(handler);
-    const publish = () => handler!(new Request(`${ORIGIN}/functions/v1/process-post`, {
+    const publish = (resume = false) => handler!(new Request(`${ORIGIN}/functions/v1/process-post`, {
       method: "POST",
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${SERVICE}` },
-      body: JSON.stringify({ post_id: POST }),
+      body: JSON.stringify({ post_id: POST, ...(resume ? { resume_platform_post_id: DEFERRED } : {}) }),
     }));
 
     await test.step("Facebook attached_media follows canonical IDs", async () => {
@@ -231,6 +243,31 @@ Deno.test("shuffled media rows and reversed child completion preserve provider a
         const response = await publish();
         assertEquals(response.status, 503);
         assertEquals(post.status, "failed");
+        assertEquals(providerCalls, 0);
+        assertEquals(preparationLogs.length, 1);
+      });
+    }
+    for (const failure of ["read", "error", "empty"] as const) {
+      await test.step(`a resumed ${failure} preparation failure preserves deferred settlement`, async () => {
+        reset("instagram");
+        post.status = "processing";
+        deferredRow = {
+          id: DEFERRED, social_account_id: ACCOUNT, platform: "instagram", status: "pending",
+          response_data: { deferred: {
+            kind: "ig_reel", container_id: "existing-container", attempts: 1,
+            first_deferred_at: new Date(Date.now() - 60000).toISOString(),
+            give_up_at: new Date(Date.now() + 600000).toISOString(),
+            next_check_at: new Date().toISOString(),
+          } },
+        };
+        const previousRow = JSON.stringify(deferredRow);
+        if (failure === "read") mediaError = true;
+        else signingFailure = failure;
+        const response = await publish(true);
+        assertEquals(response.status, 503);
+        assertEquals(post.status, "processing");
+        assertEquals(postWrites, 0);
+        assertEquals(JSON.stringify(deferredRow), previousRow);
         assertEquals(providerCalls, 0);
         assertEquals(preparationLogs.length, 1);
       });

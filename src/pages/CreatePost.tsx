@@ -57,8 +57,11 @@ interface CreatePostComposerProps {
 export default function CreatePost() {
   const [completion, setCompletion] = useState<(SavedPostCompletion & { locationKey: string }) | null>(null);
   const [composerGeneration, setComposerGeneration] = useState(0);
+  const composerGenerationRef = useRef(0);
   const navigate = useNavigate();
   const location = useLocation();
+  const locationKeyRef = useRef(location.key);
+  locationKeyRef.current = location.key;
 
   const startNewPost = useCallback(() => {
     sessionStorage.removeItem("postora_post_draft");
@@ -69,7 +72,8 @@ export default function CreatePost() {
     params.delete("from");
     navigate({ pathname: location.pathname, search: params.toString() }, { replace: true, state: null });
     setCompletion(null);
-    setComposerGeneration((generation) => generation + 1);
+    composerGenerationRef.current += 1;
+    setComposerGeneration(composerGenerationRef.current);
   }, [location.pathname, location.search, navigate]);
 
   if (completion && completion.locationKey === location.key) {
@@ -82,7 +86,10 @@ export default function CreatePost() {
     );
   }
 
-  return <CreatePostComposer key={composerGeneration} onSaved={(saved) => setCompletion({ ...saved, locationKey: location.key })} onStartNewPost={startNewPost} />;
+  return <CreatePostComposer key={composerGeneration} onSaved={(saved) => {
+    if (composerGeneration !== composerGenerationRef.current) return;
+    setCompletion({ ...saved, locationKey: locationKeyRef.current });
+  }} onStartNewPost={startNewPost} />;
 }
 
 function CreatePostComposer({ onSaved, onStartNewPost }: CreatePostComposerProps) {

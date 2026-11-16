@@ -1722,7 +1722,9 @@ Deno.serve(async (req) => {
     // Step 2: Get media files and generate URLs
     // ─────────────────────────────────────────────────────────────────────
     const failMediaPreparation = async (message: string) => {
-      const { error: statusError } = await supabase.from("posts").update({ status: "failed" }).eq("id", post_id);
+      const { error: statusError } = resume
+        ? { error: null }
+        : await supabase.from("posts").update({ status: "failed" }).eq("id", post_id);
       if (statusError) console.error("Could not mark media preparation failed:", statusError.message);
       const { error: logError } = await supabase.from("system_logs").insert({
         level: "error",
@@ -1730,7 +1732,11 @@ Deno.serve(async (req) => {
         source: "process-post",
         message,
         user_id: post.user_id,
-        metadata: { event: "media_preparation_failed", post_id, status_update_failed: Boolean(statusError) },
+        metadata: {
+          event: "media_preparation_failed", post_id,
+          status_update_failed: Boolean(statusError),
+          resume_platform_post_id: resume?.platformPostId ?? null,
+        },
       });
       if (logError) console.error("Could not log media preparation failure:", logError.message);
       return createErrorResponse(message, statusError ? 500 : 503);
