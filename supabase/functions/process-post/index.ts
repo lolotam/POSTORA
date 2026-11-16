@@ -1719,13 +1719,90 @@ Deno.serve(async (req) => {
     }
 
     // ─────────────────────────────────────────────────────────────────────
-    // Step 2: Get media files and generate URLs
-    // ─────────────────────────────────────────────────────────────────────
-    const failMediaPreparation = async (message: string) => {
-      const { error: statusError } = resume
-        ? { error: null }
-        : await supabase.from("posts").update({ status: "failed" }).eq("id", post_id);
-      if (statusError) console.error("Could not mark media preparation failed:", statusError.message);
+    // Step 2: Get social accounts for selected platforms
+    // Use override values if provided (for single-platform retry), else use post data
+    // Determine which platforms to post to
+    const platformsToPost: string[] = (overridePlatforms && Array.isArray(overridePlatforms) && overridePlatforms.length > 0)
+      ? overridePlatforms
+      : post.platforms;
+
+    console.log("Platforms to post:", platformsToPost);
+
+    // Guard: if no platforms, fail fast (prevents "completed" posts with no results)
+    if (!Array.isArray(platformsToPost) || platformsToPost.length === 0) {
+      const msg = "No platforms selected for this post";
+      console.error(msg, { postId: post_id, overridePlatforms });
+      await supabase.from("posts").update({ status: "failed" }).eq("id", post_id);
+      return createErrorResponse(msg, 400);
+    }
+
+    // Determine which account IDs to use
+    let selectedAccountIds: string[] = [];
+
+    if (overrideAccountIds && Array.isArray(overrideAccountIds) && overrideAccountIds.length > 0) {
+      // Use override account IDs (for single-platform retry)
+      selectedAccountIds = overrideAccountIds.filter(
+        (id: unknown): id is string => typeof id === "string" && id.length > 0
+      );
+      console.log("Using override account IDs:", selectedAccountIds);
+    } else if (Array.isArray(post.metadata?.selected_account_ids)) {
+      // Use post metadata account IDs
+      selectedAccountIds = post.metadata!.selected_account_ids.filter(
+        (id: unknown): id is string => typeof id === "string" && id.length > 0
+      );
+      console.log("Using post metadata account IDs:", selectedAccountIds);
+    }
+
+    let accountsQuery = supabase
+      .from("social_accounts")
+      .select("*")
+      .eq("user_id", post.user_id)
+      .in("platform", platformsToPost)
+      .eq("is_active", true);
+
+    if (selectedAccountIds.length > 0) {
+      console.log("Filtering social accounts by selected IDs:", selectedAccountIds);
+      accountsQuery = accountsQuery.in("id", selectedAccountIds);
+    }
+
+    const { data: accounts, error: accountsError } = await accountsQuery;
+
+    if (accountsError) {
+      throw accountsError;
+    }
+
+    console.log("Found accounts:", accounts?.length || 0);
+
+    // Guard: if no accounts found, fail fast (prevents blank Profile/Account/Link in History)
+    if (!accounts || accounts.length === 0) {
+      const msg = selectedAccountIds.length > 0
+        ? "No active social accounts found for the selected account IDs"
+        : "No active social accounts found for the selected platforms";
+      console.error(msg, { postId: post_id, platformsToPost, selectedAccountIds });
+      await supabase.from("posts").update({ status: "failed" }).eq("id", post_id);
+      return createErrorResponse(msg, 400);
+    }
+
+    const failMediaPreparation = async (message: string, statusCode = 503) => {
+      let resultWriteError: string | null = null;
+      if (!resume) {
+        for (const account of accounts) {
+          const settled = await settlePlatformPost(supabase, {
+            platformPostId: null, postId: post_id,
+            socialAccountId: account.id, platform: account.platform,
+            status: "failed", errorMessage: message,
+          });
+          if (settled.error) {
+            resultWriteError = settled.error;
+            console.error("Could not record media preparation retry target:", settled.error);
+          }
+        }
+      }
+      // The settlement seam owns final rollup; incomplete target recording must remain sweepable.
+      const { error: statusError } = resultWriteError
+        ? await supabase.from("posts").update({ status: "processing" }).eq("id", post_id)
+        : { error: null };
+      if (statusError) console.error("Could not preserve incomplete retry-target recording:", statusError.message);
       const { error: logError } = await supabase.from("system_logs").insert({
         level: "error",
         category: "post",
@@ -1735,13 +1812,17 @@ Deno.serve(async (req) => {
         metadata: {
           event: "media_preparation_failed", post_id,
           status_update_failed: Boolean(statusError),
+          result_write_failed: Boolean(resultWriteError),
           resume_platform_post_id: resume?.platformPostId ?? null,
         },
       });
       if (logError) console.error("Could not log media preparation failure:", logError.message);
-      return createErrorResponse(message, statusError ? 500 : 503);
+      return createErrorResponse(message, statusError || resultWriteError ? 500 : resume ? 503 : statusCode);
     };
 
+    // ─────────────────────────────────────────────────────────────────────
+    // Step 3: Get media files and generate URLs
+    // ─────────────────────────────────────────────────────────────────────
     let mediaFiles: MediaFile[] = [];
     if (post.media_file_ids && post.media_file_ids.length > 0) {
       const { data: files, error: mediaReadError } = await supabase
@@ -1760,8 +1841,7 @@ Deno.serve(async (req) => {
       if (missingMediaFileIds.length > 0) {
         const message = `Post media is unavailable. Re-upload all ${post.media_file_ids.length} media item(s) before retrying.`;
         console.error(message, { postId: post_id, missingMediaFileIds });
-        await supabase.from("posts").update({ status: "failed" }).eq("id", post_id);
-        return createErrorResponse(message, 422);
+        return await failMediaPreparation(message, 422);
       }
 
       // The scan-state rule is enforced HERE, at the publish, not only when
@@ -1775,8 +1855,7 @@ Deno.serve(async (req) => {
       if (unsendable.length > 0) {
         const message = `Post media cannot be published: ${unsendable.length} file(s) are pending or rejected by scanning.`;
         console.error(message, { postId: post_id, mediaFileIds: unsendable.map((file) => file.id) });
-        await supabase.from("posts").update({ status: "failed" }).eq("id", post_id);
-        return createErrorResponse(message, 422);
+        return await failMediaPreparation(message, 422);
       }
     }
 
@@ -1856,71 +1935,8 @@ Deno.serve(async (req) => {
     }
 
     // ─────────────────────────────────────────────────────────────────────
-    // Step 3: Get social accounts for selected platforms
-    // Use override values if provided (for single-platform retry), else use post data
-    // ─────────────────────────────────────────────────────────────────────
 
-    // Determine which platforms to post to
-    const platformsToPost: string[] = (overridePlatforms && Array.isArray(overridePlatforms) && overridePlatforms.length > 0)
-      ? overridePlatforms
-      : post.platforms;
 
-    console.log("Platforms to post:", platformsToPost);
-
-    // Guard: if no platforms, fail fast (prevents "completed" posts with no results)
-    if (!Array.isArray(platformsToPost) || platformsToPost.length === 0) {
-      const msg = "No platforms selected for this post";
-      console.error(msg, { postId: post_id, overridePlatforms });
-      await supabase.from("posts").update({ status: "failed" }).eq("id", post_id);
-      return createErrorResponse(msg, 400);
-    }
-
-    // Determine which account IDs to use
-    let selectedAccountIds: string[] = [];
-
-    if (overrideAccountIds && Array.isArray(overrideAccountIds) && overrideAccountIds.length > 0) {
-      // Use override account IDs (for single-platform retry)
-      selectedAccountIds = overrideAccountIds.filter(
-        (id: unknown): id is string => typeof id === "string" && id.length > 0
-      );
-      console.log("Using override account IDs:", selectedAccountIds);
-    } else if (Array.isArray(post.metadata?.selected_account_ids)) {
-      // Use post metadata account IDs
-      selectedAccountIds = post.metadata!.selected_account_ids.filter(
-        (id: unknown): id is string => typeof id === "string" && id.length > 0
-      );
-      console.log("Using post metadata account IDs:", selectedAccountIds);
-    }
-
-    let accountsQuery = supabase
-      .from("social_accounts")
-      .select("*")
-      .eq("user_id", post.user_id)
-      .in("platform", platformsToPost)
-      .eq("is_active", true);
-
-    if (selectedAccountIds.length > 0) {
-      console.log("Filtering social accounts by selected IDs:", selectedAccountIds);
-      accountsQuery = accountsQuery.in("id", selectedAccountIds);
-    }
-
-    const { data: accounts, error: accountsError } = await accountsQuery;
-
-    if (accountsError) {
-      throw accountsError;
-    }
-
-    console.log("Found accounts:", accounts?.length || 0);
-
-    // Guard: if no accounts found, fail fast (prevents blank Profile/Account/Link in History)
-    if (!accounts || accounts.length === 0) {
-      const msg = selectedAccountIds.length > 0
-        ? "No active social accounts found for the selected account IDs"
-        : "No active social accounts found for the selected platforms";
-      console.error(msg, { postId: post_id, platformsToPost, selectedAccountIds });
-      await supabase.from("posts").update({ status: "failed" }).eq("id", post_id);
-      return createErrorResponse(msg, 400);
-    }
 
     // ─────────────────────────────────────────────────────────────────────
     // Step 3.5: JIT Token Refresh for YouTube

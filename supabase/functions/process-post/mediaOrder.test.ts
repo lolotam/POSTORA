@@ -5,6 +5,7 @@ const OWNER = "e1000000-0000-4000-8000-000000000011";
 const ACCOUNT = "e2000000-0000-4000-8000-000000000011";
 const POST = "e3000000-0000-4000-8000-000000000011";
 const DEFERRED = "e4000000-0000-4000-8000-000000000011";
+const OTHER_ACCOUNT = "e2000000-0000-4000-8000-000000000012";
 const SERVICE = "fixture-service";
 const MEDIA_IDS = ["media-a", "media-b", "media-c"];
 type Handler = (request: Request) => Response | Promise<Response>;
@@ -24,6 +25,10 @@ Deno.test("shuffled media rows and reversed child completion preserve provider a
   let signingFailure: "error" | "empty" | null = null;
   let deferredRow: Record<string, unknown> | null = null;
   let postWrites = 0;
+  let settlementFailure: "all" | "second" | null = null;
+  let accountIds = [ACCOUNT];
+  let priorSuccess = false;
+  const settledRows: Array<Record<string, unknown>> = [];
   const preparationLogs: Array<Record<string, unknown>> = [];
   let providerCalls = 0;
   let attachedOrder: string[] = [];
@@ -50,6 +55,10 @@ Deno.test("shuffled media rows and reversed child completion preserve provider a
     signingFailure = null;
     deferredRow = null;
     postWrites = 0;
+    settlementFailure = null;
+    accountIds = [ACCOUNT];
+    priorSuccess = false;
+    settledRows.length = 0;
     preparationLogs.length = 0;
     providerCalls = 0;
     attachedOrder = [];
@@ -158,8 +167,10 @@ Deno.test("shuffled media rows and reversed child completion preserve provider a
     if (table === "media_file_providers") return Response.json([]);
     if (table === "app_settings") return Response.json(null);
     if (table === "social_accounts") {
-      return Response.json([{
-        id: ACCOUNT,
+      assertEquals(url.searchParams.get("user_id"), `eq.${OWNER}`);
+      assertEquals(url.searchParams.get("id"), `in.(${accountIds.join(",")})`);
+      return Response.json(accountIds.map(id => ({
+        id,
         user_id: OWNER,
         platform,
         platform_user_id: "fixture-user",
@@ -168,9 +179,15 @@ Deno.test("shuffled media rows and reversed child completion preserve provider a
         is_active: true,
         auth_provider: "native",
         account_metadata: {},
-      }]);
+      })));
     }
     if (table === "rpc/partner_settle_platform_post") {
+      const payload = await request.json();
+      if (settlementFailure === "all" || (settlementFailure === "second" && payload.p_social_account_id === OTHER_ACCOUNT)) {
+        return Response.json({ message: "fixture settlement failure" }, { status: 500 });
+      }
+      settledRows.push(payload);
+      post.status = priorSuccess || settledRows.some(row => row.p_status === "success") ? "completed" : "failed";
       return Response.json({ platform_post_id: "result-row", recorded: true });
     }
     if (table === "platform_posts") {
@@ -225,6 +242,7 @@ Deno.test("shuffled media rows and reversed child completion preserve provider a
       assertEquals(response.status, 422);
       assertEquals(providerCalls, 0);
       assertEquals(post.status, "failed");
+      assertEquals(settledRows.map(row => [row.p_social_account_id, row.p_status]), [[ACCOUNT, "failed"]]);
     });
 
     await test.step("a media read failure refuses every provider call", async () => {
@@ -235,6 +253,9 @@ Deno.test("shuffled media rows and reversed child completion preserve provider a
       assertEquals(providerCalls, 0);
       assertEquals(post.status, "failed");
       assertEquals(preparationLogs.length, 1);
+      assertEquals(settledRows.map(row => [row.p_post_id, row.p_social_account_id, row.p_platform, row.p_status]), [
+        [POST, ACCOUNT, "facebook", "failed"],
+      ]);
     });
     for (const failure of ["error", "empty"] as const) {
       await test.step(`a signing ${failure} fails the post without calling providers`, async () => {
@@ -245,6 +266,7 @@ Deno.test("shuffled media rows and reversed child completion preserve provider a
         assertEquals(post.status, "failed");
         assertEquals(providerCalls, 0);
         assertEquals(preparationLogs.length, 1);
+        assertEquals(settledRows.map(row => [row.p_social_account_id, row.p_status]), [[ACCOUNT, "failed"]]);
       });
     }
     for (const failure of ["read", "error", "empty"] as const) {
@@ -267,11 +289,45 @@ Deno.test("shuffled media rows and reversed child completion preserve provider a
         assertEquals(response.status, 503);
         assertEquals(post.status, "processing");
         assertEquals(postWrites, 0);
+        assertEquals(settledRows.length, 0);
         assertEquals(JSON.stringify(deferredRow), previousRow);
         assertEquals(providerCalls, 0);
         assertEquals(preparationLogs.length, 1);
       });
     }
+    await test.step("a failed retry-target write does not finalize an unrecoverable parent", async () => {
+      reset("facebook");
+      mediaError = true;
+      settlementFailure = "all";
+      const response = await publish();
+      assertEquals(response.status, 500);
+      assertEquals(post.status, "processing");
+      assertEquals(settledRows.length, 0);
+      assertEquals(providerCalls, 0);
+      assertEquals(preparationLogs.length, 1);
+    });
+    await test.step("partial retry-target recording remains eligible for stale recovery", async () => {
+      reset("facebook");
+      accountIds = [ACCOUNT, OTHER_ACCOUNT];
+      post.metadata.selected_account_ids = [...accountIds];
+      settlementFailure = "second";
+      mediaError = true;
+      const response = await publish();
+      assertEquals(response.status, 500);
+      assertEquals(post.status, "processing");
+      assertEquals(settledRows.map(row => row.p_social_account_id), [ACCOUNT]);
+      assertEquals(providerCalls, 0);
+    });
+    await test.step("recording a failed retry preserves the settlement seam's prior-success rollup", async () => {
+      reset("facebook");
+      priorSuccess = true;
+      mediaError = true;
+      const response = await publish();
+      assertEquals(response.status, 503);
+      assertEquals(post.status, "completed");
+      assertEquals(settledRows.map(row => [row.p_social_account_id, row.p_status]), [[ACCOUNT, "failed"]]);
+      assertEquals(providerCalls, 0);
+    });
     assertEquals(unexpected, []);
   } finally {
     globalThis.fetch = previousFetch;
