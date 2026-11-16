@@ -127,11 +127,14 @@ export async function takeOutboxRow(
   outboxId: string,
   userId?: string,
 ): Promise<OutboxEntry> {
-  const { data: row, error } = await admin
+  let query = admin
     .from("pending_agent_replies")
     .select("status, generated_reply, generated_tool_calls, generated_kind, user_id")
-    .eq("id", outboxId)
-    .maybeSingle();
+    .eq("id", outboxId);
+  // A stored reply is also tenant-bound: redelivery must not bypass the ownership
+  // check merely because it needs no pending -> running transition.
+  if (userId) query = query.eq("user_id", userId);
+  const { data: row, error } = await query.maybeSingle();
   if (error || !row) return { mode: "refuse", status: error ? `lookup failed: ${error.message}` : "missing" };
 
   if (row.status === "ready_to_send" && typeof row.generated_reply === "string") {

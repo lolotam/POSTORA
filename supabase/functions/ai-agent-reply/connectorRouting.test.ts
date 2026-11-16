@@ -783,3 +783,86 @@ for (const [label, output, failed] of [
     assertEquals(connectorCallFailed({ output }), failed);
   });
 }
+
+Deno.test("validated adapter envelopes own read success, including empty and truncated data", async (test) => {
+  const getEnv = (name: string) => name === "SUPABASE_URL" ? "http://kong:8000" : "service-key";
+  await test.step("empty", async () => {
+    const result = await executeAdapterTool(context(), wooTool, typedArgs, {
+      fetch: () => Promise.resolve(Response.json({ ok: true, data: [] })),
+      getEnv,
+    });
+    assertEquals(result.readOutcome, "success");
+    assertEquals(result.output, 'Connector "woo_store" returned: []');
+  });
+  await test.step("populated", async () => {
+    const result = await executeAdapterTool(context(), wooTool, typedArgs, {
+      fetch: () => Promise.resolve(Response.json({ ok: true, data: [{ id: 7 }] })),
+      getEnv,
+    });
+    assertEquals(result.readOutcome, "success");
+    assertStringIncludes(result.output, '"id":7');
+  });
+  await test.step("truncated", async () => {
+    const result = await executeAdapterTool(context(), wooTool, typedArgs, {
+      fetch: () => Promise.resolve(Response.json({ ok: true, data: { text: "x".repeat(ADAPTER_OUTPUT_LIMIT + 100) } })),
+      getEnv,
+    });
+    assertEquals(result.readOutcome, "success");
+    assertStringIncludes(result.output, "[output truncated:");
+  });
+});
+
+Deno.test("every adapter failure boundary is typed error and never a cacheable empty read", async (test) => {
+  const getEnv = (name: string) => name === "SUPABASE_URL" ? "http://kong:8000" : "service-key";
+  const cases: Array<[string, () => Promise<Response>]> = [
+    ["ok false", () => Promise.resolve(Response.json({ ok: false, error: { message: "refused" } }))],
+    ["non-2xx", () => Promise.resolve(Response.json({ ok: true, data: [] }, { status: 503 }))],
+    ["malformed JSON", () => Promise.resolve(new Response("not json"))],
+    ["missing envelope", () => Promise.resolve(Response.json({ data: [] }))],
+  ];
+  for (const [label, fetch] of cases) {
+    await test.step(label, async () => {
+      const result = await executeAdapterTool(context(), wooTool, typedArgs, { fetch, getEnv });
+      assertEquals(result.readOutcome, "error");
+      assertStringIncludes(result.output, "failed");
+    });
+  }
+  await test.step("timeout", async () => {
+    const result = await executeAdapterTool(context(), wooTool, typedArgs, {
+      fetch: (input) => new Promise<Response>((_resolve, reject) => {
+        (input as Request).signal.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError")));
+      }),
+      getEnv,
+      timeoutMs: 1,
+    });
+    assertEquals(result.readOutcome, "error");
+    assertStringIncludes(result.output, "timed out");
+  });
+});
+
+Deno.test("legacy and Composio results carry no read proof and therefore cannot enter reuse", async () => {
+  const legacy = await executeRoutedCustomTool(context(), legacyTool, { input: "hello" }, {
+    executeLegacy: () => Promise.resolve({ output: "legacy success" }),
+  });
+  assertEquals(legacy.readOutcome, undefined);
+
+  const composio = await executeRoutedCustomTool(context(), composioTool, typedArgs, {
+    executeComposio: () => Promise.resolve({ output: "composio success" }),
+  });
+  assertEquals(composio.readOutcome, undefined);
+});
+
+Deno.test("connector credentials are redacted before a response cap can expose a partial secret", async (test) => {
+  for (const secret of ["fake-service-credential-never-real", "fake-connector-credential-never-real"]) {
+    await test.step(secret.startsWith("fake-service") ? "service role" : "connector", async () => {
+      const noise = "x".repeat(ADAPTER_OUTPUT_LIMIT - (secret.length - 1) - '{"echo":"'.length);
+      const result = await executeAdapterTool(context(), { ...wooTool, secret }, typedArgs, {
+        fetch: () => Promise.resolve(Response.json({ ok: true, data: { echo: noise + secret } })),
+        getEnv: (name) => name === "SUPABASE_URL" ? "http://kong:8000" : secret,
+      });
+      assertEquals(result.output.includes(secret.slice(0, -1)), false);
+      assertEquals(result.output.includes(secret), false);
+      assertEquals(result.readOutcome, "success");
+    });
+  }
+});

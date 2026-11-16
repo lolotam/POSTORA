@@ -21,13 +21,13 @@ import {
   type GraphRelationFact,
   historyWindow,
   ModelChainExhaustedError,
-  iterationBudget,
   jevStartKey,
   modelBudgetRemaining,
   evaluateGates,
   fixedGreeting,
   handoffNoticeLanguage,
   parallelizable,
+  readOnlyConnector,
   phaseTimings,
   procedurePromptBlock,
   procedureStateAfterTurn,
@@ -123,6 +123,21 @@ import { loadOpenAiCompatibleBase, type RowReader } from "../_shared/providerEnd
 import { runTriage, selectConnectorTools, triageBudgetFor, TRIAGE_CHAT_BUDGET_MS, TRIAGE_SETTING_KEYS, triageChainFromSettings, triageSlotsFromSettings, type TriageRun } from "../_shared/agentTriage.ts";
 import { persistTriageRefusals } from "./triageRefusal.ts";
 import { resolveProviderKey } from "../_shared/providerKeys.ts";
+import {
+  finalSynthesisInstruction,
+  limitationText,
+  modelCallBudget,
+  replyRoundPolicy,
+  type SynthesisReason,
+} from "./replyReliability.ts";
+import { TurnReadCache } from "./turnReadCache.ts";
+import {
+  ensureInboundTurn,
+  HISTORICAL_FACTS_REMINDER,
+  InboundTurnStorageError,
+  restoreInboundTurn,
+  supabaseTurnHistory,
+} from "./turnHistory.ts";
 import { enabledProcedures, readProcedureConfig } from "../_shared/procedures/config.ts";
 import { expireIfStale, isLivePendingOpener } from "../_shared/procedures/engine.ts";
 import { openerLanguage } from "../_shared/procedures/openers.ts";
@@ -792,7 +807,16 @@ Deno.serve(async (req) => {
     // error) pass no dry_run in meta, and the dashboard must exclude every sandbox outcome.
     dry_run: dryRun,
   };
-  const outboxId = dryRun ? null : request.outbox_id ?? null;
+  const rawOutboxId = dryRun ? null : request.outbox_id ?? null;
+  const outboxId = typeof rawOutboxId === "string" ? rawOutboxId.toLowerCase() : rawOutboxId;
+  baseLog.idempotency_key = outboxId;
+  // Outbox work reuses its verified event identity. Direct and sandbox calls get one
+  // invocation-local id; no cross-request deduplication is promised for those callers.
+  const inboundTurnId = outboxId ?? crypto.randomUUID();
+  const readCache = new TurnReadCache();
+  let inboundPersistStatus = "not_started";
+  let synthesisReason: SynthesisReason | null = null;
+  let finalizationKind: "model" | "limitation_fallback" | null = null;
 
   // Hoisted so the catch block can report which models were attempted.
   let usedModel: string | null = null;
@@ -822,8 +846,23 @@ Deno.serve(async (req) => {
   // happened) or must go to a human (something may have).
   let sideEffectsHappened = false;
   let earlyEscalationLease: EscalationLeaseState | null = null;
+  const reliabilityMetadata = () => ({
+    synthesis_reason: synthesisReason,
+    finalization_kind: finalizationKind,
+    ...readCache.stats,
+    inbound_persist_status: inboundPersistStatus,
+  });
 
   try {
+    if (outboxId !== null && !UUID_PATTERN.test(outboxId)) {
+      await logOutcome(settlementAdmin, {
+        ...baseLog,
+        status: "error",
+        error: "invalid_outbox_id",
+        latency_ms: Date.now() - startedAt,
+      }, { dry_run: dryRun, ...reliabilityMetadata() });
+      return badRequestResponse("Invalid field: outbox_id");
+    }
     const modelOverride = await resolveSandboxModelOverride({
       dryRun,
       requestedOverride: body.model_override,
@@ -918,6 +957,22 @@ Deno.serve(async (req) => {
     const mode = resolveEngagementMode(overrideMode, config.default_mode);
     const { data: thread, error: threadError } = threadResult;
     if (threadError) throw threadError;
+    if (outboxId) {
+      // Recovery may re-extract media or pass its original placeholder. The first
+      // persisted enrichment is canonical for this scoped event, not a new message.
+      const stored = await restoreInboundTurn(supabaseTurnHistory(admin), {
+        id: inboundTurnId, threadId: thread.id, userId: request.user_id,
+      });
+      if (!stored.ok) {
+        inboundPersistStatus = "failed";
+        throw new InboundTurnStorageError(stored.error);
+      }
+      if (stored.content !== null) {
+        request.inbound_text = stored.content;
+        baseLog.inbound_text = stored.content.slice(0, 2000);
+        inboundPersistStatus = "verified";
+      }
+    }
     const storedCustomerLanguage: ReplyLanguage | null =
       thread.customer_language === "ar" || thread.customer_language === "en" ? thread.customer_language : null;
 
@@ -938,6 +993,24 @@ Deno.serve(async (req) => {
     // The lease token of the acknowledgement claim this turn holds. It identifies the claim,
     // so a release or a completion only ever touches the claim this turn took.
     let humanModeAckToken: string | null = null;
+
+    const persistInbound = async () => {
+      if (inboundPersistStatus === "inserted" || inboundPersistStatus === "verified") return;
+      const inbound = await ensureInboundTurn(supabaseTurnHistory(admin), {
+        id: inboundTurnId, threadId: thread.id, userId: request.user_id, content: request.inbound_text,
+      });
+      if (!inbound.ok) {
+        inboundPersistStatus = "failed";
+        // No send has started. Return this turn's notice lease so a retry need
+        // not wait for expiry after a local storage failure.
+        if (humanModeAck) {
+          const released = await releaseHumanModeAck(settlementAdmin, handoffScope(request), humanModeAckToken);
+          if (!released) console.warn("[ai-agent-reply] the human-mode acknowledgement claim was not released");
+        }
+        throw new InboundTurnStorageError(inbound.error);
+      }
+      inboundPersistStatus = inbound.status;
+    };
 
     // Sandbox runs bypass the delivery gates — they test the agent's brain,
     // not the conversation's delivery state. The sender is built only after
@@ -1065,17 +1138,14 @@ Deno.serve(async (req) => {
           timestamp: new Date().toISOString(),
         });
       }
-      const { error: threadWriteError } = await settlementAdmin.from("ai_thread_messages").insert([
-        { thread_id: thread.id, user_id: request.user_id, role: "user", content: request.inbound_text },
-        {
-          thread_id: thread.id,
-          user_id: request.user_id,
-          role: "assistant",
-          content: text,
-          tool_calls: toolCalls.length ? toolCalls : null,
-        },
-      ]);
-      if (threadWriteError) console.error("[ai-agent-reply] Thread write failed:", threadWriteError.message);
+      const { error: threadWriteError } = await settlementAdmin.from("ai_thread_messages").insert({
+        thread_id: thread.id,
+        user_id: request.user_id,
+        role: "assistant",
+        content: text,
+        tool_calls: toolCalls.length ? toolCalls : null,
+      });
+      if (threadWriteError) console.error("[ai-agent-reply] Assistant thread write failed:", threadWriteError.message);
       const shown = customerLanguageSignal(request.inbound_text, request.language_hint);
       if (shown && shown !== thread.customer_language) {
         const { error: languageError } = await settlementAdmin.from("ai_threads")
@@ -1099,6 +1169,7 @@ Deno.serve(async (req) => {
         return jsonResponse({ ok: false, error: `outbox row not runnable: ${entry.status}` }, 409);
       }
       if (entry.mode === "redeliver") {
+        await persistInbound();
         const sender = replySender;
         // The payload the caller read travels with the claim: a row whose text was
         // replaced between the read and the claim is not sent, and what goes out is what
@@ -1133,10 +1204,14 @@ Deno.serve(async (req) => {
           tool_calls: entry.toolCalls?.length ? entry.toolCalls : null,
           latency_ms: Date.now() - startedAt,
           status: entry.kind === "human_mode_ack" ? "human_mode_ack" : "sent",
-        }, { redelivered: true, outbound_message_id: delivered.messageId });
+        }, { redelivered: true, outbound_message_id: delivered.messageId, ...reliabilityMetadata() });
         return jsonResponse({ ok: true, redelivered: true, reply: delivered.text });
       }
     }
+
+    // Local persistence precedes every send, including legacy stored redelivery.
+    // A failure here remains retryable and cannot strand an already-sent reply.
+    await persistInbound();
 
     // The human_first notice travels the same send path as a generated reply and leaves the
     // same thread trail. It is at most once: the claim is spent before the send, and it is
@@ -1198,7 +1273,7 @@ Deno.serve(async (req) => {
         reply_text: noticeText,
         latency_ms: Date.now() - startedAt,
         status: "human_mode_ack",
-      }, { outbound_message_id: outboundMessageId });
+      }, { outbound_message_id: outboundMessageId, ...reliabilityMetadata() });
       return jsonResponse({ ok: true, human_mode_ack: true, reply: noticeText });
     }
 
@@ -1234,12 +1309,16 @@ Deno.serve(async (req) => {
     ] = await Promise.all([
       admin
         .from("ai_thread_messages")
-        .select("role, content, created_at")
+        .select("id, role, content, created_at")
         .eq("thread_id", thread.id)
+        .eq("user_id", request.user_id)
         .in("role", ["user", "assistant"])
+        // The admitted turn is already persisted; exclude it before the limit and
+        // append it once below so it cannot consume two places in the prompt.
+        .neq("id", inboundTurnId)
         .order("created_at", { ascending: false })
-        // A turn's user and assistant rows are inserted together and share created_at;
-        // "assistant" sorting first here puts the user row first once reversed.
+        // Historical user/assistant pairs can share created_at; assistant sorts
+        // first here so the user row appears first once the window is reversed.
         .order("role", { ascending: true })
         .limit(HISTORY_LIMIT),
       resolveDualEmbeddingConfigFromDb(admin),
@@ -1572,6 +1651,14 @@ Deno.serve(async (req) => {
       })
       : toolResolution.tools;
     const customToolByName = new Map(customTools.map((tool) => [tool.name, tool]));
+    const readCacheScope = {
+      userId: request.user_id,
+      socialAccountId: toolContext.socialAccountId,
+      platform: request.platform,
+      conversationId: request.conversation_id,
+      threadId: thread.id,
+      dryRun,
+    };
 
     const procedureTurn = proceduresOn ? createProcedureTurn({
       state: initialProcedureState, config: procedureConfig, dryRun, now: () => new Date(),
@@ -1704,6 +1791,7 @@ Deno.serve(async (req) => {
     const messages: any[] = [
       { role: "system", content: systemPrompt },
       ...(historyStaleNote ? [{ role: "system", content: historyStaleNote }] : []),
+      { role: "system", content: HISTORICAL_FACTS_REMINDER },
       ...history,
       { role: "user", content: request.inbound_text.slice(0, MAX_INBOUND_CHARS) },
     ];
@@ -1818,13 +1906,32 @@ Deno.serve(async (req) => {
       logAgentAuthEvent(admin, request.user_id, { code }, modelBudgetRemaining(startedAt, Date.now())));
     let toldWaitlistGap = false;
     let procedureToolRanThisRound = false;
+    let synthesisInstructionAdded = false;
     for (let iteration = 0; ; iteration++) {
       const procedureToolRanOnLastRound = procedureToolRanThisRound;
       procedureToolRanThisRound = false;
-      const budget = iterationBudget(maxIterations, procedureToolRanOnLastRound, iteration);
+      const round = replyRoundPolicy({
+        configuredLimit: maxIterations,
+        iteration,
+        procedureActive,
+        procedureToolRanOnLastRound,
+        remainingModelMs: modelBudgetRemaining(startedAt, Date.now()),
+      });
+      const budget = round.mode;
       if (budget === "stop") break;
-      const offeredSightings = waitlistOn ? await boundWaitlistSightings(stockSightings, bindingPort) : [];
-      const waitlist = waitlistOn ? waitlistRound(stockSightings, offeredSightings) : { tool: null, gap: null };
+      if (budget === "text_only") {
+        synthesisReason = round.synthesisReason;
+        if (!synthesisInstructionAdded) {
+          messages.push({ role: "system", content: finalSynthesisInstruction() });
+          synthesisInstructionAdded = true;
+        }
+      }
+      const offeredSightings = budget === "tools" && waitlistOn
+        ? await boundWaitlistSightings(stockSightings, bindingPort)
+        : [];
+      const waitlist = budget === "tools" && waitlistOn
+        ? waitlistRound(stockSightings, offeredSightings)
+        : { tool: null, gap: null };
       const waitlistTool = waitlist.tool;
       if (waitlist.gap && !toldWaitlistGap) {
         messages.push({ role: "system", content: waitlist.gap });
@@ -1839,7 +1946,7 @@ Deno.serve(async (req) => {
       let attemptStartedAt = Date.now();
       const selected = await selectAgentCompletion({
         tiers: modelChain.length,
-        budget: () => modelBudgetRemaining(startedAt, Date.now()),
+        budget: () => modelCallBudget(modelBudgetRemaining(startedAt, Date.now()), budget),
         attempt: async (mi, budgetMs) => {
           attemptStartedAt = Date.now();
           const tier = modelChain[mi];
@@ -1854,13 +1961,13 @@ Deno.serve(async (req) => {
             temperature: config.temperature ?? 0.4,
             messages,
             ...(roundToolDefinitions.length ? { tools: roundToolDefinitions, tool_choice: "auto" } : {}),
-          }, Math.min(CHAT_TIMEOUT_MS, modelBudgetRemaining(startedAt, Date.now())), routingAdmin, { continuation: oauthContinuation }, signal), signal));
+          }, Math.min(CHAT_TIMEOUT_MS, budgetMs), routingAdmin, { continuation: oauthContinuation }, signal), signal));
           if (authConfigured) {
             try { candidate.choices[0].message = canonicalAssistant(candidate.choices[0].message); }
             catch { throw new AgentOAuthRefusal("oauth_response_invalid"); }
           }
           const selectedAuth = tier.credentialSource === "platform" && tier.authMethod === "oauth";
-          if (authToolsActive || selectedAuth) {
+          if ((authToolsActive || selectedAuth) && budget === "tools") {
             // Check the ENTIRE proposed round before executing even its first call.
             // This also applies to an API recovery response after Auth execution.
             const message = candidate.choices[0].message;
@@ -1931,16 +2038,18 @@ Deno.serve(async (req) => {
       // chatCompletion rejects any body that lacks one, so this cannot be undefined.
       const choice = completion.choices[0].message;
 
-      if (!choice.tool_calls?.length) {
+      const content = repairChatReply((choice.content || "").trim());
+      const hasToolCalls = Boolean(choice.tool_calls?.length);
+      if ((budget === "text_only" && hasToolCalls) || (!hasToolCalls && !content)) {
+        replyText = withGreeting(repairChatReply(limitationText(language)), openingGreeting);
+        finalizationKind = "limitation_fallback";
+        break;
+      }
+      if (!hasToolCalls) {
         // Repaired here, at the single place a reply is born, so the fix
         // covers the send, the stored transcript and the sandbox alike.
-        // Links AND markdown: the model has ignored the no-markdown prompt
-        // rule on a live reply (11:10 UTC), so rendering safety cannot
-        // depend on it complying.
-        replyText = repairChatReply((choice.content || "").trim());
-        // The greeting OPENS a reply; it must never BE the reply. An empty answer
-        // stays on the no-reply path below instead of going out as a bare greeting.
-        replyText = withGreeting(replyText, openingGreeting);
+        replyText = withGreeting(content, openingGreeting);
+        finalizationKind = "model";
         break;
       }
 
@@ -1952,9 +2061,11 @@ Deno.serve(async (req) => {
         toolCall: { id: string; function: { name: string; arguments?: string } },
       ): Promise<{ role: "tool"; tool_call_id: string; content: string }> => {
         let args: Record<string, unknown> = {};
+        let argumentsValid = true;
         try {
           args = JSON.parse(toolCall.function.arguments || "{}");
         } catch {
+          argumentsValid = false;
           // leave args empty; the executor handles missing fields
         }
         executedToolCalls.push({ name: toolCall.function.name, arguments: args });
@@ -1982,22 +2093,44 @@ Deno.serve(async (req) => {
             )
             : (isAdmin ? await executeAdminTool(toolContext, toolCall.function.name, args) : null) ??
               (await executeTool(toolContext, toolCall.function.name, args)));
-        const result: ToolResult = authToolsActive
-          ? await authLedger.execute(toolCall.function.name, args, authActionSafety(toolCall.function.name, customToolByName), execute)
-          : await execute();
+        const safety = authActionSafety(toolCall.function.name, customToolByName);
+        // Execution resolves custom tools before native names. A connector named
+        // search_knowledge must not inherit the native tool's read-only classification.
+        const invalidatesReads = isProcedureTool || (customTool
+          ? !readOnlyConnector(customTool)
+          : safety?.kind !== "read");
+        if (invalidatesReads) readCache.invalidate();
+        const executeCached = () => readCache.execute({
+          name: toolCall.function.name,
+          args,
+          argumentsValid,
+          customTool: isProcedureTool ? undefined : customTool,
+          scope: readCacheScope,
+        }, execute);
+        // Authorization and action receipts wrap reuse, so every proposed call still
+        // passes the ledger and every transcript entry keeps its own tool_call_id.
+        let toolResult: ToolResult;
+        try {
+          toolResult = authToolsActive
+            ? await authLedger.execute(toolCall.function.name, args, safety, executeCached)
+            : await executeCached();
+        } finally {
+          // An action with an unknown outcome can also have changed the data a read saw.
+          if (invalidatesReads) readCache.invalidate();
+        }
         if (dryRun && customTool && args.capability === "search_products") {
-          catalogEvidence.push(...catalogEvidenceFromOutput(result.output).slice(0, Math.max(0, 100 - catalogEvidence.length)));
+          catalogEvidence.push(...catalogEvidenceFromOutput(toolResult.output).slice(0, Math.max(0, 100 - catalogEvidence.length)));
         }
         if (customTool && args.capability === "check_stock") {
-          stockSightings.push(...stockSightingsFromToolOutput(customTool.id, result.output));
+          stockSightings.push(...stockSightingsFromToolOutput(customTool.id, toolResult.output));
         }
-        if (result.escalated) {
+        if (toolResult.escalated) {
           escalated = true;
-          if (result.humanNotified) escalationNotifiedHuman = true;
+          if (toolResult.humanNotified) escalationNotifiedHuman = true;
           procedureTurn?.endForHandoff();
         }
-        if (result.retrievedChunkIds) retrievedChunkIds.push(...result.retrievedChunkIds);
-        return { role: "tool", tool_call_id: toolCall.id, content: result.output };
+        if (toolResult.retrievedChunkIds) retrievedChunkIds.push(...toolResult.retrievedChunkIds);
+        return { role: "tool", tool_call_id: toolCall.id, content: toolResult.output };
       };
       if (parallelizable(choice.tool_calls, customToolByName)) {
         // Every call in the round is a read-only connector call, so they cannot
@@ -2014,6 +2147,11 @@ Deno.serve(async (req) => {
           messages.push(await runToolCall(toolCall));
         }
       }
+    }
+
+    if (!replyText) {
+      replyText = withGreeting(repairChatReply(limitationText(language)), openingGreeting);
+      finalizationKind = "limitation_fallback";
     }
 
     // Fire-and-forget audit trail for AI agent calls (admin-visible logs).
@@ -2034,36 +2172,12 @@ Deno.serve(async (req) => {
           tool_calls: executedToolCalls.map((t) => t.name),
           escalated,
           dry_run: dryRun,
+          ...reliabilityMetadata(),
         },
       });
       if (auditError) throw new Error("AI audit log write failed");
     } catch (e) {
       console.error("[ai-agent-reply] audit log insert failed:", errorMessage(e));
-    }
-
-    if (!replyText) {
-      await logOutcome(settlementAdmin, {
-        ...baseLog,
-        status: "skipped",
-        error: "no_reply_generated",
-        tool_calls: executedToolCalls.length ? executedToolCalls : null,
-        prompt_tokens: promptTokens,
-        completion_tokens: completionTokens,
-        latency_ms: Date.now() - startedAt,
-      }, {
-        used_model: usedModel,
-        credential_source: usedCredentialSource,
-        fallback_reason: fallbackReason,
-        fallback_level: usedFallbackLevel,
-        model_errors: modelErrors.length ? modelErrors : null,
-        rag_error: ragError,
-        graph_error: graphError,
-        dry_run: dryRun,
-        timings: timings.toJSON(),
-        triage: triage ? { outcome: triage.outcome, errors: triage.errors.length ? triage.errors : null } : null,
-      });
-      if (outboxId) await cancelOutboxRow(settlementAdmin, outboxId, "no_reply_generated", request.user_id);
-      return jsonResponse({ ok: true, skipped: "no_reply_generated" });
     }
 
     const procedureStateToWrite = procedureStateAfterTurn({
@@ -2134,7 +2248,7 @@ Deno.serve(async (req) => {
         const held = await settleStaffInterruptedTurn({
           admin: settlementAdmin, outboxId, sideEffectsHappened, scope: handoffScope(request), lease: earlyEscalationLease,
           threadId: thread.id,
-          turn: { userId: request.user_id, content: request.inbound_text, id: outboxId ?? undefined },
+          turn: { userId: request.user_id, content: request.inbound_text, id: inboundTurnId },
         });
         await logOutcome(settlementAdmin, {
           ...baseLog,
@@ -2279,6 +2393,7 @@ Deno.serve(async (req) => {
       intent: triage?.outcome?.answers.intent ?? null,
       triage: triage ? { outcome: triage.outcome, errors: triage.errors.length ? triage.errors : null } : null,
       timings: timings.toJSON(),
+      ...reliabilityMetadata(),
     });
 
     // Intent labels are advisory: applied only after a fresh delivery on
@@ -2342,6 +2457,7 @@ Deno.serve(async (req) => {
         model_chain: modelChain.map(formatModelRef),
         triage: triage ? { outcome: triage.outcome, errors: triage.errors.length ? triage.errors : null } : null,
         ...floor,
+        ...reliabilityMetadata(),
       });
       if (outboxId) {
         // Escalated means the floor did something external -- assigned a human, notified
@@ -2380,9 +2496,11 @@ Deno.serve(async (req) => {
       fallback_level: usedFallbackLevel,
       model_errors: modelErrors.length ? modelErrors : null,
       triage: triage ? { outcome: triage.outcome, errors: triage.errors.length ? triage.errors : null } : null,
+      ...reliabilityMetadata(),
     });
     return jsonResponse({ ok: false, error: errorMessage(error) });
   } finally {
+    readCache.destroy();
     try {
       const released = await releaseUnpersistedEscalation(cleanupAdmin, handoffScope(request), earlyEscalationLease);
       if (!released) console.warn("[ai-agent-reply] escalation lease remains recoverable on expiry");

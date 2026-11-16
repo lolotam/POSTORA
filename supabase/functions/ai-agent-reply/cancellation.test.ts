@@ -67,7 +67,7 @@ Deno.test("delivery persistence failure releases its lease and retryable turn be
     const response = await handleReply(new Request("https://function.example.test", { method: "POST",
       headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
       body: JSON.stringify({ user_id: "owner", platform: "whatsapp", social_account_id: "account", conversation_id: "conversation",
-        phone_number_id: "phone", recipient_phone: "recipient", inbound_text: "What are your hours?", outbox_id: "outbox" }) }));
+        phone_number_id: "phone", recipient_phone: "recipient", inbound_text: "What are your hours?", outbox_id: "10000000-0000-4000-8000-000000000001" }) }));
     assertEquals((await response.json()).ok, false);
     assertEquals(persistenceRefused, true);
     assertEquals(errorLogged, true);
@@ -292,3 +292,813 @@ Deno.test("an uncooperative delivery cannot prevent unknown-outcome settlement a
     assertEquals(released, true);
   } finally { globalThis.fetch = original; }
 });
+
+// Reliability wiring uses the handler captured above, with all provider and database
+// transport replaced. Nothing here can reach a model, connector, or production service.
+type FixtureRow = Record<string, unknown>;
+type FixtureLog = { metadata?: FixtureRow };
+
+function modelMessages(payload: FixtureRow): FixtureRow[] {
+  return Array.isArray(payload.messages) ? payload.messages as FixtureRow[] : [];
+}
+
+function nestedField(row: FixtureRow, outer: string, inner: string): unknown {
+  const nested = row[outer];
+  return nested !== null && typeof nested === "object" && !Array.isArray(nested)
+    ? (nested as FixtureRow)[inner]
+    : undefined;
+}
+
+type FixtureOptions = {
+  maxIterations?: number;
+  language?: "en" | "ar";
+  tools?: FixtureRow[];
+  initialMessages?: FixtureRow[];
+  failInbound?: boolean;
+  failCacheRead?: boolean;
+  failInboundRead?: boolean;
+  failInboundReadAfterSend?: boolean;
+  staffInterrupt?: boolean;
+  humanModeAck?: boolean;
+  model: (call: number, payload: FixtureRow) => Response;
+  adapter?: (call: number, payload: FixtureRow) => Response | Promise<Response>;
+};
+
+function toolCompletion(id: string, args: FixtureRow, second?: { id: string; args: FixtureRow }) {
+  const call = (callId: string, callArgs: FixtureRow) => ({
+    id: callId,
+    type: "function",
+    function: { name: "catalog", arguments: JSON.stringify(callArgs) },
+  });
+  return Response.json({
+    choices: [{
+      message: {
+        role: "assistant",
+        content: null,
+        tool_calls: [call(id, args), ...(second ? [call(second.id, second.args)] : [])],
+      },
+    }],
+  });
+}
+
+function namedToolCompletion(id: string, name: string, args: FixtureRow) {
+  return Response.json({
+    choices: [{
+      message: {
+        role: "assistant",
+        content: null,
+        tool_calls: [{ id, type: "function", function: { name, arguments: JSON.stringify(args) } }],
+      },
+    }],
+  });
+}
+
+function textCompletion(text: string | null) {
+  return Response.json({ choices: [{ message: { role: "assistant", content: text } }] });
+}
+
+async function withReliabilityFixture(
+  options: FixtureOptions,
+  run: (fixture: {
+    request(inboundText: string, outboxId?: string | null): Promise<Response>;
+    sandboxRequest(inboundText: string): Promise<Response>;
+    ackEvents: string[];
+    advance(ms: number): void;
+    modelPayloads: FixtureRow[];
+    adapterPayloads: FixtureRow[];
+    messageRows: FixtureRow[];
+    sent: string[];
+    systemLogs: FixtureLog[];
+    historyQueries: URL[];
+    prepareRedelivery(id: string, text: string): void;
+    state(): string;
+  }) => Promise<void>,
+) {
+  const originalFetch = globalThis.fetch;
+  const originalNow = Date.now;
+  const savedEnv = ["SUPABASE_URL", "SUPABASE_SERVICE_ROLE_KEY", "SUPABASE_ANON_KEY"].map((name) => [name, Deno.env.get(name)] as const);
+  const serviceKey = crypto.randomUUID();
+  Deno.env.set("SUPABASE_URL", "https://database.example.test");
+  Deno.env.set("SUPABASE_SERVICE_ROLE_KEY", serviceKey);
+  Deno.env.set("SUPABASE_ANON_KEY", "sandbox-anon-key");
+  let now = originalNow();
+  Date.now = () => now;
+  const outboxStates = new Map<string, string>();
+  const outboxReplies = new Map<string, { text: string; toolCalls: unknown[] }>();
+  const outboxId = "10000000-0000-4000-8000-000000000001";
+  const owner = "owner";
+  const threadId = "thread";
+  const modelPayloads: FixtureRow[] = [];
+  const adapterPayloads: FixtureRow[] = [];
+  const messageRows: FixtureRow[] = (options.initialMessages ?? []).map((row) => ({ ...row }));
+  const sent: string[] = [];
+  const ackEvents: string[] = [];
+  const systemLogs: FixtureLog[] = [];
+  const historyQueries: URL[] = [];
+  const account = {
+    id: "account",
+    user_id: owner,
+    platform: "whatsapp",
+    platform_user_id: "phone",
+    access_token: crypto.randomUUID(),
+    connection_mode: "cloud_api",
+    account_metadata: {},
+  };
+  const catalog = {
+    id: "catalog-tool",
+    name: "catalog",
+    description: "Read the product catalog",
+    url: "https://connector.example.test",
+    secret: null,
+    admin_only: false,
+    scope: "all_accounts",
+    social_account_id: null,
+    connector_type: "woocommerce",
+    read_only_mode: true,
+    settings: {},
+    auth_strategy: "manual_credentials",
+    connection_id: null,
+  };
+
+  globalThis.fetch = async (input, init) => {
+    init?.signal?.throwIfAborted();
+    const url = new URL(input instanceof Request ? input.url : String(input));
+    const rawBody = init?.body !== undefined
+      ? String(init.body)
+      : input instanceof Request
+      ? await input.clone().text()
+      : "";
+    const args: FixtureRow = rawBody ? JSON.parse(rawBody) : {};
+    const method = init?.method ?? (input instanceof Request ? input.method : "GET");
+    const table = url.pathname.startsWith("/rest/v1/") ? url.pathname.split("/").at(-1)! : "";
+
+    if (url.pathname.endsWith("/auth/v1/user")) {
+      return Response.json({ id: owner, aud: "authenticated", role: "authenticated" });
+    }
+    if (url.pathname.includes("/rpc/") && url.pathname.includes("rate_limit")) {
+      return Response.json({ allowed: true, count: 0, remaining: 60, retry_after: 0 });
+    }
+    if (url.pathname.endsWith("/chat/completions")) {
+      modelPayloads.push(args);
+      return options.model(modelPayloads.length, args);
+    }
+    if (url.pathname.endsWith("/functions/v1/ai-agent-adapters")) {
+      adapterPayloads.push(args);
+      return options.adapter?.(adapterPayloads.length, args) ?? Response.json({ ok: true, data: [] });
+    }
+    if (url.pathname.endsWith("/messages") && !table) {
+      sent.push(String(nestedField(args, "text", "body") ?? nestedField(args, "message", "text") ?? args.text ?? ""));
+      return Response.json({ messages: [{ id: `external-${sent.length}` }] });
+    }
+    if (url.pathname.includes("/rpc/")) {
+      if (options.humanModeAck && url.pathname.endsWith("/claim_human_mode_ack_leased")) {
+        ackEvents.push("claimed");
+        return Response.json({ result: "claimed", claim_token: "ack-claim" });
+      }
+      if (options.humanModeAck && url.pathname.endsWith("/release_human_mode_ack_claim")) {
+        assertEquals(args.p_claim_token, "ack-claim");
+        ackEvents.push("released");
+        return Response.json(true);
+      }
+      if (options.staffInterrupt && url.pathname.endsWith("/claim_unanswered_escalation")) {
+        return Response.json({ marker: new Date(now - 60_000).toISOString(), token: "staff-claim" });
+      }
+      if (args.p_from) {
+        const id = String(args.p_id ?? outboxId);
+        if (args.p_from !== (outboxStates.get(id) ?? "pending")) return Response.json(false);
+        outboxStates.set(id, String(args.p_to));
+        return Response.json(true);
+      }
+      return Response.json([]);
+    }
+    if (table === "ai_thread_messages") {
+      if (method === "POST") {
+        const rows = Array.isArray(args) ? args : [args];
+        for (const row of rows) {
+          if (row.role === "user" && options.failInbound) {
+            return Response.json({ code: "500", message: "storage unavailable" }, { status: 500 });
+          }
+          if (messageRows.some((existing) => existing.id === row.id)) {
+            return Response.json({ code: "23505", message: "duplicate" }, { status: 409 });
+          }
+          messageRows.push({ id: crypto.randomUUID(), created_at: new Date(now).toISOString(), ...row,
+            ...(typeof row.id === "string" ? { id: row.id.toLowerCase() } : {}) });
+        }
+        return Response.json(null);
+      }
+      const filters = (column: string) => url.searchParams.get(column);
+      if (filters("id")?.startsWith("eq.")) {
+        if (options.failInboundRead || (options.failInboundReadAfterSend && sent.length > 0)) {
+          return Response.json({ message: "settlement read unavailable" }, { status: 500 });
+        }
+        const id = filters("id")!.slice(3).toLowerCase();
+        const row = messageRows.find((candidate) =>
+          candidate.id === id &&
+          (!filters("thread_id") || filters("thread_id") === `eq.${candidate.thread_id}`) &&
+          (!filters("user_id") || filters("user_id") === `eq.${candidate.user_id}`)
+        );
+        return Response.json(row ?? null);
+      }
+      historyQueries.push(url);
+      const excluded = filters("id")?.startsWith("neq.") ? filters("id")!.slice(4) : null;
+      const rows = messageRows.filter((row) =>
+        row.id !== excluded && row.thread_id === threadId && ["user", "assistant"].includes(String(row.role))
+      ).sort((left, right) =>
+        Date.parse(String(right.created_at)) - Date.parse(String(left.created_at)) || String(left.role).localeCompare(String(right.role))
+      );
+      const limit = Number(url.searchParams.get("limit") ?? rows.length);
+      return Response.json(rows.slice(0, limit), { headers: { "content-range": `0-${Math.max(0, rows.length - 1)}/${rows.length}` } });
+    }
+    if (table === "ai_threads") {
+      if (method === "POST") return Response.json({ id: threadId, user_id: owner, customer_language: null });
+      if (method === "PATCH") return Response.json(null);
+      return Response.json({ id: threadId, user_id: owner, customer_language: null,
+        unanswered_escalation_since: options.staffInterrupt ? new Date(now - 60_000).toISOString() : null });
+    }
+    if (table === "pending_agent_replies") {
+      const requestedId = url.searchParams.get("id")?.replace(/^eq\./, "") ?? outboxId;
+      const stored = outboxReplies.get(requestedId);
+      const row = {
+        id: requestedId,
+        user_id: owner,
+        status: outboxStates.get(requestedId) ?? "pending",
+        generated_reply: stored?.text ?? null,
+        generated_tool_calls: stored?.toolCalls ?? null,
+        generated_kind: null,
+      };
+      const matches = !url.searchParams.get("user_id") || url.searchParams.get("user_id") === `eq.${owner}`;
+      return Response.json(matches ? row : null);
+    }
+    if (table === "social_accounts") return Response.json(account);
+    if (table === "ai_agent_configs") {
+      return Response.json({
+        is_enabled: true,
+        default_mode: options.humanModeAck ? "human_first" : "ai_first",
+        reply_cooldown_seconds: 0,
+        daily_message_cap: 0,
+        language_mode: options.language ?? "en",
+        max_tool_iterations: options.maxIterations ?? 5,
+        admin_phone_numbers: [],
+        handoff_on_request: true,
+        handoff_on_low_confidence: true,
+      });
+    }
+    if (table === "system_settings") {
+      return Response.json([{
+        key: "default_ai_model_agent",
+        value: { provider_code: "openai", model_id: "configured-model" },
+      }]);
+    }
+    if (table === "provider_api_keys") return Response.json({ api_key: serviceKey });
+    if (table === "ai_agent_tools") return Response.json(options.tools ?? [catalog]);
+    if (table === "ai_agent_tool_accounts") return Response.json([]);
+    if (table === "messaging_cache") {
+      return options.failCacheRead
+        ? Response.json({ message: "cache read failed" }, { status: 500 })
+        : Response.json(null);
+    }
+    if (table === "whatsapp_messages" && method === "GET") {
+      if (options.staffInterrupt && url.searchParams.get("from_name") === "eq.You") {
+        return Response.json(modelPayloads.length === 0 ? [] : [{
+          id: "30000000-0000-4000-8000-000000000003", direction: "outbound", from_name: "You",
+          message_text: "A staff member answered", message_type: "text", media_url: null,
+          created_at: new Date(now).toISOString(),
+        }]);
+      }
+      return Response.json({ timestamp: new Date(now).toISOString() });
+    }
+    if (table === "system_logs" && method === "POST") systemLogs.push(args);
+    if (["ai_conversation_modes", "whatsapp_conversation_assignments", "whatsapp_agents"].includes(table)) {
+      return Response.json(table === "whatsapp_agents" ? [] : null);
+    }
+    if (["app_settings", "user_feature_overrides", "user_ai_routing_preferences"].includes(table)) {
+      return Response.json(null);
+    }
+    return Response.json([], { headers: { "content-range": "0-0/0" } });
+  };
+
+  const request = (inboundText: string, id: string | null = outboxId) => handleReply(new Request("https://function.example.test", {
+    method: "POST",
+    headers: { Authorization: `Bearer ${serviceKey}`, "Content-Type": "application/json" },
+    body: JSON.stringify({
+      user_id: owner,
+      platform: "whatsapp",
+      social_account_id: "account",
+      conversation_id: "conversation",
+      phone_number_id: "phone",
+      recipient_phone: "recipient",
+      inbound_text: inboundText,
+      ...(id ? { outbox_id: id } : {}),
+    }),
+  }));
+  const sandboxRequest = (inboundText: string) => handleReply(new Request("https://function.example.test", {
+    method: "POST",
+    headers: { Authorization: "Bearer sandbox-token", "Content-Type": "application/json" },
+    body: JSON.stringify({ platform: "whatsapp", social_account_id: "account", inbound_text: inboundText }),
+  }));
+  try {
+    await run({
+      request,
+      sandboxRequest,
+      ackEvents,
+      advance: (ms) => { now += ms; },
+      modelPayloads,
+      adapterPayloads,
+      messageRows,
+      sent,
+      systemLogs,
+      historyQueries,
+      prepareRedelivery: (id, text) => {
+        outboxStates.set(id, "ready_to_send");
+        outboxReplies.set(id, { text, toolCalls: [{ name: "catalog", arguments: { capability: "search_products" } }] });
+      },
+      state: () => outboxStates.get(outboxId) ?? "pending",
+    });
+  } finally {
+    globalThis.fetch = originalFetch;
+    Date.now = originalNow;
+    clearProviderEndpointCache();
+    for (const [name, value] of savedEnv) {
+      if (value === undefined) Deno.env.delete(name);
+      else Deno.env.set(name, value);
+    }
+  }
+}
+
+Deno.test("ordinary handler reserves synthesis, coalesces exact reads, and preserves every tool call id", async () => {
+  await withReliabilityFixture({
+    model: (call) => {
+      if (call === 1) {
+        return toolCompletion(
+          "call-1a",
+          { capability: "search_products", parameters: { query: "Cream", filters: { inStock: true } } },
+          {
+            id: "call-1b",
+            args: { parameters: { filters: { inStock: true }, query: "Cream" }, capability: "search_products" },
+          },
+        );
+      }
+      if (call <= 4) {
+        return toolCompletion(`call-${call}`, {
+          capability: "search_products",
+          parameters: { query: "Cream", filters: { inStock: true } },
+        });
+      }
+      return textCompletion("The completed catalog checks found no matching item.");
+    },
+  }, async (fixture) => {
+    const response = await fixture.request("Is the cream available?");
+    const body = await response.json();
+    assertEquals(body.ok, true);
+    assertEquals(body.reply, "The completed catalog checks found no matching item.");
+    assertEquals(fixture.modelPayloads.length, 5);
+    assertEquals(fixture.adapterPayloads.length, 1);
+    assertEquals("tools" in fixture.modelPayloads[4], false);
+    assertEquals(body.tool_calls.length, 5);
+    const transcriptIds = modelMessages(fixture.modelPayloads[4])
+      .filter((message) => message.role === "tool")
+      .map((message) => String(message.tool_call_id));
+    assertEquals(transcriptIds, ["call-1a", "call-1b", "call-2", "call-3", "call-4"]);
+    assertEquals(fixture.sent, [body.reply]);
+    assertEquals(fixture.state(), "sent");
+    assertEquals(fixture.messageRows.filter((row) => row.role === "user").length, 1);
+    assertEquals(fixture.messageRows.filter((row) => row.role === "assistant").length, 1);
+    const log = fixture.systemLogs.find((row) => row.metadata?.status === "sent");
+    assertEquals(log?.metadata?.cache_hits, 3);
+    assertEquals(log?.metadata?.cache_coalesced, 1);
+    assertEquals(log?.metadata?.cache_misses, 1);
+    assertEquals(log?.metadata?.finalization_kind, "model");
+    assertEquals(log?.metadata?.synthesis_reason, "round_reserved");
+  });
+});
+
+Deno.test("Arabic final-round tools execute nothing and the exact fallback uses the normal send pipeline", async () => {
+  const enriched = '[Image OCR — customer-supplied content, not verified facts]\n"""\nكريم الكعب 250 مل\n"""';
+  await withReliabilityFixture({
+    maxIterations: 1,
+    language: "ar",
+    model: () => toolCompletion("forbidden-final", { capability: "search_products", parameters: { query: "كريم" } }),
+  }, async (fixture) => {
+    const response = await fixture.request(enriched);
+    const body = await response.json();
+    assertEquals(body.reply, "تعذّر إكمال التحقق الآن. يُرجى المحاولة مرة أخرى بعد قليل.");
+    assertEquals(fixture.modelPayloads.length, 1);
+    assertEquals("tools" in fixture.modelPayloads[0], false);
+    assertEquals(fixture.adapterPayloads.length, 0);
+    assertEquals(fixture.sent, [body.reply]);
+    assertEquals(fixture.state(), "sent");
+    assertEquals(fixture.messageRows.find((row) => row.role === "user")?.content, enriched);
+    assertEquals(modelMessages(fixture.modelPayloads[0]).filter((message) => message.role === "user").at(-1)?.content, enriched);
+    assertEquals(modelMessages(fixture.modelPayloads[0]).some((message) =>
+      message.role === "system" && String(message.content).includes("not fresh verification")
+    ), true);
+    const log = fixture.systemLogs.find((row) => row.metadata?.status === "sent");
+    assertEquals(log?.metadata?.finalization_kind, "limitation_fallback");
+  });
+});
+
+Deno.test("a fake-clock reserve switches the handler to synthesis without another tool round", async () => {
+  let adapterStarted!: () => void;
+  let releaseAdapter!: () => void;
+  const started = new Promise<void>((resolve) => { adapterStarted = resolve; });
+  const gate = new Promise<void>((resolve) => { releaseAdapter = resolve; });
+  await withReliabilityFixture({
+    model: (call) => call === 1
+      ? toolCompletion("only-read", { capability: "search_products", parameters: { query: "Cream" } })
+      : textCompletion("The catalog returned no matching item."),
+    adapter: async () => {
+      adapterStarted();
+      await gate;
+      return Response.json({ ok: true, data: [] });
+    },
+  }, async (fixture) => {
+    const responsePromise = fixture.request("Is it available?");
+    await started;
+    fixture.advance(36_000);
+    releaseAdapter();
+    const body = await (await responsePromise).json();
+    assertEquals(body.ok, true);
+    assertEquals(fixture.modelPayloads.length, 2);
+    assertEquals("tools" in fixture.modelPayloads[1], false);
+    assertEquals(fixture.adapterPayloads.length, 1);
+    assertEquals(fixture.sent, [body.reply]);
+  });
+});
+
+Deno.test("an inbound prewrite failure starts no model or send and releases outbox work for retry", async () => {
+  await withReliabilityFixture({
+    failInbound: true,
+    model: () => textCompletion("must not run"),
+  }, async (fixture) => {
+    const body = await (await fixture.request("Keep my question")).json();
+    assertEquals(body.ok, false);
+    assertEquals(body.error, "inbound_turn_insert_failed");
+    assertEquals(fixture.modelPayloads.length, 0);
+    assertEquals(fixture.adapterPayloads.length, 0);
+    assertEquals(fixture.sent.length, 0);
+    assertEquals(fixture.state(), "pending");
+    const log = fixture.systemLogs.find((row) => row.metadata?.status === "error");
+    assertEquals(log?.metadata?.inbound_persist_status, "failed");
+  });
+});
+
+Deno.test("a collision in another tenant fails closed before generation", async () => {
+  const outboxId = "10000000-0000-4000-8000-000000000001";
+  await withReliabilityFixture({
+    initialMessages: [{
+      id: outboxId,
+      thread_id: "thread",
+      user_id: "another-owner",
+      role: "user",
+      content: "unrelated customer text",
+    }],
+    model: () => textCompletion("must not run"),
+  }, async (fixture) => {
+    const body = await (await fixture.request("Keep my question")).json();
+    assertEquals(body.error, "inbound_turn_collision");
+    assertEquals(fixture.modelPayloads.length, 0);
+    assertEquals(fixture.sent.length, 0);
+    assertEquals(fixture.state(), "pending");
+    assertEquals(fixture.messageRows.length, 1);
+  });
+});
+
+Deno.test("a failed turn retains its question for the followup prompt exactly once", async () => {
+  const secondId = "20000000-0000-4000-8000-000000000002";
+  const options: FixtureOptions = {
+    failCacheRead: true,
+    model: () => textCompletion("The earlier question is available in context."),
+  };
+  await withReliabilityFixture(options, async (fixture) => {
+    const failed = await (await fixture.request("Do you have the 250 ml cream?")).json();
+    assertEquals(failed.ok, false);
+    assertEquals(fixture.modelPayloads.length, 0);
+    assertEquals(fixture.state(), "pending");
+
+    // The followup is a new event, not a deduplication of equal text.
+    options.failCacheRead = false;
+    const response = await fixture.request("You did not answer", secondId);
+    assertEquals((await response.json()).ok, true);
+    assertEquals(fixture.messageRows.filter((row) => row.role === "user").length, 2);
+    assertEquals(fixture.historyQueries.at(-1)?.searchParams.get("id"), `neq.${secondId}`);
+    const promptUsers = modelMessages(fixture.modelPayloads[0])
+      .filter((message) => message.role === "user")
+      .map((message) => String(message.content));
+    assertEquals(promptUsers.filter((content: string) => content === "Do you have the 250 ml cream?").length, 1);
+    assertEquals(promptUsers.filter((content: string) => content === "You did not answer").length, 1);
+  });
+});
+
+Deno.test("blank synthesis selects the honest fallback instead of cancelling as no_reply_generated", async () => {
+  await withReliabilityFixture({
+    maxIterations: 1,
+    model: () => textCompletion("  "),
+  }, async (fixture) => {
+    const body = await (await fixture.request("Please verify this")).json();
+    assertEquals(body.reply, "I couldn’t complete verification just now. Please try again shortly.");
+    assertEquals(body.skipped, undefined);
+    assertEquals(fixture.sent, [body.reply]);
+    assertEquals(fixture.state(), "sent");
+  });
+});
+
+Deno.test("direct non-outbox calls use only invocation-local inbound identity", async () => {
+  await withReliabilityFixture({
+    maxIterations: 1,
+    model: () => textCompletion("A direct response."),
+  }, async (fixture) => {
+    for (let call = 0; call < 2; call++) {
+      const body = await (await fixture.request("Same words", null)).json();
+      assertEquals(body.ok, true);
+    }
+    const users = fixture.messageRows.filter((row) => row.role === "user");
+    assertEquals(users.length, 2);
+    assertEquals(new Set(users.map((row) => row.id)).size, 2);
+    assertEquals(fixture.modelPayloads.length, 2);
+    assertEquals(fixture.sent, ["A direct response.", "A direct response."]);
+  });
+});
+
+Deno.test("sandbox turns prewrite with invocation identity and never send externally", async () => {
+  await withReliabilityFixture({
+    maxIterations: 1,
+    model: () => textCompletion("Sandbox response."),
+  }, async (fixture) => {
+    for (let call = 0; call < 2; call++) {
+      const body = await (await fixture.sandboxRequest("Same sandbox question")).json();
+      assertEquals(body.ok, true);
+      assertEquals(body.reply, "Sandbox response.");
+    }
+    const users = fixture.messageRows.filter((row) => row.role === "user");
+    assertEquals(users.length, 2);
+    assertEquals(new Set(users.map((row) => row.id)).size, 2);
+    assertEquals(fixture.sent.length, 0);
+    const log = fixture.systemLogs.find((row) => row.metadata?.status === "test");
+    assert(["inserted", "verified"].includes(String(log?.metadata?.inbound_persist_status)));
+  });
+});
+
+
+Deno.test("an adapter failure is not cached and the next model round retries the read", async () => {
+  await withReliabilityFixture({
+    model: (call) => {
+      if (call <= 2) {
+        return toolCompletion(`retry-${call}`, {
+          capability: "search_products",
+          parameters: { query: "Cream", filters: { inStock: true } },
+        });
+      }
+      return textCompletion("The retry succeeded and returned no matching items.");
+    },
+    adapter: (call) => call === 1
+      ? Response.json({ ok: false, error: { message: "temporary adapter failure" } })
+      : Response.json({ ok: true, data: [] }),
+  }, async (fixture) => {
+    const body = await (await fixture.request("Please check the cream")).json();
+    assertEquals(body.ok, true);
+    assertEquals(fixture.adapterPayloads.length, 2);
+    assertEquals(fixture.modelPayloads.length, 3);
+    const log = fixture.systemLogs.find((row) => row.metadata?.status === "sent");
+    assertEquals(log?.metadata?.cache_misses, 2);
+    assertEquals(log?.metadata?.cache_errors, 1);
+    assertEquals(log?.metadata?.cache_hits, 0);
+  });
+});
+
+Deno.test("a potentially mutating action invalidates an earlier successful read", async () => {
+  const args = { capability: "search_products", parameters: { query: "Cream", filters: { inStock: true } } };
+  await withReliabilityFixture({
+    model: (call) => {
+      if (call === 1) return toolCompletion("before-action", args);
+      if (call === 2) return namedToolCompletion("action", "escalate_to_human", { reason: "Customer asked for a person" });
+      if (call === 3) return toolCompletion("after-action", args);
+      return textCompletion("The catalog was checked again after the handoff.");
+    },
+  }, async (fixture) => {
+    const body = await (await fixture.request("Check this and connect me to a person")).json();
+    assertEquals(body.ok, true);
+    assertEquals(body.escalated, true);
+    assertEquals(fixture.adapterPayloads.length, 2);
+    assertEquals(fixture.sent, [body.reply]);
+    const log = fixture.systemLogs.find((row) => row.metadata?.status === "sent");
+    assertEquals(log?.metadata?.cache_misses, 2);
+    assertEquals(log?.metadata?.cache_hits, 0);
+  });
+});
+
+
+Deno.test("a non-read-only connector with a native tool name invalidates cached reads", async () => {
+  const args = { capability: "search_products", parameters: { query: "Cream" } };
+  const tool = (name: string, readOnly: boolean): FixtureRow => ({
+    id: name,
+    name,
+    description: name,
+    url: "https://connector.example.test",
+    secret: null,
+    admin_only: false,
+    scope: "all_accounts",
+    connector_type: "supabase",
+    read_only_mode: readOnly,
+  });
+  await withReliabilityFixture({
+    tools: [tool("catalog", true), tool("search_knowledge", false)],
+    model: (call) => {
+      if (call === 1) return toolCompletion("before", args);
+      if (call === 2) return namedToolCompletion("custom", "search_knowledge", args);
+      if (call === 3) return toolCompletion("after", args);
+      return textCompletion("The catalog was checked again.");
+    },
+  }, async (fixture) => {
+    const body = await (await fixture.request("Check the current catalog")).json();
+    assertEquals(body.ok, true);
+    assertEquals(fixture.adapterPayloads.map((payload) => payload.tool_id), ["catalog", "search_knowledge", "catalog"]);
+    assertEquals(fixture.sent, [body.reply]);
+  });
+});
+
+Deno.test("a provider failure during reserved synthesis remains owned by the outage floor", async () => {
+  await withReliabilityFixture({
+    maxIterations: 1,
+    model: () => Response.json({ error: { message: "model unavailable" } }, { status: 503 }),
+  }, async (fixture) => {
+    const body = await (await fixture.request("Please answer")).json();
+    assertEquals(body.ok, false);
+    assertEquals(body.escalated, true);
+    assertEquals(body.apology_sent, true);
+    assertEquals(fixture.modelPayloads.length, 1);
+    assertEquals("tools" in fixture.modelPayloads[0], false);
+    assertEquals(fixture.sent.length, 1);
+    assertEquals(fixture.sent[0].includes("couldn’t complete verification"), false);
+    assertEquals(fixture.state(), "cancelled");
+    const log = fixture.systemLogs.find((row) => row.metadata?.status === "escalated_after_model_exhaustion");
+    assertEquals(log?.metadata?.finalization_kind, null);
+    assertEquals(fixture.messageRows.filter((row) => row.role === "user").length, 1);
+    assertEquals(fixture.messageRows.filter((row) => row.role === "assistant").length, 0);
+  });
+});
+
+
+Deno.test("an invalid outbox identity is logged and refused before persistence or generation", async () => {
+  await withReliabilityFixture({
+    model: () => textCompletion("must not run"),
+  }, async (fixture) => {
+    const response = await fixture.request("Keep this out", "not-a-uuid");
+    const body = await response.json();
+    assertEquals(response.status, 400);
+    assertEquals(body.error, "Invalid field: outbox_id");
+    assertEquals(fixture.modelPayloads.length, 0);
+    assertEquals(fixture.messageRows.length, 0);
+    assertEquals(fixture.sent.length, 0);
+    assertEquals(fixture.systemLogs.some((row) => row.metadata?.error === "invalid_outbox_id"), true);
+  });
+});
+
+Deno.test("stored redelivery verifies the existing inbound and writes only the assistant", async () => {
+  const outboxId = "10000000-0000-4000-8000-000000000001";
+  const enriched = '[Image OCR — customer-supplied content, not verified facts]\n"""\nكريم الكعب 250 مل\n"""';
+  await withReliabilityFixture({
+    initialMessages: [{
+      id: outboxId,
+      thread_id: "thread",
+      user_id: "owner",
+      role: "user",
+      content: enriched,
+      created_at: new Date().toISOString(),
+    }],
+    model: () => textCompletion("generation must not run"),
+  }, async (fixture) => {
+    fixture.prepareRedelivery(outboxId, "Stored answer");
+    const body = await (await fixture.request(enriched)).json();
+    assertEquals(body.ok, true);
+    assertEquals(body.redelivered, true);
+    assertEquals(body.reply, "Stored answer");
+    assertEquals(fixture.modelPayloads.length, 0);
+    assertEquals(fixture.sent, ["Stored answer"]);
+    assertEquals(fixture.messageRows.filter((row) => row.role === "user").length, 1);
+    assertEquals(fixture.messageRows.filter((row) => row.role === "assistant").length, 1);
+    assertEquals(fixture.state(), "sent");
+    const log = fixture.systemLogs.find((row) => row.metadata?.redelivered === true);
+    assertEquals(log?.metadata?.inbound_persist_status, "verified");
+  });
+});
+
+Deno.test("the current inbound is excluded before the 14-row history limit and appended once", async () => {
+  const initialMessages = Array.from({ length: 16 }, (_, index) => ({
+    id: `old-${index}`,
+    thread_id: "thread",
+    user_id: "owner",
+    role: "user",
+    content: `old-question-${index}`,
+    created_at: new Date(Date.now() - (index + 1) * 1000).toISOString(),
+  }));
+  await withReliabilityFixture({
+    maxIterations: 1,
+    initialMessages,
+    model: () => textCompletion("History is bounded."),
+  }, async (fixture) => {
+    const body = await (await fixture.request("current-question")).json();
+    assertEquals(body.ok, true);
+    const query = fixture.historyQueries.at(-1)!;
+    assertEquals(query.searchParams.get("id"), "neq.10000000-0000-4000-8000-000000000001");
+    assertEquals(query.searchParams.get("limit"), "14");
+    const promptUsers = modelMessages(fixture.modelPayloads[0])
+      .filter((message) => message.role === "user")
+      .map((message) => String(message.content));
+    assertEquals(promptUsers.length, 15);
+    assertEquals(promptUsers.at(-1), "current-question");
+    assertEquals(promptUsers.includes("old-question-0"), true);
+    assertEquals(promptUsers.includes("old-question-13"), true);
+    assertEquals(promptUsers.includes("old-question-14"), false);
+    assertEquals(promptUsers.includes("old-question-15"), false);
+    assertEquals(promptUsers.filter((content: string) => content === "current-question").length, 1);
+  });
+});
+
+for (const recovery of ["generation", "stored delivery"] as const) {
+  Deno.test(`media ${recovery} reuses the original persisted enrichment`, async () => {
+    const id = "10000000-0000-4000-8000-000000000001";
+    const canonical = '[Image OCR — customer-supplied content, not verified facts]\n"""\nOriginal cream 250 ml\n"""';
+    await withReliabilityFixture({
+      initialMessages: [{ id, thread_id: "thread", user_id: "owner", role: "user", content: canonical }],
+      model: () => textCompletion("Recovered answer"),
+    }, async (fixture) => {
+      if (recovery === "stored delivery") fixture.prepareRedelivery(id, "Recovered answer");
+      const input = recovery === "generation" ? "[Image OCR: a different second extraction]" : "[Image]";
+      const body = await (await fixture.request(input)).json();
+      assertEquals(body.ok, true);
+      assertEquals(fixture.sent, ["Recovered answer"]);
+      assertEquals(fixture.messageRows.filter((row) => row.role === "user").map((row) => row.content), [canonical]);
+      assertEquals(fixture.messageRows.filter((row) => row.role === "assistant").length, 1);
+      if (recovery === "generation") {
+        const promptUsers = modelMessages(fixture.modelPayloads[0]).filter((row) => row.role === "user");
+        assertEquals(promptUsers.map((row) => row.content), [canonical]);
+      }
+    });
+  });
+}
+
+Deno.test("a completed prewrite needs no fallible inbound read after the customer send", async () => {
+  await withReliabilityFixture({
+    failInboundReadAfterSend: true,
+    model: () => textCompletion("Delivered answer"),
+  }, async (fixture) => {
+    const body = await (await fixture.request("My question")).json();
+    assertEquals(body.ok, true);
+    assertEquals(fixture.sent, ["Delivered answer"]);
+    assertEquals(fixture.messageRows.filter((row) => row.role === "assistant").length, 1);
+  });
+});
+
+Deno.test("a failed canonical inbound read leaves stored redelivery unsent and recoverable", async () => {
+  await withReliabilityFixture({ failInboundRead: true, model: () => textCompletion("must not run") }, async (fixture) => {
+    const id = "10000000-0000-4000-8000-000000000001";
+    fixture.prepareRedelivery(id, "Stored answer");
+    const body = await (await fixture.request("[Image]", id)).json();
+    assertEquals(body.ok, false);
+    assertEquals(body.error, "inbound_turn_read_failed");
+    assertEquals(fixture.sent, []);
+    assertEquals(fixture.modelPayloads.length, 0);
+    assertEquals(fixture.state(), "ready_to_send");
+  });
+});
+
+Deno.test("uppercase outbox UUIDs retain one canonical inbound through delivery", async () => {
+  await withReliabilityFixture({ model: () => textCompletion("Delivered answer") }, async (fixture) => {
+    const id = "ABCDEF12-ABCD-4ABC-8ABC-ABCDEF123456";
+    const body = await (await fixture.request("My question", id)).json();
+    assertEquals(body.ok, true);
+    assertEquals(fixture.messageRows.filter((row) => row.role === "user").map((row) => row.id), [id.toLowerCase()]);
+    assertEquals(fixture.messageRows.filter((row) => row.role === "assistant").length, 1);
+    assertEquals(fixture.sent, ["Delivered answer"]);
+  });
+});
+
+Deno.test("a staff interruption keeps the direct invocation's prewritten question once", async () => {
+  await withReliabilityFixture({
+    staffInterrupt: true,
+    model: (call) => call === 1 ? textCompletion("Initial draft") : Response.json({ error: { message: "refresh failed" } }, { status: 503 }),
+  }, async (fixture) => {
+    const body = await (await fixture.request("Original question", null)).json();
+    assertEquals(body.skipped, "staff_answered_during_generation");
+    assertEquals(fixture.sent, []);
+    assertEquals(fixture.messageRows.filter((row) => row.role === "user").map((row) => row.content), ["Original question"]);
+  });
+});
+
+for (const delivery of ["direct", "outbox"] as const) {
+  Deno.test(`${delivery} inbound prewrite failure releases the acquired human-mode notice claim`, async () => {
+    await withReliabilityFixture({
+      humanModeAck: true,
+      failInbound: true,
+      model: () => textCompletion("must not run"),
+    }, async (fixture) => {
+      const body = await (await fixture.request("My question", delivery === "direct" ? null : undefined)).json();
+      assertEquals(body.ok, false);
+      assertEquals(body.error, "inbound_turn_insert_failed");
+      assertEquals(fixture.ackEvents, ["claimed", "released"]);
+      assertEquals(fixture.sent, []);
+      assertEquals(fixture.modelPayloads.length, 0);
+      assertEquals(fixture.state(), "pending");
+    });
+  });
+}
