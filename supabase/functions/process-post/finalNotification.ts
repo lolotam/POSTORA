@@ -136,4 +136,3 @@ export async function confirmThreadsImageNotification(
     error: res?.error ?? null,
   };
 }
-

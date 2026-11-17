@@ -1373,4 +1373,3 @@ END $$;
 ROLLBACK;
 
 \echo '=== deferred_publishes: ALL CHECKS PASSED ==='
-

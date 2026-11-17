@@ -142,15 +142,11 @@ Deno.test("registered process-post durably completes single-image Threads contai
   let clock = 0;
   const BASE_CLOCK = 1_767_225_600_000;
   class MockDate extends previousDate {
-    constructor(...args: any[]) {
-      if (args.length === 0) {
-        super(BASE_CLOCK + clock);
-      } else if (args.length === 1) {
-        super(args[0]);
-      } else {
-        // @ts-ignore
-        super(...args);
-      }
+    constructor(...args: [] | [string | number | Date] | [number, number, number?, number?, number?, number?, number?]) {
+      const instant = args.length === 0
+        ? new previousDate(BASE_CLOCK + clock)
+        : Reflect.construct(previousDate, args) as Date;
+      super(instant.getTime());
     }
     static override now() {
       return BASE_CLOCK + clock;

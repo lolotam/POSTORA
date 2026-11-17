@@ -453,4 +453,3 @@ Deno.test("a stale image owner update with 0 affected rows returns ownership cha
   assertEquals(result.error, "Threads image execution ownership changed");
   assertEquals(result.gaveUp, false);
 });
-
