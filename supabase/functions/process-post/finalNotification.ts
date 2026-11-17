@@ -24,8 +24,9 @@ export const FINAL_NOTIFIED_KEY = "final_notified_at";
 
 export interface FinalNotificationClaim {
   claimed: boolean;
-  /** Set when notification authority could not be established. */
+  /** Legacy marker read/write failure; distinct from a managed-intent refusal. */
   error: string | null;
+  reason?: "managed_intent";
 }
 
 function asRecord(value: unknown): Record<string, unknown> {
@@ -57,7 +58,7 @@ export async function claimFinalNotification(
 
   const metadata = asRecord(row.metadata);
   if (metadata.final_notification_intent != null) {
-    return { claimed: false, error: "Managed image intent requires a fenced notification claim" };
+    return { claimed: false, error: null, reason: "managed_intent" };
   }
   const marker = metadata[FINAL_NOTIFIED_KEY];
   if (markerCoversCycle(marker, row.processing_started_at ?? null)) return { claimed: false, error: null };

@@ -198,6 +198,7 @@ Deno.test("registered process-post durably completes single-image Threads contai
   let legacyVideoMode = false;
   let beforeLegacyRestore: (() => void) | null = null;
   let legacyRestoreFailure = false;
+  let legacyNotificationClaimFailure: "none" | "read" | "update" = "none";
   let notificationScopeMode: "ok" | "missing" | "empty" | "deleted" | "changed" | "parent_changed" = "ok";
   const unexpected: string[] = [];
 
@@ -286,6 +287,7 @@ Deno.test("registered process-post durably completes single-image Threads contai
     legacyVideoMode = false;
     beforeLegacyRestore = null;
     legacyRestoreFailure = false;
+    legacyNotificationClaimFailure = "none";
   }
 
   function insertCheckpoint(payload: Record<string, unknown>) {
@@ -456,6 +458,10 @@ Deno.test("registered process-post durably completes single-image Threads contai
       if (request.method === "PATCH") {
         if (!matchesPostFilters(post, url)) return Response.json([]);
         const update = await request.json() as Record<string, unknown>;
+        if (legacyNotificationClaimFailure === "update" &&
+          (update.metadata as Record<string, unknown> | undefined)?.final_notified_at) {
+          return Response.json({ message: "fixture legacy marker update unavailable" }, { status: 500 });
+        }
         if (update.status === "processing" && update.processing_started_at &&
           update.processing_started_at !== post.processing_started_at && rows.some((row) =>
             row.status === "pending" && row.platform === "threads" && deferred(row.response_data)?.media_type === "IMAGE")) {
@@ -470,6 +476,9 @@ Deno.test("registered process-post durably completes single-image Threads contai
           }
         }
         return Response.json([{ id: POST, processing_started_at: post.processing_started_at }]);
+      }
+      if (legacyNotificationClaimFailure === "read" && url.searchParams.get("select") === "metadata,processing_started_at") {
+        return Response.json({ message: "fixture legacy marker read unavailable" }, { status: 500 });
       }
       if (parentReadError && url.searchParams.get("select") !== "*") {
         return Response.json({ message: "fixture parent read failure" }, { status: 500 });
@@ -2195,6 +2204,35 @@ Deno.test("registered process-post durably completes single-image Threads contai
         assertEquals(intent.notified, mode === "ok" || mode === "opt_out");
         assertEquals(publishes, 1);
       });
+    }
+
+    for (const failure of ["read", "update"] as const) {
+      for (const failed of [false, true]) {
+        await test.step(`legacy ${failed ? "failure" : "success"} notification survives a ${failure} marker error`, async () => {
+          reset();
+          accounts = [facebookAccount()];
+          post.platforms = ["facebook"];
+          post.metadata = { selected_account_ids: [FACEBOOK_ACCOUNT], webhook_url: "https://webhook-fixture.invalid/hook" };
+          facebookFail = failed;
+          profileEmailEnabled = true;
+          legacyNotificationClaimFailure = failure;
+          const background: Promise<unknown>[] = [];
+          const runtime = globalThis as Record<string, unknown>;
+          const previous = runtime.EdgeRuntime;
+          runtime.EdgeRuntime = { waitUntil: (promise: Promise<unknown>) => { background.push(promise); } };
+          try {
+            const response = await invoke();
+            assertEquals(response.status, 200);
+            await Promise.all(background);
+            assertEquals(deliveredNotifications.filter(entry => entry.event === (failed ? "post.failed" : "post.completed")).length, 1);
+            assertEquals(deliveredNotifications.filter(entry => entry.event === "email.post_failed").length, failed ? 1 : 0);
+            assertEquals(post.status, failed ? "failed" : "completed");
+          } finally {
+            if (previous === undefined) delete runtime.EdgeRuntime;
+            else runtime.EdgeRuntime = previous;
+          }
+        });
+      }
     }
 
     for (const newerClaim of [false, true]) {

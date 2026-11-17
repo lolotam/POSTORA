@@ -95,6 +95,8 @@ for (const concurrent of [false, true]) {
     }, concurrent ? { beforeUpdate: current => { current.metadata = { final_notification_intent: structuredClone(intent) }; } } : {});
     const result = await claimFinalNotification(client, "post-1", NOW);
     assertEquals(result.claimed, false);
+    assertEquals(result.error, null);
+    if (!concurrent) assertEquals(result.reason, "managed_intent");
     assertEquals(row.metadata, { final_notification_intent: intent });
   });
 }

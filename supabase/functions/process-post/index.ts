@@ -1667,13 +1667,22 @@ async function announceFinalPost(
   }
 
   const claim = await claimFinalNotification(supabase, post.id);
-  if (claim.error) {
+  if (claim.reason === "managed_intent") {
     await writeLogRow(supabase, {
-      level: "warn", category: "post", source: "process-post", user_id: post.user_id,
-      message: "Final notification withheld because its unfenced claim could not be established",
-      metadata: { event: "final_notification_claim_refused", post_id: post.id, reason: claim.error },
+      level: "info", category: "post", source: "process-post", user_id: post.user_id,
+      message: "Managed image notification remains owned by its fenced reconciler",
+      metadata: { event: "final_notification_claim_refused", post_id: post.id, reason: claim.reason },
     });
     return false;
+  }
+  if (claim.error) {
+    // Preserve legacy best-effort delivery on marker outages. This does not write
+    // or acknowledge a managed intent; known managed refusals returned above.
+    await writeLogRow(supabase, {
+      level: "warn", category: "post", source: "process-post", user_id: post.user_id,
+      message: "Legacy notification marker unavailable; attempting best-effort delivery",
+      metadata: { event: "legacy_notification_claim_error", post_id: post.id, reason: claim.error },
+    });
   } else if (!claim.claimed) {
     console.log(`[process-post] post ${post.id} was already announced; not sending again`);
     return false;
