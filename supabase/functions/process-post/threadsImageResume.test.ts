@@ -204,6 +204,8 @@ Deno.test("registered process-post durably completes single-image Threads contai
   let recoveryRowReadFailure = false;
   let recoveryClaims = 0;
   let refreshCandidateOnClaim = false;
+  let instagramFeedFailureMode: "none" | "error" | "missing" | "ok" = "none";
+  let instagramStoryPublishes = 0;
   let enrollmentFailure: "none" | "error" | "lost" = "none";
   let missingMedia = false;
   let closedRetainedIds: string[] = [];
@@ -302,6 +304,8 @@ Deno.test("registered process-post durably completes single-image Threads contai
     recoveryRowReadFailure = false;
     recoveryClaims = 0;
     refreshCandidateOnClaim = false;
+    instagramFeedFailureMode = "none";
+    instagramStoryPublishes = 0;
     enrollmentFailure = "none";
     missingMedia = false;
     closedRetainedIds = [];
@@ -334,6 +338,10 @@ Deno.test("registered process-post durably completes single-image Threads contai
 
   async function settle(payload: Record<string, unknown>) {
     settlements++;
+    if (instagramFeedFailureMode !== "none" && payload.p_platform === "instagram" && payload.p_status === "failed") {
+      if (instagramFeedFailureMode === "error") return Response.json({ message: "fixture feed failure write unavailable" }, { status: 500 });
+      if (instagramFeedFailureMode === "missing") return Response.json({});
+    }
     if (successSettlementFails && !successSettlementLost && payload.p_platform_post_id === IMAGE_ROW && payload.p_status === "success") {
       return Response.json({ message: "fixture success settlement unavailable" }, { status: 500 });
     }
@@ -454,6 +462,19 @@ Deno.test("registered process-post durably completes single-image Threads contai
       throw new Error(unexpected.at(-1));
     }
     if (url.hostname === "graph.facebook.com") {
+      if (instagramFeedFailureMode !== "none") {
+        if (request.method === "POST" && url.pathname.endsWith("/fixture-instagram-user/media")) {
+          const body = await request.json();
+          return body.media_type === "STORIES" ? Response.json({ id: "fixture-story-container" }) :
+            Response.json({ error: { message: "fixture feed rejected" } });
+        }
+        if (url.pathname.endsWith("/fixture-story-container")) return Response.json({ status_code: "FINISHED" });
+        if (request.method === "POST" && url.pathname.endsWith("/fixture-instagram-user/media_publish")) {
+          instagramStoryPublishes++;
+          return Response.json({ id: "fixture-live-story" });
+        }
+        if (url.pathname.endsWith("/fixture-live-story")) return Response.json({ permalink: "https://instagram.fixture/live-story" });
+      }
       if (legacyVideoMode && request.method === "POST" && url.pathname.endsWith("/fixture-instagram-user/media")) {
         clock += 40_000;
         return Response.json({ id: "fixture-instagram-container" });
@@ -933,6 +954,14 @@ Deno.test("registered process-post durably completes single-image Threads contai
       clock += markDuration;
       if (markMode === "lost") return Response.json({ message: "committed mark response lost" }, { status: 500 });
       return Response.json(true);
+    }
+    if (table === "rpc/record_published_story" && instagramFeedFailureMode !== "none") {
+      const payload = await request.json();
+      const id = "77000000-0000-4000-8000-000000000100";
+      rows.push({ id, post_id: POST, social_account_id: payload.p_social_account_id, platform: "instagram",
+        status: "success", platform_post_id: payload.p_story_id, platform_post_url: payload.p_story_url,
+        error_message: null, created_at: new Date().toISOString(), response_data: { ig_post_subtype: "story" } });
+      return Response.json({ recorded: true, platform_post_id: id });
     }
     if (table === "rpc/partner_settle_platform_post") return settle(await request.json());
     if (table === "rpc/record_deferred_platform_post") {
@@ -2461,6 +2490,42 @@ Deno.test("registered process-post durably completes single-image Threads contai
         assertEquals(response.status, 400);
         assert(logs.some(entry => (entry.metadata as Record<string, unknown>)?.event === "notification_route_refused"));
         assertEquals({ creates, statusReads, publishes, settlements, recoveryClaims }, { creates: 0, statusReads: 0, publishes: 0, settlements: 0, recoveryClaims: 0 });
+      });
+    }
+    for (const mode of ["error", "missing", "ok"] as const) {
+      await test.step(`live Instagram Story cannot hide an unrecorded feed failure (${mode})`, async () => {
+        reset();
+        instagramFeedFailureMode = mode;
+        profileEmailEnabled = true;
+        accounts = [{ ...threadsAccount(), platform: "instagram", platform_user_id: "fixture-instagram-user" }];
+        post.platforms = ["instagram"];
+        post.metadata = { ...post.metadata as Record<string, unknown>, instagram_post_type: ["story", "feed"] };
+        const background: Promise<unknown>[] = [];
+        const runtime = globalThis as Record<string, unknown>;
+        const previous = runtime.EdgeRuntime;
+        runtime.EdgeRuntime = { waitUntil: (promise: Promise<unknown>) => { background.push(promise); } };
+        try {
+          const response = await invoke();
+          await Promise.all(background);
+          assertEquals(response.status, mode === "ok" ? 200 : 503, await response.clone().text());
+          assertEquals(instagramStoryPublishes, 1);
+          assertEquals(rows.filter(row => row.response_data.ig_post_subtype === "story" && row.status === "success").length, 1);
+          assertEquals(closedFanoutCalls, mode === "ok" ? 1 : 0);
+          assertEquals(recoveryClaims, mode === "ok" ? 1 : 0);
+          if (mode !== "ok") {
+            assertEquals(deliveredNotifications.length, 0);
+            assertEquals((post.metadata as Record<string, unknown>).final_notified_at, undefined);
+            assert(logs.some(entry => (entry.metadata as Record<string, unknown>)?.event === "notification_fanout_write_failed"));
+          } else {
+            const notice = deliveredNotifications.find(entry => entry.event === "post.completed")!;
+            const body = notice.body as { data: { platform_results_list: Array<{ status: string }> } };
+            assertEquals(body.data.platform_results_list.map(row => row.status).sort(), ["failed", "success"]);
+            assertEquals(deliveredNotifications.filter(entry => entry.event === "email.post_failed").length, 1);
+          }
+        } finally {
+          if (previous === undefined) delete runtime.EdgeRuntime;
+          else runtime.EdgeRuntime = previous;
+        }
       });
     }
     for (const mode of ["ok", "read_error", "missing_row", "refreshed", "changed_status"] as const) {

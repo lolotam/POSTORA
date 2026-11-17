@@ -3309,6 +3309,7 @@ Deno.serve(async (req) => {
           if (settled.id) {
             exactPlatformPostIds.push(settled.id);
           }
+          if (settled.error || !settled.id) fanoutWriteFailed = true;
           if (settled.error) {
             console.error(`Failed to settle the failure row for ${account.platform}:`, settled.error);
           }
