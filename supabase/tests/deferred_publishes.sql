@@ -2194,6 +2194,85 @@ BEGIN
   ASSERT NOT (answer->'authorized_platform_post_ids' @> to_jsonb(ARRAY[second_story])),'T103 chained result excluded';
 END $$;
 
+-- T104: managed image reconciliation cannot certify a partial Instagram multi-result fanout.
+DO $$
+DECLARE
+  u uuid := gen_random_uuid(); ig uuid := gen_random_uuid(); th uuid := gen_random_uuid(); p uuid := gen_random_uuid();
+  thread_row uuid := gen_random_uuid(); story_row uuid; feed_row uuid; unrelated uuid := gen_random_uuid();
+  t timestamptz := now(); f jsonb; answer jsonb; saved_metadata jsonb;
+BEGIN
+  INSERT INTO auth.users(id,email) VALUES(u,'managed-fanout-test@example.invalid');
+  INSERT INTO public.social_accounts(id,user_id,platform,platform_user_id,access_token,is_active)
+    VALUES(ig,u,'instagram','managed-fanout-ig','fixture',true),(th,u,'threads','managed-fanout-th','fixture',true);
+  INSERT INTO public.posts(id,user_id,caption,platforms,status,processing_started_at,source,metadata)
+    VALUES(p,u,'managed fanout',ARRAY['instagram','threads'],'processing',t,'manual','{"instagram_post_type":["feed","story"]}');
+  SELECT jsonb_build_object('user_id',x.user_id,'caption',x.caption,'media_file_ids',x.media_file_ids,
+    'metadata',x.metadata,'platforms',x.platforms,'scheduled_at',x.scheduled_at,
+    'publish_requested_at',x.publish_requested_at,'source',x.source) INTO f FROM public.posts x WHERE x.id=p;
+  PERFORM public.enroll_post_notification_recovery(p,t,f,ARRAY[ig,th],ARRAY[]::uuid[]);
+  INSERT INTO public.platform_posts(id,post_id,social_account_id,platform,status,created_at,response_data)
+    VALUES(thread_row,p,th,'threads','success',t,jsonb_build_object('deferred',jsonb_build_object(
+      'kind','threads','media_type','IMAGE','attempt_started_at',t,'claimed_until',t-interval '1 second')));
+  answer:=public.record_published_story(p,ig,'managed-fanout-story','https://fixture.invalid/managed-story','{}');
+  story_row:=(answer->>'platform_post_id')::uuid;
+  answer:=public.finalize_threads_image_attempt(p,t,f,ARRAY[ig,th]);
+  ASSERT answer->>'notify'='false' AND answer->>'status'='processing','T104 partial multi-result account cannot finalize';
+  ASSERT answer->>'reason'='fanout_not_closed','T104 durable original closure is required';
+  ASSERT (SELECT metadata #>> '{legacy_notification_candidate,requires_image_fanout_closure}' FROM public.posts WHERE id=p)='true','T104 requirement enrolled before providers';
+  ASSERT NOT (SELECT metadata ? 'final_notification_intent' FROM public.posts WHERE id=p),'T104 no partial managed intent';
+  ASSERT NOT EXISTS(SELECT 1 FROM public.claim_deferred_publishes(100) w WHERE w.platform_post_id=thread_row),'T104 unclosed terminal row cannot consume cron slots';
+  answer:=public.finalize_threads_image_attempt(p,t,f);
+  ASSERT answer->>'notify'='false' AND answer->>'status'='processing','T104 later terminal reconciliation also refuses';
+  SELECT metadata INTO saved_metadata FROM public.posts WHERE id=p;
+  UPDATE public.posts SET status='completed' WHERE id=p;
+  UPDATE public.posts SET metadata=saved_metadata || jsonb_build_object('final_notification_intent',jsonb_build_object(
+    'status','completed','attempt_started_at',t,'notified',false,'content_hash',md5(f::text),
+    'authorized_platform_post_ids',to_jsonb(ARRAY[thread_row,story_row]))) WHERE id=p;
+  answer:=public.claim_threads_image_notification(p,t,'completed',f);
+  ASSERT answer->>'claimed'='false' AND answer->>'error'='fanout_not_closed','T104 pre-existing partial intent cannot bypass the barrier';
+  UPDATE public.posts SET status='processing' WHERE id=p;
+  UPDATE public.posts SET metadata=saved_metadata WHERE id=p;
+  -- After the failed feed result is durably acknowledged, the original worker can close its complete scope.
+  answer:=public.partner_settle_platform_post(NULL,p,ig,'instagram','failed',NULL,NULL,'fixture feed rejected',NULL);
+  feed_row:=(answer->>'platform_post_id')::uuid;
+  answer:=public.close_post_fanout(p,t,f,ARRAY[thread_row,story_row,feed_row],ARRAY[]::uuid[]);
+  ASSERT answer->>'closed'='true' AND answer->>'ready'='false','T104 closure preserves managed notification ownership';
+  ASSERT (SELECT status FROM public.posts WHERE id=p)='processing','T104 only managed finalizer changes parent';
+  INSERT INTO public.platform_posts(id,post_id,social_account_id,platform,status,created_at)
+    VALUES(unrelated,p,ig,'instagram','success',t);
+  answer:=public.finalize_threads_image_attempt(p,t,f,ARRAY[ig,th]);
+  ASSERT answer->>'notify'='true' AND answer->>'status'='completed','T104 complete mixed results finalize';
+  ASSERT jsonb_array_length(answer->'authorized_platform_post_ids')=3,'T104 exact complete scope excludes unlisted current row';
+  ASSERT answer->'authorized_platform_post_ids' @> to_jsonb(ARRAY[feed_row]),'T104 failed feed remains in notification scope';
+  answer:=public.claim_threads_image_notification(p,t,'completed',f);
+  ASSERT answer->>'claimed'='true','T104 complete scope can claim managed notification';
+  ASSERT jsonb_array_length(answer->'authorized_platform_post_ids')=3,'T104 claimed payload retains all three exact results';
+END $$;
+
+-- T105: ordinary single-result image recovery needs no extra original-worker closure.
+DO $$
+DECLARE
+  u uuid := gen_random_uuid(); a uuid := gen_random_uuid(); p uuid := gen_random_uuid(); r uuid := gen_random_uuid();
+  t timestamptz := now(); f jsonb; answer jsonb;
+BEGIN
+  INSERT INTO auth.users(id,email) VALUES(u,'single-image-fanout-test@example.invalid');
+  INSERT INTO public.social_accounts(id,user_id,platform,platform_user_id,access_token,is_active)
+    VALUES(a,u,'threads','single-image-fanout','fixture',true);
+  INSERT INTO public.posts(id,user_id,caption,platforms,status,processing_started_at,source,metadata)
+    VALUES(p,u,'single image fanout',ARRAY['threads'],'processing',t,'manual','{}');
+  SELECT jsonb_build_object('user_id',x.user_id,'caption',x.caption,'media_file_ids',x.media_file_ids,
+    'metadata',x.metadata,'platforms',x.platforms,'scheduled_at',x.scheduled_at,
+    'publish_requested_at',x.publish_requested_at,'source',x.source) INTO f FROM public.posts x WHERE x.id=p;
+  answer:=public.enroll_post_notification_recovery(p,t,f,ARRAY[a],ARRAY[]::uuid[]);
+  ASSERT answer->>'requires_image_fanout_closure'='false','T105 single result admission does not require closure';
+  INSERT INTO public.platform_posts(id,post_id,social_account_id,platform,status,created_at,response_data)
+    VALUES(r,p,a,'threads','success',t,jsonb_build_object('deferred',jsonb_build_object(
+      'kind','threads','media_type','IMAGE','attempt_started_at',t,'claimed_until',t-interval '1 second')));
+  answer:=public.finalize_threads_image_attempt(p,t,f);
+  ASSERT answer->>'notify'='true' AND answer->>'status'='completed','T105 single-result durable completion remains available';
+  ASSERT EXISTS(SELECT 1 FROM public.claim_deferred_publishes(100) w WHERE w.platform_post_id=r),'T105 single-result terminal notification recovery remains eligible';
+END $$;
+
 ROLLBACK;
 
 \echo '=== deferred_publishes: ALL CHECKS PASSED ==='

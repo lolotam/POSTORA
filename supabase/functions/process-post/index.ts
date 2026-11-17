@@ -1800,6 +1800,7 @@ async function finishDeferredPost(
       stale?: unknown;
       notify?: unknown;
       authorized_platform_post_ids?: unknown;
+      reason?: unknown;
     } | null;
     if (finalizationError || typeof finalization?.status !== "string" ||
       typeof finalization.stale !== "boolean" || typeof finalization.notify !== "boolean") {
@@ -1810,6 +1811,12 @@ async function finishDeferredPost(
       });
       if (logError) console.error("Threads image finalization refusal log failed:", logError);
       return { finalStatus: "processing", notified: false };
+    }
+    if (finalization.reason === "fanout_not_closed") {
+      await writeLogRow(supabase, { level: "warn", category: "post", source: "process-post", user_id: post.user_id,
+        message: "Threads image completion withheld until the original multi-result fanout is proven",
+        metadata: { event: "threads_image_fanout_unconfirmed", post_id: post.id, platform_post_id: platformPostId } });
+      return { finalStatus: finalization.status, notified: false };
     }
     let authorizedIds: string[] | undefined = undefined;
     if (Array.isArray(finalization.authorized_platform_post_ids)) {
@@ -2531,6 +2538,7 @@ Deno.serve(async (req) => {
     }
 
     let enrolledCandidateId: string | null = null;
+    let requiresImageFanoutClosure = false;
     if (!resume && claim.processingStartedAt) {
       try {
         const { data: enrollData, error: enrollError } = await supabase.rpc("enroll_post_notification_recovery", {
@@ -2543,9 +2551,10 @@ Deno.serve(async (req) => {
         if (enrollError) {
           console.warn("[process-post] enroll_post_notification_recovery RPC error:", enrollError);
         } else {
-          const res = enrollData as { enrolled?: boolean; candidate_id?: string } | null;
-          if (res?.enrolled) {
+          const res = enrollData as { enrolled?: boolean; candidate_id?: string; requires_image_fanout_closure?: boolean } | null;
+          if (res?.enrolled && typeof res.requires_image_fanout_closure === "boolean") {
             enrolledCandidateId = typeof res.candidate_id === "string" ? res.candidate_id : null;
+            requiresImageFanoutClosure = res.requires_image_fanout_closure;
           }
         }
       } catch (enrollErr) {
@@ -3348,7 +3357,8 @@ Deno.serve(async (req) => {
     };
     let fanoutClosedResult: FanoutClosedOutcome | null = null;
 
-    if (!resume && claim.processingStartedAt && enrolledCandidateId && !imageHandoff) {
+    if (!resume && claim.processingStartedAt && enrolledCandidateId &&
+        (!imageHandoff || requiresImageFanoutClosure || fanoutWriteFailed)) {
       if (fanoutWriteFailed) {
         await writeLogRow(supabase, { level: "error", category: "post", source: "process-post", user_id: post.user_id, message: "Complete notification scope unavailable after a result write failed", metadata: { event: "notification_fanout_write_failed", post_id } });
         return createErrorResponse("Existing provider results retained; result recording needs reconciliation", 503);

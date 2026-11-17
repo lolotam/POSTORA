@@ -709,6 +709,11 @@ AS $$
          AND pp.response_data #>> '{deferred,kind}' = 'threads'
          AND pp.response_data #>> '{deferred,media_type}' = 'IMAGE'
          AND coalesce((pp.response_data #>> '{deferred,claimed_until}')::timestamptz, '-infinity') <= now()
+          AND NOT (
+            (p.metadata #>> '{legacy_notification_candidate,attempt_started_at}')::timestamptz IS NOT DISTINCT FROM p.processing_started_at
+            AND p.metadata #>> '{legacy_notification_candidate,requires_image_fanout_closure}' IS NOT DISTINCT FROM 'true'
+            AND p.metadata #>> '{legacy_notification_candidate,fanout_closed}' IS DISTINCT FROM 'true'
+          )
          AND (
            (
              p.status = 'processing'
@@ -843,6 +848,11 @@ BEGIN
   END IF;
 
   v_intent := v_post.metadata -> 'final_notification_intent';
+  IF (v_post.metadata #>> '{legacy_notification_candidate,attempt_started_at}')::timestamptz IS NOT DISTINCT FROM p_expected_processing_started_at
+     AND v_post.metadata #>> '{legacy_notification_candidate,requires_image_fanout_closure}' = 'true'
+     AND v_post.metadata #>> '{legacy_notification_candidate,fanout_closed}' IS DISTINCT FROM 'true' THEN
+    RETURN jsonb_build_object('claimed', false, 'status', v_post.status, 'error', 'fanout_not_closed');
+  END IF;
   IF v_intent IS NULL THEN
     RETURN jsonb_build_object('claimed', false, 'status', v_post.status, 'error', 'no_intent');
   END IF;
@@ -1073,6 +1083,7 @@ DECLARE
   v_target_account_ids uuid[];
   v_retained_row_ids uuid[];
   v_authorized_row_ids uuid[];
+  v_fanout_row_ids uuid[];
 BEGIN
   IF p_expected_processing_started_at IS NULL THEN RETURN NULL; END IF;
 
@@ -1097,6 +1108,20 @@ BEGIN
        true
      ) THEN
     RETURN jsonb_build_object('status', v_post.status, 'stale', true, 'notify', false);
+  END IF;
+
+  IF (v_post.metadata #>> '{legacy_notification_candidate,attempt_started_at}')::timestamptz IS NOT DISTINCT FROM p_expected_processing_started_at THEN
+    IF v_post.metadata #>> '{legacy_notification_candidate,requires_image_fanout_closure}' = 'true'
+       AND v_post.metadata #>> '{legacy_notification_candidate,fanout_closed}' IS DISTINCT FROM 'true' THEN
+      RETURN jsonb_build_object('status', v_post.status, 'stale', false, 'notify', false, 'reason', 'fanout_not_closed');
+    END IF;
+    IF v_post.metadata #>> '{legacy_notification_candidate,fanout_closed}' = 'true' THEN
+      SELECT coalesce(array_agg(x::uuid), ARRAY[]::uuid[]) INTO v_fanout_row_ids
+        FROM jsonb_array_elements_text(
+          coalesce(v_post.metadata #> '{legacy_notification_candidate,exact_platform_post_ids}', '[]'::jsonb) ||
+          coalesce(v_post.metadata #> '{legacy_notification_candidate,retained_platform_post_ids}', '[]'::jsonb)
+        ) x;
+    END IF;
   END IF;
 
   v_marker := v_post.metadata ->> 'final_notified_at';
@@ -1176,6 +1201,7 @@ BEGIN
        SELECT 1 FROM public.platform_posts pp
         WHERE pp.post_id = p_post_id
           AND pp.social_account_id = target_acct.id
+           AND (v_fanout_row_ids IS NULL OR pp.id = ANY(v_fanout_row_ids))
           AND (
             pp.created_at >= p_expected_processing_started_at
             OR (pp.response_data #>> '{deferred,attempt_started_at}')::timestamptz = p_expected_processing_started_at
@@ -1193,6 +1219,7 @@ BEGIN
     INTO v_total, v_pending, v_succeeded
     FROM public.platform_posts pp
    WHERE pp.post_id = p_post_id
+      AND (v_fanout_row_ids IS NULL OR pp.id = ANY(v_fanout_row_ids))
      AND (
        (
          pp.social_account_id = ANY(v_target_account_ids)
@@ -1220,6 +1247,7 @@ BEGIN
   SELECT array_agg(pp.id) INTO v_authorized_row_ids
     FROM public.platform_posts pp
    WHERE pp.post_id = p_post_id
+      AND (v_fanout_row_ids IS NULL OR pp.id = ANY(v_fanout_row_ids))
      AND (
        (
          pp.social_account_id = ANY(v_target_account_ids)
@@ -1859,6 +1887,7 @@ BEGIN
     RETURN jsonb_build_object(
       'enrolled', true,
       'candidate_id', v_candidate ->> 'candidate_id',
+      'requires_image_fanout_closure', coalesce((v_candidate ->> 'requires_image_fanout_closure')::boolean, false),
       'already_enrolled', true
     );
   END IF;
@@ -1871,6 +1900,15 @@ BEGIN
     'content_fence', v_content,
     'ready', false,
     'fanout_closed', false,
+    'requires_image_fanout_closure', coalesce((
+      EXISTS (SELECT 1 FROM public.social_accounts a WHERE a.id = ANY(v_targets) AND a.user_id = v_post.user_id AND a.platform = 'instagram')
+      AND (
+        v_post.metadata ->> 'instagram_share_to_story' = 'true'
+        OR (v_post.metadata -> 'instagram_post_type' @> '["story"]'::jsonb
+            AND (v_post.metadata -> 'instagram_post_type' @> '["feed"]'::jsonb
+                 OR v_post.metadata -> 'instagram_post_type' @> '["reel"]'::jsonb))
+      )
+    ), false),
     'target_account_ids', to_jsonb(v_targets),
     'retained_platform_post_ids', to_jsonb(v_retained)
   );
@@ -1886,7 +1924,8 @@ BEGIN
 
   RETURN jsonb_build_object(
     'enrolled', true,
-    'candidate_id', v_candidate_id
+    'candidate_id', v_candidate_id,
+    'requires_image_fanout_closure', v_candidate -> 'requires_image_fanout_closure'
   );
 END;
 $$;
@@ -1922,6 +1961,7 @@ DECLARE
   v_frozen_ids uuid[];
   v_carried_ids uuid[];
   v_result_statuses jsonb;
+  v_managed_image boolean;
 BEGIN
   IF p_post_id IS NULL OR p_expected_processing_started_at IS NULL THEN
     RETURN jsonb_build_object('closed', false, 'error', 'invalid_arguments');
@@ -1971,14 +2011,15 @@ BEGIN
      ), false) THEN
     RETURN jsonb_build_object('closed', false, 'error', 'candidate_authority_changed');
   END IF;
-  IF v_post.metadata ? 'final_notification_intent' OR EXISTS (
+  IF v_post.metadata ? 'final_notification_intent' THEN
+    RETURN jsonb_build_object('closed', false, 'error', 'managed_image_owner');
+  END IF;
+  SELECT EXISTS (
     SELECT 1 FROM public.platform_posts pp WHERE pp.post_id = p_post_id
       AND pp.response_data #>> '{deferred,kind}' = 'threads'
       AND pp.response_data #>> '{deferred,media_type}' = 'IMAGE'
       AND (pp.response_data #>> '{deferred,attempt_started_at}')::timestamptz = p_expected_processing_started_at
-  ) THEN
-    RETURN jsonb_build_object('closed', false, 'error', 'managed_image_owner');
-  END IF;
+  ) INTO v_managed_image;
   SELECT coalesce(array_agg(x::uuid ORDER BY x), ARRAY[]::uuid[]) INTO v_expected_retained
     FROM jsonb_array_elements_text(v_candidate -> 'retained_platform_post_ids') x;
   SELECT coalesce(array_agg(x::uuid), ARRAY[]::uuid[]) INTO v_target_ids
@@ -2089,7 +2130,7 @@ BEGIN
 
   v_all_rows := array_cat(p_exact_platform_post_ids, p_retained_platform_post_ids);
 
-  IF v_pending_count > 0 THEN
+  IF v_managed_image OR v_pending_count > 0 THEN
     -- Not ready yet (native pending or deferred)
     v_candidate := v_candidate || jsonb_build_object(
       'fanout_closed', true,
