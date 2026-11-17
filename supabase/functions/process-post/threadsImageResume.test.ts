@@ -50,6 +50,7 @@ function normalizeTestMetadata(raw: Record<string, unknown> | null | undefined):
     "settlement_rollup_processing_started_at",
     "attempt_target_account_ids",
     "attempt_retained_account_ids",
+    "attempt_retained_platform_post_ids",
     "attempt_started_at",
     "attempt_scope",
     "final_notification_intent",
@@ -169,6 +170,7 @@ Deno.test("registered process-post durably completes single-image Threads contai
   let markMode: "ok" | "error" | "lost";
   let finalizerMode: "ok" | "error" | "lost";
   let publishMode: "success" | "timeout" | "rejected" | "null";
+  let createMode: "ok" | "error";
   let facebookFail = false;
   let createDuration = 0;
   let markDuration = 0;
@@ -186,6 +188,7 @@ Deno.test("registered process-post durably completes single-image Threads contai
   let releases = 0;
   let pendingReschedules = 0;
   let finalNotificationClaims = 0;
+  let finalizerCalls = 0;
   let webhookFailure: "none" | "http" | "transport" = "none";
   let deliveredNotifications: Array<{ url: string; event: string; body: unknown }> = [];
   let outbox = 0;
@@ -244,6 +247,7 @@ Deno.test("registered process-post durably completes single-image Threads contai
     markMode = "ok";
     finalizerMode = "ok";
     publishMode = "success";
+    createMode = "ok";
     facebookFail = false;
     createDuration = 0;
     markDuration = 0;
@@ -261,6 +265,7 @@ Deno.test("registered process-post durably completes single-image Threads contai
     releases = 0;
     pendingReschedules = 0;
     finalNotificationClaims = 0;
+    finalizerCalls = 0;
     webhookFailure = "none";
     deliveredNotifications = [];
     outbox = 0;
@@ -374,6 +379,9 @@ Deno.test("registered process-post durably completes single-image Threads contai
     }
     if (url.hostname === "graph.threads.net") {
       if (request.method === "POST" && url.pathname.endsWith("/threads")) {
+        if (createMode === "error") {
+          return Response.json({ error: { message: "fixture container creation failed" } }, { status: 400 });
+        }
         creates++;
         clock += createDuration;
         return Response.json({
@@ -489,8 +497,17 @@ Deno.test("registered process-post durably completes single-image Threads contai
         }
         return Response.json(candidates.map((row) => ({ id: row.id })));
       }
+      const statusParam = url.searchParams.get("status")?.replace(/^eq\./, "");
+      const inMatch = url.searchParams.get("id")?.match(/^in\.\((.*)\)$/);
+      if (inMatch) {
+        const ids = inMatch[1].split(",").map(s => s.trim().replace(/^["']|["']$/g, ""));
+        let selected = rows.filter(row => row.post_id === POST && ids.includes(row.id));
+        if (statusParam) selected = selected.filter(row => row.status === statusParam);
+        return Response.json(selected);
+      }
       const id = url.searchParams.get("id")?.replace(/^eq\./, "");
-      const selected = id ? rows.filter((row) => row.id === id) : rows.filter((row) => row.post_id === POST);
+      let selected = id ? rows.filter((row) => row.id === id) : rows.filter((row) => row.post_id === POST);
+      if (statusParam) selected = selected.filter(row => row.status === statusParam);
       return Response.json(id ? selected[0] ?? null : selected);
     }
     if (table === "rpc/record_threads_image_checkpoint") {
@@ -517,6 +534,12 @@ Deno.test("registered process-post durably completes single-image Threads contai
         post.metadata = {
           ...(post.metadata as Record<string, unknown> || {}),
           attempt_target_account_ids: payload.p_target_account_ids,
+        };
+      }
+      if (Array.isArray(payload.p_retained_platform_post_ids)) {
+        post.metadata = {
+          ...(post.metadata as Record<string, unknown> || {}),
+          attempt_retained_platform_post_ids: payload.p_retained_platform_post_ids,
         };
       }
       if (Array.isArray(payload.p_retained_account_ids)) {
@@ -580,6 +603,7 @@ Deno.test("registered process-post durably completes single-image Threads contai
       return Response.json(true);
     }
     if (table === "rpc/finalize_threads_image_attempt") {
+      finalizerCalls++;
       const payload = await request.json() as Record<string, unknown>;
       if (parentReadError || finalizerMode === "error") return Response.json({ message: "fixture parent read failure" }, { status: 500 });
       const currentContent = contentFence(post);
@@ -592,7 +616,12 @@ Deno.test("registered process-post durably completes single-image Threads contai
         Date.parse(metadata.final_notified_at) >= Date.parse(String(payload.p_expected_processing_started_at));
 
       if (["completed", "failed"].includes(String(post.status))) {
-        return Response.json({ status: post.status, stale: false, notify: false });
+        return Response.json({
+          status: post.status,
+          stale: false,
+          notify: false,
+          authorized_platform_post_ids: (metadata.final_notification_intent as Record<string, unknown> | undefined)?.authorized_platform_post_ids,
+        });
       }
 
       if (post.status !== "processing") {
@@ -615,10 +644,15 @@ Deno.test("registered process-post durably completes single-image Threads contai
       const retainedAccountIds = Array.isArray(metadata.attempt_retained_account_ids)
         ? (metadata.attempt_retained_account_ids as string[])
         : [];
+      const retainedRowIds: string[] = Array.isArray(metadata.attempt_retained_platform_post_ids)
+        ? (metadata.attempt_retained_platform_post_ids as string[])
+        : rows.filter(r => retainedAccountIds.includes(r.social_account_id) && r.status === "success").map(r => r.id);
 
       const started = String(payload.p_expected_processing_started_at);
       const missingTargets = targetAccountIds.filter(targetId => {
-        if (retainedAccountIds.includes(targetId)) return false;
+        if (retainedAccountIds.includes(targetId) || rows.some(r => retainedRowIds.includes(r.id) && r.social_account_id === targetId)) {
+          return false;
+        }
         return !rows.some(row =>
           row.social_account_id === targetId &&
           row.post_id === POST &&
@@ -631,24 +665,34 @@ Deno.test("registered process-post durably completes single-image Threads contai
 
       const attemptRows = rows.filter(row =>
         row.post_id === POST &&
-        (retainedAccountIds.includes(row.social_account_id) || deferred(row.response_data)?.attempt_started_at === started || (row.created_at ?? "") >= started)
+        (
+          retainedRowIds.includes(row.id) ||
+          retainedAccountIds.includes(row.social_account_id) ||
+          (targetAccountIds.includes(row.social_account_id) &&
+            (deferred(row.response_data)?.attempt_started_at === started || (row.created_at ?? "") >= started))
+        )
       );
 
-      if (attemptRows.length === 0 && retainedAccountIds.length === 0) {
+      if (attemptRows.length === 0 && retainedAccountIds.length === 0 && retainedRowIds.length === 0) {
         return Response.json({ status: post.status, stale: false, notify: false });
       }
       if (attemptRows.some((row) => row.status === "pending")) {
         return Response.json({ status: "processing", stale: false, notify: false });
       }
 
-      const hasSuccess = retainedAccountIds.length > 0 || attemptRows.some((row) => row.status === "success");
+      const hasSuccess = retainedAccountIds.length > 0 || retainedRowIds.length > 0 || attemptRows.some((row) => row.status === "success");
       post.status = hasSuccess ? "completed" : "failed";
+      const authorizedRowIds = [
+        ...retainedRowIds,
+        ...attemptRows.filter(r => !retainedRowIds.includes(r.id)).map(r => r.id)
+      ];
       post.metadata = {
         ...(post.metadata as Record<string, unknown> || {}),
         final_notification_intent: {
           created_at: new Date(clock).toISOString(),
           notified: false,
           final_status: post.status,
+          authorized_platform_post_ids: authorizedRowIds,
         },
       };
 
@@ -657,7 +701,12 @@ Deno.test("registered process-post durably completes single-image Threads contai
       }
 
       const notify = !alreadyNotified;
-      return Response.json({ status: post.status, stale: false, notify });
+      return Response.json({
+        status: post.status,
+        stale: false,
+        notify,
+        authorized_platform_post_ids: authorizedRowIds,
+      });
     }
     if (table === "rpc/claim_threads_image_notification") {
       const payload = await request.json() as Record<string, unknown>;
@@ -676,7 +725,12 @@ Deno.test("registered process-post durably completes single-image Threads contai
       finalNotificationClaims++;
       intent.claimed_until = new Date(BASE_CLOCK + clock + 180_000).toISOString();
       intent.claim_id = crypto.randomUUID();
-      return Response.json({ claimed: true, status: post.status, claim_id: intent.claim_id });
+      return Response.json({
+        claimed: true,
+        status: post.status,
+        claim_id: intent.claim_id,
+        authorized_platform_post_ids: intent.authorized_platform_post_ids,
+      });
     }
     if (table === "rpc/confirm_threads_image_notification") {
       const payload = await request.json() as Record<string, unknown>;
@@ -1897,6 +1951,91 @@ Deno.test("registered process-post durably completes single-image Threads contai
         totals.deliveredNotifications += deliveredNotifications.length;
       }
       assertEquals(totals, { creates: 200, statusReads: 200, publishes: 200, settlements: 200, outbox: 200, notifications: 200, deliveredNotifications: 200 });
+    });
+
+    await test.step("A06: legacy pending sibling rollup restores parent status to processing", async () => {
+      reset();
+      const attemptAt = new Date().toISOString();
+      post.processing_started_at = attemptAt;
+      post.status = "completed";
+      post.metadata = {
+        settlement_rollup_at: attemptAt,
+        settlement_rollup_processing_started_at: attemptAt,
+        settlement_rollup_status: "completed",
+      };
+      const response = await fetch(`${ORIGIN}/rest/v1/posts?id=eq.${POST}&status=eq.completed&processing_started_at=eq.${attemptAt}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ status: "processing" }),
+      });
+      assertEquals(response.ok, true);
+      assertEquals(post.status, "processing");
+    });
+
+    await test.step("A06: native Threads text post does not call image checkpoint or finalizer", async () => {
+      reset();
+      let checkpointCalled = false;
+      checkpointHook = () => { checkpointCalled = true; };
+      post.media_file_ids = [];
+      const response = await invoke({ at: 1_000 });
+      assertEquals(response.status, 200);
+      assertEquals(checkpointCalled, false);
+      assertEquals(finalizerCalls, 0);
+    });
+
+    await test.step("A06: definite create failure has no image finalizer", async () => {
+      reset();
+      createMode = "error";
+      const response = await invoke({ at: 1_000 });
+      assertEquals(response.status, 200);
+      const body = await response.json();
+      assertEquals(body.status, "failed");
+      assertEquals(finalizerCalls, 0);
+      createMode = "ok";
+    });
+
+    await test.step("A04: two historical rows for same account: only authorized row included", async () => {
+      reset();
+      accounts = [threadsAccount(), secondThreadsAccount()];
+      const priorSuccessRowId = "44000000-0000-4000-8000-000000000091";
+      const priorFailedRowId = "44000000-0000-4000-8000-000000000092";
+      rows.push({
+        id: priorSuccessRowId,
+        post_id: POST,
+        social_account_id: THREADS_ACCOUNT_2,
+        platform: "threads",
+        status: "success",
+        platform_post_id: "prior-success",
+        platform_post_url: "https://threads.net/p/prior-success",
+        error_message: null,
+        response_data: {},
+        created_at: new Date(Date.now() - 3600_000).toISOString(),
+      });
+      rows.push({
+        id: priorFailedRowId,
+        post_id: POST,
+        social_account_id: THREADS_ACCOUNT_2,
+        platform: "threads",
+        status: "failed",
+        platform_post_id: null,
+        platform_post_url: null,
+        error_message: "old failure",
+        response_data: {},
+        created_at: new Date(Date.now() - 1800_000).toISOString(),
+      });
+
+      post.metadata = {
+        selected_account_ids: [THREADS_ACCOUNT],
+        webhook_url: "https://webhook-fixture.invalid/hook",
+      };
+
+      const response = await invoke({ at: 1_000 });
+      assertEquals(response.status, 200);
+      const intent = (post.metadata as Record<string, unknown>).final_notification_intent as Record<string, unknown>;
+      assert(intent);
+      const authorizedIds = intent.authorized_platform_post_ids as string[];
+      assert(authorizedIds.includes(priorSuccessRowId));
+      assert(!authorizedIds.includes(priorFailedRowId));
     });
 
     assertEquals(unexpected, []);

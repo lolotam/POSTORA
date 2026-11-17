@@ -14,6 +14,7 @@ AS $$
     - 'settlement_rollup_processing_started_at'
     - 'attempt_target_account_ids'
     - 'attempt_retained_account_ids'
+    - 'attempt_retained_platform_post_ids'
     - 'attempt_started_at'
     - 'attempt_scope'
     - 'final_notification_intent';
@@ -392,7 +393,7 @@ CREATE OR REPLACE FUNCTION public.record_threads_image_checkpoint(
   p_expected_processing_started_at timestamptz,
   p_expected_content jsonb,
   p_target_account_ids uuid[],
-  p_retained_account_ids uuid[]
+  p_retained_platform_post_ids uuid[]
 )
 RETURNS uuid
 LANGUAGE plpgsql
@@ -407,7 +408,12 @@ DECLARE
   v_same_attempt_rollup boolean;
   v_existing_status text;
   v_targets uuid[];
+  v_persisted_targets uuid[];
   v_retained uuid[];
+  v_persisted_retained uuid[];
+  v_resolved_retained uuid[] := ARRAY[]::uuid[];
+  v_row_match uuid;
+  r_elem record;
 BEGIN
   IF p_expected_processing_started_at IS NULL
      OR p_response_data #>> '{deferred,kind}' IS DISTINCT FROM 'threads'
@@ -497,21 +503,30 @@ BEGIN
       USING ERRCODE = 'serialization_failure';
   END IF;
 
-  -- Persist authoritative original target scope and retained successes under parent lock
+  -- 1. Target scope resolution & validation
   IF (v_post.metadata ->> 'attempt_started_at')::timestamptz IS NOT DISTINCT FROM p_expected_processing_started_at
      AND jsonb_typeof(v_post.metadata -> 'attempt_target_account_ids') = 'array'
      AND jsonb_array_length(v_post.metadata -> 'attempt_target_account_ids') > 0 THEN
-    SELECT array_agg(elem::uuid) INTO v_targets
+    SELECT array_agg(elem::uuid) INTO v_persisted_targets
       FROM jsonb_array_elements_text(v_post.metadata -> 'attempt_target_account_ids') AS elem;
-    -- Explicit scope arguments must match frozen persisted scope; reject mismatch instead of override
     IF p_target_account_ids IS NOT NULL AND cardinality(p_target_account_ids) > 0 THEN
-      IF (SELECT count(*) FROM unnest(p_target_account_ids) x WHERE x NOT IN (SELECT unnest(v_targets))) > 0
-         OR cardinality(p_target_account_ids) <> cardinality(v_targets) THEN
+      IF (SELECT count(*) FROM unnest(p_target_account_ids) x WHERE x NOT IN (SELECT unnest(v_persisted_targets))) > 0
+         OR (SELECT count(*) FROM unnest(v_persisted_targets) x WHERE x NOT IN (SELECT unnest(p_target_account_ids))) > 0
+         OR cardinality(p_target_account_ids) <> cardinality(v_persisted_targets) THEN
         RAISE EXCEPTION 'record_threads_image_checkpoint: target account scope mismatch with persisted attempt scope'
           USING ERRCODE = 'data_exception';
       END IF;
     END IF;
+    v_targets := v_persisted_targets;
   ELSIF p_target_account_ids IS NOT NULL AND cardinality(p_target_account_ids) > 0 THEN
+    IF EXISTS (SELECT 1 FROM unnest(p_target_account_ids) x WHERE x IS NULL) THEN
+      RAISE EXCEPTION 'record_threads_image_checkpoint: null element in target scope'
+        USING ERRCODE = 'data_exception';
+    END IF;
+    IF (SELECT count(DISTINCT x) FROM unnest(p_target_account_ids) x) <> cardinality(p_target_account_ids) THEN
+      RAISE EXCEPTION 'record_threads_image_checkpoint: duplicate target account in scope'
+        USING ERRCODE = 'data_exception';
+    END IF;
     v_targets := p_target_account_ids;
   ELSIF jsonb_typeof(v_post.metadata -> 'selected_account_ids') = 'array'
         AND jsonb_array_length(v_post.metadata -> 'selected_account_ids') > 0 THEN
@@ -545,21 +560,67 @@ BEGIN
       USING ERRCODE = 'foreign_key_violation';
   END IF;
 
-  -- Retained successful results from prior attempt(s)
+  -- 2. Retained successful results resolution & validation
+  IF p_retained_platform_post_ids IS NOT NULL THEN
+    IF EXISTS (SELECT 1 FROM unnest(p_retained_platform_post_ids) x WHERE x IS NULL) THEN
+      RAISE EXCEPTION 'record_threads_image_checkpoint: null element in retained scope'
+        USING ERRCODE = 'data_exception';
+    END IF;
+
+    FOR r_elem IN SELECT unnest(p_retained_platform_post_ids) AS rid LOOP
+      -- 1) Exact platform_posts row id
+      SELECT rpp.id INTO v_row_match
+        FROM public.platform_posts rpp
+        JOIN public.social_accounts rsa ON rsa.id = rpp.social_account_id
+       WHERE rpp.id = r_elem.rid
+         AND rpp.post_id = p_post_id
+         AND rpp.status = 'success'
+         AND rsa.user_id = v_post.user_id;
+
+      IF v_row_match IS NOT NULL THEN
+        v_resolved_retained := array_append(v_resolved_retained, v_row_match);
+      ELSE
+        -- 2) Legacy compat: social_accounts.id belonging to this user
+        SELECT rpp.id INTO v_row_match
+          FROM public.platform_posts rpp
+          JOIN public.social_accounts rsa ON rsa.id = rpp.social_account_id
+         WHERE rpp.social_account_id = r_elem.rid
+           AND rpp.post_id = p_post_id
+           AND rpp.status = 'success'
+           AND rsa.user_id = v_post.user_id
+         ORDER BY rpp.created_at DESC
+         LIMIT 1;
+
+        IF v_row_match IS NOT NULL THEN
+          v_resolved_retained := array_append(v_resolved_retained, v_row_match);
+        ELSE
+          RAISE EXCEPTION 'record_threads_image_checkpoint: retained result is not an authoritative success for this post'
+            USING ERRCODE = 'foreign_key_violation';
+        END IF;
+      END IF;
+    END LOOP;
+
+    SELECT coalesce(array_agg(DISTINCT x), ARRAY[]::uuid[]) INTO v_resolved_retained
+      FROM unnest(v_resolved_retained) x;
+  END IF;
+
   IF (v_post.metadata ->> 'attempt_started_at')::timestamptz IS NOT DISTINCT FROM p_expected_processing_started_at
-     AND jsonb_typeof(v_post.metadata -> 'attempt_retained_account_ids') = 'array'
-     AND jsonb_array_length(v_post.metadata -> 'attempt_retained_account_ids') > 0 THEN
-    SELECT array_agg(elem::uuid) INTO v_retained
-      FROM jsonb_array_elements_text(v_post.metadata -> 'attempt_retained_account_ids') AS elem;
-    IF p_retained_account_ids IS NOT NULL THEN
-      IF (SELECT count(*) FROM unnest(p_retained_account_ids) x WHERE x NOT IN (SELECT unnest(v_retained))) > 0
-         OR cardinality(p_retained_account_ids) <> cardinality(v_retained) THEN
-        RAISE EXCEPTION 'record_threads_image_checkpoint: retained account scope mismatch with persisted attempt scope'
+     AND jsonb_typeof(v_post.metadata -> 'attempt_retained_platform_post_ids') = 'array' THEN
+    SELECT array_agg(elem::uuid) INTO v_persisted_retained
+      FROM jsonb_array_elements_text(v_post.metadata -> 'attempt_retained_platform_post_ids') AS elem;
+    IF v_persisted_retained IS NULL THEN v_persisted_retained := ARRAY[]::uuid[]; END IF;
+
+    IF p_retained_platform_post_ids IS NOT NULL THEN
+      IF (SELECT count(*) FROM unnest(v_resolved_retained) x WHERE x NOT IN (SELECT unnest(v_persisted_retained))) > 0
+         OR (SELECT count(*) FROM unnest(v_persisted_retained) x WHERE x NOT IN (SELECT unnest(v_resolved_retained))) > 0
+         OR cardinality(v_resolved_retained) <> cardinality(v_persisted_retained) THEN
+        RAISE EXCEPTION 'record_threads_image_checkpoint: retained row scope mismatch with persisted attempt scope'
           USING ERRCODE = 'data_exception';
       END IF;
     END IF;
-  ELSIF p_retained_account_ids IS NOT NULL THEN
-    v_retained := p_retained_account_ids;
+    v_retained := v_persisted_retained;
+  ELSIF p_retained_platform_post_ids IS NOT NULL THEN
+    v_retained := v_resolved_retained;
   ELSE
     v_retained := ARRAY[]::uuid[];
   END IF;
@@ -568,28 +629,10 @@ BEGIN
     v_retained := ARRAY[]::uuid[];
   END IF;
 
-  -- Validate retained results structurally: must be successful rows belonging to this post and user
-  IF cardinality(v_retained) > 0 THEN
-    IF EXISTS (
-      SELECT 1 FROM unnest(v_retained) AS rid
-       WHERE NOT EXISTS (
-         SELECT 1 FROM public.platform_posts rpp
-           JOIN public.social_accounts rsa ON rsa.id = rpp.social_account_id
-          WHERE rpp.post_id = p_post_id
-            AND rpp.status = 'success'
-            AND (rpp.social_account_id = rid OR rpp.id = rid)
-            AND rsa.user_id = v_post.user_id
-       )
-    ) THEN
-      RAISE EXCEPTION 'record_threads_image_checkpoint: retained result is not an authoritative success for this post'
-        USING ERRCODE = 'foreign_key_violation';
-    END IF;
-  END IF;
-
   UPDATE public.posts
-     SET metadata = coalesce(metadata, '{}'::jsonb) || jsonb_build_object(
+     SET metadata = (coalesce(metadata, '{}'::jsonb) - 'attempt_retained_account_ids') || jsonb_build_object(
            'attempt_target_account_ids', to_jsonb(v_targets),
-           'attempt_retained_account_ids', to_jsonb(v_retained),
+           'attempt_retained_platform_post_ids', to_jsonb(v_retained),
            'attempt_started_at', p_expected_processing_started_at
          )
    WHERE id = p_post_id;
@@ -799,7 +842,12 @@ BEGIN
          )
    WHERE id = p_post_id;
 
-  RETURN jsonb_build_object('claimed', true, 'status', v_post.status, 'claim_id', v_claim_id);
+  RETURN jsonb_build_object(
+    'claimed', true,
+    'status', v_post.status,
+    'claim_id', v_claim_id,
+    'authorized_platform_post_ids', v_intent -> 'authorized_platform_post_ids'
+  );
 END;
 $$;
 
@@ -922,7 +970,8 @@ DECLARE
   v_marker text;
   v_notify boolean := true;
   v_target_account_ids uuid[];
-  v_retained_account_ids uuid[];
+  v_retained_row_ids uuid[];
+  v_authorized_row_ids uuid[];
 BEGIN
   IF p_expected_processing_started_at IS NULL THEN RETURN NULL; END IF;
 
@@ -967,7 +1016,8 @@ BEGIN
     RETURN jsonb_build_object(
       'status', v_post.status,
       'stale', NOT (v_post.status IN ('completed', 'failed')),
-      'notify', false
+      'notify', false,
+      'authorized_platform_post_ids', v_post.metadata #> '{final_notification_intent,authorized_platform_post_ids}'
     );
   END IF;
 
@@ -984,6 +1034,7 @@ BEGIN
     -- Explicit scope arguments must match frozen persisted scope; reject mismatch instead of override
     IF p_expected_account_ids IS NOT NULL AND cardinality(p_expected_account_ids) > 0 THEN
       IF (SELECT count(*) FROM unnest(p_expected_account_ids) x WHERE x NOT IN (SELECT unnest(v_target_account_ids))) > 0
+         OR (SELECT count(*) FROM unnest(v_target_account_ids) x WHERE x NOT IN (SELECT unnest(p_expected_account_ids))) > 0
          OR cardinality(p_expected_account_ids) <> cardinality(v_target_account_ids) THEN
         RETURN jsonb_build_object('status', v_post.status, 'stale', true, 'notify', false, 'error', 'scope_mismatch');
       END IF;
@@ -1006,17 +1057,17 @@ BEGIN
        AND a.platform = ANY(v_post.platforms);
   END IF;
 
-  -- Retained successful account IDs from prior attempt(s)
+  -- Retained successful platform post row IDs from prior attempt(s)
   IF (v_post.metadata ->> 'attempt_started_at')::timestamptz IS NOT DISTINCT FROM p_expected_processing_started_at
-     AND jsonb_typeof(v_post.metadata -> 'attempt_retained_account_ids') = 'array'
-     AND jsonb_array_length(v_post.metadata -> 'attempt_retained_account_ids') > 0 THEN
-    SELECT array_agg(elem::uuid) INTO v_retained_account_ids
-      FROM jsonb_array_elements_text(v_post.metadata -> 'attempt_retained_account_ids') AS elem;
+     AND jsonb_typeof(v_post.metadata -> 'attempt_retained_platform_post_ids') = 'array'
+     AND jsonb_array_length(v_post.metadata -> 'attempt_retained_platform_post_ids') > 0 THEN
+    SELECT array_agg(elem::uuid) INTO v_retained_row_ids
+      FROM jsonb_array_elements_text(v_post.metadata -> 'attempt_retained_platform_post_ids') AS elem;
   ELSE
-    v_retained_account_ids := ARRAY[]::uuid[];
+    v_retained_row_ids := ARRAY[]::uuid[];
   END IF;
 
-  -- Verify each target account has a durable row for this attempt or an explicitly retained success
+  -- Verify each target account has a durable row created/deferred in the CURRENT attempt
   IF v_target_account_ids IS NOT NULL AND cardinality(v_target_account_ids) > 0 THEN
     SELECT count(*) INTO v_missing
       FROM unnest(v_target_account_ids) AS target_acct(id)
@@ -1025,17 +1076,8 @@ BEGIN
         WHERE pp.post_id = p_post_id
           AND pp.social_account_id = target_acct.id
           AND (
-            (
-              pp.created_at >= p_expected_processing_started_at
-              OR (pp.response_data #>> '{deferred,attempt_started_at}')::timestamptz = p_expected_processing_started_at
-            )
-            OR (
-              pp.status = 'success'
-              AND (
-                target_acct.id = ANY(v_retained_account_ids)
-                OR pp.id = ANY(v_retained_account_ids)
-              )
-            )
+            pp.created_at >= p_expected_processing_started_at
+            OR (pp.response_data #>> '{deferred,attempt_started_at}')::timestamptz = p_expected_processing_started_at
           )
      );
     IF v_missing > 0 THEN
@@ -1043,7 +1085,7 @@ BEGIN
     END IF;
   END IF;
 
-  -- Count total, pending, and succeeded across this attempt plus retained successes ONLY for target/retained accounts
+  -- Count total, pending, and succeeded across this attempt + exact retained successes ONLY
   SELECT count(*),
          count(*) FILTER (WHERE status = 'pending'),
          count(*) FILTER (WHERE status = 'success')
@@ -1051,21 +1093,16 @@ BEGIN
     FROM public.platform_posts pp
    WHERE pp.post_id = p_post_id
      AND (
-       pp.social_account_id = ANY(v_target_account_ids)
-       OR pp.social_account_id = ANY(v_retained_account_ids)
-       OR pp.id = ANY(v_retained_account_ids)
-     )
-     AND (
        (
-         pp.created_at >= p_expected_processing_started_at
-         OR (pp.response_data #>> '{deferred,attempt_started_at}')::timestamptz = p_expected_processing_started_at
+         pp.social_account_id = ANY(v_target_account_ids)
+         AND (
+           pp.created_at >= p_expected_processing_started_at
+           OR (pp.response_data #>> '{deferred,attempt_started_at}')::timestamptz = p_expected_processing_started_at
+         )
        )
        OR (
-         pp.status = 'success'
-         AND (
-           pp.social_account_id = ANY(v_retained_account_ids)
-           OR pp.id = ANY(v_retained_account_ids)
-         )
+         pp.id = ANY(v_retained_row_ids)
+         AND pp.status = 'success'
        )
      );
 
@@ -1079,6 +1116,23 @@ BEGIN
 
   v_status := CASE WHEN v_succeeded > 0 THEN 'completed' ELSE 'failed' END;
 
+  SELECT array_agg(pp.id) INTO v_authorized_row_ids
+    FROM public.platform_posts pp
+   WHERE pp.post_id = p_post_id
+     AND (
+       (
+         pp.social_account_id = ANY(v_target_account_ids)
+         AND (
+           pp.created_at >= p_expected_processing_started_at
+           OR (pp.response_data #>> '{deferred,attempt_started_at}')::timestamptz = p_expected_processing_started_at
+         )
+       )
+       OR (
+         pp.id = ANY(v_retained_row_ids)
+         AND pp.status = 'success'
+       )
+     );
+
   UPDATE public.posts
      SET status = v_status,
          posted_at = CASE WHEN v_status = 'completed' THEN coalesce(posted_at, now()) ELSE posted_at END,
@@ -1087,12 +1141,18 @@ BEGIN
              'status', v_status,
              'attempt_started_at', p_expected_processing_started_at,
              'notified', false,
-             'created_at', now()
+             'created_at', now(),
+             'authorized_platform_post_ids', to_jsonb(v_authorized_row_ids)
            )
          )
    WHERE id = p_post_id;
 
-  RETURN jsonb_build_object('status', v_status, 'stale', false, 'notify', v_notify);
+  RETURN jsonb_build_object(
+    'status', v_status,
+    'stale', false,
+    'notify', v_notify,
+    'authorized_platform_post_ids', to_jsonb(v_authorized_row_ids)
+  );
 END;
 $$;
 

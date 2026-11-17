@@ -924,12 +924,14 @@ BEGIN
 
   row_id := public.record_threads_image_checkpoint(
     post_a05, acct_th, payload, claim_at, expected,
-    ARRAY[acct_th, acct_th2], ARRAY[acct_th2]
+    ARRAY[acct_th, acct_th2], ARRAY['f0000000-0000-4000-8000-0000000000f5'::uuid]
   );
   ASSERT (SELECT (metadata->'attempt_target_account_ids') = jsonb_build_array(acct_th::text, acct_th2::text) FROM public.posts WHERE id = post_a05),
     'T66 attempt_target_account_ids persisted in posts.metadata';
-  ASSERT (SELECT (metadata->'attempt_retained_account_ids') = jsonb_build_array(acct_th2::text) FROM public.posts WHERE id = post_a05),
-    'T66 attempt_retained_account_ids persisted in posts.metadata';
+  ASSERT (SELECT (metadata->'attempt_retained_platform_post_ids') = jsonb_build_array('f0000000-0000-4000-8000-0000000000f5') FROM public.posts WHERE id = post_a05),
+    'T66 attempt_retained_platform_post_ids persisted in posts.metadata';
+  ASSERT (SELECT (metadata ? 'attempt_retained_account_ids') FROM public.posts WHERE id = post_a05) = false,
+    'T66 attempt_retained_account_ids stripped from posts.metadata';
 
   -- T67: claim_deferred_publishes claims terminal post row when final notification intent is unconfirmed
   UPDATE public.posts
@@ -1025,14 +1027,25 @@ DECLARE
   p_t75 uuid := 'e0000000-0000-4000-8000-000000000075';
   p_t78 uuid := 'e0000000-0000-4000-8000-000000000078';
   p_t79 uuid := 'e0000000-0000-4000-8000-000000000079';
+  p_t80 uuid := 'e0000000-0000-4000-8000-000000000080';
+  p_t81 uuid := 'e0000000-0000-4000-8000-000000000081';
+  p_t82 uuid := 'e0000000-0000-4000-8000-000000000082';
   attempt_at timestamptz := now() - interval '5 minutes';
   fence_t75 jsonb;
   fence_t78 jsonb;
+  fence_t80 jsonb;
+  fence_t81 jsonb;
+  fence_t82 jsonb;
   payload jsonb;
   res jsonb;
   err_caught boolean;
   first_notification_claim uuid;
   recovered_notification_claim uuid;
+  row_s1 uuid := 'f0000000-0000-4000-8000-000000000081';
+  row_f1 uuid := 'f0000000-0000-4000-8000-000000000082';
+  row_curr uuid := 'f0000000-0000-4000-8000-000000000083';
+  row_foreign uuid := 'f0000000-0000-4000-8000-000000000084';
+  row_other_post uuid := 'f0000000-0000-4000-8000-000000000085';
 BEGIN
   -- Setup foreign user and accounts
   INSERT INTO auth.users (id, email) VALUES (foreign_id, 'foreign-user@example.invalid')
@@ -1051,7 +1064,7 @@ BEGIN
     jsonb_build_object(
       'attempt_started_at', attempt_at,
       'attempt_target_account_ids', jsonb_build_array(acct_1, acct_2),
-      'attempt_retained_account_ids', '[]'::jsonb
+      'attempt_retained_platform_post_ids', '[]'::jsonb
     ));
 
   fence_t75 := jsonb_build_object(
@@ -1188,6 +1201,172 @@ BEGIN
   UPDATE public.posts SET status = 'failed' WHERE id = p_t79;
   ASSERT (SELECT metadata -> 'final_notification_intent' FROM public.posts WHERE id = p_t79) IS NULL,
     'T79 cancellation trigger strips final_notification_intent on status divergence';
+
+  -- =========================================================================
+  -- T80: Two historical rows (same account): one explicit retained success +
+  -- another failed/pending row. Unlisted row must not change final status,
+  -- hold processing, or appear in final payload.
+  -- =========================================================================
+  INSERT INTO public.posts (id, user_id, caption, platforms, status, processing_started_at, source, metadata)
+  VALUES (p_t80, owner_id, 't80 post', ARRAY['threads'], 'processing', attempt_at, 'manual', '{}'::jsonb);
+
+  fence_t80 := jsonb_build_object(
+    'user_id', owner_id, 'caption', 't80 post', 'media_file_ids', NULL,
+    'metadata', '{}'::jsonb,
+    'platforms', ARRAY['threads'], 'scheduled_at', NULL, 'publish_requested_at', NULL, 'source', 'manual'
+  );
+
+  -- Account 1: historical successful row (to be explicitly retained)
+  INSERT INTO public.platform_posts (id, post_id, social_account_id, platform, status, created_at, response_data)
+  VALUES (row_s1, p_t80, acct_1, 'threads', 'success', attempt_at - interval '2 hours',
+    jsonb_build_object('deferred', jsonb_build_object('kind', 'threads', 'media_type', 'IMAGE', 'attempt_started_at', attempt_at - interval '2 hours')));
+
+  -- Account 1: another historical row that is failed (must NOT be included or hold processing)
+  INSERT INTO public.platform_posts (id, post_id, social_account_id, platform, status, created_at, response_data)
+  VALUES (row_f1, p_t80, acct_1, 'threads', 'failed', attempt_at - interval '1 hour',
+    jsonb_build_object('error', 'prior attempt failure'));
+
+  payload := jsonb_build_object(
+    'deferred', jsonb_build_object(
+      'kind', 'threads', 'media_type', 'IMAGE', 'container_id', 'c-t80',
+      'attempt_started_at', attempt_at, 'attempts', 0, 'first_deferred_at', attempt_at,
+      'give_up_at', attempt_at + interval '30 minutes', 'next_check_at', attempt_at + interval '1 minute'
+    ),
+    'content_fence', fence_t80,
+    'account_updated_at', (SELECT updated_at FROM public.social_accounts WHERE id = acct_2)
+  );
+
+  -- Checkpoint for acct_2 explicitly retains row_s1
+  row_curr := public.record_threads_image_checkpoint(
+    p_t80, acct_2, payload, attempt_at, fence_t80,
+    ARRAY[acct_2], ARRAY[row_s1]
+  );
+
+  -- Settled to success after checkpoint
+  UPDATE public.platform_posts SET status = 'success' WHERE id = row_curr;
+
+  ASSERT (SELECT (metadata->'attempt_retained_platform_post_ids') = jsonb_build_array(row_s1::text) FROM public.posts WHERE id = p_t80),
+    'T80 metadata persists exact row_s1 as retained platform post';
+
+  res := public.finalize_threads_image_attempt(p_t80, attempt_at, fence_t80, ARRAY[acct_2]);
+  ASSERT res ->> 'status' = 'completed' AND (res ->> 'notify')::boolean = true,
+    format('T80 finalizer completes without being blocked by unlisted failed row (got %s)', res);
+  ASSERT res -> 'authorized_platform_post_ids' = jsonb_build_array(row_s1::text, row_curr::text)
+      OR res -> 'authorized_platform_post_ids' = jsonb_build_array(row_curr::text, row_s1::text),
+    format('T80 authorized platform post IDs contains only row_s1 and row_curr, excluding unlisted row_f1 (got %s)', res -> 'authorized_platform_post_ids');
+
+  -- Also verify claim_threads_image_notification returns authorized_platform_post_ids
+  res := public.claim_threads_image_notification(p_t80, attempt_at, 'completed', fence_t80, interval '3 minutes');
+  ASSERT (res ->> 'claimed')::boolean = true, 'T80 notification claimed';
+  ASSERT res -> 'authorized_platform_post_ids' = jsonb_build_array(row_s1::text, row_curr::text)
+      OR res -> 'authorized_platform_post_ids' = jsonb_build_array(row_curr::text, row_s1::text),
+    format('T80 claim notification returns durable authorized_platform_post_ids (got %s)', res -> 'authorized_platform_post_ids');
+
+  -- =========================================================================
+  -- T81: Foreign post / foreign tenant / non-success row passed as retained
+  -- is strictly refused.
+  -- =========================================================================
+  INSERT INTO public.posts (id, user_id, caption, platforms, status, processing_started_at, source, metadata)
+  VALUES (p_t81, owner_id, 't81 post', ARRAY['threads'], 'processing', attempt_at, 'manual', '{}'::jsonb);
+
+  fence_t81 := jsonb_build_object(
+    'user_id', owner_id, 'caption', 't81 post', 'media_file_ids', NULL,
+    'metadata', '{}'::jsonb,
+    'platforms', ARRAY['threads'], 'scheduled_at', NULL, 'publish_requested_at', NULL, 'source', 'manual'
+  );
+
+  -- Row on other post (p_t80)
+  INSERT INTO public.platform_posts (id, post_id, social_account_id, platform, status, created_at)
+  VALUES (row_other_post, p_t80, acct_1, 'threads', 'success', attempt_at - interval '1 hour');
+
+  payload := jsonb_build_object(
+    'deferred', jsonb_build_object(
+      'kind', 'threads', 'media_type', 'IMAGE', 'container_id', 'c-t81',
+      'attempt_started_at', attempt_at, 'attempts', 0, 'first_deferred_at', attempt_at,
+      'give_up_at', attempt_at + interval '30 minutes', 'next_check_at', attempt_at + interval '1 minute'
+    ),
+    'content_fence', fence_t81,
+    'account_updated_at', (SELECT updated_at FROM public.social_accounts WHERE id = acct_1)
+  );
+
+  -- 1) Foreign post row rejected
+  err_caught := false;
+  BEGIN
+    PERFORM public.record_threads_image_checkpoint(
+      p_t81, acct_1, payload, attempt_at, fence_t81,
+      ARRAY[acct_1], ARRAY[row_other_post]
+    );
+  EXCEPTION WHEN OTHERS THEN
+    err_caught := true;
+  END;
+  ASSERT err_caught, 'T81 foreign post row rejected as retained platform post';
+
+  -- 2) Failed row on same post rejected
+  INSERT INTO public.platform_posts (id, post_id, social_account_id, platform, status, created_at)
+  VALUES ('f0000000-0000-4000-8000-000000000086', p_t81, acct_2, 'threads', 'failed', attempt_at - interval '10 minutes');
+  err_caught := false;
+  BEGIN
+    PERFORM public.record_threads_image_checkpoint(
+      p_t81, acct_1, payload, attempt_at, fence_t81,
+      ARRAY[acct_1], ARRAY['f0000000-0000-4000-8000-000000000086'::uuid]
+    );
+  EXCEPTION WHEN OTHERS THEN
+    err_caught := true;
+  END;
+  ASSERT err_caught, 'T81 non-success row rejected as retained platform post';
+
+  -- 3) Foreign tenant account row rejected
+  INSERT INTO public.platform_posts (id, post_id, social_account_id, platform, status, created_at)
+  VALUES (row_foreign, p_t81, acct_foreign, 'threads', 'success', attempt_at - interval '10 minutes');
+  err_caught := false;
+  BEGIN
+    PERFORM public.record_threads_image_checkpoint(
+      p_t81, acct_1, payload, attempt_at, fence_t81,
+      ARRAY[acct_1], ARRAY[row_foreign]
+    );
+  EXCEPTION WHEN OTHERS THEN
+    err_caught := true;
+  END;
+  ASSERT err_caught, 'T81 foreign tenant account row rejected as retained platform post';
+
+  -- =========================================================================
+  -- T82: Legacy 5-arg wrapper on a new attempt initializes clean scope
+  -- without inheriting stale scope.
+  -- =========================================================================
+  INSERT INTO public.posts (id, user_id, caption, platforms, status, processing_started_at, source, metadata)
+  VALUES (p_t82, owner_id, 't82 post', ARRAY['threads'], 'processing', attempt_at, 'manual',
+    jsonb_build_object(
+      'selected_account_ids', jsonb_build_array(acct_1),
+      'attempt_started_at', attempt_at - interval '1 day',
+      'attempt_target_account_ids', jsonb_build_array(acct_1, acct_2),
+      'attempt_retained_platform_post_ids', jsonb_build_array(row_s1)
+    ));
+
+  fence_t82 := jsonb_build_object(
+    'user_id', owner_id, 'caption', 't82 post', 'media_file_ids', NULL,
+    'metadata', jsonb_build_object('selected_account_ids', jsonb_build_array(acct_1)),
+    'platforms', ARRAY['threads'], 'scheduled_at', NULL, 'publish_requested_at', NULL, 'source', 'manual'
+  );
+
+  payload := jsonb_build_object(
+    'deferred', jsonb_build_object(
+      'kind', 'threads', 'media_type', 'IMAGE', 'container_id', 'c-t82',
+      'attempt_started_at', attempt_at, 'attempts', 0, 'first_deferred_at', attempt_at,
+      'give_up_at', attempt_at + interval '30 minutes', 'next_check_at', attempt_at + interval '1 minute'
+    ),
+    'content_fence', fence_t82,
+    'account_updated_at', (SELECT updated_at FROM public.social_accounts WHERE id = acct_1)
+  );
+
+  -- Calling 5-arg wrapper with fresh attempt_at
+  PERFORM public.record_threads_image_checkpoint(
+    p_t82, acct_1, payload, attempt_at, fence_t82
+  );
+
+  ASSERT (SELECT (metadata->'attempt_target_account_ids') = jsonb_build_array(acct_1::text) FROM public.posts WHERE id = p_t82),
+    'T82 5-arg wrapper sets single target account on fresh attempt';
+  ASSERT (SELECT (metadata->'attempt_retained_platform_post_ids') = '[]'::jsonb FROM public.posts WHERE id = p_t82),
+    'T82 5-arg wrapper clears retained platform post IDs on fresh attempt without stale inheritance';
 
 END $$;
 

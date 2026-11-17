@@ -499,6 +499,7 @@ export function normalizeThreadsInternalMetadata(metadata: Record<string, unknow
   delete normalized.settlement_rollup_processing_started_at;
   delete normalized.attempt_target_account_ids;
   delete normalized.attempt_retained_account_ids;
+  delete normalized.attempt_retained_platform_post_ids;
   delete normalized.attempt_started_at;
   delete normalized.attempt_scope;
   delete normalized.final_notification_intent;
@@ -1592,11 +1593,19 @@ async function announceFinalPost(
 }
 
 /** The reads readPostOutcome needs, against the service-role client. */
-function postReaderFor(supabase: SupabaseClient): PostReader {
+function postReaderFor(supabase: SupabaseClient, authorizedPlatformPostIds?: string[] | null): PostReader {
   return {
     postStatus: (postId) => supabase.from("posts").select("status").eq("id", postId).maybeSingle(),
-    platformRows: (postId) =>
-      supabase.from("platform_posts").select("platform, status, platform_post_url, error_message, story_on_reel:response_data->story_recorded_on_reel_row").eq("post_id", postId).order("created_at"),
+    platformRows: (postId) => {
+      let query = supabase
+        .from("platform_posts")
+        .select("platform, status, platform_post_url, error_message, story_on_reel:response_data->story_recorded_on_reel_row")
+        .eq("post_id", postId);
+      if (Array.isArray(authorizedPlatformPostIds) && authorizedPlatformPostIds.length > 0) {
+        query = query.in("id", authorizedPlatformPostIds);
+      }
+      return query.order("created_at");
+    },
   };
 }
 
@@ -1622,14 +1631,24 @@ async function finishDeferredPost(
   thisRun: { results: PlatformResultSummary[]; hasSuccess: boolean; hasFailed: boolean },
   imageFence?: { processingStartedAt: string; content: Record<string, unknown> },
 ): Promise<{ finalStatus: string; notified: boolean }> {
-  let imageFinalization: { status: string; stale: boolean; notify: boolean } | null = null;
+  let imageFinalization: {
+    status: string;
+    stale: boolean;
+    notify: boolean;
+    authorizedPlatformPostIds?: string[];
+  } | null = null;
   if (imageFence) {
     const { data: finalized, error: finalizationError } = await supabase.rpc("finalize_threads_image_attempt", {
       p_post_id: post.id,
       p_expected_processing_started_at: imageFence.processingStartedAt,
       p_expected_content: imageFence.content,
     });
-    const finalization = finalized as { status?: unknown; stale?: unknown; notify?: unknown } | null;
+    const finalization = finalized as {
+      status?: unknown;
+      stale?: unknown;
+      notify?: unknown;
+      authorized_platform_post_ids?: unknown;
+    } | null;
     if (finalizationError || typeof finalization?.status !== "string" ||
       typeof finalization.stale !== "boolean" || typeof finalization.notify !== "boolean") {
       const logError = await writeLogRow(supabase, {
@@ -1640,7 +1659,22 @@ async function finishDeferredPost(
       if (logError) console.error("Threads image finalization refusal log failed:", logError);
       return { finalStatus: "processing", notified: false };
     }
-    imageFinalization = { status: finalization.status, stale: finalization.stale, notify: finalization.notify };
+    let authorizedIds: string[] | undefined = undefined;
+    if (Array.isArray(finalization.authorized_platform_post_ids)) {
+      authorizedIds = finalization.authorized_platform_post_ids.filter((id): id is string => typeof id === "string");
+    } else {
+      const metadata = (post.metadata ?? {}) as Record<string, unknown>;
+      const intent = metadata.final_notification_intent as Record<string, unknown> | undefined;
+      if (intent && Array.isArray(intent.authorized_platform_post_ids)) {
+        authorizedIds = intent.authorized_platform_post_ids.filter((id): id is string => typeof id === "string");
+      }
+    }
+    imageFinalization = {
+      status: finalization.status,
+      stale: finalization.stale,
+      notify: finalization.notify,
+      authorizedPlatformPostIds: authorizedIds,
+    };
     const metadata = (post.metadata ?? {}) as Record<string, unknown>;
     const unconfirmedNotification =
       metadata.final_notification_intent &&
@@ -1653,7 +1687,11 @@ async function finishDeferredPost(
     }
   }
 
-  const outcome = await readPostOutcome(postReaderFor(supabase), post.id, thisRun);
+  const outcome = await readPostOutcome(
+    postReaderFor(supabase, imageFinalization?.authorizedPlatformPostIds),
+    post.id,
+    thisRun,
+  );
   if (outcome.kind === "in_progress") return { finalStatus: "processing", notified: false };
   if (outcome.kind === "unknown") {
     console.error(`[process-post] ${outcome.error}`);
@@ -1661,7 +1699,17 @@ async function finishDeferredPost(
     if (logError) console.error("[process-post] could not log the unreadable post either:", logError);
     return { finalStatus: "processing", notified: false };
   }
-  if (outcome.degraded) console.warn(`[process-post] notifying with a partial read: ${outcome.degraded}`);
+  if (outcome.degraded) {
+    console.warn(`[process-post] notifying with a partial read: ${outcome.degraded}`);
+    if (imageFinalization) {
+      await writeLogRow(supabase, {
+        level: "error", category: "post", source: "process-post", user_id: post.user_id,
+        message: "Threads image final notification withheld because authorized platform post rows could not be completely read",
+        metadata: { event: "threads_image_notification_read_degraded", post_id: post.id, platform_post_id: platformPostId, degraded: outcome.degraded },
+      });
+      return { finalStatus: imageFinalization.status, notified: false };
+    }
+  }
   if (imageFinalization) {
     const notified = await announceFinalPost(supabase, post, imageFinalization.status, outcome.results, outcome.hasFailed, imageFence);
     return { finalStatus: imageFinalization.status, notified };
@@ -2181,20 +2229,24 @@ Deno.serve(async (req) => {
       }
     }
 
-    let retainedAccountIds: string[] = [];
+    let retainedPlatformPostIds: string[] = [];
     if (!resume) {
       const { data: priorSuccesses, error: priorSuccessesError } = await supabase
         .from("platform_posts")
-        .select("social_account_id")
+        .select("id, social_account_id")
         .eq("post_id", post_id)
         .eq("status", "success");
       if (priorSuccessesError) {
         console.error("Could not verify prior successful platform posts:", priorSuccessesError);
         return createErrorResponse("Could not verify prior successful platform posts for retry safety.", 503);
       }
-      retainedAccountIds = (priorSuccesses ?? [])
-        .map((r: { social_account_id?: string | null }) => r.social_account_id)
-        .filter((id: unknown): id is string => typeof id === "string" && !accounts.some((a) => a.id === id));
+      retainedPlatformPostIds = (priorSuccesses ?? [])
+        .filter((r: { id?: string | null; social_account_id?: string | null }) =>
+          typeof r.id === "string" &&
+          typeof r.social_account_id === "string" &&
+          !accounts.some((a) => a.id === r.social_account_id)
+        )
+        .map((r: { id: string }) => r.id);
     }
 
     const failMediaPreparation = async (message: string, statusCode = 503) => {
@@ -2549,7 +2601,7 @@ Deno.serve(async (req) => {
                 p_expected_processing_started_at: claim.processingStartedAt,
                 p_expected_content: expectedContent,
                 p_target_account_ids: accounts.map((a) => a.id),
-                p_retained_account_ids: retainedAccountIds,
+                p_retained_platform_post_ids: retainedPlatformPostIds,
               });
               if (error || typeof data !== "string" || !data) {
                 if (error && (
@@ -2968,7 +3020,12 @@ Deno.serve(async (req) => {
         p_expected_content: imageHandoff.content,
         p_expected_account_ids: accounts.map((a) => a.id),
       });
-      const finalization = finalized as { status?: unknown; stale?: unknown; notify?: unknown } | null;
+      const finalization = finalized as {
+        status?: unknown;
+        stale?: unknown;
+        notify?: unknown;
+        authorized_platform_post_ids?: unknown;
+      } | null;
       if (finalizationError || typeof finalization?.status !== "string" ||
         typeof finalization.stale !== "boolean" || typeof finalization.notify !== "boolean") {
         const logError = await writeLogRow(supabase, {
@@ -2988,14 +3045,26 @@ Deno.serve(async (req) => {
         });
         if (logError) console.error("Threads image handoff stale-state log failed:", logError);
       } else if (finalization.notify) {
-        const outcome = await readPostOutcome(postReaderFor(supabase), post_id, {
+        let authorizedPlatformPostIds: string[] | null = null;
+        if (Array.isArray(finalization.authorized_platform_post_ids)) {
+          authorizedPlatformPostIds = finalization.authorized_platform_post_ids.filter((id): id is string => typeof id === "string");
+        }
+        const outcome = await readPostOutcome(postReaderFor(supabase, authorizedPlatformPostIds), post_id, {
           results: platformResults,
           hasSuccess,
           hasFailed,
         });
-        const finalResults = outcome.kind === "terminal" ? outcome.results : platformResults;
-        const finalHasFailed = outcome.kind === "terminal" ? outcome.hasFailed : hasFailed;
-        await announceFinalPost(supabase, post, finalStatus, finalResults, finalHasFailed, imageHandoff);
+        if (outcome.kind === "terminal" && !outcome.degraded) {
+          await announceFinalPost(supabase, post, finalStatus, outcome.results, outcome.hasFailed, imageHandoff);
+        } else {
+          const degradedReason = outcome.kind === "terminal" ? outcome.degraded : outcome.kind === "unknown" ? outcome.error : "post still in progress";
+          console.warn(`[process-post] withholding Threads image managed notification: ${degradedReason}`);
+          await writeLogRow(supabase, {
+            level: "error", category: "post", source: "process-post", user_id: post.user_id,
+            message: "Threads image final notification withheld because authorized platform post rows could not be completely read",
+            metadata: { event: "threads_image_notification_read_degraded", post_id, reason: degradedReason },
+          });
+        }
       }
     } else if (hasDeferred) {
       // Legacy video/carousel pending behavior is unchanged.
@@ -3010,24 +3079,72 @@ Deno.serve(async (req) => {
           .eq("status", "processing")
           .select("id");
         if (updateError || (updated ?? []).length !== 1) {
-          const { data: postRecord } = await supabase
+          const { data: postRecord, error: readPostError } = await supabase
             .from("posts")
-            .select("status, processing_started_at, metadata")
+            .select("id, status, processing_started_at, posted_at, metadata, user_id, caption, media_file_ids, platforms, scheduled_at, publish_requested_at, source")
             .eq("id", post_id)
             .maybeSingle();
-          const meta = (postRecord?.metadata ?? {}) as Record<string, unknown>;
-          const authorizedRollup =
-            postRecord &&
-            postRecord.processing_started_at === claim.processingStartedAt &&
-            (postRecord.status === "completed" || postRecord.status === "failed") &&
-            meta.settlement_rollup_at &&
-            meta.settlement_rollup_processing_started_at === claim.processingStartedAt;
-          if (authorizedRollup) {
-            finalStatus = postRecord.status;
-            console.log(`Parent post already settled into ${finalStatus} by same-attempt sibling rollup`);
-          } else {
+          if (readPostError || !postRecord) {
+            await writeLogRow(supabase, {
+              level: "error", category: "post", source: "process-post", user_id: post.user_id,
+              message: "Could not read parent post state to verify sibling rollup restoration",
+              metadata: { event: "legacy_pending_rollup_read_failed", post_id, error: readPostError?.message ?? "Post record missing" },
+            });
             finalStatus = postRecord?.status ?? "canceled";
-            console.log("Parent status was canceled or modified; processing status not restored");
+          } else {
+            const meta = (postRecord.metadata ?? {}) as Record<string, unknown>;
+            const sameAttempt = postRecord.processing_started_at === claim.processingStartedAt;
+            const statusEligible = postRecord.status === "completed" || postRecord.status === "failed";
+            const rollupProvenance = Boolean(
+              meta.settlement_rollup_at &&
+              meta.settlement_rollup_processing_started_at === claim.processingStartedAt,
+            );
+            const contentOk = await hashRequest(threadsImageContentFence(postRecord as PostData)) === await hashRequest(threadsImageContentFence(post));
+
+            if (sameAttempt && statusEligible && rollupProvenance && contentOk) {
+              const { data: restored, error: restoreError } = await supabase
+                .from("posts")
+                .update({
+                  status: "processing",
+                  posted_at: hasSuccess ? (postRecord.posted_at || new Date().toISOString()) : postRecord.posted_at,
+                })
+                .eq("id", post_id)
+                .eq("processing_started_at", claim.processingStartedAt)
+                .eq("status", postRecord.status)
+                .select("id");
+              if (restoreError || (restored ?? []).length !== 1) {
+                await writeLogRow(supabase, {
+                  level: "warn", category: "post", source: "process-post", user_id: post.user_id,
+                  message: "Restoration of processing status for deferred sibling was refused by newer parent state",
+                  metadata: {
+                    event: "legacy_pending_restore_refused",
+                    post_id,
+                    prior_status: postRecord.status,
+                    error: restoreError?.message ?? "Condition did not match",
+                  },
+                });
+                finalStatus = postRecord.status;
+              } else {
+                finalStatus = "processing";
+                console.log(`Parent post status restored to processing from same-attempt sibling rollup (${postRecord.status})`);
+              }
+            } else {
+              await writeLogRow(supabase, {
+                level: "info", category: "post", source: "process-post", user_id: post.user_id,
+                message: "Parent post status not restored to processing because parent state was canceled, superseded, or modified",
+                metadata: {
+                  event: "legacy_pending_restore_skipped",
+                  post_id,
+                  current_status: postRecord.status,
+                  same_attempt: sameAttempt,
+                  status_eligible: statusEligible,
+                  rollup_provenance: rollupProvenance,
+                  content_match: contentOk,
+                },
+              });
+              finalStatus = postRecord.status ?? "canceled";
+              console.log("Parent status was canceled or modified; processing status not restored");
+            }
           }
         }
       } else {

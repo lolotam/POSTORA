@@ -83,6 +83,7 @@ export interface ThreadsImageNotificationClaim {
   claimed: boolean;
   claimId?: string;
   status?: string;
+  authorizedPlatformPostIds?: string[];
   error?: string | null;
 }
 
@@ -102,11 +103,12 @@ export async function claimThreadsImageNotification(
     p_lease: lease,
   });
   if (error) return { claimed: false, error: error.message ?? String(error) };
-  const res = data as { claimed?: boolean; claim_id?: string; status?: string; error?: string } | null;
+  const res = data as { claimed?: boolean; claim_id?: string; status?: string; authorized_platform_post_ids?: string[]; error?: string } | null;
   return {
     claimed: res?.claimed === true && typeof res.claim_id === "string" && res.claim_id.length > 0,
     claimId: res?.claim_id,
     status: res?.status,
+    authorizedPlatformPostIds: Array.isArray(res?.authorized_platform_post_ids) ? res.authorized_platform_post_ids : undefined,
     error: res?.error ?? null,
   };
 }
