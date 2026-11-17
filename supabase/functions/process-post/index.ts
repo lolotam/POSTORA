@@ -6511,7 +6511,7 @@ async function postToInstagramBusinessLogin(
         return null;
       }
       console.log(`[IG ${subtype}] platform_posts row settled: ${settled.id} (status=${status})`);
-      if (settled.id) recordResultId?.(settled.id);
+      recordResultId?.(settled.id);
       return settled.id;
     } catch (e) {
       console.error(`[IG ${subtype}] insert exception:`, e);

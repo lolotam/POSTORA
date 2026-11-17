@@ -461,7 +461,7 @@ Deno.test("registered process-post durably completes single-image Threads contai
       unexpected.push(`Unexpected Threads call ${request.method} ${url.pathname}`);
       throw new Error(unexpected.at(-1));
     }
-    if (url.hostname === "graph.facebook.com") {
+    if (url.hostname === "graph.facebook.com" || (url.hostname === "graph.instagram.com" && instagramFeedFailureMode !== "none")) {
       if (instagramFeedFailureMode !== "none") {
         if (request.method === "POST" && url.pathname.endsWith("/fixture-instagram-user/media")) {
           const body = await request.json();
@@ -2509,73 +2509,83 @@ Deno.test("registered process-post durably completes single-image Threads contai
         assertEquals({ creates, statusReads, publishes, settlements, recoveryClaims }, { creates: 0, statusReads: 0, publishes: 0, settlements: 0, recoveryClaims: 0 });
       });
     }
-    for (const order of ["none", "threads_first", "threads_last"] as const) {
-      for (const mode of ["error", "missing", "ok"] as const) {
-        await test.step(`live Instagram Story cannot hide an unrecorded feed failure (${mode}, ${order})`, async () => {
-          reset();
-          instagramFeedFailureMode = mode;
-          profileEmailEnabled = true;
-          const instagram = { ...threadsAccount(), id: THREADS_ACCOUNT_2, platform: "instagram", platform_user_id: "fixture-instagram-user" };
-          accounts = order === "none" ? [instagram] : order === "threads_first" ? [threadsAccount(), instagram] : [instagram, threadsAccount()];
-          post.platforms = order === "none" ? ["instagram"] : ["instagram", "threads"];
-          post.metadata = { ...post.metadata as Record<string, unknown>, selected_account_ids: accounts.map(account => account.id), instagram_post_type: ["story", "feed"] };
-          const background: Promise<unknown>[] = [];
-          const runtime = globalThis as Record<string, unknown>;
-          const previous = runtime.EdgeRuntime;
-          runtime.EdgeRuntime = { waitUntil: (promise: Promise<unknown>) => { background.push(promise); } };
-          try {
-            const response = await invoke();
-            await Promise.all(background);
-            assertEquals(response.status, mode === "ok" ? 200 : 503, await response.clone().text());
-            assertEquals(instagramStoryPublishes, 1);
-            assertEquals(rows.filter(row => row.response_data.ig_post_subtype === "story" && row.status === "success").length, 1);
-            assertEquals(closedFanoutCalls, mode === "ok" ? 1 : 0);
-            assertEquals(recoveryClaims, mode === "ok" && order === "none" ? 1 : 0);
-            if (mode !== "ok") {
-              assertEquals(deliveredNotifications.length, 0);
-              assertEquals((post.metadata as Record<string, unknown>).final_notified_at, undefined);
-              assert(logs.some(entry => (entry.metadata as Record<string, unknown>)?.event === "notification_fanout_write_failed"));
-              if (order !== "none") {
-                const before = { creates, statusReads, publishes, settlements };
-                clock = 181_000;
-                assertEquals(claimDeferredPublishes(10).length, 0);
-                let freshHandler: Handler | undefined;
-                const savedServe = Deno.serve;
-                Deno.serve = ((registered: Handler) => {
-                  freshHandler = registered;
-                  return { finished: Promise.resolve(), shutdown: () => Promise.resolve() };
-                }) as typeof Deno.serve;
-                try {
-                  if (order === "threads_first") {
-                    if (mode === "error") await import("./index.ts?incomplete-managed-first-error");
-                    else await import("./index.ts?incomplete-managed-first-missing");
-                  } else {
-                    if (mode === "error") await import("./index.ts?incomplete-managed-last-error");
-                    else await import("./index.ts?incomplete-managed-last-missing");
-                  }
-                } finally { Deno.serve = savedServe; }
-                const resumed = await freshHandler!(new Request(`${ORIGIN}/functions/v1/process-post`, {
-                  method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${SERVICE}` },
-                  body: JSON.stringify({ post_id: POST, resume_platform_post_id: IMAGE_ROW }),
-                }));
-                assertEquals(resumed.status, 200, await resumed.clone().text());
-                await Promise.all(background);
-                assertEquals(post.status, "processing");
+    for (const auth of ["facebook_login", "business_login"] as const) {
+      for (const order of ["none", "threads_first", "threads_last"] as const) {
+        for (const mode of ["error", "missing", "ok"] as const) {
+          await test.step(`live Instagram Story cannot hide an unrecorded feed failure (${auth}, ${mode}, ${order})`, async () => {
+            reset();
+            instagramFeedFailureMode = mode;
+            profileEmailEnabled = true;
+            const instagram = { ...threadsAccount(), id: THREADS_ACCOUNT_2, platform: "instagram", platform_user_id: "fixture-instagram-user", ig_auth_type: auth };
+            accounts = order === "none" ? [instagram] : order === "threads_first" ? [threadsAccount(), instagram] : [instagram, threadsAccount()];
+            post.platforms = order === "none" ? ["instagram"] : ["instagram", "threads"];
+            post.metadata = { ...post.metadata as Record<string, unknown>, selected_account_ids: accounts.map(account => account.id), instagram_post_type: ["story", "feed"] };
+            const background: Promise<unknown>[] = [];
+            const runtime = globalThis as Record<string, unknown>;
+            const previous = runtime.EdgeRuntime;
+            runtime.EdgeRuntime = { waitUntil: (promise: Promise<unknown>) => { background.push(promise); } };
+            try {
+              const response = await invoke();
+              await Promise.all(background);
+              assertEquals(response.status, mode === "ok" ? 200 : 503, await response.clone().text());
+              assertEquals(instagramStoryPublishes, 1);
+              assertEquals(rows.filter(row => row.response_data.ig_post_subtype === "story" && row.status === "success").length, 1);
+              assertEquals(closedFanoutCalls, mode === "ok" ? 1 : 0);
+              assertEquals(recoveryClaims, mode === "ok" && order === "none" ? 1 : 0);
+              if (mode !== "ok") {
                 assertEquals(deliveredNotifications.length, 0);
-                assertEquals((post.metadata as Record<string, unknown>).final_notification_intent, undefined);
-                assertEquals({ creates, statusReads, publishes, settlements }, before);
+                assertEquals((post.metadata as Record<string, unknown>).final_notified_at, undefined);
+                assert(logs.some(entry => (entry.metadata as Record<string, unknown>)?.event === "notification_fanout_write_failed"));
+                if (order !== "none") {
+                  const before = { creates, statusReads, publishes, settlements };
+                  clock = 181_000;
+                  assertEquals(claimDeferredPublishes(10).length, 0);
+                  let freshHandler: Handler | undefined;
+                  const savedServe = Deno.serve;
+                  Deno.serve = ((registered: Handler) => {
+                    freshHandler = registered;
+                    return { finished: Promise.resolve(), shutdown: () => Promise.resolve() };
+                  }) as typeof Deno.serve;
+                  try {
+                    if (auth === "business_login") {
+                      if (order === "threads_first") {
+                        if (mode === "error") await import("./index.ts?incomplete-business-first-error");
+                        else await import("./index.ts?incomplete-business-first-missing");
+                      } else {
+                        if (mode === "error") await import("./index.ts?incomplete-business-last-error");
+                        else await import("./index.ts?incomplete-business-last-missing");
+                      }
+                    } else if (order === "threads_first") {
+                      if (mode === "error") await import("./index.ts?incomplete-managed-first-error");
+                      else await import("./index.ts?incomplete-managed-first-missing");
+                    } else {
+                      if (mode === "error") await import("./index.ts?incomplete-managed-last-error");
+                      else await import("./index.ts?incomplete-managed-last-missing");
+                    }
+                  } finally { Deno.serve = savedServe; }
+                  const resumed = await freshHandler!(new Request(`${ORIGIN}/functions/v1/process-post`, {
+                    method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${SERVICE}` },
+                    body: JSON.stringify({ post_id: POST, resume_platform_post_id: IMAGE_ROW }),
+                  }));
+                  assertEquals(resumed.status, 200, await resumed.clone().text());
+                  await Promise.all(background);
+                  assertEquals(post.status, "processing");
+                  assertEquals(deliveredNotifications.length, 0);
+                  assertEquals((post.metadata as Record<string, unknown>).final_notification_intent, undefined);
+                  assertEquals({ creates, statusReads, publishes, settlements }, before);
+                }
+              } else {
+                const notice = deliveredNotifications.find(entry => entry.event === "post.completed")!;
+                const body = notice.body as { data: { platform_results_list: Array<{ status: string }> } };
+                assertEquals(body.data.platform_results_list.map(row => row.status).sort(), order === "none" ? ["failed", "success"] : ["failed", "success", "success"]);
+                assertEquals(deliveredNotifications.filter(entry => entry.event === "email.post_failed").length, 1);
               }
-            } else {
-              const notice = deliveredNotifications.find(entry => entry.event === "post.completed")!;
-              const body = notice.body as { data: { platform_results_list: Array<{ status: string }> } };
-              assertEquals(body.data.platform_results_list.map(row => row.status).sort(), order === "none" ? ["failed", "success"] : ["failed", "success", "success"]);
-              assertEquals(deliveredNotifications.filter(entry => entry.event === "email.post_failed").length, 1);
+            } finally {
+              if (previous === undefined) delete runtime.EdgeRuntime;
+              else runtime.EdgeRuntime = previous;
             }
-          } finally {
-            if (previous === undefined) delete runtime.EdgeRuntime;
-            else runtime.EdgeRuntime = previous;
-          }
-        });
+          });
+        }
       }
     }
     for (const mode of ["ok", "read_error", "missing_row", "refreshed", "changed_status"] as const) {
