@@ -1601,7 +1601,7 @@ async function announceFinalPost(
       }
       {
         const outcome = await readPostOutcome(
-          postReaderFor(supabase, claim.authorizedPlatformPostIds, claim.authorizedPlatformPostStatuses),
+          postReaderFor(supabase, claim.authorizedPlatformPostIds, claim.authorizedPlatformPostStatuses, imageFence),
           post.id,
           { results: platformResults, hasSuccess: finalStatus === "completed", hasFailed },
         );
@@ -1692,9 +1692,28 @@ async function announceFinalPost(
 }
 
 /** The reads readPostOutcome needs, against the service-role client. */
-function postReaderFor(supabase: SupabaseClient, authorizedPlatformPostIds?: string[] | null, expectedStatuses?: Record<string, string>): PostReader {
+function postReaderFor(
+  supabase: SupabaseClient,
+  authorizedPlatformPostIds?: string[] | null,
+  expectedStatuses?: Record<string, string>,
+  imageFence?: { processingStartedAt: string; content: Record<string, unknown> },
+): PostReader {
   return {
-    postStatus: (postId) => supabase.from("posts").select("status").eq("id", postId).maybeSingle(),
+    postStatus: async (postId) => {
+      const result = await supabase.from("posts").select(imageFence ? "*" : "status").eq("id", postId).maybeSingle();
+      if (!result.error && result.data && imageFence) {
+        const current = result.data as PostData;
+        const expectedContent = {
+          ...imageFence.content,
+          metadata: normalizeThreadsInternalMetadata(imageFence.content.metadata as Record<string, unknown> | null | undefined),
+        };
+        if (Date.parse(current.processing_started_at ?? "") !== Date.parse(imageFence.processingStartedAt) ||
+          await hashRequest(threadsImageContentFence(current)) !== await hashRequest(expectedContent)) {
+          return { data: null, error: { message: "Managed notification attempt or content changed before dispatch" } };
+        }
+      }
+      return result;
+    },
     platformRows: async (postId) => {
       let query = supabase
         .from("platform_posts")

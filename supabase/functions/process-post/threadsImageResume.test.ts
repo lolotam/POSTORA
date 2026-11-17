@@ -199,7 +199,7 @@ Deno.test("registered process-post durably completes single-image Threads contai
   let beforeLegacyRestore: (() => void) | null = null;
   let legacyRestoreFailure = false;
   let legacyNotificationClaimFailure: "none" | "read" | "update" = "none";
-  let notificationScopeMode: "ok" | "missing" | "empty" | "deleted" | "changed" | "parent_changed" = "ok";
+  let notificationScopeMode: "ok" | "missing" | "empty" | "deleted" | "changed" | "parent_changed" | "content_changed" | "settings_changed" | "attempt_changed" | "content_read_error" = "ok";
   const unexpected: string[] = [];
 
   const threadsAccount = (): Account => ({
@@ -479,6 +479,9 @@ Deno.test("registered process-post durably completes single-image Threads contai
       }
       if (legacyNotificationClaimFailure === "read" && url.searchParams.get("select") === "metadata,processing_started_at") {
         return Response.json({ message: "fixture legacy marker read unavailable" }, { status: 500 });
+      }
+      if (notificationScopeMode === "content_read_error" && finalNotificationClaims > 0 && url.searchParams.get("select") === "*") {
+        return Response.json({ message: "fixture notification content read unavailable" }, { status: 500 });
       }
       if (parentReadError && url.searchParams.get("select") !== "*") {
         return Response.json({ message: "fixture parent read failure" }, { status: 500 });
@@ -773,6 +776,9 @@ Deno.test("registered process-post durably completes single-image Threads contai
       if (notificationScopeMode === "deleted") rows = rows.filter(row => row.id !== authorizedIds[0]);
       if (notificationScopeMode === "changed") rows.find(row => row.id === authorizedIds[0])!.status = "failed";
       if (notificationScopeMode === "parent_changed") post.status = post.status === "completed" ? "failed" : "completed";
+      if (notificationScopeMode === "content_changed") post.caption = "Owner edited caption after notification claim";
+      if (notificationScopeMode === "settings_changed") post.metadata = { ...meta, instagram_share_to_feed: false };
+      if (notificationScopeMode === "attempt_changed") post.processing_started_at = new Date(BASE_CLOCK + clock + 86_400_000).toISOString();
       return Response.json({
         claimed: true,
         status: post.status,
@@ -2170,7 +2176,7 @@ Deno.test("registered process-post durably completes single-image Threads contai
       assert(!deliveredBody.includes("old failure"));
     });
 
-    for (const mode of ["missing", "empty", "deleted", "changed", "parent_changed"] as const) {
+    for (const mode of ["missing", "empty", "deleted", "changed", "parent_changed", "content_changed", "settings_changed", "attempt_changed", "content_read_error"] as const) {
       for (const resumed of [false, true]) {
         await test.step(`managed notification refuses ${mode} leased result scope (${resumed ? "resumed" : "original"})`, async () => {
           reset();
