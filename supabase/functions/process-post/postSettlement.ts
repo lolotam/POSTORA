@@ -1,8 +1,9 @@
 /**
  * What a post looks like once a deferred account has been settled, for notifications.
  *
- * A resumed run settles one account's row; the settle RPC rolls the post up when the last
- * pending row becomes terminal. That run then has to tell the user about the whole post, not
+ * A resumed run settles one account's row. Legacy settlement rolls the post up when the last
+ * pending row becomes terminal; a managed Threads image instead uses its fenced attempt
+ * finalizer before this read. That run then has to tell the user about the whole post, not
  * just its own account, and has to do it even if the read that finds out hits a database
  * hiccup: the row is already settled, the reconciler will never come back to it, so a
  * notification dropped here is dropped for good.

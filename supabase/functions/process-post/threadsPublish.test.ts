@@ -84,18 +84,82 @@ Deno.test("the image publish guard runs before sending and marks every unknown o
 
 for (const markDelay of [6000, 8000]) Deno.test(`publish uses the budget remaining after a ${markDelay}ms durable marker write`, async () => {
   let clock = 0;
+  let releases = 0;
   const observedTimeouts: number[] = [];
   const operation = () => publishThreadsContainer((timeout) => {
     observedTimeouts.push(timeout);
     return Promise.resolve({ id: "published-image" });
   }, "image-1", "threads", 10_000, () => clock, {
     beforeSend: () => { clock += markDelay; return Promise.resolve(); },
+    onDefinitelyUnsent: () => { releases++; return Promise.resolve(true); },
   });
   if (markDelay === 8000) {
     await assertRejects(operation, ContainerStillProcessing);
     assertEquals(observedTimeouts, []);
+    assertEquals(releases, 1);
   } else {
     assertEquals(await operation(), { id: "published-image" });
     assertEquals(observedTimeouts, [4000]);
+    assertEquals(releases, 0);
   }
 });
+
+Deno.test("an unconfirmed definitely-unsent release stays fail-closed without sending", async () => {
+  for (const released of [false, Promise.reject(new Error("lost release acknowledgement"))]) {
+    let sends = 0;
+    let clock = 0;
+    await assertRejects(() => publishThreadsContainer(() => {
+      sends++;
+      return Promise.resolve({ id: "must-not-send" });
+    }, "image-1", "threads", 10_000, () => clock, {
+      beforeSend: () => { clock = 8_000; return Promise.resolve(); },
+      onDefinitelyUnsent: () => typeof released === "boolean" ? Promise.resolve(released) : released,
+    }), ThreadsCheckpointUnavailable);
+    assertEquals(sends, 0);
+  }
+});
+
+Deno.test("malformed error payloads route to uncertainty; definitive errors reject", async () => {
+  const malformedPayloads = [
+    { error: "bad" },
+    { error: true },
+    { error: [] },
+    { error: {} },
+    { error: { message: "" } },
+  ];
+
+  for (const payload of malformedPayloads) {
+    let unknownCalls = 0;
+    await assertRejects(
+      () =>
+        publishThreadsContainer(
+          () => Promise.resolve(payload),
+          "container-malformed",
+          "threads",
+          10_000,
+          () => 0,
+          { onUnknown: () => { unknownCalls++; } },
+        ),
+      ContainerStillProcessing,
+    );
+    assertEquals(unknownCalls, 1);
+  }
+
+  // Definitive explicit provider error throws Error and does NOT call onUnknown
+  let unknownCalls = 0;
+  await assertRejects(
+    () =>
+      publishThreadsContainer(
+        () => Promise.resolve({ error: { message: "Invalid OAuth access token", code: 190 } }),
+        "container-explicit",
+        "threads",
+        10_000,
+        () => 0,
+        { onUnknown: () => { unknownCalls++; } },
+      ),
+    Error,
+    "Threads publish error: Invalid OAuth access token",
+  );
+  assertEquals(unknownCalls, 0);
+});
+

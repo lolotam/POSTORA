@@ -3,14 +3,19 @@ import type { GraphResponse } from "./graphResponse.ts";
 
 /** A pending checkpoint must survive an uncertain write; never settle it failed. */
 export class ThreadsCheckpointUnavailable extends Error {}
+export class ThreadsCheckpointCanceled extends ThreadsCheckpointUnavailable {}
 
-export type ThreadsImageCheckpoint = (deferral: Deferral) => Promise<{ platformPostId: string; responseData: Record<string, unknown> }>;
+export type ThreadsImageCheckpoint = (deferral: Deferral) => Promise<{
+  platformPostId: string;
+  responseData: Record<string, unknown>;
+  execution?: ResumeContext | null;
+}>;
 
 /** Persist a new image before its first status read; an uncertain acknowledgement is not retryable creation. */
 export async function checkpointThreadsImage(
   checkpoint: ThreadsImageCheckpoint | undefined,
   deferral: Deferral,
-): Promise<{ platformPostId: string; responseData: Record<string, unknown> }> {
+): Promise<{ platformPostId: string; responseData: Record<string, unknown>; execution?: ResumeContext | null }> {
   if (!checkpoint || deferral.media_type !== "IMAGE" || !deferral.container_id) {
     throw new ThreadsCheckpointUnavailable("Threads image checkpoint unavailable; nothing was published");
   }
@@ -46,6 +51,8 @@ export async function threadsParentContainer(resume: ResumeContext | null, creat
 export interface ThreadsPublishGuards {
   /** The image path durably claims its one send here, before the provider request. */
   beforeSend?: () => Promise<void>;
+  /** A proven pre-send deadline may remove only the matching durable marker; false stays fail-closed. */
+  onDefinitelyUnsent?: () => Promise<boolean>;
   /** A timeout, transport loss or malformed success answer leaves an explicit uncertain outcome. */
   onUnknown?: () => void;
 }
@@ -63,7 +70,21 @@ export async function publishThreadsContainer(
   if (timeoutMs < 3000) throw new ContainerStillProcessing(kind, containerId);
   await guards.beforeSend?.();
   timeoutMs = Math.min(20_000, deadlineMs - now());
-  if (timeoutMs < 3000) throw new ContainerStillProcessing(kind, containerId);
+  if (timeoutMs < 3000) {
+    if (guards.onDefinitelyUnsent) {
+      let released = false;
+      try {
+        released = await guards.onDefinitelyUnsent();
+      } catch (error) {
+        if (error instanceof ThreadsCheckpointUnavailable) throw error;
+        throw new ThreadsCheckpointUnavailable("Threads image unsent-marker release could not be confirmed; nothing was sent");
+      }
+      if (!released) {
+        throw new ThreadsCheckpointUnavailable("Threads image unsent-marker release was refused; nothing was sent");
+      }
+    }
+    throw new ContainerStillProcessing(kind, containerId);
+  }
   let payload: unknown;
   try {
     payload = await publish(timeoutMs);
@@ -77,7 +98,18 @@ export async function publishThreadsContainer(
   }
   const response = payload as GraphResponse;
   if (typeof response.id === "string" && response.id) return { id: response.id };
-  if (response.error) throw new Error(`Threads publish error: ${response.error.message ?? "Meta rejected the publish"}`);
+  const errorObj = response.error;
+  if (
+    errorObj &&
+    typeof errorObj === "object" &&
+    !Array.isArray(errorObj) &&
+    ((typeof (errorObj as { message?: unknown }).message === "string" &&
+      (errorObj as { message: string }).message.trim().length > 0) ||
+      typeof (errorObj as { code?: unknown }).code === "number")
+  ) {
+    throw new Error(`Threads publish error: ${(errorObj as { message?: string }).message ?? "Meta rejected the publish"}`);
+  }
   guards.onUnknown?.();
   throw new ContainerStillProcessing(kind, containerId);
 }
+

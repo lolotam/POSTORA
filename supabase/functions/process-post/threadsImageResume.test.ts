@@ -4,9 +4,11 @@ import { hashRequest } from "../_shared/partnerApiIdempotency.ts";
 const ORIGIN = "https://threads-image-fixture.invalid";
 const OWNER = "11000000-0000-4000-8000-000000000001";
 const THREADS_ACCOUNT = "22000000-0000-4000-8000-000000000001";
+const THREADS_ACCOUNT_2 = "22000000-0000-4000-8000-000000000003";
 const FACEBOOK_ACCOUNT = "22000000-0000-4000-8000-000000000002";
 const POST = "33000000-0000-4000-8000-000000000001";
 const IMAGE_ROW = "44000000-0000-4000-8000-000000000001";
+const IMAGE_ROW_2 = "44000000-0000-4000-8000-000000000002";
 const SERVICE = "fixture-service";
 const CONTAINER = "fixture-image-container";
 const LEASE = "2027-01-01T00:03:00.000Z";
@@ -21,6 +23,7 @@ type Row = {
   platform_post_url: string | null;
   error_message: string | null;
   response_data: Record<string, unknown>;
+  created_at?: string;
 };
 type Account = {
   id: string;
@@ -60,7 +63,17 @@ function matchesPostFilters(post: Record<string, unknown>, url: URL): boolean {
     if (column === "select") continue;
     const match = raw.match(/^(eq|is)\.(.*)$/);
     if (!match) continue;
-    const actual = post[column];
+    let actual: unknown;
+    if (column.includes("->")) {
+      const parts = column.split("->");
+      actual = post;
+      for (const part of parts) {
+        const key = part.replace(/>/g, "");
+        actual = actual && typeof actual === "object" ? (actual as Record<string, unknown>)[key] : undefined;
+      }
+    } else {
+      actual = post[column];
+    }
     const expected = match[2];
     if (expected === "null") {
       if (actual != null) return false;
@@ -86,6 +99,7 @@ Deno.test("registered process-post durably completes single-image Threads contai
   const previousFetch = globalThis.fetch;
   const previousServe = Deno.serve;
   const previousNow = Date.now;
+  const previousDate = globalThis.Date;
   const environment = new Map(["SUPABASE_URL", "SUPABASE_SERVICE_ROLE_KEY", "SUPABASE_ANON_KEY"].map((key) => [key, Deno.env.get(key)]));
   Deno.env.set("SUPABASE_URL", ORIGIN);
   Deno.env.set("SUPABASE_SERVICE_ROLE_KEY", SERVICE);
@@ -100,17 +114,29 @@ Deno.test("registered process-post durably completes single-image Threads contai
   let logs: Record<string, unknown>[];
   let providerStatuses: Array<Record<string, unknown> | Error>;
   let checkpointMode: "ok" | "error" | "null" | "lost";
+  let inlineClaimMode: "ok" | "refused" | "error" | "lost";
+  let releaseMode: "ok" | "false" | "error" | "lost";
+  let markMode: "ok" | "error" | "lost";
   let publishMode: "success" | "timeout" | "rejected" | "null";
   let createDuration = 0;
+  let markDuration = 0;
   let statusHook: (() => void) | null = null;
+  let beforeCheckpointHook: (() => void | Promise<void>) | null = null;
   let checkpointHook: (() => void) | null = null;
   let parentReadError = false;
   let successSettlementFails = false;
+  let successSettlementLost = false;
   let creates = 0;
   let statusReads = 0;
   let publishes = 0;
   let settlements = 0;
+  let inlineClaims = 0;
+  let releases = 0;
+  let pendingReschedules = 0;
+  let finalNotificationClaims = 0;
+  let deliveredNotifications: Array<{ url: string; event: string; body: unknown }> = [];
   let outbox = 0;
+  let containerIdOverride: string | null = null;
   const unexpected: string[] = [];
 
   const threadsAccount = (): Account => ({
@@ -132,6 +158,12 @@ Deno.test("registered process-post durably completes single-image Threads contai
     platform: "facebook",
     platform_user_id: "fixture-facebook-user",
   });
+  const secondThreadsAccount = (): Account => ({
+    ...threadsAccount(),
+    id: THREADS_ACCOUNT_2,
+    platform_user_id: "fixture-threads-user-2",
+    platform_username: "fixture-2",
+  });
 
   function reset() {
     clock = 0;
@@ -142,7 +174,7 @@ Deno.test("registered process-post durably completes single-image Threads contai
       status: "pending",
       platforms: ["threads"],
       media_file_ids: ["image-a"],
-      metadata: { selected_account_ids: [THREADS_ACCOUNT] },
+      metadata: { selected_account_ids: [THREADS_ACCOUNT], webhook_url: "https://webhook-fixture.invalid/hook" },
       scheduled_at: null,
       publish_requested_at: null,
       source: "manual",
@@ -154,43 +186,57 @@ Deno.test("registered process-post durably completes single-image Threads contai
     logs = [];
     providerStatuses = [{ status: "FINISHED" }];
     checkpointMode = "ok";
+    inlineClaimMode = "ok";
+    releaseMode = "ok";
+    markMode = "ok";
     publishMode = "success";
     createDuration = 0;
+    markDuration = 0;
     statusHook = null;
+    beforeCheckpointHook = null;
     checkpointHook = null;
     parentReadError = false;
     successSettlementFails = false;
+    successSettlementLost = false;
     creates = 0;
     statusReads = 0;
     publishes = 0;
     settlements = 0;
+    inlineClaims = 0;
+    releases = 0;
+    pendingReschedules = 0;
+    finalNotificationClaims = 0;
+    deliveredNotifications = [];
     outbox = 0;
+    containerIdOverride = null;
   }
 
   function insertCheckpoint(payload: Record<string, unknown>) {
     const responseData = payload.p_response_data as Record<string, unknown>;
     const identity = deferred(responseData);
-    const existing = rows.find((row) => deferred(row.response_data)?.container_id === identity.container_id);
+    const existing = rows.find((row) => row.social_account_id === payload.p_social_account_id &&
+      deferred(row.response_data)?.container_id === identity.container_id);
     if (existing) return existing;
     const row: Row = {
-      id: IMAGE_ROW,
+      id: payload.p_social_account_id === THREADS_ACCOUNT_2 ? IMAGE_ROW_2 : IMAGE_ROW,
       post_id: POST,
-      social_account_id: THREADS_ACCOUNT,
+      social_account_id: String(payload.p_social_account_id),
       platform: "threads",
       status: "pending",
       platform_post_id: null,
       platform_post_url: null,
       error_message: null,
       response_data: responseData,
+      created_at: new Date().toISOString(),
     };
     rows.push(row);
     post.status = "processing";
     return row;
   }
 
-  function settle(payload: Record<string, unknown>) {
+  async function settle(payload: Record<string, unknown>) {
     settlements++;
-    if (successSettlementFails && payload.p_platform_post_id === IMAGE_ROW && payload.p_status === "success") {
+    if (successSettlementFails && !successSettlementLost && payload.p_platform_post_id === IMAGE_ROW && payload.p_status === "success") {
       return Response.json({ message: "fixture success settlement unavailable" }, { status: 500 });
     }
     const id = payload.p_platform_post_id as string | null;
@@ -214,6 +260,7 @@ Deno.test("registered process-post durably completes single-image Threads contai
         platform_post_url: null,
         error_message: null,
         response_data: {},
+        created_at: new Date().toISOString(),
       };
       rows.push(row);
     }
@@ -225,7 +272,25 @@ Deno.test("registered process-post durably completes single-image Threads contai
     if (payload.p_response_data) row.response_data = payload.p_response_data as Record<string, unknown>;
     outbox++;
     if (rows.every((candidate) => candidate.status !== "pending")) {
-      post.status = rows.some((candidate) => candidate.status === "success") ? "completed" : "failed";
+      const identity = deferred(row.response_data);
+      const managedAttempt = rows.some((candidate) => {
+        const current = deferred(candidate.response_data);
+        return current?.kind === "threads" && current.media_type === "IMAGE" &&
+          current.attempt_started_at === post.processing_started_at;
+      });
+      const threadsInPlatforms = (post.platforms as string[]).includes("threads");
+      const threadsTerminal = rows.some(candidate => candidate.platform === "threads" && ["success", "failed"].includes(candidate.status));
+      const threadsSuppressed = threadsInPlatforms && !threadsTerminal;
+      const ownsParent = !managedAttempt && !threadsSuppressed && (identity?.media_type !== "IMAGE" ||
+        (post.processing_started_at === identity.attempt_started_at &&
+          await hashRequest(contentFence(post)) === await hashRequest(row.response_data.content_fence)));
+      if (ownsParent) {
+        post.status = rows.some((candidate) => candidate.status === "success") ? "completed" : "failed";
+        post.metadata = { ...(post.metadata as Record<string, unknown> || {}), settlement_rollup_at: new Date().toISOString() };
+      }
+    }
+    if (successSettlementFails && successSettlementLost && payload.p_platform_post_id === IMAGE_ROW && payload.p_status === "success") {
+      return Response.json({ message: "fixture committed settlement response lost" }, { status: 500 });
     }
     return Response.json({ platform_post_id: row.id, settled: true, post_status: post.status });
   }
@@ -233,18 +298,38 @@ Deno.test("registered process-post durably completes single-image Threads contai
   globalThis.fetch = async (input, init) => {
     const request = new Request(input, init);
     const url = new URL(request.url);
+    if (url.origin === "https://webhook-fixture.invalid") {
+      deliveredNotifications.push({
+        url: request.url,
+        event: request.headers.get("X-Postora-Event") ?? "",
+        body: await request.clone().json(),
+      });
+      return new Response(JSON.stringify({ received: true }), { status: 200, headers: { "Content-Type": "application/json" } });
+    }
+    if (url.pathname.includes("/functions/v1/send-subscription-email")) {
+      deliveredNotifications.push({
+        url: request.url,
+        event: "email.post_failed",
+        body: await request.clone().json(),
+      });
+      return Response.json({ success: true });
+    }
     if (url.hostname === "graph.threads.net") {
       if (request.method === "POST" && url.pathname.endsWith("/threads")) {
         creates++;
         clock += createDuration;
-        return Response.json({ id: CONTAINER });
+        return Response.json({
+          id: url.pathname.includes("fixture-threads-user-2")
+            ? `${CONTAINER}-2`
+            : (containerIdOverride === "dynamic" ? `${CONTAINER}-${creates}` : (containerIdOverride ?? CONTAINER)),
+        });
       }
       if (request.method === "POST" && url.pathname.endsWith("/threads_publish")) {
         publishes++;
         if (publishMode === "timeout") throw new DOMException("fixture timeout", "TimeoutError");
         if (publishMode === "null") return Response.json(null);
         if (publishMode === "rejected") return Response.json({ error: { message: "fixture publish rejection" } });
-        return Response.json({ id: "published-image-1" });
+        return Response.json({ id: url.searchParams.get("creation_id")?.endsWith("-2") ? "published-image-2" : "published-image-1" });
       }
       if (request.method === "GET" && url.searchParams.get("fields")?.includes("error_message")) {
         statusReads++;
@@ -279,9 +364,10 @@ Deno.test("registered process-post durably completes single-image Threads contai
           return Response.json({ message: "Resume the existing Threads image checkpoint" }, { status: 409 });
         }
         Object.assign(post, update);
+        if ((update.metadata as Record<string, unknown> | undefined)?.final_notified_at) finalNotificationClaims++;
         return Response.json([{ id: POST, processing_started_at: post.processing_started_at }]);
       }
-      if (parentReadError && rows.some((row) => row.id === IMAGE_ROW)) {
+      if (parentReadError && url.searchParams.get("select") !== "*") {
         return Response.json({ message: "fixture parent read failure" }, { status: 500 });
       }
       return Response.json(post);
@@ -311,7 +397,10 @@ Deno.test("registered process-post durably completes single-image Threads contai
           }
           return true;
         });
-        for (const row of candidates) Object.assign(row, body);
+        for (const row of candidates) {
+          Object.assign(row, body);
+          if (row.status === "pending" && body.response_data) pendingReschedules++;
+        }
         return Response.json(candidates.map((row) => ({ id: row.id })));
       }
       const id = url.searchParams.get("id")?.replace(/^eq\./, "");
@@ -320,18 +409,136 @@ Deno.test("registered process-post durably completes single-image Threads contai
     }
     if (table === "rpc/record_threads_image_checkpoint") {
       const payload = await request.json() as Record<string, unknown>;
+      await beforeCheckpointHook?.();
       if (checkpointMode === "error") return Response.json({ message: "checkpoint unavailable" }, { status: 500 });
       if (checkpointMode === "null") return Response.json(null);
       if (checkpointMode === "lost") {
         insertCheckpoint(payload);
         return Response.json({ message: "response lost" }, { status: 500 });
       }
-      if (payload.p_expected_processing_started_at !== post.processing_started_at || post.status === "pending") {
+      const sameAttemptRollup = ["completed", "failed"].includes(String(post.status)) &&
+        typeof (post.metadata as Record<string, unknown>)?.settlement_rollup_at === "string" &&
+        Date.parse(String((post.metadata as Record<string, unknown>).settlement_rollup_at)) >= Date.parse(String(payload.p_expected_processing_started_at)) &&
+        rows.some((row) => ["success", "failed"].includes(row.status));
+      if (!sameAttemptRollup && ["failed", "canceled"].includes(String(post.status))) {
+        return Response.json({ message: `record_threads_image_checkpoint: post is in status ${post.status}, expected processing` }, { status: 409 });
+      }
+      if (payload.p_expected_processing_started_at !== post.processing_started_at || post.status === "pending" ||
+          (!sameAttemptRollup && post.status !== "processing")) {
         return Response.json({ message: "stale publish claim" }, { status: 409 });
       }
       const checkpoint = insertCheckpoint(payload);
+      if (sameAttemptRollup) post.status = "processing";
       checkpointHook?.();
       return Response.json(checkpoint.id);
+    }
+    if (table === "rpc/claim_threads_image_inline_execution") {
+      inlineClaims++;
+      const payload = await request.json() as Record<string, unknown>;
+      const row = rows.find((candidate) => candidate.id === payload.p_platform_post_id);
+      const identity = row ? deferred(row.response_data) : null;
+      const account = accounts.find((candidate) => candidate.id === row?.social_account_id);
+      const fenceMatches = row && await hashRequest(row.response_data.content_fence) === await hashRequest(payload.p_expected_content) &&
+        await hashRequest(contentFence(post)) === await hashRequest(payload.p_expected_content);
+      const active = row?.status === "pending" && identity && !identity.execution_id && !identity.publish_attempt_id &&
+        (!identity.claimed_until || Date.parse(String(identity.claimed_until)) <= clock) &&
+        identity.container_id === payload.p_expected_container_id &&
+        identity.attempt_started_at === payload.p_expected_processing_started_at &&
+        payload.p_post_id === post.id && payload.p_social_account_id === row.social_account_id &&
+        post.status === "processing" && post.processing_started_at === payload.p_expected_processing_started_at &&
+        account?.is_active && account.updated_at === row.response_data.account_updated_at && fenceMatches;
+      if (!active || inlineClaimMode === "refused") return Response.json(null);
+      const claimedUntil = new Date(clock + 180_000).toISOString();
+      Object.assign(identity, {
+        claimed_until: claimedUntil,
+        execution_id: payload.p_execution_id,
+        execution_claimed_until: claimedUntil,
+      });
+      if (inlineClaimMode === "error") return Response.json({ message: "inline claim unavailable" }, { status: 500 });
+      if (inlineClaimMode === "lost") return Response.json({ message: "lost inline claim acknowledgement" }, { status: 500 });
+      return Response.json({ platform_post_id: row.id, response_data: row.response_data });
+    }
+    if (table === "rpc/release_threads_image_publish_unsent") {
+      const payload = await request.json() as Record<string, unknown>;
+      const row = rows.find((candidate) => candidate.id === payload.p_platform_post_id);
+      const identity = row ? deferred(row.response_data) : null;
+      const account = accounts.find((candidate) => candidate.id === row?.social_account_id);
+      const fenceMatches = row && await hashRequest(row.response_data.content_fence) === await hashRequest(payload.p_expected_content) &&
+        await hashRequest(contentFence(post)) === await hashRequest(payload.p_expected_content);
+      const active = row?.status === "pending" && identity &&
+        identity.container_id === payload.p_expected_container_id &&
+        identity.attempt_started_at === payload.p_expected_processing_started_at &&
+        identity.claimed_until === payload.p_expected_claimed_until &&
+        identity.execution_claimed_until === payload.p_expected_claimed_until &&
+        identity.execution_id === payload.p_execution_id &&
+        identity.publish_attempt_id === payload.p_publish_attempt_id && !identity.publish_outcome &&
+        post.status === "processing" && post.processing_started_at === payload.p_expected_processing_started_at &&
+        account?.is_active && account.updated_at === row.response_data.account_updated_at && fenceMatches;
+      if (!active || releaseMode === "false") return Response.json(false);
+      delete identity.publish_attempt_id;
+      releases++;
+      if (releaseMode === "error") return Response.json({ message: "release unavailable" }, { status: 500 });
+      if (releaseMode === "lost") return Response.json({ message: "lost release acknowledgement" }, { status: 500 });
+      return Response.json(true);
+    }
+    if (table === "rpc/finalize_threads_image_attempt") {
+      const payload = await request.json() as Record<string, unknown>;
+      if (parentReadError) return Response.json({ message: "fixture parent read failure" }, { status: 500 });
+      const currentContent = contentFence(post);
+      const expectedContent = { ...(payload.p_expected_content as Record<string, unknown>) };
+      for (const fence of [currentContent, expectedContent]) {
+        const metadata = { ...((fence.metadata as Record<string, unknown> | null) ?? {}) };
+        delete metadata.final_notified_at;
+        delete metadata.settlement_rollup_at;
+        fence.metadata = metadata;
+      }
+      const stale = post.processing_started_at !== payload.p_expected_processing_started_at ||
+        await hashRequest(currentContent) !== await hashRequest(expectedContent);
+      if (stale) return Response.json({ status: post.status, stale: true, notify: false });
+      const metadata = { ...((post.metadata as Record<string, unknown> | null) ?? {}) };
+      const alreadyNotified = typeof metadata.final_notified_at === "string" &&
+        Date.parse(metadata.final_notified_at) >= Date.parse(String(payload.p_expected_processing_started_at));
+      if (post.status !== "processing") {
+        const replay = ["completed", "failed"].includes(String(post.status)) && alreadyNotified;
+        return Response.json({ status: post.status, stale: !replay, notify: false });
+      }
+
+      let targetAccountIds: string[] = [];
+      if (Array.isArray(payload.p_expected_account_ids) && payload.p_expected_account_ids.length > 0) {
+        targetAccountIds = payload.p_expected_account_ids as string[];
+      } else if (Array.isArray(metadata.selected_account_ids) && metadata.selected_account_ids.length > 0) {
+        const selected = metadata.selected_account_ids as string[];
+        targetAccountIds = accounts.filter(a => selected.includes(a.id) && a.is_active).map(a => a.id);
+      } else {
+        const postPlatforms = post.platforms as string[];
+        targetAccountIds = accounts.filter(a => postPlatforms.includes(a.platform) && a.is_active).map(a => a.id);
+      }
+
+      const started = String(payload.p_expected_processing_started_at);
+      const missingTargets = targetAccountIds.filter(targetId => !rows.some(row =>
+        row.social_account_id === targetId &&
+        row.post_id === POST &&
+        (deferred(row.response_data)?.attempt_started_at === started || (row.created_at ?? "") >= started)
+      ));
+      if (missingTargets.length > 0) {
+        return Response.json({ status: "processing", stale: false, notify: false });
+      }
+
+      const attemptRows = rows.filter(row =>
+        row.post_id === POST &&
+        (deferred(row.response_data)?.attempt_started_at === started || (row.created_at ?? "") >= started)
+      );
+
+      if (attemptRows.length === 0) {
+        return Response.json({ status: post.status, stale: false, notify: false });
+      }
+      if (attemptRows.some((row) => row.status === "pending")) {
+        return Response.json({ status: "processing", stale: false, notify: false });
+      }
+
+      post.status = attemptRows.some((row) => row.status === "success") ? "completed" : "failed";
+      const notify = !alreadyNotified;
+      return Response.json({ status: post.status, stale: false, notify });
     }
     if (table === "rpc/claim_threads_image_execution") {
       const payload = await request.json() as Record<string, unknown>;
@@ -359,7 +566,10 @@ Deno.test("registered process-post durably completes single-image Threads contai
         identity.execution_claimed_until === payload.p_expected_claimed_until && !identity.publish_attempt_id &&
         account?.is_active && account.updated_at === row.response_data.account_updated_at && fenceMatches;
       if (!active) return Response.json(false);
+      if (markMode === "error") return Response.json({ message: "mark unavailable" }, { status: 500 });
       identity.publish_attempt_id = payload.p_execution_id;
+      clock += markDuration;
+      if (markMode === "lost") return Response.json({ message: "committed mark response lost" }, { status: 500 });
       return Response.json(true);
     }
     if (table === "rpc/partner_settle_platform_post") return settle(await request.json());
@@ -390,6 +600,15 @@ Deno.test("registered process-post durably completes single-image Threads contai
         ...(options.accountIds ? { account_ids: options.accountIds } : {}),
       }),
     }));
+  }
+
+  async function checkpointForResume() {
+    inlineClaimMode = "refused";
+    try {
+      return await invoke({ at: 1_000 });
+    } finally {
+      inlineClaimMode = "ok";
+    }
   }
 
   function addFailedRow(kind: "uncertain" | "facebook") {
@@ -435,7 +654,7 @@ Deno.test("registered process-post durably completes single-image Threads contai
       assertEquals(response.status, 200, await response.clone().text());
       const body = await response.json();
       assertEquals(body.status, "processing");
-      assertEquals({ creates, statusReads, publishes }, { creates: 1, statusReads: 0, publishes: 0 });
+      assertEquals({ creates, statusReads, publishes, inlineClaims }, { creates: 1, statusReads: 0, publishes: 0, inlineClaims: 1 });
       assertEquals(rows.length, 1);
       assertEquals(rows[0].status, "pending");
       assertEquals(deferred(rows[0].response_data).media_type, "IMAGE");
@@ -458,20 +677,190 @@ Deno.test("registered process-post durably completes single-image Threads contai
       assertEquals(outbox, 1);
     });
 
-    await test.step("a fast new image uses the same immediate handoff", async () => {
+    await test.step("a fast new image checkpoints, claims, checks once, publishes and settles inline", async () => {
       reset();
       createDuration = 1;
       const response = await invoke({ at: 1_000 });
       assertEquals(response.status, 200, await response.clone().text());
-      assertEquals({ creates, statusReads, publishes }, { creates: 1, statusReads: 0, publishes: 0 });
-      assertEquals(rows[0].status, "pending");
+      assertEquals({ creates, statusReads, publishes, inlineClaims }, { creates: 1, statusReads: 1, publishes: 1, inlineClaims: 1 });
+      assertEquals(rows.length, 1);
+      assertEquals(rows[0].id, IMAGE_ROW);
+      assertEquals(rows[0].status, "success");
+      assertEquals(rows[0].platform_post_id, "published-image-1");
       assertEquals(deferred(rows[0].response_data).media_type, "IMAGE");
+      assertEquals(outbox, 1);
+      assertEquals(finalNotificationClaims, 1);
       assert(!logs.some((entry) => entry.metadata &&
         (entry.metadata as Record<string, unknown>).event === "threads_image_handoff_stale"),
       "An unchanged checkpoint must not be misclassified as stale by REST content filters");
     });
 
+    for (const mode of ["refused", "error", "lost"] as const) {
+      await test.step(`inline claim ${mode} performs no status or publish traffic and preserves durable recovery`, async () => {
+        reset();
+        inlineClaimMode = mode;
+        const response = await invoke({ at: 1_000 });
+        assertEquals(response.status, mode === "refused" ? 200 : 503);
+        assertEquals({ creates, statusReads, publishes, settlements }, { creates: 1, statusReads: 0, publishes: 0, settlements: 0 });
+        assertEquals(rows.length, 1);
+        assertEquals(rows[0].status, "pending");
+        assertEquals(pendingReschedules, 0);
+      });
+    }
+
+    for (const mode of ["error", "lost"] as const) {
+      await test.step(`pre-send mark ${mode} acknowledgement sends nothing and preserves the durable marker decision`, async () => {
+        reset();
+        markMode = mode;
+        const response = await invoke({ at: 1_000 });
+        assertEquals(response.status, 503);
+        assertEquals(publishes, 0);
+        assertEquals(rows[0].status, "pending");
+        assertEquals(pendingReschedules, 0);
+        assertEquals(deferred(rows[0].response_data).publish_attempt_id !== undefined, mode === "lost");
+        if (mode === "lost") {
+          markMode = "ok";
+          leaseImageRow();
+          providerStatuses = [{ status: "FINISHED" }];
+          const reconciled = await invoke({ resume: IMAGE_ROW });
+          assertEquals(reconciled.status, 200, await reconciled.clone().text());
+          assertEquals(publishes, 0);
+          assertEquals(rows[0].status, "pending");
+          assertEquals(deferred(rows[0].response_data).publish_outcome, "uncertain");
+        }
+      });
+    }
+
+    await test.step("a waiting inline image reschedules its authoritative checkpoint after one observation", async () => {
+      reset();
+      providerStatuses = [{ status: "IN_PROGRESS" }];
+      const response = await invoke({ at: 1_000 });
+      assertEquals(response.status, 200, await response.clone().text());
+      assertEquals({ statusReads, publishes, inlineClaims }, { statusReads: 1, publishes: 0, inlineClaims: 1 });
+      assertEquals(rows[0].status, "pending");
+      assertEquals(deferred(rows[0].response_data).attempts, 1);
+      assertEquals(deferred(rows[0].response_data).container_id, CONTAINER);
+      assertEquals(pendingReschedules, 1);
+      assertEquals(finalNotificationClaims, 0);
+    });
+
+    await test.step("inline acknowledged success never falls through to failed settlement when recording fails", async () => {
+      reset();
+      successSettlementFails = true;
+      const response = await invoke({ at: 1_000 });
+      assertEquals(response.status, 503);
+      assertEquals({ publishes, settlements }, { publishes: 1, settlements: 1 });
+      assertEquals(rows[0].status, "pending");
+      assertEquals(finalNotificationClaims, 0);
+      successSettlementFails = false;
+      leaseImageRow();
+      providerStatuses = [{ status: "PUBLISHED" }];
+      const reconciled = await invoke({ resume: IMAGE_ROW });
+      assertEquals(reconciled.status, 200);
+      assertEquals(rows[0].status, "success");
+      assertEquals(publishes, 1);
+    });
+
+    await test.step("a committed but unacknowledged success settlement recovers finalization without provider traffic", async () => {
+      reset();
+      successSettlementFails = true;
+      successSettlementLost = true;
+      const response = await invoke({ at: 1_000 });
+      assertEquals(response.status, 503);
+      assertEquals(rows[0].status, "success");
+      assertEquals(post.status, "processing");
+      assertEquals({ creates, statusReads, publishes, outbox }, { creates: 1, statusReads: 1, publishes: 1, outbox: 1 });
+      assertEquals(finalNotificationClaims, 0);
+      successSettlementFails = false;
+      successSettlementLost = false;
+      const recovered = await invoke({ resume: IMAGE_ROW });
+      assertEquals(recovered.status, 200, await recovered.clone().text());
+      const body = await recovered.json();
+      assertEquals(body.post_status, "completed");
+      assertEquals(body.notified, true);
+      assertEquals({ creates, statusReads, publishes, outbox }, { creates: 1, statusReads: 1, publishes: 1, outbox: 1 });
+      assertEquals(finalNotificationClaims, 1);
+    });
+
+    await test.step("an 8 second inline marker releases proven-unsent state and later cron sends exactly once", async () => {
+      reset();
+      markDuration = 8_000;
+      statusHook = () => { clock = 110_000; };
+      const response = await invoke({ at: 1_000 });
+      assertEquals(response.status, 200, await response.clone().text());
+      assertEquals({ creates, statusReads, publishes, releases }, { creates: 1, statusReads: 1, publishes: 0, releases: 1 });
+      assertEquals(rows[0].status, "pending");
+      assertEquals(deferred(rows[0].response_data).publish_attempt_id, undefined);
+      assertEquals(pendingReschedules, 1);
+      markDuration = 0;
+      statusHook = null;
+      leaseImageRow();
+      providerStatuses = [{ status: "FINISHED" }];
+      const recovered = await invoke({ resume: IMAGE_ROW });
+      assertEquals(recovered.status, 200, await recovered.clone().text());
+      assertEquals(publishes, 1);
+      assertEquals(rows[0].status, "success");
+    });
+
+    for (const mode of ["false", "error", "lost"] as const) {
+      await test.step(`definitely-unsent release ${mode} cannot send or reschedule stale JSON`, async () => {
+        reset();
+        markDuration = 8_000;
+        releaseMode = mode;
+        statusHook = () => { clock = 110_000; };
+        const response = await invoke({ at: 1_000 });
+        assertEquals(response.status, 503);
+        assertEquals(publishes, 0);
+        assertEquals(rows[0].status, "pending");
+        assertEquals(pendingReschedules, 0);
+        assertEquals(finalNotificationClaims, 0);
+        if (mode === "lost") {
+          markDuration = 0;
+          statusHook = null;
+          releaseMode = "ok";
+          leaseImageRow();
+          providerStatuses = [{ status: "FINISHED" }];
+          const recovered = await invoke({ resume: IMAGE_ROW });
+          assertEquals(recovered.status, 200, await recovered.clone().text());
+          assertEquals(publishes, 1);
+          assertEquals(rows[0].status, "success");
+        }
+      });
+    }
+
+    await test.step("two Threads accounts keep independent inline rows and one final notification", async () => {
+      reset();
+      accounts = [threadsAccount(), secondThreadsAccount()];
+      providerStatuses = [{ status: "FINISHED" }, { status: "FINISHED" }];
+      post.metadata = { selected_account_ids: [THREADS_ACCOUNT, THREADS_ACCOUNT_2] };
+      const response = await invoke({ at: 1_000 });
+      assertEquals(response.status, 200, await response.clone().text());
+      assertEquals({ creates, statusReads, publishes, settlements }, { creates: 2, statusReads: 2, publishes: 2, settlements: 2 });
+      assertEquals(rows.map((row) => row.id).sort(), [IMAGE_ROW, IMAGE_ROW_2].sort());
+      assertEquals(rows.map((row) => row.status), ["success", "success"]);
+      assertEquals(rows.map((row) => row.social_account_id).sort(), [THREADS_ACCOUNT, THREADS_ACCOUNT_2].sort());
+      assertEquals(rows.map((row) => row.platform_post_id).sort(), ["published-image-1", "published-image-2"]);
+      assertEquals(outbox, 2);
+      assertEquals(finalNotificationClaims, 1);
+    });
+
+    await test.step("an inline Threads success followed by Facebook preserves sibling order and effects", async () => {
+      reset();
+      accounts = [threadsAccount(), facebookAccount()];
+      post.platforms = ["threads", "facebook"];
+      post.metadata = { selected_account_ids: [THREADS_ACCOUNT, FACEBOOK_ACCOUNT] };
+      const response = await invoke({ at: 1_000 });
+      assertEquals(response.status, 200, await response.clone().text());
+      const body = await response.json();
+      assertEquals(body.platform_results.map((result: Record<string, unknown>) => result.platform), ["threads", "facebook"]);
+      assertEquals(rows.filter((row) => row.status === "success").length, 2);
+      assertEquals(outbox, 2);
+      assertEquals(finalNotificationClaims, 1);
+    });
+
     await test.step("PUBLISHED settles without a resend or a fabricated provider post ID", async () => {
+      reset();
+      await checkpointForResume();
       leaseImageRow();
       providerStatuses = [{ status: "PUBLISHED" }];
       const response = await invoke({ resume: IMAGE_ROW });
@@ -483,7 +872,7 @@ Deno.test("registered process-post durably completes single-image Threads contai
 
     await test.step("an acknowledged image stays pending when success settlement fails and reconciles without resend", async () => {
       reset();
-      await invoke({ at: 1_000 });
+      await checkpointForResume();
       leaseImageRow();
       successSettlementFails = true;
       const response = await invoke({ resume: IMAGE_ROW });
@@ -502,7 +891,7 @@ Deno.test("registered process-post durably completes single-image Threads contai
 
     await test.step("a sibling Pinterest history stamp does not abandon the unchanged Threads image", async () => {
       reset();
-      await invoke({ at: 1_000 });
+      await checkpointForResume();
       post.metadata = { ...(post.metadata as Record<string, unknown>), pinterest_post_type: "image" };
       leaseImageRow();
       const response = await invoke({ resume: IMAGE_ROW });
@@ -513,7 +902,7 @@ Deno.test("registered process-post durably completes single-image Threads contai
 
     await test.step("a missing image lease persists a refusal log before returning", async () => {
       reset();
-      await invoke({ at: 1_000 });
+      await checkpointForResume();
       const response = await invoke({ resume: IMAGE_ROW });
       assertEquals(response.status, 503);
       assert(logs.some((entry) => (entry.metadata as Record<string, unknown> | undefined)?.event === "threads_image_lease_missing"));
@@ -522,7 +911,7 @@ Deno.test("registered process-post durably completes single-image Threads contai
 
     await test.step("an unanswered publish reconciles PUBLISHED without sending twice", async () => {
       reset();
-      await invoke({ at: 1_000 });
+      await checkpointForResume();
       leaseImageRow();
       publishMode = "timeout";
       providerStatuses = [{ status: "FINISHED" }];
@@ -541,7 +930,7 @@ Deno.test("registered process-post durably completes single-image Threads contai
 
     await test.step("JSON null from publish is an unknown outcome and never permits a second send", async () => {
       reset();
-      await invoke({ at: 1_000 });
+      await checkpointForResume();
       leaseImageRow();
       publishMode = "null";
       const response = await invoke({ resume: IMAGE_ROW });
@@ -556,7 +945,7 @@ Deno.test("registered process-post durably completes single-image Threads contai
 
     await test.step("a direct override cannot replace the attempt owning a pending image checkpoint", async () => {
       reset();
-      await invoke({ at: 1_000 });
+      await checkpointForResume();
       const firstClaim = post.processing_started_at;
       const response = await invoke({ at: 2_000, accountIds: [THREADS_ACCOUNT] });
       assertEquals(response.status, 500);
@@ -567,7 +956,7 @@ Deno.test("registered process-post durably completes single-image Threads contai
 
     await test.step("FINISHED after an unanswered publish never authorizes a blind resend and expires unresolved", async () => {
       reset();
-      await invoke({ at: 1_000 });
+      await checkpointForResume();
       leaseImageRow();
       publishMode = "timeout";
       providerStatuses = [{ status: "FINISHED" }];
@@ -590,7 +979,7 @@ Deno.test("registered process-post durably completes single-image Threads contai
 
     await test.step("duplicate resumes have one execution owner and one provider write", async () => {
       reset();
-      await invoke({ at: 1_000 });
+      await checkpointForResume();
       leaseImageRow();
       providerStatuses = [{ status: "FINISHED" }, { status: "FINISHED" }];
       const responses = await Promise.all([invoke({ resume: IMAGE_ROW }), invoke({ resume: IMAGE_ROW })]);
@@ -600,9 +989,46 @@ Deno.test("registered process-post durably completes single-image Threads contai
       assert(logs.some((entry) => (entry.metadata as Record<string, unknown> | undefined)?.event === "threads_image_execution_refused"));
     });
 
+    await test.step("a duplicate first request loses a stale checkpoint race without touching the winner", async () => {
+      reset();
+      containerIdOverride = "dynamic";
+      post.metadata = { selected_account_ids: [THREADS_ACCOUNT], webhook_url: "https://webhook-fixture.invalid/hook" };
+      let notifyFirstAtCheckpoint!: () => void;
+      const firstAtCheckpoint = new Promise<void>((resolve) => { notifyFirstAtCheckpoint = resolve; });
+      let releaseFirstCheckpoint!: () => void;
+      const firstCheckpointHeld = new Promise<void>((resolve) => { releaseFirstCheckpoint = resolve; });
+      let checkpointCalls = 0;
+      beforeCheckpointHook = () => {
+        checkpointCalls++;
+        if (checkpointCalls === 1) {
+          notifyFirstAtCheckpoint();
+          return firstCheckpointHeld;
+        }
+      };
+      const staleRequest = invoke({ at: 1_000 });
+      await firstAtCheckpoint;
+      const winner = await invoke({ at: 2_000 });
+      assertEquals(winner.status, 200, await winner.clone().text());
+      const winningExecution = deferred(rows[0].response_data).execution_id;
+      releaseFirstCheckpoint();
+      const stale = await staleRequest;
+      console.log("DEBUG stale status:", stale.status, "text:", await stale.clone().text());
+      assertEquals(stale.status, 503);
+      assert((await stale.text()).includes("Threads container checkpoint could not be confirmed"));
+      assert(logs.some((entry) => (entry.metadata as Record<string, unknown> | undefined)?.event === "threads_checkpoint_refused"));
+      assertEquals(publishes, 1);
+      assertEquals(rows.filter((row) => row.id === IMAGE_ROW).length, 1);
+      assertEquals(rows[0].status, "success");
+      assertEquals(deferred(rows[0].response_data).execution_id, winningExecution);
+      assertEquals(outbox, 1);
+      assertEquals(finalNotificationClaims, 1);
+      assertEquals(deliveredNotifications.length, 1);
+      assertEquals(deliveredNotifications[0].event, "post.completed");
+    });
+
     await test.step("waiting keeps the same image checkpoint and increments bounded attempts", async () => {
       reset();
-      await invoke({ at: 1_000 });
+      await checkpointForResume();
       const row = leaseImageRow();
       providerStatuses = [{ status: "IN_PROGRESS" }];
       const response = await invoke({ resume: IMAGE_ROW });
@@ -617,7 +1043,7 @@ Deno.test("registered process-post durably completes single-image Threads contai
     for (const status of ["ERROR", "EXPIRED"] as const) {
       await test.step(`${status} without a prior send settles the actual provider reason on the checkpoint`, async () => {
         reset();
-        await invoke({ at: 1_000 });
+        await checkpointForResume();
         const row = leaseImageRow();
         providerStatuses = [{ status, error_message: "synthetic provider detail" }];
         const response = await invoke({ resume: IMAGE_ROW });
@@ -630,7 +1056,7 @@ Deno.test("registered process-post durably completes single-image Threads contai
 
     await test.step("a status-read failure after an unanswered send cannot authorize another publish", async () => {
       reset();
-      await invoke({ at: 1_000 });
+      await checkpointForResume();
       leaseImageRow();
       publishMode = "timeout";
       providerStatuses = [{ status: "FINISHED" }];
@@ -646,7 +1072,7 @@ Deno.test("registered process-post durably completes single-image Threads contai
 
     await test.step("a stale execution loses its conditional publish mark and cannot overwrite the new owner", async () => {
       reset();
-      await invoke({ at: 1_000 });
+      await checkpointForResume();
       const row = leaseImageRow();
       providerStatuses = [{ status: "FINISHED" }];
       statusHook = () => {
@@ -663,7 +1089,7 @@ Deno.test("registered process-post durably completes single-image Threads contai
     for (const conflict of ["edit-before-send", "cancel-before-send", "account-before-send"] as const) {
       await test.step(`${conflict} fails the atomic pre-send guard without a provider write`, async () => {
         reset();
-        await invoke({ at: 1_000 });
+        await checkpointForResume();
         const row = leaseImageRow();
         providerStatuses = [{ status: "FINISHED" }];
         statusHook = () => {
@@ -682,7 +1108,7 @@ Deno.test("registered process-post durably completes single-image Threads contai
     await test.step("edited content and cancelled posts refuse new provider work without resurrection", async () => {
       for (const change of ["edit", "cancel"] as const) {
         reset();
-        await invoke({ at: 1_000 });
+        await checkpointForResume();
         leaseImageRow();
         if (change === "edit") post.caption = "changed synthetic caption";
         else post.status = "failed";
@@ -690,14 +1116,14 @@ Deno.test("registered process-post durably completes single-image Threads contai
         assertEquals(response.status, 200, await response.clone().text());
         assertEquals({ statusReads, publishes }, { statusReads: 0, publishes: 0 });
         assertEquals(rows[0].status, "failed");
-        assertEquals(post.status, "failed");
+        assertEquals(post.status, change === "edit" ? "processing" : "failed");
       }
     });
 
     await test.step("wrong account scope and credential refresh conflicts retain pending state without provider calls", async () => {
       for (const conflict of ["account", "credential"] as const) {
         reset();
-        await invoke({ at: 1_000 });
+        await checkpointForResume();
         leaseImageRow();
         if (conflict === "account") accounts = [];
         else accounts[0].updated_at = "2026-01-02T00:00:00.000Z";
@@ -712,7 +1138,7 @@ Deno.test("registered process-post durably completes single-image Threads contai
     for (const kind of ["threads", "threads_carousel"] as const) {
       await test.step(`legacy ${kind} resume keeps its original media fallback and publish behavior`, async () => {
         reset();
-        await invoke({ at: 1_000 });
+        await checkpointForResume();
         const row = leaseImageRow();
         deferred(row.response_data).kind = kind;
         delete deferred(row.response_data).media_type;
@@ -728,7 +1154,7 @@ Deno.test("registered process-post durably completes single-image Threads contai
       await test.step(`checkpoint ${mode} refuses provider publish without failure settlement or duplicate rows`, async () => {
         reset();
         checkpointMode = mode;
-        const response = await invoke({ at: 1_000 });
+        const response = await checkpointForResume();
         assertEquals(response.status, 503);
         assertEquals(publishes, 0);
         assertEquals(settlements, 0);
@@ -751,7 +1177,7 @@ Deno.test("registered process-post durably completes single-image Threads contai
       accounts = [facebookAccount(), threadsAccount()];
       post.platforms = ["facebook", "threads"];
       post.metadata = { selected_account_ids: [FACEBOOK_ACCOUNT, THREADS_ACCOUNT] };
-      const response = await invoke({ at: 1_000 });
+      const response = await checkpointForResume();
       assertEquals(response.status, 200, await response.clone().text());
       assertEquals(rows.filter((row) => row.platform === "facebook" && row.status === "success").length, 1);
       assertEquals(rows.filter((row) => row.id === IMAGE_ROW && row.status === "pending").length, 1);
@@ -759,17 +1185,20 @@ Deno.test("registered process-post durably completes single-image Threads contai
       assertEquals(outbox, 1);
     });
 
-    await test.step("reconciler completion before the original response is not rolled back to processing", async () => {
+    await test.step("same-attempt reconciler completion is finalized once without a stale-parent warning", async () => {
       reset();
       checkpointHook = () => {
         rows[0].status = "success";
         post.status = "completed";
+        post.metadata = { ...(post.metadata as Record<string, unknown>), final_notified_at: post.processing_started_at };
+        finalNotificationClaims++;
       };
-      const response = await invoke({ at: 1_000 });
+      const response = await checkpointForResume();
       assertEquals(response.status, 200, await response.clone().text());
       assertEquals((await response.json()).status, "completed");
       assertEquals(post.status, "completed");
-      assert(logs.some((entry) => entry.metadata && (entry.metadata as Record<string, unknown>).event === "threads_image_handoff_stale"));
+      assertEquals(finalNotificationClaims, 1);
+      assert(!logs.some((entry) => entry.metadata && (entry.metadata as Record<string, unknown>).event === "threads_image_handoff_stale"));
     });
 
     await test.step("a newer claim and edit during handoff win over the original parent write", async () => {
@@ -778,17 +1207,49 @@ Deno.test("registered process-post durably completes single-image Threads contai
         post.processing_started_at = "newer-claim";
         post.caption = "newer edit";
       };
-      const response = await invoke({ at: 1_000 });
+      const response = await checkpointForResume();
       assertEquals(response.status, 200, await response.clone().text());
       assertEquals(post.processing_started_at, "newer-claim");
       assertEquals(post.caption, "newer edit");
       assert(logs.some((entry) => entry.metadata && (entry.metadata as Record<string, unknown>).event === "threads_image_handoff_stale"));
     });
 
+    await test.step("stale PUBLISHED settlement preserves a newer parent and sends no stale notification", async () => {
+      reset();
+      await checkpointForResume();
+      const row = leaseImageRow();
+      providerStatuses = [{ status: "PUBLISHED" }];
+      statusHook = () => {
+        post.processing_started_at = "newer-parent-claim";
+        post.caption = "newer parent content";
+      };
+      const response = await invoke({ resume: IMAGE_ROW });
+      assertEquals(response.status, 200, await response.clone().text());
+      assertEquals(row.status, "success");
+      assertEquals(post.status, "processing");
+      assertEquals(post.processing_started_at, "newer-parent-claim");
+      assertEquals(post.caption, "newer parent content");
+      assertEquals(finalNotificationClaims, 0);
+    });
+
+    await test.step("status-only cancellation survives old image settlement and finalization", async () => {
+      reset();
+      await checkpointForResume();
+      const row = leaseImageRow();
+      providerStatuses = [{ status: "PUBLISHED" }];
+      statusHook = () => { post.status = "pending"; };
+      const response = await invoke({ resume: IMAGE_ROW });
+      assertEquals(response.status, 200, await response.clone().text());
+      assertEquals(row.status, "success");
+      assertEquals(post.status, "pending");
+      assertEquals(post.caption, "Synthetic image caption");
+      assertEquals(finalNotificationClaims, 0);
+    });
+
     await test.step("a handoff state read error returns 503 and preserves the parent and checkpoint", async () => {
       reset();
       parentReadError = true;
-      const response = await invoke({ at: 1_000 });
+      const response = await checkpointForResume();
       assertEquals(response.status, 503);
       assertEquals(post.status, "processing");
       assertEquals(rows[0].status, "pending");
@@ -826,7 +1287,7 @@ Deno.test("registered process-post durably completes single-image Threads contai
     await test.step("JSONB key ordering does not look like an edit to the saved image", async () => {
       reset();
       post.metadata = { selected_account_ids: [THREADS_ACCOUNT], nested: { second: 2, first: 1 } };
-      await invoke({ at: 1_000 });
+      await checkpointForResume();
       const row = leaseImageRow();
       const fence = row.response_data.content_fence as Record<string, unknown>;
       row.response_data.content_fence = Object.fromEntries(Object.entries(fence).reverse());
@@ -838,6 +1299,249 @@ Deno.test("registered process-post durably completes single-image Threads contai
       assertEquals(response.status, 200, await response.clone().text());
       assertEquals(rows[0].status, "success");
       assertEquals(publishes, 1);
+    });
+
+    await test.step("A02: status-only failed cancellation rejects admission and leaves post failed with zero sends", async () => {
+      reset();
+      accounts = [threadsAccount(), facebookAccount()];
+      post.platforms = ["threads", "facebook"];
+      post.metadata = { selected_account_ids: [THREADS_ACCOUNT, FACEBOOK_ACCOUNT], webhook_url: "https://webhook-fixture.invalid/hook" };
+
+      let notifyFirstAtCheckpoint!: () => void;
+      const firstAtCheckpoint = new Promise<void>((resolve) => { notifyFirstAtCheckpoint = resolve; });
+      let releaseFirstCheckpoint!: () => void;
+      const firstCheckpointHeld = new Promise<void>((resolve) => { releaseFirstCheckpoint = resolve; });
+      let checkpointCalls = 0;
+      beforeCheckpointHook = () => {
+        checkpointCalls++;
+        if (checkpointCalls === 1) {
+          notifyFirstAtCheckpoint();
+          return firstCheckpointHeld;
+        }
+      };
+
+      const runningRequest = invoke({ at: 1_000 });
+      await firstAtCheckpoint;
+
+      // Status-only cancellation without settlement_rollup_at
+      post.status = "failed";
+
+      releaseFirstCheckpoint();
+      const response = await runningRequest;
+      console.log("DEBUG A02 response status:", response.status, "text:", await response.clone().text(), "post.status:", post.status);
+      assertEquals(post.status, "failed");
+      assertEquals(publishes, 0);
+      assert(rows.every((row) => row.status !== "success"));
+
+      // Pair with legitimate failure-first admission success where sibling rolled up parent with settlement_rollup_at
+      reset();
+      accounts = [threadsAccount(), facebookAccount()];
+      post.platforms = ["threads", "facebook"];
+      post.status = "failed";
+      const started = new Date().toISOString();
+      post.processing_started_at = started;
+      post.metadata = {
+        selected_account_ids: [THREADS_ACCOUNT, FACEBOOK_ACCOUNT],
+        settlement_rollup_at: started,
+      };
+      rows.push({
+        id: "facebook-failed-row",
+        post_id: POST,
+        social_account_id: FACEBOOK_ACCOUNT,
+        platform: "facebook",
+        status: "failed",
+        platform_post_id: null,
+        platform_post_url: null,
+        error_message: "sibling failure",
+        response_data: {},
+        created_at: started,
+      });
+      const legResp = await invoke({ at: 1_000 });
+      assertEquals(legResp.status, 200, await legResp.clone().text());
+      assertEquals(rows.some((r) => r.platform === "threads" && r.status === "success"), true);
+    });
+
+    await test.step("A03: lost settlement ACK recovers terminal row via ordinary cron reconciliation and delivers one notification", async () => {
+      reset();
+      post.metadata = { selected_account_ids: [THREADS_ACCOUNT], webhook_url: "https://webhook-fixture.invalid/hook" };
+      successSettlementFails = true;
+      successSettlementLost = true;
+      const initialResponse = await invoke({ at: 1_000 });
+      assertEquals(initialResponse.status, 503);
+      assertEquals(rows[0].status, "success");
+      assertEquals(post.status, "processing");
+      assertEquals(finalNotificationClaims, 0);
+      assertEquals(deliveredNotifications.length, 0);
+
+      // Ordinary cron reconciliation path: row is claimed by claim_deferred_publishes
+      successSettlementFails = false;
+      successSettlementLost = false;
+      leaseImageRow();
+      const recovered = await invoke({ resume: IMAGE_ROW });
+      assertEquals(recovered.status, 200, await recovered.clone().text());
+      const body = await recovered.json();
+      assertEquals(body.post_status, "completed");
+      assertEquals(body.notified, true);
+      assertEquals(finalNotificationClaims, 1);
+      assertEquals(deliveredNotifications.length, 1);
+      assertEquals(deliveredNotifications[0].event, "post.completed");
+    });
+
+    await test.step("A03: lost finalizer ACK or failed outcome read does not permanently consume notification", async () => {
+      reset();
+      post.metadata = { selected_account_ids: [THREADS_ACCOUNT], webhook_url: "https://webhook-fixture.invalid/hook" };
+      await checkpointForResume();
+      const row = leaseImageRow();
+      row.status = "success";
+      // First recovery attempt: outcome read fails
+      parentReadError = true;
+      const failedRecovery = await invoke({ resume: IMAGE_ROW });
+      assertEquals(failedRecovery.status, 200);
+      const failedBody = await failedRecovery.json();
+      assertEquals(failedBody.notified, false);
+      assertEquals(finalNotificationClaims, 0);
+      assertEquals(deliveredNotifications.length, 0);
+      assertEquals((post.metadata as Record<string, unknown>).final_notified_at, undefined);
+
+      // Second recovery attempt: outcome read succeeds
+      parentReadError = false;
+      const successRecovery = await invoke({ resume: IMAGE_ROW });
+      assertEquals(successRecovery.status, 200);
+      const successBody = await successRecovery.json();
+      assertEquals(successBody.notified, true);
+      assertEquals(finalNotificationClaims, 1);
+      assertEquals(deliveredNotifications.length, 1);
+      assertEquals(deliveredNotifications[0].event, "post.completed");
+    });
+
+    await test.step("A03: multi-account request preserves sibling fan-out when Threads checkpoint is unavailable", async () => {
+      reset();
+      accounts = [threadsAccount(), facebookAccount()];
+      post.platforms = ["threads", "facebook"];
+      post.metadata = { selected_account_ids: [THREADS_ACCOUNT, FACEBOOK_ACCOUNT] };
+      checkpointMode = "error";
+      const response = await invoke({ at: 1_000 });
+      assertEquals(response.status, 200, await response.clone().text());
+      const body = await response.json();
+      assertEquals(body.platform_results.map((r: Record<string, unknown>) => ({ platform: r.platform, status: r.status })), [
+        { platform: "threads", status: "pending" },
+        { platform: "facebook", status: "success" },
+      ]);
+      assertEquals(rows.some((r) => r.platform === "facebook" && r.status === "success"), true);
+      assertEquals(post.status, "processing");
+    });
+
+    await test.step("A04: sibling completeness validates actual target accounts from current attempt", async () => {
+      // (a) Omitted IDs (targets all active accounts for post.platforms)
+      reset();
+      accounts = [threadsAccount(), facebookAccount()];
+      post.platforms = ["threads", "facebook"];
+      delete (post.metadata as Record<string, unknown>).selected_account_ids;
+      // Retained old row from previous attempt
+      rows.push({
+        id: "facebook-old-row",
+        post_id: POST,
+        social_account_id: FACEBOOK_ACCOUNT,
+        platform: "facebook",
+        status: "success",
+        platform_post_id: "old-fb",
+        platform_post_url: null,
+        error_message: null,
+        response_data: {},
+        created_at: "2025-01-01T00:00:00.000Z",
+      });
+      await checkpointForResume();
+      rows = rows.filter((r) => r.id === IMAGE_ROW || r.id === "facebook-old-row");
+      const row = leaseImageRow();
+      row.status = "success";
+      // Finalize check while Facebook has no row for CURRENT attempt: returns processing
+      const resp1 = await invoke({ resume: IMAGE_ROW });
+      assertEquals(resp1.status, 200);
+      assertEquals((await resp1.json()).post_status, "processing");
+      assertEquals(finalNotificationClaims, 0);
+
+      // Now Facebook admits row for current attempt:
+      rows.push({
+        id: "facebook-current-row",
+        post_id: POST,
+        social_account_id: FACEBOOK_ACCOUNT,
+        platform: "facebook",
+        status: "success",
+        platform_post_id: "curr-fb",
+        platform_post_url: null,
+        error_message: null,
+        response_data: {},
+        created_at: new Date().toISOString(),
+      });
+      const resp2 = await invoke({ resume: IMAGE_ROW });
+      assertEquals(resp2.status, 200);
+      assertEquals((await resp2.json()).post_status, "completed");
+      assertEquals(finalNotificationClaims, 1);
+
+      // (b) Inactive account in metadata.selected_account_ids does not block finalization
+      reset();
+      const inactiveAccount: Account = {
+        ...facebookAccount(),
+        id: "22000000-0000-4000-8000-000000000099",
+        is_active: false,
+      };
+      accounts = [threadsAccount(), inactiveAccount];
+      post.metadata = { selected_account_ids: [THREADS_ACCOUNT, inactiveAccount.id] };
+      const respInactive = await invoke({ at: 1_000 });
+      assertEquals(respInactive.status, 200);
+      assertEquals(post.status, "completed");
+      assertEquals(finalNotificationClaims, 1);
+
+      // (c) Two Threads accounts: both must have rows before finalization
+      reset();
+      accounts = [threadsAccount(), secondThreadsAccount()];
+      post.metadata = { selected_account_ids: [THREADS_ACCOUNT, THREADS_ACCOUNT_2] };
+      await checkpointForResume();
+      rows = rows.filter((r) => r.id === IMAGE_ROW);
+      const rowT1 = leaseImageRow();
+      rowT1.status = "success";
+      const respTwoT1 = await invoke({ resume: IMAGE_ROW });
+      assertEquals(respTwoT1.status, 200);
+      assertEquals((await respTwoT1.json()).post_status, "processing");
+      assertEquals(finalNotificationClaims, 0);
+
+      rows.push({
+        id: IMAGE_ROW_2,
+        post_id: POST,
+        social_account_id: THREADS_ACCOUNT_2,
+        platform: "threads",
+        status: "success",
+        platform_post_id: "published-image-2",
+        platform_post_url: null,
+        error_message: null,
+        response_data: {},
+        created_at: new Date().toISOString(),
+      });
+      const respTwoT2 = await invoke({ resume: IMAGE_ROW });
+      assertEquals(respTwoT2.status, 200);
+      assertEquals((await respTwoT2.json()).post_status, "completed");
+      assertEquals(finalNotificationClaims, 1);
+    });
+
+    await test.step("200 independent ready first requests complete inline without cron or duplicate effects", async () => {
+      const totals = { creates: 0, statusReads: 0, publishes: 0, settlements: 0, outbox: 0, notifications: 0, deliveredNotifications: 0 };
+      for (let request = 0; request < 200; request++) {
+        reset();
+        createDuration = 1;
+        const response = await invoke({ at: 1_000 });
+        assertEquals(response.status, 200, `request ${request}: ${await response.clone().text()}`);
+        assertEquals(rows.length, 1, `request ${request} uses one stable row`);
+        assertEquals(rows[0].id, IMAGE_ROW);
+        assertEquals(rows[0].status, "success", `request ${request} settles inline`);
+        totals.creates += creates;
+        totals.statusReads += statusReads;
+        totals.publishes += publishes;
+        totals.settlements += settlements;
+        totals.outbox += outbox;
+        totals.notifications += finalNotificationClaims;
+        totals.deliveredNotifications += deliveredNotifications.length;
+      }
+      assertEquals(totals, { creates: 200, statusReads: 200, publishes: 200, settlements: 200, outbox: 200, notifications: 200, deliveredNotifications: 200 });
     });
 
     assertEquals(unexpected, []);

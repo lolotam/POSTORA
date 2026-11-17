@@ -6,9 +6,10 @@
  * post `processing` forever. Now a handler waits only while the worker has time;
  * a container still processing is recorded as a `pending` platform_posts row
  * carrying `response_data.deferred`. A new single-image Threads container is
- * checkpointed immediately instead of being polled in its first request. The
- * reconcile-deferred-publishes cron resumes once a minute until Meta finishes,
- * fails, or the deadline passes.
+ * checkpointed immediately, then gets one bounded inline observation under an
+ * exclusive database lease when budget remains. The reconcile-deferred-publishes
+ * cron resumes waiting, clipped or interrupted work once a minute until Meta
+ * finishes, fails, or the deadline passes.
  *
  * Spec: docs/superpowers/specs/2026-10-29-hardening-followups-design.md, Part B2.
  */
@@ -83,6 +84,10 @@ export interface ResumeContext {
   markFollowUpsStarted?: () => Promise<FollowUpMark>;
   /** Persist the image publish attempt before any provider write. */
   markPublishStarted?: () => Promise<FollowUpMark>;
+  /** A first-request image execution uses one observation bounded by its account/worker cutoff. */
+  inline?: boolean;
+  /** Releases only a matching marker when no provider publish callback was entered. */
+  releasePublishUnsent?: () => Promise<boolean>;
   /** New image rows fence credential refreshes to the account version used at creation. */
   accountUpdatedAt?: string | null;
 }
@@ -450,6 +455,7 @@ export async function recordStillProcessing(
     write = write
       .eq("response_data->deferred->>execution_id", execution.execution_id)
       .eq("response_data->deferred->>claimed_until", execution.execution_claimed_until)
+      .eq("response_data->deferred->>execution_claimed_until", execution.execution_claimed_until)
       .eq("response_data->deferred->>container_id", execution.container_id)
       .select("id");
   }

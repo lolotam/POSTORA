@@ -214,7 +214,8 @@ BEGIN
     (SELECT updated_at FROM public.social_accounts WHERE id = acct_th));
 
   -- Pinterest may stamp derived History metadata without changing publishing inputs.
-  UPDATE public.posts SET metadata = '{"pinterest_post_type":"image"}'::jsonb WHERE id = post_t;
+  -- Sibling rollup stamps settlement_rollup_at to identify legitimate provenance.
+  UPDATE public.posts SET metadata = jsonb_build_object('pinterest_post_type', 'image', 'settlement_rollup_at', claim_at) WHERE id = post_t;
   row_t := public.record_threads_image_checkpoint(post_t, acct_th, payload, claim_at, expected);
   ASSERT row_t IS NOT NULL, 'T1 checkpoint admission returns a row UUID';
   ASSERT (SELECT status FROM public.posts WHERE id = post_t) = 'processing',
@@ -225,7 +226,8 @@ BEGIN
     'T3 the checkpoint is pending IMAGE and never uses the container as provider post ID';
 
   UPDATE public.platform_posts SET status = 'success' WHERE post_id = post_t AND social_account_id = acct_ig;
-  UPDATE public.posts SET status = 'completed' WHERE id = post_t;
+  UPDATE public.posts SET status = 'completed',
+    metadata = jsonb_build_object('pinterest_post_type', 'image', 'settlement_rollup_at', claim_at) WHERE id = post_t;
   row_again := public.record_threads_image_checkpoint(post_t, acct_th, payload, claim_at, expected);
   ASSERT row_again = row_t, 'T4 a repeated acknowledged or recovered checkpoint returns the same UUID';
   ASSERT (SELECT status FROM public.posts WHERE id = post_t) = 'processing',
@@ -233,6 +235,9 @@ BEGIN
   ASSERT (SELECT count(*) FROM public.platform_posts
            WHERE post_id = post_t AND social_account_id = acct_th) = 1,
     'T5 checkpoint recovery never inserts a duplicate';
+
+  -- Restore clean metadata for subsequent pre-send fence assertions
+  UPDATE public.posts SET metadata = '{"pinterest_post_type":"image"}'::jsonb WHERE id = post_t;
 
   refused := false;
   BEGIN
@@ -414,8 +419,8 @@ BEGIN
 
   row_again := public.record_threads_image_checkpoint(post_t, acct_th, payload, claim_at, expected);
   ASSERT row_again = row_t, 'T18b terminal checkpoint replay returns the same settled row';
-  ASSERT (SELECT status FROM public.posts WHERE id = post_t) = 'completed',
-    'T18c terminal checkpoint replay never resurrects the parent';
+  ASSERT (SELECT status FROM public.posts WHERE id = post_t) = 'processing',
+    'T18c terminal checkpoint replay never resurrects or finalizes the parent outside the fenced attempt finalizer';
   ASSERT (SELECT count(*) FROM public.platform_posts
            WHERE post_id = post_t AND social_account_id = acct_th) = 1,
     'T18d terminal checkpoint replay creates no second operation';
@@ -468,6 +473,422 @@ BEGIN
     'T26 checkpoint, execution and settlement functions are security definer with pinned search_path';
 END $$;
 
+-- T27-T48: bounded original-request ownership, definitely-unsent release and
+-- atomic attempt finalization (migration 20261117120000).
+DO $$
+DECLARE
+  u_a uuid := 'd1d1d1d1-1111-4111-8111-d1d1d1d1d1d1';
+  acct_th uuid := 'd3d3d3d3-3333-4333-8333-d3d3d3d3d3d3';
+  acct_b uuid := 'd5d5d5d5-5555-4555-8555-d5d5d5d5d5d5';
+  post_i uuid := 'e0000000-0000-4000-8000-0000000000e4';
+  row_i uuid;
+  claim_at timestamptz := now();
+  expected jsonb;
+  payload jsonb;
+  claimed jsonb;
+  saved jsonb;
+  lease_at timestamptz;
+  finalized jsonb;
+BEGIN
+  INSERT INTO public.posts (id, user_id, caption, platforms, status, processing_started_at, source)
+  VALUES (post_i, u_a, 'inline synthetic image', ARRAY['threads'], 'processing', claim_at, 'manual');
+  expected := jsonb_build_object(
+    'user_id', u_a, 'caption', 'inline synthetic image', 'media_file_ids', NULL,
+    'metadata', '{}'::jsonb, 'platforms', ARRAY['threads'], 'scheduled_at', NULL,
+    'publish_requested_at', NULL, 'source', 'manual'
+  );
+  payload := jsonb_build_object('deferred', jsonb_build_object(
+    'kind', 'threads', 'media_type', 'IMAGE', 'container_id', 'inline-container-1',
+    'attempt_started_at', claim_at, 'attempts', 0,
+    'first_deferred_at', claim_at, 'give_up_at', claim_at + interval '30 minutes',
+    'next_check_at', claim_at + interval '1 minute'
+  ), 'content_fence', expected, 'account_updated_at',
+    (SELECT updated_at FROM public.social_accounts WHERE id = acct_th));
+  row_i := public.record_threads_image_checkpoint(post_i, acct_th, payload, claim_at, expected);
+
+  ASSERT public.claim_threads_image_inline_execution(row_i, post_i, acct_b,
+    'inline-container-1', claim_at, expected, 'inline-cross-owner') IS NULL,
+    'T27 inline ownership structurally rejects another account';
+  ASSERT public.claim_threads_image_inline_execution(row_i, post_i, acct_th,
+    'wrong-container', claim_at, expected, 'inline-wrong-container') IS NULL,
+    'T28 inline ownership rejects the wrong container';
+  ASSERT public.claim_threads_image_inline_execution(row_i, post_i, acct_th,
+    'inline-container-1', claim_at - interval '1 second', expected, 'inline-wrong-attempt') IS NULL,
+    'T29 inline ownership rejects the wrong processing attempt';
+
+  claimed := public.claim_threads_image_inline_execution(row_i, post_i, acct_th,
+    'inline-container-1', claim_at, expected, 'inline-execution-1');
+  lease_at := (claimed #>> '{response_data,deferred,claimed_until}')::timestamptz;
+  ASSERT claimed->>'platform_post_id' = row_i::text AND lease_at > now()
+    AND claimed #>> '{response_data,deferred,execution_id}' = 'inline-execution-1'
+    AND claimed #>> '{response_data,deferred,execution_claimed_until}' = claimed #>> '{response_data,deferred,claimed_until}',
+    'T30 inline ownership returns the authoritative row and database lease';
+  ASSERT claimed #>> '{response_data,deferred,next_check_at}' = payload #>> '{deferred,next_check_at}',
+    'T31 original-request ownership does not rewrite next_check_at';
+  ASSERT public.claim_threads_image_inline_execution(row_i, post_i, acct_th,
+    'inline-container-1', claim_at, expected, 'inline-execution-2') IS NULL,
+    'T32 a duplicate inline execution loses';
+
+  UPDATE public.platform_posts SET response_data = jsonb_set(response_data, '{deferred,next_check_at}',
+    to_jsonb(now() - interval '1 minute'), true) WHERE id = row_i;
+  ASSERT NOT EXISTS (SELECT 1 FROM public.claim_deferred_publishes(10) WHERE platform_post_id = row_i),
+    'T33 cron cannot take a live inline lease';
+
+  ASSERT NOT public.release_threads_image_publish_unsent(row_i, 'inline-container-1', claim_at,
+    lease_at, 'inline-execution-1', 'wrong-marker', expected),
+    'T34 release rejects a mismatched marker';
+  ASSERT public.mark_threads_image_publish_started(row_i, lease_at, 'inline-execution-1', expected),
+    'T35 the inline owner can persist its pre-send marker';
+  saved := (SELECT response_data FROM public.platform_posts WHERE id = row_i);
+  ASSERT NOT public.release_threads_image_publish_unsent(row_i, 'wrong-container', claim_at,
+    lease_at, 'inline-execution-1', 'inline-execution-1', expected),
+    'T36 release rejects a mismatched container';
+  ASSERT NOT public.release_threads_image_publish_unsent(row_i, 'inline-container-1', claim_at,
+    lease_at, 'wrong-execution', 'inline-execution-1', expected),
+    'T37 release rejects a mismatched execution';
+  ASSERT (SELECT response_data FROM public.platform_posts WHERE id = row_i) = saved,
+    'T38 refused releases preserve all response data and ownership';
+
+  ASSERT public.release_threads_image_publish_unsent(row_i, 'inline-container-1', claim_at,
+    lease_at, 'inline-execution-1', 'inline-execution-1', expected),
+    'T39 the exact definitely-unsent release succeeds';
+  ASSERT (SELECT response_data #>> '{deferred,publish_attempt_id}' IS NULL
+            AND response_data #>> '{deferred,execution_id}' = 'inline-execution-1'
+            AND response_data #>> '{deferred,container_id}' = 'inline-container-1'
+            AND response_data -> 'content_fence' = expected
+            FROM public.platform_posts WHERE id = row_i),
+    'T40 release removes only the matching marker';
+  ASSERT NOT public.release_threads_image_publish_unsent(row_i, 'inline-container-1', claim_at,
+    lease_at, 'inline-execution-1', 'inline-execution-1', expected),
+    'T41 release replay is refused without a marker';
+
+  UPDATE public.platform_posts SET response_data = jsonb_set(response_data,
+    '{deferred,publish_attempt_id}', to_jsonb('inline-execution-1'::text), true) WHERE id = row_i;
+  UPDATE public.posts SET status = 'failed' WHERE id = post_i;
+  ASSERT NOT public.release_threads_image_publish_unsent(row_i, 'inline-container-1', claim_at,
+    lease_at, 'inline-execution-1', 'inline-execution-1', expected),
+    'T42 cancellation refuses release conservatively';
+  UPDATE public.posts SET status = 'processing', caption = 'edited before release' WHERE id = post_i;
+  ASSERT NOT public.release_threads_image_publish_unsent(row_i, 'inline-container-1', claim_at,
+    lease_at, 'inline-execution-1', 'inline-execution-1', expected),
+    'T43 edited content refuses release conservatively';
+  UPDATE public.posts SET caption = 'inline synthetic image' WHERE id = post_i;
+  UPDATE public.social_accounts SET is_active = false WHERE id = acct_th;
+  ASSERT NOT public.release_threads_image_publish_unsent(row_i, 'inline-container-1', claim_at,
+    lease_at, 'inline-execution-1', 'inline-execution-1', expected),
+    'T44 an inactive credential refuses release';
+  UPDATE public.social_accounts SET is_active = true WHERE id = acct_th;
+  UPDATE public.platform_posts SET response_data = jsonb_set(response_data,
+    '{deferred,publish_outcome}', to_jsonb('uncertain'::text), true) WHERE id = row_i;
+  ASSERT NOT public.release_threads_image_publish_unsent(row_i, 'inline-container-1', claim_at,
+    lease_at, 'inline-execution-1', 'inline-execution-1', expected),
+    'T45 a real uncertain send can never be released';
+
+  finalized := public.finalize_threads_image_attempt(post_i, claim_at, expected);
+  ASSERT finalized->>'status' = 'processing' AND finalized->>'notify' = 'false'
+    AND finalized->>'stale' = 'false', 'T46 pending work cannot finalize or notify';
+
+  UPDATE public.platform_posts SET response_data = (response_data || jsonb_build_object('deferred',
+    (response_data->'deferred') - 'publish_attempt_id' - 'publish_outcome')) WHERE id = row_i;
+  PERFORM public.partner_settle_platform_post(row_i, post_i, acct_th, 'threads', 'success',
+    'published-inline-1', NULL, NULL, (SELECT response_data FROM public.platform_posts WHERE id = row_i));
+  finalized := public.finalize_threads_image_attempt(post_i, claim_at, expected);
+  ASSERT finalized->>'status' = 'completed' AND finalized->>'notify' = 'true'
+    AND finalized->>'stale' = 'false', 'T47 the original attempt claims its one final notification';
+  ASSERT public.finalize_threads_image_attempt(post_i, claim_at, expected)->>'notify' = 'false',
+    'T48 finalization replay cannot claim a second notification';
+  ASSERT public.claim_threads_image_inline_execution(row_i, post_i, acct_th,
+    'inline-container-1', claim_at, expected, 'terminal-replay') IS NULL,
+    'T49 terminal inline-claim replay creates no execution';
+
+  UPDATE public.posts SET processing_started_at = claim_at + interval '1 second', status = 'processing'
+   WHERE id = post_i;
+  finalized := public.finalize_threads_image_attempt(post_i, claim_at, expected);
+  ASSERT finalized->>'stale' = 'true' AND finalized->>'notify' = 'false'
+    AND (SELECT processing_started_at FROM public.posts WHERE id = post_i) = claim_at + interval '1 second',
+    'T50 stale finalization cannot change or announce a newer parent';
+
+  ASSERT NOT has_function_privilege('authenticated',
+    'public.claim_threads_image_inline_execution(uuid,uuid,uuid,text,timestamptz,jsonb,text)', 'EXECUTE'),
+    'T51 authenticated cannot claim inline execution';
+  ASSERT NOT has_function_privilege('anon',
+    'public.release_threads_image_publish_unsent(uuid,text,timestamptz,timestamptz,text,text,jsonb)', 'EXECUTE'),
+    'T52 anon cannot release an image marker';
+  ASSERT NOT has_function_privilege('authenticated',
+    'public.finalize_threads_image_attempt(uuid,timestamptz,jsonb,uuid[])', 'EXECUTE'),
+    'T53 authenticated cannot finalize an image attempt';
+  ASSERT (SELECT bool_and(prosecdef AND 'search_path=public' = ANY(proconfig)) FROM pg_proc WHERE oid IN (
+    'public.claim_threads_image_inline_execution(uuid,uuid,uuid,text,timestamptz,jsonb,text)'::regprocedure,
+    'public.release_threads_image_publish_unsent(uuid,text,timestamptz,timestamptz,text,text,jsonb)'::regprocedure,
+    'public.finalize_threads_image_attempt(uuid,timestamptz,jsonb,uuid[])'::regprocedure)),
+    'T54 all new RPCs are security definer with a pinned search_path';
+END $$;
+
+-- T55: an old image can settle its own row without rolling back edited parent content.
+DO $$
+DECLARE
+  u_a uuid := 'd1d1d1d1-1111-4111-8111-d1d1d1d1d1d1';
+  acct_th uuid := 'd3d3d3d3-3333-4333-8333-d3d3d3d3d3d3';
+  post_s uuid := 'e0000000-0000-4000-8000-0000000000e5';
+  row_s uuid;
+  claim_at timestamptz := now();
+  expected jsonb;
+  payload jsonb;
+  claimed jsonb;
+BEGIN
+  INSERT INTO public.posts (id, user_id, caption, platforms, status, processing_started_at, source)
+  VALUES (post_s, u_a, 'stale settlement image', ARRAY['threads'], 'processing', claim_at, 'manual');
+  expected := jsonb_build_object(
+    'user_id', u_a, 'caption', 'stale settlement image', 'media_file_ids', NULL,
+    'metadata', '{}'::jsonb, 'platforms', ARRAY['threads'], 'scheduled_at', NULL,
+    'publish_requested_at', NULL, 'source', 'manual'
+  );
+  payload := jsonb_build_object('deferred', jsonb_build_object(
+    'kind', 'threads', 'media_type', 'IMAGE', 'container_id', 'stale-settlement-container',
+    'attempt_started_at', claim_at, 'attempts', 0,
+    'first_deferred_at', claim_at, 'give_up_at', claim_at + interval '30 minutes',
+    'next_check_at', claim_at + interval '1 minute'
+  ), 'content_fence', expected, 'account_updated_at',
+    (SELECT updated_at FROM public.social_accounts WHERE id = acct_th));
+  row_s := public.record_threads_image_checkpoint(post_s, acct_th, payload, claim_at, expected);
+  claimed := public.claim_threads_image_inline_execution(row_s, post_s, acct_th,
+    'stale-settlement-container', claim_at, expected, 'stale-settlement-execution');
+  UPDATE public.posts SET caption = 'newer parent content' WHERE id = post_s;
+  PERFORM public.partner_settle_platform_post(row_s, post_s, acct_th, 'threads', 'success',
+    'published-stale-image', NULL, NULL, claimed->'response_data');
+  ASSERT (SELECT status FROM public.platform_posts WHERE id = row_s) = 'success'
+    AND (SELECT status FROM public.posts WHERE id = post_s) = 'processing'
+    AND (SELECT caption FROM public.posts WHERE id = post_s) = 'newer parent content',
+    'T55 stale image settlement preserves the newer parent while settling the same row';
+END $$;
+
+-- T56-T60: selected siblings and status-only cancellation are persisted fences.
+DO $$
+DECLARE
+  u_a uuid := 'd1d1d1d1-1111-4111-8111-d1d1d1d1d1d1';
+  acct_ig uuid := 'd2d2d2d2-2222-4222-8222-d2d2d2d2d2d2';
+  acct_th uuid := 'd3d3d3d3-3333-4333-8333-d3d3d3d3d3d3';
+  post_f uuid := 'e0000000-0000-4000-8000-0000000000e6';
+  row_f uuid;
+  claim_at timestamptz := now();
+  expected jsonb;
+  payload jsonb;
+  claimed jsonb;
+  finalized jsonb;
+BEGIN
+  INSERT INTO public.posts (id, user_id, caption, platforms, status, processing_started_at, source, metadata)
+  VALUES (post_f, u_a, 'selected sibling image', ARRAY['instagram','threads'], 'processing', claim_at, 'manual',
+    jsonb_build_object('selected_account_ids', jsonb_build_array(acct_ig, acct_th)));
+  expected := jsonb_build_object(
+    'user_id', u_a, 'caption', 'selected sibling image', 'media_file_ids', NULL,
+    'metadata', jsonb_build_object('selected_account_ids', jsonb_build_array(acct_ig, acct_th)),
+    'platforms', ARRAY['instagram','threads'], 'scheduled_at', NULL,
+    'publish_requested_at', NULL, 'source', 'manual'
+  );
+  payload := jsonb_build_object('deferred', jsonb_build_object(
+    'kind', 'threads', 'media_type', 'IMAGE', 'container_id', 'selected-sibling-container',
+    'attempt_started_at', claim_at, 'attempts', 0,
+    'first_deferred_at', claim_at, 'give_up_at', claim_at + interval '30 minutes',
+    'next_check_at', claim_at + interval '1 minute'
+  ), 'content_fence', expected, 'account_updated_at',
+    (SELECT updated_at FROM public.social_accounts WHERE id = acct_th));
+  row_f := public.record_threads_image_checkpoint(post_f, acct_th, payload, claim_at, expected);
+  claimed := public.claim_threads_image_inline_execution(row_f, post_f, acct_th,
+    'selected-sibling-container', claim_at, expected, 'selected-sibling-execution');
+  PERFORM public.partner_settle_platform_post(row_f, post_f, acct_th, 'threads', 'success',
+    'published-selected-image', NULL, NULL, claimed->'response_data');
+
+  finalized := public.finalize_threads_image_attempt(post_f, claim_at, expected);
+  ASSERT finalized->>'status' = 'processing' AND finalized->>'notify' = 'false'
+    AND (SELECT status FROM public.posts WHERE id = post_f) = 'processing',
+    'T56 a selected sibling without a durable row prevents final status and notification';
+
+  UPDATE public.posts SET status = 'pending' WHERE id = post_f;
+  finalized := public.finalize_threads_image_attempt(post_f, claim_at, expected);
+  ASSERT finalized->>'status' = 'pending' AND finalized->>'stale' = 'true'
+    AND finalized->>'notify' = 'false'
+    AND (SELECT status FROM public.posts WHERE id = post_f) = 'pending',
+    'T57 status-only pending cancellation is preserved with unchanged content and attempt';
+  UPDATE public.posts SET status = 'processing' WHERE id = post_f;
+
+  INSERT INTO public.platform_posts (post_id, social_account_id, platform, status, platform_post_id)
+  VALUES (post_f, acct_ig, 'instagram', 'success', 'selected-sibling-instagram');
+  finalized := public.finalize_threads_image_attempt(post_f, claim_at, expected);
+  ASSERT finalized->>'status' = 'completed' AND finalized->>'stale' = 'false'
+    AND finalized->>'notify' = 'true',
+    'T58 the original processing attempt finalizes after every selected sibling has a result';
+
+  UPDATE public.posts SET status = 'failed' WHERE id = post_f;
+  finalized := public.finalize_threads_image_attempt(post_f, claim_at, expected);
+  ASSERT finalized->>'status' = 'failed' AND finalized->>'notify' = 'false'
+    AND (SELECT status FROM public.posts WHERE id = post_f) = 'failed',
+    'T59 a later status-only terminal change is never overwritten by finalization replay';
+END $$;
+
+DO $$
+DECLARE
+  u_a uuid := 'd1d1d1d1-1111-4111-8111-d1d1d1d1d1d1';
+  acct_th uuid := 'd3d3d3d3-3333-4333-8333-d3d3d3d3d3d3';
+  post_c uuid := 'e0000000-0000-4000-8000-0000000000e7';
+  row_c uuid;
+  claim_at timestamptz := now();
+  expected jsonb;
+  payload jsonb;
+  claimed jsonb;
+BEGIN
+  INSERT INTO public.posts (id, user_id, caption, platforms, status, processing_started_at, source)
+  VALUES (post_c, u_a, 'status only cancel image', ARRAY['threads'], 'processing', claim_at, 'manual');
+  expected := jsonb_build_object(
+    'user_id', u_a, 'caption', 'status only cancel image', 'media_file_ids', NULL,
+    'metadata', '{}'::jsonb, 'platforms', ARRAY['threads'], 'scheduled_at', NULL,
+    'publish_requested_at', NULL, 'source', 'manual'
+  );
+  payload := jsonb_build_object('deferred', jsonb_build_object(
+    'kind', 'threads', 'media_type', 'IMAGE', 'container_id', 'status-only-cancel-container',
+    'attempt_started_at', claim_at, 'attempts', 0,
+    'first_deferred_at', claim_at, 'give_up_at', claim_at + interval '30 minutes',
+    'next_check_at', claim_at + interval '1 minute'
+  ), 'content_fence', expected, 'account_updated_at',
+    (SELECT updated_at FROM public.social_accounts WHERE id = acct_th));
+  row_c := public.record_threads_image_checkpoint(post_c, acct_th, payload, claim_at, expected);
+  claimed := public.claim_threads_image_inline_execution(row_c, post_c, acct_th,
+    'status-only-cancel-container', claim_at, expected, 'status-only-cancel-execution');
+  UPDATE public.posts SET status = 'pending' WHERE id = post_c;
+  PERFORM public.partner_settle_platform_post(row_c, post_c, acct_th, 'threads', 'success',
+    'published-status-only-cancel', NULL, NULL, claimed->'response_data');
+  ASSERT (SELECT status FROM public.platform_posts WHERE id = row_c) = 'success'
+    AND (SELECT status FROM public.posts WHERE id = post_c) = 'pending'
+    AND (SELECT caption FROM public.posts WHERE id = post_c) = 'status only cancel image',
+    'T60 old image settlement preserves status-only cancellation with identical content and attempt';
+END $$;
+
+-- T61-T64: A02 (status-only cancellation vs sibling rollup), A03 (lost settlement ACK replay),
+-- and A04 (sibling completeness with multi-account list).
+DO $$
+DECLARE
+  u_a uuid := 'd1d1d1d1-1111-4111-8111-d1d1d1d1d1d1';
+  acct_th uuid := 'd3d3d3d3-3333-4333-8333-d3d3d3d3d3d3';
+  acct_th2 uuid := 'd4d4d4d4-4444-4444-8444-d4d4d4d4d4d4';
+  post_a02 uuid := 'e0000000-0000-4000-8000-0000000000f1';
+  post_a03 uuid := 'e0000000-0000-4000-8000-0000000000f2';
+  post_a04 uuid := 'e0000000-0000-4000-8000-0000000000f3';
+  row_id uuid;
+  row_ack uuid;
+  row_th1 uuid;
+  claim_at timestamptz := now();
+  expected jsonb;
+  payload jsonb;
+  claimed jsonb;
+  finalized jsonb;
+  caught_cancel boolean := false;
+BEGIN
+  -- Insert second Threads account for user u_a
+  INSERT INTO public.social_accounts (id, user_id, platform, platform_user_id, platform_username, access_token, is_active)
+  VALUES (acct_th2, u_a, 'threads', 'dp-th2', 'dp_th2', 'tok-th2', true)
+  ON CONFLICT (id) DO NOTHING;
+
+  -- T61: A02 status-only cancellation rejects admission without settlement_rollup_at
+  INSERT INTO public.posts (id, user_id, caption, platforms, status, processing_started_at, source)
+  VALUES (post_a02, u_a, 'a02 cancellation post', ARRAY['threads'], 'failed', claim_at, 'manual');
+
+  expected := jsonb_build_object(
+    'user_id', u_a, 'caption', 'a02 cancellation post', 'media_file_ids', NULL,
+    'metadata', '{}'::jsonb, 'platforms', ARRAY['threads'], 'scheduled_at', NULL,
+    'publish_requested_at', NULL, 'source', 'manual'
+  );
+  payload := jsonb_build_object('deferred', jsonb_build_object(
+    'kind', 'threads', 'media_type', 'IMAGE', 'container_id', 'a02-cancel-container',
+    'attempt_started_at', claim_at, 'attempts', 0,
+    'first_deferred_at', claim_at, 'give_up_at', claim_at + interval '30 minutes',
+    'next_check_at', claim_at + interval '1 minute'
+  ), 'content_fence', expected, 'account_updated_at',
+    (SELECT updated_at FROM public.social_accounts WHERE id = acct_th));
+
+  BEGIN
+    PERFORM public.record_threads_image_checkpoint(post_a02, acct_th, payload, claim_at, expected);
+  EXCEPTION WHEN serialization_failure THEN
+    caught_cancel := true;
+  END;
+  ASSERT caught_cancel, 'T61 status-only failed cancellation raises serialization_failure on admission';
+  ASSERT (SELECT status FROM public.posts WHERE id = post_a02) = 'failed',
+    'T61 post remains failed and was not resurrected';
+
+  -- T62: A02 sibling rollup with settlement_rollup_at permits admission and reopens processing
+  UPDATE public.posts
+     SET metadata = jsonb_build_object('settlement_rollup_at', claim_at + interval '10 seconds')
+   WHERE id = post_a02;
+  INSERT INTO public.platform_posts (id, post_id, social_account_id, platform, status, response_data, created_at)
+  VALUES ('f0000000-0000-4000-8000-0000000000f1', post_a02, acct_th2, 'threads', 'success', '{}'::jsonb, claim_at);
+
+  row_id := public.record_threads_image_checkpoint(post_a02, acct_th, payload, claim_at, expected);
+  ASSERT row_id IS NOT NULL, 'T62 checkpoint admitted under legitimate sibling rollup';
+  ASSERT (SELECT status FROM public.posts WHERE id = post_a02) = 'processing',
+    'T62 post status reopened to processing for sibling admission';
+
+  -- T63: A03 lost settlement ACK replay on already-settled row returns existing ID without modifying parent
+  INSERT INTO public.posts (id, user_id, caption, platforms, status, processing_started_at, source)
+  VALUES (post_a03, u_a, 'a03 lost ack post', ARRAY['threads'], 'completed', claim_at, 'manual');
+  expected := jsonb_build_object(
+    'user_id', u_a, 'caption', 'a03 lost ack post', 'media_file_ids', NULL,
+    'metadata', '{}'::jsonb, 'platforms', ARRAY['threads'], 'scheduled_at', NULL,
+    'publish_requested_at', NULL, 'source', 'manual'
+  );
+  payload := jsonb_build_object('deferred', jsonb_build_object(
+    'kind', 'threads', 'media_type', 'IMAGE', 'container_id', 'a03-ack-container',
+    'attempt_started_at', claim_at, 'attempts', 0,
+    'first_deferred_at', claim_at, 'give_up_at', claim_at + interval '30 minutes',
+    'next_check_at', claim_at + interval '1 minute'
+  ), 'content_fence', expected, 'account_updated_at',
+    (SELECT updated_at FROM public.social_accounts WHERE id = acct_th));
+
+  INSERT INTO public.platform_posts (id, post_id, social_account_id, platform, status, response_data, created_at)
+  VALUES ('f0000000-0000-4000-8000-0000000000f2', post_a03, acct_th, 'threads', 'success', payload, claim_at);
+
+  row_ack := public.record_threads_image_checkpoint(post_a03, acct_th, payload, claim_at, expected);
+  ASSERT row_ack = 'f0000000-0000-4000-8000-0000000000f2'::uuid,
+    'T63 lost settlement ACK returns existing platform_post id';
+  ASSERT (SELECT status FROM public.posts WHERE id = post_a03) = 'completed',
+    'T63 parent completed status preserved on lost settlement ACK replay';
+
+  -- T64: A04 sibling completeness with multiple accounts of the same platform (Threads)
+  INSERT INTO public.posts (id, user_id, caption, platforms, status, processing_started_at, source, metadata)
+  VALUES (post_a04, u_a, 'a04 multi-threads image', ARRAY['threads'], 'processing', claim_at, 'manual',
+    jsonb_build_object('selected_account_ids', jsonb_build_array(acct_th, acct_th2)));
+  expected := jsonb_build_object(
+    'user_id', u_a, 'caption', 'a04 multi-threads image', 'media_file_ids', NULL,
+    'metadata', jsonb_build_object('selected_account_ids', jsonb_build_array(acct_th, acct_th2)),
+    'platforms', ARRAY['threads'], 'scheduled_at', NULL,
+    'publish_requested_at', NULL, 'source', 'manual'
+  );
+  payload := jsonb_build_object('deferred', jsonb_build_object(
+    'kind', 'threads', 'media_type', 'IMAGE', 'container_id', 'a04-container-1',
+    'attempt_started_at', claim_at, 'attempts', 0,
+    'first_deferred_at', claim_at, 'give_up_at', claim_at + interval '30 minutes',
+    'next_check_at', claim_at + interval '1 minute'
+  ), 'content_fence', expected, 'account_updated_at',
+    (SELECT updated_at FROM public.social_accounts WHERE id = acct_th));
+
+  row_th1 := public.record_threads_image_checkpoint(post_a04, acct_th, payload, claim_at, expected);
+  claimed := public.claim_threads_image_inline_execution(row_th1, post_a04, acct_th,
+    'a04-container-1', claim_at, expected, 'a04-execution-1');
+  PERFORM public.partner_settle_platform_post(row_th1, post_a04, acct_th, 'threads', 'success',
+    'published-th1', NULL, NULL, claimed->'response_data');
+
+  -- Finalize with expected account list [acct_th, acct_th2]: only 1 is settled, so status stays processing
+  finalized := public.finalize_threads_image_attempt(post_a04, claim_at, expected, ARRAY[acct_th, acct_th2]);
+  ASSERT finalized->>'status' = 'processing' AND finalized->>'notify' = 'false',
+    'T64 only one of two Threads accounts settled keeps post processing';
+
+  -- Settle second Threads account
+  INSERT INTO public.platform_posts (id, post_id, social_account_id, platform, status, platform_post_id)
+  VALUES ('f0000000-0000-4000-8000-0000000000f4', post_a04, acct_th2, 'threads', 'success', 'published-th2');
+
+  finalized := public.finalize_threads_image_attempt(post_a04, claim_at, expected, ARRAY[acct_th, acct_th2]);
+  ASSERT finalized->>'status' = 'completed' AND finalized->>'notify' = 'true',
+    'T64 all expected Threads accounts settled completes the post';
+END $$;
+
 ROLLBACK;
 
 \echo '=== deferred_publishes: ALL CHECKS PASSED ==='
+

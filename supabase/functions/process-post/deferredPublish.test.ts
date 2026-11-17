@@ -129,7 +129,7 @@ Deno.test("only a well-formed deferral is read off a row", () => {
   assertEquals(readDeferral(null), null);
 });
 
-function fakeDb(error: string | null = null, returnedId?: string, conditional = false) {
+function fakeDb(error: string | null = null, returnedId?: string, conditional = false, returnedData: unknown[] = [{ id: "pp-1" }]) {
   const writes: { op: string; values: unknown; filters: [string, unknown][] }[] = [];
   const db = {
     rpc: (fn: string, args: unknown) => {
@@ -145,7 +145,7 @@ function fakeDb(error: string | null = null, returnedId?: string, conditional = 
             write.filters.push([column, value]);
             return !conditional && write.filters.length === 2 ? Promise.resolve({ error: error ? { message: error } : null }) : chain;
           },
-          select: () => Promise.resolve({ data: [{ id: "pp-1" }], error: error ? { message: error } : null }),
+          select: () => Promise.resolve({ data: returnedData, error: error ? { message: error } : null }),
         };
         return chain;
       },
@@ -427,9 +427,30 @@ Deno.test("an image reschedule checks its execution, lease and container predica
     ["status", "pending"],
     ["response_data->deferred->>execution_id", "execution-1"],
     ["response_data->deferred->>claimed_until", "2026-10-29T12:03:00.000Z"],
+    ["response_data->deferred->>execution_claimed_until", "2026-10-29T12:03:00.000Z"],
     ["response_data->deferred->>container_id", "image-container"],
   ]);
   const next = (writes[0].values as { response_data: { deferred: { execution_id?: string; claimed_until?: string } } }).response_data.deferred;
   assertEquals(next.execution_id, null);
   assertEquals(next.claimed_until, null);
 });
+
+Deno.test("a stale image owner update with 0 affected rows returns ownership changed error", async () => {
+  const { db } = fakeDb(null, undefined, true, []); // 0 rows affected
+  const deferral = {
+    ...newDeferral("threads", "image-container", NOW, { mediaType: "IMAGE" }),
+    claimed_until: "2026-10-29T12:03:00.000Z",
+    execution_id: "execution-stale",
+    execution_claimed_until: "2026-10-29T12:03:00.000Z",
+  };
+  const result = await recordStillProcessing(db, noSettle, {
+    postId: "post-1",
+    account: { ...ACCOUNT, platform: "threads" },
+    signal: new ContainerStillProcessing("threads", "image-container"),
+    resume: { platformPostId: "pp-1", deferral },
+    resumeResponseData: { deferred: deferral },
+  }, NOW);
+  assertEquals(result.error, "Threads image execution ownership changed");
+  assertEquals(result.gaveUp, false);
+});
+

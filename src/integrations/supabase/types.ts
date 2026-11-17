@@ -11929,6 +11929,39 @@ export type Database = {
         Args: { p_platform_post_id: string; p_expected_claimed_until: string; p_execution_id: string }
         Returns: boolean
       }
+      claim_threads_image_inline_execution: {
+        Args: {
+          p_platform_post_id: string
+          p_post_id: string
+          p_social_account_id: string
+          p_expected_container_id: string
+          p_expected_processing_started_at: string
+          p_expected_content: Json
+          p_execution_id: string
+        }
+        Returns: Json
+      }
+      finalize_threads_image_attempt: {
+        Args: {
+          p_post_id: string
+          p_expected_processing_started_at: string
+          p_expected_content: Json
+          p_expected_account_ids?: string[] | null
+        }
+        Returns: Json
+      }
+      release_threads_image_publish_unsent: {
+        Args: {
+          p_platform_post_id: string
+          p_expected_container_id: string
+          p_expected_processing_started_at: string
+          p_expected_claimed_until: string
+          p_execution_id: string
+          p_publish_attempt_id: string
+          p_expected_content: Json
+        }
+        Returns: boolean
+      }
       mark_threads_image_publish_started: {
         Args: {
           p_platform_post_id: string
