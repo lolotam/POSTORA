@@ -1420,6 +1420,8 @@ async function sendFailureEmailNotification(
     if (invokeError) {
       if (delivery) throw invokeError;
       console.error("[Email] Failed to invoke email function:", invokeError);
+    } else if (delivery && (!emailData || typeof emailData !== "object" || (emailData as Record<string, unknown>).success !== true)) {
+      throw new Error("Email function did not acknowledge delivery or an authorized opt-out");
     } else if (emailData && typeof emailData === "object" && (emailData as Record<string, unknown>).success === false) {
       const message = (emailData as Record<string, unknown>).message || "Email delivery failed";
       if (delivery) throw new Error(`Email function reported failure: ${message}`);
@@ -1560,18 +1562,34 @@ async function announceFinalPost(
       imageFence.content,
     );
     if (!claim.claimed || !claim.claimId) {
-      console.log(`[process-post] threads image final-notification claim not acquired (${claim.error ?? "already claimed"}); skipping dispatch`);
+      await writeLogRow(supabase, {
+        level: claim.error ? "warn" : "info", category: "post", source: "process-post", user_id: post.user_id,
+        message: "Threads image final notification claim was refused; no notice was sent",
+        metadata: { event: "threads_image_notification_claim_refused", post_id: post.id, reason: claim.error ?? "already claimed" },
+      });
       return false;
     }
     try {
-      if (Array.isArray(claim.authorizedPlatformPostIds)) {
+      if (!claim.authorizedPlatformPostIds?.length || !claim.authorizedPlatformPostStatuses) {
+        await writeLogRow(supabase, {
+          level: "error", category: "post", source: "process-post", user_id: post.user_id,
+          message: "Threads image notification withheld because its leased result scope is missing",
+          metadata: { event: "threads_image_notification_invalid_scope", post_id: post.id },
+        });
+        return false;
+      }
+      {
         const outcome = await readPostOutcome(
-          postReaderFor(supabase, claim.authorizedPlatformPostIds),
+          postReaderFor(supabase, claim.authorizedPlatformPostIds, claim.authorizedPlatformPostStatuses),
           post.id,
           { results: platformResults, hasSuccess: finalStatus === "completed", hasFailed },
         );
         if (outcome.kind !== "terminal" || outcome.degraded) {
-          console.warn(`[process-post] withholding Threads image managed notification: authorized rows mismatch or degraded`);
+          await writeLogRow(supabase, {
+            level: "error", category: "post", source: "process-post", user_id: post.user_id,
+            message: "Threads image notification withheld because its leased result rows changed or could not be completely read",
+            metadata: { event: "threads_image_notification_read_degraded", post_id: post.id },
+          });
           return false;
         }
         platformResults = outcome.results;
@@ -1587,7 +1605,11 @@ async function announceFinalPost(
         claim.claimId,
       );
       if (!confirmed.confirmed) {
-        console.error(`[process-post] threads image final-notification confirmation failed: ${confirmed.error}`);
+        await writeLogRow(supabase, {
+          level: "error", category: "post", source: "process-post", user_id: post.user_id,
+          message: "Threads image notification delivery could not be confirmed; intent retained",
+          metadata: { event: "threads_image_notification_confirmation_refused", post_id: post.id, reason: confirmed.error },
+        });
         return false;
       }
       return true;
@@ -1610,7 +1632,7 @@ async function announceFinalPost(
 }
 
 /** The reads readPostOutcome needs, against the service-role client. */
-function postReaderFor(supabase: SupabaseClient, authorizedPlatformPostIds?: string[] | null): PostReader {
+function postReaderFor(supabase: SupabaseClient, authorizedPlatformPostIds?: string[] | null, expectedStatuses?: Record<string, string>): PostReader {
   return {
     postStatus: (postId) => supabase.from("posts").select("status").eq("id", postId).maybeSingle(),
     platformRows: async (postId) => {
@@ -1629,7 +1651,10 @@ function postReaderFor(supabase: SupabaseClient, authorizedPlatformPostIds?: str
       if (Array.isArray(authorizedPlatformPostIds)) {
         const returnedIds = new Set((res.data ?? []).map((r: { id: string }) => r.id));
         const expectedIds = new Set(authorizedPlatformPostIds);
-        if (returnedIds.size !== expectedIds.size || !authorizedPlatformPostIds.every((id) => returnedIds.has(id))) {
+        if (expectedIds.size !== authorizedPlatformPostIds.length || returnedIds.size !== expectedIds.size || (res.data ?? []).length !== expectedIds.size ||
+          !authorizedPlatformPostIds.every((id) => returnedIds.has(id)) ||
+          (res.data ?? []).some((row: { id: string; status: string }) =>
+            !["success", "failed"].includes(row.status) || (expectedStatuses && expectedStatuses[row.id] !== row.status))) {
           return {
             data: null,
             error: {
@@ -3123,13 +3148,14 @@ Deno.serve(async (req) => {
           already_processing?: boolean;
         } | null;
 
-        if (restoreError || !res) {
+        if (restoreError || !res || typeof res.restored !== "boolean" ||
+          (!res.restored && typeof res.current_status !== "string")) {
           await writeLogRow(supabase, {
             level: "error", category: "post", source: "process-post", user_id: post.user_id,
             message: "Could not execute atomic restoration of processing status for sibling rollup",
             metadata: { event: "legacy_pending_rollup_read_failed", post_id, error: restoreError?.message ?? "RPC failed" },
           });
-          finalStatus = "canceled";
+          return createErrorResponse("Deferred publication could not confirm its current parent state. Existing work is retained.", 503);
         } else if (res.restored) {
           finalStatus = "processing";
           if (!res.already_processing) {
@@ -3146,7 +3172,7 @@ Deno.serve(async (req) => {
               reason: res.reason,
             },
           });
-          finalStatus = res.current_status ?? "canceled";
+          finalStatus = res.current_status!;
           console.log("Parent status was canceled or modified; processing status not restored");
         }
       } else {

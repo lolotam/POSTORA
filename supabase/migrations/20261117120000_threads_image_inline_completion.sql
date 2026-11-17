@@ -763,6 +763,8 @@ DECLARE
   v_content jsonb;
   v_intent jsonb;
   v_claim_id uuid := gen_random_uuid();
+  v_authorized_ids uuid[];
+  v_result_statuses jsonb;
 BEGIN
   IF p_post_id IS NULL OR p_expected_processing_started_at IS NULL OR p_expected_status IS NULL THEN
     RETURN jsonb_build_object('claimed', false, 'error', 'invalid_arguments');
@@ -817,6 +819,37 @@ BEGIN
     RETURN jsonb_build_object('claimed', false, 'status', v_post.status, 'error', 'intent_unusable');
   END IF;
 
+  IF jsonb_typeof(v_intent -> 'authorized_platform_post_ids') IS DISTINCT FROM 'array'
+     OR jsonb_array_length(v_intent -> 'authorized_platform_post_ids') = 0 THEN
+    RETURN jsonb_build_object('claimed', false, 'status', v_post.status, 'error', 'invalid_result_scope');
+  END IF;
+  IF EXISTS (
+    SELECT 1 FROM jsonb_array_elements_text(v_intent -> 'authorized_platform_post_ids') x
+     WHERE x IS NULL OR x !~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+  ) THEN
+    RETURN jsonb_build_object('claimed', false, 'status', v_post.status, 'error', 'invalid_result_scope');
+  END IF;
+  SELECT array_agg(x::uuid) INTO v_authorized_ids
+    FROM jsonb_array_elements_text(v_intent -> 'authorized_platform_post_ids') x;
+  IF cardinality(v_authorized_ids) <> (SELECT count(DISTINCT x) FROM unnest(v_authorized_ids) x)
+     OR (v_post.metadata ->> 'attempt_started_at')::timestamptz IS DISTINCT FROM p_expected_processing_started_at THEN
+    RETURN jsonb_build_object('claimed', false, 'status', v_post.status, 'error', 'invalid_result_scope');
+  END IF;
+  -- Validate membership and capture result statuses in one database snapshot.
+  SELECT jsonb_object_agg(pp.id::text, pp.status) INTO v_result_statuses
+    FROM public.platform_posts pp
+    JOIN public.social_accounts a ON a.id=pp.social_account_id AND a.user_id=v_post.user_id
+   WHERE pp.id=ANY(v_authorized_ids) AND pp.post_id=p_post_id AND pp.status IN ('success','failed')
+     AND (
+       (pp.status='success' AND coalesce(v_post.metadata->'attempt_retained_platform_post_ids','[]'::jsonb) @> to_jsonb(ARRAY[pp.id]))
+       OR (coalesce(v_post.metadata->'attempt_target_account_ids','[]'::jsonb) @> to_jsonb(ARRAY[pp.social_account_id])
+           AND (pp.created_at>=p_expected_processing_started_at
+                OR (pp.response_data #>> '{deferred,attempt_started_at}')::timestamptz=p_expected_processing_started_at))
+     );
+  IF (SELECT count(*) FROM jsonb_object_keys(coalesce(v_result_statuses,'{}'::jsonb))) <> cardinality(v_authorized_ids) THEN
+    RETURN jsonb_build_object('claimed', false, 'status', v_post.status, 'error', 'invalid_result_scope');
+  END IF;
+
   IF coalesce((v_intent ->> 'claimed_until')::timestamptz, '-infinity') > now() THEN
     RETURN jsonb_build_object('claimed', false, 'status', v_post.status, 'error', 'lease_held');
   END IF;
@@ -834,7 +867,8 @@ BEGIN
     'claimed', true,
     'status', v_post.status,
     'claim_id', v_claim_id,
-    'authorized_platform_post_ids', v_intent -> 'authorized_platform_post_ids'
+    'authorized_platform_post_ids', v_intent -> 'authorized_platform_post_ids',
+    'authorized_platform_post_statuses', v_result_statuses
   );
 END;
 $$;
@@ -1179,6 +1213,27 @@ BEGIN
     RETURN jsonb_build_object('restored', false, 'reason', 'not_found');
   END IF;
 
+  v_content := jsonb_build_object(
+    'user_id', v_post.user_id,
+    'caption', v_post.caption,
+    'media_file_ids', v_post.media_file_ids,
+    'metadata', public.normalize_threads_internal_metadata(v_post.metadata),
+    'platforms', v_post.platforms,
+    'scheduled_at', v_post.scheduled_at,
+    'publish_requested_at', v_post.publish_requested_at,
+    'source', v_post.source
+  );
+  IF p_expected_processing_started_at IS NULL THEN
+    RETURN jsonb_build_object('restored', false, 'reason', 'invalid_arguments', 'current_status', v_post.status);
+  END IF;
+  IF v_post.processing_started_at IS DISTINCT FROM p_expected_processing_started_at THEN
+    RETURN jsonb_build_object('restored', false, 'reason', 'attempt_mismatch', 'current_status', v_post.status);
+  END IF;
+  IF v_content IS DISTINCT FROM jsonb_set(p_expected_content, '{metadata}',
+       public.normalize_threads_internal_metadata(p_expected_content -> 'metadata'), true) THEN
+    RETURN jsonb_build_object('restored', false, 'reason', 'content_mismatch', 'current_status', v_post.status);
+  END IF;
+
   IF v_post.status = 'processing' AND v_post.processing_started_at IS NOT DISTINCT FROM p_expected_processing_started_at THEN
     IF p_has_success AND v_post.posted_at IS NULL THEN
       UPDATE public.posts
@@ -1188,9 +1243,6 @@ BEGIN
     RETURN jsonb_build_object('restored', true, 'status', 'processing', 'already_processing', true);
   END IF;
 
-  IF v_post.processing_started_at IS DISTINCT FROM p_expected_processing_started_at THEN
-    RETURN jsonb_build_object('restored', false, 'reason', 'attempt_mismatch', 'current_status', v_post.status);
-  END IF;
 
   IF v_post.status NOT IN ('completed', 'failed') THEN
     RETURN jsonb_build_object('restored', false, 'reason', 'status_ineligible', 'current_status', v_post.status);
@@ -1200,20 +1252,10 @@ BEGIN
     RETURN jsonb_build_object('restored', false, 'reason', 'missing_rollup_provenance', 'current_status', v_post.status);
   END IF;
 
-  IF (v_post.metadata ->> 'settlement_rollup_processing_started_at')::timestamptz IS DISTINCT FROM p_expected_processing_started_at THEN
+  IF (v_post.metadata ->> 'settlement_rollup_processing_started_at')::timestamptz IS DISTINCT FROM p_expected_processing_started_at
+     OR (v_post.metadata ->> 'settlement_rollup_at')::timestamptz < p_expected_processing_started_at
+     OR (v_post.metadata ->> 'settlement_rollup_status') IS DISTINCT FROM v_post.status THEN
     RETURN jsonb_build_object('restored', false, 'reason', 'rollup_attempt_mismatch', 'current_status', v_post.status);
-  END IF;
-
-  v_content := jsonb_build_object(
-    'caption', v_post.caption,
-    'media_file_ids', v_post.media_file_ids,
-    'platforms', v_post.platforms,
-    'scheduled_at', v_post.scheduled_at,
-    'publish_requested_at', v_post.publish_requested_at,
-    'source', v_post.source
-  );
-  IF v_content IS DISTINCT FROM p_expected_content THEN
-    RETURN jsonb_build_object('restored', false, 'reason', 'content_mismatch', 'current_status', v_post.status);
   END IF;
 
   UPDATE public.posts

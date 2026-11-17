@@ -1134,13 +1134,17 @@ BEGIN
   VALUES (p_t78, owner_id, 't78 notification post', ARRAY['threads'], 'completed', attempt_at, 'manual',
     jsonb_build_object(
       'attempt_started_at', attempt_at,
+      'attempt_target_account_ids', jsonb_build_array(acct_1),
       'final_notification_intent', jsonb_build_object(
         'status', 'completed',
         'attempt_started_at', attempt_at,
         'notified', false,
+        'authorized_platform_post_ids', jsonb_build_array('f0000000-0000-4000-8000-000000000078'),
         'created_at', now()
       )
     ));
+  INSERT INTO public.platform_posts(id, post_id, social_account_id, platform, status, created_at)
+  VALUES ('f0000000-0000-4000-8000-000000000078', p_t78, acct_1, 'threads', 'success', attempt_at);
 
   fence_t78 := jsonb_build_object(
     'user_id', owner_id, 'caption', 't78 notification post', 'media_file_ids', NULL,
@@ -1386,9 +1390,18 @@ BEGIN
       'platforms', ARRAY['threads'], 'scheduled_at', NULL, 'publish_requested_at', NULL, 'source', 'manual'
     );
 
-    INSERT INTO public.platform_posts (id, post_id, social_account_id, platform, status, created_at, response_data)
-    VALUES (row_f, p_t83, acct_1, 'threads', 'failed', attempt_at,
-      jsonb_build_object('deferred', jsonb_build_object('kind', 'threads', 'media_type', 'IMAGE', 'attempt_started_at', attempt_at)));
+    row_f := public.record_threads_image_checkpoint(p_t83, acct_1, jsonb_build_object(
+      'content_fence', fence_t83,
+      'account_updated_at', (SELECT updated_at FROM public.social_accounts WHERE id=acct_1),
+      'deferred', jsonb_build_object('kind','threads','media_type','IMAGE','container_id','t83-container',
+        'attempt_started_at',attempt_at,'first_deferred_at',attempt_at,'next_check_at',attempt_at,
+        'give_up_at',attempt_at+interval '30 minutes','attempts',0)
+    ), attempt_at, fence_t83, ARRAY[acct_1], ARRAY[]::uuid[]);
+    res := public.claim_threads_image_inline_execution(row_f,p_t83,acct_1,'t83-container',attempt_at,fence_t83,'t83-execution');
+    ASSERT res IS NOT NULL, 'T83 actual inline execution is claimed';
+    res := public.partner_settle_platform_post(row_f,p_t83,acct_1,'threads','failed',NULL,NULL,
+      'Synthetic definitive provider refusal',(SELECT response_data FROM public.platform_posts WHERE id=row_f));
+    ASSERT res->>'settled'='true' AND res->>'post_status'='processing', 'T83 actual failed settlement preserves managed parent';
 
     res := public.finalize_threads_image_attempt(p_t83, attempt_at, fence_t83, ARRAY[acct_1]);
     ASSERT res ->> 'status' = 'failed' AND (res ->> 'notify')::boolean = true,
@@ -1512,6 +1525,8 @@ BEGIN
       ));
 
     fence_t86 := jsonb_build_object(
+      'user_id', owner_id,
+      'metadata', jsonb_build_object('selected_account_ids', jsonb_build_array(acct_1)),
       'caption', 't86 post',
       'media_file_ids', NULL,
       'platforms', ARRAY['threads', 'instagram'],
@@ -1534,6 +1549,32 @@ BEGIN
     res := public.restore_legacy_pending_post(p_t86, attempt_at, jsonb_build_object('caption', 'tampered'), true);
     ASSERT (res ->> 'restored')::boolean = false AND res ->> 'reason' = 'content_mismatch',
       format('T86 restore refused on content mismatch (got %s)', res);
+  END;
+
+  -- T87: A leased notice cannot authorize deleted, changed or incomplete retained results.
+  DECLARE
+    original_intent jsonb;
+    retained_row public.platform_posts%ROWTYPE;
+  BEGIN
+    SELECT metadata->'final_notification_intent' INTO original_intent FROM public.posts WHERE id=p_t80;
+    original_intent := original_intent - 'claimed_until' - 'claim_id';
+    UPDATE public.posts SET metadata=jsonb_set(metadata,'{final_notification_intent}',original_intent) WHERE id=p_t80;
+    SELECT * INTO retained_row FROM public.platform_posts WHERE id=row_s1;
+    DELETE FROM public.platform_posts WHERE id=row_s1;
+    res := public.claim_threads_image_notification(p_t80,attempt_at,'completed',fence_t80);
+    ASSERT res->>'claimed'='false' AND res->>'error'='invalid_result_scope', 'T87 deleted retained row refuses notification';
+    INSERT INTO public.platform_posts SELECT (retained_row).*;
+    UPDATE public.platform_posts SET status='failed' WHERE id=row_s1;
+    res := public.claim_threads_image_notification(p_t80,attempt_at,'completed',fence_t80);
+    ASSERT res->>'claimed'='false', 'T87 retained row changed to failed refuses notification';
+    UPDATE public.platform_posts SET status='success' WHERE id=row_s1;
+    UPDATE public.posts SET metadata=jsonb_set(metadata,'{final_notification_intent,authorized_platform_post_ids}','[]'::jsonb) WHERE id=p_t80;
+    res := public.claim_threads_image_notification(p_t80,attempt_at,'completed',fence_t80);
+    ASSERT res->>'claimed'='false', 'T87 empty authorized scope refuses notification';
+    UPDATE public.posts SET metadata=jsonb_set(metadata,'{final_notification_intent}',original_intent) WHERE id=p_t80;
+    res := public.claim_threads_image_notification(p_t80,attempt_at,'completed',fence_t80);
+    ASSERT res->>'claimed'='true' AND res #>> ARRAY['authorized_platform_post_statuses',row_s1::text]='success',
+      'T87 valid scope returns authoritative current result statuses';
   END;
 
 END $$;

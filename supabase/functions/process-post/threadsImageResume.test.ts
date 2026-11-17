@@ -189,7 +189,12 @@ Deno.test("registered process-post durably completes single-image Threads contai
   let deliveredNotifications: Array<{ url: string; event: string; body: unknown }> = [];
   let outbox = 0;
   let containerIdOverride: string | null = null;
-  let emailMode: "ok" | "semantic_failure" = "ok";
+  let emailMode: "ok" | "semantic_failure" | "invalid" = "ok";
+  let profileEmailEnabled = false;
+  let legacyVideoMode = false;
+  let beforeLegacyRestore: (() => void) | null = null;
+  let legacyRestoreFailure = false;
+  let notificationScopeMode: "ok" | "missing" | "empty" | "deleted" | "changed" = "ok";
   const unexpected: string[] = [];
 
   const threadsAccount = (): Account => ({
@@ -268,6 +273,11 @@ Deno.test("registered process-post durably completes single-image Threads contai
     outbox = 0;
     containerIdOverride = null;
     emailMode = "ok";
+    notificationScopeMode = "ok";
+    profileEmailEnabled = false;
+    legacyVideoMode = false;
+    beforeLegacyRestore = null;
+    legacyRestoreFailure = false;
   }
 
   function insertCheckpoint(payload: Record<string, unknown>) {
@@ -345,7 +355,8 @@ Deno.test("registered process-post durably completes single-image Threads contai
           await hashRequest(contentFence(post)) === await hashRequest(row.response_data.content_fence)));
       if (ownsParent) {
         post.status = rows.some((candidate) => candidate.status === "success") ? "completed" : "failed";
-        post.metadata = { ...(post.metadata as Record<string, unknown> || {}), settlement_rollup_at: new Date().toISOString() };
+        post.metadata = { ...(post.metadata as Record<string, unknown> || {}), settlement_rollup_at: new Date().toISOString(),
+          settlement_rollup_status: post.status, settlement_rollup_processing_started_at: post.processing_started_at };
       }
     }
     if (successSettlementFails && successSettlementLost && payload.p_platform_post_id === IMAGE_ROW && payload.p_status === "success") {
@@ -373,6 +384,7 @@ Deno.test("registered process-post durably completes single-image Threads contai
         event: "email.post_failed",
         body: await request.clone().json(),
       });
+      if (emailMode === "invalid") return Response.json(null);
       if (emailMode === "semantic_failure") {
         return Response.json({ success: false, message: "Email not configured" });
       }
@@ -412,6 +424,15 @@ Deno.test("registered process-post durably completes single-image Threads contai
       throw new Error(unexpected.at(-1));
     }
     if (url.hostname === "graph.facebook.com") {
+      if (legacyVideoMode && request.method === "POST" && url.pathname.endsWith("/fixture-instagram-user/media")) {
+        clock += 40_000;
+        return Response.json({ id: "fixture-instagram-container" });
+      }
+      if (legacyVideoMode && url.pathname.endsWith("/fixture-instagram-container")) {
+        clock += 40_000;
+        return Response.json({ status_code: "IN_PROGRESS" });
+      }
+      if (legacyVideoMode && url.pathname.endsWith("/videos") && !facebookFail) return Response.json({ id: "facebook-video-1" });
       if (facebookFail) throw new Error("fixture facebook error");
       if (url.pathname.endsWith("/photos")) return Response.json({ id: "facebook-photo-1" });
       if (url.pathname.endsWith("/facebook-photo-1")) return Response.json({ link: "https://media-fixture.invalid/facebook-photo-1.jpg" });
@@ -471,10 +492,10 @@ Deno.test("registered process-post durably completes single-image Threads contai
     if (table === "media_files") {
       return Response.json((post.media_file_ids as string[]).map((id) => ({
         id,
-        file_path: `https://media-fixture.invalid/${id}.jpg`,
-        file_type: "image",
+        file_path: `https://media-fixture.invalid/${id}.${legacyVideoMode ? "mp4" : "jpg"}`,
+        file_type: legacyVideoMode ? "video" : "image",
         storage_bucket: "openinary",
-        mime_type: "image/jpeg",
+        mime_type: legacyVideoMode ? "video/mp4" : "image/jpeg",
       })));
     }
     if (table === "media_file_providers") return Response.json([]);
@@ -535,6 +556,7 @@ Deno.test("registered process-post durably completes single-image Threads contai
         post.metadata = {
           ...(post.metadata as Record<string, unknown> || {}),
           attempt_target_account_ids: payload.p_target_account_ids,
+          attempt_started_at: payload.p_expected_processing_started_at,
         };
       }
       if (Array.isArray(payload.p_retained_platform_post_ids)) {
@@ -597,16 +619,16 @@ Deno.test("registered process-post durably completes single-image Threads contai
         post.status === "processing" && post.processing_started_at === payload.p_expected_processing_started_at &&
         account?.is_active && account.updated_at === row.response_data.account_updated_at && fenceMatches;
       if (!active || releaseMode === "false") return Response.json(false);
+      if (releaseMode === "error") return Response.json({ message: "release unavailable" }, { status: 500 });
       delete identity.publish_attempt_id;
       releases++;
-      if (releaseMode === "error") return Response.json({ message: "release unavailable" }, { status: 500 });
       if (releaseMode === "lost") return Response.json({ message: "lost release acknowledgement" }, { status: 500 });
       return Response.json(true);
     }
     if (table === "rpc/finalize_threads_image_attempt") {
       finalizerCalls++;
       const payload = await request.json() as Record<string, unknown>;
-      if (parentReadError || finalizerMode === "error") return Response.json({ message: "fixture parent read failure" }, { status: 500 });
+      if (finalizerMode === "error") return Response.json({ message: "fixture parent read failure" }, { status: 500 });
       const currentContent = contentFence(post);
       const expectedContent = normalizeFence(payload.p_expected_content);
       const stale = post.processing_started_at !== payload.p_expected_processing_started_at ||
@@ -642,15 +664,12 @@ Deno.test("registered process-post durably completes single-image Threads contai
         targetAccountIds = accounts.filter(a => postPlatforms.includes(a.platform) && a.is_active).map(a => a.id);
       }
 
-      const retainedRowIds: string[] = Array.isArray(metadata.attempt_retained_platform_post_ids)
+      const retainedRowIds: string[] = metadata.attempt_started_at === payload.p_expected_processing_started_at && Array.isArray(metadata.attempt_retained_platform_post_ids)
         ? (metadata.attempt_retained_platform_post_ids as string[])
         : [];
 
       const started = String(payload.p_expected_processing_started_at);
       const missingTargets = targetAccountIds.filter(targetId => {
-        if (rows.some(r => retainedRowIds.includes(r.id) && r.social_account_id === targetId)) {
-          return false;
-        }
         return !rows.some(row =>
           row.social_account_id === targetId &&
           row.post_id === POST &&
@@ -664,7 +683,7 @@ Deno.test("registered process-post durably completes single-image Threads contai
       const attemptRows = rows.filter(row =>
         row.post_id === POST &&
         (
-          retainedRowIds.includes(row.id) ||
+          (retainedRowIds.includes(row.id) && row.status === "success") ||
           (targetAccountIds.includes(row.social_account_id) &&
             (deferred(row.response_data)?.attempt_started_at === started || (row.created_at ?? "") >= started))
         )
@@ -677,18 +696,18 @@ Deno.test("registered process-post durably completes single-image Threads contai
         return Response.json({ status: "processing", stale: false, notify: false });
       }
 
-      const hasSuccess = retainedRowIds.length > 0 || attemptRows.some((row) => row.status === "success");
+      const hasSuccess = attemptRows.some((row) => row.status === "success");
       post.status = hasSuccess ? "completed" : "failed";
       const authorizedRowIds = [
-        ...retainedRowIds,
-        ...attemptRows.filter(r => !retainedRowIds.includes(r.id)).map(r => r.id)
+        ...attemptRows.map(r => r.id)
       ];
       post.metadata = {
         ...(post.metadata as Record<string, unknown> || {}),
         final_notification_intent: {
-          created_at: new Date(clock).toISOString(),
+          created_at: new Date().toISOString(),
           notified: false,
-          final_status: post.status,
+          status: post.status,
+          attempt_started_at: payload.p_expected_processing_started_at,
           authorized_platform_post_ids: authorizedRowIds,
         },
       };
@@ -722,17 +741,39 @@ Deno.test("registered process-post durably completes single-image Threads contai
       finalNotificationClaims++;
       intent.claimed_until = new Date(BASE_CLOCK + clock + 180_000).toISOString();
       intent.claim_id = crypto.randomUUID();
+      const authorizedIds = intent.authorized_platform_post_ids as string[];
+      const statuses = Object.fromEntries(rows.filter(row => authorizedIds.includes(row.id)).map(row => [row.id, row.status]));
+      if (notificationScopeMode === "deleted") rows = rows.filter(row => row.id !== authorizedIds[0]);
+      if (notificationScopeMode === "changed") rows.find(row => row.id === authorizedIds[0])!.status = "failed";
       return Response.json({
         claimed: true,
         status: post.status,
         claim_id: intent.claim_id,
-        authorized_platform_post_ids: intent.authorized_platform_post_ids,
+        ...(notificationScopeMode === "missing" ? {} : {
+          authorized_platform_post_ids: notificationScopeMode === "empty" ? [] : authorizedIds,
+          authorized_platform_post_statuses: statuses,
+        }),
       });
     }
+    if (table === "rpc/record_deferred_platform_post") {
+      const payload = await request.json() as Record<string, unknown>;
+      const account = accounts.find(a => a.id === payload.p_social_account_id && a.user_id === post.user_id);
+      assert(account);
+      const id = crypto.randomUUID();
+      rows.push({ id, post_id: POST, social_account_id: account.id, platform: account.platform, status: "pending",
+        platform_post_id: null, platform_post_url: null, error_message: null,
+        response_data: payload.p_response_data as Record<string, unknown>, created_at: new Date().toISOString() });
+      return Response.json(id);
+    }
     if (table === "rpc/restore_legacy_pending_post") {
+      beforeLegacyRestore?.();
+      if (legacyRestoreFailure) return Response.json({ message: "fixture restore unavailable" }, { status: 500 });
       const payload = await request.json() as Record<string, unknown>;
       if (!post || post.id !== payload.p_post_id) {
         return Response.json({ restored: false, reason: "not_found" });
+      }
+      if (await hashRequest(contentFence(post)) !== await hashRequest(normalizeFence(payload.p_expected_content))) {
+        return Response.json({ restored: false, reason: "content_mismatch", current_status: post.status });
       }
       if (post.status === "processing" && post.processing_started_at === payload.p_expected_processing_started_at) {
         if (payload.p_has_success && !post.posted_at) {
@@ -824,7 +865,7 @@ Deno.test("registered process-post durably completes single-image Threads contai
       logs.push(await request.json());
       return new Response(null, { status: 201 });
     }
-    if (table === "profiles") return Response.json({ id: OWNER, preferred_timezone: "UTC" });
+    if (table === "profiles") return Response.json({ id: OWNER, preferred_timezone: "UTC", email_notifications_enabled: profileEmailEnabled });
     if (["user_rate_limits", "user_subscriptions", "tier_rate_limits", "rate_limit_settings"].includes(table)) return Response.json([]);
     if (table === "api_logs") return request.method === "HEAD" ? new Response(null, { headers: { "content-range": "*/0" } }) : new Response(null, { status: 201 });
     unexpected.push(`Unexpected persistence call ${request.method} ${url.pathname}`);
@@ -883,9 +924,9 @@ Deno.test("registered process-post durably completes single-image Threads contai
 
       const isTerminalManagedImage = ["success", "failed"].includes(row.status) &&
         def.kind === "threads" && def.media_type === "IMAGE" &&
-        ((post.status === "processing" && (!def.attempt_started_at || def.attempt_started_at === post.processing_started_at)) || (
+        ((post.status === "processing" && def.attempt_started_at === post.processing_started_at) || (
           ["completed", "failed"].includes(String(post.status)) &&
-          (!def.attempt_started_at || def.attempt_started_at === post.processing_started_at) &&
+          def.attempt_started_at === post.processing_started_at &&
           Boolean(post.metadata) &&
           ((post.metadata as Record<string, unknown>).final_notification_intent as Record<string, unknown> | undefined)?.notified === false
         ));
@@ -903,25 +944,18 @@ Deno.test("registered process-post durably completes single-image Threads contai
     return claimed;
   }
 
+  // Worker-boundary fixtures arrange an expired lease; actual SQL contention is tested in PostgreSQL.
   function leaseImageRow(id = IMAGE_ROW): Row {
     const row = rows.find((candidate) => candidate.id === id);
     if (!row) throw new Error(`Row ${id} not found to lease`);
     const def = deferred(row.response_data);
     if (def) {
-      def.claimed_until = null;
-      def.execution_id = null;
-      def.execution_claimed_until = null;
-      def.next_check_at = new Date(clock).toISOString();
+      def.claimed_until = new Date(BASE_CLOCK + clock - 1).toISOString();
+      def.execution_claimed_until = def.claimed_until;
+      def.next_check_at = new Date(BASE_CLOCK + clock).toISOString();
     }
-    const claimed = claimDeferredPublishes(10);
-    const target = claimed.find((r) => r.id === id) ?? row;
-    if (!deferred(target.response_data)?.claimed_until) {
-      Object.assign(deferred(target.response_data), {
-        claimed_until: new Date(BASE_CLOCK + clock + 180_000).toISOString(),
-        execution_id: null,
-        execution_claimed_until: null,
-      });
-    }
+    const target = claimDeferredPublishes(10).find(candidate => candidate.id === id);
+    if (!target) throw new Error(`Scheduler did not select ${id}`);
     return target;
   }
 
@@ -1536,7 +1570,7 @@ Deno.test("registered process-post durably completes single-image Threads contai
 
     await test.step("a handoff state read error returns 503 and preserves the parent and checkpoint", async () => {
       reset();
-      parentReadError = true;
+      finalizerMode = "error";
       const response = await checkpointForResume();
       assertEquals(response.status, 503);
       assertEquals(post.status, "processing");
@@ -1987,24 +2021,39 @@ Deno.test("registered process-post durably completes single-image Threads contai
       assertEquals(totals, { creates: 200, statusReads: 200, publishes: 200, settlements: 200, outbox: 200, notifications: 200, deliveredNotifications: 200 });
     });
 
-    await test.step("A06: legacy pending sibling rollup restores parent status to processing", async () => {
-      reset();
-      const attemptAt = new Date().toISOString();
-      post.processing_started_at = attemptAt;
-      post.status = "completed";
-      post.metadata = {
-        settlement_rollup_at: attemptAt,
-        settlement_rollup_processing_started_at: attemptAt,
-        settlement_rollup_status: "completed",
-      };
-      const response = await fetch(`${ORIGIN}/rest/v1/posts?id=eq.${POST}&status=eq.completed&processing_started_at=eq.${attemptAt}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ status: "processing" }),
-      });
-      assertEquals(response.ok, true);
-      assertEquals(post.status, "processing");
-    });
+    for (const reverse of [false, true]) {
+      for (const mutation of ["none", "canceled", "caption", "metadata", "new_claim", "rpc_error"] as const) {
+        await test.step(`legacy video handoff (${reverse ? "Instagram first" : "Facebook first"}, ${mutation})`, async () => {
+          reset();
+          legacyVideoMode = true;
+          const instagram = { ...threadsAccount(), id: THREADS_ACCOUNT_2, platform: "instagram", platform_user_id: "fixture-instagram-user" };
+          accounts = reverse ? [instagram, facebookAccount()] : [facebookAccount(), instagram];
+          post.platforms = ["facebook", "instagram"];
+          post.metadata = { selected_account_ids: accounts.map(a => a.id), instagram_post_type: ["reel"] };
+          beforeLegacyRestore = () => {
+            const metadata = post.metadata as Record<string, unknown>;
+            if (mutation === "canceled") {
+              post.status = "failed";
+              delete metadata.settlement_rollup_at;
+              delete metadata.settlement_rollup_processing_started_at;
+            }
+            if (mutation === "caption") post.caption = "Owner edit during deferred handoff";
+            if (mutation === "metadata") metadata.instagram_disable_comments = true;
+            if (mutation === "new_claim") post.processing_started_at = new Date(BASE_CLOCK + clock + 1).toISOString();
+          };
+          legacyRestoreFailure = mutation === "rpc_error";
+          const response = await invoke();
+          assertEquals(response.status, mutation === "rpc_error" ? 503 : 200, await response.clone().text());
+          assertEquals(rows.some(row => row.platform === "facebook" && row.status === "success"), true);
+          assertEquals(rows.some(row => row.platform === "instagram" && row.status === "pending"), true);
+          assertEquals(finalizerCalls, 0);
+          if (mutation === "none") assertEquals(post.status, "processing");
+          if (mutation === "canceled") assertEquals(post.status, "failed");
+          if (["caption", "metadata", "new_claim"].includes(mutation) && !reverse) assertEquals(post.status, "completed");
+          assertEquals(deliveredNotifications.length, 0);
+        });
+      }
+    }
 
     await test.step("A06: native Threads text post does not call image checkpoint or finalizer", async () => {
       reset();
@@ -2071,6 +2120,42 @@ Deno.test("registered process-post durably completes single-image Threads contai
       assert(authorizedIds.includes(priorSuccessRowId));
       assert(!authorizedIds.includes(priorFailedRowId));
     });
+
+    for (const mode of ["missing", "empty", "deleted", "changed"] as const) {
+      for (const resumed of [false, true]) {
+        await test.step(`managed notification refuses ${mode} leased result scope (${resumed ? "resumed" : "original"})`, async () => {
+          reset();
+          if (resumed) {
+            await checkpointForResume();
+            leaseImageRow();
+          }
+          notificationScopeMode = mode;
+          const response = await invoke(resumed ? { resume: IMAGE_ROW } : {});
+          assertEquals(response.status, 200, await response.clone().text());
+          assertEquals(publishes, 1);
+          assertEquals(deliveredNotifications.length, 0);
+          assertEquals((post.metadata as Record<string, unknown>).final_notified_at, undefined);
+          assertEquals(((post.metadata as Record<string, unknown>).final_notification_intent as Record<string, unknown>).notified, false);
+        });
+      }
+    }
+
+    for (const mode of ["semantic_failure", "invalid", "ok", "opt_out"] as const) {
+      await test.step(`managed failure email requires a semantic ACK (${mode})`, async () => {
+        reset();
+        accounts = [threadsAccount(), facebookAccount()];
+        post.platforms = ["threads", "facebook"];
+        post.metadata = { selected_account_ids: accounts.map(a => a.id) };
+        facebookFail = true;
+        emailMode = mode === "opt_out" ? "semantic_failure" : mode;
+        profileEmailEnabled = mode !== "opt_out";
+        const response = await invoke();
+        assertEquals(response.status, 200, await response.clone().text());
+        const intent = (post.metadata as Record<string, unknown>).final_notification_intent as Record<string, unknown>;
+        assertEquals(intent.notified, mode === "ok" || mode === "opt_out");
+        assertEquals(publishes, 1);
+      });
+    }
 
     assertEquals(unexpected, []);
   } finally {
