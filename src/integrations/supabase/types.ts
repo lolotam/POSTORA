@@ -12021,6 +12021,59 @@ export type Database = {
         }
         Returns: Json
       }
+      stamp_pinterest_post_type: {
+        Args: {
+          p_post_id: string
+          p_social_account_id: string
+          p_expected_processing_started_at: string
+          p_expected_content: Json
+          p_post_type: string
+        }
+        Returns: boolean
+      }
+      enroll_post_notification_recovery: {
+        Args: {
+          p_post_id: string
+          p_expected_processing_started_at: string
+          p_expected_content: Json
+          p_target_account_ids: string[]
+          p_retained_platform_post_ids?: string[] | null
+        }
+        Returns: Json
+      }
+      close_post_fanout: {
+        Args: {
+          p_post_id: string
+          p_expected_processing_started_at: string
+          p_expected_content: Json
+          p_exact_platform_post_ids?: string[] | null
+          p_retained_platform_post_ids?: string[] | null
+        }
+        Returns: Json
+      }
+      claim_legacy_notification_candidate: {
+        Args: {
+          p_post_id: string
+          p_expected_processing_started_at: string
+          p_expected_content: Json
+          p_candidate_id?: string | null
+          p_lease?: unknown
+        }
+        Returns: Json
+      }
+      claim_post_completion_work: {
+        Args: {
+          p_limit?: number
+          p_lease?: unknown
+        }
+        Returns: {
+          kind: string
+          platform_post_id: string | null
+          post_id: string
+          attempt_started_at: string | null
+          candidate_id: string | null
+        }[]
+      }
       claim_meta_analytics_collection_job: {
         Args: {
           p_platform: string

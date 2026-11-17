@@ -15,15 +15,31 @@ export function createReconcilePorts(): ReconcilePorts {
 
   return {
     async claim(limit) {
-      const { data, error } = await admin.rpc("claim_deferred_publishes", { p_limit: limit });
-      if (error) throw new Error(`claim_deferred_publishes failed: ${error.message}`);
+      const { data, error } = await admin.rpc("claim_post_completion_work", { p_limit: limit });
+      if (error) {
+        const { data: legacyData, error: legacyError } = await admin.rpc("claim_deferred_publishes", { p_limit: limit });
+        if (legacyError) throw new Error(`claim_post_completion_work failed: ${error.message}; legacy fallback failed: ${legacyError.message}`);
+        return (legacyData ?? []) as ClaimedRow[];
+      }
       return (data ?? []) as ClaimedRow[];
     },
     async resume(row) {
+      const isNotificationOnly = row.kind === "notification_only";
+      const payload = isNotificationOnly
+        ? {
+            post_id: row.post_id,
+            notification_only: true,
+            attempt_started_at: row.attempt_started_at,
+            candidate_id: row.candidate_id,
+          }
+        : {
+            post_id: row.post_id,
+            resume_platform_post_id: row.platform_post_id,
+          };
       const response = await fetch(`${supabaseUrl}/functions/v1/process-post`, {
         method: "POST",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${serviceRoleKey}` },
-        body: JSON.stringify({ post_id: row.post_id, resume_platform_post_id: row.platform_post_id }),
+        body: JSON.stringify(payload),
         signal: AbortSignal.timeout(RESUME_TIMEOUT_MS),
       });
       const body = await response.json().catch(() => null) as { status?: string; error?: string } | null;

@@ -16,6 +16,7 @@ import type { SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2.89.0
 export interface StoryRef {
   id: string;
   url: string;
+  platformPostId?: string;
 }
 
 /** The key under which a story that could not be recorded travels on the reel's pending row. */
@@ -85,8 +86,10 @@ export async function recordPublishedStory(
       },
     });
     if (error) return error.message ?? String(error);
+    const rowId = (data as { platform_post_id?: string | null } | null)?.platform_post_id;
+    if (rowId) args.story.platformPostId = rowId;
     // Success means a row now shows the story; an answer without one must not let the carry go.
-    return (data as { platform_post_id?: string | null } | null)?.platform_post_id ? null : "record_published_story answered no row";
+    return rowId ? null : "record_published_story answered no row";
   } catch (error) {
     return error instanceof Error ? error.message : String(error);
   }

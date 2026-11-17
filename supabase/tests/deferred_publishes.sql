@@ -1746,6 +1746,159 @@ BEGIN
 
 END $$;
 
+-- =========================================================================
+-- T95: Track A - Narrow fixed-field atomic RPC stamp_pinterest_post_type
+-- =========================================================================
+DO $$
+DECLARE
+  u_pin uuid := gen_random_uuid();
+  acct_pin uuid := gen_random_uuid();
+  post_pin uuid := gen_random_uuid();
+  claim_at timestamptz := now();
+  pin_fence jsonb;
+  stamped boolean;
+BEGIN
+  INSERT INTO auth.users (id, email) VALUES (u_pin, 'pin-test@example.invalid');
+  INSERT INTO public.social_accounts (id, user_id, platform, platform_user_id, platform_username, access_token, is_active)
+  VALUES (acct_pin, u_pin, 'pinterest', 'dp-pin', 'dp_pin', 'tok-pin', true);
+  INSERT INTO public.posts (id, user_id, caption, platforms, status, processing_started_at, source, metadata)
+  VALUES (post_pin, u_pin, 'pinterest caption', ARRAY['pinterest'], 'processing', claim_at, 'manual',
+    jsonb_build_object('extra_key', 'keep_me'));
+
+  pin_fence := jsonb_build_object(
+    'user_id', u_pin,
+    'caption', 'pinterest caption',
+    'media_file_ids', NULL,
+    'metadata', jsonb_build_object('extra_key', 'keep_me'),
+    'platforms', ARRAY['pinterest'],
+    'scheduled_at', NULL,
+    'publish_requested_at', NULL,
+    'source', 'manual'
+  );
+
+  -- Valid stamp
+  stamped := public.stamp_pinterest_post_type(post_pin, acct_pin, claim_at, pin_fence, 'image');
+  ASSERT stamped = true, 'T95 valid stamp_pinterest_post_type returns true';
+  ASSERT (SELECT metadata ->> 'pinterest_post_type' FROM public.posts WHERE id = post_pin) = 'image',
+    'T95 metadata has pinterest_post_type = image';
+  ASSERT (SELECT metadata ->> 'extra_key' FROM public.posts WHERE id = post_pin) = 'keep_me',
+    'T95 original metadata preserved';
+
+  -- Fails closed on stale attempt
+  stamped := public.stamp_pinterest_post_type(post_pin, acct_pin, claim_at - interval '1 hour', pin_fence, 'image');
+  ASSERT stamped = false, 'T95 stale attempt refused';
+
+  -- Fails closed on content mismatch
+  stamped := public.stamp_pinterest_post_type(post_pin, acct_pin, claim_at, jsonb_build_object('caption', 'tampered'), 'image');
+  ASSERT stamped = false, 'T95 content mismatch refused';
+
+  -- Fails on invalid post_type
+  stamped := public.stamp_pinterest_post_type(post_pin, acct_pin, claim_at, pin_fence, 'invalid_type');
+  ASSERT stamped = false, 'T95 invalid post_type refused';
+
+  -- Same-attempt rollup preserves ability to stamp
+  UPDATE public.posts SET status = 'completed',
+    metadata = metadata || jsonb_build_object('settlement_rollup_at', claim_at, 'settlement_rollup_status', 'completed', 'settlement_rollup_processing_started_at', claim_at)
+  WHERE id = post_pin;
+  stamped := public.stamp_pinterest_post_type(post_pin, acct_pin, claim_at, pin_fence, 'video');
+  ASSERT stamped = true, 'T95 same-attempt rollup allows updating badge';
+  ASSERT (SELECT metadata ->> 'pinterest_post_type' FROM public.posts WHERE id = post_pin) = 'video',
+    'T95 updated badge to video';
+END $$;
+
+-- =========================================================================
+-- T96: Track B0 - Pre-claim-only legacy notification recovery
+-- =========================================================================
+DO $$
+DECLARE
+  u_b0 uuid := gen_random_uuid();
+  acct_ig uuid := gen_random_uuid();
+  acct_fb uuid := gen_random_uuid();
+  post_b0 uuid := gen_random_uuid();
+  row_ig uuid := gen_random_uuid();
+  row_fb uuid := gen_random_uuid();
+  claim_at timestamptz := now();
+  b0_fence jsonb;
+  res jsonb;
+  work_rows record;
+  claimed_candidate jsonb;
+BEGIN
+  INSERT INTO auth.users (id, email) VALUES (u_b0, 'b0-test@example.invalid');
+  INSERT INTO public.social_accounts (id, user_id, platform, platform_user_id, platform_username, access_token, is_active)
+  VALUES
+    (acct_ig, u_b0, 'instagram', 'dp-b0-ig', 'dp_b0_ig', 'tok-ig', true),
+    (acct_fb, u_b0, 'facebook', 'dp-b0-fb', 'dp_b0_fb', 'tok-fb', true);
+  INSERT INTO public.posts (id, user_id, caption, platforms, status, processing_started_at, source, metadata)
+  VALUES (post_b0, u_b0, 'b0 test post', ARRAY['instagram', 'facebook'], 'processing', claim_at, 'manual', '{}'::jsonb);
+
+  b0_fence := jsonb_build_object(
+    'user_id', u_b0,
+    'caption', 'b0 test post',
+    'media_file_ids', NULL,
+    'metadata', '{}'::jsonb,
+    'platforms', ARRAY['instagram', 'facebook'],
+    'scheduled_at', NULL,
+    'publish_requested_at', NULL,
+    'source', 'manual'
+  );
+
+  -- 1. enroll_post_notification_recovery
+  res := public.enroll_post_notification_recovery(
+    post_b0, claim_at, b0_fence, ARRAY[acct_ig, acct_fb], ARRAY[]::uuid[]
+  );
+  ASSERT (res ->> 'enrolled')::boolean = true, format('T96 enroll succeeds (got %s)', res);
+  ASSERT (SELECT metadata ? 'legacy_notification_candidate' FROM public.posts WHERE id = post_b0),
+    'T96 legacy_notification_candidate stamped on post';
+
+  -- Refuse enroll on content mismatch
+  res := public.enroll_post_notification_recovery(
+    post_b0, claim_at, jsonb_build_object('caption', 'tampered'), ARRAY[acct_ig, acct_fb], ARRAY[]::uuid[]
+  );
+  ASSERT (res ->> 'enrolled')::boolean = false, 'T96 enroll refused on content mismatch';
+
+  -- 2. Worker publishes platform posts
+  INSERT INTO public.platform_posts (id, post_id, social_account_id, platform, status, created_at, platform_post_id)
+  VALUES
+    (row_ig, post_b0, acct_ig, 'instagram', 'success', claim_at, 'ig-b0-success'),
+    (row_fb, post_b0, acct_fb, 'facebook', 'failed', claim_at, NULL);
+
+  -- 3. close_post_fanout
+  res := public.close_post_fanout(
+    post_b0, claim_at, b0_fence, ARRAY[row_ig, row_fb], ARRAY[]::uuid[]
+  );
+  ASSERT (res ->> 'closed')::boolean = true, format('T96 close_post_fanout succeeds (got %s)', res);
+  ASSERT res ->> 'status' = 'completed', format('T96 status is completed since 1 succeeded (got %s)', res);
+
+  -- 4. claim_post_completion_work returns notification-only work item
+  UPDATE public.posts SET metadata = jsonb_set(
+    metadata,
+    '{legacy_notification_candidate,claimed_until}',
+    to_jsonb(now() - interval '1 second')
+  ) WHERE id = post_b0;
+
+  UPDATE public.platform_posts SET response_data = jsonb_set(response_data, '{deferred,claimed_until}', to_jsonb(now() + interval '1 day'))
+  WHERE response_data ? 'deferred';
+
+  SELECT * INTO work_rows FROM public.claim_post_completion_work(5) WHERE post_id = post_b0;
+  ASSERT work_rows.kind = 'notification_only', format('T96 claim_post_completion_work returns notification_only (got %s)', work_rows.kind);
+  ASSERT work_rows.candidate_id IS NOT NULL, 'T96 candidate_id is present';
+
+  -- 5. claim_legacy_notification_candidate
+  claimed_candidate := public.claim_legacy_notification_candidate(
+    post_b0, claim_at, b0_fence, work_rows.candidate_id
+  );
+  ASSERT (claimed_candidate ->> 'claimed')::boolean = true, format('T96 candidate claimed (got %s)', claimed_candidate);
+  ASSERT (SELECT metadata ->> 'final_notified_at' IS NOT NULL FROM public.posts WHERE id = post_b0),
+    'T96 final_notified_at stamped after claim';
+
+  -- Double claim rejected
+  claimed_candidate := public.claim_legacy_notification_candidate(
+    post_b0, claim_at, b0_fence, work_rows.candidate_id
+  );
+  ASSERT (claimed_candidate ->> 'claimed')::boolean = false, 'T96 duplicate candidate claim rejected';
+END $$;
+
 ROLLBACK;
 
 \echo '=== deferred_publishes: ALL CHECKS PASSED ==='
+

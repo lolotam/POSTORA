@@ -54,6 +54,7 @@ function normalizeTestMetadata(raw: Record<string, unknown> | null | undefined):
     "attempt_started_at",
     "attempt_scope",
     "final_notification_intent",
+    "legacy_notification_candidate",
   ]) {
     delete metadata[key];
   }
@@ -921,6 +922,41 @@ Deno.test("registered process-post durably completes single-image Threads contai
     if (table === "rpc/record_deferred_platform_post") {
       const payload = await request.json();
       return Response.json(insertCheckpoint(payload).id);
+    }
+    if (table === "rpc/enroll_post_notification_recovery") {
+      const payload = await request.json() as Record<string, unknown>;
+      const candidateId = crypto.randomUUID();
+      const meta = (post.metadata ?? {}) as Record<string, unknown>;
+      meta.legacy_notification_candidate = {
+        candidate_id: candidateId,
+        attempt_started_at: payload.p_expected_processing_started_at,
+        ready: false,
+        fanout_closed: false,
+      };
+      return Response.json({ enrolled: true, candidate_id: candidateId });
+    }
+    if (table === "rpc/close_post_fanout") {
+      const payload = await request.json() as Record<string, unknown>;
+      const meta = (post.metadata ?? {}) as Record<string, unknown>;
+      const cand = (meta.legacy_notification_candidate ?? {}) as Record<string, unknown>;
+      cand.fanout_closed = true;
+      cand.ready = true;
+      cand.authorized_platform_post_ids = payload.p_exact_platform_post_ids;
+      return Response.json({ closed: true, ready: true, status: post.status });
+    }
+    if (table === "rpc/claim_legacy_notification_candidate") {
+      const payload = await request.json() as Record<string, unknown>;
+      const meta = (post.metadata ?? {}) as Record<string, unknown>;
+      const cand = (meta.legacy_notification_candidate ?? {}) as Record<string, unknown>;
+      cand.consumed = true;
+      meta.final_notified_at = new Date(BASE_CLOCK + clock).toISOString();
+      return Response.json({ claimed: true, status: post.status, authorized_platform_post_ids: cand.authorized_platform_post_ids });
+    }
+    if (table === "rpc/stamp_pinterest_post_type") {
+      const payload = await request.json() as Record<string, unknown>;
+      const meta = (post.metadata ?? {}) as Record<string, unknown>;
+      meta.pinterest_post_type = payload.p_post_type;
+      return Response.json(true);
     }
     if (table === "system_logs") {
       logs.push(await request.json());

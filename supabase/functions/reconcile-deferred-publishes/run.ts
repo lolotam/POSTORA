@@ -9,8 +9,11 @@
  */
 
 export interface ClaimedRow {
-  platform_post_id: string;
+  kind?: string;
+  platform_post_id?: string | null;
   post_id: string;
+  attempt_started_at?: string | null;
+  candidate_id?: string | null;
 }
 
 export interface ResumeOutcome {
@@ -57,7 +60,9 @@ export async function runReconcile(ports: ReconcilePorts, limit = RESUMES_PER_RU
       const key = outcome.status ?? "unknown";
       resumed[key] = (resumed[key] ?? 0) + 1;
     } else {
-      failures.push({ platform_post_id: claimed[index].platform_post_id, error: (outcome.error ?? "unknown").slice(0, 300) });
+      const row = claimed[index];
+      const targetId = row.platform_post_id || row.candidate_id || row.post_id;
+      failures.push({ platform_post_id: targetId, error: (outcome.error ?? "unknown").slice(0, 300) });
     }
   });
 

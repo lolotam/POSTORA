@@ -15,8 +15,9 @@ function ports(options: {
       return Promise.resolve((options.claimed ?? []).slice(0, limit));
     },
     resume: (row) => {
-      resumed.push(row.platform_post_id);
-      const outcome = options.outcomes?.[row.platform_post_id] ?? { ok: true, status: "processing" };
+      const id = row.platform_post_id ?? row.candidate_id ?? row.post_id;
+      resumed.push(id);
+      const outcome = options.outcomes?.[id] ?? { ok: true, status: "processing" };
       return outcome instanceof Error ? Promise.reject(outcome) : Promise.resolve(outcome);
     },
     sweep: () => options.sweep instanceof Error ? Promise.reject(options.sweep) : Promise.resolve(options.sweep ?? { posts: 0, rows_failed: 0 }),
@@ -105,3 +106,24 @@ Deno.test("claimed image rows finish before the stale sweep even when one resume
   assertEquals(summary.resumed, { completed: 1 });
   assertEquals(summary.resume_errors, 1);
 });
+
+Deno.test("reconciler resumes notification_only work items and aggregates outcomes", async () => {
+  const notifRow: ClaimedRow = {
+    kind: "notification_only",
+    post_id: "post-notif-1",
+    attempt_started_at: "2026-11-17T12:00:00Z",
+    candidate_id: "cand-1",
+  };
+  const { fake, logs } = ports({
+    claimed: [notifRow],
+  });
+  fake.resume = (_row) => {
+    return Promise.resolve({ ok: true, status: "completed" });
+  };
+  const summary = await runReconcile(fake);
+  assertEquals(summary.claimed, 1);
+  assertEquals(summary.resumed, { completed: 1 });
+  assertEquals(summary.resume_errors, 0);
+  assertEquals(logs.map((l) => l.level), ["info"]);
+});
+

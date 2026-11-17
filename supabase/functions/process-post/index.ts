@@ -195,6 +195,10 @@ const ProcessPostSchema = z.object({
   // Sent by reconcile-deferred-publishes (service role only): finish the pending row
   // a Meta container was deferred on, instead of publishing the post afresh.
   resume_platform_post_id: z.string().uuid().optional(),
+  // Sent by reconcile-deferred-publishes (service role only): notification recovery only mode
+  notification_only: z.boolean().optional(),
+  attempt_started_at: z.string().max(64).optional(),
+  candidate_id: z.string().uuid().optional(),
 }).passthrough();
 
 /**
@@ -503,6 +507,7 @@ export function normalizeThreadsInternalMetadata(metadata: Record<string, unknow
   delete normalized.attempt_started_at;
   delete normalized.attempt_scope;
   delete normalized.final_notification_intent;
+  delete normalized.legacy_notification_candidate;
   return normalized;
 }
 
@@ -1859,6 +1864,92 @@ async function finishDeferredPost(
   return { finalStatus: outcome.status, notified };
 }
 
+/**
+ * Handle notification_only requests: strictly validate claim and enrollment,
+ * atomically claim legacy notification candidate, read exact authorized results,
+ * dispatch notifications, and return immediately.
+ * Never executes any provider calls, media downloads, or processing claims.
+ */
+async function handleNotificationOnly(
+  supabase: SupabaseClient,
+  postId: string,
+  expectedProcessingStartedAt?: string,
+  expectedCandidateId?: string,
+): Promise<Response> {
+  const { data: post, error: postError } = await supabase
+    .from("posts")
+    .select("*")
+    .eq("id", postId)
+    .maybeSingle();
+
+  if (postError || !post) {
+    return createErrorResponse("Post not found", 404);
+  }
+
+  const attemptStartedAt = expectedProcessingStartedAt ?? post.processing_started_at;
+  if (!attemptStartedAt) {
+    return createErrorResponse("Attempt started timestamp unavailable", 400);
+  }
+
+  const expectedContent = threadsImageContentFence(post as PostData);
+  const { data: claimData, error: claimError } = await supabase.rpc("claim_legacy_notification_candidate", {
+    p_post_id: post.id,
+    p_expected_processing_started_at: attemptStartedAt,
+    p_expected_content: expectedContent,
+    p_candidate_id: expectedCandidateId ?? null,
+  });
+
+  const claimRes = claimData as {
+    claimed?: boolean;
+    claim_id?: string;
+    status?: string;
+    authorized_platform_post_ids?: string[];
+    reason?: string;
+  } | null;
+
+  if (claimError || !claimRes?.claimed) {
+    const reason = claimRes?.reason ?? claimError?.message ?? "claim_refused";
+    console.log(`[process-post] notification_only claim refused: ${reason}`);
+    return createJsonResponse({
+      success: true,
+      notification_only: true,
+      claimed: false,
+      reason,
+    });
+  }
+
+  const authorizedIds = Array.isArray(claimRes.authorized_platform_post_ids)
+    ? claimRes.authorized_platform_post_ids
+    : [];
+
+  let platformResults: PlatformResultSummary[] = [];
+  if (authorizedIds.length > 0) {
+    const { data: rows } = await supabase
+      .from("platform_posts")
+      .select("id, platform, status, platform_post_url, error_message")
+      .in("id", authorizedIds);
+
+    platformResults = (rows ?? []).map((r: { platform: string; status: string; platform_post_url?: string | null; error_message?: string | null }) => ({
+      platform: r.platform,
+      status: r.status,
+      platform_post_url: r.platform_post_url ?? undefined,
+      error_message: r.error_message ?? undefined,
+    }));
+  }
+
+  const hasFailed = platformResults.some((r) => r.status === "failed");
+  const finalStatus = claimRes.status ?? post.status;
+
+  sendFinalNotifications(supabase, post as PostData, finalStatus, platformResults, hasFailed);
+
+  return createJsonResponse({
+    success: true,
+    notification_only: true,
+    notified: true,
+    status: finalStatus,
+  });
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
 // SECTION 4: MAIN REQUEST HANDLER
 // ═══════════════════════════════════════════════════════════════════════════
@@ -1888,6 +1979,9 @@ Deno.serve(async (req) => {
       expected_scheduled_at: expectedScheduledAt,
       expected_publish_requested_at: expectedPublishRequestedAt,
       resume_platform_post_id: resumePlatformPostId,
+      notification_only: notificationOnly,
+      attempt_started_at: attemptStartedAt,
+      candidate_id: candidateId,
     } = validation.data;
     // A resumed run narrows both to the deferred row's account (below).
     let { platforms: overridePlatforms, account_ids: overrideAccountIds } = validation.data;
@@ -1946,6 +2040,17 @@ Deno.serve(async (req) => {
 
       authenticatedUserId = claimsData.claims.sub as string;
       console.log("User authenticated", { userId: authenticatedUserId });
+    }
+
+    // Notification-only mode: discriminator check and immediate execution
+    if (notificationOnly) {
+      if (resumePlatformPostId || overridePlatforms?.length || overrideAccountIds?.length || expectedScheduledAt || expectedPublishRequestedAt) {
+        return createErrorResponse("Combined mode rejected: notification_only cannot be combined with publish or resume parameters", 400);
+      }
+      if (!isServiceRoleAuth) {
+        return createErrorResponse("Forbidden: notification_only is internal", 403);
+      }
+      return await handleNotificationOnly(supabase, post_id, attemptStartedAt, candidateId);
     }
 
     // A run its caller retries on its own is not started on a worker near its end: it would be
@@ -2402,6 +2507,29 @@ Deno.serve(async (req) => {
         .map((r: { id: string }) => r.id);
     }
 
+    let enrolledCandidateId: string | null = null;
+    if (!resume && claim.processingStartedAt) {
+      try {
+        const { data: enrollData, error: enrollError } = await supabase.rpc("enroll_post_notification_recovery", {
+          p_post_id: post_id,
+          p_expected_processing_started_at: claim.processingStartedAt,
+          p_expected_content: threadsImageContentFence(post),
+          p_target_account_ids: accounts.map((a) => a.id),
+          p_retained_platform_post_ids: retainedPlatformPostIds,
+        });
+        if (enrollError) {
+          console.warn("[process-post] enroll_post_notification_recovery RPC error:", enrollError);
+        } else {
+          const res = enrollData as { enrolled?: boolean; candidate_id?: string } | null;
+          if (res?.enrolled) {
+            enrolledCandidateId = typeof res.candidate_id === "string" ? res.candidate_id : null;
+          }
+        }
+      } catch (enrollErr) {
+        console.warn("[process-post] enroll_post_notification_recovery failed:", enrollErr);
+      }
+    }
+
     const failMediaPreparation = async (message: string, statusCode = 503) => {
       let resultWriteError: string | null = null;
       if (!resume) {
@@ -2662,6 +2790,7 @@ Deno.serve(async (req) => {
       : null;
     let imageHandoff: { processingStartedAt: string; content: Record<string, unknown> } | null = null;
     const platformResults: PlatformResultSummary[] = [];
+    const exactPlatformPostIds: string[] = [];
 
     for (const account of (accounts || [])) {
       console.log(`Posting to ${account.platform}...`);
@@ -2730,7 +2859,7 @@ Deno.serve(async (req) => {
             result = await postToLinkedIn(account, post, mediaUrls);
             break;
           case "pinterest":
-            result = await postToPinterest(account, post, mediaUrls, supabase);
+            result = await postToPinterest(account, post, mediaUrls, supabase, claim.processingStartedAt);
             break;
           case "reddit":
             result = await postToReddit(account, post, mediaUrls);
@@ -2766,6 +2895,7 @@ Deno.serve(async (req) => {
                 }
                 throw new ThreadsCheckpointUnavailable("Threads image checkpoint could not be confirmed");
               }
+              exactPlatformPostIds.push(data);
               const executionId = crypto.randomUUID();
               const { data: claimed, error: inlineClaimError } = await supabase.rpc("claim_threads_image_inline_execution", {
                 p_platform_post_id: data,
@@ -2877,6 +3007,7 @@ Deno.serve(async (req) => {
         if (result.selfWroteRows) {
           const subResults = result.subResults || [];
           for (const sub of subResults) {
+            if (sub.id) exactPlatformPostIds.push(sub.id);
             platformResults.push({
               platform: account.platform,
               status: sub.status,
@@ -2955,6 +3086,10 @@ Deno.serve(async (req) => {
             throw new Error(`Failed to save platform post: ${settled.error}`);
           }
           platformPostRecord = settled.id ? { id: settled.id } : null;
+        }
+
+        if (platformPostRecord?.id) {
+          exactPlatformPostIds.push(platformPostRecord.id);
         }
 
         console.log(`Saved platform_posts record for ${account.platform}: ${platformPostRecord?.id}`);
@@ -3110,7 +3245,7 @@ Deno.serve(async (req) => {
         // do not insert a duplicate failed row.
         const selfWrote = (error as { selfWroteRows?: boolean })?.selfWroteRows === true;
         if (!selfWrote) {
-          const { error: settleError } = await settlePlatformPost(supabase, {
+          const settled = await settlePlatformPost(supabase, {
             platformPostId: imageExecution?.platformPostId ?? resume?.platformPostId ?? null,
             postId: post_id,
             socialAccountId: account.id,
@@ -3121,8 +3256,11 @@ Deno.serve(async (req) => {
               ? { responseData: { ...imageResponseData, deferred: imageExecution.deferral } }
               : {}),
           });
-          if (settleError) {
-            console.error(`Failed to settle the failure row for ${account.platform}:`, settleError);
+          if (settled.id) {
+            exactPlatformPostIds.push(settled.id);
+          }
+          if (settled.error) {
+            console.error(`Failed to settle the failure row for ${account.platform}:`, settled.error);
           }
         }
 
@@ -3136,6 +3274,9 @@ Deno.serve(async (req) => {
       } finally {
         // Runs for every outcome, `continue` included: a live story is a success.
         if (stories.live.length > 0) {
+          for (const s of stories.live) {
+            if (s.platformPostId) exactPlatformPostIds.push(s.platformPostId);
+          }
           platformResults.push(...recordedStoryResults(stories.live));
           hasSuccess = true;
         }
@@ -3148,6 +3289,36 @@ Deno.serve(async (req) => {
     let finalStatus = hasSuccess && !hasFailed ? "completed" : hasFailed && !hasSuccess ? "failed" : "completed";
     // Notifications go out once the post is final: here, or from the resumed run that settles it.
     let notify = true;
+
+    // Track exact result IDs and close fanout if candidate enrolled
+    const uniqueExactRowIds = Array.from(new Set(exactPlatformPostIds));
+    type FanoutClosedOutcome = {
+      closed?: boolean;
+      ready?: boolean;
+      status?: string;
+      authorized_platform_post_ids?: string[];
+    };
+    let fanoutClosedResult: FanoutClosedOutcome | null = null;
+
+    if (!resume && claim.processingStartedAt && enrolledCandidateId && !imageHandoff) {
+      try {
+        const { data: closeData, error: closeError } = await supabase.rpc("close_post_fanout", {
+          p_post_id: post_id,
+          p_expected_processing_started_at: claim.processingStartedAt,
+          p_expected_content: threadsImageContentFence(post),
+          p_exact_platform_post_ids: uniqueExactRowIds,
+          p_retained_platform_post_ids: retainedPlatformPostIds,
+        });
+        if (closeError) {
+          console.warn("[process-post] close_post_fanout RPC error:", closeError);
+        } else {
+          fanoutClosedResult = closeData as typeof fanoutClosedResult;
+          console.log("[process-post] close_post_fanout result:", fanoutClosedResult);
+        }
+      } catch (closeErr) {
+        console.warn("[process-post] close_post_fanout failed:", closeErr);
+      }
+    }
 
     if (resume) {
       // Legacy settlement rolled the post up; a managed image finalizes its fenced
@@ -3273,13 +3444,51 @@ Deno.serve(async (req) => {
           .eq("id", post_id);
       }
     } else {
-      await supabase
-        .from("posts")
-        .update({
-          status: finalStatus,
-          posted_at: hasSuccess ? new Date().toISOString() : null
-        })
-        .eq("id", post_id);
+      const closedRes = fanoutClosedResult as FanoutClosedOutcome | null;
+      if (closedRes?.closed && closedRes.status) {
+        finalStatus = closedRes.status;
+      } else {
+        await supabase
+          .from("posts")
+          .update({
+            status: finalStatus,
+            posted_at: hasSuccess ? new Date().toISOString() : null
+          })
+          .eq("id", post_id);
+      }
+
+      if (!resume && claim.processingStartedAt && enrolledCandidateId && !hasDeferred && !imageHandoff) {
+        const { data: claimData, error: claimError } = await supabase.rpc("claim_legacy_notification_candidate", {
+          p_post_id: post_id,
+          p_expected_processing_started_at: claim.processingStartedAt,
+          p_expected_content: threadsImageContentFence(post),
+          p_candidate_id: enrolledCandidateId,
+        });
+        const claimRes = claimData as {
+          claimed?: boolean;
+          status?: string;
+          authorized_platform_post_ids?: string[];
+        } | null;
+
+        if (!claimError && claimRes?.claimed) {
+          const authorizedIds = Array.isArray(claimRes.authorized_platform_post_ids)
+            ? claimRes.authorized_platform_post_ids.filter((id): id is string => typeof id === "string")
+            : uniqueExactRowIds;
+          const outcome = await readPostOutcome(postReaderFor(supabase, authorizedIds), post_id, {
+            results: platformResults,
+            hasSuccess,
+            hasFailed,
+          });
+          if (outcome.kind === "terminal" && !outcome.degraded) {
+            sendFinalNotifications(supabase, post, finalStatus, outcome.results, outcome.hasFailed);
+          } else {
+            console.warn(`[process-post] withholding candidate notification: degraded read`);
+          }
+          notify = false;
+        } else {
+          notify = false;
+        }
+      }
     }
 
     console.log("Post processing complete:", finalStatus);
@@ -6974,7 +7183,8 @@ async function postToPinterest(
   account: SocialAccount,
   post: PostData,
   mediaUrls: string[],
-  supabase: SupabaseClient
+  supabase: SupabaseClient,
+  processingStartedAt?: string | null,
 ): Promise<PlatformPostResult> {
   const accessToken = account.access_token;
 
@@ -7054,11 +7264,25 @@ async function postToPinterest(
     : hasLink ? "link"
     : "image";
 
-  // Stamp pinterest_post_type onto the post's metadata so /history can render the badge
+  // Stamp pinterest_post_type onto the post's metadata using narrow atomic RPC so /history can render badge
   const stampPinterestType = async () => {
+    if (!processingStartedAt) {
+      console.warn("Pinterest: processingStartedAt missing, skipping stamp_pinterest_post_type");
+      return;
+    }
     try {
-      const newMetadata = { ...(metadata || {}), pinterest_post_type: resolvedPinType };
-      await supabase.from("posts").update({ metadata: newMetadata }).eq("id", post.id);
+      const { data, error } = await supabase.rpc("stamp_pinterest_post_type", {
+        p_post_id: post.id,
+        p_social_account_id: account.id,
+        p_expected_processing_started_at: processingStartedAt,
+        p_expected_content: threadsImageContentFence(post),
+        p_post_type: resolvedPinType,
+      });
+      if (error) {
+        console.warn("Pinterest: stamp_pinterest_post_type RPC error:", error);
+      } else if (!data) {
+        console.warn("Pinterest: stamp_pinterest_post_type returned false (fence mismatch or post state mismatch)");
+      }
     } catch (err) {
       console.warn("Pinterest: failed to stamp pinterest_post_type:", err);
     }
