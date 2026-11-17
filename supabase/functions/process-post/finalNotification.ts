@@ -26,7 +26,7 @@ export interface FinalNotificationClaim {
   claimed: boolean;
   /** Legacy marker read/write failure; distinct from a managed-intent refusal. */
   error: string | null;
-  reason?: "managed_intent";
+  reason?: "managed_intent" | "ownership_unavailable" | "post_missing";
 }
 
 function asRecord(value: unknown): Record<string, unknown> {
@@ -48,13 +48,16 @@ export async function claimFinalNotification(
   postId: string,
   now = new Date(),
 ): Promise<FinalNotificationClaim> {
-  const { data: row, error: readError } = await supabase
+  const readOwnership = () => supabase
     .from("posts")
     .select("metadata, processing_started_at")
     .eq("id", postId)
     .maybeSingle();
-  if (readError) return { claimed: false, error: readError.message ?? String(readError) };
-  if (!row) return { claimed: false, error: "post not found" };
+  let ownership = await readOwnership();
+  if (ownership.error) ownership = await readOwnership();
+  const { data: row, error: readError } = ownership;
+  if (readError) return { claimed: false, error: readError.message ?? String(readError), reason: "ownership_unavailable" };
+  if (!row) return { claimed: false, error: null, reason: "post_missing" };
 
   const metadata = asRecord(row.metadata);
   if (metadata.final_notification_intent != null) {

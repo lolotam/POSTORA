@@ -1703,6 +1703,47 @@ BEGIN
     ASSERT res->>'status'='completed', 'T93 finalizer agrees with scoped repair eligibility';
   END;
 
+  -- T94: Retrying only Instagram must retain an older Threads success without
+  -- requiring a new Threads publication in the replacement processing attempt.
+  DECLARE
+    retry_post uuid:=gen_random_uuid();
+    control_post uuid:=gen_random_uuid();
+    ig_account uuid:=gen_random_uuid();
+    retained_row uuid:=gen_random_uuid();
+    video_row uuid;
+    requested_at timestamptz;
+  BEGIN
+    INSERT INTO public.social_accounts(id,user_id,platform,platform_user_id,access_token,is_active)
+    VALUES(ig_account,owner_id,'instagram','retained-retry-ig','synthetic-fixture',true);
+    INSERT INTO public.posts(id,user_id,platforms,status,processing_started_at,metadata)
+    VALUES(retry_post,owner_id,ARRAY['threads','instagram'],'completed',attempt_at-interval '1 hour','{}'),
+      (control_post,owner_id,ARRAY['threads','instagram'],'failed',attempt_at-interval '1 hour','{}');
+    INSERT INTO public.platform_posts(id,post_id,social_account_id,platform,status,created_at,platform_post_id)
+    VALUES(retained_row,retry_post,acct_1,'threads','success',attempt_at-interval '1 hour','retained-thread'),
+      (gen_random_uuid(),retry_post,ig_account,'instagram','failed',attempt_at-interval '1 hour',NULL),
+      (gen_random_uuid(),control_post,acct_1,'threads','failed',attempt_at-interval '1 hour',NULL),
+      (gen_random_uuid(),control_post,ig_account,'instagram','failed',attempt_at-interval '1 hour',NULL);
+    res:=public.request_post_retry(retry_post,owner_id,ARRAY[ig_account]);
+    ASSERT res->>'status'='accepted', 'T94 actual targeted retry request is accepted';
+    requested_at:=(res->>'requested_at')::timestamptz;
+    UPDATE public.posts SET status='processing',processing_started_at=requested_at+interval '1 second' WHERE id=retry_post;
+    video_row:=public.record_deferred_platform_post(retry_post,ig_account,jsonb_build_object('deferred',jsonb_build_object('kind','instagram','container_id','retained-retry-video')));
+    PERFORM public.partner_settle_platform_post(video_row,retry_post,ig_account,'instagram','success','retried-ig-video');
+    ASSERT (SELECT status='completed' FROM public.posts WHERE id=retry_post),
+      'T94 retained Threads success permits the retried Instagram video to finalize';
+    ASSERT (SELECT count(*)=2 FROM public.platform_posts WHERE post_id=retry_post)
+      AND (SELECT platform_post_id='retained-thread' AND status='success' FROM public.platform_posts WHERE id=retained_row),
+      'T94 targeted retry preserves the exact prior Threads result without another Threads row';
+
+    res:=public.request_post_retry(control_post,owner_id,ARRAY[acct_1,ig_account]);
+    requested_at:=(res->>'requested_at')::timestamptz;
+    UPDATE public.posts SET status='processing',processing_started_at=requested_at+interval '1 second' WHERE id=control_post;
+    video_row:=public.record_deferred_platform_post(control_post,ig_account,jsonb_build_object('deferred',jsonb_build_object('kind','instagram','container_id','retry-both-video')));
+    PERFORM public.partner_settle_platform_post(video_row,control_post,ig_account,'instagram','success','retry-both-ig-video');
+    ASSERT (SELECT status='processing' FROM public.posts WHERE id=control_post),
+      'T94 explicitly retried Threads target still blocks rollup until its current result exists';
+  END;
+
 END $$;
 
 ROLLBACK;

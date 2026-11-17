@@ -1667,17 +1667,17 @@ async function announceFinalPost(
   }
 
   const claim = await claimFinalNotification(supabase, post.id);
-  if (claim.reason === "managed_intent") {
+  if (claim.reason) {
     await writeLogRow(supabase, {
-      level: "info", category: "post", source: "process-post", user_id: post.user_id,
-      message: "Managed image notification remains owned by its fenced reconciler",
-      metadata: { event: "final_notification_claim_refused", post_id: post.id, reason: claim.reason },
+      level: claim.error ? "warn" : "info", category: "post", source: "process-post", user_id: post.user_id,
+      message: claim.reason === "managed_intent" ? "Managed image notification remains owned by its fenced reconciler" : "Final notification withheld because its current ownership could not be established",
+      metadata: { event: "final_notification_claim_refused", post_id: post.id, reason: claim.reason, error: claim.error },
     });
     return false;
   }
   if (claim.error) {
-    // Preserve legacy best-effort delivery on marker outages. This does not write
-    // or acknowledge a managed intent; known managed refusals returned above.
+    // Only marker UPDATE errors follow a successful legacy ownership read.
+    // Unknown/missing ownership and managed refusals returned above.
     await writeLogRow(supabase, {
       level: "warn", category: "post", source: "process-post", user_id: post.user_id,
       message: "Legacy notification marker unavailable; attempting best-effort delivery",

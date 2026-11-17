@@ -1478,8 +1478,26 @@ BEGIN
 
   SELECT * INTO v_post FROM public.posts WHERE id = v_row.post_id;
   IF 'threads' = ANY(v_post.platforms) THEN
-    -- If Threads has not finished its current attempt, suppress parent rollup
-    IF NOT EXISTS (
+    -- A current targeted retry can retain an earlier Threads success without
+    -- attempting Threads again. Only its actual Threads retry targets must wait.
+    IF jsonb_typeof(v_post.metadata #> '{retry_request,account_ids}') = 'array'
+       AND jsonb_array_length(v_post.metadata #> '{retry_request,account_ids}') > 0
+       AND (v_post.metadata #> '{retry_request,requested_at}') = to_jsonb(v_post.publish_requested_at) THEN
+      IF EXISTS (
+        SELECT 1 FROM public.social_accounts target
+         WHERE target.user_id = v_post.user_id AND target.platform = 'threads'
+           AND (v_post.metadata #> '{retry_request,account_ids}') @> to_jsonb(ARRAY[target.id])
+           AND NOT EXISTS (
+             SELECT 1 FROM public.platform_posts tp
+              WHERE tp.post_id = v_row.post_id AND tp.social_account_id = target.id
+                AND tp.status IN ('success', 'failed')
+                AND (tp.created_at >= v_post.processing_started_at
+                  OR (tp.response_data #>> '{deferred,attempt_started_at}')::timestamptz = v_post.processing_started_at)
+           )
+      ) THEN
+        v_rollup_parent := false;
+      END IF;
+    ELSIF NOT EXISTS (
       SELECT 1 FROM public.platform_posts tp
        WHERE tp.post_id = v_row.post_id
          AND tp.platform = 'threads'

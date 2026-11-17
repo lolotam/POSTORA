@@ -198,7 +198,9 @@ Deno.test("registered process-post durably completes single-image Threads contai
   let legacyVideoMode = false;
   let beforeLegacyRestore: (() => void) | null = null;
   let legacyRestoreFailure = false;
-  let legacyNotificationClaimFailure: "none" | "read" | "update" = "none";
+  let legacyNotificationClaimFailure: "none" | "read" | "read_persistent" | "missing" | "update" = "none";
+  let legacyNotificationClaimReads = 0;
+  let legacySiblingReadSnapshot = false;
   let notificationScopeMode: "ok" | "missing" | "empty" | "deleted" | "changed" | "parent_changed" | "content_changed" | "settings_changed" | "attempt_changed" | "content_read_error" = "ok";
   const unexpected: string[] = [];
 
@@ -288,6 +290,8 @@ Deno.test("registered process-post durably completes single-image Threads contai
     beforeLegacyRestore = null;
     legacyRestoreFailure = false;
     legacyNotificationClaimFailure = "none";
+    legacyNotificationClaimReads = 0;
+    legacySiblingReadSnapshot = false;
   }
 
   function insertCheckpoint(payload: Record<string, unknown>) {
@@ -477,8 +481,21 @@ Deno.test("registered process-post durably completes single-image Threads contai
         }
         return Response.json([{ id: POST, processing_started_at: post.processing_started_at }]);
       }
-      if (legacyNotificationClaimFailure === "read" && url.searchParams.get("select") === "metadata,processing_started_at") {
-        return Response.json({ message: "fixture legacy marker read unavailable" }, { status: 500 });
+      if (legacySiblingReadSnapshot && url.searchParams.get("select") === "*") {
+        legacySiblingReadSnapshot = false;
+        // The sibling read processing before the image's concurrent finalization.
+        const snapshot = structuredClone(post);
+        snapshot.status = "processing";
+        delete (snapshot.metadata as Record<string, unknown>).final_notification_intent;
+        return Response.json(snapshot);
+      }
+      if (url.searchParams.get("select") === "metadata,processing_started_at") {
+        legacyNotificationClaimReads++;
+        if (legacyNotificationClaimFailure === "missing") return Response.json(null);
+        if (legacyNotificationClaimFailure === "read_persistent" ||
+          (legacyNotificationClaimFailure === "read" && legacyNotificationClaimReads === 1)) {
+          return Response.json({ message: "fixture legacy marker read unavailable" }, { status: 500 });
+        }
       }
       if (notificationScopeMode === "content_read_error" && finalNotificationClaims > 0 && url.searchParams.get("select") === "*") {
         return Response.json({ message: "fixture notification content read unavailable" }, { status: 500 });
@@ -2239,6 +2256,30 @@ Deno.test("registered process-post durably completes single-image Threads contai
           }
         });
       }
+    }
+
+    for (const failure of ["read", "read_persistent", "missing"] as const) {
+      await test.step(`legacy deferred sibling cannot bypass managed notice ownership (${failure})`, async () => {
+        reset();
+        webhookFailure = "http";
+        assertEquals((await invoke()).status, 200);
+        const intent = structuredClone((post.metadata as Record<string, unknown>).final_notification_intent);
+        assertEquals((intent as Record<string, unknown>).notified, false);
+        assertEquals(deliveredNotifications.length, 0);
+        const sibling = structuredClone(rows[0]);
+        sibling.id = "44000000-0000-4000-8000-000000000099";
+        sibling.status = "pending";
+        sibling.platform_post_id = null;
+        sibling.platform_post_url = null;
+        deferred(sibling.response_data).media_type = "VIDEO";
+        rows.push(sibling);
+        webhookFailure = "none";
+        legacyNotificationClaimFailure = failure;
+        legacySiblingReadSnapshot = true;
+        assertEquals((await invoke({ resume: sibling.id, at: 2_000 })).status, 200);
+        assertEquals(deliveredNotifications.length, 0);
+        assertEquals((post.metadata as Record<string, unknown>).final_notification_intent, intent);
+      });
     }
 
     for (const newerClaim of [false, true]) {

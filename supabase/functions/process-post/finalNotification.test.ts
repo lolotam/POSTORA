@@ -11,7 +11,7 @@ interface PostRow {
  * A posts table of one row with the semantics the claim relies on: an UPDATE applies only if
  * its filters still hold against the row as it is when the UPDATE runs, not as it was read.
  */
-function fakePosts(initial: PostRow, failures: { read?: string; update?: string; beforeUpdate?: (row: PostRow) => void } = {}) {
+function fakePosts(initial: PostRow, failures: { read?: string; missing?: boolean; update?: string; beforeUpdate?: (row: PostRow) => void } = {}) {
   const row: PostRow = structuredClone(initial);
   const valueAt = (column: string): unknown => {
     const [field, key] = column.split(/->>?/);
@@ -21,7 +21,7 @@ function fakePosts(initial: PostRow, failures: { read?: string; update?: string;
     from: () => ({
       select: () => ({
         eq: () => ({
-          maybeSingle: () => Promise.resolve(failures.read ? { data: null, error: { message: failures.read } } : { data: structuredClone(row), error: null }),
+          maybeSingle: () => Promise.resolve(failures.read ? { data: null, error: { message: failures.read } } : { data: failures.missing ? null : structuredClone(row), error: null }),
         }),
       }),
       update: (values: Partial<PostRow>) => {
@@ -78,7 +78,9 @@ Deno.test("a post retried and final again is announced again, still by exactly o
 
 Deno.test("a read that fails, or a missing post, is an error rather than 'already announced'", async () => {
   const unreadable = fakePosts({ metadata: null, processing_started_at: null }, { read: "statement timeout" });
-  assertEquals(await claimFinalNotification(unreadable.client, "post-1", NOW), { claimed: false, error: "statement timeout" });
+  assertEquals(await claimFinalNotification(unreadable.client, "post-1", NOW), { claimed: false, error: "statement timeout", reason: "ownership_unavailable" });
+  const missing = fakePosts({ metadata: null, processing_started_at: null }, { missing: true });
+  assertEquals(await claimFinalNotification(missing.client, "post-1", NOW), { claimed: false, error: null, reason: "post_missing" });
 });
 
 Deno.test("an update that fails is an error rather than notification authority", async () => {
