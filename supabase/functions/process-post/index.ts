@@ -1909,7 +1909,8 @@ async function handleNotificationOnly(
     return createErrorResponse("Notification scope unavailable", 503);
   }
   // Read before consuming the send-once marker. Database outages remain pre-claim work.
-  const outcome = await readPostOutcome(postReaderFor(supabase, authorizedIds, candidate.authorized_platform_post_statuses, {
+  // The locked claim refreshes stale status snapshots and refuses their old candidate ID.
+  const outcome = await readPostOutcome(postReaderFor(supabase, authorizedIds, undefined, {
     processingStartedAt: attemptStartedAt, content: expectedContent,
   }), postId, { results: [], hasSuccess: false, hasFailed: false });
   if (outcome.kind !== "terminal" || outcome.degraded) {

@@ -974,6 +974,14 @@ Deno.test("registered process-post durably completes single-image Threads contai
       const meta = (post.metadata ?? {}) as Record<string, unknown>;
       const cand = (meta.legacy_notification_candidate ?? {}) as Record<string, unknown>;
       assertEquals(payload.p_candidate_id, cand.candidate_id, "every recovery claim binds the prepared candidate");
+      const currentStatuses = Object.fromEntries(rows.filter(row =>
+        (cand.authorized_platform_post_ids as string[]).includes(row.id)).map(row => [row.id, row.status]));
+      if (JSON.stringify(cand.authorized_platform_post_statuses) !== JSON.stringify(currentStatuses)) {
+        cand.authorized_platform_post_statuses = currentStatuses;
+        cand.candidate_id = crypto.randomUUID();
+        post.status = Object.values(currentStatuses).includes("success") ? "completed" : "failed";
+        return Response.json({ claimed: false, reason: "candidate_refreshed" });
+      }
       if (refreshCandidateOnClaim) {
         cand.candidate_id = crypto.randomUUID();
         return Response.json({ claimed: false, reason: "candidate_refreshed" });
@@ -2464,7 +2472,7 @@ Deno.test("registered process-post durably completes single-image Threads contai
         rows[0].platform_post_url = "https://facebook.fixture/recovered";
         post.status = "completed";
         post.processing_started_at = new Date(BASE_CLOCK).toISOString();
-        const candidateId = "77000000-0000-4000-8000-000000000001";
+        let candidateId = "77000000-0000-4000-8000-000000000001";
         const claimId = "77000000-0000-4000-8000-000000000002";
         post.metadata = { ...post.metadata as Record<string, unknown>, legacy_notification_candidate: {
           candidate_id: candidateId, authorized_platform_post_ids: [resultId], ready: true,
@@ -2480,9 +2488,10 @@ Deno.test("registered process-post durably completes single-image Threads contai
         if (mode === "missing_row") rows = [];
         if (mode === "changed_status") rows[0].status = "failed";
         const response = await call();
-        assertEquals(response.status, mode === "ok" || mode === "refreshed" ? 200 : 503, await response.clone().text());
+        const reachesClaim = mode === "ok" || mode === "refreshed" || mode === "changed_status";
+        assertEquals(response.status, reachesClaim ? 200 : 503, await response.clone().text());
         assertEquals({ creates, statusReads, publishes, settlements, inlineClaims }, { creates: 0, statusReads: 0, publishes: 0, settlements: 0, inlineClaims: 0 });
-        assertEquals(recoveryClaims, mode === "ok" || mode === "refreshed" ? 1 : 0);
+        assertEquals(recoveryClaims, reachesClaim ? 1 : 0);
         if (mode === "ok") {
           const receipt = await response.json();
           assertEquals(receipt.notification_scheduled, true);
@@ -2491,6 +2500,32 @@ Deno.test("registered process-post durably completes single-image Threads contai
         if (mode !== "ok") {
           assertEquals((post.metadata as Record<string, unknown>).final_notified_at, undefined);
           assertEquals(deliveredNotifications.length, 0);
+        }
+        if (mode === "changed_status") {
+          assertEquals((await response.json()).reason, "candidate_refreshed");
+          candidateId = ((post.metadata as Record<string, unknown>).legacy_notification_candidate as Record<string, unknown>).candidate_id as string;
+          const background: Promise<unknown>[] = [];
+          const runtime = globalThis as Record<string, unknown>;
+          const previous = runtime.EdgeRuntime;
+          runtime.EdgeRuntime = { waitUntil: (promise: Promise<unknown>) => { background.push(promise); } };
+          try {
+            const recovered = await call();
+            assertEquals(recovered.status, 200);
+            const receipt = await recovered.json();
+            assertEquals(receipt.claimed, true);
+            assertEquals(receipt.notification_scheduled, true);
+            assertEquals(receipt.status, "failed");
+            await Promise.all(background);
+            const notices = deliveredNotifications.filter(entry => entry.event === "post.failed");
+            assertEquals(notices.length, 1);
+            const body = notices[0].body as { data: { platform_results_list: Array<{ platform: string; status: string }> } };
+            assertEquals(body.data.platform_results_list.map(row => ({ platform: row.platform, status: row.status })), [{ platform: "facebook", status: "failed" }]);
+          } finally {
+            if (previous === undefined) delete runtime.EdgeRuntime;
+            else runtime.EdgeRuntime = previous;
+          }
+          assertEquals(recoveryClaims, 2);
+          assertEquals({ creates, statusReads, publishes, settlements }, { creates: 0, statusReads: 0, publishes: 0, settlements: 0 });
         }
       });
     }
