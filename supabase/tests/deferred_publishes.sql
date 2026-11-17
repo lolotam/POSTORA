@@ -2033,6 +2033,41 @@ BEGIN
   ASSERT (SELECT jsonb_array_length(metadata #> '{legacy_notification_candidate,authorized_platform_post_ids}') FROM public.posts WHERE id=p)=2,'T99 final payload is anchor plus carried story only';
 END $$;
 
+-- T100: a committed Story insert with lost ACK is included even on existing-row replay.
+DO $$
+DECLARE
+  u uuid := gen_random_uuid(); a uuid := gen_random_uuid(); p uuid := gen_random_uuid();
+  anchor_id uuid := gen_random_uuid(); story_row uuid; t timestamptz := now(); f jsonb; answer jsonb;
+BEGIN
+  INSERT INTO auth.users(id,email) VALUES(u,'carried-ack-test@example.invalid');
+  INSERT INTO public.social_accounts(id,user_id,platform,platform_user_id,access_token,is_active)
+    VALUES(a,u,'instagram','carried-ack','fixture',true);
+  INSERT INTO public.posts(id,user_id,caption,platforms,status,processing_started_at,source,metadata)
+    VALUES(p,u,'carried ACK',ARRAY['instagram'],'processing',t,'manual','{}');
+  SELECT jsonb_build_object('user_id',x.user_id,'caption',x.caption,'media_file_ids',x.media_file_ids,
+    'metadata','{}'::jsonb,'platforms',x.platforms,'scheduled_at',x.scheduled_at,
+    'publish_requested_at',x.publish_requested_at,'source',x.source) INTO f FROM public.posts x WHERE x.id=p;
+  PERFORM public.enroll_post_notification_recovery(p,t,f,ARRAY[a],ARRAY[]::uuid[]);
+  -- The database commits; the original worker observes neither response nor row ID.
+  PERFORM public.record_published_story(p,a,'ack-lost-provider','https://fixture.invalid/ack-story','{}');
+  INSERT INTO public.platform_posts(id,post_id,social_account_id,platform,status,created_at,response_data)
+    VALUES(anchor_id,p,a,'instagram','pending',t,'{"unrecorded_story":{"id":"ack-lost-provider","url":"https://fixture.invalid/ack-story"}}');
+  answer := public.close_post_fanout(p,t,f,ARRAY[anchor_id],ARRAY[]::uuid[]);
+  ASSERT answer->>'closed'='true' AND answer->>'ready'='false','T100 close pending carrier';
+  SELECT id INTO story_row FROM public.platform_posts WHERE post_id=p AND platform_post_id='ack-lost-provider';
+  ASSERT (SELECT (metadata #> '{legacy_notification_candidate,exact_platform_post_ids}') @> to_jsonb(ARRAY[story_row]) FROM public.posts WHERE id=p),'T100 committed story belongs to carrier scope despite lost ACK';
+  -- Repeated closure with original args is idempotent after derived authorization.
+  answer := public.close_post_fanout(p,t,f,ARRAY[anchor_id],ARRAY[]::uuid[]);
+  ASSERT answer->>'closed'='true','T100 original closure replay';
+  answer := public.record_published_story(p,a,'ack-lost-provider','https://fixture.invalid/ack-story','{}');
+  ASSERT answer->>'recorded'='false','T100 actual existing-row fast return';
+  ASSERT (answer->>'platform_post_id')::uuid=story_row,'T100 same stable Story row';
+  PERFORM public.partner_settle_platform_post(anchor_id,NULL,NULL,NULL,'failed',NULL,NULL,'reel expired after ACK loss',NULL);
+  ASSERT (SELECT status FROM public.posts WHERE id=p)='completed','T100 live Story survives failed anchor';
+  ASSERT (SELECT jsonb_array_length(metadata #> '{legacy_notification_candidate,authorized_platform_post_ids}') FROM public.posts WHERE id=p)=2,'T100 exact notification scope includes Story and anchor';
+  ASSERT (SELECT count(*) FROM public.platform_posts WHERE post_id=p)=2,'T100 no duplicate Story or result';
+END $$;
+
 ROLLBACK;
 
 \echo '=== deferred_publishes: ALL CHECKS PASSED ==='

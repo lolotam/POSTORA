@@ -1386,7 +1386,6 @@ DECLARE
   v_post_state TEXT;
   v_rollup_parent BOOLEAN := true;
   v_content    JSONB;
-  v_carried_anchor UUID;
 BEGIN
   IF p_status NOT IN ('success', 'failed') THEN
     RAISE EXCEPTION 'partner_settle_platform_post: % is not a terminal status', p_status;
@@ -1555,32 +1554,6 @@ BEGIN
     FROM public.platform_posts WHERE post_id = v_row.post_id;
 
   IF v_post.metadata ? 'legacy_notification_candidate' THEN
-    -- A story carried by an original, frozen pending row is an authorized future
-    -- result. Its successful recorder may materialize the row only on resume.
-    IF v_row.platform = 'instagram' AND v_row.status = 'success'
-       AND v_row.response_data ->> 'ig_post_subtype' = 'story'
-       AND v_post.metadata #>> '{legacy_notification_candidate,fanout_closed}' = 'true'
-       AND (v_post.metadata #>> '{legacy_notification_candidate,attempt_started_at}')::timestamptz = v_post.processing_started_at
-       AND v_post.metadata #>> '{legacy_notification_candidate,content_hash}' = md5(jsonb_build_object(
-         'user_id',v_post.user_id,'caption',v_post.caption,'media_file_ids',v_post.media_file_ids,
-         'metadata',public.normalize_threads_internal_metadata(v_post.metadata),'platforms',v_post.platforms,
-         'scheduled_at',v_post.scheduled_at,'publish_requested_at',v_post.publish_requested_at,'source',v_post.source
-       )::text) THEN
-      SELECT anchor.id INTO v_carried_anchor FROM public.platform_posts anchor
-       WHERE anchor.post_id = v_row.post_id AND anchor.social_account_id = v_row.social_account_id
-         AND (v_post.metadata #> '{legacy_notification_candidate,exact_platform_post_ids}') @> to_jsonb(ARRAY[anchor.id])
-         AND anchor.response_data #>> '{unrecorded_story,id}' = v_row.platform_post_id
-       LIMIT 1;
-      IF v_carried_anchor IS NOT NULL AND NOT (
-        (v_post.metadata #> '{legacy_notification_candidate,exact_platform_post_ids}') @> to_jsonb(ARRAY[v_row.id])
-      ) THEN
-        UPDATE public.posts SET metadata = jsonb_set(metadata,
-          '{legacy_notification_candidate,exact_platform_post_ids}',
-          (metadata #> '{legacy_notification_candidate,exact_platform_post_ids}') || to_jsonb(ARRAY[v_row.id]))
-         WHERE id = v_row.post_id;
-        SELECT * INTO v_post FROM public.posts WHERE id = v_row.post_id;
-      END IF;
-    END IF;
     -- Original worker closure is authoritative, including multiple rows per account.
     -- A pending producer may finish only the already-closed exact row set.
     IF v_post.metadata #>> '{legacy_notification_candidate,fanout_closed}' = 'true' THEN
@@ -1945,6 +1918,8 @@ DECLARE
   v_all_rows uuid[];
   v_expected_retained uuid[];
   v_target_ids uuid[];
+  v_anchor_ids uuid[];
+  v_carried_ids uuid[];
 BEGIN
   IF p_post_id IS NULL OR p_expected_processing_started_at IS NULL THEN
     RETURN jsonb_build_object('closed', false, 'error', 'invalid_arguments');
@@ -2015,9 +1990,33 @@ BEGIN
      ) THEN
     RETURN jsonb_build_object('closed', false, 'error', 'result_scope_mismatch');
   END IF;
-  IF v_candidate ->> 'fanout_closed' = 'true' AND
-     NOT ((v_candidate -> 'exact_platform_post_ids') @> to_jsonb(p_exact_platform_post_ids)
-       AND to_jsonb(p_exact_platform_post_ids) @> (v_candidate -> 'exact_platform_post_ids')) THEN
+  -- Resolve the original worker's explicit carried-Story receipts on closure and
+  -- every refresh, including a recorder's committed-but-unacknowledged insert.
+  -- Existing-row recorder replays need not settle again to authorize this result.
+  SELECT coalesce(array_agg(x::uuid), ARRAY[]::uuid[]) INTO v_anchor_ids
+    FROM jsonb_array_elements_text(v_candidate -> 'exact_platform_post_ids') x;
+  IF v_candidate ->> 'fanout_closed' IS DISTINCT FROM 'true' THEN
+    v_anchor_ids := p_exact_platform_post_ids;
+  END IF;
+  PERFORM anchor.id FROM public.platform_posts anchor WHERE anchor.id = ANY(v_anchor_ids)
+    ORDER BY anchor.id FOR UPDATE;
+  SELECT coalesce(array_agg(DISTINCT story.id), ARRAY[]::uuid[]) INTO v_carried_ids
+    FROM public.platform_posts anchor
+    JOIN public.platform_posts story ON story.post_id = anchor.post_id
+      AND story.social_account_id = anchor.social_account_id
+      AND story.platform_post_id = anchor.response_data #>> '{unrecorded_story,id}'
+    JOIN public.social_accounts account ON account.id = story.social_account_id
+   WHERE anchor.id = ANY(v_anchor_ids) AND anchor.post_id = p_post_id
+     AND anchor.platform = 'instagram' AND story.platform = 'instagram'
+     AND story.status = 'success' AND story.response_data ->> 'ig_post_subtype' = 'story'
+     AND account.user_id = v_post.user_id AND account.id = ANY(v_target_ids)
+     AND NOT (story.id = ANY(v_expected_retained));
+  SELECT array_agg(DISTINCT id ORDER BY id) INTO p_exact_platform_post_ids
+    FROM unnest(p_exact_platform_post_ids || v_carried_ids) id;
+  IF v_candidate ->> 'fanout_closed' = 'true' AND NOT (
+    p_exact_platform_post_ids @> (v_anchor_ids || v_carried_ids)
+    AND (v_anchor_ids || v_carried_ids) @> p_exact_platform_post_ids
+  ) THEN
     RETURN jsonb_build_object('closed', false, 'error', 'fanout_scope_frozen');
   END IF;
   -- Parent lock precedes result locks in both settlement and closure.
