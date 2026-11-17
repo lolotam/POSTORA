@@ -11,10 +11,10 @@ interface PostRow {
  * A posts table of one row with the semantics the claim relies on: an UPDATE applies only if
  * its filters still hold against the row as it is when the UPDATE runs, not as it was read.
  */
-function fakePosts(initial: PostRow, failures: { read?: string; update?: string } = {}) {
+function fakePosts(initial: PostRow, failures: { read?: string; update?: string; beforeUpdate?: (row: PostRow) => void } = {}) {
   const row: PostRow = structuredClone(initial);
   const valueAt = (column: string): unknown => {
-    const [field, key] = column.split("->>");
+    const [field, key] = column.split(/->>?/);
     return key ? (row[field as "metadata"] as Record<string, unknown> | null)?.[key] ?? null : (row as unknown as Record<string, unknown>)[field];
   };
   const client = {
@@ -36,6 +36,7 @@ function fakePosts(initial: PostRow, failures: { read?: string; update?: string 
             return chain;
           },
           select: () => {
+            failures.beforeUpdate?.(row);
             if (failures.update) return Promise.resolve({ data: null, error: { message: failures.update } });
             if (!filters.every((holds) => holds())) return Promise.resolve({ data: [], error: null });
             Object.assign(row, values);
@@ -80,10 +81,23 @@ Deno.test("a read that fails, or a missing post, is an error rather than 'alread
   assertEquals(await claimFinalNotification(unreadable.client, "post-1", NOW), { claimed: false, error: "statement timeout" });
 });
 
-Deno.test("an update that fails is an error, so the caller can send instead of dropping the notice", async () => {
+Deno.test("an update that fails is an error rather than notification authority", async () => {
   const { client } = fakePosts({ metadata: null, processing_started_at: "2026-10-30T11:00:00.000Z" }, { update: "permission denied" });
   assertEquals(await claimFinalNotification(client, "post-1", NOW), { claimed: false, error: "permission denied" });
 });
+
+for (const concurrent of [false, true]) {
+  Deno.test(`an unfenced legacy claim cannot consume a managed intent (${concurrent ? "concurrent" : "existing"})`, async () => {
+    const intent = { notified: false, claim_id: "active-image-lease", delivery_acks: { delivered: true } };
+    const { client, row } = fakePosts({
+      metadata: concurrent ? {} : { final_notification_intent: intent },
+      processing_started_at: "2026-10-30T11:00:00.000Z",
+    }, concurrent ? { beforeUpdate: current => { current.metadata = { final_notification_intent: structuredClone(intent) }; } } : {});
+    const result = await claimFinalNotification(client, "post-1", NOW);
+    assertEquals(result.claimed, false);
+    assertEquals(row.metadata, { final_notification_intent: intent });
+  });
+}
 
 Deno.test("a marker covers the cycle it was written in, not an earlier one", () => {
   assertEquals(markerCoversCycle(undefined, "2026-10-30T11:00:00.000Z"), false);

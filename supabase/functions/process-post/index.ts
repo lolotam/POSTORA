@@ -1605,7 +1605,7 @@ async function announceFinalPost(
           post.id,
           { results: platformResults, hasSuccess: finalStatus === "completed", hasFailed },
         );
-        if (outcome.kind !== "terminal" || outcome.degraded) {
+        if (outcome.kind !== "terminal" || outcome.degraded || outcome.status !== finalStatus) {
           await writeLogRow(supabase, {
             level: "error", category: "post", source: "process-post", user_id: post.user_id,
             message: "Threads image notification withheld because its leased result rows changed or could not be completely read",
@@ -1668,8 +1668,12 @@ async function announceFinalPost(
 
   const claim = await claimFinalNotification(supabase, post.id);
   if (claim.error) {
-    // The claim could not be made. A notice sent twice is better than one never sent.
-    console.error(`[process-post] final-notification claim failed, sending anyway: ${claim.error}`);
+    await writeLogRow(supabase, {
+      level: "warn", category: "post", source: "process-post", user_id: post.user_id,
+      message: "Final notification withheld because its unfenced claim could not be established",
+      metadata: { event: "final_notification_claim_refused", post_id: post.id, reason: claim.error },
+    });
+    return false;
   } else if (!claim.claimed) {
     console.log(`[process-post] post ${post.id} was already announced; not sending again`);
     return false;

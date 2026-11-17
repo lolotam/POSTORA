@@ -941,6 +941,11 @@ BEGIN
            'status', 'completed', 'attempt_started_at', claim_at, 'notified', false, 'created_at', now()
          ))
    WHERE id = post_a05;
+  UPDATE public.posts p SET metadata=jsonb_set(metadata,'{final_notification_intent,content_hash}',to_jsonb(md5(jsonb_build_object(
+    'user_id',p.user_id,'caption',p.caption,'media_file_ids',p.media_file_ids,
+    'metadata',public.normalize_threads_internal_metadata(p.metadata),'platforms',p.platforms,
+    'scheduled_at',p.scheduled_at,'publish_requested_at',p.publish_requested_at,'source',p.source)::text)))
+    WHERE id=post_a05;
   UPDATE public.platform_posts
      SET status = 'success',
          response_data = jsonb_build_object('deferred', jsonb_build_object(
@@ -1650,11 +1655,52 @@ BEGIN
     INSERT INTO public.posts(id,user_id,platforms,status,processing_started_at,metadata)
     SELECT id,owner_id,ARRAY['threads'],'completed',attempt_at,jsonb_build_object('final_notification_intent',
       jsonb_build_object('status','completed','attempt_started_at',attempt_at,'notified',false)) FROM unnest(ARRAY[old_post,new_post]) id;
+    UPDATE public.posts p SET metadata=jsonb_set(metadata,'{final_notification_intent,content_hash}',to_jsonb(md5(jsonb_build_object(
+      'user_id',p.user_id,'caption',p.caption,'media_file_ids',p.media_file_ids,
+      'metadata',public.normalize_threads_internal_metadata(p.metadata),'platforms',p.platforms,
+      'scheduled_at',p.scheduled_at,'publish_requested_at',p.publish_requested_at,'source',p.source)::text)))
+      WHERE id=ANY(ARRAY[old_post,new_post]);
     INSERT INTO public.platform_posts(id,post_id,social_account_id,platform,status,created_at,response_data)
     VALUES(old_row,old_post,acct_1,'threads','success',now()-interval '1 day',jsonb_build_object('deferred',jsonb_build_object('kind','threads','media_type','IMAGE','attempt_started_at',attempt_at,'claimed_until',now()-interval '1 second'))),
       (new_row,new_post,acct_1,'threads','success',now(),jsonb_build_object('deferred',jsonb_build_object('kind','threads','media_type','IMAGE','attempt_started_at',attempt_at,'claimed_until',now()-interval '2 seconds')));
     SELECT platform_post_id INTO selected_row FROM public.claim_deferred_publishes(1);
     ASSERT selected_row=new_row, 'T91 recently retried old notification cannot monopolize terminal repairs by original creation order';
+    UPDATE public.platform_posts SET response_data=jsonb_set(response_data,'{deferred,claimed_until}',to_jsonb(now()-interval '1 second')) WHERE id=ANY(ARRAY[old_row,new_row]);
+    UPDATE public.posts SET caption='Edited after finalization' WHERE id=old_post;
+    ASSERT NOT EXISTS (SELECT 1 FROM public.claim_deferred_publishes(100) WHERE platform_post_id=old_row),
+      'T92 edited terminal content is excluded from obsolete notice recovery';
+    ASSERT (SELECT status='success' FROM public.platform_posts WHERE id=old_row),
+      'T92 obsolete intent exclusion preserves publication evidence';
+  END;
+
+  -- T93: Only pending rows in the finalizer's current target attempt delay repair.
+  DECLARE
+    repair_post uuid:=gen_random_uuid();
+    image_row uuid:=gen_random_uuid();
+    current_pending uuid:=gen_random_uuid();
+    repair_fence jsonb;
+  BEGIN
+    UPDATE public.platform_posts SET response_data=jsonb_set(response_data,'{deferred,claimed_until}',to_jsonb(now()+interval '1 day')) WHERE response_data ? 'deferred';
+    INSERT INTO public.posts(id,user_id,caption,platforms,status,processing_started_at,metadata)
+    VALUES(repair_post,owner_id,'Scoped terminal repair',ARRAY['threads'],'processing',attempt_at,
+      jsonb_build_object('attempt_started_at',attempt_at,'attempt_target_account_ids',jsonb_build_array(acct_1)));
+    SELECT jsonb_build_object('user_id',user_id,'caption',caption,'media_file_ids',media_file_ids,
+      'metadata',public.normalize_threads_internal_metadata(metadata),'platforms',platforms,'scheduled_at',scheduled_at,
+      'publish_requested_at',publish_requested_at,'source',source) INTO repair_fence FROM public.posts WHERE id=repair_post;
+    INSERT INTO public.platform_posts(id,post_id,social_account_id,platform,status,created_at,response_data)
+    VALUES(image_row,repair_post,acct_1,'threads','success',attempt_at,jsonb_build_object('deferred',jsonb_build_object('kind','threads','media_type','IMAGE','attempt_started_at',attempt_at))),
+      (gen_random_uuid(),repair_post,acct_1,'threads','pending',attempt_at-interval '1 hour','{}'),
+      (gen_random_uuid(),repair_post,acct_2,'threads','pending',attempt_at,'{}');
+    ASSERT EXISTS (SELECT 1 FROM public.claim_deferred_publishes(100) WHERE platform_post_id=image_row),
+      'T93 historical and non-target pending rows do not strand current attempt repair';
+    UPDATE public.platform_posts SET response_data=jsonb_set(response_data,'{deferred,claimed_until}',to_jsonb(now()-interval '1 second')) WHERE id=image_row;
+    INSERT INTO public.platform_posts(id,post_id,social_account_id,platform,status,created_at,response_data)
+    VALUES(current_pending,repair_post,acct_1,'threads','pending',attempt_at,'{}');
+    ASSERT NOT EXISTS (SELECT 1 FROM public.claim_deferred_publishes(100) WHERE platform_post_id=image_row),
+      'T93 current target pending result still blocks premature repair';
+    UPDATE public.platform_posts SET created_at=attempt_at-interval '1 hour' WHERE id=current_pending;
+    res:=public.finalize_threads_image_attempt(repair_post,attempt_at,repair_fence);
+    ASSERT res->>'status'='completed', 'T93 finalizer agrees with scoped repair eligibility';
   END;
 
 END $$;

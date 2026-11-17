@@ -706,7 +706,23 @@ AS $$
            (
              p.status = 'processing'
              AND (pp.response_data #>> '{deferred,attempt_started_at}')::timestamptz IS NOT DISTINCT FROM p.processing_started_at
-             AND NOT EXISTS (SELECT 1 FROM public.platform_posts sibling WHERE sibling.post_id=p.id AND sibling.status='pending')
+             AND NOT EXISTS (
+               SELECT 1 FROM public.platform_posts sibling
+                WHERE sibling.post_id=p.id AND sibling.status='pending'
+                  AND (sibling.created_at>=p.processing_started_at
+                    OR (sibling.response_data #>> '{deferred,attempt_started_at}')::timestamptz=p.processing_started_at)
+                  AND CASE
+                    WHEN (p.metadata->>'attempt_started_at')::timestamptz IS NOT DISTINCT FROM p.processing_started_at
+                      AND jsonb_typeof(p.metadata->'attempt_target_account_ids')='array'
+                      AND jsonb_array_length(p.metadata->'attempt_target_account_ids')>0
+                    THEN p.metadata->'attempt_target_account_ids' @> to_jsonb(ARRAY[sibling.social_account_id])
+                    WHEN jsonb_typeof(p.metadata->'selected_account_ids')='array'
+                      AND jsonb_array_length(p.metadata->'selected_account_ids')>0
+                    THEN p.metadata->'selected_account_ids' @> to_jsonb(ARRAY[sibling.social_account_id])
+                      AND EXISTS (SELECT 1 FROM public.social_accounts a WHERE a.id=sibling.social_account_id AND a.user_id=p.user_id AND a.is_active=true)
+                    ELSE EXISTS (SELECT 1 FROM public.social_accounts a WHERE a.id=sibling.social_account_id AND a.user_id=p.user_id AND a.is_active=true AND a.platform=ANY(p.platforms))
+                  END
+             )
            )
            OR (
              p.status IN ('completed', 'failed')
@@ -714,6 +730,13 @@ AS $$
              AND (p.metadata #>> '{final_notification_intent,attempt_started_at}')::timestamptz IS NOT DISTINCT FROM p.processing_started_at
              AND (p.metadata #>> '{final_notification_intent,status}') = p.status
              AND p.metadata #>> '{final_notification_intent,notified}' = 'false'
+             -- Edited content can no longer confirm this intent. Keep the result
+             -- evidence, but do not repeatedly lease an obsolete notification.
+             AND p.metadata #>> '{final_notification_intent,content_hash}' = md5(jsonb_build_object(
+               'user_id',p.user_id,'caption',p.caption,'media_file_ids',p.media_file_ids,
+               'metadata',public.normalize_threads_internal_metadata(p.metadata),'platforms',p.platforms,
+               'scheduled_at',p.scheduled_at,'publish_requested_at',p.publish_requested_at,'source',p.source
+             )::text)
              AND coalesce((p.metadata #>> '{final_notification_intent,claimed_until}')::timestamptz, '-infinity') <= now()
              AND (
                (p.metadata ->> 'final_notified_at') IS NULL

@@ -198,7 +198,7 @@ Deno.test("registered process-post durably completes single-image Threads contai
   let legacyVideoMode = false;
   let beforeLegacyRestore: (() => void) | null = null;
   let legacyRestoreFailure = false;
-  let notificationScopeMode: "ok" | "missing" | "empty" | "deleted" | "changed" = "ok";
+  let notificationScopeMode: "ok" | "missing" | "empty" | "deleted" | "changed" | "parent_changed" = "ok";
   const unexpected: string[] = [];
 
   const threadsAccount = (): Account => ({
@@ -763,6 +763,7 @@ Deno.test("registered process-post durably completes single-image Threads contai
       const statuses = Object.fromEntries(rows.filter(row => authorizedIds.includes(row.id)).map(row => [row.id, row.status]));
       if (notificationScopeMode === "deleted") rows = rows.filter(row => row.id !== authorizedIds[0]);
       if (notificationScopeMode === "changed") rows.find(row => row.id === authorizedIds[0])!.status = "failed";
+      if (notificationScopeMode === "parent_changed") post.status = post.status === "completed" ? "failed" : "completed";
       return Response.json({
         claimed: true,
         status: post.status,
@@ -2154,9 +2155,13 @@ Deno.test("registered process-post durably completes single-image Threads contai
       const authorizedIds = intent.authorized_platform_post_ids as string[];
       assert(authorizedIds.includes(priorSuccessRowId));
       assert(!authorizedIds.includes(priorFailedRowId));
+      assertEquals(deliveredNotifications.length, 1);
+      const deliveredBody = JSON.stringify(deliveredNotifications[0].body);
+      assert(deliveredBody.includes("https://threads.net/p/prior-success"));
+      assert(!deliveredBody.includes("old failure"));
     });
 
-    for (const mode of ["missing", "empty", "deleted", "changed"] as const) {
+    for (const mode of ["missing", "empty", "deleted", "changed", "parent_changed"] as const) {
       for (const resumed of [false, true]) {
         await test.step(`managed notification refuses ${mode} leased result scope (${resumed ? "resumed" : "original"})`, async () => {
           reset();

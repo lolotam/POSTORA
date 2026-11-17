@@ -12,6 +12,8 @@
  * The marker is a timestamp, not a flag, so a post that is retried and becomes final again is
  * announced again: a marker older than the post's latest claim (`processing_started_at`)
  * belongs to an earlier cycle and is claimed over.
+ * Managed image intents use the leased RPC below. This legacy claim refuses them,
+ * including an intent staged between its read and compare-and-set.
  *
  * Review follow-up F6: docs/superpowers/specs/2026-10-30-hardening-review-followups-design.md.
  */
@@ -22,7 +24,7 @@ export const FINAL_NOTIFIED_KEY = "final_notified_at";
 
 export interface FinalNotificationClaim {
   claimed: boolean;
-  /** Set when the claim could not be made at all; the caller sends anyway (see announce). */
+  /** Set when notification authority could not be established. */
   error: string | null;
 }
 
@@ -54,6 +56,9 @@ export async function claimFinalNotification(
   if (!row) return { claimed: false, error: "post not found" };
 
   const metadata = asRecord(row.metadata);
+  if (metadata.final_notification_intent != null) {
+    return { claimed: false, error: "Managed image intent requires a fenced notification claim" };
+  }
   const marker = metadata[FINAL_NOTIFIED_KEY];
   if (markerCoversCycle(marker, row.processing_started_at ?? null)) return { claimed: false, error: null };
 
@@ -63,17 +68,12 @@ export async function claimFinalNotification(
     ...metadata,
     [FINAL_NOTIFIED_KEY]: now.toISOString(),
   };
-  if (metadata.final_notification_intent && typeof metadata.final_notification_intent === "object") {
-    updatedMetadata.final_notification_intent = {
-      ...(metadata.final_notification_intent as Record<string, unknown>),
-      notified: true,
-      notified_at: now.toISOString(),
-    };
-  }
   const update = supabase
     .from("posts")
     .update({ metadata: updatedMetadata })
-    .eq("id", postId);
+    .eq("id", postId)
+    // Recheck under the UPDATE lock if an image finalizer staged an intent after our read.
+    .is("metadata->final_notification_intent", null);
   const { data, error } = await (typeof marker === "string" ? update.eq(path, marker) : update.is(path, null)).select("id");
   if (error) return { claimed: false, error: error.message ?? String(error) };
   return { claimed: (data ?? []).length > 0, error: null };
