@@ -731,9 +731,14 @@ DECLARE
   v_post public.posts%ROWTYPE;
   v_content jsonb;
   v_intent jsonb;
+  v_claim_id uuid := gen_random_uuid();
 BEGIN
   IF p_post_id IS NULL OR p_expected_processing_started_at IS NULL OR p_expected_status IS NULL THEN
     RETURN jsonb_build_object('claimed', false, 'error', 'invalid_arguments');
+  END IF;
+
+  IF p_lease IS NULL OR p_lease <= interval '0' OR p_lease > interval '3 minutes' THEN
+    RETURN jsonb_build_object('claimed', false, 'error', 'invalid_lease');
   END IF;
 
   SELECT * INTO v_post FROM public.posts WHERE id = p_post_id FOR UPDATE;
@@ -788,12 +793,13 @@ BEGIN
   UPDATE public.posts
      SET metadata = coalesce(metadata, '{}'::jsonb) || jsonb_build_object(
            'final_notification_intent', v_intent || jsonb_build_object(
-             'claimed_until', now() + p_lease
+             'claimed_until', now() + p_lease,
+              'claim_id', v_claim_id
            )
          )
    WHERE id = p_post_id;
 
-  RETURN jsonb_build_object('claimed', true, 'status', v_post.status);
+  RETURN jsonb_build_object('claimed', true, 'status', v_post.status, 'claim_id', v_claim_id);
 END;
 $$;
 
@@ -803,11 +809,13 @@ GRANT EXECUTE ON FUNCTION public.claim_threads_image_notification(uuid, timestam
   TO service_role;
 
 -- Confirm final notification delivery after awaited external dispatch ACK or outbox emission
+DROP FUNCTION IF EXISTS public.confirm_threads_image_notification(uuid, timestamptz, text, jsonb);
 CREATE OR REPLACE FUNCTION public.confirm_threads_image_notification(
   p_post_id uuid,
   p_expected_processing_started_at timestamptz,
   p_expected_status text,
-  p_expected_content jsonb
+  p_expected_content jsonb,
+  p_claim_id uuid
 )
 RETURNS jsonb
 LANGUAGE plpgsql
@@ -819,7 +827,7 @@ DECLARE
   v_content jsonb;
   v_intent jsonb;
 BEGIN
-  IF p_post_id IS NULL OR p_expected_processing_started_at IS NULL OR p_expected_status IS NULL THEN
+  IF p_post_id IS NULL OR p_expected_processing_started_at IS NULL OR p_expected_status IS NULL OR p_claim_id IS NULL THEN
     RETURN jsonb_build_object('confirmed', false, 'error', 'invalid_arguments');
   END IF;
 
@@ -857,6 +865,18 @@ BEGIN
     RETURN jsonb_build_object('confirmed', false, 'status', v_post.status, 'error', 'no_intent');
   END IF;
 
+  IF (v_intent ->> 'status') IS DISTINCT FROM p_expected_status
+     OR (v_intent ->> 'attempt_started_at')::timestamptz IS DISTINCT FROM p_expected_processing_started_at
+     OR (v_intent ->> 'claim_id')::uuid IS DISTINCT FROM p_claim_id THEN
+    RETURN jsonb_build_object('confirmed', false, 'status', v_post.status, 'error', 'intent_owner_mismatch');
+  END IF;
+  IF v_intent ->> 'notified' = 'true' THEN
+    RETURN jsonb_build_object('confirmed', true, 'status', v_post.status);
+  END IF;
+  IF coalesce((v_intent ->> 'claimed_until')::timestamptz, '-infinity') <= now() THEN
+    RETURN jsonb_build_object('confirmed', false, 'status', v_post.status, 'error', 'lease_expired');
+  END IF;
+
   UPDATE public.posts
      SET metadata = coalesce(metadata, '{}'::jsonb) || jsonb_build_object(
            'final_notified_at', now(),
@@ -872,9 +892,9 @@ BEGIN
 END;
 $$;
 
-REVOKE ALL ON FUNCTION public.confirm_threads_image_notification(uuid, timestamptz, text, jsonb)
+REVOKE ALL ON FUNCTION public.confirm_threads_image_notification(uuid, timestamptz, text, jsonb, uuid)
   FROM PUBLIC, anon, authenticated;
-GRANT EXECUTE ON FUNCTION public.confirm_threads_image_notification(uuid, timestamptz, text, jsonb)
+GRANT EXECUTE ON FUNCTION public.confirm_threads_image_notification(uuid, timestamptz, text, jsonb, uuid)
   TO service_role;
 
 DROP FUNCTION IF EXISTS public.finalize_threads_image_attempt(uuid,timestamptz,jsonb);

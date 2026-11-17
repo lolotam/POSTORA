@@ -1074,12 +1074,27 @@ async function pollWithRetry<T>(
 /**
  * Send webhook notifications to registered endpoints and per-request webhooks
  */
+type AcknowledgedDelivery = { requireAcknowledgement: true };
+
+async function postNotificationWebhook(url: string, request: RequestInit, delivery?: AcknowledgedDelivery): Promise<void> {
+  const fetcher: typeof fetch = (target, init) => {
+    if (!delivery) return fetch(target, init);
+    const timeoutMs = followUpTimeoutMs(WORKER_STARTED_AT_MS, Date.now());
+    if (timeoutMs <= 0) throw new Error("Final notification delivery budget exhausted");
+    const signals = init?.signal ? [init.signal, AbortSignal.timeout(timeoutMs)] : [AbortSignal.timeout(timeoutMs)];
+    return fetch(target, { ...init, signal: AbortSignal.any(signals) });
+  };
+  const response = await postWebhook(url, request, fetcher);
+  if (delivery && !response.ok) throw new Error(`Final notification endpoint returned HTTP ${response.status}`);
+}
+
 async function sendWebhookNotifications(
   supabase: SupabaseClient,
   userId: string,
   event: string,
   data: Record<string, unknown>,
-  perRequestWebhook?: { url: string; secret?: string }
+  perRequestWebhook?: { url: string; secret?: string },
+  delivery?: AcknowledgedDelivery,
 ): Promise<void> {
   console.log(`Sending webhook notification: ${event} for user ${userId}`);
 
@@ -1123,16 +1138,18 @@ async function sendWebhookNotifications(
 
       const validationError = validateWebhookTarget(perRequestWebhook.url);
       if (validationError) {
+        if (delivery) throw new Error("Final notification webhook target is unsafe");
         console.warn(`Skipping unsafe per-request webhook: ${perRequestWebhook.url}`);
       } else {
-        await postWebhook(perRequestWebhook.url, {
+        await postNotificationWebhook(perRequestWebhook.url, {
           method: "POST",
           headers,
           body: JSON.stringify(payload)
-        });
+        }, delivery);
         console.log("Per-request webhook sent successfully");
       }
     } catch (webhookError) {
+      if (delivery) throw webhookError;
       console.error("Failed to send per-request webhook:", webhookError);
     }
   }
@@ -1144,6 +1161,7 @@ async function sendWebhookNotifications(
       .select("value")
       .like("key", `n8n_webhook_${userId}_%`);
 
+    if (error && delivery) throw new Error(`Could not read final notification subscriptions: ${error.message}`);
     if (error || !settings?.length) {
       console.log("No registered webhooks found for user:", userId);
       return;
@@ -1163,11 +1181,12 @@ async function sendWebhookNotifications(
       try {
         const validationError = validateWebhookTarget(webhook.webhook_url);
         if (validationError) {
+          if (delivery) throw new Error("Registered final notification webhook target is unsafe");
           console.warn(`Skipping unsafe registered webhook: ${webhook.webhook_url}`);
           continue;
         }
         console.log(`Sending to registered webhook: ${webhook.webhook_url}`);
-        await postWebhook(webhook.webhook_url, {
+        await postNotificationWebhook(webhook.webhook_url, {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
@@ -1175,12 +1194,14 @@ async function sendWebhookNotifications(
             "X-Postora-Timestamp": payload.timestamp
           },
           body: JSON.stringify(payload)
-        });
+        }, delivery);
       } catch (webhookError) {
+        if (delivery) throw webhookError;
         console.error("Failed to send webhook:", webhookError);
       }
     }
   } catch (error) {
+    if (delivery) throw error;
     console.error("Error sending webhook notifications:", error);
   }
 }
@@ -1323,18 +1344,20 @@ async function sendFailureEmailNotification(
   supabase: SupabaseClient,
   userId: string,
   caption: string,
-  platformResults: PlatformResult[]
+  platformResults: PlatformResult[],
+  delivery?: AcknowledgedDelivery,
 ): Promise<void> {
   try {
     console.log(`[Email] Checking if failure email should be sent for user ${userId}`);
 
     // Check admin-level global toggle for user post failure emails
-    const { data: settingRow } = await supabase
+    const { data: settingRow, error: settingError } = await supabase
       .from("app_settings")
       .select("value")
       .eq("key", "user_email_post_failure")
       .maybeSingle();
 
+    if (settingError && delivery) throw new Error(`Could not read final notification email policy: ${settingError.message}`);
     if (settingRow) {
       const parsed = typeof settingRow.value === "string" ? JSON.parse(settingRow.value) : settingRow.value;
       if (parsed === false) {
@@ -1351,6 +1374,7 @@ async function sendFailureEmailNotification(
       .single();
 
     if (profileError) {
+      if (delivery) throw new Error(`Could not read final notification email preferences: ${profileError.message}`);
       console.error("[Email] Could not fetch user profile:", profileError);
       return;
     }
@@ -1393,11 +1417,13 @@ async function sendFailureEmailNotification(
     });
 
     if (invokeError) {
+      if (delivery) throw invokeError;
       console.error("[Email] Failed to invoke email function:", invokeError);
     } else {
       console.log("[Email] Failure notification email sent successfully");
     }
   } catch (error) {
+    if (delivery) throw error;
     console.error("[Email] Error sending failure notification:", error);
   }
 }
@@ -1482,7 +1508,7 @@ async function dispatchFinalNotifications(
   } : undefined;
 
   const tasks: Promise<unknown>[] = [
-    sendWebhookNotifications(supabase, post.user_id, webhookEvent, webhookData, perRequestWebhook),
+    sendWebhookNotifications(supabase, post.user_id, webhookEvent, webhookData, perRequestWebhook, { requireAcknowledgement: true }),
   ];
 
   if (typeof (globalThis as Record<string, unknown>).EdgeRuntime !== "undefined" && typeof (globalThis as { EdgeRuntime?: { waitUntil?: unknown } }).EdgeRuntime?.waitUntil === "function") {
@@ -1494,14 +1520,14 @@ async function dispatchFinalNotifications(
             platform: result.platform,
             post_url: result.platform_post_url,
             caption: post.caption,
-          }, perRequestWebhook)
+          }, perRequestWebhook, { requireAcknowledgement: true })
         );
       }
     }
   }
 
   if (hasFailed) {
-    tasks.push(sendFailureEmailNotification(supabase, post.user_id, post.caption || "", platformResults));
+    tasks.push(sendFailureEmailNotification(supabase, post.user_id, post.caption || "", platformResults, { requireAcknowledgement: true }));
   }
 
   await Promise.all(tasks);
@@ -1528,7 +1554,7 @@ async function announceFinalPost(
       finalStatus,
       imageFence.content,
     );
-    if (!claim.claimed) {
+    if (!claim.claimed || !claim.claimId) {
       console.log(`[process-post] threads image final-notification claim not acquired (${claim.error ?? "already claimed"}); skipping dispatch`);
       return false;
     }
@@ -1540,6 +1566,7 @@ async function announceFinalPost(
         imageFence.processingStartedAt,
         finalStatus,
         imageFence.content,
+        claim.claimId,
       );
       if (!confirmed.confirmed) {
         console.error(`[process-post] threads image final-notification confirmation failed: ${confirmed.error}`);

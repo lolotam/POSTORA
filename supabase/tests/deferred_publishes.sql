@@ -1031,6 +1031,8 @@ DECLARE
   payload jsonb;
   res jsonb;
   err_caught boolean;
+  first_notification_claim uuid;
+  recovered_notification_claim uuid;
 BEGIN
   -- Setup foreign user and accounts
   INSERT INTO auth.users (id, email) VALUES (foreign_id, 'foreign-user@example.invalid')
@@ -1136,6 +1138,8 @@ BEGIN
   -- 1. Initial claim succeeds with lease
   res := public.claim_threads_image_notification(p_t78, attempt_at, 'completed', fence_t78, interval '3 minutes');
   ASSERT (res ->> 'claimed')::boolean = true, format('T78 initial notification claim succeeds (got %s)', res);
+  first_notification_claim := (res ->> 'claim_id')::uuid;
+  ASSERT first_notification_claim IS NOT NULL, 'T78 notification ownership has a durable claim identity';
 
   -- 2. Immediate second claim rejected with lease_held
   res := public.claim_threads_image_notification(p_t78, attempt_at, 'completed', fence_t78, interval '3 minutes');
@@ -1150,9 +1154,15 @@ BEGIN
   -- 4. Reclaim after expiry succeeds
   res := public.claim_threads_image_notification(p_t78, attempt_at, 'completed', fence_t78, interval '3 minutes');
   ASSERT (res ->> 'claimed')::boolean = true, format('T78 reclaim after lease expiry succeeds (got %s)', res);
+  recovered_notification_claim := (res ->> 'claim_id')::uuid;
+  ASSERT recovered_notification_claim IS DISTINCT FROM first_notification_claim, 'T78 lease recovery receives a new owner';
+  res := public.confirm_threads_image_notification(p_t78, attempt_at, 'completed', fence_t78, first_notification_claim);
+  ASSERT res ->> 'confirmed' = 'false', 'T78 an expired owner cannot confirm the replacement owner delivery';
+  ASSERT (SELECT metadata #>> '{final_notification_intent,notified}' FROM public.posts WHERE id = p_t78) = 'false',
+    'T78 stale confirmation leaves the new intent recoverable';
 
   -- 5. Confirm notification delivery
-  res := public.confirm_threads_image_notification(p_t78, attempt_at, 'completed', fence_t78);
+  res := public.confirm_threads_image_notification(p_t78, attempt_at, 'completed', fence_t78, recovered_notification_claim);
   ASSERT (res ->> 'confirmed')::boolean = true, format('T78 notification confirmation succeeds (got %s)', res);
   ASSERT (SELECT (metadata ->> 'final_notified_at') IS NOT NULL FROM public.posts WHERE id = p_t78),
     'T78 final_notified_at stamped on confirmation';

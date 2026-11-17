@@ -1,5 +1,6 @@
 import { assert, assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import { hashRequest } from "../_shared/partnerApiIdempotency.ts";
+import { runReconcile } from "../reconcile-deferred-publishes/run.ts";
 
 const ORIGIN = "https://threads-image-fixture.invalid";
 const OWNER = "11000000-0000-4000-8000-000000000001";
@@ -185,6 +186,7 @@ Deno.test("registered process-post durably completes single-image Threads contai
   let releases = 0;
   let pendingReschedules = 0;
   let finalNotificationClaims = 0;
+  let webhookFailure: "none" | "http" | "transport" = "none";
   let deliveredNotifications: Array<{ url: string; event: string; body: unknown }> = [];
   let outbox = 0;
   let containerIdOverride: string | null = null;
@@ -259,6 +261,7 @@ Deno.test("registered process-post durably completes single-image Threads contai
     releases = 0;
     pendingReschedules = 0;
     finalNotificationClaims = 0;
+    webhookFailure = "none";
     deliveredNotifications = [];
     outbox = 0;
     containerIdOverride = null;
@@ -352,6 +355,8 @@ Deno.test("registered process-post durably completes single-image Threads contai
     const request = new Request(input, init);
     const url = new URL(request.url);
     if (url.origin === "https://webhook-fixture.invalid") {
+      if (webhookFailure === "http") return new Response("fixture unavailable", { status: 503 });
+      if (webhookFailure === "transport") throw new TypeError("fixture delivery connection lost");
       deliveredNotifications.push({
         url: request.url,
         event: request.headers.get("X-Postora-Event") ?? "",
@@ -670,7 +675,8 @@ Deno.test("registered process-post durably completes single-image Threads contai
       }
       finalNotificationClaims++;
       intent.claimed_until = new Date(BASE_CLOCK + clock + 180_000).toISOString();
-      return Response.json({ claimed: true, status: post.status });
+      intent.claim_id = crypto.randomUUID();
+      return Response.json({ claimed: true, status: post.status, claim_id: intent.claim_id });
     }
     if (table === "rpc/confirm_threads_image_notification") {
       const payload = await request.json() as Record<string, unknown>;
@@ -679,6 +685,9 @@ Deno.test("registered process-post durably completes single-image Threads contai
       }
       const meta = (post.metadata ?? {}) as Record<string, unknown>;
       const intent = meta.final_notification_intent as Record<string, unknown> | undefined;
+      if (!intent || intent.claim_id !== payload.p_claim_id || Date.parse(String(intent.claimed_until)) <= BASE_CLOCK + clock) {
+        return Response.json({ confirmed: false, status: post.status, error: "intent_owner_mismatch" });
+      }
       meta.final_notified_at = new Date(BASE_CLOCK + clock).toISOString();
       if (intent) {
         intent.notified = true;
@@ -1820,6 +1829,54 @@ Deno.test("registered process-post durably completes single-image Threads contai
         globalThis.fetch = originalFetch;
       }
     });
+
+    for (const failure of ["http", "transport"] as const) {
+      await test.step(`failed ${failure} webhook delivery leaves the intent recoverable without republishing`, async () => {
+        reset();
+        webhookFailure = failure;
+        const initial = await invoke({ at: 1_000 });
+        assertEquals(initial.status, 200);
+        const intent = (post.metadata as Record<string, unknown>).final_notification_intent as Record<string, unknown>;
+        assertEquals(intent.notified, false);
+        assertEquals((post.metadata as Record<string, unknown>).final_notified_at, undefined);
+        assertEquals(deliveredNotifications.length, 0);
+        assertEquals(publishes, 1);
+
+        webhookFailure = "none";
+        clock += 181_000;
+        let freshHandler: Handler | undefined;
+        Deno.serve = ((registered: Handler) => {
+          freshHandler = registered;
+          return { finished: Promise.resolve(), shutdown: () => Promise.resolve() };
+        }) as typeof Deno.serve;
+        try {
+          if (failure === "http") await import("./index.ts?notification-recovery-http");
+          else await import("./index.ts?notification-recovery-transport");
+        } finally {
+          Deno.serve = previousServe;
+        }
+        const summary = await runReconcile({
+          claim: async (limit) => claimDeferredPublishes(limit).map((row) => ({ platform_post_id: row.id, post_id: row.post_id })),
+          resume: async (row) => {
+            const response = await freshHandler!(new Request(`${ORIGIN}/functions/v1/process-post`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json", Authorization: `Bearer ${SERVICE}` },
+              body: JSON.stringify({ post_id: row.post_id, resume_platform_post_id: row.platform_post_id }),
+            }));
+            const body = await response.json();
+            return { ok: response.ok, status: body.status };
+          },
+          sweep: async () => ({ posts: 0, rows_failed: 0 }),
+          log: async () => {},
+        });
+        assertEquals(summary.claimed, 1);
+        assertEquals(summary.resume_errors, 0);
+        assertEquals(((post.metadata as Record<string, unknown>).final_notification_intent as Record<string, unknown>).notified, true);
+        assertEquals(deliveredNotifications.length, 1);
+        assertEquals(deliveredNotifications[0].event, "post.completed");
+        assertEquals(publishes, 1);
+      });
+    }
 
     await test.step("200 independent ready first requests complete inline without cron or duplicate effects", async () => {
       const totals = { creates: 0, statusReads: 0, publishes: 0, settlements: 0, outbox: 0, notifications: 0, deliveredNotifications: 0 };

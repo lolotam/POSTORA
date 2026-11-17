@@ -81,6 +81,7 @@ export async function claimFinalNotification(
 
 export interface ThreadsImageNotificationClaim {
   claimed: boolean;
+  claimId?: string;
   status?: string;
   error?: string | null;
 }
@@ -101,9 +102,10 @@ export async function claimThreadsImageNotification(
     p_lease: lease,
   });
   if (error) return { claimed: false, error: error.message ?? String(error) };
-  const res = data as { claimed?: boolean; status?: string; error?: string } | null;
+  const res = data as { claimed?: boolean; claim_id?: string; status?: string; error?: string } | null;
   return {
-    claimed: Boolean(res?.claimed),
+    claimed: res?.claimed === true && typeof res.claim_id === "string" && res.claim_id.length > 0,
+    claimId: res?.claim_id,
     status: res?.status,
     error: res?.error ?? null,
   };
@@ -115,12 +117,14 @@ export async function confirmThreadsImageNotification(
   expectedProcessingStartedAt: string,
   expectedStatus: string,
   expectedContent: Record<string, unknown>,
+  claimId: string,
 ): Promise<{ confirmed: boolean; status?: string; error?: string | null }> {
   const { data, error } = await supabase.rpc("confirm_threads_image_notification", {
     p_post_id: postId,
     p_expected_processing_started_at: expectedProcessingStartedAt,
     p_expected_status: expectedStatus,
     p_expected_content: expectedContent,
+    p_claim_id: claimId,
   });
   if (error) return { confirmed: false, error: error.message ?? String(error) };
   const res = data as { confirmed?: boolean; status?: string; error?: string } | null;

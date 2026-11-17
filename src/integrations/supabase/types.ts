@@ -11941,6 +11941,7 @@ export type Database = {
           p_expected_processing_started_at: string
           p_expected_status: string
           p_expected_content: Json
+          p_claim_id: string
         }
         Returns: Json
       }
