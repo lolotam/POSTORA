@@ -89,8 +89,8 @@ export default function MultiPlatformGuide() {
     "caption": "Learn something new today! #tutorial #howto",
     "media_urls": "https://example.com/tutorial-video.mp4",
     
-    "youtube_privacy_status": "public",
-    "youtube_category_id": "22",
+    "youtube_privacy": "public",
+    "youtube_category": "22",
     "youtube_tags": ["tutorial", "howto", "guide"],
     "youtube_made_for_kids": false,
     

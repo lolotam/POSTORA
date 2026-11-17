@@ -27,7 +27,9 @@ export function usePlaygroundState() {
   // Platform-specific settings
   const [instagramShareToFeed, setInstagramShareToFeed] = useState(true);
   const [tiktokPrivacy, setTiktokPrivacy] = useState("PUBLIC_TO_EVERYONE");
-  const [youtubePrivacy, setYoutubePrivacy] = useState("public");
+  // Postora publishes as private when the request names no privacy, so the
+  // playground starts on the value the API will actually apply.
+  const [youtubePrivacy, setYoutubePrivacy] = useState("private");
   const [youtubeCategoryId, setYoutubeCategoryId] = useState("22");
   const [twitterReplySettings, setTwitterReplySettings] = useState("everyone");
   const [linkedinVisibility, setLinkedinVisibility] = useState("PUBLIC");
@@ -180,8 +182,8 @@ export function usePlaygroundState() {
     if (selectedPlatforms.includes("instagram")) body.instagram_share_to_feed = instagramShareToFeed;
     if (selectedPlatforms.includes("tiktok")) body.tiktok_privacy_level = tiktokPrivacy;
     if (selectedPlatforms.includes("youtube")) {
-      body.youtube_privacy_status = youtubePrivacy;
-      body.youtube_category_id = youtubeCategoryId;
+      body.youtube_privacy = youtubePrivacy;
+      body.youtube_category = youtubeCategoryId;
     }
     if (selectedPlatforms.includes("twitter")) body.twitter_reply_settings = twitterReplySettings;
     if (selectedPlatforms.includes("linkedin")) body.linkedin_visibility = linkedinVisibility;

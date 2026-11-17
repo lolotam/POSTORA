@@ -28,6 +28,11 @@ import {
   normalizeLinkedInDestinationSelections,
 } from "../_shared/linkedinDestinations.ts";
 import { youtubeOptionsUnsupportedOnComposio } from "../_shared/youtubeComposioOptions.ts";
+import {
+  resolveYoutubePublishOptions,
+  youtubePrivacyOrDefault,
+  YOUTUBE_DEFAULT_CATEGORY_ID,
+} from "../_shared/youtubePublishOptions.ts";
 import { recordConnectorCall, resolveWorkspaceForCall } from "../_shared/connectorTelemetry.ts";
 
 import { restrictedCorsHeaders } from "../_shared/cors.ts";
@@ -232,6 +237,11 @@ interface PlatformMetadata {
   youtube_first_comment?: string;
   youtube_thumbnail?: string;
   youtube_recording_date?: string;
+  // Legacy YouTube field names, still accepted. The canonical names above win
+  // when both are present.
+  youtube_privacy_status?: 'private' | 'unlisted' | 'public';
+  youtube_category_id?: string;
+  youtube_embeddable?: boolean;
 
   // TikTok
   tiktok_post_mode?: 'DIRECT_POST' | 'MEDIA_UPLOAD';
@@ -516,13 +526,12 @@ async function handleCreatePost(req: Request, supabase: any, userId: string, bod
     user_identifier, // Alternative field for account selection by username
 
     // YouTube metadata
-    youtube_privacy,
+    // youtube_privacy, youtube_category and youtube_allow_embedding are read
+    // through resolveYoutubePublishOptions so their legacy aliases are honoured.
     youtube_title,
     youtube_description,
     youtube_tags,
-    youtube_category,
     youtube_made_for_kids,
-    youtube_allow_embedding,
     youtube_public_stats_viewable,
     youtube_contains_synthetic_media,
     youtube_has_paid_product_placement,
@@ -911,6 +920,9 @@ async function handleCreatePost(req: Request, supabase: any, userId: string, bod
 
   // Build platform-specific metadata object
   const metadata: Record<string, any> = {};
+  // Request-level warnings surfaced in the response, for options that were
+  // ambiguous rather than silently dropped.
+  const youtubeWarnings: string[] = [];
 
   // Store account_ids in metadata if provided (use 'selected_account_ids' to match process-post expectation)
   if (validatedAccountIds) {
@@ -933,17 +945,33 @@ async function handleCreatePost(req: Request, supabase: any, userId: string, bod
 
   // YouTube metadata - map to process-post expected format (including Shorts support)
   if (platforms.includes('youtube')) {
-    metadata.youtube_visibility = youtube_privacy || 'private';
+    // The canonical field names win. The legacy aliases that Postora's own
+    // website documentation used to publish are still accepted, so requests
+    // built from those examples keep working instead of being silently
+    // ignored.
+    const youtubeResolution = resolveYoutubePublishOptions(body);
+    const youtubeOptions = youtubeResolution.options;
+    for (const alias of youtubeResolution.conflictingAliases) {
+      youtubeWarnings.push(
+        `Both the canonical YouTube option and its legacy alias "${alias}" were sent with different values. The canonical option was used.`,
+      );
+    }
+
+    metadata.youtube_visibility = youtubePrivacyOrDefault(youtubeOptions.youtube_privacy);
     metadata.youtube_title = youtube_title;
     metadata.youtube_description = youtube_description;
     metadata.youtube_tags = Array.isArray(youtube_tags) ? youtube_tags :
       (typeof youtube_tags === 'string' ? youtube_tags.split(',').map((t: string) => t.trim()).filter(Boolean) : []);
-    metadata.youtube_category = youtube_category || '22';
+    metadata.youtube_category = youtubeOptions.youtube_category || YOUTUBE_DEFAULT_CATEGORY_ID;
     metadata.youtube_made_for_kids = youtube_made_for_kids ?? false;
-    metadata.youtube_allow_embedding = youtube_allow_embedding ?? true;
+    metadata.youtube_allow_embedding = youtubeOptions.youtube_allow_embedding ?? true;
     metadata.youtube_public_stats_viewable = youtube_public_stats_viewable ?? true;
     metadata.youtube_contains_synthetic_media = youtube_contains_synthetic_media ?? false;
-    metadata.youtube_has_paid_promotion = youtube_has_paid_product_placement ?? false;
+    // Left unset when the caller did not state it, so Postora never declares a
+    // video free of paid product placement on the caller's behalf.
+    metadata.youtube_has_paid_promotion = typeof youtube_has_paid_product_placement === 'boolean'
+      ? youtube_has_paid_product_placement
+      : null;
     metadata.youtube_notify_subscribers = youtube_notify_subscribers ?? true;
     metadata.youtube_video_language = youtube_default_language || null;
     metadata.youtube_audio_language = youtube_default_audio_language || null;
@@ -1388,6 +1416,7 @@ async function handleCreatePost(req: Request, supabase: any, userId: string, bod
       post,
       scheduled: !!finalScheduledAt,
       ...(platformResults ? { platform_results: platformResults } : {}),
+      ...(youtubeWarnings.length > 0 ? { warnings: youtubeWarnings } : {}),
       message: finalScheduledAt ? 'Post scheduled successfully' : 'Post created and processing started',
       metadata_applied: metadata,
       account_ids_used: validatedAccountIds || 'auto-selected first account per platform'
@@ -2471,6 +2500,7 @@ export async function handleRequest(req: Request): Promise<Response> {
           } else if (key === 'instagram_share_to_story') {
             body[key] = parseFormBoolean(value);
           } else if (key === 'youtube_made_for_kids' || key === 'youtube_allow_embedding' ||
+            key === 'youtube_embeddable' ||
             key === 'youtube_public_stats_viewable' || key === 'youtube_contains_synthetic_media' ||
             key === 'youtube_has_paid_product_placement' || key === 'youtube_notify_subscribers' ||
             key === 'tiktok_allow_comments' ||
@@ -2506,6 +2536,7 @@ export async function handleRequest(req: Request): Promise<Response> {
                 body[key] = value.split(',').map(s => s.trim()).filter(Boolean);
               }
             } else if (key === 'youtube_made_for_kids' || key === 'youtube_allow_embedding' ||
+              key === 'youtube_embeddable' ||
               key === 'youtube_public_stats_viewable' || key === 'youtube_contains_synthetic_media' ||
               key === 'youtube_has_paid_product_placement' || key === 'youtube_notify_subscribers' ||
               key === 'tiktok_allow_comments' ||

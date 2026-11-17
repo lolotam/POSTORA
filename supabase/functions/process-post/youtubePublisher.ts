@@ -1,0 +1,277 @@
+/**
+ * Native YouTube publisher: request construction and the resumable-upload
+ * handshake with the YouTube Data API.
+ *
+ * Kept out of `process-post/index.ts` so the request Postora sends can be
+ * asserted against a fake provider instead of against the live API.
+ *
+ * Reference for the fields used here:
+ * https://developers.google.com/youtube/data/reference/rest/v3/videos/insert
+ */
+
+import {
+  YOUTUBE_DEFAULT_CATEGORY_ID,
+  YOUTUBE_UPLOAD_UNCONFIRMED_OPTIONS,
+  youtubePrivacyOrDefault,
+} from "../_shared/youtubePublishOptions.ts";
+
+const YOUTUBE_UPLOAD_ENDPOINT = "https://www.googleapis.com/upload/youtube/v3/videos";
+
+export interface YoutubeUploadRequestInput {
+  /**
+   * Post metadata, as stored on the post row.
+   *
+   * Typed as `object` because the caller owns a typed metadata interface, and
+   * an interface is not assignable to an indexed record type.
+   */
+  metadata: object | null | undefined;
+  title: string;
+  description: string;
+  tags: string[];
+}
+
+export interface YoutubeUploadRequest {
+  /** Fully built resumable-upload URL, including `part` and `notifySubscribers`. */
+  url: string;
+  /** The `part` values the request body is built for. */
+  part: string;
+  /** The request body sent to `videos.insert`. */
+  body: Record<string, unknown>;
+  notifySubscribers: boolean;
+  /**
+   * Options Postora sent that the YouTube Data API does not document as
+   * settable at upload time. Reported so the caller is never told an option
+   * was applied when the provider did not confirm it.
+   */
+  warnings: string[];
+}
+
+function nonEmptyString(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
+}
+
+function nonEmptyStringArray(value: unknown): string[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const entries = value
+    .filter((entry): entry is string => typeof entry === "string")
+    .map((entry) => entry.trim())
+    .filter((entry) => entry.length > 0);
+  return entries.length > 0 ? entries : undefined;
+}
+
+/** Reads a boolean option, falling back when it was not set to a boolean. */
+function booleanOrDefault(value: unknown, fallback: boolean): boolean {
+  return typeof value === "boolean" ? value : fallback;
+}
+
+function buildSnippet(
+  input: YoutubeUploadRequestInput,
+  metadata: Record<string, unknown>,
+): Record<string, unknown> {
+  const snippet: Record<string, unknown> = {
+    title: input.title.substring(0, 100),
+    description: input.description.substring(0, 5000),
+    tags: input.tags.slice(0, 500),
+    categoryId: nonEmptyString(metadata.youtube_category) ?? YOUTUBE_DEFAULT_CATEGORY_ID,
+  };
+
+  const defaultLanguage = nonEmptyString(metadata.youtube_video_language);
+  if (defaultLanguage) {
+    snippet.defaultLanguage = defaultLanguage;
+  }
+
+  // `snippet.defaultAudioLanguage` is not listed among the properties
+  // `videos.insert` can set. It is still sent, because the provider may honour
+  // it, and it is reported as unconfirmed when it was sent.
+  const defaultAudioLanguage = nonEmptyString(metadata.youtube_audio_language);
+  if (defaultAudioLanguage) {
+    snippet.defaultAudioLanguage = defaultAudioLanguage;
+  }
+
+  return snippet;
+}
+
+function buildStatus(metadata: Record<string, unknown>): Record<string, unknown> {
+  return {
+    privacyStatus: youtubePrivacyOrDefault(metadata.youtube_visibility),
+    embeddable: booleanOrDefault(metadata.youtube_allow_embedding, true),
+    publicStatsViewable: booleanOrDefault(metadata.youtube_public_stats_viewable, true),
+    // `status.madeForKids` is read-only in the API, so only its writable twin
+    // is sent.
+    selfDeclaredMadeForKids: booleanOrDefault(metadata.youtube_made_for_kids, false),
+    license: metadata.youtube_license === "creativeCommon" ? "creativeCommon" : "youtube",
+    containsSyntheticMedia: booleanOrDefault(metadata.youtube_contains_synthetic_media, false),
+  };
+}
+
+/**
+ * Builds the region restriction the post asked for.
+ *
+ * `contentDetails.regionRestriction` is not listed among the properties
+ * `videos.insert` can set either. It is still sent, because the provider may
+ * honour it, and it is reported as unconfirmed when it was sent.
+ */
+function buildRegionRestriction(
+  metadata: Record<string, unknown>,
+): Record<string, unknown> | undefined {
+  const allowed = nonEmptyStringArray(metadata.youtube_allowed_countries);
+  const blocked = nonEmptyStringArray(metadata.youtube_blocked_countries);
+  if (!allowed && !blocked) return undefined;
+
+  const regionRestriction: Record<string, unknown> = {};
+  if (allowed) regionRestriction.allowed = allowed;
+  if (blocked) regionRestriction.blocked = blocked;
+  return regionRestriction;
+}
+
+/**
+ * Builds the paid-product-placement declaration, but only when the caller
+ * expressed one.
+ *
+ * Since 2026-11-16 an upload that omits this property is not declared free of
+ * paid product placement, so Postora sends the declaration whenever the caller
+ * stated one and stays silent when the caller did not.
+ */
+function buildPaidProductPlacement(
+  metadata: Record<string, unknown>,
+): Record<string, unknown> | undefined {
+  if (typeof metadata.youtube_has_paid_promotion !== "boolean") return undefined;
+  return { hasPaidProductPlacement: metadata.youtube_has_paid_promotion };
+}
+
+/** Names the options that were sent but that YouTube does not document as settable. */
+function collectUnconfirmedWarnings(metadata: Record<string, unknown>): string[] {
+  const warnings: string[] = [];
+
+  for (const entry of YOUTUBE_UPLOAD_UNCONFIRMED_OPTIONS) {
+    const value = metadata[entry.metadataKey];
+    if (value === undefined || value === null) continue;
+    if (Array.isArray(value) && value.length === 0) continue;
+    if (typeof value === "string" && value.trim().length === 0) continue;
+    warnings.push(
+      `YouTube does not document ${entry.option} as settable at upload time. ` +
+        `It was sent on a best-effort basis and may not have been applied.`,
+    );
+  }
+
+  return warnings;
+}
+
+/**
+ * Builds the `videos.insert` request from a post's metadata.
+ *
+ * Only the properties the YouTube Data API documents as settable by
+ * `videos.insert` are sent:
+ * `snippet.title`, `snippet.description`, `snippet.tags[]`,
+ * `snippet.categoryId`, `snippet.defaultLanguage`, `status.embeddable`,
+ * `status.license`, `status.privacyStatus`, `status.publicStatsViewable`,
+ * `status.selfDeclaredMadeForKids`, `status.containsSyntheticMedia`,
+ * `recordingDetails.recordingDate` and
+ * `paidProductPlacementDetails.hasPaidProductPlacement`.
+ */
+export function buildYoutubeUploadRequest(
+  input: YoutubeUploadRequestInput,
+): YoutubeUploadRequest {
+  const metadata = (input.metadata ?? {}) as Record<string, unknown>;
+  const body: Record<string, unknown> = {
+    snippet: buildSnippet(input, metadata),
+    status: buildStatus(metadata),
+  };
+  const parts = ["snippet", "status"];
+
+  const recordingDate = nonEmptyString(metadata.youtube_recording_date);
+  if (recordingDate) {
+    body.recordingDetails = { recordingDate };
+    parts.push("recordingDetails");
+  }
+
+  const regionRestriction = buildRegionRestriction(metadata);
+  if (regionRestriction) {
+    body.contentDetails = { regionRestriction };
+    parts.push("contentDetails");
+  }
+
+  const paidProductPlacement = buildPaidProductPlacement(metadata);
+  if (paidProductPlacement) {
+    body.paidProductPlacementDetails = paidProductPlacement;
+    parts.push("paidProductPlacementDetails");
+  }
+
+  const notifySubscribers = booleanOrDefault(metadata.youtube_notify_subscribers, true);
+  const part = parts.join(",");
+  const url =
+    `${YOUTUBE_UPLOAD_ENDPOINT}?uploadType=resumable&part=${part}` +
+    (notifySubscribers ? "" : "&notifySubscribers=false");
+
+  return {
+    url,
+    part,
+    body,
+    notifySubscribers,
+    warnings: collectUnconfirmedWarnings(metadata),
+  };
+}
+
+export interface YoutubeUploadInit {
+  accessToken: string;
+  videoSize: number;
+  mimeType: string;
+  request: YoutubeUploadRequest;
+  /** Injectable for tests; defaults to the global fetch. */
+  fetchImpl?: typeof fetch;
+}
+
+/** Translates a failed upload handshake into the message the caller shows. */
+function uploadFailureMessage(status: number, errorData: any, statusText: string): string {
+  if (status === 401) {
+    return "YouTube authentication expired. Please reconnect your YouTube account.";
+  }
+  if (status === 403) {
+    const reason = errorData?.error?.errors?.[0]?.reason;
+    if (reason === "quotaExceeded") {
+      return "YouTube API quota exceeded. Please try again tomorrow.";
+    }
+    if (reason === "forbidden") {
+      return "YouTube upload permission denied. Make sure your account has upload access.";
+    }
+    return `YouTube permission error: ${errorData?.error?.message || "Access denied"}`;
+  }
+  return `YouTube API error: ${errorData?.error?.message || statusText}`;
+}
+
+/**
+ * Starts a resumable upload and returns the URL the video bytes go to.
+ *
+ * The provider's failure modes are translated here so the caller sees the
+ * same messages it always has.
+ */
+export async function initiateYoutubeUpload(init: YoutubeUploadInit): Promise<string> {
+  const doFetch = init.fetchImpl ?? fetch;
+
+  const initResponse = await doFetch(init.request.url, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${init.accessToken}`,
+      "Content-Type": "application/json; charset=UTF-8",
+      "X-Upload-Content-Length": String(init.videoSize),
+      "X-Upload-Content-Type": init.mimeType,
+    },
+    body: JSON.stringify(init.request.body),
+  });
+
+  if (!initResponse.ok) {
+    const errorData = await initResponse.json().catch(() => ({}));
+    console.error("YouTube init error:", errorData);
+    throw new Error(
+      uploadFailureMessage(initResponse.status, errorData, initResponse.statusText),
+    );
+  }
+
+  const uploadUrl = initResponse.headers.get("Location");
+  if (!uploadUrl) {
+    throw new Error("YouTube did not return an upload URL");
+  }
+  return uploadUrl;
+}
