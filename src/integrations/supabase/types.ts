@@ -12000,9 +12000,17 @@ export type Database = {
           p_expected_content: Json
           p_target_account_ids?: string[] | null
           p_retained_platform_post_ids?: string[] | null
-          p_retained_account_ids?: string[] | null
         }
         Returns: string
+      }
+            restore_legacy_pending_post: {
+        Args: {
+          p_post_id: string
+          p_expected_processing_started_at: string
+          p_expected_content: Json
+          p_has_success?: boolean | null
+        }
+        Returns: Json
       }
       claim_meta_analytics_collection_job: {
         Args: {

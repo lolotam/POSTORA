@@ -1368,6 +1368,174 @@ BEGIN
   ASSERT (SELECT (metadata->'attempt_retained_platform_post_ids') = '[]'::jsonb FROM public.posts WHERE id = p_t82),
     'T82 5-arg wrapper clears retained platform post IDs on fresh attempt without stale inheritance';
 
+  -- =========================================================================
+  -- T83: A03.1 - All-failed notification intent staged and claimed cleanly
+  -- =========================================================================
+  DECLARE
+    p_t83 uuid := '33000000-0000-4000-8000-000000000083';
+    row_f uuid := '44000000-0000-4000-8000-000000000083';
+    fence_t83 jsonb;
+  BEGIN
+    INSERT INTO public.posts (id, user_id, caption, platforms, status, processing_started_at, source, metadata)
+    VALUES (p_t83, owner_id, 't83 all-failed', ARRAY['threads'], 'processing', attempt_at, 'manual',
+      jsonb_build_object('selected_account_ids', jsonb_build_array(acct_1)));
+
+    fence_t83 := jsonb_build_object(
+      'user_id', owner_id, 'caption', 't83 all-failed', 'media_file_ids', NULL,
+      'metadata', jsonb_build_object('selected_account_ids', jsonb_build_array(acct_1)),
+      'platforms', ARRAY['threads'], 'scheduled_at', NULL, 'publish_requested_at', NULL, 'source', 'manual'
+    );
+
+    INSERT INTO public.platform_posts (id, post_id, social_account_id, platform, status, created_at, response_data)
+    VALUES (row_f, p_t83, acct_1, 'threads', 'failed', attempt_at,
+      jsonb_build_object('deferred', jsonb_build_object('kind', 'threads', 'media_type', 'IMAGE', 'attempt_started_at', attempt_at)));
+
+    res := public.finalize_threads_image_attempt(p_t83, attempt_at, fence_t83, ARRAY[acct_1]);
+    ASSERT res ->> 'status' = 'failed' AND (res ->> 'notify')::boolean = true,
+      format('T83 finalizer marks post failed with notify=true (got %s)', res);
+
+    ASSERT (SELECT (metadata #>> '{final_notification_intent,status}') = 'failed'
+              FROM public.posts WHERE id = p_t83),
+      'T83 final_notification_intent is preserved on failed post (not deleted by status trigger)';
+    ASSERT (SELECT (metadata #>> '{final_notification_intent,notified}') = 'false'
+              FROM public.posts WHERE id = p_t83),
+      'T83 final_notification_intent has notified = false';
+
+    res := public.claim_threads_image_notification(p_t83, attempt_at, 'failed', fence_t83, interval '3 minutes');
+    ASSERT (res ->> 'claimed')::boolean = true AND (res ->> 'claim_id') IS NOT NULL,
+      format('T83 failed notification intent claimed successfully (got %s)', res);
+  END;
+
+  -- =========================================================================
+  -- T84: A03.2 - Stale terminal rows from prior attempt do not starve cron
+  -- =========================================================================
+  DECLARE
+    p_t84 uuid := '33000000-0000-4000-8000-000000000084';
+    p_due uuid := '33000000-0000-4000-8000-000000000085';
+    row_due uuid := '44000000-0000-4000-8000-000000000099';
+    attempt_cur timestamptz := now();
+    attempt_old timestamptz := now() - interval '2 hours';
+    v_claimed uuid[];
+    i integer;
+  BEGIN
+    INSERT INTO public.posts (id, user_id, caption, platforms, status, processing_started_at, source)
+    VALUES (p_t84, owner_id, 't84 post', ARRAY['threads'], 'processing', attempt_cur, 'manual');
+
+    FOR i IN 1..5 LOOP
+      INSERT INTO public.platform_posts (id, post_id, social_account_id, platform, status, created_at, response_data)
+      VALUES (
+        gen_random_uuid(), p_t84, acct_1, 'threads', 'failed', attempt_old,
+        jsonb_build_object('deferred', jsonb_build_object(
+          'kind', 'threads', 'media_type', 'IMAGE',
+          'attempt_started_at', attempt_old,
+          'claimed_until', NULL
+        ))
+      );
+    END LOOP;
+
+    INSERT INTO public.posts (id, user_id, caption, platforms, status, processing_started_at, source)
+    VALUES (p_due, owner_id, 'p_due', ARRAY['threads'], 'processing', attempt_cur, 'manual');
+
+    INSERT INTO public.platform_posts (id, post_id, social_account_id, platform, status, created_at, response_data)
+    VALUES (row_due, p_due, acct_1, 'threads', 'pending', attempt_cur,
+      jsonb_build_object('deferred', jsonb_build_object(
+        'kind', 'threads', 'media_type', 'IMAGE',
+        'attempt_started_at', attempt_cur,
+        'next_check_at', now() - interval '1 minute',
+        'claimed_until', NULL
+      )));
+
+    SELECT array_agg(platform_post_id) INTO v_claimed FROM public.claim_deferred_publishes(10);
+    ASSERT row_due = ANY(v_claimed), 'T84 row_due was claimed';
+    ASSERT NOT EXISTS (
+      SELECT 1 FROM unnest(v_claimed) c
+      JOIN public.platform_posts p ON p.id = c
+      WHERE p.post_id = p_t84
+    ), format('T84 none of the stale terminal rows for p_t84 were claimed (got %s)', v_claimed);
+  END;
+
+  -- =========================================================================
+  -- T85: A04.1 - Account UUID in retained platform post IDs is rejected
+  -- =========================================================================
+  DECLARE
+    p_t85 uuid := '33000000-0000-4000-8000-000000000086';
+    fence_t85 jsonb;
+    payload_t85 jsonb;
+  BEGIN
+    INSERT INTO public.posts (id, user_id, caption, platforms, status, processing_started_at, source, metadata)
+    VALUES (p_t85, owner_id, 't85 post', ARRAY['threads'], 'processing', attempt_at, 'manual',
+      jsonb_build_object('selected_account_ids', jsonb_build_array(acct_1)));
+
+    fence_t85 := jsonb_build_object(
+      'user_id', owner_id, 'caption', 't85 post', 'media_file_ids', NULL,
+      'metadata', jsonb_build_object('selected_account_ids', jsonb_build_array(acct_1)),
+      'platforms', ARRAY['threads'], 'scheduled_at', NULL, 'publish_requested_at', NULL, 'source', 'manual'
+    );
+
+    payload_t85 := jsonb_build_object(
+      'deferred', jsonb_build_object(
+        'kind', 'threads', 'media_type', 'IMAGE', 'container_id', 'c-t85',
+        'attempt_started_at', attempt_at, 'attempts', 0, 'first_deferred_at', attempt_at,
+        'give_up_at', attempt_at + interval '30 minutes', 'next_check_at', attempt_at + interval '1 minute'
+      ),
+      'content_fence', fence_t85,
+      'account_updated_at', (SELECT updated_at FROM public.social_accounts WHERE id = acct_1)
+    );
+
+    err_caught := false;
+    BEGIN
+      PERFORM public.record_threads_image_checkpoint(
+        p_t85, acct_1, payload_t85, attempt_at, fence_t85,
+        ARRAY[acct_1], ARRAY[acct_1]
+      );
+    EXCEPTION WHEN foreign_key_violation THEN
+      err_caught := true;
+    END;
+
+    ASSERT err_caught, 'T85 social_accounts.id passed in p_retained_platform_post_ids is rejected';
+  END;
+
+  -- =========================================================================
+  -- T86: A06 - Atomic restore_legacy_pending_post under row lock
+  -- =========================================================================
+  DECLARE
+    p_t86 uuid := '33000000-0000-4000-8000-000000000087';
+    fence_t86 jsonb;
+  BEGIN
+    INSERT INTO public.posts (id, user_id, caption, platforms, status, processing_started_at, source, metadata)
+    VALUES (p_t86, owner_id, 't86 post', ARRAY['threads', 'instagram'], 'completed', attempt_at, 'manual',
+      jsonb_build_object(
+        'selected_account_ids', jsonb_build_array(acct_1),
+        'settlement_rollup_at', attempt_at,
+        'settlement_rollup_processing_started_at', attempt_at,
+        'settlement_rollup_status', 'completed'
+      ));
+
+    fence_t86 := jsonb_build_object(
+      'caption', 't86 post',
+      'media_file_ids', NULL,
+      'platforms', ARRAY['threads', 'instagram'],
+      'scheduled_at', NULL,
+      'publish_requested_at', NULL,
+      'source', 'manual'
+    );
+
+    res := public.restore_legacy_pending_post(p_t86, attempt_at, fence_t86, true);
+    ASSERT (res ->> 'restored')::boolean = true AND res ->> 'status' = 'processing',
+      format('T86 restore_legacy_pending_post succeeds (got %s)', res);
+    ASSERT (SELECT status FROM public.posts WHERE id = p_t86) = 'processing',
+      'T86 post status restored to processing';
+
+    UPDATE public.posts SET status = 'completed' WHERE id = p_t86;
+    res := public.restore_legacy_pending_post(p_t86, attempt_at - interval '1 hour', fence_t86, true);
+    ASSERT (res ->> 'restored')::boolean = false AND res ->> 'reason' = 'attempt_mismatch',
+      format('T86 restore refused on attempt mismatch (got %s)', res);
+
+    res := public.restore_legacy_pending_post(p_t86, attempt_at, jsonb_build_object('caption', 'tampered'), true);
+    ASSERT (res ->> 'restored')::boolean = false AND res ->> 'reason' = 'content_mismatch',
+      format('T86 restore refused on content mismatch (got %s)', res);
+  END;
+
 END $$;
 
 ROLLBACK;

@@ -1405,7 +1405,7 @@ async function sendFailureEmailNotification(
     console.log(`[Email] Sending failure email: ${failedPlatforms.length} failed, ${successPlatforms.length} succeeded`);
 
     // Call the send-subscription-email function
-    const { error: invokeError } = await supabase.functions.invoke("send-subscription-email", {
+    const { data: emailData, error: invokeError } = await supabase.functions.invoke("send-subscription-email", {
       body: {
         type: "post_failed",
         user_id: userId,
@@ -1420,6 +1420,10 @@ async function sendFailureEmailNotification(
     if (invokeError) {
       if (delivery) throw invokeError;
       console.error("[Email] Failed to invoke email function:", invokeError);
+    } else if (emailData && typeof emailData === "object" && (emailData as Record<string, unknown>).success === false) {
+      const message = (emailData as Record<string, unknown>).message || "Email delivery failed";
+      if (delivery) throw new Error(`Email function reported failure: ${message}`);
+      console.error("[Email] Email function reported failure:", emailData);
     } else {
       console.log("[Email] Failure notification email sent successfully");
     }
@@ -1560,6 +1564,19 @@ async function announceFinalPost(
       return false;
     }
     try {
+      if (Array.isArray(claim.authorizedPlatformPostIds)) {
+        const outcome = await readPostOutcome(
+          postReaderFor(supabase, claim.authorizedPlatformPostIds),
+          post.id,
+          { results: platformResults, hasSuccess: finalStatus === "completed", hasFailed },
+        );
+        if (outcome.kind !== "terminal" || outcome.degraded) {
+          console.warn(`[process-post] withholding Threads image managed notification: authorized rows mismatch or degraded`);
+          return false;
+        }
+        platformResults = outcome.results;
+        hasFailed = outcome.hasFailed;
+      }
       await dispatchFinalNotifications(supabase, post, finalStatus, platformResults, hasFailed);
       const confirmed = await confirmThreadsImageNotification(
         supabase,
@@ -1596,15 +1613,35 @@ async function announceFinalPost(
 function postReaderFor(supabase: SupabaseClient, authorizedPlatformPostIds?: string[] | null): PostReader {
   return {
     postStatus: (postId) => supabase.from("posts").select("status").eq("id", postId).maybeSingle(),
-    platformRows: (postId) => {
+    platformRows: async (postId) => {
       let query = supabase
         .from("platform_posts")
-        .select("platform, status, platform_post_url, error_message, story_on_reel:response_data->story_recorded_on_reel_row")
+        .select("id, platform, status, platform_post_url, error_message, story_on_reel:response_data->story_recorded_on_reel_row")
         .eq("post_id", postId);
-      if (Array.isArray(authorizedPlatformPostIds) && authorizedPlatformPostIds.length > 0) {
+      if (Array.isArray(authorizedPlatformPostIds)) {
+        if (authorizedPlatformPostIds.length === 0) {
+          return { data: [], error: null };
+        }
         query = query.in("id", authorizedPlatformPostIds);
       }
-      return query.order("created_at");
+      const res = await query.order("created_at");
+      if (res.error) return res;
+      if (Array.isArray(authorizedPlatformPostIds)) {
+        const returnedIds = new Set((res.data ?? []).map((r: { id: string }) => r.id));
+        const expectedIds = new Set(authorizedPlatformPostIds);
+        if (returnedIds.size !== expectedIds.size || !authorizedPlatformPostIds.every((id) => returnedIds.has(id))) {
+          return {
+            data: null,
+            error: {
+              message: `Authorized platform post rows could not be completely read (expected ${authorizedPlatformPostIds.length}, got ${returnedIds.size})`,
+              details: "",
+              hint: "",
+              code: "PGRST_DEGRADED_ROW_SET",
+            },
+          };
+        }
+      }
+      return res;
     },
   };
 }
@@ -3071,81 +3108,46 @@ Deno.serve(async (req) => {
       finalStatus = "processing";
       notify = false;
       if (claim.processingStartedAt) {
-        const { data: updated, error: updateError } = await supabase
-          .from("posts")
-          .update({ status: "processing", posted_at: hasSuccess ? new Date().toISOString() : null })
-          .eq("id", post_id)
-          .eq("processing_started_at", claim.processingStartedAt)
-          .eq("status", "processing")
-          .select("id");
-        if (updateError || (updated ?? []).length !== 1) {
-          const { data: postRecord, error: readPostError } = await supabase
-            .from("posts")
-            .select("id, status, processing_started_at, posted_at, metadata, user_id, caption, media_file_ids, platforms, scheduled_at, publish_requested_at, source")
-            .eq("id", post_id)
-            .maybeSingle();
-          if (readPostError || !postRecord) {
-            await writeLogRow(supabase, {
-              level: "error", category: "post", source: "process-post", user_id: post.user_id,
-              message: "Could not read parent post state to verify sibling rollup restoration",
-              metadata: { event: "legacy_pending_rollup_read_failed", post_id, error: readPostError?.message ?? "Post record missing" },
-            });
-            finalStatus = postRecord?.status ?? "canceled";
-          } else {
-            const meta = (postRecord.metadata ?? {}) as Record<string, unknown>;
-            const sameAttempt = postRecord.processing_started_at === claim.processingStartedAt;
-            const statusEligible = postRecord.status === "completed" || postRecord.status === "failed";
-            const rollupProvenance = Boolean(
-              meta.settlement_rollup_at &&
-              meta.settlement_rollup_processing_started_at === claim.processingStartedAt,
-            );
-            const contentOk = await hashRequest(threadsImageContentFence(postRecord as PostData)) === await hashRequest(threadsImageContentFence(post));
+        const { data: restoreResult, error: restoreError } = await supabase.rpc("restore_legacy_pending_post", {
+          p_post_id: post_id,
+          p_expected_processing_started_at: claim.processingStartedAt,
+          p_expected_content: threadsImageContentFence(post),
+          p_has_success: hasSuccess,
+        });
+        const res = restoreResult as {
+          restored?: boolean;
+          status?: string;
+          prior_status?: string;
+          reason?: string;
+          current_status?: string;
+          already_processing?: boolean;
+        } | null;
 
-            if (sameAttempt && statusEligible && rollupProvenance && contentOk) {
-              const { data: restored, error: restoreError } = await supabase
-                .from("posts")
-                .update({
-                  status: "processing",
-                  posted_at: hasSuccess ? (postRecord.posted_at || new Date().toISOString()) : postRecord.posted_at,
-                })
-                .eq("id", post_id)
-                .eq("processing_started_at", claim.processingStartedAt)
-                .eq("status", postRecord.status)
-                .select("id");
-              if (restoreError || (restored ?? []).length !== 1) {
-                await writeLogRow(supabase, {
-                  level: "warn", category: "post", source: "process-post", user_id: post.user_id,
-                  message: "Restoration of processing status for deferred sibling was refused by newer parent state",
-                  metadata: {
-                    event: "legacy_pending_restore_refused",
-                    post_id,
-                    prior_status: postRecord.status,
-                    error: restoreError?.message ?? "Condition did not match",
-                  },
-                });
-                finalStatus = postRecord.status;
-              } else {
-                finalStatus = "processing";
-                console.log(`Parent post status restored to processing from same-attempt sibling rollup (${postRecord.status})`);
-              }
-            } else {
-              await writeLogRow(supabase, {
-                level: "info", category: "post", source: "process-post", user_id: post.user_id,
-                message: "Parent post status not restored to processing because parent state was canceled, superseded, or modified",
-                metadata: {
-                  event: "legacy_pending_restore_skipped",
-                  post_id,
-                  current_status: postRecord.status,
-                  same_attempt: sameAttempt,
-                  status_eligible: statusEligible,
-                  rollup_provenance: rollupProvenance,
-                  content_match: contentOk,
-                },
-              });
-              finalStatus = postRecord.status ?? "canceled";
-              console.log("Parent status was canceled or modified; processing status not restored");
-            }
+        if (restoreError || !res) {
+          await writeLogRow(supabase, {
+            level: "error", category: "post", source: "process-post", user_id: post.user_id,
+            message: "Could not execute atomic restoration of processing status for sibling rollup",
+            metadata: { event: "legacy_pending_rollup_read_failed", post_id, error: restoreError?.message ?? "RPC failed" },
+          });
+          finalStatus = "canceled";
+        } else if (res.restored) {
+          finalStatus = "processing";
+          if (!res.already_processing) {
+            console.log(`Parent post status restored to processing from same-attempt sibling rollup (${res.prior_status})`);
           }
+        } else {
+          await writeLogRow(supabase, {
+            level: "info", category: "post", source: "process-post", user_id: post.user_id,
+            message: "Parent post status not restored to processing because parent state was canceled, superseded, or modified",
+            metadata: {
+              event: "legacy_pending_restore_skipped",
+              post_id,
+              current_status: res.current_status,
+              reason: res.reason,
+            },
+          });
+          finalStatus = res.current_status ?? "canceled";
+          console.log("Parent status was canceled or modified; processing status not restored");
         }
       } else {
         await supabase

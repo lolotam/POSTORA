@@ -580,23 +580,8 @@ BEGIN
       IF v_row_match IS NOT NULL THEN
         v_resolved_retained := array_append(v_resolved_retained, v_row_match);
       ELSE
-        -- 2) Legacy compat: social_accounts.id belonging to this user
-        SELECT rpp.id INTO v_row_match
-          FROM public.platform_posts rpp
-          JOIN public.social_accounts rsa ON rsa.id = rpp.social_account_id
-         WHERE rpp.social_account_id = r_elem.rid
-           AND rpp.post_id = p_post_id
-           AND rpp.status = 'success'
-           AND rsa.user_id = v_post.user_id
-         ORDER BY rpp.created_at DESC
-         LIMIT 1;
-
-        IF v_row_match IS NOT NULL THEN
-          v_resolved_retained := array_append(v_resolved_retained, v_row_match);
-        ELSE
-          RAISE EXCEPTION 'record_threads_image_checkpoint: retained result is not an authoritative success for this post'
-            USING ERRCODE = 'foreign_key_violation';
-        END IF;
+        RAISE EXCEPTION 'record_threads_image_checkpoint: retained result is not an authoritative success for this post'
+          USING ERRCODE = 'foreign_key_violation';
       END IF;
     END LOOP;
 
@@ -718,7 +703,10 @@ AS $$
          AND pp.response_data #>> '{deferred,media_type}' = 'IMAGE'
          AND coalesce((pp.response_data #>> '{deferred,claimed_until}')::timestamptz, '-infinity') <= now()
          AND (
-           p.status = 'processing'
+           (
+             p.status = 'processing'
+             AND (pp.response_data #>> '{deferred,attempt_started_at}')::timestamptz IS NOT DISTINCT FROM p.processing_started_at
+           )
            OR (
              p.status IN ('completed', 'failed')
              AND (pp.response_data #>> '{deferred,attempt_started_at}')::timestamptz IS NOT DISTINCT FROM p.processing_started_at
@@ -1133,10 +1121,15 @@ BEGIN
        )
      );
 
+  -- Step 1: Update status. If transitioning to failed, trg_posts_invalidate_rollup fires and clears any old intent.
   UPDATE public.posts
      SET status = v_status,
-         posted_at = CASE WHEN v_status = 'completed' THEN coalesce(posted_at, now()) ELSE posted_at END,
-         metadata = coalesce(metadata, '{}'::jsonb) || jsonb_build_object(
+         posted_at = CASE WHEN v_status = 'completed' THEN coalesce(posted_at, now()) ELSE posted_at END
+   WHERE id = p_post_id;
+
+  -- Step 2: Stage fresh final_notification_intent in a separate metadata-only update (does not fire BEFORE UPDATE OF status trigger).
+  UPDATE public.posts
+     SET metadata = coalesce(metadata, '{}'::jsonb) || jsonb_build_object(
            'final_notification_intent', jsonb_build_object(
              'status', v_status,
              'attempt_started_at', p_expected_processing_started_at,
@@ -1160,6 +1153,80 @@ REVOKE ALL ON FUNCTION public.finalize_threads_image_attempt(uuid,timestamptz,js
   FROM PUBLIC, anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.finalize_threads_image_attempt(uuid,timestamptz,jsonb,uuid[])
   TO service_role;
+
+-- Atomically verify sibling rollup provenance and restore parent post to processing under lock
+CREATE OR REPLACE FUNCTION public.restore_legacy_pending_post(
+  p_post_id uuid,
+  p_expected_processing_started_at timestamptz,
+  p_expected_content jsonb,
+  p_has_success boolean DEFAULT false
+)
+RETURNS jsonb
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  v_post public.posts%ROWTYPE;
+  v_content jsonb;
+BEGIN
+  SELECT * INTO v_post
+    FROM public.posts
+   WHERE id = p_post_id
+   FOR UPDATE;
+
+  IF NOT FOUND THEN
+    RETURN jsonb_build_object('restored', false, 'reason', 'not_found');
+  END IF;
+
+  IF v_post.status = 'processing' AND v_post.processing_started_at IS NOT DISTINCT FROM p_expected_processing_started_at THEN
+    IF p_has_success AND v_post.posted_at IS NULL THEN
+      UPDATE public.posts
+         SET posted_at = now()
+       WHERE id = p_post_id;
+    END IF;
+    RETURN jsonb_build_object('restored', true, 'status', 'processing', 'already_processing', true);
+  END IF;
+
+  IF v_post.processing_started_at IS DISTINCT FROM p_expected_processing_started_at THEN
+    RETURN jsonb_build_object('restored', false, 'reason', 'attempt_mismatch', 'current_status', v_post.status);
+  END IF;
+
+  IF v_post.status NOT IN ('completed', 'failed') THEN
+    RETURN jsonb_build_object('restored', false, 'reason', 'status_ineligible', 'current_status', v_post.status);
+  END IF;
+
+  IF NOT (v_post.metadata ? 'settlement_rollup_at') THEN
+    RETURN jsonb_build_object('restored', false, 'reason', 'missing_rollup_provenance', 'current_status', v_post.status);
+  END IF;
+
+  IF (v_post.metadata ->> 'settlement_rollup_processing_started_at')::timestamptz IS DISTINCT FROM p_expected_processing_started_at THEN
+    RETURN jsonb_build_object('restored', false, 'reason', 'rollup_attempt_mismatch', 'current_status', v_post.status);
+  END IF;
+
+  v_content := jsonb_build_object(
+    'caption', v_post.caption,
+    'media_file_ids', v_post.media_file_ids,
+    'platforms', v_post.platforms,
+    'scheduled_at', v_post.scheduled_at,
+    'publish_requested_at', v_post.publish_requested_at,
+    'source', v_post.source
+  );
+  IF v_content IS DISTINCT FROM p_expected_content THEN
+    RETURN jsonb_build_object('restored', false, 'reason', 'content_mismatch', 'current_status', v_post.status);
+  END IF;
+
+  UPDATE public.posts
+     SET status = 'processing',
+         posted_at = CASE WHEN p_has_success THEN coalesce(v_post.posted_at, now()) ELSE v_post.posted_at END
+   WHERE id = p_post_id;
+
+  RETURN jsonb_build_object('restored', true, 'status', 'processing', 'prior_status', v_post.status);
+END;
+$$;
+
+REVOKE ALL ON FUNCTION public.restore_legacy_pending_post(uuid, timestamptz, jsonb, boolean) FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.restore_legacy_pending_post(uuid, timestamptz, jsonb, boolean) TO service_role;
 
 -- Keep the publishing seam and outbox implementation authoritative. For an old
 -- managed image, settle its own row but never roll a newer/edited parent back.

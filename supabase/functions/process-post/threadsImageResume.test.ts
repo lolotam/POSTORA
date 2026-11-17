@@ -189,6 +189,7 @@ Deno.test("registered process-post durably completes single-image Threads contai
   let deliveredNotifications: Array<{ url: string; event: string; body: unknown }> = [];
   let outbox = 0;
   let containerIdOverride: string | null = null;
+  let emailMode: "ok" | "semantic_failure" = "ok";
   const unexpected: string[] = [];
 
   const threadsAccount = (): Account => ({
@@ -266,6 +267,7 @@ Deno.test("registered process-post durably completes single-image Threads contai
     deliveredNotifications = [];
     outbox = 0;
     containerIdOverride = null;
+    emailMode = "ok";
   }
 
   function insertCheckpoint(payload: Record<string, unknown>) {
@@ -371,6 +373,9 @@ Deno.test("registered process-post durably completes single-image Threads contai
         event: "email.post_failed",
         body: await request.clone().json(),
       });
+      if (emailMode === "semantic_failure") {
+        return Response.json({ success: false, message: "Email not configured" });
+      }
       return Response.json({ success: true });
     }
     if (url.hostname === "graph.threads.net") {
@@ -533,15 +538,15 @@ Deno.test("registered process-post durably completes single-image Threads contai
         };
       }
       if (Array.isArray(payload.p_retained_platform_post_ids)) {
+        for (const rid of payload.p_retained_platform_post_ids as string[]) {
+          const match = rows.find(r => r.id === rid && r.post_id === post.id && r.status === "success");
+          if (!match) {
+            return Response.json({ message: "record_threads_image_checkpoint: retained result is not an authoritative success for this post" }, { status: 400 });
+          }
+        }
         post.metadata = {
           ...(post.metadata as Record<string, unknown> || {}),
           attempt_retained_platform_post_ids: payload.p_retained_platform_post_ids,
-        };
-      }
-      if (Array.isArray(payload.p_retained_account_ids)) {
-        post.metadata = {
-          ...(post.metadata as Record<string, unknown> || {}),
-          attempt_retained_account_ids: payload.p_retained_account_ids,
         };
       }
       const checkpoint = insertCheckpoint(payload);
@@ -637,16 +642,13 @@ Deno.test("registered process-post durably completes single-image Threads contai
         targetAccountIds = accounts.filter(a => postPlatforms.includes(a.platform) && a.is_active).map(a => a.id);
       }
 
-      const retainedAccountIds = Array.isArray(metadata.attempt_retained_account_ids)
-        ? (metadata.attempt_retained_account_ids as string[])
-        : [];
       const retainedRowIds: string[] = Array.isArray(metadata.attempt_retained_platform_post_ids)
         ? (metadata.attempt_retained_platform_post_ids as string[])
-        : rows.filter(r => retainedAccountIds.includes(r.social_account_id) && r.status === "success").map(r => r.id);
+        : [];
 
       const started = String(payload.p_expected_processing_started_at);
       const missingTargets = targetAccountIds.filter(targetId => {
-        if (retainedAccountIds.includes(targetId) || rows.some(r => retainedRowIds.includes(r.id) && r.social_account_id === targetId)) {
+        if (rows.some(r => retainedRowIds.includes(r.id) && r.social_account_id === targetId)) {
           return false;
         }
         return !rows.some(row =>
@@ -663,20 +665,19 @@ Deno.test("registered process-post durably completes single-image Threads contai
         row.post_id === POST &&
         (
           retainedRowIds.includes(row.id) ||
-          retainedAccountIds.includes(row.social_account_id) ||
           (targetAccountIds.includes(row.social_account_id) &&
             (deferred(row.response_data)?.attempt_started_at === started || (row.created_at ?? "") >= started))
         )
       );
 
-      if (attemptRows.length === 0 && retainedAccountIds.length === 0 && retainedRowIds.length === 0) {
+      if (attemptRows.length === 0 && retainedRowIds.length === 0) {
         return Response.json({ status: post.status, stale: false, notify: false });
       }
       if (attemptRows.some((row) => row.status === "pending")) {
         return Response.json({ status: "processing", stale: false, notify: false });
       }
 
-      const hasSuccess = retainedAccountIds.length > 0 || retainedRowIds.length > 0 || attemptRows.some((row) => row.status === "success");
+      const hasSuccess = retainedRowIds.length > 0 || attemptRows.some((row) => row.status === "success");
       post.status = hasSuccess ? "completed" : "failed";
       const authorizedRowIds = [
         ...retainedRowIds,
@@ -727,6 +728,42 @@ Deno.test("registered process-post durably completes single-image Threads contai
         claim_id: intent.claim_id,
         authorized_platform_post_ids: intent.authorized_platform_post_ids,
       });
+    }
+    if (table === "rpc/restore_legacy_pending_post") {
+      const payload = await request.json() as Record<string, unknown>;
+      if (!post || post.id !== payload.p_post_id) {
+        return Response.json({ restored: false, reason: "not_found" });
+      }
+      if (post.status === "processing" && post.processing_started_at === payload.p_expected_processing_started_at) {
+        if (payload.p_has_success && !post.posted_at) {
+          post.posted_at = new Date(BASE_CLOCK + clock).toISOString();
+        }
+        return Response.json({ restored: true, status: "processing", already_processing: true });
+      }
+      if (post.processing_started_at !== payload.p_expected_processing_started_at) {
+        return Response.json({ restored: false, reason: "attempt_mismatch", current_status: post.status });
+      }
+      if (!["completed", "failed"].includes(String(post.status))) {
+        return Response.json({ restored: false, reason: "status_ineligible", current_status: post.status });
+      }
+      const meta = (post.metadata ?? {}) as Record<string, unknown>;
+      if (!meta.settlement_rollup_at) {
+        return Response.json({ restored: false, reason: "missing_rollup_provenance", current_status: post.status });
+      }
+      if (meta.settlement_rollup_processing_started_at !== payload.p_expected_processing_started_at) {
+        return Response.json({ restored: false, reason: "rollup_attempt_mismatch", current_status: post.status });
+      }
+      const currentFence = contentFence(post);
+      const expectedFence = normalizeFence(payload.p_expected_content);
+      if (await hashRequest(currentFence) !== await hashRequest(expectedFence)) {
+        return Response.json({ restored: false, reason: "content_mismatch", current_status: post.status });
+      }
+      const priorStatus = post.status;
+      post.status = "processing";
+      if (payload.p_has_success) {
+        post.posted_at = post.posted_at || new Date(BASE_CLOCK + clock).toISOString();
+      }
+      return Response.json({ restored: true, status: "processing", prior_status: priorStatus });
     }
     if (table === "rpc/confirm_threads_image_notification") {
       const payload = await request.json() as Record<string, unknown>;
@@ -842,12 +879,13 @@ Deno.test("registered process-post durably completes single-image Threads contai
       if (claimedUntil > currentClock) continue;
 
       const isPendingDue = row.status === "pending" &&
-        (!def.next_check_at || Date.parse(String(def.next_check_at)) <= clock);
+        (!def.next_check_at || Date.parse(String(def.next_check_at)) <= currentClock);
 
       const isTerminalManagedImage = ["success", "failed"].includes(row.status) &&
         def.kind === "threads" && def.media_type === "IMAGE" &&
-        (post.status === "processing" || (
+        ((post.status === "processing" && (!def.attempt_started_at || def.attempt_started_at === post.processing_started_at)) || (
           ["completed", "failed"].includes(String(post.status)) &&
+          (!def.attempt_started_at || def.attempt_started_at === post.processing_started_at) &&
           Boolean(post.metadata) &&
           ((post.metadata as Record<string, unknown>).final_notification_intent as Record<string, unknown> | undefined)?.notified === false
         ));
