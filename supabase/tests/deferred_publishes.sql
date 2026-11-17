@@ -1967,6 +1967,72 @@ BEGIN
   ASSERT NOT EXISTS(SELECT 1 FROM public.claim_post_completion_work(5) w WHERE w.post_id=closure_case.post_id),'T97 cancellation cannot be recovered';
 END $$;
 
+-- T98: media failure closure includes preserved sub-results of the retried account.
+DO $$
+DECLARE
+  u uuid := gen_random_uuid(); a uuid := gen_random_uuid(); p uuid; r uuid; old_feed uuid;
+  t timestamptz := now(); f jsonb; answer jsonb; retained boolean; kept uuid[];
+BEGIN
+  INSERT INTO auth.users(id,email) VALUES(u,'subresult-test@example.invalid');
+  INSERT INTO public.social_accounts(id,user_id,platform,platform_user_id,access_token,is_active)
+    VALUES(a,u,'instagram','subresult','fixture',true);
+  FOREACH retained IN ARRAY ARRAY[false,true] LOOP
+    p := gen_random_uuid(); old_feed := gen_random_uuid(); kept := ARRAY[]::uuid[];
+    INSERT INTO public.posts(id,user_id,caption,platforms,status,processing_started_at,source,metadata)
+      VALUES(p,u,'subresult',ARRAY['instagram'],'processing',t,'manual','{}');
+    IF retained THEN
+      INSERT INTO public.platform_posts(id,post_id,social_account_id,platform,status,created_at,response_data)
+        VALUES(old_feed,p,a,'instagram','success',t-interval '1 hour','{"ig_post_subtype":"feed"}');
+      kept := ARRAY[old_feed];
+    END IF;
+    SELECT jsonb_build_object('user_id',x.user_id,'caption',x.caption,'media_file_ids',x.media_file_ids,
+      'metadata','{}'::jsonb,'platforms',x.platforms,'scheduled_at',x.scheduled_at,
+      'publish_requested_at',x.publish_requested_at,'source',x.source) INTO f FROM public.posts x WHERE x.id=p;
+    PERFORM public.enroll_post_notification_recovery(p,t,f,ARRAY[a],kept);
+    answer := public.partner_settle_platform_post(NULL,p,a,'instagram','failed',NULL,NULL,'media unavailable',NULL);
+    r := (answer->>'platform_post_id')::uuid;
+    ASSERT (SELECT status FROM public.posts WHERE id=p)='processing','T98 failure waits for explicit closure';
+    answer := public.close_post_fanout(p,t,f,ARRAY[r],kept);
+    ASSERT answer->>'ready'='true','T98 failure closure ready';
+    ASSERT answer->>'status'=CASE WHEN retained THEN 'completed' ELSE 'failed' END,'T98 retained live feed controls rollup';
+    ASSERT (SELECT metadata #>> '{legacy_notification_candidate,ready}' FROM public.posts WHERE id=p)='true','T98 failed-status trigger preserves newly staged candidate';
+    ASSERT jsonb_array_length(answer->'authorized_platform_post_ids')=CASE WHEN retained THEN 2 ELSE 1 END,'T98 exact notification row count';
+  END LOOP;
+END $$;
+
+-- T99: an original carried-story receipt authorizes exactly its recovered row.
+DO $$
+DECLARE
+  u uuid := gen_random_uuid(); a uuid := gen_random_uuid(); p uuid := gen_random_uuid();
+  anchor_id uuid := gen_random_uuid(); story_id uuid; unrelated_id uuid;
+  t timestamptz := now(); f jsonb; answer jsonb;
+BEGIN
+  INSERT INTO auth.users(id,email) VALUES(u,'carried-scope-test@example.invalid');
+  INSERT INTO public.social_accounts(id,user_id,platform,platform_user_id,access_token,is_active)
+    VALUES(a,u,'instagram','carried-scope','fixture',true);
+  INSERT INTO public.posts(id,user_id,caption,platforms,status,processing_started_at,source,metadata)
+    VALUES(p,u,'carried scope',ARRAY['instagram'],'processing',t,'manual','{}');
+  SELECT jsonb_build_object('user_id',x.user_id,'caption',x.caption,'media_file_ids',x.media_file_ids,
+    'metadata','{}'::jsonb,'platforms',x.platforms,'scheduled_at',x.scheduled_at,
+    'publish_requested_at',x.publish_requested_at,'source',x.source) INTO f FROM public.posts x WHERE x.id=p;
+  PERFORM public.enroll_post_notification_recovery(p,t,f,ARRAY[a],ARRAY[]::uuid[]);
+  INSERT INTO public.platform_posts(id,post_id,social_account_id,platform,status,created_at,response_data)
+    VALUES(anchor_id,p,a,'instagram','pending',t,'{"unrecorded_story":{"id":"carried-provider","url":"https://fixture.invalid/story"}}');
+  answer := public.close_post_fanout(p,t,f,ARRAY[anchor_id],ARRAY[]::uuid[]);
+  ASSERT answer->>'ready'='false','T99 original pending barrier';
+  answer := public.record_published_story(p,a,'unrelated-provider','https://fixture.invalid/other','{}');
+  unrelated_id := (answer->>'platform_post_id')::uuid;
+  ASSERT NOT (SELECT (metadata #> '{legacy_notification_candidate,exact_platform_post_ids}') @> to_jsonb(ARRAY[unrelated_id]) FROM public.posts WHERE id=p),'T99 unrelated story cannot expand scope';
+  answer := public.record_published_story(p,a,'carried-provider','https://fixture.invalid/story','{}');
+  story_id := (answer->>'platform_post_id')::uuid;
+  ASSERT (SELECT (metadata #> '{legacy_notification_candidate,exact_platform_post_ids}') @> to_jsonb(ARRAY[story_id]) FROM public.posts WHERE id=p),'T99 carried story result included atomically';
+  PERFORM public.record_published_story(p,a,'carried-provider','https://fixture.invalid/story','{}');
+  ASSERT (SELECT jsonb_array_length(metadata #> '{legacy_notification_candidate,exact_platform_post_ids}') FROM public.posts WHERE id=p)=2,'T99 recorder replay adds no duplicate';
+  PERFORM public.partner_settle_platform_post(anchor_id,NULL,NULL,NULL,'failed',NULL,NULL,'reel expired',NULL);
+  ASSERT (SELECT status FROM public.posts WHERE id=p)='completed','T99 live story survives failed reel';
+  ASSERT (SELECT jsonb_array_length(metadata #> '{legacy_notification_candidate,authorized_platform_post_ids}') FROM public.posts WHERE id=p)=2,'T99 final payload is anchor plus carried story only';
+END $$;
+
 ROLLBACK;
 
 \echo '=== deferred_publishes: ALL CHECKS PASSED ==='

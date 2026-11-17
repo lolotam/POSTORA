@@ -1386,6 +1386,7 @@ DECLARE
   v_post_state TEXT;
   v_rollup_parent BOOLEAN := true;
   v_content    JSONB;
+  v_carried_anchor UUID;
 BEGIN
   IF p_status NOT IN ('success', 'failed') THEN
     RAISE EXCEPTION 'partner_settle_platform_post: % is not a terminal status', p_status;
@@ -1554,6 +1555,32 @@ BEGIN
     FROM public.platform_posts WHERE post_id = v_row.post_id;
 
   IF v_post.metadata ? 'legacy_notification_candidate' THEN
+    -- A story carried by an original, frozen pending row is an authorized future
+    -- result. Its successful recorder may materialize the row only on resume.
+    IF v_row.platform = 'instagram' AND v_row.status = 'success'
+       AND v_row.response_data ->> 'ig_post_subtype' = 'story'
+       AND v_post.metadata #>> '{legacy_notification_candidate,fanout_closed}' = 'true'
+       AND (v_post.metadata #>> '{legacy_notification_candidate,attempt_started_at}')::timestamptz = v_post.processing_started_at
+       AND v_post.metadata #>> '{legacy_notification_candidate,content_hash}' = md5(jsonb_build_object(
+         'user_id',v_post.user_id,'caption',v_post.caption,'media_file_ids',v_post.media_file_ids,
+         'metadata',public.normalize_threads_internal_metadata(v_post.metadata),'platforms',v_post.platforms,
+         'scheduled_at',v_post.scheduled_at,'publish_requested_at',v_post.publish_requested_at,'source',v_post.source
+       )::text) THEN
+      SELECT anchor.id INTO v_carried_anchor FROM public.platform_posts anchor
+       WHERE anchor.post_id = v_row.post_id AND anchor.social_account_id = v_row.social_account_id
+         AND (v_post.metadata #> '{legacy_notification_candidate,exact_platform_post_ids}') @> to_jsonb(ARRAY[anchor.id])
+         AND anchor.response_data #>> '{unrecorded_story,id}' = v_row.platform_post_id
+       LIMIT 1;
+      IF v_carried_anchor IS NOT NULL AND NOT (
+        (v_post.metadata #> '{legacy_notification_candidate,exact_platform_post_ids}') @> to_jsonb(ARRAY[v_row.id])
+      ) THEN
+        UPDATE public.posts SET metadata = jsonb_set(metadata,
+          '{legacy_notification_candidate,exact_platform_post_ids}',
+          (metadata #> '{legacy_notification_candidate,exact_platform_post_ids}') || to_jsonb(ARRAY[v_row.id]))
+         WHERE id = v_row.post_id;
+        SELECT * INTO v_post FROM public.posts WHERE id = v_row.post_id;
+      END IF;
+    END IF;
     -- Original worker closure is authoritative, including multiple rows per account.
     -- A pending producer may finish only the already-closed exact row set.
     IF v_post.metadata #>> '{legacy_notification_candidate,fanout_closed}' = 'true' THEN

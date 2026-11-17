@@ -1676,7 +1676,7 @@ async function announceFinalPost(
   if (claim.reason === "legacy_candidate") {
     const response = await handleNotificationOnly(supabase, post.id);
     const receipt = await response.json();
-    return response.ok && receipt.notified === true;
+    return response.ok && receipt.notification_scheduled === true;
   }
   if (claim.reason) {
     await writeLogRow(supabase, {
@@ -1955,7 +1955,8 @@ async function handleNotificationOnly(
   return createJsonResponse({
     success: true,
     notification_only: true,
-    notified: true,
+    claimed: true,
+    notification_scheduled: true,
     status: finalStatus,
   });
 }
@@ -2053,17 +2054,25 @@ Deno.serve(async (req) => {
       console.log("User authenticated", { userId: authenticatedUserId });
     }
 
+    const refuseNotificationRoute = async (reason: string, message: string, status: number) => {
+      await writeLogRow(supabase, {
+        level: "warn", category: "post", source: "process-post", user_id: authenticatedUserId,
+        message: "Notification-only routing refused",
+        metadata: { event: "notification_route_refused", post_id, reason },
+      });
+      return createErrorResponse(message, status);
+    };
     // Notification-only mode: discriminator check and immediate execution
     if (notificationOnly) {
       if (!attemptStartedAt || !candidateId || !notificationClaimId || resumePlatformPostId || overridePlatforms?.length || overrideAccountIds?.length || expectedScheduledAt || expectedPublishRequestedAt) {
-        return createErrorResponse("Combined mode rejected: notification_only cannot be combined with publish or resume parameters", 400);
+        return await refuseNotificationRoute("invalid_identity_or_combined_mode", "Combined mode rejected: notification_only requires a lease identity and cannot be combined with publish or resume parameters", 400);
       }
       if (!isServiceRoleAuth) {
-        return createErrorResponse("Forbidden: notification_only is internal", 403);
+        return await refuseNotificationRoute("service_role_required", "Forbidden: notification_only is internal", 403);
       }
       return await handleNotificationOnly(supabase, post_id, attemptStartedAt, candidateId, notificationClaimId);
     }
-    if (attemptStartedAt || candidateId || notificationClaimId) return createErrorResponse("Notification identity requires notification_only mode", 400);
+    if (attemptStartedAt || candidateId || notificationClaimId) return await refuseNotificationRoute("missing_notification_mode", "Notification identity requires notification_only mode", 400);
 
     // A run its caller retries on its own is not started on a worker near its end: it would be
     // stopped between creating a container and recording it. Refused before any read or claim.
@@ -2496,7 +2505,7 @@ Deno.serve(async (req) => {
     if (!resume) {
       const { data: priorSuccesses, error: priorSuccessesError } = await supabase
         .from("platform_posts")
-        .select("id, social_account_id")
+        .select("id, social_account_id, platform")
         .eq("post_id", post_id)
         .eq("status", "success");
       if (priorSuccessesError) {
@@ -2511,10 +2520,10 @@ Deno.serve(async (req) => {
           : "Could not verify prior successful platform posts or restore the processing claim. Current state retained.", 503);
       }
       retainedPlatformPostIds = (priorSuccesses ?? [])
-        .filter((r: { id?: string | null; social_account_id?: string | null }) =>
+        .filter((r: { id?: string | null; social_account_id?: string | null; platform?: string | null }) =>
           typeof r.id === "string" &&
           typeof r.social_account_id === "string" &&
-          !accounts.some((a) => a.id === r.social_account_id)
+          (!accounts.some((a) => a.id === r.social_account_id) || (retryRun && r.platform === "instagram"))
         )
         .map((r: { id: string }) => r.id);
     }
@@ -2542,12 +2551,16 @@ Deno.serve(async (req) => {
       }
       if (!enrolledCandidateId) {
         await writeLogRow(supabase, { level: "error", category: "post", source: "process-post", user_id: post.user_id, message: "Publication stopped before provider execution because notification enrollment was unconfirmed", metadata: { event: "notification_enrollment_unconfirmed", post_id } });
-        return createErrorResponse("Publication admission could not be confirmed; no provider operation was started", 503);
+        const restored = await restoreUnpublishedClaim();
+        return createErrorResponse(restored
+          ? "Publication admission could not be confirmed; prior state restored without provider work"
+          : "Publication admission and prior state restoration could not be confirmed; no provider operation was started", 503);
       }
     }
 
     const failMediaPreparation = async (message: string, statusCode = 503) => {
       let resultWriteError: string | null = null;
+      const failedRowIds: string[] = [];
       if (!resume) {
         for (const account of accounts) {
           const settled = await settlePlatformPost(supabase, {
@@ -2559,11 +2572,23 @@ Deno.serve(async (req) => {
             resultWriteError = settled.error;
             console.error("Could not record media preparation retry target:", settled.error);
           }
+          if (settled.id) failedRowIds.push(settled.id);
+          else resultWriteError = resultWriteError ?? "Failed result identity unavailable";
+        }
+        if (!resultWriteError && enrolledCandidateId && claim.processingStartedAt) {
+          const { data: closed, error: closeError } = await supabase.rpc("close_post_fanout", {
+            p_post_id: post_id, p_expected_processing_started_at: claim.processingStartedAt,
+            p_expected_content: threadsImageContentFence(post), p_exact_platform_post_ids: failedRowIds,
+            p_retained_platform_post_ids: retainedPlatformPostIds,
+          });
+          if (closeError || closed?.closed !== true) resultWriteError = "Media failure completion could not be confirmed";
+          else if (closed.ready === true) await announceFinalPost(supabase, post, closed.status, [], true);
         }
       }
       // The settlement seam owns final rollup; incomplete target recording must remain sweepable.
       const { error: statusError } = resultWriteError
         ? await supabase.from("posts").update({ status: "processing" }).eq("id", post_id)
+          .eq("status", "processing").eq("processing_started_at", claim.processingStartedAt)
         : { error: null };
       if (statusError) console.error("Could not preserve incomplete retry-target recording:", statusError.message);
       const { error: logError } = await supabase.from("system_logs").insert({

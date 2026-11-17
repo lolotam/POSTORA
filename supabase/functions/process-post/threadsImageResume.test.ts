@@ -203,6 +203,10 @@ Deno.test("registered process-post durably completes single-image Threads contai
   let legacyNotificationClaimReads = 0;
   let recoveryRowReadFailure = false;
   let recoveryClaims = 0;
+  let enrollmentFailure: "none" | "error" | "lost" = "none";
+  let missingMedia = false;
+  let closedRetainedIds: string[] = [];
+  let closedFanoutCalls = 0;
   let legacySiblingReadSnapshot = false;
   let notificationScopeMode: "ok" | "missing" | "empty" | "deleted" | "changed" | "parent_changed" | "content_changed" | "settings_changed" | "attempt_changed" | "content_read_error" = "ok";
   const unexpected: string[] = [];
@@ -296,6 +300,10 @@ Deno.test("registered process-post durably completes single-image Threads contai
     legacyNotificationClaimReads = 0;
     recoveryRowReadFailure = false;
     recoveryClaims = 0;
+    enrollmentFailure = "none";
+    missingMedia = false;
+    closedRetainedIds = [];
+    closedFanoutCalls = 0;
     legacySiblingReadSnapshot = false;
   }
 
@@ -533,6 +541,7 @@ Deno.test("registered process-post durably completes single-image Threads contai
       return Response.json(filtered);
     }
     if (table === "media_files") {
+      if (missingMedia) return Response.json([]);
       return Response.json((post.media_file_ids as string[]).map((id) => ({
         id,
         file_path: `https://media-fixture.invalid/${id}.${legacyVideoMode ? "mp4" : "jpg"}`,
@@ -930,6 +939,7 @@ Deno.test("registered process-post durably completes single-image Threads contai
     }
     if (table === "rpc/enroll_post_notification_recovery") {
       const payload = await request.json() as Record<string, unknown>;
+      if (enrollmentFailure === "error") return Response.json({ message: "fixture enrollment unavailable" }, { status: 500 });
       const candidateId = crypto.randomUUID();
       const meta = (post.metadata ?? {}) as Record<string, unknown>;
       meta.legacy_notification_candidate = {
@@ -938,16 +948,22 @@ Deno.test("registered process-post durably completes single-image Threads contai
         ready: false,
         fanout_closed: false,
       };
+      if (enrollmentFailure === "lost") return Response.json({ message: "fixture enrollment response lost" }, { status: 500 });
       return Response.json({ enrolled: true, candidate_id: candidateId });
     }
     if (table === "rpc/close_post_fanout") {
+      closedFanoutCalls++;
       const payload = await request.json() as Record<string, unknown>;
       const meta = (post.metadata ?? {}) as Record<string, unknown>;
       const cand = (meta.legacy_notification_candidate ?? {}) as Record<string, unknown>;
+      closedRetainedIds = payload.p_retained_platform_post_ids as string[];
+      const ids = [...payload.p_exact_platform_post_ids as string[], ...closedRetainedIds];
+      const scoped = rows.filter(row => ids.includes(row.id));
       cand.fanout_closed = true;
-      cand.ready = true;
-      cand.authorized_platform_post_ids = payload.p_exact_platform_post_ids;
-      return Response.json({ closed: true, ready: true, status: post.status });
+      cand.ready = scoped.length === ids.length && scoped.every(row => row.status !== "pending");
+      cand.authorized_platform_post_ids = ids;
+      if (cand.ready) post.status = scoped.some(row => row.status === "success") ? "completed" : "failed";
+      return Response.json({ closed: true, ready: cand.ready, status: post.status });
     }
     if (table === "rpc/claim_legacy_notification_candidate") {
       recoveryClaims++;
@@ -2382,6 +2398,55 @@ Deno.test("registered process-post durably completes single-image Threads contai
       assertEquals(publishes, 1);
     });
 
+    for (const mode of ["error", "lost"] as const) {
+      await test.step(`unconfirmed enrollment (${mode}) restores the unpublished claim`, async () => {
+        reset();
+        const originalStatus = post.status;
+        enrollmentFailure = mode;
+        const response = await invoke();
+        assertEquals(response.status, 503);
+        assertEquals(post.status, originalStatus);
+        assertEquals({ creates, statusReads, publishes, settlements }, { creates: 0, statusReads: 0, publishes: 0, settlements: 0 });
+        assert(logs.some(entry => (entry.metadata as Record<string, unknown>)?.event === "notification_enrollment_unconfirmed"));
+      });
+    }
+    for (const retained of [false, true]) {
+      await test.step(`media preparation closes failed targets and preserves Instagram successes (${retained})`, async () => {
+        reset();
+        accounts = [{ ...facebookAccount(), platform: "instagram" }];
+        post.platforms = ["instagram"];
+        post.metadata = { ...post.metadata as Record<string, unknown>, selected_account_ids: [FACEBOOK_ACCOUNT] };
+        if (retained) {
+          addFailedRow("facebook");
+          rows[0].platform = "instagram";
+          rows[0].status = "success";
+          rows[0].response_data = { ig_post_subtype: "feed" };
+          post.status = "failed";
+        }
+        missingMedia = true;
+        const response = await invoke({ accountIds: [FACEBOOK_ACCOUNT], platforms: ["instagram"] });
+        assertEquals(response.status, 422);
+        assertEquals(post.status, retained ? "completed" : "failed");
+        assertEquals(closedRetainedIds, retained ? ["facebook-failed-old"] : []);
+        assertEquals(closedFanoutCalls, 1);
+        assertEquals({ creates, statusReads, publishes }, { creates: 0, statusReads: 0, publishes: 0 });
+      });
+    }
+    for (const mode of ["missing_identity", "combined", "identity_without_mode"] as const) {
+      await test.step(`notification routing ${mode} is refused with a persistent diagnostic`, async () => {
+        reset();
+        const response = await handler!(new Request(`${ORIGIN}/functions/v1/process-post`, {
+          method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${SERVICE}` },
+          body: JSON.stringify({ post_id: POST,
+            ...(mode === "identity_without_mode" ? { attempt_started_at: new Date(BASE_CLOCK).toISOString() } : { notification_only: true }),
+            ...(mode === "combined" ? { resume_platform_post_id: IMAGE_ROW } : {}),
+          }),
+        }));
+        assertEquals(response.status, 400);
+        assert(logs.some(entry => (entry.metadata as Record<string, unknown>)?.event === "notification_route_refused"));
+        assertEquals({ creates, statusReads, publishes, settlements, recoveryClaims }, { creates: 0, statusReads: 0, publishes: 0, settlements: 0, recoveryClaims: 0 });
+      });
+    }
     for (const mode of ["ok", "read_error", "missing_row"] as const) {
       await test.step(`notification-only recovery ${mode} never enters publishing and retains pre-claim work on degraded reads`, async () => {
         reset();
@@ -2407,6 +2472,11 @@ Deno.test("registered process-post durably completes single-image Threads contai
         assertEquals(response.status, mode === "ok" ? 200 : 503, await response.clone().text());
         assertEquals({ creates, statusReads, publishes, settlements, inlineClaims }, { creates: 0, statusReads: 0, publishes: 0, settlements: 0, inlineClaims: 0 });
         assertEquals(recoveryClaims, mode === "ok" ? 1 : 0);
+        if (mode === "ok") {
+          const receipt = await response.json();
+          assertEquals(receipt.notification_scheduled, true);
+          assertEquals("notified" in receipt, false);
+        }
         if (mode !== "ok") {
           assertEquals((post.metadata as Record<string, unknown>).final_notified_at, undefined);
           assertEquals(deliveredNotifications.length, 0);
