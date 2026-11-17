@@ -919,6 +919,9 @@ BEGIN
   ), 'content_fence', expected, 'account_updated_at',
     (SELECT updated_at FROM public.social_accounts WHERE id = acct_th));
 
+  INSERT INTO public.platform_posts (id, post_id, social_account_id, platform, status, platform_post_id)
+  VALUES ('f0000000-0000-4000-8000-0000000000f5', post_a05, acct_th2, 'threads', 'success', 'prior-success-th2');
+
   row_id := public.record_threads_image_checkpoint(
     post_a05, acct_th, payload, claim_at, expected,
     ARRAY[acct_th, acct_th2], ARRAY[acct_th2]
@@ -931,7 +934,10 @@ BEGIN
   -- T67: claim_deferred_publishes claims terminal post row when final notification intent is unconfirmed
   UPDATE public.posts
      SET status = 'completed',
-         metadata = jsonb_build_object('final_notification_intent', jsonb_build_object('notified', false, 'created_at', now()))
+         processing_started_at = claim_at,
+         metadata = jsonb_build_object('final_notification_intent', jsonb_build_object(
+           'status', 'completed', 'attempt_started_at', claim_at, 'notified', false, 'created_at', now()
+         ))
    WHERE id = post_a05;
   UPDATE public.platform_posts
      SET status = 'success',
@@ -1006,6 +1012,173 @@ BEGIN
   ASSERT (SELECT status FROM public.platform_posts WHERE id = row_id) = 'success'
     AND (SELECT count(*) FROM public.platform_posts WHERE post_id = legacy_post_id) = 1,
     'T74 legacy fence completion settles the original durable row';
+END $$;
+
+-- T75-T79: Round 3 MUST_FIX verifications (A03, A04, A06, A05)
+DO $$
+DECLARE
+  owner_id uuid := 'd1d1d1d1-1111-4111-8111-d1d1d1d1d1d1';
+  foreign_id uuid := 'e2e2e2e2-2222-4222-8222-e2e2e2e2e2e2';
+  acct_1 uuid := 'd3d3d3d3-3333-4333-8333-d3d3d3d3d3d3';
+  acct_2 uuid := 'd4d4d4d4-4444-4444-8444-d4d4d4d4d4d4';
+  acct_foreign uuid := 'e3e3e3e3-3333-4333-8333-e3e3e3e3e3e3';
+  p_t75 uuid := 'e0000000-0000-4000-8000-000000000075';
+  p_t78 uuid := 'e0000000-0000-4000-8000-000000000078';
+  p_t79 uuid := 'e0000000-0000-4000-8000-000000000079';
+  attempt_at timestamptz := now() - interval '5 minutes';
+  fence_t75 jsonb;
+  fence_t78 jsonb;
+  payload jsonb;
+  res jsonb;
+  err_caught boolean;
+BEGIN
+  -- Setup foreign user and accounts
+  INSERT INTO auth.users (id, email) VALUES (foreign_id, 'foreign-user@example.invalid')
+  ON CONFLICT (id) DO NOTHING;
+  INSERT INTO public.social_accounts (id, user_id, platform, platform_user_id, platform_username, access_token, is_active)
+  VALUES
+    (acct_2, owner_id, 'threads', 'dp-th-2', 'dp_th_2', 'tok-th-2', true),
+    (acct_foreign, foreign_id, 'threads', 'dp-foreign', 'dp_foreign', 'tok-foreign', true)
+  ON CONFLICT (id) DO NOTHING;
+
+  -- =========================================================================
+  -- T75: New target account with old unlisted success staying 'processing'
+  -- =========================================================================
+  INSERT INTO public.posts (id, user_id, caption, platforms, status, processing_started_at, source, metadata)
+  VALUES (p_t75, owner_id, 't75 post', ARRAY['threads'], 'processing', attempt_at, 'manual',
+    jsonb_build_object(
+      'attempt_started_at', attempt_at,
+      'attempt_target_account_ids', jsonb_build_array(acct_1, acct_2),
+      'attempt_retained_account_ids', '[]'::jsonb
+    ));
+
+  fence_t75 := jsonb_build_object(
+    'user_id', owner_id, 'caption', 't75 post', 'media_file_ids', NULL,
+    'metadata', '{}'::jsonb,
+    'platforms', ARRAY['threads'], 'scheduled_at', NULL, 'publish_requested_at', NULL, 'source', 'manual'
+  );
+
+  -- Old historical success for acct_1 from prior attempt (not in attempt_retained_account_ids)
+  INSERT INTO public.platform_posts (id, post_id, social_account_id, platform, status, created_at, response_data)
+  VALUES ('f0000000-0000-4000-8000-000000000071', p_t75, acct_1, 'threads', 'success', attempt_at - interval '1 hour',
+    jsonb_build_object('deferred', jsonb_build_object('kind', 'threads', 'media_type', 'IMAGE', 'attempt_started_at', attempt_at - interval '1 hour')));
+
+  -- Current success for acct_2 from this attempt
+  INSERT INTO public.platform_posts (id, post_id, social_account_id, platform, status, created_at, response_data)
+  VALUES ('f0000000-0000-4000-8000-000000000072', p_t75, acct_2, 'threads', 'success', attempt_at + interval '10 seconds',
+    jsonb_build_object('deferred', jsonb_build_object('kind', 'threads', 'media_type', 'IMAGE', 'attempt_started_at', attempt_at)));
+
+  -- finalize_threads_image_attempt: acct_1 was target but its success is from prior attempt and unlisted
+  res := public.finalize_threads_image_attempt(p_t75, attempt_at, fence_t75, ARRAY[acct_1, acct_2]);
+  ASSERT res ->> 'status' = 'processing' AND (res ->> 'notify')::boolean = false,
+    format('T75 unlisted prior success does not satisfy new target; must stay processing (got %s)', res);
+
+  -- =========================================================================
+  -- T76: Mismatched explicit scope arguments rejected
+  -- =========================================================================
+  payload := jsonb_build_object(
+    'deferred', jsonb_build_object(
+      'kind', 'threads', 'media_type', 'IMAGE', 'container_id', 'c-t76',
+      'attempt_started_at', attempt_at, 'attempts', 0, 'first_deferred_at', attempt_at,
+      'give_up_at', attempt_at + interval '30 minutes', 'next_check_at', attempt_at + interval '1 minute'
+    ),
+    'content_fence', fence_t75,
+    'account_updated_at', (SELECT updated_at FROM public.social_accounts WHERE id = acct_1)
+  );
+
+  err_caught := false;
+  BEGIN
+    -- Mismatched target accounts against existing attempt_target_account_ids
+    PERFORM public.record_threads_image_checkpoint(
+      p_t75, acct_1, payload, attempt_at, fence_t75,
+      ARRAY[acct_1] -- diverges from [acct_1, acct_2]
+    );
+  EXCEPTION WHEN OTHERS THEN
+    err_caught := true;
+  END;
+  ASSERT err_caught, 'T76 divergent target scope arguments rejected during checkpointing';
+
+  -- =========================================================================
+  -- T77: Foreign tenant account rejected
+  -- =========================================================================
+  err_caught := false;
+  BEGIN
+    PERFORM public.record_threads_image_checkpoint(
+      p_t75, acct_foreign, payload, attempt_at, fence_t75,
+      ARRAY[acct_1, acct_2]
+    );
+  EXCEPTION WHEN OTHERS THEN
+    err_caught := true;
+  END;
+  ASSERT err_caught, 'T77 foreign tenant account rejected during checkpointing';
+
+  -- =========================================================================
+  -- T78: Notification claim lease, dispatch failure simulation, expiry, confirmation
+  -- =========================================================================
+  INSERT INTO public.posts (id, user_id, caption, platforms, status, processing_started_at, source, metadata)
+  VALUES (p_t78, owner_id, 't78 notification post', ARRAY['threads'], 'completed', attempt_at, 'manual',
+    jsonb_build_object(
+      'attempt_started_at', attempt_at,
+      'final_notification_intent', jsonb_build_object(
+        'status', 'completed',
+        'attempt_started_at', attempt_at,
+        'notified', false,
+        'created_at', now()
+      )
+    ));
+
+  fence_t78 := jsonb_build_object(
+    'user_id', owner_id, 'caption', 't78 notification post', 'media_file_ids', NULL,
+    'metadata', '{}'::jsonb,
+    'platforms', ARRAY['threads'], 'scheduled_at', NULL, 'publish_requested_at', NULL, 'source', 'manual'
+  );
+
+  -- 1. Initial claim succeeds with lease
+  res := public.claim_threads_image_notification(p_t78, attempt_at, 'completed', fence_t78, interval '3 minutes');
+  ASSERT (res ->> 'claimed')::boolean = true, format('T78 initial notification claim succeeds (got %s)', res);
+
+  -- 2. Immediate second claim rejected with lease_held
+  res := public.claim_threads_image_notification(p_t78, attempt_at, 'completed', fence_t78, interval '3 minutes');
+  ASSERT (res ->> 'claimed')::boolean = false AND res ->> 'error' = 'lease_held',
+    format('T78 concurrent claim rejected while lease held (got %s)', res);
+
+  -- 3. Simulate dispatch failure / lease expiry by winding back claimed_until
+  UPDATE public.posts
+     SET metadata = jsonb_set(metadata, '{final_notification_intent,claimed_until}', to_jsonb(now() - interval '1 second'))
+   WHERE id = p_t78;
+
+  -- 4. Reclaim after expiry succeeds
+  res := public.claim_threads_image_notification(p_t78, attempt_at, 'completed', fence_t78, interval '3 minutes');
+  ASSERT (res ->> 'claimed')::boolean = true, format('T78 reclaim after lease expiry succeeds (got %s)', res);
+
+  -- 5. Confirm notification delivery
+  res := public.confirm_threads_image_notification(p_t78, attempt_at, 'completed', fence_t78);
+  ASSERT (res ->> 'confirmed')::boolean = true, format('T78 notification confirmation succeeds (got %s)', res);
+  ASSERT (SELECT (metadata ->> 'final_notified_at') IS NOT NULL FROM public.posts WHERE id = p_t78),
+    'T78 final_notified_at stamped on confirmation';
+
+  -- 6. Claim after confirmation rejected with already_notified / intent_unusable
+  res := public.claim_threads_image_notification(p_t78, attempt_at, 'completed', fence_t78, interval '3 minutes');
+  ASSERT (res ->> 'claimed')::boolean = false, format('T78 claim rejected after confirmation (got %s)', res);
+
+  -- =========================================================================
+  -- T79: Owner cancellation invalidates final notification intent
+  -- =========================================================================
+  INSERT INTO public.posts (id, user_id, caption, platforms, status, processing_started_at, source, metadata)
+  VALUES (p_t79, owner_id, 't79 cancel post', ARRAY['threads'], 'completed', attempt_at, 'manual',
+    jsonb_build_object(
+      'final_notification_intent', jsonb_build_object(
+        'status', 'completed',
+        'attempt_started_at', attempt_at,
+        'notified', false
+      )
+    ));
+
+  -- User or system resets the post to failed
+  UPDATE public.posts SET status = 'failed' WHERE id = p_t79;
+  ASSERT (SELECT metadata -> 'final_notification_intent' FROM public.posts WHERE id = p_t79) IS NULL,
+    'T79 cancellation trigger strips final_notification_intent on status divergence';
+
 END $$;
 
 ROLLBACK;

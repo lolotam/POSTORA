@@ -23,14 +23,22 @@ REVOKE ALL ON FUNCTION public.normalize_threads_internal_metadata(jsonb) FROM PU
 GRANT EXECUTE ON FUNCTION public.normalize_threads_internal_metadata(jsonb) TO service_role;
 
 -- Invalidate prior sibling rollup provenance on owner status cancellation (pending/failed)
+-- or status transition away from established intent
 CREATE OR REPLACE FUNCTION public.trg_posts_invalidate_rollup_on_cancellation()
 RETURNS trigger
 LANGUAGE plpgsql
 AS $$
 BEGIN
-  IF NEW.status IN ('pending', 'failed') AND NEW.metadata ? 'settlement_rollup_at' THEN
-    IF (NEW.metadata ->> 'settlement_rollup_at') IS NOT DISTINCT FROM (OLD.metadata ->> 'settlement_rollup_at') THEN
+  IF NEW.status IN ('pending', 'failed') THEN
+    IF NEW.metadata ? 'settlement_rollup_at' AND (NEW.metadata ->> 'settlement_rollup_at') IS NOT DISTINCT FROM (OLD.metadata ->> 'settlement_rollup_at') THEN
       NEW.metadata := NEW.metadata - 'settlement_rollup_at' - 'settlement_rollup_status' - 'settlement_rollup_processing_started_at';
+    END IF;
+    IF NEW.metadata ? 'final_notification_intent' THEN
+      NEW.metadata := NEW.metadata - 'final_notification_intent';
+    END IF;
+  ELSIF NEW.status IS DISTINCT FROM OLD.status AND NEW.metadata ? 'final_notification_intent' THEN
+    IF (NEW.metadata #>> '{final_notification_intent,status}') IS DISTINCT FROM NEW.status THEN
+      NEW.metadata := NEW.metadata - 'final_notification_intent';
     END IF;
   END IF;
   RETURN NEW;
@@ -490,12 +498,21 @@ BEGIN
   END IF;
 
   -- Persist authoritative original target scope and retained successes under parent lock
-  IF p_target_account_ids IS NOT NULL AND cardinality(p_target_account_ids) > 0 THEN
-    v_targets := p_target_account_ids;
-  ELSIF jsonb_typeof(v_post.metadata -> 'attempt_target_account_ids') = 'array'
-        AND jsonb_array_length(v_post.metadata -> 'attempt_target_account_ids') > 0 THEN
+  IF (v_post.metadata ->> 'attempt_started_at')::timestamptz IS NOT DISTINCT FROM p_expected_processing_started_at
+     AND jsonb_typeof(v_post.metadata -> 'attempt_target_account_ids') = 'array'
+     AND jsonb_array_length(v_post.metadata -> 'attempt_target_account_ids') > 0 THEN
     SELECT array_agg(elem::uuid) INTO v_targets
       FROM jsonb_array_elements_text(v_post.metadata -> 'attempt_target_account_ids') AS elem;
+    -- Explicit scope arguments must match frozen persisted scope; reject mismatch instead of override
+    IF p_target_account_ids IS NOT NULL AND cardinality(p_target_account_ids) > 0 THEN
+      IF (SELECT count(*) FROM unnest(p_target_account_ids) x WHERE x NOT IN (SELECT unnest(v_targets))) > 0
+         OR cardinality(p_target_account_ids) <> cardinality(v_targets) THEN
+        RAISE EXCEPTION 'record_threads_image_checkpoint: target account scope mismatch with persisted attempt scope'
+          USING ERRCODE = 'data_exception';
+      END IF;
+    END IF;
+  ELSIF p_target_account_ids IS NOT NULL AND cardinality(p_target_account_ids) > 0 THEN
+    v_targets := p_target_account_ids;
   ELSIF jsonb_typeof(v_post.metadata -> 'selected_account_ids') = 'array'
         AND jsonb_array_length(v_post.metadata -> 'selected_account_ids') > 0 THEN
     SELECT array_agg(a.id) INTO v_targets
@@ -516,18 +533,57 @@ BEGIN
     v_targets := ARRAY[p_social_account_id];
   END IF;
 
-  IF p_retained_account_ids IS NOT NULL THEN
-    v_retained := p_retained_account_ids;
-  ELSIF jsonb_typeof(v_post.metadata -> 'attempt_retained_account_ids') = 'array'
-        AND jsonb_array_length(v_post.metadata -> 'attempt_retained_account_ids') > 0 THEN
+  -- Validate all target accounts structurally belong to user and match post platforms
+  IF EXISTS (
+    SELECT 1 FROM unnest(v_targets) AS tid
+     WHERE NOT EXISTS (
+       SELECT 1 FROM public.social_accounts sa
+        WHERE sa.id = tid AND sa.user_id = v_post.user_id AND sa.platform = ANY(v_post.platforms)
+     )
+  ) THEN
+    RAISE EXCEPTION 'record_threads_image_checkpoint: invalid or foreign target account in scope'
+      USING ERRCODE = 'foreign_key_violation';
+  END IF;
+
+  -- Retained successful results from prior attempt(s)
+  IF (v_post.metadata ->> 'attempt_started_at')::timestamptz IS NOT DISTINCT FROM p_expected_processing_started_at
+     AND jsonb_typeof(v_post.metadata -> 'attempt_retained_account_ids') = 'array'
+     AND jsonb_array_length(v_post.metadata -> 'attempt_retained_account_ids') > 0 THEN
     SELECT array_agg(elem::uuid) INTO v_retained
       FROM jsonb_array_elements_text(v_post.metadata -> 'attempt_retained_account_ids') AS elem;
+    IF p_retained_account_ids IS NOT NULL THEN
+      IF (SELECT count(*) FROM unnest(p_retained_account_ids) x WHERE x NOT IN (SELECT unnest(v_retained))) > 0
+         OR cardinality(p_retained_account_ids) <> cardinality(v_retained) THEN
+        RAISE EXCEPTION 'record_threads_image_checkpoint: retained account scope mismatch with persisted attempt scope'
+          USING ERRCODE = 'data_exception';
+      END IF;
+    END IF;
+  ELSIF p_retained_account_ids IS NOT NULL THEN
+    v_retained := p_retained_account_ids;
   ELSE
     v_retained := ARRAY[]::uuid[];
   END IF;
 
   IF v_retained IS NULL THEN
     v_retained := ARRAY[]::uuid[];
+  END IF;
+
+  -- Validate retained results structurally: must be successful rows belonging to this post and user
+  IF cardinality(v_retained) > 0 THEN
+    IF EXISTS (
+      SELECT 1 FROM unnest(v_retained) AS rid
+       WHERE NOT EXISTS (
+         SELECT 1 FROM public.platform_posts rpp
+           JOIN public.social_accounts rsa ON rsa.id = rpp.social_account_id
+          WHERE rpp.post_id = p_post_id
+            AND rpp.status = 'success'
+            AND (rpp.social_account_id = rid OR rpp.id = rid)
+            AND rsa.user_id = v_post.user_id
+       )
+    ) THEN
+      RAISE EXCEPTION 'record_threads_image_checkpoint: retained result is not an authoritative success for this post'
+        USING ERRCODE = 'foreign_key_violation';
+    END IF;
   END IF;
 
   UPDATE public.posts
@@ -622,9 +678,14 @@ AS $$
            p.status = 'processing'
            OR (
              p.status IN ('completed', 'failed')
+             AND (pp.response_data #>> '{deferred,attempt_started_at}')::timestamptz IS NOT DISTINCT FROM p.processing_started_at
+             AND (p.metadata #>> '{final_notification_intent,attempt_started_at}')::timestamptz IS NOT DISTINCT FROM p.processing_started_at
+             AND (p.metadata #>> '{final_notification_intent,status}') = p.status
+             AND p.metadata #>> '{final_notification_intent,notified}' = 'false'
+             AND coalesce((p.metadata #>> '{final_notification_intent,claimed_until}')::timestamptz, '-infinity') <= now()
              AND (
-               p.metadata #>> '{final_notification_intent,notified}' = 'false'
-               OR (p.metadata ? 'final_notification_intent' AND (p.metadata ->> 'final_notified_at') IS NULL)
+               (p.metadata ->> 'final_notified_at') IS NULL
+               OR (p.metadata ->> 'final_notified_at')::timestamptz < p.processing_started_at
              )
            )
          )
@@ -652,6 +713,169 @@ $$;
 
 REVOKE ALL ON FUNCTION public.claim_deferred_publishes(integer, interval) FROM PUBLIC, anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.claim_deferred_publishes(integer, interval) TO service_role;
+
+-- Atomically lease unconfirmed final notification intent for a managed image post
+CREATE OR REPLACE FUNCTION public.claim_threads_image_notification(
+  p_post_id uuid,
+  p_expected_processing_started_at timestamptz,
+  p_expected_status text,
+  p_expected_content jsonb,
+  p_lease interval DEFAULT interval '3 minutes'
+)
+RETURNS jsonb
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  v_post public.posts%ROWTYPE;
+  v_content jsonb;
+  v_intent jsonb;
+BEGIN
+  IF p_post_id IS NULL OR p_expected_processing_started_at IS NULL OR p_expected_status IS NULL THEN
+    RETURN jsonb_build_object('claimed', false, 'error', 'invalid_arguments');
+  END IF;
+
+  SELECT * INTO v_post FROM public.posts WHERE id = p_post_id FOR UPDATE;
+  IF NOT FOUND THEN
+    RETURN jsonb_build_object('claimed', false, 'error', 'post_not_found');
+  END IF;
+
+  IF v_post.processing_started_at IS DISTINCT FROM p_expected_processing_started_at
+     OR v_post.status IS DISTINCT FROM p_expected_status THEN
+    RETURN jsonb_build_object('claimed', false, 'status', v_post.status, 'error', 'cycle_or_status_mismatch');
+  END IF;
+
+  v_content := jsonb_build_object(
+    'user_id', v_post.user_id,
+    'caption', v_post.caption,
+    'media_file_ids', v_post.media_file_ids,
+    'metadata', public.normalize_threads_internal_metadata(v_post.metadata),
+    'platforms', v_post.platforms,
+    'scheduled_at', v_post.scheduled_at,
+    'publish_requested_at', v_post.publish_requested_at,
+    'source', v_post.source
+  );
+  IF v_content IS DISTINCT FROM jsonb_set(
+    p_expected_content,
+    '{metadata}',
+    public.normalize_threads_internal_metadata(p_expected_content -> 'metadata'),
+    true
+  ) THEN
+    RETURN jsonb_build_object('claimed', false, 'status', v_post.status, 'error', 'content_mismatch');
+  END IF;
+
+  IF (v_post.metadata ->> 'final_notified_at') IS NOT NULL
+     AND (v_post.metadata ->> 'final_notified_at')::timestamptz >= p_expected_processing_started_at THEN
+    RETURN jsonb_build_object('claimed', false, 'status', v_post.status, 'error', 'already_notified');
+  END IF;
+
+  v_intent := v_post.metadata -> 'final_notification_intent';
+  IF v_intent IS NULL THEN
+    RETURN jsonb_build_object('claimed', false, 'status', v_post.status, 'error', 'no_intent');
+  END IF;
+
+  IF (v_intent ->> 'status') IS DISTINCT FROM p_expected_status
+     OR (v_intent ->> 'attempt_started_at')::timestamptz IS DISTINCT FROM p_expected_processing_started_at
+     OR coalesce((v_intent ->> 'notified')::boolean, false) = true THEN
+    RETURN jsonb_build_object('claimed', false, 'status', v_post.status, 'error', 'intent_unusable');
+  END IF;
+
+  IF coalesce((v_intent ->> 'claimed_until')::timestamptz, '-infinity') > now() THEN
+    RETURN jsonb_build_object('claimed', false, 'status', v_post.status, 'error', 'lease_held');
+  END IF;
+
+  UPDATE public.posts
+     SET metadata = coalesce(metadata, '{}'::jsonb) || jsonb_build_object(
+           'final_notification_intent', v_intent || jsonb_build_object(
+             'claimed_until', now() + p_lease
+           )
+         )
+   WHERE id = p_post_id;
+
+  RETURN jsonb_build_object('claimed', true, 'status', v_post.status);
+END;
+$$;
+
+REVOKE ALL ON FUNCTION public.claim_threads_image_notification(uuid, timestamptz, text, jsonb, interval)
+  FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.claim_threads_image_notification(uuid, timestamptz, text, jsonb, interval)
+  TO service_role;
+
+-- Confirm final notification delivery after awaited external dispatch ACK or outbox emission
+CREATE OR REPLACE FUNCTION public.confirm_threads_image_notification(
+  p_post_id uuid,
+  p_expected_processing_started_at timestamptz,
+  p_expected_status text,
+  p_expected_content jsonb
+)
+RETURNS jsonb
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  v_post public.posts%ROWTYPE;
+  v_content jsonb;
+  v_intent jsonb;
+BEGIN
+  IF p_post_id IS NULL OR p_expected_processing_started_at IS NULL OR p_expected_status IS NULL THEN
+    RETURN jsonb_build_object('confirmed', false, 'error', 'invalid_arguments');
+  END IF;
+
+  SELECT * INTO v_post FROM public.posts WHERE id = p_post_id FOR UPDATE;
+  IF NOT FOUND THEN
+    RETURN jsonb_build_object('confirmed', false, 'error', 'post_not_found');
+  END IF;
+
+  IF v_post.processing_started_at IS DISTINCT FROM p_expected_processing_started_at
+     OR v_post.status IS DISTINCT FROM p_expected_status THEN
+    RETURN jsonb_build_object('confirmed', false, 'status', v_post.status, 'error', 'cycle_or_status_mismatch');
+  END IF;
+
+  v_content := jsonb_build_object(
+    'user_id', v_post.user_id,
+    'caption', v_post.caption,
+    'media_file_ids', v_post.media_file_ids,
+    'metadata', public.normalize_threads_internal_metadata(v_post.metadata),
+    'platforms', v_post.platforms,
+    'scheduled_at', v_post.scheduled_at,
+    'publish_requested_at', v_post.publish_requested_at,
+    'source', v_post.source
+  );
+  IF v_content IS DISTINCT FROM jsonb_set(
+    p_expected_content,
+    '{metadata}',
+    public.normalize_threads_internal_metadata(p_expected_content -> 'metadata'),
+    true
+  ) THEN
+    RETURN jsonb_build_object('confirmed', false, 'status', v_post.status, 'error', 'content_mismatch');
+  END IF;
+
+  v_intent := v_post.metadata -> 'final_notification_intent';
+  IF v_intent IS NULL THEN
+    RETURN jsonb_build_object('confirmed', false, 'status', v_post.status, 'error', 'no_intent');
+  END IF;
+
+  UPDATE public.posts
+     SET metadata = coalesce(metadata, '{}'::jsonb) || jsonb_build_object(
+           'final_notified_at', now(),
+           'final_notification_intent', v_intent || jsonb_build_object(
+             'notified', true,
+             'notified_at', now(),
+             'claimed_until', NULL
+           )
+         )
+   WHERE id = p_post_id;
+
+  RETURN jsonb_build_object('confirmed', true, 'status', v_post.status);
+END;
+$$;
+
+REVOKE ALL ON FUNCTION public.confirm_threads_image_notification(uuid, timestamptz, text, jsonb)
+  FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.confirm_threads_image_notification(uuid, timestamptz, text, jsonb)
+  TO service_role;
 
 DROP FUNCTION IF EXISTS public.finalize_threads_image_attempt(uuid,timestamptz,jsonb);
 DROP FUNCTION IF EXISTS public.finalize_threads_image_attempt(uuid,timestamptz,jsonb,uuid[]);
@@ -728,16 +952,24 @@ BEGIN
   END IF;
 
   -- Authoritative target scope resolution:
-  -- 1) Explicit caller argument
-  -- 2) Persisted attempt scope stored under parent lock
+  -- 1) Persisted attempt scope stored under parent lock (if from current attempt)
+  -- 2) Explicit caller argument
   -- 3) Metadata selected_account_ids
   -- 4) Fallback to active platform accounts
-  IF p_expected_account_ids IS NOT NULL AND cardinality(p_expected_account_ids) > 0 THEN
-    v_target_account_ids := p_expected_account_ids;
-  ELSIF jsonb_typeof(v_post.metadata -> 'attempt_target_account_ids') = 'array'
-        AND jsonb_array_length(v_post.metadata -> 'attempt_target_account_ids') > 0 THEN
+  IF (v_post.metadata ->> 'attempt_started_at')::timestamptz IS NOT DISTINCT FROM p_expected_processing_started_at
+     AND jsonb_typeof(v_post.metadata -> 'attempt_target_account_ids') = 'array'
+     AND jsonb_array_length(v_post.metadata -> 'attempt_target_account_ids') > 0 THEN
     SELECT array_agg(elem::uuid) INTO v_target_account_ids
       FROM jsonb_array_elements_text(v_post.metadata -> 'attempt_target_account_ids') AS elem;
+    -- Explicit scope arguments must match frozen persisted scope; reject mismatch instead of override
+    IF p_expected_account_ids IS NOT NULL AND cardinality(p_expected_account_ids) > 0 THEN
+      IF (SELECT count(*) FROM unnest(p_expected_account_ids) x WHERE x NOT IN (SELECT unnest(v_target_account_ids))) > 0
+         OR cardinality(p_expected_account_ids) <> cardinality(v_target_account_ids) THEN
+        RETURN jsonb_build_object('status', v_post.status, 'stale', true, 'notify', false, 'error', 'scope_mismatch');
+      END IF;
+    END IF;
+  ELSIF p_expected_account_ids IS NOT NULL AND cardinality(p_expected_account_ids) > 0 THEN
+    v_target_account_ids := p_expected_account_ids;
   ELSIF jsonb_typeof(v_post.metadata -> 'selected_account_ids') = 'array'
         AND jsonb_array_length(v_post.metadata -> 'selected_account_ids') > 0 THEN
     SELECT array_agg(a.id) INTO v_target_account_ids
@@ -755,7 +987,8 @@ BEGIN
   END IF;
 
   -- Retained successful account IDs from prior attempt(s)
-  IF jsonb_typeof(v_post.metadata -> 'attempt_retained_account_ids') = 'array'
+  IF (v_post.metadata ->> 'attempt_started_at')::timestamptz IS NOT DISTINCT FROM p_expected_processing_started_at
+     AND jsonb_typeof(v_post.metadata -> 'attempt_retained_account_ids') = 'array'
      AND jsonb_array_length(v_post.metadata -> 'attempt_retained_account_ids') > 0 THEN
     SELECT array_agg(elem::uuid) INTO v_retained_account_ids
       FROM jsonb_array_elements_text(v_post.metadata -> 'attempt_retained_account_ids') AS elem;
@@ -780,7 +1013,7 @@ BEGIN
               pp.status = 'success'
               AND (
                 target_acct.id = ANY(v_retained_account_ids)
-                OR pp.created_at < p_expected_processing_started_at
+                OR pp.id = ANY(v_retained_account_ids)
               )
             )
           )
@@ -790,13 +1023,18 @@ BEGIN
     END IF;
   END IF;
 
-  -- Count total, pending, and succeeded across this attempt plus retained successes
+  -- Count total, pending, and succeeded across this attempt plus retained successes ONLY for target/retained accounts
   SELECT count(*),
          count(*) FILTER (WHERE status = 'pending'),
          count(*) FILTER (WHERE status = 'success')
     INTO v_total, v_pending, v_succeeded
     FROM public.platform_posts pp
    WHERE pp.post_id = p_post_id
+     AND (
+       pp.social_account_id = ANY(v_target_account_ids)
+       OR pp.social_account_id = ANY(v_retained_account_ids)
+       OR pp.id = ANY(v_retained_account_ids)
+     )
      AND (
        (
          pp.created_at >= p_expected_processing_started_at
@@ -806,7 +1044,7 @@ BEGIN
          pp.status = 'success'
          AND (
            pp.social_account_id = ANY(v_retained_account_ids)
-           OR pp.created_at < p_expected_processing_started_at
+           OR pp.id = ANY(v_retained_account_ids)
          )
        )
      );

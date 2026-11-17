@@ -11925,6 +11925,25 @@ export type Database = {
         Args: { p_limit?: number; p_lease?: string }
         Returns: { platform_post_id: string; post_id: string }[]
       }
+      claim_threads_image_notification: {
+        Args: {
+          p_post_id: string
+          p_expected_processing_started_at: string
+          p_expected_status: string
+          p_expected_content: Json
+          p_lease?: string
+        }
+        Returns: Json
+      }
+      confirm_threads_image_notification: {
+        Args: {
+          p_post_id: string
+          p_expected_processing_started_at: string
+          p_expected_status: string
+          p_expected_content: Json
+        }
+        Returns: Json
+      }
       claim_threads_image_execution: {
         Args: { p_platform_post_id: string; p_expected_claimed_until: string; p_execution_id: string }
         Returns: boolean

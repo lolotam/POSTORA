@@ -654,6 +654,39 @@ Deno.test("registered process-post durably completes single-image Threads contai
       const notify = !alreadyNotified;
       return Response.json({ status: post.status, stale: false, notify });
     }
+    if (table === "rpc/claim_threads_image_notification") {
+      const payload = await request.json() as Record<string, unknown>;
+      if (post.status !== payload.p_expected_status || post.processing_started_at !== payload.p_expected_processing_started_at) {
+        return Response.json({ claimed: false, status: post.status, error: "cycle_or_status_mismatch" });
+      }
+      const meta = (post.metadata ?? {}) as Record<string, unknown>;
+      const intent = meta.final_notification_intent as Record<string, unknown> | undefined;
+      if (!intent || intent.notified === true) {
+        return Response.json({ claimed: false, status: post.status, error: "intent_unusable" });
+      }
+      const claimedUntil = intent.claimed_until ? Date.parse(String(intent.claimed_until)) : null;
+      if (claimedUntil && claimedUntil > BASE_CLOCK + clock) {
+        return Response.json({ claimed: false, status: post.status, error: "lease_held" });
+      }
+      finalNotificationClaims++;
+      intent.claimed_until = new Date(BASE_CLOCK + clock + 180_000).toISOString();
+      return Response.json({ claimed: true, status: post.status });
+    }
+    if (table === "rpc/confirm_threads_image_notification") {
+      const payload = await request.json() as Record<string, unknown>;
+      if (post.status !== payload.p_expected_status || post.processing_started_at !== payload.p_expected_processing_started_at) {
+        return Response.json({ confirmed: false, status: post.status, error: "cycle_or_status_mismatch" });
+      }
+      const meta = (post.metadata ?? {}) as Record<string, unknown>;
+      const intent = meta.final_notification_intent as Record<string, unknown> | undefined;
+      meta.final_notified_at = new Date(BASE_CLOCK + clock).toISOString();
+      if (intent) {
+        intent.notified = true;
+        intent.notified_at = meta.final_notified_at;
+        intent.claimed_until = null;
+      }
+      return Response.json({ confirmed: true, status: post.status });
+    }
     if (table === "rpc/claim_threads_image_execution") {
       const payload = await request.json() as Record<string, unknown>;
       const row = rows.find((candidate) => candidate.id === payload.p_platform_post_id);

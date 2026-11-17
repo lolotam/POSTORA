@@ -78,3 +78,56 @@ export async function claimFinalNotification(
   if (error) return { claimed: false, error: error.message ?? String(error) };
   return { claimed: (data ?? []).length > 0, error: null };
 }
+
+export interface ThreadsImageNotificationClaim {
+  claimed: boolean;
+  status?: string;
+  error?: string | null;
+}
+
+export async function claimThreadsImageNotification(
+  supabase: SupabaseClient,
+  postId: string,
+  expectedProcessingStartedAt: string,
+  expectedStatus: string,
+  expectedContent: Record<string, unknown>,
+  lease = "3 minutes",
+): Promise<ThreadsImageNotificationClaim> {
+  const { data, error } = await supabase.rpc("claim_threads_image_notification", {
+    p_post_id: postId,
+    p_expected_processing_started_at: expectedProcessingStartedAt,
+    p_expected_status: expectedStatus,
+    p_expected_content: expectedContent,
+    p_lease: lease,
+  });
+  if (error) return { claimed: false, error: error.message ?? String(error) };
+  const res = data as { claimed?: boolean; status?: string; error?: string } | null;
+  return {
+    claimed: Boolean(res?.claimed),
+    status: res?.status,
+    error: res?.error ?? null,
+  };
+}
+
+export async function confirmThreadsImageNotification(
+  supabase: SupabaseClient,
+  postId: string,
+  expectedProcessingStartedAt: string,
+  expectedStatus: string,
+  expectedContent: Record<string, unknown>,
+): Promise<{ confirmed: boolean; status?: string; error?: string | null }> {
+  const { data, error } = await supabase.rpc("confirm_threads_image_notification", {
+    p_post_id: postId,
+    p_expected_processing_started_at: expectedProcessingStartedAt,
+    p_expected_status: expectedStatus,
+    p_expected_content: expectedContent,
+  });
+  if (error) return { confirmed: false, error: error.message ?? String(error) };
+  const res = data as { confirmed?: boolean; status?: string; error?: string } | null;
+  return {
+    confirmed: Boolean(res?.confirmed),
+    status: res?.status,
+    error: res?.error ?? null,
+  };
+}
+
