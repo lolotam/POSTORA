@@ -11921,6 +11921,161 @@ export type Database = {
         Args: { p_post_id: string; p_user_id: string; p_account_ids?: string[] }
         Returns: Json
       }
+      claim_deferred_publishes: {
+        Args: { p_limit?: number; p_lease?: string }
+        Returns: { platform_post_id: string; post_id: string }[]
+      }
+      ack_threads_image_notification_delivery: {
+        Args: {
+          p_post_id: string
+          p_expected_processing_started_at: string
+          p_claim_id: string
+          p_delivery_key: string
+        }
+        Returns: boolean
+      }
+      claim_threads_image_notification: {
+        Args: {
+          p_post_id: string
+          p_expected_processing_started_at: string
+          p_expected_status: string
+          p_expected_content: Json
+          p_lease?: string
+        }
+        Returns: Json
+      }
+      confirm_threads_image_notification: {
+        Args: {
+          p_post_id: string
+          p_expected_processing_started_at: string
+          p_expected_status: string
+          p_expected_content: Json
+          p_claim_id: string
+        }
+        Returns: Json
+      }
+      claim_threads_image_execution: {
+        Args: { p_platform_post_id: string; p_expected_claimed_until: string; p_execution_id: string }
+        Returns: boolean
+      }
+      claim_threads_image_inline_execution: {
+        Args: {
+          p_platform_post_id: string
+          p_post_id: string
+          p_social_account_id: string
+          p_expected_container_id: string
+          p_expected_processing_started_at: string
+          p_expected_content: Json
+          p_execution_id: string
+        }
+        Returns: Json
+      }
+      finalize_threads_image_attempt: {
+        Args: {
+          p_post_id: string
+          p_expected_processing_started_at: string
+          p_expected_content: Json
+          p_expected_account_ids?: string[] | null
+        }
+        Returns: Json
+      }
+      release_threads_image_publish_unsent: {
+        Args: {
+          p_platform_post_id: string
+          p_expected_container_id: string
+          p_expected_processing_started_at: string
+          p_expected_claimed_until: string
+          p_execution_id: string
+          p_publish_attempt_id: string
+          p_expected_content: Json
+        }
+        Returns: boolean
+      }
+      mark_threads_image_publish_started: {
+        Args: {
+          p_platform_post_id: string
+          p_expected_claimed_until: string
+          p_execution_id: string
+          p_expected_content: Json
+        }
+        Returns: boolean
+      }
+      record_threads_image_checkpoint: {
+        Args: {
+          p_post_id: string
+          p_social_account_id: string
+          p_response_data: Json
+          p_expected_processing_started_at: string
+          p_expected_content: Json
+          p_target_account_ids?: string[] | null
+          p_retained_platform_post_ids?: string[] | null
+        }
+        Returns: string
+      }
+            restore_legacy_pending_post: {
+        Args: {
+          p_post_id: string
+          p_expected_processing_started_at: string
+          p_expected_content: Json
+          p_has_success?: boolean | null
+        }
+        Returns: Json
+      }
+      stamp_pinterest_post_type: {
+        Args: {
+          p_post_id: string
+          p_social_account_id: string
+          p_expected_processing_started_at: string
+          p_expected_content: Json
+          p_post_type: string
+        }
+        Returns: boolean
+      }
+      enroll_post_notification_recovery: {
+        Args: {
+          p_post_id: string
+          p_expected_processing_started_at: string
+          p_expected_content: Json
+          p_target_account_ids: string[]
+          p_retained_platform_post_ids?: string[] | null
+        }
+        Returns: Json
+      }
+      close_post_fanout: {
+        Args: {
+          p_post_id: string
+          p_expected_processing_started_at: string
+          p_expected_content: Json
+          p_exact_platform_post_ids?: string[] | null
+          p_retained_platform_post_ids?: string[] | null
+        }
+        Returns: Json
+      }
+      claim_legacy_notification_candidate: {
+        Args: {
+          p_post_id: string
+          p_expected_processing_started_at: string
+          p_expected_content: Json
+          p_candidate_id?: string | null
+          p_lease?: unknown
+          p_claim_id?: string | null
+        }
+        Returns: Json
+      }
+      claim_post_completion_work: {
+        Args: {
+          p_limit?: number
+          p_lease?: unknown
+        }
+        Returns: {
+          kind: string
+          platform_post_id: string | null
+          post_id: string
+          attempt_started_at: string | null
+          candidate_id: string | null
+          claim_id: string | null
+        }[]
+      }
       claim_meta_analytics_collection_job: {
         Args: {
           p_platform: string

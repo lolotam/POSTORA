@@ -1,13 +1,15 @@
 /**
  * Deferred completion for Meta containers that outlast the edge worker.
  *
- * An Instagram reel or a Threads video can take Meta minutes to process, and the
- * worker lives 60 s. Waiting inline got the worker killed mid-wait with nothing
- * recorded, leaving the post `processing` forever. Now a handler waits only while
- * the worker has time; a container still processing is recorded as a `pending`
- * platform_posts row carrying `response_data.deferred`, and the
- * reconcile-deferred-publishes cron calls process-post again in resume mode, once
- * a minute, until Meta finishes, fails, or the deadline passes.
+ * An Instagram reel or Threads media can take Meta minutes to process. Waiting
+ * inline once got the worker killed mid-wait with nothing recorded, leaving the
+ * post `processing` forever. Now a handler waits only while the worker has time;
+ * a container still processing is recorded as a `pending` platform_posts row
+ * carrying `response_data.deferred`. A new single-image Threads container is
+ * checkpointed immediately, then gets one bounded inline observation under an
+ * exclusive database lease when budget remains. The reconcile-deferred-publishes
+ * cron resumes waiting, clipped or interrupted work once a minute until Meta
+ * finishes, fails, or the deadline passes.
  *
  * Spec: docs/superpowers/specs/2026-10-29-hardening-followups-design.md, Part B2.
  */
@@ -17,6 +19,7 @@ import { CHECK_ONCE_DEADLINE } from "../_shared/metaContainerStatus.ts";
 import { type StoryRef, UNRECORDED_STORY_KEY } from "./instagramStory.ts";
 
 export type DeferredKind = "ig_reel" | "ig_business_reel" | "ig_carousel" | "threads" | "threads_carousel";
+export type ThreadsMediaType = "IMAGE" | "VIDEO" | "TEXT";
 
 /** How long a deferred container may keep processing before it is given up. */
 export const DEFERRAL_GIVE_UP_MS = 30 * 60 * 1000;
@@ -28,6 +31,16 @@ export const FIRST_RUN_POLL_BUDGET_MS = 35 * 1000;
 export const DeferralSchema = z.object({
   kind: z.enum(["ig_reel", "ig_business_reel", "ig_carousel", "threads", "threads_carousel"]),
   container_id: z.string().min(1),
+  /** Legacy Threads rows omit this and remain videos; new image checkpoints always carry IMAGE. */
+  media_type: z.enum(["IMAGE", "VIDEO", "TEXT"]).optional(),
+  /** The processing claim whose provider container this is; required by the image checkpoint RPC. */
+  attempt_started_at: z.string().nullish(),
+  /** One resume execution, compare-and-set against the reconciler's actual lease. */
+  execution_id: z.string().nullish(),
+  execution_claimed_until: z.string().nullish(),
+  /** Written before the first image publish request; its presence forbids a blind second send. */
+  publish_attempt_id: z.string().nullish(),
+  publish_outcome: z.enum(["uncertain"]).optional(),
   /** Present only while a Threads carousel is waiting for its children, before creating its parent. */
   carousel_children: z.array(z.string().min(1)).min(1).max(10).optional(),
   attempts: z.number().int().nonnegative(),
@@ -69,6 +82,14 @@ export interface ResumeContext {
    * `claimed: false` means another run holds them.
    */
   markFollowUpsStarted?: () => Promise<FollowUpMark>;
+  /** Persist the image publish attempt before any provider write. */
+  markPublishStarted?: () => Promise<FollowUpMark>;
+  /** A first-request image execution uses one observation bounded by its account/worker cutoff. */
+  inline?: boolean;
+  /** Releases only a matching marker when no provider publish callback was entered. */
+  releasePublishUnsent?: () => Promise<boolean>;
+  /** New image rows fence credential refreshes to the account version used at creation. */
+  accountUpdatedAt?: string | null;
 }
 
 export type FollowUpMark = { claimed: boolean } | { error: string };
@@ -113,10 +134,17 @@ export interface PublishTiming {
 
 export const NO_DEFERRAL: PublishTiming = { resume: null, deadlineMs: Number.POSITIVE_INFINITY };
 
-export function newDeferral(kind: DeferredKind, containerId: string, now: Date): Deferral {
+export function newDeferral(
+  kind: DeferredKind,
+  containerId: string,
+  now: Date,
+  identity: { mediaType?: ThreadsMediaType; attemptStartedAt?: string } = {},
+): Deferral {
   return {
     kind,
     container_id: containerId,
+    ...(identity.mediaType ? { media_type: identity.mediaType } : {}),
+    ...(identity.attemptStartedAt ? { attempt_started_at: identity.attemptStartedAt } : {}),
     attempts: 0,
     first_deferred_at: now.toISOString(),
     give_up_at: new Date(now.getTime() + DEFERRAL_GIVE_UP_MS).toISOString(),
@@ -131,7 +159,20 @@ export function nextDeferral(deferral: Deferral, now: Date): Deferral {
     attempts: deferral.attempts + 1,
     next_check_at: new Date(now.getTime() + DEFERRAL_RECHECK_MS).toISOString(),
     claimed_until: null,
+    ...(deferral.media_type === "IMAGE" ? { execution_id: null, execution_claimed_until: null } : {}),
   };
+}
+
+export function threadsMediaType(deferral: Deferral): ThreadsMediaType {
+  return deferral.media_type ?? "VIDEO";
+}
+
+export function hasUnresolvedThreadsPublish(deferral: Deferral): boolean {
+  return deferral.kind === "threads" && deferral.media_type === "IMAGE" && typeof deferral.publish_attempt_id === "string";
+}
+
+export function withUnresolvedThreadsPublish(deferral: Deferral): Deferral {
+  return hasUnresolvedThreadsPublish(deferral) ? { ...deferral, publish_outcome: "uncertain" } : deferral;
 }
 
 export function isPastGiveUp(deferral: Deferral, now: Date): boolean {
@@ -145,10 +186,25 @@ export function giveUpMessage(kind: DeferredKind): string {
   return `Instagram did not finish processing the ${media} within 30 minutes. Safe to retry.`;
 }
 
+export function deferralGiveUpMessage(deferral: Deferral): string {
+  if (hasUnresolvedThreadsPublish(deferral)) {
+    return "Threads publish outcome could not be confirmed within 30 minutes. Manual reconciliation is required; automatic retry is disabled.";
+  }
+  if (deferral.kind === "threads" && deferral.media_type === "IMAGE") {
+    return "Threads did not finish processing the image within 30 minutes. Safe to retry.";
+  }
+  return giveUpMessage(deferral.kind);
+}
+
 /** Why a resumed run settles its row failed without asking Meta again, or null to go on. */
 export function abandonReason(deferral: Deferral, postStatus: string | null, now: Date): string | null {
-  if (isPastGiveUp(deferral, now)) return giveUpMessage(deferral.kind);
-  if (postStatus !== "processing") return "The post was changed while the media was processing. Safe to retry.";
+  if (isPastGiveUp(deferral, now)) return deferralGiveUpMessage(deferral);
+  if (postStatus !== "processing") {
+    if (hasUnresolvedThreadsPublish(deferral)) {
+      return "The post changed after a Threads publish attempt. Manual reconciliation is required; automatic retry is disabled.";
+    }
+    return "The post was changed while the media was processing. Safe to retry.";
+  }
   return null;
 }
 
@@ -300,7 +356,12 @@ export function readDeferral(responseData: unknown): Deferral | null {
   return parsed.success ? parsed.data : null;
 }
 
-type WriteResult = PromiseLike<{ error: { message: string } | null }>;
+type WriteResult = PromiseLike<{ data?: unknown; error: { message: string } | null }>;
+
+interface PlatformPostUpdate extends PromiseLike<{ data: Array<{ id: string }> | null; error: { message: string } | null }> {
+  eq(column: string, value: string): PlatformPostUpdate;
+  select(columns: string): PlatformPostUpdate;
+}
 
 /** The two platform_posts writes recordStillProcessing makes, and nothing more. */
 interface PlatformPostsWriter {
@@ -310,7 +371,8 @@ interface PlatformPostsWriter {
     args: { p_post_id: string; p_social_account_id: string; p_response_data: Record<string, unknown> },
   ): WriteResult;
   from(table: "platform_posts"): {
-    update(values: Record<string, unknown>): { eq(column: string, value: string): { eq(column: string, value: string): WriteResult } };
+    // The image path adds lease/container predicates and a returned-row count; legacy paths keep two predicates.
+    update(values: Record<string, unknown>): PlatformPostUpdate;
   };
 }
 
@@ -339,13 +401,13 @@ export async function recordStillProcessing(
     resumeResponseData: Record<string, unknown> | null;
   },
   now = new Date(),
-): Promise<{ gaveUp: boolean; error: string | null }> {
+): Promise<{ gaveUp: boolean; error: string | null; platformPostId?: string | null }> {
   const db = supabase as PlatformPostsWriter;
   if (!args.resume) {
     // Through SQL, not a bare insert: the function refuses an account that does not belong
     // to the post's owner, so the pairing never depends on this caller having checked it.
     // The platform is taken from the account row there.
-    const { error } = await db.rpc("record_deferred_platform_post", {
+    const { data, error } = await db.rpc("record_deferred_platform_post", {
       p_post_id: args.postId,
       p_social_account_id: args.account.id,
       p_response_data: {
@@ -356,25 +418,50 @@ export async function recordStillProcessing(
         ...(args.signal.unrecordedStory ? { [UNRECORDED_STORY_KEY]: args.signal.unrecordedStory } : {}),
       },
     });
-    return { gaveUp: false, error: error?.message ?? null };
+    return {
+      gaveUp: false,
+      error: error?.message ?? null,
+      ...(typeof data === "string" ? { platformPostId: data } : {}),
+    };
   }
 
   if (isPastGiveUp(args.resume.deferral, now)) {
+    const deferred = withUnresolvedThreadsPublish(args.resume.deferral);
     const settled = await settle(supabase, {
       platformPostId: args.resume.platformPostId,
       postId: args.postId,
       socialAccountId: args.account.id,
       platform: args.account.platform,
       status: "failed",
-      errorMessage: giveUpMessage(args.resume.deferral.kind),
+      errorMessage: deferralGiveUpMessage(deferred),
+      ...(deferred.media_type === "IMAGE"
+        ? { responseData: { ...(args.resumeResponseData ?? {}), deferred } }
+        : {}),
     });
     return { gaveUp: true, error: settled.error };
   }
 
-  const { error } = await db
+  const execution = args.resume.deferral;
+  const deferred = withUnresolvedThreadsPublish(nextDeferral(execution, now));
+  let write = db
     .from("platform_posts")
-    .update({ response_data: { ...(args.resumeResponseData ?? {}), deferred: nextDeferral(args.resume.deferral, now) } })
+    .update({ response_data: { ...(args.resumeResponseData ?? {}), deferred } })
     .eq("id", args.resume.platformPostId)
     .eq("status", "pending");
+  if (deferred.media_type === "IMAGE") {
+    if (!execution.execution_id || !execution.execution_claimed_until) {
+      return { gaveUp: false, error: "Missing Threads image execution ownership" };
+    }
+    write = write
+      .eq("response_data->deferred->>execution_id", execution.execution_id)
+      .eq("response_data->deferred->>claimed_until", execution.execution_claimed_until)
+      .eq("response_data->deferred->>execution_claimed_until", execution.execution_claimed_until)
+      .eq("response_data->deferred->>container_id", execution.container_id)
+      .select("id");
+  }
+  const { data, error } = await write;
+  if (!error && deferred.media_type === "IMAGE" && (data ?? []).length !== 1) {
+    return { gaveUp: false, error: "Threads image execution ownership changed" };
+  }
   return { gaveUp: false, error: error?.message ?? null };
 }

@@ -31,6 +31,8 @@ export const SCHEDULER_CLAIMABLE_STATUSES = ["pending", "scheduled"];
 export interface PostProcessingClaim {
   claimed: boolean;
   error: string | null;
+  /** Returned by the atomic transition; the image checkpoint uses it as the attempt fence. */
+  processingStartedAt: string | null;
 }
 
 /** A request stamp takes precedence over any scheduled_at expectation, including null. */
@@ -61,7 +63,12 @@ export async function claimPostForProcessing(
       .in("status", SCHEDULER_CLAIMABLE_STATUSES);
   }
 
-  const { data, error } = await transition.select("id");
-  if (error) return { claimed: false, error: error.message ?? String(error) };
-  return { claimed: (data ?? []).length > 0, error: null };
+  const { data, error } = await transition.select("id, processing_started_at");
+  if (error) return { claimed: false, error: error.message ?? String(error), processingStartedAt: null };
+  const claimed = (data ?? []).length > 0;
+  return {
+    claimed,
+    error: null,
+    processingStartedAt: claimed && typeof data[0]?.processing_started_at === "string" ? data[0].processing_started_at : null,
+  };
 }

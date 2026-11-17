@@ -1,4 +1,5 @@
-import { publishThreadsContainer, threadsParentContainer, ThreadsCheckpointUnavailable } from "./threadsPublish.ts";
+import { checkpointThreadsImage, publishThreadsContainer, threadsParentContainer, ThreadsCheckpointUnavailable, ThreadsCheckpointCanceled, type ThreadsImageCheckpoint } from "./threadsPublish.ts";
+import { hashRequest } from "../_shared/partnerApiIdempotency.ts";
 /**
  * ============================================================================
  * PROCESS-POST EDGE FUNCTION
@@ -133,8 +134,13 @@ import {
   claimFollowUps,
   deferrableDeadline,
   type DeferredKind,
+  deferralGiveUpMessage,
   giveUpMessage,
+  hasUnresolvedThreadsPublish,
+  newDeferral,
+  threadsMediaType,
   withFollowUpsStarted,
+  withUnresolvedThreadsPublish,
   workerPublishDeadline,
   NO_DEFERRAL,
   followUpTimeoutMs,
@@ -149,7 +155,7 @@ import {
   unfinishedError,
 } from "./deferredPublish.ts";
 import { createCarouselChildren, threadsChildWait, waitForCarouselChildren } from "./carouselChildren.ts";
-import { claimFinalNotification } from "./finalNotification.ts";
+import { claimFinalNotification, claimThreadsImageNotification, confirmThreadsImageNotification } from "./finalNotification.ts";
 import {
   dropRecordedStory,
   readUnrecordedStory,
@@ -189,6 +195,11 @@ const ProcessPostSchema = z.object({
   // Sent by reconcile-deferred-publishes (service role only): finish the pending row
   // a Meta container was deferred on, instead of publishing the post afresh.
   resume_platform_post_id: z.string().uuid().optional(),
+  // Sent by reconcile-deferred-publishes (service role only): notification recovery only mode
+  notification_only: z.boolean().optional(),
+  attempt_started_at: z.string().max(64).optional(),
+  candidate_id: z.string().uuid().optional(),
+  notification_claim_id: z.string().uuid().optional(),
 }).passthrough();
 
 /**
@@ -475,16 +486,49 @@ interface PostData {
   platforms: string[];
   media_file_ids: string[] | null;
   scheduled_at?: string | null;
+  publish_requested_at?: string | null;
   metadata?: PlatformMetadata | null;
   source?: string | null;
   /** As read when this run began, before it claimed the post. */
   status?: string | null;
+  processing_started_at?: string | null;
   created_at?: string | null;
+}
+
+export function normalizeThreadsInternalMetadata(metadata: Record<string, unknown> | null | undefined): Record<string, unknown> {
+  const normalized = { ...(metadata ?? {}) };
+  delete normalized.pinterest_post_type;
+  delete normalized.final_notified_at;
+  delete normalized.settlement_rollup_at;
+  delete normalized.settlement_rollup_status;
+  delete normalized.settlement_rollup_processing_started_at;
+  delete normalized.attempt_target_account_ids;
+  delete normalized.attempt_retained_account_ids;
+  delete normalized.attempt_retained_platform_post_ids;
+  delete normalized.attempt_started_at;
+  delete normalized.attempt_scope;
+  delete normalized.final_notification_intent;
+  delete normalized.legacy_notification_candidate;
+  return normalized;
 }
 
 /**
  * Social account data from social_accounts table
  */
+export function threadsImageContentFence(post: PostData): Record<string, unknown> {
+  // Sibling publishers may add History-only output metadata after admission.
+  return {
+    user_id: post.user_id,
+    caption: post.caption,
+    media_file_ids: post.media_file_ids,
+    metadata: normalizeThreadsInternalMetadata(post.metadata as Record<string, unknown> | null | undefined),
+    platforms: post.platforms,
+    scheduled_at: post.scheduled_at ?? null,
+    publish_requested_at: post.publish_requested_at ?? null,
+    source: post.source ?? null,
+  };
+}
+
 interface SocialAccount {
   id: string;
   platform: string;
@@ -497,6 +541,64 @@ interface SocialAccount {
   auth_provider?: "native" | "composio";
   connection_id?: string | null;
   workspace_id?: string | null;
+}
+
+function threadsImageExecutionCallbacks(
+  supabase: SupabaseClient,
+  post: PostData,
+  execution: ResumeContext,
+  initialResponseData: Record<string, unknown>,
+  onResponseData: (responseData: Record<string, unknown>) => void,
+): Pick<ResumeContext, "markPublishStarted" | "releasePublishUnsent"> {
+  let responseData = initialResponseData;
+  const update = (deferral: ResumeContext["deferral"]) => {
+    execution.deferral = deferral;
+    responseData = { ...responseData, deferred: deferral };
+    onResponseData(responseData);
+  };
+  return {
+    markPublishStarted: async () => {
+      const current = execution.deferral;
+      if (!current.execution_id || !current.execution_claimed_until) {
+        return { error: "missing Threads image execution owner" };
+      }
+      if (current.publish_attempt_id) return { claimed: false };
+      const { data: marked, error: markError } = await supabase.rpc("mark_threads_image_publish_started", {
+        p_platform_post_id: execution.platformPostId,
+        p_expected_claimed_until: current.execution_claimed_until,
+        p_execution_id: current.execution_id,
+        p_expected_content: threadsImageContentFence(post),
+      });
+      if (markError) return { error: markError.message };
+      if (marked !== true) return { claimed: false };
+      update({ ...current, publish_attempt_id: current.execution_id });
+      return { claimed: true };
+    },
+    releasePublishUnsent: async () => {
+      const current = execution.deferral;
+      if (!current.execution_id || !current.execution_claimed_until || !current.attempt_started_at ||
+        !current.publish_attempt_id) {
+        throw new ThreadsCheckpointUnavailable("Threads image unsent-marker identity is incomplete");
+      }
+      const { data: released, error: releaseError } = await supabase.rpc("release_threads_image_publish_unsent", {
+        p_platform_post_id: execution.platformPostId,
+        p_expected_container_id: current.container_id,
+        p_expected_processing_started_at: current.attempt_started_at,
+        p_expected_claimed_until: current.execution_claimed_until,
+        p_execution_id: current.execution_id,
+        p_publish_attempt_id: current.publish_attempt_id,
+        p_expected_content: threadsImageContentFence(post),
+      });
+      if (releaseError) {
+        throw new ThreadsCheckpointUnavailable("Threads image unsent-marker release acknowledgement was lost");
+      }
+      if (released !== true) return false;
+      const next = { ...current };
+      delete next.publish_attempt_id;
+      update(next);
+      return true;
+    },
+  };
 }
 
 /**
@@ -518,6 +620,8 @@ interface MediaFile {
 interface PlatformPostResult {
   id?: string;
   url?: string;
+  /** A newly created image already has its stable pending row; the outer loop must not settle or insert it. */
+  deferredHandoff?: { platformPostId: string; responseData: Record<string, unknown> };
   /** The platform's public post id when it differs from `id`. TikTok's `id` is the publish_id
    *  that webhooks are matched on, so the post id it reports on completion travels here. */
   providerPostId?: string;
@@ -977,14 +1081,38 @@ async function pollWithRetry<T>(
 /**
  * Send webhook notifications to registered endpoints and per-request webhooks
  */
+type AcknowledgedDelivery = {
+  requireAcknowledgement: true;
+  acknowledgedKeys?: ReadonlySet<string>;
+  recordAcknowledgement?: (key: string) => Promise<void>;
+};
+
+async function postNotificationWebhook(url: string, request: RequestInit, delivery?: AcknowledgedDelivery): Promise<void> {
+  const payload = delivery ? JSON.parse(String(request.body)) as { event: string; data: unknown } : null;
+  const deliveryKey = payload ? await hashRequest({ channel: "webhook", url, event: payload.event, postId: (payload.data as Record<string, unknown>).post_id, platform: (payload.data as Record<string, unknown>).platform ?? null, postUrl: (payload.data as Record<string, unknown>).post_url ?? null }) : null;
+  if (deliveryKey && delivery?.acknowledgedKeys?.has(deliveryKey)) return;
+  const fetcher: typeof fetch = (target, init) => {
+    if (!delivery) return fetch(target, init);
+    const timeoutMs = followUpTimeoutMs(WORKER_STARTED_AT_MS, Date.now());
+    if (timeoutMs <= 0) throw new Error("Final notification delivery budget exhausted");
+    const signals = init?.signal ? [init.signal, AbortSignal.timeout(timeoutMs)] : [AbortSignal.timeout(timeoutMs)];
+    return fetch(target, { ...init, signal: AbortSignal.any(signals) });
+  };
+  const response = await postWebhook(url, request, fetcher);
+  if (delivery && !response.ok) throw new Error(`Final notification endpoint returned HTTP ${response.status}`);
+  if (deliveryKey) await delivery?.recordAcknowledgement?.(deliveryKey);
+}
+
 async function sendWebhookNotifications(
   supabase: SupabaseClient,
   userId: string,
   event: string,
   data: Record<string, unknown>,
-  perRequestWebhook?: { url: string; secret?: string }
+  perRequestWebhook?: { url: string; secret?: string },
+  delivery?: AcknowledgedDelivery,
 ): Promise<void> {
   console.log(`Sending webhook notification: ${event} for user ${userId}`);
+  const deliveryFailures: unknown[] = [];
 
   const payload = {
     event,
@@ -1026,17 +1154,19 @@ async function sendWebhookNotifications(
 
       const validationError = validateWebhookTarget(perRequestWebhook.url);
       if (validationError) {
+        if (delivery) throw new Error("Final notification webhook target is unsafe");
         console.warn(`Skipping unsafe per-request webhook: ${perRequestWebhook.url}`);
       } else {
-        await postWebhook(perRequestWebhook.url, {
+        await postNotificationWebhook(perRequestWebhook.url, {
           method: "POST",
           headers,
           body: JSON.stringify(payload)
-        });
+        }, delivery);
         console.log("Per-request webhook sent successfully");
       }
     } catch (webhookError) {
-      console.error("Failed to send per-request webhook:", webhookError);
+      if (delivery) deliveryFailures.push(webhookError);
+      else console.error("Failed to send per-request webhook:", webhookError);
     }
   }
 
@@ -1047,13 +1177,14 @@ async function sendWebhookNotifications(
       .select("value")
       .like("key", `n8n_webhook_${userId}_%`);
 
+    if (error && delivery) throw new Error(`Could not read final notification subscriptions: ${error.message}`);
     if (error || !settings?.length) {
       console.log("No registered webhooks found for user:", userId);
-      return;
+      if (!delivery) return;
     }
 
     // Send to all active webhooks that subscribe to this event
-    for (const setting of settings) {
+    for (const setting of settings ?? []) {
       const webhook = setting.value as {
         webhook_url: string;
         events: string[];
@@ -1066,11 +1197,12 @@ async function sendWebhookNotifications(
       try {
         const validationError = validateWebhookTarget(webhook.webhook_url);
         if (validationError) {
+          if (delivery) throw new Error("Registered final notification webhook target is unsafe");
           console.warn(`Skipping unsafe registered webhook: ${webhook.webhook_url}`);
           continue;
         }
         console.log(`Sending to registered webhook: ${webhook.webhook_url}`);
-        await postWebhook(webhook.webhook_url, {
+        await postNotificationWebhook(webhook.webhook_url, {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
@@ -1078,14 +1210,17 @@ async function sendWebhookNotifications(
             "X-Postora-Timestamp": payload.timestamp
           },
           body: JSON.stringify(payload)
-        });
+        }, delivery);
       } catch (webhookError) {
-        console.error("Failed to send webhook:", webhookError);
+        if (delivery) deliveryFailures.push(webhookError);
+        else console.error("Failed to send webhook:", webhookError);
       }
     }
   } catch (error) {
-    console.error("Error sending webhook notifications:", error);
+    if (delivery) deliveryFailures.push(error);
+    else console.error("Error sending webhook notifications:", error);
   }
+  if (deliveryFailures.length > 0) throw deliveryFailures[0];
 }
 
 // ───────────────────────────────────────────────────────────────────────────
@@ -1226,22 +1361,30 @@ async function sendFailureEmailNotification(
   supabase: SupabaseClient,
   userId: string,
   caption: string,
-  platformResults: PlatformResult[]
+  platformResults: PlatformResult[],
+  delivery?: AcknowledgedDelivery,
 ): Promise<void> {
+  const deliveryKey = delivery ? await hashRequest({ channel: "failure_email", userId }) : null;
+  if (deliveryKey && delivery?.acknowledgedKeys?.has(deliveryKey)) return;
+  const acknowledge = async () => {
+    if (deliveryKey) await delivery?.recordAcknowledgement?.(deliveryKey);
+  };
   try {
     console.log(`[Email] Checking if failure email should be sent for user ${userId}`);
 
     // Check admin-level global toggle for user post failure emails
-    const { data: settingRow } = await supabase
+    const { data: settingRow, error: settingError } = await supabase
       .from("app_settings")
       .select("value")
       .eq("key", "user_email_post_failure")
       .maybeSingle();
 
+    if (settingError && delivery) throw new Error(`Could not read final notification email policy: ${settingError.message}`);
     if (settingRow) {
       const parsed = typeof settingRow.value === "string" ? JSON.parse(settingRow.value) : settingRow.value;
       if (parsed === false) {
         console.log("[Email] Post failure emails globally disabled by admin, skipping");
+        await acknowledge();
         return;
       }
     }
@@ -1254,6 +1397,7 @@ async function sendFailureEmailNotification(
       .single();
 
     if (profileError) {
+      if (delivery) throw new Error(`Could not read final notification email preferences: ${profileError.message}`);
       console.error("[Email] Could not fetch user profile:", profileError);
       return;
     }
@@ -1263,6 +1407,7 @@ async function sendFailureEmailNotification(
 
     if (!emailEnabled) {
       console.log("[Email] Email notifications disabled for user, skipping");
+      await acknowledge();
       return;
     }
 
@@ -1283,7 +1428,7 @@ async function sendFailureEmailNotification(
     console.log(`[Email] Sending failure email: ${failedPlatforms.length} failed, ${successPlatforms.length} succeeded`);
 
     // Call the send-subscription-email function
-    const { error: invokeError } = await supabase.functions.invoke("send-subscription-email", {
+    const { data: emailData, error: invokeError } = await supabase.functions.invoke("send-subscription-email", {
       body: {
         type: "post_failed",
         user_id: userId,
@@ -1296,11 +1441,20 @@ async function sendFailureEmailNotification(
     });
 
     if (invokeError) {
+      if (delivery) throw invokeError;
       console.error("[Email] Failed to invoke email function:", invokeError);
+    } else if (delivery && (!emailData || typeof emailData !== "object" || (emailData as Record<string, unknown>).success !== true)) {
+      throw new Error("Email function did not acknowledge delivery or an authorized opt-out");
+    } else if (emailData && typeof emailData === "object" && (emailData as Record<string, unknown>).success === false) {
+      const message = (emailData as Record<string, unknown>).message || "Email delivery failed";
+      if (delivery) throw new Error(`Email function reported failure: ${message}`);
+      console.error("[Email] Email function reported failure:", emailData);
     } else {
+      await acknowledge();
       console.log("[Email] Failure notification email sent successfully");
     }
   } catch (error) {
+    if (delivery) throw error;
     console.error("[Email] Error sending failure notification:", error);
   }
 }
@@ -1363,6 +1517,56 @@ function sendFinalNotifications(
   }
 }
 
+async function dispatchFinalNotifications(
+  supabase: SupabaseClient,
+  post: PostData,
+  finalStatus: string,
+  platformResults: PlatformResultSummary[],
+  hasFailed: boolean,
+  delivery: AcknowledgedDelivery,
+): Promise<void> {
+  const webhookEvent = finalStatus === "completed" ? "post.completed" : "post.failed";
+  const webhookData = {
+    post_id: post.id,
+    caption: post.caption,
+    platforms: post.platforms,
+    status: finalStatus,
+    ...buildWebhookResults(platformResults),
+  };
+
+  const perRequestWebhook = post.metadata?.webhook_url ? {
+    url: post.metadata.webhook_url as string,
+    secret: post.metadata.webhook_secret as string | undefined,
+  } : undefined;
+
+  const tasks: Promise<unknown>[] = [
+    sendWebhookNotifications(supabase, post.user_id, webhookEvent, webhookData, perRequestWebhook, delivery),
+  ];
+
+  if (typeof (globalThis as Record<string, unknown>).EdgeRuntime !== "undefined" && typeof (globalThis as { EdgeRuntime?: { waitUntil?: unknown } }).EdgeRuntime?.waitUntil === "function") {
+    for (const result of platformResults) {
+      if (result.status === "success" && result.platform_post_url) {
+        tasks.push(
+          sendWebhookNotifications(supabase, post.user_id, "post.published", {
+            post_id: post.id,
+            platform: result.platform,
+            post_url: result.platform_post_url,
+            caption: post.caption,
+          }, perRequestWebhook, delivery)
+        );
+      }
+    }
+  }
+
+  if (hasFailed) {
+    tasks.push(sendFailureEmailNotification(supabase, post.user_id, post.caption || "", platformResults, delivery));
+  }
+
+  const delivered = await Promise.allSettled(tasks);
+  const failed = delivered.find((result): result is PromiseRejectedResult => result.status === "rejected");
+  if (failed) throw failed.reason;
+}
+
 /**
  * Announce a final post once. Every path that makes a post final (the first run, a resumed run,
  * a given-up account) goes through here: the claim is atomic, so two runs that settle the last
@@ -1374,11 +1578,122 @@ async function announceFinalPost(
   finalStatus: string,
   platformResults: PlatformResultSummary[],
   hasFailed: boolean,
+  imageFence?: { processingStartedAt: string; content: Record<string, unknown> },
 ): Promise<boolean> {
+  if (imageFence) {
+    const claim = await claimThreadsImageNotification(
+      supabase,
+      post.id,
+      imageFence.processingStartedAt,
+      finalStatus,
+      imageFence.content,
+    );
+    if (!claim.claimed || !claim.claimId) {
+      await writeLogRow(supabase, {
+        level: claim.error ? "warn" : "info", category: "post", source: "process-post", user_id: post.user_id,
+        message: "Threads image final notification claim was refused; no notice was sent",
+        metadata: { event: "threads_image_notification_claim_refused", post_id: post.id, reason: claim.error ?? "already claimed" },
+      });
+      return false;
+    }
+    try {
+      if (!claim.authorizedPlatformPostIds?.length || !claim.authorizedPlatformPostStatuses) {
+        await writeLogRow(supabase, {
+          level: "error", category: "post", source: "process-post", user_id: post.user_id,
+          message: "Threads image notification withheld because its leased result scope is missing",
+          metadata: { event: "threads_image_notification_invalid_scope", post_id: post.id },
+        });
+        return false;
+      }
+      {
+        const outcome = await readPostOutcome(
+          postReaderFor(supabase, claim.authorizedPlatformPostIds, claim.authorizedPlatformPostStatuses, imageFence),
+          post.id,
+          { results: platformResults, hasSuccess: finalStatus === "completed", hasFailed },
+        );
+        if (outcome.kind !== "terminal" || outcome.degraded || outcome.status !== finalStatus) {
+          await writeLogRow(supabase, {
+            level: "error", category: "post", source: "process-post", user_id: post.user_id,
+            message: "Threads image notification withheld because its leased result rows changed or could not be completely read",
+            metadata: { event: "threads_image_notification_read_degraded", post_id: post.id },
+          });
+          return false;
+        }
+        platformResults = outcome.results;
+        hasFailed = outcome.hasFailed;
+      }
+      const acknowledgedKeys = new Set(claim.acknowledgedDeliveryKeys ?? []);
+      const delivery: AcknowledgedDelivery = {
+        requireAcknowledgement: true,
+        acknowledgedKeys,
+        recordAcknowledgement: async (key) => {
+          const { data: recorded, error } = await supabase.rpc("ack_threads_image_notification_delivery", {
+            p_post_id: post.id, p_expected_processing_started_at: imageFence.processingStartedAt,
+            p_claim_id: claim.claimId!, p_delivery_key: key,
+          });
+          if (error || recorded !== true) throw new Error("Notification destination acknowledgement could not be persisted");
+          acknowledgedKeys.add(key);
+        },
+      };
+      await dispatchFinalNotifications(supabase, post, finalStatus, platformResults, hasFailed, delivery);
+      const confirmed = await confirmThreadsImageNotification(
+        supabase,
+        post.id,
+        imageFence.processingStartedAt,
+        finalStatus,
+        imageFence.content,
+        claim.claimId,
+      );
+      if (!confirmed.confirmed) {
+        await writeLogRow(supabase, {
+          level: "error", category: "post", source: "process-post", user_id: post.user_id,
+          message: "Threads image notification delivery could not be confirmed; intent retained",
+          metadata: { event: "threads_image_notification_confirmation_refused", post_id: post.id, reason: confirmed.error },
+        });
+        return false;
+      }
+      return true;
+    } catch (err) {
+      const deliveryError = (err instanceof Error ? err.message : "Unknown notification delivery failure")
+        .replace(/https?:\/\/\S+/gi, "[redacted URL]")
+        .replace(/Bearer\s+\S+/gi, "Bearer [redacted]")
+        .slice(0, 500);
+      const logError = await writeLogRow(supabase, {
+        level: "error", category: "post", source: "process-post", user_id: post.user_id,
+        message: "Threads image final notification delivery failed; intent retained for recovery",
+        metadata: {
+          event: "threads_image_notification_delivery_failed", post_id: post.id,
+          notification_claim_id: claim.claimId, attempt_started_at: imageFence.processingStartedAt,
+          delivery_error: deliveryError,
+        },
+      });
+      if (logError) console.error("Threads image notification diagnostic could not be persisted:", logError);
+      return false;
+    }
+  }
+
   const claim = await claimFinalNotification(supabase, post.id);
+  if (claim.reason === "legacy_candidate") {
+    const response = await handleNotificationOnly(supabase, post.id);
+    const receipt = await response.json();
+    return response.ok && receipt.notification_scheduled === true;
+  }
+  if (claim.reason) {
+    await writeLogRow(supabase, {
+      level: claim.error ? "warn" : "info", category: "post", source: "process-post", user_id: post.user_id,
+      message: claim.reason === "managed_intent" ? "Managed image notification remains owned by its fenced reconciler" : "Final notification withheld because its current ownership could not be established",
+      metadata: { event: "final_notification_claim_refused", post_id: post.id, reason: claim.reason, error: claim.error },
+    });
+    return false;
+  }
   if (claim.error) {
-    // The claim could not be made. A notice sent twice is better than one never sent.
-    console.error(`[process-post] final-notification claim failed, sending anyway: ${claim.error}`);
+    // Only marker UPDATE errors follow a successful legacy ownership read.
+    // Unknown/missing ownership and managed refusals returned above.
+    await writeLogRow(supabase, {
+      level: "warn", category: "post", source: "process-post", user_id: post.user_id,
+      message: "Legacy notification marker unavailable; attempting best-effort delivery",
+      metadata: { event: "legacy_notification_claim_error", post_id: post.id, reason: claim.error },
+    });
   } else if (!claim.claimed) {
     console.log(`[process-post] post ${post.id} was already announced; not sending again`);
     return false;
@@ -1388,12 +1703,72 @@ async function announceFinalPost(
 }
 
 /** The reads readPostOutcome needs, against the service-role client. */
-function postReaderFor(supabase: SupabaseClient): PostReader {
+function postReaderFor(
+  supabase: SupabaseClient,
+  authorizedPlatformPostIds?: string[] | null,
+  expectedStatuses?: Record<string, string>,
+  imageFence?: { processingStartedAt: string; content: Record<string, unknown> },
+): PostReader {
   return {
-    postStatus: (postId) => supabase.from("posts").select("status").eq("id", postId).maybeSingle(),
-    platformRows: (postId) =>
-      supabase.from("platform_posts").select("platform, status, platform_post_url, error_message, story_on_reel:response_data->story_recorded_on_reel_row").eq("post_id", postId).order("created_at"),
+    postStatus: async (postId) => {
+      const result = await supabase.from("posts").select(imageFence ? "*" : "status").eq("id", postId).maybeSingle();
+      if (!result.error && result.data && imageFence) {
+        const current = result.data as PostData;
+        const expectedContent = {
+          ...imageFence.content,
+          metadata: normalizeThreadsInternalMetadata(imageFence.content.metadata as Record<string, unknown> | null | undefined),
+        };
+        if (Date.parse(current.processing_started_at ?? "") !== Date.parse(imageFence.processingStartedAt) ||
+          await hashRequest(threadsImageContentFence(current)) !== await hashRequest(expectedContent)) {
+          return { data: null, error: { message: "Managed notification attempt or content changed before dispatch" } };
+        }
+      }
+      return result;
+    },
+    platformRows: async (postId) => {
+      let query = supabase
+        .from("platform_posts")
+        .select("id, platform, status, platform_post_url, error_message, story_on_reel:response_data->story_recorded_on_reel_row")
+        .eq("post_id", postId);
+      if (Array.isArray(authorizedPlatformPostIds)) {
+        if (authorizedPlatformPostIds.length === 0) {
+          return { data: [], error: null };
+        }
+        query = query.in("id", authorizedPlatformPostIds);
+      }
+      const res = await query.order("created_at");
+      if (res.error) return res;
+      if (Array.isArray(authorizedPlatformPostIds)) {
+        const returnedIds = new Set((res.data ?? []).map((r: { id: string }) => r.id));
+        const expectedIds = new Set(authorizedPlatformPostIds);
+        if (expectedIds.size !== authorizedPlatformPostIds.length || returnedIds.size !== expectedIds.size || (res.data ?? []).length !== expectedIds.size ||
+          !authorizedPlatformPostIds.every((id) => returnedIds.has(id)) ||
+          (res.data ?? []).some((row: { id: string; status: string }) =>
+            !["success", "failed"].includes(row.status) || (expectedStatuses && expectedStatuses[row.id] !== row.status))) {
+          return {
+            data: null,
+            error: {
+              message: `Authorized platform post rows could not be completely read (expected ${authorizedPlatformPostIds.length}, got ${returnedIds.size})`,
+              details: "",
+              hint: "",
+              code: "PGRST_DEGRADED_ROW_SET",
+            },
+          };
+        }
+      }
+      return res;
+    },
   };
+}
+
+function imageAttemptFence(
+  deferral: ResumeContext["deferral"],
+  responseData: Record<string, unknown> | null,
+): { processingStartedAt: string; content: Record<string, unknown> } | undefined {
+  const content = responseData?.content_fence;
+  if (deferral.media_type !== "IMAGE" || !deferral.attempt_started_at ||
+    !content || typeof content !== "object" || Array.isArray(content)) return undefined;
+  return { processingStartedAt: deferral.attempt_started_at, content: content as Record<string, unknown> };
 }
 
 /**
@@ -1406,8 +1781,76 @@ async function finishDeferredPost(
   post: PostData,
   platformPostId: string,
   thisRun: { results: PlatformResultSummary[]; hasSuccess: boolean; hasFailed: boolean },
+  imageFence?: { processingStartedAt: string; content: Record<string, unknown> },
 ): Promise<{ finalStatus: string; notified: boolean }> {
-  const outcome = await readPostOutcome(postReaderFor(supabase), post.id, thisRun);
+  let imageFinalization: {
+    status: string;
+    stale: boolean;
+    notify: boolean;
+    authorizedPlatformPostIds?: string[];
+  } | null = null;
+  if (imageFence) {
+    const { data: finalized, error: finalizationError } = await supabase.rpc("finalize_threads_image_attempt", {
+      p_post_id: post.id,
+      p_expected_processing_started_at: imageFence.processingStartedAt,
+      p_expected_content: imageFence.content,
+    });
+    const finalization = finalized as {
+      status?: unknown;
+      stale?: unknown;
+      notify?: unknown;
+      authorized_platform_post_ids?: unknown;
+      reason?: unknown;
+    } | null;
+    if (finalizationError || typeof finalization?.status !== "string" ||
+      typeof finalization.stale !== "boolean" || typeof finalization.notify !== "boolean") {
+      const logError = await writeLogRow(supabase, {
+        level: "error", category: "post", source: "process-post", user_id: post.user_id,
+        message: "Threads image final notification fence could not be confirmed; no notice was sent",
+        metadata: { event: "threads_image_finalization_unavailable", post_id: post.id, platform_post_id: platformPostId },
+      });
+      if (logError) console.error("Threads image finalization refusal log failed:", logError);
+      return { finalStatus: "processing", notified: false };
+    }
+    if (finalization.reason === "fanout_not_closed") {
+      await writeLogRow(supabase, { level: "warn", category: "post", source: "process-post", user_id: post.user_id,
+        message: "Threads image completion withheld until the original multi-result fanout is proven",
+        metadata: { event: "threads_image_fanout_unconfirmed", post_id: post.id, platform_post_id: platformPostId } });
+      return { finalStatus: finalization.status, notified: false };
+    }
+    let authorizedIds: string[] | undefined = undefined;
+    if (Array.isArray(finalization.authorized_platform_post_ids)) {
+      authorizedIds = finalization.authorized_platform_post_ids.filter((id): id is string => typeof id === "string");
+    } else {
+      const metadata = (post.metadata ?? {}) as Record<string, unknown>;
+      const intent = metadata.final_notification_intent as Record<string, unknown> | undefined;
+      if (intent && Array.isArray(intent.authorized_platform_post_ids)) {
+        authorizedIds = intent.authorized_platform_post_ids.filter((id): id is string => typeof id === "string");
+      }
+    }
+    imageFinalization = {
+      status: finalization.status,
+      stale: finalization.stale,
+      notify: finalization.notify,
+      authorizedPlatformPostIds: authorizedIds,
+    };
+    const metadata = (post.metadata ?? {}) as Record<string, unknown>;
+    const unconfirmedNotification =
+      metadata.final_notification_intent &&
+      typeof metadata.final_notification_intent === "object" &&
+      (metadata.final_notification_intent as Record<string, unknown>).notified === false;
+
+    if (imageFinalization.stale || imageFinalization.status === "processing" ||
+        (!imageFinalization.notify && !unconfirmedNotification)) {
+      return { finalStatus: imageFinalization.status, notified: false };
+    }
+  }
+
+  const outcome = await readPostOutcome(
+    postReaderFor(supabase, imageFinalization ? (imageFinalization.authorizedPlatformPostIds ?? []) : undefined),
+    post.id,
+    thisRun,
+  );
   if (outcome.kind === "in_progress") return { finalStatus: "processing", notified: false };
   if (outcome.kind === "unknown") {
     console.error(`[process-post] ${outcome.error}`);
@@ -1415,9 +1858,116 @@ async function finishDeferredPost(
     if (logError) console.error("[process-post] could not log the unreadable post either:", logError);
     return { finalStatus: "processing", notified: false };
   }
-  if (outcome.degraded) console.warn(`[process-post] notifying with a partial read: ${outcome.degraded}`);
+  if (outcome.degraded) {
+    console.warn(`[process-post] notifying with a partial read: ${outcome.degraded}`);
+    if (imageFinalization) {
+      await writeLogRow(supabase, {
+        level: "error", category: "post", source: "process-post", user_id: post.user_id,
+        message: "Threads image final notification withheld because authorized platform post rows could not be completely read",
+        metadata: { event: "threads_image_notification_read_degraded", post_id: post.id, platform_post_id: platformPostId, degraded: outcome.degraded },
+      });
+      return { finalStatus: imageFinalization.status, notified: false };
+    }
+  }
+  if (imageFinalization) {
+    const notified = await announceFinalPost(supabase, post, imageFinalization.status, outcome.results, outcome.hasFailed, imageFence);
+    return { finalStatus: imageFinalization.status, notified };
+  }
   const notified = await announceFinalPost(supabase, post, outcome.status, outcome.results, outcome.hasFailed);
   return { finalStatus: outcome.status, notified };
+}
+
+/**
+ * Handle notification_only requests: strictly validate claim and enrollment,
+ * atomically claim legacy notification candidate, read exact authorized results,
+ * dispatch notifications, and return immediately.
+ * Never executes any provider calls, media downloads, or processing claims.
+ */
+async function handleNotificationOnly(
+  supabase: SupabaseClient,
+  postId: string,
+  expectedProcessingStartedAt?: string,
+  expectedCandidateId?: string,
+  expectedClaimId?: string,
+): Promise<Response> {
+  const { data: post, error: postError } = await supabase
+    .from("posts")
+    .select("*")
+    .eq("id", postId)
+    .maybeSingle();
+
+  if (postError || !post) {
+    await writeLogRow(supabase, { level: "warn", category: "post", source: "process-post", message: "Notification recovery could not read its parent", metadata: { event: "legacy_notification_parent_unavailable", post_id: postId } });
+    return createErrorResponse("Notification parent unavailable", 503);
+  }
+
+  const attemptStartedAt = expectedProcessingStartedAt ?? post.processing_started_at;
+  if (!attemptStartedAt) {
+    return createErrorResponse("Attempt started timestamp unavailable", 400);
+  }
+
+  const expectedContent = threadsImageContentFence(post as PostData);
+  const candidate = post.metadata?.legacy_notification_candidate;
+  const authorizedIds = candidate?.authorized_platform_post_ids;
+  if (!candidate || typeof candidate.candidate_id !== "string" || !candidate.candidate_id ||
+      !Array.isArray(authorizedIds) || authorizedIds.length === 0 ||
+      !authorizedIds.every((id: unknown) => typeof id === "string")) {
+    await writeLogRow(supabase, { level: "warn", category: "post", source: "process-post", user_id: post.user_id, message: "Notification recovery has no proven complete result scope", metadata: { event: "legacy_notification_scope_unavailable", post_id: postId } });
+    return createErrorResponse("Notification scope unavailable", 503);
+  }
+  // Read before consuming the send-once marker. Database outages remain pre-claim work.
+  // The locked claim refreshes stale status snapshots and refuses their old candidate ID.
+  const outcome = await readPostOutcome(postReaderFor(supabase, authorizedIds, undefined, {
+    processingStartedAt: attemptStartedAt, content: expectedContent,
+  }), postId, { results: [], hasSuccess: false, hasFailed: false });
+  if (outcome.kind !== "terminal" || outcome.degraded) {
+    await writeLogRow(supabase, { level: "warn", category: "post", source: "process-post", user_id: post.user_id, message: "Notification recovery withheld an incomplete result read", metadata: { event: "legacy_notification_results_unavailable", post_id: postId } });
+    return createErrorResponse("Notification results unavailable", 503);
+  }
+  const { data: claimData, error: claimError } = await supabase.rpc("claim_legacy_notification_candidate", {
+    p_post_id: post.id,
+    p_expected_processing_started_at: attemptStartedAt,
+    p_expected_content: expectedContent,
+    p_candidate_id: expectedCandidateId ?? candidate.candidate_id,
+    p_claim_id: expectedClaimId ?? null,
+  });
+
+  const claimRes = claimData as {
+    claimed?: boolean;
+    claim_id?: string;
+    status?: string;
+    authorized_platform_post_ids?: string[];
+    reason?: string;
+  } | null;
+
+  if (claimError || !claimRes?.claimed) {
+    const reason = claimRes?.reason ?? claimError?.message ?? "claim_refused";
+    await writeLogRow(supabase, { level: "warn", category: "post", source: "process-post", user_id: post.user_id, message: "Notification recovery claim refused", metadata: { event: "legacy_notification_candidate_refused", post_id: postId, reason: claimError ? "claim_unavailable" : reason } });
+    if (claimError) return createErrorResponse("Notification claim unavailable", 503);
+    return createJsonResponse({
+      success: true,
+      notification_only: true,
+      claimed: false,
+      reason,
+    });
+  }
+
+  if (claimRes.status !== outcome.status || !Array.isArray(claimRes.authorized_platform_post_ids) ||
+      claimRes.authorized_platform_post_ids.length !== authorizedIds.length ||
+      !authorizedIds.every((id: string) => claimRes.authorized_platform_post_ids!.includes(id))) {
+    await writeLogRow(supabase, { level: "error", category: "post", source: "process-post", user_id: post.user_id, message: "Notification claim returned an inconsistent snapshot", metadata: { event: "legacy_notification_claim_snapshot_invalid", post_id: postId } });
+    return createErrorResponse("Notification claim snapshot invalid", 503);
+  }
+  const finalStatus = outcome.status;
+  sendFinalNotifications(supabase, post as PostData, finalStatus, outcome.results, outcome.hasFailed);
+
+  return createJsonResponse({
+    success: true,
+    notification_only: true,
+    claimed: true,
+    notification_scheduled: true,
+    status: finalStatus,
+  });
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -1449,6 +1999,10 @@ Deno.serve(async (req) => {
       expected_scheduled_at: expectedScheduledAt,
       expected_publish_requested_at: expectedPublishRequestedAt,
       resume_platform_post_id: resumePlatformPostId,
+      notification_only: notificationOnly,
+      attempt_started_at: attemptStartedAt,
+      candidate_id: candidateId,
+      notification_claim_id: notificationClaimId,
     } = validation.data;
     // A resumed run narrows both to the deferred row's account (below).
     let { platforms: overridePlatforms, account_ids: overrideAccountIds } = validation.data;
@@ -1509,6 +2063,26 @@ Deno.serve(async (req) => {
       console.log("User authenticated", { userId: authenticatedUserId });
     }
 
+    const refuseNotificationRoute = async (reason: string, message: string, status: number) => {
+      await writeLogRow(supabase, {
+        level: "warn", category: "post", source: "process-post", user_id: authenticatedUserId,
+        message: "Notification-only routing refused",
+        metadata: { event: "notification_route_refused", post_id, reason },
+      });
+      return createErrorResponse(message, status);
+    };
+    // Notification-only mode: discriminator check and immediate execution
+    if (notificationOnly) {
+      if (!attemptStartedAt || !candidateId || !notificationClaimId || resumePlatformPostId || overridePlatforms?.length || overrideAccountIds?.length || expectedScheduledAt || expectedPublishRequestedAt) {
+        return await refuseNotificationRoute("invalid_identity_or_combined_mode", "Combined mode rejected: notification_only requires a lease identity and cannot be combined with publish or resume parameters", 400);
+      }
+      if (!isServiceRoleAuth) {
+        return await refuseNotificationRoute("service_role_required", "Forbidden: notification_only is internal", 403);
+      }
+      return await handleNotificationOnly(supabase, post_id, attemptStartedAt, candidateId, notificationClaimId);
+    }
+    if (attemptStartedAt || candidateId || notificationClaimId) return await refuseNotificationRoute("missing_notification_mode", "Notification identity requires notification_only mode", 400);
+
     // A run its caller retries on its own is not started on a worker near its end: it would be
     // stopped between creating a container and recording it. Refused before any read or claim.
     if (refuseOnSpentWorker({ resume: !!resumePlatformPostId, scheduled: typeof expectedScheduledAt === "string" || typeof expectedPublishRequestedAt === "string" }, WORKER_STARTED_AT_MS, Date.now())) {
@@ -1558,13 +2132,81 @@ Deno.serve(async (req) => {
         .maybeSingle();
       // A failed read is not "nothing deferred": answer retryable and touch nothing.
       if (rowError) return createErrorResponse(`Could not read the deferred row: ${rowError.message}`, 503);
-      const deferral = row?.status === "pending" ? readDeferral(row.response_data) : null;
+      let deferral = row?.status === "pending" ? readDeferral(row.response_data) : null;
+      if (row && (row.status === "success" || row.status === "failed")) {
+        const terminalDeferral = readDeferral(row.response_data);
+        const fence = terminalDeferral
+          ? imageAttemptFence(terminalDeferral, (row.response_data as Record<string, unknown> | null) ?? {})
+          : undefined;
+        if (fence) {
+          const finished = await finishDeferredPost(supabase, post, row.id, {
+            results: [], hasSuccess: false, hasFailed: false,
+          }, fence);
+          return createJsonResponse({
+            success: true,
+            status: "skipped",
+            reason: "Threads image row is already terminal",
+            post_status: finished.finalStatus,
+            notified: finished.notified,
+          });
+        }
+      }
       if (!row || !deferral || !row.social_account_id) {
         return createJsonResponse({ success: true, status: "skipped", reason: "nothing deferred on this row" });
       }
+      // Image expiry/edit/cancel abandonment needs the same execution owner as a
+      // normal resume; terminal settlement never bypasses lease ownership.
+      if (deferral.media_type === "IMAGE") {
+        if (!deferral.claimed_until) {
+          const logError = await writeLogRow(supabase, {
+            level: "warn", category: "post", source: "process-post", user_id: post.user_id,
+            message: "Threads image resume refused without a reconciliation lease",
+            metadata: { event: "threads_image_lease_missing", post_id, platform_post_id: row.id },
+          });
+          if (logError) console.error("Threads image lease refusal log failed:", logError);
+          return createErrorResponse("Threads image checkpoint has no active reconciliation lease; retry shortly.", 503);
+        }
+        const executionId = crypto.randomUUID();
+        const { data: executionClaimed, error: executionError } = await supabase.rpc("claim_threads_image_execution", {
+          p_platform_post_id: row.id,
+          p_expected_claimed_until: deferral.claimed_until,
+          p_execution_id: executionId,
+        });
+        if (executionError) {
+          const logError = await writeLogRow(supabase, {
+            level: "error", category: "post", source: "process-post", user_id: post.user_id,
+            message: "Threads image execution claim unavailable; no provider call was made",
+            metadata: { post_id, platform_post_id: row.id },
+          });
+          if (logError) console.error("Threads image execution refusal log failed:", logError);
+          return createErrorResponse("Threads image execution could not be claimed. Retry shortly.", 503);
+        }
+        if (executionClaimed !== true) {
+          const logError = await writeLogRow(supabase, {
+            level: "info", category: "post", source: "process-post", user_id: post.user_id,
+            message: "Threads image resume refused because the execution lease is already owned or stale",
+            metadata: { event: "threads_image_execution_refused", post_id, platform_post_id: row.id },
+          });
+          if (logError) console.error("Threads image execution refusal log failed:", logError);
+          return createJsonResponse({ success: true, status: "processing", reason: "another execution owns this lease" });
+        }
+        deferral = { ...deferral, execution_id: executionId, execution_claimed_until: deferral.claimed_until };
+        resumeResponseData = { ...((row.response_data as Record<string, unknown> | null) ?? {}), deferred: deferral };
+      }
       // Bounded whatever happens later in this request: a row past its deadline, or on
       // a post someone has since changed, is settled now rather than checked forever.
-      const abandon = abandonReason(deferral, post.status, new Date());
+      const rowData = (row.response_data as Record<string, unknown> | null) ?? {};
+      const rowFence = rowData.content_fence && typeof rowData.content_fence === "object"
+        ? {
+            ...(rowData.content_fence as Record<string, unknown>),
+            metadata: normalizeThreadsInternalMetadata((rowData.content_fence as Record<string, unknown>).metadata as Record<string, unknown> | null | undefined),
+          }
+        : rowData.content_fence;
+      const contentChanged = deferral.media_type === "IMAGE" && rowFence !== undefined &&
+        await hashRequest(rowFence) !== await hashRequest(threadsImageContentFence(post));
+      const attemptChanged = deferral.media_type === "IMAGE" &&
+        post.processing_started_at !== deferral.attempt_started_at;
+      const abandon = abandonReason(deferral, contentChanged || attemptChanged ? "changed" : post.status, new Date());
       if (abandon) {
         // A live story the first run could not record is recorded before the reel is given up,
         // so the post rolls up with it and it is not lost with the abandoned row. If it still
@@ -1610,6 +2252,9 @@ Deno.serve(async (req) => {
             platform: row.platform,
             status: "failed",
             errorMessage: abandon,
+            ...(deferral.media_type === "IMAGE"
+              ? { responseData: { ...((row.response_data as Record<string, unknown> | null) ?? {}), deferred: withUnresolvedThreadsPublish(deferral) } }
+              : {}),
           });
         if (settled.error) return createErrorResponse(`Could not settle the deferred row: ${settled.error}`, 503);
         if (storyOnReelRow && carried.error) {
@@ -1631,14 +2276,16 @@ Deno.serve(async (req) => {
               : [{ platform: row.platform, status: "failed", error_message: abandon }, ...recordedStoryResults(carried.recorded)],
             hasSuccess: storyOnReelRow !== null || carried.recorded.length > 0,
             hasFailed: true,
-          })
+          }, imageAttemptFence(deferral, row.response_data))
           : { finalStatus: post.status as string, notified: false };
         return createJsonResponse({ success: true, status: "failed", reason: abandon, post_status: finished.finalStatus, notified: finished.notified });
       }
+      resumeResponseData = { ...((row.response_data as Record<string, unknown> | null) ?? {}), deferred: deferral };
       resume = {
         platformPostId: row.id,
         deferral,
         unrecordedStory: readUnrecordedStory(row.response_data),
+        accountUpdatedAt: typeof resumeResponseData?.account_updated_at === "string" ? resumeResponseData.account_updated_at : null,
         checkpointContainer: async (next) => {
           const previous = resume?.deferral.container_id;
           if (!previous) throw new Error("Missing deferred container checkpoint");
@@ -1666,7 +2313,15 @@ Deno.serve(async (req) => {
           return markError ? { error: markError.message } : { claimed: (marked ?? []).length > 0 };
         },
       };
-      resumeResponseData = (row.response_data as Record<string, unknown> | null) ?? null;
+      if (resume.deferral.media_type === "IMAGE") {
+        Object.assign(resume, threadsImageExecutionCallbacks(
+          supabase,
+          post,
+          resume,
+          resumeResponseData ?? row.response_data ?? {},
+          (next) => { resumeResponseData = next; },
+        ));
+      }
       overrideAccountIds = [row.social_account_id];
       overridePlatforms = [row.platform];
       console.log("Resuming deferred publish", { post_id, platform_post_id: row.id, kind: deferral.kind, attempts: deferral.attempts });
@@ -1686,8 +2341,14 @@ Deno.serve(async (req) => {
     // touched. Callers with no expectation keep the unconditional transition.
     // A resumed run continues the original run's claim; claiming again would also
     // restart the stale-post clock.
-    const claim = resume ? { claimed: true, error: null } : await claimPostForProcessing(supabase, post_id, expectedScheduledAt, expectedPublishRequestedAt);
+    const claim = resume ? { claimed: true, error: null, processingStartedAt: null } : await claimPostForProcessing(supabase, post_id, expectedScheduledAt, expectedPublishRequestedAt);
     if (claim.error) {
+      const logError = await writeLogRow(supabase, {
+        level: "error", category: "post", source: "process-post", user_id: post.user_id,
+        message: "Post processing claim was refused or unavailable; no provider call was made",
+        metadata: { event: "post_processing_claim_refused", post_id },
+      });
+      if (logError) console.error("Post processing claim refusal log failed:", logError);
       return createErrorResponse(`Could not claim post for processing: ${claim.error}`, 500);
     }
     if (!claim.claimed) {
@@ -1779,12 +2440,138 @@ Deno.serve(async (req) => {
         ? "No active social accounts found for the selected account IDs"
         : "No active social accounts found for the selected platforms";
       console.error(msg, { postId: post_id, platformsToPost, selectedAccountIds });
+      if (resume) {
+        const logError = await writeLogRow(supabase, {
+          level: "error", category: "post", source: "process-post", user_id: post.user_id,
+          message: "Deferred account scope was unavailable; pending state retained",
+          metadata: { event: "deferred_account_refused", post_id, platform_post_id: resume.platformPostId },
+        });
+        if (logError) console.error("Deferred account refusal log failed:", logError);
+        return createErrorResponse("The deferred account is no longer active or owned by this post owner. Retry reconciliation after restoring access.", 503);
+      }
       await supabase.from("posts").update({ status: "failed" }).eq("id", post_id);
       return createErrorResponse(msg, 400);
     }
 
+    const restoreUnpublishedClaim = async (): Promise<boolean> => {
+      if (!claim.processingStartedAt) return true;
+      const { data: restored, error: restoreError } = await supabase.from("posts")
+        .update({ status: post.status }).eq("id", post_id).eq("status", "processing")
+        .eq("processing_started_at", claim.processingStartedAt).select("id");
+      if (!restoreError && (restored ?? []).length === 1) return true;
+      await writeLogRow(supabase, {
+        level: "error", category: "post", source: "process-post", user_id: post.user_id,
+        message: "Unpublished processing claim could not be restored; current state retained",
+        metadata: { event: "unpublished_claim_restore_failed", post_id, processing_started_at: claim.processingStartedAt },
+      });
+      return false;
+    };
+
+    // A direct override must not bypass the uncertain-image retry exclusion used
+    // by SQL and n8n/MCP. Proven failures on other accounts remain eligible.
+    if (!resume && accounts.some((account) => account.platform === "threads")) {
+      const threadAccountIds = accounts.filter((account) => account.platform === "threads").map((account) => account.id);
+      const { data: failedThreads, error: failedThreadsError } = await supabase
+        .from("platform_posts")
+        .select("social_account_id, response_data")
+        .eq("post_id", post_id)
+        .eq("platform", "threads")
+        .eq("status", "failed")
+        .in("social_account_id", threadAccountIds);
+      const blocked = new Set<string>();
+      if (!failedThreadsError) {
+        for (const row of failedThreads ?? []) {
+          const deferred = (row.response_data as { deferred?: Record<string, unknown> } | null)?.deferred;
+          if (deferred?.media_type === "IMAGE" && deferred.publish_outcome === "uncertain" && row.social_account_id) {
+            blocked.add(row.social_account_id);
+          }
+        }
+      }
+      const refuseRetry = async (message: string, statusCode: number) => {
+        const logError = await writeLogRow(supabase, {
+          level: "error", category: "post", source: "process-post", user_id: post.user_id,
+          message: "Threads image retry refused without provider work or result deletion",
+          metadata: { event: "threads_uncertain_retry_refused", post_id, account_ids: [...blocked], detail: message },
+        });
+        if (logError) console.error("Threads uncertain-retry refusal log failed:", logError);
+        if (!await restoreUnpublishedClaim()) {
+          return createErrorResponse("Threads image retry was refused and the prior parent state could not be restored. Current state was not replaced intentionally.", 503);
+        }
+        return createErrorResponse(message, statusCode);
+      };
+      if (failedThreadsError) {
+        return await refuseRetry("Could not verify whether this Threads result is safe to retry. No publish was started.", 503);
+      }
+      if (blocked.size > 0 && accounts.every((account) => blocked.has(account.id))) {
+        return await refuseRetry("Threads publish outcome is uncertain. Manual reconciliation is required before any retry.", 409);
+      }
+      if (blocked.size > 0) {
+        accounts.splice(0, accounts.length, ...accounts.filter((account) => !blocked.has(account.id)));
+      }
+    }
+
+    let retainedPlatformPostIds: string[] = [];
+    if (!resume) {
+      const { data: priorSuccesses, error: priorSuccessesError } = await supabase
+        .from("platform_posts")
+        .select("id, social_account_id, platform")
+        .eq("post_id", post_id)
+        .eq("status", "success");
+      if (priorSuccessesError) {
+        await writeLogRow(supabase, {
+          level: "error", category: "post", source: "process-post", user_id: post.user_id,
+          message: "Prior successful publications could not be read; no provider work started",
+          metadata: { event: "prior_publication_read_failed", post_id },
+        });
+        const restored = await restoreUnpublishedClaim();
+        return createErrorResponse(restored
+          ? "Could not verify prior successful platform posts for retry safety. Prior state restored."
+          : "Could not verify prior successful platform posts or restore the processing claim. Current state retained.", 503);
+      }
+      retainedPlatformPostIds = (priorSuccesses ?? [])
+        .filter((r: { id?: string | null; social_account_id?: string | null; platform?: string | null }) =>
+          typeof r.id === "string" &&
+          typeof r.social_account_id === "string" &&
+          (!accounts.some((a) => a.id === r.social_account_id) || (retryRun && r.platform === "instagram"))
+        )
+        .map((r: { id: string }) => r.id);
+    }
+
+    let enrolledCandidateId: string | null = null;
+    let requiresImageFanoutClosure = false;
+    if (!resume && claim.processingStartedAt) {
+      try {
+        const { data: enrollData, error: enrollError } = await supabase.rpc("enroll_post_notification_recovery", {
+          p_post_id: post_id,
+          p_expected_processing_started_at: claim.processingStartedAt,
+          p_expected_content: threadsImageContentFence(post),
+          p_target_account_ids: accounts.map((a) => a.id),
+          p_retained_platform_post_ids: retainedPlatformPostIds,
+        });
+        if (enrollError) {
+          console.warn("[process-post] enroll_post_notification_recovery RPC error:", enrollError);
+        } else {
+          const res = enrollData as { enrolled?: boolean; candidate_id?: string; requires_image_fanout_closure?: boolean } | null;
+          if (res?.enrolled && typeof res.requires_image_fanout_closure === "boolean") {
+            enrolledCandidateId = typeof res.candidate_id === "string" ? res.candidate_id : null;
+            requiresImageFanoutClosure = res.requires_image_fanout_closure;
+          }
+        }
+      } catch (enrollErr) {
+        console.warn("[process-post] enroll_post_notification_recovery failed:", enrollErr);
+      }
+      if (!enrolledCandidateId) {
+        await writeLogRow(supabase, { level: "error", category: "post", source: "process-post", user_id: post.user_id, message: "Publication stopped before provider execution because notification enrollment was unconfirmed", metadata: { event: "notification_enrollment_unconfirmed", post_id } });
+        const restored = await restoreUnpublishedClaim();
+        return createErrorResponse(restored
+          ? "Publication admission could not be confirmed; prior state restored without provider work"
+          : "Publication admission and prior state restoration could not be confirmed; no provider operation was started", 503);
+      }
+    }
+
     const failMediaPreparation = async (message: string, statusCode = 503) => {
       let resultWriteError: string | null = null;
+      const failedRowIds: string[] = [];
       if (!resume) {
         for (const account of accounts) {
           const settled = await settlePlatformPost(supabase, {
@@ -1796,11 +2583,23 @@ Deno.serve(async (req) => {
             resultWriteError = settled.error;
             console.error("Could not record media preparation retry target:", settled.error);
           }
+          if (settled.id) failedRowIds.push(settled.id);
+          else resultWriteError = resultWriteError ?? "Failed result identity unavailable";
+        }
+        if (!resultWriteError && enrolledCandidateId && claim.processingStartedAt) {
+          const { data: closed, error: closeError } = await supabase.rpc("close_post_fanout", {
+            p_post_id: post_id, p_expected_processing_started_at: claim.processingStartedAt,
+            p_expected_content: threadsImageContentFence(post), p_exact_platform_post_ids: failedRowIds,
+            p_retained_platform_post_ids: retainedPlatformPostIds,
+          });
+          if (closeError || closed?.closed !== true) resultWriteError = "Media failure completion could not be confirmed";
+          else if (closed.ready === true) await announceFinalPost(supabase, post, closed.status, [], true);
         }
       }
       // The settlement seam owns final rollup; incomplete target recording must remain sweepable.
       const { error: statusError } = resultWriteError
         ? await supabase.from("posts").update({ status: "processing" }).eq("id", post_id)
+          .eq("status", "processing").eq("processing_started_at", claim.processingStartedAt)
         : { error: null };
       if (statusError) console.error("Could not preserve incomplete retry-target recording:", statusError.message);
       const { error: logError } = await supabase.from("system_logs").insert({
@@ -2038,7 +2837,13 @@ Deno.serve(async (req) => {
     let hasFailed = false;
     // An account whose Meta container is left for reconcile-deferred-publishes.
     let hasDeferred = false;
+    const managedImageFence = claim.processingStartedAt
+      ? { processingStartedAt: claim.processingStartedAt, content: threadsImageContentFence(post) }
+      : null;
+    let imageHandoff: { processingStartedAt: string; content: Record<string, unknown> } | null = null;
     const platformResults: PlatformResultSummary[] = [];
+    const exactPlatformPostIds: string[] = [];
+    let fanoutWriteFailed = false;
 
     for (const account of (accounts || [])) {
       console.log(`Posting to ${account.platform}...`);
@@ -2047,6 +2852,9 @@ Deno.serve(async (req) => {
       // (below); only the ones whose row was written may be dropped from a pending row's carry.
       const stories = newStoryLedger();
       const timingForAccount = accountTiming(timing, Date.now(), WORKER_STARTED_AT_MS);
+      let imageExecution: ResumeContext | null = resume?.deferral.media_type === "IMAGE" ? resume : null;
+      let imageResponseData: Record<string, unknown> | null = imageExecution ? resumeResponseData : null;
+      let imageOutcomeAcknowledged = false;
 
       try {
         let result: PlatformPostResult;
@@ -2082,10 +2890,13 @@ Deno.serve(async (req) => {
               }
               : NOT_A_RETRY;
             if (igAuthType === 'business_login') {
-              result = await postToInstagramBusinessLogin(account, primaryPost, mediaUrls, mediaFiles, supabase, post_id, timingForAccount, retry);
+              result = await postToInstagramBusinessLogin(account, primaryPost, mediaUrls, mediaFiles, supabase, post_id, timingForAccount, retry, (id) => {
+                if (id) exactPlatformPostIds.push(id);
+                else fanoutWriteFailed = true;
+              });
             } else {
               result = await postToInstagram(account, primaryPost, mediaUrls, mediaFiles, timingForAccount, (story) =>
-                recordLiveStory(supabase, { postId: post_id, account, story }, stories), retry, async (error) => {
+                recordLiveStory(supabase, { postId: post_id, account, story, onRecorded: (id) => exactPlatformPostIds.push(id) }, stories), retry, async (error) => {
                 const settled = await settlePlatformPost(supabase, {
                   platformPostId: null,
                   postId: post_id,
@@ -2095,6 +2906,8 @@ Deno.serve(async (req) => {
                   errorMessage: error,
                   responseData: { ig_post_subtype: "story", account_username: account.platform_username },
                 });
+                if (settled.id) exactPlatformPostIds.push(settled.id);
+                if (settled.error || !settled.id) fanoutWriteFailed = true;
                 return settled.error;
               });
             }
@@ -2104,14 +2917,107 @@ Deno.serve(async (req) => {
             result = await postToLinkedIn(account, post, mediaUrls);
             break;
           case "pinterest":
-            result = await postToPinterest(account, post, mediaUrls, supabase);
+            result = await postToPinterest(account, post, mediaUrls, supabase, claim.processingStartedAt);
             break;
           case "reddit":
             result = await postToReddit(account, post, mediaUrls);
             break;
-          case "threads":
-            result = await postToThreads(account, post, mediaUrls, timingForAccount);
+          case "threads": {
+            const imageCheckpoint: ThreadsImageCheckpoint = async (deferral) => {
+              if (!claim.processingStartedAt) throw new ThreadsCheckpointUnavailable("Threads image claim fence unavailable");
+              if (managedImageFence) imageHandoff = managedImageFence;
+              const expectedContent = threadsImageContentFence(post);
+              const responseData = {
+                deferred: deferral,
+                account_username: account.platform_username,
+                account_metadata: account.account_metadata,
+                account_updated_at: (account as SocialAccount & { updated_at?: string | null }).updated_at ?? null,
+                content_fence: expectedContent,
+              };
+              const { data, error } = await supabase.rpc("record_threads_image_checkpoint", {
+                p_post_id: post_id,
+                p_social_account_id: account.id,
+                p_response_data: responseData,
+                p_expected_processing_started_at: claim.processingStartedAt,
+                p_expected_content: expectedContent,
+                p_target_account_ids: accounts.map((a) => a.id),
+                p_retained_platform_post_ids: retainedPlatformPostIds,
+              });
+              if (error || typeof data !== "string" || !data) {
+                if (error && (
+                  error.message?.includes("is in status failed") ||
+                  error.message?.includes("is in status canceled") ||
+                  error.message?.includes("cancelled or retried attempt")
+                )) {
+                  throw new ThreadsCheckpointCanceled(error.message || "Threads image checkpoint refused: parent state changed or canceled");
+                }
+                throw new ThreadsCheckpointUnavailable("Threads image checkpoint could not be confirmed");
+              }
+              exactPlatformPostIds.push(data);
+              const executionId = crypto.randomUUID();
+              const { data: claimed, error: inlineClaimError } = await supabase.rpc("claim_threads_image_inline_execution", {
+                p_platform_post_id: data,
+                p_post_id: post_id,
+                p_social_account_id: account.id,
+                p_expected_container_id: deferral.container_id,
+                p_expected_processing_started_at: claim.processingStartedAt,
+                p_expected_content: expectedContent,
+                p_execution_id: executionId,
+              });
+              if (inlineClaimError) {
+                const logError = await writeLogRow(supabase, {
+                  level: "error", category: "post", source: "process-post", user_id: post.user_id,
+                  message: "Threads image inline claim was not acknowledged; no status or publish call was made",
+                  metadata: { event: "threads_image_inline_claim_unavailable", post_id, platform_post_id: data },
+                });
+                if (logError) console.error("Threads image inline claim refusal log failed:", logError);
+                throw new ThreadsCheckpointUnavailable("Threads image inline execution claim could not be confirmed");
+              }
+              if (claimed === null) {
+                const logError = await writeLogRow(supabase, {
+                  level: "info", category: "post", source: "process-post", user_id: post.user_id,
+                  message: "Threads image inline execution was refused; the durable checkpoint remains for reconciliation",
+                  metadata: { event: "threads_image_inline_claim_refused", post_id, platform_post_id: data },
+                });
+                if (logError) console.error("Threads image inline claim refusal log failed:", logError);
+                return { platformPostId: data, responseData, execution: null };
+              }
+              const claimedData = claimed as { platform_post_id?: unknown; response_data?: unknown } | null;
+              const authoritativeData = claimedData?.response_data &&
+                  typeof claimedData.response_data === "object" && !Array.isArray(claimedData.response_data)
+                ? claimedData.response_data as Record<string, unknown>
+                : null;
+              const authoritativeDeferral = readDeferral(authoritativeData);
+              if (claimedData?.platform_post_id !== data || !authoritativeData || !authoritativeDeferral ||
+                authoritativeDeferral.container_id !== deferral.container_id ||
+                authoritativeDeferral.attempt_started_at !== claim.processingStartedAt ||
+                authoritativeDeferral.execution_id !== executionId ||
+                !authoritativeDeferral.execution_claimed_until ||
+                authoritativeDeferral.claimed_until !== authoritativeDeferral.execution_claimed_until ||
+                authoritativeDeferral.publish_attempt_id) {
+                throw new ThreadsCheckpointUnavailable("Threads image inline claim returned no authoritative executable state");
+              }
+              const execution: ResumeContext = {
+                platformPostId: data,
+                deferral: authoritativeDeferral,
+                inline: true,
+                accountUpdatedAt: typeof authoritativeData.account_updated_at === "string" ? authoritativeData.account_updated_at : null,
+              };
+              Object.assign(execution, threadsImageExecutionCallbacks(
+                supabase,
+                post,
+                execution,
+                authoritativeData,
+                (next) => { imageResponseData = next; },
+              ));
+              imageExecution = execution;
+              imageResponseData = authoritativeData;
+              imageHandoff = { processingStartedAt: claim.processingStartedAt, content: expectedContent };
+              return { platformPostId: data, responseData: authoritativeData, execution };
+            };
+            result = await postToThreads(account, post, mediaUrls, timingForAccount, imageCheckpoint, claim.processingStartedAt);
             break;
+          }
           case "tiktok": {
             const reviewSubmissionId = requiredReviewSubmissionId(post);
             result = reviewSubmissionId
@@ -2144,11 +3050,22 @@ Deno.serve(async (req) => {
             throw new Error(`Unsupported platform: ${account.platform}`);
         }
 
+        imageOutcomeAcknowledged = imageExecution?.deferral.media_type === "IMAGE";
+        if (result.deferredHandoff) {
+          platformResults.push({ platform: account.platform, status: "pending" });
+          hasDeferred = true;
+          if (!claim.processingStartedAt) throw new ThreadsCheckpointUnavailable("Threads image handoff claim fence unavailable");
+          imageHandoff = { processingStartedAt: claim.processingStartedAt, content: threadsImageContentFence(post) };
+          console.log(`[threads] image checkpoint ${result.deferredHandoff.platformPostId} left for the reconciler`);
+          continue;
+        }
+
         // If the platform handler already wrote its own platform_posts rows
         // (e.g. Instagram fan-out into story/reel/feed), skip the default insert.
         if (result.selfWroteRows) {
           const subResults = result.subResults || [];
           for (const sub of subResults) {
+            // Provider IDs are not platform_posts primary keys.
             platformResults.push({
               platform: account.platform,
               status: sub.status,
@@ -2177,6 +3094,7 @@ Deno.serve(async (req) => {
           if (logError) console.error("[process-post] could not log the unrecorded story either:", logError);
         }
         const responseData = {
+          ...(imageExecution?.deferral.media_type === "IMAGE" ? { ...imageResponseData, deferred: imageExecution.deferral } : {}),
           ...(independentStory && result.publicationSubtype === "reel" ? { ig_post_subtype: "reel" } : {}),
           tiktok_publish_id: result.id,
           account_username: account.platform_username,
@@ -2212,7 +3130,7 @@ Deno.serve(async (req) => {
         } else {
           const settled = await settlePlatformPost(supabase, {
             // A resumed run settles the pending row the first run left.
-            platformPostId: resume?.platformPostId ?? null,
+            platformPostId: imageExecution?.platformPostId ?? resume?.platformPostId ?? null,
             postId: post_id,
             socialAccountId: account.id,
             platform: account.platform,
@@ -2226,6 +3144,10 @@ Deno.serve(async (req) => {
             throw new Error(`Failed to save platform post: ${settled.error}`);
           }
           platformPostRecord = settled.id ? { id: settled.id } : null;
+        }
+
+        if (platformPostRecord?.id) {
+          exactPlatformPostIds.push(platformPostRecord.id);
         }
 
         console.log(`Saved platform_posts record for ${account.platform}: ${platformPostRecord?.id}`);
@@ -2261,18 +3183,70 @@ Deno.serve(async (req) => {
         console.log(`Successfully posted to ${account.platform}${isTikTokProcessing ? " (processing in background)" : ""}`);
 
       } catch (caught) {
+        if (imageOutcomeAcknowledged && imageExecution) {
+          // Meta acknowledged publication (or reported PUBLISHED). A failed
+          // success write cannot become a retryable publishing failure.
+          const logError = await writeLogRow(supabase, {
+            level: "error", category: "post", source: "process-post", user_id: post.user_id,
+            message: "Threads image publication acknowledged but result recording was not confirmed; checkpoint retained",
+            metadata: { event: "threads_image_success_unrecorded", post_id, platform_post_id: imageExecution.platformPostId },
+          });
+          if (logError) console.error("Threads image success-recording refusal log failed:", logError);
+          if (accounts.length > 1 && !resumePlatformPostId) {
+            const { data: currentPost, error: checkError } = await supabase
+              .from("posts")
+              .select("status, processing_started_at, user_id, caption, media_file_ids, metadata, platforms, scheduled_at, publish_requested_at, source")
+              .eq("id", post_id)
+              .maybeSingle();
+            const contentOk = currentPost && await hashRequest(threadsImageContentFence(currentPost as PostData)) === await hashRequest(threadsImageContentFence(post));
+            if (checkError || !currentPost || currentPost.status !== "processing" ||
+                (claim.processingStartedAt && currentPost.processing_started_at !== claim.processingStartedAt) || !contentOk) {
+              console.log("Parent post canceled, superseded, or content changed; stopping remaining fan-out");
+              return createErrorResponse("Post processing was canceled or superseded. No further accounts published.", 409);
+            }
+            platformResults.push({ platform: account.platform, status: "pending" });
+            hasDeferred = true;
+            continue;
+          }
+          return createErrorResponse("Threads image publication was acknowledged but recording could not be confirmed. The existing checkpoint will be reconciled; do not retry publication.", 503);
+        }
         if (caught instanceof ThreadsCheckpointUnavailable) {
+          if (caught instanceof ThreadsCheckpointCanceled) {
+            const logError = await writeLogRow(supabase, {
+              level: "info", category: "post", source: "process-post", user_id: post.user_id,
+              message: "Threads checkpoint refused because parent state was canceled or changed; remaining fan-out halted",
+              metadata: { event: "threads_checkpoint_canceled", post_id },
+            });
+            if (logError) console.error("Threads checkpoint cancellation log failed:", logError);
+            return createErrorResponse("Post processing was canceled or superseded. No further accounts published.", 409);
+          }
           try {
             const { error: logError } = await supabase.from("system_logs").insert({
               level: "error", category: "post", source: "process-post", user_id: post.user_id,
-              message: "Threads carousel checkpoint unavailable; pending state retained",
-              metadata: { post_id, platform_post_id: resume?.platformPostId ?? null },
+              message: "Threads container checkpoint unavailable; no new publish was started and pending state was retained",
+              metadata: { event: "threads_checkpoint_refused", post_id, platform_post_id: imageExecution?.platformPostId ?? resume?.platformPostId ?? null },
             });
             if (logError) console.error("Threads checkpoint refusal log failed");
           } catch {
             console.error("Threads checkpoint refusal log unavailable");
           }
-          return createErrorResponse("Threads carousel checkpoint could not be confirmed. It will be checked again.", 503);
+          if (accounts.length > 1 && !resumePlatformPostId) {
+            const { data: currentPost, error: checkError } = await supabase
+              .from("posts")
+              .select("status, processing_started_at, user_id, caption, media_file_ids, metadata, platforms, scheduled_at, publish_requested_at, source")
+              .eq("id", post_id)
+              .maybeSingle();
+            const contentOk = currentPost && await hashRequest(threadsImageContentFence(currentPost as PostData)) === await hashRequest(threadsImageContentFence(post));
+            if (checkError || !currentPost || currentPost.status !== "processing" ||
+                (claim.processingStartedAt && currentPost.processing_started_at !== claim.processingStartedAt) || !contentOk) {
+              console.log("Parent post canceled, superseded, or content changed; stopping remaining fan-out");
+              return createErrorResponse("Post processing was canceled or superseded. No further accounts published.", 409);
+            }
+            platformResults.push({ platform: account.platform, status: "pending" });
+            hasDeferred = true;
+            continue;
+          }
+          return createErrorResponse("Threads container checkpoint could not be confirmed. No new publish was started; retry reconciliation shortly.", 503);
         }
         let error = caught;
         if (error instanceof ContainerStillProcessing) {
@@ -2280,10 +3254,11 @@ Deno.serve(async (req) => {
             postId: post_id,
             account,
             signal: error,
-            resume,
+            resume: imageExecution ?? resume,
             // A story whose row this very run wrote must not be carried (and recorded) again.
-            resumeResponseData: dropRecordedStory(resumeResponseData, stories.recorded),
+            resumeResponseData: dropRecordedStory(imageExecution ? imageResponseData : resumeResponseData, stories.recorded),
           });
+          if (recorded.platformPostId) exactPlatformPostIds.push(recorded.platformPostId);
           if (!recorded.error && !recorded.gaveUp) {
             console.log(`[${account.platform}] container ${error.containerId} still processing; left for the reconciler`);
             platformResults.push({ platform: account.platform, status: "pending" });
@@ -2291,11 +3266,36 @@ Deno.serve(async (req) => {
             continue;
           }
           if (!recorded.error) {
-            platformResults.push({ platform: account.platform, status: "failed", error_message: giveUpMessage(error.kind) });
+            platformResults.push({ platform: account.platform, status: "failed", error_message: imageExecution ?? resume ? deferralGiveUpMessage((imageExecution ?? resume)!.deferral) : giveUpMessage(error.kind) });
             hasFailed = true;
             continue;
           }
           console.error(`[${account.platform}] could not record the deferred container:`, recorded.error);
+          if (imageExecution?.deferral.media_type === "IMAGE") {
+            const logError = await writeLogRow(supabase, {
+              level: "error", category: "post", source: "process-post", user_id: post.user_id,
+              message: "Threads image execution update was not confirmed; pending state was not settled",
+              metadata: { event: "threads_image_stale_execution", post_id, platform_post_id: imageExecution.platformPostId },
+            });
+            if (logError) console.error("Threads image stale-execution log failed:", logError);
+            if (accounts.length > 1 && !resumePlatformPostId) {
+              const { data: currentPost, error: checkError } = await supabase
+                .from("posts")
+                .select("status, processing_started_at, user_id, caption, media_file_ids, metadata, platforms, scheduled_at, publish_requested_at, source")
+                .eq("id", post_id)
+                .maybeSingle();
+              const contentOk = currentPost && await hashRequest(threadsImageContentFence(currentPost as PostData)) === await hashRequest(threadsImageContentFence(post));
+              if (checkError || !currentPost || currentPost.status !== "processing" ||
+                  (claim.processingStartedAt && currentPost.processing_started_at !== claim.processingStartedAt) || !contentOk) {
+                console.log("Parent post canceled, superseded, or content changed; stopping remaining fan-out");
+                return createErrorResponse("Post processing was canceled or superseded. No further accounts published.", 409);
+              }
+              platformResults.push({ platform: account.platform, status: "pending" });
+              hasDeferred = true;
+              continue;
+            }
+            return createErrorResponse("Threads image reconciliation ownership changed or could not be confirmed. Retry shortly.", 503);
+          }
           error = new Error(`${account.platform === "threads" ? "Threads" : "Instagram"} was still processing the media and it could not be finished later. Safe to retry.`);
         }
         console.error(`Error posting to ${account.platform}:`, error);
@@ -2304,16 +3304,23 @@ Deno.serve(async (req) => {
         // do not insert a duplicate failed row.
         const selfWrote = (error as { selfWroteRows?: boolean })?.selfWroteRows === true;
         if (!selfWrote) {
-          const { error: settleError } = await settlePlatformPost(supabase, {
-            platformPostId: resume?.platformPostId ?? null,
+          const settled = await settlePlatformPost(supabase, {
+            platformPostId: imageExecution?.platformPostId ?? resume?.platformPostId ?? null,
             postId: post_id,
             socialAccountId: account.id,
             platform: account.platform,
             status: "failed",
             errorMessage: error instanceof Error ? error.message : "Unknown error",
+            ...(imageExecution?.deferral.media_type === "IMAGE"
+              ? { responseData: { ...imageResponseData, deferred: imageExecution.deferral } }
+              : {}),
           });
-          if (settleError) {
-            console.error(`Failed to settle the failure row for ${account.platform}:`, settleError);
+          if (settled.id) {
+            exactPlatformPostIds.push(settled.id);
+          }
+          if (settled.error || !settled.id) fanoutWriteFailed = true;
+          if (settled.error) {
+            console.error(`Failed to settle the failure row for ${account.platform}:`, settled.error);
           }
         }
 
@@ -2340,29 +3347,183 @@ Deno.serve(async (req) => {
     // Notifications go out once the post is final: here, or from the resumed run that settles it.
     let notify = true;
 
+    // Track exact result IDs and close fanout if candidate enrolled
+    const uniqueExactRowIds = Array.from(new Set(exactPlatformPostIds));
+    type FanoutClosedOutcome = {
+      closed?: boolean;
+      ready?: boolean;
+      status?: string;
+      authorized_platform_post_ids?: string[];
+    };
+    let fanoutClosedResult: FanoutClosedOutcome | null = null;
+
+    if (!resume && claim.processingStartedAt && enrolledCandidateId &&
+        (!imageHandoff || requiresImageFanoutClosure || fanoutWriteFailed)) {
+      if (fanoutWriteFailed) {
+        await writeLogRow(supabase, { level: "error", category: "post", source: "process-post", user_id: post.user_id, message: "Complete notification scope unavailable after a result write failed", metadata: { event: "notification_fanout_write_failed", post_id } });
+        return createErrorResponse("Existing provider results retained; result recording needs reconciliation", 503);
+      }
+      try {
+        const { data: closeData, error: closeError } = await supabase.rpc("close_post_fanout", {
+          p_post_id: post_id,
+          p_expected_processing_started_at: claim.processingStartedAt,
+          p_expected_content: threadsImageContentFence(post),
+          p_exact_platform_post_ids: uniqueExactRowIds,
+          p_retained_platform_post_ids: retainedPlatformPostIds,
+        });
+        if (closeError) {
+          console.warn("[process-post] close_post_fanout RPC error:", closeError);
+        } else {
+          fanoutClosedResult = closeData as FanoutClosedOutcome;
+          console.log("[process-post] close_post_fanout result:", fanoutClosedResult);
+        }
+      } catch (closeErr) {
+        console.warn("[process-post] close_post_fanout failed:", closeErr);
+      }
+      if (!fanoutClosedResult?.closed) {
+        await writeLogRow(supabase, { level: "error", category: "post", source: "process-post", user_id: post.user_id, message: "Publication results retained but the complete fanout could not be proven", metadata: { event: "notification_fanout_unconfirmed", post_id } });
+        return createErrorResponse("Existing publication results retained; completion requires reconciliation", 503);
+      }
+    }
+
     if (resume) {
-      // The settle RPC rolled the post up when this row became terminal. finishDeferredPost
-      // reads where the post stands (retrying once; an unreadable post is logged, not taken
-      // for unfinished) and, if it is final, notifies for all of its accounts, not only this one.
-      const finished = await finishDeferredPost(supabase, post, resume.platformPostId, { results: platformResults, hasSuccess, hasFailed });
+      // Legacy settlement rolled the post up; a managed image finalizes its fenced
+      // attempt first. finishDeferredPost then reads the final state (retrying once;
+      // an unreadable post is logged, not taken for unfinished) and, if it is final,
+      // notifies for all of its accounts, not only this one.
+      const finished = await finishDeferredPost(
+        supabase,
+        post,
+        resume.platformPostId,
+        { results: platformResults, hasSuccess, hasFailed },
+        imageAttemptFence(resume.deferral, resumeResponseData),
+      );
       finalStatus = finished.finalStatus;
       notify = false;
+    } else if (imageHandoff) {
+      // The original claim and content alone may roll up this first-run fan-out.
+      // The same parent lock claims the one final notification after all siblings settle.
+      notify = false;
+      const { data: finalized, error: finalizationError } = await supabase.rpc("finalize_threads_image_attempt", {
+        p_post_id: post_id,
+        p_expected_processing_started_at: imageHandoff.processingStartedAt,
+        p_expected_content: imageHandoff.content,
+        p_expected_account_ids: accounts.map((a) => a.id),
+      });
+      const finalization = finalized as {
+        status?: unknown;
+        stale?: unknown;
+        notify?: unknown;
+        authorized_platform_post_ids?: unknown;
+      } | null;
+      if (finalizationError || typeof finalization?.status !== "string" ||
+        typeof finalization.stale !== "boolean" || typeof finalization.notify !== "boolean") {
+        const logError = await writeLogRow(supabase, {
+          level: "error", category: "post", source: "process-post", user_id: post.user_id,
+          message: "Threads image handoff could not confirm the current parent state; checkpoint retained",
+          metadata: { event: "threads_image_handoff_state_unreadable", post_id },
+        });
+        if (logError) console.error("Threads image handoff state-read log failed:", logError);
+        return createErrorResponse("Threads image handoff could not confirm the current parent state. Checkpoint retained.", 503);
+      }
+      finalStatus = finalization.status;
+      if (finalization.stale) {
+        const logError = await writeLogRow(supabase, {
+          level: "info", category: "post", source: "process-post", user_id: post.user_id,
+          message: "Threads image handoff preserved a newer parent state",
+          metadata: { event: "threads_image_handoff_stale", post_id, current_status: finalStatus },
+        });
+        if (logError) console.error("Threads image handoff stale-state log failed:", logError);
+      } else if (finalization.notify) {
+        let authorizedPlatformPostIds: string[] | null = null;
+        if (Array.isArray(finalization.authorized_platform_post_ids)) {
+          authorizedPlatformPostIds = finalization.authorized_platform_post_ids.filter((id): id is string => typeof id === "string");
+        }
+        const outcome = await readPostOutcome(postReaderFor(supabase, authorizedPlatformPostIds ?? []), post_id, {
+          results: platformResults,
+          hasSuccess,
+          hasFailed,
+        });
+        if (outcome.kind === "terminal" && !outcome.degraded) {
+          await announceFinalPost(supabase, post, finalStatus, outcome.results, outcome.hasFailed, imageHandoff);
+        } else {
+          const degradedReason = outcome.kind === "terminal" ? outcome.degraded : outcome.kind === "unknown" ? outcome.error : "post still in progress";
+          console.warn(`[process-post] withholding Threads image managed notification: ${degradedReason}`);
+          await writeLogRow(supabase, {
+            level: "error", category: "post", source: "process-post", user_id: post.user_id,
+            message: "Threads image final notification withheld because authorized platform post rows could not be completely read",
+            metadata: { event: "threads_image_notification_read_degraded", post_id, reason: degradedReason },
+          });
+        }
+      }
     } else if (hasDeferred) {
-      // Stays `processing` until the deferred rows settle; the RPC rolls it up then.
+      // Legacy video/carousel pending behavior is unchanged.
       finalStatus = "processing";
       notify = false;
-      await supabase
-        .from("posts")
-        .update({ status: "processing", posted_at: hasSuccess ? new Date().toISOString() : null })
-        .eq("id", post_id);
+      if (claim.processingStartedAt) {
+        const { data: restoreResult, error: restoreError } = await supabase.rpc("restore_legacy_pending_post", {
+          p_post_id: post_id,
+          p_expected_processing_started_at: claim.processingStartedAt,
+          p_expected_content: threadsImageContentFence(post),
+          p_has_success: hasSuccess,
+        });
+        const res = restoreResult as {
+          restored?: boolean;
+          status?: string;
+          prior_status?: string;
+          reason?: string;
+          current_status?: string;
+          already_processing?: boolean;
+        } | null;
+
+        if (restoreError || !res || typeof res.restored !== "boolean" ||
+          (!res.restored && typeof res.current_status !== "string")) {
+          await writeLogRow(supabase, {
+            level: "error", category: "post", source: "process-post", user_id: post.user_id,
+            message: "Could not execute atomic restoration of processing status for sibling rollup",
+            metadata: { event: "legacy_pending_rollup_read_failed", post_id, error: restoreError?.message ?? "RPC failed" },
+          });
+          return createErrorResponse("Deferred publication could not confirm its current parent state. Existing work is retained.", 503);
+        } else if (res.restored) {
+          finalStatus = "processing";
+          if (!res.already_processing) {
+            console.log(`Parent post status restored to processing from same-attempt sibling rollup (${res.prior_status})`);
+          }
+        } else {
+          await writeLogRow(supabase, {
+            level: "info", category: "post", source: "process-post", user_id: post.user_id,
+            message: "Parent post status not restored to processing because parent state was canceled, superseded, or modified",
+            metadata: {
+              event: "legacy_pending_restore_skipped",
+              post_id,
+              current_status: res.current_status,
+              reason: res.reason,
+            },
+          });
+          finalStatus = res.current_status!;
+          console.log("Parent status was canceled or modified; processing status not restored");
+        }
+      } else {
+        await supabase
+          .from("posts")
+          .update({ status: "processing", posted_at: hasSuccess ? new Date().toISOString() : null })
+          .eq("id", post_id);
+      }
     } else {
-      await supabase
-        .from("posts")
-        .update({
-          status: finalStatus,
-          posted_at: hasSuccess ? new Date().toISOString() : null
-        })
-        .eq("id", post_id);
+      const closedRes = fanoutClosedResult as FanoutClosedOutcome | null;
+      if (closedRes?.closed && closedRes.status) {
+        finalStatus = closedRes.status;
+      } else {
+        await supabase
+          .from("posts")
+          .update({
+            status: finalStatus,
+            posted_at: hasSuccess ? new Date().toISOString() : null
+          })
+          .eq("id", post_id);
+      }
+
+
     }
 
     console.log("Post processing complete:", finalStatus);
@@ -2395,7 +3556,7 @@ Deno.serve(async (req) => {
           : hasFailed && !hasSuccess
             ? `Post failed on all platforms: ${failedPlatforms.join(', ')}`
             : `Post partially succeeded: ${successPlatforms.join(', ')} succeeded, ${failedPlatforms.join(', ')} failed`)
-          + (hasDeferred ? " (a video is still processing and will be finished in the background)" : ""),
+          + (hasDeferred ? " (media is still processing and will be finished in the background)" : ""),
         user_id: post.user_id,
         metadata: {
           post_id: post_id,
@@ -5025,6 +6186,7 @@ async function postToInstagramBusinessLogin(
   postId: string,
   timing: PublishTiming = NO_DEFERRAL,
   retry: RetryState = NOT_A_RETRY,
+  recordResultId?: (id: string | null) => void,
 ): Promise<PlatformPostResult> {
   const igUserId = account.platform_user_id;
   const accessToken = account.access_token;
@@ -5345,12 +6507,15 @@ async function postToInstagramBusinessLogin(
       });
       if (settled.error) {
         console.error(`[IG ${subtype}] settle failed:`, settled.error);
+        recordResultId?.(null);
         return null;
       }
       console.log(`[IG ${subtype}] platform_posts row settled: ${settled.id} (status=${status})`);
+      recordResultId?.(settled.id);
       return settled.id;
     } catch (e) {
       console.error(`[IG ${subtype}] insert exception:`, e);
+      recordResultId?.(null);
       return null;
     }
   };
@@ -6057,7 +7222,8 @@ async function postToPinterest(
   account: SocialAccount,
   post: PostData,
   mediaUrls: string[],
-  supabase: SupabaseClient
+  supabase: SupabaseClient,
+  processingStartedAt?: string | null,
 ): Promise<PlatformPostResult> {
   const accessToken = account.access_token;
 
@@ -6137,11 +7303,25 @@ async function postToPinterest(
     : hasLink ? "link"
     : "image";
 
-  // Stamp pinterest_post_type onto the post's metadata so /history can render the badge
+  // Stamp pinterest_post_type onto the post's metadata using narrow atomic RPC so /history can render badge
   const stampPinterestType = async () => {
+    if (!processingStartedAt) {
+      console.warn("Pinterest: processingStartedAt missing, skipping stamp_pinterest_post_type");
+      return;
+    }
     try {
-      const newMetadata = { ...(metadata || {}), pinterest_post_type: resolvedPinType };
-      await supabase.from("posts").update({ metadata: newMetadata }).eq("id", post.id);
+      const { data, error } = await supabase.rpc("stamp_pinterest_post_type", {
+        p_post_id: post.id,
+        p_social_account_id: account.id,
+        p_expected_processing_started_at: processingStartedAt,
+        p_expected_content: threadsImageContentFence(post),
+        p_post_type: resolvedPinType,
+      });
+      if (error) {
+        console.warn("Pinterest: stamp_pinterest_post_type RPC error:", error);
+      } else if (!data) {
+        console.warn("Pinterest: stamp_pinterest_post_type returned false (fence mismatch or post state mismatch)");
+      }
     } catch (err) {
       console.warn("Pinterest: failed to stamp pinterest_post_type:", err);
     }
@@ -6464,7 +7644,13 @@ async function postToThreads(
   post: PostData,
   mediaUrls: string[],
   timing: PublishTiming = NO_DEFERRAL,
+  imageCheckpoint?: ThreadsImageCheckpoint,
+  attemptStartedAt?: string | null,
 ): Promise<PlatformPostResult> {
+  if (timing.resume?.deferral.media_type === "IMAGE" && timing.resume.accountUpdatedAt &&
+    (account as SocialAccount & { updated_at?: string | null }).updated_at !== timing.resume.accountUpdatedAt) {
+    throw new ThreadsCheckpointUnavailable("Threads image account credentials changed; pending state retained");
+  }
   const accessToken = account.access_token;
   const userId = account.platform_user_id;
   const username = account.platform_username;
@@ -6743,7 +7929,7 @@ async function postToThreads(
     const isVideo = firstMediaUrl ? isVideoUrl(firstMediaUrl) : false;
 
     if (timing.resume && !timing.resume.deferral.carousel_children) {
-      containerParams.media_type = timing.resume.deferral.kind === "threads_carousel" ? "CAROUSEL" : "VIDEO";
+      containerParams.media_type = timing.resume.deferral.kind === "threads_carousel" ? "CAROUSEL" : threadsMediaType(timing.resume.deferral);
     } else if (mediaUrls.length === 1 && !timing.resume?.deferral.carousel_children) {
       // Single media
       if (isVideo) {
@@ -6921,23 +8107,43 @@ async function postToThreads(
   // A resumed run already has the container; creating another would post twice.
   const containerId = await threadsParentContainer(timing.resume, createThreadsContainer);
 
+  // A new image is durable before any status traffic. A successful exclusive claim
+  // permits one finite inline observation; a refusal leaves ordinary cron recovery.
+  if (!timing.resume && containerParams.media_type === "IMAGE") {
+    if (typeof containerId !== "string" || !containerId || !attemptStartedAt) {
+      throw new ThreadsCheckpointUnavailable("Threads image container identity or claim fence is missing");
+    }
+    const deferral = newDeferral("threads", containerId, new Date(), { mediaType: "IMAGE", attemptStartedAt });
+    const checkpoint = await checkpointThreadsImage(imageCheckpoint, deferral);
+    if (!checkpoint.execution) return { deferredHandoff: checkpoint };
+    timing = { ...timing, resume: checkpoint.execution };
+  }
+
   // Poll container status until FINISHED (required by Threads API)
   const statusEndpoint = `https://graph.threads.net/v1.0/${containerId}?fields=${CONTAINER_STATUS_FIELDS.threads}&access_token=${accessToken}`;
   const pollInterval = 2000; // 2 seconds
+  const inlineImage = timing.resume?.inline === true && timing.resume.deferral.media_type === "IMAGE";
   // Only a single video can be finished later; a resumed run checks once, now.
-  const deferrable = containerParams.media_type === "VIDEO" || containerParams.media_type === "CAROUSEL";
+  const deferrable = containerParams.media_type === "VIDEO" || containerParams.media_type === "CAROUSEL" ||
+    (timing.resume?.deferral.media_type === "IMAGE");
   // The deadline bounds the requests as well as the sleeps, for every container.
   const container = await pollContainer("threads", statusEndpoint, {
-    maxAttempts: 15,
+    maxAttempts: inlineImage ? 1 : 15,
     intervalMs: pollInterval,
-    // Every container waits on the deadline, a video's or not; only a video can be finished later.
+    checkFirst: inlineImage,
+    // Inline images get one observation clipped to both the account and worker cutoffs.
     deadlineMs: timing.resume
-      ? CHECK_ONCE_DEADLINE
+      ? inlineImage ? deferrableDeadline(timing.deadlineMs, WORKER_STARTED_AT_MS) : CHECK_ONCE_DEADLINE
       : deferrable ? deferrableDeadline(timing.deadlineMs, WORKER_STARTED_AT_MS) : timing.deadlineMs,
   });
 
-  // Meta's ERROR ends the wait, and a container that never finished is never published blindly.
-  if (container.state === "failed") throw new Error(containerFailureMessage("threads", container.reason));
+  // ERROR/EXPIRED after an unanswered send does not prove the provider rejected that send.
+  if (container.state === "failed") {
+    if (timing.resume && hasUnresolvedThreadsPublish(timing.resume.deferral)) {
+      throw new ContainerStillProcessing("threads", containerId);
+    }
+    throw new Error(containerFailureMessage("threads", container.reason));
+  }
   if (container.state === "waiting") {
     throw unfinishedError({ deadlineMs: timing.deadlineMs, deferKind: deferrable ? (containerParams.media_type === "CAROUSEL" ? "threads_carousel" : "threads") : undefined }, containerId, "Threads");
   }
@@ -6957,11 +8163,28 @@ async function postToThreads(
   publishUrl.searchParams.set("access_token", accessToken);
   publishUrl.searchParams.set("creation_id", containerId);
 
+  const resumedImage = timing.resume?.deferral.media_type === "IMAGE" ? timing.resume : null;
+  // FINISHED or a readable status failure after an unanswered send still cannot prove non-acceptance.
+  if (resumedImage && hasUnresolvedThreadsPublish(resumedImage.deferral)) {
+    throw new ContainerStillProcessing("threads", containerId);
+  }
+
   const publishData = await publishThreadsContainer(async (timeoutMs) => {
     const response = await fetchWithTimeout(publishUrl.toString(), { method: "POST" }, timeoutMs);
     return await response.json();
   }, containerId, containerParams.media_type === "CAROUSEL" ? "threads_carousel" : "threads",
-  workerPublishDeadline(WORKER_STARTED_AT_MS));
+  workerPublishDeadline(WORKER_STARTED_AT_MS), Date.now, {
+    beforeSend: resumedImage ? async () => {
+      const marked = await resumedImage.markPublishStarted?.();
+      if (!marked || "error" in marked || !marked.claimed) {
+        throw new ThreadsCheckpointUnavailable("Threads image publish attempt could not be persisted; nothing was sent");
+      }
+    } : undefined,
+    onDefinitelyUnsent: resumedImage?.releasePublishUnsent,
+    onUnknown: resumedImage ? () => {
+      resumedImage.deferral = withUnresolvedThreadsPublish(resumedImage.deferral);
+    } : undefined,
+  });
   tLocationDebug.publish_success = true;
 
   const postId = publishData.id;

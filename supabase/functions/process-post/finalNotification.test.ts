@@ -11,17 +11,17 @@ interface PostRow {
  * A posts table of one row with the semantics the claim relies on: an UPDATE applies only if
  * its filters still hold against the row as it is when the UPDATE runs, not as it was read.
  */
-function fakePosts(initial: PostRow, failures: { read?: string; update?: string } = {}) {
+function fakePosts(initial: PostRow, failures: { read?: string; missing?: boolean; update?: string; beforeUpdate?: (row: PostRow) => void } = {}) {
   const row: PostRow = structuredClone(initial);
   const valueAt = (column: string): unknown => {
-    const [field, key] = column.split("->>");
+    const [field, key] = column.split(/->>?/);
     return key ? (row[field as "metadata"] as Record<string, unknown> | null)?.[key] ?? null : (row as unknown as Record<string, unknown>)[field];
   };
   const client = {
     from: () => ({
       select: () => ({
         eq: () => ({
-          maybeSingle: () => Promise.resolve(failures.read ? { data: null, error: { message: failures.read } } : { data: structuredClone(row), error: null }),
+          maybeSingle: () => Promise.resolve(failures.read ? { data: null, error: { message: failures.read } } : { data: failures.missing ? null : structuredClone(row), error: null }),
         }),
       }),
       update: (values: Partial<PostRow>) => {
@@ -36,6 +36,7 @@ function fakePosts(initial: PostRow, failures: { read?: string; update?: string 
             return chain;
           },
           select: () => {
+            failures.beforeUpdate?.(row);
             if (failures.update) return Promise.resolve({ data: null, error: { message: failures.update } });
             if (!filters.every((holds) => holds())) return Promise.resolve({ data: [], error: null });
             Object.assign(row, values);
@@ -50,6 +51,19 @@ function fakePosts(initial: PostRow, failures: { read?: string; update?: string 
 }
 
 const NOW = new Date("2026-10-30T12:00:00.000Z");
+
+for (const concurrent of [false, true]) {
+  Deno.test(`legacy send-once marker refuses enrolled recovery (${concurrent ? "concurrent" : "existing"})`, async () => {
+    const candidate = { candidate_id: "candidate", fanout_closed: true };
+    const { client, row } = fakePosts({ metadata: concurrent ? {} : { legacy_notification_candidate: candidate }, processing_started_at: NOW.toISOString() }, {
+      ...(concurrent ? { beforeUpdate: (current: PostRow) => { current.metadata = { legacy_notification_candidate: candidate }; } } : {}),
+    });
+    const receipt = await claimFinalNotification(client, "post-1", NOW);
+    assertEquals(receipt.claimed, false);
+    if (!concurrent) assertEquals(receipt.reason, "legacy_candidate");
+    assertEquals(row.metadata, { legacy_notification_candidate: candidate });
+  });
+}
 
 Deno.test("the first claim wins, keeps the rest of the metadata, and a second finds it taken", async () => {
   const { client, row } = fakePosts({ metadata: { webhook_url: "https://hook" }, processing_started_at: "2026-10-30T11:00:00.000Z" });
@@ -77,13 +91,30 @@ Deno.test("a post retried and final again is announced again, still by exactly o
 
 Deno.test("a read that fails, or a missing post, is an error rather than 'already announced'", async () => {
   const unreadable = fakePosts({ metadata: null, processing_started_at: null }, { read: "statement timeout" });
-  assertEquals(await claimFinalNotification(unreadable.client, "post-1", NOW), { claimed: false, error: "statement timeout" });
+  assertEquals(await claimFinalNotification(unreadable.client, "post-1", NOW), { claimed: false, error: "statement timeout", reason: "ownership_unavailable" });
+  const missing = fakePosts({ metadata: null, processing_started_at: null }, { missing: true });
+  assertEquals(await claimFinalNotification(missing.client, "post-1", NOW), { claimed: false, error: null, reason: "post_missing" });
 });
 
-Deno.test("an update that fails is an error, so the caller can send instead of dropping the notice", async () => {
+Deno.test("an update that fails is an error rather than notification authority", async () => {
   const { client } = fakePosts({ metadata: null, processing_started_at: "2026-10-30T11:00:00.000Z" }, { update: "permission denied" });
   assertEquals(await claimFinalNotification(client, "post-1", NOW), { claimed: false, error: "permission denied" });
 });
+
+for (const concurrent of [false, true]) {
+  Deno.test(`an unfenced legacy claim cannot consume a managed intent (${concurrent ? "concurrent" : "existing"})`, async () => {
+    const intent = { notified: false, claim_id: "active-image-lease", delivery_acks: { delivered: true } };
+    const { client, row } = fakePosts({
+      metadata: concurrent ? {} : { final_notification_intent: intent },
+      processing_started_at: "2026-10-30T11:00:00.000Z",
+    }, concurrent ? { beforeUpdate: current => { current.metadata = { final_notification_intent: structuredClone(intent) }; } } : {});
+    const result = await claimFinalNotification(client, "post-1", NOW);
+    assertEquals(result.claimed, false);
+    assertEquals(result.error, null);
+    if (!concurrent) assertEquals(result.reason, "managed_intent");
+    assertEquals(row.metadata, { final_notification_intent: intent });
+  });
+}
 
 Deno.test("a marker covers the cycle it was written in, not an earlier one", () => {
   assertEquals(markerCoversCycle(undefined, "2026-10-30T11:00:00.000Z"), false);

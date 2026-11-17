@@ -15,15 +15,37 @@ export function createReconcilePorts(): ReconcilePorts {
 
   return {
     async claim(limit) {
-      const { data, error } = await admin.rpc("claim_deferred_publishes", { p_limit: limit });
-      if (error) throw new Error(`claim_deferred_publishes failed: ${error.message}`);
-      return (data ?? []) as ClaimedRow[];
+      const { data, error } = await admin.rpc("claim_post_completion_work", { p_limit: limit });
+      if (error) {
+        throw new Error(`claim_post_completion_work failed: ${error.message}`);
+      }
+      if (!Array.isArray(data) || data.some((row) =>
+        !row || typeof row.post_id !== "string" ||
+        (row.kind === "notification_only"
+          ? !row.candidate_id || !row.claim_id || !row.attempt_started_at || row.platform_post_id != null
+          : row.kind !== "deferred_publish" || typeof row.platform_post_id !== "string"))) {
+        throw new Error("claim_post_completion_work returned malformed work");
+      }
+      return data as ClaimedRow[];
     },
     async resume(row) {
+      const isNotificationOnly = row.kind === "notification_only";
+      const payload = isNotificationOnly
+        ? {
+            post_id: row.post_id,
+            notification_only: true,
+            attempt_started_at: row.attempt_started_at,
+            candidate_id: row.candidate_id,
+            notification_claim_id: row.claim_id,
+          }
+        : {
+            post_id: row.post_id,
+            resume_platform_post_id: row.platform_post_id,
+          };
       const response = await fetch(`${supabaseUrl}/functions/v1/process-post`, {
         method: "POST",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${serviceRoleKey}` },
-        body: JSON.stringify({ post_id: row.post_id, resume_platform_post_id: row.platform_post_id }),
+        body: JSON.stringify(payload),
         signal: AbortSignal.timeout(RESUME_TIMEOUT_MS),
       });
       const body = await response.json().catch(() => null) as { status?: string; error?: string } | null;
