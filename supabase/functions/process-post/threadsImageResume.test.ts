@@ -190,6 +190,10 @@ Deno.test("registered process-post durably completes single-image Threads contai
   let outbox = 0;
   let containerIdOverride: string | null = null;
   let emailMode: "ok" | "semantic_failure" | "invalid" = "ok";
+  let registeredEndpoints: string[] = [];
+  let failingRegisteredEndpoint = false;
+  let priorSuccessReadFailure = false;
+  let newerClaimOnReadFailure = false;
   let profileEmailEnabled = false;
   let legacyVideoMode = false;
   let beforeLegacyRestore: (() => void) | null = null;
@@ -274,6 +278,10 @@ Deno.test("registered process-post durably completes single-image Threads contai
     containerIdOverride = null;
     emailMode = "ok";
     notificationScopeMode = "ok";
+    registeredEndpoints = [];
+    failingRegisteredEndpoint = false;
+    priorSuccessReadFailure = false;
+    newerClaimOnReadFailure = false;
     profileEmailEnabled = false;
     legacyVideoMode = false;
     beforeLegacyRestore = null;
@@ -369,6 +377,7 @@ Deno.test("registered process-post durably completes single-image Threads contai
     const request = new Request(input, init);
     const url = new URL(request.url);
     if (url.origin === "https://webhook-fixture.invalid") {
+      if (failingRegisteredEndpoint && url.pathname === "/bad") return new Response("gone", { status: 410 });
       if (webhookFailure === "http") return new Response("fixture unavailable", { status: 503 });
       if (webhookFailure === "transport") throw new TypeError("fixture delivery connection lost");
       deliveredNotifications.push({
@@ -499,8 +508,17 @@ Deno.test("registered process-post durably completes single-image Threads contai
       })));
     }
     if (table === "media_file_providers") return Response.json([]);
-    if (table === "app_settings") return Response.json(null);
+    if (table === "app_settings") {
+      if (url.searchParams.get("key")?.startsWith("like.n8n_webhook_")) {
+        return Response.json(registeredEndpoints.map(webhook_url => ({ value: { webhook_url, is_active: true, events: ["*"] } })));
+      }
+      return Response.json(null);
+    }
     if (table === "platform_posts") {
+      if (priorSuccessReadFailure && request.method === "GET" && url.searchParams.get("status") === "eq.success") {
+        if (newerClaimOnReadFailure) post.processing_started_at = new Date(BASE_CLOCK + clock + 1).toISOString();
+        return Response.json({ message: "fixture prior success read failed" }, { status: 500 });
+      }
       if (request.method === "PATCH") {
         const body = await request.json() as Record<string, unknown>;
         const candidates = rows.filter((row) => {
@@ -752,6 +770,7 @@ Deno.test("registered process-post durably completes single-image Threads contai
         ...(notificationScopeMode === "missing" ? {} : {
           authorized_platform_post_ids: notificationScopeMode === "empty" ? [] : authorizedIds,
           authorized_platform_post_statuses: statuses,
+          delivery_acks: intent.delivery_acks ?? {},
         }),
       });
     }
@@ -805,6 +824,15 @@ Deno.test("registered process-post durably completes single-image Threads contai
         post.posted_at = post.posted_at || new Date(BASE_CLOCK + clock).toISOString();
       }
       return Response.json({ restored: true, status: "processing", prior_status: priorStatus });
+    }
+    if (table === "rpc/ack_threads_image_notification_delivery") {
+      const payload = await request.json() as Record<string, unknown>;
+      const meta = post.metadata as Record<string, unknown>;
+      const intent = meta.final_notification_intent as Record<string, unknown> | undefined;
+      if (!intent || intent.claim_id !== payload.p_claim_id || post.processing_started_at !== payload.p_expected_processing_started_at ||
+          Date.parse(String(intent.claimed_until)) <= BASE_CLOCK + clock) return Response.json(false);
+      intent.delivery_acks = { ...(intent.delivery_acks as Record<string, boolean> ?? {}), [String(payload.p_delivery_key)]: true };
+      return Response.json(true);
     }
     if (table === "rpc/confirm_threads_image_notification") {
       const payload = await request.json() as Record<string, unknown>;
@@ -2163,6 +2191,64 @@ Deno.test("registered process-post durably completes single-image Threads contai
         assertEquals(publishes, 1);
       });
     }
+
+    for (const newerClaim of [false, true]) {
+      await test.step(`prior result read failure releases only its own unpublished claim (${newerClaim})`, async () => {
+        reset();
+        priorSuccessReadFailure = true;
+        newerClaimOnReadFailure = newerClaim;
+        const response = await invoke();
+        assertEquals(response.status, 503);
+        assertEquals(post.status, newerClaim ? "processing" : "pending");
+        assertEquals(creates, 0);
+        assert(logs.some(entry => (entry.metadata as Record<string, unknown>)?.event === "prior_publication_read_failed"));
+      });
+    }
+
+    await test.step("failed destination cannot block or replay acknowledged webhooks and email across notification leases", async () => {
+      reset();
+      accounts = [threadsAccount(), facebookAccount()];
+      post.platforms = ["threads", "facebook"];
+      post.metadata = { selected_account_ids: accounts.map(account => account.id) };
+      facebookFail = true;
+      profileEmailEnabled = true;
+      registeredEndpoints = ["https://webhook-fixture.invalid/bad", "https://webhook-fixture.invalid/healthy"];
+      failingRegisteredEndpoint = true;
+      assertEquals((await invoke()).status, 200);
+      assertEquals(deliveredNotifications.filter(entry => entry.url.endsWith("/healthy")).length, 1);
+      assertEquals(deliveredNotifications.filter(entry => entry.event === "email.post_failed").length, 1);
+      for (const retry of [1, 2]) {
+        clock = retry * 181_000;
+        if (retry === 2) failingRegisteredEndpoint = false;
+        let freshHandler: Handler | undefined;
+        const savedServe = Deno.serve;
+        Deno.serve = ((registered: Handler) => {
+          freshHandler = registered;
+          return { finished: Promise.resolve(), shutdown: () => Promise.resolve() };
+        }) as typeof Deno.serve;
+        try {
+          if (retry === 1) await import("./index.ts?notification-destination-recovery");
+          else await import("./index.ts?notification-destination-final-recovery");
+        } finally { Deno.serve = savedServe; }
+        await runReconcile({
+          claim: async limit => claimDeferredPublishes(limit).map(row => ({ platform_post_id: row.id, post_id: row.post_id })),
+          resume: async row => {
+            const response = await freshHandler!(new Request(`${ORIGIN}/functions/v1/process-post`, {
+              method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${SERVICE}` },
+              body: JSON.stringify({ post_id: row.post_id, resume_platform_post_id: row.platform_post_id }),
+            }));
+            return { ok: response.ok, status: (await response.json()).status };
+          },
+          sweep: async () => ({ posts: 0, rows_failed: 0 }),
+          log: async () => {},
+        });
+        assertEquals(deliveredNotifications.filter(entry => entry.url.endsWith("/healthy")).length, 1);
+        assertEquals(deliveredNotifications.filter(entry => entry.event === "email.post_failed").length, 1);
+        assertEquals(((post.metadata as Record<string, unknown>).final_notification_intent as Record<string, unknown>).notified, retry === 2);
+      }
+      assertEquals(deliveredNotifications.filter(entry => entry.url.endsWith("/bad")).length, 1);
+      assertEquals(publishes, 1);
+    });
 
     assertEquals(unexpected, []);
   } finally {

@@ -1075,9 +1075,16 @@ async function pollWithRetry<T>(
 /**
  * Send webhook notifications to registered endpoints and per-request webhooks
  */
-type AcknowledgedDelivery = { requireAcknowledgement: true };
+type AcknowledgedDelivery = {
+  requireAcknowledgement: true;
+  acknowledgedKeys?: ReadonlySet<string>;
+  recordAcknowledgement?: (key: string) => Promise<void>;
+};
 
 async function postNotificationWebhook(url: string, request: RequestInit, delivery?: AcknowledgedDelivery): Promise<void> {
+  const payload = delivery ? JSON.parse(String(request.body)) as { event: string; data: unknown } : null;
+  const deliveryKey = payload ? await hashRequest({ channel: "webhook", url, event: payload.event, postId: (payload.data as Record<string, unknown>).post_id, platform: (payload.data as Record<string, unknown>).platform ?? null, postUrl: (payload.data as Record<string, unknown>).post_url ?? null }) : null;
+  if (deliveryKey && delivery?.acknowledgedKeys?.has(deliveryKey)) return;
   const fetcher: typeof fetch = (target, init) => {
     if (!delivery) return fetch(target, init);
     const timeoutMs = followUpTimeoutMs(WORKER_STARTED_AT_MS, Date.now());
@@ -1087,6 +1094,7 @@ async function postNotificationWebhook(url: string, request: RequestInit, delive
   };
   const response = await postWebhook(url, request, fetcher);
   if (delivery && !response.ok) throw new Error(`Final notification endpoint returned HTTP ${response.status}`);
+  if (deliveryKey) await delivery?.recordAcknowledgement?.(deliveryKey);
 }
 
 async function sendWebhookNotifications(
@@ -1098,6 +1106,7 @@ async function sendWebhookNotifications(
   delivery?: AcknowledgedDelivery,
 ): Promise<void> {
   console.log(`Sending webhook notification: ${event} for user ${userId}`);
+  const deliveryFailures: unknown[] = [];
 
   const payload = {
     event,
@@ -1150,8 +1159,8 @@ async function sendWebhookNotifications(
         console.log("Per-request webhook sent successfully");
       }
     } catch (webhookError) {
-      if (delivery) throw webhookError;
-      console.error("Failed to send per-request webhook:", webhookError);
+      if (delivery) deliveryFailures.push(webhookError);
+      else console.error("Failed to send per-request webhook:", webhookError);
     }
   }
 
@@ -1165,11 +1174,11 @@ async function sendWebhookNotifications(
     if (error && delivery) throw new Error(`Could not read final notification subscriptions: ${error.message}`);
     if (error || !settings?.length) {
       console.log("No registered webhooks found for user:", userId);
-      return;
+      if (!delivery) return;
     }
 
     // Send to all active webhooks that subscribe to this event
-    for (const setting of settings) {
+    for (const setting of settings ?? []) {
       const webhook = setting.value as {
         webhook_url: string;
         events: string[];
@@ -1197,14 +1206,15 @@ async function sendWebhookNotifications(
           body: JSON.stringify(payload)
         }, delivery);
       } catch (webhookError) {
-        if (delivery) throw webhookError;
-        console.error("Failed to send webhook:", webhookError);
+        if (delivery) deliveryFailures.push(webhookError);
+        else console.error("Failed to send webhook:", webhookError);
       }
     }
   } catch (error) {
-    if (delivery) throw error;
-    console.error("Error sending webhook notifications:", error);
+    if (delivery) deliveryFailures.push(error);
+    else console.error("Error sending webhook notifications:", error);
   }
+  if (deliveryFailures.length > 0) throw deliveryFailures[0];
 }
 
 // ───────────────────────────────────────────────────────────────────────────
@@ -1348,6 +1358,11 @@ async function sendFailureEmailNotification(
   platformResults: PlatformResult[],
   delivery?: AcknowledgedDelivery,
 ): Promise<void> {
+  const deliveryKey = delivery ? await hashRequest({ channel: "failure_email", userId }) : null;
+  if (deliveryKey && delivery?.acknowledgedKeys?.has(deliveryKey)) return;
+  const acknowledge = async () => {
+    if (deliveryKey) await delivery?.recordAcknowledgement?.(deliveryKey);
+  };
   try {
     console.log(`[Email] Checking if failure email should be sent for user ${userId}`);
 
@@ -1363,6 +1378,7 @@ async function sendFailureEmailNotification(
       const parsed = typeof settingRow.value === "string" ? JSON.parse(settingRow.value) : settingRow.value;
       if (parsed === false) {
         console.log("[Email] Post failure emails globally disabled by admin, skipping");
+        await acknowledge();
         return;
       }
     }
@@ -1385,6 +1401,7 @@ async function sendFailureEmailNotification(
 
     if (!emailEnabled) {
       console.log("[Email] Email notifications disabled for user, skipping");
+      await acknowledge();
       return;
     }
 
@@ -1427,6 +1444,7 @@ async function sendFailureEmailNotification(
       if (delivery) throw new Error(`Email function reported failure: ${message}`);
       console.error("[Email] Email function reported failure:", emailData);
     } else {
+      await acknowledge();
       console.log("[Email] Failure notification email sent successfully");
     }
   } catch (error) {
@@ -1499,6 +1517,7 @@ async function dispatchFinalNotifications(
   finalStatus: string,
   platformResults: PlatformResultSummary[],
   hasFailed: boolean,
+  delivery: AcknowledgedDelivery,
 ): Promise<void> {
   const webhookEvent = finalStatus === "completed" ? "post.completed" : "post.failed";
   const webhookData = {
@@ -1515,7 +1534,7 @@ async function dispatchFinalNotifications(
   } : undefined;
 
   const tasks: Promise<unknown>[] = [
-    sendWebhookNotifications(supabase, post.user_id, webhookEvent, webhookData, perRequestWebhook, { requireAcknowledgement: true }),
+    sendWebhookNotifications(supabase, post.user_id, webhookEvent, webhookData, perRequestWebhook, delivery),
   ];
 
   if (typeof (globalThis as Record<string, unknown>).EdgeRuntime !== "undefined" && typeof (globalThis as { EdgeRuntime?: { waitUntil?: unknown } }).EdgeRuntime?.waitUntil === "function") {
@@ -1527,17 +1546,19 @@ async function dispatchFinalNotifications(
             platform: result.platform,
             post_url: result.platform_post_url,
             caption: post.caption,
-          }, perRequestWebhook, { requireAcknowledgement: true })
+          }, perRequestWebhook, delivery)
         );
       }
     }
   }
 
   if (hasFailed) {
-    tasks.push(sendFailureEmailNotification(supabase, post.user_id, post.caption || "", platformResults, { requireAcknowledgement: true }));
+    tasks.push(sendFailureEmailNotification(supabase, post.user_id, post.caption || "", platformResults, delivery));
   }
 
-  await Promise.all(tasks);
+  const delivered = await Promise.allSettled(tasks);
+  const failed = delivered.find((result): result is PromiseRejectedResult => result.status === "rejected");
+  if (failed) throw failed.reason;
 }
 
 /**
@@ -1595,7 +1616,20 @@ async function announceFinalPost(
         platformResults = outcome.results;
         hasFailed = outcome.hasFailed;
       }
-      await dispatchFinalNotifications(supabase, post, finalStatus, platformResults, hasFailed);
+      const acknowledgedKeys = new Set(claim.acknowledgedDeliveryKeys ?? []);
+      const delivery: AcknowledgedDelivery = {
+        requireAcknowledgement: true,
+        acknowledgedKeys,
+        recordAcknowledgement: async (key) => {
+          const { data: recorded, error } = await supabase.rpc("ack_threads_image_notification_delivery", {
+            p_post_id: post.id, p_expected_processing_started_at: imageFence.processingStartedAt,
+            p_claim_id: claim.claimId!, p_delivery_key: key,
+          });
+          if (error || recorded !== true) throw new Error("Notification destination acknowledgement could not be persisted");
+          acknowledgedKeys.add(key);
+        },
+      };
+      await dispatchFinalNotifications(supabase, post, finalStatus, platformResults, hasFailed, delivery);
       const confirmed = await confirmThreadsImageNotification(
         supabase,
         post.id,
@@ -2252,6 +2286,20 @@ Deno.serve(async (req) => {
       return createErrorResponse(msg, 400);
     }
 
+    const restoreUnpublishedClaim = async (): Promise<boolean> => {
+      if (!claim.processingStartedAt) return true;
+      const { data: restored, error: restoreError } = await supabase.from("posts")
+        .update({ status: post.status }).eq("id", post_id).eq("status", "processing")
+        .eq("processing_started_at", claim.processingStartedAt).select("id");
+      if (!restoreError && (restored ?? []).length === 1) return true;
+      await writeLogRow(supabase, {
+        level: "error", category: "post", source: "process-post", user_id: post.user_id,
+        message: "Unpublished processing claim could not be restored; current state retained",
+        metadata: { event: "unpublished_claim_restore_failed", post_id, processing_started_at: claim.processingStartedAt },
+      });
+      return false;
+    };
+
     // A direct override must not bypass the uncertain-image retry exclusion used
     // by SQL and n8n/MCP. Proven failures on other accounts remain eligible.
     if (!resume && accounts.some((account) => account.platform === "threads")) {
@@ -2279,17 +2327,8 @@ Deno.serve(async (req) => {
           metadata: { event: "threads_uncertain_retry_refused", post_id, account_ids: [...blocked], detail: message },
         });
         if (logError) console.error("Threads uncertain-retry refusal log failed:", logError);
-        if (claim.processingStartedAt) {
-          const { data: restored, error: restoreError } = await supabase
-            .from("posts")
-            .update({ status: post.status })
-            .eq("id", post_id)
-            .eq("status", "processing")
-            .eq("processing_started_at", claim.processingStartedAt)
-            .select("id");
-          if (restoreError || (restored ?? []).length !== 1) {
-            return createErrorResponse("Threads image retry was refused and the prior parent state could not be restored. Current state was not replaced intentionally.", 503);
-          }
+        if (!await restoreUnpublishedClaim()) {
+          return createErrorResponse("Threads image retry was refused and the prior parent state could not be restored. Current state was not replaced intentionally.", 503);
         }
         return createErrorResponse(message, statusCode);
       };
@@ -2312,8 +2351,15 @@ Deno.serve(async (req) => {
         .eq("post_id", post_id)
         .eq("status", "success");
       if (priorSuccessesError) {
-        console.error("Could not verify prior successful platform posts:", priorSuccessesError);
-        return createErrorResponse("Could not verify prior successful platform posts for retry safety.", 503);
+        await writeLogRow(supabase, {
+          level: "error", category: "post", source: "process-post", user_id: post.user_id,
+          message: "Prior successful publications could not be read; no provider work started",
+          metadata: { event: "prior_publication_read_failed", post_id },
+        });
+        const restored = await restoreUnpublishedClaim();
+        return createErrorResponse(restored
+          ? "Could not verify prior successful platform posts for retry safety. Prior state restored."
+          : "Could not verify prior successful platform posts or restore the processing claim. Current state retained.", 503);
       }
       retainedPlatformPostIds = (priorSuccesses ?? [])
         .filter((r: { id?: string | null; social_account_id?: string | null }) =>

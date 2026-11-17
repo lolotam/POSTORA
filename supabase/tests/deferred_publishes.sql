@@ -1106,9 +1106,9 @@ BEGIN
     -- Mismatched target accounts against existing attempt_target_account_ids
     PERFORM public.record_threads_image_checkpoint(
       p_t75, acct_1, payload, attempt_at, fence_t75,
-      ARRAY[acct_1] -- diverges from [acct_1, acct_2]
+      ARRAY[acct_1], ARRAY[]::uuid[] -- diverges from [acct_1, acct_2]
     );
-  EXCEPTION WHEN OTHERS THEN
+  EXCEPTION WHEN data_exception THEN
     err_caught := true;
   END;
   ASSERT err_caught, 'T76 divergent target scope arguments rejected during checkpointing';
@@ -1120,9 +1120,9 @@ BEGIN
   BEGIN
     PERFORM public.record_threads_image_checkpoint(
       p_t75, acct_foreign, payload, attempt_at, fence_t75,
-      ARRAY[acct_1, acct_2]
+      ARRAY[acct_1, acct_2], ARRAY[]::uuid[]
     );
-  EXCEPTION WHEN OTHERS THEN
+  EXCEPTION WHEN foreign_key_violation THEN
     err_caught := true;
   END;
   ASSERT err_caught, 'T77 foreign tenant account rejected during checkpointing';
@@ -1495,6 +1495,10 @@ BEGIN
       'account_updated_at', (SELECT updated_at FROM public.social_accounts WHERE id = acct_1)
     );
 
+    INSERT INTO public.platform_posts(id,post_id,social_account_id,platform,status,created_at)
+    VALUES(gen_random_uuid(),p_t85,acct_1,'threads','success',attempt_at-interval '2 hours'),
+      (gen_random_uuid(),p_t85,acct_1,'threads','success',attempt_at-interval '1 hour');
+
     err_caught := false;
     BEGIN
       PERFORM public.record_threads_image_checkpoint(
@@ -1575,6 +1579,82 @@ BEGIN
     res := public.claim_threads_image_notification(p_t80,attempt_at,'completed',fence_t80);
     ASSERT res->>'claimed'='true' AND res #>> ARRAY['authorized_platform_post_statuses',row_s1::text]='success',
       'T87 valid scope returns authoritative current result statuses';
+  END;
+
+  -- T88: A pre-M2 image checkpoint has no parent scope metadata. Finalization
+  -- freezes the resolved scope so notification claiming remains compatible.
+  DECLARE
+    legacy_post uuid := gen_random_uuid();
+    legacy_row uuid := gen_random_uuid();
+    legacy_fence jsonb;
+    lease_owner uuid;
+    replacement_owner uuid;
+  BEGIN
+    INSERT INTO public.posts(id,user_id,caption,platforms,status,processing_started_at,source,metadata)
+    VALUES(legacy_post,owner_id,'M1 rolling checkpoint',ARRAY['threads'],'processing',attempt_at,'manual',
+      jsonb_build_object('selected_account_ids',jsonb_build_array(acct_1)));
+    SELECT jsonb_build_object('user_id',user_id,'caption',caption,'media_file_ids',media_file_ids,
+      'metadata',public.normalize_threads_internal_metadata(metadata),'platforms',platforms,'scheduled_at',scheduled_at,
+      'publish_requested_at',publish_requested_at,'source',source) INTO legacy_fence FROM public.posts WHERE id=legacy_post;
+    INSERT INTO public.platform_posts(id,post_id,social_account_id,platform,status,created_at,response_data)
+    VALUES(legacy_row,legacy_post,acct_1,'threads','success',attempt_at,jsonb_build_object('deferred',
+      jsonb_build_object('kind','threads','media_type','IMAGE','attempt_started_at',attempt_at)));
+    res:=public.finalize_threads_image_attempt(legacy_post,attempt_at,legacy_fence);
+    ASSERT res->>'status'='completed', 'T88 legacy fallback finalizes';
+    res:=public.claim_threads_image_notification(legacy_post,attempt_at,'completed',legacy_fence);
+    ASSERT res->>'claimed'='true', 'T88 legacy fallback persists its scope and can claim notice';
+    lease_owner:=(res->>'claim_id')::uuid;
+    ASSERT public.ack_threads_image_notification_delivery(legacy_post,attempt_at,lease_owner,repeat('a',64)),
+      'T89 destination acknowledgement is accepted under the active lease';
+    UPDATE public.posts SET metadata=jsonb_set(metadata,'{final_notification_intent,claimed_until}',to_jsonb(now()-interval '1 second')) WHERE id=legacy_post;
+    res:=public.claim_threads_image_notification(legacy_post,attempt_at,'completed',legacy_fence);
+    replacement_owner:=(res->>'claim_id')::uuid;
+    ASSERT res #>> ARRAY['delivery_acks',repeat('a',64)]='true', 'T89 acknowledged destination survives lease rollover';
+    ASSERT NOT public.ack_threads_image_notification_delivery(legacy_post,attempt_at,lease_owner,repeat('b',64)),
+      'T89 old owner cannot acknowledge replacement deliveries';
+    ASSERT public.ack_threads_image_notification_delivery(legacy_post,attempt_at,replacement_owner,repeat('b',64)),
+      'T89 replacement owner adds its destination acknowledgement';
+    UPDATE public.posts SET caption='Owner changed content' WHERE id=legacy_post;
+    ASSERT NOT public.ack_threads_image_notification_delivery(legacy_post,attempt_at,replacement_owner,repeat('c',64)),
+      'T89 changed content cannot receive a stale destination acknowledgement';
+  END;
+
+  -- T90: Old terminal repairs cannot consume the slot of a due publication.
+  DECLARE
+    due_post uuid:=gen_random_uuid();
+    due_row uuid;
+    claimed_row uuid;
+  BEGIN
+    UPDATE public.platform_posts SET response_data=jsonb_set(response_data,'{deferred,claimed_until}',to_jsonb(now()+interval '1 day'))
+      WHERE response_data ? 'deferred';
+    INSERT INTO public.posts(id,user_id,caption,platforms,status,processing_started_at,source,metadata)
+    VALUES(due_post,owner_id,'Due pending priority',ARRAY['threads'],'processing',attempt_at,'manual','{}');
+    due_row:=public.record_deferred_platform_post(due_post,acct_1,jsonb_build_object('deferred',
+      jsonb_build_object('kind','threads','media_type','VIDEO','next_check_at',now()-interval '1 minute')));
+    UPDATE public.platform_posts SET response_data=jsonb_set(response_data,'{deferred,claimed_until}',to_jsonb(now()-interval '1 second')),
+      created_at=now()-interval '1 day' WHERE id=row_curr;
+    UPDATE public.posts SET metadata=jsonb_set(metadata,'{final_notification_intent,claimed_until}',to_jsonb(now()-interval '1 second')) WHERE id=p_t80;
+    SELECT platform_post_id INTO claimed_row FROM public.claim_deferred_publishes(1);
+    ASSERT claimed_row=due_row, 'T90 due pending publication takes priority over older terminal repair';
+  END;
+
+  -- T91: Terminal repairs rotate by their last lease, not original creation time.
+  DECLARE
+    old_post uuid:=gen_random_uuid();
+    new_post uuid:=gen_random_uuid();
+    old_row uuid:=gen_random_uuid();
+    new_row uuid:=gen_random_uuid();
+    selected_row uuid;
+  BEGIN
+    UPDATE public.platform_posts SET response_data=jsonb_set(response_data,'{deferred,claimed_until}',to_jsonb(now()+interval '1 day')) WHERE response_data ? 'deferred';
+    INSERT INTO public.posts(id,user_id,platforms,status,processing_started_at,metadata)
+    SELECT id,owner_id,ARRAY['threads'],'completed',attempt_at,jsonb_build_object('final_notification_intent',
+      jsonb_build_object('status','completed','attempt_started_at',attempt_at,'notified',false)) FROM unnest(ARRAY[old_post,new_post]) id;
+    INSERT INTO public.platform_posts(id,post_id,social_account_id,platform,status,created_at,response_data)
+    VALUES(old_row,old_post,acct_1,'threads','success',now()-interval '1 day',jsonb_build_object('deferred',jsonb_build_object('kind','threads','media_type','IMAGE','attempt_started_at',attempt_at,'claimed_until',now()-interval '1 second'))),
+      (new_row,new_post,acct_1,'threads','success',now(),jsonb_build_object('deferred',jsonb_build_object('kind','threads','media_type','IMAGE','attempt_started_at',attempt_at,'claimed_until',now()-interval '2 seconds')));
+    SELECT platform_post_id INTO selected_row FROM public.claim_deferred_publishes(1);
+    ASSERT selected_row=new_row, 'T91 recently retried old notification cannot monopolize terminal repairs by original creation order';
   END;
 
 END $$;

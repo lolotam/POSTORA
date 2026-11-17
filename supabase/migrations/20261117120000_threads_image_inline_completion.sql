@@ -706,6 +706,7 @@ AS $$
            (
              p.status = 'processing'
              AND (pp.response_data #>> '{deferred,attempt_started_at}')::timestamptz IS NOT DISTINCT FROM p.processing_started_at
+             AND NOT EXISTS (SELECT 1 FROM public.platform_posts sibling WHERE sibling.post_id=p.id AND sibling.status='pending')
            )
            OR (
              p.status IN ('completed', 'failed')
@@ -722,7 +723,10 @@ AS $$
          )
        )
      )
-     ORDER BY pp.created_at
+     ORDER BY CASE WHEN pp.status='pending' THEN 0 ELSE 1 END,
+       CASE WHEN pp.status='pending' THEN pp.created_at
+         ELSE coalesce((pp.response_data #>> '{deferred,claimed_until}')::timestamptz,pp.created_at) END,
+       pp.created_at
      LIMIT greatest(p_limit, 0)
      FOR UPDATE OF pp SKIP LOCKED
   )
@@ -868,7 +872,8 @@ BEGIN
     'status', v_post.status,
     'claim_id', v_claim_id,
     'authorized_platform_post_ids', v_intent -> 'authorized_platform_post_ids',
-    'authorized_platform_post_statuses', v_result_statuses
+    'authorized_platform_post_statuses', v_result_statuses,
+    'delivery_acks', coalesce(v_intent -> 'delivery_acks', '{}'::jsonb)
   );
 END;
 $$;
@@ -877,6 +882,50 @@ REVOKE ALL ON FUNCTION public.claim_threads_image_notification(uuid, timestamptz
   FROM PUBLIC, anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.claim_threads_image_notification(uuid, timestamptz, text, jsonb, interval)
   TO service_role;
+
+-- Acknowledged destinations survive notification lease handover. A lost external
+-- response remains ambiguous, but an acknowledged destination is not sent again.
+CREATE OR REPLACE FUNCTION public.ack_threads_image_notification_delivery(
+  p_post_id uuid,
+  p_expected_processing_started_at timestamptz,
+  p_claim_id uuid,
+  p_delivery_key text
+)
+RETURNS boolean
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  v_post public.posts%ROWTYPE;
+  v_intent jsonb;
+  v_content jsonb;
+BEGIN
+  IF p_claim_id IS NULL OR p_expected_processing_started_at IS NULL
+     OR p_delivery_key IS NULL OR p_delivery_key !~ '^[a-f0-9]{64}$' THEN RETURN false; END IF;
+  SELECT * INTO v_post FROM public.posts WHERE id=p_post_id FOR UPDATE;
+  IF NOT FOUND THEN RETURN false; END IF;
+  v_intent := v_post.metadata->'final_notification_intent';
+  IF v_post.processing_started_at IS DISTINCT FROM p_expected_processing_started_at
+     OR (v_intent->>'attempt_started_at')::timestamptz IS DISTINCT FROM p_expected_processing_started_at
+     OR (v_intent->>'claim_id')::uuid IS DISTINCT FROM p_claim_id
+     OR v_post.status IS DISTINCT FROM v_intent->>'status'
+     OR coalesce((v_intent->>'claimed_until')::timestamptz,'-infinity')<=now()
+     OR coalesce((v_intent->>'notified')::boolean,false) THEN RETURN false; END IF;
+  v_content := jsonb_build_object(
+    'user_id',v_post.user_id,'caption',v_post.caption,'media_file_ids',v_post.media_file_ids,
+    'metadata',public.normalize_threads_internal_metadata(v_post.metadata),'platforms',v_post.platforms,
+    'scheduled_at',v_post.scheduled_at,'publish_requested_at',v_post.publish_requested_at,'source',v_post.source
+  );
+  IF (v_intent->>'content_hash') IS DISTINCT FROM md5(v_content::text) THEN RETURN false; END IF;
+  UPDATE public.posts SET metadata=jsonb_set(metadata,'{final_notification_intent}',
+    v_intent||jsonb_build_object('delivery_acks',coalesce(v_intent->'delivery_acks','{}'::jsonb)||jsonb_build_object(p_delivery_key,true)))
+  WHERE id=p_post_id;
+  RETURN true;
+END;
+$$;
+REVOKE ALL ON FUNCTION public.ack_threads_image_notification_delivery(uuid,timestamptz,uuid,text) FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.ack_threads_image_notification_delivery(uuid,timestamptz,uuid,text) TO service_role;
 
 -- Confirm final notification delivery after awaited external dispatch ACK or outbox emission
 DROP FUNCTION IF EXISTS public.confirm_threads_image_notification(uuid, timestamptz, text, jsonb);
@@ -1164,11 +1213,16 @@ BEGIN
   -- Step 2: Stage fresh final_notification_intent in a separate metadata-only update (does not fire BEFORE UPDATE OF status trigger).
   UPDATE public.posts
      SET metadata = coalesce(metadata, '{}'::jsonb) || jsonb_build_object(
+           'attempt_started_at', p_expected_processing_started_at,
+           'attempt_target_account_ids', to_jsonb(v_target_account_ids),
+           'attempt_retained_platform_post_ids', to_jsonb(v_retained_row_ids),
            'final_notification_intent', jsonb_build_object(
              'status', v_status,
              'attempt_started_at', p_expected_processing_started_at,
              'notified', false,
              'created_at', now(),
+             'content_hash', md5(v_content::text),
+             'delivery_acks', '{}'::jsonb,
              'authorized_platform_post_ids', to_jsonb(v_authorized_row_ids)
            )
          )

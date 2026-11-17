@@ -11925,6 +11925,15 @@ export type Database = {
         Args: { p_limit?: number; p_lease?: string }
         Returns: { platform_post_id: string; post_id: string }[]
       }
+      ack_threads_image_notification_delivery: {
+        Args: {
+          p_post_id: string
+          p_expected_processing_started_at: string
+          p_claim_id: string
+          p_delivery_key: string
+        }
+        Returns: boolean
+      }
       claim_threads_image_notification: {
         Args: {
           p_post_id: string
