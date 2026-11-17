@@ -1614,7 +1614,20 @@ async function announceFinalPost(
       }
       return true;
     } catch (err) {
-      console.error(`[process-post] threads image external notification dispatch failed:`, err);
+      const deliveryError = (err instanceof Error ? err.message : "Unknown notification delivery failure")
+        .replace(/https?:\/\/\S+/gi, "[redacted URL]")
+        .replace(/Bearer\s+\S+/gi, "Bearer [redacted]")
+        .slice(0, 500);
+      const logError = await writeLogRow(supabase, {
+        level: "error", category: "post", source: "process-post", user_id: post.user_id,
+        message: "Threads image final notification delivery failed; intent retained for recovery",
+        metadata: {
+          event: "threads_image_notification_delivery_failed", post_id: post.id,
+          notification_claim_id: claim.claimId, attempt_started_at: imageFence.processingStartedAt,
+          delivery_error: deliveryError,
+        },
+      });
+      if (logError) console.error("Threads image notification diagnostic could not be persisted:", logError);
       return false;
     }
   }

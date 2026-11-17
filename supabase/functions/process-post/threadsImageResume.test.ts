@@ -1964,6 +1964,13 @@ Deno.test("registered process-post durably completes single-image Threads contai
         assertEquals(deliveredNotifications.length, 0);
         assertEquals(publishes, 1);
 
+        const deliveryFailureLog = logs.find(entry => (entry.metadata as Record<string, unknown> | undefined)?.event === "threads_image_notification_delivery_failed");
+        assert(deliveryFailureLog, "Delivery refusal must persist its diagnostic before returning");
+        const diagnostic = deliveryFailureLog.metadata as Record<string, unknown>;
+        assertEquals(diagnostic.post_id, POST);
+        assertEquals(typeof diagnostic.notification_claim_id, "string");
+        assertEquals(typeof diagnostic.delivery_error, "string");
+        assert(String(diagnostic.delivery_error).length > 0);
         webhookFailure = "none";
         clock += 181_000;
         let freshHandler: Handler | undefined;
