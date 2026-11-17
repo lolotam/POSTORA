@@ -112,7 +112,12 @@ BEGIN
        public.normalize_threads_internal_metadata(p_expected_content -> 'metadata'),
        true
      )
-     OR v_row.response_data -> 'content_fence' IS DISTINCT FROM jsonb_set(
+     OR jsonb_set(
+       v_row.response_data -> 'content_fence',
+       '{metadata}',
+       public.normalize_threads_internal_metadata(v_row.response_data #> '{content_fence,metadata}'),
+       true
+     ) IS DISTINCT FROM jsonb_set(
        p_expected_content,
        '{metadata}',
        public.normalize_threads_internal_metadata(p_expected_content -> 'metadata'),
@@ -230,7 +235,12 @@ BEGIN
        public.normalize_threads_internal_metadata(p_expected_content -> 'metadata'),
        true
      )
-     OR v_row.response_data -> 'content_fence' IS DISTINCT FROM jsonb_set(
+     OR jsonb_set(
+       v_row.response_data -> 'content_fence',
+       '{metadata}',
+       public.normalize_threads_internal_metadata(v_row.response_data #> '{content_fence,metadata}'),
+       true
+     ) IS DISTINCT FROM jsonb_set(
        p_expected_content,
        '{metadata}',
        public.normalize_threads_internal_metadata(p_expected_content -> 'metadata'),
@@ -330,7 +340,12 @@ BEGIN
        public.normalize_threads_internal_metadata(p_expected_content -> 'metadata'),
        true
      )
-     OR v_row.response_data -> 'content_fence' IS DISTINCT FROM jsonb_set(
+     OR jsonb_set(
+       v_row.response_data -> 'content_fence',
+       '{metadata}',
+       public.normalize_threads_internal_metadata(v_row.response_data #> '{content_fence,metadata}'),
+       true
+     ) IS DISTINCT FROM jsonb_set(
        p_expected_content,
        '{metadata}',
        public.normalize_threads_internal_metadata(p_expected_content -> 'metadata'),

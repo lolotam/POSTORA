@@ -948,6 +948,66 @@ BEGIN
   ), 'T67 claim_deferred_publishes claims terminal row with unconfirmed notification intent';
 END $$;
 
+-- A02 rolling compatibility: M1 checkpoints can contain prior-cycle output metadata.
+DO $$
+DECLARE
+  owner_id uuid := 'd1d1d1d1-1111-4111-8111-d1d1d1d1d1d1';
+  account_id uuid := 'd3d3d3d3-3333-4333-8333-d3d3d3d3d3d3';
+  legacy_post_id uuid := 'e0000000-0000-4000-8000-0000000000f8';
+  row_id uuid;
+  attempt_at timestamptz := now();
+  lease_at timestamptz;
+  legacy_fence jsonb;
+  current_fence jsonb;
+  payload jsonb;
+  claimed jsonb;
+  saved jsonb;
+BEGIN
+  INSERT INTO public.posts (id, user_id, caption, platforms, status, processing_started_at, source, metadata)
+  VALUES (legacy_post_id, owner_id, 'legacy checkpoint fence', ARRAY['threads'], 'processing', attempt_at, 'manual',
+    jsonb_build_object('final_notified_at', attempt_at - interval '1 day'));
+  legacy_fence := jsonb_build_object(
+    'user_id', owner_id, 'caption', 'legacy checkpoint fence', 'media_file_ids', NULL,
+    'metadata', jsonb_build_object('final_notified_at', attempt_at - interval '1 day'),
+    'platforms', ARRAY['threads'], 'scheduled_at', NULL, 'publish_requested_at', NULL, 'source', 'manual'
+  );
+  current_fence := jsonb_set(legacy_fence, '{metadata}',
+    public.normalize_threads_internal_metadata(legacy_fence -> 'metadata'));
+  payload := jsonb_build_object('deferred', jsonb_build_object(
+    'kind', 'threads', 'media_type', 'IMAGE', 'container_id', 'legacy-fence-container',
+    'attempt_started_at', attempt_at, 'attempts', 0, 'first_deferred_at', attempt_at,
+    'give_up_at', attempt_at + interval '30 minutes', 'next_check_at', attempt_at + interval '1 minute'
+  ), 'content_fence', legacy_fence, 'account_updated_at',
+    (SELECT updated_at FROM public.social_accounts WHERE id = account_id));
+  row_id := public.record_threads_image_checkpoint(legacy_post_id, account_id, payload, attempt_at, legacy_fence);
+  ASSERT (SELECT response_data -> 'content_fence' FROM public.platform_posts WHERE id = row_id) = legacy_fence,
+    'T68 legacy stored output metadata is retained during rolling compatibility';
+
+  UPDATE public.posts SET caption = 'owner edit' WHERE id = legacy_post_id;
+  ASSERT public.claim_threads_image_inline_execution(row_id, legacy_post_id, account_id,
+    'legacy-fence-container', attempt_at, current_fence, 'legacy-fence-execution') IS NULL,
+    'T69 normalization never permits an actual publishing-input edit';
+  UPDATE public.posts SET caption = 'legacy checkpoint fence' WHERE id = legacy_post_id;
+  claimed := public.claim_threads_image_inline_execution(row_id, legacy_post_id, account_id,
+    'legacy-fence-container', attempt_at, current_fence, 'legacy-fence-execution');
+  ASSERT claimed ->> 'platform_post_id' = row_id::text AND claimed IS NOT NULL,
+    'T70 an unchanged legacy fence can acquire inline ownership';
+  lease_at := (claimed #>> '{response_data,deferred,claimed_until}')::timestamptz;
+  ASSERT public.mark_threads_image_publish_started(row_id, lease_at, 'legacy-fence-execution', current_fence),
+    'T71 an unchanged legacy fence can persist its publish marker';
+  ASSERT public.release_threads_image_publish_unsent(row_id, 'legacy-fence-container', attempt_at,
+    lease_at, 'legacy-fence-execution', 'legacy-fence-execution', current_fence),
+    'T72 an unchanged legacy fence permits only the exact definitely-unsent release';
+  ASSERT public.mark_threads_image_publish_started(row_id, lease_at, 'legacy-fence-execution', current_fence),
+    'T73 the same owner can mark again after an acknowledged unsent release';
+  saved := (SELECT response_data FROM public.platform_posts WHERE id = row_id);
+  PERFORM public.partner_settle_platform_post(row_id, legacy_post_id, account_id, 'threads', 'success',
+    'legacy-fence-published', NULL, NULL, saved);
+  ASSERT (SELECT status FROM public.platform_posts WHERE id = row_id) = 'success'
+    AND (SELECT count(*) FROM public.platform_posts WHERE post_id = legacy_post_id) = 1,
+    'T74 legacy fence completion settles the original durable row';
+END $$;
+
 ROLLBACK;
 
 \echo '=== deferred_publishes: ALL CHECKS PASSED ==='
