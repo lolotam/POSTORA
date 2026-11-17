@@ -1919,6 +1919,7 @@ DECLARE
   v_expected_retained uuid[];
   v_target_ids uuid[];
   v_anchor_ids uuid[];
+  v_frozen_ids uuid[];
   v_carried_ids uuid[];
 BEGIN
   IF p_post_id IS NULL OR p_expected_processing_started_at IS NULL THEN
@@ -1993,11 +1994,20 @@ BEGIN
   -- Resolve the original worker's explicit carried-Story receipts on closure and
   -- every refresh, including a recorder's committed-but-unacknowledged insert.
   -- Existing-row recorder replays need not settle again to authorize this result.
-  SELECT coalesce(array_agg(x::uuid), ARRAY[]::uuid[]) INTO v_anchor_ids
+  SELECT coalesce(array_agg(x::uuid), ARRAY[]::uuid[]) INTO v_frozen_ids
     FROM jsonb_array_elements_text(v_candidate -> 'exact_platform_post_ids') x;
-  IF v_candidate ->> 'fanout_closed' IS DISTINCT FROM 'true' THEN
+  IF v_candidate ->> 'fanout_closed' = 'true' THEN
+    SELECT coalesce(array_agg(x::uuid), ARRAY[]::uuid[]) INTO v_anchor_ids
+      FROM jsonb_array_elements_text(v_candidate -> 'original_platform_post_ids') x;
+    IF cardinality(v_anchor_ids) = 0 THEN
+      RETURN jsonb_build_object('closed', false, 'error', 'original_scope_unavailable');
+    END IF;
+  ELSE
     v_anchor_ids := p_exact_platform_post_ids;
+    v_frozen_ids := p_exact_platform_post_ids;
   END IF;
+  -- Derived successes are results only; they never become original carrier authority.
+  v_candidate := v_candidate || jsonb_build_object('original_platform_post_ids', to_jsonb(v_anchor_ids));
   PERFORM anchor.id FROM public.platform_posts anchor WHERE anchor.id = ANY(v_anchor_ids)
     ORDER BY anchor.id FOR UPDATE;
   SELECT coalesce(array_agg(DISTINCT story.id), ARRAY[]::uuid[]) INTO v_carried_ids
@@ -2014,8 +2024,8 @@ BEGIN
   SELECT array_agg(DISTINCT id ORDER BY id) INTO p_exact_platform_post_ids
     FROM unnest(p_exact_platform_post_ids || v_carried_ids) id;
   IF v_candidate ->> 'fanout_closed' = 'true' AND NOT (
-    p_exact_platform_post_ids @> (v_anchor_ids || v_carried_ids)
-    AND (v_anchor_ids || v_carried_ids) @> p_exact_platform_post_ids
+    p_exact_platform_post_ids @> (v_frozen_ids || v_carried_ids)
+    AND (v_frozen_ids || v_carried_ids) @> p_exact_platform_post_ids
   ) THEN
     RETURN jsonb_build_object('closed', false, 'error', 'fanout_scope_frozen');
   END IF;
@@ -2100,7 +2110,7 @@ BEGIN
     v_status := CASE WHEN (v_success_count + v_retained_count) > 0 THEN 'completed' ELSE 'failed' END;
 
     -- Atomically update status and ready candidate
-    IF v_post.status = 'processing' THEN
+    IF v_post.status = 'processing' OR v_post.status IS DISTINCT FROM v_status THEN
       UPDATE public.posts
          SET status = v_status,
              metadata = coalesce(metadata, '{}'::jsonb) || jsonb_build_object(

@@ -2068,6 +2068,51 @@ BEGIN
   ASSERT (SELECT count(*) FROM public.platform_posts WHERE post_id=p)=2,'T100 no duplicate Story or result';
 END $$;
 
+-- T101: refresh may correct an authorized terminal rollup, but derived rows never authorize chains.
+DO $$
+DECLARE
+  u uuid; a uuid; p uuid; anchor_id uuid; story_row uuid; chained_row uuid;
+  t timestamptz := now(); f jsonb; answer jsonb; scenario text;
+BEGIN
+  FOREACH scenario IN ARRAY ARRAY['late','chain'] LOOP
+    u:=gen_random_uuid(); a:=gen_random_uuid(); p:=gen_random_uuid(); anchor_id:=gen_random_uuid();
+    INSERT INTO auth.users(id,email) VALUES(u,'scope-refresh-'||scenario||'@example.invalid');
+    INSERT INTO public.social_accounts(id,user_id,platform,platform_user_id,access_token,is_active)
+      VALUES(a,u,'instagram','scope-refresh','fixture',true);
+    INSERT INTO public.posts(id,user_id,caption,platforms,status,processing_started_at,source,metadata)
+      VALUES(p,u,'scope refresh',ARRAY['instagram'],'processing',t,'manual','{}');
+    SELECT jsonb_build_object('user_id',x.user_id,'caption',x.caption,'media_file_ids',x.media_file_ids,
+      'metadata','{}'::jsonb,'platforms',x.platforms,'scheduled_at',x.scheduled_at,
+      'publish_requested_at',x.publish_requested_at,'source',x.source) INTO f FROM public.posts x WHERE x.id=p;
+    PERFORM public.enroll_post_notification_recovery(p,t,f,ARRAY[a],ARRAY[]::uuid[]);
+    INSERT INTO public.platform_posts(id,post_id,social_account_id,platform,status,created_at,response_data)
+      VALUES(anchor_id,p,a,'instagram','pending',t,'{"unrecorded_story":{"id":"original-story","url":"https://fixture.invalid/original"}}');
+    PERFORM public.close_post_fanout(p,t,f,ARRAY[anchor_id],ARRAY[]::uuid[]);
+    IF scenario='late' THEN
+      PERFORM public.partner_settle_platform_post(anchor_id,NULL,NULL,NULL,'failed',NULL,NULL,'anchor expired',NULL);
+      ASSERT (SELECT status FROM public.posts WHERE id=p)='failed','T101 initial failed rollup';
+    END IF;
+    answer:=public.record_published_story(p,a,'original-story','https://fixture.invalid/original',
+      '{"unrecorded_story":{"id":"chained-story","url":"https://fixture.invalid/chained"}}');
+    story_row:=(answer->>'platform_post_id')::uuid;
+    IF scenario='chain' THEN
+      answer:=public.record_published_story(p,a,'chained-story','https://fixture.invalid/chained','{}');
+      chained_row:=(answer->>'platform_post_id')::uuid;
+      ASSERT NOT (SELECT (metadata #> '{legacy_notification_candidate,exact_platform_post_ids}') @> to_jsonb(ARRAY[chained_row]) FROM public.posts WHERE id=p),'T101 derived result cannot authorize a chain';
+      PERFORM public.partner_settle_platform_post(anchor_id,NULL,NULL,NULL,'failed',NULL,NULL,'anchor expired',NULL);
+    END IF;
+    ASSERT (SELECT status FROM public.posts WHERE id=p)='completed','T101 late carried success corrects terminal rollup';
+    ASSERT (SELECT metadata #>> '{legacy_notification_candidate,status}' FROM public.posts WHERE id=p)='completed','T101 candidate and parent agree';
+    ASSERT (SELECT metadata #> '{legacy_notification_candidate,original_platform_post_ids}' FROM public.posts WHERE id=p)=to_jsonb(ARRAY[anchor_id]),'T101 original anchors remain immutable';
+    ASSERT (SELECT jsonb_array_length(metadata #> '{legacy_notification_candidate,authorized_platform_post_ids}') FROM public.posts WHERE id=p)=2,'T101 only original anchor and proven carried Story notify';
+    answer:=public.claim_legacy_notification_candidate(p,t,f);
+    ASSERT answer->>'claimed'='true' AND answer->>'status'='completed','T101 corrected rollup can notify';
+    UPDATE public.posts SET status='failed' WHERE id=p;
+    answer:=public.close_post_fanout(p,t,f,ARRAY[anchor_id,story_row],ARRAY[]::uuid[]);
+    ASSERT answer->>'closed'='false' AND (SELECT status FROM public.posts WHERE id=p)='failed','T101 owner cancellation cannot be revived';
+  END LOOP;
+END $$;
+
 ROLLBACK;
 
 \echo '=== deferred_publishes: ALL CHECKS PASSED ==='
