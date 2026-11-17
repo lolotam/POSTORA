@@ -203,6 +203,7 @@ Deno.test("registered process-post durably completes single-image Threads contai
   let legacyNotificationClaimReads = 0;
   let recoveryRowReadFailure = false;
   let recoveryClaims = 0;
+  let refreshCandidateOnClaim = false;
   let enrollmentFailure: "none" | "error" | "lost" = "none";
   let missingMedia = false;
   let closedRetainedIds: string[] = [];
@@ -300,6 +301,7 @@ Deno.test("registered process-post durably completes single-image Threads contai
     legacyNotificationClaimReads = 0;
     recoveryRowReadFailure = false;
     recoveryClaims = 0;
+    refreshCandidateOnClaim = false;
     enrollmentFailure = "none";
     missingMedia = false;
     closedRetainedIds = [];
@@ -962,6 +964,7 @@ Deno.test("registered process-post durably completes single-image Threads contai
       cand.fanout_closed = true;
       cand.ready = scoped.length === ids.length && scoped.every(row => row.status !== "pending");
       cand.authorized_platform_post_ids = ids;
+      cand.authorized_platform_post_statuses = Object.fromEntries(scoped.map(row => [row.id, row.status]));
       if (cand.ready) post.status = scoped.some(row => row.status === "success") ? "completed" : "failed";
       return Response.json({ closed: true, ready: cand.ready, status: post.status });
     }
@@ -970,6 +973,11 @@ Deno.test("registered process-post durably completes single-image Threads contai
       const payload = await request.json() as Record<string, unknown>;
       const meta = (post.metadata ?? {}) as Record<string, unknown>;
       const cand = (meta.legacy_notification_candidate ?? {}) as Record<string, unknown>;
+      assertEquals(payload.p_candidate_id, cand.candidate_id, "every recovery claim binds the prepared candidate");
+      if (refreshCandidateOnClaim) {
+        cand.candidate_id = crypto.randomUUID();
+        return Response.json({ claimed: false, reason: "candidate_refreshed" });
+      }
       cand.consumed = true;
       meta.final_notified_at = new Date(BASE_CLOCK + clock).toISOString();
       return Response.json({ claimed: true, status: post.status, authorized_platform_post_ids: cand.authorized_platform_post_ids });
@@ -2447,7 +2455,7 @@ Deno.test("registered process-post durably completes single-image Threads contai
         assertEquals({ creates, statusReads, publishes, settlements, recoveryClaims }, { creates: 0, statusReads: 0, publishes: 0, settlements: 0, recoveryClaims: 0 });
       });
     }
-    for (const mode of ["ok", "read_error", "missing_row"] as const) {
+    for (const mode of ["ok", "read_error", "missing_row", "refreshed", "changed_status"] as const) {
       await test.step(`notification-only recovery ${mode} never enters publishing and retains pre-claim work on degraded reads`, async () => {
         reset();
         addFailedRow("facebook");
@@ -2460,6 +2468,7 @@ Deno.test("registered process-post durably completes single-image Threads contai
         const claimId = "77000000-0000-4000-8000-000000000002";
         post.metadata = { ...post.metadata as Record<string, unknown>, legacy_notification_candidate: {
           candidate_id: candidateId, authorized_platform_post_ids: [resultId], ready: true,
+          authorized_platform_post_statuses: { [resultId]: "success" },
         } };
         const call = () => handler!(new Request(`${ORIGIN}/functions/v1/process-post`, {
           method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${SERVICE}` },
@@ -2467,11 +2476,13 @@ Deno.test("registered process-post durably completes single-image Threads contai
             candidate_id: candidateId, notification_claim_id: claimId }),
         }));
         recoveryRowReadFailure = mode === "read_error";
+        refreshCandidateOnClaim = mode === "refreshed";
         if (mode === "missing_row") rows = [];
+        if (mode === "changed_status") rows[0].status = "failed";
         const response = await call();
-        assertEquals(response.status, mode === "ok" ? 200 : 503, await response.clone().text());
+        assertEquals(response.status, mode === "ok" || mode === "refreshed" ? 200 : 503, await response.clone().text());
         assertEquals({ creates, statusReads, publishes, settlements, inlineClaims }, { creates: 0, statusReads: 0, publishes: 0, settlements: 0, inlineClaims: 0 });
-        assertEquals(recoveryClaims, mode === "ok" ? 1 : 0);
+        assertEquals(recoveryClaims, mode === "ok" || mode === "refreshed" ? 1 : 0);
         if (mode === "ok") {
           const receipt = await response.json();
           assertEquals(receipt.notification_scheduled, true);

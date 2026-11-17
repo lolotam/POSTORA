@@ -1921,6 +1921,7 @@ DECLARE
   v_anchor_ids uuid[];
   v_frozen_ids uuid[];
   v_carried_ids uuid[];
+  v_result_statuses jsonb;
 BEGIN
   IF p_post_id IS NULL OR p_expected_processing_started_at IS NULL THEN
     RETURN jsonb_build_object('closed', false, 'error', 'invalid_arguments');
@@ -1963,11 +1964,11 @@ BEGIN
 
   IF v_candidate ->> 'content_hash' IS DISTINCT FROM md5(v_content::text)
      OR coalesce((v_candidate ->> 'consumed')::boolean, false)
-     OR NOT (v_post.status = 'processing' OR (
+     OR NOT coalesce(v_post.status = 'processing' OR (
        v_post.status IN ('completed', 'failed')
        AND v_post.metadata ->> 'settlement_rollup_status' = v_post.status
        AND (v_post.metadata ->> 'settlement_rollup_processing_started_at')::timestamptz = p_expected_processing_started_at
-     )) THEN
+     ), false) THEN
     RETURN jsonb_build_object('closed', false, 'error', 'candidate_authority_changed');
   END IF;
   IF v_post.metadata ? 'final_notification_intent' OR EXISTS (
@@ -2018,6 +2019,7 @@ BEGIN
     JOIN public.social_accounts account ON account.id = story.social_account_id
    WHERE anchor.id = ANY(v_anchor_ids) AND anchor.post_id = p_post_id
      AND anchor.platform = 'instagram' AND story.platform = 'instagram'
+     AND coalesce(anchor.response_data ->> 'ig_post_subtype', '') <> 'story'
      AND story.status = 'success' AND story.response_data ->> 'ig_post_subtype' = 'story'
      AND account.user_id = v_post.user_id AND account.id = ANY(v_target_ids)
      AND NOT (story.id = ANY(v_expected_retained));
@@ -2108,6 +2110,13 @@ BEGIN
   ELSE
     -- All exact rows are terminal!
     v_status := CASE WHEN (v_success_count + v_retained_count) > 0 THEN 'completed' ELSE 'failed' END;
+    SELECT coalesce(jsonb_object_agg(pp.id::text, pp.status), '{}'::jsonb) INTO v_result_statuses
+      FROM public.platform_posts pp WHERE pp.id = ANY(v_all_rows);
+    -- Bind a claim to the prepared result snapshot, not merely the parent attempt.
+    IF v_candidate -> 'authorized_platform_post_statuses' IS DISTINCT FROM v_result_statuses
+       OR v_candidate ->> 'status' IS DISTINCT FROM v_status THEN
+      v_candidate := v_candidate || jsonb_build_object('candidate_id', gen_random_uuid());
+    END IF;
 
     -- Atomically update status and ready candidate
     IF v_post.status = 'processing' OR v_post.status IS DISTINCT FROM v_status THEN
@@ -2126,7 +2135,8 @@ BEGIN
       'status', v_status,
       'exact_platform_post_ids', to_jsonb(p_exact_platform_post_ids),
       'retained_platform_post_ids', to_jsonb(p_retained_platform_post_ids),
-      'authorized_platform_post_ids', to_jsonb(v_all_rows)
+      'authorized_platform_post_ids', to_jsonb(v_all_rows),
+      'authorized_platform_post_statuses', v_result_statuses
     );
 
     UPDATE public.posts
@@ -2259,6 +2269,12 @@ BEGIN
   );
   IF v_readiness ->> 'ready' IS DISTINCT FROM 'true' THEN
     RETURN jsonb_build_object('claimed', false, 'reason', 'results_not_ready');
+  END IF;
+  SELECT * INTO v_post FROM public.posts WHERE id = p_post_id;
+  v_candidate := v_post.metadata -> 'legacy_notification_candidate';
+  IF p_candidate_id IS NOT NULL
+     AND (v_candidate ->> 'candidate_id')::uuid IS DISTINCT FROM p_candidate_id THEN
+    RETURN jsonb_build_object('claimed', false, 'reason', 'candidate_refreshed');
   END IF;
 
   -- Lease check: if held by someone else, refuse

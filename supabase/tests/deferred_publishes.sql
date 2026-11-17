@@ -1959,9 +1959,10 @@ BEGIN
   UPDATE public.posts p SET caption='closure' WHERE p.id=post_id;
   SELECT * INTO work FROM public.claim_post_completion_work(5) w WHERE w.post_id=closure_case.post_id;
   ASSERT work.claim_id IS NOT NULL,'T97 scheduler returns distinct lease identity';
+  candidate := work.candidate_id;
   UPDATE public.posts p SET metadata=jsonb_set(p.metadata,'{legacy_notification_candidate,claimed_until}',to_jsonb(now()-interval '1 second')) WHERE p.id=post_id;
   receipt := public.claim_legacy_notification_candidate(post_id,attempt_at,fence,candidate,interval '3 minutes',work.claim_id);
-  ASSERT receipt->>'claimed'='false','T97 expired scheduler cannot consume marker';
+  ASSERT receipt->>'claimed'='false' AND receipt->>'reason'='stale_scheduling_claim','T97 expired scheduler cannot consume marker';
   UPDATE public.posts p SET status='failed' WHERE p.id=post_id;
   ASSERT NOT (SELECT p.metadata ? 'legacy_notification_candidate' FROM public.posts p WHERE p.id=post_id),'T97 owner cancellation invalidates recovery';
   ASSERT NOT EXISTS(SELECT 1 FROM public.claim_post_completion_work(5) w WHERE w.post_id=closure_case.post_id),'T97 cancellation cannot be recovered';
@@ -2111,6 +2112,86 @@ BEGIN
     answer:=public.close_post_fanout(p,t,f,ARRAY[anchor_id,story_row],ARRAY[]::uuid[]);
     ASSERT answer->>'closed'='false' AND (SELECT status FROM public.posts WHERE id=p)='failed','T101 owner cancellation cannot be revived';
   END LOOP;
+END $$;
+
+-- T102: a refresh during the claim cannot consume or overwrite the prepared snapshot.
+DO $$
+DECLARE
+  u uuid := gen_random_uuid(); a uuid := gen_random_uuid(); p uuid := gen_random_uuid();
+  anchor_id uuid := gen_random_uuid(); story_row uuid := gen_random_uuid();
+  t timestamptz := now(); f jsonb; answer jsonb; old_candidate uuid; fresh_candidate uuid;
+  saved_metadata jsonb;
+BEGIN
+  INSERT INTO auth.users(id,email) VALUES(u,'claim-refresh-test@example.invalid');
+  INSERT INTO public.social_accounts(id,user_id,platform,platform_user_id,access_token,is_active)
+    VALUES(a,u,'instagram','claim-refresh','fixture',true);
+  INSERT INTO public.posts(id,user_id,caption,platforms,status,processing_started_at,source,metadata)
+    VALUES(p,u,'claim refresh',ARRAY['instagram'],'processing',t,'manual','{}');
+  SELECT jsonb_build_object('user_id',x.user_id,'caption',x.caption,'media_file_ids',x.media_file_ids,
+    'metadata','{}'::jsonb,'platforms',x.platforms,'scheduled_at',x.scheduled_at,
+    'publish_requested_at',x.publish_requested_at,'source',x.source) INTO f FROM public.posts x WHERE x.id=p;
+  PERFORM public.enroll_post_notification_recovery(p,t,f,ARRAY[a],ARRAY[]::uuid[]);
+  INSERT INTO public.platform_posts(id,post_id,social_account_id,platform,status,created_at,response_data)
+    VALUES(anchor_id,p,a,'instagram','pending',t,'{"unrecorded_story":{"id":"late-claim-story","url":"https://fixture.invalid/late"}}');
+  PERFORM public.close_post_fanout(p,t,f,ARRAY[anchor_id],ARRAY[]::uuid[]);
+  PERFORM public.partner_settle_platform_post(anchor_id,NULL,NULL,NULL,'failed',NULL,NULL,'anchor expired',NULL);
+  SELECT metadata,(metadata #>> '{legacy_notification_candidate,candidate_id}')::uuid
+    INTO saved_metadata,old_candidate FROM public.posts WHERE id=p;
+  -- Missing rollup provenance is not authority to change a terminal post.
+  UPDATE public.posts SET metadata=metadata-'settlement_rollup_status' WHERE id=p;
+  answer:=public.close_post_fanout(p,t,f,ARRAY[anchor_id],ARRAY[]::uuid[]);
+  ASSERT answer->>'closed'='false','T102 missing terminal provenance fails closed';
+  UPDATE public.posts SET metadata=saved_metadata WHERE id=p;
+  -- Represents a committed recorder insert whose ACK was lost. Existing-row replay does not settle it again.
+  INSERT INTO public.platform_posts(id,post_id,social_account_id,platform,status,platform_post_id,created_at,response_data)
+    VALUES(story_row,p,a,'instagram','success','late-claim-story',t,'{"ig_post_subtype":"story"}');
+  answer:=public.record_published_story(p,a,'late-claim-story','https://fixture.invalid/late','{}');
+  ASSERT answer->>'recorded'='false','T102 existing recorder fast return';
+  answer:=public.claim_legacy_notification_candidate(p,t,f,old_candidate);
+  ASSERT answer->>'claimed'='false' AND answer->>'reason'='candidate_refreshed','T102 stale prepared snapshot cannot consume';
+  ASSERT (SELECT status FROM public.posts WHERE id=p)='completed','T102 refreshed parent retains carried success';
+  ASSERT NOT (SELECT metadata ? 'final_notified_at' FROM public.posts WHERE id=p),'T102 refusal leaves send marker untouched';
+  ASSERT NOT coalesce((SELECT (metadata #>> '{legacy_notification_candidate,consumed}')::boolean FROM public.posts WHERE id=p),false),'T102 candidate remains available';
+  SELECT (metadata #>> '{legacy_notification_candidate,candidate_id}')::uuid INTO fresh_candidate FROM public.posts WHERE id=p;
+  ASSERT fresh_candidate<>old_candidate,'T102 changed result snapshot has a new identity';
+  ASSERT (SELECT jsonb_array_length(metadata #> '{legacy_notification_candidate,authorized_platform_post_ids}') FROM public.posts WHERE id=p)=2,'T102 refreshed scope is not overwritten';
+  -- A row-status change with the same aggregate status also invalidates a prepared read.
+  UPDATE public.platform_posts SET status='success' WHERE id=anchor_id;
+  answer:=public.claim_legacy_notification_candidate(p,t,f,fresh_candidate);
+  ASSERT answer->>'claimed'='false' AND answer->>'reason'='candidate_refreshed','T102 same aggregate with changed row status requires a fresh read';
+  SELECT (metadata #>> '{legacy_notification_candidate,candidate_id}')::uuid INTO fresh_candidate FROM public.posts WHERE id=p;
+  answer:=public.claim_legacy_notification_candidate(p,t,f,fresh_candidate);
+  ASSERT answer->>'claimed'='true' AND answer->>'status'='completed','T102 fresh snapshot can consume once';
+  ASSERT jsonb_array_length(answer->'authorized_platform_post_ids')=2,'T102 claim returns refreshed scope';
+END $$;
+
+-- T103: a Story already in the original closure is still a result, never a carrier authority.
+DO $$
+DECLARE
+  u uuid := gen_random_uuid(); a uuid := gen_random_uuid(); p uuid := gen_random_uuid();
+  anchor_id uuid := gen_random_uuid(); first_story uuid; second_story uuid;
+  t timestamptz := now(); f jsonb; answer jsonb;
+BEGIN
+  INSERT INTO auth.users(id,email) VALUES(u,'initial-chain-test@example.invalid');
+  INSERT INTO public.social_accounts(id,user_id,platform,platform_user_id,access_token,is_active)
+    VALUES(a,u,'instagram','initial-chain','fixture',true);
+  INSERT INTO public.posts(id,user_id,caption,platforms,status,processing_started_at,source,metadata)
+    VALUES(p,u,'initial chain',ARRAY['instagram'],'processing',t,'manual','{}');
+  SELECT jsonb_build_object('user_id',x.user_id,'caption',x.caption,'media_file_ids',x.media_file_ids,
+    'metadata','{}'::jsonb,'platforms',x.platforms,'scheduled_at',x.scheduled_at,
+    'publish_requested_at',x.publish_requested_at,'source',x.source) INTO f FROM public.posts x WHERE x.id=p;
+  PERFORM public.enroll_post_notification_recovery(p,t,f,ARRAY[a],ARRAY[]::uuid[]);
+  answer:=public.record_published_story(p,a,'first-chain-story','https://fixture.invalid/first',
+    '{"unrecorded_story":{"id":"second-chain-story","url":"https://fixture.invalid/second"}}');
+  first_story:=(answer->>'platform_post_id')::uuid;
+  answer:=public.record_published_story(p,a,'second-chain-story','https://fixture.invalid/second','{}');
+  second_story:=(answer->>'platform_post_id')::uuid;
+  INSERT INTO public.platform_posts(id,post_id,social_account_id,platform,status,created_at,response_data)
+    VALUES(anchor_id,p,a,'instagram','failed',t,'{"unrecorded_story":{"id":"first-chain-story","url":"https://fixture.invalid/first"}}');
+  answer:=public.close_post_fanout(p,t,f,ARRAY[anchor_id,first_story],ARRAY[]::uuid[]);
+  ASSERT answer->>'ready'='true','T103 original closure is ready';
+  ASSERT jsonb_array_length(answer->'authorized_platform_post_ids')=2,'T103 initial Story cannot authorize a second Story';
+  ASSERT NOT (answer->'authorized_platform_post_ids' @> to_jsonb(ARRAY[second_story])),'T103 chained result excluded';
 END $$;
 
 ROLLBACK;

@@ -1902,13 +1902,14 @@ async function handleNotificationOnly(
   const expectedContent = threadsImageContentFence(post as PostData);
   const candidate = post.metadata?.legacy_notification_candidate;
   const authorizedIds = candidate?.authorized_platform_post_ids;
-  if (!candidate || !Array.isArray(authorizedIds) || authorizedIds.length === 0 ||
+  if (!candidate || typeof candidate.candidate_id !== "string" || !candidate.candidate_id ||
+      !Array.isArray(authorizedIds) || authorizedIds.length === 0 ||
       !authorizedIds.every((id: unknown) => typeof id === "string")) {
     await writeLogRow(supabase, { level: "warn", category: "post", source: "process-post", user_id: post.user_id, message: "Notification recovery has no proven complete result scope", metadata: { event: "legacy_notification_scope_unavailable", post_id: postId } });
     return createErrorResponse("Notification scope unavailable", 503);
   }
   // Read before consuming the send-once marker. Database outages remain pre-claim work.
-  const outcome = await readPostOutcome(postReaderFor(supabase, authorizedIds, undefined, {
+  const outcome = await readPostOutcome(postReaderFor(supabase, authorizedIds, candidate.authorized_platform_post_statuses, {
     processingStartedAt: attemptStartedAt, content: expectedContent,
   }), postId, { results: [], hasSuccess: false, hasFailed: false });
   if (outcome.kind !== "terminal" || outcome.degraded) {
@@ -1919,7 +1920,7 @@ async function handleNotificationOnly(
     p_post_id: post.id,
     p_expected_processing_started_at: attemptStartedAt,
     p_expected_content: expectedContent,
-    p_candidate_id: expectedCandidateId ?? null,
+    p_candidate_id: expectedCandidateId ?? candidate.candidate_id,
     p_claim_id: expectedClaimId ?? null,
   });
 
