@@ -772,6 +772,7 @@ DECLARE
   post_a02 uuid := 'e0000000-0000-4000-8000-0000000000f1';
   post_a03 uuid := 'e0000000-0000-4000-8000-0000000000f2';
   post_a04 uuid := 'e0000000-0000-4000-8000-0000000000f3';
+  post_a05 uuid := 'e0000000-0000-4000-8000-0000000000f5';
   row_id uuid;
   row_ack uuid;
   row_th1 uuid;
@@ -886,6 +887,65 @@ BEGIN
   finalized := public.finalize_threads_image_attempt(post_a04, claim_at, expected, ARRAY[acct_th, acct_th2]);
   ASSERT finalized->>'status' = 'completed' AND finalized->>'notify' = 'true',
     'T64 all expected Threads accounts settled completes the post';
+
+  -- T65: trg_posts_invalidate_rollup_on_cancellation strips rollup provenance on status change to failed
+  UPDATE public.posts
+     SET status = 'processing',
+         metadata = jsonb_build_object('settlement_rollup_at', claim_at, 'settlement_rollup_status', 'failed')
+   WHERE id = post_a02;
+  ASSERT (SELECT metadata->>'settlement_rollup_at' FROM public.posts WHERE id = post_a02) IS NOT NULL,
+    'T65 setup: settlement_rollup_at is present before status change';
+
+  UPDATE public.posts
+     SET status = 'failed'
+   WHERE id = post_a02;
+  ASSERT (SELECT metadata->>'settlement_rollup_at' FROM public.posts WHERE id = post_a02) IS NULL,
+    'T65 trg_posts_invalidate_rollup_on_cancellation stripped settlement_rollup_at on update to failed';
+
+  -- T66: record_threads_image_checkpoint persists authoritative target and retained account IDs
+  INSERT INTO public.posts (id, user_id, caption, platforms, status, processing_started_at, source, metadata)
+  VALUES (post_a05, u_a, 'a06 target and retained account post', ARRAY['threads'], 'processing', claim_at, 'manual', '{}'::jsonb);
+  expected := jsonb_build_object(
+    'user_id', u_a, 'caption', 'a06 target and retained account post', 'media_file_ids', NULL,
+    'metadata', '{}'::jsonb,
+    'platforms', ARRAY['threads'], 'scheduled_at', NULL,
+    'publish_requested_at', NULL, 'source', 'manual'
+  );
+  payload := jsonb_build_object('deferred', jsonb_build_object(
+    'kind', 'threads', 'media_type', 'IMAGE', 'container_id', 'a06-container-1',
+    'attempt_started_at', claim_at, 'attempts', 0,
+    'first_deferred_at', claim_at, 'give_up_at', claim_at + interval '30 minutes',
+    'next_check_at', claim_at + interval '1 minute'
+  ), 'content_fence', expected, 'account_updated_at',
+    (SELECT updated_at FROM public.social_accounts WHERE id = acct_th));
+
+  row_id := public.record_threads_image_checkpoint(
+    post_a05, acct_th, payload, claim_at, expected,
+    ARRAY[acct_th, acct_th2], ARRAY[acct_th2]
+  );
+  ASSERT (SELECT (metadata->'attempt_target_account_ids') = jsonb_build_array(acct_th::text, acct_th2::text) FROM public.posts WHERE id = post_a05),
+    'T66 attempt_target_account_ids persisted in posts.metadata';
+  ASSERT (SELECT (metadata->'attempt_retained_account_ids') = jsonb_build_array(acct_th2::text) FROM public.posts WHERE id = post_a05),
+    'T66 attempt_retained_account_ids persisted in posts.metadata';
+
+  -- T67: claim_deferred_publishes claims terminal post row when final notification intent is unconfirmed
+  UPDATE public.posts
+     SET status = 'completed',
+         metadata = jsonb_build_object('final_notification_intent', jsonb_build_object('notified', false, 'created_at', now()))
+   WHERE id = post_a05;
+  UPDATE public.platform_posts
+     SET status = 'success',
+         response_data = jsonb_build_object('deferred', jsonb_build_object(
+           'kind', 'threads', 'media_type', 'IMAGE', 'container_id', 'a06-container-1',
+           'attempt_started_at', claim_at, 'next_check_at', now() - interval '10 seconds',
+           'claimed_until', now() - interval '10 seconds'
+         ))
+   WHERE id = row_id;
+
+  ASSERT EXISTS (
+    SELECT 1 FROM public.claim_deferred_publishes(10)
+     WHERE platform_post_id = row_id
+  ), 'T67 claim_deferred_publishes claims terminal row with unconfirmed notification intent';
 END $$;
 
 ROLLBACK;

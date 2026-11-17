@@ -11978,6 +11978,8 @@ export type Database = {
           p_response_data: Json
           p_expected_processing_started_at: string
           p_expected_content: Json
+          p_target_account_ids?: string[] | null
+          p_retained_account_ids?: string[] | null
         }
         Returns: string
       }

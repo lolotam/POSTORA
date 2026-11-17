@@ -1,6 +1,48 @@
 -- Bounded first-request completion for durable single-image Threads containers.
 -- Additive RPCs are safe before dependent code; existing timing and lease budgets are unchanged.
 
+CREATE OR REPLACE FUNCTION public.normalize_threads_internal_metadata(p_metadata jsonb)
+RETURNS jsonb
+LANGUAGE sql
+IMMUTABLE
+AS $$
+  SELECT coalesce(p_metadata, '{}'::jsonb)
+    - 'pinterest_post_type'
+    - 'final_notified_at'
+    - 'settlement_rollup_at'
+    - 'settlement_rollup_status'
+    - 'settlement_rollup_processing_started_at'
+    - 'attempt_target_account_ids'
+    - 'attempt_retained_account_ids'
+    - 'attempt_started_at'
+    - 'attempt_scope'
+    - 'final_notification_intent';
+$$;
+
+REVOKE ALL ON FUNCTION public.normalize_threads_internal_metadata(jsonb) FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.normalize_threads_internal_metadata(jsonb) TO service_role;
+
+-- Invalidate prior sibling rollup provenance on owner status cancellation (pending/failed)
+CREATE OR REPLACE FUNCTION public.trg_posts_invalidate_rollup_on_cancellation()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+BEGIN
+  IF NEW.status IN ('pending', 'failed') AND NEW.metadata ? 'settlement_rollup_at' THEN
+    IF (NEW.metadata ->> 'settlement_rollup_at') IS NOT DISTINCT FROM (OLD.metadata ->> 'settlement_rollup_at') THEN
+      NEW.metadata := NEW.metadata - 'settlement_rollup_at' - 'settlement_rollup_status' - 'settlement_rollup_processing_started_at';
+    END IF;
+  END IF;
+  RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_posts_invalidate_rollup ON public.posts;
+CREATE TRIGGER trg_posts_invalidate_rollup
+  BEFORE UPDATE OF status ON public.posts
+  FOR EACH ROW
+  EXECUTE FUNCTION public.trg_posts_invalidate_rollup_on_cancellation();
+
 CREATE OR REPLACE FUNCTION public.claim_threads_image_inline_execution(
   p_platform_post_id uuid,
   p_post_id uuid,
@@ -43,7 +85,7 @@ BEGIN
     'user_id', v_post.user_id,
     'caption', v_post.caption,
     'media_file_ids', v_post.media_file_ids,
-    'metadata', coalesce(v_post.metadata, '{}'::jsonb) - 'pinterest_post_type',
+    'metadata', public.normalize_threads_internal_metadata(v_post.metadata),
     'platforms', v_post.platforms,
     'scheduled_at', v_post.scheduled_at,
     'publish_requested_at', v_post.publish_requested_at,
@@ -64,8 +106,18 @@ BEGIN
      OR coalesce((v_row.response_data #>> '{deferred,claimed_until}')::timestamptz, '-infinity') > now()
      OR v_post.status IS DISTINCT FROM 'processing'
      OR v_post.processing_started_at IS DISTINCT FROM p_expected_processing_started_at
-     OR v_content IS DISTINCT FROM p_expected_content
-     OR v_row.response_data -> 'content_fence' IS DISTINCT FROM p_expected_content
+     OR v_content IS DISTINCT FROM jsonb_set(
+       p_expected_content,
+       '{metadata}',
+       public.normalize_threads_internal_metadata(p_expected_content -> 'metadata'),
+       true
+     )
+     OR v_row.response_data -> 'content_fence' IS DISTINCT FROM jsonb_set(
+       p_expected_content,
+       '{metadata}',
+       public.normalize_threads_internal_metadata(p_expected_content -> 'metadata'),
+       true
+     )
      OR NOT EXISTS (
        SELECT 1 FROM public.social_accounts a
         WHERE a.id = p_social_account_id
@@ -148,7 +200,7 @@ BEGIN
     'user_id', v_post.user_id,
     'caption', v_post.caption,
     'media_file_ids', v_post.media_file_ids,
-    'metadata', coalesce(v_post.metadata, '{}'::jsonb) - 'pinterest_post_type',
+    'metadata', public.normalize_threads_internal_metadata(v_post.metadata),
     'platforms', v_post.platforms,
     'scheduled_at', v_post.scheduled_at,
     'publish_requested_at', v_post.publish_requested_at,
@@ -172,8 +224,18 @@ BEGIN
      OR v_row.response_data #>> '{deferred,publish_outcome}' IS NOT NULL
      OR v_post.status IS DISTINCT FROM 'processing'
      OR v_post.processing_started_at IS DISTINCT FROM p_expected_processing_started_at
-     OR v_content IS DISTINCT FROM p_expected_content
-     OR v_row.response_data -> 'content_fence' IS DISTINCT FROM p_expected_content
+     OR v_content IS DISTINCT FROM jsonb_set(
+       p_expected_content,
+       '{metadata}',
+       public.normalize_threads_internal_metadata(p_expected_content -> 'metadata'),
+       true
+     )
+     OR v_row.response_data -> 'content_fence' IS DISTINCT FROM jsonb_set(
+       p_expected_content,
+       '{metadata}',
+       public.normalize_threads_internal_metadata(p_expected_content -> 'metadata'),
+       true
+     )
      OR NOT EXISTS (
        SELECT 1 FROM public.social_accounts a
         WHERE a.id = v_row.social_account_id
@@ -189,10 +251,10 @@ BEGIN
      SET response_data = jsonb_set(
        response_data,
        '{deferred}',
-       (response_data -> 'deferred') - 'publish_attempt_id',
-       true
+       (response_data -> 'deferred') - 'publish_attempt_id'
      )
    WHERE id = p_platform_post_id;
+
   RETURN true;
 END;
 $$;
@@ -202,14 +264,112 @@ REVOKE ALL ON FUNCTION public.release_threads_image_publish_unsent(uuid,text,tim
 GRANT EXECUTE ON FUNCTION public.release_threads_image_publish_unsent(uuid,text,timestamptz,timestamptz,text,text,jsonb)
   TO service_role;
 
--- Authoritative admission checkpoint with provenance check for authorized
--- sibling rollup vs owner cancellation.
+-- Override M1 mark_threads_image_publish_started to use unified metadata normalization
+CREATE OR REPLACE FUNCTION public.mark_threads_image_publish_started(
+  p_platform_post_id uuid,
+  p_expected_claimed_until timestamptz,
+  p_execution_id text,
+  p_expected_content jsonb
+)
+RETURNS boolean
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  v_post public.posts%ROWTYPE;
+  v_row public.platform_posts%ROWTYPE;
+  v_claimed_until timestamptz;
+  v_content jsonb;
+  v_account_updated text;
+BEGIN
+  IF p_expected_claimed_until IS NULL OR coalesce(p_execution_id, '') = '' THEN
+    RETURN false;
+  END IF;
+
+  SELECT p.* INTO v_post
+    FROM public.posts p
+    JOIN public.platform_posts pp ON pp.post_id = p.id
+   WHERE pp.id = p_platform_post_id
+   FOR UPDATE OF p;
+  IF NOT FOUND THEN RETURN false; END IF;
+
+  SELECT pp.* INTO v_row FROM public.platform_posts pp
+   WHERE pp.id = p_platform_post_id
+   FOR UPDATE;
+  IF NOT FOUND OR v_row.status IS DISTINCT FROM 'pending'
+     OR v_row.response_data #>> '{deferred,kind}' IS DISTINCT FROM 'threads'
+     OR v_row.response_data #>> '{deferred,media_type}' IS DISTINCT FROM 'IMAGE'
+     OR v_row.response_data #>> '{deferred,execution_id}' IS DISTINCT FROM p_execution_id
+     OR (v_row.response_data #>> '{deferred,execution_claimed_until}')::timestamptz IS DISTINCT FROM p_expected_claimed_until
+     OR v_row.response_data #>> '{deferred,publish_attempt_id}' IS NOT NULL THEN
+    RETURN false;
+  END IF;
+
+  v_claimed_until := (v_row.response_data #>> '{deferred,claimed_until}')::timestamptz;
+  v_content := jsonb_build_object(
+    'user_id', v_post.user_id,
+    'caption', v_post.caption,
+    'media_file_ids', v_post.media_file_ids,
+    'metadata', public.normalize_threads_internal_metadata(v_post.metadata),
+    'platforms', v_post.platforms,
+    'scheduled_at', v_post.scheduled_at,
+    'publish_requested_at', v_post.publish_requested_at,
+    'source', v_post.source
+  );
+  v_account_updated := v_row.response_data ->> 'account_updated_at';
+
+  IF v_claimed_until IS DISTINCT FROM p_expected_claimed_until
+     OR v_claimed_until <= now()
+     OR v_post.status IS DISTINCT FROM 'processing'
+     OR v_post.processing_started_at IS DISTINCT FROM
+       (v_row.response_data #>> '{deferred,attempt_started_at}')::timestamptz
+     OR v_content IS DISTINCT FROM jsonb_set(
+       p_expected_content,
+       '{metadata}',
+       public.normalize_threads_internal_metadata(p_expected_content -> 'metadata'),
+       true
+     )
+     OR v_row.response_data -> 'content_fence' IS DISTINCT FROM jsonb_set(
+       p_expected_content,
+       '{metadata}',
+       public.normalize_threads_internal_metadata(p_expected_content -> 'metadata'),
+       true
+     )
+     OR NOT EXISTS (
+       SELECT 1 FROM public.social_accounts a
+        WHERE a.id = v_row.social_account_id
+          AND a.user_id = v_post.user_id
+          AND a.platform = 'threads'
+          AND a.is_active = true
+          AND a.updated_at IS NOT DISTINCT FROM v_account_updated::timestamptz
+     ) THEN
+    RETURN false;
+  END IF;
+
+  UPDATE public.platform_posts
+     SET response_data = jsonb_set(response_data, '{deferred,publish_attempt_id}', to_jsonb(p_execution_id), true)
+   WHERE id = p_platform_post_id;
+  RETURN true;
+END;
+$$;
+
+REVOKE ALL ON FUNCTION public.mark_threads_image_publish_started(uuid, timestamptz, text, jsonb)
+  FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.mark_threads_image_publish_started(uuid, timestamptz, text, jsonb)
+  TO service_role;
+
+DROP FUNCTION IF EXISTS public.record_threads_image_checkpoint(uuid, uuid, jsonb, timestamptz, jsonb);
+DROP FUNCTION IF EXISTS public.record_threads_image_checkpoint(uuid, uuid, jsonb, timestamptz, jsonb, uuid[], uuid[]);
+
 CREATE OR REPLACE FUNCTION public.record_threads_image_checkpoint(
   p_post_id uuid,
   p_social_account_id uuid,
   p_response_data jsonb,
   p_expected_processing_started_at timestamptz,
-  p_expected_content jsonb
+  p_expected_content jsonb,
+  p_target_account_ids uuid[],
+  p_retained_account_ids uuid[]
 )
 RETURNS uuid
 LANGUAGE plpgsql
@@ -223,6 +383,8 @@ DECLARE
   v_content jsonb;
   v_same_attempt_rollup boolean;
   v_existing_status text;
+  v_targets uuid[];
+  v_retained uuid[];
 BEGIN
   IF p_expected_processing_started_at IS NULL
      OR p_response_data #>> '{deferred,kind}' IS DISTINCT FROM 'threads'
@@ -250,7 +412,7 @@ BEGIN
     'user_id', v_post.user_id,
     'caption', v_post.caption,
     'media_file_ids', v_post.media_file_ids,
-    'metadata', coalesce(v_post.metadata, '{}'::jsonb) - 'pinterest_post_type' - 'final_notified_at' - 'settlement_rollup_at',
+    'metadata', public.normalize_threads_internal_metadata(v_post.metadata),
     'platforms', v_post.platforms,
     'scheduled_at', v_post.scheduled_at,
     'publish_requested_at', v_post.publish_requested_at,
@@ -259,10 +421,18 @@ BEGIN
 
   -- Authoritative provenance: only a legitimate sibling rollup that stamped
   -- settlement_rollup_at in this attempt permits admission in a completed/failed post.
-  -- An owner's status-only cancellation (lacking settlement_rollup_at) is never revived.
+  -- An owner's status-only cancellation (or newer transition) strips or mismatches rollup provenance.
   v_same_attempt_rollup := v_post.status IN ('completed', 'failed')
     AND (v_post.metadata ->> 'settlement_rollup_at') IS NOT NULL
     AND ((v_post.metadata ->> 'settlement_rollup_at')::timestamptz >= p_expected_processing_started_at)
+    AND (
+      (v_post.metadata ->> 'settlement_rollup_status') IS NULL
+      OR (v_post.metadata ->> 'settlement_rollup_status') = v_post.status
+    )
+    AND (
+      (v_post.metadata ->> 'settlement_rollup_processing_started_at') IS NULL
+      OR (v_post.metadata ->> 'settlement_rollup_processing_started_at')::timestamptz = p_expected_processing_started_at
+    )
     AND EXISTS (
       SELECT 1 FROM public.platform_posts pp
        WHERE pp.post_id = p_post_id AND pp.status IN ('success', 'failed')
@@ -286,7 +456,7 @@ BEGIN
      OR v_content IS DISTINCT FROM jsonb_set(
        p_expected_content,
        '{metadata}',
-       coalesce(p_expected_content -> 'metadata', '{}'::jsonb) - 'final_notified_at' - 'settlement_rollup_at',
+       public.normalize_threads_internal_metadata(p_expected_content -> 'metadata'),
        true
      ) THEN
     RAISE EXCEPTION 'record_threads_image_checkpoint: stale claim or changed content'
@@ -303,6 +473,55 @@ BEGIN
     RAISE EXCEPTION 'record_threads_image_checkpoint: cancelled or retried attempt'
       USING ERRCODE = 'serialization_failure';
   END IF;
+
+  -- Persist authoritative original target scope and retained successes under parent lock
+  IF p_target_account_ids IS NOT NULL AND cardinality(p_target_account_ids) > 0 THEN
+    v_targets := p_target_account_ids;
+  ELSIF jsonb_typeof(v_post.metadata -> 'attempt_target_account_ids') = 'array'
+        AND jsonb_array_length(v_post.metadata -> 'attempt_target_account_ids') > 0 THEN
+    SELECT array_agg(elem::uuid) INTO v_targets
+      FROM jsonb_array_elements_text(v_post.metadata -> 'attempt_target_account_ids') AS elem;
+  ELSIF jsonb_typeof(v_post.metadata -> 'selected_account_ids') = 'array'
+        AND jsonb_array_length(v_post.metadata -> 'selected_account_ids') > 0 THEN
+    SELECT array_agg(a.id) INTO v_targets
+      FROM jsonb_array_elements_text(v_post.metadata -> 'selected_account_ids') AS sel(account_id)
+      JOIN public.social_accounts a
+        ON a.id::text = sel.account_id
+       AND a.user_id = v_post.user_id
+       AND a.is_active = true;
+  ELSE
+    SELECT array_agg(a.id) INTO v_targets
+      FROM public.social_accounts a
+     WHERE a.user_id = v_post.user_id
+       AND a.is_active = true
+       AND a.platform = ANY(v_post.platforms);
+  END IF;
+
+  IF v_targets IS NULL OR cardinality(v_targets) = 0 THEN
+    v_targets := ARRAY[p_social_account_id];
+  END IF;
+
+  IF p_retained_account_ids IS NOT NULL THEN
+    v_retained := p_retained_account_ids;
+  ELSIF jsonb_typeof(v_post.metadata -> 'attempt_retained_account_ids') = 'array'
+        AND jsonb_array_length(v_post.metadata -> 'attempt_retained_account_ids') > 0 THEN
+    SELECT array_agg(elem::uuid) INTO v_retained
+      FROM jsonb_array_elements_text(v_post.metadata -> 'attempt_retained_account_ids') AS elem;
+  ELSE
+    v_retained := ARRAY[]::uuid[];
+  END IF;
+
+  IF v_retained IS NULL THEN
+    v_retained := ARRAY[]::uuid[];
+  END IF;
+
+  UPDATE public.posts
+     SET metadata = coalesce(metadata, '{}'::jsonb) || jsonb_build_object(
+           'attempt_target_account_ids', to_jsonb(v_targets),
+           'attempt_retained_account_ids', to_jsonb(v_retained),
+           'attempt_started_at', p_expected_processing_started_at
+         )
+   WHERE id = p_post_id;
 
   IF v_existing IS NOT NULL THEN
     IF v_same_attempt_rollup THEN
@@ -323,13 +542,41 @@ BEGIN
 END;
 $$;
 
+REVOKE ALL ON FUNCTION public.record_threads_image_checkpoint(uuid, uuid, jsonb, timestamptz, jsonb, uuid[], uuid[])
+  FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.record_threads_image_checkpoint(uuid, uuid, jsonb, timestamptz, jsonb, uuid[], uuid[])
+  TO service_role;
+
+CREATE OR REPLACE FUNCTION public.record_threads_image_checkpoint(
+  p_post_id uuid,
+  p_social_account_id uuid,
+  p_response_data jsonb,
+  p_expected_processing_started_at timestamptz,
+  p_expected_content jsonb
+)
+RETURNS uuid
+LANGUAGE sql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+  SELECT public.record_threads_image_checkpoint(
+    p_post_id,
+    p_social_account_id,
+    p_response_data,
+    p_expected_processing_started_at,
+    p_expected_content,
+    NULL::uuid[],
+    NULL::uuid[]
+  );
+$$;
+
 REVOKE ALL ON FUNCTION public.record_threads_image_checkpoint(uuid, uuid, jsonb, timestamptz, jsonb)
   FROM PUBLIC, anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.record_threads_image_checkpoint(uuid, uuid, jsonb, timestamptz, jsonb)
   TO service_role;
 
 -- Allow reconciler cron to recover terminal managed-image rows whose parent is
--- still processing (e.g. after a lost settlement ACK), without waiting for manual intervention.
+-- still processing, or whose final notification was lost before acknowledgement.
 CREATE OR REPLACE FUNCTION public.claim_deferred_publishes(
   p_limit integer DEFAULT 10,
   p_lease interval DEFAULT interval '3 minutes'
@@ -355,8 +602,17 @@ AS $$
          pp.status IN ('success', 'failed')
          AND pp.response_data #>> '{deferred,kind}' = 'threads'
          AND pp.response_data #>> '{deferred,media_type}' = 'IMAGE'
-         AND p.status = 'processing'
          AND coalesce((pp.response_data #>> '{deferred,claimed_until}')::timestamptz, '-infinity') <= now()
+         AND (
+           p.status = 'processing'
+           OR (
+             p.status IN ('completed', 'failed')
+             AND (
+               p.metadata #>> '{final_notification_intent,notified}' = 'false'
+               OR (p.metadata ? 'final_notification_intent' AND (p.metadata ->> 'final_notified_at') IS NULL)
+             )
+           )
+         )
        )
      )
      ORDER BY pp.created_at
@@ -368,15 +624,11 @@ AS $$
        pp.response_data,
        '{deferred}',
        coalesce(pp.response_data -> 'deferred', '{}'::jsonb) ||
-         CASE WHEN pp.response_data #>> '{deferred,media_type}' = 'IMAGE'
-           THEN jsonb_build_object(
-             'claimed_until', now() + p_lease,
-             'execution_id', NULL,
-             'execution_claimed_until', NULL
-           )
-           ELSE jsonb_build_object('claimed_until', now() + p_lease)
-         END,
-       true
+       jsonb_build_object(
+         'claimed_until', now() + p_lease,
+         'execution_id', NULL,
+         'execution_claimed_until', NULL
+       )
      )
     FROM due
    WHERE pp.id = due.id
@@ -387,6 +639,7 @@ REVOKE ALL ON FUNCTION public.claim_deferred_publishes(integer, interval) FROM P
 GRANT EXECUTE ON FUNCTION public.claim_deferred_publishes(integer, interval) TO service_role;
 
 DROP FUNCTION IF EXISTS public.finalize_threads_image_attempt(uuid,timestamptz,jsonb);
+DROP FUNCTION IF EXISTS public.finalize_threads_image_attempt(uuid,timestamptz,jsonb,uuid[]);
 
 CREATE OR REPLACE FUNCTION public.finalize_threads_image_attempt(
   p_post_id uuid,
@@ -410,6 +663,7 @@ DECLARE
   v_marker text;
   v_notify boolean := true;
   v_target_account_ids uuid[];
+  v_retained_account_ids uuid[];
 BEGIN
   IF p_expected_processing_started_at IS NULL THEN RETURN NULL; END IF;
 
@@ -420,7 +674,7 @@ BEGIN
     'user_id', v_post.user_id,
     'caption', v_post.caption,
     'media_file_ids', v_post.media_file_ids,
-    'metadata', coalesce(v_post.metadata, '{}'::jsonb) - 'pinterest_post_type' - 'final_notified_at' - 'settlement_rollup_at',
+    'metadata', public.normalize_threads_internal_metadata(v_post.metadata),
     'platforms', v_post.platforms,
     'scheduled_at', v_post.scheduled_at,
     'publish_requested_at', v_post.publish_requested_at,
@@ -430,7 +684,7 @@ BEGIN
      OR v_content IS DISTINCT FROM jsonb_set(
        p_expected_content,
        '{metadata}',
-       coalesce(p_expected_content -> 'metadata', '{}'::jsonb) - 'final_notified_at' - 'settlement_rollup_at',
+       public.normalize_threads_internal_metadata(p_expected_content -> 'metadata'),
        true
      ) THEN
     RETURN jsonb_build_object('status', v_post.status, 'stale', true, 'notify', false);
@@ -453,14 +707,22 @@ BEGIN
   IF v_post.status IS DISTINCT FROM 'processing' THEN
     RETURN jsonb_build_object(
       'status', v_post.status,
-      'stale', NOT (v_post.status IN ('completed', 'failed') AND NOT v_notify),
+      'stale', NOT (v_post.status IN ('completed', 'failed')),
       'notify', false
     );
   END IF;
 
-  -- Determine authoritative target account IDs for this attempt
+  -- Authoritative target scope resolution:
+  -- 1) Explicit caller argument
+  -- 2) Persisted attempt scope stored under parent lock
+  -- 3) Metadata selected_account_ids
+  -- 4) Fallback to active platform accounts
   IF p_expected_account_ids IS NOT NULL AND cardinality(p_expected_account_ids) > 0 THEN
     v_target_account_ids := p_expected_account_ids;
+  ELSIF jsonb_typeof(v_post.metadata -> 'attempt_target_account_ids') = 'array'
+        AND jsonb_array_length(v_post.metadata -> 'attempt_target_account_ids') > 0 THEN
+    SELECT array_agg(elem::uuid) INTO v_target_account_ids
+      FROM jsonb_array_elements_text(v_post.metadata -> 'attempt_target_account_ids') AS elem;
   ELSIF jsonb_typeof(v_post.metadata -> 'selected_account_ids') = 'array'
         AND jsonb_array_length(v_post.metadata -> 'selected_account_ids') > 0 THEN
     SELECT array_agg(a.id) INTO v_target_account_ids
@@ -477,7 +739,16 @@ BEGIN
        AND a.platform = ANY(v_post.platforms);
   END IF;
 
-  -- Verify each target account has a durable row for this attempt
+  -- Retained successful account IDs from prior attempt(s)
+  IF jsonb_typeof(v_post.metadata -> 'attempt_retained_account_ids') = 'array'
+     AND jsonb_array_length(v_post.metadata -> 'attempt_retained_account_ids') > 0 THEN
+    SELECT array_agg(elem::uuid) INTO v_retained_account_ids
+      FROM jsonb_array_elements_text(v_post.metadata -> 'attempt_retained_account_ids') AS elem;
+  ELSE
+    v_retained_account_ids := ARRAY[]::uuid[];
+  END IF;
+
+  -- Verify each target account has a durable row for this attempt or an explicitly retained success
   IF v_target_account_ids IS NOT NULL AND cardinality(v_target_account_ids) > 0 THEN
     SELECT count(*) INTO v_missing
       FROM unnest(v_target_account_ids) AS target_acct(id)
@@ -486,8 +757,17 @@ BEGIN
         WHERE pp.post_id = p_post_id
           AND pp.social_account_id = target_acct.id
           AND (
-            pp.created_at >= p_expected_processing_started_at
-            OR (pp.response_data #>> '{deferred,attempt_started_at}')::timestamptz = p_expected_processing_started_at
+            (
+              pp.created_at >= p_expected_processing_started_at
+              OR (pp.response_data #>> '{deferred,attempt_started_at}')::timestamptz = p_expected_processing_started_at
+            )
+            OR (
+              pp.status = 'success'
+              AND (
+                target_acct.id = ANY(v_retained_account_ids)
+                OR pp.created_at < p_expected_processing_started_at
+              )
+            )
           )
      );
     IF v_missing > 0 THEN
@@ -495,6 +775,7 @@ BEGIN
     END IF;
   END IF;
 
+  -- Count total, pending, and succeeded across this attempt plus retained successes
   SELECT count(*),
          count(*) FILTER (WHERE status = 'pending'),
          count(*) FILTER (WHERE status = 'success')
@@ -502,8 +783,17 @@ BEGIN
     FROM public.platform_posts pp
    WHERE pp.post_id = p_post_id
      AND (
-       pp.created_at >= p_expected_processing_started_at
-       OR (pp.response_data #>> '{deferred,attempt_started_at}')::timestamptz = p_expected_processing_started_at
+       (
+         pp.created_at >= p_expected_processing_started_at
+         OR (pp.response_data #>> '{deferred,attempt_started_at}')::timestamptz = p_expected_processing_started_at
+       )
+       OR (
+         pp.status = 'success'
+         AND (
+           pp.social_account_id = ANY(v_retained_account_ids)
+           OR pp.created_at < p_expected_processing_started_at
+         )
+       )
      );
 
   IF v_total = 0 THEN
@@ -516,12 +806,17 @@ BEGIN
 
   v_status := CASE WHEN v_succeeded > 0 THEN 'completed' ELSE 'failed' END;
 
-  -- Do not stamp final_notified_at in the database here: if notification delivery
-  -- fails or ACK is lost, final_notified_at would be permanently consumed.
-  -- Delivery is claimed via atomic CAS in application layer (announceFinalPost).
   UPDATE public.posts
      SET status = v_status,
-         posted_at = CASE WHEN v_status = 'completed' THEN coalesce(posted_at, now()) ELSE posted_at END
+         posted_at = CASE WHEN v_status = 'completed' THEN coalesce(posted_at, now()) ELSE posted_at END,
+         metadata = coalesce(metadata, '{}'::jsonb) || jsonb_build_object(
+           'final_notification_intent', jsonb_build_object(
+             'status', v_status,
+             'attempt_started_at', p_expected_processing_started_at,
+             'notified', false,
+             'created_at', now()
+           )
+         )
    WHERE id = p_post_id;
 
   RETURN jsonb_build_object('status', v_status, 'stale', false, 'notify', v_notify);
@@ -646,7 +941,7 @@ BEGIN
       'user_id', v_post.user_id,
       'caption', v_post.caption,
       'media_file_ids', v_post.media_file_ids,
-      'metadata', coalesce(v_post.metadata, '{}'::jsonb) - 'pinterest_post_type' - 'final_notified_at' - 'settlement_rollup_at',
+      'metadata', public.normalize_threads_internal_metadata(v_post.metadata),
       'platforms', v_post.platforms,
       'scheduled_at', v_post.scheduled_at,
       'publish_requested_at', v_post.publish_requested_at,
@@ -657,7 +952,7 @@ BEGIN
       AND v_content IS NOT DISTINCT FROM jsonb_set(
         v_row.response_data -> 'content_fence',
         '{metadata}',
-        coalesce((v_row.response_data -> 'content_fence') -> 'metadata', '{}'::jsonb) - 'final_notified_at' - 'settlement_rollup_at',
+        public.normalize_threads_internal_metadata((v_row.response_data -> 'content_fence') -> 'metadata'),
         true
       );
   END IF;
@@ -693,6 +988,21 @@ BEGIN
     v_rollup_parent := false;
   END IF;
 
+  -- Suppress premature rollup if known target accounts have not yet settled
+  IF jsonb_typeof(v_post.metadata -> 'attempt_target_account_ids') = 'array'
+     AND jsonb_array_length(v_post.metadata -> 'attempt_target_account_ids') > 0 THEN
+    IF (SELECT count(*) FROM unnest(ARRAY(
+         SELECT jsonb_array_elements_text(v_post.metadata -> 'attempt_target_account_ids')::uuid
+       )) AS target(id)
+       WHERE NOT EXISTS (
+         SELECT 1 FROM public.platform_posts pp2
+          WHERE pp2.post_id = v_row.post_id AND pp2.social_account_id = target.id
+            AND pp2.status IN ('success', 'failed')
+       )) > 0 THEN
+      v_rollup_parent := false;
+    END IF;
+  END IF;
+
   SELECT count(*),
          count(*) FILTER (WHERE status IN ('success', 'failed')),
          count(*) FILTER (WHERE status = 'success')
@@ -705,7 +1015,11 @@ BEGIN
        SET status = v_post_state,
            posted_at = CASE WHEN v_post_state = 'completed'
                             THEN coalesce(posted_at, now()) ELSE posted_at END,
-           metadata = coalesce(metadata, '{}'::jsonb) || jsonb_build_object('settlement_rollup_at', now())
+           metadata = coalesce(metadata, '{}'::jsonb) || jsonb_build_object(
+             'settlement_rollup_at', now(),
+             'settlement_rollup_status', v_post_state,
+             'settlement_rollup_processing_started_at', v_post.processing_started_at
+           )
      WHERE id = v_row.post_id;
   END IF;
 

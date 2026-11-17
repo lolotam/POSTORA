@@ -490,18 +490,31 @@ interface PostData {
   created_at?: string | null;
 }
 
+export function normalizeThreadsInternalMetadata(metadata: Record<string, unknown> | null | undefined): Record<string, unknown> {
+  const normalized = { ...(metadata ?? {}) };
+  delete normalized.pinterest_post_type;
+  delete normalized.final_notified_at;
+  delete normalized.settlement_rollup_at;
+  delete normalized.settlement_rollup_status;
+  delete normalized.settlement_rollup_processing_started_at;
+  delete normalized.attempt_target_account_ids;
+  delete normalized.attempt_retained_account_ids;
+  delete normalized.attempt_started_at;
+  delete normalized.attempt_scope;
+  delete normalized.final_notification_intent;
+  return normalized;
+}
+
 /**
  * Social account data from social_accounts table
  */
-function threadsImageContentFence(post: PostData): Record<string, unknown> {
+export function threadsImageContentFence(post: PostData): Record<string, unknown> {
   // Sibling publishers may add History-only output metadata after admission.
-  const metadata: Record<string, unknown> = { ...(post.metadata ?? {}) };
-  delete metadata.pinterest_post_type;
   return {
     user_id: post.user_id,
     caption: post.caption,
     media_file_ids: post.media_file_ids,
-    metadata,
+    metadata: normalizeThreadsInternalMetadata(post.metadata as Record<string, unknown> | null | undefined),
     platforms: post.platforms,
     scheduled_at: post.scheduled_at ?? null,
     publish_requested_at: post.publish_requested_at ?? null,
@@ -1521,7 +1534,14 @@ async function finishDeferredPost(
       return { finalStatus: "processing", notified: false };
     }
     imageFinalization = { status: finalization.status, stale: finalization.stale, notify: finalization.notify };
-    if (imageFinalization.stale || imageFinalization.status === "processing" || !imageFinalization.notify) {
+    const metadata = (post.metadata ?? {}) as Record<string, unknown>;
+    const unconfirmedNotification =
+      metadata.final_notification_intent &&
+      typeof metadata.final_notification_intent === "object" &&
+      (metadata.final_notification_intent as Record<string, unknown>).notified === false;
+
+    if (imageFinalization.stale || imageFinalization.status === "processing" ||
+        (!imageFinalization.notify && !unconfirmedNotification)) {
       return { finalStatus: imageFinalization.status, notified: false };
     }
   }
@@ -1745,8 +1765,14 @@ Deno.serve(async (req) => {
       // Bounded whatever happens later in this request: a row past its deadline, or on
       // a post someone has since changed, is settled now rather than checked forever.
       const rowData = (row.response_data as Record<string, unknown> | null) ?? {};
-      const contentChanged = deferral.media_type === "IMAGE" && rowData.content_fence !== undefined &&
-        await hashRequest(rowData.content_fence) !== await hashRequest(threadsImageContentFence(post));
+      const rowFence = rowData.content_fence && typeof rowData.content_fence === "object"
+        ? {
+            ...(rowData.content_fence as Record<string, unknown>),
+            metadata: normalizeThreadsInternalMetadata((rowData.content_fence as Record<string, unknown>).metadata as Record<string, unknown> | null | undefined),
+          }
+        : rowData.content_fence;
+      const contentChanged = deferral.media_type === "IMAGE" && rowFence !== undefined &&
+        await hashRequest(rowFence) !== await hashRequest(threadsImageContentFence(post));
       const attemptChanged = deferral.media_type === "IMAGE" &&
         post.processing_started_at !== deferral.attempt_started_at;
       const abandon = abandonReason(deferral, contentChanged || attemptChanged ? "changed" : post.status, new Date());
@@ -2048,6 +2074,18 @@ Deno.serve(async (req) => {
       }
     }
 
+    let retainedAccountIds: string[] = [];
+    if (!resume) {
+      const { data: priorSuccesses } = await supabase
+        .from("platform_posts")
+        .select("social_account_id")
+        .eq("post_id", post_id)
+        .eq("status", "success");
+      retainedAccountIds = (priorSuccesses ?? [])
+        .map((r: { social_account_id?: string | null }) => r.social_account_id)
+        .filter((id: unknown): id is string => typeof id === "string" && !accounts.some((a) => a.id === id));
+    }
+
     const failMediaPreparation = async (message: string, statusCode = 503) => {
       let resultWriteError: string | null = null;
       if (!resume) {
@@ -2303,6 +2341,9 @@ Deno.serve(async (req) => {
     let hasFailed = false;
     // An account whose Meta container is left for reconcile-deferred-publishes.
     let hasDeferred = false;
+    const managedImageFence = claim.processingStartedAt
+      ? { processingStartedAt: claim.processingStartedAt, content: threadsImageContentFence(post) }
+      : null;
     let imageHandoff: { processingStartedAt: string; content: Record<string, unknown> } | null = null;
     const platformResults: PlatformResultSummary[] = [];
 
@@ -2379,6 +2420,7 @@ Deno.serve(async (req) => {
             result = await postToReddit(account, post, mediaUrls);
             break;
           case "threads": {
+            if (managedImageFence) imageHandoff = managedImageFence;
             const imageCheckpoint: ThreadsImageCheckpoint = async (deferral) => {
               if (!claim.processingStartedAt) throw new ThreadsCheckpointUnavailable("Threads image claim fence unavailable");
               const expectedContent = threadsImageContentFence(post);
@@ -2395,6 +2437,8 @@ Deno.serve(async (req) => {
                 p_response_data: responseData,
                 p_expected_processing_started_at: claim.processingStartedAt,
                 p_expected_content: expectedContent,
+                p_target_account_ids: accounts.map((a) => a.id),
+                p_retained_account_ids: retainedAccountIds,
               });
               if (error || typeof data !== "string" || !data) {
                 if (error && (
@@ -2662,6 +2706,16 @@ Deno.serve(async (req) => {
             console.error("Threads checkpoint refusal log unavailable");
           }
           if (accounts.length > 1 && !resumePlatformPostId) {
+            const { data: currentPost, error: checkError } = await supabase
+              .from("posts")
+              .select("status, processing_started_at")
+              .eq("id", post_id)
+              .maybeSingle();
+            if (checkError || !currentPost || currentPost.status !== "processing" ||
+                (claim.processingStartedAt && currentPost.processing_started_at !== claim.processingStartedAt)) {
+              console.log("Parent post canceled or attempt superseded; stopping remaining fan-out");
+              return createErrorResponse("Post processing was canceled or superseded. No further accounts published.", 409);
+            }
             platformResults.push({ platform: account.platform, status: "pending" });
             hasDeferred = true;
             continue;
@@ -2796,10 +2850,23 @@ Deno.serve(async (req) => {
       // Legacy video/carousel pending behavior is unchanged.
       finalStatus = "processing";
       notify = false;
-      await supabase
-        .from("posts")
-        .update({ status: "processing", posted_at: hasSuccess ? new Date().toISOString() : null })
-        .eq("id", post_id);
+      if (claim.processingStartedAt) {
+        const { data: updated, error: updateError } = await supabase
+          .from("posts")
+          .update({ status: "processing", posted_at: hasSuccess ? new Date().toISOString() : null })
+          .eq("id", post_id)
+          .eq("processing_started_at", claim.processingStartedAt)
+          .eq("status", "processing")
+          .select("id");
+        if (updateError || (updated ?? []).length !== 1) {
+          console.log("Parent status was canceled or modified; processing status not restored");
+        }
+      } else {
+        await supabase
+          .from("posts")
+          .update({ status: "processing", posted_at: hasSuccess ? new Date().toISOString() : null })
+          .eq("id", post_id);
+      }
     } else {
       await supabase
         .from("posts")

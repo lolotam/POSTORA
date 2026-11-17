@@ -59,9 +59,20 @@ export async function claimFinalNotification(
 
   // The UPDATE only matches while the marker is still what was read here.
   const path = `metadata->>${FINAL_NOTIFIED_KEY}`;
+  const updatedMetadata: Record<string, unknown> = {
+    ...metadata,
+    [FINAL_NOTIFIED_KEY]: now.toISOString(),
+  };
+  if (metadata.final_notification_intent && typeof metadata.final_notification_intent === "object") {
+    updatedMetadata.final_notification_intent = {
+      ...(metadata.final_notification_intent as Record<string, unknown>),
+      notified: true,
+      notified_at: now.toISOString(),
+    };
+  }
   const update = supabase
     .from("posts")
-    .update({ metadata: { ...metadata, [FINAL_NOTIFIED_KEY]: now.toISOString() } })
+    .update({ metadata: updatedMetadata })
     .eq("id", postId);
   const { data, error } = await (typeof marker === "string" ? update.eq(path, marker) : update.is(path, null)).select("id");
   if (error) return { claimed: false, error: error.message ?? String(error) };
