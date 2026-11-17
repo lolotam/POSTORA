@@ -1750,7 +1750,7 @@ async function finishDeferredPost(
   }
 
   const outcome = await readPostOutcome(
-    postReaderFor(supabase, imageFinalization?.authorizedPlatformPostIds),
+    postReaderFor(supabase, imageFinalization ? (imageFinalization.authorizedPlatformPostIds ?? []) : undefined),
     post.id,
     thisRun,
   );
@@ -3111,7 +3111,7 @@ Deno.serve(async (req) => {
         if (Array.isArray(finalization.authorized_platform_post_ids)) {
           authorizedPlatformPostIds = finalization.authorized_platform_post_ids.filter((id): id is string => typeof id === "string");
         }
-        const outcome = await readPostOutcome(postReaderFor(supabase, authorizedPlatformPostIds), post_id, {
+        const outcome = await readPostOutcome(postReaderFor(supabase, authorizedPlatformPostIds ?? []), post_id, {
           results: platformResults,
           hasSuccess,
           hasFailed,
