@@ -8,13 +8,9 @@
  * 2026-10-29-hardening-followups-design.md, Part B2.
  */
 
-export interface ClaimedRow {
-  kind?: string;
-  platform_post_id?: string | null;
-  post_id: string;
-  attempt_started_at?: string | null;
-  candidate_id?: string | null;
-}
+export type ClaimedRow =
+  | { kind?: "deferred_publish"; platform_post_id: string; post_id: string; candidate_id?: never }
+  | { kind: "notification_only"; platform_post_id?: null; post_id: string; attempt_started_at: string; candidate_id: string; claim_id: string };
 
 export interface ResumeOutcome {
   ok: boolean;

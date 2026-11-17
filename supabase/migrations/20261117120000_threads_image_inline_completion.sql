@@ -1400,7 +1400,7 @@ BEGIN
       JOIN public.platform_posts pp ON pp.post_id = p.id
      WHERE pp.id = p_platform_post_id;
   ELSE
-    SELECT p.user_id INTO v_owner FROM public.posts p WHERE p.id = p_post_id;
+    SELECT p.user_id INTO v_owner FROM public.posts p WHERE p.id = p_post_id FOR UPDATE;
   END IF;
 
   IF p_social_account_id IS NOT NULL OR p_platform_post_id IS NOT NULL THEN
@@ -1553,7 +1553,18 @@ BEGIN
     INTO v_total, v_settled, v_succeeded
     FROM public.platform_posts WHERE post_id = v_row.post_id;
 
-  IF v_settled = v_total AND v_rollup_parent THEN
+  IF v_post.metadata ? 'legacy_notification_candidate' THEN
+    -- Original worker closure is authoritative, including multiple rows per account.
+    -- A pending producer may finish only the already-closed exact row set.
+    IF v_post.metadata #>> '{legacy_notification_candidate,fanout_closed}' = 'true' THEN
+      PERFORM public.close_post_fanout(
+        v_post.id, v_post.processing_started_at,
+        v_post.metadata #> '{legacy_notification_candidate,content_fence}',
+        ARRAY(SELECT jsonb_array_elements_text(v_post.metadata #> '{legacy_notification_candidate,exact_platform_post_ids}')::uuid),
+        ARRAY(SELECT jsonb_array_elements_text(v_post.metadata #> '{legacy_notification_candidate,retained_platform_post_ids}')::uuid)
+      );
+    END IF;
+  ELSIF v_settled = v_total AND v_rollup_parent THEN
     v_post_state := CASE WHEN v_succeeded > 0 THEN 'completed' ELSE 'failed' END;
     UPDATE public.posts
        SET status = v_post_state,
@@ -1563,21 +1574,7 @@ BEGIN
              'settlement_rollup_at', now(),
              'settlement_rollup_status', v_post_state,
              'settlement_rollup_processing_started_at', v_post.processing_started_at
-           ) || CASE
-             WHEN (metadata ? 'legacy_notification_candidate')
-                  AND ((metadata #>> '{legacy_notification_candidate,fanout_closed}') = 'true')
-             THEN jsonb_build_object(
-               'legacy_notification_candidate',
-               (metadata -> 'legacy_notification_candidate') || jsonb_build_object(
-                 'ready', true,
-                 'status', v_post_state,
-                 'authorized_platform_post_ids',
-                 coalesce(metadata #> '{legacy_notification_candidate,exact_platform_post_ids}', '[]'::jsonb) ||
-                 coalesce(metadata #> '{legacy_notification_candidate,retained_platform_post_ids}', '[]'::jsonb)
-               )
-             )
-             ELSE '{}'::jsonb
-           END
+           )
      WHERE id = v_row.post_id;
   END IF;
 
@@ -1645,7 +1642,7 @@ BEGIN
   IF p_post_id IS NULL OR p_social_account_id IS NULL OR p_expected_processing_started_at IS NULL THEN
     RETURN false;
   END IF;
-  IF p_post_type NOT IN ('video', 'image', 'link', 'multi') THEN
+  IF p_post_type IS NULL OR p_post_type NOT IN ('video', 'image', 'link', 'multi') THEN
     RETURN false;
   END IF;
 
@@ -1854,6 +1851,11 @@ BEGIN
   v_candidate := v_post.metadata -> 'legacy_notification_candidate';
   IF v_candidate IS NOT NULL
      AND (v_candidate ->> 'attempt_started_at')::timestamptz IS NOT DISTINCT FROM p_expected_processing_started_at THEN
+    IF v_candidate -> 'target_account_ids' IS DISTINCT FROM to_jsonb(v_targets)
+       OR v_candidate -> 'retained_platform_post_ids' IS DISTINCT FROM to_jsonb(v_retained)
+       OR v_candidate ->> 'content_hash' IS DISTINCT FROM md5(v_content::text) THEN
+      RETURN jsonb_build_object('enrolled', false, 'error', 'candidate_scope_mismatch');
+    END IF;
     RETURN jsonb_build_object(
       'enrolled', true,
       'candidate_id', v_candidate ->> 'candidate_id',
@@ -1866,6 +1868,7 @@ BEGIN
     'candidate_id', v_candidate_id,
     'attempt_started_at', p_expected_processing_started_at,
     'content_hash', md5(v_content::text),
+    'content_fence', v_content,
     'ready', false,
     'fanout_closed', false,
     'target_account_ids', to_jsonb(v_targets),
@@ -1913,6 +1916,8 @@ DECLARE
   v_retained_count integer;
   v_status text;
   v_all_rows uuid[];
+  v_expected_retained uuid[];
+  v_target_ids uuid[];
 BEGIN
   IF p_post_id IS NULL OR p_expected_processing_started_at IS NULL THEN
     RETURN jsonb_build_object('closed', false, 'error', 'invalid_arguments');
@@ -1951,6 +1956,68 @@ BEGIN
   IF v_candidate IS NULL
      OR (v_candidate ->> 'attempt_started_at')::timestamptz IS DISTINCT FROM p_expected_processing_started_at THEN
     RETURN jsonb_build_object('closed', false, 'error', 'no_candidate_for_attempt');
+  END IF;
+
+  IF v_candidate ->> 'content_hash' IS DISTINCT FROM md5(v_content::text)
+     OR coalesce((v_candidate ->> 'consumed')::boolean, false)
+     OR NOT (v_post.status = 'processing' OR (
+       v_post.status IN ('completed', 'failed')
+       AND v_post.metadata ->> 'settlement_rollup_status' = v_post.status
+       AND (v_post.metadata ->> 'settlement_rollup_processing_started_at')::timestamptz = p_expected_processing_started_at
+     )) THEN
+    RETURN jsonb_build_object('closed', false, 'error', 'candidate_authority_changed');
+  END IF;
+  IF v_post.metadata ? 'final_notification_intent' OR EXISTS (
+    SELECT 1 FROM public.platform_posts pp WHERE pp.post_id = p_post_id
+      AND pp.response_data #>> '{deferred,kind}' = 'threads'
+      AND pp.response_data #>> '{deferred,media_type}' = 'IMAGE'
+      AND (pp.response_data #>> '{deferred,attempt_started_at}')::timestamptz = p_expected_processing_started_at
+  ) THEN
+    RETURN jsonb_build_object('closed', false, 'error', 'managed_image_owner');
+  END IF;
+  SELECT coalesce(array_agg(x::uuid ORDER BY x), ARRAY[]::uuid[]) INTO v_expected_retained
+    FROM jsonb_array_elements_text(v_candidate -> 'retained_platform_post_ids') x;
+  SELECT coalesce(array_agg(x::uuid), ARRAY[]::uuid[]) INTO v_target_ids
+    FROM jsonb_array_elements_text(v_candidate -> 'target_account_ids') x;
+  IF cardinality(v_target_ids) = 0 OR cardinality(p_exact_platform_post_ids) IS NULL
+     OR cardinality(p_exact_platform_post_ids) = 0
+     OR EXISTS (SELECT 1 FROM unnest(p_exact_platform_post_ids) x WHERE x IS NULL)
+     OR cardinality(p_exact_platform_post_ids) <> (SELECT count(DISTINCT x) FROM unnest(p_exact_platform_post_ids) x)
+     OR v_expected_retained IS DISTINCT FROM (
+       SELECT coalesce(array_agg(x ORDER BY x::text), ARRAY[]::uuid[]) FROM unnest(coalesce(p_retained_platform_post_ids, ARRAY[]::uuid[])) x
+     ) THEN
+    RETURN jsonb_build_object('closed', false, 'error', 'result_scope_mismatch');
+  END IF;
+  IF v_candidate ->> 'fanout_closed' = 'true' AND
+     NOT ((v_candidate -> 'exact_platform_post_ids') @> to_jsonb(p_exact_platform_post_ids)
+       AND to_jsonb(p_exact_platform_post_ids) @> (v_candidate -> 'exact_platform_post_ids')) THEN
+    RETURN jsonb_build_object('closed', false, 'error', 'fanout_scope_frozen');
+  END IF;
+  -- Parent lock precedes result locks in both settlement and closure.
+  PERFORM pp.id FROM public.platform_posts pp
+    WHERE pp.id = ANY(p_exact_platform_post_ids || v_expected_retained)
+    ORDER BY pp.id FOR UPDATE;
+  IF EXISTS (
+    SELECT 1 FROM unnest(p_exact_platform_post_ids) rid
+    WHERE NOT EXISTS (
+      SELECT 1 FROM public.platform_posts pp JOIN public.social_accounts sa ON sa.id = pp.social_account_id
+       WHERE pp.id = rid AND pp.post_id = p_post_id AND sa.user_id = v_post.user_id
+         AND pp.social_account_id = ANY(v_target_ids) AND pp.platform = sa.platform
+         AND pp.status IN ('pending', 'success', 'failed')
+         AND (pp.created_at >= p_expected_processing_started_at
+           OR (pp.response_data #>> '{deferred,attempt_started_at}')::timestamptz = p_expected_processing_started_at)
+    )
+  ) OR EXISTS (
+    SELECT 1 FROM unnest(v_target_ids) tid WHERE NOT EXISTS (
+      SELECT 1 FROM public.platform_posts pp WHERE pp.id = ANY(p_exact_platform_post_ids) AND pp.social_account_id = tid
+    )
+  ) OR EXISTS (
+    SELECT 1 FROM unnest(v_expected_retained) rid WHERE NOT EXISTS (
+      SELECT 1 FROM public.platform_posts pp JOIN public.social_accounts sa ON sa.id = pp.social_account_id
+       WHERE pp.id = rid AND pp.post_id = p_post_id AND pp.status = 'success' AND sa.user_id = v_post.user_id
+    )
+  ) THEN
+    RETURN jsonb_build_object('closed', false, 'error', 'invalid_result_scope');
   END IF;
 
   -- Check all exact rows exist for post
@@ -2010,6 +2077,9 @@ BEGIN
     IF v_post.status = 'processing' THEN
       UPDATE public.posts
          SET status = v_status,
+             metadata = coalesce(metadata, '{}'::jsonb) || jsonb_build_object(
+               'settlement_rollup_at', now(), 'settlement_rollup_status', v_status,
+               'settlement_rollup_processing_started_at', p_expected_processing_started_at),
              posted_at = CASE WHEN v_status = 'completed' THEN coalesce(posted_at, now()) ELSE posted_at END
        WHERE id = p_post_id;
     END IF;
@@ -2040,12 +2110,14 @@ $$;
 REVOKE ALL ON FUNCTION public.close_post_fanout(uuid, timestamptz, jsonb, uuid[], uuid[]) FROM PUBLIC, anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.close_post_fanout(uuid, timestamptz, jsonb, uuid[], uuid[]) TO service_role;
 
+DROP FUNCTION IF EXISTS public.claim_legacy_notification_candidate(uuid, timestamptz, jsonb, uuid, interval);
 CREATE OR REPLACE FUNCTION public.claim_legacy_notification_candidate(
   p_post_id uuid,
   p_expected_processing_started_at timestamptz,
   p_expected_content jsonb,
   p_candidate_id uuid DEFAULT NULL,
-  p_lease interval DEFAULT interval '3 minutes'
+  p_lease interval DEFAULT interval '3 minutes',
+  p_claim_id uuid DEFAULT NULL
 )
 RETURNS jsonb
 LANGUAGE plpgsql
@@ -2057,6 +2129,7 @@ DECLARE
   v_content jsonb;
   v_candidate jsonb;
   v_claim_id uuid := gen_random_uuid();
+  v_readiness jsonb;
 BEGIN
   IF p_post_id IS NULL OR p_expected_processing_started_at IS NULL THEN
     RETURN jsonb_build_object('claimed', false, 'reason', 'invalid_arguments');
@@ -2117,6 +2190,18 @@ BEGIN
     RETURN jsonb_build_object('claimed', false, 'reason', 'candidate_attempt_mismatch');
   END IF;
 
+  IF v_candidate ->> 'content_hash' IS DISTINCT FROM md5(v_content::text)
+     OR v_candidate ->> 'status' IS DISTINCT FROM v_post.status
+     OR v_candidate ->> 'fanout_closed' IS DISTINCT FROM 'true'
+     OR EXISTS (
+       SELECT 1 FROM public.platform_posts pp WHERE pp.post_id = p_post_id
+         AND pp.response_data #>> '{deferred,kind}' = 'threads'
+         AND pp.response_data #>> '{deferred,media_type}' = 'IMAGE'
+         AND (pp.response_data #>> '{deferred,attempt_started_at}')::timestamptz = p_expected_processing_started_at
+     ) THEN
+    RETURN jsonb_build_object('claimed', false, 'reason', 'candidate_authority_changed');
+  END IF;
+
   IF p_candidate_id IS NOT NULL
      AND (v_candidate ->> 'candidate_id')::uuid IS DISTINCT FROM p_candidate_id THEN
     RETURN jsonb_build_object('claimed', false, 'reason', 'candidate_id_mismatch');
@@ -2130,10 +2215,26 @@ BEGIN
     RETURN jsonb_build_object('claimed', false, 'reason', 'candidate_already_consumed');
   END IF;
 
+  -- Revalidate the frozen rows under the same parent/result locks before consumption.
+  v_readiness := public.close_post_fanout(
+    p_post_id, p_expected_processing_started_at, p_expected_content,
+    ARRAY(SELECT jsonb_array_elements_text(v_candidate -> 'exact_platform_post_ids')::uuid),
+    ARRAY(SELECT jsonb_array_elements_text(v_candidate -> 'retained_platform_post_ids')::uuid)
+  );
+  IF v_readiness ->> 'ready' IS DISTINCT FROM 'true' THEN
+    RETURN jsonb_build_object('claimed', false, 'reason', 'results_not_ready');
+  END IF;
+
   -- Lease check: if held by someone else, refuse
   IF coalesce((v_candidate ->> 'claimed_until')::timestamptz, '-infinity') > now()
-     AND (p_candidate_id IS NULL OR (v_candidate ->> 'candidate_id')::uuid IS DISTINCT FROM p_candidate_id) THEN
+     AND (p_claim_id IS NULL OR (v_candidate ->> 'claim_id')::uuid IS DISTINCT FROM p_claim_id) THEN
     RETURN jsonb_build_object('claimed', false, 'reason', 'lease_held');
+  END IF;
+  IF p_claim_id IS NOT NULL AND (
+    (v_candidate ->> 'claim_id')::uuid IS DISTINCT FROM p_claim_id
+    OR coalesce((v_candidate ->> 'claimed_until')::timestamptz, '-infinity') <= now()
+  ) THEN
+    RETURN jsonb_build_object('claimed', false, 'reason', 'stale_scheduling_claim');
   END IF;
 
   -- ATOMICALLY claim and consume: stamp final_notified_at and mark candidate consumed
@@ -2158,9 +2259,10 @@ BEGIN
 END;
 $$;
 
-REVOKE ALL ON FUNCTION public.claim_legacy_notification_candidate(uuid, timestamptz, jsonb, uuid, interval) FROM PUBLIC, anon, authenticated;
-GRANT EXECUTE ON FUNCTION public.claim_legacy_notification_candidate(uuid, timestamptz, jsonb, uuid, interval) TO service_role;
+REVOKE ALL ON FUNCTION public.claim_legacy_notification_candidate(uuid, timestamptz, jsonb, uuid, interval, uuid) FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.claim_legacy_notification_candidate(uuid, timestamptz, jsonb, uuid, interval, uuid) TO service_role;
 
+DROP FUNCTION IF EXISTS public.claim_post_completion_work(integer, interval);
 CREATE OR REPLACE FUNCTION public.claim_post_completion_work(
   p_limit integer DEFAULT 5,
   p_lease interval DEFAULT interval '3 minutes'
@@ -2170,7 +2272,8 @@ RETURNS TABLE (
   platform_post_id uuid,
   post_id uuid,
   attempt_started_at timestamptz,
-  candidate_id uuid
+  candidate_id uuid,
+  claim_id uuid
 )
 LANGUAGE plpgsql
 SECURITY DEFINER
@@ -2183,6 +2286,8 @@ DECLARE
   v_remaining integer;
   v_step1_post_ids uuid[] := ARRAY[]::uuid[];
 BEGIN
+  p_limit := least(5, greatest(0, coalesce(p_limit, 5)));
+  p_lease := interval '3 minutes';
   -- Step 1: Claim due deferred publishes / image rows using existing claim_deferred_publishes
   FOR v_rec IN 
     SELECT cdp.platform_post_id, cdp.post_id 
@@ -2193,6 +2298,7 @@ BEGIN
     post_id := v_rec.post_id;
     attempt_started_at := NULL;
     candidate_id := NULL;
+    claim_id := NULL;
     v_claimed_count := v_claimed_count + 1;
     v_step1_post_ids := array_append(v_step1_post_ids, v_rec.post_id);
     RETURN NEXT;
@@ -2210,6 +2316,15 @@ BEGIN
          WHERE p.status IN ('completed', 'failed')
            AND p.metadata ? 'legacy_notification_candidate'
            AND (p.metadata #>> '{legacy_notification_candidate,ready}') = 'true'
+           AND (p.metadata #>> '{legacy_notification_candidate,fanout_closed}') = 'true'
+           AND (p.metadata #>> '{legacy_notification_candidate,attempt_started_at}')::timestamptz = p.processing_started_at
+           AND p.metadata #>> '{legacy_notification_candidate,status}' = p.status
+           AND p.metadata #>> '{legacy_notification_candidate,content_hash}' = md5(jsonb_build_object(
+             'user_id', p.user_id, 'caption', p.caption, 'media_file_ids', p.media_file_ids,
+             'metadata', public.normalize_threads_internal_metadata(p.metadata), 'platforms', p.platforms,
+             'scheduled_at', p.scheduled_at, 'publish_requested_at', p.publish_requested_at, 'source', p.source
+           )::text)
+           AND NOT (p.metadata ? 'final_notification_intent')
            AND coalesce((p.metadata #>> '{legacy_notification_candidate,consumed}')::boolean, false) = false
            AND coalesce((p.metadata #>> '{legacy_notification_candidate,claimed_until}')::timestamptz, '-infinity') <= now()
            AND (
@@ -2241,13 +2356,15 @@ BEGIN
              )
         FROM candidates
        WHERE p.id = candidates.id
-      RETURNING p.id AS post_id, p.processing_started_at, (p.metadata #>> '{legacy_notification_candidate,candidate_id}')::uuid AS candidate_id
+      RETURNING p.id AS post_id, p.processing_started_at, (p.metadata #>> '{legacy_notification_candidate,candidate_id}')::uuid AS candidate_id,
+        (p.metadata #>> '{legacy_notification_candidate,claim_id}')::uuid AS claim_id
     LOOP
       kind := 'notification_only';
       platform_post_id := NULL;
       post_id := v_candidate_rec.post_id;
       attempt_started_at := v_candidate_rec.processing_started_at;
       candidate_id := v_candidate_rec.candidate_id;
+      claim_id := v_candidate_rec.claim_id;
       RETURN NEXT;
     END LOOP;
   END IF;

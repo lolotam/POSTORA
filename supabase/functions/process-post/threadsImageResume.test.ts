@@ -201,6 +201,8 @@ Deno.test("registered process-post durably completes single-image Threads contai
   let legacyRestoreFailure = false;
   let legacyNotificationClaimFailure: "none" | "read" | "read_persistent" | "missing" | "update" = "none";
   let legacyNotificationClaimReads = 0;
+  let recoveryRowReadFailure = false;
+  let recoveryClaims = 0;
   let legacySiblingReadSnapshot = false;
   let notificationScopeMode: "ok" | "missing" | "empty" | "deleted" | "changed" | "parent_changed" | "content_changed" | "settings_changed" | "attempt_changed" | "content_read_error" = "ok";
   const unexpected: string[] = [];
@@ -292,6 +294,8 @@ Deno.test("registered process-post durably completes single-image Threads contai
     legacyRestoreFailure = false;
     legacyNotificationClaimFailure = "none";
     legacyNotificationClaimReads = 0;
+    recoveryRowReadFailure = false;
+    recoveryClaims = 0;
     legacySiblingReadSnapshot = false;
   }
 
@@ -545,6 +549,7 @@ Deno.test("registered process-post durably completes single-image Threads contai
       return Response.json(null);
     }
     if (table === "platform_posts") {
+      if (recoveryRowReadFailure && request.method === "GET") return Response.json({ message: "fixture result read unavailable" }, { status: 500 });
       if (priorSuccessReadFailure && request.method === "GET" && url.searchParams.get("status") === "eq.success") {
         if (newerClaimOnReadFailure) post.processing_started_at = new Date(BASE_CLOCK + clock + 1).toISOString();
         return Response.json({ message: "fixture prior success read failed" }, { status: 500 });
@@ -945,6 +950,7 @@ Deno.test("registered process-post durably completes single-image Threads contai
       return Response.json({ closed: true, ready: true, status: post.status });
     }
     if (table === "rpc/claim_legacy_notification_candidate") {
+      recoveryClaims++;
       const payload = await request.json() as Record<string, unknown>;
       const meta = (post.metadata ?? {}) as Record<string, unknown>;
       const cand = (meta.legacy_notification_candidate ?? {}) as Record<string, unknown>;
@@ -2376,6 +2382,37 @@ Deno.test("registered process-post durably completes single-image Threads contai
       assertEquals(publishes, 1);
     });
 
+    for (const mode of ["ok", "read_error", "missing_row"] as const) {
+      await test.step(`notification-only recovery ${mode} never enters publishing and retains pre-claim work on degraded reads`, async () => {
+        reset();
+        addFailedRow("facebook");
+        const resultId = rows[0].id;
+        rows[0].status = "success";
+        rows[0].platform_post_url = "https://facebook.fixture/recovered";
+        post.status = "completed";
+        post.processing_started_at = new Date(BASE_CLOCK).toISOString();
+        const candidateId = "77000000-0000-4000-8000-000000000001";
+        const claimId = "77000000-0000-4000-8000-000000000002";
+        post.metadata = { ...post.metadata as Record<string, unknown>, legacy_notification_candidate: {
+          candidate_id: candidateId, authorized_platform_post_ids: [resultId], ready: true,
+        } };
+        const call = () => handler!(new Request(`${ORIGIN}/functions/v1/process-post`, {
+          method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${SERVICE}` },
+          body: JSON.stringify({ post_id: POST, notification_only: true, attempt_started_at: post.processing_started_at,
+            candidate_id: candidateId, notification_claim_id: claimId }),
+        }));
+        recoveryRowReadFailure = mode === "read_error";
+        if (mode === "missing_row") rows = [];
+        const response = await call();
+        assertEquals(response.status, mode === "ok" ? 200 : 503, await response.clone().text());
+        assertEquals({ creates, statusReads, publishes, settlements, inlineClaims }, { creates: 0, statusReads: 0, publishes: 0, settlements: 0, inlineClaims: 0 });
+        assertEquals(recoveryClaims, mode === "ok" ? 1 : 0);
+        if (mode !== "ok") {
+          assertEquals((post.metadata as Record<string, unknown>).final_notified_at, undefined);
+          assertEquals(deliveredNotifications.length, 0);
+        }
+      });
+    }
     assertEquals(unexpected, []);
   } finally {
     globalThis.fetch = previousFetch;

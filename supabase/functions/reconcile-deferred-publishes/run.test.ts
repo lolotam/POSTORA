@@ -113,6 +113,7 @@ Deno.test("reconciler resumes notification_only work items and aggregates outcom
     post_id: "post-notif-1",
     attempt_started_at: "2026-11-17T12:00:00Z",
     candidate_id: "cand-1",
+    claim_id: "claim-1",
   };
   const { fake, logs } = ports({
     claimed: [notifRow],

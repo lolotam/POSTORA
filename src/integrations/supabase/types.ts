@@ -12058,6 +12058,7 @@ export type Database = {
           p_expected_content: Json
           p_candidate_id?: string | null
           p_lease?: unknown
+          p_claim_id?: string | null
         }
         Returns: Json
       }
@@ -12072,6 +12073,7 @@ export type Database = {
           post_id: string
           attempt_started_at: string | null
           candidate_id: string | null
+          claim_id: string | null
         }[]
       }
       claim_meta_analytics_collection_job: {

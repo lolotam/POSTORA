@@ -199,6 +199,7 @@ const ProcessPostSchema = z.object({
   notification_only: z.boolean().optional(),
   attempt_started_at: z.string().max(64).optional(),
   candidate_id: z.string().uuid().optional(),
+  notification_claim_id: z.string().uuid().optional(),
 }).passthrough();
 
 /**
@@ -1672,6 +1673,11 @@ async function announceFinalPost(
   }
 
   const claim = await claimFinalNotification(supabase, post.id);
+  if (claim.reason === "legacy_candidate") {
+    const response = await handleNotificationOnly(supabase, post.id);
+    const receipt = await response.json();
+    return response.ok && receipt.notified === true;
+  }
   if (claim.reason) {
     await writeLogRow(supabase, {
       level: claim.error ? "warn" : "info", category: "post", source: "process-post", user_id: post.user_id,
@@ -1875,6 +1881,7 @@ async function handleNotificationOnly(
   postId: string,
   expectedProcessingStartedAt?: string,
   expectedCandidateId?: string,
+  expectedClaimId?: string,
 ): Promise<Response> {
   const { data: post, error: postError } = await supabase
     .from("posts")
@@ -1883,7 +1890,8 @@ async function handleNotificationOnly(
     .maybeSingle();
 
   if (postError || !post) {
-    return createErrorResponse("Post not found", 404);
+    await writeLogRow(supabase, { level: "warn", category: "post", source: "process-post", message: "Notification recovery could not read its parent", metadata: { event: "legacy_notification_parent_unavailable", post_id: postId } });
+    return createErrorResponse("Notification parent unavailable", 503);
   }
 
   const attemptStartedAt = expectedProcessingStartedAt ?? post.processing_started_at;
@@ -1892,11 +1900,27 @@ async function handleNotificationOnly(
   }
 
   const expectedContent = threadsImageContentFence(post as PostData);
+  const candidate = post.metadata?.legacy_notification_candidate;
+  const authorizedIds = candidate?.authorized_platform_post_ids;
+  if (!candidate || !Array.isArray(authorizedIds) || authorizedIds.length === 0 ||
+      !authorizedIds.every((id: unknown) => typeof id === "string")) {
+    await writeLogRow(supabase, { level: "warn", category: "post", source: "process-post", user_id: post.user_id, message: "Notification recovery has no proven complete result scope", metadata: { event: "legacy_notification_scope_unavailable", post_id: postId } });
+    return createErrorResponse("Notification scope unavailable", 503);
+  }
+  // Read before consuming the send-once marker. Database outages remain pre-claim work.
+  const outcome = await readPostOutcome(postReaderFor(supabase, authorizedIds, undefined, {
+    processingStartedAt: attemptStartedAt, content: expectedContent,
+  }), postId, { results: [], hasSuccess: false, hasFailed: false });
+  if (outcome.kind !== "terminal" || outcome.degraded) {
+    await writeLogRow(supabase, { level: "warn", category: "post", source: "process-post", user_id: post.user_id, message: "Notification recovery withheld an incomplete result read", metadata: { event: "legacy_notification_results_unavailable", post_id: postId } });
+    return createErrorResponse("Notification results unavailable", 503);
+  }
   const { data: claimData, error: claimError } = await supabase.rpc("claim_legacy_notification_candidate", {
     p_post_id: post.id,
     p_expected_processing_started_at: attemptStartedAt,
     p_expected_content: expectedContent,
     p_candidate_id: expectedCandidateId ?? null,
+    p_claim_id: expectedClaimId ?? null,
   });
 
   const claimRes = claimData as {
@@ -1909,7 +1933,8 @@ async function handleNotificationOnly(
 
   if (claimError || !claimRes?.claimed) {
     const reason = claimRes?.reason ?? claimError?.message ?? "claim_refused";
-    console.log(`[process-post] notification_only claim refused: ${reason}`);
+    await writeLogRow(supabase, { level: "warn", category: "post", source: "process-post", user_id: post.user_id, message: "Notification recovery claim refused", metadata: { event: "legacy_notification_candidate_refused", post_id: postId, reason: claimError ? "claim_unavailable" : reason } });
+    if (claimError) return createErrorResponse("Notification claim unavailable", 503);
     return createJsonResponse({
       success: true,
       notification_only: true,
@@ -1918,29 +1943,14 @@ async function handleNotificationOnly(
     });
   }
 
-  const authorizedIds = Array.isArray(claimRes.authorized_platform_post_ids)
-    ? claimRes.authorized_platform_post_ids
-    : [];
-
-  let platformResults: PlatformResultSummary[] = [];
-  if (authorizedIds.length > 0) {
-    const { data: rows } = await supabase
-      .from("platform_posts")
-      .select("id, platform, status, platform_post_url, error_message")
-      .in("id", authorizedIds);
-
-    platformResults = (rows ?? []).map((r: { platform: string; status: string; platform_post_url?: string | null; error_message?: string | null }) => ({
-      platform: r.platform,
-      status: r.status,
-      platform_post_url: r.platform_post_url ?? undefined,
-      error_message: r.error_message ?? undefined,
-    }));
+  if (claimRes.status !== outcome.status || !Array.isArray(claimRes.authorized_platform_post_ids) ||
+      claimRes.authorized_platform_post_ids.length !== authorizedIds.length ||
+      !authorizedIds.every((id: string) => claimRes.authorized_platform_post_ids!.includes(id))) {
+    await writeLogRow(supabase, { level: "error", category: "post", source: "process-post", user_id: post.user_id, message: "Notification claim returned an inconsistent snapshot", metadata: { event: "legacy_notification_claim_snapshot_invalid", post_id: postId } });
+    return createErrorResponse("Notification claim snapshot invalid", 503);
   }
-
-  const hasFailed = platformResults.some((r) => r.status === "failed");
-  const finalStatus = claimRes.status ?? post.status;
-
-  sendFinalNotifications(supabase, post as PostData, finalStatus, platformResults, hasFailed);
+  const finalStatus = outcome.status;
+  sendFinalNotifications(supabase, post as PostData, finalStatus, outcome.results, outcome.hasFailed);
 
   return createJsonResponse({
     success: true,
@@ -1982,6 +1992,7 @@ Deno.serve(async (req) => {
       notification_only: notificationOnly,
       attempt_started_at: attemptStartedAt,
       candidate_id: candidateId,
+      notification_claim_id: notificationClaimId,
     } = validation.data;
     // A resumed run narrows both to the deferred row's account (below).
     let { platforms: overridePlatforms, account_ids: overrideAccountIds } = validation.data;
@@ -2044,14 +2055,15 @@ Deno.serve(async (req) => {
 
     // Notification-only mode: discriminator check and immediate execution
     if (notificationOnly) {
-      if (resumePlatformPostId || overridePlatforms?.length || overrideAccountIds?.length || expectedScheduledAt || expectedPublishRequestedAt) {
+      if (!attemptStartedAt || !candidateId || !notificationClaimId || resumePlatformPostId || overridePlatforms?.length || overrideAccountIds?.length || expectedScheduledAt || expectedPublishRequestedAt) {
         return createErrorResponse("Combined mode rejected: notification_only cannot be combined with publish or resume parameters", 400);
       }
       if (!isServiceRoleAuth) {
         return createErrorResponse("Forbidden: notification_only is internal", 403);
       }
-      return await handleNotificationOnly(supabase, post_id, attemptStartedAt, candidateId);
+      return await handleNotificationOnly(supabase, post_id, attemptStartedAt, candidateId, notificationClaimId);
     }
+    if (attemptStartedAt || candidateId || notificationClaimId) return createErrorResponse("Notification identity requires notification_only mode", 400);
 
     // A run its caller retries on its own is not started on a worker near its end: it would be
     // stopped between creating a container and recording it. Refused before any read or claim.
@@ -2528,6 +2540,10 @@ Deno.serve(async (req) => {
       } catch (enrollErr) {
         console.warn("[process-post] enroll_post_notification_recovery failed:", enrollErr);
       }
+      if (!enrolledCandidateId) {
+        await writeLogRow(supabase, { level: "error", category: "post", source: "process-post", user_id: post.user_id, message: "Publication stopped before provider execution because notification enrollment was unconfirmed", metadata: { event: "notification_enrollment_unconfirmed", post_id } });
+        return createErrorResponse("Publication admission could not be confirmed; no provider operation was started", 503);
+      }
     }
 
     const failMediaPreparation = async (message: string, statusCode = 503) => {
@@ -2791,6 +2807,7 @@ Deno.serve(async (req) => {
     let imageHandoff: { processingStartedAt: string; content: Record<string, unknown> } | null = null;
     const platformResults: PlatformResultSummary[] = [];
     const exactPlatformPostIds: string[] = [];
+    let fanoutWriteFailed = false;
 
     for (const account of (accounts || [])) {
       console.log(`Posting to ${account.platform}...`);
@@ -2837,10 +2854,13 @@ Deno.serve(async (req) => {
               }
               : NOT_A_RETRY;
             if (igAuthType === 'business_login') {
-              result = await postToInstagramBusinessLogin(account, primaryPost, mediaUrls, mediaFiles, supabase, post_id, timingForAccount, retry);
+              result = await postToInstagramBusinessLogin(account, primaryPost, mediaUrls, mediaFiles, supabase, post_id, timingForAccount, retry, (id) => {
+                if (id) exactPlatformPostIds.push(id);
+                else fanoutWriteFailed = true;
+              });
             } else {
               result = await postToInstagram(account, primaryPost, mediaUrls, mediaFiles, timingForAccount, (story) =>
-                recordLiveStory(supabase, { postId: post_id, account, story }, stories), retry, async (error) => {
+                recordLiveStory(supabase, { postId: post_id, account, story, onRecorded: (id) => exactPlatformPostIds.push(id) }, stories), retry, async (error) => {
                 const settled = await settlePlatformPost(supabase, {
                   platformPostId: null,
                   postId: post_id,
@@ -2850,6 +2870,8 @@ Deno.serve(async (req) => {
                   errorMessage: error,
                   responseData: { ig_post_subtype: "story", account_username: account.platform_username },
                 });
+                if (settled.id) exactPlatformPostIds.push(settled.id);
+                if (settled.error || !settled.id) fanoutWriteFailed = true;
                 return settled.error;
               });
             }
@@ -3007,7 +3029,7 @@ Deno.serve(async (req) => {
         if (result.selfWroteRows) {
           const subResults = result.subResults || [];
           for (const sub of subResults) {
-            if (sub.id) exactPlatformPostIds.push(sub.id);
+            // Provider IDs are not platform_posts primary keys.
             platformResults.push({
               platform: account.platform,
               status: sub.status,
@@ -3200,6 +3222,7 @@ Deno.serve(async (req) => {
             // A story whose row this very run wrote must not be carried (and recorded) again.
             resumeResponseData: dropRecordedStory(imageExecution ? imageResponseData : resumeResponseData, stories.recorded),
           });
+          if (recorded.platformPostId) exactPlatformPostIds.push(recorded.platformPostId);
           if (!recorded.error && !recorded.gaveUp) {
             console.log(`[${account.platform}] container ${error.containerId} still processing; left for the reconciler`);
             platformResults.push({ platform: account.platform, status: "pending" });
@@ -3274,9 +3297,6 @@ Deno.serve(async (req) => {
       } finally {
         // Runs for every outcome, `continue` included: a live story is a success.
         if (stories.live.length > 0) {
-          for (const s of stories.live) {
-            if (s.platformPostId) exactPlatformPostIds.push(s.platformPostId);
-          }
           platformResults.push(...recordedStoryResults(stories.live));
           hasSuccess = true;
         }
@@ -3301,6 +3321,10 @@ Deno.serve(async (req) => {
     let fanoutClosedResult: FanoutClosedOutcome | null = null;
 
     if (!resume && claim.processingStartedAt && enrolledCandidateId && !imageHandoff) {
+      if (fanoutWriteFailed) {
+        await writeLogRow(supabase, { level: "error", category: "post", source: "process-post", user_id: post.user_id, message: "Complete notification scope unavailable after a result write failed", metadata: { event: "notification_fanout_write_failed", post_id } });
+        return createErrorResponse("Existing provider results retained; result recording needs reconciliation", 503);
+      }
       try {
         const { data: closeData, error: closeError } = await supabase.rpc("close_post_fanout", {
           p_post_id: post_id,
@@ -3312,11 +3336,15 @@ Deno.serve(async (req) => {
         if (closeError) {
           console.warn("[process-post] close_post_fanout RPC error:", closeError);
         } else {
-          fanoutClosedResult = closeData as typeof fanoutClosedResult;
+          fanoutClosedResult = closeData as FanoutClosedOutcome;
           console.log("[process-post] close_post_fanout result:", fanoutClosedResult);
         }
       } catch (closeErr) {
         console.warn("[process-post] close_post_fanout failed:", closeErr);
+      }
+      if (!fanoutClosedResult?.closed) {
+        await writeLogRow(supabase, { level: "error", category: "post", source: "process-post", user_id: post.user_id, message: "Publication results retained but the complete fanout could not be proven", metadata: { event: "notification_fanout_unconfirmed", post_id } });
+        return createErrorResponse("Existing publication results retained; completion requires reconciliation", 503);
       }
     }
 
@@ -3457,38 +3485,7 @@ Deno.serve(async (req) => {
           .eq("id", post_id);
       }
 
-      if (!resume && claim.processingStartedAt && enrolledCandidateId && !hasDeferred && !imageHandoff) {
-        const { data: claimData, error: claimError } = await supabase.rpc("claim_legacy_notification_candidate", {
-          p_post_id: post_id,
-          p_expected_processing_started_at: claim.processingStartedAt,
-          p_expected_content: threadsImageContentFence(post),
-          p_candidate_id: enrolledCandidateId,
-        });
-        const claimRes = claimData as {
-          claimed?: boolean;
-          status?: string;
-          authorized_platform_post_ids?: string[];
-        } | null;
 
-        if (!claimError && claimRes?.claimed) {
-          const authorizedIds = Array.isArray(claimRes.authorized_platform_post_ids)
-            ? claimRes.authorized_platform_post_ids.filter((id): id is string => typeof id === "string")
-            : uniqueExactRowIds;
-          const outcome = await readPostOutcome(postReaderFor(supabase, authorizedIds), post_id, {
-            results: platformResults,
-            hasSuccess,
-            hasFailed,
-          });
-          if (outcome.kind === "terminal" && !outcome.degraded) {
-            sendFinalNotifications(supabase, post, finalStatus, outcome.results, outcome.hasFailed);
-          } else {
-            console.warn(`[process-post] withholding candidate notification: degraded read`);
-          }
-          notify = false;
-        } else {
-          notify = false;
-        }
-      }
     }
 
     console.log("Post processing complete:", finalStatus);
@@ -6151,6 +6148,7 @@ async function postToInstagramBusinessLogin(
   postId: string,
   timing: PublishTiming = NO_DEFERRAL,
   retry: RetryState = NOT_A_RETRY,
+  recordResultId?: (id: string | null) => void,
 ): Promise<PlatformPostResult> {
   const igUserId = account.platform_user_id;
   const accessToken = account.access_token;
@@ -6471,12 +6469,15 @@ async function postToInstagramBusinessLogin(
       });
       if (settled.error) {
         console.error(`[IG ${subtype}] settle failed:`, settled.error);
+        recordResultId?.(null);
         return null;
       }
       console.log(`[IG ${subtype}] platform_posts row settled: ${settled.id} (status=${status})`);
+      if (settled.id) recordResultId?.(settled.id);
       return settled.id;
     } catch (e) {
       console.error(`[IG ${subtype}] insert exception:`, e);
+      recordResultId?.(null);
       return null;
     }
   };

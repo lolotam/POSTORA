@@ -17,11 +17,16 @@ export function createReconcilePorts(): ReconcilePorts {
     async claim(limit) {
       const { data, error } = await admin.rpc("claim_post_completion_work", { p_limit: limit });
       if (error) {
-        const { data: legacyData, error: legacyError } = await admin.rpc("claim_deferred_publishes", { p_limit: limit });
-        if (legacyError) throw new Error(`claim_post_completion_work failed: ${error.message}; legacy fallback failed: ${legacyError.message}`);
-        return (legacyData ?? []) as ClaimedRow[];
+        throw new Error(`claim_post_completion_work failed: ${error.message}`);
       }
-      return (data ?? []) as ClaimedRow[];
+      if (!Array.isArray(data) || data.some((row) =>
+        !row || typeof row.post_id !== "string" ||
+        (row.kind === "notification_only"
+          ? !row.candidate_id || !row.claim_id || !row.attempt_started_at || row.platform_post_id != null
+          : row.kind !== "deferred_publish" || typeof row.platform_post_id !== "string"))) {
+        throw new Error("claim_post_completion_work returned malformed work");
+      }
+      return data as ClaimedRow[];
     },
     async resume(row) {
       const isNotificationOnly = row.kind === "notification_only";
@@ -31,6 +36,7 @@ export function createReconcilePorts(): ReconcilePorts {
             notification_only: true,
             attempt_started_at: row.attempt_started_at,
             candidate_id: row.candidate_id,
+            notification_claim_id: row.claim_id,
           }
         : {
             post_id: row.post_id,

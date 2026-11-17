@@ -1887,15 +1887,84 @@ BEGIN
   claimed_candidate := public.claim_legacy_notification_candidate(
     post_b0, claim_at, b0_fence, work_rows.candidate_id
   );
+  ASSERT claimed_candidate ->> 'reason' = 'lease_held', 'T96 candidate identity alone cannot steal scheduling ownership';
+  claimed_candidate := public.claim_legacy_notification_candidate(
+    post_b0, claim_at, b0_fence, work_rows.candidate_id, interval '3 minutes', gen_random_uuid()
+  );
+  ASSERT NOT (claimed_candidate ->> 'claimed')::boolean, 'T96 wrong scheduling claim refused';
+  claimed_candidate := public.claim_legacy_notification_candidate(
+    post_b0, claim_at, b0_fence, work_rows.candidate_id, interval '3 minutes', work_rows.claim_id
+  );
   ASSERT (claimed_candidate ->> 'claimed')::boolean = true, format('T96 candidate claimed (got %s)', claimed_candidate);
   ASSERT (SELECT metadata ->> 'final_notified_at' IS NOT NULL FROM public.posts WHERE id = post_b0),
     'T96 final_notified_at stamped after claim';
 
   -- Double claim rejected
   claimed_candidate := public.claim_legacy_notification_candidate(
-    post_b0, claim_at, b0_fence, work_rows.candidate_id
+    post_b0, claim_at, b0_fence, work_rows.candidate_id, interval '3 minutes', work_rows.claim_id
   );
   ASSERT (claimed_candidate ->> 'claimed')::boolean = false, 'T96 duplicate candidate claim rejected';
+END $$;
+
+-- T97: closed fanout survives native pending settlement; stale/partial scope cannot notify.
+DO $$
+<<closure_case>>
+DECLARE
+  owner_id uuid := gen_random_uuid();
+  account_a uuid := gen_random_uuid();
+  account_b uuid := gen_random_uuid();
+  post_id uuid := gen_random_uuid();
+  row_a uuid := gen_random_uuid();
+  row_b uuid := gen_random_uuid();
+  attempt_at timestamptz := now();
+  fence jsonb;
+  receipt jsonb;
+  candidate uuid;
+  work record;
+BEGIN
+  INSERT INTO auth.users(id,email) VALUES(owner_id,'closure-test@example.invalid');
+  INSERT INTO public.social_accounts(id,user_id,platform,platform_user_id,access_token,is_active)
+    VALUES(account_a,owner_id,'facebook','closure-a','fixture',true),
+          (account_b,owner_id,'tiktok','closure-b','fixture',true);
+  INSERT INTO public.posts(id,user_id,caption,platforms,status,processing_started_at,source,metadata)
+    VALUES(post_id,owner_id,'closure',ARRAY['facebook','tiktok'],'processing',attempt_at,'manual','{}');
+  SELECT jsonb_build_object('user_id',p.user_id,'caption',p.caption,'media_file_ids',p.media_file_ids,
+    'metadata','{}'::jsonb,'platforms',p.platforms,'scheduled_at',p.scheduled_at,
+    'publish_requested_at',p.publish_requested_at,'source',p.source) INTO fence FROM public.posts p WHERE p.id=post_id;
+  receipt := public.enroll_post_notification_recovery(post_id,attempt_at,fence,ARRAY[account_a,account_b],ARRAY[]::uuid[]);
+  ASSERT receipt->>'enrolled'='true','T97 admission';
+  candidate := (receipt->>'candidate_id')::uuid;
+  receipt := public.enroll_post_notification_recovery(post_id,attempt_at,fence,ARRAY[account_a],ARRAY[]::uuid[]);
+  ASSERT receipt->>'enrolled'='false','T97 scope cannot shrink on replay';
+  INSERT INTO public.platform_posts(id,post_id,social_account_id,platform,status,created_at)
+    VALUES(row_a,post_id,account_a,'facebook','pending',attempt_at);
+  PERFORM public.partner_settle_platform_post(row_a,NULL,NULL,NULL,'success','closure-provider',NULL,NULL,NULL);
+  ASSERT (SELECT p.status FROM public.posts p WHERE p.id=post_id)='processing','T97 settlement cannot infer original fanout closure';
+  ASSERT (SELECT p.metadata ? 'legacy_notification_candidate' FROM public.posts p WHERE p.id=post_id),'T97 partial settlement preserves enrollment';
+  INSERT INTO public.platform_posts(id,post_id,social_account_id,platform,status,created_at)
+    VALUES(row_b,post_id,account_b,'tiktok','pending',attempt_at);
+  receipt := public.close_post_fanout(post_id,attempt_at,fence,ARRAY[row_a],ARRAY[]::uuid[]);
+  ASSERT receipt->>'closed'='false','T97 missing target cannot close';
+  receipt := public.close_post_fanout(post_id,attempt_at,fence,ARRAY[row_a,row_b],ARRAY[row_a]);
+  ASSERT receipt->>'closed'='false','T97 retained identity cannot be added after admission';
+  receipt := public.close_post_fanout(post_id,attempt_at,fence,ARRAY[row_a,row_b],ARRAY[]::uuid[]);
+  ASSERT receipt->>'closed'='true' AND receipt->>'ready'='false','T97 native pending remains pending';
+  PERFORM public.partner_settle_platform_post(row_b,NULL,NULL,NULL,'failed',NULL,NULL,'fixture failure',NULL);
+  ASSERT (SELECT p.status FROM public.posts p WHERE p.id=post_id)='completed','T97 final native settlement completes exact set';
+  ASSERT (SELECT p.metadata #>> '{legacy_notification_candidate,ready}' FROM public.posts p WHERE p.id=post_id)='true','T97 final producer makes pre-claim work durable';
+  UPDATE public.posts p SET caption='edited' WHERE p.id=post_id;
+  ASSERT NOT EXISTS(SELECT 1 FROM public.claim_post_completion_work(5) w WHERE w.post_id=closure_case.post_id),'T97 edited content cannot occupy notification slots';
+  receipt := public.claim_legacy_notification_candidate(post_id,attempt_at,fence,candidate);
+  ASSERT receipt->>'claimed'='false','T97 edited content cannot consume marker';
+  UPDATE public.posts p SET caption='closure' WHERE p.id=post_id;
+  SELECT * INTO work FROM public.claim_post_completion_work(5) w WHERE w.post_id=closure_case.post_id;
+  ASSERT work.claim_id IS NOT NULL,'T97 scheduler returns distinct lease identity';
+  UPDATE public.posts p SET metadata=jsonb_set(p.metadata,'{legacy_notification_candidate,claimed_until}',to_jsonb(now()-interval '1 second')) WHERE p.id=post_id;
+  receipt := public.claim_legacy_notification_candidate(post_id,attempt_at,fence,candidate,interval '3 minutes',work.claim_id);
+  ASSERT receipt->>'claimed'='false','T97 expired scheduler cannot consume marker';
+  UPDATE public.posts p SET status='failed' WHERE p.id=post_id;
+  ASSERT NOT (SELECT p.metadata ? 'legacy_notification_candidate' FROM public.posts p WHERE p.id=post_id),'T97 owner cancellation invalidates recovery';
+  ASSERT NOT EXISTS(SELECT 1 FROM public.claim_post_completion_work(5) w WHERE w.post_id=closure_case.post_id),'T97 cancellation cannot be recovered';
 END $$;
 
 ROLLBACK;

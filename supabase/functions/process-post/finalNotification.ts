@@ -26,7 +26,7 @@ export interface FinalNotificationClaim {
   claimed: boolean;
   /** Legacy marker read/write failure; distinct from a managed-intent refusal. */
   error: string | null;
-  reason?: "managed_intent" | "ownership_unavailable" | "post_missing";
+  reason?: "managed_intent" | "legacy_candidate" | "ownership_unavailable" | "post_missing";
 }
 
 function asRecord(value: unknown): Record<string, unknown> {
@@ -63,6 +63,9 @@ export async function claimFinalNotification(
   if (metadata.final_notification_intent != null) {
     return { claimed: false, error: null, reason: "managed_intent" };
   }
+  if (metadata.legacy_notification_candidate != null) {
+    return { claimed: false, error: null, reason: "legacy_candidate" };
+  }
   const marker = metadata[FINAL_NOTIFIED_KEY];
   if (markerCoversCycle(marker, row.processing_started_at ?? null)) return { claimed: false, error: null };
 
@@ -77,7 +80,8 @@ export async function claimFinalNotification(
     .update({ metadata: updatedMetadata })
     .eq("id", postId)
     // Recheck under the UPDATE lock if an image finalizer staged an intent after our read.
-    .is("metadata->final_notification_intent", null);
+    .is("metadata->final_notification_intent", null)
+    .is("metadata->legacy_notification_candidate", null);
   const { data, error } = await (typeof marker === "string" ? update.eq(path, marker) : update.is(path, null)).select("id");
   if (error) return { claimed: false, error: error.message ?? String(error) };
   return { claimed: (data ?? []).length > 0, error: null };

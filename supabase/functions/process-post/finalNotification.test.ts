@@ -52,6 +52,19 @@ function fakePosts(initial: PostRow, failures: { read?: string; missing?: boolea
 
 const NOW = new Date("2026-10-30T12:00:00.000Z");
 
+for (const concurrent of [false, true]) {
+  Deno.test(`legacy send-once marker refuses enrolled recovery (${concurrent ? "concurrent" : "existing"})`, async () => {
+    const candidate = { candidate_id: "candidate", fanout_closed: true };
+    const { client, row } = fakePosts({ metadata: concurrent ? {} : { legacy_notification_candidate: candidate }, processing_started_at: NOW.toISOString() }, {
+      ...(concurrent ? { beforeUpdate: (current: PostRow) => { current.metadata = { legacy_notification_candidate: candidate }; } } : {}),
+    });
+    const receipt = await claimFinalNotification(client, "post-1", NOW);
+    assertEquals(receipt.claimed, false);
+    if (!concurrent) assertEquals(receipt.reason, "legacy_candidate");
+    assertEquals(row.metadata, { legacy_notification_candidate: candidate });
+  });
+}
+
 Deno.test("the first claim wins, keeps the rest of the metadata, and a second finds it taken", async () => {
   const { client, row } = fakePosts({ metadata: { webhook_url: "https://hook" }, processing_started_at: "2026-10-30T11:00:00.000Z" });
   assertEquals(await claimFinalNotification(client, "post-1", NOW), { claimed: true, error: null });
