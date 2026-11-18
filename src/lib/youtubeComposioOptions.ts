@@ -5,6 +5,7 @@ export const YOUTUBE_COMPOSIO_UNSUPPORTED_OPTION_KEYS = [
   "youtube_public_stats_viewable",
   "youtube_contains_synthetic_media",
   "youtube_has_paid_promotion",
+  "youtube_has_paid_product_placement",
   "youtube_video_language",
   "youtube_audio_language",
   "youtube_recording_date",
@@ -20,11 +21,14 @@ export function youtubeOptionsUnsupportedOnComposio(
   if (!metadata) return [];
   return YOUTUBE_COMPOSIO_UNSUPPORTED_OPTION_KEYS.filter((key) => {
     const value = metadata[key];
+    if (key === "youtube_has_paid_product_placement") return typeof value === "boolean";
+    if (key === "youtube_has_paid_promotion") {
+      return value === true && typeof metadata.youtube_has_paid_product_placement !== "boolean";
+    }
     if (
       [
         "youtube_made_for_kids",
         "youtube_contains_synthetic_media",
-        "youtube_has_paid_promotion",
       ].includes(key)
     )
       return value === true;

@@ -252,7 +252,7 @@ export function YouTubeSettings({
               <HelpCircle className="w-3.5 h-3.5 text-muted-foreground cursor-help" />
             </TooltipTrigger>
             <TooltipContent>
-              <p>{t("youtube.videoTypeTooltip", "Choose between regular video or YouTube Shorts (under 60s)")}</p>
+              <p>{t("youtube.videoTypeTooltip", "Choose between regular video or YouTube Shorts (up to three minutes)")}</p>
             </TooltipContent>
           </Tooltip>
         </Label>
@@ -268,7 +268,7 @@ export function YouTubeSettings({
           <label className="flex items-center gap-2 cursor-pointer">
             <RadioGroupItem value="short" />
             <span className="text-sm flex items-center gap-1">
-              {t("youtube.shortOption", "📱 Short (up to 60s)")}
+              {t("youtube.shortOption", "📱 Short (up to 3 min)")}
             </span>
           </label>
         </RadioGroup>
@@ -281,10 +281,10 @@ export function YouTubeSettings({
             {t("youtube.shortsHeading", "📱 YouTube Shorts")}
           </div>
           <div className="text-xs text-muted-foreground space-y-1">
-            <p>{t("youtube.shortsTipDuration", "• Shorts must be under 60 seconds")}</p>
-            <p>{t("youtube.shortsTipAspectRatio", "• Vertical format (9:16 aspect ratio) required")}</p>
+            <p>{t("youtube.shortsTipDuration", "• Shorts can run up to three minutes")}</p>
+            <p>{t("youtube.shortsTipAspectRatio", "• Square or vertical format (9:16 or 1:1) required")}</p>
             <p>{t("youtube.shortsTipResolution", "• Maximum resolution: 1920x1080")}</p>
-            <p>{t("youtube.shortsTipTitle", "• Title should include #Shorts for discovery")}</p>
+            <p>{t("youtube.shortsTipTitle", "• YouTube treats the video as a Short from its aspect ratio and length, so the #Shorts tag is optional")}</p>
           </div>
         </div>
       )}

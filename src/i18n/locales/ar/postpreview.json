@@ -424,7 +424,7 @@
   "youTubeShorts": {
     "defaultChannel": "قناتك",
     "dislike": "لم يعجبني",
-    "infoText": "فيديوهات Shorts هي فيديوهات طولية حتى 60 ثانية",
+    "infoText": "فيديوهات Shorts هي فيديوهات طولية أو مربعة حتى 3 دقائق",
     "like": "إعجاب",
     "originalAudio": "صوت أصلي - {{username}}",
     "previewTitle": "معاينة Shorts",

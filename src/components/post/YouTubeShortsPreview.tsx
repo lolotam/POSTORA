@@ -129,7 +129,7 @@ export function YouTubeShortsPreview({
 
       {/* Info text */}
       <p className="text-xs text-muted-foreground text-center">
-        {t("youTubeShorts.infoText", "Shorts are vertical videos up to 60 seconds")}
+        {t("youTubeShorts.infoText", "Shorts are square or vertical videos up to three minutes")}
       </p>
     </div>
   );

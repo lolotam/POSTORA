@@ -12,6 +12,7 @@ export const YOUTUBE_COMPOSIO_UNSUPPORTED_OPTION_KEYS = [
   "youtube_public_stats_viewable",
   "youtube_contains_synthetic_media",
   "youtube_has_paid_promotion",
+  "youtube_has_paid_product_placement",
   "youtube_video_language",
   "youtube_audio_language",
   "youtube_recording_date",
@@ -40,8 +41,11 @@ export function youtubeOptionsUnsupportedOnComposio(
     switch (key) {
       case "youtube_made_for_kids":
       case "youtube_contains_synthetic_media":
-      case "youtube_has_paid_promotion":
         return value === true;
+      case "youtube_has_paid_promotion":
+        return value === true && typeof metadata.youtube_has_paid_product_placement !== "boolean";
+      case "youtube_has_paid_product_placement":
+        return typeof value === "boolean";
       case "youtube_notify_subscribers":
       case "youtube_allow_embedding":
       case "youtube_public_stats_viewable":

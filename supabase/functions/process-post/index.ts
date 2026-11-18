@@ -1,4 +1,5 @@
 import { checkpointThreadsImage, publishThreadsContainer, threadsParentContainer, ThreadsCheckpointUnavailable, ThreadsCheckpointCanceled, type ThreadsImageCheckpoint } from "./threadsPublish.ts";
+import { buildYoutubeUploadRequest, initiateYoutubeUpload } from "./youtubePublisher.ts";
 import { hashRequest } from "../_shared/partnerApiIdempotency.ts";
 /**
  * ============================================================================
@@ -9370,27 +9371,14 @@ async function postToYouTube(
   }
 
   const description = metadata?.youtube_description || post.caption || "";
-  const privacyStatus = metadata?.youtube_visibility || "private";
   const tags = metadata?.youtube_tags || [];
+  const privacyStatus = metadata?.youtube_visibility || "private";
 
   // DEBUG: Log tags to verify they are being received correctly
   console.log(`[YouTube Debug] Raw metadata.youtube_tags:`, JSON.stringify(metadata?.youtube_tags));
   console.log(`[YouTube Debug] Processed tags array:`, JSON.stringify(tags));
   console.log(`[YouTube Debug] Tags type: ${typeof tags}, Is Array: ${Array.isArray(tags)}, Length: ${tags.length}`);
 
-  const categoryId = metadata?.youtube_category || "22"; // People & Blogs
-  const madeForKids = metadata?.youtube_made_for_kids ?? false;
-  const embeddable = metadata?.youtube_allow_embedding ?? true;
-  const publicStatsViewable = metadata?.youtube_public_stats_viewable ?? true;
-  const containsSyntheticMedia = metadata?.youtube_contains_synthetic_media ?? false;
-  const hasPaidPromotion = metadata?.youtube_has_paid_promotion ?? false;
-  const notifySubscribers = metadata?.youtube_notify_subscribers ?? true;
-  const defaultLanguage = metadata?.youtube_video_language || undefined;
-  const defaultAudioLanguage = metadata?.youtube_audio_language || undefined;
-  const recordingDate = metadata?.youtube_recording_date || undefined;
-  const license = metadata?.youtube_license === "creativeCommon" ? "creativeCommon" : "youtube";
-  const allowedCountries = metadata?.youtube_allowed_countries || undefined;
-  const blockedCountries = metadata?.youtube_blocked_countries || undefined;
   const firstComment = metadata?.youtube_first_comment;
   const thumbnailUrl = metadata?.youtube_thumbnail_url;
 
@@ -9407,93 +9395,23 @@ async function postToYouTube(
   // ─────────────────────────────────────────────────────────────────────
   // Step 2: Initialize resumable upload
   // ─────────────────────────────────────────────────────────────────────
-  const videoMetadata: Record<string, unknown> = {
-    snippet: {
-      title: title.substring(0, 100),
-      description: description.substring(0, 5000),
-      tags: tags.slice(0, 500),
-      categoryId: categoryId,
-    },
-    status: {
-      privacyStatus: privacyStatus,
-      embeddable: embeddable,
-      publicStatsViewable: publicStatsViewable,
-      madeForKids: madeForKids,
-      selfDeclaredMadeForKids: madeForKids,
-      license: license,
-    },
-  };
-
-  // Add default language if specified
-  if (defaultLanguage) {
-    (videoMetadata.snippet as Record<string, unknown>).defaultLanguage = defaultLanguage;
-  }
-
-  if (defaultAudioLanguage) {
-    (videoMetadata.snippet as Record<string, unknown>).defaultAudioLanguage = defaultAudioLanguage;
-  }
-
-  // Add recording details if specified
-  if (recordingDate) {
-    videoMetadata.recordingDetails = {
-      recordingDate: recordingDate,
-    };
-  }
-
-  // Add content details for country restrictions
-  if (allowedCountries || blockedCountries) {
-    const regionRestriction: Record<string, unknown> = {};
-    if (allowedCountries && allowedCountries.length > 0) {
-      regionRestriction.allowed = allowedCountries;
-    }
-    if (blockedCountries && blockedCountries.length > 0) {
-      regionRestriction.blocked = blockedCountries;
-    }
-    videoMetadata.contentDetails = {
-      regionRestriction,
-    };
-  }
+  // The request is built by the YouTube provider adapter so the fields that
+  // the YouTube Data API actually accepts are the ones that get sent.
+  const uploadRequest = buildYoutubeUploadRequest({
+    metadata,
+    title,
+    description,
+    tags,
+  });
 
   console.log("YouTube: Initializing resumable upload...");
 
-  const initResponse = await fetch(
-    `https://www.googleapis.com/upload/youtube/v3/videos?uploadType=resumable&part=snippet,status,recordingDetails,contentDetails${notifySubscribers ? "" : "&notifySubscribers=false"}`,
-    {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${accessToken}`,
-        "Content-Type": "application/json; charset=UTF-8",
-        "X-Upload-Content-Length": String(videoSize),
-        "X-Upload-Content-Type": mimeType,
-      },
-      body: JSON.stringify(videoMetadata),
-    }
-  );
-
-  if (!initResponse.ok) {
-    const errorData = await initResponse.json().catch(() => ({}));
-    console.error("YouTube init error:", errorData);
-
-    if (initResponse.status === 401) {
-      throw new Error("YouTube authentication expired. Please reconnect your YouTube account.");
-    }
-    if (initResponse.status === 403) {
-      const reason = errorData?.error?.errors?.[0]?.reason;
-      if (reason === "quotaExceeded") {
-        throw new Error("YouTube API quota exceeded. Please try again tomorrow.");
-      }
-      if (reason === "forbidden") {
-        throw new Error("YouTube upload permission denied. Make sure your account has upload access.");
-      }
-      throw new Error(`YouTube permission error: ${errorData?.error?.message || "Access denied"}`);
-    }
-    throw new Error(`YouTube API error: ${errorData?.error?.message || initResponse.statusText}`);
-  }
-
-  const uploadUrl = initResponse.headers.get("Location");
-  if (!uploadUrl) {
-    throw new Error("YouTube did not return an upload URL");
-  }
+  const uploadUrl = await initiateYoutubeUpload({
+    accessToken,
+    videoSize,
+    mimeType,
+    request: uploadRequest,
+  });
 
   console.log("Got resumable upload URL, uploading video...");
 
@@ -9590,6 +9508,7 @@ async function postToYouTube(
   return {
     id: videoId,
     url: `https://www.youtube.com/watch?v=${videoId}`,
+    ...(uploadRequest.warnings.length > 0 ? { warnings: uploadRequest.warnings } : {}),
   };
 }
 

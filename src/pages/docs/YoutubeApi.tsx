@@ -61,9 +61,9 @@ export default function YoutubeApi() {
     "description": "Learn everything about YouTube in this comprehensive tutorial!",
     "media_urls": "https://res.cloudinary.com/demo/video/upload/tutorial.mp4",
     "youtube_tags": ["tutorial", "youtube", "2026", "guide"],
-    "youtube_category_id": "22",
-    "youtube_privacy_status": "public",
-    "youtube_embeddable": true,
+    "youtube_category": "22",
+    "youtube_privacy": "public",
+    "youtube_allow_embedding": true,
     "youtube_license": "youtube",
     "youtube_public_stats_viewable": true,
     "youtube_thumbnail": "https://example.com/thumbnail.jpg",
@@ -83,8 +83,8 @@ export default function YoutubeApi() {
     "title": "Quick Tip! #shorts",
     "description": "A quick tip for you! #shorts #viral",
     "media_urls": "https://res.cloudinary.com/demo/video/upload/short-video.mp4",
-    "youtube_category_id": "22",
-    "youtube_privacy_status": "public",
+    "youtube_category": "22",
+    "youtube_privacy": "public",
     "youtube_made_for_kids": false
   }'`;
 
@@ -98,8 +98,8 @@ export default function YoutubeApi() {
     "title": "Private Video for Review",
     "description": "This video is private and only visible to me",
     "media_urls": "https://res.cloudinary.com/demo/video/upload/private-video.mp4",
-    "youtube_privacy_status": "private",
-    "youtube_embeddable": false,
+    "youtube_privacy": "private",
+    "youtube_allow_embedding": false,
     "youtube_public_stats_viewable": false
   }'`;
 
@@ -113,7 +113,7 @@ export default function YoutubeApi() {
     "title": "Scheduled Video Premiere 🎉",
     "description": "Coming soon! Subscribe to not miss it!",
     "media_urls": "https://res.cloudinary.com/demo/video/upload/premiere.mp4",
-    "youtube_privacy_status": "private",
+    "youtube_privacy": "private",
     "youtube_made_for_kids": false,
     "scheduled_date": "2026-02-01T18:00:00Z",
     "timezone": "America/New_York"
@@ -129,7 +129,7 @@ export default function YoutubeApi() {
     "title": "Region-Specific Content",
     "description": "This video is only available in certain countries",
     "media_urls": "https://res.cloudinary.com/demo/video/upload/regional.mp4",
-    "youtube_privacy_status": "public",
+    "youtube_privacy": "public",
     "youtube_allowed_countries": ["US", "CA", "GB", "AU"],
     "youtube_blocked_countries": [],
     "youtube_default_language": "en"
@@ -145,7 +145,7 @@ export default function YoutubeApi() {
     "title": "New Tutorial with Engagement Comment",
     "description": "Check out this tutorial! Subscribe for more content.",
     "media_urls": "https://res.cloudinary.com/demo/video/upload/tutorial.mp4",
-    "youtube_privacy_status": "public",
+    "youtube_privacy": "public",
     "youtube_first_comment": "Thanks for watching! 🎉 What topic should I cover next? Let me know in the replies!",
     "youtube_made_for_kids": false
   }'`;
@@ -168,8 +168,8 @@ export default function YoutubeApi() {
   -F "title=My Uploaded Video 📹" \\
   -F "description=Uploaded directly from my computer!" \\
   -F "file=@/path/to/my-video.mp4" \\
-  -F "youtube_category_id=22" \\
-  -F "youtube_privacy_status=public"`;
+  -F "youtube_category=22" \\
+  -F "youtube_privacy=public"`;
 
   const curlFormWithThumbnail = `curl -X POST "${API_BASE}/api/v1/post" \\
   -H "x-api-key: YOUR_API_KEY" \\
@@ -180,7 +180,7 @@ export default function YoutubeApi() {
   -F "description=This video has a custom thumbnail!" \\
   -F "file=@/path/to/video.mp4" \\
   -F "youtube_thumbnail=https://example.com/custom-thumbnail.jpg" \\
-  -F "youtube_category_id=22" \\
+  -F "youtube_category=22" \\
   -F "youtube_tags=tutorial,guide,howto"`;
 
   const curlFormAllFields = `curl -X POST "${API_BASE}/api/v1/post" \\
@@ -192,9 +192,9 @@ export default function YoutubeApi() {
   -F "description=Full description with all settings configured" \\
   -F "file=@/path/to/video.mp4" \\
   -F "youtube_tags=tutorial,complete,guide" \\
-  -F "youtube_category_id=22" \\
-  -F "youtube_privacy_status=public" \\
-  -F "youtube_embeddable=true" \\
+  -F "youtube_category=22" \\
+  -F "youtube_privacy=public" \\
+  -F "youtube_allow_embedding=true" \\
   -F "youtube_license=youtube" \\
   -F "youtube_public_stats_viewable=true" \\
   -F "youtube_thumbnail=https://example.com/thumb.jpg" \\
@@ -297,7 +297,7 @@ export default function YoutubeApi() {
       icon: Hash
     },
     {
-      name: "youtube_category_id",
+      name: "youtube_category",
       type: "string",
       required: false,
       default: "22",
@@ -307,17 +307,26 @@ export default function YoutubeApi() {
       icon: Layers
     },
     {
-      name: "youtube_privacy_status",
+      name: "youtube_privacy",
       type: "string",
       required: false,
-      default: "public",
-      description: "Privacy status of the video. Controls who can view the video.",
+      default: "private",
+      description: "Privacy status of the video. Controls who can view the video. Postora publishes as 'private' when this is omitted, which differs from the YouTube Data API's own 'public' default, so set it explicitly.",
       options: ["public", "private", "unlisted"],
       n8nField: "YouTube Privacy Status",
       icon: Lock
     },
     {
-      name: "youtube_embeddable",
+      name: "youtube_video_type",
+      type: "string",
+      required: false,
+      default: "video",
+      description: "Set to 'short' to publish as a YouTube Short. YouTube categorises a Short from a square or vertical aspect ratio and a duration of up to three minutes; the '#shorts' hashtag is not required for it to be treated as a Short.",
+      options: ["video", "short"],
+      icon: Video
+    },
+    {
+      name: "youtube_allow_embedding",
       type: "boolean",
       required: false,
       default: true,
@@ -367,7 +376,7 @@ export default function YoutubeApi() {
       type: "boolean",
       required: false,
       default: false,
-      description: "Whether the video contains AI-generated or synthetic media that appears realistic.",
+      description: "Whether the video contains AI-generated or synthetic media that appears realistic. Applied natively through the YouTube Data API (status.containsSyntheticMedia).",
       n8nField: "YouTube Contains Synthetic Media",
       icon: AlertCircle
     },
@@ -384,7 +393,7 @@ export default function YoutubeApi() {
       name: "youtube_default_audio_language",
       type: "string",
       required: false,
-      description: "The default audio language of the video.",
+      description: "The default audio language of the video. YouTube does not list this property as settable by videos.insert, so it is sent on a best-effort basis and may not be applied.",
       example: "en, es, fr, de",
       n8nField: "YouTube Default Audio Language",
       icon: Music
@@ -393,7 +402,7 @@ export default function YoutubeApi() {
       name: "youtube_allowed_countries",
       type: "array | string",
       required: false,
-      description: "List of country codes where the video is allowed. Uses ISO 3166-1 alpha-2 codes.",
+      description: "List of country codes where the video is allowed. Uses ISO 3166-1 alpha-2 codes. YouTube does not list region restrictions as settable by videos.insert, so they are sent on a best-effort basis and may not be applied.",
       example: "[\"US\", \"CA\", \"GB\"] or \"US,CA,GB\"",
       n8nField: "YouTube Allowed Countries",
       icon: MapPin
@@ -402,7 +411,7 @@ export default function YoutubeApi() {
       name: "youtube_blocked_countries",
       type: "array | string",
       required: false,
-      description: "List of country codes where the video is blocked. Uses ISO 3166-1 alpha-2 codes.",
+      description: "List of country codes where the video is blocked. Uses ISO 3166-1 alpha-2 codes. YouTube does not list region restrictions as settable by videos.insert, so they are sent on a best-effort basis and may not be applied.",
       example: "[\"CN\", \"RU\"] or \"CN,RU\"",
       n8nField: "YouTube Blocked Countries",
       icon: MapPin
@@ -411,8 +420,7 @@ export default function YoutubeApi() {
       name: "youtube_has_paid_product_placement",
       type: "boolean",
       required: false,
-      default: false,
-      description: "Whether the video contains paid product placement or endorsements.",
+      description: "Whether the video contains paid product placement or endorsements. Set it to declare the video's paid-placement status. When it is omitted, Postora sends no declaration at all, because YouTube no longer treats an upload without this property as declared free of paid product placement.",
       n8nField: "YouTube Has Paid Product Placement",
       icon: AlertCircle
     },
@@ -615,7 +623,11 @@ export default function YoutubeApi() {
             </div>
             <div className="flex items-start gap-2">
               <CheckCircle2 className="w-4 h-4 text-green-500 mt-0.5 flex-shrink-0" />
-              <p className="text-sm"><strong>Shorts:</strong> For YouTube Shorts, use vertical videos (9:16 aspect ratio) under 60 seconds and include #shorts in the title or description.</p>
+              <p className="text-sm"><strong>Shorts:</strong> YouTube categorises a Short by its aspect ratio and length, so a square or vertical video of up to three minutes is a Short and the '#shorts' hashtag is not required. Postora adds '#Shorts' to the title of a Short for you. YouTube's own rules are in the <a href="https://support.google.com/youtube/answer/15424877" target="_blank" rel="noreferrer" className="underline">Shorts upload requirements</a>.</p>
+            </div>
+            <div className="flex items-start gap-2">
+              <Info className="w-4 h-4 text-blue-500 mt-0.5 flex-shrink-0" />
+              <p className="text-sm"><strong>Legacy field names:</strong> 'youtube_category_id' and 'youtube_embeddable' are accepted as aliases. The canonical names win, and conflicting values produce a warning. Use 'youtube_privacy' to select visibility. Requests with only 'youtube_privacy_status' or 'youtube_visibility' stay private and return a warning.</p>
             </div>
             <div className="flex items-start gap-2">
               <CheckCircle2 className="w-4 h-4 text-green-500 mt-0.5 flex-shrink-0" />
