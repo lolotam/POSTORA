@@ -228,22 +228,30 @@ export interface YoutubeUploadInit {
   fetchImpl?: typeof fetch;
 }
 
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined;
+  return value as Record<string, unknown>;
+}
+
 /** Translates a failed upload handshake into the message the caller shows. */
-function uploadFailureMessage(status: number, errorData: any, statusText: string): string {
+function uploadFailureMessage(status: number, errorData: unknown, statusText: string): string {
+  const payload = asRecord(asRecord(errorData)?.error);
+  const message = typeof payload?.message === "string" ? payload.message : undefined;
   if (status === 401) {
     return "YouTube authentication expired. Please reconnect your YouTube account.";
   }
   if (status === 403) {
-    const reason = errorData?.error?.errors?.[0]?.reason;
+    const errors = payload?.errors;
+    const reason = Array.isArray(errors) ? asRecord(errors[0])?.reason : undefined;
     if (reason === "quotaExceeded") {
       return "YouTube API quota exceeded. Please try again tomorrow.";
     }
     if (reason === "forbidden") {
       return "YouTube upload permission denied. Make sure your account has upload access.";
     }
-    return `YouTube permission error: ${errorData?.error?.message || "Access denied"}`;
+    return `YouTube permission error: ${message || "Access denied"}`;
   }
-  return `YouTube API error: ${errorData?.error?.message || statusText}`;
+  return `YouTube API error: ${message || statusText}`;
 }
 
 /**

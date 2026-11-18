@@ -46,20 +46,20 @@ function fakeYouTube(options: {
   return { calls, fetchImpl };
 }
 
-function bodyOf(call: RecordedCall): Record<string, any> {
-  return JSON.parse(String(call.init.body)) as Record<string, any>;
+function bodyOf(call: RecordedCall): Record<string, unknown> {
+  return JSON.parse(String(call.init.body)) as Record<string, unknown>;
 }
 
 function headersOf(call: RecordedCall): Headers {
   return new Headers(call.init.headers as HeadersInit);
 }
 
-function snippetOf(request: YoutubeUploadRequest): Record<string, any> {
-  return request.body.snippet as Record<string, any>;
+function snippetOf(request: YoutubeUploadRequest): Record<string, unknown> {
+  return request.body.snippet as Record<string, unknown>;
 }
 
-function statusOf(request: YoutubeUploadRequest): Record<string, any> {
-  return request.body.status as Record<string, any>;
+function statusOf(request: YoutubeUploadRequest): Record<string, unknown> {
+  return request.body.status as Record<string, unknown>;
 }
 
 function errorMessage(error: unknown): string {
@@ -117,7 +117,7 @@ Deno.test("upload request sends paid product placement only when it was stated",
     metadata: { youtube_has_paid_promotion: true },
     ...baseInput,
   });
-  const statedDetails = stated.body.paidProductPlacementDetails as Record<string, any>;
+  const statedDetails = stated.body.paidProductPlacementDetails as Record<string, unknown>;
   assertEquals(statedDetails.hasPaidProductPlacement, true);
   assertStringIncludes(stated.part, "paidProductPlacementDetails");
 
@@ -166,7 +166,7 @@ Deno.test("upload request does not report documented options as unconfirmed", ()
 
   assertEquals(request.warnings, []);
   assertEquals(snippetOf(request).defaultLanguage, "en");
-  assertEquals((request.body.recordingDetails as Record<string, any>).recordingDate, "2026-11-16");
+  assertEquals((request.body.recordingDetails as Record<string, unknown>).recordingDate, "2026-11-16");
 });
 
 Deno.test("upload request turns off subscriber notifications when asked", () => {
@@ -221,8 +221,12 @@ Deno.test("upload handshake sends the built request to the provider", async () =
   assertEquals(headersOf(call).get("X-Upload-Content-Type"), "video/mp4");
 
   const body = bodyOf(call);
-  assertEquals(body.status.privacyStatus, "public");
-  assertEquals(body.status.containsSyntheticMedia, true);
+  const status = body.status;
+  assert(typeof status === "object" && status !== null);
+  assert("privacyStatus" in status);
+  assert("containsSyntheticMedia" in status);
+  assertEquals(status.privacyStatus, "public");
+  assertEquals(status.containsSyntheticMedia, true);
 });
 
 Deno.test("upload handshake reports an expired authorization", async () => {
