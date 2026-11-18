@@ -12,6 +12,11 @@ Sections 1 to 10 are the contract the first round established. Sections 11
 to 20 are the changes the second round made to it, and they change the
 lifecycle, not just the wording.
 
+Sections 21 to 41 are the third round. The lifecycle does not change: it says
+in which order the locks are taken, which outcome is a proof and which is not,
+what a repair is allowed to take, and what the live authority is checked
+against.
+
 ---
 
 ## 1. The lease is a number of milliseconds, not an interval
@@ -855,6 +860,221 @@ recovery exists to prevent.
 
 ---
 
+## 33. One lock order, owned by one helper
+
+**Was:** the writers of a session took their locks in different orders. The
+settlement locked the session and then the parent, the projection locked the
+result row first, and the classification locked the parent and the session in
+one statement. Two transactions that walked the same post in opposite orders
+could deadlock, and the failure of one of them would be a deadlock victim
+rather than a retry.
+
+**Is:** the order is **parent → session → result**, and it lives in one place:
+`youtube_upload_lock_scope(p_session_id)`.
+
+* The helper locks the parent, then the session, and it **re-reads the binding**
+  between the two locks: a session that was moved to another parent cannot be
+  written through the old one, and the helper says so instead of writing.
+* The settlement, the receipt projection, the cancellation repair and the
+  classification all take their scope through the helper, and none of them takes
+  a session lock of its own. The result row may still be locked: that is the
+  third step of the order, not an inversion.
+* The classification loop of the batch claim locks the **parent**
+  (`FOR UPDATE OF p SKIP LOCKED`), so a backlog of exhausted sessions cannot
+  invert the order either.
+
+The order is a property of the code, so it is proved on the code: the suite
+reads the definitions and checks the order of the two locks, and checks that no
+writer locks the session itself.
+
+**Proved by:** SQL suite Y34.
+
+---
+
+## 34. An explicit reconcile is never taken away
+
+**Was:** the settlement derived the outcome of the session from the byte
+counters alone: a session that was already marked for a human — the worker
+could not tell whether the last chunk landed — became `failed` when the
+settlement said `failed`. The mark was the only thing that kept a second video
+off the channel, and it was dropped. The public row got no marker either, so
+the retry gate and the page could not see that the outcome was not a proof.
+
+**Is:** the uncertainty is read from the **record**, not from the counters.
+
+* A session that is already `reconcile` stays `reconcile`: a failure never
+  replaces an explicit manual outcome with a safe one.
+* A session whose bytes may have reached the provider, a session that was
+  already marked for a human, and a settlement that says the outcome is
+  uncertain are all `reconcile`.
+* The settled row carries `publish_outcome = 'uncertain'` and the reason that
+  made it uncertain — **even when the final-byte flag says false**. The marker
+  is the row's own record of what happened, and it is what the retry gate and
+  the page read.
+* A proven failure carries **no** marker: the upload never started, or the
+  provider refused it for good. Those stay retryable.
+
+The worker writes the same marker on its side, so the row that the worker
+settles and the row that the database settles say the same thing.
+
+**Proved by:** SQL suite Y36, and the continuation's tests.
+
+---
+
+## 35. A cancelled post is not classified
+
+**Was:** the classification settled the public row of a session whose post was
+no longer being processed. On a cancelled post that preempted the
+cancellation repair: the row was closed with the outcome of the **upload**
+instead of the outcome of the **cancellation**, and the repair that should
+have closed it found a row that was already settled.
+
+**Is:** a post that is not being processed is left alone — state and all.
+
+* The classification returns `{ classified: false, reason: 'post_not_processing' }`
+  and does not touch the session or the public row.
+* The cancellation repair finds the session by its state and closes the row
+  itself, with `youtube_upload_cancelled` and `publish_outcome = 'cancelled'`,
+  and the parent keeps the outcome the owner gave it.
+
+**Proved by:** SQL suite Y37.
+
+---
+
+## 36. The repairs are bounded
+
+**Was:** the expiry reset and the exhausted classification walked the whole
+table in one pass. A backlog of expired or exhausted sessions held a lock on
+every one of them, and one pass of the claim did the work of many.
+
+**Is:** both repairs are bounded by the batch, and they skip the rows another
+transaction is holding.
+
+* The expiry reset is a bounded set (`ORDER BY … LIMIT p_limit FOR UPDATE SKIP
+  LOCKED`): one pass reopens one session, the rest waits for the next one.
+* The exhausted classification is bounded by the same limit and locks the
+  **parent** with `FOR UPDATE OF p SKIP LOCKED`, so it keeps the lock order and
+  never blocks on a row another worker holds.
+
+**Proved by:** SQL suite Y38.
+
+---
+
+## 37. No work is starved
+
+**Was:** the shared claim limit handed the first step — the deferred publishes —
+all of it. A backlog of deferred publishes took every slot, and the upload
+continuations that were due got none: their posts stayed `processing` until
+the backlog was gone.
+
+**Is:** the shared limit is still the limit, and it keeps a **reserved share**
+for the upload work.
+
+* The deferred publishes take `p_limit - reserved`, the notification candidates
+  take one of what is left, and the upload continuations take the rest.
+* The reserve is `least(2, p_limit - 1)`: with a limit of one the behaviour is
+  unchanged, and with a larger limit the upload work always keeps a slot.
+* The total is still at most `p_limit`: the shared limit is a limit on the
+  batch, not on each kind.
+
+**Proved by:** SQL suites Y19 and Y38.
+
+---
+
+## 38. The live authority in the last checkpoint
+
+**Was:** the write authority was checked **before** the chunk was read. A slow
+read — a chunk that took a minute to come out of the provider — is long enough
+for the customer to cancel the post, to edit it, or to start another attempt
+of it. The checkpoint then wrote the bytes of a post that no longer existed in
+that shape.
+
+**Is:** the live authority is checked again in the **last statement before the
+bytes are written**.
+
+* It is checked on the chunk that **completes** the upload, because that is the
+  write that can publish a video. The chunks before it only fill a provider
+  session that is discarded when the upload is not finished, so they cost one
+  query per upload instead of one per chunk.
+* The refusals reuse the codes that already exist: `YUS11` for a superseded
+  attempt, `YUS12` for a post that is no longer being processed, `YUS04` for a
+  post that was edited, `YUS15` for a target the post no longer selects, `YUS03`
+  for a media file that was replaced.
+* The refused chunk moves **nothing**: the offsets, the provider session URI and
+  the uncertainty are exactly what they were.
+
+**Proved by:** SQL suites Y35 and Y35b.
+
+---
+
+## 39. A disconnected destination leaves the scope
+
+**Was:** the recovery of a dead worker skipped a destination whose account was
+disconnected, but the scope of the attempt still named it. The closure is
+refused when a destination in the scope has no result row
+(`invalid_result_scope`), so the fanout could never close and the post waited
+for ever.
+
+**Is:** the disconnected destination leaves the scope **in the same
+transaction**, and its record of the possible side effect stays.
+
+* The scope of the attempt is the list of destinations this attempt owns. An
+  account that is gone, or that belongs to somebody else, cannot be published
+  to any more, so it leaves the scope.
+* The record of the unknown outcome (`fanout_unknown_account_ids`) **keeps** it:
+  the account may have been published to before it was disconnected, and that is
+  a possible side effect nobody may forget.
+* The other destinations and their receipts are untouched, and the parent rolls
+  up as it always did.
+
+**Proved by:** SQL suite Y39.
+
+---
+
+## 40. The admission takes the live media version
+
+**Was:** the admission read the live media version and recorded it in the
+session, but it never compared it with the version the caller had read. A file
+that was replaced between the caller's read and the admission was admitted
+under its **new** version: a continuation could then send the bytes of the old
+file under the new version, and the video would be a mixture of two files.
+
+**Is:** the admission takes the version the caller read, and refuses the
+admission when it is not the live one.
+
+* `admit_youtube_upload(..., p_expected_media_version)` compares the caller's
+  version with `media_files.current_object_version` and refuses with `YUS03`
+  when they differ.
+* The refusal happens **before** the session and the public row exist, so a
+  refused admission creates nothing.
+* The caller's version comes from the file the worker resolved, so the bytes the
+  worker holds are the bytes the session records.
+
+**Proved by:** SQL suite Y40, and the session store's tests.
+
+---
+
+## 41. A cleared schedule is not an unchanged one
+
+**Was:** the checkpoint could not say "the next check is at this moment" and
+"there is no next check" apart: both were the absence of a time, so a session
+that had to be watched again could not be told apart from one that was done.
+
+**Is:** the two are separate.
+
+* `checkpoint_youtube_upload_session(..., p_clear_next_check)` says which one it
+  is: a cleared schedule empties `next_check_at`, and a schedule that is not
+  given leaves it where it was.
+* The worker sends the flag from the same value it sends the time: no time
+  means "cleared".
+* The in-memory session store stops handing out a session that is at the
+  continuation cap, the way the database does, so a test cannot prove something
+  the database would refuse.
+
+**Proved by:** the session store's tests, and SQL suite Y38.
+
+---
+
 ## The bounded driver of the three repairs
 
 `reconcile_youtube_upload_fanouts(p_limit)` does what no worker can:
@@ -879,7 +1099,16 @@ and the upload continuations. The notification step now increments the
 counter it shares, so a notification candidate consumes a slot and the upload
 continuations only get what is left.
 
-**Proved by:** SQL suite Y19.
+**The limit keeps a reserved share for the upload work.** The first step — the
+deferred publishes — may not take all of it: a backlog of deferred publishes
+would otherwise starve the upload continuations that are due, and their posts
+would stay `processing` until the backlog was gone. The deferred publishes take
+`p_limit - reserved`, the notification candidates take one of what is left, and
+the upload continuations take the rest. The reserve is `least(2, p_limit - 1)`,
+so a limit of one behaves as before. The total is still at most `p_limit`: the
+shared limit is a limit on the batch, not on each kind.
+
+**Proved by:** SQL suites Y19 and Y38.
 
 ---
 

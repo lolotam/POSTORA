@@ -618,6 +618,17 @@ async function interpretOutcome(args: {
     ? outcome.reason
     : outcome.reason;
 
+  // The marker that says the provider's answer is not a proof.
+  //
+  // History and the API retry selector read publish_outcome, so a result
+  // whose outcome is unknown is never offered as a retry: the provider may
+  // already hold the video, and a blind retry could publish a second one.
+  //
+  // An upload that never sent a byte is a proven failure and stays
+  // retryable, and a provider that refused the upload has answered, so that
+  // one is a proof as well.
+  const uncertain = outcome.kind === "reconcile" || reason === YOUTUBE_UPLOAD_REASON.unknown;
+
   // The fanout closure comes BEFORE the settlement, for the same reason as
   // above: the pending YouTube row is what keeps the generic sweeper from
   // reading the absence of a sibling row as a proof that the sibling never
@@ -630,7 +641,10 @@ async function interpretOutcome(args: {
     status: "failed",
     videoId: null,
     errorMessage: reason,
-    responseData: { youtube_upload_reason: reason },
+    responseData: {
+      youtube_upload_reason: reason,
+      ...(uncertain ? { publish_outcome: "uncertain" } : {}),
+    },
   });
   if (!settled.settled) {
     // The lease is gone, so the outcome is not recorded here. The worker that

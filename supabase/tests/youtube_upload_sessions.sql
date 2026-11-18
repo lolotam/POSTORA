@@ -82,6 +82,24 @@
 --   Y33 the terminal-result recovery: the session whose worker died is
 --       settled with a safe outcome, a live lease is respected, and a
 --       cancelled or superseded post keeps its own outcome.
+--   Y34 ONE LOCK ORDER: the helper takes the parent before the session, it
+--       re-reads the binding between them, and no writer takes a session lock
+--       of its own.
+--   Y35 the live authority in the last checkpoint: the chunk that completes
+--       the upload is refused when the post was cancelled, edited or
+--       superseded, and the refused chunk moves nothing.
+--   Y36 an explicit reconcile is never taken away by a safe failure, and the
+--       settled row carries the uncertain marker even when the final-byte
+--       flag says false.
+--   Y37 the cancellation repair is not preempted by a classification: the
+--       cancelled post keeps its own outcome.
+--   Y38 the repairs are bounded (the expiry reset and the exhausted
+--       classification, one per pass) and the due upload work is not starved
+--       by a backlog of deferred publishes.
+--   Y39 a disconnected destination leaves the scope of the attempt, and its
+--       possible side effect stays on record.
+--   Y40 the admission takes the expected live media version, and a refused
+--       admission creates nothing.
 --
 -- The suite SET ROLEs away from superuser where the point of the check is
 -- that a client role cannot do something. The service role bypasses RLS, so
@@ -211,14 +229,20 @@ BEGIN
     'Y1 authenticated holds no DELETE on the session table';
 
   ASSERT NOT has_function_privilege('anon',
-      'public.admit_youtube_upload(uuid,uuid,uuid,uuid,bigint,bigint,jsonb,timestamptz,uuid[],timestamptz,jsonb)', 'EXECUTE'),
+      'public.admit_youtube_upload(uuid,uuid,uuid,uuid,bigint,bigint,jsonb,timestamptz,uuid[],timestamptz,jsonb,integer)', 'EXECUTE'),
     'Y1 anon may not admit an upload';
   ASSERT NOT has_function_privilege('authenticated',
-      'public.admit_youtube_upload(uuid,uuid,uuid,uuid,bigint,bigint,jsonb,timestamptz,uuid[],timestamptz,jsonb)', 'EXECUTE'),
+      'public.admit_youtube_upload(uuid,uuid,uuid,uuid,bigint,bigint,jsonb,timestamptz,uuid[],timestamptz,jsonb,integer)', 'EXECUTE'),
     'Y1 authenticated may not admit an upload';
   ASSERT NOT has_function_privilege('authenticated',
-      'public.checkpoint_youtube_upload_session(uuid,uuid,bigint,bigint,text,boolean,timestamptz,text)', 'EXECUTE'),
+      'public.checkpoint_youtube_upload_session(uuid,uuid,bigint,bigint,text,boolean,timestamptz,text,boolean)', 'EXECUTE'),
     'Y1 authenticated may not checkpoint a session';
+  ASSERT NOT has_function_privilege('anon',
+      'public.youtube_upload_lock_scope(uuid)', 'EXECUTE'),
+    'Y1 anon may not lock the scope of a session';
+  ASSERT NOT has_function_privilege('authenticated',
+      'public.youtube_upload_lock_scope(uuid)', 'EXECUTE'),
+    'Y1 authenticated may not lock the scope of a session';
   ASSERT NOT has_function_privilege('authenticated',
       'public.complete_youtube_upload_session(uuid,uuid,text)', 'EXECUTE'),
     'Y1 authenticated may not complete a session';
@@ -245,11 +269,14 @@ BEGIN
     'Y1 authenticated may not read the terminal outcome';
 
   ASSERT has_function_privilege('service_role',
-      'public.admit_youtube_upload(uuid,uuid,uuid,uuid,bigint,bigint,jsonb,timestamptz,uuid[],timestamptz,jsonb)', 'EXECUTE'),
+      'public.admit_youtube_upload(uuid,uuid,uuid,uuid,bigint,bigint,jsonb,timestamptz,uuid[],timestamptz,jsonb,integer)', 'EXECUTE'),
     'Y1 the service role may admit an upload';
   ASSERT has_function_privilege('service_role',
-      'public.checkpoint_youtube_upload_session(uuid,uuid,bigint,bigint,text,boolean,timestamptz,text)', 'EXECUTE'),
+      'public.checkpoint_youtube_upload_session(uuid,uuid,bigint,bigint,text,boolean,timestamptz,text,boolean)', 'EXECUTE'),
     'Y1 the service role may checkpoint a session';
+  ASSERT has_function_privilege('service_role',
+      'public.youtube_upload_lock_scope(uuid)', 'EXECUTE'),
+    'Y1 the service role may lock the scope of a session';
   ASSERT has_function_privilege('service_role',
       'public.settle_youtube_upload_session(uuid,uuid,text,text,text,jsonb)', 'EXECUTE'),
     'Y1 the service role may settle an upload';
@@ -724,6 +751,7 @@ DECLARE
   v_named     integer;
   v_token     integer;
   v_attempt   integer;
+  v_uri       integer;
 BEGIN
   -- This scenario owns its post, its account and its media file.
   SELECT f.account_id, f.post_id, f.media_id
@@ -744,16 +772,18 @@ BEGIN
   -- The lease is gone and the session is due: it is handed out with a token.
   --
   -- ONE claim pass: the claim takes the work, so it is asked once and every
-  -- property is read out of the same answer.
+  -- property is read out of the same answer -- including the keys the answer
+  -- carries. A second claim would take the lease again and prove nothing.
   UPDATE public.youtube_upload_sessions
      SET lease_expires_at = now() - interval '1 second'
    WHERE id = v_session;
   SELECT
     count(*) FILTER (WHERE session_id = v_session),
     count(*) FILTER (WHERE session_id = v_session AND lease_token IS NOT NULL),
-    count(*) FILTER (WHERE session_id = v_session AND attempt_started_at IS NOT NULL)
-    INTO v_named, v_token, v_attempt
-    FROM public.claim_youtube_upload_sessions(5, 180000, 24);
+    count(*) FILTER (WHERE session_id = v_session AND attempt_started_at IS NOT NULL),
+    count(*) FILTER (WHERE session_id = v_session AND to_jsonb(ys) ? 'session_uri')
+    INTO v_named, v_token, v_attempt, v_uri
+    FROM public.claim_youtube_upload_sessions(5, 180000, 24) ys;
   ASSERT v_named = 1,
     'Y9 a due session with no live lease is handed out';
   ASSERT v_token = 1,
@@ -762,10 +792,7 @@ BEGIN
     'Y9 the claim carries the attempt';
 
   -- The session URI is NOT in the claim.
-  ASSERT NOT EXISTS (
-    SELECT 1 FROM information_schema.columns
-     WHERE table_name = 'claim_youtube_upload_sessions'
-       AND column_name = 'session_uri'),
+  ASSERT v_uri = 0,
     'Y9 the claim does not carry the session URI at all';
 
   -- A session that is not due is not handed out.
@@ -1106,9 +1133,16 @@ BEGIN
 
   -- The public row is already settled: there is nothing to project, so the
   -- session is not handed out again.
+  --
+  -- The lease of the previous claim is expired first, so the session is
+  -- eligible in every other way and the ONLY reason it is not handed out is
+  -- the settled row.
   UPDATE public.platform_posts
      SET status = 'success', platform_post_id = 'yt-video-fixture-3'
    WHERE post_id = v_post_a AND social_account_id = v_acct_a;
+  UPDATE public.youtube_upload_sessions
+     SET lease_expires_at = now() - interval '1 second'
+   WHERE id = v_session;
   ASSERT (SELECT count(*) FROM public.claim_youtube_upload_sessions(5, 180000, 24)
            WHERE session_id = v_session) = 0,
     'Y16 a receipt whose public row is already settled is not handed out';
@@ -2709,6 +2743,705 @@ BEGIN
   RAISE NOTICE 'PASS Y33: the terminal session whose worker died is settled with a safe outcome';
 END
 $y33_terminal_recovery$;
+
+-- ---------------------------------------------------------------------------
+-- Y34: ONE LOCK ORDER.
+--
+-- Every writer of a session takes the parent, then the session, then the
+-- result. The order lives in ONE place -- the lock helper -- so it is proved
+-- here once:
+--
+--   * the helper takes the parent before the session;
+--   * it re-reads the binding between the two locks, so a session that was
+--     moved to another parent cannot be written through the old one;
+--   * no writer takes a session lock of its own, so no writer can invert the
+--     order and no two of them can deadlock.
+--
+-- The order is a property of the code, so it is proved on the code.
+-- ---------------------------------------------------------------------------
+DO $y34_lock_order$
+DECLARE
+  v_def    text;
+  v_after  text;
+  v_part   text;
+  v_writer text;
+  v_writers text[] := ARRAY[
+    'settle_youtube_upload_session',
+    'project_youtube_upload_receipt',
+    'youtube_upload_terminalize_cancelled',
+    'youtube_upload_classify_terminal'];
+  v_acct_a  uuid;
+  v_post_a  uuid;
+  v_media_a uuid;
+  v_u_a     uuid := 'b1000000-0000-4000-8000-000000000001';
+  v_session uuid;
+  v_scope   jsonb;
+BEGIN
+  SELECT pg_get_functiondef(p.oid) INTO v_def
+    FROM pg_proc p
+    JOIN pg_namespace n ON n.oid = p.pronamespace
+   WHERE n.nspname = 'public' AND p.proname = 'youtube_upload_lock_scope';
+  ASSERT v_def IS NOT NULL,
+    'Y34 the lock helper exists';
+
+  -- The parent is locked before the session.
+  ASSERT position('FROM public.posts p WHERE p.id = v_post_id FOR UPDATE' IN v_def)
+         < position('FROM public.youtube_upload_sessions s WHERE s.id = p_session_id FOR UPDATE' IN v_def),
+    'Y34 the helper takes the parent before the session';
+
+  -- The binding is read again under both locks.
+  ASSERT position('session_rebound' IN v_def) > 0,
+    'Y34 the helper re-reads the binding between the two locks';
+
+  FOREACH v_writer IN ARRAY v_writers LOOP
+    SELECT pg_get_functiondef(p.oid) INTO v_def
+      FROM pg_proc p
+      JOIN pg_namespace n ON n.oid = p.pronamespace
+     WHERE n.nspname = 'public' AND p.proname = v_writer;
+    ASSERT v_def IS NOT NULL,
+      'Y34 the writer exists';
+    ASSERT position('youtube_upload_lock_scope(p_session_id)' IN v_def) > 0,
+      'Y34 the writer takes its scope through the helper';
+
+    -- Nothing after the helper may take the session lock again. The result row
+    -- may be locked: that is the third step of the order, not an inversion.
+    v_after := substr(v_def, position('youtube_upload_lock_scope(p_session_id)' IN v_def));
+    FOR v_part IN SELECT unnest(string_to_array(v_after, ';')) LOOP
+      IF position('FOR UPDATE' IN v_part) > 0 THEN
+        ASSERT position('youtube_upload_sessions' IN v_part) = 0,
+          'Y34 the writer does not take the session lock itself';
+      END IF;
+    END LOOP;
+  END LOOP;
+
+  -- The helper answers for a live session.
+  SELECT f.account_id, f.post_id, f.media_id
+    INTO v_acct_a, v_post_a, v_media_a
+    FROM pg_temp.new_youtube_fixture('y34') f;
+  v_session := (public.admit_youtube_upload(
+      v_post_a, v_acct_a, v_u_a, v_media_a, 4096, 4096, '{}'::jsonb)
+    -> 'session' ->> 'id')::uuid;
+
+  v_scope := public.youtube_upload_lock_scope(v_session);
+  ASSERT (v_scope ->> 'locked')::boolean,
+    'Y34 the helper locks the scope of a live session';
+  ASSERT (v_scope ->> 'post_id')::uuid = v_post_a,
+    'Y34 the helper names the parent it locked';
+
+  -- A session that is not there has no scope.
+  v_scope := public.youtube_upload_lock_scope(gen_random_uuid());
+  ASSERT NOT (v_scope ->> 'locked')::boolean,
+    'Y34 the helper refuses a session that is not there';
+  ASSERT (v_scope ->> 'reason') = 'session_missing',
+    'Y34 the refusal says the session is missing';
+
+  RAISE NOTICE 'PASS Y34: one lock order, owned by one helper';
+END
+$y34_lock_order$;
+
+-- ---------------------------------------------------------------------------
+-- Y35: THE LIVE AUTHORITY IN THE LAST CHECKPOINT.
+--
+-- The advisory preflight that ran before the chunk was read is not enough: a
+-- slow read can be long enough for the customer to cancel the post, to edit it
+-- or to start another attempt. So the live authority is checked again in the
+-- last statement before the bytes are written.
+--
+-- It is checked on the chunk that COMPLETES the upload, because that is the
+-- write that can publish a video: the chunks before it only fill a provider
+-- session that is discarded when it is not finished.
+--
+-- The refused chunk moves nothing: the offsets, the session URI and the
+-- uncertainty are exactly what they were.
+-- ---------------------------------------------------------------------------
+DO $y35_authority$
+DECLARE
+  v_acct_a  uuid;
+  v_post_a  uuid;
+  v_media_a uuid;
+  v_u_a     uuid := 'b1000000-0000-4000-8000-000000000001';
+  v_session uuid;
+  v_lease   uuid := 'f5000000-0000-4000-8000-000000000001';
+BEGIN
+  -- This scenario owns its post, its account and its media file.
+  SELECT f.account_id, f.post_id, f.media_id
+    INTO v_acct_a, v_post_a, v_media_a
+    FROM pg_temp.new_youtube_fixture('y35') f;
+  v_session := (public.admit_youtube_upload(
+      v_post_a, v_acct_a, v_u_a, v_media_a, 4096, 4096, '{}'::jsonb)
+    -> 'session' ->> 'id')::uuid;
+  PERFORM public.claim_youtube_upload_session(v_session, v_lease, 180000);
+
+  -- A chunk that does not complete the upload cannot publish a video: it only
+  -- fills a provider session that is discarded when the upload is not finished.
+  PERFORM public.checkpoint_youtube_upload_session(v_session, v_lease, 1024, 1024,
+    'https://upload.example.invalid/session/y35', false, NULL, NULL);
+  ASSERT (SELECT bytes_sent FROM public.youtube_upload_sessions WHERE id = v_session) = 1024,
+    'Y35 the chunk that does not complete the upload is written';
+
+  -- The customer cancels the post while the worker holds the session.
+  UPDATE public.posts SET status = 'failed' WHERE id = v_post_a;
+
+  BEGIN
+    PERFORM public.checkpoint_youtube_upload_session(v_session, v_lease, 4096, 4096,
+      'https://upload.example.invalid/session/y35', true, NULL, NULL);
+    RAISE EXCEPTION 'Y35 the completing chunk was written after the post was cancelled';
+  EXCEPTION WHEN SQLSTATE 'YUS12' THEN
+    RAISE NOTICE 'PASS Y35: the completing chunk is refused after the post was cancelled';
+  END;
+
+  -- The refused chunk moved nothing.
+  ASSERT (SELECT bytes_sent FROM public.youtube_upload_sessions WHERE id = v_session) = 1024,
+    'Y35 the refused chunk did not move the offsets';
+  ASSERT (SELECT video_may_exist FROM public.youtube_upload_sessions WHERE id = v_session) = false,
+    'Y35 the refused chunk did not mark a video as possible';
+  ASSERT (SELECT confirmed_bytes FROM public.youtube_upload_sessions WHERE id = v_session) = 1024,
+    'Y35 the refused chunk did not move the confirmed offset';
+END
+$y35_authority$;
+
+-- ---------------------------------------------------------------------------
+-- Y35b: THE LIVE AUTHORITY AFTER AN EDIT AND AFTER A NEW ATTEMPT.
+--
+-- The same gate, seen from the two other ways the world can change while the
+-- chunk is being read: the post is edited, and another attempt of the post
+-- starts.
+-- ---------------------------------------------------------------------------
+DO $y35b_authority$
+DECLARE
+  v_acct_a  uuid;
+  v_post_a  uuid;
+  v_media_a uuid;
+  v_acct_b  uuid;
+  v_post_b  uuid;
+  v_media_b uuid;
+  v_u_a     uuid := 'b1000000-0000-4000-8000-000000000001';
+  v_session uuid;
+  v_session_b uuid;
+  v_lease   uuid := 'f5000000-0000-4000-8000-000000000002';
+  v_lease_b uuid := 'f5000000-0000-4000-8000-000000000003';
+BEGIN
+  -- The edited post.
+  SELECT f.account_id, f.post_id, f.media_id
+    INTO v_acct_a, v_post_a, v_media_a
+    FROM pg_temp.new_youtube_fixture('y35b') f;
+  v_session := (public.admit_youtube_upload(
+      v_post_a, v_acct_a, v_u_a, v_media_a, 4096, 4096, '{}'::jsonb)
+    -> 'session' ->> 'id')::uuid;
+  PERFORM public.claim_youtube_upload_session(v_session, v_lease, 180000);
+
+  UPDATE public.posts SET caption = 'A video, edited' WHERE id = v_post_a;
+  BEGIN
+    PERFORM public.checkpoint_youtube_upload_session(v_session, v_lease, 4096, 4096,
+      'https://upload.example.invalid/session/y35b', true, NULL, NULL);
+    RAISE EXCEPTION 'Y35b the completing chunk was written after the post was edited';
+  EXCEPTION WHEN SQLSTATE 'YUS04' THEN
+    RAISE NOTICE 'PASS Y35b: the completing chunk is refused after the post was edited';
+  END;
+  ASSERT (SELECT bytes_sent FROM public.youtube_upload_sessions WHERE id = v_session) = 0,
+    'Y35b the refused chunk did not move the offsets';
+
+  -- The superseded attempt.
+  SELECT f.account_id, f.post_id, f.media_id
+    INTO v_acct_b, v_post_b, v_media_b
+    FROM pg_temp.new_youtube_fixture('y35c') f;
+  v_session_b := (public.admit_youtube_upload(
+      v_post_b, v_acct_b, v_u_a, v_media_b, 4096, 4096, '{}'::jsonb)
+    -> 'session' ->> 'id')::uuid;
+  PERFORM public.claim_youtube_upload_session(v_session_b, v_lease_b, 180000);
+
+  -- Another attempt of the post starts. The whole suite is one transaction, so
+  -- now() is the same clock for every statement: the new attempt needs the
+  -- wall clock to be a different moment.
+  UPDATE public.posts SET processing_started_at = clock_timestamp() WHERE id = v_post_b;
+  BEGIN
+    PERFORM public.checkpoint_youtube_upload_session(v_session_b, v_lease_b, 4096, 4096,
+      'https://upload.example.invalid/session/y35c', true, NULL, NULL);
+    RAISE EXCEPTION 'Y35b the completing chunk was written by an older attempt';
+  EXCEPTION WHEN SQLSTATE 'YUS11' THEN
+    RAISE NOTICE 'PASS Y35b: the completing chunk is refused after a new attempt started';
+  END;
+  ASSERT (SELECT bytes_sent FROM public.youtube_upload_sessions WHERE id = v_session_b) = 0,
+    'Y35b the refused chunk did not move the offsets of the older attempt';
+END
+$y35b_authority$;
+
+-- ---------------------------------------------------------------------------
+-- Y36: AN EXPLICIT RECONCILE IS NEVER TAKEN AWAY.
+--
+-- A session that was already marked for a human keeps that mark: a failure
+-- must never turn a manual outcome into a safe one, because the mark is what
+-- keeps a second video off the channel.
+--
+-- The public row carries the marker too, and it carries it even when the
+-- final-byte flag says false: the marker is the row's own record of what
+-- happened, and it is what the retry gate and the page read. A proven failure
+-- carries no marker, so it stays retryable.
+-- ---------------------------------------------------------------------------
+DO $y36_uncertain$
+DECLARE
+  v_acct_a  uuid;
+  v_post_a  uuid;
+  v_media_a uuid;
+  v_acct_b  uuid;
+  v_post_b  uuid;
+  v_media_b uuid;
+  v_u_a     uuid := 'b1000000-0000-4000-8000-000000000001';
+  v_session uuid;
+  v_session_b uuid;
+  v_lease   uuid := 'f6000000-0000-4000-8000-000000000001';
+  v_lease_b uuid := 'f6000000-0000-4000-8000-000000000002';
+  v_state   text;
+  v_outcome text;
+  v_retry   jsonb;
+BEGIN
+  -- The session that was marked for a human.
+  SELECT f.account_id, f.post_id, f.media_id
+    INTO v_acct_a, v_post_a, v_media_a
+    FROM pg_temp.new_youtube_fixture('y36') f;
+  v_session := (public.admit_youtube_upload(
+      v_post_a, v_acct_a, v_u_a, v_media_a, 4096, 4096, '{}'::jsonb)
+    -> 'session' ->> 'id')::uuid;
+  PERFORM public.claim_youtube_upload_session(v_session, v_lease, 180000);
+
+  -- The worker cannot tell whether the last chunk landed, so it marks the
+  -- session for a human. No byte ever reached the provider, and the
+  -- final-byte flag says false.
+  PERFORM public.release_youtube_upload_session(v_session, v_lease, 'reconcile',
+    'the last chunk may have been written');
+  ASSERT (SELECT state FROM public.youtube_upload_sessions WHERE id = v_session) = 'reconcile',
+    'Y36 the session is marked for a human';
+  ASSERT (SELECT video_may_exist FROM public.youtube_upload_sessions WHERE id = v_session) = false,
+    'Y36 the final-byte flag says false';
+
+  -- The settlement that follows is a failure, and it must not take the mark
+  -- away.
+  PERFORM public.settle_youtube_upload_session(v_session, v_lease, 'failed', NULL,
+    'the provider refused the upload', '{}'::jsonb);
+
+  SELECT state INTO v_state FROM public.youtube_upload_sessions WHERE id = v_session;
+  ASSERT v_state = 'reconcile',
+    'Y36 the explicit reconcile is not replaced with a safe failure';
+
+  -- The public row carries the marker, even though the final-byte flag is false.
+  SELECT response_data ->> 'publish_outcome' INTO v_outcome
+    FROM public.platform_posts WHERE id =
+      (SELECT platform_post_id FROM public.youtube_upload_sessions WHERE id = v_session);
+  ASSERT v_outcome = 'uncertain',
+    'Y36 the settled row carries the uncertain marker';
+  ASSERT (SELECT status FROM public.platform_posts
+           WHERE id = (SELECT platform_post_id FROM public.youtube_upload_sessions WHERE id = v_session))
+           = 'failed',
+    'Y36 the settled row is a failure';
+
+  -- The marker is durable: the retry gate refuses the destination.
+  v_retry := public.request_post_retry(v_post_a, v_u_a, ARRAY[v_acct_a]);
+  ASSERT (v_retry ->> 'status') = 'refused',
+    'Y36 the uncertain outcome is not retried';
+  ASSERT (v_retry ->> 'reason') = 'no_targets',
+    'Y36 the refusal says there is nothing safe to retry';
+
+  -- The proven failure: nothing ever reached the provider.
+  SELECT f.account_id, f.post_id, f.media_id
+    INTO v_acct_b, v_post_b, v_media_b
+    FROM pg_temp.new_youtube_fixture('y36b') f;
+  v_session_b := (public.admit_youtube_upload(
+      v_post_b, v_acct_b, v_u_a, v_media_b, 4096, 4096, '{}'::jsonb)
+    -> 'session' ->> 'id')::uuid;
+  PERFORM public.claim_youtube_upload_session(v_session_b, v_lease_b, 180000);
+  PERFORM public.release_youtube_upload_session(v_session_b, v_lease_b, 'failed',
+    'the provider refused the upload');
+  PERFORM public.settle_youtube_upload_session(v_session_b, v_lease_b, 'failed', NULL,
+    'the provider refused the upload', '{}'::jsonb);
+
+  SELECT state INTO v_state FROM public.youtube_upload_sessions WHERE id = v_session_b;
+  ASSERT v_state = 'failed',
+    'Y36 the proven failure is a failed session';
+  SELECT response_data ->> 'publish_outcome' INTO v_outcome
+    FROM public.platform_posts WHERE id =
+      (SELECT platform_post_id FROM public.youtube_upload_sessions WHERE id = v_session_b);
+  ASSERT v_outcome IS NULL,
+    'Y36 the proven failure carries no marker';
+  v_retry := public.request_post_retry(v_post_b, v_u_a, ARRAY[v_acct_b]);
+  ASSERT (v_retry ->> 'status') = 'accepted',
+    'Y36 the proven failure stays retryable';
+
+  RAISE NOTICE 'PASS Y36: an explicit reconcile is never taken away by a safe failure';
+END
+$y36_uncertain$;
+
+-- ---------------------------------------------------------------------------
+-- Y37: THE CANCELLED REPAIR IS NOT PREEMPTED.
+--
+-- A post that was cancelled keeps its own outcome, and its pending row is
+-- closed by the cancellation repair. A classification that settled the row
+-- first would take the repair's place: the row would carry the outcome of the
+-- upload instead of the outcome of the cancellation.
+--
+-- So a post that is no longer being processed is left alone, state and all.
+-- The repair finds the session by its state and closes the row itself.
+-- ---------------------------------------------------------------------------
+DO $y37_cancelled$
+DECLARE
+  v_acct_a  uuid;
+  v_post_a  uuid;
+  v_media_a uuid;
+  v_u_a     uuid := 'b1000000-0000-4000-8000-000000000001';
+  v_session uuid;
+  v_lease   uuid := 'f7000000-0000-4000-8000-000000000001';
+  v_row_id  uuid;
+  v_class   jsonb;
+  v_repair  jsonb;
+BEGIN
+  -- This scenario owns its post, its account and its media file.
+  SELECT f.account_id, f.post_id, f.media_id
+    INTO v_acct_a, v_post_a, v_media_a
+    FROM pg_temp.new_youtube_fixture('y37') f;
+  v_session := (public.admit_youtube_upload(
+      v_post_a, v_acct_a, v_u_a, v_media_a, 4096, 4096, '{}'::jsonb)
+    -> 'session' ->> 'id')::uuid;
+  v_row_id := (SELECT platform_post_id FROM public.youtube_upload_sessions WHERE id = v_session);
+  PERFORM public.claim_youtube_upload_session(v_session, v_lease, 180000);
+
+  -- The worker gave up, and died before it settled the public row. Its lease
+  -- runs out with the worker.
+  PERFORM public.release_youtube_upload_session(v_session, v_lease, 'failed',
+    'the provider refused the upload');
+  UPDATE public.youtube_upload_sessions
+     SET lease_expires_at = now() - interval '1 minute'
+   WHERE id = v_session;
+
+  -- The customer cancels the post.
+  UPDATE public.posts SET status = 'failed' WHERE id = v_post_a;
+
+  -- The classification does not touch it.
+  v_class := public.youtube_upload_classify_terminal(v_session);
+  ASSERT (v_class ->> 'classified')::boolean IS FALSE,
+    'Y37 the classification does not claim a cancelled post';
+  ASSERT (v_class ->> 'reason') = 'post_not_processing',
+    'Y37 the classification says the post is not being processed';
+  ASSERT (SELECT state FROM public.youtube_upload_sessions WHERE id = v_session) = 'failed',
+    'Y37 the classification leaves the state of the session alone';
+  ASSERT (SELECT status FROM public.platform_posts WHERE id = v_row_id) = 'pending',
+    'Y37 the classification does not settle the row of a cancelled post';
+
+  -- The batch claim does not touch it either.
+  PERFORM public.claim_youtube_upload_sessions(20, 180000, 24);
+  ASSERT (SELECT status FROM public.platform_posts WHERE id = v_row_id) = 'pending',
+    'Y37 the batch claim does not settle the row of a cancelled post';
+
+  -- The cancellation repair closes it, with the outcome of the cancellation.
+  v_repair := public.reconcile_youtube_upload_fanouts(5);
+  ASSERT (SELECT status FROM public.platform_posts WHERE id = v_row_id) = 'failed',
+    'Y37 the cancellation repair closes the pending row';
+  ASSERT (SELECT error_message FROM public.platform_posts WHERE id = v_row_id)
+           = 'youtube_upload_cancelled',
+    'Y37 the closed row carries the reason of the cancellation';
+  ASSERT (SELECT response_data ->> 'publish_outcome' FROM public.platform_posts WHERE id = v_row_id)
+           = 'cancelled',
+    'Y37 the closed row carries the outcome of the cancellation';
+
+  -- The post keeps the outcome the owner gave it.
+  ASSERT (SELECT status FROM public.posts WHERE id = v_post_a) = 'failed',
+    'Y37 the cancelled post keeps its own outcome';
+
+  RAISE NOTICE 'PASS Y37: the cancellation repair is not preempted by a classification';
+END
+$y37_cancelled$;
+
+-- ---------------------------------------------------------------------------
+-- Y38: THE REPAIRS ARE BOUNDED, AND NO WORK IS STARVED.
+--
+-- The expiry reset and the exhausted classification are repairs that run over
+-- a backlog. A backlog must not hold a lock on every session of the table, and
+-- it must not take the whole batch either: the work that is due has to be
+-- claimed as well.
+--
+-- So the reset is bounded and skips the locked rows, the classification is
+-- bounded and locks the parent, and the shared claim limit keeps a slot for
+-- the upload work that is due.
+-- ---------------------------------------------------------------------------
+DO $y38_bounded$
+DECLARE
+  v_acct    uuid;
+  v_post    uuid;
+  v_media   uuid;
+  v_u_a     uuid := 'b1000000-0000-4000-8000-000000000001';
+  v_session uuid;
+  v_lease   uuid := 'f8000000-0000-4000-8000-000000000001';
+  v_expired uuid[] := ARRAY[]::uuid[];
+  v_tired   uuid[] := ARRAY[]::uuid[];
+  v_before  integer;
+  v_after   integer;
+  v_total   integer;
+  v_deferred integer;
+  v_uploads integer;
+  v_ig      uuid;
+  v_i       integer;
+BEGIN
+  -- Three sessions whose provider session is gone, and no byte ever reached
+  -- it: the expiry reset may reopen them.
+  FOR i IN 1..3 LOOP
+    SELECT f.account_id, f.post_id, f.media_id
+      INTO v_acct, v_post, v_media
+      FROM pg_temp.new_youtube_fixture('y38e' || i::text) f;
+    v_session := (public.admit_youtube_upload(
+        v_post, v_acct, v_u_a, v_media, 4096, 4096, '{}'::jsonb)
+      -> 'session' ->> 'id')::uuid;
+    PERFORM public.claim_youtube_upload_session(v_session, v_lease, 180000);
+    PERFORM public.checkpoint_youtube_upload_session(v_session, v_lease, 0, 0,
+      'https://upload.example.invalid/session/y38e' || i::text, false, NULL, NULL);
+    -- The provider session is gone, and the lease with it.
+    UPDATE public.youtube_upload_sessions
+       SET session_expires_at = now() - interval '1 minute',
+           lease_expires_at = now() - interval '1 second'
+     WHERE id = v_session;
+    v_expired := array_append(v_expired, v_session);
+  END LOOP;
+
+  -- Three sessions that ran out of continuations: the classification closes
+  -- them, one by one.
+  FOR i IN 1..3 LOOP
+    SELECT f.account_id, f.post_id, f.media_id
+      INTO v_acct, v_post, v_media
+      FROM pg_temp.new_youtube_fixture('y38t' || i::text) f;
+    v_session := (public.admit_youtube_upload(
+        v_post, v_acct, v_u_a, v_media, 4096, 4096, '{}'::jsonb)
+      -> 'session' ->> 'id')::uuid;
+    UPDATE public.youtube_upload_sessions
+       SET continuation_count = 24
+     WHERE id = v_session;
+    v_tired := array_append(v_tired, v_session);
+  END LOOP;
+
+  -- The backlog is the one this scenario made.
+  SELECT count(*) INTO v_before
+    FROM public.youtube_upload_sessions
+   WHERE state = 'open' AND session_uri IS NOT NULL AND session_expires_at IS NOT NULL
+     AND session_expires_at <= now() AND NOT video_may_exist AND bytes_sent = 0
+     AND (lease_expires_at IS NULL OR lease_expires_at <= now());
+  ASSERT v_before = 3,
+    'Y38 the expired sessions of this scenario are the whole backlog';
+
+  -- ONE pass, ONE slot: one session is reopened, and one session is
+  -- classified. The rest waits for the next pass.
+  PERFORM public.claim_youtube_upload_sessions(1, 180000, 24);
+
+  SELECT count(*) INTO v_after
+    FROM public.youtube_upload_sessions
+   WHERE id = ANY(v_expired) AND session_uri IS NULL;
+  ASSERT v_after = 1,
+    'Y38 the expiry reset is bounded: one session is reopened per pass';
+
+  SELECT count(*) INTO v_after
+    FROM public.youtube_upload_sessions
+   WHERE id = ANY(v_tired) AND state <> 'open';
+  ASSERT v_after = 1,
+    'Y38 the exhausted classification is bounded: one session is classified per pass';
+
+  -- The other two are still waiting, and the next pass takes them.
+  PERFORM public.claim_youtube_upload_sessions(1, 180000, 24);
+  SELECT count(*) INTO v_after
+    FROM public.youtube_upload_sessions
+   WHERE id = ANY(v_tired) AND state <> 'open';
+  ASSERT v_after = 2,
+    'Y38 the next pass classifies the next session';
+
+  -- The shared limit: a backlog of deferred publishes may not starve the
+  -- upload work that is due.
+  --
+  -- Six deferred publishes are due, and one upload session is due for another
+  -- look. The limit is five, so the deferred publishes may not take all of it.
+  SELECT f.account_id, f.post_id, f.media_id
+    INTO v_acct, v_post, v_media
+    FROM pg_temp.new_youtube_fixture('y38d') f;
+  FOR i IN 1..6 LOOP
+    v_ig := gen_random_uuid();
+    INSERT INTO public.social_accounts
+      (id, user_id, platform, platform_user_id, platform_username, access_token, is_active)
+    VALUES (v_ig, v_u_a, 'instagram', 'ig-y38d-' || i::text, 'y38d' || i::text, 'token', true);
+    INSERT INTO public.platform_posts (post_id, social_account_id, platform, status, response_data)
+    VALUES (v_post, v_ig, 'instagram', 'pending', jsonb_build_object(
+      'deferred', jsonb_build_object('kind', 'threads',
+        'next_check_at', now() - interval '1 minute')));
+  END LOOP;
+
+  v_session := (public.admit_youtube_upload(
+      v_post, v_acct, v_u_a, v_media, 4096, 4096, '{}'::jsonb)
+    -> 'session' ->> 'id')::uuid;
+
+  SELECT
+    count(*) FILTER (WHERE kind = 'deferred_publish'),
+    count(*) FILTER (WHERE kind = 'youtube_upload_continuation'),
+    count(*)
+    INTO v_deferred, v_uploads, v_total
+    FROM public.claim_post_completion_work(5);
+
+  ASSERT v_total <= 5,
+    'Y38 the shared limit is still the limit';
+  ASSERT v_deferred = 3,
+    'Y38 the deferred publishes keep to the share that is left';
+  ASSERT v_uploads >= 1,
+    'Y38 the due upload work is not starved by the deferred publishes';
+
+  RAISE NOTICE 'PASS Y38: the repairs are bounded and no due work is starved';
+END
+$y38_bounded$;
+
+-- ---------------------------------------------------------------------------
+-- Y39: A DELETED TARGET LEAVES THE SCOPE, ITS SIDE EFFECT STAYS.
+--
+-- The scope is the list of destinations this attempt owns, and the closure is
+-- refused when one of them has no result row. An account that was
+-- disconnected cannot be published to any more, so it leaves the scope in the
+-- same transaction -- otherwise the fanout could never close and the post
+-- would wait for ever.
+--
+-- The record of the unknown outcome stays: the account may have been
+-- published to before it was disconnected, and that is a possible side effect
+-- nobody may forget.
+-- ---------------------------------------------------------------------------
+DO $y39_deleted_target$
+DECLARE
+  v_acct_a  uuid;
+  v_post_a  uuid;
+  v_media_a uuid;
+  v_u_a     uuid := 'b1000000-0000-4000-8000-000000000001';
+  v_ig      uuid := 'e9000000-0000-4000-8000-000000000001';
+  v_session uuid;
+  v_lease   uuid := 'f9000000-0000-4000-8000-000000000001';
+  v_attempt timestamptz;
+  v_content jsonb;
+  v_recovered jsonb;
+  v_scope   jsonb;
+BEGIN
+  -- This scenario owns its post, its account and its media file.
+  SELECT f.account_id, f.post_id, f.media_id
+    INTO v_acct_a, v_post_a, v_media_a
+    FROM pg_temp.new_youtube_fixture('y39') f;
+
+  -- The post has a second destination.
+  INSERT INTO public.social_accounts
+    (id, user_id, platform, platform_user_id, platform_username, access_token, is_active)
+  VALUES (v_ig, v_u_a, 'instagram', 'ig-y39', 'y39', 'token-ig', true)
+  ON CONFLICT (id) DO NOTHING;
+  UPDATE public.posts
+     SET platforms = ARRAY['youtube', 'instagram'],
+         metadata = metadata || jsonb_build_object(
+           'selected_account_ids', jsonb_build_array(v_acct_a::text, v_ig::text))
+   WHERE id = v_post_a;
+
+  -- The worker that owned this attempt is gone.
+  UPDATE public.posts
+     SET processing_started_at = now() - public.youtube_upload_attempt_quiet_after() - interval '1 second'
+   WHERE id = v_post_a;
+  SELECT processing_started_at INTO v_attempt FROM public.posts WHERE id = v_post_a;
+  SELECT jsonb_build_object(
+           'user_id', x.user_id, 'caption', x.caption, 'media_file_ids', x.media_file_ids,
+           'metadata', public.normalize_threads_internal_metadata(x.metadata), 'platforms', x.platforms,
+           'scheduled_at', x.scheduled_at, 'publish_requested_at', x.publish_requested_at, 'source', x.source)
+    INTO v_content FROM public.posts x WHERE x.id = v_post_a;
+
+  PERFORM public.enroll_post_notification_recovery(v_post_a, v_attempt, v_content,
+    ARRAY[v_acct_a, v_ig], ARRAY[]::uuid[]);
+
+  -- The customer disconnects the second destination while the worker is gone.
+  DELETE FROM public.social_accounts WHERE id = v_ig;
+
+  v_session := (public.admit_youtube_upload(
+      v_post_a, v_acct_a, v_u_a, v_media_a, 4096, 4096, '{}'::jsonb)
+    -> 'session' ->> 'id')::uuid;
+  PERFORM public.claim_youtube_upload_session(v_session, v_lease, 180000);
+  PERFORM public.checkpoint_youtube_upload_session(v_session, v_lease, 4096, 4096,
+    'https://upload.example.invalid/session/y39', true, NULL, NULL);
+  PERFORM public.complete_youtube_upload_session(v_session, v_lease, 'yt-video-y39');
+  PERFORM public.settle_youtube_upload_session(v_session, v_lease, 'success', 'yt-video-y39');
+
+  v_recovered := public.recover_youtube_upload_fanout(v_session, NULL);
+  ASSERT (v_recovered ->> 'recovered') = 'true',
+    'Y39 the fanout closes although a destination was disconnected';
+
+  -- The disconnected destination leaves the scope.
+  SELECT metadata -> 'legacy_notification_candidate' INTO v_scope
+    FROM public.posts WHERE id = v_post_a;
+  ASSERT NOT (v_scope -> 'target_account_ids') @> to_jsonb(ARRAY[v_ig]),
+    'Y39 the disconnected destination leaves the scope of the attempt';
+
+  -- Its unknown outcome stays on record.
+  ASSERT (v_scope -> 'fanout_unknown_account_ids') @> to_jsonb(ARRAY[v_ig]),
+    'Y39 the possible side effect of the disconnected destination stays on record';
+
+  -- The parent reaches a finite outcome.
+  ASSERT (SELECT status FROM public.posts WHERE id = v_post_a) = 'completed',
+    'Y39 the parent reaches the outcome the successful destination gives it';
+
+  RAISE NOTICE 'PASS Y39: a deleted target leaves the scope and its side effect stays';
+END
+$y39_deleted_target$;
+
+-- ---------------------------------------------------------------------------
+-- Y40: THE ADMISSION TAKES THE EXPECTED LIVE MEDIA VERSION.
+--
+-- The worker resolves the file it is about to send and names the version it
+-- read. If the file was replaced between that read and the admission, the
+-- bytes the worker holds belong to a version the post does not name any
+-- more, and the session would record the NEW version: a continuation could
+-- then send the old bytes under the new version, and the video would be a
+-- mixture of two files.
+--
+-- So the admission refuses that, before the session exists and before anything
+-- is written to the provider. A refused admission creates nothing.
+-- ---------------------------------------------------------------------------
+DO $y40_media_version$
+DECLARE
+  v_acct_a  uuid;
+  v_post_a  uuid;
+  v_media_a uuid;
+  v_acct_b  uuid;
+  v_post_b  uuid;
+  v_media_b uuid;
+  v_u_a     uuid := 'b1000000-0000-4000-8000-000000000001';
+  v_session uuid;
+  v_admitted jsonb;
+BEGIN
+  -- The version that matches: the admission is accepted.
+  SELECT f.account_id, f.post_id, f.media_id
+    INTO v_acct_a, v_post_a, v_media_a
+    FROM pg_temp.new_youtube_fixture('y40') f;
+  v_admitted := public.admit_youtube_upload(
+    v_post_a, v_acct_a, v_u_a, v_media_a, 4096, 4096, '{}'::jsonb,
+    NULL, NULL, NULL, NULL, 1);
+  ASSERT (v_admitted -> 'session' ->> 'id') IS NOT NULL,
+    'Y40 the admission with the live media version is accepted';
+  v_session := (v_admitted -> 'session' ->> 'id')::uuid;
+  ASSERT (SELECT media_object_version FROM public.youtube_upload_sessions WHERE id = v_session) = 1,
+    'Y40 the session records the live media version';
+
+  -- The version that does not match: the file was replaced while the worker
+  -- was reading it.
+  SELECT f.account_id, f.post_id, f.media_id
+    INTO v_acct_b, v_post_b, v_media_b
+    FROM pg_temp.new_youtube_fixture('y40b') f;
+  UPDATE public.media_files SET current_object_version = 2 WHERE id = v_media_b;
+
+  BEGIN
+    PERFORM public.admit_youtube_upload(
+      v_post_b, v_acct_b, v_u_a, v_media_b, 4096, 4096, '{}'::jsonb,
+      NULL, NULL, NULL, NULL, 1);
+    RAISE EXCEPTION 'Y40 the admission accepted a media file that was replaced';
+  EXCEPTION WHEN SQLSTATE 'YUS03' THEN
+    RAISE NOTICE 'PASS Y40: the admission refuses a media file that was replaced';
+  END;
+
+  -- The refused admission created nothing.
+  ASSERT (SELECT count(*) FROM public.youtube_upload_sessions WHERE post_id = v_post_b) = 0,
+    'Y40 the refused admission created no session';
+  ASSERT (SELECT count(*) FROM public.platform_posts WHERE post_id = v_post_b) = 0,
+    'Y40 the refused admission created no public row';
+
+  RAISE NOTICE 'PASS Y40: the admission takes the expected live media version';
+END
+$y40_media_version$;
 
 ROLLBACK;
 

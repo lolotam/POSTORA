@@ -34,8 +34,13 @@ function recordingClient(responses: Record<string, unknown> = {}) {
     rpc(fn: string, args: Record<string, unknown>) {
       calls.push({ fn, args });
       const response = responses[fn];
-      if (response && typeof response === "object" && "error" in response) {
-        return Promise.resolve({ data: null, error: (response as { error: unknown }).error });
+      // The envelope is EXPLICIT: a refusal says so in the envelope, and a
+      // payload that happens to carry an "error" field of its own is DATA.
+      // The session the claim returns has an "error" field, and a stub that
+      // reads it as a refusal swallows the very payload it was given.
+      if (response && typeof response === "object" && "data" in response && "error" in response) {
+        const envelope = response as { data: unknown; error: unknown };
+        return Promise.resolve({ data: envelope.data, error: envelope.error });
       }
       return Promise.resolve({ data: response ?? null, error: null });
     },
@@ -63,6 +68,9 @@ function sessionPayload(overrides: Record<string, unknown> = {}) {
     video_may_exist: false,
     total_bytes: 100,
     video_id: null,
+    // The claim payload carries an error field of its own: it is the
+    // session's own error, and it is DATA, not a refusal.
+    error: null,
     attempt_started_at: "2026-11-18T00:00:00.000Z",
     next_check_at: null,
     last_outcome: null,
@@ -83,7 +91,7 @@ Deno.test("the lease is sent as a number of milliseconds", async () => {
     }),
   });
   const store = createSupabaseYoutubeUploadSessionStore(client);
-  await store.claim({ sessionId: SESSION_ID, leaseToken: LEASE, leaseMs: 180_000 });
+  const claimed = await store.claim({ sessionId: SESSION_ID, leaseToken: LEASE, leaseMs: 180_000 });
 
   const call = calls.find((entry) => entry.fn === "claim_youtube_upload_session");
   assert(call !== undefined);
@@ -93,6 +101,11 @@ Deno.test("the lease is sent as a number of milliseconds", async () => {
   assertEquals("p_lease" in call.args, false);
   assertEquals(call.args.p_session_id, SESSION_ID);
   assertEquals(call.args.p_lease_token, LEASE);
+  // The payload came back: a stub that reads the session's own error field as
+  // a refusal would swallow the very payload it was given.
+  assertEquals(claimed.refused, null);
+  assertEquals(claimed.record?.id, SESSION_ID);
+  assertEquals(claimed.record?.state, "open");
 });
 
 Deno.test("the continuation claim is sent as a number of milliseconds", async () => {
@@ -127,6 +140,37 @@ Deno.test("the checkpoint carries the continuation schedule", async () => {
   assertEquals(call.args.p_video_may_exist, true);
 });
 
+Deno.test("the checkpoint tells a cleared schedule apart from an unchanged one", async () => {
+  const { client, calls } = recordingClient({ checkpoint_youtube_upload_session: true });
+  const store = createSupabaseYoutubeUploadSessionStore(client);
+
+  // A time moves the schedule.
+  await store.checkpoint({
+    sessionId: SESSION_ID,
+    leaseToken: LEASE,
+    confirmedBytes: 100,
+    bytesSent: 200,
+    nextCheckAt: "2026-11-18T00:05:00.000Z",
+  });
+  // A cleared schedule empties it.
+  await store.checkpoint({
+    sessionId: SESSION_ID,
+    leaseToken: LEASE,
+    confirmedBytes: 100,
+    bytesSent: 200,
+    nextCheckAt: null,
+  });
+
+  const checkpoints = calls.filter((entry) => entry.fn === "checkpoint_youtube_upload_session");
+  assertEquals(checkpoints.length, 2);
+  assertEquals(checkpoints[0].args.p_next_check_at, "2026-11-18T00:05:00.000Z");
+  assertEquals(checkpoints[0].args.p_clear_next_check, false);
+  // The flag keeps "cleared" apart from "not given": a schedule that is not
+  // given has to stay where it was, and a schedule that is cleared has to go.
+  assertEquals(checkpoints[1].args.p_next_check_at, null);
+  assertEquals(checkpoints[1].args.p_clear_next_check, true);
+});
+
 Deno.test("the admission is asked for with the attempt and the resolved targets", async () => {
   const { client, calls } = recordingClient({
     admit_youtube_upload: { session: sessionPayload(), platform_post_id: PUBLIC_ROW_ID },
@@ -152,6 +196,33 @@ Deno.test("the admission is asked for with the attempt and the resolved targets"
   assertEquals(call.args.p_target_account_ids, [ACCOUNT_ID]);
   // The public row is created BY the admission, so its id is not an argument.
   assertEquals("p_platform_post_id" in call.args, false);
+});
+
+Deno.test("the admission is asked for with the live media version", async () => {
+  const { client, calls } = recordingClient({
+    admit_youtube_upload: { session: sessionPayload(), platform_post_id: PUBLIC_ROW_ID },
+  });
+  const store = createSupabaseYoutubeUploadSessionStore(client);
+  await store.admit({
+    postId: POST_ID,
+    socialAccountId: ACCOUNT_ID,
+    mediaFileId: "77777777-7777-7777-7777-777777777777",
+    mediaObjectVersion: 7,
+    mediaSize: 100,
+    totalBytes: 100,
+    uploadBody: { snippet: { title: "A video" } },
+    expectedContent: { caption: "A video" },
+    userId: OWNER_ID,
+    attemptStartedAt: "2026-11-18T00:00:00.000Z",
+    targetAccountIds: [ACCOUNT_ID],
+  });
+
+  const call = calls.find((entry) => entry.fn === "admit_youtube_upload");
+  assert(call !== undefined);
+  // The version of the file the caller read. A file that was replaced in the
+  // meantime is refused, so the bytes the worker holds are the bytes the
+  // session records.
+  assertEquals(call.args.p_expected_media_version, 7);
 });
 
 Deno.test("the admission hands back the public row it created", async () => {
@@ -189,7 +260,7 @@ Deno.test("a refusal is read from the sqlstate", () => {
 
 Deno.test("a raised refusal becomes a reason the caller can branch on", async () => {
   const { client } = recordingClient({
-    claim_youtube_upload_session: { error: { code: "YUS07", message: "another worker owns the session" } },
+    claim_youtube_upload_session: { data: null, error: { code: "YUS07", message: "another worker owns the session" } },
   });
   const store = createSupabaseYoutubeUploadSessionStore(client);
   const result = await store.claim({ sessionId: SESSION_ID, leaseToken: LEASE, leaseMs: 1000 });
@@ -242,7 +313,7 @@ Deno.test("the settlement is asked for with the lease that owns it", async () =>
 
 Deno.test("a refused settlement is not a success", async () => {
   const { client } = recordingClient({
-    settle_youtube_upload_session: { error: { code: "YUS09", message: "the lease is stale" } },
+    settle_youtube_upload_session: { data: null, error: { code: "YUS09", message: "the lease is stale" } },
   });
   const store = createSupabaseYoutubeUploadSessionStore(client);
   const result = await store.settle({
@@ -820,6 +891,29 @@ Deno.test("a claim that holds no live lease is refused at the cap", async () => 
   const refused = await store.claim({ sessionId, leaseToken: "lease-b", leaseMs: 60_000 });
   assertEquals(refused.refused, "too_many_continuations");
   assertEquals(refused.record, null);
+});
+
+Deno.test("the continuation claim stops at the cap", async () => {
+  // The database does not hand out a session that is at the cap: it
+  // classifies it instead, because a session that keeps failing is not asked
+  // for ever.
+  let clock = 1_000;
+  const store = createInMemoryYoutubeUploadSessionStore({ now: () => clock });
+  const opened = await store.admit(admitInput);
+  const sessionId = opened.record!.id;
+  await store.claim({ sessionId, leaseToken: "lease-a", leaseMs: 1_000 });
+  await store.checkpoint({
+    sessionId,
+    leaseToken: "lease-a",
+    confirmedBytes: 0,
+    bytesSent: 0,
+    sessionUri: "https://www.googleapis.com/upload?upload_id=secret",
+  });
+  clock += 2_000;
+  store.sessions.get(sessionId)!.continuationCount = 24;
+
+  const claims = await store.claimContinuations({ limit: 5, leaseMs: 60_000 });
+  assertEquals(claims.length, 0);
 });
 
 // ───────────────────────────────────────────────────────────────────────────

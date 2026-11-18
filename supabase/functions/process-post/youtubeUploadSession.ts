@@ -212,6 +212,10 @@ export function createSupabaseYoutubeUploadSessionStore(
         // The snapshot the caller built the upload body from. The admission
         // compares it with the live post under the post's lock.
         p_expected_content: input.expectedContent,
+        // The version of the file the caller read. The admission refuses a
+        // file that was replaced in the meantime, so the bytes the worker
+        // holds are the bytes the session records.
+        p_expected_media_version: input.mediaObjectVersion,
       });
       if (!result.ok) return { record: null, refused: result.refusal, platformPostId: null };
       const payload = result.value ?? {};
@@ -250,6 +254,10 @@ export function createSupabaseYoutubeUploadSessionStore(
         p_video_may_exist: input.videoMayExist ?? null,
         p_next_check_at: input.nextCheckAt ?? null,
         p_last_outcome: input.lastOutcome ?? null,
+        // The schedule has three states: a time moves it, a cleared value
+        // empties it, and no value at all leaves it where it was. The flag
+        // keeps "cleared" apart from "not given".
+        p_clear_next_check: input.nextCheckAt === null,
       });
       return result.ok ? result.value : false;
     },
@@ -760,6 +768,11 @@ export function createInMemoryYoutubeUploadSessionStore(options?: {
         if (!continues && !neverOpened && !receipt) continue;
         if (holdsLiveLease(session)) continue;
         if (session.nextCheckAt !== null && session.nextCheckAt > now()) continue;
+        // The continuation cap. The database does not hand out a session that
+        // is at the cap: it classifies it instead, because a session that
+        // keeps failing is not asked for ever. A receipt is still handed out,
+        // because projecting it is not another try.
+        if (session.state === "open" && session.continuationCount >= 24) continue;
 
         const leaseToken = nextLeaseToken();
         session.leaseToken = leaseToken;

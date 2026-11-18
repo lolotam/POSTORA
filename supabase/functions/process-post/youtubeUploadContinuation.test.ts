@@ -53,7 +53,12 @@ interface World {
   mediaReads: number;
   uploads: number;
   /** The terminal outcomes the worker tried to record. */
-  settled: Array<{ status: string; videoId: string | null; errorMessage: string | null }>;
+  settled: Array<{
+    status: string;
+    videoId: string | null;
+    errorMessage: string | null;
+    responseData: Record<string, unknown>;
+  }>;
   /** The receipts the worker projected. */
   projected: string[];
   /** The videos the worker did the follow-ups for. */
@@ -184,6 +189,7 @@ function world(options: WorldOptions = {}): World {
           status: args.status,
           videoId: args.videoId ?? null,
           errorMessage: args.errorMessage ?? null,
+          responseData: args.responseData ?? {},
         });
         return Promise.resolve({ settled: true, refused: null });
       },
@@ -447,6 +453,50 @@ Deno.test("a claim that another worker holds is refused", async () => {
   assertEquals(result.status, "refused");
   assertEquals(result.reason, YOUTUBE_UPLOAD_REASON.lease_conflict);
   assertEquals(w.uploads, 0);
+});
+
+// ───────────────────────────────────────────────────────────────────────────
+// The uncertain marker
+//
+// History and the API retry selector read publish_outcome, so a result whose
+// outcome is not a proof is never offered as a retry: the provider may already
+// hold the video, and a blind retry could publish a second one.
+//
+// A proven failure carries no marker, so it stays retryable.
+// ───────────────────────────────────────────────────────────────────────────
+
+Deno.test("an outcome that is not a proof is settled with the uncertain marker", async () => {
+  // Two ways of not knowing: the worker cannot tell whether the last chunk
+  // landed, and the provider gave no answer at all. Both are uncertain, and
+  // both have to be refused by the retry gate.
+  const uncertain: ResumableUploadOutcome[] = [
+    { kind: "reconcile", reason: YOUTUBE_UPLOAD_REASON.reconcile },
+    { kind: "failed", reason: YOUTUBE_UPLOAD_REASON.unknown, retryable: true },
+  ];
+  for (const outcome of uncertain) {
+    const w = world({ outcome });
+    await continueYoutubeUpload(w.ports, request);
+    assertEquals(w.settled.length, 1);
+    assertEquals(w.settled[0].status, "failed");
+    assertEquals(w.settled[0].responseData.publish_outcome, "uncertain");
+  }
+});
+
+Deno.test("a proven failure is settled without the uncertain marker", async () => {
+  // The upload never started: nothing reached the provider, so a retry cannot
+  // create a second video.
+  const unsent = world({ outcome: { kind: "unsent", reason: YOUTUBE_UPLOAD_REASON.unsent } });
+  await continueYoutubeUpload(unsent.ports, request);
+  assertEquals(unsent.settled.length, 1);
+  assertEquals("publish_outcome" in unsent.settled[0].responseData, false);
+
+  // The provider refused the upload: it answered, so that is a proof as well.
+  const rejected = world({
+    outcome: { kind: "failed", reason: YOUTUBE_UPLOAD_REASON.rejected, retryable: false },
+  });
+  await continueYoutubeUpload(rejected.ports, request);
+  assertEquals(rejected.settled.length, 1);
+  assertEquals("publish_outcome" in rejected.settled[0].responseData, false);
 });
 
 Deno.test("a session that never got a provider session is started", async () => {
