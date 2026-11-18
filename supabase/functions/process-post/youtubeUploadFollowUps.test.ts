@@ -190,7 +190,7 @@ Deno.test("a follow-up is skipped when the worker has no time left", async () =>
 
 Deno.test("the second follow-up is skipped when the first one used the budget up", async () => {
   const w = world({
-    budgetMs: () => (w.budgetCalls() === 1 ? 1_000 : 0),
+    budgetMs: () => (w.budgetCalls() <= 2 ? 1_000 : 0),
   });
   await runYoutubeFollowUps(
     { videoId: VIDEO_ID, accessToken: "token-1", thumbnailUrl: THUMBNAIL_URL, firstComment: "Hello" },
@@ -200,4 +200,16 @@ Deno.test("the second follow-up is skipped when the first one used the budget up
   assertEquals(w.downloads.length, 1);
   assertEquals(w.calls.length, 1);
   assertEquals(w.calls[0].url.includes("thumbnails"), true);
+});
+
+Deno.test("a thumbnail download that consumes the deadline sends no provider write", async () => {
+  const w = world({
+    budgetMs: () => (w.budgetCalls() === 1 ? 1_000 : 0),
+  });
+  await runYoutubeFollowUps(
+    { videoId: VIDEO_ID, accessToken: "token-1", thumbnailUrl: THUMBNAIL_URL, firstComment: null },
+    w.deps,
+  );
+  assertEquals(w.downloads.length, 1);
+  assertEquals(w.calls.length, 0);
 });

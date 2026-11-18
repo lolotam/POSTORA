@@ -541,8 +541,10 @@ class StreamingByteSource implements VideoByteSource {
 
     const budget = Math.max(1, Math.min(timeoutMs ?? this.timeoutMs, this.timeoutMs));
     let timedOut = false;
+    let seekTimedOut = false;
     const timer = setTimeout(() => {
       timedOut = true;
+      seekTimedOut = budget >= this.timeoutMs && this.readOffset < start;
       this.reset();
     }, budget);
     try {
@@ -564,6 +566,10 @@ class StreamingByteSource implements VideoByteSource {
     } catch (error) {
       this.reset();
       if (!timedOut) throw mediaReadError(error);
+      if (seekTimedOut) {
+        const reason = YOUTUBE_UPLOAD_REASON.media_range_required;
+        throw new VideoSourceError(reason, MEDIA_READ_FAILED, "The non-range source did not reach the resume offset.");
+      }
       throw new VideoSourceError(
         YOUTUBE_UPLOAD_REASON.media_read_failed,
         MEDIA_READ_FAILED,
@@ -572,6 +578,10 @@ class StreamingByteSource implements VideoByteSource {
     } finally {
       clearTimeout(timer);
     }
+  }
+
+  close(): void {
+    this.reset();
   }
 }
 

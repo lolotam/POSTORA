@@ -1067,17 +1067,16 @@ admission when it is not the live one.
 
 ## 41. A cleared schedule is not an unchanged one
 
-**Was:** the checkpoint could not say "the next check is at this moment" and
-"there is no next check" apart: both were the absence of a time, so a session
-that had to be watched again could not be told apart from one that was done.
+**Was:** an omitted next-check time and an explicit clear both reached SQL
+as NULL. The checkpoint could not distinguish them.
 
 **Is:** the two are separate.
 
 * `checkpoint_youtube_upload_session(..., p_clear_next_check)` says which one it
-  is: a cleared schedule empties `next_check_at`, and a schedule that is not
-  given leaves it where it was.
-* The worker sends the flag from the same value it sends the time: no time
-  means "cleared".
+  is. Clearing sets `next_check_at` to NULL, removing the delay. An open
+  session that meets the other claim conditions is then due immediately.
+* Omitting the time leaves it unchanged. The worker sends the clear flag
+  only for an explicit null.
 * The in-memory session store stops handing out a session that is at the
   continuation cap, the way the database does, so a test cannot prove something
   the database would refuse.
@@ -1155,9 +1154,10 @@ the attempt did not name the destination and the fanout could not close.
   acts on the answer.
 * A settlement that was **confirmed** is the final word: the row is a failure
   and the customer is told what it was.
-* A settlement that was **not confirmed** is a pending durable handoff: the row
-  is still open, the receipt is already stored, and the error says the recovery
-  will settle it instead of pretending the failure was recorded.
+* When a settlement is **unconfirmed**, the worker leaves the admitted result
+  to recovery. A lost response can mean the write already committed. Otherwise
+  recovery can project a stored receipt or classify a terminal failure from the
+  session state.
 * The error carries `selfWroteRows` and the row id, so the generic writer does
   not write a second row and the scope of the attempt names the destination.
 * The failure never becomes a *second* row beside the admitted one: the same
@@ -1548,9 +1548,11 @@ shared limit is a limit on the batch, not on each kind.
 functions and the changed `sweep_stale_processing_posts` and
 `claim_post_completion_work`. The `process-post` build that calls them needs
 those functions to exist: a missing function is an error at the first upload,
-not a fallback.
+not a fallback. Apply `20261118121000_post_retry_replacement_media.sql`
+before deploying `enqueue-post-publish` with replacement-media support.
+Deploy that handler before the frontend that sends replacement IDs.
 
-The migration has never been applied anywhere, so the corrected signatures
+The YouTube migration has not been applied to production, so the corrected signatures
 (`p_lease_ms`, the attempt column, the extended `checkpoint`, the admission,
 the fenced settlement and the receipt projection) are simply the first
 version.

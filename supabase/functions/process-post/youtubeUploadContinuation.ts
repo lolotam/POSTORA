@@ -83,6 +83,7 @@ export interface ContinuationAccount {
   isActive: boolean;
   accessToken: string | null;
   needsReauth: boolean;
+  tokenRefreshPending?: boolean;
 }
 
 /** The media file, as far as the continuation needs it. */
@@ -298,6 +299,9 @@ export function deferredUploadByteSource(
       const source = await opened;
       return await source.read(start, end, timeoutMs);
     },
+    close(): void {
+      void opened?.then((source) => source.close?.()).catch(() => {});
+    },
   };
 }
 
@@ -446,6 +450,9 @@ export async function continueYoutubeUpload(
   }
 
   const account = await ports.loadAccount(session.socialAccountId);
+  if (account?.tokenRefreshPending && account.userId === post.userId && account.isActive && !account.needsReauth) {
+    return scopeIncomplete(ports, YOUTUBE_UPLOAD_REASON.resumable);
+  }
   if (!isUsableAccount(account, post)) {
     return refused(YOUTUBE_UPLOAD_REASON.account_unusable);
   }
@@ -569,6 +576,7 @@ export async function continueYoutubeUpload(
       const live = await ports.effectAuthority({ sessionId: session.id, leaseToken });
       if (!live.authorized) {
         authorityLost = effectAuthorityReason(live.reason);
+        opened.close?.();
         throw new Error("the live state no longer allows the upload");
       }
       return opened;

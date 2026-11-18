@@ -35,6 +35,7 @@ export const YOUTUBE_UPLOAD_REASON = {
   expired: "youtube_upload_expired",
   /** The provider refused the upload in a way that will not change on retry. */
   rejected: "youtube_upload_rejected",
+  quota_exceeded: "youtube_upload_quota_exceeded",
   /** The provider did not answer in a way that can be classified. */
   unknown: "youtube_upload_unknown",
   /** Another worker holds the session lease. */
@@ -65,6 +66,7 @@ export const YOUTUBE_UPLOAD_REASON = {
    * "the host did not answer".
    */
   media_read_failed: "youtube_upload_media_read_failed",
+  media_range_required: "youtube_upload_media_range_required",
   /** The media lives on a host outside the approved egress policy. */
   media_origin_not_approved: "youtube_upload_media_origin_not_approved",
   /** No session exists for this post and account. */
@@ -106,6 +108,7 @@ const PUBLIC_MESSAGE: Record<YoutubeUploadReason, string> = {
     "The YouTube upload session expired. YouTube may still have a video from it. " +
     "Check your channel before retrying.",
   [YOUTUBE_UPLOAD_REASON.rejected]: "YouTube refused this upload.",
+  [YOUTUBE_UPLOAD_REASON.quota_exceeded]: "YouTube API quota exceeded. Try again tomorrow.",
   [YOUTUBE_UPLOAD_REASON.unknown]:
     "YouTube did not confirm the upload. It will be checked again shortly.",
   [YOUTUBE_UPLOAD_REASON.lease_conflict]: "Another worker is already uploading to YouTube.",
@@ -123,6 +126,8 @@ const PUBLIC_MESSAGE: Record<YoutubeUploadReason, string> = {
     "The video for this post is no longer available in the media library.",
   [YOUTUBE_UPLOAD_REASON.media_read_failed]:
     "The video could not be read from the media host. Retry the publish.",
+  [YOUTUBE_UPLOAD_REASON.media_range_required]:
+    "This media host could not resume the upload in time. Check YouTube before retrying with a file from the media library.",
   [YOUTUBE_UPLOAD_REASON.media_origin_not_approved]:
     "The video is stored outside Postora's approved media hosts and cannot be uploaded safely.",
   [YOUTUBE_UPLOAD_REASON.not_found]: "No YouTube upload was found for this post.",

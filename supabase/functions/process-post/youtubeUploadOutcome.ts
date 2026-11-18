@@ -75,7 +75,9 @@ export function youtubeUploadOutcomeMessage(outcome: ResumableUploadOutcome): st
     case "unsent":
       return `${youtubeUploadPublicMessage(YOUTUBE_UPLOAD_REASON.unsent)} (${outcome.reason})`;
     case "reconcile":
-      return `${youtubeUploadPublicMessage(YOUTUBE_UPLOAD_REASON.reconcile)} (${outcome.reason})`;
+      return `${youtubeUploadPublicMessage(
+        outcome.reason === YOUTUBE_UPLOAD_REASON.media_range_required ? outcome.reason : YOUTUBE_UPLOAD_REASON.reconcile
+      )} (${outcome.reason})`;
     case "abandoned":
       // The reason says why the write was not made: the live state refused it,
       // or the lease was gone. It is the outcome's own reason, not a guess.

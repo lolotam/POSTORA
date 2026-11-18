@@ -269,6 +269,11 @@ function asRecord(value: unknown): Record<string, unknown> | undefined {
 }
 
 /** Translates a failed upload handshake into the message the caller shows. */
+export function youtubeUploadErrorReason(errorData: unknown): unknown {
+  const errors = asRecord(asRecord(errorData)?.error)?.errors;
+  return Array.isArray(errors) ? asRecord(errors[0])?.reason : undefined;
+}
+
 export function uploadFailureMessage(status: number, errorData: unknown, statusText: string): string {
   const payload = asRecord(asRecord(errorData)?.error);
   const message = typeof payload?.message === "string" ? payload.message : undefined;
@@ -276,8 +281,7 @@ export function uploadFailureMessage(status: number, errorData: unknown, statusT
     return "YouTube authentication expired. Please reconnect your YouTube account.";
   }
   if (status === 403) {
-    const errors = payload?.errors;
-    const reason = Array.isArray(errors) ? asRecord(errors[0])?.reason : undefined;
+    const reason = youtubeUploadErrorReason(errorData);
     if (reason === "quotaExceeded") {
       return "YouTube API quota exceeded. Please try again tomorrow.";
     }

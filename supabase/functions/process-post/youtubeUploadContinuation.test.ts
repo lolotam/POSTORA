@@ -1038,3 +1038,12 @@ Deno.test("the follow-ups are skipped when the live state no longer allows them"
   assertEquals(w.settled[0].status, "success");
   assertEquals(w.settled[0].videoId, VIDEO_ID);
 });
+
+Deno.test("a temporarily unavailable refreshed credential leaves the session untouched", async () => {
+  const w = world({ account: { accessToken: null, tokenRefreshPending: true } });
+  const result = await continueYoutubeUpload(w.ports, request);
+  assertEquals(result.status, "pending");
+  assertEquals(result.reason, YOUTUBE_UPLOAD_REASON.resumable);
+  assertEquals(w.mediaReads, 0);
+  assertEquals(w.settled.length, 0);
+});

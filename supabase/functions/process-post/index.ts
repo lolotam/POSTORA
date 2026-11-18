@@ -2891,11 +2891,13 @@ Deno.serve(async (req) => {
         },
       });
 
-      if (token.refreshed) {
-        // Update in-memory so postToYouTube() uses the fresh token
+      // The refresh can lose its conditional update to a concurrent reconnect.
+      // Use the current stored credential if the helper read it back.
+      if (token.accessToken) {
         account.access_token = token.accessToken;
         account.token_expires_at = token.expiresAt;
-
+      }
+      if (token.refreshed) {
         console.log(`[JIT] YouTube token refreshed for account ${account.id}, expires: ${token.expiresAt} (source: ${postSource}, post: ${post_id})`);
 
         // Write to system_logs for observability
@@ -9748,12 +9750,16 @@ function buildYoutubeContinuationPorts(
         },
       });
 
+      const usableToken = token.accessToken && token.expiresAt && Date.parse(token.expiresAt) > Date.now()
+        ? token.accessToken
+        : null;
       return {
         id: String(data.id),
         userId: String(data.user_id),
         platform: String(data.platform),
         isActive: data.is_active !== false,
-        accessToken: token.accessToken,
+        accessToken: usableToken,
+        tokenRefreshPending: usableToken === null && token.reason !== null,
         needsReauth: data.needs_reauth === true || metadata.needs_reauth === true,
       };
     },
@@ -9807,6 +9813,7 @@ function buildYoutubeContinuationPorts(
           storageBucket: media.storageBucket,
           mimeType: media.mimeType,
           currentObjectVersion: media.currentObjectVersion,
+          fileSize: media.fileSize,
         },
         mediaHosts,
       });

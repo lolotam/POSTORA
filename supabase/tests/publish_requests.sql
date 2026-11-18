@@ -250,6 +250,9 @@ BEGIN
   DECLARE
     p_replace uuid := gen_random_uuid();
     p_blocked uuid := gen_random_uuid();
+    p_mixed uuid := gen_random_uuid();
+    acct_yt uuid := gen_random_uuid();
+    saved_result uuid := gen_random_uuid();
     m_original uuid := gen_random_uuid();
     m_new uuid := gen_random_uuid();
     m_foreign uuid := gen_random_uuid();
@@ -265,7 +268,33 @@ BEGIN
       (p_replace, acct_fb, 'facebook', 'failed', '{}'::jsonb),
       (p_blocked, acct_fb, 'facebook', 'failed', '{"publish_outcome":"uncertain"}'::jsonb);
 
-    ASSERT NOT has_function_privilege('authenticated', 'public.request_post_retry_with_media(uuid,uuid,uuid[],uuid[])', 'EXECUTE'),
+    INSERT INTO public.social_accounts (id, user_id, platform, platform_user_id, access_token, is_active)
+    VALUES (acct_yt, u_a, 'youtube', 'retry-media-fixture-channel', 'fixture-token', true);
+    INSERT INTO public.posts (id, user_id, status, platforms, media_file_ids)
+    VALUES (p_mixed, u_a, 'completed', ARRAY['facebook','youtube'], ARRAY[m_original]);
+    INSERT INTO public.platform_posts (id, post_id, social_account_id, platform, status, platform_post_id)
+    VALUES (gen_random_uuid(), p_mixed, acct_fb, 'facebook', 'failed', NULL),
+           (saved_result, p_mixed, acct_yt, 'youtube', 'success', 'fixturevid1');
+    INSERT INTO public.youtube_upload_sessions
+      (user_id, post_id, social_account_id, platform_post_id, media_file_id, media_size, total_bytes,
+       upload_body, upload_settings, content_fence, state, video_id)
+    VALUES (u_a, p_mixed, acct_yt, saved_result, m_original, 10, 10,
+            '{}'::jsonb, '{}'::jsonb, '{}'::jsonb, 'uploaded', 'fixturevid1');
+
+    v_result := public.request_post_retry_with_media(p_mixed, u_a, ARRAY[m_new], ARRAY[acct_fb,acct_yt]);
+    ASSERT v_result ->> 'status' = 'accepted' AND v_result -> 'account_ids' = to_jsonb(ARRAY[acct_fb]),
+      'replacement accepts only the eligible target of a mixed retry';
+    ASSERT (SELECT media_file_ids = ARRAY[m_new] AND status = 'pending' FROM public.posts WHERE id=p_mixed),
+      'mixed retry commits replacement media';
+    ASSERT (SELECT status = 'success' AND platform_post_id = 'fixturevid1' FROM public.platform_posts WHERE id=saved_result),
+      'mixed retry preserves the successful result';
+    ASSERT (SELECT state = 'uploaded' AND video_id = 'fixturevid1' AND media_file_id = m_original
+              FROM public.youtube_upload_sessions WHERE post_id=p_mixed AND social_account_id=acct_yt),
+      'mixed retry preserves the original YouTube receipt and media binding';
+
+    ASSERT NOT has_function_privilege('authenticated', 'public.request_post_retry_with_media(uuid,uuid,uuid[],uuid[])', 'EXECUTE')
+      AND NOT has_function_privilege('anon', 'public.request_post_retry_with_media(uuid,uuid,uuid[],uuid[])', 'EXECUTE')
+      AND has_function_privilege('service_role', 'public.request_post_retry_with_media(uuid,uuid,uuid[],uuid[])', 'EXECUTE'),
       'replacement accepts a service role caller only';
     v_result := public.request_post_retry_with_media(p_replace, u_a, ARRAY[m_foreign]);
     ASSERT v_result ->> 'reason' = 'invalid_media', 'foreign media is refused';

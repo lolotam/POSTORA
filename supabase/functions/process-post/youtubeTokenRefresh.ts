@@ -1,21 +1,10 @@
 /**
  * The YouTube access token, refreshed when it is about to expire.
  *
- * YouTube tokens live for an hour. A worker that sends an expired credential
- * gets a refusal from the provider that looks like a broken upload, and an
- * upload that is half written cannot be retried with a new credential: the
- * provider session belongs to the credential that opened it.
- *
- * So the token is refreshed BEFORE the provider is contacted, and the rule is
- * ONE rule, shared by the two paths that talk to YouTube:
- *
- *   * the publishing path, which opens the upload;
- *   * the continuation, which carries an upload on.
- *
- * A token that expires within half an hour is refreshed. A token that cannot
- * be refreshed is used as it is, and the caller decides what to do about it:
- * the publishing path warns, and the continuation refuses the upload, because
- * a provider that refused a credential says nothing about the video.
+ * YouTube access tokens expire. Publishing and continuation refresh before
+ * sending provider requests. The continuation leaves the session pending
+ * when it cannot obtain a usable credential, so a refresh failure does not
+ * become an upload outcome.
  *
  * Nothing here logs a token, and the refresh token is never sent anywhere but
  * to the provider's own token endpoint.
@@ -160,7 +149,7 @@ export async function refreshYoutubeAccessToken(args: {
     };
   }
 
-  let payload: { access_token?: unknown; expires_in?: unknown };
+  let payload: unknown;
   try {
     payload = await response.json();
   } catch (error) {
@@ -176,9 +165,13 @@ export async function refreshYoutubeAccessToken(args: {
     };
   }
 
-  const accessToken = typeof payload.access_token === "string" ? payload.access_token : null;
-  const expiresInSeconds = typeof payload.expires_in === "number" ? payload.expires_in : null;
-  if (!accessToken || !expiresInSeconds) {
+  const attributes = payload && typeof payload === "object"
+    ? payload as Record<string, unknown>
+    : {};
+  const accessToken = typeof attributes.access_token === "string" ? attributes.access_token : null;
+  const lifetime = typeof attributes.expires_in === "number" ? attributes.expires_in : 0;
+  const expiry = new Date(nowMs + lifetime * 1000);
+  if (!accessToken || lifetime <= 0 || !Number.isFinite(expiry.getTime()) || expiry.getTime() <= nowMs) {
     return {
       accessToken: account.accessToken,
       refreshed: false,
@@ -187,17 +180,29 @@ export async function refreshYoutubeAccessToken(args: {
     };
   }
 
-  const expiresAt = new Date(nowMs + expiresInSeconds * 1000).toISOString();
-  const { error } = await supabase
-    .from("social_accounts")
+  const expiresAt = expiry.toISOString();
+  let update = supabase.from("social_accounts")
     .update({ access_token: accessToken, token_expires_at: expiresAt })
-    .eq("id", account.id);
-  if (error) {
-    // The token was refreshed but not stored. It is still returned: the upload
-    // may go on with it, and the next worker refreshes again.
-    console.warn(
-      `[youtube] the refreshed token of account ${account.id} could not be stored: ${error.message}`,
-    );
+    .eq("id", account.id)
+    .eq("refresh_token", account.refreshToken);
+  update = account.accessToken === null
+    ? update.is("access_token", null)
+    : update.eq("access_token", account.accessToken);
+  update = account.tokenExpiresAt === null
+    ? update.is("token_expires_at", null)
+    : update.eq("token_expires_at", account.tokenExpiresAt);
+
+  const { data: stored, error } = await update.select("id").maybeSingle();
+  if (error || !stored) {
+    if (error) console.warn("[youtube] token check-and-update failed:", redactProviderText(error));
+    const { data: current } = await supabase.from("social_accounts")
+      .select("access_token, token_expires_at").eq("id", account.id).maybeSingle();
+    return {
+      accessToken: current?.access_token ?? null,
+      expiresAt: current?.token_expires_at ?? null,
+      refreshed: false,
+      reason: "refresh_not_stored",
+    };
   }
 
   return { accessToken, refreshed: true, expiresAt, reason: null };

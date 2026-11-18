@@ -35,6 +35,7 @@ export interface OwnedVideoFile {
   filePath: string;
   storageBucket: string;
   mimeType: string | null;
+  fileSize?: number | null;
   currentObjectVersion: number | null;
 }
 
@@ -125,6 +126,7 @@ export async function createOwnedVideoSource(args: {
     return await createVideoByteSource({
       url,
       mimeType: file.mimeType,
+      declaredSize: file.fileSize,
       approvedHosts: mediaHosts,
       ...(args.fetchImpl ? { fetchImpl: args.fetchImpl } : {}),
       ...(args.timeoutMs !== undefined ? { timeoutMs: args.timeoutMs } : {}),

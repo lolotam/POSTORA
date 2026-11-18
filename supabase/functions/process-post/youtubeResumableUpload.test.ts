@@ -167,6 +167,7 @@ async function run(
   effectAuthority: () => Promise<{ authorized: boolean; reason: string | null }> = () =>
     Promise.resolve({ authorized: true, reason: null }),
   deadlineMs = Date.now() + 120_000,
+  now = Date.now,
 ): Promise<{ outcome: ResumableUploadOutcome; store: ReturnType<typeof createInMemoryYoutubeUploadSessionStore> }> {
   // The session is put in the store the way the caller puts it there:
   // admitted, claimed, and given its provider uri when it already has one.
@@ -219,7 +220,7 @@ async function run(
     totalBytes: TOTAL_BYTES,
     mimeType: "video/mp4",
     deadlineMs,
-    now: () => Date.now(),
+    now,
     sleep: async () => {},
     uploadUrl: `${SESSION_HOST}/upload/youtube/v3/videos?uploadType=resumable&part=snippet,status`,
     uploadBody: { snippet: { title: "A video" } },
@@ -645,16 +646,74 @@ Deno.test("the provider status is asked for when a write does not move the offse
   assert(probes.length >= 1);
 });
 
-Deno.test("a transport failure returns a stable reason and a redacted diagnostic", async () => {
+Deno.test("a failed session request is unsent and its diagnostic is redacted", async () => {
   const provider: FakeProvider = {
     fetchImpl: () => Promise.reject(new Error(`Transport failed for ${SESSION_URI}`)),
     requests: [],
   };
   const { outcome } = await run(provider, record());
-  assert(outcome.kind === "failed");
-  assertEquals(outcome.reason, YOUTUBE_UPLOAD_REASON.unknown);
+  assert(outcome.kind === "unsent");
+  assertEquals(outcome.reason, YOUTUBE_UPLOAD_REASON.unsent);
   assertStringIncludes(outcome.detail ?? "", "[redacted-url]");
   assert(!outcome.detail?.includes(SESSION_URI));
+});
+
+Deno.test("a dropped successful receipt body is recovered by a probe", async () => {
+  const offset = TOTAL_BYTES - YOUTUBE_RESUMABLE_CHUNK_BYTES;
+  const finalReceipt = { status: 200, body: JSON.stringify({ id: VIDEO_ID }) };
+  const provider = fakeProvider([acceptBytesThrough(offset), finalReceipt]);
+  const scripted = provider.fetchImpl;
+  provider.fetchImpl = (url, init) => {
+    const range = new Headers(init?.headers).get("content-range");
+    if (range?.startsWith(`bytes ${offset}-`)) {
+      const droppedBody = new ReadableStream({
+        start(controller) { controller.error(new Error("receipt body disconnected")); },
+      });
+      return Promise.resolve(new Response(droppedBody, { status: 200 }));
+    }
+    return scripted(url, init);
+  };
+  const { outcome } = await run(provider, record({ sessionUri: SESSION_URI, confirmedBytes: offset, bytesSent: offset }));
+  assertEquals(outcome, { kind: "completed", videoId: VIDEO_ID });
+});
+
+Deno.test("no chunk is sent after the presend checkpoint exhausts the deadline", async () => {
+  const provider = fakeProvider([{ status: 200, headers: { Location: SESSION_URI } }]);
+  const store = createInMemoryYoutubeUploadSessionStore();
+  let time = Date.now();
+  const deadline = time + 20_000;
+  const original = store.checkpoint;
+  store.checkpoint = async (args) => {
+    const stored = await original(args);
+    if (args.bytesSent > 0 && !args.nextCheckAt) time = deadline;
+    return stored;
+  };
+  let closed = false;
+  const source = { ...memorySource(TOTAL_BYTES), close: () => { closed = true; } };
+  const { outcome } = await run(provider, record(), source, store, undefined, deadline, () => time);
+  assertEquals(outcome.kind, "resumable");
+  assertEquals(provider.requests.map((request) => request.method), ["POST"]);
+  assertEquals(closed, true);
+});
+
+Deno.test("a successful progress response can require a pause before the next chunk", async () => {
+  const provider = fakeProvider([
+    { status: 200, headers: { Location: SESSION_URI } },
+    { status: 308, headers: { Range: "bytes=0-8388607", "Retry-After": "120" } },
+  ]);
+  const { outcome, store } = await run(provider, record());
+  assertEquals(outcome.kind, "resumable");
+  assertEquals(provider.requests.length, 2);
+  assertEquals([...store.sessions.values()][0].confirmedBytes, YOUTUBE_RESUMABLE_CHUNK_BYTES);
+});
+
+Deno.test("quota exhaustion does not suggest reconnecting the account", async () => {
+  const provider = fakeProvider([{ status: 403, body: JSON.stringify({
+    error: { errors: [{ reason: "quotaExceeded" }] },
+  }) }]);
+  const { outcome } = await run(provider, record());
+  assert(outcome.kind === "failed");
+  assertEquals(outcome.reason, YOUTUBE_UPLOAD_REASON.quota_exceeded);
 });
 
 Deno.test("durable state write refused means the worker abandoned its work", async () => {

@@ -62,7 +62,7 @@
  * followed with the OAuth token attached.
  */
 
-import { uploadFailureMessage } from "./youtubePublisher.ts";
+import { uploadFailureMessage, youtubeUploadErrorReason } from "./youtubePublisher.ts";
 import type { YoutubeUploadRequestSettings } from "./youtubePublisher.ts";
 import {
   redactProviderText,
@@ -137,7 +137,7 @@ export type ProviderUploadStatus =
   /** The provider created the video. The id is the receipt. */
   | { kind: "accepted"; videoId: string }
   /** The upload continues. The provider holds exactly `confirmedBytes` bytes. */
-  | { kind: "resumable"; confirmedBytes: number }
+  | { kind: "resumable"; confirmedBytes: number; retryAfterMs?: number }
   /** The session is gone. Whether a video exists is unknown. */
   | { kind: "expired" }
   /** The provider refused the request outright. Nothing was stored. */
@@ -622,6 +622,7 @@ export interface UploadByteSource {
    * slow media host cannot hold a worker past its deadline.
    */
   read(start: number, end: number, timeoutMs?: number): Promise<ArrayBuffer>;
+  close?(): void;
 }
 
 /** Everything the upload needs from the outside world. */
@@ -880,7 +881,7 @@ export function classifyProviderStatus(input: ProviderStatusInput): ProviderUplo
         retryable: false,
       };
     }
-    return { kind: "resumable", confirmedBytes: confirmed };
+    return { kind: "resumable", confirmedBytes: confirmed, ...(retryAfterMs !== undefined ? { retryAfterMs } : {}) };
   }
 
   if (status === 404) {
@@ -906,18 +907,6 @@ export function classifyProviderStatus(input: ProviderStatusInput): ProviderUplo
 }
 
 /**
- * Reads the provider's answer body without letting a broken body hide the
- * status code.
- */
-async function readBodyText(response: Response): Promise<string> {
-  try {
-    return await response.text();
-  } catch {
-    return "";
-  }
-}
-
-/**
  * The provider's answer to one write or one status probe, reduced to the
  * protocol's vocabulary.
  */
@@ -927,7 +916,14 @@ async function readProviderStatus(
   previousConfirmedBytes: number,
   submittedBytes: number,
 ): Promise<ProviderUploadStatus> {
-  const bodyText = response.status >= 200 && response.status < 300 ? await readBodyText(response) : "";
+  let bodyText = "";
+  if (response.ok) {
+    try {
+      bodyText = await response.text();
+    } catch {
+      return ambiguousWrite("The upload receipt connection ended before the body was read.");
+    }
+  }
   const answer = classifyProviderStatus({
     status: response.status,
     rangeHeader: response.headers.get("range"),
@@ -991,7 +987,7 @@ interface UploadContext {
  * no third thing: an answer that says nothing usable ends the upload.
  */
 type AnswerResolution =
-  | { kind: "offset"; confirmedBytes: number; videoMayExist: boolean }
+  | { kind: "offset"; confirmedBytes: number; videoMayExist: boolean; retryAfterMs?: number }
   | { kind: "outcome"; outcome: ResumableUploadOutcome };
 
 /**
@@ -1145,8 +1141,8 @@ async function resolveProviderAnswer(
     return { kind: "outcome", outcome };
   }
 
-  if (status.kind === "resumable" && status.confirmedBytes > offset) {
-    return { kind: "offset", confirmedBytes: status.confirmedBytes, videoMayExist };
+  if (status.kind === "resumable" && (status.confirmedBytes > offset || status.retryAfterMs !== undefined)) {
+    return { kind: "offset", confirmedBytes: status.confirmedBytes, videoMayExist, retryAfterMs: status.retryAfterMs };
   }
 
   // The answer either left the offset where it was or did not answer at all.
@@ -1193,7 +1189,7 @@ async function resolveProviderAnswer(
   }
 
   if (probed.kind === "resumable") {
-    return { kind: "offset", confirmedBytes: probed.confirmedBytes, videoMayExist };
+    return { kind: "offset", confirmedBytes: probed.confirmedBytes, videoMayExist, retryAfterMs: probed.retryAfterMs };
   }
 
   if (probed.retryable) {
@@ -1256,6 +1252,14 @@ export function continuationDelayMs(attempt: number, retryAfterMs?: number): num
  * video.
  */
 export async function runResumableVideoUpload(deps: ResumableUploadDeps): Promise<ResumableUploadOutcome> {
+  try {
+    return await uploadWithSession(deps);
+  } finally {
+    deps.source?.close?.();
+  }
+}
+
+async function uploadWithSession(deps: ResumableUploadDeps): Promise<ResumableUploadOutcome> {
   const { store, session, leaseToken, source, totalBytes, mimeType, deadlineMs, now, sleep } = deps;
   const allowedHosts = deps.allowedHosts ?? YOUTUBE_PROVIDER_UPLOAD_HOSTS;
   const chunkBytes = deps.chunkBytes ?? YOUTUBE_RESUMABLE_CHUNK_BYTES;
@@ -1380,6 +1384,10 @@ export async function runResumableVideoUpload(deps: ResumableUploadDeps): Promis
       // The provider confirmed an offset that may sit inside a chunk that was
       // written before. The next block starts exactly there.
       confirmedBytes = probed.confirmedBytes;
+      if (probed.retryAfterMs !== undefined) {
+        const delay = continuationDelayMs(session.continuationCount + 1, probed.retryAfterMs);
+        return await scheduleAnotherLook(inherited, confirmedBytes, bytesSent, videoMayExist, now() + delay);
+      }
     } else if (probed.retryable) {
       // The provider is not talking. The session is still good, so it is
       // asked again later instead of being thrown away.
@@ -1457,6 +1465,13 @@ export async function runResumableVideoUpload(deps: ResumableUploadDeps): Promis
     // that reach the provider for a post the customer cancelled are bytes
     // that have to be accounted for.
     const bytes = await readChunkBytes(source, chunk, deadlineMs - now());
+    if (bytes === "range_required") {
+      return await giveUp(context, { state: "reconcile" }, {
+        kind: "reconcile",
+        reason: YOUTUBE_UPLOAD_REASON.media_range_required,
+        detail: "The media host could not reach the resume offset within the read budget.",
+      });
+    }
     if (bytes === null) {
       const delay = continuationDelayMs(session.continuationCount + 1);
       return await scheduleAnotherLook(context, offset, bytesSent, videoMayExist, now() + delay);
@@ -1501,6 +1516,10 @@ export async function runResumableVideoUpload(deps: ResumableUploadDeps): Promis
 
     // The persisted uncertainty remains sticky once a final write has started.
     videoMayExist = resolution.videoMayExist;
+    if (resolution.retryAfterMs !== undefined) {
+      const delay = continuationDelayMs(session.continuationCount + 1, resolution.retryAfterMs);
+      return await scheduleAnotherLook(context, resolution.confirmedBytes, bytesSent, videoMayExist, now() + delay);
+    }
     if (resolution.confirmedBytes > offset) {
       stalls = 0;
     } else {
@@ -1541,7 +1560,7 @@ export async function runResumableVideoUpload(deps: ResumableUploadDeps): Promis
   if (final.kind === "resumable" || (final.kind === "unknown" && final.retryable)) {
     const delay = continuationDelayMs(
       session.continuationCount + 1,
-      final.kind === "unknown" ? final.retryAfterMs : undefined,
+      final.retryAfterMs,
     );
     return await scheduleAnotherLook(context, totalBytes, bytesSent, videoMayExist, now() + delay);
   }
@@ -1608,6 +1627,13 @@ async function openProviderSession(
   mimeType: string,
   allowedHosts: readonly string[],
 ): Promise<{ kind: "sessionUri"; sessionUri: string } | { kind: "outcome"; outcome: ResumableUploadOutcome }> {
+  const remainingMs = deps.deadlineMs - deps.now();
+  if (remainingMs <= 0) {
+    const delay = continuationDelayMs(deps.session.continuationCount + 1);
+    const context = buildContext(deps, deps.session.id, "", totalBytes, mimeType, deps.deadlineMs, deps.now, deps.sleep);
+    const outcome = await scheduleAnotherLook(context, 0, 0, false, deps.now() + delay);
+    return { kind: "outcome", outcome };
+  }
   let sessionUri: string;
   try {
     sessionUri = await createYoutubeResumableSession({
@@ -1618,6 +1644,7 @@ async function openProviderSession(
       totalBytes,
       mimeType,
       allowedHosts,
+      timeoutMs: Math.min(YOUTUBE_PROVIDER_REQUEST_TIMEOUT_MS, remainingMs),
     });
   } catch (error) {
     const reason = redactProviderText(error);
@@ -1629,7 +1656,7 @@ async function openProviderSession(
         kind: "outcome",
         outcome: {
           kind: "failed",
-          reason: providerRefusalReason(error.status),
+          reason: error.reason,
           detail: `The provider refused the session request: ${reason}`,
           retryable: false,
         },
@@ -1638,10 +1665,9 @@ async function openProviderSession(
     return {
       kind: "outcome",
       outcome: {
-        kind: "failed",
-        reason: YOUTUBE_UPLOAD_REASON.unknown,
+        kind: "unsent",
+        reason: YOUTUBE_UPLOAD_REASON.unsent,
         detail: `The provider did not answer the session request: ${reason}`,
-        retryable: true,
       },
     };
   }
@@ -1673,12 +1699,15 @@ async function readChunkBytes(
   source: UploadByteSource,
   chunk: UploadChunk,
   timeoutMs: number,
-): Promise<ArrayBuffer | null> {
+): Promise<ArrayBuffer | null | "range_required"> {
   let bytes: ArrayBuffer;
   try {
     bytes = await source.read(chunk.start, chunk.end, Math.max(1, timeoutMs));
-  } catch {
-    return null;
+  } catch (error) {
+    return error && typeof error === "object" && "reason" in error &&
+        error.reason === YOUTUBE_UPLOAD_REASON.media_range_required
+      ? "range_required"
+      : null;
   }
   if (bytes.byteLength !== chunk.size) {
     return null;
@@ -1733,7 +1762,11 @@ async function writeChunk(
     return ambiguousWrite("The upload chunk does not fit the video.");
   }
 
-  const timeoutMs = Math.max(1, Math.min(YOUTUBE_PROVIDER_REQUEST_TIMEOUT_MS, context.deadlineMs - context.now()));
+  const remainingMs = context.deadlineMs - context.now();
+  if (remainingMs <= 0) {
+    return ambiguousWrite("The worker deadline passed before the chunk could start.");
+  }
+  const timeoutMs = Math.min(YOUTUBE_PROVIDER_REQUEST_TIMEOUT_MS, remainingMs);
   let response: Response;
   try {
     response = await context.fetchImpl(context.sessionUri, {
@@ -1846,11 +1879,13 @@ function mimeTypeForProbe(): string {
  */
 export class YoutubeProviderRefusal extends Error {
   readonly status: number;
+  readonly reason: YoutubeUploadReason;
 
-  constructor(status: number, message: string) {
+  constructor(status: number, message: string, reason: YoutubeUploadReason) {
     super(message);
     this.name = "YoutubeProviderRefusal";
     this.status = status;
+    this.reason = reason;
   }
 }
 
@@ -1920,6 +1955,9 @@ export async function createYoutubeResumableSession(args: {
     throw new YoutubeProviderRefusal(
       response.status,
       redactProviderText(uploadFailureMessage(response.status, errorData, response.statusText)),
+      response.status === 403 && youtubeUploadErrorReason(errorData) === "quotaExceeded"
+        ? YOUTUBE_UPLOAD_REASON.quota_exceeded
+        : providerRefusalReason(response.status),
     );
   }
 

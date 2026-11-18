@@ -261,6 +261,16 @@ Deno.test("a timed-out streaming read cancels the stream and can reopen", async 
   assertEquals(new Uint8Array(await source.read(0, 9)), fileBytes(10));
 });
 
+Deno.test("a full seek budget exhausted on a non-range source requires a different source", async () => {
+  const fetchImpl: typeof fetch = () =>
+    Promise.resolve(new Response(new ReadableStream<Uint8Array>(), { headers: { "Content-Length": "1024" } }));
+  const source = await createVideoByteSource({
+    url: `${HOST}/video.mp4`, fetchImpl, approvedHosts: APPROVED, timeoutMs: 10,
+  });
+  const error = await assertRejects(() => source.read(10, 19), VideoSourceError);
+  assertEquals(error.reason, YOUTUBE_UPLOAD_REASON.media_range_required);
+});
+
 Deno.test("uses the declared object size only when a streaming response omits its size", async () => {
   const fetchImpl: typeof fetch = () => Promise.resolve(new Response(blockBody(fileBytes(33), [7, 13])));
   const source = await createVideoByteSource({

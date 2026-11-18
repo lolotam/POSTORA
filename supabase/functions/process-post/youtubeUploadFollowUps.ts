@@ -93,6 +93,8 @@ async function setYoutubeThumbnail(
   }
   try {
     const { blob, mimeType } = await deps.downloadThumbnail(thumbnailUrl, budgetMs);
+    const uploadBudgetMs = deps.budgetMs();
+    if (uploadBudgetMs <= 0) return;
     const response = await deps.fetchImpl(`${THUMBNAIL_ENDPOINT}?videoId=${videoId}`, {
       method: "POST",
       headers: {
@@ -100,7 +102,7 @@ async function setYoutubeThumbnail(
         "Content-Type": mimeType,
       },
       body: blob,
-      signal: AbortSignal.timeout(budgetMs),
+      signal: AbortSignal.timeout(uploadBudgetMs),
     });
     if (response.ok) {
       console.log("YouTube thumbnail set successfully");
