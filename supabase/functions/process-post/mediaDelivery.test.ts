@@ -185,6 +185,30 @@ Deno.test("an object outside the owner's own prefix is not signed", async () => 
   assertEquals(signed.buckets, []);
 });
 
+// A path that starts with the owner's prefix but climbs out of it names another
+// tenant's object once the storage layer resolves it.
+for (
+  const path of [
+    `${OWNER}/../victim/video.mp4`,
+    `${OWNER}/./video.mp4`,
+    `${OWNER}//video.mp4`,
+    `${OWNER}/a/../../victim/video.mp4`,
+    `${OWNER}/..%2Fvictim/video.mp4`,
+    `${OWNER}/%2e%2e/victim/video.mp4`,
+    `${OWNER}\\..\\victim\\video.mp4`,
+  ]
+) {
+  Deno.test(`an owner-prefixed path with traversal is not signed: ${path}`, async () => {
+    const { client, signed } = storageClient();
+    const error = await assertRejects(
+      () => resolveMediaUrl(client as never, mediaFile({ file_path: path }), {}, OPTIONS),
+      MediaDeliveryRefusedError,
+    );
+    assertEquals(error.reason, "not_owned");
+    assertEquals(signed.buckets, []);
+  });
+}
+
 Deno.test("a delivery URL that is not HTTPS is refused", async () => {
   const { client } = storageClient();
   const error = await assertRejects(

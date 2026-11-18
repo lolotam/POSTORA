@@ -200,7 +200,13 @@ function isAllowedBucket(bucket: string): boolean {
 
 /** Whether a storage path is the owner's own object. */
 function isOwnedPath(path: string, prefix: string | null | undefined): boolean {
-  return typeof prefix === "string" && prefix.length > 0 && path.startsWith(`${prefix}/`);
+  if (typeof prefix !== "string" || prefix.length === 0 || !path.startsWith(`${prefix}/`)) return false;
+  // `OWNER/../VICTIM/x` starts with the owner's prefix but names another
+  // tenant's object once the storage layer resolves it. Dot segments, empty
+  // segments, backslashes and encoded separators are never part of an object
+  // key Postora writes.
+  if (/[\\\u0000-\u001f]|%2e|%2f|%5c/i.test(path)) return false;
+  return path.split("/").every((segment) => segment !== "" && segment !== "." && segment !== "..");
 }
 
 /**
