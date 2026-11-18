@@ -6,6 +6,8 @@ import {
 
 import {
   buildYoutubeUploadRequest,
+  buildYoutubeUploadUrl,
+  youtubeUploadSettingsFromBody,
   type YoutubeUploadRequest,
 } from "./youtubePublisher.ts";
 import { YOUTUBE_DEFAULT_CATEGORY_ID } from "../_shared/youtubePublishOptions.ts";
@@ -157,4 +159,67 @@ Deno.test("upload request keeps the title and description within the provider li
   assertEquals(String(snippetOf(request).title).length, 100);
   assertEquals(String(snippetOf(request).description).length, 5000);
   assert(Array.isArray(snippetOf(request).tags));
+});
+
+// ───────────────────────────────────────────────────────────────────────────
+// The settings of a request that is made later
+//
+// A worker that opens the provider session later has to make the SAME request
+// as the one that was approved: the same parts, and the same answer to the
+// subscriber notification. A request that notifies when the approved one did
+// not tells the channel's subscribers about a video the customer wanted quiet.
+// ───────────────────────────────────────────────────────────────────────────
+
+Deno.test("the request url keeps the parts the request writes", () => {
+  const url = buildYoutubeUploadUrl({ part: "snippet,status,recordingDetails", notifySubscribers: true });
+  assertStringIncludes(url, "part=snippet,status,recordingDetails");
+});
+
+Deno.test("the request url says when the subscribers are not notified", () => {
+  const url = buildYoutubeUploadUrl({ part: "snippet,status", notifySubscribers: false });
+  assertStringIncludes(url, "notifySubscribers=false");
+});
+
+Deno.test("the request url leaves the notification out when the subscribers are notified", () => {
+  const url = buildYoutubeUploadUrl({ part: "snippet,status", notifySubscribers: true });
+  assertEquals(url.includes("notifySubscribers"), false);
+});
+
+Deno.test("the request the post builds carries its own settings", () => {
+  const request = buildYoutubeUploadRequest({
+    metadata: { youtube_notify_subscribers: false },
+    ...baseInput,
+  });
+
+  // The url and the settings are the same thing: a request that is rebuilt
+  // from the settings cannot drift away from the one that was approved.
+  assertStringIncludes(request.url, `part=${request.part}`);
+  assertStringIncludes(request.url, "notifySubscribers=false");
+  assertEquals(request.notifySubscribers, false);
+});
+
+Deno.test("a request that notifies says so in its url", () => {
+  const request = buildYoutubeUploadRequest({ metadata: {}, ...baseInput });
+
+  assertEquals(request.notifySubscribers, true);
+  assertEquals(request.url.includes("notifySubscribers"), false);
+});
+
+Deno.test("the fallback settings name the fields the body carries", () => {
+  const settings = youtubeUploadSettingsFromBody({
+    snippet: { title: "A video" },
+    status: { privacyStatus: "private" },
+  });
+
+  assertEquals(settings.part, "snippet,status");
+});
+
+Deno.test("the fallback settings notify the way the provider does by default", () => {
+  const settings = youtubeUploadSettingsFromBody({ snippet: { title: "A video" } });
+  assertEquals(settings.notifySubscribers, true);
+});
+
+Deno.test("the fallback settings of an empty body still name a writable part", () => {
+  const settings = youtubeUploadSettingsFromBody({});
+  assertEquals(settings.part, "snippet,status");
 });

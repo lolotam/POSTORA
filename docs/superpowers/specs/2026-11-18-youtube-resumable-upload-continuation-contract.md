@@ -1075,6 +1075,155 @@ that had to be watched again could not be told apart from one that was done.
 
 ---
 
+## 42. The provider request is recreated exactly
+
+**Was:** the settings of the provider request were rebuilt from the stored body
+when a later worker opened the provider session: the parts were the names of the
+fields the body carried, and the subscriber notification was always the
+provider's default. A customer who had turned the notification off was told
+about their video by a worker that opened the session later, and the request
+that was approved was not the request that was made.
+
+**Is:** the settings are stored with the session, and they are part of the
+request that is made.
+
+* `admit_youtube_upload(..., p_upload_settings)` keeps the settings the caller
+  named: the `part` values the request writes, and whether the channel's
+  subscribers are told about the video.
+* A caller that names none gets the request its body describes — the parts are
+  the names of the fields the body carries, in one order, and the notification
+  is the provider's default. The derivation lives in the database, so the
+  settings a session carries are the settings the worker will use.
+* The settings travel in the session payload, and the safe restart refreshes
+  them with the ones of the new attempt.
+* `buildYoutubeUploadUrl` is the only place the URL is built, so the request
+  the publisher makes and the request a later worker makes cannot drift apart.
+
+**Proved by:** SQL suite Y41, and the publisher's and the session store's tests.
+
+---
+
+## 43. The receipt is recovered before the media is opened
+
+**Was:** the continuation opened the media before it asked the provider what it
+held. A media host that answered with a 500 ended the attempt before the
+provider was asked, so a receipt that YouTube could still return was never
+read: the attempt cap ran out with an uncertain result on the customer's
+channel.
+
+**Is:** the provider is asked first, and the file is opened only when it says it
+needs more bytes.
+
+* The continuation hands the runner a **deferred** source: the media is opened
+  on the first byte that is read, not before.
+* The runner probes an inherited session before any data write, so a session
+  the provider already finished is settled without the media ever being touched.
+* The media check and the write-authority check still run **before** the upload,
+  so a file that is gone, replaced or still being scanned is refused before
+  the provider is asked, and a write that the live state does not allow never
+  happens.
+* A media host that cannot answer can therefore no longer keep a receipt from
+  being recovered.
+
+**Proved by:** the continuation's tests.
+
+---
+
+## 44. An admitted row belongs to the upload recovery
+
+**Was:** a settlement whose answer was lost, or that was refused because the
+lease was gone, threw an error that did not say the row had been written by
+this worker. The outer loop then recorded a **second** result for the same
+destination: beside the pending row the admission made, or beside a success
+that had already committed. The row id was not carried either, so the scope of
+the attempt did not name the destination and the fanout could not close.
+
+**Is:** the row is owned by the upload recovery, and the error says so.
+
+* The settlement never throws. It answers `{confirmed, reason}`, and the caller
+  acts on the answer.
+* A settlement that was **confirmed** is the final word: the row is a failure
+  and the customer is told what it was.
+* A settlement that was **not confirmed** is a pending durable handoff: the row
+  is still open, the receipt is already stored, and the error says the recovery
+  will settle it instead of pretending the failure was recorded.
+* The error carries `selfWroteRows` and the row id, so the generic writer does
+  not write a second row and the scope of the attempt names the destination.
+* The failure never becomes a *second* row beside the admitted one: the same
+  row is settled.
+
+**Proved by:** the outcome contract's tests, and the continuation's tests.
+
+---
+
+## 45. The follow-ups are bounded and guarded
+
+**Was:** the thumbnail and the first comment were written without a deadline
+and without a check of the live state. A host that accepted the connection and
+then stopped sending held the worker, and the outcome was never written at all;
+and a post that was edited or cancelled while the video was being written still
+got a thumbnail and a comment.
+
+**Is:** both follow-ups are best-effort requests inside the worker's budget.
+
+* Every request carries a deadline that covers the headers **and** the body,
+  and the thumbnail is read with the same bound.
+* The budget is asked for **every** follow-up, so the second one is skipped when
+  the first one used the time up.
+* The live state is asked about **before** the follow-ups are written. The
+  receipt does not depend on that answer: the video exists, so the row is
+  settled either way.
+* The first comment is posted **once**. It is never retried: a first comment
+  posted twice is a duplicate on the customer's channel, and a timeout says
+  nothing about whether the first one arrived.
+* The follow-ups belong to the run that **created** the video. A run that
+  inherited the receipt never repeats them.
+
+**Proved by:** the follow-ups' tests, and the continuation's tests.
+
+---
+
+## 46. A credential that is not accepted asks for a reconnect
+
+**Was:** a handshake that was refused with 401 or 403 became a refusal of the
+upload, and the customer was told that the upload had been refused. The
+customer had to work out that the credential was the problem, and a retry with
+the same credential failed the same way.
+
+**Is:** a credential the provider no longer accepts is its own outcome.
+
+* The provider module raises a typed refusal with the status it was given.
+* 401 and 403 become the reason `account_unusable`, whose public message asks
+  the customer to reconnect the account and try again.
+* Every other refusal stays a plain refusal: YouTube refused the upload, and
+  that is a proof that nothing was published.
+* The message never carries the provider's own words.
+
+**Proved by:** the runner's tests, and the outcome contract's tests.
+
+---
+
+## 47. The marker says the outcome is not a proof
+
+**Was:** the native path settled a failure without the marker that says the
+provider may already hold a video. History and the API retry selector read that
+marker, so an outcome that was not a proof was offered as a retry.
+
+**Is:** one rule decides what is a proof, and it is in one place.
+
+* An outcome is uncertain when the provider may hold a video nobody has a
+  receipt for: a reconcile, or an answer that could not be classified.
+* The native settlement carries `publish_outcome: "uncertain"` for exactly those
+  outcomes, and no marker for a proven failure.
+* The database adds the marker on its own rule as well, and the union is
+  uncertain: a settlement that dropped the marker would offer a blind retry.
+* A proven failure on a sibling account carries no marker, so one account's
+  refusal does not take the whole post away from the retry button.
+
+**Proved by:** the outcome contract's tests, and SQL suites Y22 and Y25.
+
+---
+
 ## The bounded driver of the three repairs
 
 `reconcile_youtube_upload_fanouts(p_limit)` does what no worker can:

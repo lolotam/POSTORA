@@ -1,5 +1,5 @@
 import { checkpointThreadsImage, publishThreadsContainer, threadsParentContainer, ThreadsCheckpointUnavailable, ThreadsCheckpointCanceled, type ThreadsImageCheckpoint } from "./threadsPublish.ts";
-import { buildYoutubeUploadRequest } from "./youtubePublisher.ts";
+import { buildYoutubeUploadRequest, buildYoutubeUploadUrl } from "./youtubePublisher.ts";
 import { hashRequest } from "../_shared/partnerApiIdempotency.ts";
 /**
  * ============================================================================
@@ -181,6 +181,17 @@ import {
   type ContinuationResult,
   type YoutubeContinuationPorts,
 } from "./youtubeUploadContinuation.ts";
+import {
+  uploadOwnedFailure,
+  youtubeUploadFailureResponseData,
+  youtubeUploadOutcomeMessage,
+  youtubeUploadOutcomeReason,
+  youtubeUploadUnconfirmedMessage,
+} from "./youtubeUploadOutcome.ts";
+import {
+  runYoutubeFollowUps,
+  type YoutubeFollowUpDeps,
+} from "./youtubeUploadFollowUps.ts";
 import {
   dropRecordedStory,
   readUnrecordedStory,
@@ -996,13 +1007,18 @@ async function generateBlueskyDPoPProof(
 
 /**
  * Download media from URL and return as Blob with metadata
+ *
+ * The timeout bounds the WHOLE read: the headers AND the body. A media host
+ * that accepts the connection and then stops sending would otherwise hold the
+ * worker for as long as the provider is willing to wait, and the worker is the
+ * only thing that may settle the outcome.
  */
-async function downloadMediaAsBlob(url: string): Promise<{
+async function downloadMediaAsBlob(url: string, timeoutMs?: number): Promise<{
   blob: Blob;
   mimeType: string;
   size: number;
 }> {
-  const response = await fetch(url);
+  const response = await fetch(url, timeoutMs ? { signal: AbortSignal.timeout(timeoutMs) } : undefined);
   if (!response.ok) {
     throw new Error(`Failed to download media (${response.status})`);
   }
@@ -3456,6 +3472,16 @@ Deno.serve(async (req) => {
           if (settled.error || !settled.id) fanoutWriteFailed = true;
           if (settled.error) {
             console.error(`Failed to settle the failure row for ${account.platform}:`, settled.error);
+          }
+        } else {
+          // The row the handler owns is part of the scope of this attempt, even
+          // when the handler did not write the outcome itself: the closure
+          // reads the scope, and a scope that names a destination without a
+          // result row is refused. The fanout could then never close, and the
+          // post would wait for ever.
+          const ownedRowId = (error as { platformPostId?: string | null })?.platformPostId ?? null;
+          if (ownedRowId) {
+            exactPlatformPostIds.push(ownedRowId);
           }
         }
 
@@ -9504,88 +9530,6 @@ async function approvedMediaHostSet(supabase: SupabaseClient): Promise<Set<strin
 }
 
 /**
- * The things that happen AFTER the video exists: the thumbnail and the first
- * comment.
- *
- * They belong to the run that CREATED the video. Two runs can reach a video:
- * the one that uploaded it, and the one that inherited its receipt after an
- * interruption. Only the first one does the follow-ups, because a first
- * comment posted twice is a duplicate on the customer's channel.
- *
- * Neither follow-up is allowed to fail the publish. The video is already
- * live, and the public row has to be settled either way, so a failure is
- * logged and the publish carries on.
- */
-async function runYouTubeFollowUps(args: {
-  videoId: string;
-  accessToken: string;
-  thumbnailUrl: string | null;
-  firstComment: string | null;
-}): Promise<void> {
-  const { videoId, accessToken, thumbnailUrl, firstComment } = args;
-
-  if (thumbnailUrl) {
-    try {
-      const { blob: thumbBlob, mimeType: thumbMimeType } = await downloadMediaAsBlob(thumbnailUrl);
-
-      const thumbUploadResponse = await fetch(
-        `https://www.googleapis.com/upload/youtube/v3/thumbnails/set?videoId=${videoId}`,
-        {
-          method: "POST",
-          headers: {
-            Authorization: `Bearer ${accessToken}`,
-            "Content-Type": thumbMimeType,
-          },
-          body: thumbBlob,
-        }
-      );
-
-      if (thumbUploadResponse.ok) {
-        console.log("YouTube thumbnail set successfully");
-      } else {
-        console.warn("Failed to set YouTube thumbnail:", redactProviderText(await thumbUploadResponse.text()));
-      }
-    } catch (thumbError) {
-      console.warn("Error setting YouTube thumbnail:", redactProviderText(thumbError));
-    }
-  }
-
-  if (firstComment) {
-    try {
-      console.log("Posting first comment to YouTube video...");
-      const commentResponse = await fetch(
-        "https://www.googleapis.com/youtube/v3/commentThreads?part=snippet",
-        {
-          method: "POST",
-          headers: {
-            Authorization: `Bearer ${accessToken}`,
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            snippet: {
-              videoId,
-              topLevelComment: {
-                snippet: {
-                  textOriginal: firstComment,
-                },
-              },
-            },
-          }),
-        }
-      );
-
-      if (commentResponse.ok) {
-        console.log("First comment posted successfully");
-      } else {
-        console.warn("Failed to post first comment:", redactProviderText(await commentResponse.text()));
-      }
-    } catch (commentError) {
-      console.warn("Error posting first comment:", redactProviderText(commentError));
-    }
-  }
-}
-
-/**
  * The message a YouTube upload refusal becomes.
  *
  * The wording matters as much as the branch: a refusal that needs a human
@@ -9628,26 +9572,6 @@ function youtubeUploadRefusalMessage(refusal: YoutubeUploadRefusal): string {
  * that says the upload never started and is safe to try again, one that says
  * it can continue where it stopped, and one that says a human has to look.
  */
-function youtubeUploadOutcomeMessage(outcome: ResumableUploadOutcome): string {
-  switch (outcome.kind) {
-    case "resumable":
-      return `${youtubeUploadPublicMessage(YOUTUBE_UPLOAD_REASON.resumable)} (${outcome.reason})`;
-    case "unsent":
-      return `${youtubeUploadPublicMessage(YOUTUBE_UPLOAD_REASON.unsent)} (${outcome.reason})`;
-    case "reconcile":
-      return `${youtubeUploadPublicMessage(YOUTUBE_UPLOAD_REASON.reconcile)} (${outcome.reason})`;
-    case "abandoned":
-      // The reason says why the write was not made: the live state refused it,
-      // or the lease was gone. It is the outcome's own reason, not a guess.
-      return `${youtubeUploadPublicMessage(outcome.reason)} (${outcome.reason})`;
-    case "failed":
-      return outcome.retryable
-        ? `${youtubeUploadPublicMessage(YOUTUBE_UPLOAD_REASON.rejected)} (${outcome.reason})`
-        : `${youtubeUploadPublicMessage(YOUTUBE_UPLOAD_REASON.rejected)} (${outcome.reason})`;
-    default:
-      return youtubeUploadPublicMessage(YOUTUBE_UPLOAD_REASON.completed);
-  }
-}
 
 /**
  * Admits the durable upload session and takes it for this worker.
@@ -9694,6 +9618,12 @@ async function openYoutubeUploadSession(
  * record the outcome, and the public row and the parent rollup are settled in
  * one transaction. A worker that lost its lease settles nothing, because the
  * worker that took over may already have written the video.
+ *
+ * The answer may also be LOST: the write may have committed and the reply
+ * never arrive. That is not a failure of the upload, it is a failure to PROVE
+ * it. So this never throws, and it says what happened: the row is left to the
+ * upload recovery either way, because the row exists and it belongs to this
+ * attempt.
  */
 async function settleYoutubeUpload(
   store: ReturnType<typeof createSupabaseYoutubeUploadSessionStore>,
@@ -9705,20 +9635,48 @@ async function settleYoutubeUpload(
     errorMessage?: string | null;
     responseData?: Record<string, unknown>;
   },
-): Promise<boolean> {
-  const settled = await store.settle({
-    sessionId,
-    leaseToken,
-    status: args.status,
-    videoId: args.videoId ?? null,
-    errorMessage: args.errorMessage ?? null,
-    responseData: args.responseData ?? {},
-  });
-  if (!settled.settled) {
-    console.error(`[youtube] the upload outcome was not recorded: ${settled.refused ?? "unknown"}`);
-    return false;
+): Promise<{ confirmed: boolean; reason: string | null }> {
+  try {
+    const settled = await store.settle({
+      sessionId,
+      leaseToken,
+      status: args.status,
+      videoId: args.videoId ?? null,
+      errorMessage: args.errorMessage ?? null,
+      responseData: args.responseData ?? {},
+    });
+    if (!settled.settled) {
+      console.error(`[youtube] the upload outcome was not recorded: ${settled.refused ?? "unknown"}`);
+      return { confirmed: false, reason: settled.refused ?? "unknown" };
+    }
+    return { confirmed: true, reason: null };
+  } catch (error) {
+    console.error("[youtube] the upload outcome was not confirmed:", redactProviderText(error));
+    return { confirmed: false, reason: "answer_lost" };
   }
-  return true;
+}
+
+/**
+ * The boundary of the YouTube follow-ups.
+ *
+ * The thumbnail is read from the URL the customer gave, and the read is
+ * bounded by what is left of the worker: a host that accepts the connection
+ * and then stops sending must not hold the worker, because the worker is the
+ * only thing that may settle the outcome.
+ *
+ * The budget is asked for EVERY follow-up, not once for both of them, so the
+ * second one is skipped rather than started when the worker has already run
+ * out of time.
+ */
+function youtubeFollowUpDeps(): YoutubeFollowUpDeps {
+  return {
+    fetchImpl: fetch,
+    async downloadThumbnail(url, timeoutMs) {
+      const { blob, mimeType } = await downloadMediaAsBlob(url, timeoutMs);
+      return { blob, mimeType };
+    },
+    budgetMs: () => followUpTimeoutMs(WORKER_STARTED_AT_MS, Date.now()),
+  };
 }
 
 /**
@@ -9839,7 +9797,13 @@ function buildYoutubeContinuationPorts(
         deadlineMs,
         now: () => Date.now(),
         sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
-        uploadUrl: "https://www.googleapis.com/upload/youtube/v3/videos?uploadType=resumable&part=snippet,status",
+        uploadUrl: buildYoutubeUploadUrl(
+          // The settings the approved request was made with. A session that
+          // was admitted but never opened a provider session is opened with
+          // the SAME request: the same parts, and the same subscriber
+          // notification the customer chose.
+          record.uploadSettings,
+        ),
         // The video resource the publish sent, kept on the session. A session
         // that was admitted but never opened a provider session is opened
         // with the same resource, so the video is the one the customer asked
@@ -9882,12 +9846,15 @@ function buildYoutubeContinuationPorts(
       // The run that created the video does the follow-ups. A run that
       // inherited the receipt never reaches here, so a first comment is never
       // posted twice.
-      await runYouTubeFollowUps({
-        videoId: args.videoId,
-        accessToken: args.accessToken,
-        thumbnailUrl: args.post.thumbnailUrl,
-        firstComment: args.post.firstComment,
-      });
+      await runYoutubeFollowUps(
+        {
+          videoId: args.videoId,
+          accessToken: args.accessToken,
+          thumbnailUrl: args.post.thumbnailUrl,
+          firstComment: args.post.firstComment,
+        },
+        youtubeFollowUpDeps(),
+      );
     },
 
     async effectAuthority(args) {
@@ -10102,6 +10069,14 @@ async function postToYouTube(
       mediaSize: videoSize,
       totalBytes: videoSize,
       uploadBody: uploadRequest.body,
+      // The query settings of the request. They travel with the session, so a
+      // worker that opens the provider session later makes the SAME request:
+      // the same parts, and the same subscriber notification the customer
+      // chose.
+      uploadSettings: {
+        part: uploadRequest.part,
+        notifySubscribers: uploadRequest.notifySubscribers,
+      },
       userId: post.user_id,
       attemptStartedAt,
       targetAccountIds,
@@ -10171,16 +10146,30 @@ async function postToYouTube(
     // The upload ended for good.
     //
     // The public row is settled through the fenced settlement, because only
-    // the worker that still owns the upload may record the outcome. The error
-    // says the row was written, so the outer loop does not write a second one.
-    await settleYoutubeUpload(store, opened.record.id, leaseToken, {
+    // the worker that still owns the upload may record the outcome. A
+    // settlement that is refused, or whose answer was lost, leaves the row to
+    // the upload recovery: the row exists, it belongs to this attempt, and
+    // the generic writer must not record a second one beside it.
+    //
+    // The marker says the outcome is not a proof. History and the API retry
+    // selector read it, so a video the provider may already hold is never
+    // offered as a retry.
+    const settlement = await settleYoutubeUpload(store, opened.record.id, leaseToken, {
       status: "failed",
-      errorMessage: outcome.reason,
-      responseData: { youtube_upload_reason: outcome.reason },
+      errorMessage: youtubeUploadOutcomeReason(outcome),
+      responseData: youtubeUploadFailureResponseData(outcome),
     });
-    const failure = new Error(youtubeUploadOutcomeMessage(outcome)) as Error & { selfWroteRows?: boolean };
-    failure.selfWroteRows = true;
-    throw failure;
+    //
+    // A CONFIRMED settlement is the final word: the row is a failure and the
+    // customer is told what it was. An UNCONFIRMED one is a pending durable
+    // handoff: the row is still open, the upload recovery owns it, and the
+    // error says so instead of pretending the failure was recorded.
+    throw uploadOwnedFailure(
+      settlement.confirmed
+        ? youtubeUploadOutcomeMessage(outcome)
+        : youtubeUploadUnconfirmedMessage(outcome),
+      { platformPostId: pendingPlatformPostId },
+    );
   }
 
   const videoId = outcome.videoId;
@@ -10195,12 +10184,33 @@ async function postToYouTube(
   // on the customer's channel.
   // ─────────────────────────────────────────────────────────────────────
   if (!inheritedReceipt) {
-    await runYouTubeFollowUps({
-      videoId,
-      accessToken,
-      thumbnailUrl: thumbnailUrl ?? null,
-      firstComment: firstComment ?? null,
+    // The follow-ups are provider WRITES, so the live state is asked about
+    // first: the lease says this worker owns the upload, and it says nothing
+    // about the post, the target or the content being what they were. A post
+    // that was edited or cancelled while the video was being written is not
+    // given a thumbnail and a comment.
+    //
+    // The receipt does not depend on that answer. The video exists, so it is
+    // settled either way.
+    const followUpAuthority = await store.effectAuthority({
+      sessionId: uploadSessionId,
+      leaseToken,
     });
+    if (followUpAuthority.authorized) {
+      await runYoutubeFollowUps(
+        {
+          videoId,
+          accessToken,
+          thumbnailUrl: thumbnailUrl ?? null,
+          firstComment: firstComment ?? null,
+        },
+        youtubeFollowUpDeps(),
+      );
+    } else {
+      console.warn(
+        `YouTube follow-ups skipped: ${followUpAuthority.reason ?? "not authorized"}`,
+      );
+    }
   } else {
     if (thumbnailUrl) console.log("YouTube thumbnail skipped: the video was uploaded by an earlier attempt");
     if (firstComment) console.log("First comment skipped: the video was uploaded by an earlier attempt");
@@ -10212,7 +10222,7 @@ async function postToYouTube(
   // The receipt is stored and the public row is settled in one fenced step,
   // so the row and the receipt cannot disagree.
   // ─────────────────────────────────────────────────────────────────────
-  const settled = await settleYoutubeUpload(store, opened.record.id, leaseToken, {
+  const settlement = await settleYoutubeUpload(store, opened.record.id, leaseToken, {
     status: "success",
     videoId,
     responseData: {
@@ -10221,12 +10231,19 @@ async function postToYouTube(
       ...(uploadRequest.warnings.length > 0 ? { warnings: uploadRequest.warnings } : {}),
     },
   });
-  if (!settled) {
-    const failure = new Error(youtubeUploadPublicMessage(YOUTUBE_UPLOAD_REASON.lease_conflict)) as Error & {
-      selfWroteRows?: boolean;
-    };
-    failure.selfWroteRows = true;
-    throw failure;
+  if (!settlement.confirmed) {
+    // The outcome was not recorded, or its answer was lost. The row belongs to
+    // this attempt, so it is handed to the upload recovery with its id: the
+    // recovery settles it, and the generic writer does not write a second row
+    // beside it.
+    //
+    // The receipt is already stored, so the recovery finds the video instead
+    // of uploading it again, and the customer is never told that a retry is
+    // safe when it is not.
+    throw uploadOwnedFailure(youtubeUploadUnconfirmedMessage(outcome), {
+      platformPostId: pendingPlatformPostId,
+      videoId,
+    });
   }
 
   return {

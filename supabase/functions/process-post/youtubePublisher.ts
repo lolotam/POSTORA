@@ -206,17 +206,61 @@ export function buildYoutubeUploadRequest(
 
   const notifySubscribers = booleanOrDefault(metadata.youtube_notify_subscribers, true);
   const part = parts.join(",");
-  const url =
-    `${YOUTUBE_UPLOAD_ENDPOINT}?uploadType=resumable&part=${part}` +
-    (notifySubscribers ? "" : "&notifySubscribers=false");
 
   return {
-    url,
+    url: buildYoutubeUploadUrl({ part, notifySubscribers }),
     part,
     body,
     notifySubscribers,
     warnings: collectUnconfirmedWarnings(metadata),
   };
+}
+
+/**
+ * The query settings of the provider request.
+ *
+ * They are not part of the body, and they decide what the request DOES: the
+ * parts name the fields the provider is asked to write, and the subscriber
+ * notification says whether the channel's subscribers are told about the
+ * video.
+ *
+ * A worker that opens a provider session later has to make the SAME request,
+ * so these settings travel with the session.
+ */
+export type YoutubeUploadRequestSettings = {
+  /** The parts the request writes, as the provider names them. */
+  part: string;
+  /** Whether the channel's subscribers are told about the video. */
+  notifySubscribers: boolean;
+};
+
+/**
+ * The URL of the provider request.
+ *
+ * It is built here and nowhere else, so a request that is made later carries
+ * the same parts and the same subscriber notification as the one that was
+ * approved.
+ */
+export function buildYoutubeUploadUrl(settings: YoutubeUploadRequestSettings): string {
+  return (
+    `${YOUTUBE_UPLOAD_ENDPOINT}?uploadType=resumable&part=${settings.part}` +
+    (settings.notifySubscribers ? "" : "&notifySubscribers=false")
+  );
+}
+
+/**
+ * The settings of a request that is rebuilt from a stored body.
+ *
+ * The parts are the names of the fields the body carries, and the subscriber
+ * notification is the provider's default. It is the fallback for a session
+ * that was admitted without its own settings: the request writes the fields
+ * the body carries and notifies the way YouTube does by default.
+ */
+export function youtubeUploadSettingsFromBody(
+  body: Record<string, unknown>,
+): YoutubeUploadRequestSettings {
+  const part = Object.keys(body).sort().join(",") || "snippet,status";
+  return { part, notifySubscribers: true };
 }
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {

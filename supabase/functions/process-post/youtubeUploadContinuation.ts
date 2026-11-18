@@ -40,6 +40,7 @@ import {
 } from "./youtubeResumableUpload.ts";
 import { mediaSendability } from "../_shared/partnerMediaStore.ts";
 import { YOUTUBE_UPLOAD_REASON, type YoutubeUploadReason } from "./youtubeUploadPolicy.ts";
+import { isUncertainUploadOutcome } from "./youtubeUploadOutcome.ts";
 
 /** What the continuation is asked to do. */
 export interface YoutubeContinuationRequest {
@@ -129,9 +130,10 @@ export interface YoutubeContinuationPorts {
   /**
    * The video bytes.
    *
-   * It is only called when the upload has to WRITE. A receipt-only recovery
-   * never reaches it, so no media is fetched for an upload that is already
-   * finished.
+   * It is only called when the upload has to WRITE, and only when the first
+   * byte is asked for: a receipt-only recovery never reaches it, and neither
+   * does a session whose video the provider turns out to hold already. So no
+   * media is fetched for an upload that is already finished.
    *
    * The port is handed the file, not a URL: the port resolves the URL the way
    * publishing does, from the file's own bucket and its provider rows, so a
@@ -238,6 +240,31 @@ export interface ContinuationResult {
 
 /** How long this worker may hold the session. */
 export const YOUTUBE_CONTINUATION_LEASE_MS = 120_000;
+
+/**
+ * A source that opens the media only when the first byte is asked for.
+ *
+ * The provider is asked what it holds BEFORE the media is touched: an
+ * inherited session is probed first, because the video may already exist and
+ * the receipt is then worth more than the file. A media host that is down
+ * cannot keep a receipt from being recovered, because the file is only
+ * opened once the provider has confirmed that it needs more bytes.
+ */
+export function deferredUploadByteSource(
+  resolve: () => Promise<UploadByteSource>,
+  size: number,
+): UploadByteSource {
+  let opened: Promise<UploadByteSource> | null = null;
+  return {
+    size,
+    async read(start: number, end: number, timeoutMs?: number): Promise<ArrayBuffer> {
+      // The media is opened once, and every chunk reads from that one open.
+      opened ??= resolve();
+      const source = await opened;
+      return await source.read(start, end, timeoutMs);
+    },
+  };
+}
 
 /** The refusal a session state becomes, as a reason code. */
 export function refusalToReason(refusal: YoutubeUploadRefusal): YoutubeUploadReason {
@@ -433,7 +460,21 @@ export async function continueYoutubeUpload(
     return refused(reason);
   }
 
-  const source = await ports.createSource({ media: media.media });
+  // The media is NOT opened here.
+  //
+  // The provider is asked what it holds first, and the file is only opened
+  // once the provider has confirmed that it needs more bytes. A receipt that
+  // YouTube can return is worth more than a file that a media host may not be
+  // able to serve right now: an inherited session whose video already exists
+  // is settled without touching the media at all.
+  //
+  // The checks above still run before anything is sent, so a file that is gone,
+  // replaced or still being scanned is refused before the provider is asked.
+  const mediaFile = media.media;
+  const source = deferredUploadByteSource(
+    async () => await ports.createSource({ media: mediaFile }),
+    session.totalBytes,
+  );
   const outcome = await ports.runUpload({
     record: session,
     leaseToken,
@@ -553,12 +594,29 @@ async function interpretOutcome(args: {
     //
     // A follow-up that fails is not fatal. The video is already live, and the
     // public row has to be settled either way.
-    try {
-      await ports.followUps({ post, videoId: outcome.videoId, accessToken });
-    } catch (error) {
+    //
+    // The follow-ups are provider WRITES, so the live state is asked about
+    // first: the lease says this worker owns the session, and it says nothing
+    // about the post, the target or the content being what they were. A
+    // post that was edited or cancelled while the video was being written is
+    // not given a thumbnail and a comment.
+    //
+    // The receipt does not depend on that answer. The video exists, so it is
+    // settled either way.
+    const followUpAuthority = await ports.effectAuthority({ sessionId: session.id, leaseToken });
+    if (followUpAuthority.authorized) {
+      try {
+        await ports.followUps({ post, videoId: outcome.videoId, accessToken });
+      } catch (error) {
+        console.warn(
+          `[youtube] the follow-ups for video ${outcome.videoId} did not finish:`,
+          error instanceof Error ? error.message : String(error),
+        );
+      }
+    } else {
       console.warn(
-        `[youtube] the follow-ups for video ${outcome.videoId} did not finish:`,
-        error instanceof Error ? error.message : String(error),
+        `[youtube] the follow-ups for video ${outcome.videoId} were skipped:`,
+        followUpAuthority.reason ?? "not authorized",
       );
     }
 
@@ -627,7 +685,7 @@ async function interpretOutcome(args: {
   // An upload that never sent a byte is a proven failure and stays
   // retryable, and a provider that refused the upload has answered, so that
   // one is a proof as well.
-  const uncertain = outcome.kind === "reconcile" || reason === YOUTUBE_UPLOAD_REASON.unknown;
+  const uncertain = isUncertainUploadOutcome(outcome);
 
   // The fanout closure comes BEFORE the settlement, for the same reason as
   // above: the pending YouTube row is what keeps the generic sweeper from

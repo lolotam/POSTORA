@@ -146,6 +146,15 @@ CREATE TABLE public.youtube_upload_sessions (
   -- The video resource that was sent to the provider. It is kept for the
   -- record, but it is NOT the content fence: the fence is the live post.
   upload_body jsonb NOT NULL,
+  -- The query settings of the provider request: the parts it writes and
+  -- whether the channel's subscribers are told about the video.
+  --
+  -- They are not part of the body, and they decide what the request DOES: a
+  -- worker that has to open the provider session later has to make the SAME
+  -- request, with the same parts and the same subscriber notification. A
+  -- session that is opened without them would write a different video, or
+  -- notify subscribers the customer had turned off.
+  upload_settings jsonb NOT NULL,
   -- What the content was when the session was opened.
   content_fence jsonb NOT NULL,
   -- The platforms and the accounts the run was allowed to publish to.
@@ -1256,6 +1265,11 @@ AS $$
     -- admitted but never opened one) sends the same resource the publish
     -- would have sent, instead of an empty one.
     'upload_body', s.upload_body,
+    -- The query settings of the provider request. They are carried so a worker
+    -- that has to OPEN the provider session (a session that was admitted but
+    -- never opened one) makes the SAME request: the same parts, and the same
+    -- subscriber notification the customer chose.
+    'upload_settings', s.upload_settings,
     'error', s.error,
     'lease_expires_at', s.lease_expires_at
   )
@@ -1300,6 +1314,7 @@ $$;
 -- nobody revokes would still be callable by the browser roles.
 DROP FUNCTION IF EXISTS public.admit_youtube_upload(uuid, uuid, uuid, uuid, bigint, bigint, jsonb, timestamptz, uuid[], timestamptz);
 DROP FUNCTION IF EXISTS public.admit_youtube_upload(uuid, uuid, uuid, uuid, bigint, bigint, jsonb, timestamptz, uuid[], timestamptz, jsonb);
+DROP FUNCTION IF EXISTS public.admit_youtube_upload(uuid, uuid, uuid, uuid, bigint, bigint, jsonb, timestamptz, uuid[], timestamptz, jsonb, integer, jsonb);
 
 CREATE OR REPLACE FUNCTION public.admit_youtube_upload(
   p_post_id uuid,
@@ -1313,7 +1328,8 @@ CREATE OR REPLACE FUNCTION public.admit_youtube_upload(
   p_target_account_ids uuid[] DEFAULT NULL,
   p_session_expires_at timestamptz DEFAULT NULL,
   p_expected_content jsonb DEFAULT NULL,
-  p_expected_media_version integer DEFAULT NULL
+  p_expected_media_version integer DEFAULT NULL,
+  p_upload_settings jsonb DEFAULT NULL
 )
 RETURNS jsonb
 LANGUAGE plpgsql
@@ -1328,6 +1344,7 @@ DECLARE
   v_fence jsonb;
   v_content jsonb;
   v_media_version integer;
+  v_settings jsonb;
   v_attempt timestamptz;
   v_public_row public.platform_posts%ROWTYPE;
   v_public_row_id uuid;
@@ -1405,6 +1422,30 @@ BEGIN
     RAISE EXCEPTION 'YUS04: the upload body is not usable' USING ERRCODE = 'YUS04';
   END IF;
 
+  -- The query settings of the provider request.
+  --
+  -- They decide what the request DOES: the parts it writes and whether the
+  -- channel's subscribers are told about the video. A worker that opens the
+  -- provider session later has to make the SAME request, so they travel with
+  -- the session.
+  --
+  -- They are kept when the caller gives them, and they are derived when it
+  -- does not: the parts are the names of the fields the body carries, and the
+  -- subscriber notification is the provider's default. A derived request
+  -- writes the fields the body carries and notifies the way YouTube does by
+  -- default, which is what the caller asked for when it named no settings.
+  IF p_upload_settings IS NOT NULL AND jsonb_typeof(p_upload_settings) <> 'object' THEN
+    RAISE EXCEPTION 'YUS04: the upload settings are not usable' USING ERRCODE = 'YUS04';
+  END IF;
+
+  v_settings := coalesce(
+    p_upload_settings,
+    jsonb_build_object(
+      'part', coalesce(
+        (SELECT string_agg(key, ',' ORDER BY key) FROM jsonb_object_keys(p_upload_body) AS key),
+        'snippet,status'),
+      'notifySubscribers', true));
+
   SELECT current_object_version INTO v_media_version
     FROM public.media_files WHERE id = p_media_file_id;
 
@@ -1444,11 +1485,11 @@ BEGIN
   IF NOT FOUND THEN
     INSERT INTO public.youtube_upload_sessions(
       user_id, post_id, social_account_id, media_file_id, media_object_version,
-      media_size, total_bytes, upload_body, content_fence, session_expires_at,
+      media_size, total_bytes, upload_body, upload_settings, content_fence, session_expires_at,
       attempt_started_at, resolved_platform, target_account_ids)
     VALUES (
       p_user_id, p_post_id, p_social_account_id, p_media_file_id, v_media_version,
-      p_media_size, p_total_bytes, p_upload_body, v_fence, p_session_expires_at,
+      p_media_size, p_total_bytes, p_upload_body, v_settings, v_fence, p_session_expires_at,
       v_attempt, 'youtube', p_target_account_ids)
     RETURNING * INTO v_session;
   ELSE
@@ -1503,6 +1544,7 @@ BEGIN
              -- are the ones that were checked above, and they are kept.
              content_fence = v_fence,
              upload_body = p_upload_body,
+             upload_settings = v_settings,
              media_size = p_media_size,
              total_bytes = p_total_bytes,
              media_object_version = coalesce(v_media_version, v_session.media_object_version),
@@ -1646,7 +1688,7 @@ BEGIN
 END;
 $$;
 
-COMMENT ON FUNCTION public.admit_youtube_upload(uuid, uuid, uuid, uuid, bigint, bigint, jsonb, timestamptz, uuid[], timestamptz, jsonb, integer) IS
+COMMENT ON FUNCTION public.admit_youtube_upload(uuid, uuid, uuid, uuid, bigint, bigint, jsonb, timestamptz, uuid[], timestamptz, jsonb, integer, jsonb) IS
   'Admits one YouTube upload: the private session and the public pending '
   'platform_posts row are created in ONE transaction, before the provider is '
   'contacted. The caller''s snapshot of the post is compared with the live post '
@@ -3585,7 +3627,7 @@ COMMENT ON FUNCTION public.claim_post_completion_work(integer, interval) IS
 REVOKE ALL ON FUNCTION public.youtube_upload_live_fence(uuid, uuid, bigint, uuid),
   public.youtube_upload_target_authorized(uuid, uuid, uuid[]),
   public.youtube_upload_session_payload(public.youtube_upload_sessions),
-  public.admit_youtube_upload(uuid, uuid, uuid, uuid, bigint, bigint, jsonb, timestamptz, uuid[], timestamptz, jsonb, integer),
+  public.admit_youtube_upload(uuid, uuid, uuid, uuid, bigint, bigint, jsonb, timestamptz, uuid[], timestamptz, jsonb, integer, jsonb),
   public.claim_youtube_upload_session(uuid, uuid, bigint),
   public.checkpoint_youtube_upload_session(uuid, uuid, bigint, bigint, text, boolean, timestamptz, text, boolean),
   public.complete_youtube_upload_session(uuid, uuid, text),
@@ -3595,7 +3637,7 @@ REVOKE ALL ON FUNCTION public.youtube_upload_live_fence(uuid, uuid, bigint, uuid
   public.claim_youtube_upload_sessions(integer, bigint, integer)
   FROM PUBLIC, anon, authenticated;
 
-GRANT EXECUTE ON FUNCTION public.admit_youtube_upload(uuid, uuid, uuid, uuid, bigint, bigint, jsonb, timestamptz, uuid[], timestamptz, jsonb, integer),
+GRANT EXECUTE ON FUNCTION public.admit_youtube_upload(uuid, uuid, uuid, uuid, bigint, bigint, jsonb, timestamptz, uuid[], timestamptz, jsonb, integer, jsonb),
   public.claim_youtube_upload_session(uuid, uuid, bigint),
   public.checkpoint_youtube_upload_session(uuid, uuid, bigint, bigint, text, boolean, timestamptz, text, boolean),
   public.complete_youtube_upload_session(uuid, uuid, text),

@@ -151,6 +151,7 @@ function record(overrides: Partial<YoutubeUploadSessionRecord> = {}): YoutubeUpl
     mediaObjectVersion: 1,
     continuationCount: 0,
     uploadBody: { snippet: { title: "A video" } },
+    uploadSettings: { part: "snippet,status", notifySubscribers: false },
     resolvedPlatform: "youtube",
     targetAccountIds: ["account-1"],
     ...overrides,
@@ -590,6 +591,32 @@ Deno.test("a provider that refuses the upload for good does not offer a blind re
   const { outcome } = await run(provider, record({ sessionUri: SESSION_URI }));
   assertEquals(outcome.kind, "failed");
   assert(outcome.kind === "failed" && outcome.retryable === false);
+});
+
+Deno.test("a credential the provider no longer accepts asks for a reconnect", async () => {
+  const provider = fakeProvider([
+    { status: 401, body: "Invalid Credentials" },
+  ]);
+  const { outcome } = await run(provider, record());
+
+  // A credential the provider no longer accepts is not a video the provider
+  // refused: the customer has to reconnect, and a retry with the same
+  // credential would fail the same way.
+  assertEquals(outcome.kind, "failed");
+  assert(outcome.kind === "failed" && outcome.reason === YOUTUBE_UPLOAD_REASON.account_unusable);
+  assert(outcome.kind === "failed" && outcome.retryable === false);
+  // The handshake is the only thing that was asked: no byte was written.
+  assertEquals(provider.requests.length, 1);
+});
+
+Deno.test("a provider that refuses for another reason does not ask for a reconnect", async () => {
+  const provider = fakeProvider([
+    { status: 400, body: "bad request" },
+  ]);
+  const { outcome } = await run(provider, record());
+
+  assertEquals(outcome.kind, "failed");
+  assert(outcome.kind === "failed" && outcome.reason === YOUTUBE_UPLOAD_REASON.rejected);
 });
 
 Deno.test("the provider status is asked for when a write does not move the offset", async () => {

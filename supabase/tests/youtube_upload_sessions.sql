@@ -229,10 +229,10 @@ BEGIN
     'Y1 authenticated holds no DELETE on the session table';
 
   ASSERT NOT has_function_privilege('anon',
-      'public.admit_youtube_upload(uuid,uuid,uuid,uuid,bigint,bigint,jsonb,timestamptz,uuid[],timestamptz,jsonb,integer)', 'EXECUTE'),
+      'public.admit_youtube_upload(uuid,uuid,uuid,uuid,bigint,bigint,jsonb,timestamptz,uuid[],timestamptz,jsonb,integer,jsonb)', 'EXECUTE'),
     'Y1 anon may not admit an upload';
   ASSERT NOT has_function_privilege('authenticated',
-      'public.admit_youtube_upload(uuid,uuid,uuid,uuid,bigint,bigint,jsonb,timestamptz,uuid[],timestamptz,jsonb,integer)', 'EXECUTE'),
+      'public.admit_youtube_upload(uuid,uuid,uuid,uuid,bigint,bigint,jsonb,timestamptz,uuid[],timestamptz,jsonb,integer,jsonb)', 'EXECUTE'),
     'Y1 authenticated may not admit an upload';
   ASSERT NOT has_function_privilege('authenticated',
       'public.checkpoint_youtube_upload_session(uuid,uuid,bigint,bigint,text,boolean,timestamptz,text,boolean)', 'EXECUTE'),
@@ -269,7 +269,7 @@ BEGIN
     'Y1 authenticated may not read the terminal outcome';
 
   ASSERT has_function_privilege('service_role',
-      'public.admit_youtube_upload(uuid,uuid,uuid,uuid,bigint,bigint,jsonb,timestamptz,uuid[],timestamptz,jsonb,integer)', 'EXECUTE'),
+      'public.admit_youtube_upload(uuid,uuid,uuid,uuid,bigint,bigint,jsonb,timestamptz,uuid[],timestamptz,jsonb,integer,jsonb)', 'EXECUTE'),
     'Y1 the service role may admit an upload';
   ASSERT has_function_privilege('service_role',
       'public.checkpoint_youtube_upload_session(uuid,uuid,bigint,bigint,text,boolean,timestamptz,text,boolean)', 'EXECUTE'),
@@ -3442,6 +3442,137 @@ BEGIN
   RAISE NOTICE 'PASS Y40: the admission takes the expected live media version';
 END
 $y40_media_version$;
+
+-- ---------------------------------------------------------------------------
+-- Y41: THE QUERY SETTINGS TRAVEL WITH THE SESSION.
+--
+-- The regression of PR441 comment 4610856939: a worker that opens the provider
+-- session later has to make the SAME request as the one that was approved.
+--
+-- The settings are not part of the body: the parts name the fields the
+-- provider is asked to write, and the subscriber notification says whether the
+-- channel's subscribers are told about the video. A session that lost them
+-- would either write a different video, or notify subscribers the customer had
+-- turned off.
+--
+-- So they are stored with the session, they travel in the payload, and a
+-- restart refreshes them with the ones the new attempt was approved with.
+-- ---------------------------------------------------------------------------
+DO $y41_upload_settings$
+DECLARE
+  v_acct_a  uuid;
+  v_post_a  uuid;
+  v_media_a uuid;
+  v_acct_b  uuid;
+  v_post_b  uuid;
+  v_media_b uuid;
+  v_u_a       uuid := 'b1000000-0000-4000-8000-000000000001';
+  v_session   uuid;
+  v_session_b uuid;
+  v_lease     uuid := 'ec000000-0000-4000-8000-000000000003';
+  v_lease_b   uuid := 'ec000000-0000-4000-8000-000000000004';
+  v_admitted  jsonb;
+  v_settings  jsonb;
+  v_attempt   timestamptz;
+BEGIN
+  -- THE SETTINGS THE CALLER NAMED ARE STORED
+  --
+  -- The subscriber notification is kept as it was: a customer who turned the
+  -- notification off must not have it turned back on by a later worker.
+  SELECT f.account_id, f.post_id, f.media_id
+    INTO v_acct_a, v_post_a, v_media_a
+    FROM pg_temp.new_youtube_fixture('y41') f;
+  v_admitted := public.admit_youtube_upload(
+    v_post_a, v_acct_a, v_u_a, v_media_a, 4096, 4096, '{"snippet":{"title":"A video"}}'::jsonb,
+    NULL, ARRAY[v_acct_a], NULL, NULL, NULL,
+    '{"part":"snippet,status","notifySubscribers":false}'::jsonb);
+  v_session := (v_admitted -> 'session' ->> 'id')::uuid;
+
+  SELECT upload_settings INTO v_settings
+    FROM public.youtube_upload_sessions WHERE id = v_session;
+  ASSERT v_settings = '{"part":"snippet,status","notifySubscribers":false}'::jsonb,
+    'Y41 the session keeps the settings the caller named';
+
+  -- The settings travel in the payload, so the worker that opens the provider
+  -- session later can read them.
+  ASSERT (v_admitted -> 'session' -> 'upload_settings') = '{"part":"snippet,status","notifySubscribers":false}'::jsonb,
+    'Y41 the payload carries the settings of the request';
+
+  -- A SETTINGS OBJECT THAT IS NOT ONE IS REFUSED
+  --
+  -- A settings object that lost its parts or its subscriber notification is not
+  -- a settings object, and a request made from it would write a different
+  -- video than the one that was approved.
+  BEGIN
+    PERFORM public.admit_youtube_upload(
+      v_post_a, v_acct_a, v_u_a, v_media_a, 4096, 4096, '{"snippet":{"title":"A video"}}'::jsonb,
+      NULL, ARRAY[v_acct_a], NULL, NULL, NULL, '"not an object"'::jsonb);
+    RAISE EXCEPTION 'Y41 the admission accepted settings that are not an object';
+  EXCEPTION WHEN SQLSTATE 'YUS04' THEN
+    RAISE NOTICE 'PASS Y41: settings that are not an object are refused';
+  END;
+
+  -- THE DERIVED SETTINGS
+  --
+  -- A caller that names no settings gets the request its body describes: the
+  -- parts are the names of the fields the body carries, and the notification
+  -- is the provider's default.
+  SELECT f.account_id, f.post_id, f.media_id
+    INTO v_acct_b, v_post_b, v_media_b
+    FROM pg_temp.new_youtube_fixture('y41b') f;
+  v_session_b := (public.admit_youtube_upload(
+    v_post_b, v_acct_b, v_u_a, v_media_b, 4096, 4096,
+    '{"status":{"privacyStatus":"private"},"snippet":{"title":"A video"}}'::jsonb)
+    -> 'session' ->> 'id')::uuid;
+
+  SELECT upload_settings INTO v_settings
+    FROM public.youtube_upload_sessions WHERE id = v_session_b;
+  ASSERT v_settings = '{"part":"snippet,status","notifySubscribers":true}'::jsonb,
+    'Y41 a session without settings is read as the request its body describes';
+
+  -- THE RESTART REFRESHES THEM
+  --
+  -- A retry is a new request, and it may be approved with other settings. The
+  -- restarted session carries the ones of the new attempt, so the worker that
+  -- opens the provider session makes the request that was approved NOW.
+  SELECT f.account_id, f.post_id, f.media_id
+    INTO v_acct_a, v_post_a, v_media_a
+    FROM pg_temp.new_youtube_fixture('y41c') f;
+  v_session := (public.admit_youtube_upload(
+    v_post_a, v_acct_a, v_u_a, v_media_a, 4096, 4096, '{"snippet":{"title":"A video"}}'::jsonb,
+    NULL, ARRAY[v_acct_a], NULL, NULL, NULL,
+    '{"part":"snippet,status","notifySubscribers":false}'::jsonb)
+    -> 'session' ->> 'id')::uuid;
+  PERFORM public.claim_youtube_upload_session(v_session, v_lease, 180000);
+  PERFORM public.release_youtube_upload_session(v_session, v_lease, 'failed',
+    'the provider refused the upload');
+  PERFORM public.settle_youtube_upload_session(v_session, v_lease, 'failed', NULL,
+    'the provider refused the upload', '{}'::jsonb);
+
+  ASSERT (SELECT state FROM public.youtube_upload_sessions WHERE id = v_session) = 'failed',
+    'Y41 the refused upload is a failed session';
+
+  PERFORM public.request_post_retry(v_post_a, v_u_a, ARRAY[v_acct_a]);
+  UPDATE public.posts
+     SET status = 'processing', processing_started_at = now()
+   WHERE id = v_post_a;
+  SELECT processing_started_at INTO v_attempt FROM public.posts WHERE id = v_post_a;
+
+  v_admitted := public.admit_youtube_upload(
+    v_post_a, v_acct_a, v_u_a, v_media_a, 4096, 4096, '{"snippet":{"title":"A video"}}'::jsonb,
+    v_attempt, ARRAY[v_acct_a], NULL, NULL, NULL,
+    '{"part":"snippet,status,recordingDetails","notifySubscribers":true}'::jsonb);
+  ASSERT (v_admitted -> 'session' ->> 'state') = 'open',
+    'Y41 the retried upload is started again';
+
+  SELECT upload_settings INTO v_settings
+    FROM public.youtube_upload_sessions WHERE id = v_session;
+  ASSERT v_settings = '{"part":"snippet,status,recordingDetails","notifySubscribers":true}'::jsonb,
+    'Y41 the restart refreshes the settings of the new attempt';
+
+  RAISE NOTICE 'PASS Y41: the query settings travel with the session';
+END
+$y41_upload_settings$;
 
 ROLLBACK;
 

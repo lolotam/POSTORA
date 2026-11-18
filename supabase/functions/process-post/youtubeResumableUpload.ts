@@ -63,6 +63,7 @@
  */
 
 import { uploadFailureMessage } from "./youtubePublisher.ts";
+import type { YoutubeUploadRequestSettings } from "./youtubePublisher.ts";
 import {
   redactProviderText,
   YOUTUBE_UPLOAD_REASON,
@@ -248,6 +249,15 @@ export interface YoutubeUploadSessionRecord {
    * but never opened one has no bytes and no receipt, so opening it is safe.
    */
   uploadBody: Record<string, unknown>;
+  /**
+   * The query settings of the provider request.
+   *
+   * They are not part of the body, and they decide what the request DOES: the
+   * parts it writes and whether the channel's subscribers are told about the
+   * video. A worker that opens the provider session later has to make the SAME
+   * request, so they are kept with the session.
+   */
+  uploadSettings: YoutubeUploadRequestSettings;
   /**
    * The platform this session writes to.
    *
@@ -472,6 +482,14 @@ export interface AdmitUploadSession {
    * the customer.
    */
   targetAccountIds: string[];
+  /**
+   * The query settings of the provider request.
+   *
+   * They travel with the session, so a worker that opens the provider session
+   * later makes the SAME request: the same parts, and the same subscriber
+   * notification the customer chose.
+   */
+  uploadSettings?: YoutubeUploadRequestSettings | null;
 }
 
 /**
@@ -1073,7 +1091,12 @@ async function resolveProviderAnswer(
       { state: videoMayExist ? "reconcile" : "failed" },
       videoMayExist
         ? { kind: "reconcile", reason: YOUTUBE_UPLOAD_REASON.reconcile, detail: status.message }
-        : { kind: "failed", reason: YOUTUBE_UPLOAD_REASON.rejected, detail: status.message, retryable: false },
+        : {
+          kind: "failed",
+          reason: providerRefusalReason(status.status),
+          detail: status.message,
+          retryable: false,
+        },
     );
     return { kind: "outcome", outcome };
   }
@@ -1118,7 +1141,12 @@ async function resolveProviderAnswer(
       { state: videoMayExist ? "reconcile" : "failed" },
       videoMayExist
         ? { kind: "reconcile", reason: YOUTUBE_UPLOAD_REASON.reconcile, detail: probed.message }
-        : { kind: "failed", reason: YOUTUBE_UPLOAD_REASON.rejected, detail: probed.message, retryable: false },
+        : {
+          kind: "failed",
+          reason: providerRefusalReason(probed.status),
+          detail: probed.message,
+          retryable: false,
+        },
     );
     return { kind: "outcome", outcome };
   }
@@ -1297,7 +1325,12 @@ export async function runResumableVideoUpload(deps: ResumableUploadDeps): Promis
         { state: videoMayExist ? "reconcile" : "failed" },
         videoMayExist
           ? { kind: "reconcile", reason: YOUTUBE_UPLOAD_REASON.reconcile, detail: probed.message }
-          : { kind: "failed", reason: YOUTUBE_UPLOAD_REASON.rejected, detail: probed.message, retryable: false },
+          : {
+            kind: "failed",
+            reason: providerRefusalReason(probed.status),
+            detail: probed.message,
+            retryable: false,
+          },
       );
       return outcome;
     }
@@ -1561,6 +1594,20 @@ async function openProviderSession(
     });
   } catch (error) {
     const reason = redactProviderText(error);
+    // A credential the provider no longer accepts is its own outcome: the
+    // customer has to reconnect, and a retry with the same credential would
+    // fail the same way.
+    if (error instanceof YoutubeProviderRefusal) {
+      return {
+        kind: "outcome",
+        outcome: {
+          kind: "failed",
+          reason: providerRefusalReason(error.status),
+          detail: `The provider refused the session request: ${reason}`,
+          retryable: false,
+        },
+      };
+    }
     return {
       kind: "outcome",
       outcome: {
@@ -1762,6 +1809,39 @@ function mimeTypeForProbe(): string {
 }
 
 /**
+ * A provider answer that was a refusal.
+ *
+ * The status travels with the message, because the status says WHAT the
+ * refusal was. A 401 is not a refusal of the upload: it is the provider saying
+ * that the credential is no longer accepted, and the customer has to
+ * reconnect their account. The message alone does not say that, and the
+ * message is written for a log line.
+ */
+export class YoutubeProviderRefusal extends Error {
+  readonly status: number;
+
+  constructor(status: number, message: string) {
+    super(message);
+    this.name = "YoutubeProviderRefusal";
+    this.status = status;
+  }
+}
+
+/**
+ * The reason a provider refusal becomes.
+ *
+ * A credential that is no longer accepted is not the same thing as a video
+ * the provider refused: one needs the customer to reconnect, the other is a
+ * proof that nothing was published. The reason code keeps them apart, and the
+ * customer is told which one it was.
+ */
+function providerRefusalReason(status: number): YoutubeUploadReason {
+  return status === 401 || status === 403
+    ? YOUTUBE_UPLOAD_REASON.account_unusable
+    : YOUTUBE_UPLOAD_REASON.rejected;
+}
+
+/**
  * Asks the provider for a resumable session.
  *
  * The answer carries the session URI in its `Location` header, and that URI
@@ -1810,7 +1890,8 @@ export async function createYoutubeResumableSession(args: {
 
   if (!response.ok) {
     const errorData = await response.json().catch(() => ({}));
-    throw new Error(
+    throw new YoutubeProviderRefusal(
+      response.status,
       redactProviderText(uploadFailureMessage(response.status, errorData, response.statusText)),
     );
   }

@@ -225,8 +225,58 @@ Deno.test("the admission is asked for with the live media version", async () => 
   assertEquals(call.args.p_expected_media_version, 7);
 });
 
-Deno.test("the admission hands back the public row it created", async () => {
+Deno.test("the admission is asked for with the query settings of the request", async () => {
+  const { client, calls } = recordingClient({
+    admit_youtube_upload: { session: sessionPayload(), platform_post_id: PUBLIC_ROW_ID },
+  });
+  const store = createSupabaseYoutubeUploadSessionStore(client);
+  await store.admit({
+    ...admitInput,
+    uploadSettings: { part: "snippet,status", notifySubscribers: false },
+  });
+
+  const call = calls.find((entry) => entry.fn === "admit_youtube_upload");
+  assert(call !== undefined);
+  // The settings travel with the session, so a worker that opens the provider
+  // session later makes the SAME request: the same parts, and the same
+  // subscriber notification.
+  assertEquals(call.args.p_upload_settings, { part: "snippet,status", notifySubscribers: false });
+});
+
+Deno.test("the stored settings come back with the session", async () => {
   const { client } = recordingClient({
+    admit_youtube_upload: {
+      session: sessionPayload({
+        upload_settings: { part: "snippet,status,recordingDetails", notifySubscribers: false },
+      }),
+      platform_post_id: PUBLIC_ROW_ID,
+    },
+  });
+  const store = createSupabaseYoutubeUploadSessionStore(client);
+  const result = await store.admit(admitInput);
+
+  assertEquals(result.record?.uploadSettings, {
+    part: "snippet,status,recordingDetails",
+    notifySubscribers: false,
+  });
+});
+
+Deno.test("a session without settings is read as the request its body describes", async () => {
+  const { client } = recordingClient({
+    admit_youtube_upload: {
+      session: sessionPayload({ upload_body: { snippet: { title: "A video" } } }),
+      platform_post_id: PUBLIC_ROW_ID,
+    },
+  });
+  const store = createSupabaseYoutubeUploadSessionStore(client);
+  const result = await store.admit(admitInput);
+
+  // A session that carries no settings of its own still has to make a request,
+  // and it makes the one its body describes.
+  assertEquals(result.record?.uploadSettings, { part: "snippet", notifySubscribers: true });
+});
+
+Deno.test("the admission hands back the public row it created", async () => {  const { client } = recordingClient({
     admit_youtube_upload: { session: sessionPayload(), platform_post_id: PUBLIC_ROW_ID },
   });
   const store = createSupabaseYoutubeUploadSessionStore(client);
@@ -385,6 +435,26 @@ Deno.test("one session serves one post and one account", async () => {
   const second = await store.admit(admitInput);
   assertEquals(first.record?.id, second.record?.id);
   assertEquals(store.sessions.size, 1);
+});
+
+Deno.test("the settings of the request travel with the session", async () => {
+  const store = openStore();
+  const admitted = await store.admit({
+    ...admitInput,
+    uploadSettings: { part: "snippet,status", notifySubscribers: false },
+  });
+
+  // A worker that opens the provider session later reads these settings, so it
+  // makes the request that was approved: the same parts, and the same
+  // subscriber notification.
+  assertEquals(admitted.record?.uploadSettings, { part: "snippet,status", notifySubscribers: false });
+});
+
+Deno.test("a session admitted without settings is read as the request its body describes", async () => {
+  const store = openStore();
+  const admitted = await store.admit(admitInput);
+
+  assertEquals(admitted.record?.uploadSettings, { part: "snippet", notifySubscribers: true });
 });
 
 Deno.test("another owner cannot ask for the same session", async () => {

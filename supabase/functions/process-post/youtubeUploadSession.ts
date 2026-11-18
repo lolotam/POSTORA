@@ -52,6 +52,8 @@ import type {
   YoutubeUploadSessionStore,
 } from "./youtubeResumableUpload.ts";
 import { redactProviderText } from "./youtubeUploadPolicy.ts";
+import { youtubeUploadSettingsFromBody } from "./youtubePublisher.ts";
+import type { YoutubeUploadRequestSettings } from "./youtubePublisher.ts";
 
 export type { YoutubeUploadRefusal };
 
@@ -124,7 +126,33 @@ function toRecord(payload: Record<string, unknown> | null): YoutubeUploadSession
     uploadBody: payload.upload_body && typeof payload.upload_body === "object"
       ? (payload.upload_body as Record<string, unknown>)
       : {},
+    uploadSettings: readUploadSettings(payload.upload_settings, payload.upload_body),
   };
+}
+
+/**
+ * The query settings of the provider request, as they were stored.
+ *
+ * They are read as a whole: a settings object that lost its parts or its
+ * subscriber notification is not a settings object, and a request made from it
+ * would write a different video than the one that was approved. A session
+ * that carries none is read as the request its body describes.
+ */
+function readUploadSettings(
+  value: unknown,
+  body: unknown,
+): YoutubeUploadRequestSettings {
+  if (typeof value === "object" && value !== null && !Array.isArray(value)) {
+    const settings = value as Record<string, unknown>;
+    if (typeof settings.part === "string" && settings.part.length > 0 &&
+        typeof settings.notifySubscribers === "boolean") {
+      return { part: settings.part, notifySubscribers: settings.notifySubscribers };
+    }
+  }
+  const storedBody = typeof body === "object" && body !== null && !Array.isArray(body)
+    ? (body as Record<string, unknown>)
+    : {};
+  return youtubeUploadSettingsFromBody(storedBody);
 }
 
 function toClaim(payload: Record<string, unknown>): YoutubeUploadContinuationClaim | null {
@@ -216,6 +244,10 @@ export function createSupabaseYoutubeUploadSessionStore(
         // file that was replaced in the meantime, so the bytes the worker
         // holds are the bytes the session records.
         p_expected_media_version: input.mediaObjectVersion,
+        // The query settings of the provider request. They travel with the
+        // session, so a worker that opens the provider session later makes the
+        // SAME request: the same parts, and the same subscriber notification.
+        p_upload_settings: input.uploadSettings ?? null,
       });
       if (!result.ok) return { record: null, refused: result.refusal, platformPostId: null };
       const payload = result.value ?? {};
@@ -369,6 +401,8 @@ interface MemorySession {
   mediaSize: number;
   totalBytes: number;
   uploadBody: Record<string, unknown>;
+  /** The query settings of the provider request. */
+  uploadSettings: YoutubeUploadRequestSettings;
   /** The post content the caller built the upload body from. */
   expectedContent: Record<string, unknown> | null;
   confirmedBytes: number;
@@ -443,6 +477,7 @@ export function createInMemoryYoutubeUploadSessionStore(options?: {
       resolvedPlatform: session.resolvedPlatform,
       targetAccountIds: session.targetAccountIds,
       uploadBody: session.uploadBody,
+      uploadSettings: session.uploadSettings,
     };
   }
 
@@ -478,6 +513,7 @@ export function createInMemoryYoutubeUploadSessionStore(options?: {
           mediaSize: input.mediaSize,
           totalBytes: input.totalBytes,
           uploadBody: input.uploadBody,
+          uploadSettings: input.uploadSettings ?? youtubeUploadSettingsFromBody(input.uploadBody),
           expectedContent: input.expectedContent,
           confirmedBytes: 0,
           bytesSent: 0,
@@ -540,6 +576,7 @@ export function createInMemoryYoutubeUploadSessionStore(options?: {
           session.leaseToken = null;
           session.leaseExpiresAt = null;
           session.uploadBody = input.uploadBody;
+          session.uploadSettings = input.uploadSettings ?? youtubeUploadSettingsFromBody(input.uploadBody);
           session.expectedContent = input.expectedContent;
         }
 

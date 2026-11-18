@@ -67,6 +67,8 @@ interface World {
   fanoutRecoveries: string[];
   /** The order the worker did the things that touch the public row. */
   timeline: string[];
+  /** How often the live state was asked about. */
+  authorityChecks: number;
 }
 
 interface WorldOptions {
@@ -81,7 +83,18 @@ interface WorldOptions {
   /** The refusal the store answers a projection with. */
   projectRefused?: YoutubeUploadRefusal | null;
   /** The verdict the store answers the write-authority question with. */
-  authority?: { authorized: boolean; reason: string | null };
+  authority?:
+    | { authorized: boolean; reason: string | null }
+    /**
+     * The verdicts of several checks, in order.
+     *
+     * The live state is asked about more than once: before the bytes are
+     * written, and again before the follow-ups. A list answers each question
+     * with its own verdict, and the last one answers every question after it.
+     */
+    | Array<{ authorized: boolean; reason: string | null }>;
+  /** What the upload attempt does when it runs. */
+  runUpload?: (args: { source: UploadByteSource }) => Promise<ResumableUploadOutcome>;
   /** The answer the store gives the fanout closure. */
   fanout?: { recovered: boolean; reason: string | null };
 }
@@ -137,6 +150,7 @@ function world(options: WorldOptions = {}): World {
     mediaObjectVersion: 1,
     continuationCount: 0,
     uploadBody: { snippet: { title: "A video" } },
+    uploadSettings: { part: "snippet,status", notifySubscribers: false },
     resolvedPlatform: "youtube",
     targetAccountIds: [ACCOUNT_ID],
     ...options.session,
@@ -150,6 +164,7 @@ function world(options: WorldOptions = {}): World {
     followUps: [],
     fanoutRecoveries: [],
     timeline: [],
+    authorityChecks: 0,
     ports: {
       loadPost() {
         return Promise.resolve(post);
@@ -176,8 +191,9 @@ function world(options: WorldOptions = {}): World {
         };
         return Promise.resolve(source);
       },
-      runUpload() {
+      runUpload(args) {
         world.uploads += 1;
+        if (options.runUpload) return options.runUpload(args);
         return Promise.resolve(options.outcome ?? { kind: "completed", videoId: VIDEO_ID });
       },
       settleUpload(args) {
@@ -206,7 +222,13 @@ function world(options: WorldOptions = {}): World {
         return Promise.resolve();
       },
       effectAuthority() {
-        return Promise.resolve(options.authority ?? { authorized: true, reason: null });
+        world.authorityChecks += 1;
+        const verdicts = options.authority;
+        if (Array.isArray(verdicts)) {
+          const verdict = verdicts[Math.min(world.authorityChecks - 1, verdicts.length - 1)];
+          return Promise.resolve(verdict);
+        }
+        return Promise.resolve(verdicts ?? { authorized: true, reason: null });
       },
       recoverFanout(args) {
         world.timeline.push("recover");
@@ -708,3 +730,75 @@ for (const outcome of ORDER_CASES) {
     assertEquals(w.timeline, outcome.expected);
   });
 }
+
+// ───────────────────────────────────────────────────────────────────────────
+// The media and the receipt
+//
+// The provider is asked what it holds BEFORE the file is opened. A session the
+// provider already finished is worth more than a file the media host may not be
+// able to serve right now: a media host that answers with a 500 must not keep
+// a receipt from being recovered.
+// ───────────────────────────────────────────────────────────────────────────
+
+Deno.test("the media is not opened when the provider already holds the video", async () => {
+  const w = world({
+    runUpload: () => Promise.resolve({ kind: "completed", videoId: VIDEO_ID }),
+  });
+  const result = await continueYoutubeUpload(w.ports, request);
+
+  assertEquals(result.status, "completed");
+  assertEquals(result.videoId, VIDEO_ID);
+  // The provider named the video, so no byte was needed and the file was never
+  // opened: a media host that cannot answer cannot stop a receipt from being
+  // recovered.
+  assertEquals(w.uploads, 1);
+  assertEquals(w.mediaReads, 0);
+});
+
+Deno.test("the media is opened when the upload has to write", async () => {
+  const w = world({
+    runUpload: async (args) => {
+      // The provider needs more bytes, so the file is opened.
+      await args.source.read(0, 9);
+      return { kind: "completed", videoId: VIDEO_ID };
+    },
+  });
+  const result = await continueYoutubeUpload(w.ports, request);
+
+  assertEquals(result.status, "completed");
+  assertEquals(w.mediaReads, 1);
+});
+
+Deno.test("the file is opened once, however many chunks are read", async () => {
+  const w = world({
+    runUpload: async (args) => {
+      await args.source.read(0, 9);
+      await args.source.read(10, 19);
+      return { kind: "completed", videoId: VIDEO_ID };
+    },
+  });
+  await continueYoutubeUpload(w.ports, request);
+  assertEquals(w.mediaReads, 1);
+});
+
+Deno.test("the follow-ups are skipped when the live state no longer allows them", async () => {
+  const w = world({
+    outcome: { kind: "completed", videoId: VIDEO_ID },
+    post: { thumbnailUrl: "https://cdn.example.test/thumb.jpg", firstComment: "Hello" },
+    // The write was allowed, and the follow-ups were not: the post changed
+    // while the video was being written.
+    authority: [
+      { authorized: true, reason: null },
+      { authorized: false, reason: "content_changed" },
+    ],
+  });
+  const result = await continueYoutubeUpload(w.ports, request);
+
+  assertEquals(result.status, "completed");
+  assertEquals(w.followUps, []);
+  // The receipt does not depend on the follow-ups: the video exists, so the row
+  // is settled either way.
+  assertEquals(w.settled.length, 1);
+  assertEquals(w.settled[0].status, "success");
+  assertEquals(w.settled[0].videoId, VIDEO_ID);
+});
