@@ -140,6 +140,7 @@ Deno.test("the admission is asked for with the attempt and the resolved targets"
     mediaSize: 100,
     totalBytes: 100,
     uploadBody: { snippet: { title: "A video" } },
+    expectedContent: { caption: "A video" },
     userId: OWNER_ID,
     attemptStartedAt: "2026-11-18T00:00:00.000Z",
     targetAccountIds: [ACCOUNT_ID],
@@ -166,6 +167,7 @@ Deno.test("the admission hands back the public row it created", async () => {
     mediaSize: 100,
     totalBytes: 100,
     uploadBody: {},
+    expectedContent: null,
     userId: OWNER_ID,
     attemptStartedAt: null,
     targetAccountIds: [],
@@ -208,6 +210,7 @@ Deno.test("a session that needs a human comes back as a refusal", async () => {
     mediaSize: 100,
     totalBytes: 100,
     uploadBody: {},
+    expectedContent: null,
     userId: OWNER_ID,
     attemptStartedAt: null,
     targetAccountIds: [],
@@ -284,6 +287,10 @@ const admitInput = {
   mediaSize: 100,
   totalBytes: 100,
   uploadBody: { snippet: { title: "A video" } },
+  // The post content the upload body was built from. The store compares it
+  // with the live post under the post's lock, so a body that was built from a
+  // stale read is refused instead of being blessed.
+  expectedContent: { caption: "A video" },
   userId: OWNER_ID,
   attemptStartedAt: "2026-11-18T00:00:00.000Z",
   targetAccountIds: [ACCOUNT_ID],
@@ -407,10 +414,42 @@ Deno.test("the receipt is kept and the session uri is dropped with it", async ()
   });
   const completed = await store.complete({ sessionId, leaseToken: "lease-a", videoId: "abcdefghijk" });
   assertEquals(completed, true);
-  const record = (await store.claim({ sessionId, leaseToken: "lease-b", leaseMs: 60_000 })).record;
+
+  const record = store.sessions.get(sessionId);
   assertEquals(record?.videoId, "abcdefghijk");
   assertEquals(record?.sessionUri, null);
   assertEquals(record?.state, "uploaded");
+
+  // The owner still holds its lease: it is the one that has to settle, and a
+  // takeover would settle the same row twice.
+  assertEquals(record?.leaseToken, "lease-a");
+  const takeover = await store.claim({ sessionId, leaseToken: "lease-b", leaseMs: 60_000 });
+  assertEquals(takeover.refused, "lease_held");
+  assertEquals(takeover.record, null);
+});
+
+Deno.test("a takeover after the lease ran out inherits the receipt", async () => {
+  let clock = 1_000;
+  const store = createInMemoryYoutubeUploadSessionStore({ now: () => clock });
+  const opened = await store.admit(admitInput);
+  const sessionId = opened.record!.id;
+  await store.claim({ sessionId, leaseToken: "lease-a", leaseMs: 1_000 });
+  await store.checkpoint({
+    sessionId,
+    leaseToken: "lease-a",
+    confirmedBytes: 0,
+    bytesSent: 0,
+    sessionUri: "https://www.googleapis.com/upload?upload_id=secret",
+  });
+  await store.complete({ sessionId, leaseToken: "lease-a", videoId: "abcdefghijk" });
+
+  // The owner died before it could settle. Its lease runs out.
+  clock += 2_000;
+
+  const takeover = await store.claim({ sessionId, leaseToken: "lease-b", leaseMs: 60_000 });
+  assertEquals(takeover.record?.videoId, "abcdefghijk");
+  assertEquals(takeover.record?.sessionUri, null);
+  assertEquals(takeover.record?.state, "uploaded");
 });
 
 Deno.test("the owner keeps its lease after the receipt so it can settle", async () => {
@@ -534,15 +573,21 @@ Deno.test("a session with no receipt cannot be projected", async () => {
 });
 
 Deno.test("a released session never takes back a receipt", async () => {
-  const store = openStore();
+  let clock = 1_000;
+  const store = createInMemoryYoutubeUploadSessionStore({ now: () => clock });
   const opened = await store.admit(admitInput);
   const sessionId = opened.record!.id;
-  await store.claim({ sessionId, leaseToken: "lease-a", leaseMs: 60_000 });
+  await store.claim({ sessionId, leaseToken: "lease-a", leaseMs: 1_000 });
   await store.complete({ sessionId, leaseToken: "lease-a", videoId: "abcdefghijk" });
   const released = await store.release({ sessionId, leaseToken: "lease-a", state: "reconcile" });
   assertEquals(released, false);
-  const record = (await store.claim({ sessionId, leaseToken: "lease-b", leaseMs: 60_000 })).record;
-  assertEquals(record?.videoId, "abcdefghijk");
+  // The receipt is still there, and the owner still owns the session.
+  assertEquals(store.sessions.get(sessionId)?.videoId, "abcdefghijk");
+  assertEquals(store.sessions.get(sessionId)?.state, "uploaded");
+
+  clock += 2_000;
+  const takeover = await store.claim({ sessionId, leaseToken: "lease-b", leaseMs: 60_000 });
+  assertEquals(takeover.record?.videoId, "abcdefghijk");
 });
 
 Deno.test("the continuation claim hands out a token and not the session uri", async () => {
@@ -669,4 +714,108 @@ Deno.test("the claim token is what lets the worker take the session", async () =
   assertEquals(wrong.refused, "lease_held");
   const right = await store.claim({ sessionId, leaseToken: claims[0].leaseToken, leaseMs: 60_000 });
   assertEquals(right.refused, null);
+});
+
+// ───────────────────────────────────────────────────────────────────────────
+// The terminal handoff
+//
+// The receipt is kept and the lease is kept with it: the worker that stored
+// the receipt is the one that has to settle the public row, and the
+// settlement is fenced on the lease it was given.
+// ───────────────────────────────────────────────────────────────────────────
+
+Deno.test("a released session keeps its lease so the owner can settle it", async () => {
+  const store = openStore();
+  const opened = await store.admit(admitInput);
+  const sessionId = opened.record!.id;
+  await store.claim({ sessionId, leaseToken: "lease-a", leaseMs: 60_000 });
+  const released = await store.release({ sessionId, leaseToken: "lease-a", state: "failed" });
+  assertEquals(released, true);
+  assertEquals(store.sessions.get(sessionId)?.leaseToken, "lease-a");
+
+  const settled = await store.settle({
+    sessionId,
+    leaseToken: "lease-a",
+    status: "failed",
+    errorMessage: "the provider refused the upload",
+  });
+  assertEquals(settled.settled, true);
+  assertEquals(store.sessions.get(sessionId)?.leaseToken, null);
+});
+
+// ───────────────────────────────────────────────────────────────────────────
+// The continuation cap
+//
+// The dispatch that brought the count to the cap is consumable by the lease
+// it was handed. Everyone else is refused.
+// ───────────────────────────────────────────────────────────────────────────
+
+Deno.test("the holder of the live lease may consume the dispatch that reached the cap", async () => {
+  const store = openStore();
+  const opened = await store.admit(admitInput);
+  const sessionId = opened.record!.id;
+  await store.claim({ sessionId, leaseToken: "lease-a", leaseMs: 60_000 });
+  store.sessions.get(sessionId)!.continuationCount = 24;
+
+  const held = await store.claim({ sessionId, leaseToken: "lease-a", leaseMs: 60_000 });
+  assertEquals(held.refused, null);
+});
+
+Deno.test("a claim that holds no live lease is refused at the cap", async () => {
+  let clock = 1_000;
+  const store = createInMemoryYoutubeUploadSessionStore({ now: () => clock });
+  const opened = await store.admit(admitInput);
+  const sessionId = opened.record!.id;
+  await store.claim({ sessionId, leaseToken: "lease-a", leaseMs: 1_000 });
+  store.sessions.get(sessionId)!.continuationCount = 24;
+  clock += 2_000;
+
+  const refused = await store.claim({ sessionId, leaseToken: "lease-b", leaseMs: 60_000 });
+  assertEquals(refused.refused, "too_many_continuations");
+  assertEquals(refused.record, null);
+});
+
+// ───────────────────────────────────────────────────────────────────────────
+// The admission compares the caller's snapshot with the live post
+// ───────────────────────────────────────────────────────────────────────────
+
+Deno.test("an admission built from a stale snapshot is refused", async () => {
+  const store = openStore();
+  await store.admit(admitInput);
+  const stale = await store.admit({ ...admitInput, expectedContent: { caption: "Another video" } });
+  assertEquals(stale.refused, "content_changed");
+  assertEquals(stale.record, null);
+});
+
+// ───────────────────────────────────────────────────────────────────────────
+// The fanout closure
+// ───────────────────────────────────────────────────────────────────────────
+
+Deno.test("a settled session closes its own fanout", async () => {
+  const store = openStore();
+  const opened = await store.admit(admitInput);
+  const sessionId = opened.record!.id;
+  await store.claim({ sessionId, leaseToken: "lease-a", leaseMs: 60_000 });
+  await store.complete({ sessionId, leaseToken: "lease-a", videoId: "abcdefghijk" });
+  await store.settle({ sessionId, leaseToken: "lease-a", status: "success", videoId: "abcdefghijk" });
+
+  const recovered = await store.recoverFanout({ sessionId });
+  assertEquals(recovered.recovered, true);
+  assertEquals(store.fanoutRecoveries.get(sessionId), 1);
+});
+
+Deno.test("a session that is neither terminal nor leased closes no fanout", async () => {
+  const store = openStore();
+  const opened = await store.admit(admitInput);
+  const sessionId = opened.record!.id;
+  await store.claim({ sessionId, leaseToken: "lease-a", leaseMs: 60_000 });
+
+  // The owner may close it: it still holds the lease.
+  const owned = await store.recoverFanout({ sessionId, leaseToken: "lease-a" });
+  assertEquals(owned.recovered, true);
+
+  // A caller that owns nothing may not.
+  const stranger = await store.recoverFanout({ sessionId, leaseToken: "lease-b" });
+  assertEquals(stranger.recovered, false);
+  assertEquals(stranger.reason, "lease_stale");
 });

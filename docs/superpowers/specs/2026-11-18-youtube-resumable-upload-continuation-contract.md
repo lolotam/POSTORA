@@ -487,6 +487,181 @@ customer's channel, which is worse than a missing one.
 
 ---
 
+# The third round
+
+## 21. The receipt and the lease are handed to the owner that has to settle them
+
+**Was:** `complete_youtube_upload_session` and `release_youtube_upload_session`
+cleared the lease, and `settle_youtube_upload_session` demanded a live lease.
+The worker that stored the receipt therefore could not publish it: the receipt
+sat on the session with nobody able to settle the public row, and a takeover
+could settle the row with a receipt the owner had already stored.
+
+**Is:** the lease **survives** `complete` and `release`. The owner keeps the
+lease it was given, and that lease is what the fenced settlement accepts. The
+settlement releases the lease.
+
+The handoff is a sequence, not a state: **claim → complete/release → settle,
+all with the same lease.** A worker that lost the lease settles nothing
+(YUS09), and a live lease is never taken over (YUS07) — the owner of an
+uploaded session is the worker that is about to settle it.
+
+A worker that dies between the receipt and the settlement leaves a lease that
+expires on its own. The takeover then inherits the receipt and settles it.
+
+**Proved by:** SQL suite Y20; `youtubeUploadSession.test.ts` ("the owner keeps
+its lease after the receipt so it can settle", "a takeover after the lease ran
+out inherits the receipt").
+
+---
+
+## 22. The dispatch that reached the cap is consumable by its own lease
+
+**Was:** the single-session claim refused every claim once the continuation
+count reached the cap, including the claim of the worker the **batch** claim
+had just handed the session to. The dispatch that brought the count to the cap
+could not be consumed, so the session stalled at the cap with a public row that
+stayed pending.
+
+**Is:** the cap refuses everyone **except** the holder of the live exact lease.
+A takeover, and the same worker after its lease expired, are refused (YUS13);
+the batch reconciliation classifies the session once the lease is gone.
+
+**Proved by:** SQL suite Y21; `youtubeUploadSession.test.ts` ("the holder of the
+live lease may consume the dispatch that reached the cap").
+
+---
+
+## 23. An exhausted session settles its public row
+
+**Was:** the batch reconciliation changed the private state of an exhausted
+session and left the public row pending. A session that never opened a provider
+session was not even eligible, so its row stayed pending for ever.
+
+**Is:** `youtube_upload_classify_terminal(session)` classifies a due session and
+**settles its public row** under the same authority as every other settlement:
+the parent is locked before the row, and only when the post is still processing
+and the attempt still matches.
+
+The classification distinguishes the two outcomes:
+
+* a video **may** exist (a byte reached the provider) → the session is
+  `reconcile`, the public row is failed with `youtube_upload_reconcile_required`,
+  and **no blind retry** is offered;
+* nothing was ever written → the session is `failed`, the public row is failed
+  with `youtube_upload_unsent`, and **a retry is safe**.
+
+A session that never opened a provider session counts as exhausted too: leaving
+it invisible would leave its public row pending for ever.
+
+**Proved by:** SQL suite Y22.
+
+---
+
+## 24. A late receipt does not overwrite a cancellation
+
+**Was:** the receipt-only projection settled the public row and the parent
+without asking whether the owner had cancelled the post in the meantime. A
+cancellation could be overwritten by a receipt that was read before it.
+
+**Is:** the projection locks the **parent before the result row**, so the two
+never deadlock and a cancellation is either seen or waits. When the post is no
+longer being processed, the projection refuses (YUS12): the **private receipt is
+kept** on the session — it is the truth about what the provider holds — and the
+public row and the parent keep the outcome the owner gave them.
+
+The idempotent answer is checked first: a row that is already settled with the
+same video returns the same answer and changes nothing, because there is no
+parent transition left to make.
+
+**Proved by:** SQL suites Y18 and Y23.
+
+---
+
+## 25. The admission compares the caller's snapshot with the live post
+
+**Was:** the admission blessed the upload body the caller had already built.
+Between the caller's read and the admission, the customer could have changed the
+title, the privacy or the caption, and the body would still have been blessed.
+
+**Is:** `admit_youtube_upload(...)` takes the caller's snapshot
+(`p_expected_content`) and compares it with the **live** post under the post's
+lock. A snapshot that no longer matches the live post is refused (YUS04), so a
+body built from a stale read is never blessed. The admission also refuses a
+post that is no longer being processed (YUS12) and an attempt that is not the
+post's current one (YUS11).
+
+**Proved by:** SQL suite Y26.
+
+---
+
+## 26. The write authority is the live state, not the lease
+
+**Was:** the lease was the only fence between the worker's first read of the
+world and the write to the provider. A lease says the worker owns the session;
+it says nothing about the post, the content, the target or the media.
+
+**Is:** `youtube_upload_effect_authority(session, lease_token)` answers whether
+the worker may write **now**, against the live state: the lease, the attempt,
+the post status, the live content fence, the authorised target, and the media
+file (its current object version and its scan state).
+
+It returns a reason rather than raising, because the caller has to decide: a
+stale attempt is a refusal, and a media file that is still being scanned is a
+wait.
+
+The check runs **before the provider session is opened** and **again before the
+write that creates the video** — the two writes that cannot be taken back. A
+refusal writes nothing at all and leaves the record exactly as it was, so a
+refusal before the last chunk does not leave the record claiming that a video
+may exist when no byte was ever written.
+
+**The media rule is the shared one.** `media_files.scan_state` is read with the
+same `mediaSendability` rule every other send path uses: `pending` is a wait
+and `rejected` is permanent. A resumed upload refuses exactly what every other
+send path refuses.
+
+**Proved by:** SQL suites Y26 and Y27; `youtubeResumableUpload.test.ts` ("a
+refusal before the session is opened writes nothing at all", "a refusal before
+the last chunk leaves the video unwritten"); `youtubeUploadContinuation.test.ts`
+("a title that changed after the claim stops the write", "a media file that is
+still being scanned waits").
+
+---
+
+## 27. The fanout of a dead worker is closed by the next one
+
+**Was:** the worker that admitted the upload may have died before it closed
+the post fanout. The notification candidate stayed open, the post stayed
+`processing`, and the parent was never rolled up.
+
+**Is:** `recover_youtube_upload_fanout(session)` closes the fanout of an upload
+whose worker died between the admission and the closure.
+
+The scope is **derived from the database**, never guessed: the attempt's
+destinations come from the persisted notification candidate, and the rows are
+the attempt's own rows for those destinations. The closure only happens when
+the scope is **complete**.
+
+* A **single destination** closes through the real notification-enrolled
+  fanout: the candidate becomes ready, the parent is rolled up, and the
+  notification is dispatched as it is for any other post.
+* A **mixed destination** whose sibling never started is **not** closed. The
+  candidate records an explicit terminal state
+  (`fanout_state = 'youtube_upload_partial_scope'`, the accounts that never
+  started, and a reason), the successful sibling keeps its result, and
+  **nothing is re-run**.
+
+The authority is the session, not the lease: the closure runs after the
+settlement, and the settlement releases the lease. A session that reached a
+terminal state was settled by the worker that owned it, and the scope is read
+from the database, so a caller that arrives late or twice can only cause the
+closure the database already implies.
+
+**Proved by:** SQL suites Y24 and Y25.
+
+---
+
 ## The shared claim limit
 
 `claim_post_completion_work(p_limit, ...)` hands out work of three kinds
@@ -512,6 +687,28 @@ The migration has never been applied anywhere, so the corrected signatures
 (`p_lease_ms`, the attempt column, the extended `checkpoint`, the admission,
 the fenced settlement and the receipt projection) are simply the first
 version.
+
+### The order of the three deploys
+
+**1. The schema.** Apply the migration. It is additive: a new table, new
+functions, and the changed sweeper and claim. Nothing that exists calls the
+new functions yet, so the old `process-post` keeps working.
+
+**2. The compatible reconciler.** Deploy the `reconcile-deferred-publishes`
+build that knows the new functions. It is compatible with the old
+`process-post`: it only *claims* work, and the claim is a read of the new
+tables. The old publisher never calls the new functions.
+
+**3. The publishing producer.** Deploy the `process-post` build that calls the
+admission, the fenced settlement, the effect authority and the fanout
+recovery. This is the deploy that needs the schema, and it is the deploy that
+starts writing the durable sessions.
+
+**The order is not optional in the other direction.** The new `process-post`
+calls `admit_youtube_upload`, `settle_youtube_upload_session`,
+`youtube_upload_effect_authority` and `recover_youtube_upload_fanout`, so it
+needs the schema. The new reconciler drives the continuation, and the
+continuation needs the schema too. The schema needs neither.
 
 **One thing the owner has to decide:** the `reconcile-deferred-publishes`
 cron already runs every minute, and the YouTube continuation rides on it, so

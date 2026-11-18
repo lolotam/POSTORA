@@ -349,6 +349,34 @@ export interface YoutubeUploadSessionStore {
   /** Records a terminal state that is not a receipt. */
   release(input: ReleaseUploadSession): Promise<boolean>;
   /**
+   * Whether the worker that holds the lease may write to the provider NOW.
+   *
+   * A lease says the worker owns the session. It does not say the world is
+   * still the way the worker saw it, so the authority is checked against the
+   * live state: the attempt, the post status, the content fence, the target
+   * and the media.
+   *
+   * The reason is returned rather than thrown, because the caller has to
+   * decide: a stale attempt is a refusal, and a media file that is still
+   * being scanned is a wait.
+   */
+  effectAuthority(input: EffectAuthorityUploadSession): Promise<{
+    authorized: boolean;
+    reason: string | null;
+  }>;
+  /**
+   * Closes the post fanout for an upload whose worker died between the
+   * admission and the closure.
+   *
+   * It only closes when the attempt's scope is COMPLETE. When a destination
+   * never started, it records an explicit terminal state instead and re-runs
+   * nothing.
+   */
+  recoverFanout(input: RecoverFanoutUploadSession): Promise<{
+    recovered: boolean;
+    reason: string | null;
+  }>;
+  /**
    * The sessions that are due for another look, with their claim tokens.
    *
    * The claim is what makes two reconcilers pick different sessions, and the
@@ -357,6 +385,56 @@ export interface YoutubeUploadSessionStore {
    * and is read by the worker with the token.
    */
   claimContinuations(input: ClaimContinuations): Promise<YoutubeUploadContinuationClaim[]>;
+}
+
+/** The check that runs immediately before the provider is written to. */
+export interface EffectAuthorityUploadSession {
+  sessionId: string;
+  leaseToken: string;
+}
+
+/**
+ * The fanout closure for an upload whose worker died between the admission
+ * and the closure.
+ *
+ * The lease is optional on purpose: the closure is derived from the DATABASE,
+ * not from what the caller remembers, and it runs after the settlement that
+ * released the lease. A caller that still holds a lease may pass it, and the
+ * store uses it only to prove that the caller is the owner.
+ */
+export interface RecoverFanoutUploadSession {
+  sessionId: string;
+  leaseToken?: string | null;
+}
+
+/**
+ * The stable reason for a refused write.
+ *
+ * The codes are the ones the database answers with, so the customer sees the
+ * same sentence whether the refusal came from the store or from the policy.
+ */
+export function effectAuthorityReason(reason: string | null | undefined): YoutubeUploadReason {
+  switch (reason) {
+    case "lease_stale":
+      return YOUTUBE_UPLOAD_REASON.lease_conflict;
+    case "stale_attempt":
+      return YOUTUBE_UPLOAD_REASON.stale_attempt;
+    case "post_not_processing":
+    case "content_changed":
+      return YOUTUBE_UPLOAD_REASON.superseded;
+    case "target_not_authorized":
+      return YOUTUBE_UPLOAD_REASON.account_unusable;
+    case "media_missing":
+    case "media_changed":
+    case "media_rejected":
+      return YOUTUBE_UPLOAD_REASON.media_unavailable;
+    case "media_pending":
+      // The scan will finish on its own, so the upload waits rather than
+      // failing: the same sentence the resumable outcome already uses.
+      return YOUTUBE_UPLOAD_REASON.resumable;
+    default:
+      return YOUTUBE_UPLOAD_REASON.unknown;
+  }
 }
 
 export interface AdmitUploadSession {
@@ -368,6 +446,14 @@ export interface AdmitUploadSession {
   totalBytes: number;
   /** The video resource that was sent to the provider. */
   uploadBody: Record<string, unknown>;
+  /**
+   * The post content the caller built the upload body from.
+   *
+   * It is compared with the LIVE post under the post's lock, so a body that
+   * was built from a stale read is refused instead of being blessed. It is
+   * null when the caller has no snapshot to offer.
+   */
+  expectedContent: Record<string, unknown> | null;
   userId: string;
   /**
    * The post attempt this upload belongs to.
@@ -522,6 +608,18 @@ export interface ResumableUploadDeps {
   uploadUrl: string;
   /** The video resource the provider is asked to create. */
   uploadBody: Record<string, unknown>;
+  /**
+   * Whether this worker may write to the provider NOW.
+   *
+   * It is asked before the provider session is opened and before every chunk
+   * that is written. A lease says the worker owns the session; it does not say
+   * the post, the content, the target or the media are still what the worker
+   * saw when it took the lease.
+   *
+   * It is NOT optional. A write that cannot prove it was allowed is not made,
+   * so a caller that leaves this out has no way to publish at all.
+   */
+  effectAuthority: () => Promise<{ authorized: boolean; reason: string | null }>;
 }
 
 /** A provider answer, reduced to what the protocol needs. */
@@ -1156,6 +1254,12 @@ export async function runResumableVideoUpload(deps: ResumableUploadDeps): Promis
         detail: "The upload has no session but bytes were written before.",
       };
     }
+    // The initialization write is the first thing that leaves this process
+    // towards the provider, so the live state is asked about first. The lease
+    // says this worker owns the session; only the live state says the post,
+    // the content, the target and the media are still what this worker saw.
+    const refused = await checkEffectAuthority(deps);
+    if (refused) return refused;
     const opened = await openProviderSession(deps, totalBytes, mimeType, allowedHosts);
     if (opened.kind === "outcome") return opened.outcome;
     sessionUri = opened.sessionUri;
@@ -1272,6 +1376,20 @@ export async function runResumableVideoUpload(deps: ResumableUploadDeps): Promis
       );
     }
 
+    // The live state is asked about BEFORE every write to the provider.
+    //
+    // The lease says the worker owns the session; it does not say the post,
+    // the content, the target or the media are still what the worker saw. A
+    // refusal is acted on BEFORE the state is advanced, so the record never
+    // claims that a video may exist when no byte was ever written.
+    //
+    // The last chunk is the write that creates the video, and it is the one
+    // that cannot be taken back, but the check is not limited to it: bytes
+    // that reach the provider for a post the customer cancelled are bytes
+    // that have to be accounted for.
+    const refused = await checkEffectAuthority(deps);
+    if (refused) return refused;
+
     const bytes = await readChunkBytes(source, chunk, deadlineMs - now());
     if (bytes === null) {
       const delay = continuationDelayMs(session.continuationCount + 1);
@@ -1377,6 +1495,38 @@ export async function runResumableVideoUpload(deps: ResumableUploadDeps): Promis
         retryable: false,
       },
   );
+}
+
+/**
+ * Asks whether the live state still authorises the write.
+ *
+ * It returns an outcome when the write is refused, and null when it may go
+ * ahead. A refusal is never turned into a write: a write that cannot prove it
+ * was allowed is not made, and the record is left exactly as it was, so the
+ * worker that owns the session decides what happens next.
+ */
+async function checkEffectAuthority(
+  deps: ResumableUploadDeps,
+): Promise<ResumableUploadOutcome | null> {
+  let verdict: { authorized: boolean; reason: string | null };
+  try {
+    verdict = await deps.effectAuthority();
+  } catch {
+    // The authority could not be read. A write that cannot prove it is
+    // allowed is not made.
+    return {
+      kind: "abandoned",
+      reason: YOUTUBE_UPLOAD_REASON.unknown,
+      detail: "The write authority could not be confirmed.",
+    };
+  }
+  if (verdict.authorized) return null;
+
+  return {
+    kind: "abandoned",
+    reason: effectAuthorityReason(verdict.reason),
+    detail: "The live state no longer authorises this write.",
+  };
 }
 
 /**

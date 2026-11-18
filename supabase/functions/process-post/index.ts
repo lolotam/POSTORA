@@ -9635,7 +9635,9 @@ function youtubeUploadOutcomeMessage(outcome: ResumableUploadOutcome): string {
     case "reconcile":
       return `${youtubeUploadPublicMessage(YOUTUBE_UPLOAD_REASON.reconcile)} (${outcome.reason})`;
     case "abandoned":
-      return youtubeUploadPublicMessage(YOUTUBE_UPLOAD_REASON.lease_conflict);
+      // The reason says why the write was not made: the live state refused it,
+      // or the lease was gone. It is the outcome's own reason, not a guess.
+      return `${youtubeUploadPublicMessage(outcome.reason)} (${outcome.reason})`;
     case "failed":
       return outcome.retryable
         ? `${youtubeUploadPublicMessage(YOUTUBE_UPLOAD_REASON.rejected)} (${outcome.reason})`
@@ -9777,7 +9779,7 @@ function buildYoutubeContinuationPorts(
     async loadMedia(mediaFileId) {
       const { data } = await supabase
         .from("media_files")
-        .select("id, user_id, current_object_version, file_path, storage_bucket, mime_type")
+        .select("id, user_id, current_object_version, file_path, storage_bucket, mime_type, scan_state")
         .eq("id", mediaFileId)
         .maybeSingle();
       if (!data) return null;
@@ -9792,6 +9794,10 @@ function buildYoutubeContinuationPorts(
         // made for the bucket the object is actually in.
         storageBucket: String(data.storage_bucket ?? ""),
         mimeType: typeof data.mime_type === "string" ? data.mime_type : null,
+        // The shared sendability rule reads this. A resumed upload refuses a
+        // file that is still being scanned or that was rejected, exactly as
+        // every other send path does.
+        scanState: typeof data.scan_state === "string" ? data.scan_state : null,
       };
     },
 
@@ -9837,6 +9843,9 @@ function buildYoutubeContinuationPorts(
         // with the same resource, so the video is the one the customer asked
         // for.
         uploadBody: record.uploadBody ?? {},
+        // The live state is asked about before the provider is written to.
+        effectAuthority: async () =>
+          await store.effectAuthority({ sessionId: record.id, leaseToken: token }),
       });
     },
 
@@ -9876,6 +9885,25 @@ function buildYoutubeContinuationPorts(
         accessToken: args.accessToken,
         thumbnailUrl: args.post.thumbnailUrl,
         firstComment: args.post.firstComment,
+      });
+    },
+
+    async effectAuthority(args) {
+      // The live state, read under the database's own locks: the attempt, the
+      // post status, the content fence, the authorised target and the media.
+      return await store.effectAuthority({
+        sessionId: args.sessionId,
+        leaseToken: args.leaseToken,
+      });
+    },
+
+    async recoverFanout(args) {
+      // The closure is derived from the database and it only happens when the
+      // attempt's scope is complete. A destination that never started leaves
+      // an explicit terminal state behind instead.
+      return await store.recoverFanout({
+        sessionId: args.sessionId,
+        leaseToken: args.leaseToken ?? null,
       });
     },
 
@@ -10074,6 +10102,10 @@ async function postToYouTube(
       userId: post.user_id,
       attemptStartedAt,
       targetAccountIds,
+      // The snapshot the upload body was built from. The admission compares
+      // it with the live post under the post's lock, so a body that was
+      // built from a stale read is refused rather than blessed.
+      expectedContent: threadsImageContentFence(post),
     },
     leaseToken,
     leaseMs,
@@ -10086,6 +10118,7 @@ async function postToYouTube(
 
   // The public row the upload settles when it finishes.
   const pendingPlatformPostId = opened.platformPostId;
+  const uploadSessionId = opened.record.id;
 
   // A receipt that already exists belongs to an earlier attempt. The video
   // is not uploaded again, and the first comment is not posted again either.
@@ -10108,9 +10141,22 @@ async function postToYouTube(
     sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
     uploadUrl: uploadRequest.url,
     uploadBody: uploadRequest.body,
+    // The live state is asked about before the provider is written to. The
+    // lease says this worker owns the upload; only the live state says the
+    // post, the content, the target and the media are still what this worker
+    // saw.
+    effectAuthority: async () =>
+      await store.effectAuthority({ sessionId: uploadSessionId, leaseToken }),
   });
 
-  if (outcome.kind === "resumable") {
+  // A file that is still being scanned is a WAIT, not a failure: the scan
+  // finishes on its own and the upload continues afterwards. The row stays
+  // pending so the continuation carries it on, and the post is not failed
+  // over a file the customer has not uploaded yet.
+  const waitsForTheScan =
+    outcome.kind !== "completed" && outcome.reason === YOUTUBE_UPLOAD_REASON.resumable;
+
+  if (outcome.kind === "resumable" || waitsForTheScan) {
     // The upload continues in a later worker. The row stays pending and the
     // post stays processing, so the sweeper leaves it alone and the
     // continuation finishes it.

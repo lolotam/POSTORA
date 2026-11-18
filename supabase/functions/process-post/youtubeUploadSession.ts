@@ -41,7 +41,9 @@ import type {
   ClaimUploadSession,
   CheckpointUploadSession,
   CompleteUploadSession,
+  EffectAuthorityUploadSession,
   ProjectUploadReceipt,
+  RecoverFanoutUploadSession,
   ReleaseUploadSession,
   SettleUploadSession,
   YoutubeUploadContinuationClaim,
@@ -207,6 +209,9 @@ export function createSupabaseYoutubeUploadSessionStore(
         p_upload_body: input.uploadBody,
         p_attempt_started_at: input.attemptStartedAt,
         p_target_account_ids: input.targetAccountIds,
+        // The snapshot the caller built the upload body from. The admission
+        // compares it with the live post under the post's lock.
+        p_expected_content: input.expectedContent,
       });
       if (!result.ok) return { record: null, refused: result.refusal, platformPostId: null };
       const payload = result.value ?? {};
@@ -296,6 +301,38 @@ export function createSupabaseYoutubeUploadSessionStore(
       return result.ok ? result.value : false;
     },
 
+    async effectAuthority(input: EffectAuthorityUploadSession) {
+      const result = await callRefusing<Record<string, unknown>>("youtube_upload_effect_authority", {
+        p_session_id: input.sessionId,
+        p_lease_token: input.leaseToken,
+      });
+      if (!result.ok) {
+        // A refused call is not an authority. The lease is the only thing
+        // that could have said yes, and it did not.
+        return { authorized: false, reason: result.refusal ?? "authority_unavailable" };
+      }
+      return {
+        authorized: result.value?.authorized === true,
+        reason: typeof result.value?.reason === "string" ? result.value.reason : null,
+      };
+    },
+
+    async recoverFanout(input: RecoverFanoutUploadSession) {
+      const result = await callRefusing<Record<string, unknown>>("recover_youtube_upload_fanout", {
+        p_session_id: input.sessionId,
+        p_lease_token: input.leaseToken ?? null,
+      });
+      if (!result.ok) {
+        // A refused call closed nothing. The candidate keeps whatever state it
+        // had, and the post is left for the next reconciliation.
+        return { recovered: false, reason: result.refusal ?? "fanout_unavailable" };
+      }
+      return {
+        recovered: result.value?.recovered === true,
+        reason: typeof result.value?.reason === "string" ? result.value.reason : null,
+      };
+    },
+
     async claimContinuations(input: ClaimContinuations) {
       const result = await callRefusing<Record<string, unknown>[]>("claim_youtube_upload_sessions", {
         p_limit: input.limit,
@@ -324,6 +361,8 @@ interface MemorySession {
   mediaSize: number;
   totalBytes: number;
   uploadBody: Record<string, unknown>;
+  /** The post content the caller built the upload body from. */
+  expectedContent: Record<string, unknown> | null;
   confirmedBytes: number;
   bytesSent: number;
   sessionUri: string | null;
@@ -356,7 +395,10 @@ export function createInMemoryYoutubeUploadSessionStore(options?: {
   nextId?: () => string;
   nextLeaseToken?: () => string;
   nextPublicRowId?: () => string;
-}): YoutubeUploadSessionStore & { sessions: Map<string, MemorySession> } {
+}): YoutubeUploadSessionStore & {
+  sessions: Map<string, MemorySession>;
+  fanoutRecoveries: Map<string, number>;
+} {
   const now = options?.now ?? (() => Date.now());
   let counter = 0;
   const nextId = options?.nextId ?? (() => `session-${++counter}`);
@@ -365,6 +407,8 @@ export function createInMemoryYoutubeUploadSessionStore(options?: {
   let rowCounter = 0;
   const nextPublicRowId = options?.nextPublicRowId ?? (() => `platform-post-${++rowCounter}`);
   const sessions = new Map<string, MemorySession>();
+  /** How often the fanout closure was driven for a session. */
+  const fanoutRecoveries = new Map<string, number>();
 
   function payload(session: MemorySession): YoutubeUploadSessionRecord {
     return {
@@ -407,6 +451,7 @@ export function createInMemoryYoutubeUploadSessionStore(options?: {
 
   return {
     sessions,
+    fanoutRecoveries,
 
     admit(input: AdmitUploadSession): Promise<{
       record: YoutubeUploadSessionRecord | null;
@@ -425,6 +470,7 @@ export function createInMemoryYoutubeUploadSessionStore(options?: {
           mediaSize: input.mediaSize,
           totalBytes: input.totalBytes,
           uploadBody: input.uploadBody,
+          expectedContent: input.expectedContent,
           confirmedBytes: 0,
           bytesSent: 0,
           sessionUri: null,
@@ -459,6 +505,7 @@ export function createInMemoryYoutubeUploadSessionStore(options?: {
 
         const sameContent =
           JSON.stringify(session.uploadBody) === JSON.stringify(input.uploadBody) &&
+          JSON.stringify(session.expectedContent) === JSON.stringify(input.expectedContent) &&
           session.mediaFileId === input.mediaFileId &&
           session.totalBytes === input.totalBytes;
         if (!sameContent) {
@@ -508,13 +555,25 @@ export function createInMemoryYoutubeUploadSessionStore(options?: {
     claim(input: ClaimUploadSession): Promise<{ record: YoutubeUploadSessionRecord | null; refused: YoutubeUploadRefusal | null }> {
       const session = sessions.get(input.sessionId);
       if (!session) return Promise.resolve({ record: null, refused: "session_not_found" });
-      if (session.state === "uploaded") return Promise.resolve({ record: payload(session), refused: null });
+      if (holdsLiveLease(session) && session.leaseToken !== input.leaseToken) {
+        // A live lease is never taken over: the owner of an uploaded session
+        // is the worker that stored the receipt, and it is about to settle
+        // the public row with that lease.
+        return Promise.resolve({ record: null, refused: "lease_held" });
+      }
+      if (session.state === "uploaded") {
+        session.leaseToken = input.leaseToken;
+        session.leaseExpiresAt = now() + input.leaseMs;
+        return Promise.resolve({ record: payload(session), refused: null });
+      }
       if (session.state === "reconcile") return Promise.resolve({ record: null, refused: "reconcile_required" });
       if (session.sessionExpiresAt !== null && session.sessionExpiresAt <= now()) {
         return Promise.resolve({ record: null, refused: "session_expired" });
       }
-      if (holdsLiveLease(session) && session.leaseToken !== input.leaseToken) {
-        return Promise.resolve({ record: null, refused: "lease_held" });
+      // The continuation cap. The holder of the live lease it was given may
+      // still consume what it was handed; everyone else is refused.
+      if (session.continuationCount >= 24 && !holdsLiveLease(session)) {
+        return Promise.resolve({ record: null, refused: "too_many_continuations" });
       }
       session.leaseToken = input.leaseToken;
       session.leaseExpiresAt = now() + input.leaseMs;
@@ -607,9 +666,43 @@ export function createInMemoryYoutubeUploadSessionStore(options?: {
       if (session.leaseToken !== input.leaseToken) return Promise.resolve(false);
       if (session.leaseExpiresAt === null || session.leaseExpiresAt <= now()) return Promise.resolve(false);
       session.state = input.state;
-      session.leaseToken = null;
-      session.leaseExpiresAt = null;
+      // The lease is KEPT: the owner still has to settle the public row, and
+      // the settlement is fenced to the owner. The settlement releases it.
       return Promise.resolve(true);
+    },
+
+    effectAuthority(input: EffectAuthorityUploadSession): Promise<{ authorized: boolean; reason: string | null }> {
+      const session = sessions.get(input.sessionId);
+      if (!session) return Promise.resolve({ authorized: false, reason: "session_not_found" });
+      if (session.leaseToken !== input.leaseToken) {
+        return Promise.resolve({ authorized: false, reason: "lease_stale" });
+      }
+      if (session.leaseExpiresAt === null || session.leaseExpiresAt <= now()) {
+        return Promise.resolve({ authorized: false, reason: "lease_stale" });
+      }
+      if (session.state !== "open") {
+        return Promise.resolve({ authorized: false, reason: "session_not_open" });
+      }
+      return Promise.resolve({ authorized: true, reason: null });
+    },
+
+    recoverFanout(input: RecoverFanoutUploadSession): Promise<{ recovered: boolean; reason: string | null }> {
+      const session = sessions.get(input.sessionId);
+      if (!session) return Promise.resolve({ recovered: false, reason: "session_not_found" });
+      // The same authority the database uses: the caller still owns the
+      // session, or the session has already reached a terminal state and the
+      // closure is derived from the database rather than from the caller.
+      const ownsLease =
+        session.leaseToken !== null &&
+        session.leaseToken === input.leaseToken &&
+        session.leaseExpiresAt !== null &&
+        session.leaseExpiresAt > now();
+      const terminal = session.state === "uploaded" || session.state === "failed" || session.state === "reconcile";
+      if (!ownsLease && !terminal) {
+        return Promise.resolve({ recovered: false, reason: "lease_stale" });
+      }
+      fanoutRecoveries.set(input.sessionId, (fanoutRecoveries.get(input.sessionId) ?? 0) + 1);
+      return Promise.resolve({ recovered: true, reason: null });
     },
 
     claimContinuations(input: ClaimContinuations): Promise<YoutubeUploadContinuationClaim[]> {

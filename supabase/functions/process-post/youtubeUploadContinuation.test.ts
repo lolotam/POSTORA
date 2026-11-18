@@ -58,6 +58,8 @@ interface World {
   projected: string[];
   /** The videos the worker did the follow-ups for. */
   followUps: string[];
+  /** How often the fanout closure was driven. */
+  fanoutRecoveries: string[];
 }
 
 interface WorldOptions {
@@ -71,6 +73,10 @@ interface WorldOptions {
   settleRefused?: YoutubeUploadRefusal | null;
   /** The refusal the store answers a projection with. */
   projectRefused?: YoutubeUploadRefusal | null;
+  /** The verdict the store answers the write-authority question with. */
+  authority?: { authorized: boolean; reason: string | null };
+  /** The answer the store gives the fanout closure. */
+  fanout?: { recovered: boolean; reason: string | null };
 }
 
 function world(options: WorldOptions = {}): World {
@@ -101,6 +107,7 @@ function world(options: WorldOptions = {}): World {
     filePath: "postora/user/video.mp4",
     storageBucket: "postora",
     mimeType: "video/mp4",
+    scanState: "available",
     ...options.media,
   };
   const session: YoutubeUploadSessionRecord = {
@@ -134,6 +141,7 @@ function world(options: WorldOptions = {}): World {
     settled: [],
     projected: [],
     followUps: [],
+    fanoutRecoveries: [],
     ports: {
       loadPost() {
         return Promise.resolve(post);
@@ -185,6 +193,13 @@ function world(options: WorldOptions = {}): World {
       followUps(args) {
         world.followUps.push(args.videoId);
         return Promise.resolve();
+      },
+      effectAuthority() {
+        return Promise.resolve(options.authority ?? { authorized: true, reason: null });
+      },
+      recoverFanout(args) {
+        world.fanoutRecoveries.push(args.sessionId);
+        return Promise.resolve(options.fanout ?? { recovered: true, reason: null });
       },
       now: () => 1_700_000_000_000,
     },
@@ -496,4 +511,113 @@ Deno.test("a follow-up that fails does not stop the settlement", async () => {
   assertEquals(thrown, undefined);
   assertEquals(w.settled.length, 1);
   assertEquals(w.settled[0].status, "success");
+});
+
+// ───────────────────────────────────────────────────────────────────────────
+// The live write authority
+//
+// The lease says the worker owns the session. It does not say the post, the
+// content, the target or the media are still what the worker saw. The live
+// state is asked about before anything is sent.
+// ───────────────────────────────────────────────────────────────────────────
+
+Deno.test("the live state is asked about before the upload runs", async () => {
+  const w = world({});
+  await continueYoutubeUpload(w.ports, request);
+  // The upload ran, and the refusal cases below prove that the authority was
+  // asked about: without the question they would have written to the provider.
+  assertEquals(w.uploads, 1);
+});
+
+// A refusal of the write is a refusal, whatever the live state says.
+for (
+  const refusal of [
+    { name: "the title changed", reason: "content_changed", expected: YOUTUBE_UPLOAD_REASON.superseded },
+    { name: "the post was cancelled", reason: "post_not_processing", expected: YOUTUBE_UPLOAD_REASON.superseded },
+    { name: "the attempt was replaced", reason: "stale_attempt", expected: YOUTUBE_UPLOAD_REASON.stale_attempt },
+    {
+      name: "the account is no longer a target",
+      reason: "target_not_authorized",
+      expected: YOUTUBE_UPLOAD_REASON.account_unusable,
+    },
+  ]
+) {
+  Deno.test(`a live state that says ${refusal.name} stops the write`, async () => {
+    const w = world({ authority: { authorized: false, reason: refusal.reason } });
+    const result = await continueYoutubeUpload(w.ports, request);
+    assertEquals(result.status, "refused");
+    assertEquals(result.reason, refusal.expected);
+    // Nothing was written to the provider.
+    assertEquals(w.uploads, 0);
+    assertEquals(w.settled.length, 0);
+  });
+}
+
+// ───────────────────────────────────────────────────────────────────────────
+// The media sendability rule
+//
+// The rule is the shared one, so a resumed upload refuses exactly what every
+// other send path refuses.
+// ───────────────────────────────────────────────────────────────────────────
+
+Deno.test("a media file that is still being scanned waits", async () => {
+  const w = world({ media: { scanState: "pending" } });
+  const result = await continueYoutubeUpload(w.ports, request);
+  assertEquals(result.status, "pending");
+  assertEquals(result.reason, YOUTUBE_UPLOAD_REASON.resumable);
+  // Nothing was read from the provider and nothing was written.
+  assertEquals(w.uploads, 0);
+  assertEquals(w.settled.length, 0);
+});
+
+Deno.test("a media file that the scan rejected is refused", async () => {
+  const w = world({ media: { scanState: "rejected" } });
+  const result = await continueYoutubeUpload(w.ports, request);
+  assertEquals(result.status, "refused");
+  assertEquals(result.reason, YOUTUBE_UPLOAD_REASON.media_unavailable);
+  assertEquals(w.uploads, 0);
+  assertEquals(w.settled.length, 0);
+});
+
+// ───────────────────────────────────────────────────────────────────────────
+// The fanout closure
+//
+// The worker that admitted the upload may have died before it closed the post
+// fanout. The continuation that settles the upload closes it too, so the post
+// is not held open for ever.
+// ───────────────────────────────────────────────────────────────────────────
+
+Deno.test("a settled upload closes the fanout of its attempt", async () => {
+  const w = world({ outcome: { kind: "completed", videoId: VIDEO_ID } });
+  await continueYoutubeUpload(w.ports, request);
+  assertEquals(w.fanoutRecoveries, ["session-1"]);
+});
+
+Deno.test("a projected receipt closes the fanout of its attempt", async () => {
+  const w = world({ session: { state: "uploaded", videoId: VIDEO_ID } });
+  await continueYoutubeUpload(w.ports, request);
+  assertEquals(w.fanoutRecoveries, ["session-1"]);
+});
+
+Deno.test("a fanout that cannot be closed does not fail the upload", async () => {
+  const w = world({
+    outcome: { kind: "completed", videoId: VIDEO_ID },
+    fanout: { recovered: false, reason: "incomplete_scope" },
+  });
+  const result = await continueYoutubeUpload(w.ports, request);
+  assertEquals(result.status, "completed");
+  assertEquals(w.settled.length, 1);
+});
+
+Deno.test("a fanout that throws does not fail the upload", async () => {
+  const w = world({ outcome: { kind: "completed", videoId: VIDEO_ID } });
+  const failing: YoutubeContinuationPorts = {
+    ...w.ports,
+    recoverFanout() {
+      return Promise.reject(new Error("the database was not reachable"));
+    },
+  };
+  const result = await continueYoutubeUpload(failing, request);
+  assertEquals(result.status, "completed");
+  assertEquals(w.settled.length, 1);
 });

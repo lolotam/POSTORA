@@ -162,6 +162,8 @@ async function run(
   session: YoutubeUploadSessionRecord,
   source?: UploadByteSource,
   store = createInMemoryYoutubeUploadSessionStore(),
+  effectAuthority: () => Promise<{ authorized: boolean; reason: string | null }> = () =>
+    Promise.resolve({ authorized: true, reason: null }),
 ): Promise<{ outcome: ResumableUploadOutcome; store: ReturnType<typeof createInMemoryYoutubeUploadSessionStore> }> {
   // The session is put in the store the way the caller puts it there:
   // admitted, claimed, and given its provider uri when it already has one.
@@ -173,6 +175,7 @@ async function run(
     mediaSize: session.totalBytes,
     totalBytes: session.totalBytes,
     uploadBody: { snippet: { title: "A video" } },
+    expectedContent: { caption: "A video" },
     userId: "user-1",
     attemptStartedAt: session.attemptStartedAt,
     targetAccountIds: [session.socialAccountId],
@@ -212,6 +215,7 @@ async function run(
     sleep: async () => {},
     uploadUrl: `${SESSION_HOST}/upload/youtube/v3/videos?uploadType=resumable&part=snippet,status`,
     uploadBody: { snippet: { title: "A video" } },
+    effectAuthority,
   });
   return { outcome, store };
 }
@@ -575,6 +579,88 @@ Deno.test("the outcome carries a stable reason code", async () => {
   assert(outcome.kind === "reconcile");
   assertEquals(outcome.reason, YOUTUBE_UPLOAD_REASON.expired);
   assert(Object.values(YOUTUBE_UPLOAD_REASON).includes(outcome.reason));
+});
+
+// ───────────────────────────────────────────────────────────────────────────
+// The live write authority
+//
+// The write is only made when the live state still authorises it. A lease
+// says the worker owns the session; it does not say the post, the content,
+// the target or the media are still what the worker saw.
+// ───────────────────────────────────────────────────────────────────────────
+
+Deno.test("a refusal before the session is opened writes nothing at all", async () => {
+  const provider = fakeProvider([]);
+  const { outcome } = await run(
+    provider,
+    record(),
+    undefined,
+    undefined,
+    () => Promise.resolve({ authorized: false, reason: "content_changed" }),
+  );
+  assertEquals(outcome.kind, "abandoned");
+  assert(outcome.kind === "abandoned" && outcome.reason === YOUTUBE_UPLOAD_REASON.superseded);
+  // Not one request reached the provider: no session was opened.
+  assertEquals(provider.requests.length, 0);
+});
+
+Deno.test("a refusal before a chunk write leaves the bytes unwritten", async () => {
+  // The session is already open, so the initialization write is not the one
+  // that is refused: the write of the chunk is.
+  const provider = fakeProvider([
+    { status: 308, headers: { Range: "bytes=0-10485759" } },
+  ]);
+  let checks = 0;
+  const { outcome } = await run(
+    provider,
+    record({ sessionUri: SESSION_URI }),
+    undefined,
+    undefined,
+    () => {
+      checks += 1;
+      return Promise.resolve({ authorized: false, reason: "post_not_processing" });
+    },
+  );
+  assertEquals(outcome.kind, "abandoned");
+  assertEquals(checks, 1);
+  // Not one chunk reached the provider. The request that was made is the
+  // status probe, which asks the provider what it holds and writes no bytes.
+  const written = provider.requests.filter(
+    (request) => request.method === "PUT" && !(request.range ?? "").includes("bytes */"),
+  );
+  assertEquals(written.length, 0);
+});
+
+Deno.test("the write is made when the live state authorises it", async () => {
+  const provider = fakeProvider([
+    // The session is opened.
+    { status: 200, headers: { Location: SESSION_URI } },
+    // The first chunk is accepted.
+    { status: 308, headers: { Range: "bytes=0-10485759" } },
+    // The last chunk creates the video.
+    { status: 200, body: JSON.stringify({ id: VIDEO_ID }) },
+  ]);
+  const { outcome } = await run(
+    provider,
+    record(),
+    undefined,
+    undefined,
+    () => Promise.resolve({ authorized: true, reason: null }),
+  );
+  assertEquals(outcome, { kind: "completed", videoId: VIDEO_ID });
+});
+
+Deno.test("an authority that cannot be read is not an authority", async () => {
+  const provider = fakeProvider([]);
+  const { outcome } = await run(
+    provider,
+    record(),
+    undefined,
+    undefined,
+    () => Promise.reject(new Error("the database was not reachable")),
+  );
+  assertEquals(outcome.kind, "abandoned");
+  assertEquals(provider.requests.length, 0);
 });
 
 Deno.test("a status that is not a receipt is never read as one", () => {

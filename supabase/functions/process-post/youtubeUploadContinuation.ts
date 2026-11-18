@@ -30,12 +30,15 @@
  * what needs the account.
  */
 
-import type {
-  ResumableUploadOutcome,
-  UploadByteSource,
-  YoutubeUploadRefusal,
-  YoutubeUploadSessionRecord,
+import {
+  effectAuthorityReason,
+  YOUTUBE_CONTINUATION_MIN_DELAY_MS,
+  type ResumableUploadOutcome,
+  type UploadByteSource,
+  type YoutubeUploadRefusal,
+  type YoutubeUploadSessionRecord,
 } from "./youtubeResumableUpload.ts";
+import { mediaSendability } from "../_shared/partnerMediaStore.ts";
 import { YOUTUBE_UPLOAD_REASON, type YoutubeUploadReason } from "./youtubeUploadPolicy.ts";
 
 /** What the continuation is asked to do. */
@@ -96,6 +99,15 @@ export interface ContinuationMedia {
    */
   storageBucket: string;
   mimeType: string | null;
+  /**
+   * The security scan state of the file.
+   *
+   * It is the shared sendability rule: a file that is still being scanned is
+   * a wait, and a file that was rejected is permanent. A resumed upload
+   * applies the SAME rule every other send path applies, so a file that may
+   * not be sent is not sent from here either.
+   */
+  scanState: string | null;
 }
 
 /** Everything the continuation needs from the outside world. */
@@ -179,6 +191,32 @@ export interface YoutubeContinuationPorts {
     videoId: string;
     accessToken: string;
   }): Promise<void>;
+  /**
+   * Whether this worker may write to the provider NOW.
+   *
+   * The lease says the worker owns the session. It does not say the post, the
+   * content, the target or the media are still what the worker saw, so the
+   * live state is asked about before anything is sent.
+   *
+   * The reason is returned rather than thrown: a stale attempt is a refusal
+   * and a media file that is still being scanned is a wait.
+   */
+  effectAuthority(args: { sessionId: string; leaseToken: string }): Promise<{
+    authorized: boolean;
+    reason: string | null;
+  }>;
+  /**
+   * Closes the post fanout for an upload whose worker died between the
+   * admission and the closure.
+   *
+   * It only closes when the attempt's scope is complete. When a destination
+   * never started, it records an explicit terminal state instead and re-runs
+   * nothing.
+   */
+  recoverFanout(args: { sessionId: string; leaseToken?: string | null }): Promise<{
+    recovered: boolean;
+    reason: string | null;
+  }>;
   now(): number;
 }
 
@@ -304,6 +342,10 @@ export async function continueYoutubeUpload(
     if (!projected.settled) {
       return refused(refusalToReason(projected.refused ?? "session_not_found"));
     }
+    // The receipt is on the public row now, so the post may be finished with
+    // the notification candidate that the worker that stored the receipt left
+    // open.
+    await recoverFanoutQuietly(ports, session.id);
     return { status: "completed", reason: YOUTUBE_UPLOAD_REASON.completed, videoId: session.videoId };
   }
 
@@ -347,11 +389,43 @@ export async function continueYoutubeUpload(
   }
 
   const media = await loadMatchingMedia(ports, session, post);
-  if (!media) return refused(YOUTUBE_UPLOAD_REASON.media_unavailable);
+  if (!media.media) {
+    // A file that is still being scanned waits: the upload continues when the
+    // scan is done. Anything else is permanent for this attempt.
+    if (media.reason === YOUTUBE_UPLOAD_REASON.resumable) {
+      return {
+        status: "pending",
+        reason: YOUTUBE_UPLOAD_REASON.resumable,
+        nextCheckAt: new Date(ports.now() + YOUTUBE_CONTINUATION_MIN_DELAY_MS).toISOString(),
+      };
+    }
+    return refused(media.reason ?? YOUTUBE_UPLOAD_REASON.media_unavailable);
+  }
 
   const { leaseToken } = request;
   const { accessToken } = account;
-  const source = await ports.createSource({ media });
+
+  // The live state is asked about BEFORE anything is sent.
+  //
+  // Everything above this line read the world once. Between that read and the
+  // write, the customer may have changed the title, the privacy or the
+  // account, or the media may have been replaced or rejected by a scan. The
+  // lease only says this worker owns the session; it says nothing about any
+  // of that.
+  const authority = await ports.effectAuthority({ sessionId: session.id, leaseToken });
+  if (!authority.authorized) {
+    const reason = effectAuthorityReason(authority.reason);
+    if (reason === YOUTUBE_UPLOAD_REASON.resumable) {
+      return {
+        status: "pending",
+        reason: YOUTUBE_UPLOAD_REASON.resumable,
+        nextCheckAt: new Date(ports.now() + YOUTUBE_CONTINUATION_MIN_DELAY_MS).toISOString(),
+      };
+    }
+    return refused(reason);
+  }
+
+  const source = await ports.createSource({ media: media.media });
   const outcome = await ports.runUpload({
     record: session,
     leaseToken,
@@ -394,23 +468,47 @@ function isUsableAccount(
  * The media file the upload started with, if it is still the one the post
  * names.
  *
- * The file must still be named by the post, still belong to the owner, and
- * still be the same version. A replaced file is a different video.
+ * The file must still be named by the post, still belong to the owner, still
+ * be the same version, and still be SENDABLE. The sendability rule is the
+ * shared one, so a file that is pending a security scan waits and a file that
+ * was rejected is permanent: a resumed upload refuses exactly what every
+ * other send path refuses.
  */
 async function loadMatchingMedia(
   ports: YoutubeContinuationPorts,
   session: YoutubeUploadSessionRecord,
   post: ContinuationPost,
-): Promise<ContinuationMedia | null> {
-  if (!session.mediaFileId || !post.mediaFileIds.includes(session.mediaFileId)) return null;
+): Promise<{ media: ContinuationMedia | null; reason: YoutubeUploadReason | null }> {
+  if (!session.mediaFileId || !post.mediaFileIds.includes(session.mediaFileId)) {
+    return { media: null, reason: YOUTUBE_UPLOAD_REASON.media_unavailable };
+  }
   const media = await ports.loadMedia(session.mediaFileId);
-  if (!media || media.userId !== post.userId) return null;
+  if (!media || media.userId !== post.userId) {
+    return { media: null, reason: YOUTUBE_UPLOAD_REASON.media_unavailable };
+  }
   if (session.mediaObjectVersion !== null && media.currentObjectVersion !== session.mediaObjectVersion) {
     // The file was replaced. The bytes of the upload belong to the old
     // version, and the old version is not what the post names any more.
-    return null;
+    return { media: null, reason: YOUTUBE_UPLOAD_REASON.media_unavailable };
   }
-  return media;
+  const sendable = mediaSendability({ scanState: media.scanState });
+  if (!sendable.ok) {
+    return { media: null, reason: mediaSendabilityReason(sendable.code) };
+  }
+  return { media, reason: null };
+}
+
+/**
+ * Why a file that may not be sent stops the upload.
+ *
+ * A file that is still being scanned is a wait, not a failure: the scan will
+ * finish on its own and the upload can continue afterwards. A file the scan
+ * rejected is permanent for this attempt.
+ */
+function mediaSendabilityReason(code: string): YoutubeUploadReason {
+  return code === "media_pending"
+    ? YOUTUBE_UPLOAD_REASON.resumable
+    : YOUTUBE_UPLOAD_REASON.media_unavailable;
 }
 
 /**
@@ -469,6 +567,7 @@ async function interpretOutcome(args: {
       // session now decides what happens to the row.
       return { status: "refused", reason: YOUTUBE_UPLOAD_REASON.lease_conflict };
     }
+    await recoverFanoutQuietly(ports, session.id);
     return { status: "completed", reason: YOUTUBE_UPLOAD_REASON.completed, videoId: outcome.videoId };
   }
 
@@ -517,5 +616,40 @@ async function interpretOutcome(args: {
     return { status: "refused", reason: YOUTUBE_UPLOAD_REASON.lease_conflict };
   }
 
+  await recoverFanoutQuietly(ports, session.id);
+
   return { status: "failed", reason };
+}
+
+/**
+ * Drives the fanout closure for a settled upload.
+ *
+ * The upload may have been the only thing this post was doing, and the worker
+ * that died between the admission and the closure left the notification
+ * candidate open. The closure is derived from the database, and it only
+ * happens when the attempt's scope is complete.
+ *
+ * A failure here is never fatal: the video is already published, or the
+ * failure is already recorded, and the post is settled either way. The
+ * candidate stays in whatever state the closure left it, and the next
+ * reconciliation sees it.
+ */
+async function recoverFanoutQuietly(
+  ports: YoutubeContinuationPorts,
+  sessionId: string,
+): Promise<void> {
+  try {
+    const recovered = await ports.recoverFanout({ sessionId });
+    if (!recovered.recovered) {
+      console.warn(
+        `[youtube] the fanout of session ${sessionId} was not closed:`,
+        recovered.reason ?? "unknown reason",
+      );
+    }
+  } catch (error) {
+    console.warn(
+      `[youtube] the fanout of session ${sessionId} could not be closed:`,
+      error instanceof Error ? error.message : String(error),
+    );
+  }
 }

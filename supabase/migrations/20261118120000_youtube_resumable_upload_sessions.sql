@@ -340,6 +340,340 @@ COMMENT ON FUNCTION public.youtube_upload_target_authorized(uuid, uuid, uuid[]) 
   'run that opened the upload.';
 
 -- ---------------------------------------------------------------------------
+-- recover_youtube_upload_fanout
+--
+-- The fanout closure a worker that died between the admission and the
+-- closure leaves open.
+--
+-- WHY IT EXISTS
+-- -------------
+-- The admission creates the public pending row. The publishing worker closes
+-- the fanout at the END, with the exact list of rows this attempt wrote. A
+-- worker that died in between leaves the notification candidate open, and the
+-- parent waits for a closure that never comes.
+--
+-- THE SCOPE IS NOT GUESSED
+-- ------------------------
+-- The attempt's destinations are persisted by the notification enrolment
+-- (`attempt_target_account_ids`, and the candidate's `target_account_ids`).
+-- The rows the attempt owns are in the database: they are the rows of this
+-- post, for the attempt's accounts, created by this attempt. That is the
+-- same authority `close_post_fanout` itself applies to the ids it is given,
+-- so the scope handed to it is the scope it would have derived.
+--
+-- TWO OUTCOMES
+-- ------------
+--   * EVERY destination has a row: the scope is complete, and the fanout is
+--     closed with it. A single-destination post closes here -- the row the
+--     admission created is the whole scope -- and the notification fires
+--     through the real enrolled fanout. A mixed post closes too, with the
+--     siblings' rows included, so their successes are preserved and nothing
+--     is replayed.
+--   * A destination has NO row: that destination never started, so the scope
+--     is INCOMPLETE. Closing it now would freeze a scope that does not
+--     include a row the destination is going to write later, and the closure
+--     would then be refused for ever. So the fanout is NOT closed, and the
+--     candidate records an explicit terminal state that says which
+--     destinations never started. Nothing is re-run here: the destination
+--     that never started is the retry path's business, not this one's.
+--
+-- A sibling that started and is not finished is not 'unsent': it has a row,
+-- so it is part of the scope, and the closure marks the fanout as not ready
+-- until that row settles.
+-- ---------------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION public.recover_youtube_upload_fanout(
+  p_session_id uuid,
+  p_lease_token uuid DEFAULT NULL
+)
+RETURNS jsonb
+LANGUAGE plpgsql
+VOLATILE
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+DECLARE
+  v_session public.youtube_upload_sessions%ROWTYPE;
+  v_post public.posts%ROWTYPE;
+  v_candidate jsonb;
+  v_targets uuid[];
+  v_retained uuid[];
+  v_rows uuid[];
+  v_unsent uuid[];
+  v_attempt timestamptz;
+  v_closed jsonb;
+  r_target record;
+BEGIN
+  IF p_session_id IS NULL THEN
+    RETURN jsonb_build_object('recovered', false, 'reason', 'invalid_arguments');
+  END IF;
+
+  SELECT * INTO v_session FROM public.youtube_upload_sessions WHERE id = p_session_id;
+  IF NOT FOUND THEN
+    RETURN jsonb_build_object('recovered', false, 'reason', 'session_not_found');
+  END IF;
+
+  -- THE AUTHORITY
+  -- -------------
+  -- The closure runs AFTER the settlement, and the settlement releases the
+  -- lease. So the lease is not the authority here: the SESSION is.
+  --
+  -- A session that reached a terminal state was settled by the worker that
+  -- owned it, and the settlement is what made the public row terminal. The
+  -- scope below is read from the database, not from the caller, so a caller
+  -- that arrives late, or twice, can only cause the closure that the database
+  -- already implies. A caller that owns a live lease is allowed in as well, so
+  -- the closure may also run before the settlement.
+  IF NOT (
+    v_session.state IN ('uploaded', 'failed', 'reconcile')
+    OR (
+      v_session.lease_token IS NOT DISTINCT FROM p_lease_token
+      AND v_session.lease_expires_at IS NOT NULL
+      AND v_session.lease_expires_at > now()
+    )
+  ) THEN
+    RETURN jsonb_build_object('recovered', false, 'reason', 'lease_stale');
+  END IF;
+
+  -- The parent is locked first, and the attempt must still be the running
+  -- one. A cancelled or superseded post keeps its own outcome.
+  SELECT * INTO v_post FROM public.posts WHERE id = v_session.post_id FOR UPDATE;
+  IF NOT FOUND THEN
+    RETURN jsonb_build_object('recovered', false, 'reason', 'post_not_found');
+  END IF;
+  v_attempt := v_session.attempt_started_at;
+  IF v_attempt IS NOT NULL AND v_post.processing_started_at IS DISTINCT FROM v_attempt THEN
+    RETURN jsonb_build_object('recovered', false, 'reason', 'stale_attempt');
+  END IF;
+  IF v_post.status <> 'processing' THEN
+    -- The parent may already have been rolled up by THIS attempt's own
+    -- closure. That is the same authority every other settlement path reads,
+    -- and it is what makes the closure repeatable: a second call finds the
+    -- scope it froze and changes nothing.
+    --
+    -- A post that was cancelled or superseded does not carry those markers,
+    -- so it is still refused.
+    IF NOT (
+      v_post.status IN ('completed', 'failed')
+      AND v_post.metadata ->> 'settlement_rollup_status' = v_post.status
+      AND (v_post.metadata ->> 'settlement_rollup_processing_started_at')::timestamptz = v_attempt
+    ) THEN
+      RETURN jsonb_build_object('recovered', false, 'reason', 'post_not_processing');
+    END IF;
+  END IF;
+
+  v_candidate := v_post.metadata -> 'legacy_notification_candidate';
+  IF v_candidate IS NULL
+     OR (v_candidate ->> 'attempt_started_at')::timestamptz IS DISTINCT FROM v_attempt THEN
+    RETURN jsonb_build_object('recovered', false, 'reason', 'no_candidate_for_attempt');
+  END IF;
+
+  SELECT coalesce(array_agg(x::uuid), ARRAY[]::uuid[]) INTO v_targets
+    FROM jsonb_array_elements_text(v_candidate -> 'target_account_ids') x;
+  SELECT coalesce(array_agg(x::uuid), ARRAY[]::uuid[]) INTO v_retained
+    FROM jsonb_array_elements_text(v_candidate -> 'retained_platform_post_ids') x;
+  IF cardinality(v_targets) = 0 THEN
+    RETURN jsonb_build_object('recovered', false, 'reason', 'no_target_scope');
+  END IF;
+
+  -- The rows this attempt owns, for its own destinations.
+  SELECT coalesce(array_agg(pp.id ORDER BY pp.id), ARRAY[]::uuid[]) INTO v_rows
+    FROM public.platform_posts pp
+   WHERE pp.post_id = v_post.id
+     AND pp.social_account_id = ANY(v_targets)
+     AND (
+       pp.created_at >= v_attempt
+       OR (
+         (pp.response_data #>> '{deferred,attempt_started_at}') ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}[ T]'
+         AND (pp.response_data #>> '{deferred,attempt_started_at}')::timestamptz = v_attempt
+       )
+     );
+
+  -- A destination with no row never started. The scope is incomplete, so the
+  -- fanout is not closed on a scope that would be wrong the moment that
+  -- destination writes its row.
+  v_unsent := ARRAY[]::uuid[];
+  FOR r_target IN SELECT unnest(v_targets) AS account_id LOOP
+    IF NOT EXISTS (
+      SELECT 1 FROM public.platform_posts pp
+       WHERE pp.id = ANY(v_rows) AND pp.social_account_id = r_target.account_id
+    ) THEN
+      v_unsent := array_append(v_unsent, r_target.account_id);
+    END IF;
+  END LOOP;
+
+  IF cardinality(v_unsent) > 0 THEN
+    -- The explicit safe terminal state. The candidate says which
+    -- destinations never started, so the post is not silently held open and
+    -- the reason is actionable rather than guessed.
+    v_candidate := v_candidate || jsonb_build_object(
+      'fanout_state', 'youtube_upload_partial_scope',
+      'fanout_unsent_account_ids', to_jsonb(v_unsent),
+      'fanout_recovered_at', now(),
+      'fanout_recovery_reason', 'these destinations never started, so the fanout scope is incomplete'
+    );
+    UPDATE public.posts
+       SET metadata = jsonb_set(coalesce(metadata, '{}'::jsonb), '{legacy_notification_candidate}', v_candidate, true)
+     WHERE id = v_post.id;
+    RETURN jsonb_build_object(
+      'recovered', false,
+      'reason', 'incomplete_scope',
+      'unsent_account_ids', to_jsonb(v_unsent)
+    );
+  END IF;
+
+  v_closed := public.close_post_fanout(
+    v_post.id,
+    v_attempt,
+    v_candidate -> 'content_fence',
+    v_rows,
+    v_retained
+  );
+
+  RETURN jsonb_build_object(
+    'recovered', coalesce((v_closed ->> 'closed')::boolean, false),
+    'reason', v_closed ->> 'error',
+    'closed', v_closed
+  );
+END;
+$$;
+
+COMMENT ON FUNCTION public.recover_youtube_upload_fanout(uuid, uuid) IS
+  'Closes the post fanout for a YouTube upload whose worker died between the '
+  'admission and the closure, when the attempt scope is complete. When a '
+  'destination never started, it records an explicit terminal state instead '
+  'of closing on an incomplete scope, and re-runs nothing.';
+
+REVOKE ALL ON FUNCTION public.recover_youtube_upload_fanout(uuid, uuid) FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.recover_youtube_upload_fanout(uuid, uuid) TO service_role;
+
+-- ---------------------------------------------------------------------------
+-- youtube_upload_effect_authority
+--
+-- The check that runs immediately before the provider is written to.
+--
+-- WHY IT EXISTS
+-- -------------
+-- A lease says "this worker owns the session". It does NOT say "the world is
+-- still the way the worker saw it". Between the admission and the write, the
+-- customer may have changed the title or the privacy, the post may have been
+-- cancelled, the account may have been disconnected, the media may have been
+-- replaced, and the security scan may have rejected the file. Any of those
+-- turns the write into the wrong write.
+--
+-- So the authority is checked against the LIVE state at the moment of the
+-- effect, and not against the lease alone:
+--
+--   * the worker still holds a live lease on the session;
+--   * the session's attempt is the post's current attempt, and the post is
+--     still being processed;
+--   * the content fence still matches the live post;
+--   * the account is still an authorised target of the post;
+--   * the media file is still the version the upload started with, and it is
+--     still SENDABLE -- the same rule every other send path uses, so a file
+--     that is pending a scan or was rejected by one is not sent from here
+--     either.
+--
+-- It returns the reason rather than raising, because the caller has to
+-- decide: a stale attempt is a refusal, and a media file that is still
+-- being scanned is a wait.
+-- ---------------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION public.youtube_upload_effect_authority(
+  p_session_id uuid,
+  p_lease_token uuid
+)
+RETURNS jsonb
+LANGUAGE plpgsql
+VOLATILE
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+DECLARE
+  v_session public.youtube_upload_sessions%ROWTYPE;
+  v_post public.posts%ROWTYPE;
+  v_fence jsonb;
+  v_media_version integer;
+  v_scan_state text;
+BEGIN
+  IF p_session_id IS NULL OR p_lease_token IS NULL THEN
+    RETURN jsonb_build_object('authorized', false, 'reason', 'invalid_arguments');
+  END IF;
+
+  SELECT * INTO v_session FROM public.youtube_upload_sessions WHERE id = p_session_id;
+  IF NOT FOUND THEN
+    RETURN jsonb_build_object('authorized', false, 'reason', 'session_not_found');
+  END IF;
+
+  IF v_session.lease_token IS DISTINCT FROM p_lease_token
+     OR v_session.lease_expires_at IS NULL
+     OR v_session.lease_expires_at <= now() THEN
+    RETURN jsonb_build_object('authorized', false, 'reason', 'lease_stale');
+  END IF;
+
+  SELECT * INTO v_post FROM public.posts WHERE id = v_session.post_id;
+  IF NOT FOUND THEN
+    RETURN jsonb_build_object('authorized', false, 'reason', 'post_not_found');
+  END IF;
+  IF v_session.attempt_started_at IS NOT NULL
+     AND v_post.processing_started_at IS DISTINCT FROM v_session.attempt_started_at THEN
+    RETURN jsonb_build_object('authorized', false, 'reason', 'stale_attempt');
+  END IF;
+  IF v_post.status <> 'processing' THEN
+    RETURN jsonb_build_object('authorized', false, 'reason', 'post_not_processing');
+  END IF;
+
+  -- The content fence is the LIVE post. A title, a privacy or a caption that
+  -- changed since the admission is caught here.
+  v_fence := public.youtube_upload_live_fence(
+    v_session.post_id, v_session.media_file_id, v_session.total_bytes, v_session.social_account_id);
+  IF v_fence IS NULL THEN
+    RETURN jsonb_build_object('authorized', false, 'reason', 'post_not_found');
+  END IF;
+  IF v_session.content_fence IS NOT NULL AND v_session.content_fence IS DISTINCT FROM v_fence THEN
+    RETURN jsonb_build_object('authorized', false, 'reason', 'content_changed');
+  END IF;
+
+  IF NOT public.youtube_upload_target_authorized(
+       v_session.post_id, v_session.social_account_id, v_session.target_account_ids) THEN
+    RETURN jsonb_build_object('authorized', false, 'reason', 'target_not_authorized');
+  END IF;
+
+  -- The media file: still the version the upload started with, and still
+  -- sendable. The sendability rule is the shared one, so a file that is
+  -- pending a security scan or was rejected by it is refused here exactly as
+  -- every other send path refuses it.
+  IF v_session.media_file_id IS NOT NULL THEN
+    SELECT current_object_version, scan_state
+      INTO v_media_version, v_scan_state
+      FROM public.media_files WHERE id = v_session.media_file_id;
+    IF NOT FOUND THEN
+      RETURN jsonb_build_object('authorized', false, 'reason', 'media_missing');
+    END IF;
+    IF v_session.media_object_version IS NOT NULL
+       AND coalesce(v_media_version, 1) IS DISTINCT FROM v_session.media_object_version THEN
+      RETURN jsonb_build_object('authorized', false, 'reason', 'media_changed');
+    END IF;
+    IF v_scan_state = 'pending' THEN
+      RETURN jsonb_build_object('authorized', false, 'reason', 'media_pending');
+    END IF;
+    IF v_scan_state = 'rejected' THEN
+      RETURN jsonb_build_object('authorized', false, 'reason', 'media_rejected');
+    END IF;
+  END IF;
+
+  RETURN jsonb_build_object('authorized', true, 'reason', null);
+END;
+$$;
+
+COMMENT ON FUNCTION public.youtube_upload_effect_authority(uuid, uuid) IS
+  'Whether the worker that holds the lease may write to the provider now. '
+  'Checks the attempt, the post status, the live content fence, the target '
+  'and the media -- including the shared media sendability rule -- against '
+  'the live state, not against the lease alone.';
+
+REVOKE ALL ON FUNCTION public.youtube_upload_effect_authority(uuid, uuid) FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.youtube_upload_effect_authority(uuid, uuid) TO service_role;
+
+-- ---------------------------------------------------------------------------
 -- The payload one function reads.
 --
 -- It carries the session URI, so it is only ever built for the service role.
@@ -402,6 +736,11 @@ $$;
 --     bytes were written the session is left for a human: a new session
 --     could create a second video.
 -- ---------------------------------------------------------------------------
+-- The admission grew a parameter, so the old signature is a different
+-- function now. It is dropped rather than left behind: an overload that
+-- nobody revokes would still be callable by the browser roles.
+DROP FUNCTION IF EXISTS public.admit_youtube_upload(uuid, uuid, uuid, uuid, bigint, bigint, jsonb, timestamptz, uuid[], timestamptz);
+
 CREATE OR REPLACE FUNCTION public.admit_youtube_upload(
   p_post_id uuid,
   p_social_account_id uuid,
@@ -412,7 +751,8 @@ CREATE OR REPLACE FUNCTION public.admit_youtube_upload(
   p_upload_body jsonb,
   p_attempt_started_at timestamptz DEFAULT NULL,
   p_target_account_ids uuid[] DEFAULT NULL,
-  p_session_expires_at timestamptz DEFAULT NULL
+  p_session_expires_at timestamptz DEFAULT NULL,
+  p_expected_content jsonb DEFAULT NULL
 )
 RETURNS jsonb
 LANGUAGE plpgsql
@@ -425,6 +765,7 @@ DECLARE
   v_account public.social_accounts%ROWTYPE;
   v_session public.youtube_upload_sessions%ROWTYPE;
   v_fence jsonb;
+  v_content jsonb;
   v_media_version integer;
   v_attempt timestamptz;
   v_public_row public.platform_posts%ROWTYPE;
@@ -437,6 +778,49 @@ BEGIN
   SELECT * INTO v_post FROM public.posts WHERE id = p_post_id AND user_id = p_user_id FOR UPDATE;
   IF NOT FOUND THEN
     RAISE EXCEPTION 'YUS01: the post is not the owner''s, or is not there' USING ERRCODE = 'YUS01';
+  END IF;
+
+  -- The post must still be the one being worked on, and the attempt the
+  -- caller names must still be the running one. A post that was cancelled,
+  -- superseded or retried is not admitted into a new upload.
+  IF v_post.status <> 'processing' THEN
+    RAISE EXCEPTION 'YUS12: the post is no longer being processed' USING ERRCODE = 'YUS12';
+  END IF;
+  IF p_attempt_started_at IS NOT NULL
+     AND v_post.processing_started_at IS DISTINCT FROM p_attempt_started_at THEN
+    RAISE EXCEPTION 'YUS11: the upload belongs to an older attempt of the post' USING ERRCODE = 'YUS11';
+  END IF;
+
+  -- The caller's snapshot must be the LIVE post.
+  --
+  -- The caller built the upload body from the post it read. Between that read
+  -- and this admission the customer may have changed the title, the privacy
+  -- or the caption, and the body would then publish the old one. The
+  -- snapshot the caller used is compared with the live post HERE, under the
+  -- post's lock, so a body that was built from a stale read is refused rather
+  -- than blessed.
+  IF p_expected_content IS NOT NULL THEN
+    IF jsonb_typeof(p_expected_content) <> 'object' THEN
+      RAISE EXCEPTION 'YUS04: the expected content is not usable' USING ERRCODE = 'YUS04';
+    END IF;
+    v_content := jsonb_build_object(
+      'user_id', v_post.user_id,
+      'caption', v_post.caption,
+      'media_file_ids', v_post.media_file_ids,
+      'metadata', public.normalize_threads_internal_metadata(v_post.metadata),
+      'platforms', v_post.platforms,
+      'scheduled_at', v_post.scheduled_at,
+      'publish_requested_at', v_post.publish_requested_at,
+      'source', v_post.source
+    );
+    IF v_content IS DISTINCT FROM jsonb_set(
+      p_expected_content,
+      '{metadata}',
+      public.normalize_threads_internal_metadata(p_expected_content -> 'metadata'),
+      true
+    ) THEN
+      RAISE EXCEPTION 'YUS04: the post was edited while the upload was being prepared' USING ERRCODE = 'YUS04';
+    END IF;
   END IF;
 
   SELECT * INTO v_account FROM public.social_accounts
@@ -611,13 +995,15 @@ BEGIN
 END;
 $$;
 
-COMMENT ON FUNCTION public.admit_youtube_upload(uuid, uuid, uuid, uuid, bigint, bigint, jsonb, timestamptz, uuid[], timestamptz) IS
+COMMENT ON FUNCTION public.admit_youtube_upload(uuid, uuid, uuid, uuid, bigint, bigint, jsonb, timestamptz, uuid[], timestamptz, jsonb) IS
   'Admits one YouTube upload: the private session and the public pending '
   'platform_posts row are created in ONE transaction, before the provider is '
-  'contacted. Refuses a post, account or media file that is not the owner''s, '
-  'and a post whose live content changed while the upload was in flight. '
-  'Reopens an expired session ONLY when the record proves that no byte ever '
-  'reached the provider; otherwise the session is marked for manual '
+  'contacted. The caller''s snapshot of the post is compared with the live post '
+  'under the post''s lock, so an upload body that was built from a stale read is '
+  'refused rather than blessed. Refuses a post, account or media file that is '
+  'not the owner''s, and a post whose live content changed while the upload was '
+  'in flight. Reopens an expired session ONLY when the record proves that no '
+  'byte ever reached the provider; otherwise the session is marked for manual '
   'reconciliation and returned in that state, because a refusal raised here '
   'would undo the mark with the caller''s rollback.';
 
@@ -672,7 +1058,17 @@ BEGIN
 
   -- A receipt is returned as it is: the caller uses it instead of uploading.
   -- The lease is still taken, so the receipt is projected once.
+  --
+  -- A live lease held by ANOTHER worker is not taken over here. The owner of
+  -- an uploaded session is the worker that stored the receipt, and it is
+  -- about to settle the public row with that lease. Taking it away would
+  -- make the owner's own settlement fail.
   IF v_session.state = 'uploaded' THEN
+    IF v_session.lease_expires_at IS NOT NULL
+       AND v_session.lease_expires_at > now()
+       AND v_session.lease_token IS DISTINCT FROM p_lease_token THEN
+      RAISE EXCEPTION 'YUS07: another worker owns the session' USING ERRCODE = 'YUS07';
+    END IF;
     UPDATE public.youtube_upload_sessions
        SET lease_token = p_lease_token,
            lease_expires_at = now() + v_lease,
@@ -697,8 +1093,24 @@ BEGIN
     RAISE EXCEPTION 'YUS07: another worker owns the session' USING ERRCODE = 'YUS07';
   END IF;
 
-  -- A session that has been continued too many times is not asked again.
-  IF v_session.continuation_count >= 24 THEN
+  -- The continuation cap.
+  --
+  -- The cap is enforced by the BATCH claim, which will not hand out a session
+  -- that is already at the cap. This single-session claim is what the holder
+  -- of a lease uses to take the session it was just given, so it must not
+  -- refuse the very dispatch that reached the cap: the worker that was handed
+  -- the session at the cap has to be able to consume it.
+  --
+  -- So the cap refuses everyone EXCEPT the worker that still holds the live
+  -- lease it was given. A takeover, and the same worker after its lease
+  -- expired, are refused here -- and the batch reconciliation classifies the
+  -- session once the lease is gone.
+  IF v_session.continuation_count >= 24
+     AND NOT (
+       v_session.lease_token IS NOT DISTINCT FROM p_lease_token
+       AND v_session.lease_expires_at IS NOT NULL
+       AND v_session.lease_expires_at > now()
+     ) THEN
     RAISE EXCEPTION 'YUS13: the upload has been continued too many times' USING ERRCODE = 'YUS13';
   END IF;
 
@@ -883,8 +1295,15 @@ BEGIN
          confirmed_bytes = total_bytes,
          bytes_sent = total_bytes,
          error = NULL,
-         lease_token = NULL,
-         lease_expires_at = NULL,
+         -- The lease is KEPT, deliberately.
+         --
+         -- The owner still has to settle the public row, and the settlement is
+         -- fenced on the lease it was given. Clearing the lease here would
+         -- leave the owner unable to settle the video it just finished: the
+         -- receipt would sit on the session with nobody able to publish it.
+         --
+         -- The lease is released by the settlement, and a worker that dies
+         -- before it leaves a lease that expires on its own.
          updated_at = clock_timestamp()
    WHERE id = v_session.id;
   RETURN true;
@@ -892,9 +1311,10 @@ END;
 $$;
 
 COMMENT ON FUNCTION public.complete_youtube_upload_session(uuid, uuid, text) IS
-  'Records the video id the provider returned. It is kept, and the session '
-  'URI is dropped with it. Idempotent for the same video id, and refuses a '
-  'worker whose lease is stale.';
+  'Records the video id the provider returned. It is kept, the session URI is '
+  'dropped with it, and the lease is KEPT so the owner can still settle the '
+  'public row. Idempotent for the same video id, and refuses a worker whose '
+  'lease is stale.';
 
 -- ---------------------------------------------------------------------------
 -- settle_youtube_upload_session
@@ -1067,9 +1487,32 @@ BEGIN
     RAISE EXCEPTION 'YUS14: the session has no public row to settle' USING ERRCODE = 'YUS14';
   END IF;
 
+  -- The parent is locked BEFORE the result row.
+  --
+  -- The order matters twice over. A deadlock is possible when two writers
+  -- take the two locks in opposite orders, and every other settlement path
+  -- takes the parent first. And a cancellation that commits while this
+  -- recovery is reading has to be VISIBLE here: the post is locked first, so
+  -- a cancellation either happened before this lock and is seen, or it waits
+  -- for this transaction and happens after the settlement that was
+  -- authorised while the post was still being processed.
+  SELECT * INTO v_post FROM public.posts WHERE id = v_session.post_id FOR UPDATE;
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'YUS01: the post is gone' USING ERRCODE = 'YUS01';
+  END IF;
+  IF v_session.attempt_started_at IS NOT NULL
+     AND v_post.processing_started_at IS DISTINCT FROM v_session.attempt_started_at THEN
+    RAISE EXCEPTION 'YUS11: the upload belongs to an older attempt of the post' USING ERRCODE = 'YUS11';
+  END IF;
+
   SELECT * INTO v_row FROM public.platform_posts WHERE id = v_session.platform_post_id FOR UPDATE;
 
   -- The row is already settled with the same video: the same answer, kept.
+  --
+  -- This is checked BEFORE the authority below, because there is nothing left
+  -- to settle: no parent transition is made and nothing is overwritten. A
+  -- projection that already ran rolled the parent up itself, so the parent is
+  -- no longer 'processing' by the time the projection is asked to run again.
   IF v_row.status = 'success' AND v_row.platform_post_id = v_session.video_id THEN
     RETURN jsonb_build_object('settled', true, 'already', true, 'platform_post_id', v_row.id);
   END IF;
@@ -1078,13 +1521,12 @@ BEGIN
     RETURN jsonb_build_object('settled', false, 'already', true, 'platform_post_id', v_row.id);
   END IF;
 
-  SELECT * INTO v_post FROM public.posts WHERE id = v_session.post_id FOR UPDATE;
-  IF NOT FOUND THEN
-    RAISE EXCEPTION 'YUS01: the post is gone' USING ERRCODE = 'YUS01';
-  END IF;
-  IF v_session.attempt_started_at IS NOT NULL
-     AND v_post.processing_started_at IS DISTINCT FROM v_session.attempt_started_at THEN
-    RAISE EXCEPTION 'YUS11: the upload belongs to an older attempt of the post' USING ERRCODE = 'YUS11';
+  IF v_post.status <> 'processing' THEN
+    -- The owner cancelled or superseded the post. The receipt is KEPT on the
+    -- session -- it is the truth about what the provider holds -- but the
+    -- public row and the parent are NOT touched: a cancelled post must not
+    -- be turned into a published one by a late receipt.
+    RAISE EXCEPTION 'YUS12: the post is no longer being processed' USING ERRCODE = 'YUS12';
   END IF;
 
   v_settled := public.partner_settle_platform_post(
@@ -1170,8 +1612,16 @@ BEGIN
   UPDATE public.youtube_upload_sessions
      SET state = p_state,
          error = left(coalesce(p_error, ''), 300),
-         lease_token = NULL,
-         lease_expires_at = NULL,
+         -- The lease is KEPT, deliberately.
+         --
+         -- A release is not the end of the story: the owner still has to
+         -- settle the public row, and the settlement is fenced on the lease
+         -- it was given. Clearing the lease here would leave the owner
+         -- unable to publish the failure it just decided on, and the public
+         -- row would stay pending for ever.
+         --
+         -- The lease is released by the settlement, and a worker that dies
+         -- before it leaves a lease that expires on its own.
          updated_at = clock_timestamp()
    WHERE id = v_session.id;
   RETURN true;
@@ -1181,8 +1631,153 @@ $$;
 COMMENT ON FUNCTION public.release_youtube_upload_session(uuid, uuid, text, text) IS
   'Records a terminal state that is not a receipt: the provider session is '
   'gone, the provider may hold a video nobody has a receipt for, or the '
-  'provider refused for good. Never takes back a receipt. Refuses a worker '
-  'whose lease is stale.';
+  'provider refused for good. Never takes back a receipt. The lease is KEPT '
+  'so the owner can still settle the public row. Refuses a worker whose '
+  'lease is stale.';
+
+-- ---------------------------------------------------------------------------
+-- youtube_upload_classify_terminal
+--
+-- The terminal classification of a session that cannot be carried on.
+--
+-- WHY IT EXISTS
+-- -------------
+-- A session that is classified privately -- marked 'reconcile' or 'failed' and
+-- nothing else -- leaves its PUBLIC row pending for ever. The post stays
+-- processing, the customer is told nothing, and the row nobody settles is the
+-- row the parent roll-up waits for. So the classification and the public
+-- outcome are one thing here, not two.
+--
+-- THE TWO OUTCOMES
+-- ----------------
+--   * a video MAY exist: a byte reached the provider, or the last write may
+--     have landed. The public outcome is a failure with a manual reason, and
+--     the session is 'reconcile', which the retry path refuses -- so a blind
+--     retry can never publish a second video.
+--   * NO video can exist: nothing ever reached the provider. The public
+--     outcome is a definitive failure and the session is 'failed', which the
+--     retry path accepts, because a retry cannot create a second video.
+--
+-- THE AUTHORITY
+-- -------------
+-- The public row is only settled when the attempt is still the running one
+-- and the post is still processing. A post that was cancelled, superseded or
+-- retried keeps its own outcome: this classification must not turn a
+-- cancelled post into a failed one.
+--
+-- A worker that still holds the lease is never classified. It may be writing
+-- right now, and taking the session away from it would let two workers write
+-- the same upload.
+-- ---------------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION public.youtube_upload_classify_terminal(p_session_id uuid)
+RETURNS jsonb
+LANGUAGE plpgsql
+VOLATILE
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+DECLARE
+  v_session public.youtube_upload_sessions%ROWTYPE;
+  v_post public.posts%ROWTYPE;
+  v_row public.platform_posts%ROWTYPE;
+  v_may_exist boolean;
+  v_state text;
+  v_reason text;
+  v_message text;
+  v_settled jsonb;
+  v_fanout jsonb;
+BEGIN
+  IF p_session_id IS NULL THEN
+    RETURN jsonb_build_object('classified', false, 'reason', 'invalid_arguments');
+  END IF;
+
+  SELECT * INTO v_session FROM public.youtube_upload_sessions WHERE id = p_session_id FOR UPDATE;
+  IF NOT FOUND THEN
+    RETURN jsonb_build_object('classified', false, 'reason', 'session_missing');
+  END IF;
+  IF v_session.state <> 'open' THEN
+    RETURN jsonb_build_object('classified', false, 'reason', 'not_open');
+  END IF;
+  IF v_session.lease_expires_at IS NOT NULL AND v_session.lease_expires_at > now() THEN
+    RETURN jsonb_build_object('classified', false, 'reason', 'lease_live');
+  END IF;
+
+  -- A video may exist when a byte ever reached the provider, or when the last
+  -- write may have landed.
+  v_may_exist := v_session.video_may_exist OR v_session.bytes_sent > 0;
+
+  IF v_may_exist THEN
+    v_state := 'reconcile';
+    v_reason := 'youtube_upload_reconcile_required';
+    v_message := 'the provider may already hold a video from this upload, so it has to be checked by hand';
+  ELSE
+    v_state := 'failed';
+    v_reason := 'youtube_upload_unsent';
+    v_message := 'the upload was never sent to the provider';
+  END IF;
+
+  -- The public row is settled under the same authority as every other
+  -- settlement. The parent is locked BEFORE the result row, so the two never
+  -- deadlock and a cancellation is either seen or waits.
+  IF v_session.platform_post_id IS NOT NULL THEN
+    SELECT * INTO v_post FROM public.posts WHERE id = v_session.post_id FOR UPDATE;
+    IF FOUND
+       AND v_post.status = 'processing'
+       AND (v_session.attempt_started_at IS NULL
+            OR v_post.processing_started_at IS NOT DISTINCT FROM v_session.attempt_started_at) THEN
+      SELECT * INTO v_row FROM public.platform_posts WHERE id = v_session.platform_post_id FOR UPDATE;
+      IF FOUND AND v_row.status = 'pending' THEN
+        v_settled := public.partner_settle_platform_post(
+          v_row.id,
+          v_session.post_id,
+          v_session.social_account_id,
+          'youtube',
+          'failed',
+          NULL,
+          NULL,
+          v_reason,
+          jsonb_build_object(
+            'youtube_upload_reason', v_reason,
+            'youtube_upload_state', v_state
+          )
+        );
+      END IF;
+    END IF;
+  END IF;
+
+  UPDATE public.youtube_upload_sessions
+     SET state = v_state,
+         error = left(v_message, 300),
+         lease_token = NULL,
+         lease_expires_at = NULL,
+         updated_at = clock_timestamp()
+   WHERE id = v_session.id;
+
+  -- The public row is settled now, so the post may be finished with the
+  -- notification candidate that the worker that admitted the upload left
+  -- open. The closure is derived from the database and it only happens when
+  -- the attempt's scope is complete; a destination that never started leaves
+  -- an explicit terminal state behind instead.
+  v_fanout := public.recover_youtube_upload_fanout(v_session.id, NULL);
+
+  RETURN jsonb_build_object(
+    'classified', true,
+    'reason', v_reason,
+    'state', v_state,
+    'settled', v_settled IS NOT NULL,
+    'fanout', v_fanout
+  );
+END;
+$$;
+
+COMMENT ON FUNCTION public.youtube_upload_classify_terminal(uuid) IS
+  'Classifies a session that cannot be carried on and settles its public row '
+  'under the attempt authority. A video that may exist becomes a manual '
+  'failure; a video that cannot exist becomes a definitive one. Never '
+  'classifies a session a worker still holds.';
+
+REVOKE ALL ON FUNCTION public.youtube_upload_classify_terminal(uuid) FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.youtube_upload_classify_terminal(uuid) TO service_role;
 
 -- ---------------------------------------------------------------------------
 -- claim_youtube_upload_sessions
@@ -1255,6 +1850,7 @@ AS $$
 DECLARE
   v_limit integer := least(50, greatest(0, coalesce(p_limit, 5)));
   v_lease interval;
+  v_candidate record;
 BEGIN
   IF p_lease_ms IS NULL OR p_lease_ms <= 0 OR p_lease_ms > 3600000 THEN
     RAISE EXCEPTION 'YUS09: the lease length is not usable' USING ERRCODE = 'YUS09';
@@ -1264,21 +1860,6 @@ BEGIN
   -- The provider session is gone and a byte reached the provider: the
   -- provider may already hold a video, so only a human may decide.
   --
-  -- A worker that still holds the lease is NOT touched: it may be writing
-  -- right now, and taking the session away from it would let two workers
-  -- write the same upload.
-  UPDATE public.youtube_upload_sessions s
-     SET state = 'reconcile',
-         error = coalesce(s.error, 'the provider session expired after bytes were written'),
-         lease_token = NULL, lease_expires_at = NULL,
-         updated_at = clock_timestamp()
-   WHERE s.state = 'open'
-     AND s.session_uri IS NOT NULL
-     AND s.session_expires_at IS NOT NULL
-     AND s.session_expires_at <= now()
-     AND (s.video_may_exist OR s.bytes_sent > 0)
-     AND (s.lease_expires_at IS NULL OR s.lease_expires_at <= now());
-
   -- The provider session is gone and no byte ever reached it: no video can
   -- exist, so the upload is admitted again from the start.
   UPDATE public.youtube_upload_sessions s
@@ -1294,22 +1875,36 @@ BEGIN
      AND s.bytes_sent = 0
      AND (s.lease_expires_at IS NULL OR s.lease_expires_at <= now());
 
-  -- A session that has been continued too many times is not asked again. It
-  -- is marked for a human, because it may already hold a video.
+  -- The sessions that cannot be carried on any further are classified, and
+  -- their public rows are settled with them.
   --
-  -- A worker that still holds the lease keeps it: the mark waits until the
-  -- lease is gone, so the public outcome is only projected once nobody is
-  -- working on the session any more.
-  UPDATE public.youtube_upload_sessions s
-     SET state = 'reconcile',
-         error = coalesce(s.error, 'the upload was continued too many times'),
-         lease_token = NULL, lease_expires_at = NULL,
-         updated_at = clock_timestamp()
-   WHERE s.state = 'open'
-     AND s.session_uri IS NOT NULL
-     AND s.continuation_count >= p_max_continuations
-     AND (s.next_check_at IS NULL OR s.next_check_at <= now())
-     AND (s.lease_expires_at IS NULL OR s.lease_expires_at <= now());
+  -- They are classified ONE BY ONE, because the public outcome of a session
+  -- depends on facts only that session knows: whether a video may exist, and
+  -- whether the attempt that owns it is still the one running.
+  --
+  -- A worker that still holds the lease keeps its session: the mark waits
+  -- until the lease is gone, so the public outcome is only projected once
+  -- nobody is working on the session any more.
+  FOR v_candidate IN
+    SELECT s.id
+      FROM public.youtube_upload_sessions s
+     WHERE s.state = 'open'
+       AND (s.lease_expires_at IS NULL OR s.lease_expires_at <= now())
+       AND (
+         -- The provider session is gone and a byte reached the provider.
+         (s.session_expires_at IS NOT NULL
+          AND s.session_expires_at <= now()
+          AND (s.video_may_exist OR s.bytes_sent > 0))
+         -- The upload ran out of continuations. A session that never opened a
+         -- provider session counts too: it is just as exhausted, and leaving
+         -- it invisible would leave its public row pending for ever.
+         OR (s.continuation_count >= p_max_continuations
+             AND (s.next_check_at IS NULL OR s.next_check_at <= now()))
+       )
+     ORDER BY s.id
+  LOOP
+    PERFORM public.youtube_upload_classify_terminal(v_candidate.id);
+  END LOOP;
 
   RETURN QUERY
   WITH due AS (
@@ -1790,7 +2385,7 @@ COMMENT ON FUNCTION public.claim_post_completion_work(integer, interval) IS
 REVOKE ALL ON FUNCTION public.youtube_upload_live_fence(uuid, uuid, bigint, uuid),
   public.youtube_upload_target_authorized(uuid, uuid, uuid[]),
   public.youtube_upload_session_payload(public.youtube_upload_sessions),
-  public.admit_youtube_upload(uuid, uuid, uuid, uuid, bigint, bigint, jsonb, timestamptz, uuid[], timestamptz),
+  public.admit_youtube_upload(uuid, uuid, uuid, uuid, bigint, bigint, jsonb, timestamptz, uuid[], timestamptz, jsonb),
   public.claim_youtube_upload_session(uuid, uuid, bigint),
   public.checkpoint_youtube_upload_session(uuid, uuid, bigint, bigint, text, boolean, timestamptz, text),
   public.complete_youtube_upload_session(uuid, uuid, text),
@@ -1800,7 +2395,7 @@ REVOKE ALL ON FUNCTION public.youtube_upload_live_fence(uuid, uuid, bigint, uuid
   public.claim_youtube_upload_sessions(integer, bigint, integer)
   FROM PUBLIC, anon, authenticated;
 
-GRANT EXECUTE ON FUNCTION public.admit_youtube_upload(uuid, uuid, uuid, uuid, bigint, bigint, jsonb, timestamptz, uuid[], timestamptz),
+GRANT EXECUTE ON FUNCTION public.admit_youtube_upload(uuid, uuid, uuid, uuid, bigint, bigint, jsonb, timestamptz, uuid[], timestamptz, jsonb),
   public.claim_youtube_upload_session(uuid, uuid, bigint),
   public.checkpoint_youtube_upload_session(uuid, uuid, bigint, bigint, text, boolean, timestamptz, text),
   public.complete_youtube_upload_session(uuid, uuid, text),
