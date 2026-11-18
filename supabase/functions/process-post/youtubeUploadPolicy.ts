@@ -13,6 +13,8 @@
  *    that read is a network call the attacker could aim at an internal host.
  */
 
+import { publicSupabaseUrl } from "../_shared/publicSupabaseUrl.ts";
+
 /**
  * Stable, machine-readable outcomes.
  *
@@ -150,12 +152,31 @@ export function redactProviderText(value: unknown, maxLength = 500): string {
   return redacted.length > maxLength ? `${redacted.slice(0, maxLength)}…` : redacted;
 }
 
+/** Rebase only a signed Storage URL minted against this stack's internal origin. */
+export function youtubeStorageReadUrl(
+  value: string,
+  internalBase = Deno.env.get("SUPABASE_URL") ?? "",
+  publicBase = publicSupabaseUrl(),
+): string {
+  try {
+    const source = new URL(value);
+    const internal = new URL(internalBase);
+    const target = new URL(publicBase);
+    if (source.origin !== internal.origin || source.username || source.password ||
+        !source.pathname.startsWith("/storage/v1/object/sign/") ||
+        target.protocol !== "https:" || target.username || target.password) return value;
+    return `${target.origin}${source.pathname}${source.search}`;
+  } catch {
+    return value;
+  }
+}
+
 /**
  * Hosts Postora is willing to read a media file from.
  *
  * The list is built from the running configuration rather than hard-coded, so
  * a deployment that moves its storage or CDN keeps working. The storage host
- * comes from `SUPABASE_URL`; the CDN origin comes from the admin-configured
+ * comes from the public Supabase origin; the CDN origin comes from the admin-configured
  * `cdn_storage` setting.
  */
 export function approvedMediaHosts(args: {

@@ -21,7 +21,25 @@ import {
   redactResumableCredentials,
   YOUTUBE_UPLOAD_REASON,
   youtubeUploadPublicMessage,
+  youtubeStorageReadUrl,
 } from "./youtubeUploadPolicy.ts";
+
+Deno.test("internal signed video URLs use the approved public HTTPS Storage endpoint", () => {
+  const internal = "http://kong:8000";
+  const external = "https://storage.example";
+  const path = "/storage/v1/object/sign/media/team/clip%20one.mp4?token=fixture";
+  const rebased = youtubeStorageReadUrl(internal + path, internal, external);
+  assertEquals(rebased, external + path);
+  assertEquals(isApprovedMediaUrl(rebased, approvedMediaHosts({ supabaseUrl: external })), true);
+  for (const url of [
+    "http://kong:8000/rest/v1/media_files",
+    "http://alternate.example" + path,
+    "http://user@kong:8000" + path,
+  ]) {
+    assertEquals(youtubeStorageReadUrl(url, internal, external), url);
+  }
+  assertEquals(youtubeStorageReadUrl(internal + path, internal, "http://storage.example"), internal + path);
+});
 
 Deno.test("every reason code has a message of its own", () => {
   const codes = Object.values(YOUTUBE_UPLOAD_REASON);

@@ -162,6 +162,7 @@ import {
   type ResumableUploadOutcome,
 } from "./youtubeResumableUpload.ts";
 import { createVideoByteSource } from "./youtubeVideoSource.ts";
+import { publicSupabaseUrl } from "../_shared/publicSupabaseUrl.ts";
 import { createOwnedVideoSource } from "./youtubeUploadSource.ts";
 import {
   createSupabaseYoutubeUploadSessionStore,
@@ -173,6 +174,7 @@ import {
   redactProviderText,
   YOUTUBE_UPLOAD_REASON,
   youtubeUploadPublicMessage,
+  youtubeStorageReadUrl,
 } from "./youtubeUploadPolicy.ts";
 import {
   continueYoutubeUpload,
@@ -9498,7 +9500,7 @@ async function approvedMediaHostSet(supabase: SupabaseClient): Promise<Set<strin
   } catch (error) {
     console.warn("[process-post] cdn_storage read failed for the media host policy:", redactProviderText(error));
   }
-  return approvedMediaHosts({ supabaseUrl: Deno.env.get("SUPABASE_URL") ?? null, cdnOrigins: origins });
+  return approvedMediaHosts({ supabaseUrl: publicSupabaseUrl(), cdnOrigins: origins });
 }
 
 /**
@@ -10045,7 +10047,8 @@ async function postToYouTube(
   // hop again.
   // ─────────────────────────────────────────────────────────────────────
   const mediaHosts = await approvedMediaHostSet(supabase);
-  if (!isApprovedMediaUrl(videoUrl, mediaHosts)) {
+  const readUrl = youtubeStorageReadUrl(videoUrl);
+  if (!isApprovedMediaUrl(readUrl, mediaHosts)) {
     throw new Error(youtubeUploadPublicMessage(YOUTUBE_UPLOAD_REASON.media_origin_not_approved));
   }
 
@@ -10054,7 +10057,7 @@ async function postToYouTube(
   // type are asked for. The file itself is never held whole.
   // ─────────────────────────────────────────────────────────────────────
   const source = await createVideoByteSource({
-    url: videoUrl,
+    url: readUrl,
     mimeType: videoFile?.mime_type ?? null,
     approvedHosts: mediaHosts,
   });

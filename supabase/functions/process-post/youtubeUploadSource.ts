@@ -25,6 +25,7 @@ import {
   isApprovedMediaUrl,
   redactProviderText,
   YOUTUBE_UPLOAD_REASON,
+  youtubeStorageReadUrl,
 } from "./youtubeUploadPolicy.ts";
 
 /** An owned media file, as the continuation knows it. */
@@ -91,7 +92,8 @@ export async function createOwnedVideoSource(args: {
 
   let url: string | null;
   try {
-    url = await ownedVideoUrl(supabase, file);
+    const deliveryUrl = await ownedVideoUrl(supabase, file);
+    url = deliveryUrl ? youtubeStorageReadUrl(deliveryUrl) : null;
   } catch (error) {
     console.error(
       `[youtube] the delivery URL for media ${file.id} could not be signed:`,
