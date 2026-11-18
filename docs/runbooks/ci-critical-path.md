@@ -6,6 +6,22 @@ Waleed owns the measurement and two-week report. Track rollout and the **2026-12
 
 Five distinct successful code PRs, all first attempts on GitHub-hosted `ubuntu-24.04`. Wall time starts at the CI run creation timestamp and ends at the last check completion in the named cohort. Runner time sums job start-to-finish durations and excludes queue time. These are measured job minutes, not billing records.
 
+### Cohort membership
+
+The core CI cohort uses the seven rows below. For wall time, start at creation of the pull-request CI run and stop when the last of its seven named checks completes successfully. This is a composite timing endpoint. The two aggregate checks keep their existing names. Include the shard jobs and both aggregate jobs in post-rollout runner minutes because each runs on its own runner.
+
+| Baseline check and runner job | Post-rollout wall-time check | Post-rollout runner jobs to sum |
+| --- | --- | --- |
+| Read-only analytics probe safety | Read-only analytics probe safety | Same job |
+| npm run typecheck | npm run typecheck | Same job |
+| npm run test | npm run test | Vitest shard 1/2, Vitest shard 2/2, npm run test |
+| npm run build | npm run build | Same job |
+| Lint/i18n: no regressions | Lint/i18n: no regressions | Same job |
+| Deno service proxy and MCP | Deno service proxy and MCP | Deno service and publishing suites, Deno analytics deadline suite, Deno service proxy and MCP |
+| Postgres baseline plus delta | Postgres baseline plus delta | Same job |
+
+The browser-inclusive cohort adds **Canonical Instagram Auth SQL API MCP contract** and **Isolated owner Auth SQL browser journeys** from the separate Owner analytics local journeys workflow. Both keep their names and remain one job each. Sum both in runner minutes and use the last successful completion across all nine named checks as the wall-time endpoint. Use this cohort only when both browser jobs ran. Review-bot and security results are outside the timing cohorts and retain their existing role in merge decisions.
+
 | CI run | Core gate wall time | Core runner minutes | Both browser checks ran | Runner minutes including browser checks |
 | --- | ---: | ---: | --- | ---: |
 | [44113995137](https://github.com/lolotam/POSTORA/actions/runs/44113995137) | 11m 56s | 27.78 | Yes | 35.48 |
