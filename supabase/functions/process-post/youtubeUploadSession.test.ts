@@ -1,7 +1,7 @@
 /**
  * The durable session store.
  *
- * Two things are proved here.
+ * Three things are proved here.
  *
  * The first is the NAMED ARGUMENT CONTRACT. PostgREST sends the named
  * arguments of a function as JSON, and a function that is asked for an
@@ -9,9 +9,15 @@
  * the argument that was wrong: the functions take `p_lease_ms`, a number of
  * milliseconds, and the adapter has to send exactly that name.
  *
- * The second is the RULES the store keeps, proved without a database: one
- * owner per session, offsets that only grow, a receipt that is kept, and a
- * continuation claim that hands out a token and not the session URI.
+ * The second is the ADMISSION. The private session and the public pending row
+ * are created together, before any provider work. There is no moment where a
+ * post has a pending row that no continuation can claim.
+ *
+ * The third is the RULES the store keeps, proved without a database: one
+ * owner per session, offsets that only grow, an uncertainty that never
+ * clears, a receipt that is kept, a settlement that only the owner may
+ * write, and a continuation claim that hands out a token and not the session
+ * URI.
  */
 
 import { assert, assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
@@ -41,28 +47,40 @@ const SESSION_ID = "11111111-1111-1111-1111-111111111111";
 const POST_ID = "22222222-2222-2222-2222-222222222222";
 const ACCOUNT_ID = "33333333-3333-3333-3333-333333333333";
 const LEASE = "44444444-4444-4444-4444-444444444444";
+const PUBLIC_ROW_ID = "55555555-5555-5555-5555-555555555555";
+const OWNER_ID = "66666666-6666-6666-6666-666666666666";
+
+/** The session the database hands back. */
+function sessionPayload(overrides: Record<string, unknown> = {}) {
+  return {
+    id: SESSION_ID,
+    post_id: POST_ID,
+    social_account_id: ACCOUNT_ID,
+    state: "open",
+    session_uri: null,
+    confirmed_bytes: 0,
+    bytes_sent: 0,
+    video_may_exist: false,
+    total_bytes: 100,
+    video_id: null,
+    attempt_started_at: "2026-11-18T00:00:00.000Z",
+    next_check_at: null,
+    last_outcome: null,
+    platform_post_id: PUBLIC_ROW_ID,
+    media_file_id: null,
+    media_object_version: null,
+    continuation_count: 0,
+    resolved_platform: "youtube",
+    target_account_ids: [ACCOUNT_ID],
+    ...overrides,
+  };
+}
 
 Deno.test("the lease is sent as a number of milliseconds", async () => {
   const { client, calls } = recordingClient({
-    claim_youtube_upload_session: {
-      id: SESSION_ID,
-      post_id: POST_ID,
-      social_account_id: ACCOUNT_ID,
-      state: "open",
+    claim_youtube_upload_session: sessionPayload({
       session_uri: "https://www.googleapis.com/upload?upload_id=secret",
-      confirmed_bytes: 0,
-      bytes_sent: 0,
-      video_may_exist: false,
-      total_bytes: 100,
-      video_id: null,
-      attempt_started_at: "2026-11-18T00:00:00.000Z",
-      next_check_at: null,
-      last_outcome: null,
-      platform_post_id: null,
-      media_file_id: null,
-      media_object_version: null,
-      continuation_count: 0,
-    },
+    }),
   });
   const store = createSupabaseYoutubeUploadSessionStore(client);
   await store.claim({ sessionId: SESSION_ID, leaseToken: LEASE, leaseMs: 180_000 });
@@ -109,51 +127,60 @@ Deno.test("the checkpoint carries the continuation schedule", async () => {
   assertEquals(call.args.p_video_may_exist, true);
 });
 
-Deno.test("the session is opened with the attempt and the pending row", async () => {
+Deno.test("the admission is asked for with the attempt and the resolved targets", async () => {
   const { client, calls } = recordingClient({
-    begin_youtube_upload_session: {
-      id: SESSION_ID,
-      post_id: POST_ID,
-      social_account_id: ACCOUNT_ID,
-      state: "open",
-      session_uri: null,
-      confirmed_bytes: 0,
-      bytes_sent: 0,
-      video_may_exist: false,
-      total_bytes: 100,
-      video_id: null,
-      attempt_started_at: "2026-11-18T00:00:00.000Z",
-      next_check_at: null,
-      last_outcome: null,
-      platform_post_id: null,
-      media_file_id: null,
-      media_object_version: null,
-      continuation_count: 0,
-    },
+    admit_youtube_upload: { session: sessionPayload(), platform_post_id: PUBLIC_ROW_ID },
   });
   const store = createSupabaseYoutubeUploadSessionStore(client);
-  await store.begin({
+  await store.admit({
     postId: POST_ID,
     socialAccountId: ACCOUNT_ID,
-    platformPostId: "55555555-5555-5555-5555-555555555555",
     mediaFileId: null,
     mediaObjectVersion: null,
     mediaSize: 100,
     totalBytes: 100,
     uploadBody: { snippet: { title: "A video" } },
-    userId: "66666666-6666-6666-6666-666666666666",
+    userId: OWNER_ID,
     attemptStartedAt: "2026-11-18T00:00:00.000Z",
+    targetAccountIds: [ACCOUNT_ID],
   });
 
-  const call = calls.find((entry) => entry.fn === "begin_youtube_upload_session");
+  const call = calls.find((entry) => entry.fn === "admit_youtube_upload");
   assert(call !== undefined);
   assertEquals(call.args.p_attempt_started_at, "2026-11-18T00:00:00.000Z");
-  assertEquals(call.args.p_platform_post_id, "55555555-5555-5555-5555-555555555555");
+  assertEquals(call.args.p_target_account_ids, [ACCOUNT_ID]);
+  // The public row is created BY the admission, so its id is not an argument.
+  assertEquals("p_platform_post_id" in call.args, false);
+});
+
+Deno.test("the admission hands back the public row it created", async () => {
+  const { client } = recordingClient({
+    admit_youtube_upload: { session: sessionPayload(), platform_post_id: PUBLIC_ROW_ID },
+  });
+  const store = createSupabaseYoutubeUploadSessionStore(client);
+  const result = await store.admit({
+    postId: POST_ID,
+    socialAccountId: ACCOUNT_ID,
+    mediaFileId: null,
+    mediaObjectVersion: null,
+    mediaSize: 100,
+    totalBytes: 100,
+    uploadBody: {},
+    userId: OWNER_ID,
+    attemptStartedAt: null,
+    targetAccountIds: [],
+  });
+  assertEquals(result.refused, null);
+  assertEquals(result.platformPostId, PUBLIC_ROW_ID);
+  assertEquals(result.record?.resolvedPlatform, "youtube");
+  assertEquals(result.record?.targetAccountIds, [ACCOUNT_ID]);
 });
 
 Deno.test("a refusal is read from the sqlstate", () => {
   assertEquals(readRefusal({ code: "YUS07" }), "lease_held");
   assertEquals(readRefusal({ code: "YUS11" }), "stale_attempt");
+  assertEquals(readRefusal({ code: "YUS14" }), "no_public_row");
+  assertEquals(readRefusal({ code: "YUS15" }), "target_not_authorized");
   assertEquals(readRefusal({ code: "P0001" }), null);
   assertEquals(readRefusal(null), null);
 });
@@ -170,22 +197,75 @@ Deno.test("a raised refusal becomes a reason the caller can branch on", async ()
 
 Deno.test("a session that needs a human comes back as a refusal", async () => {
   const { client } = recordingClient({
-    begin_youtube_upload_session: { id: SESSION_ID, state: "reconcile" },
+    admit_youtube_upload: { session: { id: SESSION_ID, state: "reconcile" } },
   });
   const store = createSupabaseYoutubeUploadSessionStore(client);
-  const result = await store.begin({
+  const result = await store.admit({
     postId: POST_ID,
     socialAccountId: ACCOUNT_ID,
-    platformPostId: null,
     mediaFileId: null,
     mediaObjectVersion: null,
     mediaSize: 100,
     totalBytes: 100,
     uploadBody: {},
-    userId: "66666666-6666-6666-6666-666666666666",
+    userId: OWNER_ID,
     attemptStartedAt: null,
+    targetAccountIds: [],
   });
   assertEquals(result.refused, "reconcile_required");
+});
+
+Deno.test("the settlement is asked for with the lease that owns it", async () => {
+  const { client, calls } = recordingClient({
+    settle_youtube_upload_session: { settled: true },
+  });
+  const store = createSupabaseYoutubeUploadSessionStore(client);
+  const result = await store.settle({
+    sessionId: SESSION_ID,
+    leaseToken: LEASE,
+    status: "success",
+    videoId: "abcdefghijk",
+    errorMessage: null,
+    responseData: { youtube_video_id: "abcdefghijk" },
+  });
+  assertEquals(result.settled, true);
+
+  const call = calls.find((entry) => entry.fn === "settle_youtube_upload_session");
+  assert(call !== undefined);
+  assertEquals(call.args.p_lease_token, LEASE);
+  assertEquals(call.args.p_status, "success");
+  assertEquals(call.args.p_video_id, "abcdefghijk");
+});
+
+Deno.test("a refused settlement is not a success", async () => {
+  const { client } = recordingClient({
+    settle_youtube_upload_session: { error: { code: "YUS09", message: "the lease is stale" } },
+  });
+  const store = createSupabaseYoutubeUploadSessionStore(client);
+  const result = await store.settle({
+    sessionId: SESSION_ID,
+    leaseToken: LEASE,
+    status: "success",
+    videoId: "abcdefghijk",
+  });
+  assertEquals(result.settled, false);
+  assertEquals(result.refused, "lease_stale");
+});
+
+Deno.test("the receipt is projected without a lease", async () => {
+  const { client, calls } = recordingClient({
+    project_youtube_upload_receipt: { settled: true, video_id: "abcdefghijk" },
+  });
+  const store = createSupabaseYoutubeUploadSessionStore(client);
+  const result = await store.projectReceipt({ sessionId: SESSION_ID });
+  assertEquals(result.settled, true);
+  assertEquals(result.videoId, "abcdefghijk");
+
+  const call = calls.find((entry) => entry.fn === "project_youtube_upload_receipt");
+  assert(call !== undefined);
+  assertEquals(call.args.p_session_id, SESSION_ID);
+  // A projection is not a provider write, so it asks for no lease.
+  assertEquals("p_lease_token" in call.args, false);
 });
 
 // ───────────────────────────────────────────────────────────────────────────
@@ -193,48 +273,59 @@ Deno.test("a session that needs a human comes back as a refusal", async () => {
 // ───────────────────────────────────────────────────────────────────────────
 
 function openStore() {
-  const store = createInMemoryYoutubeUploadSessionStore();
-  return store;
+  return createInMemoryYoutubeUploadSessionStore();
 }
 
-const beginInput = {
+const admitInput = {
   postId: POST_ID,
   socialAccountId: ACCOUNT_ID,
-  platformPostId: null,
   mediaFileId: null,
   mediaObjectVersion: null,
   mediaSize: 100,
   totalBytes: 100,
   uploadBody: { snippet: { title: "A video" } },
-  userId: "66666666-6666-6666-6666-666666666666",
+  userId: OWNER_ID,
   attemptStartedAt: "2026-11-18T00:00:00.000Z",
+  targetAccountIds: [ACCOUNT_ID],
 };
+
+Deno.test("the admission creates the session and the public row together", async () => {
+  const store = openStore();
+  const admitted = await store.admit(admitInput);
+  assert(admitted.record !== null);
+  assert(admitted.platformPostId !== null);
+  assertEquals(admitted.refused, null);
+  assertEquals(admitted.record.id.length > 0, true);
+  // There is no window where one exists without the other.
+  assertEquals(admitted.platformPostId.length > 0, true);
+  assertEquals(admitted.record.platformPostId, admitted.platformPostId);
+});
 
 Deno.test("one session serves one post and one account", async () => {
   const store = openStore();
-  const first = await store.begin(beginInput);
-  const second = await store.begin(beginInput);
+  const first = await store.admit(admitInput);
+  const second = await store.admit(admitInput);
   assertEquals(first.record?.id, second.record?.id);
   assertEquals(store.sessions.size, 1);
 });
 
 Deno.test("another owner cannot ask for the same session", async () => {
   const store = openStore();
-  await store.begin(beginInput);
-  const other = await store.begin({ ...beginInput, userId: "77777777-7777-7777-7777-777777777777" });
+  await store.admit(admitInput);
+  const other = await store.admit({ ...admitInput, userId: "77777777-7777-7777-7777-777777777777" });
   assertEquals(other.refused, "post_not_found");
 });
 
 Deno.test("a post that changed while the upload was in flight is refused", async () => {
   const store = openStore();
-  await store.begin(beginInput);
-  const changed = await store.begin({ ...beginInput, uploadBody: { snippet: { title: "Another video" } } });
+  await store.admit(admitInput);
+  const changed = await store.admit({ ...admitInput, uploadBody: { snippet: { title: "Another video" } } });
   assertEquals(changed.refused, "content_changed");
 });
 
 Deno.test("only one worker owns a session at a time", async () => {
   const store = openStore();
-  const opened = await store.begin(beginInput);
+  const opened = await store.admit(admitInput);
   const sessionId = opened.record!.id;
   const first = await store.claim({ sessionId, leaseToken: "lease-a", leaseMs: 60_000 });
   assertEquals(first.refused, null);
@@ -244,7 +335,7 @@ Deno.test("only one worker owns a session at a time", async () => {
 
 Deno.test("the owner of a session may take it again", async () => {
   const store = openStore();
-  const opened = await store.begin(beginInput);
+  const opened = await store.admit(admitInput);
   const sessionId = opened.record!.id;
   await store.claim({ sessionId, leaseToken: "lease-a", leaseMs: 60_000 });
   const again = await store.claim({ sessionId, leaseToken: "lease-a", leaseMs: 60_000 });
@@ -254,7 +345,7 @@ Deno.test("the owner of a session may take it again", async () => {
 Deno.test("a worker whose lease is stale cannot write", async () => {
   let clock = 1_000;
   const store = createInMemoryYoutubeUploadSessionStore({ now: () => clock });
-  const opened = await store.begin(beginInput);
+  const opened = await store.admit(admitInput);
   const sessionId = opened.record!.id;
   await store.claim({ sessionId, leaseToken: "lease-a", leaseMs: 1_000 });
   clock += 2_000;
@@ -269,7 +360,7 @@ Deno.test("a worker whose lease is stale cannot write", async () => {
 
 Deno.test("an offset only ever grows", async () => {
   const store = openStore();
-  const opened = await store.begin(beginInput);
+  const opened = await store.admit(admitInput);
   const sessionId = opened.record!.id;
   await store.claim({ sessionId, leaseToken: "lease-a", leaseMs: 60_000 });
   await store.checkpoint({ sessionId, leaseToken: "lease-a", confirmedBytes: 50, bytesSent: 50 });
@@ -278,9 +369,33 @@ Deno.test("an offset only ever grows", async () => {
   assertEquals(record?.confirmedBytes, 50);
 });
 
+Deno.test("the uncertainty that a video may exist never clears", async () => {
+  const store = openStore();
+  const opened = await store.admit(admitInput);
+  const sessionId = opened.record!.id;
+  await store.claim({ sessionId, leaseToken: "lease-a", leaseMs: 60_000 });
+  await store.checkpoint({
+    sessionId,
+    leaseToken: "lease-a",
+    confirmedBytes: 100,
+    bytesSent: 100,
+    videoMayExist: true,
+  });
+  // A later checkpoint that says "no video yet" cannot take it back.
+  await store.checkpoint({
+    sessionId,
+    leaseToken: "lease-a",
+    confirmedBytes: 100,
+    bytesSent: 100,
+    videoMayExist: false,
+  });
+  const record = (await store.claim({ sessionId, leaseToken: "lease-a", leaseMs: 60_000 })).record;
+  assertEquals(record?.videoMayExist, true);
+});
+
 Deno.test("the receipt is kept and the session uri is dropped with it", async () => {
   const store = openStore();
-  const opened = await store.begin(beginInput);
+  const opened = await store.admit(admitInput);
   const sessionId = opened.record!.id;
   await store.claim({ sessionId, leaseToken: "lease-a", leaseMs: 60_000 });
   await store.checkpoint({
@@ -298,9 +413,129 @@ Deno.test("the receipt is kept and the session uri is dropped with it", async ()
   assertEquals(record?.state, "uploaded");
 });
 
+Deno.test("the owner keeps its lease after the receipt so it can settle", async () => {
+  const store = openStore();
+  const opened = await store.admit(admitInput);
+  const sessionId = opened.record!.id;
+  await store.claim({ sessionId, leaseToken: "lease-a", leaseMs: 60_000 });
+  await store.complete({ sessionId, leaseToken: "lease-a", videoId: "abcdefghijk" });
+
+  const settled = await store.settle({
+    sessionId,
+    leaseToken: "lease-a",
+    status: "success",
+    videoId: "abcdefghijk",
+  });
+  assertEquals(settled.settled, true);
+});
+
+Deno.test("a worker that lost the lease settles nothing", async () => {
+  const store = openStore();
+  const opened = await store.admit(admitInput);
+  const sessionId = opened.record!.id;
+  await store.claim({ sessionId, leaseToken: "lease-a", leaseMs: 60_000 });
+
+  const stale = await store.settle({
+    sessionId,
+    leaseToken: "lease-b",
+    status: "success",
+    videoId: "abcdefghijk",
+  });
+  assertEquals(stale.settled, false);
+  assertEquals(stale.refused, "lease_stale");
+});
+
+Deno.test("a worker that lost the lease to a takeover settles nothing", async () => {
+  let clock = 1_000;
+  const store = createInMemoryYoutubeUploadSessionStore({ now: () => clock });
+  const opened = await store.admit(admitInput);
+  const sessionId = opened.record!.id;
+  await store.claim({ sessionId, leaseToken: "lease-a", leaseMs: 1_000 });
+
+  // The first worker is paused until its lease runs out.
+  clock += 2_000;
+  const taken = await store.claim({ sessionId, leaseToken: "lease-b", leaseMs: 60_000 });
+  assertEquals(taken.refused, null);
+
+  // The first worker wakes up and tries to settle what it believes it wrote.
+  const stale = await store.settle({
+    sessionId,
+    leaseToken: "lease-a",
+    status: "success",
+    videoId: "abcdefghijk",
+  });
+  assertEquals(stale.settled, false);
+
+  // And it may not write anything else either.
+  const checkpoint = await store.checkpoint({
+    sessionId,
+    leaseToken: "lease-a",
+    confirmedBytes: 100,
+    bytesSent: 100,
+    videoMayExist: true,
+  });
+  assertEquals(checkpoint, false);
+
+  // The worker that owns the session settles it.
+  const owned = await store.settle({
+    sessionId,
+    leaseToken: "lease-b",
+    status: "success",
+    videoId: "abcdefghijk",
+  });
+  assertEquals(owned.settled, true);
+});
+
+Deno.test("a failed settlement leaves a session that may hold a video for a human", async () => {
+  const store = openStore();
+  const opened = await store.admit(admitInput);
+  const sessionId = opened.record!.id;
+  await store.claim({ sessionId, leaseToken: "lease-a", leaseMs: 60_000 });
+  await store.checkpoint({
+    sessionId,
+    leaseToken: "lease-a",
+    confirmedBytes: 100,
+    bytesSent: 100,
+    videoMayExist: true,
+  });
+  const settled = await store.settle({
+    sessionId,
+    leaseToken: "lease-a",
+    status: "failed",
+    errorMessage: "youtube_upload_reconcile_required",
+  });
+  assertEquals(settled.settled, true);
+  // A session that may hold a video is left for a human, and it is not
+  // handed out as a continuation.
+  assertEquals(store.sessions.get(sessionId)?.state, "reconcile");
+  assertEquals(store.sessions.get(sessionId)?.videoId, null);
+  const claims = await store.claimContinuations({ limit: 5, leaseMs: 60_000 });
+  assertEquals(claims.length, 0);
+});
+
+Deno.test("a receipt is projected onto the public row without a lease", async () => {
+  const store = openStore();
+  const opened = await store.admit(admitInput);
+  const sessionId = opened.record!.id;
+  await store.claim({ sessionId, leaseToken: "lease-a", leaseMs: 60_000 });
+  await store.complete({ sessionId, leaseToken: "lease-a", videoId: "abcdefghijk" });
+
+  const projected = await store.projectReceipt({ sessionId });
+  assertEquals(projected.settled, true);
+  assertEquals(projected.videoId, "abcdefghijk");
+});
+
+Deno.test("a session with no receipt cannot be projected", async () => {
+  const store = openStore();
+  const opened = await store.admit(admitInput);
+  const projected = await store.projectReceipt({ sessionId: opened.record!.id });
+  assertEquals(projected.settled, false);
+  assertEquals(projected.refused, "reconcile_required");
+});
+
 Deno.test("a released session never takes back a receipt", async () => {
   const store = openStore();
-  const opened = await store.begin(beginInput);
+  const opened = await store.admit(admitInput);
   const sessionId = opened.record!.id;
   await store.claim({ sessionId, leaseToken: "lease-a", leaseMs: 60_000 });
   await store.complete({ sessionId, leaseToken: "lease-a", videoId: "abcdefghijk" });
@@ -314,7 +549,7 @@ Deno.test("the continuation claim hands out a token and not the session uri", as
   // The worker that started the upload has died, so its lease is gone.
   let clock = 1_000;
   const store = createInMemoryYoutubeUploadSessionStore({ now: () => clock });
-  const opened = await store.begin(beginInput);
+  const opened = await store.admit(admitInput);
   const sessionId = opened.record!.id;
   await store.claim({ sessionId, leaseToken: "lease-a", leaseMs: 1_000 });
   await store.checkpoint({
@@ -334,10 +569,36 @@ Deno.test("the continuation claim hands out a token and not the session uri", as
   assertEquals(JSON.stringify(claims).includes("secret"), false);
 });
 
+Deno.test("a session that never got a provider session is still eligible", async () => {
+  const store = openStore();
+  const opened = await store.admit(admitInput);
+  const claims = await store.claimContinuations({ limit: 5, leaseMs: 60_000 });
+  assertEquals(claims.length, 1);
+  assertEquals(claims[0].sessionId, opened.record!.id);
+});
+
+Deno.test("a receipt that is waiting for the public row is still eligible", async () => {
+  // The worker that stored the receipt died before it could settle the row,
+  // so its lease ran out with the receipt still on the session.
+  let clock = 1_000;
+  const store = createInMemoryYoutubeUploadSessionStore({ now: () => clock });
+  const opened = await store.admit(admitInput);
+  const sessionId = opened.record!.id;
+  await store.claim({ sessionId, leaseToken: "lease-a", leaseMs: 1_000 });
+  await store.complete({ sessionId, leaseToken: "lease-a", videoId: "abcdefghijk" });
+  clock += 2_000;
+
+  const claims = await store.claimContinuations({ limit: 5, leaseMs: 60_000 });
+  assertEquals(claims.length, 1);
+  assertEquals(claims[0].state, "uploaded");
+  // A receipt projection is not a provider write, so it is not a continuation.
+  assertEquals(claims[0].continuationCount, 0);
+});
+
 Deno.test("a session that is not due is not claimed", async () => {
   let clock = 1_000;
   const store = createInMemoryYoutubeUploadSessionStore({ now: () => clock });
-  const opened = await store.begin(beginInput);
+  const opened = await store.admit(admitInput);
   const sessionId = opened.record!.id;
   await store.claim({ sessionId, leaseToken: "lease-a", leaseMs: 1_000 });
   await store.checkpoint({
@@ -355,7 +616,7 @@ Deno.test("a session that is not due is not claimed", async () => {
 
 Deno.test("a session that a live lease holds is not claimed", async () => {
   const store = openStore();
-  const opened = await store.begin(beginInput);
+  const opened = await store.admit(admitInput);
   const sessionId = opened.record!.id;
   await store.claim({ sessionId, leaseToken: "lease-a", leaseMs: 60_000 });
   await store.checkpoint({
@@ -372,7 +633,7 @@ Deno.test("a session that a live lease holds is not claimed", async () => {
 Deno.test("two continuation claims do not hand out the same session", async () => {
   let clock = 1_000;
   const store = createInMemoryYoutubeUploadSessionStore({ now: () => clock });
-  const opened = await store.begin(beginInput);
+  const opened = await store.admit(admitInput);
   const sessionId = opened.record!.id;
   await store.claim({ sessionId, leaseToken: "lease-a", leaseMs: 1_000 });
   await store.checkpoint({
@@ -392,7 +653,7 @@ Deno.test("two continuation claims do not hand out the same session", async () =
 Deno.test("the claim token is what lets the worker take the session", async () => {
   let clock = 1_000;
   const store = createInMemoryYoutubeUploadSessionStore({ now: () => clock });
-  const opened = await store.begin(beginInput);
+  const opened = await store.admit(admitInput);
   const sessionId = opened.record!.id;
   await store.claim({ sessionId, leaseToken: "lease-a", leaseMs: 1_000 });
   await store.checkpoint({

@@ -46,7 +46,44 @@
  */
 
 import type { UploadByteSource } from "./youtubeResumableUpload.ts";
-import { isApprovedMediaUrl } from "./youtubeUploadPolicy.ts";
+import {
+  isApprovedMediaUrl,
+  redactProviderText,
+  YOUTUBE_UPLOAD_REASON,
+  type YoutubeUploadReason,
+} from "./youtubeUploadPolicy.ts";
+
+/**
+ * A failure to read the video.
+ *
+ * It carries a STABLE reason code, and its message is stable too. That is the
+ * point: a media read fails for a handful of reasons, and the reason a human
+ * needs is never the reason the exception happened to carry.
+ *
+ * The exception a failed read throws is the dangerous one. A signed media URL
+ * is a credential, and `fetch` puts the URL it was given into the message of
+ * the error it raises. So the raw text goes into `detail`, which is redacted
+ * and is for the log line, and never into `message`, which is what the public
+ * result and the stored error column are built from.
+ */
+export class VideoSourceError extends Error {
+  /** The stable reason code. */
+  readonly reason: YoutubeUploadReason;
+  /** A redacted detail. For a log line, never for the public result. */
+  readonly detail: string;
+
+  constructor(reason: YoutubeUploadReason, message: string, detail?: string) {
+    super(message);
+    this.name = "VideoSourceError";
+    this.reason = reason;
+    this.detail = detail ? redactProviderText(detail) : "";
+  }
+}
+
+/** The message a media read failure carries. It names no host and no URL. */
+const MEDIA_READ_FAILED = "The video could not be read from the media host.";
+/** The message a media host that is not approved carries. */
+const MEDIA_ORIGIN_NOT_APPROVED = "The video is stored on a host this upload may not read from.";
 
 /** How long one media request may take. */
 export const VIDEO_SOURCE_REQUEST_TIMEOUT_MS = 60_000;
@@ -133,7 +170,11 @@ export function readProbeResponse(response: Response): VideoSourceProbe {
   if (response.status === 206) {
     const total = parseContentRangeTotal(contentRange);
     if (total === null) {
-      throw new Error("The media host answered a range request without naming the file size.");
+      throw new VideoSourceError(
+        YOUTUBE_UPLOAD_REASON.media_read_failed,
+        MEDIA_READ_FAILED,
+        "The media host answered a range request without naming the file size.",
+      );
     }
     return { size: total, mimeType, ranged: true };
   }
@@ -141,12 +182,20 @@ export function readProbeResponse(response: Response): VideoSourceProbe {
   if (response.status === 200) {
     const length = Number(response.headers.get("content-length"));
     if (!Number.isSafeInteger(length) || length <= 0) {
-      throw new Error("The media host did not say how large the video is.");
+      throw new VideoSourceError(
+        YOUTUBE_UPLOAD_REASON.media_read_failed,
+        MEDIA_READ_FAILED,
+        "The media host did not say how large the video is.",
+      );
     }
     return { size: length, mimeType, ranged: false };
   }
 
-  throw new Error(`The media host answered ${response.status} instead of the video.`);
+  throw new VideoSourceError(
+    YOUTUBE_UPLOAD_REASON.media_read_failed,
+    MEDIA_READ_FAILED,
+    `The media host answered ${response.status} instead of the video.`,
+  );
 }
 
 /**
@@ -160,12 +209,20 @@ export function readProbeResponse(response: Response): VideoSourceProbe {
 export async function readBoundedBytes(response: Response, maxBytes: number): Promise<ArrayBuffer> {
   const declared = Number(response.headers.get("content-length"));
   if (Number.isFinite(declared) && declared > maxBytes) {
-    throw new Error(`The media host announced ${declared} bytes instead of ${maxBytes}.`);
+    throw new VideoSourceError(
+      YOUTUBE_UPLOAD_REASON.media_read_failed,
+      MEDIA_READ_FAILED,
+      `The media host announced ${declared} bytes instead of ${maxBytes}.`,
+    );
   }
   if (!response.body) {
     const buffer = await response.arrayBuffer();
     if (buffer.byteLength !== maxBytes) {
-      throw new Error(`The media host answered ${buffer.byteLength} bytes instead of ${maxBytes}.`);
+      throw new VideoSourceError(
+        YOUTUBE_UPLOAD_REASON.media_read_failed,
+        MEDIA_READ_FAILED,
+        `The media host answered ${buffer.byteLength} bytes instead of ${maxBytes}.`,
+      );
     }
     return buffer;
   }
@@ -179,7 +236,11 @@ export async function readBoundedBytes(response: Response, maxBytes: number): Pr
       if (done) break;
       total += value.byteLength;
       if (total > maxBytes) {
-        throw new Error(`The media host sent more than ${maxBytes} bytes.`);
+        throw new VideoSourceError(
+          YOUTUBE_UPLOAD_REASON.media_read_failed,
+          MEDIA_READ_FAILED,
+          `The media host sent more than ${maxBytes} bytes.`,
+        );
       }
       chunks.push(value);
     }
@@ -188,7 +249,11 @@ export async function readBoundedBytes(response: Response, maxBytes: number): Pr
   }
 
   if (total !== maxBytes) {
-    throw new Error(`The media host answered ${total} bytes instead of ${maxBytes}.`);
+    throw new VideoSourceError(
+      YOUTUBE_UPLOAD_REASON.media_read_failed,
+      MEDIA_READ_FAILED,
+      `The media host answered ${total} bytes instead of ${maxBytes}.`,
+    );
   }
   const bytes = new Uint8Array(total);
   let offset = 0;
@@ -217,7 +282,10 @@ async function fetchApprovedMedia(
 
   for (let hop = 0; hop <= VIDEO_SOURCE_MAX_REDIRECTS; hop += 1) {
     if (approvedHosts && !isApprovedMediaUrl(target, approvedHosts)) {
-      throw new Error("The video is stored on a host this upload may not read from.");
+      throw new VideoSourceError(
+        YOUTUBE_UPLOAD_REASON.media_origin_not_approved,
+        MEDIA_ORIGIN_NOT_APPROVED,
+      );
     }
 
     const response = await fetchImpl(target, { ...init, redirect: "manual" });
@@ -235,16 +303,27 @@ async function fetchApprovedMedia(
     try {
       next = new URL(location, target).toString();
     } catch {
-      throw new Error("The media host answered with a redirect this upload cannot follow.");
+      throw new VideoSourceError(
+        YOUTUBE_UPLOAD_REASON.media_read_failed,
+        MEDIA_READ_FAILED,
+        "The media host answered with a redirect this upload cannot follow.",
+      );
     }
 
     if (approvedHosts && !isApprovedMediaUrl(next, approvedHosts)) {
-      throw new Error("The media host answered with a redirect to a host this upload may not read from.");
+      throw new VideoSourceError(
+        YOUTUBE_UPLOAD_REASON.media_origin_not_approved,
+        MEDIA_ORIGIN_NOT_APPROVED,
+      );
     }
     target = next;
   }
 
-  throw new Error("The media host answered with too many redirects.");
+  throw new VideoSourceError(
+    YOUTUBE_UPLOAD_REASON.media_read_failed,
+    MEDIA_READ_FAILED,
+    "The media host answered with too many redirects.",
+  );
 }
 
 /** A source that reads a range with one request per range. */
@@ -274,12 +353,20 @@ class RangeByteSource implements VideoByteSource {
       this.fetchImpl,
     );
     if (response.status !== 206) {
-      throw new Error(`The media host answered ${response.status} instead of the requested bytes.`);
+      throw new VideoSourceError(
+        YOUTUBE_UPLOAD_REASON.media_read_failed,
+        MEDIA_READ_FAILED,
+        `The media host answered ${response.status} instead of the requested bytes.`,
+      );
     }
     const contentRange = response.headers.get("content-range");
     const expected = /^bytes\s+(\d+)-(\d+)\//.exec(contentRange ?? "");
     if (!expected || Number(expected[1]) !== start || Number(expected[2]) !== end) {
-      throw new Error("The media host answered with a different range than the one that was asked for.");
+      throw new VideoSourceError(
+        YOUTUBE_UPLOAD_REASON.media_read_failed,
+        MEDIA_READ_FAILED,
+        "The media host answered with a different range than the one that was asked for.",
+      );
     }
     return await readBoundedBytes(response, wanted);
   }
@@ -335,7 +422,11 @@ class StreamingByteSource implements VideoByteSource {
       this.fetchImpl,
     );
     if (!response.ok || !response.body) {
-      throw new Error(`The media host answered ${response.status} instead of the video.`);
+      throw new VideoSourceError(
+        YOUTUBE_UPLOAD_REASON.media_read_failed,
+        MEDIA_READ_FAILED,
+        `The media host answered ${response.status} instead of the video.`,
+      );
     }
     this.reader = response.body.getReader();
     this.readOffset = 0;
@@ -354,19 +445,33 @@ class StreamingByteSource implements VideoByteSource {
    * changing the video.
    */
   private async pull(): Promise<void> {
-    if (!this.reader) throw new Error("The media stream is closed.");
+    if (!this.reader) throw new VideoSourceError(YOUTUBE_UPLOAD_REASON.media_read_failed, MEDIA_READ_FAILED, "The media stream is closed.");
     const { done, value } = await this.reader.read();
-    if (done) throw new Error("The media stream ended before the video did.");
+    if (done) {
+      throw new VideoSourceError(
+        YOUTUBE_UPLOAD_REASON.media_read_failed,
+        MEDIA_READ_FAILED,
+        "The media stream ended before the video did.",
+      );
+    }
     const chunk = value instanceof Uint8Array ? value : new Uint8Array(value);
     if (chunk.byteLength === 0) return;
 
     if (this.streamOffset + chunk.byteLength > this.size) {
-      throw new Error("The media host sent more bytes than the video has.");
+      throw new VideoSourceError(
+        YOUTUBE_UPLOAD_REASON.media_read_failed,
+        MEDIA_READ_FAILED,
+        "The media host sent more bytes than the video has.",
+      );
     }
     this.streamOffset += chunk.byteLength;
 
     if (this.available + chunk.byteLength > VIDEO_SOURCE_MAX_BUFFER_BYTES) {
-      throw new Error("The media host sent more than this upload is willing to hold.");
+      throw new VideoSourceError(
+        YOUTUBE_UPLOAD_REASON.media_read_failed,
+        MEDIA_READ_FAILED,
+        "The media host sent more than this upload is willing to hold.",
+      );
     }
 
     // The consumed part of the buffer is dropped before it is grown, so the
@@ -428,7 +533,13 @@ class StreamingByteSource implements VideoByteSource {
 
   async read(start: number, end: number, timeoutMs?: number): Promise<ArrayBuffer> {
     const wanted = end - start + 1;
-    if (wanted <= 0) throw new Error("The media range is empty.");
+    if (wanted <= 0) {
+      throw new VideoSourceError(
+        YOUTUBE_UPLOAD_REASON.media_read_failed,
+        MEDIA_READ_FAILED,
+        "The media range is empty.",
+      );
+    }
 
     const budget = Math.max(1, Math.min(timeoutMs ?? this.timeoutMs, this.timeoutMs));
     const started = Date.now();
@@ -437,7 +548,11 @@ class StreamingByteSource implements VideoByteSource {
     await this.fill(wanted);
 
     if (Date.now() - started > budget) {
-      throw new Error("The media read took longer than this upload is allowed.");
+      throw new VideoSourceError(
+        YOUTUBE_UPLOAD_REASON.media_read_failed,
+        MEDIA_READ_FAILED,
+        "The media read took longer than this upload is allowed.",
+      );
     }
 
     const bytes = this.buffer.slice(this.bufferStart, this.bufferStart + wanted);
@@ -462,7 +577,10 @@ export async function createVideoByteSource(options: VideoByteSourceOptions): Pr
   // The host is checked before the first request, so an unapproved host never
   // receives one.
   if (options.approvedHosts && !isApprovedMediaUrl(options.url, options.approvedHosts)) {
-    throw new Error("The video is stored on a host this upload may not read from.");
+    throw new VideoSourceError(
+      YOUTUBE_UPLOAD_REASON.media_origin_not_approved,
+      MEDIA_ORIGIN_NOT_APPROVED,
+    );
   }
 
   let response: Response;
@@ -478,12 +596,24 @@ export async function createVideoByteSource(options: VideoByteSourceOptions): Pr
       fetchImpl,
     );
   } catch (error) {
-    const reason = error instanceof Error ? error.message : String(error);
-    throw new Error(`The video could not be read: ${reason}`);
+    // The exception a failed media read throws carries the URL it was given,
+    // and a signed media URL is a credential. The raw text is redacted into
+    // the detail, which is for the log line; the message the caller sees is
+    // the stable one, and the reason is the stable code.
+    if (error instanceof VideoSourceError) throw error;
+    throw new VideoSourceError(
+      YOUTUBE_UPLOAD_REASON.media_read_failed,
+      MEDIA_READ_FAILED,
+      error instanceof Error ? error.message : String(error),
+    );
   }
 
   if (response.status === 416) {
-    throw new Error("The video is empty.");
+    throw new VideoSourceError(
+      YOUTUBE_UPLOAD_REASON.media_read_failed,
+      MEDIA_READ_FAILED,
+      "The video is empty.",
+    );
   }
 
   const probe = readProbeResponse(response);
@@ -500,7 +630,11 @@ export async function createVideoByteSource(options: VideoByteSourceOptions): Pr
 
   const size = probe.size || options.declaredSize || 0;
   if (!Number.isSafeInteger(size) || size <= 0) {
-    throw new Error("The video host did not say how large the video is.");
+    throw new VideoSourceError(
+      YOUTUBE_UPLOAD_REASON.media_read_failed,
+      MEDIA_READ_FAILED,
+      "The video host did not say how large the video is.",
+    );
   }
   const mimeType = probe.mimeType === "application/octet-stream" ? fallbackMimeType : probe.mimeType;
 

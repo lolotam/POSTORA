@@ -240,6 +240,31 @@ export interface YoutubeUploadSessionRecord {
    * It bounds the work: a session that keeps failing is not asked for ever.
    */
   continuationCount: number;
+  /**
+   * The video resource that was sent to the provider.
+   *
+   * It is kept so a worker that has to OPEN the provider session sends the
+   * same resource the publish would have sent. A session that was admitted
+   * but never opened one has no bytes and no receipt, so opening it is safe.
+   */
+  uploadBody: Record<string, unknown>;
+  /**
+   * The platform this session writes to.
+   *
+   * It is kept so a later worker knows the session belongs to a YouTube
+   * upload and not to something else.
+   */
+  resolvedPlatform: string | null;
+  /**
+   * The accounts the run was allowed to publish to, resolved under the post
+   * claim.
+   *
+   * The upload may only be carried on to one of them. It is kept because the
+   * post's own stored selection does not always name the account: a run may
+   * have been given an explicit account, and that account is still a target
+   * of that run.
+   */
+  targetAccountIds: string[];
 }
 
 /**
@@ -275,22 +300,52 @@ export type YoutubeUploadRefusal =
   /** The post was cancelled or superseded. */
   | "post_superseded"
   /** The session has been continued too many times. */
-  | "too_many_continuations";
+  | "too_many_continuations"
+  /** The session has no public row to settle. */
+  | "no_public_row"
+  /** The account is not a target of this post any more. */
+  | "target_not_authorized";
 
 /** The durable store the upload keeps its state in. */
 export interface YoutubeUploadSessionStore {
   /**
-   * The session for this post and account, opened or reopened as the store's
-   * rules allow. `refused` explains a refusal; the caller must not write
-   * anything when it is set.
+   * Admits the upload: the private session and the public pending row are
+   * created together, before any provider work.
+   *
+   * `refused` explains a refusal; the caller must not write anything when it
+   * is set. `platformPostId` is the public row the upload settles when it
+   * finishes.
    */
-  begin(input: BeginUploadSession): Promise<{ record: YoutubeUploadSessionRecord | null; refused: YoutubeUploadRefusal | null }>;
+  admit(input: AdmitUploadSession): Promise<{
+    record: YoutubeUploadSessionRecord | null;
+    refused: YoutubeUploadRefusal | null;
+    platformPostId: string | null;
+  }>;
   /** Takes the session for one worker. `refused` is set when another worker owns it. */
   claim(input: ClaimUploadSession): Promise<{ record: YoutubeUploadSessionRecord | null; refused: YoutubeUploadRefusal | null }>;
   /** Records confirmed progress and, when the session was just opened, the session URI. */
   checkpoint(input: CheckpointUploadSession): Promise<boolean>;
   /** Records the receipt. The receipt is kept: it is what stops a duplicate video. */
   complete(input: CompleteUploadSession): Promise<boolean>;
+  /**
+   * Records the terminal outcome: the public row and the parent rollup are
+   * settled together, fenced to the worker that still owns the session.
+   *
+   * A worker that lost its lease settles nothing, and the refusal says so.
+   */
+  settle(input: SettleUploadSession): Promise<{ settled: boolean; refused: YoutubeUploadRefusal | null }>;
+  /**
+   * Projects a stored receipt onto the public row.
+   *
+   * No provider is contacted and no media is read: the video already exists.
+   * This is what recovers an acknowledgement that was lost after the
+   * database had already stored the receipt.
+   */
+  projectReceipt(input: ProjectUploadReceipt): Promise<{
+    settled: boolean;
+    refused: YoutubeUploadRefusal | null;
+    videoId: string | null;
+  }>;
   /** Records a terminal state that is not a receipt. */
   release(input: ReleaseUploadSession): Promise<boolean>;
   /**
@@ -304,10 +359,9 @@ export interface YoutubeUploadSessionStore {
   claimContinuations(input: ClaimContinuations): Promise<YoutubeUploadContinuationClaim[]>;
 }
 
-export interface BeginUploadSession {
+export interface AdmitUploadSession {
   postId: string;
   socialAccountId: string;
-  platformPostId: string | null;
   mediaFileId: string | null;
   mediaObjectVersion: number | null;
   mediaSize: number;
@@ -323,6 +377,37 @@ export interface BeginUploadSession {
    * now.
    */
   attemptStartedAt: string | null;
+  /**
+   * The accounts the run was allowed to publish to, resolved under the post
+   * claim.
+   *
+   * The upload may only be carried on to one of them, so a later worker can
+   * tell an account that was really targeted from one that merely belongs to
+   * the customer.
+   */
+  targetAccountIds: string[];
+}
+
+/**
+ * The terminal outcome of one upload.
+ *
+ * It is fenced to the worker that still owns the session: a worker that lost
+ * its lease settles nothing, because the worker that took over may already
+ * have written the video.
+ */
+export interface SettleUploadSession {
+  sessionId: string;
+  leaseToken: string;
+  status: "success" | "failed";
+  /** The receipt. Required for a success. */
+  videoId?: string | null;
+  errorMessage?: string | null;
+  responseData?: Record<string, unknown>;
+}
+
+/** The projection of a receipt that is already stored. */
+export interface ProjectUploadReceipt {
+  sessionId: string;
 }
 
 export interface ClaimUploadSession {

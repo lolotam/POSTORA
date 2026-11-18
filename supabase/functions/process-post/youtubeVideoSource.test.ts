@@ -16,9 +16,9 @@
  *     a redirect to a host that is not on the list is refused too.
  */
 
-import { assertEquals, assertRejects } from "https://deno.land/std@0.224.0/assert/mod.ts";
-import { createVideoByteSource, readBoundedBytes } from "./youtubeVideoSource.ts";
-import { approvedMediaHosts, isApprovedMediaUrl } from "./youtubeUploadPolicy.ts";
+import { assert, assertEquals, assertRejects } from "https://deno.land/std@0.224.0/assert/mod.ts";
+import { createVideoByteSource, readBoundedBytes, VideoSourceError } from "./youtubeVideoSource.ts";
+import { approvedMediaHosts, isApprovedMediaUrl, YOUTUBE_UPLOAD_REASON } from "./youtubeUploadPolicy.ts";
 
 const HOST = "https://media.example.test";
 const APPROVED = approvedMediaHosts({ supabaseUrl: "https://api.example.test" });
@@ -289,4 +289,136 @@ Deno.test("the approved hosts come from the running configuration", () => {
   assertEquals(hosts.has("cdn.example.test"), true);
   assertEquals(hosts.has("insecure.example.test"), false);
   assertEquals(hosts.has("res.cloudinary.com"), true);
+});
+
+// ───────────────────────────────────────────────────────────────────────────
+// What a failure says
+//
+// A media read fails for a handful of reasons, and the reason a human needs
+// is never the reason the exception happened to carry. A signed media URL is
+// a credential, and `fetch` puts the URL it was given into the message of
+// the error it raises, so the raw text must not reach the message that the
+// public result is built from.
+//
+// Every host in this section is a script. Nothing here talks to a real site.
+// ───────────────────────────────────────────────────────────────────────────
+
+Deno.test("a failed read names a stable reason and no URL", async () => {
+  const url = `${HOST}/video.mp4?token=secret-signed-token`;
+  const fetchImpl: typeof fetch = () =>
+    Promise.reject(new TypeError(`fetch failed for ${url}`));
+
+  let thrown: unknown;
+  try {
+    await createVideoByteSource({ url, fetchImpl, approvedHosts: APPROVED });
+  } catch (error) {
+    thrown = error;
+  }
+
+  assert(thrown instanceof VideoSourceError);
+  const failure = thrown as VideoSourceError;
+  assertEquals(failure.reason, YOUTUBE_UPLOAD_REASON.media_read_failed);
+  // The message is the stable one: it names no host, no path and no token.
+  assertEquals(failure.message.includes("secret-signed-token"), false);
+  assertEquals(failure.message.includes(HOST), false);
+  assertEquals(failure.message.includes("/video.mp4"), false);
+  // The detail is for the log line, and the credential is out of it.
+  assertEquals(failure.detail.includes("secret-signed-token"), false);
+  assert(failure.detail.includes("[redacted-url]"));
+});
+
+Deno.test("a provider response body never reaches the message", async () => {
+  const body = JSON.stringify({
+    error: { message: "the upload_id=abc123secret was refused" },
+    access_token: "ya29.secret-token",
+  });
+  const fetchImpl: typeof fetch = () =>
+    Promise.resolve(new Response(body, { status: 500, headers: { "Content-Type": "application/json" } }));
+
+  let thrown: unknown;
+  try {
+    await createVideoByteSource({
+      url: `${HOST}/video.mp4`,
+      fetchImpl,
+      approvedHosts: APPROVED,
+    });
+  } catch (error) {
+    thrown = error;
+  }
+
+  assert(thrown instanceof VideoSourceError);
+  const failure = thrown as VideoSourceError;
+  assertEquals(failure.reason, YOUTUBE_UPLOAD_REASON.media_read_failed);
+  assertEquals(failure.message.includes("abc123secret"), false);
+  assertEquals(failure.message.includes("ya29.secret-token"), false);
+  assertEquals(failure.detail.includes("abc123secret"), false);
+  assertEquals(failure.detail.includes("ya29.secret-token"), false);
+});
+
+Deno.test("a host that answers the wrong status names a stable reason", async () => {
+  const fetchImpl: typeof fetch = () => Promise.resolve(new Response("", { status: 500 }));
+
+  let thrown: unknown;
+  try {
+    await createVideoByteSource({
+      url: `${HOST}/video.mp4`,
+      fetchImpl,
+      approvedHosts: APPROVED,
+    });
+  } catch (error) {
+    thrown = error;
+  }
+
+  assert(thrown instanceof VideoSourceError);
+  const failure = thrown as VideoSourceError;
+  assertEquals(failure.reason, YOUTUBE_UPLOAD_REASON.media_read_failed);
+  // The status is in the detail, which is for the log.
+  assert(failure.detail.includes("500"));
+  assertEquals(failure.message.includes("500"), false);
+});
+
+Deno.test("a host outside the approved list names its own reason", async () => {
+  const host = fakeHost();
+  let thrown: unknown;
+  try {
+    await createVideoByteSource({
+      url: "https://elsewhere.example/video.mp4?token=secret",
+      fetchImpl: host.fetchImpl,
+      approvedHosts: APPROVED,
+    });
+  } catch (error) {
+    thrown = error;
+  }
+
+  assert(thrown instanceof VideoSourceError);
+  const failure = thrown as VideoSourceError;
+  assertEquals(failure.reason, YOUTUBE_UPLOAD_REASON.media_origin_not_approved);
+  assertEquals(failure.message.includes("secret"), false);
+  assertEquals(host.requests.length, 0);
+});
+
+Deno.test("a read that fails mid-stream keeps the stable reason", async () => {
+  // The probe is answered, but the range read is answered with a DIFFERENT
+  // range. The read is refused, and the refusal names the protocol's reason.
+  const fetchImpl: typeof fetch = () =>
+    Promise.resolve(
+      new Response(new Uint8Array(10), {
+        status: 206,
+        headers: { "Content-Range": "bytes 0-9/4096" },
+      }),
+    );
+  const source = await createVideoByteSource({
+    url: `${HOST}/video.mp4`,
+    fetchImpl,
+    approvedHosts: APPROVED,
+  });
+
+  let thrown: unknown;
+  try {
+    await source.read(100, 199);
+  } catch (error) {
+    thrown = error;
+  }
+  assert(thrown instanceof VideoSourceError);
+  assertEquals((thrown as VideoSourceError).reason, YOUTUBE_UPLOAD_REASON.media_read_failed);
 });

@@ -45,6 +45,14 @@ export const YOUTUBE_UPLOAD_REASON = {
   account_unusable: "youtube_upload_account_unusable",
   /** The media file is missing, replaced, or not owned by this owner. */
   media_unavailable: "youtube_upload_media_unavailable",
+  /**
+   * The media host could not be read.
+   *
+   * It is a separate code from `media_unavailable` because the two mean
+   * different things to the customer: one is "the file is gone", the other is
+   * "the host did not answer".
+   */
+  media_read_failed: "youtube_upload_media_read_failed",
   /** The media lives on a host outside the approved egress policy. */
   media_origin_not_approved: "youtube_upload_media_origin_not_approved",
   /** No session exists for this post and account. */
@@ -89,6 +97,8 @@ const PUBLIC_MESSAGE: Record<YoutubeUploadReason, string> = {
     "The connected YouTube account can no longer publish. Reconnect it and retry.",
   [YOUTUBE_UPLOAD_REASON.media_unavailable]:
     "The video for this post is no longer available in the media library.",
+  [YOUTUBE_UPLOAD_REASON.media_read_failed]:
+    "The video could not be read from the media host. Retry the publish.",
   [YOUTUBE_UPLOAD_REASON.media_origin_not_approved]:
     "The video is stored outside Postora's approved media hosts and cannot be uploaded safely.",
   [YOUTUBE_UPLOAD_REASON.not_found]: "No YouTube upload was found for this post.",
@@ -191,12 +201,4 @@ export function isApprovedMediaUrl(url: string, hosts: Set<string>): boolean {
   if (parsed.protocol !== "https:") return false;
   if (parsed.username.length > 0 || parsed.password.length > 0) return false;
   return hosts.has(parsed.host.toLowerCase());
-}
-
-/**
- * The media hosts that are approved, as a sorted list, for a log line that
- * needs to say which policy applied.
- */
-export function describeMediaHosts(hosts: Set<string>): string {
-  return [...hosts].sort().join(",");
 }

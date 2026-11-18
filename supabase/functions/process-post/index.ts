@@ -162,6 +162,7 @@ import {
   type ResumableUploadOutcome,
 } from "./youtubeResumableUpload.ts";
 import { createVideoByteSource } from "./youtubeVideoSource.ts";
+import { createOwnedVideoSource } from "./youtubeUploadSource.ts";
 import {
   createSupabaseYoutubeUploadSessionStore,
   type YoutubeUploadRefusal,
@@ -200,6 +201,12 @@ import {
   unrecordedStoryLog,
   writeLogRow,
 } from "./postSettlement.ts";
+import {
+  cdnReadPreferenceOrder,
+  loadMediaProviderRows,
+  resolveMediaUrl,
+  type MediaFile as MediaFileRow,
+} from "./mediaDelivery.ts";
 import { z } from "npm:zod@3.23.8";
 
 /** When this worker started: the runtime reuses it for several requests inside one lifetime. */
@@ -632,17 +639,12 @@ function threadsImageExecutionCallbacks(
 }
 
 /**
- * Media file data from media_files table
+ * Media file data from media_files table.
+ *
+ * It lives in mediaDelivery.ts because the publishing path and the YouTube
+ * continuation have to resolve a file the same way.
  */
-interface MediaFile {
-  id: string;
-  file_path: string;
-  file_type: string;
-  storage_bucket: string;
-  mime_type?: string | null;
-  current_object_version?: number | null;
-  file_size?: number | null;
-}
+type MediaFile = MediaFileRow;
 
 /**
  * Result from posting to a platform
@@ -660,6 +662,14 @@ interface PlatformPostResult {
    * with two rows.
    */
   pendingPlatformPostId?: string;
+  /**
+   * The handler settled its own public row.
+   *
+   * The YouTube upload settles its row through the fenced settlement, because
+   * only the worker that still owns the upload may record the outcome. The
+   * outer loop must not settle it a second time.
+   */
+  settledByUpload?: boolean;
   /**
    * The work continues in a later worker.
    *
@@ -2118,9 +2128,46 @@ Deno.serve(async (req) => {
       });
       return createErrorResponse(message, status);
     };
-    // Notification-only mode: discriminator check and immediate execution
+    const refuseDispatchMode = async (reason: string, message: string, status: number) => {
+      await writeLogRow(supabase, {
+        level: "warn", category: "post", source: "process-post", user_id: authenticatedUserId,
+        message: "Dispatch mode refused",
+        metadata: { event: "dispatch_mode_refused", post_id, reason },
+      });
+      console.warn(`[process-post] dispatch refused for post ${post_id}: ${reason}`);
+      return createErrorResponse(message, status);
+    };
+
+    // ─────────────────────────────────────────────────────────────────────
+    // The dispatch modes are exclusive.
+    //
+    // A request carries ONE of them:
+    //
+    //   * the NOTIFICATION mode. The reconciler hands over a candidate that
+    //     still needs its final notification, with a claim identity.
+    //   * the YOUTUBE CONTINUATION mode. The reconciler hands over an upload
+    //     session that has to be carried on, with a claim token.
+    //   * the PUBLICATION mode. Everything else, which publishes the post.
+    //
+    // The modes are told apart by their OWN identity, and the attempt is read
+    // as part of the identity of the mode that carries it. The attempt is
+    // therefore never refused on its own: it belongs to the notification mode
+    // and to the continuation mode, and only the publication mode has no
+    // identity at all.
+    //
+    // A request that carries two identities is refused before anything is
+    // read, written or sent to a provider.
+    // ─────────────────────────────────────────────────────────────────────
+    const carriesNotificationIdentity = Boolean(attemptStartedAt || candidateId || notificationClaimId);
+    const carriesYoutubeIdentity = Boolean(resumeYoutubeUploadSessionId || resumeYoutubeUploadLeaseToken);
+
     if (notificationOnly) {
-      if (!attemptStartedAt || !candidateId || !notificationClaimId || resumePlatformPostId || overridePlatforms?.length || overrideAccountIds?.length || expectedScheduledAt || expectedPublishRequestedAt) {
+      // The notification mode owns the attempt and the claim identity.
+      if (!attemptStartedAt || !candidateId || !notificationClaimId) {
+        return await refuseNotificationRoute("invalid_identity", "Combined mode rejected: notification_only requires a lease identity", 400);
+      }
+      if (carriesYoutubeIdentity || resumePlatformPostId || overridePlatforms?.length || overrideAccountIds?.length ||
+          expectedScheduledAt || expectedPublishRequestedAt) {
         return await refuseNotificationRoute("invalid_identity_or_combined_mode", "Combined mode rejected: notification_only requires a lease identity and cannot be combined with publish or resume parameters", 400);
       }
       if (!isServiceRoleAuth) {
@@ -2128,7 +2175,6 @@ Deno.serve(async (req) => {
       }
       return await handleNotificationOnly(supabase, post_id, attemptStartedAt, candidateId, notificationClaimId);
     }
-    if (attemptStartedAt || candidateId || notificationClaimId) return await refuseNotificationRoute("missing_notification_mode", "Notification identity requires notification_only mode", 400);
 
     // ─────────────────────────────────────────────────────────────────────
     // YouTube upload continuation.
@@ -2141,14 +2187,19 @@ Deno.serve(async (req) => {
     // is read here with the token, so the credential never travels in a
     // request body and never appears in a response.
     // ─────────────────────────────────────────────────────────────────────
-    if (resumeYoutubeUploadSessionId || resumeYoutubeUploadLeaseToken) {
-      if (!isServiceRoleAuth) return createErrorResponse("Forbidden: the upload continuation is internal", 403);
+    if (carriesYoutubeIdentity) {
       if (!resumeYoutubeUploadSessionId || !resumeYoutubeUploadLeaseToken) {
-        return createErrorResponse("The upload continuation needs both the session and the claim token.", 400);
+        return await refuseDispatchMode("youtube_identity_incomplete", "The upload continuation needs both the session and the claim token.", 400);
       }
-      if (notificationOnly || resumePlatformPostId || overridePlatforms?.length || overrideAccountIds?.length ||
+      if (carriesNotificationIdentity && (candidateId || notificationClaimId)) {
+        return await refuseDispatchMode("youtube_combined_mode", "The upload continuation cannot be combined with another mode.", 400);
+      }
+      if (resumePlatformPostId || overridePlatforms?.length || overrideAccountIds?.length ||
           expectedScheduledAt || expectedPublishRequestedAt) {
-        return createErrorResponse("The upload continuation cannot be combined with another mode.", 400);
+        return await refuseDispatchMode("youtube_combined_mode", "The upload continuation cannot be combined with another mode.", 400);
+      }
+      if (!isServiceRoleAuth) {
+        return await refuseDispatchMode("service_role_required", "Forbidden: the upload continuation is internal", 403);
       }
       return await handleYoutubeUploadContinuation(
         supabase,
@@ -2156,6 +2207,21 @@ Deno.serve(async (req) => {
         resumeYoutubeUploadSessionId,
         resumeYoutubeUploadLeaseToken,
         attemptStartedAt ?? null,
+      );
+    }
+
+    // The publication mode has no identity of its own.
+    if (carriesNotificationIdentity) {
+      // An attempt or a claim identity only means something in the mode that
+      // owns it. Carrying one in the publication mode is a routing mistake,
+      // and it is refused before anything is read, claimed or sent.
+      //
+      // The refusal keeps the notification routing diagnostic, because that
+      // is the shape that was refused: an identity whose mode is missing.
+      return await refuseNotificationRoute(
+        "identity_without_mode",
+        "Notification identity requires notification_only mode",
+        400,
       );
     }
 
@@ -2737,28 +2803,12 @@ Deno.serve(async (req) => {
     // Generate URLs for media files (provider-aware: prefer the delivery URL of the
     // read-preference provider, fall back to the other provider, then legacy paths).
     const mediaUrls: string[] = [];
-    let readPreference = "openinary";
-    try {
-      const { data: cdnSetting } = await supabase
-        .from("app_settings")
-        .select("value")
-        .eq("key", "cdn_storage")
-        .maybeSingle();
-      if (typeof cdnSetting?.value?.read_preference === "string") {
-        readPreference = cdnSetting.value.read_preference;
-      }
-    } catch (e) {
-      console.warn("[process-post] cdn_storage read failed, defaulting read_preference to openinary:", e);
-    }
+    const providerPreferenceOrder = await cdnReadPreferenceOrder(supabase);
 
     // Provider state per media file (single query for the whole post). Rows are
     // matched against each file's current_object_version afterwards — renames bump
     // the version, and the stale version-1 rows stay 'ready' with dead URLs.
     const providerRowsByMedia = await loadMediaProviderRows(supabase, mediaFiles);
-
-    const providerPreferenceOrder = readPreference === "openinary"
-      ? ["openinary", "cloudinary"]
-      : ["cloudinary", "openinary"];
 
     for (const file of mediaFiles) {
       let resolvedUrl: string | null = null;
@@ -2897,11 +2947,6 @@ Deno.serve(async (req) => {
       let imageExecution: ResumeContext | null = resume?.deferral.media_type === "IMAGE" ? resume : null;
       let imageResponseData: Record<string, unknown> | null = imageExecution ? resumeResponseData : null;
       let imageOutcomeAcknowledged = false;
-
-      // The pending row the native YouTube path wrote before the upload
-      // started. The failure path settles THAT row instead of writing a
-      // second one for the same account.
-      let youtubePendingRowId: string | null = null;
 
       try {
         let result: PlatformPostResult;
@@ -3093,31 +3138,20 @@ Deno.serve(async (req) => {
               });
               break;
             }
-            // The native YouTube path writes a PENDING row before the upload
-            // starts.
+            // The native YouTube path admits the upload BEFORE the provider is
+            // contacted.
             //
-            // The row is what the sweeper respects while the upload is in
-            // flight, so the post is never declared "safe to retry" while the
-            // provider may already hold a video. It is also the row the
-            // continuation settles when it carries the upload on.
-            const { data: pendingRow, error: pendingRowError } = await supabase
-              .from("platform_posts")
-              .insert({
-                post_id: post_id,
-                social_account_id: account.id,
-                platform: "youtube",
-                platform_post_id: null,
-                platform_post_url: null,
-                status: "pending",
-                posted_at: null,
-                response_data: { youtube_upload: { state: "uploading" } },
-              })
-              .select("id")
-              .single();
-            if (pendingRowError || !pendingRow) {
-              throw new Error(`Failed to save platform post: ${pendingRowError?.message ?? "no row"}`);
-            }
-            youtubePendingRowId = pendingRow.id;
+            // The admission creates the private session AND the public pending
+            // platform_posts row in one transaction. That is what closes the
+            // window where a post had a pending row that no continuation
+            // could claim, and it is what the sweeper respects while the
+            // upload is in flight: the post is never declared "safe to
+            // retry" while the provider may already hold a video.
+            //
+            // The resolved targets of this run are handed over, so the
+            // continuation knows the account was really targeted and not
+            // merely owned by the customer.
+            const resolvedTargetAccountIds = (accounts ?? []).map((entry) => entry.id);
             result = await postToYouTube(
               account,
               post,
@@ -3125,7 +3159,7 @@ Deno.serve(async (req) => {
               mediaFiles,
               supabase,
               claim.processingStartedAt ?? null,
-              pendingRow.id,
+              resolvedTargetAccountIds,
             );
             break;
           }
@@ -3221,11 +3255,14 @@ Deno.serve(async (req) => {
             throw new Error(`Failed to save platform post: ${insertError.message}`);
           }
           platformPostRecord = data;
+        } else if (result.settledByUpload && result.pendingPlatformPostId) {
+          // The YouTube upload settled its own public row, fenced to the
+          // worker that owned the upload. The row is already terminal, so the
+          // loop records it instead of settling it a second time.
+          platformPostRecord = { id: result.pendingPlatformPostId };
         } else {
           const settled = await settlePlatformPost(supabase, {
             // A resumed run settles the pending row the first run left.
-            // A YouTube upload settles the pending row it wrote before the
-            // upload started.
             platformPostId: imageExecution?.platformPostId ?? resume?.platformPostId ?? result.pendingPlatformPostId ?? null,
             postId: post_id,
             socialAccountId: account.id,
@@ -3401,9 +3438,7 @@ Deno.serve(async (req) => {
         const selfWrote = (error as { selfWroteRows?: boolean })?.selfWroteRows === true;
         if (!selfWrote) {
           const settled = await settlePlatformPost(supabase, {
-            // A YouTube upload settles the pending row it wrote before the
-            // upload started, so the account never ends up with two rows.
-            platformPostId: imageExecution?.platformPostId ?? resume?.platformPostId ?? youtubePendingRowId ?? null,
+            platformPostId: imageExecution?.platformPostId ?? resume?.platformPostId ?? null,
             postId: post_id,
             socialAccountId: account.id,
             platform: account.platform,
@@ -9467,64 +9502,85 @@ async function approvedMediaHostSet(supabase: SupabaseClient): Promise<Set<strin
 }
 
 /**
- * The provider rows of the media files, keyed by media file id.
+ * The things that happen AFTER the video exists: the thumbnail and the first
+ * comment.
  *
- * The rows are matched against each file's own content version: a rename
- * bumps the version, and the stale rows stay 'ready' with dead URLs.
+ * They belong to the run that CREATED the video. Two runs can reach a video:
+ * the one that uploaded it, and the one that inherited its receipt after an
+ * interruption. Only the first one does the follow-ups, because a first
+ * comment posted twice is a duplicate on the customer's channel.
+ *
+ * Neither follow-up is allowed to fail the publish. The video is already
+ * live, and the public row has to be settled either way, so a failure is
+ * logged and the publish carries on.
  */
-async function loadMediaProviderRows(
-  supabase: SupabaseClient,
-  mediaFiles: MediaFile[],
-): Promise<Record<string, { provider: string; object_version: number | null; status: string; delivery_url: string | null }[]>> {
-  const providerRowsByMedia: Record<
-    string,
-    { provider: string; object_version: number | null; status: string; delivery_url: string | null }[]
-  > = {};
-  if (mediaFiles.length === 0) return providerRowsByMedia;
-  try {
-    const { data: providerRows } = await supabase
-      .from("media_file_providers")
-      .select("media_file_id, provider, object_version, status, delivery_url")
-      .in("media_file_id", mediaFiles.map((file) => file.id));
-    if (providerRows) {
-      for (const row of providerRows) {
-        (providerRowsByMedia[row.media_file_id] ||= []).push(row);
-      }
-    }
-  } catch (error) {
-    console.warn("[process-post] media_file_providers lookup failed, falling back to file_path:", redactProviderText(error));
-  }
-  return providerRowsByMedia;
-}
+async function runYouTubeFollowUps(args: {
+  videoId: string;
+  accessToken: string;
+  thumbnailUrl: string | null;
+  firstComment: string | null;
+}): Promise<void> {
+  const { videoId, accessToken, thumbnailUrl, firstComment } = args;
 
-/**
- * The URL one media file is read from.
- *
- * The provider's delivery URL is preferred, because that is the one the CDN
- * serves, and a storage signed URL is the fallback. The two CDN buckets carry
- * the whole URL in their file path.
- */
-async function resolveMediaUrl(
-  supabase: SupabaseClient,
-  file: MediaFile,
-  providerRowsByMedia: Record<string, { provider: string; object_version: number | null; status: string; delivery_url: string | null }[]>,
-  preferenceOrder: string[],
-): Promise<string | null> {
-  const currentVersion = file.current_object_version ?? 1;
-  const providers = (providerRowsByMedia[file.id] || []).filter((row) => (row.object_version ?? 1) === currentVersion);
-  for (const provider of preferenceOrder) {
-    const ready = providers.find((row) => row.provider === provider && row.status === "ready" && !!row.delivery_url);
-    if (ready) return ready.delivery_url!;
+  if (thumbnailUrl) {
+    try {
+      const { blob: thumbBlob, mimeType: thumbMimeType } = await downloadMediaAsBlob(thumbnailUrl);
+
+      const thumbUploadResponse = await fetch(
+        `https://www.googleapis.com/upload/youtube/v3/thumbnails/set?videoId=${videoId}`,
+        {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+            "Content-Type": thumbMimeType,
+          },
+          body: thumbBlob,
+        }
+      );
+
+      if (thumbUploadResponse.ok) {
+        console.log("YouTube thumbnail set successfully");
+      } else {
+        console.warn("Failed to set YouTube thumbnail:", redactProviderText(await thumbUploadResponse.text()));
+      }
+    } catch (thumbError) {
+      console.warn("Error setting YouTube thumbnail:", redactProviderText(thumbError));
+    }
   }
-  if (file.storage_bucket === "cloudinary" || file.storage_bucket === "openinary" || file.file_path.startsWith("http")) {
-    return file.file_path;
+
+  if (firstComment) {
+    try {
+      console.log("Posting first comment to YouTube video...");
+      const commentResponse = await fetch(
+        "https://www.googleapis.com/youtube/v3/commentThreads?part=snippet",
+        {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            snippet: {
+              videoId,
+              topLevelComment: {
+                snippet: {
+                  textOriginal: firstComment,
+                },
+              },
+            },
+          }),
+        }
+      );
+
+      if (commentResponse.ok) {
+        console.log("First comment posted successfully");
+      } else {
+        console.warn("Failed to post first comment:", redactProviderText(await commentResponse.text()));
+      }
+    } catch (commentError) {
+      console.warn("Error posting first comment:", redactProviderText(commentError));
+    }
   }
-  const { data: signedUrlData, error: signedUrlError } = await supabase.storage
-    .from(file.storage_bucket)
-    .createSignedUrl(file.file_path, 3600);
-  if (signedUrlError) throw new Error(`Could not create a delivery URL for media ${file.id}`);
-  if (!signedUrlData?.signedUrl) throw new Error(`Missing signed URL for media ${file.id}`);
-  return signedUrlData.signedUrl;
 }
 
 /**
@@ -9590,33 +9646,75 @@ function youtubeUploadOutcomeMessage(outcome: ResumableUploadOutcome): string {
 }
 
 /**
- * Opens the durable upload session and takes it for this worker.
+ * Admits the durable upload session and takes it for this worker.
  *
- * The session is opened first and claimed second, and the pair is tried twice:
- * a session whose provider session expired between the two calls is reopened
- * by the second round, and a session that was reopened is claimed with the
- * same lease.
+ * The admission creates the private session AND the public pending row in one
+ * transaction, before the provider is contacted at all. That is what closes
+ * the window where a post had a pending row that no continuation could claim.
+ *
+ * The session is admitted first and claimed second, and the pair is tried
+ * twice: a session whose provider session expired between the two calls is
+ * reopened by the second round, and a session that was reopened is claimed
+ * with the same lease.
  */
 async function openYoutubeUploadSession(
   store: ReturnType<typeof createSupabaseYoutubeUploadSessionStore>,
-  input: Parameters<ReturnType<typeof createSupabaseYoutubeUploadSessionStore>["begin"]>[0],
+  input: Parameters<ReturnType<typeof createSupabaseYoutubeUploadSessionStore>["admit"]>[0],
   leaseToken: string,
   leaseMs: number,
-): Promise<{ record: Awaited<ReturnType<typeof store.claim>>["record"]; refused: YoutubeUploadRefusal | null }> {
+): Promise<{
+  record: Awaited<ReturnType<typeof store.claim>>["record"];
+  refused: YoutubeUploadRefusal | null;
+  platformPostId: string | null;
+}> {
   for (let round = 0; round < 2; round += 1) {
-    const opened = await store.begin(input);
-    if (opened.refused) return { record: null, refused: opened.refused };
-    if (!opened.record) return { record: null, refused: "post_not_found" };
+    const opened = await store.admit(input);
+    if (opened.refused) return { record: null, refused: opened.refused, platformPostId: null };
+    if (!opened.record) return { record: null, refused: "post_not_found", platformPostId: null };
 
     const claimed = await store.claim({
       sessionId: opened.record.id,
       leaseToken,
       leaseMs,
     });
-    if (!claimed.refused) return claimed;
-    if (claimed.refused !== "session_expired") return claimed;
+    if (!claimed.refused) return { ...claimed, platformPostId: opened.platformPostId };
+    if (claimed.refused !== "session_expired") return { ...claimed, platformPostId: opened.platformPostId };
   }
-  return { record: null, refused: "session_expired" };
+  return { record: null, refused: "session_expired", platformPostId: null };
+}
+
+/**
+ * Settles the public row of one YouTube upload.
+ *
+ * The settlement is fenced: only the worker that still owns the upload may
+ * record the outcome, and the public row and the parent rollup are settled in
+ * one transaction. A worker that lost its lease settles nothing, because the
+ * worker that took over may already have written the video.
+ */
+async function settleYoutubeUpload(
+  store: ReturnType<typeof createSupabaseYoutubeUploadSessionStore>,
+  sessionId: string,
+  leaseToken: string,
+  args: {
+    status: "success" | "failed";
+    videoId?: string | null;
+    errorMessage?: string | null;
+    responseData?: Record<string, unknown>;
+  },
+): Promise<boolean> {
+  const settled = await store.settle({
+    sessionId,
+    leaseToken,
+    status: args.status,
+    videoId: args.videoId ?? null,
+    errorMessage: args.errorMessage ?? null,
+    responseData: args.responseData ?? {},
+  });
+  if (!settled.settled) {
+    console.error(`[youtube] the upload outcome was not recorded: ${settled.refused ?? "unknown"}`);
+    return false;
+  }
+  return true;
 }
 
 /**
@@ -9653,6 +9751,8 @@ function buildYoutubeContinuationPorts(
         mediaFileIds: Array.isArray(data.media_file_ids)
           ? data.media_file_ids.filter((value): value is string => typeof value === "string")
           : [],
+        thumbnailUrl: typeof metadata.youtube_thumbnail_url === "string" ? metadata.youtube_thumbnail_url : null,
+        firstComment: typeof metadata.youtube_first_comment === "string" ? metadata.youtube_first_comment : null,
       };
     },
 
@@ -9688,6 +9788,9 @@ function buildYoutubeContinuationPorts(
           ? null
           : Number(data.current_object_version),
         filePath: String(data.file_path),
+        // The bucket is part of the file's identity: a signed URL is only
+        // made for the bucket the object is actually in.
+        storageBucket: String(data.storage_bucket ?? ""),
         mimeType: typeof data.mime_type === "string" ? data.mime_type : null,
       };
     },
@@ -9696,26 +9799,23 @@ function buildYoutubeContinuationPorts(
       return await store.claim({ sessionId: id, leaseToken: token, leaseMs });
     },
 
-    async createSource({ media, videoUrl }) {
-      const url = videoUrl.startsWith("http")
-        ? videoUrl
-        : (await resolveMediaUrl(
-          supabase,
-          {
-            id: media.id,
-            file_path: media.filePath,
-            file_type: "video",
-            storage_bucket: "postora",
-            mime_type: media.mimeType,
-            current_object_version: media.currentObjectVersion,
-          },
-          {},
-          ["openinary", "cloudinary"],
-        )) ?? media.filePath;
-      if (!isApprovedMediaUrl(url, mediaHosts)) {
-        throw new Error(youtubeUploadPublicMessage(YOUTUBE_UPLOAD_REASON.media_origin_not_approved));
-      }
-      return await createVideoByteSource({ url, mimeType: media.mimeType, approvedHosts: mediaHosts });
+    async createSource({ media }) {
+      // The source is rebuilt the way publishing builds it: from the file's own
+      // bucket and from the provider rows that match its CURRENT content
+      // version. A hard-coded bucket or a stale provider row would upload
+      // bytes that are not the video the post names.
+      return await createOwnedVideoSource({
+        supabase,
+        file: {
+          id: media.id,
+          userId: media.userId,
+          filePath: media.filePath,
+          storageBucket: media.storageBucket,
+          mimeType: media.mimeType,
+          currentObjectVersion: media.currentObjectVersion,
+        },
+        mediaHosts,
+      });
     },
 
     async runUpload({ record, leaseToken: token, accessToken, source, totalBytes }) {
@@ -9732,36 +9832,50 @@ function buildYoutubeContinuationPorts(
         now: () => Date.now(),
         sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
         uploadUrl: "https://www.googleapis.com/upload/youtube/v3/videos?uploadType=resumable&part=snippet,status",
-        uploadBody: {},
+        // The video resource the publish sent, kept on the session. A session
+        // that was admitted but never opened a provider session is opened
+        // with the same resource, so the video is the one the customer asked
+        // for.
+        uploadBody: record.uploadBody ?? {},
       });
     },
 
-    async settlePlatformPost(args) {
-      const settled = await settlePlatformPost(supabase, {
-        platformPostId: args.platformPostId,
-        postId: args.postId,
-        socialAccountId: args.socialAccountId,
-        platform: args.platform,
-        status: args.status,
-        providerPostId: args.providerPostId,
-        providerPostUrl: args.providerPostUrl,
-        errorMessage: args.errorMessage,
-        responseData: args.responseData,
-      });
-      if (settled.error) {
-        throw new Error(`The YouTube upload result could not be recorded: ${redactProviderText(settled.error)}`);
-      }
-    },
-
-    async scheduleNextCheck(args) {
-      await store.checkpoint({
+    async settleUpload(args) {
+      // The settlement is fenced to the worker that still owns the session,
+      // and the public row and the parent rollup are settled together. A
+      // worker that lost its lease settles nothing.
+      const settled = await store.settle({
         sessionId: args.sessionId,
         leaseToken: args.leaseToken,
-        confirmedBytes: args.confirmedBytes,
-        bytesSent: args.bytesSent,
-        videoMayExist: args.videoMayExist,
-        nextCheckAt: args.nextCheckAt,
-        lastOutcome: args.lastOutcome,
+        status: args.status,
+        videoId: args.videoId ?? null,
+        errorMessage: args.errorMessage ?? null,
+        responseData: args.responseData ?? {},
+      });
+      if (!settled.settled) {
+        console.error(
+          `[youtube] the upload outcome was not recorded: ${settled.refused ?? "unknown"}`,
+        );
+      }
+      return settled;
+    },
+
+    async projectReceipt(args) {
+      // The receipt is projected onto the public row without a lease and
+      // without the provider: the video already exists, so there is nothing
+      // to send and nothing to fetch.
+      return await store.projectReceipt({ sessionId: args.sessionId });
+    },
+
+    async followUps(args) {
+      // The run that created the video does the follow-ups. A run that
+      // inherited the receipt never reaches here, so a first comment is never
+      // posted twice.
+      await runYouTubeFollowUps({
+        videoId: args.videoId,
+        accessToken: args.accessToken,
+        thumbnailUrl: args.post.thumbnailUrl,
+        firstComment: args.post.firstComment,
       });
     },
 
@@ -9854,7 +9968,7 @@ async function postToYouTube(
   mediaFiles: MediaFile[],
   supabase: SupabaseClient,
   attemptStartedAt: string | null,
-  pendingPlatformPostId: string,
+  targetAccountIds: string[],
 ): Promise<PlatformPostResult> {
   const accessToken = account.access_token;
 
@@ -9936,9 +10050,11 @@ async function postToYouTube(
   // ─────────────────────────────────────────────────────────────────────
   // Step 3: The durable session.
   //
-  // It holds the provider's resumable session URI, the confirmed offset and
-  // the video id. It is private to the service role, so the URI never
-  // reaches a log line, a telemetry event or a client response.
+  // The admission creates the private session AND the public pending row in
+  // one transaction, before the provider is contacted at all. It holds the
+  // provider's resumable session URI, the confirmed offset and the video id.
+  // It is private to the service role, so the URI never reaches a log line, a
+  // telemetry event or a client response.
   // ─────────────────────────────────────────────────────────────────────
   const store = createSupabaseYoutubeUploadSessionStore(supabase);
   const leaseToken = crypto.randomUUID();
@@ -9950,7 +10066,6 @@ async function postToYouTube(
     {
       postId: post.id,
       socialAccountId: account.id,
-      platformPostId: pendingPlatformPostId,
       mediaFileId: videoFile?.id ?? null,
       mediaObjectVersion: videoFile?.current_object_version ?? null,
       mediaSize: videoSize,
@@ -9958,6 +10073,7 @@ async function postToYouTube(
       uploadBody: uploadRequest.body,
       userId: post.user_id,
       attemptStartedAt,
+      targetAccountIds,
     },
     leaseToken,
     leaseMs,
@@ -9967,6 +10083,9 @@ async function postToYouTube(
     const refusal = opened.refused ?? "post_not_found";
     throw new Error(youtubeUploadRefusalMessage(refusal));
   }
+
+  // The public row the upload settles when it finishes.
+  const pendingPlatformPostId = opened.platformPostId;
 
   // A receipt that already exists belongs to an earlier attempt. The video
   // is not uploaded again, and the first comment is not posted again either.
@@ -9996,11 +10115,23 @@ async function postToYouTube(
     // post stays processing, so the sweeper leaves it alone and the
     // continuation finishes it.
     console.log(`YouTube upload continues later (${outcome.reason}).`);
-    return { pendingContinuation: true, pendingPlatformPostId };
+    return { pendingContinuation: true, pendingPlatformPostId: pendingPlatformPostId ?? undefined };
   }
 
   if (outcome.kind !== "completed") {
-    throw new Error(youtubeUploadOutcomeMessage(outcome));
+    // The upload ended for good.
+    //
+    // The public row is settled through the fenced settlement, because only
+    // the worker that still owns the upload may record the outcome. The error
+    // says the row was written, so the outer loop does not write a second one.
+    await settleYoutubeUpload(store, opened.record.id, leaseToken, {
+      status: "failed",
+      errorMessage: outcome.reason,
+      responseData: { youtube_upload_reason: outcome.reason },
+    });
+    const failure = new Error(youtubeUploadOutcomeMessage(outcome)) as Error & { selfWroteRows?: boolean };
+    failure.selfWroteRows = true;
+    throw failure;
   }
 
   const videoId = outcome.videoId;
@@ -10008,81 +10139,52 @@ async function postToYouTube(
   console.log("YouTube upload complete:", videoId);
 
   // ─────────────────────────────────────────────────────────────────────
-  // Step 5: Set thumbnail if provided
+  // Step 5 and 6: the follow-ups.
+  //
+  // They belong to the run that CREATED the video. A run that inherited a
+  // receipt does not repeat them: a first comment posted twice is a duplicate
+  // on the customer's channel.
   // ─────────────────────────────────────────────────────────────────────
-  if (thumbnailUrl) {
-    try {
-      const { blob: thumbBlob, mimeType: thumbMimeType } = await downloadMediaAsBlob(thumbnailUrl);
-
-      const thumbUploadResponse = await fetch(
-        `https://www.googleapis.com/upload/youtube/v3/thumbnails/set?videoId=${videoId}`,
-        {
-          method: "POST",
-          headers: {
-            Authorization: `Bearer ${accessToken}`,
-            "Content-Type": thumbMimeType,
-          },
-          body: thumbBlob,
-        }
-      );
-
-      if (thumbUploadResponse.ok) {
-        console.log("YouTube thumbnail set successfully");
-      } else {
-        console.warn("Failed to set YouTube thumbnail:", redactProviderText(await thumbUploadResponse.text()));
-      }
-    } catch (thumbError) {
-      console.warn("Error setting YouTube thumbnail:", redactProviderText(thumbError));
-    }
+  if (!inheritedReceipt) {
+    await runYouTubeFollowUps({
+      videoId,
+      accessToken,
+      thumbnailUrl: thumbnailUrl ?? null,
+      firstComment: firstComment ?? null,
+    });
+  } else {
+    if (thumbnailUrl) console.log("YouTube thumbnail skipped: the video was uploaded by an earlier attempt");
+    if (firstComment) console.log("First comment skipped: the video was uploaded by an earlier attempt");
   }
 
   // ─────────────────────────────────────────────────────────────────────
-  // Step 6: Post first comment if provided
+  // Step 7: Record the outcome.
   //
-  // Only when this run uploaded the video. A comment that was already posted
-  // by an earlier attempt must not be posted twice, and the earlier attempt
-  // is the one that had the video id.
+  // The receipt is stored and the public row is settled in one fenced step,
+  // so the row and the receipt cannot disagree.
   // ─────────────────────────────────────────────────────────────────────
-  if (firstComment && !inheritedReceipt) {
-    try {
-      console.log("Posting first comment to YouTube video...");
-      const commentResponse = await fetch(
-        "https://www.googleapis.com/youtube/v3/commentThreads?part=snippet",
-        {
-          method: "POST",
-          headers: {
-            Authorization: `Bearer ${accessToken}`,
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            snippet: {
-              videoId,
-              topLevelComment: {
-                snippet: {
-                  textOriginal: firstComment,
-                },
-              },
-            },
-          }),
-        }
-      );
-
-      if (commentResponse.ok) {
-        console.log("First comment posted successfully");
-      } else {
-        console.warn("Failed to post first comment:", redactProviderText(await commentResponse.text()));
-      }
-    } catch (commentError) {
-      console.warn("Error posting first comment:", redactProviderText(commentError));
-    }
-  } else if (firstComment) {
-    console.log("First comment skipped: the video was uploaded by an earlier attempt");
+  const settled = await settleYoutubeUpload(store, opened.record.id, leaseToken, {
+    status: "success",
+    videoId,
+    responseData: {
+      youtube_video_id: videoId,
+      youtube_upload_source: "publish",
+      ...(uploadRequest.warnings.length > 0 ? { warnings: uploadRequest.warnings } : {}),
+    },
+  });
+  if (!settled) {
+    const failure = new Error(youtubeUploadPublicMessage(YOUTUBE_UPLOAD_REASON.lease_conflict)) as Error & {
+      selfWroteRows?: boolean;
+    };
+    failure.selfWroteRows = true;
+    throw failure;
   }
 
   return {
     id: videoId,
     url: `https://www.youtube.com/watch?v=${videoId}`,
-    pendingPlatformPostId,
+    pendingPlatformPostId: pendingPlatformPostId ?? undefined,
+    settledByUpload: true,
     ...(uploadRequest.warnings.length > 0 ? { warnings: uploadRequest.warnings } : {}),
   };
 }

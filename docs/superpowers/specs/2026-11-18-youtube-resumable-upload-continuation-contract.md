@@ -8,6 +8,10 @@ This note says what changed against the contract the previous commit
 established, and why. It is written for the reviewer: everything here is a
 deliberate difference, not an accident.
 
+Sections 1 to 10 are the contract the first round established. Sections 11
+to 20 are the changes the second round made to it, and they change the
+lifecycle, not just the wording.
+
 ---
 
 ## 1. The lease is a number of milliseconds, not an interval
@@ -36,8 +40,8 @@ and never sends `p_lease`).
 **Was:** the session knew the owner, the account, the content fence and the
 lease. It did not know which attempt of the post it belonged to.
 
-**Is:** `youtube_upload_sessions.attempt_started_at`. `begin` records the
-attempt the post is on (the caller's, or the post's own
+**Is:** `youtube_upload_sessions.attempt_started_at`. The **admission**
+records the attempt the post is on (the caller's, or the post's own
 `processing_started_at` when the caller does not name one).
 `claim_youtube_upload_session` refuses a session whose attempt is not the
 post's current one (`YUS11`) and a session whose post is no longer
@@ -212,6 +216,289 @@ is open would write the same bytes into a second session.
 
 ---
 
+# The second round
+
+The nine findings of the second review are addressed below. Each one changes
+the contract, and each one is proved by a test that runs.
+
+---
+
+## 11. The session and the public row are admitted together, atomically
+
+**Was:** `begin_youtube_upload_session` created the private session, and the
+publishing path inserted the public pending row itself, in a second
+statement. Between them there was a window in which one existed without the
+other.
+
+**Is:** `admit_youtube_upload(post, account, user, media, size, total_bytes,
+upload_body, attempt_started_at, target_account_ids, session_expires_at)`
+creates **the private session and the public pending `platform_posts` row in
+one transaction**, before any provider work. It returns the session and the
+row id. There is no separate insert any more: the publishing path no longer
+writes a pending row of its own.
+
+**The two crash windows, stated plainly:**
+
+| When the worker dies | What is durable | What happens next |
+|---|---|---|
+| **Before the admission** | Nothing. No session, no row, no byte ever reached the provider. | The post is still `processing` with no pending row, so the sweeper's "safe to retry" is correct: a retry starts a fresh upload and no video can exist. |
+| **Immediately after the admission** | Both rows, and no byte has reached the provider. | The sweeper skips the post (it has a pending row and an open session). The continuation claims the session and starts the upload — it may have no provider session yet, which is an eligible window. |
+
+**Why it matters:** the exclusion-only cleanup of the first round could only
+ever say "do not touch this". A recovery path has to be able to say "this is
+what happens next", for every window after the admission.
+
+**Proved by:** SQL suite Y3 (the session and the row are created together,
+one per post and account) and the `admit` assertions in
+`youtubeUploadSession.test.ts`.
+
+---
+
+## 12. Every window after the admission has a finite, eligible recovery path
+
+**Was:** the batch claim only handed out sessions that were `open` with a
+provider session URI. A session that was admitted and never opened one, or
+one that held a receipt whose row was still pending, was invisible.
+
+**Is:** `claim_youtube_upload_sessions` hands out every window that can still
+be finished:
+
+| Window | Handed out? | What the worker does |
+|---|---|---|
+| Admitted, no provider session, no bytes written | **Yes** | Opens a provider session and starts the upload. |
+| Admitted, provider session, bytes in flight | **Yes** | Probes the provider and continues from the confirmed offset. |
+| Receipt stored, public row still pending | **Yes** | Projects the receipt onto the row. No media is read and the provider is not contacted. |
+| Expired, no byte ever written | Reopened by the admission | A fresh session is safe. |
+| Expired, bytes may have been written | Marked `reconcile` | A human looks. A new session could create a second video. |
+| Over the continuation cap | Marked `reconcile` | A human looks, and only once the lease is gone. |
+| Already settled | **No** | There is nothing left to do. |
+
+**After a possible provider success there is never a blind retry.** A session
+in `reconcile`, `open` or `uploaded` is excluded from `request_post_retry`'s
+targeting *and* from its deletion.
+
+**Proved by:** SQL suites Y8, Y10, Y16 and Y17.
+
+---
+
+## 13. The fence is the LIVE post, not the saved upload body
+
+**Was:** the content fence compared the saved `upload_body` against itself,
+so a post that was edited while the upload ran was not noticed.
+
+**Is:** `youtube_upload_live_fence(post, media, total_bytes, account)`
+computes the fence from the **live** row: the caption, the platforms, the
+media file ids, `normalize_threads_internal_metadata(metadata)`, the schedule
+and the source — plus the media file's **current content version** and the
+account.
+
+The normaliser strips the keys that are attempt-only runtime bookkeeping
+(`attempt_started_at`, `attempt_scope`, `settlement_rollup_*`,
+`final_notification_intent`, `legacy_notification_candidate`) and keeps the
+customer's content (`youtube_title`, `youtube_visibility`, the description,
+the tags).
+
+So a change to the title, the privacy, the caption or the media file refuses
+the session, and a change that only records that a worker was running does
+not.
+
+**A receipt-only reconciliation does not need to authorise another provider
+write.** It is fenced on the attempt, not on the content, because it sends
+nothing.
+
+**Proved by:** SQL suite Y7.
+
+---
+
+## 14. The terminal outcome is fenced to the attempt and to the upload's owner
+
+**Was:** the worker that finished an upload settled the public row through
+the publishing seam, and a worker that had lost its lease could still write
+the row.
+
+**Is:** `settle_youtube_upload_session(session, lease_token, status, video_id,
+error_message, response_data)` settles the durable public result **and** the
+parent transitions in one transaction, and only for the worker that still
+holds the lease and the current attempt. A worker that lost its lease
+settles **nothing**.
+
+`project_youtube_upload_receipt(session)` is the receipt-only path: no lease
+is needed (it is not a provider write), it is fenced on the attempt, it is
+idempotent, and it never forces a second settlement.
+
+**A worker that lost its lease writes nothing at all.** The worker that took
+over may already have written the video, so a stale worker settling the row
+would publish a result the upload does not have.
+
+**At the continuation cap the active lease is honoured**: the session is only
+marked `reconcile` once the lease is gone, and the public outcome is
+projected only after a safe recovery or after the lease expires.
+
+**Proved by:** SQL suites Y4, Y17 and Y18, and the takeover and stale-worker
+tests in `youtubeUploadSession.test.ts` ("a worker that lost the lease to a
+takeover settles nothing").
+
+---
+
+## 15. The continuation resumes only the target the run resolved
+
+**Was:** the continuation checked the account against the post's stored
+`selected_account_ids` only. A run that was given an explicit account — a
+platform-only publish, an account override — resolved a target the post does
+not store, and the continuation refused it.
+
+**Is:** the session records what the run resolved: `resolved_platform` and
+`target_account_ids`. The continuation resumes the target when the session
+names it, and falls back to the post's stored selection when it does not.
+
+The retry-request list is deliberately **not** the authority: a retry
+excludes the accounts that have an open session, so reading the retry list
+would strand exactly the sessions that need carrying on.
+
+**Only a YouTube target is resumed.** A session whose `resolved_platform` is
+anything else is refused, so no other platform is ever re-run by this worker.
+
+**Proved by:** SQL suite Y15 and the target tests in
+`youtubeUploadContinuation.test.ts`.
+
+---
+
+## 16. The dispatch modes are exclusive, and every refusal is observable
+
+**Was:** the handler rejected `attempt_started_at` before it looked at the
+mode. That made the YouTube continuation unreachable, because the attempt is
+part of the continuation's own identity.
+
+**Is:** the modes are told apart by the lease they carry:
+
+| Mode | Identity |
+|---|---|
+| Publication | none |
+| Notification recovery | attempt + candidate + claim |
+| Upload continuation | attempt + session + claim token |
+
+The notification mode is checked first, then the upload continuation, then the
+publication mode refuses any leftover identity. A request that carries an
+attempt and no mode is refused; a request that carries the continuation *and* a
+notification claim is refused; a request that carries the continuation and a
+publication override is refused. An ordinary client cannot ask for either
+internal mode.
+
+**Every refusal writes a persistent diagnostic and touches nothing else** —
+no read, no claim, no provider call.
+
+**Proved by:** `youtubeDispatchMode.test.ts`, which drives the **real
+registered handler** with the reconciler's own `resumePayload()` and asserts
+that a refusal made no work call at all.
+
+---
+
+## 17. The continuation writes nothing when the upload merely continues
+
+**Was:** the continuation wrote the confirmed offset and the next look time
+again from its own snapshot. That put older values back over newer ones, and
+it cleared the "a video may exist" uncertainty.
+
+**Is:** the resumable path writes **nothing**. The upload already recorded
+the confirmed offset, the next look time and the uncertainty under its lease,
+and those records are the authoritative ones. The continuation only reports
+when the session may be looked at again.
+
+The uncertainty that a video may exist is **sticky** in both the SQL and the
+in-memory store: a checkpoint can set it, and no checkpoint can clear it.
+
+**Proved by:** the "an upload that continues leaves the row pending and
+writes nothing" test, the "the uncertainty that a video may exist never
+clears" test, and SQL suite Y5.
+
+---
+
+## 18. The source is rebuilt through the normal resolver
+
+**Was:** the continuation rebuilt the video's source with a hard-coded
+`storage_bucket: "postora"` and no provider rows. A file in the `media`
+bucket, or a file whose provider had a delivery URL, was read from the wrong
+place.
+
+**Is:** the resolver lives in one module, `mediaDelivery.ts`, and the
+publishing path and the continuation both use it. The continuation reads the
+file's **own bucket** and the provider rows that match its **current content
+version**. The CDN read preference is one admin setting read through one
+function, so the two paths cannot disagree about which object they publish.
+
+Nothing is hard-coded and nothing reaches outside the approved media hosts:
+the URL the resolver returns is checked against the host policy before the
+first byte is asked for.
+
+**Proved by:** `youtubeUploadSource.test.ts` (a file in `media` is signed in
+`media`, a file in `postora` is signed in `postora`, a provider row of the
+current version is used, a provider row of a stale version is not, and an
+unapproved host never receives a request).
+
+---
+
+## 19. A media read failure names a stable reason and no URL
+
+**Was:** the source module threw ``The video could not be read: ${reason}``,
+where `reason` was the raw exception message. A failed `fetch` carries the
+URL it was given in its message, and a media URL is signed: the credential
+ended up in the public result and in the stored error column.
+
+**Is:** every failure in `youtubeVideoSource.ts` is a `VideoSourceError` with
+a stable reason code and a stable message. The raw text goes into `detail`,
+which is redacted and is for the log line. The provider's response body is
+never read into a message at all.
+
+Two new reasons: `youtube_upload_media_read_failed` (the host did not
+answer) and `youtube_upload_media_origin_not_approved` (the host is outside
+the policy). They are separate from `youtube_upload_media_unavailable`
+(the file is gone) because they mean different things to a customer.
+
+**Proved by:** `youtubeVideoSource.test.ts` ("a failed read names a stable
+reason and no URL", "a provider response body never reaches the message", "a
+host that answers the wrong status names a stable reason", "a host outside
+the approved list names its own reason"). Every host in those tests is a
+script; nothing talks to a real site.
+
+---
+
+## 20. The follow-ups belong to the run that created the video
+
+**Was:** the thumbnail and the first comment were done by whichever run
+finished the upload. With a continuation in the picture, the run that created
+the video is not always the run that finished it.
+
+**Is:** they belong to the run that **created** the video.
+
+- The publishing path does them only when it created the video
+  (`!inheritedReceipt`).
+- The continuation does them only when it created the video — that is, when
+  it ran the upload itself and it completed. A continuation that inherits a
+  receipt does **not** repeat them.
+- They happen **before** the settlement, so a worker that dies in between
+  leaves them done rather than done twice.
+- A follow-up that fails never blocks the settlement: the video is already
+  live and the public row has to be settled either way.
+
+The rule is at-most-once. A first comment posted twice is a duplicate on the
+customer's channel, which is worse than a missing one.
+
+**Proved by:** the follow-up tests in `youtubeUploadContinuation.test.ts`.
+
+---
+
+## The shared claim limit
+
+`claim_post_completion_work(p_limit, ...)` hands out work of three kinds
+through **one** limit: the deferred publishes, the notification candidates
+and the upload continuations. The notification step now increments the
+counter it shares, so a notification candidate consumes a slot and the upload
+continuations only get what is left.
+
+**Proved by:** SQL suite Y19.
+
+---
+
 ## The rollout order
 
 **The schema comes before the code.** The migration
@@ -222,8 +509,9 @@ those functions to exist: a missing function is an error at the first upload,
 not a fallback.
 
 The migration has never been applied anywhere, so the corrected signatures
-(`p_lease_ms`, the attempt column, the extended `checkpoint`) are simply the
-first version.
+(`p_lease_ms`, the attempt column, the extended `checkpoint`, the admission,
+the fenced settlement and the receipt projection) are simply the first
+version.
 
 **One thing the owner has to decide:** the `reconcile-deferred-publishes`
 cron already runs every minute, and the YouTube continuation rides on it, so

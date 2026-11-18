@@ -13,33 +13,51 @@
 --   Y2  the owner boundary: a post, an account and a media file that are not
 --       the caller's are refused, and so is an account that is not a usable
 --       YouTube account. No row is created by a refused call.
---   Y3  one upload per post and account: opening the same pair twice returns
---       the same session.
+--   Y3  the admission is ATOMIC: the private session and the public pending
+--       platform_posts row are created together, or not at all. One upload per
+--       post and account: admitting the same pair twice returns the same
+--       session and the same public row.
 --   Y4  the lease: one worker owns the session, a second worker is refused
 --       while the lease is live, and a stale lease cannot write, checkpoint,
---       complete or release.
---   Y5  the offsets only grow.
+--       complete, release or settle.
+--   Y5  the offsets only grow, and the uncertainty that a video may exist is
+--       never cleared by a checkpoint.
 --   Y6  the receipt: it is kept, the session URI is dropped with it, it is
 --       idempotent, and a release never takes it back.
---   Y7  the content fence: an edited upload body and a replaced media file
---       both refuse the resume.
+--   Y7  the content fence is the LIVE post: an edited title, an edited
+--       visibility and a replaced media file refuse the resume, while the
+--       attempt-only runtime metadata of the same post does not.
 --   Y8  the expired session: it is reopened when no video can exist, and it
 --       is left for a human when the last chunk may have been written.
 --   Y9  the batch claim takes the open sessions no live lease holds, and
 --       leaves the leased and the closed ones alone. The claim carries the
 --       token and the attempt, and no session URI.
---   Y10 the retry guard: an upload that needs manual reconciliation is
---       neither targeted nor deleted by a post retry.
+--   Y10 the retry guard: an upload that needs manual reconciliation AND an
+--       upload that already holds a receipt are neither targeted nor deleted
+--       by a post retry.
 --   Y11 the lease is a number of milliseconds, and the functions turn it
 --       into an interval themselves.
---   Y12 the attempt fence: a session that belongs to an older attempt of
---       the post, or to a post that is no longer being processed, is not
+--   Y12 the attempt fence: a session that belongs to an older attempt of the
+--       post, or to a post that is no longer being processed, is not
 --       carried on.
 --   Y13 the reconciler's one claim surface hands out the upload sessions
 --       that are due, with the token and the attempt.
 --   Y14 the sweeper leaves a post with an open YouTube upload alone, so it
 --       is never declared "safe to retry" while the provider may already
 --       hold a video.
+--   Y15 the target authorization: an account the post no longer selects is
+--       refused, and the account must still be a YouTube target of the post.
+--   Y16 every window after the admission is eligible: an upload whose
+--       provider session was never opened, and a stored receipt whose public
+--       row is still pending.
+--   Y17 the terminal settlement is fenced: the worker that holds the lease
+--       settles the public row and the parent, a worker that lost the lease
+--       settles nothing, and a takeover leaves the old worker unable to
+--       mutate anything.
+--   Y18 the receipt-only projection settles the public row without a lease
+--       and without touching the provider.
+--   Y19 the claim limit is SHARED: a notification candidate takes a slot, so
+--       the upload step only gets what is left.
 --
 -- The suite SET ROLEs away from superuser where the point of the check is
 -- that a client role cannot do something. The service role bypasses RLS, so
@@ -82,8 +100,8 @@ BEGIN
   INSERT INTO public.user_quotas
     (user_id, max_posts_per_day, max_posts_per_month)
   VALUES
-    (v_u_a, 20, 100),
-    (v_u_b, 20, 100)
+    (v_u_a, 100, 500),
+    (v_u_b, 100, 500)
   ON CONFLICT (user_id) DO UPDATE
     SET max_posts_per_day = EXCLUDED.max_posts_per_day,
         max_posts_per_month = EXCLUDED.max_posts_per_month;
@@ -111,6 +129,40 @@ END
 $fixtures$;
 
 -- ---------------------------------------------------------------------------
+-- One scenario, one post, one account, one media file.
+--
+-- Every scenario needs its own post and account: the session is unique per
+-- post and account, so two scenarios that shared a pair would share a
+-- session, and one scenario's lease would refuse the next one.
+-- ---------------------------------------------------------------------------
+CREATE FUNCTION pg_temp.new_youtube_fixture(p_suffix text)
+RETURNS TABLE (owner_id uuid, account_id uuid, post_id uuid, media_id uuid)
+LANGUAGE plpgsql
+AS $$
+DECLARE
+  v_owner   uuid := 'b1000000-0000-4000-8000-000000000001';
+  v_account uuid := gen_random_uuid();
+  v_post    uuid := gen_random_uuid();
+  v_media   uuid := gen_random_uuid();
+BEGIN
+  INSERT INTO public.social_accounts
+    (id, user_id, platform, platform_user_id, platform_username, access_token, is_active)
+  VALUES (v_account, v_owner, 'youtube', 'yt-' || p_suffix, p_suffix, 'token-' || p_suffix, true);
+
+  INSERT INTO public.media_files
+    (id, user_id, file_path, file_type, file_size, mime_type, storage_bucket)
+  VALUES (v_media, v_owner, 'uploads/' || p_suffix || '.mp4', 'video', 4096, 'video/mp4', 'media');
+
+  INSERT INTO public.posts
+    (id, user_id, caption, platforms, media_file_ids, status, processing_started_at, metadata)
+  VALUES (v_post, v_owner, 'A video', ARRAY['youtube'], ARRAY[v_media], 'processing', now(),
+    jsonb_build_object('selected_account_ids', jsonb_build_array(v_account::text)));
+
+  RETURN QUERY SELECT v_owner, v_account, v_post, v_media;
+END
+$$;
+
+-- ---------------------------------------------------------------------------
 -- Y1: the grant surface.
 -- ---------------------------------------------------------------------------
 DO $y1_grants$
@@ -134,11 +186,11 @@ BEGIN
     'Y1 authenticated holds no DELETE on the session table';
 
   ASSERT NOT has_function_privilege('anon',
-      'public.begin_youtube_upload_session(uuid,uuid,uuid,uuid,bigint,bigint,jsonb,timestamptz,uuid,timestamptz)', 'EXECUTE'),
-    'Y1 anon may not open a session';
+      'public.admit_youtube_upload(uuid,uuid,uuid,uuid,bigint,bigint,jsonb,timestamptz,uuid[],timestamptz)', 'EXECUTE'),
+    'Y1 anon may not admit an upload';
   ASSERT NOT has_function_privilege('authenticated',
-      'public.begin_youtube_upload_session(uuid,uuid,uuid,uuid,bigint,bigint,jsonb,timestamptz,uuid,timestamptz)', 'EXECUTE'),
-    'Y1 authenticated may not open a session';
+      'public.admit_youtube_upload(uuid,uuid,uuid,uuid,bigint,bigint,jsonb,timestamptz,uuid[],timestamptz)', 'EXECUTE'),
+    'Y1 authenticated may not admit an upload';
   ASSERT NOT has_function_privilege('authenticated',
       'public.checkpoint_youtube_upload_session(uuid,uuid,bigint,bigint,text,boolean,timestamptz,text)', 'EXECUTE'),
     'Y1 authenticated may not checkpoint a session';
@@ -146,15 +198,27 @@ BEGIN
       'public.complete_youtube_upload_session(uuid,uuid,text)', 'EXECUTE'),
     'Y1 authenticated may not complete a session';
   ASSERT NOT has_function_privilege('authenticated',
+      'public.settle_youtube_upload_session(uuid,uuid,text,text,text,jsonb)', 'EXECUTE'),
+    'Y1 authenticated may not settle an upload';
+  ASSERT NOT has_function_privilege('authenticated',
+      'public.project_youtube_upload_receipt(uuid)', 'EXECUTE'),
+    'Y1 authenticated may not project a receipt';
+  ASSERT NOT has_function_privilege('authenticated',
       'public.claim_youtube_upload_sessions(integer,bigint,integer)', 'EXECUTE'),
     'Y1 authenticated may not take the sessions of a later worker';
 
   ASSERT has_function_privilege('service_role',
-      'public.begin_youtube_upload_session(uuid,uuid,uuid,uuid,bigint,bigint,jsonb,timestamptz,uuid,timestamptz)', 'EXECUTE'),
-    'Y1 the service role may open a session';
+      'public.admit_youtube_upload(uuid,uuid,uuid,uuid,bigint,bigint,jsonb,timestamptz,uuid[],timestamptz)', 'EXECUTE'),
+    'Y1 the service role may admit an upload';
   ASSERT has_function_privilege('service_role',
       'public.checkpoint_youtube_upload_session(uuid,uuid,bigint,bigint,text,boolean,timestamptz,text)', 'EXECUTE'),
     'Y1 the service role may checkpoint a session';
+  ASSERT has_function_privilege('service_role',
+      'public.settle_youtube_upload_session(uuid,uuid,text,text,text,jsonb)', 'EXECUTE'),
+    'Y1 the service role may settle an upload';
+  ASSERT has_function_privilege('service_role',
+      'public.project_youtube_upload_receipt(uuid)', 'EXECUTE'),
+    'Y1 the service role may project a receipt';
   ASSERT has_function_privilege('service_role',
       'public.claim_youtube_upload_sessions(integer,bigint,integer)', 'EXECUTE'),
     'Y1 the service role may take the sessions of a later worker';
@@ -168,294 +232,436 @@ $y1_grants$;
 -- ---------------------------------------------------------------------------
 DO $y2_owner$
 DECLARE
+  v_acct_a  uuid;
+  v_post_a  uuid;
+  v_media_a uuid;
   v_u_a     uuid := 'b1000000-0000-4000-8000-000000000001';
   v_u_b     uuid := 'b1000000-0000-4000-8000-000000000002';
-  v_acct_a  uuid := 'b2000000-0000-4000-8000-000000000001';
   v_acct_b  uuid := 'b2000000-0000-4000-8000-000000000002';
-  v_post_a  uuid := 'b3000000-0000-4000-8000-000000000001';
-  v_media_a uuid := 'b4000000-0000-4000-8000-000000000001';
   v_media_b uuid := 'b4000000-0000-4000-8000-000000000002';
+  v_count   integer;
 BEGIN
+  -- This scenario owns its post, its account and its media file.
+  SELECT f.account_id, f.post_id, f.media_id
+    INTO v_acct_a, v_post_a, v_media_a
+    FROM pg_temp.new_youtube_fixture('y2') f;
   -- A post that is not the caller's.
   BEGIN
-    PERFORM public.begin_youtube_upload_session(
-      v_post_a, v_acct_a, v_u_b, v_media_a, 4096, 4096, '{"snippet":{"title":"A"}}'::jsonb);
-    RAISE EXCEPTION 'Y2 failed: another owner opened a session'
-      USING ERRCODE = 'assert_failure';
+    PERFORM public.admit_youtube_upload(v_post_a, v_acct_a, v_u_b, v_media_a, 4096, 4096, '{}'::jsonb);
+    RAISE EXCEPTION 'Y2 a post that is not the owner''s was admitted';
   EXCEPTION WHEN SQLSTATE 'YUS01' THEN
-    NULL;
+    RAISE NOTICE 'PASS Y2: a post that is not the owner''s is refused';
   END;
 
   -- An account that is not the caller's.
   BEGIN
-    PERFORM public.begin_youtube_upload_session(
-      v_post_a, v_acct_b, v_u_a, v_media_a, 4096, 4096, '{"snippet":{"title":"A"}}'::jsonb);
-    RAISE EXCEPTION 'Y2 failed: another owner''s account was accepted'
-      USING ERRCODE = 'assert_failure';
+    PERFORM public.admit_youtube_upload(v_post_a, v_acct_b, v_u_a, v_media_a, 4096, 4096, '{}'::jsonb);
+    RAISE EXCEPTION 'Y2 an account that is not the owner''s was admitted';
   EXCEPTION WHEN SQLSTATE 'YUS02' THEN
-    NULL;
+    RAISE NOTICE 'PASS Y2: an account that is not the owner''s is refused';
   END;
 
   -- A media file that is not the caller's.
   BEGIN
-    PERFORM public.begin_youtube_upload_session(
-      v_post_a, v_acct_a, v_u_a, v_media_b, 4096, 4096, '{"snippet":{"title":"A"}}'::jsonb);
-    RAISE EXCEPTION 'Y2 failed: another owner''s media file was accepted'
-      USING ERRCODE = 'assert_failure';
+    PERFORM public.admit_youtube_upload(v_post_a, v_acct_a, v_u_a, v_media_b, 4096, 4096, '{}'::jsonb);
+    RAISE EXCEPTION 'Y2 a media file that is not the owner''s was admitted';
   EXCEPTION WHEN SQLSTATE 'YUS03' THEN
-    NULL;
+    RAISE NOTICE 'PASS Y2: a media file that is not the owner''s is refused';
   END;
 
-  -- A video with no size.
+  -- An account that is not usable.
+  UPDATE public.social_accounts SET is_active = false WHERE id = v_acct_a;
   BEGIN
-    PERFORM public.begin_youtube_upload_session(
-      v_post_a, v_acct_a, v_u_a, v_media_a, 0, 0, '{"snippet":{"title":"A"}}'::jsonb);
-    RAISE EXCEPTION 'Y2 failed: a video with no size was accepted'
-      USING ERRCODE = 'assert_failure';
-  EXCEPTION WHEN SQLSTATE 'YUS10' THEN
-    NULL;
+    PERFORM public.admit_youtube_upload(v_post_a, v_acct_a, v_u_a, v_media_a, 4096, 4096, '{}'::jsonb);
+    RAISE EXCEPTION 'Y2 an unusable account was admitted';
+  EXCEPTION WHEN SQLSTATE 'YUS02' THEN
+    RAISE NOTICE 'PASS Y2: an unusable account is refused';
   END;
+  UPDATE public.social_accounts SET is_active = true WHERE id = v_acct_a;
 
-  ASSERT (SELECT count(*) = 0 FROM public.youtube_upload_sessions),
-    'Y2 a refused call leaves no session behind';
-
-  RAISE NOTICE 'PASS Y2: the owner, the account, the media file and the size are all fenced';
+  -- A refused call leaves nothing behind: no session and no public row.
+  SELECT count(*) INTO v_count FROM public.youtube_upload_sessions WHERE post_id = v_post_a;
+  ASSERT v_count = 0, 'Y2 a refused admission creates no session';
+  SELECT count(*) INTO v_count FROM public.platform_posts WHERE post_id = v_post_a;
+  ASSERT v_count = 0, 'Y2 a refused admission creates no public row';
+  RAISE NOTICE 'PASS Y2: a refused admission leaves no session and no public row';
 END
 $y2_owner$;
 
 -- ---------------------------------------------------------------------------
--- Y3 and Y4: one session per post and account, and the lease.
+-- Y3: the admission is atomic.
 -- ---------------------------------------------------------------------------
-DO $y3_lease$
+DO $y3_atomic$
 DECLARE
-  v_u_a      uuid := 'b1000000-0000-4000-8000-000000000001';
-  v_acct_a   uuid := 'b2000000-0000-4000-8000-000000000001';
-  v_post_a   uuid := 'b3000000-0000-4000-8000-000000000001';
-  v_media_a  uuid := 'b4000000-0000-4000-8000-000000000001';
-  v_session  uuid;
-  v_again    uuid;
-  v_lease_a  uuid := 'b5000000-0000-4000-8000-000000000001';
-  v_lease_b  uuid := 'b5000000-0000-4000-8000-000000000002';
+  v_acct_a  uuid;
+  v_post_a  uuid;
+  v_media_a uuid;
+  v_u_a       uuid := 'b1000000-0000-4000-8000-000000000001';
+  v_admitted  jsonb;
+  v_again     jsonb;
+  v_row_id    uuid;
+  v_session_id uuid;
 BEGIN
-  SELECT (public.begin_youtube_upload_session(
+  -- This scenario owns its post, its account and its media file.
+  SELECT f.account_id, f.post_id, f.media_id
+    INTO v_acct_a, v_post_a, v_media_a
+    FROM pg_temp.new_youtube_fixture('y3') f;
+  v_admitted := public.admit_youtube_upload(
     v_post_a, v_acct_a, v_u_a, v_media_a, 4096, 4096,
-    '{"snippet":{"title":"A video"}}'::jsonb))->>'id'
-    INTO v_session;
-  ASSERT v_session IS NOT NULL, 'Y3 the session opens';
+    '{"snippet":{"title":"A video"}}'::jsonb,
+    NULL, ARRAY[v_acct_a]);
 
-  SELECT (public.begin_youtube_upload_session(
+  v_session_id := (v_admitted -> 'session' ->> 'id')::uuid;
+  v_row_id := (v_admitted ->> 'platform_post_id')::uuid;
+
+  ASSERT v_session_id IS NOT NULL, 'Y3 the admission creates a session';
+  ASSERT v_row_id IS NOT NULL, 'Y3 the admission creates the public row in the same call';
+
+  -- The public row exists and is PENDING: that is what the sweeper respects.
+  ASSERT (SELECT status FROM public.platform_posts WHERE id = v_row_id) = 'pending',
+    'Y3 the public row the admission created is pending';
+  ASSERT (SELECT social_account_id FROM public.platform_posts WHERE id = v_row_id) = v_acct_a,
+    'Y3 the public row belongs to the account';
+  ASSERT (SELECT platform FROM public.platform_posts WHERE id = v_row_id) = 'youtube',
+    'Y3 the public row is a YouTube row';
+
+  -- The session points at the public row.
+  ASSERT (SELECT platform_post_id FROM public.youtube_upload_sessions WHERE id = v_session_id) = v_row_id,
+    'Y3 the session points at the public row';
+
+  -- The resolved targets are kept.
+  ASSERT (SELECT target_account_ids FROM public.youtube_upload_sessions WHERE id = v_session_id)
+      = ARRAY[v_acct_a],
+    'Y3 the session keeps the resolved targets';
+
+  -- Admitting the same pair again returns the same session AND the same row.
+  v_again := public.admit_youtube_upload(
     v_post_a, v_acct_a, v_u_a, v_media_a, 4096, 4096,
-    '{"snippet":{"title":"A video"}}'::jsonb))->>'id'
-    INTO v_again;
-  ASSERT v_again = v_session, 'Y3 the same post and account return the same session';
-
-  ASSERT (SELECT count(*) = 1 FROM public.youtube_upload_sessions),
+    '{"snippet":{"title":"A video"}}'::jsonb,
+    NULL, ARRAY[v_acct_a]);
+  ASSERT (v_again -> 'session' ->> 'id')::uuid = v_session_id,
     'Y3 one upload per post and account';
+  ASSERT (v_again ->> 'platform_post_id')::uuid = v_row_id,
+    'Y3 the second admission reuses the public row';
+  ASSERT (SELECT count(*) FROM public.platform_posts WHERE post_id = v_post_a) = 1,
+    'Y3 the account never ends up with two public rows';
+
+  RAISE NOTICE 'PASS Y3: the admission creates the session and the public pending row together';
+END
+$y3_atomic$;
+
+-- ---------------------------------------------------------------------------
+-- Y4: the lease.
+-- ---------------------------------------------------------------------------
+DO $y4_lease$
+DECLARE
+  v_acct_a  uuid;
+  v_post_a  uuid;
+  v_media_a uuid;
+  v_u_a       uuid := 'b1000000-0000-4000-8000-000000000001';
+  v_session   uuid;
+  v_lease_a   uuid := 'c1000000-0000-4000-8000-000000000001';
+  v_lease_b   uuid := 'c1000000-0000-4000-8000-000000000002';
+  v_stale     uuid := 'c1000000-0000-4000-8000-000000000003';
+  v_claimed   jsonb;
+BEGIN
+  -- This scenario owns its post, its account and its media file.
+  SELECT f.account_id, f.post_id, f.media_id
+    INTO v_acct_a, v_post_a, v_media_a
+    FROM pg_temp.new_youtube_fixture('y4') f;
+  v_session := (public.admit_youtube_upload(
+      v_post_a, v_acct_a, v_u_a, v_media_a, 4096, 4096, '{}'::jsonb)
+    -> 'session' ->> 'id')::uuid;
 
   -- The first worker takes it.
-  PERFORM public.claim_youtube_upload_session(v_session, v_lease_a, 180000);
+  v_claimed := public.claim_youtube_upload_session(v_session, v_lease_a, 180000);
+  ASSERT (v_claimed ->> 'id')::uuid = v_session, 'Y4 the worker holds the session';
 
-  -- The second worker is refused while the lease is live.
+  -- A second worker is refused while the lease is live.
   BEGIN
     PERFORM public.claim_youtube_upload_session(v_session, v_lease_b, 180000);
-    RAISE EXCEPTION 'Y4 failed: a second worker took a leased session'
-      USING ERRCODE = 'assert_failure';
+    RAISE EXCEPTION 'Y4 a second worker took a live session';
   EXCEPTION WHEN SQLSTATE 'YUS07' THEN
-    NULL;
+    RAISE NOTICE 'PASS Y4: a second worker is refused while the lease is live';
   END;
 
-  -- A worker with the wrong token cannot write.
+  -- A stale lease cannot write, checkpoint, complete, release or settle.
+  UPDATE public.youtube_upload_sessions
+     SET lease_expires_at = now() - interval '1 second'
+   WHERE id = v_session;
+
   BEGIN
-    PERFORM public.checkpoint_youtube_upload_session(
-      v_session, v_lease_b, 0, 0, 'https://provider.test/session?upload_id=x', false);
-    RAISE EXCEPTION 'Y4 failed: a worker with the wrong token wrote'
-      USING ERRCODE = 'assert_failure';
+    PERFORM public.checkpoint_youtube_upload_session(v_session, v_stale, 10, 10, NULL, NULL, NULL, NULL);
+    RAISE EXCEPTION 'Y4 a stale worker checkpointed';
   EXCEPTION WHEN SQLSTATE 'YUS09' THEN
-    NULL;
+    RAISE NOTICE 'PASS Y4: a stale lease cannot checkpoint';
   END;
 
-  -- The owner writes.
-  ASSERT public.checkpoint_youtube_upload_session(
-    v_session, v_lease_a, 0, 0, 'https://provider.test/session?upload_id=x', false),
-    'Y4 the owner checkpoints';
+  BEGIN
+    PERFORM public.complete_youtube_upload_session(v_session, v_stale, 'video-stale');
+    RAISE EXCEPTION 'Y4 a stale worker completed';
+  EXCEPTION WHEN SQLSTATE 'YUS09' THEN
+    RAISE NOTICE 'PASS Y4: a stale lease cannot complete';
+  END;
 
-  ASSERT (SELECT session_uri FROM public.youtube_upload_sessions WHERE id = v_session)
-           = 'https://provider.test/session?upload_id=x',
-    'Y4 the session uri is stored';
+  BEGIN
+    PERFORM public.release_youtube_upload_session(v_session, v_stale, 'failed', 'stale');
+    RAISE EXCEPTION 'Y4 a stale worker released';
+  EXCEPTION WHEN SQLSTATE 'YUS09' THEN
+    RAISE NOTICE 'PASS Y4: a stale lease cannot release';
+  END;
 
-  RAISE NOTICE 'PASS Y3 and Y4: one session per post and account, and one owner at a time';
+  BEGIN
+    PERFORM public.settle_youtube_upload_session(v_session, v_stale, 'failed', NULL, 'stale', '{}'::jsonb);
+    RAISE EXCEPTION 'Y4 a stale worker settled';
+  EXCEPTION WHEN SQLSTATE 'YUS09' THEN
+    RAISE NOTICE 'PASS Y4: a stale lease cannot settle';
+  END;
+
+  ASSERT (SELECT status FROM public.platform_posts
+           WHERE post_id = v_post_a AND social_account_id = v_acct_a) = 'pending',
+    'Y4 a stale worker settles nothing';
+
+  RAISE NOTICE 'PASS Y4: one session has one owner';
 END
-$y3_lease$;
+$y4_lease$;
 
 -- ---------------------------------------------------------------------------
--- Y5: the offsets only grow.
+-- Y5: the offsets only grow, and the uncertainty is sticky.
 -- ---------------------------------------------------------------------------
 DO $y5_offsets$
 DECLARE
-  v_session uuid;
-  v_lease   uuid := 'b5000000-0000-4000-8000-000000000001';
+  v_acct_a  uuid;
+  v_post_a  uuid;
+  v_media_a uuid;
+  v_u_a       uuid := 'b1000000-0000-4000-8000-000000000001';
+  v_session   uuid;
+  v_lease     uuid := 'c2000000-0000-4000-8000-000000000001';
 BEGIN
-  SELECT id INTO v_session FROM public.youtube_upload_sessions LIMIT 1;
+  -- This scenario owns its post, its account and its media file.
+  SELECT f.account_id, f.post_id, f.media_id
+    INTO v_acct_a, v_post_a, v_media_a
+    FROM pg_temp.new_youtube_fixture('y5') f;
+  v_session := (public.admit_youtube_upload(
+      v_post_a, v_acct_a, v_u_a, v_media_a, 4096, 4096, '{}'::jsonb)
+    -> 'session' ->> 'id')::uuid;
+  PERFORM public.claim_youtube_upload_session(v_session, v_lease, 180000);
 
-  PERFORM public.checkpoint_youtube_upload_session(v_session, v_lease, 2048, 2048, NULL, false);
-  ASSERT (SELECT confirmed_bytes FROM public.youtube_upload_sessions WHERE id = v_session) = 2048,
-    'Y5 the confirmed offset moves forward';
+  PERFORM public.checkpoint_youtube_upload_session(v_session, v_lease, 1000, 1000,
+    'https://upload.example.invalid/session/one', false, NULL, 'resumable');
+  ASSERT (SELECT confirmed_bytes FROM public.youtube_upload_sessions WHERE id = v_session) = 1000,
+    'Y5 the confirmed offset is recorded';
+  ASSERT (SELECT session_uri FROM public.youtube_upload_sessions WHERE id = v_session)
+      = 'https://upload.example.invalid/session/one',
+    'Y5 the session URI is recorded';
 
-  PERFORM public.checkpoint_youtube_upload_session(v_session, v_lease, 512, 512, NULL, false);
-  ASSERT (SELECT confirmed_bytes FROM public.youtube_upload_sessions WHERE id = v_session) = 2048,
-    'Y5 a smaller confirmed offset does not move it back';
-  ASSERT (SELECT bytes_sent FROM public.youtube_upload_sessions WHERE id = v_session) = 2048,
-    'Y5 a smaller written offset does not move it back';
+  -- A smaller offset does not walk it back.
+  PERFORM public.checkpoint_youtube_upload_session(v_session, v_lease, 500, 500, NULL, NULL, NULL, NULL);
+  ASSERT (SELECT confirmed_bytes FROM public.youtube_upload_sessions WHERE id = v_session) = 1000,
+    'Y5 the confirmed offset only grows';
+  ASSERT (SELECT bytes_sent FROM public.youtube_upload_sessions WHERE id = v_session) = 1000,
+    'Y5 the written offset only grows';
 
-  -- A byte count that does not fit the video is refused.
-  BEGIN
-    PERFORM public.checkpoint_youtube_upload_session(v_session, v_lease, 999999, 0, NULL, false);
-    RAISE EXCEPTION 'Y5 failed: a byte count outside the video was accepted'
-      USING ERRCODE = 'assert_failure';
-  EXCEPTION WHEN SQLSTATE 'YUS10' THEN
-    NULL;
-  END;
+  -- The uncertainty is STICKY: a checkpoint that says "no video yet" cannot
+  -- clear a record that says the last chunk may have been written.
+  PERFORM public.checkpoint_youtube_upload_session(v_session, v_lease, 4096, 4096, NULL, true, NULL, 'resumable');
+  ASSERT (SELECT video_may_exist FROM public.youtube_upload_sessions WHERE id = v_session),
+    'Y5 the uncertainty is recorded';
+  PERFORM public.checkpoint_youtube_upload_session(v_session, v_lease, 4096, 4096, NULL, false, NULL, 'resumable');
+  ASSERT (SELECT video_may_exist FROM public.youtube_upload_sessions WHERE id = v_session),
+    'Y5 a checkpoint never clears the uncertainty that a video may exist';
 
-  RAISE NOTICE 'PASS Y5: the confirmed and written offsets only grow';
+  RAISE NOTICE 'PASS Y5: the offsets only grow and the uncertainty is sticky';
 END
 $y5_offsets$;
-
--- ---------------------------------------------------------------------------
--- Y7: the content fence.
--- ---------------------------------------------------------------------------
-DO $y7_fence$
-DECLARE
-  v_u_a      uuid := 'b1000000-0000-4000-8000-000000000001';
-  v_acct_a   uuid := 'b2000000-0000-4000-8000-000000000001';
-  v_post_a   uuid := 'b3000000-0000-4000-8000-000000000001';
-  v_media_a  uuid := 'b4000000-0000-4000-8000-000000000001';
-  v_lease    uuid := 'b5000000-0000-4000-8000-000000000001';
-BEGIN
-  -- An edited title is a different upload.
-  BEGIN
-    PERFORM public.begin_youtube_upload_session(
-      v_post_a, v_acct_a, v_u_a, v_media_a, 4096, 4096,
-      '{"snippet":{"title":"A different video"}}'::jsonb);
-    RAISE EXCEPTION 'Y7 failed: an edited upload body was accepted'
-      USING ERRCODE = 'assert_failure';
-  EXCEPTION WHEN SQLSTATE 'YUS04' THEN
-    NULL;
-  END;
-
-  -- A replaced media file is a different video.
-  UPDATE public.media_files
-     SET current_object_version = current_object_version + 1
-   WHERE id = v_media_a;
-
-  BEGIN
-    PERFORM public.claim_youtube_upload_session(
-      (SELECT id FROM public.youtube_upload_sessions LIMIT 1), v_lease, 180000);
-    RAISE EXCEPTION 'Y7 failed: a replaced media file was accepted'
-      USING ERRCODE = 'assert_failure';
-  EXCEPTION WHEN SQLSTATE 'YUS04' THEN
-    NULL;
-  END;
-
-  UPDATE public.media_files
-     SET current_object_version = current_object_version - 1
-   WHERE id = v_media_a;
-
-  RAISE NOTICE 'PASS Y7: an edited upload body and a replaced media file refuse the resume';
-END
-$y7_fence$;
 
 -- ---------------------------------------------------------------------------
 -- Y6: the receipt.
 -- ---------------------------------------------------------------------------
 DO $y6_receipt$
 DECLARE
-  v_session uuid;
-  v_lease   uuid := 'b5000000-0000-4000-8000-000000000001';
+  v_acct_a  uuid;
+  v_post_a  uuid;
+  v_media_a uuid;
+  v_u_a       uuid := 'b1000000-0000-4000-8000-000000000001';
+  v_session   uuid;
+  v_lease     uuid := 'c3000000-0000-4000-8000-000000000001';
+  v_video     text := 'yt-video-fixture-1';
 BEGIN
-  SELECT id INTO v_session FROM public.youtube_upload_sessions LIMIT 1;
+  -- This scenario owns its post, its account and its media file.
+  SELECT f.account_id, f.post_id, f.media_id
+    INTO v_acct_a, v_post_a, v_media_a
+    FROM pg_temp.new_youtube_fixture('y6') f;
+  v_session := (public.admit_youtube_upload(
+      v_post_a, v_acct_a, v_u_a, v_media_a, 4096, 4096, '{}'::jsonb)
+    -> 'session' ->> 'id')::uuid;
+  PERFORM public.claim_youtube_upload_session(v_session, v_lease, 180000);
+  PERFORM public.checkpoint_youtube_upload_session(v_session, v_lease, 100, 100,
+    'https://upload.example.invalid/session/two', false, NULL, NULL);
 
-  ASSERT public.complete_youtube_upload_session(v_session, v_lease, 'dQw4w9WgXcQ'),
-    'Y6 the receipt is recorded';
-
+  PERFORM public.complete_youtube_upload_session(v_session, v_lease, v_video);
   ASSERT (SELECT state FROM public.youtube_upload_sessions WHERE id = v_session) = 'uploaded',
-    'Y6 the session is uploaded';
-  ASSERT (SELECT video_id FROM public.youtube_upload_sessions WHERE id = v_session) = 'dQw4w9WgXcQ',
-    'Y6 the video id is kept';
+    'Y6 the session holds the receipt';
+  ASSERT (SELECT video_id FROM public.youtube_upload_sessions WHERE id = v_session) = v_video,
+    'Y6 the receipt is the video id';
   ASSERT (SELECT session_uri FROM public.youtube_upload_sessions WHERE id = v_session) IS NULL,
-    'Y6 the session uri is dropped once the receipt is kept';
-  ASSERT (SELECT confirmed_bytes FROM public.youtube_upload_sessions WHERE id = v_session)
-           = (SELECT total_bytes FROM public.youtube_upload_sessions WHERE id = v_session),
-    'Y6 the whole file is confirmed';
+    'Y6 the session URI is dropped with the receipt';
 
-  -- The same receipt again is the same answer.
-  ASSERT public.complete_youtube_upload_session(v_session, v_lease, 'dQw4w9WgXcQ'),
-    'Y6 the same receipt is idempotent';
+  -- It is idempotent for the same video id.
+  PERFORM public.complete_youtube_upload_session(v_session, v_lease, v_video);
+  ASSERT (SELECT video_id FROM public.youtube_upload_sessions WHERE id = v_session) = v_video,
+    'Y6 the same receipt is kept';
 
-  -- A release never takes the receipt back.
-  ASSERT NOT public.release_youtube_upload_session(v_session, v_lease, 'failed', 'late'),
-    'Y6 a release never takes a receipt back';
+  -- A release never takes it back.
+  PERFORM public.claim_youtube_upload_session(v_session, v_lease, 180000);
+  PERFORM public.release_youtube_upload_session(v_session, v_lease, 'failed', 'no');
   ASSERT (SELECT state FROM public.youtube_upload_sessions WHERE id = v_session) = 'uploaded',
-    'Y6 the session is still uploaded';
+    'Y6 a release never takes a receipt back';
 
-  RAISE NOTICE 'PASS Y6: the receipt is kept, the session uri is dropped, the release cannot take it back';
+  RAISE NOTICE 'PASS Y6: the receipt is kept, idempotent, and never taken back';
 END
 $y6_receipt$;
+
+-- ---------------------------------------------------------------------------
+-- Y7: the content fence is the LIVE post.
+-- ---------------------------------------------------------------------------
+DO $y7_fence$
+DECLARE
+  v_acct_a  uuid;
+  v_post_a  uuid;
+  v_media_a uuid;
+  v_u_a       uuid := 'b1000000-0000-4000-8000-000000000001';
+  v_session   uuid;
+  v_lease     uuid := 'c4000000-0000-4000-8000-000000000001';
+  v_saved_meta jsonb;
+BEGIN
+  -- This scenario owns its post, its account and its media file.
+  SELECT f.account_id, f.post_id, f.media_id
+    INTO v_acct_a, v_post_a, v_media_a
+    FROM pg_temp.new_youtube_fixture('y7') f;
+  v_session := (public.admit_youtube_upload(
+      v_post_a, v_acct_a, v_u_a, v_media_a, 4096, 4096, '{}'::jsonb)
+    -> 'session' ->> 'id')::uuid;
+  PERFORM public.claim_youtube_upload_session(v_session, v_lease, 180000);
+  PERFORM public.checkpoint_youtube_upload_session(v_session, v_lease, 10, 10,
+    'https://upload.example.invalid/session/three', false, NULL, NULL);
+
+  -- The attempt-only runtime metadata does NOT refuse: a sibling publisher
+  -- may write it while the upload is in flight.
+  UPDATE public.posts
+     SET metadata = coalesce(metadata, '{}'::jsonb) || jsonb_build_object(
+           'attempt_started_at', now(),
+           'attempt_scope', 'fanout',
+           'settlement_rollup_at', now(),
+           'final_notification_intent', jsonb_build_object('status', 'processing')
+         )
+   WHERE id = v_post_a;
+  PERFORM public.claim_youtube_upload_session(v_session, v_lease, 180000);
+  RAISE NOTICE 'PASS Y7: the attempt-only runtime metadata does not refuse the resume';
+
+  -- A changed TITLE does refuse.
+  SELECT metadata INTO v_saved_meta FROM public.posts WHERE id = v_post_a;
+  UPDATE public.posts
+     SET metadata = coalesce(metadata, '{}'::jsonb) || jsonb_build_object('youtube_title', 'A different title')
+   WHERE id = v_post_a;
+  BEGIN
+    PERFORM public.claim_youtube_upload_session(v_session, v_lease, 180000);
+    RAISE EXCEPTION 'Y7 a changed title did not refuse the resume';
+  EXCEPTION WHEN SQLSTATE 'YUS04' THEN
+    RAISE NOTICE 'PASS Y7: a changed title refuses the resume';
+  END;
+  UPDATE public.posts SET metadata = v_saved_meta WHERE id = v_post_a;
+
+  -- A changed VISIBILITY does refuse.
+  UPDATE public.posts
+     SET metadata = coalesce(metadata, '{}'::jsonb) || jsonb_build_object('youtube_visibility', 'public')
+   WHERE id = v_post_a;
+  BEGIN
+    PERFORM public.claim_youtube_upload_session(v_session, v_lease, 180000);
+    RAISE EXCEPTION 'Y7 a changed visibility did not refuse the resume';
+  EXCEPTION WHEN SQLSTATE 'YUS04' THEN
+    RAISE NOTICE 'PASS Y7: a changed visibility refuses the resume';
+  END;
+  UPDATE public.posts SET metadata = v_saved_meta WHERE id = v_post_a;
+
+  -- A changed CAPTION does refuse.
+  UPDATE public.posts SET caption = 'A different caption' WHERE id = v_post_a;
+  BEGIN
+    PERFORM public.claim_youtube_upload_session(v_session, v_lease, 180000);
+    RAISE EXCEPTION 'Y7 a changed caption did not refuse the resume';
+  EXCEPTION WHEN SQLSTATE 'YUS04' THEN
+    RAISE NOTICE 'PASS Y7: a changed caption refuses the resume';
+  END;
+  UPDATE public.posts SET caption = 'A video' WHERE id = v_post_a;
+
+  -- A REPLACED media file does refuse.
+  UPDATE public.media_files SET current_object_version = 2 WHERE id = v_media_a;
+  BEGIN
+    PERFORM public.claim_youtube_upload_session(v_session, v_lease, 180000);
+    RAISE EXCEPTION 'Y7 a replaced media file did not refuse the resume';
+  EXCEPTION WHEN SQLSTATE 'YUS04' THEN
+    RAISE NOTICE 'PASS Y7: a replaced media file refuses the resume';
+  END;
+  UPDATE public.media_files SET current_object_version = 1 WHERE id = v_media_a;
+
+  -- The unchanged post is still carried on.
+  PERFORM public.claim_youtube_upload_session(v_session, v_lease, 180000);
+  RAISE NOTICE 'PASS Y7: the unchanged post is carried on';
+
+  RAISE NOTICE 'PASS Y7: the content fence is the live post';
+END
+$y7_fence$;
 
 -- ---------------------------------------------------------------------------
 -- Y8: the expired session.
 -- ---------------------------------------------------------------------------
 DO $y8_expired$
 DECLARE
-  v_u_a      uuid := 'b1000000-0000-4000-8000-000000000001';
-  v_acct_a   uuid := 'b2000000-0000-4000-8000-000000000001';
-  v_post_a   uuid := 'b3000000-0000-4000-8000-000000000001';
-  v_media_a  uuid := 'b4000000-0000-4000-8000-000000000001';
-  v_lease    uuid := 'b5000000-0000-4000-8000-000000000001';
-  v_body     jsonb := '{"snippet":{"title":"A second video"}}'::jsonb;
-  v_session  uuid;
-  v_record   jsonb;
+  v_acct_a  uuid;
+  v_post_a  uuid;
+  v_media_a uuid;
+  v_u_a       uuid := 'b1000000-0000-4000-8000-000000000001';
+  v_session   uuid;
+  v_lease     uuid := 'c5000000-0000-4000-8000-000000000001';
+  v_admitted  jsonb;
 BEGIN
-  -- A second post, so the first session is not in the way.
-  INSERT INTO public.posts (id, user_id, caption, platforms, media_file_ids, status, processing_started_at)  VALUES ('b3000000-0000-4000-8000-000000000002', v_u_a, 'Another video',
-          ARRAY['youtube'], ARRAY[v_media_a], 'processing', now())
-  ON CONFLICT (id) DO NOTHING;
-
-  SELECT (public.begin_youtube_upload_session(
-    'b3000000-0000-4000-8000-000000000002', v_acct_a, v_u_a, v_media_a, 4096, 4096, v_body))->>'id'
-    INTO v_session;
-
+  -- This scenario owns its post, its account and its media file.
+  SELECT f.account_id, f.post_id, f.media_id
+    INTO v_acct_a, v_post_a, v_media_a
+    FROM pg_temp.new_youtube_fixture('y8') f;
+  -- No byte ever reached the provider: the session is admitted again.
+  -- The provider session was opened, but no chunk was written to it.
+  v_session := (public.admit_youtube_upload(
+      v_post_a, v_acct_a, v_u_a, v_media_a, 4096, 4096, '{}'::jsonb)
+    -> 'session' ->> 'id')::uuid;
   PERFORM public.claim_youtube_upload_session(v_session, v_lease, 180000);
-  PERFORM public.checkpoint_youtube_upload_session(
-    v_session, v_lease, 1024, 1024, 'https://provider.test/session?upload_id=y', false);
+  PERFORM public.checkpoint_youtube_upload_session(v_session, v_lease, 0, 0,
+    'https://upload.example.invalid/session/four', false, NULL, NULL);
+  UPDATE public.youtube_upload_sessions
+     SET session_expires_at = now() - interval '1 minute'
+   WHERE id = v_session;
 
-  -- The provider session is gone and no video can exist, so it is reopened.
-  PERFORM public.release_youtube_upload_session(
-    v_session, v_lease, 'expired', 'The session expired.');
+  v_admitted := public.admit_youtube_upload(v_post_a, v_acct_a, v_u_a, v_media_a, 4096, 4096, '{}'::jsonb);
+  ASSERT (v_admitted -> 'session' ->> 'state') = 'open',
+    'Y8 an expired session that never wrote a byte is admitted again';
+  ASSERT (v_admitted -> 'session' ->> 'session_uri') IS NULL,
+    'Y8 the admitted again session has no provider session';
+  ASSERT (v_admitted -> 'session' ->> 'confirmed_bytes')::bigint = 0,
+    'Y8 the admitted again session starts from the beginning';
 
-  SELECT public.begin_youtube_upload_session(
-    'b3000000-0000-4000-8000-000000000002', v_acct_a, v_u_a, v_media_a, 4096, 4096, v_body)
-    INTO v_record;
-  ASSERT v_record->>'session_uri' IS NULL, 'Y8 an expired session is reopened without its session uri';
-  ASSERT (v_record->>'confirmed_bytes')::bigint = 0, 'Y8 the reopened session starts from nothing';
-  ASSERT v_record->>'state' = 'open', 'Y8 the reopened session is open';
-
-  -- Now the last chunk may have been written: no video can be ruled out.
-  -- The session is returned in the 'reconcile' state rather than refused
-  -- with an exception, because a refusal raised inside the function would be
-  -- undone by the caller's rollback and the mark is the whole point.
+  -- A byte reached the provider: only a human may decide.
   PERFORM public.claim_youtube_upload_session(v_session, v_lease, 180000);
-  PERFORM public.checkpoint_youtube_upload_session(
-    v_session, v_lease, 4096, 4096, 'https://provider.test/session?upload_id=z', true);
-  PERFORM public.release_youtube_upload_session(
-    v_session, v_lease, 'expired', 'The session expired.');
+  PERFORM public.checkpoint_youtube_upload_session(v_session, v_lease, 4096, 4096,
+    'https://upload.example.invalid/session/five', true, NULL, NULL);
+  UPDATE public.youtube_upload_sessions
+     SET session_expires_at = now() - interval '1 minute'
+   WHERE id = v_session;
 
-  SELECT public.begin_youtube_upload_session(
-    'b3000000-0000-4000-8000-000000000002', v_acct_a, v_u_a, v_media_a, 4096, 4096, v_body)
-    INTO v_record;
-  ASSERT v_record->>'state' = 'reconcile', 'Y8 the session is returned for a human';
-
-  ASSERT (SELECT state FROM public.youtube_upload_sessions WHERE id = v_session) = 'reconcile',
-    'Y8 the mark is durable';
+  v_admitted := public.admit_youtube_upload(v_post_a, v_acct_a, v_u_a, v_media_a, 4096, 4096, '{}'::jsonb);
+  ASSERT (v_admitted -> 'session' ->> 'state') = 'reconcile',
+    'Y8 an expired session that wrote a byte is left for a human';
+  ASSERT (v_admitted -> 'session' ->> 'session_uri') IS NOT NULL,
+    'Y8 the session that needs a human keeps its provider session';
 
   RAISE NOTICE 'PASS Y8: an expired session is reopened only when no video can exist';
 END
@@ -466,355 +672,625 @@ $y8_expired$;
 -- ---------------------------------------------------------------------------
 DO $y9_batch$
 DECLARE
-  v_u_a      uuid := 'b1000000-0000-4000-8000-000000000001';
-  v_acct_a   uuid := 'b2000000-0000-4000-8000-000000000001';
-  v_post_a   uuid := 'b3000000-0000-4000-8000-000000000001';
-  v_media_a  uuid := 'b4000000-0000-4000-8000-000000000001';
-  v_lease    uuid := 'b5000000-0000-4000-8000-000000000001';
-  v_body     jsonb := '{"snippet":{"title":"A third video"}}'::jsonb;
-  v_session  uuid;
-  v_claimed  uuid[];
-  v_rows     record;
-  v_found    boolean := false;
+  v_acct_a  uuid;
+  v_post_a  uuid;
+  v_media_a uuid;
+  v_u_a       uuid := 'b1000000-0000-4000-8000-000000000001';
+  v_session   uuid;
+  v_lease     uuid := 'c6000000-0000-4000-8000-000000000001';
+  v_named     integer;
+  v_token     integer;
+  v_attempt   integer;
 BEGIN
-  INSERT INTO public.posts (id, user_id, caption, platforms, media_file_ids, status, processing_started_at)
-  VALUES ('b3000000-0000-4000-8000-000000000003', v_u_a, 'A third video',
-          ARRAY['youtube'], ARRAY[v_media_a], 'processing', now())
-  ON CONFLICT (id) DO NOTHING;
-
-  SELECT (public.begin_youtube_upload_session(
-    'b3000000-0000-4000-8000-000000000003', v_acct_a, v_u_a, v_media_a, 4096, 4096, v_body))->>'id'
-    INTO v_session;
+  -- This scenario owns its post, its account and its media file.
+  SELECT f.account_id, f.post_id, f.media_id
+    INTO v_acct_a, v_post_a, v_media_a
+    FROM pg_temp.new_youtube_fixture('y9') f;
+  v_session := (public.admit_youtube_upload(
+      v_post_a, v_acct_a, v_u_a, v_media_a, 4096, 4096, '{}'::jsonb)
+    -> 'session' ->> 'id')::uuid;
   PERFORM public.claim_youtube_upload_session(v_session, v_lease, 180000);
+  PERFORM public.checkpoint_youtube_upload_session(v_session, v_lease, 100, 100,
+    'https://upload.example.invalid/session/six', false, NULL, NULL);
 
-  -- The worker that owned it is gone: its lease expires.
+  -- The lease is live: the session is not taken away from the worker.
+  ASSERT (SELECT count(*) FROM public.claim_youtube_upload_sessions(5, 180000, 24)
+           WHERE session_id = v_session) = 0,
+    'Y9 a session with a live lease is not handed out';
+
+  -- The lease is gone and the session is due: it is handed out with a token.
+  --
+  -- ONE claim pass: the claim takes the work, so it is asked once and every
+  -- property is read out of the same answer.
   UPDATE public.youtube_upload_sessions
      SET lease_expires_at = now() - interval '1 second'
    WHERE id = v_session;
+  SELECT
+    count(*) FILTER (WHERE session_id = v_session),
+    count(*) FILTER (WHERE session_id = v_session AND lease_token IS NOT NULL),
+    count(*) FILTER (WHERE session_id = v_session AND attempt_started_at IS NOT NULL)
+    INTO v_named, v_token, v_attempt
+    FROM public.claim_youtube_upload_sessions(5, 180000, 24);
+  ASSERT v_named = 1,
+    'Y9 a due session with no live lease is handed out';
+  ASSERT v_token = 1,
+    'Y9 the claim carries the lease token';
+  ASSERT v_attempt = 1,
+    'Y9 the claim carries the attempt';
 
-  -- A session with no provider session is not handed out: there is nothing
-  -- to continue.
-  SELECT array_agg(id) INTO v_claimed FROM public.claim_youtube_upload_sessions(10, 180000);
-  ASSERT v_claimed IS NULL OR NOT (v_claimed @> ARRAY[v_session]),
-    'Y9 a session with no provider session is not handed out';
+  -- The session URI is NOT in the claim.
+  ASSERT NOT EXISTS (
+    SELECT 1 FROM information_schema.columns
+     WHERE table_name = 'claim_youtube_upload_sessions'
+       AND column_name = 'session_uri'),
+    'Y9 the claim does not carry the session URI at all';
 
-  -- A session with a provider session and no live lease IS handed out.
-  PERFORM public.claim_youtube_upload_session(v_session, v_lease, 180000);
-  PERFORM public.checkpoint_youtube_upload_session(
-    v_session, v_lease, 1024, 1024, 'https://provider.test/session?upload_id=w', false);
+  -- A session that is not due is not handed out.
   UPDATE public.youtube_upload_sessions
-     SET lease_expires_at = now() - interval '1 second'
+     SET lease_expires_at = now() - interval '1 second',
+         next_check_at = now() + interval '10 minutes'
    WHERE id = v_session;
-
-  FOR v_rows IN SELECT * FROM public.claim_youtube_upload_sessions(10, 180000)
-  LOOP
-    IF v_rows.id = v_session THEN
-      v_found := true;
-      ASSERT v_rows.lease_token IS NOT NULL,
-        'Y9 the claim carries the token the worker proves ownership with';
-      ASSERT v_rows.attempt_started_at IS NOT NULL,
-        'Y9 the claim carries the post attempt the session belongs to';
-    END IF;
-  END LOOP;
-  ASSERT v_found, 'Y9 a session with a provider session and no live lease is handed out';
-
-  -- The session is now leased by the claim, so it is not handed out again.
-  SELECT array_agg(id) INTO v_claimed FROM public.claim_youtube_upload_sessions(10, 180000);
-  ASSERT v_claimed IS NULL OR NOT (v_claimed @> ARRAY[v_session]),
-    'Y9 a session a live lease holds is not handed out twice';
-
-  -- A session that is not due is not handed out either.
-  UPDATE public.youtube_upload_sessions
-     SET next_check_at = now() + interval '10 minutes',
-         lease_expires_at = now() - interval '1 second'
-   WHERE id = v_session;
-  SELECT array_agg(id) INTO v_claimed FROM public.claim_youtube_upload_sessions(10, 180000);
-  ASSERT v_claimed IS NULL OR NOT (v_claimed @> ARRAY[v_session]),
+  ASSERT (SELECT count(*) FROM public.claim_youtube_upload_sessions(5, 180000, 24)
+           WHERE session_id = v_session) = 0,
     'Y9 a session that is not due is not handed out';
 
-  RAISE NOTICE 'PASS Y9: the batch claim hands out nothing that cannot be continued';
+  RAISE NOTICE 'PASS Y9: the batch claim hands out the due sessions with a token and no URI';
 END
 $y9_batch$;
 
 -- ---------------------------------------------------------------------------
 -- Y10: the retry guard.
---
--- A YouTube upload that needs manual reconciliation may have created a video
--- on the channel. A retry would create a second one, so the account is
--- neither targeted nor deleted.
 -- ---------------------------------------------------------------------------
 DO $y10_retry$
 DECLARE
-  v_u_a      uuid := 'b1000000-0000-4000-8000-000000000001';
-  v_acct_a   uuid := 'b2000000-0000-4000-8000-000000000001';
-  v_post_a   uuid := 'b3000000-0000-4000-8000-000000000004';
-  v_media_a  uuid := 'b4000000-0000-4000-8000-000000000001';
-  v_lease    uuid := 'b5000000-0000-4000-8000-000000000001';
-  v_body     jsonb := '{"snippet":{"title":"A fourth video"}}'::jsonb;
-  v_session  uuid;
-  v_result   jsonb;
+  v_acct_a  uuid;
+  v_post_a  uuid;
+  v_media_a uuid;
+  v_u_a       uuid := 'b1000000-0000-4000-8000-000000000001';
+  v_session   uuid;
+  v_lease     uuid := 'c7000000-0000-4000-8000-000000000001';
+  v_answer    jsonb;
+  v_row_id    uuid;
 BEGIN
-  INSERT INTO public.posts (id, user_id, caption, platforms, media_file_ids, status)
-  VALUES (v_post_a, v_u_a, 'A fourth video', ARRAY['youtube'], ARRAY[v_media_a], 'failed')
-  ON CONFLICT (id) DO NOTHING;
+  -- This scenario owns its post, its account and its media file.
+  SELECT f.account_id, f.post_id, f.media_id
+    INTO v_acct_a, v_post_a, v_media_a
+    FROM pg_temp.new_youtube_fixture('y10') f;
+  v_session := (public.admit_youtube_upload(
+      v_post_a, v_acct_a, v_u_a, v_media_a, 4096, 4096, '{}'::jsonb)
+    -> 'session' ->> 'id')::uuid;
+  v_row_id := (SELECT platform_post_id FROM public.youtube_upload_sessions WHERE id = v_session);
 
-  INSERT INTO public.platform_posts (post_id, social_account_id, platform, status, error_message)
-  VALUES (v_post_a, v_acct_a, 'youtube', 'failed', 'The upload could not be confirmed.')
-  ON CONFLICT DO NOTHING;
+  -- A session that needs a human is not retried.
+  UPDATE public.youtube_upload_sessions SET state = 'reconcile' WHERE id = v_session;
+  UPDATE public.posts SET status = 'failed' WHERE id = v_post_a;
+  UPDATE public.platform_posts SET status = 'failed' WHERE id = v_row_id;
 
-  SELECT (public.begin_youtube_upload_session(
-    v_post_a, v_acct_a, v_u_a, v_media_a, 4096, 4096, v_body))->>'id' INTO v_session;
-  PERFORM public.claim_youtube_upload_session(v_session, v_lease, 180000);
-  PERFORM public.checkpoint_youtube_upload_session(
-    v_session, v_lease, 4096, 4096, 'https://provider.test/session?upload_id=r', true);
-  PERFORM public.release_youtube_upload_session(
-    v_session, v_lease, 'reconcile', 'The provider would not say what happened.');
+  v_answer := public.request_post_retry(v_post_a, v_u_a, ARRAY[v_acct_a]);
+  ASSERT v_answer ->> 'status' = 'refused',
+    'Y10 an upload that needs a human is not retried';
 
-  v_result := public.request_post_retry(v_post_a, v_u_a);
-  ASSERT v_result->>'status' = 'refused', 'Y10 the retry is refused';
-  ASSERT v_result->>'reason' = 'no_targets', 'Y10 the account that needs reconciliation is not a target';
+  -- A session that already holds a RECEIPT is not retried either: the video
+  -- exists, and a retry would put a second one on the channel.
+  UPDATE public.youtube_upload_sessions
+     SET state = 'uploaded', video_id = 'yt-video-fixture-2'
+   WHERE id = v_session;
+  UPDATE public.posts SET status = 'failed' WHERE id = v_post_a;
+  UPDATE public.platform_posts SET status = 'failed' WHERE id = v_row_id;
 
-  ASSERT (SELECT count(*) = 1 FROM public.platform_posts
-           WHERE post_id = v_post_a AND social_account_id = v_acct_a),
-    'Y10 the failed row is not deleted either';
+  v_answer := public.request_post_retry(v_post_a, v_u_a, ARRAY[v_acct_a]);
+  ASSERT v_answer ->> 'status' = 'refused',
+    'Y10 an upload that holds a receipt is not retried';
 
-  RAISE NOTICE 'PASS Y10: an upload that needs manual reconciliation is not retried';
+  RAISE NOTICE 'PASS Y10: an uncertain or receipted upload is never retried blindly';
 END
 $y10_retry$;
 
 -- ---------------------------------------------------------------------------
 -- Y11: the lease is a number of milliseconds.
---
--- PostgREST sends the named arguments of a function as JSON, and a JSON
--- interval has no agreed shape. The functions therefore take `p_lease_ms`,
--- a number, and turn it into an interval themselves. This is the one place
--- the two shapes meet, so it is proved here.
 -- ---------------------------------------------------------------------------
-DO $y11_lease$
+DO $y11_lease_ms$
 DECLARE
-  v_u_a      uuid := 'b1000000-0000-4000-8000-000000000001';
-  v_acct_a   uuid := 'b2000000-0000-4000-8000-000000000001';
-  v_media_a  uuid := 'b4000000-0000-4000-8000-000000000001';
-  v_lease    uuid := 'b5000000-0000-4000-8000-000000000003';
-  v_body     jsonb := '{"snippet":{"title":"A leased video"}}'::jsonb;
-  v_session  uuid;
-  v_expires  timestamptz;
+  v_acct_a  uuid;
+  v_post_a  uuid;
+  v_media_a uuid;
+  v_u_a       uuid := 'b1000000-0000-4000-8000-000000000001';
+  v_session   uuid;
+  v_lease     uuid := 'c8000000-0000-4000-8000-000000000001';
+  v_expires   timestamptz;
 BEGIN
-  INSERT INTO public.posts (id, user_id, caption, platforms, media_file_ids, status, processing_started_at)
-  VALUES ('b3000000-0000-4000-8000-000000000005', v_u_a, 'A leased video',
-          ARRAY['youtube'], ARRAY[v_media_a], 'processing', now())
-  ON CONFLICT (id) DO NOTHING;
+  -- This scenario owns its post, its account and its media file.
+  SELECT f.account_id, f.post_id, f.media_id
+    INTO v_acct_a, v_post_a, v_media_a
+    FROM pg_temp.new_youtube_fixture('y11') f;
+  v_session := (public.admit_youtube_upload(
+      v_post_a, v_acct_a, v_u_a, v_media_a, 4096, 4096, '{}'::jsonb)
+    -> 'session' ->> 'id')::uuid;
 
-  SELECT (public.begin_youtube_upload_session(
-    'b3000000-0000-4000-8000-000000000005', v_acct_a, v_u_a, v_media_a, 4096, 4096, v_body))->>'id'
-    INTO v_session;
-
+  -- 180000 ms is three minutes.
   PERFORM public.claim_youtube_upload_session(v_session, v_lease, 180000);
+  SELECT lease_expires_at INTO v_expires FROM public.youtube_upload_sessions WHERE id = v_session;
+  ASSERT v_expires BETWEEN now() + interval '2 minutes 55 seconds' AND now() + interval '3 minutes 5 seconds',
+    'Y11 a lease of 180000 milliseconds is three minutes';
 
-  SELECT lease_expires_at INTO v_expires
-    FROM public.youtube_upload_sessions WHERE id = v_session;
-
-  ASSERT v_expires IS NOT NULL, 'Y11 the claim set a lease expiry';
-  -- The lease is 180 seconds long, with a second of slack for the clock.
-  ASSERT v_expires > now() + interval '179 seconds'
-     AND v_expires < now() + interval '181 seconds',
-    'Y11 a lease of 180000 ms is a lease of three minutes';
-
-  -- A lease length that is not usable is refused rather than guessed at.
+  -- A lease of zero is refused: an unbounded lease is not a lease.
   BEGIN
     PERFORM public.claim_youtube_upload_session(v_session, v_lease, 0);
-    RAISE EXCEPTION 'Y11 failed: a lease of no length was accepted'
-      USING ERRCODE = 'assert_failure';
+    RAISE EXCEPTION 'Y11 a lease of zero was accepted';
   EXCEPTION WHEN SQLSTATE 'YUS09' THEN
-    NULL;
+    RAISE NOTICE 'PASS Y11: a lease of zero is refused';
   END;
 
+  -- The batch claim takes the same shape.
   BEGIN
-    PERFORM public.claim_youtube_upload_session(v_session, v_lease, 999999999);
-    RAISE EXCEPTION 'Y11 failed: an unbounded lease was accepted'
-      USING ERRCODE = 'assert_failure';
+    PERFORM public.claim_youtube_upload_sessions(5, 0, 24);
+    RAISE EXCEPTION 'Y11 a batch lease of zero was accepted';
   EXCEPTION WHEN SQLSTATE 'YUS09' THEN
-    NULL;
+    RAISE NOTICE 'PASS Y11: the batch claim refuses a lease of zero';
   END;
 
-  RAISE NOTICE 'PASS Y11: the lease is a number of milliseconds and becomes an interval';
+  RAISE NOTICE 'PASS Y11: the lease is a number of milliseconds';
 END
-$y11_lease$;
+$y11_lease_ms$;
 
 -- ---------------------------------------------------------------------------
 -- Y12: the attempt fence.
---
--- A post that was edited or retried is published again, and that is a new
--- attempt with a new processing_started_at. The bytes of the older attempt
--- are not what the customer asked for now, so a session that belongs to the
--- older attempt must not be carried on.
 -- ---------------------------------------------------------------------------
 DO $y12_attempt$
 DECLARE
-  v_u_a      uuid := 'b1000000-0000-4000-8000-000000000001';
-  v_acct_a   uuid := 'b2000000-0000-4000-8000-000000000001';
-  v_media_a  uuid := 'b4000000-0000-4000-8000-000000000001';
-  v_lease    uuid := 'b5000000-0000-4000-8000-000000000004';
-  v_body     jsonb := '{"snippet":{"title":"An attempt video"}}'::jsonb;
-  v_session  uuid;
+  v_acct_a  uuid;
+  v_post_a  uuid;
+  v_media_a uuid;
+  v_u_a       uuid := 'b1000000-0000-4000-8000-000000000001';
+  v_session   uuid;
+  v_lease     uuid := 'c9000000-0000-4000-8000-000000000001';
+  v_attempt   timestamptz;
 BEGIN
-  INSERT INTO public.posts (id, user_id, caption, platforms, media_file_ids, status, processing_started_at)
-  VALUES ('b3000000-0000-4000-8000-000000000006', v_u_a, 'An attempt video',
-          ARRAY['youtube'], ARRAY[v_media_a], 'processing', now())
-  ON CONFLICT (id) DO NOTHING;
+  -- This scenario owns its post, its account and its media file.
+  SELECT f.account_id, f.post_id, f.media_id
+    INTO v_acct_a, v_post_a, v_media_a
+    FROM pg_temp.new_youtube_fixture('y12') f;
+  v_attempt := (SELECT processing_started_at FROM public.posts WHERE id = v_post_a);
+  v_session := (public.admit_youtube_upload(
+      v_post_a, v_acct_a, v_u_a, v_media_a, 4096, 4096, '{}'::jsonb, v_attempt)
+    -> 'session' ->> 'id')::uuid;
 
-  SELECT (public.begin_youtube_upload_session(
-    'b3000000-0000-4000-8000-000000000006', v_acct_a, v_u_a, v_media_a, 4096, 4096, v_body))->>'id'
-    INTO v_session;
-
-  -- The session records the attempt the post is on.
-  ASSERT (SELECT attempt_started_at IS NOT NULL FROM public.youtube_upload_sessions WHERE id = v_session),
-    'Y12 the session records the attempt it belongs to';
-
-  -- The post moves on to a newer attempt.
-  UPDATE public.posts SET processing_started_at = now() + interval '1 minute'
-   WHERE id = 'b3000000-0000-4000-8000-000000000006';
-
-  -- The session may not be carried on.
+  -- The post moved on to a newer attempt.
+  UPDATE public.posts SET processing_started_at = now() + interval '1 second' WHERE id = v_post_a;
   BEGIN
     PERFORM public.claim_youtube_upload_session(v_session, v_lease, 180000);
-    RAISE EXCEPTION 'Y12 failed: a session of an older attempt was claimed'
-      USING ERRCODE = 'assert_failure';
+    RAISE EXCEPTION 'Y12 an older attempt was carried on';
   EXCEPTION WHEN SQLSTATE 'YUS11' THEN
-    NULL;
+    RAISE NOTICE 'PASS Y12: a session of an older attempt is refused';
   END;
+  UPDATE public.posts SET processing_started_at = v_attempt WHERE id = v_post_a;
 
-  -- A post that is no longer being processed may not be carried on either.
-  UPDATE public.posts SET status = 'completed'
-   WHERE id = 'b3000000-0000-4000-8000-000000000006';
-
+  -- The post is no longer being processed.
+  UPDATE public.posts SET status = 'failed' WHERE id = v_post_a;
   BEGIN
     PERFORM public.claim_youtube_upload_session(v_session, v_lease, 180000);
-    RAISE EXCEPTION 'Y12 failed: a session of a settled post was claimed'
-      USING ERRCODE = 'assert_failure';
+    RAISE EXCEPTION 'Y12 a settled post was carried on';
   EXCEPTION WHEN SQLSTATE 'YUS12' THEN
-    NULL;
+    RAISE NOTICE 'PASS Y12: a post that is no longer processing is refused';
   END;
+  UPDATE public.posts SET status = 'processing' WHERE id = v_post_a;
 
-  RAISE NOTICE 'PASS Y12: a session of an older attempt is not carried on';
+  RAISE NOTICE 'PASS Y12: the attempt fence holds';
 END
 $y12_attempt$;
 
 -- ---------------------------------------------------------------------------
--- Y13: the reconciler's one claim surface hands out the YouTube uploads.
---
--- The completion claim is the reconciler's bounded entry point. It now also
--- hands out the upload sessions that are due for another look, with the
--- token and the attempt, and with no session URI.
+-- Y13: the reconciler's claim surface.
 -- ---------------------------------------------------------------------------
-DO $y13_completion_claim$
+DO $y13_reconciler$
 DECLARE
-  v_u_a      uuid := 'b1000000-0000-4000-8000-000000000001';
-  v_acct_a   uuid := 'b2000000-0000-4000-8000-000000000001';
-  v_media_a  uuid := 'b4000000-0000-4000-8000-000000000001';
-  v_lease    uuid := 'b5000000-0000-4000-8000-000000000005';
-  v_body     jsonb := '{"snippet":{"title":"A claimed video"}}'::jsonb;
-  v_session  uuid;
-  v_row      record;
-  v_found    boolean := false;
+  v_acct_a  uuid;
+  v_post_a  uuid;
+  v_media_a uuid;
+  v_u_a       uuid := 'b1000000-0000-4000-8000-000000000001';
+  v_session   uuid;
+  v_lease     uuid := 'ca000000-0000-4000-8000-000000000001';
+  v_total     integer;
+  v_named     integer;
+  v_token     integer;
+  v_attempt   integer;
+  v_no_row    integer;
 BEGIN
-  INSERT INTO public.posts (id, user_id, caption, platforms, media_file_ids, status, processing_started_at)
-  VALUES ('b3000000-0000-4000-8000-000000000007', v_u_a, 'A claimed video',
-          ARRAY['youtube'], ARRAY[v_media_a], 'processing', now())
-  ON CONFLICT (id) DO NOTHING;
-
-  SELECT (public.begin_youtube_upload_session(
-    'b3000000-0000-4000-8000-000000000007', v_acct_a, v_u_a, v_media_a, 4096, 4096, v_body))->>'id'
-    INTO v_session;
+  -- This scenario owns its post, its account and its media file.
+  SELECT f.account_id, f.post_id, f.media_id
+    INTO v_acct_a, v_post_a, v_media_a
+    FROM pg_temp.new_youtube_fixture('y13') f;
+  v_session := (public.admit_youtube_upload(
+      v_post_a, v_acct_a, v_u_a, v_media_a, 4096, 4096, '{}'::jsonb)
+    -> 'session' ->> 'id')::uuid;
   PERFORM public.claim_youtube_upload_session(v_session, v_lease, 180000);
-  PERFORM public.checkpoint_youtube_upload_session(
-    v_session, v_lease, 1024, 1024, 'https://provider.test/session?upload_id=claim', false);
-
-  -- The worker that owned it is gone: its lease expires.
+  PERFORM public.checkpoint_youtube_upload_session(v_session, v_lease, 100, 100,
+    'https://upload.example.invalid/session/seven', false, NULL, NULL);
   UPDATE public.youtube_upload_sessions
      SET lease_expires_at = now() - interval '1 second'
    WHERE id = v_session;
-
-  FOR v_row IN SELECT * FROM public.claim_post_completion_work(5)
-  LOOP
-    IF v_row.kind = 'youtube_upload_continuation' AND v_row.candidate_id = v_session THEN
-      v_found := true;
-      ASSERT v_row.claim_id IS NOT NULL,
-        'Y13 the claim carries the token the worker proves ownership with';
-      ASSERT v_row.attempt_started_at IS NOT NULL,
-        'Y13 the claim carries the post attempt the session belongs to';
-      ASSERT v_row.platform_post_id IS NULL,
-        'Y13 the claim carries no public row id';
-    END IF;
-  END LOOP;
-  ASSERT v_found, 'Y13 the completion claim hands out the upload session';
+  -- ONE claim pass: the claim takes the work, so it is asked once and every
+  -- property is read out of the same answer.
+  SELECT
+    count(*) FILTER (WHERE kind = 'youtube_upload_continuation' AND candidate_id = v_session),
+    count(*) FILTER (WHERE kind = 'youtube_upload_continuation' AND candidate_id = v_session),
+    count(*) FILTER (WHERE kind = 'youtube_upload_continuation' AND candidate_id = v_session AND claim_id IS NOT NULL),
+    count(*) FILTER (WHERE kind = 'youtube_upload_continuation' AND candidate_id = v_session AND attempt_started_at IS NOT NULL),
+    count(*) FILTER (WHERE kind = 'youtube_upload_continuation' AND candidate_id = v_session AND platform_post_id IS NULL)
+    INTO v_total, v_named, v_token, v_attempt, v_no_row
+    FROM public.claim_post_completion_work(5, interval '3 minutes');
+  ASSERT v_total = 1,
+    'Y13 the reconciler hands out the upload continuation';
+  ASSERT v_named = 1,
+    'Y13 the continuation names the session';
+  ASSERT v_token = 1,
+    'Y13 the continuation carries the claim token';
+  ASSERT v_attempt = 1,
+    'Y13 the continuation carries the attempt';
+  ASSERT v_no_row = 1,
+    'Y13 the continuation carries no public row id';
 
   RAISE NOTICE 'PASS Y13: the reconciler claim carries the upload continuation';
 END
-$y13_completion_claim$;
+$y13_reconciler$;
 
 -- ---------------------------------------------------------------------------
--- Y14: the sweeper leaves a post with an open upload alone.
---
--- The sweeper marks a post that has been processing for too long as failed,
--- with the message "Safe to retry". For a YouTube upload that is wrong: the
--- provider may already hold a video, and the retry would create a second
--- one. The post is therefore left alone while the session is open.
+-- Y14: the sweeper leaves an open upload alone.
 -- ---------------------------------------------------------------------------
 DO $y14_sweeper$
 DECLARE
-  v_u_a      uuid := 'b1000000-0000-4000-8000-000000000001';
-  v_acct_a   uuid := 'b2000000-0000-4000-8000-000000000001';
-  v_media_a  uuid := 'b4000000-0000-4000-8000-000000000001';
-  v_lease    uuid := 'b5000000-0000-4000-8000-000000000006';
-  v_body     jsonb := '{"snippet":{"title":"A swept video"}}'::jsonb;
-  v_session  uuid;
-  v_result   jsonb;
+  v_acct_a  uuid;
+  v_post_a  uuid;
+  v_media_a uuid;
+  v_u_a       uuid := 'b1000000-0000-4000-8000-000000000001';
+  v_session   uuid;
+  v_lease     uuid := 'cb000000-0000-4000-8000-000000000001';
+  v_answer    jsonb;
 BEGIN
-  INSERT INTO public.posts (id, user_id, caption, platforms, media_file_ids, status, processing_started_at)
-  VALUES ('b3000000-0000-4000-8000-000000000008', v_u_a, 'A swept video',
-          ARRAY['youtube'], ARRAY[v_media_a], 'processing', now() - interval '30 minutes')
-  ON CONFLICT (id) DO NOTHING;
-
-  SELECT (public.begin_youtube_upload_session(
-    'b3000000-0000-4000-8000-000000000008', v_acct_a, v_u_a, v_media_a, 4096, 4096, v_body))->>'id'
-    INTO v_session;
+  -- This scenario owns its post, its account and its media file.
+  SELECT f.account_id, f.post_id, f.media_id
+    INTO v_acct_a, v_post_a, v_media_a
+    FROM pg_temp.new_youtube_fixture('y14') f;
+  v_session := (public.admit_youtube_upload(
+      v_post_a, v_acct_a, v_u_a, v_media_a, 4096, 4096, '{}'::jsonb)
+    -> 'session' ->> 'id')::uuid;
   PERFORM public.claim_youtube_upload_session(v_session, v_lease, 180000);
-  PERFORM public.checkpoint_youtube_upload_session(
-    v_session, v_lease, 1024, 1024, 'https://provider.test/session?upload_id=sweep', false);
-  UPDATE public.youtube_upload_sessions
-     SET lease_expires_at = now() - interval '1 second'
-   WHERE id = v_session;
+  PERFORM public.checkpoint_youtube_upload_session(v_session, v_lease, 4096, 4096,
+    'https://upload.example.invalid/session/eight', true, NULL, NULL);
 
-  v_result := public.sweep_stale_processing_posts();
-  ASSERT (SELECT status = 'processing' FROM public.posts
-           WHERE id = 'b3000000-0000-4000-8000-000000000008'),
-    'Y14 a post with an open YouTube upload is not swept';
+  -- The post has been processing for far longer than the sweeper's window.
+  UPDATE public.posts SET processing_started_at = now() - interval '1 hour' WHERE id = v_post_a;
+
+  v_answer := public.sweep_stale_processing_posts();
+  ASSERT (v_answer ->> 'posts')::integer = 0,
+    'Y14 the sweeper leaves a post with an open YouTube upload alone';
+  ASSERT (SELECT status FROM public.posts WHERE id = v_post_a) = 'processing',
+    'Y14 the post is still processing';
 
   RAISE NOTICE 'PASS Y14: the sweeper leaves an open YouTube upload alone';
 END
 $y14_sweeper$;
 
 -- ---------------------------------------------------------------------------
--- The browser roles may not reach the session at all.
+-- Y15: the target authorization.
 -- ---------------------------------------------------------------------------
-SET ROLE authenticated;
-
-DO $browser$
+DO $y15_target$
+DECLARE
+  v_acct_a  uuid;
+  v_post_a  uuid;
+  v_media_a uuid;
+  v_u_a       uuid := 'b1000000-0000-4000-8000-000000000001';
+  v_session   uuid;
+  v_lease     uuid := 'cc000000-0000-4000-8000-000000000001';
 BEGIN
-  BEGIN
-    PERFORM public.begin_youtube_upload_session(
-      gen_random_uuid(), gen_random_uuid(), gen_random_uuid(), gen_random_uuid(),
-      4096, 4096, '{}'::jsonb);
-    RAISE EXCEPTION 'the browser role opened a session'
-      USING ERRCODE = 'assert_failure';
-  EXCEPTION WHEN insufficient_privilege THEN
-    NULL;
-  END;
-END
-$browser$;
+  -- This scenario owns its post, its account and its media file.
+  SELECT f.account_id, f.post_id, f.media_id
+    INTO v_acct_a, v_post_a, v_media_a
+    FROM pg_temp.new_youtube_fixture('y15') f;
+  v_session := (public.admit_youtube_upload(
+      v_post_a, v_acct_a, v_u_a, v_media_a, 4096, 4096, '{}'::jsonb)
+    -> 'session' ->> 'id')::uuid;
 
-RESET ROLE;
+  -- The post selects the account: the upload is carried on.
+  UPDATE public.posts
+     SET metadata = coalesce(metadata, '{}'::jsonb) || jsonb_build_object(
+           'selected_account_ids', jsonb_build_array(v_acct_a::text))
+   WHERE id = v_post_a;
+  PERFORM public.claim_youtube_upload_session(v_session, v_lease, 180000);
+  RAISE NOTICE 'PASS Y15: a selected account is carried on';
+
+  -- The customer took the account out of the post: the upload is refused.
+  UPDATE public.posts
+     SET metadata = coalesce(metadata, '{}'::jsonb) || jsonb_build_object(
+           'selected_account_ids', jsonb_build_array('00000000-0000-4000-8000-000000000000'::text))
+   WHERE id = v_post_a;
+  BEGIN
+    PERFORM public.claim_youtube_upload_session(v_session, v_lease, 180000);
+    RAISE EXCEPTION 'Y15 an account the post no longer selects was carried on';
+  EXCEPTION WHEN SQLSTATE 'YUS15' THEN
+    RAISE NOTICE 'PASS Y15: an account the post no longer selects is refused';
+  END;
+
+  -- The post no longer publishes to YouTube at all.
+  UPDATE public.posts SET platforms = ARRAY['instagram'] WHERE id = v_post_a;
+  BEGIN
+    PERFORM public.claim_youtube_upload_session(v_session, v_lease, 180000);
+    RAISE EXCEPTION 'Y15 an upload to a platform the post dropped was carried on';
+  EXCEPTION WHEN SQLSTATE 'YUS15' THEN
+    RAISE NOTICE 'PASS Y15: a post that no longer publishes to YouTube refuses the upload';
+  END;
+
+  RAISE NOTICE 'PASS Y15: only an authorized YouTube target is carried on';
+END
+$y15_target$;
+
+-- ---------------------------------------------------------------------------
+-- Y16: every window after the admission is eligible.
+-- ---------------------------------------------------------------------------
+DO $y16_windows$
+DECLARE
+  v_acct_a  uuid;
+  v_post_a  uuid;
+  v_media_a uuid;
+  v_u_a       uuid := 'b1000000-0000-4000-8000-000000000001';
+  v_session   uuid;
+  v_lease     uuid := 'cd000000-0000-4000-8000-000000000001';
+BEGIN
+  -- This scenario owns its post, its account and its media file.
+  SELECT f.account_id, f.post_id, f.media_id
+    INTO v_acct_a, v_post_a, v_media_a
+    FROM pg_temp.new_youtube_fixture('y16') f;
+  v_session := (public.admit_youtube_upload(
+      v_post_a, v_acct_a, v_u_a, v_media_a, 4096, 4096, '{}'::jsonb)
+    -> 'session' ->> 'id')::uuid;
+
+  -- The provider session was never opened and no byte was written: the
+  -- session is handed out, because no video can exist.
+  ASSERT (SELECT count(*) FROM public.claim_youtube_upload_sessions(5, 180000, 24)
+           WHERE session_id = v_session) = 1,
+    'Y16 an upload whose provider session was never opened is handed out';
+
+  -- The receipt exists and the public row is still pending: the receipt is
+  -- handed out so it can be projected.
+  UPDATE public.youtube_upload_sessions
+     SET state = 'uploaded', video_id = 'yt-video-fixture-3',
+         confirmed_bytes = total_bytes, bytes_sent = total_bytes,
+         lease_token = NULL, lease_expires_at = NULL
+   WHERE id = v_session;
+  ASSERT (SELECT count(*) FROM public.claim_youtube_upload_sessions(5, 180000, 24)
+           WHERE session_id = v_session) = 1,
+    'Y16 a stored receipt whose public row is pending is handed out';
+
+  -- The public row is already settled: there is nothing to project, so the
+  -- session is not handed out again.
+  UPDATE public.platform_posts
+     SET status = 'success', platform_post_id = 'yt-video-fixture-3'
+   WHERE post_id = v_post_a AND social_account_id = v_acct_a;
+  ASSERT (SELECT count(*) FROM public.claim_youtube_upload_sessions(5, 180000, 24)
+           WHERE session_id = v_session) = 0,
+    'Y16 a receipt whose public row is already settled is not handed out';
+
+  RAISE NOTICE 'PASS Y16: every window after the admission has a recovery path';
+END
+$y16_windows$;
+
+-- ---------------------------------------------------------------------------
+-- Y17: the terminal settlement is fenced.
+-- ---------------------------------------------------------------------------
+DO $y17_settle$
+DECLARE
+  v_acct_a  uuid;
+  v_post_a  uuid;
+  v_media_a uuid;
+  v_u_a       uuid := 'b1000000-0000-4000-8000-000000000001';
+  v_session   uuid;
+  v_lease_a   uuid := 'ce000000-0000-4000-8000-000000000001';
+  v_lease_b   uuid := 'ce000000-0000-4000-8000-000000000002';
+  v_row_id    uuid;
+  v_settled   jsonb;
+BEGIN
+  -- This scenario owns its post, its account and its media file.
+  SELECT f.account_id, f.post_id, f.media_id
+    INTO v_acct_a, v_post_a, v_media_a
+    FROM pg_temp.new_youtube_fixture('y17') f;
+  v_session := (public.admit_youtube_upload(
+      v_post_a, v_acct_a, v_u_a, v_media_a, 4096, 4096, '{}'::jsonb)
+    -> 'session' ->> 'id')::uuid;
+  v_row_id := (SELECT platform_post_id FROM public.youtube_upload_sessions WHERE id = v_session);
+
+  PERFORM public.claim_youtube_upload_session(v_session, v_lease_a, 180000);
+
+  -- The lease expires and another worker takes over.
+  UPDATE public.youtube_upload_sessions SET lease_expires_at = now() - interval '1 second' WHERE id = v_session;
+  PERFORM public.claim_youtube_upload_session(v_session, v_lease_b, 180000);
+
+  -- The old worker cannot settle anything.
+  BEGIN
+    PERFORM public.settle_youtube_upload_session(v_session, v_lease_a, 'success', 'yt-video-old', NULL, '{}'::jsonb);
+    RAISE EXCEPTION 'Y17 the old worker settled the row';
+  EXCEPTION WHEN SQLSTATE 'YUS09' THEN
+    RAISE NOTICE 'PASS Y17: a worker that lost the lease settles nothing';
+  END;
+  ASSERT (SELECT status FROM public.platform_posts WHERE id = v_row_id) = 'pending',
+    'Y17 the public row is untouched by the old worker';
+
+  -- The new owner settles it.
+  v_settled := public.settle_youtube_upload_session(
+    v_session, v_lease_b, 'success', 'yt-video-new', NULL, '{}'::jsonb);
+  ASSERT (v_settled ->> 'settled') = 'true', 'Y17 the owner settles the upload';
+  ASSERT (SELECT status FROM public.platform_posts WHERE id = v_row_id) = 'success',
+    'Y17 the public row is settled';
+  ASSERT (SELECT platform_post_id FROM public.platform_posts WHERE id = v_row_id) = 'yt-video-new',
+    'Y17 the public row holds the video id';
+  ASSERT (SELECT state FROM public.youtube_upload_sessions WHERE id = v_session) = 'uploaded',
+    'Y17 the session holds the receipt';
+  ASSERT (SELECT video_id FROM public.youtube_upload_sessions WHERE id = v_session) = 'yt-video-new',
+    'Y17 the receipt is the video id';
+
+  -- The old worker still cannot mutate anything afterwards.
+  BEGIN
+    PERFORM public.settle_youtube_upload_session(v_session, v_lease_a, 'failed', NULL, 'old', '{}'::jsonb);
+    RAISE EXCEPTION 'Y17 the old worker settled the row after the takeover';
+  EXCEPTION WHEN SQLSTATE 'YUS09' THEN
+    RAISE NOTICE 'PASS Y17: the old worker cannot mutate anything after a takeover';
+  END;
+  ASSERT (SELECT status FROM public.platform_posts WHERE id = v_row_id) = 'success',
+    'Y17 the public row still holds the new receipt';
+
+  RAISE NOTICE 'PASS Y17: the terminal settlement is fenced to the owner and the attempt';
+END
+$y17_settle$;
+
+-- ---------------------------------------------------------------------------
+-- Y18: the receipt-only projection.
+-- ---------------------------------------------------------------------------
+DO $y18_projection$
+DECLARE
+  v_acct_a  uuid;
+  v_post_a  uuid;
+  v_media_a uuid;
+  v_u_a       uuid := 'b1000000-0000-4000-8000-000000000001';
+  v_session   uuid;
+  v_lease     uuid := 'cf000000-0000-4000-8000-000000000001';
+  v_row_id    uuid;
+  v_projected jsonb;
+BEGIN
+  -- This scenario owns its post, its account and its media file.
+  SELECT f.account_id, f.post_id, f.media_id
+    INTO v_acct_a, v_post_a, v_media_a
+    FROM pg_temp.new_youtube_fixture('y18') f;
+  v_session := (public.admit_youtube_upload(
+      v_post_a, v_acct_a, v_u_a, v_media_a, 4096, 4096, '{}'::jsonb)
+    -> 'session' ->> 'id')::uuid;
+  v_row_id := (SELECT platform_post_id FROM public.youtube_upload_sessions WHERE id = v_session);
+
+  PERFORM public.claim_youtube_upload_session(v_session, v_lease, 180000);
+  PERFORM public.checkpoint_youtube_upload_session(v_session, v_lease, 4096, 4096,
+    'https://upload.example.invalid/session/nine', true, NULL, NULL);
+  PERFORM public.complete_youtube_upload_session(v_session, v_lease, 'yt-video-fixture-4');
+
+  -- The acknowledgement was lost after the database had already stored the
+  -- receipt: the receipt is projected onto the public row.
+  v_projected := public.project_youtube_upload_receipt(v_session);
+  ASSERT (v_projected ->> 'settled') = 'true', 'Y18 the receipt is projected';
+  ASSERT (SELECT status FROM public.platform_posts WHERE id = v_row_id) = 'success',
+    'Y18 the public row is settled by the projection';
+  ASSERT (SELECT platform_post_id FROM public.platform_posts WHERE id = v_row_id) = 'yt-video-fixture-4',
+    'Y18 the public row holds the video id';
+  ASSERT (SELECT post_id FROM public.platform_posts WHERE id = v_row_id) = v_post_a,
+    'Y18 the projection settles the row of its own post';
+
+  -- It is idempotent: a second projection settles nothing and says so.
+  v_projected := public.project_youtube_upload_receipt(v_session);
+  ASSERT (v_projected ->> 'settled') = 'true' AND (v_projected ->> 'already') = 'true',
+    'Y18 the projection is idempotent';
+
+  -- A session without a receipt has nothing to project.
+  BEGIN
+    PERFORM public.project_youtube_upload_receipt(gen_random_uuid());
+    RAISE EXCEPTION 'Y18 a session that is not there was projected';
+  EXCEPTION WHEN SQLSTATE 'YUS08' THEN
+    RAISE NOTICE 'PASS Y18: a session that is not there has no receipt to project';
+  END;
+
+  RAISE NOTICE 'PASS Y18: the receipt-only projection settles the public row';
+END
+$y18_projection$;
+
+-- ---------------------------------------------------------------------------
+-- Y19: the claim limit is shared.
+-- ---------------------------------------------------------------------------
+DO $y19_limit$
+DECLARE
+  v_acct_a  uuid;
+  v_post_a  uuid;
+  v_media_a uuid;
+  v_u_a       uuid := 'b1000000-0000-4000-8000-000000000001';
+  v_notif     uuid := 'b3000000-0000-4000-8000-000000000002';
+  v_notif_acct uuid := 'b2000000-0000-4000-8000-000000000003';
+  v_notif_row  uuid := 'b5000000-0000-4000-8000-000000000001';
+  v_session   uuid;
+  v_lease     uuid := 'd0000000-0000-4000-8000-000000000001';
+  v_attempt   timestamptz := now();
+  v_content   jsonb;
+  v_count     integer;
+  v_total     integer;
+  v_notifications integer;
+  v_uploads   integer;
+BEGIN
+  -- This scenario owns its post, its account and its media file.
+  SELECT f.account_id, f.post_id, f.media_id
+    INTO v_acct_a, v_post_a, v_media_a
+    FROM pg_temp.new_youtube_fixture('y19') f;
+  -- An upload session that is due.
+  v_session := (public.admit_youtube_upload(
+      v_post_a, v_acct_a, v_u_a, v_media_a, 4096, 4096, '{}'::jsonb)
+    -> 'session' ->> 'id')::uuid;
+  PERFORM public.claim_youtube_upload_session(v_session, v_lease, 180000);
+  PERFORM public.checkpoint_youtube_upload_session(v_session, v_lease, 100, 100,
+    'https://upload.example.invalid/session/ten', false, NULL, NULL);
+  UPDATE public.youtube_upload_sessions
+     SET lease_expires_at = now() - interval '1 second'
+   WHERE id = v_session;
+
+  -- A ready legacy notification candidate.
+  INSERT INTO public.social_accounts
+    (id, user_id, platform, platform_user_id, platform_username, access_token, is_active)
+  VALUES (v_notif_acct, v_u_a, 'instagram', 'ig-notify', 'notify', 'token-n', true)
+  ON CONFLICT (id) DO NOTHING;
+  INSERT INTO public.posts
+    (id, user_id, caption, platforms, status, processing_started_at, source, metadata)
+  VALUES (v_notif, v_u_a, 'a notification post', ARRAY['instagram'], 'processing', v_attempt, 'manual', '{}'::jsonb)
+  ON CONFLICT (id) DO NOTHING;
+
+  SELECT jsonb_build_object(
+           'user_id', x.user_id, 'caption', x.caption, 'media_file_ids', x.media_file_ids,
+           'metadata', public.normalize_threads_internal_metadata(x.metadata), 'platforms', x.platforms,
+           'scheduled_at', x.scheduled_at, 'publish_requested_at', x.publish_requested_at, 'source', x.source)
+    INTO v_content FROM public.posts x WHERE x.id = v_notif;
+  PERFORM public.enroll_post_notification_recovery(v_notif, v_attempt, v_content, ARRAY[v_notif_acct], ARRAY[]::uuid[]);
+
+  -- The attempt's own result row: the fanout closes over the rows of the
+  -- attempt, so a candidate without one is never ready.
+  INSERT INTO public.platform_posts
+    (id, post_id, social_account_id, platform, status, created_at, response_data)
+  VALUES (v_notif_row, v_notif, v_notif_acct, 'instagram', 'failed', v_attempt, '{}'::jsonb);
+  PERFORM public.close_post_fanout(v_notif, v_attempt, v_content, ARRAY[v_notif_row], ARRAY[]::uuid[]);
+  UPDATE public.posts
+     SET metadata = jsonb_set(
+           metadata, '{legacy_notification_candidate}',
+           (metadata -> 'legacy_notification_candidate') || jsonb_build_object('ready', 'true'))
+   WHERE id = v_notif;
+
+  -- The limit of one: the notification candidate takes the slot, so the
+  -- upload is not claimed in the same pass.
+  SELECT
+    count(*),
+    count(*) FILTER (WHERE kind = 'notification_only' AND post_id = v_notif),
+    count(*) FILTER (WHERE kind = 'youtube_upload_continuation' AND candidate_id = v_session)
+    INTO v_total, v_notifications, v_uploads
+    FROM public.claim_post_completion_work(1, interval '3 minutes');
+  ASSERT v_total <= 1, 'Y19 the shared limit is honoured: at most one piece of work for a limit of one';
+  ASSERT v_notifications = 1,
+    'Y19 the notification candidate took the slot';
+  ASSERT v_uploads = 0,
+    'Y19 the upload only gets what is left of the limit';
+  ASSERT (SELECT lease_expires_at FROM public.youtube_upload_sessions WHERE id = v_session) <= now(),
+    'Y19 the upload session was not claimed behind the limit';
+
+  -- With a limit of two, the upload gets the slot that is left.
+  SELECT
+    count(*),
+    count(*) FILTER (WHERE kind = 'youtube_upload_continuation' AND candidate_id = v_session)
+    INTO v_total, v_uploads
+    FROM public.claim_post_completion_work(2, interval '3 minutes');
+  ASSERT v_total <= 2, 'Y19 a limit of two hands out at most two pieces of work';
+  ASSERT v_uploads = 1,
+    'Y19 the upload takes the slot the notification did not';
+
+  RAISE NOTICE 'PASS Y19: every kind draws from the same limit';
+END
+$y19_limit$;
 
 ROLLBACK;
 

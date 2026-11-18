@@ -8,7 +8,7 @@
  *     still be on the attempt the upload belongs to;
  *   * a receipt that is already stored is projected onto the public row
  *     WITHOUT reading any media and WITHOUT calling the provider;
- *   * sending needs an account the post selected, that belongs to the post
+ *   * sending needs an account the run resolved, that belongs to the post
  *     owner, and that is usable;
  *   * sending needs a media file the post still names, that belongs to the
  *     owner, and that is still the version the upload started with.
@@ -16,6 +16,10 @@
  * The distinction between settling a receipt and sending bytes is the one
  * that matters most: settling is safe even when the account can no longer
  * publish, and sending is not.
+ *
+ * And the rule that matters most of all: a worker that LOST ITS LEASE
+ * writes nothing. The worker that took over may already have written the
+ * video.
  */
 
 import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
@@ -36,6 +40,7 @@ import { YOUTUBE_UPLOAD_REASON } from "./youtubeUploadPolicy.ts";
 
 const POST_ID = "post-1";
 const ACCOUNT_ID = "account-1";
+const OTHER_ACCOUNT_ID = "account-2";
 const USER_ID = "user-1";
 const MEDIA_ID = "media-1";
 const PLATFORM_POST_ID = "platform-post-1";
@@ -47,8 +52,12 @@ interface World {
   ports: YoutubeContinuationPorts;
   mediaReads: number;
   uploads: number;
-  settled: Array<{ status: string; providerPostId: string | null; errorMessage: string | null }>;
-  schedules: Array<{ nextCheckAt: string; lastOutcome: string }>;
+  /** The terminal outcomes the worker tried to record. */
+  settled: Array<{ status: string; videoId: string | null; errorMessage: string | null }>;
+  /** The receipts the worker projected. */
+  projected: string[];
+  /** The videos the worker did the follow-ups for. */
+  followUps: string[];
 }
 
 interface WorldOptions {
@@ -58,6 +67,10 @@ interface WorldOptions {
   session?: Partial<YoutubeUploadSessionRecord>;
   outcome?: ResumableUploadOutcome;
   claimRefused?: YoutubeUploadRefusal | null;
+  /** The refusal the store answers a settlement with. */
+  settleRefused?: YoutubeUploadRefusal | null;
+  /** The refusal the store answers a projection with. */
+  projectRefused?: YoutubeUploadRefusal | null;
 }
 
 function world(options: WorldOptions = {}): World {
@@ -68,6 +81,8 @@ function world(options: WorldOptions = {}): World {
     processingStartedAt: ATTEMPT,
     selectedAccountIds: [ACCOUNT_ID],
     mediaFileIds: [MEDIA_ID],
+    thumbnailUrl: null,
+    firstComment: null,
     ...options.post,
   };
   const account: ContinuationAccount = {
@@ -84,6 +99,7 @@ function world(options: WorldOptions = {}): World {
     userId: USER_ID,
     currentObjectVersion: 1,
     filePath: "postora/user/video.mp4",
+    storageBucket: "postora",
     mimeType: "video/mp4",
     ...options.media,
   };
@@ -106,6 +122,9 @@ function world(options: WorldOptions = {}): World {
     mediaFileId: MEDIA_ID,
     mediaObjectVersion: 1,
     continuationCount: 0,
+    uploadBody: { snippet: { title: "A video" } },
+    resolvedPlatform: "youtube",
+    targetAccountIds: [ACCOUNT_ID],
     ...options.session,
   };
 
@@ -113,7 +132,8 @@ function world(options: WorldOptions = {}): World {
     mediaReads: 0,
     uploads: 0,
     settled: [],
-    schedules: [],
+    projected: [],
+    followUps: [],
     ports: {
       loadPost() {
         return Promise.resolve(post);
@@ -144,16 +164,26 @@ function world(options: WorldOptions = {}): World {
         world.uploads += 1;
         return Promise.resolve(options.outcome ?? { kind: "completed", videoId: VIDEO_ID });
       },
-      settlePlatformPost(args) {
+      settleUpload(args) {
+        if (options.settleRefused) {
+          return Promise.resolve({ settled: false, refused: options.settleRefused });
+        }
         world.settled.push({
           status: args.status,
-          providerPostId: args.providerPostId,
-          errorMessage: args.errorMessage,
+          videoId: args.videoId ?? null,
+          errorMessage: args.errorMessage ?? null,
         });
-        return Promise.resolve();
+        return Promise.resolve({ settled: true, refused: null });
       },
-      scheduleNextCheck(args) {
-        world.schedules.push({ nextCheckAt: args.nextCheckAt, lastOutcome: args.lastOutcome });
+      projectReceipt(args) {
+        if (options.projectRefused) {
+          return Promise.resolve({ settled: false, refused: options.projectRefused, videoId: null });
+        }
+        world.projected.push(args.sessionId);
+        return Promise.resolve({ settled: true, refused: null, videoId: session.videoId });
+      },
+      followUps(args) {
+        world.followUps.push(args.videoId);
         return Promise.resolve();
       },
       now: () => 1_700_000_000_000,
@@ -178,9 +208,11 @@ Deno.test("a receipt that is already stored settles the row without touching the
   // No media was read and the provider was never called.
   assertEquals(w.mediaReads, 0);
   assertEquals(w.uploads, 0);
-  assertEquals(w.settled.length, 1);
-  assertEquals(w.settled[0].status, "success");
-  assertEquals(w.settled[0].providerPostId, VIDEO_ID);
+  // The receipt is PROJECTED, not settled again: the projection is the one
+  // path that does not need a lease.
+  assertEquals(w.projected.length, 1);
+  assertEquals(w.projected[0], "session-1");
+  assertEquals(w.settled.length, 0);
 });
 
 Deno.test("a receipt settles the row even when the account can no longer publish", async () => {
@@ -190,6 +222,17 @@ Deno.test("a receipt settles the row even when the account can no longer publish
   });
   const result = await continueYoutubeUpload(w.ports, request);
   assertEquals(result.status, "completed");
+  assertEquals(w.uploads, 0);
+});
+
+Deno.test("a receipt that cannot be projected is refused", async () => {
+  const w = world({
+    session: { state: "uploaded", videoId: VIDEO_ID },
+    projectRefused: "no_public_row",
+  });
+  const result = await continueYoutubeUpload(w.ports, request);
+  assertEquals(result.status, "refused");
+  assertEquals(result.reason, YOUTUBE_UPLOAD_REASON.not_found);
   assertEquals(w.uploads, 0);
 });
 
@@ -217,27 +260,60 @@ Deno.test("a session that belongs to an older attempt is refused", async () => {
   assertEquals(result.reason, YOUTUBE_UPLOAD_REASON.stale_attempt);
 });
 
-Deno.test("an account that belongs to another owner is refused", async () => {
-  const w = world({ account: { userId: "someone-else" } });
-  const result = await continueYoutubeUpload(w.ports, request);
-  assertEquals(result.status, "refused");
-  assertEquals(result.reason, YOUTUBE_UPLOAD_REASON.account_unusable);
-  assertEquals(w.uploads, 0);
-});
-
-Deno.test("an account that needs to be reconnected is refused", async () => {
-  const w = world({ account: { needsReauth: true } });
-  const result = await continueYoutubeUpload(w.ports, request);
-  assertEquals(result.status, "refused");
-  assertEquals(result.reason, YOUTUBE_UPLOAD_REASON.account_unusable);
-  assertEquals(w.uploads, 0);
-});
+// An account that cannot publish is refused in every shape it can be in.
+for (const account of [
+  { name: "belongs to another owner", overrides: { userId: "someone-else" } },
+  { name: "needs to be reconnected", overrides: { needsReauth: true } },
+  { name: "is not active", overrides: { isActive: false } },
+]) {
+  Deno.test(`an account that ${account.name} is refused`, async () => {
+    const w = world({ account: account.overrides });
+    const result = await continueYoutubeUpload(w.ports, request);
+    assertEquals(result.status, "refused");
+    assertEquals(result.reason, YOUTUBE_UPLOAD_REASON.account_unusable);
+    assertEquals(w.uploads, 0);
+  });
+}
 
 Deno.test("an account the post does not select is refused", async () => {
-  const w = world({ post: { selectedAccountIds: [] } });
+  // The run resolved no target of its own, so the post's stored selection is
+  // the only authority, and it does not name this account.
+  const w = world({ post: { selectedAccountIds: [] }, session: { targetAccountIds: [] } });
   const result = await continueYoutubeUpload(w.ports, request);
   assertEquals(result.status, "refused");
   assertEquals(result.reason, YOUTUBE_UPLOAD_REASON.account_unusable);
+  assertEquals(w.uploads, 0);
+});
+
+Deno.test("an account the run resolved but the post no longer stores is still a target", async () => {
+  // A run may have been given an explicit account. The post's stored
+  // selection does not name it, but the session records what the run
+  // resolved, and that is what the upload may be carried on to.
+  const w = world({
+    post: { selectedAccountIds: [] },
+    session: { targetAccountIds: [ACCOUNT_ID] },
+  });
+  const result = await continueYoutubeUpload(w.ports, request);
+  assertEquals(result.status, "completed");
+  assertEquals(w.uploads, 1);
+});
+
+Deno.test("an account the run resolved to something else is refused", async () => {
+  const w = world({
+    post: { selectedAccountIds: [ACCOUNT_ID] },
+    session: { targetAccountIds: [OTHER_ACCOUNT_ID] },
+  });
+  const result = await continueYoutubeUpload(w.ports, request);
+  assertEquals(result.status, "refused");
+  assertEquals(result.reason, YOUTUBE_UPLOAD_REASON.account_unusable);
+  assertEquals(w.uploads, 0);
+});
+
+Deno.test("a session that belongs to another platform is refused", async () => {
+  const w = world({ session: { resolvedPlatform: "instagram" } });
+  const result = await continueYoutubeUpload(w.ports, request);
+  assertEquals(result.status, "refused");
+  assertEquals(result.reason, YOUTUBE_UPLOAD_REASON.session_not_open);
   assertEquals(w.uploads, 0);
 });
 
@@ -272,18 +348,25 @@ Deno.test("a finished upload settles the public row", async () => {
   assertEquals(w.uploads, 1);
   assertEquals(w.settled.length, 1);
   assertEquals(w.settled[0].status, "success");
-  assertEquals(w.settled[0].providerPostId, VIDEO_ID);
+  assertEquals(w.settled[0].videoId, VIDEO_ID);
 });
 
-Deno.test("an upload that continues leaves the row pending and schedules the next look", async () => {
+Deno.test("an upload that continues leaves the row pending and writes nothing", async () => {
   const w = world({
-    outcome: { kind: "resumable", confirmedBytes: 50, reason: YOUTUBE_UPLOAD_REASON.resumable },
+    outcome: {
+      kind: "resumable",
+      confirmedBytes: 50,
+      reason: YOUTUBE_UPLOAD_REASON.resumable,
+      nextCheckAtMs: 1_700_000_060_000,
+    },
   });
   const result = await continueYoutubeUpload(w.ports, request);
   assertEquals(result.status, "pending");
+  // The upload already recorded the confirmed offset and the next look
+  // under the lease. Writing them again from a snapshot would put older
+  // values over newer ones.
   assertEquals(w.settled.length, 0);
-  assertEquals(w.schedules.length, 1);
-  assertEquals(w.schedules[0].lastOutcome, YOUTUBE_UPLOAD_REASON.resumable);
+  assertEquals(w.projected.length, 0);
 });
 
 Deno.test("an upload that needs a human settles the row as failed", async () => {
@@ -298,6 +381,27 @@ Deno.test("an upload that needs a human settles the row as failed", async () => 
   assertEquals(w.settled[0].errorMessage, YOUTUBE_UPLOAD_REASON.expired);
 });
 
+Deno.test("a worker that lost its lease writes nothing", async () => {
+  const w = world({ outcome: { kind: "abandoned", reason: YOUTUBE_UPLOAD_REASON.lease_conflict } });
+  const result = await continueYoutubeUpload(w.ports, request);
+  assertEquals(result.status, "refused");
+  assertEquals(result.reason, YOUTUBE_UPLOAD_REASON.lease_conflict);
+  // The worker that took over owns the outcome now.
+  assertEquals(w.settled.length, 0);
+  assertEquals(w.projected.length, 0);
+});
+
+Deno.test("a settlement the store refuses records no outcome", async () => {
+  const w = world({
+    outcome: { kind: "completed", videoId: VIDEO_ID },
+    settleRefused: "lease_stale",
+  });
+  const result = await continueYoutubeUpload(w.ports, request);
+  assertEquals(result.status, "refused");
+  assertEquals(result.reason, YOUTUBE_UPLOAD_REASON.lease_conflict);
+  assertEquals(w.settled.length, 0);
+});
+
 Deno.test("a claim that another worker holds is refused", async () => {
   const w = world({ claimRefused: "lease_held" });
   const result = await continueYoutubeUpload(w.ports, request);
@@ -306,10 +410,72 @@ Deno.test("a claim that another worker holds is refused", async () => {
   assertEquals(w.uploads, 0);
 });
 
-Deno.test("a session with no provider session is not continued", async () => {
-  const w = world({ session: { sessionUri: null } });
+Deno.test("a session that never got a provider session is started", async () => {
+  // The session was admitted but no byte ever reached the provider, so no
+  // video can exist and the upload opens a session and starts.
+  const w = world({ session: { sessionUri: null, bytesSent: 0, videoMayExist: false } });
+  const result = await continueYoutubeUpload(w.ports, request);
+  assertEquals(result.status, "completed");
+  assertEquals(w.uploads, 1);
+});
+
+Deno.test("a session that lost its uri after writing is left for a human", async () => {
+  const w = world({ session: { sessionUri: null, bytesSent: 100, videoMayExist: true } });
   const result = await continueYoutubeUpload(w.ports, request);
   assertEquals(result.status, "refused");
-  assertEquals(result.reason, YOUTUBE_UPLOAD_REASON.session_not_open);
+  assertEquals(result.reason, YOUTUBE_UPLOAD_REASON.reconcile);
   assertEquals(w.uploads, 0);
+  assertEquals(w.settled.length, 0);
+});
+
+// ───────────────────────────────────────────────────────────────────────────
+// The follow-ups
+//
+// A thumbnail and a first comment happen AFTER the video exists. They belong
+// to the run that CREATED the video: a run that inherits a receipt does not
+// repeat them, because a first comment posted twice is a duplicate on the
+// customer's channel.
+// ───────────────────────────────────────────────────────────────────────────
+
+Deno.test("the run that created the video does the follow-ups", async () => {
+  const w = world({
+    outcome: { kind: "completed", videoId: VIDEO_ID },
+    post: { thumbnailUrl: "https://cdn.example.test/thumb.jpg", firstComment: "Hello" },
+  });
+  const result = await continueYoutubeUpload(w.ports, request);
+  assertEquals(result.status, "completed");
+  assertEquals(w.followUps, [VIDEO_ID]);
+});
+
+Deno.test("a run that inherits a receipt does not repeat the follow-ups", async () => {
+  const w = world({
+    session: { state: "uploaded", videoId: VIDEO_ID },
+    post: { thumbnailUrl: "https://cdn.example.test/thumb.jpg", firstComment: "Hello" },
+  });
+  const result = await continueYoutubeUpload(w.ports, request);
+  assertEquals(result.status, "completed");
+  // The earlier run owned the follow-ups. Repeating them here could post the
+  // first comment twice.
+  assertEquals(w.followUps, []);
+  assertEquals(w.uploads, 0);
+});
+
+Deno.test("a follow-up that fails does not stop the settlement", async () => {
+  const w = world({ outcome: { kind: "completed", videoId: VIDEO_ID } });
+  const failing: YoutubeContinuationPorts = {
+    ...w.ports,
+    followUps() {
+      return Promise.reject(new Error("the comment could not be posted"));
+    },
+  };
+  let thrown: unknown;
+  try {
+    await continueYoutubeUpload(failing, request);
+  } catch (error) {
+    thrown = error;
+  }
+  // The video is already live, so the row still has to be settled.
+  assertEquals(thrown, undefined);
+  assertEquals(w.settled.length, 1);
+  assertEquals(w.settled[0].status, "success");
 });

@@ -36,12 +36,14 @@
  */
 
 import type {
-  BeginUploadSession,
+  AdmitUploadSession,
   ClaimContinuations,
   ClaimUploadSession,
   CheckpointUploadSession,
   CompleteUploadSession,
+  ProjectUploadReceipt,
   ReleaseUploadSession,
+  SettleUploadSession,
   YoutubeUploadContinuationClaim,
   YoutubeUploadRefusal,
   YoutubeUploadSessionRecord,
@@ -72,6 +74,8 @@ const REFUSAL_BY_SQLSTATE: Record<string, YoutubeUploadRefusal> = {
   YUS11: "stale_attempt",
   YUS12: "post_superseded",
   YUS13: "too_many_continuations",
+  YUS14: "no_public_row",
+  YUS15: "target_not_authorized",
 };
 
 /**
@@ -111,11 +115,24 @@ function toRecord(payload: Record<string, unknown> | null): YoutubeUploadSession
       ? null
       : Number(payload.media_object_version),
     continuationCount: Number(payload.continuation_count ?? 0),
+    resolvedPlatform: typeof payload.resolved_platform === "string" ? payload.resolved_platform : null,
+    targetAccountIds: Array.isArray(payload.target_account_ids)
+      ? payload.target_account_ids.filter((value): value is string => typeof value === "string")
+      : [],
+    uploadBody: payload.upload_body && typeof payload.upload_body === "object"
+      ? (payload.upload_body as Record<string, unknown>)
+      : {},
   };
 }
 
 function toClaim(payload: Record<string, unknown>): YoutubeUploadContinuationClaim | null {
-  const sessionId = typeof payload.session_id === "string" ? payload.session_id : null;
+  // The batch claim names the session `session_id`. The single claim names it
+  // `id`, so both shapes are read here.
+  const sessionId = typeof payload.session_id === "string"
+    ? payload.session_id
+    : typeof payload.id === "string"
+    ? payload.id
+    : null;
   if (!sessionId) return null;
   return {
     sessionId,
@@ -179,8 +196,8 @@ export function createSupabaseYoutubeUploadSessionStore(
   }
 
   return {
-    async begin(input: BeginUploadSession) {
-      const result = await callRefusing<Record<string, unknown>>("begin_youtube_upload_session", {
+    async admit(input: AdmitUploadSession) {
+      const result = await callRefusing<Record<string, unknown>>("admit_youtube_upload", {
         p_post_id: input.postId,
         p_social_account_id: input.socialAccountId,
         p_user_id: input.userId,
@@ -188,18 +205,24 @@ export function createSupabaseYoutubeUploadSessionStore(
         p_media_size: input.mediaSize,
         p_total_bytes: input.totalBytes,
         p_upload_body: input.uploadBody,
-        p_platform_post_id: input.platformPostId,
         p_attempt_started_at: input.attemptStartedAt,
+        p_target_account_ids: input.targetAccountIds,
       });
-      if (!result.ok) return { record: null, refused: result.refusal };
-      const record = toRecord(result.value);
-      // A session that needs a human comes back in that state rather than
-      // as a refusal, because the mark is durable and a refusal raised
-      // inside the function would be undone by the caller's rollback.
+      if (!result.ok) return { record: null, refused: result.refusal, platformPostId: null };
+      const payload = result.value ?? {};
+      const session = payload.session as Record<string, unknown> | undefined;
+      const record = session ? toRecord(session) : null;
+      // A session that needs a human comes back in that state rather than as
+      // a refusal, because the mark is durable and a refusal raised inside the
+      // function would be undone by the caller's rollback.
       if (record?.state === "reconcile") {
-        return { record: null, refused: "reconcile_required" };
+        return { record: null, refused: "reconcile_required", platformPostId: null };
       }
-      return { record, refused: null };
+      return {
+        record,
+        refused: null,
+        platformPostId: typeof payload.platform_post_id === "string" ? payload.platform_post_id : null,
+      };
     },
 
     async claim(input: ClaimUploadSession) {
@@ -233,6 +256,31 @@ export function createSupabaseYoutubeUploadSessionStore(
         p_video_id: input.videoId,
       });
       return result.ok ? result.value : false;
+    },
+
+    async settle(input: SettleUploadSession) {
+      const result = await callRefusing<Record<string, unknown>>("settle_youtube_upload_session", {
+        p_session_id: input.sessionId,
+        p_lease_token: input.leaseToken,
+        p_status: input.status,
+        p_video_id: input.videoId ?? null,
+        p_error_message: input.errorMessage ?? null,
+        p_response_data: input.responseData ?? {},
+      });
+      if (!result.ok) return { settled: false, refused: result.refusal };
+      return { settled: result.value?.settled === true, refused: null };
+    },
+
+    async projectReceipt(input: ProjectUploadReceipt) {
+      const result = await callRefusing<Record<string, unknown>>("project_youtube_upload_receipt", {
+        p_session_id: input.sessionId,
+      });
+      if (!result.ok) return { settled: false, refused: result.refusal, videoId: null };
+      return {
+        settled: result.value?.settled === true,
+        refused: null,
+        videoId: typeof result.value?.video_id === "string" ? result.value.video_id : null,
+      };
     },
 
     async release(input: ReleaseUploadSession) {
@@ -292,6 +340,8 @@ interface MemorySession {
   lastOutcome: string | null;
   platformPostId: string | null;
   continuationCount: number;
+  resolvedPlatform: string | null;
+  targetAccountIds: string[];
 }
 
 /**
@@ -305,12 +355,15 @@ export function createInMemoryYoutubeUploadSessionStore(options?: {
   now?: () => number;
   nextId?: () => string;
   nextLeaseToken?: () => string;
+  nextPublicRowId?: () => string;
 }): YoutubeUploadSessionStore & { sessions: Map<string, MemorySession> } {
   const now = options?.now ?? (() => Date.now());
   let counter = 0;
   const nextId = options?.nextId ?? (() => `session-${++counter}`);
   let leaseCounter = 0;
   const nextLeaseToken = options?.nextLeaseToken ?? (() => `lease-${++leaseCounter}`);
+  let rowCounter = 0;
+  const nextPublicRowId = options?.nextPublicRowId ?? (() => `platform-post-${++rowCounter}`);
   const sessions = new Map<string, MemorySession>();
 
   function payload(session: MemorySession): YoutubeUploadSessionRecord {
@@ -335,6 +388,9 @@ export function createInMemoryYoutubeUploadSessionStore(options?: {
       mediaFileId: session.mediaFileId,
       mediaObjectVersion: session.mediaObjectVersion,
       continuationCount: session.continuationCount,
+      resolvedPlatform: session.resolvedPlatform,
+      targetAccountIds: session.targetAccountIds,
+      uploadBody: session.uploadBody,
     };
   }
 
@@ -352,7 +408,11 @@ export function createInMemoryYoutubeUploadSessionStore(options?: {
   return {
     sessions,
 
-    begin(input: BeginUploadSession): Promise<{ record: YoutubeUploadSessionRecord | null; refused: YoutubeUploadRefusal | null }> {
+    admit(input: AdmitUploadSession): Promise<{
+      record: YoutubeUploadSessionRecord | null;
+      refused: YoutubeUploadRefusal | null;
+      platformPostId: string | null;
+    }> {
       let session = find(input.postId, input.socialAccountId);
       if (!session) {
         session = {
@@ -377,57 +437,72 @@ export function createInMemoryYoutubeUploadSessionStore(options?: {
           attemptStartedAt: input.attemptStartedAt,
           nextCheckAt: null,
           lastOutcome: null,
-          platformPostId: input.platformPostId,
+          platformPostId: null,
           continuationCount: 0,
+          resolvedPlatform: "youtube",
+          targetAccountIds: input.targetAccountIds,
         };
         sessions.set(session.id, session);
-        return Promise.resolve({ record: payload(session), refused: null });
-      }
-
-      // The session belongs to the owner of the post. Another user asking for
-      // the same post and account is asking for someone else's session.
-      if (session.userId !== input.userId) {
-        return Promise.resolve({ record: null, refused: "post_not_found" });
-      }
-
-      if (session.state === "uploaded") return Promise.resolve({ record: payload(session), refused: null });
-      if (session.state === "reconcile") return Promise.resolve({ record: null, refused: "reconcile_required" });
-
-      const sameContent =
-        JSON.stringify(session.uploadBody) === JSON.stringify(input.uploadBody) &&
-        session.mediaFileId === input.mediaFileId &&
-        session.totalBytes === input.totalBytes;
-      if (!sameContent) return Promise.resolve({ record: null, refused: "content_changed" });
-
-      if (session.state === "expired" || (session.sessionExpiresAt !== null && session.sessionExpiresAt <= now())) {
-        if (session.videoMayExist) {
-          // The last chunk may have been written, so a video may exist and a
-          // fresh session could create a second one.
-          session.state = "reconcile";
-          return Promise.resolve({ record: null, refused: "reconcile_required" });
+      } else {
+        // The session belongs to the owner of the post. Another user asking for
+        // the same post and account is asking for someone else's session.
+        if (session.userId !== input.userId) {
+          return Promise.resolve({ record: null, refused: "post_not_found", platformPostId: null });
         }
-        session.state = "open";
-        session.sessionUri = null;
-        session.confirmedBytes = 0;
-        session.bytesSent = 0;
-        session.leaseToken = null;
-        session.leaseExpiresAt = null;
+
+        if (session.state === "uploaded") {
+          return Promise.resolve({ record: payload(session), refused: null, platformPostId: session.platformPostId });
+        }
+        if (session.state === "reconcile") {
+          return Promise.resolve({ record: null, refused: "reconcile_required", platformPostId: null });
+        }
+
+        const sameContent =
+          JSON.stringify(session.uploadBody) === JSON.stringify(input.uploadBody) &&
+          session.mediaFileId === input.mediaFileId &&
+          session.totalBytes === input.totalBytes;
+        if (!sameContent) {
+          return Promise.resolve({ record: null, refused: "content_changed", platformPostId: null });
+        }
+
+        if (session.state === "expired" || (session.sessionExpiresAt !== null && session.sessionExpiresAt <= now())) {
+          if (session.videoMayExist || session.bytesSent > 0) {
+            // The last chunk may have been written, so a video may exist and a
+            // fresh session could create a second one.
+            session.state = "reconcile";
+            return Promise.resolve({ record: null, refused: "reconcile_required", platformPostId: null });
+          }
+          session.state = "open";
+          session.sessionUri = null;
+          session.confirmedBytes = 0;
+          session.bytesSent = 0;
+          session.leaseToken = null;
+          session.leaseExpiresAt = null;
+        }
+
+        if (session.state === "failed") {
+          session.state = "open";
+          session.sessionUri = null;
+          session.confirmedBytes = 0;
+          session.bytesSent = 0;
+          session.leaseToken = null;
+          session.leaseExpiresAt = null;
+        }
+
+        // The session now belongs to the attempt that is running.
+        session.attemptStartedAt = input.attemptStartedAt;
+        session.resolvedPlatform = "youtube";
+        if (input.targetAccountIds.length > 0) session.targetAccountIds = input.targetAccountIds;
       }
 
-      if (session.state === "failed") {
-        session.state = "open";
-        session.sessionUri = null;
-        session.confirmedBytes = 0;
-        session.bytesSent = 0;
-        session.leaseToken = null;
-        session.leaseExpiresAt = null;
+      // The public pending row is created with the session, in one step.
+      //
+      // A post is never left with a pending row that no continuation can
+      // claim, and never with a session that has no row to settle.
+      if (session.platformPostId === null) {
+        session.platformPostId = nextPublicRowId();
       }
-
-      // The session now belongs to the attempt that is running.
-      session.attemptStartedAt = input.attemptStartedAt;
-      if (input.platformPostId) session.platformPostId = input.platformPostId;
-
-      return Promise.resolve({ record: payload(session), refused: null });
+      return Promise.resolve({ record: payload(session), refused: null, platformPostId: session.platformPostId });
     },
 
     claim(input: ClaimUploadSession): Promise<{ record: YoutubeUploadSessionRecord | null; refused: YoutubeUploadRefusal | null }> {
@@ -454,7 +529,11 @@ export function createInMemoryYoutubeUploadSessionStore(options?: {
       session.confirmedBytes = Math.max(session.confirmedBytes, input.confirmedBytes);
       session.bytesSent = Math.max(session.bytesSent, input.bytesSent);
       if (input.sessionUri) session.sessionUri = input.sessionUri;
-      if (typeof input.videoMayExist === "boolean") session.videoMayExist = input.videoMayExist;
+      // The uncertainty that a video may exist only ever grows. A checkpoint
+      // that says "no video yet" cannot clear a record that says the last
+      // chunk may have been written: a second video on the customer's channel
+      // is worse than a post that needs a human.
+      if (input.videoMayExist === true) session.videoMayExist = true;
       if (input.nextCheckAt !== undefined) {
         session.nextCheckAt = input.nextCheckAt === null ? null : Date.parse(input.nextCheckAt);
       }
@@ -475,9 +554,50 @@ export function createInMemoryYoutubeUploadSessionStore(options?: {
       session.sessionUri = null;
       session.confirmedBytes = session.totalBytes;
       session.bytesSent = session.totalBytes;
+      // The lease is KEPT: the owner still has to settle the public row, and
+      // the settlement is fenced to the owner.
+      return Promise.resolve(true);
+    },
+
+    settle(input: SettleUploadSession): Promise<{ settled: boolean; refused: YoutubeUploadRefusal | null }> {
+      const session = sessions.get(input.sessionId);
+      if (!session) return Promise.resolve({ settled: false, refused: "session_not_found" });
+      // A worker that lost the lease settles nothing: the worker that took
+      // over may already have written the video.
+      if (session.leaseToken !== input.leaseToken) return Promise.resolve({ settled: false, refused: "lease_stale" });
+      if (session.leaseExpiresAt === null || session.leaseExpiresAt <= now()) {
+        return Promise.resolve({ settled: false, refused: "lease_stale" });
+      }
+      if (session.platformPostId === null) return Promise.resolve({ settled: false, refused: "no_public_row" });
+      if (input.status === "success") {
+        session.state = "uploaded";
+        session.videoId = input.videoId ?? session.videoId;
+        session.confirmedBytes = session.totalBytes;
+        session.bytesSent = session.totalBytes;
+      } else {
+        // A video may exist, so the session is left for a human rather than
+        // declared failed.
+        session.state = session.videoMayExist ? "reconcile" : "failed";
+      }
       session.leaseToken = null;
       session.leaseExpiresAt = null;
-      return Promise.resolve(true);
+      return Promise.resolve({ settled: true, refused: null });
+    },
+
+    projectReceipt(input: ProjectUploadReceipt): Promise<{
+      settled: boolean;
+      refused: YoutubeUploadRefusal | null;
+      videoId: string | null;
+    }> {
+      const session = sessions.get(input.sessionId);
+      if (!session) return Promise.resolve({ settled: false, refused: "session_not_found", videoId: null });
+      if (session.state !== "uploaded" || session.videoId === null) {
+        return Promise.resolve({ settled: false, refused: "reconcile_required", videoId: null });
+      }
+      if (session.platformPostId === null) {
+        return Promise.resolve({ settled: false, refused: "no_public_row", videoId: session.videoId });
+      }
+      return Promise.resolve({ settled: true, refused: null, videoId: session.videoId });
     },
 
     release(input: ReleaseUploadSession): Promise<boolean> {
@@ -496,15 +616,25 @@ export function createInMemoryYoutubeUploadSessionStore(options?: {
       const claims: YoutubeUploadContinuationClaim[] = [];
       for (const session of sessions.values()) {
         if (claims.length >= input.limit) break;
-        if (session.state !== "open") continue;
-        if (session.sessionUri === null) continue;
+        // Every window after the admission is eligible.
+        //
+        //   * the upload continues from a provider session;
+        //   * the provider session was never opened and no byte was written,
+        //     so no video can exist and the worker opens one and starts;
+        //   * a receipt is waiting to be projected onto the public row.
+        const continues = session.state === "open" && session.sessionUri !== null;
+        const neverOpened = session.state === "open" && session.sessionUri === null &&
+          session.bytesSent === 0 && !session.videoMayExist;
+        const receipt = session.state === "uploaded" && session.videoId !== null;
+        if (!continues && !neverOpened && !receipt) continue;
         if (holdsLiveLease(session)) continue;
         if (session.nextCheckAt !== null && session.nextCheckAt > now()) continue;
 
         const leaseToken = nextLeaseToken();
         session.leaseToken = leaseToken;
         session.leaseExpiresAt = now() + input.leaseMs;
-        session.continuationCount += 1;
+        // Only an upload that still has to be written counts a continuation.
+        if (session.state === "open") session.continuationCount += 1;
 
         claims.push({
           sessionId: session.id,

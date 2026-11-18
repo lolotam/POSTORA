@@ -65,6 +65,10 @@ export interface ContinuationPost {
   selectedAccountIds: string[];
   /** The media files the post names. */
   mediaFileIds: string[];
+  /** The thumbnail the customer asked for, if any. */
+  thumbnailUrl: string | null;
+  /** The first comment the customer asked for, if any. */
+  firstComment: string | null;
 }
 
 /** The account, as far as the continuation needs it. */
@@ -83,6 +87,14 @@ export interface ContinuationMedia {
   userId: string;
   currentObjectVersion: number | null;
   filePath: string;
+  /**
+   * The storage bucket the file lives in.
+   *
+   * It is part of the file's identity: the same path in a different bucket is
+   * a different object, and a signed URL is only made for the bucket the file
+   * is actually in.
+   */
+  storageBucket: string;
   mimeType: string | null;
 }
 
@@ -108,8 +120,13 @@ export interface YoutubeContinuationPorts {
    * It is only called when the upload has to WRITE. A receipt-only recovery
    * never reaches it, so no media is fetched for an upload that is already
    * finished.
+   *
+   * The port is handed the file, not a URL: the port resolves the URL the way
+   * publishing does, from the file's own bucket and its provider rows, so a
+   * continuation cannot read a different object than the one the upload
+   * started with.
    */
-  createSource(args: { media: ContinuationMedia; videoUrl: string }): Promise<UploadByteSource>;
+  createSource(args: { media: ContinuationMedia }): Promise<UploadByteSource>;
   /** Runs the upload against the provider. */
   runUpload(args: {
     record: YoutubeUploadSessionRecord;
@@ -119,27 +136,48 @@ export interface YoutubeContinuationPorts {
     totalBytes: number;
     deadlineMs: number;
   }): Promise<ResumableUploadOutcome>;
-  /** Settles the public row through the publishing seam. */
-  settlePlatformPost(args: {
-    platformPostId: string | null;
-    postId: string;
-    socialAccountId: string;
-    platform: string;
-    status: "success" | "failed";
-    providerPostId: string | null;
-    providerPostUrl: string | null;
-    errorMessage: string | null;
-    responseData: Record<string, unknown>;
-  }): Promise<void>;
-  /** Schedules the next look at the session. */
-  scheduleNextCheck(args: {
+  /**
+   * Records the terminal outcome.
+   *
+   * The public row and the parent rollup are settled together, in one
+   * transaction, fenced to the worker that still owns the session. A worker
+   * that lost its lease settles nothing, because the worker that took over
+   * may already have written the video.
+   */
+  settleUpload(args: {
     sessionId: string;
     leaseToken: string;
-    confirmedBytes: number;
-    bytesSent: number;
-    videoMayExist: boolean;
-    nextCheckAt: string;
-    lastOutcome: string;
+    status: "success" | "failed";
+    videoId: string | null;
+    errorMessage: string | null;
+    responseData: Record<string, unknown>;
+  }): Promise<{ settled: boolean; refused: YoutubeUploadRefusal | null }>;
+  /**
+   * Projects a stored receipt onto the public row.
+   *
+   * No provider is contacted and no media is read: the video already exists.
+   */
+  projectReceipt(args: { sessionId: string }): Promise<{
+    settled: boolean;
+    refused: YoutubeUploadRefusal | null;
+    videoId: string | null;
+  }>;
+  /**
+   * The things that happen AFTER the video exists: the thumbnail and the
+   * first comment.
+   *
+   * They belong to the run that CREATED the video. A run that inherits a
+   * receipt does not repeat them, because a first comment posted twice is a
+   * duplicate on the customer's channel and a thumbnail set twice is a
+   * provider write nobody asked for.
+   *
+   * A failure here is never fatal: the video is already published, and the
+   * public row has to be settled either way.
+   */
+  followUps(args: {
+    post: ContinuationPost;
+    videoId: string;
+    accessToken: string;
   }): Promise<void>;
   now(): number;
 }
@@ -186,6 +224,10 @@ export function refusalToReason(refusal: YoutubeUploadRefusal): YoutubeUploadRea
       return YOUTUBE_UPLOAD_REASON.superseded;
     case "too_many_continuations":
       return YOUTUBE_UPLOAD_REASON.reconcile;
+    case "no_public_row":
+      return YOUTUBE_UPLOAD_REASON.not_found;
+    case "target_not_authorized":
+      return YOUTUBE_UPLOAD_REASON.account_unusable;
     default:
       return YOUTUBE_UPLOAD_REASON.unknown;
   }
@@ -242,14 +284,15 @@ export async function continueYoutubeUpload(
   // The video exists. It is projected onto the public row and the post is
   // settled. No media is read, no provider is called, and no other platform
   // is touched.
+  //
+  // The projection needs no lease: it is not a provider write, it is the
+  // receipt being told about. It does need the attempt to be the current one.
   // ───────────────────────────────────────────────────────────────────────
   if (session.videoId) {
-    await settle(ports, session, post, {
-      status: "success",
-      providerPostId: session.videoId,
-      errorMessage: null,
-      responseData: { youtube_video_id: session.videoId, youtube_upload_source: "receipt_recovery" },
-    });
+    const projected = await ports.projectReceipt({ sessionId: session.id });
+    if (!projected.settled) {
+      return refused(refusalToReason(projected.refused ?? "session_not_found"));
+    }
     return { status: "completed", reason: YOUTUBE_UPLOAD_REASON.completed, videoId: session.videoId };
   }
 
@@ -259,15 +302,37 @@ export async function continueYoutubeUpload(
   }
 
   if (!session.sessionUri) {
-    // A continuation carries an existing session on. It never opens a new
-    // one, because a new session could create a second video.
-    return refused(YOUTUBE_UPLOAD_REASON.session_not_open);
+    // The session was admitted but the provider session was never opened.
+    //
+    // The batch claim only hands out such a session when no byte ever
+    // reached the provider, so no video can exist and the upload opens a
+    // session and starts. A session that DID write bytes and then lost its
+    // URI could have a video nobody has a receipt for, so it is left for a
+    // human instead of being started again.
+    if (session.bytesSent > 0 || session.videoMayExist) {
+      return refused(YOUTUBE_UPLOAD_REASON.reconcile);
+    }
   }
 
-  if (!post.selectedAccountIds.includes(session.socialAccountId)) {
+  // The account must still be a target of the post.
+  //
+  // The claim already refuses a session whose account the post no longer
+  // targets. This is the second half of that rule: the account has to be one
+  // the RUN resolved, which is not always the same set as the post's stored
+  // selection, because a run may have been given an explicit account.
+  const targets = session.targetAccountIds.length > 0
+    ? session.targetAccountIds
+    : post.selectedAccountIds;
+  if (!targets.includes(session.socialAccountId)) {
     // The post no longer selects this account. Sending would publish to an
     // account the customer took out of the post.
     return refused(YOUTUBE_UPLOAD_REASON.account_unusable);
+  }
+
+  // Only a YouTube upload is resumed. The session names the platform it
+  // writes to, and nothing else is ever carried on by this worker.
+  if (session.resolvedPlatform !== null && session.resolvedPlatform !== "youtube") {
+    return refused(YOUTUBE_UPLOAD_REASON.session_not_open);
   }
 
   const media = await loadMatchingMedia(ports, session, post);
@@ -275,7 +340,7 @@ export async function continueYoutubeUpload(
 
   const { leaseToken } = request;
   const { accessToken } = account;
-  const source = await ports.createSource({ media, videoUrl: media.filePath });
+  const source = await ports.createSource({ media });
   const outcome = await ports.runUpload({
     record: session,
     leaseToken,
@@ -285,7 +350,7 @@ export async function continueYoutubeUpload(
     deadlineMs: ports.now() + YOUTUBE_CONTINUATION_LEASE_MS,
   });
 
-  return await interpretOutcome({ ports, request, session, post, outcome });
+  return await interpretOutcome({ ports, request, session, outcome, post, accessToken });
 }
 
 /** The continuation stops here, and says why. */
@@ -337,94 +402,109 @@ async function loadMatchingMedia(
   return media;
 }
 
-/** Settles the public row through the publishing seam. */
-async function settle(
-  ports: YoutubeContinuationPorts,
-  session: YoutubeUploadSessionRecord,
-  post: ContinuationPost,
-  args: {
-    status: "success" | "failed";
-    providerPostId: string | null;
-    errorMessage: string | null;
-    responseData: Record<string, unknown>;
-  },
-): Promise<void> {
-  await ports.settlePlatformPost({
-    platformPostId: session.platformPostId,
-    postId: post.id,
-    socialAccountId: session.socialAccountId,
-    platform: "youtube",
-    status: args.status,
-    providerPostId: args.providerPostId,
-    providerPostUrl: args.providerPostId ? `https://www.youtube.com/watch?v=${args.providerPostId}` : null,
-    errorMessage: args.errorMessage,
-    responseData: args.responseData,
-  });
-}
-
 /**
  * Turns the outcome of one upload attempt into the public result.
  *
  * A completed upload settles the row as a success. A resumable one leaves the
  * row pending and the post processing, and says when the session may be
- * looked at again. Everything else settles the row as failed, so the post
- * rolls up and the customer is told the truth.
+ * looked at again.
+ *
+ * A worker that LOST ITS LEASE writes nothing at all. The worker that took
+ * over may already have written the video, so a stale worker settling the row
+ * would publish a result the upload does not have. The row is left to the
+ * worker that owns it.
+ *
+ * Everything else settles the row as failed, so the post rolls up and the
+ * customer is told the truth.
  */
 async function interpretOutcome(args: {
   ports: YoutubeContinuationPorts;
   request: YoutubeContinuationRequest;
   session: YoutubeUploadSessionRecord;
-  post: ContinuationPost;
   outcome: ResumableUploadOutcome;
+  post: ContinuationPost;
+  accessToken: string;
 }): Promise<ContinuationResult> {
-  const { ports, request, session, post, outcome } = args;
+  const { ports, request, session, outcome, post, accessToken } = args;
   const { leaseToken } = request;
 
   if (outcome.kind === "completed") {
-    await settle(ports, session, post, {
+    // The follow-ups belong to the run that CREATED the video. They happen
+    // BEFORE the settlement, so a worker that dies here leaves them done
+    // rather than done twice: the worker that inherits the receipt does not
+    // repeat them.
+    //
+    // A follow-up that fails is not fatal. The video is already live, and the
+    // public row has to be settled either way.
+    try {
+      await ports.followUps({ post, videoId: outcome.videoId, accessToken });
+    } catch (error) {
+      console.warn(
+        `[youtube] the follow-ups for video ${outcome.videoId} did not finish:`,
+        error instanceof Error ? error.message : String(error),
+      );
+    }
+
+    const settled = await ports.settleUpload({
+      sessionId: session.id,
+      leaseToken,
       status: "success",
-      providerPostId: outcome.videoId,
+      videoId: outcome.videoId,
       errorMessage: null,
       responseData: { youtube_video_id: outcome.videoId, youtube_upload_source: "continuation" },
     });
+    if (!settled.settled) {
+      // The lease is gone. Nothing is settled: the worker that owns the
+      // session now decides what happens to the row.
+      return { status: "refused", reason: YOUTUBE_UPLOAD_REASON.lease_conflict };
+    }
     return { status: "completed", reason: YOUTUBE_UPLOAD_REASON.completed, videoId: outcome.videoId };
   }
 
   if (outcome.kind === "resumable") {
-    // The upload continues. The public row stays pending, the post stays
-    // processing, and the session says when it may be looked at again.
+    // The upload continues.
+    //
+    // The public row stays pending, the post stays processing, and the session
+    // says when it may be looked at again.
+    //
+    // NOTHING IS WRITTEN HERE. The upload already recorded the confirmed
+    // offset and the time of the next look while it was running, and those
+    // records are the authoritative ones. Writing them again from a snapshot
+    // would put the older values back over the newer ones, and would clear
+    // the uncertainty that a video may already exist.
     const delay = outcome.nextCheckAtMs ?? ports.now() + 60_000;
-    const nextCheckAt = new Date(delay).toISOString();
-    await ports.scheduleNextCheck({
-      sessionId: session.id,
-      leaseToken,
-      confirmedBytes: outcome.confirmedBytes,
-      bytesSent: session.bytesSent,
-      videoMayExist: session.videoMayExist,
-      nextCheckAt,
-      lastOutcome: YOUTUBE_UPLOAD_REASON.resumable,
-    });
     return {
       status: "pending",
       reason: YOUTUBE_UPLOAD_REASON.resumable,
-      nextCheckAt,
+      nextCheckAt: new Date(delay).toISOString(),
     };
+  }
+
+  if (outcome.kind === "abandoned") {
+    // The lease was lost. This worker writes nothing: the worker that took
+    // over owns the session and its outcome.
+    return { status: "refused", reason: YOUTUBE_UPLOAD_REASON.lease_conflict };
   }
 
   const reason = outcome.kind === "unsent"
     ? YOUTUBE_UPLOAD_REASON.unsent
     : outcome.kind === "reconcile"
     ? outcome.reason
-    : outcome.kind === "abandoned"
-    ? YOUTUBE_UPLOAD_REASON.lease_conflict
     : outcome.reason;
 
-  await settle(ports, session, post, {
+  const settled = await ports.settleUpload({
+    sessionId: session.id,
+    leaseToken,
     status: "failed",
-    providerPostId: null,
+    videoId: null,
     errorMessage: reason,
     responseData: { youtube_upload_reason: reason },
   });
+  if (!settled.settled) {
+    // The lease is gone, so the outcome is not recorded here. The worker that
+    // owns the session now decides what happens to the row.
+    return { status: "refused", reason: YOUTUBE_UPLOAD_REASON.lease_conflict };
+  }
 
   return { status: "failed", reason };
 }

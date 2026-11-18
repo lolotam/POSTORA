@@ -150,6 +150,9 @@ function record(overrides: Partial<YoutubeUploadSessionRecord> = {}): YoutubeUpl
     mediaFileId: "media-1",
     mediaObjectVersion: 1,
     continuationCount: 0,
+    uploadBody: { snippet: { title: "A video" } },
+    resolvedPlatform: "youtube",
+    targetAccountIds: ["account-1"],
     ...overrides,
   };
 }
@@ -160,12 +163,11 @@ async function run(
   source?: UploadByteSource,
   store = createInMemoryYoutubeUploadSessionStore(),
 ): Promise<{ outcome: ResumableUploadOutcome; store: ReturnType<typeof createInMemoryYoutubeUploadSessionStore> }> {
-  // The session is put in the store the way the caller puts it there: opened,
-  // claimed, and given its provider uri when it already has one.
-  const opened = await store.begin({
+  // The session is put in the store the way the caller puts it there:
+  // admitted, claimed, and given its provider uri when it already has one.
+  const opened = await store.admit({
     postId: session.postId,
     socialAccountId: session.socialAccountId,
-    platformPostId: session.platformPostId,
     mediaFileId: session.mediaFileId,
     mediaObjectVersion: session.mediaObjectVersion,
     mediaSize: session.totalBytes,
@@ -173,6 +175,7 @@ async function run(
     uploadBody: { snippet: { title: "A video" } },
     userId: "user-1",
     attemptStartedAt: session.attemptStartedAt,
+    targetAccountIds: [session.socialAccountId],
   });
   assert(opened.record !== null);
   await store.claim({ sessionId: opened.record.id, leaseToken: "lease-1", leaseMs: 300_000 });
