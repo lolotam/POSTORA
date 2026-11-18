@@ -88,7 +88,6 @@ jobs:
       matrix:
         script:
           - typecheck
-          - test
           - build
     steps:
       - name: Checkout
@@ -106,6 +105,47 @@ jobs:
 
       - name: Run ${{ matrix.script }}
         run: npm run ${{ matrix.script }}
+
+  node-test-shards:
+    name: Vitest shard ${{ matrix.shard }}/2
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Setup Node.js 22.14.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "22.14.0"
+
+      - name: Install dependencies
+        run: npm ci --no-audit --no-fund
+
+      - name: Run Vitest shard
+        env:
+          VITEST_SHARD: ${{ matrix.shard }}/2
+        run: |
+          free -m
+          /usr/bin/time -v npm run test -- --shard="$VITEST_SHARD"
+
+  node-test:
+    name: npm run test
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    needs: node-test-shards
+    if: ${{ always() }}
+    env:
+      SHARDS_RESULT: ${{ needs.node-test-shards.result }}
+    steps:
+      - name: Require every Vitest shard to succeed
+        run: test "$SHARDS_RESULT" = success
 
   lint-i18n-regression:
     name: "Lint/i18n: no regressions"
@@ -190,8 +230,8 @@ jobs:
           path: ${{ runner.temp }}/lint-i18n-regression.json
           if-no-files-found: error
 
-  deno-proxy-mcp:
-    name: Deno service proxy and MCP
+  deno-service-suites:
+    name: Deno service and publishing suites
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
@@ -218,9 +258,6 @@ jobs:
           set -euo pipefail
           deno check --no-config --import-map=scripts/ci/deno-analytics.import-map.json --lock=scripts/ci/deno-analytics.lock --frozen --node-modules-dir=none supabase/functions/meta-owned-analytics-sync/*.ts
           deno test --no-config --import-map=scripts/ci/deno-analytics.import-map.json --lock=scripts/ci/deno-analytics.lock --frozen --node-modules-dir=none --allow-env supabase/functions/meta-owned-analytics-sync/enqueue.test.ts supabase/functions/meta-owned-analytics-sync/composition.test.ts supabase/functions/meta-owned-analytics-sync/dispatch.test.ts supabase/functions/meta-owned-analytics-sync/collection.test.ts supabase/functions/meta-owned-analytics-sync/retention.test.ts supabase/functions/meta-owned-analytics-sync/truncation.test.ts supabase/functions/meta-owned-analytics-sync/facebookResume.test.ts
-
-      - name: Prove owned analytics dependency termination with real timeout ceilings
-        run: deno test --no-config --import-map=scripts/ci/deno-analytics.import-map.json --lock=scripts/ci/deno-analytics.lock --frozen --node-modules-dir=none --allow-env supabase/functions/meta-owned-analytics-sync/termination.test.ts
 
       - name: Typecheck and test persisted owned analytics reports
         run: |
@@ -718,6 +755,37 @@ jobs:
           deno check --no-config --import-map=scripts/ci/deno-analytics.import-map.json --lock=scripts/ci/deno-analytics.lock --frozen --node-modules-dir=none "${route}"
           deno test --no-config --import-map=scripts/ci/deno-analytics.import-map.json --lock=scripts/ci/deno-analytics.lock --frozen --node-modules-dir=none \
             --allow-read --allow-write --allow-env --allow-run "${route}"
+
+  deno-analytics-termination:
+    name: Deno analytics deadline suite
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Setup Deno 2.9.8
+        uses: denoland/setup-deno@22d081ff2d3a40755e97629de92e3bcbfa7cf2ed # v2.0.5
+        with:
+          deno-version: "2.9.8"
+
+      - name: Prove owned analytics dependency termination with real timeout ceilings
+        run: deno test --no-config --import-map=scripts/ci/deno-analytics.import-map.json --lock=scripts/ci/deno-analytics.lock --frozen --node-modules-dir=none --allow-env supabase/functions/meta-owned-analytics-sync/termination.test.ts
+
+  deno-proxy-mcp:
+    name: Deno service proxy and MCP
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    needs: [deno-service-suites, deno-analytics-termination]
+    if: ${{ always() }}
+    env:
+      SERVICE_RESULT: ${{ needs.deno-service-suites.result }}
+      DEADLINE_RESULT: ${{ needs.deno-analytics-termination.result }}
+    steps:
+      - name: Require both Deno suites to succeed
+        run: test "$SERVICE_RESULT" = success && test "$DEADLINE_RESULT" = success
 
   db-harness:
     name: Postgres baseline plus delta
