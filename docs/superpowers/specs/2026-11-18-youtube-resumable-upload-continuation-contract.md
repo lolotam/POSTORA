@@ -1550,12 +1550,17 @@ functions and the changed `sweep_stale_processing_posts` and
 those functions to exist: a missing function is an error at the first upload,
 not a fallback. Apply `20261118121000_post_retry_replacement_media.sql`
 before deploying `enqueue-post-publish` with replacement-media support.
-Deploy that handler before the frontend that sends replacement IDs.
+Deploy that handler before the frontend that sends replacement IDs. Apply
+`20261118173000_youtube_pending_handoff_guard.sql` and
+`20261118190000_post_action_processing_claim.sql` before the `process-post`
+build that calls `restore_youtube_pending_post` and
+`claim_post_action_processing`.
 
-The YouTube migration has not been applied to production, so the corrected signatures
-(`p_lease_ms`, the attempt column, the extended `checkpoint`, the admission,
-the fenced settlement and the receipt projection) are simply the first
-version.
+**Every migration of this feature is applied in production.** A change to
+their behaviour is therefore a NEW migration and never an edit of an applied
+file (ARCHITECTURE.md §23). The corrected signatures (`p_lease_ms`, the
+attempt column, the extended `checkpoint`, the admission, the fenced
+settlement and the receipt projection) are the ones that run.
 
 ### The order of the three deploys
 

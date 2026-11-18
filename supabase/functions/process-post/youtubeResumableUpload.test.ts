@@ -53,6 +53,7 @@ interface RecordedRequest {
   url: string;
   method: string;
   range: string | null;
+  contentType: string | null;
   bodyLength: number;
   bytes: Uint8Array | null;
 }
@@ -86,6 +87,7 @@ function fakeProvider(answers: ScriptedAnswer[]): FakeProvider {
       url,
       method: init?.method ?? "GET",
       range: headers.get("content-range"),
+      contentType: headers.get("content-type"),
       bodyLength: bytes?.byteLength ?? 0,
       bytes,
     });
@@ -844,6 +846,17 @@ Deno.test("a run with no time left writes no bytes at all", async () => {
   assertEquals(provider.requests.filter((request) => request.bodyLength > 0).length, 0);
 });
 
+Deno.test("the chunks are declared with the type of the video", async () => {
+  // The provider is told the type with every chunk. A resumed upload has to
+  // declare the type the first one declared, so the header is the type the
+  // caller resolved and not a default.
+  const provider = fakeProvider([{ status: 200, headers: { Location: SESSION_URI } }]);
+  await run(provider, record());
+  const writes = provider.requests.filter((request) => request.method === "PUT");
+  assert(writes.length > 0);
+  assertEquals(writes[0].contentType, "video/mp4");
+});
+
 Deno.test("a transient initialization refusal leaves the empty upload scheduled", async () => {
   const provider = fakeProvider([{ status: 503, headers: { "Retry-After": "120" } }]);
   const before = Date.now();
@@ -851,5 +864,32 @@ Deno.test("a transient initialization refusal leaves the empty upload scheduled"
   assert(outcome.kind === "resumable");
   assert(outcome.nextCheckAtMs && outcome.nextCheckAtMs >= before + 120_000);
   assertEquals(provider.requests.map((call) => call.method), ["POST"]);
+  assertEquals([...store.sessions.values()][0].sessionUri, null);
+});
+
+Deno.test("a session request that times out leaves the empty upload scheduled", async () => {
+  // The provider never answers. Nothing was sent, so the upload is scheduled
+  // for another worker instead of ending.
+  const calls: string[] = [];
+  const fetchImpl: typeof fetch = (_input, init) => {
+    calls.push("POST");
+    return new Promise<Response>((_resolve, reject) => {
+      init?.signal?.addEventListener(
+        "abort",
+        () => reject(new Error("The request was aborted")),
+        { once: true },
+      );
+    });
+  };
+  const { outcome, store } = await run(
+    { fetchImpl, requests: [] },
+    record(),
+    undefined,
+    undefined,
+    undefined,
+    Date.now() + 30,
+  );
+  assert(outcome.kind === "resumable");
+  assertEquals(calls, ["POST"]);
   assertEquals([...store.sessions.values()][0].sessionUri, null);
 });

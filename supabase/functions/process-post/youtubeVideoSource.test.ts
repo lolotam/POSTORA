@@ -285,6 +285,51 @@ Deno.test("a full seek budget exhausted on a non-range source requires a differe
   assertEquals(error.reason, YOUTUBE_UPLOAD_REASON.media_range_required);
 });
 
+Deno.test("a resume read that reaches the offset and cannot finish its chunk needs a different source", async () => {
+  // The prefix arrives, so the resume offset IS reached, and the chunk that
+  // follows never does. A second worker would pull the same prefix with the
+  // same budget, so the read cannot be repeated.
+  let opened = 0;
+  const fetchImpl: typeof fetch = () => {
+    opened += 1;
+    const body = opened === 2
+      ? new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(fileBytes(10));
+        },
+      })
+      : blockBody(fileBytes(1024), [7, 13]);
+    return Promise.resolve(new Response(body, { headers: { "Content-Length": "1024" } }));
+  };
+  const source = await createVideoByteSource({
+    url: `${HOST}/video.mp4`, fetchImpl, approvedHosts: APPROVED, timeoutMs: 10,
+  });
+  const error = await assertRejects(() => source.read(10, 19), VideoSourceError);
+  assertEquals(error.reason, YOUTUBE_UPLOAD_REASON.media_range_required);
+});
+
+Deno.test("a sequential read that runs out of time is rescheduled, not refused", async () => {
+  // The source is already where the read starts, so no prefix has to be paid
+  // for again and a second worker may still finish the chunk.
+  let opened = 0;
+  const fetchImpl: typeof fetch = () => {
+    opened += 1;
+    const body = opened === 2
+      ? new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(fileBytes(5));
+        },
+      })
+      : blockBody(fileBytes(1024), [7, 13]);
+    return Promise.resolve(new Response(body, { headers: { "Content-Length": "1024" } }));
+  };
+  const source = await createVideoByteSource({
+    url: `${HOST}/video.mp4`, fetchImpl, approvedHosts: APPROVED, timeoutMs: 10,
+  });
+  const first = await assertRejects(() => source.read(0, 9), VideoSourceError);
+  assertEquals(first.reason, YOUTUBE_UPLOAD_REASON.media_read_failed);
+});
+
 Deno.test("uses the declared object size only when a streaming response omits its size", async () => {
   const fetchImpl: typeof fetch = () => Promise.resolve(new Response(blockBody(fileBytes(33), [7, 13])));
   const source = await createVideoByteSource({

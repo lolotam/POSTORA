@@ -143,6 +143,9 @@
 --   Y65 the recovery helpers are service role only, in the catalog itself.
 --   Y66 a cancellation after the final durable intent keeps the uncertainty:
 --       the session goes to reconcile, not to a definitive failure.
+--   Y67 the outcome of a destination that goes with the account is kept on the
+--       post: the video id of a published video and the marker of an uncertain
+--       upload both outlive the result row they were written on.
 --
 -- The suite SET ROLEs away from superuser where the point of the check is
 -- that a client role cannot do something. The service role bypasses RLS, so
@@ -5486,6 +5489,94 @@ BEGIN
   RAISE NOTICE 'PASS Y66: a cancellation after the final durable intent keeps the uncertainty';
 END
 $y66_cancelled_uncertain$;
+
+-- ---------------------------------------------------------------------------
+-- Y67: THE OUTCOME OF A DESTINATION THAT GOES WITH THE ACCOUNT.
+--
+-- The result row of a destination belongs to the account it published on, so
+-- it is deleted with the account the customer disconnects. The video id of a
+-- published video and the marker of an uncertain upload live on that row, and
+-- the session keeps them where the owner does not read them.
+--
+-- So the evidence is copied onto the post before the row goes: the post is
+-- the row the owner keeps, and it outlives every account the customer may
+-- disconnect. Both outcomes are proved here: the receipt of a published
+-- video, and the marker of an upload that may already have published one.
+-- ---------------------------------------------------------------------------
+DO $y67_disconnected_outcome$
+DECLARE
+  v_acct_a   uuid;
+  v_post_a   uuid;
+  v_media_a  uuid;
+  v_u_a      uuid := 'b1000000-0000-4000-8000-000000000001';
+  v_session  uuid;
+  v_row_id   uuid;
+  v_lease    uuid := 'ed000000-0000-4000-8000-000000000067';
+  v_outcomes jsonb;
+BEGIN
+  -- THE RECEIPT OF A PUBLISHED VIDEO.
+  SELECT f.account_id, f.post_id, f.media_id
+    INTO v_acct_a, v_post_a, v_media_a
+    FROM pg_temp.new_youtube_fixture('y67a') f;
+  v_session := (public.admit_youtube_upload(
+      v_post_a, v_acct_a, v_u_a, v_media_a, 4096, 4096, '{}'::jsonb)
+    -> 'session' ->> 'id')::uuid;
+  v_row_id := (SELECT platform_post_id FROM public.youtube_upload_sessions WHERE id = v_session);
+  PERFORM public.claim_youtube_upload_session(v_session, v_lease, 180000);
+  PERFORM public.checkpoint_youtube_upload_session(v_session, v_lease, 4096, 4096,
+    'https://upload.example.invalid/session/y67a', true, NULL, NULL);
+  PERFORM public.complete_youtube_upload_session(v_session, v_lease, 'yt-video-y67a');
+
+  -- The customer disconnects the account: the result row goes with it.
+  DELETE FROM public.social_accounts WHERE id = v_acct_a;
+
+  ASSERT NOT EXISTS (SELECT 1 FROM public.platform_posts WHERE id = v_row_id),
+    'Y67 the result row goes with the account';
+  v_outcomes := (SELECT metadata -> 'youtube_upload_outcomes' FROM public.posts WHERE id = v_post_a);
+  ASSERT v_outcomes -> (v_row_id::text) ->> 'outcome' = 'published',
+    'Y67 the post keeps the outcome of the published video';
+  ASSERT v_outcomes -> (v_row_id::text) ->> 'video_id' = 'yt-video-y67a',
+    'Y67 the post keeps the video id of the published video';
+  ASSERT v_outcomes -> (v_row_id::text) ->> 'channel_id' = 'yt-y67a',
+    'Y67 the post keeps the channel the video was published on';
+
+  -- THE MARKER OF AN UPLOAD THAT MAY ALREADY HAVE PUBLISHED ONE.
+  SELECT f.account_id, f.post_id, f.media_id
+    INTO v_acct_a, v_post_a, v_media_a
+    FROM pg_temp.new_youtube_fixture('y67b') f;
+  v_session := (public.admit_youtube_upload(
+      v_post_a, v_acct_a, v_u_a, v_media_a, 4096, 4096, '{}'::jsonb)
+    -> 'session' ->> 'id')::uuid;
+  v_row_id := (SELECT platform_post_id FROM public.youtube_upload_sessions WHERE id = v_session);
+  PERFORM public.claim_youtube_upload_session(v_session, v_lease, 180000);
+  PERFORM public.release_youtube_upload_session(v_session, v_lease, 'reconcile',
+    'the provider may already hold a video');
+
+  DELETE FROM public.social_accounts WHERE id = v_acct_a;
+
+  v_outcomes := (SELECT metadata -> 'youtube_upload_outcomes' FROM public.posts WHERE id = v_post_a);
+  ASSERT v_outcomes -> (v_row_id::text) ->> 'outcome' = 'uncertain',
+    'Y67 the post keeps the marker of the uncertain upload';
+  ASSERT v_outcomes -> (v_row_id::text) ->> 'publish_outcome_reason' IS NOT NULL,
+    'Y67 the post says why the outcome is uncertain';
+  ASSERT v_outcomes -> (v_row_id::text) ->> 'channel_id' = 'yt-y67b',
+    'Y67 the post keeps the channel the upload was for';
+
+  -- A result that says nothing leaves no evidence behind.
+  SELECT f.account_id, f.post_id, f.media_id
+    INTO v_acct_a, v_post_a, v_media_a
+    FROM pg_temp.new_youtube_fixture('y67c') f;
+  v_session := (public.admit_youtube_upload(
+      v_post_a, v_acct_a, v_u_a, v_media_a, 4096, 4096, '{}'::jsonb)
+    -> 'session' ->> 'id')::uuid;
+  v_row_id := (SELECT platform_post_id FROM public.youtube_upload_sessions WHERE id = v_session);
+  DELETE FROM public.social_accounts WHERE id = v_acct_a;
+  ASSERT (SELECT metadata -> 'youtube_upload_outcomes' FROM public.posts WHERE id = v_post_a) IS NULL,
+    'Y67 a result that says nothing leaves no evidence behind';
+
+  RAISE NOTICE 'PASS Y67: the outcome of a destination that goes with the account is kept';
+END
+$y67_disconnected_outcome$;
 
 ROLLBACK;
 

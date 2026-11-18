@@ -261,6 +261,29 @@ Deno.test("the stored settings come back with the session", async () => {
   });
 });
 
+Deno.test("the declared video type travels with the admission", async () => {
+  // The continuation sends the remaining chunks with the type the FIRST upload
+  // declared. A `.mov` whose stored type is null is declared from the media
+  // response, so the type has to survive the round trip: a continuation that
+  // falls back to video/mp4 sends the rest of a `.mov` as an mp4.
+  const { client } = recordingClient({
+    admit_youtube_upload: {
+      session: sessionPayload({
+        upload_settings: {
+          part: "snippet,status",
+          notifySubscribers: false,
+          mimeType: "video/quicktime",
+        },
+      }),
+      platform_post_id: PUBLIC_ROW_ID,
+    },
+  });
+  const store = createSupabaseYoutubeUploadSessionStore(client);
+  const result = await store.admit(admitInput);
+
+  assertEquals(result.record?.uploadSettings.mimeType, "video/quicktime");
+});
+
 Deno.test("a session without settings is read as the request its body describes", async () => {
   const { client } = recordingClient({
     admit_youtube_upload: {

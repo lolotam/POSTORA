@@ -1650,6 +1650,12 @@ async function openProviderSession(
     });
   } catch (error) {
     const reason = redactProviderText(error);
+    // A provider that did not answer in time is not a refusal: no session was
+    // created and no byte was sent, so the upload is scheduled for another
+    // worker instead of ending.
+    if (error instanceof YoutubeProviderTimeout) {
+      return { kind: "outcome", outcome: await deferInitialization() };
+    }
     // A credential the provider no longer accepts is its own outcome: the
     // customer has to reconnect, and a retry with the same credential would
     // fail the same way.
@@ -1897,6 +1903,22 @@ export class YoutubeProviderRefusal extends Error {
 }
 
 /**
+ * A provider that did not answer the session request in time.
+ *
+ * A request that ran out of its own budget is not a refusal. The provider may
+ * have been slow or the worker may have been near its deadline, and in both
+ * cases nothing was sent: no session exists and no byte of the video reached
+ * the provider. The upload may therefore be scheduled for another worker
+ * instead of ending.
+ */
+export class YoutubeProviderTimeout extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "YoutubeProviderTimeout";
+  }
+}
+
+/**
  * The reason a provider refusal becomes.
  *
  * A credential that is no longer accepted is not the same thing as a video
@@ -1934,6 +1956,7 @@ export async function createYoutubeResumableSession(args: {
   const timeoutMs = args.timeoutMs ?? YOUTUBE_PROVIDER_REQUEST_TIMEOUT_MS;
 
   let response: Response;
+  const signal = AbortSignal.timeout(timeoutMs);
   try {
     response = await args.fetchImpl(args.url, {
       method: "POST",
@@ -1945,10 +1968,16 @@ export async function createYoutubeResumableSession(args: {
       },
       body: JSON.stringify(args.body),
       redirect: "manual",
-      signal: AbortSignal.timeout(timeoutMs),
+      signal,
     });
   } catch (error) {
     const reason = redactProviderText(error);
+    // The signal belongs to this request, so it is aborted only when the
+    // request ran out of its own budget. That is a provider that did not
+    // answer in time, not a refusal, and the caller may try again.
+    if (signal.aborted) {
+      throw new YoutubeProviderTimeout(`The provider did not answer the session request in time: ${reason}`);
+    }
     throw new Error(`The provider did not answer the session request: ${reason}`);
   }
 

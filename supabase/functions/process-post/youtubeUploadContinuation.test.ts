@@ -400,6 +400,21 @@ Deno.test("the type of the video reaches the upload", async () => {
   assertEquals(w.uploadMimeTypes, ["video/quicktime"]);
 });
 
+Deno.test("a resumed upload declares the type the first attempt declared", async () => {
+  // The media library may know no type at all by the time the upload
+  // continues. The type the session was admitted with is the one the chunks
+  // are declared with, so the provider is not told the video changed shape
+  // halfway through.
+  const w = world({
+    media: { mimeType: null },
+    session: {
+      uploadSettings: { part: "snippet,status", notifySubscribers: false, mimeType: "video/quicktime" },
+    },
+  });
+  await continueYoutubeUpload(w.ports, request);
+  assertEquals(w.uploadMimeTypes, ["video/quicktime"]);
+});
+
 Deno.test("the upload deadline is the lease the claim granted", async () => {
   // The lease ends at an instant the DATABASE decided, before the slow calls
   // ran. A deadline of "now plus the lease length" would grant a whole second
@@ -460,6 +475,64 @@ Deno.test("a media that is still being scanned waits instead of failing", async 
   assertEquals(result.status, "pending");
   assertEquals(result.reason, YOUTUBE_UPLOAD_REASON.resumable);
   assertEquals(w.settled.length, 0);
+});
+
+Deno.test("a media lookup that fails leaves the upload pending", async () => {
+  // A failed read is not proof that the media is gone. Settling the row here
+  // would send a recoverable upload to a human because the database was busy.
+  const w = world({});
+  const failing: YoutubeContinuationPorts = {
+    ...w.ports,
+    loadMedia() {
+      return Promise.reject(new Error("the media_files query failed"));
+    },
+  };
+  const result = await continueYoutubeUpload(failing, request);
+  // The attempt waits: nothing is settled, and the row stays the evidence
+  // that the upload ran.
+  assertEquals(result.status, "pending");
+  assertEquals(w.settled.length, 0);
+  assertEquals(w.uploads, 0);
+});
+
+Deno.test("a media row without a size is judged by the object that is opened", async () => {
+  // The row may not record a size. The object that is opened is then the only
+  // proof of what is being sent, and it is the one that is compared with the
+  // byte count the upload started with.
+  const w = world({ media: { fileSize: null } });
+  const result = await continueYoutubeUpload(w.ports, request);
+  assertEquals(result.status, "completed");
+  assertEquals(w.uploads, 1);
+});
+
+Deno.test("an opened object of another size is refused before the first byte", async () => {
+  // The media row may carry no size at all, so the OPENED object is the only
+  // proof of what is being sent. An object that is not the size the upload
+  // started with is not that object, and the rest of it would publish bytes
+  // that do not belong to the video.
+  const w = world({ media: { fileSize: null } });
+  let reads = 0;
+  const wrongSize: YoutubeContinuationPorts = {
+    ...w.ports,
+    createSource() {
+      return Promise.resolve({
+        size: 200,
+        read() {
+          reads += 1;
+          return Promise.resolve(new ArrayBuffer(1));
+        },
+      });
+    },
+    // The source is opened when the first chunk is read.
+    runUpload(args) {
+      return args.source.read(0, 1).then(() => ({ kind: "completed", videoId: VIDEO_ID }));
+    },
+  };
+  const result = await continueYoutubeUpload(wrongSize, request);
+  assertEquals(result.status, "failed");
+  assertEquals(result.reason, YOUTUBE_UPLOAD_REASON.media_unavailable);
+  // The object is refused when it is opened: not one byte was read.
+  assertEquals(reads, 0);
 });
 
 // An account that cannot publish is refused in every shape it can be in.
@@ -768,6 +841,38 @@ Deno.test("a follow-up that fails does not stop the settlement", async () => {
   assertEquals(thrown, undefined);
   assertEquals(w.settled.length, 1);
   assertEquals(w.settled[0].status, "success");
+});
+
+Deno.test("a live state that cannot be read does not stop the settlement", async () => {
+  // The follow-ups are optional; the receipt is not. The video is already
+  // live, so the row has to be settled even when the authority check could
+  // not be answered.
+  const w = world({ outcome: { kind: "completed", videoId: VIDEO_ID } });
+  let checks = 0;
+  const failing: YoutubeContinuationPorts = {
+    ...w.ports,
+    effectAuthority() {
+      checks += 1;
+      // The first question is the one before the write; the second is the one
+      // before the follow-ups.
+      if (checks === 1) return Promise.resolve({ authorized: true, reason: null });
+      return Promise.reject(new Error("the database could not be reached"));
+    },
+  };
+  let thrown: unknown;
+  try {
+    await continueYoutubeUpload(failing, request);
+  } catch (error) {
+    thrown = error;
+  }
+  assertEquals(thrown, undefined);
+  // The follow-ups were skipped: an unanswerable check is not a permission,
+  // so nothing was written to the provider.
+  assertEquals(w.followUps, []);
+  // The video is live, so the row is settled.
+  assertEquals(w.settled.length, 1);
+  assertEquals(w.settled[0].status, "success");
+  assertEquals(w.settled[0].videoId, VIDEO_ID);
 });
 
 // ───────────────────────────────────────────────────────────────────────────

@@ -409,6 +409,17 @@ class StreamingByteSource implements VideoByteSource {
   private readOffset = 0;
   /** How many bytes the stream has produced. */
   private streamOffset = 0;
+  /**
+   * How many bytes the network had to deliver to reach a resume offset.
+   *
+   * A non-range source cannot seek: it reads the prefix and throws it away.
+   * Every worker that tries the same read pays for that prefix again, so a
+   * read that had to skip and still ran out of time cannot succeed on a
+   * second try.
+   */
+  private skippedFromNetwork = 0;
+  /** Whether the bytes being pulled belong to a skip. */
+  private skipping = false;
   /** The bytes from `readOffset` on. */
   private buffer: Uint8Array = new Uint8Array(0);
   /** Where the wanted bytes start inside `buffer`. */
@@ -483,6 +494,7 @@ class StreamingByteSource implements VideoByteSource {
       );
     }
     this.streamOffset += chunk.byteLength;
+    if (this.skipping) this.skippedFromNetwork += chunk.byteLength;
 
     if (this.available + chunk.byteLength > VIDEO_SOURCE_MAX_BUFFER_BYTES) {
       throw new VideoSourceError(
@@ -511,14 +523,22 @@ class StreamingByteSource implements VideoByteSource {
     }
     if (!this.reader) await this.open();
 
-    while (this.readOffset < offset) {
-      if (this.available === 0) {
-        await this.pull();
-        continue;
+    // The bytes the network delivers for the skip are counted, so a read that
+    // had to skip them is not mistaken for a read that a second try could
+    // finish.
+    this.skipping = true;
+    try {
+      while (this.readOffset < offset) {
+        if (this.available === 0) {
+          await this.pull();
+          continue;
+        }
+        const drop = Math.min(offset - this.readOffset, this.available);
+        this.bufferStart += drop;
+        this.readOffset += drop;
       }
-      const drop = Math.min(offset - this.readOffset, this.available);
-      this.bufferStart += drop;
-      this.readOffset += drop;
+    } finally {
+      this.skipping = false;
     }
   }
 
@@ -531,6 +551,9 @@ class StreamingByteSource implements VideoByteSource {
     this.bufferStart = 0;
     this.readOffset = 0;
     this.streamOffset = 0;
+    // The prefix has to be paid for again after a reset, so the count of the
+    // bytes the network delivered for a skip starts over with it.
+    this.skippedFromNetwork = 0;
   }
 
   private async verifyEnd(reader: ReadableStreamDefaultReader<Uint8Array>): Promise<void> {
@@ -562,7 +585,13 @@ class StreamingByteSource implements VideoByteSource {
     let seekTimedOut = false;
     const timer = setTimeout(() => {
       timedOut = true;
-      seekTimedOut = budget >= this.timeoutMs && this.readOffset < start;
+      // A read that had to pull the prefix from the network again cannot be
+      // repeated: the next worker reads the same prefix with the same budget
+      // and gets the same result. A read that started where the source
+      // already was may still succeed with more time, so that one reports the
+      // worker's deadline and is rescheduled.
+      const cannotRepeat = this.readOffset < start || this.skippedFromNetwork > 0;
+      seekTimedOut = budget >= this.timeoutMs && cannotRepeat;
       this.reset();
     }, budget);
     try {
@@ -588,7 +617,7 @@ class StreamingByteSource implements VideoByteSource {
       if (!timedOut) throw mediaReadError(error);
       if (seekTimedOut) {
         const reason = YOUTUBE_UPLOAD_REASON.media_range_required;
-        throw new VideoSourceError(reason, MEDIA_READ_FAILED, "The non-range source did not reach the resume offset.");
+        throw new VideoSourceError(reason, MEDIA_READ_FAILED, "The non-range source could not finish the resume read within its own budget.");
       }
       throw new VideoSourceError(
         YOUTUBE_UPLOAD_REASON.media_read_failed,
