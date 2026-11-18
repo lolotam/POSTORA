@@ -2893,8 +2893,8 @@ Deno.serve(async (req) => {
 
       if (token.refreshed) {
         // Update in-memory so postToYouTube() uses the fresh token
-        (account as any).access_token = token.accessToken;
-        (account as any).token_expires_at = token.expiresAt;
+        account.access_token = token.accessToken;
+        account.token_expires_at = token.expiresAt;
 
         console.log(`[JIT] YouTube token refreshed for account ${account.id}, expires: ${token.expiresAt} (source: ${postSource}, post: ${post_id})`);
 
