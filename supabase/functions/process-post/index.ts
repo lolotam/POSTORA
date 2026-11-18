@@ -181,6 +181,11 @@ import {
   youtubeStorageReadUrl,
 } from "./youtubeUploadPolicy.ts";
 import {
+  pendingDestinationResult,
+  settleYoutubeUpload,
+  youtubeUploadHandoff,
+} from "./youtubeUploadHandoff.ts";
+import {
   continueYoutubeUpload,
   type ContinuationResult,
   type YoutubeContinuationPorts,
@@ -191,7 +196,6 @@ import {
   youtubeUploadFailureResponseData,
   youtubeUploadOutcomeMessage,
   youtubeUploadOutcomeReason,
-  youtubeUploadUnconfirmedMessage,
 } from "./youtubeUploadOutcome.ts";
 import {
   runYoutubeFollowUps,
@@ -213,6 +217,7 @@ import {
   buildWebhookResults,
   type PlatformResultSummary,
   type PostReader,
+  parentStatusForDestinations,
   readPostOutcome,
   unreadableOutcomeLog,
   storyRecordedOnReelRowLog,
@@ -3180,7 +3185,7 @@ Deno.serve(async (req) => {
 
         imageOutcomeAcknowledged = imageExecution?.deferral.media_type === "IMAGE";
         if (result.deferredHandoff) {
-          platformResults.push({ platform: account.platform, status: "pending" });
+          platformResults.push(pendingDestinationResult(account.platform));
           hasDeferred = true;
           if (!claim.processingStartedAt) throw new ThreadsCheckpointUnavailable("Threads image handoff claim fence unavailable");
           imageHandoff = { processingStartedAt: claim.processingStartedAt, content: threadsImageContentFence(post) };
@@ -3192,7 +3197,7 @@ Deno.serve(async (req) => {
           // The upload continues in a later worker. The row stays pending and
           // the post stays processing, so the sweeper leaves it alone and the
           // continuation settles it when the video is there.
-          platformResults.push({ platform: account.platform, status: "pending" });
+          platformResults.push(pendingDestinationResult(account.platform));
           hasDeferred = true;
           if (result.pendingPlatformPostId) exactPlatformPostIds.push(result.pendingPlatformPostId);
           console.log(`[${account.platform}] upload left for the continuation`);
@@ -3348,7 +3353,7 @@ Deno.serve(async (req) => {
               console.log("Parent post canceled, superseded, or content changed; stopping remaining fan-out");
               return createErrorResponse("Post processing was canceled or superseded. No further accounts published.", 409);
             }
-            platformResults.push({ platform: account.platform, status: "pending" });
+            platformResults.push(pendingDestinationResult(account.platform));
             hasDeferred = true;
             continue;
           }
@@ -3386,7 +3391,7 @@ Deno.serve(async (req) => {
               console.log("Parent post canceled, superseded, or content changed; stopping remaining fan-out");
               return createErrorResponse("Post processing was canceled or superseded. No further accounts published.", 409);
             }
-            platformResults.push({ platform: account.platform, status: "pending" });
+            platformResults.push(pendingDestinationResult(account.platform));
             hasDeferred = true;
             continue;
           }
@@ -3405,7 +3410,7 @@ Deno.serve(async (req) => {
           if (recorded.platformPostId) exactPlatformPostIds.push(recorded.platformPostId);
           if (!recorded.error && !recorded.gaveUp) {
             console.log(`[${account.platform}] container ${error.containerId} still processing; left for the reconciler`);
-            platformResults.push({ platform: account.platform, status: "pending" });
+            platformResults.push(pendingDestinationResult(account.platform));
             hasDeferred = true;
             continue;
           }
@@ -3434,7 +3439,7 @@ Deno.serve(async (req) => {
                 console.log("Parent post canceled, superseded, or content changed; stopping remaining fan-out");
                 return createErrorResponse("Post processing was canceled or superseded. No further accounts published.", 409);
               }
-              platformResults.push({ platform: account.platform, status: "pending" });
+              platformResults.push(pendingDestinationResult(account.platform));
               hasDeferred = true;
               continue;
             }
@@ -3619,7 +3624,11 @@ Deno.serve(async (req) => {
       }
     } else if (hasDeferred) {
       // Legacy video/carousel pending behavior is unchanged.
-      finalStatus = "processing";
+      //
+      // A destination that left its row open keeps the post PROCESSING: the
+      // row is still open, so the publication is not over. The post rolls up
+      // when the destination that owns the row settles it.
+      finalStatus = parentStatusForDestinations(platformResults);
       notify = false;
       if (claim.processingStartedAt) {
         const { data: restoreResult, error: restoreError } = await supabase.rpc("restore_legacy_pending_post", {
@@ -9565,6 +9574,11 @@ function youtubeUploadRefusalMessage(refusal: YoutubeUploadRefusal): string {
       // reads like the reconcile it is: a human has to look before anything is
       // sent again.
       return youtubeUploadPublicMessage(YOUTUBE_UPLOAD_REASON.reconcile);
+    case "already_published":
+      // The channel holds a video of this post from an earlier attempt. A new
+      // attempt is a new publication, and publishing it here would put a
+      // second video of the same post on the channel.
+      return youtubeUploadPublicMessage(YOUTUBE_UPLOAD_REASON.already_published);
     default:
       return youtubeUploadPublicMessage(YOUTUBE_UPLOAD_REASON.unknown);
   }
@@ -9616,50 +9630,10 @@ async function openYoutubeUploadSession(
   return { record: null, refused: "session_expired", platformPostId: null };
 }
 
-/**
- * Settles the public row of one YouTube upload.
- *
- * The settlement is fenced: only the worker that still owns the upload may
- * record the outcome, and the public row and the parent rollup are settled in
- * one transaction. A worker that lost its lease settles nothing, because the
- * worker that took over may already have written the video.
- *
- * The answer may also be LOST: the write may have committed and the reply
- * never arrive. That is not a failure of the upload, it is a failure to PROVE
- * it. So this never throws, and it says what happened: the row is left to the
- * upload recovery either way, because the row exists and it belongs to this
- * attempt.
- */
-async function settleYoutubeUpload(
-  store: ReturnType<typeof createSupabaseYoutubeUploadSessionStore>,
-  sessionId: string,
-  leaseToken: string,
-  args: {
-    status: "success" | "failed";
-    videoId?: string | null;
-    errorMessage?: string | null;
-    responseData?: Record<string, unknown>;
-  },
-): Promise<{ confirmed: boolean; reason: string | null }> {
-  try {
-    const settled = await store.settle({
-      sessionId,
-      leaseToken,
-      status: args.status,
-      videoId: args.videoId ?? null,
-      errorMessage: args.errorMessage ?? null,
-      responseData: args.responseData ?? {},
-    });
-    if (!settled.settled) {
-      console.error(`[youtube] the upload outcome was not recorded: ${settled.refused ?? "unknown"}`);
-      return { confirmed: false, reason: settled.refused ?? "unknown" };
-    }
-    return { confirmed: true, reason: null };
-  } catch (error) {
-    console.error("[youtube] the upload outcome was not confirmed:", redactProviderText(error));
-    return { confirmed: false, reason: "answer_lost" };
-  }
-}
+// The settlement of an upload, and what it hands to the outer loop, live in
+// ./youtubeUploadHandoff.ts: a settlement that was not recorded leaves the row
+// open, and the post has to stay processing until the recovery settles it.
+
 
 /**
  * How large a thumbnail may be.
@@ -9838,7 +9812,7 @@ function buildYoutubeContinuationPorts(
       });
     },
 
-    async runUpload({ record, leaseToken: token, accessToken, source, totalBytes, mimeType }) {
+    async runUpload({ record, leaseToken: token, accessToken, source, totalBytes, mimeType, deadlineMs: uploadDeadlineMs }) {
       return await runResumableVideoUpload({
         fetchImpl: fetch,
         store,
@@ -9852,7 +9826,11 @@ function buildYoutubeContinuationPorts(
         // first upload declared: a MOV or a WebM that is resumed as an MP4
         // is refused by the provider.
         mimeType: mimeType ?? "video/mp4",
-        deadlineMs,
+        // The deadline is the LEASE the claim granted, and never past the
+        // worker's own budget. The worker may not write after its lease
+        // ended -- another worker may already own the session -- and it may
+        // not outlive the request either.
+        deadlineMs: Math.min(uploadDeadlineMs, deadlineMs),
         now: () => Date.now(),
         sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
         uploadUrl: buildYoutubeUploadUrl(
@@ -10232,17 +10210,31 @@ async function postToYouTube(
       errorMessage: youtubeUploadOutcomeReason(outcome),
       responseData: youtubeUploadFailureResponseData(outcome),
     });
+    const handoff = youtubeUploadHandoff(settlement, pendingPlatformPostId);
+    if (handoff.kind === "pending") {
+      // The failure was NOT written.
+      //
+      // The row is still open and still belongs to this attempt, so the upload
+      // recovery owns it: the row stays pending and the post stays PROCESSING
+      // until the recovery settles it.
+      //
+      // Claiming that the failure was written would be a lie with two edges:
+      // the generic writer would skip the row, and the parent would roll up
+      // to a terminal state while its destination row is still open. A post
+      // that is failed and a row that is pending are two different truths,
+      // and only one of them is true here.
+      console.log("The YouTube failure could not be recorded; the upload recovery owns the row.");
+      return {
+        pendingContinuation: handoff.pendingContinuation,
+        pendingPlatformPostId: handoff.pendingPlatformPostId,
+      };
+    }
     //
     // A CONFIRMED settlement is the final word: the row is a failure and the
-    // customer is told what it was. An UNCONFIRMED one is a pending durable
-    // handoff: the row is still open, the upload recovery owns it, and the
-    // error says so instead of pretending the failure was recorded.
-    throw uploadOwnedFailure(
-      settlement.confirmed
-        ? youtubeUploadOutcomeMessage(outcome)
-        : youtubeUploadUnconfirmedMessage(outcome),
-      { platformPostId: pendingPlatformPostId },
-    );
+    // customer is told what it was.
+    throw uploadOwnedFailure(youtubeUploadOutcomeMessage(outcome), {
+      platformPostId: pendingPlatformPostId,
+    });
   }
 
   const videoId = outcome.videoId;
@@ -10304,7 +10296,8 @@ async function postToYouTube(
       ...(uploadRequest.warnings.length > 0 ? { warnings: uploadRequest.warnings } : {}),
     },
   });
-  if (!settlement.confirmed) {
+  const handoff = youtubeUploadHandoff(settlement, pendingPlatformPostId);
+  if (handoff.kind === "pending") {
     // The outcome was not recorded, or its answer was lost. The row belongs to
     // this attempt, so it is handed to the upload recovery with its id: the
     // recovery settles it, and the generic writer does not write a second row
@@ -10313,10 +10306,16 @@ async function postToYouTube(
     // The receipt is already stored, so the recovery finds the video instead
     // of uploading it again, and the customer is never told that a retry is
     // safe when it is not.
-    throw uploadOwnedFailure(youtubeUploadUnconfirmedMessage(outcome), {
-      platformPostId: pendingPlatformPostId,
-      videoId,
-    });
+    //
+    // The post stays PROCESSING while that happens. The video exists, but the
+    // row that says so is still open: a parent that rolled up to a terminal
+    // state now, with an open row under it, would be telling the customer
+    // that the publication is over while it is still being recorded.
+    console.log("The YouTube outcome could not be recorded; the upload recovery owns the row.");
+    return {
+      pendingContinuation: handoff.pendingContinuation,
+      pendingPlatformPostId: handoff.pendingPlatformPostId,
+    };
   }
 
   return {

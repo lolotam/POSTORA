@@ -100,6 +100,18 @@
 --       possible side effect stays on record.
 --   Y40 the admission takes the expected live media version, and a refused
 --       admission creates nothing.
+--   Y41 the query settings of the provider request travel with the session.
+--   Y42 the evidence of a session survives a disconnect: the account link is
+--       dropped, the session and its receipt stay.
+--   Y43 the media file of an upload is one of the post's own files.
+--   Y44 a retry with a replacement file is admitted: the session of the
+--       previous attempt is rebound to the file the post names.
+--   Y45 a session that may hold a video is never rebound.
+--   Y46 the same channel is not published again after a reconnect.
+--   Y47 the receipt proves ONE attempt: it answers the attempt that stored it
+--       and is refused to another one, which leaves the evidence untouched.
+--   Y48 the lease is stamped with the time of the grant, not with the start
+--       of the transaction.
 --
 -- The suite SET ROLEs away from superuser where the point of the check is
 -- that a client role cannot do something. The service role bypasses RLS, so
@@ -211,6 +223,7 @@ $$;
 DO $y1_grants$
 DECLARE
   v_signature text;
+  v_privilege text;
 BEGIN
   ASSERT (SELECT relrowsecurity FROM pg_class WHERE oid = 'public.youtube_upload_sessions'::regclass),
     'Y1 RLS is enabled on the session table';
@@ -229,6 +242,22 @@ BEGIN
     'Y1 authenticated holds no UPDATE on the session table';
   ASSERT NOT has_table_privilege('authenticated', 'public.youtube_upload_sessions', 'DELETE'),
     'Y1 authenticated holds no DELETE on the session table';
+
+  -- EVERY TABLE PRIVILEGE, FOR BOTH BROWSER ROLES
+  --
+  -- The table is RLS on and carries no policy, so a browser role that may
+  -- not even read it may certainly not write it. A privilege granted by
+  -- accident -- INSERT, TRUNCATE, REFERENCES -- is a hole that the row level
+  -- security does not close, so the whole set is checked for every role
+  -- instead of the two or three that were named by hand.
+  FOR v_privilege IN
+    SELECT unnest(ARRAY['SELECT', 'INSERT', 'UPDATE', 'DELETE', 'TRUNCATE', 'REFERENCES', 'TRIGGER'])
+  LOOP
+    ASSERT NOT has_table_privilege('anon', 'public.youtube_upload_sessions', v_privilege),
+      'Y1 anon holds no ' || v_privilege || ' on the session table';
+    ASSERT NOT has_table_privilege('authenticated', 'public.youtube_upload_sessions', v_privilege),
+      'Y1 authenticated holds no ' || v_privilege || ' on the session table';
+  END LOOP;
 
   ASSERT NOT has_function_privilege('anon',
       'public.admit_youtube_upload(uuid,uuid,uuid,uuid,bigint,bigint,jsonb,timestamptz,uuid[],timestamptz,jsonb,integer,jsonb)', 'EXECUTE'),
@@ -1119,6 +1148,16 @@ BEGIN
   END;
 
   -- The post no longer publishes to YouTube at all.
+  --
+  -- The account is put BACK into the selection first. The scenario above took
+  -- it out, and a claim would refuse that with the same code, so a refusal
+  -- here would prove nothing about the platform: the account was refused
+  -- either way. The selection is restored so that this refusal can only be
+  -- about the platform the post dropped.
+  UPDATE public.posts
+     SET metadata = coalesce(metadata, '{}'::jsonb) || jsonb_build_object(
+           'selected_account_ids', jsonb_build_array(v_acct_a::text))
+   WHERE id = v_post_a;
   UPDATE public.posts SET platforms = ARRAY['instagram'] WHERE id = v_post_a;
   BEGIN
     PERFORM public.claim_youtube_upload_session(v_session, v_lease, 180000);
@@ -1885,8 +1924,15 @@ BEGIN
   PERFORM public.checkpoint_youtube_upload_session(v_session, v_lease, 4096, 4096,
     'https://upload.example.invalid/session/y25', true, NULL, NULL);
   PERFORM public.complete_youtube_upload_session(v_session, v_lease, 'yt-video-y25');
-  PERFORM public.settle_youtube_upload_session(v_session, v_lease, 'success', 'yt-video-y25');
 
+  -- THE CLOSURE COMES BEFORE THE SETTLEMENT
+  --
+  -- The pending YouTube row is what keeps the generic sweeper from reading
+  -- the absence of the sibling row as a destination that never started. So
+  -- the scope has to be closed while that row is still PENDING: settling it
+  -- first would open exactly the window the sweeper reads, and the test would
+  -- pass even if the production order were reversed.
+  --
   -- The sibling has no row. Its outcome is unknown, so it is terminalised
   -- with a reason that is not a retry offer.
   v_recovered := public.recover_youtube_upload_fanout(v_session, NULL);
@@ -1894,6 +1940,13 @@ BEGIN
     'Y25 the fanout is closed once the scope is complete';
   ASSERT (v_recovered -> 'unknown_account_ids') @> to_jsonb(ARRAY[v_ig]),
     'Y25 the unknown destination is named';
+
+  -- The YouTube row was still pending while the scope was closed.
+  ASSERT (SELECT status FROM public.platform_posts
+           WHERE id = (SELECT platform_post_id FROM public.youtube_upload_sessions WHERE id = v_session)) = 'pending',
+    'Y25 the scope is closed while the YouTube row is still pending';
+
+  PERFORM public.settle_youtube_upload_session(v_session, v_lease, 'success', 'yt-video-y25');
 
   SELECT id INTO v_ig_row FROM public.platform_posts
    WHERE post_id = v_post_a AND social_account_id = v_ig;
@@ -3975,6 +4028,172 @@ BEGIN
   RAISE NOTICE 'PASS Y46: only the same channel is refused';
 END
 $y46_reconnect$;
+
+-- ---------------------------------------------------------------------------
+-- Y47: THE RECEIPT PROVES ONE ATTEMPT.
+--
+-- A receipt is the proof that the provider holds a video FOR THE ATTEMPT THAT
+-- STORED IT. It says nothing about a later attempt: the customer may have
+-- edited the post and published it again, and the old video is not the new
+-- content.
+--
+-- So the admission answers the attempt that stored the receipt with that
+-- receipt, and refuses every other attempt. The session is left EXACTLY as it
+-- is: the receipt is never deleted, the evidence stays, and nothing is
+-- replayed.
+--
+-- The decision is the ATTEMPT, never a guess about whether the content is
+-- "really" a new video: a guess would drop a receipt that is still the proof
+-- of a published video, and a replay would publish the old content twice. A
+-- genuinely distinct repost -- a second video of the same content on the same
+-- channel -- needs a NEW POST: the session is unique per post and channel, and
+-- a new post has a new id and therefore a new session.
+-- ---------------------------------------------------------------------------
+DO $y47_receipt_proves_one_attempt$
+DECLARE
+  v_acct_a     uuid;
+  v_post_a     uuid;
+  v_media_a    uuid;
+  v_u_a        uuid := 'b1000000-0000-4000-8000-000000000001';
+  v_session    uuid;
+  v_lease      uuid := 'ed000000-0000-4000-8000-000000000007';
+  v_attempt    timestamptz;
+  v_new_attempt timestamptz;
+  v_public_row uuid;
+  v_result     jsonb;
+BEGIN
+  SELECT f.account_id, f.post_id, f.media_id
+    INTO v_acct_a, v_post_a, v_media_a
+    FROM pg_temp.new_youtube_fixture('y47') f;
+
+  SELECT processing_started_at INTO v_attempt
+    FROM public.posts WHERE id = v_post_a;
+
+  v_session := (public.admit_youtube_upload(
+    v_post_a, v_acct_a, v_u_a, v_media_a, 4096, 4096, '{}'::jsonb)
+    -> 'session' ->> 'id')::uuid;
+
+  SELECT platform_post_id INTO v_public_row
+    FROM public.youtube_upload_sessions WHERE id = v_session;
+
+  -- The upload finishes: the provider holds the video and the receipt is
+  -- stored on the session. The worker dies before it settles the public row,
+  -- so the post is still being processed.
+  PERFORM public.claim_youtube_upload_session(v_session, v_lease, 180000);
+  PERFORM public.checkpoint_youtube_upload_session(v_session, v_lease, 4096, 4096,
+    'https://upload.example.invalid/session/y47', true, NULL, NULL);
+  PERFORM public.complete_youtube_upload_session(v_session, v_lease, 'yt-video-y47');
+
+  ASSERT (SELECT state FROM public.youtube_upload_sessions WHERE id = v_session) = 'uploaded',
+    'Y47 the receipt is stored on the session';
+
+  -- THE ATTEMPT THAT STORED IT IS ANSWERED WITH THE RECEIPT.
+  v_result := public.admit_youtube_upload(
+    v_post_a, v_acct_a, v_u_a, v_media_a, 4096, 4096, '{}'::jsonb,
+    v_attempt, ARRAY[v_acct_a], NULL, NULL, NULL, NULL);
+  ASSERT (v_result -> 'session' ->> 'state') = 'uploaded',
+    'Y47 the receipt answers the attempt that stored it';
+  ASSERT (v_result ->> 'platform_post_id')::uuid = v_public_row,
+    'Y47 the receipt names the public row it belongs to';
+
+  -- ANOTHER ATTEMPT IS REFUSED.
+  --
+  -- The customer edited the post and published it again: that is a new
+  -- attempt, and the old video is not the new content.
+  v_new_attempt := v_attempt + interval '2 minutes';
+  UPDATE public.posts
+     SET status = 'processing',
+         processing_started_at = v_new_attempt,
+         caption = 'A different video'
+   WHERE id = v_post_a;
+
+  BEGIN
+    PERFORM public.admit_youtube_upload(
+      v_post_a, v_acct_a, v_u_a, v_media_a, 4096, 4096, '{}'::jsonb,
+      v_new_attempt, ARRAY[v_acct_a], NULL, NULL, NULL, NULL);
+    RAISE EXCEPTION 'Y47 the receipt of another attempt was returned';
+  EXCEPTION WHEN SQLSTATE 'YUS17' THEN
+    RAISE NOTICE 'PASS Y47: the receipt of another attempt is refused';
+  END;
+
+  -- THE EVIDENCE STAYS, AND NOTHING IS REPLAYED.
+  ASSERT (SELECT state FROM public.youtube_upload_sessions WHERE id = v_session) = 'uploaded',
+    'Y47 the refused admission leaves the session uploaded';
+  ASSERT (SELECT video_id FROM public.youtube_upload_sessions WHERE id = v_session) = 'yt-video-y47',
+    'Y47 the refused admission keeps the receipt';
+  ASSERT (SELECT attempt_started_at FROM public.youtube_upload_sessions WHERE id = v_session) = v_attempt,
+    'Y47 the refused admission keeps the attempt that stored the receipt';
+  ASSERT (SELECT platform_post_id FROM public.youtube_upload_sessions WHERE id = v_session) = v_public_row,
+    'Y47 the refused admission keeps the public row';
+  ASSERT (SELECT count(*) FROM public.youtube_upload_sessions WHERE post_id = v_post_a) = 1,
+    'Y47 the refused admission opens no second session';
+  ASSERT (SELECT status FROM public.platform_posts WHERE id = v_public_row) = 'pending',
+    'Y47 the refused admission settles nothing';
+
+  RAISE NOTICE 'PASS Y47: the receipt proves one attempt';
+END
+$y47_receipt_proves_one_attempt$;
+
+-- ---------------------------------------------------------------------------
+-- Y48: THE LEASE IS STAMPED WITH THE TIME OF THE GRANT.
+--
+-- now() is the instant the TRANSACTION started, so a claim that waited on a
+-- lock or worked through a backlog would hand out a lease that had already
+-- spent most of its life: the worker would get a lease that expires in a
+-- moment, and a reconciler could take the session over while the first worker
+-- was still writing to the provider.
+--
+-- clock_timestamp() is the instant the lease is actually granted, and it is
+-- what every lease comparison uses as well, so a lease is judged against the
+-- time it is asked about.
+--
+-- The worker here waits before the claim, so the two clocks are measurably
+-- apart: the transaction's clock is fixed at the start of this suite, while
+-- the wall clock moves on. The lease must end 60 seconds after the GRANT, not
+-- 60 seconds after the start of the transaction.
+-- ---------------------------------------------------------------------------
+DO $y48_lease_clock$
+DECLARE
+  v_acct_a     uuid;
+  v_post_a     uuid;
+  v_media_a    uuid;
+  v_u_a        uuid := 'b1000000-0000-4000-8000-000000000001';
+  v_session    uuid;
+  v_lease      uuid := 'ed000000-0000-4000-8000-000000000008';
+  v_granted_at timestamptz;
+  v_read_at    timestamptz;
+  v_expires    timestamptz;
+BEGIN
+  SELECT f.account_id, f.post_id, f.media_id
+    INTO v_acct_a, v_post_a, v_media_a
+    FROM pg_temp.new_youtube_fixture('y48') f;
+
+  v_session := (public.admit_youtube_upload(
+    v_post_a, v_acct_a, v_u_a, v_media_a, 4096, 4096, '{}'::jsonb)
+    -> 'session' ->> 'id')::uuid;
+
+  -- The worker waits for the session. The wall clock moves on; the
+  -- transaction's own clock does not.
+  PERFORM pg_sleep(2);
+  v_granted_at := clock_timestamp();
+
+  PERFORM public.claim_youtube_upload_session(v_session, v_lease, 60000);
+  v_read_at := clock_timestamp();
+
+  SELECT lease_expires_at INTO v_expires
+    FROM public.youtube_upload_sessions WHERE id = v_session;
+
+  -- The grant happened at or after v_granted_at, so the lease ends at least
+  -- 59 seconds after that moment.
+  ASSERT v_expires >= v_granted_at + interval '59 seconds',
+    'Y48 the lease is stamped with the time of the grant, not with the start of the transaction';
+  -- And it ends no later than a full lease after the claim was answered.
+  ASSERT v_expires <= v_read_at + interval '61 seconds',
+    'Y48 the lease is no longer than the grant asked for';
+
+  RAISE NOTICE 'PASS Y48: the lease is stamped with the current time';
+END
+$y48_lease_clock$;
 
 ROLLBACK;
 

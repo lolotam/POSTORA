@@ -24,7 +24,6 @@ import {
   youtubeUploadFailureResponseData,
   youtubeUploadOutcomeMessage,
   youtubeUploadOutcomeReason,
-  youtubeUploadUnconfirmedMessage,
 } from "./youtubeUploadOutcome.ts";
 import { YOUTUBE_UPLOAD_REASON, type YoutubeUploadReason } from "./youtubeUploadPolicy.ts";
 import type { ResumableUploadOutcome } from "./youtubeResumableUpload.ts";
@@ -108,12 +107,6 @@ Deno.test("a provider that refused the upload does not ask for a reconnect", () 
   const message = youtubeUploadOutcomeMessage(failed(YOUTUBE_UPLOAD_REASON.rejected));
   assertStringIncludes(message, "YouTube refused this upload");
   assertEquals(message.includes("Reconnect"), false);
-});
-
-Deno.test("a settlement that was not confirmed says the recovery owns it", () => {
-  const message = youtubeUploadUnconfirmedMessage({ kind: "completed", videoId: "abcdefghijk" });
-  assertStringIncludes(message, "The YouTube video was uploaded.");
-  assertStringIncludes(message, "not recorded");
 });
 
 // ───────────────────────────────────────────────────────────────────────────

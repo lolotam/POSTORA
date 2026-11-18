@@ -88,19 +88,6 @@ export function youtubeUploadOutcomeMessage(outcome: ResumableUploadOutcome): st
 }
 
 /**
- * The message an UNCONFIRMED settlement becomes.
- *
- * A settlement whose answer was lost, or that was refused because the lease
- * was gone, leaves the row to the upload recovery: the row exists, it belongs
- * to this attempt, and the receipt is already stored, so nothing is uploaded
- * a second time. The message says that, so the customer is never told that a
- * retry is safe when it is not.
- */
-export function youtubeUploadUnconfirmedMessage(outcome: ResumableUploadOutcome): string {
-  return `${youtubeUploadOutcomeMessage(outcome)} The result was not recorded, so the upload recovery will settle it.`;
-}
-
-/**
  * What the public row records about a failed upload.
  *
  * The marker is what the retry gate in the database and the retry selector on

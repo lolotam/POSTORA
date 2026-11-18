@@ -214,6 +214,16 @@ export interface YoutubeUploadSessionRecord {
   videoId: string | null;
   sessionExpiresAt: string | null;
   /**
+   * When this worker's lease on the session ends.
+   *
+   * It is the instant the DATABASE granted it, so it is the instant this
+   * worker may still write. A deadline computed from the worker's own clock
+   * would be a guess: the lease was granted before the slow calls, and a fresh
+   * duration from here would outlive it, which is how two workers end up
+   * writing to the same provider session.
+   */
+  leaseExpiresAt: string | null;
+  /**
    * The post attempt this session belongs to.
    *
    * A post can be published again after an edit or a retry, and that is a new
@@ -322,7 +332,9 @@ export type YoutubeUploadRefusal =
   /** The account is not a target of this post any more. */
   | "target_not_authorized"
   /** The channel may already have published this post, so it is not published again. */
-  | "channel_may_have_published";
+  | "channel_may_have_published"
+  /** The post was already published to this channel by an earlier attempt. */
+  | "already_published";
 
 /** The durable store the upload keeps its state in. */
 export interface YoutubeUploadSessionStore {

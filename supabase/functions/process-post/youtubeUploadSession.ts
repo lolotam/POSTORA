@@ -81,6 +81,7 @@ const REFUSAL_BY_SQLSTATE: Record<string, YoutubeUploadRefusal> = {
   YUS14: "no_public_row",
   YUS15: "target_not_authorized",
   YUS16: "channel_may_have_published",
+  YUS17: "already_published",
 };
 
 /**
@@ -113,6 +114,7 @@ function toRecord(payload: Record<string, unknown> | null): YoutubeUploadSession
     totalBytes: Number(payload.total_bytes ?? 0),
     videoId: typeof payload.video_id === "string" ? payload.video_id : null,
     sessionExpiresAt: typeof payload.session_expires_at === "string" ? payload.session_expires_at : null,
+    leaseExpiresAt: typeof payload.lease_expires_at === "string" ? payload.lease_expires_at : null,
     attemptStartedAt: typeof payload.attempt_started_at === "string" ? payload.attempt_started_at : null,
     nextCheckAt: typeof payload.next_check_at === "string" ? payload.next_check_at : null,
     lastOutcome: typeof payload.last_outcome === "string" ? payload.last_outcome : null,
@@ -472,6 +474,9 @@ export function createInMemoryYoutubeUploadSessionStore(options?: {
       sessionExpiresAt: session.sessionExpiresAt === null
         ? null
         : new Date(session.sessionExpiresAt).toISOString(),
+      leaseExpiresAt: session.leaseExpiresAt === null
+        ? null
+        : new Date(session.leaseExpiresAt).toISOString(),
       attemptStartedAt: session.attemptStartedAt,
       nextCheckAt: session.nextCheckAt === null ? null : new Date(session.nextCheckAt).toISOString(),
       lastOutcome: session.lastOutcome,

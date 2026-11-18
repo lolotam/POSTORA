@@ -113,6 +113,8 @@
 --     YUS13  the upload has been continued too many times
 --     YUS14  the session has no public row to settle
 --     YUS15  the account is not a target of this post
+--     YUS16  the channel may already have published this post
+--     YUS17  the post was already published to this channel
 --
 -- The house convention: RLS is on and the browser roles hold no grant, the
 -- search path is pinned, the browser roles are revoked explicitly, and the
@@ -646,7 +648,7 @@ BEGIN
     OR (
       v_session.lease_token IS NOT DISTINCT FROM p_lease_token
       AND v_session.lease_expires_at IS NOT NULL
-      AND v_session.lease_expires_at > now()
+      AND v_session.lease_expires_at > clock_timestamp()
     )
   ) THEN
     RETURN jsonb_build_object('recovered', false, 'reason', 'lease_stale');
@@ -1209,7 +1211,7 @@ BEGIN
 
   IF v_session.lease_token IS DISTINCT FROM p_lease_token
      OR v_session.lease_expires_at IS NULL
-     OR v_session.lease_expires_at <= now() THEN
+     OR v_session.lease_expires_at <= clock_timestamp() THEN
     RETURN jsonb_build_object('authorized', false, 'reason', 'lease_stale');
   END IF;
 
@@ -1583,12 +1585,36 @@ BEGIN
       v_attempt, 'youtube', p_target_account_ids)
     RETURNING * INTO v_session;
   ELSE
-    -- A receipt that exists is the answer. The video is not uploaded again.
+    -- A RECEIPT PROVES ONE ATTEMPT
+    --
+    -- A receipt is the proof that the provider holds a video FOR THE ATTEMPT
+    -- THAT STORED IT. It says nothing about a later attempt: the customer may
+    -- have edited the post and published it again, and the old video is not
+    -- the new content.
+    --
+    -- Returning it for another attempt would report the old video as the new
+    -- publication's success. The settlement is fenced to the attempt, so it
+    -- would be refused as well, and the row would stay pending while the
+    -- parent rolled up: a publication that is neither finished nor failed.
+    --
+    -- So the receipt answers only the attempt that stored it.
+    --
+    -- For another attempt the session is left EXACTLY as it is. The evidence
+    -- stays -- the receipt is never deleted -- and nothing is replayed: the
+    -- decision is the attempt, never a guess about whether the content is
+    -- "really" a new video. A genuinely distinct repost -- a second video of
+    -- the same content on the same channel -- needs a NEW POST: the session
+    -- is unique per post and channel, and a new post has a new id and
+    -- therefore a new session.
     IF v_session.state = 'uploaded' THEN
-      RETURN jsonb_build_object(
-        'session', public.youtube_upload_session_payload(v_session),
-        'platform_post_id', v_session.platform_post_id
-      );
+      IF v_session.attempt_started_at IS NOT NULL
+         AND v_session.attempt_started_at IS NOT DISTINCT FROM v_attempt THEN
+        RETURN jsonb_build_object(
+          'session', public.youtube_upload_session_payload(v_session),
+          'platform_post_id', v_session.platform_post_id
+        );
+      END IF;
+      RAISE EXCEPTION 'YUS17: this post was already published to this channel, so a new post is needed to publish again' USING ERRCODE = 'YUS17';
     END IF;
 
     -- THE SAFE RESTART
@@ -1621,7 +1647,7 @@ BEGIN
        AND v_session.bytes_sent = 0
        AND (v_session.lease_token IS NULL
             OR v_session.lease_expires_at IS NULL
-            OR v_session.lease_expires_at <= now())
+            OR v_session.lease_expires_at <= clock_timestamp())
        AND v_session.total_bytes IS NOT DISTINCT FROM p_total_bytes
        AND v_session.media_file_id IS NOT DISTINCT FROM p_media_file_id
        AND (v_session.media_object_version IS NULL
@@ -1682,7 +1708,7 @@ BEGIN
        AND v_session.bytes_sent = 0
        AND (v_session.lease_token IS NULL
             OR v_session.lease_expires_at IS NULL
-            OR v_session.lease_expires_at <= now())
+            OR v_session.lease_expires_at <= clock_timestamp())
        AND v_session.media_file_id IS DISTINCT FROM p_media_file_id
        AND public.youtube_upload_target_authorized(
              p_post_id, p_social_account_id,
@@ -1910,6 +1936,19 @@ BEGIN
   END IF;
   v_lease := make_interval(secs => (p_lease_ms::double precision / 1000.0));
 
+  -- THE LEASE IS STAMPED WITH THE CURRENT TIME, NOT THE TRANSACTION'S.
+  --
+  -- now() is the instant the transaction started, so a claim that waited on a
+  -- lock or worked through a backlog would hand out a lease that had already
+  -- spent most of its life: the worker would receive a lease that expires in
+  -- a moment, and a reconciler could take the session over while the first
+  -- worker was still writing to the provider. Two workers writing to the same
+  -- provider session is an upload nobody can prove.
+  --
+  -- clock_timestamp() is the instant the lease is actually granted, and it is
+  -- what every lease comparison below uses as well, so a lease is judged
+  -- against the time it is asked about and not against a time in the past.
+
   SELECT * INTO v_session FROM public.youtube_upload_sessions WHERE id = p_session_id FOR UPDATE;
   IF NOT FOUND THEN
     RAISE EXCEPTION 'YUS08: the session is not there' USING ERRCODE = 'YUS08';
@@ -1924,13 +1963,13 @@ BEGIN
   -- make the owner's own settlement fail.
   IF v_session.state = 'uploaded' THEN
     IF v_session.lease_expires_at IS NOT NULL
-       AND v_session.lease_expires_at > now()
+       AND v_session.lease_expires_at > clock_timestamp()
        AND v_session.lease_token IS DISTINCT FROM p_lease_token THEN
       RAISE EXCEPTION 'YUS07: another worker owns the session' USING ERRCODE = 'YUS07';
     END IF;
     UPDATE public.youtube_upload_sessions
        SET lease_token = p_lease_token,
-           lease_expires_at = now() + v_lease,
+           lease_expires_at = clock_timestamp() + v_lease,
            updated_at = clock_timestamp()
      WHERE id = v_session.id
     RETURNING * INTO v_session;
@@ -1947,7 +1986,7 @@ BEGIN
 
   -- Another worker holds the session and its lease is still live.
   IF v_session.lease_expires_at IS NOT NULL
-     AND v_session.lease_expires_at > now()
+     AND v_session.lease_expires_at > clock_timestamp()
      AND v_session.lease_token IS DISTINCT FROM p_lease_token THEN
     RAISE EXCEPTION 'YUS07: another worker owns the session' USING ERRCODE = 'YUS07';
   END IF;
@@ -1968,7 +2007,7 @@ BEGIN
      AND NOT (
        v_session.lease_token IS NOT DISTINCT FROM p_lease_token
        AND v_session.lease_expires_at IS NOT NULL
-       AND v_session.lease_expires_at > now()
+       AND v_session.lease_expires_at > clock_timestamp()
      ) THEN
     RAISE EXCEPTION 'YUS13: the upload has been continued too many times' USING ERRCODE = 'YUS13';
   END IF;
@@ -2007,7 +2046,7 @@ BEGIN
 
   UPDATE public.youtube_upload_sessions
      SET lease_token = p_lease_token,
-         lease_expires_at = now() + v_lease,
+         lease_expires_at = clock_timestamp() + v_lease,
          updated_at = clock_timestamp()
    WHERE id = v_session.id
   RETURNING * INTO v_session;
@@ -2075,7 +2114,7 @@ BEGIN
 
   IF v_session.lease_token IS DISTINCT FROM p_lease_token
      OR v_session.lease_expires_at IS NULL
-     OR v_session.lease_expires_at <= now() THEN
+     OR v_session.lease_expires_at <= clock_timestamp() THEN
     RAISE EXCEPTION 'YUS09: the lease is stale, so this worker does not own the session' USING ERRCODE = 'YUS09';
   END IF;
 
@@ -2193,7 +2232,7 @@ BEGIN
 
   IF v_session.lease_token IS DISTINCT FROM p_lease_token
      OR v_session.lease_expires_at IS NULL
-     OR v_session.lease_expires_at <= now() THEN
+     OR v_session.lease_expires_at <= clock_timestamp() THEN
     RAISE EXCEPTION 'YUS09: the lease is stale, so this worker does not own the session' USING ERRCODE = 'YUS09';
   END IF;
 
@@ -2388,7 +2427,7 @@ BEGIN
   -- The worker must still own the session.
   IF v_session.lease_token IS DISTINCT FROM p_lease_token
      OR v_session.lease_expires_at IS NULL
-     OR v_session.lease_expires_at <= now() THEN
+     OR v_session.lease_expires_at <= clock_timestamp() THEN
     RAISE EXCEPTION 'YUS09: the lease is stale, so this worker does not own the session' USING ERRCODE = 'YUS09';
   END IF;
 
@@ -2649,7 +2688,7 @@ BEGIN
 
   IF v_session.lease_token IS DISTINCT FROM p_lease_token
      OR v_session.lease_expires_at IS NULL
-     OR v_session.lease_expires_at <= now() THEN
+     OR v_session.lease_expires_at <= clock_timestamp() THEN
     RAISE EXCEPTION 'YUS09: the lease is stale, so this worker does not own the session' USING ERRCODE = 'YUS09';
   END IF;
 
@@ -2856,7 +2895,7 @@ BEGIN
   IF v_pre_state NOT IN ('open', 'failed', 'expired', 'reconcile') THEN
     RETURN jsonb_build_object('classified', false, 'reason', 'not_open');
   END IF;
-  IF v_session.lease_expires_at IS NOT NULL AND v_session.lease_expires_at > now() THEN
+  IF v_session.lease_expires_at IS NOT NULL AND v_session.lease_expires_at > clock_timestamp() THEN
     RETURN jsonb_build_object('classified', false, 'reason', 'lease_live');
   END IF;
 
@@ -3038,7 +3077,7 @@ BEGIN
        AND ys.platform_post_id IS NOT NULL
        -- A worker that still holds the lease is about to settle the row
        -- itself: the release keeps the lease on purpose.
-       AND (ys.lease_expires_at IS NULL OR ys.lease_expires_at <= now())
+       AND (ys.lease_expires_at IS NULL OR ys.lease_expires_at <= clock_timestamp())
        -- The authority of the classification, in the query as well: the post
        -- must still be processing and the attempt must still be the running
        -- one, so a cancelled or superseded post keeps its own outcome.
@@ -3176,7 +3215,7 @@ BEGIN
        AND s.session_expires_at <= now()
        AND NOT s.video_may_exist
        AND s.bytes_sent = 0
-       AND (s.lease_expires_at IS NULL OR s.lease_expires_at <= now())
+       AND (s.lease_expires_at IS NULL OR s.lease_expires_at <= clock_timestamp())
      ORDER BY s.session_expires_at, s.id
      LIMIT v_limit
      FOR UPDATE SKIP LOCKED
@@ -3209,7 +3248,7 @@ BEGIN
       FROM public.youtube_upload_sessions s
       JOIN public.posts p ON p.id = s.post_id
      WHERE s.state = 'open'
-       AND (s.lease_expires_at IS NULL OR s.lease_expires_at <= now())
+       AND (s.lease_expires_at IS NULL OR s.lease_expires_at <= clock_timestamp())
        AND (
          -- The provider session is gone and a byte reached the provider.
          (s.session_expires_at IS NOT NULL
@@ -3248,7 +3287,7 @@ BEGIN
        -- A receipt is projected even after the cap: the video exists, and
        -- projecting it is not another try.
        AND (s.state = 'uploaded' OR s.continuation_count < p_max_continuations)
-       AND (s.lease_expires_at IS NULL OR s.lease_expires_at <= now())
+       AND (s.lease_expires_at IS NULL OR s.lease_expires_at <= clock_timestamp())
        AND (s.next_check_at IS NULL OR s.next_check_at <= now())
      ORDER BY s.next_check_at NULLS FIRST, s.updated_at
      LIMIT v_limit
@@ -3256,7 +3295,7 @@ BEGIN
   )
   UPDATE public.youtube_upload_sessions s
      SET lease_token = gen_random_uuid(),
-         lease_expires_at = now() + v_lease,
+         lease_expires_at = clock_timestamp() + v_lease,
          -- Only an upload that still has to be written counts a continuation.
          continuation_count = s.continuation_count
            + CASE WHEN s.state = 'open' THEN 1 ELSE 0 END,
@@ -3684,7 +3723,7 @@ BEGIN
            )::text)
            AND NOT (p.metadata ? 'final_notification_intent')
            AND coalesce((p.metadata #>> '{legacy_notification_candidate,consumed}')::boolean, false) = false
-           AND coalesce((p.metadata #>> '{legacy_notification_candidate,claimed_until}')::timestamptz, '-infinity') <= now()
+           AND coalesce((p.metadata #>> '{legacy_notification_candidate,claimed_until}')::timestamptz, '-infinity') <= clock_timestamp()
            AND (
              (p.metadata ->> 'final_notified_at') IS NULL
              OR (p.metadata ->> 'final_notified_at')::timestamptz < p.processing_started_at
@@ -3708,7 +3747,7 @@ BEGIN
                p.metadata,
                '{legacy_notification_candidate}',
                (p.metadata -> 'legacy_notification_candidate') || jsonb_build_object(
-                 'claimed_until', now() + p_lease,
+                 'claimed_until', clock_timestamp() + p_lease,
                  'claim_id', gen_random_uuid()
                )
              )

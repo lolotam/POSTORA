@@ -76,6 +76,14 @@ export const YOUTUBE_UPLOAD_REASON = {
    * were submitted. It cannot replace a session after a video may exist.
    */
   session_not_open: "youtube_upload_session_not_open",
+  /**
+   * The post was already published to this channel.
+   *
+   * A receipt is the proof that the provider holds a video FOR ONE ATTEMPT.
+   * A later attempt of the same post is a different publication, and the
+   * channel already holds a video of this post.
+   */
+  already_published: "youtube_upload_already_published",
 } as const;
 
 export type YoutubeUploadReason = (typeof YOUTUBE_UPLOAD_REASON)[keyof typeof YOUTUBE_UPLOAD_REASON];
@@ -120,6 +128,9 @@ const PUBLIC_MESSAGE: Record<YoutubeUploadReason, string> = {
   [YOUTUBE_UPLOAD_REASON.not_found]: "No YouTube upload was found for this post.",
   [YOUTUBE_UPLOAD_REASON.session_not_open]:
     "No active YouTube upload session is available.",
+  [YOUTUBE_UPLOAD_REASON.already_published]:
+    "This post was already published to this YouTube channel. " +
+    "Create a new post to publish a different video to the same channel.",
 };
 
 /** The public message for a reason code. Unknown codes get a neutral message. */

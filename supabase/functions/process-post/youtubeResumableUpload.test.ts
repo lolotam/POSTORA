@@ -143,6 +143,7 @@ function record(overrides: Partial<YoutubeUploadSessionRecord> = {}): YoutubeUpl
     totalBytes: TOTAL_BYTES,
     videoId: null,
     sessionExpiresAt: null,
+    leaseExpiresAt: null,
     attemptStartedAt: "2026-11-18T00:00:00.000Z",
     nextCheckAt: null,
     lastOutcome: null,
@@ -165,6 +166,7 @@ async function run(
   store = createInMemoryYoutubeUploadSessionStore(),
   effectAuthority: () => Promise<{ authorized: boolean; reason: string | null }> = () =>
     Promise.resolve({ authorized: true, reason: null }),
+  deadlineMs = Date.now() + 120_000,
 ): Promise<{ outcome: ResumableUploadOutcome; store: ReturnType<typeof createInMemoryYoutubeUploadSessionStore> }> {
   // The session is put in the store the way the caller puts it there:
   // admitted, claimed, and given its provider uri when it already has one.
@@ -216,7 +218,7 @@ async function run(
     source: source ?? memorySource(TOTAL_BYTES),
     totalBytes: TOTAL_BYTES,
     mimeType: "video/mp4",
-    deadlineMs: Date.now() + 120_000,
+    deadlineMs,
     now: () => Date.now(),
     sleep: async () => {},
     uploadUrl: `${SESSION_HOST}/upload/youtube/v3/videos?uploadType=resumable&part=snippet,status`,
@@ -761,4 +763,24 @@ Deno.test("an authority that cannot be read is not an authority", async () => {
 Deno.test("a status that is not a receipt is never read as one", () => {
   const status: ProviderUploadStatus = { kind: "unknown", reason: "x", retryable: true };
   assertEquals(status.kind, "unknown");
+});
+
+Deno.test("a run with no time left writes no bytes at all", async () => {
+  // The deadline is the lease, and a lease that could not be read leaves the
+  // worker with no time. Writing after the lease ended would overlap the
+  // worker that took the session over, and the database cannot undo a
+  // provider write that already happened.
+  const provider = fakeProvider([{ status: 200, headers: { Location: SESSION_URI } }]);
+  const { outcome } = await run(
+    provider,
+    record(),
+    undefined,
+    undefined,
+    undefined,
+    Date.now() - 1,
+  );
+  assertEquals(outcome.kind, "resumable");
+  // The provider session may be opened, but not one byte of the video is
+  // written: the write loop finds no time and stops.
+  assertEquals(provider.requests.filter((request) => request.bodyLength > 0).length, 0);
 });

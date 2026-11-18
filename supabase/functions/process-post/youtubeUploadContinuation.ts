@@ -266,6 +266,17 @@ export interface ContinuationResult {  /** The public outcome. */
 export const YOUTUBE_CONTINUATION_LEASE_MS = 120_000;
 
 /**
+ * The time kept back from the end of the lease.
+ *
+ * The lease is stamped by the database and the deadline is read by the
+ * worker, so the two clocks are not the same clock. The margin covers that
+ * difference and the abort of a request that is already in flight when the
+ * lease ends, so this worker stops writing before a reconciler can take the
+ * session over.
+ */
+export const YOUTUBE_LEASE_END_MARGIN_MS = 1_000;
+
+/**
  * A source that opens the media only when the first byte is asked for.
  *
  * The provider is asked what it holds BEFORE the media is touched: an
@@ -580,7 +591,15 @@ export async function continueYoutubeUpload(
       accessToken,
       source,
       totalBytes: session.totalBytes,
-      deadlineMs: ports.now() + YOUTUBE_CONTINUATION_LEASE_MS,
+      // The deadline is the LEASE, not a fresh duration.
+      //
+      // The claim granted the lease before the slow calls, and the database
+      // decided when it ends. A deadline of "now plus the lease length" would
+      // grant a whole second lease after those calls, so this worker could
+      // still be writing to the provider after its lease had expired -- and a
+      // reconciler that took the session over would be writing at the same
+      // time. The database cannot undo an overlapping provider write.
+      deadlineMs: leaseDeadlineMs(ports.now(), session.leaseExpiresAt),
       // The type of the video, as the media library knows it. The chunks of a
       // resumed upload are declared with it, so the continuation declares the
       // type the first upload declared.
@@ -598,6 +617,28 @@ export async function continueYoutubeUpload(
   if (stopped) return stopped;
 
   return await interpretOutcome({ ports, request, session, outcome, post, accessToken });
+}
+
+/**
+ * The instant this worker may still write.
+ *
+ * It is the end of the lease the claim granted, minus the margin below.
+ *
+ * The lease is stamped by the DATABASE and the deadline is read by the
+ * WORKER, so the two clocks are not the same clock. The margin covers that
+ * difference: a worker that ran ahead of the database would otherwise still
+ * be writing a moment after its lease ended.
+ *
+ * A lease that cannot be read is a lease that cannot be shown to be live, so
+ * the worker writes nothing: the upload stays resumable and the next worker,
+ * which reads the lease the same way, tries again. A second video on the
+ * customer's channel is worse than a post that needs a human.
+ */
+function leaseDeadlineMs(nowMs: number, leaseExpiresAt: string | null): number {
+  if (!leaseExpiresAt) return nowMs;
+  const parsed = Date.parse(leaseExpiresAt);
+  if (!Number.isFinite(parsed)) return nowMs;
+  return parsed - YOUTUBE_LEASE_END_MARGIN_MS;
 }
 
 /**

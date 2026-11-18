@@ -26,6 +26,7 @@ import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import {
   continueYoutubeUpload,
   scopeStateOf,
+  YOUTUBE_LEASE_END_MARGIN_MS,
   type ContinuationAccount,
   type ContinuationMedia,
   type ContinuationPost,
@@ -47,6 +48,8 @@ const MEDIA_ID = "media-1";
 const PLATFORM_POST_ID = "platform-post-1";
 const ATTEMPT = "2026-11-18T00:00:00.000Z";
 const VIDEO_ID = "abcdefghijk";
+/** The clock this world runs on. */
+const NOW_MS = 1_700_000_000_000;
 
 /** What the fake outside world was asked to do. */
 interface World {
@@ -70,6 +73,8 @@ interface World {
   recoveryLeaseTokens: Array<string | null>;
   /** The types of video the uploads were declared with. */
   uploadMimeTypes: Array<string | null>;
+  /** The deadlines the uploads were given. */
+  uploadDeadlines: number[];
   /** The order the worker did the things that touch the public row. */
   timeline: string[];
   /** How often the live state was asked about. */
@@ -148,6 +153,9 @@ function world(options: WorldOptions = {}): World {
     totalBytes: 100,
     videoId: null,
     sessionExpiresAt: null,
+    // The lease the claim granted, ending a hundred and twenty seconds after
+    // the clock this world runs on.
+    leaseExpiresAt: new Date(NOW_MS + 120_000).toISOString(),
     attemptStartedAt: ATTEMPT,
     nextCheckAt: null,
     lastOutcome: null,
@@ -171,6 +179,7 @@ function world(options: WorldOptions = {}): World {
     fanoutRecoveries: [],
     recoveryLeaseTokens: [],
     uploadMimeTypes: [],
+    uploadDeadlines: [],
     timeline: [],
     authorityChecks: 0,
     ports: {
@@ -202,6 +211,7 @@ function world(options: WorldOptions = {}): World {
       runUpload(args) {
         world.uploads += 1;
         world.uploadMimeTypes.push(args.mimeType ?? null);
+        world.uploadDeadlines.push(args.deadlineMs);
         if (options.runUpload) return options.runUpload(args);
         return Promise.resolve(options.outcome ?? { kind: "completed", videoId: VIDEO_ID });
       },
@@ -245,7 +255,7 @@ function world(options: WorldOptions = {}): World {
         world.recoveryLeaseTokens.push(args.leaseToken ?? null);
         return Promise.resolve(options.fanout ?? { recovered: true, reason: null });
       },
-      now: () => 1_700_000_000_000,
+      now: () => NOW_MS,
     },
   };
   return world;
@@ -388,6 +398,27 @@ Deno.test("the type of the video reaches the upload", async () => {
   const w = world({ media: { mimeType: "video/quicktime" } });
   await continueYoutubeUpload(w.ports, request);
   assertEquals(w.uploadMimeTypes, ["video/quicktime"]);
+});
+
+Deno.test("the upload deadline is the lease the claim granted", async () => {
+  // The lease ends at an instant the DATABASE decided, before the slow calls
+  // ran. A deadline of "now plus the lease length" would grant a whole second
+  // lease after those calls, so this worker could still be writing to the
+  // provider after its lease had expired -- and a reconciler that took the
+  // session over would be writing at the same time.
+  const w = world();
+  await continueYoutubeUpload(w.ports, request);
+  assertEquals(w.uploadDeadlines, [NOW_MS + 120_000 - YOUTUBE_LEASE_END_MARGIN_MS]);
+});
+
+Deno.test("a session with no lease to read is given no time to write", async () => {
+  // A lease that cannot be read is a lease that cannot be shown to be live,
+  // so the worker is given no time at all: the upload runner stops before it
+  // writes a byte, and the next worker -- which reads the lease the same way
+  // -- tries again.
+  const w = world({ session: { leaseExpiresAt: null } });
+  await continueYoutubeUpload(w.ports, request);
+  assertEquals(w.uploadDeadlines, [NOW_MS]);
 });
 
 Deno.test("the live state is asked about again once the media is open", async () => {
