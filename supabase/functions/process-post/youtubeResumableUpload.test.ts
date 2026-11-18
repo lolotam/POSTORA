@@ -288,16 +288,18 @@ Deno.test("a 308 with a range names the bytes the provider holds", () => {
   assertEquals(status, { kind: "resumable", confirmedBytes: 5_242_880 });
 });
 
-Deno.test("a range the provider cannot mean is not a resumable answer", () => {
-  const status = classifyProviderStatus({
-    status: 308,
-    rangeHeader: "bytes=nonsense",
-    bodyText: "",
-    totalBytes: TOTAL_BYTES,
-    previousConfirmedBytes: 0,
-  });
-  assertEquals(status.kind, "unknown");
-  assertEquals(status.kind === "unknown" && status.retryable, false);
+Deno.test("a malformed range or nonzero prefix is not resumable", () => {
+  for (const rangeHeader of ["bytes=nonsense", "", "bytes=100-199"]) {
+    const status = classifyProviderStatus({
+      status: 308,
+      rangeHeader,
+      bodyText: "",
+      totalBytes: TOTAL_BYTES,
+      previousConfirmedBytes: 0,
+    });
+    assertEquals(status.kind, "unknown");
+    assertEquals(status.kind === "unknown" && status.retryable, false);
+  }
 });
 
 Deno.test("a provider that reports fewer bytes than before is not retryable", () => {
@@ -609,19 +611,30 @@ Deno.test("the provider status is asked for when a write does not move the offse
   assert(probes.length >= 1);
 });
 
-Deno.test("the stored error keeps the reason code and drops the credential", async () => {
-  const provider = fakeProvider([
-    { status: 500, body: "the upload_id=secret-upload-id is gone" },
-    { status: 500, body: "the upload_id=secret-upload-id is gone" },
-    { status: 500, body: "the upload_id=secret-upload-id is gone" },
-  ]);
-  const store = createInMemoryYoutubeUploadSessionStore();
-  await run(provider, record({ sessionUri: SESSION_URI }), undefined, store);
-  const session = [...store.sessions.values()][0];
-  // The in-memory store does not keep the error text; the SQL one does, and
-  // it is redacted there. What matters here is that the outcome carries the
-  // stable reason code.
-  assertEquals(session.state, "open");
+Deno.test("a transport failure returns a stable reason and a redacted diagnostic", async () => {
+  const provider: FakeProvider = {
+    fetchImpl: () => Promise.reject(new Error(`Transport failed for ${SESSION_URI}`)),
+    requests: [],
+  };
+  const { outcome } = await run(provider, record());
+  assert(outcome.kind === "failed");
+  assertEquals(outcome.reason, YOUTUBE_UPLOAD_REASON.unknown);
+  assertStringIncludes(outcome.detail ?? "", "[redacted-url]");
+  assert(!outcome.detail?.includes(SESSION_URI));
+});
+
+Deno.test("durable state write refused means the worker abandoned its work", async () => {
+  for (const stateWrite of ["release", "checkpoint"] as const) {
+    const provider = fakeProvider(stateWrite === "release"
+      ? [{ status: 404 }]
+      : [{ status: 429, headers: { "Retry-After": "60" } }]);
+    const store = createInMemoryYoutubeUploadSessionStore();
+    const originalCheckpoint = store.checkpoint;
+    if (stateWrite === "release") store.release = () => Promise.resolve(false);
+    else store.checkpoint = (args) => args.nextCheckAt ? Promise.resolve(false) : originalCheckpoint(args);
+    const { outcome } = await run(provider, record({ sessionUri: SESSION_URI }), undefined, store);
+    assertEquals(outcome, { kind: "abandoned", reason: YOUTUBE_UPLOAD_REASON.lease_conflict });
+  }
 });
 
 Deno.test("the outcome carries a stable reason code", async () => {

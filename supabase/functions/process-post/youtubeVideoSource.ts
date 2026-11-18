@@ -157,7 +157,7 @@ export function parseContentRangeTotal(value: string | null | undefined): number
 /**
  * What the host answered to a range request, reduced to the size and the type.
  */
-export function readProbeResponse(response: Response): VideoSourceProbe {
+export function readProbeResponse(response: Response, declaredSize?: number | null): VideoSourceProbe {
   const contentRange = response.headers.get("content-range");
   const mimeType = mimeTypeOf(response.headers.get("content-type"), "application/octet-stream");
 
@@ -174,7 +174,8 @@ export function readProbeResponse(response: Response): VideoSourceProbe {
   }
 
   if (response.status === 200) {
-    const length = Number(response.headers.get("content-length"));
+    const lengthHeader = response.headers.get("content-length");
+    const length = lengthHeader === null ? declaredSize ?? 0 : Number(lengthHeader);
     if (!Number.isSafeInteger(length) || length <= 0) {
       throw new VideoSourceError(
         YOUTUBE_UPLOAD_REASON.media_read_failed,
@@ -320,6 +321,11 @@ async function fetchApprovedMedia(
   );
 }
 
+function mediaReadError(error: unknown): VideoSourceError {
+  if (error instanceof VideoSourceError) return error;
+  return new VideoSourceError(YOUTUBE_UPLOAD_REASON.media_read_failed, MEDIA_READ_FAILED, error instanceof Error ? error.message : String(error));
+}
+
 /** A source that reads a range with one request per range. */
 class RangeByteSource implements VideoByteSource {
   readonly ranged = true;
@@ -334,37 +340,41 @@ class RangeByteSource implements VideoByteSource {
   ) {}
 
   async read(start: number, end: number, timeoutMs?: number): Promise<ArrayBuffer> {
-    const wanted = end - start + 1;
-    const budget = Math.max(1, Math.min(timeoutMs ?? this.timeoutMs, this.timeoutMs));
-    const response = await fetchApprovedMedia(
-      this.url,
-      {
-        method: "GET",
-        headers: { Range: `bytes=${start}-${end}` },
-        signal: AbortSignal.timeout(budget),
-      },
-      this.approvedHosts,
-      this.fetchImpl,
-    );
-    if (response.status !== 206) {
-      void response.body?.cancel().catch(() => {});
-      throw new VideoSourceError(
-        YOUTUBE_UPLOAD_REASON.media_read_failed,
-        MEDIA_READ_FAILED,
-        `The media host answered ${response.status} instead of the requested bytes.`,
+    try {
+      const wanted = end - start + 1;
+      const budget = Math.max(1, Math.min(timeoutMs ?? this.timeoutMs, this.timeoutMs));
+      const response = await fetchApprovedMedia(
+        this.url,
+        {
+          method: "GET",
+          headers: { Range: `bytes=${start}-${end}` },
+          signal: AbortSignal.timeout(budget),
+        },
+        this.approvedHosts,
+        this.fetchImpl,
       );
+      if (response.status !== 206) {
+        void response.body?.cancel().catch(() => {});
+        throw new VideoSourceError(
+          YOUTUBE_UPLOAD_REASON.media_read_failed,
+          MEDIA_READ_FAILED,
+          `The media host answered ${response.status} instead of the requested bytes.`,
+        );
+      }
+      const contentRange = response.headers.get("content-range");
+      const returned = parseContentRange(contentRange);
+      if (!returned || returned.start !== start || returned.end !== end || returned.total !== this.size) {
+        void response.body?.cancel().catch(() => {});
+        throw new VideoSourceError(
+          YOUTUBE_UPLOAD_REASON.media_read_failed,
+          MEDIA_READ_FAILED,
+          "The media host answered with a different range than the one that was asked for.",
+        );
+      }
+      return await readBoundedBytes(response, wanted);
+    } catch (error) {
+      throw mediaReadError(error);
     }
-    const contentRange = response.headers.get("content-range");
-    const returned = parseContentRange(contentRange);
-    if (!returned || returned.start !== start || returned.end !== end || returned.total !== this.size) {
-      void response.body?.cancel().catch(() => {});
-      throw new VideoSourceError(
-        YOUTUBE_UPLOAD_REASON.media_read_failed,
-        MEDIA_READ_FAILED,
-        "The media host answered with a different range than the one that was asked for.",
-      );
-    }
-    return await readBoundedBytes(response, wanted);
   }
 }
 
@@ -550,7 +560,7 @@ class StreamingByteSource implements VideoByteSource {
       return bytes.buffer;
     } catch (error) {
       this.reset();
-      if (!timedOut) throw error;
+      if (!timedOut) throw mediaReadError(error);
       throw new VideoSourceError(
         YOUTUBE_UPLOAD_REASON.media_read_failed,
         MEDIA_READ_FAILED,
@@ -600,12 +610,7 @@ export async function createVideoByteSource(options: VideoByteSourceOptions): Pr
     // and a signed media URL is a credential. The raw text is redacted into
     // the detail, which is for the log line; the message the caller sees is
     // the stable one, and the reason is the stable code.
-    if (error instanceof VideoSourceError) throw error;
-    throw new VideoSourceError(
-      YOUTUBE_UPLOAD_REASON.media_read_failed,
-      MEDIA_READ_FAILED,
-      error instanceof Error ? error.message : String(error),
-    );
+    throw mediaReadError(error);
   }
 
   let probe: VideoSourceProbe;
@@ -617,12 +622,12 @@ export async function createVideoByteSource(options: VideoByteSourceOptions): Pr
         "The video is empty.",
       );
     }
-    probe = readProbeResponse(response);
+    probe = readProbeResponse(response, options.declaredSize);
   } finally {
     void response.body?.cancel().catch(() => {});
   }
 
-  const size = probe.size || options.declaredSize || 0;
+  const size = probe.size;
   if (!Number.isSafeInteger(size) || size <= 0) {
     throw new VideoSourceError(
       YOUTUBE_UPLOAD_REASON.media_read_failed,

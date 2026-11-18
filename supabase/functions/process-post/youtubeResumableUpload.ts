@@ -665,7 +665,7 @@ export function isValidYoutubeVideoId(value: unknown): value is string {
 export function parseProviderRange(rangeHeader: string | null | undefined): number | null {
   if (rangeHeader === null || rangeHeader === undefined) return 0;
   const trimmed = rangeHeader.trim();
-  if (trimmed === "") return 0;
+  if (trimmed === "") return null;
   const match = /^bytes=(\d+)-(\d+)$/.exec(trimmed);
   if (!match) return null;
   const start = Number(match[1]);
@@ -973,7 +973,7 @@ async function giveUp(
   release: { state: "expired" | "reconcile" | "failed" },
   outcome: TerminalUploadOutcome,
 ): Promise<ResumableUploadOutcome> {
-  await context.store.release({
+  const released = await context.store.release({
     sessionId: context.sessionId,
     leaseToken: context.leaseToken,
     state: release.state,
@@ -982,6 +982,7 @@ async function giveUp(
     // redacted because a provider body can echo the session URI.
     error: outcome.detail ? `${outcome.reason}: ${redactProviderText(outcome.detail)}` : outcome.reason,
   });
+  if (!released) return { kind: "abandoned", reason: YOUTUBE_UPLOAD_REASON.lease_conflict };
   return outcome;
 }
 
@@ -1000,7 +1001,7 @@ async function scheduleAnotherLook(
   videoMayExist: boolean,
   nextCheckAtMs: number,
 ): Promise<ResumableUploadOutcome> {
-  await context.store.checkpoint({
+  const scheduled = await context.store.checkpoint({
     sessionId: context.sessionId,
     leaseToken: context.leaseToken,
     confirmedBytes,
@@ -1009,6 +1010,7 @@ async function scheduleAnotherLook(
     nextCheckAt: new Date(nextCheckAtMs).toISOString(),
     lastOutcome: YOUTUBE_UPLOAD_REASON.resumable,
   });
+  if (!scheduled) return { kind: "abandoned", reason: YOUTUBE_UPLOAD_REASON.lease_conflict };
   return {
     kind: "resumable",
     confirmedBytes,

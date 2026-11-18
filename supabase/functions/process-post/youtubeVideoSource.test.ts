@@ -261,6 +261,28 @@ Deno.test("a timed-out streaming read cancels the stream and can reopen", async 
   assertEquals(new Uint8Array(await source.read(0, 9)), fileBytes(10));
 });
 
+Deno.test("uses the declared object size only when a streaming response omits its size", async () => {
+  const fetchImpl: typeof fetch = () => Promise.resolve(new Response(blockBody(fileBytes(33), [7, 13])));
+  const source = await createVideoByteSource({
+    url: `${HOST}/video.mp4`, fetchImpl, approvedHosts: APPROVED, declaredSize: 33,
+  });
+  assertEquals(new Uint8Array(await source.read(0, 32)), fileBytes(33));
+  await assertRejects(() => createVideoByteSource({ url: `${HOST}/video.mp4`, fetchImpl, approvedHosts: APPROVED }), VideoSourceError);
+});
+
+Deno.test("a range transport failure returns a typed error without its signed URL", async () => {
+  const signedUrl = `${HOST}/[fixture].mp4?signature=fixture-value`;
+  const fetchImpl: typeof fetch = (_input, init) =>
+    new Headers(init?.headers).get("range") === "bytes=0-0"
+      ? Promise.resolve(new Response(new Uint8Array(1), { status: 206, headers: { "Content-Range": "bytes 0-0/32" } }))
+      : Promise.reject(new Error(`Media request failed for ${signedUrl}`));
+  const source = await createVideoByteSource({ url: signedUrl, fetchImpl, approvedHosts: APPROVED });
+  const error = await assertRejects(() => source.read(1, 31), VideoSourceError);
+  assertEquals(error.reason, YOUTUBE_UPLOAD_REASON.media_read_failed);
+  assert(!error.message.includes(signedUrl));
+  assert(!error.detail.includes("fixture-value"));
+});
+
 Deno.test("a read past the size of the video is refused", async () => {
   const host = fakeHost({ ranged: false });
   const source = await createVideoByteSource({

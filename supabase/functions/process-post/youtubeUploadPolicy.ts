@@ -43,6 +43,8 @@ export const YOUTUBE_UPLOAD_REASON = {
   stale_attempt: "youtube_upload_stale_attempt",
   /** The post was edited, cancelled or superseded while the upload ran. */
   superseded: "youtube_upload_superseded",
+  /** The attempt was cancelled before a video could exist. */
+  cancelled: "youtube_upload_cancelled",
   /** The connected account can no longer be used to publish. */
   account_unusable: "youtube_upload_account_unusable",
   /** The media file is missing, replaced, or not owned by this owner. */
@@ -62,8 +64,8 @@ export const YOUTUBE_UPLOAD_REASON = {
   /**
    * The session has no provider session of its own.
    *
-   * A continuation carries an existing session on. It never opens a new one,
-   * because a new session could create a second video.
+   * A continuation may open one for a newly admitted upload when no bytes
+   * were submitted. It cannot replace a session after a video may exist.
    */
   session_not_open: "youtube_upload_session_not_open",
 } as const;
@@ -95,6 +97,7 @@ const PUBLIC_MESSAGE: Record<YoutubeUploadReason, string> = {
     "This upload belongs to an older attempt of the post and was not continued.",
   [YOUTUBE_UPLOAD_REASON.superseded]:
     "The post was changed while the YouTube upload was running, so the upload was stopped.",
+  [YOUTUBE_UPLOAD_REASON.cancelled]: "The YouTube upload was cancelled.",
   [YOUTUBE_UPLOAD_REASON.account_unusable]:
     "The connected YouTube account can no longer publish. Reconnect it and retry.",
   [YOUTUBE_UPLOAD_REASON.media_unavailable]:
@@ -105,7 +108,7 @@ const PUBLIC_MESSAGE: Record<YoutubeUploadReason, string> = {
     "The video is stored outside Postora's approved media hosts and cannot be uploaded safely.",
   [YOUTUBE_UPLOAD_REASON.not_found]: "No YouTube upload was found for this post.",
   [YOUTUBE_UPLOAD_REASON.session_not_open]:
-    "The YouTube upload has no session to continue. It will be started again by the post.",
+    "No active YouTube upload session is available.",
 };
 
 /** The public message for a reason code. Unknown codes get a neutral message. */

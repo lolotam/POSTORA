@@ -20,6 +20,10 @@ export type ClaimedRow =
    */
   | { kind: "youtube_upload_continuation"; platform_post_id?: null; post_id: string; attempt_started_at: string; candidate_id: string; claim_id: string };
 
+function nonEmptyString(value: unknown): value is string {
+  return typeof value === "string" && value.trim() !== "";
+}
+
 /**
  * Whether a row the claim returned is one this reconciler can act on.
  *
@@ -32,14 +36,14 @@ export type ClaimedRow =
 export function isWellFormedClaimRow(row: unknown): row is ClaimedRow {
   if (!row || typeof row !== "object") return false;
   const candidate = row as Record<string, unknown>;
-  if (typeof candidate.post_id !== "string") return false;
+  if (!nonEmptyString(candidate.post_id)) return false;
   if (candidate.kind === "notification_only" || candidate.kind === "youtube_upload_continuation") {
-    return Boolean(candidate.candidate_id) &&
-      Boolean(candidate.claim_id) &&
-      Boolean(candidate.attempt_started_at) &&
+    return nonEmptyString(candidate.candidate_id) &&
+      nonEmptyString(candidate.claim_id) &&
+      nonEmptyString(candidate.attempt_started_at) &&
       candidate.platform_post_id == null;
   }
-  return candidate.kind === "deferred_publish" && typeof candidate.platform_post_id === "string";
+  return candidate.kind === "deferred_publish" && nonEmptyString(candidate.platform_post_id);
 }
 
 /**

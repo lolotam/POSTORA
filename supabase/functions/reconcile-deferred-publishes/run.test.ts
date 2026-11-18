@@ -166,14 +166,13 @@ Deno.test("a claimed upload continuation is a well formed row", () => {
   assert(isWellFormedClaimRow(UPLOAD_ROW));
 });
 
-Deno.test("a claimed row without its token is refused", () => {
-  assert(!isWellFormedClaimRow({
-    kind: "youtube_upload_continuation",
-    post_id: "post-upload-1",
-    attempt_started_at: "2026-11-18T00:00:00Z",
-    candidate_id: "session-1",
-    claim_id: "",
-  }));
+Deno.test("a continuation claim must have nonempty string identifiers", () => {
+  for (const malformed of [
+    { claim_id: "" }, { claim_id: 17 }, { candidate_id: [] },
+    { attempt_started_at: {} }, { post_id: " " },
+  ]) {
+    assert(!isWellFormedClaimRow({ ...UPLOAD_ROW, ...malformed }));
+  }
 });
 
 Deno.test("a claimed row that carries a public row id it should not have is refused", () => {
