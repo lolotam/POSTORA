@@ -1,4 +1,6 @@
 import fs from "node:fs";
+import { youtubeOptionsUnsupportedOnComposio as browserUnsupported } from "../youtubeComposioOptions";
+import { youtubeOptionsUnsupportedOnComposio as serverUnsupported } from "../../../supabase/functions/_shared/youtubeComposioOptions.ts";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 
@@ -28,6 +30,24 @@ const PLAYGROUND_STATE = "src/components/api-playground/usePlaygroundState.ts";
 const CROSS_PLATFORM_GUIDE = "src/pages/docs/MultiPlatformGuide.tsx";
 
 describe("YouTube publishing option contract", () => {
+  it.each([
+    { metadata: {}, rejected: [] },
+    { metadata: { youtube_has_paid_promotion: false }, rejected: [] },
+    { metadata: { youtube_has_paid_promotion: true }, rejected: ["youtube_has_paid_promotion"] },
+    { metadata: { youtube_has_paid_product_placement: true }, rejected: ["youtube_has_paid_product_placement"] },
+    { metadata: { youtube_has_paid_product_placement: false }, rejected: ["youtube_has_paid_product_placement"] },
+    {
+      metadata: { youtube_has_paid_product_placement: false, youtube_has_paid_promotion: true },
+      rejected: ["youtube_has_paid_product_placement"],
+    },
+  ])("reports the same unsupported paid-placement fields in the browser and API ($metadata)", ({
+    metadata,
+    rejected,
+  }) => {
+    expect(browserUnsupported(metadata)).toEqual(rejected);
+    expect(serverUnsupported(metadata)).toEqual(rejected);
+  });
+
   it("declares the canonical field names and their legacy aliases", () => {
     expect(YOUTUBE_OPTION_ALIASES).toEqual({
       youtube_category: "youtube_category_id",

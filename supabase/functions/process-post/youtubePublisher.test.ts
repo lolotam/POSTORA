@@ -195,6 +195,7 @@ Deno.test("upload request falls back to the default category", () => {
 });
 
 Deno.test("upload handshake sends the built request to the provider", async () => {
+  const fixtureCredential = "fixture";
   const provider = fakeYouTube();
   const request = buildYoutubeUploadRequest({
     metadata: { youtube_visibility: "public", youtube_contains_synthetic_media: true },
@@ -202,7 +203,7 @@ Deno.test("upload handshake sends the built request to the provider", async () =
   });
 
   const uploadUrl = await initiateYoutubeUpload({
-    accessToken: "token-123",
+    accessToken: fixtureCredential,
     videoSize: 2048,
     mimeType: "video/mp4",
     request,
@@ -216,7 +217,7 @@ Deno.test("upload handshake sends the built request to the provider", async () =
   assertEquals(call.init.method, "POST");
   assertStringIncludes(call.url, "uploadType=resumable");
   assertStringIncludes(call.url, "part=snippet,status");
-  assertEquals(headersOf(call).get("Authorization"), "Bearer token-123");
+  assertEquals(headersOf(call).get("Authorization"), `Bearer ${fixtureCredential}`);
   assertEquals(headersOf(call).get("X-Upload-Content-Length"), "2048");
   assertEquals(headersOf(call).get("X-Upload-Content-Type"), "video/mp4");
 

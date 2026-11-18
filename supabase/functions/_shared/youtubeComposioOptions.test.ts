@@ -28,7 +28,7 @@ Deno.test("Composio YouTube cannot carry an explicit paid-placement declaration"
   for (const declared of [true, false]) {
     assertEquals(
       youtubeOptionsUnsupportedOnComposio({ youtube_has_paid_product_placement: declared }),
-      ["youtube_has_paid_promotion"],
+      ["youtube_has_paid_product_placement"],
     );
   }
 });
