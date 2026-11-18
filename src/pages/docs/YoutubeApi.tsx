@@ -627,7 +627,7 @@ export default function YoutubeApi() {
             </div>
             <div className="flex items-start gap-2">
               <Info className="w-4 h-4 text-blue-500 mt-0.5 flex-shrink-0" />
-              <p className="text-sm"><strong>Legacy field names:</strong> 'youtube_privacy_status', 'youtube_category_id' and 'youtube_embeddable' are still accepted as aliases of 'youtube_privacy', 'youtube_category' and 'youtube_allow_embedding'. Use the canonical names above; when both are sent, the canonical name wins and the response carries a warning.</p>
+              <p className="text-sm"><strong>Legacy field names:</strong> 'youtube_category_id' and 'youtube_embeddable' are accepted as aliases. The canonical names win, and conflicting values produce a warning. Use 'youtube_privacy' to select visibility. Requests with only 'youtube_privacy_status' or 'youtube_visibility' stay private and return a warning.</p>
             </div>
             <div className="flex items-start gap-2">
               <CheckCircle2 className="w-4 h-4 text-green-500 mt-0.5 flex-shrink-0" />

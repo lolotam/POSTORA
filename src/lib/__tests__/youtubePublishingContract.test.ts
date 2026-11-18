@@ -30,7 +30,6 @@ const CROSS_PLATFORM_GUIDE = "src/pages/docs/MultiPlatformGuide.tsx";
 describe("YouTube publishing option contract", () => {
   it("declares the canonical field names and their legacy aliases", () => {
     expect(YOUTUBE_OPTION_ALIASES).toEqual({
-      youtube_privacy: "youtube_privacy_status",
       youtube_category: "youtube_category_id",
       youtube_allow_embedding: "youtube_embeddable",
     });
@@ -48,7 +47,8 @@ describe("YouTube publishing option contract", () => {
       youtube_embeddable: false,
     });
 
-    expect(resolved.options.youtube_privacy).toBe("public");
+    expect(youtubePrivacyOrDefault(resolved.options.youtube_privacy)).toBe("private");
+    expect(resolved.ignoredPrivacyFields).toEqual(["youtube_privacy_status"]);
     expect(resolved.options.youtube_category).toBe("10");
     expect(resolved.options.youtube_allow_embedding).toBe(false);
   });

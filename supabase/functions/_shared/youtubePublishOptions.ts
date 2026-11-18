@@ -47,7 +47,6 @@ export const YOUTUBE_DEFAULT_CATEGORY_ID = "22";
  * from those examples keep working.
  */
 export const YOUTUBE_OPTION_ALIASES = {
-  youtube_privacy: "youtube_privacy_status",
   youtube_category: "youtube_category_id",
   youtube_allow_embedding: "youtube_embeddable",
 } as const;
@@ -87,6 +86,7 @@ export interface YoutubePublishOptionsResolution {
    * caller can see that one of its two names was ignored.
    */
   conflictingAliases: YoutubeOptionAlias[];
+  ignoredPrivacyFields: ("youtube_privacy_status" | "youtube_visibility")[];
 }
 
 /**
@@ -130,7 +130,10 @@ export function resolveYoutubePublishOptions(
     if (picked.conflicted) conflictingAliases.push(alias as YoutubeOptionAlias);
   }
 
-  return { options, conflictingAliases };
+  const privacyFields = ["youtube_privacy_status", "youtube_visibility"] as const;
+  const ignoredPrivacyFields = privacyFields.filter((field) => values[field] != null);
+  if (values.youtube_privacy != null) options.youtube_privacy = values.youtube_privacy;
+  return { options, conflictingAliases, ignoredPrivacyFields };
 }
 
 /**

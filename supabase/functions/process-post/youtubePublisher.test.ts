@@ -121,7 +121,16 @@ Deno.test("upload request sends paid product placement only when it was stated",
   assertEquals(statedDetails.hasPaidProductPlacement, true);
   assertStringIncludes(stated.part, "paidProductPlacementDetails");
 
-  const unstated = buildYoutubeUploadRequest({ metadata: {}, ...baseInput });
+  const explicitFalse = buildYoutubeUploadRequest({
+    metadata: { youtube_has_paid_product_placement: false },
+    ...baseInput,
+  });
+  assertEquals(explicitFalse.body.paidProductPlacementDetails, { hasPaidProductPlacement: false });
+
+  const unstated = buildYoutubeUploadRequest({
+    metadata: { youtube_has_paid_promotion: false },
+    ...baseInput,
+  });
   assertEquals(unstated.body.paidProductPlacementDetails, undefined);
   assertEquals(unstated.part.includes("paidProductPlacementDetails"), false);
 });

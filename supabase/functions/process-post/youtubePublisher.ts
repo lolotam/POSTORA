@@ -137,8 +137,13 @@ function buildRegionRestriction(
 function buildPaidProductPlacement(
   metadata: Record<string, unknown>,
 ): Record<string, unknown> | undefined {
-  if (typeof metadata.youtube_has_paid_promotion !== "boolean") return undefined;
-  return { hasPaidProductPlacement: metadata.youtube_has_paid_promotion };
+  if (typeof metadata.youtube_has_paid_product_placement === "boolean") {
+    return { hasPaidProductPlacement: metadata.youtube_has_paid_product_placement };
+  }
+  // The old field stored false by default. Only true proves a user opted in.
+  return metadata.youtube_has_paid_promotion === true
+    ? { hasPaidProductPlacement: true }
+    : undefined;
 }
 
 /** Names the options that were sent but that YouTube does not document as settable. */
@@ -162,8 +167,8 @@ function collectUnconfirmedWarnings(metadata: Record<string, unknown>): string[]
 /**
  * Builds the `videos.insert` request from a post's metadata.
  *
- * Only the properties the YouTube Data API documents as settable by
- * `videos.insert` are sent:
+ * The documented writable properties are listed below. Existing audio
+ * language and region options are also sent on a best-effort basis.
  * `snippet.title`, `snippet.description`, `snippet.tags[]`,
  * `snippet.categoryId`, `snippet.defaultLanguage`, `status.embeddable`,
  * `status.license`, `status.privacyStatus`, `status.publicStatsViewable`,

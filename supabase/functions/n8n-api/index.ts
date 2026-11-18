@@ -239,7 +239,6 @@ interface PlatformMetadata {
   youtube_recording_date?: string;
   // Legacy YouTube field names, still accepted. The canonical names above win
   // when both are present.
-  youtube_privacy_status?: 'private' | 'unlisted' | 'public';
   youtube_category_id?: string;
   youtube_embeddable?: boolean;
 
@@ -526,8 +525,7 @@ async function handleCreatePost(req: Request, supabase: any, userId: string, bod
     user_identifier, // Alternative field for account selection by username
 
     // YouTube metadata
-    // youtube_privacy, youtube_category and youtube_allow_embedding are read
-    // through resolveYoutubePublishOptions so their legacy aliases are honoured.
+    // YouTube privacy, category and embedding are read by the option resolver.
     youtube_title,
     youtube_description,
     youtube_tags,
@@ -945,10 +943,6 @@ async function handleCreatePost(req: Request, supabase: any, userId: string, bod
 
   // YouTube metadata - map to process-post expected format (including Shorts support)
   if (platforms.includes('youtube')) {
-    // The canonical field names win. The legacy aliases that Postora's own
-    // website documentation used to publish are still accepted, so requests
-    // built from those examples keep working instead of being silently
-    // ignored.
     const youtubeResolution = resolveYoutubePublishOptions(body);
     const youtubeOptions = youtubeResolution.options;
     for (const alias of youtubeResolution.conflictingAliases) {
@@ -957,6 +951,9 @@ async function handleCreatePost(req: Request, supabase: any, userId: string, bod
       );
     }
 
+    for (const field of youtubeResolution.ignoredPrivacyFields) {
+      youtubeWarnings.push(`"${field}" does not set YouTube privacy. Use "youtube_privacy" to choose a status. Without it, the video is private.`);
+    }
     metadata.youtube_visibility = youtubePrivacyOrDefault(youtubeOptions.youtube_privacy);
     metadata.youtube_title = youtube_title;
     metadata.youtube_description = youtube_description;
@@ -969,9 +966,9 @@ async function handleCreatePost(req: Request, supabase: any, userId: string, bod
     metadata.youtube_contains_synthetic_media = youtube_contains_synthetic_media ?? false;
     // Left unset when the caller did not state it, so Postora never declares a
     // video free of paid product placement on the caller's behalf.
-    metadata.youtube_has_paid_promotion = typeof youtube_has_paid_product_placement === 'boolean'
-      ? youtube_has_paid_product_placement
-      : null;
+    if (typeof youtube_has_paid_product_placement === 'boolean') {
+      metadata.youtube_has_paid_product_placement = youtube_has_paid_product_placement;
+    }
     metadata.youtube_notify_subscribers = youtube_notify_subscribers ?? true;
     metadata.youtube_video_language = youtube_default_language || null;
     metadata.youtube_audio_language = youtube_default_audio_language || null;

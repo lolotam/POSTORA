@@ -10,12 +10,10 @@ import {
 
 Deno.test("a legacy alias is used when the canonical field is absent", () => {
   const resolved = resolveYoutubePublishOptions({
-    youtube_privacy_status: "public",
     youtube_category_id: "10",
     youtube_embeddable: false,
   });
 
-  assertEquals(resolved.options.youtube_privacy, "public");
   assertEquals(resolved.options.youtube_category, "10");
   assertEquals(resolved.options.youtube_allow_embedding, false);
   assertEquals(resolved.conflictingAliases, []);
@@ -36,14 +34,23 @@ Deno.test("the canonical field wins over its legacy alias", () => {
   assertEquals(resolved.options.youtube_allow_embedding, true);
 });
 
-Deno.test("a legacy alias that disagrees with the canonical field is reported", () => {
+Deno.test("a legacy privacy field is reported even with a canonical value", () => {
   const resolved = resolveYoutubePublishOptions({
     youtube_privacy: "unlisted",
     youtube_privacy_status: "public",
   });
 
   assertEquals(resolved.options.youtube_privacy, "unlisted");
-  assertEquals(resolved.conflictingAliases, ["youtube_privacy_status"]);
+  assertEquals(resolved.ignoredPrivacyFields, ["youtube_privacy_status"]);
+});
+
+Deno.test("legacy privacy from documentation and n8n cannot make a video public", () => {
+  const resolved = resolveYoutubePublishOptions({
+    youtube_privacy_status: "unlisted",
+    youtube_visibility: "public",
+  });
+  assertEquals(youtubePrivacyOrDefault(resolved.options.youtube_privacy), "private");
+  assertEquals(resolved.ignoredPrivacyFields, ["youtube_privacy_status", "youtube_visibility"]);
 });
 
 Deno.test("an absent option stays absent", () => {

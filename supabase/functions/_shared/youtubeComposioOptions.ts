@@ -40,8 +40,9 @@ export function youtubeOptionsUnsupportedOnComposio(
     switch (key) {
       case "youtube_made_for_kids":
       case "youtube_contains_synthetic_media":
-      case "youtube_has_paid_promotion":
         return value === true;
+      case "youtube_has_paid_promotion":
+        return value === true || typeof metadata.youtube_has_paid_product_placement === "boolean";
       case "youtube_notify_subscribers":
       case "youtube_allow_embedding":
       case "youtube_public_stats_viewable":

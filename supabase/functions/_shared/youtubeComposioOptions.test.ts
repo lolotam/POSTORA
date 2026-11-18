@@ -24,6 +24,15 @@ for (const [key, value] of unsupportedCases) {
   });
 }
 
+Deno.test("Composio YouTube cannot carry an explicit paid-placement declaration", () => {
+  for (const declared of [true, false]) {
+    assertEquals(
+      youtubeOptionsUnsupportedOnComposio({ youtube_has_paid_product_placement: declared }),
+      ["youtube_has_paid_promotion"],
+    );
+  }
+});
+
 Deno.test("Composio YouTube accepts mapped metadata and harmless defaults", () => {
   assertEquals(
     youtubeOptionsUnsupportedOnComposio({
