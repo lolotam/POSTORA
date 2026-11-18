@@ -167,6 +167,18 @@ import {
   type YoutubeUploadRefusal,
 } from "./youtubeUploadSession.ts";
 import {
+  approvedMediaHosts,
+  isApprovedMediaUrl,
+  redactProviderText,
+  YOUTUBE_UPLOAD_REASON,
+  youtubeUploadPublicMessage,
+} from "./youtubeUploadPolicy.ts";
+import {
+  continueYoutubeUpload,
+  type ContinuationResult,
+  type YoutubeContinuationPorts,
+} from "./youtubeUploadContinuation.ts";
+import {
   dropRecordedStory,
   readUnrecordedStory,
   recordCarriedStory,
@@ -210,6 +222,14 @@ const ProcessPostSchema = z.object({
   attempt_started_at: z.string().max(64).optional(),
   candidate_id: z.string().uuid().optional(),
   notification_claim_id: z.string().uuid().optional(),
+  // Sent by reconcile-deferred-publishes (service role only): carry on a YouTube
+  // upload that a worker left half written.
+  //
+  // The session URI is NOT part of the dispatch. It stays in the private
+  // session table and is read with the claim token, so the credential never
+  // travels in a request body and never appears in a response.
+  resume_youtube_upload_session_id: z.string().uuid().optional(),
+  resume_youtube_upload_lease_token: z.string().uuid().optional(),
 }).passthrough();
 
 /**
@@ -632,6 +652,21 @@ interface PlatformPostResult {
   url?: string;
   /** A newly created image already has its stable pending row; the outer loop must not settle or insert it. */
   deferredHandoff?: { platformPostId: string; responseData: Record<string, unknown> };
+  /**
+   * The pending row the handler wrote for this account.
+   *
+   * The outer loop settles THAT row instead of writing a new one, so a
+   * YouTube upload that started before its row was settled does not end up
+   * with two rows.
+   */
+  pendingPlatformPostId?: string;
+  /**
+   * The work continues in a later worker.
+   *
+   * The row stays pending and the post stays processing, so the sweeper
+   * leaves it alone and the continuation finishes it.
+   */
+  pendingContinuation?: boolean;
   /** The platform's public post id when it differs from `id`. TikTok's `id` is the publish_id
    *  that webhooks are matched on, so the post id it reports on completion travels here. */
   providerPostId?: string;
@@ -2013,6 +2048,8 @@ Deno.serve(async (req) => {
       attempt_started_at: attemptStartedAt,
       candidate_id: candidateId,
       notification_claim_id: notificationClaimId,
+      resume_youtube_upload_session_id: resumeYoutubeUploadSessionId,
+      resume_youtube_upload_lease_token: resumeYoutubeUploadLeaseToken,
     } = validation.data;
     // A resumed run narrows both to the deferred row's account (below).
     let { platforms: overridePlatforms, account_ids: overrideAccountIds } = validation.data;
@@ -2092,6 +2129,35 @@ Deno.serve(async (req) => {
       return await handleNotificationOnly(supabase, post_id, attemptStartedAt, candidateId, notificationClaimId);
     }
     if (attemptStartedAt || candidateId || notificationClaimId) return await refuseNotificationRoute("missing_notification_mode", "Notification identity requires notification_only mode", 400);
+
+    // ─────────────────────────────────────────────────────────────────────
+    // YouTube upload continuation.
+    //
+    // A worker that did not finish a YouTube upload leaves the session
+    // behind. The reconciler claims it and asks this function to carry it on.
+    //
+    // The dispatch carries the session id and the claim token. It does NOT
+    // carry the session URI: the URI stays in the private session table and
+    // is read here with the token, so the credential never travels in a
+    // request body and never appears in a response.
+    // ─────────────────────────────────────────────────────────────────────
+    if (resumeYoutubeUploadSessionId || resumeYoutubeUploadLeaseToken) {
+      if (!isServiceRoleAuth) return createErrorResponse("Forbidden: the upload continuation is internal", 403);
+      if (!resumeYoutubeUploadSessionId || !resumeYoutubeUploadLeaseToken) {
+        return createErrorResponse("The upload continuation needs both the session and the claim token.", 400);
+      }
+      if (notificationOnly || resumePlatformPostId || overridePlatforms?.length || overrideAccountIds?.length ||
+          expectedScheduledAt || expectedPublishRequestedAt) {
+        return createErrorResponse("The upload continuation cannot be combined with another mode.", 400);
+      }
+      return await handleYoutubeUploadContinuation(
+        supabase,
+        post_id,
+        resumeYoutubeUploadSessionId,
+        resumeYoutubeUploadLeaseToken,
+        attemptStartedAt ?? null,
+      );
+    }
 
     // A run its caller retries on its own is not started on a worker near its end: it would be
     // stopped between creating a container and recording it. Refused before any read or claim.
@@ -2688,59 +2754,25 @@ Deno.serve(async (req) => {
     // Provider state per media file (single query for the whole post). Rows are
     // matched against each file's current_object_version afterwards — renames bump
     // the version, and the stale version-1 rows stay 'ready' with dead URLs.
-    let providerRowsByMedia: Record<string, { provider: string; object_version: number | null; status: string; delivery_url: string | null }[]> = {};
-    if (mediaFiles.length > 0) {
-      try {
-        const { data: providerRows } = await supabase
-          .from("media_file_providers")
-          .select("media_file_id, provider, object_version, status, delivery_url")
-          .in("media_file_id", mediaFiles.map((f) => f.id));
-        if (providerRows) {
-          for (const row of providerRows) {
-            (providerRowsByMedia[row.media_file_id] ||= []).push(row);
-          }
-        }
-      } catch (e) {
-        console.warn("[process-post] media_file_providers lookup failed, falling back to file_path:", e);
-        providerRowsByMedia = {};
-      }
-    }
+    const providerRowsByMedia = await loadMediaProviderRows(supabase, mediaFiles);
 
     const providerPreferenceOrder = readPreference === "openinary"
       ? ["openinary", "cloudinary"]
       : ["cloudinary", "openinary"];
 
     for (const file of mediaFiles) {
-      const currentVersion = file.current_object_version ?? 1;
-      const providers = (providerRowsByMedia[file.id] || [])
-        .filter((p) => (p.object_version ?? 1) === currentVersion);
       let resolvedUrl: string | null = null;
-      for (const provider of providerPreferenceOrder) {
-        const ready = providers.find((p) => p.provider === provider && p.status === "ready" && !!p.delivery_url);
-        if (ready) { resolvedUrl = ready.delivery_url!; break; }
+      try {
+        resolvedUrl = await resolveMediaUrl(supabase, file, providerRowsByMedia, providerPreferenceOrder);
+      } catch (signingError) {
+        console.error(`Failed to create a delivery URL for media ${file.id}:`, redactProviderText(signingError));
+        return await failMediaPreparation("Could not create a delivery URL for post media. Retry the publish.");
       }
-      if (resolvedUrl) {
-        console.log(`Using provider-resolved URL for ${file.id}: ${resolvedUrl}`);
-        mediaUrls.push(resolvedUrl);
-      } else if (file.storage_bucket === "cloudinary" || file.storage_bucket === "openinary" || file.file_path.startsWith("http")) {
-        // CDN files: file_path contains the full URL
-        console.log(`Using file_path URL for ${file.id}: ${file.file_path}`);
-        mediaUrls.push(file.file_path);
-      } else {
-        // Supabase storage: create signed URL
-        try {
-          const { data: signedUrlData, error: signedUrlError } = await supabase.storage
-            .from(file.storage_bucket)
-            .createSignedUrl(file.file_path, 3600); // 1 hour expiry
-          if (signedUrlError) throw signedUrlError;
-          if (!signedUrlData?.signedUrl) throw new Error(`Missing signed URL for media ${file.id}`);
-          console.log(`Generated signed URL for ${file.file_path}`);
-          mediaUrls.push(signedUrlData.signedUrl);
-        } catch (signingError) {
-          console.error(`Failed to create signed URL for ${file.file_path}:`, signingError);
-          return await failMediaPreparation("Could not create a delivery URL for post media. Retry the publish.");
-        }
+      if (!resolvedUrl) {
+        console.error(`No delivery URL could be resolved for media ${file.id}`);
+        return await failMediaPreparation("Could not create a delivery URL for post media. Retry the publish.");
       }
+      mediaUrls.push(resolvedUrl);
     }
 
     // ─────────────────────────────────────────────────────────────────────
@@ -2865,6 +2897,11 @@ Deno.serve(async (req) => {
       let imageExecution: ResumeContext | null = resume?.deferral.media_type === "IMAGE" ? resume : null;
       let imageResponseData: Record<string, unknown> | null = imageExecution ? resumeResponseData : null;
       let imageOutcomeAcknowledged = false;
+
+      // The pending row the native YouTube path wrote before the upload
+      // started. The failure path settles THAT row instead of writing a
+      // second one for the same account.
+      let youtubePendingRowId: string | null = null;
 
       try {
         let result: PlatformPostResult;
@@ -3041,9 +3078,9 @@ Deno.serve(async (req) => {
           case "twitter":
             result = await postToTwitter(account, post, mediaUrls, supabase);
             break;
-          case "youtube":
-            result = account.auth_provider === "composio"
-              ? await publishYouTubeViaComposio(account, post, mediaFiles, {
+          case "youtube": {
+            if (account.auth_provider === "composio") {
+              result = await publishYouTubeViaComposio(account, post, mediaFiles, {
                 admin: supabase,
                 client: composioClientFromEnv(),
                 signedUrlFor: async (file) => {
@@ -3053,9 +3090,45 @@ Deno.serve(async (req) => {
                   if (error || !data?.signedUrl) throw new Error("youtube_media_sign_failed");
                   return data.signedUrl;
                 },
+              });
+              break;
+            }
+            // The native YouTube path writes a PENDING row before the upload
+            // starts.
+            //
+            // The row is what the sweeper respects while the upload is in
+            // flight, so the post is never declared "safe to retry" while the
+            // provider may already hold a video. It is also the row the
+            // continuation settles when it carries the upload on.
+            const { data: pendingRow, error: pendingRowError } = await supabase
+              .from("platform_posts")
+              .insert({
+                post_id: post_id,
+                social_account_id: account.id,
+                platform: "youtube",
+                platform_post_id: null,
+                platform_post_url: null,
+                status: "pending",
+                posted_at: null,
+                response_data: { youtube_upload: { state: "uploading" } },
               })
-              : await postToYouTube(account, post, mediaUrls, mediaFiles, supabase);
+              .select("id")
+              .single();
+            if (pendingRowError || !pendingRow) {
+              throw new Error(`Failed to save platform post: ${pendingRowError?.message ?? "no row"}`);
+            }
+            youtubePendingRowId = pendingRow.id;
+            result = await postToYouTube(
+              account,
+              post,
+              mediaUrls,
+              mediaFiles,
+              supabase,
+              claim.processingStartedAt ?? null,
+              pendingRow.id,
+            );
             break;
+          }
           default:
             throw new Error(`Unsupported platform: ${account.platform}`);
         }
@@ -3067,6 +3140,17 @@ Deno.serve(async (req) => {
           if (!claim.processingStartedAt) throw new ThreadsCheckpointUnavailable("Threads image handoff claim fence unavailable");
           imageHandoff = { processingStartedAt: claim.processingStartedAt, content: threadsImageContentFence(post) };
           console.log(`[threads] image checkpoint ${result.deferredHandoff.platformPostId} left for the reconciler`);
+          continue;
+        }
+
+        if (result.pendingContinuation) {
+          // The upload continues in a later worker. The row stays pending and
+          // the post stays processing, so the sweeper leaves it alone and the
+          // continuation settles it when the video is there.
+          platformResults.push({ platform: account.platform, status: "pending" });
+          hasDeferred = true;
+          if (result.pendingPlatformPostId) exactPlatformPostIds.push(result.pendingPlatformPostId);
+          console.log(`[${account.platform}] upload left for the continuation`);
           continue;
         }
 
@@ -3140,7 +3224,9 @@ Deno.serve(async (req) => {
         } else {
           const settled = await settlePlatformPost(supabase, {
             // A resumed run settles the pending row the first run left.
-            platformPostId: imageExecution?.platformPostId ?? resume?.platformPostId ?? null,
+            // A YouTube upload settles the pending row it wrote before the
+            // upload started.
+            platformPostId: imageExecution?.platformPostId ?? resume?.platformPostId ?? result.pendingPlatformPostId ?? null,
             postId: post_id,
             socialAccountId: account.id,
             platform: account.platform,
@@ -3315,7 +3401,9 @@ Deno.serve(async (req) => {
         const selfWrote = (error as { selfWroteRows?: boolean })?.selfWroteRows === true;
         if (!selfWrote) {
           const settled = await settlePlatformPost(supabase, {
-            platformPostId: imageExecution?.platformPostId ?? resume?.platformPostId ?? null,
+            // A YouTube upload settles the pending row it wrote before the
+            // upload started, so the account never ends up with two rows.
+            platformPostId: imageExecution?.platformPostId ?? resume?.platformPostId ?? youtubePendingRowId ?? null,
             postId: post_id,
             socialAccountId: account.id,
             platform: account.platform,
@@ -9352,6 +9440,94 @@ async function postToTwitter(
 // └─────────────────────────────────────────────────────────────────────────┘
 
 /**
+ * The CDN origins Postora is willing to read a media file from.
+ *
+ * The list is built from the running configuration, so a deployment that
+ * moves its storage or its CDN keeps working. The storage host comes from
+ * `SUPABASE_URL`, and the CDN origin comes from the admin-configured
+ * `cdn_storage` setting.
+ *
+ * A media host that is not on this list never receives a request: the check
+ * runs before the first byte is asked for, and again for every redirect hop.
+ */
+async function approvedMediaHostSet(supabase: SupabaseClient): Promise<Set<string>> {
+  const origins: string[] = [];
+  try {
+    const { data: cdnSetting } = await supabase
+      .from("app_settings")
+      .select("value")
+      .eq("key", "cdn_storage")
+      .maybeSingle();
+    const serverUrl = (cdnSetting?.value as { openinary?: { serverUrl?: string } } | null)?.openinary?.serverUrl;
+    if (typeof serverUrl === "string") origins.push(serverUrl);
+  } catch (error) {
+    console.warn("[process-post] cdn_storage read failed for the media host policy:", redactProviderText(error));
+  }
+  return approvedMediaHosts({ supabaseUrl: Deno.env.get("SUPABASE_URL") ?? null, cdnOrigins: origins });
+}
+
+/**
+ * The provider rows of the media files, keyed by media file id.
+ *
+ * The rows are matched against each file's own content version: a rename
+ * bumps the version, and the stale rows stay 'ready' with dead URLs.
+ */
+async function loadMediaProviderRows(
+  supabase: SupabaseClient,
+  mediaFiles: MediaFile[],
+): Promise<Record<string, { provider: string; object_version: number | null; status: string; delivery_url: string | null }[]>> {
+  const providerRowsByMedia: Record<
+    string,
+    { provider: string; object_version: number | null; status: string; delivery_url: string | null }[]
+  > = {};
+  if (mediaFiles.length === 0) return providerRowsByMedia;
+  try {
+    const { data: providerRows } = await supabase
+      .from("media_file_providers")
+      .select("media_file_id, provider, object_version, status, delivery_url")
+      .in("media_file_id", mediaFiles.map((file) => file.id));
+    if (providerRows) {
+      for (const row of providerRows) {
+        (providerRowsByMedia[row.media_file_id] ||= []).push(row);
+      }
+    }
+  } catch (error) {
+    console.warn("[process-post] media_file_providers lookup failed, falling back to file_path:", redactProviderText(error));
+  }
+  return providerRowsByMedia;
+}
+
+/**
+ * The URL one media file is read from.
+ *
+ * The provider's delivery URL is preferred, because that is the one the CDN
+ * serves, and a storage signed URL is the fallback. The two CDN buckets carry
+ * the whole URL in their file path.
+ */
+async function resolveMediaUrl(
+  supabase: SupabaseClient,
+  file: MediaFile,
+  providerRowsByMedia: Record<string, { provider: string; object_version: number | null; status: string; delivery_url: string | null }[]>,
+  preferenceOrder: string[],
+): Promise<string | null> {
+  const currentVersion = file.current_object_version ?? 1;
+  const providers = (providerRowsByMedia[file.id] || []).filter((row) => (row.object_version ?? 1) === currentVersion);
+  for (const provider of preferenceOrder) {
+    const ready = providers.find((row) => row.provider === provider && row.status === "ready" && !!row.delivery_url);
+    if (ready) return ready.delivery_url!;
+  }
+  if (file.storage_bucket === "cloudinary" || file.storage_bucket === "openinary" || file.file_path.startsWith("http")) {
+    return file.file_path;
+  }
+  const { data: signedUrlData, error: signedUrlError } = await supabase.storage
+    .from(file.storage_bucket)
+    .createSignedUrl(file.file_path, 3600);
+  if (signedUrlError) throw new Error(`Could not create a delivery URL for media ${file.id}`);
+  if (!signedUrlData?.signedUrl) throw new Error(`Missing signed URL for media ${file.id}`);
+  return signedUrlData.signedUrl;
+}
+
+/**
  * The message a YouTube upload refusal becomes.
  *
  * The wording matters as much as the branch: a refusal that needs a human
@@ -9361,21 +9537,29 @@ async function postToTwitter(
 function youtubeUploadRefusalMessage(refusal: YoutubeUploadRefusal): string {
   switch (refusal) {
     case "reconcile_required":
-      return "The YouTube upload could not be confirmed. The video may or may not have been created, so it was not uploaded again automatically. Please check your YouTube channel.";
+      return youtubeUploadPublicMessage(YOUTUBE_UPLOAD_REASON.reconcile);
     case "content_changed":
-      return "The YouTube upload was interrupted and the post was changed since it started. Review the post before trying again.";
+      return youtubeUploadPublicMessage(YOUTUBE_UPLOAD_REASON.superseded);
     case "lease_held":
-      return "Another upload of this video is already running.";
+      return youtubeUploadPublicMessage(YOUTUBE_UPLOAD_REASON.lease_conflict);
     case "account_not_usable":
-      return "The YouTube account is not connected or not usable. Please reconnect it.";
+      return youtubeUploadPublicMessage(YOUTUBE_UPLOAD_REASON.account_unusable);
     case "media_not_owned":
-      return "The video file for this post is no longer available.";
+      return youtubeUploadPublicMessage(YOUTUBE_UPLOAD_REASON.media_unavailable);
     case "post_not_found":
-      return "The post for this upload is no longer available.";
+      return youtubeUploadPublicMessage(YOUTUBE_UPLOAD_REASON.not_found);
     case "invalid_size":
-      return "The video file for this post could not be read.";
+      return youtubeUploadPublicMessage(YOUTUBE_UPLOAD_REASON.media_unavailable);
+    case "stale_attempt":
+      return youtubeUploadPublicMessage(YOUTUBE_UPLOAD_REASON.stale_attempt);
+    case "post_superseded":
+      return youtubeUploadPublicMessage(YOUTUBE_UPLOAD_REASON.superseded);
+    case "session_expired":
+      return youtubeUploadPublicMessage(YOUTUBE_UPLOAD_REASON.expired);
+    case "too_many_continuations":
+      return youtubeUploadPublicMessage(YOUTUBE_UPLOAD_REASON.reconcile);
     default:
-      return "The YouTube upload could not be prepared.";
+      return youtubeUploadPublicMessage(YOUTUBE_UPLOAD_REASON.unknown);
   }
 }
 
@@ -9389,19 +9573,19 @@ function youtubeUploadRefusalMessage(refusal: YoutubeUploadRefusal): string {
 function youtubeUploadOutcomeMessage(outcome: ResumableUploadOutcome): string {
   switch (outcome.kind) {
     case "resumable":
-      return `The YouTube upload did not finish yet (${outcome.reason}). Trying again continues the same upload from where it stopped.`;
+      return `${youtubeUploadPublicMessage(YOUTUBE_UPLOAD_REASON.resumable)} (${outcome.reason})`;
     case "unsent":
-      return `The YouTube upload never reached the point where a video could be created (${outcome.reason}). Nothing was published to the channel, so trying again is safe.`;
+      return `${youtubeUploadPublicMessage(YOUTUBE_UPLOAD_REASON.unsent)} (${outcome.reason})`;
     case "reconcile":
-      return `The YouTube upload could not be confirmed (${outcome.reason}). The video may or may not have been created, so it was not uploaded again automatically. Please check your YouTube channel.`;
+      return `${youtubeUploadPublicMessage(YOUTUBE_UPLOAD_REASON.reconcile)} (${outcome.reason})`;
     case "abandoned":
-      return "Another worker is finishing this YouTube upload.";
+      return youtubeUploadPublicMessage(YOUTUBE_UPLOAD_REASON.lease_conflict);
     case "failed":
       return outcome.retryable
-        ? `The YouTube upload failed (${outcome.message}). Nothing was created on the channel, so trying again is safe.`
-        : `The YouTube upload failed (${outcome.message}).`;
+        ? `${youtubeUploadPublicMessage(YOUTUBE_UPLOAD_REASON.rejected)} (${outcome.reason})`
+        : `${youtubeUploadPublicMessage(YOUTUBE_UPLOAD_REASON.rejected)} (${outcome.reason})`;
     default:
-      return "The YouTube upload finished.";
+      return youtubeUploadPublicMessage(YOUTUBE_UPLOAD_REASON.completed);
   }
 }
 
@@ -9436,6 +9620,223 @@ async function openYoutubeUploadSession(
 }
 
 /**
+ * Binds the database and the provider to the continuation's port contract.
+ *
+ * The ports are the boundary: everything the continuation reads or writes goes
+ * through them, so the worker itself never touches the database and never
+ * learns a provider's URL.
+ */
+function buildYoutubeContinuationPorts(
+  supabase: SupabaseClient,
+  store: ReturnType<typeof createSupabaseYoutubeUploadSessionStore>,
+  mediaHosts: Set<string>,
+  deadlineMs: number,
+): YoutubeContinuationPorts {
+  return {
+    async loadPost(id) {
+      const { data } = await supabase
+        .from("posts")
+        .select("id, user_id, status, processing_started_at, metadata, media_file_ids")
+        .eq("id", id)
+        .maybeSingle();
+      if (!data) return null;
+      const metadata = (data.metadata ?? {}) as Record<string, unknown>;
+      const selected = Array.isArray(metadata.selected_account_ids)
+        ? metadata.selected_account_ids.filter((value): value is string => typeof value === "string")
+        : [];
+      return {
+        id: String(data.id),
+        userId: String(data.user_id),
+        status: String(data.status),
+        processingStartedAt: data.processing_started_at ? new Date(data.processing_started_at).toISOString() : null,
+        selectedAccountIds: selected,
+        mediaFileIds: Array.isArray(data.media_file_ids)
+          ? data.media_file_ids.filter((value): value is string => typeof value === "string")
+          : [],
+      };
+    },
+
+    async loadAccount(accountId) {
+      const { data } = await supabase
+        .from("social_accounts")
+        .select("id, user_id, platform, is_active, access_token, account_metadata, needs_reauth")
+        .eq("id", accountId)
+        .maybeSingle();
+      if (!data) return null;
+      const metadata = (data.account_metadata ?? {}) as Record<string, unknown>;
+      return {
+        id: String(data.id),
+        userId: String(data.user_id),
+        platform: String(data.platform),
+        isActive: data.is_active !== false,
+        accessToken: typeof data.access_token === "string" ? data.access_token : null,
+        needsReauth: data.needs_reauth === true || metadata.needs_reauth === true,
+      };
+    },
+
+    async loadMedia(mediaFileId) {
+      const { data } = await supabase
+        .from("media_files")
+        .select("id, user_id, current_object_version, file_path, storage_bucket, mime_type")
+        .eq("id", mediaFileId)
+        .maybeSingle();
+      if (!data) return null;
+      return {
+        id: String(data.id),
+        userId: String(data.user_id),
+        currentObjectVersion: data.current_object_version === null || data.current_object_version === undefined
+          ? null
+          : Number(data.current_object_version),
+        filePath: String(data.file_path),
+        mimeType: typeof data.mime_type === "string" ? data.mime_type : null,
+      };
+    },
+
+    async claimSession(id, token, leaseMs) {
+      return await store.claim({ sessionId: id, leaseToken: token, leaseMs });
+    },
+
+    async createSource({ media, videoUrl }) {
+      const url = videoUrl.startsWith("http")
+        ? videoUrl
+        : (await resolveMediaUrl(
+          supabase,
+          {
+            id: media.id,
+            file_path: media.filePath,
+            file_type: "video",
+            storage_bucket: "postora",
+            mime_type: media.mimeType,
+            current_object_version: media.currentObjectVersion,
+          },
+          {},
+          ["openinary", "cloudinary"],
+        )) ?? media.filePath;
+      if (!isApprovedMediaUrl(url, mediaHosts)) {
+        throw new Error(youtubeUploadPublicMessage(YOUTUBE_UPLOAD_REASON.media_origin_not_approved));
+      }
+      return await createVideoByteSource({ url, mimeType: media.mimeType, approvedHosts: mediaHosts });
+    },
+
+    async runUpload({ record, leaseToken: token, accessToken, source, totalBytes }) {
+      return await runResumableVideoUpload({
+        fetchImpl: fetch,
+        store,
+        session: record,
+        leaseToken: token,
+        accessToken,
+        source,
+        totalBytes,
+        mimeType: "video/mp4",
+        deadlineMs,
+        now: () => Date.now(),
+        sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+        uploadUrl: "https://www.googleapis.com/upload/youtube/v3/videos?uploadType=resumable&part=snippet,status",
+        uploadBody: {},
+      });
+    },
+
+    async settlePlatformPost(args) {
+      const settled = await settlePlatformPost(supabase, {
+        platformPostId: args.platformPostId,
+        postId: args.postId,
+        socialAccountId: args.socialAccountId,
+        platform: args.platform,
+        status: args.status,
+        providerPostId: args.providerPostId,
+        providerPostUrl: args.providerPostUrl,
+        errorMessage: args.errorMessage,
+        responseData: args.responseData,
+      });
+      if (settled.error) {
+        throw new Error(`The YouTube upload result could not be recorded: ${redactProviderText(settled.error)}`);
+      }
+    },
+
+    async scheduleNextCheck(args) {
+      await store.checkpoint({
+        sessionId: args.sessionId,
+        leaseToken: args.leaseToken,
+        confirmedBytes: args.confirmedBytes,
+        bytesSent: args.bytesSent,
+        videoMayExist: args.videoMayExist,
+        nextCheckAt: args.nextCheckAt,
+        lastOutcome: args.lastOutcome,
+      });
+    },
+
+    now: () => Date.now(),
+  };
+}
+
+/**
+ * The answer the worker gives the reconciler.
+ *
+ * It carries a reason code and the public message, never provider text and
+ * never the session URI.
+ */
+function youtubeContinuationResponse(result: ContinuationResult): Response {
+  if (result.status === "completed") {
+    return createJsonResponse({
+      success: true,
+      status: "completed",
+      reason: result.reason,
+      video_id: result.videoId ?? null,
+    });
+  }
+  if (result.status === "pending") {
+    return createJsonResponse({
+      success: true,
+      status: "processing",
+      reason: result.reason,
+      next_check_at: result.nextCheckAt ?? null,
+    });
+  }
+  if (result.status === "refused") {
+    // Nothing was sent to the provider, so a refusal is safe to repeat: the
+    // next reconciler pass looks again.
+    return createErrorResponse(youtubeUploadPublicMessage(result.reason), 503);
+  }
+  return createErrorResponse(youtubeUploadPublicMessage(result.reason), 500);
+}
+
+/**
+ * Carries a YouTube upload on.
+ *
+ * The reconciler claims the session and calls this. The dispatch carried the
+ * session id and the claim token; the session URI is read here, from the
+ * private table, with that token. It never appears in the response.
+ *
+ * The work is bounded: one session, one attempt, one lease. A receipt that
+ * already exists is projected onto the public row without reading any media
+ * and without calling the provider.
+ */
+async function handleYoutubeUploadContinuation(
+  supabase: SupabaseClient,
+  postId: string,
+  sessionId: string,
+  leaseToken: string,
+  attemptStartedAt: string | null,
+): Promise<Response> {
+  const store = createSupabaseYoutubeUploadSessionStore(supabase);
+  const mediaHosts = await approvedMediaHostSet(supabase);
+  const deadlineMs = workerPublishDeadline(WORKER_STARTED_AT_MS);
+
+  const result = await continueYoutubeUpload(
+    buildYoutubeContinuationPorts(supabase, store, mediaHosts, deadlineMs),
+    {
+      postId,
+      sessionId,
+      leaseToken,
+      attemptStartedAt,
+    },
+  );
+
+  console.log(`[youtube] continuation ${result.status} (${result.reason})`);
+  return youtubeContinuationResponse(result);
+}
+
+/**
  * Post to YouTube (video uploads, Shorts)
  *
  * The upload is native and resumable. The video is written in bounded
@@ -9452,6 +9853,8 @@ async function postToYouTube(
   mediaUrls: string[],
   mediaFiles: MediaFile[],
   supabase: SupabaseClient,
+  attemptStartedAt: string | null,
+  pendingPlatformPostId: string,
 ): Promise<PlatformPostResult> {
   const accessToken = account.access_token;
 
@@ -9492,12 +9895,26 @@ async function postToYouTube(
   console.log(`YouTube upload - type: ${isShort ? "Short" : "Video"}, title: ${title}, privacy: ${privacyStatus}`);
 
   // ─────────────────────────────────────────────────────────────────────
+  // The media host policy.
+  //
+  // The video is read over the network, so the host it is read from has to
+  // be one Postora reviewed. The check runs BEFORE the first request, so an
+  // unapproved host never receives one, and the source checks every redirect
+  // hop again.
+  // ─────────────────────────────────────────────────────────────────────
+  const mediaHosts = await approvedMediaHostSet(supabase);
+  if (!isApprovedMediaUrl(videoUrl, mediaHosts)) {
+    throw new Error(youtubeUploadPublicMessage(YOUTUBE_UPLOAD_REASON.media_origin_not_approved));
+  }
+
+  // ─────────────────────────────────────────────────────────────────────
   // Step 1: The video is read a chunk at a time, so only its size and its
   // type are asked for. The file itself is never held whole.
   // ─────────────────────────────────────────────────────────────────────
   const source = await createVideoByteSource({
     url: videoUrl,
     mimeType: videoFile?.mime_type ?? null,
+    approvedHosts: mediaHosts,
   });
   const mimeType = source.mimeType;
   const videoSize = source.size;
@@ -9533,13 +9950,14 @@ async function postToYouTube(
     {
       postId: post.id,
       socialAccountId: account.id,
-      platformPostId: null,
+      platformPostId: pendingPlatformPostId,
       mediaFileId: videoFile?.id ?? null,
       mediaObjectVersion: videoFile?.current_object_version ?? null,
       mediaSize: videoSize,
       totalBytes: videoSize,
       uploadBody: uploadRequest.body,
       userId: post.user_id,
+      attemptStartedAt,
     },
     leaseToken,
     leaseMs,
@@ -9573,6 +9991,14 @@ async function postToYouTube(
     uploadBody: uploadRequest.body,
   });
 
+  if (outcome.kind === "resumable") {
+    // The upload continues in a later worker. The row stays pending and the
+    // post stays processing, so the sweeper leaves it alone and the
+    // continuation finishes it.
+    console.log(`YouTube upload continues later (${outcome.reason}).`);
+    return { pendingContinuation: true, pendingPlatformPostId };
+  }
+
   if (outcome.kind !== "completed") {
     throw new Error(youtubeUploadOutcomeMessage(outcome));
   }
@@ -9586,7 +10012,6 @@ async function postToYouTube(
   // ─────────────────────────────────────────────────────────────────────
   if (thumbnailUrl) {
     try {
-      console.log("Downloading thumbnail from:", thumbnailUrl);
       const { blob: thumbBlob, mimeType: thumbMimeType } = await downloadMediaAsBlob(thumbnailUrl);
 
       const thumbUploadResponse = await fetch(
@@ -9604,10 +10029,10 @@ async function postToYouTube(
       if (thumbUploadResponse.ok) {
         console.log("YouTube thumbnail set successfully");
       } else {
-        console.warn("Failed to set YouTube thumbnail:", await thumbUploadResponse.text());
+        console.warn("Failed to set YouTube thumbnail:", redactProviderText(await thumbUploadResponse.text()));
       }
     } catch (thumbError) {
-      console.warn("Error setting YouTube thumbnail:", thumbError);
+      console.warn("Error setting YouTube thumbnail:", redactProviderText(thumbError));
     }
   }
 
@@ -9645,10 +10070,10 @@ async function postToYouTube(
       if (commentResponse.ok) {
         console.log("First comment posted successfully");
       } else {
-        console.warn("Failed to post first comment:", await commentResponse.text());
+        console.warn("Failed to post first comment:", redactProviderText(await commentResponse.text()));
       }
     } catch (commentError) {
-      console.warn("Error posting first comment:", commentError);
+      console.warn("Error posting first comment:", redactProviderText(commentError));
     }
   } else if (firstComment) {
     console.log("First comment skipped: the video was uploaded by an earlier attempt");
@@ -9657,6 +10082,7 @@ async function postToYouTube(
   return {
     id: videoId,
     url: `https://www.youtube.com/watch?v=${videoId}`,
+    pendingPlatformPostId,
     ...(uploadRequest.warnings.length > 0 ? { warnings: uploadRequest.warnings } : {}),
   };
 }

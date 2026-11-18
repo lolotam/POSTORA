@@ -17,6 +17,14 @@
  * The store is the only thing that knows how those are kept, so the upload
  * code asks the store instead of writing a row itself.
  *
+ * THE LEASE IS A NUMBER OF MILLISECONDS
+ * -------------------------------------
+ * The functions take `p_lease_ms`, not an interval. PostgREST sends the named
+ * arguments of a function as JSON, and a JSON interval has no agreed shape, so
+ * a caller that sent an interval string would depend on the server's parser.
+ * A number of milliseconds is the same on both sides, and the function turns
+ * it into an interval itself.
+ *
  * TWO IMPLEMENTATIONS
  * -------------------
  * The Supabase one talks to the functions in
@@ -29,15 +37,17 @@
 
 import type {
   BeginUploadSession,
+  ClaimContinuations,
   ClaimUploadSession,
   CheckpointUploadSession,
   CompleteUploadSession,
   ReleaseUploadSession,
+  YoutubeUploadContinuationClaim,
   YoutubeUploadRefusal,
   YoutubeUploadSessionRecord,
   YoutubeUploadSessionStore,
 } from "./youtubeResumableUpload.ts";
-import { redactResumableCredentials } from "./youtubeResumableUpload.ts";
+import { redactProviderText } from "./youtubeUploadPolicy.ts";
 
 export type { YoutubeUploadRefusal };
 
@@ -59,6 +69,9 @@ const REFUSAL_BY_SQLSTATE: Record<string, YoutubeUploadRefusal> = {
   YUS08: "session_not_found",
   YUS09: "lease_stale",
   YUS10: "invalid_size",
+  YUS11: "stale_attempt",
+  YUS12: "post_superseded",
+  YUS13: "too_many_continuations",
 };
 
 /**
@@ -79,6 +92,8 @@ function toRecord(payload: Record<string, unknown> | null): YoutubeUploadSession
   const state = typeof payload.state === "string" ? payload.state : "open";
   return {
     id: String(payload.id ?? ""),
+    postId: String(payload.post_id ?? ""),
+    socialAccountId: String(payload.social_account_id ?? ""),
     state: state as YoutubeUploadSessionRecord["state"],
     sessionUri: typeof payload.session_uri === "string" ? payload.session_uri : null,
     confirmedBytes: Number(payload.confirmed_bytes ?? 0),
@@ -87,6 +102,35 @@ function toRecord(payload: Record<string, unknown> | null): YoutubeUploadSession
     totalBytes: Number(payload.total_bytes ?? 0),
     videoId: typeof payload.video_id === "string" ? payload.video_id : null,
     sessionExpiresAt: typeof payload.session_expires_at === "string" ? payload.session_expires_at : null,
+    attemptStartedAt: typeof payload.attempt_started_at === "string" ? payload.attempt_started_at : null,
+    nextCheckAt: typeof payload.next_check_at === "string" ? payload.next_check_at : null,
+    lastOutcome: typeof payload.last_outcome === "string" ? payload.last_outcome : null,
+    platformPostId: typeof payload.platform_post_id === "string" ? payload.platform_post_id : null,
+    mediaFileId: typeof payload.media_file_id === "string" ? payload.media_file_id : null,
+    mediaObjectVersion: payload.media_object_version === null || payload.media_object_version === undefined
+      ? null
+      : Number(payload.media_object_version),
+    continuationCount: Number(payload.continuation_count ?? 0),
+  };
+}
+
+function toClaim(payload: Record<string, unknown>): YoutubeUploadContinuationClaim | null {
+  const sessionId = typeof payload.session_id === "string" ? payload.session_id : null;
+  if (!sessionId) return null;
+  return {
+    sessionId,
+    postId: String(payload.post_id ?? ""),
+    socialAccountId: String(payload.social_account_id ?? ""),
+    userId: String(payload.user_id ?? ""),
+    leaseToken: String(payload.lease_token ?? ""),
+    attemptStartedAt: typeof payload.attempt_started_at === "string" ? payload.attempt_started_at : null,
+    platformPostId: typeof payload.platform_post_id === "string" ? payload.platform_post_id : null,
+    mediaFileId: typeof payload.media_file_id === "string" ? payload.media_file_id : null,
+    confirmedBytes: Number(payload.confirmed_bytes ?? 0),
+    totalBytes: Number(payload.total_bytes ?? 0),
+    videoMayExist: payload.video_may_exist === true,
+    state: typeof payload.state === "string" ? payload.state : "open",
+    continuationCount: Number(payload.continuation_count ?? 0),
   };
 }
 
@@ -107,95 +151,110 @@ export function createSupabaseYoutubeUploadSessionStore(
     return data as T;
   }
 
+  /**
+   * Calls one function and tells a durable refusal apart from a failure.
+   *
+   * A refusal raised inside the database function arrives as an error with one
+   * of the YUS codes. The store answers with the refusal instead of throwing,
+   * because the caller's next step depends on WHICH refusal it was. An error
+   * with no such code is a failure of the database itself and is thrown.
+   */
+  async function callRefusing<T>(
+    fn: string,
+    args: Record<string, unknown>,
+  ): Promise<{ ok: true; value: T } | { ok: false; refusal: YoutubeUploadRefusal }> {
+    try {
+      return { ok: true, value: await call<T>(fn, args) };
+    } catch (error) {
+      const refusal = readRefusal(error);
+      if (refusal) return { ok: false, refusal };
+      throw error;
+    }
+  }
+
   return {
     async begin(input: BeginUploadSession) {
-      try {
-        const payload = await call<Record<string, unknown>>("begin_youtube_upload_session", {
-          p_post_id: input.postId,
-          p_social_account_id: input.socialAccountId,
-          p_user_id: input.userId,
-          p_media_file_id: input.mediaFileId,
-          p_media_size: input.mediaSize,
-          p_total_bytes: input.totalBytes,
-          p_upload_body: input.uploadBody,
-        });
-        const record = toRecord(payload);
-        // A session that needs a human comes back in that state rather than
-        // as a refusal, because the mark is durable and a refusal raised
-        // inside the function would be undone by the caller's rollback.
-        if (record?.state === "reconcile") {
-          return { record: null, refused: "reconcile_required" };
-        }
-        return { record, refused: null };
-      } catch (error) {
-        const refusal = readRefusal(error);
-        if (refusal) return { record: null, refused: refusal };
-        throw error;
+      const result = await callRefusing<Record<string, unknown>>("begin_youtube_upload_session", {
+        p_post_id: input.postId,
+        p_social_account_id: input.socialAccountId,
+        p_user_id: input.userId,
+        p_media_file_id: input.mediaFileId,
+        p_media_size: input.mediaSize,
+        p_total_bytes: input.totalBytes,
+        p_upload_body: input.uploadBody,
+        p_platform_post_id: input.platformPostId,
+        p_attempt_started_at: input.attemptStartedAt,
+      });
+      if (!result.ok) return { record: null, refused: result.refusal };
+      const record = toRecord(result.value);
+      // A session that needs a human comes back in that state rather than
+      // as a refusal, because the mark is durable and a refusal raised
+      // inside the function would be undone by the caller's rollback.
+      if (record?.state === "reconcile") {
+        return { record: null, refused: "reconcile_required" };
       }
+      return { record, refused: null };
     },
 
     async claim(input: ClaimUploadSession) {
-      try {
-        const payload = await call<Record<string, unknown>>("claim_youtube_upload_session", {
-          p_session_id: input.sessionId,
-          p_lease_token: input.leaseToken,
-          p_lease_ms: input.leaseMs,
-        });
-        return { record: toRecord(payload), refused: null };
-      } catch (error) {
-        const refusal = readRefusal(error);
-        if (refusal) return { record: null, refused: refusal };
-        throw error;
-      }
+      const result = await callRefusing<Record<string, unknown>>("claim_youtube_upload_session", {
+        p_session_id: input.sessionId,
+        p_lease_token: input.leaseToken,
+        p_lease_ms: input.leaseMs,
+      });
+      if (!result.ok) return { record: null, refused: result.refusal };
+      return { record: toRecord(result.value), refused: null };
     },
 
     async checkpoint(input: CheckpointUploadSession) {
-      try {
-        return await call<boolean>("checkpoint_youtube_upload_session", {
-          p_session_id: input.sessionId,
-          p_lease_token: input.leaseToken,
-          p_confirmed_bytes: input.confirmedBytes,
-          p_bytes_sent: input.bytesSent,
-          p_session_uri: input.sessionUri ?? null,
-          p_video_may_exist: input.videoMayExist ?? null,
-        });
-      } catch (error) {
-        const refusal = readRefusal(error);
-        if (refusal) return false;
-        throw error;
-      }
+      const result = await callRefusing<boolean>("checkpoint_youtube_upload_session", {
+        p_session_id: input.sessionId,
+        p_lease_token: input.leaseToken,
+        p_confirmed_bytes: input.confirmedBytes,
+        p_bytes_sent: input.bytesSent,
+        p_session_uri: input.sessionUri ?? null,
+        p_video_may_exist: input.videoMayExist ?? null,
+        p_next_check_at: input.nextCheckAt ?? null,
+        p_last_outcome: input.lastOutcome ?? null,
+      });
+      return result.ok ? result.value : false;
     },
 
     async complete(input: CompleteUploadSession) {
-      try {
-        return await call<boolean>("complete_youtube_upload_session", {
-          p_session_id: input.sessionId,
-          p_lease_token: input.leaseToken,
-          p_video_id: input.videoId,
-        });
-      } catch (error) {
-        const refusal = readRefusal(error);
-        if (refusal) return false;
-        throw error;
-      }
+      const result = await callRefusing<boolean>("complete_youtube_upload_session", {
+        p_session_id: input.sessionId,
+        p_lease_token: input.leaseToken,
+        p_video_id: input.videoId,
+      });
+      return result.ok ? result.value : false;
     },
 
     async release(input: ReleaseUploadSession) {
-      try {
-        return await call<boolean>("release_youtube_upload_session", {
-          p_session_id: input.sessionId,
-          p_lease_token: input.leaseToken,
-          p_state: input.state,
-          // The error text is kept in a private row, but a provider answer
-          // can echo the request it refused, and the request carries the
-          // session URI. The credential is taken out before it is stored.
-          p_error: input.error ? redactResumableCredentials(input.error).slice(0, 300) : null,
-        });
-      } catch (error) {
-        const refusal = readRefusal(error);
-        if (refusal) return false;
-        throw error;
+      const result = await callRefusing<boolean>("release_youtube_upload_session", {
+        p_session_id: input.sessionId,
+        p_lease_token: input.leaseToken,
+        p_state: input.state,
+        // The error text is kept in a private row, but a provider answer
+        // can echo the request it refused, and the request carries the
+        // session URI. The credential is taken out before it is stored.
+        p_error: input.error ? redactProviderText(input.error).slice(0, 300) : null,
+      });
+      return result.ok ? result.value : false;
+    },
+
+    async claimContinuations(input: ClaimContinuations) {
+      const result = await callRefusing<Record<string, unknown>[]>("claim_youtube_upload_sessions", {
+        p_limit: input.limit,
+        p_lease_ms: input.leaseMs,
+      });
+      if (!result.ok) return [];
+      if (!Array.isArray(result.value)) return [];
+      const claims: YoutubeUploadContinuationClaim[] = [];
+      for (const row of result.value) {
+        const claim = toClaim(row);
+        if (claim) claims.push(claim);
       }
+      return claims;
     },
   };
 }
@@ -222,6 +281,11 @@ interface MemorySession {
   state: YoutubeUploadSessionRecord["state"];
   leaseToken: string | null;
   leaseExpiresAt: number | null;
+  attemptStartedAt: string | null;
+  nextCheckAt: number | null;
+  lastOutcome: string | null;
+  platformPostId: string | null;
+  continuationCount: number;
 }
 
 /**
@@ -234,15 +298,20 @@ interface MemorySession {
 export function createInMemoryYoutubeUploadSessionStore(options?: {
   now?: () => number;
   nextId?: () => string;
+  nextLeaseToken?: () => string;
 }): YoutubeUploadSessionStore & { sessions: Map<string, MemorySession> } {
   const now = options?.now ?? (() => Date.now());
   let counter = 0;
   const nextId = options?.nextId ?? (() => `session-${++counter}`);
+  let leaseCounter = 0;
+  const nextLeaseToken = options?.nextLeaseToken ?? (() => `lease-${++leaseCounter}`);
   const sessions = new Map<string, MemorySession>();
 
   function payload(session: MemorySession): YoutubeUploadSessionRecord {
     return {
       id: session.id,
+      postId: session.postId,
+      socialAccountId: session.socialAccountId,
       state: session.state,
       sessionUri: session.sessionUri,
       confirmedBytes: session.confirmedBytes,
@@ -253,6 +322,13 @@ export function createInMemoryYoutubeUploadSessionStore(options?: {
       sessionExpiresAt: session.sessionExpiresAt === null
         ? null
         : new Date(session.sessionExpiresAt).toISOString(),
+      attemptStartedAt: session.attemptStartedAt,
+      nextCheckAt: session.nextCheckAt === null ? null : new Date(session.nextCheckAt).toISOString(),
+      lastOutcome: session.lastOutcome,
+      platformPostId: session.platformPostId,
+      mediaFileId: session.mediaFileId,
+      mediaObjectVersion: session.mediaObjectVersion,
+      continuationCount: session.continuationCount,
     };
   }
 
@@ -270,7 +346,7 @@ export function createInMemoryYoutubeUploadSessionStore(options?: {
   return {
     sessions,
 
-    async begin(input: BeginUploadSession): Promise<{ record: YoutubeUploadSessionRecord | null; refused: YoutubeUploadRefusal | null }> {
+    begin(input: BeginUploadSession): Promise<{ record: YoutubeUploadSessionRecord | null; refused: YoutubeUploadRefusal | null }> {
       let session = find(input.postId, input.socialAccountId);
       if (!session) {
         session = {
@@ -292,32 +368,37 @@ export function createInMemoryYoutubeUploadSessionStore(options?: {
           state: "open",
           leaseToken: null,
           leaseExpiresAt: null,
+          attemptStartedAt: input.attemptStartedAt,
+          nextCheckAt: null,
+          lastOutcome: null,
+          platformPostId: input.platformPostId,
+          continuationCount: 0,
         };
         sessions.set(session.id, session);
-        return { record: payload(session), refused: null };
+        return Promise.resolve({ record: payload(session), refused: null });
       }
 
       // The session belongs to the owner of the post. Another user asking for
       // the same post and account is asking for someone else's session.
       if (session.userId !== input.userId) {
-        return { record: null, refused: "post_not_found" };
+        return Promise.resolve({ record: null, refused: "post_not_found" });
       }
 
-      if (session.state === "uploaded") return { record: payload(session), refused: null };
-      if (session.state === "reconcile") return { record: null, refused: "reconcile_required" };
+      if (session.state === "uploaded") return Promise.resolve({ record: payload(session), refused: null });
+      if (session.state === "reconcile") return Promise.resolve({ record: null, refused: "reconcile_required" });
 
       const sameContent =
         JSON.stringify(session.uploadBody) === JSON.stringify(input.uploadBody) &&
         session.mediaFileId === input.mediaFileId &&
         session.totalBytes === input.totalBytes;
-      if (!sameContent) return { record: null, refused: "content_changed" };
+      if (!sameContent) return Promise.resolve({ record: null, refused: "content_changed" });
 
       if (session.state === "expired" || (session.sessionExpiresAt !== null && session.sessionExpiresAt <= now())) {
         if (session.videoMayExist) {
           // The last chunk may have been written, so a video may exist and a
           // fresh session could create a second one.
           session.state = "reconcile";
-          return { record: null, refused: "reconcile_required" };
+          return Promise.resolve({ record: null, refused: "reconcile_required" });
         }
         session.state = "open";
         session.sessionUri = null;
@@ -336,43 +417,53 @@ export function createInMemoryYoutubeUploadSessionStore(options?: {
         session.leaseExpiresAt = null;
       }
 
-      return { record: payload(session), refused: null };
+      // The session now belongs to the attempt that is running.
+      session.attemptStartedAt = input.attemptStartedAt;
+      if (input.platformPostId) session.platformPostId = input.platformPostId;
+
+      return Promise.resolve({ record: payload(session), refused: null });
     },
 
-    async claim(input: ClaimUploadSession): Promise<{ record: YoutubeUploadSessionRecord | null; refused: YoutubeUploadRefusal | null }> {
+    claim(input: ClaimUploadSession): Promise<{ record: YoutubeUploadSessionRecord | null; refused: YoutubeUploadRefusal | null }> {
       const session = sessions.get(input.sessionId);
-      if (!session) return { record: null, refused: "session_not_found" };
-      if (session.state === "uploaded") return { record: payload(session), refused: null };
-      if (session.state === "reconcile") return { record: null, refused: "reconcile_required" };
+      if (!session) return Promise.resolve({ record: null, refused: "session_not_found" });
+      if (session.state === "uploaded") return Promise.resolve({ record: payload(session), refused: null });
+      if (session.state === "reconcile") return Promise.resolve({ record: null, refused: "reconcile_required" });
       if (session.sessionExpiresAt !== null && session.sessionExpiresAt <= now()) {
-        return { record: null, refused: "session_expired" };
+        return Promise.resolve({ record: null, refused: "session_expired" });
       }
       if (holdsLiveLease(session) && session.leaseToken !== input.leaseToken) {
-        return { record: null, refused: "lease_held" };
+        return Promise.resolve({ record: null, refused: "lease_held" });
       }
       session.leaseToken = input.leaseToken;
       session.leaseExpiresAt = now() + input.leaseMs;
-      return { record: payload(session), refused: null };
+      return Promise.resolve({ record: payload(session), refused: null });
     },
 
-    async checkpoint(input: CheckpointUploadSession) {
+    checkpoint(input: CheckpointUploadSession): Promise<boolean> {
       const session = sessions.get(input.sessionId);
-      if (!session) return false;
-      if (session.leaseToken !== input.leaseToken) return false;
-      if (session.leaseExpiresAt === null || session.leaseExpiresAt <= now()) return false;
+      if (!session) return Promise.resolve(false);
+      if (session.leaseToken !== input.leaseToken) return Promise.resolve(false);
+      if (session.leaseExpiresAt === null || session.leaseExpiresAt <= now()) return Promise.resolve(false);
       session.confirmedBytes = Math.max(session.confirmedBytes, input.confirmedBytes);
       session.bytesSent = Math.max(session.bytesSent, input.bytesSent);
       if (input.sessionUri) session.sessionUri = input.sessionUri;
       if (typeof input.videoMayExist === "boolean") session.videoMayExist = input.videoMayExist;
-      return true;
+      if (input.nextCheckAt !== undefined) {
+        session.nextCheckAt = input.nextCheckAt === null ? null : Date.parse(input.nextCheckAt);
+      }
+      if (input.lastOutcome !== undefined && input.lastOutcome !== null) {
+        session.lastOutcome = input.lastOutcome;
+      }
+      return Promise.resolve(true);
     },
 
-    async complete(input: CompleteUploadSession) {
+    complete(input: CompleteUploadSession): Promise<boolean> {
       const session = sessions.get(input.sessionId);
-      if (!session) return false;
-      if (session.state === "uploaded" && session.videoId === input.videoId) return true;
-      if (session.leaseToken !== input.leaseToken) return false;
-      if (session.leaseExpiresAt === null || session.leaseExpiresAt <= now()) return false;
+      if (!session) return Promise.resolve(false);
+      if (session.state === "uploaded" && session.videoId === input.videoId) return Promise.resolve(true);
+      if (session.leaseToken !== input.leaseToken) return Promise.resolve(false);
+      if (session.leaseExpiresAt === null || session.leaseExpiresAt <= now()) return Promise.resolve(false);
       session.state = "uploaded";
       session.videoId = input.videoId;
       session.sessionUri = null;
@@ -380,19 +471,52 @@ export function createInMemoryYoutubeUploadSessionStore(options?: {
       session.bytesSent = session.totalBytes;
       session.leaseToken = null;
       session.leaseExpiresAt = null;
-      return true;
+      return Promise.resolve(true);
     },
 
-    async release(input: ReleaseUploadSession) {
+    release(input: ReleaseUploadSession): Promise<boolean> {
       const session = sessions.get(input.sessionId);
-      if (!session) return false;
-      if (session.state === "uploaded") return false;
-      if (session.leaseToken !== input.leaseToken) return false;
-      if (session.leaseExpiresAt === null || session.leaseExpiresAt <= now()) return false;
+      if (!session) return Promise.resolve(false);
+      if (session.state === "uploaded") return Promise.resolve(false);
+      if (session.leaseToken !== input.leaseToken) return Promise.resolve(false);
+      if (session.leaseExpiresAt === null || session.leaseExpiresAt <= now()) return Promise.resolve(false);
       session.state = input.state;
       session.leaseToken = null;
       session.leaseExpiresAt = null;
-      return true;
+      return Promise.resolve(true);
+    },
+
+    claimContinuations(input: ClaimContinuations): Promise<YoutubeUploadContinuationClaim[]> {
+      const claims: YoutubeUploadContinuationClaim[] = [];
+      for (const session of sessions.values()) {
+        if (claims.length >= input.limit) break;
+        if (session.state !== "open") continue;
+        if (session.sessionUri === null) continue;
+        if (holdsLiveLease(session)) continue;
+        if (session.nextCheckAt !== null && session.nextCheckAt > now()) continue;
+
+        const leaseToken = nextLeaseToken();
+        session.leaseToken = leaseToken;
+        session.leaseExpiresAt = now() + input.leaseMs;
+        session.continuationCount += 1;
+
+        claims.push({
+          sessionId: session.id,
+          postId: session.postId,
+          socialAccountId: session.socialAccountId,
+          userId: session.userId,
+          leaseToken,
+          attemptStartedAt: session.attemptStartedAt,
+          platformPostId: session.platformPostId,
+          mediaFileId: session.mediaFileId,
+          confirmedBytes: session.confirmedBytes,
+          totalBytes: session.totalBytes,
+          videoMayExist: session.videoMayExist,
+          state: session.state,
+          continuationCount: session.continuationCount,
+        });
+      }
+      return Promise.resolve(claims);
     },
   };
 }

@@ -63,6 +63,13 @@
  */
 
 import { uploadFailureMessage } from "./youtubePublisher.ts";
+import {
+  redactProviderText,
+  YOUTUBE_UPLOAD_REASON,
+  type YoutubeUploadReason,
+} from "./youtubeUploadPolicy.ts";
+
+export { redactResumableCredentials } from "./youtubeUploadPolicy.ts";
 
 /** Google's rule: a chunk size must be a multiple of 256 KiB (the last chunk excepted). */
 export const YOUTUBE_CHUNK_GRANULARITY_BYTES = 256 * 1024;
@@ -87,6 +94,23 @@ export const YOUTUBE_MAX_PROBE_ATTEMPTS = 3;
 
 /** The backoff between two probes of the same ambiguous write. */
 export const YOUTUBE_PROBE_BACKOFF_MS = 1_000;
+
+/**
+ * How long the reconciler waits before it looks at a session again.
+ *
+ * A transient probe failure must not turn into a manual reconciliation, and it
+ * must not turn into a tight loop either. This is the floor of the wait.
+ */
+export const YOUTUBE_CONTINUATION_MIN_DELAY_MS = 60_000;
+
+/**
+ * The ceiling of the wait between two continuation attempts.
+ *
+ * The wait grows with the number of attempts so a provider that is down for a
+ * while is not hammered, but it never grows past this, so a session cannot sit
+ * in the database forever without anybody looking at it.
+ */
+export const YOUTUBE_CONTINUATION_MAX_DELAY_MS = 15 * 60_000;
 
 /** A YouTube video id is 11 characters of the URL-safe alphabet. */
 const YOUTUBE_VIDEO_ID_PATTERN = /^[A-Za-z0-9_-]{11}$/;
@@ -121,27 +145,46 @@ export type ProviderUploadStatus =
    * The answer does not say what happened. Either the provider is unhealthy,
    * or it answered something this protocol does not allow. The upload may or
    * may not exist, so nothing more may be written.
+   *
+   * `retryable` splits the two cases that matter:
+   *
+   *   - `true` means the provider did not answer usefully but nothing is
+   *     broken: a timeout, a 5xx, a 429. The same session can be asked again
+   *     later, so the upload stays alive.
+   *   - `false` means the provider answered something the protocol does not
+   *     allow, or contradicted what it said before. The session can no longer
+   *     be trusted, so a human decides.
    */
-  | { kind: "unknown"; reason: string };
+  | { kind: "unknown"; reason: string; retryable: boolean; retryAfterMs?: number };
 
 /** What the whole upload attempt ended as. */
 export type ResumableUploadOutcome =
   /** The video exists and this is its id. */
   | { kind: "completed"; videoId: string }
-  /** The upload can continue later, in this session, from `confirmedBytes`. */
-  | { kind: "resumable"; confirmedBytes: number; reason: string }
+  /**
+   * The upload can continue later, in this session, from `confirmedBytes`.
+   *
+   * `nextCheckAtMs` says when the continuation may look again. It is bounded
+   * and it is never in the past, so a provider that is down does not turn
+   * into a loop.
+   */
+  | { kind: "resumable"; confirmedBytes: number; reason: YoutubeUploadReason; nextCheckAtMs?: number }
   /** Nothing was ever written, so no video exists and a fresh attempt is safe. */
-  | { kind: "unsent"; reason: string }
+  | { kind: "unsent"; reason: YoutubeUploadReason; detail?: string }
   /** The provider may hold a video nobody has a receipt for. A human decides. */
-  | { kind: "reconcile"; reason: string }
+  | { kind: "reconcile"; reason: YoutubeUploadReason; detail?: string }
   /** The upload failed for good. `retryable` says whether a fresh attempt is safe. */
-  | { kind: "failed"; message: string; retryable: boolean }
+  | { kind: "failed"; reason: YoutubeUploadReason; detail?: string; retryable: boolean }
   /** Another worker owns the session. This worker must not write anything. */
-  | { kind: "abandoned"; reason: string };
+  | { kind: "abandoned"; reason: YoutubeUploadReason; detail?: string };
 
 /** The durable state of one upload, as the store keeps it. */
 export interface YoutubeUploadSessionRecord {
   id: string;
+  /** The post this upload belongs to. */
+  postId: string;
+  /** The YouTube account this upload goes to. */
+  socialAccountId: string;
   state: "open" | "uploaded" | "expired" | "reconcile" | "failed";
   /** The session URI. A credential: never log it, never show it to a client. */
   sessionUri: string | null;
@@ -163,6 +206,40 @@ export interface YoutubeUploadSessionRecord {
   /** The receipt. Present only once the provider accepted the video. */
   videoId: string | null;
   sessionExpiresAt: string | null;
+  /**
+   * The post attempt this session belongs to.
+   *
+   * A post can be published again after an edit or a retry, and that is a new
+   * attempt with a new `processing_started_at`. An upload that belongs to an
+   * older attempt must not be continued: its bytes describe a video the user
+   * may have changed.
+   */
+  attemptStartedAt: string | null;
+  /**
+   * When the continuation may look at this session again.
+   *
+   * `null` means "now". A value in the past means the session is due.
+   */
+  nextCheckAt: string | null;
+  /** The stable reason code of the last attempt. */
+  lastOutcome: string | null;
+  /** The `platform_posts` row this upload settles when it finishes. */
+  platformPostId: string | null;
+  /** The media file the bytes come from. */
+  mediaFileId: string | null;
+  /**
+   * The media file's content version when the upload started.
+   *
+   * A replaced file is a different video, so a continuation refuses to send
+   * the bytes of a file that is no longer the one the upload began with.
+   */
+  mediaObjectVersion: number | null;
+  /**
+   * How many continuations this session has had.
+   *
+   * It bounds the work: a session that keeps failing is not asked for ever.
+   */
+  continuationCount: number;
 }
 
 /**
@@ -192,7 +269,13 @@ export type YoutubeUploadRefusal =
   /** The lease is stale, so this worker does not own the session. */
   | "lease_stale"
   /** The video has no usable size. */
-  | "invalid_size";
+  | "invalid_size"
+  /** The session belongs to an older attempt of the post. */
+  | "stale_attempt"
+  /** The post was cancelled or superseded. */
+  | "post_superseded"
+  /** The session has been continued too many times. */
+  | "too_many_continuations";
 
 /** The durable store the upload keeps its state in. */
 export interface YoutubeUploadSessionStore {
@@ -210,6 +293,15 @@ export interface YoutubeUploadSessionStore {
   complete(input: CompleteUploadSession): Promise<boolean>;
   /** Records a terminal state that is not a receipt. */
   release(input: ReleaseUploadSession): Promise<boolean>;
+  /**
+   * The sessions that are due for another look, with their claim tokens.
+   *
+   * The claim is what makes two reconcilers pick different sessions, and the
+   * token is what proves to the worker that this particular claim is the one
+   * it may act on. The session URI is NOT returned: it stays in the database
+   * and is read by the worker with the token.
+   */
+  claimContinuations(input: ClaimContinuations): Promise<YoutubeUploadContinuationClaim[]>;
 }
 
 export interface BeginUploadSession {
@@ -223,11 +315,43 @@ export interface BeginUploadSession {
   /** The video resource that was sent to the provider. */
   uploadBody: Record<string, unknown>;
   userId: string;
+  /**
+   * The post attempt this upload belongs to.
+   *
+   * A continuation of an older attempt is refused: the post was edited or
+   * retried, and the bytes of that attempt are not what the user asked for
+   * now.
+   */
+  attemptStartedAt: string | null;
 }
 
 export interface ClaimUploadSession {
   sessionId: string;
   leaseToken: string;
+  leaseMs: number;
+}
+
+/** One session the reconciler may hand to a worker. */
+export interface YoutubeUploadContinuationClaim {
+  sessionId: string;
+  postId: string;
+  socialAccountId: string;
+  userId: string;
+  /** The claim token. The worker proves ownership with it. */
+  leaseToken: string;
+  /** The post attempt this session belongs to. */
+  attemptStartedAt: string | null;
+  platformPostId: string | null;
+  mediaFileId: string | null;
+  confirmedBytes: number;
+  totalBytes: number;
+  videoMayExist: boolean;
+  state: string;
+  continuationCount: number;
+}
+
+export interface ClaimContinuations {
+  limit: number;
   leaseMs: number;
 }
 
@@ -245,6 +369,14 @@ export interface CheckpointUploadSession {
    * only when the provider says the upload is still incomplete.
    */
   videoMayExist?: boolean;
+  /**
+   * When the continuation may look at this session again.
+   *
+   * `null` clears it, which makes the session due right away.
+   */
+  nextCheckAt?: string | null;
+  /** The stable reason code of this attempt. */
+  lastOutcome?: string | null;
 }
 
 export interface CompleteUploadSession {
@@ -269,8 +401,11 @@ export interface UploadByteSource {
    * An `ArrayBuffer` rather than a view into one: the buffer is exactly the
    * range, so it can be handed to the provider as the request body without
    * a copy and without the risk of sending bytes that were not asked for.
+   *
+   * `timeoutMs` clips the read to what is left of the worker's budget, so a
+   * slow media host cannot hold a worker past its deadline.
    */
-  read(start: number, end: number): Promise<ArrayBuffer>;
+  read(start: number, end: number, timeoutMs?: number): Promise<ArrayBuffer>;
 }
 
 /** Everything the upload needs from the outside world. */
@@ -280,7 +415,14 @@ export interface ResumableUploadDeps {
   session: YoutubeUploadSessionRecord;
   leaseToken: string;
   accessToken: string;
-  source: UploadByteSource;
+  /**
+   * Where the video bytes come from.
+   *
+   * It is optional on purpose: a session that already carries a receipt is
+   * settled without reading a single byte of media, so a receipt-only
+   * recovery never refetches the video.
+   */
+  source?: UploadByteSource;
   totalBytes: number;
   mimeType: string;
   /** The last moment this worker may still write. */
@@ -307,6 +449,14 @@ export interface ProviderStatusInput {
   totalBytes: number;
   /** The offset already confirmed, so a provider that goes backwards is caught. */
   previousConfirmedBytes: number;
+  /**
+   * The `Retry-After` header of an answer that asked for patience.
+   *
+   * It is honoured so a provider that says "wait 120 seconds" is not asked
+   * again in five, and it is bounded so a provider cannot park an upload for
+   * a week.
+   */
+  retryAfterHeader?: string | null;
 }
 
 /**
@@ -361,18 +511,6 @@ export function parseContentRange(value: string | null | undefined): (ProviderBy
 }
 
 /**
- * Removes the credential out of arbitrary text.
- *
- * A provider error can echo the request it refused, and the request carries
- * the session URI. The `upload_id` is what makes that URI a credential, so
- * it is the part that is taken out. The rest of the message is kept, because
- * it is what tells the customer what went wrong.
- */
-export function redactResumableCredentials(text: string): string {
-  return text.replace(/(upload_id=)[^&\s"'<>]+/gi, "$1***");
-}
-
-/**
  * Whether a session URI may be written to.
  *
  * The URI is an input from the provider, and it carries the authority to write
@@ -398,30 +536,28 @@ export function isAllowedProviderUploadUri(
 }
 
 /**
- * The writes one file is split into.
+ * The block to write next, starting at the offset the provider confirmed.
  *
- * Every chunk but the last carries exactly `chunkBytes`, and `chunkBytes` is a
- * multiple of 256 KiB, which is what the provider asks for. The last chunk
- * carries whatever is left.
+ * Google's rule is that every request but the last carries the same chunk
+ * size, and that this size is a multiple of 256 KiB. The last block may be
+ * smaller. The START of a block is whatever offset the provider confirmed,
+ * which after a partial acknowledgement is not a multiple of the chunk size:
+ * the block then continues from inside the chunk that was written before.
+ *
+ * `null` means the offset cannot be used: it is outside the file, or the
+ * chunk size is not one the provider accepts.
  */
-export function planUploadChunks(totalBytes: number, chunkBytes: number = YOUTUBE_RESUMABLE_CHUNK_BYTES): UploadChunk[] {
-  if (!Number.isSafeInteger(totalBytes) || totalBytes <= 0) {
-    throw new Error("The video has no bytes to upload.");
-  }
-  if (!Number.isSafeInteger(chunkBytes) || chunkBytes <= 0) {
-    throw new Error("The upload chunk size is not usable.");
-  }
-  if (chunkBytes % YOUTUBE_CHUNK_GRANULARITY_BYTES !== 0) {
-    throw new Error("The upload chunk size must be a multiple of 256 KiB.");
-  }
-  const chunks: UploadChunk[] = [];
-  let offset = 0;
-  while (offset < totalBytes) {
-    const size = Math.min(chunkBytes, totalBytes - offset);
-    chunks.push({ start: offset, end: offset + size - 1, size });
-    offset += size;
-  }
-  return chunks;
+export function planChunkFrom(
+  offset: number,
+  totalBytes: number,
+  chunkBytes: number = YOUTUBE_RESUMABLE_CHUNK_BYTES,
+): UploadChunk | null {
+  if (!Number.isSafeInteger(totalBytes) || totalBytes <= 0) return null;
+  if (!Number.isSafeInteger(chunkBytes) || chunkBytes <= 0) return null;
+  if (chunkBytes % YOUTUBE_CHUNK_GRANULARITY_BYTES !== 0) return null;
+  if (!Number.isSafeInteger(offset) || offset < 0 || offset >= totalBytes) return null;
+  const size = Math.min(chunkBytes, totalBytes - offset);
+  return { start: offset, end: offset + size - 1, size };
 }
 
 /**
@@ -443,6 +579,31 @@ export function readVideoIdFromBody(bodyText: string): string | null {
 }
 
 /**
+ * Reads a `Retry-After` header into milliseconds.
+ *
+ * Both shapes are accepted: a number of seconds and an HTTP date. A value
+ * that cannot be read is ignored, and every value is bounded, so a provider
+ * cannot park an upload for an unbounded time.
+ */
+export function parseRetryAfterMs(header: string | null | undefined, nowMs: number): number | undefined {
+  if (typeof header !== "string") return undefined;
+  const trimmed = header.trim();
+  if (trimmed.length === 0) return undefined;
+
+  if (/^\d+$/.test(trimmed)) {
+    const seconds = Number(trimmed);
+    if (!Number.isFinite(seconds) || seconds <= 0) return undefined;
+    return Math.min(seconds * 1000, YOUTUBE_CONTINUATION_MAX_DELAY_MS);
+  }
+
+  const asDate = Date.parse(trimmed);
+  if (Number.isNaN(asDate)) return undefined;
+  const delta = asDate - nowMs;
+  if (delta <= 0) return undefined;
+  return Math.min(delta, YOUTUBE_CONTINUATION_MAX_DELAY_MS);
+}
+
+/**
  * What one provider answer means.
  *
  * The classification is deliberately strict. An answer that does not fit the
@@ -451,27 +612,45 @@ export function readVideoIdFromBody(bodyText: string): string | null {
  */
 export function classifyProviderStatus(input: ProviderStatusInput): ProviderUploadStatus {
   const { status, totalBytes } = input;
+  const retryAfterMs = parseRetryAfterMs(input.retryAfterHeader, Date.now());
 
   if (status >= 200 && status < 300) {
     const videoId = readVideoIdFromBody(input.bodyText);
     if (videoId) return { kind: "accepted", videoId };
-    // The provider says it is done but names no video. The video may exist.
-    return { kind: "unknown", reason: "The provider accepted the upload without a usable video id." };
+    // The provider says it is done but names no video. The video may exist,
+    // and the session cannot be trusted again, so this is not retryable.
+    return {
+      kind: "unknown",
+      reason: "The provider accepted the upload without a usable video id.",
+      retryable: false,
+    };
   }
 
   if (status === 308) {
     const confirmed = parseProviderRange(input.rangeHeader);
     if (confirmed === null) {
-      return { kind: "unknown", reason: "The provider sent a range this upload cannot parse." };
+      return {
+        kind: "unknown",
+        reason: "The provider sent a range this upload cannot parse.",
+        retryable: false,
+      };
     }
     if (confirmed > totalBytes) {
-      return { kind: "unknown", reason: "The provider reported more bytes than the video has." };
+      return {
+        kind: "unknown",
+        reason: "The provider reported more bytes than the video has.",
+        retryable: false,
+      };
     }
     if (confirmed < input.previousConfirmedBytes) {
       // The provider now holds fewer bytes than it confirmed earlier. One of
       // the two records is wrong, and a resume from either could write a
       // block the provider will refuse. Nothing more is written.
-      return { kind: "unknown", reason: "The provider reported fewer bytes than were already confirmed." };
+      return {
+        kind: "unknown",
+        reason: "The provider reported fewer bytes than were already confirmed.",
+        retryable: false,
+      };
     }
     return { kind: "resumable", confirmedBytes: confirmed };
   }
@@ -484,18 +663,18 @@ export function classifyProviderStatus(input: ProviderStatusInput): ProviderUplo
   if (status === 408 || status === 429) {
     // The provider asked for patience or gave up on the request. Whether it
     // stored anything is not stated, so the status is asked for instead.
-    return { kind: "unknown", reason: `The provider answered ${status}.` };
+    return { kind: "unknown", reason: `The provider answered ${status}.`, retryable: true, retryAfterMs };
   }
 
   if (status >= 500) {
-    return { kind: "unknown", reason: `The provider answered ${status}.` };
+    return { kind: "unknown", reason: `The provider answered ${status}.`, retryable: true, retryAfterMs };
   }
 
   if (status >= 400) {
     return { kind: "rejected", status, message: "The provider refused the upload." };
   }
 
-  return { kind: "unknown", reason: `The provider answered ${status}.` };
+  return { kind: "unknown", reason: `The provider answered ${status}.`, retryable: false };
 }
 
 /**
@@ -526,6 +705,7 @@ async function readProviderStatus(
     bodyText,
     totalBytes,
     previousConfirmedBytes,
+    retryAfterHeader: response.headers.get("retry-after"),
   });
 }
 
@@ -533,10 +713,11 @@ async function readProviderStatus(
  * A provider request that never answered.
  *
  * The request may or may not have been stored, so this is an ambiguous write
- * and the status has to be asked for.
+ * and the status has to be asked for. It is retryable: nothing about the
+ * session is broken, the provider simply did not answer.
  */
-function ambiguousWrite(reason: string): ProviderUploadStatus {
-  return { kind: "unknown", reason };
+function ambiguousWrite(reason: string, retryable = true): ProviderUploadStatus {
+  return { kind: "unknown", reason, retryable };
 }
 
 /**
@@ -547,16 +728,6 @@ function ambiguousWrite(reason: string): ProviderUploadStatus {
  * whether a receipt already exists. What this owns is the writing: the chunk
  * plan, the status probe after an ambiguous write, and the refusal to write
  * again once the provider may hold a video.
- */
-/**
- * Runs one native YouTube upload to a conclusion.
- *
- * The function never opens a session by itself: the store owns that decision,
- * because only the durable record can say whether a video may already exist
- * and whether a receipt is already there. What this owns is the writing: the
- * chunk plan, the status probe after an answer that did not move the offset
- * forward, and the refusal to write again once the provider may hold a
- * video.
  */
 /**
  * Everything one upload needs to talk to the provider and to its session.
@@ -591,6 +762,17 @@ type AnswerResolution =
   | { kind: "outcome"; outcome: ResumableUploadOutcome };
 
 /**
+ * The outcomes that end an upload for good.
+ *
+ * They are the ones that carry a reason code and a detail, and they are the
+ * ones a session can be released into.
+ */
+export type TerminalUploadOutcome =
+  | { kind: "unsent"; reason: YoutubeUploadReason; detail?: string }
+  | { kind: "reconcile"; reason: YoutubeUploadReason; detail?: string }
+  | { kind: "failed"; reason: YoutubeUploadReason; detail?: string; retryable: boolean };
+
+/**
  * Ends the upload and keeps the session in the state the reason implies.
  *
  * `expired` means the provider session is gone and no video can exist, so a
@@ -600,18 +782,51 @@ type AnswerResolution =
  */
 async function giveUp(
   context: UploadContext,
-  state: "expired" | "reconcile" | "failed",
-  reason: string,
+  release: { state: "expired" | "reconcile" | "failed" },
+  outcome: TerminalUploadOutcome,
 ): Promise<ResumableUploadOutcome> {
   await context.store.release({
     sessionId: context.sessionId,
     leaseToken: context.leaseToken,
-    state,
-    error: reason,
+    state: release.state,
+    // The stored error is the stable reason code plus a redacted detail. The
+    // provider text is kept because it is what a human needs, and it is
+    // redacted because a provider body can echo the session URI.
+    error: outcome.detail ? `${outcome.reason}: ${redactProviderText(outcome.detail)}` : outcome.reason,
   });
-  if (state === "reconcile") return { kind: "reconcile", reason };
-  if (state === "expired") return { kind: "unsent", reason };
-  return { kind: "failed", message: reason, retryable: true };
+  return outcome;
+}
+
+/**
+ * Keeps the session open and says when it may be looked at again.
+ *
+ * Every place that stops an upload early does the same thing: the session
+ * stays open, the durable record says when the next look happens, and the
+ * caller is told the upload continues. Only the confirmed offset and the
+ * wait differ, so only those two are passed in.
+ */
+async function scheduleAnotherLook(
+  context: UploadContext,
+  confirmedBytes: number,
+  bytesSent: number,
+  videoMayExist: boolean,
+  nextCheckAtMs: number,
+): Promise<ResumableUploadOutcome> {
+  await context.store.checkpoint({
+    sessionId: context.sessionId,
+    leaseToken: context.leaseToken,
+    confirmedBytes,
+    bytesSent,
+    videoMayExist,
+    nextCheckAt: new Date(nextCheckAtMs).toISOString(),
+    lastOutcome: YOUTUBE_UPLOAD_REASON.resumable,
+  });
+  return {
+    kind: "resumable",
+    confirmedBytes,
+    reason: YOUTUBE_UPLOAD_REASON.resumable,
+    nextCheckAtMs,
+  };
 }
 
 /**
@@ -630,7 +845,11 @@ async function keepReceipt(
   if (!completed) {
     // The receipt could not be stored, so the next worker asks the provider
     // again and finds the same receipt. Nothing is uploaded twice.
-    return { kind: "abandoned", reason: "The receipt could not be stored." };
+    return {
+      kind: "abandoned",
+      reason: YOUTUBE_UPLOAD_REASON.lease_conflict,
+      detail: "The receipt could not be stored.",
+    };
   }
   return { kind: "completed", videoId };
 }
@@ -658,7 +877,13 @@ async function resolveProviderAnswer(
   if (status.kind === "rejected") {
     // A permanent refusal stores nothing, so no video exists -- unless the
     // last chunk may already have been written, which the durable flag says.
-    const outcome = await giveUp(context, videoMayExist ? "reconcile" : "failed", status.message);
+    const outcome = await giveUp(
+      context,
+      { state: videoMayExist ? "reconcile" : "failed" },
+      videoMayExist
+        ? { kind: "reconcile", reason: YOUTUBE_UPLOAD_REASON.reconcile, detail: status.message }
+        : { kind: "failed", reason: YOUTUBE_UPLOAD_REASON.rejected, detail: status.message, retryable: false },
+    );
     return { kind: "outcome", outcome };
   }
 
@@ -666,10 +891,16 @@ async function resolveProviderAnswer(
     // The provider session is gone. Whether it turned the bytes into a video
     // depends on whether the last chunk was ever written: the flag says so,
     // and it is durable, so a worker that died mid-write is covered too.
-    const reason = videoMayExist
+    const detail = videoMayExist
       ? "The session expired after the last chunk may have been written."
       : "The session expired before the last chunk was written.";
-    const outcome = await giveUp(context, videoMayExist ? "reconcile" : "expired", reason);
+    const outcome = await giveUp(
+      context,
+      { state: videoMayExist ? "reconcile" : "expired" },
+      videoMayExist
+        ? { kind: "reconcile", reason: YOUTUBE_UPLOAD_REASON.expired, detail }
+        : { kind: "unsent", reason: YOUTUBE_UPLOAD_REASON.unsent, detail },
+    );
     return { kind: "outcome", outcome };
   }
 
@@ -689,15 +920,27 @@ async function resolveProviderAnswer(
   }
 
   if (probed.kind === "rejected") {
-    const outcome = await giveUp(context, videoMayExist ? "reconcile" : "failed", probed.message);
+    const outcome = await giveUp(
+      context,
+      { state: videoMayExist ? "reconcile" : "failed" },
+      videoMayExist
+        ? { kind: "reconcile", reason: YOUTUBE_UPLOAD_REASON.reconcile, detail: probed.message }
+        : { kind: "failed", reason: YOUTUBE_UPLOAD_REASON.rejected, detail: probed.message, retryable: false },
+    );
     return { kind: "outcome", outcome };
   }
 
   if (probed.kind === "expired") {
-    const reason = videoMayExist
+    const detail = videoMayExist
       ? "The session expired while the write was unconfirmed."
       : "The session expired before the last chunk was written.";
-    const outcome = await giveUp(context, videoMayExist ? "reconcile" : "expired", reason);
+    const outcome = await giveUp(
+      context,
+      { state: videoMayExist ? "reconcile" : "expired" },
+      videoMayExist
+        ? { kind: "reconcile", reason: YOUTUBE_UPLOAD_REASON.expired, detail }
+        : { kind: "unsent", reason: YOUTUBE_UPLOAD_REASON.unsent, detail },
+    );
     return { kind: "outcome", outcome };
   }
 
@@ -705,12 +948,53 @@ async function resolveProviderAnswer(
     return { kind: "offset", confirmedBytes: probed.confirmedBytes, videoMayExist };
   }
 
-  // The provider would not say what happened. When the last chunk may already
-  // have been written, a blind retry could write the same bytes into a video
-  // that already exists, so a human decides. When it may not have been, no
-  // video exists and a fresh attempt is safe.
-  const outcome = await giveUp(context, videoMayExist ? "reconcile" : "failed", probed.reason);
+  if (probed.retryable) {
+    // The provider is not talking, but nothing is broken: a timeout, a 5xx, a
+    // 429. The session is still good, so the SAME URI is asked again later.
+    // Nothing is written now, and no new session is opened: an upload that
+    // may have been accepted must never be started again from zero.
+    return {
+      kind: "outcome",
+      outcome: {
+        kind: "resumable",
+        confirmedBytes: offset,
+        reason: YOUTUBE_UPLOAD_REASON.resumable,
+        nextCheckAtMs: probed.retryAfterMs,
+      },
+    };
+  }
+
+  // The provider answered something the protocol does not allow, or
+  // contradicted what it said before. When the last chunk may already have
+  // been written, a blind retry could write the same bytes into a video that
+  // already exists, so a human decides. When it may not have been, no video
+  // exists and the upload can be started again.
+  const outcome = await giveUp(
+    context,
+    { state: videoMayExist ? "reconcile" : "failed" },
+    videoMayExist
+      ? { kind: "reconcile", reason: YOUTUBE_UPLOAD_REASON.reconcile, detail: probed.reason }
+      : { kind: "failed", reason: YOUTUBE_UPLOAD_REASON.unknown, detail: probed.reason, retryable: false },
+  );
   return { kind: "outcome", outcome };
+}
+
+/**
+ * The wait before the continuation looks at a session again.
+ *
+ * The wait grows with the number of attempts and is bounded at both ends: a
+ * provider that is down is not hammered, and a session does not sit in the
+ * database forever without anybody looking at it. A `Retry-After` the provider
+ * asked for is honoured, but never shorter than the floor and never longer
+ * than the ceiling.
+ */
+export function continuationDelayMs(attempt: number, retryAfterMs?: number): number {
+  const growth = Math.max(1, Math.min(attempt, 16));
+  const backoff = Math.min(YOUTUBE_CONTINUATION_MIN_DELAY_MS * growth, YOUTUBE_CONTINUATION_MAX_DELAY_MS);
+  if (typeof retryAfterMs === "number" && Number.isFinite(retryAfterMs) && retryAfterMs > 0) {
+    return Math.min(Math.max(retryAfterMs, YOUTUBE_CONTINUATION_MIN_DELAY_MS), YOUTUBE_CONTINUATION_MAX_DELAY_MS);
+  }
+  return backoff;
 }
 
 /**
@@ -726,51 +1010,139 @@ async function resolveProviderAnswer(
 export async function runResumableVideoUpload(deps: ResumableUploadDeps): Promise<ResumableUploadOutcome> {
   const { store, session, leaseToken, source, totalBytes, mimeType, deadlineMs, now, sleep } = deps;
   const allowedHosts = deps.allowedHosts ?? YOUTUBE_PROVIDER_UPLOAD_HOSTS;
+  const chunkBytes = deps.chunkBytes ?? YOUTUBE_RESUMABLE_CHUNK_BYTES;
 
-  // A receipt that already exists is the answer. Nothing is uploaded again.
+  // A receipt that already exists is the answer. Nothing is uploaded again,
+  // and no media is read: this is the receipt-only recovery.
   if (session.videoId) {
     return { kind: "completed", videoId: session.videoId };
   }
   if (session.state === "uploaded") {
-    return { kind: "reconcile", reason: "The upload is recorded as accepted but carries no receipt." };
+    return {
+      kind: "reconcile",
+      reason: YOUTUBE_UPLOAD_REASON.reconcile,
+      detail: "The upload is recorded as accepted but carries no receipt.",
+    };
   }
   if (session.state === "reconcile") {
-    return { kind: "reconcile", reason: "The upload needs manual reconciliation." };
+    return {
+      kind: "reconcile",
+      reason: YOUTUBE_UPLOAD_REASON.reconcile,
+      detail: "The upload needs manual reconciliation.",
+    };
   }
   if (session.state === "failed") {
-    return { kind: "failed", message: "The upload was already given up.", retryable: true };
+    return {
+      kind: "failed",
+      reason: YOUTUBE_UPLOAD_REASON.rejected,
+      detail: "The upload was already given up.",
+      retryable: true,
+    };
   }
 
   let sessionUri = session.sessionUri;
-  const confirmedBytes = Math.min(session.confirmedBytes, totalBytes);
+  let confirmedBytes = Math.min(session.confirmedBytes, totalBytes);
   let bytesSent = Math.min(session.bytesSent, totalBytes);
   let videoMayExist = session.videoMayExist;
+
+  if (sessionUri && !isAllowedProviderUploadUri(sessionUri, allowedHosts)) {
+    // The session URI is not one this worker may write to. Writing anyway
+    // would send the OAuth token somewhere it does not belong, so the check
+    // runs BEFORE any request that carries the token.
+    const context = buildContext(deps, session.id, sessionUri, totalBytes, mimeType, deadlineMs, now, sleep);
+    return await giveUp(
+      context,
+      { state: "reconcile" },
+      {
+        kind: "reconcile",
+        reason: YOUTUBE_UPLOAD_REASON.reconcile,
+        detail: "The session uri was refused by the provider host policy.",
+      },
+    );
+  }
 
   if (!sessionUri) {
     // Nothing was ever written (the store only reopens a session it proved
     // is empty), so a fresh session cannot duplicate a video.
     if (bytesSent > 0) {
-      return { kind: "reconcile", reason: "The upload has no session but bytes were written before." };
+      return {
+        kind: "reconcile",
+        reason: YOUTUBE_UPLOAD_REASON.reconcile,
+        detail: "The upload has no session but bytes were written before.",
+      };
     }
     const opened = await openProviderSession(deps, totalBytes, mimeType, allowedHosts);
     if (opened.kind === "outcome") return opened.outcome;
     sessionUri = opened.sessionUri;
-  }
+  } else {
+    // An inherited session is probed BEFORE any data write.
+    //
+    // The provider is the only party that knows how many bytes it holds. The
+    // durable record knows how many were confirmed, but a worker may have
+    // died between writing and recording, and the provider may have accepted
+    // part of a chunk. Writing first and asking later would push bytes the
+    // provider has already accepted, which it refuses, and would risk a
+    // second write over a video that already exists.
+    const inherited = buildContext(deps, session.id, sessionUri, totalBytes, mimeType, deadlineMs, now, sleep);
+    const probed = await probeStatus(inherited, confirmedBytes);
 
-  if (!isAllowedProviderUploadUri(sessionUri, allowedHosts)) {
-    // The session URI is not one this worker may write to. Writing anyway
-    // would send the OAuth token somewhere it does not belong.
-    const context = buildContext(deps, session.id, sessionUri, totalBytes, mimeType, deadlineMs, now, sleep);
-    return await giveUp(context, "reconcile", "The session uri was refused by the provider host policy.");
-  }
+    if (probed.kind === "accepted") {
+      // The provider finished this upload while nobody was watching. This is
+      // the lost final acknowledgement, and the receipt is still there.
+      return await keepReceipt(inherited, probed.videoId);
+    }
 
-  let chunks: UploadChunk[];
-  try {
-    chunks = planUploadChunks(totalBytes, deps.chunkBytes ?? YOUTUBE_RESUMABLE_CHUNK_BYTES);
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    await store.release({ sessionId: session.id, leaseToken, state: "failed", error: message });
-    return { kind: "failed", message, retryable: false };
+    if (probed.kind === "rejected") {
+      const outcome = await giveUp(
+        inherited,
+        { state: videoMayExist ? "reconcile" : "failed" },
+        videoMayExist
+          ? { kind: "reconcile", reason: YOUTUBE_UPLOAD_REASON.reconcile, detail: probed.message }
+          : { kind: "failed", reason: YOUTUBE_UPLOAD_REASON.rejected, detail: probed.message, retryable: false },
+      );
+      return outcome;
+    }
+
+    if (probed.kind === "expired") {
+      const detail = videoMayExist
+        ? "The session expired after the last chunk may have been written."
+        : "The session expired before the last chunk was written.";
+      const outcome = await giveUp(
+        inherited,
+        { state: videoMayExist ? "reconcile" : "expired" },
+        videoMayExist
+          ? { kind: "reconcile", reason: YOUTUBE_UPLOAD_REASON.expired, detail }
+          : { kind: "unsent", reason: YOUTUBE_UPLOAD_REASON.unsent, detail },
+      );
+      return outcome;
+    }
+
+    if (probed.kind === "resumable") {
+      // The provider confirmed an offset that may sit inside a chunk that was
+      // written before. The next block starts exactly there.
+      confirmedBytes = probed.confirmedBytes;
+      videoMayExist = videoMayExist && confirmedBytes >= totalBytes;
+    } else if (probed.retryable) {
+      // The provider is not talking. The session is still good, so it is
+      // asked again later instead of being thrown away.
+      const delay = continuationDelayMs(session.continuationCount + 1, probed.retryAfterMs);
+      return await scheduleAnotherLook(
+        inherited,
+        confirmedBytes,
+        bytesSent,
+        videoMayExist,
+        now() + delay,
+      );
+    } else {
+      const outcome = await giveUp(
+        inherited,
+        { state: videoMayExist ? "reconcile" : "failed" },
+        videoMayExist
+          ? { kind: "reconcile", reason: YOUTUBE_UPLOAD_REASON.reconcile, detail: probed.reason }
+          : { kind: "failed", reason: YOUTUBE_UPLOAD_REASON.unknown, detail: probed.reason, retryable: false },
+      );
+      return outcome;
+    }
   }
 
   const context = buildContext(deps, session.id, sessionUri, totalBytes, mimeType, deadlineMs, now, sleep);
@@ -782,20 +1154,43 @@ export async function runResumableVideoUpload(deps: ResumableUploadDeps): Promis
 
   while (offset < totalBytes) {
     if (now() >= deadlineMs) {
-      return { kind: "resumable", confirmedBytes: offset, reason: "The worker ran out of time." };
+      const delay = continuationDelayMs(session.continuationCount + 1);
+      return await scheduleAnotherLook(context, offset, bytesSent, videoMayExist, now() + delay);
     }
 
-    const chunk = chunks.find((candidate) => candidate.start === offset);
+    // The block is built from the offset the provider confirmed, so a
+    // continuation that resumes inside an old chunk sends the rest of that
+    // chunk and not a block the provider will refuse.
+    const chunk = planChunkFrom(offset, totalBytes, chunkBytes);
     if (!chunk) {
-      // The provider confirmed an offset that is not on the chunk plan. The
-      // plan is a multiple of the chunk size, so this can only mean the two
-      // disagree about the file.
-      return await giveUp(context, "reconcile", "The confirmed offset is not on the upload plan.");
+      return await giveUp(
+        context,
+        { state: "reconcile" },
+        {
+          kind: "reconcile",
+          reason: YOUTUBE_UPLOAD_REASON.reconcile,
+          detail: "The confirmed offset is not usable.",
+        },
+      );
     }
 
-    const bytes = await readChunkBytes(source, chunk);
+    if (!source) {
+      return await giveUp(
+        context,
+        { state: "failed" },
+        {
+          kind: "failed",
+          reason: YOUTUBE_UPLOAD_REASON.unknown,
+          detail: "The upload needs media bytes but no source was given.",
+          retryable: false,
+        },
+      );
+    }
+
+    const bytes = await readChunkBytes(source, chunk, deadlineMs - now());
     if (bytes === null) {
-      return { kind: "resumable", confirmedBytes: offset, reason: "The video bytes could not be read." };
+      const delay = continuationDelayMs(session.continuationCount + 1);
+      return await scheduleAnotherLook(context, offset, bytesSent, videoMayExist, now() + delay);
     }
 
     // The write is recorded BEFORE it is made. If the worker dies between
@@ -814,13 +1209,19 @@ export async function runResumableVideoUpload(deps: ResumableUploadDeps): Promis
       videoMayExist,
     });
     if (!checkpointed) {
-      return { kind: "abandoned", reason: "Another worker owns this upload." };
+      return { kind: "abandoned", reason: YOUTUBE_UPLOAD_REASON.lease_conflict };
     }
     bytesSent = Math.max(bytesSent, chunk.end + 1);
 
     const status = await writeChunk(context, chunk, bytes, offset);
     const resolution = await resolveProviderAnswer(context, status, offset, videoMayExist);
-    if (resolution.kind === "outcome") return resolution.outcome;
+    if (resolution.kind === "outcome") {
+      if (resolution.outcome.kind === "resumable") {
+        const delay = continuationDelayMs(session.continuationCount + 1, resolution.outcome.nextCheckAtMs);
+        return await scheduleAnotherLook(context, offset, bytesSent, videoMayExist, now() + delay);
+      }
+      return resolution.outcome;
+    }
 
     // The provider says how much it holds. While it says it is short of the
     // whole file, no video can exist, so the flag is cleared.
@@ -830,7 +1231,15 @@ export async function runResumableVideoUpload(deps: ResumableUploadDeps): Promis
     } else {
       stalls += 1;
       if (stalls >= 2) {
-        return await giveUp(context, "reconcile", "The provider did not accept the bytes.");
+        return await giveUp(
+          context,
+          { state: "reconcile" },
+          {
+            kind: "reconcile",
+            reason: YOUTUBE_UPLOAD_REASON.reconcile,
+            detail: "The provider did not accept the bytes.",
+          },
+        );
       }
     }
 
@@ -841,7 +1250,9 @@ export async function runResumableVideoUpload(deps: ResumableUploadDeps): Promis
       bytesSent,
       videoMayExist,
     });
-    if (!advanced) return { kind: "abandoned", reason: "Another worker owns this upload." };
+    if (!advanced) {
+      return { kind: "abandoned", reason: YOUTUBE_UPLOAD_REASON.lease_conflict };
+    }
     offset = resolution.confirmedBytes;
   }
 
@@ -855,12 +1266,31 @@ export async function runResumableVideoUpload(deps: ResumableUploadDeps): Promis
   if (final.kind === "resumable") {
     // The provider says it holds fewer bytes than were confirmed. The two
     // records disagree, so nothing more is written.
-    return await giveUp(context, "reconcile", "The provider reported fewer bytes than were confirmed.");
+    return await giveUp(
+      context,
+      { state: "reconcile" },
+      {
+        kind: "reconcile",
+        reason: YOUTUBE_UPLOAD_REASON.reconcile,
+        detail: "The provider reported fewer bytes than were confirmed.",
+      },
+    );
   }
   return await giveUp(
     context,
-    videoMayExist ? "reconcile" : "failed",
-    "The upload finished but the provider did not return a receipt.",
+    { state: videoMayExist ? "reconcile" : "failed" },
+    videoMayExist
+      ? {
+        kind: "reconcile",
+        reason: YOUTUBE_UPLOAD_REASON.reconcile,
+        detail: "The upload finished but the provider did not return a receipt.",
+      }
+      : {
+        kind: "failed",
+        reason: YOUTUBE_UPLOAD_REASON.unknown,
+        detail: "The upload finished but the provider did not return a receipt.",
+        retryable: false,
+      },
   );
 }
 
@@ -889,8 +1319,16 @@ async function openProviderSession(
       allowedHosts,
     });
   } catch (error) {
-    const reason = error instanceof Error ? error.message : String(error);
-    return { kind: "outcome", outcome: { kind: "failed", message: reason, retryable: true } };
+    const reason = redactProviderText(error);
+    return {
+      kind: "outcome",
+      outcome: {
+        kind: "failed",
+        reason: YOUTUBE_UPLOAD_REASON.unknown,
+        detail: `The provider did not answer the session request: ${reason}`,
+        retryable: true,
+      },
+    };
   }
 
   const stored = await deps.store.checkpoint({
@@ -902,7 +1340,10 @@ async function openProviderSession(
   });
   if (!stored) {
     // Another worker owns the session, so this worker must not write to it.
-    return { kind: "outcome", outcome: { kind: "abandoned", reason: "Another worker owns this upload." } };
+    return {
+      kind: "outcome",
+      outcome: { kind: "abandoned", reason: YOUTUBE_UPLOAD_REASON.lease_conflict },
+    };
   }
   return { kind: "sessionUri", sessionUri };
 }
@@ -916,10 +1357,11 @@ async function openProviderSession(
 async function readChunkBytes(
   source: UploadByteSource,
   chunk: UploadChunk,
+  timeoutMs: number,
 ): Promise<ArrayBuffer | null> {
   let bytes: ArrayBuffer;
   try {
-    bytes = await source.read(chunk.start, chunk.end);
+    bytes = await source.read(chunk.start, chunk.end, Math.max(1, timeoutMs));
   } catch {
     return null;
   }
@@ -991,7 +1433,9 @@ async function writeChunk(
       signal: AbortSignal.timeout(timeoutMs),
     });
   } catch (error) {
-    const reason = error instanceof Error ? error.message : String(error);
+    // A failed request can carry the session URL in its message. It is
+    // redacted before it becomes a reason.
+    const reason = redactProviderText(error);
     return ambiguousWrite(`The provider did not answer the write: ${reason}`);
   }
 
@@ -1016,10 +1460,16 @@ async function probeStatus(
   previousConfirmedBytes: number,
 ): Promise<ProviderUploadStatus> {
   let lastReason = "The provider did not answer the status request.";
+  let lastRetryAfterMs: number | undefined;
 
   for (let attempt = 0; attempt < YOUTUBE_MAX_PROBE_ATTEMPTS; attempt += 1) {
     if (context.now() >= context.deadlineMs) {
-      return { kind: "unknown", reason: "The worker ran out of time while the status was being asked for." };
+      return {
+        kind: "unknown",
+        reason: "The worker ran out of time while the status was being asked for.",
+        retryable: true,
+        retryAfterMs: lastRetryAfterMs,
+      };
     }
 
     const timeoutMs = Math.max(1, Math.min(YOUTUBE_PROVIDER_REQUEST_TIMEOUT_MS, context.deadlineMs - context.now()));
@@ -1038,7 +1488,7 @@ async function probeStatus(
         signal: AbortSignal.timeout(timeoutMs),
       });
     } catch (error) {
-      const reason = error instanceof Error ? error.message : String(error);
+      const reason = redactProviderText(error);
       lastReason = `The provider did not answer the status request: ${reason}`;
       if (attempt + 1 < YOUTUBE_MAX_PROBE_ATTEMPTS) await context.sleep(YOUTUBE_PROBE_BACKOFF_MS);
       continue;
@@ -1054,10 +1504,17 @@ async function probeStatus(
     // A `rejected` status is an answer: the session is not usable.
     if (status.kind !== "unknown") return status;
     lastReason = status.reason;
-    if (attempt + 1 < YOUTUBE_MAX_PROBE_ATTEMPTS) await context.sleep(YOUTUBE_PROBE_BACKOFF_MS);
+    lastRetryAfterMs = status.retryAfterMs ?? lastRetryAfterMs;
+    if (attempt + 1 < YOUTUBE_MAX_PROBE_ATTEMPTS) {
+      await context.sleep(
+        status.retryAfterMs && status.retryAfterMs > YOUTUBE_PROBE_BACKOFF_MS
+          ? status.retryAfterMs
+          : YOUTUBE_PROBE_BACKOFF_MS,
+      );
+    }
   }
 
-  return { kind: "unknown", reason: lastReason };
+  return { kind: "unknown", reason: lastReason, retryable: true, retryAfterMs: lastRetryAfterMs };
 }
 
 /** The probe carries no bytes, so it declares the type it would have carried. */
@@ -1103,7 +1560,7 @@ export async function createYoutubeResumableSession(args: {
       signal: AbortSignal.timeout(timeoutMs),
     });
   } catch (error) {
-    const reason = error instanceof Error ? error.message : String(error);
+    const reason = redactProviderText(error);
     throw new Error(`The provider did not answer the session request: ${reason}`);
   }
 
@@ -1115,7 +1572,7 @@ export async function createYoutubeResumableSession(args: {
   if (!response.ok) {
     const errorData = await response.json().catch(() => ({}));
     throw new Error(
-      redactResumableCredentials(uploadFailureMessage(response.status, errorData, response.statusText)),
+      redactProviderText(uploadFailureMessage(response.status, errorData, response.statusText)),
     );
   }
 

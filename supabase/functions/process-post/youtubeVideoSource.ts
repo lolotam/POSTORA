@@ -3,7 +3,7 @@
  *
  * WHY THIS EXISTS
  * ---------------
- * The YouTube upload is now written in chunks, so the bytes have to arrive a
+ * The YouTube upload is written in chunks, so the bytes have to arrive a
  * chunk at a time too. The old path downloaded the whole file into memory and
  * then sent it as one request, which is what made a long video fail: the
  * worker held the whole file, and a single lost answer lost all of it.
@@ -19,6 +19,22 @@
  * late upload from a host like that costs the skipped prefix in bandwidth,
  * which is a price worth paying for not holding the file in memory.
  *
+ * THE SKIP IS EXACT
+ * -----------------
+ * A stream delivers the file in blocks whose sizes the host chooses, and a
+ * block boundary almost never lands on the offset that was asked for. The
+ * skip therefore keeps the part of the block that is still wanted instead of
+ * dropping the whole block: the bytes that were read past the offset are the
+ * first bytes of the next range.
+ *
+ * WHAT IS BOUNDED
+ * ---------------
+ * A media host is an untrusted party. The body it sends is read through a
+ * bounded reader, so a host that announces a small file and then sends
+ * gigabytes cannot make the worker allocate them. The stream buffer is
+ * capped as well, so the worker never holds more than one chunk plus one
+ * block.
+ *
  * WHAT IS REFUSED
  * ---------------
  * A range answer is checked against the range that was asked for: the status
@@ -30,9 +46,27 @@
  */
 
 import type { UploadByteSource } from "./youtubeResumableUpload.ts";
+import { isApprovedMediaUrl } from "./youtubeUploadPolicy.ts";
 
 /** How long one media request may take. */
 export const VIDEO_SOURCE_REQUEST_TIMEOUT_MS = 60_000;
+
+/**
+ * How many bytes the stream buffer may hold.
+ *
+ * The worker asks for one chunk at a time, so this is a ceiling on the
+ * worst case rather than the usual case. A host that tries to push more than
+ * this through the reader is refused.
+ */
+export const VIDEO_SOURCE_MAX_BUFFER_BYTES = 32 * 1024 * 1024;
+
+/**
+ * How many redirects a media read may follow.
+ *
+ * Every hop is checked against the approved hosts, so a redirect cannot move
+ * the read to a host that was not reviewed.
+ */
+export const VIDEO_SOURCE_MAX_REDIRECTS = 3;
 
 /** The video's bytes, and what the host could tell us about them. */
 export interface VideoByteSource extends UploadByteSource {
@@ -58,6 +92,13 @@ export interface VideoByteSourceOptions {
   timeoutMs?: number;
   /** The size the caller already knows, used when the host cannot say. */
   declaredSize?: number | null;
+  /**
+   * The hosts this read may go to.
+   *
+   * When it is given, the URL and every redirect hop are checked against it
+   * BEFORE any request is made. An unapproved host never receives a request.
+   */
+  approvedHosts?: Set<string>;
 }
 
 function mimeTypeOf(value: string | null | undefined, fallback: string): string {
@@ -108,6 +149,104 @@ export function readProbeResponse(response: Response): VideoSourceProbe {
   throw new Error(`The media host answered ${response.status} instead of the video.`);
 }
 
+/**
+ * Reads a body through a bounded reader.
+ *
+ * `maxBytes` is the number of bytes that are wanted. A body that announces a
+ * different length is refused before it is read, and a body that sends more
+ * than it announced is refused while it is read. Either way the worker never
+ * allocates more than it asked for.
+ */
+export async function readBoundedBytes(response: Response, maxBytes: number): Promise<ArrayBuffer> {
+  const declared = Number(response.headers.get("content-length"));
+  if (Number.isFinite(declared) && declared > maxBytes) {
+    throw new Error(`The media host announced ${declared} bytes instead of ${maxBytes}.`);
+  }
+  if (!response.body) {
+    const buffer = await response.arrayBuffer();
+    if (buffer.byteLength !== maxBytes) {
+      throw new Error(`The media host answered ${buffer.byteLength} bytes instead of ${maxBytes}.`);
+    }
+    return buffer;
+  }
+
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      total += value.byteLength;
+      if (total > maxBytes) {
+        throw new Error(`The media host sent more than ${maxBytes} bytes.`);
+      }
+      chunks.push(value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+
+  if (total !== maxBytes) {
+    throw new Error(`The media host answered ${total} bytes instead of ${maxBytes}.`);
+  }
+  const bytes = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return bytes.buffer;
+}
+
+/**
+ * Fetches a media URL, following only redirects that stay inside the
+ * approved hosts.
+ *
+ * The host of the first URL is checked before the first request, and the host
+ * of every hop is checked before that hop is made. A redirect to a host that
+ * was not approved is refused rather than followed.
+ */
+async function fetchApprovedMedia(
+  url: string,
+  init: RequestInit,
+  approvedHosts: Set<string> | undefined,
+  fetchImpl: typeof fetch,
+): Promise<Response> {
+  let target = url;
+
+  for (let hop = 0; hop <= VIDEO_SOURCE_MAX_REDIRECTS; hop += 1) {
+    if (approvedHosts && !isApprovedMediaUrl(target, approvedHosts)) {
+      throw new Error("The video is stored on a host this upload may not read from.");
+    }
+
+    const response = await fetchImpl(target, { ...init, redirect: "manual" });
+
+    if (response.status < 300 || response.status >= 400) {
+      return response;
+    }
+
+    const location = response.headers.get("location");
+    if (!location) {
+      return response;
+    }
+
+    let next: string;
+    try {
+      next = new URL(location, target).toString();
+    } catch {
+      throw new Error("The media host answered with a redirect this upload cannot follow.");
+    }
+
+    if (approvedHosts && !isApprovedMediaUrl(next, approvedHosts)) {
+      throw new Error("The media host answered with a redirect to a host this upload may not read from.");
+    }
+    target = next;
+  }
+
+  throw new Error("The media host answered with too many redirects.");
+}
+
 /** A source that reads a range with one request per range. */
 class RangeByteSource implements VideoByteSource {
   readonly ranged = true;
@@ -116,18 +255,24 @@ class RangeByteSource implements VideoByteSource {
     private readonly url: string,
     private readonly fetchImpl: typeof fetch,
     private readonly timeoutMs: number,
+    private readonly approvedHosts: Set<string> | undefined,
     readonly size: number,
     readonly mimeType: string,
   ) {}
 
-  async read(start: number, end: number): Promise<ArrayBuffer> {
+  async read(start: number, end: number, timeoutMs?: number): Promise<ArrayBuffer> {
     const wanted = end - start + 1;
-    const response = await this.fetchImpl(this.url, {
-      method: "GET",
-      headers: { Range: `bytes=${start}-${end}` },
-      redirect: "follow",
-      signal: AbortSignal.timeout(this.timeoutMs),
-    });
+    const budget = Math.max(1, Math.min(timeoutMs ?? this.timeoutMs, this.timeoutMs));
+    const response = await fetchApprovedMedia(
+      this.url,
+      {
+        method: "GET",
+        headers: { Range: `bytes=${start}-${end}` },
+        signal: AbortSignal.timeout(budget),
+      },
+      this.approvedHosts,
+      this.fetchImpl,
+    );
     if (response.status !== 206) {
       throw new Error(`The media host answered ${response.status} instead of the requested bytes.`);
     }
@@ -136,11 +281,7 @@ class RangeByteSource implements VideoByteSource {
     if (!expected || Number(expected[1]) !== start || Number(expected[2]) !== end) {
       throw new Error("The media host answered with a different range than the one that was asked for.");
     }
-    const bytes = await response.arrayBuffer();
-    if (bytes.byteLength !== wanted) {
-      throw new Error(`The media host answered ${bytes.byteLength} bytes instead of ${wanted}.`);
-    }
-    return bytes;
+    return await readBoundedBytes(response, wanted);
   }
 }
 
@@ -151,61 +292,123 @@ class RangeByteSource implements VideoByteSource {
  * the current position is served by opening a fresh stream and skipping
  * again, which happens only when a resumed upload is asked for bytes that
  * were already passed.
+ *
+ * THE SKIP IS EXACT
+ * -----------------
+ * `readOffset` is the file offset of the next byte this source hands out, and
+ * `buffer` holds the bytes from that offset on. A block that reaches past the
+ * offset that was asked for is not dropped: the part before the offset is
+ * discarded and the part from the offset on stays in the buffer, so the next
+ * range starts with exactly the byte it asked for.
  */
 class StreamingByteSource implements VideoByteSource {
   readonly ranged = false;
   private reader: ReadableStreamDefaultReader<Uint8Array> | null = null;
-  private position = 0;
-  private pending: Uint8Array = new Uint8Array(0);
+  /** The file offset of the next byte handed out. */
+  private readOffset = 0;
+  /** How many bytes the stream has produced. */
+  private streamOffset = 0;
+  /** The bytes from `readOffset` on. */
+  private buffer: Uint8Array = new Uint8Array(0);
+  /** Where the wanted bytes start inside `buffer`. */
+  private bufferStart = 0;
 
   constructor(
     private readonly url: string,
     private readonly fetchImpl: typeof fetch,
     private readonly timeoutMs: number,
+    private readonly approvedHosts: Set<string> | undefined,
     readonly size: number,
     readonly mimeType: string,
   ) {}
 
+  /** How many bytes are buffered and not handed out yet. */
+  private get available(): number {
+    return this.buffer.length - this.bufferStart;
+  }
+
   private async open(): Promise<void> {
-    const response = await this.fetchImpl(this.url, {
-      method: "GET",
-      redirect: "follow",
-      signal: AbortSignal.timeout(this.timeoutMs),
-    });
+    const response = await fetchApprovedMedia(
+      this.url,
+      { method: "GET", signal: AbortSignal.timeout(this.timeoutMs) },
+      this.approvedHosts,
+      this.fetchImpl,
+    );
     if (!response.ok || !response.body) {
       throw new Error(`The media host answered ${response.status} instead of the video.`);
     }
     this.reader = response.body.getReader();
-    this.position = 0;
-    this.pending = new Uint8Array(0);
+    this.readOffset = 0;
+    this.streamOffset = 0;
+    this.buffer = new Uint8Array(0);
+    this.bufferStart = 0;
   }
 
-  private async fill(wanted: number): Promise<void> {
-    while (this.pending.length < wanted) {
-      if (!this.reader) throw new Error("The media stream is closed.");
-      const { done, value } = await this.reader.read();
-      if (done) throw new Error("The media stream ended before the video did.");
-      const chunk = value instanceof Uint8Array ? value : new Uint8Array(value);
-      const merged = new Uint8Array(this.pending.length + chunk.length);
-      merged.set(this.pending, 0);
-      merged.set(chunk, this.pending.length);
-      this.pending = merged;
+  /**
+   * Reads one block from the stream into the buffer.
+   *
+   * The buffer is capped, so a host that sends an endless block is refused
+   * instead of being allowed to grow the worker's memory. The stream is also
+   * not allowed to produce more bytes than the file has, so a host that
+   * announces one size and sends another is refused instead of quietly
+   * changing the video.
+   */
+  private async pull(): Promise<void> {
+    if (!this.reader) throw new Error("The media stream is closed.");
+    const { done, value } = await this.reader.read();
+    if (done) throw new Error("The media stream ended before the video did.");
+    const chunk = value instanceof Uint8Array ? value : new Uint8Array(value);
+    if (chunk.byteLength === 0) return;
+
+    if (this.streamOffset + chunk.byteLength > this.size) {
+      throw new Error("The media host sent more bytes than the video has.");
     }
+    this.streamOffset += chunk.byteLength;
+
+    if (this.available + chunk.byteLength > VIDEO_SOURCE_MAX_BUFFER_BYTES) {
+      throw new Error("The media host sent more than this upload is willing to hold.");
+    }
+
+    // The consumed part of the buffer is dropped before it is grown, so the
+    // buffer stays as small as the wanted bytes allow.
+    const kept = this.buffer.subarray(this.bufferStart);
+    const merged = new Uint8Array(kept.length + chunk.byteLength);
+    merged.set(kept, 0);
+    merged.set(chunk, kept.length);
+    this.buffer = merged;
+    this.bufferStart = 0;
   }
 
+  /**
+   * Moves the read position to `offset`.
+   *
+   * Bytes before the offset are discarded. Bytes at or after the offset are
+   * kept, so a block boundary that lands past the offset does not throw away
+   * the bytes the next range needs.
+   */
   private async skipTo(offset: number): Promise<void> {
-    if (this.position > offset) {
+    if (this.readOffset > offset) {
       // The stream is past the offset. A fresh one is opened and the prefix
       // is skipped again.
       await this.reset();
     }
     if (!this.reader) await this.open();
-    while (this.position < offset) {
-      if (!this.reader) throw new Error("The media stream is closed.");
-      const { done, value } = await this.reader.read();
-      if (done) throw new Error("The media stream ended before the video did.");
-      const chunk = value instanceof Uint8Array ? value : new Uint8Array(value);
-      this.position += chunk.length;
+
+    while (this.readOffset < offset) {
+      if (this.available === 0) {
+        await this.pull();
+        continue;
+      }
+      const drop = Math.min(offset - this.readOffset, this.available);
+      this.bufferStart += drop;
+      this.readOffset += drop;
+    }
+  }
+
+  /** Makes sure at least `wanted` bytes are buffered. */
+  private async fill(wanted: number): Promise<void> {
+    while (this.available < wanted) {
+      await this.pull();
     }
   }
 
@@ -218,16 +421,28 @@ class StreamingByteSource implements VideoByteSource {
       }
       this.reader = null;
     }
-    this.pending = new Uint8Array(0);
+    this.buffer = new Uint8Array(0);
+    this.bufferStart = 0;
+    this.readOffset = 0;
   }
 
-  async read(start: number, end: number): Promise<ArrayBuffer> {
+  async read(start: number, end: number, timeoutMs?: number): Promise<ArrayBuffer> {
     const wanted = end - start + 1;
+    if (wanted <= 0) throw new Error("The media range is empty.");
+
+    const budget = Math.max(1, Math.min(timeoutMs ?? this.timeoutMs, this.timeoutMs));
+    const started = Date.now();
+
     await this.skipTo(start);
     await this.fill(wanted);
-    const bytes = this.pending.slice(0, wanted);
-    this.pending = this.pending.slice(wanted);
-    this.position += wanted;
+
+    if (Date.now() - started > budget) {
+      throw new Error("The media read took longer than this upload is allowed.");
+    }
+
+    const bytes = this.buffer.slice(this.bufferStart, this.bufferStart + wanted);
+    this.bufferStart += wanted;
+    this.readOffset += wanted;
     return bytes.buffer as ArrayBuffer;
   }
 }
@@ -244,14 +459,24 @@ export async function createVideoByteSource(options: VideoByteSourceOptions): Pr
   const timeoutMs = options.timeoutMs ?? VIDEO_SOURCE_REQUEST_TIMEOUT_MS;
   const fallbackMimeType = mimeTypeOf(options.mimeType, "application/octet-stream");
 
+  // The host is checked before the first request, so an unapproved host never
+  // receives one.
+  if (options.approvedHosts && !isApprovedMediaUrl(options.url, options.approvedHosts)) {
+    throw new Error("The video is stored on a host this upload may not read from.");
+  }
+
   let response: Response;
   try {
-    response = await fetchImpl(options.url, {
-      method: "GET",
-      headers: { Range: "bytes=0-0" },
-      redirect: "follow",
-      signal: AbortSignal.timeout(timeoutMs),
-    });
+    response = await fetchApprovedMedia(
+      options.url,
+      {
+        method: "GET",
+        headers: { Range: "bytes=0-0" },
+        signal: AbortSignal.timeout(timeoutMs),
+      },
+      options.approvedHosts,
+      fetchImpl,
+    );
   } catch (error) {
     const reason = error instanceof Error ? error.message : String(error);
     throw new Error(`The video could not be read: ${reason}`);
@@ -280,7 +505,7 @@ export async function createVideoByteSource(options: VideoByteSourceOptions): Pr
   const mimeType = probe.mimeType === "application/octet-stream" ? fallbackMimeType : probe.mimeType;
 
   if (probe.ranged) {
-    return new RangeByteSource(options.url, fetchImpl, timeoutMs, size, mimeType);
+    return new RangeByteSource(options.url, fetchImpl, timeoutMs, options.approvedHosts, size, mimeType);
   }
-  return new StreamingByteSource(options.url, fetchImpl, timeoutMs, size, mimeType);
+  return new StreamingByteSource(options.url, fetchImpl, timeoutMs, options.approvedHosts, size, mimeType);
 }
