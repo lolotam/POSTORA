@@ -212,23 +212,53 @@ Deno.test("a fresh non-zero seek receives exact bytes", async () => {
   assertEquals(bytes[49], 59 % 251);
 });
 
-Deno.test("a host that sends more than it announced is refused", async () => {
-  const fetchImpl: typeof fetch = () =>
-    Promise.resolve(
-      new Response(blockBody(fileBytes(4096), [512]), {
-        status: 200,
-        headers: { "Content-Length": "1024", "Content-Type": "video/mp4" },
-      }),
-    );
-  const source = await createVideoByteSource({
-    url: `${HOST}/video.mp4`,
-    fetchImpl,
-    approvedHosts: APPROVED,
-  });
-  // The host said the video is 1024 bytes and then kept sending. A read that
-  // runs past the size the host announced is refused, because the bytes
-  // beyond it are not the video.
-  await assertRejects(() => source.read(0, 2047));
+Deno.test("rejects a stream block crossing the announced end", async () => {
+  for (const actualSize of [1024, 1025]) {
+    const fetchImpl: typeof fetch = () =>
+      Promise.resolve(
+        new Response(blockBody(fileBytes(actualSize), [513]), {
+          status: 200,
+          headers: { "Content-Length": "1024", "Content-Type": "video/mp4" },
+        }),
+      );
+    const source = await createVideoByteSource({ url: `${HOST}/video.mp4`, fetchImpl, approvedHosts: APPROVED });
+    if (actualSize === 1024) {
+      assertEquals(new Uint8Array(await source.read(0, 1023)), fileBytes(1024));
+    } else {
+      const error = await assertRejects(() => source.read(0, 1023), VideoSourceError);
+      assertEquals(error.detail, "The media host sent more bytes than the video has.");
+    }
+  }
+});
+
+Deno.test("rejects a ranged response for a different object size", async () => {
+  const fetchImpl: typeof fetch = (_input, init) => {
+    const probe = new Headers(init?.headers).get("range") === "bytes=0-0";
+    return Promise.resolve(new Response(new Uint8Array(probe ? 1 : 10), {
+      status: 206,
+      headers: { "Content-Range": probe ? "bytes 0-0/1024" : "bytes 1-10/2048" },
+    }));
+  };
+  const source = await createVideoByteSource({ url: `${HOST}/video.mp4`, fetchImpl, approvedHosts: APPROVED });
+  const error = await assertRejects(() => source.read(1, 10), VideoSourceError);
+  assertEquals(error.detail, "The media host answered with a different range than the one that was asked for.");
+});
+
+Deno.test("a timed-out streaming read cancels the stream and can reopen", async () => {
+  let opened = 0;
+  let cancelled = false;
+  const fetchImpl: typeof fetch = () => {
+    opened++;
+    const body = opened === 2
+      ? new ReadableStream<Uint8Array>({ cancel() { cancelled = true; } })
+      : blockBody(fileBytes(1024), [7, 13]);
+    return Promise.resolve(new Response(body, { headers: { "Content-Length": "1024" } }));
+  };
+  const source = await createVideoByteSource({ url: `${HOST}/video.mp4`, fetchImpl, approvedHosts: APPROVED });
+  const error = await assertRejects(() => source.read(0, 9, 5), VideoSourceError);
+  assertEquals(error.detail, "The media read took longer than this upload is allowed.");
+  assertEquals(cancelled, true);
+  assertEquals(new Uint8Array(await source.read(0, 9)), fileBytes(10));
 });
 
 Deno.test("a read past the size of the video is refused", async () => {

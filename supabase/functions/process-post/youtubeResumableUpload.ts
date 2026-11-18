@@ -671,7 +671,7 @@ export function parseProviderRange(rangeHeader: string | null | undefined): numb
   const start = Number(match[1]);
   const end = Number(match[2]);
   if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end)) return null;
-  if (start < 0 || end < start) return null;
+  if (start !== 0 || end < start || !Number.isSafeInteger(end + 1)) return null;
   return end + 1;
 }
 
@@ -880,9 +880,10 @@ async function readProviderStatus(
   response: Response,
   totalBytes: number,
   previousConfirmedBytes: number,
+  submittedBytes: number,
 ): Promise<ProviderUploadStatus> {
   const bodyText = response.status >= 200 && response.status < 300 ? await readBodyText(response) : "";
-  return classifyProviderStatus({
+  const answer = classifyProviderStatus({
     status: response.status,
     rangeHeader: response.headers.get("range"),
     bodyText,
@@ -890,6 +891,10 @@ async function readProviderStatus(
     previousConfirmedBytes,
     retryAfterHeader: response.headers.get("retry-after"),
   });
+  if (answer.kind === "resumable" && answer.confirmedBytes > submittedBytes) {
+    return ambiguousWrite("The provider confirmed more bytes than were submitted.", false);
+  }
+  return answer;
 }
 
 /**
@@ -1052,6 +1057,7 @@ async function resolveProviderAnswer(
   status: ProviderUploadStatus,
   offset: number,
   videoMayExist: boolean,
+  submittedBytes: number,
 ): Promise<AnswerResolution> {
   if (status.kind === "accepted") {
     return { kind: "outcome", outcome: await keepReceipt(context, status.videoId) };
@@ -1094,7 +1100,9 @@ async function resolveProviderAnswer(
   // The answer either left the offset where it was or did not answer at all.
   // The status is asked for, because a write that went unanswered may or may
   // not have been stored.
-  const probed = await probeStatus(context, offset);
+  const probed = status.kind === "unknown" && (!status.retryable || status.retryAfterMs !== undefined)
+    ? status
+    : await probeStatus(context, offset, submittedBytes);
 
   if (probed.kind === "accepted") {
     // The provider had already finished the upload. This is the lost final
@@ -1273,7 +1281,7 @@ export async function runResumableVideoUpload(deps: ResumableUploadDeps): Promis
     // provider has already accepted, which it refuses, and would risk a
     // second write over a video that already exists.
     const inherited = buildContext(deps, session.id, sessionUri, totalBytes, mimeType, deadlineMs, now, sleep);
-    const probed = await probeStatus(inherited, confirmedBytes);
+    const probed = await probeStatus(inherited, confirmedBytes, bytesSent);
 
     if (probed.kind === "accepted") {
       // The provider finished this upload while nobody was watching. This is
@@ -1310,7 +1318,6 @@ export async function runResumableVideoUpload(deps: ResumableUploadDeps): Promis
       // The provider confirmed an offset that may sit inside a chunk that was
       // written before. The next block starts exactly there.
       confirmedBytes = probed.confirmedBytes;
-      videoMayExist = videoMayExist && confirmedBytes >= totalBytes;
     } else if (probed.retryable) {
       // The provider is not talking. The session is still good, so it is
       // asked again later instead of being thrown away.
@@ -1387,11 +1394,15 @@ export async function runResumableVideoUpload(deps: ResumableUploadDeps): Promis
     // that cannot be taken back, but the check is not limited to it: bytes
     // that reach the provider for a post the customer cancelled are bytes
     // that have to be accounted for.
-    const refused = await checkEffectAuthority(deps);
-    if (refused) return refused;
-
     const bytes = await readChunkBytes(source, chunk, deadlineMs - now());
     if (bytes === null) {
+      const delay = continuationDelayMs(session.continuationCount + 1);
+      return await scheduleAnotherLook(context, offset, bytesSent, videoMayExist, now() + delay);
+    }
+
+    const refused = await checkEffectAuthority(deps);
+    if (refused) return refused;
+    if (now() >= deadlineMs) {
       const delay = continuationDelayMs(session.continuationCount + 1);
       return await scheduleAnotherLook(context, offset, bytesSent, videoMayExist, now() + delay);
     }
@@ -1416,8 +1427,8 @@ export async function runResumableVideoUpload(deps: ResumableUploadDeps): Promis
     }
     bytesSent = Math.max(bytesSent, chunk.end + 1);
 
-    const status = await writeChunk(context, chunk, bytes, offset);
-    const resolution = await resolveProviderAnswer(context, status, offset, videoMayExist);
+    const status = await writeChunk(context, chunk, bytes, offset, bytesSent);
+    const resolution = await resolveProviderAnswer(context, status, offset, videoMayExist, bytesSent);
     if (resolution.kind === "outcome") {
       if (resolution.outcome.kind === "resumable") {
         const delay = continuationDelayMs(session.continuationCount + 1, resolution.outcome.nextCheckAtMs);
@@ -1426,9 +1437,8 @@ export async function runResumableVideoUpload(deps: ResumableUploadDeps): Promis
       return resolution.outcome;
     }
 
-    // The provider says how much it holds. While it says it is short of the
-    // whole file, no video can exist, so the flag is cleared.
-    videoMayExist = resolution.videoMayExist && resolution.confirmedBytes >= totalBytes;
+    // The persisted uncertainty remains sticky once a final write has started.
+    videoMayExist = resolution.videoMayExist;
     if (resolution.confirmedBytes > offset) {
       stalls = 0;
     } else {
@@ -1462,22 +1472,16 @@ export async function runResumableVideoUpload(deps: ResumableUploadDeps): Promis
   // Every byte is confirmed, but no receipt was read: the provider finished
   // the upload and the answer was lost. The status is asked for once more,
   // because that is where the receipt is.
-  const final = await probeStatus(context, totalBytes);
+  const final = await probeStatus(context, totalBytes, bytesSent);
   if (final.kind === "accepted") {
     return await keepReceipt(context, final.videoId);
   }
-  if (final.kind === "resumable") {
-    // The provider says it holds fewer bytes than were confirmed. The two
-    // records disagree, so nothing more is written.
-    return await giveUp(
-      context,
-      { state: "reconcile" },
-      {
-        kind: "reconcile",
-        reason: YOUTUBE_UPLOAD_REASON.reconcile,
-        detail: "The provider reported fewer bytes than were confirmed.",
-      },
+  if (final.kind === "resumable" || (final.kind === "unknown" && final.retryable)) {
+    const delay = continuationDelayMs(
+      session.continuationCount + 1,
+      final.kind === "unknown" ? final.retryAfterMs : undefined,
     );
+    return await scheduleAnotherLook(context, totalBytes, bytesSent, videoMayExist, now() + delay);
   }
   return await giveUp(
     context,
@@ -1643,6 +1647,7 @@ async function writeChunk(
   chunk: UploadChunk,
   bytes: ArrayBuffer,
   previousConfirmedBytes: number,
+  submittedBytes: number,
 ): Promise<ProviderUploadStatus> {
   const contentRange = `bytes ${chunk.start}-${chunk.end}/${context.totalBytes}`;
   const declared = parseContentRange(contentRange);
@@ -1679,7 +1684,7 @@ async function writeChunk(
     return ambiguousWrite("The provider answered with a redirect, which is not followed.");
   }
 
-  return readProviderStatus(response, context.totalBytes, previousConfirmedBytes);
+  return readProviderStatus(response, context.totalBytes, previousConfirmedBytes, submittedBytes);
 }
 
 /**
@@ -1693,9 +1698,9 @@ async function writeChunk(
 async function probeStatus(
   context: UploadContext,
   previousConfirmedBytes: number,
+  submittedBytes: number,
 ): Promise<ProviderUploadStatus> {
   let lastReason = "The provider did not answer the status request.";
-  let lastRetryAfterMs: number | undefined;
 
   for (let attempt = 0; attempt < YOUTUBE_MAX_PROBE_ATTEMPTS; attempt += 1) {
     if (context.now() >= context.deadlineMs) {
@@ -1703,7 +1708,6 @@ async function probeStatus(
         kind: "unknown",
         reason: "The worker ran out of time while the status was being asked for.",
         retryable: true,
-        retryAfterMs: lastRetryAfterMs,
       };
     }
 
@@ -1725,31 +1729,29 @@ async function probeStatus(
     } catch (error) {
       const reason = redactProviderText(error);
       lastReason = `The provider did not answer the status request: ${reason}`;
-      if (attempt + 1 < YOUTUBE_MAX_PROBE_ATTEMPTS) await context.sleep(YOUTUBE_PROBE_BACKOFF_MS);
+      if (attempt + 1 < YOUTUBE_MAX_PROBE_ATTEMPTS && context.now() + YOUTUBE_PROBE_BACKOFF_MS < context.deadlineMs) {
+        await context.sleep(YOUTUBE_PROBE_BACKOFF_MS);
+      }
       continue;
     }
 
     if (response.status >= 300 && response.status < 400 && response.status !== 308) {
       lastReason = "The provider answered the status request with a redirect, which is not followed.";
-      if (attempt + 1 < YOUTUBE_MAX_PROBE_ATTEMPTS) await context.sleep(YOUTUBE_PROBE_BACKOFF_MS);
+      if (attempt + 1 < YOUTUBE_MAX_PROBE_ATTEMPTS && context.now() + YOUTUBE_PROBE_BACKOFF_MS < context.deadlineMs) {
+        await context.sleep(YOUTUBE_PROBE_BACKOFF_MS);
+      }
       continue;
     }
 
-    const status = await readProviderStatus(response, context.totalBytes, previousConfirmedBytes);
-    // A `rejected` status is an answer: the session is not usable.
-    if (status.kind !== "unknown") return status;
+    const status = await readProviderStatus(response, context.totalBytes, previousConfirmedBytes, submittedBytes);
+    if (status.kind !== "unknown" || !status.retryable || status.retryAfterMs !== undefined) return status;
     lastReason = status.reason;
-    lastRetryAfterMs = status.retryAfterMs ?? lastRetryAfterMs;
-    if (attempt + 1 < YOUTUBE_MAX_PROBE_ATTEMPTS) {
-      await context.sleep(
-        status.retryAfterMs && status.retryAfterMs > YOUTUBE_PROBE_BACKOFF_MS
-          ? status.retryAfterMs
-          : YOUTUBE_PROBE_BACKOFF_MS,
-      );
+    if (attempt + 1 < YOUTUBE_MAX_PROBE_ATTEMPTS && context.now() + YOUTUBE_PROBE_BACKOFF_MS < context.deadlineMs) {
+      await context.sleep(YOUTUBE_PROBE_BACKOFF_MS);
     }
   }
 
-  return { kind: "unknown", reason: lastReason, retryable: true, retryAfterMs: lastRetryAfterMs };
+  return { kind: "unknown", reason: lastReason, retryable: true };
 }
 
 /** The probe carries no bytes, so it declares the type it would have carried. */

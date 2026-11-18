@@ -77,6 +77,12 @@ Deno.test("a provider body cannot leak the session uri into a log line", () => {
   assert(!redacted.includes("https://"));
 });
 
+Deno.test("query values after a bracket or upload ID are redacted", () => {
+  const storageUrl = "https://storage.example.test/[video].mp4?signature=private-value&additional=extra-value";
+  const uploadUrl = "https://www.googleapis.com/upload?upload_id=identifier&additional=extra-value";
+  assertEquals(redactProviderText(`source ${storageUrl} provider ${uploadUrl}`), "source [redacted-url] provider [redacted-url]");
+});
+
 Deno.test("an exception message cannot leak the session uri into a log line", () => {
   const error = new Error("request to https://www.googleapis.com/upload?upload_id=abc123 failed");
   const redacted = redactProviderText(error);

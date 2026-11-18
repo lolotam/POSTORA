@@ -45,7 +45,7 @@
  * channel.
  */
 
-import type { UploadByteSource } from "./youtubeResumableUpload.ts";
+import { parseContentRange, type UploadByteSource } from "./youtubeResumableUpload.ts";
 import {
   isApprovedMediaUrl,
   redactProviderText,
@@ -151,13 +151,7 @@ function mimeTypeOf(value: string | null | undefined, fallback: string): string 
  * request, and its total is the size of the file.
  */
 export function parseContentRangeTotal(value: string | null | undefined): number | null {
-  if (typeof value !== "string") return null;
-  const match = /^bytes\s+(\d+)-(\d+)\/(\d+|\*)$/.exec(value.trim());
-  if (!match) return null;
-  if (match[3] === "*") return null;
-  const total = Number(match[3]);
-  if (!Number.isSafeInteger(total) || total <= 0) return null;
-  return total;
+  return parseContentRange(value)?.total ?? null;
 }
 
 /**
@@ -353,6 +347,7 @@ class RangeByteSource implements VideoByteSource {
       this.fetchImpl,
     );
     if (response.status !== 206) {
+      void response.body?.cancel().catch(() => {});
       throw new VideoSourceError(
         YOUTUBE_UPLOAD_REASON.media_read_failed,
         MEDIA_READ_FAILED,
@@ -360,8 +355,9 @@ class RangeByteSource implements VideoByteSource {
       );
     }
     const contentRange = response.headers.get("content-range");
-    const expected = /^bytes\s+(\d+)-(\d+)\//.exec(contentRange ?? "");
-    if (!expected || Number(expected[1]) !== start || Number(expected[2]) !== end) {
+    const returned = parseContentRange(contentRange);
+    if (!returned || returned.start !== start || returned.end !== end || returned.total !== this.size) {
+      void response.body?.cancel().catch(() => {});
       throw new VideoSourceError(
         YOUTUBE_UPLOAD_REASON.media_read_failed,
         MEDIA_READ_FAILED,
@@ -391,6 +387,7 @@ class RangeByteSource implements VideoByteSource {
 class StreamingByteSource implements VideoByteSource {
   readonly ranged = false;
   private reader: ReadableStreamDefaultReader<Uint8Array> | null = null;
+  private controller: AbortController | null = null;
   /** The file offset of the next byte handed out. */
   private readOffset = 0;
   /** How many bytes the stream has produced. */
@@ -415,13 +412,17 @@ class StreamingByteSource implements VideoByteSource {
   }
 
   private async open(): Promise<void> {
+    const controller = new AbortController();
+    this.controller = controller;
     const response = await fetchApprovedMedia(
       this.url,
-      { method: "GET", signal: AbortSignal.timeout(this.timeoutMs) },
+      { method: "GET", signal: controller.signal },
       this.approvedHosts,
       this.fetchImpl,
     );
+    controller.signal.throwIfAborted();
     if (!response.ok || !response.body) {
+      void response.body?.cancel().catch(() => {});
       throw new VideoSourceError(
         YOUTUBE_UPLOAD_REASON.media_read_failed,
         MEDIA_READ_FAILED,
@@ -474,13 +475,7 @@ class StreamingByteSource implements VideoByteSource {
       );
     }
 
-    // The consumed part of the buffer is dropped before it is grown, so the
-    // buffer stays as small as the wanted bytes allow.
-    const kept = this.buffer.subarray(this.bufferStart);
-    const merged = new Uint8Array(kept.length + chunk.byteLength);
-    merged.set(kept, 0);
-    merged.set(chunk, kept.length);
-    this.buffer = merged;
+    this.buffer = chunk;
     this.bufferStart = 0;
   }
 
@@ -495,7 +490,7 @@ class StreamingByteSource implements VideoByteSource {
     if (this.readOffset > offset) {
       // The stream is past the offset. A fresh one is opened and the prefix
       // is skipped again.
-      await this.reset();
+      this.reset();
     }
     if (!this.reader) await this.open();
 
@@ -510,55 +505,60 @@ class StreamingByteSource implements VideoByteSource {
     }
   }
 
-  /** Makes sure at least `wanted` bytes are buffered. */
-  private async fill(wanted: number): Promise<void> {
-    while (this.available < wanted) {
-      await this.pull();
-    }
-  }
-
-  private async reset(): Promise<void> {
-    if (this.reader) {
-      try {
-        await this.reader.cancel();
-      } catch {
-        // The stream is already gone; a fresh one is opened either way.
-      }
-      this.reader = null;
-    }
+  private reset(): void {
+    this.controller?.abort();
+    this.controller = null;
+    void this.reader?.cancel().catch(() => {});
+    this.reader = null;
     this.buffer = new Uint8Array(0);
     this.bufferStart = 0;
     this.readOffset = 0;
+    this.streamOffset = 0;
   }
 
   async read(start: number, end: number, timeoutMs?: number): Promise<ArrayBuffer> {
     const wanted = end - start + 1;
-    if (wanted <= 0) {
+    if (start < 0 || end >= this.size || wanted <= 0 || wanted > VIDEO_SOURCE_MAX_BUFFER_BYTES) {
       throw new VideoSourceError(
         YOUTUBE_UPLOAD_REASON.media_read_failed,
         MEDIA_READ_FAILED,
-        "The media range is empty.",
+        "The requested media range is outside the readable bounds.",
       );
     }
 
     const budget = Math.max(1, Math.min(timeoutMs ?? this.timeoutMs, this.timeoutMs));
-    const started = Date.now();
-
-    await this.skipTo(start);
-    await this.fill(wanted);
-
-    if (Date.now() - started > budget) {
+    let timedOut = false;
+    const timer = setTimeout(() => {
+      timedOut = true;
+      this.reset();
+    }, budget);
+    try {
+      await this.skipTo(start);
+      const bytes = new Uint8Array(wanted);
+      let filled = 0;
+      while (filled < wanted) {
+        if (this.available === 0) {
+          await this.pull();
+          continue;
+        }
+        const take = Math.min(wanted - filled, this.available);
+        bytes.set(this.buffer.subarray(this.bufferStart, this.bufferStart + take), filled);
+        this.bufferStart += take;
+        this.readOffset += take;
+        filled += take;
+      }
+      return bytes.buffer;
+    } catch (error) {
+      this.reset();
+      if (!timedOut) throw error;
       throw new VideoSourceError(
         YOUTUBE_UPLOAD_REASON.media_read_failed,
         MEDIA_READ_FAILED,
         "The media read took longer than this upload is allowed.",
       );
+    } finally {
+      clearTimeout(timer);
     }
-
-    const bytes = this.buffer.slice(this.bufferStart, this.bufferStart + wanted);
-    this.bufferStart += wanted;
-    this.readOffset += wanted;
-    return bytes.buffer as ArrayBuffer;
   }
 }
 
@@ -608,24 +608,18 @@ export async function createVideoByteSource(options: VideoByteSourceOptions): Pr
     );
   }
 
-  if (response.status === 416) {
-    throw new VideoSourceError(
-      YOUTUBE_UPLOAD_REASON.media_read_failed,
-      MEDIA_READ_FAILED,
-      "The video is empty.",
-    );
-  }
-
-  const probe = readProbeResponse(response);
-
-  // The probe answered with the whole file. It is not read: the source below
-  // opens its own stream.
-  if (response.body) {
-    try {
-      await response.body.cancel();
-    } catch {
-      // The body was already consumed or closed; nothing to release.
+  let probe: VideoSourceProbe;
+  try {
+    if (response.status === 416) {
+      throw new VideoSourceError(
+        YOUTUBE_UPLOAD_REASON.media_read_failed,
+        MEDIA_READ_FAILED,
+        "The video is empty.",
+      );
     }
+    probe = readProbeResponse(response);
+  } finally {
+    void response.body?.cancel().catch(() => {});
   }
 
   const size = probe.size || options.declaredSize || 0;

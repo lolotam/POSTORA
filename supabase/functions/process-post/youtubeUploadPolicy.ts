@@ -125,7 +125,7 @@ export function redactResumableCredentials(text: string): string {
   return text.replace(/(upload_id=)[^&\s"'<>]+/gi, "$1***");
 }
 
-const URL_PATTERN = /https?:\/\/[^\s"'<>)\]]+/gi;
+const URL_PATTERN = /https?:\/\/[^\s"'<>]+/gi;
 const UPLOAD_ID_PATTERN = /(upload_id=)[^\s&"'<>)\]]+/gi;
 const UPLOAD_TYPE_PATTERN = /(uploadType=)[^\s&"'<>)\]]+/gi;
 const BEARER_PATTERN = /(bearer\s+)[^\s"'<>)\]]+/gi;
@@ -143,12 +143,11 @@ const TOKEN_FIELD_PATTERN =
  */
 export function redactProviderText(value: unknown, maxLength = 500): string {
   const raw = typeof value === "string" ? value : value instanceof Error ? value.message : String(value ?? "");
-  const redacted = redactResumableCredentials(raw)
+  const redacted = raw.replace(URL_PATTERN, "[redacted-url]")
     .replace(UPLOAD_ID_PATTERN, "$1[redacted]")
     .replace(UPLOAD_TYPE_PATTERN, "$1[redacted]")
     .replace(BEARER_PATTERN, "$1[redacted]")
-    .replace(TOKEN_FIELD_PATTERN, "$1[redacted]")
-    .replace(URL_PATTERN, "[redacted-url]");
+    .replace(TOKEN_FIELD_PATTERN, "$1[redacted]");
   return redacted.length > maxLength ? `${redacted.slice(0, maxLength)}…` : redacted;
 }
 

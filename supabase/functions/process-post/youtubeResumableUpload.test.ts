@@ -362,17 +362,70 @@ Deno.test("the wait between two continuations is bounded at both ends", () => {
 // The upload
 // ───────────────────────────────────────────────────────────────────────────
 
+function acceptBytesThrough(confirmedBytes: number): ScriptedAnswer {
+  return { status: 308, headers: { Range: `bytes=0-${confirmedBytes - 1}` } };
+}
+
+function completeUploadFrom(offset: number): ScriptedAnswer[] {
+  const answers: ScriptedAnswer[] = [];
+  for (let end = offset + YOUTUBE_RESUMABLE_CHUNK_BYTES; end < TOTAL_BYTES; end += YOUTUBE_RESUMABLE_CHUNK_BYTES) {
+    answers.push(acceptBytesThrough(end));
+  }
+  answers.push({ status: 200, body: JSON.stringify({ id: VIDEO_ID }) });
+  return answers;
+}
+
 Deno.test("a finished upload stores the receipt", async () => {
   const provider = fakeProvider([
-    // The session is opened.
     { status: 200, headers: { Location: SESSION_URI } },
-    // The first chunk is accepted.
-    { status: 308, headers: { Range: "bytes=0-10485759" } },
-    // The last chunk creates the video.
-    { status: 200, body: JSON.stringify({ id: VIDEO_ID }) },
+    ...completeUploadFrom(0),
   ]);
-  const { outcome } = await run(provider, record());
+  const { outcome, store } = await run(provider, record());
   assertEquals(outcome, { kind: "completed", videoId: VIDEO_ID });
+  const saved = [...store.sessions.values()][0];
+  assertEquals(saved.state, "uploaded");
+  assertEquals(saved.videoId, VIDEO_ID);
+  assertEquals(provider.requests.at(-1)?.range, `bytes ${TOTAL_BYTES - YOUTUBE_RESUMABLE_CHUNK_BYTES}-${TOTAL_BYTES - 1}/${TOTAL_BYTES}`);
+});
+
+Deno.test("the provider cannot advance past the submitted chunk", async () => {
+  const provider = fakeProvider([
+    { status: 200, headers: { Location: SESSION_URI } },
+    acceptBytesThrough(YOUTUBE_RESUMABLE_CHUNK_BYTES + 1),
+  ]);
+  const { outcome, store } = await run(provider, record());
+  assertEquals(outcome.kind, "failed");
+  assertEquals(provider.requests.length, 2);
+  assertEquals([...store.sessions.values()][0].confirmedBytes, 0);
+});
+
+Deno.test("transient final-receipt probes leave the confirmed session open", async () => {
+  const offset = TOTAL_BYTES - YOUTUBE_RESUMABLE_CHUNK_BYTES;
+  const provider = fakeProvider([
+    acceptBytesThrough(offset),
+    acceptBytesThrough(TOTAL_BYTES),
+    { status: 503, headers: { "Retry-After": "300" } },
+  ]);
+  const { outcome, store } = await run(provider, record({ sessionUri: SESSION_URI, confirmedBytes: offset, bytesSent: offset }));
+  assertEquals(outcome.kind, "resumable");
+  const saved = [...store.sessions.values()][0];
+  assertEquals(saved.state, "open");
+  assertEquals(saved.confirmedBytes, TOTAL_BYTES);
+  assertEquals(saved.videoMayExist, true);
+  assertEquals(provider.requests.length, 3);
+});
+
+Deno.test("Retry-After on a chunk schedules the next check without probing", async () => {
+  const provider = fakeProvider([
+    { status: 200, headers: { Location: SESSION_URI } },
+    { status: 429, headers: { "Retry-After": "300" } },
+  ]);
+  const before = Date.now();
+  const { outcome, store } = await run(provider, record());
+  assertEquals(outcome.kind, "resumable");
+  assertEquals(provider.requests.length, 2);
+  const nextCheckAt = [...store.sessions.values()][0].nextCheckAt;
+  assert(nextCheckAt && nextCheckAt >= before + 300_000);
 });
 
 Deno.test("the session uri never reaches the outcome", async () => {
@@ -388,14 +441,13 @@ Deno.test("the session uri never reaches the outcome", async () => {
 Deno.test("an inherited session is probed before any byte is written", async () => {
   const provider = fakeProvider([
     // The probe of the inherited session.
-    { status: 308, headers: { Range: "bytes=0-5242879" } },
-    // The write that continues from the confirmed offset.
-    { status: 200, body: JSON.stringify({ id: VIDEO_ID }) },
+    acceptBytesThrough(5_242_880),
+    ...completeUploadFrom(5_242_880),
   ]);
   const source = memorySource(TOTAL_BYTES);
   const { outcome } = await run(
     provider,
-    record({ sessionUri: SESSION_URI, confirmedBytes: 5_242_880 }),
+    record({ sessionUri: SESSION_URI, confirmedBytes: 1_000, bytesSent: YOUTUBE_RESUMABLE_CHUNK_BYTES }),
     source,
   );
   assertEquals(outcome, { kind: "completed", videoId: VIDEO_ID });
@@ -416,14 +468,13 @@ Deno.test("a partial acknowledgement inside a chunk is accepted and continued", 
   const provider = fakeProvider([
     // The probe of the inherited session confirms 5,000,000 bytes, which is
     // inside the chunk that was written before.
-    { status: 308, headers: { Range: "bytes=0-4999999" } },
-    // The write that continues from there.
-    { status: 200, body: JSON.stringify({ id: VIDEO_ID }) },
+    acceptBytesThrough(5_000_000),
+    ...completeUploadFrom(5_000_000),
   ]);
   const source = memorySource(TOTAL_BYTES);
   const { outcome } = await run(
     provider,
-    record({ sessionUri: SESSION_URI, confirmedBytes: 5_000_000 }),
+    record({ sessionUri: SESSION_URI, confirmedBytes: 1_000, bytesSent: YOUTUBE_RESUMABLE_CHUNK_BYTES }),
     source,
   );
   assertEquals(outcome, { kind: "completed", videoId: VIDEO_ID });
@@ -440,7 +491,7 @@ Deno.test("a lost final acknowledgement finds the same video again", async () =>
   const source = memorySource(TOTAL_BYTES);
   const { outcome } = await run(
     provider,
-    record({ sessionUri: SESSION_URI, confirmedBytes: TOTAL_BYTES, videoMayExist: true }),
+    record({ sessionUri: SESSION_URI, confirmedBytes: TOTAL_BYTES, bytesSent: TOTAL_BYTES, videoMayExist: true }),
     source,
   );
   assertEquals(outcome, { kind: "completed", videoId: VIDEO_ID });
@@ -608,15 +659,17 @@ Deno.test("a refusal before a chunk write leaves the bytes unwritten", async () 
   // The session is already open, so the initialization write is not the one
   // that is refused: the write of the chunk is.
   const provider = fakeProvider([
-    { status: 308, headers: { Range: "bytes=0-10485759" } },
+    { status: 308 },
   ]);
+  const source = memorySource(TOTAL_BYTES);
   let checks = 0;
   const { outcome } = await run(
     provider,
     record({ sessionUri: SESSION_URI }),
-    undefined,
+    source,
     undefined,
     () => {
+      assertEquals(source.reads.length, 1);
       checks += 1;
       return Promise.resolve({ authorized: false, reason: "post_not_processing" });
     },
@@ -635,10 +688,7 @@ Deno.test("the write is made when the live state authorises it", async () => {
   const provider = fakeProvider([
     // The session is opened.
     { status: 200, headers: { Location: SESSION_URI } },
-    // The first chunk is accepted.
-    { status: 308, headers: { Range: "bytes=0-10485759" } },
-    // The last chunk creates the video.
-    { status: 200, body: JSON.stringify({ id: VIDEO_ID }) },
+    ...completeUploadFrom(0),
   ]);
   const { outcome } = await run(
     provider,

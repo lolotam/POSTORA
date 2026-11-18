@@ -690,14 +690,15 @@ a second time.
   is untouched.
 * Nothing is published again from the recovery.
 
-**The quiescence boundary.** The closure may only be made once the worker that
-owns the attempt cannot write any more, because a live worker is about to write
-the very row the scope is missing. `youtube_upload_attempt_quiet_after()` is
-`150 seconds`, which is `WORKER_LIFETIME_MS` in the process-post edge function:
-the worker that claims the attempt starts before the claim and is killed
-150 seconds later, so `posts.processing_started_at + 150 seconds` is a bound
-after which no worker of that attempt can write another result row. Until then
-the recovery says `attempt_may_still_be_running` and closes nothing.
+**The quiescence boundary.** Recovery waits until
+`posts.processing_started_at + youtube_upload_attempt_quiet_after()`,
+which is 150 seconds on the current worker configuration. A live worker may
+still send its result while that window is open. After the window, a database
+request sent before worker termination may still commit. The timeout therefore
+does not establish whether a provider call happened or whether a result write
+is still in flight. Recovery classifies a missing sibling result as uncertain
+and does not authorize a resend. Until the window expires, recovery returns
+`attempt_may_still_be_running` without closing the fanout.
 
 **The order.** The closure is driven **before** the public row is settled. The
 pending YouTube row is what keeps the generic sweeper from reading the absence

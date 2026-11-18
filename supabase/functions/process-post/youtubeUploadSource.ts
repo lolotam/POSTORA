@@ -19,7 +19,7 @@ import {
   resolveMediaUrl,
   type MediaFile,
 } from "./mediaDelivery.ts";
-import { createVideoByteSource } from "./youtubeVideoSource.ts";
+import { createVideoByteSource, VideoSourceError } from "./youtubeVideoSource.ts";
 import type { UploadByteSource } from "./youtubeResumableUpload.ts";
 import {
   isApprovedMediaUrl,
@@ -130,6 +130,9 @@ export async function createOwnedVideoSource(args: {
       ...(args.timeoutMs !== undefined ? { timeoutMs: args.timeoutMs } : {}),
     });
   } catch (error) {
+    if (error instanceof VideoSourceError && error.reason === YOUTUBE_UPLOAD_REASON.media_origin_not_approved) {
+      throw new VideoSourceUnavailableError(error.reason, error.message);
+    }
     // The exception a failed media read throws carries the URL it was given,
     // and a signed media URL is a credential. The raw text is redacted into
     // the log line; the message the caller sees names no host and no URL.
