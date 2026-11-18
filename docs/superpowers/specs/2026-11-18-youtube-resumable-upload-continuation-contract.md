@@ -1554,7 +1554,12 @@ Deploy that handler before the frontend that sends replacement IDs. Apply
 `20261118173000_youtube_pending_handoff_guard.sql` and
 `20261118190000_post_action_processing_claim.sql` before the `process-post`
 build that calls `restore_youtube_pending_post` and
-`claim_post_action_processing`.
+`claim_post_action_processing`. Apply
+`20261118200000_youtube_disconnected_outcome_evidence.sql` before the
+`process-post` build that relies on the preserved receipt and the uncertainty
+marker: the trigger that copies the outcome of a deleted result row onto the
+post has to exist before that build settles a post whose account was
+disconnected.
 
 **Every migration of this feature is applied in production.** A change to
 their behaviour is therefore a NEW migration and never an edit of an applied
