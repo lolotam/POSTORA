@@ -94,10 +94,8 @@ describe("post retry submission", () => {
     expect(result.current.retryDialogPost).toBeNull();
   });
 
-  it("replaces media without changing the retryable status or deleting platform results", async () => {
-    const update = vi.fn(() => ({ eq: async () => ({ error: null }) }));
+  it("submits replacement media through the enqueue boundary without writing the post directly", async () => {
     from.mockImplementation((table) => {
-      if (table === "posts") return { update };
       if (table === "media_files") return { insert: () => ({ select: () => ({ single: async () => ({ data: { id: "media-1" }, error: null }) }) }) };
       throw new Error(`Unexpected table: ${table}`);
     });
@@ -108,8 +106,8 @@ describe("post retry submission", () => {
       result.current.setRetryMediaFiles([new File(["image"], "photo.jpg", { type: "image/jpeg" })]);
     });
     await act(async () => { await result.current.handleRetryWithNewMedia(); });
-    expect(update).toHaveBeenCalledWith({ media_file_ids: ["media-1"] });
-    expect(invoke).toHaveBeenCalledWith("enqueue-post-publish", { body: { post_id: post.id, mode: "retry" } });
+    expect(from).not.toHaveBeenCalledWith("posts");
+    expect(invoke).toHaveBeenCalledWith("enqueue-post-publish", { body: { post_id: post.id, mode: "retry", replacement_media_ids: ["media-1"] } });
     expect(from).not.toHaveBeenCalledWith("platform_posts");
     expect(result.current.retryMediaDialogPost).toBeNull();
   });

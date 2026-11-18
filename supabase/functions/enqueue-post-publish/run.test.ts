@@ -16,8 +16,8 @@ function fixture(overrides: Partial<EnqueueDependencies> = {}) {
       calls.push(["publish_now", postId, userId]);
       return Promise.resolve(STAMP);
     },
-    requestPostRetry: (postId, userId, accountIds) => {
-      calls.push(["retry", postId, userId, accountIds]);
+    requestPostRetry: (postId, userId, accountIds, mediaIds) => {
+      calls.push(["retry", postId, userId, accountIds, ...(mediaIds ? [mediaIds] : [])]);
       return Promise.resolve({ status: "accepted", requested_at: STAMP, account_ids: [ACCOUNT], platforms: ["instagram"] });
     },
     readPostStatus: () => Promise.resolve("pending"),
@@ -97,7 +97,17 @@ Deno.test("retry accepts the RPC stamp and sends only owner-scoped selected acco
   assertEquals(f.logs, []);
 });
 
-for (const reason of ["not_found", "not_retryable", "no_targets"] as const) {
+Deno.test("retry submits the replacement IDs to the owner-scoped admission before kicking", async () => {
+  const f = fixture();
+  const response = await run(f.deps, {
+    callerId: OWNER, body: { post_id: POST, mode: "retry", replacement_media_ids: [ACCOUNT] },
+  });
+  assertEquals(response.status, 202);
+  assertEquals(f.calls, [["retry", POST, OWNER, undefined, [ACCOUNT]]]);
+  assertEquals(f.kicks, [{ post_id: POST, expected_publish_requested_at: STAMP }]);
+});
+
+for (const reason of ["not_found", "not_retryable", "no_targets", "invalid_media"] as const) {
   Deno.test(`retry refusal ${reason} maps to its HTTP status and logs once`, async () => {
     const f = fixture({ requestPostRetry: () => Promise.resolve({ status: "refused", reason }) });
     assertEquals(await run(f.deps, { callerId: OWNER, body: { post_id: POST, mode: "retry" } }), {

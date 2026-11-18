@@ -246,6 +246,41 @@ BEGIN
   UPDATE public.posts SET scheduled_at = now() + interval '1 day' WHERE id = p_failed;
   ASSERT (SELECT publish_requested_at FROM public.posts WHERE id = p_failed) = now() - interval '1 minute',
     'S3 a queued retry keeps its request so its marker still applies';
+  -- Replacement media commits only with retry admission and must belong to the post owner.
+  DECLARE
+    p_replace uuid := gen_random_uuid();
+    p_blocked uuid := gen_random_uuid();
+    m_original uuid := gen_random_uuid();
+    m_new uuid := gen_random_uuid();
+    m_foreign uuid := gen_random_uuid();
+  BEGIN
+    INSERT INTO public.media_files (id, user_id, file_path, file_type, file_size, mime_type, storage_bucket) VALUES
+      (m_original, u_a, 'fixture/original.jpg', 'image', 10, 'image/jpeg', 'media'),
+      (m_new, u_a, 'fixture/replacement.jpg', 'image', 10, 'image/jpeg', 'media'),
+      (m_foreign, u_b, 'fixture/foreign.jpg', 'image', 10, 'image/jpeg', 'media');
+    INSERT INTO public.posts (id, user_id, status, platforms, media_file_ids) VALUES
+      (p_replace, u_a, 'failed', ARRAY['facebook'], ARRAY[m_original]),
+      (p_blocked, u_a, 'failed', ARRAY['facebook'], ARRAY[m_original]);
+    INSERT INTO public.platform_posts (post_id, social_account_id, platform, status, response_data) VALUES
+      (p_replace, acct_fb, 'facebook', 'failed', '{}'::jsonb),
+      (p_blocked, acct_fb, 'facebook', 'failed', '{"publish_outcome":"uncertain"}'::jsonb);
+
+    ASSERT NOT has_function_privilege('authenticated', 'public.request_post_retry_with_media(uuid,uuid,uuid[],uuid[])', 'EXECUTE'),
+      'replacement accepts a service role caller only';
+    v_result := public.request_post_retry_with_media(p_replace, u_a, ARRAY[m_foreign]);
+    ASSERT v_result ->> 'reason' = 'invalid_media', 'foreign media is refused';
+    ASSERT (SELECT media_file_ids = ARRAY[m_original] AND status = 'failed' FROM public.posts WHERE id=p_replace),
+      'foreign media leaves the original post intact';
+    v_result := public.request_post_retry_with_media(p_blocked, u_a, ARRAY[m_new]);
+    ASSERT v_result ->> 'reason' = 'no_targets', 'uncertain target remains blocked';
+    ASSERT (SELECT media_file_ids = ARRAY[m_original] AND status = 'failed' FROM public.posts WHERE id=p_blocked),
+      'refused retry leaves the original media intact';
+    v_result := public.request_post_retry_with_media(p_replace, u_a, ARRAY[m_new]);
+    ASSERT v_result ->> 'status' = 'accepted', 'owned media can be retried';
+    ASSERT (SELECT media_file_ids = ARRAY[m_new] AND status = 'pending' FROM public.posts WHERE id=p_replace),
+      'accepted request queues the same post with replacement media';
+  END;
+
 END $$;
 
 -- G1-G8: privileges, definer settings and the due-row index.

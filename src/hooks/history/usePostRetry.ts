@@ -15,9 +15,12 @@ import type { Platform } from "@/lib/types";
 export function usePostRetry() {
   const { toast } = useToast();
   const { t } = useTranslation("history");
-  const submitRetry = async (postId: string, accountIds?: string[]) => {
-    const acceptance = await enqueuePostPublish({ postId, mode: "retry", accountIds });
+  const submitRetry = async (postId: string, accountIds?: string[], replacementMediaIds?: string[]) => {
+    const acceptance = await enqueuePostPublish({ postId, mode: "retry", accountIds, replacementMediaIds });
     if (acceptance.accepted === false) {
+      if (acceptance.reason === "invalid_media") {
+        throw new Error("The replacement media is unavailable. Choose files from your media library and try again.");
+      }
       if (acceptance.reason === "no_targets") {
         throw new Error("No destinations are currently eligible to retry. Refresh History to see the latest results.");
       }
@@ -182,12 +185,7 @@ export function usePostRetry() {
         }
         throw failed.reason;
       }
-      const newMediaFiles = stored;
-
-      const { error: updateError } = await supabase.from("posts").update({ media_file_ids: newMediaFiles.map((mediaFile) => mediaFile.id) }).eq("id", retryMediaDialogPost.id);
-      if (updateError) throw updateError;
-
-      await submitRetry(retryMediaDialogPost.id);
+      await submitRetry(retryMediaDialogPost.id, undefined, stored.map((mediaFile) => mediaFile.id));
       notifyRetrySubmitted();
       invalidatePostQueries(queryClient);
       setRetryMediaDialogPost(null);

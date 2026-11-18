@@ -13,7 +13,7 @@ const RetryResultSchema = z.discriminatedUnion("status", [
     status: z.literal("accepted"), requested_at: RequestStampSchema,
     account_ids: z.array(z.string().uuid()).min(1), platforms: z.array(z.string().min(1)).min(1),
   }),
-  z.object({ status: z.literal("refused"), reason: z.enum(["not_found", "not_retryable", "no_targets"]) }),
+  z.object({ status: z.literal("refused"), reason: z.enum(["not_found", "not_retryable", "no_targets", "invalid_media"]) }),
 ]);
 
 export interface HttpDependencies extends EnqueueDependencies {
@@ -45,10 +45,11 @@ export function createDependencies(): HttpDependencies {
       if (error) throw error;
       return RequestStampSchema.nullable().parse(data);
     },
-    requestPostRetry: async (postId, userId, accountIds) => {
-      const { data, error } = await admin.rpc("request_post_retry", {
-        p_post_id: postId, p_user_id: userId, ...(accountIds ? { p_account_ids: accountIds } : {}),
-      });
+    requestPostRetry: async (postId, userId, accountIds, replacementMediaIds) => {
+      const args = { p_post_id: postId, p_user_id: userId, ...(accountIds ? { p_account_ids: accountIds } : {}) };
+      const { data, error } = replacementMediaIds
+        ? await admin.rpc("request_post_retry_with_media", { ...args, p_media_ids: replacementMediaIds })
+        : await admin.rpc("request_post_retry", args);
       if (error) throw error;
       return RetryResultSchema.parse(data);
     },
