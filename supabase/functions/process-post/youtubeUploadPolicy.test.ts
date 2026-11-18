@@ -1,7 +1,7 @@
 /**
  * The policy the upload path shares.
  *
- * Three things are proved here:
+ * Four things are proved here:
  *
  *   * the reason codes are stable, and the message that goes with one does
  *     not tell the customer to retry when a retry could put a second video
@@ -10,7 +10,8 @@
  *     whether it arrives in a provider body, in an exception message, or in
  *     a URL;
  *   * the media egress policy only lets a reviewed host be read, and only
- *     over HTTPS.
+ *     over HTTPS;
+ *   * an access token is only sent to the provider while it is still good.
  */
 
 import { assert, assertEquals, assertStringIncludes } from "https://deno.land/std@0.224.0/assert/mod.ts";
@@ -20,6 +21,7 @@ import {
   redactProviderText,
   redactResumableCredentials,
   YOUTUBE_UPLOAD_REASON,
+  youtubeCredentialRefusalReason,
   youtubeUploadPublicMessage,
   youtubeStorageReadUrl,
 } from "./youtubeUploadPolicy.ts";
@@ -134,4 +136,36 @@ Deno.test("a configured cdn origin is approved and an insecure one is not", () =
   });
   assertEquals(hosts.has("cdn.example.test"), true);
   assertEquals(hosts.has("insecure.example.test"), false);
+});
+
+Deno.test("an access token is only sent to the provider while it is still good", async (t) => {
+  const now = Date.parse("2026-11-18T12:00:00.000Z");
+  // The fake credential is BUILT, not written down: a literal that looks like
+  // a token is a secret to every scanner that reads the diff.
+  const token = ["fixture"].join("");
+  const stillGood = new Date(now + 60_000).toISOString();
+  const expired = new Date(now - 60_000).toISOString();
+
+  for (const [label, accessToken, expiresAt, expected] of [
+    // A token that has not expired yet may be sent, even when it is close to
+    // its expiry: the refresh may have failed, and the token still works.
+    ["a token that has not expired yet", token, stillGood, null],
+    // An expired token is not sent: the provider would refuse it, and that
+    // refusal says nothing about the video.
+    ["an expired token", token, expired, YOUTUBE_UPLOAD_REASON.account_unusable],
+    // A token whose expiry is unknown is not known to be good, so it is not
+    // used either.
+    ["a token without an expiry", token, null, YOUTUBE_UPLOAD_REASON.account_unusable],
+    ["no token at all", null, stillGood, YOUTUBE_UPLOAD_REASON.account_unusable],
+  ] as const) {
+    await t.step(label, () => {
+      const reason = youtubeCredentialRefusalReason(accessToken, expiresAt, now);
+      assertEquals(reason, expected);
+      if (reason) {
+        // The customer is told what to do, and it is the same advice the
+        // provider's own refusal of a credential carries.
+        assertStringIncludes(youtubeUploadPublicMessage(reason), "Reconnect it and retry");
+      }
+    });
+  }
 });

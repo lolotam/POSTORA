@@ -1,7 +1,7 @@
 /**
  * Shared policy for the native YouTube resumable upload path.
  *
- * Three things live here because more than one module needs them and they must
+ * Four things live here because more than one module needs them and they must
  * not drift:
  *
  * 1. The stable public reason codes. A caller (the dashboard, the n8n node,
@@ -11,6 +11,8 @@
  *    resumable session URL, which carries the upload credential.
  * 3. The media egress policy. A video is read back from storage or a CDN, and
  *    that read is a network call the attacker could aim at an internal host.
+ * 4. The credential policy. The publish path and the continuation have to
+ *    agree on which access token may be sent to the provider.
  */
 
 import { publicSupabaseUrl } from "../_shared/publicSupabaseUrl.ts";
@@ -141,6 +143,31 @@ const PUBLIC_MESSAGE: Record<YoutubeUploadReason, string> = {
 /** The public message for a reason code. Unknown codes get a neutral message. */
 export function youtubeUploadPublicMessage(reason: YoutubeUploadReason | string): string {
   return PUBLIC_MESSAGE[reason as YoutubeUploadReason] ?? "The YouTube upload could not be completed.";
+}
+
+/**
+ * The reason a credential may not be sent to the provider, or null when it may.
+ *
+ * A token is good while it is still good. An expiry in the past means the
+ * provider will refuse it, and that refusal says nothing about the video, so
+ * the token is not sent. A token without an expiry is not known to be good,
+ * and a token that is not known to be good is not used.
+ *
+ * The publish path and the continuation path share this rule, because a rule
+ * that exists twice is a rule that will disagree. The publish path admits the
+ * upload BEFORE the provider is contacted, so a credential it may not use has
+ * to be refused before the admission: otherwise the pending row of an upload
+ * that can never start is written first.
+ */
+export function youtubeCredentialRefusalReason(
+  accessToken: string | null | undefined,
+  tokenExpiresAt: string | null | undefined,
+  nowMs: number = Date.now(),
+): YoutubeUploadReason | null {
+  if (!accessToken || !tokenExpiresAt) return YOUTUBE_UPLOAD_REASON.account_unusable;
+  const expiresAt = Date.parse(tokenExpiresAt);
+  if (!Number.isFinite(expiresAt) || expiresAt <= nowMs) return YOUTUBE_UPLOAD_REASON.account_unusable;
+  return null;
 }
 
 /**

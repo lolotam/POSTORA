@@ -15,10 +15,11 @@
  *   * that the session URI never leaves the code that owns it.
  */
 
-import { assert, assertEquals, assertStringIncludes } from "https://deno.land/std@0.224.0/assert/mod.ts";
+import { assert, assertEquals, assertRejects, assertStringIncludes } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import {
   classifyProviderStatus,
   continuationDelayMs,
+  createYoutubeResumableSession,
   parseRetryAfterMs,
   planChunkFrom,
   runResumableVideoUpload,
@@ -26,6 +27,7 @@ import {
   YOUTUBE_CONTINUATION_MAX_DELAY_MS,
   YOUTUBE_CONTINUATION_MIN_DELAY_MS,
   YOUTUBE_RESUMABLE_CHUNK_BYTES,
+  YoutubeProviderTimeout,
   type ProviderUploadStatus,
   type ResumableUploadOutcome,
   type UploadByteSource,
@@ -900,4 +902,32 @@ Deno.test("a session request that times out leaves the empty upload scheduled", 
   assert(outcome.kind === "resumable");
   assertEquals(calls, ["POST"]);
   assertEquals([...store.sessions.values()][0].sessionUri, null);
+});
+
+Deno.test("a session request that times out keeps its own kind of failure", async () => {
+  // The timeout has to be told apart from a refusal, because the caller
+  // answers the two differently: a timeout schedules the upload for another
+  // worker, and a refusal ends it. A generic error would end the upload and
+  // tell the customer the post can be started again from scratch.
+  const fetchImpl: typeof fetch = (_input, init) =>
+    new Promise<Response>((_resolve, reject) => {
+      init?.signal?.addEventListener(
+        "abort",
+        () => reject(new Error("The request was aborted")),
+        { once: true },
+      );
+    });
+  await assertRejects(
+    () =>
+      createYoutubeResumableSession({
+        fetchImpl,
+        accessToken: "token-1",
+        url: `${SESSION_HOST}/upload/youtube/v3/videos?uploadType=resumable`,
+        body: {},
+        totalBytes: TOTAL_BYTES,
+        mimeType: "video/mp4",
+        timeoutMs: 10,
+      }),
+    YoutubeProviderTimeout,
+  );
 });

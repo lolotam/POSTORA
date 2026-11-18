@@ -182,6 +182,7 @@ import {
   isApprovedMediaUrl,
   redactProviderText,
   YOUTUBE_UPLOAD_REASON,
+  youtubeCredentialRefusalReason,
   youtubeUploadPublicMessage,
   youtubeStorageReadUrl,
 } from "./youtubeUploadPolicy.ts";
@@ -607,6 +608,7 @@ interface SocialAccount {
   platform_username: string | null;
   access_token: string;
   refresh_token: string | null;
+  token_expires_at?: string | null;
   account_metadata: Record<string, unknown> | null;
   ig_auth_type?: string | null;
   auth_provider?: "native" | "composio";
@@ -9842,9 +9844,9 @@ function buildYoutubeContinuationPorts(
         },
       });
 
-      const usableToken = token.accessToken && token.expiresAt && Date.parse(token.expiresAt) > Date.now()
-        ? token.accessToken
-        : null;
+      const usableToken = youtubeCredentialRefusalReason(token.accessToken, token.expiresAt)
+        ? null
+        : token.accessToken;
       return {
         id: String(data.id),
         userId: String(data.user_id),
@@ -10141,6 +10143,20 @@ async function postToYouTube(
   attemptStartedAt: string | null,
   targetAccountIds: string[],
 ): Promise<PlatformPostResult> {
+  // The credential is checked BEFORE the admission.
+  //
+  // The refresh that runs before the publish may have failed, and the token it
+  // left behind may be expired. An expired token reaches the provider as a
+  // refusal that says nothing about the video, so it is refused here instead:
+  // no session is admitted for an upload that cannot start, and the customer
+  // is told the same thing the provider would have said.
+  //
+  // The continuation requires the same of the token it uses, and the rule
+  // lives in one place.
+  const credentialRefusal = youtubeCredentialRefusalReason(account.access_token, account.token_expires_at);
+  if (credentialRefusal) {
+    throw new Error(youtubeUploadPublicMessage(credentialRefusal));
+  }
   const accessToken = account.access_token;
 
   // YouTube only supports video uploads
