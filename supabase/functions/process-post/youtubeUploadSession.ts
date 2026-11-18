@@ -134,6 +134,13 @@ function toClaim(payload: Record<string, unknown>): YoutubeUploadContinuationCla
   };
 }
 
+interface YoutubeUploadSessionRpc {
+  rpc(
+    name: string,
+    args: Record<string, unknown>,
+  ): PromiseLike<{ data: unknown; error: unknown }>;
+}
+
 /**
  * The store backed by the database.
  *
@@ -142,8 +149,7 @@ function toClaim(payload: Record<string, unknown>): YoutubeUploadContinuationCla
  * function and the database.
  */
 export function createSupabaseYoutubeUploadSessionStore(
-  // deno-lint-ignore no-explicit-any
-  supabase: any,
+  supabase: YoutubeUploadSessionRpc,
 ): YoutubeUploadSessionStore {
   async function call<T>(fn: string, args: Record<string, unknown>): Promise<T> {
     const { data, error } = await supabase.rpc(fn, args);
