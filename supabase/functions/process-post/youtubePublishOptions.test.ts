@@ -6,7 +6,7 @@ import {
   resolveYoutubePublishOptions,
   youtubePrivacyOrDefault,
   YOUTUBE_PRIVACY_VALUES,
-} from "./youtubePublishOptions.ts";
+} from "../_shared/youtubePublishOptions.ts";
 
 Deno.test("a legacy alias is used when the canonical field is absent", () => {
   const resolved = resolveYoutubePublishOptions({
