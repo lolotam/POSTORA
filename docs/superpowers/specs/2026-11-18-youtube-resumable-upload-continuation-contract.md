@@ -769,16 +769,103 @@ minute.
 
 ---
 
-## The bounded driver of the two repairs
+## 31. A retried upload that never sent a byte is started again
+
+**Was:** `request_post_retry` legitimately changes the post's `publish_requested_at`,
+and that is part of the content fence. The admission compared the fence of the
+existing session with the live fence **before** the branch that reopens a
+`failed` session, so the retry of an upload that never sent a single byte was
+refused with YUS04: the customer could not publish the video again at all,
+although nothing had ever reached the provider.
+
+**Is:** the admission restarts a terminal session that proves that nothing ever
+reached the provider — and it does so **before** the fence is compared.
+
+* The restart is allowed only when the session is `failed` or `expired`, the
+  record proves that no byte ever reached the provider (`video_may_exist` is
+  false and `bytes_sent` is zero), the media file is the **same file at the
+  same content version**, the account is still a target of the post, and the
+  attempt that is asking is the one that is running (the post is locked, and the
+  caller's attempt must still be the current one).
+* The restart resets the state, the provider session URI, the offsets, the
+  lease, the attempt and the continuation count, and it **refreshes** the fence
+  and the upload body with the live ones, because this attempt publishes the
+  live post. The media file and its version are the ones that were checked.
+* A session that may already hold a video is **not** restarted: the `failed`
+  branch now refuses to reopen one, exactly like the `expired` branch already
+  did, and leaves it for a human.
+* An inherited or open session keeps the fence comparison: it holds a provider
+  session that carries the old attempt's content.
+* A session that holds a receipt is returned as it is, and a possible video is
+  never restarted.
+
+The reason codes do not change: the restart produces the same session a first
+admission produces, and the write authority sees the live fence afterwards.
+
+**Proved by:** SQL suite Y32 (the real composition of `request_post_retry`, the
+fresh processing claim and the admission, plus the unsafe counterparts), and the
+in-memory session store's tests.
+
+---
+
+## 32. The terminal session whose worker died is settled
+
+**Was:** a worker that gives up releases the session into a terminal state and
+then settles the public row in a **separate** call. A worker that died in
+between left the session terminal (`failed`, `expired` or `reconcile`) and the
+public row `pending`, and nothing else settled it: the claim only recovered
+open sessions and stored receipts, and the sweeper leaves a post with a pending
+row alone. The post stayed `processing` for ever, and the customer saw a
+publication that never finishes.
+
+**Is:** `recover_youtube_upload_terminal_results(p_limit)` classifies the
+sessions whose public row is still pending although the session itself is
+already terminal.
+
+* The classification is the one the database already applies to an open session
+  that cannot be carried on, so the outcome is derived from the record: no
+  provider is contacted, no upload is written a second time and nothing
+  uncertain is replayed.
+* The reason follows the state the session was found in: a session the worker
+  marked for a human stays `reconcile`, a session the provider refused for good
+  becomes `youtube_upload_rejected`, and a session whose provider session was
+  gone becomes `youtube_upload_unsent` unless a byte had reached the provider.
+  A proven failure is retryable; a possible video is not, and it carries the
+  `publish_outcome = 'uncertain'` marker, so the database and the browser both
+  refuse a blind retry.
+* The fences: a worker that still holds the lease is left alone (the release
+  keeps the lease on purpose, because the owner still has to settle the row),
+  the attempt must still be the running one and the post must still be
+  processing, so a cancelled or superseded post keeps its own outcome, and the
+  work is bounded.
+* The pending row of a **cancelled** post is closed by the cancellation path
+  (`youtube_upload_terminalize_cancelled`, which now also accepts a terminal
+  session), and the parent keeps the outcome the owner gave it.
+* The other destinations and their receipts are untouched: the settlement is the
+  one the database already uses, and the parent rolls up as it always did.
+
+**The two callers.** The claim surface calls the recovery with the shared
+remaining limit, so one pass never walks more than the batch allows; it does
+not consume the budget, because it hands out no work and costs no worker. The
+repair driver calls it as well, with a bound of its own: a post that waits for
+a free slot would stay `processing` for ever, which is the very thing this
+recovery exists to prevent.
+
+**Proved by:** SQL suite Y33.
+
+---
+
+## The bounded driver of the three repairs
 
 `reconcile_youtube_upload_fanouts(p_limit)` does what no worker can:
 
-1. it closes the pending row of a cancelled post, and
-2. it closes a fanout whose attempt has gone quiet.
+1. it closes the pending row of a cancelled post,
+2. it settles the pending row of a terminal session whose worker died, and
+3. it closes a fanout whose attempt has gone quiet.
 
-It hands out no work: both outcomes are derived from the database, so neither
-needs a provider and neither needs a worker. That is why it is **not** part of
-the shared claim limit — a post that waits for a free slot would stay
+It hands out no work: all three outcomes are derived from the database, so none
+of them needs a provider and none needs a worker. That is why it is **not**
+part of the shared claim limit — a post that waits for a free slot would stay
 `processing` for ever — and why it has a bound of its own. It runs from
 `claim_post_completion_work`, which the reconciler calls every minute.
 
@@ -817,9 +904,10 @@ functions, and the changed sweeper and claim. Nothing that exists calls the
 new functions yet, so the old `process-post` keeps working.
 
 The migration is self-contained: `claim_post_completion_work` calls
-`reconcile_youtube_upload_fanouts`, and both are in the same migration. Before
-the publishing producer is deployed no YouTube session exists, so the driver
-has nothing to do.
+`reconcile_youtube_upload_fanouts`, which calls
+`recover_youtube_upload_terminal_results`, and all three are in the same
+migration. Before the publishing producer is deployed no YouTube session
+exists, so the drivers have nothing to do.
 
 **2. The compatible reconciler.** Deploy the `reconcile-deferred-publishes`
 build that knows the new functions. It is compatible with the old

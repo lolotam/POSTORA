@@ -757,6 +757,13 @@ GRANT EXECUTE ON FUNCTION public.recover_youtube_upload_fanout(uuid, uuid) TO se
 -- (YUS12), and the sweeper leaves a post with a pending row alone. The
 -- customer then sees a publication that never finishes.
 --
+-- A session that is ALREADY terminal is closed here as well. A worker that
+-- gives up releases the session into a terminal state and settles the public
+-- row in a separate call, so a worker that dies in between leaves a terminal
+-- session with a pending row -- and the terminal recovery refuses a post that
+-- is no longer being processed, because the cancellation keeps its own
+-- outcome.
+--
 -- WHAT IT DOES, AND ONLY THAT
 -- ---------------------------
 --   * the row becomes a terminal failure with a stable public reason,
@@ -803,7 +810,7 @@ BEGIN
   IF NOT FOUND THEN
     RETURN jsonb_build_object('terminalized', false, 'reason', 'session_missing');
   END IF;
-  IF v_session.state NOT IN ('open', 'uploaded') THEN
+  IF v_session.state NOT IN ('open', 'uploaded', 'failed', 'expired', 'reconcile') THEN
     RETURN jsonb_build_object('terminalized', false, 'reason', 'not_open');
   END IF;
 
@@ -937,6 +944,12 @@ GRANT EXECUTE ON FUNCTION public.youtube_upload_terminalize_cancelled(uuid) TO s
 -- The cancelled rows come first: a pending row of a cancelled post can never
 -- be settled by the continuation, because the continuation refuses a post that
 -- is not being processed.
+--
+-- The terminal sessions come next: their public row is pending although the
+-- session is already terminal, which is the window a worker that died
+-- between the release and the settlement leaves. A post in that state waits
+-- for an outcome that never comes, and the sweeper leaves a post with a
+-- pending row alone.
 -- ---------------------------------------------------------------------------
 CREATE OR REPLACE FUNCTION public.reconcile_youtube_upload_fanouts(p_limit integer DEFAULT 5)
 RETURNS jsonb
@@ -951,16 +964,22 @@ DECLARE
   v_attempted integer := 0;
   v_recovered integer := 0;
   v_result jsonb;
+  v_terminal jsonb;
   r_session record;
 BEGIN
   v_limit := least(50, greatest(0, coalesce(p_limit, 5)));
 
   -- The pending rows of cancelled posts.
+  --
+  -- A session that is already terminal is closed as well: a worker that died
+  -- between the release and the settlement leaves a terminal session with a
+  -- pending row, and the continuation cannot settle it because it refuses a
+  -- post that is no longer being processed.
   FOR r_session IN
     SELECT ys.id
       FROM public.youtube_upload_sessions ys
       JOIN public.posts p ON p.id = ys.post_id
-     WHERE ys.state IN ('open', 'uploaded')
+     WHERE ys.state IN ('open', 'uploaded', 'failed', 'expired', 'reconcile')
        AND ys.platform_post_id IS NOT NULL
        AND p.status IN ('pending', 'failed', 'scheduled')
        AND p.processing_started_at IS NOT DISTINCT FROM ys.attempt_started_at
@@ -977,6 +996,13 @@ BEGIN
       v_cancelled := v_cancelled + 1;
     END IF;
   END LOOP;
+
+  -- The terminal sessions whose public row is still pending.
+  --
+  -- This is the window a worker that died between the release and the
+  -- settlement leaves: the session is terminal and the row is pending, so the
+  -- post waits for an outcome that never comes.
+  v_terminal := public.recover_youtube_upload_terminal_results(v_limit);
 
   -- The fanouts a dead worker left open. The session has to be terminal,
   -- because that is the authority the closure itself accepts, and the attempt
@@ -1006,6 +1032,7 @@ BEGIN
 
   RETURN jsonb_build_object(
     'cancelled_rows', v_cancelled,
+    'terminal_rows', v_terminal,
     'fanouts_attempted', v_attempted,
     'fanouts_recovered', v_recovered
   );
@@ -1014,7 +1041,8 @@ $$;
 
 COMMENT ON FUNCTION public.reconcile_youtube_upload_fanouts(integer) IS
   'The bounded driver of the YouTube fanout repairs: it closes the pending row '
-  'of a cancelled post, and it closes a fanout whose attempt has gone quiet. '
+  'of a cancelled post, it settles the pending row of a terminal session whose '
+  'worker died, and it closes a fanout whose attempt has gone quiet. '
   'It needs no worker and no provider.';
 
 REVOKE ALL ON FUNCTION public.reconcile_youtube_upload_fanouts(integer) FROM PUBLIC, anon, authenticated;
@@ -1209,6 +1237,22 @@ $$;
 --     when the record proves that no byte ever reached the provider. When
 --     bytes were written the session is left for a human: a new session
 --     could create a second video.
+--
+-- THE SAFE RESTART
+-- ----------------
+-- A retry changes the post's publish_requested_at, so the fence of the
+-- session the previous attempt opened no longer matches the live post. That
+-- fence describes a write that never happened, so a session that is terminal
+-- AND that proves that nothing ever reached the provider is started again
+-- BEFORE the fence is compared: the same media file at the same content
+-- version, the same account, still a target of the post, the attempt that is
+-- running. The fence and the upload body are refreshed with the live ones,
+-- because this attempt publishes the live post.
+--
+-- A session that may already hold a video is not restarted, an open session
+-- keeps the fence comparison, and a session that holds a receipt is returned
+-- as it is. The rule is checked before the fence on purpose: a retry of an
+-- upload that never sent a byte has to be possible.
 -- ---------------------------------------------------------------------------
 -- The admission grew a parameter, so the old signature is a different
 -- function now. It is dropped rather than left behind: an overload that
@@ -1357,6 +1401,59 @@ BEGIN
       );
     END IF;
 
+    -- THE SAFE RESTART
+    --
+    -- A retry legitimately changes the post's publish_requested_at, so the
+    -- fence the previous attempt left behind no longer matches the live
+    -- post. That fence describes a write that never happened, so refusing
+    -- the retry here would leave an upload that never sent a single byte
+    -- unretryable for ever: the customer could not publish the video again
+    -- at all, although nothing had ever reached the provider.
+    --
+    -- The restart is allowed ONLY when the record proves that nothing ever
+    -- reached the provider, the media file is the SAME file at the SAME
+    -- content version, the account is still a target of the post, and the
+    -- attempt that is asking is the one that is running. The caller's upload
+    -- body was built from the live post, and that was compared with the live
+    -- post above, so the restarted upload publishes what the post says NOW.
+    --
+    -- A session that may already hold a video is NOT restarted: a second
+    -- video on the customer's channel is worse than a post that needs a
+    -- human. A session that is still OPEN is not restarted either: it holds
+    -- a provider session that carries the OLD attempt's content, so it keeps
+    -- the fence comparison below.
+    IF v_session.state IN ('failed', 'expired')
+       AND NOT v_session.video_may_exist
+       AND v_session.bytes_sent = 0
+       AND v_session.total_bytes IS NOT DISTINCT FROM p_total_bytes
+       AND v_session.media_file_id IS NOT DISTINCT FROM p_media_file_id
+       AND (v_session.media_object_version IS NULL
+            OR coalesce(v_media_version, 1) IS NOT DISTINCT FROM v_session.media_object_version)
+       AND public.youtube_upload_target_authorized(
+             p_post_id, p_social_account_id,
+             coalesce(p_target_account_ids, v_session.target_account_ids)) THEN
+      UPDATE public.youtube_upload_sessions
+         SET state = 'open', session_uri = NULL, confirmed_bytes = 0, bytes_sent = 0,
+             session_expires_at = p_session_expires_at, error = NULL,
+             lease_token = NULL, lease_expires_at = NULL,
+             next_check_at = NULL, last_outcome = NULL, continuation_count = 0,
+             attempt_started_at = v_attempt,
+             -- The fence and the body are REFRESHED: this attempt publishes
+             -- the live post, so the session must carry the live fence and
+             -- the body that goes with it. The media file and its version
+             -- are the ones that were checked above, and they are kept.
+             content_fence = v_fence,
+             upload_body = p_upload_body,
+             media_size = p_media_size,
+             total_bytes = p_total_bytes,
+             media_object_version = coalesce(v_media_version, v_session.media_object_version),
+             resolved_platform = 'youtube',
+             target_account_ids = coalesce(p_target_account_ids, v_session.target_account_ids),
+             updated_at = clock_timestamp()
+       WHERE id = v_session.id
+      RETURNING * INTO v_session;
+    END IF;
+
     IF v_session.content_fence IS DISTINCT FROM v_fence THEN
       RAISE EXCEPTION 'YUS04: the post was edited while the upload was in flight' USING ERRCODE = 'YUS04';
     END IF;
@@ -1402,6 +1499,27 @@ BEGIN
         'platform_post_id', v_session.platform_post_id
       );
     ELSIF v_session.state = 'failed' THEN
+      -- A permanent failure may be tried again, but ONLY when the record
+      -- proves that no video can exist. A failure that may already hold a
+      -- video is left for a human, exactly like the expired session above:
+      -- a new session could create a second video.
+      --
+      -- The mark is made HERE rather than raised as an exception, because a
+      -- caller that caught the exception would undo it with its own
+      -- rollback, and the mark is the whole point.
+      IF v_session.video_may_exist OR v_session.bytes_sent > 0 THEN
+        UPDATE public.youtube_upload_sessions
+           SET state = 'reconcile',
+               error = left(coalesce(v_session.error, 'The upload may already have left a video on the channel.'), 300),
+               lease_token = NULL, lease_expires_at = NULL,
+               updated_at = clock_timestamp()
+         WHERE id = v_session.id
+        RETURNING * INTO v_session;
+        RETURN jsonb_build_object(
+          'session', public.youtube_upload_session_payload(v_session),
+          'platform_post_id', v_session.platform_post_id
+        );
+      END IF;
       -- A permanent failure may be tried again.
       UPDATE public.youtube_upload_sessions
          SET state = 'open', session_uri = NULL, confirmed_bytes = 0, bytes_sent = 0,
@@ -2110,6 +2228,66 @@ COMMENT ON FUNCTION public.release_youtube_upload_session(uuid, uuid, text, text
   'lease is stale.';
 
 -- ---------------------------------------------------------------------------
+-- youtube_upload_terminal_outcome
+--
+-- The outcome of a session that cannot be carried on.
+--
+-- ONE RULE
+-- --------
+--   * a video MAY exist -- a byte reached the provider, or the last write may
+--     have landed -- is a manual outcome: the session is 'reconcile' and the
+--     public reason asks for a human. A session that was already marked that
+--     way stays that way, whatever the facts say: the mark is what keeps a
+--     second video off the channel.
+--   * NO video can exist is a definitive outcome. The provider refused for
+--     good ('failed'), so nothing was published. The provider session was
+--     gone ('expired', or an open session that cannot be carried on), so
+--     nothing was ever sent.
+--
+-- The state the session was found in says what the worker decided when it
+-- left, and the facts say whether a video can exist. Both are needed.
+--
+-- It is a pure rule, so it can be read and proved on its own.
+-- ---------------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION public.youtube_upload_terminal_outcome(
+  p_pre_state text,
+  p_may_exist boolean
+)
+RETURNS jsonb
+LANGUAGE sql
+STABLE
+SET search_path = public, pg_temp
+AS $$
+  SELECT CASE
+    WHEN p_pre_state = 'reconcile' OR p_may_exist THEN
+      jsonb_build_object(
+        'state', 'reconcile',
+        'reason', 'youtube_upload_reconcile_required',
+        'message', 'the provider may already hold a video from this upload, so it has to be checked by hand'
+      )
+    WHEN p_pre_state = 'failed' THEN
+      jsonb_build_object(
+        'state', 'failed',
+        'reason', 'youtube_upload_rejected',
+        'message', 'the provider refused the upload'
+      )
+    ELSE
+      jsonb_build_object(
+        'state', 'failed',
+        'reason', 'youtube_upload_unsent',
+        'message', 'the upload was never sent to the provider'
+      )
+  END
+$$;
+
+COMMENT ON FUNCTION public.youtube_upload_terminal_outcome(text, boolean) IS
+  'The outcome of a YouTube upload session that cannot be carried on: a manual '
+  'one when a video may exist, a definitive one when it cannot.';
+
+REVOKE ALL ON FUNCTION public.youtube_upload_terminal_outcome(text, boolean) FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.youtube_upload_terminal_outcome(text, boolean) TO service_role;
+
+-- ---------------------------------------------------------------------------
 -- youtube_upload_classify_terminal
 --
 -- The terminal classification of a session that cannot be carried on.
@@ -2131,6 +2309,25 @@ COMMENT ON FUNCTION public.release_youtube_upload_session(uuid, uuid, text, text
 --   * NO video can exist: nothing ever reached the provider. The public
 --     outcome is a definitive failure and the session is 'failed', which the
 --     retry path accepts, because a retry cannot create a second video.
+--
+-- THE LOST-WORKER WINDOW
+-- ----------------------
+-- A worker that gives up releases the session into a terminal state and then
+-- settles the public row in a SEPARATE call. A worker that dies in between
+-- leaves the session terminal and the row pending, and nothing else in the
+-- system will ever settle it: the claim only recovers open sessions and
+-- stored receipts, and the sweeper leaves a post with a pending row alone.
+-- The post would wait for ever.
+--
+-- So a session that is ALREADY terminal is classified here as well. The
+-- reason follows the state it was found in: a session the worker marked for
+-- a human stays that way, a session the provider refused for good is a
+-- proven failure, and a session whose provider session was gone is a proven
+-- failure unless a byte had reached the provider.
+--
+-- Nothing is sent to the provider and nothing is replayed: the outcome is
+-- derived from the record, so an uncertain upload is closed with a manual
+-- reason rather than published a second time.
 --
 -- THE AUTHORITY
 -- -------------
@@ -2160,6 +2357,9 @@ DECLARE
   v_message text;
   v_settled jsonb;
   v_fanout jsonb;
+  v_pre_state text;
+  v_data jsonb;
+  v_outcome jsonb;
 BEGIN
   IF p_session_id IS NULL THEN
     RETURN jsonb_build_object('classified', false, 'reason', 'invalid_arguments');
@@ -2169,7 +2369,16 @@ BEGIN
   IF NOT FOUND THEN
     RETURN jsonb_build_object('classified', false, 'reason', 'session_missing');
   END IF;
-  IF v_session.state <> 'open' THEN
+  -- The state the session was found in.
+  --
+  -- A session that is ALREADY terminal is classified as well. That is the
+  -- lost-worker window: the worker released the session into a terminal
+  -- state and died before it could settle the public row, so the row is
+  -- still pending, the post keeps waiting for an outcome that never comes,
+  -- and the sweeper leaves the post alone because a pending row exists.
+  v_pre_state := v_session.state;
+
+  IF v_pre_state NOT IN ('open', 'failed', 'expired', 'reconcile') THEN
     RETURN jsonb_build_object('classified', false, 'reason', 'not_open');
   END IF;
   IF v_session.lease_expires_at IS NOT NULL AND v_session.lease_expires_at > now() THEN
@@ -2180,14 +2389,28 @@ BEGIN
   -- write may have landed.
   v_may_exist := v_session.video_may_exist OR v_session.bytes_sent > 0;
 
-  IF v_may_exist THEN
-    v_state := 'reconcile';
-    v_reason := 'youtube_upload_reconcile_required';
-    v_message := 'the provider may already hold a video from this upload, so it has to be checked by hand';
-  ELSE
-    v_state := 'failed';
-    v_reason := 'youtube_upload_unsent';
-    v_message := 'the upload was never sent to the provider';
+  -- THE OUTCOME
+  --
+  -- The reason follows the facts and the state the session was found in.
+  v_outcome := public.youtube_upload_terminal_outcome(v_pre_state, v_may_exist);
+  v_state := v_outcome ->> 'state';
+  v_reason := v_outcome ->> 'reason';
+  v_message := v_outcome ->> 'message';
+
+  -- The row's own record of what happened.
+  --
+  -- An outcome that is not a proven failure carries the marker that says so,
+  -- so the retry gate in the database and the retry button on the page both
+  -- refuse it: the provider may already hold the video.
+  v_data := jsonb_build_object(
+    'youtube_upload_reason', v_reason,
+    'youtube_upload_state', v_state
+  );
+  IF v_reason = 'youtube_upload_reconcile_required' THEN
+    v_data := v_data || jsonb_build_object(
+      'publish_outcome', 'uncertain',
+      'publish_outcome_reason', v_message
+    );
   END IF;
 
   -- The public row is settled under the same authority as every other
@@ -2210,10 +2433,7 @@ BEGIN
           NULL,
           NULL,
           v_reason,
-          jsonb_build_object(
-            'youtube_upload_reason', v_reason,
-            'youtube_upload_state', v_state
-          )
+          v_data
         );
       END IF;
     END IF;
@@ -2243,6 +2463,7 @@ BEGIN
     'classified', true,
     'reason', v_reason,
     'state', v_state,
+    'previous_state', v_pre_state,
     'settled', v_settled IS NOT NULL,
     'fanout', v_fanout
   );
@@ -2252,11 +2473,127 @@ $$;
 COMMENT ON FUNCTION public.youtube_upload_classify_terminal(uuid) IS
   'Classifies a session that cannot be carried on and settles its public row '
   'under the attempt authority. A video that may exist becomes a manual '
-  'failure; a video that cannot exist becomes a definitive one. Never '
-  'classifies a session a worker still holds.';
+  'failure; a video that cannot exist becomes a definitive one. A session that '
+  'is already terminal is classified too -- that is the window a worker that '
+  'died between the release and the settlement leaves -- and its reason '
+  'follows the state it was found in. Never classifies a session a worker '
+  'still holds.';
 
 REVOKE ALL ON FUNCTION public.youtube_upload_classify_terminal(uuid) FROM PUBLIC, anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.youtube_upload_classify_terminal(uuid) TO service_role;
+
+-- ---------------------------------------------------------------------------
+-- recover_youtube_upload_terminal_results
+--
+-- The bounded driver of the terminal-result recovery.
+--
+-- WHY IT EXISTS
+-- -------------
+-- A worker that gives up releases the session into a terminal state and then
+-- settles the public row in a SEPARATE call. A worker that dies in between
+-- leaves the session terminal -- 'failed', 'expired' or 'reconcile' -- and
+-- the public row PENDING, and nothing else in the system settles it: the
+-- claim only recovers open sessions and stored receipts, and the sweeper
+-- leaves a post with a pending row alone. The post would stay 'processing'
+-- for ever and the customer would see a publication that never finishes.
+--
+-- WHAT IT DOES, AND ONLY THAT
+-- ---------------------------
+-- It classifies the sessions whose public row is still pending although the
+-- session itself is already terminal. The classification is the one the
+-- database already applies to an open session that cannot be carried on, so
+-- the outcome is derived from the record: no provider is contacted, no
+-- upload is written a second time and nothing uncertain is replayed.
+--
+--   * a session that may already hold a video becomes 'reconcile' and its
+--     row is closed with a manual, non-retryable reason,
+--   * a session the provider refused for good becomes a proven failure,
+--   * a session whose provider session was gone becomes a proven failure
+--     unless a byte had reached the provider.
+--
+-- THE FENCES
+-- ----------
+--   * a worker that still holds the lease is left alone: it is about to
+--     settle the row itself, and the release keeps the lease on purpose,
+--   * the attempt must still be the running one and the post must still be
+--     processing, so a cancelled or superseded post keeps its own outcome
+--     and the row of a cancelled post is closed by the cancellation path,
+--   * the work is bounded, so one call never walks the whole table.
+--
+-- THE TWO CALLERS
+-- ---------------
+-- The claim surface calls it with the shared batch limit, so the recovery
+-- draws from the same budget as the rest of the batch. The repair driver
+-- calls it as well, with a bound of its own: the repair needs no worker and
+-- no provider, and a post that waits for a free slot would stay 'processing'
+-- for ever, which is the very thing this recovery exists to prevent.
+-- ---------------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION public.recover_youtube_upload_terminal_results(p_limit integer DEFAULT 5)
+RETURNS jsonb
+LANGUAGE plpgsql
+VOLATILE
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+DECLARE
+  v_limit integer;
+  v_candidate record;
+  v_result jsonb;
+  v_examined integer := 0;
+  v_settled integer := 0;
+  v_manual integer := 0;
+BEGIN
+  v_limit := least(50, greatest(0, coalesce(p_limit, 5)));
+
+  FOR v_candidate IN
+    SELECT ys.id
+      FROM public.youtube_upload_sessions ys
+      JOIN public.posts p ON p.id = ys.post_id
+     WHERE ys.state IN ('failed', 'expired', 'reconcile')
+       AND ys.platform_post_id IS NOT NULL
+       -- A worker that still holds the lease is about to settle the row
+       -- itself: the release keeps the lease on purpose.
+       AND (ys.lease_expires_at IS NULL OR ys.lease_expires_at <= now())
+       -- The authority of the classification, in the query as well: the post
+       -- must still be processing and the attempt must still be the running
+       -- one, so a cancelled or superseded post keeps its own outcome.
+       AND p.status = 'processing'
+       AND (ys.attempt_started_at IS NULL
+            OR p.processing_started_at IS NOT DISTINCT FROM ys.attempt_started_at)
+       AND EXISTS (
+         SELECT 1 FROM public.platform_posts pp
+          WHERE pp.id = ys.platform_post_id
+            AND pp.status = 'pending'
+       )
+     ORDER BY ys.updated_at, ys.id
+     LIMIT v_limit
+  LOOP
+    v_examined := v_examined + 1;
+    v_result := public.youtube_upload_classify_terminal(v_candidate.id);
+    IF coalesce((v_result ->> 'settled')::boolean, false) THEN
+      v_settled := v_settled + 1;
+    END IF;
+    IF (v_result ->> 'reason') = 'youtube_upload_reconcile_required' THEN
+      v_manual := v_manual + 1;
+    END IF;
+  END LOOP;
+
+  RETURN jsonb_build_object(
+    'examined', v_examined,
+    'settled', v_settled,
+    'manual', v_manual
+  );
+END;
+$$;
+
+COMMENT ON FUNCTION public.recover_youtube_upload_terminal_results(integer) IS
+  'Classifies the YouTube upload sessions whose public row is still pending '
+  'although the session itself is already terminal: that is the window a '
+  'worker that died between the release and the settlement leaves. Nothing '
+  'is sent to the provider and nothing is replayed.';
+
+REVOKE ALL ON FUNCTION public.recover_youtube_upload_terminal_results(integer) FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.recover_youtube_upload_terminal_results(integer) TO service_role;
 
 -- ---------------------------------------------------------------------------
 -- claim_youtube_upload_sessions
@@ -2870,8 +3207,23 @@ BEGIN
   --
   -- A session without an attempt is never claimed: the worker could not tell
   -- whether the post it belongs to is still the one that is being worked on.
+  --
+  -- THE TERMINAL RECOVERY DRAWS FROM THE SAME LIMIT
+  -- -----------------------------------------------
+  -- A session that is already terminal although its public row is still
+  -- pending is settled here, before the claim: that is the window a worker
+  -- that died between the release and the settlement leaves, and the post
+  -- waits in 'processing' for an outcome that never comes.
+  --
+  -- The recovery is bounded by the same remaining limit as the rest of the
+  -- batch, so one pass never walks more than the batch allows. It does not
+  -- CONSUME the budget: it hands out no work and costs no worker, and
+  -- taking a slot away from a continuation would starve an upload that is
+  -- still running.
   v_remaining := p_limit - v_claimed_count;
   IF v_remaining > 0 THEN
+    PERFORM public.recover_youtube_upload_terminal_results(v_remaining);
+
     FOR v_rec IN
       SELECT ys.session_id, ys.post_id, ys.attempt_started_at, ys.lease_token
         FROM public.claim_youtube_upload_sessions(v_remaining, 180000, 24) ys

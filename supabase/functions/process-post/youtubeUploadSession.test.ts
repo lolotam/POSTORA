@@ -330,6 +330,53 @@ Deno.test("a post that changed while the upload was in flight is refused", async
   assertEquals(changed.refused, "content_changed");
 });
 
+Deno.test("a retried upload that never sent a byte is started again", async () => {
+  const store = openStore();
+  const opened = await store.admit(admitInput);
+  const sessionId = opened.record!.id;
+  await store.claim({ sessionId, leaseToken: "lease-a", leaseMs: 60_000 });
+  // The provider refused the upload and the worker gave up. No byte ever
+  // reached the provider, so a second attempt cannot create a second video.
+  await store.release({ sessionId, leaseToken: "lease-a", state: "failed" });
+  assertEquals(store.sessions.get(sessionId)?.state, "failed");
+
+  // The customer retries the post. The retry changes publish_requested_at, so
+  // the content of the previous attempt no longer matches the live post.
+  const retried = await store.admit({
+    ...admitInput,
+    expectedContent: { caption: "A video", publish_requested_at: "2026-11-19T00:00:00.000Z" },
+    attemptStartedAt: "2026-11-19T00:00:00.000Z",
+  });
+  assertEquals(retried.refused, null);
+  assertEquals(retried.record?.state, "open");
+  // The upload starts from the beginning, with no provider session.
+  assertEquals(retried.record?.sessionUri, null);
+  assertEquals(retried.record?.confirmedBytes, 0);
+  assertEquals(retried.record?.attemptStartedAt, "2026-11-19T00:00:00.000Z");
+});
+
+Deno.test("an upload that may hold a video is never started again", async () => {
+  const store = openStore();
+  const opened = await store.admit(admitInput);
+  const sessionId = opened.record!.id;
+  await store.claim({ sessionId, leaseToken: "lease-a", leaseMs: 60_000 });
+  // The last chunk may have been written, so a video may exist.
+  await store.checkpoint({
+    sessionId,
+    leaseToken: "lease-a",
+    confirmedBytes: 100,
+    bytesSent: 100,
+    videoMayExist: true,
+  });
+  await store.release({ sessionId, leaseToken: "lease-a", state: "failed" });
+
+  // A failure that may hold a video is left for a human: a second attempt
+  // could put a second video on the channel.
+  const again = await store.admit(admitInput);
+  assertEquals(again.refused, "reconcile_required");
+  assertEquals(store.sessions.get(sessionId)?.state, "reconcile");
+});
+
 Deno.test("only one worker owns a session at a time", async () => {
   const store = openStore();
   const opened = await store.admit(admitInput);

@@ -503,6 +503,38 @@ export function createInMemoryYoutubeUploadSessionStore(options?: {
           return Promise.resolve({ record: null, refused: "reconcile_required", platformPostId: null });
         }
 
+        // THE SAFE RESTART
+        //
+        // A retry changes the post's publish_requested_at, so the content of the
+        // previous attempt no longer matches the live post, and the comparison
+        // below would refuse the retry of an upload that never sent a byte.
+        //
+        // A terminal session that proves that nothing ever reached the provider
+        // is started again: nothing reached the provider, so a second attempt
+        // cannot create a second video. The media file has to be the SAME file
+        // at the SAME content version.
+        //
+        // A session that may already hold a video is not started again, and an
+        // open session keeps the comparison below: it holds a provider session
+        // that carries the old attempt's content.
+        if (
+          (session.state === "failed" || session.state === "expired") &&
+          !session.videoMayExist &&
+          session.bytesSent === 0 &&
+          session.mediaFileId === input.mediaFileId &&
+          session.totalBytes === input.totalBytes &&
+          (session.mediaObjectVersion === null || session.mediaObjectVersion === input.mediaObjectVersion)
+        ) {
+          session.state = "open";
+          session.sessionUri = null;
+          session.confirmedBytes = 0;
+          session.bytesSent = 0;
+          session.leaseToken = null;
+          session.leaseExpiresAt = null;
+          session.uploadBody = input.uploadBody;
+          session.expectedContent = input.expectedContent;
+        }
+
         const sameContent =
           JSON.stringify(session.uploadBody) === JSON.stringify(input.uploadBody) &&
           JSON.stringify(session.expectedContent) === JSON.stringify(input.expectedContent) &&
@@ -528,6 +560,12 @@ export function createInMemoryYoutubeUploadSessionStore(options?: {
         }
 
         if (session.state === "failed") {
+          if (session.videoMayExist || session.bytesSent > 0) {
+            // The failure may already hold a video, so a fresh session could
+            // create a second one. Only a human may decide.
+            session.state = "reconcile";
+            return Promise.resolve({ record: null, refused: "reconcile_required", platformPostId: null });
+          }
           session.state = "open";
           session.sessionUri = null;
           session.confirmedBytes = 0;
