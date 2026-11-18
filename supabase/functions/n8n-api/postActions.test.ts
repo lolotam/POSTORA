@@ -2799,6 +2799,43 @@ for (const publishOutcome of ["uncertain", "cancelled"]) {
   });
 }
 
+Deno.test("retry explains each protected result even when every account is skipped", async () => {
+  const db = new FakeSupabase();
+  claimQueued(db);
+  db.queue("platform_posts", { data: [
+    { ...platformResult("unknown-result", "youtube", ACCOUNT, "failed"),
+      response_data: { publish_outcome: "uncertain" } },
+    { ...platformResult("cancelled-result", "youtube", ACCOUNT, "failed"),
+      response_data: { publish_outcome: "cancelled" } },
+  ], error: null });
+  db.queueRpc(RELEASE_RPC, { data: true, error: null });
+  const { calls, fetcher } = fakeFetcher([]);
+  const result = await retryFailedPost(depsFor(db, fetcher), USER, { post_id: POST });
+  assertEquals(result.status, 409);
+  const details = (result.body.error as { details: { skipped: Array<{ reason: string }> } }).details;
+  assertEquals(details.skipped.map(({ reason }) => reason), [
+    "Publish outcome is uncertain; reconcile it manually before any retry.",
+    "Publishing for this account was cancelled.",
+  ]);
+  assertEquals(calls.length, 0);
+});
+
+Deno.test("retry cleanup preserves an uncertain marker first observed after dispatch", async () => {
+  const db = new FakeSupabase();
+  claimQueued(db);
+  const old = platformResult("old-result", "youtube", ACCOUNT, "failed");
+  db.queue("platform_posts", { data: [old], error: null });
+  db.queue("platform_posts", { data: [
+    { ...old, response_data: { publish_outcome: "uncertain" } },
+    platformResult("new-result", "youtube", ACCOUNT, "success"),
+  ], error: null });
+  db.queueRpc(RELEASE_RPC, { data: true, error: null });
+  const { fetcher } = fakeFetcher([{ status: 200, body: { success: true } }]);
+  const result = await retryFailedPost(depsFor(db, fetcher), USER, { post_id: POST });
+  assertEquals(result.status, 200);
+  assertEquals(callsFor(db, "platform_posts", "delete").length, 0);
+});
+
 Deno.test("a retry publishes only the failed accounts and clears the rows it replaced", async () => {
   const db = new FakeSupabase();
   claimQueued(db);

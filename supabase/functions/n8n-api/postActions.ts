@@ -1649,7 +1649,9 @@ function pickRetryTargets(
     }
     if (row.status === "failed") {
       const reason = protectedRetryReason(row);
-      if (reason) protectedAccounts.set(row.social_account_id, reason);
+      if (reason && (!protectedAccounts.has(row.social_account_id) || row.response_data?.publish_outcome !== "cancelled")) {
+        protectedAccounts.set(row.social_account_id, reason);
+      }
     }
   }
 
@@ -1664,7 +1666,8 @@ function pickRetryTargets(
         reason: "Use story_result_id to retry this managed Story independently." });
       continue;
     }
-    const protectedReason = row.social_account_id ? protectedAccounts.get(row.social_account_id) : undefined;
+    const protectedReason = protectedRetryReason(row) ??
+      (row.social_account_id ? protectedAccounts.get(row.social_account_id) : undefined);
     if (protectedReason) {
       skipped.push({ account_id: row.social_account_id, platform: row.platform, reason: protectedReason });
       continue;
@@ -2120,6 +2123,7 @@ export async function retryFailedPost(
         409,
         "NO_FAILED_PLATFORMS",
         "This post has no failed platform result left to retry.",
+        skipped.length ? { skipped } : undefined,
       ),
     );
   }
@@ -2138,7 +2142,7 @@ export async function retryFailedPost(
     // let a second retry take the post and publish the same accounts again
     // while the first publish may still be running. The claim is a lease, so
     // it runs out on its own and the post is free again after it.
-    return ok({ post_id: postId, status: "results_pending", retried }, 202);
+    return ok({ post_id: postId, status: "results_pending", retried, ...(skipped.length ? { skipped } : {}) }, 202);
   }
   if (dispatch.kind === "failed") {
     // Nothing was published, so the post is free again right away.
