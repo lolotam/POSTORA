@@ -340,6 +340,134 @@ COMMENT ON FUNCTION public.youtube_upload_target_authorized(uuid, uuid, uuid[]) 
   'run that opened the upload.';
 
 -- ---------------------------------------------------------------------------
+-- youtube_upload_attempt_quiet_after
+--
+-- How long the worker that owns a post attempt may still write.
+--
+-- THE DERIVATION
+-- --------------
+-- The publishing worker is an edge function with a hard lifetime. It is killed
+-- WORKER_LIFETIME_MS after the worker process started, and the last thing it
+-- may do is record the outcome of a publish, which the record reserve keeps
+-- five seconds before the end. So the last result row the worker of an attempt
+-- can write happens no later than
+--
+--   worker_started_at + WORKER_LIFETIME_MS - RECORD_RESERVE_MS
+--
+-- and the worker that claims the attempt starts BEFORE the claim, because the
+-- claim happens inside the worker's request:
+--
+--   worker_started_at <= posts.processing_started_at
+--
+-- Which makes `posts.processing_started_at + 150 seconds` a bound after which
+-- no worker of that attempt can write another result row. 150 seconds is
+-- WORKER_LIFETIME_MS in supabase/functions/process-post/deferredPublish.ts, and
+-- the two have to move together.
+--
+-- It is a bound, not a guess: the recovery uses it to decide whether the
+-- worker that owns the attempt may still be publishing, and it waits for the
+-- bound rather than closing a fanout that a live worker is about to extend.
+-- ---------------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION public.youtube_upload_attempt_quiet_after()
+RETURNS interval
+LANGUAGE sql
+IMMUTABLE
+SET search_path = public, pg_temp
+AS $$
+  SELECT interval '150 seconds';
+$$;
+
+COMMENT ON FUNCTION public.youtube_upload_attempt_quiet_after() IS
+  'How long after a post attempt started its own worker may still write a '
+  'result row. Mirrors WORKER_LIFETIME_MS in the process-post edge function.';
+
+REVOKE ALL ON FUNCTION public.youtube_upload_attempt_quiet_after() FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.youtube_upload_attempt_quiet_after() TO service_role;
+
+-- ---------------------------------------------------------------------------
+-- partner_close_ambiguous_destination
+--
+-- Closes a destination whose outcome is not a proven failure.
+--
+-- WHY IT EXISTS
+-- -------------
+-- A destination of a post that has a YouTube upload may have been published
+-- even though its result row is missing: the platforms that are not YouTube
+-- write their row AFTER the provider call, so a missing receipt says nothing
+-- about whether the publication happened.
+--
+-- Such a destination is closed with a stable, non-retryable reason, so it is
+-- never published twice and a human can check it. The recovery and the
+-- sweeper both need that rule and they must not drift apart, so it lives here
+-- once.
+--
+-- The row is created through the settlement every other result row goes
+-- through, so the tenant check and the webhook are the ones the platform
+-- already uses. The parent is not rolled up here: a post that has a YouTube
+-- upload carries an open notification candidate, and the closure is the
+-- authority on that post.
+-- ---------------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION public.partner_close_ambiguous_destination(
+  p_post_id uuid,
+  p_social_account_id uuid,
+  p_platform text
+)
+RETURNS uuid
+LANGUAGE plpgsql
+VOLATILE
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+DECLARE
+  v_owner uuid;
+  v_settled jsonb;
+BEGIN
+  IF p_post_id IS NULL OR p_social_account_id IS NULL OR p_platform IS NULL THEN
+    RETURN NULL;
+  END IF;
+
+  -- The account has to belong to the owner of the post. A destination that
+  -- belongs to somebody else is not this post's business.
+  SELECT p.user_id INTO v_owner FROM public.posts p WHERE p.id = p_post_id;
+  IF v_owner IS NULL THEN
+    RETURN NULL;
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM public.social_accounts sa
+     WHERE sa.id = p_social_account_id AND sa.user_id = v_owner
+  ) THEN
+    RETURN NULL;
+  END IF;
+
+  v_settled := public.partner_settle_platform_post(
+    NULL,
+    p_post_id,
+    p_social_account_id,
+    p_platform,
+    'failed',
+    NULL,
+    NULL,
+    'partner_publish_reconcile_required',
+    jsonb_build_object(
+      'publish_outcome', 'uncertain',
+      'publish_outcome_reason', 'this destination may already have been published, so it has to be checked by hand before it is retried',
+      'partner_publish_ambiguous', true
+    )
+  );
+
+  RETURN (v_settled ->> 'platform_post_id')::uuid;
+END;
+$$;
+
+COMMENT ON FUNCTION public.partner_close_ambiguous_destination(uuid, uuid, text) IS
+  'Closes a destination whose outcome is not a proven failure, with a stable '
+  'non-retryable reason, so it is never published twice. It returns the id of '
+  'the result row it created.';
+
+REVOKE ALL ON FUNCTION public.partner_close_ambiguous_destination(uuid, uuid, text) FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.partner_close_ambiguous_destination(uuid, uuid, text) TO service_role;
+
+-- ---------------------------------------------------------------------------
 -- recover_youtube_upload_fanout
 --
 -- The fanout closure a worker that died between the admission and the
@@ -361,6 +489,30 @@ COMMENT ON FUNCTION public.youtube_upload_target_authorized(uuid, uuid, uuid[]) 
 -- same authority `close_post_fanout` itself applies to the ids it is given,
 -- so the scope handed to it is the scope it would have derived.
 --
+-- A MISSING ROW IS AMBIGUOUS, NOT 'NEVER STARTED'
+-- ----------------------------------------------
+-- Only the native YouTube path writes its result row BEFORE the provider
+-- call, so only a missing YouTube row proves that nothing was sent. Every
+-- other platform writes its row AFTER the provider call: the worker publishes
+-- first and records the outcome afterwards. A missing sibling row therefore
+-- does NOT prove that the sibling never started -- the provider call may have
+-- succeeded and the receipt may have been lost with the worker.
+--
+-- So the recovery never claims that a sibling never started, and it never
+-- gives a sibling a retryable result. It closes the gap the only honest way:
+-- the sibling gets a TERMINAL, non-retryable row with a stable public reason
+-- that says the outcome has to be checked by hand. A retry of an unknown
+-- destination could publish a second time; a human decides instead.
+--
+-- THE QUIESCENCE BOUNDARY
+-- -----------------------
+-- The closure may only be made once the worker that owns the attempt cannot
+-- write any more, because a live worker is about to write the very row the
+-- scope is missing. So the recovery waits until
+-- `posts.processing_started_at + youtube_upload_attempt_quiet_after()` has
+-- passed, and until then it says so instead of closing. The reconciler calls
+-- it again, so the wait is bounded and the post is never held open for ever.
+--
 -- TWO OUTCOMES
 -- ------------
 --   * EVERY destination has a row: the scope is complete, and the fanout is
@@ -369,16 +521,14 @@ COMMENT ON FUNCTION public.youtube_upload_target_authorized(uuid, uuid, uuid[]) 
 --     through the real enrolled fanout. A mixed post closes too, with the
 --     siblings' rows included, so their successes are preserved and nothing
 --     is replayed.
---   * A destination has NO row: that destination never started, so the scope
---     is INCOMPLETE. Closing it now would freeze a scope that does not
---     include a row the destination is going to write later, and the closure
---     would then be refused for ever. So the fanout is NOT closed, and the
---     candidate records an explicit terminal state that says which
---     destinations never started. Nothing is re-run here: the destination
---     that never started is the retry path's business, not this one's.
+--   * A destination has NO row: the outcome of that destination is unknown.
+--     It is terminalised with a non-retryable reason, so the scope becomes
+--     complete, the fanout closes, and the parent reaches a finite outcome
+--     that says what a human has to do. Nothing is re-run here: the
+--     destination is not published again by the recovery.
 --
--- A sibling that started and is not finished is not 'unsent': it has a row,
--- so it is part of the scope, and the closure marks the fanout as not ready
+-- A sibling that started and is not finished is not unknown: it has a row, so
+-- it is part of the scope, and the closure marks the fanout as not ready
 -- until that row settles.
 -- ---------------------------------------------------------------------------
 CREATE OR REPLACE FUNCTION public.recover_youtube_upload_fanout(
@@ -398,9 +548,11 @@ DECLARE
   v_targets uuid[];
   v_retained uuid[];
   v_rows uuid[];
-  v_unsent uuid[];
+  v_unknown uuid[];
   v_attempt timestamptz;
   v_closed jsonb;
+  v_new_row uuid;
+  v_platform text;
   r_target record;
 BEGIN
   IF p_session_id IS NULL THEN
@@ -414,15 +566,19 @@ BEGIN
 
   -- THE AUTHORITY
   -- -------------
-  -- The closure runs AFTER the settlement, and the settlement releases the
-  -- lease. So the lease is not the authority here: the SESSION is.
+  -- The lease is not the authority here: the SESSION is.
   --
   -- A session that reached a terminal state was settled by the worker that
   -- owned it, and the settlement is what made the public row terminal. The
   -- scope below is read from the database, not from the caller, so a caller
   -- that arrives late, or twice, can only cause the closure that the database
-  -- already implies. A caller that owns a live lease is allowed in as well, so
-  -- the closure may also run before the settlement.
+  -- already implies.
+  --
+  -- A caller that owns a live lease is allowed in as well, so the closure may
+  -- run BEFORE the settlement. The continuation does exactly that: the pending
+  -- YouTube row is what keeps the generic sweeper from reading the absence of a
+  -- sibling row as a proof, so the scope has to be settled while that row is
+  -- still pending.
   IF NOT (
     v_session.state IN ('uploaded', 'failed', 'reconcile')
     OR (
@@ -475,6 +631,32 @@ BEGIN
     RETURN jsonb_build_object('recovered', false, 'reason', 'no_target_scope');
   END IF;
 
+  -- THE QUIESCENCE BOUNDARY
+  -- -----------------------
+  -- The worker that owns this attempt may still be publishing to the
+  -- destinations that have no row yet. Closing the fanout now would freeze a
+  -- scope that is about to change, so the recovery waits until that worker
+  -- cannot write any more. The reconciler calls this again, so the wait is
+  -- bounded and the post is not held open for ever.
+  IF v_post.processing_started_at IS NOT NULL
+     AND now() < v_post.processing_started_at + public.youtube_upload_attempt_quiet_after() THEN
+    IF (v_candidate ->> 'fanout_state') IS DISTINCT FROM 'youtube_upload_attempt_running' THEN
+      v_candidate := v_candidate || jsonb_build_object(
+        'fanout_state', 'youtube_upload_attempt_running',
+        'fanout_recovered_at', now(),
+        'fanout_recovery_reason', 'the worker of this attempt may still be publishing, so the fanout scope is not closed yet'
+      );
+      UPDATE public.posts
+         SET metadata = jsonb_set(coalesce(metadata, '{}'::jsonb), '{legacy_notification_candidate}', v_candidate, true)
+       WHERE id = v_post.id;
+    END IF;
+    RETURN jsonb_build_object(
+      'recovered', false,
+      'reason', 'attempt_may_still_be_running',
+      'quiet_after', v_post.processing_started_at + public.youtube_upload_attempt_quiet_after()
+    );
+  END IF;
+
   -- The rows this attempt owns, for its own destinations.
   SELECT coalesce(array_agg(pp.id ORDER BY pp.id), ARRAY[]::uuid[]) INTO v_rows
     FROM public.platform_posts pp
@@ -488,37 +670,50 @@ BEGIN
        )
      );
 
-  -- A destination with no row never started. The scope is incomplete, so the
-  -- fanout is not closed on a scope that would be wrong the moment that
-  -- destination writes its row.
-  v_unsent := ARRAY[]::uuid[];
+  -- A destination with no row has an UNKNOWN outcome. It did not necessarily
+  -- never start: the other platforms write their row after the provider call,
+  -- so the worker may have published and died before it recorded the receipt.
+  v_unknown := ARRAY[]::uuid[];
   FOR r_target IN SELECT unnest(v_targets) AS account_id LOOP
     IF NOT EXISTS (
       SELECT 1 FROM public.platform_posts pp
        WHERE pp.id = ANY(v_rows) AND pp.social_account_id = r_target.account_id
     ) THEN
-      v_unsent := array_append(v_unsent, r_target.account_id);
+      v_unknown := array_append(v_unknown, r_target.account_id);
     END IF;
   END LOOP;
 
-  IF cardinality(v_unsent) > 0 THEN
-    -- The explicit safe terminal state. The candidate says which
-    -- destinations never started, so the post is not silently held open and
-    -- the reason is actionable rather than guessed.
+  IF cardinality(v_unknown) > 0 THEN
+    -- Each unknown destination is terminalised with a NON-RETRYABLE reason, so
+    -- the scope becomes complete and the fanout can close, and so a retry can
+    -- never publish a second time to a destination whose outcome is unknown.
+    FOR r_target IN SELECT unnest(v_unknown) AS account_id LOOP
+      SELECT sa.platform INTO v_platform
+        FROM public.social_accounts sa
+       WHERE sa.id = r_target.account_id
+         AND sa.user_id = v_post.user_id;
+
+      IF v_platform IS NULL THEN
+        -- The account is gone or belongs to somebody else. It cannot be
+        -- published to, so there is nothing to close.
+        CONTINUE;
+      END IF;
+
+      v_new_row := public.partner_close_ambiguous_destination(v_post.id, r_target.account_id, v_platform);
+      IF v_new_row IS NOT NULL THEN
+        v_rows := array_append(v_rows, v_new_row);
+      END IF;
+    END LOOP;
+
     v_candidate := v_candidate || jsonb_build_object(
-      'fanout_state', 'youtube_upload_partial_scope',
-      'fanout_unsent_account_ids', to_jsonb(v_unsent),
+      'fanout_state', 'youtube_upload_unknown_scope',
+      'fanout_unknown_account_ids', to_jsonb(v_unknown),
       'fanout_recovered_at', now(),
-      'fanout_recovery_reason', 'these destinations never started, so the fanout scope is incomplete'
+      'fanout_recovery_reason', 'these destinations have no result row, so their outcome is unknown and they are not retried automatically'
     );
     UPDATE public.posts
        SET metadata = jsonb_set(coalesce(metadata, '{}'::jsonb), '{legacy_notification_candidate}', v_candidate, true)
      WHERE id = v_post.id;
-    RETURN jsonb_build_object(
-      'recovered', false,
-      'reason', 'incomplete_scope',
-      'unsent_account_ids', to_jsonb(v_unsent)
-    );
   END IF;
 
   v_closed := public.close_post_fanout(
@@ -532,19 +727,298 @@ BEGIN
   RETURN jsonb_build_object(
     'recovered', coalesce((v_closed ->> 'closed')::boolean, false),
     'reason', v_closed ->> 'error',
-    'closed', v_closed
+    'closed', v_closed,
+    'unknown_account_ids', to_jsonb(v_unknown)
   );
 END;
 $$;
 
 COMMENT ON FUNCTION public.recover_youtube_upload_fanout(uuid, uuid) IS
   'Closes the post fanout for a YouTube upload whose worker died between the '
-  'admission and the closure, when the attempt scope is complete. When a '
-  'destination never started, it records an explicit terminal state instead '
-  'of closing on an incomplete scope, and re-runs nothing.';
+  'admission and the closure. A destination without a result row has an '
+  'UNKNOWN outcome -- the other platforms record their result after the '
+  'provider call -- so it is terminalised with a non-retryable reason that '
+  'asks for a manual check, and nothing is replayed. The closure waits until '
+  'the worker of the attempt cannot write any more.';
 
 REVOKE ALL ON FUNCTION public.recover_youtube_upload_fanout(uuid, uuid) FROM PUBLIC, anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.recover_youtube_upload_fanout(uuid, uuid) TO service_role;
+
+-- ---------------------------------------------------------------------------
+-- youtube_upload_terminalize_cancelled
+--
+-- The pending row of an upload whose post was cancelled.
+--
+-- WHY IT EXISTS
+-- -------------
+-- The admission creates the public pending row and the session together. When
+-- the post is cancelled the attempt ends, and that row would stay pending for
+-- ever: the continuation refuses a post that is no longer being processed
+-- (YUS12), and the sweeper leaves a post with a pending row alone. The
+-- customer then sees a publication that never finishes.
+--
+-- WHAT IT DOES, AND ONLY THAT
+-- ---------------------------
+--   * the row becomes a terminal failure with a stable public reason,
+--   * the session becomes terminal and releases its lease,
+--   * the parent is NOT rolled up and nothing is published again.
+--
+-- The parent keeps the outcome the owner gave it. The row is closed under the
+-- attempt authority: the session's attempt must still be the post's current
+-- one, so an attempt that has been superseded is never disturbed. A later
+-- attempt owns the post, and this row is not its business.
+--
+-- The row is closed directly instead of through the settlement, because the
+-- settlement rolls the parent up when the post carries no notification
+-- candidate -- and a cancelled post must keep the outcome the owner gave it.
+--
+-- Neither reason is retryable. A video that may exist has to be checked by
+-- hand on the channel; an upload that never reached the provider is simply
+-- cancelled, and the owner publishes again if they want to.
+-- ---------------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION public.youtube_upload_terminalize_cancelled(p_session_id uuid)
+RETURNS jsonb
+LANGUAGE plpgsql
+VOLATILE
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+DECLARE
+  v_session public.youtube_upload_sessions%ROWTYPE;
+  v_post public.posts%ROWTYPE;
+  v_row public.platform_posts%ROWTYPE;
+  v_may_exist boolean;
+  v_reason text;
+  v_message text;
+  v_outcome text;
+  v_state text;
+  v_workspace uuid;
+  v_enqueued integer := 0;
+BEGIN
+  IF p_session_id IS NULL THEN
+    RETURN jsonb_build_object('terminalized', false, 'reason', 'invalid_arguments');
+  END IF;
+
+  SELECT * INTO v_session FROM public.youtube_upload_sessions WHERE id = p_session_id FOR UPDATE;
+  IF NOT FOUND THEN
+    RETURN jsonb_build_object('terminalized', false, 'reason', 'session_missing');
+  END IF;
+  IF v_session.state NOT IN ('open', 'uploaded') THEN
+    RETURN jsonb_build_object('terminalized', false, 'reason', 'not_open');
+  END IF;
+
+  -- The parent is locked first and the result row after it, so the two never
+  -- deadlock and a cancellation is either seen or waits.
+  SELECT * INTO v_post FROM public.posts WHERE id = v_session.post_id FOR UPDATE;
+  IF NOT FOUND THEN
+    RETURN jsonb_build_object('terminalized', false, 'reason', 'post_missing');
+  END IF;
+
+  -- A later attempt owns the post: it has its own fanout and its own rows.
+  IF v_session.attempt_started_at IS NOT NULL
+     AND v_post.processing_started_at IS DISTINCT FROM v_session.attempt_started_at THEN
+    RETURN jsonb_build_object('terminalized', false, 'reason', 'stale_attempt');
+  END IF;
+
+  -- The post is cancelled: it is not being processed any more.
+  IF v_post.status NOT IN ('pending', 'failed', 'scheduled') THEN
+    RETURN jsonb_build_object('terminalized', false, 'reason', 'post_not_cancelled');
+  END IF;
+
+  IF v_session.platform_post_id IS NULL THEN
+    RETURN jsonb_build_object('terminalized', false, 'reason', 'no_public_row');
+  END IF;
+
+  SELECT * INTO v_row FROM public.platform_posts WHERE id = v_session.platform_post_id FOR UPDATE;
+  IF NOT FOUND THEN
+    RETURN jsonb_build_object('terminalized', false, 'reason', 'public_row_missing');
+  END IF;
+  IF v_row.status <> 'pending' THEN
+    RETURN jsonb_build_object('terminalized', false, 'reason', 'row_not_pending');
+  END IF;
+
+  -- A video may exist when a byte ever reached the provider, or when the last
+  -- write may have landed.
+  v_may_exist := v_session.video_may_exist OR v_session.bytes_sent > 0;
+  IF v_may_exist THEN
+    v_reason := 'youtube_upload_reconcile_required';
+    v_message := 'the post was cancelled, and the provider may already hold a video from this upload, so it has to be checked by hand';
+    v_outcome := 'uncertain';
+    v_state := 'reconcile';
+  ELSE
+    v_reason := 'youtube_upload_cancelled';
+    v_message := 'the post was cancelled before the upload reached the provider';
+    v_outcome := 'cancelled';
+    v_state := 'failed';
+  END IF;
+
+  UPDATE public.platform_posts
+     SET status        = 'failed',
+         error_message = v_reason,
+         response_data = coalesce(response_data, '{}'::jsonb) || jsonb_build_object(
+           'publish_outcome', v_outcome,
+           'publish_outcome_reason', v_message,
+           'youtube_upload_reason', v_reason,
+           'youtube_upload_state', v_state
+         )
+   WHERE id = v_row.id;
+
+  UPDATE public.youtube_upload_sessions
+     SET state = v_state,
+         error = left(v_message, 300),
+         lease_token = NULL,
+         lease_expires_at = NULL,
+         updated_at = clock_timestamp()
+   WHERE id = v_session.id;
+
+  -- The row is terminal, so it reports itself like every other terminal row.
+  v_workspace := public.partner_workspace_of_account(v_row.social_account_id);
+  IF v_workspace IS NOT NULL THEN
+    v_enqueued := public.partner_emit_webhook_event(
+      v_workspace,
+      'post.failed',
+      'post.failed:' || v_row.id::text,
+      jsonb_build_object(
+        'post_id', v_row.post_id,
+        'platform_post_id', v_row.id,
+        'platform', v_row.platform,
+        'account_id', v_row.social_account_id,
+        'status', v_row.status,
+        'error_message', v_row.error_message,
+        'post_status', v_post.status
+      ),
+      v_row.platform,
+      v_row.social_account_id,
+      coalesce(v_row.posted_at, now())
+    );
+  END IF;
+
+  RETURN jsonb_build_object(
+    'terminalized', true,
+    'reason', v_reason,
+    'outcome', v_outcome,
+    'state', v_state,
+    'platform_post_id', v_row.id,
+    'post_status', v_post.status,
+    'enqueued', v_enqueued
+  );
+END;
+$$;
+
+COMMENT ON FUNCTION public.youtube_upload_terminalize_cancelled(uuid) IS
+  'Closes the pending row of an upload whose post was cancelled, with a '
+  'non-retryable reason. The parent keeps the outcome the owner gave it and '
+  'nothing is published again.';
+
+REVOKE ALL ON FUNCTION public.youtube_upload_terminalize_cancelled(uuid) FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.youtube_upload_terminalize_cancelled(uuid) TO service_role;
+
+-- ---------------------------------------------------------------------------
+-- reconcile_youtube_upload_fanouts
+--
+-- The bounded driver of the two repairs above.
+--
+-- WHY IT IS A DRIVER AND NOT A WORKER
+-- -----------------------------------
+-- Neither repair needs a provider and neither needs a worker: the outcome is
+-- derived from the database. The reconciler calls this every minute, so a
+-- post that is waiting for its attempt to go quiet is picked up as soon as it
+-- is quiet, and a pending row of a cancelled post is closed promptly.
+--
+-- IT IS NOT PART OF THE SHARED CLAIM LIMIT
+-- ----------------------------------------
+-- The shared limit of `claim_post_completion_work` counts the pieces of work a
+-- worker may hold, because each of them costs a worker. This costs database
+-- time only, and a post that waits for a free slot would stay 'processing'
+-- for ever. It has its own bound instead.
+--
+-- THE ORDER
+-- ---------
+-- The cancelled rows come first: a pending row of a cancelled post can never
+-- be settled by the continuation, because the continuation refuses a post that
+-- is not being processed.
+-- ---------------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION public.reconcile_youtube_upload_fanouts(p_limit integer DEFAULT 5)
+RETURNS jsonb
+LANGUAGE plpgsql
+VOLATILE
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+DECLARE
+  v_limit integer;
+  v_cancelled integer := 0;
+  v_attempted integer := 0;
+  v_recovered integer := 0;
+  v_result jsonb;
+  r_session record;
+BEGIN
+  v_limit := least(50, greatest(0, coalesce(p_limit, 5)));
+
+  -- The pending rows of cancelled posts.
+  FOR r_session IN
+    SELECT ys.id
+      FROM public.youtube_upload_sessions ys
+      JOIN public.posts p ON p.id = ys.post_id
+     WHERE ys.state IN ('open', 'uploaded')
+       AND ys.platform_post_id IS NOT NULL
+       AND p.status IN ('pending', 'failed', 'scheduled')
+       AND p.processing_started_at IS NOT DISTINCT FROM ys.attempt_started_at
+       AND EXISTS (
+         SELECT 1 FROM public.platform_posts pp
+          WHERE pp.id = ys.platform_post_id
+            AND pp.status = 'pending'
+       )
+     ORDER BY ys.updated_at, ys.id
+     LIMIT v_limit
+  LOOP
+    v_result := public.youtube_upload_terminalize_cancelled(r_session.id);
+    IF coalesce((v_result ->> 'terminalized')::boolean, false) THEN
+      v_cancelled := v_cancelled + 1;
+    END IF;
+  END LOOP;
+
+  -- The fanouts a dead worker left open. The session has to be terminal,
+  -- because that is the authority the closure itself accepts, and the attempt
+  -- has to be quiet, because a live worker is about to write the row the
+  -- scope is missing.
+  FOR r_session IN
+    SELECT ys.id
+      FROM public.youtube_upload_sessions ys
+      JOIN public.posts p ON p.id = ys.post_id
+     WHERE ys.state IN ('uploaded', 'failed', 'reconcile')
+       AND p.status = 'processing'
+       AND p.processing_started_at IS NOT DISTINCT FROM ys.attempt_started_at
+       AND p.metadata ? 'legacy_notification_candidate'
+       AND (p.metadata #>> '{legacy_notification_candidate,attempt_started_at}')::timestamptz
+           IS NOT DISTINCT FROM ys.attempt_started_at
+       AND (p.metadata #>> '{legacy_notification_candidate,fanout_closed}') IS DISTINCT FROM 'true'
+       AND p.processing_started_at + public.youtube_upload_attempt_quiet_after() <= now()
+     ORDER BY p.processing_started_at, ys.id
+     LIMIT v_limit
+  LOOP
+    v_attempted := v_attempted + 1;
+    v_result := public.recover_youtube_upload_fanout(r_session.id, NULL);
+    IF coalesce((v_result ->> 'recovered')::boolean, false) THEN
+      v_recovered := v_recovered + 1;
+    END IF;
+  END LOOP;
+
+  RETURN jsonb_build_object(
+    'cancelled_rows', v_cancelled,
+    'fanouts_attempted', v_attempted,
+    'fanouts_recovered', v_recovered
+  );
+END;
+$$;
+
+COMMENT ON FUNCTION public.reconcile_youtube_upload_fanouts(integer) IS
+  'The bounded driver of the YouTube fanout repairs: it closes the pending row '
+  'of a cancelled post, and it closes a fanout whose attempt has gone quiet. '
+  'It needs no worker and no provider.';
+
+REVOKE ALL ON FUNCTION public.reconcile_youtube_upload_fanouts(integer) FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.reconcile_youtube_upload_fanouts(integer) TO service_role;
 
 -- ---------------------------------------------------------------------------
 -- youtube_upload_effect_authority
@@ -1755,9 +2229,14 @@ BEGIN
 
   -- The public row is settled now, so the post may be finished with the
   -- notification candidate that the worker that admitted the upload left
-  -- open. The closure is derived from the database and it only happens when
-  -- the attempt's scope is complete; a destination that never started leaves
-  -- an explicit terminal state behind instead.
+  -- open.
+  --
+  -- The closure comes after the settlement HERE, and that is safe because the
+  -- whole classification is one transaction: the sweeper cannot see the
+  -- settled row before the closure has run. The continuation, which settles in
+  -- a transaction of its own, drives the closure BEFORE its settlement
+  -- instead. A destination without a row has an unknown outcome, so it is
+  -- closed with a non-retryable reason rather than left open.
   v_fanout := public.recover_youtube_upload_fanout(v_session.id, NULL);
 
   RETURN jsonb_build_object(
@@ -2045,6 +2524,19 @@ BEGIN
           AND ys.social_account_id = t
           AND ys.state IN ('reconcile', 'open', 'uploaded')
      )
+     -- A result whose publish outcome is UNKNOWN or CANCELLED is not retried.
+     -- The provider may already hold the publication, so a retry could publish
+     -- a second one, and a cancelled attempt is not republished either. The
+     -- marker is the row's own record of what happened, so it holds for every
+     -- destination and not only for YouTube. It is refused here, in the one
+     -- place every retry path goes through, so the queue, the API and the
+     -- browser all get the same answer.
+     AND NOT EXISTS (
+       SELECT 1 FROM public.platform_posts pp
+        WHERE pp.post_id = p_post_id
+          AND pp.social_account_id = t
+          AND coalesce(pp.response_data ->> 'publish_outcome', '') IN ('uncertain', 'cancelled')
+     )
      AND NOT EXISTS (
        SELECT 1 FROM public.platform_posts pp
         WHERE pp.post_id = p_post_id
@@ -2076,6 +2568,11 @@ BEGIN
        AND response_data #>> '{deferred,media_type}' = 'IMAGE'
        AND response_data #>> '{deferred,publish_outcome}' IS NOT DISTINCT FROM 'uncertain'
      )
+     -- An unknown or cancelled outcome keeps its row: it is the record of what
+     -- happened, and it is the evidence that the destination is not retryable.
+     -- The coalesce matters: a row without the marker must still be deleted,
+     -- because `NOT (NULL IN (...))` is NULL and would keep it for ever.
+     AND coalesce(response_data ->> 'publish_outcome', '') NOT IN ('uncertain', 'cancelled')
      AND NOT EXISTS (
        SELECT 1 FROM public.youtube_upload_sessions ys
         WHERE ys.post_id = platform_posts.post_id
@@ -2110,7 +2607,9 @@ COMMENT ON FUNCTION public.request_post_retry(uuid, uuid, uuid[]) IS
   'The accepted retry contract, plus the exclusion of a YouTube upload that '
   'needs manual reconciliation or that already holds a receipt: such an '
   'upload may have created a video on the channel, so it is neither targeted '
-  'nor deleted.';
+  'nor deleted. A result whose publish outcome is unknown or cancelled is '
+  'neither targeted nor deleted either, for the same reason: the provider '
+  'may already hold the publication.';
 
 -- ---------------------------------------------------------------------------
 -- The sweeper is taught about the YouTube upload.
@@ -2178,10 +2677,29 @@ BEGIN
             WHERE pp.post_id = v_post.id AND pp.social_account_id = a.id
          )
     LOOP
-      PERFORM public.partner_settle_platform_post(
-        NULL, v_post.id, v_account.id, v_account.platform, 'failed',
-        NULL, NULL, v_message, jsonb_build_object('swept_at', now())
-      );
+      -- A destination of a post with a YouTube upload has an AMBIGUOUS outcome.
+      --
+      -- The platforms that are not YouTube write their result row AFTER the
+      -- provider call, so an absent row does not prove that the destination
+      -- never started: the provider call may have succeeded and the receipt
+      -- may have been lost with the worker. A row that says "Safe to retry"
+      -- would therefore offer a retry that can publish a second time.
+      --
+      -- Such a destination is closed with the same non-retryable reason the
+      -- durable recovery uses, so the two paths agree and neither of them can
+      -- publish twice. The parent is still rolled up below, so the post
+      -- reaches a finite outcome either way.
+      IF EXISTS (
+        SELECT 1 FROM public.youtube_upload_sessions ys
+         WHERE ys.post_id = v_post.id
+      ) THEN
+        PERFORM public.partner_close_ambiguous_destination(v_post.id, v_account.id, v_account.platform);
+      ELSE
+        PERFORM public.partner_settle_platform_post(
+          NULL, v_post.id, v_account.id, v_account.platform, 'failed',
+          NULL, NULL, v_message, jsonb_build_object('swept_at', now())
+        );
+      END IF;
       v_rows := v_rows + 1;
     END LOOP;
 
@@ -2203,7 +2721,9 @@ COMMENT ON FUNCTION public.sweep_stale_processing_posts(interval) IS
   'Marks the posts that have been processing for too long as failed. A post '
   'with an open YouTube upload session is left alone: the continuation carries '
   'the upload on, and a sweep would offer a retry for an upload whose '
-  'provider session may already hold a video.';
+  'provider session may already hold a video. A destination of a post with a '
+  'YouTube upload is closed with a non-retryable reason instead of a retry '
+  'offer, because its outcome is ambiguous.';
 
 -- ---------------------------------------------------------------------------
 -- The completion claim learns about the YouTube upload.
@@ -2366,6 +2886,14 @@ BEGIN
       RETURN NEXT;
     END LOOP;
   END IF;
+
+  -- Step 4: Drive the YouTube fanout repairs.
+  --
+  -- This hands out no work: the outcome is derived from the database, so it
+  -- needs no worker and no provider. It is not part of the shared limit for
+  -- that reason, and a post that waits for a free slot would stay
+  -- 'processing' for ever.
+  PERFORM public.reconcile_youtube_upload_fanouts(5);
 END;
 $$;
 
@@ -2373,7 +2901,8 @@ COMMENT ON FUNCTION public.claim_post_completion_work(integer, interval) IS
   'The reconciler''s one bounded claim surface. It hands out the deferred '
   'Meta containers, the ready legacy notification candidates, and the YouTube '
   'upload sessions that are due for another look. Every kind draws from the '
-  'same limit.';
+  'same limit. It also drives the YouTube fanout repairs, which need no '
+  'worker.';
 
 -- ---------------------------------------------------------------------------
 -- The grants.

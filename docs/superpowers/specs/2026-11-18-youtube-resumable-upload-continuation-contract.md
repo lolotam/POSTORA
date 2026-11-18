@@ -641,16 +641,15 @@ whose worker died between the admission and the closure.
 The scope is **derived from the database**, never guessed: the attempt's
 destinations come from the persisted notification candidate, and the rows are
 the attempt's own rows for those destinations. The closure only happens when
-the scope is **complete**.
+the scope is **complete**, and section 28 says how a destination without a row
+becomes part of the scope.
 
 * A **single destination** closes through the real notification-enrolled
   fanout: the candidate becomes ready, the parent is rolled up, and the
   notification is dispatched as it is for any other post.
-* A **mixed destination** whose sibling never started is **not** closed. The
-  candidate records an explicit terminal state
-  (`fanout_state = 'youtube_upload_partial_scope'`, the accounts that never
-  started, and a reason), the successful sibling keeps its result, and
-  **nothing is re-run**.
+* A **mixed destination** whose sibling has no row is closed too, after that
+  sibling is terminalised the way section 28 describes. The successful sibling
+  keeps its result, and **nothing is re-run**.
 
 The authority is the session, not the lease: the closure runs after the
 settlement, and the settlement releases the lease. A session that reached a
@@ -658,7 +657,129 @@ terminal state was settled by the worker that owned it, and the scope is read
 from the database, so a caller that arrives late or twice can only cause the
 closure the database already implies.
 
-**Proved by:** SQL suites Y24 and Y25.
+**Proved by:** SQL suites Y24, Y25 and Y31.
+
+---
+
+## 28. A missing result row is an unknown outcome, not a proof
+
+**Was:** the recovery read a destination without a result row as a destination
+that **never started**, wrote that claim into the candidate
+(`fanout_unsent_account_ids`), and left the fanout open. The generic sweeper
+then read the same absence as a proof, wrote a row that said *Safe to retry*,
+and made the post terminal.
+
+**That reading was wrong.** Only the native YouTube path writes its result row
+**before** the provider call, so only a missing YouTube row proves that nothing
+was sent. Every other platform writes its row **after** the provider call: the
+worker publishes first and records the outcome afterwards. A missing sibling row
+therefore proves nothing. The provider call may have succeeded and the receipt
+may have been lost with the worker, and a retry of that destination can publish
+a second time.
+
+**Is:**
+
+* The recovery **never** claims that a sibling never started, and **never**
+  gives a sibling a retryable result.
+* A destination without a row is **terminal** with the stable public reason
+  `partner_publish_reconcile_required`, and its `response_data` carries
+  `publish_outcome = 'uncertain'`. The scope becomes complete, the fanout
+  closes, and the parent reaches a finite outcome. The row says what a human
+  has to do.
+* The successful siblings keep their results, and the durable YouTube receipt
+  is untouched.
+* Nothing is published again from the recovery.
+
+**The quiescence boundary.** The closure may only be made once the worker that
+owns the attempt cannot write any more, because a live worker is about to write
+the very row the scope is missing. `youtube_upload_attempt_quiet_after()` is
+`150 seconds`, which is `WORKER_LIFETIME_MS` in the process-post edge function:
+the worker that claims the attempt starts before the claim and is killed
+150 seconds later, so `posts.processing_started_at + 150 seconds` is a bound
+after which no worker of that attempt can write another result row. Until then
+the recovery says `attempt_may_still_be_running` and closes nothing.
+
+**The order.** The closure is driven **before** the public row is settled. The
+pending YouTube row is what keeps the generic sweeper from reading the absence
+of a sibling row as a proof, so the scope has to be settled while that row is
+still pending. The continuation drives `recoverFanout` before `settleUpload`
+and before the receipt projection.
+
+**The retry gate.** `request_post_retry` refuses a result whose
+`publish_outcome` is `uncertain` or `cancelled`, in the one place every retry
+path goes through. The queue, the API, the MCP node and the browser therefore
+get the same answer: that destination is not safe to publish to again.
+
+**Proved by:** SQL suites Y25, Y28, Y29 and Y31.
+
+---
+
+## 29. The generic sweeper never offers a retry for an ambiguous destination
+
+**Was:** `sweep_stale_processing_posts` read the absence of a result row as a
+proof that the destination never started, and wrote a row that said *Safe to
+retry*. For a post with a YouTube upload that reading is wrong, and the retry
+could publish a second time.
+
+**Is:** a destination of a post that has a YouTube upload is closed with the
+same non-retryable reason the recovery uses
+(`partner_publish_reconcile_required`, `publish_outcome = 'uncertain'`). The
+parent is still rolled up, so the post reaches a finite outcome either way, and
+the sweeper never becomes the thing that asserts a safety it cannot prove.
+
+A post **without** a YouTube upload is swept exactly as before.
+
+**Proved by:** SQL suite Y29.
+
+---
+
+## 30. The pending row of a cancelled post is closed
+
+**Was:** the admission creates the public pending row and the session together.
+When the post was cancelled the attempt ended and that row stayed `pending` for
+ever: the continuation refuses a post that is no longer being processed
+(YUS12), and the sweeper leaves a post with a pending row alone. The customer
+saw a publication that never finished.
+
+**Is:** `youtube_upload_terminalize_cancelled(session)` closes **that row** and
+nothing else.
+
+* The row becomes a terminal failure with a stable public reason:
+  `youtube_upload_reconcile_required` when a video may exist (a byte ever
+  reached the provider, or the last write may have landed), and
+  `youtube_upload_cancelled` when nothing ever reached the provider.
+* The session becomes terminal and releases its lease.
+* The parent is **not** rolled up and nothing is published again: the post keeps
+  the outcome the owner gave it. The row is closed directly instead of through
+  the settlement, because the settlement rolls the parent up when the post
+  carries no notification candidate.
+* The attempt authority still holds: the session's attempt must be the post's
+  current one, so an attempt that has been superseded is left alone.
+
+Neither reason is retryable, and the `publish_outcome` marker keeps the retry
+gate from touching the destination.
+
+**The reachable surface.** The continuation can never reach this: it refuses a
+post that is not being processed. `reconcile_youtube_upload_fanouts(p_limit)`
+is the bounded driver that reaches it, and the reconciler calls it every
+minute.
+
+**Proved by:** SQL suite Y30.
+
+---
+
+## The bounded driver of the two repairs
+
+`reconcile_youtube_upload_fanouts(p_limit)` does what no worker can:
+
+1. it closes the pending row of a cancelled post, and
+2. it closes a fanout whose attempt has gone quiet.
+
+It hands out no work: both outcomes are derived from the database, so neither
+needs a provider and neither needs a worker. That is why it is **not** part of
+the shared claim limit — a post that waits for a free slot would stay
+`processing` for ever — and why it has a bound of its own. It runs from
+`claim_post_completion_work`, which the reconciler calls every minute.
 
 ---
 
@@ -694,6 +815,11 @@ version.
 functions, and the changed sweeper and claim. Nothing that exists calls the
 new functions yet, so the old `process-post` keeps working.
 
+The migration is self-contained: `claim_post_completion_work` calls
+`reconcile_youtube_upload_fanouts`, and both are in the same migration. Before
+the publishing producer is deployed no YouTube session exists, so the driver
+has nothing to do.
+
 **2. The compatible reconciler.** Deploy the `reconcile-deferred-publishes`
 build that knows the new functions. It is compatible with the old
 `process-post`: it only *claims* work, and the claim is a read of the new
@@ -709,6 +835,13 @@ calls `admit_youtube_upload`, `settle_youtube_upload_session`,
 `youtube_upload_effect_authority` and `recover_youtube_upload_fanout`, so it
 needs the schema. The new reconciler drives the continuation, and the
 continuation needs the schema too. The schema needs neither.
+
+**The closure is driven before the settlement.** The new `process-post` calls
+`recover_youtube_upload_fanout` **before** it settles the public row, because
+the pending YouTube row is what keeps the generic sweeper from reading the
+absence of a sibling row as a proof. A `process-post` that settled first would
+leave a window in which the sweeper could close that window with a retry
+offer. The schema alone cannot prevent that: the order lives in the producer.
 
 **One thing the owner has to decide:** the `reconcile-deferred-publishes`
 cron already runs every minute, and the YouTube continuation rides on it, so

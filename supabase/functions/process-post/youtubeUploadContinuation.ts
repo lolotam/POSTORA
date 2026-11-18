@@ -209,9 +209,13 @@ export interface YoutubeContinuationPorts {
    * Closes the post fanout for an upload whose worker died between the
    * admission and the closure.
    *
-   * It only closes when the attempt's scope is complete. When a destination
-   * never started, it records an explicit terminal state instead and re-runs
-   * nothing.
+   * A destination without a result row has an UNKNOWN outcome, because the
+   * platforms that are not YouTube write their row after the provider call.
+   * Such a destination is terminalised with a non-retryable reason, so it is
+   * never published twice, and the scope becomes complete.
+   *
+   * The closure waits until the worker of the attempt cannot write any more,
+   * so it never freezes a scope that is about to change.
    */
   recoverFanout(args: { sessionId: string; leaseToken?: string | null }): Promise<{
     recovered: boolean;
@@ -338,14 +342,18 @@ export async function continueYoutubeUpload(
   // receipt being told about. It does need the attempt to be the current one.
   // ───────────────────────────────────────────────────────────────────────
   if (session.videoId) {
+    // The fanout closure comes BEFORE the projection.
+    //
+    // The pending YouTube row is what keeps the generic sweeper from reading
+    // the absence of a sibling row as "this destination never started". So the
+    // scope has to be settled while that row is still pending: the closure
+    // then knows every destination of the attempt, and the sweeper never sees
+    // a gap it could mistake for a proof.
+    await recoverFanoutQuietly(ports, session.id);
     const projected = await ports.projectReceipt({ sessionId: session.id });
     if (!projected.settled) {
       return refused(refusalToReason(projected.refused ?? "session_not_found"));
     }
-    // The receipt is on the public row now, so the post may be finished with
-    // the notification candidate that the worker that stored the receipt left
-    // open.
-    await recoverFanoutQuietly(ports, session.id);
     return { status: "completed", reason: YOUTUBE_UPLOAD_REASON.completed, videoId: session.videoId };
   }
 
@@ -554,6 +562,15 @@ async function interpretOutcome(args: {
       );
     }
 
+    // The fanout closure comes BEFORE the settlement.
+    //
+    // The pending YouTube row is what keeps the generic sweeper from reading
+    // the absence of a sibling row as "this destination never started". So the
+    // scope has to be settled while that row is still pending: the closure
+    // then knows every destination of the attempt, and the sweeper never sees
+    // a gap it could mistake for a proof.
+    await recoverFanoutQuietly(ports, session.id);
+
     const settled = await ports.settleUpload({
       sessionId: session.id,
       leaseToken,
@@ -567,7 +584,6 @@ async function interpretOutcome(args: {
       // session now decides what happens to the row.
       return { status: "refused", reason: YOUTUBE_UPLOAD_REASON.lease_conflict };
     }
-    await recoverFanoutQuietly(ports, session.id);
     return { status: "completed", reason: YOUTUBE_UPLOAD_REASON.completed, videoId: outcome.videoId };
   }
 
@@ -602,6 +618,12 @@ async function interpretOutcome(args: {
     ? outcome.reason
     : outcome.reason;
 
+  // The fanout closure comes BEFORE the settlement, for the same reason as
+  // above: the pending YouTube row is what keeps the generic sweeper from
+  // reading the absence of a sibling row as a proof that the sibling never
+  // started.
+  await recoverFanoutQuietly(ports, session.id);
+
   const settled = await ports.settleUpload({
     sessionId: session.id,
     leaseToken,
@@ -616,8 +638,6 @@ async function interpretOutcome(args: {
     return { status: "refused", reason: YOUTUBE_UPLOAD_REASON.lease_conflict };
   }
 
-  await recoverFanoutQuietly(ports, session.id);
-
   return { status: "failed", reason };
 }
 
@@ -626,8 +646,13 @@ async function interpretOutcome(args: {
  *
  * The upload may have been the only thing this post was doing, and the worker
  * that died between the admission and the closure left the notification
- * candidate open. The closure is derived from the database, and it only
- * happens when the attempt's scope is complete.
+ * candidate open. The closure is derived from the database: it closes the
+ * scope when it is complete, and it terminalises a destination whose outcome
+ * is unknown with a reason that is not a retry offer.
+ *
+ * It runs BEFORE the public row is settled, because the pending YouTube row
+ * is what keeps the generic sweeper from reading the absence of a sibling row
+ * as a proof that the sibling never started.
  *
  * A failure here is never fatal: the video is already published, or the
  * failure is already recorded, and the post is settled either way. The

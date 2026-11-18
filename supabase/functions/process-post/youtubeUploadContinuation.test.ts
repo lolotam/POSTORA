@@ -60,6 +60,8 @@ interface World {
   followUps: string[];
   /** How often the fanout closure was driven. */
   fanoutRecoveries: string[];
+  /** The order the worker did the things that touch the public row. */
+  timeline: string[];
 }
 
 interface WorldOptions {
@@ -142,6 +144,7 @@ function world(options: WorldOptions = {}): World {
     projected: [],
     followUps: [],
     fanoutRecoveries: [],
+    timeline: [],
     ports: {
       loadPost() {
         return Promise.resolve(post);
@@ -176,6 +179,7 @@ function world(options: WorldOptions = {}): World {
         if (options.settleRefused) {
           return Promise.resolve({ settled: false, refused: options.settleRefused });
         }
+        world.timeline.push("settle");
         world.settled.push({
           status: args.status,
           videoId: args.videoId ?? null,
@@ -187,6 +191,7 @@ function world(options: WorldOptions = {}): World {
         if (options.projectRefused) {
           return Promise.resolve({ settled: false, refused: options.projectRefused, videoId: null });
         }
+        world.timeline.push("project");
         world.projected.push(args.sessionId);
         return Promise.resolve({ settled: true, refused: null, videoId: session.videoId });
       },
@@ -198,6 +203,7 @@ function world(options: WorldOptions = {}): World {
         return Promise.resolve(options.authority ?? { authorized: true, reason: null });
       },
       recoverFanout(args) {
+        world.timeline.push("recover");
         world.fanoutRecoveries.push(args.sessionId);
         return Promise.resolve(options.fanout ?? { recovered: true, reason: null });
       },
@@ -621,3 +627,34 @@ Deno.test("a fanout that throws does not fail the upload", async () => {
   assertEquals(result.status, "completed");
   assertEquals(w.settled.length, 1);
 });
+
+// The fanout closure has to come before the public row is settled, in every
+// shape the worker can finish in. The pending YouTube row is what keeps the
+// generic sweeper from reading the absence of a sibling row as a proof that
+// the sibling never started, so the scope has to be settled while that row is
+// still pending.
+const ORDER_CASES: Array<{ name: string; options: WorldOptions; expected: string[] }> = [
+  {
+    name: "a success",
+    options: { outcome: { kind: "completed", videoId: VIDEO_ID } },
+    expected: ["recover", "settle"],
+  },
+  {
+    name: "a failure",
+    options: { outcome: { kind: "failed", reason: YOUTUBE_UPLOAD_REASON.rejected, retryable: false } },
+    expected: ["recover", "settle"],
+  },
+  {
+    name: "a receipt that is already stored",
+    options: { session: { state: "uploaded", videoId: VIDEO_ID } },
+    expected: ["recover", "project"],
+  },
+];
+
+for (const outcome of ORDER_CASES) {
+  Deno.test(`the fanout closure comes before the row is settled on ${outcome.name}`, async () => {
+    const w = world(outcome.options);
+    await continueYoutubeUpload(w.ports, request);
+    assertEquals(w.timeline, outcome.expected);
+  });
+}

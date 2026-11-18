@@ -9,7 +9,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import {
   PostWithResults, invalidatePostQueries,
 } from "./historyUtils";
-import { failedRetryTargets } from "./retryTargets";
+import { failedRetryTargets, hasNonRetryableOutcome } from "./retryTargets";
 import type { Platform } from "@/lib/types";
 
 export function usePostRetry() {
@@ -18,6 +18,14 @@ export function usePostRetry() {
   const submitRetry = async (postId: string, accountIds?: string[]) => {
     const acceptance = await enqueuePostPublish({ postId, mode: "retry", accountIds });
     if (acceptance.accepted === false) {
+      if (acceptance.reason === "no_targets") {
+        // The database refused every target: the only failed result of this
+        // post is one whose outcome is not a proven failure, so a retry could
+        // publish a second time.
+        throw new Error(
+          "Nothing on this post can be retried safely. A result whose outcome is unknown may already have been published, so check that account by hand."
+        );
+      }
       throw new Error(t("common:publishing.unconfirmed", "Could not confirm the publish request. Check History for its status."));
     }
   };
@@ -55,7 +63,9 @@ export function usePostRetry() {
     );
 
   const openRetryDialog = (post: PostWithResults) => {
-    const failedAccountIds = post.platformResults?.filter((r) => r.status === "failed" && r.social_account_id).map((r) => r.social_account_id as string) || [];
+    // A result whose outcome is unknown is not offered: its account is not
+    // safe to publish to again.
+    const failedAccountIds = post.platformResults?.filter((r) => r.status === "failed" && r.social_account_id && !hasNonRetryableOutcome(r)).map((r) => r.social_account_id as string) || [];
     setRetrySelectedAccountIds(failedAccountIds);
     setRetryDialogPost(post);
   };
@@ -100,7 +110,16 @@ export function usePostRetry() {
     if (hasTikTokFailure(post)) { openRetryDialog(post); return; }
 
     if (failedRetryTargets(post.platformResults).accountIds.length === 0) {
-      toast({ title: "Cannot retry automatically", description: "The failed results name no account, so they cannot be retried without posting to every account again.", variant: "destructive" });
+      // A result whose outcome is unknown is not retried: its account is not
+      // safe to publish to again, so the customer has to look at it by hand.
+      const uncertain = (post.platformResults ?? []).some((r) => r.status === "failed" && hasNonRetryableOutcome(r));
+      toast({
+        title: uncertain ? "This result cannot be retried" : "Cannot retry automatically",
+        description: uncertain
+          ? "Its outcome is not known: the destination may already have been published, so a retry could publish a second copy. Check that account by hand."
+          : "The failed results name no account, so they cannot be retried without posting to every account again.",
+        variant: "destructive",
+      });
       return;
     }
 

@@ -1618,6 +1618,13 @@ BEGIN
   SELECT f.account_id, f.post_id, f.media_id
     INTO v_acct_a, v_post_a, v_media_a
     FROM pg_temp.new_youtube_fixture('y24') f;
+
+  -- The worker that owned this attempt is gone: the attempt is older than the
+  -- worker lifetime, so no worker of it can write another result row and the
+  -- closure may be made.
+  UPDATE public.posts
+     SET processing_started_at = now() - public.youtube_upload_attempt_quiet_after() - interval '1 second'
+   WHERE id = v_post_a;
   SELECT processing_started_at INTO v_attempt FROM public.posts WHERE id = v_post_a;
 
   SELECT jsonb_build_object(
@@ -1679,11 +1686,17 @@ END
 $y24_fanout$;
 
 -- ---------------------------------------------------------------------------
--- Y25: a mixed destination is never closed on a guessed scope.
+-- Y25: a mixed destination with a lost receipt is UNKNOWN, not unsent.
 --
--- The YouTube destination finished and the other one never started. The
--- fanout is NOT closed: the scope would be wrong the moment that destination
--- writes its row. The candidate records an explicit terminal state instead.
+-- The YouTube destination finished and the other one has no row. The platforms
+-- that are not YouTube write their result row AFTER the provider call, so the
+-- missing row does NOT prove that the destination never started: the provider
+-- call may have succeeded and the receipt may have been lost with the worker.
+--
+-- So the destination is terminalised with a NON-RETRYABLE reason, the scope
+-- becomes complete, the fanout closes, and the parent reaches a finite
+-- outcome. The successful sibling keeps its result, and the retry gate
+-- refuses the unknown destination, so nothing can be published twice.
 -- ---------------------------------------------------------------------------
 DO $y25_mixed$
 DECLARE
@@ -1697,6 +1710,8 @@ DECLARE
   v_session uuid;
   v_lease   uuid := 'e5000000-0000-4000-8000-000000000002';
   v_recovered jsonb;
+  v_retry   jsonb;
+  v_ig_row  uuid;
 BEGIN
   -- This scenario owns its post, its account and its media file.
   SELECT f.account_id, f.post_id, f.media_id
@@ -1713,6 +1728,10 @@ BEGIN
            'selected_account_ids', jsonb_build_array(v_acct_a::text, v_ig::text))
    WHERE id = v_post_a;
 
+  -- The worker that owned this attempt is gone.
+  UPDATE public.posts
+     SET processing_started_at = now() - public.youtube_upload_attempt_quiet_after() - interval '1 second'
+   WHERE id = v_post_a;
   SELECT processing_started_at INTO v_attempt FROM public.posts WHERE id = v_post_a;
   SELECT jsonb_build_object(
            'user_id', x.user_id, 'caption', x.caption, 'media_file_ids', x.media_file_ids,
@@ -1732,31 +1751,60 @@ BEGIN
   PERFORM public.complete_youtube_upload_session(v_session, v_lease, 'yt-video-y25');
   PERFORM public.settle_youtube_upload_session(v_session, v_lease, 'success', 'yt-video-y25');
 
+  -- The sibling has no row. Its outcome is unknown, so it is terminalised
+  -- with a reason that is not a retry offer.
   v_recovered := public.recover_youtube_upload_fanout(v_session, NULL);
-  ASSERT (v_recovered ->> 'recovered') = 'false',
-    'Y25 an incomplete scope is not closed';
-  ASSERT (v_recovered ->> 'reason') = 'incomplete_scope',
-    'Y25 the reason says the scope is incomplete';
-  ASSERT (v_recovered -> 'unsent_account_ids') @> to_jsonb(ARRAY[v_ig]),
-    'Y25 the destination that never started is named';
+  ASSERT (v_recovered ->> 'recovered') = 'true',
+    'Y25 the fanout is closed once the scope is complete';
+  ASSERT (v_recovered -> 'unknown_account_ids') @> to_jsonb(ARRAY[v_ig]),
+    'Y25 the unknown destination is named';
 
-  -- The candidate carries the explicit terminal state, and the fanout was not
-  -- closed on a guessed scope.
-  ASSERT (SELECT metadata #>> '{legacy_notification_candidate,fanout_state}'
-            FROM public.posts WHERE id = v_post_a) = 'youtube_upload_partial_scope',
-    'Y25 the candidate records the explicit terminal state';
-  ASSERT (SELECT metadata #>> '{legacy_notification_candidate,fanout_closed}'
-            FROM public.posts WHERE id = v_post_a) = 'false',
-    'Y25 the fanout was not closed';
-  ASSERT (SELECT metadata #>> '{legacy_notification_candidate,fanout_recovery_reason}'
-            FROM public.posts WHERE id = v_post_a) IS NOT NULL,
-    'Y25 the terminal state carries an actionable reason';
-  -- The successful sibling is untouched: its row is still the one it wrote.
+  SELECT id INTO v_ig_row FROM public.platform_posts
+   WHERE post_id = v_post_a AND social_account_id = v_ig;
+  ASSERT v_ig_row IS NOT NULL,
+    'Y25 the unknown destination has a result row';
+  ASSERT (SELECT status FROM public.platform_posts WHERE id = v_ig_row) = 'failed',
+    'Y25 the unknown destination is terminal';
+  ASSERT (SELECT error_message FROM public.platform_posts WHERE id = v_ig_row)
+           = 'partner_publish_reconcile_required',
+    'Y25 the unknown destination carries the stable public reason';
+  ASSERT (SELECT response_data ->> 'publish_outcome' FROM public.platform_posts WHERE id = v_ig_row)
+           = 'uncertain',
+    'Y25 the unknown destination is marked as an unknown outcome';
+
+  -- The successful sibling keeps its result.
   ASSERT (SELECT status FROM public.platform_posts
            WHERE id = (SELECT platform_post_id FROM public.youtube_upload_sessions WHERE id = v_session)) = 'success',
     'Y25 the successful sibling keeps its result';
 
-  RAISE NOTICE 'PASS Y25: a mixed destination is left with an explicit terminal state';
+  -- The parent reaches a finite outcome.
+  ASSERT (SELECT status FROM public.posts WHERE id = v_post_a) = 'completed',
+    'Y25 the parent is finished by the closure';
+  ASSERT (SELECT metadata #>> '{legacy_notification_candidate,fanout_closed}'
+            FROM public.posts WHERE id = v_post_a) = 'true',
+    'Y25 the fanout is closed';
+  ASSERT (SELECT metadata #>> '{legacy_notification_candidate,fanout_state}'
+            FROM public.posts WHERE id = v_post_a) = 'youtube_upload_unknown_scope',
+    'Y25 the candidate records the unknown scope';
+  ASSERT (SELECT metadata #>> '{legacy_notification_candidate,fanout_recovery_reason}'
+            FROM public.posts WHERE id = v_post_a) IS NOT NULL,
+    'Y25 the terminal state carries an actionable reason';
+
+  -- The retry gate refuses the unknown destination: a retry could publish a
+  -- second time.
+  v_retry := public.request_post_retry(v_post_a, v_u_a, ARRAY[v_ig]);
+  ASSERT (v_retry ->> 'status') = 'refused',
+    'Y25 the unknown destination is not retried';
+  ASSERT (v_retry ->> 'reason') = 'no_targets',
+    'Y25 the refusal says there is nothing safe to retry';
+
+  -- The refusal did not delete the evidence, and did not move the post.
+  ASSERT (SELECT count(*) FROM public.platform_posts WHERE id = v_ig_row) = 1,
+    'Y25 the unknown result row is kept';
+  ASSERT (SELECT status FROM public.posts WHERE id = v_post_a) = 'completed',
+    'Y25 the refused retry left the post alone';
+
+  RAISE NOTICE 'PASS Y25: a lost sibling receipt is unknown, terminal and not retryable';
 END
 $y25_mixed$;
 
@@ -1869,6 +1917,336 @@ BEGIN
   RAISE NOTICE 'PASS Y27: the media sendability rule is the shared one';
 END
 $y27_media$;
+
+-- ---------------------------------------------------------------------------
+-- Y28: the closure waits for the worker of the attempt to go quiet.
+--
+-- A live worker may still write the row the scope is missing, so the closure
+-- is refused while the attempt is young. The reconciler drives it again, so
+-- the wait is bounded and the post is not held open for ever.
+-- ---------------------------------------------------------------------------
+DO $y28_quiet$
+DECLARE
+  v_acct_a  uuid;
+  v_post_a  uuid;
+  v_media_a uuid;
+  v_u_a     uuid := 'b1000000-0000-4000-8000-000000000001';
+  v_attempt timestamptz;
+  v_content jsonb;
+  v_session uuid;
+  v_lease   uuid := 'e8000000-0000-4000-8000-000000000001';
+  v_recovered jsonb;
+  v_reconciled jsonb;
+  v_quiet   timestamptz;
+BEGIN
+  -- This scenario owns its post, its account and its media file.
+  SELECT f.account_id, f.post_id, f.media_id
+    INTO v_acct_a, v_post_a, v_media_a
+    FROM pg_temp.new_youtube_fixture('y28') f;
+  SELECT processing_started_at INTO v_attempt FROM public.posts WHERE id = v_post_a;
+  SELECT jsonb_build_object(
+           'user_id', x.user_id, 'caption', x.caption, 'media_file_ids', x.media_file_ids,
+           'metadata', public.normalize_threads_internal_metadata(x.metadata), 'platforms', x.platforms,
+           'scheduled_at', x.scheduled_at, 'publish_requested_at', x.publish_requested_at, 'source', x.source)
+    INTO v_content FROM public.posts x WHERE x.id = v_post_a;
+
+  PERFORM public.enroll_post_notification_recovery(v_post_a, v_attempt, v_content,
+    ARRAY[v_acct_a], ARRAY[]::uuid[]);
+
+  v_session := (public.admit_youtube_upload(
+      v_post_a, v_acct_a, v_u_a, v_media_a, 4096, 4096, '{}'::jsonb)
+    -> 'session' ->> 'id')::uuid;
+  PERFORM public.claim_youtube_upload_session(v_session, v_lease, 180000);
+  PERFORM public.complete_youtube_upload_session(v_session, v_lease, 'yt-video-y28');
+  PERFORM public.settle_youtube_upload_session(v_session, v_lease, 'success', 'yt-video-y28');
+
+  -- The worker of this attempt may still be running: the closure waits.
+  v_recovered := public.recover_youtube_upload_fanout(v_session, NULL);
+  ASSERT (v_recovered ->> 'recovered') = 'false',
+    'Y28 a running attempt is not closed';
+  ASSERT (v_recovered ->> 'reason') = 'attempt_may_still_be_running',
+    'Y28 the reason says the attempt may still be running';
+  ASSERT (SELECT metadata #>> '{legacy_notification_candidate,fanout_closed}'
+            FROM public.posts WHERE id = v_post_a) = 'false',
+    'Y28 the fanout is not closed while the attempt is running';
+  ASSERT (SELECT status FROM public.posts WHERE id = v_post_a) = 'processing',
+    'Y28 the post is not finished while the attempt is running';
+
+  -- The attempt goes quiet: the post, the session and the candidate all move
+  -- to the same older attempt, which is what an attempt whose worker has been
+  -- gone for a while looks like.
+  v_quiet := now() - public.youtube_upload_attempt_quiet_after() - interval '1 second';
+  UPDATE public.posts
+     SET processing_started_at = v_quiet,
+         metadata = (metadata - 'attempt_started_at' - 'legacy_notification_candidate')
+                    || jsonb_build_object(
+                         'attempt_started_at', v_quiet,
+                         'legacy_notification_candidate', (metadata -> 'legacy_notification_candidate')
+                           || jsonb_build_object('attempt_started_at', v_quiet))
+   WHERE id = v_post_a;
+  UPDATE public.youtube_upload_sessions
+     SET attempt_started_at = v_quiet
+   WHERE id = v_session;
+
+  -- The driver closes it.
+  v_reconciled := public.reconcile_youtube_upload_fanouts(5);
+  ASSERT (v_reconciled ->> 'fanouts_recovered') = '1',
+    'Y28 the driver closes the fanout once the attempt is quiet';
+  ASSERT (SELECT metadata #>> '{legacy_notification_candidate,fanout_closed}'
+            FROM public.posts WHERE id = v_post_a) = 'true',
+    'Y28 the fanout is closed by the driver';
+  ASSERT (SELECT status FROM public.posts WHERE id = v_post_a) = 'completed',
+    'Y28 the parent is finished by the driver';
+
+  RAISE NOTICE 'PASS Y28: the closure waits for the worker of the attempt to go quiet';
+END
+$y28_quiet$;
+
+-- ---------------------------------------------------------------------------
+-- Y29: the sweeper never offers a retry for an ambiguous destination.
+--
+-- This is the hole the parent named: the sibling's provider call may have
+-- succeeded and its receipt may have been lost, so a row that says "Safe to
+-- retry" would offer a retry that can publish a second time.
+--
+-- The post is old enough for the sweeper, the YouTube upload is settled and
+-- its receipt is durable, and the sibling has no row. The sweeper runs
+-- before the recovery has, which is the window that matters.
+-- ---------------------------------------------------------------------------
+DO $y29_sweep$
+DECLARE
+  v_acct_a  uuid;
+  v_post_a  uuid;
+  v_media_a uuid;
+  v_ig      uuid := 'e9000000-0000-4000-8000-000000000001';
+  v_u_a     uuid := 'b1000000-0000-4000-8000-000000000001';
+  v_attempt timestamptz;
+  v_content jsonb;
+  v_session uuid;
+  v_lease   uuid := 'e9000000-0000-4000-8000-000000000002';
+  v_answer  jsonb;
+  v_retry   jsonb;
+BEGIN
+  -- This scenario owns its post, its account and its media file.
+  SELECT f.account_id, f.post_id, f.media_id
+    INTO v_acct_a, v_post_a, v_media_a
+    FROM pg_temp.new_youtube_fixture('y29') f;
+  INSERT INTO public.social_accounts
+    (id, user_id, platform, platform_user_id, platform_username, access_token, is_active)
+  VALUES (v_ig, v_u_a, 'instagram', 'ig-y29', 'y29', 'token-ig', true)
+  ON CONFLICT (id) DO NOTHING;
+  UPDATE public.posts
+     SET platforms = ARRAY['youtube', 'instagram'],
+         metadata = metadata || jsonb_build_object(
+           'selected_account_ids', jsonb_build_array(v_acct_a::text, v_ig::text))
+   WHERE id = v_post_a;
+
+  -- The attempt is older than the sweeper's window, and older than the worker
+  -- lifetime, so the attempt is quiet.
+  UPDATE public.posts
+     SET processing_started_at = now() - interval '30 minutes'
+   WHERE id = v_post_a;
+  SELECT processing_started_at INTO v_attempt FROM public.posts WHERE id = v_post_a;
+  SELECT jsonb_build_object(
+           'user_id', x.user_id, 'caption', x.caption, 'media_file_ids', x.media_file_ids,
+           'metadata', public.normalize_threads_internal_metadata(x.metadata), 'platforms', x.platforms,
+           'scheduled_at', x.scheduled_at, 'publish_requested_at', x.publish_requested_at, 'source', x.source)
+    INTO v_content FROM public.posts x WHERE x.id = v_post_a;
+
+  PERFORM public.enroll_post_notification_recovery(v_post_a, v_attempt, v_content,
+    ARRAY[v_acct_a, v_ig], ARRAY[]::uuid[]);
+
+  -- The upload is settled, so its receipt is durable and its row is terminal.
+  v_session := (public.admit_youtube_upload(
+      v_post_a, v_acct_a, v_u_a, v_media_a, 4096, 4096, '{}'::jsonb)
+    -> 'session' ->> 'id')::uuid;
+  PERFORM public.claim_youtube_upload_session(v_session, v_lease, 180000);
+  PERFORM public.complete_youtube_upload_session(v_session, v_lease, 'yt-video-y29');
+  PERFORM public.settle_youtube_upload_session(v_session, v_lease, 'success', 'yt-video-y29');
+
+  -- The sweeper runs.
+  v_answer := public.sweep_stale_processing_posts();
+
+  -- No destination is offered a retry.
+  ASSERT NOT EXISTS (
+    SELECT 1 FROM public.platform_posts
+     WHERE post_id = v_post_a AND error_message LIKE '%Safe to retry%'
+  ), 'Y29 the sweeper offers no retry for an ambiguous destination';
+
+  -- The sibling is closed with the non-retryable reason instead.
+  ASSERT (SELECT error_message FROM public.platform_posts
+           WHERE post_id = v_post_a AND social_account_id = v_ig)
+           = 'partner_publish_reconcile_required',
+    'Y29 the ambiguous destination carries the stable public reason';
+  ASSERT (SELECT response_data ->> 'publish_outcome' FROM public.platform_posts
+           WHERE post_id = v_post_a AND social_account_id = v_ig) = 'uncertain',
+    'Y29 the ambiguous destination is marked as an unknown outcome';
+
+  -- The post still reaches a finite outcome.
+  ASSERT (SELECT status FROM public.posts WHERE id = v_post_a) IN ('completed', 'failed'),
+    'Y29 the post reaches a finite outcome';
+
+  -- And the destination is still not retryable.
+  v_retry := public.request_post_retry(v_post_a, v_u_a, ARRAY[v_ig]);
+  ASSERT (v_retry ->> 'status') = 'refused',
+    'Y29 the ambiguous destination is not retried';
+
+  RAISE NOTICE 'PASS Y29: the sweeper offers no retry for an ambiguous destination';
+END
+$y29_sweep$;
+
+-- ---------------------------------------------------------------------------
+-- Y30: the pending row of a cancelled post is closed, and the parent keeps
+-- the outcome the owner gave it.
+-- ---------------------------------------------------------------------------
+DO $y30_cancelled$
+DECLARE
+  v_acct_a  uuid;
+  v_post_a  uuid;
+  v_media_a uuid;
+  v_u_a     uuid := 'b1000000-0000-4000-8000-000000000001';
+  v_session uuid;
+  v_lease   uuid := 'ea000000-0000-4000-8000-000000000001';
+  v_row_id  uuid;
+  v_answer  jsonb;
+  v_retry   jsonb;
+BEGIN
+  -- This scenario owns its post, its account and its media file.
+  SELECT f.account_id, f.post_id, f.media_id
+    INTO v_acct_a, v_post_a, v_media_a
+    FROM pg_temp.new_youtube_fixture('y30') f;
+  v_session := (public.admit_youtube_upload(
+      v_post_a, v_acct_a, v_u_a, v_media_a, 4096, 4096, '{}'::jsonb)
+    -> 'session' ->> 'id')::uuid;
+  v_row_id := (SELECT platform_post_id FROM public.youtube_upload_sessions WHERE id = v_session);
+
+  -- The owner cancels the post while the upload is open.
+  UPDATE public.posts SET status = 'failed' WHERE id = v_post_a;
+
+  -- The row is closed, and only the row.
+  v_answer := public.youtube_upload_terminalize_cancelled(v_session);
+  ASSERT (v_answer ->> 'terminalized') = 'true',
+    'Y30 the pending row of a cancelled post is closed';
+  ASSERT (v_answer ->> 'reason') = 'youtube_upload_cancelled',
+    'Y30 the reason says the upload never reached the provider';
+  ASSERT (SELECT status FROM public.platform_posts WHERE id = v_row_id) = 'failed',
+    'Y30 the row is terminal';
+  ASSERT (SELECT error_message FROM public.platform_posts WHERE id = v_row_id)
+           = 'youtube_upload_cancelled',
+    'Y30 the row carries the stable public reason';
+  ASSERT (SELECT response_data ->> 'publish_outcome' FROM public.platform_posts WHERE id = v_row_id)
+           = 'cancelled',
+    'Y30 the row is marked as cancelled';
+
+  -- The parent keeps the outcome the owner gave it.
+  ASSERT (SELECT status FROM public.posts WHERE id = v_post_a) = 'failed',
+    'Y30 the parent is not rolled up by the cancellation';
+  ASSERT (SELECT state FROM public.youtube_upload_sessions WHERE id = v_session) = 'failed',
+    'Y30 the session is terminal';
+  ASSERT (SELECT lease_token FROM public.youtube_upload_sessions WHERE id = v_session) IS NULL,
+    'Y30 the cancelled session releases its lease';
+
+  -- The destination is not retried: the attempt was cancelled.
+  v_retry := public.request_post_retry(v_post_a, v_u_a, ARRAY[v_acct_a]);
+  ASSERT (v_retry ->> 'status') = 'refused',
+    'Y30 the cancelled destination is not retried';
+
+  -- A later attempt owns the post: the old row is not its business.
+  UPDATE public.youtube_upload_sessions
+     SET state = 'open',
+         platform_post_id = v_row_id,
+         attempt_started_at = now() - interval '1 hour'
+   WHERE id = v_session;
+  UPDATE public.platform_posts SET status = 'pending' WHERE id = v_row_id;
+  v_answer := public.youtube_upload_terminalize_cancelled(v_session);
+  ASSERT (v_answer ->> 'terminalized') = 'false',
+    'Y30 a superseded attempt is left alone';
+  ASSERT (v_answer ->> 'reason') = 'stale_attempt',
+    'Y30 the reason names the attempt that owns the post now';
+
+  RAISE NOTICE 'PASS Y30: the pending row of a cancelled post is closed without rolling the parent';
+END
+$y30_cancelled$;
+
+-- ---------------------------------------------------------------------------
+-- Y31: a late worker cannot make an unknown destination retryable, and the
+-- settlement is idempotent.
+-- ---------------------------------------------------------------------------
+DO $y31_late$
+DECLARE
+  v_acct_a  uuid;
+  v_post_a  uuid;
+  v_media_a uuid;
+  v_ig      uuid := 'eb000000-0000-4000-8000-000000000001';
+  v_u_a     uuid := 'b1000000-0000-4000-8000-000000000001';
+  v_attempt timestamptz;
+  v_content jsonb;
+  v_session uuid;
+  v_lease   uuid := 'eb000000-0000-4000-8000-000000000002';
+  v_recovered jsonb;
+  v_retry   jsonb;
+  v_rows    integer;
+BEGIN
+  -- This scenario owns its post, its account and its media file.
+  SELECT f.account_id, f.post_id, f.media_id
+    INTO v_acct_a, v_post_a, v_media_a
+    FROM pg_temp.new_youtube_fixture('y31') f;
+  INSERT INTO public.social_accounts
+    (id, user_id, platform, platform_user_id, platform_username, access_token, is_active)
+  VALUES (v_ig, v_u_a, 'instagram', 'ig-y31', 'y31', 'token-ig', true)
+  ON CONFLICT (id) DO NOTHING;
+  UPDATE public.posts
+     SET platforms = ARRAY['youtube', 'instagram'],
+         metadata = metadata || jsonb_build_object(
+           'selected_account_ids', jsonb_build_array(v_acct_a::text, v_ig::text))
+   WHERE id = v_post_a;
+
+  -- The worker of this attempt is gone.
+  UPDATE public.posts
+     SET processing_started_at = now() - public.youtube_upload_attempt_quiet_after() - interval '1 second'
+   WHERE id = v_post_a;
+  SELECT processing_started_at INTO v_attempt FROM public.posts WHERE id = v_post_a;
+  SELECT jsonb_build_object(
+           'user_id', x.user_id, 'caption', x.caption, 'media_file_ids', x.media_file_ids,
+           'metadata', public.normalize_threads_internal_metadata(x.metadata), 'platforms', x.platforms,
+           'scheduled_at', x.scheduled_at, 'publish_requested_at', x.publish_requested_at, 'source', x.source)
+    INTO v_content FROM public.posts x WHERE x.id = v_post_a;
+
+  PERFORM public.enroll_post_notification_recovery(v_post_a, v_attempt, v_content,
+    ARRAY[v_acct_a, v_ig], ARRAY[]::uuid[]);
+
+  v_session := (public.admit_youtube_upload(
+      v_post_a, v_acct_a, v_u_a, v_media_a, 4096, 4096, '{}'::jsonb)
+    -> 'session' ->> 'id')::uuid;
+  PERFORM public.claim_youtube_upload_session(v_session, v_lease, 180000);
+  PERFORM public.complete_youtube_upload_session(v_session, v_lease, 'yt-video-y31');
+  PERFORM public.settle_youtube_upload_session(v_session, v_lease, 'success', 'yt-video-y31');
+
+  v_recovered := public.recover_youtube_upload_fanout(v_session, NULL);
+  ASSERT (v_recovered ->> 'recovered') = 'true',
+    'Y31 the fanout is closed';
+
+  -- The settlement is idempotent: a second pass writes nothing new.
+  v_recovered := public.recover_youtube_upload_fanout(v_session, NULL);
+  SELECT count(*) INTO v_rows FROM public.platform_posts WHERE post_id = v_post_a;
+  ASSERT v_rows = 2,
+    'Y31 a second pass writes no extra row';
+
+  -- A late worker writes the sibling's own row. The platform allows more than
+  -- one row for an account, and the late row says what really happened.
+  INSERT INTO public.platform_posts (post_id, social_account_id, platform, status, error_message, response_data)
+  VALUES (v_post_a, v_ig, 'instagram', 'failed', 'the provider refused the media',
+          jsonb_build_object('late_worker', true));
+
+  -- The late row does not make the destination retryable: the unknown outcome
+  -- is still on record, and a retry could publish a second time.
+  v_retry := public.request_post_retry(v_post_a, v_u_a, ARRAY[v_ig]);
+  ASSERT (v_retry ->> 'status') = 'refused',
+    'Y31 a late worker does not make an unknown destination retryable';
+
+  RAISE NOTICE 'PASS Y31: a late worker cannot make an unknown destination retryable';
+END
+$y31_late$;
 
 ROLLBACK;
 

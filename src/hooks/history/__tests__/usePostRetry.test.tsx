@@ -60,6 +60,27 @@ describe("post retry submission", () => {
     expect(from).not.toHaveBeenCalled();
   });
 
+  it("does not offer a result whose outcome is unknown, because a retry could publish twice", async () => {
+    const uncertain = { id: "post-2", platformResults: [
+      { id: "failed-2", platform: "instagram", status: "failed", social_account_id: "account-9", response_data: { publish_outcome: "uncertain" } },
+    ] };
+    const { result } = renderRetry();
+    await act(async () => { await result.current.handleRetryFailed(uncertain); });
+    expect(invoke).not.toHaveBeenCalled();
+    expect(toast).toHaveBeenCalledWith(expect.objectContaining({ title: "This result cannot be retried", variant: "destructive" }));
+    expect(toast).not.toHaveBeenCalledWith(expect.objectContaining({ title: "Retry submitted" }));
+  });
+
+  it("says what to do when the database refuses every target", async () => {
+    invoke.mockResolvedValue({ data: null, error: new FunctionsHttpError(Response.json({ error: "no_targets" }, { status: 409 })) });
+    const { result } = renderRetry();
+    await act(async () => { await result.current.handleRetryFailed(post); });
+    expect(toast).toHaveBeenCalledWith(expect.objectContaining({
+      title: "Retry failed",
+      description: expect.stringContaining("may already have been published"),
+    }));
+  });
+
   it("passes only the picker selection to the retry request", async () => {
     const { result } = renderRetry();
     await act(async () => { await result.current.handleRetryFailed({ ...post, platformResults: [{ ...post.platformResults[0], platform: "tiktok" }] }); });
