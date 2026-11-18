@@ -1413,6 +1413,22 @@ platform, and changing it for YouTube alone would be a different product.
 cosmetic. The pattern is the one the repository already uses for the same
 problem (`20261002090000_scheduled_keep_inflight_on_account_delete.sql`).
 
+**The evidence is kept; no code reads it yet.** Nothing reads
+`posts.metadata.youtube_upload_outcomes`: not the retry path, not the
+dashboard, not the reconciler. That is not a hole in the safety. The rule that
+keeps a second video off the channel is the session's (§56, `YUS16`): the
+session outlives the disconnect, and the admission refuses a reconnect that
+would carry the upload onto the same channel. The retry path cannot replay the
+destination either, because the row that named it is deleted with the
+account, so there is nothing there to keep out of the retry. The map is
+therefore the record of a destination that no longer exists — for a human
+reading the post, and for whatever reads it next — and not an input to an
+automatic decision.
+
+It is deliberately **not** shown in History: the public row goes with the
+account for every platform, and keeping this one would make YouTube the only
+platform that shows a destination the customer disconnected.
+
 **Proved by:** SQL suite Y42.
 
 ---

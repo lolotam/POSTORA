@@ -330,6 +330,33 @@ Deno.test("a sequential read that runs out of time is rescheduled, not refused",
   assertEquals(first.reason, YOUTUBE_UPLOAD_REASON.media_read_failed);
 });
 
+Deno.test("a sequential read after a resumed one is rescheduled, not refused", async () => {
+  // The first read had to pull a prefix and it succeeded. The next read
+  // starts where the source already is, so it skipped nothing: a second
+  // worker may still finish it, and it must not be refused as a source that
+  // can never work.
+  let opened = 0;
+  const fetchImpl: typeof fetch = () => {
+    opened += 1;
+    const body = opened === 2
+      ? new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(fileBytes(20));
+        },
+      })
+      : blockBody(fileBytes(1024), [7, 13]);
+    return Promise.resolve(new Response(body, { headers: { "Content-Length": "1024" } }));
+  };
+  const source = await createVideoByteSource({
+    url: `${HOST}/video.mp4`, fetchImpl, approvedHosts: APPROVED, timeoutMs: 10,
+  });
+  // The resumed read pulls the prefix and succeeds.
+  assertEquals(new Uint8Array(await source.read(10, 19)), fileBytes(20).slice(10, 20));
+  // The next read starts where the source is, and it runs out of time.
+  const second = await assertRejects(() => source.read(20, 29), VideoSourceError);
+  assertEquals(second.reason, YOUTUBE_UPLOAD_REASON.media_read_failed);
+});
+
 Deno.test("uses the declared object size only when a streaming response omits its size", async () => {
   const fetchImpl: typeof fetch = () => Promise.resolve(new Response(blockBody(fileBytes(33), [7, 13])));
   const source = await createVideoByteSource({

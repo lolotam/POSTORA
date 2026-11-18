@@ -451,6 +451,10 @@ class StreamingByteSource implements VideoByteSource {
    * Every worker that tries the same read pays for that prefix again, so a
    * read that had to skip and still ran out of time cannot succeed on a
    * second try.
+   *
+   * The count describes the read that is running NOW. It starts over with
+   * every read, because a read that skipped nothing may still succeed with
+   * more time, even when an earlier read had to pay for a prefix.
    */
   private skippedFromNetwork = 0;
   /** Whether the bytes being pulled belong to a skip. */
@@ -630,6 +634,11 @@ class StreamingByteSource implements VideoByteSource {
       this.reset();
     }, budget);
     try {
+      // The count of the bytes the network had to deliver belongs to THIS
+      // read. A read that skipped nothing may still succeed with more time,
+      // even when an earlier read had to pay for a prefix, so the count of
+      // that earlier read must not decide this one.
+      this.skippedFromNetwork = 0;
       await this.skipTo(start);
       const bytes = new Uint8Array(wanted);
       let filled = 0;

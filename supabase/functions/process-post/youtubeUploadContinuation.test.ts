@@ -500,10 +500,19 @@ Deno.test("a media row without a size is judged by the object that is opened", a
   // The row may not record a size. The object that is opened is then the only
   // proof of what is being sent, and it is the one that is compared with the
   // byte count the upload started with.
-  const w = world({ media: { fileSize: null } });
+  const w = world({
+    media: { fileSize: null },
+    // The source is opened when the first byte is read, so the read has to go
+    // through it for the opened object to be judged at all.
+    runUpload(args) {
+      return args.source.read(0, 1).then(() => ({ kind: "completed", videoId: VIDEO_ID }));
+    },
+  });
   const result = await continueYoutubeUpload(w.ports, request);
   assertEquals(result.status, "completed");
   assertEquals(w.uploads, 1);
+  // The object was opened, and it is the size the upload started with.
+  assertEquals(w.mediaReads, 1);
 });
 
 Deno.test("an opened object of another size is refused before the first byte", async () => {
