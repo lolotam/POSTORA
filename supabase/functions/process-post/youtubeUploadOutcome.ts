@@ -82,8 +82,10 @@ export function youtubeUploadOutcomeMessage(outcome: ResumableUploadOutcome): st
       // The reason says why the write was not made: the live state refused it,
       // or the lease was gone. It is the outcome's own reason, not a guess.
       return `${youtubeUploadPublicMessage(outcome.reason)} (${outcome.reason})`;
-    case "failed":
-      return `${youtubeUploadPublicMessage(outcome.reason)} (${outcome.reason})`;
+    case "failed": {
+      const reason = isUncertainUploadOutcome(outcome) ? YOUTUBE_UPLOAD_REASON.reconcile : outcome.reason;
+      return `${youtubeUploadPublicMessage(reason)} (${outcome.reason})`;
+    }
     default:
       return youtubeUploadPublicMessage(YOUTUBE_UPLOAD_REASON.completed);
   }

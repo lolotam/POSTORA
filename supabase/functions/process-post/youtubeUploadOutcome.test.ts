@@ -68,10 +68,12 @@ Deno.test("a refusal that needs a human is a proof about the credential, not abo
 // ───────────────────────────────────────────────────────────────────────────
 
 Deno.test("an outcome that is not a proof carries the marker", () => {
-  assertEquals(youtubeUploadFailureResponseData(failed(YOUTUBE_UPLOAD_REASON.unknown)), {
+  const outcome = failed(YOUTUBE_UPLOAD_REASON.unknown);
+  assertEquals(youtubeUploadFailureResponseData(outcome), {
     youtube_upload_reason: YOUTUBE_UPLOAD_REASON.unknown,
     publish_outcome: "uncertain",
   });
+  assertStringIncludes(youtubeUploadOutcomeMessage(outcome), "Check your YouTube channel");
 });
 
 Deno.test("a proven failure carries no marker, so it stays retryable", () => {

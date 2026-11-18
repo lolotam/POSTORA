@@ -93,6 +93,8 @@ Deno.test("an exception message cannot leak the session uri into a log line", ()
 Deno.test("a token cannot leak into a log line", () => {
   const redacted = redactProviderText('{"access_token":"ya29.super-secret","expires_in":3600}');
   assert(!redacted.includes("ya29.super-secret"));
+  assertEquals(redactProviderText("{'refresh_token': 'fixture with spaces'}"),
+    "{'refresh_token': '[redacted]'}");
 });
 
 Deno.test("a bearer token cannot leak into a log line", () => {

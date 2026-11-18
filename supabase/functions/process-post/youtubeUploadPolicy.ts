@@ -160,7 +160,7 @@ const UPLOAD_ID_PATTERN = /(upload_id=)[^\s&"'<>)\]]+/gi;
 const UPLOAD_TYPE_PATTERN = /(uploadType=)[^\s&"'<>)\]]+/gi;
 const BEARER_PATTERN = /(bearer\s+)[^\s"'<>)\]]+/gi;
 const TOKEN_FIELD_PATTERN =
-  /("?(?:access_token|refresh_token|client_secret|api_key|token|credential)"?\s*[:=]\s*"?)[^\s"'<>,}]+/gi;
+  /(["']?(?:access_token|refresh_token|client_secret|api_key|token|credential)["']?\s*[:=]\s*)(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^\s"'<>,}]+)/gi;
 
 /**
  * Removes credentials, session URLs and provider payloads from a string that
@@ -177,7 +177,11 @@ export function redactProviderText(value: unknown, maxLength = 500): string {
     .replace(UPLOAD_ID_PATTERN, "$1[redacted]")
     .replace(UPLOAD_TYPE_PATTERN, "$1[redacted]")
     .replace(BEARER_PATTERN, "$1[redacted]")
-    .replace(TOKEN_FIELD_PATTERN, "$1[redacted]");
+    .replace(TOKEN_FIELD_PATTERN, (match, field: string) => {
+      const valueStart = match[field.length];
+      const quote = valueStart === '"' || valueStart === "'" ? valueStart : "";
+      return `${field}${quote}[redacted]${quote}`;
+    });
   return redacted.length > maxLength ? `${redacted.slice(0, maxLength)}…` : redacted;
 }
 

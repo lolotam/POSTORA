@@ -438,7 +438,7 @@ class StreamingByteSource implements VideoByteSource {
       this.fetchImpl,
     );
     controller.signal.throwIfAborted();
-    if (!response.ok || !response.body) {
+    if (response.status !== 200 || response.headers.has("content-range") || !response.body) {
       void response.body?.cancel().catch(() => {});
       throw new VideoSourceError(
         YOUTUBE_UPLOAD_REASON.media_read_failed,
@@ -533,6 +533,20 @@ class StreamingByteSource implements VideoByteSource {
     this.streamOffset = 0;
   }
 
+  private async verifyEnd(reader: ReadableStreamDefaultReader<Uint8Array>): Promise<void> {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) return;
+      if (value.byteLength > 0) {
+        throw new VideoSourceError(
+          YOUTUBE_UPLOAD_REASON.media_read_failed,
+          MEDIA_READ_FAILED,
+          "The media host sent more bytes than the video has.",
+        );
+      }
+    }
+  }
+
   async read(start: number, end: number, timeoutMs?: number): Promise<ArrayBuffer> {
     const wanted = end - start + 1;
     if (start < 0 || end >= this.size || wanted <= 0 || wanted > VIDEO_SOURCE_MAX_BUFFER_BYTES) {
@@ -566,6 +580,8 @@ class StreamingByteSource implements VideoByteSource {
         this.readOffset += take;
         filled += take;
       }
+      if (end + 1 === this.size && this.reader) await this.verifyEnd(this.reader);
+      if (timedOut) throw new Error("Media read timed out");
       return bytes.buffer;
     } catch (error) {
       this.reset();

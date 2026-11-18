@@ -212,11 +212,11 @@ Deno.test("a fresh non-zero seek receives exact bytes", async () => {
   assertEquals(bytes[49], 59 % 251);
 });
 
-Deno.test("rejects a stream block crossing the announced end", async () => {
-  for (const actualSize of [1024, 1025]) {
+Deno.test("validates EOF even when a block ends at the announced size", async () => {
+  for (const [actualSize, blockSize] of [[1024, 513], [1025, 513], [1025, 1024]]) {
     const fetchImpl: typeof fetch = () =>
       Promise.resolve(
-        new Response(blockBody(fileBytes(actualSize), [513]), {
+        new Response(blockBody(fileBytes(actualSize), [blockSize]), {
           status: 200,
           headers: { "Content-Length": "1024", "Content-Type": "video/mp4" },
         }),
@@ -229,6 +229,20 @@ Deno.test("rejects a stream block crossing the announced end", async () => {
       assertEquals(error.detail, "The media host sent more bytes than the video has.");
     }
   }
+});
+
+Deno.test("rejects a partial response when reopening a full video stream", async () => {
+  const fetchImpl: typeof fetch = (_input, init) => {
+    if (new Headers(init?.headers).has("range")) {
+      return Promise.resolve(new Response(new Uint8Array(1024), { headers: { "Content-Length": "1024" } }));
+    }
+    return Promise.resolve(new Response(new Uint8Array(512), {
+      status: 206,
+      headers: { "Content-Range": "bytes 512-1023/1024" },
+    }));
+  };
+  const source = await createVideoByteSource({ url: `${HOST}/video.mp4`, fetchImpl, approvedHosts: APPROVED });
+  await assertRejects(() => source.read(0, 63), VideoSourceError);
 });
 
 Deno.test("rejects a ranged response for a different object size", async () => {

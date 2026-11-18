@@ -10091,6 +10091,7 @@ async function postToYouTube(
   const source = await createVideoByteSource({
     url: readUrl,
     mimeType: videoFile?.mime_type ?? null,
+    declaredSize: videoFile?.file_size ?? null,
     approvedHosts: mediaHosts,
   });
   const mimeType = source.mimeType;
