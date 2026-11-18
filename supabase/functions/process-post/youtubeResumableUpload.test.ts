@@ -31,6 +31,7 @@ import {
   type UploadByteSource,
   type YoutubeUploadSessionRecord,
 } from "./youtubeResumableUpload.ts";
+import { youtubeUploadOutcomeMessage } from "./youtubeUploadOutcome.ts";
 import {
   createInMemoryYoutubeUploadSessionStore,
 } from "./youtubeUploadSession.ts";
@@ -716,6 +717,13 @@ Deno.test("quota exhaustion does not suggest reconnecting the account", async ()
   const { outcome } = await run(provider, record());
   assert(outcome.kind === "failed");
   assertEquals(outcome.reason, YOUTUBE_UPLOAD_REASON.quota_exceeded);
+
+  // The reason says WHAT happened; the sentence is what the customer reads.
+  // So the quota guidance, and the absence of a reconnect instruction that
+  // belongs to a dead credential, are proved on the formatted message.
+  const message = youtubeUploadOutcomeMessage(outcome);
+  assertStringIncludes(message, "YouTube API quota exceeded");
+  assertEquals(message.toLowerCase().includes("reconnect"), false);
 });
 
 Deno.test("durable state write refused means the worker abandoned its work", async () => {
